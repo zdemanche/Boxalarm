@@ -8,3 +8,5 @@ Pulumi.*.yaml.bak
 .pulumi/
 *.log
 .DS_Store
+.worktrees/
+.analysis/
