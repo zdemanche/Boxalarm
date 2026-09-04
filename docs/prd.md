@@ -126,6 +126,13 @@ Priority: **P0** = required to replace Chief360 · **P1** = required for a compl
 - **F2.5** Availability / marking off — planned unavailability affecting alerting
 - **F2.6** Member self-service profile and contact update
 - **F2.7** Roles and permissions (member / officer / training / apparatus / admin / chief)
+- **F2.8** **Duty shifts** — officers define shifts/standby periods with required positions and quals
+- **F2.9** **Open-shift signup** — members browse and claim open shifts from mobile; claiming is atomic (no double-booking)
+- **F2.10** Shift coverage view — which shifts are covered, which are short, which lack a required qual
+- **F2.11** Shift give-back / swap between members, with officer approval where configured
+- **F2.12** Shift attendance feeds LOSAP points (F2.4) and reporting (F8) automatically
+
+> **Note:** this is *volunteer* scheduling — self-service signup for open duty shifts. It is explicitly **not** career shift scheduling: no overtime, no callback lists, no Kelly days, no minimum-staffing mandates. Coverage gaps are surfaced, not enforced.
 
 ### F3. Training and certifications — *P0*
 
@@ -201,26 +208,35 @@ Priority: **P0** = required to replace Chief360 · **P1** = required for a compl
 
 ## 6. Non-functional requirements
 
-### N1. Alert reliability — *the defining NFR*
+### N1. Alert reliability — *life-safety critical*
+
+> **The app replaces radio tone-out paging as the alerting path of record.** A delivery failure means no response to an emergency call. This is life-safety software, and N1 is engineered accordingly — it is not a quality target, it is the product's reason to exist.
 
 - **N1.1** Alert fan-out initiated within **5 seconds** of dispatch receipt (p99)
-- **N1.2** Redundant delivery channels; no single-vendor dependency for the critical path
-- **N1.3** Delivery instrumented end to end and **alertable on failure** — the system must notice its own failure
+- **N1.2** Redundant delivery channels in **independent failure domains** — push, SMS, and voice must not share a vendor, network path, or availability zone
+- **N1.3** Delivery instrumented end to end and **alertable on failure** — the system must notice its own failure and escalate to a human
 - **N1.4** Exactly-once semantics per member per dispatch
-- **N1.5** Alerting path degrades independently — an outage in reporting, training, or inventory must never impair alerting
-- **N1.6** Synthetic end-to-end alert canary running continuously in production
+- **N1.5** Alerting path degrades independently — an outage in reporting, training, inventory, or *any* other module must never impair alerting. Architecturally isolated.
+- **N1.6** Synthetic end-to-end alert canary running continuously in production, alerting on-call within minutes of a broken path
+- **N1.7** **No single point of failure** anywhere between dispatch ingress and member device
+- **N1.8** **Documented degraded mode** — defined behavior and human fallback procedure when the platform is unavailable
+- **N1.9** **Parallel-run requirement:** existing tone-out paging is retained alongside the platform until measured delivery data over a full cycle of live use justifies cutover. App-only is the destination, not the launch state.
 
 ### N2. Availability
 
-- **N2.1** Alerting path target **99.9%+**; explicitly higher than the rest of the platform
-- **N2.2** No scheduled maintenance window that takes alerting down
+- **N2.1** Alerting path target **99.95%+**; explicitly and substantially higher than the rest of the platform
+- **N2.2** No scheduled maintenance window that takes alerting down — ever
+- **N2.3** Alerting must survive a single AWS AZ failure without degradation
 
 ### N3. Mobile and offline
 
-- **N3.1** Every field workflow (checks, inspections, attendance, response) completable on a phone
-- **N3.2** Offline capture with sync-on-reconnect for checks and field data
-- **N3.3** Touch targets usable with gloves
-- **N3.4** Night-legible display for in-apparatus use
+- **N3.1** **Native iOS and Android applications.** Required, not preferred: critical-alert entitlement and reliable Do-Not-Disturb override are unavailable to a PWA, and N1 cannot be met without them.
+- **N3.2** iOS Critical Alerts entitlement obtained from Apple; Android full-screen intent / high-priority notification channels configured
+- **N3.3** Every field workflow (checks, inspections, attendance, response, shift signup) completable on a phone
+- **N3.4** Offline capture with sync-on-reconnect for checks and field data
+- **N3.5** Touch targets usable with gloves
+- **N3.6** Night-legible display for in-apparatus use
+- **N3.7** Alert receipt must not depend on the app being foregrounded, recently opened, or exempt from OS battery optimization
 
 ### N4. Performance
 
@@ -313,35 +329,37 @@ Wave 1 alone replaces Chief360's primary function.
 
 ## 11. Assumptions
 
-1. **Nichols FD is a volunteer department.** Personnel is modeled as volunteer roster, response availability, and LOSAP points — *not* career shift scheduling with overtime and minimum staffing. **⚠ Confirm before architecture — this is the highest-impact assumption in the document.**
-2. Fire-only. No EMS transport, no patient care records.
-3. Single department at launch; multi-tenancy is a seam, not a feature.
-4. Members have smartphones capable of running a modern app.
-5. The department can obtain a NERIS Integration Partner vendor account.
-6. Existing Chief360 data may need migration — scope unknown.
+1. **Nichols FD is all-volunteer, with member-claimable duty shifts.** *(Confirmed 2026-09-03.)* Personnel is a volunteer roster with LOSAP points and self-service open-shift signup — not career scheduling.
+2. **The app replaces tone-out paging as the alerting path of record.** *(Confirmed 2026-09-03.)* Drives the life-safety classification of N1, with a parallel-run period per N1.9.
+3. **Native iOS + Android.** *(Confirmed 2026-09-03.)* Required for critical-alert delivery.
+4. Fire-only. No EMS transport, no patient care records.
+5. Single department at launch; multi-tenancy is a seam, not a feature.
+6. Members have smartphones capable of running a modern app. **⚠ Members without a capable smartphone cannot be alerted — a real coverage gap given N1.9 cutover, and one the department must consciously accept.**
+7. The department can obtain a NERIS Integration Partner vendor account.
+8. Existing Chief360 data may need migration — scope unknown.
 
 ---
 
 ## 12. Open questions
 
-**Blocking architecture:**
+**Blocking architecture — OUTSTANDING:**
 
-1. **Volunteer, career, or combination?** (Assumption 1.) Changes the entire personnel and scheduling model.
-2. **How does dispatch reach the department today?** Regional/municipal CAD vendor, active 911 dispatch center, existing integration or paging? **This determines F1.1 and is the single largest unknown in the alerting design.**
-3. **Radio/tone paging interaction** — does the platform supplement existing tone-out paging, or replace it? Are physical pagers staying?
+1. **How does dispatch reach the department today?** Regional/municipal CAD vendor, county 911 center, existing integration, or something else? Is there an API, a feed, or only radio/tone? **This determines F1.1 and is now the single largest unknown in the design — and with the app as alerting path of record (N1), the ingress path is life-safety critical.**
+
+**Resolved 2026-09-03:** staffing model (all-volunteer + pickup shifts, F2.8–F2.12) · paging interaction (replace, with N1.9 parallel run) · native vs PWA (native, N3.1).
 
 **Blocking backlog:**
 
-4. Connecticut state fire reporting requirements beyond NERIS?
-5. CT LOSAP statutory point rules — what exactly must be tracked?
-6. Chief360 data migration — what must come across, and can it be exported?
-7. Mutual aid — Trumbull has multiple volunteer companies. Cross-department visibility in scope?
-8. Native apps or PWA? (Critical-alert entitlement and DND override may force native.)
-9. Station alerting hardware — is any in place that must be driven or preserved?
+2. Connecticut state fire reporting requirements beyond NERIS?
+3. CT LOSAP statutory point rules — what exactly must be tracked?
+4. Chief360 data migration — what must come across, and can it be exported?
+5. Mutual aid — Trumbull has multiple volunteer companies. Cross-department visibility in scope?
+6. Station alerting hardware — is any in place that must be driven or preserved?
+7. Apple Critical Alerts entitlement — requires justification to Apple; who owns that application?
 
 **Commercial:**
 
-10. Who owns the software, and is a second department a real near-term target?
+8. Who owns the software, and is a second department a real near-term target?
 
 ---
 
