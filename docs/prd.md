@@ -197,7 +197,7 @@ Priority: **P0** = required to replace Chief360 · **P1** = required for a compl
 
 ### F9. Platform and administration — *P0*
 
-- **F9.1** Authentication with MFA available; **credential recovery must be self-service and reliable** (a documented Chief360 failure)
+- **F9.1** Authentication — **no MFA anywhere, and a session that does not expire: sign in once and forget.** A responder woken at 03:00 opens the app and sees the call, never a login screen and never a second factor; a re-authentication prompt on the alert path is an alerting failure (N1), not a security feature. Sessions are long-lived by design with silent background token refresh, no idle timeout, and no periodic forced re-authentication. **Credential recovery must be self-service and reliable** (a documented Chief360 failure). **No step-up re-authentication either** — not on data export (F9.5), not on destructive admin actions, not anywhere: a password re-entry prompt is friction the platform does not impose. Sensitive admin surfaces are protected by **role-based authorization alone** (F9.2), evaluated server-side on a valid session. ⚠ **The security cost is real and accepted, not mitigated:** one password is the whole authentication system for every role, a valid chief/admin session is by itself enough to export the department's entire dataset, and the controls left on those actions detect and reverse rather than prevent (per-invocation alarm to the chief, audit event, token revocation). See N5.2.
 - **F9.2** Role-based authorization
 - **F9.3** Department configuration: apparatus, stations, ranks, point rules, checklists, alert rules
 - **F9.4** Audit logging for all record mutation
@@ -246,7 +246,7 @@ Priority: **P0** = required to replace Chief360 · **P1** = required for a compl
 ### N5. Security
 
 - **N5.1** Encryption in transit and at rest
-- **N5.2** MFA available; enforceable for privileged roles
+- **N5.2** **No MFA, and no session expiry a responder can hit** — long-lived refresh tokens (near the identity provider's maximum) held in Keychain/Keystore on native and secure storage on web, refreshed silently; no idle timeout, no forced re-authentication. This is a deliberate trade of account-security depth for alerting reliability (F9.1, N1), taken with eyes open: **token revocation on member status change, not token expiry, is the control that ends a session** — and revocation needs a human to notice, which the support model (§8) does not staff. Privileged actions (export, disposal) are gated by role authorization only, with per-invocation alarming as the detective control
 - **N5.3** Least-privilege authorization, enforced server-side
 - **N5.4** Secrets never in source; OAuth credentials rotatable
 - **N5.5** Member PII minimized and access-audited
