@@ -344,9 +344,15 @@ Wave 1 alone replaces Chief360's primary function.
 
 **Blocking architecture — OUTSTANDING:**
 
-1. **How does dispatch reach the department today?** Regional/municipal CAD vendor, county 911 center, existing integration, or something else? Is there an API, a feed, or only radio/tone? **This determines F1.1 and is now the single largest unknown in the design — and with the app as alerting path of record (N1), the ingress path is life-safety critical.**
+1. **CAD integration surface.** Dispatch comes from a **regional CAD system** *(confirmed 2026-09-03)* — so a digital feed exists and alert ingress does not require tone-decoder hardware. Still needed before the ingress adapter can be built:
+   - **a. Which regional CAD?** Vendor and product (Motorola, Tyler/New World, CentralSquare, Hexagon, Mark43, ProPhoenix, IMC…). Determines whether an API, CAD-to-CAD interface, or only a relay exists.
+   - **b. How does Chief360 receive dispatch today?** *This is the highest-value question* — whatever feed already reaches the department is the path most likely reusable, and it proves the integration is permitted.
+   - **c. What is the delivery mechanism?** API/webhook · CAD-to-CAD · email relay · SMS relay · paging protocol (TAP/IXP) · third-party middleware (Active911, IamResponding, PulsePoint).
+   - **d. Who authorizes the integration?** Regional dispatch authority approval is typically required and is a lead-time item, not a technical one.
 
-**Resolved 2026-09-03:** staffing model (all-volunteer + pickup shifts, F2.8–F2.12) · paging interaction (replace, with N1.9 parallel run) · native vs PWA (native, N3.1).
+   Ingress is designed as a port with pluggable adapters (F1.1), so the architecture is not blocked — but the concrete adapter cannot be implemented until a–c are answered, and **d may be the long pole on the whole project**.
+
+**Resolved 2026-09-03:** staffing model (all-volunteer + pickup shifts, F2.8–F2.12) · paging interaction (replace, with N1.9 parallel run) · native vs PWA (native, N3.1) · dispatch source is a regional CAD, i.e. a digital feed exists.
 
 **Blocking backlog:**
 
