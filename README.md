@@ -49,5 +49,8 @@ Blocking items with external lead times — these gate everything and should be 
 
 ## Layout
 
+- `CLAUDE.md` — session handoff: current state, next step, settled decisions, alerting invariants
 - `docs/prd.md` — product requirements
 - `docs/architecture.md` — compiled architecture (2,401 lines)
+- `docs/build-order.md` — 8 epics, 90 stories, 13 dependency waves
+- `docs/dependency-graph.json` — machine-readable story graph (160 edges, acyclic)
