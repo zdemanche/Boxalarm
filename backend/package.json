@@ -1,0 +1,29 @@
+{
+  "name": "boxalarm-backend",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "typecheck": "tsc --build",
+    "lint": "eslint .",
+    "format": "prettier --check .",
+    "format:write": "prettier --write .",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "@eslint/js": "9.39.5",
+    "@types/node": "24.13.3",
+    "eslint": "9.39.5",
+    "eslint-config-prettier": "10.1.8",
+    "prettier": "3.9.6",
+    "typescript": "5.9.3",
+    "typescript-eslint": "8.69.0",
+    "vitest": "3.2.7"
+  }
+}
