@@ -1,0 +1,104 @@
+{
+  "version": 2,
+  "source": {
+    "path": "/Users/zacharydemanche/Projects/boxalarm/docs/architecture.md",
+    "sha256": "c5de1eac3fafa749787fdebcf7cfcc303d1975ad911897068dce14cf7f79a623",
+    "lines": 2410
+  },
+  "plugin_version": "2.12.0",
+  "created": "2026-09-04",
+  "spine": "spine.md",
+  "contracts": "contracts.json",
+  "components": [
+    {
+      "name": "alerting-service",
+      "slug": "alerting-service",
+      "file": "components/alerting-service.md",
+      "keywords": ["dispatch", "fan-out", "escalation", "DELIVERY_RECEIPT", "DISPATCH_ALERT", "canary", "self-test", "SNS FIFO", "channelTier", "idempotencyKey", "MEMBER_ELIGIBILITY_SNAPSHOT", "PRE_PLAN_COPY"],
+      "aliases": ["alert path", "life-safety plane", "alerting plane", "N1"],
+      "jira": { "epics": [], "labels": [] },
+      "depends_on": []
+    },
+    {
+      "name": "platform-service",
+      "slug": "platform-service",
+      "file": "components/platform-service.md",
+      "keywords": ["department config", "audit log", "AUDIT_LOG_ENTRY", "DEPARTMENT_CONFIG", "data export", "Cognito triggers", "Verified Permissions policy admin", "F9.5", "F9.4"],
+      "aliases": ["platform table", "shared table owner"],
+      "jira": { "epics": [], "labels": [] },
+      "depends_on": []
+    },
+    {
+      "name": "personnel-service",
+      "slug": "personnel-service",
+      "file": "components/personnel-service.md",
+      "keywords": ["roster", "MEMBER", "LOSAP", "duty shift", "SHIFT_POSITION", "availability", "quals", "attendance", "MEMBER_QUALIFICATION", "shift claim"],
+      "aliases": ["roster service", "membership"],
+      "jira": { "epics": [], "labels": [] },
+      "depends_on": []
+    },
+    {
+      "name": "apparatus-service",
+      "slug": "apparatus-service",
+      "file": "components/apparatus-service.md",
+      "keywords": ["APPARATUS", "checklist", "CHECKLIST_RUN", "DEFECT", "SCBA_RECORD", "out of service", "OOS", "compartment inventory", "truck check"],
+      "aliases": ["rig checks", "truck checks"],
+      "jira": { "epics": [], "labels": [] },
+      "depends_on": ["notification-service"]
+    },
+    {
+      "name": "incident-service",
+      "slug": "incident-service",
+      "file": "components/incident-service.md",
+      "keywords": ["NERIS", "INCIDENT", "INCIDENT_SECONDARY", "NERIS_SUBMISSION_ATTEMPT", "SCHEMA_VERSION", "corePayload", "nerisSchemaVersion", "exposure", "responder safety"],
+      "aliases": ["incident reporting", "NERIS submission"],
+      "jira": { "epics": [], "labels": [] },
+      "depends_on": []
+    },
+    {
+      "name": "training-service",
+      "slug": "training-service",
+      "file": "components/training-service.md",
+      "keywords": ["CERTIFICATION", "cert expiry", "TRAINING_EVENT", "TRAINING_ATTENDANCE", "transcript", "ISO training hours", "drill"],
+      "aliases": ["certifications", "certs"],
+      "jira": { "epics": [], "labels": [] },
+      "depends_on": ["notification-service"]
+    },
+    {
+      "name": "reporting-service",
+      "slug": "reporting-service",
+      "file": "components/reporting-service.md",
+      "keywords": ["chief dashboard", "LOSAP year-end", "grant report", "response-time analytics", "CSV export", "PDF export", "Reporting Projections", "membership trends"],
+      "aliases": ["dashboards", "analytics"],
+      "jira": { "epics": [], "labels": [] },
+      "depends_on": ["personnel-service", "apparatus-service", "training-service", "inspections-service", "inventory-service", "incident-service"]
+    },
+    {
+      "name": "inspections-service",
+      "slug": "inspections-service",
+      "file": "components/inspections-service.md",
+      "keywords": ["OCCUPANCY", "PRE_PLAN", "pre-incident plan", "HYDRANT", "INSPECTION_RECORD", "hydrant flow test", "geohash", "map retrieval", "field capture"],
+      "aliases": ["pre-plans", "occupancies", "hydrants"],
+      "jira": { "epics": [], "labels": [] },
+      "depends_on": []
+    },
+    {
+      "name": "inventory-service",
+      "slug": "inventory-service",
+      "file": "components/inventory-service.md",
+      "keywords": ["EQUIPMENT_ASSET", "PPE_ASSIGNMENT", "CONSUMABLE_STOCK", "reorder threshold", "NFPA service life", "asset lifecycle"],
+      "aliases": ["equipment", "PPE"],
+      "jira": { "epics": [], "labels": [] },
+      "depends_on": ["notification-service"]
+    },
+    {
+      "name": "notification-service",
+      "slug": "notification-service",
+      "file": "components/notification-service.md",
+      "keywords": ["NOTIFICATION_PREFERENCE", "NOTIFICATION", "in-app inbox", "digest batching", "apparatus.defect.reported", "inventory.reorder.due", "cert.expiry.due", "non-critical channel"],
+      "aliases": ["notifications", "notification inbox"],
+      "jira": { "epics": [], "labels": [] },
+      "depends_on": []
+    }
+  ]
+}

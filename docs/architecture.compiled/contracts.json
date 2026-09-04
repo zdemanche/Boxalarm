@@ -1,0 +1,483 @@
+{
+  "version": 1,
+  "source": { "sha256": "c5de1eac3fafa749787fdebcf7cfcc303d1975ad911897068dce14cf7f79a623" },
+  "contracts": [
+    {
+      "id": "event-envelope",
+      "kind": "event-envelope",
+      "severity": "blocker",
+      "mustContain": ["eventId", "eventTime", "eventType", "source", "correlationId", "schemaVersion", "payload"],
+      "mustNotContain": [],
+      "mustMatch": [],
+      "source": "spine.md#Cross-Cutting Non-Negotiables"
+    },
+    {
+      "id": "error-envelope",
+      "kind": "error-envelope",
+      "severity": "blocker",
+      "mustContain": ["traceId"],
+      "mustNotContain": [],
+      "mustMatch": [],
+      "source": "architecture.md line 251 (API endpoints intro: RFC 7807 errors with traceId)"
+    },
+    {
+      "id": "endpoint-prefix",
+      "kind": "endpoint-prefix",
+      "severity": "blocker",
+      "mustContain": [],
+      "mustNotContain": [],
+      "mustMatch": ["['\\\"]/api/v1/"],
+      "source": "architecture.md line 251 (Base path /api/v1/{service}/...)"
+    },
+    {
+      "id": "auth-no-mfa-no-stepup",
+      "kind": "auth",
+      "severity": "blocker",
+      "mustContain": [],
+      "mustNotContain": ["MfaConfiguration: 'ON'", "MfaConfiguration: \"ON\"", "SOFTWARE_TOKEN_MFA", "SMS_MFA", "requireStepUp", "stepUpAuth", "reauthenticate", "reAuthChallenge", "idleTimeout"],
+      "mustMatch": [],
+      "source": "architecture.md lines 420, 2302-2303, 2310-2323 (Session and re-authentication policy — CANONICAL)"
+    },
+    {
+      "id": "auth-export-role-check-only",
+      "kind": "auth",
+      "severity": "blocker",
+      "mustContain": ["IsAuthorizedWithToken"],
+      "mustNotContain": ["mfaRequired", "requirePasswordReentry", "confirmPassword"],
+      "mustMatch": [],
+      "source": "architecture.md lines 2303, 2305 (export and destructive admin actions gated by Cedar chief/admin role check alone)"
+    },
+    {
+      "id": "auth-verified-permissions-fail-secure",
+      "kind": "auth",
+      "severity": "blocker",
+      "mustContain": ["IsAuthorizedWithToken"],
+      "mustNotContain": [],
+      "mustMatch": [],
+      "source": "architecture.md line 417 (Fail-secure: a Verified Permissions outage returns 503, never a defaulted allow)"
+    },
+    {
+      "id": "auth-list-endpoint-batch-authz",
+      "kind": "auth",
+      "severity": "warn",
+      "mustContain": [],
+      "mustNotContain": [],
+      "mustMatch": ["BatchIsAuthorizedWithToken"],
+      "source": "architecture.md line 417 (list endpoints must use BatchIsAuthorizedWithToken, never a per-item loop)"
+    },
+    {
+      "id": "dynamo-keys-dispatch-alert",
+      "kind": "dynamo-keys",
+      "severity": "blocker",
+      "mustContain": ["pk", "sk"],
+      "mustNotContain": [],
+      "mustMatch": ["DEPT#\\$\\{deptId\\}#DISPATCH#\\$\\{dispatchId\\}"],
+      "source": "architecture.md line 548 (DISPATCH_ALERT pk shape)"
+    },
+    {
+      "id": "dynamo-keys-delivery-receipt",
+      "kind": "dynamo-keys",
+      "severity": "blocker",
+      "mustContain": [],
+      "mustNotContain": [],
+      "mustMatch": ["RECEIPT#\\$\\{memberId\\}#\\$\\{channel\\}"],
+      "source": "architecture.md line 579 (DELIVERY_RECEIPT sk — per-channel, immutable item)"
+    },
+    {
+      "id": "dynamo-keys-member-eligibility-snapshot",
+      "kind": "dynamo-keys",
+      "severity": "blocker",
+      "mustContain": [],
+      "mustNotContain": [],
+      "mustMatch": ["DEPT#\\$\\{deptId\\}#ELIGIBILITY"],
+      "source": "architecture.md line 619 (MEMBER_ELIGIBILITY_SNAPSHOT pk, alerting-service table only)"
+    },
+    {
+      "id": "dynamo-keys-shift-position-claim",
+      "kind": "dynamo-keys",
+      "severity": "blocker",
+      "mustContain": ["attribute_not_exists(claimedByMemberId)"],
+      "mustNotContain": [],
+      "mustMatch": [],
+      "source": "architecture.md line 886, 1201 (atomic no-double-booking shift claim, ConditionExpression)"
+    },
+    {
+      "id": "dynamo-keys-department-scoped-pk",
+      "kind": "dynamo-keys",
+      "severity": "blocker",
+      "mustContain": [],
+      "mustNotContain": [],
+      "mustMatch": ["DEPT#\\$\\{deptId\\}"],
+      "source": "architecture.md line 538 (deptId present in every table PK from day one, F9.6 tenancy seam)"
+    },
+    {
+      "id": "key-shape-idempotency-key",
+      "kind": "key-shape",
+      "severity": "blocker",
+      "mustContain": [],
+      "mustNotContain": ["${dispatchId}#${memberId}\"", "dispatchId}#${memberId}'"],
+      "mustMatch": ["\\$\\{dispatchId\\}#\\$\\{memberId\\}#\\$\\{channel\\}"],
+      "source": "architecture.md lines 193-200, 590 (exactly-once key is per-channel; dispatchId#memberId alone is explicitly wrong)"
+    },
+    {
+      "id": "key-shape-message-dedup-id",
+      "kind": "key-shape",
+      "severity": "blocker",
+      "mustContain": [],
+      "mustNotContain": ["hash(dispatchId, memberId, channelTier)", "MessageDeduplicationId = hash(dispatchId, memberId)"],
+      "mustMatch": ["hash\\(dispatchId,\\s*memberId,\\s*channel\\)"],
+      "source": "architecture.md lines 200, 1375, 1531 (dedup keys on channel, never channelTier)"
+    },
+    {
+      "id": "retention-ttl-notification",
+      "kind": "retention-ttl",
+      "severity": "warn",
+      "mustContain": ["ttl"],
+      "mustNotContain": [],
+      "mustMatch": [],
+      "source": "architecture.md line 137 (NOTIFICATION item, TTL 180 days)"
+    },
+    {
+      "id": "retention-ttl-self-test-run",
+      "kind": "retention-ttl",
+      "severity": "warn",
+      "mustContain": ["ttl"],
+      "mustNotContain": [],
+      "mustMatch": [],
+      "source": "architecture.md line 666 (SELF_TEST_RUN ttl 1 year — operational diagnostic, not audit evidence)"
+    },
+    {
+      "id": "retention-ttl-canary-run",
+      "kind": "retention-ttl",
+      "severity": "warn",
+      "mustContain": ["ttl"],
+      "mustNotContain": [],
+      "mustMatch": [],
+      "source": "architecture.md line 680 (CANARY_RUN ttl 90 days)"
+    },
+    {
+      "id": "retention-ttl-delivery-receipt-no-expiry",
+      "kind": "retention-ttl",
+      "severity": "blocker",
+      "mustContain": [],
+      "mustNotContain": ["ttl:", "TimeToLiveSpecification"],
+      "mustMatch": [],
+      "source": "architecture.md lines 593, 1168 (DELIVERY_RECEIPT — no TTL-based deletion, retention via separate export-to-Glacier job, must never silently disappear on a timer)"
+    },
+    {
+      "id": "retention-ttl-event-dedup",
+      "kind": "retention-ttl",
+      "severity": "warn",
+      "mustContain": ["48"],
+      "mustNotContain": [],
+      "mustMatch": [],
+      "source": "architecture.md line 1335 (EVENT_DEDUP ttl 48 hours, general-domain at-least-once redelivery guard)"
+    },
+    {
+      "id": "retention-ttl-outbox-entry",
+      "kind": "retention-ttl",
+      "severity": "warn",
+      "mustContain": ["sentAt"],
+      "mustNotContain": [],
+      "mustMatch": [],
+      "source": "architecture.md line 1334 (OUTBOX_ENTRY ttl 7 days after sentAt)"
+    },
+    {
+      "id": "event-type-alerting-dispatch-normalized",
+      "kind": "event-type",
+      "severity": "blocker",
+      "mustContain": ["alerting.dispatch.normalized"],
+      "mustNotContain": ["DispatchReceived", "DispatchNormalized"],
+      "mustMatch": [],
+      "source": "architecture.md line 241, 1438 (dotted event names are canonical; PascalCase never appears in code)"
+    },
+    {
+      "id": "event-type-dispatch-alert-received",
+      "kind": "event-type",
+      "severity": "blocker",
+      "mustContain": ["dispatch.alert.received"],
+      "mustNotContain": ["DispatchReceived"],
+      "mustMatch": [],
+      "source": "architecture.md line 241 (DispatchReceived -> dispatch.alert.received)"
+    },
+    {
+      "id": "event-type-alerting-response-confirmed",
+      "kind": "event-type",
+      "severity": "blocker",
+      "mustContain": ["alerting.response.confirmed"],
+      "mustNotContain": ["ResponseConfirmed"],
+      "mustMatch": [],
+      "source": "architecture.md line 241 (ResponseConfirmed -> alerting.response.confirmed; the only two events allow-listed LOB-ward from alerting)"
+    },
+    {
+      "id": "event-type-alerting-escalation-triggered",
+      "kind": "event-type",
+      "severity": "blocker",
+      "mustContain": ["alerting.escalation.triggered"],
+      "mustNotContain": [],
+      "mustMatch": [],
+      "source": "architecture.md line 1475"
+    },
+    {
+      "id": "event-type-alerting-delivery-receipt",
+      "kind": "event-type",
+      "severity": "blocker",
+      "mustContain": ["alerting.delivery.receipt"],
+      "mustNotContain": [],
+      "mustMatch": [],
+      "source": "architecture.md line 1459"
+    },
+    {
+      "id": "event-type-alerting-canary-result",
+      "kind": "event-type",
+      "severity": "blocker",
+      "mustContain": ["alerting.canary.result"],
+      "mustNotContain": [],
+      "mustMatch": [],
+      "source": "architecture.md line 1477"
+    },
+    {
+      "id": "event-type-personnel-member-updated",
+      "kind": "event-type",
+      "severity": "blocker",
+      "mustContain": ["personnel.member.updated"],
+      "mustNotContain": ["MemberUpdated"],
+      "mustMatch": [],
+      "source": "architecture.md line 241"
+    },
+    {
+      "id": "event-type-cert-expiry-due",
+      "kind": "event-type",
+      "severity": "blocker",
+      "mustContain": ["cert.expiry.due"],
+      "mustNotContain": ["CertExpiring"],
+      "mustMatch": [],
+      "source": "architecture.md lines 241, 1493"
+    },
+    {
+      "id": "event-type-apparatus-check-completed",
+      "kind": "event-type",
+      "severity": "warn",
+      "mustContain": ["apparatus.check.completed"],
+      "mustNotContain": ["CheckCompleted"],
+      "mustMatch": [],
+      "source": "architecture.md line 241"
+    },
+    {
+      "id": "event-type-neris-incident-submitted",
+      "kind": "event-type",
+      "severity": "blocker",
+      "mustContain": ["neris.incident.submitted"],
+      "mustNotContain": ["IncidentSubmitted"],
+      "mustMatch": [],
+      "source": "architecture.md lines 241, 1496"
+    },
+    {
+      "id": "event-type-apparatus-defect-reported",
+      "kind": "event-type",
+      "severity": "blocker",
+      "mustContain": ["apparatus.defect.reported"],
+      "mustNotContain": [],
+      "mustMatch": [],
+      "source": "architecture.md line 1341 (newly reconciled event, first exposed by F4.3)"
+    },
+    {
+      "id": "event-type-inventory-reorder-due",
+      "kind": "event-type",
+      "severity": "blocker",
+      "mustContain": ["inventory.reorder.due"],
+      "mustNotContain": [],
+      "mustMatch": [],
+      "source": "architecture.md line 1342 (newly reconciled event)"
+    },
+    {
+      "id": "status-map-incident-status",
+      "kind": "status-map",
+      "severity": "blocker",
+      "mustContain": ["DRAFT", "VALIDATED", "SUBMITTED", "ACCEPTED", "REJECTED"],
+      "mustNotContain": [],
+      "mustMatch": [],
+      "source": "architecture.md line 708 (INCIDENT.status enum)"
+    },
+    {
+      "id": "status-map-neris-submission-outcome",
+      "kind": "status-map",
+      "severity": "blocker",
+      "mustContain": ["SUCCESS", "RATE_LIMITED", "VALIDATION_ERROR", "SERVER_ERROR"],
+      "mustNotContain": [],
+      "mustMatch": [],
+      "source": "architecture.md line 750 (NERIS_SUBMISSION_ATTEMPT.outcome enum)"
+    },
+    {
+      "id": "status-map-submission-status",
+      "kind": "status-map",
+      "severity": "blocker",
+      "mustContain": ["submitted", "accepted", "rejected", "retrying", "failed"],
+      "mustNotContain": [],
+      "mustMatch": [],
+      "source": "architecture.md line 333 (GET /incidents/{incidentId}/submission status enum, F7.7)"
+    },
+    {
+      "id": "status-map-roster-ack-status",
+      "kind": "status-map",
+      "severity": "blocker",
+      "mustContain": ["NONE", "RESPONDING", "NOT_RESPONDING", "DIRECT_TO_SCENE"],
+      "mustNotContain": [],
+      "mustMatch": [],
+      "source": "architecture.md line 606 (DISPATCH_ROSTER_ENTRY.ackStatus enum)"
+    },
+    {
+      "id": "status-map-channel",
+      "kind": "status-map",
+      "severity": "blocker",
+      "mustContain": ["push", "sms", "voice"],
+      "mustNotContain": [],
+      "mustMatch": [],
+      "source": "architecture.md line 392 (channel enum — routing and dedup input, lowercase in event attrs)"
+    },
+    {
+      "id": "status-map-channel-tier",
+      "kind": "status-map",
+      "severity": "blocker",
+      "mustContain": ["primary", "escalation"],
+      "mustNotContain": [],
+      "mustMatch": [],
+      "source": "architecture.md lines 202, 585 (channelTier enum — bookkeeping only, never routing/dedup)"
+    },
+    {
+      "id": "event-payload-alerting-dispatch-normalized",
+      "kind": "event-payload",
+      "severity": "blocker",
+      "mustContain": ["dispatchId", "memberId", "channel", "channelTier", "incidentType", "address", "narrative"],
+      "mustNotContain": ["dispatchId: null", "memberId: null", "channel: null"],
+      "mustMatch": [],
+      "source": "architecture.md lines 1438-1457 (alerting.dispatch.normalized payload)"
+    },
+    {
+      "id": "event-payload-alerting-delivery-receipt",
+      "kind": "event-payload",
+      "severity": "blocker",
+      "mustContain": ["dispatchId", "memberId", "channel", "channelTier", "status", "providerTimestamp", "providerMessageId"],
+      "mustNotContain": ["status: null", "channel: null"],
+      "mustMatch": [],
+      "source": "architecture.md lines 1459-1473 (alerting.delivery.receipt payload)"
+    },
+    {
+      "id": "event-payload-alerting-canary-result",
+      "kind": "event-payload",
+      "severity": "blocker",
+      "mustContain": ["runId", "channelsTested", "endToEndLatencyMs", "outcome"],
+      "mustNotContain": ["outcome: null"],
+      "mustMatch": [],
+      "source": "architecture.md lines 1477-1489 (alerting.canary.result payload)"
+    },
+    {
+      "id": "event-payload-apparatus-defect-reported",
+      "kind": "event-payload",
+      "severity": "blocker",
+      "mustContain": ["defectId", "apparatusId", "unitLabel", "reportedByMemberId", "severity", "outOfService", "deptId"],
+      "mustNotContain": ["defectId: null", "apparatusId: null", "severity: null"],
+      "mustMatch": [],
+      "source": "architecture.md line 1341 (apparatus.defect.reported payload, notification-service reconciliation)"
+    },
+    {
+      "id": "event-payload-inventory-reorder-due",
+      "kind": "event-payload",
+      "severity": "blocker",
+      "mustContain": ["itemId", "itemName", "currentQty", "reorderThreshold", "deptId"],
+      "mustNotContain": ["itemId: null", "currentQty: null"],
+      "mustMatch": [],
+      "source": "architecture.md line 1342 (inventory.reorder.due payload)"
+    },
+    {
+      "id": "event-payload-cert-expiry-due",
+      "kind": "event-payload",
+      "severity": "warn",
+      "mustContain": ["memberId", "certId", "expiryDate", "leadDays"],
+      "mustNotContain": ["expiryDate: null"],
+      "mustMatch": [],
+      "source": "architecture.md line 1493 (cert.expiry.due payload)"
+    },
+    {
+      "id": "event-payload-neris-submission-failed",
+      "kind": "event-payload",
+      "severity": "blocker",
+      "mustContain": ["incidentId", "httpStatus", "attemptNumber", "willRetry", "failureReason"],
+      "mustNotContain": ["willRetry: null"],
+      "mustMatch": [],
+      "source": "architecture.md line 1497 (neris.submission.failed payload — F7.7 never silently dropped)"
+    },
+    {
+      "id": "event-payload-personnel-attendance-recorded",
+      "kind": "event-payload",
+      "severity": "warn",
+      "mustContain": ["memberId", "activityType", "activityId", "losapPoints"],
+      "mustNotContain": [],
+      "mustMatch": [],
+      "source": "architecture.md line 1499 (personnel.attendance.recorded payload)"
+    },
+    {
+      "id": "event-payload-scheduling-coverage-gap-detected",
+      "kind": "event-payload",
+      "severity": "warn",
+      "mustContain": ["shiftId", "requiredQuals", "gapReason"],
+      "mustNotContain": [],
+      "mustMatch": [],
+      "source": "architecture.md line 1498 (scheduling.coverage_gap.detected payload)"
+    },
+    {
+      "id": "endpoint-annotation-export-alarmed",
+      "kind": "endpoint-annotation",
+      "severity": "blocker",
+      "mustContain": ["PutMetricAlarm", "alarm"],
+      "mustNotContain": [],
+      "mustMatch": [],
+      "source": "architecture.md lines 2305-2306 (every POST /platform/export alarms on invocation, not merely on volume)"
+    },
+    {
+      "id": "endpoint-annotation-mutation-audited",
+      "kind": "endpoint-annotation",
+      "severity": "blocker",
+      "mustContain": ["AuditEvent"],
+      "mustNotContain": [],
+      "mustMatch": [],
+      "source": "architecture.md line 439 (F9.4 mutation-audit requirement satisfied by outbox-driven AuditEvent stream)"
+    },
+    {
+      "id": "endpoint-annotation-incident-secondary-scoped",
+      "kind": "endpoint-annotation",
+      "severity": "blocker",
+      "mustContain": [],
+      "mustNotContain": [],
+      "mustMatch": [],
+      "source": "architecture.md line 2307 (INCIDENT_SECONDARY visible to affected member, chief, safety officer only — narrower than general incident read; no single grep-able helper name given in source, flagged for reviewer verification rather than an automatable literal)"
+    },
+    {
+      "id": "other-batch-write-item-forbidden-alerting",
+      "kind": "other",
+      "severity": "blocker",
+      "mustContain": [],
+      "mustNotContain": ["BatchWriteItem"],
+      "mustMatch": [],
+      "source": "architecture.md lines 198, 574, 1182 (alerting-service receipt/roster writes: never BatchWriteItem, it cannot carry a ConditionExpression)"
+    },
+    {
+      "id": "other-alerting-no-platform-table-iam",
+      "kind": "other",
+      "severity": "blocker",
+      "mustContain": [],
+      "mustNotContain": ["platform-service-table", "incident-service-table"],
+      "mustMatch": [],
+      "source": "architecture.md lines 217, 1192 (alerting-service execution roles hold no IAM permission on platform-service or incident-service tables; enforced, not just documented)"
+    },
+    {
+      "id": "other-neris-never-prod-before-n62",
+      "kind": "other",
+      "severity": "blocker",
+      "mustContain": [],
+      "mustNotContain": [],
+      "mustMatch": ["NERIS_DEV_BASE_URL"],
+      "source": "architecture.md lines 2089, 753 (all NERIS integration tests/dev traffic must target NERIS_DEV_BASE_URL, asserted non-production; nerisEnvironment never PROD before N6.2 check passes)"
+    }
+  ]
+}

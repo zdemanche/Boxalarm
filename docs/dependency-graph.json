@@ -15,12 +15,12 @@
     {
       "from": "E8-S1",
       "to": "E8-S8",
-      "reason": "Session/refresh-token policy and step-up re-authentication operate on sessions issued by the sign-in flow; the session must exist before its lifecycle can be governed."
+      "reason": "Session/refresh-token policy and token revocation operate on sessions issued by the sign-in flow; the session must exist before its lifecycle can be governed."
     },
     {
-      "from": "E8-S8",
+      "from": "E8-S3",
       "to": "E8-S6",
-      "reason": "Full data export requires the step-up re-authentication challenge defined in E8-S8 before it can gate the export endpoint."
+      "reason": "Cedar chief/admin role authorization is the sole gate on the export endpoint, so the Verified Permissions enforcement layer must exist before export can be correctly restricted."
     },
     {
       "from": "E8-S5",
@@ -30,7 +30,7 @@
     {
       "from": "E8-S8",
       "to": "E8-S2",
-      "reason": "Self-service credential recovery re-issues a session under the same session policy defined in E8-S8."
+      "reason": "Self-service credential recovery re-issues a session under the session policy defined in E8-S8, and must revoke the recovered account's outstanding refresh tokens using E8-S8's revocation path."
     },
     {
       "from": "E8-S1",

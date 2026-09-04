@@ -23,7 +23,7 @@
 - [E1-S16](https://github.com/zdemanche/boxalarm-docs/issues/30) — Resolve CAD integration surface and obtain dispatch-authority authorization
 - [E6-S12](https://github.com/zdemanche/boxalarm-docs/issues/89) — NERIS Integration Partner vendor onboarding and compatibility check
 - [E6-S7](https://github.com/zdemanche/boxalarm-docs/issues/84) — NERIS environment configuration and OAuth2 client-credentials integration
-- [E8-S1](https://github.com/zdemanche/boxalarm-docs/issues/101) — Cross-platform sign-in with MFA
+- [E8-S1](https://github.com/zdemanche/boxalarm-docs/issues/101) — Cross-platform sign-in, no MFA
 - [E8-S11](https://github.com/zdemanche/boxalarm-docs/issues/111) — Platform-wide observability foundation: structured logging, tracing, metrics (N8.1)
 - [E8-S5](https://github.com/zdemanche/boxalarm-docs/issues/105) — Tamper-evident audit log for every record mutation
 - [E8-S7](https://github.com/zdemanche/boxalarm-docs/issues/107) — Department-scoping tenancy seam across the data model
@@ -33,7 +33,7 @@
 
 - [E8-S10](https://github.com/zdemanche/boxalarm-docs/issues/110) — Assert U.S.-only data residency and encryption posture in CI (N6.1, N5.1)
 - [E8-S3](https://github.com/zdemanche/boxalarm-docs/issues/103) — Role-based authorization via Verified Permissions (Cedar)
-- [E8-S8](https://github.com/zdemanche/boxalarm-docs/issues/108) — Session policy and step-up re-authentication enforcement
+- [E8-S8](https://github.com/zdemanche/boxalarm-docs/issues/108) — Session policy and token revocation
 
 ### Wave 3  (11 stories)
 
@@ -47,7 +47,7 @@
 - [E6-S1](https://github.com/zdemanche/boxalarm-docs/issues/78) — NERIS-native incident data model with opaque versioned payloads
 - [E8-S2](https://github.com/zdemanche/boxalarm-docs/issues/102) — Self-service, reliable credential recovery
 - [E8-S4](https://github.com/zdemanche/boxalarm-docs/issues/104) — Department configuration management
-- [E8-S6](https://github.com/zdemanche/boxalarm-docs/issues/106) — Full department data export with step-up authentication
+- [E8-S6](https://github.com/zdemanche/boxalarm-docs/issues/106) — Full department data export
 
 ### Wave 4  (19 stories)
 
