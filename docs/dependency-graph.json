@@ -1,0 +1,1065 @@
+{
+  "hasCycle": false,
+  "cycles": [],
+  "edges": [
+    {
+      "from": "E8-S1",
+      "to": "E8-S3",
+      "reason": "Verified Permissions needs the resolved principal (member ID, cognito:groups) the Lambda authorizer attaches after sign-in before it can evaluate any Cedar policy."
+    },
+    {
+      "from": "E8-S3",
+      "to": "E8-S4",
+      "reason": "Department-config mutation is Cognito(admin)-gated; the RBAC/Cedar enforcement layer must exist before an admin-only config endpoint can be protected."
+    },
+    {
+      "from": "E8-S1",
+      "to": "E8-S8",
+      "reason": "Session/refresh-token policy and step-up re-authentication operate on sessions issued by the sign-in flow; the session must exist before its lifecycle can be governed."
+    },
+    {
+      "from": "E8-S8",
+      "to": "E8-S6",
+      "reason": "Full data export requires the step-up re-authentication challenge defined in E8-S8 before it can gate the export endpoint."
+    },
+    {
+      "from": "E8-S5",
+      "to": "E8-S6",
+      "reason": "Every export invocation must land as a first-class audited event; the outbox-driven audit log must exist before export can be unconditionally audited."
+    },
+    {
+      "from": "E8-S8",
+      "to": "E8-S2",
+      "reason": "Self-service credential recovery re-issues a session under the same session policy defined in E8-S8."
+    },
+    {
+      "from": "E8-S1",
+      "to": "E1-S1",
+      "reason": "Every endpoint in the alerting domain requires a valid Cognito-issued JWT validated by the shared Lambda authorizer before any business logic runs."
+    },
+    {
+      "from": "E8-S3",
+      "to": "E1-S1",
+      "reason": "Admin/officer-gated writes in the alerting domain are enforced by Verified Permissions Cedar policy, which must exist before those endpoints can be correctly authorized."
+    },
+    {
+      "from": "E8-S1",
+      "to": "E2-S1",
+      "reason": "Every endpoint in the personnel/roster domain requires a valid Cognito-issued JWT validated by the shared Lambda authorizer before any business logic runs."
+    },
+    {
+      "from": "E8-S3",
+      "to": "E2-S1",
+      "reason": "Admin/officer-gated writes in the personnel/roster domain are enforced by Verified Permissions Cedar policy, which must exist before those endpoints can be correctly authorized."
+    },
+    {
+      "from": "E8-S1",
+      "to": "E3-S1",
+      "reason": "Every endpoint in the training/certification domain requires a valid Cognito-issued JWT validated by the shared Lambda authorizer before any business logic runs."
+    },
+    {
+      "from": "E8-S3",
+      "to": "E3-S1",
+      "reason": "Admin/officer-gated writes in the training/certification domain are enforced by Verified Permissions Cedar policy, which must exist before those endpoints can be correctly authorized."
+    },
+    {
+      "from": "E8-S1",
+      "to": "E4-S1",
+      "reason": "Every endpoint in the apparatus domain requires a valid Cognito-issued JWT validated by the shared Lambda authorizer before any business logic runs."
+    },
+    {
+      "from": "E8-S3",
+      "to": "E4-S1",
+      "reason": "Admin/officer-gated writes in the apparatus domain are enforced by Verified Permissions Cedar policy, which must exist before those endpoints can be correctly authorized."
+    },
+    {
+      "from": "E8-S1",
+      "to": "E5-S1",
+      "reason": "Every endpoint in the inspections/occupancy domain requires a valid Cognito-issued JWT validated by the shared Lambda authorizer before any business logic runs."
+    },
+    {
+      "from": "E8-S3",
+      "to": "E5-S1",
+      "reason": "Admin/officer-gated writes in the inspections/occupancy domain are enforced by Verified Permissions Cedar policy, which must exist before those endpoints can be correctly authorized."
+    },
+    {
+      "from": "E8-S1",
+      "to": "E6-S1",
+      "reason": "Every endpoint in the incident domain requires a valid Cognito-issued JWT validated by the shared Lambda authorizer before any business logic runs."
+    },
+    {
+      "from": "E8-S3",
+      "to": "E6-S1",
+      "reason": "Admin/officer-gated writes in the incident domain are enforced by Verified Permissions Cedar policy, which must exist before those endpoints can be correctly authorized."
+    },
+    {
+      "from": "E8-S1",
+      "to": "E7-S1",
+      "reason": "Every endpoint in the reporting domain requires a valid Cognito-issued JWT validated by the shared Lambda authorizer before any business logic runs."
+    },
+    {
+      "from": "E8-S3",
+      "to": "E7-S1",
+      "reason": "Admin/officer-gated writes in the reporting domain are enforced by Verified Permissions Cedar policy, which must exist before those endpoints can be correctly authorized."
+    },
+    {
+      "from": "E8-S1",
+      "to": "E2-S7",
+      "reason": "Duty-shift definition is an authenticated officer action and requires the sign-in/JWT-validation layer."
+    },
+    {
+      "from": "E8-S3",
+      "to": "E2-S7",
+      "reason": "POST /personnel/shifts is officer/admin-gated and requires the Cedar authorization layer."
+    },
+    {
+      "from": "E8-S1",
+      "to": "E4-S11",
+      "reason": "Equipment/asset registration is an authenticated admin action and requires the sign-in/JWT-validation layer."
+    },
+    {
+      "from": "E8-S3",
+      "to": "E4-S11",
+      "reason": "POST /inventory/equipment is Cognito(admin)-gated and requires the Cedar authorization layer."
+    },
+    {
+      "from": "E8-S1",
+      "to": "E5-S3",
+      "reason": "Hydrant record creation is an authenticated inspections/apparatus-officer action and requires the sign-in/JWT-validation layer."
+    },
+    {
+      "from": "E8-S1",
+      "to": "E3-S4",
+      "reason": "Training-event creation and sign-up are authenticated actions and require the sign-in/JWT-validation layer."
+    },
+    {
+      "from": "E8-S3",
+      "to": "E3-S4",
+      "reason": "POST /training/events is a training-officer-gated write and requires the Cedar authorization layer."
+    },
+    {
+      "from": "E1-S1",
+      "to": "E1-S2",
+      "reason": "Fan-out consumes DISPATCH_ALERT records; the manual-entry ingress adapter (the only buildable adapter today, per open question §12.1) is what produces them."
+    },
+    {
+      "from": "E1-S2",
+      "to": "E1-S3",
+      "reason": "The escalation timer checks ack status against receipts created by fan-out and re-uses the same per-channel dedup key fan-out establishes."
+    },
+    {
+      "from": "E1-S2",
+      "to": "E1-S4",
+      "reason": "Webhook receipt ingestion updates the immutable per-channel DELIVERY_RECEIPT items that fan-out first creates via its conditional put."
+    },
+    {
+      "from": "E1-S2",
+      "to": "E1-S5",
+      "reason": "Response confirmation and the live roster write to DISPATCH_ROSTER_ENTRY collocated with the DISPATCH_ALERT item collection fan-out creates."
+    },
+    {
+      "from": "E1-S1",
+      "to": "E1-S6",
+      "reason": "Alert-detail content (address, narrative, map) is served over the DISPATCH_ALERT record the ingress adapter creates."
+    },
+    {
+      "from": "E1-S2",
+      "to": "E1-S6",
+      "reason": "Alert-detail rendering happens after fan-out has run and populated eligibleMemberCount/fanOutStartedAt on the alert."
+    },
+    {
+      "from": "E1-S2",
+      "to": "E1-S7",
+      "reason": "The native Critical Alerts/full-screen-intent layer receives the push payload shape fan-out's per-channel send produces; the backend payload contract must exist first."
+    },
+    {
+      "from": "E1-S2",
+      "to": "E1-S8",
+      "reason": "Self-test re-uses the identical ingress-to-delivery fan-out pipeline flagged isTest:true."
+    },
+    {
+      "from": "E1-S4",
+      "to": "E1-S8",
+      "reason": "Self-test surfaces per-channel pass/fail sourced from the same receipt-ingestion path E1-S4 builds."
+    },
+    {
+      "from": "E1-S4",
+      "to": "E1-S9",
+      "reason": "The audit log queries DELIVERY_RECEIPT items that only exist once webhook receipt ingestion is built."
+    },
+    {
+      "from": "E1-S3",
+      "to": "E1-S9",
+      "reason": "The audit log's per-member timeline includes ESCALATION_EVENT records that only exist once the escalation scheduler is built."
+    },
+    {
+      "from": "E1-S8",
+      "to": "E1-S10",
+      "reason": "The production canary explicitly reuses the self-test pipeline (E1-S8) unmodified as its payload."
+    },
+    {
+      "from": "E1-S2",
+      "to": "E1-S11",
+      "reason": "The three-channel chaos/no-SPOF verification exercises the independently-vendored channel workers and per-channel queues fan-out stands up."
+    },
+    {
+      "from": "E1-S9",
+      "to": "E1-S12",
+      "reason": "The 'why didn't I get the page' diagnostic tool pulls its timeline directly from the delivery audit log E1-S9 builds."
+    },
+    {
+      "from": "E1-S2",
+      "to": "E1-S13",
+      "reason": "IAM isolation enforcement and the eligibility-snapshot staleness alarm harden the fan-out/snapshot pattern E1-S2 establishes."
+    },
+    {
+      "from": "E2-S2",
+      "to": "E1-S13",
+      "reason": "personnel.eligibility.changed (qual currency flips) is one of the three event sources the alerting-plane snapshot consumer this story hardens must ingest."
+    },
+    {
+      "from": "E2-S5",
+      "to": "E1-S13",
+      "reason": "personnel.availability.changed (marked-off windows) is event-propagated into MEMBER_ELIGIBILITY_SNAPSHOT, the pattern this story enforces and monitors."
+    },
+    {
+      "from": "E2-S6",
+      "to": "E1-S13",
+      "reason": "personnel.member.updated (contact-channel changes) must reach the snapshot this story's staleness alarm and IAM boundary govern."
+    },
+    {
+      "from": "E3-S8",
+      "to": "E1-S13",
+      "reason": "The cert-expiry-to-eligibility cascade emits personnel.eligibility.changed, which must reach the alerting-plane snapshot this story propagates and monitors."
+    },
+    {
+      "from": "E1-S1",
+      "to": "E5-S4",
+      "reason": "The alerting-service DynamoDB table and its isolation boundary must exist before the pre-plan/hydrant event consumer can be added to it."
+    },
+    {
+      "from": "E1-S6",
+      "to": "E5-S8",
+      "reason": "The pre-plan panel is built as an embeddable component inside the alert-detail screen this story delivers."
+    },
+    {
+      "from": "E1-S1",
+      "to": "E6-S2",
+      "reason": "Incident pre-population copies address/type/narrative/timestamps from the DISPATCH_ALERT record the ingress adapter creates."
+    },
+    {
+      "from": "E1-S5",
+      "to": "E6-S2",
+      "reason": "Incident pre-population copies responding units/members from the live response roster this story builds."
+    },
+    {
+      "from": "E2-S1",
+      "to": "E2-S2",
+      "reason": "Qualifications are assigned to a MEMBER record; the member must exist first."
+    },
+    {
+      "from": "E2-S1",
+      "to": "E2-S3",
+      "reason": "Attendance is recorded under a member's partition; the member must exist first."
+    },
+    {
+      "from": "E2-S3",
+      "to": "E2-S4",
+      "reason": "LOSAP points accrue automatically from ATTENDANCE_RECORD writes; attendance capture must exist first."
+    },
+    {
+      "from": "E2-S1",
+      "to": "E2-S5",
+      "reason": "Planned unavailability is recorded against an existing member."
+    },
+    {
+      "from": "E2-S1",
+      "to": "E2-S6",
+      "reason": "Self-service profile update mutates an existing MEMBER record."
+    },
+    {
+      "from": "E2-S7",
+      "to": "E2-S8",
+      "reason": "A shift and its unclaimed SHIFT_POSITION items must be defined before a member can atomically claim one."
+    },
+    {
+      "from": "E2-S1",
+      "to": "E2-S8",
+      "reason": "A claiming member must already exist as a MEMBER record."
+    },
+    {
+      "from": "E2-S7",
+      "to": "E2-S9",
+      "reason": "Coverage visibility reports on shifts/positions defined by E2-S7."
+    },
+    {
+      "from": "E2-S8",
+      "to": "E2-S9",
+      "reason": "Coverage classification (covered/short/qual-gapped) reads claim state written by the atomic claim story."
+    },
+    {
+      "from": "E2-S8",
+      "to": "E2-S10",
+      "reason": "Give-back and swap operate on a SHIFT_POSITION only after it has been claimed."
+    },
+    {
+      "from": "E2-S3",
+      "to": "E2-S11",
+      "reason": "Shift-derived attendance records reuse the ATTENDANCE_RECORD entity and write path this story establishes."
+    },
+    {
+      "from": "E2-S4",
+      "to": "E2-S11",
+      "reason": "Shift-derived attendance must flow into LOSAP accrual, which this story's rule engine provides."
+    },
+    {
+      "from": "E2-S8",
+      "to": "E2-S11",
+      "reason": "Only a claimed shift has attendance to record on completion."
+    },
+    {
+      "from": "E2-S1",
+      "to": "E3-S1",
+      "reason": "Certification records are stored per member; the member roster must exist first."
+    },
+    {
+      "from": "E3-S1",
+      "to": "E3-S2",
+      "reason": "The expiry scanner queries CERTIFICATION items via GSI2; certification records must exist first."
+    },
+    {
+      "from": "E3-S2",
+      "to": "E3-S3",
+      "reason": "Digest notifications are triggered by the cert.expiry.due event this scanner publishes."
+    },
+    {
+      "from": "E2-S1",
+      "to": "E3-S4",
+      "reason": "Training-event sign-up records attendance against existing members."
+    },
+    {
+      "from": "E3-S4",
+      "to": "E3-S5",
+      "reason": "Hours tracking rolls up TRAINING_ATTENDANCE records this story creates."
+    },
+    {
+      "from": "E3-S4",
+      "to": "E3-S6",
+      "reason": "The ISO report rolls up training events/categories this story defines."
+    },
+    {
+      "from": "E3-S5",
+      "to": "E3-S6",
+      "reason": "The ISO report reconciles exactly against the per-member/category hour totals this story computes."
+    },
+    {
+      "from": "E3-S1",
+      "to": "E3-S7",
+      "reason": "The transcript includes certification records from this story."
+    },
+    {
+      "from": "E3-S5",
+      "to": "E3-S7",
+      "reason": "The transcript includes category-hour totals computed by this story."
+    },
+    {
+      "from": "E3-S1",
+      "to": "E3-S8",
+      "reason": "A certification must exist before its expiry/revocation can flip a qualification's currency."
+    },
+    {
+      "from": "E2-S2",
+      "to": "E3-S8",
+      "reason": "MEMBER_QUALIFICATION.currentlyEligible (owned by E2-S2) is the field this story flips on expiry/revocation."
+    },
+    {
+      "from": "E4-S1",
+      "to": "E4-S2",
+      "reason": "Check-sheet templates are scoped to applicable apparatus IDs; the apparatus registry must exist first."
+    },
+    {
+      "from": "E4-S2",
+      "to": "E4-S3",
+      "reason": "The check runner executes today's checklist template resolved by this story."
+    },
+    {
+      "from": "E4-S1",
+      "to": "E4-S4",
+      "reason": "A defect is reported against an existing apparatus record."
+    },
+    {
+      "from": "E3-S3",
+      "to": "E4-S4",
+      "reason": "Defect-reported notifications route through notification-service's digest/non-critical-channel/isolation pattern, established in E3-S3."
+    },
+    {
+      "from": "E4-S1",
+      "to": "E4-S5",
+      "reason": "Out-of-service tracking transitions the status field this story's registry defines."
+    },
+    {
+      "from": "E4-S1",
+      "to": "E4-S6",
+      "reason": "Maintenance history is recorded against an existing apparatus record."
+    },
+    {
+      "from": "E4-S1",
+      "to": "E4-S7",
+      "reason": "SCBA records reference an apparatus/unit that must already be registered."
+    },
+    {
+      "from": "E3-S3",
+      "to": "E4-S7",
+      "reason": "SCBA test-due notifications route through the notification-service pattern established in E3-S3."
+    },
+    {
+      "from": "E4-S1",
+      "to": "E4-S8",
+      "reason": "Hose/ladder/pump/aerial test records reference an existing apparatus."
+    },
+    {
+      "from": "E3-S3",
+      "to": "E4-S8",
+      "reason": "Test-due digest-batched notifications route through the notification-service pattern established in E3-S3."
+    },
+    {
+      "from": "E4-S1",
+      "to": "E4-S9",
+      "reason": "Compartment inventory is scoped to an existing apparatus record."
+    },
+    {
+      "from": "E4-S3",
+      "to": "E4-S10",
+      "reason": "Compliance reporting aggregates CHECKLIST_RUN records produced by the check-runner story."
+    },
+    {
+      "from": "E2-S1",
+      "to": "E4-S12",
+      "reason": "PPE is issued to an existing member."
+    },
+    {
+      "from": "E3-S3",
+      "to": "E4-S12",
+      "reason": "PPE expiry notifications route through the notification-service pattern established in E3-S3."
+    },
+    {
+      "from": "E3-S3",
+      "to": "E4-S13",
+      "reason": "Reorder-threshold notifications route through the notification-service pattern established in E3-S3."
+    },
+    {
+      "from": "E4-S11",
+      "to": "E4-S14",
+      "reason": "An asset must be registered before its acquisition-through-retirement lifecycle can be transitioned."
+    },
+    {
+      "from": "E5-S1",
+      "to": "E5-S2",
+      "reason": "A pre-incident plan is attached to an existing occupancy record."
+    },
+    {
+      "from": "E5-S1",
+      "to": "E5-S5",
+      "reason": "Inspections are scheduled against an existing occupancy."
+    },
+    {
+      "from": "E5-S1",
+      "to": "E5-S6",
+      "reason": "Map retrieval of occupancies requires occupancy geohash keys this story writes."
+    },
+    {
+      "from": "E5-S3",
+      "to": "E5-S6",
+      "reason": "Map retrieval of hydrants requires hydrant geohash keys this story writes."
+    },
+    {
+      "from": "E5-S1",
+      "to": "E5-S7",
+      "reason": "Mobile field capture attaches photos/updates to occupancy records."
+    },
+    {
+      "from": "E5-S5",
+      "to": "E5-S7",
+      "reason": "Mobile field capture attaches photos/updates to inspection records."
+    },
+    {
+      "from": "E5-S2",
+      "to": "E5-S4",
+      "reason": "The alerting-plane pre-plan copy consumes inspections.preplan.updated, emitted only once pre-plans exist."
+    },
+    {
+      "from": "E5-S3",
+      "to": "E5-S4",
+      "reason": "Nearest-hydrant resolution at copy-write time requires hydrant records and inspections.hydrant.updated to exist."
+    },
+    {
+      "from": "E6-S1",
+      "to": "E6-S3",
+      "reason": "Guided completion validates and writes against the NERIS-native incident model this story defines."
+    },
+    {
+      "from": "E6-S1",
+      "to": "E6-S4",
+      "reason": "Narrative capture writes into the corePayload this story's data model defines."
+    },
+    {
+      "from": "E6-S1",
+      "to": "E6-S5",
+      "reason": "Response-time recording writes INCIDENT_RESPONSE_UNIT items under an existing incident."
+    },
+    {
+      "from": "E6-S2",
+      "to": "E6-S5",
+      "reason": "Units pre-populated from the response roster (E6-S2) are what response-time recording edits."
+    },
+    {
+      "from": "E6-S1",
+      "to": "E6-S6",
+      "reason": "Secondary-schema capture attaches to an existing incident record."
+    },
+    {
+      "from": "E6-S11",
+      "to": "E6-S3",
+      "reason": "Enumeration validation in guided completion depends on the schema-version registry this story provides."
+    },
+    {
+      "from": "E6-S11",
+      "to": "E6-S6",
+      "reason": "Secondary-schema enumeration validation depends on the schema-version registry this story provides."
+    },
+    {
+      "from": "E6-S1",
+      "to": "E6-S10",
+      "reason": "Search/history queries the INCIDENT entity this story defines."
+    },
+    {
+      "from": "E6-S1",
+      "to": "E6-S11",
+      "reason": "Schema-version fixtures are validated against the incident data model this story defines."
+    },
+    {
+      "from": "E6-S7",
+      "to": "E6-S8",
+      "reason": "Submission requires the OAuth2 client-credentials/per-environment config foundation this story builds."
+    },
+    {
+      "from": "E6-S1",
+      "to": "E6-S8",
+      "reason": "Submission acts on a VALIDATED incident built on this story's data model."
+    },
+    {
+      "from": "E6-S2",
+      "to": "E6-S8",
+      "reason": "Submission requires a created (pre-populated) incident."
+    },
+    {
+      "from": "E6-S3",
+      "to": "E6-S8",
+      "reason": "Only a VALIDATED incident (guided completion's terminal state) may be submitted."
+    },
+    {
+      "from": "E6-S4",
+      "to": "E6-S8",
+      "reason": "The narrative is part of what gets submitted."
+    },
+    {
+      "from": "E6-S5",
+      "to": "E6-S8",
+      "reason": "Response-time/unit data is part of what gets submitted."
+    },
+    {
+      "from": "E6-S6",
+      "to": "E6-S8",
+      "reason": "Secondary-schema data is part of what gets submitted."
+    },
+    {
+      "from": "E6-S8",
+      "to": "E6-S9",
+      "reason": "Submission status/retry surfaces the outcome of the submission this story performs."
+    },
+    {
+      "from": "E2-S3",
+      "to": "E7-S2",
+      "reason": "personnel.attendance.recorded is one of the events this rollup consumer ingests."
+    },
+    {
+      "from": "E6-S8",
+      "to": "E7-S2",
+      "reason": "neris.incident.submitted feeds the NERIS-compliance rollup counter."
+    },
+    {
+      "from": "E6-S9",
+      "to": "E7-S2",
+      "reason": "neris.submission.failed feeds the NERIS-compliance rollup counter."
+    },
+    {
+      "from": "E7-S2",
+      "to": "E7-S1",
+      "reason": "The dashboard is served from the pre-aggregated rollup items this story maintains."
+    },
+    {
+      "from": "E4-S5",
+      "to": "E7-S1",
+      "reason": "The OOS-apparatus panel is sourced from out-of-service tracking data."
+    },
+    {
+      "from": "E3-S2",
+      "to": "E7-S1",
+      "reason": "The expiring-certifications panel is sourced from the cert-expiry due-date index."
+    },
+    {
+      "from": "E6-S9",
+      "to": "E7-S1",
+      "reason": "The NERIS-compliance panel is sourced from submission status/failure data."
+    },
+    {
+      "from": "E2-S1",
+      "to": "E7-S1",
+      "reason": "Active-member/staffing counts are sourced from the roster."
+    },
+    {
+      "from": "E2-S9",
+      "to": "E7-S1",
+      "reason": "Staffing-vs-shift-coverage summary is sourced from coverage visibility."
+    },
+    {
+      "from": "E2-S4",
+      "to": "E7-S3",
+      "reason": "The LOSAP year-end report aggregates LOSAP_POINT_ENTRY records this story writes."
+    },
+    {
+      "from": "E3-S6",
+      "to": "E7-S4",
+      "reason": "The ISO report includes training hours from this story's ISO-aligned rollup."
+    },
+    {
+      "from": "E4-S8",
+      "to": "E7-S4",
+      "reason": "The ISO report includes apparatus test pass/fail history from this story."
+    },
+    {
+      "from": "E5-S3",
+      "to": "E7-S4",
+      "reason": "The ISO report includes hydrant flow-test currency from this story's records."
+    },
+    {
+      "from": "E6-S5",
+      "to": "E7-S4",
+      "reason": "The ISO report includes response-time summary data from this story."
+    },
+    {
+      "from": "E7-S2",
+      "to": "E7-S4",
+      "reason": "ISO reporting reads rollups where they exist per this story's projection consumer."
+    },
+    {
+      "from": "E2-S1",
+      "to": "E7-S5",
+      "reason": "The grant report includes active-member count/trend from the roster."
+    },
+    {
+      "from": "E6-S1",
+      "to": "E7-S5",
+      "reason": "The grant report includes incident/response volume from the incident data model."
+    },
+    {
+      "from": "E3-S5",
+      "to": "E7-S5",
+      "reason": "The grant report includes training-hours compliance from this story."
+    },
+    {
+      "from": "E4-S5",
+      "to": "E7-S5",
+      "reason": "The grant report includes apparatus in/out-of-service history from this story."
+    },
+    {
+      "from": "E6-S5",
+      "to": "E7-S6",
+      "reason": "Turnout/travel/total analytics compute directly from the per-unit response-time timestamps this story captures."
+    },
+    {
+      "from": "E2-S3",
+      "to": "E7-S7",
+      "reason": "Attendance-rate trend reporting aggregates ATTENDANCE_RECORD data this story captures."
+    },
+    {
+      "from": "E2-S1",
+      "to": "E7-S7",
+      "reason": "Membership-count trend reporting reads member status transitions this story governs."
+    },
+    {
+      "from": "E7-S1",
+      "to": "E7-S8",
+      "reason": "The reporting UI screen for this report/dashboard consumes the E7-S1 endpoint directly; explicitly named as a dependency in E7-S8."
+    },
+    {
+      "from": "E7-S1",
+      "to": "E7-S9",
+      "reason": "CSV/PDF export of this report depends on its underlying data/endpoint from E7-S1; explicitly named as a dependency in E7-S9."
+    },
+    {
+      "from": "E7-S3",
+      "to": "E7-S8",
+      "reason": "The reporting UI screen for this report/dashboard consumes the E7-S3 endpoint directly; explicitly named as a dependency in E7-S8."
+    },
+    {
+      "from": "E7-S3",
+      "to": "E7-S9",
+      "reason": "CSV/PDF export of this report depends on its underlying data/endpoint from E7-S3; explicitly named as a dependency in E7-S9."
+    },
+    {
+      "from": "E7-S4",
+      "to": "E7-S8",
+      "reason": "The reporting UI screen for this report/dashboard consumes the E7-S4 endpoint directly; explicitly named as a dependency in E7-S8."
+    },
+    {
+      "from": "E7-S4",
+      "to": "E7-S9",
+      "reason": "CSV/PDF export of this report depends on its underlying data/endpoint from E7-S4; explicitly named as a dependency in E7-S9."
+    },
+    {
+      "from": "E7-S5",
+      "to": "E7-S8",
+      "reason": "The reporting UI screen for this report/dashboard consumes the E7-S5 endpoint directly; explicitly named as a dependency in E7-S8."
+    },
+    {
+      "from": "E7-S5",
+      "to": "E7-S9",
+      "reason": "CSV/PDF export of this report depends on its underlying data/endpoint from E7-S5; explicitly named as a dependency in E7-S9."
+    },
+    {
+      "from": "E7-S6",
+      "to": "E7-S8",
+      "reason": "The reporting UI screen for this report/dashboard consumes the E7-S6 endpoint directly; explicitly named as a dependency in E7-S8."
+    },
+    {
+      "from": "E7-S6",
+      "to": "E7-S9",
+      "reason": "CSV/PDF export of this report depends on its underlying data/endpoint from E7-S6; explicitly named as a dependency in E7-S9."
+    },
+    {
+      "from": "E7-S7",
+      "to": "E7-S8",
+      "reason": "The reporting UI screen for this report/dashboard consumes the E7-S7 endpoint directly; explicitly named as a dependency in E7-S8."
+    },
+    {
+      "from": "E7-S7",
+      "to": "E7-S9",
+      "reason": "CSV/PDF export of this report depends on its underlying data/endpoint from E7-S7; explicitly named as a dependency in E7-S9."
+    },
+    {
+      "from": "E8-S3",
+      "to": "E1-S14",
+      "reason": "Token write is an authenticated member action and needs the Cedar authorization layer."
+    },
+    {
+      "from": "E2-S1",
+      "to": "E1-S14",
+      "reason": "A token is stored against a member record, so the roster must exist."
+    },
+    {
+      "from": "E1-S14",
+      "to": "E1-S2",
+      "reason": "Fan-out cannot publish a push without a registered device token — this is the missing link that made push undeliverable."
+    },
+    {
+      "from": "E1-S2",
+      "to": "E1-S17",
+      "reason": "Enrichment renders on an alert produced by fan-out."
+    },
+    {
+      "from": "E5-S4",
+      "to": "E1-S17",
+      "reason": "Pre-plan/hydrant enrichment consumes the denormalized copy this story maintains."
+    },
+    {
+      "from": "E8-S3",
+      "to": "E5-S3",
+      "reason": "Hydrant creation is gated on an authenticated inspections/apparatus officer, so Cedar authorization is required."
+    },
+    {
+      "from": "E8-S11",
+      "to": "E1-S10",
+      "reason": "The canary's telemetry builds on the platform logging/tracing/metrics foundation."
+    },
+    {
+      "from": "E8-S11",
+      "to": "E1-S11",
+      "reason": "DLQ alarming builds on the platform metrics foundation."
+    },
+    {
+      "from": "E8-S1",
+      "to": "E8-S10",
+      "reason": "Region and encryption assertions run against provisioned stacks."
+    },
+    {
+      "from": "E1-S9",
+      "to": "E1-S15",
+      "reason": "The cutover decision reads the delivery audit log this story produces."
+    },
+    {
+      "from": "E1-S16",
+      "to": "E1-S1",
+      "reason": "The manual adapter ships regardless, but the port contract is confirmed by the CAD finding."
+    }
+  ],
+  "epicEdges": [
+    {
+      "from": "E8",
+      "to": "E1",
+      "reason": "Authentication (E8-S1), Cedar authorization (E8-S3), and the department-scoping tenancy seam (E8-S7) gate every alerting-service admin/query endpoint."
+    },
+    {
+      "from": "E8",
+      "to": "E2",
+      "reason": "Roster/shift endpoints are Cognito-authenticated and Cedar-authorized; admin writes require E8-S1/E8-S3."
+    },
+    {
+      "from": "E8",
+      "to": "E3",
+      "reason": "Certification and training endpoints are Cognito-authenticated and admin/training-officer writes are Cedar-gated."
+    },
+    {
+      "from": "E8",
+      "to": "E4",
+      "reason": "Apparatus/inventory registries and admin-only status/lifecycle transitions require Cognito auth and Cedar authorization."
+    },
+    {
+      "from": "E8",
+      "to": "E5",
+      "reason": "Occupancy/hydrant/pre-plan writes require Cognito auth and, for admin actions, Cedar authorization."
+    },
+    {
+      "from": "E8",
+      "to": "E6",
+      "reason": "Incident creation, guided completion, and submission are Cognito-authenticated; submission is Cognito(admin)-gated."
+    },
+    {
+      "from": "E8",
+      "to": "E7",
+      "reason": "Every reporting/dashboard endpoint is Cognito(admin)-gated."
+    },
+    {
+      "from": "E2",
+      "to": "E1",
+      "reason": "personnel.eligibility.changed, personnel.availability.changed, and personnel.member.updated are event-propagated into MEMBER_ELIGIBILITY_SNAPSHOT — the coupling is the snapshot-maintaining story (E1-S13), not all of E2, per the looser event-propagation architecture."
+    },
+    {
+      "from": "E3",
+      "to": "E1",
+      "reason": "Expired-certification eligibility cascades (E3-S8) publish personnel.eligibility.changed, which must reach the alerting-plane snapshot before a fan-out can correctly exclude a decertified member."
+    },
+    {
+      "from": "E5",
+      "to": "E1",
+      "reason": "inspections.preplan.updated/inspections.hydrant.updated maintain the alerting-plane PRE_PLAN_COPY that alert-detail (E1-S6) renders without a live cross-service call."
+    },
+    {
+      "from": "E1",
+      "to": "E5",
+      "reason": "The alerting-service table/isolation boundary (E1-S1) must exist before the pre-plan-copy consumer can be added to it, and the alert-detail screen (E1-S6) must exist before the pre-plan panel (E5-S8) can be embedded in it."
+    },
+    {
+      "from": "E1",
+      "to": "E6",
+      "reason": "Incident creation pre-populates from the originating DISPATCH_ALERT and live response roster that alerting produces."
+    },
+    {
+      "from": "E2",
+      "to": "E3",
+      "reason": "Certification records and training sign-up are recorded per existing MEMBER; the roster is foundational."
+    },
+    {
+      "from": "E2",
+      "to": "E4",
+      "reason": "PPE is assigned to an existing member; the roster is foundational."
+    },
+    {
+      "from": "E3",
+      "to": "E4",
+      "reason": "notification-service's shared digest-batching / non-critical-channel / LOB-isolation infrastructure is established in E3-S3 and reused by E4's defect/testing/PPE/reorder notification stories."
+    },
+    {
+      "from": "E2",
+      "to": "E7",
+      "reason": "Reporting reads attendance, LOSAP, roster, and coverage data captured by E2 rather than capturing it itself."
+    },
+    {
+      "from": "E3",
+      "to": "E7",
+      "reason": "Reporting reads training-hours and certification-expiry data captured by E3."
+    },
+    {
+      "from": "E4",
+      "to": "E7",
+      "reason": "Reporting reads apparatus out-of-service, testing, and compliance data captured by E4."
+    },
+    {
+      "from": "E5",
+      "to": "E7",
+      "reason": "ISO reporting reads hydrant flow-test currency captured by E5."
+    },
+    {
+      "from": "E6",
+      "to": "E7",
+      "reason": "Reporting reads NERIS submission status and incident/response-time data captured by E6."
+    }
+  ],
+  "waves": [
+    {
+      "wave": 1,
+      "stories": [
+        "E1-S16",
+        "E6-S12",
+        "E6-S7",
+        "E8-S1",
+        "E8-S11",
+        "E8-S5",
+        "E8-S7",
+        "E8-S9"
+      ]
+    },
+    {
+      "wave": 2,
+      "stories": [
+        "E8-S10",
+        "E8-S3",
+        "E8-S8"
+      ]
+    },
+    {
+      "wave": 3,
+      "stories": [
+        "E1-S1",
+        "E2-S1",
+        "E2-S7",
+        "E4-S1",
+        "E4-S11",
+        "E5-S1",
+        "E5-S3",
+        "E6-S1",
+        "E8-S2",
+        "E8-S4",
+        "E8-S6"
+      ]
+    },
+    {
+      "wave": 4,
+      "stories": [
+        "E1-S14",
+        "E2-S2",
+        "E2-S3",
+        "E2-S5",
+        "E2-S6",
+        "E2-S8",
+        "E3-S1",
+        "E3-S4",
+        "E4-S14",
+        "E4-S2",
+        "E4-S5",
+        "E4-S6",
+        "E4-S9",
+        "E5-S2",
+        "E5-S5",
+        "E5-S6",
+        "E6-S10",
+        "E6-S11",
+        "E6-S4"
+      ]
+    },
+    {
+      "wave": 5,
+      "stories": [
+        "E1-S2",
+        "E2-S10",
+        "E2-S4",
+        "E2-S9",
+        "E3-S2",
+        "E3-S5",
+        "E3-S8",
+        "E4-S3",
+        "E5-S4",
+        "E5-S7",
+        "E6-S3",
+        "E6-S6",
+        "E7-S7"
+      ]
+    },
+    {
+      "wave": 6,
+      "stories": [
+        "E1-S11",
+        "E1-S13",
+        "E1-S17",
+        "E1-S3",
+        "E1-S4",
+        "E1-S5",
+        "E1-S6",
+        "E1-S7",
+        "E2-S11",
+        "E3-S3",
+        "E3-S6",
+        "E3-S7",
+        "E4-S10",
+        "E7-S3",
+        "E7-S5"
+      ]
+    },
+    {
+      "wave": 7,
+      "stories": [
+        "E1-S8",
+        "E1-S9",
+        "E4-S12",
+        "E4-S13",
+        "E4-S4",
+        "E4-S7",
+        "E4-S8",
+        "E5-S8",
+        "E6-S2"
+      ]
+    },
+    {
+      "wave": 8,
+      "stories": [
+        "E1-S10",
+        "E1-S12",
+        "E1-S15",
+        "E6-S5"
+      ]
+    },
+    {
+      "wave": 9,
+      "stories": [
+        "E6-S8",
+        "E7-S6"
+      ]
+    },
+    {
+      "wave": 10,
+      "stories": [
+        "E6-S9"
+      ]
+    },
+    {
+      "wave": 11,
+      "stories": [
+        "E7-S2"
+      ]
+    },
+    {
+      "wave": 12,
+      "stories": [
+        "E7-S1",
+        "E7-S4"
+      ]
+    },
+    {
+      "wave": 13,
+      "stories": [
+        "E7-S8",
+        "E7-S9"
+      ]
+    }
+  ]
+}
