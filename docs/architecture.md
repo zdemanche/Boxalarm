@@ -1,4 +1,4 @@
-# Architecture: Fire Department Operations Platform
+# Boxalarm — Architecture
 
 ## Requirements Summary
 
@@ -34,7 +34,7 @@ flowchart TB
         ESC["Escalation<br/>EventBridge Scheduler"]
         RCPT["Delivery Receipts"]
         CANARY["Canary / Self-test<br/>F1.10 = N1.6"]
-        ABUS(["SNS FIFO topic<br/>fd-env-alerting-topic.fifo"])
+        ABUS(["SNS FIFO topic<br/>boxalarm-env-alerting-topic.fifo"])
         AQ[["Per-channel SQS + DLQ"]]
         ADB[("alerting-service<br/>DynamoDB")]
     end
@@ -47,7 +47,7 @@ flowchart TB
         INSP["Inspections + Pre-plans"]
         INC["Incident / NERIS"]
         RPT["Reporting"]
-        LBUS(["EventBridge<br/>fd-env-platform-bus"])
+        LBUS(["EventBridge<br/>boxalarm-env-platform-bus"])
         LQ[["SQS + DLQ"]]
         PDB[("platform-service<br/>DynamoDB")]
         IDB[("incident-service<br/>DynamoDB")]
@@ -113,7 +113,7 @@ N1 (life-safety alerting) and N1.5 ("an outage in reporting, training, inventory
 
 ## 1. Service architecture
 
-### 1.1 Bounded contexts (10 services, 1 repo: `fd-backend`)
+### 1.1 Bounded contexts (10 services, 1 repo: `boxalarm-backend`)
 
 | # | Service | Bounded context | Wave | Store |
 |---|---|---|---|---|
@@ -128,11 +128,11 @@ N1 (life-safety alerting) and N1.5 ("an outage in reporting, training, inventory
 | 9 | `inventory-service` | Equipment/PPE registry, consumable stock, asset lifecycle | 4 | DynamoDB |
 | 10 | `notification-service` | **Non-alert** member/officer notification: cert expiry (F3.2), defect routing to apparatus officer (F4.3), testing-due (F4.7), PPE expiry, reorder thresholds (F5.3), shift-coverage gaps. Notification preferences, in-app inbox, digest batching | 1 | `platform-service` table |
 
-Each is a Lambda-per-route (or small route group) deployment unit under `src/services/<name>/`, packaged from the single `fd-backend` repo per the house repo topology; `fd-infrastructure` owns all Pulumi that wires them to API Gateway, DynamoDB, EventBridge, etc. Detailed DynamoDB single-table key design is deferred to `data-architect`.
+Each is a Lambda-per-route (or small route group) deployment unit under `src/services/<name>/`, packaged from the single `boxalarm-backend` repo per the house repo topology; `boxalarm-infrastructure` owns all Pulumi that wires them to API Gateway, DynamoDB, EventBridge, etc. Detailed DynamoDB single-table key design is deferred to `data-architect`.
 
 > **`notification-service` (reconciled — CANONICAL).** The Events section routes `cert.expiry.due`, `apparatus.test.due`, `ppe.expiry.due`, `inventory.reorder.due` and `scheduling.coverage_gap.detected` to a "Notification Service" that previously existed in no service list. It is service 10 above. Its contract:
 >
-> - **Failure domain is the LOB plane, explicitly.** It shares **no** SQS queue, no Lambda concurrency reservation, no SNS topic, and **no provider account** with the alerting plane. A notification-service failure, or a flood of cert-expiry notices, cannot consume capacity the alert path depends on (N1.5). It consumes from `fd-{env}-platform-bus`, never from the alerting FIFO topic.
+> - **Failure domain is the LOB plane, explicitly.** It shares **no** SQS queue, no Lambda concurrency reservation, no SNS topic, and **no provider account** with the alerting plane. A notification-service failure, or a flood of cert-expiry notices, cannot consume capacity the alert path depends on (N1.5). It consumes from `boxalarm-{env}-platform-bus`, never from the alerting FIFO topic.
 > - **Channels:** APNs/FCM via a **separate, non-critical notification channel** in the same mobile app (distinct channel ID / not the Critical Alerts channel, so OS-level treatment differs and a routine cert reminder can never present as a dispatch), plus email. No SMS and no voice in v1 — those are reserved to the alerting plane to keep the cost and the failure domain separate.
 > - **Entities** (on the `platform-service` table): `NOTIFICATION_PREFERENCE` (`sk = NOTIFPREF#{memberId}#{category}` — channel opt-ins and digest cadence per category) and `NOTIFICATION` (`sk = NOTIF#{memberId}#{ts}#{notificationId}` — the in-app inbox record, with `readAt`, TTL 180 days).
 > - **Endpoints:** `GET /notifications` (inbox, paginated), `POST /notifications/{id}/read`, `GET /notifications/preferences`, `PUT /notifications/preferences`.
@@ -160,7 +160,7 @@ flowchart TB
   Manual[Officer manual entry\n- degraded mode N1.8] --> Ingress
   Canary[Synthetic Canary\nscheduled every 1-2 min] --> Ingress
 
-  Ingress -->|conditional put, idempotent on dispatchId| AlertDB[(DynamoDB\nfd-alerting-table)]
+  Ingress -->|conditional put, idempotent on dispatchId| AlertDB[(DynamoDB\nboxalarm-alerting-table)]
   AlertDB -->|DynamoDB Stream| FanOut[Fan-Out Lambda\ncomputes eligible members\nfrom denormalized roster copy]
 
   FanOut -->|conditional put per\ndispatchId#memberId#channel - N1.4| AlertDB
@@ -179,7 +179,7 @@ flowchart TB
   Escalator[Escalation Scheduler\nStep Functions / EventBridge Scheduler\npolls ack status per member] -->|no ack in N sec| SmsQ
   Escalator -->|still no ack| VoiceQ
 
-  AlertDB -->|DynamoDB Stream\noutbox republish| PlatformBus{{EventBridge\nfd-env-platform-bus\nLOB plane only}}
+  AlertDB -->|DynamoDB Stream\noutbox republish| PlatformBus{{EventBridge\nboxalarm-env-platform-bus\nLOB plane only}}
 
   CW[CloudWatch Alarms\non fan-out latency, delivery rate,\ncanary failure] -->|page| OnCall[(On-call / department admin)]
   AlertDB --> CW
@@ -229,14 +229,14 @@ flowchart TB
 >
 > | Plane | Transport | Why |
 > |---|---|---|
-> | **Alerting** | **SNS FIFO topic `fd-{env}-alerting-topic.fifo` → SQS FIFO queues**, one per channel, each with its own DLQ | FIFO ordering plus `MessageDeduplicationId` is **load-bearing** for the N1.4 exactly-once guarantee. **EventBridge has no FIFO mode and cannot supply it.** There is no `fd-alerting-bus`; alerting does not use EventBridge for fan-out. |
-> | **Domain (LOB)** | **EventBridge bus `fd-{env}-platform-bus`**, rule-routed to per-consumer SQS queues, each with its own DLQ | Content-based rule routing, cheap at this volume, one bus instead of six topics to operate. No ordering requirement exists on this plane. |
+> | **Alerting** | **SNS FIFO topic `boxalarm-{env}-alerting-topic.fifo` → SQS FIFO queues**, one per channel, each with its own DLQ | FIFO ordering plus `MessageDeduplicationId` is **load-bearing** for the N1.4 exactly-once guarantee. **EventBridge has no FIFO mode and cannot supply it.** There is no `boxalarm-alerting-bus`; alerting does not use EventBridge for fan-out. |
+> | **Domain (LOB)** | **EventBridge bus `boxalarm-{env}-platform-bus`**, rule-routed to per-consumer SQS queues, each with its own DLQ | Content-based rule routing, cheap at this volume, one bus instead of six topics to operate. No ordering requirement exists on this plane. |
 >
-> **Crossing between planes** is one-way only: a `fd-{env}-platform-bus` rule subscribes to a narrow allow-list of alerting events (`dispatch.alert.received`, `alerting.response.confirmed`) republished outward from the alerting plane, so the LOB plane can observe alerting but can never back-pressure or reach into it (N1.5, N1.7).
+> **Crossing between planes** is one-way only: a `boxalarm-{env}-platform-bus` rule subscribes to a narrow allow-list of alerting events (`dispatch.alert.received`, `alerting.response.confirmed`) republished outward from the alerting plane, so the LOB plane can observe alerting but can never back-pressure or reach into it (N1.5, N1.7).
 >
 > **EventBridge Scheduler** is used within the alerting plane for one-time escalation timers only (not as a bus) — this is a scheduler, not a transport, and does not conflict with the FIFO decision.
 >
-> **Resource naming is `fd-{env}-*` everywhere.** Any `moonaan-prod-*` resource name appearing in a diagram or table below is template boilerplate; read it as `fd-{env}-*`. The six per-domain SNS topics (`*-training-topic`, `-apparatus-`, `-inventory-`, `-neris-`, `-scheduling-`, `-personnel-`) are **superseded** by `fd-{env}-platform-bus` with one rule per event type; the consumer queues named alongside them remain correct.
+> **Resource naming is `boxalarm-{env}-*` everywhere.** Any `moonaan-prod-*` resource name appearing in a diagram or table below is template boilerplate; read it as `boxalarm-{env}-*`. The six per-domain SNS topics (`*-training-topic`, `-apparatus-`, `-inventory-`, `-neris-`, `-scheduling-`, `-personnel-`) are **superseded** by `boxalarm-{env}-platform-bus` with one rule per event type; the consumer queues named alongside them remain correct.
 
 > **Event naming (reconciled).** The Events section is the authority on event names and envelope shape, and its convention — lowercase dotted `<domain>.<entity>.<past-tense-verb>` — is canonical throughout this architecture. Where this Backend section used PascalCase shorthand, read it as the dotted name: `DispatchReceived` → `dispatch.alert.received`, `ResponseConfirmed` → `alerting.response.confirmed`, `MemberUpdated` → `personnel.member.updated`, `CertExpiring` → `cert.expiry.due`, `CheckCompleted` → `apparatus.check.completed`, `IncidentSubmitted` → `neris.incident.submitted`. Implementations MUST emit the dotted form; the PascalCase names appear nowhere in code, config, or EventBridge rule patterns.
 - **Outbox pattern**, per house standard, for every write that must also raise an event: the write and an outbox row land in the same DynamoDB transaction; a DynamoDB Streams-triggered Lambda publishes the outbox row to EventBridge and marks it sent. Used by `incident-service` for NERIS submission, `personnel-service`/`training-service` for eligibility-affecting changes, and `platform-service` for the audit sink.
@@ -399,7 +399,7 @@ Base path `/api/v1/{service}/...`, JSON camelCase, RFC 7807 errors with `traceId
 | Messaging | **SNS FIFO (alerting) + EventBridge (1 LOB bus) + SQS** (per-channel FIFO queues + DLQs) + DynamoDB Streams | Outbox pattern backbone; SQS gives the alerting channels independent, individually-retryable, individually-alarmable queues. |
 | Orchestration | Step Functions (or EventBridge Scheduler for simple timer cases) | Escalation ladder timing (F1.4) and NERIS submission retry/backoff need durable, observable state machines, not in-Lambda sleep loops. |
 | Cache | ElastiCache Serverless (Valkey) — config/reference data and reporting aggregations only, never the alerting hot path | House standard; scoped narrowly because a cache is explicitly a soft dependency and the alerting read path cannot tolerate "soft." |
-| IaC | Pulumi, `fd-infrastructure` repo | Pinned by requirements §8 and house repo topology — `fd-backend` carries no IaC. |
+| IaC | Pulumi, `boxalarm-infrastructure` repo | Pinned by requirements §8 and house repo topology — `boxalarm-backend` carries no IaC. |
 | Identity | Amazon Cognito user pool (single pool, per environment) | Pinned by requirements §8 and house auth standard. |
 | Authorization | AWS Verified Permissions, Cedar policies | House standard; encodes F2.7's six roles and the F9.6 department-scoping tenancy seam as policy, not scattered `if` statements. |
 
@@ -1272,17 +1272,17 @@ Two buckets, one per service that produces large objects (alerting-service produ
 
 | Bucket | Holds | Prefix pattern |
 |---|---|---|
-| `nichols-fd-platform-assets` | Cert/PPE attachments, defect photos, checklist photos, pre-plan diagrams/attachments, inspection photos | `{deptId}/{entityType}/{entityId}/{filename}` |
-| `nichols-fd-incident-assets` | Incident report attachments, NERIS schema pins (`SCHEMA_VERSION.coreSchemaS3Key`/`secondarySchemaS3Key`) | `{deptId}/{entityType}/{entityId}/{filename}` |
+| `nichols-boxalarm-platform-assets` | Cert/PPE attachments, defect photos, checklist photos, pre-plan diagrams/attachments, inspection photos | `{deptId}/{entityType}/{entityId}/{filename}` |
+| `boxalarm-incident-assets` | Incident report attachments, NERIS schema pins (`SCHEMA_VERSION.coreSchemaS3Key`/`secondarySchemaS3Key`) | `{deptId}/{entityType}/{entityId}/{filename}` |
 
-Applied uniformly: Block Public Access on, SSE-S3, versioning off, `AbortIncompleteMultipartUpload` at 7 days, Intelligent-Tiering default with IA transition at 60 days (department documents are rarely re-read after the first month), client uploads via CloudFront signed URLs scoped to the specific `{deptId}/{entityType}/{entityId}/` prefix with 10-minute expirations (field capture, F6.5/N3.4), multipart above 100MB with 25MB parts (rare — mostly small photos/PDFs). A third, short-lived bucket, `nichols-fd-exports-staging`, holds F8.7/F9.5 CSV/PDF exports and any Chief360 import staging files, with a 7-day expiration lifecycle rule on the whole bucket (temporary by design).
+Applied uniformly: Block Public Access on, SSE-S3, versioning off, `AbortIncompleteMultipartUpload` at 7 days, Intelligent-Tiering default with IA transition at 60 days (department documents are rarely re-read after the first month), client uploads via CloudFront signed URLs scoped to the specific `{deptId}/{entityType}/{entityId}/` prefix with 10-minute expirations (field capture, F6.5/N3.4), multipart above 100MB with 25MB parts (rare — mostly small photos/PDFs). A third, short-lived bucket, `boxalarm-exports-staging`, holds F8.7/F9.5 CSV/PDF exports and any Chief360 import staging files, with a 7-day expiration lifecycle rule on the whole bucket (temporary by design).
 
 ## 9. Migration strategy
 
 This is a greenfield product — there is no existing platform data to migrate except the department's own Chief360 history, whose export scope is an **open, unresolved question** (requirements §12, item 4).
 
 - **Approach: backfill, not lazy or dual-write.** There is no live traffic on the new platform pre-launch and no concurrent read/write contention with Chief360 to manage, so a one-time batch import is sufficient — lazy migration (format-on-read) and dual-write both solve problems that don't exist here.
-- **Pending the open question:** once Chief360's export format and scope are confirmed, land the raw export in `nichols-fd-exports-staging`, write a batch transform script that maps exported records to this document's entity shapes (most plausibly: `MEMBER`, `MEMBER_QUALIFICATION`, `CERTIFICATION`, `APPARATUS`, and possibly historical `ATTENDANCE_RECORD`/`LOSAP_POINT_ENTRY` — Chief360 is not described as NERIS-native, so **no incident data migrates**; NFIRS is retired and out of scope per requirements §4.1/§2.2), and load via `BatchWriteItem` off-peak, pre-cutover, following dev → qa → staging → prod.
+- **Pending the open question:** once Chief360's export format and scope are confirmed, land the raw export in `boxalarm-exports-staging`, write a batch transform script that maps exported records to this document's entity shapes (most plausibly: `MEMBER`, `MEMBER_QUALIFICATION`, `CERTIFICATION`, `APPARATUS`, and possibly historical `ATTENDANCE_RECORD`/`LOSAP_POINT_ENTRY` — Chief360 is not described as NERIS-native, so **no incident data migrates**; NFIRS is retired and out of scope per requirements §4.1/§2.2), and load via `BatchWriteItem` off-peak, pre-cutover, following dev → qa → staging → prod.
 - **No cross-database tooling is needed** for this import (DMS/DataSync target relational-to-relational or DynamoDB-to-DynamoDB moves; Chief360's export shape is unknown and, per the open question, may just be CSV/PDF exports a human maps by hand). Revisit this section once question 4 is answered — it may turn out to be a manual, low-volume data-entry exercise rather than a scripted migration at all, given this is a volunteer department with a roster in the dozens.
 - **N1.9 parallel-run** is an *operational* coexistence requirement (tone-out paging kept alongside the app), not a data migration concern — alerting-service has no historical data to backfill; it starts empty at launch.
 - **Schema evolution going forward** is handled per-entity, not as a migration event: `incident-service` needs none (§3.2's versioned-payload design). `platform-service`/`alerting-service` attribute additions follow standard additive-schema practice for a document store — new optional attributes, no backfill required unless a new required GSI key is introduced, in which case a backfill script (Streams-driven or a one-time `Scan`+`UpdateItem` pass) populates it before the GSI goes live.
@@ -1311,7 +1311,7 @@ This is a greenfield product — there is no existing platform data to migrate e
 
 > **Reconciliations that override this section where they conflict.** Read these first; the section below was authored before cross-domain reconciliation.
 >
-> 1. **Transport.** Alerting uses SNS FIFO → SQS FIFO (correct as written below). The **six per-domain SNS topics are superseded** by the single EventBridge bus `fd-{env}-platform-bus` with one rule per event type; the consumer queue names below remain correct. All `moonaan-prod-*` names read as `fd-{env}-*`. See the transport note in Backend §1.4.
+> 1. **Transport.** Alerting uses SNS FIFO → SQS FIFO (correct as written below). The **six per-domain SNS topics are superseded** by the single EventBridge bus `boxalarm-{env}-platform-bus` with one rule per event type; the consumer queue names below remain correct. All `moonaan-prod-*` names read as `boxalarm-{env}-*`. See the transport note in Backend §1.4.
 > 2. **Exactly-once key** is `{dispatchId}#{memberId}#{channel}` (per-channel), enforced by the DynamoDB conditional put, with FIFO `MessageDeduplicationId` as a transport optimization only. See the key note in Backend §1.3.
 > 3. **Routing is on `channel`, not `channelTier`.** The fan-out issues **one publish per `{member, channel}`**; each queue subscribes on `channel` (`push`\|`sms`\|`voice`). `channelTier` (`primary` = push + SMS at T+0, `escalation` = voice at T+N=75s) is **escalation-state bookkeeping only — never a routing filter and never a dedup input**. This corrects the §2 defect where the SMS queue subscribed to `channelTier=push`: had both queues instead subscribed to a shared `channelTier=primary`, one publish would have had to serve two channels, which is incompatible with a `channel`-keyed `MessageDeduplicationId`. Two publishes, filtered on `channel`, is the coherent design.
 > 4. **Service names.** Every service named in §3/§5 maps onto a service in Backend §1.1 — these are internal handlers, not separate deployment units, except `notification-service` which is now service 10:
@@ -1338,8 +1338,8 @@ This is a greenfield product — there is no existing platform data to migrate e
 >
 >    | Event | Producer | Consumer | Transport | Payload |
 >    |---|---|---|---|---|
->    | `apparatus.defect.reported` | `apparatus-service` (outbox, on defect creation from a check — F4.3) | `notification-service` (routes to the apparatus officer role) | `fd-{env}-platform-bus` rule → `apparatus-notify-queue` + DLQ | `defectId`, `apparatusId`, `unitLabel`, `reportedByMemberId`, `severity`, `photoS3Key?`, `outOfService: boolean`, `deptId` |
->    | `inventory.reorder.due` | `inventory-service` (scheduled stock scan — F5.3) | `notification-service` (routes to quartermaster/admin role) | `fd-{env}-platform-bus` rule → `inventory-notify-queue` + DLQ | `itemId`, `itemName`, `currentQty`, `reorderThreshold`, `deptId` |
+>    | `apparatus.defect.reported` | `apparatus-service` (outbox, on defect creation from a check — F4.3) | `notification-service` (routes to the apparatus officer role) | `boxalarm-{env}-platform-bus` rule → `apparatus-notify-queue` + DLQ | `defectId`, `apparatusId`, `unitLabel`, `reportedByMemberId`, `severity`, `photoS3Key?`, `outOfService: boolean`, `deptId` |
+>    | `inventory.reorder.due` | `inventory-service` (scheduled stock scan — F5.3) | `notification-service` (routes to quartermaster/admin role) | `boxalarm-{env}-platform-bus` rule → `inventory-notify-queue` + DLQ | `itemId`, `itemName`, `currentQty`, `reorderThreshold`, `deptId` |
 >
 >    F4.3 was the requirement that first exposed the missing notification capability; without `apparatus.defect.reported` it still would not have been deliverable end to end.
 
@@ -1584,9 +1584,9 @@ flowchart TB
     end
 
     subgraph Shared["Shared TypeScript packages (npm workspace, published internally, not to @moonaan npm scope — single-consumer)"]
-        Core["@fd/core\ndomain types, API client,\nvalidation, sync-queue logic"]
-        Tokens["@fd/design-tokens\ncolor/spacing/type scale\n(CSS custom props + RN theme object)"]
-        I18n["@fd/i18n\ni18next resource bundles"]
+        Core["@boxalarm/core\ndomain types, API client,\nvalidation, sync-queue logic"]
+        Tokens["@boxalarm/design-tokens\ncolor/spacing/type scale\n(CSS custom props + RN theme object)"]
+        I18n["@boxalarm/i18n\ni18next resource bundles"]
     end
 
     RNApp -->|imports| Core
@@ -1631,8 +1631,8 @@ flowchart TB
 
 - **Bare React Native (not Expo managed workflow)** — the Critical Alerts entitlement and Android full-screen intent both require native module code and Info.plist / AndroidManifest entries that managed Expo cannot own without ejecting; start bare to avoid a mid-project eject.
 - **Small native module layer, written directly in Swift / Kotlin** (not JS): the notification service extension (iOS) and the FCM message-receiver + foreground service (Android) from §5. This is the only hand-written native code in the project — everything else (screens, navigation, offline queue, forms) is shared TypeScript/RN.
-- **Shared packages** (`@fd/core`, `@fd/design-tokens`, `@fd/i18n`) are consumed by both the RN app and the web SPA — domain types, API client, NERIS enum validation, and the offline sync-queue logic are written once. UI components are *not* shared between web and RN (DOM vs. native rendering targets differ too much to share components profitably); design tokens are shared as raw values (color hex, spacing scale, type scale) consumed as CSS custom properties on web and a plain theme object on RN, so the two surfaces stay visually consistent without a shared component library.
-- **Repo:** one `fd-ui` npm workspace (Yarn/npm workspaces — not Nx/Turborepo; a build-orchestration tool is unjustified for three packages and two apps at this scale, revisit if build times or task graphs actually demand it) with `apps/web`, `apps/mobile`, `packages/core`, `packages/design-tokens`, `packages/i18n`.
+- **Shared packages** (`@boxalarm/core`, `@boxalarm/design-tokens`, `@boxalarm/i18n`) are consumed by both the RN app and the web SPA — domain types, API client, NERIS enum validation, and the offline sync-queue logic are written once. UI components are *not* shared between web and RN (DOM vs. native rendering targets differ too much to share components profitably); design tokens are shared as raw values (color hex, spacing scale, type scale) consumed as CSS custom properties on web and a plain theme object on RN, so the two surfaces stay visually consistent without a shared component library.
+- **Repo:** one `boxalarm-ui` npm workspace (Yarn/npm workspaces — not Nx/Turborepo; a build-orchestration tool is unjustified for three packages and two apps at this scale, revisit if build times or task graphs actually demand it) with `apps/web`, `apps/mobile`, `packages/core`, `packages/design-tokens`, `packages/i18n`.
 
 ## 4. Component hierarchy
 
@@ -1680,7 +1680,7 @@ App
 │       └── SyncStatusScreen (offline queue — reachable from anywhere via a persistent banner)
 ├── features/ — mirrors web's feature boundaries (alerting, apparatus, scheduling, training)
 ├── components/ — native presentational primitives (large touch targets, haptic feedback)
-└── shared/{hooks,types,utils} — imports @fd/core, @fd/design-tokens, @fd/i18n
+└── shared/{hooks,types,utils} — imports @boxalarm/core, @boxalarm/design-tokens, @boxalarm/i18n
 ```
 
 The incoming full-screen alert screen is not inside a normal navigation stack — it is presented directly from the native notification handler (§5) over whatever screen is active, including the lock screen, matching how a phone call UI behaves.
@@ -1723,16 +1723,16 @@ Both platforms' notification handling above is intentionally implemented as OS-r
 | `react-native-app-auth` | mobile | Cognito OIDC PKCE via system browser (ASWebAuthenticationSession / Custom Tabs) — `oidc-client-ts` is DOM-bound and unsuitable for RN; **flagged as an assumption, not a confirmed Moonaan standard** (see Open Questions) |
 | `react-native-keychain` | mobile | Token storage in Keychain/Keystore (equivalent of the web's httpOnly cookie requirement — RN has no cookie jar, so the secure-hardware-backed store is the platform analogue) |
 | `i18next`, `react-i18next` | web, mobile | i18n, `useTranslation()` hook, JSON resource bundles per house standard |
-| `@fd/core` (internal) | web, mobile | Domain types, generated API client, NERIS enum validation, offline sync-queue engine |
-| `@fd/design-tokens` (internal) | web, mobile | Color/spacing/type scale as CSS custom properties (web) and theme object (RN) |
-| `@fd/i18n` (internal) | web, mobile | Shared translation resource bundles |
+| `@boxalarm/core` (internal) | web, mobile | Domain types, generated API client, NERIS enum validation, offline sync-queue engine |
+| `@boxalarm/design-tokens` (internal) | web, mobile | Color/spacing/type scale as CSS custom properties (web) and theme object (RN) |
+| `@boxalarm/i18n` (internal) | web, mobile | Shared translation resource bundles |
 | `op-sqlite` or `@nozbe/watermelondb` | mobile | Local-first SQLite store backing the offline sync queue (§7) — final pick deferred to implementation; both satisfy the requirement, choose on team familiarity |
 | CSS Modules | web | Static styling |
 | `axe-core` / `@axe-core/playwright` | web, mobile (via Detox+axe or manual) | Automated a11y checks in CI |
 | Storybook + a11y addon | web (design-system components) | Component development and a11y linting |
 | CloudWatch RUM web client | web only | Core Web Vitals, loaded once at app root |
 
-**Design system:** check the Moonaan Design System for existing components before building custom ones on web; native has no equivalent shared native component library today, so `apps/mobile/components` starts custom, themed from `@fd/design-tokens` to stay visually aligned with web — **open question:** whether a `@moonaan` React Native component package exists or should be started here.
+**Design system:** check the Moonaan Design System for existing components before building custom ones on web; native has no equivalent shared native component library today, so `apps/mobile/components` starts custom, themed from `@boxalarm/design-tokens` to stay visually aligned with web — **open question:** whether a `@moonaan` React Native component package exists or should be started here.
 
 ## 7. Routing and navigation plan
 
@@ -1768,7 +1768,7 @@ No cross-surface routing is needed between web and native (they are not federate
 
 **Target:** WCAG 2.1 AA on both surfaces, screen-reader support on every primary workflow (N7.2), against POUR.
 
-- **Perceivable / contrast (N7.3):** the design token system (`@fd/design-tokens`) ships two contrast-qualified palettes beyond ordinary light/dark — a **daylight-legible** palette (higher-contrast, larger minimum text size for outdoor glare) and a **dark-cab palette** (near-black background, desaturated high-contrast foreground, no pure white to limit night-vision disruption) — both independently AA-checked, not derived by simply inverting the default theme. Cab mode is user-toggleable and also auto-switches on Android/iOS ambient light or system dark-mode signal where available.
+- **Perceivable / contrast (N7.3):** the design token system (`@boxalarm/design-tokens`) ships two contrast-qualified palettes beyond ordinary light/dark — a **daylight-legible** palette (higher-contrast, larger minimum text size for outdoor glare) and a **dark-cab palette** (near-black background, desaturated high-contrast foreground, no pure white to limit night-vision disruption) — both independently AA-checked, not derived by simply inverting the default theme. Cab mode is user-toggleable and also auto-switches on Android/iOS ambient light or system dark-mode signal where available.
 - **Operable / touch targets (N3.5):** native touch targets minimum 48×48dp (Android) / 44×44pt (iOS) — exceeding platform minimums given gloved operation — with generous spacing between adjacent targets on the truck-check runner and response-confirm screens specifically, since those are the screens most likely to be used gloved and in a moving vehicle.
 - **Operable / keyboard (web):** full keyboard operability on the officer/admin console — logical tab order, visible focus rings meeting AA non-text contrast, no keyboard traps in the NERIS guided form's multi-step wizard, skip-to-content link.
 - **Understandable / screen reader:** semantic HTML landmarks and heading hierarchy on web (single `<h1>` per page — no MFE boundary complicates this, per §1); native screens use platform accessibility APIs (`accessibilityLabel`/`accessibilityRole` on RN, mapping to VoiceOver/TalkBack) on every interactive element, with the incoming-alert screen's critical fields (incident type, address) as the first-announced content.
@@ -1780,7 +1780,7 @@ No cross-surface routing is needed between web and native (they are not federate
 
 **Scope:** truck checks (F4.2), defect reports (F4.3), inspections (F6.3/F6.5), attendance capture (F2.3), and shift claims (F2.9) must all be capturable with zero connectivity and sync when a connection returns — apparatus bays and fire scenes are the two worst-connectivity environments in the product.
 
-- **Local-first store:** `@fd/core`'s sync engine backs onto an on-device SQLite store (op-sqlite/WatermelonDB, §6). Every mutating action writes to the local store first and enqueues an outbox entry; the UI reflects the local write immediately (optimistic) so the interaction is not blocked on network round-trip — this is also how the truck check meets its 90-second budget (N4.2): no step in the checklist waits on a server response.
+- **Local-first store:** `@boxalarm/core`'s sync engine backs onto an on-device SQLite store (op-sqlite/WatermelonDB, §6). Every mutating action writes to the local store first and enqueues an outbox entry; the UI reflects the local write immediately (optimistic) so the interaction is not blocked on network round-trip — this is also how the truck check meets its 90-second budget (N4.2): no step in the checklist waits on a server response.
 - **Outbox sync:** a background task drains the outbox on connectivity regain (RN `NetInfo` listener + periodic retry with backoff), pushing queued mutations to the API in order. Each outbox entry carries a client-generated idempotency key so a retried push after a partial failure cannot double-submit a check or defect report — the same idempotency discipline F1.5 requires of alert dispatch applies here on the write side.
 - **Conflict handling:** truck checks and inspections are treated as append-only submissions (a check is a timestamped record, not an editable shared document), so last-write-wins conflicts are structurally rare. **Shift claims are the one genuinely contended write** (F2.9 requires atomic, no-double-booking claims) — a claim made offline is queued as *pending* in the UI (not shown as confirmed) until the server round-trip either confirms or rejects it as already taken; this is called out explicitly because it is the one workflow where offline-optimism would otherwise mislead a volunteer into believing a shift is theirs.
 - **Sync status UI:** a persistent, dismissible banner (native) / status indicator (web, lower priority since web is assumed to have office connectivity) shows queued-item count and last-sync time, with the live-region announcement from §8 firing on state transitions (queued → syncing → synced / failed). A failed sync surfaces the specific failed item with a retry action — never a silent drop, mirroring the "never silently dropped" requirement F7.7 states for NERIS submissions.
@@ -1799,22 +1799,6 @@ No cross-surface routing is needed between web and native (they are not federate
 - One web SPA serves all desk-based roles (officer/chief/training/apparatus/admin) rather than separate admin and officer apps — justified by the single-team, single-release-train constraint that also rules out MFE.
 - Incident report authoring (F7) is primarily a web-console workflow (guided multi-step form), with native limited to viewing/status; this can move if officers report needing to write reports from the truck.
 - CloudWatch RUM is web-only per the house standard ("shell app only"); native crash/performance telemetry is a backend/observability-domain concern, not specified here.
-
-## Receipt
-
-**File written:** `/Users/zacharydemanche/Projects/nichols-fd/.analysis/generate-architecture/frontend.md`
-
-**Sections included:** topology rationale (MFE exclusion + native mandate), application topology diagram (Mermaid), native code-sharing strategy, component hierarchy (web + native), native platform specifics (iOS Critical Alerts, Android full-screen intent, background delivery, self-test/diagnostics UI), shared dependency list, routing/navigation plan (web + native), accessibility (WCAG 2.1 AA, keyboard, screen reader, glove/night/daylight), offline and sync strategy, open questions and assumptions.
-
-**Completeness counts:**
-- Frontend surfaces: 2 (native mobile — shared iOS/Android codebase — and web SPA); no MFE remotes, by design.
-- Web routes: 15
-- Native top-level stacks: 5 (Alerts, Checks, Schedule, Me, Sync Status) covering 15 screens enumerated in §4.2/§7.2
-- Shared internal packages: 3 (`@fd/core`, `@fd/design-tokens`, `@fd/i18n`)
-- Shared/cross-surface dependencies listed: 18 (table in §6)
-- Open questions: 5; explicit assumptions: 3
-
-Requirements file confirmed read in full (379 lines). Skills `mfe-architecture` and `authentication` invoked and applied — MFE conventions carried forward wherever they still govern a single app (design system, shared deps, CloudFront caching, heading/landmark ownership, RUM-at-root); authentication section built on Cognito + PKCE per the skill, with the mobile OIDC library gap flagged as an open question since the skill only names a web library.
 
 ## Testing Strategy
 
@@ -2266,14 +2250,14 @@ Four repositories, all under `zdemanche` (personal account, not the Moonaan org 
 
 | Repo | Owns | Contains IaC? |
 |---|---|---|
-| `fd-ui` | React Native app (iOS + Android) and the React web SPA, plus the three shared internal packages (`@fd/core`, `@fd/design-tokens`, `@fd/i18n`) | No — build only |
-| `fd-backend` | All Lambda service code across the alerting and line-of-business planes | No — build only |
-| `fd-infrastructure` | All Pulumi. Every AWS resource for every environment. Deploys via GitHub OIDC → central org role | Yes — exclusively |
-| `fd-docs` | This architecture document, the PRD, and the tracked backlog (GitHub Issues) | No |
+| `boxalarm-ui` | React Native app (iOS + Android) and the React web SPA, plus the three shared internal packages (`@boxalarm/core`, `@boxalarm/design-tokens`, `@boxalarm/i18n`) | No — build only |
+| `boxalarm-backend` | All Lambda service code across the alerting and line-of-business planes | No — build only |
+| `boxalarm-infrastructure` | All Pulumi. Every AWS resource for every environment. Deploys via GitHub OIDC → central org role | Yes — exclusively |
+| `boxalarm-docs` | This architecture document, the PRD, and the tracked backlog (GitHub Issues) | No |
 
 Never a monorepo, never per-service repos. UI and backend are build-only; the infrastructure repo is the single owner of all Pulumi state and the only thing that touches AWS.
 
-**Note on `fd-ui` holding two surfaces.** The requirements exclude the MFE shell/remote topology (§8), so the native app and the web SPA are two build targets sharing internal packages inside one repo rather than independently deployed remotes. Revisit only when a second department needs an independent deploy cadence.
+**Note on `boxalarm-ui` holding two surfaces.** The requirements exclude the MFE shell/remote topology (§8), so the native app and the web SPA are two build targets sharing internal packages inside one repo rather than independently deployed remotes. Revisit only when a second department needs an independent deploy cadence.
 
 ### Observability
 
@@ -2346,7 +2330,7 @@ Ordered by what blocks the most work. **Every question carries a named owner rol
 > | OQ-6 escalation sequencing | **Push + SMS parallel at T+0; voice as sole escalation.** This is what N1.2's independent-failure-domain requirement actually implies. | Backend §1.3 |
 > | OQ-7 escalation threshold N | **Default 75 seconds**, department-configurable per F9.3. Configurable-with-no-default left implementers and the config schema with nothing. | Backend §1.3 |
 > | Non-alert notification channel | **`notification-service`**, separate non-critical push channel plus email, LOB failure domain. | Backend §1.1 |
-> | Frontend `op-sqlite` vs WatermelonDB | Genuinely interchangeable **because `@fd/core` owns the sync engine regardless** — stated so the pick stays an implementation detail. | Frontend §9 |
+> | Frontend `op-sqlite` vs WatermelonDB | Genuinely interchangeable **because `@boxalarm/core` owns the sync engine regardless** — stated so the pick stays an implementation detail. | Frontend §9 |
 
 ### Newly raised — these were missing and matter
 

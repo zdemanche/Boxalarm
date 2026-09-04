@@ -1,6 +1,6 @@
-# Product Requirements Document — Fire Department Operations Platform
+# Boxalarm — Product Requirements Document
 
-**Version:** 0.1 (draft for review)
+**Version:** 0.2
 **Date:** 2026-09-03
 **Tenant zero:** Nichols Fire Department, Trumbull, CT 06615
 **Status:** Draft — open questions in §12 must be resolved before architecture is locked
