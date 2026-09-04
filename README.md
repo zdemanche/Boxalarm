@@ -16,6 +16,7 @@ Tenant zero: **Nichols Fire Department, Trumbull CT 06615.**
 | **Incident reporting** | NERIS-native. NFIRS retired 2026-01-31 and is not supported. |
 | **Personnel model** | All-volunteer roster with member-claimable duty shifts, LOSAP points, call/drill attendance. Not career shift scheduling. |
 | **Alerting** | **App replaces radio tone-out as the path of record.** This is life-safety software. N1.9 parallel tone-out run is the compensating control for accepted SPOFs and is **not optional**. |
+| **Auth** | **Sign in once and forget** — no MFA, no step-up re-authentication, no idle timeout, no session a responder can be logged out of. A login prompt on the alert path is an alerting failure, not a security control. Export and destructive admin actions are gated by Cedar role authorization **alone**; the architecture states plainly what that trade costs. |
 | **Mobile** | Native iOS + Android (React Native + native notification extensions). Required, not preferred — Critical Alerts and DND override are unavailable to a PWA. |
 | **Tenancy** | Single-tenant build; `{deptId}` in every partition key so a second department is additive, not a rewrite. |
 | **Stack** | AWS serverless, U.S. region pinned (NERIS requirement): Cognito + Verified Permissions, Lambda, 3 DynamoDB tables, SNS FIFO (alerting) + EventBridge (LOB), Pulumi. **No MFE topology.** |
@@ -31,6 +32,8 @@ Tenant zero: **Nichols Fire Department, Trumbull CT 06615.**
 | [`boxalarm-infrastructure`](https://github.com/zdemanche/boxalarm-infrastructure) | All Pulumi. The only thing that touches AWS. |
 | [`boxalarm-docs`](https://github.com/zdemanche/boxalarm-docs) | This repo — PRD, architecture, backlog. |
 
+All three code repos are scaffolded and green as of 2026-09-04 — workspaces, TypeScript, Vitest, lint/format, and a Pulumi project with four stacks. No features yet.
+
 ## Process
 
 Moonaan SDLC: PRD → `/sdlc:generate-architecture` → `/sdlc:arch-compile` → `/sdlc:generate-backlog` → `/sdlc:generate-code` per story.
@@ -45,12 +48,14 @@ Blocking items with external lead times — these gate everything and should be 
 - [#2](https://github.com/zdemanche/boxalarm-docs/issues/2) Regional dispatch authority approval — likely the longest pole
 - [#3](https://github.com/zdemanche/boxalarm-docs/issues/3) Apple Critical Alerts entitlement — can be rejected
 - [#4](https://github.com/zdemanche/boxalarm-docs/issues/4) Who carries the pager at 03:00
+- **OQ-24** — who revokes a compromised or lost session, and how fast; with expiry gone this is the only control that ends access
 - [#11](https://github.com/zdemanche/boxalarm-docs/issues/11) ⚠️ Read before implementing the alert path
 
 ## Layout
 
-- `CLAUDE.md` — session handoff: current state, next step, settled decisions, alerting invariants
+- `CLAUDE.md` — session handoff: current state, how to run a story, settled decisions, alerting invariants
 - `docs/prd.md` — product requirements
-- `docs/architecture.md` — compiled architecture (2,401 lines)
+- `docs/architecture.md` — compiled architecture (2,410 lines)
+- `docs/architecture.compiled/` — tiered artifacts for `generate-code`; hash-guarded against the source
 - `docs/build-order.md` — 8 epics, 90 stories, 13 dependency waves
 - `docs/dependency-graph.json` — machine-readable story graph (160 edges, acyclic)
