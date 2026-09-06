@@ -1,93 +1,96 @@
 # alerting-service
 
 ## Purpose & Boundaries
-Dispatch ingress, fan-out, escalation, delivery receipts, self-test, continuous canary, and the alert delivery audit log. Wave 1. The one isolated life-safety system in the product — the architecture is organized around holding N1/N1.5 ("no outage anywhere else may impair alerting") true at every layer: own DynamoDB table, own SNS FIFO topic, own SQS FIFO queues + DLQs, own reserved Lambda concurrency, own IAM boundary. No component of this service performs a synchronous read or write against `platform-service` or `incident-service` at any point on the alert hot path or otherwise — enforced by IAM, not convention. The sole exception in the whole system is `POST /platform/export`'s dedicated read-only role (owned by `platform-service`), which may read this table; nothing here can read out.
+The isolated life-safety alerting plane: dispatch ingress, per-member channel fan-out/escalation, department-level tone ladder (tones 1-3), mutual-aid prompt, delivery receipts, self-test, canary, and the alert audit log. N1/N1.5 require this plane to degrade independently of every other module in the system — enforced at the IAM layer, not by convention. Owns its own DynamoDB table, own SNS FIFO topic, own SQS FIFO queues + DLQs, own reserved Lambda concurrency. No component here performs a synchronous read or write against `platform-service` or `incident-service` at any point, including fan-out time.
 
 ## Interfaces
-Base path `/api/v1/alerting/...`. Auth model: `Cognito` = end-user JWT; `Cognito(admin)` = JWT + Verified Permissions chief/admin/officer check; `Vendor` = signature/shared-secret webhook auth, not Cognito.
+Base path `/api/v1/alerting/...`. Auth: `Cognito` = end-user JWT; `Cognito(admin)` = JWT + Verified Permissions chief/admin/officer check; `Vendor` = webhook signature/shared secret (not Cognito).
 
-| Method | Path | Description | Auth |
-|---|---|---|---|
-| POST | `/ingress/{adapter}` | CAD/vendor dispatch ingress (adapter-specific payload) | Vendor |
-| POST | `/dispatches` | Manual dispatch entry — N1.8 degraded-mode fallback | Cognito(admin) |
-| GET | `/dispatches/{dispatchId}` | Dispatch detail incl. normalized alert content (F1.8) | Cognito |
-| GET | `/dispatches/{dispatchId}/roster` | Live response roster: responding/ETA/quals/apparatus (F1.7) | Cognito |
-| POST | `/dispatches/{dispatchId}/responses` | Member response confirmation + ETA (F1.6) | Cognito |
-| GET | `/dispatches/{dispatchId}/receipts` | Per-member sent/delivered/opened receipts (F1.3) | Cognito(admin) |
-| POST | `/self-test` | Trigger self-test to caller's own devices (F1.10) | Cognito |
-| GET | `/self-test/{testId}` | Self-test result | Cognito |
-| POST | `/receipts/push` | Push-provider delivery/open callback | Vendor |
-| POST | `/receipts/sms` | SMS delivery-status callback | Vendor |
-| POST | `/receipts/voice` | Voice call-outcome callback | Vendor |
-| GET | `/audit` | Alert delivery audit log, filterable (F1.11) | Cognito(admin) |
-| GET | `/canary/status` | Current canary health (N1.6, feeds N8.3) | Cognito(admin) |
+| Method | Path | Auth |
+|---|---|---|
+| POST | `/ingress/{adapter}` | Vendor |
+| POST | `/dispatches` (manual entry, N1.8 degraded mode) | Cognito(admin) |
+| GET | `/dispatches/{dispatchId}` (incl. `toneLadder{status,currentToneSequence,nextToneAt,predicateGaps}`, amendment) | Cognito |
+| GET | `/dispatches/{dispatchId}/roster` | Cognito |
+| POST | `/dispatches/{dispatchId}/responses` | Cognito |
+| GET | `/dispatches/{dispatchId}/receipts` | Cognito(admin) |
+| POST | `/self-test` | Cognito |
+| GET | `/self-test/{testId}` | Cognito |
+| POST | `/receipts/push` \| `/receipts/sms` \| `/receipts/voice` | Vendor |
+| GET | `/audit` | Cognito(admin) |
+| GET | `/canary/status` | Cognito(admin) |
+| POST | `/dispatches/{dispatchId}/tone-ladder/advance` (amendment) | Cognito(admin) |
+| POST | `/dispatches/{dispatchId}/tone-ladder/halt` (amendment) | Cognito(admin) |
+| POST | `/dispatches/{dispatchId}/mutual-aid/trigger` (amendment) | Cognito(admin) |
+| POST | `/dispatches/{dispatchId}/mutual-aid/acknowledge` (amendment) | Cognito(admin) |
 
-`DispatchIngressPort` — canonical internal interface every CAD/vendor adapter normalizes into, producing a `DispatchReceived` (dotted: `dispatch.alert.received`) record: incident type, address, cross-streets, units requested, narrative, external dispatch ID. Candidate adapters (none confirmed — OQ-1): webhook, polling, store-and-forward (email/SMS-to-alert), manual-entry (doubles as N1.8 degraded mode).
-
-Query/admin endpoints above go through the Cognito authorizer + Verified Permissions; the fan-out/escalation hot path itself has **no per-request authorization decision** (background pipeline).
+`DispatchIngressPort` — pluggable adapter interface (webhook, polling, store-and-forward, manual-entry), all normalizing into a canonical `DispatchReceived`/`dispatch.alert.received` record. No adapter chosen (OQ-1, blocking).
 
 ## Data Ownership
-Own DynamoDB table (`alerting-service`), on-demand, PITR on, Streams on (feeds a future OSI pipeline only — not consumed by anything in v1), customer-managed KMS key.
+Own DynamoDB table (Streams on, unused in v1; PITR on; on-demand). Customer-managed KMS key (life-safety evidence).
 
-- **DISPATCH_ALERT** — `pk=DEPT#{deptId}#DISPATCH#{dispatchId}`, `sk=METADATA`. `dispatchId` = NERIS-format `deptId+dispatchNumber+epochSeconds`, minted once at alert ingestion and reused unchanged as `incident-service`'s `INCIDENT` key (assumption — verify against real NERIS behavior, OQ-17). `sourceSystem` CAD|MANUAL|SELF_TEST. `idempotencyKey` = dedup key from CAD feed (dedupes CAD retries, pattern-1 conditional put). `hydrantRefs`/`prePlanRefs` are ID references only. `gsi2pk/sk` = `DEPT#{deptId}` / `DISPATCH#{dispatchedAt}`.
-- **DELIVERY_RECEIPT** — `sk=RECEIPT#{memberId}#{channel}`. **One immutable item per member per channel attempt** — never mutated across escalation (a per-member item would overwrite each channel's `sentAt`/`deliveredAt`/`failureReason`, destroying F1.3/F1.11 evidence and the N1.9 cutover basis). `channel` is PUSH|SMS|VOICE, immutable. `channelTier` is bookkeeping only — never routing/dedup. `idempotencyKey = {dispatchId}#{memberId}#{channel}`, guarded by `attribute_not_exists`. **No TTL** — retained 7yr default via a separate scheduled export-to-S3-Glacier job (Wave 3), never item expiry. Writes via `TransactWriteItems`/`PutItem`; never `BatchWriteItem` (cannot carry a `ConditionExpression`).
-- **DISPATCH_ROSTER_ENTRY** — member-level rollup, `sk=ROSTER#{memberId}`, one row per member (not per channel), serves F1.7. Updated on each receipt/ack: `ackStatus`, `eta`, `assignedApparatusId`, denormalized `quals`, `currentChannelTier`, `escalationLevel`.
-- **MEMBER_ELIGIBILITY_SNAPSHOT** — `pk=DEPT#{deptId}#ELIGIBILITY`, `sk=MEMBER#{memberId}`. Denormalized copy owned here, maintained *event-driven* from `personnel.member.updated`/`personnel.eligibility.changed`/`personnel.availability.changed`. **Fan-out reads this, never the platform table.** Staleness alarm at 15 min; propagation target <30s p99.
-- **PRE_PLAN_COPY** — `pk=DEPT#{deptId}#PREPLAN`, `sk=OCCUPANCY#{occupancyId}`. Denormalized from `inspections.preplan.updated`/`inspections.hydrant.updated`; hydrant refs resolved **at copy-write time**, never looked up during fan-out.
-- **ESCALATION_EVENT** — `sk=ESCALATION#{memberId}#{escalatedAt}`.
-- **SELF_TEST_RUN** — `pk=DEPT#{deptId}#MEMBER#{memberId}`, `sk=SELFTEST#{runAt}`. TTL 365 days (operational, not audit evidence).
-- **CANARY_RUN** — `pk=DEPT#{deptId}#CANARY#{YYYY-MM-DD}` (date-bucketed for real cardinality), `sk=RUN#{ranAt}`. TTL 90 days.
-
-GSI1 (`MEMBER#{memberId}`) serves member self-view of alert history / F1.11 / N8.3. GSI2 (`DEPT#{deptId}`) serves department-wide audit by date range.
+- `DISPATCH_ALERT` — `pk=DEPT#{deptId}#DISPATCH#{dispatchId}`, `sk=METADATA`. Amendment fields: `toneLadderStatus` (`ACTIVE`|`HALTED_MANUAL`|`COMPLETED`), `currentToneSequence`, `nextToneAt`. `gsi2pk/sk` for dept-wide date-range audit.
+- `DELIVERY_RECEIPT` — one immutable item per member per channel **per tone**. `sk=RECEIPT#{memberId}#{channel}#{toneSequence}`. `idempotencyKey={dispatchId}#{toneSequence}#{memberId}#{channel}`, `attribute_not_exists` guard. No TTL. `gsi1pk=MEMBER#{memberId}`.
+- `DISPATCH_ROSTER_ENTRY` — mutable "current answer" rollup, `sk=ROSTER#{memberId}`, carries `lastAnsweredTone` (amendment), last-writer-wins on `ackAt`.
+- `DISPATCH_RESPONSE_RECORD` (amendment, append-only) — every answer ever given, `sk=RESPONSE#{memberId}#{answeredAt}`, `toneSequence` field. Written unconditionally in the same `TransactWriteItems` as the roster-entry conditional update.
+- `MEMBER_ELIGIBILITY_SNAPSHOT` — `pk=DEPT#{deptId}#ELIGIBILITY`, `sk=MEMBER#{memberId}`. Denormalized from `personnel-service` events; includes `roles` (amendment, targets officers for mutual-aid prompt). Staleness alarm at 15 min, propagation target <30s p99.
+- `PRE_PLAN_COPY` — `pk=DEPT#{deptId}#PREPLAN`, `sk=OCCUPANCY#{occupancyId}`. Denormalized from `inspections-service`; hydrant refs resolved at copy-write time.
+- `ALERT_RULES_COPY` (amendment) — `pk=DEPT#{deptId}#ALERT_RULES`, `sk=METADATA`. `toneLadder{tone2AtSeconds,tone3AtSeconds,mutualAidAfterTone}` (defaults 180/360/3), `retoneRespondingMembers` (default true), `voiceEscalatesPerTone` (default true), `defaultRule{minResponders,requiredQuals}`, `callTypeOverrides`. Denormalized from `platform-service` via `platform.config.alert_rules.updated`.
+- `ESCALATION_EVENT` — `sk=ESCALATION#{memberId}#{toneSequence}#{escalatedAt}`.
+- `TONE_EVENT` (amendment) — two item shapes: singleton fire-guard `sk=TONE#{toneSequence}` (conditional-put guard, no timestamp), and append-only audit row `sk=TONE#{toneSequence}#{evaluatedAt}`. `outcome`: `FIRED`|`FIRED_MANUAL_OVERRIDE`|`SKIPPED_PREDICATE_MET`|`SKIPPED_ALREADY_FIRED`|`SKIPPED_MANUALLY_HALTED`|`SKIPPED_NO_CONFIG`.
+- `MUTUAL_AID_EVENT` (amendment) — `sk=MUTUALAID#SINGLETON` (fixed, one per dispatch ever, conditional put). `reason`: `TONE_3_PREDICATE_UNMET`|`MANUAL`. `adapterUsed=OFFICER_MANUAL_PROMPT` (only shipped adapter).
+- Officer mutual-aid push item — `sk=MAPROMPT#{memberId}#PUSH` (its own namespace, never `RECEIPT#...`). `idempotencyKey={dispatchId}#MUTUALAID#{memberId}#push`.
+- `SELF_TEST_RUN` — `pk=DEPT#{deptId}#MEMBER#{memberId}`, `sk=SELFTEST#{runAt}`. TTL 365 days.
+- `CANARY_RUN` — `pk=DEPT#{deptId}#CANARY#{YYYY-MM-DD}`, `sk=RUN#{ranAt}`. TTL 90 days.
 
 ## Events Produced
-Envelope per spine (`eventId`, `eventTime`, `eventType`, `source`, `correlationId`=`dispatchId`, `schemaVersion`, `payload`).
-
-- `alerting.dispatch.normalized` — `{dispatchId, memberId, channel, channelTier, incidentType, address, crossStreets, mapLink, narrative, prePlanLink, hydrantLink, eligibilityBasis[]}`. One publish per `{member, channel}` pair (not per member) — required for the channel-keyed `MessageDeduplicationId` to exist at publish time.
-- `alerting.escalation.triggered` — same shape, `channelTier` advanced, `reason: "no_ack_at_tier"`.
-- `alerting.delivery.receipt` — `{dispatchId, memberId, channel, channelTier, status, providerTimestamp, providerMessageId}`.
-- `alerting.canary.result` — `{runId, channelsTested[], endToEndLatencyMs, outcome}`. Published **direct to CloudWatch PutMetricData, not through the queue under test** — a queue outage must not blind the canary.
-- Republished outward to the LOB plane (one-way only, narrow allow-list): `dispatch.alert.received`, `alerting.response.confirmed`.
+- `dispatch.alert.received` (from ingress adapter)
+- `alerting.dispatch.normalized` — tone-1 default; tones 2/3 re-publish the same type carrying `toneSequence` verbatim from the schedule payload, never incremented. Payload includes `channel`, `channelTier`, `toneSequence`, dispatch content, `eligibilityBasis`.
+- `alerting.delivery.receipt` (amended, `toneSequence` added)
+- `alerting.escalation.triggered` — per-member channel escalation (push/SMS→voice), same shape as `dispatch.normalized` with `channelTier` advanced and `reason:"no_ack_at_tier"`.
+- `alerting.tone.escalated` (new, amendment) — audit/observability only, not delivery-critical. `{dispatchId, toneSequence, firedAt, outcome, predicateSnapshot, eligibleMemberCount}`.
+- `alerting.mutual_aid.triggered` (new, amendment) — `{dispatchId, triggeredAt, reason, predicateSnapshot, adapterUsed, officersNotified}`.
+- `alerting.canary.result` — published directly to CloudWatch, not through the queue under test.
+- `alerting.response.confirmed` — republished one-way outward to the LOB bus.
+- One-way bridge allow-list to `boxalarm-{env}-platform-bus`: `dispatch.alert.received`, `alerting.response.confirmed`, `alerting.tone.escalated`, `alerting.mutual_aid.triggered` — outward only, never inward except the config-copy event below.
 
 ## Events Consumed
-- `personnel.member.updated`, `personnel.eligibility.changed`, `personnel.availability.changed` (from `personnel-service`) — maintain `MEMBER_ELIGIBILITY_SNAPSHOT`. `AVAILABILITY_MARKOFF.affectsAlerting` is event-propagated into the snapshot, never read cross-service at fan-out time.
-- `inspections.preplan.updated`, `inspections.hydrant.updated` (from `inspections-service`) — maintain `PRE_PLAN_COPY`, with hydrant refs resolved at copy time.
+- `personnel.member.updated`, `personnel.eligibility.changed`, `personnel.availability.changed` → maintain `MEMBER_ELIGIBILITY_SNAPSHOT`.
+- `inspections.preplan.updated`, `inspections.hydrant.updated` → maintain `PRE_PLAN_COPY`.
+- `platform.config.alert_rules.updated` (amendment) → maintain `ALERT_RULES_COPY`, via `alert-rules-copy-queue` + DLQ off `boxalarm-{env}-platform-bus` — this is the one direction a LOB-plane event legitimately crosses into alerting (same pattern as the other two denormalized copies), not a violation of the one-way bridge (which restricts the opposite direction only).
 
 ## Dependencies
-**Internal (event-driven only, never synchronous):** `personnel-service`, `inspections-service`. **Correlates with** `incident-service` via a shared, ID-reference-only `dispatchId`/`incidentId` (no shared table, no join).
-**External:** APNs/FCM (push, unavoidable single vendor per platform but independent of SMS/voice); SMS vendor (unselected, OQ-3); voice vendor (unselected, must differ from SMS vendor per N1.2, OQ-3); CAD/dispatch system (vendor/protocol unconfirmed, OQ-1, OQ-2).
+- **Internal**: `personnel-service` (eligibility snapshot source, event-only), `inspections-service` (pre-plan/hydrant copy source, event-only), `platform-service` (alert-rules config source, event-only; also the sole external reader via the export role), `incident-service` (shares the NERIS `dispatchId`/`incidentId`, ID-reference only, no table access).
+- **External**: APNs/FCM (push, unavoidable single vendor per platform but independent of SMS/voice), SMS vendor (unselected, OQ-3), voice vendor (unselected, OQ-3, must differ from SMS vendor), CAD/dispatch system (unselected, OQ-1), Mutual Aid Port (officer-manual-prompt adapter only; CAD-relay variant not designed, gated on OQ-1/OQ-2).
 
 ## Gotchas & Constraints
-- **Exactly-once key is `{dispatchId}#{memberId}#{channel}` — per-channel, never per-member alone.** `dispatchId#memberId` alone is explicitly wrong and must not be implemented; a regression test (one dispatch, one member, assert two distinct provider sends at T+0) is mandatory.
-- **Routing and dedup key on `channel`, never `channelTier`.** Push and SMS share tier `primary`; a tier-keyed `MessageDeduplicationId` makes SNS FIFO silently discard the SMS publish — no error, no DLQ, no receipt.
-- **Two-layer idempotency, deliberately.** SNS/SQS FIFO `MessageDeduplicationId = hash(dispatchId, memberId, channel)` is a cost-free first filter (5-min window only); the DynamoDB conditional put on `idempotencyKey`, executed **in the channel worker immediately before the provider send call** (not only at fan-out), is the actual enforced guarantee.
-- **Escalation ladder is push+SMS parallel at T+0, voice the sole escalation tier at T+N=75s default (F9.3-configurable).** Not a sequential ladder — any sequential-SMS-after-push description elsewhere in the source is superseded.
-- **No cache on this hot path, ever.** Eligibility reads come straight from the DynamoDB denormalized copy; Valkey is explicitly excluded from delivery-confirmation and alert state.
-- **BatchWriteItem is forbidden** for any receipt/roster write — it cannot carry a `ConditionExpression`, and every write here depends on one.
-- **Self-test (F1.10) and canary (N1.6) reuse the identical production pipeline**, flagged `isTest: true` so they never fan out to real channels but exercise every hop. A canary testing a simplified/parallel path is explicitly rejected as a design.
-- **N1.7 is NOT literally satisfied** — SNS FIFO topic, this table, the fan-out Lambda, and the AWS region are each an accepted single point of failure with no alternate path. N1.9 (retained parallel tone-out paging) is the compensating control and is not optional. Chaos tests here are scoped to the channel layer only.
-- **DLQ:** `maxReceiveCount: 3` (tighter than the LOB plane's 3–5) — a poison message should escalate to a human faster rather than burn the 5s p99 budget on retries. Alerting DLQ alarms page on-call immediately.
-- **Ordering:** FIFO `MessageGroupId = dispatchId` — a member's push/SMS/voice attempts for one dispatch process in publish order, never interleaving with another dispatch's messages in the same group.
-- **RTO target ≤ 1 hour is flagged optimistic** — a PITR restore-to-new-table on a cold procedure is not reliably one hour with no multi-region standby; a release-gate restore drill must measure and record the actual figure.
-- **Auth on this service's fan-out core has no re-authentication or MFA obligation whatsoever** (system-wide policy — see spine Cross-Cutting) — do not add a step-up prompt anywhere on the alert path; a re-auth prompt appearing here is a documented test failure, not a hardening improvement.
+- Exactly-once key is 4 segments: `{dispatchId}#{toneSequence}#{memberId}#{channel}`. 3-segment forms are explicitly wrong.
+- `toneSequence` must be a literal payload field fixed at EventBridge Scheduler schedule-creation time, never computed at fire time (Scheduler is at-least-once).
+- `channelTier` is bookkeeping only — never routing, never dedup. Routing/dedup key on `channel`.
+- `BatchWriteItem` cannot carry a `ConditionExpression` — never use it for any conditional write here; use `TransactWriteItems`/`PutItem`.
+- Audience for tones 2/3 is the **full current eligible-member set**, re-resolved fresh each tone from `MEMBER_ELIGIBILITY_SNAPSHOT` — never filtered by `ackStatus`. A member who answered `NOT_RESPONDING` or `RESPONDING` is, by default, re-toned anyway (`retoneRespondingMembers` default true).
+- `PUT /platform/config` must reject an `ALERT_RULES.requiredQuals` entry naming a qualification code no currently-eligible member holds — validator is a named obligation, not designed in the amendment; an unvalidated impossible predicate fires tone 3/mutual aid on every dispatch of that call type.
+- If `ALERT_RULES_COPY` is absent (greenfield, no config written), the ladder does not auto-fire blind — `outcome=SKIPPED_NO_CONFIG` plus a CloudWatch alarm. Manual advance remains available.
+- Manual `advance` is a conditional `UpdateItem` keyed on the officer's observed `expectedCurrentToneSequence` (`ConditionExpression: currentToneSequence = :expected`) — a retried/double-tapped request fails the condition rather than minting a further tone.
+- A member's `toneSequence` in a response body is **never trusted raw** — server clamps it to `DISPATCH_ALERT.currentToneSequence` before writing `DISPATCH_RESPONSE_RECORD`.
+- Custom metric `ToneFiredZeroReceipts` (amendment, M2) — Tone Evaluator emits it on every `FIRED`/`FIRED_MANUAL_OVERRIDE` outcome if no corresponding `DELIVERY_RECEIPT` items for that `toneSequence` exist shortly after for the expected audience. P0 alarm, page-immediately tier.
+- No cache anywhere on this hot path — eligibility/pre-plan/rules reads come straight from the denormalized DynamoDB copies.
+- Self-test and canary reuse the identical production pipeline flagged `isTest:true` — a canary testing a parallel simplified path is rejected as dishonest.
+- Voice re-arms on every tone by default (`voiceEscalatesPerTone`) — up to 3 voice attempts per never-acking member per dispatch; no partial-ladder design exists.
+- N1.7 is NOT literally satisfied at the SNS topic/table/region/fan-out-Lambda layer — these are accepted SPOFs. N1.9 parallel tone-out paging is the compensating control and is not optional.
+- DLQ `maxReceiveCount: 3` on alerting queues (tighter than the LOB-plane default of 5) so a poison message escalates to a human before burning the 5s p99 budget on retries.
 
 ## Source Sections
-- Architecture Overview (diagram) — lines 7–100
-- Backend §0 Governing decision — lines 106–111
-- Backend §1.1 Bounded contexts / service table — lines 116–142
-- Backend §1.2 CAD/dispatch ingress — lines 144–153
-- Backend §1.3 Alerting pipeline (N1 detail) — lines 155–224
-- Backend §1.4 Cross-service integration (roster/pre-plan denormalization) — lines 226–245
-- API endpoints: alerting-service — lines 253–269
-- Data Model §1 Summary recommendation — lines 465–477
-- Data Model §3.1 alerting-service table (all entities) — lines 540–682
-- Data Model §3.4 Retention/TTL — lines 1164–1175
-- Data Model §4 Access patterns #1–9, #11, #37 — lines 1181–1234
-- Data Model §7 Cost/performance (fan-out burst) — lines 1260–1268
-- Events §Reconciliations + §1–7 (transport, exactly-once, routing, envelope, notification-service routing) — lines 1310–1345
-- Eventing Architecture §1–9 (full alerting event flow, schema, producer/consumer table, error handling, canary) — lines 1346–1554
-- Testing §1.1–1.3 (Tier 0 pyramid, N1 properties as tests) — lines 1809–1867
-- Testing §2 F1/N1 test matrix — lines 1875–1905
-- Testing §3.2 Tier 0 E2E flows — lines 2039–2050
-- Cross-Cutting → Single Points of Failure table (N1.7) — lines 2279–2294
-- Cross-Cutting → Data Protection (encryption, RTO/RPO, audit immutability) — lines 2296–2308
+- Backend §1.1 Bounded contexts (service #1), lines 118-142
+- Backend §1.2 CAD/dispatch ingress, lines 144-153
+- Backend §1.3 Alerting pipeline (N1 detail), lines 155-232
+- Backend §1.3a Department-level tone ladder and mutual aid, lines 233-243
+- Backend §1.4 Cross-service integration, lines 245-264 (messaging/event-naming reconciliation notes)
+- API endpoints, alerting-service, lines 272-292
+- Data Model §3.1 alerting-service table, lines 566-786
+- Data Model §3.4 Retention/TTL, lines 1268-1279
+- Data Model §4 Access patterns 1-11, lines 1285-1303
+- Eventing §1-2, 4.1, 5, 7, 7a, lines 1460-1518, 1560-1662, 1676-1698, 1713-1728
+- Cross-Cutting → SPOF table, lines 2477-2492
+- Cross-Cutting → Data Protection (encryption, export exception), lines 2494-2507
+- Testing §1.2/§2 F1/N1 matrix, §3.2 items 1-7a, lines 2040-2100, 2233-2247

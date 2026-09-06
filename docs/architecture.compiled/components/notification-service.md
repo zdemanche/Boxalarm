@@ -1,52 +1,49 @@
 # notification-service
 
 ## Purpose & Boundaries
-Non-alert member/officer notification: cert expiry (F3.2), defect routing to apparatus officer (F4.3), testing-due (F4.7), PPE expiry, reorder thresholds (F5.3), shift-coverage gaps. Notification preferences, in-app inbox, digest batching. Wave 1. Service 10 — did not exist in the original service list; reconciled in as a **CANONICAL** addition because the Events section routed five event types to a "Notification Service" that had no owning service until this reconciliation.
+Non-alert member/officer notification: cert expiry (F3.2), defect routing to apparatus officer (F4.3), testing-due (F4.7), PPE expiry, reorder thresholds (F5.3), shift-coverage gaps. Notification preferences, in-app inbox, digest batching. Service 10 in the bounded-context list; was previously undefined ("Notification Service") in the Events section before reconciliation gave it a canonical home.
 
-**Failure domain is the LOB plane, explicitly** — this is the load-bearing boundary of this service's existence. It shares **no** SQS queue, no Lambda concurrency reservation, no SNS topic, and **no provider account** with `alerting-service`. A notification-service failure or a flood of cert-expiry notices cannot consume capacity the alert path depends on (N1.5). It consumes from `boxalarm-{env}-platform-bus` only, never from the alerting FIFO topic.
+**Failure domain is the LOB plane, explicitly** - shares no SQS queue, no Lambda concurrency reservation, no SNS topic, and no provider account with `alerting-service`. A notification-service failure, or a flood of cert-expiry notices, cannot consume capacity the alert path depends on (N1.5). Consumes exclusively from `boxalarm-{env}-platform-bus`, never the alerting FIFO topic.
 
 ## Interfaces
-Base path `/api/v1/notifications/...` (inferred from the entity/endpoint description — the source document gives these four endpoints without a full table entry alongside the other 9 services' endpoint tables).
+Base path `/api/v1/notifications/...` (implied from the four endpoints named in Backend section 1.1).
 
-| Method | Path | Description | Auth |
-|---|---|---|---|
-| GET | `/notifications` | Inbox, paginated | Cognito |
-| POST | `/notifications/{id}/read` | Mark notification read | Cognito |
-| GET | `/notifications/preferences` | Get notification preferences | Cognito |
-| PUT | `/notifications/preferences` | Update notification preferences | Cognito |
+| Method | Path |
+|---|---|
+| GET | `/notifications` (inbox, paginated) |
+| POST | `/notifications/{id}/read` |
+| GET | `/notifications/preferences` |
+| PUT | `/notifications/preferences` |
 
 ## Data Ownership
-On the shared `platform-service` table.
-
-- **NOTIFICATION_PREFERENCE** — `sk = NOTIFPREF#{memberId}#{category}` — channel opt-ins and digest cadence per category.
-- **NOTIFICATION** — `sk = NOTIF#{memberId}#{ts}#{notificationId}` — in-app inbox record, `readAt` field, TTL 180 days.
+On the shared `platform-service` table:
+- `NOTIFICATION_PREFERENCE` - `sk=NOTIFPREF#{memberId}#{category}` - channel opt-ins and digest cadence per category.
+- `NOTIFICATION` - `sk=NOTIF#{memberId}#{ts}#{notificationId}` - in-app inbox record, `readAt`, TTL 180 days.
 
 ## Events Produced
-None — this is a pure consumer/router service; it does not publish domain events onward (it triggers push/FCM/email sends directly, not further EventBridge events).
+None (a consumer service).
 
 ## Events Consumed
-All via `boxalarm-{env}-platform-bus`, rule-routed to per-consumer SQS queues + DLQ:
-- `cert.expiry.due` (from `training-service`) → `training-notify-queue`
-- `apparatus.defect.reported` (from `apparatus-service`) → `apparatus-notify-queue`
-- `apparatus.test.due` (from `apparatus-service`) → `apparatus-notify-queue`
-- `ppe.expiry.due` (from `inventory-service`) → `inventory-notify-queue`
-- `inventory.reorder.due` (from `inventory-service`) → `inventory-notify-queue`
-- `scheduling.coverage_gap.detected` (from `personnel-service`) → `scheduling-notify-queue`
+- `cert.expiry.due` (from `training-service`)
+- `apparatus.test.due` (from `apparatus-service`)
+- `apparatus.defect.reported` (from `apparatus-service`, routes to apparatus officer role)
+- `ppe.expiry.due` (from `inventory-service`)
+- `inventory.reorder.due` (from `inventory-service`, routes to quartermaster/admin role)
+- `scheduling.coverage_gap.detected` (from `personnel-service`)
+
+All via `boxalarm-{env}-platform-bus` rule -> per-domain notify queue + DLQ.
 
 ## Dependencies
-**Internal:** consumes events from `training-service`, `apparatus-service`, `inventory-service`, `personnel-service`. Shares the `platform-service` table for its own entities.
-**External:** APNs/FCM via a **separate, non-critical notification channel** (distinct channel ID, not the Critical Alerts channel — so a routine cert reminder can never present as a dispatch), plus email. **No SMS and no voice in v1** — those channels are reserved to the alerting plane to keep cost and failure domain separate.
+- Internal: `training-service`, `apparatus-service`, `inventory-service`, `personnel-service` (all event producers only - no synchronous calls).
+- External: APNs/FCM via a separate, non-critical notification channel (distinct channel ID from the alerting Critical Alerts channel so a routine cert reminder can never present as a dispatch), plus email. No SMS and no voice in v1.
 
 ## Gotchas & Constraints
-- **Must never share infrastructure with `alerting-service`** — no shared queue, concurrency reservation, SNS topic, or provider account. This is the entire reason this service exists as a separate deployment unit rather than a handler inside another LOB service; a regression test (`NOTIF-ISO` in the test matrix) verifies this by chaos-testing this service and asserting alerting delivery is unaffected.
-- **Digest batching is required, not optional** — expiry scanners run daily and would otherwise emit one push per expiring item; notifications are grouped per member per category per day.
-- **Two events this service routes to were originally undefined and had to be reconciled in:** `apparatus.defect.reported` and `inventory.reorder.due` (see the owning services' sheets for their payload shapes). F4.3 was the requirement that first exposed the gap.
-- Test-matrix rows are required for F3.2, F4.3, F4.7, F5.3, and shift-coverage delivery (F2.10n) — each is its own explicit row in the F1/N1 test matrix despite being LOB-tier, because delivery must be proven, not assumed.
+- Digest batching is required, not optional - expiry scanners run daily and would otherwise emit one push per expiring item; notifications are grouped per member per category per day.
+- Must never share a queue, concurrency reservation, or provider account with `alerting-service` - this is a test-matrix row (NOTIF-ISO) in its own right, verified by chaos test (saturate this service, assert alerting unaffected).
+- Test-matrix rows are required for F3.2, F4.3, F4.7, F5.3, and shift-coverage delivery - all listed explicitly as a named obligation when this service was reconciled into existence.
 
 ## Source Sections
-- Backend §1.1 Bounded contexts / service table + `notification-service` CANONICAL note — lines 116–140
-- Events §Reconciliations item 4 (service name mapping) — lines 1317–1329
-- Events §Reconciliations item 7 (apparatus.defect.reported, inventory.reorder.due newly defined) — lines 1337–1345
-- Events §3, §5 (producer/consumer/transport table, all five consumed event types) — lines 1398–1420, 1503–1522
-- Eventing Architecture §1 Design rule (isolation from alerting) — lines 1348–1354
-- Testing §2 F1/N1 test matrix, notification rows F3.2n/F4.3n/F4.7n/F5.3n/F2.10n/NOTIF-ISO — lines 1897–1903
+- Backend section 1.1 Bounded contexts (service #10, CANONICAL reconciliation note), lines 129-140
+- Eventing section 1 reconciliation items 4 and 7, lines 1428-1456
+- Eventing section 3, 5 (producer/consumer/transport table), lines 1520-1544, 1676-1698
+- Testing section 2 F1/N1 matrix (notification test rows, NOTIF-ISO), lines 2091-2097
