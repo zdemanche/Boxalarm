@@ -116,6 +116,9 @@ Priority: **P0** = required to replace Chief360 · **P1** = required for a compl
 - **F1.9** Critical-alert delivery that overrides device silent/DND where the platform allows
 - **F1.10** **Self-test** — members and admins can verify their own alert path end to end, on demand, without a real call
 - **F1.11** Alert delivery audit log, retained and queryable — the evidence base for "did it work"
+- **F1.12** *(Amendment, 2026-09-06)* **Department-level tone escalation** — if aggregate response is inadequate (configurable minimum responder count and/or required qualifications, per call type), the full eligible roster is re-toned at T+3:00 and T+6:00 (defaults, F9.3-configurable), regardless of individual members' prior answers. Audience is never filtered by whether a member already responded or declined — only ineligibility removes a member from a re-tone.
+- **F1.13** *(Amendment, 2026-09-06)* **Mutual aid prompt** — after the tone ladder is exhausted with the predicate still unmet (or on manual officer trigger), department officers/chief are notified in-app to manually initiate a mutual-aid request; the platform does not page another department's roster directly (open, pending §12 items 1/5).
+- **F1.14** *(Amendment, 2026-09-06)* **Officer-visible, overridable tone ladder** — an officer/chief can see which tone is active, what the escalation predicate is still waiting for, and when the next tone fires, and can manually advance or halt the ladder.
 
 ### F2. Personnel and membership — *P0*
 
@@ -221,6 +224,7 @@ Priority: **P0** = required to replace Chief360 · **P1** = required for a compl
 - **N1.7** **No single point of failure** anywhere between dispatch ingress and member device
 - **N1.8** **Documented degraded mode** — defined behavior and human fallback procedure when the platform is unavailable
 - **N1.9** **Parallel-run requirement:** existing tone-out paging is retained alongside the platform until measured delivery data over a full cycle of live use justifies cutover. App-only is the destination, not the launch state.
+- **N1.10** *(Amendment, 2026-09-06)* **Voice escalation re-arms on every department-level tone** — each tone (1, 2, 3) runs its own independent push+SMS→voice ladder for every member it pages. A never-acking eligible member can therefore receive up to three voice attempts across a single dispatch. Department-configurable off (`ALERT_RULES.voiceEscalatesPerTone`) if this cost proves material; no partial ladder is specified.
 
 ### N2. Availability
 
@@ -302,7 +306,8 @@ Priority: **P0** = required to replace Chief360 · **P1** = required for a compl
 |---|---|
 | Alert delivery rate | > 99.9% of eligible members per dispatch |
 | Alert fan-out latency | < 5s p99 from dispatch receipt |
-| Duplicate alerts | 0 |
+| Duplicate alerts (same tone re-delivered) | 0 |
+| Missed deliberate re-tones (amendment, 2026-09-06 — a re-tone silently swallowed by the dedup key is a distinct failure from a duplicate, and must not be conflated with the metric above) | 0 |
 | Truck check completion time | < 90 seconds median |
 | Apparatus check compliance | > 95% of scheduled checks completed |
 | NERIS submission success | 100%, no silent failures |
@@ -359,7 +364,7 @@ Wave 1 alone replaces Chief360's primary function.
 2. Connecticut state fire reporting requirements beyond NERIS?
 3. CT LOSAP statutory point rules — what exactly must be tracked?
 4. Chief360 data migration — what must come across, and can it be exported?
-5. Mutual aid — Trumbull has multiple volunteer companies. Cross-department visibility in scope?
+5. Mutual aid — Trumbull has multiple volunteer companies. Cross-department visibility in scope? **Partially addressed by amendment F1.13** (2026-09-06): the tone ladder's mutual-aid trigger notifies our own officers to place the call manually; no cross-department API is introduced. Whether the platform should ever page a neighboring department's roster directly remains open, gated on item 1 above.
 6. Station alerting hardware — is any in place that must be driven or preserved?
 7. Apple Critical Alerts entitlement — requires justification to Apple; who owns that application?
 
@@ -371,7 +376,7 @@ Wave 1 alone replaces Chief360's primary function.
 
 ## 13. What "better than Chief360" means concretely
 
-1. **Alerts that provably arrive** — receipts, escalation, self-test, canary, and a duplicate rate of zero
+1. **Alerts that provably arrive** — receipts, per-member and department-level escalation, self-test, canary, and a duplicate rate of zero (per tone — a deliberate re-tone is escalation working, not a duplicate)
 2. **NERIS-native, not NFIRS-retrofitted**
 3. **A truck check that takes 90 seconds on a phone**
 4. **Reports that generate themselves** from data already captured

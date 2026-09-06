@@ -117,7 +117,7 @@ N1 (life-safety alerting) and N1.5 ("an outage in reporting, training, inventory
 
 | # | Service | Bounded context | Wave | Store |
 |---|---|---|---|---|
-| 1 | `alerting-service` | Dispatch ingress, fan-out, escalation, receipts, self-test, canary, alert audit log | 1 | own DynamoDB table, own SNS FIFO topic, own SQS FIFO queues + DLQs |
+| 1 | `alerting-service` | Dispatch ingress, fan-out, per-member channel escalation, department-level tone ladder, mutual-aid prompt, receipts, self-test, canary, alert audit log | 1 | own DynamoDB table, own SNS FIFO topic, own SQS FIFO queues + DLQs |
 | 2 | `platform-service` | Cognito triggers, department config, Verified Permissions policy admin, cross-service audit log sink, data export | 1 | DynamoDB |
 | 3 | `personnel-service` | Roster, quals, attendance, LOSAP points, availability, duty shifts, open-shift signup | 1 | DynamoDB |
 | 4 | `apparatus-service` | Apparatus registry, check sheets, defects, OOS tracking, maintenance, SCBA, testing schedules, compartments | 2 | DynamoDB |
@@ -163,7 +163,7 @@ flowchart TB
   Ingress -->|conditional put, idempotent on dispatchId| AlertDB[(DynamoDB\nboxalarm-alerting-table)]
   AlertDB -->|DynamoDB Stream| FanOut[Fan-Out Lambda\ncomputes eligible members\nfrom denormalized roster copy]
 
-  FanOut -->|conditional put per\ndispatchId#memberId#channel - N1.4| AlertDB
+  FanOut -->|conditional put per\ndispatchId#toneSequence#memberId#channel - N1.4| AlertDB
   FanOut --> PushQ[[SQS push-queue]]
   FanOut --> SmsQ[[SQS sms-queue]]
   FanOut --> VoiceQ[[SQS voice-queue]]
@@ -176,8 +176,13 @@ flowchart TB
   SMSVendor -.->|delivery status webhook| AlertDB
   VoiceVendor -.->|call outcome webhook| AlertDB
 
-  Escalator[Escalation Scheduler\nStep Functions / EventBridge Scheduler\npolls ack status per member] -->|no ack in N sec| SmsQ
+  Escalator[Escalation Scheduler\nStep Functions / EventBridge Scheduler\npolls ack status per member, per tone] -->|no ack in N sec| SmsQ
   Escalator -->|still no ack| VoiceQ
+
+  ToneEval[Tone Evaluator\nEventBridge Scheduler one-time,\ndept-level, T+3:00 fires toneSequence=2\nT+6:00 fires toneSequence=3\nliteral in each schedule's payload] -->|predicate unmet:\nre-invoke Fan-Out with the\ntoneSequence from this payload| FanOut
+  AlertDB -->|roster + quals + ALERT_RULES_COPY\nin-table read (N1), N1.5-safe| ToneEval
+  ToneEval -->|tone 3 unmet, or manual trigger| MutualAid[Mutual Aid Port\nofficer manual-prompt adapter]
+  MutualAid --> PushQ
 
   AlertDB -->|DynamoDB Stream\noutbox republish| PlatformBus{{EventBridge\nboxalarm-env-platform-bus\nLOB plane only}}
 
@@ -190,16 +195,18 @@ flowchart TB
 - **Three independently vendored channel workers, three separate SQS queues, three separate DLQs.** Satisfies N1.2 (independent failure domains) directly — an outage in one vendor's API only stalls its own queue and its own DLQ, never the other two. Push uses APNs/FCM directly (unavoidable single vendor per platform, but Apple and Google are themselves independent of each other and of any SMS/voice vendor); SMS and voice must be two **different** commercial vendors (e.g., not the same provider for both) — left as an open question below, but the port/adapter shape means the vendor choice is a config change, not a redesign.
 - **Idempotency at two layers.** The ingress adapter conditionally-puts on the CAD's own dispatch ID (dedupes a CAD retry or a duplicate feed message — this is exactly the Chief360 "duplicate message storm" defect class named in the requirements). The fan-out Lambda then conditionally-puts **per channel** before any provider send call.
 
-> **Exactly-once key (reconciled — CANONICAL).** The enforced invariant is a DynamoDB conditional put on **`{dispatchId}#{memberId}#{channel}`** — per-channel granularity, not per-member. This note is the authority wherever a section says otherwise (`dispatchId#memberId` alone is **wrong** and must not be implemented).
+> **Exactly-once key (reconciled — CANONICAL, amended for department-level escalation — see §Department tone ladder below).** The enforced invariant is a DynamoDB conditional put on **`{dispatchId}#{toneSequence}#{memberId}#{channel}`** — per-channel, per-tone granularity. `toneSequence` (`1`|`2`|`3`) identifies which rung of the department-level tone ladder produced this send: tone 1 is the original CAD-triggered fan-out at T+0; tones 2/3 are department-level re-tones. This note is the authority wherever a section says otherwise (`dispatchId#memberId` alone is **wrong**, and `dispatchId#memberId#channel` without the tone component is now **also wrong** — both are silent-suppression defects and must not be implemented).
 >
-> - **Item shape:** `sk = RECEIPT#{memberId}#{channel}`, `idempotencyKey = {dispatchId}#{memberId}#{channel}`, guarded by `attribute_not_exists(idempotencyKey)`.
+> - **Item shape:** `sk = RECEIPT#{memberId}#{channel}#{toneSequence}`, `idempotencyKey = {dispatchId}#{toneSequence}#{memberId}#{channel}`, guarded by `attribute_not_exists(idempotencyKey)`.
 > - **Why per-channel:** a member escalates push → SMS → voice. A per-member key cannot detect a duplicate *voice* send after a push send, and a single mutable item overwrites each channel's `sentAt`/`deliveredAt`/`failureReason` on every escalation — destroying exactly the per-channel evidence F1.3 and F1.11 call life-safety audit evidence, and the evidence base for the N1.9 cutover decision. One immutable item per channel attempt preserves it.
-> - **F1.7 live roster** (one row per member, not per channel) is served by a member-level rollup item `sk = ROSTER#{memberId}` carrying `ackStatus`, `eta`, `assignedApparatusId`, denormalized `quals`, and `currentChannelTier`, updated on each receipt.
+> - **Why per-tone is now equally load-bearing.** A member who answers `NOT_RESPONDING` at tone 1 already holds `RECEIPT#{memberId}#push#1` and `RECEIPT#{memberId}#sms#1`. Per F1.12, that member is re-toned at tone 2 and tone 3 **regardless of their answer** — audience is never filtered by `ackStatus` (see §Department tone ladder). Without `toneSequence` in the key, the tone-2 conditional put finds the tone-1 item and silently no-ops the re-tone — no error, no DLQ, no receipt, the same defect class as the `channelTier`-keyed dedup bug below, on a new axis. With `toneSequence` present, tone 2 writes a distinct `RECEIPT#{memberId}#push#2` item and sends.
+> - **Why a replayed/redelivered dispatch still collapses to one alert per tone (F1.5) — and why `toneSequence` must be a stored literal, never computed at fire time.** `toneSequence` is a **fixed field written into each EventBridge Scheduler payload at fan-out time**, not a value the evaluator derives from "how far the ladder has gotten": the T+180s schedule's payload carries `toneSequence: 2` and the T+360s schedule's payload carries `toneSequence: 3`, full stop. This matters because EventBridge Scheduler is **at-least-once** — if the evaluator instead computed the next tone as "current + 1" from observed ladder state, a redelivered T+180s invocation would read the ladder one rung further along (because the first invocation already advanced it) and mint tone 3 early, at T+180 instead of T+360, which is itself a silent duplicate-storm generator on the new axis this amendment introduces. With the tone number fixed at schedule-creation time instead, a redelivered invocation for the *same* schedule always carries the *same* `toneSequence`, so its conditional put collides with the existing item for that tone and no-ops — exactly the CAD-retry/bus-redelivery case above. A **deliberate** re-tone is a *different* schedule (the T+360s one, not a redelivery of the T+180s one) carrying its own distinct, pre-assigned `toneSequence: 3`. Replay redelivers the same schedule with the same literal tone number; escalation is a different schedule with a different pre-assigned one — that is the entire distinction, and it is why `toneSequence` must be a stored, immutable payload field and never a runtime increment.
+> - **F1.7 live roster** (one row per member, not per channel) is served by a member-level rollup item `sk = ROSTER#{memberId}` carrying `ackStatus`, `eta`, `assignedApparatusId`, denormalized `quals`, `currentChannelTier`, and `lastAnsweredTone` (which tone this current answer was given on), updated on each receipt. It reflects the **current** answer; every answer ever given is preserved separately and immutably in `DISPATCH_RESPONSE_RECORD` (§Department tone ladder) — the roster rollup is never the audit record.
 > - **Operation:** writes use `TransactWriteItems` or individual `PutItem` calls. **`BatchWriteItem` cannot carry a `ConditionExpression`** — any access pattern below specifying a conditional `BatchWriteItem` is an error; read it as `TransactWriteItems`.
-> - **SNS/SQS FIFO `MessageDeduplicationId` is a transport-layer optimization only.** Its 5-minute window does not cover redelivery outside that window, so it is never the enforced guarantee — the DynamoDB conditional put is.
-> - **`channelTier` is escalation-state bookkeeping ONLY — never a routing filter and never a dedup input. Routing is on `channel`.** Push and SMS share the tier `primary`; keying dedup on the tier makes their two publishes byte-identical, so SNS FIFO discards the SMS silently — no error, no DLQ, no receipt, and the N1.2 parallel guarantee is gone. Every dedup input keys on `channel` (`push`/`sms`/`voice`). **Regression test required:** one dispatch, one member, assert two distinct provider sends at T+0.
+> - **SNS/SQS FIFO `MessageDeduplicationId` is a transport-layer optimization only**, now `hash(dispatchId, toneSequence, memberId, channel)`. Its 5-minute window does not cover redelivery outside that window, so it is never the enforced guarantee — the DynamoDB conditional put is. `MessageGroupId` remains `dispatchId`, unchanged — per-dispatch FIFO ordering must still span every tone.
+> - **`channelTier` is escalation-state bookkeeping ONLY — never a routing filter and never a dedup input. Routing is on `channel`.** Push and SMS share the tier `primary`; keying dedup on the tier makes their two publishes byte-identical, so SNS FIFO discards the SMS silently — no error, no DLQ, no receipt, and the N1.2 parallel guarantee is gone. Every dedup input keys on `channel` (`push`/`sms`/`voice`), now alongside `toneSequence`. **Regression test required:** one dispatch, one member, assert two distinct provider sends at T+0. **A second regression test is now required:** one dispatch, one member answers `NOT_RESPONDING` at tone 1, tone 2 fires — assert a *new* delivery record is created on the same channel, not swallowed by the tone-1 key.
 
-- **Escalation ladder (reconciled — CANONICAL): push and SMS fire in parallel at T+0; voice is the single escalation tier.** This is the correct reading of N1.2 — two independent failure domains hit simultaneously means a total outage at one vendor costs zero delay, whereas a sequential ladder makes every push failure cost the full escalation interval before SMS is even attempted. Channel tiers are therefore `primary` (push + SMS, T+0) and `escalation` (voice, T+N). Any section below showing SMS as the *first escalation* after push is superseded by this note. Default N = **75 seconds**, department-configurable per F9.3.
+- **Escalation ladder (reconciled — CANONICAL): push and SMS fire in parallel at T+0; voice is the single escalation tier.** This is the correct reading of N1.2 — two independent failure domains hit simultaneously means a total outage at one vendor costs zero delay, whereas a sequential ladder makes every push failure cost the full escalation interval before SMS is even attempted. Channel tiers are therefore `primary` (push + SMS, T+0) and `escalation` (voice, T+N). Any section below showing SMS as the *first escalation* after push is superseded by this note. Default N = **75 seconds**, department-configurable per F9.3. **Amendment (N1.10):** this per-member ladder is orthogonal to, and re-arms independently for, each department-level tone (§1.3a) — Decision: `voiceEscalatesPerTone` defaults `true`, so a never-acking member can receive up to three voice attempts across a single dispatch (one T+N after each of tones 1, 2, 3). This is unchanged per-tone; only the number of times the whole T+0→T+N sequence runs is new.
 - **Roster read is denormalized, not a live call.** `personnel-service` publishes `RosterChanged`/`EligibilityChanged` events; `alerting-service` maintains its own eligibility snapshot in its own table. Fan-out never calls another service synchronously — a `personnel-service` outage cannot block or slow alert fan-out (N1.5). Snapshot staleness (a member added/removed mid-shift) is an accepted, documented tradeoff — the alternative (a live cross-service call on the alert hot path) reintroduces exactly the SPOF this pipeline exists to eliminate.
 
 > **Alerting-plane isolation invariant (reconciled — CANONICAL, and it overrides every access pattern below).** No component of `alerting-service` performs a synchronous read or write against the `platform-service` or `incident-service` table, at fan-out time or at any other point on the alert hot path. Two entities in the Data Model must be read as living in the **`alerting-service` table**, not the platform table:
@@ -223,6 +230,18 @@ flowchart TB
 - **Multi-AZ for free.** Lambda, DynamoDB, SQS, EventBridge, and Step Functions are all AWS-managed multi-AZ services — N2.3 (survive a single AZ failure) is satisfied by the choice of primitives, not by extra engineering.
 - **N1.9 parallel run**: this pipeline runs *alongside* existing radio tone-out, not instead of it, until measured delivery data justifies cutover. No architectural implication beyond F1.11's audit log needing to support a delivery-rate comparison report against the tone-out baseline.
 
+### 1.3a Department-level tone ladder and mutual aid (F1.12–F1.14, amendment)
+
+**Orthogonal to the per-member channel escalation above.** Per-member escalation (push+SMS at T+0 → voice at T+75s) governs *how* one member is reached on one tone. The department-level tone ladder governs *whether the whole eligible roster gets paged again*, based on aggregate response, not individual ack state. The two mechanisms compose: every tone (1, 2, or 3) independently runs its own full push+SMS→voice ladder for every member it pages — **Decision: voice re-arms on every tone.** If the department is still short-staffed at T+6:00, a ringing phone is the loudest channel available, and silence is the worse failure than a third voice call to a member who has never acked. **Cost consequence, stated plainly:** a never-acking eligible member can receive up to three voice attempts across a single dispatch (one per tone) in addition to three push and three SMS attempts. This is a real, non-trivial cost against per-call-type independent-vendor commercial rates, and is exposed as a config lever (`ALERT_RULES.voiceEscalatesPerTone`, default `true`) precisely so it can be tuned down without a redesign if the cost proves material in practice — but the default ships "on," and no separate partial ladder (e.g. "voice only on tone 1") is designed, because a second predicate for *which* tones get voice is a second thing to get wrong for a marginal cost saving.
+
+- **Trigger:** at fan-out time (tone 1), the Fan-out Lambda creates two additional **department-level** EventBridge Scheduler one-time schedules (not per-member) at T+180s and T+360s (F9.3-configurable via `ALERT_RULES.toneLadder.tone2AtSeconds`/`tone3AtSeconds`, defaults 3:00/6:00) invoking a new **Tone Evaluator** handler within `alerting-service`. Same pattern as the existing per-member escalation: EventBridge Scheduler one-time schedule, self-checking Lambda at fire time, no cancellation. **`toneSequence` is a literal, immutable field of each schedule's invocation payload, assigned once at creation** — the T+180s schedule's payload is `{dispatchId, toneSequence: 2}`, the T+360s schedule's is `{dispatchId, toneSequence: 3}` — **never computed by the evaluator from observed ladder state.** This is deliberate: EventBridge Scheduler is at-least-once, so if the evaluator instead derived the target tone as "one past whatever's currently fired," a redelivered T+180s invocation arriving after its own first successful run would see tone 2 already fired and mint tone 3 early, at T+180 instead of T+360 — a duplicate-storm generator on the tone axis. A fixed literal in the payload makes a redelivery idempotent by construction (same payload, same `toneSequence`, collides with the same `TONE#{toneSequence}` guard — see AP 5a/5f) instead of idempotent by careful arithmetic.
+- **Precedent:** this shape is operationally conventional even though no responder app implements it — dispatch-center SOG documents re-activating the primary assignment and adding second-due at 6 minutes, repeating at 12 minutes with third-due. This design's 3:00/6:00 defaults are tighter than that precedent. The ladder's *existence* needs no justification; only its mechanics are new engineering.
+- **Audience (who gets re-toned) — never filtered by `ackStatus`.** Each tone re-resolves the **full current eligible-member set** from `MEMBER_ELIGIBILITY_SNAPSHOT` fresh (not the tone-1 snapshot — a member marked off or reinstated in the intervening minutes must be reflected). The only thing that removes a member from the audience is ineligibility (marked off, unqualified, inactive) — never their answer. A member who answered `NOT_RESPONDING` at tone 1 is re-toned at tones 2 and 3 by design (F9.6 department decision — circumstances change in three minutes at 03:00, and the cost of an extra buzz is far below an apparatus not rolling). **A member who answered `RESPONDING` is, by default, also re-toned** (`ALERT_RULES.retoneRespondingMembers`, default `true`) — carving out an exception for `RESPONDING` specifically would make it the one place `ackStatus` gates audience, reintroducing the exact conflation this rule exists to prevent; a second buzz to someone already en route is weak information but non-zero, and cheaper to accept than a second predicate to get wrong under exactly the conditions where it matters most. Department-configurable to `false` without a redeploy if the noise proves unwelcome.
+- **Predicate (whether tone 2/3 fires, and whether mutual aid triggers) — reads `ackStatus`, never gates audience with it.** Keeping "who gets paged" and "did enough people answer" as two separate reads against two separate entities (§Data Model, `DISPATCH_ROSTER_ENTRY` vs. `MEMBER_ELIGIBILITY_SNAPSHOT`) is deliberate, so a future edit to one cannot silently leak into the other the way `channel`/`channelTier` did. The predicate is configuration (F9.3 `ALERT_RULES`), not code: a minimum responder count plus optional per-qualification minimums, with per-`incidentType` overrides. **Market context:** no responder-alerting competitor (Active911, IamResponding, PulsePoint, Resgrid, Bryx, First Due, Station Boss, Emergency Reporting) escalates on qualifications being met, or even displays quals on a live roster; Station Boss is the only vendor claiming count-based per-call-type thresholds, with no published timer or escalation-target definition. The qualification-aware predicate is this product's differentiator, and it degrades honestly: a department that configures nothing gets `requiredQuals: {}` — a raw responder count, exactly what the market offers today. A department that configures per-call-type quals (e.g., a structure fire needs 2 interior-qualified and 1 driver/operator; a wires-down call needs 2 responders, no quals) gets qualification-aware thresholds no competitor has shipped. Evaluated entirely from `DISPATCH_ROSTER_ENTRY`'s already-denormalized `quals` (`:605`) and a new denormalized `ALERT_RULES_COPY` in the alerting table — **no synchronous read to `platform-service` at evaluation time**, preserving N1.5. **Named config-validation obligation, not designed here:** `PUT /platform/config` (F9.3) must reject an `ALERT_RULES.requiredQuals` entry naming a qualification code no currently-eligible member holds — an unvalidated impossible predicate never satisfies, fires tone 3 and mutual aid on every dispatch of that call type, and is otherwise indistinguishable from a genuinely under-staffed department. Recorded here so the obligation is not lost; the validator itself is a follow-on implementation task.
+- **Answers are append-only.** A member can change their answer on any tone. Every answer is written as an immutable `DISPATCH_RESPONSE_RECORD` (new entity, §Data Model); `DISPATCH_ROSTER_ENTRY`'s `ackStatus`/`ackAt` remain the mutable "current answer" rollup (last-writer-wins on `ackAt`, per Ordering and Duplication) that the live roster (F1.7) reads, now carrying `lastAnsweredTone`. The audit log (F1.11) can therefore show "declined tone 1, responded tone 2" — that is evidentiary and an operationally useful signal, not incidental.
+- **Officer-visible, overridable ladder (F1.14) — not a black box.** The nearest competitor (Station Boss) publishes neither its timer nor its escalation target. `GET /dispatches/{dispatchId}` (existing endpoint) is extended with a `toneLadder` object: `status` (`ACTIVE`\|`HALTED_MANUAL`\|`COMPLETED`), `currentToneSequence`, `nextToneAt`, and `predicateGaps` (a computed, human-facing list of what's still needed — e.g. "2 more responders," "1 more INTERIOR-qualified" — computed at read time from the same in-table data the Tone Evaluator itself reads (N1 — `DISPATCH_ROSTER_ENTRY` is in-partition, `ALERT_RULES_COPY` is a different partition of the same table); no new storage). An officer/chief can **halt** the ladder (`POST /dispatches/{dispatchId}/tone-ladder/halt` — sets `toneLadderStatus = HALTED_MANUAL`; every subsequent scheduled Tone Evaluator fire self-checks this first and no-ops with `outcome = SKIPPED_MANUALLY_HALTED`, no schedule cancellation needed, consistent with the existing no-cancellation pattern) or **advance** it immediately (`POST /dispatches/{dispatchId}/tone-ladder/advance` — fires the next tone now, bypassing its timer and predicate, recorded as `outcome = FIRED_MANUAL_OVERRIDE`; the later scheduled fire for that same tone sees it already exists via the same conditional-put idempotency mechanism and self-skips as `SKIPPED_ALREADY_FIRED` — no lock required, the existing dedup key absorbs the race). Halting also suppresses automatic mutual-aid triggering; a separate `POST /dispatches/{dispatchId}/mutual-aid/trigger` lets an officer request mutual aid manually at any time, guarded by the same idempotent singleton write as the automatic path.
+- **Mutual aid (F1.13) is a port, not an inter-department API.** If the predicate is still unmet after tone 3 evaluates (or an officer triggers it manually), `alerting-service` calls a `MutualAidPort`. **The mutual-aid department is not on this platform — its members cannot be paged.** Every real-world implementation found (Motorola Mach Alert, Locution CADVoice) keeps a human dispatcher in the loop and works CAD-to-CAD, never app-to-app, and no vendor has resolved who is authorized to commit a department to mutual aid — a liability question this architecture cannot answer. The **shipped default adapter** therefore notifies our own officers/chief (via the existing alerting push queue and worker, reused rather than built new, with a distinguishing `alertKind: "mutual_aid_prompt"` payload field so the app renders an actionable prompt rather than a dispatch alert, and its own `MAPROMPT#{memberId}#PUSH` item namespace — never a `RECEIPT#...` key, which an already-toned officer would already hold, causing a silent no-op — see Data Model §3.1 `MUTUAL_AID_EVENT`) and records the request (`MUTUAL_AID_EVENT`, singleton per dispatch via conditional put) pending a human phone call. A **CAD-relay adapter** that pages a neighboring department directly is named as a future variant, explicitly gated on OQ-1/OQ-2 (CAD integration surface, regional dispatch authority approval) — not designed here.
+
 ### 1.4 Cross-service integration (everything outside alerting)
 
 > **Messaging transport (reconciled — CANONICAL).** The two planes use **two different transports**, deliberately, and this note is the authority wherever any section disagrees:
@@ -232,7 +251,7 @@ flowchart TB
 > | **Alerting** | **SNS FIFO topic `boxalarm-{env}-alerting-topic.fifo` → SQS FIFO queues**, one per channel, each with its own DLQ | FIFO ordering plus `MessageDeduplicationId` is **load-bearing** for the N1.4 exactly-once guarantee. **EventBridge has no FIFO mode and cannot supply it.** There is no `boxalarm-alerting-bus`; alerting does not use EventBridge for fan-out. |
 > | **Domain (LOB)** | **EventBridge bus `boxalarm-{env}-platform-bus`**, rule-routed to per-consumer SQS queues, each with its own DLQ | Content-based rule routing, cheap at this volume, one bus instead of six topics to operate. No ordering requirement exists on this plane. |
 >
-> **Crossing between planes** is one-way only: a `boxalarm-{env}-platform-bus` rule subscribes to a narrow allow-list of alerting events (`dispatch.alert.received`, `alerting.response.confirmed`) republished outward from the alerting plane, so the LOB plane can observe alerting but can never back-pressure or reach into it (N1.5, N1.7).
+> **Crossing between planes** is one-way only: a `boxalarm-{env}-platform-bus` rule subscribes to a narrow allow-list of alerting events (`dispatch.alert.received`, `alerting.response.confirmed`, and — amendment — `alerting.tone.escalated`, `alerting.mutual_aid.triggered`) republished outward from the alerting plane, so the LOB plane can observe alerting but can never back-pressure or reach into it (N1.5, N1.7). The two new events let `reporting-service`/`incident-service` annotate the eventual NERIS incident or chief dashboard with tone-ladder and mutual-aid facts; alerting never reads anything back.
 >
 > **EventBridge Scheduler** is used within the alerting plane for one-time escalation timers only (not as a bus) — this is a scheduler, not a transport, and does not conflict with the FIFO decision.
 >
@@ -256,7 +275,7 @@ Base path `/api/v1/{service}/...`, JSON camelCase, RFC 7807 errors with `traceId
 |---|---|---|---|
 | POST | `/api/v1/alerting/ingress/{adapter}` | CAD/vendor dispatch ingress (adapter-specific payload) | Vendor |
 | POST | `/api/v1/alerting/dispatches` | Manual dispatch entry (degraded-mode fallback, N1.8) | Cognito(admin) |
-| GET | `/api/v1/alerting/dispatches/{dispatchId}` | Dispatch detail incl. normalized alert content (F1.8) | Cognito |
+| GET | `/api/v1/alerting/dispatches/{dispatchId}` | Dispatch detail incl. normalized alert content (F1.8); response extended with a `toneLadder` object (`status`, `currentToneSequence`, `nextToneAt`, `predicateGaps`) per F1.14, amendment | Cognito |
 | GET | `/api/v1/alerting/dispatches/{dispatchId}/roster` | Live response roster: responding/ETA/quals/apparatus (F1.7) | Cognito |
 | POST | `/api/v1/alerting/dispatches/{dispatchId}/responses` | Member response confirmation + ETA (F1.6) | Cognito |
 | GET | `/api/v1/alerting/dispatches/{dispatchId}/receipts` | Per-member sent/delivered/opened receipts (F1.3) | Cognito(admin) |
@@ -267,13 +286,17 @@ Base path `/api/v1/{service}/...`, JSON camelCase, RFC 7807 errors with `traceId
 | POST | `/api/v1/alerting/receipts/voice` | Voice call-outcome callback | Vendor |
 | GET | `/api/v1/alerting/audit` | Alert delivery audit log, filterable/queryable (F1.11) | Cognito(admin) |
 | GET | `/api/v1/alerting/canary/status` | Current canary health (N1.6, feeds N8.3 self-diagnosis) | Cognito(admin) |
+| POST | `/api/v1/alerting/dispatches/{dispatchId}/tone-ladder/advance` | Manually fire the next tone now, bypassing its timer and predicate (F1.14, amendment) | Cognito(admin) |
+| POST | `/api/v1/alerting/dispatches/{dispatchId}/tone-ladder/halt` | Halt remaining scheduled tone evaluations and suppress automatic mutual-aid trigger (F1.14, amendment) | Cognito(admin) |
+| POST | `/api/v1/alerting/dispatches/{dispatchId}/mutual-aid/trigger` | Manually trigger mutual aid without waiting for tone 3 (F1.13, amendment) | Cognito(admin) |
+| POST | `/api/v1/alerting/dispatches/{dispatchId}/mutual-aid/acknowledge` | Officer confirms the mutual-aid phone call was made; records notes (F1.13, amendment) | Cognito(admin) |
 
 ### platform-service
 
 | Method | Path | Description | Auth |
 |---|---|---|---|
 | GET | `/api/v1/platform/config` | Department configuration: apparatus, stations, ranks, point rules, checklists, alert rules (F9.3) | Cognito(admin) |
-| PUT | `/api/v1/platform/config` | Update department configuration | Cognito(admin) |
+| PUT | `/api/v1/platform/config` | Update department configuration. **Amendment obligation:** a write with `configType=ALERT_RULES` must reject `requiredQuals` naming a qualification no currently-eligible member holds (see Data Model §3.1 `DEPARTMENT_CONFIG`) — validator not designed in this amendment, recorded so the obligation is not lost | Cognito(admin) |
 | GET | `/api/v1/platform/audit` | Cross-service record-mutation audit log (F9.4) | Cognito(admin) |
 | POST | `/api/v1/platform/export` | Request full data export job — accept-and-queue (F9.5) | Cognito(admin) |
 | GET | `/api/v1/platform/export/{jobId}` | Export job status + download link | Cognito(admin) |
@@ -434,7 +457,7 @@ Base path `/api/v1/{service}/...`, JSON camelCase, RFC 7807 errors with `traceId
 ### 4.4 Logging, tracing, metrics
 
 - Structured JSON logs to stdout, every entry carrying `correlationId` and `service`, per house standard; W3C `traceparent`/`tracestate` propagated on every inter-service call and included in RFC 7807 error responses as `traceId`.
-- AWS X-Ray active tracing on every Lambda, correlated per `{dispatchId}#{memberId}#{channel}`. **X-Ray is a diagnostic aid, not the audit trail** — its retention is measured in days, whereas F1.11's delivery evidence must survive as the basis for the N1.9 cutover decision and any post-incident review. The durable record is the immutable per-channel `DELIVERY_RECEIPT` items, archived to S3 with Object Lock (see Data Protection above). Tracing answers "why was this slow"; the receipts answer "was this delivered."
+- AWS X-Ray active tracing on every Lambda, correlated per `{dispatchId}#{toneSequence}#{memberId}#{channel}` (amended — `toneSequence` added, matching the exactly-once key; without it the traces for tone 1 and a tone-2 re-tone to the same member on the same channel collapse into one correlation ID, and "why was this slow" cannot distinguish which tone was slow). **X-Ray is a diagnostic aid, not the audit trail** — its retention is measured in days, whereas F1.11's delivery evidence must survive as the basis for the N1.9 cutover decision and any post-incident review. The durable record is the immutable per-channel `DELIVERY_RECEIPT` items, archived to S3 with Object Lock (see Data Protection above). Tracing answers "why was this slow"; the receipts answer "was this delivered."
 - CloudWatch Metrics + Alarms: alerting-specific alarms (fan-out p99 latency vs. the 5s N1.1 target, per-channel delivery-failure rate, canary failure) are **P0 operational tooling** per N8.2 and page a human directly — they are not folded into a general-purpose dashboard alongside, say, inventory reorder alerts, because that would let a life-safety alarm get lost in low-priority noise.
 - No PII in logs (member names, addresses beyond what's operationally required on an alert payload) per house standard; F9.4's audit-of-mutations requirement is satisfied by the outbox-driven `AuditEvent` stream into `platform-service`, queryable per N8.3 without vendor support.
 
@@ -519,6 +542,9 @@ erDiagram
 
     DISPATCH_ALERT ||--o{ DELIVERY_RECEIPT : "fans out to"
     DISPATCH_ALERT ||--o{ ESCALATION_EVENT : triggers
+    DISPATCH_ALERT ||--o{ DISPATCH_RESPONSE_RECORD : "answered via"
+    DISPATCH_ALERT ||--o{ TONE_EVENT : escalates
+    DISPATCH_ALERT |o--o| MUTUAL_AID_EVENT : "may trigger"
     DISPATCH_ALERT }o--|| INCIDENT : "becomes (shared NERIS ID)"
     DISPATCH_ALERT }o--o{ HYDRANT : references
     DISPATCH_ALERT }o--o{ PRE_PLAN : references
@@ -564,6 +590,9 @@ Streams: **on** (feeds a future OSI pipeline if CQRS is adopted later; not consu
 | `eligibleMemberCount` | Number | Snapshot at fan-out time | `34` |
 | `idempotencyKey` | String | Dedup key from CAD feed, unique | `cad-msg-88213` |
 | `createdAt` | Number (epoch) | | `1798000000` |
+| `toneLadderStatus` | String | **Amendment (B6).** `ACTIVE`\|`HALTED_MANUAL`\|`COMPLETED`. Written by the Tone Evaluator (transitions to `COMPLETED` after tone 3 evaluates) and by `POST /tone-ladder/halt` (`ACTIVE`→`HALTED_MANUAL`). Read by AP 5b's `ConditionCheck` (closes the halt race) and by `GET /dispatches/{id}` | `ACTIVE` |
+| `currentToneSequence` | Number | **Amendment (B6).** Highest tone that has actually fired (`1`\|`2`\|`3`). Written by AP 5b on every successful fire (automatic or manual); read by `POST /tone-ladder/advance` to compute the next tone (`currentToneSequence + 1`, computed once at call time, never re-derived — see AP 5d) and by `GET /dispatches/{id}` | `1` |
+| `nextToneAt` | Number (epoch, nullable) | **Amendment (B6).** When the next scheduled tone evaluation fires; `null` once `toneLadderStatus` is `COMPLETED` or `HALTED_MANUAL`. Set at fan-out time to the T+180s schedule's fire time, updated to T+360s after tone 2 evaluates, cleared after tone 3. Display-only — the actual firing is driven by the EventBridge schedule, not by this field | `1798000180` |
 | `gsi2pk` | String | `DEPT#{deptId}` | `DEPT#NICHOLS` |
 | `gsi2sk` | String | `DISPATCH#{dispatchedAt}` | `DISPATCH#1798000000` |
 
@@ -576,18 +605,19 @@ Life-safety audit evidence for F1.3/F1.11. Collocated in the same item collectio
 | Attribute | Type | Description | Example |
 |---|---|---|---|
 | `pk` | String | `DEPT#{deptId}#DISPATCH#{dispatchId}` | `DEPT#NICHOLS#DISPATCH#NICHOLS-4471-1798000000` |
-| `sk` | String | `RECEIPT#{memberId}#{channel}` | `RECEIPT#MBR-0012#PUSH` |
+| `sk` | String | `RECEIPT#{memberId}#{channel}#{toneSequence}` | `RECEIPT#MBR-0012#PUSH#1` |
 | `entityType` | String | | `DELIVERY_RECEIPT` |
 | `dispatchId` | String | | `NICHOLS-4471-1798000000` |
 | `memberId` | String | | `MBR-0012` |
 | `deptId` | String | | `NICHOLS` |
 | `channel` | String | `PUSH` \| `SMS` \| `VOICE` — **this attempt's channel; immutable** | `PUSH` |
 | `channelTier` | String | `primary` (push, sms) \| `escalation` (voice). **Escalation-state bookkeeping only — never a routing filter, never a dedup input. Routing and dedup both key on `channel`** | `primary` |
+| `toneSequence` | Number | **Amendment.** Which department-level tone (`1`\|`2`\|`3`) produced this send — see §Department tone ladder. Immutable, part of the dedup key, never a routing input | `1` |
 | `sentAt` | Number (epoch) | This channel's send | `1798000003` |
 | `deliveredAt` | Number (epoch, nullable) | | `1798000004` |
 | `openedAt` | Number (epoch, nullable) | | `1798000009` |
 | `failureReason` | String (nullable) | | `APNS_TIMEOUT` |
-| `idempotencyKey` | String | `{dispatchId}#{memberId}#{channel}` — conditional-put guard for F1.5/N1.4 exactly-once, `attribute_not_exists` | `NICHOLS-4471-1798000000#MBR-0012#PUSH` |
+| `idempotencyKey` | String | `{dispatchId}#{toneSequence}#{memberId}#{channel}` — conditional-put guard for F1.5/N1.4 exactly-once, `attribute_not_exists` | `NICHOLS-4471-1798000000#1#MBR-0012#PUSH` |
 | `gsi1pk` | String | `MEMBER#{memberId}` | `MEMBER#MBR-0012` |
 | `gsi1sk` | String | `RECEIPT#{sentAt}#{dispatchId}` | `RECEIPT#1798000003#NICHOLS-4471-1798000000` |
 | `ttl` | Number | See §3.4 retention | *(none — no expiry, see below)* |
@@ -609,6 +639,24 @@ The member-level rollup serving F1.7 (live response roster — one row per membe
 | `assignedApparatusId` | String (nullable) | | `APP-ENGINE-2` |
 | `currentChannelTier` | String | Highest tier attempted so far | `primary` |
 | `escalationLevel` | Number | 0 = primary tier only | `1` |
+| `lastAnsweredTone` | Number | **Amendment.** Which department-level tone (`1`\|`2`\|`3`) this current `ackStatus`/`ackAt` answer was given on. Reflects the current answer only — every answer ever given is preserved separately in `DISPATCH_RESPONSE_RECORD` below | `2` |
+
+#### DISPATCH_RESPONSE_RECORD (amendment — F1.12, F1.11 audit trail)
+
+**Append-only.** A member can change their answer on any tone; this is the immutable record of every answer, so F1.11's audit view can show "declined tone 1, responded tone 2." `DISPATCH_ROSTER_ENTRY` above remains the mutable "current answer" rollup that F1.7's live view reads — the two entities intentionally answer different questions ("what does this member currently say" vs. "what has this member ever said") the same way `DELIVERY_RECEIPT` and the old single-item design once conflated "was this sent" with "what is the latest status," a mistake already corrected once in this document (`:196`) and not repeated here.
+
+| Attribute | Type | Description | Example |
+|---|---|---|---|
+| `pk` | String | `DEPT#{deptId}#DISPATCH#{dispatchId}` | same partition as `DISPATCH_ALERT` |
+| `sk` | String | `RESPONSE#{memberId}#{answeredAt}` | `RESPONSE#MBR-0012#1798000300` |
+| `entityType` | String | | `DISPATCH_RESPONSE_RECORD` |
+| `memberId` | String | | `MBR-0012` |
+| `ackStatus` | String | `RESPONDING`\|`NOT_RESPONDING`\|`DIRECT_TO_SCENE` | `NOT_RESPONDING` |
+| `toneSequence` | Number | Which tone was in effect when this answer was given | `1` |
+| `eta` / `assignedApparatusId` | (nullable) | | |
+| `answeredAt` | Number (epoch) | | `1798000300` |
+
+Written unconditionally (`PutItem`, always a new item by construction of `answeredAt`) in the same `TransactWriteItems` as the `DISPATCH_ROSTER_ENTRY` update, which is conditional: `ConditionExpression: attribute_not_exists(ackAt) OR :newAckAt > ackAt` — last-writer-wins on timestamp, per Ordering and Duplication, so an out-of-order network delivery cannot regress the rollup even though the append-only record always lands.
 
 #### MEMBER_ELIGIBILITY_SNAPSHOT
 
@@ -621,6 +669,7 @@ Denormalized eligibility copy owned by `alerting-service` (C-2 isolation invaria
 | `entityType` | String | | `MEMBER_ELIGIBILITY_SNAPSHOT` |
 | `active` | Boolean | | `true` |
 | `quals` | List(String) | | `["INTERIOR","DRIVER_OP"]` |
+| `roles` | List(String) | **Amendment.** Denormalized from `MEMBER.roles` (`:795`) — needed to target officer/chief members for the mutual-aid prompt (§Department tone ladder) without a cross-service read | `["MEMBER","OFFICER"]` |
 | `contactChannels` | List(Map) | Push tokens, phone numbers per channel | `[{"channel":"PUSH","token":"..."}]` |
 | `availabilityState` | String | `AVAILABLE`\|`MARKED_OFF`\|`LOA` — **event-propagated, never read cross-service at fan-out** | `AVAILABLE` |
 | `snapshotUpdatedAt` | Number (epoch) | Staleness alarm at 15 min; propagation target < 30s p99 | `1798000000` |
@@ -640,17 +689,72 @@ Denormalized pre-plan copy owned by `alerting-service` (F1.8, F6.2). Maintained 
 | `nearestHydrants` | List(Map) | Resolved at copy time — id, location, size, flow | |
 | `snapshotUpdatedAt` | Number (epoch) | | `1798000000` |
 
+#### ALERT_RULES_COPY (amendment — F1.12 predicate config)
+
+Denormalized copy owned by `alerting-service` (C-2 isolation invariant), same pattern as `MEMBER_ELIGIBILITY_SNAPSHOT`/`PRE_PLAN_COPY` above. **Fan-out and the Tone Evaluator read this, never the `platform-service` table.**
+
+| Attribute | Type | Description | Example |
+|---|---|---|---|
+| `pk` | String | `DEPT#{deptId}#ALERT_RULES` | `DEPT#NICHOLS#ALERT_RULES` |
+| `sk` | String | `METADATA` | `METADATA` |
+| `entityType` | String | | `ALERT_RULES_COPY` |
+| `toneLadder` | Map | `{tone2AtSeconds, tone3AtSeconds, mutualAidAfterTone}` | `{"tone2AtSeconds":180,"tone3AtSeconds":360,"mutualAidAfterTone":3}` |
+| `retoneRespondingMembers` | Boolean | Default `true` — see §Department tone ladder for the reasoning | `true` |
+| `voiceEscalatesPerTone` | Boolean | Default `true` — each tone re-arms its own push+SMS→voice ladder. Set `false` only to cap voice-vendor cost; no partial-ladder design exists, this is a blunt on/off | `true` |
+| `defaultRule` | Map | `{minResponders, requiredQuals: {qualCode: count}}`. Empty `requiredQuals` is the honest fallback — a raw count, same as the market offers today | `{"minResponders":4,"requiredQuals":{}}` |
+| `callTypeOverrides` | Map\<String, Map\> | Keyed on `incidentType`, same shape as `defaultRule`. **`PUT /platform/config` must reject a `requiredQuals` entry naming a qual code no currently-eligible member holds** — an unvalidated impossible predicate fires tone 3 and mutual aid on every dispatch of that call type; the validator is a named obligation, not designed in this amendment | `{"STRUCTURE_FIRE":{"minResponders":4,"requiredQuals":{"INTERIOR":2,"DRIVER_OPERATOR":1}}}` |
+| `snapshotUpdatedAt` | Number (epoch) | | `1798000000` |
+
+Maintained by a new event `platform.config.alert_rules.updated`, published (outbox pattern, `:242`) by `platform-service` when `PUT /platform/config` writes `configType=ALERT_RULES`.
+
 #### ESCALATION_EVENT
 
 | Attribute | Type | Description | Example |
 |---|---|---|---|
 | `pk` | String | `DEPT#{deptId}#DISPATCH#{dispatchId}` | same partition as above |
-| `sk` | String | `ESCALATION#{memberId}#{escalatedAt}` | `ESCALATION#MBR-0012#1798000030` |
+| `sk` | String | `ESCALATION#{memberId}#{toneSequence}#{escalatedAt}` | `ESCALATION#MBR-0012#1#1798000030` |
 | `entityType` | String | | `ESCALATION_EVENT` |
 | `memberId` | String | | `MBR-0012` |
 | `fromChannel` / `toChannel` | String | | `PUSH` / `SMS` |
+| `toneSequence` | Number | **Amendment.** Which department-level tone this per-member channel escalation belongs to — each tone re-arms its own push+SMS→voice ladder (Decision: voice re-arms on every tone, `voiceEscalatesPerTone` default `true`) | `1` |
 | `escalatedAt` | Number (epoch) | | `1798000030` |
 | `reason` | String | `NO_ACK_TIMEOUT` | `NO_ACK_TIMEOUT` |
+
+#### TONE_EVENT (amendment — F1.12, F1.14 department-level tone ladder)
+
+**Two item shapes in this entity, by design (M1 — the review caught that a timestamped-only sk cannot be a conditional-put guard):**
+
+1. **Singleton fire-guard, `sk = TONE#{toneSequence}`** (no timestamp). Written exactly once per tone via the conditional put embedded in AP 5b's `TransactWriteItems` (`attribute_not_exists`, alongside the `toneLadderStatus <> HALTED_MANUAL` `ConditionCheck`). This is the item AP 5f's `GetItem` reads to decide `SKIPPED_ALREADY_FIRED` vs. proceed — the same "one immutable item guards one action" pattern as `DELIVERY_RECEIPT`, applied to "has this tone already fired" instead of "has this member-channel-tone already sent."
+2. **Timestamped audit row, `sk = TONE#{toneSequence}#{evaluatedAt}`** (append-only, unconditional put, one per evaluation attempt — including races and skips). This is the audit trail for "why did/didn't tone 3 fire," queried via AP 5f's `begins_with(TONE#)` for `GET /dispatches/{dispatchId}`'s `toneLadder.predicateGaps` (F1.14) and the officer-facing ladder history.
+
+| Attribute | Type | Description | Example |
+|---|---|---|---|
+| `pk` | String | `DEPT#{deptId}#DISPATCH#{dispatchId}` | same partition |
+| `sk` | String | `TONE#{toneSequence}` (singleton guard) or `TONE#{toneSequence}#{evaluatedAt}` (audit row) | `TONE#2#1798000180` |
+| `entityType` | String | | `TONE_EVENT` |
+| `toneSequence` | Number | `1`\|`2`\|`3` — **the literal value carried in the invoking schedule/manual-advance payload, never computed at evaluation time** (see AP 5a) | `2` |
+| `evaluatedAt` | Number (epoch) | Present only on the timestamped audit row | `1798000180` |
+| `outcome` | String | `FIRED`\|`FIRED_MANUAL_OVERRIDE`\|`SKIPPED_PREDICATE_MET`\|`SKIPPED_ALREADY_FIRED`\|`SKIPPED_MANUALLY_HALTED`\|`SKIPPED_NO_CONFIG` (amendment — `ALERT_RULES_COPY` absent, see AP 5a; alarms rather than firing blind) | `FIRED` |
+| `predicateSnapshot` | Map | `{respondingCount, requiredMinimum, qualCounts, requiredQuals, ruleMatched}` | `{"respondingCount":2,"requiredMinimum":4,"ruleMatched":"STRUCTURE_FIRE"}` |
+| `eligibleMemberCountAtEvaluation` | Number | | `34` |
+| `triggeredBy` | String (nullable) | memberId — populated only for the two manual outcomes (F1.14) | `MBR-0034` |
+
+#### MUTUAL_AID_EVENT (amendment — F1.13)
+
+| Attribute | Type | Description | Example |
+|---|---|---|---|
+| `pk` | String | `DEPT#{deptId}#DISPATCH#{dispatchId}` | same partition |
+| `sk` | String | `MUTUALAID#SINGLETON` | fixed — **one trigger per dispatch, ever**; the fixed sk plus a conditional `PutItem` (`attribute_not_exists`) guards against double-trigger whether the automatic tone-3 path and a manual trigger race, or the evaluator itself is invoked twice |
+| `entityType` | String | | `MUTUAL_AID_EVENT` |
+| `triggeredAt` | Number (epoch) | | |
+| `reason` | String | `TONE_3_PREDICATE_UNMET`\|`MANUAL` | `TONE_3_PREDICATE_UNMET` |
+| `predicateSnapshot` | Map | Same shape as `TONE_EVENT.predicateSnapshot` | |
+| `adapterUsed` | String | `OFFICER_MANUAL_PROMPT` — the only adapter that ships; a CAD-relay adapter is a named future variant gated on OQ-1/OQ-2, not designed here | `OFFICER_MANUAL_PROMPT` |
+| `officersNotified` | List\<String\> | memberIds pushed, resolved from `MEMBER_ELIGIBILITY_SNAPSHOT.roles` containing `OFFICER`\|`CHIEF` | `["MBR-0034"]` |
+| `acknowledgedBy` / `acknowledgedAt` | String/Number (nullable) | Officer confirms the phone call was made | |
+| `notes` | String (nullable) | Free text, e.g. "Called Trumbull Center, requested Engine 3." **Compliance (amendment):** this is officer-entered free text retained for 7 years (§3.4) — the same no-PII guidance the logging standard applies elsewhere (Cross-Cutting → Logging, "no member names, addresses beyond what's operationally required") applies here too. Officers should be trained not to enter occupant or caller names/addresses beyond what the incident record already carries; the field is not validated against this, since free text cannot be reliably scrubbed, so the control is guidance, not enforcement | |
+
+**Officer push item shape and idempotency (B3 — fixed after review).** The officer-facing mutual-aid prompt is its own item, **not** a `DELIVERY_RECEIPT` row — `sk = MAPROMPT#{memberId}#PUSH`, a namespace disjoint from both `RECEIPT#{memberId}#{channel}#{toneSequence}` and `MUTUALAID#SINGLETON`, so it can never collide with a per-tone member receipt an officer already holds (the original design's `RECEIPT#{memberId}#PUSH#3`-shaped guess was exactly the collision risk this fixes — an officer toned at tone 3 already owns that key, and the guarded put would have failed silently). `idempotencyKey = {dispatchId}#MUTUALAID#{memberId}#push`, conditional put, same mechanism as every other send-guard in this document. **Push worker key derivation:** the worker branches on `alertKind` in the message payload — `alertKind: "dispatch"` (default) derives its guard/receipt key as `RECEIPT#{memberId}#{channel}#{toneSequence}` per the CANONICAL key; `alertKind: "mutual_aid_prompt"` derives it as `MAPROMPT#{memberId}#PUSH` and does **not** read or write `toneSequence` at all (the message carries none). This reuses the existing push queue and worker Lambda (ladder rung: reuse before new) with one added branch, not a second worker.
 
 #### SELF_TEST_RUN (F1.10)
 
@@ -1139,7 +1243,7 @@ Collocated with its `OCCUPANCY` so "retrievable from within an active alert" (F1
 | `pk` | String | `DEPT#{deptId}` | `DEPT#NICHOLS` |
 | `sk` | String | `CONFIG#{configType}` | `CONFIG#LOSAP_POINT_RULES` |
 | `entityType` | String | | `DEPARTMENT_CONFIG` |
-| `configType` | String | `STATIONS`\|`RANKS`\|`LOSAP_POINT_RULES`\|`ALERT_RULES`\|`CHECKLIST_DEFAULTS` | |
+| `configType` | String | `STATIONS`\|`RANKS`\|`LOSAP_POINT_RULES`\|`ALERT_RULES`\|`CHECKLIST_DEFAULTS`. **Amendment obligation:** a write with `configType=ALERT_RULES` must reject any `requiredQuals` entry naming a qualification code no currently-eligible member holds — an unvalidated impossible predicate fires mutual aid on every dispatch of that call type. Validator not designed here; recorded as a required follow-on. | |
 | `value` | Map (JSON) | Configuration payload | |
 | `version` | Number | Optimistic-lock / cache-bust counter | `4` |
 
@@ -1165,7 +1269,7 @@ Daily-bucketed PK gives real cardinality and bounds partition size the same way 
 
 | Entity class | TTL policy | Rationale |
 |---|---|---|
-| `DELIVERY_RECEIPT`, `ESCALATION_EVENT`, `DISPATCH_ALERT` | **No TTL-based deletion.** Retention governed by N6.3 (configurable to CT/municipal requirement, default 7 years) via a separate scheduled export-to-S3-Glacier job, not item expiry. | This is the life-safety audit evidence for "did the page go out" (F1.11) — it must never silently disappear on a timer. |
+| `DELIVERY_RECEIPT`, `ESCALATION_EVENT`, `DISPATCH_ALERT`, `DISPATCH_RESPONSE_RECORD`, `TONE_EVENT`, `MUTUAL_AID_EVENT` (amendment) | **No TTL-based deletion.** Retention governed by N6.3 (configurable to CT/municipal requirement, default 7 years) via a separate scheduled export-to-S3-Glacier job, not item expiry. | This is the life-safety audit evidence for "did the page go out" (F1.11) — it must never silently disappear on a timer. The amendment's three new entities are the same evidence class: who was re-toned, why, and whether mutual aid was requested. |
 | `SELF_TEST_RUN` | TTL 365 days | Operational self-diagnostic, not incident evidence. |
 | `CANARY_RUN` | TTL 90 days | Synthetic monitoring data; aggregated uptime metrics live in CloudWatch, not DynamoDB. |
 | `NERIS_SUBMISSION_ATTEMPT` | No TTL | Compliance evidence for "100% submission, no silent failures" (§9 success metric). |
@@ -1179,12 +1283,19 @@ Daily-bucketed PK gives real cardinality and bounds partition size the same way 
 | # | Access pattern | Table | PK | SK / condition | GSI | Operation |
 |---|---|---|---|---|---|---|
 | 1 | Ingest normalized dispatch, create alert (F1.1) | alerting | `DEPT#{d}#DISPATCH#{id}` | `METADATA` | — | `PutItem` (conditional on `idempotencyKey` for dedup — F1.5) |
-| 2 | Fan out receipts to all eligible members (F1.2) | alerting | `DEPT#{d}#DISPATCH#{id}` | `RECEIPT#{memberId}#{channel}` | — | `TransactWriteItems` (or per-item `PutItem`), conditional put on `attribute_not_exists(idempotencyKey)` per channel (F1.5/N1.4 exactly-once). **Not `BatchWriteItem` — it cannot carry a `ConditionExpression`** |
+| 2 | Fan out receipts to all eligible members, tone 1 (F1.2) | alerting | `DEPT#{d}#DISPATCH#{id}` | `RECEIPT#{memberId}#{channel}#{toneSequence}` — **amended; `toneSequence=1` for this, the CAD-triggered fan-out** | — | `TransactWriteItems` (or per-item `PutItem`), conditional put on `attribute_not_exists(idempotencyKey)` per channel per tone (F1.5/N1.4 exactly-once). **Not `BatchWriteItem` — it cannot carry a `ConditionExpression`**. **This is the tone-1 instance of the same write AP 5b uses for tones 2/3** — same code path, `toneSequence` supplied by the caller (CAD ingress supplies `1`; the Tone Evaluator supplies `2`/`3` from its schedule payload, never computed) |
 | 3 | Live response roster for a dispatch (F1.3, F1.7) | alerting | `DEPT#{d}#DISPATCH#{id}` | `begins_with(RECEIPT#)` | — | `Query` |
-| 4a | Update a channel's delivery status (delivered/opened/failed) | alerting | `DEPT#{d}#DISPATCH#{id}` | `RECEIPT#{memberId}#{channel}` | — | `UpdateItem` |
-| 4b | Record a member's ack (responding/ETA/apparatus — F1.6) | alerting | `DEPT#{d}#DISPATCH#{id}` | `ROSTER#{memberId}` | — | `UpdateItem` on `DISPATCH_ROSTER_ENTRY` |
-| 5 | Escalate a member to the voice tier (F1.4) | alerting | `DEPT#{d}#DISPATCH#{id}` | `ESCALATION#{memberId}#{ts}` (put) + **`RECEIPT#{memberId}#voice` (new item, conditional put)** + `ROSTER#{memberId}` (update `currentChannelTier`) | — | `TransactWriteItems`. Escalation **creates a new per-channel receipt**; it never mutates the primary-tier receipts, so per-channel evidence survives (F1.3/F1.11) |
+| 4a | Update a channel's delivery status (delivered/opened/failed) | alerting | `DEPT#{d}#DISPATCH#{id}` | `RECEIPT#{memberId}#{channel}#{toneSequence}` — **amended.** The provider webhook payload (push/SMS/voice delivery-status callback) must carry `toneSequence` — round-tripped from the outbound send so the worker can reconstruct the exact SK; a webhook that cannot report which tone it belongs to cannot be written back to the correct immutable receipt | — | `UpdateItem` |
+| 4b | Record a member's ack (responding/ETA/apparatus — F1.6) | alerting | `DEPT#{d}#DISPATCH#{id}` | `ROSTER#{memberId}` | — | `UpdateItem` on `DISPATCH_ROSTER_ENTRY`. **Amendment:** the request body's `toneSequence` (echoed from the push payload the member is responding to) is **never trusted raw** — the server clamps it to the stored `DISPATCH_ALERT.currentToneSequence` before writing `DISPATCH_RESPONSE_RECORD.toneSequence` (AP 5c), so a stale client payload can't misattribute an answer to a tone that has since advanced |
+| 5 | Escalate a member to the voice tier (F1.4) | alerting | `DEPT#{d}#DISPATCH#{id}` | `ESCALATION#{memberId}#{toneSequence}#{ts}` (put) + **`RECEIPT#{memberId}#voice#{toneSequence}` (new item, conditional put)** + `ROSTER#{memberId}` (update `currentChannelTier`) | — | `TransactWriteItems`. Escalation **creates a new per-channel receipt**; it never mutates the primary-tier receipts, so per-channel evidence survives (F1.3/F1.11). **Amendment:** re-arms per tone — see AP 5a. `toneSequence` here is always the tone that is currently arming voice, supplied by the caller, never derived |
+| 5a | **Evaluate department tone predicate at T+3:00/T+6:00 (F1.12, amendment)** | alerting | `DEPT#{d}#DISPATCH#{id}` | `begins_with(ROSTER#)` (roster+quals+ackStatus) | — | `Query`, plus `GetItem` on `ALERT_RULES_COPY` (`DEPT#{d}#ALERT_RULES`) and `GetItem` on `TONE#{toneSequence}` (AP 5f, the fire-guard). The roster query is in-partition; `ALERT_RULES_COPY` and `MEMBER_ELIGIBILITY_SNAPSHOT` (AP 11) are **other partitions of the same alerting table** — call this **in-table**, not in-partition. **No cross-service read**, N1.5-safe regardless. **`toneSequence` for this evaluation is the literal value carried in the EventBridge Scheduler payload that invoked it** (`2` for the T+180s schedule, `3` for the T+360s schedule) — fixed at schedule-creation time (§1.3a Trigger, done by the Fan-out Lambda alongside AP 2's tone-1 write), never computed from `currentToneSequence + 1` at fire time (EventBridge Scheduler is at-least-once; computing it from observed state would let a redelivered T+180s invocation mint tone 3 early). **If `ALERT_RULES_COPY` is absent** (greenfield department, no config written yet): the ladder does not auto-fire — outcome is recorded as `SKIPPED_NO_CONFIG` and a CloudWatch alarm fires (silence here is itself a defect, not a valid default) — manual advance (F1.14, AP 5d) remains available regardless |
+| 5b | **Re-fan-out for tone 2/3 (F1.12, amendment)** | alerting | `DEPT#{d}#DISPATCH#{id}` | `TONE#{toneSequence}` (conditional put, fire-guard — AP 5f) + `RECEIPT#{memberId}#{channel}#{toneSequence}` per eligible member × channel | — | `TransactWriteItems`: the `TONE#{toneSequence}` singleton conditional put (`attribute_not_exists`) is attempted first as a `ConditionCheck`, **also asserting `METADATA.toneLadderStatus <> HALTED_MANUAL`** (closes the halt race, N2) — only on success does the same write shape as AP 2 execute, with `toneSequence` fixed to the literal value from the schedule/manual-advance payload (never incremented at fire time). Audience re-resolved fresh from AP 11, never filtered by `ackStatus` |
+| 5c | **Record a per-tone response, append-only (F1.12, amendment)** | alerting | `DEPT#{d}#DISPATCH#{id}` | `RESPONSE#{memberId}#{answeredAt}` (put, `toneSequence` = server-clamped value per AP 4b) + `ROSTER#{memberId}` (conditional update, last-writer-wins on `ackAt`) | — | `TransactWriteItems` |
+| 5d | **Manual tone-ladder advance/halt, manual mutual-aid trigger (F1.14, amendment)** | alerting | `DEPT#{d}#DISPATCH#{id}` | `METADATA` (update `toneLadderStatus`, `currentToneSequence`, `nextToneAt`) and/or `MUTUALAID#SINGLETON` (conditional put) | — | `UpdateItem` / conditional `PutItem`. **Advance** is idempotent against a double-submit: the caller sends the tone it observed (`expectedCurrentToneSequence`, from the `GET /dispatches/{id}` payload the officer is looking at) and the advance is a **conditional** `UpdateItem` — `ConditionExpression: currentToneSequence = :expected` — that sets `currentToneSequence = :expected + 1` and then invokes AP 5b with that value. A retried or double-tapped request fails the condition and is rejected rather than computing a fresh `+1` and minting a further tone; the AP 5f singleton guard alone cannot catch this case, because each recomputed value is a *different* key. **Advance** does **not** re-base the remaining schedule(s): a T+360s schedule already created for tone 3 keeps its original fire time and self-skips via the AP 5f guard if tone 3 was already manually fired; advancing past tone 2 does not fire tone 3 early. **Halt** is `UpdateItem` with a `ConditionExpression` on the current value (read-then-act closed, N2) — see AP 5b's `ConditionCheck` for the write-side half of the same guard |
+| 5e | **Trigger and acknowledge mutual aid (F1.13, amendment)** | alerting | `DEPT#{d}#DISPATCH#{id}` | `MUTUALAID#SINGLETON` (conditional put on trigger, `UpdateItem` on acknowledge) | — | Conditional `PutItem` guards at-most-once trigger regardless of automatic-vs-manual race |
+| 5f | **Tone fire-guard / ladder-status read (M1, amendment)** | alerting | `DEPT#{d}#DISPATCH#{id}` | `TONE#{toneSequence}` (singleton, `GetItem`) for the guard; `begins_with(TONE#)` (`Query`) for `GET /dispatches/{id}`'s `toneLadder` display and `predicateGaps` computation | — | `GetItem` / `Query`. The singleton (`TONE#{toneSequence}`, no timestamp) is the **conditional-put guard** consumed by AP 5b; the timestamped `TONE#{toneSequence}#{evaluatedAt}` rows (Data Model §3.1 `TONE_EVENT`) are the **append-only audit trail** of every evaluation attempt, fired or skipped — the two are separate items by design so the guard stays a single cheap conditional check while the audit history stays complete |
 | 6 | Member's own alert/delivery history (F1.11 self-view, N8.3 "why didn't I get the page") | alerting | — | — | GSI1 `MEMBER#{memberId}` | `Query` |
+| 6a | **Full answer history for a member on a dispatch (F1.11 "declined tone 1, responded tone 2", amendment)** | alerting | `DEPT#{d}#DISPATCH#{id}` | `begins_with(RESPONSE#{memberId}#)` | — | `Query` |
 | 7 | Department-wide alert audit for a date range (F1.11, F8.1) | alerting | — | — | GSI2 `DEPT#{d}` range on `DISPATCH#{ts}` | `Query` |
 | 8 | Record a self-test run (F1.10) | alerting | `DEPT#{d}#MEMBER#{m}` | `SELFTEST#{ts}` | — | `PutItem` |
 | 9 | Record a canary run (N1.6) | alerting | `DEPT#{d}#CANARY#{date}` | `RUN#{ts}` | — | `PutItem` |
@@ -1312,7 +1423,7 @@ This is a greenfield product — there is no existing platform data to migrate e
 > **Reconciliations that override this section where they conflict.** Read these first; the section below was authored before cross-domain reconciliation.
 >
 > 1. **Transport.** Alerting uses SNS FIFO → SQS FIFO (correct as written below). The **six per-domain SNS topics are superseded** by the single EventBridge bus `boxalarm-{env}-platform-bus` with one rule per event type; the consumer queue names below remain correct. All `moonaan-prod-*` names read as `boxalarm-{env}-*`. See the transport note in Backend §1.4.
-> 2. **Exactly-once key** is `{dispatchId}#{memberId}#{channel}` (per-channel), enforced by the DynamoDB conditional put, with FIFO `MessageDeduplicationId` as a transport optimization only. See the key note in Backend §1.3.
+> 2. **Exactly-once key** is `{dispatchId}#{toneSequence}#{memberId}#{channel}` (per-channel, per-tone — amended) enforced by the DynamoDB conditional put, with FIFO `MessageDeduplicationId = hash(dispatchId, toneSequence, memberId, channel)` as a transport optimization only. `MessageGroupId` remains `dispatchId`, unchanged. See the key note in Backend §1.3.
 > 3. **Routing is on `channel`, not `channelTier`.** The fan-out issues **one publish per `{member, channel}`**; each queue subscribes on `channel` (`push`\|`sms`\|`voice`). `channelTier` (`primary` = push + SMS at T+0, `escalation` = voice at T+N=75s) is **escalation-state bookkeeping only — never a routing filter and never a dedup input**. This corrects the §2 defect where the SMS queue subscribed to `channelTier=push`: had both queues instead subscribed to a shared `channelTier=primary`, one publish would have had to serve two channels, which is incompatible with a `channel`-keyed `MessageDeduplicationId`. Two publishes, filtered on `channel`, is the coherent design.
 > 4. **Service names.** Every service named in §3/§5 maps onto a service in Backend §1.1 — these are internal handlers, not separate deployment units, except `notification-service` which is now service 10:
 >
@@ -1324,6 +1435,7 @@ This is a greenfield product — there is no existing platform data to migrate e
 >    | Submission Status Service | handler within `incident-service` |
 >    | LOSAP Accrual Service | handler within `personnel-service` |
 >    | Reporting Projections | handler within `reporting-service` — see item 5 |
+>    | Tone Evaluator (amendment) | handler within `alerting-service` — evaluates the department-level tone predicate, re-invokes Fan-out for tones 2/3, triggers Mutual Aid Port |
 >
 >    The "12 consumer services" count therefore describes **consumers**, not deployment units; the deployment-unit count is 10.
 > 5. **"Reporting Projections" is not CQRS.** The Data Model rejects OpenSearch/CQRS in v1. This consumer maintains **DynamoDB rollup items** on the `platform-service` table (pre-aggregated counters for the chief dashboard), not a separate read store. The §8 cross-reference to "CQRS read models" is withdrawn.
@@ -1367,12 +1479,14 @@ sequenceDiagram
     participant Recv as Delivery Receipt Service
     participant Esc as Escalation Scheduler (EventBridge)
     participant Roster as Live Roster Service
+    participant Tone as Tone Evaluator (EventBridge, amendment)
+    participant MA as Mutual Aid Port (amendment)
 
     CAD->>Fan: dispatch.alert.received
     Fan->>Fan: normalize + resolve eligible members (quals, availability)
     loop per eligible member × channel (push, sms)
-        Fan->>Dedupe: conditional put(dispatchId#memberId#channel) — reject if exists
-        Fan->>Topic: alerting.dispatch.normalized (MessageGroupId=dispatchId,<br/>MessageDeduplicationId=hash(dispatchId,memberId,channel),<br/>attrs: channel, channelTier=primary)
+        Fan->>Dedupe: conditional put(dispatchId#toneSequence=1#memberId#channel) — reject if exists
+        Fan->>Topic: alerting.dispatch.normalized (MessageGroupId=dispatchId,<br/>MessageDeduplicationId=hash(dispatchId,toneSequence,memberId,channel),<br/>attrs: channel, channelTier=primary, toneSequence=1)
     end
     Topic-->>Push: filtered (channel=push)
     Topic-->>SMS: filtered (channel=sms) — separate publish, parallel per N1.2
@@ -1382,14 +1496,24 @@ sequenceDiagram
     Fan->>Esc: schedule one-time check at T+N seconds (F1.4)
     Esc->>Recv: read ack status at T+N
     alt not acknowledged
-        Esc->>Topic: alerting.escalation.triggered (channel=voice, channelTier=escalation)
+        Esc->>Topic: alerting.escalation.triggered (channel=voice, channelTier=escalation, toneSequence=1)
         Topic-->>Voice: filtered (channel=voice)
     else acknowledged
-        Esc->>Esc: no-op, cancel remaining tiers
+        Esc->>Esc: no-op, cancel remaining tiers (this tone only)
     end
+    Fan->>Tone: schedule dept-level tone checks, payload={dispatchId, toneSequence:2} at T+180s and {dispatchId, toneSequence:3} at T+360s (amendment — literal, immutable, never computed)
+    Tone->>Roster: read ackStatus + quals (in-table, N1.5-safe — same table, other partitions for ALERT_RULES_COPY/eligibility)
+    alt predicate unmet, TONE#{toneSequence} guard not already set, and not manually halted
+        Tone->>Fan: re-invoke fan-out with the toneSequence from this schedule's payload — full eligible audience, never filtered by ackStatus
+        Note over Fan,Voice: tone 2/3 re-run the same push+SMS→voice ladder above, using the fixed toneSequence throughout — never derived from tone 1's
+    else predicate met, already fired (TONE#{toneSequence} guard exists), or manually halted
+        Tone->>Tone: no-op, record outcome (no schedule cancellation)
+    end
+    Tone->>MA: tone 3 still unmet (or manual trigger)
+    MA->>Push: officer/chief mutual-aid prompt (reuses push queue + receipt dedup, alertKind=mutual_aid_prompt)
 ```
 
-**Publish granularity (canonical).** The fan-out issues **one publish per `{member, channel}` pair**, not one per member. This is what makes the `channel`-keyed `MessageDeduplicationId` constructible — the value must exist at publish time — and it is what delivers the N1.2 parallel guarantee: push and SMS arrive as **two separate publishes**, not as one publish fanned out by two subscription filters. Each message carries two attributes: `channel` (`push`\|`sms`\|`voice`) — the subscription filter and the dedup input — and `channelTier` (`primary`\|`escalation`) — used for escalation-state bookkeeping only, never for routing or dedup.
+**Publish granularity (canonical, amended).** The fan-out issues **one publish per `{member, channel, toneSequence}` triple**, not one per member. This is what makes the `channel`+`toneSequence`-keyed `MessageDeduplicationId` constructible — the value must exist at publish time — and it is what delivers the N1.2 parallel guarantee: push and SMS arrive as **two separate publishes**, not as one publish fanned out by two subscription filters. Each message carries three attributes: `channel` (`push`\|`sms`\|`voice`) — the subscription filter and (with `toneSequence`) the dedup input — `channelTier` (`primary`\|`escalation`) — used for escalation-state bookkeeping only, never for routing or dedup — and `toneSequence` (`1`\|`2`\|`3`, amendment) — which department-level tone this send belongs to, part of the dedup input, never a routing/filter input (subscription filters still key on `channel` alone; no queue or filter policy changes).
 
 Push and SMS fire **in parallel** at T+0 (both `channelTier=primary` per N1.2, not a strict waterfall); voice escalates at T+N=75s only if neither is acknowledged. **This is decided, not pending** — see the resolved block in Open Questions.
 
@@ -1435,7 +1559,7 @@ Standard envelope, required on every event regardless of domain:
 
 ### 4.1 Alerting domain
 
-**`alerting.dispatch.normalized`**
+**`alerting.dispatch.normalized`** (amended — `toneSequence` added, defaults `1` for the original CAD-triggered fan-out; tones 2/3 re-publish this same event type carrying the `toneSequence` taken verbatim from the invoking schedule payload (never incremented at publish time — see the CANONICAL exactly-once note), per §Department tone ladder)
 ```json
 {
   "eventType": "alerting.dispatch.normalized",
@@ -1443,7 +1567,7 @@ Standard envelope, required on every event regardless of domain:
   "payload": {
     "dispatchId": "dispatch-4471",
     "memberId": "mbr-102",
-    "channel": "push", "channelTier": "primary",
+    "channel": "push", "channelTier": "primary", "toneSequence": 1,
     "incidentType": "structure-fire",
     "address": "12 Main St",
     "crossStreets": "Main & Elm",
@@ -1456,7 +1580,7 @@ Standard envelope, required on every event regardless of domain:
 }
 ```
 
-**`alerting.delivery.receipt`**
+**`alerting.delivery.receipt`** (amended — `toneSequence` added)
 ```json
 {
   "eventType": "alerting.delivery.receipt",
@@ -1464,7 +1588,7 @@ Standard envelope, required on every event regardless of domain:
   "payload": {
     "dispatchId": "dispatch-4471",
     "memberId": "mbr-102",
-    "channel": "push", "channelTier": "primary",
+    "channel": "push", "channelTier": "primary", "toneSequence": 1,
     "status": "delivered",
     "providerTimestamp": "2026-09-03T02:14:07Z",
     "providerMessageId": "..."
@@ -1472,7 +1596,39 @@ Standard envelope, required on every event regardless of domain:
 }
 ```
 
-**`alerting.escalation.triggered`** — same shape as `alerting.dispatch.normalized` with `channelTier` advanced and a `reason: "no_ack_at_tier"` field.
+**`alerting.escalation.triggered`** — same shape as `alerting.dispatch.normalized` with `channelTier` advanced, `toneSequence` carried through (amended), and a `reason: "no_ack_at_tier"` field. This is the **per-member channel** escalation (push/SMS→voice), distinct from the department-level tone events below.
+
+**`alerting.tone.escalated`** (new, amendment — F1.12, audit/observability event, not on the delivery-critical path)
+```json
+{
+  "eventType": "alerting.tone.escalated",
+  "correlationId": "dispatch-4471",
+  "payload": {
+    "dispatchId": "dispatch-4471",
+    "toneSequence": 2,
+    "firedAt": "2026-09-06T03:03:00Z",
+    "outcome": "fired",
+    "predicateSnapshot": { "respondingCount": 2, "requiredMinimum": 4, "ruleMatched": "structure-fire" },
+    "eligibleMemberCount": 34
+  }
+}
+```
+
+**`alerting.mutual_aid.triggered`** (new, amendment — F1.13)
+```json
+{
+  "eventType": "alerting.mutual_aid.triggered",
+  "correlationId": "dispatch-4471",
+  "payload": {
+    "dispatchId": "dispatch-4471",
+    "triggeredAt": "2026-09-06T03:06:00Z",
+    "reason": "tone_3_predicate_unmet",
+    "predicateSnapshot": { "respondingCount": 2, "requiredMinimum": 4 },
+    "adapterUsed": "officer_manual_prompt",
+    "officersNotified": ["mbr-034"]
+  }
+}
+```
 
 **`alerting.canary.result`**
 ```json
@@ -1487,6 +1643,23 @@ Standard envelope, required on every event regardless of domain:
   }
 }
 ```
+
+**`platform.config.alert_rules.updated`** (new, amendment — B5, fixes the previously-invented event by giving it a definition)
+```json
+{
+  "eventType": "platform.config.alert_rules.updated",
+  "correlationId": "config-update-77",
+  "payload": {
+    "deptId": "NICHOLS",
+    "toneLadder": { "tone2AtSeconds": 180, "tone3AtSeconds": 360, "mutualAidAfterTone": 3 },
+    "retoneRespondingMembers": true,
+    "voiceEscalatesPerTone": true,
+    "defaultRule": { "minResponders": 4, "requiredQuals": {} },
+    "callTypeOverrides": { "STRUCTURE_FIRE": { "minResponders": 4, "requiredQuals": { "INTERIOR": 2, "DRIVER_OPERATOR": 1 } } }
+  }
+}
+```
+Producer: `platform-service`, outbox pattern, on any `PUT /platform/config` write with `configType=ALERT_RULES`. Consumer: `alerting-service`'s `ALERT_RULES_COPY` maintainer (a small handler, not a new service), which upserts `ALERT_RULES_COPY` (`DEPT#{deptId}#ALERT_RULES` / `METADATA`). Transport: `boxalarm-{env}-platform-bus` (this is a LOB-plane config-propagation event, not an alerting-plane event — it crosses **into** alerting the same direction `personnel.member.updated`/`inspections.preplan.updated` already do for the other two denormalized copies, not against the one-way bridge, which only restricts the opposite direction) → a new `alert-rules-copy-queue` + DLQ, `maxReceiveCount: 5` (standard LOB tier — a delay in propagating a config change is a staleness window, not a life-safety miss, since the fail-mode below is safe-by-default). **Fail-mode if `ALERT_RULES_COPY` is absent or stale beyond a staleness bound** (same 15-minute pattern as `MEMBER_ELIGIBILITY_SNAPSHOT`, §Data Model): the Tone Evaluator does **not** guess a default and does **not** fire blind — it records `TONE_EVENT.outcome = SKIPPED_NO_CONFIG` and raises a CloudWatch alarm, because both "fires on every dispatch" and "never fires" are silent failures of exactly the kind this whole amendment exists to prevent. Manual advance (F1.14) remains available regardless of config state.
 
 ### 4.2 Other domains (representative — same envelope)
 
@@ -1508,6 +1681,9 @@ Standard envelope, required on every event regardless of domain:
 | `alerting.dispatch.normalized` | Alert Fan-out Service | Push Channel Worker, SMS Channel Worker | SNS FIFO `moonaan-prod-alerting-topic.fifo` → SQS FIFO (`alerting-push-queue.fifo`, `alerting-sms-queue.fifo`), attribute filter on `channel` (`push`\|`sms`) |
 | `alerting.escalation.triggered` | Escalation Scheduler (EventBridge one-time schedule) | Voice Channel Worker | Same SNS FIFO topic, filtered `channel=voice` → `alerting-voice-queue.fifo` |
 | `alerting.delivery.receipt` | Push/SMS/Voice provider webhook adapters | Delivery Receipt Service, Live Roster Service, Escalation Scheduler (ack check) | SNS FIFO topic → `alerting-receipts-queue.fifo` |
+| `alerting.tone.escalated` (amendment) | Tone Evaluator (EventBridge one-time schedule, dept-level) | Live Roster Service (ladder-state display, F1.14), one-way bridge to LOB plane | Same SNS FIFO topic — audit/observability only, not on the delivery-critical path |
+| `alerting.mutual_aid.triggered` (amendment) | Tone Evaluator / manual trigger endpoint | Officer push (reuses `alerting-push-queue.fifo`), one-way bridge to LOB plane | Same SNS FIFO topic, `channel=push` (message-level; recipients are officer/chief role-holders, not the dispatch roster) |
+| `platform.config.alert_rules.updated` (amendment, B5) | `platform-service` (outbox, on `PUT /platform/config` write) | `alerting-service`'s `ALERT_RULES_COPY` maintainer | `boxalarm-{env}-platform-bus` → `alert-rules-copy-queue` + DLQ (`maxReceiveCount: 5`, standard LOB tier) — crosses into alerting the same direction as the other two denormalized-copy events, not against the one-way bridge |
 | `alerting.canary.result` | Canary Runner (EventBridge Scheduler, e.g. every 2 min) | Canary Monitor → CloudWatch custom metric | Direct (Lambda → CloudWatch PutMetricData); not queued — canary result must not itself depend on the queue it's testing failure paths for |
 | `cert.expiry.due` | Certification Expiry Scanner (daily scheduled Lambda) | Notification Service (member + training officer) | SNS `moonaan-prod-training-topic` → `training-notify-queue` |
 | `apparatus.test.due` | Apparatus Testing Scanner (daily scheduled Lambda) | Notification Service | SNS `moonaan-prod-apparatus-topic` → `apparatus-notify-queue` |
@@ -1519,7 +1695,7 @@ Standard envelope, required on every event regardless of domain:
 
 Every queue above has a paired DLQ (`RedrivePolicy`, `maxReceiveCount: 3` for the alerting plane, `5` for all other domains — tighter on alerting so a poison message escalates to a human faster rather than burning through the 5s p99 budget on retries) and a CloudWatch alarm on `ApproximateNumberOfMessagesVisible > 0`. The alerting-plane DLQ alarms page on-call immediately (N1.3, N8.2); all other DLQ alarms follow standard on-call routing.
 
-**Count: 12 events defined · 9 producer services · 12 consumer services · 4 DLQ-bearing queue groups (alerting: 4 queues; training; apparatus; inventory; NERIS: 2 queues; scheduling; personnel: 2 queues) = 10 SQS queues, each with its own DLQ.**
+**Count (amended, corrected — B5): 15 events defined · 10 producer services · 13 consumer services · 5 DLQ-bearing queue groups (alerting: 4 queues; training; apparatus; inventory; NERIS: 2 queues; scheduling; personnel: 2 queues; alert-rules-copy: 1 queue) = 11 SQS queues, each with its own DLQ.** `alerting.tone.escalated` and `alerting.mutual_aid.triggered` add no new queue — both ride the existing alerting topic/queues. `platform.config.alert_rules.updated` adds one new LOB-tier queue (`alert-rules-copy-queue` + DLQ), since it is the one amendment event that is not simply riding existing infrastructure.
 
 ## 6. Error handling
 
@@ -1528,9 +1704,11 @@ Every queue above has a paired DLQ (`RedrivePolicy`, `maxReceiveCount: 3` for th
 - **NERIS-specific (F7.6/F7.7):** a 429 from NERIS is an *expected*, not terminal, failure — the NERIS Submission Worker does exponential backoff internally (bounded number of in-process retries) before the message is allowed to exhaust `maxReceiveCount` and land in the DLQ. Either way, `neris.submission.failed` is always published so the Submission Status Service and Chief Dashboard show the failure — a submission is never silently dropped, satisfying F7.7 independent of whether it eventually lands in the DLQ.
 - **Idempotency, general domains:** consumers deduplicate on `eventId` in a DynamoDB table with TTL (~48h), keyed by `eventId`; a conditional put that already exists means "already processed, no-op."
 - **Idempotency, alerting (N1.4 — the direct answer to Chief360's duplicate-storm defect):** two independent layers, because SQS FIFO's native dedup window (5 minutes) is shorter than the operational window in which a redelivery could occur:
-  1. **Transport-level:** SNS/SQS **FIFO**, `MessageGroupId = dispatchId`, `MessageDeduplicationId = hash(dispatchId, memberId, **channel**)`. **Never `channelTier`** — push and SMS share the tier `primary`, so a tier-keyed dedup ID makes SNS FIFO silently discard the parallel SMS publish at T+0, defeating N1.2 with no error, no DLQ and no receipt.
-  2. **Application-level:** a DynamoDB conditional put on `idempotencyKey = {dispatchId}#{memberId}#{channel}` before any provider send call. If the item already exists, the worker no-ops rather than sending. **The conditional put happens once, in the channel worker, immediately before the provider send call** — not at fan-out. A put at fan-out only would leave a redelivery outside FIFO's 5-minute window to reach the provider unguarded, which is the exact hole this layer exists to close; the fan-out-side puts shown in the diagrams create the receipt row, and the worker's conditional put is the send guard. This is durable beyond FIFO's 5-minute window and is the actual guarantee behind "exactly-once per member per dispatch" — the FIFO dedup is a cost-free first filter, the DynamoDB check is the enforced invariant.
-- **Ordering:** FIFO `MessageGroupId = dispatchId` preserves per-dispatch, per-member ordering across escalation tiers on the alerting topic. All other domains use standard (non-FIFO) SNS/SQS; consumers compare `eventTime` and discard stale updates (last-writer-wins) since none of those domains have an ordering-sensitive escalation sequence.
+  1. **Transport-level:** SNS/SQS **FIFO**, `MessageGroupId = dispatchId`, `MessageDeduplicationId = hash(dispatchId, toneSequence, memberId, **channel**)` (amended — `toneSequence` added). **Never `channelTier`** — push and SMS share the tier `primary`, so a tier-keyed dedup ID makes SNS FIFO silently discard the parallel SMS publish at T+0, defeating N1.2 with no error, no DLQ and no receipt.
+  2. **Application-level:** a DynamoDB conditional put on `idempotencyKey = {dispatchId}#{toneSequence}#{memberId}#{channel}` before any provider send call. If the item already exists, the worker no-ops rather than sending. **The conditional put happens once, in the channel worker, immediately before the provider send call** — not at fan-out. A put at fan-out only would leave a redelivery outside FIFO's 5-minute window to reach the provider unguarded, which is the exact hole this layer exists to close; the fan-out-side puts shown in the diagrams create the receipt row, and the worker's conditional put is the send guard. This is durable beyond FIFO's 5-minute window and is the actual guarantee behind "exactly-once per member per dispatch per tone" — the FIFO dedup is a cost-free first filter, the DynamoDB check is the enforced invariant.
+- **Idempotency, department-level tone ladder (amendment — F1.12).** The `toneSequence` component above is what lets a **replayed dispatch** and a **deliberate re-tone** collapse to different outcomes from the same conditional-put mechanism: a replay reuses the tone number already assigned by the Fan-out/Tone-Evaluator logic and collides with the existing item (no-op, correct); a genuine escalation is a distinct, later invocation that mints the next tone number, producing a key that has never existed (sends, correct). Nothing about this is a third dedup layer — it is the existing two-layer mechanism above, with one more dimension in the key, exactly as `channel` was added to distinguish per-channel sends from a per-member-only key.
+- **Idempotency, mutual aid (amendment — F1.13).** A single fixed-`sk` conditional `PutItem` on `MUTUAL_AID_EVENT` (`attribute_not_exists`) guards at-most-once-per-dispatch triggering, whether the race is between the automatic tone-3 evaluation and a manual trigger, or a redelivered scheduler event evaluating tone 3 twice.
+- **Ordering:** FIFO `MessageGroupId = dispatchId` preserves per-dispatch, per-member ordering across escalation tiers **and across tones** (amended — `MessageGroupId` is unchanged by the tone dimension, so total ordering still spans tones 1–3) on the alerting topic. All other domains use standard (non-FIFO) SNS/SQS; consumers compare `eventTime` and discard stale updates (last-writer-wins) since none of those domains have an ordering-sensitive escalation sequence.
 
 ## 7. Alert fan-out path — explicit treatment
 
@@ -1540,10 +1718,19 @@ Every queue above has a paired DLQ (`RedrivePolicy`, `maxReceiveCount: 3` for th
 - **Delivery-receipt capture (F1.3):** provider webhooks (APNs/FCM delivery receipts, SMS vendor status callbacks, voice vendor call-completion callbacks) are normalized into `alerting.delivery.receipt` events. The Live Roster Service consumes these to drive the real-time per-member sent/delivered/opened view officers see (F1.3); the same events feed the Alert Delivery Audit Log (F1.11).
 - **Canary (N1.6):** a synthetic dispatch is injected on a fixed schedule (proposed: every 2 minutes) through the *same* ingress-to-delivery path as a real dispatch, addressed to a dedicated canary "member" device/endpoint per channel. `alerting.canary.result` is published directly to CloudWatch (not through the queue under test, so a queue outage doesn't also blind the canary) with a metric alarm that pages on-call within minutes of a broken path — satisfying N1.3's "system must notice its own failure."
 
+## 7a. Department-level tone ladder (F1.12–F1.14, amendment)
+
+Orthogonal to the per-member escalation ladder above. See Backend §1.3a for the full design (trigger mechanism, audience/predicate split, config shape, officer override, mutual aid). Summarized here for the eventing view:
+
+- **Trigger:** two department-level EventBridge Scheduler one-time schedules per dispatch (T+180s/T+360s, F9.3-configurable), created at fan-out alongside the existing per-member schedules — no new scheduling infrastructure, more instances of the existing pattern.
+- **Publish shape:** tone 2/3 re-publish `alerting.dispatch.normalized` carrying the `toneSequence` **taken verbatim from the invoking schedule's payload** — never incremented, never derived from observed ladder state (see the CANONICAL note above; EventBridge Scheduler is at-least-once, so a redelivered invocation that computed its own tone number would mint a new one and produce the duplicate storm this key exists to prevent). Same topic, same `channel`-filtered queues, same workers. No new SNS topic, no new SQS queue, no new filter policy.
+- **Audit events:** `alerting.tone.escalated` and `alerting.mutual_aid.triggered` are observability/audit facts, not delivery-critical — a failure to publish either never blocks a member-facing send, since the actual sends are `alerting.dispatch.normalized` messages the Fan-out logic emits directly.
+- **Officer override (F1.14):** halt/advance/manual-mutual-aid-trigger are synchronous API calls against alerting-table state (`toneLadderStatus`, `TONE_EVENT`, `MUTUAL_AID_EVENT`), not events — the Tone Evaluator's self-check at each scheduled fire is what makes a halt effective without cancelling the underlying EventBridge schedule, consistent with the no-cancellation pattern already used for per-member escalation.
+
 ## 8. Cross-references
 
-- **`data-architect`** — DynamoDB dedup table design and TTL, delivery-receipt and audit-log storage shape, outbox table schema for Incident Report and Attendance services, CQRS read models for the Chief Dashboard and Live Roster views.
-- **`backend-architect`** — outbox pattern implementation (transactional write + async publish) for `neris.incident.submitted` and `personnel.attendance.recorded`; NERIS OAuth2 client and backoff implementation detail behind the NERIS Submission Worker.
+- **`data-architect`** — DynamoDB dedup table design and TTL, delivery-receipt and audit-log storage shape, outbox table schema for Incident Report and Attendance services, CQRS read models for the Chief Dashboard and Live Roster views. **Amendment:** `DISPATCH_RESPONSE_RECORD`, `TONE_EVENT`, `MUTUAL_AID_EVENT`, and `ALERT_RULES_COPY` storage shape and TTL policy (Data Model §3.1/§3.4).
+- **`backend-architect`** — outbox pattern implementation (transactional write + async publish) for `neris.incident.submitted` and `personnel.attendance.recorded`; NERIS OAuth2 client and backoff implementation detail behind the NERIS Submission Worker. **Amendment:** Tone Evaluator implementation (predicate evaluation, re-fan-out re-entrancy), Mutual Aid Port's officer-manual-prompt adapter.
 
 ## 9. Open questions / assumptions carried into this section
 
@@ -1692,21 +1879,23 @@ The incoming full-screen alert screen is not inside a normal navigation stack �
 - **Critical Alerts entitlement** (`com.apple.developer.usernotifications.critical-alerts`) requested from Apple against the department's justification (life-safety dispatch alerting for volunteer firefighters) — **who submits this application is open question §12.7 in requirements; architecture assumes it is obtained before N1 can be considered met, and documents degraded-mode fallback (N1.8) for the period before approval.**
 - Alerts delivered as APNs pushes with `interruption-level: critical` plus a `sound` and `volume`; a **Notification Service Extension** (separate app extension target, native Swift) intercepts the push, applies the critical-alert flag, and can enrich content (incident address, map thumbnail) before display — this extension runs even if the main app is force-quit.
 - A **Notification Content Extension** renders the custom full-screen alert UI (incident type, address, map link, respond/decline actions) directly from the lock screen without unlocking into the app.
+- **Notification identity (B4, amendment — F1.12).** APNs' `apns-collapse-id` is set to `{dispatchId}#{toneSequence}`, **not** `{dispatchId}` alone. A collapse ID keyed on `dispatchId` only would let iOS coalesce a tone-2 push into tone-1's existing notification — no second Critical Alert re-fire, no second buzz, the notification list shows nothing new, and the delivery receipt still (correctly) says "delivered," making this the exact backend swallow this amendment fixed, reproduced one layer down at the device. Every tone gets its own collapse ID and therefore its own presentation, **even when the tone-1 alert is still on screen or has already been answered** — a re-tone is a new fact, not an update to the old one.
 
 ### 5.2 Android
 
 - **Full-screen intent notifications** (`Notification.Builder.setFullScreenIntent`, category `CATEGORY_CALL`) on a dedicated high-priority `NotificationChannel` (`IMPORTANCE_HIGH`, bypass Do Not Disturb via `NotificationManager.Policy` alerting-apps exemption where the user grants it — this is a user-grantable permission, not automatic, so onboarding must walk the volunteer through granting it explicitly).
 - FCM messages sent as **high-priority data messages** (not display messages) so a **native Kotlin `FirebaseMessagingService`** receives them even when the app is killed or battery-optimized, and posts the full-screen-intent notification itself rather than relying on RN JS.
 - App requests exemption from battery optimization (`REQUEST_IGNORE_BATTERY_OPTIMIZATIONS`) during onboarding, but per N3.7 delivery must not *depend* on the exemption being granted — the high-priority FCM path is designed to work without it; the exemption prompt is a reliability improvement, not a requirement gate.
+- **Notification identity (B4, amendment — F1.12).** The Android notification id passed to `NotificationManager.notify()` is derived from `{dispatchId}#{toneSequence}` (e.g. a stable hash of the pair), **not** `dispatchId` alone — the same reasoning as the iOS collapse ID above. A `dispatchId`-only notification id would let Android's "update an existing notification with this id" behavior silently replace tone 1's full-screen intent with tone 2's, which on some OEM skins does not re-trigger the DND-bypass/full-screen presentation the way a genuinely new notification id does.
 
 ### 5.3 Background delivery independent of app state (N3.7)
 
-Both platforms' notification handling above is intentionally implemented as OS-registered native code (extension/service), not RN JS — this is the mechanism, not a fallback, that satisfies "must not depend on the app being foregrounded, recently opened, or exempt from battery optimization." The RN JS layer only takes over once the user taps into the alert (response confirmation, live roster, etc.).
+Both platforms' notification handling above is intentionally implemented as OS-registered native code (extension/service), not RN JS — this is the mechanism, not a fallback, that satisfies "must not depend on the app being foregrounded, recently opened, or exempt from battery optimization." The RN JS layer only takes over once the user taps into the alert (response confirmation, live roster, etc.). **Amendment (F1.12):** this now includes re-presenting a tone-2/3 alert identically to a tone-1 alert — the native handler has no special case for "a dispatch I've already shown," only for "a `{dispatchId}#{toneSequence}` I haven't shown yet," which is what makes the always-new-tone-always-presents behavior fall out of the existing mechanism rather than requiring new logic.
 
 ### 5.4 Self-test and diagnostics UI (F1.10, N8.3)
 
 - **Member self-test:** a "Test my alert path" action in `MeStack` triggers a synthetic, clearly-labeled test dispatch through the same fan-out path as a real alert, and the app surfaces per-channel result (push received / SMS received / voice received, each with timestamp) — this is the member-runnable end-to-end test F1.10 requires, with no admin involvement.
-- **"Why didn't I get the page" diagnostic** (web, officer/admin-facing, and a member-facing simplified version on native): pulls the delivery audit log (F1.11) for a specific member + dispatch and renders a timeline — dispatch received → push sent → push delivered (APNs/FCM receipt) → opened → response logged — plus device-side checks the app can self-report (notification permission granted, critical-alert/full-screen-intent permission granted, battery-optimization exemption status, last-known app version and OS version). This is real diagnostic UI, not a log dump, because N8.3 requires a non-technical admin to use it unsupported.
+- **"Why didn't I get the page" diagnostic** (web, officer/admin-facing, and a member-facing simplified version on native): pulls the delivery audit log (F1.11) for a specific member + dispatch and renders a timeline — dispatch received → push sent → push delivered (APNs/FCM receipt) → opened → response logged — plus device-side checks the app can self-report (notification permission granted, critical-alert/full-screen-intent permission granted, battery-optimization exemption status, last-known app version and OS version). This is real diagnostic UI, not a log dump, because N8.3 requires a non-technical admin to use it unsupported. **Amendment (F1.12):** the timeline now spans every tone (1–3), each with its own sent/delivered/opened markers, plus each answer from `DISPATCH_RESPONSE_RECORD` in sequence — e.g. "declined tone 1, responded tone 2" is rendered directly, not inferred.
 
 ## 6. Shared dependency list
 
@@ -1742,7 +1931,7 @@ Both platforms' notification handling above is intentionally implemented as OS-r
 |---|---|---|
 | `/login` | public | Cognito hosted flow, self-service credential recovery (F9.1). No MFA challenge; reached on first sign-in or after explicit sign-out only |
 | `/` (dashboard) | chief, officer | F8.1 — staffing, response performance, OOS apparatus, expiring certs, NERIS compliance |
-| `/alerts/roster` | officer, chief | F1.7 live response roster, real-time |
+| `/alerts/roster` | officer, chief | F1.7 live response roster, real-time. **Amendment (F1.14):** tone-ladder panel — current tone, predicate gaps, next-fire countdown, per-member `lastAnsweredTone` — with officer-gated Advance/Halt controls |
 | `/alerts/diagnostics` | officer, chief, admin | N8.3 self-diagnosis tool (§5.4) |
 | `/incidents` | officer, chief | F7.9 incident search/history |
 | `/incidents/:id` | officer, chief | F7 guided NERIS form, pre-populated, validated, submission status (F7.2–F7.7) |
@@ -1852,8 +2041,9 @@ This is life-safety software wearing the clothes of a line-of-business app. One 
 
 | Property | Requirement | How it is proven (not assumed) |
 |---|---|---|
-| Exactly-once delivery per member per dispatch | N1.4, F1.5 | Unit: idempotency-key derivation is pure and deterministic (**dispatch ID + member ID + channel** → one key; the per-member-only shape is explicitly wrong and a test must fail if it reappears). Integration: duplicate dispatch events (replayed, retried, or racing) against a real DynamoDB conditional-write table produce one delivery record, not N. Chaos: inject duplicate/out-of-order events at the eventing layer and assert delivery count stays 1. This is Chief360's documented failure mode — the test exists because that incident is on record, not speculatively. **Mandatory regression test for the parallel-channel dedup defect:** one dispatch, one member, assert **two distinct provider sends at T+0** (push and SMS). A tier-keyed dedup ID collapses these into one silently — no error, no DLQ, no receipt — so this assertion is the only thing that catches it. |
-| 5s p99 fan-out | N1.1 | Load/performance test in CI-adjacent environment: synthetic dispatch → measure time-to-first-channel-attempt across a roster size representative of the department (and 3-5x for headroom) — p99 asserted, not eyeballed. Production canary (N1.6) re-measures this continuously against real infrastructure. |
+| Exactly-once delivery per member per dispatch per tone | N1.4, F1.5 | Unit: idempotency-key derivation is pure and deterministic (**dispatch ID + toneSequence + member ID + channel** → one key, amended; the per-member-only shape and the pre-amendment per-channel-without-tone shape are both explicitly wrong and a test must fail if either reappears). Integration: duplicate dispatch events (replayed, retried, or racing) against a real DynamoDB conditional-write table produce one delivery record per tone, not N. Chaos: inject duplicate/out-of-order events at the eventing layer and assert delivery count stays 1 per tone. This is Chief360's documented failure mode — the test exists because that incident is on record, not speculatively. **Mandatory regression test for the parallel-channel dedup defect:** one dispatch, one member, assert **two distinct provider sends at T+0** (push and SMS). A tier-keyed dedup ID collapses these into one silently — no error, no DLQ, no receipt — so this assertion is the only thing that catches it. **Mandatory regression test for the amendment (F1.12):** the same member, having answered `NOT_RESPONDING` at tone 1, must receive a genuinely new send at tone 2 — a tone-blind key would silently swallow it the same way a tier-keyed key swallows parallel channels. |
+| Department-level tone escalation, audience never gated by ackStatus | N1.10, F1.12 | Unit: predicate evaluation (count + qual thresholds) against fixture rosters, including the empty-`requiredQuals` fallback case. Integration: tone-2 audience computed from a roster with mixed `RESPONDING`/`NOT_RESPONDING`/ineligible members — assert the audience equals the eligible set exactly, independent of `ackStatus`. E2E: full replay of the F1.12 flow including a manual halt mid-ladder (F1.14). |
+| 5s p99 fan-out | N1.1 | Load/performance test in CI-adjacent environment: synthetic dispatch → measure time-to-first-channel-attempt across a roster size representative of the department (and 3-5x for headroom) — p99 asserted, not eyeballed. Production canary (N1.6) re-measures this continuously against real infrastructure. **Amendment (N3):** the 5s p99 budget is defined for tone 1 only, but tones 1–3 plus every member's voice escalation all serialize through the **same** `MessageGroupId = dispatchId` (Eventing §6, Ordering) — a fully-escalated dispatch (3 tones × push+SMS+voice per member) pushes roughly 3× the single-tone publish volume through one FIFO group. Extend the load test to assert fan-out latency for a **simulated tone-2/3 re-fan-out** (not just tone 1) stays within budget at that volume, since FIFO's strict per-group ordering means a large tone-3 fan-out is throughput-bound by the same group tone-1 already used, not a fresh one. |
 | Independent failure domains per channel | N1.2 | Integration + chaos: kill/fault-inject the push provider (APNs/FCM) and assert SMS/voice channels still fire; repeat per channel. A shared-dependency regression (e.g., both push and SMS routed through one vendor account) is exactly what this catches and what config alone won't. |
 | Independent degradation from other modules | N1.5 | Chaos: fault-inject or load-saturate a non-alert service (reporting, training, inventory) and assert alert fan-out latency and success rate are unaffected. This is an architectural isolation claim (see backend/eventing sections for the mechanism) that must be exercised, not inferred from the diagram. |
 | No single point of failure | N1.7 | Chaos, **scoped to the channel layer only**: remove one channel provider (push, SMS, or voice) or one channel queue and assert delivery still completes via a remaining channel. **Deliberately NOT tested at the topic/table/region layer** — the Cross-Cutting SPOF table states these are accepted single points of failure with no alternate path, so a test asserting survival there would be asserting something the design does not claim. Region and topic loss are covered by the N1.9 retained tone-out paging, verified by drill, not by automated test. |
@@ -1887,6 +2077,10 @@ Legend: U = unit · C = contract · A = accessibility (axe) · I = integration (
 | F1.9 | Critical-alert DND override | | | | ✓ (native) | ✓ (device-level, §7) | | |
 | F1.10 | Self-test end-to-end | ✓ | | ✓ | ✓ | ✓ | | ✓ (reused as canary payload) |
 | F1.11 | Delivery audit log, queryable | ✓ | ✓ (query API) | ✓ | ✓ | ✓ | | |
+| F1.12 | Department-level tone escalation, config predicate, audience never filtered by ackStatus | ✓ (predicate evaluation, key derivation) | ✓ (`ALERT_RULES` config schema) | | ✓ (real DynamoDB conditional writes) | ✓ | ✓ (tone-2 re-tone of a NOT_RESPONDING member is not swallowed) | |
+| F1.13 | Mutual aid prompt after tone 3 unmet | ✓ | | ✓ | ✓ | ✓ (1 flow) | | |
+| F1.14 | Officer views/advances/halts the tone ladder | ✓ | | ✓ | ✓ (halt-vs-scheduled-fire and advance-vs-scheduled-fire races) | ✓ | | |
+| N1.10 | Voice re-arms on every tone (up to 3 voice attempts/dispatch); config-overridable | ✓ | | | ✓ | | | |
 | N1.1 | 5s p99 fan-out | | | | ✓ (load test) | | | ✓ |
 | N1.2 | Independent failure domains | | | | ✓ | | ✓ | |
 | N1.3 | Delivery instrumented, alertable on failure | ✓ | | | ✓ | | | ✓ |
@@ -2042,11 +2236,14 @@ Tier 0 (alert path) — heaviest coverage, run on every PR touching alerting cod
 
 1. **Dispatch → fan-out → receipt.** Simulated CAD/paging event → assert alert created, fan-out initiated within budget, delivery receipts populate per member (F1.1–F1.3, N1.1).
 2. **No-ack → escalation.** Member does not acknowledge within N seconds → assert escalation to next channel fires exactly once (F1.4).
-3. **Duplicate dispatch → single alert.** Same dispatch event replayed (retry, at-least-once redelivery from the event bus) → assert exactly one delivery record per member (F1.5, N1.4) — the single highest-value regression test in the suite, given Chief360's documented failure.
+3. **Duplicate dispatch → single alert per tone.** Same dispatch event replayed (retry, at-least-once redelivery from the event bus) → assert exactly one delivery record per member **per tone** (F1.5, N1.4) — the single highest-value regression test in the suite, given Chief360's documented failure.
+3a. **Deliberate re-tone → new alert, not swallowed (F1.12, amendment).** Member answers `NOT_RESPONDING` at tone 1 (holds `RECEIPT#{member}#push#1`/`#sms#1`); tone-2 timer fires with the predicate still unmet → assert a *new* delivery record (`RECEIPT#{member}#push#2`/`#sms#2`) is created, not swallowed by the tone-1 dedup key. This is the direct sibling of test 3 — same mechanism, opposite required outcome, and the reason `toneSequence` is in the key at all.
+3b. **Tone-2/3 audience is never filtered by ackStatus (F1.12, amendment).** One eligible member answers `RESPONDING`, one answers `NOT_RESPONDING`, one is ineligible (marked off) — tone 2 fires → assert both answered members appear in the tone-2 publish set and the ineligible member does not. Guards against the intuitive-but-wrong reading ("escalate only to non-responders").
 4. **Response confirmation → live roster.** Member confirms responding/not responding/direct-to-scene with ETA → officer view updates in real time (F1.6–F1.7).
 5. **Self-test.** Member/admin triggers self-test → full path exercised without a real dispatch, result surfaced (F1.10) — this flow is reused verbatim as the production canary payload (N1.6), so its Page Object and assertions must be canary-safe (idempotent, side-effect-free against real rosters).
 6. **Channel failure isolation.** Fault-inject the push provider via a test double at the adapter boundary → assert SMS/voice still deliver (N1.2) — this is an integration-level chaos test wrapped in a Playwright assertion of the resulting delivery-receipt state, not a UI click-path.
 7. **Audit log query.** Officer/admin queries "why didn't member X get the page" → audit log surfaces the answer (F1.11, N8.3).
+7a. **Officer halts/advances the tone ladder (F1.14, amendment).** Officer views ladder state (current tone, predicate gaps, next-fire time) mid-dispatch, halts it → assert no further tone fires and mutual aid does not auto-trigger; separately, officer advances a tone manually → assert it fires immediately and the later scheduled fire for that same tone self-skips as already-fired, not a duplicate send.
 
 Tier 1 (compliance/money):
 
@@ -2110,7 +2307,7 @@ N7 is not decorative here: the primary persona is a volunteer in gloves, in the 
 - **Critical and serious violations fail the build.** Moderate/minor are logged to a per-sprint tracked backlog, not blocking.
 - Scanned pages/states (Tier 0/1 prioritized):
   - Alert receipt screen and each response-confirmation state (responding / not responding / direct-to-scene)
-  - Live response roster (dynamic content — re-scan after roster updates render)
+  - Live response roster (dynamic content — re-scan after roster updates render), including the tone-ladder panel and its Advance/Halt controls (amendment, F1.14)
   - Self-test flow, including its result state
   - Delivery-receipt / audit-log table (dense data table — landmark and header-association risk)
   - Truck check sheet: default state, an item marked defective (dynamic form-validation state), and the completed-check confirmation
@@ -2205,6 +2402,7 @@ Native iOS and Android are required, not optional (N3.1) — a PWA cannot obtain
 
 - **iOS Critical Alerts entitlement (N3.2):** tested against Apple's provisioning behavior in a sandboxed/dev build; the entitlement approval itself is an Apple-side process (open question #7 in requirements §12 — who owns that application is unresolved) and cannot be CI-tested until granted. Until granted, tests run against the best-available fallback (high-priority local notification) with the entitlement-dependent code path covered by unit tests plus a manual device verification once entitlement lands.
 - **Android full-screen intent / high-priority channels:** instrumented Espresso tests verify the notification channel configuration and full-screen intent trigger under Do-Not-Disturb, on both a recent and an older supported Android version (channel/DND behavior has shifted across Android releases).
+- **Re-tone re-presentation (B4, amendment — F1.12/N1.10).** Instrumented Espresso (Android) and XCUITest (iOS) assertions: deliver a tone-1 push, then a tone-2 push for the same `dispatchId` while the tone-1 alert is still on screen (and, separately, after it has been answered) — assert the tone-2 full-screen intent / Critical Alert re-fires as a **distinct** presentation, not a silent update to the existing one. This is the device-side sibling of the backend regression test in §2.1 item 3a; both exist because a collapse-id/notification-id mistake here reproduces the identical swallow this amendment otherwise fixes end to end.
 - **N3.7 (alert receipt independent of foreground/recent-use/battery-optimization exemption):** this is the single hardest-to-fake native property and the one most likely to regress silently. It is tested on real devices, not simulators/emulators alone, in a background-app-killed and battery-optimization-enabled state, on a device farm (BrowserStack App Automate or equivalent — vendor unconfirmed, open question) as part of the pre-release gate; simulator/emulator instrumented tests cover the code path but are explicitly not sufficient proof of this property on their own.
 - **Offline capture + sync-on-reconnect (N3.4):** tested for both the happy path and the two properties explicitly called out in scope — conflict (two offline edits to the same record reconcile deterministically, e.g., last-write-wins with a visible conflict flag, or an explicit merge UI, per the frontend/backend section's chosen strategy) and replay (a queued offline action is not double-applied on reconnect — this is the same idempotency discipline as N1.4, applied to sync rather than alerting, and tested the same way: replay the sync payload and assert single application).
 - **Touch targets / glove usability (N3.5) and night legibility (N3.6):** covered by the layout-assertion and manual outdoor/dark-cab checks described in §4.2; native and web share the same minimum-target-size assertion where the design system is shared.
@@ -2263,7 +2461,7 @@ Never a monorepo, never per-service repos. UI and backend are build-only; the in
 
 - **Tracing:** AWS X-Ray across all Lambdas, with the alerting plane traced end to end from ingress through per-channel delivery so a "why didn't I get the page" question resolves to a single trace. N8.3 makes this a product requirement, not just an ops nicety.
 - **Logging:** CloudWatch structured JSON, correlation ID propagated from the dispatch event through every downstream alert record.
-- **Metrics and alarms:** the alerting plane carries its own alarm set — fan-out latency against the N1.1 5-second p99, per-channel delivery success rate, duplicate-delivery counter (must stay at zero per N1.4), escalation-fire rate, and DLQ depth per queue. The canary publishes directly to CloudWatch, bypassing the queue under test, so a queue-level outage cannot suppress the signal that detects it.
+- **Metrics and alarms:** the alerting plane carries its own alarm set — fan-out latency against the N1.1 5-second p99, per-channel delivery success rate, duplicate-delivery counter (must stay at zero per N1.4), escalation-fire rate, and DLQ depth per queue. The canary publishes directly to CloudWatch, bypassing the queue under test, so a queue-level outage cannot suppress the signal that detects it. **Amendment (M2 — the PRD's "Missed deliberate re-tones = 0" metric needs an instrument, not just a definition):** a custom metric `ToneFiredZeroReceipts`, emitted by the Tone Evaluator on every `outcome = FIRED`/`FIRED_MANUAL_OVERRIDE` `TONE_EVENT` if, within a short window after, no corresponding `DELIVERY_RECEIPT` items carrying that `toneSequence` exist for the expected audience — a **P0 alarm**, page-immediately tier alongside the duplicate-delivery counter. This is the direct instrument for the metric: a tone that fired but produced zero new sends is a re-tone silently swallowed, which is precisely the condition the PRD metric names and the one failure mode in this whole amendment that would otherwise end the ladder with no signal to anyone.
 - **Frontend:** CloudWatch RUM on the web SPA; native crash and delivery telemetry from the mobile clients.
 - **SLOs:** alerting path 99.95%+ (N2.1), explicitly and separately tracked from the rest of the platform, which targets ordinary availability. A single dashboard mixing the two would hide exactly the signal that matters.
 - **No LLM tracing** — this system has no AI feature (see Output Provenance).
@@ -2339,6 +2537,8 @@ Ordered by what blocks the most work. **Every question carries a named owner rol
 > | OQ-7 escalation threshold N | **Default 75 seconds**, department-configurable per F9.3. Configurable-with-no-default left implementers and the config schema with nothing. | Backend §1.3 |
 > | Non-alert notification channel | **`notification-service`**, separate non-critical push channel plus email, LOB failure domain. | Backend §1.1 |
 > | Frontend `op-sqlite` vs WatermelonDB | Genuinely interchangeable **because `@boxalarm/core` owns the sync engine regardless** — stated so the pick stays an implementation detail. | Frontend §9 |
+> | Amendment OQ — re-tone `RESPONDING` members? | **Yes, default `true`** (`ALERT_RULES.retoneRespondingMembers`). The confirmed rule that `ackStatus` never gates audience would otherwise gain its one exception at exactly `RESPONDING` — the same conflation this project keeps correcting. Config-overridable without a redeploy. | Backend §1.3a |
+> | Amendment OQ — does voice re-arm on every tone? | **Yes, default `true`** (`ALERT_RULES.voiceEscalatesPerTone`). A ringing phone is the loudest channel available when the department is still short at T+6:00; silence is the worse failure. Cost consequence: up to 3 voice attempts per never-acking member per dispatch. Config-overridable; no partial-ladder (e.g. "voice only on tone 1") is designed — a second predicate to get wrong is not worth the marginal cost saving. | Backend §1.3a |
 
 ### Newly raised — these were missing and matter
 
@@ -2351,6 +2551,7 @@ Ordered by what blocks the most work. **Every question carries a named owner rol
 | **OQ-22** | **Members without a capable smartphone.** PRD assumption 6 flags this as a real coverage gap under the N1.9 cutover. Can the SMS/voice channels serve them as a *primary* path, or are those members simply uncovered once tone-out is retired? This is a life-safety policy decision, not a technical one. | Fire chief | Before N1.9 cutover |
 | **OQ-24** | **Who revokes a compromised or lost session, and how fast?** With MFA, step-up re-authentication, and session expiry all removed by product decision (see §Session and re-authentication policy), **token revocation is the only control that ends access** — to a stolen phone carrying a 3650-day refresh token, to a phished chief password, or to an ex-member. Revocation requires a human to notice and act, and OQ-18/OQ-21 establish that no such human is on duty. Needed: who holds the revocation capability, what triggers them (device-loss report, the export alarm, member status change), and what the target time-to-revoke is. Automatic revocation on `personnel.member.updated` status changes (LOA, retired) covers the orderly cases; this question is about the disorderly ones. | Fire chief + platform operator | Before Wave 1 ships |
 | **OQ-23** | **NERIS Integration Partner vendor account** — required before any production submission, obtained via helpdesk with a compatibility check. Lead time unknown. | Platform operator | Wave 2 |
+| **OQ-25** | **Who is authorized to halt the tone ladder, and what does the department's SOG say a halt means?** F1.14 hands an officer a control that suppresses automatic mutual-aid triggering — this is a human-authority question of the same shape as OQ-2 (who is permitted to commit mutual aid), not a design one. The architecture implements halt as a role-gated (Cognito admin/officer) API call, but *which* roles, whether a halt requires a second officer's concurrence, and what the department's own operating guidelines say about calling off an escalating response are department policy, not engineering decisions this document can make. | Fire chief | Before Wave 1 ships F1.14 |
 
 ### Ownership for the pre-existing questions
 
@@ -2386,7 +2587,7 @@ Ordered by what blocks the most work. **Every question carries a named owner rol
 11. **Chief360 data migration** — what must come across, and can Chief360 actually export it? Scope and format both unknown; migration strategy is written against an unknown source.
 12. **Connecticut LOSAP statutory point rules** — what exactly must be tracked to satisfy CT requirements? F2.4 is configurable, but the statutory minimum shapes the defaults.
 13. **Connecticut state fire reporting** beyond NERIS — does any additional state-level obligation exist?
-14. **Mutual aid.** Trumbull has multiple volunteer fire companies. Is cross-department visibility or mutual-aid response in scope? This is the requirement most likely to force the multi-tenant seams open earlier than planned.
+14. **Mutual aid.** Trumbull has multiple volunteer fire companies. Is cross-department visibility or mutual-aid response in scope? This is the requirement most likely to force the multi-tenant seams open earlier than planned. **Partially resolved by amendment (F1.13):** the tone-ladder's mutual-aid trigger notifies our own officers to make the call manually (`OFFICER_MANUAL_PROMPT` adapter) — no cross-department read/write API is introduced, so this does not itself force the multi-tenant seam open. An adapter that pages a neighboring department directly remains fully open, gated on OQ-1/OQ-2 (CAD integration surface, regional dispatch authority approval).
 
 ### Accepted deferrals (decided, recorded for revisit)
 
