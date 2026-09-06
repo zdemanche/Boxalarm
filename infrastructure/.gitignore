@@ -9,4 +9,3 @@ Pulumi.*.yaml.bak
 *.log
 .DS_Store
 .worktrees/
-.analysis/
