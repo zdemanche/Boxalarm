@@ -33,6 +33,7 @@ Consume from EventBridge. `notification-service` shares **no** queue, concurrenc
 - **Exactly-once key is `{dispatchId}#{memberId}#{channel}`.** One immutable receipt per channel attempt; escalation creates a new receipt and never mutates an existing one, so per-channel delivery evidence survives.
 - **`BatchWriteItem` cannot carry a `ConditionExpression`** — use `TransactWriteItems`.
 - **Never test against NERIS production.** Separate dev environment, distinct `User-Agent` per environment.
+- **`deptId` is derived server-side from the Cognito-verified token**, never from a request body, query string, or path parameter. It reaches Cedar as `principal.deptId` through Verified Permissions' `IsAuthorizedWithToken`; `resource.deptId` comes from the service-built pk. `@boxalarm/dept-scope`'s `toVerifiedDeptId` is the only mint point for the `VerifiedDeptId` a pk builder accepts — that is what makes the contract enforceable at the type level.
 
 ## Conventions
 
