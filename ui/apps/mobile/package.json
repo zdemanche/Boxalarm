@@ -1,0 +1,37 @@
+{
+  "name": "@boxalarm/mobile",
+  "version": "0.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "react-native start",
+    "build": "echo 'apps/mobile: native release build runs per-platform via Xcode/Gradle once apps/mobile/ios and apps/mobile/android are scaffolded (out of scope for E8-S1-UI)'",
+    "typecheck": "tsc --noEmit",
+    "test": "jest"
+  },
+  "dependencies": {
+    "@boxalarm/design-tokens": "*",
+    "react": "19.2.8",
+    "react-native": "0.87.1",
+    "react-native-app-auth": "^8.4.1",
+    "react-native-config": "^1.7.2",
+    "react-native-keychain": "^10.0.0"
+  },
+  "devDependencies": {
+    "@babel/core": "^8.0.1",
+    "@react-native/babel-preset": "0.87.1",
+    "@react-native/jest-preset": "0.87.1",
+    "@react-native/metro-config": "0.87.1",
+    "@testing-library/react-native": "^14.0.1",
+    "@types/jest": "^30.0.0",
+    "@types/react": "^19.2.18",
+    "babel-jest": "^30.5.1",
+    "jest": "^30.5.1",
+    "react-test-renderer": "19.2.8"
+  },
+  "jest": {
+    "preset": "@react-native/jest-preset",
+    "transformIgnorePatterns": [
+      "node_modules/(?!((jest-)?react-native|@react-native|react-native-.*)/)"
+    ]
+  }
+}

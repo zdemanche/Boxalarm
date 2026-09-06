@@ -8,4 +8,5 @@ coverage/
 *.log
 .DS_Store
 .worktrees/
-.analysis/
+test-results/
+playwright-report/
