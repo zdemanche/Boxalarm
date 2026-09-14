@@ -176,8 +176,7 @@ flowchart TB
   SMSVendor -.->|delivery status webhook| AlertDB
   VoiceVendor -.->|call outcome webhook| AlertDB
 
-  Escalator[Escalation Scheduler\nStep Functions / EventBridge Scheduler\npolls ack status per member, per tone] -->|no ack in N sec| SmsQ
-  Escalator -->|still no ack| VoiceQ
+  Escalator[Escalation Scheduler\nStep Functions / EventBridge Scheduler\npolls ack status per member, per tone] -->|"no ack on push OR sms\nat T+75s (N1.2: primary tier\nis parallel, not sequential)"| VoiceQ
 
   ToneEval[Tone Evaluator\nEventBridge Scheduler one-time,\ndept-level, T+3:00 fires toneSequence=2\nT+6:00 fires toneSequence=3\nliteral in each schedule's payload] -->|predicate unmet:\nre-invoke Fan-Out with the\ntoneSequence from this payload| FanOut
   AlertDB -->|roster + quals + ALERT_RULES_COPY\nin-table read (N1), N1.5-safe| ToneEval
@@ -206,7 +205,7 @@ flowchart TB
 > - **SNS/SQS FIFO `MessageDeduplicationId` is a transport-layer optimization only**, now `hash(dispatchId, toneSequence, memberId, channel)`. Its 5-minute window does not cover redelivery outside that window, so it is never the enforced guarantee — the DynamoDB conditional put is. `MessageGroupId` remains `dispatchId`, unchanged — per-dispatch FIFO ordering must still span every tone.
 > - **`channelTier` is escalation-state bookkeeping ONLY — never a routing filter and never a dedup input. Routing is on `channel`.** Push and SMS share the tier `primary`; keying dedup on the tier makes their two publishes byte-identical, so SNS FIFO discards the SMS silently — no error, no DLQ, no receipt, and the N1.2 parallel guarantee is gone. Every dedup input keys on `channel` (`push`/`sms`/`voice`), now alongside `toneSequence`. **Regression test required:** one dispatch, one member, assert two distinct provider sends at T+0. **A second regression test is now required:** one dispatch, one member answers `NOT_RESPONDING` at tone 1, tone 2 fires — assert a *new* delivery record is created on the same channel, not swallowed by the tone-1 key.
 
-- **Escalation ladder (reconciled — CANONICAL): push and SMS fire in parallel at T+0; voice is the single escalation tier.** This is the correct reading of N1.2 — two independent failure domains hit simultaneously means a total outage at one vendor costs zero delay, whereas a sequential ladder makes every push failure cost the full escalation interval before SMS is even attempted. Channel tiers are therefore `primary` (push + SMS, T+0) and `escalation` (voice, T+N). Any section below showing SMS as the *first escalation* after push is superseded by this note. Default N = **75 seconds**, department-configurable per F9.3. **Amendment (N1.10):** this per-member ladder is orthogonal to, and re-arms independently for, each department-level tone (§1.3a) — Decision: `voiceEscalatesPerTone` defaults `true`, so a never-acking member can receive up to three voice attempts across a single dispatch (one T+N after each of tones 1, 2, 3). This is unchanged per-tone; only the number of times the whole T+0→T+N sequence runs is new.
+- **Escalation ladder (reconciled — CANONICAL): push and SMS fire in parallel at T+0; voice is the single escalation tier.** This is the correct reading of N1.2 — two independent failure domains hit simultaneously means a total outage at one vendor costs zero delay, whereas a sequential ladder makes every push failure cost the full escalation interval before SMS is even attempted. Channel tiers are therefore `primary` (push + SMS, T+0) and `escalation` (voice, T+N). Any section below showing SMS as the *first escalation* after push is superseded by this note — **this diagram's own Escalation Scheduler node was exactly that defect (#119, fixed):** it wired two edges, `no ack → SmsQ` then `still no ack → VoiceQ`, describing the sequential ladder this note already forbids, while `FanOut` two paragraphs above correctly fires both `PushQ` and `SmsQ` directly. Now a single edge: no ack on *either* primary channel escalates straight to voice. Default N = **75 seconds**, department-configurable per F9.3. **Amendment (N1.10):** this per-member ladder is orthogonal to, and re-arms independently for, each department-level tone (§1.3a) — Decision: `voiceEscalatesPerTone` defaults `true`, so a never-acking member can receive up to three voice attempts across a single dispatch (one T+N after each of tones 1, 2, 3). This is unchanged per-tone; only the number of times the whole T+0→T+N sequence runs is new.
 - **Roster read is denormalized, not a live call.** `personnel-service` publishes `RosterChanged`/`EligibilityChanged` events; `alerting-service` maintains its own eligibility snapshot in its own table. Fan-out never calls another service synchronously — a `personnel-service` outage cannot block or slow alert fan-out (N1.5). Snapshot staleness (a member added/removed mid-shift) is an accepted, documented tradeoff — the alternative (a live cross-service call on the alert hot path) reintroduces exactly the SPOF this pipeline exists to eliminate.
 
 > **Alerting-plane isolation invariant (reconciled — CANONICAL, and it overrides every access pattern below).** No component of `alerting-service` performs a synchronous read or write against the `platform-service` or `incident-service` table, at fan-out time or at any other point on the alert hot path. Two entities in the Data Model must be read as living in the **`alerting-service` table**, not the platform table:
@@ -461,6 +460,17 @@ Base path `/api/v1/{service}/...`, JSON camelCase, RFC 7807 errors with `traceId
 - CloudWatch Metrics + Alarms: alerting-specific alarms (fan-out p99 latency vs. the 5s N1.1 target, per-channel delivery-failure rate, canary failure) are **P0 operational tooling** per N8.2 and page a human directly — they are not folded into a general-purpose dashboard alongside, say, inventory reorder alerts, because that would let a life-safety alarm get lost in low-priority noise.
 - No PII in logs (member names, addresses beyond what's operationally required on an alert payload) per house standard; F9.4's audit-of-mutations requirement is satisfied by the outbox-driven `AuditEvent` stream into `platform-service`, queryable per N8.3 without vendor support.
 
+### 4.5 Deployment strategy (N-7, decided — N2.2: no maintenance window ever takes alerting down)
+
+**There is no maintenance window, scheduled or otherwise, for `alerting-service` — deploys happen at any time, gated by automated health signals, never by a calendar slot.** A dispatch is an unscheduled 24/7 event, so an off-hours deploy window doesn't reduce risk the way it would for a business-hours system; it just concentrates a department's calls onto whatever window a release picked.
+
+- **Every `alerting-service` Lambda deploys via a versioned alias, never to `$LATEST` serving live traffic.** AWS CodeDeploy manages the alias with a linear or canary traffic shift (e.g. 10% every 2 minutes) from the previous version to the new one, per function.
+- **The N1.6 canary is the deployment gate, not a separate synthetic check invented for this purpose.** It already exercises the full ingress → fan-out → queue → worker → vendor-sandbox → receipt path every 1–2 minutes with `isTest: true`. A deploy only proceeds past its initial traffic slice once several canary cycles have run clean *against the new version specifically* — the canary result already carries enough information (§1.3, `CANARY_RUN.channelResults`) to gate a shift, it just needs the deployment tooling to check it, not new instrumentation.
+- **CloudWatch alarms already defined for N8.2 (fan-out p99 latency, per-channel delivery-failure rate, canary failure) double as CodeDeploy rollback triggers.** If any fire during a shift, CodeDeploy automatically shifts traffic back to the prior version and pages on-call — the same alarm serves both its existing operational-paging purpose and the new deployment-safety purpose, rather than needing a second alarm set to maintain.
+- **DynamoDB, SNS, SQS, and EventBridge Scheduler have no maintenance windows of their own to schedule around** — they're AWS-managed services with no customer-visible deploy step. The only thing a release ever touches is Lambda code/config and IAM, which is exactly what the alias-and-canary mechanism above covers. N2.2 therefore reduces entirely to "how do we roll Lambda code with zero traffic interruption," not a broader infrastructure question.
+- **Schema changes need no coordinated cutover.** Per §9's migration strategy, additive DynamoDB attributes need no backfill; a new *required* GSI key gets its backfill script run and verified complete before the code that depends on it reaches 100% traffic in the shift above — the same ordering already implied by §9, just made explicit here for the alerting plane specifically, where "briefly can't compute eligibility" is not an acceptable failure mode the way it would be for, say, a reporting rollup.
+- **A failed shift is a rollback, not an incident, provided it's caught inside the canary/alarm window above** — this is the whole point of gating on live health signals instead of a fixed-duration soak. If a defect ships that the canary and alarms both miss (a correctness bug that still "delivers" cleanly), that is a testing-coverage gap, not a deployment-strategy gap, and is out of scope for N2.2 specifically.
+
 ---
 
 ## 5. Open questions / unconfirmed dependencies
@@ -578,7 +588,7 @@ Streams: **on** (feeds a future OSI pipeline if CQRS is adopted later; not consu
 | `deptId` | String | Department scope | `NICHOLS` |
 | `sourceSystem` | String | `CAD` \| `MANUAL` \| `SELF_TEST` | `CAD` |
 | `incidentType` | String | Raw dispatch type from CAD | `STRUCTURE_FIRE` |
-| `address` | String | Street address | `123 Main St` |
+| `address` | String | Street address. **PII (NEW-11/M-23) — §3.5.** | `123 Main St` |
 | `crossStreets` | String | | `Main & Elm` |
 | `latitude` / `longitude` | Number | | `41.2429` / `-73.2007` |
 | `mapLink` | String | Generated deep link | `https://maps...` |
@@ -670,7 +680,7 @@ Denormalized eligibility copy owned by `alerting-service` (C-2 isolation invaria
 | `active` | Boolean | | `true` |
 | `quals` | List(String) | | `["INTERIOR","DRIVER_OP"]` |
 | `roles` | List(String) | **Amendment.** Denormalized from `MEMBER.roles` (`:795`) — needed to target officer/chief members for the mutual-aid prompt (§Department tone ladder) without a cross-service read | `["MEMBER","OFFICER"]` |
-| `contactChannels` | List(Map) | Push tokens, phone numbers per channel | `[{"channel":"PUSH","token":"..."}]` |
+| `contactChannels` | List(Map) | Push tokens, phone numbers per channel. **PII (NEW-11/M-23) — §3.5,** denormalized from `MEMBER` | `[{"channel":"PUSH","token":"..."}]` |
 | `availabilityState` | String | `AVAILABLE`\|`MARKED_OFF`\|`LOA` — **event-propagated, never read cross-service at fan-out** | `AVAILABLE` |
 | `snapshotUpdatedAt` | Number (epoch) | Staleness alarm at 15 min; propagation target < 30s p99 | `1798000000` |
 
@@ -805,7 +815,7 @@ Streams: **on** (future CQRS trigger). PITR: on.
 | `nerisSchemaVersion` | String | | `2026.2` |
 | `corePayload` | Map (JSON) | Full NERIS Core schema document for this version | `{...}` |
 | `incidentType` | String | Denormalized for list/search without deserializing payload | `STRUCTURE_FIRE` |
-| `address` | String | Denormalized | `123 Main St` |
+| `address` | String | Denormalized. **PII (NEW-11/M-23) — §3.5.** | `123 Main St` |
 | `latitude` / `longitude` | Number | Denormalized | |
 | `alarmAt` / `dispatchAt` / `arrivedAt` / `clearedAt` | Number (epoch) | Denormalized timestamps for GSI/reporting | |
 | `narrative` | String | | |
@@ -825,7 +835,7 @@ Streams: **on** (future CQRS trigger). PITR: on.
 | `entityType` | String | | `INCIDENT_SECONDARY` |
 | `secondaryType` | String | NERIS Secondary schema module name | `EXPOSURE` |
 | `nerisSchemaVersion` | String | | `2026.2` |
-| `payload` | Map (JSON) | Secondary schema document | `{...}` |
+| `payload` | Map (JSON) | Secondary schema document. **Sensitive, non-PHI (NEW-11/M-23) — §3.5,** the most sensitive non-PHI data in the system | `{...}` |
 | `affectedMemberIds` | List\<String\> | | `["MBR-0012"]` |
 
 #### INCIDENT_RESPONSE_UNIT (F7.5)
@@ -890,12 +900,12 @@ Generic GSI roles used throughout this table:
 | `entityType` | String | | `MEMBER` |
 | `memberId` | String | | `MBR-0012` |
 | `deptId` | String | | `NICHOLS` |
-| `firstName` / `lastName` | String | | `Jamie` / `Rios` |
-| `phone` / `email` | String | | |
+| `firstName` / `lastName` | String | **PII (NEW-11/M-23) — §3.5.** | `Jamie` / `Rios` |
+| `phone` / `email` | String | **PII (NEW-11/M-23) — §3.5.** | |
 | `status` | String | `ACTIVE`\|`PROBATIONARY`\|`LOA`\|`RETIRED` | `ACTIVE` |
 | `joinDate` | String (ISO date) | | `2019-05-01` |
 | `rank` | String | | `FIREFIGHTER` |
-| `agencyId` | String | | `NFD-0012` |
+| `agencyId` | String | **PII (NEW-11/M-23) — §3.5.** | `NFD-0012` |
 | `roles` | List\<String\> | `MEMBER`\|`OFFICER`\|`TRAINING`\|`APPARATUS`\|`ADMIN`\|`CHIEF` | `["MEMBER"]` |
 | `createdAt` / `updatedAt` | Number (epoch) | | |
 
@@ -922,7 +932,7 @@ Generic GSI roles used throughout this table:
 | `certType` | String | | `FF1` |
 | `issueDate` / `expiryDate` | String (ISO date) | | `2024-01-10` / `2027-01-10` |
 | `issuingAuthority` | String | | `CT DESPP` |
-| `attachmentS3Key` | String (nullable) | See §7 S3 conventions | `NICHOLS/cert/CERT-0091/card.pdf` |
+| `attachmentS3Key` | String (nullable) | See §7 S3 conventions. **PII (NEW-11/M-23) — §3.5,** a scanned cert card typically shows the holder's full name and DOB | `NICHOLS/cert/CERT-0091/card.pdf` |
 | `status` | String | `CURRENT`\|`EXPIRED`\|`REVOKED` | `CURRENT` |
 | `gsi1pk` / `gsi1sk` | String | `MEMBER#{memberId}` / `CERTIFICATION#{expiryDate}` | |
 | `gsi2pk` / `gsi2sk` | String | `DEPT#{deptId}#DUE#CERTIFICATION#{YYYY-MM}` / `{expiryDate}#{certId}` | `DEPT#NICHOLS#DUE#CERTIFICATION#2027-01` / `2027-01-10#CERT-0091` |
@@ -964,7 +974,7 @@ Generic GSI roles used throughout this table:
 | `entityType` | String | | `AVAILABILITY_MARKOFF` |
 | `startAt` / `endAt` | Number (epoch) | | |
 | `reason` | String (nullable) | | `Vacation` |
-| `affectsAlerting` | Boolean | Read by alerting-service at fan-out time (cross-service, ID-ref read) | `true` |
+| `affectsAlerting` | Boolean | **Corrected (#113).** Event-propagated into `MEMBER_ELIGIBILITY_SNAPSHOT.availabilityState` via `personnel.availability.changed` when this changes — never read cross-service at fan-out time. The C-2 isolation invariant (§Backend `:212`) already states this; this row previously contradicted it by describing a read that would fail closed at runtime (`alerting-service`'s execution role holds no permission to read this table at all). Note the field also **renames**, not just relocates: the snapshot carries the three-valued `availabilityState` (`AVAILABLE`\|`MARKED_OFF`\|`LOA`), not a same-named boolean copy of this flag. | `true` |
 
 #### DUTY_SHIFT (F2.8)
 
@@ -1180,10 +1190,10 @@ Generic GSI roles used throughout this table:
 | `pk` | String | `DEPT#{deptId}#OCCUPANCY#{occupancyId}` | `DEPT#NICHOLS#OCCUPANCY#OCC-0210` |
 | `sk` | String | `METADATA` | `METADATA` |
 | `entityType` | String | | `OCCUPANCY` |
-| `address` | String | | `456 Oak Ave` |
-| `normalizedAddress` | String | For F1.8/GSI3 address lookup | `456 OAK AVE` |
+| `address` | String | **PII (NEW-11/M-23) — §3.5.** | `456 Oak Ave` |
+| `normalizedAddress` | String | For F1.8/GSI3 address lookup. **PII (NEW-11/M-23) — §3.5.** | `456 OAK AVE` |
 | `occupancyType` | String | | `MULTI_FAMILY` |
-| `contacts` | List\<Map\> | `{name, phone, role}` | |
+| `contacts` | List\<Map\> | `{name, phone, role}`. **PII (NEW-11/M-23) — §3.5,** private-citizen contacts | |
 | `hazards` | List\<String\> | | `["PROPANE_TANK"]` |
 | `latitude` / `longitude` | Number | | |
 | `gsi3pk` / `gsi3sk` | String | `DEPT#{deptId}#OCCUPANCY#GEO#{geohash5}` / `{geohash8}#{occupancyId}` | |
@@ -1259,7 +1269,7 @@ Read-mostly, near-static — the canonical Valkey caching candidate (§6).
 | `mutatedEntityType` / `mutatedEntityId` | String | | `CERTIFICATION` / `CERT-0091` |
 | `action` | String | `CREATE`\|`UPDATE`\|`DELETE` | `UPDATE` |
 | `actorId` | String (memberId) | | `MBR-0034` |
-| `changedFields` | Map | Before/after for changed attributes only | `{"expiryDate":{"old":"2026-01-10","new":"2027-01-10"}}` |
+| `changedFields` | Map | Before/after for changed attributes only. **Inherits classification (NEW-11/M-23) — §3.5:** a diff on a PII-bearing entity (e.g. `MEMBER.phone`) carries that PII into this item too | `{"expiryDate":{"old":"2026-01-10","new":"2027-01-10"}}` |
 | `ts` | Number (epoch) | | |
 | `gsi3pk` / `gsi3sk` | String | `DEPT#{deptId}#AUDIT#ENTITY#{mutatedEntityType}#{mutatedEntityId}` / `{ts}` | for "audit trail of this record" |
 
@@ -1277,6 +1287,26 @@ Daily-bucketed PK gives real cardinality and bounds partition size the same way 
 | `AUDIT_LOG_ENTRY` | No TTL | F9.4 mutation audit; export-to-S3 archival after 2 years to control table size, never deleted outright without a records-retention decision. |
 | `CHECKLIST_RUN`, `MAINTENANCE_RECORD`, `APPARATUS_TEST_RECORD` | No TTL (compliance history for F4.9/ISO) | ISO/compliance reporting requires historical check completion. |
 | All other operational entities (`MEMBER`, `APPARATUS`, `HYDRANT`, `OCCUPANCY`, config, etc.) | No TTL — current-state records | Deleted explicitly on business action (retirement, decommission), not by time. |
+
+### 3.5 Sensitive data classification (NEW-11/M-23, applied)
+
+Security & Auth's **Sensitive data classification** note (`:2505`) *declares* the scheme but named only three entities. This section applies it: every field in this Data Model carrying PII or restricted-sensitivity data now also carries an inline `**PII**`/`**Sensitive, non-PHI**` marker at its point of definition in §3.1–§3.3, cross-referencing back here. This table is the single place to look it up without hunting through every entity.
+
+| Entity(.field) | Classification | Why |
+|---|---|---|
+| `MEMBER.firstName`/`.lastName`/`.phone`/`.email`/`.agencyId` | **PII** | Named in the original declaration. |
+| `OCCUPANCY.address`/`.normalizedAddress`/`.contacts` | **PII** | Named in the original declaration — private-citizen contacts and the address they attach to. |
+| `INCIDENT.address` | **PII** | Named in the original declaration. |
+| `INCIDENT_SECONDARY.payload` | **Sensitive, non-PHI** | Named in the original declaration — responder exposure/safety records; access rule is already narrower than the general incident read (visible to the affected member, the chief, and the safety officer only). |
+| `DISPATCH_ALERT.address`/`.crossStreets` | **PII** | Not named in the original declaration, but the same address data as `INCIDENT.address` — this is the pre-incident copy of the same location fact, so it inherits the same classification. |
+| `MEMBER_ELIGIBILITY_SNAPSHOT.contactChannels` | **PII** | Not named in the original declaration. Denormalized copy of `MEMBER.phone`/push tokens into the alerting-service table (C-2 isolation invariant) — the copy carries the same classification as its source. |
+| `CERTIFICATION.attachmentS3Key` | **PII** | Not named in the original declaration. The referenced file (a scanned cert card) typically shows the holder's full name and date of birth even though the DynamoDB item itself holds only an S3 key. |
+| `AUDIT_LOG_ENTRY.changedFields` | **Inherits classification** | Not a new source — a diff on any of the fields above carries that same PII into the audit item. No blanket marker on the entity: most audited fields (a cert's `expiryDate`, an apparatus `status`) are not sensitive at all. |
+| `MUTUAL_AID_EVENT.notes` | **Guidance, not enforced** (already noted at `:755`) | Free text; officers are trained not to enter occupant/caller PII here, but the field isn't validated against it since free text can't be reliably scrubbed. Listed here for completeness, not reclassified. |
+
+**OpenAPI schemas:** every response schema for an endpoint returning one of the fields above (§2) inherits that field's classification — there is no separate schema-level annotation to maintain by hand; a schema is PII if and only if a field it serializes is. `GET /platform/export` (F9.5) is the one endpoint that aggregates across nearly all of them at once, which is exactly why it carries its own alarm-on-every-invocation control (`:2504`) rather than relying on per-field classification alone.
+
+**Event schemas:** `alerting.dispatch.normalized`, `alerting.dispatch.received`, and `alerting.delivery.receipt` (§4.1) carry `address`/`narrative`-shaped fields inherited from `DISPATCH_ALERT` and are **PII** by the same inheritance rule; `personnel.member.updated` is **PII** for the same reason `MEMBER` is. Every other event in §4.1/§4.2 carries only IDs, codes, timestamps, or counts and needs no marker.
 
 ## 4. Access patterns
 
@@ -1376,6 +1406,31 @@ Per the `caching` skill: ElastiCache Serverless Valkey, key format `{service}:{e
 - **No OpenSearch cost** in v1, per §1/§5 — this is the single largest cost lever available given the hard budget constraint, and it is a decision this document is explicit about rather than a default.
 - **S3** (§8 below) with Intelligent-Tiering keeps attachment storage cost negligible at this department's document volume without an operator having to hand-tune lifecycle rules per prefix.
 - **Reserved capacity / cost risk to watch:** if F9.6's tenancy seam activates for real (a second department), GSI3's list-style partitions (§3.3) are the first thing to re-shard — flagged in §3.3 with its ceiling and upgrade path.
+
+### 7.1 Monthly cost estimate (N-8, decided)
+
+No dollar figure existed anywhere in this document despite the budget being a named hard constraint (requirements §8, OQ-21). This is a back-of-envelope order-of-magnitude estimate, not a quote — validate against the AWS Pricing Calculator before committing a number to the department. **Assumptions, stated explicitly so they can be corrected:** ~40 active members; ~5 dispatches/day (150/month) for alerting fan-out volume, consistent with this section's existing "a few dispatches/day" framing (`:1405`); ~150–300 of those become filed NERIS incidents/year (not every alerting dispatch produces a submittable report — false alarms and cancel-en-route calls still page but don't); routine LOB traffic (truck checks, training, attendance) is human-paced and negligible by comparison. Single-region (`us-east-1`), single department, no provisioned capacity anywhere (§7 above).
+
+| Line item | Est. monthly cost | Basis |
+|---|---|---|
+| Lambda (all services combined) | **~$0** | Request and compute volume at this scale sits inside the perpetual free tier (1M requests + 400,000 GB-seconds/month). |
+| DynamoDB, on-demand (3 tables) | **< $5** | Low tens of thousands of read/write request units/month at this call volume; storage is a few GB. |
+| API Gateway (HTTP API) | **< $1** | $1.00/million requests; well under a million/month here. |
+| Cognito | **~$0** | ~40 MAUs is inside every current Cognito pricing tier's free allowance. |
+| SNS + SQS (alerting FIFO + LOB standard) | **< $2** | Publish/request volume in the low thousands/month even counting fan-out, escalation, and tone re-tones. |
+| EventBridge (bus + Scheduler) | **< $1** | $1.00/million events; low thousands/month here. |
+| X-Ray | **~$0** | First 100,000 traces/month free; this department won't approach that. |
+| CloudWatch (logs, metrics, alarms) | **~$10–15** | The one line item that scales with *how many alarms and how much log volume* a careful N8 observability build-out adds, not with department size — worth re-checking once N8.1's structured-logging story ships. |
+| ElastiCache Serverless (Valkey) | **~$40–50** | **Flagged, not decided.** ElastiCache Serverless has a per-cache minimum footprint/charge that doesn't scale down to zero — at this department's read-mostly, near-static config-caching workload (`DEPARTMENT_CONFIG`, `SCHEMA_VERSION`), this floor cost is plausibly larger than everything else on this list *combined*. This is not a re-litigation of the no-cache-on-the-alerting-hot-path invariant (N1.5, unchanged) — it's a question of whether the LOB-plane's read-mostly caching needs a managed cluster at all at this volume, versus, say, Lambda-execution-environment-local caching (free, and DEPARTMENT_CONFIG's own "read-mostly, near-static" framing at `:1250` tolerates it). Recorded here as a cost-driven follow-on question, not resolved. |
+| S3 (Intelligent-Tiering) | **< $1** | Low object count/volume — photos, attachments, cert PDFs — at this department's document activity. |
+| Secrets Manager | **~$2–4** | ~5–10 secrets (NERIS creds × environments, SMS/voice vendor creds) at $0.40/secret/month. |
+| Verified Permissions | **~$0** | Per-authorization-request pricing at this call volume sits inside typical free-tier/negligible-cost territory. |
+| **AWS subtotal** | **~$60–80/month** | Dominated by the Valkey question above; everything else combined is under $20/month. |
+| SMS (third-party, vendor TBD — OQ-3) | **~$40–60/month** | ~150 dispatches/month × ~30 eligible members × primary-tier SMS (parallel with push) ≈ 4,000–5,000 messages/month at a typical $0.01–0.015/message range. **Cannot be pinned down before OQ-3 resolves** — vendor rates vary meaningfully. |
+| Voice (third-party, vendor TBD — OQ-3) | **~$20–35/month** | Estimating ~30% of primary sends escalate to voice (no ack within 75s) × ~1 minute average call ≈ 1,000–1,500 minutes/month at a typical $0.02–0.025/minute range. Same caveat as SMS. |
+| Push (APNs/FCM) | **$0** | Free from both platforms. |
+
+**Total estimate: roughly $120–175/month**, with the two largest and least-certain lines being the Valkey floor cost (AWS-side, resolvable without a vendor decision) and the SMS/voice vendor costs (third-party, blocked on OQ-3). Everything else on this list is small enough, individually and combined, that it's unlikely to be the thing that breaks a volunteer-municipal budget — the two flagged lines are where a real budget conversation should focus.
 
 ## 8. S3 conventions
 
@@ -2502,7 +2557,7 @@ N1.7 requires no single point of failure between dispatch ingress and member dev
 - **Retention and disposal.** `DEPARTMENT_CONFIG` gains a `retention` `configType` so N6.3's "configurable to CT and municipal requirements" has an actual configuration surface. Disposal is **verified hard delete** for LOB records and **crypto-shredding** (KMS key destruction) for archived incident and delivery-receipt classes. The S3-Glacier archival job is assigned to **Wave 3** — until it ships, table storage for these entities grows unbounded, which is acceptable only at this department's volume.
 - **Export IAM path (the one sanctioned exception to the isolation invariant).** `POST /platform/export` (F9.5) runs under a **dedicated read-only role with read access to all three tables**. This is the *only* principal outside `alerting-service` holding any alerting-table permission, and it is read-only, **Cedar chief/admin-gated (no re-authentication challenge — see §Session and re-authentication policy)**, and alarmed on every invocation. The C-2 invariant forbids alerting reaching *out*; this is the reverse direction and is stated here so it is not discovered as an undocumented grant.
 - **Anomalous access monitoring.** Every `POST /platform/export` is audited as a first-class event and **alarms on invocation**, not merely on volume — a full export of member PII, LOSAP records, and incident history behind a single admin role check, with no re-authentication and no session expiry behind it, warrants chief notification every time. This alarm is now the **primary** control on that surface, not a secondary one, and it detects rather than prevents. Off-hours privileged activity also alarms.
-- **Sensitive data classification.** Entity tables, OpenAPI schemas, and event schemas carry a classification annotation. `MEMBER` (name, phone, email, agency ID), `OCCUPANCY` (private-citizen contacts, hazards), and `INCIDENT` (addresses) are PII. **`INCIDENT_SECONDARY` responder exposure and safety records are the most sensitive non-PHI data in the system** and take an access rule narrower than the general incident read: visible to the affected member, the chief, and the safety officer only.
+- **Sensitive data classification (applied — NEW-11/M-23, Data Model §3.5).** Entity tables, OpenAPI schemas, and event schemas carry a classification annotation. `MEMBER` (name, phone, email, agency ID), `OCCUPANCY` (private-citizen contacts, hazards), and `INCIDENT` (addresses) are PII. **`INCIDENT_SECONDARY` responder exposure and safety records are the most sensitive non-PHI data in the system** and take an access rule narrower than the general incident read: visible to the affected member, the chief, and the safety officer only. Data Model §3.5 also extends this to fields not named here — `DISPATCH_ALERT`'s pre-incident address, `MEMBER_ELIGIBILITY_SNAPSHOT`'s denormalized contact channels, and `CERTIFICATION`'s scanned attachment all inherit PII status from their source.
 - **Third-party data handling.** SMS and voice vendors receive member phone numbers, incident addresses, and dispatch narratives on every call. Vendor selection criteria (OQ-3) therefore include contractual data-handling terms: **no message-content retention beyond delivery confirmation, U.S.-only processing** (consistent with N6.1), and a named subprocessor list.
 
 ### Security & Auth
