@@ -47,6 +47,7 @@ flowchart TB
         INSP["Inspections + Pre-plans"]
         INC["Incident / NERIS"]
         RPT["Reporting"]
+        NOTIF["Notifications<br/>non-alert channel"]
         LBUS(["EventBridge<br/>boxalarm-env-platform-bus"])
         LQ[["SQS + DLQ"]]
         PDB[("platform-service<br/>DynamoDB")]
@@ -61,7 +62,7 @@ flowchart TB
     HTTP --> LOB
 
     CAD -.->|"unconfirmed<br/>feed"| ING
-    ING --> ABUS --> FAN --> AQ
+    ING --> FAN --> ABUS --> AQ
     AQ --> PUSH --> RN
     AQ --> SMS
     AQ --> VOICE
@@ -86,6 +87,9 @@ flowchart TB
     INC -->|"OAuth2 · backoff<br/>· User-Agent"| NERIS
 
     LOB --> LBUS --> LQ
+    LBUS -->|"cert.expiry.due · apparatus.test.due ·<br/>ppe.expiry.due · inventory.reorder.due ·<br/>scheduling.coverage_gap.detected"| NOTIF
+    NOTIF --> PDB
+    NOTIF -->|"separate, non-critical<br/>channel — not Critical Alerts"| PUSH
     ABUS -.->|"one-way bridge<br/>out only"| LBUS
     PERS -.->|"denormalized<br/>roster copy"| ADB
     INSP -.->|"denormalized<br/>pre-plan copy"| ADB
@@ -289,6 +293,8 @@ Base path `/api/v1/{service}/...`, JSON camelCase, RFC 7807 errors with `traceId
 | POST | `/api/v1/alerting/dispatches/{dispatchId}/tone-ladder/halt` | Halt remaining scheduled tone evaluations and suppress automatic mutual-aid trigger (F1.14, amendment) | Cognito(admin) |
 | POST | `/api/v1/alerting/dispatches/{dispatchId}/mutual-aid/trigger` | Manually trigger mutual aid without waiting for tone 3 (F1.13, amendment) | Cognito(admin) |
 | POST | `/api/v1/alerting/dispatches/{dispatchId}/mutual-aid/acknowledge` | Officer confirms the mutual-aid phone call was made; records notes (F1.13, amendment) | Cognito(admin) |
+| GET | `/api/v1/alerting/health/liveness` | Liveness | none |
+| GET | `/api/v1/alerting/health/readiness` | Readiness — includes the N1.6 canary signal (§4.3) | none |
 
 ### platform-service
 
@@ -323,6 +329,8 @@ Base path `/api/v1/{service}/...`, JSON camelCase, RFC 7807 errors with `traceId
 | POST | `/api/v1/personnel/shifts/{shiftId}/release` | Give back a claimed shift (F2.11) | Cognito |
 | POST | `/api/v1/personnel/shifts/{shiftId}/swap` | Propose a swap, officer-approval gated | Cognito |
 | GET | `/api/v1/personnel/shifts/coverage` | Coverage view: covered/short/qual-gapped (F2.10) | Cognito(admin) |
+| GET | `/api/v1/personnel/health/liveness` | Liveness | none |
+| GET | `/api/v1/personnel/health/readiness` | Readiness | none |
 
 ### apparatus-service
 
@@ -339,6 +347,8 @@ Base path `/api/v1/{service}/...`, JSON camelCase, RFC 7807 errors with `traceId
 | GET | `/api/v1/apparatus/testing-schedules` | Hose/ladder/pump/aerial due dates (F4.7) | Cognito |
 | GET | `/api/v1/apparatus/{unitId}/inventory` | Compartment inventory (F4.8) | Cognito |
 | GET | `/api/v1/apparatus/compliance` | Check compliance report (F4.9) | Cognito(admin) |
+| GET | `/api/v1/apparatus/health/liveness` | Liveness | none |
+| GET | `/api/v1/apparatus/health/readiness` | Readiness | none |
 
 ### incident-service
 
@@ -354,6 +364,8 @@ Base path `/api/v1/{service}/...`, JSON camelCase, RFC 7807 errors with `traceId
 | POST | `/api/v1/incidents/{incidentId}/submit` | Submit to NERIS — accept-and-queue, 202 (F7.6) | Cognito(admin) |
 | GET | `/api/v1/incidents/{incidentId}/submission` | Submission status: submitted/accepted/rejected/retrying/failed (F7.7) | Cognito |
 | POST | `/api/v1/incidents/{incidentId}/submission/retry` | Manually retry a failed submission | Cognito(admin) |
+| GET | `/api/v1/incidents/health/liveness` | Liveness | none |
+| GET | `/api/v1/incidents/health/readiness` | Readiness | none |
 
 ### training-service
 
@@ -367,6 +379,8 @@ Base path `/api/v1/{service}/...`, JSON camelCase, RFC 7807 errors with `traceId
 | GET | `/api/v1/training/hours` | Training hours by member/category/period (F3.4) | Cognito |
 | GET | `/api/v1/training/reports/iso` | ISO-aligned training hour report (F3.5) | Cognito(admin) |
 | GET | `/api/v1/training/members/{memberId}/transcript` | Exportable transcript (F3.6) | Cognito |
+| GET | `/api/v1/training/health/liveness` | Liveness | none |
+| GET | `/api/v1/training/health/readiness` | Readiness | none |
 
 ### reporting-service
 
@@ -379,6 +393,8 @@ Base path `/api/v1/{service}/...`, JSON camelCase, RFC 7807 errors with `traceId
 | GET | `/api/v1/reporting/response-times` | Turnout/travel/total analytics (F8.5) | Cognito(admin) |
 | GET | `/api/v1/reporting/membership-trends` | Membership/attendance trends (F8.6) | Cognito(admin) |
 | GET | `/api/v1/reporting/export` | CSV/PDF export, accept-and-queue for large ranges (F8.7) | Cognito(admin) |
+| GET | `/api/v1/reporting/health/liveness` | Liveness | none |
+| GET | `/api/v1/reporting/health/readiness` | Readiness | none |
 
 ### inspections-service
 
@@ -394,6 +410,8 @@ Base path `/api/v1/{service}/...`, JSON camelCase, RFC 7807 errors with `traceId
 | PUT | `/api/v1/inspections/hydrants/{hydrantId}` | Update hydrant (flow test, OOS) | Cognito(admin) |
 | POST | `/api/v1/inspections/field-capture` | Mobile field capture with photos, offline-sync-tolerant (F6.5) | Cognito |
 | GET | `/api/v1/inspections/map` | Map-based retrieval (F6.6) | Cognito |
+| GET | `/api/v1/inspections/health/liveness` | Liveness | none |
+| GET | `/api/v1/inspections/health/readiness` | Readiness | none |
 
 ### inventory-service
 
@@ -404,8 +422,23 @@ Base path `/api/v1/{service}/...`, JSON camelCase, RFC 7807 errors with `traceId
 | GET | `/api/v1/inventory/ppe/{memberId}` | PPE assignment, sizes, NFPA service-life expiry (F5.2) | Cognito |
 | GET | `/api/v1/inventory/consumables` | Stock levels + reorder thresholds (F5.3) | Cognito |
 | PUT | `/api/v1/inventory/equipment/{assetId}/lifecycle` | Acquisition/service/retirement transition (F5.4) | Cognito(admin) |
+| GET | `/api/v1/inventory/health/liveness` | Liveness | none |
+| GET | `/api/v1/inventory/health/readiness` | Readiness | none |
 
-**Endpoint count: 65** across 9 services, plus 4 `notification-service` endpoints (see the `notification-service` note in §1.1) = **69 across 10 services**.
+### notification-service
+
+Paths as given verbatim in Backend §1.1's canonical contract note — that note predates this table's `/api/v1/{service}/...` convention and is the source of truth here, not the convention.
+
+| Method | Path | Description | Auth |
+|---|---|---|---|
+| GET | `/notifications` | In-app inbox, paginated | Cognito |
+| POST | `/notifications/{id}/read` | Mark a notification read | Cognito |
+| GET | `/notifications/preferences` | Channel opt-ins and digest cadence per category | Cognito |
+| PUT | `/notifications/preferences` | Update notification preferences | Cognito |
+| GET | `/notifications/health/liveness` | Liveness | none |
+| GET | `/notifications/health/readiness` | Readiness | none |
+
+**Endpoint count: 81** (65 business endpoints + the 16 `health/liveness`/`health/readiness` pairs §4.3 requires of every service, added to this table by M-15) across 9 services, plus 6 `notification-service` endpoints (4 from the canonical contract note in §1.1, plus its own health pair; NEW-9) = **87 across 10 services**.
 
 ---
 
@@ -565,6 +598,13 @@ erDiagram
     INCIDENT }o--|| SCHEMA_VERSION : "validated against"
 
     AUDIT_LOG_ENTRY }o--|| MEMBER : "actor"
+
+    DISPATCH_ALERT ||--o{ DISPATCH_ROSTER_ENTRY : "rolled up in"
+    MEMBER ||--o| MEMBER_ELIGIBILITY_SNAPSHOT : "denormalized into"
+    PRE_PLAN ||--o| PRE_PLAN_COPY : "denormalized into"
+    DEPARTMENT ||--o{ DEPARTMENT_CONFIG : configures
+    DEPARTMENT ||--o{ CANARY_RUN : "self-tests via"
+    DEPARTMENT ||--o{ CONSUMABLE_STOCK : stocks
 ```
 
 Cross-service references (`DISPATCH_ALERT`↔`INCIDENT`, `DISPATCH_ALERT`↔`HYDRANT`/`PRE_PLAN`) are **ID references only** — resolved by the app via independent `GetItem`/`Query` calls against each service's own table, never a cross-table join. This is what keeps N1.5's isolation real: `incident-service` or `platform-service` being down does not block a `alerting-service` write or an alert fan-out; the alert simply carries the hydrant/pre-plan IDs and the client fetches them best-effort.
@@ -1287,6 +1327,7 @@ Daily-bucketed PK gives real cardinality and bounds partition size the same way 
 | `AUDIT_LOG_ENTRY` | No TTL | F9.4 mutation audit; export-to-S3 archival after 2 years to control table size, never deleted outright without a records-retention decision. |
 | `CHECKLIST_RUN`, `MAINTENANCE_RECORD`, `APPARATUS_TEST_RECORD` | No TTL (compliance history for F4.9/ISO) | ISO/compliance reporting requires historical check completion. |
 | All other operational entities (`MEMBER`, `APPARATUS`, `HYDRANT`, `OCCUPANCY`, config, etc.) | No TTL — current-state records | Deleted explicitly on business action (retirement, decommission), not by time. |
+| `DISPATCH_ROSTER_ENTRY`, `MEMBER_ELIGIBILITY_SNAPSHOT`, `PRE_PLAN_COPY` | **No TTL needed** (R3-4 — explicitly a decision, not an omission). Mutable current-state rollups/denormalized copies, overwritten in place as their source event stream progresses. | Each has its own audit trail elsewhere: `DISPATCH_ROSTER_ENTRY`'s answer history is preserved immutably in `DISPATCH_RESPONSE_RECORD` above; `MEMBER_ELIGIBILITY_SNAPSHOT`/`PRE_PLAN_COPY` are point-in-time copies of `MEMBER`/`PRE_PLAN`, whose own retention already governs the source history. Staleness, not deletion, is the failure mode that matters for these three — covered by the `snapshotUpdatedAt` alarm (Backend §1.3). |
 
 ### 3.5 Sensitive data classification (NEW-11/M-23, applied)
 
@@ -1617,8 +1658,12 @@ Standard envelope, required on every event regardless of domain:
 **`alerting.dispatch.normalized`** (amended — `toneSequence` added, defaults `1` for the original CAD-triggered fan-out; tones 2/3 re-publish this same event type carrying the `toneSequence` taken verbatim from the invoking schedule payload (never incremented at publish time — see the CANONICAL exactly-once note), per §Department tone ladder)
 ```json
 {
+  "eventId": "018f2b4a-0001-7000-8000-000000000001",
+  "eventTime": "2026-09-03T02:14:00Z",
   "eventType": "alerting.dispatch.normalized",
+  "source": "alert-fanout-service",
   "correlationId": "dispatch-4471",
+  "schemaVersion": "1.0",
   "payload": {
     "dispatchId": "dispatch-4471",
     "memberId": "mbr-102",
@@ -1638,8 +1683,12 @@ Standard envelope, required on every event regardless of domain:
 **`alerting.delivery.receipt`** (amended — `toneSequence` added)
 ```json
 {
+  "eventId": "018f2b4a-0002-7000-8000-000000000002",
+  "eventTime": "2026-09-03T02:14:07Z",
   "eventType": "alerting.delivery.receipt",
+  "source": "delivery-receipt-service",
   "correlationId": "dispatch-4471",
+  "schemaVersion": "1.0",
   "payload": {
     "dispatchId": "dispatch-4471",
     "memberId": "mbr-102",
@@ -1656,8 +1705,12 @@ Standard envelope, required on every event regardless of domain:
 **`alerting.tone.escalated`** (new, amendment — F1.12, audit/observability event, not on the delivery-critical path)
 ```json
 {
+  "eventId": "018f2b4a-0003-7000-8000-000000000003",
+  "eventTime": "2026-09-06T03:03:00Z",
   "eventType": "alerting.tone.escalated",
+  "source": "tone-evaluator",
   "correlationId": "dispatch-4471",
+  "schemaVersion": "1.0",
   "payload": {
     "dispatchId": "dispatch-4471",
     "toneSequence": 2,
@@ -1672,8 +1725,12 @@ Standard envelope, required on every event regardless of domain:
 **`alerting.mutual_aid.triggered`** (new, amendment — F1.13)
 ```json
 {
+  "eventId": "018f2b4a-0004-7000-8000-000000000004",
+  "eventTime": "2026-09-06T03:06:00Z",
   "eventType": "alerting.mutual_aid.triggered",
+  "source": "tone-evaluator",
   "correlationId": "dispatch-4471",
+  "schemaVersion": "1.0",
   "payload": {
     "dispatchId": "dispatch-4471",
     "triggeredAt": "2026-09-06T03:06:00Z",
@@ -1688,8 +1745,12 @@ Standard envelope, required on every event regardless of domain:
 **`alerting.canary.result`**
 ```json
 {
+  "eventId": "018f2b4a-0005-7000-8000-000000000005",
+  "eventTime": "2026-09-03T02:00:00Z",
   "eventType": "alerting.canary.result",
+  "source": "canary-service",
   "correlationId": "canary-run-8821",
+  "schemaVersion": "1.0",
   "payload": {
     "runId": "canary-run-8821",
     "channelsTested": ["push", "sms", "voice"],
@@ -1702,8 +1763,12 @@ Standard envelope, required on every event regardless of domain:
 **`platform.config.alert_rules.updated`** (new, amendment — B5, fixes the previously-invented event by giving it a definition)
 ```json
 {
+  "eventId": "018f2b4a-0006-7000-8000-000000000006",
+  "eventTime": "2026-09-03T02:00:00Z",
   "eventType": "platform.config.alert_rules.updated",
+  "source": "platform-service",
   "correlationId": "config-update-77",
+  "schemaVersion": "1.0",
   "payload": {
     "deptId": "NICHOLS",
     "toneLadder": { "tone2AtSeconds": 180, "tone3AtSeconds": 360, "mutualAidAfterTone": 3 },
@@ -1848,7 +1913,7 @@ flowchart TB
         AlertAPI["Alerting service\n(isolated per N1.5)"]
         CoreAPI["Platform API\n(roster, apparatus, training,\ninventory, inspections, reporting)"]
         NERISAPI["NERIS submission service"]
-        AuthAPI["Cognito user pool\n+ token exchange"]
+        AuthAPI["Cognito user pool\n+ Lambda JWT authorizer"]
     end
 
     AlertAPI --> APNs --> NotifSvc --> RNApp
