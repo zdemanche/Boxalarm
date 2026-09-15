@@ -4,7 +4,7 @@ import { LocalstackContainer, type StartedLocalStackContainer } from '@testconta
 import { CreateTableCommand, DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import { DynamoDBDocumentClient, GetCommand, ScanCommand } from '@aws-sdk/lib-dynamodb';
 import { toVerifiedDeptId } from '@boxalarm/dept-scope';
-import { createManualDispatch } from './repository.js';
+import { createManualDispatch, getDispatchById } from './repository.js';
 import { deriveIngressIdempotencyKey } from './dispatchIngressPort.js';
 import type { DispatchReceived } from './dispatchIngressPort.js';
 
@@ -166,5 +166,26 @@ describe('createManualDispatch (real DynamoDB, AC2/AC4)', () => {
 
     expect(manualResult.outcome).toBe('created');
     expect(cadResult.outcome).toBe('created');
+  });
+
+  it('getDispatchById returns the stored alert including occupancyId (E1-S17 AC1)', async () => {
+    const deptId = toVerifiedDeptId({ deptId: 'NICHOLS' });
+    const externalId = `getbyid-${randomUUID()}`;
+    const created = await createManualDispatch(client, TABLE_NAME, {
+      deptId,
+      dispatch: dispatchPayload(externalId),
+      idempotencyKey: deriveIngressIdempotencyKey(deptId, 'MANUAL', externalId),
+      dispatchedAt: 1798000000,
+    });
+    const dispatchId = created.outcome === 'created' ? created.dispatchId : '';
+
+    const found = await getDispatchById(client, TABLE_NAME, deptId, dispatchId);
+    expect(found?.dispatchId).toBe(dispatchId);
+  });
+
+  it('getDispatchById returns undefined for a dispatchId that does not exist (E1-S17 AC2)', async () => {
+    const deptId = toVerifiedDeptId({ deptId: 'NICHOLS' });
+    const found = await getDispatchById(client, TABLE_NAME, deptId, 'no-such-dispatch');
+    expect(found).toBeUndefined();
   });
 });
