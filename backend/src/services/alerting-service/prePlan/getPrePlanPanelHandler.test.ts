@@ -120,6 +120,9 @@ describe('getPrePlanPanelHandler', () => {
     const wrapped = createGetPrePlanPanelHandler(fakeDoc(send), allowClient());
     const result = await wrapped(buildEvent());
     expect(result).toMatchObject({ statusCode: 503 });
+    const body = JSON.parse((result as { body: string }).body) as Record<string, unknown>;
+    expect(body.type).toBe('https://boxalarm.dev/problems/dependency-unavailable');
+    expect(body.detail).toBe('A required upstream dependency is temporarily unavailable.');
     expect(logErrorSpy).toHaveBeenCalledWith(
       expect.objectContaining({
         event: 'preplan_panel.dependency_failed',

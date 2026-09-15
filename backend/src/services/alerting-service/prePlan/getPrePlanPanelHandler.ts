@@ -6,11 +6,11 @@ import {
   withAuthorization,
   extractTraceId,
   notFoundProblem,
-  serviceUnavailableProblem,
+  dependencyUnavailableProblem,
   type GuardEvent,
 } from '@boxalarm/authz';
 import { buildDeptScopedPk, toVerifiedDeptId } from '@boxalarm/dept-scope';
-import { emitOutcomeMetric } from '@boxalarm/metrics';
+import { emitOutcomeMetric, withLatency } from '@boxalarm/metrics';
 import { createDynamoClient, readAlertingConfig } from '../eligibility/dynamoClient.js';
 import { logError } from '../logger.js';
 import type { NearestHydrant } from './nearestHydrants.js';
@@ -46,14 +46,16 @@ export function createGetPrePlanPanelHandler(
       const client = createDynamoClient(process.env, doc);
 
       try {
-        const result = await client.send(
-          new GetCommand({
-            TableName: tableName,
-            Key: {
-              pk: buildDeptScopedPk(deptId, 'PREPLAN'),
-              sk: `OCCUPANCY#${occupancyId}`,
-            },
-          }),
+        const result = await withLatency(METRIC_NAMESPACE, 'GetPrePlanPanel', () =>
+          client.send(
+            new GetCommand({
+              TableName: tableName,
+              Key: {
+                pk: buildDeptScopedPk(deptId, 'PREPLAN'),
+                sk: `OCCUPANCY#${occupancyId}`,
+              },
+            }),
+          ),
         );
         const item = result.Item as PrePlanCopyItem | undefined;
         if (!item) {
@@ -82,7 +84,7 @@ export function createGetPrePlanPanelHandler(
           traceId,
         });
         emitOutcomeMetric(METRIC_NAMESPACE, 'PrePlanPanelFailed');
-        return serviceUnavailableProblem(traceId);
+        return dependencyUnavailableProblem(traceId);
       }
     },
     {

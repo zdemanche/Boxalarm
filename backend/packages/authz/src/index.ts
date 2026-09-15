@@ -5,6 +5,7 @@ export type { CedarPrincipalContext, CedarAction, BatchResourceDecision } from '
 export {
   forbiddenProblem,
   serviceUnavailableProblem,
+  dependencyUnavailableProblem,
   notFoundProblem,
   badRequestProblem,
 } from './problemDetails.js';
