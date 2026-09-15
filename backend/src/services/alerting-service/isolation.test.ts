@@ -2,10 +2,11 @@ import { readFileSync, readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
+// TODO: E1-S13 AC1/AC3 IAM policy enforcement and AC4 chaos/load isolation exercise (NOTIF-ISO row) are owned by boxalarm-infrastructure; this file is an app-level static proxy only.
 const alertingServiceDir = fileURLToPath(new URL('.', import.meta.url));
 
 const FORBIDDEN_PATTERN =
-  /platform-service|incident-service|PLATFORM_TABLE_NAME|INCIDENT_TABLE_NAME/;
+  /platform-service|incident-service|\b(PLATFORM(_SERVICE)?|PERSONNEL|INCIDENT|AUDIT|OCCUPANCY|TRAINING(_DYNAMO)?)_TABLE_NAME\b/;
 
 const sourceFiles = readdirSync(alertingServiceDir, { recursive: true, withFileTypes: true })
   .filter(
@@ -29,5 +30,16 @@ describe('alerting-service IAM/data-plane isolation (AC3, NOTIF-ISO)', () => {
     expect('import { readIncidentTable } from "../incident-service/repository.js";').toMatch(
       FORBIDDEN_PATTERN,
     );
+  });
+
+  it.each([
+    'process.env.PLATFORM_SERVICE_TABLE_NAME',
+    'process.env.PERSONNEL_TABLE_NAME',
+    'process.env.AUDIT_TABLE_NAME',
+    'process.env.OCCUPANCY_TABLE_NAME',
+    'process.env.TRAINING_TABLE_NAME',
+    'process.env.TRAINING_DYNAMO_TABLE_NAME',
+  ])('the sweep pattern fails on %s (negative control)', (violation) => {
+    expect(violation).toMatch(FORBIDDEN_PATTERN);
   });
 });
