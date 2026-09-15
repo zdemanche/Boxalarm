@@ -367,6 +367,51 @@ describe('digestJob handler (entrypoint-test obligation)', () => {
     expect(sendEmailDigest).toHaveBeenCalledTimes(1);
   });
 
+  it('isolates a recipient whose roster-query fails, logs it, and still processes the next group (P5/V6)', async () => {
+    const send = vi.fn().mockImplementation((command: CommandLike) => {
+      if (command.constructor.name === 'QueryCommand') {
+        const gsi3pk = command.input.ExpressionAttributeValues as { ':gsi3pk': string };
+        if (gsi3pk[':gsi3pk'].includes('DIGEST_PENDING')) {
+          return Promise.resolve({
+            Items: [
+              pendingItem('ROLE', 'TRAINING', 'CERT-1'),
+              pendingItem('MEMBER', 'MBR-1', 'CERT-2'),
+            ],
+          });
+        }
+        if (gsi3pk[':gsi3pk'].includes('MEMBER')) {
+          return Promise.reject(new Error('roster query unavailable'));
+        }
+        return Promise.resolve({ Items: [] });
+      }
+      if (command.constructor.name === 'GetCommand') {
+        const sk = keySk(command);
+        if (sk === 'METADATA') {
+          return Promise.resolve({ Item: { email: 'mbr1@example.com' } });
+        }
+        return Promise.resolve({ Item: undefined });
+      }
+      return Promise.resolve({});
+    });
+    mockDdb(send);
+    const sendPushDigest = vi.fn().mockResolvedValue(undefined);
+    const sendEmailDigest = vi.fn().mockResolvedValue(undefined);
+    mockChannelSender(sendPushDigest, sendEmailDigest);
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const { handler } = await import('./digestJob.js');
+
+    const result = await handler({ deptId: 'NICHOLS' });
+
+    expect(result).toEqual({ processed: 1 });
+    expect(sendPushDigest).toHaveBeenCalledTimes(1);
+    expect(
+      errorSpy.mock.calls.some((call) =>
+        (call[0] as string).includes('notification.digest.recipient_failed'),
+      ),
+    ).toBe(true);
+    errorSpy.mockRestore();
+  });
+
   it('isolates a recipient whose channel send fails, logs it, and still processes the next recipient (P5/P6/P12)', async () => {
     const send = vi.fn().mockImplementation((command: CommandLike) => {
       if (command.constructor.name === 'QueryCommand') {
@@ -404,12 +449,17 @@ describe('digestJob handler (entrypoint-test obligation)', () => {
 
     const result = await handler({ deptId: 'NICHOLS' });
 
-    expect(result).toEqual({ processed: 2 });
+    expect(result).toEqual({ processed: 1 });
     expect(sendPushDigest).toHaveBeenCalledTimes(2);
     expect(sendEmailDigest).toHaveBeenCalledTimes(1);
     expect(
       errorSpy.mock.calls.some((call) =>
         (call[0] as string).includes('notification.digest.send_failed'),
+      ),
+    ).toBe(true);
+    expect(
+      errorSpy.mock.calls.some((call) =>
+        (call[0] as string).includes('notification.digest.recipient_failed'),
       ),
     ).toBe(true);
     errorSpy.mockRestore();

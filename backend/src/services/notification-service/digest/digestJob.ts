@@ -305,7 +305,7 @@ async function sendDigestToMember(
     });
     emitOutcomeMetric(METRIC_NAMESPACE, 'DigestSendFailed');
     await releaseDigestSlot(ddb, tableName, deptId, memberId, CERT_EXPIRY_CATEGORY, today, correlationId);
-    return;
+    throw error;
   }
 
   try {
@@ -363,7 +363,7 @@ async function sendDigestToTrainingOfficer(
       today,
       correlationId,
     );
-    return;
+    throw error;
   }
 
   try {
@@ -447,7 +447,16 @@ export const handler = async (payload: unknown): Promise<{ processed: number }> 
       continue;
     }
 
-    const officers = await resolveTrainingOfficers(ddb, tableName, deptId, correlationId);
+    let officers: RosterOfficer[];
+    try {
+      officers = await resolveTrainingOfficers(ddb, tableName, deptId, correlationId);
+    } catch (error) {
+      logError('notification.digest.recipient_failed', error, correlationId, {
+        recipientType: 'ROLE',
+      });
+      emitOutcomeMetric(METRIC_NAMESPACE, 'DigestRecipientFailed');
+      continue;
+    }
     for (const officer of officers) {
       try {
         await sendDigestToTrainingOfficer(
