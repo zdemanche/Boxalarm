@@ -9,7 +9,7 @@ Pulumi (TypeScript), deployed via GitHub OIDC → central org role. Architecture
 
 **Nothing is scaffolded yet.** The repo holds a README and bootstrap issue [#1](https://github.com/zdemanche/boxalarm-infrastructure/issues/1). Architecture v1.0 and a 90-story backlog are done in `boxalarm-docs`; the user has asked for a **decision gate before the build phase begins**, so do not start provisioning until they say go.
 
-Work is tracked as issues in `boxalarm-docs`, not here.
+Work is tracked as `<KEY>-INFRA` issues here, each a sub-issue of its story in `boxalarm-backend`. Shared resources (HTTP API, tables, bus, outbox publisher, policy store) have one owner issue each — see the ownership map commented on #6. Epics and open questions stay in `boxalarm-docs`.
 
 ## Hard constraints
 
