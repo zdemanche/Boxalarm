@@ -127,6 +127,49 @@ describe('eligibility consumer (entrypoint-test obligation)', () => {
     errorSpy.mockRestore();
   });
 
+  it('emits SnapshotPropagationLatencyMs with the elapsed ms from eventTime to now (AC5)', async () => {
+    vi.setSystemTime(new Date('2026-09-06T00:00:05.000Z'));
+    const send = vi.fn().mockResolvedValue({});
+    mockDdb(send);
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    const { handler } = await import('./consumer.js');
+
+    await handler(
+      sqsEvent({ deptId: 'NICHOLS', memberId: 'mbr-1', availabilityState: 'MARKED_OFF' }),
+    );
+
+    const emitted = logSpy.mock.calls
+      .map((call) => JSON.parse(call[0] as string) as Record<string, unknown>)
+      .find((entry) => entry.SnapshotPropagationLatencyMs !== undefined);
+    expect(emitted?.SnapshotPropagationLatencyMs).toBe(5000);
+    logSpy.mockRestore();
+    vi.useRealTimers();
+  });
+
+  it('clamps a future eventTime (clock skew) to 0 and logs a warning instead of throwing', async () => {
+    vi.setSystemTime(new Date('2026-09-05T23:59:00.000Z'));
+    const send = vi.fn().mockResolvedValue({});
+    mockDdb(send);
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const { handler } = await import('./consumer.js');
+
+    await handler(
+      sqsEvent({ deptId: 'NICHOLS', memberId: 'mbr-1', availabilityState: 'MARKED_OFF' }),
+    );
+
+    const emitted = logSpy.mock.calls
+      .map((call) => JSON.parse(call[0] as string) as Record<string, unknown>)
+      .find((entry) => entry.SnapshotPropagationLatencyMs !== undefined);
+    expect(emitted?.SnapshotPropagationLatencyMs).toBe(0);
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.stringContaining('eligibility.snapshot_propagation_future_event_time'),
+    );
+    logSpy.mockRestore();
+    errorSpy.mockRestore();
+    vi.useRealTimers();
+  });
+
   it('never reads from or calls personnel-service — writes only to this dept eligibility snapshot key (C-2 isolation)', async () => {
     const send = vi.fn().mockResolvedValue({});
     mockDdb(send);

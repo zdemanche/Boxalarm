@@ -1,6 +1,6 @@
 import { TransactWriteCommand } from '@aws-sdk/lib-dynamodb';
 import { buildDeptScopedPk, toVerifiedDeptId } from '@boxalarm/dept-scope';
-import { emitOutcomeMetric } from '@boxalarm/metrics';
+import { emitEmf, emitOutcomeMetric } from '@boxalarm/metrics';
 import type { SQSEvent } from 'aws-lambda';
 import { createDynamoClient, readAlertingConfig } from './dynamoClient.js';
 import type { AvailabilityState } from './selector.js';
@@ -141,5 +141,18 @@ export const handler = async (event: SQSEvent): Promise<void> => {
     }
 
     emitOutcomeMetric(METRIC_NAMESPACE, 'SnapshotUpdated');
+
+    const latencyMs = Date.now() - eventTime;
+    if (latencyMs < 0) {
+      logError(
+        'eligibility.snapshot_propagation_future_event_time',
+        new Error('clock skew'),
+        eventId,
+        {
+          latencyMs,
+        },
+      );
+    }
+    emitEmf(METRIC_NAMESPACE, 'SnapshotPropagationLatencyMs', Math.max(latencyMs, 0), [[]]);
   }
 };

@@ -158,6 +158,50 @@ describe('memberUpdatedHandler', () => {
     expect(result).toEqual({ batchItemFailures: [] });
   });
 
+  it('emits SnapshotPropagationLatencyMs with the elapsed ms from eventTime to now (AC5)', async () => {
+    vi.setSystemTime(new Date('2026-09-14T00:00:07.000Z'));
+    const send = vi.fn().mockResolvedValue({});
+    vi.doMock('./dynamoClient.js', () => ({
+      createDynamoClient: () => ({ send }),
+      readAlertingConfig: () => ({ tableName: 'alerting-table' }),
+    }));
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    const { handler } = await import('./memberUpdatedHandler.js');
+
+    await handler(buildSqsEvent(VALID_ENVELOPE));
+
+    const emitted = logSpy.mock.calls
+      .map((call) => JSON.parse(call[0] as string) as Record<string, unknown>)
+      .find((entry) => entry.SnapshotPropagationLatencyMs !== undefined);
+    expect(emitted?.SnapshotPropagationLatencyMs).toBe(7000);
+    logSpy.mockRestore();
+    vi.useRealTimers();
+  });
+
+  it('clamps a future eventTime (clock skew) to 0 and logs a warning instead of throwing', async () => {
+    vi.setSystemTime(new Date('2026-09-13T23:59:00.000Z'));
+    const send = vi.fn().mockResolvedValue({});
+    vi.doMock('./dynamoClient.js', () => ({
+      createDynamoClient: () => ({ send }),
+      readAlertingConfig: () => ({ tableName: 'alerting-table' }),
+    }));
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const { handler } = await import('./memberUpdatedHandler.js');
+
+    const result = await handler(buildSqsEvent(VALID_ENVELOPE));
+
+    expect(result).toEqual({ batchItemFailures: [] });
+    const emitted = logSpy.mock.calls
+      .map((call) => JSON.parse(call[0] as string) as Record<string, unknown>)
+      .find((entry) => entry.SnapshotPropagationLatencyMs !== undefined);
+    expect(emitted?.SnapshotPropagationLatencyMs).toBe(0);
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('future_event_time'));
+    logSpy.mockRestore();
+    warnSpy.mockRestore();
+    vi.useRealTimers();
+  });
+
   it('rethrows a non-conditional DynamoDB failure (never swallows) so SQS retries/DLQs', async () => {
     const send = vi.fn().mockRejectedValue(new Error('ProvisionedThroughputExceededException'));
     vi.doMock('./dynamoClient.js', () => ({

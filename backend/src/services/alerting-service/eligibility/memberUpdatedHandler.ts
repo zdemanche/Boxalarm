@@ -1,8 +1,11 @@
 import { ConditionalCheckFailedException } from '@aws-sdk/client-dynamodb';
 import { UpdateCommand } from '@aws-sdk/lib-dynamodb';
 import { buildDeptScopedPk, toVerifiedDeptId } from '@boxalarm/dept-scope';
+import { emitEmf } from '@boxalarm/metrics';
 import type { SQSBatchResponse, SQSEvent } from 'aws-lambda';
 import { createDynamoClient, readAlertingConfig } from './dynamoClient.js';
+
+const LATENCY_METRIC_NAMESPACE = 'Boxalarm/AlertingEligibility';
 
 interface MemberUpdatedPayload {
   readonly deptId: string;
@@ -116,6 +119,22 @@ export const handler = async (event: SQSEvent): Promise<SQSBatchResponse> => {
         }),
       );
       emitSnapshotMetric('Updated');
+
+      const latencyMs = Date.now() - snapshotUpdatedAt;
+      if (latencyMs < 0) {
+        console.warn(
+          JSON.stringify({
+            event: 'alerting.eligibility.snapshot_propagation.future_event_time',
+            service: 'alerting-service',
+            correlationId: payload.memberId,
+            memberId: payload.memberId,
+            latencyMs,
+          }),
+        );
+      }
+      emitEmf(LATENCY_METRIC_NAMESPACE, 'SnapshotPropagationLatencyMs', Math.max(latencyMs, 0), [
+        [],
+      ]);
     } catch (error) {
       if (error instanceof ConditionalCheckFailedException) {
         console.log(
