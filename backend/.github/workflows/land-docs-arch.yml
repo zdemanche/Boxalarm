@@ -1,0 +1,66 @@
+name: Land architecture.md onto boxalarm-docs
+on:
+  workflow_dispatch:
+    inputs:
+      docs_token:
+        description: "PAT with Contents:write on zdemanche/boxalarm-docs"
+        required: true
+        type: string
+      docs_branch:
+        description: "Target branch on boxalarm-docs"
+        required: true
+        default: cursor/arch-n3-n5-n9-land-56a7
+        type: string
+jobs:
+  land:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: PUT docs/architecture.md
+        env:
+          DOCS_TOKEN: ${{ inputs.docs_token }}
+          DOCS_BRANCH: ${{ inputs.docs_branch }}
+        run: |
+          set -euo pipefail
+          SRC=tmp-host/architecture-merged.md
+          test -f "$SRC"
+          test "$(wc -c < "$SRC")" -eq 310943
+          echo "bf82b5634184aa43b430eb5b6923c87e7d667147875eaf51836b734b56e964fa  $SRC" | sha256sum -c
+          ! grep -q 'FanOut --> VoiceQ' "$SRC"
+          grep -q 'Endpoint count: 83' "$SRC"
+          CODE=$(curl -sS -o /tmp/meta.json -w '%{http_code}' \
+            -H "Authorization: Bearer ${DOCS_TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            -H "User-Agent: boxalarm-land-architecture" \
+            "https://api.github.com/repos/zdemanche/boxalarm-docs/contents/docs/architecture.md?ref=${DOCS_BRANCH}")
+          python3 <<'PY'
+          import json, os, base64, pathlib, urllib.request
+          content = pathlib.Path("tmp-host/architecture-merged.md").read_bytes()
+          body = {
+              "message": "docs: land N-3/N-5/N-9 + #119 FanOut→VoiceQ fix on architecture.md",
+              "content": base64.b64encode(content).decode(),
+              "branch": os.environ["DOCS_BRANCH"],
+          }
+          try:
+              meta = json.load(open("/tmp/meta.json"))
+              if isinstance(meta, dict) and meta.get("sha"):
+                  body["sha"] = meta["sha"]
+          except Exception:
+              pass
+          req = urllib.request.Request(
+              "https://api.github.com/repos/zdemanche/boxalarm-docs/contents/docs/architecture.md",
+              data=json.dumps(body).encode(),
+              headers={
+                  "Authorization": f"Bearer {os.environ['DOCS_TOKEN']}",
+                  "Accept": "application/vnd.github+json",
+                  "Content-Type": "application/json",
+                  "User-Agent": "boxalarm-land-architecture",
+              },
+              method="PUT",
+          )
+          with urllib.request.urlopen(req) as r:
+              out = json.load(r)
+          print("commit", out["commit"]["sha"])
+          print("size", out["content"]["size"])
+          print("content_sha", out["content"]["sha"])
+          PY
