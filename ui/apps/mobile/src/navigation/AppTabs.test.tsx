@@ -26,14 +26,16 @@ test('renders all four tabs from architecture.md §7.2: Alerts, Checks, Schedule
   expect(await findByText('Me')).toBeTruthy();
 });
 
-test('opens on the Alerts tab by default', async () => {
-  const { findByText } = await renderTabs();
+test('opens on the Alerts tab by default, showing its real content', async () => {
+  const { findByRole } = await renderTabs();
 
-  expect(await findByText('Alerts stack coming in phase 7')).toBeTruthy();
+  expect(await findByRole('button', { name: 'Send test alert' })).toBeTruthy();
 });
 
-test("switching tabs shows that tab's real content — Checks (phase 5) and Schedule (phase 6)", async () => {
-  const { findByText, findAllByText } = await renderTabs();
+test("switching tabs shows that tab's real content - Checks (5), Schedule (6), Alerts (7)", async () => {
+  const { findByText, findAllByText, findByRole } = await renderTabs();
+
+  expect(await findByRole('button', { name: 'Send test alert' })).toBeTruthy();
 
   await act(async () => {
     fireEvent.press(await findByText('Checks'));

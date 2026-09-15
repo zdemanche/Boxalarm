@@ -3,9 +3,9 @@ import { useState } from 'react';
 import { Text, TouchableOpacity, useColorScheme, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-// F1.10: triggers a synthetic test dispatch through the same fan-out path as a real alert and
-// surfaces a per-channel result. That path lives in alerting-service (boxalarm-backend), which
-// this session has no access to yet - so the entry point is real, the round trip isn't.
+// F1.10: the real self-test round trip (Phase 7) lives in the Alerts tab, wired against a mock
+// alerting-service repository until real backend access lands. This screen stays as a shortcut
+// pointing there rather than duplicating the flow in two places.
 export function SelfTestScreen() {
   const scheme = useColorScheme();
   const tokens = scheme === 'dark' ? palette.cab : palette.day;
@@ -35,9 +35,7 @@ export function SelfTestScreen() {
         accessibilityRole="button"
         accessibilityLabel="Run self-test"
         onPress={() =>
-          setMessage(
-            'Self-test is not yet connected — this needs alerting-service to be reachable.',
-          )
+          setMessage('Open the Alerts tab and tap "Send test alert" to run the real self-test.')
         }
         style={{
           minHeight: touchTarget.baseline.ios,
