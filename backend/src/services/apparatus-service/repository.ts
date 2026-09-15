@@ -27,6 +27,7 @@ export interface OutOfServiceSummary {
 }
 
 export interface ApparatusListItem extends ApparatusRecord {
+  readonly apparatusId: string;
   readonly outOfService?: OutOfServiceSummary;
 }
 
@@ -347,14 +348,16 @@ export async function listApparatus(
     const items = output.Items ?? [];
     const filtered = statusFilter ? items.filter((item) => item.status === statusFilter) : items;
     return filtered.map((item): ApparatusListItem => {
+      const apparatusId = apparatusIdFromRegistryKey(item.pk as string);
       const unitId = item.unitId as string;
       const type = item.type as string;
       const status = item.status as ApparatusStatus;
       const startAt = item.outOfServiceStartAt as number | undefined;
       if (status !== 'OUT_OF_SERVICE' || startAt === undefined) {
-        return { unitId, type, status };
+        return { apparatusId, unitId, type, status };
       }
       return {
+        apparatusId,
         unitId,
         type,
         status,

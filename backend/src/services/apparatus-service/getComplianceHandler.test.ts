@@ -146,12 +146,27 @@ describe('getComplianceHandler (entrypoint)', () => {
         Promise.resolve(
           command.input.KeyConditionExpression?.includes('BETWEEN')
             ? {
-                Items: [{ pk: 'DEPT#dept-001#APPARATUS#ENGINE-1', gsi3sk: 1798000000 }],
+                Items: [
+                  {
+                    pk: 'DEPT#dept-001#APPARATUS#APP-ENGINE-1',
+                    completedAt: 1798000000,
+                  },
+                ],
               }
             : {
                 Items: [
-                  { unitId: 'ENGINE-1', type: 'ENGINE', status: 'IN_SERVICE' },
-                  { unitId: 'LADDER-1', type: 'LADDER', status: 'IN_SERVICE' },
+                  {
+                    pk: 'DEPT#dept-001#APPARATUS#APP-ENGINE-1',
+                    unitId: 'ENGINE-1',
+                    type: 'ENGINE',
+                    status: 'IN_SERVICE',
+                  },
+                  {
+                    pk: 'DEPT#dept-001#APPARATUS#APP-LADDER-1',
+                    unitId: 'LADDER-1',
+                    type: 'LADDER',
+                    status: 'IN_SERVICE',
+                  },
                 ],
               },
         ),
@@ -172,6 +187,20 @@ describe('getComplianceHandler (entrypoint)', () => {
     expect(body.report).toContainEqual(
       expect.objectContaining({ unitId: 'ENGINE-1', actualChecks: 1, compliant: true }),
     );
+  });
+
+  it('returns 400 when the requested range exceeds the maximum window', async () => {
+    const createGetComplianceHandler = await importHandler();
+    const handler = createGetComplianceHandler({
+      client: fakeDynamoClient(() => Promise.resolve({ Items: [] })),
+      authzClient: fakeAuthzClient('ALLOW'),
+    });
+
+    const result = await handler(
+      buildEvent({ from: '1798000000', to: String(1798000000 + 401 * 86400) }),
+    );
+
+    expect(result).toMatchObject({ statusCode: 400 });
   });
 
   it('returns 200 with an empty report when the department has no apparatus', async () => {
@@ -201,5 +230,43 @@ describe('getComplianceHandler (entrypoint)', () => {
     expect(result).toMatchObject({ statusCode: 503 });
     expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('apparatus.compliance.error'));
     errorSpy.mockRestore();
+  });
+
+  it('engages the default (production) dependency wiring when no overrides are supplied', async () => {
+    vi.doMock('./dynamoClient.js', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('./dynamoClient.js')>();
+      return {
+        ...actual,
+        createDynamoClient: () =>
+          fakeDynamoClient((command) =>
+            Promise.resolve(
+              command.input.KeyConditionExpression?.includes('BETWEEN')
+                ? { Items: [] }
+                : { Items: [] },
+            ),
+          ),
+      };
+    });
+    vi.doMock('@boxalarm/authz', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('@boxalarm/authz')>();
+      return {
+        ...actual,
+        withAuthorization: (
+          inner: (event: GuardEvent, principal: CedarPrincipalContext) => unknown,
+          options: unknown,
+        ) =>
+          actual.withAuthorization(
+            inner as never,
+            { ...(options as object), client: fakeAuthzClient('ALLOW') } as never,
+          ),
+      };
+    });
+
+    const { handler } = await import('./getComplianceHandler.js');
+    const result = await handler(buildEvent({ from: '1798000000', to: '1798000000' }));
+
+    expect(result).toMatchObject({ statusCode: 200 });
+    vi.doUnmock('./dynamoClient.js');
+    vi.doUnmock('@boxalarm/authz');
   });
 });

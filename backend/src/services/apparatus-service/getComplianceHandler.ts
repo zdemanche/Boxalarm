@@ -11,7 +11,11 @@ import {
 } from '@boxalarm/authz';
 import { toVerifiedDeptId } from '@boxalarm/dept-scope';
 import { createDynamoClient, readApparatusServiceConfig } from './dynamoClient.js';
-import { computeComplianceReport, queryChecklistRunsInRange } from './complianceReport.js';
+import {
+  computeComplianceReport,
+  queryChecklistRunsInRange,
+  MAX_RANGE_SECONDS,
+} from './complianceReport.js';
 import { ApparatusRepositoryUnavailableError, listApparatus } from './repository.js';
 
 function emitComplianceMetric(outcome: 'Success' | 'Unavailable' | 'Error'): void {
@@ -71,6 +75,12 @@ async function getCompliance(
     return badRequestProblem(
       traceId,
       'from and to query parameters are required, must be numeric epoch seconds, and to must be >= from.',
+    );
+  }
+  if (to - from > MAX_RANGE_SECONDS) {
+    return badRequestProblem(
+      traceId,
+      `from/to range must not exceed ${MAX_RANGE_SECONDS / 86400} days.`,
     );
   }
 

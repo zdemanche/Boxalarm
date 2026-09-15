@@ -313,8 +313,9 @@ describe('listApparatus', () => {
       if (command instanceof QueryCommand && command.input.IndexName === 'GSI3') {
         return {
           Items: [
-            { unitId: 'E1', type: 'ENGINE', status: 'IN_SERVICE' },
+            { pk: `DEPT#${DEPT_ID}#APPARATUS#APP-E1`, unitId: 'E1', type: 'ENGINE', status: 'IN_SERVICE' },
             {
+              pk: `DEPT#${DEPT_ID}#APPARATUS#APP-L1`,
               unitId: 'L1',
               type: 'LADDER',
               status: 'OUT_OF_SERVICE',
@@ -333,7 +334,9 @@ describe('listApparatus', () => {
     expect(result).toHaveLength(2);
     const engine = result.find((item) => item.unitId === 'E1');
     const ladder = result.find((item) => item.unitId === 'L1');
+    expect(engine?.apparatusId).toBe('APP-E1');
     expect(engine?.outOfService).toBeUndefined();
+    expect(ladder?.apparatusId).toBe('APP-L1');
     expect(ladder?.outOfService?.reason).toBe('Pump failure');
     expect(ladder?.outOfService?.elapsedSeconds).toBeGreaterThanOrEqual(5);
   });
@@ -344,8 +347,8 @@ describe('listApparatus', () => {
       if (command instanceof QueryCommand) {
         return {
           Items: [
-            { unitId: 'E1', type: 'ENGINE', status: 'IN_SERVICE' },
-            { unitId: 'L1', type: 'LADDER', status: 'OUT_OF_SERVICE' },
+            { pk: `DEPT#${DEPT_ID}#APPARATUS#APP-E1`, unitId: 'E1', type: 'ENGINE', status: 'IN_SERVICE' },
+            { pk: `DEPT#${DEPT_ID}#APPARATUS#APP-L1`, unitId: 'L1', type: 'LADDER', status: 'OUT_OF_SERVICE' },
           ],
         };
       }
@@ -353,7 +356,9 @@ describe('listApparatus', () => {
     });
 
     const result = await listApparatus(client, TABLE, DEPT_ID, 'IN_SERVICE');
-    expect(result).toEqual([{ unitId: 'E1', type: 'ENGINE', status: 'IN_SERVICE' }]);
+    expect(result).toEqual([
+      { apparatusId: 'APP-E1', unitId: 'E1', type: 'ENGINE', status: 'IN_SERVICE' },
+    ]);
   });
 
   it('logs the original error (including error.message) and wraps a registry query failure as ApparatusRepositoryUnavailableError', async () => {

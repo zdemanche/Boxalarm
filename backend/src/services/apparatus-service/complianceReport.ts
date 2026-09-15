@@ -8,6 +8,8 @@ import {
 } from './repository.js';
 
 const SECONDS_PER_DAY = 86400;
+const EPOCH_SORT_KEY_WIDTH = 10;
+export const MAX_RANGE_SECONDS = 400 * SECONDS_PER_DAY;
 
 export interface ChecklistRunSummary {
   readonly apparatusId: string;
@@ -27,9 +29,13 @@ function apparatusIdFromPartitionKey(partitionKey: string): string | undefined {
   return index === -1 ? undefined : partitionKey.slice(index + marker.length);
 }
 
+function buildEpochSortKey(epochSeconds: number): string {
+  return String(Math.trunc(epochSeconds)).padStart(EPOCH_SORT_KEY_WIDTH, '0');
+}
+
 function toChecklistRunSummary(item: Record<string, unknown>): ChecklistRunSummary | undefined {
   const partitionKey = item.pk;
-  const completedAt = item.gsi3sk;
+  const completedAt = item.completedAt;
   if (typeof partitionKey !== 'string' || typeof completedAt !== 'number') {
     return undefined;
   }
@@ -53,10 +59,11 @@ export async function queryChecklistRunsInRange(
           TableName: tableName,
           IndexName: GSI3_INDEX_NAME,
           KeyConditionExpression: 'gsi3pk = :gsi3pk AND gsi3sk BETWEEN :from AND :to',
+          ProjectionExpression: 'pk, completedAt',
           ExpressionAttributeValues: {
             ':gsi3pk': buildDeptScopedPk(deptId, 'CHECKLIST_RUN'),
-            ':from': fromEpoch,
-            ':to': toEpoch,
+            ':from': buildEpochSortKey(fromEpoch),
+            ':to': buildEpochSortKey(toEpoch),
           },
           ExclusiveStartKey: exclusiveStartKey,
         }),
@@ -76,8 +83,12 @@ export async function queryChecklistRunsInRange(
   }
 }
 
+function dayIndexUtc(epochSeconds: number): number {
+  return Math.floor(epochSeconds / SECONDS_PER_DAY);
+}
+
 function expectedChecksForRange(fromEpoch: number, toEpoch: number): number {
-  return Math.floor((toEpoch - fromEpoch) / SECONDS_PER_DAY) + 1;
+  return dayIndexUtc(toEpoch) - dayIndexUtc(fromEpoch) + 1;
 }
 
 export function computeComplianceReport(
@@ -87,12 +98,14 @@ export function computeComplianceReport(
   toEpoch: number,
 ): readonly ApparatusComplianceEntry[] {
   const expectedChecks = expectedChecksForRange(fromEpoch, toEpoch);
-  const actualByUnitId = new Map<string, number>();
+  const checkedDaysByApparatusId = new Map<string, Set<number>>();
   for (const run of runs) {
-    actualByUnitId.set(run.apparatusId, (actualByUnitId.get(run.apparatusId) ?? 0) + 1);
+    const checkedDays = checkedDaysByApparatusId.get(run.apparatusId) ?? new Set<number>();
+    checkedDays.add(dayIndexUtc(run.completedAt));
+    checkedDaysByApparatusId.set(run.apparatusId, checkedDays);
   }
   return roster.map((apparatus) => {
-    const actualChecks = actualByUnitId.get(apparatus.unitId) ?? 0;
+    const actualChecks = checkedDaysByApparatusId.get(apparatus.apparatusId)?.size ?? 0;
     return {
       unitId: apparatus.unitId,
       expectedChecks,
