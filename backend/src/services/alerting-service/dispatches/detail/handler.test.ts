@@ -76,11 +76,9 @@ describe('alert-detail handler', () => {
   it('passes eligibleMemberCount/fanOutStartedAt through when E1-S2 has populated them, without blocking on their absence otherwise', async () => {
     const { createHandler } = await import('./handler.js');
     const docClient = {
-      send: vi
-        .fn()
-        .mockResolvedValue({
-          Item: { ...DISPATCH_ITEM, eligibleMemberCount: 34, fanOutStartedAt: 1798000002 },
-        }),
+      send: vi.fn().mockResolvedValue({
+        Item: { ...DISPATCH_ITEM, eligibleMemberCount: 34, fanOutStartedAt: 1798000002 },
+      }),
     } as unknown as DynamoDBDocumentClient;
     const handler = createHandler({ authzClient: fakeAuthzClient('ALLOW'), docClient });
 
@@ -177,9 +175,7 @@ describe('alert-detail handler', () => {
     const result = await handler(buildEvent('NICHOLS-4471-1798000000'));
 
     const body = JSON.parse((result as { body: string }).body) as Record<string, unknown>;
-    expect(body.mapLink).toBe(
-      'https://www.google.com/maps/search/?api=1&query=41.2429%2C-73.2007',
-    );
+    expect(body.mapLink).toBe('https://www.google.com/maps/search/?api=1&query=41.2429%2C-73.2007');
   });
 
   it('returns 404 when no DISPATCH_ALERT item exists for the given dispatchId', async () => {

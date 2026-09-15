@@ -15,9 +15,9 @@ describe('buildMapLink', () => {
   });
 
   it('prefers latitude/longitude over the address when both coordinates are present', () => {
-    expect(
-      buildMapLink({ address: '123 Main St', latitude: 41.2429, longitude: -73.2007 }),
-    ).toBe('https://www.google.com/maps/search/?api=1&query=41.2429%2C-73.2007');
+    expect(buildMapLink({ address: '123 Main St', latitude: 41.2429, longitude: -73.2007 })).toBe(
+      'https://www.google.com/maps/search/?api=1&query=41.2429%2C-73.2007',
+    );
   });
 
   it('falls back to the address when only one coordinate is present', () => {
