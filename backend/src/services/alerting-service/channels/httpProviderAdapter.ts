@@ -32,6 +32,38 @@ export function readChannelProviderConfig(
   return { endpointUrl, secretId };
 }
 
+const SECRET_CACHE_TTL_MS = 15 * 60 * 1000;
+const PROVIDER_REQUEST_TIMEOUT_MS = 4_000;
+
+interface CachedSecret {
+  readonly apiKey: string;
+  readonly expiresAt: number;
+}
+
+const secretCache = new Map<string, CachedSecret>();
+
+export function resetChannelSecretsCache(): void {
+  secretCache.clear();
+}
+
+async function resolveApiKey(
+  channel: ChannelName,
+  secretId: string,
+  secretsClient: SecretsManagerClient,
+): Promise<string> {
+  const cached = secretCache.get(channel);
+  if (cached && cached.expiresAt > Date.now()) {
+    return cached.apiKey;
+  }
+  const secretOutput = await secretsClient.send(new GetSecretValueCommand({ SecretId: secretId }));
+  const apiKey = secretOutput.SecretString;
+  if (!apiKey) {
+    throw new Error(`Secret ${secretId} has no SecretString value`);
+  }
+  secretCache.set(channel, { apiKey, expiresAt: Date.now() + SECRET_CACHE_TTL_MS });
+  return apiKey;
+}
+
 export async function sendViaHttpProvider(
   channel: ChannelName,
   target: string,
@@ -41,15 +73,12 @@ export async function sendViaHttpProvider(
 ): Promise<void> {
   const config = readChannelProviderConfig(channel, env);
   const client = createChannelSecretsClient(secretsClient);
-  const secretOutput = await client.send(new GetSecretValueCommand({ SecretId: config.secretId }));
-  const apiKey = secretOutput.SecretString;
-  if (!apiKey) {
-    throw new Error(`Secret ${config.secretId} has no SecretString value`);
-  }
+  const apiKey = await resolveApiKey(channel, config.secretId, client);
   const response = await fetch(config.endpointUrl, {
     method: 'POST',
     headers: { 'content-type': 'application/json', authorization: `Bearer ${apiKey}` },
     body: JSON.stringify({ target, message }),
+    signal: AbortSignal.timeout(PROVIDER_REQUEST_TIMEOUT_MS),
   });
   if (!response.ok) {
     throw new Error(`${channel} provider responded ${response.status}`);

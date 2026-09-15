@@ -1,3 +1,5 @@
+import { assertNoDelimiter } from '@boxalarm/dept-scope';
+
 export type ChannelName = 'push' | 'sms' | 'voice';
 
 export interface ChannelEnvelopePayload {
@@ -40,6 +42,8 @@ export function parseChannelEnvelope(
       `channel envelope routed to the ${expectedChannel} worker carries channel=${channel}`,
     );
   }
+  assertNoDelimiter(dispatchId, 'dispatchId');
+  assertNoDelimiter(memberId, 'memberId');
   return { deptId, dispatchId, memberId, channel, toneSequence, incidentType, address };
 }
 

@@ -98,4 +98,29 @@ describe('push channel worker (entrypoint-test obligation)', () => {
       process.env,
     );
   });
+
+  it('logs a structured entry with correlationId/memberId/channel and rethrows when the eligibility read fails', async () => {
+    const sendViaHttpProvider = vi.fn();
+    const send = vi.fn().mockImplementation((command: { constructor: { name: string } }) => {
+      if (command.constructor.name === 'GetCommand') {
+        return Promise.reject(new Error('DynamoDB throttled'));
+      }
+      return Promise.resolve({});
+    });
+    mockDeps(sendViaHttpProvider, send);
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const { handler } = await import('./worker.js');
+
+    await expect(handler(sqsEvent('push'))).rejects.toThrow('DynamoDB throttled');
+
+    expect(sendViaHttpProvider).not.toHaveBeenCalled();
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.stringContaining('alerting.channel.eligibility_read_failed'),
+    );
+    const logged = JSON.parse(errorSpy.mock.calls[0]?.[0] as string) as Record<string, unknown>;
+    expect(logged.correlationId).toBe('dispatch-1');
+    expect(logged.memberId).toBe('mbr-1');
+    expect(logged.channel).toBe('push');
+    errorSpy.mockRestore();
+  });
 });

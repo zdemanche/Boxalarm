@@ -65,6 +65,28 @@ describe('sendViaHttpProvider', () => {
     expect((init as RequestInit).body).toBe(
       JSON.stringify({ target: 'push-token-1', message: 'structure-fire — 12 Main St' }),
     );
+    expect((init as RequestInit).signal).toBeInstanceOf(AbortSignal);
+  });
+
+  it('rejects when the provider connection accepts but never responds (bounded by the abort signal)', async () => {
+    const { client } = fakeSecretsClient('api-key-1');
+    const fetchMock = vi.fn<typeof fetch>().mockImplementation(
+      (_url, init) =>
+        new Promise((_resolve, reject) => {
+          (init as RequestInit).signal?.addEventListener('abort', () =>
+            reject(new Error('TimeoutError')),
+          );
+        }),
+    );
+    globalThis.fetch = fetchMock;
+    const { sendViaHttpProvider } = await import('./httpProviderAdapter.js');
+
+    const pending = sendViaHttpProvider('push', 'push-token-1', 'msg', process.env, client);
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalled());
+    const signal = fetchMock.mock.calls[0]?.[1]?.signal as AbortSignal | undefined;
+    signal?.dispatchEvent(new Event('abort'));
+
+    await expect(pending).rejects.toThrow('TimeoutError');
   });
 
   it('throws when the provider responds with a non-ok status', async () => {
@@ -86,5 +108,16 @@ describe('sendViaHttpProvider', () => {
     await expect(
       sendViaHttpProvider('push', 'push-token-1', 'msg', process.env, client),
     ).rejects.toThrow('has no SecretString value');
+  });
+
+  it('caches the resolved secret across sends on the hot delivery path (one GetSecretValueCommand for two sends)', async () => {
+    const { client, send } = fakeSecretsClient('api-key-1');
+    globalThis.fetch = vi.fn<typeof fetch>().mockResolvedValue({ ok: true, status: 200 } as Response);
+    const { sendViaHttpProvider } = await import('./httpProviderAdapter.js');
+
+    await sendViaHttpProvider('push', 'push-token-1', 'msg', process.env, client);
+    await sendViaHttpProvider('push', 'push-token-2', 'msg', process.env, client);
+
+    expect(send).toHaveBeenCalledTimes(1);
   });
 });

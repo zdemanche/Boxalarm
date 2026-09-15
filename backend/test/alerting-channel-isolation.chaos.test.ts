@@ -52,7 +52,16 @@ const CONTACT_CHANNELS = [
   { channel: 'VOICE', phoneNumber: '+12035550100', valid: true },
 ];
 
-function mockDeps(sendFor: Record<string, () => Promise<void>>): void {
+function mockDeps(sendFor: Record<string, () => Promise<void>>): {
+  sendMock: ReturnType<typeof vi.fn>;
+  ddbSendMock: ReturnType<typeof vi.fn>;
+} {
+  const ddbSendMock = vi.fn().mockImplementation((command: { constructor: { name: string } }) => {
+    if (command.constructor.name === 'GetCommand') {
+      return Promise.resolve({ Item: { contactChannels: CONTACT_CHANNELS } });
+    }
+    return Promise.resolve({});
+  });
   vi.doMock(
     '../src/services/alerting-service/eligibility/dynamoClient.js',
     async (importOriginal) => {
@@ -60,30 +69,30 @@ function mockDeps(sendFor: Record<string, () => Promise<void>>): void {
         await importOriginal<
           typeof import('../src/services/alerting-service/eligibility/dynamoClient.js')
         >();
-      return {
-        ...actual,
-        createDynamoClient: () => ({
-          send: vi.fn().mockImplementation((command: { constructor: { name: string } }) => {
-            if (command.constructor.name === 'GetCommand') {
-              return Promise.resolve({ Item: { contactChannels: CONTACT_CHANNELS } });
-            }
-            return Promise.resolve({});
-          }),
-        }),
-      };
+      return { ...actual, createDynamoClient: () => ({ send: ddbSendMock }) };
     },
   );
+  const sendMock = vi.fn().mockImplementation((channel: string) => {
+    const impl = sendFor[channel];
+    return impl ? impl() : Promise.resolve(undefined);
+  });
   vi.doMock('../src/services/alerting-service/channels/httpProviderAdapter.js', () => ({
-    sendViaHttpProvider: vi.fn().mockImplementation((channel: string) => {
-      const impl = sendFor[channel];
-      return impl ? impl() : Promise.resolve(undefined);
-    }),
+    sendViaHttpProvider: sendMock,
   }));
+  return { sendMock, ddbSendMock };
+}
+
+function putCallsFor(ddbSendMock: ReturnType<typeof vi.fn>): number {
+  return ddbSendMock.mock.calls.filter(
+    (call) => (call[0] as { constructor: { name: string } }).constructor.name === 'PutCommand',
+  ).length;
 }
 
 describe('channel failure-domain isolation and no-SPOF chaos verification (E1-S11)', () => {
   it('push fault-injected to fail 100% does not affect sms delivery for the same dispatch (AC1)', async () => {
-    mockDeps({ push: () => Promise.reject(new Error('push provider down')) });
+    const { sendMock, ddbSendMock } = mockDeps({
+      push: () => Promise.reject(new Error('push provider down')),
+    });
     const { handler: pushHandler } =
       await import('../src/services/alerting-service/channels/push/worker.js');
     const { handler: smsHandler } =
@@ -91,10 +100,15 @@ describe('channel failure-domain isolation and no-SPOF chaos verification (E1-S1
 
     await expect(pushHandler(dispatchEvent('push'))).rejects.toThrow('push provider down');
     await expect(smsHandler(dispatchEvent('sms'))).resolves.toBeUndefined();
+
+    expect(sendMock).toHaveBeenCalledWith('sms', '+12035550100', expect.any(String), expect.anything());
+    expect(putCallsFor(ddbSendMock)).toBe(2);
   });
 
   it('sms provider saturation/errors do not affect push or voice delivery (AC2 — independent queue/DLQ per channel)', async () => {
-    mockDeps({ sms: () => Promise.reject(new Error('sms provider saturated')) });
+    const { sendMock, ddbSendMock } = mockDeps({
+      sms: () => Promise.reject(new Error('sms provider saturated')),
+    });
     const { handler: pushHandler } =
       await import('../src/services/alerting-service/channels/push/worker.js');
     const { handler: smsHandler } =
@@ -105,10 +119,16 @@ describe('channel failure-domain isolation and no-SPOF chaos verification (E1-S1
     await expect(smsHandler(dispatchEvent('sms'))).rejects.toThrow('sms provider saturated');
     await expect(pushHandler(dispatchEvent('push'))).resolves.toBeUndefined();
     await expect(voiceHandler(dispatchEvent('voice'))).resolves.toBeUndefined();
+
+    expect(sendMock).toHaveBeenCalledWith('push', 'push-token', expect.any(String), expect.anything());
+    expect(sendMock).toHaveBeenCalledWith('voice', '+12035550100', expect.any(String), expect.anything());
+    expect(putCallsFor(ddbSendMock)).toBe(3);
   });
 
   it('one channel provider removed entirely still lets delivery complete via a remaining channel (AC3 — no SPOF at the channel layer)', async () => {
-    mockDeps({ voice: () => Promise.reject(new Error('ENOTFOUND voice.example')) });
+    const { sendMock, ddbSendMock } = mockDeps({
+      voice: () => Promise.reject(new Error('ENOTFOUND voice.example')),
+    });
     const { handler: pushHandler } =
       await import('../src/services/alerting-service/channels/push/worker.js');
     const { handler: voiceHandler } =
@@ -116,5 +136,8 @@ describe('channel failure-domain isolation and no-SPOF chaos verification (E1-S1
 
     await expect(voiceHandler(dispatchEvent('voice'))).rejects.toThrow(/ENOTFOUND/);
     await expect(pushHandler(dispatchEvent('push'))).resolves.toBeUndefined();
+
+    expect(sendMock).toHaveBeenCalledWith('push', 'push-token', expect.any(String), expect.anything());
+    expect(putCallsFor(ddbSendMock)).toBe(2);
   });
 });

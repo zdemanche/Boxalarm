@@ -1,9 +1,15 @@
 import { ConditionalCheckFailedException } from '@aws-sdk/client-dynamodb';
-import { GetCommand, PutCommand, type DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
+import {
+  GetCommand,
+  PutCommand,
+  UpdateCommand,
+  type DynamoDBDocumentClient,
+} from '@aws-sdk/lib-dynamodb';
 import { buildDeptScopedPk, toVerifiedDeptId, type VerifiedDeptId } from '@boxalarm/dept-scope';
 import { emitOutcomeMetric } from '@boxalarm/metrics';
 import type { SQSEvent } from 'aws-lambda';
 import { createDynamoClient, readAlertingConfig } from '../eligibility/dynamoClient.js';
+import { logError, logInfo } from '../dispatches/logger.js';
 import {
   parseChannelEnvelope,
   resolveChannelTarget,
@@ -31,22 +37,6 @@ export interface DeliverChannelMessageParams {
   readonly env: NodeJS.ProcessEnv;
 }
 
-function logChannel(event: string, level: 'log' | 'error', fields: Record<string, unknown>): void {
-  const line = JSON.stringify({ event, service: 'alerting-service', ...fields });
-  if (level === 'error') {
-    console.error(line);
-  } else {
-    console.log(line);
-  }
-}
-
-function errorFields(error: unknown): Record<string, unknown> {
-  return {
-    reason: error instanceof Error ? error.constructor.name : 'UnknownError',
-    message: error instanceof Error ? error.message : String(error),
-  };
-}
-
 export async function deliverChannelMessage(
   ddb: DynamoDBDocumentClient,
   tableName: string,
@@ -57,27 +47,24 @@ export async function deliverChannelMessage(
   const correlationId = dispatchId;
   const resolved = resolveChannelTarget(channel, contactChannels);
   if (resolved.skipped) {
-    logChannel('alerting.channel.no_target', 'log', {
-      correlationId,
-      memberId,
-      channel,
-      reason: resolved.reason,
-    });
+    logInfo('alerting.channel.no_target', { correlationId, memberId, channel, reason: resolved.reason });
     emitOutcomeMetric(METRIC_NAMESPACE, 'NoTargetRegistered', channel);
     return;
   }
 
   const channelUpper = channel.toUpperCase();
   const idempotencyKey = `${dispatchId}#${toneSequence}#${memberId}#${channelUpper}`;
-  const sentAt = Date.now();
+  const pk = buildDeptScopedPk(deptId, 'DISPATCH', dispatchId);
+  const sk = `RECEIPT#${memberId}#${channelUpper}#${toneSequence}`;
+  const sentAt = Math.floor(Date.now() / 1000);
 
   try {
     await ddb.send(
       new PutCommand({
         TableName: tableName,
         Item: {
-          pk: buildDeptScopedPk(deptId, 'DISPATCH', dispatchId),
-          sk: `RECEIPT#${memberId}#${channelUpper}#${toneSequence}`,
+          pk,
+          sk,
           entityType: 'DELIVERY_RECEIPT',
           dispatchId,
           memberId,
@@ -98,34 +85,78 @@ export async function deliverChannelMessage(
     );
   } catch (error) {
     if (error instanceof ConditionalCheckFailedException) {
-      logChannel('alerting.channel.duplicate_skipped', 'log', { correlationId, memberId, channel });
-      emitOutcomeMetric(METRIC_NAMESPACE, 'DuplicateSkipped', channel);
-      return;
+      const retried = await reattemptClaimedFailure(ddb, tableName, pk, sk, sentAt);
+      if (!retried) {
+        logInfo('alerting.channel.duplicate_skipped', { correlationId, memberId, channel });
+        emitOutcomeMetric(METRIC_NAMESPACE, 'DuplicateSkipped', channel);
+        return;
+      }
+    } else {
+      logError('alerting.channel.receipt_write_failed', error, { correlationId, memberId, channel });
+      emitOutcomeMetric(METRIC_NAMESPACE, 'SendFailed', channel);
+      throw error;
     }
-    logChannel('alerting.channel.receipt_write_failed', 'error', {
-      correlationId,
-      memberId,
-      channel,
-      ...errorFields(error),
-    });
-    emitOutcomeMetric(METRIC_NAMESPACE, 'SendFailed', channel);
-    throw error;
   }
 
   try {
     await sendViaHttpProvider(channel, resolved.target, message, env);
   } catch (error) {
-    logChannel('alerting.channel.send_failed', 'error', {
-      correlationId,
-      memberId,
-      channel,
-      ...errorFields(error),
-    });
+    logError('alerting.channel.send_failed', error, { correlationId, memberId, channel });
     emitOutcomeMetric(METRIC_NAMESPACE, 'SendFailed', channel);
+    await recordClaimedFailure(ddb, tableName, pk, sk, error);
     throw error;
   }
 
   emitOutcomeMetric(METRIC_NAMESPACE, 'Sent', channel);
+}
+
+async function reattemptClaimedFailure(
+  ddb: DynamoDBDocumentClient,
+  tableName: string,
+  pk: string,
+  sk: string,
+  sentAt: number,
+): Promise<boolean> {
+  const existing = await ddb.send(new GetCommand({ TableName: tableName, Key: { pk, sk } }));
+  const item = existing.Item;
+  const claimedButFailed = Boolean(item) && item?.failureReason != null && item?.deliveredAt == null;
+  if (!claimedButFailed) {
+    return false;
+  }
+  await ddb.send(
+    new UpdateCommand({
+      TableName: tableName,
+      Key: { pk, sk },
+      UpdateExpression: 'SET sentAt = :sentAt REMOVE failureReason',
+      ConditionExpression: 'attribute_exists(idempotencyKey) AND attribute_not_exists(deliveredAt)',
+      ExpressionAttributeValues: { ':sentAt': sentAt },
+    }),
+  );
+  return true;
+}
+
+async function recordClaimedFailure(
+  ddb: DynamoDBDocumentClient,
+  tableName: string,
+  pk: string,
+  sk: string,
+  error: unknown,
+): Promise<void> {
+  try {
+    await ddb.send(
+      new UpdateCommand({
+        TableName: tableName,
+        Key: { pk, sk },
+        UpdateExpression: 'SET failureReason = :reason',
+        ConditionExpression: 'attribute_exists(idempotencyKey)',
+        ExpressionAttributeValues: {
+          ':reason': error instanceof Error ? error.message : String(error),
+        },
+      }),
+    );
+  } catch (updateError) {
+    logError('alerting.channel.failure_reason_write_failed', updateError, { pk, sk });
+  }
 }
 
 export function createChannelWorkerHandler(
@@ -135,28 +166,36 @@ export function createChannelWorkerHandler(
     const { tableName } = readAlertingConfig(process.env);
     const ddb = createDynamoClient(process.env);
 
-    for (const record of event.Records) {
+    async function processRecord(record: SQSEvent['Records'][number]): Promise<void> {
       let envelope: ReturnType<typeof parseChannelEnvelope>;
       try {
         envelope = parseChannelEnvelope(record.body, channel);
       } catch (error) {
-        logChannel('alerting.channel.malformed_event', 'error', {
+        logError('alerting.channel.malformed_event', error, {
           correlationId: record.messageId,
           channel,
-          ...errorFields(error),
         });
         throw error;
       }
 
       const deptId = toVerifiedDeptId({ deptId: envelope.deptId });
-      const snapshot = await ddb.send(
-        new GetCommand({
-          TableName: tableName,
-          Key: { pk: buildDeptScopedPk(deptId, 'ELIGIBILITY'), sk: `MEMBER#${envelope.memberId}` },
-        }),
-      );
-      const contactChannels = snapshot.Item?.contactChannels as
-        ContactChannelSnapshot[] | undefined;
+      let contactChannels: ContactChannelSnapshot[] | undefined;
+      try {
+        const snapshot = await ddb.send(
+          new GetCommand({
+            TableName: tableName,
+            Key: { pk: buildDeptScopedPk(deptId, 'ELIGIBILITY'), sk: `MEMBER#${envelope.memberId}` },
+          }),
+        );
+        contactChannels = snapshot.Item?.contactChannels as ContactChannelSnapshot[] | undefined;
+      } catch (error) {
+        logError('alerting.channel.eligibility_read_failed', error, {
+          correlationId: envelope.dispatchId,
+          memberId: envelope.memberId,
+          channel,
+        });
+        throw error;
+      }
 
       await deliverChannelMessage(ddb, tableName, {
         deptId,
@@ -169,5 +208,7 @@ export function createChannelWorkerHandler(
         env: process.env,
       });
     }
+
+    await Promise.all(event.Records.map(processRecord));
   };
 }

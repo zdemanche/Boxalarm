@@ -55,6 +55,18 @@ describe('parseChannelEnvelope', () => {
       parseChannelEnvelope(body({ ...validPayload, toneSequence: Number.NaN }), 'push'),
     ).toThrow('alerting channel envelope failed shape validation');
   });
+
+  it('throws when memberId contains the "#" pk-scoping delimiter (P1 — idempotency-key/receipt-sk collision guard)', () => {
+    expect(() =>
+      parseChannelEnvelope(body({ ...validPayload, memberId: 'mbr#1' }), 'push'),
+    ).toThrow(/memberId/);
+  });
+
+  it('throws when dispatchId contains the "#" pk-scoping delimiter', () => {
+    expect(() =>
+      parseChannelEnvelope(body({ ...validPayload, dispatchId: 'dispatch#1' }), 'push'),
+    ).toThrow(/dispatchId/);
+  });
 });
 
 describe('resolveChannelTarget', () => {
