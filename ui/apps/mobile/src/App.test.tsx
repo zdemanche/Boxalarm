@@ -54,7 +54,7 @@ test('the sign-in button uses the accent color and meets the N3.5 touch-target m
   expect(style.minWidth).toBeGreaterThanOrEqual(touchTarget.baseline.ios);
 });
 
-test('a valid stored session renders the highest-priority role dashboard', async () => {
+test('a valid stored session lands on the AppTabs shell (Alerts · Checks · Schedule · Me)', async () => {
   const idToken = `h.${base64url(JSON.stringify({ roles: ['MEMBER', 'ADMIN'] }))}.s`;
   mockedGetInternetCredentials.mockResolvedValue({
     username: 'boxalarm-auth',
@@ -70,5 +70,8 @@ test('a valid stored session renders the highest-priority role dashboard', async
 
   const { findByText } = await render(<App />);
 
-  expect(await findByText('Admin dashboard')).toBeTruthy();
+  expect(await findByText('Alerts')).toBeTruthy();
+  expect(await findByText('Checks')).toBeTruthy();
+  expect(await findByText('Schedule')).toBeTruthy();
+  expect(await findByText('Me')).toBeTruthy();
 });
