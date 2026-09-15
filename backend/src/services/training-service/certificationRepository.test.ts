@@ -10,6 +10,7 @@ import {
   createCertification,
   deriveCertificationStatus,
   listCertificationsForMember,
+  queryCertificationsDueInMonth,
 } from './certificationRepository.js';
 
 const deptId = toVerifiedDeptId({ deptId: 'NICHOLS' });
@@ -202,5 +203,98 @@ describe('listCertificationsForMember', () => {
     expect(logged.event).toBe('certification.list.failed');
     expect(logged.correlationId).toBe('trace-5');
     errorSpy.mockRestore();
+  });
+});
+
+describe('queryCertificationsDueInMonth', () => {
+  it('queries gsi2 on the dept-scoped DUE#CERTIFICATION#{yearMonth} partition (AC1)', async () => {
+    const send = vi.fn().mockResolvedValue({
+      Items: [
+        {
+          certId: 'CERT-0091',
+          memberId: 'MBR-0034',
+          certType: 'FF1',
+          issueDate: '2024-01-10',
+          expiryDate: '2026-09-20',
+          issuingAuthority: 'CT DESPP',
+          attachmentS3Key: null,
+          status: 'CURRENT',
+        },
+      ],
+    });
+    const client = fakeClient(send);
+
+    const records = await queryCertificationsDueInMonth(client, env, {
+      deptId,
+      yearMonth: '2026-09',
+      correlationId: 'trace-6',
+    });
+
+    expect(send).toHaveBeenCalledTimes(1);
+    const command = send.mock.calls[0]?.[0] as QueryCommand;
+    expect(command).toBeInstanceOf(QueryCommand);
+    expect(command.input.IndexName).toBe('gsi2');
+    expect(command.input.ExpressionAttributeValues).toEqual({
+      ':gsi2pk': 'DEPT#NICHOLS#DUE#CERTIFICATION#2026-09',
+    });
+    expect(records).toHaveLength(1);
+    expect(records[0]?.certId).toBe('CERT-0091');
+  });
+
+  it('returns an empty array when nothing is due in that month partition', async () => {
+    const send = vi.fn().mockResolvedValue({});
+    const client = fakeClient(send);
+
+    const records = await queryCertificationsDueInMonth(client, env, {
+      deptId,
+      yearMonth: '2026-10',
+      correlationId: 'trace-7',
+    });
+
+    expect(records).toEqual([]);
+  });
+
+  it('logs the original error and rethrows on a dependency failure', async () => {
+    const failure = new Error('DynamoDB unavailable');
+    const send = vi.fn().mockRejectedValue(failure);
+    const client = fakeClient(send);
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    await expect(
+      queryCertificationsDueInMonth(client, env, {
+        deptId,
+        yearMonth: '2026-09',
+        correlationId: 'trace-8',
+      }),
+    ).rejects.toBe(failure);
+
+    const logged = JSON.parse(errorSpy.mock.calls[0]?.[0] as string) as Record<string, unknown>;
+    expect(logged.event).toBe('certification.queryDueInMonth.failed');
+    expect(logged.correlationId).toBe('trace-8');
+    errorSpy.mockRestore();
+  });
+
+  it('follows LastEvaluatedKey across pages and accumulates all items past the 1MB response cap', async () => {
+    const send = vi
+      .fn()
+      .mockResolvedValueOnce({
+        Items: [{ certId: 'CERT-A', memberId: 'MBR-A' }],
+        LastEvaluatedKey: { pk: 'p', sk: 's1' },
+      })
+      .mockResolvedValueOnce({
+        Items: [{ certId: 'CERT-B', memberId: 'MBR-B' }],
+      });
+    const client = fakeClient(send);
+
+    const records = await queryCertificationsDueInMonth(client, env, {
+      deptId,
+      yearMonth: '2026-09',
+      correlationId: 'trace-9',
+    });
+
+    expect(send).toHaveBeenCalledTimes(2);
+    const secondCommand = send.mock.calls[1]?.[0] as QueryCommand;
+    expect(secondCommand.input.ExclusiveStartKey).toEqual({ pk: 'p', sk: 's1' });
+    expect(records.map((r) => r.certId)).toEqual(['CERT-A', 'CERT-B']);
   });
 });

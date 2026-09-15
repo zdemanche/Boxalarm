@@ -227,3 +227,40 @@ export async function listCertificationsForMember(
     throw error;
   }
 }
+
+export interface QueryCertificationsDueInMonthParams {
+  readonly deptId: VerifiedDeptId;
+  readonly yearMonth: string;
+  readonly correlationId: string;
+}
+
+export async function queryCertificationsDueInMonth(
+  client: DynamoDBDocumentClient,
+  env: NodeJS.ProcessEnv,
+  params: QueryCertificationsDueInMonthParams,
+): Promise<readonly CertificationRecord[]> {
+  const { tableName } = readTrainingDynamoConfig(env);
+  try {
+    const items: Record<string, unknown>[] = [];
+    let exclusiveStartKey: Record<string, unknown> | undefined;
+    do {
+      const output = await client.send(
+        new QueryCommand({
+          TableName: tableName,
+          IndexName: 'gsi2',
+          KeyConditionExpression: 'gsi2pk = :gsi2pk',
+          ExpressionAttributeValues: {
+            ':gsi2pk': buildDeptScopedPk(params.deptId, 'DUE', 'CERTIFICATION', params.yearMonth),
+          },
+          ExclusiveStartKey: exclusiveStartKey,
+        }),
+      );
+      items.push(...(output.Items ?? []));
+      exclusiveStartKey = output.LastEvaluatedKey;
+    } while (exclusiveStartKey);
+    return items.map(toCertificationRecord);
+  } catch (error) {
+    logRepositoryError('certification.queryDueInMonth.failed', error, params.correlationId);
+    throw error;
+  }
+}
