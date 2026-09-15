@@ -7,6 +7,7 @@ import {
   createTrainingEvent,
   DuplicateSignupError,
   getTrainingEvent,
+  listAttendanceForPeriod,
   listEventAttendees,
   listMemberAttendanceEventIds,
   listMemberAttendanceInRange,
@@ -275,6 +276,93 @@ describe('createSignupAttendance', () => {
     ).rejects.toThrow(DuplicateSignupError);
     expect(logSpy.mock.calls[0]?.[0] as string).toContain('ConditionalCheckFailedException');
     logSpy.mockRestore();
+  });
+});
+
+describe('listAttendanceForPeriod', () => {
+  it("delegates to listTrainingEventsInRange/listEventAttendees, reading the same TRAINING_ATTENDANCE items recordAttendanceHours writes, via the same zero-padded gsi3sk BETWEEN bound (AC2)", async () => {
+    const calls: Array<{ input: Record<string, unknown> }> = [];
+    const client = fakeClient((command) => {
+      const captured = command as { input: Record<string, unknown> };
+      calls.push(captured);
+      if (captured.input.IndexName === 'GSI3') {
+        return { Items: [{ eventId: 'e1' }, { eventId: 'e2' }] };
+      }
+      const pk = (captured.input.ExpressionAttributeValues as Record<string, unknown>)[':pk'];
+      if (pk === 'DEPT#dept-001#TRAINING_EVENT#e1') {
+        return { Items: [{ eventId: 'e1', memberId: 'member-1', category: 'ems', hours: 3 }] };
+      }
+      return { Items: [{ eventId: 'e2', memberId: 'member-2', category: 'ladder', hours: 2 }] };
+    });
+
+    const records = await listAttendanceForPeriod(client, CONFIG, DEPT_ID, 1_000, 2_000);
+
+    const gsi3Call = calls.find((c) => c.input.IndexName === 'GSI3')!;
+    expect(gsi3Call.input.KeyConditionExpression).toBe(
+      'gsi3pk = :gsi3pk AND gsi3sk BETWEEN :from AND :to',
+    );
+    expect(gsi3Call.input.ExpressionAttributeValues).toEqual({
+      ':gsi3pk': 'DEPT#dept-001#TRAINING_EVENT',
+      ':from': '0000000001000',
+      ':to': '0000000002000',
+    });
+    expect(records).toEqual(
+      expect.arrayContaining([
+        { eventId: 'e1', memberId: 'member-1', category: 'ems', hours: 3 },
+        { eventId: 'e2', memberId: 'member-2', category: 'ladder', hours: 2 },
+      ]),
+    );
+  });
+
+  it('returns an empty list, not an error, when no events fall in the period (AC3)', async () => {
+    const client = fakeClient(() => ({ Items: [] }));
+
+    const records = await listAttendanceForPeriod(client, CONFIG, DEPT_ID, 1_000, 2_000);
+
+    expect(records).toEqual([]);
+  });
+
+  it('excludes ATTENDEE# rows with no recorded hours (signup-only, no hours attribute) rather than propagating a zero-hour phantom entry (P3)', async () => {
+    const client = fakeClient((command) => {
+      const captured = command as { input: Record<string, unknown> };
+      if (captured.input.IndexName === 'GSI3') {
+        return { Items: [{ eventId: 'e1' }] };
+      }
+      return {
+        Items: [
+          { eventId: 'e1', memberId: 'member-1', category: 'ems', hours: 3 },
+          { eventId: 'e1', memberId: 'member-2', category: 'ems' },
+        ],
+      };
+    });
+
+    const records = await listAttendanceForPeriod(client, CONFIG, DEPT_ID, 1_000, 2_000);
+
+    expect(records).toEqual([{ eventId: 'e1', memberId: 'member-1', category: 'ems', hours: 3 }]);
+  });
+
+  it('bounds attendee fan-out concurrency while still fetching every in-period event (P1)', async () => {
+    const eventIds = Array.from({ length: 25 }, (_, i) => `e${i}`);
+    let inFlight = 0;
+    let maxInFlight = 0;
+    const client = fakeClient(async (command) => {
+      const captured = command as { input: Record<string, unknown> };
+      if (captured.input.IndexName === 'GSI3') {
+        return { Items: eventIds.map((eventId) => ({ eventId })) };
+      }
+      inFlight += 1;
+      maxInFlight = Math.max(maxInFlight, inFlight);
+      await new Promise((resolve) => setTimeout(resolve, 1));
+      inFlight -= 1;
+      const pk = (captured.input.ExpressionAttributeValues as Record<string, unknown>)[':pk'];
+      const eventId = (pk as string).split('#').pop();
+      return { Items: [{ eventId, memberId: 'member-1', category: 'ems', hours: 1 }] };
+    });
+
+    const records = await listAttendanceForPeriod(client, CONFIG, DEPT_ID, 1_000, 2_000);
+
+    expect(records).toHaveLength(25);
+    expect(maxInFlight).toBe(10);
   });
 });
 
