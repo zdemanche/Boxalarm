@@ -2,11 +2,12 @@ import { palette, touchTarget, typography } from '@boxalarm/design-tokens';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { useColorScheme } from 'react-native';
 import { PlaceholderScreen } from '../screens/PlaceholderScreen';
+import { ChecksStack } from './ChecksStack';
 import { MeStack } from './MeStack';
 
 // Bottom tab bar per architecture.md §7.2 — Alerts · Checks · Schedule · Me, in that order.
-// Alerts/Checks/Schedule are placeholders until their own phase (5-7) builds the real stack;
-// Me is phase 4's real stack (profile, certifications, self-test/diagnostics entry points).
+// Alerts/Schedule are placeholders until their own phase (6-7) builds the real stack; Checks
+// (phase 5) and Me (phase 4) are real stacks.
 export type AppTabsParamList = {
   Alerts: undefined;
   Checks: undefined;
@@ -18,10 +19,6 @@ const Tab = createBottomTabNavigator<AppTabsParamList>();
 
 function AlertsPlaceholder() {
   return <PlaceholderScreen label="Alerts stack coming in phase 7" />;
-}
-
-function ChecksPlaceholder() {
-  return <PlaceholderScreen label="Checks stack coming in phase 5" />;
 }
 
 function SchedulePlaceholder() {
@@ -48,7 +45,7 @@ export function AppTabs() {
       }}
     >
       <Tab.Screen name="Alerts" component={AlertsPlaceholder} />
-      <Tab.Screen name="Checks" component={ChecksPlaceholder} />
+      <Tab.Screen name="Checks" component={ChecksStack} />
       <Tab.Screen name="Schedule" component={SchedulePlaceholder} />
       <Tab.Screen name="Me" component={MeStack} />
     </Tab.Navigator>

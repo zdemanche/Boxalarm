@@ -1,5 +1,5 @@
 import { NavigationContainer } from '@react-navigation/native';
-import { fireEvent, render } from '@testing-library/react-native';
+import { act, fireEvent, render } from '@testing-library/react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { AppTabs } from './AppTabs';
 
@@ -32,9 +32,16 @@ test('opens on the Alerts tab by default', async () => {
   expect(await findByText('Alerts stack coming in phase 7')).toBeTruthy();
 });
 
-test("switching tabs shows that tab's placeholder content", async () => {
+test("switching tabs shows that tab's content — Checks (phase 5) is real, Schedule is still a placeholder", async () => {
   const { findByText } = await renderTabs();
 
-  fireEvent.press(await findByText('Checks'));
-  expect(await findByText('Checks stack coming in phase 5')).toBeTruthy();
+  await act(async () => {
+    fireEvent.press(await findByText('Checks'));
+  });
+  expect(await findByText('ENGINE-2')).toBeTruthy();
+
+  await act(async () => {
+    fireEvent.press(await findByText('Schedule'));
+  });
+  expect(await findByText('Schedule stack coming in phase 6')).toBeTruthy();
 });
