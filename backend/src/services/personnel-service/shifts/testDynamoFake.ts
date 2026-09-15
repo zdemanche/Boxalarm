@@ -37,6 +37,35 @@ function evaluateClause(
     const valueKey = equals[2] ?? '';
     return item !== undefined && item[attr] === values[valueKey];
   }
+  const notEquals = /^(#?\w+)\s*<>\s*(:\w+)$/.exec(trimmed);
+  if (notEquals) {
+    const attr = resolveAttr(notEquals[1] ?? '', names) ?? '';
+    const valueKey = notEquals[2] ?? '';
+    return item !== undefined && item[attr] !== values[valueKey];
+  }
+  const comparison = /^(#?\w+)\s*(<=|>=|<|>)\s*(:\w+)$/.exec(trimmed);
+  if (comparison) {
+    const attr = resolveAttr(comparison[1] ?? '', names) ?? '';
+    const op = comparison[2] ?? '';
+    const valueKey = comparison[3] ?? '';
+    const left = item?.[attr];
+    const right = values[valueKey];
+    if (typeof left !== 'number' || typeof right !== 'number') {
+      return false;
+    }
+    switch (op) {
+      case '<=':
+        return left <= right;
+      case '>=':
+        return left >= right;
+      case '<':
+        return left < right;
+      case '>':
+        return left > right;
+      default:
+        return false;
+    }
+  }
   throw new Error(`testDynamoFake does not support condition clause: ${trimmed}`);
 }
 
@@ -114,6 +143,7 @@ interface TransactItem {
 
 export type FakeDocumentClient = DynamoDBDocumentClient & {
   readonly peek: (partitionKey: string, sortKey: string) => FakeItem | undefined;
+  readonly all: () => IterableIterator<FakeItem>;
 };
 
 export function createFakeDocumentClient(seed: readonly FakeItem[] = []): FakeDocumentClient {
@@ -132,9 +162,29 @@ export function createFakeDocumentClient(seed: readonly FakeItem[] = []): FakeDo
     }
 
     if (name === 'QueryCommand') {
-      const values = input.ExpressionAttributeValues as Record<string, unknown>;
-      const wantedPk = values[':shiftPk'];
-      const items = [...store.values()].filter((item) => item.pk === wantedPk);
+      const values = (input.ExpressionAttributeValues ?? {}) as Record<string, unknown>;
+      const names = (input.ExpressionAttributeNames ?? {}) as Record<string, string>;
+      let items = [...store.values()];
+
+      if (values[':shiftPk'] !== undefined) {
+        items = items.filter((item) => item.pk === values[':shiftPk']);
+      } else if (values[':gsi3pk'] !== undefined) {
+        items = items.filter((item) => item.gsi3pk === values[':gsi3pk']);
+        if (typeof values[':nowSk'] === 'string') {
+          items = items.filter(
+            (item) =>
+              typeof item.gsi3sk === 'string' && item.gsi3sk <= (values[':nowSk'] as string),
+          );
+        }
+      } else if (values[':pk'] !== undefined) {
+        items = items.filter((item) => item.pk === values[':pk']);
+      }
+
+      const filter = input.FilterExpression as string | undefined;
+      if (filter) {
+        items = items.filter((item) => evaluateCondition(filter, item, values, names));
+      }
+
       return Promise.resolve({ Items: items });
     }
 
@@ -222,5 +272,7 @@ export function createFakeDocumentClient(seed: readonly FakeItem[] = []): FakeDo
   const peek = (partitionKey: string, sortKey: string): FakeItem | undefined =>
     store.get(`${partitionKey}#${sortKey}`);
 
-  return { send, peek } as unknown as FakeDocumentClient;
+  const all = (): IterableIterator<FakeItem> => store.values();
+
+  return { send, peek, all } as unknown as FakeDocumentClient;
 }

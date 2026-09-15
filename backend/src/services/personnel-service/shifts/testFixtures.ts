@@ -6,6 +6,8 @@ export type TestDutyShiftItem = Readonly<Record<'pk' | 'sk', string>> & {
   readonly startAt: number;
   readonly endAt: number;
   readonly status: string;
+  readonly activityType?: 'STANDBY' | 'WORK_DETAIL';
+  readonly attendanceCompletedAt?: number;
   readonly gsi3pk: string;
   readonly gsi3sk: string;
 };
@@ -28,7 +30,12 @@ export type TestMemberQualificationItem = Readonly<Record<'pk' | 'sk', string>> 
 export function buildDutyShift(
   deptId: VerifiedDeptId,
   shiftId: string,
-  overrides: Partial<Pick<TestDutyShiftItem, 'startAt' | 'endAt' | 'status'>> = {},
+  overrides: Partial<
+    Pick<
+      TestDutyShiftItem,
+      'startAt' | 'endAt' | 'status' | 'activityType' | 'attendanceCompletedAt'
+    >
+  > = {},
 ): TestDutyShiftItem {
   const startAt = overrides.startAt ?? 1_800_000_000;
   return {
@@ -41,6 +48,10 @@ export function buildDutyShift(
     status: overrides.status ?? 'OPEN',
     gsi3pk: buildDeptScopedPk(deptId, 'DUTY_SHIFT'),
     gsi3sk: String(startAt),
+    ...(overrides.activityType !== undefined ? { activityType: overrides.activityType } : {}),
+    ...(overrides.attendanceCompletedAt !== undefined
+      ? { attendanceCompletedAt: overrides.attendanceCompletedAt }
+      : {}),
   };
 }
 
