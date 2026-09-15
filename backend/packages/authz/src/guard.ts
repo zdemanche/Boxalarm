@@ -51,7 +51,7 @@ function extractBearerToken(event: GuardEvent): string | undefined {
   return token;
 }
 
-function extractTraceId(event: GuardEvent): string {
+export function extractTraceId(event: GuardEvent): string {
   const traceparent = event.headers?.traceparent ?? event.headers?.Traceparent;
   const traceId = traceparent?.split('-')[1];
   return traceId && traceId.length > 0 ? traceId : randomUUID();

@@ -46,3 +46,23 @@ export function serviceUnavailableProblem(traceId: string): ProblemResponse {
     traceId,
   );
 }
+
+export function notFoundProblem(traceId: string, detail: string): ProblemResponse {
+  return problemResponse(
+    404,
+    'https://boxalarm.dev/problems/not-found',
+    'Not Found',
+    detail,
+    traceId,
+  );
+}
+
+export function badRequestProblem(traceId: string, detail: string): ProblemResponse {
+  return problemResponse(
+    400,
+    'https://boxalarm.dev/problems/bad-request',
+    'Bad Request',
+    detail,
+    traceId,
+  );
+}

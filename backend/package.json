@@ -18,6 +18,9 @@
     "test:coverage": "vitest run --coverage"
   },
   "dependencies": {
+    "@aws-sdk/client-dynamodb": "3.1131.0",
+    "@aws-sdk/lib-dynamodb": "3.1131.0",
+    "@boxalarm/authz": "*",
     "@boxalarm/dept-scope": "*",
     "aws-jwt-verify": "5.2.1"
   },
