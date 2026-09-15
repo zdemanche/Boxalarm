@@ -2,6 +2,7 @@ import { Component, lazy, Suspense, type ReactNode } from 'react';
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
 import { AuthProvider, useAuth } from './auth/AuthContext';
 import { SignInPage } from './pages/SignInPage';
+import { GlobalTokensStyle } from './styles/GlobalTokensStyle';
 
 const AuthCallbackPage = lazy(() =>
   import('./pages/AuthCallbackPage').then((mod) => ({ default: mod.AuthCallbackPage })),
@@ -39,6 +40,7 @@ function RootRoute() {
 export function App() {
   return (
     <ConfigErrorBoundary>
+      <GlobalTokensStyle />
       <AuthProvider>
         <BrowserRouter>
           <Suspense fallback={null}>

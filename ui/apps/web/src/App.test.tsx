@@ -13,3 +13,10 @@ test('unauthenticated root route renders the sign-in screen with no MFA challeng
   await screen.findByRole('button', { name: 'Sign in' });
   expect(screen.queryByText(/mfa/i)).toBeNull();
 });
+
+test('mounts the global design-token stylesheet so every route inherits it', async () => {
+  const { container } = render(<App />);
+  await screen.findByRole('button', { name: 'Sign in' });
+
+  expect(container.querySelector('style')?.textContent).toContain('--boxalarm-accent-day');
+});

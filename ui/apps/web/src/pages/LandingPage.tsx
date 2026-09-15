@@ -1,3 +1,4 @@
+import { spacing, typography } from '@boxalarm/design-tokens';
 import { useAuth, type Role } from '../auth/AuthContext';
 
 const ROLE_PRIORITY: readonly Role[] = [
@@ -27,8 +28,8 @@ export function LandingPage() {
   const role = primaryRole(roles);
 
   return (
-    <main>
-      <h1>{ROLE_LABEL[role]}</h1>
+    <main style={{ padding: spacing.lg }}>
+      <h1 style={{ fontSize: typography.size.xl, margin: 0 }}>{ROLE_LABEL[role]}</h1>
     </main>
   );
 }

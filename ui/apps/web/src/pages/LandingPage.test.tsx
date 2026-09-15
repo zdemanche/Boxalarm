@@ -1,5 +1,6 @@
+import { typography } from '@boxalarm/design-tokens';
 import { cleanup, render, screen } from '@testing-library/react';
-import { afterEach, test, vi } from 'vitest';
+import { afterEach, expect, test, vi } from 'vitest';
 import type { User, UserManager } from 'oidc-client-ts';
 import { AuthProvider } from '../auth/AuthContext';
 import { LandingPage } from './LandingPage';
@@ -43,4 +44,15 @@ test('falls back to the member dashboard when no roles are present', async () =>
   );
 
   await screen.findByRole('heading', { name: 'Member dashboard' });
+});
+
+test('the heading uses the design-token type scale, matching the sign-in page', async () => {
+  render(
+    <AuthProvider userManager={makeManager({ sub: 'm1' })}>
+      <LandingPage />
+    </AuthProvider>,
+  );
+
+  const heading = await screen.findByRole('heading', { name: 'Member dashboard' });
+  expect(heading.style.fontSize).toBe(`${typography.size.xl}px`);
 });

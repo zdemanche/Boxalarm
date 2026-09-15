@@ -1,12 +1,8 @@
 import { useEffect, useRef, useState, type CSSProperties } from 'react';
-import { palette, spacing } from '@boxalarm/design-tokens';
+import { radius, spacing, typography } from '@boxalarm/design-tokens';
 import { useAuth } from '../auth/AuthContext';
 
-const containerStyle = {
-  '--sign-in-bg-day': palette.day.background,
-  '--sign-in-fg-day': palette.day.foreground,
-  '--sign-in-bg-cab': palette.cab.background,
-  '--sign-in-fg-cab': palette.cab.foreground,
+const containerStyle: CSSProperties = {
   display: 'flex',
   flexDirection: 'column',
   alignItems: 'center',
@@ -14,7 +10,25 @@ const containerStyle = {
   minHeight: '100vh',
   gap: spacing.lg,
   padding: spacing.lg,
-} as CSSProperties;
+};
+
+const headingStyle: CSSProperties = {
+  fontSize: typography.size.display,
+  margin: 0,
+};
+
+const buttonStyle: CSSProperties = {
+  minWidth: 220,
+  minHeight: 56,
+  fontSize: typography.size.lg,
+  fontWeight: 600,
+  padding: `${spacing.md}px ${spacing.lg}px`,
+  background: 'var(--boxalarm-accent)',
+  color: 'var(--boxalarm-bg)',
+  borderRadius: radius.default,
+  border: 'none',
+  cursor: 'pointer',
+};
 
 export function SignInPage() {
   const { signIn } = useAuth();
@@ -33,33 +47,16 @@ export function SignInPage() {
   };
 
   return (
-    <>
-      <style>{`
-        .boxalarm-sign-in { background: var(--sign-in-bg-day); color: var(--sign-in-fg-day); }
-        @media (prefers-color-scheme: dark) {
-          .boxalarm-sign-in { background: var(--sign-in-bg-cab); color: var(--sign-in-fg-cab); }
-        }
-      `}</style>
-      <main className="boxalarm-sign-in" style={containerStyle}>
-        <h1>Boxalarm</h1>
-        <button
-          type="button"
-          onClick={handleSignIn}
-          style={{
-            minWidth: 220,
-            minHeight: 56,
-            fontSize: '1.25rem',
-            padding: `${spacing.md}px ${spacing.lg}px`,
-          }}
-        >
-          Sign in
-        </button>
-        {error && (
-          <p ref={errorRef} role="alert" aria-live="assertive" tabIndex={-1}>
-            {error}
-          </p>
-        )}
-      </main>
-    </>
+    <main style={containerStyle}>
+      <h1 style={headingStyle}>Boxalarm</h1>
+      <button type="button" onClick={handleSignIn} style={buttonStyle}>
+        Sign in
+      </button>
+      {error && (
+        <p ref={errorRef} role="alert" aria-live="assertive" tabIndex={-1}>
+          {error}
+        </p>
+      )}
+    </main>
   );
 }
