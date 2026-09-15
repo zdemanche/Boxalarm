@@ -86,8 +86,10 @@ async function getCompliance(
 
   const deptId = toVerifiedDeptId(principal);
   try {
-    const roster = await listApparatus(deps.client, deps.tableName, deptId);
-    const runs = await queryChecklistRunsInRange(deps.client, deps.tableName, deptId, from, to);
+    const [roster, runs] = await Promise.all([
+      listApparatus(deps.client, deps.tableName, deptId),
+      queryChecklistRunsInRange(deps.client, deps.tableName, deptId, from, to),
+    ]);
     const report = computeComplianceReport(roster, runs, from, to);
     emitComplianceMetric('Success');
     return {

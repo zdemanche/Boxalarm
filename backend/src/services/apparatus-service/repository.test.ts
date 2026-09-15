@@ -313,7 +313,12 @@ describe('listApparatus', () => {
       if (command instanceof QueryCommand && command.input.IndexName === 'GSI3') {
         return {
           Items: [
-            { pk: `DEPT#${DEPT_ID}#APPARATUS#APP-E1`, unitId: 'E1', type: 'ENGINE', status: 'IN_SERVICE' },
+            {
+              pk: `DEPT#${DEPT_ID}#APPARATUS#APP-E1`,
+              unitId: 'E1',
+              type: 'ENGINE',
+              status: 'IN_SERVICE',
+            },
             {
               pk: `DEPT#${DEPT_ID}#APPARATUS#APP-L1`,
               unitId: 'L1',
@@ -347,8 +352,18 @@ describe('listApparatus', () => {
       if (command instanceof QueryCommand) {
         return {
           Items: [
-            { pk: `DEPT#${DEPT_ID}#APPARATUS#APP-E1`, unitId: 'E1', type: 'ENGINE', status: 'IN_SERVICE' },
-            { pk: `DEPT#${DEPT_ID}#APPARATUS#APP-L1`, unitId: 'L1', type: 'LADDER', status: 'OUT_OF_SERVICE' },
+            {
+              pk: `DEPT#${DEPT_ID}#APPARATUS#APP-E1`,
+              unitId: 'E1',
+              type: 'ENGINE',
+              status: 'IN_SERVICE',
+            },
+            {
+              pk: `DEPT#${DEPT_ID}#APPARATUS#APP-L1`,
+              unitId: 'L1',
+              type: 'LADDER',
+              status: 'OUT_OF_SERVICE',
+            },
           ],
         };
       }

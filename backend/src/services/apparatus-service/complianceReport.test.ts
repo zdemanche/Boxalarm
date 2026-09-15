@@ -108,9 +108,7 @@ describe('computeComplianceReport', () => {
       to,
     );
 
-    expect(report).toContainEqual(
-      expect.objectContaining({ unitId: 'ENGINE-1', actualChecks: 1 }),
-    );
+    expect(report).toContainEqual(expect.objectContaining({ unitId: 'ENGINE-1', actualChecks: 1 }));
   });
 
   it('flags an apparatus with zero completed checks as non-compliant rather than omitting it (AC2)', () => {

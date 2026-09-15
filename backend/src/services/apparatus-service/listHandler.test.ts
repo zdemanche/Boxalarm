@@ -136,9 +136,11 @@ describe('listHandler', () => {
 
   it('does not leak the internal apparatusId field on the registry response body', async () => {
     mockVerifiedPermissions(() => Promise.resolve({ decision: 'ALLOW' }));
-    const listApparatus = vi.fn().mockResolvedValue([
-      { apparatusId: 'APP-ENGINE-2', unitId: 'E1', type: 'ENGINE', status: 'IN_SERVICE' },
-    ]);
+    const listApparatus = vi
+      .fn()
+      .mockResolvedValue([
+        { apparatusId: 'APP-ENGINE-2', unitId: 'E1', type: 'ENGINE', status: 'IN_SERVICE' },
+      ]);
     await mockRepository({ listApparatus });
     mockDynamoClient();
 

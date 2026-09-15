@@ -1,6 +1,7 @@
 import { QueryCommand, type DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
 import { buildDeptScopedPk, type VerifiedDeptId } from '@boxalarm/dept-scope';
 import { GSI3_INDEX_NAME } from './dynamoClient.js';
+import { apparatusIdFromPartitionKey } from './checklistResolution.js';
 import {
   ApparatusRepositoryUnavailableError,
   logError,
@@ -21,12 +22,6 @@ export interface ApparatusComplianceEntry {
   readonly expectedChecks: number;
   readonly actualChecks: number;
   readonly compliant: boolean;
-}
-
-function apparatusIdFromPartitionKey(partitionKey: string): string | undefined {
-  const marker = '#APPARATUS#';
-  const index = partitionKey.indexOf(marker);
-  return index === -1 ? undefined : partitionKey.slice(index + marker.length);
 }
 
 function buildEpochSortKey(epochSeconds: number): string {
