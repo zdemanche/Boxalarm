@@ -21,12 +21,18 @@ describe('TODAY_BUCKET', () => {
 });
 
 describe('buildPreferenceItem / parsePreferenceItem', () => {
-  it('round-trips a preference item', () => {
-    const item = buildPreferenceItem(DEPT_ID, 'MBR-1', CERT_EXPIRY_CATEGORY, true, 1000);
+  it('round-trips a per-channel preference item', () => {
+    const item = buildPreferenceItem(
+      DEPT_ID,
+      'MBR-1',
+      CERT_EXPIRY_CATEGORY,
+      { push: true, email: false },
+      1000,
+    );
     expect(parsePreferenceItem(item as unknown as Record<string, unknown>)).toEqual({
       memberId: 'MBR-1',
       category: CERT_EXPIRY_CATEGORY,
-      muted: true,
+      channels: { push: true, email: false },
       updatedAt: 1000,
     });
   });
@@ -50,6 +56,8 @@ describe('buildNotificationItem', () => {
     expect(item.sk).toBe('NOTIF#MBR-1#2000000#NOTIF-1');
     expect(item.readAt).toBeNull();
     expect(item.summary).toBe('1 item expiring');
+    expect(item.gsi1pk).toBe('MEMBER#MBR-1');
+    expect(item.gsi1sk).toBe('NOTIFICATION#NOTIF-1');
   });
 
   it('pluralizes the summary for multiple items', () => {

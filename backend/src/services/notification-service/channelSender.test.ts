@@ -51,13 +51,20 @@ describe('sendEmailDigest', () => {
     expect(call.input.Destination.ToAddresses).toEqual(['mbr1@example.com']);
   });
 
-  it('no-ops without an email address rather than sending to an unknown destination', async () => {
+  it('skips (with a log entry) without an email address rather than sending to an unknown destination (P7)', async () => {
     const send = vi.fn();
     const client = { send } as unknown as SESv2Client;
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
 
     await sendEmailDigest(ENV, { memberId: 'MBR-1' }, ITEMS, 'corr-1', client);
 
     expect(send).not.toHaveBeenCalled();
+    expect(
+      errorSpy.mock.calls.some((call) =>
+        (call[0] as string).includes('notification.channel.email_skipped_no_address'),
+      ),
+    ).toBe(true);
+    errorSpy.mockRestore();
   });
 
   it('throws (fail-closed) when NOTIFICATION_SES_FROM_ADDRESS is not configured', async () => {

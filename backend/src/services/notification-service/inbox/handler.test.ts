@@ -97,8 +97,9 @@ describe('inbox handler (entrypoint-test + authz-wiring obligations)', () => {
 
   it('POST /notifications/{id}/read marks readAt and returns it (AC6)', async () => {
     send.mockResolvedValue({ decision: Decision.ALLOW });
-    const dynamoSend = vi.fn().mockImplementation((command: { constructor: { name: string } }) => {
+    const dynamoSend = vi.fn().mockImplementation((command: { constructor: { name: string }; input: Record<string, unknown> }) => {
       if (command.constructor.name === 'QueryCommand') {
+        expect(command.input.IndexName).toBe('GSI1');
         return Promise.resolve({
           Items: [{ sk: 'NOTIF#MBR-1#1#NOTIF-1', notificationId: 'NOTIF-1' }],
         });
@@ -116,6 +117,20 @@ describe('inbox handler (entrypoint-test + authz-wiring obligations)', () => {
     const body = JSON.parse(result.body) as { notificationId: string; readAt: number };
     expect(body.notificationId).toBe('NOTIF-1');
     expect(typeof body.readAt).toBe('number');
+  });
+
+  it('POST /notifications/{id}/read returns 400 when the id path parameter is absent (P9)', async () => {
+    send.mockResolvedValue({ decision: Decision.ALLOW });
+    const dynamoSend = vi.fn();
+    mockDdb(dynamoSend);
+
+    const { markReadHandler } = await import('./handler.js');
+    const result = (await markReadHandler(
+      buildEvent('POST /notifications/{id}/read', undefined),
+    )) as { statusCode: number };
+
+    expect(result.statusCode).toBe(400);
+    expect(dynamoSend).not.toHaveBeenCalled();
   });
 
   it("POST /notifications/{id}/read returns 404 when the id is not in the member's own inbox", async () => {

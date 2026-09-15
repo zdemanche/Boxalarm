@@ -13,12 +13,13 @@ import { createDynamoClient, readNotificationConfig } from '../dynamoClient.js';
 import {
   buildPreferenceItem,
   parsePreferenceItem,
+  type NotificationChannelMutes,
   type NotificationPreference,
 } from '../repository.js';
 
 interface UpdatePreferenceBody {
   readonly category: string;
-  readonly muted: boolean;
+  readonly channels: NotificationChannelMutes;
 }
 
 function parseBody(raw: string | undefined | null): UpdatePreferenceBody {
@@ -32,10 +33,16 @@ function parseBody(raw: string | undefined | null): UpdatePreferenceBody {
   if (typeof body.category !== 'string' || body.category.length === 0) {
     throw new Error('category is required and must be a non-empty string');
   }
-  if (typeof body.muted !== 'boolean') {
-    throw new Error('muted is required and must be a boolean');
+  const channels = body.channels as Partial<NotificationChannelMutes> | undefined;
+  if (
+    typeof channels !== 'object' ||
+    channels === null ||
+    typeof channels.push !== 'boolean' ||
+    typeof channels.email !== 'boolean'
+  ) {
+    throw new Error('channels is required and must be { push: boolean, email: boolean }');
   }
-  return { category: body.category, muted: body.muted };
+  return { category: body.category, channels: { push: channels.push, email: channels.email } };
 }
 
 function logError(event: string, error: unknown, correlationId: string): void {
@@ -100,7 +107,7 @@ async function putPreferences(
   const deptId = toVerifiedDeptId(principal);
   const memberId = principal.sub;
   const updatedAt = Date.now();
-  const item = buildPreferenceItem(deptId, memberId, body.category, body.muted, updatedAt);
+  const item = buildPreferenceItem(deptId, memberId, body.category, body.channels, updatedAt);
 
   try {
     const { tableName } = readNotificationConfig(process.env);
@@ -114,7 +121,7 @@ async function putPreferences(
   return {
     statusCode: 200,
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ category: body.category, muted: body.muted, updatedAt }),
+    body: JSON.stringify({ category: body.category, channels: body.channels, updatedAt }),
   };
 }
 

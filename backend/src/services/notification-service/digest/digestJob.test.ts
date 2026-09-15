@@ -40,6 +40,10 @@ function pendingItem(recipientType: 'MEMBER' | 'ROLE', recipientId: string, cert
   return { recipientType, recipientId, certId, expiryDate: '2027-01-10' };
 }
 
+function keySk(command: CommandLike): string | undefined {
+  return (command.input.Key as { sk?: string } | undefined)?.sk;
+}
+
 describe('digestJob handler (entrypoint-test obligation)', () => {
   it('rethrows on a malformed payload, never silently no-oping', async () => {
     const send = vi.fn();
@@ -85,6 +89,41 @@ describe('digestJob handler (entrypoint-test obligation)', () => {
     errorSpy.mockRestore();
   });
 
+  it('paginates the DIGEST_PENDING query across multiple pages rather than dropping the tail (P2)', async () => {
+    let queryCalls = 0;
+    const send = vi.fn().mockImplementation((command: CommandLike) => {
+      if (command.constructor.name === 'QueryCommand') {
+        queryCalls += 1;
+        if (queryCalls === 1) {
+          return Promise.resolve({
+            Items: [pendingItem('MEMBER', 'MBR-1', 'CERT-1')],
+            LastEvaluatedKey: { pk: 'p', sk: 's' },
+          });
+        }
+        return Promise.resolve({ Items: [pendingItem('MEMBER', 'MBR-2', 'CERT-2')] });
+      }
+      if (command.constructor.name === 'GetCommand') {
+        const sk = keySk(command);
+        if (sk === 'METADATA') {
+          return Promise.resolve({ Item: { email: 'mbr@example.com' } });
+        }
+        return Promise.resolve({ Item: undefined });
+      }
+      return Promise.resolve({});
+    });
+    mockDdb(send);
+    const sendPushDigest = vi.fn().mockResolvedValue(undefined);
+    const sendEmailDigest = vi.fn().mockResolvedValue(undefined);
+    mockChannelSender(sendPushDigest, sendEmailDigest);
+    const { handler } = await import('./digestJob.js');
+
+    const result = await handler({ deptId: 'NICHOLS' });
+
+    expect(queryCalls).toBe(2);
+    expect(result).toEqual({ processed: 2 });
+    expect(sendPushDigest).toHaveBeenCalledTimes(2);
+  });
+
   it('AC1: N cert.expiry.due items for one member on one day collapse into exactly 1 push + 1 email, not N', async () => {
     const send = vi.fn().mockImplementation((command: CommandLike) => {
       if (command.constructor.name === 'QueryCommand') {
@@ -101,8 +140,8 @@ describe('digestJob handler (entrypoint-test obligation)', () => {
         return Promise.resolve({ Items: [] });
       }
       if (command.constructor.name === 'GetCommand') {
-        const key = command.input.Key as { sk: string };
-        if (key.sk === 'METADATA') {
+        const sk = keySk(command);
+        if (sk === 'METADATA') {
           return Promise.resolve({ Item: { email: 'mbr1@example.com' } });
         }
         return Promise.resolve({ Item: undefined });
@@ -124,7 +163,7 @@ describe('digestJob handler (entrypoint-test obligation)', () => {
     expect(items).toHaveLength(3);
   });
 
-  it('AC4: a muted member gets zero push/email but the NOTIFICATION item is still written', async () => {
+  it('AC4: a member with both channels muted gets zero push/email but the NOTIFICATION item is still written', async () => {
     const transactItems: unknown[] = [];
     const send = vi.fn().mockImplementation((command: CommandLike) => {
       if (command.constructor.name === 'QueryCommand') {
@@ -135,13 +174,21 @@ describe('digestJob handler (entrypoint-test obligation)', () => {
         return Promise.resolve({ Items: [] });
       }
       if (command.constructor.name === 'GetCommand') {
-        const key = command.input.Key as { sk: string };
-        if (key.sk === 'METADATA') {
+        const sk = keySk(command);
+        if (sk === 'METADATA') {
           return Promise.resolve({ Item: { email: 'mbr1@example.com' } });
         }
-        return Promise.resolve({
-          Item: { memberId: 'MBR-1', category: 'cert-expiry', muted: true, updatedAt: 1 },
-        });
+        if (sk?.startsWith('NOTIFPREF#')) {
+          return Promise.resolve({
+            Item: {
+              memberId: 'MBR-1',
+              category: 'cert-expiry',
+              channels: { push: true, email: true },
+              updatedAt: 1,
+            },
+          });
+        }
+        return Promise.resolve({ Item: undefined });
       }
       if (command.constructor.name === 'TransactWriteCommand') {
         transactItems.push(command.input.TransactItems);
@@ -165,6 +212,46 @@ describe('digestJob handler (entrypoint-test obligation)', () => {
     expect(notificationPut).toBeDefined();
   });
 
+  it('a member who mutes only push still receives the email digest (P13 — mute is per channel)', async () => {
+    const send = vi.fn().mockImplementation((command: CommandLike) => {
+      if (command.constructor.name === 'QueryCommand') {
+        const gsi3pk = command.input.ExpressionAttributeValues as { ':gsi3pk': string };
+        if (gsi3pk[':gsi3pk'].includes('DIGEST_PENDING')) {
+          return Promise.resolve({ Items: [pendingItem('MEMBER', 'MBR-1', 'CERT-1')] });
+        }
+        return Promise.resolve({ Items: [] });
+      }
+      if (command.constructor.name === 'GetCommand') {
+        const sk = keySk(command);
+        if (sk === 'METADATA') {
+          return Promise.resolve({ Item: { email: 'mbr1@example.com' } });
+        }
+        if (sk?.startsWith('NOTIFPREF#')) {
+          return Promise.resolve({
+            Item: {
+              memberId: 'MBR-1',
+              category: 'cert-expiry',
+              channels: { push: true, email: false },
+              updatedAt: 1,
+            },
+          });
+        }
+        return Promise.resolve({ Item: undefined });
+      }
+      return Promise.resolve({});
+    });
+    mockDdb(send);
+    const sendPushDigest = vi.fn().mockResolvedValue(undefined);
+    const sendEmailDigest = vi.fn().mockResolvedValue(undefined);
+    mockChannelSender(sendPushDigest, sendEmailDigest);
+    const { handler } = await import('./digestJob.js');
+
+    await handler({ deptId: 'NICHOLS' });
+
+    expect(sendPushDigest).not.toHaveBeenCalled();
+    expect(sendEmailDigest).toHaveBeenCalledTimes(1);
+  });
+
   it('AC2: the training officer digest is delivered unconditionally, never gated on the member preference path', async () => {
     const send = vi.fn().mockImplementation((command: CommandLike) => {
       if (command.constructor.name === 'QueryCommand') {
@@ -179,7 +266,11 @@ describe('digestJob handler (entrypoint-test obligation)', () => {
         });
       }
       if (command.constructor.name === 'GetCommand') {
-        throw new Error('preference should never be read on the officer path');
+        const sk = keySk(command);
+        if (sk?.startsWith('NOTIFPREF#')) {
+          throw new Error('preference should never be read on the officer path');
+        }
+        return Promise.resolve({ Item: undefined });
       }
       return Promise.resolve({});
     });
@@ -200,11 +291,7 @@ describe('digestJob handler (entrypoint-test obligation)', () => {
     });
   });
 
-  it('skips a recipient whose digest was already sent today (guard-transact idempotency)', async () => {
-    const conditionalFailure = Object.assign(new Error('already sent'), {
-      name: 'TransactionCanceledException',
-      CancellationReasons: [{ Code: 'ConditionalCheckFailed' }, { Code: 'None' }],
-    });
+  it('skips a recipient whose digest was already sent today (guard-check idempotency)', async () => {
     const send = vi.fn().mockImplementation((command: CommandLike) => {
       if (command.constructor.name === 'QueryCommand') {
         const gsi3pk = command.input.ExpressionAttributeValues as { ':gsi3pk': string };
@@ -214,10 +301,14 @@ describe('digestJob handler (entrypoint-test obligation)', () => {
         return Promise.resolve({ Items: [] });
       }
       if (command.constructor.name === 'GetCommand') {
-        return Promise.resolve({ Item: { email: 'mbr1@example.com' } });
-      }
-      if (command.constructor.name === 'TransactWriteCommand') {
-        return Promise.reject(conditionalFailure);
+        const sk = keySk(command);
+        if (sk?.startsWith('DIGESTSENT#')) {
+          return Promise.resolve({ Item: { entityType: 'DIGEST_SENT' } });
+        }
+        if (sk === 'METADATA') {
+          return Promise.resolve({ Item: { email: 'mbr1@example.com' } });
+        }
+        return Promise.resolve({ Item: undefined });
       }
       return Promise.resolve({});
     });
@@ -231,5 +322,53 @@ describe('digestJob handler (entrypoint-test obligation)', () => {
 
     expect(sendPushDigest).not.toHaveBeenCalled();
     expect(sendEmailDigest).not.toHaveBeenCalled();
+  });
+
+  it('isolates a recipient whose channel send fails, logs it, and still processes the next recipient (P5/P6/P12)', async () => {
+    const send = vi.fn().mockImplementation((command: CommandLike) => {
+      if (command.constructor.name === 'QueryCommand') {
+        const gsi3pk = command.input.ExpressionAttributeValues as { ':gsi3pk': string };
+        if (gsi3pk[':gsi3pk'].includes('DIGEST_PENDING')) {
+          return Promise.resolve({
+            Items: [
+              pendingItem('MEMBER', 'MBR-FAIL', 'CERT-1'),
+              pendingItem('MEMBER', 'MBR-OK', 'CERT-2'),
+            ],
+          });
+        }
+        return Promise.resolve({ Items: [] });
+      }
+      if (command.constructor.name === 'GetCommand') {
+        const sk = keySk(command);
+        if (sk === 'METADATA') {
+          return Promise.resolve({ Item: { email: 'mbr@example.com' } });
+        }
+        return Promise.resolve({ Item: undefined });
+      }
+      return Promise.resolve({});
+    });
+    mockDdb(send);
+    const sendPushDigest = vi.fn().mockImplementation((_env: unknown, recipient: { memberId: string }) => {
+      if (recipient.memberId === 'MBR-FAIL') {
+        return Promise.reject(new Error('SNS throttled'));
+      }
+      return Promise.resolve(undefined);
+    });
+    const sendEmailDigest = vi.fn().mockResolvedValue(undefined);
+    mockChannelSender(sendPushDigest, sendEmailDigest);
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const { handler } = await import('./digestJob.js');
+
+    const result = await handler({ deptId: 'NICHOLS' });
+
+    expect(result).toEqual({ processed: 2 });
+    expect(sendPushDigest).toHaveBeenCalledTimes(2);
+    expect(sendEmailDigest).toHaveBeenCalledTimes(1);
+    expect(
+      errorSpy.mock.calls.some((call) =>
+        (call[0] as string).includes('notification.digest.send_failed'),
+      ),
+    ).toBe(true);
+    errorSpy.mockRestore();
   });
 });

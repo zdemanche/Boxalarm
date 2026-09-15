@@ -92,6 +92,32 @@ function groupByRecipient(items: readonly RawPendingItem[]): RecipientGroup[] {
   return [...groups.values()];
 }
 
+async function queryPendingItems(
+  ddb: DynamoDBDocumentClient,
+  tableName: string,
+  deptId: VerifiedDeptId,
+  today: string,
+): Promise<RawPendingItem[]> {
+  const items: RawPendingItem[] = [];
+  let exclusiveStartKey: Record<string, unknown> | undefined;
+  do {
+    const result = await ddb.send(
+      new QueryCommand({
+        TableName: tableName,
+        IndexName: 'GSI3',
+        KeyConditionExpression: 'gsi3pk = :gsi3pk',
+        ExpressionAttributeValues: {
+          ':gsi3pk': buildDeptScopedPk(deptId, 'DIGEST_PENDING', today),
+        },
+        ExclusiveStartKey: exclusiveStartKey,
+      }),
+    );
+    items.push(...((result.Items ?? []) as RawPendingItem[]));
+    exclusiveStartKey = result.LastEvaluatedKey as Record<string, unknown> | undefined;
+  } while (exclusiveStartKey);
+  return items;
+}
+
 async function resolveTrainingOfficers(
   ddb: DynamoDBDocumentClient,
   tableName: string,
@@ -129,7 +155,22 @@ async function resolveTrainingOfficers(
   return officers;
 }
 
-async function guardThenWrite(
+async function alreadySent(
+  ddb: DynamoDBDocumentClient,
+  tableName: string,
+  deptId: VerifiedDeptId,
+  recipientId: string,
+  category: string,
+  today: string,
+): Promise<boolean> {
+  const marker = buildDigestSentMarker(deptId, 'MEMBER', recipientId, category, today, 0);
+  const result = await ddb.send(
+    new GetCommand({ TableName: tableName, Key: { pk: marker.pk, sk: marker.sk } }),
+  );
+  return result.Item !== undefined;
+}
+
+async function commitSentRecord(
   ddb: DynamoDBDocumentClient,
   tableName: string,
   deptId: VerifiedDeptId,
@@ -188,13 +229,57 @@ async function sendDigestToMember(
   tableName: string,
   deptId: VerifiedDeptId,
   memberId: string,
-  email: string | undefined,
   items: readonly DigestNotificationItem[],
   today: string,
   now: number,
   correlationId: string,
 ): Promise<void> {
-  const outcome = await guardThenWrite(
+  const [member, sent, preference] = await Promise.all([
+    ddb.send(
+      new GetCommand({
+        TableName: tableName,
+        Key: { pk: buildDeptScopedPk(deptId, 'MEMBER', memberId), sk: 'METADATA' },
+      }),
+    ),
+    alreadySent(ddb, tableName, deptId, memberId, CERT_EXPIRY_CATEGORY, today),
+    ddb.send(
+      new GetCommand({
+        TableName: tableName,
+        Key: {
+          pk: buildDeptScopedPk(deptId, 'MEMBER', memberId),
+          sk: `NOTIFPREF#${memberId}#${CERT_EXPIRY_CATEGORY}`,
+        },
+      }),
+    ),
+  ]);
+
+  if (sent) {
+    emitOutcomeMetric(METRIC_NAMESPACE, 'DigestSkipped');
+    return;
+  }
+
+  const email = member.Item?.email as string | undefined;
+  const channels = parsePreferenceItem(preference.Item)?.channels;
+  const pushMuted = channels?.push === true;
+  const emailMuted = channels?.email === true;
+
+  try {
+    if (!pushMuted) {
+      await sendPushDigest(process.env, { memberId, email }, items, correlationId);
+    }
+    if (!emailMuted) {
+      await sendEmailDigest(process.env, { memberId, email }, items, correlationId);
+    }
+  } catch (error) {
+    logError('notification.digest.send_failed', error, correlationId, {
+      memberId,
+      category: CERT_EXPIRY_CATEGORY,
+    });
+    emitOutcomeMetric(METRIC_NAMESPACE, 'DigestSendFailed');
+    return;
+  }
+
+  const outcome = await commitSentRecord(
     ddb,
     tableName,
     deptId,
@@ -205,29 +290,9 @@ async function sendDigestToMember(
     now,
     correlationId,
   );
-  if (outcome === 'Skipped') {
-    return;
+  if (outcome === 'Written') {
+    emitOutcomeMetric(METRIC_NAMESPACE, pushMuted || emailMuted ? 'DigestMuted' : 'DigestSent');
   }
-
-  const preference = await ddb.send(
-    new GetCommand({
-      TableName: tableName,
-      Key: {
-        pk: buildDeptScopedPk(deptId, 'MEMBER', memberId),
-        sk: `NOTIFPREF#${memberId}#${CERT_EXPIRY_CATEGORY}`,
-      },
-    }),
-  );
-  const muted = parsePreferenceItem(preference.Item)?.muted === true;
-
-  if (muted) {
-    emitOutcomeMetric(METRIC_NAMESPACE, 'DigestMuted');
-    return;
-  }
-
-  await sendPushDigest(process.env, { memberId, email }, items, correlationId);
-  await sendEmailDigest(process.env, { memberId, email }, items, correlationId);
-  emitOutcomeMetric(METRIC_NAMESPACE, 'DigestSent');
 }
 
 async function sendDigestToTrainingOfficer(
@@ -240,7 +305,32 @@ async function sendDigestToTrainingOfficer(
   now: number,
   correlationId: string,
 ): Promise<void> {
-  const outcome = await guardThenWrite(
+  const sent = await alreadySent(
+    ddb,
+    tableName,
+    deptId,
+    officer.memberId,
+    TRAINING_OFFICER_DIGEST_CATEGORY,
+    today,
+  );
+  if (sent) {
+    emitOutcomeMetric(METRIC_NAMESPACE, 'DigestSkipped');
+    return;
+  }
+
+  try {
+    await sendPushDigest(process.env, officer, items, correlationId);
+    await sendEmailDigest(process.env, officer, items, correlationId);
+  } catch (error) {
+    logError('notification.digest.send_failed', error, correlationId, {
+      memberId: officer.memberId,
+      category: TRAINING_OFFICER_DIGEST_CATEGORY,
+    });
+    emitOutcomeMetric(METRIC_NAMESPACE, 'DigestSendFailed');
+    return;
+  }
+
+  const outcome = await commitSentRecord(
     ddb,
     tableName,
     deptId,
@@ -251,13 +341,9 @@ async function sendDigestToTrainingOfficer(
     now,
     correlationId,
   );
-  if (outcome === 'Skipped') {
-    return;
+  if (outcome === 'Written') {
+    emitOutcomeMetric(METRIC_NAMESPACE, 'DigestSent');
   }
-
-  await sendPushDigest(process.env, officer, items, correlationId);
-  await sendEmailDigest(process.env, officer, items, correlationId);
-  emitOutcomeMetric(METRIC_NAMESPACE, 'DigestSent');
 }
 
 export const handler = async (payload: unknown): Promise<{ processed: number }> => {
@@ -276,17 +362,7 @@ export const handler = async (payload: unknown): Promise<{ processed: number }> 
 
   let pendingItems: RawPendingItem[];
   try {
-    const result = await ddb.send(
-      new QueryCommand({
-        TableName: tableName,
-        IndexName: 'GSI3',
-        KeyConditionExpression: 'gsi3pk = :gsi3pk',
-        ExpressionAttributeValues: {
-          ':gsi3pk': buildDeptScopedPk(deptId, 'DIGEST_PENDING', today),
-        },
-      }),
-    );
-    pendingItems = (result.Items ?? []) as RawPendingItem[];
+    pendingItems = await queryPendingItems(ddb, tableName, deptId, today);
   } catch (error) {
     logError('notification.digest.query_failed', error, correlationId);
     emitOutcomeMetric(METRIC_NAMESPACE, 'DigestFailed');
@@ -300,49 +376,47 @@ export const handler = async (payload: unknown): Promise<{ processed: number }> 
   let processed = 0;
   for (const group of groupByRecipient(pendingItems)) {
     if (group.recipientType === 'MEMBER') {
-      let email: string | undefined;
       try {
-        const member = await ddb.send(
-          new GetCommand({
-            TableName: tableName,
-            Key: { pk: buildDeptScopedPk(deptId, 'MEMBER', group.recipientId), sk: 'METADATA' },
-          }),
+        await sendDigestToMember(
+          ddb,
+          tableName,
+          deptId,
+          group.recipientId,
+          group.items,
+          today,
+          now,
+          correlationId,
         );
-        email = member.Item?.email as string | undefined;
+        processed += 1;
       } catch (error) {
-        logError('notification.digest.member_lookup_failed', error, correlationId, {
+        logError('notification.digest.recipient_failed', error, correlationId, {
           memberId: group.recipientId,
         });
-        throw error;
+        emitOutcomeMetric(METRIC_NAMESPACE, 'DigestRecipientFailed');
       }
-      await sendDigestToMember(
-        ddb,
-        tableName,
-        deptId,
-        group.recipientId,
-        email,
-        group.items,
-        today,
-        now,
-        correlationId,
-      );
-      processed += 1;
       continue;
     }
 
     const officers = await resolveTrainingOfficers(ddb, tableName, deptId, correlationId);
     for (const officer of officers) {
-      await sendDigestToTrainingOfficer(
-        ddb,
-        tableName,
-        deptId,
-        officer,
-        group.items,
-        today,
-        now,
-        correlationId,
-      );
-      processed += 1;
+      try {
+        await sendDigestToTrainingOfficer(
+          ddb,
+          tableName,
+          deptId,
+          officer,
+          group.items,
+          today,
+          now,
+          correlationId,
+        );
+        processed += 1;
+      } catch (error) {
+        logError('notification.digest.recipient_failed', error, correlationId, {
+          memberId: officer.memberId,
+        });
+        emitOutcomeMetric(METRIC_NAMESPACE, 'DigestRecipientFailed');
+      }
     }
   }
 

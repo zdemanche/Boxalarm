@@ -74,7 +74,10 @@ describe('preferences handler (entrypoint-test + authz-wiring obligations)', () 
 
     const { putHandler, getHandler } = await import('./handler.js');
     const putResult = (await putHandler(
-      buildEvent('PUT /notifications/preferences', { category: 'cert-expiry', muted: true }),
+      buildEvent('PUT /notifications/preferences', {
+        category: 'cert-expiry',
+        channels: { push: true, email: false },
+      }),
     )) as { statusCode: number };
     expect(putResult.statusCode).toBe(200);
 
@@ -86,19 +89,24 @@ describe('preferences handler (entrypoint-test + authz-wiring obligations)', () 
     };
     expect(getResult.statusCode).toBe(200);
     const body = JSON.parse(getResult.body) as {
-      preferences: { category: string; muted: boolean; memberId: string; updatedAt: number }[];
+      preferences: {
+        category: string;
+        channels: { push: boolean; email: boolean };
+        memberId: string;
+        updatedAt: number;
+      }[];
     };
     expect(body.preferences).toEqual([
       {
         category: 'cert-expiry',
-        muted: true,
+        channels: { push: true, email: false },
         memberId: 'MBR-1',
         updatedAt: expect.any(Number) as number,
       },
     ]);
   });
 
-  it('PUT returns 400 when muted is absent', async () => {
+  it('PUT returns 400 when channels is absent', async () => {
     send.mockResolvedValue({ decision: Decision.ALLOW });
     const dynamoSend = vi.fn();
     mockDdb(dynamoSend);
@@ -119,7 +127,10 @@ describe('preferences handler (entrypoint-test + authz-wiring obligations)', () 
 
     const { putHandler } = await import('./handler.js');
     const result = (await putHandler(
-      buildEvent('PUT /notifications/preferences', { category: 42, muted: false }),
+      buildEvent('PUT /notifications/preferences', {
+        category: 42,
+        channels: { push: false, email: false },
+      }),
     )) as { statusCode: number };
 
     expect(result.statusCode).toBe(400);
@@ -147,7 +158,10 @@ describe('preferences handler (entrypoint-test + authz-wiring obligations)', () 
 
     const { putHandler } = await import('./handler.js');
     const result = (await putHandler(
-      buildEvent('PUT /notifications/preferences', { category: 'cert-expiry', muted: true }),
+      buildEvent('PUT /notifications/preferences', {
+        category: 'cert-expiry',
+        channels: { push: true, email: false },
+      }),
     )) as { statusCode: number };
 
     expect(result.statusCode).toBe(403);

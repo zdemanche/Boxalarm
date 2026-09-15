@@ -11,10 +11,15 @@ export function TODAY_BUCKET(now: Date): string {
   return now.toISOString().slice(0, 10);
 }
 
+export interface NotificationChannelMutes {
+  readonly push: boolean;
+  readonly email: boolean;
+}
+
 export interface NotificationPreference {
   readonly memberId: string;
   readonly category: string;
-  readonly muted: boolean;
+  readonly channels: NotificationChannelMutes;
   readonly updatedAt: number;
 }
 
@@ -24,7 +29,7 @@ export interface PreferenceItem {
   readonly entityType: 'NOTIFICATION_PREFERENCE';
   readonly memberId: string;
   readonly category: string;
-  readonly muted: boolean;
+  readonly channels: NotificationChannelMutes;
   readonly updatedAt: number;
 }
 
@@ -32,7 +37,7 @@ export function buildPreferenceItem(
   deptId: VerifiedDeptId,
   memberId: string,
   category: string,
-  muted: boolean,
+  channels: NotificationChannelMutes,
   updatedAt: number,
 ): PreferenceItem {
   return {
@@ -41,7 +46,7 @@ export function buildPreferenceItem(
     entityType: 'NOTIFICATION_PREFERENCE',
     memberId,
     category,
-    muted,
+    channels,
     updatedAt,
   };
 }
@@ -52,10 +57,11 @@ export function parsePreferenceItem(
   if (!item) {
     return undefined;
   }
+  const channels = item.channels as NotificationChannelMutes | undefined;
   return {
     memberId: item.memberId as string,
     category: item.category as string,
-    muted: item.muted as boolean,
+    channels: { push: channels?.push === true, email: channels?.email === true },
     updatedAt: item.updatedAt as number,
   };
 }
@@ -77,6 +83,8 @@ export interface NotificationItem {
   readonly createdAt: number;
   readonly readAt: number | null;
   readonly ttl: number;
+  readonly gsi1pk: string;
+  readonly gsi1sk: string;
 }
 
 export function buildNotificationItem(
@@ -99,6 +107,8 @@ export function buildNotificationItem(
     createdAt,
     readAt: null,
     ttl: Math.floor(createdAt / 1000) + NOTIFICATION_TTL_SECONDS,
+    gsi1pk: `MEMBER#${memberId}`,
+    gsi1sk: `NOTIFICATION#${notificationId}`,
   };
 }
 

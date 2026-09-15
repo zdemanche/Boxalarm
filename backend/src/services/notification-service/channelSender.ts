@@ -1,9 +1,17 @@
 import { PublishCommand, SNSClient } from '@aws-sdk/client-sns';
 import { SendEmailCommand, SESv2Client } from '@aws-sdk/client-sesv2';
 import AWSXRay from 'aws-xray-sdk-core';
+import { emitOutcomeMetric } from '@boxalarm/metrics';
 import type { DigestNotificationItem } from './repository.js';
 
 export const CERT_EXPIRY_DIGEST_CHANNEL_ID = 'cert-expiry-digest';
+const METRIC_NAMESPACE = 'Boxalarm/NotificationDigest';
+
+function logSkip(event: string, correlationId: string, extra: Record<string, unknown>): void {
+  console.error(
+    JSON.stringify({ event, service: 'notification-service', correlationId, ...extra }),
+  );
+}
 
 export interface DigestRecipient {
   readonly memberId: string;
@@ -76,6 +84,10 @@ export async function sendEmailDigest(
     throw new Error('NOTIFICATION_SES_FROM_ADDRESS is required and was not set');
   }
   if (!recipient.email) {
+    logSkip('notification.channel.email_skipped_no_address', correlationId, {
+      memberId: recipient.memberId,
+    });
+    emitOutcomeMetric(METRIC_NAMESPACE, 'EmailDigestSkippedNoAddress');
     return;
   }
   const ses = createSesClient(client);

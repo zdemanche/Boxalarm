@@ -102,12 +102,11 @@ async function markNotificationRead(
     const result = await client.send(
       new QueryCommand({
         TableName: tableName,
-        KeyConditionExpression: 'pk = :pk AND begins_with(sk, :prefix)',
-        FilterExpression: 'notificationId = :notificationId',
+        IndexName: 'GSI1',
+        KeyConditionExpression: 'gsi1pk = :gsi1pk AND gsi1sk = :gsi1sk',
         ExpressionAttributeValues: {
-          ':pk': buildDeptScopedPk(deptId, 'MEMBER', memberId),
-          ':prefix': 'NOTIF#',
-          ':notificationId': notificationId,
+          ':gsi1pk': `MEMBER#${memberId}`,
+          ':gsi1sk': `NOTIFICATION#${notificationId}`,
         },
       }),
     );
