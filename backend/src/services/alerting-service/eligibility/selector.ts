@@ -1,6 +1,7 @@
 import { QueryCommand } from '@aws-sdk/lib-dynamodb';
 import { buildDeptScopedPk, type VerifiedDeptId } from '@boxalarm/dept-scope';
 import type { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
+import type { ContactChannelSnapshot } from './resolvePushTarget.js';
 
 export type AvailabilityState = 'AVAILABLE' | 'MARKED_OFF' | 'LOA';
 
@@ -10,6 +11,7 @@ export type EligibilitySnapshotItem = Record<'pk' | 'sk', string> & {
   readonly active: boolean;
   readonly quals: readonly string[];
   readonly roles: readonly string[];
+  readonly contactChannels: readonly ContactChannelSnapshot[];
   readonly availabilityState: AvailabilityState;
   readonly snapshotUpdatedAt: number;
 };
@@ -28,6 +30,7 @@ export function parseSnapshotItem(
     active,
     quals,
     roles,
+    contactChannels,
     availabilityState,
     snapshotUpdatedAt,
   } = item;
@@ -39,6 +42,7 @@ export function parseSnapshotItem(
     typeof active !== 'boolean' ||
     !Array.isArray(quals) ||
     !Array.isArray(roles) ||
+    (contactChannels !== undefined && !Array.isArray(contactChannels)) ||
     (availabilityState !== 'AVAILABLE' &&
       availabilityState !== 'MARKED_OFF' &&
       availabilityState !== 'LOA') ||
@@ -54,6 +58,7 @@ export function parseSnapshotItem(
     active,
     quals,
     roles,
+    contactChannels: (contactChannels as ContactChannelSnapshot[] | undefined) ?? [],
     availabilityState,
     snapshotUpdatedAt,
   };
