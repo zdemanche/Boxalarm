@@ -112,7 +112,7 @@ async function withRepositoryErrorHandling<T>(
   }
 }
 
-interface ApparatusItem extends ApparatusRecord {
+export interface ApparatusItem extends ApparatusRecord {
   readonly apparatusId: string;
   readonly outOfServiceReason?: string;
   readonly outOfServiceStartAt?: number;
@@ -122,7 +122,7 @@ function apparatusIdFromRegistryKey(registryItemKey: string): string {
   return registryItemKey.slice(registryItemKey.lastIndexOf('#') + 1);
 }
 
-async function findApparatusItem(
+export async function findApparatusItem(
   client: DynamoDBDocumentClient,
   tableName: string,
   deptId: VerifiedDeptId,
