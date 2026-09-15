@@ -1,3 +1,4 @@
+import { palette, radius, touchTarget } from '@boxalarm/design-tokens';
 import { render } from '@testing-library/react-native';
 import { getInternetCredentials } from 'react-native-keychain';
 import { App } from './App';
@@ -39,6 +40,18 @@ test('a cold start with no stored credentials renders the sign-in screen', async
 
   await findByText('Boxalarm');
   expect(await findByText('Sign in')).toBeTruthy();
+});
+
+test('the sign-in button uses the accent color and meets the N3.5 touch-target minimum', async () => {
+  const { findByRole } = await render(<App />);
+
+  const button = await findByRole('button', { name: 'Sign in' });
+  expect(button).toHaveStyle({ backgroundColor: palette.day.accent, borderRadius: radius.default });
+  const style = Array.isArray(button.props.style)
+    ? Object.assign({}, ...button.props.style)
+    : button.props.style;
+  expect(style.minHeight).toBeGreaterThanOrEqual(touchTarget.baseline.ios);
+  expect(style.minWidth).toBeGreaterThanOrEqual(touchTarget.baseline.ios);
 });
 
 test('a valid stored session renders the highest-priority role dashboard', async () => {

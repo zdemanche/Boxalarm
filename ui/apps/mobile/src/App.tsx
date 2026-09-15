@@ -1,4 +1,11 @@
-import { palette, spacing } from '@boxalarm/design-tokens';
+import {
+  elevation,
+  palette,
+  radius,
+  spacing,
+  touchTarget,
+  typography,
+} from '@boxalarm/design-tokens';
 import { Component, useEffect, useRef, useState, type ElementRef, type ReactNode } from 'react';
 import {
   AccessibilityInfo,
@@ -94,27 +101,55 @@ function SignInScreen() {
     >
       <Text
         accessibilityRole="header"
-        style={{ color: tokens.foreground, fontSize: 28, marginBottom: spacing.lg }}
+        style={{
+          color: tokens.foreground,
+          fontSize: typography.size.display,
+          fontWeight: '700',
+          marginBottom: spacing.xs,
+        }}
       >
         Boxalarm
+      </Text>
+      <Text
+        style={{
+          color: tokens.foreground,
+          opacity: 0.7,
+          fontSize: typography.size.base,
+          marginBottom: spacing.xl,
+        }}
+      >
+        Nichols Fire Department
       </Text>
       <TouchableOpacity
         accessibilityRole="button"
         accessibilityLabel="Sign in"
         onPress={handleSignIn}
         style={{
-          minWidth: 220,
-          minHeight: 56,
+          minWidth: 240,
+          minHeight: touchTarget.baseline.ios,
           alignItems: 'center',
           justifyContent: 'center',
-          paddingHorizontal: spacing.lg,
-          backgroundColor: tokens.foreground,
+          paddingHorizontal: spacing.xl,
+          paddingVertical: spacing.md,
+          backgroundColor: tokens.accent,
+          borderRadius: radius.default,
+          shadowColor: '#000000',
+          shadowOffset: { width: 0, height: 2 },
+          shadowOpacity: elevation.level1.shadowOpacity,
+          shadowRadius: elevation.level1.shadowRadius,
+          elevation: elevation.level1.androidElevation,
         }}
       >
-        <Text style={{ color: tokens.background, fontSize: 20 }}>Sign in</Text>
+        <Text style={{ color: tokens.background, fontSize: typography.size.lg, fontWeight: '600' }}>
+          Sign in
+        </Text>
       </TouchableOpacity>
       {error && (
-        <Text ref={errorRef} accessible style={{ color: tokens.foreground, marginTop: spacing.md }}>
+        <Text
+          ref={errorRef}
+          accessible
+          style={{ color: tokens.error, fontSize: typography.size.sm, marginTop: spacing.md }}
+        >
           {error}
         </Text>
       )}
@@ -137,7 +172,10 @@ function LandingScreen() {
         justifyContent: 'center',
       }}
     >
-      <Text accessibilityRole="header" style={{ color: tokens.foreground, fontSize: 24 }}>
+      <Text
+        accessibilityRole="header"
+        style={{ color: tokens.foreground, fontSize: typography.size.xl, fontWeight: '700' }}
+      >
         {ROLE_LABEL[role]}
       </Text>
     </SafeAreaView>
