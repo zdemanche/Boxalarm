@@ -158,16 +158,28 @@ export async function runFanOut(
   }
 
   for (const member of eligibleMembers) {
-    await fanOutOneMember(
-      ddb,
-      scheduler,
-      tableName,
-      deptId,
-      dispatchId,
-      dispatchedAt,
-      member.memberId,
-      member.quals,
-    );
+    try {
+      await fanOutOneMember(
+        ddb,
+        scheduler,
+        tableName,
+        deptId,
+        dispatchId,
+        dispatchedAt,
+        member.memberId,
+        member.quals,
+      );
+    } catch (error) {
+      // One member's failure must never silently stop the rest of the roster from being
+      // alerted — that would leave the remaining department un-notified with only a log line
+      // to show for it. Record and continue.
+      logError('alerting.fanout.member_failed', error, {
+        deptId,
+        dispatchId,
+        memberId: member.memberId,
+      });
+      emitOutcomeMetric(METRIC_NAMESPACE, 'FanOutMemberFailed');
+    }
   }
 
   emitOutcomeMetric(METRIC_NAMESPACE, 'FanOutCompleted');

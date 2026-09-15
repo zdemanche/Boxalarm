@@ -88,6 +88,26 @@ export const handler = async (payload: unknown): Promise<{ outcome: EscalationOu
   const escalatedAt = Math.floor(Date.now() / 1000);
   const idempotencyKey = `${dispatchId}#${toneSequence}#${memberId}#VOICE`;
 
+  // Publish before the DynamoDB write, not after: publishEscalationTriggered carries a
+  // deterministic SNS FIFO MessageDeduplicationId (dispatchId#toneSequence#memberId#voice), so a
+  // retried publish is safely deduped. Publishing after the conditional write would let a retry
+  // land on "already escalated" (from the earlier write succeeding) and skip publishing forever —
+  // recording the escalation as delivered while the voice call never actually fires. See
+  // boxalarm-docs#11 for the prior SMS-never-sends incident this mirrors.
+  const { topicArn } = readAlertingTopicConfig(process.env);
+  try {
+    await publishEscalationTriggered(getSnsClient(), topicArn, {
+      deptId,
+      dispatchId,
+      memberId,
+      toneSequence,
+    });
+  } catch (error) {
+    logError('alerting.escalation.publish_failed', error, { correlationId });
+    emitOutcomeMetric(METRIC_NAMESPACE, 'EscalationFailed', 'SnsUnavailable');
+    throw error;
+  }
+
   try {
     await ddb.send(
       new TransactWriteCommand({
@@ -156,20 +176,6 @@ export const handler = async (payload: unknown): Promise<{ outcome: EscalationOu
     }
     logError('alerting.escalation.write_failed', error, { correlationId });
     emitOutcomeMetric(METRIC_NAMESPACE, 'EscalationFailed', 'DynamoDbUnavailable');
-    throw error;
-  }
-
-  const { topicArn } = readAlertingTopicConfig(process.env);
-  try {
-    await publishEscalationTriggered(getSnsClient(), topicArn, {
-      deptId,
-      dispatchId,
-      memberId,
-      toneSequence,
-    });
-  } catch (error) {
-    logError('alerting.escalation.publish_failed', error, { correlationId });
-    emitOutcomeMetric(METRIC_NAMESPACE, 'EscalationFailed', 'SnsUnavailable');
     throw error;
   }
 
