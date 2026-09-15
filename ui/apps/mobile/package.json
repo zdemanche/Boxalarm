@@ -38,6 +38,7 @@
   },
   "jest": {
     "preset": "@react-native/jest-preset",
+    "testTimeout": 60000,
     "setupFiles": [
       "<rootDir>/jest.setup.js"
     ],

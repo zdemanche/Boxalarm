@@ -66,8 +66,8 @@ export function AvailabilityScreen() {
           marginTop: spacing.sm,
         }}
       >
-        Suppresses alert paging for the next 7 days. This does not cancel any shift you've
-        already claimed.
+        Suppresses alert paging for the next 7 days. This does not cancel any shift you've already
+        claimed.
       </Text>
       <TextInput
         value={reason}

@@ -15,9 +15,9 @@ export default tseslint.config(
     },
   },
   {
-    files: ['**/babel.config.js', '**/metro.config.js'],
+    files: ['**/babel.config.js', '**/metro.config.js', '**/jest.setup.js'],
     languageOptions: {
-      globals: { module: 'writable', require: 'readonly', __dirname: 'readonly' },
+      globals: { module: 'writable', require: 'readonly', __dirname: 'readonly', jest: 'readonly' },
     },
     rules: { '@typescript-eslint/no-require-imports': 'off' },
   },

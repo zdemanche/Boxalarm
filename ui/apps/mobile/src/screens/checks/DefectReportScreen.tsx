@@ -159,7 +159,9 @@ export function DefectReportScreen() {
             marginTop: spacing.lg,
           }}
         >
-          <Text style={{ color: tokens.background, fontSize: typography.size.base, fontWeight: '600' }}>
+          <Text
+            style={{ color: tokens.background, fontSize: typography.size.base, fontWeight: '600' }}
+          >
             Submit defect report
           </Text>
         </TouchableOpacity>

@@ -54,7 +54,6 @@ test('tapping Not responding submits immediately without an ETA step', async () 
   expect(await findByText(/you responded: not responding/i)).toBeTruthy();
 });
 
-
 test('announces the recorded response for screen reader users', async () => {
   const announceSpy = jest.spyOn(AccessibilityInfo, 'announceForAccessibility');
   const { findByRole } = await render(<AlertDetailScreen />);
