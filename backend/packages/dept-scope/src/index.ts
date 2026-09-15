@@ -38,7 +38,7 @@ export function buildDeptScopedPk(deptId: VerifiedDeptId, ...segments: readonly 
 }
 
 const PK_ASSIGNMENT =
-  /["'`]?\bpk\b["'`]?\s*[:=]\s*(`[^`]*`|'[^']*'|"[^"]*"|\{\s*S:\s*(?:`[^`]*`|'[^']*'|"[^"]*")\s*\}|[A-Za-z_$][\w$]*(?:\([^)]*\))?)/gi;
+  /["'`]?\bpk\b["'`]?\s*([:=])\s*(`[^`]*`|'[^']*'|"[^"]*"|\{\s*S:\s*(?:`[^`]*`|'[^']*'|"[^"]*")\s*\}|[A-Za-z_$][\w$]*(?:\([^)]*\))?)/gi;
 const REQUIRED_PK_PREFIX = 'DEPT#${deptId}';
 const BUILDER_CALL_PREFIX = 'buildDeptScopedPk(';
 
@@ -51,13 +51,29 @@ function unwrapLiteral(value: string): string | undefined {
   return marshalledMatch ? marshalledMatch[1] : undefined;
 }
 
+// TS primitive type keywords a bare RHS can equal only in a `pk: string`-style type
+// annotation (an interface field or a function's object-literal return type) — never a
+// real value assignment, which is always a quoted literal or a builder call. Only
+// relevant when the matched delimiter is ':' — a `=` delimiter is always a value
+// assignment (e.g. `const pk = string;` assigning an identifier literally named
+// `string`), never a type annotation, so it must still be checked as a violation.
+const TS_PRIMITIVE_TYPE_KEYWORDS = new Set(['string']);
+
 // ponytail: regex sweep over source text, not AST — upgrade to a custom eslint rule if false positives appear on real entity code
 export function findPkScopingViolations(sourceText: string): readonly string[] {
   const violations: string[] = [];
   for (const match of sourceText.matchAll(PK_ASSIGNMENT)) {
-    const rhs = match[1] ?? '';
+    const delimiter = match[1];
+    const rhs = match[2] ?? '';
     if (rhs.startsWith(BUILDER_CALL_PREFIX)) {
       continue;
+    }
+    if (delimiter === ':' && TS_PRIMITIVE_TYPE_KEYWORDS.has(rhs)) {
+      const afterMatch = sourceText.slice((match.index ?? 0) + match[0].length);
+      const isDeclarationWithInitializer = /^\s*=(?!=)/.test(afterMatch);
+      if (!isDeclarationWithInitializer) {
+        continue;
+      }
     }
     const literal = unwrapLiteral(rhs);
     if (literal === undefined || !literal.startsWith(REQUIRED_PK_PREFIX)) {

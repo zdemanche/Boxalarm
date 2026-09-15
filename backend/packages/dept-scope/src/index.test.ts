@@ -97,4 +97,23 @@ describe('findPkScopingViolations', () => {
     const source = 'const pkValue = `MEMBER#${id}`; const item = { pk: pkValue };';
     expect(findPkScopingViolations(source)).toHaveLength(1);
   });
+
+  it('does not flag a `pk: string` type annotation on an interface field or return type', () => {
+    const source =
+      'export interface Item { readonly pk: string; readonly sk: string; }\n' +
+      'function keys(): { pk: string; sk: string } { return { pk: buildDeptScopedPk(deptId, id), sk: `M` }; }';
+    expect(findPkScopingViolations(source)).toEqual([]);
+  });
+
+  it('flags a `const pk: string = <untrusted>` typed declaration with an initializer', () => {
+    const source = 'const pk: string = JSON.parse(event.body).pk;';
+    expect(findPkScopingViolations(source)).toHaveLength(1);
+  });
+
+  it('flags a bare identifier named `string` assigned via `=`, not a type annotation', () => {
+    expect(findPkScopingViolations('const pk = string;')).toHaveLength(1);
+    expect(
+      findPkScopingViolations('import { string } from "io-ts"; const pk = string;'),
+    ).toHaveLength(1);
+  });
 });
