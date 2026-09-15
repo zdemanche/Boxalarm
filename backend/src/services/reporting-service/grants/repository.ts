@@ -1,6 +1,9 @@
 import { QueryCommand, type DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
 import { buildDeptScopedPk, type VerifiedDeptId } from '@boxalarm/dept-scope';
 import type { GrantsReportConfig } from '../client.js';
+import { logError as logErrorFields } from '../logger.js';
+
+const FANOUT_CONCURRENCY = 5;
 
 export interface ReportPeriod {
   readonly periodStart: number;
@@ -30,15 +33,19 @@ export interface ApparatusOosHistory {
   readonly totalOutOfServiceEvents: number;
 }
 
-function logError(event: string, error: unknown, fields: Record<string, unknown> = {}): void {
-  console.error(
-    JSON.stringify({
-      event,
-      service: 'reporting-service',
-      reason: error instanceof Error ? error.constructor.name : 'UnknownError',
-      ...fields,
-    }),
-  );
+function logError(
+  event: string,
+  error: unknown,
+  fields: Record<string, unknown> = {},
+): void {
+  logErrorFields({
+    event,
+    service: 'reporting-service',
+    reason: error instanceof Error ? error.constructor.name : 'UnknownError',
+    message: error instanceof Error ? error.message : String(error),
+    stack: error instanceof Error ? error.stack : undefined,
+    ...fields,
+  });
 }
 
 async function queryAllPages(
@@ -55,8 +62,34 @@ async function queryAllPages(
   return items;
 }
 
+async function mapWithConcurrency<T, R>(
+  items: readonly T[],
+  limit: number,
+  fn: (item: T) => Promise<R>,
+): Promise<R[]> {
+  const results: R[] = new Array(items.length) as R[];
+  let nextIndex = 0;
+  async function worker(): Promise<void> {
+    while (nextIndex < items.length) {
+      const current = nextIndex;
+      nextIndex += 1;
+      results[current] = await fn(items[current] as T);
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, () => worker()));
+  return results;
+}
+
 function isWithinPeriod(timestampMs: number, period: ReportPeriod): boolean {
   return timestampMs >= period.periodStart && timestampMs < period.periodEnd;
+}
+
+function overlapsPeriod(
+  startAtMs: number,
+  endAtMs: number | null,
+  period: ReportPeriod,
+): boolean {
+  return startAtMs < period.periodEnd && (endAtMs === null || endAtMs >= period.periodStart);
 }
 
 export async function getActiveMemberCountAndTrend(
@@ -64,6 +97,7 @@ export async function getActiveMemberCountAndTrend(
   config: GrantsReportConfig,
   deptId: VerifiedDeptId,
   period: ReportPeriod,
+  traceId?: string,
 ): Promise<MemberCountAndTrend> {
   try {
     const items = await queryAllPages(client, (exclusiveStartKey) =>
@@ -88,7 +122,7 @@ export async function getActiveMemberCountAndTrend(
     }
     return { activeMemberCount, joinedInPeriod };
   } catch (error) {
-    logError('reporting.grants.memberCount.failed', error, { deptId });
+    logError('reporting.grants.memberCount.failed', error, { deptId, correlationId: traceId });
     throw error;
   }
 }
@@ -98,6 +132,7 @@ export async function getTrainingHoursCompliance(
   config: GrantsReportConfig,
   deptId: VerifiedDeptId,
   period: ReportPeriod,
+  traceId?: string,
 ): Promise<TrainingHoursCompliance> {
   try {
     const eventItems = await queryAllPages(client, (exclusiveStartKey) =>
@@ -110,23 +145,21 @@ export async function getTrainingHoursCompliance(
       }),
     );
     const eventsInPeriod = eventItems.filter((item) => {
-      const startAt = typeof item.startAt === 'number' ? item.startAt : NaN;
-      return Number.isFinite(startAt) && isWithinPeriod(startAt, period);
+      const startAtSeconds = typeof item.startAt === 'number' ? item.startAt : NaN;
+      return Number.isFinite(startAtSeconds) && isWithinPeriod(startAtSeconds * 1000, period);
     });
 
-    const attendeeLists = await Promise.all(
-      eventsInPeriod.map((event) =>
-        queryAllPages(client, (exclusiveStartKey) =>
-          new QueryCommand({
-            TableName: config.trainingTableName,
-            KeyConditionExpression: 'pk = :pk AND begins_with(sk, :prefix)',
-            ExpressionAttributeValues: {
-              ':pk': buildDeptScopedPk(deptId, 'TRAINING_EVENT', event.eventId as string),
-              ':prefix': 'ATTENDEE#',
-            },
-            ExclusiveStartKey: exclusiveStartKey,
-          }),
-        ),
+    const attendeeLists = await mapWithConcurrency(eventsInPeriod, FANOUT_CONCURRENCY, (event) =>
+      queryAllPages(client, (exclusiveStartKey) =>
+        new QueryCommand({
+          TableName: config.trainingTableName,
+          KeyConditionExpression: 'pk = :pk AND begins_with(sk, :prefix)',
+          ExpressionAttributeValues: {
+            ':pk': buildDeptScopedPk(deptId, 'TRAINING_EVENT', event.eventId as string),
+            ':prefix': 'ATTENDEE#',
+          },
+          ExclusiveStartKey: exclusiveStartKey,
+        }),
       ),
     );
 
@@ -147,7 +180,7 @@ export async function getTrainingHoursCompliance(
 
     return { totalHours, memberCount: members.size, eventCount: eventsInPeriod.length };
   } catch (error) {
-    logError('reporting.grants.trainingHours.failed', error, { deptId });
+    logError('reporting.grants.trainingHours.failed', error, { deptId, correlationId: traceId });
     throw error;
   }
 }
@@ -157,6 +190,7 @@ export async function getApparatusOosHistory(
   config: GrantsReportConfig,
   deptId: VerifiedDeptId,
   period: ReportPeriod,
+  traceId?: string,
 ): Promise<ApparatusOosHistory> {
   try {
     const apparatusItems = await queryAllPages(client, (exclusiveStartKey) =>
@@ -169,8 +203,10 @@ export async function getApparatusOosHistory(
       }),
     );
 
-    const oosLists = await Promise.all(
-      apparatusItems.map(async (apparatus) => {
+    const oosLists = await mapWithConcurrency(
+      apparatusItems,
+      FANOUT_CONCURRENCY,
+      async (apparatus) => {
         const apparatusId = apparatus.apparatusId as string;
         const unitId = apparatus.unitId as string;
         const items = await queryAllPages(client, (exclusiveStartKey) =>
@@ -187,7 +223,12 @@ export async function getApparatusOosHistory(
         return items
           .filter((item) => {
             const startAtSeconds = typeof item.startAt === 'number' ? item.startAt : NaN;
-            return Number.isFinite(startAtSeconds) && isWithinPeriod(startAtSeconds * 1000, period);
+            if (!Number.isFinite(startAtSeconds)) {
+              return false;
+            }
+            const endAtSeconds = typeof item.endAt === 'number' ? item.endAt : null;
+            const endAtMs = endAtSeconds === null ? null : endAtSeconds * 1000;
+            return overlapsPeriod(startAtSeconds * 1000, endAtMs, period);
           })
           .map(
             (item): ApparatusOosRecord => ({
@@ -197,13 +238,13 @@ export async function getApparatusOosHistory(
               endAt: typeof item.endAt === 'number' ? item.endAt : null,
             }),
           );
-      }),
+      },
     );
 
     const records = oosLists.flat();
     return { records, totalOutOfServiceEvents: records.length };
   } catch (error) {
-    logError('reporting.grants.apparatusOos.failed', error, { deptId });
+    logError('reporting.grants.apparatusOos.failed', error, { deptId, correlationId: traceId });
     throw error;
   }
 }

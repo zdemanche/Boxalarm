@@ -1,7 +1,7 @@
-import { randomUUID } from 'node:crypto';
 import type { APIGatewayProxyResultV2 } from 'aws-lambda';
 import {
   badRequestProblem,
+  extractTraceId,
   serviceUnavailableProblem,
   withAuthorization,
   type CedarPrincipalContext,
@@ -10,6 +10,7 @@ import {
 import { toVerifiedDeptId } from '@boxalarm/dept-scope';
 import { emitOutcomeMetric } from '@boxalarm/metrics';
 import { createDynamoClient, readGrantsReportConfig } from '../client.js';
+import { logError } from '../logger.js';
 import { assembleGrantsReport } from './assembleReport.js';
 import {
   getActiveMemberCountAndTrend,
@@ -20,12 +21,6 @@ import {
 
 const METRIC_NAMESPACE = 'Boxalarm/Reporting';
 const METRIC_NAME = 'GrantsReport';
-
-function extractTraceId(event: GuardEvent): string {
-  const traceparent = event.headers?.traceparent ?? event.headers?.Traceparent;
-  const traceId = traceparent?.split('-')[1];
-  return traceId && traceId.length > 0 ? traceId : randomUUID();
-}
 
 function parsePeriod(event: GuardEvent): ReportPeriod | undefined {
   const periodStartRaw = event.queryStringParameters?.periodStart;
@@ -60,9 +55,9 @@ async function getGrantsReport(
     const client = createDynamoClient(process.env);
     const config = readGrantsReportConfig(process.env);
     const [memberCountAndTrend, trainingHoursCompliance, apparatusOosHistory] = await Promise.all([
-      getActiveMemberCountAndTrend(client, config, deptId, period),
-      getTrainingHoursCompliance(client, config, deptId, period),
-      getApparatusOosHistory(client, config, deptId, period),
+      getActiveMemberCountAndTrend(client, config, deptId, period, traceId),
+      getTrainingHoursCompliance(client, config, deptId, period, traceId),
+      getApparatusOosHistory(client, config, deptId, period, traceId),
     ]);
 
     const report = assembleGrantsReport({
@@ -81,15 +76,15 @@ async function getGrantsReport(
       body: JSON.stringify(report),
     };
   } catch (error) {
-    console.error(
-      JSON.stringify({
-        event: 'reporting.grants.get_failed',
-        service: 'reporting-service',
-        reason: error instanceof Error ? error.constructor.name : 'UnknownError',
-        correlationId: traceId,
-        deptId,
-      }),
-    );
+    logError({
+      event: 'reporting.grants.get_failed',
+      service: 'reporting-service',
+      reason: error instanceof Error ? error.constructor.name : 'UnknownError',
+      message: error instanceof Error ? error.message : String(error),
+      stack: error instanceof Error ? error.stack : undefined,
+      correlationId: traceId,
+      deptId,
+    });
     emitOutcomeMetric(METRIC_NAMESPACE, METRIC_NAME, 'Failed');
     return serviceUnavailableProblem(traceId);
   }

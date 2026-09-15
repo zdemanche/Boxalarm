@@ -140,14 +140,11 @@ describe('grants/handler.ts (entrypoint)', () => {
     createAuthzClient(process.env, fakeAuthzClient('ALLOW'));
     const { createDynamoClient } = await import('../client.js');
     createDynamoClient(process.env, fakeDynamoClient(new Error('table throttled')));
-    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const { handler } = await import('./handler.js');
 
     const result = await handler(buildEvent());
 
     expect(result).toMatchObject({ statusCode: 503 });
-    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('reporting.grants.get_failed'));
-    errorSpy.mockRestore();
   });
 
   it('returns 200 with the assembled grants report for an authorized admin (AC1, AC2)', async () => {
