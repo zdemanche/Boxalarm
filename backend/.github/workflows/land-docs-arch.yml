@@ -3,8 +3,8 @@ on:
   workflow_dispatch:
     inputs:
       docs_token:
-        description: "PAT with Contents:write on zdemanche/boxalarm-docs"
-        required: true
+        description: "Optional PAT override (else uses secrets.BOXALARM_DOCS_TOKEN)"
+        required: false
         type: string
       docs_branch:
         description: "Target branch on boxalarm-docs"
@@ -18,23 +18,28 @@ jobs:
       - uses: actions/checkout@v4
       - name: PUT docs/architecture.md
         env:
-          DOCS_TOKEN: ${{ inputs.docs_token }}
+          DOCS_TOKEN: ${{ inputs.docs_token || secrets.BOXALARM_DOCS_TOKEN }}
           DOCS_BRANCH: ${{ inputs.docs_branch }}
         run: |
           set -euo pipefail
+          if [ -z "${DOCS_TOKEN:-}" ]; then
+            echo "Missing docs write token. Set secrets.BOXALARM_DOCS_TOKEN or pass docs_token input."
+            exit 1
+          fi
           SRC=tmp-host/architecture-merged.md
           test -f "$SRC"
           test "$(wc -c < "$SRC")" -eq 310943
           echo "bf82b5634184aa43b430eb5b6923c87e7d667147875eaf51836b734b56e964fa  $SRC" | sha256sum -c
           ! grep -q 'FanOut --> VoiceQ' "$SRC"
           grep -q 'Endpoint count: 83' "$SRC"
-          CODE=$(curl -sS -o /tmp/meta.json -w '%{http_code}' \
+          curl -sS -o /tmp/meta.json -w '%{http_code}' \
             -H "Authorization: Bearer ${DOCS_TOKEN}" \
             -H "Accept: application/vnd.github+json" \
             -H "User-Agent: boxalarm-land-architecture" \
-            "https://api.github.com/repos/zdemanche/boxalarm-docs/contents/docs/architecture.md?ref=${DOCS_BRANCH}")
+            "https://api.github.com/repos/zdemanche/boxalarm-docs/contents/docs/architecture.md?ref=${DOCS_BRANCH}" \
+            > /tmp/code.txt || true
           python3 <<'PY'
-          import json, os, base64, pathlib, urllib.request
+          import json, os, base64, pathlib, urllib.request, urllib.error
           content = pathlib.Path("tmp-host/architecture-merged.md").read_bytes()
           body = {
               "message": "docs: land N-3/N-5/N-9 + #119 FanOut→VoiceQ fix on architecture.md",
@@ -58,9 +63,14 @@ jobs:
               },
               method="PUT",
           )
-          with urllib.request.urlopen(req) as r:
-              out = json.load(r)
+          try:
+              with urllib.request.urlopen(req) as r:
+                  out = json.load(r)
+          except urllib.error.HTTPError as e:
+              print(e.read().decode())
+              raise
           print("commit", out["commit"]["sha"])
           print("size", out["content"]["size"])
           print("content_sha", out["content"]["sha"])
+          assert out["content"]["size"] == 310943
           PY
