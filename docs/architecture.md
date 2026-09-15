@@ -1,1 +1,1 @@
-PLACEHOLDER
+file:///cursor/stores/self/uploads/architecture-fixed.md
