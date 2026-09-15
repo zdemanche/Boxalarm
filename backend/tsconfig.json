@@ -5,6 +5,10 @@
     "outDir": "dist",
     "tsBuildInfoFile": "dist/.tsbuildinfo"
   },
-  "references": [{ "path": "packages/dept-scope" }, { "path": "packages/authz" }],
+  "references": [
+    { "path": "packages/dept-scope" },
+    { "path": "packages/authz" },
+    { "path": "packages/outbox" }
+  ],
   "include": ["src", "test", "vitest.config.ts"]
 }
