@@ -105,23 +105,15 @@ function parseCandidates(body: string | undefined): DisposalCandidate[] | { erro
       return { error: 'each candidate must be an object.' };
     }
     const record = entry as Record<string, unknown>;
-    if (
-      typeof record.pk !== 'string' ||
-      typeof record.sk !== 'string' ||
-      typeof record.entityType !== 'string' ||
-      typeof record.ageEpochSeconds !== 'number'
-    ) {
+    if (typeof record.pk !== 'string' || typeof record.sk !== 'string') {
       return {
-        error: 'each candidate requires pk, sk, entityType, and ageEpochSeconds.',
+        error: 'each candidate requires pk and sk (entityType/age/kms are read from DynamoDB).',
       };
     }
     parsed.push({
-      // Computed keys: candidate pk is caller-supplied stored key, not a newly authored write.
+      // Computed keys: locator only — trusted fields are derived from GetItem in runDisposal.
       ['pk']: record.pk,
       ['sk']: record.sk,
-      entityType: record.entityType,
-      ageEpochSeconds: record.ageEpochSeconds,
-      ...(typeof record.kmsKeyId === 'string' ? { kmsKeyId: record.kmsKeyId } : {}),
     });
   }
   return parsed;

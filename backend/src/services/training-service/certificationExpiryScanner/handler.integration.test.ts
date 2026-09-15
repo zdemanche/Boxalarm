@@ -41,7 +41,7 @@ beforeAll(async () => {
       ],
       GlobalSecondaryIndexes: [
         {
-          IndexName: 'gsi2',
+          IndexName: 'GSI2',
           KeySchema: [
             { AttributeName: 'gsi2pk', KeyType: 'HASH' },
             { AttributeName: 'gsi2sk', KeyType: 'RANGE' },

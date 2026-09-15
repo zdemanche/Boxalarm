@@ -1,6 +1,11 @@
 import { ScheduleKeyDeletionCommand, type KMSClient } from '@aws-sdk/client-kms';
-import { DeleteCommand, PutCommand, type DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
-import type { VerifiedDeptId } from '@boxalarm/dept-scope';
+import {
+  DeleteCommand,
+  GetCommand,
+  PutCommand,
+  type DynamoDBDocumentClient,
+} from '@aws-sdk/lib-dynamodb';
+import { buildDeptScopedPk, type VerifiedDeptId } from '@boxalarm/dept-scope';
 import { emitEmf } from '@boxalarm/metrics';
 import { buildAuditLogEntryItem } from '../audit/auditEntry.js';
 import { getRetentionConfig } from './configRepository.js';
@@ -24,13 +29,10 @@ export const LIFE_SAFETY_ENTITY_TYPES = [
 
 const LIFE_SAFETY_SET = new Set<string>(LIFE_SAFETY_ENTITY_TYPES);
 
+/** Locator keys only — entityType / age / kmsKeyId are read from the stored item. */
 export interface DisposalCandidate {
   readonly pk: string;
   readonly sk: string;
-  readonly entityType: string;
-  /** Epoch seconds used to decide whether the record is past retention. */
-  readonly ageEpochSeconds: number;
-  readonly kmsKeyId?: string;
 }
 
 export interface RunDisposalInput {
@@ -65,6 +67,26 @@ export function isPastRetention(
 ): boolean {
   const cutoff = nowEpochSeconds - retentionYears * SECONDS_PER_YEAR;
   return ageEpochSeconds < cutoff;
+}
+
+/** True when pk is exactly the dept root or a child under `DEPT#{deptId}#…`. */
+export function isPkInDeptScope(pk: string, deptId: VerifiedDeptId): boolean {
+  const deptRoot = buildDeptScopedPk(deptId);
+  return pk === deptRoot || pk.startsWith(`${deptRoot}#`);
+}
+
+/**
+ * Age for retention is taken from stored timestamps only — never from the caller.
+ * Prefer startAt (OOS), then archivedAt / createdAt.
+ */
+export function deriveAgeEpochSeconds(item: Record<string, unknown>): number | undefined {
+  for (const key of ['startAt', 'archivedAt', 'createdAt'] as const) {
+    const value = item[key];
+    if (typeof value === 'number' && Number.isFinite(value)) {
+      return value;
+    }
+  }
+  return undefined;
 }
 
 function emitDisposalInvoked(): void {
@@ -110,16 +132,50 @@ export async function runDisposal(input: RunDisposalInput): Promise<RunDisposalR
 
   try {
     for (const candidate of input.candidates) {
-      if (LIFE_SAFETY_SET.has(candidate.entityType)) {
-        refused.push(candidate.entityType);
+      if (!isPkInDeptScope(candidate.pk, input.deptId)) {
+        refused.push(`CROSS_DEPT:${candidate.pk}`);
         continue;
       }
 
-      if (!isPastRetention(candidate.ageEpochSeconds, retentionYearsUsed, input.nowEpochSeconds)) {
+      const got = await input.docClient.send(
+        new GetCommand({
+          TableName: tableName,
+          // Computed keys: locator from caller; trusted fields come from Item below.
+          Key: { ['pk']: candidate.pk, ['sk']: candidate.sk },
+        }),
+      );
+      const item = got.Item as Record<string, unknown> | undefined;
+      if (!item) {
+        refused.push(`MISSING:${candidate.pk}#${candidate.sk}`);
         continue;
       }
 
-      if (HARD_DELETE_ENTITY_TYPES.has(candidate.entityType)) {
+      const storedPk = item.pk;
+      if (typeof storedPk !== 'string' || !isPkInDeptScope(storedPk, input.deptId)) {
+        refused.push(`CROSS_DEPT:${typeof storedPk === 'string' ? storedPk : candidate.pk}`);
+        continue;
+      }
+
+      const entityType = item.entityType;
+      if (typeof entityType !== 'string') {
+        refused.push(`INVALID_ENTITY:${candidate.pk}#${candidate.sk}`);
+        continue;
+      }
+
+      if (LIFE_SAFETY_SET.has(entityType)) {
+        refused.push(entityType);
+        continue;
+      }
+
+      const ageEpochSeconds = deriveAgeEpochSeconds(item);
+      if (
+        ageEpochSeconds === undefined ||
+        !isPastRetention(ageEpochSeconds, retentionYearsUsed, input.nowEpochSeconds)
+      ) {
+        continue;
+      }
+
+      if (HARD_DELETE_ENTITY_TYPES.has(entityType)) {
         await input.docClient.send(
           new DeleteCommand({
             TableName: tableName,
@@ -131,16 +187,15 @@ export async function runDisposal(input: RunDisposalInput): Promise<RunDisposalR
         continue;
       }
 
-      if (CRYPTO_SHRED_ENTITY_TYPES.has(candidate.entityType)) {
-        if (!candidate.kmsKeyId) {
-          throw new Error(
-            `kmsKeyId is required to crypto-shred ${candidate.entityType} ${candidate.pk}`,
-          );
+      if (CRYPTO_SHRED_ENTITY_TYPES.has(entityType)) {
+        const kmsKeyId = item.kmsKeyId;
+        if (typeof kmsKeyId !== 'string' || kmsKeyId.length === 0) {
+          throw new Error(`kmsKeyId is required to crypto-shred ${entityType} ${candidate.pk}`);
         }
         if (!input.kmsClient) {
           throw new Error('kmsClient is required to crypto-shred archived classes');
         }
-        await input.kmsClient.send(new ScheduleKeyDeletionCommand({ KeyId: candidate.kmsKeyId }));
+        await input.kmsClient.send(new ScheduleKeyDeletionCommand({ KeyId: kmsKeyId }));
         cryptoShredded += 1;
       }
     }

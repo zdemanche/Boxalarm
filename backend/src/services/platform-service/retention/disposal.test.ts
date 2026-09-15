@@ -5,6 +5,7 @@ import { DEFAULT_RETENTION_YEARS } from './configRepository.js';
 import { SECONDS_PER_YEAR, runDisposal } from './disposal.js';
 
 const DEPT_ID = toVerifiedDeptId({ deptId: 'NICHOLS' });
+const OTHER_DEPT = toVerifiedDeptId({ deptId: 'TRUMBULL' });
 
 function keyOf(pk: string, sk: string): string {
   return `${pk}\0${sk}`;
@@ -77,14 +78,7 @@ describe('runDisposal hard-delete (AC2)', () => {
       actorId: 'MBR-CHIEF',
       traceId: 'trace-disposal-1',
       nowEpochSeconds: nowEpoch,
-      candidates: [
-        {
-          pk: oosPk,
-          sk: oosSk,
-          entityType: 'OUT_OF_SERVICE_RECORD',
-          ageEpochSeconds: tooOldStartAt,
-        },
-      ],
+      candidates: [{ pk: oosPk, sk: oosSk }],
     });
 
     expect(result.hardDeleted).toBe(1);
@@ -120,14 +114,7 @@ describe('runDisposal hard-delete (AC2)', () => {
       actorId: 'MBR-CHIEF',
       traceId: 'trace-disposal-2',
       nowEpochSeconds: nowEpoch,
-      candidates: [
-        {
-          pk: oosPk,
-          sk: oosSk,
-          entityType: 'OUT_OF_SERVICE_RECORD',
-          ageEpochSeconds: recentStartAt,
-        },
-      ],
+      candidates: [{ pk: oosPk, sk: oosSk }],
     });
 
     expect(result.hardDeleted).toBe(0);
@@ -164,19 +151,103 @@ describe('runDisposal hard-delete (AC2)', () => {
       actorId: 'MBR-CHIEF',
       traceId: 'trace-disposal-3',
       nowEpochSeconds: nowEpoch,
-      candidates: [
-        {
-          pk: oosPk,
-          sk: oosSk,
-          entityType: 'OUT_OF_SERVICE_RECORD',
-          ageEpochSeconds: age,
-        },
-      ],
+      candidates: [{ pk: oosPk, sk: oosSk }],
     });
 
     expect(DEFAULT_RETENTION_YEARS).toBe(7);
     expect(result.retentionYearsUsed).toBe(5);
     expect(result.hardDeleted).toBe(1);
     expect(store.has(keyOf(oosPk, oosSk))).toBe(false);
+  });
+
+  it('refuses when caller spoofs OUT_OF_SERVICE_RECORD over a stored life-safety item', async () => {
+    const nowEpoch = 1_800_000_000;
+    const age = nowEpoch - 20 * SECONDS_PER_YEAR;
+    const receiptPk = buildDeptScopedPk(DEPT_ID, 'ALERT', 'RCPT-1');
+    const receiptSk = 'RECEIPT#1';
+
+    const { client, store, send } = createMemoryDocClient({
+      [keyOf(receiptPk, receiptSk)]: {
+        pk: receiptPk,
+        sk: receiptSk,
+        entityType: 'DELIVERY_RECEIPT',
+        startAt: age,
+      },
+    });
+
+    const result = await runDisposal({
+      docClient: client,
+      deptId: DEPT_ID,
+      actorId: 'MBR-CHIEF',
+      traceId: 'trace-spoof-type',
+      nowEpochSeconds: nowEpoch,
+      // Caller-supplied entityType is no longer accepted; locator only.
+      candidates: [{ pk: receiptPk, sk: receiptSk }],
+    });
+
+    expect(result.hardDeleted).toBe(0);
+    expect(result.refused).toEqual(['DELIVERY_RECEIPT']);
+    expect(store.has(keyOf(receiptPk, receiptSk))).toBe(true);
+    expect(send.mock.calls.some((call) => call[0] instanceof DeleteCommand)).toBe(false);
+  });
+
+  it('refuses cross-dept pk and never deletes the foreign item', async () => {
+    const nowEpoch = 1_800_000_000;
+    const age = nowEpoch - 20 * SECONDS_PER_YEAR;
+    const foreignPk = buildDeptScopedPk(OTHER_DEPT, 'APPARATUS', 'APP-X');
+    const foreignSk = `OOS#${age}`;
+
+    const { client, store, send } = createMemoryDocClient({
+      [keyOf(foreignPk, foreignSk)]: {
+        pk: foreignPk,
+        sk: foreignSk,
+        entityType: 'OUT_OF_SERVICE_RECORD',
+        startAt: age,
+      },
+    });
+
+    const result = await runDisposal({
+      docClient: client,
+      deptId: DEPT_ID,
+      actorId: 'MBR-CHIEF',
+      traceId: 'trace-cross-dept',
+      nowEpochSeconds: nowEpoch,
+      candidates: [{ pk: foreignPk, sk: foreignSk }],
+    });
+
+    expect(result.hardDeleted).toBe(0);
+    expect(result.refused).toEqual([`CROSS_DEPT:${foreignPk}`]);
+    expect(store.has(keyOf(foreignPk, foreignSk))).toBe(true);
+    // Dept-scope check runs before GetItem — never touch the foreign key.
+    const candidateGets = send.mock.calls.filter((call) => {
+      const cmd = call[0];
+      return (
+        cmd instanceof GetCommand &&
+        cmd.input.Key?.pk === foreignPk &&
+        cmd.input.Key?.sk === foreignSk
+      );
+    });
+    expect(candidateGets).toHaveLength(0);
+    expect(send.mock.calls.some((call) => call[0] instanceof DeleteCommand)).toBe(false);
+  });
+
+  it('refuses missing items without DeleteItem', async () => {
+    const nowEpoch = 1_800_000_000;
+    const missingPk = buildDeptScopedPk(DEPT_ID, 'APPARATUS', 'GONE');
+    const missingSk = 'OOS#1';
+    const { client, send } = createMemoryDocClient();
+
+    const result = await runDisposal({
+      docClient: client,
+      deptId: DEPT_ID,
+      actorId: 'MBR-CHIEF',
+      traceId: 'trace-missing',
+      nowEpochSeconds: nowEpoch,
+      candidates: [{ pk: missingPk, sk: missingSk }],
+    });
+
+    expect(result.hardDeleted).toBe(0);
+    expect(result.refused).toEqual([`MISSING:${missingPk}#${missingSk}`]);
+    expect(send.mock.calls.some((call) => call[0] instanceof DeleteCommand)).toBe(false);
   });
 });

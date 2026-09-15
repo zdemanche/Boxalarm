@@ -68,7 +68,24 @@ describe('runDisposal crypto-shred and life-safety (AC3, AC4)', () => {
     const nowEpoch = 1_800_000_000;
     const age = nowEpoch - 8 * SECONDS_PER_YEAR;
     const kms = fakeKmsClient();
-    const { client } = createMemoryDocClient();
+    const incPk = buildDeptScopedPk(DEPT_ID, 'ARCHIVE', 'INC-1');
+    const rcptPk = buildDeptScopedPk(DEPT_ID, 'ARCHIVE', 'RCPT-1');
+    const { client } = createMemoryDocClient({
+      [keyOf(incPk, 'METADATA')]: {
+        pk: incPk,
+        sk: 'METADATA',
+        entityType: 'ARCHIVED_INCIDENT',
+        archivedAt: age,
+        kmsKeyId: 'arn:aws:kms:us-east-1:123:key/inc-key',
+      },
+      [keyOf(rcptPk, 'METADATA')]: {
+        pk: rcptPk,
+        sk: 'METADATA',
+        entityType: 'ARCHIVED_DELIVERY_RECEIPT',
+        archivedAt: age,
+        kmsKeyId: 'arn:aws:kms:us-east-1:123:key/rcpt-key',
+      },
+    });
 
     const result = await runDisposal({
       docClient: client,
@@ -78,20 +95,8 @@ describe('runDisposal crypto-shred and life-safety (AC3, AC4)', () => {
       traceId: 'trace-shred-1',
       nowEpochSeconds: nowEpoch,
       candidates: [
-        {
-          pk: buildDeptScopedPk(DEPT_ID, 'ARCHIVE', 'INC-1'),
-          sk: 'METADATA',
-          entityType: 'ARCHIVED_INCIDENT',
-          ageEpochSeconds: age,
-          kmsKeyId: 'arn:aws:kms:us-east-1:123:key/inc-key',
-        },
-        {
-          pk: buildDeptScopedPk(DEPT_ID, 'ARCHIVE', 'RCPT-1'),
-          sk: 'METADATA',
-          entityType: 'ARCHIVED_DELIVERY_RECEIPT',
-          ageEpochSeconds: age,
-          kmsKeyId: 'arn:aws:kms:us-east-1:123:key/rcpt-key',
-        },
+        { pk: incPk, sk: 'METADATA' },
+        { pk: rcptPk, sk: 'METADATA' },
       ],
     });
 
@@ -108,6 +113,36 @@ describe('runDisposal crypto-shred and life-safety (AC3, AC4)', () => {
     ]);
   });
 
+  it('ignores caller-supplied kmsKeyId and uses the stored key only', async () => {
+    const nowEpoch = 1_800_000_000;
+    const age = nowEpoch - 8 * SECONDS_PER_YEAR;
+    const kms = fakeKmsClient();
+    const incPk = buildDeptScopedPk(DEPT_ID, 'ARCHIVE', 'INC-2');
+    const { client } = createMemoryDocClient({
+      [keyOf(incPk, 'METADATA')]: {
+        pk: incPk,
+        sk: 'METADATA',
+        entityType: 'ARCHIVED_INCIDENT',
+        archivedAt: age,
+        kmsKeyId: 'arn:aws:kms:us-east-1:123:key/stored-key',
+      },
+    });
+
+    const result = await runDisposal({
+      docClient: client,
+      kmsClient: kms,
+      deptId: DEPT_ID,
+      actorId: 'MBR-CHIEF',
+      traceId: 'trace-shred-stored-key',
+      nowEpochSeconds: nowEpoch,
+      candidates: [{ pk: incPk, sk: 'METADATA' }],
+    });
+
+    expect(result.cryptoShredded).toBe(1);
+    const cmd = kms.send.mock.calls[0]?.[0] as ScheduleKeyDeletionCommand;
+    expect(cmd.input.KeyId).toBe('arn:aws:kms:us-east-1:123:key/stored-key');
+  });
+
   it('refuses life-safety evidence classes and never DeleteItem / shreds them', async () => {
     const nowEpoch = 1_800_000_000;
     const age = nowEpoch - 20 * SECONDS_PER_YEAR;
@@ -116,7 +151,7 @@ describe('runDisposal crypto-shred and life-safety (AC3, AC4)', () => {
       pk: buildDeptScopedPk(DEPT_ID, 'EVIDENCE', entityType),
       sk: `ITEM#${index}`,
       entityType,
-      ageEpochSeconds: age,
+      startAt: age,
       kmsKeyId: `key-${entityType}`,
     }));
 
@@ -124,7 +159,13 @@ describe('runDisposal crypto-shred and life-safety (AC3, AC4)', () => {
       Object.fromEntries(
         lifeSafety.map((item) => [
           keyOf(item.pk, item.sk),
-          { ...item, entityType: item.entityType },
+          {
+            pk: item.pk,
+            sk: item.sk,
+            entityType: item.entityType,
+            startAt: item.startAt,
+            kmsKeyId: item.kmsKeyId,
+          },
         ]),
       ),
     );
@@ -136,7 +177,7 @@ describe('runDisposal crypto-shred and life-safety (AC3, AC4)', () => {
       actorId: 'MBR-CHIEF',
       traceId: 'trace-refuse-1',
       nowEpochSeconds: nowEpoch,
-      candidates: lifeSafety,
+      candidates: lifeSafety.map(({ pk, sk }) => ({ pk, sk })),
     });
 
     expect(LIFE_SAFETY_ENTITY_TYPES).toEqual(

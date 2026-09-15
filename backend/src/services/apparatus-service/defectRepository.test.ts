@@ -91,7 +91,7 @@ describe('createDefect', () => {
 
     const outboxPut = items[1]?.Put?.Item as Record<string, unknown>;
     expect(outboxPut).toMatchObject({
-      entityType: 'OUTBOX_RECORD',
+      entityType: 'OUTBOX_ENTRY',
       eventType: 'apparatus.defect.reported',
       source: 'apparatus-service',
       pk: 'DEPT#NICHOLS#OUTBOX',
