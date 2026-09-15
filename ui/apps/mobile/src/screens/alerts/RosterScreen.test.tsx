@@ -7,9 +7,15 @@ jest.mock('@react-navigation/native', () => ({
   useRoute: () => ({ params: mockRouteParams }),
 }));
 
+const mockConnectivity: { isOnline: boolean } = { isOnline: true };
+jest.mock('../../sync/ConnectivityContext', () => ({
+  useConnectivity: () => mockConnectivity,
+}));
+
 beforeEach(async () => {
   const { dispatchId } = await mockAlertsRepository.triggerSelfTest();
   mockRouteParams.dispatchId = dispatchId;
+  mockConnectivity.isOnline = true;
 });
 
 test('lists each roster entry with name, response status, and quals', async () => {
@@ -29,4 +35,12 @@ test('reflects a recorded response after submitResponse resolves', async () => {
   const { findByText } = await render(<RosterScreen />);
 
   expect(await findByText(/^responding$/i)).toBeTruthy();
+});
+
+test('shows an honest offline state instead of a stale or empty roster - F1.7 requires connectivity', async () => {
+  mockConnectivity.isOnline = false;
+  const { findByText, queryByText } = await render(<RosterScreen />);
+
+  expect(await findByText(/offline.*will resume/i)).toBeTruthy();
+  expect(queryByText('Jamie Rios')).toBeNull();
 });

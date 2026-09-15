@@ -75,3 +75,22 @@ test('a valid stored session lands on the AppTabs shell (Alerts · Checks · Sch
   expect(await findByText('Schedule')).toBeTruthy();
   expect(await findByText('Me')).toBeTruthy();
 });
+
+test('the authenticated shell shows the persistent sync-status banner above the tabs', async () => {
+  const idToken = `h.${base64url(JSON.stringify({ roles: ['MEMBER'] }))}.s`;
+  mockedGetInternetCredentials.mockResolvedValue({
+    username: 'boxalarm-auth',
+    password: JSON.stringify({
+      accessToken: 'access-1',
+      refreshToken: 'refresh-1',
+      accessTokenExpirationDate: new Date(Date.now() + 3600_000).toISOString(),
+      idToken,
+    }),
+    service: 'boxalarm-auth',
+    storage: 'keychain',
+  } as unknown as Awaited<ReturnType<typeof getInternetCredentials>>);
+
+  const { findByText } = await render(<App />);
+
+  expect(await findByText(/waiting to sync/i)).toBeTruthy();
+});

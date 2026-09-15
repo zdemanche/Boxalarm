@@ -4,6 +4,7 @@ import { StatusBar, Text, View } from 'react-native';
 import { initialWindowMetrics, SafeAreaProvider } from 'react-native-safe-area-context';
 import { AuthProvider } from './auth/AuthContext';
 import { RootNavigator } from './navigation/RootNavigator';
+import { ConnectivityProvider } from './sync/ConnectivityContext';
 
 class ConfigErrorBoundary extends Component<{ children: ReactNode }, { failed: boolean }> {
   state = { failed: false };
@@ -35,10 +36,12 @@ export function App() {
   return (
     <ConfigErrorBoundary>
       <SafeAreaProvider initialMetrics={initialWindowMetrics}>
-        <AuthProvider>
-          <StatusBar barStyle="default" />
-          <RootNavigator />
-        </AuthProvider>
+        <ConnectivityProvider>
+          <AuthProvider>
+            <StatusBar barStyle="default" />
+            <RootNavigator />
+          </AuthProvider>
+        </ConnectivityProvider>
       </SafeAreaProvider>
     </ConfigErrorBoundary>
   );
