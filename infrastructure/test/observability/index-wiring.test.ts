@@ -57,16 +57,34 @@ describe("index.ts production wiring", () => {
     await new Promise<void>((resolve) =>
       indexModule.alertingSamplingRule.urn.apply(() => resolve()),
     );
+    // boxalarm-docs#115 identity infra (pre-token-generation trigger + both app
+    // clients) settles here too, so its registerOutputs doesn't fire after this
+    // file's next beforeEach has already swapped in a fresh mock monitor.
+    await new Promise<void>((resolve) =>
+      pulumi
+        .all([
+          indexModule.identity.userPool.id,
+          indexModule.identity.preTokenGenerationFunction.arn,
+          indexModule.identity.functionRole.arn,
+          indexModule.identity.functionLogGroup.arn,
+          indexModule.identity.invokePermission.id,
+          indexModule.mobileUserPoolClient.userPoolClient.id,
+          indexModule.webUserPoolClient.userPoolClient.id,
+        ])
+        .apply(() => resolve()),
+    );
 
-    expect(counts["aws:cloudwatch/logGroup:LogGroup"]).toBe(10);
+    // 10 services + the identity pre-token-generation trigger's own log group.
+    expect(counts["aws:cloudwatch/logGroup:LogGroup"]).toBe(11);
     expect(counts["aws:cloudwatch/dashboard:Dashboard"]).toBe(10);
     expect(counts["aws:xray/samplingRule:SamplingRule"]).toBe(2);
     expect(indexModule.stack).toBe("dev");
     expect(indexModule.env).toBe("dev");
 
-    const expectedLogGroupNames = new Set(
-      SERVICES.map((serviceName) => `/aws/lambda/boxalarm-dev-${serviceName}`),
-    );
+    const expectedLogGroupNames = new Set([
+      ...SERVICES.map((serviceName) => `/aws/lambda/boxalarm-dev-${serviceName}`),
+      "/aws/lambda/boxalarm-dev-identity-pre-token-generation",
+    ]);
     const expectedDashboardNames = new Set(
       SERVICES.map((serviceName) => `boxalarm-dev-${serviceName}`),
     );

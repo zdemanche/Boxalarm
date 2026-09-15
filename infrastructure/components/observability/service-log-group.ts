@@ -4,7 +4,7 @@ import { SERVICES, ServiceName } from "./services";
 
 const KNOWN_SERVICES = new Set<string>(SERVICES);
 
-const RETENTION_DAYS_BY_ENV: Record<string, number> = {
+export const RETENTION_DAYS_BY_ENV: Record<string, number> = {
   dev: 14,
   qa: 14,
   staging: 30,
