@@ -9,3 +9,5 @@ coverage/
 .worktrees/
 .analysis/
 coverage/
+.analysis/
+coverage/
