@@ -44,6 +44,18 @@ export function buildDutyShift(
   };
 }
 
+export type TestMemberItem = Readonly<Record<'pk' | 'sk', string>> & {
+  readonly entityType: 'MEMBER';
+};
+
+export function buildMember(deptId: VerifiedDeptId, memberId: string): TestMemberItem {
+  return {
+    pk: buildDeptScopedPk(deptId, 'MEMBER', memberId),
+    sk: 'METADATA',
+    entityType: 'MEMBER',
+  };
+}
+
 export function buildShiftPosition(
   deptId: VerifiedDeptId,
   shiftId: string,
