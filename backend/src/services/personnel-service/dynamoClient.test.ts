@@ -1,6 +1,20 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
 
+describe('readPersonnelConfig', () => {
+  it('reads the table name', async () => {
+    const { readPersonnelConfig } = await import('./dynamoClient.js');
+    expect(readPersonnelConfig({ PERSONNEL_TABLE_NAME: 'personnel-table' })).toEqual({
+      tableName: 'personnel-table',
+    });
+  });
+
+  it('throws when PERSONNEL_TABLE_NAME is missing (empty/absent-input row)', async () => {
+    const { readPersonnelConfig } = await import('./dynamoClient.js');
+    expect(() => readPersonnelConfig({})).toThrow('PERSONNEL_TABLE_NAME is required');
+  });
+});
+
 describe('readAttendanceTableConfig', () => {
   it('reads the table name', async () => {
     const { readAttendanceTableConfig } = await import('./dynamoClient.js');
@@ -22,6 +36,7 @@ describe('createDynamoClient', () => {
 
   beforeEach(() => {
     vi.resetModules();
+    process.env.PERSONNEL_TABLE_NAME = 'personnel-table';
     process.env.PLATFORM_SERVICE_TABLE_NAME = 'platform-service';
   });
 
@@ -29,10 +44,11 @@ describe('createDynamoClient', () => {
     process.env = { ...originalEnv };
   });
 
-  it('throws (fail-closed) instead of returning a client when the table name is missing', async () => {
+  it('throws (fail-closed) instead of returning a client when config is missing', async () => {
+    delete process.env.PERSONNEL_TABLE_NAME;
     delete process.env.PLATFORM_SERVICE_TABLE_NAME;
     const { createDynamoClient } = await import('./dynamoClient.js');
-    expect(() => createDynamoClient(process.env)).toThrow('PLATFORM_SERVICE_TABLE_NAME');
+    expect(() => createDynamoClient(process.env)).toThrow('PERSONNEL_TABLE_NAME is required');
   });
 
   it('constructs a client once and reuses the same instance across calls', async () => {

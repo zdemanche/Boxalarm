@@ -6,7 +6,7 @@ export interface VerifiedPrincipal {
   readonly deptId: string;
 }
 
-function assertNoDelimiter(value: string, label: string): void {
+export function assertNoDelimiter(value: string, label: string): void {
   if (value.includes('#')) {
     throw new Error(
       `${label} cannot contain '#', the department-scoped pk delimiter: received "${value}"`,

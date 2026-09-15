@@ -1,12 +1,12 @@
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
-import AWSXRay from 'aws-xray-sdk-core';
+import { captureAWSv3Client } from 'aws-xray-sdk-core';
 
-export interface AlertingDdbConfig {
+export interface AlertingConfig {
   readonly tableName: string;
 }
 
-export function readAlertingDdbConfig(env: NodeJS.ProcessEnv): AlertingDdbConfig {
+export function readAlertingConfig(env: NodeJS.ProcessEnv): AlertingConfig {
   const tableName = env.ALERTING_TABLE_NAME;
   if (!tableName) {
     throw new Error('ALERTING_TABLE_NAME is required and was not set');
@@ -16,12 +16,12 @@ export function readAlertingDdbConfig(env: NodeJS.ProcessEnv): AlertingDdbConfig
 
 let cachedClient: DynamoDBDocumentClient | undefined;
 
-export function createDdbClient(
+export function createDynamoClient(
   env: NodeJS.ProcessEnv,
   client?: DynamoDBDocumentClient,
 ): DynamoDBDocumentClient {
-  readAlertingDdbConfig(env);
+  readAlertingConfig(env);
   cachedClient ??=
-    client ?? DynamoDBDocumentClient.from(AWSXRay.captureAWSv3Client(new DynamoDBClient({})));
+    client ?? DynamoDBDocumentClient.from(captureAWSv3Client(new DynamoDBClient({})));
   return cachedClient;
 }
