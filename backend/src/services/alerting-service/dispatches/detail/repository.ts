@@ -36,6 +36,8 @@ export async function getDispatchDetail(
   return result.Item as DispatchAlertItem | undefined;
 }
 
+// Keyed by occupancyId per architecture.md:734 (`sk = OCCUPANCY#{occupancyId}`). The caller
+// (handler.ts fetchPrePlan) currently has no occupancyId to give this — see the TODO there.
 export async function getPrePlanCopy(
   client: DynamoDBDocumentClient,
   tableName: string,

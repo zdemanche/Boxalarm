@@ -19,21 +19,29 @@ import { dataUnavailableProblem } from './problemDetails.js';
 
 const METRICS_NAMESPACE = 'Boxalarm/Alerting';
 
+// TODO(E1-S1/architecture): DISPATCH_ALERT.prePlanRefs holds pre-plan IDs (e.g. "PP-0044",
+// architecture.md:637) but PRE_PLAN_COPY.sk is keyed by occupancyId (e.g. "OCCUPANCY#OCC-0231",
+// architecture.md:734) — two different identifier spaces. alerting-service's data model carries
+// no occupancyId anywhere, so there is currently no correct value to pass here; this lookup is a
+// documented no-op (always misses, AC2's error boundary renders prePlan: null) until either
+// DISPATCH_ALERT gains an occupancyId (an ingress/architecture change owned by another story) or
+// PRE_PLAN_COPY grows a prePlanId-keyed access path. Do not "fix" by treating prePlanRef as an
+// occupancyId — that reintroduces the silent-miss bug this comment documents.
 async function fetchPrePlan(
   client: DynamoDBDocumentClient,
   tableName: string,
   deptId: VerifiedDeptId,
-  occupancyId: string | undefined,
+  prePlanRef: string | undefined,
   traceId: string,
 ): Promise<PrePlanCopyItem | null> {
-  if (!occupancyId) {
+  if (!prePlanRef) {
     return null;
   }
   try {
-    const item = await getPrePlanCopy(client, tableName, deptId, occupancyId);
+    const item = await getPrePlanCopy(client, tableName, deptId, prePlanRef);
     return item ?? null;
   } catch (error) {
-    logError('dispatches.detail.preplan_read_failed', error, { traceId, occupancyId });
+    logError('dispatches.detail.preplan_read_failed', error, { traceId, prePlanRef });
     return null;
   }
 }
