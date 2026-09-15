@@ -147,6 +147,49 @@ export async function listMemberAttendanceEventIds(
   return new Set(items.map((item) => item.eventId as string));
 }
 
+export interface MemberAttendanceRecord {
+  readonly eventId: string;
+  readonly category: string;
+  readonly hours: number;
+  readonly startAt: number;
+}
+
+const ATTENDANCE_GSI1SK_PREFIX = 'TRAINING_ATTENDANCE#';
+
+function toMemberAttendanceRecord(item: Record<string, unknown>): MemberAttendanceRecord {
+  const gsi1sk = item.gsi1sk as string;
+  return {
+    eventId: item.eventId as string,
+    category: item.category as string,
+    hours: (item.hours as number | undefined) ?? 0,
+    startAt: Number(gsi1sk.slice(ATTENDANCE_GSI1SK_PREFIX.length)),
+  };
+}
+
+export async function listMemberAttendanceRecords(
+  client: DynamoDBDocumentClient,
+  config: TrainingConfig,
+  memberId: string,
+): Promise<readonly MemberAttendanceRecord[]> {
+  const items = await queryAllPages(
+    client,
+    (exclusiveStartKey) =>
+      new QueryCommand({
+        TableName: config.tableName,
+        IndexName: 'GSI1',
+        KeyConditionExpression: 'gsi1pk = :gsi1pk AND begins_with(gsi1sk, :prefix)',
+        ExpressionAttributeValues: {
+          ':gsi1pk': `MEMBER#${memberId}`,
+          ':prefix': ATTENDANCE_GSI1SK_PREFIX,
+        },
+        ProjectionExpression: 'eventId, category, hours, gsi1sk',
+        Limit: QUERY_PAGE_SIZE,
+        ExclusiveStartKey: exclusiveStartKey,
+      }),
+  );
+  return items.map(toMemberAttendanceRecord);
+}
+
 export async function createSignupAttendance(
   client: DynamoDBDocumentClient,
   config: TrainingConfig,

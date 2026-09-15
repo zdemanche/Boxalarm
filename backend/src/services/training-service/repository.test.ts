@@ -8,6 +8,7 @@ import {
   DuplicateSignupError,
   getTrainingEvent,
   listMemberAttendanceEventIds,
+  listMemberAttendanceRecords,
   listTrainingEvents,
   recordAttendanceHours,
 } from './repository.js';
@@ -109,6 +110,52 @@ describe('listMemberAttendanceEventIds', () => {
     });
     expect(captured!.input.ProjectionExpression).toBe('eventId');
     expect(ids).toEqual(new Set(['e1', 'e2']));
+  });
+});
+
+describe('listMemberAttendanceRecords', () => {
+  it('queries GSI1 for MEMBER#{memberId} attendance, projecting hours/category/gsi1sk, across multiple categories and pages (AC1)', async () => {
+    let callCount = 0;
+    const client = fakeClient(() => {
+      callCount += 1;
+      if (callCount === 1) {
+        return {
+          Items: [
+            { eventId: 'e1', category: 'LADDER_OPS', hours: 3, gsi1sk: 'TRAINING_ATTENDANCE#100' },
+          ],
+          LastEvaluatedKey: { gsi1pk: 'p', gsi1sk: 's' },
+        };
+      }
+      return {
+        Items: [{ eventId: 'e2', category: 'EMS', hours: 2, gsi1sk: 'TRAINING_ATTENDANCE#200' }],
+      };
+    });
+
+    const records = await listMemberAttendanceRecords(client, CONFIG, 'member-1');
+
+    expect(callCount).toBe(2);
+    expect(records).toEqual([
+      { eventId: 'e1', category: 'LADDER_OPS', hours: 3, startAt: 100 },
+      { eventId: 'e2', category: 'EMS', hours: 2, startAt: 200 },
+    ]);
+  });
+
+  it('defaults hours to 0 for a signed-up-but-not-yet-recorded attendance record', async () => {
+    const client = fakeClient(() => ({
+      Items: [{ eventId: 'e1', category: 'LADDER_OPS', gsi1sk: 'TRAINING_ATTENDANCE#100' }],
+    }));
+
+    const records = await listMemberAttendanceRecords(client, CONFIG, 'member-1');
+
+    expect(records).toEqual([{ eventId: 'e1', category: 'LADDER_OPS', hours: 0, startAt: 100 }]);
+  });
+
+  it('returns an empty array for a member with no attendance history (AC3)', async () => {
+    const client = fakeClient(() => ({}));
+
+    const records = await listMemberAttendanceRecords(client, CONFIG, 'member-1');
+
+    expect(records).toEqual([]);
   });
 });
 
