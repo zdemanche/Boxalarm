@@ -76,4 +76,33 @@ describe('deliverChannelMessage receipt write (real DynamoDB, exactly-once idemp
     });
     expect(item.Item?.sentAt).toBeLessThan(10_000_000_000);
   });
+
+  it('recovers a claimed-but-failed receipt on redelivery against the real ConditionExpression', async () => {
+    const { deliverChannelMessage } = await import('./deliverChannelMessage.js');
+    const { sendViaHttpProvider } = await import('./httpProviderAdapter.js');
+    const send = vi.mocked(sendViaHttpProvider);
+    send.mockClear();
+
+    const params: DeliverChannelMessageParams = {
+      ...baseParams,
+      dispatchId: 'dispatch-ls-2',
+      memberId: 'mbr-ls-2',
+    };
+
+    send.mockRejectedValueOnce(new Error('provider 503'));
+    await expect(deliverChannelMessage(client, TABLE_NAME, params)).rejects.toThrow('provider 503');
+
+    send.mockResolvedValueOnce(undefined);
+    await deliverChannelMessage(client, TABLE_NAME, params);
+
+    const item = await client.send(
+      new GetCommand({
+        TableName: TABLE_NAME,
+        Key: { pk: 'DEPT#NICHOLS#DISPATCH#dispatch-ls-2', sk: 'RECEIPT#mbr-ls-2#PUSH#1' },
+      }),
+    );
+
+    expect(item.Item?.failureReason).toBeUndefined();
+    expect(send).toHaveBeenCalledTimes(2);
+  });
 });

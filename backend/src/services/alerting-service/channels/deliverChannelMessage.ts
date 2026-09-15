@@ -128,8 +128,8 @@ async function reattemptClaimedFailure(
       TableName: tableName,
       Key: { pk, sk },
       UpdateExpression: 'SET sentAt = :sentAt REMOVE failureReason',
-      ConditionExpression: 'attribute_exists(idempotencyKey) AND attribute_not_exists(deliveredAt)',
-      ExpressionAttributeValues: { ':sentAt': sentAt },
+      ConditionExpression: 'attribute_exists(idempotencyKey) AND deliveredAt = :nullVal',
+      ExpressionAttributeValues: { ':sentAt': sentAt, ':nullVal': null },
     }),
   );
   return true;
