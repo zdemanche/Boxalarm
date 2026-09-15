@@ -25,7 +25,7 @@ An outage in reporting, training, or inventory must never degrade alert delivery
 
 - **Routing and dedup both key on `channel`** (`push`/`sms`/`voice`). `channelTier` (`primary`/`escalation`) is escalation bookkeeping **only** — never a routing filter, never a dedup input. Getting this wrong means SMS silently never sends: no error, no DLQ, no receipt.
 - **One publish per `{member, channel}`.** The parallel push+SMS guarantee comes from two publishes, not two subscription filters on one.
-- **Exactly-once key is `{dispatchId}#{memberId}#{channel}`.** One immutable receipt per channel attempt; escalation creates a new receipt and never mutates an existing one, so per-channel delivery evidence survives.
+- **Exactly-once key is `{dispatchId}#{toneSequence}#{memberId}#{channel}`** (tone-ladder amendment — without `toneSequence`, tones 2/3 silently no-op). One immutable receipt per channel attempt per tone; escalation creates a new receipt and never mutates an existing one, so per-channel delivery evidence survives.
 - **`BatchWriteItem` cannot carry a `ConditionExpression`** — use `TransactWriteItems`.
 - **Never test against NERIS production.** Separate dev environment, distinct `User-Agent` per environment.
 - `{deptId}` in every partition key — a second department must be additive, not a rewrite.
