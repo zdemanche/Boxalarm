@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
+import AWSXRay from 'aws-xray-sdk-core';
 import type { GuardEvent } from '@boxalarm/authz';
 import { toVerifiedDeptId, type VerifiedDeptId } from '@boxalarm/dept-scope';
 
@@ -23,7 +24,8 @@ export function createDocumentClient(
   client?: DynamoDBDocumentClient,
 ): DynamoDBDocumentClient {
   readTrainingConfig(env);
-  cachedClient ??= client ?? DynamoDBDocumentClient.from(new DynamoDBClient({}));
+  cachedClient ??=
+    client ?? DynamoDBDocumentClient.from(AWSXRay.captureAWSv3Client(new DynamoDBClient({})));
   return cachedClient;
 }
 

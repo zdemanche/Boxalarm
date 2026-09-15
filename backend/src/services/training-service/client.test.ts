@@ -49,6 +49,12 @@ describe('training-service client', () => {
     expect(second).toBe(fakeClient);
   });
 
+  it('createDocumentClient returns a working X-Ray-wrapped document client when none is injected', async () => {
+    const { createDocumentClient } = await import('./client.js');
+    const client = createDocumentClient(process.env);
+    expect(typeof client.send).toBe('function');
+  });
+
   it('extractTraceId falls back to a random id, else parses the W3C traceparent header', async () => {
     const { extractTraceId } = await import('./client.js');
     expect(extractTraceId(buildEvent({}))).toMatch(/^[0-9a-f-]{36}$/);
