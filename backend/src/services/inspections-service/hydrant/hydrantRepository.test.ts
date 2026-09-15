@@ -97,7 +97,7 @@ describe('updateHydrant (AC2)', () => {
     const items = call?.args[0].input.TransactItems ?? [];
     expect(items).toHaveLength(2);
     expect(items[0]?.Update?.ConditionExpression).toBe('attribute_exists(pk)');
-    expect(items[1]?.Put?.Item?.entityType).toBe('OUTBOX_RECORD');
+    expect(items[1]?.Put?.Item?.entityType).toBe('OUTBOX_ENTRY');
     expect(items[1]?.Put?.Item?.eventType).toBe('inspections.hydrant.updated');
     expect(items[1]?.Put?.Item?.correlationId).toBe('corr-1');
     expect(items[1]?.Put?.Item?.payload).toMatchObject({

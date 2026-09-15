@@ -34,7 +34,7 @@ export function createEventBridgeClient(
 }
 
 interface OutboxStreamRecord {
-  readonly entityType: 'OUTBOX_RECORD';
+  readonly entityType: 'OUTBOX_ENTRY';
   readonly eventId: string;
   readonly eventTime: string;
   readonly eventType: string;
@@ -50,7 +50,7 @@ function toOutboxStreamRecord(
   sequenceNumber: string,
 ): OutboxStreamRecord | undefined {
   if (
-    value.entityType !== 'OUTBOX_RECORD' ||
+    value.entityType !== 'OUTBOX_ENTRY' ||
     typeof value.eventId !== 'string' ||
     typeof value.eventTime !== 'string' ||
     typeof value.eventType !== 'string' ||
@@ -63,7 +63,7 @@ function toOutboxStreamRecord(
     return undefined;
   }
   return {
-    entityType: 'OUTBOX_RECORD',
+    entityType: 'OUTBOX_ENTRY',
     eventId: value.eventId,
     eventTime: value.eventTime,
     eventType: value.eventType,

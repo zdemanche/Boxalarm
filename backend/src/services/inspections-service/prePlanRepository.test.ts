@@ -65,7 +65,7 @@ describe('putPrePlan', () => {
     const prePlanPut = transactItems[1]?.Put as { Item: Record<string, unknown> };
     const outboxPut = transactItems[2]?.Put as { Item: Record<string, unknown> };
     expect(prePlanPut.Item.entityType).toBe('PRE_PLAN');
-    expect(outboxPut.Item.entityType).toBe('OUTBOX_RECORD');
+    expect(outboxPut.Item.entityType).toBe('OUTBOX_ENTRY');
     expect(outboxPut.Item.eventType).toBe('inspections.preplan.updated');
     expect(outboxPut.Item.pk).toBe('DEPT#NICHOLS#OUTBOX');
     expect(outboxPut.Item.payload).toMatchObject({
