@@ -1,6 +1,6 @@
-import { randomUUID } from 'node:crypto';
 import type { APIGatewayProxyResultV2 } from 'aws-lambda';
 import {
+  extractTraceId,
   notFoundProblem,
   serviceUnavailableProblem,
   withAuthorization,
@@ -11,12 +11,6 @@ import { toVerifiedDeptId } from '@boxalarm/dept-scope';
 import { createDynamoClient, readAlertingConfig } from '../eligibility/dynamoClient.js';
 import { logError } from '../dispatches/logger.js';
 import { queryRoster } from './repository.js';
-
-function extractTraceId(event: GuardEvent): string {
-  const traceparent = event.headers?.traceparent ?? event.headers?.Traceparent;
-  const traceId = traceparent?.split('-')[1];
-  return traceId && traceId.length > 0 ? traceId : randomUUID();
-}
 
 async function innerHandler(
   event: GuardEvent,

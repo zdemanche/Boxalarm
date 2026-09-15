@@ -43,7 +43,7 @@ beforeEach(() => {
 });
 
 describe('responses handler through the real withAuthorization (AC3)', () => {
-  it('returns 403 when the member is not on the eligible roster for this dispatch (Cedar deny)', async () => {
+  it('returns 403 when Cedar denies the action (Cedar deny; in-service eligibility is covered in repository.test.ts, AC3)', async () => {
     send.mockResolvedValue({ decision: Decision.DENY });
     const result = (await handler(buildEvent())) as { statusCode: number };
     expect(result.statusCode).toBe(403);

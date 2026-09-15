@@ -57,6 +57,13 @@ describe('parseRosterEntryItem', () => {
     });
   });
 
+  it('defaults ackStatus to NONE for a fan-out-created row with no ackStatus yet (P6)', () => {
+    const parsed = parseRosterEntryItem(
+      validItem({ ackStatus: undefined, ackAt: undefined, eta: undefined, lastAnsweredTone: undefined }),
+    );
+    expect(parsed?.ackStatus).toBe('NONE');
+  });
+
   it('throws on an invalid ackStatus (shape validation)', () => {
     expect(() => parseRosterEntryItem(validItem({ ackStatus: 'BOGUS' }))).toThrow(
       'DISPATCH_ROSTER_ENTRY item failed shape validation',

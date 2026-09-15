@@ -1,7 +1,8 @@
-import { randomUUID } from 'node:crypto';
 import type { APIGatewayProxyResultV2 } from 'aws-lambda';
 import {
   badRequestProblem,
+  extractTraceId,
+  forbiddenProblem,
   notFoundProblem,
   serviceUnavailableProblem,
   withAuthorization,
@@ -25,12 +26,6 @@ interface RecordResponseBody {
   readonly ackStatus: ResponseAckStatus;
   readonly eta: number | null;
   readonly assignedApparatusId: string | null;
-}
-
-function extractTraceId(event: GuardEvent): string {
-  const traceparent = event.headers?.traceparent ?? event.headers?.Traceparent;
-  const traceId = traceparent?.split('-')[1];
-  return traceId && traceId.length > 0 ? traceId : randomUUID();
 }
 
 function parseBody(raw: string | undefined): RecordResponseBody {
@@ -104,12 +99,17 @@ async function innerHandler(
       ackStatus: body.ackStatus,
       eta: body.eta,
       assignedApparatusId: body.assignedApparatusId,
-      answeredAt: Date.now(),
+      answeredAt: Math.floor(Date.now() / 1000),
     });
 
     if (result.outcome === 'dispatch-not-found') {
       emitOutcomeMetric(METRIC_NAMESPACE, 'ResponseConfirmRejected', 'DispatchNotFound');
       return notFoundProblem(traceId, 'Dispatch was not found');
+    }
+
+    if (result.outcome === 'ineligible') {
+      emitOutcomeMetric(METRIC_NAMESPACE, 'ResponseConfirmRejected', 'Ineligible');
+      return forbiddenProblem(traceId);
     }
 
     emitOutcomeMetric(METRIC_NAMESPACE, 'ResponseConfirmed');

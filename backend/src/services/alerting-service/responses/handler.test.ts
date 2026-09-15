@@ -121,6 +121,29 @@ describe('responses handler', () => {
     expect(result.statusCode).toBe(404);
   });
 
+  it('returns 403 when the member has no eligibility snapshot for the department (AC3)', async () => {
+    vi.mocked(recordResponse).mockResolvedValue({ outcome: 'ineligible' });
+    const result = (await handler(
+      buildEvent({ body: JSON.stringify({ ackStatus: 'NOT_RESPONDING' }) }),
+    )) as { statusCode: number };
+    expect(result.statusCode).toBe(403);
+  });
+
+  it('passes a 10-digit epoch-seconds answeredAt to recordResponse (P5)', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-09-15T00:00:00.000Z'));
+    vi.mocked(recordResponse).mockResolvedValue({ outcome: 'recorded' });
+    await handler(buildEvent({ body: JSON.stringify({ ackStatus: 'RESPONDING', eta: 6 }) }));
+    expect(recordResponse).toHaveBeenCalledWith(
+      expect.anything(),
+      'alerting-table',
+      expect.objectContaining({ answeredAt: Math.floor(Date.now() / 1000) }),
+    );
+    const [, , input] = vi.mocked(recordResponse).mock.calls[0]!;
+    expect(String((input as { answeredAt: number }).answeredAt)).toHaveLength(10);
+    vi.useRealTimers();
+  });
+
   it('returns 200 with the recorded response, using the caller sub as memberId (AC1, no impersonation)', async () => {
     vi.mocked(recordResponse).mockResolvedValue({ outcome: 'recorded' });
     const result = (await handler(

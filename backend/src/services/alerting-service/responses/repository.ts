@@ -1,11 +1,13 @@
-import { TransactionCanceledException } from '@aws-sdk/client-dynamodb';
+import { ConditionalCheckFailedException } from '@aws-sdk/client-dynamodb';
 import {
   GetCommand,
-  TransactWriteCommand,
+  PutCommand,
+  UpdateCommand,
   type DynamoDBDocumentClient,
 } from '@aws-sdk/lib-dynamodb';
 import { buildDeptScopedPk, type VerifiedDeptId } from '@boxalarm/dept-scope';
 import type { AckStatus } from '../dispatchRosterEntry.js';
+import { parseSnapshotItem } from '../eligibility/selector.js';
 import { logError, logInfo } from '../dispatches/logger.js';
 
 export type ResponseAckStatus = Exclude<AckStatus, 'NONE'>;
@@ -21,9 +23,9 @@ export interface RecordResponseInput {
 }
 
 export type RecordResponseResult =
-  { readonly outcome: 'recorded' } | { readonly outcome: 'dispatch-not-found' };
-
-const ROSTER_UPDATE_INDEX = 1;
+  | { readonly outcome: 'recorded' }
+  | { readonly outcome: 'dispatch-not-found' }
+  | { readonly outcome: 'ineligible' };
 
 export async function recordResponse(
   client: DynamoDBDocumentClient,
@@ -41,62 +43,66 @@ export async function recordResponse(
   }
   const toneSequence = (dispatch.Item.currentToneSequence as number | undefined) ?? 1;
 
-  const command = new TransactWriteCommand({
-    TransactItems: [
-      {
-        Put: {
-          TableName: tableName,
-          Item: {
-            pk,
-            sk: `RESPONSE#${memberId}#${answeredAt}`,
-            entityType: 'DISPATCH_RESPONSE_RECORD',
-            memberId,
-            ackStatus,
-            toneSequence,
-            eta,
-            assignedApparatusId,
-            answeredAt,
-          },
-        },
+  const eligibility = await client.send(
+    new GetCommand({
+      TableName: tableName,
+      Key: {
+        pk: buildDeptScopedPk(deptId, 'ELIGIBILITY'),
+        sk: `MEMBER#${memberId}`,
       },
-      {
-        Update: {
-          TableName: tableName,
-          Key: { pk, sk: `ROSTER#${memberId}` },
-          UpdateExpression:
-            'SET entityType = :entityType, memberId = :memberId, ackStatus = :ackStatus, ackAt = :ackAt, eta = :eta, assignedApparatusId = :assignedApparatusId, lastAnsweredTone = :toneSequence, quals = if_not_exists(quals, :emptyQuals)',
-          ConditionExpression: 'attribute_not_exists(ackAt) OR :ackAt > ackAt',
-          ExpressionAttributeValues: {
-            ':entityType': 'DISPATCH_ROSTER_ENTRY',
-            ':memberId': memberId,
-            ':ackStatus': ackStatus,
-            ':ackAt': answeredAt,
-            ':eta': eta,
-            ':assignedApparatusId': assignedApparatusId,
-            ':toneSequence': toneSequence,
-            ':emptyQuals': [],
-          },
-        },
+    }),
+  );
+  const snapshot = parseSnapshotItem(eligibility.Item as Record<string, unknown> | undefined);
+  if (!snapshot || !snapshot.active) {
+    logInfo('responses.record.ineligible', { deptId, dispatchId, memberId });
+    return { outcome: 'ineligible' };
+  }
+
+  await client.send(
+    new PutCommand({
+      TableName: tableName,
+      Item: {
+        pk,
+        sk: `RESPONSE#${memberId}#${answeredAt}`,
+        entityType: 'DISPATCH_RESPONSE_RECORD',
+        memberId,
+        ackStatus,
+        toneSequence,
+        eta,
+        assignedApparatusId,
+        answeredAt,
       },
-    ],
-  });
+    }),
+  );
 
   try {
-    await client.send(command);
-    return { outcome: 'recorded' };
+    await client.send(
+      new UpdateCommand({
+        TableName: tableName,
+        Key: { pk, sk: `ROSTER#${memberId}` },
+        UpdateExpression:
+          'SET entityType = :entityType, memberId = :memberId, ackStatus = :ackStatus, ackAt = :ackAt, eta = :eta, assignedApparatusId = :assignedApparatusId, lastAnsweredTone = :toneSequence, quals = :quals',
+        ConditionExpression: 'attribute_not_exists(ackAt) OR :ackAt > ackAt',
+        ExpressionAttributeValues: {
+          ':entityType': 'DISPATCH_ROSTER_ENTRY',
+          ':memberId': memberId,
+          ':ackStatus': ackStatus,
+          ':ackAt': answeredAt,
+          ':eta': eta,
+          ':assignedApparatusId': assignedApparatusId,
+          ':toneSequence': toneSequence,
+          ':quals': snapshot.quals,
+        },
+      }),
+    );
   } catch (error) {
-    if (error instanceof TransactionCanceledException) {
-      const rosterReason = error.CancellationReasons?.[ROSTER_UPDATE_INDEX];
-      if (rosterReason?.Code === 'ConditionalCheckFailed') {
-        logInfo('responses.record.stale_write_skipped', {
-          deptId,
-          dispatchId,
-          memberId,
-        });
-        return { outcome: 'recorded' };
-      }
+    if (error instanceof ConditionalCheckFailedException) {
+      logInfo('responses.record.stale_write_skipped', { deptId, dispatchId, memberId });
+      return { outcome: 'recorded' };
     }
-    logError('responses.record.failed', error, { deptId, dispatchId, memberId });
+    logError('responses.record.roster_update_failed', error, { deptId, dispatchId, memberId });
     throw error;
   }
+
+  return { outcome: 'recorded' };
 }

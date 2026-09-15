@@ -61,6 +61,30 @@ describe('recordResponse (real DynamoDB, AC1/AC5/core-harm)', () => {
     );
   }
 
+  async function putEligibilitySnapshot(
+    memberId: string,
+    overrides: Record<string, unknown> = {},
+  ): Promise<void> {
+    const deptId = toVerifiedDeptId({ deptId: 'NICHOLS' });
+    await client.send(
+      new PutCommand({
+        TableName: TABLE_NAME,
+        Item: {
+          pk: `DEPT#${deptId}#ELIGIBILITY`,
+          sk: `MEMBER#${memberId}`,
+          entityType: 'MEMBER_ELIGIBILITY_SNAPSHOT',
+          memberId,
+          active: true,
+          quals: ['INTERIOR', 'DRIVER_OP'],
+          roles: ['FIREFIGHTER'],
+          availabilityState: 'AVAILABLE',
+          snapshotUpdatedAt: 1798000000,
+          ...overrides,
+        },
+      }),
+    );
+  }
+
   it('returns dispatch-not-found when the dispatch alert does not exist', async () => {
     const deptId = toVerifiedDeptId({ deptId: 'NICHOLS' });
     const result = await recordResponse(client, TABLE_NAME, {
@@ -75,10 +99,54 @@ describe('recordResponse (real DynamoDB, AC1/AC5/core-harm)', () => {
     expect(result.outcome).toBe('dispatch-not-found');
   });
 
+  it('returns ineligible and writes nothing when the member has no eligibility snapshot (AC3)', async () => {
+    const deptId = toVerifiedDeptId({ deptId: 'NICHOLS' });
+    const dispatchId = 'NICHOLS-4471-NOSNAP';
+    await putDispatchAlert(dispatchId);
+
+    const result = await recordResponse(client, TABLE_NAME, {
+      deptId,
+      dispatchId,
+      memberId: 'MBR-9999',
+      ackStatus: 'RESPONDING',
+      eta: 6,
+      assignedApparatusId: null,
+      answeredAt: 1798000300,
+    });
+    expect(result.outcome).toBe('ineligible');
+
+    const roster = await client.send(
+      new GetCommand({
+        TableName: TABLE_NAME,
+        Key: { pk: `DEPT#${deptId}#DISPATCH#${dispatchId}`, sk: 'ROSTER#MBR-9999' },
+      }),
+    );
+    expect(roster.Item).toBeUndefined();
+  });
+
+  it('returns ineligible when the eligibility snapshot is inactive (AC3)', async () => {
+    const deptId = toVerifiedDeptId({ deptId: 'NICHOLS' });
+    const dispatchId = 'NICHOLS-4471-INACTIVE';
+    await putDispatchAlert(dispatchId);
+    await putEligibilitySnapshot('MBR-0013', { active: false });
+
+    const result = await recordResponse(client, TABLE_NAME, {
+      deptId,
+      dispatchId,
+      memberId: 'MBR-0013',
+      ackStatus: 'RESPONDING',
+      eta: 6,
+      assignedApparatusId: null,
+      answeredAt: 1798000300,
+    });
+    expect(result.outcome).toBe('ineligible');
+  });
+
   it('writes the roster rollup with ackStatus/ackAt/eta and an append-only response record (AC1)', async () => {
     const deptId = toVerifiedDeptId({ deptId: 'NICHOLS' });
     const dispatchId = 'NICHOLS-4471-AC1';
     await putDispatchAlert(dispatchId);
+    await putEligibilitySnapshot('MBR-0012');
 
     const result = await recordResponse(client, TABLE_NAME, {
       deptId,
@@ -104,6 +172,7 @@ describe('recordResponse (real DynamoDB, AC1/AC5/core-harm)', () => {
       eta: 6,
       assignedApparatusId: 'APP-ENGINE-2',
       lastAnsweredTone: 1,
+      quals: ['INTERIOR', 'DRIVER_OP'],
     });
 
     const responses = await client.send(
@@ -128,6 +197,7 @@ describe('recordResponse (real DynamoDB, AC1/AC5/core-harm)', () => {
     const deptId = toVerifiedDeptId({ deptId: 'NICHOLS' });
     const dispatchId = 'NICHOLS-4471-AC5';
     await putDispatchAlert(dispatchId);
+    await putEligibilitySnapshot('MBR-0099');
 
     await recordResponse(client, TABLE_NAME, {
       deptId,
@@ -152,6 +222,7 @@ describe('recordResponse (real DynamoDB, AC1/AC5/core-harm)', () => {
     const deptId = toVerifiedDeptId({ deptId: 'NICHOLS' });
     const dispatchId = 'NICHOLS-4471-RACE';
     await putDispatchAlert(dispatchId);
+    await putEligibilitySnapshot('MBR-0012');
 
     const newer = await recordResponse(client, TABLE_NAME, {
       deptId,
@@ -182,12 +253,30 @@ describe('recordResponse (real DynamoDB, AC1/AC5/core-harm)', () => {
       }),
     );
     expect(roster.Item).toMatchObject({ ackStatus: 'RESPONDING', ackAt: 1798000500 });
+
+    const responses = await client.send(
+      new QueryCommand({
+        TableName: TABLE_NAME,
+        KeyConditionExpression: 'pk = :pk AND begins_with(sk, :prefix)',
+        ExpressionAttributeValues: {
+          ':pk': `DEPT#${deptId}#DISPATCH#${dispatchId}`,
+          ':prefix': 'RESPONSE#MBR-0012#',
+        },
+      }),
+    );
+    expect(responses.Items).toHaveLength(2);
+    const staleRecord = responses.Items?.find((item) => item.answeredAt === 1798000100);
+    expect(staleRecord).toMatchObject({
+      entityType: 'DISPATCH_RESPONSE_RECORD',
+      ackStatus: 'NOT_RESPONDING',
+    });
   });
 
   it('reads currentToneSequence from the dispatch alert and stamps it on the response record', async () => {
     const deptId = toVerifiedDeptId({ deptId: 'NICHOLS' });
     const dispatchId = 'NICHOLS-4471-TONE2';
     await putDispatchAlert(dispatchId, 2);
+    await putEligibilitySnapshot('MBR-0012');
 
     await recordResponse(client, TABLE_NAME, {
       deptId,

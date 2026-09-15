@@ -44,13 +44,14 @@ export function parseRosterEntryItem(
     assignedApparatusId,
     lastAnsweredTone,
   } = item;
+  const resolvedAckStatus = ackStatus === undefined || ackStatus === null ? 'NONE' : ackStatus;
   if (
     typeof pk !== 'string' ||
     typeof sk !== 'string' ||
     entityType !== 'DISPATCH_ROSTER_ENTRY' ||
     typeof memberId !== 'string' ||
-    typeof ackStatus !== 'string' ||
-    !ACK_STATUSES.has(ackStatus) ||
+    typeof resolvedAckStatus !== 'string' ||
+    !ACK_STATUSES.has(resolvedAckStatus) ||
     !isNullableNumber(ackAt) ||
     !isNullableNumber(eta) ||
     !isNullableString(assignedApparatusId) ||
@@ -64,7 +65,7 @@ export function parseRosterEntryItem(
     entityType,
     memberId,
     quals: Array.isArray(quals) ? (quals as readonly string[]) : [],
-    ackStatus: ackStatus as AckStatus,
+    ackStatus: resolvedAckStatus as AckStatus,
     ackAt: ackAt ?? null,
     eta: eta ?? null,
     assignedApparatusId: assignedApparatusId ?? null,

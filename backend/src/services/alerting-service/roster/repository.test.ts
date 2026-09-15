@@ -104,6 +104,47 @@ describe('queryRoster (real DynamoDB, AC2/AC4/AC5)', () => {
     });
   });
 
+  it('does not abort the roster query on a fan-out-created row with no ackStatus yet (P6)', async () => {
+    const deptId = toVerifiedDeptId({ deptId: 'NICHOLS' });
+    const dispatchId = 'NICHOLS-4471-PREACK';
+    const pk = `DEPT#${deptId}#DISPATCH#${dispatchId}`;
+
+    await client.send(
+      new PutCommand({
+        TableName: TABLE_NAME,
+        Item: {
+          pk,
+          sk: 'ROSTER#MBR-0012',
+          entityType: 'DISPATCH_ROSTER_ENTRY',
+          memberId: 'MBR-0012',
+          quals: ['INTERIOR'],
+          ackStatus: 'RESPONDING',
+          ackAt: 1798000300,
+          eta: 6,
+          assignedApparatusId: null,
+          lastAnsweredTone: 1,
+        },
+      }),
+    );
+    await client.send(
+      new PutCommand({
+        TableName: TABLE_NAME,
+        Item: {
+          pk,
+          sk: 'ROSTER#MBR-0099',
+          entityType: 'DISPATCH_ROSTER_ENTRY',
+          memberId: 'MBR-0099',
+          quals: ['EMT'],
+        },
+      }),
+    );
+
+    const roster = await queryRoster(client, TABLE_NAME, deptId, dispatchId);
+    const byMember = new Map(roster.map((entry) => [entry.memberId, entry]));
+    expect(byMember.get('MBR-0012')).toMatchObject({ ackStatus: 'RESPONDING' });
+    expect(byMember.get('MBR-0099')).toMatchObject({ ackStatus: 'NONE' });
+  });
+
   it('returns every roster row for a dispatch with many responders (AC2)', async () => {
     const deptId = toVerifiedDeptId({ deptId: 'NICHOLS' });
     const dispatchId = 'NICHOLS-4471-PAGINATED';
