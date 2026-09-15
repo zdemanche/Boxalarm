@@ -22,10 +22,6 @@ export interface UpdateDeliveryReceiptInput {
 export type UpdateDeliveryReceiptResult =
   { readonly outcome: 'updated' } | { readonly outcome: 'not_found' };
 
-export function deriveDeptIdFromDispatchId(dispatchId: string): string {
-  return dispatchId.split('-')[0] ?? '';
-}
-
 export function buildReceiptKey(
   deptId: VerifiedDeptId,
   dispatchId: string,

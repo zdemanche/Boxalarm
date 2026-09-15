@@ -17,6 +17,7 @@ function buildEvent(
 }
 
 const VALID_BODY = {
+  deptId: 'NICHOLS',
   dispatchId: 'NICHOLS-4471-1798000000',
   memberId: 'MBR-0012',
   toneSequence: 1,
@@ -156,23 +157,20 @@ describe('voiceDeliveryReceiptHandler', () => {
     );
   });
 
-  it('never trusts a caller-supplied deptId field — it is derived from the dispatchId prefix (P1, cross-tenant)', async () => {
-    const updateDeliveryReceipt = vi.fn().mockResolvedValue({ outcome: 'updated' });
+  it('rejects a deptId that is not a genuine prefix of dispatchId, and makes no DynamoDB call (P1, cross-tenant)', async () => {
+    const send = vi.fn();
     vi.doMock('../eligibility/dynamoClient.js', () => ({
-      createDynamoClient: () => ({}),
+      createDynamoClient: () => ({ send }),
       readAlertingConfig: () => ({ tableName: 'alerting-table' }),
     }));
-    await mockRepository({ updateDeliveryReceipt });
-
     const { handler } = await import('./voiceDeliveryReceiptHandler.js');
-    await handler(
+    const result = (await handler(
       buildEvent(
         { 'x-voice-provider-secret': 'shared-secret' },
         { ...VALID_BODY, deptId: 'ATTACKER-DEPT' },
       ),
-    );
-
-    const call = updateDeliveryReceipt.mock.calls[0]?.[2] as Record<string, unknown>;
-    expect(call.deptId).toBe('NICHOLS');
+    )) as { statusCode: number };
+    expect(result.statusCode).toBe(400);
+    expect(send).not.toHaveBeenCalled();
   });
 });

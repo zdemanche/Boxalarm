@@ -1,19 +1,16 @@
 import { badRequestProblem, notFoundProblem, serviceUnavailableProblem } from '@boxalarm/authz';
-import { assertNoDelimiter, toVerifiedDeptId } from '@boxalarm/dept-scope';
+import { assertNoDelimiter, toVerifiedDeptId, type VerifiedDeptId } from '@boxalarm/dept-scope';
 import { emitOutcomeMetric } from '@boxalarm/metrics';
 import type { APIGatewayProxyEventV2, APIGatewayProxyResultV2 } from 'aws-lambda';
 import { createDynamoClient, readAlertingConfig } from '../eligibility/dynamoClient.js';
-import {
-  deriveDeptIdFromDispatchId,
-  updateDeliveryReceipt,
-  type DeliveryChannel,
-} from './deliveryReceiptRepository.js';
+import { updateDeliveryReceipt, type DeliveryChannel } from './deliveryReceiptRepository.js';
 import { logError, logInfo } from './logger.js';
 import { extractTraceId, unauthorizedVendorProblem, verifyVendorSecret } from './vendorAuth.js';
 
 const METRIC_NAMESPACE = 'Boxalarm/AlertingReceipts';
 
 export interface ReceiptWebhookBody {
+  readonly deptId: string;
   readonly dispatchId: string;
   readonly memberId: string;
   readonly toneSequence: number;
@@ -44,6 +41,9 @@ export function parseReceiptWebhookBody(
     throw new Error('body must be valid JSON');
   }
   const body = (parsed ?? {}) as Partial<Record<string, unknown>>;
+  if (typeof body.deptId !== 'string' || body.deptId.length === 0) {
+    throw new Error('deptId is required');
+  }
   if (typeof body.dispatchId !== 'string' || body.dispatchId.length === 0) {
     throw new Error('dispatchId is required');
   }
@@ -67,6 +67,7 @@ export function parseReceiptWebhookBody(
     throw new Error('failureReason is required when status is failed');
   }
   return {
+    deptId: body.deptId,
     dispatchId: body.dispatchId,
     memberId: body.memberId,
     toneSequence: body.toneSequence,
@@ -135,19 +136,27 @@ export function createDeliveryReceiptWebhookHandler(
       return badRequestProblem(traceId, detail);
     }
 
-    let deptId;
+    // deptId is caller-supplied but never trusted blindly: dispatchId is minted (and only
+    // ever minted) as `${deptId}-...` (see dispatches/repository.ts's mintDispatchId), so a
+    // deptId that isn't a genuine prefix of this dispatchId cannot be the dispatch's real
+    // owning department — closing the cross-tenant redirect an attacker holding the
+    // channel-wide shared secret could otherwise attempt. This is a prefix check, not a
+    // split/derive: deptId itself may legitimately contain '-' (see e.g. `dept-001`-shaped
+    // department ids used elsewhere in this codebase), so it must never be parsed out of
+    // dispatchId by splitting on '-'.
+    let deptId: VerifiedDeptId;
     try {
-      deptId = toVerifiedDeptId({ deptId: deriveDeptIdFromDispatchId(body.dispatchId) });
+      deptId = toVerifiedDeptId({ deptId: body.deptId });
+      if (!body.dispatchId.startsWith(`${deptId}-`)) {
+        throw new Error('deptId does not match the dispatchId prefix');
+      }
     } catch (error) {
       emitOutcomeMetric(
         METRIC_NAMESPACE,
         `${config.metricPrefix}ReceiptRejected`,
         'ValidationFailed',
       );
-      return badRequestProblem(
-        traceId,
-        error instanceof Error ? error.message : 'invalid dispatchId',
-      );
+      return badRequestProblem(traceId, error instanceof Error ? error.message : 'invalid deptId');
     }
 
     try {

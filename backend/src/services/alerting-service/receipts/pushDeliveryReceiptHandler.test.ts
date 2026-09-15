@@ -17,6 +17,7 @@ function buildEvent(
 }
 
 const VALID_BODY = {
+  deptId: 'NICHOLS',
   dispatchId: 'NICHOLS-4471-1798000000',
   memberId: 'MBR-0012',
   toneSequence: 1,
@@ -244,31 +245,24 @@ describe('pushDeliveryReceiptHandler', () => {
     );
   });
 
-  it('derives deptId from the dispatchId prefix and never trusts a caller-supplied deptId field (P1, cross-tenant)', async () => {
-    const updateDeliveryReceipt = vi.fn().mockResolvedValue({ outcome: 'updated' });
+  it('rejects a deptId that is not a genuine prefix of dispatchId, and makes no DynamoDB call (P1, cross-tenant)', async () => {
+    const send = vi.fn();
     vi.doMock('../eligibility/dynamoClient.js', () => ({
-      createDynamoClient: () => ({}),
+      createDynamoClient: () => ({ send }),
       readAlertingConfig: () => ({ tableName: 'alerting-table' }),
     }));
-    vi.doMock('./deliveryReceiptRepository.js', async () => {
-      const actual = await vi.importActual<typeof import('./deliveryReceiptRepository.js')>(
-        './deliveryReceiptRepository.js',
-      );
-      return { ...actual, updateDeliveryReceipt };
-    });
-
     const { handler } = await import('./pushDeliveryReceiptHandler.js');
-    await handler(
+    // An attacker holding the single channel-wide secret cannot redirect the write to a
+    // different department by supplying an unrelated deptId — dispatchId is minted as
+    // `${deptId}-...`, so a deptId that isn't a prefix of this dispatchId is rejected.
+    const result = (await handler(
       buildEvent(
         { 'x-push-provider-secret': 'shared-secret' },
-        // An attacker holding the single channel-wide secret cannot redirect the write to a
-        // different department by supplying an unrelated deptId — it is never read.
         { ...VALID_BODY, deptId: 'ATTACKER-DEPT' },
       ),
-    );
-
-    const call = updateDeliveryReceipt.mock.calls[0]?.[2] as Record<string, unknown>;
-    expect(call.deptId).toBe('NICHOLS');
+    )) as { statusCode: number };
+    expect(result.statusCode).toBe(400);
+    expect(send).not.toHaveBeenCalled();
   });
 
   it('emits a PushReceiptUpdated business metric on success (business-metrics obligation)', async () => {
