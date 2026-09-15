@@ -315,6 +315,75 @@ describe('handler', () => {
     expect(result).toEqual({ isAuthorized: false });
   });
 
+  it('allows a token 59m59s into its 1h lifetime — no idle-age check exists on top of exp (AC2)', async () => {
+    const keyPair = generateTestKeyPair('kid-1');
+    const { createVerifier } = await import('./tokenVerifier.js');
+    const config = { userPoolId: USER_POOL_ID, issuer: ISSUER, allowedClientIds: [WEB_CLIENT_ID] };
+    const verifier = createVerifier(config);
+    verifier.cacheJwks({ keys: [keyPair.jwk as never] });
+
+    vi.resetModules();
+    vi.doMock('./tokenVerifier.js', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('./tokenVerifier.js')>();
+      return { ...actual, createVerifier: () => verifier };
+    });
+
+    const { handler } = await import('./handler.js');
+    const issuedAt = nowSeconds() - (60 * 59 + 59);
+    const token = signAccessToken(
+      keyPair,
+      baseAccessTokenPayload({ iat: issuedAt, auth_time: issuedAt, exp: issuedAt + 3600 }),
+    );
+    const result = await handler(
+      buildEvent({ authorization: `Bearer ${token}` }),
+      {} as never,
+      () => undefined,
+    );
+    expect(result).toMatchObject({ isAuthorized: true });
+  });
+
+  it('produces an identical isAuthorized/context shape for a valid token regardless of routeKey — no route ever adds a second gate (AC3)', async () => {
+    const keyPair = generateTestKeyPair('kid-1');
+    const { createVerifier } = await import('./tokenVerifier.js');
+    const config = { userPoolId: USER_POOL_ID, issuer: ISSUER, allowedClientIds: [WEB_CLIENT_ID] };
+    const verifier = createVerifier(config);
+    verifier.cacheJwks({ keys: [keyPair.jwk as never] });
+
+    vi.resetModules();
+    vi.doMock('./tokenVerifier.js', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('./tokenVerifier.js')>();
+      return { ...actual, createVerifier: () => verifier };
+    });
+
+    const { handler } = await import('./handler.js');
+    const token = signAccessToken(keyPair, baseAccessTokenPayload());
+    const routeKeys = [
+      'GET /api/v1/platform/config',
+      'PUT /api/v1/platform/config',
+      'POST /api/v1/platform/export',
+      'POST /api/v1/platform/sessions/revoke',
+    ];
+
+    const results = [];
+    for (const routeKey of routeKeys) {
+      results.push(
+        await handler(
+          { ...buildEvent({ authorization: `Bearer ${token}` }), routeKey },
+          {} as never,
+          () => undefined,
+        ),
+      );
+    }
+
+    for (const result of results) {
+      expect(result).toEqual(results[0]);
+      expect(result).toEqual({
+        isAuthorized: true,
+        context: { sub: 'member-0012', deptId: DEPT_ID, 'cognito:groups': '' },
+      });
+    }
+  });
+
   it('constructs the verifier once and reuses its JWKS cache across invocations (exactly one fetch)', async () => {
     const keyPair = generateTestKeyPair('kid-1');
     const fetchCalls: string[] = [];

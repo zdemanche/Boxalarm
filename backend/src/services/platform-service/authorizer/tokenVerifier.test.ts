@@ -151,6 +151,17 @@ describe('verifyAccessToken', () => {
     await expect(verifyAccessToken(verifier, token)).rejects.toThrow(JwtExpiredError);
   });
 
+  it('denies a token presented more than 1 hour after issuance — the exact 1h00m01s boundary (AC4)', async () => {
+    const keyPair = generateTestKeyPair('kid-1');
+    const verifier = buildVerifier(keyPair);
+    const issuedAt = nowSeconds() - (3600 + 1);
+    const token = signAccessToken(
+      keyPair,
+      baseAccessTokenPayload({ iat: issuedAt, auth_time: issuedAt, exp: issuedAt + 3600 }),
+    );
+    await expect(verifyAccessToken(verifier, token)).rejects.toThrow(JwtExpiredError);
+  });
+
   it('denies a token with a bad signature with the specific signature error', async () => {
     const keyPair = generateTestKeyPair('kid-1');
     const wrongSigner = generateTestKeyPair('kid-1');
