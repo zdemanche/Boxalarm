@@ -11,8 +11,9 @@ import { buildDeptScopedPk, toVerifiedDeptId, type VerifiedDeptId } from '@boxal
 import { emitEmf, emitOutcomeMetric } from '@boxalarm/metrics';
 import type { DynamoDBBatchResponse, DynamoDBRecord, DynamoDBStreamEvent } from 'aws-lambda';
 import { createDynamoClient, readAlertingConfig } from '../eligibility/dynamoClient.js';
-import { queryEligibleMembers } from '../eligibility/selector.js';
+import { getMemberEligibility, queryEligibleMembers } from '../eligibility/selector.js';
 import { resolvePushTarget } from '../eligibility/resolvePushTarget.js';
+import { upsertSelfTestRun, type SelfTestChannelResult } from '../selfTest/selfTestRunRepository.js';
 import {
   deriveFanOutKey,
   deriveMessageDeduplicationId,
@@ -37,6 +38,9 @@ interface DispatchAlertRecord {
   readonly mapLink: string | undefined;
   readonly isTest: boolean;
   readonly sourceSystem: string | undefined;
+  readonly targetMemberId: string | undefined;
+  readonly selfTestId: string | undefined;
+  readonly channelsTested: readonly string[] | undefined;
 }
 
 interface FanOutTask {
@@ -124,6 +128,11 @@ function parseDispatchAlertRecord(record: DynamoDBRecord): DispatchAlertRecord |
     mapLink: typeof item.mapLink === 'string' ? item.mapLink : undefined,
     isTest: item.isTest === true,
     sourceSystem: typeof item.sourceSystem === 'string' ? item.sourceSystem : undefined,
+    targetMemberId: typeof item.targetMemberId === 'string' ? item.targetMemberId : undefined,
+    selfTestId: typeof item.selfTestId === 'string' ? item.selfTestId : undefined,
+    channelsTested: Array.isArray(item.channelsTested)
+      ? (item.channelsTested as string[])
+      : undefined,
   };
 }
 
@@ -343,6 +352,81 @@ async function fanOutOneDispatch(
   }
 }
 
+async function fanOutSelfTestDispatch(
+  ddb: DynamoDBDocumentClient,
+  sns: SNSClient,
+  tableName: string,
+  topicArn: string,
+  dispatch: DispatchAlertRecord,
+): Promise<void> {
+  const memberId = dispatch.targetMemberId!;
+  const runAt = Math.floor(Date.now() / 1000);
+  const testId = dispatch.selfTestId ?? String(runAt);
+  const channelsTested = dispatch.channelsTested ?? FAN_OUT_CHANNELS.map((c) => c.toUpperCase());
+
+  const member = await getMemberEligibility(ddb, tableName, dispatch.deptId, memberId);
+  if (!member) {
+    logInfo('fanout.selfTest.memberNotFound', dispatch.dispatchId, { memberId, testId });
+    emitOutcomeMetric(METRIC_NAMESPACE, 'SelfTestFailed', 'MemberNotFound');
+    await upsertSelfTestRun(ddb, tableName, {
+      deptId: dispatch.deptId,
+      memberId,
+      testId,
+      runAt,
+      channelsTested,
+      channelResults: Object.fromEntries(
+        channelsTested.map((channel) => [channel, { ok: false, ms: 0, reason: 'member not found' }]),
+      ),
+      overallResult: 'FAIL',
+    });
+    return;
+  }
+
+  const channelResults: Record<string, SelfTestChannelResult> = {};
+
+  for (const channel of FAN_OUT_CHANNELS) {
+    if (channel === 'push') {
+      const pushTarget = resolvePushTarget(member.contactChannels);
+      if (pushTarget.skipped) {
+        channelResults.PUSH = { ok: false, ms: 0, reason: pushTarget.reason };
+        emitOutcomeMetric(METRIC_NAMESPACE, 'SelfTestChannelFailed', 'PushSkipped');
+        continue;
+      }
+    }
+    const startedMs = Date.now();
+    try {
+      await sendOne(ddb, sns, tableName, topicArn, dispatch, { memberId, channel });
+      channelResults[channel.toUpperCase()] = { ok: true, ms: Date.now() - startedMs };
+      emitOutcomeMetric(METRIC_NAMESPACE, 'SelfTestChannelPassed');
+    } catch (error) {
+      logError('fanout.selfTest.channelFailed', error, dispatch.dispatchId, { memberId, channel });
+      channelResults[channel.toUpperCase()] = {
+        ok: false,
+        ms: Date.now() - startedMs,
+        reason: `send failed (${error instanceof Error ? error.constructor.name : 'UnknownError'})`,
+      };
+      emitOutcomeMetric(METRIC_NAMESPACE, 'SelfTestChannelFailed', 'SendFailed');
+    }
+  }
+
+  const overallResult = Object.values(channelResults).every((result) => result.ok)
+    ? 'PASS'
+    : 'FAIL';
+  await upsertSelfTestRun(ddb, tableName, {
+    deptId: dispatch.deptId,
+    memberId,
+    testId,
+    runAt,
+    channelsTested,
+    channelResults,
+    overallResult,
+  });
+  emitOutcomeMetric(
+    METRIC_NAMESPACE,
+    overallResult === 'PASS' ? 'SelfTestPassed' : 'SelfTestFailed',
+  );
+}
+
 function recordItemIdentifier(record: DynamoDBRecord): string {
   return record.dynamodb?.SequenceNumber ?? record.eventID ?? 'unknown';
 }
@@ -365,7 +449,11 @@ export const handler = async (event: DynamoDBStreamEvent): Promise<DynamoDBBatch
       continue;
     }
     try {
-      await fanOutOneDispatch(ddb, sns, tableName, topicArn, dispatch);
+      if (dispatch.targetMemberId) {
+        await fanOutSelfTestDispatch(ddb, sns, tableName, topicArn, dispatch);
+      } else {
+        await fanOutOneDispatch(ddb, sns, tableName, topicArn, dispatch);
+      }
     } catch (error) {
       logError('fanout.dispatch_failed', error, dispatch.dispatchId);
       return { batchItemFailures: [{ itemIdentifier: recordItemIdentifier(record) }] };

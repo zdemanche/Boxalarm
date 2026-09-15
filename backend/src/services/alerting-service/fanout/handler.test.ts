@@ -92,6 +92,11 @@ function createFakeDdb(
       items.set(key, existing);
       return {};
     }
+    if (name === 'PutCommand') {
+      const { Item } = input as { Item: FakeItem };
+      items.set(`${Item.pk}#${Item.sk}`, Item);
+      return {};
+    }
     if (name === 'QueryCommand') {
       const query = input as { ExpressionAttributeValues: Record<string, string> };
       return {
@@ -177,6 +182,155 @@ function dispatchAlertInsertEvent(dispatchId = 'NICHOLS-1-1798000000'): DynamoDB
     ],
   } as unknown as DynamoDBStreamEvent;
 }
+
+function selfTestDispatchInsertEvent(
+  overrides: { dispatchId?: string; targetMemberId?: string; selfTestId?: string } = {},
+): DynamoDBStreamEvent {
+  const dispatchId = overrides.dispatchId ?? 'NICHOLS-SELFTEST-1798000000';
+  const targetMemberId = overrides.targetMemberId ?? 'mbr-1';
+  const selfTestId = overrides.selfTestId ?? '1798000000';
+  return {
+    Records: [
+      {
+        eventName: 'INSERT',
+        eventID: 'ev-selftest-1',
+        dynamodb: {
+          SequenceNumber: 'seq-selftest-1',
+          NewImage: {
+            pk: { S: `DEPT#NICHOLS#DISPATCH#${dispatchId}` },
+            sk: { S: 'METADATA' },
+            entityType: { S: 'DISPATCH_ALERT' },
+            dispatchId: { S: dispatchId },
+            deptId: { S: 'NICHOLS' },
+            incidentType: { S: 'SELF_TEST' },
+            narrative: { S: 'Synthetic self-test dispatch' },
+            isTest: { BOOL: true },
+            sourceSystem: { S: 'SELF_TEST' },
+            targetMemberId: { S: targetMemberId },
+            selfTestId: { S: selfTestId },
+            channelsTested: { L: [{ S: 'PUSH' }, { S: 'SMS' }] },
+          },
+        },
+      },
+    ],
+  } as unknown as DynamoDBStreamEvent;
+}
+
+describe('fanout/handler self-test branch (E1-S8 AC1/AC2/AC3/AC4/AC5)', () => {
+  const originalEnv = { ...process.env };
+
+  beforeEach(() => {
+    vi.resetModules();
+    process.env.ALERTING_TABLE_NAME = 'alerting-table';
+    process.env.ALERTING_TOPIC_ARN = 'arn:aws:sns:us-east-1:1:boxalarm-dev-alerting-topic.fifo';
+  });
+
+  afterEach(() => {
+    process.env = { ...originalEnv };
+  });
+
+  it('addresses SNS/DELIVERY_RECEIPT only to targetMemberId even when the roster has other members, and records a PASS SELF_TEST_RUN (AC1/AC3/AC4, core-harm)', async () => {
+    const ddb = createFakeDdb([memberSnapshot({ memberId: 'mbr-1' }), memberSnapshot({ memberId: 'mbr-2' })]);
+    const sns = createFakeSns();
+    vi.doMock('../eligibility/dynamoClient.js', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('../eligibility/dynamoClient.js')>();
+      return { ...actual, createDynamoClient: () => ddb as unknown as DynamoDBDocumentClient };
+    });
+    vi.doMock('./snsClient.js', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('./snsClient.js')>();
+      return { ...actual, createSnsClient: () => sns as unknown as SNSClient };
+    });
+
+    const { handler } = await import('./handler.js');
+    await handler(selfTestDispatchInsertEvent());
+
+    expect(sns.calls).toHaveLength(2);
+    const receipts = [...ddb.items.values()].filter((item) => item.entityType === 'DELIVERY_RECEIPT');
+    expect(receipts).toHaveLength(2);
+    expect(receipts.every((item) => item.memberId === 'mbr-1')).toBe(true);
+
+    const run = ddb.items.get('DEPT#NICHOLS#MEMBER#mbr-1#SELFTEST#1798000000');
+    expect(run?.entityType).toBe('SELF_TEST_RUN');
+    expect(run?.overallResult).toBe('PASS');
+    const channelResults = run?.channelResults as Record<string, { ok: boolean; ms: number }>;
+    expect(channelResults.PUSH?.ok).toBe(true);
+    expect(channelResults.SMS?.ok).toBe(true);
+  });
+
+  it('records a specific push failure reason and overallResult FAIL when the member has no registered push token (AC5)', async () => {
+    const ddb = createFakeDdb([
+      memberSnapshot({ memberId: 'mbr-1', contactChannels: [{ channel: 'sms', token: '+15551234567' }] }),
+    ]);
+    const sns = createFakeSns();
+    vi.doMock('../eligibility/dynamoClient.js', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('../eligibility/dynamoClient.js')>();
+      return { ...actual, createDynamoClient: () => ddb as unknown as DynamoDBDocumentClient };
+    });
+    vi.doMock('./snsClient.js', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('./snsClient.js')>();
+      return { ...actual, createSnsClient: () => sns as unknown as SNSClient };
+    });
+
+    const { handler } = await import('./handler.js');
+    await handler(selfTestDispatchInsertEvent());
+
+    const run = ddb.items.get('DEPT#NICHOLS#MEMBER#mbr-1#SELFTEST#1798000000');
+    expect(run?.overallResult).toBe('FAIL');
+    const channelResults = run?.channelResults as Record<string, { ok: boolean; reason?: string }>;
+    expect(channelResults.PUSH).toEqual({ ok: false, ms: 0, reason: 'push: no token registered' });
+    expect(channelResults.SMS?.ok).toBe(true);
+  });
+
+  it('records overallResult FAIL with reason "member not found" and never publishes when the targeted member has no MEMBER_ELIGIBILITY_SNAPSHOT, without failing the batch', async () => {
+    const ddb = createFakeDdb([]);
+    const sns = createFakeSns();
+    vi.doMock('../eligibility/dynamoClient.js', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('../eligibility/dynamoClient.js')>();
+      return { ...actual, createDynamoClient: () => ddb as unknown as DynamoDBDocumentClient };
+    });
+    vi.doMock('./snsClient.js', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('./snsClient.js')>();
+      return { ...actual, createSnsClient: () => sns as unknown as SNSClient };
+    });
+
+    const { handler } = await import('./handler.js');
+    await expect(handler(selfTestDispatchInsertEvent())).resolves.toEqual({
+      batchItemFailures: [],
+    });
+
+    expect(sns.calls).toHaveLength(0);
+    const run = ddb.items.get('DEPT#NICHOLS#MEMBER#mbr-1#SELFTEST#1798000000');
+    expect(run?.overallResult).toBe('FAIL');
+    const channelResults = run?.channelResults as Record<string, { ok: boolean; reason?: string }>;
+    expect(channelResults.PUSH?.reason).toBe('member not found');
+    expect(channelResults.SMS?.reason).toBe('member not found');
+  });
+
+  it('captures an SNS publish failure into channelResults with a specific reason instead of failing the batch (AC5, self-test never retries via Streams redrive)', async () => {
+    const ddb = createFakeDdb([memberSnapshot({ memberId: 'mbr-1' })]);
+    const sns = createFakeSns((call) => call.MessageAttributes.channel?.StringValue === 'push');
+    vi.doMock('../eligibility/dynamoClient.js', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('../eligibility/dynamoClient.js')>();
+      return { ...actual, createDynamoClient: () => ddb as unknown as DynamoDBDocumentClient };
+    });
+    vi.doMock('./snsClient.js', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('./snsClient.js')>();
+      return { ...actual, createSnsClient: () => sns as unknown as SNSClient };
+    });
+
+    const { handler } = await import('./handler.js');
+    await expect(handler(selfTestDispatchInsertEvent())).resolves.toEqual({
+      batchItemFailures: [],
+    });
+
+    const run = ddb.items.get('DEPT#NICHOLS#MEMBER#mbr-1#SELFTEST#1798000000');
+    expect(run?.overallResult).toBe('FAIL');
+    const channelResults = run?.channelResults as Record<string, { ok: boolean; reason?: string }>;
+    expect(channelResults.PUSH?.ok).toBe(false);
+    expect(channelResults.PUSH?.reason).toContain('send failed');
+    expect(channelResults.SMS?.ok).toBe(true);
+  });
+});
 
 describe('fanout/handler', () => {
   const originalEnv = { ...process.env };
