@@ -39,7 +39,7 @@ export const handler: APIGatewayProxyHandlerV2WithLambdaAuthorizer<AuthorizerCon
 
   try {
     const repository = getApparatusRepository(process.env);
-    const apparatus = await repository.getApparatusByUnitId(deptId, unitId);
+    const apparatus = await repository.getApparatusDetail(deptId, unitId);
     if (!apparatus) {
       return problemResponse(
         404,

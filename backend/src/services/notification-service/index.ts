@@ -41,3 +41,29 @@ export function handleApparatusDefectReported(
     }),
   );
 }
+
+export interface ApparatusTestDuePayload {
+  readonly apparatusId: string;
+  readonly testType: string;
+  readonly dueDate: string;
+}
+
+export function handleApparatusTestDue(
+  payload: ApparatusTestDuePayload,
+  correlationId: string,
+): void {
+  // TODO: E3-S3 — resolve the department-configured responsible role and digest-batch this per member per day.
+  console.log(
+    JSON.stringify({
+      event: 'notification.apparatus_test_due.stub',
+      service: 'notification-service',
+      correlationId,
+      apparatusId: payload.apparatusId,
+      testType: payload.testType,
+      dueDate: payload.dueDate,
+      channelClass: 'non-critical',
+      message:
+        'Stub only — must use notification-service non-critical channel; do not route via alerting-service',
+    }),
+  );
+}
