@@ -17,13 +17,19 @@ function buildEvent(
 }
 
 const VALID_BODY = {
-  deptId: 'NICHOLS',
   dispatchId: 'NICHOLS-4471-1798000000',
   memberId: 'MBR-0012',
   toneSequence: 1,
   status: 'delivered',
   providerTimestamp: 1798000100,
 };
+
+async function mockRepository(overrides: Record<string, unknown>): Promise<void> {
+  const actual = await vi.importActual<typeof import('./deliveryReceiptRepository.js')>(
+    './deliveryReceiptRepository.js',
+  );
+  vi.doMock('./deliveryReceiptRepository.js', () => ({ ...actual, ...overrides }));
+}
 
 describe('voiceDeliveryReceiptHandler', () => {
   const originalEnv = { ...process.env };
@@ -38,6 +44,7 @@ describe('voiceDeliveryReceiptHandler', () => {
     process.env = { ...originalEnv };
     vi.doUnmock('../eligibility/dynamoClient.js');
     vi.doUnmock('./deliveryReceiptRepository.js');
+    vi.doUnmock('./logger.js');
   });
 
   it('returns 401 on a missing/invalid vendor secret (AC3)', async () => {
@@ -50,6 +57,16 @@ describe('voiceDeliveryReceiptHandler', () => {
     expect(invalid.statusCode).toBe(401);
   });
 
+  it('logs a structured rejection (no secret value) on a 401', async () => {
+    const logInfo = vi.fn();
+    vi.doMock('./logger.js', () => ({ logInfo, logError: vi.fn() }));
+    const { handler } = await import('./voiceDeliveryReceiptHandler.js');
+    await handler(buildEvent({ 'x-voice-provider-secret': 'wrong' }, VALID_BODY));
+    expect(logInfo).toHaveBeenCalledWith(
+      expect.objectContaining({ event: 'alerting.receipts.voice.unauthorized' }),
+    );
+  });
+
   it('returns 400 when a required field is missing', async () => {
     const { handler } = await import('./voiceDeliveryReceiptHandler.js');
     const withoutDispatchId: Record<string, unknown> = { ...VALID_BODY };
@@ -60,14 +77,31 @@ describe('voiceDeliveryReceiptHandler', () => {
     expect(result.statusCode).toBe(400);
   });
 
+  it('returns 400 (never 503) when dispatchId contains the pk delimiter, and makes no DynamoDB call', async () => {
+    const send = vi.fn();
+    vi.doMock('../eligibility/dynamoClient.js', () => ({
+      createDynamoClient: () => ({ send }),
+      readAlertingConfig: () => ({ tableName: 'alerting-table' }),
+    }));
+    const { handler } = await import('./voiceDeliveryReceiptHandler.js');
+    const result = (await handler(
+      buildEvent(
+        { 'x-voice-provider-secret': 'shared-secret' },
+        { ...VALID_BODY, dispatchId: 'A#ELIGIBILITY' },
+      ),
+    )) as { statusCode: number };
+    expect(result.statusCode).toBe(400);
+    expect(send).not.toHaveBeenCalled();
+  });
+
   it('returns 404 when no matching DELIVERY_RECEIPT item exists', async () => {
     vi.doMock('../eligibility/dynamoClient.js', () => ({
       createDynamoClient: () => ({}),
       readAlertingConfig: () => ({ tableName: 'alerting-table' }),
     }));
-    vi.doMock('./deliveryReceiptRepository.js', () => ({
+    await mockRepository({
       updateDeliveryReceipt: vi.fn().mockResolvedValue({ outcome: 'not_found' }),
-    }));
+    });
     const { handler } = await import('./voiceDeliveryReceiptHandler.js');
     const result = (await handler(
       buildEvent({ 'x-voice-provider-secret': 'shared-secret' }, VALID_BODY),
@@ -75,20 +109,24 @@ describe('voiceDeliveryReceiptHandler', () => {
     expect(result.statusCode).toBe(404);
   });
 
-  it('returns 503 when DynamoDB is unavailable', async () => {
+  it('returns 503 when DynamoDB is unavailable, and logs the original error', async () => {
     vi.doMock('../eligibility/dynamoClient.js', () => ({
       createDynamoClient: () => ({}),
       readAlertingConfig: () => ({ tableName: 'alerting-table' }),
     }));
-    vi.doMock('./deliveryReceiptRepository.js', () => ({
+    await mockRepository({
       updateDeliveryReceipt: vi.fn().mockRejectedValue(new Error('table not reachable')),
-    }));
-    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    });
+    const logError = vi.fn();
+    vi.doMock('./logger.js', () => ({ logError, logInfo: vi.fn() }));
     const { handler } = await import('./voiceDeliveryReceiptHandler.js');
     const result = (await handler(
       buildEvent({ 'x-voice-provider-secret': 'shared-secret' }, VALID_BODY),
     )) as { statusCode: number };
     expect(result.statusCode).toBe(503);
+    expect(logError).toHaveBeenCalledWith(
+      expect.objectContaining({ message: 'table not reachable' }),
+    );
   });
 
   it('returns 200 and updates the matching VOICE receipt at the escalation tone (AC1, entrypoint test)', async () => {
@@ -97,7 +135,7 @@ describe('voiceDeliveryReceiptHandler', () => {
       createDynamoClient: () => ({}),
       readAlertingConfig: () => ({ tableName: 'alerting-table' }),
     }));
-    vi.doMock('./deliveryReceiptRepository.js', () => ({ updateDeliveryReceipt }));
+    await mockRepository({ updateDeliveryReceipt });
 
     const { handler } = await import('./voiceDeliveryReceiptHandler.js');
     const result = (await handler(
@@ -108,13 +146,33 @@ describe('voiceDeliveryReceiptHandler', () => {
     expect(JSON.parse(result.body)).toEqual({
       dispatchId: 'NICHOLS-4471-1798000000',
       memberId: 'MBR-0012',
-      channel: 'VOICE',
+      channel: 'voice',
       status: 'delivered',
     });
     expect(updateDeliveryReceipt).toHaveBeenCalledWith(
       {},
       'alerting-table',
-      expect.objectContaining({ channel: 'VOICE', deliveredAt: 1798000100 }),
+      expect.objectContaining({ channel: 'voice', deliveredAt: 1798000100, deptId: 'NICHOLS' }),
     );
+  });
+
+  it('never trusts a caller-supplied deptId field — it is derived from the dispatchId prefix (P1, cross-tenant)', async () => {
+    const updateDeliveryReceipt = vi.fn().mockResolvedValue({ outcome: 'updated' });
+    vi.doMock('../eligibility/dynamoClient.js', () => ({
+      createDynamoClient: () => ({}),
+      readAlertingConfig: () => ({ tableName: 'alerting-table' }),
+    }));
+    await mockRepository({ updateDeliveryReceipt });
+
+    const { handler } = await import('./voiceDeliveryReceiptHandler.js');
+    await handler(
+      buildEvent(
+        { 'x-voice-provider-secret': 'shared-secret' },
+        { ...VALID_BODY, deptId: 'ATTACKER-DEPT' },
+      ),
+    );
+
+    const call = updateDeliveryReceipt.mock.calls[0]?.[2] as Record<string, unknown>;
+    expect(call.deptId).toBe('NICHOLS');
   });
 });

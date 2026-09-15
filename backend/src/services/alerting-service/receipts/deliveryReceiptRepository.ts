@@ -2,7 +2,11 @@ import { ConditionalCheckFailedException } from '@aws-sdk/client-dynamodb';
 import { QueryCommand, UpdateCommand, type DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
 import { buildDeptScopedPk, type VerifiedDeptId } from '@boxalarm/dept-scope';
 
-export type DeliveryChannel = 'PUSH' | 'SMS' | 'VOICE';
+// Lowercase, matching the fan-out producer's FanOutChannel type (fanout/idempotencyKey.ts)
+// and the routing/dedup canonical form in CLAUDE.md ("channel (push/sms/voice)"). This must
+// stay byte-identical to what E1-S2's fan-out writes into the sk, or every webhook update
+// silently 404s against a receipt that does exist under a differently-cased key.
+export type DeliveryChannel = 'push' | 'sms' | 'voice';
 
 export interface UpdateDeliveryReceiptInput {
   readonly deptId: VerifiedDeptId;
@@ -18,7 +22,11 @@ export interface UpdateDeliveryReceiptInput {
 export type UpdateDeliveryReceiptResult =
   { readonly outcome: 'updated' } | { readonly outcome: 'not_found' };
 
-function buildReceiptKey(
+export function deriveDeptIdFromDispatchId(dispatchId: string): string {
+  return dispatchId.split('-')[0] ?? '';
+}
+
+export function buildReceiptKey(
   deptId: VerifiedDeptId,
   dispatchId: string,
   memberId: string,
@@ -97,17 +105,25 @@ export async function queryReceiptsForDispatch(
   deptId: VerifiedDeptId,
   dispatchId: string,
 ): Promise<DeliveryReceiptRecord[]> {
-  const result = await client.send(
-    new QueryCommand({
-      TableName: tableName,
-      KeyConditionExpression: 'pk = :pk AND begins_with(sk, :prefix)',
-      ExpressionAttributeValues: {
-        ':pk': buildDeptScopedPk(deptId, 'DISPATCH', dispatchId),
-        ':prefix': 'RECEIPT#',
-      },
-    }),
-  );
-  return (result.Items ?? []).map((item) => ({
+  const items: Record<string, unknown>[] = [];
+  let exclusiveStartKey: Record<string, unknown> | undefined;
+  do {
+    const result = await client.send(
+      new QueryCommand({
+        TableName: tableName,
+        KeyConditionExpression: 'pk = :pk AND begins_with(sk, :prefix)',
+        ExpressionAttributeValues: {
+          ':pk': buildDeptScopedPk(deptId, 'DISPATCH', dispatchId),
+          ':prefix': 'RECEIPT#',
+        },
+        ExclusiveStartKey: exclusiveStartKey,
+      }),
+    );
+    items.push(...(result.Items ?? []));
+    exclusiveStartKey = result.LastEvaluatedKey;
+  } while (exclusiveStartKey !== undefined);
+
+  return items.map((item) => ({
     memberId: item.memberId as string,
     channel: item.channel as string,
     toneSequence: item.toneSequence as number,

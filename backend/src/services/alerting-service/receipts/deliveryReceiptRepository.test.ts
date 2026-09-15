@@ -22,7 +22,7 @@ describe('updateDeliveryReceipt (AC1, core-harm)', () => {
         deptId,
         dispatchId: 'NICHOLS-4471-1798000000',
         memberId: 'MBR-0012',
-        channel: 'PUSH',
+        channel: 'push',
         toneSequence: 1,
         deliveredAt: 1798000004,
       },
@@ -32,7 +32,7 @@ describe('updateDeliveryReceipt (AC1, core-harm)', () => {
     const call = ddbMock.commandCalls(UpdateCommand)[0];
     expect(call?.args[0].input.Key).toEqual({
       pk: 'DEPT#NICHOLS#DISPATCH#NICHOLS-4471-1798000000',
-      sk: 'RECEIPT#MBR-0012#PUSH#1',
+      sk: 'RECEIPT#MBR-0012#push#1',
     });
     expect(call?.args[0].input.ConditionExpression).toBe('attribute_exists(pk)');
     expect(call?.args[0].input.UpdateExpression).toContain(
@@ -46,7 +46,7 @@ describe('updateDeliveryReceipt (AC1, core-harm)', () => {
       deptId,
       dispatchId: 'NICHOLS-4471-1798000000',
       memberId: 'MBR-0012',
-      channel: 'PUSH' as const,
+      channel: 'push' as const,
       toneSequence: 1,
       deliveredAt: 1798000004,
     };
@@ -66,7 +66,7 @@ describe('updateDeliveryReceipt (AC1, core-harm)', () => {
     for (const call of ddbMock.commandCalls(UpdateCommand)) {
       expect(call.args[0].input.Key).toEqual({
         pk: 'DEPT#NICHOLS#DISPATCH#NICHOLS-4471-1798000000',
-        sk: 'RECEIPT#MBR-0012#PUSH#1',
+        sk: 'RECEIPT#MBR-0012#push#1',
       });
     }
   });
@@ -77,7 +77,7 @@ describe('updateDeliveryReceipt (AC1, core-harm)', () => {
       deptId,
       dispatchId: 'NICHOLS-4471-1798000000',
       memberId: 'MBR-0012',
-      channel: 'SMS',
+      channel: 'sms',
       toneSequence: 1,
       failureReason: 'CARRIER_REJECTED',
     });
@@ -96,7 +96,7 @@ describe('updateDeliveryReceipt (AC1, core-harm)', () => {
         deptId,
         dispatchId: 'NICHOLS-4471-1798000000',
         memberId: 'MBR-0012',
-        channel: 'VOICE',
+        channel: 'voice',
         toneSequence: 2,
         deliveredAt: 1798000100,
       },
@@ -111,7 +111,7 @@ describe('updateDeliveryReceipt (AC1, core-harm)', () => {
         deptId,
         dispatchId: 'NICHOLS-4471-1798000000',
         memberId: 'MBR-0012',
-        channel: 'PUSH',
+        channel: 'push',
         toneSequence: 1,
         deliveredAt: 1798000004,
       }),
@@ -125,7 +125,7 @@ describe('queryReceiptsForDispatch (AC2)', () => {
       Items: [
         {
           memberId: 'MBR-0012',
-          channel: 'PUSH',
+          channel: 'push',
           toneSequence: 1,
           sentAt: 1798000003,
           deliveredAt: 1798000004,
@@ -143,7 +143,7 @@ describe('queryReceiptsForDispatch (AC2)', () => {
     expect(receipts).toEqual([
       {
         memberId: 'MBR-0012',
-        channel: 'PUSH',
+        channel: 'push',
         toneSequence: 1,
         sentAt: 1798000003,
         deliveredAt: 1798000004,
@@ -168,5 +168,35 @@ describe('queryReceiptsForDispatch (AC2)', () => {
       'NICHOLS-4471-1798000000',
     );
     expect(receipts).toEqual([]);
+  });
+
+  it('follows LastEvaluatedKey across pages so a dispatch with a large roster is never truncated', async () => {
+    ddbMock
+      .on(QueryCommand)
+      .resolvesOnce({
+        Items: [{ memberId: 'MBR-0001', channel: 'push', toneSequence: 1, sentAt: 1798000003 }],
+        LastEvaluatedKey: {
+          pk: 'DEPT#NICHOLS#DISPATCH#NICHOLS-4471-1798000000',
+          sk: 'RECEIPT#MBR-0001#push#1',
+        },
+      })
+      .resolvesOnce({
+        Items: [{ memberId: 'MBR-0002', channel: 'sms', toneSequence: 1, sentAt: 1798000003 }],
+      });
+
+    const receipts = await queryReceiptsForDispatch(
+      ddbMock as unknown as DynamoDBDocumentClient,
+      'alerting-table',
+      deptId,
+      'NICHOLS-4471-1798000000',
+    );
+
+    expect(receipts.map((r) => r.memberId)).toEqual(['MBR-0001', 'MBR-0002']);
+    expect(ddbMock.commandCalls(QueryCommand)).toHaveLength(2);
+    const secondCall = ddbMock.commandCalls(QueryCommand)[1];
+    expect(secondCall?.args[0].input.ExclusiveStartKey).toEqual({
+      pk: 'DEPT#NICHOLS#DISPATCH#NICHOLS-4471-1798000000',
+      sk: 'RECEIPT#MBR-0001#push#1',
+    });
   });
 });

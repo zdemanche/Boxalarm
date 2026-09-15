@@ -6,7 +6,7 @@ import {
   type CedarPrincipalContext,
   type GuardEvent,
 } from '@boxalarm/authz';
-import { toVerifiedDeptId } from '@boxalarm/dept-scope';
+import { assertNoDelimiter, toVerifiedDeptId } from '@boxalarm/dept-scope';
 import { emitOutcomeMetric } from '@boxalarm/metrics';
 import type { APIGatewayProxyResultV2 } from 'aws-lambda';
 import { createDynamoClient, readAlertingConfig } from '../eligibility/dynamoClient.js';
@@ -14,6 +14,7 @@ import {
   queryReceiptsForDispatch,
   type DeliveryReceiptRecord,
 } from './deliveryReceiptRepository.js';
+import { logError } from './logger.js';
 
 const METRIC_NAMESPACE = 'Boxalarm/AlertingReceipts';
 const SENT_UNCONFIRMED_AFTER_SECONDS = 300;
@@ -24,31 +25,23 @@ export function deriveReceiptStatus(
   record: Pick<DeliveryReceiptRecord, 'sentAt' | 'deliveredAt' | 'openedAt' | 'failureReason'>,
   nowSeconds: number,
 ): ReceiptStatus {
-  if (record.failureReason) {
-    return 'FAILED';
-  }
+  // Positive delivery evidence (opened/delivered) always outranks a failureReason: the
+  // repository writes each field independently with if_not_exists, and failureReason has
+  // no stored timestamp, so a late/out-of-order failure callback must never downgrade a
+  // channel attempt that a provider has already confirmed reached the member.
   if (record.openedAt) {
     return 'OPENED';
   }
   if (record.deliveredAt) {
     return 'DELIVERED';
   }
+  if (record.failureReason) {
+    return 'FAILED';
+  }
   if (nowSeconds - record.sentAt > SENT_UNCONFIRMED_AFTER_SECONDS) {
     return 'SENT_UNCONFIRMED';
   }
   return 'SENT';
-}
-
-function logError(event: string, error: unknown, correlationId: string): void {
-  console.error(
-    JSON.stringify({
-      event,
-      service: 'alerting-service',
-      reason: error instanceof Error ? error.constructor.name : 'UnknownError',
-      message: error instanceof Error ? error.message : String(error),
-      correlationId,
-    }),
-  );
 }
 
 async function listReceipts(
@@ -59,6 +52,14 @@ async function listReceipts(
   const dispatchId = event.pathParameters?.dispatchId;
   if (!dispatchId || dispatchId.trim().length === 0) {
     return badRequestProblem(traceId, 'dispatchId path parameter is required');
+  }
+  try {
+    assertNoDelimiter(dispatchId, 'dispatchId');
+  } catch (error) {
+    return badRequestProblem(
+      traceId,
+      error instanceof Error ? error.message : 'invalid dispatchId',
+    );
   }
 
   try {
@@ -85,7 +86,14 @@ async function listReceipts(
       body: JSON.stringify({ receipts }),
     };
   } catch (error) {
-    logError('alerting.receipts.query.failed', error, traceId);
+    logError({
+      event: 'alerting.receipts.query.failed',
+      service: 'alerting-service',
+      reason: error instanceof Error ? error.constructor.name : 'UnknownError',
+      message: error instanceof Error ? error.message : String(error),
+      traceId,
+      dispatchId,
+    });
     emitOutcomeMetric(METRIC_NAMESPACE, 'ReceiptsQueryFailed');
     return serviceUnavailableProblem(traceId);
   }

@@ -1,6 +1,11 @@
-import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
+import { createHash, timingSafeEqual } from 'node:crypto';
+import { extractTraceId as extractTraceIdFromAuthz, type GuardEvent } from '@boxalarm/authz';
 import type { APIGatewayProxyEventV2, APIGatewayProxyResultV2 } from 'aws-lambda';
 
+// ponytail: static shared-secret verification for all three channels; SMS/voice vendor is
+// unconfirmed (architecture §5 OQ-3) so vendor-native signature verification (e.g. Twilio's
+// X-Twilio-Signature HMAC) can't be implemented against a real contract yet — upgrade once a
+// vendor is selected.
 export function verifyVendorSecret(provided: string | undefined, expected: string): boolean {
   if (!provided) {
     return false;
@@ -11,9 +16,7 @@ export function verifyVendorSecret(provided: string | undefined, expected: strin
 }
 
 export function extractTraceId(event: APIGatewayProxyEventV2): string {
-  const traceparent = event.headers?.traceparent ?? event.headers?.Traceparent;
-  const traceId = traceparent?.split('-')[1];
-  return traceId && traceId.length > 0 ? traceId : randomUUID();
+  return extractTraceIdFromAuthz(event as unknown as GuardEvent);
 }
 
 export function unauthorizedVendorProblem(

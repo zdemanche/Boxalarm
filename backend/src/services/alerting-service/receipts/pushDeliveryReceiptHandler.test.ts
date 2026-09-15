@@ -17,7 +17,6 @@ function buildEvent(
 }
 
 const VALID_BODY = {
-  deptId: 'NICHOLS',
   dispatchId: 'NICHOLS-4471-1798000000',
   memberId: 'MBR-0012',
   toneSequence: 1,
@@ -38,6 +37,7 @@ describe('pushDeliveryReceiptHandler', () => {
     process.env = { ...originalEnv };
     vi.doUnmock('../eligibility/dynamoClient.js');
     vi.doUnmock('./deliveryReceiptRepository.js');
+    vi.doUnmock('./logger.js');
   });
 
   it('returns 401 on a missing vendor secret (AC3)', async () => {
@@ -62,6 +62,18 @@ describe('pushDeliveryReceiptHandler', () => {
     expect(result.statusCode).toBe(401);
   });
 
+  it('logs a structured rejection (no secret value) on a 401, for rejected-webhook forensics', async () => {
+    const logInfo = vi.fn();
+    vi.doMock('./logger.js', () => ({ logInfo, logError: vi.fn() }));
+    const { handler } = await import('./pushDeliveryReceiptHandler.js');
+    await handler(buildEvent({ 'x-push-provider-secret': 'wrong' }, VALID_BODY));
+    expect(logInfo).toHaveBeenCalledWith(
+      expect.objectContaining({ event: 'alerting.receipts.push.unauthorized' }),
+    );
+    const fields = logInfo.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(JSON.stringify(fields)).not.toContain('wrong');
+  });
+
   it('returns 400 for malformed JSON and makes no DynamoDB call', async () => {
     const send = vi.fn();
     vi.doMock('../eligibility/dynamoClient.js', () => ({
@@ -74,6 +86,16 @@ describe('pushDeliveryReceiptHandler', () => {
     )) as { statusCode: number };
     expect(result.statusCode).toBe(400);
     expect(send).not.toHaveBeenCalled();
+  });
+
+  it('logs a structured rejection on a 400 validation failure', async () => {
+    const logInfo = vi.fn();
+    vi.doMock('./logger.js', () => ({ logInfo, logError: vi.fn() }));
+    const { handler } = await import('./pushDeliveryReceiptHandler.js');
+    await handler(buildEvent({ 'x-push-provider-secret': 'shared-secret' }, '{not json'));
+    expect(logInfo).toHaveBeenCalledWith(
+      expect.objectContaining({ event: 'alerting.receipts.push.rejected' }),
+    );
   });
 
   it('returns 400 when toneSequence is absent', async () => {
@@ -119,14 +141,37 @@ describe('pushDeliveryReceiptHandler', () => {
     expect(result.statusCode).toBe(400);
   });
 
+  it('returns 400 (never 503) when dispatchId contains the pk delimiter, and makes no DynamoDB call', async () => {
+    const send = vi.fn();
+    vi.doMock('../eligibility/dynamoClient.js', () => ({
+      createDynamoClient: () => ({ send }),
+      readAlertingConfig: () => ({ tableName: 'alerting-table' }),
+    }));
+    const { handler } = await import('./pushDeliveryReceiptHandler.js');
+    const result = (await handler(
+      buildEvent(
+        { 'x-push-provider-secret': 'shared-secret' },
+        { ...VALID_BODY, dispatchId: 'A#ELIGIBILITY' },
+      ),
+    )) as { statusCode: number };
+    expect(result.statusCode).toBe(400);
+    expect(send).not.toHaveBeenCalled();
+  });
+
   it('returns 404 when no matching DELIVERY_RECEIPT item exists for this channel attempt', async () => {
     vi.doMock('../eligibility/dynamoClient.js', () => ({
       createDynamoClient: () => ({}),
       readAlertingConfig: () => ({ tableName: 'alerting-table' }),
     }));
-    vi.doMock('./deliveryReceiptRepository.js', () => ({
-      updateDeliveryReceipt: vi.fn().mockResolvedValue({ outcome: 'not_found' }),
-    }));
+    vi.doMock('./deliveryReceiptRepository.js', async () => {
+      const actual = await vi.importActual<typeof import('./deliveryReceiptRepository.js')>(
+        './deliveryReceiptRepository.js',
+      );
+      return {
+        ...actual,
+        updateDeliveryReceipt: vi.fn().mockResolvedValue({ outcome: 'not_found' }),
+      };
+    });
     const { handler } = await import('./pushDeliveryReceiptHandler.js');
     const result = (await handler(
       buildEvent({ 'x-push-provider-secret': 'shared-secret' }, VALID_BODY),
@@ -139,17 +184,26 @@ describe('pushDeliveryReceiptHandler', () => {
       createDynamoClient: () => ({}),
       readAlertingConfig: () => ({ tableName: 'alerting-table' }),
     }));
-    vi.doMock('./deliveryReceiptRepository.js', () => ({
-      updateDeliveryReceipt: vi.fn().mockRejectedValue(new Error('table not reachable')),
-    }));
-    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    vi.doMock('./deliveryReceiptRepository.js', async () => {
+      const actual = await vi.importActual<typeof import('./deliveryReceiptRepository.js')>(
+        './deliveryReceiptRepository.js',
+      );
+      return {
+        ...actual,
+        updateDeliveryReceipt: vi.fn().mockRejectedValue(new Error('table not reachable')),
+      };
+    });
+    const logError = vi.fn();
+    vi.doMock('./logger.js', () => ({ logError, logInfo: vi.fn() }));
 
     const { handler } = await import('./pushDeliveryReceiptHandler.js');
     const result = (await handler(
       buildEvent({ 'x-push-provider-secret': 'shared-secret' }, VALID_BODY),
     )) as { statusCode: number };
     expect(result.statusCode).toBe(503);
-    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('table not reachable'));
+    expect(logError).toHaveBeenCalledWith(
+      expect.objectContaining({ message: 'table not reachable' }),
+    );
   });
 
   it('returns 200 and updates the matching receipt on a valid delivered callback (AC1, entrypoint test)', async () => {
@@ -158,7 +212,12 @@ describe('pushDeliveryReceiptHandler', () => {
       createDynamoClient: () => ({}),
       readAlertingConfig: () => ({ tableName: 'alerting-table' }),
     }));
-    vi.doMock('./deliveryReceiptRepository.js', () => ({ updateDeliveryReceipt }));
+    vi.doMock('./deliveryReceiptRepository.js', async () => {
+      const actual = await vi.importActual<typeof import('./deliveryReceiptRepository.js')>(
+        './deliveryReceiptRepository.js',
+      );
+      return { ...actual, updateDeliveryReceipt };
+    });
 
     const { handler } = await import('./pushDeliveryReceiptHandler.js');
     const result = (await handler(
@@ -169,7 +228,7 @@ describe('pushDeliveryReceiptHandler', () => {
     expect(JSON.parse(result.body)).toEqual({
       dispatchId: 'NICHOLS-4471-1798000000',
       memberId: 'MBR-0012',
-      channel: 'PUSH',
+      channel: 'push',
       status: 'delivered',
     });
     expect(updateDeliveryReceipt).toHaveBeenCalledWith(
@@ -178,11 +237,38 @@ describe('pushDeliveryReceiptHandler', () => {
       expect.objectContaining({
         dispatchId: 'NICHOLS-4471-1798000000',
         memberId: 'MBR-0012',
-        channel: 'PUSH',
+        channel: 'push',
         toneSequence: 1,
         deliveredAt: 1798000004,
       }),
     );
+  });
+
+  it('derives deptId from the dispatchId prefix and never trusts a caller-supplied deptId field (P1, cross-tenant)', async () => {
+    const updateDeliveryReceipt = vi.fn().mockResolvedValue({ outcome: 'updated' });
+    vi.doMock('../eligibility/dynamoClient.js', () => ({
+      createDynamoClient: () => ({}),
+      readAlertingConfig: () => ({ tableName: 'alerting-table' }),
+    }));
+    vi.doMock('./deliveryReceiptRepository.js', async () => {
+      const actual = await vi.importActual<typeof import('./deliveryReceiptRepository.js')>(
+        './deliveryReceiptRepository.js',
+      );
+      return { ...actual, updateDeliveryReceipt };
+    });
+
+    const { handler } = await import('./pushDeliveryReceiptHandler.js');
+    await handler(
+      buildEvent(
+        { 'x-push-provider-secret': 'shared-secret' },
+        // An attacker holding the single channel-wide secret cannot redirect the write to a
+        // different department by supplying an unrelated deptId — it is never read.
+        { ...VALID_BODY, deptId: 'ATTACKER-DEPT' },
+      ),
+    );
+
+    const call = updateDeliveryReceipt.mock.calls[0]?.[2] as Record<string, unknown>;
+    expect(call.deptId).toBe('NICHOLS');
   });
 
   it('emits a PushReceiptUpdated business metric on success (business-metrics obligation)', async () => {
@@ -190,9 +276,15 @@ describe('pushDeliveryReceiptHandler', () => {
       createDynamoClient: () => ({}),
       readAlertingConfig: () => ({ tableName: 'alerting-table' }),
     }));
-    vi.doMock('./deliveryReceiptRepository.js', () => ({
-      updateDeliveryReceipt: vi.fn().mockResolvedValue({ outcome: 'updated' }),
-    }));
+    vi.doMock('./deliveryReceiptRepository.js', async () => {
+      const actual = await vi.importActual<typeof import('./deliveryReceiptRepository.js')>(
+        './deliveryReceiptRepository.js',
+      );
+      return {
+        ...actual,
+        updateDeliveryReceipt: vi.fn().mockResolvedValue({ outcome: 'updated' }),
+      };
+    });
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
 
     const { handler } = await import('./pushDeliveryReceiptHandler.js');

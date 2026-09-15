@@ -59,10 +59,28 @@ describe('deriveReceiptStatus (AC4)', () => {
     );
   });
 
-  it('returns FAILED regardless of other fields', () => {
+  it('returns FAILED when there is no positive delivery evidence', () => {
+    expect(deriveReceiptStatus({ sentAt: 1000, failureReason: 'APNS_TIMEOUT' }, 5000)).toBe(
+      'FAILED',
+    );
+  });
+
+  it('returns DELIVERED (never FAILED) when a late/out-of-order failure callback lands on an already-delivered receipt', () => {
     expect(
-      deriveReceiptStatus({ sentAt: 1000, deliveredAt: 1005, failureReason: 'APNS_TIMEOUT' }, 5000),
-    ).toBe('FAILED');
+      deriveReceiptStatus(
+        { sentAt: 1000, deliveredAt: 1005, failureReason: 'LATE_CARRIER_FAIL' },
+        5000,
+      ),
+    ).toBe('DELIVERED');
+  });
+
+  it('returns OPENED (never FAILED) when a late failure callback lands on an already-opened receipt', () => {
+    expect(
+      deriveReceiptStatus(
+        { sentAt: 1000, deliveredAt: 1005, openedAt: 1009, failureReason: 'LATE_CARRIER_FAIL' },
+        5000,
+      ),
+    ).toBe('OPENED');
   });
 });
 
@@ -80,6 +98,7 @@ describe('getDeliveryReceiptsHandler', () => {
     vi.doUnmock('@aws-sdk/client-verifiedpermissions');
     vi.doUnmock('../eligibility/dynamoClient.js');
     vi.doUnmock('./deliveryReceiptRepository.js');
+    vi.doUnmock('./logger.js');
   });
 
   it('returns 403 on a missing/malformed bearer token (fail-secure)', async () => {
@@ -161,11 +180,18 @@ describe('getDeliveryReceiptsHandler', () => {
     vi.doMock('./deliveryReceiptRepository.js', () => ({
       queryReceiptsForDispatch: vi.fn().mockRejectedValue(new Error('table not reachable')),
     }));
-    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const logError = vi.fn();
+    vi.doMock('./logger.js', () => ({ logError, logInfo: vi.fn() }));
     const { handler } = await import('./getDeliveryReceiptsHandler.js');
     const result = await handler(
       buildEvent(OFFICER, undefined, { dispatchId: 'NICHOLS-4471-1798000000' }),
     );
     expect(result).toMatchObject({ statusCode: 503 });
+    expect(logError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: 'table not reachable',
+        dispatchId: 'NICHOLS-4471-1798000000',
+      }),
+    );
   });
 });
