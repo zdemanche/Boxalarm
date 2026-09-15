@@ -23,7 +23,7 @@ function makeUser(overrides: Partial<User> = {}): User {
   return {
     access_token: 'access-token',
     expired: false,
-    profile: { sub: 'member-1', roles: ['CHIEF'] },
+    profile: { sub: 'member-1', 'cognito:groups': ['CHIEF'] },
     ...overrides,
   } as User;
 }

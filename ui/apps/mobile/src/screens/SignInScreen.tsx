@@ -10,12 +10,14 @@ import { useEffect, useRef, useState, type ElementRef } from 'react';
 import {
   AccessibilityInfo,
   findNodeHandle,
+  Linking,
   Text,
   TouchableOpacity,
   useColorScheme,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useAuth } from '../auth/AuthContext';
+import { buildForgotPasswordUrl } from '../auth/config';
 
 export function SignInScreen() {
   const { signIn } = useAuth();
@@ -37,6 +39,24 @@ export function SignInScreen() {
       setError(message);
       AccessibilityInfo.announceForAccessibility(message);
     });
+  };
+
+  const handleForgotPassword = () => {
+    setError(null);
+    try {
+      const url = buildForgotPasswordUrl();
+      Linking.openURL(url).catch(() => {
+        const message =
+          'Password recovery could not be started. Check your connection and try again.';
+        setError(message);
+        AccessibilityInfo.announceForAccessibility(message);
+      });
+    } catch {
+      const message =
+        'Password recovery could not be started. Check your connection and try again.';
+      setError(message);
+      AccessibilityInfo.announceForAccessibility(message);
+    }
   };
 
   return (
@@ -92,6 +112,29 @@ export function SignInScreen() {
       >
         <Text style={{ color: tokens.background, fontSize: typography.size.lg, fontWeight: '600' }}>
           Sign in
+        </Text>
+      </TouchableOpacity>
+      <TouchableOpacity
+        accessibilityRole="button"
+        accessibilityLabel="Forgot password"
+        onPress={handleForgotPassword}
+        style={{
+          minWidth: 240,
+          minHeight: touchTarget.baseline.ios,
+          alignItems: 'center',
+          justifyContent: 'center',
+          marginTop: spacing.md,
+          paddingHorizontal: spacing.xl,
+          paddingVertical: spacing.md,
+          borderRadius: radius.default,
+          borderWidth: 1,
+          borderColor: tokens.foreground,
+        }}
+      >
+        <Text
+          style={{ color: tokens.foreground, fontSize: typography.size.base, fontWeight: '500' }}
+        >
+          Forgot password
         </Text>
       </TouchableOpacity>
       {error && (

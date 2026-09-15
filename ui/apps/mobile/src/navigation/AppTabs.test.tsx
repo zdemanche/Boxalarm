@@ -4,7 +4,16 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { AppTabs } from './AppTabs';
 
 jest.mock('../auth/AuthContext', () => ({
-  useAuth: () => ({ signOut: jest.fn(async () => {}) }),
+  useAuth: () => ({
+    signOut: jest.fn(async () => {}),
+    isAuthenticated: false,
+    isLoading: false,
+    roles: [],
+    signIn: jest.fn(async () => {}),
+    getAccessToken: jest.fn(async () => null),
+    renewSilently: jest.fn(async () => null),
+  }),
+  useOptionalAuth: () => undefined,
 }));
 
 async function renderTabs() {

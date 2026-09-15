@@ -68,4 +68,37 @@ body {
     'Segoe UI',
     sans-serif;
 }
+
+.skip-to-content {
+  position: absolute;
+  left: -10000px;
+  top: auto;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+}
+
+.skip-to-content:focus {
+  position: static;
+  left: auto;
+  width: auto;
+  height: auto;
+  overflow: visible;
+  padding: var(--boxalarm-spacing-sm) var(--boxalarm-spacing-md);
+  background: var(--boxalarm-accent);
+  color: var(--boxalarm-bg);
+  z-index: 1000;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
 `;

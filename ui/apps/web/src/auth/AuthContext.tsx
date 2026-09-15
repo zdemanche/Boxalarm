@@ -10,26 +10,12 @@ import {
 } from 'react';
 import { ErrorResponse, UserManager, WebStorageStateStore, type User } from 'oidc-client-ts';
 import { buildOidcConfig } from './config';
+import { rolesFromProfile, type Role } from './roles';
 
-export type Role = 'MEMBER' | 'OFFICER' | 'TRAINING' | 'APPARATUS' | 'ADMIN' | 'CHIEF';
-
-const KNOWN_ROLES: readonly Role[] = [
-  'MEMBER',
-  'OFFICER',
-  'TRAINING',
-  'APPARATUS',
-  'ADMIN',
-  'CHIEF',
-];
+export type { Role } from './roles';
 
 const RENEW_RETRY_MAX_DELAY_MS = 30_000;
 const RENEW_RETRY_BASE_DELAY_MS = 1_000;
-
-function rolesFromClaim(claim: unknown): Role[] {
-  if (!Array.isArray(claim)) return ['MEMBER'];
-  const roles = claim.filter((role): role is Role => KNOWN_ROLES.includes(role as Role));
-  return roles.length > 0 ? roles : ['MEMBER'];
-}
 
 function isInvalidGrant(error: Error): boolean {
   return error instanceof ErrorResponse && error.error === 'invalid_grant';
@@ -121,7 +107,7 @@ export function AuthProvider({
       retryCountRef.current = 0;
       setState({
         user,
-        roles: user ? rolesFromClaim(user.profile['roles']) : [],
+        roles: user ? rolesFromProfile(user.profile as Record<string, unknown>) : [],
         isAuthenticated: user !== null,
         isLoading: false,
       });

@@ -3,7 +3,7 @@ import { useNavigation, type NavigationProp } from '@react-navigation/native';
 import { useEffect, useState } from 'react';
 import { FlatList, Text, TouchableOpacity, useColorScheme } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { mockChecksRepository } from '../../features/checks/mockChecksRepository';
+import { useChecksRepository } from '../../features/checks/apiChecksRepository';
 import type { Apparatus } from '../../features/checks/types';
 import type { ChecksStackParamList } from '../../navigation/ChecksStack';
 
@@ -11,17 +11,18 @@ export function ApparatusPickerScreen() {
   const navigation = useNavigation<NavigationProp<ChecksStackParamList>>();
   const scheme = useColorScheme();
   const tokens = scheme === 'dark' ? palette.cab : palette.day;
+  const repository = useChecksRepository();
   const [apparatus, setApparatus] = useState<Apparatus[]>([]);
 
   useEffect(() => {
     let cancelled = false;
-    mockChecksRepository.getApparatus().then((result) => {
+    repository.getApparatus().then((result) => {
       if (!cancelled) setApparatus(result);
     });
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [repository]);
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: tokens.background }}>

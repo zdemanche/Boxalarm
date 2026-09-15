@@ -69,7 +69,7 @@ async function stubCognito(
   await page.route(`${ISSUER}/oauth2/token`, async (route) => {
     onTokenIssued?.();
     const idToken = issueIdToken(privateKey, {
-      roles: ['CHIEF'],
+      'cognito:groups': ['CHIEF'],
       ...(capturedNonce ? { nonce: capturedNonce } : {}),
     });
     await route.fulfill({

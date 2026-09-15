@@ -32,3 +32,24 @@ export function buildOidcConfig(): OidcRuntimeConfig {
     monitorSession: false,
   };
 }
+
+/**
+ * Cognito Hosted UI forgot-password entry. Requires COGNITO_HOSTED_UI_ORIGIN
+ * (e.g. https://boxalarm.auth.us-east-1.amazoncognito.com) from E8-S2-INFRA.
+ */
+export function buildForgotPasswordUrl(): string {
+  const origin = import.meta.env.COGNITO_HOSTED_UI_ORIGIN;
+  const clientId = import.meta.env.COGNITO_WEB_CLIENT_ID;
+  if (!origin || !clientId) {
+    throw new Error('Missing COGNITO_HOSTED_UI_ORIGIN or COGNITO_WEB_CLIENT_ID');
+  }
+
+  const redirectUri = `${window.location.origin}/auth/callback`;
+  const params = new URLSearchParams({
+    client_id: clientId,
+    response_type: 'code',
+    scope: 'openid profile email',
+    redirect_uri: redirectUri,
+  });
+  return `${origin.replace(/\/$/, '')}/forgotPassword?${params.toString()}`;
+}

@@ -46,9 +46,12 @@ function decodeRoles(idToken: string): Role[] {
     if (!payload) return ['MEMBER'];
     const normalized = payload.replace(/-/g, '+').replace(/_/g, '/');
     const claims = JSON.parse(atob(normalized)) as Record<string, unknown>;
-    const claim = claims['roles'];
-    if (!Array.isArray(claim)) return ['MEMBER'];
-    const roles = claim.filter((role): role is Role => KNOWN_ROLES.includes(role as Role));
+    const groups = claims['cognito:groups'];
+    if (!Array.isArray(groups)) return ['MEMBER'];
+    const roles = groups
+      .filter((g): g is string => typeof g === 'string')
+      .map((g) => g.toUpperCase())
+      .filter((role): role is Role => KNOWN_ROLES.includes(role as Role));
     return roles.length > 0 ? roles : ['MEMBER'];
   } catch {
     return ['MEMBER'];
@@ -123,6 +126,11 @@ export interface AuthContextValue extends AuthState {
 }
 
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
+
+/** Returns undefined outside AuthProvider — used by data hooks that degrade to mocks. */
+export function useOptionalAuth(): AuthContextValue | undefined {
+  return useContext(AuthContext);
+}
 
 export function AuthProvider({
   children,

@@ -29,3 +29,19 @@ test('a missing COGNITO_ISSUER or COGNITO_WEB_CLIENT_ID throws rather than start
   vi.stubEnv('COGNITO_ISSUER', '');
   expect(() => buildOidcConfig()).toThrow();
 });
+
+test('buildForgotPasswordUrl points at Cognito Hosted UI forgotPassword with the web client', async () => {
+  vi.stubEnv('COGNITO_HOSTED_UI_ORIGIN', 'https://boxalarm.auth.us-east-1.amazoncognito.com');
+  const { buildForgotPasswordUrl } = await import('./config');
+  const url = new URL(buildForgotPasswordUrl());
+  expect(url.origin).toBe('https://boxalarm.auth.us-east-1.amazoncognito.com');
+  expect(url.pathname).toBe('/forgotPassword');
+  expect(url.searchParams.get('client_id')).toBe('test-web-client');
+  expect(url.searchParams.get('redirect_uri')).toBe(`${window.location.origin}/auth/callback`);
+});
+
+test('buildForgotPasswordUrl throws when the hosted UI origin is missing', async () => {
+  vi.stubEnv('COGNITO_HOSTED_UI_ORIGIN', '');
+  const { buildForgotPasswordUrl } = await import('./config');
+  expect(() => buildForgotPasswordUrl()).toThrow(/COGNITO_HOSTED_UI_ORIGIN/);
+});

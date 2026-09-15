@@ -69,3 +69,40 @@ test('clicking sign in starts the OIDC redirect', async () => {
 
   expect(manager.signinRedirect).toHaveBeenCalledTimes(1);
 });
+
+test('Forgot password navigates to Cognito Hosted UI forgotPassword', async () => {
+  vi.stubEnv('COGNITO_ISSUER', 'https://cognito-idp.us-east-1.amazonaws.com/us-east-1_test');
+  vi.stubEnv('COGNITO_WEB_CLIENT_ID', 'test-web-client');
+  vi.stubEnv('COGNITO_HOSTED_UI_ORIGIN', 'https://boxalarm.auth.us-east-1.amazoncognito.com');
+
+  const assign = vi.fn();
+  vi.stubGlobal('location', { ...window.location, assign, origin: window.location.origin });
+
+  render(
+    <AuthProvider userManager={makeManager()}>
+      <SignInPage />
+    </AuthProvider>,
+  );
+
+  fireEvent.click(await screen.findByRole('button', { name: 'Forgot password' }));
+  expect(assign).toHaveBeenCalledWith(
+    expect.stringContaining('https://boxalarm.auth.us-east-1.amazoncognito.com/forgotPassword'),
+  );
+});
+
+test('Forgot password failure stays on sign-in with an announced retryable error', async () => {
+  vi.stubEnv('COGNITO_HOSTED_UI_ORIGIN', '');
+  vi.stubEnv('COGNITO_WEB_CLIENT_ID', 'test-web-client');
+  vi.stubEnv('COGNITO_ISSUER', 'https://cognito-idp.us-east-1.amazonaws.com/us-east-1_test');
+
+  render(
+    <AuthProvider userManager={makeManager()}>
+      <SignInPage />
+    </AuthProvider>,
+  );
+
+  fireEvent.click(await screen.findByRole('button', { name: 'Forgot password' }));
+  const alert = await screen.findByRole('alert');
+  expect(alert.textContent).toMatch(/Password recovery could not be started/);
+  expect(screen.getByRole('button', { name: 'Forgot password' })).toBeTruthy();
+});

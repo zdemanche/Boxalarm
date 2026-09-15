@@ -31,7 +31,7 @@ function base64url(value: string): string {
 function issuedTokens(
   overrides: Partial<{ accessToken: string; refreshToken: string; idToken: string }> = {},
 ) {
-  const idToken = `h.${base64url(JSON.stringify({ roles: ['OFFICER'] }))}.s`;
+  const idToken = `h.${base64url(JSON.stringify({ 'cognito:groups': ['OFFICER'] }))}.s`;
   return {
     accessToken: 'access-1',
     refreshToken: 'refresh-1',

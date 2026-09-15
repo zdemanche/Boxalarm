@@ -1,5 +1,6 @@
 import { typography } from '@boxalarm/design-tokens';
 import { cleanup, render, screen } from '@testing-library/react';
+import { MemoryRouter } from 'react-router-dom';
 import { afterEach, expect, test, vi } from 'vitest';
 import type { User, UserManager } from 'oidc-client-ts';
 import { AuthProvider } from '../auth/AuthContext';
@@ -26,33 +27,28 @@ function makeManager(profile: Record<string, unknown>): UserManager {
   } as unknown as UserManager;
 }
 
-test('renders the highest-priority role dashboard when multiple roles are present', async () => {
-  render(
-    <AuthProvider userManager={makeManager({ sub: 'm1', roles: ['MEMBER', 'ADMIN'] })}>
-      <LandingPage />
+function renderLanding(profile: Record<string, unknown>) {
+  return render(
+    <AuthProvider userManager={makeManager(profile)}>
+      <MemoryRouter>
+        <LandingPage />
+      </MemoryRouter>
     </AuthProvider>,
   );
+}
 
-  await screen.findByRole('heading', { name: 'Admin dashboard' });
+test('renders the highest-priority role dashboard when CHIEF is present', async () => {
+  renderLanding({ sub: 'm1', 'cognito:groups': ['MEMBER', 'CHIEF'] });
+  await screen.findByRole('heading', { name: 'Chief dashboard' });
 });
 
-test('falls back to the member dashboard when no roles are present', async () => {
-  render(
-    <AuthProvider userManager={makeManager({ sub: 'm1' })}>
-      <LandingPage />
-    </AuthProvider>,
-  );
-
-  await screen.findByRole('heading', { name: 'Member dashboard' });
+test('falls back to member home when no groups are present', async () => {
+  renderLanding({ sub: 'm1' });
+  await screen.findByRole('heading', { name: 'Member home' });
 });
 
 test('the heading uses the design-token type scale, matching the sign-in page', async () => {
-  render(
-    <AuthProvider userManager={makeManager({ sub: 'm1' })}>
-      <LandingPage />
-    </AuthProvider>,
-  );
-
-  const heading = await screen.findByRole('heading', { name: 'Member dashboard' });
+  renderLanding({ sub: 'm1' });
+  const heading = await screen.findByRole('heading', { name: 'Member home' });
   expect(heading.style.fontSize).toBe(`${typography.size.xl}px`);
 });
