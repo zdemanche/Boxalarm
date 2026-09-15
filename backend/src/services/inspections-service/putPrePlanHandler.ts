@@ -158,6 +158,7 @@ export function createPutPrePlanHandler(
           ? createSignedUploadUrl(
               assetsConfig,
               deptId,
+              'PRE_PLAN',
               prePlan.prePlanId,
               input.siteDiagramFilename,
               signer,
@@ -168,6 +169,7 @@ export function createPutPrePlanHandler(
           uploadUrl: createSignedUploadUrl(
             assetsConfig,
             deptId,
+            'PRE_PLAN',
             prePlan.prePlanId,
             filename,
             signer,

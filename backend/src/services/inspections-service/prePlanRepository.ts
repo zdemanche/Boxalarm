@@ -100,10 +100,10 @@ export async function putPrePlan(
     entityType: 'PRE_PLAN',
     prePlanId,
     siteDiagramS3Key: input.siteDiagramFilename
-      ? buildAssetKey(deptId, prePlanId, input.siteDiagramFilename)
+      ? buildAssetKey(deptId, 'PRE_PLAN', prePlanId, input.siteDiagramFilename)
       : null,
     attachmentS3Keys: input.attachmentFilenames.map((filename) =>
-      buildAssetKey(deptId, prePlanId, filename),
+      buildAssetKey(deptId, 'PRE_PLAN', prePlanId, filename),
     ),
     utilityShutoffs: input.utilityShutoffs,
     hazards: input.hazards,
