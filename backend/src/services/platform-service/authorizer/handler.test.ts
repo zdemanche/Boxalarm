@@ -167,6 +167,35 @@ describe('handler', () => {
     });
   });
 
+  it('allows a token with a stale auth_time with no step-up/recency check (AC2/N5.2 post-recovery session guard)', async () => {
+    const keyPair = generateTestKeyPair('kid-1');
+    const { createVerifier } = await import('./tokenVerifier.js');
+    const config = { userPoolId: USER_POOL_ID, issuer: ISSUER, allowedClientIds: [WEB_CLIENT_ID] };
+    const verifier = createVerifier(config);
+    verifier.cacheJwks({ keys: [keyPair.jwk as never] });
+
+    vi.resetModules();
+    vi.doMock('./tokenVerifier.js', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('./tokenVerifier.js')>();
+      return { ...actual, createVerifier: () => verifier };
+    });
+
+    const { handler } = await import('./handler.js');
+    const token = signAccessToken(
+      keyPair,
+      baseAccessTokenPayload({ auth_time: nowSeconds() - 6000 }),
+    );
+    const result = await handler(
+      buildEvent({ authorization: `Bearer ${token}` }),
+      {} as never,
+      () => undefined,
+    );
+    expect(result).toEqual({
+      isAuthorized: true,
+      context: { sub: 'member-0012', deptId: DEPT_ID, 'cognito:groups': '' },
+    });
+  });
+
   it('denies (fail-closed) when the verified token has no custom:deptId claim', async () => {
     const keyPair = generateTestKeyPair('kid-1');
     const { createVerifier } = await import('./tokenVerifier.js');
