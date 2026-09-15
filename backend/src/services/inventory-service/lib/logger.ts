@@ -1,36 +1,17 @@
-export type LogLevel = 'info' | 'warn' | 'error';
+import { createLogger, type LogFields as SharedLogFields, type LogLevel } from '@boxalarm/logging';
+import { emitOutcomeMetric } from '@boxalarm/metrics';
 
-export interface LogFields {
-  readonly event: string;
-  readonly correlationId: string;
-  readonly [key: string]: unknown;
-}
+export type { LogLevel };
+export type LogFields = SharedLogFields;
+
+const logger = createLogger({ service: 'inventory-service' });
 
 export function logEvent(level: LogLevel, fields: LogFields): void {
-  const line = JSON.stringify({ service: 'inventory-service', ...fields });
-  if (level === 'error') {
-    console.error(line);
-  } else if (level === 'warn') {
-    console.warn(line);
-  } else {
-    console.log(line);
-  }
+  logger[level](fields);
 }
 
 export function emitMetric(name: string, count = 1): void {
-  console.log(
-    JSON.stringify({
-      _aws: {
-        Timestamp: Date.now(),
-        CloudWatchMetrics: [
-          {
-            Namespace: 'Boxalarm/InventoryService',
-            Dimensions: [[]],
-            Metrics: [{ Name: name, Unit: 'Count' }],
-          },
-        ],
-      },
-      [name]: count,
-    }),
-  );
+  // ponytail: count>1 callers don't exist yet; OutcomeMetric is count=1
+  void count;
+  emitOutcomeMetric('Boxalarm/InventoryService', name);
 }
