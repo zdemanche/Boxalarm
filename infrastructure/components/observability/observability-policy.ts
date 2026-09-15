@@ -2,9 +2,9 @@ import { ServiceName } from "./services";
 
 export interface IamPolicyStatement {
   Sid: string;
-  Effect: "Allow";
+  Effect: "Allow" | "Deny";
   Action: string[];
-  Resource: string;
+  Resource: string | string[];
   Condition?: Record<string, Record<string, string[]>>;
 }
 

@@ -1,8 +1,7 @@
 import * as aws from "@pulumi/aws";
 
-// ponytail: no Lambda component exists yet in this repo (Lambda-per-route lands in a
-// later story). The future Lambda component MUST set tracingConfig to this value for
-// every route Lambda — X-Ray is the alert-path diagnostic tool (architecture.md:437).
+// Applied by ServiceLambda (E8-S11-INFRA) as tracingConfig on every service Lambda —
+// X-Ray is the alert-path diagnostic tool (architecture.md:437).
 export const ACTIVE_TRACING_CONFIG = { mode: "Active" } as const;
 
 function requireEnv(fn: string, env: string): void {

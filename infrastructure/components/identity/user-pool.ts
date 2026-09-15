@@ -13,6 +13,9 @@ export interface BoxalarmUserPoolArgs {
 // #115's acceptance criteria; see the inline notes below for which.
 export class BoxalarmUserPool extends pulumi.ComponentResource {
   public readonly userPool: aws.cognito.UserPool;
+  public readonly userPoolDomain: aws.cognito.UserPoolDomain;
+  /** Cognito prefix domain, e.g. boxalarm-dev (not a custom domain). */
+  public readonly domainName: string;
   public readonly preTokenGenerationFunction: aws.lambda.Function;
   public readonly functionRole: aws.iam.Role;
   public readonly functionLogGroup: aws.cloudwatch.LogGroup;
@@ -105,6 +108,8 @@ export class BoxalarmUserPool extends pulumi.ComponentResource {
       `${name}-pool`,
       {
         name: `boxalarm-${env}-users`,
+        // Explicit OFF until MFA is productized — do not rely on Cognito's default.
+        mfaConfiguration: "OFF",
         // AC1: dev-vs-prod separation lives at the environment/stack level (one pool
         // per env, this component instantiated once per Pulumi.<env>.yaml stack).
         schemas: [
@@ -135,6 +140,16 @@ export class BoxalarmUserPool extends pulumi.ComponentResource {
       { parent: this },
     );
 
+    this.domainName = `boxalarm-${env}`;
+    this.userPoolDomain = new aws.cognito.UserPoolDomain(
+      `${name}-domain`,
+      {
+        domain: this.domainName,
+        userPoolId: this.userPool.id,
+      },
+      { parent: this },
+    );
+
     this.invokePermission = new aws.lambda.Permission(
       `${name}-fn-invoke-permission`,
       {
@@ -148,6 +163,8 @@ export class BoxalarmUserPool extends pulumi.ComponentResource {
 
     this.registerOutputs({
       userPool: this.userPool,
+      userPoolDomain: this.userPoolDomain,
+      domainName: this.domainName,
       preTokenGenerationFunction: this.preTokenGenerationFunction,
     });
   }

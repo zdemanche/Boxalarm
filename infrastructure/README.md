@@ -31,4 +31,4 @@ Per-environment NERIS base URL, OAuth credentials, and a distinct `User-Agent`. 
 
 ## Getting started
 
-Not yet scaffolded — see [#1](https://github.com/zdemanche/boxalarm-infrastructure/issues/1).
+Wave 1 foundations are in progress — see [PR #90](https://github.com/zdemanche/boxalarm-infrastructure/pull/90) and the open `-INFRA` issues. Stacks: `dev`, `qa`, `staging`, `prod` (`Pulumi.<env>.yaml`).

@@ -39,6 +39,7 @@ async function resolve<T>(output: pulumi.Output<T>): Promise<T> {
 // even though every assertion passed. Awaiting the full graph up front avoids that.
 async function settle(identity: {
   userPool: { id: pulumi.Output<string> };
+  userPoolDomain: { domain: pulumi.Output<string> };
   preTokenGenerationFunction: { arn: pulumi.Output<string> };
   functionRole: { arn: pulumi.Output<string> };
   functionLogGroup: { arn: pulumi.Output<string> };
@@ -46,6 +47,7 @@ async function settle(identity: {
 }): Promise<void> {
   await Promise.all([
     resolve(identity.userPool.id),
+    resolve(identity.userPoolDomain.domain),
     resolve(identity.preTokenGenerationFunction.arn),
     resolve(identity.functionRole.arn),
     resolve(identity.functionLogGroup.arn),
@@ -113,6 +115,25 @@ describe("BoxalarmUserPool", () => {
     expect(name).toBe("/aws/lambda/boxalarm-staging-identity-pre-token-generation");
     expect(retention).toBe(RETENTION_DAYS_BY_ENV.staging);
     expect(loggingConfig?.logGroup).toBe(name);
+  });
+
+  it("sets MFA configuration to OFF explicitly", async () => {
+    const { BoxalarmUserPool } = await import("../../components/identity/user-pool");
+    const identity = new BoxalarmUserPool("test-identity-mfa", { env: "dev" });
+    await settle(identity);
+
+    const mfa = await resolve(identity.userPool.mfaConfiguration);
+    expect(mfa).toBe("OFF");
+  });
+
+  it("provisions a Cognito-hosted domain with prefix boxalarm-{env}", async () => {
+    const { BoxalarmUserPool } = await import("../../components/identity/user-pool");
+    const identity = new BoxalarmUserPool("test-identity-domain", { env: "qa" });
+    await settle(identity);
+
+    const domain = await resolve(identity.userPoolDomain.domain);
+    expect(domain).toBe("boxalarm-qa");
+    expect(identity.domainName).toBe("boxalarm-qa");
   });
 
   it("throws rather than provisioning a pool for an unknown env", async () => {

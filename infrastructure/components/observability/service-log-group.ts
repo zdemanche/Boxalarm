@@ -23,9 +23,9 @@ export function serviceLogGroupName(env: string, serviceName: ServiceName): stri
 export class ServiceLogGroup extends pulumi.ComponentResource {
   public readonly logGroup: aws.cloudwatch.LogGroup;
   // Cross-repo literal: one log group per service, shared by every route Lambda in it.
-  // The future Lambda component (backend repo) MUST set loggingConfig.logGroup to this
-  // value for every route Lambda in this service — Lambda's default per-function log
-  // group is NEVER_EXPIRE and bypasses the retention this component provisions.
+  // ServiceLambda sets loggingConfig.logGroup to this value for every route Lambda in
+  // this service — Lambda's default per-function log group is NEVER_EXPIRE and bypasses
+  // the retention this component provisions.
   public readonly logGroupName: string;
 
   constructor(name: string, args: ServiceLogGroupArgs, opts?: pulumi.ComponentResourceOptions) {

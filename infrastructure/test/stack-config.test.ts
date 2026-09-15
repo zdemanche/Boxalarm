@@ -17,6 +17,13 @@ describe("Pulumi project", () => {
   });
 });
 
+const webOriginByEnv: Record<(typeof environments)[number], string> = {
+  dev: "https://localhost:5173",
+  qa: "https://qa.boxalarm.example",
+  staging: "https://staging.boxalarm.example",
+  prod: "https://app.boxalarm.example",
+};
+
 describe.each(environments)("Pulumi.%s.yaml", (env) => {
   const stack = load(`Pulumi.${env}.yaml`);
 
@@ -26,5 +33,11 @@ describe.each(environments)("Pulumi.%s.yaml", (env) => {
 
   it("pins a U.S. AWS region", () => {
     expect(stack.config["aws:region"]).toMatch(/^us-(east|west)-\d$/);
+  });
+
+  it("declares an https webOrigin for Cognito callback/logout URLs", () => {
+    const webOrigin = stack.config["boxalarm-infra:webOrigin"] as string;
+    expect(webOrigin).toBe(webOriginByEnv[env]);
+    expect(webOrigin).toMatch(/^https:\/\//);
   });
 });
