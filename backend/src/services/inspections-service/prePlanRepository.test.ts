@@ -68,7 +68,12 @@ describe('putPrePlan', () => {
     expect(outboxPut.Item.entityType).toBe('OUTBOX_RECORD');
     expect(outboxPut.Item.eventType).toBe('inspections.preplan.updated');
     expect(outboxPut.Item.pk).toBe('DEPT#NICHOLS#OUTBOX');
-    expect(outboxPut.Item.payload).toMatchObject({ deptId: DEPT_ID, occupancyId: 'OCC-1' });
+    expect(outboxPut.Item.payload).toMatchObject({
+      deptId: DEPT_ID,
+      occupancyId: 'OCC-1',
+      hazards: INPUT.hazards,
+      utilityShutoffs: INPUT.utilityShutoffs,
+    });
 
     expect(item.pk).toBe('DEPT#NICHOLS#OCCUPANCY#OCC-1');
     expect(item.sk).toBe(`PREPLAN#${item.prePlanId}`);

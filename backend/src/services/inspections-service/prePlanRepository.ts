@@ -114,7 +114,13 @@ export async function putPrePlan(
     'inspections-service',
     'inspections.preplan.updated',
     prePlanId,
-    { deptId, occupancyId, prePlanId },
+    {
+      deptId,
+      occupancyId,
+      prePlanId,
+      hazards: input.hazards,
+      utilityShutoffs: input.utilityShutoffs,
+    },
   );
 
   try {
