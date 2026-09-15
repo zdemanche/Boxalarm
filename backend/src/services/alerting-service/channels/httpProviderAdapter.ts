@@ -1,0 +1,57 @@
+import { GetSecretValueCommand, SecretsManagerClient } from '@aws-sdk/client-secrets-manager';
+import { captureAWSv3Client } from 'aws-xray-sdk-core';
+import type { ChannelName } from './channelEnvelope.js';
+
+let cachedSecretsClient: SecretsManagerClient | undefined;
+
+export function createChannelSecretsClient(client?: SecretsManagerClient): SecretsManagerClient {
+  cachedSecretsClient ??= client ?? captureAWSv3Client(new SecretsManagerClient({}));
+  return cachedSecretsClient;
+}
+
+export interface ChannelProviderConfig {
+  readonly endpointUrl: string;
+  readonly secretId: string;
+}
+
+const ENV_PREFIX: Record<ChannelName, string> = { push: 'PUSH', sms: 'SMS', voice: 'VOICE' };
+
+export function readChannelProviderConfig(
+  channel: ChannelName,
+  env: NodeJS.ProcessEnv,
+): ChannelProviderConfig {
+  const prefix = ENV_PREFIX[channel];
+  const endpointUrl = env[`${prefix}_PROVIDER_ENDPOINT_URL`];
+  const secretId = env[`${prefix}_PROVIDER_SECRET_ID`];
+  if (!endpointUrl) {
+    throw new Error(`${prefix}_PROVIDER_ENDPOINT_URL is required and was not set`);
+  }
+  if (!secretId) {
+    throw new Error(`${prefix}_PROVIDER_SECRET_ID is required and was not set`);
+  }
+  return { endpointUrl, secretId };
+}
+
+export async function sendViaHttpProvider(
+  channel: ChannelName,
+  target: string,
+  message: string,
+  env: NodeJS.ProcessEnv,
+  secretsClient?: SecretsManagerClient,
+): Promise<void> {
+  const config = readChannelProviderConfig(channel, env);
+  const client = createChannelSecretsClient(secretsClient);
+  const secretOutput = await client.send(new GetSecretValueCommand({ SecretId: config.secretId }));
+  const apiKey = secretOutput.SecretString;
+  if (!apiKey) {
+    throw new Error(`Secret ${config.secretId} has no SecretString value`);
+  }
+  const response = await fetch(config.endpointUrl, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${apiKey}` },
+    body: JSON.stringify({ target, message }),
+  });
+  if (!response.ok) {
+    throw new Error(`${channel} provider responded ${response.status}`);
+  }
+}
