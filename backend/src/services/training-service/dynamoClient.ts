@@ -1,6 +1,7 @@
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
 import AWSXRay from 'aws-xray-sdk-core';
+import { emitEmf as emitEmfMetric } from '@boxalarm/metrics';
 
 export interface TrainingDynamoConfig {
   readonly tableName: string;
@@ -46,8 +47,12 @@ function emitEmf(
   );
 }
 
-export type CertificationCreateOutcome = 'Created' | 'Failed';
+export type CertificationCreateOutcome = 'Created' | 'Failed' | 'Revoked';
 
 export function emitCertificationMetric(outcome: CertificationCreateOutcome): void {
   emitEmf('Boxalarm/Training', `Certification${outcome}`, [[]], {});
+}
+
+export function emitExpiryScanMetric(count: number): void {
+  emitEmfMetric('Boxalarm/Training', 'CertificationsExpired', count, [[]], {});
 }

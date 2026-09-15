@@ -1,5 +1,6 @@
 import { TransactionCanceledException } from '@aws-sdk/client-dynamodb';
 import {
+  GetCommand,
   QueryCommand,
   TransactWriteCommand,
   type TransactWriteCommandInput,
@@ -7,8 +8,16 @@ import {
 } from '@aws-sdk/lib-dynamodb';
 import { buildDeptScopedPk, type VerifiedDeptId } from '@boxalarm/dept-scope';
 import { readTrainingDynamoConfig } from './dynamoClient.js';
+import { logError } from './logger.js';
 
 export type CertificationStatus = 'CURRENT' | 'EXPIRED' | 'REVOKED';
+
+export class CertNotFoundError extends Error {
+  constructor(readonly certId: string) {
+    super(`Certification ${certId} not found`);
+    this.name = 'CertNotFoundError';
+  }
+}
 
 export function deriveCertificationStatus(
   stored: CertificationStatus,
@@ -104,18 +113,17 @@ function logRepositoryError(
   correlationId: string,
   certId?: string,
 ): void {
-  console.error(
-    JSON.stringify({
-      event,
-      service: 'training',
-      reason: error instanceof Error ? error.constructor.name : 'UnknownError',
-      correlationId,
-      ...(certId ? { certId } : {}),
-      ...(error instanceof TransactionCanceledException
-        ? { cancellationReasons: error.CancellationReasons?.map((r) => r.Code) }
-        : {}),
-    }),
-  );
+  logError({
+    event,
+    service: 'training',
+    reason: error instanceof Error ? error.constructor.name : 'UnknownError',
+    message: error instanceof Error ? error.message : undefined,
+    correlationId,
+    ...(certId ? { certId } : {}),
+    ...(error instanceof TransactionCanceledException
+      ? { cancellationReasons: error.CancellationReasons?.map((r) => r.Code) }
+      : {}),
+  });
 }
 
 export async function createCertification(
@@ -247,7 +255,7 @@ export async function queryCertificationsDueInMonth(
       const output = await client.send(
         new QueryCommand({
           TableName: tableName,
-          IndexName: 'gsi2',
+          IndexName: 'GSI2',
           KeyConditionExpression: 'gsi2pk = :gsi2pk',
           ExpressionAttributeValues: {
             ':gsi2pk': buildDeptScopedPk(params.deptId, 'DUE', 'CERTIFICATION', params.yearMonth),
@@ -263,4 +271,149 @@ export async function queryCertificationsDueInMonth(
     logRepositoryError('certification.queryDueInMonth.failed', error, params.correlationId);
     throw error;
   }
+}
+
+export interface ExpireCertificationParams {
+  readonly deptId: VerifiedDeptId;
+  readonly memberId: string;
+  readonly certId: string;
+  readonly correlationId: string;
+  readonly now: Date;
+}
+
+export async function expireCertification(
+  client: DynamoDBDocumentClient,
+  env: NodeJS.ProcessEnv,
+  params: ExpireCertificationParams,
+): Promise<boolean> {
+  const { tableName } = readTrainingDynamoConfig(env);
+  const pk = buildDeptScopedPk(params.deptId, 'MEMBER', params.memberId);
+  const sk = `CERT#${params.certId}`;
+  const ts = Math.floor(params.now.getTime() / 1000);
+  const auditPut = buildAuditLogPut({
+    tableName,
+    deptId: params.deptId,
+    mutatedEntityType: 'CERTIFICATION',
+    mutatedEntityId: params.certId,
+    action: 'UPDATE',
+    actorId: 'system:expiry-scan',
+    changedFields: { status: { old: 'CURRENT', new: 'EXPIRED' } },
+    ts,
+  });
+
+  try {
+    await client.send(
+      new TransactWriteCommand({
+        TransactItems: [
+          {
+            Update: {
+              TableName: tableName,
+              Key: { pk, sk },
+              UpdateExpression: 'SET status = :expired',
+              ConditionExpression: 'status = :current',
+              ExpressionAttributeValues: { ':expired': 'EXPIRED', ':current': 'CURRENT' },
+            },
+          },
+          auditPut,
+        ],
+      }),
+    );
+    return true;
+  } catch (error) {
+    if (
+      error instanceof TransactionCanceledException &&
+      error.CancellationReasons?.[0]?.Code === 'ConditionalCheckFailed'
+    ) {
+      return false;
+    }
+    logRepositoryError('certification.expire.failed', error, params.correlationId, params.certId);
+    throw error;
+  }
+}
+
+export interface RevokeCertificationParams {
+  readonly deptId: VerifiedDeptId;
+  readonly memberId: string;
+  readonly certId: string;
+  readonly actorId: string;
+  readonly correlationId: string;
+  readonly now: Date;
+}
+
+export async function revokeCertification(
+  client: DynamoDBDocumentClient,
+  env: NodeJS.ProcessEnv,
+  params: RevokeCertificationParams,
+): Promise<CertificationRecord> {
+  const { tableName } = readTrainingDynamoConfig(env);
+  const pk = buildDeptScopedPk(params.deptId, 'MEMBER', params.memberId);
+  const sk = `CERT#${params.certId}`;
+
+  let existing: Record<string, unknown>;
+  try {
+    const result = await client.send(new GetCommand({ TableName: tableName, Key: { pk, sk } }));
+    if (!result.Item) {
+      throw new CertNotFoundError(params.certId);
+    }
+    existing = result.Item;
+  } catch (error) {
+    if (error instanceof CertNotFoundError) {
+      throw error;
+    }
+    logRepositoryError(
+      'certification.revoke.lookupFailed',
+      error,
+      params.correlationId,
+      params.certId,
+    );
+    throw error;
+  }
+
+  const record = toCertificationRecord(existing);
+  if (record.status === 'REVOKED') {
+    return record;
+  }
+
+  const auditPut = buildAuditLogPut({
+    tableName,
+    deptId: params.deptId,
+    mutatedEntityType: 'CERTIFICATION',
+    mutatedEntityId: params.certId,
+    action: 'UPDATE',
+    actorId: params.actorId,
+    changedFields: { status: { old: record.status, new: 'REVOKED' } },
+    ts: Math.floor(params.now.getTime() / 1000),
+  });
+
+  try {
+    await client.send(
+      new TransactWriteCommand({
+        TransactItems: [
+          {
+            Update: {
+              TableName: tableName,
+              Key: { pk, sk },
+              UpdateExpression: 'SET status = :revoked',
+              ConditionExpression: 'status = :expectedStatus',
+              ExpressionAttributeValues: {
+                ':revoked': 'REVOKED',
+                ':expectedStatus': record.status,
+              },
+            },
+          },
+          auditPut,
+        ],
+      }),
+    );
+  } catch (error) {
+    logRepositoryError(
+      'certification.revoke.writeFailed',
+      error,
+      params.correlationId,
+      params.certId,
+    );
+    throw error;
+  }
+
+  return { ...record, status: 'REVOKED' };
 }

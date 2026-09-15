@@ -1,6 +1,7 @@
 import { QueryCommand } from '@aws-sdk/lib-dynamodb';
 import { buildDeptScopedPk, type VerifiedDeptId } from '@boxalarm/dept-scope';
 import type { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
+import { logError } from '../logger.js';
 import type { ContactChannelSnapshot } from './resolvePushTarget.js';
 
 export type AvailabilityState = 'AVAILABLE' | 'MARKED_OFF' | 'LOA';
@@ -81,9 +82,21 @@ export async function queryEligiblePartition(
       }),
     );
     for (const item of result.Items ?? []) {
-      const parsed = parseSnapshotItem(item as Record<string, unknown>);
-      if (parsed !== undefined) {
-        items.push(parsed);
+      try {
+        const parsed = parseSnapshotItem(item as Record<string, unknown>);
+        if (parsed !== undefined) {
+          items.push(parsed);
+        }
+      } catch (error) {
+        logError({
+          event: 'alerting.eligibility.snapshotItemInvalid',
+          service: 'alerting-service',
+          reason: error instanceof Error ? error.constructor.name : 'UnknownError',
+          message: error instanceof Error ? error.message : undefined,
+          deptId,
+          pk: (item as Record<string, unknown>).pk,
+          sk: (item as Record<string, unknown>).sk,
+        });
       }
     }
     exclusiveStartKey = result.LastEvaluatedKey as Record<string, unknown> | undefined;

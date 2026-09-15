@@ -59,3 +59,22 @@ describe('emitCertificationMetric', () => {
     logSpy.mockRestore();
   });
 });
+
+describe('emitExpiryScanMetric', () => {
+  it('emits the flip count under the Boxalarm/Training namespace', async () => {
+    const { emitExpiryScanMetric } = await import('./dynamoClient.js');
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+
+    emitExpiryScanMetric(3);
+
+    expect(logSpy).toHaveBeenCalledTimes(1);
+    const logged = JSON.parse(logSpy.mock.calls[0]?.[0] as string) as {
+      CertificationsExpired: number;
+      _aws: { CloudWatchMetrics: { Namespace: string }[] };
+    };
+    expect(logged.CertificationsExpired).toBe(3);
+    expect(logged._aws.CloudWatchMetrics[0]?.Namespace).toBe('Boxalarm/Training');
+
+    logSpy.mockRestore();
+  });
+});

@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { TransactionCanceledException } from '@aws-sdk/client-dynamodb';
 import {
   QueryCommand,
@@ -6,15 +6,26 @@ import {
   type DynamoDBDocumentClient,
 } from '@aws-sdk/lib-dynamodb';
 import { toVerifiedDeptId } from '@boxalarm/dept-scope';
-import {
+
+const loggedErrors = vi.fn();
+vi.mock('./logger.js', () => ({ logError: loggedErrors }));
+
+const {
+  CertNotFoundError,
   createCertification,
   deriveCertificationStatus,
+  expireCertification,
   listCertificationsForMember,
   queryCertificationsDueInMonth,
-} from './certificationRepository.js';
+  revokeCertification,
+} = await import('./certificationRepository.js');
 
 const deptId = toVerifiedDeptId({ deptId: 'NICHOLS' });
 const env = { TRAINING_DYNAMO_TABLE_NAME: 'platform-service' };
+
+beforeEach(() => {
+  loggedErrors.mockClear();
+});
 
 function fakeClient(send: ReturnType<typeof vi.fn>): DynamoDBDocumentClient {
   return { send } as unknown as DynamoDBDocumentClient;
@@ -108,7 +119,6 @@ describe('createCertification', () => {
     });
     const send = vi.fn().mockRejectedValue(cancellation);
     const client = fakeClient(send);
-    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
 
     await expect(
       createCertification(client, env, {
@@ -126,13 +136,12 @@ describe('createCertification', () => {
       }),
     ).rejects.toBe(cancellation);
 
-    expect(errorSpy).toHaveBeenCalledTimes(1);
-    const logged = JSON.parse(errorSpy.mock.calls[0]?.[0] as string) as Record<string, unknown>;
+    expect(loggedErrors).toHaveBeenCalledTimes(1);
+    const logged = loggedErrors.mock.calls[0]?.[0] as Record<string, unknown>;
     expect(logged.event).toBe('certification.create.failed');
     expect(logged.correlationId).toBe('trace-2');
     expect(logged.certId).toBe('CERT-0091');
     expect(logged.cancellationReasons).toEqual(['None', 'ConditionalCheckFailed']);
-    errorSpy.mockRestore();
   });
 });
 
@@ -189,7 +198,6 @@ describe('listCertificationsForMember', () => {
     const failure = new Error('DynamoDB unavailable');
     const send = vi.fn().mockRejectedValue(failure);
     const client = fakeClient(send);
-    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
 
     await expect(
       listCertificationsForMember(client, env, {
@@ -199,10 +207,9 @@ describe('listCertificationsForMember', () => {
       }),
     ).rejects.toBe(failure);
 
-    const logged = JSON.parse(errorSpy.mock.calls[0]?.[0] as string) as Record<string, unknown>;
+    const logged = loggedErrors.mock.calls[0]?.[0] as Record<string, unknown>;
     expect(logged.event).toBe('certification.list.failed');
     expect(logged.correlationId).toBe('trace-5');
-    errorSpy.mockRestore();
   });
 });
 
@@ -233,7 +240,7 @@ describe('queryCertificationsDueInMonth', () => {
     expect(send).toHaveBeenCalledTimes(1);
     const command = send.mock.calls[0]?.[0] as QueryCommand;
     expect(command).toBeInstanceOf(QueryCommand);
-    expect(command.input.IndexName).toBe('gsi2');
+    expect(command.input.IndexName).toBe('GSI2');
     expect(command.input.ExpressionAttributeValues).toEqual({
       ':gsi2pk': 'DEPT#NICHOLS#DUE#CERTIFICATION#2026-09',
     });
@@ -258,7 +265,6 @@ describe('queryCertificationsDueInMonth', () => {
     const failure = new Error('DynamoDB unavailable');
     const send = vi.fn().mockRejectedValue(failure);
     const client = fakeClient(send);
-    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
 
     await expect(
       queryCertificationsDueInMonth(client, env, {
@@ -268,10 +274,9 @@ describe('queryCertificationsDueInMonth', () => {
       }),
     ).rejects.toBe(failure);
 
-    const logged = JSON.parse(errorSpy.mock.calls[0]?.[0] as string) as Record<string, unknown>;
+    const logged = loggedErrors.mock.calls[0]?.[0] as Record<string, unknown>;
     expect(logged.event).toBe('certification.queryDueInMonth.failed');
     expect(logged.correlationId).toBe('trace-8');
-    errorSpy.mockRestore();
   });
 
   it('follows LastEvaluatedKey across pages and accumulates all items past the 1MB response cap', async () => {
@@ -296,5 +301,195 @@ describe('queryCertificationsDueInMonth', () => {
     const secondCommand = send.mock.calls[1]?.[0] as QueryCommand;
     expect(secondCommand.input.ExclusiveStartKey).toEqual({ pk: 'p', sk: 's1' });
     expect(records.map((r) => r.certId)).toEqual(['CERT-A', 'CERT-B']);
+  });
+});
+
+describe('expireCertification', () => {
+  it('conditionally flips a CURRENT cert to EXPIRED and writes an audit Put in one transaction (AC1)', async () => {
+    const send = vi.fn().mockResolvedValue({});
+    const client = fakeClient(send);
+
+    const flipped = await expireCertification(client, env, {
+      deptId,
+      memberId: 'MBR-0034',
+      certId: 'CERT-0091',
+      correlationId: 'trace-expire-1',
+      now: new Date('2026-09-14T12:00:00Z'),
+    });
+
+    expect(flipped).toBe(true);
+    const command = send.mock.calls[0]?.[0] as TransactWriteCommand;
+    const items = command.input.TransactItems ?? [];
+    const update = items[0]?.Update as {
+      Key: Record<string, string>;
+      ConditionExpression: string;
+      ExpressionAttributeValues: Record<string, unknown>;
+    };
+    expect(update.Key).toEqual({ pk: 'DEPT#NICHOLS#MEMBER#MBR-0034', sk: 'CERT#CERT-0091' });
+    expect(update.ConditionExpression).toBe('status = :current');
+    expect(update.ExpressionAttributeValues[':expired']).toBe('EXPIRED');
+    const auditPut = items[1]?.Put?.Item as Record<string, unknown>;
+    expect(auditPut.action).toBe('UPDATE');
+    expect(auditPut.changedFields).toEqual({ status: { old: 'CURRENT', new: 'EXPIRED' } });
+  });
+
+  it('returns false without throwing when the conditional check fails (already-flipped re-run)', async () => {
+    const cancellation = new TransactionCanceledException({
+      message: 'Transaction cancelled',
+      $metadata: {},
+      CancellationReasons: [{ Code: 'ConditionalCheckFailed' }, { Code: 'None' }],
+    });
+    const send = vi.fn().mockRejectedValue(cancellation);
+    const client = fakeClient(send);
+
+    const flipped = await expireCertification(client, env, {
+      deptId,
+      memberId: 'MBR-0034',
+      certId: 'CERT-0091',
+      correlationId: 'trace-expire-2',
+      now: new Date('2026-09-14T12:00:00Z'),
+    });
+
+    expect(flipped).toBe(false);
+  });
+
+  it('logs the original error and rethrows on an unexpected dependency failure', async () => {
+    const failure = new Error('DynamoDB unavailable');
+    const send = vi.fn().mockRejectedValue(failure);
+    const client = fakeClient(send);
+
+    await expect(
+      expireCertification(client, env, {
+        deptId,
+        memberId: 'MBR-0034',
+        certId: 'CERT-0091',
+        correlationId: 'trace-expire-3',
+        now: new Date('2026-09-14T12:00:00Z'),
+      }),
+    ).rejects.toBe(failure);
+
+    const logged = loggedErrors.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(logged.event).toBe('certification.expire.failed');
+  });
+});
+
+describe('revokeCertification', () => {
+  it('flips a CURRENT cert to REVOKED and writes an audit Put in one transaction (AC5)', async () => {
+    const send = vi
+      .fn()
+      .mockResolvedValueOnce({
+        Item: {
+          certId: 'CERT-0091',
+          memberId: 'MBR-0034',
+          certType: 'FF1',
+          issueDate: '2024-01-10',
+          expiryDate: '2027-01-10',
+          issuingAuthority: 'CT DESPP',
+          attachmentS3Key: null,
+          status: 'CURRENT',
+        },
+      })
+      .mockResolvedValueOnce({});
+    const client = fakeClient(send);
+
+    const record = await revokeCertification(client, env, {
+      deptId,
+      memberId: 'MBR-0034',
+      certId: 'CERT-0091',
+      actorId: 'OFFICER-1',
+      correlationId: 'trace-revoke-1',
+      now: new Date('2026-09-14T12:00:00Z'),
+    });
+
+    expect(record.status).toBe('REVOKED');
+    const command = send.mock.calls[1]?.[0] as TransactWriteCommand;
+    const items = command.input.TransactItems ?? [];
+    const auditPut = items[1]?.Put?.Item as Record<string, unknown>;
+    expect(auditPut.actorId).toBe('OFFICER-1');
+    expect(auditPut.changedFields).toEqual({ status: { old: 'CURRENT', new: 'REVOKED' } });
+  });
+
+  it('is idempotent when the cert is already REVOKED — no transaction write', async () => {
+    const send = vi.fn().mockResolvedValueOnce({
+      Item: {
+        certId: 'CERT-0091',
+        memberId: 'MBR-0034',
+        certType: 'FF1',
+        issueDate: '2024-01-10',
+        expiryDate: '2027-01-10',
+        issuingAuthority: 'CT DESPP',
+        attachmentS3Key: null,
+        status: 'REVOKED',
+      },
+    });
+    const client = fakeClient(send);
+
+    const record = await revokeCertification(client, env, {
+      deptId,
+      memberId: 'MBR-0034',
+      certId: 'CERT-0091',
+      actorId: 'OFFICER-1',
+      correlationId: 'trace-revoke-2',
+      now: new Date('2026-09-14T12:00:00Z'),
+    });
+
+    expect(record.status).toBe('REVOKED');
+    expect(send).toHaveBeenCalledTimes(1);
+  });
+
+  it('guards the write on the status just read and rethrows on a concurrent status change (AC5, cross-path seam)', async () => {
+    const cancellation = new TransactionCanceledException({
+      message: 'Transaction cancelled',
+      $metadata: {},
+      CancellationReasons: [{ Code: 'ConditionalCheckFailed' }, { Code: 'None' }],
+    });
+    const send = vi
+      .fn()
+      .mockResolvedValueOnce({
+        Item: {
+          certId: 'CERT-0091',
+          memberId: 'MBR-0034',
+          certType: 'FF1',
+          issueDate: '2024-01-10',
+          expiryDate: '2027-01-10',
+          issuingAuthority: 'CT DESPP',
+          attachmentS3Key: null,
+          status: 'CURRENT',
+        },
+      })
+      .mockRejectedValueOnce(cancellation);
+    const client = fakeClient(send);
+
+    await expect(
+      revokeCertification(client, env, {
+        deptId,
+        memberId: 'MBR-0034',
+        certId: 'CERT-0091',
+        actorId: 'OFFICER-1',
+        correlationId: 'trace-12',
+        now: new Date('2026-09-14T12:00:00Z'),
+      }),
+    ).rejects.toBe(cancellation);
+
+    const command = send.mock.calls[1]?.[0] as TransactWriteCommand;
+    const items = command.input.TransactItems ?? [];
+    const update = items[0]?.Update as { ExpressionAttributeValues: Record<string, unknown> };
+    expect(update.ExpressionAttributeValues[':expectedStatus']).toBe('CURRENT');
+  });
+
+  it('throws CertNotFoundError when the cert does not exist', async () => {
+    const send = vi.fn().mockResolvedValueOnce({});
+    const client = fakeClient(send);
+
+    await expect(
+      revokeCertification(client, env, {
+        deptId,
+        memberId: 'MBR-0034',
+        certId: 'CERT-MISSING',
+        actorId: 'OFFICER-1',
+        correlationId: 'trace-revoke-3',
+        now: new Date('2026-09-14T12:00:00Z'),
+      }),
+    ).rejects.toBeInstanceOf(CertNotFoundError);
   });
 });
