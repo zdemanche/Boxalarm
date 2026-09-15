@@ -280,7 +280,7 @@ describe('createSignupAttendance', () => {
 });
 
 describe('listAttendanceForPeriod', () => {
-  it("delegates to listTrainingEventsInRange/listEventAttendees, reading the same TRAINING_ATTENDANCE items recordAttendanceHours writes, via the same zero-padded gsi3sk BETWEEN bound (AC2)", async () => {
+  it('delegates to listTrainingEventsInRange/listEventAttendees, reading the same TRAINING_ATTENDANCE items recordAttendanceHours writes, via the same zero-padded gsi3sk BETWEEN bound (AC2)', async () => {
     const calls: Array<{ input: Record<string, unknown> }> = [];
     const client = fakeClient((command) => {
       const captured = command as { input: Record<string, unknown> };

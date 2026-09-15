@@ -1,7 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
-import AWSXRay from 'aws-xray-sdk-core';
 import type { GuardEvent } from '@boxalarm/authz';
 import { toVerifiedDeptId, type VerifiedDeptId } from '@boxalarm/dept-scope';
 import AWSXRay from 'aws-xray-sdk-core';
