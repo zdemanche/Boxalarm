@@ -161,7 +161,7 @@ describe('notification-service repository (real DynamoDB via LocalStack)', () =>
         IndexName: 'GSI1',
         KeyConditionExpression: 'gsi1pk = :gsi1pk AND gsi1sk = :gsi1sk',
         ExpressionAttributeValues: {
-          ':gsi1pk': 'MEMBER#MBR-INT-3',
+          ':gsi1pk': 'DEPT#NICHOLS#MEMBER#MBR-INT-3',
           ':gsi1sk': 'NOTIFICATION#NOTIF-INT-1',
         },
       }),

@@ -107,7 +107,7 @@ export function buildNotificationItem(
     createdAt,
     readAt: null,
     ttl: Math.floor(createdAt / 1000) + NOTIFICATION_TTL_SECONDS,
-    gsi1pk: `MEMBER#${memberId}`,
+    gsi1pk: buildDeptScopedPk(deptId, 'MEMBER', memberId),
     gsi1sk: `NOTIFICATION#${notificationId}`,
   };
 }

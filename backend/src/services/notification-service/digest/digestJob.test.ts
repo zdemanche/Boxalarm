@@ -164,7 +164,7 @@ describe('digestJob handler (entrypoint-test obligation)', () => {
   });
 
   it('AC4: a member with both channels muted gets zero push/email but the NOTIFICATION item is still written', async () => {
-    const transactItems: unknown[] = [];
+    const putItems: Record<string, unknown>[] = [];
     const send = vi.fn().mockImplementation((command: CommandLike) => {
       if (command.constructor.name === 'QueryCommand') {
         const gsi3pk = command.input.ExpressionAttributeValues as { ':gsi3pk': string };
@@ -190,8 +190,8 @@ describe('digestJob handler (entrypoint-test obligation)', () => {
         }
         return Promise.resolve({ Item: undefined });
       }
-      if (command.constructor.name === 'TransactWriteCommand') {
-        transactItems.push(command.input.TransactItems);
+      if (command.constructor.name === 'PutCommand') {
+        putItems.push(command.input.Item as Record<string, unknown>);
         return Promise.resolve({});
       }
       return Promise.resolve({});
@@ -206,9 +206,7 @@ describe('digestJob handler (entrypoint-test obligation)', () => {
 
     expect(sendPushDigest).not.toHaveBeenCalled();
     expect(sendEmailDigest).not.toHaveBeenCalled();
-    expect(transactItems).toHaveLength(1);
-    const items = transactItems[0] as { Put?: { Item: Record<string, unknown> } }[];
-    const notificationPut = items.find((item) => item.Put?.Item.entityType === 'NOTIFICATION');
+    const notificationPut = putItems.find((item) => item.entityType === 'NOTIFICATION');
     expect(notificationPut).toBeDefined();
   });
 
@@ -300,15 +298,12 @@ describe('digestJob handler (entrypoint-test obligation)', () => {
         }
         return Promise.resolve({ Items: [] });
       }
-      if (command.constructor.name === 'GetCommand') {
-        const sk = keySk(command);
-        if (sk?.startsWith('DIGESTSENT#')) {
-          return Promise.resolve({ Item: { entityType: 'DIGEST_SENT' } });
-        }
-        if (sk === 'METADATA') {
-          return Promise.resolve({ Item: { email: 'mbr1@example.com' } });
-        }
-        return Promise.resolve({ Item: undefined });
+      if (command.constructor.name === 'TransactWriteCommand') {
+        const error = Object.assign(new Error('conditional check failed'), {
+          name: 'TransactionCanceledException',
+          CancellationReasons: [{ Code: 'ConditionalCheckFailed' }],
+        });
+        return Promise.reject(error);
       }
       return Promise.resolve({});
     });
@@ -322,6 +317,54 @@ describe('digestJob handler (entrypoint-test obligation)', () => {
 
     expect(sendPushDigest).not.toHaveBeenCalled();
     expect(sendEmailDigest).not.toHaveBeenCalled();
+  });
+
+  it('claims the DIGESTSENT slot atomically so two overlapping invocations never double-send the same member (V4/P2 TOCTOU fix)', async () => {
+    const table = new Map<string, Record<string, unknown>>();
+    const send = vi.fn().mockImplementation((command: CommandLike) => {
+      if (command.constructor.name === 'QueryCommand') {
+        const gsi3pk = command.input.ExpressionAttributeValues as { ':gsi3pk': string };
+        if (gsi3pk[':gsi3pk'].includes('DIGEST_PENDING')) {
+          return Promise.resolve({ Items: [pendingItem('MEMBER', 'MBR-1', 'CERT-1')] });
+        }
+        return Promise.resolve({ Items: [] });
+      }
+      if (command.constructor.name === 'GetCommand') {
+        const key = command.input.Key as { pk: string; sk: string };
+        const item = table.get(`${key.pk}#${key.sk}`);
+        return Promise.resolve({ Item: item });
+      }
+      if (command.constructor.name === 'TransactWriteCommand') {
+        const items = command.input.TransactItems as {
+          Put: { Item: { pk: string; sk: string }; ConditionExpression?: string };
+        }[];
+        for (const { Put } of items) {
+          const key = `${Put.Item.pk}#${Put.Item.sk}`;
+          if (Put.ConditionExpression === 'attribute_not_exists(sk)' && table.has(key)) {
+            const error = Object.assign(new Error('conditional check failed'), {
+              name: 'TransactionCanceledException',
+              CancellationReasons: [{ Code: 'ConditionalCheckFailed' }],
+            });
+            return Promise.reject(error);
+          }
+        }
+        for (const { Put } of items) {
+          table.set(`${Put.Item.pk}#${Put.Item.sk}`, Put.Item);
+        }
+        return Promise.resolve({});
+      }
+      return Promise.resolve({});
+    });
+    mockDdb(send);
+    const sendPushDigest = vi.fn().mockResolvedValue(undefined);
+    const sendEmailDigest = vi.fn().mockResolvedValue(undefined);
+    mockChannelSender(sendPushDigest, sendEmailDigest);
+    const { handler } = await import('./digestJob.js');
+
+    await Promise.all([handler({ deptId: 'NICHOLS' }), handler({ deptId: 'NICHOLS' })]);
+
+    expect(sendPushDigest).toHaveBeenCalledTimes(1);
+    expect(sendEmailDigest).toHaveBeenCalledTimes(1);
   });
 
   it('isolates a recipient whose channel send fails, logs it, and still processes the next recipient (P5/P6/P12)', async () => {

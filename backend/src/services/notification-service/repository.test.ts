@@ -56,7 +56,7 @@ describe('buildNotificationItem', () => {
     expect(item.sk).toBe('NOTIF#MBR-1#2000000#NOTIF-1');
     expect(item.readAt).toBeNull();
     expect(item.summary).toBe('1 item expiring');
-    expect(item.gsi1pk).toBe('MEMBER#MBR-1');
+    expect(item.gsi1pk).toBe('DEPT#NICHOLS#MEMBER#MBR-1');
     expect(item.gsi1sk).toBe('NOTIFICATION#NOTIF-1');
   });
 

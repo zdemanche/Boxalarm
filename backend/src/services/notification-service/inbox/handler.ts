@@ -105,7 +105,7 @@ async function markNotificationRead(
         IndexName: 'GSI1',
         KeyConditionExpression: 'gsi1pk = :gsi1pk AND gsi1sk = :gsi1sk',
         ExpressionAttributeValues: {
-          ':gsi1pk': `MEMBER#${memberId}`,
+          ':gsi1pk': buildDeptScopedPk(deptId, 'MEMBER', memberId),
           ':gsi1sk': `NOTIFICATION#${notificationId}`,
         },
       }),

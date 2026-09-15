@@ -1,6 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import {
+  DeleteCommand,
   GetCommand,
+  PutCommand,
   QueryCommand,
   TransactWriteCommand,
   type DynamoDBDocumentClient,
@@ -155,45 +157,17 @@ async function resolveTrainingOfficers(
   return officers;
 }
 
-async function alreadySent(
+async function claimDigestSlot(
   ddb: DynamoDBDocumentClient,
   tableName: string,
   deptId: VerifiedDeptId,
   recipientId: string,
   category: string,
-  today: string,
-): Promise<boolean> {
-  const marker = buildDigestSentMarker(deptId, 'MEMBER', recipientId, category, today, 0);
-  const result = await ddb.send(
-    new GetCommand({
-      TableName: tableName,
-      Key: { pk: buildDeptScopedPk(deptId, 'MEMBER', recipientId), sk: marker.sk },
-    }),
-  );
-  return result.Item !== undefined;
-}
-
-async function commitSentRecord(
-  ddb: DynamoDBDocumentClient,
-  tableName: string,
-  deptId: VerifiedDeptId,
-  recipientId: string,
-  category: string,
-  items: readonly DigestNotificationItem[],
   today: string,
   now: number,
   correlationId: string,
-): Promise<'Written' | 'Skipped'> {
+): Promise<'Claimed' | 'AlreadyClaimed'> {
   const marker = buildDigestSentMarker(deptId, 'MEMBER', recipientId, category, today, now);
-  const notification = buildNotificationItem(
-    deptId,
-    recipientId,
-    randomUUID(),
-    category,
-    items,
-    now,
-  );
-
   try {
     await ddb.send(
       new TransactWriteCommand({
@@ -205,17 +179,15 @@ async function commitSentRecord(
               ConditionExpression: 'attribute_not_exists(sk)',
             },
           },
-          { Put: { TableName: tableName, Item: notification } },
         ],
       }),
     );
   } catch (error) {
     if (isConditionalCheckFailed(error)) {
-      emitOutcomeMetric(METRIC_NAMESPACE, 'DigestSkipped');
-      return 'Skipped';
+      return 'AlreadyClaimed';
     }
     const cancellation = asTransactionCancellation(error);
-    logError('notification.digest.write_failed', error, correlationId, {
+    logError('notification.digest.claim_failed', error, correlationId, {
       memberId: recipientId,
       ...(cancellation
         ? { cancellationReasons: cancellation.CancellationReasons?.map((r) => r.Code) }
@@ -224,7 +196,51 @@ async function commitSentRecord(
     emitOutcomeMetric(METRIC_NAMESPACE, 'DigestFailed');
     throw error;
   }
-  return 'Written';
+  return 'Claimed';
+}
+
+async function releaseDigestSlot(
+  ddb: DynamoDBDocumentClient,
+  tableName: string,
+  deptId: VerifiedDeptId,
+  recipientId: string,
+  category: string,
+  today: string,
+  correlationId: string,
+): Promise<void> {
+  const marker = buildDigestSentMarker(deptId, 'MEMBER', recipientId, category, today, 0);
+  try {
+    await ddb.send(
+      new DeleteCommand({
+        TableName: tableName,
+        Key: { pk: buildDeptScopedPk(deptId, 'MEMBER', recipientId), sk: marker.sk },
+      }),
+    );
+  } catch (error) {
+    logError('notification.digest.release_failed', error, correlationId, {
+      memberId: recipientId,
+    });
+  }
+}
+
+async function writeNotification(
+  ddb: DynamoDBDocumentClient,
+  tableName: string,
+  deptId: VerifiedDeptId,
+  recipientId: string,
+  category: string,
+  items: readonly DigestNotificationItem[],
+  now: number,
+): Promise<void> {
+  const notification = buildNotificationItem(
+    deptId,
+    recipientId,
+    randomUUID(),
+    category,
+    items,
+    now,
+  );
+  await ddb.send(new PutCommand({ TableName: tableName, Item: notification }));
 }
 
 async function sendDigestToMember(
@@ -237,14 +253,28 @@ async function sendDigestToMember(
   now: number,
   correlationId: string,
 ): Promise<void> {
-  const [member, sent, preference] = await Promise.all([
+  const claim = await claimDigestSlot(
+    ddb,
+    tableName,
+    deptId,
+    memberId,
+    CERT_EXPIRY_CATEGORY,
+    today,
+    now,
+    correlationId,
+  );
+  if (claim === 'AlreadyClaimed') {
+    emitOutcomeMetric(METRIC_NAMESPACE, 'DigestSkipped');
+    return;
+  }
+
+  const [member, preference] = await Promise.all([
     ddb.send(
       new GetCommand({
         TableName: tableName,
         Key: { pk: buildDeptScopedPk(deptId, 'MEMBER', memberId), sk: 'METADATA' },
       }),
     ),
-    alreadySent(ddb, tableName, deptId, memberId, CERT_EXPIRY_CATEGORY, today),
     ddb.send(
       new GetCommand({
         TableName: tableName,
@@ -255,11 +285,6 @@ async function sendDigestToMember(
       }),
     ),
   ]);
-
-  if (sent) {
-    emitOutcomeMetric(METRIC_NAMESPACE, 'DigestSkipped');
-    return;
-  }
 
   const email = member.Item?.email as string | undefined;
   const channels = parsePreferenceItem(preference.Item)?.channels;
@@ -279,23 +304,20 @@ async function sendDigestToMember(
       category: CERT_EXPIRY_CATEGORY,
     });
     emitOutcomeMetric(METRIC_NAMESPACE, 'DigestSendFailed');
+    await releaseDigestSlot(ddb, tableName, deptId, memberId, CERT_EXPIRY_CATEGORY, today, correlationId);
     return;
   }
 
-  const outcome = await commitSentRecord(
-    ddb,
-    tableName,
-    deptId,
-    memberId,
-    CERT_EXPIRY_CATEGORY,
-    items,
-    today,
-    now,
-    correlationId,
-  );
-  if (outcome === 'Written') {
-    emitOutcomeMetric(METRIC_NAMESPACE, pushMuted || emailMuted ? 'DigestMuted' : 'DigestSent');
+  try {
+    await writeNotification(ddb, tableName, deptId, memberId, CERT_EXPIRY_CATEGORY, items, now);
+  } catch (error) {
+    logError('notification.digest.write_failed', error, correlationId, { memberId });
+    emitOutcomeMetric(METRIC_NAMESPACE, 'DigestFailed');
+    await releaseDigestSlot(ddb, tableName, deptId, memberId, CERT_EXPIRY_CATEGORY, today, correlationId);
+    throw error;
   }
+
+  emitOutcomeMetric(METRIC_NAMESPACE, pushMuted || emailMuted ? 'DigestMuted' : 'DigestSent');
 }
 
 async function sendDigestToTrainingOfficer(
@@ -308,15 +330,17 @@ async function sendDigestToTrainingOfficer(
   now: number,
   correlationId: string,
 ): Promise<void> {
-  const sent = await alreadySent(
+  const claim = await claimDigestSlot(
     ddb,
     tableName,
     deptId,
     officer.memberId,
     TRAINING_OFFICER_DIGEST_CATEGORY,
     today,
+    now,
+    correlationId,
   );
-  if (sent) {
+  if (claim === 'AlreadyClaimed') {
     emitOutcomeMetric(METRIC_NAMESPACE, 'DigestSkipped');
     return;
   }
@@ -330,23 +354,46 @@ async function sendDigestToTrainingOfficer(
       category: TRAINING_OFFICER_DIGEST_CATEGORY,
     });
     emitOutcomeMetric(METRIC_NAMESPACE, 'DigestSendFailed');
+    await releaseDigestSlot(
+      ddb,
+      tableName,
+      deptId,
+      officer.memberId,
+      TRAINING_OFFICER_DIGEST_CATEGORY,
+      today,
+      correlationId,
+    );
     return;
   }
 
-  const outcome = await commitSentRecord(
-    ddb,
-    tableName,
-    deptId,
-    officer.memberId,
-    TRAINING_OFFICER_DIGEST_CATEGORY,
-    items,
-    today,
-    now,
-    correlationId,
-  );
-  if (outcome === 'Written') {
-    emitOutcomeMetric(METRIC_NAMESPACE, 'DigestSent');
+  try {
+    await writeNotification(
+      ddb,
+      tableName,
+      deptId,
+      officer.memberId,
+      TRAINING_OFFICER_DIGEST_CATEGORY,
+      items,
+      now,
+    );
+  } catch (error) {
+    logError('notification.digest.write_failed', error, correlationId, {
+      memberId: officer.memberId,
+    });
+    emitOutcomeMetric(METRIC_NAMESPACE, 'DigestFailed');
+    await releaseDigestSlot(
+      ddb,
+      tableName,
+      deptId,
+      officer.memberId,
+      TRAINING_OFFICER_DIGEST_CATEGORY,
+      today,
+      correlationId,
+    );
+    throw error;
   }
+
+  emitOutcomeMetric(METRIC_NAMESPACE, 'DigestSent');
 }
 
 export const handler = async (payload: unknown): Promise<{ processed: number }> => {

@@ -35,7 +35,7 @@ describe('NOTIFICATION_PREFERENCE / NOTIFICATION entity contract (architecture D
     expect(item.sk).toBe(`NOTIF#MBR-0012#${createdAt}#NOTIF-0001`);
     expect(item.readAt).toBeNull();
     expect(item.ttl).toBe(Math.floor(createdAt / 1000) + 180 * 24 * 60 * 60);
-    expect(item.gsi1pk).toBe('MEMBER#MBR-0012');
+    expect(item.gsi1pk).toBe('DEPT#NICHOLS#MEMBER#MBR-0012');
     expect(item.gsi1sk).toBe('NOTIFICATION#NOTIF-0001');
   });
 });
