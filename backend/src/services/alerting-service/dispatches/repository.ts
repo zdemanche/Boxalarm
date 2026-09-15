@@ -110,6 +110,9 @@ export async function createManualDispatch(
 
 export interface DispatchAlertItem {
   readonly dispatchId: string;
+  // TODO(E1-S2): joined onto DISPATCH_ALERT by fan-out ingress (architecture Backend
+  // §1.4); createManualDispatch below does not write it — no ingress path in this repo
+  // does yet.
   readonly occupancyId?: string;
 }
 

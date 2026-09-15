@@ -78,6 +78,22 @@ describe('getDispatchHandler', () => {
     expect(result).toMatchObject({ statusCode: 400 });
   });
 
+  it('returns 400 before any authorization or AWS call when dispatchId contains the pk delimiter', async () => {
+    const { createGetDispatchHandler } = await import('./getDispatchHandler.js');
+    const authzSend = vi.fn().mockResolvedValue({ decision: Decision.ALLOW });
+    const authzClient = { send: authzSend } as unknown as VerifiedPermissionsClient;
+    const dispatchesSend = vi.fn();
+    const wrapped = createGetDispatchHandler(
+      fakeDoc(dispatchesSend),
+      fakeDoc(vi.fn()),
+      authzClient,
+    );
+    const result = await wrapped(buildEvent('DISPATCH#1'));
+    expect(result).toMatchObject({ statusCode: 400 });
+    expect(authzSend).not.toHaveBeenCalled();
+    expect(dispatchesSend).not.toHaveBeenCalled();
+  });
+
   it('returns 404 when the dispatch does not exist', async () => {
     const { createGetDispatchHandler } = await import('./getDispatchHandler.js');
     const dispatchesSend = vi.fn().mockResolvedValue({ Item: undefined });
@@ -160,13 +176,18 @@ describe('getDispatchHandler', () => {
       allowClient(),
     );
     await wrapped(buildEvent());
+    const allowedTableNames = [
+      process.env.ALERTING_DISPATCHES_TABLE_NAME,
+      process.env.ALERTING_TABLE_NAME,
+    ];
     for (const send of [dispatchesSend, alertingSend]) {
       for (const call of send.mock.calls) {
-        expect(JSON.stringify((call[0] as { input: unknown }).input)).not.toContain(
-          'platform-table',
-        );
+        const input = (call[0] as { input: { TableName?: string } }).input;
+        expect(allowedTableNames).toContain(input.TableName);
       }
     }
+    expect(dispatchesSend).toHaveBeenCalledTimes(1);
+    expect(alertingSend).toHaveBeenCalledTimes(1);
   });
 
   it('returns 503 when the dispatch table read fails, never a defaulted 200', async () => {

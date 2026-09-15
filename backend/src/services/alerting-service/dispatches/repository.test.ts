@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { LocalstackContainer, type StartedLocalStackContainer } from '@testcontainers/localstack';
 import { CreateTableCommand, DynamoDBClient } from '@aws-sdk/client-dynamodb';
-import { DynamoDBDocumentClient, GetCommand, ScanCommand } from '@aws-sdk/lib-dynamodb';
+import { DynamoDBDocumentClient, GetCommand, PutCommand, ScanCommand } from '@aws-sdk/lib-dynamodb';
 import { toVerifiedDeptId } from '@boxalarm/dept-scope';
 import { createManualDispatch, getDispatchById } from './repository.js';
 import { deriveIngressIdempotencyKey } from './dispatchIngressPort.js';
@@ -168,7 +168,7 @@ describe('createManualDispatch (real DynamoDB, AC2/AC4)', () => {
     expect(cadResult.outcome).toBe('created');
   });
 
-  it('getDispatchById returns the stored alert including occupancyId (E1-S17 AC1)', async () => {
+  it('getDispatchById returns the stored alert by dispatchId (E1-S17 AC1 read path)', async () => {
     const deptId = toVerifiedDeptId({ deptId: 'NICHOLS' });
     const externalId = `getbyid-${randomUUID()}`;
     const created = await createManualDispatch(client, TABLE_NAME, {
@@ -181,6 +181,27 @@ describe('createManualDispatch (real DynamoDB, AC2/AC4)', () => {
 
     const found = await getDispatchById(client, TABLE_NAME, deptId, dispatchId);
     expect(found?.dispatchId).toBe(dispatchId);
+  });
+
+  it('getDispatchById returns occupancyId when present on the stored item (E1-S17 AC1)', async () => {
+    const deptId = toVerifiedDeptId({ deptId: 'NICHOLS' });
+    const dispatchId = `occ-${randomUUID()}`;
+    await client.send(
+      new PutCommand({
+        TableName: TABLE_NAME,
+        Item: {
+          pk: `DEPT#${deptId}#DISPATCH#${dispatchId}`,
+          sk: 'METADATA',
+          entityType: 'DISPATCH_ALERT',
+          dispatchId,
+          deptId,
+          occupancyId: 'OCC-1',
+        },
+      }),
+    );
+
+    const found = await getDispatchById(client, TABLE_NAME, deptId, dispatchId);
+    expect(found?.occupancyId).toBe('OCC-1');
   });
 
   it('getDispatchById returns undefined for a dispatchId that does not exist (E1-S17 AC2)', async () => {
