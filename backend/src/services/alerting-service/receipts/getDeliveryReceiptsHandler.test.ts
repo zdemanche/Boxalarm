@@ -125,17 +125,15 @@ describe('getDeliveryReceiptsHandler', () => {
     mockVerifiedPermissions(() => Promise.resolve({ decision: 'ALLOW' }));
     mockDynamoClient();
     vi.doMock('./deliveryReceiptRepository.js', () => ({
-      queryReceiptsForDispatch: vi
-        .fn()
-        .mockResolvedValue([
-          {
-            memberId: 'MBR-0012',
-            channel: 'PUSH',
-            toneSequence: 1,
-            sentAt: 1798000003,
-            deliveredAt: 1798000004,
-          },
-        ]),
+      queryReceiptsForDispatch: vi.fn().mockResolvedValue([
+        {
+          memberId: 'MBR-0012',
+          channel: 'PUSH',
+          toneSequence: 1,
+          sentAt: 1798000003,
+          deliveredAt: 1798000004,
+        },
+      ]),
     }));
     const { handler } = await import('./getDeliveryReceiptsHandler.js');
     const result = (await handler(
