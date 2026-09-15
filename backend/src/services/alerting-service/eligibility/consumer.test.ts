@@ -35,7 +35,7 @@ function sqsEvent(payload: Record<string, unknown>, messageId = 'msg-1'): SQSEve
 function mockDdb(send: ReturnType<typeof vi.fn>): void {
   vi.doMock('./dynamoClient.js', async (importOriginal) => {
     const actual = await importOriginal<typeof import('./dynamoClient.js')>();
-    return { ...actual, createDdbClient: () => ({ send }) as unknown as DynamoDBDocumentClient };
+    return { ...actual, createDynamoClient: () => ({ send }) as unknown as DynamoDBDocumentClient };
   });
 }
 

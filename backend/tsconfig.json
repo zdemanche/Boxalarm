@@ -8,7 +8,8 @@
   "references": [
     { "path": "packages/dept-scope" },
     { "path": "packages/authz" },
-    { "path": "packages/outbox" }
+    { "path": "packages/outbox" },
+    { "path": "packages/metrics" }
   ],
   "include": ["src", "test", "vitest.config.ts"]
 }

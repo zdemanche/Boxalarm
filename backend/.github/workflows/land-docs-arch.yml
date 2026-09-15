@@ -3,11 +3,11 @@ on:
   workflow_dispatch:
     inputs:
       docs_token:
-        description: "Optional PAT override (else uses secrets.BOXALARM_DOCS_TOKEN)"
+        description: 'Optional PAT override (else uses secrets.BOXALARM_DOCS_TOKEN)'
         required: false
         type: string
       docs_branch:
-        description: "Target branch on boxalarm-docs"
+        description: 'Target branch on boxalarm-docs'
         required: true
         default: cursor/arch-n3-n5-n9-land-56a7
         type: string

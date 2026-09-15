@@ -2,7 +2,7 @@ import { TransactWriteCommand } from '@aws-sdk/lib-dynamodb';
 import { buildDeptScopedPk, toVerifiedDeptId } from '@boxalarm/dept-scope';
 import { emitOutcomeMetric } from '@boxalarm/metrics';
 import type { SQSEvent } from 'aws-lambda';
-import { createDdbClient, readAlertingDdbConfig } from './dynamoClient.js';
+import { createDynamoClient, readAlertingConfig } from './dynamoClient.js';
 import type { AvailabilityState } from './selector.js';
 
 const METRIC_NAMESPACE = 'Boxalarm/AlertingEligibility';
@@ -70,8 +70,8 @@ function logError(
 }
 
 export const handler = async (event: SQSEvent): Promise<void> => {
-  const { tableName } = readAlertingDdbConfig(process.env);
-  const ddb = createDdbClient(process.env);
+  const { tableName } = readAlertingConfig(process.env);
+  const ddb = createDynamoClient(process.env);
 
   for (const record of event.Records) {
     let envelope: AvailabilityChangedEnvelope;

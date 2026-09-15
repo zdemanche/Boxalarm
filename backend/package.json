@@ -26,6 +26,7 @@
     "@aws-sdk/client-eventbridge": "3.1131.0",
     "@aws-sdk/client-lambda": "3.1131.0",
     "@aws-sdk/client-s3": "3.1131.0",
+    "@aws-sdk/client-scheduler": "^3.1131.0",
     "@aws-sdk/client-secrets-manager": "3.1131.0",
     "@aws-sdk/client-verifiedpermissions": "3.1131.0",
     "@aws-sdk/cloudfront-signer": "3.1125.0",
@@ -38,7 +39,8 @@
     "aws-jwt-verify": "5.2.1",
     "aws-xray-sdk-core": "3.12.0",
     "ngeohash": "0.6.4",
-    "pino": "10.3.1"
+    "pino": "10.3.1",
+    "@boxalarm/metrics": "*"
   },
   "devDependencies": {
     "@eslint/js": "9.39.5",
@@ -47,6 +49,7 @@
     "@types/ngeohash": "0.6.8",
     "@types/node": "24.13.3",
     "@vitest/coverage-v8": "3.2.7",
+    "aws-sdk-client-mock": "^4.1.0",
     "eslint": "9.39.5",
     "eslint-config-prettier": "10.1.8",
     "prettier": "3.9.6",

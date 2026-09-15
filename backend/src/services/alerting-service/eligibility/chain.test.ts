@@ -133,7 +133,7 @@ describe('E2-S5 chain: markoff creation suppresses fan-out eligibility and rever
       const actual = await importOriginal<typeof import('./dynamoClient.js')>();
       return {
         ...actual,
-        createDdbClient: () => ({ send: alerting.send }) as unknown as DynamoDBDocumentClient,
+        createDynamoClient: () => ({ send: alerting.send }) as unknown as DynamoDBDocumentClient,
       };
     });
 

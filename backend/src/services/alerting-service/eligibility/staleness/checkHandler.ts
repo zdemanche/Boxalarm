@@ -1,6 +1,6 @@
 import { toVerifiedDeptId } from '@boxalarm/dept-scope';
 import { emitEmf } from '@boxalarm/metrics';
-import { createDdbClient, readAlertingDdbConfig } from '../dynamoClient.js';
+import { createDynamoClient, readAlertingConfig } from '../dynamoClient.js';
 import { queryEligiblePartition } from '../selector.js';
 
 const METRIC_NAMESPACE = 'Boxalarm/AlertingEligibility';
@@ -34,8 +34,8 @@ export interface StalenessCheckResult {
 export const handler = async (): Promise<StalenessCheckResult> => {
   const { deptId: rawDeptId } = readStalenessConfig(process.env);
   const deptId = toVerifiedDeptId({ deptId: rawDeptId });
-  const { tableName } = readAlertingDdbConfig(process.env);
-  const ddb = createDdbClient(process.env);
+  const { tableName } = readAlertingConfig(process.env);
+  const ddb = createDynamoClient(process.env);
 
   let items;
   try {
