@@ -1,25 +1,25 @@
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
+import AWSXRay from 'aws-xray-sdk-core';
 
 export interface PersonnelTableConfig {
   readonly tableName: string;
 }
 
 export function readPersonnelTableConfig(env: NodeJS.ProcessEnv): PersonnelTableConfig {
-  const tableName = env.PERSONNEL_TABLE_NAME;
+  const tableName = env.PLATFORM_TABLE_NAME;
   if (!tableName) {
-    throw new Error('PERSONNEL_TABLE_NAME is required and was not set');
+    throw new Error('PLATFORM_TABLE_NAME is required and was not set');
   }
   return { tableName };
 }
 
-let cachedClient: DynamoDBDocumentClient | undefined;
+let cachedDocClient: DynamoDBDocumentClient | undefined;
 
-export function createDynamoClient(
-  env: NodeJS.ProcessEnv,
-  client?: DynamoDBDocumentClient,
-): DynamoDBDocumentClient {
+export function getDocClient(env: NodeJS.ProcessEnv): DynamoDBDocumentClient {
   readPersonnelTableConfig(env);
-  cachedClient ??= client ?? DynamoDBDocumentClient.from(new DynamoDBClient({}));
-  return cachedClient;
+  cachedDocClient ??= DynamoDBDocumentClient.from(
+    AWSXRay.captureAWSv3Client(new DynamoDBClient({})),
+  );
+  return cachedDocClient;
 }

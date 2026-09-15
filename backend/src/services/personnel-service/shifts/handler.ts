@@ -1,187 +1,224 @@
 import { randomUUID } from 'node:crypto';
-import type { APIGatewayProxyResultV2 } from 'aws-lambda';
-import type { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
+import { QueryCommand, TransactWriteCommand } from '@aws-sdk/lib-dynamodb';
+import type {
+  APIGatewayProxyEventV2WithLambdaAuthorizer,
+  APIGatewayProxyResultV2,
+  Handler,
+} from 'aws-lambda';
+import { buildDeptScopedPk, toVerifiedDeptId, type VerifiedDeptId } from '@boxalarm/dept-scope';
+import type { AuthorizerContext } from '../../platform-service/authorizer/handler.js';
+import { getDocClient, readPersonnelTableConfig } from './dynamoClient.js';
 import {
-  serviceUnavailableProblem,
-  withAuthorization,
-  type CedarPrincipalContext,
-  type GuardEvent,
-} from '@boxalarm/authz';
-import { toVerifiedDeptId, type VerifiedDeptId } from '@boxalarm/dept-scope';
-import { claimShiftPosition, ShiftPositionWriteError } from './claimShiftPosition.js';
-import {
-  createDynamoClient,
-  readPersonnelTableConfig,
-  type PersonnelTableConfig,
-} from './dynamoClient.js';
-import {
-  badRequestProblem,
-  conflictProblem,
-  internalErrorProblem,
-  notFoundProblem,
-} from './problemDetails.js';
-import { recalculateShiftStatus } from './recalculateShiftStatus.js';
+  ValidationError,
+  buildShiftTransactItems,
+  parseCreateShiftRequest,
+  parseShiftListItems,
+} from './shiftAssembly.js';
 
-function extractTraceId(event: GuardEvent): string {
-  const traceparent = event.headers?.traceparent ?? event.headers?.Traceparent;
-  const traceId = traceparent?.split('-')[1];
-  return traceId && traceId.length > 0 ? traceId : randomUUID();
+type ShiftEvent = APIGatewayProxyEventV2WithLambdaAuthorizer<AuthorizerContext>;
+
+const OFFICER_ROLES = new Set(['OFFICER', 'ADMIN', 'CHIEF']);
+const GSI3_INDEX_NAME = 'gsi3';
+
+function problemResponse(
+  status: number,
+  title: string,
+  detail: string,
+  correlationId: string,
+): APIGatewayProxyResultV2 {
+  return {
+    statusCode: status,
+    headers: { 'content-type': 'application/problem+json' },
+    body: JSON.stringify({
+      type: 'about:blank',
+      title,
+      status,
+      detail,
+      traceId: correlationId,
+    }),
+  };
 }
 
-function emitClaimMetric(outcome: 'Allowed' | 'Conflict' | 'Failed'): void {
+function jsonResponse(status: number, body: unknown): APIGatewayProxyResultV2 {
+  return {
+    statusCode: status,
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+  };
+}
+
+function emitShiftMetric(outcome: 'ShiftCreated' | 'ShiftCreateFailed'): void {
   console.log(
     JSON.stringify({
       _aws: {
         Timestamp: Date.now(),
         CloudWatchMetrics: [
           {
-            Namespace: 'Boxalarm/Personnel',
+            Namespace: 'Boxalarm/PersonnelService',
             Dimensions: [[]],
-            Metrics: [{ Name: `Claim${outcome}`, Unit: 'Count' }],
+            Metrics: [{ Name: outcome, Unit: 'Count' }],
           },
         ],
       },
-      [`Claim${outcome}`]: 1,
+      [outcome]: 1,
     }),
   );
 }
 
-function readPositionCode(event: GuardEvent, traceId: string): string | APIGatewayProxyResultV2 {
-  if (!event.body) {
-    return badRequestProblem(traceId, 'Request body is required and must include positionCode');
-  }
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(event.body) as unknown;
-  } catch {
-    return badRequestProblem(traceId, 'Request body must be valid JSON');
-  }
-  const positionCode = (parsed as { positionCode?: unknown } | null)?.positionCode;
-  if (typeof positionCode !== 'string' || positionCode.trim().length === 0) {
-    return badRequestProblem(traceId, 'positionCode is required and must be a non-empty string');
-  }
-  return positionCode;
+function hasOfficerRole(context: AuthorizerContext): boolean {
+  const groups = context['cognito:groups'].split(' ').filter((group) => group.length > 0);
+  return groups.some((group) => OFFICER_ROLES.has(group.toUpperCase()));
 }
 
-export function createHandler(
-  client?: DynamoDBDocumentClient,
-): (event: GuardEvent) => Promise<APIGatewayProxyResultV2> {
-  return withAuthorization(
-    async (
-      event: GuardEvent,
-      principal: CedarPrincipalContext,
-    ): Promise<APIGatewayProxyResultV2> => {
-      const traceId = extractTraceId(event);
-      const shiftId = event.pathParameters?.shiftId;
-      if (!shiftId) {
-        return badRequestProblem(traceId, 'shiftId path parameter is required');
-      }
-      const positionCodeOrProblem = readPositionCode(event, traceId);
-      if (typeof positionCodeOrProblem !== 'string') {
-        return positionCodeOrProblem;
-      }
-      const positionCode = positionCodeOrProblem;
-
-      if (shiftId.includes('#')) {
-        return badRequestProblem(traceId, "shiftId must not contain '#'");
-      }
-
-      let deptId: VerifiedDeptId;
-      let config: PersonnelTableConfig;
-      try {
-        deptId = toVerifiedDeptId(principal);
-        config = readPersonnelTableConfig(process.env);
-      } catch (error) {
-        console.error(
-          JSON.stringify({
-            event: 'personnel.shift_position.claim_failed',
-            service: 'personnel-service',
-            reason: error instanceof Error ? error.constructor.name : 'UnknownError',
-            message: error instanceof Error ? error.message : undefined,
-            correlationId: traceId,
-            shiftId,
-          }),
-        );
-        return internalErrorProblem(traceId);
-      }
-      const doc = createDynamoClient(process.env, client);
-
-      let outcome;
-      try {
-        outcome = await claimShiftPosition(
-          doc,
-          config.tableName,
-          deptId,
-          shiftId,
-          positionCode,
-          principal.sub,
-        );
-      } catch (error) {
-        const reason = error instanceof ShiftPositionWriteError ? error.reason : 'UnknownError';
-        const originalError = error instanceof ShiftPositionWriteError ? error.cause : error;
-        console.error(
-          JSON.stringify({
-            event: 'personnel.shift_position.claim_failed',
-            service: 'personnel-service',
-            reason,
-            message: originalError instanceof Error ? originalError.message : undefined,
-            correlationId: traceId,
-            deptId,
-            shiftId,
-          }),
-        );
-        emitClaimMetric('Failed');
-        return serviceUnavailableProblem(traceId);
-      }
-
-      if (outcome.kind === 'NOT_FOUND') {
-        emitClaimMetric('Failed');
-        return notFoundProblem(traceId);
-      }
-      if (outcome.kind === 'CONFLICT') {
-        emitClaimMetric('Conflict');
-        return conflictProblem(traceId);
-      }
-
-      if (outcome.kind === 'CLAIMED') {
-        try {
-          await recalculateShiftStatus(doc, config.tableName, deptId, shiftId);
-        } catch (error) {
-          console.error(
-            JSON.stringify({
-              event: 'personnel.duty_shift.status_recalc_failed',
-              service: 'personnel-service',
-              reason: error instanceof Error ? error.constructor.name : 'UnknownError',
-              message: error instanceof Error ? error.message : undefined,
-              correlationId: traceId,
-              deptId,
-              shiftId,
-            }),
-          );
-          emitClaimMetric('Failed');
-          return internalErrorProblem(traceId);
-        }
-      }
-
-      emitClaimMetric('Allowed');
-      return {
-        statusCode: 200,
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
-          shiftId,
-          positionCode,
-          claimedByMemberId: principal.sub,
-          claimedAt: outcome.claimedAt,
-        }),
-      };
-    },
-    {
-      actionType: 'PersonnelAction',
-      actionId: 'ClaimShiftPosition',
-      resourceType: 'Shift',
-      resourceId: (event) => event.pathParameters?.shiftId ?? '',
-    },
+function logHandlerError(event: string, correlationId: string, error: unknown): void {
+  console.error(
+    JSON.stringify({
+      event,
+      correlationId,
+      reason: error instanceof Error ? error.constructor.name : 'UnknownError',
+      message: error instanceof Error ? error.message : undefined,
+      stack: error instanceof Error ? error.stack : undefined,
+    }),
   );
 }
 
-export const handler = createHandler();
+function resolveVerifiedDeptId(
+  context: AuthorizerContext,
+  eventName: string,
+  correlationId: string,
+): VerifiedDeptId | undefined {
+  try {
+    return toVerifiedDeptId(context);
+  } catch (error) {
+    logHandlerError(eventName, correlationId, error);
+    return undefined;
+  }
+}
+
+async function handleCreate(
+  event: ShiftEvent,
+  correlationId: string,
+): Promise<APIGatewayProxyResultV2> {
+  const context = event.requestContext.authorizer.lambda;
+
+  // TODO: E8-S3 — replace with Cedar IsAuthorizedWithToken
+  if (!hasOfficerRole(context)) {
+    return problemResponse(
+      403,
+      'Forbidden',
+      'officer or admin role is required to create a duty shift',
+      correlationId,
+    );
+  }
+
+  let rawBody: unknown;
+  try {
+    rawBody = event.body ? (JSON.parse(event.body) as unknown) : undefined;
+  } catch (error) {
+    logHandlerError('shifts.create.invalid_json', correlationId, error);
+    return problemResponse(400, 'Bad Request', 'body must be valid JSON', correlationId);
+  }
+
+  let input;
+  try {
+    input = parseCreateShiftRequest(rawBody);
+  } catch (error) {
+    if (error instanceof ValidationError) {
+      return problemResponse(400, 'Bad Request', error.message, correlationId);
+    }
+    logHandlerError('shifts.create.validation_error', correlationId, error);
+    return problemResponse(400, 'Bad Request', 'invalid request body', correlationId);
+  }
+
+  const deptId = resolveVerifiedDeptId(context, 'shifts.create.invalid_dept', correlationId);
+  if (deptId === undefined) {
+    return problemResponse(
+      500,
+      'Internal Server Error',
+      'department context is invalid',
+      correlationId,
+    );
+  }
+  const shiftId = randomUUID();
+
+  try {
+    const { tableName } = readPersonnelTableConfig(process.env);
+    const docClient = getDocClient(process.env);
+    const transactItems = buildShiftTransactItems(deptId, shiftId, tableName, input);
+    await docClient.send(new TransactWriteCommand({ TransactItems: transactItems }));
+  } catch (error) {
+    logHandlerError('shifts.create.write_failed', correlationId, error);
+    emitShiftMetric('ShiftCreateFailed');
+    return problemResponse(503, 'Service Unavailable', 'shift could not be created', correlationId);
+  }
+
+  emitShiftMetric('ShiftCreated');
+  return jsonResponse(201, {
+    shiftId,
+    status: 'OPEN',
+    startAt: input.startAt,
+    endAt: input.endAt,
+    stationId: input.stationId,
+    positions: input.positions,
+  });
+}
+
+async function handleList(
+  event: ShiftEvent,
+  correlationId: string,
+): Promise<APIGatewayProxyResultV2> {
+  const context = event.requestContext.authorizer.lambda;
+  const deptId = resolveVerifiedDeptId(context, 'shifts.list.invalid_dept', correlationId);
+  if (deptId === undefined) {
+    return problemResponse(
+      500,
+      'Internal Server Error',
+      'department context is invalid',
+      correlationId,
+    );
+  }
+
+  try {
+    const { tableName } = readPersonnelTableConfig(process.env);
+    const docClient = getDocClient(process.env);
+    const gsi3pk = buildDeptScopedPk(deptId, 'DUTY_SHIFT');
+    const rawItems: Record<string, unknown>[] = [];
+    let exclusiveStartKey: Record<string, unknown> | undefined;
+    do {
+      const result = await docClient.send(
+        new QueryCommand({
+          TableName: tableName,
+          IndexName: GSI3_INDEX_NAME,
+          KeyConditionExpression: 'gsi3pk = :gsi3pk',
+          ExpressionAttributeValues: { ':gsi3pk': gsi3pk },
+          ExclusiveStartKey: exclusiveStartKey,
+        }),
+      );
+      rawItems.push(...((result.Items ?? []) as Record<string, unknown>[]));
+      exclusiveStartKey = result.LastEvaluatedKey as Record<string, unknown> | undefined;
+    } while (exclusiveStartKey !== undefined);
+    const shifts = parseShiftListItems(rawItems);
+    return jsonResponse(200, { shifts });
+  } catch (error) {
+    logHandlerError('shifts.list.query_failed', correlationId, error);
+    return problemResponse(503, 'Service Unavailable', 'shifts could not be listed', correlationId);
+  }
+}
+
+export const handler: Handler<ShiftEvent, APIGatewayProxyResultV2> = async (event) => {
+  const correlationId = event.requestContext.requestId;
+  const method = event.requestContext.http.method;
+
+  if (method === 'POST') {
+    return handleCreate(event, correlationId);
+  }
+  if (method === 'GET') {
+    return handleList(event, correlationId);
+  }
+  return problemResponse(
+    405,
+    'Method Not Allowed',
+    `${method} is not supported on this route`,
+    correlationId,
+  );
+};
