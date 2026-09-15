@@ -134,6 +134,25 @@ describe('listHandler', () => {
     expect(listApparatus).toHaveBeenNthCalledWith(2, {}, 'platform-table', 'dept-001', undefined);
   });
 
+  it('does not leak the internal apparatusId field on the registry response body', async () => {
+    mockVerifiedPermissions(() => Promise.resolve({ decision: 'ALLOW' }));
+    const listApparatus = vi.fn().mockResolvedValue([
+      { apparatusId: 'APP-ENGINE-2', unitId: 'E1', type: 'ENGINE', status: 'IN_SERVICE' },
+    ]);
+    await mockRepository({ listApparatus });
+    mockDynamoClient();
+
+    const { handler } = await import('./listHandler.js');
+    const result = await handler(buildEvent(CHIEF));
+
+    expect(result).toMatchObject({ statusCode: 200 });
+    const body = JSON.parse((result as { body: string }).body) as {
+      apparatus: readonly unknown[];
+    };
+    expect(body.apparatus).toEqual([{ unitId: 'E1', type: 'ENGINE', status: 'IN_SERVICE' }]);
+    expect(body.apparatus[0]).not.toHaveProperty('apparatusId');
+  });
+
   it('maps a DynamoDB registry-query failure to 503 rather than an unhandled throw', async () => {
     mockVerifiedPermissions(() => Promise.resolve({ decision: 'ALLOW' }));
     const actual = await vi.importActual<typeof import('./repository.js')>('./repository.js');
