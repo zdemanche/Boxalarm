@@ -98,8 +98,10 @@ describe('channel failure-domain isolation and no-SPOF chaos verification (E1-S1
     const { handler: smsHandler } =
       await import('../src/services/alerting-service/channels/sms/worker.js');
 
-    await expect(pushHandler(dispatchEvent('push'))).rejects.toThrow('push provider down');
-    await expect(smsHandler(dispatchEvent('sms'))).resolves.toBeUndefined();
+    await expect(pushHandler(dispatchEvent('push'))).resolves.toEqual({
+      batchItemFailures: [{ itemIdentifier: 'msg-push' }],
+    });
+    await expect(smsHandler(dispatchEvent('sms'))).resolves.toEqual({ batchItemFailures: [] });
 
     expect(sendMock).toHaveBeenCalledWith('sms', '+12035550100', expect.any(String), expect.anything());
     expect(putCallsFor(ddbSendMock)).toBe(2);
@@ -116,9 +118,11 @@ describe('channel failure-domain isolation and no-SPOF chaos verification (E1-S1
     const { handler: voiceHandler } =
       await import('../src/services/alerting-service/channels/voice/worker.js');
 
-    await expect(smsHandler(dispatchEvent('sms'))).rejects.toThrow('sms provider saturated');
-    await expect(pushHandler(dispatchEvent('push'))).resolves.toBeUndefined();
-    await expect(voiceHandler(dispatchEvent('voice'))).resolves.toBeUndefined();
+    await expect(smsHandler(dispatchEvent('sms'))).resolves.toEqual({
+      batchItemFailures: [{ itemIdentifier: 'msg-sms' }],
+    });
+    await expect(pushHandler(dispatchEvent('push'))).resolves.toEqual({ batchItemFailures: [] });
+    await expect(voiceHandler(dispatchEvent('voice'))).resolves.toEqual({ batchItemFailures: [] });
 
     expect(sendMock).toHaveBeenCalledWith('push', 'push-token', expect.any(String), expect.anything());
     expect(sendMock).toHaveBeenCalledWith('voice', '+12035550100', expect.any(String), expect.anything());
@@ -134,8 +138,10 @@ describe('channel failure-domain isolation and no-SPOF chaos verification (E1-S1
     const { handler: voiceHandler } =
       await import('../src/services/alerting-service/channels/voice/worker.js');
 
-    await expect(voiceHandler(dispatchEvent('voice'))).rejects.toThrow(/ENOTFOUND/);
-    await expect(pushHandler(dispatchEvent('push'))).resolves.toBeUndefined();
+    await expect(voiceHandler(dispatchEvent('voice'))).resolves.toEqual({
+      batchItemFailures: [{ itemIdentifier: 'msg-voice' }],
+    });
+    await expect(pushHandler(dispatchEvent('push'))).resolves.toEqual({ batchItemFailures: [] });
 
     expect(sendMock).toHaveBeenCalledWith('push', 'push-token', expect.any(String), expect.anything());
     expect(putCallsFor(ddbSendMock)).toBe(2);

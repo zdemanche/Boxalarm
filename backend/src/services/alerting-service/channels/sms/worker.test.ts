@@ -54,25 +54,29 @@ function mockDeps(
 }
 
 describe('sms channel worker (entrypoint-test obligation)', () => {
-  it('rethrows on a malformed record and never calls the provider', async () => {
+  it('reports a malformed record as a batch item failure and never calls the provider', async () => {
     const sendViaHttpProvider = vi.fn();
     const send = vi.fn();
     mockDeps(sendViaHttpProvider, send);
     const { handler } = await import('./worker.js');
 
-    await expect(
-      handler({ Records: [{ messageId: 'msg-1', body: 'not-json' }] } as unknown as SQSEvent),
-    ).rejects.toThrow();
+    const result = await handler({
+      Records: [{ messageId: 'msg-1', body: 'not-json' }],
+    } as unknown as SQSEvent);
+
+    expect(result.batchItemFailures).toEqual([{ itemIdentifier: 'msg-1' }]);
     expect(sendViaHttpProvider).not.toHaveBeenCalled();
   });
 
-  it('rejects an envelope routed to this worker carrying a different channel', async () => {
+  it('reports a batch item failure for an envelope routed to this worker carrying a different channel', async () => {
     const sendViaHttpProvider = vi.fn();
     const send = vi.fn();
     mockDeps(sendViaHttpProvider, send);
     const { handler } = await import('./worker.js');
 
-    await expect(handler(sqsEvent('push'))).rejects.toThrow(/channel=push/);
+    const result = await handler(sqsEvent('push'));
+
+    expect(result.batchItemFailures).toEqual([{ itemIdentifier: 'msg-1' }]);
     expect(sendViaHttpProvider).not.toHaveBeenCalled();
   });
 
@@ -89,8 +93,9 @@ describe('sms channel worker (entrypoint-test obligation)', () => {
     mockDeps(sendViaHttpProvider, send);
     const { handler } = await import('./worker.js');
 
-    await handler(sqsEvent('sms'));
+    const result = await handler(sqsEvent('sms'));
 
+    expect(result.batchItemFailures).toEqual([]);
     expect(sendViaHttpProvider).toHaveBeenCalledWith(
       'sms',
       '+12035550100',

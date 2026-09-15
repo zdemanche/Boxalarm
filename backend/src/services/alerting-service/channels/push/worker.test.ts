@@ -54,25 +54,61 @@ function mockDeps(
 }
 
 describe('push channel worker (entrypoint-test obligation)', () => {
-  it('rethrows on a malformed record and never calls the provider', async () => {
+  it('reports a malformed record as a batch item failure and never calls the provider', async () => {
     const sendViaHttpProvider = vi.fn();
     const send = vi.fn();
     mockDeps(sendViaHttpProvider, send);
     const { handler } = await import('./worker.js');
 
-    await expect(
-      handler({ Records: [{ messageId: 'msg-1', body: 'not-json' }] } as unknown as SQSEvent),
-    ).rejects.toThrow();
+    const result = await handler({
+      Records: [{ messageId: 'msg-1', body: 'not-json' }],
+    } as unknown as SQSEvent);
+
+    expect(result.batchItemFailures).toEqual([{ itemIdentifier: 'msg-1' }]);
     expect(sendViaHttpProvider).not.toHaveBeenCalled();
   });
 
-  it('rejects an envelope routed to this worker carrying a different channel', async () => {
+  it('reports only the poisoned record as a batch item failure in a mixed batch, leaving the valid record delivered', async () => {
+    const sendViaHttpProvider = vi.fn().mockResolvedValue(undefined);
+    const send = vi.fn().mockImplementation((command: { constructor: { name: string } }) => {
+      if (command.constructor.name === 'GetCommand') {
+        return Promise.resolve({
+          Item: { contactChannels: [{ channel: 'PUSH', token: 'tok-1', valid: true }] },
+        });
+      }
+      return Promise.resolve({});
+    });
+    mockDeps(sendViaHttpProvider, send);
+    const { handler } = await import('./worker.js');
+
+    const goodEvent = sqsEvent('push');
+    const mixedEvent: SQSEvent = {
+      Records: [
+        { messageId: 'msg-poison', body: 'not-json' },
+        ...goodEvent.Records,
+      ],
+    } as unknown as SQSEvent;
+
+    const result = await handler(mixedEvent);
+
+    expect(result.batchItemFailures).toEqual([{ itemIdentifier: 'msg-poison' }]);
+    expect(sendViaHttpProvider).toHaveBeenCalledWith(
+      'push',
+      'tok-1',
+      'structure-fire — 12 Main St',
+      process.env,
+    );
+  });
+
+  it('reports a batch item failure for an envelope routed to this worker carrying a different channel', async () => {
     const sendViaHttpProvider = vi.fn();
     const send = vi.fn();
     mockDeps(sendViaHttpProvider, send);
     const { handler } = await import('./worker.js');
 
-    await expect(handler(sqsEvent('sms'))).rejects.toThrow(/channel=sms/);
+    const result = await handler(sqsEvent('sms'));
+
+    expect(result.batchItemFailures).toEqual([{ itemIdentifier: 'msg-1' }]);
     expect(sendViaHttpProvider).not.toHaveBeenCalled();
   });
 
@@ -89,8 +125,9 @@ describe('push channel worker (entrypoint-test obligation)', () => {
     mockDeps(sendViaHttpProvider, send);
     const { handler } = await import('./worker.js');
 
-    await handler(sqsEvent('push'));
+    const result = await handler(sqsEvent('push'));
 
+    expect(result.batchItemFailures).toEqual([]);
     expect(sendViaHttpProvider).toHaveBeenCalledWith(
       'push',
       'tok-1',
@@ -99,7 +136,7 @@ describe('push channel worker (entrypoint-test obligation)', () => {
     );
   });
 
-  it('logs a structured entry with correlationId/memberId/channel and rethrows when the eligibility read fails', async () => {
+  it('logs a structured entry with correlationId/memberId/channel and reports a batch item failure when the eligibility read fails', async () => {
     const sendViaHttpProvider = vi.fn();
     const send = vi.fn().mockImplementation((command: { constructor: { name: string } }) => {
       if (command.constructor.name === 'GetCommand') {
@@ -111,8 +148,9 @@ describe('push channel worker (entrypoint-test obligation)', () => {
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const { handler } = await import('./worker.js');
 
-    await expect(handler(sqsEvent('push'))).rejects.toThrow('DynamoDB throttled');
+    const result = await handler(sqsEvent('push'));
 
+    expect(result.batchItemFailures).toEqual([{ itemIdentifier: 'msg-1' }]);
     expect(sendViaHttpProvider).not.toHaveBeenCalled();
     expect(errorSpy).toHaveBeenCalledWith(
       expect.stringContaining('alerting.channel.eligibility_read_failed'),

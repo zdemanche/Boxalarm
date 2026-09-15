@@ -7,7 +7,7 @@ import {
 } from '@aws-sdk/lib-dynamodb';
 import { buildDeptScopedPk, toVerifiedDeptId, type VerifiedDeptId } from '@boxalarm/dept-scope';
 import { emitOutcomeMetric } from '@boxalarm/metrics';
-import type { SQSEvent } from 'aws-lambda';
+import type { SQSBatchResponse, SQSEvent } from 'aws-lambda';
 import { createDynamoClient, readAlertingConfig } from '../eligibility/dynamoClient.js';
 import { logError, logInfo } from '../dispatches/logger.js';
 import {
@@ -161,8 +161,8 @@ async function recordClaimedFailure(
 
 export function createChannelWorkerHandler(
   channel: ChannelName,
-): (event: SQSEvent) => Promise<void> {
-  return async (event: SQSEvent): Promise<void> => {
+): (event: SQSEvent) => Promise<SQSBatchResponse> {
+  return async (event: SQSEvent): Promise<SQSBatchResponse> => {
     const { tableName } = readAlertingConfig(process.env);
     const ddb = createDynamoClient(process.env);
 
@@ -209,6 +209,13 @@ export function createChannelWorkerHandler(
       });
     }
 
-    await Promise.all(event.Records.map(processRecord));
+    const results = await Promise.allSettled(event.Records.map(processRecord));
+    const batchItemFailures = results
+      .map((result, index) =>
+        result.status === 'rejected' ? { itemIdentifier: event.Records[index]?.messageId ?? '' } : null,
+      )
+      .filter((failure): failure is { itemIdentifier: string } => failure !== null);
+
+    return { batchItemFailures };
   };
 }
