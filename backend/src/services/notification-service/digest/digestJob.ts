@@ -165,7 +165,10 @@ async function alreadySent(
 ): Promise<boolean> {
   const marker = buildDigestSentMarker(deptId, 'MEMBER', recipientId, category, today, 0);
   const result = await ddb.send(
-    new GetCommand({ TableName: tableName, Key: { pk: marker.pk, sk: marker.sk } }),
+    new GetCommand({
+      TableName: tableName,
+      Key: { pk: buildDeptScopedPk(deptId, 'MEMBER', recipientId), sk: marker.sk },
+    }),
   );
   return result.Item !== undefined;
 }
