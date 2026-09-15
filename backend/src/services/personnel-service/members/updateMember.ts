@@ -162,7 +162,7 @@ async function updateMemberProfile(
         }),
       );
       emitPersonnelMetric('MemberProfileUpdateFailed', 'NotFound');
-      return notFoundProblem(traceId, `No member found for memberId "${memberId}"`);
+      return notFoundProblem(traceId, `Member ${memberId} was not found.`);
     }
     console.error(
       JSON.stringify({
