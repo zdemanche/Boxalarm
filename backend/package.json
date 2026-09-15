@@ -28,6 +28,7 @@
     "@aws-sdk/client-s3": "3.1131.0",
     "@aws-sdk/client-scheduler": "^3.1131.0",
     "@aws-sdk/client-secrets-manager": "3.1131.0",
+    "@aws-sdk/client-sns": "3.1131.0",
     "@aws-sdk/client-verifiedpermissions": "3.1131.0",
     "@aws-sdk/cloudfront-signer": "3.1125.0",
     "@aws-sdk/lib-dynamodb": "3.1131.0",
@@ -35,12 +36,12 @@
     "@aws-sdk/util-dynamodb": "3.996.9",
     "@boxalarm/authz": "*",
     "@boxalarm/dept-scope": "*",
+    "@boxalarm/metrics": "*",
     "@boxalarm/outbox": "*",
     "aws-jwt-verify": "5.2.1",
     "aws-xray-sdk-core": "3.12.0",
     "ngeohash": "0.6.4",
-    "pino": "10.3.1",
-    "@boxalarm/metrics": "*"
+    "pino": "10.3.1"
   },
   "devDependencies": {
     "@eslint/js": "9.39.5",
