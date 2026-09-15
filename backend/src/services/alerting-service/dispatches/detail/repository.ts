@@ -6,6 +6,9 @@ export interface DispatchAlertItem {
   readonly incidentType: string;
   readonly address: string;
   readonly crossStreets: string;
+  readonly latitude?: number;
+  readonly longitude?: number;
+  readonly mapLink?: string;
   readonly narrative: string;
   readonly eligibleMemberCount?: number;
   readonly fanOutStartedAt?: number;

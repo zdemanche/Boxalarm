@@ -138,6 +138,50 @@ describe('alert-detail handler', () => {
     expect(sendSpy).not.toHaveBeenCalled();
   });
 
+  it('returns 400 (not 503) when dispatchId contains the pk delimiter "#"', async () => {
+    const { createHandler } = await import('./handler.js');
+    const sendSpy = vi.fn();
+    const docClient = { send: sendSpy } as unknown as DynamoDBDocumentClient;
+    const handler = createHandler({ authzClient: fakeAuthzClient('ALLOW'), docClient });
+
+    const result = await handler(buildEvent('a#b'));
+
+    expect(result).toMatchObject({ statusCode: 400 });
+    expect(sendSpy).not.toHaveBeenCalled();
+  });
+
+  it('prefers the stored mapLink over a recomputed address-based link (AC1)', async () => {
+    const { createHandler } = await import('./handler.js');
+    const docClient = {
+      send: vi
+        .fn()
+        .mockResolvedValue({ Item: { ...DISPATCH_ITEM, mapLink: 'https://maps.example/stored' } }),
+    } as unknown as DynamoDBDocumentClient;
+    const handler = createHandler({ authzClient: fakeAuthzClient('ALLOW'), docClient });
+
+    const result = await handler(buildEvent('NICHOLS-4471-1798000000'));
+
+    const body = JSON.parse((result as { body: string }).body) as Record<string, unknown>;
+    expect(body.mapLink).toBe('https://maps.example/stored');
+  });
+
+  it('builds a coordinate-based mapLink when latitude/longitude are stored but mapLink is not', async () => {
+    const { createHandler } = await import('./handler.js');
+    const docClient = {
+      send: vi
+        .fn()
+        .mockResolvedValue({ Item: { ...DISPATCH_ITEM, latitude: 41.2429, longitude: -73.2007 } }),
+    } as unknown as DynamoDBDocumentClient;
+    const handler = createHandler({ authzClient: fakeAuthzClient('ALLOW'), docClient });
+
+    const result = await handler(buildEvent('NICHOLS-4471-1798000000'));
+
+    const body = JSON.parse((result as { body: string }).body) as Record<string, unknown>;
+    expect(body.mapLink).toBe(
+      'https://www.google.com/maps/search/?api=1&query=41.2429%2C-73.2007',
+    );
+  });
+
   it('returns 404 when no DISPATCH_ALERT item exists for the given dispatchId', async () => {
     const { createHandler } = await import('./handler.js');
     const docClient = { send: vi.fn().mockResolvedValue({}) } as unknown as DynamoDBDocumentClient;
@@ -163,6 +207,9 @@ describe('alert-detail handler', () => {
     const logged = errorSpy.mock.calls.map((call) => call[0] as string).join('\n');
     expect(logged).toContain('throttled');
     expect(logged).toContain('dispatches.detail.read_failed');
+    const body = JSON.parse((result as { body: string }).body) as Record<string, unknown>;
+    expect(body.detail).not.toContain('authorization service');
+    expect(body.detail).toContain('alert data store');
     errorSpy.mockRestore();
   });
 

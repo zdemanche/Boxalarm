@@ -5,17 +5,17 @@ import {
   badRequestProblem,
   extractTraceId,
   notFoundProblem,
-  serviceUnavailableProblem,
   withAuthorization,
   type CedarPrincipalContext,
   type GuardEvent,
 } from '@boxalarm/authz';
-import { toVerifiedDeptId, type VerifiedDeptId } from '@boxalarm/dept-scope';
+import { assertNoDelimiter, toVerifiedDeptId, type VerifiedDeptId } from '@boxalarm/dept-scope';
 import { emitOutcomeMetric } from '@boxalarm/metrics';
 import { createDynamoClient, readAlertingConfig } from '../../eligibility/dynamoClient.js';
 import { logError } from '../logger.js';
 import { getDispatchDetail, getPrePlanCopy, type PrePlanCopyItem } from './repository.js';
 import { buildMapLink } from './mapLink.js';
+import { dataUnavailableProblem } from './problemDetails.js';
 
 const METRICS_NAMESPACE = 'Boxalarm/Alerting';
 
@@ -48,6 +48,11 @@ async function handleGetAlertDetail(
   if (!dispatchId) {
     return badRequestProblem(traceId, 'dispatchId path parameter is required');
   }
+  try {
+    assertNoDelimiter(dispatchId, 'dispatchId');
+  } catch {
+    return badRequestProblem(traceId, 'dispatchId path parameter must not contain "#"');
+  }
 
   try {
     const deptId = toVerifiedDeptId(principal);
@@ -77,7 +82,7 @@ async function handleGetAlertDetail(
         incidentType: item.incidentType,
         address: item.address,
         crossStreets: item.crossStreets,
-        mapLink: buildMapLink(item.address),
+        mapLink: item.mapLink ?? buildMapLink(item),
         narrative: item.narrative,
         eligibleMemberCount: item.eligibleMemberCount ?? null,
         fanOutStartedAt: item.fanOutStartedAt ?? null,
@@ -92,7 +97,7 @@ async function handleGetAlertDetail(
       deptId: principal.deptId,
     });
     emitOutcomeMetric(METRICS_NAMESPACE, 'AlertDetailViewFailed', reason);
-    return serviceUnavailableProblem(traceId);
+    return dataUnavailableProblem(traceId);
   }
 }
 
