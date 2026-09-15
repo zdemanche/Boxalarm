@@ -46,3 +46,9 @@ export const elevation = {
 export const iconSize = { sm: 16, md: 24, lg: 32 } as const;
 
 export type PaletteName = keyof typeof palette;
+
+// Widened shape of a single resolved palette (palette.day or palette.cab) — use this, not
+// `typeof palette.day`, whenever a value is chosen at runtime (e.g. `scheme === 'dark' ?
+// palette.cab : palette.day`), since that expression's type is a union of both literal palette
+// types, not either one alone.
+export type PaletteColors = Record<keyof (typeof palette)['day'], string>;
