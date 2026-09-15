@@ -9,7 +9,7 @@ Product context, architecture, and the backlog live in [`boxalarm-docs`](https:/
 
 **Nothing is scaffolded yet.** The repo holds a README and bootstrap issue [#1](https://github.com/zdemanche/boxalarm-ui/issues/1). Architecture v1.0 and a 90-story backlog are done in `boxalarm-docs`; the user has asked for a **decision gate before the build phase begins**, so do not start generating screens until they say go.
 
-Work is tracked as issues in `boxalarm-docs`, not here.
+Work is tracked as `<KEY>-UI` issues here, each a sub-issue of its story in `boxalarm-backend`. Epics and open questions stay in `boxalarm-docs`.
 
 ## Surfaces
 
