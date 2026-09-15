@@ -12,7 +12,10 @@ const ADMIN: CedarPrincipalContext = {
 };
 
 function buildEvent(
-  query: Record<string, string> | undefined = { periodStart: '1700000000000', periodEnd: '1701000000000' },
+  query: Record<string, string> | undefined = {
+    periodStart: '1700000000000',
+    periodEnd: '1701000000000',
+  },
   headers: Record<string, string> = { authorization: 'Bearer token' },
   principal: Partial<CedarPrincipalContext> | null | undefined = ADMIN,
 ): GuardEvent {

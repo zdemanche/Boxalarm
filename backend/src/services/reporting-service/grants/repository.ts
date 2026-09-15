@@ -33,11 +33,7 @@ export interface ApparatusOosHistory {
   readonly totalOutOfServiceEvents: number;
 }
 
-function logError(
-  event: string,
-  error: unknown,
-  fields: Record<string, unknown> = {},
-): void {
+function logError(event: string, error: unknown, fields: Record<string, unknown> = {}): void {
   logErrorFields({
     event,
     service: 'reporting-service',
@@ -84,11 +80,7 @@ function isWithinPeriod(timestampMs: number, period: ReportPeriod): boolean {
   return timestampMs >= period.periodStart && timestampMs < period.periodEnd;
 }
 
-function overlapsPeriod(
-  startAtMs: number,
-  endAtMs: number | null,
-  period: ReportPeriod,
-): boolean {
+function overlapsPeriod(startAtMs: number, endAtMs: number | null, period: ReportPeriod): boolean {
   return startAtMs < period.periodEnd && (endAtMs === null || endAtMs >= period.periodStart);
 }
 
@@ -100,14 +92,16 @@ export async function getActiveMemberCountAndTrend(
   traceId?: string,
 ): Promise<MemberCountAndTrend> {
   try {
-    const items = await queryAllPages(client, (exclusiveStartKey) =>
-      new QueryCommand({
-        TableName: config.personnelTableName,
-        IndexName: 'GSI3',
-        KeyConditionExpression: 'gsi3pk = :gsi3pk',
-        ExpressionAttributeValues: { ':gsi3pk': buildDeptScopedPk(deptId, 'MEMBER') },
-        ExclusiveStartKey: exclusiveStartKey,
-      }),
+    const items = await queryAllPages(
+      client,
+      (exclusiveStartKey) =>
+        new QueryCommand({
+          TableName: config.personnelTableName,
+          IndexName: 'GSI3',
+          KeyConditionExpression: 'gsi3pk = :gsi3pk',
+          ExpressionAttributeValues: { ':gsi3pk': buildDeptScopedPk(deptId, 'MEMBER') },
+          ExclusiveStartKey: exclusiveStartKey,
+        }),
     );
     let activeMemberCount = 0;
     let joinedInPeriod = 0;
@@ -135,14 +129,16 @@ export async function getTrainingHoursCompliance(
   traceId?: string,
 ): Promise<TrainingHoursCompliance> {
   try {
-    const eventItems = await queryAllPages(client, (exclusiveStartKey) =>
-      new QueryCommand({
-        TableName: config.trainingTableName,
-        IndexName: 'GSI3',
-        KeyConditionExpression: 'gsi3pk = :gsi3pk',
-        ExpressionAttributeValues: { ':gsi3pk': buildDeptScopedPk(deptId, 'TRAINING_EVENT') },
-        ExclusiveStartKey: exclusiveStartKey,
-      }),
+    const eventItems = await queryAllPages(
+      client,
+      (exclusiveStartKey) =>
+        new QueryCommand({
+          TableName: config.trainingTableName,
+          IndexName: 'GSI3',
+          KeyConditionExpression: 'gsi3pk = :gsi3pk',
+          ExpressionAttributeValues: { ':gsi3pk': buildDeptScopedPk(deptId, 'TRAINING_EVENT') },
+          ExclusiveStartKey: exclusiveStartKey,
+        }),
     );
     const eventsInPeriod = eventItems.filter((item) => {
       const startAtSeconds = typeof item.startAt === 'number' ? item.startAt : NaN;
@@ -150,16 +146,18 @@ export async function getTrainingHoursCompliance(
     });
 
     const attendeeLists = await mapWithConcurrency(eventsInPeriod, FANOUT_CONCURRENCY, (event) =>
-      queryAllPages(client, (exclusiveStartKey) =>
-        new QueryCommand({
-          TableName: config.trainingTableName,
-          KeyConditionExpression: 'pk = :pk AND begins_with(sk, :prefix)',
-          ExpressionAttributeValues: {
-            ':pk': buildDeptScopedPk(deptId, 'TRAINING_EVENT', event.eventId as string),
-            ':prefix': 'ATTENDEE#',
-          },
-          ExclusiveStartKey: exclusiveStartKey,
-        }),
+      queryAllPages(
+        client,
+        (exclusiveStartKey) =>
+          new QueryCommand({
+            TableName: config.trainingTableName,
+            KeyConditionExpression: 'pk = :pk AND begins_with(sk, :prefix)',
+            ExpressionAttributeValues: {
+              ':pk': buildDeptScopedPk(deptId, 'TRAINING_EVENT', event.eventId as string),
+              ':prefix': 'ATTENDEE#',
+            },
+            ExclusiveStartKey: exclusiveStartKey,
+          }),
       ),
     );
 
@@ -168,7 +166,9 @@ export async function getTrainingHoursCompliance(
     for (const attendees of attendeeLists) {
       for (const attendee of attendees) {
         const hours =
-          typeof attendee.hours === 'number' && Number.isFinite(attendee.hours) && attendee.hours >= 0
+          typeof attendee.hours === 'number' &&
+          Number.isFinite(attendee.hours) &&
+          attendee.hours >= 0
             ? attendee.hours
             : 0;
         totalHours += hours;
@@ -193,14 +193,16 @@ export async function getApparatusOosHistory(
   traceId?: string,
 ): Promise<ApparatusOosHistory> {
   try {
-    const apparatusItems = await queryAllPages(client, (exclusiveStartKey) =>
-      new QueryCommand({
-        TableName: config.platformTableName,
-        IndexName: 'GSI3',
-        KeyConditionExpression: 'gsi3pk = :gsi3pk',
-        ExpressionAttributeValues: { ':gsi3pk': buildDeptScopedPk(deptId, 'APPARATUS') },
-        ExclusiveStartKey: exclusiveStartKey,
-      }),
+    const apparatusItems = await queryAllPages(
+      client,
+      (exclusiveStartKey) =>
+        new QueryCommand({
+          TableName: config.platformTableName,
+          IndexName: 'GSI3',
+          KeyConditionExpression: 'gsi3pk = :gsi3pk',
+          ExpressionAttributeValues: { ':gsi3pk': buildDeptScopedPk(deptId, 'APPARATUS') },
+          ExclusiveStartKey: exclusiveStartKey,
+        }),
     );
 
     const oosLists = await mapWithConcurrency(
@@ -209,16 +211,18 @@ export async function getApparatusOosHistory(
       async (apparatus) => {
         const apparatusId = apparatus.apparatusId as string;
         const unitId = apparatus.unitId as string;
-        const items = await queryAllPages(client, (exclusiveStartKey) =>
-          new QueryCommand({
-            TableName: config.platformTableName,
-            KeyConditionExpression: 'pk = :pk AND begins_with(sk, :prefix)',
-            ExpressionAttributeValues: {
-              ':pk': buildDeptScopedPk(deptId, 'APPARATUS', apparatusId),
-              ':prefix': 'OOS#',
-            },
-            ExclusiveStartKey: exclusiveStartKey,
-          }),
+        const items = await queryAllPages(
+          client,
+          (exclusiveStartKey) =>
+            new QueryCommand({
+              TableName: config.platformTableName,
+              KeyConditionExpression: 'pk = :pk AND begins_with(sk, :prefix)',
+              ExpressionAttributeValues: {
+                ':pk': buildDeptScopedPk(deptId, 'APPARATUS', apparatusId),
+                ':prefix': 'OOS#',
+              },
+              ExclusiveStartKey: exclusiveStartKey,
+            }),
         );
         return items
           .filter((item) => {
@@ -230,14 +234,12 @@ export async function getApparatusOosHistory(
             const endAtMs = endAtSeconds === null ? null : endAtSeconds * 1000;
             return overlapsPeriod(startAtSeconds * 1000, endAtMs, period);
           })
-          .map(
-            (item): ApparatusOosRecord => ({
-              unitId,
-              reason: typeof item.reason === 'string' ? item.reason : 'unknown',
-              startAt: item.startAt as number,
-              endAt: typeof item.endAt === 'number' ? item.endAt : null,
-            }),
-          );
+          .map((item): ApparatusOosRecord => ({
+            unitId,
+            reason: typeof item.reason === 'string' ? item.reason : 'unknown',
+            startAt: item.startAt as number,
+            endAt: typeof item.endAt === 'number' ? item.endAt : null,
+          }));
       },
     );
 

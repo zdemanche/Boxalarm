@@ -127,7 +127,9 @@ describe('reporting-service grants repository (real DynamoDB)', () => {
       const deptId = freshDeptId();
       const badConfig: GrantsReportConfig = { ...config, personnelTableName: 'no-such-table' };
 
-      await expect(getActiveMemberCountAndTrend(client, badConfig, deptId, PERIOD)).rejects.toThrow();
+      await expect(
+        getActiveMemberCountAndTrend(client, badConfig, deptId, PERIOD),
+      ).rejects.toThrow();
     });
   });
 
