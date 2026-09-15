@@ -8,7 +8,7 @@ export {
   notFoundProblem,
   badRequestProblem,
 } from './problemDetails.js';
-export type { ProblemResponse, ProblemDetailsBody } from './problemDetails.js';
+export type { ProblemResponse, ProblemDetailsBody, FieldError } from './problemDetails.js';
 export { emitAuthzMetric, emitInvocationMetric } from './metrics.js';
 export { withAuthorization, withBatchAuthorization, extractTraceId } from './guard.js';
 export type {

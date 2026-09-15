@@ -52,4 +52,19 @@ describe('badRequestProblem', () => {
     expect(body.traceId).toBe('trace-400');
     expect(body.detail).toBe('unitId path parameter is required');
   });
+
+  it('returns a 400 body with field errors when given a FieldError list', () => {
+    const response = badRequestProblem('trace-400', [
+      { field: 'maxLng', detail: 'maxLng is required' },
+    ]);
+    expect(response.statusCode).toBe(400);
+    const body = JSON.parse(response.body) as {
+      status: number;
+      traceId: string;
+      errors: { field: string; detail: string }[];
+    };
+    expect(body.status).toBe(400);
+    expect(body.traceId).toBe('trace-400');
+    expect(body.errors.map((e) => e.field)).toEqual(['maxLng']);
+  });
 });

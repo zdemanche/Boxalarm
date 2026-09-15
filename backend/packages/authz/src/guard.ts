@@ -39,7 +39,7 @@ export interface BatchAuthorizationResult {
   readonly allowedResourceIds: readonly string[];
 }
 
-function extractBearerToken(event: GuardEvent): string | undefined {
+export function extractBearerToken(event: GuardEvent): string | undefined {
   const header = event.headers?.authorization ?? event.headers?.Authorization;
   if (!header) {
     return undefined;

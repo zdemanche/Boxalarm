@@ -1,9 +1,15 @@
+export interface FieldError {
+  readonly field: string;
+  readonly detail: string;
+}
+
 export interface ProblemDetailsBody {
   readonly type: string;
   readonly title: string;
   readonly status: number;
   readonly detail: string;
   readonly traceId: string;
+  readonly errors?: readonly FieldError[];
 }
 
 export interface ProblemResponse {
@@ -18,8 +24,16 @@ function problemResponse(
   title: string,
   detail: string,
   traceId: string,
+  errors?: readonly FieldError[],
 ): ProblemResponse {
-  const body: ProblemDetailsBody = { type, title, status, detail, traceId };
+  const body: ProblemDetailsBody = {
+    type,
+    title,
+    status,
+    detail,
+    traceId,
+    ...(errors ? { errors } : {}),
+  };
   return {
     statusCode: status,
     headers: { 'content-type': 'application/problem+json' },
@@ -57,12 +71,25 @@ export function notFoundProblem(traceId: string, detail: string): ProblemRespons
   );
 }
 
-export function badRequestProblem(traceId: string, detail: string): ProblemResponse {
+export function badRequestProblem(
+  traceId: string,
+  detailOrErrors: string | readonly FieldError[],
+): ProblemResponse {
+  if (typeof detailOrErrors === 'string') {
+    return problemResponse(
+      400,
+      'https://boxalarm.dev/problems/bad-request',
+      'Bad Request',
+      detailOrErrors,
+      traceId,
+    );
+  }
   return problemResponse(
     400,
     'https://boxalarm.dev/problems/bad-request',
     'Bad Request',
-    detail,
+    'The request failed validation.',
     traceId,
+    detailOrErrors,
   );
 }
