@@ -1,12 +1,14 @@
 import { randomUUID } from 'node:crypto';
-import { QueryCommand, TransactWriteCommand } from '@aws-sdk/lib-dynamodb';
+import { TransactWriteCommand } from '@aws-sdk/lib-dynamodb';
 import type {
   APIGatewayProxyEventV2WithLambdaAuthorizer,
   APIGatewayProxyResultV2,
   Handler,
 } from 'aws-lambda';
-import { buildDeptScopedPk, toVerifiedDeptId, type VerifiedDeptId } from '@boxalarm/dept-scope';
+import { toVerifiedDeptId, type VerifiedDeptId } from '@boxalarm/dept-scope';
+import { emitEmf, emitOutcomeMetric } from '@boxalarm/metrics';
 import type { AuthorizerContext } from '../../platform-service/authorizer/handler.js';
+import { logError, logInfo } from '../lib/logger.js';
 import { getDocClient, readPersonnelTableConfig } from './dynamoClient.js';
 import {
   ValidationError,
@@ -14,11 +16,17 @@ import {
   parseCreateShiftRequest,
   parseShiftListItems,
 } from './shiftAssembly.js';
+import { assembleShiftCoverage, type CoverageStatus } from './coverageAssembly.js';
+import {
+  buildEligibleQualCodeIndex,
+  fetchDeptShiftsWithPositions,
+  listDeptShiftMetaItems,
+} from './coverageRepository.js';
 
 type ShiftEvent = APIGatewayProxyEventV2WithLambdaAuthorizer<AuthorizerContext>;
 
 const OFFICER_ROLES = new Set(['OFFICER', 'ADMIN', 'CHIEF']);
-const GSI3_INDEX_NAME = 'gsi3';
+const METRICS_NAMESPACE = 'Boxalarm/PersonnelService';
 
 function problemResponse(
   status: number,
@@ -181,27 +189,73 @@ async function handleList(
   try {
     const { tableName } = readPersonnelTableConfig(process.env);
     const docClient = getDocClient(process.env);
-    const gsi3pk = buildDeptScopedPk(deptId, 'DUTY_SHIFT');
-    const rawItems: Record<string, unknown>[] = [];
-    let exclusiveStartKey: Record<string, unknown> | undefined;
-    do {
-      const result = await docClient.send(
-        new QueryCommand({
-          TableName: tableName,
-          IndexName: GSI3_INDEX_NAME,
-          KeyConditionExpression: 'gsi3pk = :gsi3pk',
-          ExpressionAttributeValues: { ':gsi3pk': gsi3pk },
-          ExclusiveStartKey: exclusiveStartKey,
-        }),
-      );
-      rawItems.push(...((result.Items ?? []) as Record<string, unknown>[]));
-      exclusiveStartKey = result.LastEvaluatedKey as Record<string, unknown> | undefined;
-    } while (exclusiveStartKey !== undefined);
+    const rawItems = await listDeptShiftMetaItems(docClient, tableName, deptId);
     const shifts = parseShiftListItems(rawItems);
     return jsonResponse(200, { shifts });
   } catch (error) {
     logHandlerError('shifts.list.query_failed', correlationId, error);
     return problemResponse(503, 'Service Unavailable', 'shifts could not be listed', correlationId);
+  }
+}
+
+async function handleCoverage(
+  event: ShiftEvent,
+  correlationId: string,
+): Promise<APIGatewayProxyResultV2> {
+  const context = event.requestContext.authorizer.lambda;
+
+  // TODO: E8-S3 — replace with Cedar IsAuthorizedWithToken
+  if (!hasOfficerRole(context)) {
+    return problemResponse(
+      403,
+      'Forbidden',
+      'officer or admin role is required to view shift coverage',
+      correlationId,
+    );
+  }
+
+  const deptId = resolveVerifiedDeptId(context, 'shifts.coverage.invalid_dept', correlationId);
+  if (deptId === undefined) {
+    return problemResponse(
+      500,
+      'Internal Server Error',
+      'department context is invalid',
+      correlationId,
+    );
+  }
+
+  try {
+    const { tableName } = readPersonnelTableConfig(process.env);
+    const docClient = getDocClient(process.env);
+    const shifts = await fetchDeptShiftsWithPositions(docClient, tableName, deptId);
+    const eligibleQualCodes = await buildEligibleQualCodeIndex(
+      docClient,
+      tableName,
+      deptId,
+      correlationId,
+    );
+    const coverage = shifts.map((shift) => assembleShiftCoverage(shift, eligibleQualCodes));
+    const counts = coverage.reduce(
+      (acc, shift) => {
+        acc[shift.status] += 1;
+        return acc;
+      },
+      { covered: 0, short: 0, 'qual-gapped': 0 } as Record<CoverageStatus, number>,
+    );
+    emitEmf(METRICS_NAMESPACE, 'ShiftCoverageCovered', counts.covered, [[]]);
+    emitEmf(METRICS_NAMESPACE, 'ShiftCoverageShort', counts.short, [[]]);
+    emitEmf(METRICS_NAMESPACE, 'ShiftCoverageQualGapped', counts['qual-gapped'], [[]]);
+    logInfo('shifts.coverage.read', correlationId, { deptId, shiftCount: coverage.length });
+    return jsonResponse(200, { shifts: coverage });
+  } catch (error) {
+    logError('shifts.coverage.query_failed', correlationId, error);
+    emitOutcomeMetric(METRICS_NAMESPACE, 'ShiftCoverageQueryFailed');
+    return problemResponse(
+      503,
+      'Service Unavailable',
+      'shift coverage could not be computed',
+      correlationId,
+    );
   }
 }
 
@@ -213,6 +267,9 @@ export const handler: Handler<ShiftEvent, APIGatewayProxyResultV2> = async (even
     return handleCreate(event, correlationId);
   }
   if (method === 'GET') {
+    if (event.requestContext.http.path.endsWith('/coverage')) {
+      return handleCoverage(event, correlationId);
+    }
     return handleList(event, correlationId);
   }
   return problemResponse(

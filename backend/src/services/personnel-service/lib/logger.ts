@@ -4,7 +4,7 @@ export interface LogFields {
 
 function emit(
   sink: (line: string) => void,
-  level: 'info' | 'error',
+  level: 'info' | 'warn' | 'error',
   event: string,
   correlationId: string,
   fields?: LogFields,
@@ -22,6 +22,10 @@ function emit(
 
 export function logInfo(event: string, correlationId: string, fields?: LogFields): void {
   emit(console.log, 'info', event, correlationId, fields);
+}
+
+export function logWarn(event: string, correlationId: string, fields?: LogFields): void {
+  emit(console.warn, 'warn', event, correlationId, fields);
 }
 
 export function logError(
