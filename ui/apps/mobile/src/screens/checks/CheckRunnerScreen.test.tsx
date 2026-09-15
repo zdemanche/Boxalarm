@@ -1,4 +1,6 @@
+import { touchTarget } from '@boxalarm/design-tokens';
 import { act, fireEvent, render } from '@testing-library/react-native';
+import { AccessibilityInfo } from 'react-native';
 import { CheckRunnerScreen } from './CheckRunnerScreen';
 import { mockChecksRepository } from '../../features/checks/mockChecksRepository';
 
@@ -67,4 +69,30 @@ test('linking to defect report carries the apparatus id along', async () => {
   await findByText('Tires and wheels');
   fireEvent.press(await findByText('Report a defect'));
   expect(mockNavigate).toHaveBeenCalledWith('DefectReport', { apparatusId: 'APP-ENGINE-2' });
+});
+
+test('announces check completion for screen reader users, since the screen swaps entirely', async () => {
+  const announceSpy = jest.spyOn(AccessibilityInfo, 'announceForAccessibility');
+  const { findByText, findAllByText } = await render(<CheckRunnerScreen />);
+
+  await findByText('Tires and wheels');
+  const passButtons = await findAllByText('Pass');
+  for (const button of passButtons) {
+    await act(async () => {
+      fireEvent.press(button);
+    });
+  }
+  await act(async () => {
+    fireEvent.press(await findByText('Complete check'));
+  });
+
+  expect(announceSpy).toHaveBeenCalledWith(expect.stringMatching(/check complete/i));
+  announceSpy.mockRestore();
+});
+
+test('report a defect meets the N3.5 baseline touch target, not just its text height', async () => {
+  const { findByRole } = await render(<CheckRunnerScreen />);
+
+  const link = await findByRole('button', { name: 'Report a defect' });
+  expect(link.props.style.minHeight).toBe(touchTarget.baseline.ios);
 });

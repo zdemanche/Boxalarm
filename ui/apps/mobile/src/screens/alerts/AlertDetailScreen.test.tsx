@@ -1,4 +1,6 @@
+import { touchTarget } from '@boxalarm/design-tokens';
 import { act, fireEvent, render } from '@testing-library/react-native';
+import { AccessibilityInfo } from 'react-native';
 import { mockAlertsRepository } from '../../features/alerts/mockAlertsRepository';
 import { AlertDetailScreen } from './AlertDetailScreen';
 
@@ -50,6 +52,30 @@ test('tapping Not responding submits immediately without an ETA step', async () 
   });
 
   expect(await findByText(/you responded: not responding/i)).toBeTruthy();
+});
+
+
+test('announces the recorded response for screen reader users', async () => {
+  const announceSpy = jest.spyOn(AccessibilityInfo, 'announceForAccessibility');
+  const { findByRole } = await render(<AlertDetailScreen />);
+
+  await act(async () => {
+    fireEvent.press(await findByRole('button', { name: 'Not responding' }));
+  });
+
+  expect(announceSpy).toHaveBeenCalledWith(expect.stringMatching(/not responding/i));
+  announceSpy.mockRestore();
+});
+
+test('Confirm shares the oversized touch target with Responding/Not responding (glove/moving-vehicle context)', async () => {
+  const { findByRole } = await render(<AlertDetailScreen />);
+
+  await act(async () => {
+    fireEvent.press(await findByRole('button', { name: 'Responding' }));
+  });
+  const confirmButton = await findByRole('button', { name: 'Confirm' });
+
+  expect(confirmButton.props.style.minHeight).toBe(touchTarget.oversized.ios);
 });
 
 test('viewing the roster navigates with the dispatch id', async () => {

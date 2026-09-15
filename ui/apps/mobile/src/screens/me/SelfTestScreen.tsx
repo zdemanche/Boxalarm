@@ -1,6 +1,6 @@
 import { palette, radius, spacing, touchTarget, typography } from '@boxalarm/design-tokens';
 import { useState } from 'react';
-import { Text, TouchableOpacity, useColorScheme, View } from 'react-native';
+import { AccessibilityInfo, Text, TouchableOpacity, useColorScheme, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 // F1.10: the real self-test round trip (Phase 7) lives in the Alerts tab, wired against a mock
@@ -34,9 +34,11 @@ export function SelfTestScreen() {
       <TouchableOpacity
         accessibilityRole="button"
         accessibilityLabel="Run self-test"
-        onPress={() =>
-          setMessage('Open the Alerts tab and tap "Send test alert" to run the real self-test.')
-        }
+        onPress={() => {
+          const text = 'Open the Alerts tab and tap "Send test alert" to run the real self-test.';
+          setMessage(text);
+          AccessibilityInfo.announceForAccessibility(text);
+        }}
         style={{
           minHeight: touchTarget.baseline.ios,
           alignItems: 'center',

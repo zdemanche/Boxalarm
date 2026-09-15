@@ -26,7 +26,24 @@ describe('palette', () => {
     },
   );
 
+  // Phase 8 hardening: several screens use accent/success/warning as regular-weight body/small
+  // text (status labels, links), not just large headers or button fills - the 'large' AA check
+  // above isn't sufficient proof those usages are legible. Semantic colors must clear the
+  // stricter 4.5:1 normal-text bar unconditionally so every usage site is safe by construction.
+  test.each(['day', 'cab'] as const)(
+    '%s palette semantic colors each meet AA for normal (small/body) text too',
+    (name) => {
+      const { background, accent, error, success, warning } = palette[name];
+      expect(meetsAA(background, accent, 'normal')).toBe(true);
+      expect(meetsAA(background, error, 'normal')).toBe(true);
+      expect(meetsAA(background, success, 'normal')).toBe(true);
+      expect(meetsAA(background, warning, 'normal')).toBe(true);
+    },
+  );
+
   test('day and cab palettes are not simple inversions of each other', () => {
+    // guards against the AA note's explicit requirement: "not derived by simply
+    // inverting the default theme" - day.background inverted should not equal cab.background
     const invert = (hex: string) =>
       '#' +
       hex

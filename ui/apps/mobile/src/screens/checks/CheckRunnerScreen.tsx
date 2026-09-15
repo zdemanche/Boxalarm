@@ -1,7 +1,14 @@
 import { palette, radius, spacing, touchTarget, typography } from '@boxalarm/design-tokens';
 import { useNavigation, useRoute, type NavigationProp } from '@react-navigation/native';
 import { useEffect, useState } from 'react';
-import { ScrollView, Text, TouchableOpacity, useColorScheme, View } from 'react-native';
+import {
+  AccessibilityInfo,
+  ScrollView,
+  Text,
+  TouchableOpacity,
+  useColorScheme,
+  View,
+} from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { mockChecksRepository } from '../../features/checks/mockChecksRepository';
 import type { ChecklistTemplate, ItemResult } from '../../features/checks/types';
@@ -53,6 +60,9 @@ export function CheckRunnerScreen() {
     // Optimistic: the local write already happened above; the UI confirms immediately rather
     // than waiting on any promise settling.
     setCompleted(true);
+    // The confirmation replaces the whole screen, so a screen-reader user needs an explicit
+    // announcement - there's no visible element left to shift focus onto naturally.
+    AccessibilityInfo.announceForAccessibility('Check complete');
   };
 
   if (completed) {
@@ -82,7 +92,12 @@ export function CheckRunnerScreen() {
         <TouchableOpacity
           accessibilityRole="button"
           onPress={() => navigation.navigate('DefectReport', { apparatusId })}
-          style={{ alignSelf: 'flex-end', marginBottom: spacing.md }}
+          style={{
+            alignSelf: 'flex-end',
+            marginBottom: spacing.md,
+            minHeight: touchTarget.baseline.ios,
+            justifyContent: 'center',
+          }}
         >
           <Text style={{ color: tokens.error, fontSize: typography.size.sm, fontWeight: '600' }}>
             Report a defect

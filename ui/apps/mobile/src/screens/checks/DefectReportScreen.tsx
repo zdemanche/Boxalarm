@@ -1,7 +1,15 @@
 import { palette, radius, spacing, touchTarget, typography } from '@boxalarm/design-tokens';
 import { useNavigation, useRoute } from '@react-navigation/native';
 import { useState } from 'react';
-import { ScrollView, Text, TextInput, TouchableOpacity, useColorScheme, View } from 'react-native';
+import {
+  AccessibilityInfo,
+  ScrollView,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  useColorScheme,
+  View,
+} from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { mockChecksRepository } from '../../features/checks/mockChecksRepository';
 import type { DefectSeverity } from '../../features/checks/types';
@@ -25,6 +33,9 @@ export function DefectReportScreen() {
   const handleSubmit = () => {
     void mockChecksRepository.submitDefect({ apparatusId, description, severity });
     setSubmitted(true);
+    // The confirmation replaces the whole screen, so a screen-reader user needs an explicit
+    // announcement - there's no visible element left to shift focus onto naturally.
+    AccessibilityInfo.announceForAccessibility('Defect reported');
   };
 
   if (submitted) {
@@ -47,7 +58,11 @@ export function DefectReportScreen() {
         <TouchableOpacity
           accessibilityRole="button"
           onPress={() => navigation.goBack()}
-          style={{ marginTop: spacing.lg }}
+          style={{
+            marginTop: spacing.lg,
+            minHeight: touchTarget.baseline.ios,
+            justifyContent: 'center',
+          }}
         >
           <Text style={{ color: tokens.accent, fontSize: typography.size.base }}>Back</Text>
         </TouchableOpacity>
@@ -144,7 +159,7 @@ export function DefectReportScreen() {
             marginTop: spacing.lg,
           }}
         >
-          <Text style={{ color: '#ffffff', fontSize: typography.size.base, fontWeight: '600' }}>
+          <Text style={{ color: tokens.background, fontSize: typography.size.base, fontWeight: '600' }}>
             Submit defect report
           </Text>
         </TouchableOpacity>

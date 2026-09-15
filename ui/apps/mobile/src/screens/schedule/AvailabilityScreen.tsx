@@ -1,6 +1,6 @@
 import { palette, radius, spacing, touchTarget, typography } from '@boxalarm/design-tokens';
 import { useState } from 'react';
-import { Text, TextInput, TouchableOpacity, useColorScheme } from 'react-native';
+import { AccessibilityInfo, Text, TextInput, TouchableOpacity, useColorScheme } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { mockScheduleRepository } from '../../features/schedule/mockScheduleRepository';
 
@@ -24,6 +24,9 @@ export function AvailabilityScreen() {
   const handleSubmit = () => {
     void mockScheduleRepository.markUnavailable(defaultStart(), defaultEnd(), reason || undefined);
     setConfirmed(true);
+    // The confirmation replaces the whole screen, so a screen-reader user needs an explicit
+    // announcement - there's no visible element left to shift focus onto naturally.
+    AccessibilityInfo.announceForAccessibility('Marked unavailable');
   };
 
   if (confirmed) {

@@ -1,7 +1,14 @@
 import { palette, radius, spacing, touchTarget, typography } from '@boxalarm/design-tokens';
 import { useRoute } from '@react-navigation/native';
 import { useEffect, useState } from 'react';
-import { ScrollView, Text, TouchableOpacity, useColorScheme, View } from 'react-native';
+import {
+  AccessibilityInfo,
+  ScrollView,
+  Text,
+  TouchableOpacity,
+  useColorScheme,
+  View,
+} from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { mockScheduleRepository } from '../../features/schedule/mockScheduleRepository';
 import type { DutyShift } from '../../features/schedule/types';
@@ -41,22 +48,23 @@ export function ShiftDetailScreen() {
     return <SafeAreaView style={{ flex: 1, backgroundColor: tokens.background }} />;
   }
 
-  const handleClaim = (positionCode: string) => {
-    setClaimState((prev) => ({ ...prev, [positionCode]: 'pending' }));
-    mockScheduleRepository.claimPosition(shiftId, positionCode).then((result) => {
-      setClaimState((prev) => ({
-        ...prev,
-        [positionCode]: result === 'CLAIMED' ? 'claimed_by_you' : 'already_taken',
-      }));
-    });
-  };
-
   const STATE_LABEL: Record<ClaimUiState, string> = {
     open: 'Open',
-    pending: 'Pending…',
+    pending: 'Pending...',
     claimed_by_you: 'Claimed by you',
     claimed_by_other: 'Claimed',
     already_taken: 'Already taken',
+  };
+
+  const handleClaim = (positionCode: string) => {
+    setClaimState((prev) => ({ ...prev, [positionCode]: 'pending' }));
+    mockScheduleRepository.claimPosition(shiftId, positionCode).then((result) => {
+      const next: ClaimUiState = result === 'CLAIMED' ? 'claimed_by_you' : 'already_taken';
+      setClaimState((prev) => ({ ...prev, [positionCode]: next }));
+      // Pending resolves in place (no screen swap), so a screen-reader user focused elsewhere
+      // wouldn't otherwise notice the outcome land.
+      AccessibilityInfo.announceForAccessibility(STATE_LABEL[next]);
+    });
   };
 
   return (

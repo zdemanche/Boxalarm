@@ -2,10 +2,13 @@ export const palette = {
   day: {
     background: '#ffffff',
     foreground: '#101114',
-    accent: '#C77D28',
+    // Deepened from the original #C77D28/#1F8A4C/#B8860B (which only cleared the 3:1 large-text
+    // bar) so every semantic color clears 4.5:1 normal-text AA unconditionally - several screens
+    // use these as small/regular-weight status labels, not just large headers or button fills.
+    accent: '#A56721',
     error: '#C41E3A',
-    success: '#1F8A4C',
-    warning: '#B8860B',
+    success: '#1E864A',
+    warning: '#976E09',
   },
   cab: {
     background: '#0b0b0d',

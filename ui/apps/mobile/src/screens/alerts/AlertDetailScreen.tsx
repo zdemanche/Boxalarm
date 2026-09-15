@@ -1,7 +1,15 @@
 import { palette, radius, spacing, touchTarget, typography } from '@boxalarm/design-tokens';
 import { useNavigation, useRoute, type NavigationProp } from '@react-navigation/native';
 import { useEffect, useState } from 'react';
-import { ScrollView, Text, TextInput, TouchableOpacity, useColorScheme, View } from 'react-native';
+import {
+  AccessibilityInfo,
+  ScrollView,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  useColorScheme,
+  View,
+} from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { ackStatusLabel } from '../../features/alerts/ackStatus';
 import { mockAlertsRepository } from '../../features/alerts/mockAlertsRepository';
@@ -40,6 +48,9 @@ export function AlertDetailScreen() {
     // Optimistic (N4.2): confirm immediately rather than waiting on the round trip to settle.
     setAnsweredAs(ackStatus);
     setRespondState('answered');
+    // The Responding/Not responding buttons disappear in favor of a confirmation line - a
+    // screen-reader user swiping past that spot wouldn't otherwise notice the change happened.
+    AccessibilityInfo.announceForAccessibility(`You responded: ${ackStatusLabel(ackStatus)}`);
   };
 
   return (
@@ -159,7 +170,7 @@ export function AlertDetailScreen() {
                 onPress={() => submitResponse('RESPONDING', eta)}
                 style={{
                   marginTop: spacing.md,
-                  minHeight: touchTarget.baseline.ios,
+                  minHeight: touchTarget.oversized.ios,
                   alignItems: 'center',
                   justifyContent: 'center',
                   backgroundColor: tokens.accent,
