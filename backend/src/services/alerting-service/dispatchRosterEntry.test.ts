@@ -59,7 +59,12 @@ describe('parseRosterEntryItem', () => {
 
   it('defaults ackStatus to NONE for a fan-out-created row with no ackStatus yet (P6)', () => {
     const parsed = parseRosterEntryItem(
-      validItem({ ackStatus: undefined, ackAt: undefined, eta: undefined, lastAnsweredTone: undefined }),
+      validItem({
+        ackStatus: undefined,
+        ackAt: undefined,
+        eta: undefined,
+        lastAnsweredTone: undefined,
+      }),
     );
     expect(parsed?.ackStatus).toBe('NONE');
   });
