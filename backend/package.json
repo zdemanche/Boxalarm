@@ -9,6 +9,9 @@
   "workspaces": [
     "packages/*"
   ],
+  "overrides": {
+    "semver": "^7.5.2"
+  },
   "scripts": {
     "typecheck": "tsc --build",
     "lint": "eslint .",
