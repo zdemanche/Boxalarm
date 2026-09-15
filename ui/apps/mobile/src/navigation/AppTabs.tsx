@@ -4,10 +4,11 @@ import { useColorScheme } from 'react-native';
 import { PlaceholderScreen } from '../screens/PlaceholderScreen';
 import { ChecksStack } from './ChecksStack';
 import { MeStack } from './MeStack';
+import { ScheduleStack } from './ScheduleStack';
 
 // Bottom tab bar per architecture.md §7.2 — Alerts · Checks · Schedule · Me, in that order.
-// Alerts/Schedule are placeholders until their own phase (6-7) builds the real stack; Checks
-// (phase 5) and Me (phase 4) are real stacks.
+// Alerts is a placeholder until phase 7 builds the real stack (self-test scope only); Checks
+// (5), Schedule (6), and Me (4) are real stacks.
 export type AppTabsParamList = {
   Alerts: undefined;
   Checks: undefined;
@@ -19,10 +20,6 @@ const Tab = createBottomTabNavigator<AppTabsParamList>();
 
 function AlertsPlaceholder() {
   return <PlaceholderScreen label="Alerts stack coming in phase 7" />;
-}
-
-function SchedulePlaceholder() {
-  return <PlaceholderScreen label="Schedule stack coming in phase 6" />;
 }
 
 export function AppTabs() {
@@ -46,7 +43,7 @@ export function AppTabs() {
     >
       <Tab.Screen name="Alerts" component={AlertsPlaceholder} />
       <Tab.Screen name="Checks" component={ChecksStack} />
-      <Tab.Screen name="Schedule" component={SchedulePlaceholder} />
+      <Tab.Screen name="Schedule" component={ScheduleStack} />
       <Tab.Screen name="Me" component={MeStack} />
     </Tab.Navigator>
   );

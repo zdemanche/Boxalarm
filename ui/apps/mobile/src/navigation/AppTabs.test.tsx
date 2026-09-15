@@ -32,8 +32,8 @@ test('opens on the Alerts tab by default', async () => {
   expect(await findByText('Alerts stack coming in phase 7')).toBeTruthy();
 });
 
-test("switching tabs shows that tab's content — Checks (phase 5) is real, Schedule is still a placeholder", async () => {
-  const { findByText } = await renderTabs();
+test("switching tabs shows that tab's real content — Checks (phase 5) and Schedule (phase 6)", async () => {
+  const { findByText, findAllByText } = await renderTabs();
 
   await act(async () => {
     fireEvent.press(await findByText('Checks'));
@@ -43,5 +43,5 @@ test("switching tabs shows that tab's content — Checks (phase 5) is real, Sche
   await act(async () => {
     fireEvent.press(await findByText('Schedule'));
   });
-  expect(await findByText('Schedule stack coming in phase 6')).toBeTruthy();
+  expect((await findAllByText('STATION-1')).length).toBeGreaterThan(0);
 });
