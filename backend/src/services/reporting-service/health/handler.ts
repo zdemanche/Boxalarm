@@ -2,6 +2,7 @@ import { DescribeTableCommand, DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import type { APIGatewayProxyEventV2, APIGatewayProxyResultV2, Handler } from 'aws-lambda';
 import AWSXRay from 'aws-xray-sdk-core';
 import { readReportingServiceConfig } from '../awsClients.js';
+import { logError } from '../logger.js';
 
 let cachedClient: DynamoDBClient | undefined;
 
@@ -25,14 +26,7 @@ async function handleReadiness(): Promise<APIGatewayProxyResultV2> {
     await client.send(new DescribeTableCommand({ TableName: tableName }));
     return jsonResponse(200, { status: 'ok' });
   } catch (error) {
-    console.error(
-      JSON.stringify({
-        event: 'reporting.health.readiness.failed',
-        service: 'reporting-service',
-        reason: error instanceof Error ? error.constructor.name : 'UnknownError',
-        message: error instanceof Error ? error.message : undefined,
-      }),
-    );
+    logError('reporting.health.readiness.failed', error);
     return jsonResponse(503, { status: 'unavailable' });
   }
 }

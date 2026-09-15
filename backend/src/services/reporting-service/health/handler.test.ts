@@ -2,6 +2,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import type { APIGatewayProxyEventV2 } from 'aws-lambda';
 
+const logError = vi.fn();
+
+vi.mock('../logger.js', () => ({
+  logError,
+  logger: { warn: vi.fn(), error: vi.fn() },
+}));
+
 function buildEvent(path: string): APIGatewayProxyEventV2 {
   return {
     version: '2.0',
@@ -23,6 +30,7 @@ describe('reporting-service health handler', () => {
 
   beforeEach(() => {
     vi.resetModules();
+    logError.mockClear();
     process.env.PLATFORM_SERVICE_TABLE_NAME = 'platform-table';
     mockSend = vi.spyOn(DynamoDBClient.prototype, 'send') as unknown as ReturnType<typeof vi.fn>;
   });
@@ -32,37 +40,40 @@ describe('reporting-service health handler', () => {
     vi.restoreAllMocks();
   });
 
-  it('returns 200 for liveness always', async () => {
+  it('returns 200 with an ok status body for liveness always', async () => {
     const { handler } = await import('./handler.js');
-    const result = await handler(
+    const result = (await handler(
       buildEvent('/api/v1/reporting/health/liveness'),
       {} as never,
       () => undefined,
-    );
-    expect(result).toMatchObject({ statusCode: 200 });
+    )) as { statusCode: number; body: string };
+    expect(result.statusCode).toBe(200);
+    expect(JSON.parse(result.body)).toEqual({ status: 'ok' });
   });
 
-  it('returns 200 for readiness when DescribeTable succeeds', async () => {
+  it('returns 200 with an ok status body for readiness when DescribeTable succeeds', async () => {
     mockSend.mockResolvedValueOnce({ Table: { TableStatus: 'ACTIVE' } });
     const { handler } = await import('./handler.js');
-    const result = await handler(
+    const result = (await handler(
       buildEvent('/api/v1/reporting/health/readiness'),
       {} as never,
       () => undefined,
-    );
-    expect(result).toMatchObject({ statusCode: 200 });
+    )) as { statusCode: number; body: string };
+    expect(result.statusCode).toBe(200);
+    expect(JSON.parse(result.body)).toEqual({ status: 'ok' });
   });
 
   it('returns 503 for readiness when DescribeTable throws', async () => {
-    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
-    mockSend.mockRejectedValueOnce(new Error('describe table failed'));
+    const failure = new Error('describe table failed');
+    mockSend.mockRejectedValueOnce(failure);
     const { handler } = await import('./handler.js');
-    const result = await handler(
+    const result = (await handler(
       buildEvent('/api/v1/reporting/health/readiness'),
       {} as never,
       () => undefined,
-    );
-    expect(result).toMatchObject({ statusCode: 503 });
-    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('describe table failed'));
+    )) as { statusCode: number; body: string };
+    expect(result.statusCode).toBe(503);
+    expect(JSON.parse(result.body)).toEqual({ status: 'unavailable' });
+    expect(logError).toHaveBeenCalledWith('reporting.health.readiness.failed', failure);
   });
 });

@@ -1,5 +1,3 @@
-// TODO: no ticket yet — personnel-service GET /losap/year-end (architecture :324) does not
-// exist; this test pins the AP16 aggregation shape only, not a live two-surface comparison.
 import { describe, expect, it, vi } from 'vitest';
 import type { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
 import { toVerifiedDeptId } from '@boxalarm/dept-scope';
@@ -12,7 +10,7 @@ function fakeClient(send: (command: unknown) => Promise<unknown>): DynamoDBDocum
   return { send } as unknown as DynamoDBDocumentClient;
 }
 
-describe('LOSAP year-end aggregation contract (AP16)', () => {
+describe('LOSAP year-end aggregation contract (AP16) — pins the reporting-service aggregation shape only; personnel-service GET /losap/year-end (architecture :324) has no in-repo source and no owning ticket, so a live two-surface comparison is out of scope here', () => {
   it('queries GSI1 per member — a fan-out of one Query per member, never a Scan', async () => {
     const indexNames: string[] = [];
     const send = vi.fn().mockImplementation((command: unknown) => {
@@ -46,6 +44,8 @@ describe('LOSAP year-end aggregation contract (AP16)', () => {
     });
     const client = fakeClient(send);
     const report = await buildYearEndReport(client, TABLE, DEPT_ID, 2026);
-    expect(report.members).toEqual([{ memberId: 'MBR-0001', totalPoints: 3, entryCount: 2 }]);
+    expect(report.members).toEqual([
+      { memberId: 'MBR-0001', totalPoints: 3, entryCount: 2, unreadableEntryCount: 0 },
+    ]);
   });
 });

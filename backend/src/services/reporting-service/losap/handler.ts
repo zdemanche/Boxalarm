@@ -1,7 +1,7 @@
-import { randomUUID } from 'node:crypto';
 import type { APIGatewayProxyResultV2 } from 'aws-lambda';
 import {
   badRequestProblem,
+  extractTraceId,
   serviceUnavailableProblem,
   withAuthorization,
   type CedarPrincipalContext,
@@ -10,15 +10,10 @@ import {
 import { toVerifiedDeptId } from '@boxalarm/dept-scope';
 import { emitOutcomeMetric } from '@boxalarm/metrics';
 import { createDynamoDocClient, readReportingServiceConfig } from '../awsClients.js';
+import { logError } from '../logger.js';
 import { buildYearEndReport } from './repository.js';
 
 const METRICS_NAMESPACE = 'Boxalarm/ReportingService';
-
-export function extractTraceId(event: GuardEvent): string {
-  const traceparent = event.headers?.traceparent ?? event.headers?.Traceparent;
-  const traceId = traceparent?.split('-')[1];
-  return traceId && traceId.length > 0 ? traceId : randomUUID();
-}
 
 function parseYear(raw: string | undefined): number | undefined {
   if (!raw || !/^\d{4}$/.test(raw)) {
@@ -45,7 +40,10 @@ async function innerGetLosapYearEndHandler(
   const client = createDynamoDocClient();
 
   try {
-    const report = await buildYearEndReport(client, config.tableName, deptId, year);
+    const report = await buildYearEndReport(client, config.tableName, deptId, year, traceId);
+    if (report.totalUnreadableEntryCount > 0) {
+      emitOutcomeMetric(METRICS_NAMESPACE, 'ReportingLosapYearEndDataIntegrity');
+    }
     emitOutcomeMetric(METRICS_NAMESPACE, 'ReportingLosapYearEndSucceeded');
     return {
       statusCode: 200,
@@ -54,17 +52,7 @@ async function innerGetLosapYearEndHandler(
     };
   } catch (error) {
     const reason = error instanceof Error ? error.constructor.name : 'UnknownError';
-    console.error(
-      JSON.stringify({
-        event: 'reporting.losap.year_end.failed',
-        service: 'reporting-service',
-        correlationId: traceId,
-        deptId,
-        year,
-        reason,
-        message: error instanceof Error ? error.message : undefined,
-      }),
-    );
+    logError('reporting.losap.year_end.failed', error, { correlationId: traceId, deptId, year });
     emitOutcomeMetric(METRICS_NAMESPACE, 'ReportingLosapYearEndFailed', reason);
     return serviceUnavailableProblem(traceId);
   }

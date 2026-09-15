@@ -1,6 +1,7 @@
 import { QueryCommand } from '@aws-sdk/lib-dynamodb';
 import type { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
 import { buildDeptScopedPk, type VerifiedDeptId } from '@boxalarm/dept-scope';
+import { logError, logger } from '../logger.js';
 
 const LOSAP_ELIGIBLE_STATUSES = new Set(['ACTIVE', 'RETIRED']);
 
@@ -13,6 +14,7 @@ export interface LosapMemberTotal {
   readonly memberId: string;
   readonly totalPoints: number;
   readonly entryCount: number;
+  readonly unreadableEntryCount: number;
 }
 
 export interface LosapYearEndReport {
@@ -20,18 +22,7 @@ export interface LosapYearEndReport {
   readonly year: number;
   readonly members: readonly LosapMemberTotal[];
   readonly hasData: boolean;
-}
-
-function logRepositoryError(event: string, error: unknown, context: Record<string, unknown>): void {
-  console.error(
-    JSON.stringify({
-      event,
-      service: 'reporting-service',
-      ...context,
-      reason: error instanceof Error ? error.constructor.name : 'UnknownError',
-      message: error instanceof Error ? error.message : undefined,
-    }),
-  );
+  readonly totalUnreadableEntryCount: number;
 }
 
 export async function listLosapEligibleMembers(
@@ -61,7 +52,7 @@ export async function listLosapEligibleMembers(
       exclusiveStartKey = result.LastEvaluatedKey as Record<string, unknown> | undefined;
     } while (exclusiveStartKey);
   } catch (error) {
-    logRepositoryError('reporting.losap.roster.failed', error, { deptId });
+    logError('reporting.losap.roster.failed', error, { deptId });
     throw error;
   }
   return members.filter((member) => LOSAP_ELIGIBLE_STATUSES.has(member.status));
@@ -72,9 +63,11 @@ export async function sumLosapPointsForMemberYear(
   tableName: string,
   memberId: string,
   year: number,
-): Promise<{ totalPoints: number; entryCount: number }> {
+  traceId?: string,
+): Promise<{ totalPoints: number; entryCount: number; unreadableEntryCount: number }> {
   let totalPoints = 0;
   let entryCount = 0;
+  let unreadableEntryCount = 0;
   let exclusiveStartKey: Record<string, unknown> | undefined;
   try {
     do {
@@ -95,24 +88,25 @@ export async function sumLosapPointsForMemberYear(
         if (typeof points === 'number' && Number.isFinite(points)) {
           totalPoints += points;
         } else {
-          console.error(
-            JSON.stringify({
-              event: 'reporting.losap.entry.non_numeric_points',
-              service: 'reporting-service',
-              memberId,
-              year,
-            }),
-          );
+          unreadableEntryCount += 1;
+          logger.warn({
+            event: 'reporting.losap.entry.non_numeric_points',
+            memberId,
+            year,
+            correlationId: traceId,
+            entryRef:
+              (item.sourceRefId as string | undefined) ?? (item.gsi1sk as string | undefined),
+          });
         }
         entryCount += 1;
       }
       exclusiveStartKey = result.LastEvaluatedKey as Record<string, unknown> | undefined;
     } while (exclusiveStartKey);
   } catch (error) {
-    logRepositoryError('reporting.losap.entries.failed', error, { memberId, year });
+    logError('reporting.losap.entries.failed', error, { memberId, year, correlationId: traceId });
     throw error;
   }
-  return { totalPoints, entryCount };
+  return { totalPoints, entryCount, unreadableEntryCount };
 }
 
 export async function buildYearEndReport(
@@ -120,19 +114,25 @@ export async function buildYearEndReport(
   tableName: string,
   deptId: VerifiedDeptId,
   year: number,
+  traceId?: string,
 ): Promise<LosapYearEndReport> {
   const roster = await listLosapEligibleMembers(client, tableName, deptId);
   const members = await Promise.all(
     roster.map(async (member) => {
-      const { totalPoints, entryCount } = await sumLosapPointsForMemberYear(
+      const { totalPoints, entryCount, unreadableEntryCount } = await sumLosapPointsForMemberYear(
         client,
         tableName,
         member.memberId,
         year,
+        traceId,
       );
-      return { memberId: member.memberId, totalPoints, entryCount };
+      return { memberId: member.memberId, totalPoints, entryCount, unreadableEntryCount };
     }),
   );
   const hasData = members.some((member) => member.entryCount > 0);
-  return { deptId, year, members, hasData };
+  const totalUnreadableEntryCount = members.reduce(
+    (sum, member) => sum + member.unreadableEntryCount,
+    0,
+  );
+  return { deptId, year, members, hasData, totalUnreadableEntryCount };
 }

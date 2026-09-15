@@ -1,11 +1,17 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
 import { toVerifiedDeptId } from '@boxalarm/dept-scope';
-import {
-  buildYearEndReport,
-  listLosapEligibleMembers,
-  sumLosapPointsForMemberYear,
-} from './repository.js';
+
+const logError = vi.fn();
+const warn = vi.fn();
+
+vi.mock('../logger.js', () => ({
+  logError,
+  logger: { warn, error: vi.fn() },
+}));
+
+const { buildYearEndReport, listLosapEligibleMembers, sumLosapPointsForMemberYear } =
+  await import('./repository.js');
 
 const DEPT_ID = toVerifiedDeptId({ deptId: 'NICHOLS' });
 const TABLE = 'platform-table';
@@ -13,6 +19,11 @@ const TABLE = 'platform-table';
 function fakeClient(send: (command: unknown) => Promise<unknown>): DynamoDBDocumentClient {
   return { send } as unknown as DynamoDBDocumentClient;
 }
+
+beforeEach(() => {
+  logError.mockClear();
+  warn.mockClear();
+});
 
 describe('listLosapEligibleMembers', () => {
   it('queries GSI3 for the department member list and keeps only ACTIVE/RETIRED members', async () => {
@@ -52,13 +63,15 @@ describe('listLosapEligibleMembers', () => {
   });
 
   it('logs the original error and rethrows without swallowing on a Query failure', async () => {
-    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const failure = new Error('table unavailable');
     const send = vi.fn().mockRejectedValue(failure);
     const client = fakeClient(send);
     await expect(listLosapEligibleMembers(client, TABLE, DEPT_ID)).rejects.toBe(failure);
-    const logged = JSON.parse(errorSpy.mock.calls[0]?.[0] as string) as { message: string };
-    expect(logged.message).toBe('table unavailable');
+    expect(logError).toHaveBeenCalledWith(
+      'reporting.losap.roster.failed',
+      failure,
+      expect.objectContaining({ deptId: DEPT_ID }),
+    );
   });
 });
 
@@ -72,7 +85,7 @@ describe('sumLosapPointsForMemberYear', () => {
     });
     const client = fakeClient(send);
     const result = await sumLosapPointsForMemberYear(client, TABLE, 'MBR-0012', 2026);
-    expect(result).toEqual({ totalPoints: 3, entryCount: 2 });
+    expect(result).toEqual({ totalPoints: 3, entryCount: 2, unreadableEntryCount: 0 });
   });
 
   it('queries GSI1 scoped to the member and year prefix', async () => {
@@ -97,16 +110,28 @@ describe('sumLosapPointsForMemberYear', () => {
     const send = vi.fn().mockResolvedValue({ Items: [] });
     const client = fakeClient(send);
     const result = await sumLosapPointsForMemberYear(client, TABLE, 'MBR-0099', 2026);
-    expect(result).toEqual({ totalPoints: 0, entryCount: 0 });
+    expect(result).toEqual({ totalPoints: 0, entryCount: 0, unreadableEntryCount: 0 });
   });
 
-  it('treats a missing/non-numeric points field as 0 without throwing', async () => {
+  it('treats a missing/non-numeric points field as 0, counts it as unreadable, and warns with the entry ref (core-harm)', async () => {
     const send = vi.fn().mockResolvedValue({
-      Items: [{ ruleVersionId: 'RULE-2026' }, { points: 'not-a-number' }],
+      Items: [
+        { ruleVersionId: 'RULE-2026', sourceRefId: 'ATT-0001' },
+        { points: 'not-a-number', sourceRefId: 'ATT-0002' },
+      ],
     });
     const client = fakeClient(send);
-    const result = await sumLosapPointsForMemberYear(client, TABLE, 'MBR-0012', 2026);
-    expect(result).toEqual({ totalPoints: 0, entryCount: 2 });
+    const result = await sumLosapPointsForMemberYear(client, TABLE, 'MBR-0012', 2026, 'trace-1');
+    expect(result).toEqual({ totalPoints: 0, entryCount: 2, unreadableEntryCount: 2 });
+    expect(warn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: 'reporting.losap.entry.non_numeric_points',
+        memberId: 'MBR-0012',
+        year: 2026,
+        correlationId: 'trace-1',
+        entryRef: 'ATT-0001',
+      }),
+    );
   });
 
   it('follows LastEvaluatedKey across pages (P8)', async () => {
@@ -116,20 +141,22 @@ describe('sumLosapPointsForMemberYear', () => {
       .mockResolvedValueOnce({ Items: [{ points: 1 }] });
     const client = fakeClient(send);
     const result = await sumLosapPointsForMemberYear(client, TABLE, 'MBR-0012', 2026);
-    expect(result).toEqual({ totalPoints: 2, entryCount: 2 });
+    expect(result).toEqual({ totalPoints: 2, entryCount: 2, unreadableEntryCount: 0 });
     expect(send).toHaveBeenCalledTimes(2);
   });
 
   it('logs the original error and rethrows without swallowing on a Query failure', async () => {
-    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const failure = new Error('query throttled');
     const send = vi.fn().mockRejectedValue(failure);
     const client = fakeClient(send);
     await expect(sumLosapPointsForMemberYear(client, TABLE, 'MBR-0012', 2026)).rejects.toBe(
       failure,
     );
-    const logged = JSON.parse(errorSpy.mock.calls[0]?.[0] as string) as { message: string };
-    expect(logged.message).toBe('query throttled');
+    expect(logError).toHaveBeenCalledWith(
+      'reporting.losap.entries.failed',
+      failure,
+      expect.objectContaining({ memberId: 'MBR-0012', year: 2026 }),
+    );
   });
 });
 
@@ -159,11 +186,12 @@ describe('buildYearEndReport', () => {
     const report = await buildYearEndReport(client, TABLE, DEPT_ID, 2026);
     expect(report.members).toEqual(
       expect.arrayContaining([
-        { memberId: 'MBR-0001', totalPoints: 5, entryCount: 1 },
-        { memberId: 'MBR-0002', totalPoints: 0, entryCount: 0 },
+        { memberId: 'MBR-0001', totalPoints: 5, entryCount: 1, unreadableEntryCount: 0 },
+        { memberId: 'MBR-0002', totalPoints: 0, entryCount: 0, unreadableEntryCount: 0 },
       ]),
     );
     expect(report.members).toHaveLength(2);
+    expect(report.totalUnreadableEntryCount).toBe(0);
   });
 
   it('sets hasData=false when every eligible member has zero entries for the year (AC4)', async () => {
@@ -177,7 +205,9 @@ describe('buildYearEndReport', () => {
     const client = fakeClient(send);
     const report = await buildYearEndReport(client, TABLE, DEPT_ID, 2026);
     expect(report.hasData).toBe(false);
-    expect(report.members).toEqual([{ memberId: 'MBR-0001', totalPoints: 0, entryCount: 0 }]);
+    expect(report.members).toEqual([
+      { memberId: 'MBR-0001', totalPoints: 0, entryCount: 0, unreadableEntryCount: 0 },
+    ]);
   });
 
   it('sets hasData=true when at least one member has an entry', async () => {
@@ -193,15 +223,36 @@ describe('buildYearEndReport', () => {
     expect(report.hasData).toBe(true);
   });
 
+  it('surfaces unreadable entries per member and at report level rather than silently understating the total (core-harm)', async () => {
+    const send = vi.fn().mockImplementation((command: unknown) => {
+      const input = (command as { input: { IndexName: string } }).input;
+      if (input.IndexName === 'GSI3') {
+        return Promise.resolve({ Items: [{ memberId: 'MBR-0001', status: 'ACTIVE' }] });
+      }
+      return Promise.resolve({ Items: [{ points: 5 }, { points: 'bad' }] });
+    });
+    const client = fakeClient(send);
+    const report = await buildYearEndReport(client, TABLE, DEPT_ID, 2026);
+    expect(report.members).toEqual([
+      { memberId: 'MBR-0001', totalPoints: 5, entryCount: 2, unreadableEntryCount: 1 },
+    ]);
+    expect(report.totalUnreadableEntryCount).toBe(1);
+  });
+
   it('returns an empty member list with hasData=false when the department has no eligible roster', async () => {
     const send = vi.fn().mockResolvedValue({ Items: [] });
     const client = fakeClient(send);
     const report = await buildYearEndReport(client, TABLE, DEPT_ID, 2026);
-    expect(report).toEqual({ deptId: DEPT_ID, year: 2026, members: [], hasData: false });
+    expect(report).toEqual({
+      deptId: DEPT_ID,
+      year: 2026,
+      members: [],
+      hasData: false,
+      totalUnreadableEntryCount: 0,
+    });
   });
 
   it('propagates a per-member Query rejection rather than silently dropping that member (fail-closed, core-harm)', async () => {
-    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const failure = new Error('member query throttled');
     const send = vi.fn().mockImplementation((command: unknown) => {
       const input = (command as { input: { IndexName: string } }).input;
@@ -217,6 +268,6 @@ describe('buildYearEndReport', () => {
     });
     const client = fakeClient(send);
     await expect(buildYearEndReport(client, TABLE, DEPT_ID, 2026)).rejects.toBe(failure);
-    expect(errorSpy).toHaveBeenCalled();
+    expect(logError).toHaveBeenCalled();
   });
 });
