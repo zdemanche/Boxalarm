@@ -62,7 +62,7 @@ describe('audit log GSI1/GSI2 queries (real DynamoDB via LocalStack, AC1/AC2/AC4
     await container.stop();
   });
 
-  it('returns only the queried member\'s receipts from GSI1 (AC2)', async () => {
+  it("returns only the queried member's receipts from GSI1 (AC2)", async () => {
     await client.send(
       new PutCommand({
         TableName: TABLE_NAME,
@@ -153,13 +153,7 @@ describe('audit log GSI1/GSI2 queries (real DynamoDB via LocalStack, AC1/AC2/AC4
   });
 
   it('returns an empty entries array for a date range with zero dispatches (core-harm regression)', async () => {
-    const page = await queryDepartmentAuditLog(
-      client,
-      TABLE_NAME,
-      DEPT_ID,
-      1000000000,
-      1000000001,
-    );
+    const page = await queryDepartmentAuditLog(client, TABLE_NAME, DEPT_ID, 1000000000, 1000000001);
 
     expect(page.entries).toEqual([]);
   });

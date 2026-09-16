@@ -16,7 +16,9 @@ function mockClient(sendImpl: (command: unknown) => Promise<unknown>) {
 
 describe('queryMemberDeliveryHistory (AC2)', () => {
   it('queries only the given memberId GSI1 partition, scoped to the caller department', async () => {
-    const client = mockClient(() => Promise.resolve({ Items: [{ entityType: 'DELIVERY_RECEIPT' }] }));
+    const client = mockClient(() =>
+      Promise.resolve({ Items: [{ entityType: 'DELIVERY_RECEIPT' }] }),
+    );
 
     const page = await queryMemberDeliveryHistory(client, 'alerting-table', DEPT_ID, 'mbr-102');
 
@@ -45,9 +47,7 @@ describe('queryMemberDeliveryHistory (AC2)', () => {
 
   it('never issues a Put/Update/Delete command (AC3, no write path)', async () => {
     const client = mockClient((command) => {
-      expect((command as { constructor: { name: string } }).constructor.name).toBe(
-        'QueryCommand',
-      );
+      expect((command as { constructor: { name: string } }).constructor.name).toBe('QueryCommand');
       return Promise.resolve({ Items: [] });
     });
 

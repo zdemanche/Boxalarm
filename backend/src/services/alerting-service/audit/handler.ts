@@ -77,7 +77,9 @@ function parseQuery(
   return { from, to, cursor };
 }
 
-function buildAuditPageResponse(page: MemberAuditPage | DepartmentAuditPage): APIGatewayProxyResultV2 {
+function buildAuditPageResponse(
+  page: MemberAuditPage | DepartmentAuditPage,
+): APIGatewayProxyResultV2 {
   return {
     statusCode: 200,
     headers: { 'content-type': 'application/json' },
@@ -103,7 +105,13 @@ async function queryMemberAuditLog(
     const { tableName } = readAlertingConfig(process.env);
     const client = createDynamoClient(process.env);
     const deptId = toVerifiedDeptId(principal);
-    const page = await queryMemberDeliveryHistory(client, tableName, deptId, parsed.memberId, parsed.cursor);
+    const page = await queryMemberDeliveryHistory(
+      client,
+      tableName,
+      deptId,
+      parsed.memberId,
+      parsed.cursor,
+    );
     emitOutcomeMetric(METRIC_NAMESPACE, 'AuditQueryServed');
     return buildAuditPageResponse(page);
   } catch (error) {
@@ -126,10 +134,7 @@ async function queryDepartmentAudit(
   const parsed = parseQuery(event.queryStringParameters);
   if (!parsed || 'memberId' in parsed) {
     emitOutcomeMetric(METRIC_NAMESPACE, 'AuditQueryFailed', 'InvalidQueryParams');
-    return badRequestProblem(
-      traceId,
-      'Provide both from and to (epoch seconds, from <= to).',
-    );
+    return badRequestProblem(traceId, 'Provide both from and to (epoch seconds, from <= to).');
   }
 
   try {

@@ -24,13 +24,17 @@ function buildEvent(
   } as unknown as GuardEvent;
 }
 
-function mockAuthzDecision(decision: 'ALLOW' | 'DENY' | 'ERROR'): { send: ReturnType<typeof vi.fn> } {
+function mockAuthzDecision(decision: 'ALLOW' | 'DENY' | 'ERROR'): {
+  send: ReturnType<typeof vi.fn>;
+} {
   const send =
     decision === 'ERROR'
       ? vi.fn().mockRejectedValue(new Error('VP outage'))
-      : vi.fn().mockImplementation((command: { input: unknown }) =>
-          Promise.resolve({ decision, __input: command.input }),
-        );
+      : vi
+          .fn()
+          .mockImplementation((command: { input: unknown }) =>
+            Promise.resolve({ decision, __input: command.input }),
+          );
   vi.doMock('@aws-sdk/client-verifiedpermissions', async (importOriginal) => {
     const actual = await importOriginal<typeof import('@aws-sdk/client-verifiedpermissions')>();
     return {
@@ -41,7 +45,10 @@ function mockAuthzDecision(decision: 'ALLOW' | 'DENY' | 'ERROR'): { send: Return
   return { send };
 }
 
-function mockDynamo(behavior: 'OK' | 'ERROR', items: unknown[] = []): { send: ReturnType<typeof vi.fn> } {
+function mockDynamo(
+  behavior: 'OK' | 'ERROR',
+  items: unknown[] = [],
+): { send: ReturnType<typeof vi.fn> } {
   const send = vi.fn();
   if (behavior === 'OK') {
     send.mockResolvedValue({ Items: items });
@@ -111,7 +118,9 @@ describe('handler (audit query entrypoint)', () => {
       ),
     );
 
-    const call = send.mock.calls[0]?.[0] as { input: { resource?: { entityType?: string; entityId?: string } } };
+    const call = send.mock.calls[0]?.[0] as {
+      input: { resource?: { entityType?: string; entityId?: string } };
+    };
     const input = call.input;
     expect(input.resource?.entityType).toBe('Boxalarm::Member');
     expect(input.resource?.entityId).toBe('mbr-999');

@@ -18,10 +18,7 @@ export function encodeCursor(key: Record<string, unknown>): string {
 
 export function decodeCursor(cursor: string): Record<string, unknown> {
   try {
-    return JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8')) as Record<
-      string,
-      unknown
-    >;
+    return JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8')) as Record<string, unknown>;
   } catch (error) {
     throw new InvalidCursorError('cursor is not a valid audit log pagination token', {
       cause: error,
