@@ -1,9 +1,5 @@
 import type { APIGatewayProxyResultV2 } from 'aws-lambda';
-import {
-  GetCommand,
-  TransactWriteCommand,
-  type DynamoDBDocumentClient,
-} from '@aws-sdk/lib-dynamodb';
+import { TransactWriteCommand, type DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
 import type { VerifiedPermissionsClient } from '@aws-sdk/client-verifiedpermissions';
 import {
   extractTraceId,
@@ -11,10 +7,12 @@ import {
   type CedarPrincipalContext,
   type GuardEvent,
 } from '@boxalarm/authz';
-import { buildDeptScopedPk, toVerifiedDeptId } from '@boxalarm/dept-scope';
+import { toVerifiedDeptId } from '@boxalarm/dept-scope';
 import { emitOutcomeMetric } from '@boxalarm/metrics';
 import { createDynamoClient, readApparatusTableConfig } from './dynamoClient.js';
+import { createApparatusRepository } from './apparatusRepository.js';
 import {
+  buildScbaDueItems,
   buildScbaMetadataItem,
   buildScbaTestItem,
   parseScbaMetadataItem,
@@ -114,18 +112,15 @@ async function postScba(
     return validationProblem(traceId, validation.errors);
   }
 
-  const existing = await deps.client.send(
-    new GetCommand({
-      TableName: deps.tableName,
-      Key: { pk: buildDeptScopedPk(deptId, 'APPARATUS', apparatusId), sk: 'METADATA' },
-    }),
-  );
-  if (!existing.Item) {
+  const apparatusRepository = createApparatusRepository(deps.client, deps.tableName);
+  const existingApparatus = await apparatusRepository.getApparatusByUnitId(deptId, apparatusId);
+  if (!existingApparatus) {
     return apparatusNotFoundProblem(traceId);
   }
 
   const metadataItem = buildScbaMetadataItem(deptId, apparatusId, validation.value);
   const testItem = buildScbaTestItem(deptId, apparatusId, validation.value);
+  const [flowDueItem, hydroDueItem] = buildScbaDueItems(deptId, apparatusId, validation.value);
 
   try {
     await deps.client.send(
@@ -133,6 +128,8 @@ async function postScba(
         TransactItems: [
           { Put: { TableName: deps.tableName, Item: metadataItem } },
           { Put: { TableName: deps.tableName, Item: testItem } },
+          { Put: { TableName: deps.tableName, Item: flowDueItem } },
+          { Put: { TableName: deps.tableName, Item: hydroDueItem } },
         ],
       }),
     );

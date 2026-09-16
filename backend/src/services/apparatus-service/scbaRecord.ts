@@ -41,10 +41,6 @@ function dueMonthBucket(isoDate: string): string {
   return isoDate.slice(0, 7);
 }
 
-function earlierIsoDate(a: string, b: string): string {
-  return a <= b ? a : b;
-}
-
 export function buildScbaMetadataItem(
   deptId: VerifiedDeptId,
   apparatusId: string,
@@ -52,7 +48,6 @@ export function buildScbaMetadataItem(
 ): ScbaMetadataItem {
   const nextFlowTestDue = computeNextFlowTestDue(input.flowTestDate);
   const nextHydroTestDue = computeNextHydroTestDue(input.hydroTestDate);
-  const nextDue = earlierIsoDate(nextFlowTestDue, nextHydroTestDue);
   return {
     pk: buildDeptScopedPk(deptId, 'SCBA', input.scbaUnitId),
     sk: 'METADATA',
@@ -64,8 +59,68 @@ export function buildScbaMetadataItem(
     hydroTestDate: input.hydroTestDate,
     nextFlowTestDue,
     nextHydroTestDue,
-    gsi2pk: buildDeptScopedPk(deptId, 'DUE', 'SCBA_TEST', dueMonthBucket(nextDue)),
-    gsi2sk: `${nextDue}#${input.scbaUnitId}`,
+  };
+}
+
+export type ScbaDueTestType = 'SCBA_FLOW' | 'SCBA_HYDRO';
+
+export interface ScbaDueEntry {
+  readonly apparatusId: string;
+  readonly scbaUnitId: string;
+  readonly cylinderId: string;
+  readonly testType: ScbaDueTestType;
+  readonly dueDate: string;
+}
+
+export type ScbaDueItem = Record<string, unknown>;
+
+function buildScbaDueItem(
+  deptId: VerifiedDeptId,
+  apparatusId: string,
+  input: ScbaRecordInput,
+  testType: ScbaDueTestType,
+  dueDate: string,
+): ScbaDueItem {
+  return {
+    pk: buildDeptScopedPk(deptId, 'SCBA', input.scbaUnitId),
+    sk: `DUE#${testType}`,
+    entityType: 'SCBA_TEST_DUE',
+    scbaUnitId: input.scbaUnitId,
+    apparatusId,
+    cylinderId: input.cylinderId,
+    testType,
+    dueDate,
+    gsi2pk: buildDeptScopedPk(deptId, 'DUE', 'SCBA_TEST', dueMonthBucket(dueDate)),
+    gsi2sk: `${dueDate}#${input.scbaUnitId}#${testType}`,
+  };
+}
+
+/**
+ * Each test type gets its own GSI2-bearing item, independently bucketed on its own due date.
+ * The flow-test interval (365 days) is always shorter than the hydro-test interval (1825
+ * days), so a single shared index keyed on the earlier of the two would permanently hide the
+ * hydro due date once both are submitted together — this is the normal case, not an edge case.
+ */
+export function buildScbaDueItems(
+  deptId: VerifiedDeptId,
+  apparatusId: string,
+  input: ScbaRecordInput,
+): readonly [ScbaDueItem, ScbaDueItem] {
+  const nextFlowTestDue = computeNextFlowTestDue(input.flowTestDate);
+  const nextHydroTestDue = computeNextHydroTestDue(input.hydroTestDate);
+  return [
+    buildScbaDueItem(deptId, apparatusId, input, 'SCBA_FLOW', nextFlowTestDue),
+    buildScbaDueItem(deptId, apparatusId, input, 'SCBA_HYDRO', nextHydroTestDue),
+  ];
+}
+
+export function parseScbaDueItem(item: ScbaDueItem): ScbaDueEntry {
+  return {
+    apparatusId: String(item.apparatusId),
+    scbaUnitId: String(item.scbaUnitId),
+    cylinderId: String(item.cylinderId),
+    testType: item.testType as ScbaDueTestType,
+    dueDate: String(item.dueDate),
   };
 }
 

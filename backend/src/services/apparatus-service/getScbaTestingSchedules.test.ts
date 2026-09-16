@@ -158,12 +158,17 @@ describe('getScbaTestingSchedules handler', () => {
     vi.useRealTimers();
   });
 
-  it('re-throws (fail-closed) when the GSI2 query fails, never returning a silent empty success', async () => {
+  it('returns 503 fail-closed (not a silent empty success) when the GSI2 query fails', async () => {
     const failure = new Error('DynamoDB unavailable');
     const client = { send: vi.fn().mockRejectedValue(failure) } as unknown as DynamoDBDocumentClient;
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const createHandler = await importHandler();
     const handler = createHandler({ client, authzClient: fakeAuthzClient('ALLOW') });
 
-    await expect(handler(buildEvent(undefined))).rejects.toBe(failure);
+    const result = await handler(buildEvent(undefined));
+
+    expect(result).toMatchObject({ statusCode: 503 });
+    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('DynamoDB unavailable'));
+    errorSpy.mockRestore();
   });
 });

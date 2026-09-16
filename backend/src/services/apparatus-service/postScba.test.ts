@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Decision, type VerifiedPermissionsClient } from '@aws-sdk/client-verifiedpermissions';
 import {
-  GetCommand,
+  QueryCommand,
   TransactWriteCommand,
   type DynamoDBDocumentClient,
 } from '@aws-sdk/lib-dynamodb';
@@ -59,8 +59,21 @@ function fakeDynamoClient(options: {
   readonly transactError?: Error;
 }): DynamoDBDocumentClient {
   const send = vi.fn((command: unknown) => {
-    if (command instanceof GetCommand) {
-      return Promise.resolve(options.apparatusExists ? { Item: { pk: 'x', sk: 'METADATA' } } : {});
+    if (command instanceof QueryCommand) {
+      return Promise.resolve(
+        options.apparatusExists
+          ? {
+              Items: [
+                {
+                  apparatusId: 'APP-ENGINE-2',
+                  unitId: 'ENGINE-2',
+                  type: 'ENGINE',
+                  status: 'IN_SERVICE',
+                },
+              ],
+            }
+          : { Items: [] },
+      );
     }
     if (command instanceof TransactWriteCommand) {
       return options.transactError ? Promise.reject(options.transactError) : Promise.resolve({});
@@ -282,10 +295,10 @@ describe('postScba handler', () => {
       buildEvent(VALID_BODY, 'ENGINE-2', { sub: 'b', deptId: 'dept-b', 'cognito:groups': 'apparatus' }),
     );
 
-    const [itemA] = findTransactItems(clientA);
-    const [itemB] = findTransactItems(clientB);
+    const [itemA, , flowDueItemA] = findTransactItems(clientA);
+    const [itemB, , flowDueItemB] = findTransactItems(clientB);
 
     expect(itemA?.Put.Item.pk).not.toBe(itemB?.Put.Item.pk);
-    expect(itemA?.Put.Item.gsi2pk).not.toBe(itemB?.Put.Item.gsi2pk);
+    expect(flowDueItemA?.Put.Item.gsi2pk).not.toBe(flowDueItemB?.Put.Item.gsi2pk);
   });
 });

@@ -3,6 +3,8 @@ import { DynamoDBDocumentClient, GetCommand, PutCommand } from '@aws-sdk/lib-dyn
 import { LocalstackContainer, type StartedLocalStackContainer } from '@testcontainers/localstack';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { EventBridgeClient } from '@aws-sdk/client-eventbridge';
+import { toVerifiedDeptId } from '@boxalarm/dept-scope';
+import { buildScbaDueItems } from '../scbaRecord.js';
 import { runApparatusTestingScan } from './handler.js';
 
 const APPARATUS_TABLE = 'boxalarm-test-apparatus-table';
@@ -60,25 +62,23 @@ afterAll(async () => {
   await container.stop();
 });
 
-function scbaMetadataItem(
-  scbaUnitId: string,
-  nextFlowTestDue: string,
-  yearMonth: string,
-): Record<string, unknown> {
-  return {
-    pk: `DEPT#${DEPT_ID}#SCBA#${scbaUnitId}`,
-    sk: 'METADATA',
-    entityType: 'SCBA_RECORD',
+function subtractDays(isoDate: string, days: number): string {
+  const date = new Date(`${isoDate}T00:00:00Z`);
+  date.setUTCDate(date.getUTCDate() - days);
+  return date.toISOString().slice(0, 10);
+}
+
+/** Seeds via the real production writer (buildScbaDueItems) so the test proves the real
+ * write shape round-trips through the real GSI2 read, not a hand-rolled fixture shape. */
+function scbaFlowDueItem(scbaUnitId: string, nextFlowTestDue: string): Record<string, unknown> {
+  const deptId = toVerifiedDeptId({ deptId: DEPT_ID });
+  const [flowDueItem] = buildScbaDueItems(deptId, 'ENGINE-2', {
     scbaUnitId,
-    apparatusId: 'ENGINE-2',
     cylinderId: 'CYL-0891',
-    flowTestDate: '2025-09-20',
+    flowTestDate: subtractDays(nextFlowTestDue, 365),
     hydroTestDate: '2025-09-20',
-    nextFlowTestDue,
-    nextHydroTestDue: '2030-01-01',
-    gsi2pk: `DEPT#${DEPT_ID}#DUE#SCBA_TEST#${yearMonth}`,
-    gsi2sk: `${nextFlowTestDue}#${scbaUnitId}`,
-  };
+  });
+  return flowDueItem;
 }
 
 describe('apparatus testing scanner (real DynamoDB via LocalStack — F4.7n due-notification delivery)', () => {
@@ -88,13 +88,13 @@ describe('apparatus testing scanner (real DynamoDB via LocalStack — F4.7n due-
     await documentClient.send(
       new PutCommand({
         TableName: APPARATUS_TABLE,
-        Item: scbaMetadataItem('SCBA-IN', '2026-09-20', '2026-09'),
+        Item: scbaFlowDueItem('SCBA-IN', '2026-09-20'),
       }),
     );
     await documentClient.send(
       new PutCommand({
         TableName: APPARATUS_TABLE,
-        Item: scbaMetadataItem('SCBA-OUT', '2026-10-20', '2026-10'),
+        Item: scbaFlowDueItem('SCBA-OUT', '2026-10-20'),
       }),
     );
     const ebSend = vi.fn().mockResolvedValue({ Entries: [{}] });
@@ -117,7 +117,7 @@ describe('apparatus testing scanner (real DynamoDB via LocalStack — F4.7n due-
     await documentClient.send(
       new PutCommand({
         TableName: APPARATUS_TABLE,
-        Item: scbaMetadataItem('SCBA-DEDUP', '2026-09-18', '2026-09'),
+        Item: scbaFlowDueItem('SCBA-DEDUP', '2026-09-18'),
       }),
     );
 

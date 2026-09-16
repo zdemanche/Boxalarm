@@ -18,16 +18,14 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-function scbaItem(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+function scbaDueItem(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
     scbaUnitId: 'SCBA-001',
     apparatusId: 'ENGINE-2',
     cylinderId: 'CYL-0891',
-    flowTestDate: '2026-01-01',
-    hydroTestDate: '2026-06-01',
-    nextFlowTestDue: '2026-09-20',
-    nextHydroTestDue: '2030-12-31',
-    gsi2sk: '2026-09-20#SCBA-001',
+    testType: 'SCBA_FLOW',
+    dueDate: '2026-09-20',
+    gsi2sk: '2026-09-20#SCBA-001#SCBA_FLOW',
     ...overrides,
   };
 }
@@ -65,7 +63,7 @@ const NOW = new Date('2026-09-14T02:00:00Z');
 describe('runApparatusTestingScan (AC3: emits apparatus.test.due for a due SCBA test)', () => {
   it('publishes exactly one apparatus.test.due event for a test within the lead-time window', async () => {
     const { runApparatusTestingScan } = await import('./handler.js');
-    const send = ddbSend({ currentMonthItems: [scbaItem()] });
+    const send = ddbSend({ currentMonthItems: [scbaDueItem()] });
     const ebSend = vi.fn().mockResolvedValue({ Entries: [{}] });
 
     await runApparatusTestingScan('trace-1', {
@@ -83,12 +81,10 @@ describe('runApparatusTestingScan (AC3: emits apparatus.test.due for a due SCBA 
     expect(detail.payload.scbaUnitId).toBe('SCBA-001');
   });
 
-  it('publishes no event when neither test date is within the lead-time window', async () => {
+  it('publishes no event when the due date is outside the lead-time window', async () => {
     const { runApparatusTestingScan } = await import('./handler.js');
     const send = ddbSend({
-      currentMonthItems: [
-        scbaItem({ nextFlowTestDue: '2026-12-01', nextHydroTestDue: '2031-01-01' }),
-      ],
+      currentMonthItems: [scbaDueItem({ dueDate: '2026-12-01', gsi2sk: '2026-12-01#SCBA-001#SCBA_FLOW' })],
     });
     const ebSend = vi.fn();
 
@@ -103,7 +99,7 @@ describe('runApparatusTestingScan (AC3: emits apparatus.test.due for a due SCBA 
 
   it('publishes no event on a same-day re-run for a test already flagged (dedup guard)', async () => {
     const { runApparatusTestingScan } = await import('./handler.js');
-    const send = ddbSend({ currentMonthItems: [scbaItem()], dedupConflict: true });
+    const send = ddbSend({ currentMonthItems: [scbaDueItem()], dedupConflict: true });
     const ebSend = vi.fn();
 
     await runApparatusTestingScan('trace-3', {
@@ -190,7 +186,7 @@ describe('handler (entrypoint-test obligation — the exported Lambda handler, n
   it('reads APPARATUS_SCANNER_DEPT_ID from the ScheduledEvent trigger and publishes the due test', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(NOW);
-    const ddbCalls = ddbSend({ currentMonthItems: [scbaItem()] });
+    const ddbCalls = ddbSend({ currentMonthItems: [scbaDueItem()] });
     mockDynamoModule(ddbCalls);
     const ebSend = vi.fn().mockResolvedValue({ Entries: [{}] });
     mockEventBridgeModule(ebSend);

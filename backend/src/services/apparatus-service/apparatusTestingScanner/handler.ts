@@ -5,12 +5,8 @@ import { toVerifiedDeptId } from '@boxalarm/dept-scope';
 import { emitOutcomeMetric } from '@boxalarm/metrics';
 import { createDynamoClient, readApparatusTableConfig } from '../dynamoClient.js';
 import { MS_PER_DAY, monthsWithinWindow, queryScbaDueInMonth } from '../getScbaTestingSchedules.js';
-import { parseScbaMetadataItem } from '../scbaRecord.js';
-import {
-  createEventBridgeClient,
-  publishScbaTestDueEvent,
-  type ScbaTestType,
-} from './publishDueEvents.js';
+import { parseScbaDueItem } from '../scbaRecord.js';
+import { createEventBridgeClient, publishScbaTestDueEvent } from './publishDueEvents.js';
 
 const METRIC_NAMESPACE = 'Boxalarm/ApparatusTestingScanner';
 const SERVICE_NAME = 'apparatus-service';
@@ -25,42 +21,16 @@ function readScannerDeptId(env: NodeJS.ProcessEnv): string {
   return deptId;
 }
 
-interface DueScbaTest {
-  readonly apparatusId: string;
-  readonly scbaUnitId: string;
-  readonly cylinderId: string;
-  readonly testType: ScbaTestType;
-  readonly dueDate: string;
-}
+type DueScbaTest = ReturnType<typeof parseScbaDueItem>;
 
-function dueScbaTests(
-  record: ReturnType<typeof parseScbaMetadataItem>,
-  now: Date,
-  leadDays: number,
-): readonly DueScbaTest[] {
-  const todayMs = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
-  const candidates: readonly [ScbaTestType, string][] = [
-    ['SCBA_FLOW', record.nextFlowTestDue],
-    ['SCBA_HYDRO', record.nextHydroTestDue],
-  ];
-  const tests: DueScbaTest[] = [];
-  for (const [testType, dueDate] of candidates) {
-    const dueMs = Date.parse(`${dueDate}T00:00:00Z`);
-    if (Number.isNaN(dueMs)) {
-      continue;
-    }
-    const daysUntilDue = Math.round((dueMs - todayMs) / MS_PER_DAY);
-    if (daysUntilDue >= 0 && daysUntilDue <= leadDays) {
-      tests.push({
-        apparatusId: record.apparatusId,
-        scbaUnitId: record.scbaUnitId,
-        cylinderId: record.cylinderId,
-        testType,
-        dueDate,
-      });
-    }
+function isWithinLeadWindow(dueDate: string, now: Date, leadDays: number): boolean {
+  const dueMs = Date.parse(`${dueDate}T00:00:00Z`);
+  if (Number.isNaN(dueMs)) {
+    return false;
   }
-  return tests;
+  const todayMs = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
+  const daysUntilDue = Math.round((dueMs - todayMs) / MS_PER_DAY);
+  return daysUntilDue >= 0 && daysUntilDue <= leadDays;
 }
 
 async function publishWithBoundedConcurrency(
@@ -96,8 +66,10 @@ export async function runApparatusTestingScan(
     const results = await Promise.all(
       months.map((yearMonth) => queryScbaDueInMonth(ddb, tableName, deptId, yearMonth)),
     );
-    const records = results.flat().map((item) => parseScbaMetadataItem(item, deptId));
-    dueTests = records.flatMap((record) => dueScbaTests(record, now, leadDays));
+    dueTests = results
+      .flat()
+      .map((item) => parseScbaDueItem(item))
+      .filter((test) => isWithinLeadWindow(test.dueDate, now, leadDays));
   } catch (error) {
     console.error(
       JSON.stringify({

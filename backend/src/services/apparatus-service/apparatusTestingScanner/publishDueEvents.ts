@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash } from 'node:crypto';
 import { ConditionalCheckFailedException } from '@aws-sdk/client-dynamodb';
 import { EventBridgeClient, PutEventsCommand } from '@aws-sdk/client-eventbridge';
 import { PutCommand, UpdateCommand, type DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
@@ -48,6 +48,18 @@ export interface PublishScbaTestDueParams {
 
 export type PublishScbaTestDueOutcome = 'Published' | 'SkippedDuplicate';
 
+function deterministicEventId(
+  deptId: string,
+  scbaUnitId: string,
+  testType: ScbaTestType,
+  today: string,
+): string {
+  const hash = createHash('sha256')
+    .update(`${deptId}#${scbaUnitId}#${testType}#${today}`)
+    .digest('hex');
+  return `${hash.slice(0, 8)}-${hash.slice(8, 12)}-${hash.slice(12, 16)}-${hash.slice(16, 20)}-${hash.slice(20, 32)}`;
+}
+
 function logPublishError(
   event: string,
   error: unknown,
@@ -78,6 +90,7 @@ export async function publishScbaTestDueEvent(
     pk: buildDeptScopedPk(params.deptId, 'SCBA_TEST_DUE_FLAG', today),
     sk: `SCBA#${params.scbaUnitId}#${params.testType}`,
   };
+  const eventId = deterministicEventId(params.deptId, params.scbaUnitId, params.testType, today);
 
   try {
     await ddb.send(
@@ -87,6 +100,7 @@ export async function publishScbaTestDueEvent(
           ...markerKey,
           entityType: 'SCBA_TEST_DUE_FLAG',
           flaggedAt: params.now.toISOString(),
+          eventId,
         },
         ConditionExpression: 'attribute_not_exists(pk) OR attribute_not_exists(publishedAt)',
       }),
@@ -115,7 +129,7 @@ export async function publishScbaTestDueEvent(
             DetailType: 'apparatus.test.due',
             EventBusName: busName,
             Detail: JSON.stringify({
-              eventId: randomUUID(),
+              eventId,
               eventTime: params.now.toISOString(),
               eventType: 'apparatus.test.due',
               source: EVENT_SOURCE,

@@ -4,16 +4,20 @@ import type { VerifiedPermissionsClient } from '@aws-sdk/client-verifiedpermissi
 import {
   badRequestProblem,
   extractTraceId,
+  serviceUnavailableProblem,
   withAuthorization,
   type CedarPrincipalContext,
   type GuardEvent,
 } from '@boxalarm/authz';
 import { buildDeptScopedPk, toVerifiedDeptId, type VerifiedDeptId } from '@boxalarm/dept-scope';
+import { emitOutcomeMetric } from '@boxalarm/metrics';
 import { createDynamoClient, readApparatusTableConfig } from './dynamoClient.js';
-import { parseScbaMetadataItem, type ScbaMetadataItem } from './scbaRecord.js';
+import { parseScbaDueItem, type ScbaDueItem } from './scbaRecord.js';
 
 const DEFAULT_WITHIN_DAYS = 30;
+const MAX_WITHIN_DAYS = 366;
 export const MS_PER_DAY = 24 * 60 * 60 * 1000;
+const METRIC_NAMESPACE = 'Boxalarm/ApparatusService';
 
 interface GetScbaTestingSchedulesDeps {
   readonly client: DynamoDBDocumentClient;
@@ -26,12 +30,14 @@ function monthKey(date: Date): string {
 
 export function monthsWithinWindow(now: Date, withinDays: number): readonly string[] {
   const end = new Date(now.getTime() + withinDays * MS_PER_DAY);
-  return Array.from(
-    new Set([
-      monthKey(now),
-      monthKey(new Date(Date.UTC(end.getUTCFullYear(), end.getUTCMonth(), 1))),
-    ]),
-  );
+  const months: string[] = [];
+  const cursor = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
+  const endMonth = new Date(Date.UTC(end.getUTCFullYear(), end.getUTCMonth(), 1));
+  while (cursor.getTime() <= endMonth.getTime()) {
+    months.push(monthKey(cursor));
+    cursor.setUTCMonth(cursor.getUTCMonth() + 1);
+  }
+  return months;
 }
 
 export async function queryScbaDueInMonth(
@@ -39,8 +45,8 @@ export async function queryScbaDueInMonth(
   tableName: string,
   deptId: VerifiedDeptId,
   yearMonth: string,
-): Promise<readonly ScbaMetadataItem[]> {
-  const items: ScbaMetadataItem[] = [];
+): Promise<readonly ScbaDueItem[]> {
+  const items: ScbaDueItem[] = [];
   let exclusiveStartKey: Record<string, unknown> | undefined;
   do {
     const result = await client.send(
@@ -54,13 +60,13 @@ export async function queryScbaDueInMonth(
         ...(exclusiveStartKey ? { ExclusiveStartKey: exclusiveStartKey } : {}),
       }),
     );
-    items.push(...((result.Items ?? []) as ScbaMetadataItem[]));
+    items.push(...((result.Items ?? []) as ScbaDueItem[]));
     exclusiveStartKey = result.LastEvaluatedKey as Record<string, unknown> | undefined;
   } while (exclusiveStartKey);
   return items;
 }
 
-export function isDueWithin(item: ScbaMetadataItem, now: Date, withinDays: number): boolean {
+export function isDueWithin(item: ScbaDueItem, now: Date, withinDays: number): boolean {
   const dueDate = String(item.gsi2sk).split('#')[0];
   const dueMs = Date.parse(`${dueDate}T00:00:00Z`);
   if (Number.isNaN(dueMs)) {
@@ -83,27 +89,46 @@ async function getScbaTestingSchedules(
   let withinDays = DEFAULT_WITHIN_DAYS;
   if (rawWithinDays !== undefined) {
     const parsed = Number(rawWithinDays);
-    if (!Number.isFinite(parsed)) {
-      return badRequestProblem(traceId, 'withinDays must be a finite number when provided');
+    if (!Number.isInteger(parsed) || parsed < 0 || parsed > MAX_WITHIN_DAYS) {
+      return badRequestProblem(
+        traceId,
+        `withinDays must be an integer between 0 and ${MAX_WITHIN_DAYS} when provided`,
+      );
     }
     withinDays = parsed;
   }
 
   const now = new Date();
-  const months = monthsWithinWindow(now, withinDays);
-  const results = await Promise.all(
-    months.map((yearMonth) => queryScbaDueInMonth(deps.client, deps.tableName, deptId, yearMonth)),
-  );
-  const dueSoon = results
-    .flat()
-    .filter((item) => isDueWithin(item, now, withinDays))
-    .map((item) => parseScbaMetadataItem(item, deptId));
+  try {
+    const months = monthsWithinWindow(now, withinDays);
+    const results = await Promise.all(
+      months.map((yearMonth) =>
+        queryScbaDueInMonth(deps.client, deps.tableName, deptId, yearMonth),
+      ),
+    );
+    const dueSoon = results
+      .flat()
+      .filter((item) => isDueWithin(item, now, withinDays))
+      .map((item) => parseScbaDueItem(item));
 
-  return {
-    statusCode: 200,
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ dueSoon }),
-  };
+    emitOutcomeMetric(METRIC_NAMESPACE, 'ScbaSchedulesQueried');
+    return {
+      statusCode: 200,
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ dueSoon }),
+    };
+  } catch (error) {
+    console.error(
+      JSON.stringify({
+        event: 'scba.testing_schedules.query_failed',
+        correlationId: traceId,
+        deptId,
+        error: error instanceof Error ? error.message : String(error),
+      }),
+    );
+    emitOutcomeMetric(METRIC_NAMESPACE, 'ScbaSchedulesQueryFailed');
+    return serviceUnavailableProblem(traceId);
+  }
 }
 
 interface GetScbaTestingSchedulesOverrides {
