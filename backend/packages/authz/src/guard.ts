@@ -12,7 +12,7 @@ import {
   type CedarPrincipalContext,
 } from './decide.js';
 import { emitAuthzMetric, emitInvocationMetric } from './metrics.js';
-import { forbiddenProblem, serviceUnavailableProblem } from './problemDetails.js';
+import { forbiddenProblem, serviceUnavailableProblem, unauthorizedProblem } from './problemDetails.js';
 
 type RawAuthorizerContext = Partial<CedarPrincipalContext>;
 
@@ -115,7 +115,7 @@ export function withAuthorization<TResult extends APIGatewayProxyResultV2>(
 
     const resolved = resolvePrincipal(event, traceId);
     if (!resolved) {
-      return forbiddenProblem(traceId);
+      return unauthorizedProblem(traceId);
     }
     const { token, principal } = resolved;
 
@@ -158,7 +158,7 @@ export function withBatchAuthorization(
     const traceId = extractTraceId(event);
     const resolved = resolvePrincipal(event, traceId);
     if (!resolved) {
-      return forbiddenProblem(traceId);
+      return unauthorizedProblem(traceId);
     }
     const { token, principal } = resolved;
 

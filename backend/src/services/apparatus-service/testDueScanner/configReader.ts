@@ -40,18 +40,26 @@ export async function readApparatusTestLeadDays(
   }
 }
 
-export function monthPartitionsForScan(now: Date, leadDays: number): readonly string[] {
-  const endDate = new Date(now.getTime() + leadDays * MS_PER_DAY);
-  const endCursor = Date.UTC(endDate.getUTCFullYear(), endDate.getUTCMonth(), 1);
-  const months: string[] = [];
-  let cursor = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1);
-  while (cursor <= endCursor) {
-    months.push(new Date(cursor).toISOString().slice(0, 7));
-    cursor = Date.UTC(new Date(cursor).getUTCFullYear(), new Date(cursor).getUTCMonth() + 1, 1);
-  }
-  return months;
+export interface DueWindow {
+  readonly startDate: string;
+  readonly endDate: string;
 }
 
+/** The exact [today, today+leadDays] date bounds for a single ranged GSI2 query. */
+export function dueWindowForScan(now: Date, leadDays: number): DueWindow {
+  const start = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+  const end = new Date(start.getTime() + leadDays * MS_PER_DAY);
+  return {
+    startDate: start.toISOString().slice(0, 10),
+    endDate: end.toISOString().slice(0, 10),
+  };
+}
+
+/**
+ * Belt-and-suspenders re-check against the exact lead window: the GSI2 query above already
+ * bounds results to [startDate, endDate], but this guards against a record whose dueDate
+ * failed date-shape validation from slipping through as a false positive.
+ */
 export function selectWithinLeadTime<T extends { readonly dueDate: string }>(
   records: readonly T[],
   now: Date,

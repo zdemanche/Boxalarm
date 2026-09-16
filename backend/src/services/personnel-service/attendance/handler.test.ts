@@ -282,7 +282,7 @@ describe('handler', () => {
       buildEvent({ activityType: 'DRILL', occurredAt: 1, hours: 1 }, { headers: undefined }),
     );
 
-    expect(result).toMatchObject({ statusCode: 403 });
+    expect(result).toMatchObject({ statusCode: 401 });
   });
 
   it('denies (fails closed) with 503, never a defaulted allow, when Verified Permissions is unavailable (core-harm)', async () => {

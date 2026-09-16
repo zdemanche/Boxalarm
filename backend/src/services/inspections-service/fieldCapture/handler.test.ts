@@ -87,16 +87,16 @@ describe('fieldCapture handler', () => {
     process.env = { ...originalEnv };
   });
 
-  it('returns 403 on a missing bearer token via the real exported handler (entrypoint test)', async () => {
+  it('returns 401 on a missing bearer token via the real exported handler (entrypoint test)', async () => {
     const { handler } = await import('./handler.js');
     const result = await handler(buildEvent(VALID_BODY, {}));
-    expect(result).toMatchObject({ statusCode: 403 });
+    expect(result).toMatchObject({ statusCode: 401 });
   });
 
-  it('returns 403 on a missing/invalid authorizer principal', async () => {
+  it('returns 401 on a missing/invalid authorizer principal', async () => {
     const { handler } = await import('./handler.js');
     const result = await handler(buildEvent(VALID_BODY, { authorization: 'Bearer token' }, null));
-    expect(result).toMatchObject({ statusCode: 403 });
+    expect(result).toMatchObject({ statusCode: 401 });
   });
 
   it('returns 403 on a Cedar deny', async () => {

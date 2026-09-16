@@ -180,38 +180,54 @@ export function createApparatusRepository(
       if (!apparatus) {
         return undefined;
       }
-      const [defectsResult, testsResult] = await Promise.all([
-        client.send(
-          new QueryCommand({
-            TableName: tableName,
-            KeyConditionExpression: 'pk = :pk AND begins_with(sk, :prefix)',
-            FilterExpression: '#status = :open',
-            ExpressionAttributeNames: { '#status': 'status' },
-            ExpressionAttributeValues: {
-              ':pk': buildDeptScopedPk(deptId, 'APPARATUS', apparatus.apparatusId),
-              ':prefix': 'DEFECT#',
-              ':open': 'OPEN',
-            },
-          }),
-        ),
-        client.send(
-          new QueryCommand({
-            TableName: tableName,
-            KeyConditionExpression: 'pk = :pk AND begins_with(sk, :prefix)',
-            ExpressionAttributeValues: {
-              ':pk': buildDeptScopedPk(deptId, 'APPARATUS', apparatus.apparatusId),
-              ':prefix': 'TEST#',
-            },
-            ScanIndexForward: false,
-          }),
-        ),
-      ]);
+      try {
+        const [defectsResult, testsResult] = await Promise.all([
+          client.send(
+            new QueryCommand({
+              TableName: tableName,
+              KeyConditionExpression: 'pk = :pk AND begins_with(sk, :prefix)',
+              FilterExpression: '#status = :open',
+              ExpressionAttributeNames: { '#status': 'status' },
+              ExpressionAttributeValues: {
+                ':pk': buildDeptScopedPk(deptId, 'APPARATUS', apparatus.apparatusId),
+                ':prefix': 'DEFECT#',
+                ':open': 'OPEN',
+              },
+            }),
+          ),
+          client.send(
+            new QueryCommand({
+              TableName: tableName,
+              KeyConditionExpression: 'pk = :pk AND begins_with(sk, :prefix)',
+              ExpressionAttributeValues: {
+                ':pk': buildDeptScopedPk(deptId, 'APPARATUS', apparatus.apparatusId),
+                ':prefix': 'TEST#',
+              },
+              ScanIndexForward: false,
+              // Newest-first + a small bound is enough to find the latest result per test
+              // type (at most 4: HOSE/LADDER/PUMP/AERIAL) without scanning a unit's entire
+              // lifetime test history on every hot GET /apparatus/{unitId} call.
+              Limit: 20,
+            }),
+          ),
+        ]);
 
-      return {
-        ...apparatus,
-        openDefects: (defectsResult.Items ?? []).map(toOpenDefectSummary),
-        failedTests: latestFailedTestsPerType(testsResult.Items ?? []),
-      };
+        return {
+          ...apparatus,
+          openDefects: (defectsResult.Items ?? []).map(toOpenDefectSummary),
+          failedTests: latestFailedTestsPerType(testsResult.Items ?? []),
+        };
+      } catch (error) {
+        console.error(
+          JSON.stringify({
+            event: 'apparatus.getDetail.failed',
+            deptId,
+            apparatusId: apparatus.apparatusId,
+            error: error instanceof Error ? error.message : String(error),
+          }),
+        );
+        throw error;
+      }
     },
   };
   return repository;

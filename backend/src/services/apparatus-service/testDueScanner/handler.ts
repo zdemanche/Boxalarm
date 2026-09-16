@@ -3,13 +3,9 @@ import type { EventBridgeClient } from '@aws-sdk/client-eventbridge';
 import type { Handler, ScheduledEvent } from 'aws-lambda';
 import { toVerifiedDeptId } from '@boxalarm/dept-scope';
 import { emitOutcomeMetric } from '@boxalarm/metrics';
-import { queryTestsDueInMonth } from './testsDueRepository.js';
+import { queryTestsDue } from './testsDueRepository.js';
 import { createDynamoClient } from '../dynamoClient.js';
-import {
-  monthPartitionsForScan,
-  readApparatusTestLeadDays,
-  selectWithinLeadTime,
-} from './configReader.js';
+import { dueWindowForScan, readApparatusTestLeadDays, selectWithinLeadTime } from './configReader.js';
 import { createEventBridgeClient, publishDueEvent } from './publishDueEvents.js';
 
 const METRIC_NAMESPACE = 'Boxalarm/ApparatusTestDueScanner';
@@ -55,13 +51,14 @@ export async function runApparatusTestDueScan(
 
   try {
     const leadDays = await readApparatusTestLeadDays(ddb, process.env, deptId, correlationId);
-    const monthPartitions = monthPartitionsForScan(now, leadDays);
-    const results = await Promise.all(
-      monthPartitions.map((yearMonth) =>
-        queryTestsDueInMonth(ddb, process.env, { deptId, yearMonth, correlationId }),
-      ),
-    );
-    const dueRecords = selectWithinLeadTime(results.flat(), now, leadDays);
+    const window = dueWindowForScan(now, leadDays);
+    const results = await queryTestsDue(ddb, process.env, {
+      deptId,
+      startDate: window.startDate,
+      endDate: window.endDate,
+      correlationId,
+    });
+    const dueRecords = selectWithinLeadTime(results, now, leadDays);
 
     emitOutcomeMetric(METRIC_NAMESPACE, 'Scanned');
     await publishWithBoundedConcurrency(dueRecords, (record) =>

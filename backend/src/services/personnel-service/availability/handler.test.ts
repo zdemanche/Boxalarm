@@ -247,7 +247,7 @@ describe('personnel availability handler', () => {
     errorSpy.mockRestore();
   });
 
-  it('exercises the exported, authz-wrapped Lambda handler end to end (entrypoint-test obligation): 403s (fail-secure) when no bearer token or principal is present, before any DynamoDB call', async () => {
+  it('exercises the exported, authz-wrapped Lambda handler end to end (entrypoint-test obligation): 401s (fail-secure) when no bearer token or principal is present, before any DynamoDB call', async () => {
     const send = vi.fn();
     vi.doMock('./dynamoClient.js', async (importOriginal) => {
       const actual = await importOriginal<typeof import('./dynamoClient.js')>();
@@ -255,7 +255,7 @@ describe('personnel availability handler', () => {
     });
     const { handler } = await import('./handler.js');
     const result = await handler(buildEvent({ headers: undefined } as never, PRINCIPAL));
-    expect(result).toMatchObject({ statusCode: 403 });
+    expect(result).toMatchObject({ statusCode: 401 });
     expect(send).not.toHaveBeenCalled();
   });
 });

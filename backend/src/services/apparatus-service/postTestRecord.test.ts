@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Decision, type VerifiedPermissionsClient } from '@aws-sdk/client-verifiedpermissions';
-import { PutCommand, type DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
+import { TransactWriteCommand, type DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
 import type { CedarPrincipalContext, GuardEvent } from '@boxalarm/authz';
 import type { ApparatusRepository } from './apparatusRepository.js';
 
@@ -68,7 +68,7 @@ function fakeApparatusRepository(apparatusId: string | undefined): ApparatusRepo
 
 function fakeDynamoClient(putError?: Error): DynamoDBDocumentClient {
   const send = vi.fn((command: unknown) => {
-    if (command instanceof PutCommand) {
+    if (command instanceof TransactWriteCommand) {
       return putError ? Promise.reject(putError) : Promise.resolve({});
     }
     return Promise.reject(new Error('unexpected command'));
@@ -78,11 +78,23 @@ function fakeDynamoClient(putError?: Error): DynamoDBDocumentClient {
 
 const NOW = () => '2026-09-14';
 
-function findPutItem(client: DynamoDBDocumentClient): Record<string, unknown> {
+function findTransactItems(
+  client: DynamoDBDocumentClient,
+): { readonly Put: { readonly Item: Record<string, unknown> } }[] {
   const call = (client.send as ReturnType<typeof vi.fn>).mock.calls.find(
-    (call: unknown[]) => call[0] instanceof PutCommand,
-  ) as [PutCommand] | undefined;
-  return call?.[0].input.Item as Record<string, unknown>;
+    (call: unknown[]) => call[0] instanceof TransactWriteCommand,
+  ) as [TransactWriteCommand] | undefined;
+  return (call?.[0].input.TransactItems ?? []) as {
+    readonly Put: { readonly Item: Record<string, unknown> };
+  }[];
+}
+
+function findPutItem(client: DynamoDBDocumentClient): Record<string, unknown> {
+  return findTransactItems(client)[0]?.Put.Item as Record<string, unknown>;
+}
+
+function findDueItem(client: DynamoDBDocumentClient): Record<string, unknown> {
+  return findTransactItems(client)[1]?.Put.Item as Record<string, unknown>;
 }
 
 async function importHandler() {
@@ -97,7 +109,7 @@ const VALID_BODY = JSON.stringify({
 });
 
 describe('postTestRecord handler', () => {
-  it('returns 403 forbidden when the bearer token is missing', async () => {
+  it('returns 401 unauthorized when the bearer token is missing', async () => {
     const createHandler = await importHandler();
     const handler = createHandler({
       client: fakeDynamoClient(),
@@ -106,7 +118,7 @@ describe('postTestRecord handler', () => {
       now: NOW,
     });
     const result = await handler(buildEvent(VALID_BODY, 'ENGINE-2', PRINCIPAL, {}));
-    expect(result).toMatchObject({ statusCode: 403 });
+    expect(result).toMatchObject({ statusCode: 401 });
   });
 
   it('returns 403 forbidden on a Cedar deny', async () => {
@@ -255,5 +267,10 @@ describe('postTestRecord handler', () => {
     expect(putItem.nextDueDate).toBe('2027-05-01');
     expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('TestRecordLogged'));
     logSpy.mockRestore();
+
+    const dueItem = findDueItem(dynamoClient);
+    expect(dueItem.entityType).toBe('APPARATUS_TEST_DUE');
+    expect(dueItem.sk).toBe('DUE#HOSE');
+    expect(dueItem.gsi2sk).toBe('2027-05-01#APP-ENGINE-2#HOSE');
   });
 });

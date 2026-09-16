@@ -1,23 +1,36 @@
 import type { APIGatewayProxyResultV2 } from 'aws-lambda';
 import { QueryCommand, type DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
 import type { VerifiedPermissionsClient } from '@aws-sdk/client-verifiedpermissions';
-import { withAuthorization, type CedarPrincipalContext, type GuardEvent } from '@boxalarm/authz';
+import {
+  extractTraceId,
+  serviceUnavailableProblem,
+  withAuthorization,
+  type CedarPrincipalContext,
+  type GuardEvent,
+} from '@boxalarm/authz';
 import { buildDeptScopedPk, toVerifiedDeptId, type VerifiedDeptId } from '@boxalarm/dept-scope';
+import { emitOutcomeMetric } from '@boxalarm/metrics';
+import { createApparatusRepository, type ApparatusRepository } from './apparatusRepository.js';
 import { createDynamoClient, readApparatusTableConfig } from './dynamoClient.js';
-import type { TestType } from './testRecord.js';
+import { parseTestDueItem, type TestDueItem } from './testRecord.js';
 
 const DEFAULT_MONTHS_AHEAD = 24;
 const MAX_MONTHS_AHEAD = 36;
+const METRIC_NAMESPACE = 'Boxalarm/Apparatus';
+// Sorts after any real apparatusId/testType suffix, so `sk BETWEEN start AND end#SENTINEL`
+// correctly includes every entry whose date component equals the end date.
+const RANGE_END_SENTINEL = '￿';
 
 interface GetTestingSchedulesDeps {
   readonly client: DynamoDBDocumentClient;
   readonly tableName: string;
+  readonly apparatusRepository: ApparatusRepository;
   readonly now: () => Date;
 }
 
 interface TestingScheduleEntry {
   readonly unitId: string;
-  readonly testType: TestType;
+  readonly testType: string;
   readonly nextDueDate: string;
 }
 
@@ -29,53 +42,45 @@ function monthsAheadFromQuery(value: string | undefined): number {
   return Math.min(parsed, MAX_MONTHS_AHEAD);
 }
 
-function monthWindow(now: Date, monthsAhead: number): readonly string[] {
-  const months: string[] = [];
-  let cursor = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1);
-  for (let i = 0; i <= monthsAhead; i += 1) {
-    months.push(new Date(cursor).toISOString().slice(0, 7));
-    cursor = Date.UTC(new Date(cursor).getUTCFullYear(), new Date(cursor).getUTCMonth() + 1, 1);
-  }
-  return months;
+function isoDate(date: Date): string {
+  return date.toISOString().slice(0, 10);
 }
 
-function parseGsi2Sk(gsi2sk: unknown): TestingScheduleEntry | undefined {
-  if (typeof gsi2sk !== 'string') {
-    return undefined;
-  }
-  const [nextDueDate, unitId, testType] = gsi2sk.split('#');
-  if (!nextDueDate || !unitId || !testType) {
-    return undefined;
-  }
-  return { unitId, testType: testType as TestType, nextDueDate };
+/** Last day of the month that is `monthsAhead` months after `now`, inclusive. */
+function windowEndDate(now: Date, monthsAhead: number): string {
+  const lastDayOfTargetMonth = new Date(
+    Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + monthsAhead + 1, 0),
+  );
+  return isoDate(lastDayOfTargetMonth);
 }
 
-async function queryMonth(
+async function queryDueWindow(
   client: DynamoDBDocumentClient,
   tableName: string,
   deptId: VerifiedDeptId,
-  yearMonth: string,
-): Promise<readonly TestingScheduleEntry[]> {
-  const items: Record<string, unknown>[] = [];
+  startDate: string,
+  endDate: string,
+): Promise<readonly TestDueItem[]> {
+  const items: TestDueItem[] = [];
   let exclusiveStartKey: Record<string, unknown> | undefined;
   do {
     const output = await client.send(
       new QueryCommand({
         TableName: tableName,
         IndexName: 'GSI2',
-        KeyConditionExpression: 'gsi2pk = :gsi2pk',
+        KeyConditionExpression: 'gsi2pk = :gsi2pk AND gsi2sk BETWEEN :start AND :end',
         ExpressionAttributeValues: {
-          ':gsi2pk': buildDeptScopedPk(deptId, 'DUE', 'APPARATUS_TEST', yearMonth),
+          ':gsi2pk': buildDeptScopedPk(deptId, 'DUE', 'APPARATUS_TEST'),
+          ':start': startDate,
+          ':end': `${endDate}#${RANGE_END_SENTINEL}`,
         },
         ExclusiveStartKey: exclusiveStartKey,
       }),
     );
-    items.push(...(output.Items ?? []));
+    items.push(...((output.Items ?? []) as TestDueItem[]));
     exclusiveStartKey = output.LastEvaluatedKey;
   } while (exclusiveStartKey);
-  return items
-    .map((item) => parseGsi2Sk(item.gsi2sk))
-    .filter((entry): entry is TestingScheduleEntry => entry !== undefined);
+  return items;
 }
 
 async function getTestingSchedules(
@@ -83,33 +88,68 @@ async function getTestingSchedules(
   principal: CedarPrincipalContext,
   deps: GetTestingSchedulesDeps,
 ): Promise<APIGatewayProxyResultV2> {
+  const traceId = extractTraceId(event);
   const deptId = toVerifiedDeptId(principal);
   const monthsAhead = monthsAheadFromQuery(event.queryStringParameters?.monthsAhead);
-  const months = monthWindow(deps.now(), monthsAhead);
+  const now = deps.now();
 
-  const results = await Promise.all(
-    months.map((yearMonth) => queryMonth(deps.client, deps.tableName, deptId, yearMonth)),
-  );
-  const schedule = results.flat().sort((a, b) => a.nextDueDate.localeCompare(b.nextDueDate));
+  try {
+    const dueItems = await queryDueWindow(
+      deps.client,
+      deps.tableName,
+      deptId,
+      isoDate(now),
+      windowEndDate(now, monthsAhead),
+    );
+    const apparatusList = await deps.apparatusRepository.listApparatus(deptId);
+    const unitIdByApparatusId = new Map(apparatusList.map((a) => [a.apparatusId, a.unitId]));
 
-  return {
-    statusCode: 200,
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify(schedule),
-  };
+    const schedule: TestingScheduleEntry[] = dueItems
+      .map(parseTestDueItem)
+      .map((entry) => ({
+        unitId: unitIdByApparatusId.get(entry.apparatusId) ?? entry.apparatusId,
+        testType: entry.testType,
+        nextDueDate: entry.nextDueDate,
+      }))
+      .sort((a, b) => a.nextDueDate.localeCompare(b.nextDueDate));
+
+    emitOutcomeMetric(METRIC_NAMESPACE, 'TestingSchedulesFetched');
+    return {
+      statusCode: 200,
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(schedule),
+    };
+  } catch (error) {
+    console.error(
+      JSON.stringify({
+        event: 'apparatusTest.testingSchedules.query_failed',
+        correlationId: traceId,
+        deptId,
+        monthsAhead,
+        error: error instanceof Error ? error.message : String(error),
+      }),
+    );
+    emitOutcomeMetric(METRIC_NAMESPACE, 'TestingSchedulesFetchFailed');
+    return serviceUnavailableProblem(traceId);
+  }
 }
 
 interface GetTestingSchedulesOverrides {
   readonly client?: DynamoDBDocumentClient;
   readonly tableName?: string;
+  readonly apparatusRepository?: ApparatusRepository;
   readonly now?: () => Date;
   readonly authzClient?: VerifiedPermissionsClient;
 }
 
 function resolveDeps(overrides: GetTestingSchedulesOverrides): GetTestingSchedulesDeps {
+  const client = overrides.client ?? createDynamoClient(process.env);
+  const tableName = overrides.tableName ?? readApparatusTableConfig(process.env).tableName;
   return {
-    client: overrides.client ?? createDynamoClient(process.env),
-    tableName: overrides.tableName ?? readApparatusTableConfig(process.env).tableName,
+    client,
+    tableName,
+    apparatusRepository:
+      overrides.apparatusRepository ?? createApparatusRepository(client, tableName),
     now: overrides.now ?? (() => new Date()),
   };
 }

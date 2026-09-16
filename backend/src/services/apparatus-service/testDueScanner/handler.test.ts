@@ -25,13 +25,17 @@ afterEach(() => {
 });
 
 function dueTestItem(overrides: Record<string, unknown> = {}): Record<string, unknown> {
-  return { gsi2sk: '2026-09-20#APP-ENGINE-2#HOSE', ...overrides };
+  return {
+    apparatusId: 'APP-ENGINE-2',
+    testType: 'HOSE',
+    nextDueDate: '2026-09-20',
+    ...overrides,
+  };
 }
 
 interface DdbBehavior {
   readonly leadDaysItem?: Record<string, unknown>;
-  readonly currentMonthItems?: Record<string, unknown>[];
-  readonly nextMonthItems?: Record<string, unknown>[];
+  readonly dueItems?: Record<string, unknown>[];
   readonly dedupConflict?: boolean;
 }
 
@@ -41,10 +45,7 @@ function ddbSend(behavior: DdbBehavior): ReturnType<typeof vi.fn> {
       return { Item: behavior.leadDaysItem };
     }
     if (command instanceof QueryCommand) {
-      const gsi2pk = command.input.ExpressionAttributeValues?.[':gsi2pk'] as string;
-      return gsi2pk.endsWith('2026-09')
-        ? { Items: behavior.currentMonthItems ?? [] }
-        : { Items: behavior.nextMonthItems ?? [] };
+      return { Items: behavior.dueItems ?? [] };
     }
     if (command instanceof PutCommand) {
       if (behavior.dedupConflict) {
@@ -66,7 +67,7 @@ describe('runApparatusTestDueScan (core-harm: exactly one publish, no false nega
     const { runApparatusTestDueScan } = await import('./handler.js');
     const send = ddbSend({
       leadDaysItem: { value: { apparatusTestLeadDays: 30 } },
-      currentMonthItems: [dueTestItem()],
+      dueItems: [dueTestItem()],
     });
     const ebSend = vi.fn().mockResolvedValue({ Entries: [{}] });
 
@@ -83,7 +84,7 @@ describe('runApparatusTestDueScan (core-harm: exactly one publish, no false nega
     const { runApparatusTestDueScan } = await import('./handler.js');
     const send = ddbSend({
       leadDaysItem: { value: { apparatusTestLeadDays: 5 } },
-      currentMonthItems: [dueTestItem({ gsi2sk: '2026-09-30#APP-ENGINE-2#HOSE' })],
+      dueItems: [dueTestItem({ nextDueDate: '2026-09-30' })],
     });
     const ebSend = vi.fn();
 
@@ -100,7 +101,7 @@ describe('runApparatusTestDueScan (core-harm: exactly one publish, no false nega
     const { runApparatusTestDueScan } = await import('./handler.js');
     const send = ddbSend({
       leadDaysItem: { value: { apparatusTestLeadDays: 30 } },
-      currentMonthItems: [dueTestItem()],
+      dueItems: [dueTestItem()],
       dedupConflict: true,
     });
     const ebSend = vi.fn();
@@ -117,7 +118,7 @@ describe('runApparatusTestDueScan (core-harm: exactly one publish, no false nega
   it('falls back to the default lead time and still scans when no config is set', async () => {
     const { runApparatusTestDueScan } = await import('./handler.js');
     const send = ddbSend({
-      currentMonthItems: [dueTestItem({ gsi2sk: '2026-10-05#APP-ENGINE-2#HOSE' })],
+      dueItems: [dueTestItem({ nextDueDate: '2026-10-05' })],
     });
     const ebSend = vi.fn().mockResolvedValue({ Entries: [{}] });
 
@@ -197,7 +198,7 @@ describe('handler (entrypoint-test obligation — the exported Lambda handler, n
     vi.setSystemTime(NOW);
     const ddbCalls = ddbSend({
       leadDaysItem: { value: { apparatusTestLeadDays: 30 } },
-      currentMonthItems: [dueTestItem()],
+      dueItems: [dueTestItem()],
     });
     mockDynamoModule(ddbCalls);
     const ebSend = vi.fn().mockResolvedValue({ Entries: [{}] });

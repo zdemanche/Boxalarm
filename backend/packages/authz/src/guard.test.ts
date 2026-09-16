@@ -105,7 +105,7 @@ describe('withAuthorization', () => {
     expect(inner).not.toHaveBeenCalled();
   });
 
-  it('denies (fail-closed, 403 not 503) on a missing bearer token, missing principal, or malformed principal', async () => {
+  it('denies (fail-closed, 401 not 503) on a missing bearer token, missing principal, or malformed principal', async () => {
     const { withAuthorization } = await import('./guard.js');
     const inner = vi.fn();
     const wrapped = withAuthorization(inner, {
@@ -120,9 +120,9 @@ describe('withAuthorization', () => {
     const noPrincipal = await wrapped(buildEvent({ authorization: 'Bearer token' }, undefined));
     const malformed = await wrapped(buildEvent({ authorization: 'Bearer token' }, { sub: 'x' }));
 
-    expect(noToken).toMatchObject({ statusCode: 403 });
-    expect(noPrincipal).toMatchObject({ statusCode: 403 });
-    expect(malformed).toMatchObject({ statusCode: 403 });
+    expect(noToken).toMatchObject({ statusCode: 401 });
+    expect(noPrincipal).toMatchObject({ statusCode: 401 });
+    expect(malformed).toMatchObject({ statusCode: 401 });
     expect(inner).not.toHaveBeenCalled();
   });
 

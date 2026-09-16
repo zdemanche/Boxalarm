@@ -148,11 +148,11 @@ describe('handler (Cedar-authorized entrypoint)', () => {
     expect(ddbMock.calls()).toHaveLength(0);
   });
 
-  it('denies with 403 when the authorizer context is missing (fail-secure)', async () => {
+  it('denies with 401 when the authorizer context is missing (fail-secure)', async () => {
     const result = (await handler(
       buildEvent({ body: validBody, authorization: 'Bearer member-token' }),
     )) as { statusCode: number };
-    expect(result.statusCode).toBe(403);
+    expect(result.statusCode).toBe(401);
   });
 
   it('fails closed with 503, not a silent allow, when Verified Permissions is unavailable', async () => {

@@ -1,6 +1,7 @@
 import { QueryCommand, type DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
 import { buildDeptScopedPk, type VerifiedDeptId } from '@boxalarm/dept-scope';
 import { readApparatusTableConfig } from '../dynamoClient.js';
+import { parseTestDueItem, type TestDueItem } from '../testRecord.js';
 
 export interface TestDueRecord {
   readonly apparatusId: string;
@@ -8,57 +9,57 @@ export interface TestDueRecord {
   readonly dueDate: string;
 }
 
-export interface QueryTestsDueInMonthParams {
+export interface QueryTestsDueParams {
   readonly deptId: VerifiedDeptId;
-  readonly yearMonth: string;
+  readonly startDate: string;
+  readonly endDate: string;
   readonly correlationId: string;
 }
 
-function toTestDueRecord(item: Record<string, unknown>): TestDueRecord | undefined {
-  const gsi2sk = item.gsi2sk;
-  if (typeof gsi2sk !== 'string') {
-    return undefined;
-  }
-  const [dueDate, apparatusId, testType] = gsi2sk.split('#');
-  if (!dueDate || !apparatusId || !testType) {
-    return undefined;
-  }
-  return { apparatusId, testType, dueDate };
-}
+// Sorts after any real apparatusId/testType suffix, so `sk BETWEEN start AND end#SENTINEL`
+// correctly includes every entry whose date component equals the end date.
+const RANGE_END_SENTINEL = '￿';
 
-export async function queryTestsDueInMonth(
+export async function queryTestsDue(
   client: DynamoDBDocumentClient,
   env: NodeJS.ProcessEnv,
-  params: QueryTestsDueInMonthParams,
+  params: QueryTestsDueParams,
 ): Promise<readonly TestDueRecord[]> {
   const { tableName } = readApparatusTableConfig(env);
   try {
-    const items: Record<string, unknown>[] = [];
+    const items: TestDueItem[] = [];
     let exclusiveStartKey: Record<string, unknown> | undefined;
     do {
       const output = await client.send(
         new QueryCommand({
           TableName: tableName,
           IndexName: 'GSI2',
-          KeyConditionExpression: 'gsi2pk = :gsi2pk',
+          KeyConditionExpression: 'gsi2pk = :gsi2pk AND gsi2sk BETWEEN :start AND :end',
           ExpressionAttributeValues: {
-            ':gsi2pk': buildDeptScopedPk(params.deptId, 'DUE', 'APPARATUS_TEST', params.yearMonth),
+            ':gsi2pk': buildDeptScopedPk(params.deptId, 'DUE', 'APPARATUS_TEST'),
+            ':start': params.startDate,
+            ':end': `${params.endDate}#${RANGE_END_SENTINEL}`,
           },
           ExclusiveStartKey: exclusiveStartKey,
         }),
       );
-      items.push(...(output.Items ?? []));
+      items.push(...((output.Items ?? []) as TestDueItem[]));
       exclusiveStartKey = output.LastEvaluatedKey;
     } while (exclusiveStartKey);
     return items
-      .map(toTestDueRecord)
-      .filter((record): record is TestDueRecord => record !== undefined);
+      .map(parseTestDueItem)
+      .map((entry) => ({
+        apparatusId: entry.apparatusId,
+        testType: entry.testType,
+        dueDate: entry.nextDueDate,
+      }));
   } catch (error) {
     console.error(
       JSON.stringify({
-        event: 'testDueScanner.queryDueInMonth.failed',
+        event: 'testDueScanner.queryDue.failed',
         service: 'apparatus',
         reason: error instanceof Error ? error.constructor.name : 'UnknownError',
+        message: error instanceof Error ? error.message : undefined,
         correlationId: params.correlationId,
       }),
     );

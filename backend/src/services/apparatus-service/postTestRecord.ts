@@ -1,5 +1,5 @@
 import type { APIGatewayProxyResultV2 } from 'aws-lambda';
-import { PutCommand, type DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
+import { TransactWriteCommand, type DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
 import type { VerifiedPermissionsClient } from '@aws-sdk/client-verifiedpermissions';
 import {
   extractTraceId,
@@ -12,6 +12,7 @@ import { emitOutcomeMetric } from '@boxalarm/metrics';
 import { createApparatusRepository, type ApparatusRepository } from './apparatusRepository.js';
 import { createDynamoClient, readApparatusTableConfig } from './dynamoClient.js';
 import {
+  buildTestDueItem,
   buildTestRecordItem,
   parseTestRecordItem,
   type TestResult,
@@ -140,9 +141,17 @@ async function postTestRecord(
   }
 
   const item = buildTestRecordItem(deptId, apparatus.apparatusId, validation.value);
+  const dueItem = buildTestDueItem(deptId, apparatus.apparatusId, validation.value);
 
   try {
-    await deps.client.send(new PutCommand({ TableName: deps.tableName, Item: item }));
+    await deps.client.send(
+      new TransactWriteCommand({
+        TransactItems: [
+          { Put: { TableName: deps.tableName, Item: item } },
+          { Put: { TableName: deps.tableName, Item: dueItem } },
+        ],
+      }),
+    );
   } catch (error) {
     console.error(
       JSON.stringify({

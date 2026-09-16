@@ -66,24 +66,24 @@ async function importHandler() {
 }
 
 describe('getMaintenance handler', () => {
-  it('returns 403 forbidden when the bearer token is missing', async () => {
+  it('returns 401 unauthorized when the bearer token is missing', async () => {
     const createGetMaintenanceHandler = await importHandler();
     const handler = createGetMaintenanceHandler({
       client: fakeDynamoClient([]),
       authzClient: fakeAuthzClient('ALLOW'),
     });
     const result = await handler(buildEvent('ENGINE-2', PRINCIPAL, {}));
-    expect(result).toMatchObject({ statusCode: 403 });
+    expect(result).toMatchObject({ statusCode: 401 });
   });
 
-  it('returns 403 forbidden when the principal is missing', async () => {
+  it('returns 401 unauthorized when the principal is missing', async () => {
     const createGetMaintenanceHandler = await importHandler();
     const handler = createGetMaintenanceHandler({
       client: fakeDynamoClient([]),
       authzClient: fakeAuthzClient('ALLOW'),
     });
     const result = await handler(buildEvent('ENGINE-2', null));
-    expect(result).toMatchObject({ statusCode: 403 });
+    expect(result).toMatchObject({ statusCode: 401 });
   });
 
   it('returns 403 forbidden on a Cedar deny', async () => {

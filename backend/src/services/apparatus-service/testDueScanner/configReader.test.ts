@@ -3,7 +3,7 @@ import { GetCommand, type DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
 import { toVerifiedDeptId } from '@boxalarm/dept-scope';
 import {
   DEFAULT_APPARATUS_TEST_LEAD_DAYS,
-  monthPartitionsForScan,
+  dueWindowForScan,
   readApparatusTestLeadDays,
   selectWithinLeadTime,
 } from './configReader.js';
@@ -78,16 +78,19 @@ describe('readApparatusTestLeadDays', () => {
   });
 });
 
-describe('monthPartitionsForScan', () => {
-  it('returns the current and next YYYY-MM partitions for the default 30-day lead time', () => {
-    expect(monthPartitionsForScan(new Date('2026-09-14T12:00:00Z'), 30)).toEqual([
-      '2026-09',
-      '2026-10',
-    ]);
+describe('dueWindowForScan', () => {
+  it('returns [today, today+leadDays] as the exact ranged-query bounds', () => {
+    expect(dueWindowForScan(new Date('2026-09-14T12:00:00Z'), 30)).toEqual({
+      startDate: '2026-09-14',
+      endDate: '2026-10-14',
+    });
   });
 
-  it('returns only the current month for a zero-day lead time', () => {
-    expect(monthPartitionsForScan(new Date('2026-09-14T00:00:00Z'), 0)).toEqual(['2026-09']);
+  it('returns a single-day window for a zero-day lead time', () => {
+    expect(dueWindowForScan(new Date('2026-09-14T00:00:00Z'), 0)).toEqual({
+      startDate: '2026-09-14',
+      endDate: '2026-09-14',
+    });
   });
 });
 

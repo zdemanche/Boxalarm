@@ -137,9 +137,15 @@ describe('getApparatusDetail (AC3)', () => {
   }): { readonly client: DynamoDBDocumentClient; readonly send: ReturnType<typeof vi.fn> } {
     const send = vi.fn((command: unknown) => {
       const input = (command as { input: Record<string, unknown> }).input;
-      const prefix = (input.ExpressionAttributeValues as Record<string, unknown>)?.[':prefix'];
+      const values = input.ExpressionAttributeValues as Record<string, unknown>;
+      const prefix = values?.[':prefix'];
       if (prefix === 'DEFECT#') {
-        return Promise.resolve({ Items: options.defectItems ?? [] });
+        // Honor the real FilterExpression (#status = :open) so a fixture with a non-OPEN
+        // defect actually proves it gets excluded, rather than the fake client always
+        // returning the whole fixture regardless of what the handler filtered for.
+        const openValue = values?.[':open'];
+        const items = (options.defectItems ?? []).filter((item) => item.status === openValue);
+        return Promise.resolve({ Items: items });
       }
       if (prefix === 'TEST#') {
         return Promise.resolve({ Items: options.testItems ?? [] });
@@ -169,6 +175,14 @@ describe('getApparatusDetail (AC3)', () => {
           description: 'Low tire pressure',
           severity: 'MINOR',
           reportedAt: 1798050000,
+          status: 'OPEN',
+        },
+        {
+          defectId: 'DEF-0',
+          description: 'Already repaired brake pad',
+          severity: 'MAJOR',
+          reportedAt: 1797000000,
+          status: 'CLOSED',
         },
       ],
       testItems: [

@@ -59,14 +59,14 @@ describe('listHandler', () => {
     vi.doUnmock('./repository.js');
   });
 
-  it('returns 403 on a missing/malformed bearer token', async () => {
+  it('returns 401 on a missing/malformed bearer token', async () => {
     mockVerifiedPermissions(() => Promise.resolve({ decision: 'ALLOW' }));
     await mockRepository({ listApparatus: vi.fn() });
 
     const { handler } = await import('./listHandler.js');
     const result = await handler(buildEvent(CHIEF, {}));
 
-    expect(result).toMatchObject({ statusCode: 403 });
+    expect(result).toMatchObject({ statusCode: 401 });
   });
 
   it('returns 503 when Verified Permissions is unavailable', async () => {
