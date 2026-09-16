@@ -9,9 +9,7 @@ const DISPATCH_ID = 'DISPATCH-0511';
 const APP_PK = `DEPT#${DEPT_ID}#APPARATUS#APP-ENGINE-2`;
 const DISPATCH_PK = `DEPT#${DEPT_ID}#DISPATCH#${DISPATCH_ID}`;
 
-function apparatusItem(
-  overrides: Partial<Record<string, unknown>> = {},
-): Record<string, unknown> {
+function apparatusItem(overrides: Partial<Record<string, unknown>> = {}): Record<string, unknown> {
   return {
     pk: APP_PK,
     sk: 'METADATA',
@@ -179,7 +177,10 @@ describe('assignSeat', () => {
     const seat = client.peek(DISPATCH_PK, 'SEAT#APP-ENGINE-2#DRIVER');
     expect(seat?.memberId).toBe(winnerMemberId);
     const conflictOutcome = first.kind === 'CONFLICT' ? first : second;
-    expect(conflictOutcome).toMatchObject({ kind: 'CONFLICT', current: { memberId: winnerMemberId } });
+    expect(conflictOutcome).toMatchObject({
+      kind: 'CONFLICT',
+      current: { memberId: winnerMemberId },
+    });
   });
 
   it('AC3: an unmet-qualification assignment is permitted, never blocked by the repository', async () => {
@@ -302,7 +303,9 @@ describe('getRidingBoard', () => {
 
     const board = await getRidingBoard(client, TABLE, DEPT_ID, DISPATCH_ID);
 
-    const driverPosition = board.apparatus[0]?.positions.find((position) => position.code === 'DRIVER');
+    const driverPosition = board.apparatus[0]?.positions.find(
+      (position) => position.code === 'DRIVER',
+    );
     expect(driverPosition?.assignment).toMatchObject({ memberId: 'MBR-0012', qualStatus: 'UNMET' });
   });
 
@@ -329,7 +332,9 @@ describe('getRidingBoard', () => {
 
     const board = await getRidingBoard(client, TABLE, DEPT_ID, DISPATCH_ID);
 
-    const driverPosition = board.apparatus[0]?.positions.find((position) => position.code === 'DRIVER');
+    const driverPosition = board.apparatus[0]?.positions.find(
+      (position) => position.code === 'DRIVER',
+    );
     expect(driverPosition?.assignment).toMatchObject({ qualStatus: 'MET' });
   });
 
@@ -349,6 +354,8 @@ describe('getRidingBoard', () => {
 
     const board = await getRidingBoard(client, TABLE, DEPT_ID, DISPATCH_ID);
 
-    expect(board.apparatus[0]?.positions.every((position) => position.assignment === undefined)).toBe(true);
+    expect(
+      board.apparatus[0]?.positions.every((position) => position.assignment === undefined),
+    ).toBe(true);
   });
 });

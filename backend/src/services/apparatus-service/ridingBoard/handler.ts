@@ -1,4 +1,7 @@
-import type { APIGatewayProxyHandlerV2WithLambdaAuthorizer, APIGatewayProxyResultV2 } from 'aws-lambda';
+import type {
+  APIGatewayProxyHandlerV2WithLambdaAuthorizer,
+  APIGatewayProxyResultV2,
+} from 'aws-lambda';
 import {
   badRequestProblem,
   extractTraceId,
@@ -50,7 +53,12 @@ export const getRidingBoardHandler: APIGatewayProxyHandlerV2WithLambdaAuthorizer
 
   const dispatchId = event.pathParameters?.dispatchId;
   if (!dispatchId) {
-    return apparatusProblemResponse(400, 'Bad Request', 'dispatchId path parameter is required.', traceId);
+    return apparatusProblemResponse(
+      400,
+      'Bad Request',
+      'dispatchId path parameter is required.',
+      traceId,
+    );
   }
 
   try {
@@ -65,7 +73,12 @@ export const getRidingBoardHandler: APIGatewayProxyHandlerV2WithLambdaAuthorizer
   } catch (error) {
     logError('apparatus.ridingBoard.get.failed', error, { traceId, deptId, dispatchId });
     emitApparatusMetric('RidingBoardReadFailed');
-    return apparatusProblemResponse(503, 'Service Unavailable', 'Unable to read the riding board.', traceId);
+    return apparatusProblemResponse(
+      503,
+      'Service Unavailable',
+      'Unable to read the riding board.',
+      traceId,
+    );
   }
 };
 
@@ -159,10 +172,20 @@ async function postAssignment(
     return badRequestProblem(traceId, 'positionCode is required and must be a non-empty string.');
   }
   if (memberId !== null && typeof memberId !== 'string') {
-    return badRequestProblem(traceId, 'memberId must be a string (the assigned member) or null (vacate).');
+    return badRequestProblem(
+      traceId,
+      'memberId must be a string (the assigned member) or null (vacate).',
+    );
   }
-  if (typeof expectedVersion !== 'number' || !Number.isInteger(expectedVersion) || expectedVersion < 0) {
-    return badRequestProblem(traceId, 'expectedVersion is required and must be a non-negative integer.');
+  if (
+    typeof expectedVersion !== 'number' ||
+    !Number.isInteger(expectedVersion) ||
+    expectedVersion < 0
+  ) {
+    return badRequestProblem(
+      traceId,
+      'expectedVersion is required and must be a non-negative integer.',
+    );
   }
   if (typeof clientAssignmentId !== 'string' || clientAssignmentId.length === 0) {
     return badRequestProblem(

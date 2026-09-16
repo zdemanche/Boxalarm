@@ -235,7 +235,10 @@ export async function getRidingBoard(
             version: seat.version,
             assignedAt: seat.assignedAt,
             assignedBy: seat.assignedBy,
-            qualStatus: seatQualStatus(position.requiredQual, qualsByMember.get(seat.memberId) ?? new Set()),
+            qualStatus: seatQualStatus(
+              position.requiredQual,
+              qualsByMember.get(seat.memberId) ?? new Set(),
+            ),
           },
         };
       }),
@@ -317,13 +320,19 @@ export async function assignSeat(
     emitOutcomeMetric(METRICS_NAMESPACE, 'RidingAssignmentOutOfService');
     return {
       kind: 'OUT_OF_SERVICE',
-      ...(apparatus.outOfServiceReason !== undefined ? { reason: apparatus.outOfServiceReason } : {}),
+      ...(apparatus.outOfServiceReason !== undefined
+        ? { reason: apparatus.outOfServiceReason }
+        : {}),
     };
   }
 
   const dispatchPk = buildDeptScopedPk(deptId, 'DISPATCH', dispatchId);
   const seatSkValue = seatSk(apparatus.apparatusId, input.positionCode);
-  const historySkValue = seatHistSk(apparatus.apparatusId, input.positionCode, input.clientAssignmentId);
+  const historySkValue = seatHistSk(
+    apparatus.apparatusId,
+    input.positionCode,
+    input.clientAssignmentId,
+  );
 
   let historyExisting;
   try {
@@ -375,7 +384,10 @@ export async function assignSeat(
           {
             ConditionCheck: {
               TableName: tableName,
-              Key: { pk: buildDeptScopedPk(deptId, 'APPARATUS', apparatus.apparatusId), sk: 'METADATA' },
+              Key: {
+                pk: buildDeptScopedPk(deptId, 'APPARATUS', apparatus.apparatusId),
+                sk: 'METADATA',
+              },
               ConditionExpression: '#status = :inService',
               ExpressionAttributeNames: { '#status': 'status' },
               ExpressionAttributeValues: { ':inService': 'IN_SERVICE' },

@@ -118,8 +118,7 @@ async function updateResponseUnit(
   for (let attempt = 0; attempt < MAX_UPDATE_ATTEMPTS; attempt += 1) {
     const existing = await client.send(new GetCommand({ TableName: tableName, Key: key }));
     const existingItem = existing.Item as
-      | { assignedPositions?: unknown; assignedPositionsUpdatedAt?: unknown }
-      | undefined;
+      { assignedPositions?: unknown; assignedPositionsUpdatedAt?: unknown } | undefined;
     const priorUpdatedAt =
       typeof existingItem?.assignedPositionsUpdatedAt === 'number'
         ? existingItem.assignedPositionsUpdatedAt
@@ -160,7 +159,9 @@ async function updateResponseUnit(
       throw error;
     }
   }
-  throw new Error('INCIDENT_RESPONSE_UNIT assignedPositions update exceeded retry attempts on concurrent writers');
+  throw new Error(
+    'INCIDENT_RESPONSE_UNIT assignedPositions update exceeded retry attempts on concurrent writers',
+  );
 }
 
 async function processRecord(record: SQSRecord, deps: RidingAssignmentConsumerDeps): Promise<void> {
@@ -172,7 +173,8 @@ async function processRecord(record: SQSRecord, deps: RidingAssignmentConsumerDe
     throw error;
   }
 
-  const { eventId, eventTime, deptId, dispatchId, apparatusId, memberId, previousMemberId } = envelope;
+  const { eventId, eventTime, deptId, dispatchId, apparatusId, memberId, previousMemberId } =
+    envelope;
   const tableName = getTableName(process.env);
   const client = deps.client ?? getDocumentClient();
   const dedupKey = {

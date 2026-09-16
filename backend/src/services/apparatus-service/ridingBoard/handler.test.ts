@@ -38,7 +38,8 @@ function buildPostEvent(
     rawPath: '/api/v1/apparatus/riding-board/DISPATCH-1/assignments',
     rawQueryString: '',
     headers: { authorization: 'Bearer token' },
-    pathParameters: 'pathParameters' in overrides ? overrides.pathParameters : { dispatchId: 'DISPATCH-1' },
+    pathParameters:
+      'pathParameters' in overrides ? overrides.pathParameters : { dispatchId: 'DISPATCH-1' },
     body: overrides.body,
     requestContext: { requestId: 'req-1', authorizer: { lambda: principal } },
   } as unknown as GuardEvent;
@@ -100,7 +101,11 @@ describe('getRidingBoardHandler (entrypoint)', () => {
   it('returns 401 when the authorizer context is missing', async () => {
     const { getRidingBoardHandler: handler } = await import('./handler.js');
 
-    const result = await handler(buildGetEvent(undefined, 'DISPATCH-1'), {} as never, () => undefined);
+    const result = await handler(
+      buildGetEvent(undefined, 'DISPATCH-1'),
+      {} as never,
+      () => undefined,
+    );
 
     expect(result).toMatchObject({ statusCode: 401 });
   });
@@ -260,10 +265,17 @@ describe('assignRidingPositionHandler (entrypoint)', () => {
     await mockApparatusRepository({
       findApparatusItem: vi
         .fn()
-        .mockResolvedValue({ apparatusId: 'APP-ENGINE-2', unitId: 'ENGINE-2', type: 'ENGINE', status: 'IN_SERVICE' }),
+        .mockResolvedValue({
+          apparatusId: 'APP-ENGINE-2',
+          unitId: 'ENGINE-2',
+          type: 'ENGINE',
+          status: 'IN_SERVICE',
+        }),
     });
     await mockRidingBoardRepository({
-      getRidingPositionsConfig: vi.fn().mockResolvedValue({ ENGINE: [{ code: 'DRIVER', label: 'Driver' }] }),
+      getRidingPositionsConfig: vi
+        .fn()
+        .mockResolvedValue({ ENGINE: [{ code: 'DRIVER', label: 'Driver' }] }),
     });
     mockDynamoClient();
 
@@ -288,10 +300,17 @@ describe('assignRidingPositionHandler (entrypoint)', () => {
     await mockApparatusRepository({
       findApparatusItem: vi
         .fn()
-        .mockResolvedValue({ apparatusId: 'APP-ENGINE-2', unitId: 'ENGINE-2', type: 'ENGINE', status: 'IN_SERVICE' }),
+        .mockResolvedValue({
+          apparatusId: 'APP-ENGINE-2',
+          unitId: 'ENGINE-2',
+          type: 'ENGINE',
+          status: 'IN_SERVICE',
+        }),
     });
     await mockRidingBoardRepository({
-      getRidingPositionsConfig: vi.fn().mockResolvedValue({ ENGINE: [{ code: 'DRIVER', label: 'Driver' }] }),
+      getRidingPositionsConfig: vi
+        .fn()
+        .mockResolvedValue({ ENGINE: [{ code: 'DRIVER', label: 'Driver' }] }),
       assignSeat: vi.fn().mockResolvedValue({
         kind: 'CONFLICT',
         current: {
@@ -320,7 +339,9 @@ describe('assignRidingPositionHandler (entrypoint)', () => {
     );
 
     expect(result).toMatchObject({ statusCode: 409 });
-    const body = JSON.parse((result as { body: string }).body) as { currentAssignment: { memberId: string } };
+    const body = JSON.parse((result as { body: string }).body) as {
+      currentAssignment: { memberId: string };
+    };
     expect(body.currentAssignment.memberId).toBe('MBR-0034');
   });
 
@@ -329,10 +350,17 @@ describe('assignRidingPositionHandler (entrypoint)', () => {
     await mockApparatusRepository({
       findApparatusItem: vi
         .fn()
-        .mockResolvedValue({ apparatusId: 'APP-ENGINE-2', unitId: 'ENGINE-2', type: 'ENGINE', status: 'IN_SERVICE' }),
+        .mockResolvedValue({
+          apparatusId: 'APP-ENGINE-2',
+          unitId: 'ENGINE-2',
+          type: 'ENGINE',
+          status: 'IN_SERVICE',
+        }),
     });
     await mockRidingBoardRepository({
-      getRidingPositionsConfig: vi.fn().mockResolvedValue({ ENGINE: [{ code: 'DRIVER', label: 'Driver' }] }),
+      getRidingPositionsConfig: vi
+        .fn()
+        .mockResolvedValue({ ENGINE: [{ code: 'DRIVER', label: 'Driver' }] }),
       assignSeat: vi.fn().mockResolvedValue({ kind: 'OUT_OF_SERVICE', reason: 'Pump failure' }),
     });
     mockDynamoClient();
@@ -360,10 +388,17 @@ describe('assignRidingPositionHandler (entrypoint)', () => {
     await mockApparatusRepository({
       findApparatusItem: vi
         .fn()
-        .mockResolvedValue({ apparatusId: 'APP-ENGINE-2', unitId: 'ENGINE-2', type: 'ENGINE', status: 'IN_SERVICE' }),
+        .mockResolvedValue({
+          apparatusId: 'APP-ENGINE-2',
+          unitId: 'ENGINE-2',
+          type: 'ENGINE',
+          status: 'IN_SERVICE',
+        }),
     });
     await mockRidingBoardRepository({
-      getRidingPositionsConfig: vi.fn().mockResolvedValue({ ENGINE: [{ code: 'DRIVER', label: 'Driver' }] }),
+      getRidingPositionsConfig: vi
+        .fn()
+        .mockResolvedValue({ ENGINE: [{ code: 'DRIVER', label: 'Driver' }] }),
       assignSeat: vi.fn().mockResolvedValue({
         kind: 'ASSIGNED',
         apparatusId: 'APP-ENGINE-2',
@@ -396,10 +431,17 @@ describe('assignRidingPositionHandler (entrypoint)', () => {
     await mockApparatusRepository({
       findApparatusItem: vi
         .fn()
-        .mockResolvedValue({ apparatusId: 'APP-ENGINE-2', unitId: 'ENGINE-2', type: 'ENGINE', status: 'IN_SERVICE' }),
+        .mockResolvedValue({
+          apparatusId: 'APP-ENGINE-2',
+          unitId: 'ENGINE-2',
+          type: 'ENGINE',
+          status: 'IN_SERVICE',
+        }),
     });
     await mockRidingBoardRepository({
-      getRidingPositionsConfig: vi.fn().mockResolvedValue({ ENGINE: [{ code: 'DRIVER', label: 'Driver' }] }),
+      getRidingPositionsConfig: vi
+        .fn()
+        .mockResolvedValue({ ENGINE: [{ code: 'DRIVER', label: 'Driver' }] }),
       assignSeat: vi.fn().mockRejectedValue(new Error('DynamoDB unavailable')),
     });
     mockDynamoClient();

@@ -1,4 +1,7 @@
-import { ConditionalCheckFailedException, TransactionCanceledException } from '@aws-sdk/client-dynamodb';
+import {
+  ConditionalCheckFailedException,
+  TransactionCanceledException,
+} from '@aws-sdk/client-dynamodb';
 import type { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
 
 type FakeItem = Record<string, unknown>;
@@ -49,13 +52,19 @@ function evaluateCondition(
     const trimmed = clause.trim();
     const grouped = /^\((.*)\)$/.exec(trimmed);
     if (grouped) {
-      return (grouped[1] ?? '').split(/\s+OR\s+/i).some((sub) => evaluateClause(sub, item, values, names));
+      return (grouped[1] ?? '')
+        .split(/\s+OR\s+/i)
+        .some((sub) => evaluateClause(sub, item, values, names));
     }
     return evaluateClause(trimmed, item, values, names);
   });
 }
 
-function applyUpdate(existing: FakeItem | undefined, key: FakeItem, input: Record<string, unknown>): FakeItem {
+function applyUpdate(
+  existing: FakeItem | undefined,
+  key: FakeItem,
+  input: Record<string, unknown>,
+): FakeItem {
   const values = (input.ExpressionAttributeValues ?? {}) as Record<string, unknown>;
   const names = (input.ExpressionAttributeNames ?? {}) as Record<string, string>;
   const expression = input.UpdateExpression as string;
@@ -148,7 +157,8 @@ export function createRidingBoardFakeClient(seed: readonly FakeItem[] = []): Fak
           reasons.push(ok ? 'None' : 'ConditionalCheckFailed');
           if (!ok) anyFailed = true;
         } else if (item.Update) {
-          const { Key, ConditionExpression, ExpressionAttributeValues, ExpressionAttributeNames } = item.Update;
+          const { Key, ConditionExpression, ExpressionAttributeValues, ExpressionAttributeNames } =
+            item.Update;
           const ok =
             !ConditionExpression ||
             evaluateCondition(
@@ -160,7 +170,11 @@ export function createRidingBoardFakeClient(seed: readonly FakeItem[] = []): Fak
           reasons.push(ok ? 'None' : 'ConditionalCheckFailed');
           if (!ok) anyFailed = true;
         } else if (item.Put) {
-          const ok = evaluateCondition('attribute_not_exists(pk)', store.get(itemKey(item.Put.Item)), {});
+          const ok = evaluateCondition(
+            'attribute_not_exists(pk)',
+            store.get(itemKey(item.Put.Item)),
+            {},
+          );
           reasons.push(ok ? 'None' : 'ConditionalCheckFailed');
           if (!ok) anyFailed = true;
         } else {
@@ -171,7 +185,8 @@ export function createRidingBoardFakeClient(seed: readonly FakeItem[] = []): Fak
       if (anyFailed) {
         return Promise.reject(
           new TransactionCanceledException({
-            message: 'Transaction cancelled, please refer cancellation reasons for specific reasons',
+            message:
+              'Transaction cancelled, please refer cancellation reasons for specific reasons',
             CancellationReasons: reasons.map((Code) => ({ Code })),
             $metadata: {},
           }),
@@ -189,7 +204,9 @@ export function createRidingBoardFakeClient(seed: readonly FakeItem[] = []): Fak
       return Promise.resolve({});
     }
 
-    return Promise.reject(new Error(`ridingBoard testDynamoFake does not support command: ${name}`));
+    return Promise.reject(
+      new Error(`ridingBoard testDynamoFake does not support command: ${name}`),
+    );
   };
 
   const peek = (partitionKey: string, sortKey: string): FakeItem | undefined =>

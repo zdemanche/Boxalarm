@@ -42,9 +42,13 @@ function detailBody(
 function stubSend(
   route: (command: { constructor: { name: string }; input: Record<string, unknown> }) => unknown,
 ): ReturnType<typeof vi.fn> {
-  return vi.fn().mockImplementation((command: unknown) =>
-    Promise.resolve(route(command as { constructor: { name: string }; input: Record<string, unknown> })),
-  );
+  return vi
+    .fn()
+    .mockImplementation((command: unknown) =>
+      Promise.resolve(
+        route(command as { constructor: { name: string }; input: Record<string, unknown> }),
+      ),
+    );
 }
 
 describe('ridingAssignmentChangedConsumer handler (entrypoint)', () => {
@@ -66,8 +70,11 @@ describe('ridingAssignmentChangedConsumer handler (entrypoint)', () => {
       (call) => (call[0] as { constructor: { name: string } }).constructor.name === 'UpdateCommand',
     );
     expect(updateCall).toBeDefined();
-    const input = (updateCall?.[0] as { input: { Key: { sk: string }; ExpressionAttributeValues: Record<string, unknown> } })
-      .input;
+    const input = (
+      updateCall?.[0] as {
+        input: { Key: { sk: string }; ExpressionAttributeValues: Record<string, unknown> };
+      }
+    ).input;
     expect(input.Key.sk).toBe('ROSTER#MBR-0012');
     expect(input.ExpressionAttributeValues[':apparatusId']).toBe('APP-ENGINE-2');
   });
@@ -152,14 +159,17 @@ describe('ridingAssignmentChangedConsumer handler (entrypoint)', () => {
     const updateCall = send.mock.calls.find(
       (call) => (call[0] as { constructor: { name: string } }).constructor.name === 'UpdateCommand',
     );
-    const conditionExpression = (updateCall?.[0] as { input: { ConditionExpression: string } }).input
-      .ConditionExpression;
+    const conditionExpression = (updateCall?.[0] as { input: { ConditionExpression: string } })
+      .input.ConditionExpression;
     expect(conditionExpression).toContain('attribute_exists(pk)');
   });
 
   it('skips without updating the roster on a duplicate eventId (dedup)', async () => {
     const send = stubSend((command) => {
-      if (command.constructor.name === 'GetCommand' && (command.input.Key as { sk: string }).sk === 'EVT#evt-1') {
+      if (
+        command.constructor.name === 'GetCommand' &&
+        (command.input.Key as { sk: string }).sk === 'EVT#evt-1'
+      ) {
         return { Item: { pk: 'x', sk: 'EVT#evt-1' } };
       }
       return {};

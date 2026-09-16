@@ -38,9 +38,13 @@ function detailBody(
 function stubSend(
   route: (command: { constructor: { name: string }; input: Record<string, unknown> }) => unknown,
 ): ReturnType<typeof vi.fn> {
-  return vi.fn().mockImplementation((command: unknown) =>
-    Promise.resolve(route(command as { constructor: { name: string }; input: Record<string, unknown> })),
-  );
+  return vi
+    .fn()
+    .mockImplementation((command: unknown) =>
+      Promise.resolve(
+        route(command as { constructor: { name: string }; input: Record<string, unknown> }),
+      ),
+    );
 }
 
 describe('ridingAssignmentConsumer handler (entrypoint, AC6)', () => {
@@ -137,7 +141,10 @@ describe('ridingAssignmentConsumer handler (entrypoint, AC6)', () => {
 
   it('skips a duplicate eventId redelivery without touching assignedPositions (dedup)', async () => {
     const send = stubSend((command) => {
-      if (command.constructor.name === 'GetCommand' && (command.input.Key as { sk: string }).sk === 'EVT#evt-1') {
+      if (
+        command.constructor.name === 'GetCommand' &&
+        (command.input.Key as { sk: string }).sk === 'EVT#evt-1'
+      ) {
         return { Item: { pk: 'x', sk: 'EVT#evt-1' } };
       }
       return {};

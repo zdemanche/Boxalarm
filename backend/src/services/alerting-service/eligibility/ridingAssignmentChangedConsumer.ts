@@ -111,7 +111,8 @@ async function updateAssignedApparatus(
         TableName: tableName,
         Key: { pk: buildDeptScopedPk(deptId, 'DISPATCH', dispatchId), sk: `ROSTER#${memberId}` },
         ConditionExpression: conditions.join(' AND '),
-        UpdateExpression: 'SET assignedApparatusId = :apparatusId, assignedApparatusUpdatedAt = :new',
+        UpdateExpression:
+          'SET assignedApparatusId = :apparatusId, assignedApparatusUpdatedAt = :new',
         ExpressionAttributeValues: values,
       }),
     );
@@ -129,11 +130,14 @@ async function processRecord(record: SQSRecord, deps: RidingAssignmentChangedDep
   try {
     envelope = parseEnvelope(record.body);
   } catch (error) {
-    logError('alerting.ridingAssignment.changed.malformed', error, { correlationId: record.messageId });
+    logError('alerting.ridingAssignment.changed.malformed', error, {
+      correlationId: record.messageId,
+    });
     throw error;
   }
 
-  const { eventId, eventTime, deptId, dispatchId, apparatusId, memberId, previousMemberId } = envelope;
+  const { eventId, eventTime, deptId, dispatchId, apparatusId, memberId, previousMemberId } =
+    envelope;
   const { tableName } = readAlertingConfig(process.env);
   const client = createDynamoClient(process.env, deps.client);
   const dedupKey = {
@@ -145,7 +149,9 @@ async function processRecord(record: SQSRecord, deps: RidingAssignmentChangedDep
   try {
     dedupExisting = await client.send(new GetCommand({ TableName: tableName, Key: dedupKey }));
   } catch (error) {
-    logError('alerting.ridingAssignment.changed.dedupCheckFailed', error, { correlationId: eventId });
+    logError('alerting.ridingAssignment.changed.dedupCheckFailed', error, {
+      correlationId: eventId,
+    });
     emitOutcomeMetric(
       METRIC_NAMESPACE,
       'RidingAssignmentChangedFailed',
@@ -161,7 +167,15 @@ async function processRecord(record: SQSRecord, deps: RidingAssignmentChangedDep
   const eventTimeMs = Date.parse(eventTime);
   try {
     if (memberId !== null) {
-      await updateAssignedApparatus(client, tableName, deptId, dispatchId, memberId, apparatusId, eventTimeMs);
+      await updateAssignedApparatus(
+        client,
+        tableName,
+        deptId,
+        dispatchId,
+        memberId,
+        apparatusId,
+        eventTimeMs,
+      );
     }
     if (previousMemberId !== null && previousMemberId !== memberId) {
       // Only clear the displaced member's assignment if they're still shown riding *this*
@@ -201,7 +215,9 @@ async function processRecord(record: SQSRecord, deps: RidingAssignmentChangedDep
       emitOutcomeMetric(METRIC_NAMESPACE, 'RidingAssignmentChangedUpdated');
       return;
     }
-    logError('alerting.ridingAssignment.changed.dedupMarkFailed', error, { correlationId: eventId });
+    logError('alerting.ridingAssignment.changed.dedupMarkFailed', error, {
+      correlationId: eventId,
+    });
     throw error;
   }
 
