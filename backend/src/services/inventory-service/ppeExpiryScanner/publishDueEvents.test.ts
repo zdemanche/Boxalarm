@@ -79,9 +79,9 @@ describe('publishDueEvent (AC2)', () => {
     const ebSend = vi.fn().mockRejectedValue(publishFailure);
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
 
-    await expect(
-      publishDueEvent(fakeDdb(ddbSend), fakeEb(ebSend), env, baseParams),
-    ).rejects.toBe(publishFailure);
+    await expect(publishDueEvent(fakeDdb(ddbSend), fakeEb(ebSend), env, baseParams)).rejects.toBe(
+      publishFailure,
+    );
 
     const logged = errorSpy.mock.calls
       .map((call) => JSON.parse(call[0] as string) as Record<string, unknown>)
@@ -137,10 +137,7 @@ describe('publishDueEvent (AC2)', () => {
 
   it('returns PublishedMarkerNotConfirmed and emits its own metric when the publish succeeds but marking the marker fails', async () => {
     const markFailure = new Error('conditional update unavailable');
-    const ddbSend = vi
-      .fn()
-      .mockResolvedValueOnce({})
-      .mockRejectedValueOnce(markFailure);
+    const ddbSend = vi.fn().mockResolvedValueOnce({}).mockRejectedValueOnce(markFailure);
     const ebSend = vi.fn().mockResolvedValue({ Entries: [{ EventId: 'evt-1' }] });
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
 

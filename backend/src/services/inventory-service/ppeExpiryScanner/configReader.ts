@@ -11,9 +11,7 @@ export interface PlatformConfigDynamoConfig {
   readonly tableName: string;
 }
 
-export function readPlatformConfigDynamoConfig(
-  env: NodeJS.ProcessEnv,
-): PlatformConfigDynamoConfig {
+export function readPlatformConfigDynamoConfig(env: NodeJS.ProcessEnv): PlatformConfigDynamoConfig {
   const tableName = env.PLATFORM_CONFIG_DYNAMO_TABLE_NAME;
   if (!tableName) {
     throw new Error('PLATFORM_CONFIG_DYNAMO_TABLE_NAME is required and was not set');

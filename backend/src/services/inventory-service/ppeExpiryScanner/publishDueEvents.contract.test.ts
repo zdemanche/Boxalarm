@@ -37,7 +37,15 @@ describe('ppe.expiry.due contract (architecture.md:1788)', () => {
     >;
 
     expect(Object.keys(detail).sort()).toEqual(
-      ['correlationId', 'eventId', 'eventTime', 'eventType', 'payload', 'schemaVersion', 'source'].sort(),
+      [
+        'correlationId',
+        'eventId',
+        'eventTime',
+        'eventType',
+        'payload',
+        'schemaVersion',
+        'source',
+      ].sort(),
     );
     expect(typeof detail.eventId).toBe('string');
     expect(typeof detail.eventTime).toBe('string');

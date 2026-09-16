@@ -103,10 +103,16 @@ describe('ppe expiry scanner delivery (real DynamoDB via LocalStack) — ppe.exp
 
   it('publishes only for the item just inside the lead-time window, not the one just outside (AC2)', async () => {
     await documentClient.send(
-      new PutCommand({ TableName: INVENTORY_TABLE, Item: ppeItem('TURNOUT-COAT', '2026-09-24', '2026-09') }),
+      new PutCommand({
+        TableName: INVENTORY_TABLE,
+        Item: ppeItem('TURNOUT-COAT', '2026-09-24', '2026-09'),
+      }),
     );
     await documentClient.send(
-      new PutCommand({ TableName: INVENTORY_TABLE, Item: ppeItem('HELMET', '2026-10-20', '2026-10') }),
+      new PutCommand({
+        TableName: INVENTORY_TABLE,
+        Item: ppeItem('HELMET', '2026-10-20', '2026-10'),
+      }),
     );
     await documentClient.send(
       new PutCommand({
@@ -140,7 +146,10 @@ describe('ppe expiry scanner delivery (real DynamoDB via LocalStack) — ppe.exp
 
   it('does not re-publish for the same item on a same-day re-run — the ppe.expiry.due delivery guard (AC2)', async () => {
     await documentClient.send(
-      new PutCommand({ TableName: INVENTORY_TABLE, Item: ppeItem('GLOVES', '2026-09-20', '2026-09') }),
+      new PutCommand({
+        TableName: INVENTORY_TABLE,
+        Item: ppeItem('GLOVES', '2026-09-20', '2026-09'),
+      }),
     );
     await documentClient.send(
       new PutCommand({

@@ -37,11 +37,7 @@ export function computeNfpaExpiryDate(issueDate: string): string {
   return expiry.toISOString().slice(0, 10);
 }
 
-export function derivePpeStatus(
-  stored: PpeStatus,
-  nfpaExpiryDate: string,
-  now: Date,
-): PpeStatus {
+export function derivePpeStatus(stored: PpeStatus, nfpaExpiryDate: string, now: Date): PpeStatus {
   if (stored === 'RETIRED') {
     return 'RETIRED';
   }

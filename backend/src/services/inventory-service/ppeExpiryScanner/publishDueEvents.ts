@@ -43,9 +43,7 @@ export interface PublishDueEventParams {
 }
 
 export type PublishDueEventOutcome =
-  | 'Published'
-  | 'SkippedDuplicate'
-  | 'PublishedMarkerNotConfirmed';
+  'Published' | 'SkippedDuplicate' | 'PublishedMarkerNotConfirmed';
 
 function deterministicEventId(
   deptId: string,
