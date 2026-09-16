@@ -7,7 +7,3 @@ coverage/
 *.tsbuildinfo
 .DS_Store
 .worktrees/
-.analysis/
-coverage/
-.analysis/
-coverage/

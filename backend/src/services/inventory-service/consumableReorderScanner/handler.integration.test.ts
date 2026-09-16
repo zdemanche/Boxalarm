@@ -3,7 +3,12 @@ import { DynamoDBDocumentClient, GetCommand, PutCommand } from '@aws-sdk/lib-dyn
 import { LocalstackContainer, type StartedLocalStackContainer } from '@testcontainers/localstack';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { EventBridgeClient } from '@aws-sdk/client-eventbridge';
+import { toVerifiedDeptId } from '@boxalarm/dept-scope';
 import { runConsumableReorderScan } from './handler.js';
+import {
+  listConsumables,
+  queryConsumablesBelowThreshold,
+} from '../consumables/consumableRepository.js';
 
 const TABLE = 'boxalarm-test-platform-table';
 const DEPT_ID = 'NICHOLS';
@@ -163,5 +168,38 @@ describe('consumable reorder scanner (real DynamoDB via LocalStack) — inventor
     });
 
     expect(secondRun).not.toHaveBeenCalled();
+  });
+});
+
+describe('consumableRepository (real DynamoDB via LocalStack) — GSI3 query + FilterExpression coverage (data-store-testing)', () => {
+  const deptId = toVerifiedDeptId({ deptId: DEPT_ID });
+
+  it('listConsumables flags at/below-threshold items distinctly, sourced from the real GSI3 query (AC1)', async () => {
+    await documentClient.send(
+      new PutCommand({ TableName: TABLE, Item: consumableItem('LIST-BELOW', 2, 5) }),
+    );
+    await documentClient.send(
+      new PutCommand({ TableName: TABLE, Item: consumableItem('LIST-ABOVE', 20, 5) }),
+    );
+
+    const items = await listConsumables(documentClient, TABLE, deptId);
+
+    expect(items.find((item) => item.itemId === 'LIST-BELOW')?.reorderFlagged).toBe(true);
+    expect(items.find((item) => item.itemId === 'LIST-ABOVE')?.reorderFlagged).toBe(false);
+  });
+
+  it('queryConsumablesBelowThreshold returns only the below-threshold item from the real server-side FilterExpression (AC3)', async () => {
+    await documentClient.send(
+      new PutCommand({ TableName: TABLE, Item: consumableItem('FILTER-BELOW', 1, 5) }),
+    );
+    await documentClient.send(
+      new PutCommand({ TableName: TABLE, Item: consumableItem('FILTER-ABOVE', 30, 5) }),
+    );
+
+    const items = await queryConsumablesBelowThreshold(documentClient, TABLE, deptId);
+    const itemIds = items.map((item) => item.itemId);
+
+    expect(itemIds).toContain('FILTER-BELOW');
+    expect(itemIds).not.toContain('FILTER-ABOVE');
   });
 });
