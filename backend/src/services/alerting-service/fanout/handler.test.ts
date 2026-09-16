@@ -230,7 +230,10 @@ describe('fanout/handler self-test branch (E1-S8 AC1/AC2/AC3/AC4/AC5)', () => {
   });
 
   it('addresses SNS/DELIVERY_RECEIPT only to targetMemberId even when the roster has other members, and records a PASS SELF_TEST_RUN (AC1/AC3/AC4, core-harm)', async () => {
-    const ddb = createFakeDdb([memberSnapshot({ memberId: 'mbr-1' }), memberSnapshot({ memberId: 'mbr-2' })]);
+    const ddb = createFakeDdb([
+      memberSnapshot({ memberId: 'mbr-1' }),
+      memberSnapshot({ memberId: 'mbr-2' }),
+    ]);
     const sns = createFakeSns();
     vi.doMock('../eligibility/dynamoClient.js', async (importOriginal) => {
       const actual = await importOriginal<typeof import('../eligibility/dynamoClient.js')>();
@@ -245,7 +248,9 @@ describe('fanout/handler self-test branch (E1-S8 AC1/AC2/AC3/AC4/AC5)', () => {
     await handler(selfTestDispatchInsertEvent());
 
     expect(sns.calls).toHaveLength(2);
-    const receipts = [...ddb.items.values()].filter((item) => item.entityType === 'DELIVERY_RECEIPT');
+    const receipts = [...ddb.items.values()].filter(
+      (item) => item.entityType === 'DELIVERY_RECEIPT',
+    );
     expect(receipts).toHaveLength(2);
     expect(receipts.every((item) => item.memberId === 'mbr-1')).toBe(true);
 
@@ -259,7 +264,10 @@ describe('fanout/handler self-test branch (E1-S8 AC1/AC2/AC3/AC4/AC5)', () => {
 
   it('records a specific push failure reason and overallResult FAIL when the member has no registered push token (AC5)', async () => {
     const ddb = createFakeDdb([
-      memberSnapshot({ memberId: 'mbr-1', contactChannels: [{ channel: 'sms', token: '+15551234567' }] }),
+      memberSnapshot({
+        memberId: 'mbr-1',
+        contactChannels: [{ channel: 'sms', token: '+15551234567' }],
+      }),
     ]);
     const sns = createFakeSns();
     vi.doMock('../eligibility/dynamoClient.js', async (importOriginal) => {
@@ -379,7 +387,9 @@ describe('fanout/handler self-test branch (E1-S8 AC1/AC2/AC3/AC4/AC5)', () => {
     expect(sns.calls).toHaveLength(2);
     const run = ddb.items.get('DEPT#NICHOLS#MEMBER#mbr-1#SELFTEST#1798000000');
     expect(run?.overallResult).toBe('FAIL');
-    expect(run?.eligibilityReason).toBe('member is MARKED_OFF — a real dispatch would not page you');
+    expect(run?.eligibilityReason).toBe(
+      'member is MARKED_OFF — a real dispatch would not page you',
+    );
     const channelResults = run?.channelResults as Record<string, { ok: boolean }>;
     expect(channelResults.PUSH?.ok).toBe(true);
     expect(channelResults.SMS?.ok).toBe(true);
@@ -400,7 +410,9 @@ describe('fanout/handler self-test branch (E1-S8 AC1/AC2/AC3/AC4/AC5)', () => {
     const { handler } = await import('./handler.js');
     await handler(selfTestDispatchInsertEvent());
 
-    const receipts = [...ddb.items.values()].filter((item) => item.entityType === 'DELIVERY_RECEIPT');
+    const receipts = [...ddb.items.values()].filter(
+      (item) => item.entityType === 'DELIVERY_RECEIPT',
+    );
     expect(receipts).toHaveLength(2);
     expect(receipts.every((item) => item.gsi1pk === undefined && item.gsi1sk === undefined)).toBe(
       true,

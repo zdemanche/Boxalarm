@@ -81,7 +81,9 @@ describe('selfTest postHandler', () => {
   it('returns 202 with a testId addressed only to the caller (targetMemberId=principal.sub) on success (AC1, entrypoint test)', async () => {
     mockVerifiedPermissions(() => Promise.resolve({ decision: 'ALLOW' }));
     mockDynamoClient();
-    const createManualDispatch = vi.fn().mockResolvedValue({ outcome: 'created', dispatchId: 'NICHOLS-SELFTEST-1-abcd1234' });
+    const createManualDispatch = vi
+      .fn()
+      .mockResolvedValue({ outcome: 'created', dispatchId: 'NICHOLS-SELFTEST-1-abcd1234' });
     vi.doMock('../dispatches/repository.js', () => ({ createManualDispatch }));
 
     const { handler } = await import('./postHandler.js');

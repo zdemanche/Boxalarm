@@ -121,7 +121,11 @@ describe('selfTest getHandler', () => {
     };
     expect(body.overallResult).toBe('FAIL');
     expect(body.runAt).toBe(1798000000);
-    expect(body.channelResults.PUSH).toEqual({ ok: false, ms: 12, reason: 'push: no token registered' });
+    expect(body.channelResults.PUSH).toEqual({
+      ok: false,
+      ms: 12,
+      reason: 'push: no token registered',
+    });
     expect(body.channelResults.SMS?.ok).toBe(true);
   });
 

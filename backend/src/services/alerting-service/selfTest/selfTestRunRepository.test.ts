@@ -30,7 +30,9 @@ describe('upsertSelfTestRun', () => {
 
 describe('getSelfTestRun', () => {
   it('reads back the item written for a matching deptId/memberId/testId', async () => {
-    const send = vi.fn().mockResolvedValue({ Item: { testId: '1798000000', overallResult: 'PASS' } });
+    const send = vi
+      .fn()
+      .mockResolvedValue({ Item: { testId: '1798000000', overallResult: 'PASS' } });
     const item = await getSelfTestRun(
       { send } as unknown as DynamoDBDocumentClient,
       'alerting-table',

@@ -193,7 +193,7 @@ async function sendOne(
             Put: {
               TableName: tableName,
               Item: {
-  pk: buildDeptScopedPk(dispatch.deptId, 'DISPATCH', dispatch.dispatchId),
+                pk: buildDeptScopedPk(dispatch.deptId, 'DISPATCH', dispatch.dispatchId),
                 sk,
                 entityType: 'DELIVERY_RECEIPT',
                 dispatchId: dispatch.dispatchId,
@@ -384,7 +384,10 @@ async function fanOutSelfTestDispatch(
       runAt,
       channelsTested,
       channelResults: Object.fromEntries(
-        channelsTested.map((channel) => [channel, { ok: false, ms: 0, reason: 'member not found' }]),
+        channelsTested.map((channel) => [
+          channel,
+          { ok: false, ms: 0, reason: 'member not found' },
+        ]),
       ),
       overallResult: 'FAIL',
       eligibilityReason: 'member not found',
@@ -392,12 +395,11 @@ async function fanOutSelfTestDispatch(
     return;
   }
 
-  const eligibilityReason =
-    !member.active
-      ? 'member is inactive — a real dispatch would not page you'
-      : member.availabilityState !== 'AVAILABLE'
-        ? `member is ${member.availabilityState} — a real dispatch would not page you`
-        : undefined;
+  const eligibilityReason = !member.active
+    ? 'member is inactive — a real dispatch would not page you'
+    : member.availabilityState !== 'AVAILABLE'
+      ? `member is ${member.availabilityState} — a real dispatch would not page you`
+      : undefined;
 
   const channelResults: Record<string, SelfTestChannelResult> = {};
 

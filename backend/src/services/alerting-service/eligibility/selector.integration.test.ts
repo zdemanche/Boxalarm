@@ -71,7 +71,12 @@ describe('getMemberEligibility (real DynamoDB, P3/E1-S8 AC1)', () => {
   it('returns undefined for a member with no MEMBER_ELIGIBILITY_SNAPSHOT item in the live table', async () => {
     const deptId = toVerifiedDeptId({ deptId: 'NICHOLS' });
 
-    const result = await getMemberEligibility(client, TABLE_NAME, deptId, `mbr-missing-${randomUUID()}`);
+    const result = await getMemberEligibility(
+      client,
+      TABLE_NAME,
+      deptId,
+      `mbr-missing-${randomUUID()}`,
+    );
 
     expect(result).toBeUndefined();
   });

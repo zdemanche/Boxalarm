@@ -130,7 +130,7 @@ describe('getMemberEligibility (self-test single-member lookup, E1-S8 AC1)', () 
     expect(result).toBeUndefined();
   });
 
-  it('still returns a member marked off — self-test exercises the caller\'s own path regardless of roster availability state', async () => {
+  it("still returns a member marked off — self-test exercises the caller's own path regardless of roster availability state", async () => {
     const send = vi.fn().mockResolvedValue({
       Item: snapshotItem({ availabilityState: 'MARKED_OFF' }),
     });
