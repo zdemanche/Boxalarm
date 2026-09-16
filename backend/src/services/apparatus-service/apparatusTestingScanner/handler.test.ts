@@ -1,6 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ConditionalCheckFailedException } from '@aws-sdk/client-dynamodb';
-import { QueryCommand, PutCommand, UpdateCommand, type DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
+import {
+  QueryCommand,
+  PutCommand,
+  UpdateCommand,
+  type DynamoDBDocumentClient,
+} from '@aws-sdk/lib-dynamodb';
 import type { EventBridgeClient } from '@aws-sdk/client-eventbridge';
 import type { ScheduledEvent } from 'aws-lambda';
 
@@ -84,7 +89,9 @@ describe('runApparatusTestingScan (AC3: emits apparatus.test.due for a due SCBA 
   it('publishes no event when the due date is outside the lead-time window', async () => {
     const { runApparatusTestingScan } = await import('./handler.js');
     const send = ddbSend({
-      currentMonthItems: [scbaDueItem({ dueDate: '2026-12-01', gsi2sk: '2026-12-01#SCBA-001#SCBA_FLOW' })],
+      currentMonthItems: [
+        scbaDueItem({ dueDate: '2026-12-01', gsi2sk: '2026-12-01#SCBA-001#SCBA_FLOW' }),
+      ],
     });
     const ebSend = vi.fn();
 

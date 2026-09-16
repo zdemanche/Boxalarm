@@ -66,7 +66,9 @@ function scbaItem(overrides: Record<string, unknown> = {}): Record<string, unkno
   };
 }
 
-function fakeDynamoClient(itemsByGsi2pk: Record<string, Record<string, unknown>[]>): DynamoDBDocumentClient {
+function fakeDynamoClient(
+  itemsByGsi2pk: Record<string, Record<string, unknown>[]>,
+): DynamoDBDocumentClient {
   const send = vi.fn((command: unknown) => {
     if (command instanceof QueryCommand) {
       const gsi2pk = command.input.ExpressionAttributeValues?.[':pk'] as string;
@@ -160,7 +162,9 @@ describe('getScbaTestingSchedules handler', () => {
 
   it('returns 503 fail-closed (not a silent empty success) when the GSI2 query fails', async () => {
     const failure = new Error('DynamoDB unavailable');
-    const client = { send: vi.fn().mockRejectedValue(failure) } as unknown as DynamoDBDocumentClient;
+    const client = {
+      send: vi.fn().mockRejectedValue(failure),
+    } as unknown as DynamoDBDocumentClient;
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const createHandler = await importHandler();
     const handler = createHandler({ client, authzClient: fakeAuthzClient('ALLOW') });

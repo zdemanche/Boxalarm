@@ -284,15 +284,29 @@ describe('postScba handler', () => {
     const createPostScbaHandler = await importHandler();
 
     const clientA = fakeDynamoClient({ apparatusExists: true });
-    const handlerA = createPostScbaHandler({ client: clientA, authzClient: fakeAuthzClient('ALLOW') });
+    const handlerA = createPostScbaHandler({
+      client: clientA,
+      authzClient: fakeAuthzClient('ALLOW'),
+    });
     await handlerA(
-      buildEvent(VALID_BODY, 'ENGINE-2', { sub: 'a', deptId: 'dept-a', 'cognito:groups': 'apparatus' }),
+      buildEvent(VALID_BODY, 'ENGINE-2', {
+        sub: 'a',
+        deptId: 'dept-a',
+        'cognito:groups': 'apparatus',
+      }),
     );
 
     const clientB = fakeDynamoClient({ apparatusExists: true });
-    const handlerB = createPostScbaHandler({ client: clientB, authzClient: fakeAuthzClient('ALLOW') });
+    const handlerB = createPostScbaHandler({
+      client: clientB,
+      authzClient: fakeAuthzClient('ALLOW'),
+    });
     await handlerB(
-      buildEvent(VALID_BODY, 'ENGINE-2', { sub: 'b', deptId: 'dept-b', 'cognito:groups': 'apparatus' }),
+      buildEvent(VALID_BODY, 'ENGINE-2', {
+        sub: 'b',
+        deptId: 'dept-b',
+        'cognito:groups': 'apparatus',
+      }),
     );
 
     const [itemA, , flowDueItemA] = findTransactItems(clientA);

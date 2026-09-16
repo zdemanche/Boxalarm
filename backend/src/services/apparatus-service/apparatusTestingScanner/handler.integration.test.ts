@@ -132,7 +132,10 @@ describe('apparatus testing scanner (real DynamoDB via LocalStack — F4.7n due-
     const marker = await documentClient.send(
       new GetCommand({
         TableName: APPARATUS_TABLE,
-        Key: { pk: `DEPT#${DEPT_ID}#SCBA_TEST_DUE_FLAG#2026-09-14`, sk: 'SCBA#SCBA-DEDUP#SCBA_FLOW' },
+        Key: {
+          pk: `DEPT#${DEPT_ID}#SCBA_TEST_DUE_FLAG#2026-09-14`,
+          sk: 'SCBA#SCBA-DEDUP#SCBA_FLOW',
+        },
       }),
     );
     expect(marker.Item?.publishedAt).toBeDefined();

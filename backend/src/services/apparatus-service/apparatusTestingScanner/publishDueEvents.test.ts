@@ -35,7 +35,12 @@ describe('publishScbaTestDueEvent', () => {
     const ddbSend = vi.fn().mockResolvedValue({});
     const ebSend = vi.fn().mockResolvedValue({ Entries: [{ EventId: 'evt-1' }] });
 
-    const outcome = await publishScbaTestDueEvent(fakeDdb(ddbSend), fakeEb(ebSend), env, baseParams);
+    const outcome = await publishScbaTestDueEvent(
+      fakeDdb(ddbSend),
+      fakeEb(ebSend),
+      env,
+      baseParams,
+    );
 
     expect(outcome).toBe('Published');
     expect(ddbSend).toHaveBeenCalledTimes(2);
