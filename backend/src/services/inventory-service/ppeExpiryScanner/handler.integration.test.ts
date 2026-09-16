@@ -74,7 +74,7 @@ beforeAll(async () => {
 afterAll(async () => {
   ddbClient.destroy();
   await container.stop();
-});
+}, 60_000);
 
 function ppeItem(
   ppeItemId: string,
