@@ -1,7 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ConditionalCheckFailedException } from '@aws-sdk/client-dynamodb';
 import { PutEventsCommand, type EventBridgeClient } from '@aws-sdk/client-eventbridge';
-import { PutCommand, QueryCommand, UpdateCommand, type DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
+import {
+  PutCommand,
+  QueryCommand,
+  UpdateCommand,
+  type DynamoDBDocumentClient,
+} from '@aws-sdk/lib-dynamodb';
 import type { ScheduledEvent } from 'aws-lambda';
 import { toVerifiedDeptId } from '@boxalarm/dept-scope';
 
@@ -203,7 +208,13 @@ describe('publishReorderDueEvent', () => {
     const ddb = fakeDdb(ddbSend);
     const eb = fakeEb(ebSend);
 
-    const outcome = await publishReorderDueEvent(ddb, eb, publishEnv, PUBLISH_TABLE, basePublishParams);
+    const outcome = await publishReorderDueEvent(
+      ddb,
+      eb,
+      publishEnv,
+      PUBLISH_TABLE,
+      basePublishParams,
+    );
 
     expect(outcome).toBe('Published');
     const putCommand = ddbSend.mock.calls[0]?.[0] as PutCommand;
@@ -262,7 +273,13 @@ describe('publishReorderDueEvent', () => {
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
 
     await expect(
-      publishReorderDueEvent(fakeDdb(ddbSend), fakeEb(ebSend), publishEnv, PUBLISH_TABLE, basePublishParams),
+      publishReorderDueEvent(
+        fakeDdb(ddbSend),
+        fakeEb(ebSend),
+        publishEnv,
+        PUBLISH_TABLE,
+        basePublishParams,
+      ),
     ).rejects.toBe(publishFailure);
 
     expect(ddbSend).toHaveBeenCalledTimes(1);
@@ -279,7 +296,13 @@ describe('publishReorderDueEvent', () => {
     const ebSend = vi.fn();
 
     await expect(
-      publishReorderDueEvent(fakeDdb(ddbSend), fakeEb(ebSend), {}, PUBLISH_TABLE, basePublishParams),
+      publishReorderDueEvent(
+        fakeDdb(ddbSend),
+        fakeEb(ebSend),
+        {},
+        PUBLISH_TABLE,
+        basePublishParams,
+      ),
     ).rejects.toThrow('PLATFORM_EVENT_BUS_NAME');
     expect(ddbSend).not.toHaveBeenCalled();
     expect(ebSend).not.toHaveBeenCalled();

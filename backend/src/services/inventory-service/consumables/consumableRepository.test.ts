@@ -35,9 +35,7 @@ function fakeGsi3QueryWithFilter(items: readonly Record<string, unknown>[]) {
   return (command: unknown) => {
     const query = command as QueryCommand;
     const filtered = query.input.FilterExpression
-      ? items.filter(
-          (item) => (item.stockLevel as number) <= (item.reorderThreshold as number),
-        )
+      ? items.filter((item) => (item.stockLevel as number) <= (item.reorderThreshold as number))
       : items;
     return { Items: filtered };
   };

@@ -155,7 +155,10 @@ describe('consumable reorder scanner (real DynamoDB via LocalStack) — inventor
     const marker = await documentClient.send(
       new GetCommand({
         TableName: TABLE,
-        Key: { pk: `DEPT#${DEPT_ID}#CONSUMABLE_REORDER_FLAG#2026-09-14`, sk: 'CONSUMABLE#GLOVES-DEDUP' },
+        Key: {
+          pk: `DEPT#${DEPT_ID}#CONSUMABLE_REORDER_FLAG#2026-09-14`,
+          sk: 'CONSUMABLE#GLOVES-DEDUP',
+        },
       }),
     );
     expect(marker.Item?.publishedAt).toBeDefined();
