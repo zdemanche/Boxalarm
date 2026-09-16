@@ -4,6 +4,7 @@ import {
   forbiddenProblem,
   notFoundProblem,
   serviceUnavailableProblem,
+  tooManyRequestsProblem,
 } from './problemDetails.js';
 
 describe('forbiddenProblem', () => {
@@ -39,6 +40,18 @@ describe('notFoundProblem', () => {
     expect(body.status).toBe(404);
     expect(body.traceId).toBe('trace-404');
     expect(body.detail).toBe('No apparatus found for unitId "ENGINE-9"');
+  });
+});
+
+describe('tooManyRequestsProblem', () => {
+  it('returns a 429 RFC 7807 body carrying the traceId and given detail', () => {
+    const response = tooManyRequestsProblem('trace-429', 'self-test cooldown active');
+    expect(response.statusCode).toBe(429);
+    expect(response.headers).toEqual({ 'content-type': 'application/problem+json' });
+    const body = JSON.parse(response.body) as { status: number; traceId: string; detail: string };
+    expect(body.status).toBe(429);
+    expect(body.traceId).toBe('trace-429');
+    expect(body.detail).toBe('self-test cooldown active');
   });
 });
 

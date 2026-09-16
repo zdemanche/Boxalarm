@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { ConditionalCheckFailedException } from '@aws-sdk/client-dynamodb';
 import type { CedarPrincipalContext, GuardEvent } from '@boxalarm/authz';
 
 const PRINCIPAL: CedarPrincipalContext = {
@@ -30,7 +31,7 @@ function mockVerifiedPermissions(sendImpl: () => Promise<{ decision: string }>):
 
 function mockDynamoClient(): void {
   vi.doMock('../eligibility/dynamoClient.js', () => ({
-    createDynamoClient: vi.fn(() => ({})),
+    createDynamoClient: vi.fn(() => ({ send: vi.fn().mockResolvedValue({}) })),
     readAlertingConfig: vi.fn(() => ({ tableName: 'alerting-table' })),
   }));
 }
@@ -102,6 +103,43 @@ describe('selfTest postHandler', () => {
     expect(input.targetMemberId).toBe('mbr-102');
     expect(input.dispatch.sourceSystem).toBe('SELF_TEST');
     expect(input.channelsTested).toEqual(['PUSH', 'SMS']);
+  });
+
+  it('returns 429 and never creates a dispatch when the per-member cooldown is still active (P1)', async () => {
+    mockVerifiedPermissions(() => Promise.resolve({ decision: 'ALLOW' }));
+    vi.doMock('../eligibility/dynamoClient.js', () => ({
+      createDynamoClient: vi.fn(() => ({
+        send: vi.fn().mockRejectedValue(
+          new ConditionalCheckFailedException({
+            message: 'conditional check failed',
+            $metadata: {},
+          }),
+        ),
+      })),
+      readAlertingConfig: vi.fn(() => ({ tableName: 'alerting-table' })),
+    }));
+    const createManualDispatch = vi.fn();
+    vi.doMock('../dispatches/repository.js', () => ({ createManualDispatch }));
+
+    const { handler } = await import('./postHandler.js');
+    const result = await handler(buildEvent());
+
+    expect(result).toMatchObject({ statusCode: 429 });
+    expect(createManualDispatch).not.toHaveBeenCalled();
+  });
+
+  it('returns 429 and never upserts a RUNNING run when createManualDispatch reports an idempotency-key collision (P4 duplicate outcome)', async () => {
+    mockVerifiedPermissions(() => Promise.resolve({ decision: 'ALLOW' }));
+    mockDynamoClient();
+    const createManualDispatch = vi.fn().mockResolvedValue({ outcome: 'duplicate' });
+    vi.doMock('../dispatches/repository.js', () => ({ createManualDispatch }));
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    const { handler } = await import('./postHandler.js');
+    const result = await handler(buildEvent());
+
+    expect(result).toMatchObject({ statusCode: 429 });
+    errorSpy.mockRestore();
   });
 
   it('returns 503 and does not throw when DynamoDB is unavailable on create (AC-matrix)', async () => {

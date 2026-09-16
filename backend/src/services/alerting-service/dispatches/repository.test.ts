@@ -200,6 +200,9 @@ describe('createManualDispatch (real DynamoDB, AC2/AC4)', () => {
       selfTestId: testId,
       channelsTested: ['PUSH', 'SMS'],
     });
+    expect(item.Item?.gsi2pk).toBeUndefined();
+    expect(item.Item?.gsi2sk).toBeUndefined();
+    expect(typeof item.Item?.ttl).toBe('number');
 
     const manualResult = await createManualDispatch(client, TABLE_NAME, {
       deptId,

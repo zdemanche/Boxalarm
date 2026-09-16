@@ -125,6 +125,27 @@ describe('selfTest getHandler', () => {
     expect(body.channelResults.SMS?.ok).toBe(true);
   });
 
+  it('returns 200 with overallResult RUNNING immediately after POST, before fan-out has landed a verdict (P8)', async () => {
+    mockVerifiedPermissions(() => Promise.resolve({ decision: 'ALLOW' }));
+    mockDynamoClient();
+    vi.doMock('./selfTestRunRepository.js', () => ({
+      getSelfTestRun: vi.fn().mockResolvedValue({
+        testId: '1798000000',
+        runAt: 1798000000,
+        channelsTested: ['PUSH', 'SMS'],
+        channelResults: {},
+        overallResult: 'RUNNING',
+      }),
+    }));
+
+    const { handler } = await import('./getHandler.js');
+    const result = await handler(buildEvent('1798000000'));
+
+    expect(result).toMatchObject({ statusCode: 200 });
+    const body = JSON.parse((result as { body: string }).body) as { overallResult: string };
+    expect(body.overallResult).toBe('RUNNING');
+  });
+
   it('returns 503 and does not throw when DynamoDB is unavailable on read (AC-matrix)', async () => {
     mockVerifiedPermissions(() => Promise.resolve({ decision: 'ALLOW' }));
     mockDynamoClient();

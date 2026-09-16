@@ -71,6 +71,16 @@ export function notFoundProblem(traceId: string, detail: string): ProblemRespons
   );
 }
 
+export function tooManyRequestsProblem(traceId: string, detail: string): ProblemResponse {
+  return problemResponse(
+    429,
+    'https://boxalarm.dev/problems/too-many-requests',
+    'Too Many Requests',
+    detail,
+    traceId,
+  );
+}
+
 export function badRequestProblem(
   traceId: string,
   detailOrErrors: string | readonly FieldError[],

@@ -12,8 +12,12 @@ import { emitEmf, emitOutcomeMetric } from '@boxalarm/metrics';
 import type { DynamoDBBatchResponse, DynamoDBRecord, DynamoDBStreamEvent } from 'aws-lambda';
 import { createDynamoClient, readAlertingConfig } from '../eligibility/dynamoClient.js';
 import { getMemberEligibility, queryEligibleMembers } from '../eligibility/selector.js';
-import { resolvePushTarget } from '../eligibility/resolvePushTarget.js';
-import { upsertSelfTestRun, type SelfTestChannelResult } from '../selfTest/selfTestRunRepository.js';
+import { resolvePushTarget, resolveSmsTarget } from '../eligibility/resolvePushTarget.js';
+import {
+  SELF_TEST_METRIC_NAMESPACE,
+  upsertSelfTestRun,
+  type SelfTestChannelResult,
+} from '../selfTest/selfTestRunRepository.js';
 import {
   deriveFanOutKey,
   deriveMessageDeduplicationId,
@@ -27,6 +31,7 @@ const TONE_SEQUENCE = 1;
 const FAN_OUT_CHANNELS: readonly FanOutChannel[] = ['push', 'sms'];
 const CHANNEL_TIER = 'primary';
 const MAX_CONCURRENT_FANOUT_TASKS = 10;
+const TEST_AUDIT_TTL_SECONDS = 60 * 60 * 24 * 365;
 
 interface DispatchAlertRecord {
   readonly dispatchId: string;
@@ -188,7 +193,7 @@ async function sendOne(
             Put: {
               TableName: tableName,
               Item: {
-                pk: buildDeptScopedPk(dispatch.deptId, 'DISPATCH', dispatch.dispatchId),
+  pk: buildDeptScopedPk(dispatch.deptId, 'DISPATCH', dispatch.dispatchId),
                 sk,
                 entityType: 'DELIVERY_RECEIPT',
                 dispatchId: dispatch.dispatchId,
@@ -199,8 +204,12 @@ async function sendOne(
                 toneSequence: TONE_SEQUENCE,
                 isTest: dispatch.isTest,
                 idempotencyKey,
-                gsi1pk: `MEMBER#${task.memberId}`,
-                gsi1sk: `RECEIPT#${Math.floor(Date.now() / 1000)}#${dispatch.dispatchId}`,
+                ...(dispatch.isTest
+                  ? { ttl: Math.floor(Date.now() / 1000) + TEST_AUDIT_TTL_SECONDS }
+                  : {
+                      gsi1pk: `MEMBER#${task.memberId}`,
+                      gsi1sk: `RECEIPT#${Math.floor(Date.now() / 1000)}#${dispatch.dispatchId}`,
+                    }),
               },
               ConditionExpression: 'attribute_not_exists(idempotencyKey)',
             },
@@ -367,7 +376,7 @@ async function fanOutSelfTestDispatch(
   const member = await getMemberEligibility(ddb, tableName, dispatch.deptId, memberId);
   if (!member) {
     logInfo('fanout.selfTest.memberNotFound', dispatch.dispatchId, { memberId, testId });
-    emitOutcomeMetric(METRIC_NAMESPACE, 'SelfTestFailed', 'MemberNotFound');
+    emitOutcomeMetric(SELF_TEST_METRIC_NAMESPACE, 'SelfTestFailed', 'MemberNotFound');
     await upsertSelfTestRun(ddb, tableName, {
       deptId: dispatch.deptId,
       memberId,
@@ -378,9 +387,17 @@ async function fanOutSelfTestDispatch(
         channelsTested.map((channel) => [channel, { ok: false, ms: 0, reason: 'member not found' }]),
       ),
       overallResult: 'FAIL',
+      eligibilityReason: 'member not found',
     });
     return;
   }
+
+  const eligibilityReason =
+    !member.active
+      ? 'member is inactive — a real dispatch would not page you'
+      : member.availabilityState !== 'AVAILABLE'
+        ? `member is ${member.availabilityState} — a real dispatch would not page you`
+        : undefined;
 
   const channelResults: Record<string, SelfTestChannelResult> = {};
 
@@ -389,7 +406,15 @@ async function fanOutSelfTestDispatch(
       const pushTarget = resolvePushTarget(member.contactChannels);
       if (pushTarget.skipped) {
         channelResults.PUSH = { ok: false, ms: 0, reason: pushTarget.reason };
-        emitOutcomeMetric(METRIC_NAMESPACE, 'SelfTestChannelFailed', 'PushSkipped');
+        emitOutcomeMetric(SELF_TEST_METRIC_NAMESPACE, 'SelfTestChannelFailed', 'PushSkipped');
+        continue;
+      }
+    }
+    if (channel === 'sms') {
+      const smsTarget = resolveSmsTarget(member.contactChannels);
+      if (smsTarget.skipped) {
+        channelResults.SMS = { ok: false, ms: 0, reason: smsTarget.reason };
+        emitOutcomeMetric(SELF_TEST_METRIC_NAMESPACE, 'SelfTestChannelFailed', 'SmsSkipped');
         continue;
       }
     }
@@ -397,7 +422,7 @@ async function fanOutSelfTestDispatch(
     try {
       await sendOne(ddb, sns, tableName, topicArn, dispatch, { memberId, channel });
       channelResults[channel.toUpperCase()] = { ok: true, ms: Date.now() - startedMs };
-      emitOutcomeMetric(METRIC_NAMESPACE, 'SelfTestChannelPassed');
+      emitOutcomeMetric(SELF_TEST_METRIC_NAMESPACE, 'SelfTestChannelPassed');
     } catch (error) {
       logError('fanout.selfTest.channelFailed', error, dispatch.dispatchId, { memberId, channel });
       channelResults[channel.toUpperCase()] = {
@@ -405,13 +430,14 @@ async function fanOutSelfTestDispatch(
         ms: Date.now() - startedMs,
         reason: `send failed (${error instanceof Error ? error.constructor.name : 'UnknownError'})`,
       };
-      emitOutcomeMetric(METRIC_NAMESPACE, 'SelfTestChannelFailed', 'SendFailed');
+      emitOutcomeMetric(SELF_TEST_METRIC_NAMESPACE, 'SelfTestChannelFailed', 'SendFailed');
     }
   }
 
-  const overallResult = Object.values(channelResults).every((result) => result.ok)
-    ? 'PASS'
-    : 'FAIL';
+  const overallResult =
+    eligibilityReason === undefined && Object.values(channelResults).every((result) => result.ok)
+      ? 'PASS'
+      : 'FAIL';
   await upsertSelfTestRun(ddb, tableName, {
     deptId: dispatch.deptId,
     memberId,
@@ -420,9 +446,10 @@ async function fanOutSelfTestDispatch(
     channelsTested,
     channelResults,
     overallResult,
+    ...(eligibilityReason ? { eligibilityReason } : {}),
   });
   emitOutcomeMetric(
-    METRIC_NAMESPACE,
+    SELF_TEST_METRIC_NAMESPACE,
     overallResult === 'PASS' ? 'SelfTestPassed' : 'SelfTestFailed',
   );
 }

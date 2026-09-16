@@ -19,6 +19,7 @@ export type CreateManualDispatchResult =
   { readonly outcome: 'created'; readonly dispatchId: string } | { readonly outcome: 'duplicate' };
 
 const LOCK_ITEM_INDEX = 0;
+const TEST_AUDIT_TTL_SECONDS = 60 * 60 * 24 * 365;
 
 function mintDispatchId(
   deptId: VerifiedDeptId,
@@ -36,6 +37,7 @@ export async function createManualDispatch(
 ): Promise<CreateManualDispatchResult> {
   const { deptId, dispatch, idempotencyKey, dispatchedAt } = input;
   const dispatchId = mintDispatchId(deptId, dispatchedAt, dispatch.sourceSystem);
+  const isTest = dispatch.sourceSystem === 'SELF_TEST';
 
   const command = new TransactWriteCommand({
     TransactItems: [
@@ -80,12 +82,13 @@ export async function createManualDispatch(
             toneLadderStatus: 'ACTIVE',
             currentToneSequence: 1,
             nextToneAt: null,
-            isTest: dispatch.sourceSystem === 'SELF_TEST',
+            isTest,
             ...(input.targetMemberId ? { targetMemberId: input.targetMemberId } : {}),
             ...(input.selfTestId ? { selfTestId: input.selfTestId } : {}),
             ...(input.channelsTested ? { channelsTested: input.channelsTested } : {}),
-            gsi2pk: buildDeptScopedPk(deptId),
-            gsi2sk: `DISPATCH#${dispatchedAt}`,
+            ...(isTest
+              ? { ttl: dispatchedAt + TEST_AUDIT_TTL_SECONDS }
+              : { gsi2pk: buildDeptScopedPk(deptId), gsi2sk: `DISPATCH#${dispatchedAt}` }),
           },
           ConditionExpression: 'attribute_not_exists(pk)',
         },

@@ -330,6 +330,83 @@ describe('fanout/handler self-test branch (E1-S8 AC1/AC2/AC3/AC4/AC5)', () => {
     expect(channelResults.PUSH?.reason).toContain('send failed');
     expect(channelResults.SMS?.ok).toBe(true);
   });
+
+  it('records a specific SMS failure reason and overallResult FAIL when the member has no registered SMS number (P5)', async () => {
+    const ddb = createFakeDdb([
+      memberSnapshot({
+        memberId: 'mbr-1',
+        contactChannels: [{ channel: 'PUSH', token: 'tok-1', platform: 'APNS', valid: true }],
+      }),
+    ]);
+    const sns = createFakeSns();
+    vi.doMock('../eligibility/dynamoClient.js', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('../eligibility/dynamoClient.js')>();
+      return { ...actual, createDynamoClient: () => ddb as unknown as DynamoDBDocumentClient };
+    });
+    vi.doMock('./snsClient.js', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('./snsClient.js')>();
+      return { ...actual, createSnsClient: () => sns as unknown as SNSClient };
+    });
+
+    const { handler } = await import('./handler.js');
+    await handler(selfTestDispatchInsertEvent());
+
+    const run = ddb.items.get('DEPT#NICHOLS#MEMBER#mbr-1#SELFTEST#1798000000');
+    expect(run?.overallResult).toBe('FAIL');
+    const channelResults = run?.channelResults as Record<string, { ok: boolean; reason?: string }>;
+    expect(channelResults.SMS).toEqual({ ok: false, ms: 0, reason: 'sms: no number registered' });
+    expect(channelResults.PUSH?.ok).toBe(true);
+    expect(sns.calls).toHaveLength(1);
+  });
+
+  it('reports overallResult FAIL with an eligibility reason for a MARKED_OFF member even though both channels send successfully (P6)', async () => {
+    const ddb = createFakeDdb([
+      memberSnapshot({ memberId: 'mbr-1', availabilityState: 'MARKED_OFF' }),
+    ]);
+    const sns = createFakeSns();
+    vi.doMock('../eligibility/dynamoClient.js', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('../eligibility/dynamoClient.js')>();
+      return { ...actual, createDynamoClient: () => ddb as unknown as DynamoDBDocumentClient };
+    });
+    vi.doMock('./snsClient.js', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('./snsClient.js')>();
+      return { ...actual, createSnsClient: () => sns as unknown as SNSClient };
+    });
+
+    const { handler } = await import('./handler.js');
+    await handler(selfTestDispatchInsertEvent());
+
+    expect(sns.calls).toHaveLength(2);
+    const run = ddb.items.get('DEPT#NICHOLS#MEMBER#mbr-1#SELFTEST#1798000000');
+    expect(run?.overallResult).toBe('FAIL');
+    expect(run?.eligibilityReason).toBe('member is MARKED_OFF — a real dispatch would not page you');
+    const channelResults = run?.channelResults as Record<string, { ok: boolean }>;
+    expect(channelResults.PUSH?.ok).toBe(true);
+    expect(channelResults.SMS?.ok).toBe(true);
+  });
+
+  it('writes self-test DISPATCH_ALERT and DELIVERY_RECEIPT items without gsi2pk/gsi1pk so synthetic runs never surface in dept dispatch history or member receipt history (P7)', async () => {
+    const ddb = createFakeDdb([memberSnapshot({ memberId: 'mbr-1' })]);
+    const sns = createFakeSns();
+    vi.doMock('../eligibility/dynamoClient.js', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('../eligibility/dynamoClient.js')>();
+      return { ...actual, createDynamoClient: () => ddb as unknown as DynamoDBDocumentClient };
+    });
+    vi.doMock('./snsClient.js', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('./snsClient.js')>();
+      return { ...actual, createSnsClient: () => sns as unknown as SNSClient };
+    });
+
+    const { handler } = await import('./handler.js');
+    await handler(selfTestDispatchInsertEvent());
+
+    const receipts = [...ddb.items.values()].filter((item) => item.entityType === 'DELIVERY_RECEIPT');
+    expect(receipts).toHaveLength(2);
+    expect(receipts.every((item) => item.gsi1pk === undefined && item.gsi1sk === undefined)).toBe(
+      true,
+    );
+    expect(receipts.every((item) => typeof item.ttl === 'number')).toBe(true);
+  });
 });
 
 describe('fanout/handler', () => {
