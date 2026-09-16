@@ -5,7 +5,11 @@ import { toVerifiedDeptId } from '@boxalarm/dept-scope';
 import { emitOutcomeMetric } from '@boxalarm/metrics';
 import { queryTestsDue } from './testsDueRepository.js';
 import { createDynamoClient } from '../dynamoClient.js';
-import { dueWindowForScan, readApparatusTestLeadDays, selectWithinLeadTime } from './configReader.js';
+import {
+  dueWindowForScan,
+  readApparatusTestLeadDays,
+  selectWithinLeadTime,
+} from './configReader.js';
 import { createEventBridgeClient, publishDueEvent } from './publishDueEvents.js';
 
 const METRIC_NAMESPACE = 'Boxalarm/ApparatusTestDueScanner';

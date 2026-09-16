@@ -46,13 +46,11 @@ export async function queryTestsDue(
       items.push(...((output.Items ?? []) as TestDueItem[]));
       exclusiveStartKey = output.LastEvaluatedKey;
     } while (exclusiveStartKey);
-    return items
-      .map(parseTestDueItem)
-      .map((entry) => ({
-        apparatusId: entry.apparatusId,
-        testType: entry.testType,
-        dueDate: entry.nextDueDate,
-      }));
+    return items.map(parseTestDueItem).map((entry) => ({
+      apparatusId: entry.apparatusId,
+      testType: entry.testType,
+      dueDate: entry.nextDueDate,
+    }));
   } catch (error) {
     console.error(
       JSON.stringify({

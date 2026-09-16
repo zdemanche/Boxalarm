@@ -141,7 +141,9 @@ describe('postTestRecord -> getTestingSchedules (real DynamoDB via LocalStack) â
 
     const firstListing = await getHandler(getEvent());
     const firstSchedule = JSON.parse((firstListing as { body: string }).body) as unknown[];
-    expect(firstSchedule).toEqual([{ unitId: 'ENGINE-3', testType: 'HOSE', nextDueDate: '2026-10-01' }]);
+    expect(firstSchedule).toEqual([
+      { unitId: 'ENGINE-3', testType: 'HOSE', nextDueDate: '2026-10-01' },
+    ]);
 
     // Re-test early, before the first due date -- must supersede, not accumulate.
     const secondBody = JSON.stringify({

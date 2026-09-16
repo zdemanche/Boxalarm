@@ -219,7 +219,9 @@ describe('getTestingSchedules handler', () => {
 
   it('returns 503 (not an unhandled rejection) when the GSI2 query fails', async () => {
     const failure = new Error('DynamoDB unavailable');
-    const client = { send: vi.fn().mockRejectedValue(failure) } as unknown as DynamoDBDocumentClient;
+    const client = {
+      send: vi.fn().mockRejectedValue(failure),
+    } as unknown as DynamoDBDocumentClient;
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const createHandler = await importHandler();
     const handler = createHandler({

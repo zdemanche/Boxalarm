@@ -12,7 +12,11 @@ import {
   type CedarPrincipalContext,
 } from './decide.js';
 import { emitAuthzMetric, emitInvocationMetric } from './metrics.js';
-import { forbiddenProblem, serviceUnavailableProblem, unauthorizedProblem } from './problemDetails.js';
+import {
+  forbiddenProblem,
+  serviceUnavailableProblem,
+  unauthorizedProblem,
+} from './problemDetails.js';
 
 type RawAuthorizerContext = Partial<CedarPrincipalContext>;
 
