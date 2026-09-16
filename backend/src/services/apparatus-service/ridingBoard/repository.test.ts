@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { toVerifiedDeptId } from '@boxalarm/dept-scope';
 import { assignSeat, getRidingBoard } from './repository.js';
 import { createRidingBoardFakeClient } from './testDynamoFake.js';
@@ -57,6 +57,31 @@ describe('assignSeat', () => {
     expect(outcome).toMatchObject({ kind: 'ASSIGNED', memberId: 'MBR-0012', version: 1 });
     const seat = client.peek(DISPATCH_PK, 'SEAT#APP-ENGINE-2#DRIVER');
     expect(seat?.memberId).toBe('MBR-0012');
+  });
+
+  it('reads the prior seat state with ConsistentRead (regression: eventually-consistent read could bake a stale previousMemberId into the event/history despite the transaction condition passing)', async () => {
+    const client = createRidingBoardFakeClient([apparatusItem()]);
+    const sendSpy = vi.spyOn(client, 'send');
+
+    await assignSeat(client, TABLE, DEPT_ID, DISPATCH_ID, {
+      unitId: 'ENGINE-2',
+      positionCode: 'DRIVER',
+      memberId: 'MBR-0012',
+      expectedVersion: 0,
+      clientAssignmentId: 'CLIENT-1',
+      assignedBy: 'officer-1',
+    });
+
+    // Only the seat-state read (SEAT#...) goes through readSeatState; the separate
+    // history-replay check (SEATHIST#...) is a different read with its own semantics.
+    const seatStateReads = sendSpy.mock.calls.filter((call) => {
+      const cmd = call[0] as { constructor: { name: string }; input: { Key?: { sk?: string } } };
+      return cmd.constructor.name === 'GetCommand' && cmd.input.Key?.sk?.startsWith('SEAT#');
+    });
+    expect(seatStateReads.length).toBeGreaterThan(0);
+    for (const call of seatStateReads) {
+      expect((call[0] as { input: { ConsistentRead?: boolean } }).input.ConsistentRead).toBe(true);
+    }
   });
 
   it('AC4: refuses to assign a seat on an out-of-service apparatus and surfaces the reason', async () => {

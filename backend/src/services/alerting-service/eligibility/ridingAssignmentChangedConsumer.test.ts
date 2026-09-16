@@ -98,6 +98,65 @@ describe('ridingAssignmentChangedConsumer handler (entrypoint)', () => {
     ).toBeNull();
   });
 
+  it('does not clear the previous occupant when they have since been reassigned to a different apparatus (regression: unconditional clear bug)', async () => {
+    // Member MBR-0034 was displaced from APP-ENGINE-2 by this event, but the roster already
+    // shows them riding a *different* apparatus (they were given a second seat elsewhere,
+    // which this system allows -- seats are not auto-vacated). Clearing here would wrongly
+    // un-seat someone who is actually still riding.
+    const { ConditionalCheckFailedException } = await import('@aws-sdk/client-dynamodb');
+    const send = stubSend((command) => {
+      if (command.constructor.name === 'UpdateCommand') {
+        const key = command.input.Key as { sk: string };
+        if (key.sk === 'ROSTER#MBR-0034') {
+          throw new ConditionalCheckFailedException({ message: 'condition failed', $metadata: {} });
+        }
+      }
+      return {};
+    });
+    const { createHandler } = await import('./ridingAssignmentChangedConsumer.js');
+    const handler = createHandler({ client: { send } as unknown as DynamoDBDocumentClient });
+
+    await handler(
+      {
+        Records: [{ messageId: 'm1', body: detailBody({}, { previousMemberId: 'MBR-0034' }) }],
+      } as unknown as SQSEvent,
+      {} as never,
+      () => undefined,
+    );
+
+    // The consumer must have attempted the clear (and the guard condition rejected it, not an
+    // unconditional write that would have silently succeeded and wrongly un-seated MBR-0034).
+    const clearAttempt = send.mock.calls.find(
+      (call) =>
+        (call[0] as { constructor: { name: string } }).constructor.name === 'UpdateCommand' &&
+        (call[0] as { input: { Key: { sk: string } } }).input.Key.sk === 'ROSTER#MBR-0034',
+    );
+    expect(clearAttempt).toBeDefined();
+    const values = (
+      clearAttempt?.[0] as { input: { ExpressionAttributeValues: Record<string, unknown> } }
+    ).input.ExpressionAttributeValues;
+    expect(values[':requireCurrentApparatusId']).toBe('APP-ENGINE-2');
+  });
+
+  it('does not create an orphan roster row when none exists yet (regression: upsert bug)', async () => {
+    const send = stubSend(() => ({}));
+    const { createHandler } = await import('./ridingAssignmentChangedConsumer.js');
+    const handler = createHandler({ client: { send } as unknown as DynamoDBDocumentClient });
+
+    await handler(
+      { Records: [{ messageId: 'm1', body: detailBody() }] } as unknown as SQSEvent,
+      {} as never,
+      () => undefined,
+    );
+
+    const updateCall = send.mock.calls.find(
+      (call) => (call[0] as { constructor: { name: string } }).constructor.name === 'UpdateCommand',
+    );
+    const conditionExpression = (updateCall?.[0] as { input: { ConditionExpression: string } }).input
+      .ConditionExpression;
+    expect(conditionExpression).toContain('attribute_exists(pk)');
+  });
+
   it('skips without updating the roster on a duplicate eventId (dedup)', async () => {
     const send = stubSend((command) => {
       if (command.constructor.name === 'GetCommand' && (command.input.Key as { sk: string }).sk === 'EVT#evt-1') {

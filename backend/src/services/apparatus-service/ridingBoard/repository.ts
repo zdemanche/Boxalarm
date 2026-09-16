@@ -251,7 +251,13 @@ async function readSeatState(
   pk: string,
   sk: string,
 ): Promise<SeatState | undefined> {
-  const result = await client.send(new GetCommand({ TableName: tableName, Key: { pk, sk } }));
+  // Must be strongly consistent: this read's result (previousMemberId) is baked into the
+  // outbox event and history record without re-verification, so an eventually-consistent
+  // read here can report a stale occupant even though the transaction's own version check
+  // (against the true current state) still passes.
+  const result = await client.send(
+    new GetCommand({ TableName: tableName, Key: { pk, sk }, ConsistentRead: true }),
+  );
   const item = result.Item;
   if (!item) {
     return undefined;

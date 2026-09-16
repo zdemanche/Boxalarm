@@ -94,20 +94,30 @@ async function updateAssignedApparatus(
   memberId: string,
   apparatusId: string | null,
   eventTimeMs: number,
+  requireCurrentApparatusId?: string,
 ): Promise<void> {
+  const conditions = [
+    'attribute_exists(pk)',
+    '(attribute_not_exists(assignedApparatusUpdatedAt) OR assignedApparatusUpdatedAt < :new)',
+  ];
+  const values: Record<string, unknown> = { ':apparatusId': apparatusId, ':new': eventTimeMs };
+  if (requireCurrentApparatusId !== undefined) {
+    conditions.push('assignedApparatusId = :requireCurrentApparatusId');
+    values[':requireCurrentApparatusId'] = requireCurrentApparatusId;
+  }
   try {
     await client.send(
       new UpdateCommand({
         TableName: tableName,
         Key: { pk: buildDeptScopedPk(deptId, 'DISPATCH', dispatchId), sk: `ROSTER#${memberId}` },
-        ConditionExpression:
-          'attribute_not_exists(assignedApparatusUpdatedAt) OR assignedApparatusUpdatedAt < :new',
+        ConditionExpression: conditions.join(' AND '),
         UpdateExpression: 'SET assignedApparatusId = :apparatusId, assignedApparatusUpdatedAt = :new',
-        ExpressionAttributeValues: { ':apparatusId': apparatusId, ':new': eventTimeMs },
+        ExpressionAttributeValues: values,
       }),
     );
   } catch (error) {
     if (error instanceof ConditionalCheckFailedException) {
+      emitOutcomeMetric(METRIC_NAMESPACE, 'RidingAssignmentChangedSkippedNoMatch');
       return;
     }
     throw error;
@@ -154,7 +164,19 @@ async function processRecord(record: SQSRecord, deps: RidingAssignmentChangedDep
       await updateAssignedApparatus(client, tableName, deptId, dispatchId, memberId, apparatusId, eventTimeMs);
     }
     if (previousMemberId !== null && previousMemberId !== memberId) {
-      await updateAssignedApparatus(client, tableName, deptId, dispatchId, previousMemberId, null, eventTimeMs);
+      // Only clear the displaced member's assignment if they're still shown riding *this*
+      // apparatus -- they may have since been assigned a different seat entirely (seats are
+      // not auto-vacated), in which case clearing here would wrongly un-seat them.
+      await updateAssignedApparatus(
+        client,
+        tableName,
+        deptId,
+        dispatchId,
+        previousMemberId,
+        null,
+        eventTimeMs,
+        apparatusId,
+      );
     }
   } catch (error) {
     logError('alerting.ridingAssignment.changed.updateFailed', error, { correlationId: eventId });
