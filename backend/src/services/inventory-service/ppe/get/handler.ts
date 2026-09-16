@@ -55,18 +55,20 @@ export function createGetPpeHandler(dynamoClient?: DynamoDBDocumentClient) {
         body: JSON.stringify(assignments),
       };
     } catch (error) {
-      const reason = error instanceof Error ? error.constructor.name : 'UnknownError';
+      const reason = error instanceof Error ? error.message : String(error);
+      const errorType = error instanceof Error ? error.constructor.name : 'UnknownError';
       console.error(
         JSON.stringify({
           event: 'inventory.ppe.view.error',
           service: 'inventory',
           reason,
+          errorType,
           correlationId: traceId,
           deptId,
           memberId,
         }),
       );
-      emitOutcomeMetric(METRIC_NAMESPACE, 'PpeViewFailed', reason);
+      emitOutcomeMetric(METRIC_NAMESPACE, 'PpeViewFailed', errorType);
       return serviceUnavailableProblem(traceId);
     }
   };

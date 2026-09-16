@@ -40,7 +40,7 @@ describe('publishDueEvent (AC2)', () => {
     const putCommand = ddbSend.mock.calls[0]?.[0] as PutCommand;
     expect(putCommand).toBeInstanceOf(PutCommand);
     expect(putCommand.input.Item?.pk).toBe('DEPT#NICHOLS#PPE_EXPIRY_FLAG#2026-09-14');
-    expect(putCommand.input.Item?.sk).toBe('PPE#TURNOUT-COAT');
+    expect(putCommand.input.Item?.sk).toBe('PPE#MBR-0034#TURNOUT-COAT');
 
     const updateCommand = ddbSend.mock.calls[1]?.[0] as UpdateCommand;
     expect(updateCommand).toBeInstanceOf(UpdateCommand);
@@ -100,6 +100,58 @@ describe('publishDueEvent (AC2)', () => {
     await expect(
       publishDueEvent(fakeDdb(ddbSend), fakeEb(ebSend), env, baseParams),
     ).rejects.toThrow('boom');
+    errorSpy.mockRestore();
+  });
+
+  it('gives two members holding the same itemType distinct marker keys and eventIds on the same scan day (P5 core-harm regression)', async () => {
+    const ddbSend = vi.fn().mockResolvedValue({});
+    const ebSend = vi.fn().mockResolvedValue({ Entries: [{ EventId: 'evt-1' }] });
+
+    const outcome1 = await publishDueEvent(fakeDdb(ddbSend), fakeEb(ebSend), env, {
+      ...baseParams,
+      memberId: 'MBR-1',
+    });
+    const outcome2 = await publishDueEvent(fakeDdb(ddbSend), fakeEb(ebSend), env, {
+      ...baseParams,
+      memberId: 'MBR-2',
+    });
+
+    expect(outcome1).toBe('Published');
+    expect(outcome2).toBe('Published');
+    expect(ebSend).toHaveBeenCalledTimes(2);
+
+    const putCommand1 = ddbSend.mock.calls[0]?.[0] as PutCommand;
+    const putCommand2 = ddbSend.mock.calls[2]?.[0] as PutCommand;
+    expect(putCommand1.input.Item?.sk).toBe('PPE#MBR-1#TURNOUT-COAT');
+    expect(putCommand2.input.Item?.sk).toBe('PPE#MBR-2#TURNOUT-COAT');
+    expect(putCommand1.input.Item?.sk).not.toBe(putCommand2.input.Item?.sk);
+
+    const detail1 = JSON.parse(
+      (ebSend.mock.calls[0]?.[0] as PutEventsCommand).input.Entries?.[0]?.Detail ?? '{}',
+    ) as Record<string, unknown>;
+    const detail2 = JSON.parse(
+      (ebSend.mock.calls[1]?.[0] as PutEventsCommand).input.Entries?.[0]?.Detail ?? '{}',
+    ) as Record<string, unknown>;
+    expect(detail1.eventId).not.toBe(detail2.eventId);
+  });
+
+  it('returns PublishedMarkerNotConfirmed and emits its own metric when the publish succeeds but marking the marker fails', async () => {
+    const markFailure = new Error('conditional update unavailable');
+    const ddbSend = vi
+      .fn()
+      .mockResolvedValueOnce({})
+      .mockRejectedValueOnce(markFailure);
+    const ebSend = vi.fn().mockResolvedValue({ Entries: [{ EventId: 'evt-1' }] });
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    const outcome = await publishDueEvent(fakeDdb(ddbSend), fakeEb(ebSend), env, baseParams);
+
+    expect(outcome).toBe('PublishedMarkerNotConfirmed');
+    expect(ebSend).toHaveBeenCalledTimes(1);
+    const logged = errorSpy.mock.calls
+      .map((call) => JSON.parse(call[0] as string) as Record<string, unknown>)
+      .find((entry) => entry.event === 'ppeExpiryScanner.markPublished.failed');
+    expect(logged?.correlationId).toBe('trace-1');
     errorSpy.mockRestore();
   });
 

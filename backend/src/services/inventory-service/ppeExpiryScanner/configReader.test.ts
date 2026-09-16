@@ -36,6 +36,15 @@ describe('readPpeExpiryLeadDays', () => {
     expect(leadDays).toBe(DEFAULT_PPE_EXPIRY_LEAD_DAYS);
   });
 
+  it('clamps a misconfigured leadDays value to MAX_PPE_EXPIRY_LEAD_DAYS instead of fanning out unbounded month partitions (P1)', async () => {
+    const send = vi.fn().mockResolvedValue({ Item: { value: { ppeExpiryLeadDays: 9000 } } });
+    const client = fakeClient(send);
+
+    const leadDays = await readPpeExpiryLeadDays(client, env, deptId, 'trace-clamp');
+
+    expect(leadDays).toBe(365);
+  });
+
   it('logs the original error and rethrows on a read failure', async () => {
     const failure = new Error('DynamoDB unavailable');
     const send = vi.fn().mockRejectedValue(failure);

@@ -42,10 +42,20 @@ export interface PublishDueEventParams {
   readonly now: Date;
 }
 
-export type PublishDueEventOutcome = 'Published' | 'SkippedDuplicate';
+export type PublishDueEventOutcome =
+  | 'Published'
+  | 'SkippedDuplicate'
+  | 'PublishedMarkerNotConfirmed';
 
-function deterministicEventId(deptId: string, ppeItemId: string, today: string): string {
-  const hash = createHash('sha256').update(`${deptId}#${ppeItemId}#${today}`).digest('hex');
+function deterministicEventId(
+  deptId: string,
+  memberId: string,
+  ppeItemId: string,
+  today: string,
+): string {
+  const hash = createHash('sha256')
+    .update(`${deptId}#${memberId}#${ppeItemId}#${today}`)
+    .digest('hex');
   return `${hash.slice(0, 8)}-${hash.slice(8, 12)}-${hash.slice(12, 16)}-${hash.slice(16, 20)}-${hash.slice(20, 32)}`;
 }
 
@@ -59,7 +69,8 @@ function logPublishError(
     JSON.stringify({
       event,
       service: 'inventory',
-      reason: error instanceof Error ? error.constructor.name : 'UnknownError',
+      reason: error instanceof Error ? error.message : String(error),
+      errorType: error instanceof Error ? error.constructor.name : 'UnknownError',
       correlationId,
       ppeItemId,
     }),
@@ -77,9 +88,9 @@ export async function publishDueEvent(
   const today = params.now.toISOString().slice(0, 10);
   const markerKey = {
     pk: buildDeptScopedPk(params.deptId, 'PPE_EXPIRY_FLAG', today),
-    sk: `PPE#${params.ppeItemId}`,
+    sk: `PPE#${params.memberId}#${params.ppeItemId}`,
   };
-  const eventId = deterministicEventId(params.deptId, params.ppeItemId, today);
+  const eventId = deterministicEventId(params.deptId, params.memberId, params.ppeItemId, today);
 
   try {
     await ddb.send(
@@ -178,6 +189,8 @@ export async function publishDueEvent(
       params.correlationId,
       params.ppeItemId,
     );
+    emitOutcomeMetric(METRIC_NAMESPACE, 'PublishedMarkerNotConfirmed');
+    return 'PublishedMarkerNotConfirmed';
   }
 
   emitOutcomeMetric(METRIC_NAMESPACE, 'Published');

@@ -59,7 +59,8 @@ function logRepositoryError(
     JSON.stringify({
       event,
       service: 'inventory',
-      reason: error instanceof Error ? error.constructor.name : 'UnknownError',
+      reason: error instanceof Error ? error.message : String(error),
+      errorType: error instanceof Error ? error.constructor.name : 'UnknownError',
       correlationId,
       ...(ppeItemId ? { ppeItemId } : {}),
     }),
@@ -133,6 +134,8 @@ export async function issuePpeAssignment(
           issueDate: { old: null, new: params.issueDate },
         },
         ts,
+        gsi3pk: buildDeptScopedPk(params.deptId, 'AUDIT', 'ENTITY', 'PPE_ASSIGNMENT', ppeItemId),
+        gsi3sk: `${ts}`,
       },
     },
   };

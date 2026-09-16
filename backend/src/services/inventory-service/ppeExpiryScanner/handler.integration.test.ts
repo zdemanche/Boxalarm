@@ -80,13 +80,14 @@ function ppeItem(
   ppeItemId: string,
   nfpaExpiryDate: string,
   yearMonth: string,
+  memberId = 'MBR-1',
 ): Record<string, unknown> {
   return {
-    pk: `DEPT#${DEPT_ID}#MEMBER#MBR-1`,
+    pk: `DEPT#${DEPT_ID}#MEMBER#${memberId}`,
     sk: `PPE#${ppeItemId}`,
     entityType: 'PPE_ASSIGNMENT',
     ppeItemId,
-    memberId: 'MBR-1',
+    memberId,
     itemType: ppeItemId.replace(/-/g, '_'),
     size: '44R',
     issueDate: '2016-01-10',
@@ -167,7 +168,7 @@ describe('ppe expiry scanner delivery (real DynamoDB via LocalStack) — ppe.exp
     const marker = await documentClient.send(
       new GetCommand({
         TableName: INVENTORY_TABLE,
-        Key: { pk: `DEPT#${DEPT_ID}#PPE_EXPIRY_FLAG#2026-09-14`, sk: 'PPE#GLOVES' },
+        Key: { pk: `DEPT#${DEPT_ID}#PPE_EXPIRY_FLAG#2026-09-14`, sk: 'PPE#MBR-1#GLOVES' },
       }),
     );
     expect(marker.Item?.publishedAt).toBeDefined();
@@ -180,5 +181,56 @@ describe('ppe expiry scanner delivery (real DynamoDB via LocalStack) — ppe.exp
     });
 
     expect(secondRun).not.toHaveBeenCalled();
+  });
+
+  it('publishes for both members when two members hold the same itemType due the same day (P5 core-harm regression)', async () => {
+    await documentClient.send(
+      new PutCommand({
+        TableName: INVENTORY_TABLE,
+        Item: ppeItem('COAT-SHARED', '2026-09-22', '2026-09', 'MBR-10'),
+      }),
+    );
+    await documentClient.send(
+      new PutCommand({
+        TableName: INVENTORY_TABLE,
+        Item: ppeItem('COAT-SHARED', '2026-09-22', '2026-09', 'MBR-11'),
+      }),
+    );
+    await documentClient.send(
+      new PutCommand({
+        TableName: CONFIG_TABLE,
+        Item: {
+          pk: `DEPT#${DEPT_ID}`,
+          sk: 'CONFIG#ALERT_RULES',
+          entityType: 'DEPARTMENT_CONFIG',
+          configType: 'ALERT_RULES',
+          value: { ppeExpiryLeadDays: 10 },
+          version: 1,
+        },
+      }),
+    );
+    const ebSend = vi.fn().mockResolvedValue({ Entries: [{}] });
+
+    await runPpeExpiryScan('trace-int-4', {
+      dynamoClient: documentClient,
+      eventBridgeClient: { send: ebSend } as unknown as EventBridgeClient,
+      now,
+    });
+
+    expect(ebSend).toHaveBeenCalledTimes(2);
+    const memberIds = ebSend.mock.calls.map((call) => {
+      const detail = JSON.parse(
+        (call[0] as { input: { Entries: { Detail: string }[] } }).input.Entries[0]?.Detail ?? '{}',
+      ) as { payload: { memberId: string } };
+      return detail.payload.memberId;
+    });
+    expect(memberIds.sort()).toEqual(['MBR-10', 'MBR-11']);
+    const eventIds = ebSend.mock.calls.map((call) => {
+      const detail = JSON.parse(
+        (call[0] as { input: { Entries: { Detail: string }[] } }).input.Entries[0]?.Detail ?? '{}',
+      ) as { eventId: string };
+      return detail.eventId;
+    });
+    expect(eventIds[0]).not.toBe(eventIds[1]);
   });
 });

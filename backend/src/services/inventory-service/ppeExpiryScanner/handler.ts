@@ -76,7 +76,8 @@ export async function runPpeExpiryScan(
       JSON.stringify({
         event: 'ppeExpiryScanner.scan.failed',
         service: SERVICE_NAME,
-        reason: error instanceof Error ? error.constructor.name : 'UnknownError',
+        reason: error instanceof Error ? error.message : String(error),
+        errorType: error instanceof Error ? error.constructor.name : 'UnknownError',
         correlationId,
         deptId,
       }),

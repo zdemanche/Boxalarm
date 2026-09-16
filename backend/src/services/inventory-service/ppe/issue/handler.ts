@@ -111,7 +111,8 @@ export function createIssuePpeHandler(dynamoClient?: DynamoDBDocumentClient) {
           JSON.stringify({
             event: 'inventory.ppe.issue.conflict',
             service: 'inventory',
-            reason: error.constructor.name,
+            reason: error.message,
+            errorType: error.constructor.name,
             correlationId: traceId,
             deptId,
             memberId,
@@ -120,18 +121,20 @@ export function createIssuePpeHandler(dynamoClient?: DynamoDBDocumentClient) {
         emitOutcomeMetric(METRIC_NAMESPACE, 'PpeIssueFailed', 'AlreadyIssued');
         return ppeAssignmentConflictProblem(traceId, error.message);
       }
-      const reason = error instanceof Error ? error.constructor.name : 'UnknownError';
+      const reason = error instanceof Error ? error.message : String(error);
+      const errorType = error instanceof Error ? error.constructor.name : 'UnknownError';
       console.error(
         JSON.stringify({
           event: 'inventory.ppe.issue.error',
           service: 'inventory',
           reason,
+          errorType,
           correlationId: traceId,
           deptId,
           memberId,
         }),
       );
-      emitOutcomeMetric(METRIC_NAMESPACE, 'PpeIssueFailed', reason);
+      emitOutcomeMetric(METRIC_NAMESPACE, 'PpeIssueFailed', errorType);
       return serviceUnavailableProblem(traceId);
     }
   };

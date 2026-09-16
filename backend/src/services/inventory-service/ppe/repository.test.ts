@@ -102,7 +102,12 @@ describe('issuePpeAssignment (AC1)', () => {
       status: 'ISSUED',
     });
     expect(assignmentPut?.ConditionExpression).toBe('attribute_not_exists(pk)');
-    expect(items[1]?.Put?.Item).toMatchObject({ mutatedEntityType: 'PPE_ASSIGNMENT', action: 'CREATE' });
+    expect(items[1]?.Put?.Item).toMatchObject({
+      mutatedEntityType: 'PPE_ASSIGNMENT',
+      action: 'CREATE',
+      gsi3pk: 'DEPT#NICHOLS#AUDIT#ENTITY#PPE_ASSIGNMENT#TURNOUT-COAT',
+      gsi3sk: '1768003200',
+    });
   });
 
   it('throws PpeAssignmentConflictError, not a raw exception, on a re-issue conflict (409 path)', async () => {
@@ -131,7 +136,8 @@ describe('issuePpeAssignment (AC1)', () => {
     const logged = errorSpy.mock.calls
       .map((call) => JSON.parse(call[0] as string) as Record<string, unknown>)
       .find((entry) => entry.event === 'ppe.issue.failed');
-    expect(logged?.reason).toBe('Error');
+    expect(logged?.reason).toBe('DynamoDB unavailable');
+    expect(logged?.errorType).toBe('Error');
     expect(logged?.correlationId).toBe('trace-1');
     errorSpy.mockRestore();
   });

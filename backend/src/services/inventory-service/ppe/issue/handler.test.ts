@@ -189,7 +189,8 @@ describe('inventory ppe issue handler', () => {
     const logged = logSpy.mock.calls
       .map((call) => JSON.parse(call[0] as string) as Record<string, unknown>)
       .find((entry) => entry.event === 'inventory.ppe.issue.error');
-    expect(logged?.reason).toBe('Error');
+    expect(logged?.reason).toBe('ProvisionedThroughputExceededException');
+    expect(logged?.errorType).toBe('Error');
     logSpy.mockRestore();
   });
 });
