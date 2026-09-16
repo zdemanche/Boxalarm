@@ -263,14 +263,12 @@ describe('assignRidingPositionHandler (entrypoint)', () => {
   it('returns 400 for a positionCode not configured for the apparatus type', async () => {
     mockVerifiedPermissions(() => Promise.resolve({ decision: 'ALLOW' }));
     await mockApparatusRepository({
-      findApparatusItem: vi
-        .fn()
-        .mockResolvedValue({
-          apparatusId: 'APP-ENGINE-2',
-          unitId: 'ENGINE-2',
-          type: 'ENGINE',
-          status: 'IN_SERVICE',
-        }),
+      findApparatusItem: vi.fn().mockResolvedValue({
+        apparatusId: 'APP-ENGINE-2',
+        unitId: 'ENGINE-2',
+        type: 'ENGINE',
+        status: 'IN_SERVICE',
+      }),
     });
     await mockRidingBoardRepository({
       getRidingPositionsConfig: vi
@@ -298,14 +296,12 @@ describe('assignRidingPositionHandler (entrypoint)', () => {
   it('AC8: maps a CONFLICT outcome to 409 with the winning assignment in the body', async () => {
     mockVerifiedPermissions(() => Promise.resolve({ decision: 'ALLOW' }));
     await mockApparatusRepository({
-      findApparatusItem: vi
-        .fn()
-        .mockResolvedValue({
-          apparatusId: 'APP-ENGINE-2',
-          unitId: 'ENGINE-2',
-          type: 'ENGINE',
-          status: 'IN_SERVICE',
-        }),
+      findApparatusItem: vi.fn().mockResolvedValue({
+        apparatusId: 'APP-ENGINE-2',
+        unitId: 'ENGINE-2',
+        type: 'ENGINE',
+        status: 'IN_SERVICE',
+      }),
     });
     await mockRidingBoardRepository({
       getRidingPositionsConfig: vi
@@ -348,14 +344,12 @@ describe('assignRidingPositionHandler (entrypoint)', () => {
   it('AC4: maps an OUT_OF_SERVICE outcome to 409 with the reason visible', async () => {
     mockVerifiedPermissions(() => Promise.resolve({ decision: 'ALLOW' }));
     await mockApparatusRepository({
-      findApparatusItem: vi
-        .fn()
-        .mockResolvedValue({
-          apparatusId: 'APP-ENGINE-2',
-          unitId: 'ENGINE-2',
-          type: 'ENGINE',
-          status: 'IN_SERVICE',
-        }),
+      findApparatusItem: vi.fn().mockResolvedValue({
+        apparatusId: 'APP-ENGINE-2',
+        unitId: 'ENGINE-2',
+        type: 'ENGINE',
+        status: 'IN_SERVICE',
+      }),
     });
     await mockRidingBoardRepository({
       getRidingPositionsConfig: vi
@@ -386,14 +380,12 @@ describe('assignRidingPositionHandler (entrypoint)', () => {
   it('returns 200 on a successful assignment (entrypoint, AC1)', async () => {
     mockVerifiedPermissions(() => Promise.resolve({ decision: 'ALLOW' }));
     await mockApparatusRepository({
-      findApparatusItem: vi
-        .fn()
-        .mockResolvedValue({
-          apparatusId: 'APP-ENGINE-2',
-          unitId: 'ENGINE-2',
-          type: 'ENGINE',
-          status: 'IN_SERVICE',
-        }),
+      findApparatusItem: vi.fn().mockResolvedValue({
+        apparatusId: 'APP-ENGINE-2',
+        unitId: 'ENGINE-2',
+        type: 'ENGINE',
+        status: 'IN_SERVICE',
+      }),
     });
     await mockRidingBoardRepository({
       getRidingPositionsConfig: vi
@@ -429,14 +421,12 @@ describe('assignRidingPositionHandler (entrypoint)', () => {
   it('returns 503 when the write fails unexpectedly', async () => {
     mockVerifiedPermissions(() => Promise.resolve({ decision: 'ALLOW' }));
     await mockApparatusRepository({
-      findApparatusItem: vi
-        .fn()
-        .mockResolvedValue({
-          apparatusId: 'APP-ENGINE-2',
-          unitId: 'ENGINE-2',
-          type: 'ENGINE',
-          status: 'IN_SERVICE',
-        }),
+      findApparatusItem: vi.fn().mockResolvedValue({
+        apparatusId: 'APP-ENGINE-2',
+        unitId: 'ENGINE-2',
+        type: 'ENGINE',
+        status: 'IN_SERVICE',
+      }),
     });
     await mockRidingBoardRepository({
       getRidingPositionsConfig: vi
