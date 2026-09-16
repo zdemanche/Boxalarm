@@ -14,6 +14,8 @@ import {
   InvalidCursorError,
   queryDepartmentAuditLog,
   queryMemberDeliveryHistory,
+  type DepartmentAuditPage,
+  type MemberAuditPage,
 } from './queryAuditLog.js';
 
 const METRIC_NAMESPACE = 'Boxalarm/AlertingAudit';
@@ -75,42 +77,64 @@ function parseQuery(
   return { from, to, cursor };
 }
 
-async function queryAuditLog(
+function buildAuditPageResponse(page: MemberAuditPage | DepartmentAuditPage): APIGatewayProxyResultV2 {
+  return {
+    statusCode: 200,
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      entries: page.entries,
+      ...(page.nextCursor !== undefined ? { nextCursor: page.nextCursor } : {}),
+    }),
+  };
+}
+
+async function queryMemberAuditLog(
   event: GuardEvent,
   principal: CedarPrincipalContext,
 ): Promise<APIGatewayProxyResultV2> {
   const traceId = extractTraceId(event);
   const parsed = parseQuery(event.queryStringParameters);
-  if (!parsed) {
+  if (!parsed || !('memberId' in parsed)) {
+    emitOutcomeMetric(METRIC_NAMESPACE, 'AuditQueryFailed', 'InvalidQueryParams');
+    return badRequestProblem(traceId, 'memberId is required for this query.');
+  }
+
+  try {
+    const { tableName } = readAlertingConfig(process.env);
+    const client = createDynamoClient(process.env);
+    const deptId = toVerifiedDeptId(principal);
+    const page = await queryMemberDeliveryHistory(client, tableName, deptId, parsed.memberId, parsed.cursor);
+    emitOutcomeMetric(METRIC_NAMESPACE, 'AuditQueryServed');
+    return buildAuditPageResponse(page);
+  } catch (error) {
+    const reason = error instanceof Error ? error.constructor.name : 'UnknownError';
+    logQueryFailure(reason, error, traceId, { memberId: parsed.memberId });
+    if (error instanceof InvalidCursorError) {
+      emitOutcomeMetric(METRIC_NAMESPACE, 'AuditQueryFailed', 'InvalidCursor');
+      return badRequestProblem(traceId, 'cursor is not a valid audit log pagination token.');
+    }
+    emitOutcomeMetric(METRIC_NAMESPACE, 'AuditQueryFailed', 'DynamoUnavailable');
+    return serviceUnavailableProblem(traceId);
+  }
+}
+
+async function queryDepartmentAudit(
+  event: GuardEvent,
+  principal: CedarPrincipalContext,
+): Promise<APIGatewayProxyResultV2> {
+  const traceId = extractTraceId(event);
+  const parsed = parseQuery(event.queryStringParameters);
+  if (!parsed || 'memberId' in parsed) {
     emitOutcomeMetric(METRIC_NAMESPACE, 'AuditQueryFailed', 'InvalidQueryParams');
     return badRequestProblem(
       traceId,
-      'Provide either memberId, or both from and to (epoch seconds, from <= to).',
+      'Provide both from and to (epoch seconds, from <= to).',
     );
   }
 
   try {
     const { tableName } = readAlertingConfig(process.env);
     const client = createDynamoClient(process.env);
-
-    if ('memberId' in parsed) {
-      const page = await queryMemberDeliveryHistory(
-        client,
-        tableName,
-        parsed.memberId,
-        parsed.cursor,
-      );
-      emitOutcomeMetric(METRIC_NAMESPACE, 'AuditQueryServed');
-      return {
-        statusCode: 200,
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
-          entries: page.entries,
-          ...(page.nextCursor !== undefined ? { nextCursor: page.nextCursor } : {}),
-        }),
-      };
-    }
-
     const deptId = toVerifiedDeptId(principal);
     const page = await queryDepartmentAuditLog(
       client,
@@ -121,20 +145,10 @@ async function queryAuditLog(
       parsed.cursor,
     );
     emitOutcomeMetric(METRIC_NAMESPACE, 'AuditQueryServed');
-    return {
-      statusCode: 200,
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        entries: page.entries,
-        ...(page.nextCursor !== undefined ? { nextCursor: page.nextCursor } : {}),
-      }),
-    };
+    return buildAuditPageResponse(page);
   } catch (error) {
     const reason = error instanceof Error ? error.constructor.name : 'UnknownError';
-    logQueryFailure(reason, error, traceId, {
-      memberId: 'memberId' in parsed ? parsed.memberId : undefined,
-    });
-
+    logQueryFailure(reason, error, traceId);
     if (error instanceof InvalidCursorError) {
       emitOutcomeMetric(METRIC_NAMESPACE, 'AuditQueryFailed', 'InvalidCursor');
       return badRequestProblem(traceId, 'cursor is not a valid audit log pagination token.');
@@ -144,9 +158,32 @@ async function queryAuditLog(
   }
 }
 
-export const handler = withAuthorization(queryAuditLog, {
+const authorizedMemberQuery = withAuthorization(queryMemberAuditLog, {
+  actionType: 'Boxalarm::Action',
+  actionId: 'ViewOwnDeliveryHistory',
+  resourceType: 'Boxalarm::Member',
+  resourceId: (event) => event.queryStringParameters?.memberId ?? '',
+});
+
+const authorizedDepartmentQuery = withAuthorization(queryDepartmentAudit, {
   actionType: 'Boxalarm::Action',
   actionId: 'ViewAlertingAuditLog',
   resourceType: 'Boxalarm::Department',
   resourceId: (event) => event.requestContext.authorizer?.lambda?.deptId ?? '',
 });
+
+export const handler = async (event: GuardEvent): Promise<APIGatewayProxyResultV2> => {
+  const traceId = extractTraceId(event);
+  const parsed = parseQuery(event.queryStringParameters);
+  if (!parsed) {
+    emitOutcomeMetric(METRIC_NAMESPACE, 'AuditQueryFailed', 'InvalidQueryParams');
+    return badRequestProblem(
+      traceId,
+      'Provide either memberId, or both from and to (epoch seconds, from <= to).',
+    );
+  }
+  if ('memberId' in parsed) {
+    return authorizedMemberQuery(event);
+  }
+  return authorizedDepartmentQuery(event);
+};

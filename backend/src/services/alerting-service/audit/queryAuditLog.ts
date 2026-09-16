@@ -4,11 +4,11 @@ import { buildDeptScopedPk, type VerifiedDeptId } from '@boxalarm/dept-scope';
 const PAGE_SIZE = 25;
 // TODO: E1-S3 — ESCALATION_EVENT and DISPATCH_RESPONSE_RECORD have no writer yet; once E1-S3
 // ships they collocate under the same pk and this filter picks them up with zero code changes.
-const TIMELINE_ENTITY_TYPES = new Set([
+const TIMELINE_ENTITY_TYPES = [
   'DELIVERY_RECEIPT',
   'ESCALATION_EVENT',
   'DISPATCH_RESPONSE_RECORD',
-]);
+] as const;
 
 export class InvalidCursorError extends Error {}
 
@@ -37,6 +37,7 @@ export interface MemberAuditPage {
 export async function queryMemberDeliveryHistory(
   client: DynamoDBDocumentClient,
   tableName: string,
+  deptId: VerifiedDeptId,
   memberId: string,
   cursor?: string,
 ): Promise<MemberAuditPage> {
@@ -45,9 +46,11 @@ export async function queryMemberDeliveryHistory(
       TableName: tableName,
       IndexName: 'GSI1',
       KeyConditionExpression: 'gsi1pk = :gsi1pk AND begins_with(gsi1sk, :prefix)',
+      FilterExpression: 'deptId = :deptId',
       ExpressionAttributeValues: {
         ':gsi1pk': `MEMBER#${memberId}`,
         ':prefix': 'RECEIPT#',
+        ':deptId': deptId,
       },
       ScanIndexForward: false,
       Limit: PAGE_SIZE,
@@ -77,16 +80,27 @@ async function queryDispatchTimeline(
   deptId: VerifiedDeptId,
   dispatchId: string,
 ): Promise<readonly Record<string, unknown>[]> {
-  const result = await client.send(
-    new QueryCommand({
-      TableName: tableName,
-      KeyConditionExpression: 'pk = :pk',
-      ExpressionAttributeValues: { ':pk': buildDeptScopedPk(deptId, 'DISPATCH', dispatchId) },
-    }),
-  );
-  return (result.Items ?? []).filter(
-    (item) => typeof item.entityType === 'string' && TIMELINE_ENTITY_TYPES.has(item.entityType),
-  );
+  const items: Record<string, unknown>[] = [];
+  let exclusiveStartKey: Record<string, unknown> | undefined;
+  do {
+    const result = await client.send(
+      new QueryCommand({
+        TableName: tableName,
+        KeyConditionExpression: 'pk = :pk',
+        FilterExpression: 'entityType IN (:t0, :t1, :t2)',
+        ExpressionAttributeValues: {
+          ':pk': buildDeptScopedPk(deptId, 'DISPATCH', dispatchId),
+          ':t0': TIMELINE_ENTITY_TYPES[0],
+          ':t1': TIMELINE_ENTITY_TYPES[1],
+          ':t2': TIMELINE_ENTITY_TYPES[2],
+        },
+        ...(exclusiveStartKey ? { ExclusiveStartKey: exclusiveStartKey } : {}),
+      }),
+    );
+    items.push(...(result.Items ?? []));
+    exclusiveStartKey = result.LastEvaluatedKey;
+  } while (exclusiveStartKey);
+  return items;
 }
 
 export async function queryDepartmentAuditLog(

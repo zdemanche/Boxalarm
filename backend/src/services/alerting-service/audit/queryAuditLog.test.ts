@@ -15,23 +15,29 @@ function mockClient(sendImpl: (command: unknown) => Promise<unknown>) {
 }
 
 describe('queryMemberDeliveryHistory (AC2)', () => {
-  it('queries only the given memberId GSI1 partition', async () => {
+  it('queries only the given memberId GSI1 partition, scoped to the caller department', async () => {
     const client = mockClient(() => Promise.resolve({ Items: [{ entityType: 'DELIVERY_RECEIPT' }] }));
 
-    const page = await queryMemberDeliveryHistory(client, 'alerting-table', 'mbr-102');
+    const page = await queryMemberDeliveryHistory(client, 'alerting-table', DEPT_ID, 'mbr-102');
 
     expect(page.entries).toHaveLength(1);
     const call = (client.send as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as {
-      input: { IndexName: string; ExpressionAttributeValues: Record<string, string> };
+      input: {
+        IndexName: string;
+        FilterExpression: string;
+        ExpressionAttributeValues: Record<string, string>;
+      };
     };
     expect(call.input.IndexName).toBe('GSI1');
     expect(call.input.ExpressionAttributeValues[':gsi1pk']).toBe('MEMBER#mbr-102');
+    expect(call.input.FilterExpression).toBe('deptId = :deptId');
+    expect(call.input.ExpressionAttributeValues[':deptId']).toBe('NICHOLS');
   });
 
   it('returns an empty entries array when the member has no receipts', async () => {
     const client = mockClient(() => Promise.resolve({ Items: [] }));
 
-    const page = await queryMemberDeliveryHistory(client, 'alerting-table', 'mbr-nobody');
+    const page = await queryMemberDeliveryHistory(client, 'alerting-table', DEPT_ID, 'mbr-nobody');
 
     expect(page.entries).toEqual([]);
     expect(page.nextCursor).toBeUndefined();
@@ -45,7 +51,7 @@ describe('queryMemberDeliveryHistory (AC2)', () => {
       return Promise.resolve({ Items: [] });
     });
 
-    await queryMemberDeliveryHistory(client, 'alerting-table', 'mbr-102');
+    await queryMemberDeliveryHistory(client, 'alerting-table', DEPT_ID, 'mbr-102');
   });
 });
 
@@ -72,19 +78,19 @@ describe('queryDepartmentAuditLog (AC1/AC4)', () => {
     expect(page.entries).toEqual([]);
   });
 
-  it('assembles a full timeline via a single pk fan-out Query per dispatch', async () => {
+  it('assembles a full timeline via a pk fan-out Query per dispatch, filtered server-side', async () => {
     const client = mockClient((command) => {
       const input = (command as { input: Record<string, unknown> }).input;
       if (input.IndexName === 'GSI2') {
         return Promise.resolve({ Items: [{ dispatchId: 'D-1', entityType: 'DISPATCH_ALERT' }] });
       }
       expect(input.KeyConditionExpression).toBe('pk = :pk');
+      expect(input.FilterExpression).toBe('entityType IN (:t0, :t1, :t2)');
       expect((input.ExpressionAttributeValues as Record<string, string>)[':pk']).toBe(
         'DEPT#NICHOLS#DISPATCH#D-1',
       );
       return Promise.resolve({
         Items: [
-          { entityType: 'DISPATCH_ALERT', sk: 'METADATA' },
           { entityType: 'DELIVERY_RECEIPT', sk: 'RECEIPT#mbr-1#push#1' },
           { entityType: 'ESCALATION_EVENT', sk: 'ESCALATION#mbr-1#1#500' },
         ],
@@ -100,6 +106,36 @@ describe('queryDepartmentAuditLog (AC1/AC4)', () => {
       'DELIVERY_RECEIPT',
       'ESCALATION_EVENT',
     ]);
+  });
+
+  it('paginates the per-dispatch timeline fan-out until LastEvaluatedKey is exhausted', async () => {
+    let timelineCalls = 0;
+    const client = mockClient((command) => {
+      const input = (command as { input: Record<string, unknown> }).input;
+      if (input.IndexName === 'GSI2') {
+        return Promise.resolve({ Items: [{ dispatchId: 'D-1', entityType: 'DISPATCH_ALERT' }] });
+      }
+      timelineCalls += 1;
+      if (timelineCalls === 1) {
+        expect(input.ExclusiveStartKey).toBeUndefined();
+        return Promise.resolve({
+          Items: [{ entityType: 'DELIVERY_RECEIPT', sk: 'RECEIPT#mbr-1#push#1' }],
+          LastEvaluatedKey: { pk: 'DEPT#NICHOLS#DISPATCH#D-1', sk: 'RECEIPT#mbr-1#push#1' },
+        });
+      }
+      expect(input.ExclusiveStartKey).toEqual({
+        pk: 'DEPT#NICHOLS#DISPATCH#D-1',
+        sk: 'RECEIPT#mbr-1#push#1',
+      });
+      return Promise.resolve({
+        Items: [{ entityType: 'DELIVERY_RECEIPT', sk: 'RECEIPT#mbr-2#sms#1' }],
+      });
+    });
+
+    const page = await queryDepartmentAuditLog(client, 'alerting-table', DEPT_ID, 100, 200);
+
+    expect(timelineCalls).toBe(2);
+    expect(page.entries[0]?.timeline).toHaveLength(2);
   });
 
   it('returns nextCursor when DynamoDB reports LastEvaluatedKey', async () => {

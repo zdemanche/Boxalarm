@@ -72,6 +72,7 @@ describe('audit log GSI1/GSI2 queries (real DynamoDB via LocalStack, AC1/AC2/AC4
           entityType: 'DELIVERY_RECEIPT',
           dispatchId: 'D-1',
           memberId: 'mbr-201',
+          deptId: DEPT_ID,
           channel: 'push',
           sentAt: 1798000000,
           gsi1pk: 'MEMBER#mbr-201',
@@ -88,6 +89,7 @@ describe('audit log GSI1/GSI2 queries (real DynamoDB via LocalStack, AC1/AC2/AC4
           entityType: 'DELIVERY_RECEIPT',
           dispatchId: 'D-1',
           memberId: 'mbr-999',
+          deptId: DEPT_ID,
           channel: 'push',
           sentAt: 1798000000,
           gsi1pk: 'MEMBER#mbr-999',
@@ -96,7 +98,7 @@ describe('audit log GSI1/GSI2 queries (real DynamoDB via LocalStack, AC1/AC2/AC4
       }),
     );
 
-    const page = await queryMemberDeliveryHistory(client, TABLE_NAME, 'mbr-201');
+    const page = await queryMemberDeliveryHistory(client, TABLE_NAME, DEPT_ID, 'mbr-201');
 
     expect(page.entries).toHaveLength(1);
     expect(page.entries[0]?.memberId).toBe('mbr-201');

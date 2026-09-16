@@ -24,19 +24,21 @@ function buildEvent(
   } as unknown as GuardEvent;
 }
 
-function mockAuthzDecision(decision: 'ALLOW' | 'DENY' | 'ERROR'): void {
+function mockAuthzDecision(decision: 'ALLOW' | 'DENY' | 'ERROR'): { send: ReturnType<typeof vi.fn> } {
+  const send =
+    decision === 'ERROR'
+      ? vi.fn().mockRejectedValue(new Error('VP outage'))
+      : vi.fn().mockImplementation((command: { input: unknown }) =>
+          Promise.resolve({ decision, __input: command.input }),
+        );
   vi.doMock('@aws-sdk/client-verifiedpermissions', async (importOriginal) => {
     const actual = await importOriginal<typeof import('@aws-sdk/client-verifiedpermissions')>();
     return {
       ...actual,
-      VerifiedPermissionsClient: vi.fn().mockImplementation(() => ({
-        send:
-          decision === 'ERROR'
-            ? vi.fn().mockRejectedValue(new Error('VP outage'))
-            : vi.fn().mockResolvedValue({ decision: actual.Decision[decision] }),
-      })),
+      VerifiedPermissionsClient: vi.fn().mockImplementation(() => ({ send })),
     };
   });
+  return { send };
 }
 
 function mockDynamo(behavior: 'OK' | 'ERROR', items: unknown[] = []): { send: ReturnType<typeof vi.fn> } {
@@ -97,6 +99,24 @@ describe('handler (audit query entrypoint)', () => {
     expect(JSON.parse(result.body ?? '{}')).toEqual({ entries: [] });
   });
 
+  it('authorizes the memberId query against the requested member, not the caller (AC5 IDOR guard)', async () => {
+    const { send } = mockAuthzDecision('ALLOW');
+    mockDynamo('OK', []);
+    const { handler } = await import('./handler.js');
+
+    await handler(
+      buildEvent(
+        { memberId: 'mbr-999' },
+        { principal: { sub: 'mbr-102', deptId: DEPT_ID, 'cognito:groups': 'member' } },
+      ),
+    );
+
+    const call = send.mock.calls[0]?.[0] as { input: { resource?: { entityType?: string; entityId?: string } } };
+    const input = call.input;
+    expect(input.resource?.entityType).toBe('Boxalarm::Member');
+    expect(input.resource?.entityId).toBe('mbr-999');
+  });
+
   it('denies (fails closed) 403 when Cedar denies the action (AC5)', async () => {
     mockAuthzDecision('DENY');
     const client = mockDynamo('OK');
@@ -119,6 +139,28 @@ describe('handler (audit query entrypoint)', () => {
         { principal: { sub: 'mbr-102', deptId: DEPT_ID, 'cognito:groups': 'member' } },
       ),
     );
+
+    expect(result).toMatchObject({ statusCode: 403 });
+    expect(client.send).not.toHaveBeenCalled();
+  });
+
+  it('returns 403 (fail-closed) when the request has no authenticated principal', async () => {
+    mockAuthzDecision('ALLOW');
+    const client = mockDynamo('OK');
+    const { handler } = await import('./handler.js');
+
+    const result = await handler(buildEvent({ memberId: 'mbr-102' }, { principal: null }));
+
+    expect(result).toMatchObject({ statusCode: 403 });
+    expect(client.send).not.toHaveBeenCalled();
+  });
+
+  it('returns 403 (fail-closed) when the request has no bearer token', async () => {
+    mockAuthzDecision('ALLOW');
+    const client = mockDynamo('OK');
+    const { handler } = await import('./handler.js');
+
+    const result = await handler(buildEvent({ memberId: 'mbr-102' }, { headers: {} }));
 
     expect(result).toMatchObject({ statusCode: 403 });
     expect(client.send).not.toHaveBeenCalled();
