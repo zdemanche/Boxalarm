@@ -35,7 +35,7 @@ function emitMetric(outcome: 'HydrantCreated' | 'HydrantWriteFailed', reason?: s
         Timestamp: Date.now(),
         CloudWatchMetrics: [
           {
-            Namespace: 'Boxalarm/Inspections',
+            Namespace: 'Boxalarm/inspections',
             Dimensions: reason ? [[], ['Reason']] : [[]],
             Metrics: [{ Name: outcome, Unit: 'Count' }],
           },

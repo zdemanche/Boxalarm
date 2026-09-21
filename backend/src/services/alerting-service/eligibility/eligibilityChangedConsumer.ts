@@ -11,7 +11,7 @@ import { emitOutcomeMetric } from '@boxalarm/metrics';
 import { createDynamoClient, readAlertingConfig } from './dynamoClient.js';
 import { logError as logStructuredError } from '../logger.js';
 
-const METRIC_NAMESPACE = 'Boxalarm/AlertingEligibility';
+const METRIC_NAMESPACE = 'Boxalarm/alerting-eligibility';
 const MAX_SNAPSHOT_UPDATE_ATTEMPTS = 5;
 
 interface EligibilityChangedDeps {

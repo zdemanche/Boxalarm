@@ -58,7 +58,7 @@ function emitDefectMetric(name: string): void {
         Timestamp: Date.now(),
         CloudWatchMetrics: [
           {
-            Namespace: 'Boxalarm/ApparatusService',
+            Namespace: 'Boxalarm/apparatus-service',
             Dimensions: [[]],
             Metrics: [{ Name: name, Unit: 'Count' }],
           },

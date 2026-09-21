@@ -24,7 +24,7 @@ function emitEmf(
 
 export function emitAttendanceMetric(outcome: 'Recorded' | 'Failed', reason?: string): void {
   emitEmf(
-    'Boxalarm/Personnel',
+    'Boxalarm/personnel',
     `Attendance${outcome}`,
     reason ? [[], ['Reason']] : [[]],
     reason ? { Reason: reason } : {},

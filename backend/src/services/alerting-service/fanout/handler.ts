@@ -21,7 +21,7 @@ import {
 } from './idempotencyKey.js';
 import { createSnsClient, readFanOutTopicConfig } from './snsClient.js';
 
-const METRIC_NAMESPACE = 'Boxalarm/AlertingFanOut';
+const METRIC_NAMESPACE = 'Boxalarm/alerting-fan-out';
 const TONE_SEQUENCE = 1;
 const FAN_OUT_CHANNELS: readonly FanOutChannel[] = ['push', 'sms'];
 const CHANNEL_TIER = 'primary';

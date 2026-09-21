@@ -82,7 +82,7 @@ export function emitIncidentMetric(name: string): void {
         Timestamp: Date.now(),
         CloudWatchMetrics: [
           {
-            Namespace: 'Boxalarm/IncidentService',
+            Namespace: 'Boxalarm/incident-service',
             Dimensions: [[]],
             Metrics: [{ Name: name, Unit: 'Count' }],
           },

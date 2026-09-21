@@ -118,7 +118,7 @@ export function deriveAgeEpochSeconds(
 
 function emitDisposalInvoked(): void {
   // Unconditional per-invocation alarm surface for the chief (architecture :2624–:2627).
-  emitEmf('Boxalarm/Platform', 'DisposalInvoked', 1, [[]]);
+  emitEmf('Boxalarm/platform', 'DisposalInvoked', 1, [[]]);
 }
 
 function capLocators(locators: readonly string[]): {

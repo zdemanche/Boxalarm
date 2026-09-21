@@ -32,7 +32,7 @@ describe('emitInspectionMetric', () => {
     expect(typeof payload._aws.Timestamp).toBe('number');
     expect(payload._aws.CloudWatchMetrics).toEqual([
       {
-        Namespace: 'Boxalarm/Inspections',
+        Namespace: 'Boxalarm/inspections',
         Dimensions: [[]],
         Metrics: [{ Name: metricName, Unit: 'Count' }],
       },

@@ -9,7 +9,7 @@ import {
   type LosapPointsCalculator,
 } from './completeShiftAttendance.js';
 
-const METRIC_NAMESPACE = 'Boxalarm/PersonnelShiftAttendance';
+const METRIC_NAMESPACE = 'Boxalarm/personnel-shift-attendance';
 
 export interface ShiftCompletionPayload {
   readonly deptId: string;
