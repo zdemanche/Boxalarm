@@ -197,6 +197,157 @@ describe('runDisposal crypto-shred and life-safety (AC3, AC4)', () => {
     }
   });
 
+  it('refuses (not throws) a candidate missing kmsKeyId, and keeps processing the batch', async () => {
+    const nowEpoch = 1_800_000_000;
+    const age = nowEpoch - 8 * SECONDS_PER_YEAR;
+    const kms = fakeKmsClient();
+    const noKeyPk = buildDeptScopedPk(DEPT_ID, 'ARCHIVE', 'INC-NOKEY');
+    const okPk = buildDeptScopedPk(DEPT_ID, 'ARCHIVE', 'INC-OK');
+    const { client, store } = createMemoryDocClient({
+      [keyOf(noKeyPk, 'METADATA')]: {
+        pk: noKeyPk,
+        sk: 'METADATA',
+        entityType: 'ARCHIVED_INCIDENT',
+        archivedAt: age,
+        // No kmsKeyId.
+      },
+      [keyOf(okPk, 'METADATA')]: {
+        pk: okPk,
+        sk: 'METADATA',
+        entityType: 'ARCHIVED_INCIDENT',
+        archivedAt: age,
+        kmsKeyId: 'arn:aws:kms:us-east-1:123:key/ok-key',
+      },
+    });
+
+    const result = await runDisposal({
+      docClient: client,
+      kmsClient: kms,
+      deptId: DEPT_ID,
+      actorId: 'MBR-CHIEF',
+      traceId: 'trace-missing-kms-key',
+      nowEpochSeconds: nowEpoch,
+      // The candidate missing a kmsKeyId is deliberately first, so a naive implementation
+      // that throws mid-loop would abort before reaching the second, valid candidate.
+      candidates: [
+        { pk: noKeyPk, sk: 'METADATA' },
+        { pk: okPk, sk: 'METADATA' },
+      ],
+    });
+
+    expect(result.refused).toEqual([`MISSING_KMS_KEY:${noKeyPk}#METADATA`]);
+    expect(result.cryptoShredded).toBe(1);
+    expect(kms.send.mock.calls).toHaveLength(1);
+    expect(store.has(keyOf(noKeyPk, 'METADATA'))).toBe(true);
+  });
+
+  it('refuses (not throws) a candidate when no kmsClient was provided, and keeps processing the batch', async () => {
+    const nowEpoch = 1_800_000_000;
+    const age = nowEpoch - 8 * SECONDS_PER_YEAR;
+    const shredPk = buildDeptScopedPk(DEPT_ID, 'ARCHIVE', 'INC-NOCLIENT');
+    const oosPk = buildDeptScopedPk(DEPT_ID, 'APPARATUS', 'APP-STILL-RUNS');
+    const oosAge = nowEpoch - 8 * SECONDS_PER_YEAR;
+    const { client, store } = createMemoryDocClient({
+      [keyOf(shredPk, 'METADATA')]: {
+        pk: shredPk,
+        sk: 'METADATA',
+        entityType: 'ARCHIVED_INCIDENT',
+        archivedAt: age,
+        kmsKeyId: 'arn:aws:kms:us-east-1:123:key/would-be-shredded',
+      },
+      [keyOf(oosPk, `OOS#${oosAge}`)]: {
+        pk: oosPk,
+        sk: `OOS#${oosAge}`,
+        entityType: 'OUT_OF_SERVICE_RECORD',
+        startAt: oosAge,
+        endAt: oosAge,
+      },
+    });
+
+    const result = await runDisposal({
+      docClient: client,
+      // No kmsClient provided at all.
+      deptId: DEPT_ID,
+      actorId: 'MBR-CHIEF',
+      traceId: 'trace-missing-kms-client',
+      nowEpochSeconds: nowEpoch,
+      candidates: [
+        { pk: shredPk, sk: 'METADATA' },
+        { pk: oosPk, sk: `OOS#${oosAge}` },
+      ],
+    });
+
+    expect(result.refused).toEqual([`MISSING_KMS_CLIENT:${shredPk}#METADATA`]);
+    expect(result.cryptoShredded).toBe(0);
+    // The batch kept going past the crypto-shred failure and still hard-deleted the
+    // unrelated, independently-eligible OOS candidate.
+    expect(result.hardDeleted).toBe(1);
+    expect(store.has(keyOf(oosPk, `OOS#${oosAge}`))).toBe(false);
+  });
+
+  it('classifies INCIDENT as life-safety evidence and never disposes it (E8-S9 review, PR #149 follow-up)', async () => {
+    const nowEpoch = 1_800_000_000;
+    const age = nowEpoch - 20 * SECONDS_PER_YEAR;
+    const incidentPk = buildDeptScopedPk(DEPT_ID, 'NERIS', 'INC-1');
+    const incidentSk = 'METADATA';
+    const { client, store } = createMemoryDocClient({
+      [keyOf(incidentPk, incidentSk)]: {
+        pk: incidentPk,
+        sk: incidentSk,
+        entityType: 'INCIDENT',
+        startAt: age,
+        archivedAt: age,
+      },
+    });
+
+    const result = await runDisposal({
+      docClient: client,
+      kmsClient: fakeKmsClient(),
+      deptId: DEPT_ID,
+      actorId: 'MBR-CHIEF',
+      traceId: 'trace-incident-life-safety',
+      nowEpochSeconds: nowEpoch,
+      candidates: [{ pk: incidentPk, sk: incidentSk }],
+    });
+
+    expect(result.hardDeleted).toBe(0);
+    expect(result.cryptoShredded).toBe(0);
+    expect(result.refused).toEqual(['INCIDENT']);
+    expect(store.has(keyOf(incidentPk, incidentSk))).toBe(true);
+  });
+
+  it('records scheduled KMS key ids on the AUDIT_LOG_ENTRY, not just aggregate counts', async () => {
+    const nowEpoch = 1_800_000_000;
+    const age = nowEpoch - 8 * SECONDS_PER_YEAR;
+    const kms = fakeKmsClient();
+    const incPk = buildDeptScopedPk(DEPT_ID, 'ARCHIVE', 'INC-AUDIT');
+    const { client, puts } = createMemoryDocClient({
+      [keyOf(incPk, 'METADATA')]: {
+        pk: incPk,
+        sk: 'METADATA',
+        entityType: 'ARCHIVED_INCIDENT',
+        archivedAt: age,
+        kmsKeyId: 'arn:aws:kms:us-east-1:123:key/audited-key',
+      },
+    });
+
+    await runDisposal({
+      docClient: client,
+      kmsClient: kms,
+      deptId: DEPT_ID,
+      actorId: 'MBR-CHIEF',
+      traceId: 'trace-audit-kms',
+      nowEpochSeconds: nowEpoch,
+      candidates: [{ pk: incPk, sk: 'METADATA' }],
+    });
+
+    const audit = puts.find((item) => item.entityType === 'AUDIT_LOG_ENTRY') as
+      { changedFields: { scheduledKmsKeyIds: { new: readonly string[] } } } | undefined;
+    expect(audit?.changedFields.scheduledKmsKeyIds.new).toEqual([
+      'arn:aws:kms:us-east-1:123:key/audited-key',
+    ]);
+  });
+
   it('writes an AUDIT_LOG_ENTRY and emits DisposalInvoked EMF on every invocation', async () => {
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
     const nowEpoch = 1_800_000_000;
