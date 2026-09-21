@@ -1,5 +1,11 @@
 import type { NerisConfig } from './config.js';
-import { createTokenCache, getAccessToken, type FetchFn, type TokenCache } from './tokenCache.js';
+import {
+  createTokenCache,
+  getAccessToken,
+  getTokenCache,
+  type FetchFn,
+  type TokenCache,
+} from './tokenCache.js';
 
 export interface NerisClient {
   /**
@@ -77,4 +83,23 @@ export function createNerisClient(
       });
     },
   };
+}
+
+let cachedNerisClient: NerisClient | undefined;
+
+/**
+ * Returns a module-scope singleton {@link NerisClient}, mirroring config.ts's
+ * cached-client pattern (`cachedSsmClient ??= ...`). Handlers should call this
+ * instead of {@link createNerisClient} directly: calling `createNerisClient`
+ * itself inside a handler body creates a fresh, empty token cache on every
+ * invocation, defeating the near-expiry token reuse in tokenCache.ts and
+ * multiplying calls to the NERIS token endpoint across the Lambda fleet.
+ * The client (and its token cache) survive across warm invocations by default.
+ */
+export function getNerisClient(config: NerisConfig, deps: CreateNerisClientDeps = {}): NerisClient {
+  cachedNerisClient ??= createNerisClient(config, {
+    ...deps,
+    tokenCache: deps.tokenCache ?? getTokenCache(),
+  });
+  return cachedNerisClient;
 }
