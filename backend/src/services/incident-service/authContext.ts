@@ -1,5 +1,7 @@
-import { randomUUID } from 'node:crypto';
-import type { APIGatewayProxyEventV2WithLambdaAuthorizer } from 'aws-lambda';
+import type {
+  APIGatewayProxyEventHeaders,
+  APIGatewayProxyEventV2WithLambdaAuthorizer,
+} from 'aws-lambda';
 import { toVerifiedDeptId } from '@boxalarm/dept-scope';
 import type { VerifiedDeptId } from '@boxalarm/dept-scope';
 import type { AuthorizerContext } from '../platform-service/authorizer/handler.js';
@@ -29,10 +31,13 @@ export function readAuthorizerContext(event: IncidentEvent): IncidentAuthContext
     throw new Error('authorizer context deptId is required and was not present on the event');
   }
   const rawSub = lambdaContext?.sub;
+  if (typeof rawSub !== 'string' || rawSub.trim().length === 0) {
+    throw new Error('authorizer context sub is required and was not present on the event');
+  }
   const rawGroups = lambdaContext?.['cognito:groups'];
   return {
     deptId: toVerifiedDeptId({ deptId: rawDeptId }),
-    sub: typeof rawSub === 'string' ? rawSub : '',
+    sub: rawSub,
     isAdmin: isAdminFromGroups(typeof rawGroups === 'string' ? rawGroups : ''),
   };
 }
@@ -43,9 +48,18 @@ export interface ProblemResponse {
   readonly body: string;
 }
 
-export function getTraceId(env: NodeJS.ProcessEnv): string {
-  const rootMatch = env._X_AMZN_TRACE_ID?.match(/Root=([^;]+)/);
-  return rootMatch?.[1] ?? randomUUID();
+// Mirrors personnel-service/lib/problemDetails.ts's resolveTraceId: the caller's W3C
+// traceparent header takes precedence so a reported failure can be joined to the caller's
+// trace; the request id is the fallback when no traceparent was sent.
+export function resolveTraceId(headers: APIGatewayProxyEventHeaders, fallback: string): string {
+  const traceparent = headers.traceparent ?? headers.Traceparent;
+  if (traceparent) {
+    const parts = traceparent.split('-');
+    if (parts.length === 4 && parts[1]) {
+      return parts[1];
+    }
+  }
+  return fallback;
 }
 
 export function problemResponse(
