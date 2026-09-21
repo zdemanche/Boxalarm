@@ -11,7 +11,7 @@ const SHIFT_POSITION_FETCH_CONCURRENCY = 10;
 const QUAL_READ_CONCURRENCY = 10;
 const METRICS_NAMESPACE = 'Boxalarm/PersonnelService';
 
-async function mapWithConcurrency<T, R>(
+export async function mapWithConcurrency<T, R>(
   items: readonly T[],
   concurrency: number,
   fn: (item: T) => Promise<R>,
