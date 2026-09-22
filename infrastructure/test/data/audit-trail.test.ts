@@ -83,7 +83,7 @@ describe("AuditTrail", () => {
     });
   });
 
-  it("captures DynamoDB data events for the alerting table", async () => {
+  it("captures DynamoDB data events for the alerting table, mutations only (WriteOnly)", async () => {
     const { AuditTrail } = await import("../../components/data/audit-trail");
     const tableArn =
       "arn:aws:dynamodb:us-east-1:123456789012:table/boxalarm-staging-alerting-table";
@@ -97,6 +97,30 @@ describe("AuditTrail", () => {
     const dataResources = selectors?.[0]?.dataResources ?? [];
     const dynamo = dataResources.find((d) => d.type === "AWS::DynamoDB::Table");
     expect(dynamo?.values).toContain(tableArn);
+    // Reads are the highest-volume op on a live alert path — must not be captured
+    // into the 365-day COMPLIANCE-locked bucket (cost is a hard constraint).
+    expect(selectors?.[0]?.readWriteType).toBe("WriteOnly");
+  });
+
+  it("transitions archive objects to Glacier Instant Retrieval and expires them after the lock elapses", async () => {
+    const { AuditTrail, AUDIT_LIFECYCLE_GLACIER_TRANSITION_DAYS, AUDIT_LIFECYCLE_EXPIRATION_DAYS } =
+      await import("../../components/data/audit-trail");
+    const audit = new AuditTrail("audit-lifecycle", {
+      env: "dev",
+      alertingTableArn: "arn:aws:dynamodb:us-east-1:123456789012:table/boxalarm-dev-alerting-table",
+    });
+    await settle(audit);
+
+    const rules = await resolve(audit.lifecycleConfiguration.rules);
+    expect(rules).toHaveLength(1);
+    expect(rules?.[0]?.status).toBe("Enabled");
+    expect(rules?.[0]?.transitions?.[0]).toMatchObject({
+      days: AUDIT_LIFECYCLE_GLACIER_TRANSITION_DAYS,
+      storageClass: "GLACIER_IR",
+    });
+    expect(rules?.[0]?.expiration?.days).toBe(AUDIT_LIFECYCLE_EXPIRATION_DAYS);
+    // Must expire strictly after the Object Lock retention elapses.
+    expect(AUDIT_LIFECYCLE_EXPIRATION_DAYS).toBeGreaterThan(365);
   });
 
   it("pins CloudTrail PutObject to this trail ARN and account (confused-deputy hardening)", async () => {
