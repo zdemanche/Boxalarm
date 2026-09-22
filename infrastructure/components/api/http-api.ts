@@ -13,6 +13,22 @@ export interface HttpApiArgs {
   platformLogGroup: ServiceLogGroup;
   /** Override Cognito issuer; default is https://cognito-idp.{region}.amazonaws.com/{userPoolId}. */
   cognitoIssuer?: pulumi.Input<string>;
+  /**
+   * Stage-level steady-state request rate limit (requests/sec). Every request hits
+   * the authorizer Lambda (authorizerResultTtlInSeconds: 0, never cached) before any
+   * auth check, so an unthrottled stage lets an unauthenticated flood exhaust the
+   * account's shared regional Lambda concurrency pool — which alerting-service also
+   * draws from. Conservative default; later stories may need to tune it.
+   */
+  throttlingRateLimit?: number;
+  /** Stage-level burst capacity (requests). See throttlingRateLimit. */
+  throttlingBurstLimit?: number;
+  /**
+   * Reserved concurrency for the authorizer Lambda, so an unauthenticated request
+   * flood against this Lambda cannot starve concurrency the alerting path needs.
+   * Conservative default; later stories may need to tune it.
+   */
+  authorizerReservedConcurrency?: number;
 }
 
 /**
@@ -49,6 +65,9 @@ export class HttpApi extends pulumi.ComponentResource {
       args.cognitoIssuer ??
       pulumi.interpolate`https://cognito-idp.${aws.getRegionOutput({}, { parent: this }).name}.amazonaws.com/${args.userPoolId}`;
     const allowedClientIds = pulumi.all(args.allowedClientIds).apply((ids) => ids.join(","));
+    const throttlingRateLimit = args.throttlingRateLimit ?? 50;
+    const throttlingBurstLimit = args.throttlingBurstLimit ?? 100;
+    const authorizerReservedConcurrency = args.authorizerReservedConcurrency ?? 20;
 
     this.authorizerLambda = new ServiceLambda(
       `${name}-authorizer`,
@@ -68,6 +87,10 @@ export class HttpApi extends pulumi.ComponentResource {
           COGNITO_ISSUER: cognitoIssuer,
           COGNITO_ALLOWED_CLIENT_IDS: allowedClientIds,
         },
+        // Draws from the account's shared regional concurrency pool, which
+        // alerting-service Lambdas also draw from — must not be unbounded on an
+        // unauthenticated, uncached (authorizerResultTtlInSeconds: 0) path.
+        reservedConcurrentExecutions: authorizerReservedConcurrency,
       },
       { parent: this },
     );
@@ -105,6 +128,15 @@ export class HttpApi extends pulumi.ComponentResource {
         apiId: this.httpApi.id,
         name: "$default",
         autoDeploy: true,
+        // Every request invokes the authorizer Lambda from an unauthenticated caller
+        // (no caching — authorizerResultTtlInSeconds: 0), so request volume maps 1:1
+        // to Lambda invocations. Without a stage-level cap, a flood against this
+        // public endpoint can drive account concurrency to the ceiling and throttle
+        // alerting-service, which shares the same regional pool.
+        defaultRouteSettings: {
+          throttlingRateLimit,
+          throttlingBurstLimit,
+        },
       },
       { parent: this },
     );

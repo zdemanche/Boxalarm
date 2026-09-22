@@ -50,7 +50,13 @@ async function settle(api: {
     executionArn: pulumi.Output<string>;
   };
   authorizer: { id: pulumi.Output<string>; authorizerUri: pulumi.Output<string | undefined> };
-  stage: { id: pulumi.Output<string>; name: pulumi.Output<string> };
+  stage: {
+    id: pulumi.Output<string>;
+    name: pulumi.Output<string>;
+    defaultRouteSettings: pulumi.Output<
+      { throttlingRateLimit?: number; throttlingBurstLimit?: number } | undefined
+    >;
+  };
   invokePermission: { id: pulumi.Output<string>; sourceArn: pulumi.Output<string | undefined> };
   authorizerLambda: {
     urn: pulumi.Output<string>;
@@ -74,6 +80,7 @@ async function settle(api: {
     resolve(api.authorizer.authorizerUri as pulumi.Output<string>),
     resolve(api.stage.id),
     resolve(api.stage.name),
+    resolve(api.stage.defaultRouteSettings),
     resolve(api.invokePermission.id),
     resolve(api.invokePermission.sourceArn as pulumi.Output<string>),
     resolve(api.authorizerLambda.urn),
@@ -119,10 +126,12 @@ describe("HttpApi", () => {
       invokeArn,
       stageName,
       autoDeploy,
+      defaultRouteSettings,
       principal,
       action,
       fnName,
       envVars,
+      reservedConcurrentExecutions,
     ] = await Promise.all([
       resolve(api.httpApi.name),
       resolve(api.httpApi.protocolType),
@@ -135,10 +144,12 @@ describe("HttpApi", () => {
       resolve(api.authorizerLambda.function.invokeArn),
       resolve(api.stage.name),
       resolve(api.stage.autoDeploy),
+      resolve(api.stage.defaultRouteSettings),
       resolve(api.invokePermission.principal),
       resolve(api.invokePermission.action),
       resolve(api.authorizerLambda.function.name),
       resolve(api.authorizerLambda.function.environment),
+      resolve(api.authorizerLambda.function.reservedConcurrentExecutions),
     ]);
 
     expect(apiName).toBe("boxalarm-dev-http-api");
@@ -150,6 +161,11 @@ describe("HttpApi", () => {
     expect(authorizerUri).toBe(invokeArn);
     expect(stageName).toBe("$default");
     expect(autoDeploy).toBe(true);
+    // Every request hits the authorizer Lambda uncached — the stage must throttle so
+    // an unauthenticated flood can't exhaust the account's shared concurrency pool.
+    expect(defaultRouteSettings?.throttlingRateLimit).toBe(50);
+    expect(defaultRouteSettings?.throttlingBurstLimit).toBe(100);
+    expect(reservedConcurrentExecutions).toBe(20);
     expect(principal).toBe("apigateway.amazonaws.com");
     expect(action).toBe("lambda:InvokeFunction");
     expect(fnName).toBe("boxalarm-dev-platform-authorizer");
