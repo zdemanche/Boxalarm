@@ -1,13 +1,13 @@
 import * as pulumi from "@pulumi/pulumi";
 import * as aws from "@pulumi/aws";
 import { IamPolicyStatement } from "../observability/observability-policy";
+import { requireEnv } from "../shared/env";
 
 /** Documented NERIS non-prod API host (N6.4 — never used from prod). */
 export const NERIS_DEV_BASE_URL = "https://api-test.neris.fsri.org";
 /** Documented NERIS production API host. */
 export const NERIS_PROD_BASE_URL = "https://api.neris.fsri.org";
 
-const KNOWN_ENVS = new Set(["dev", "qa", "staging", "prod"]);
 const NON_PROD_ENVS = new Set(["dev", "qa", "staging"]);
 
 export interface NerisConfigArgs {
@@ -15,12 +15,7 @@ export interface NerisConfigArgs {
 }
 
 export function nerisBaseUrlForEnv(env: string): string {
-  if (typeof env !== "string" || env.length === 0) {
-    throw new Error(`nerisBaseUrlForEnv: env is required (received ${JSON.stringify(env)})`);
-  }
-  if (!KNOWN_ENVS.has(env)) {
-    throw new Error(`nerisBaseUrlForEnv: unknown env "${env}"`);
-  }
+  requireEnv("nerisBaseUrlForEnv", env);
   // Hardcoded by env so non-prod cannot be misconfigured to hit the prod host (N6.4).
   if (env === "prod") {
     return NERIS_PROD_BASE_URL;
@@ -29,12 +24,7 @@ export function nerisBaseUrlForEnv(env: string): string {
 }
 
 export function nerisUserAgentForEnv(env: string): string {
-  if (typeof env !== "string" || env.length === 0) {
-    throw new Error(`nerisUserAgentForEnv: env is required (received ${JSON.stringify(env)})`);
-  }
-  if (!KNOWN_ENVS.has(env)) {
-    throw new Error(`nerisUserAgentForEnv: unknown env "${env}"`);
-  }
+  requireEnv("nerisUserAgentForEnv", env);
   return `Boxalarm/${env}`;
 }
 
@@ -51,9 +41,7 @@ export function nerisClientPolicyStatements(
       `nerisClientPolicyStatements: secretArn is required (received ${JSON.stringify(secretArn)})`,
     );
   }
-  if (!KNOWN_ENVS.has(env)) {
-    throw new Error(`nerisClientPolicyStatements: unknown env "${env}"`);
-  }
+  requireEnv("nerisClientPolicyStatements", env);
 
   return [
     {
@@ -86,12 +74,7 @@ export class NerisConfig extends pulumi.ComponentResource {
   public readonly userAgent: string;
 
   constructor(name: string, args: NerisConfigArgs, opts?: pulumi.ComponentResourceOptions) {
-    if (typeof args.env !== "string" || args.env.length === 0) {
-      throw new Error(`NerisConfig: env is required (received ${JSON.stringify(args.env)})`);
-    }
-    if (!KNOWN_ENVS.has(args.env)) {
-      throw new Error(`NerisConfig: unknown env "${args.env}"`);
-    }
+    requireEnv("NerisConfig", args.env);
 
     super("boxalarm:neris:NerisConfig", name, {}, opts);
     const { env } = args;

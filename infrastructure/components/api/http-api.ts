@@ -3,6 +3,7 @@ import * as pulumi from "@pulumi/pulumi";
 import * as aws from "@pulumi/aws";
 import { ServiceLambda } from "../observability/service-lambda";
 import { ServiceLogGroup } from "../observability/service-log-group";
+import { requireEnv } from "../shared/env";
 
 export interface HttpApiArgs {
   env: string;
@@ -45,9 +46,7 @@ export class HttpApi extends pulumi.ComponentResource {
   public readonly apiEndpoint: pulumi.Output<string>;
 
   constructor(name: string, args: HttpApiArgs, opts?: pulumi.ComponentResourceOptions) {
-    if (typeof args.env !== "string" || args.env.length === 0) {
-      throw new Error(`HttpApi: env is required (received ${JSON.stringify(args.env)})`);
-    }
+    requireEnv("HttpApi", args.env);
 
     super("boxalarm:api:HttpApi", name, {}, opts);
     const { env } = args;

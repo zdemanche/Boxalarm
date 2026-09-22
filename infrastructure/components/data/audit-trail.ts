@@ -1,7 +1,6 @@
 import * as pulumi from "@pulumi/pulumi";
 import * as aws from "@pulumi/aws";
-
-const KNOWN_ENVS = new Set(["dev", "qa", "staging", "prod"]);
+import { requireEnv } from "../shared/env";
 
 /** Default retention for Object Lock compliance mode on the audit archive. */
 export const AUDIT_OBJECT_LOCK_RETENTION_DAYS = 365;
@@ -19,15 +18,6 @@ export interface AuditTrailArgs {
   env: string;
   /** Alerting table ARN for CloudTrail DynamoDB data events. Parent wires after AlertingTable exists. */
   alertingTableArn: pulumi.Input<string>;
-}
-
-function requireEnv(component: string, env: string): void {
-  if (typeof env !== "string" || env.length === 0) {
-    throw new Error(`${component}: env is required (received ${JSON.stringify(env)})`);
-  }
-  if (!KNOWN_ENVS.has(env)) {
-    throw new Error(`${component}: unknown env "${env}"`);
-  }
 }
 
 /**
