@@ -24,7 +24,19 @@ beforeEach(() => {
       }
       return { id: `${args.name}-id`, state };
     },
-    call: (args: pulumi.runtime.MockCallArgs) => args.inputs,
+    call: (args: pulumi.runtime.MockCallArgs) => {
+      if (args.token === "aws:index/getCallerIdentity:getCallerIdentity") {
+        return {
+          accountId: "123456789012",
+          arn: "arn:aws:iam::123456789012:root",
+          userId: "AIDATEST",
+        };
+      }
+      if (args.token === "aws:index/getRegion:getRegion") {
+        return { name: "us-east-1", description: "US East (N. Virginia)", id: "us-east-1" };
+      }
+      return args.inputs;
+    },
   });
 });
 
@@ -53,6 +65,10 @@ async function settle(identity: {
     resolve(identity.functionLogGroup.arn),
     resolve(identity.invokePermission.id),
   ]);
+  // The pool's dependsOn: [invokePermission] adds an extra async hop before
+  // registerOutputs fires; give the mock monitor a turn to finish before the next
+  // test's beforeEach swaps it out (same pattern used in the other component tests).
+  await new Promise((r) => setImmediate(r));
 }
 
 describe("BoxalarmUserPool", () => {
@@ -84,21 +100,22 @@ describe("BoxalarmUserPool", () => {
     expect(lambdaConfig?.preTokenGenerationConfig?.lambdaArn).toBe(fnArn);
   });
 
-  it("grants only this user pool permission to invoke the trigger function", async () => {
+  it("grants a region/account-scoped invoke permission, created independently of the pool so it exists before any sign-in can occur", async () => {
     const { BoxalarmUserPool } = await import("../../components/identity/user-pool");
     const identity = new BoxalarmUserPool("test-identity-permission", { env: "dev" });
     await settle(identity);
 
-    const [principal, action, sourceArn, poolArn] = await Promise.all([
+    const [principal, action, sourceArn] = await Promise.all([
       resolve(identity.invokePermission.principal),
       resolve(identity.invokePermission.action),
       resolve(identity.invokePermission.sourceArn as pulumi.Output<string>),
-      resolve(identity.userPool.arn),
     ]);
 
     expect(principal).toBe("cognito-idp.amazonaws.com");
     expect(action).toBe("lambda:InvokeFunction");
-    expect(sourceArn).toBe(poolArn);
+    // Wildcard-scoped, not this.userPool.arn — not depending on the pool's own output
+    // is what lets Pulumi create the permission before the pool exists.
+    expect(sourceArn).toBe("arn:aws:cognito-idp:us-east-1:123456789012:userpool/*");
   });
 
   it("gives the trigger function its own retention-bounded log group rather than Lambda's default never-expire group", async () => {

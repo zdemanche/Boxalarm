@@ -104,6 +104,25 @@ export class BoxalarmUserPool extends pulumi.ComponentResource {
       { parent: this, dependsOn: [this.functionLogGroup] },
     );
 
+    // Scoped by region/account rather than this.userPool.arn, so this permission can
+    // be created independently of (and before) the pool — the pool is given a
+    // dependsOn below. Referencing this.userPool.arn directly would force Pulumi to
+    // create the permission only after the pool exists, leaving a window where the
+    // pool has a V2 pre-token trigger it isn't yet allowed to invoke: any sign-in in
+    // that window fails token generation.
+    const region = aws.getRegionOutput({}, { parent: this });
+    const caller = aws.getCallerIdentityOutput({}, { parent: this });
+    this.invokePermission = new aws.lambda.Permission(
+      `${name}-fn-invoke-permission`,
+      {
+        action: "lambda:InvokeFunction",
+        function: this.preTokenGenerationFunction.name,
+        principal: "cognito-idp.amazonaws.com",
+        sourceArn: pulumi.interpolate`arn:aws:cognito-idp:${region.name}:${caller.accountId}:userpool/*`,
+      },
+      { parent: this },
+    );
+
     this.userPool = new aws.cognito.UserPool(
       `${name}-pool`,
       {
@@ -141,8 +160,10 @@ export class BoxalarmUserPool extends pulumi.ComponentResource {
         },
       },
       // Pulumi's own accidental-destroy backstop — a stray `pulumi destroy` or a
-      // replace-forcing rename must not be able to take out the pool.
-      { parent: this, protect: true },
+      // replace-forcing rename must not be able to take out the pool. dependsOn
+      // enforces that the trigger's invoke permission exists before the pool does,
+      // closing the sign-in-failure window described above.
+      { parent: this, protect: true, dependsOn: [this.invokePermission] },
     );
 
     this.domainName = `boxalarm-${env}`;
@@ -151,17 +172,6 @@ export class BoxalarmUserPool extends pulumi.ComponentResource {
       {
         domain: this.domainName,
         userPoolId: this.userPool.id,
-      },
-      { parent: this },
-    );
-
-    this.invokePermission = new aws.lambda.Permission(
-      `${name}-fn-invoke-permission`,
-      {
-        action: "lambda:InvokeFunction",
-        function: this.preTokenGenerationFunction.name,
-        principal: "cognito-idp.amazonaws.com",
-        sourceArn: this.userPool.arn,
       },
       { parent: this },
     );
