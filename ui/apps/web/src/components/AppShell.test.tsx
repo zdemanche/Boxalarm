@@ -100,7 +100,10 @@ test('ADMIN visiting /settings sees the page; CHIEF visiting /settings sees Forb
   cleanup();
   renderShell(['CHIEF'], '/settings');
   await screen.findByRole('heading', { name: 'Forbidden' });
-  expect(screen.getByText(/Reference:/i)).toBeTruthy();
+  // The 403 body is a fixed generic message now — the server's raw detail/traceId (which can
+  // leak internal Cedar policy/action names) is intentionally kept out of the rendered DOM.
+  expect(screen.getByText('You do not have access to this page.')).toBeTruthy();
+  expect(screen.queryByText(/Reference:/i)).toBeNull();
 });
 
 test('ADMIN landing on / redirects to first granted route', async () => {

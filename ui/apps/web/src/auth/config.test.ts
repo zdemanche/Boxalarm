@@ -37,7 +37,11 @@ test('buildForgotPasswordUrl points at Cognito Hosted UI forgotPassword with the
   expect(url.origin).toBe('https://boxalarm.auth.us-east-1.amazoncognito.com');
   expect(url.pathname).toBe('/forgotPassword');
   expect(url.searchParams.get('client_id')).toBe('test-web-client');
-  expect(url.searchParams.get('redirect_uri')).toBe(`${window.location.origin}/auth/callback`);
+  // Redirects to /login, not /auth/callback: the oidc-client-ts callback route expects a
+  // `state` param matching a stored signinRedirect, which a Hosted-UI password reset never
+  // creates, so landing there produced "Sign-in could not be completed" after a successful
+  // reset.
+  expect(url.searchParams.get('redirect_uri')).toBe(`${window.location.origin}/login`);
 });
 
 test('buildForgotPasswordUrl throws when the hosted UI origin is missing', async () => {

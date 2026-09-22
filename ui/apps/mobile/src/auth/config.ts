@@ -17,7 +17,17 @@ export function buildOidcConfig(): AuthConfiguration {
   };
 }
 
-/** Cognito Hosted UI forgot-password for the native app client (opens in system browser). */
+/**
+ * Cognito Hosted UI forgot-password for the native app client (opens in system browser).
+ *
+ * Deliberately redirects to a scheme distinct from `boxalarm://auth` (the redirectUrl used by
+ * authorize()/refresh() in AuthContext): `boxalarm://auth` is react-native-app-auth's OIDC
+ * callback, which react-native-app-auth's own in-flight authorize() session expects to consume
+ * with matching PKCE/state. A Hosted-UI password reset never goes through authorize(), so
+ * redirecting it to the same URI left the callback effectively unhandled and gave the member no
+ * feedback after a successful reset. `boxalarm://sign-in` just reopens the app on the (already
+ * showing, since the member isn't authenticated yet) sign-in screen instead.
+ */
 export function buildForgotPasswordUrl(): string {
   const origin = Config.COGNITO_HOSTED_UI_ORIGIN;
   const clientId = Config.COGNITO_NATIVE_CLIENT_ID;
@@ -29,7 +39,7 @@ export function buildForgotPasswordUrl(): string {
     client_id: clientId,
     response_type: 'code',
     scope: 'openid profile email',
-    redirect_uri: 'boxalarm://auth',
+    redirect_uri: 'boxalarm://sign-in',
   });
   return `${origin.replace(/\/$/, '')}/forgotPassword?${params.toString()}`;
 }
