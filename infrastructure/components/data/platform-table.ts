@@ -38,7 +38,16 @@ export function auditMutationDenyStatement(tableArn: string): DenyIamPolicyState
   return {
     Sid: "DenyAuditMutations",
     Effect: "Deny",
-    Action: ["dynamodb:UpdateItem", "dynamodb:DeleteItem"],
+    // PutItem and BatchWriteItem must be denied alongside UpdateItem/DeleteItem:
+    // PutItem on an existing pk/sk replaces the item wholesale, and BatchWriteItem
+    // carries both put and delete semantics under its own action name. Denying only
+    // Update/Delete leaves audit rows mutable via either of those two paths.
+    Action: [
+      "dynamodb:UpdateItem",
+      "dynamodb:DeleteItem",
+      "dynamodb:PutItem",
+      "dynamodb:BatchWriteItem",
+    ],
     Resource: tableArn,
     Condition: {
       "ForAllValues:StringLike": {

@@ -98,14 +98,24 @@ describe("PlatformTable", () => {
     expect((gsis ?? []).find((g) => g.name === "GSI3")?.hashKey).toBe("gsi3pk");
   });
 
-  it("exports auditMutationDenyStatement denying UpdateItem/DeleteItem on DEPT#*#AUDIT#* leading keys", async () => {
+  it("exports auditMutationDenyStatement denying UpdateItem/DeleteItem/PutItem/BatchWriteItem on DEPT#*#AUDIT#* leading keys", async () => {
     const { auditMutationDenyStatement } = await import("../../components/data/platform-table");
     const stmt = auditMutationDenyStatement(
       "arn:aws:dynamodb:us-east-1:123456789012:table/boxalarm-dev-platform-service",
     );
 
     expect(stmt.Effect).toBe("Deny");
-    expect(stmt.Action).toEqual(["dynamodb:UpdateItem", "dynamodb:DeleteItem"]);
+    // PutItem and BatchWriteItem must be denied too — PutItem replaces an existing
+    // item wholesale, and BatchWriteItem carries delete semantics under its own name.
+    expect(stmt.Action).toEqual(
+      expect.arrayContaining([
+        "dynamodb:UpdateItem",
+        "dynamodb:DeleteItem",
+        "dynamodb:PutItem",
+        "dynamodb:BatchWriteItem",
+      ]),
+    );
+    expect(stmt.Action).toHaveLength(4);
     expect(stmt.Resource).toContain("platform-service");
     expect(stmt.Condition).toEqual({
       "ForAllValues:StringLike": {
