@@ -32,10 +32,7 @@ export function nerisUserAgentForEnv(env: string): string {
  * IAM statements for a Lambda (or other principal) that calls NERIS: read the
  * OAuth client secret and the per-env base-url / user-agent SSM parameters.
  */
-export function nerisClientPolicyStatements(
-  secretArn: string,
-  env: string,
-): IamPolicyStatement[] {
+export function nerisClientPolicyStatements(secretArn: string, env: string): IamPolicyStatement[] {
   if (typeof secretArn !== "string" || secretArn.length === 0) {
     throw new Error(
       `nerisClientPolicyStatements: secretArn is required (received ${JSON.stringify(secretArn)})`,

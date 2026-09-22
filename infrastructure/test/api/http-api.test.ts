@@ -56,9 +56,7 @@ async function settle(api: {
     defaultRouteSettings: pulumi.Output<
       { throttlingRateLimit?: number; throttlingBurstLimit?: number } | undefined
     >;
-    accessLogSettings: pulumi.Output<
-      { destinationArn?: string; format?: string } | undefined
-    >;
+    accessLogSettings: pulumi.Output<{ destinationArn?: string; format?: string } | undefined>;
   };
   accessLogGroup: { id: pulumi.Output<string>; arn: pulumi.Output<string> };
   invokePermission: { id: pulumi.Output<string>; sourceArn: pulumi.Output<string | undefined> };
