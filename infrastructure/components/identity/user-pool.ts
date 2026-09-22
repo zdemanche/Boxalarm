@@ -2,6 +2,7 @@ import * as path from "path";
 import * as pulumi from "@pulumi/pulumi";
 import * as aws from "@pulumi/aws";
 import { RETENTION_DAYS_BY_ENV } from "../observability/service-log-group";
+import { ACTIVE_TRACING_CONFIG } from "../observability/xray-sampling";
 
 export interface BoxalarmUserPoolArgs {
   env: string;
@@ -96,10 +97,17 @@ export class BoxalarmUserPool extends pulumi.ComponentResource {
             path.join(__dirname, "pre-token-generation-handler.js"),
           ),
         }),
+        // Highest-availability-criticality Lambda in this component — if it fails,
+        // Cognito fails token generation and every sign-in fails. It doesn't go
+        // through the ServiceLambda factory (that would require an identity-service
+        // SERVICES entry, a bigger change), but at minimum matches ServiceLambda's
+        // JSON logging + Active tracing convention rather than being the one
+        // function in the repo with neither.
         loggingConfig: {
-          logFormat: "Text",
+          logFormat: "JSON",
           logGroup: this.functionLogGroup.name,
         },
+        tracingConfig: ACTIVE_TRACING_CONFIG,
       },
       { parent: this, dependsOn: [this.functionLogGroup] },
     );

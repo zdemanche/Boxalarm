@@ -134,6 +134,21 @@ describe("BoxalarmUserPool", () => {
     expect(loggingConfig?.logGroup).toBe(name);
   });
 
+  it("logs JSON and enables Active tracing on the pre-token trigger — the highest-availability-criticality function here (if it fails, every sign-in fails)", async () => {
+    const { BoxalarmUserPool } = await import("../../components/identity/user-pool");
+    const { ACTIVE_TRACING_CONFIG } = await import("../../components/observability/xray-sampling");
+    const identity = new BoxalarmUserPool("test-identity-observability", { env: "dev" });
+    await settle(identity);
+
+    const [loggingConfig, tracingConfig] = await Promise.all([
+      resolve(identity.preTokenGenerationFunction.loggingConfig),
+      resolve(identity.preTokenGenerationFunction.tracingConfig),
+    ]);
+
+    expect(loggingConfig?.logFormat).toBe("JSON");
+    expect(tracingConfig).toEqual(ACTIVE_TRACING_CONFIG);
+  });
+
   it("sets MFA configuration to OFF explicitly", async () => {
     const { BoxalarmUserPool } = await import("../../components/identity/user-pool");
     const identity = new BoxalarmUserPool("test-identity-mfa", { env: "dev" });
