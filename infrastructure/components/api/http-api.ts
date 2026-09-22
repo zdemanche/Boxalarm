@@ -2,7 +2,7 @@ import * as path from "path";
 import * as pulumi from "@pulumi/pulumi";
 import * as aws from "@pulumi/aws";
 import { ServiceLambda } from "../observability/service-lambda";
-import { ServiceLogGroup } from "../observability/service-log-group";
+import { ServiceLogGroup, RETENTION_DAYS_BY_ENV } from "../observability/service-log-group";
 import { requireEnv } from "../shared/env";
 
 export interface HttpApiArgs {
@@ -43,6 +43,7 @@ export class HttpApi extends pulumi.ComponentResource {
   public readonly authorizerLambda: ServiceLambda;
   public readonly invokePermission: aws.lambda.Permission;
   public readonly stage: aws.apigatewayv2.Stage;
+  public readonly accessLogGroup: aws.cloudwatch.LogGroup;
   public readonly apiEndpoint: pulumi.Output<string>;
 
   constructor(name: string, args: HttpApiArgs, opts?: pulumi.ComponentResourceOptions) {
@@ -121,6 +122,18 @@ export class HttpApi extends pulumi.ComponentResource {
       { parent: this },
     );
 
+    // With a fail-closed authorizer denying 100% of requests today, operators would
+    // otherwise have zero record of caller activity — no 401 rate, nothing to
+    // correlate against the authorizer's own logs.
+    this.accessLogGroup = new aws.cloudwatch.LogGroup(
+      `${name}-access-logs`,
+      {
+        name: `/aws/apigateway/boxalarm-${env}-http-api-access`,
+        retentionInDays: RETENTION_DAYS_BY_ENV[env],
+      },
+      { parent: this },
+    );
+
     this.stage = new aws.apigatewayv2.Stage(
       `${name}-stage`,
       {
@@ -136,8 +149,18 @@ export class HttpApi extends pulumi.ComponentResource {
           throttlingRateLimit,
           throttlingBurstLimit,
         },
+        accessLogSettings: {
+          destinationArn: this.accessLogGroup.arn,
+          format: JSON.stringify({
+            requestId: "$context.requestId",
+            status: "$context.status",
+            routeKey: "$context.routeKey",
+            integrationErrorMessage: "$context.integrationErrorMessage",
+            authorizerError: "$context.authorizer.error",
+          }),
+        },
       },
-      { parent: this },
+      { parent: this, dependsOn: [this.accessLogGroup] },
     );
 
     this.apiEndpoint = this.httpApi.apiEndpoint;

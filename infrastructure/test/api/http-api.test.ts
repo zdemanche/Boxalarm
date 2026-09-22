@@ -56,7 +56,11 @@ async function settle(api: {
     defaultRouteSettings: pulumi.Output<
       { throttlingRateLimit?: number; throttlingBurstLimit?: number } | undefined
     >;
+    accessLogSettings: pulumi.Output<
+      { destinationArn?: string; format?: string } | undefined
+    >;
   };
+  accessLogGroup: { id: pulumi.Output<string>; arn: pulumi.Output<string> };
   invokePermission: { id: pulumi.Output<string>; sourceArn: pulumi.Output<string | undefined> };
   authorizerLambda: {
     urn: pulumi.Output<string>;
@@ -81,6 +85,9 @@ async function settle(api: {
     resolve(api.stage.id),
     resolve(api.stage.name),
     resolve(api.stage.defaultRouteSettings),
+    resolve(api.stage.accessLogSettings),
+    resolve(api.accessLogGroup.id),
+    resolve(api.accessLogGroup.arn),
     resolve(api.invokePermission.id),
     resolve(api.invokePermission.sourceArn as pulumi.Output<string>),
     resolve(api.authorizerLambda.urn),
@@ -135,6 +142,8 @@ describe("HttpApi", () => {
       authorizerResultTtlInSeconds,
       invokePermissionSourceArn,
       executionArn,
+      accessLogSettings,
+      accessLogGroupName,
     ] = await Promise.all([
       resolve(api.httpApi.name),
       resolve(api.httpApi.protocolType),
@@ -156,6 +165,8 @@ describe("HttpApi", () => {
       resolve(api.authorizer.authorizerResultTtlInSeconds),
       resolve(api.invokePermission.sourceArn as pulumi.Output<string>),
       resolve(api.httpApi.executionArn),
+      resolve(api.stage.accessLogSettings),
+      resolve(api.accessLogGroup.name),
     ]);
 
     expect(apiName).toBe("boxalarm-dev-http-api");
@@ -177,6 +188,18 @@ describe("HttpApi", () => {
     expect(authorizerResultTtlInSeconds).toBe(0);
     // Scoped to this API's authorizers, not a bare wildcard.
     expect(invokePermissionSourceArn).toBe(`${executionArn}/authorizers/*`);
+    // With a fail-closed authorizer denying every request, operators need a caller
+    // activity record — status, route, and authorizer error at minimum.
+    expect(accessLogGroupName).toBe("/aws/apigateway/boxalarm-dev-http-api-access");
+    expect(accessLogSettings?.destinationArn).toBeDefined();
+    const accessLogFormat = JSON.parse(accessLogSettings?.format ?? "{}");
+    expect(accessLogFormat).toMatchObject({
+      requestId: expect.stringContaining("requestId"),
+      status: expect.stringContaining("status"),
+      routeKey: expect.stringContaining("routeKey"),
+      integrationErrorMessage: expect.stringContaining("integrationErrorMessage"),
+      authorizerError: expect.stringContaining("authorizer.error"),
+    });
     expect(principal).toBe("apigateway.amazonaws.com");
     expect(action).toBe("lambda:InvokeFunction");
     expect(fnName).toBe("boxalarm-dev-platform-authorizer");
