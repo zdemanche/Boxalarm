@@ -1,5 +1,6 @@
 import * as pulumi from "@pulumi/pulumi";
 import * as aws from "@pulumi/aws";
+import { IamPolicyStatement } from "../observability/observability-policy";
 
 /** Documented NERIS non-prod API host (N6.4 — never used from prod). */
 export const NERIS_DEV_BASE_URL = "https://api-test.neris.fsri.org";
@@ -11,13 +12,6 @@ const NON_PROD_ENVS = new Set(["dev", "qa", "staging"]);
 
 export interface NerisConfigArgs {
   env: string;
-}
-
-export interface NerisIamPolicyStatement {
-  Sid: string;
-  Effect: "Allow";
-  Action: string[];
-  Resource: string;
 }
 
 export function nerisBaseUrlForEnv(env: string): string {
@@ -51,7 +45,7 @@ export function nerisUserAgentForEnv(env: string): string {
 export function nerisClientPolicyStatements(
   secretArn: string,
   env: string,
-): NerisIamPolicyStatement[] {
+): IamPolicyStatement[] {
   if (typeof secretArn !== "string" || secretArn.length === 0) {
     throw new Error(
       `nerisClientPolicyStatements: secretArn is required (received ${JSON.stringify(secretArn)})`,

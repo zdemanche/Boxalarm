@@ -1,18 +1,11 @@
 import * as pulumi from "@pulumi/pulumi";
 import * as aws from "@pulumi/aws";
+import { IamPolicyStatement } from "../observability/observability-policy";
 
 const KNOWN_ENVS = new Set(["dev", "qa", "staging", "prod"]);
 
 export interface PlatformTableArgs {
   env: string;
-}
-
-export interface DenyIamPolicyStatement {
-  Sid: string;
-  Effect: "Deny";
-  Action: string[];
-  Resource: string;
-  Condition?: Record<string, Record<string, string[]>>;
 }
 
 function requireEnv(component: string, env: string): void {
@@ -28,7 +21,7 @@ function requireEnv(component: string, env: string): void {
  * Deny UpdateItem/DeleteItem on audit partition keys (DEPT#*#AUDIT#*).
  * Attach to any role that may write the platform table so audit rows are append-only.
  */
-export function auditMutationDenyStatement(tableArn: string): DenyIamPolicyStatement {
+export function auditMutationDenyStatement(tableArn: string): IamPolicyStatement {
   if (typeof tableArn !== "string" || tableArn.length === 0) {
     throw new Error(
       `auditMutationDenyStatement: tableArn is required (received ${JSON.stringify(tableArn)})`,
