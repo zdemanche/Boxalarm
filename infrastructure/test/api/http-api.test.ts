@@ -132,6 +132,9 @@ describe("HttpApi", () => {
       fnName,
       envVars,
       reservedConcurrentExecutions,
+      authorizerResultTtlInSeconds,
+      invokePermissionSourceArn,
+      executionArn,
     ] = await Promise.all([
       resolve(api.httpApi.name),
       resolve(api.httpApi.protocolType),
@@ -150,6 +153,9 @@ describe("HttpApi", () => {
       resolve(api.authorizerLambda.function.name),
       resolve(api.authorizerLambda.function.environment),
       resolve(api.authorizerLambda.function.reservedConcurrentExecutions),
+      resolve(api.authorizer.authorizerResultTtlInSeconds),
+      resolve(api.invokePermission.sourceArn as pulumi.Output<string>),
+      resolve(api.httpApi.executionArn),
     ]);
 
     expect(apiName).toBe("boxalarm-dev-http-api");
@@ -166,6 +172,11 @@ describe("HttpApi", () => {
     expect(defaultRouteSettings?.throttlingRateLimit).toBe(50);
     expect(defaultRouteSettings?.throttlingBurstLimit).toBe(100);
     expect(reservedConcurrentExecutions).toBe(20);
+    // Load-bearing: never cache an allow decision from this fail-closed stub (source
+    // comment on the authorizer). A later edit setting this to e.g. 300 must fail here.
+    expect(authorizerResultTtlInSeconds).toBe(0);
+    // Scoped to this API's authorizers, not a bare wildcard.
+    expect(invokePermissionSourceArn).toBe(`${executionArn}/authorizers/*`);
     expect(principal).toBe("apigateway.amazonaws.com");
     expect(action).toBe("lambda:InvokeFunction");
     expect(fnName).toBe("boxalarm-dev-platform-authorizer");
