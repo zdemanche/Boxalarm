@@ -39,6 +39,7 @@ function requireEnv(component: string, env: string): void {
 export class AuditTrail extends pulumi.ComponentResource {
   public readonly archiveBucket: aws.s3.Bucket;
   public readonly publicAccessBlock: aws.s3.BucketPublicAccessBlock;
+  public readonly serverSideEncryption: aws.s3.BucketServerSideEncryptionConfigurationV2;
   public readonly versioning: aws.s3.BucketVersioning;
   public readonly objectLockConfiguration: aws.s3.BucketObjectLockConfiguration;
   public readonly lifecycleConfiguration: aws.s3.BucketLifecycleConfigurationV2;
@@ -74,6 +75,24 @@ export class AuditTrail extends pulumi.ComponentResource {
         blockPublicPolicy: true,
         ignorePublicAcls: true,
         restrictPublicBuckets: true,
+      },
+      { parent: this },
+    );
+
+    // S3 applies SSE-S3 by default, but every other data-layer resource in this repo
+    // declares its encryption tier explicitly (and a residency test asserts on that
+    // text) — this makes the posture reviewable in code rather than implicit.
+    this.serverSideEncryption = new aws.s3.BucketServerSideEncryptionConfigurationV2(
+      `${name}-sse`,
+      {
+        bucket: this.archiveBucket.id,
+        rules: [
+          {
+            applyServerSideEncryptionByDefault: {
+              sseAlgorithm: "AES256",
+            },
+          },
+        ],
       },
       { parent: this },
     );

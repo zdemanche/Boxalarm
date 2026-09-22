@@ -83,6 +83,18 @@ describe("AuditTrail", () => {
     });
   });
 
+  it("declares explicit SSE-S3 encryption on the archive bucket", async () => {
+    const { AuditTrail } = await import("../../components/data/audit-trail");
+    const audit = new AuditTrail("audit-sse", {
+      env: "dev",
+      alertingTableArn: "arn:aws:dynamodb:us-east-1:123456789012:table/boxalarm-dev-alerting-table",
+    });
+    await settle(audit);
+
+    const rules = await resolve(audit.serverSideEncryption.rules);
+    expect(rules?.[0]?.applyServerSideEncryptionByDefault?.sseAlgorithm).toBe("AES256");
+  });
+
   it("captures DynamoDB data events for the alerting table, mutations only (WriteOnly)", async () => {
     const { AuditTrail } = await import("../../components/data/audit-trail");
     const tableArn =
