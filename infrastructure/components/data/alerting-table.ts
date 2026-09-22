@@ -1,5 +1,6 @@
 import * as pulumi from "@pulumi/pulumi";
 import * as aws from "@pulumi/aws";
+import { dynamodbCmkPolicy } from "./cmk-policy";
 
 const KNOWN_ENVS = new Set(["dev", "qa", "staging", "prod"]);
 
@@ -14,35 +15,6 @@ function requireEnv(component: string, env: string): void {
   if (!KNOWN_ENVS.has(env)) {
     throw new Error(`${component}: unknown env "${env}"`);
   }
-}
-
-function dynamodbCmkPolicy(accountId: string): string {
-  return JSON.stringify({
-    Version: "2012-10-17",
-    Statement: [
-      {
-        Sid: "EnableRootAccountAdministration",
-        Effect: "Allow",
-        Principal: { AWS: `arn:aws:iam::${accountId}:root` },
-        Action: "kms:*",
-        Resource: "*",
-      },
-      {
-        Sid: "AllowDynamoDBService",
-        Effect: "Allow",
-        Principal: { Service: "dynamodb.amazonaws.com" },
-        Action: [
-          "kms:Encrypt",
-          "kms:Decrypt",
-          "kms:ReEncrypt*",
-          "kms:GenerateDataKey*",
-          "kms:DescribeKey",
-          "kms:CreateGrant",
-        ],
-        Resource: "*",
-      },
-    ],
-  });
 }
 
 /**
