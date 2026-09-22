@@ -7,7 +7,7 @@ import {
   createDefaultSamplingRule,
   createAlertingSamplingRule,
 } from "./components/observability/xray-sampling";
-import { SERVICES } from "./components/observability/services";
+import { SERVICES, ServiceName } from "./components/observability/services";
 import { BoxalarmUserPool } from "./components/identity/user-pool";
 import { BoxalarmUserPoolClient } from "./components/identity/user-pool-client";
 import { HttpApi } from "./components/api/http-api";
@@ -60,8 +60,12 @@ export const serviceLogGroupNames = Object.fromEntries(
   SERVICES.map((s) => [s, serviceLogGroupName(env, s)]),
 );
 
-const platformLogGroupIndex = SERVICES.indexOf("platform-service");
-const platformLogGroup = serviceLogGroups[platformLogGroupIndex];
+// Name-keyed, not positional: SERVICES.indexOf("platform-service") returning -1 on a
+// rename/reorder would silently yield undefined here with no compile-time signal.
+const serviceLogGroupByName = Object.fromEntries(
+  SERVICES.map((s, i) => [s, serviceLogGroups[i]]),
+) as Record<ServiceName, ServiceLogGroup>;
+const platformLogGroup = serviceLogGroupByName["platform-service"];
 
 export const serviceDashboards = SERVICES.map(
   (serviceName) => new ServiceDashboard(`${serviceName}-dashboard`, { env, serviceName }),
