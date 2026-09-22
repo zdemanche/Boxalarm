@@ -108,6 +108,9 @@ export class BoxalarmUserPool extends pulumi.ComponentResource {
       `${name}-pool`,
       {
         name: `boxalarm-${env}-users`,
+        // Unlike DynamoDB, Cognito has no PITR/restore path — losing this pool means
+        // every firefighter re-enrolls. ACTIVE, not the default INACTIVE.
+        deletionProtection: "ACTIVE",
         // Explicit OFF until MFA is productized — do not rely on Cognito's default.
         mfaConfiguration: "OFF",
         // AC1: dev-vs-prod separation lives at the environment/stack level (one pool
@@ -137,7 +140,9 @@ export class BoxalarmUserPool extends pulumi.ComponentResource {
           },
         },
       },
-      { parent: this },
+      // Pulumi's own accidental-destroy backstop — a stray `pulumi destroy` or a
+      // replace-forcing rename must not be able to take out the pool.
+      { parent: this, protect: true },
     );
 
     this.domainName = `boxalarm-${env}`;

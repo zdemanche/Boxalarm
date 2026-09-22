@@ -126,6 +126,15 @@ describe("BoxalarmUserPool", () => {
     expect(mfa).toBe("OFF");
   });
 
+  it("enables deletion protection — unlike DynamoDB, Cognito has no PITR/restore path", async () => {
+    const { BoxalarmUserPool } = await import("../../components/identity/user-pool");
+    const identity = new BoxalarmUserPool("test-identity-deletion-protection", { env: "dev" });
+    await settle(identity);
+
+    const deletionProtection = await resolve(identity.userPool.deletionProtection);
+    expect(deletionProtection).toBe("ACTIVE");
+  });
+
   it("provisions a Cognito-hosted domain with prefix boxalarm-{env}", async () => {
     const { BoxalarmUserPool } = await import("../../components/identity/user-pool");
     const identity = new BoxalarmUserPool("test-identity-domain", { env: "qa" });
