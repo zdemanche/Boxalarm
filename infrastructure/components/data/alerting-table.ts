@@ -117,8 +117,13 @@ export class AlertingTable extends pulumi.ComponentResource {
           attributeName: "ttl",
           enabled: true,
         },
+        // A replace-forcing schema change here is a total outage of the alert path,
+        // which CLAUDE.md states may never happen. PITR alone doesn't guard against it.
+        deletionProtectionEnabled: true,
       },
-      { parent: this },
+      // Belt-and-suspenders alongside deletionProtectionEnabled: also refuse an
+      // outright pulumi destroy/replace of the table resource itself.
+      { parent: this, protect: true },
     );
 
     this.tableName = this.table.name;

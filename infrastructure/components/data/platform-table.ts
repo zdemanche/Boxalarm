@@ -114,6 +114,9 @@ export class PlatformTable extends pulumi.ComponentResource {
         streamViewType: "NEW_AND_OLD_IMAGES",
         // AWS-managed encryption for DynamoDB (enabled; no customer CMK).
         serverSideEncryption: { enabled: true },
+        // PITR protects against in-window corruption, not against a replace-forcing
+        // schema change (renamed GSI attribute, etc.) destroying the table outright.
+        deletionProtectionEnabled: true,
       },
       { parent: this },
     );

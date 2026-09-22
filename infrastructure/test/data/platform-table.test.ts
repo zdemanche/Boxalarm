@@ -65,6 +65,15 @@ describe("PlatformTable", () => {
     expect(sse?.kmsKeyArn).toBeUndefined();
   });
 
+  it("enables deletionProtectionEnabled so a replace-forcing schema change can't destroy the table", async () => {
+    const { PlatformTable } = await import("../../components/data/platform-table");
+    const platform = new PlatformTable("platform-deletion-protection", { env: "dev" });
+    await settle(platform);
+
+    const deletionProtectionEnabled = await resolve(platform.table.deletionProtectionEnabled);
+    expect(deletionProtectionEnabled).toBe(true);
+  });
+
   it("declares GSI1/GSI2/GSI3 with ALL projection", async () => {
     const { PlatformTable } = await import("../../components/data/platform-table");
     const platform = new PlatformTable("platform-gsi", { env: "prod" });
