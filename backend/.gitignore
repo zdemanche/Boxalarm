@@ -1,0 +1,11 @@
+node_modules/
+dist/
+coverage/
+.analysis/
+.env
+.env.*
+*.tsbuildinfo
+.DS_Store
+.worktrees/
+.analysis/
+coverage/

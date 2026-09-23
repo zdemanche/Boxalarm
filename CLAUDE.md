@@ -1,7 +1,9 @@
 # Boxalarm — session handoff
 
 Fire department operations platform replacing Chief360. Tenant zero: Nichols FD, Trumbull CT.
-This repo is **docs only** (`zdemanche/boxalarm-docs`) — PRD, architecture, backlog. No code ships from here.
+**Monorepo** (`zdemanche/Boxalarm-monorepo`, consolidated 2026-09-23): PRD/architecture/backlog at the root and in `docs/`,
+code in `backend/`, `ui/`, `infrastructure/` — each its own npm project with its own lockfile, CI in `.github/workflows/<dir>.yml`
+(path-filtered). The four `boxalarm-*` repos are retired; their full history, every issue, and every open PR came along.
 
 Read `README.md` for the full locked-decision table. This file is the working handoff: state, next step, and the traps.
 
@@ -13,8 +15,8 @@ Read `README.md` for the full locked-decision table. This file is the working ha
 | `docs/architecture.md` | v1.0, 2,410 lines — done after **4 rounds** of independent review, plus the 2026-09-04 auth amendment |
 | `docs/architecture.compiled/` | Tiered artifacts for `generate-code` — spine, fact sheets, routing manifest, contracts. **Hash-guarded: any edit to `architecture.md` makes it stale — re-run `/sdlc:arch-compile` or runs fall back to the full document** |
 | `docs/build-order.md` + `dependency-graph.json` | 8 epics · 90 stories · 13 waves · 160 edges · acyclic |
-| GitHub Issues | 109+ open in `boxalarm-docs` (8 epics + 90 stories + open questions) |
-| Code | **All three repos scaffolded and pushed.** npm workspaces + TypeScript + Vitest + ESLint/Prettier in each; `boxalarm-infrastructure` has a root `Pulumi.yaml` with dev/qa/staging/prod pinned to `us-east-1`. No features yet. |
+| GitHub Issues | All in this repo (transferred 2026-09-23, renumbered — every issue link in docs and code comments is rewritten). Label `area:<docs\|backend\|ui\|infrastructure>` records where each came from. Each backend story is the parent; its `<KEY>-UI` / `<KEY>-INFRA` children are sub-issues for the **ui/** / **infrastructure/** side, so run `generate-code` per child. Shared infra resources have one owner issue each — map is commented on #180. Single-dir stories: ui E1-S7, E7-S8; infra E8-S10. Epics are the top of the sub-issue tree; open questions, architecture defects, and non-code stories E1-S16, E6-S12 carry `area:docs` |
+| Code | `backend/`, `ui/`, `infrastructure/` — npm workspaces + TypeScript + Vitest + ESLint/Prettier in each; `infrastructure/Pulumi.yaml` with dev/qa/staging/prod pinned to `us-east-1`. Wave-1+ story PRs in flight were ported as branches of the same name. |
 
 **The build-phase gate is passed** — the user said go on 2026-09-04. Wave 1's codeable stories are
 E8-S1, E8-S5, E8-S7, E8-S9, E8-S11. E1-S16 and E6-S12 are external-dependency work, not code, and
@@ -25,23 +27,24 @@ E6-S7 waits on the NERIS vendor account.
 `/sdlc:execute-backlog` is **unusable here** — it STOPs when the plan names local keys (`E1-S2`) with
 no Jira keys. Run stories individually instead:
 
-1. Export the issue to a ticket file: `gh issue view <n> --repo zdemanche/boxalarm-docs --json ...`
-   → `.analysis/wave-1/tickets/<KEY>.md` (already done for the Wave 1 five).
-2. `/sdlc:generate-code docs/architecture.md <KEY> --no-jira --ticket-file <path> --repo <repo path>`
+1. Export the issue to a ticket file: `gh issue view <n> --repo zdemanche/Boxalarm-monorepo --json ...` (find the link in `docs/build-order.md`)
+   → `.analysis/wave-1/tickets/<KEY>.md`.
+2. `/sdlc:generate-code docs/architecture.md <KEY> --no-jira --ticket-file <path> --repo <monorepo root>`
 
-**Every Wave 1 story spans 2–3 repos** and `generate-code` takes one `--repo`, so a story is 2–3 runs
-and 2–3 PRs. They all branch from `origin/main`, so **merge as you go or they conflict.**
+A story is still one run per child (backend parent, `-UI`, `-INFRA`), each touching its own directory.
+They all branch from `origin/main`, so **merge as you go or they conflict.** Not yet exercised against the
+monorepo layout — confirm on the first run that the change lands in the right directory.
 
 ## Blocking items with external lead times
 
 These gate real calendar time and are not code:
 
-- [#1](https://github.com/zdemanche/boxalarm-docs/issues/1) CAD integration surface — how does Chief360 get dispatch today?
-- [#2](https://github.com/zdemanche/boxalarm-docs/issues/2) Regional dispatch authority approval — longest pole
-- [#3](https://github.com/zdemanche/boxalarm-docs/issues/3) Apple Critical Alerts entitlement — can be rejected
-- [#4](https://github.com/zdemanche/boxalarm-docs/issues/4) Who carries the pager at 03:00
+- [#2](https://github.com/zdemanche/Boxalarm-monorepo/issues/2) CAD integration surface — how does Chief360 get dispatch today?
+- [#3](https://github.com/zdemanche/Boxalarm-monorepo/issues/3) Regional dispatch authority approval — longest pole
+- [#4](https://github.com/zdemanche/Boxalarm-monorepo/issues/4) Apple Critical Alerts entitlement — can be rejected
+- [#5](https://github.com/zdemanche/Boxalarm-monorepo/issues/5) Who carries the pager at 03:00
 - **OQ-24** Who revokes a compromised session, and how fast — now the *only* control that ends access
-- [#11](https://github.com/zdemanche/boxalarm-docs/issues/11) ⚠️ **Read before touching the alert path** — tracks the last unverified alerting edits
+- [#12](https://github.com/zdemanche/Boxalarm-monorepo/issues/12) ⚠️ **Read before touching the alert path** — tracks the last unverified alerting edits
 
 ## Do not relitigate
 
@@ -64,7 +67,7 @@ each fix landed on one link of the chain and left another inconsistent.
 
 - Alerting plane is **SNS FIFO** — EventBridge has no FIFO and ordering is load-bearing for exactly-once. LOB plane is EventBridge.
 - **Routing and dedup both key on `channel`.** `channelTier` is escalation bookkeeping ONLY — never a routing or dedup input.
-- Exactly-once key is `dispatchId#memberId#channel`; one immutable receipt per channel attempt.
+- Exactly-once key is `{dispatchId}#{toneSequence}#{memberId}#{channel}` (tone-ladder amendment, `architecture.md:198`); one immutable receipt per channel attempt per tone. The 3-segment form without `toneSequence` is now a silent-suppression defect — tones 2/3 no-op.
 - Alerting isolation is an **IAM boundary**, not a naming convention.
 - N1.7 is documented as NOT literally satisfied. Retained parallel tone-out paging (N1.9) is the compensating control and is therefore **not optional**.
 - `{deptId}` is in every partition key so a second department is additive, not a rewrite.

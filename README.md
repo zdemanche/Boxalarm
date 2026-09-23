@@ -21,18 +21,20 @@ Tenant zero: **Nichols Fire Department, Trumbull CT 06615.**
 | **Tenancy** | Single-tenant build; `{deptId}` in every partition key so a second department is additive, not a rewrite. |
 | **Stack** | AWS serverless, U.S. region pinned (NERIS requirement): Cognito + Verified Permissions, Lambda, 3 DynamoDB tables, SNS FIFO (alerting) + EventBridge (LOB), Pulumi. **No MFE topology.** |
 | **GitHub** | Personal `zdemanche`, not the Moonaan org. Transfer later if it makes sense. |
-| **Tracker** | GitHub Issues in `boxalarm-docs`. Not Jira. |
+| **Tracker** | GitHub Issues in this repo. Not Jira. |
 
-## Repos
+## Layout
 
-| Repo | Owns |
+One monorepo (consolidated 2026-09-23 from four `boxalarm-*` repos, now retired — history, issues, and open PRs preserved).
+
+| Directory | Owns |
 |---|---|
-| [`boxalarm-ui`](https://github.com/zdemanche/boxalarm-ui) | React Native app + React web SPA + shared `@boxalarm/*` packages. Build only. |
-| [`boxalarm-backend`](https://github.com/zdemanche/boxalarm-backend) | 10 Lambda services. Build only. |
-| [`boxalarm-infrastructure`](https://github.com/zdemanche/boxalarm-infrastructure) | All Pulumi. The only thing that touches AWS. |
-| [`boxalarm-docs`](https://github.com/zdemanche/boxalarm-docs) | This repo — PRD, architecture, backlog. |
+| [`ui/`](ui) | React Native app + React web SPA + shared `@boxalarm/*` packages. Build only. |
+| [`backend/`](backend) | 10 Lambda services. Build only. |
+| [`infrastructure/`](infrastructure) | All Pulumi. The only thing that touches AWS. |
+| [`docs/`](docs) | PRD, architecture, backlog. |
 
-All three code repos are scaffolded and green as of 2026-09-04 — workspaces, TypeScript, Vitest, lint/format, and a Pulumi project with four stacks. No features yet.
+Each code directory is its own npm project with its own lockfile; CI runs per directory from `.github/workflows/`, path-filtered.
 
 ## Process
 
@@ -44,14 +46,14 @@ Architecture went through **4 rounds of independent review** (cap extended once 
 
 Blocking items with external lead times — these gate everything and should be moving now:
 
-- [#1](https://github.com/zdemanche/boxalarm-docs/issues/1) CAD integration surface — *how does Chief360 get dispatch today?*
-- [#2](https://github.com/zdemanche/boxalarm-docs/issues/2) Regional dispatch authority approval — likely the longest pole
-- [#3](https://github.com/zdemanche/boxalarm-docs/issues/3) Apple Critical Alerts entitlement — can be rejected
-- [#4](https://github.com/zdemanche/boxalarm-docs/issues/4) Who carries the pager at 03:00
+- [#2](https://github.com/zdemanche/Boxalarm-monorepo/issues/2) CAD integration surface — *how does Chief360 get dispatch today?*
+- [#3](https://github.com/zdemanche/Boxalarm-monorepo/issues/3) Regional dispatch authority approval — likely the longest pole
+- [#4](https://github.com/zdemanche/Boxalarm-monorepo/issues/4) Apple Critical Alerts entitlement — can be rejected
+- [#5](https://github.com/zdemanche/Boxalarm-monorepo/issues/5) Who carries the pager at 03:00
 - **OQ-24** — who revokes a compromised or lost session, and how fast; with expiry gone this is the only control that ends access
-- [#11](https://github.com/zdemanche/boxalarm-docs/issues/11) ⚠️ Read before implementing the alert path
+- [#12](https://github.com/zdemanche/Boxalarm-monorepo/issues/12) ⚠️ Read before implementing the alert path
 
-## Layout
+## Docs
 
 - `CLAUDE.md` — session handoff: current state, how to run a story, settled decisions, alerting invariants
 - `docs/prd.md` — product requirements
