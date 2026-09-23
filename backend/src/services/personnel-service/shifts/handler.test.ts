@@ -450,6 +450,7 @@ describe('shifts handler — release/swap/approve routes', () => {
     vi.doMock('./dynamoClient.js', () => ({
       getDocClient: () => fakeDoc,
       readPersonnelTableConfig: () => ({ tableName: 'platform-service' }),
+      GSI3_INDEX_NAME: 'GSI3',
     }));
   }
 
@@ -961,5 +962,255 @@ describe('shifts handler — release/swap/approve routes', () => {
       () => undefined,
     );
     expect(result).toMatchObject({ statusCode: 500 });
+  });
+
+  describe('POST .../shifts/{id}/claim', () => {
+    it('AC1: atomically claims an open SHIFT_POSITION via a conditional update', async () => {
+      mockFakeDoc([
+        buildDutyShift(VERIFIED_DEPT_ID, 'shift-1'),
+        buildShiftPosition(VERIFIED_DEPT_ID, 'shift-1', 'DRIVER'),
+      ]);
+      const { handler } = await import('./handler.js');
+      const result = await handler(
+        buildEvent({
+          rawPath: '/api/v1/personnel/shifts/shift-1/claim',
+          body: JSON.stringify({ positionCode: 'DRIVER' }),
+          sub: 'member-1',
+        }),
+        {} as never,
+        () => undefined,
+      );
+      expect(result).toMatchObject({ statusCode: 201 });
+      const body = JSON.parse((result as { body: string }).body) as {
+        claimedByMemberId: string;
+      };
+      expect(body.claimedByMemberId).toBe('member-1');
+    });
+
+    it('never uses BatchWriteItem for the claim (test note): only Get/Update commands are issued', async () => {
+      const fakeDoc = createFakeDocumentClient([
+        buildDutyShift(VERIFIED_DEPT_ID, 'shift-1'),
+        buildShiftPosition(VERIFIED_DEPT_ID, 'shift-1', 'DRIVER'),
+      ]);
+      const sendSpy = vi.spyOn(fakeDoc, 'send');
+      vi.doMock('./dynamoClient.js', () => ({
+        getDocClient: () => fakeDoc,
+        readPersonnelTableConfig: () => ({ tableName: 'platform-service' }),
+      }));
+      const { handler } = await import('./handler.js');
+      await handler(
+        buildEvent({
+          rawPath: '/api/v1/personnel/shifts/shift-1/claim',
+          body: JSON.stringify({ positionCode: 'DRIVER' }),
+          sub: 'member-1',
+        }),
+        {} as never,
+        () => undefined,
+      );
+      for (const call of sendSpy.mock.calls) {
+        const commandName = (call[0] as { constructor: { name: string } }).constructor.name;
+        expect(commandName).not.toBe('BatchWriteCommand');
+      }
+    });
+
+    it('AC2: returns 409 with no double-booking when the position is already claimed', async () => {
+      mockFakeDoc([
+        buildDutyShift(VERIFIED_DEPT_ID, 'shift-1'),
+        buildShiftPosition(VERIFIED_DEPT_ID, 'shift-1', 'DRIVER', {
+          claimedByMemberId: 'member-2',
+        }),
+      ]);
+      const { handler } = await import('./handler.js');
+      const result = await handler(
+        buildEvent({
+          rawPath: '/api/v1/personnel/shifts/shift-1/claim',
+          body: JSON.stringify({ positionCode: 'DRIVER' }),
+          sub: 'member-1',
+        }),
+        {} as never,
+        () => undefined,
+      );
+      expect(result).toMatchObject({ statusCode: 409 });
+    });
+
+    it('returns 404 when the shift position does not exist', async () => {
+      mockFakeDoc([buildDutyShift(VERIFIED_DEPT_ID, 'shift-1')]);
+      const { handler } = await import('./handler.js');
+      const result = await handler(
+        buildEvent({
+          rawPath: '/api/v1/personnel/shifts/shift-1/claim',
+          body: JSON.stringify({ positionCode: 'DRIVER' }),
+        }),
+        {} as never,
+        () => undefined,
+      );
+      expect(result).toMatchObject({ statusCode: 404 });
+    });
+
+    it('returns 400 when positionCode is missing', async () => {
+      mockFakeDoc([]);
+      const { handler } = await import('./handler.js');
+      const result = await handler(
+        buildEvent({
+          rawPath: '/api/v1/personnel/shifts/shift-1/claim',
+          body: JSON.stringify({}),
+        }),
+        {} as never,
+        () => undefined,
+      );
+      expect(result).toMatchObject({ statusCode: 400 });
+    });
+  });
+
+  describe('GET .../shifts/{id}', () => {
+    it('returns the shift with positions and claim state, including claimedByMe for the caller', async () => {
+      mockFakeDoc([
+        buildDutyShift(VERIFIED_DEPT_ID, 'shift-1'),
+        buildShiftPosition(VERIFIED_DEPT_ID, 'shift-1', 'DRIVER', {
+          claimedByMemberId: 'member-1',
+        }),
+        buildShiftPosition(VERIFIED_DEPT_ID, 'shift-1', 'FF1'),
+      ]);
+      const { handler } = await import('./handler.js');
+      const result = await handler(
+        buildEvent({
+          method: 'GET',
+          rawPath: '/api/v1/personnel/shifts/shift-1',
+          body: undefined,
+          sub: 'member-1',
+        }),
+        {} as never,
+        () => undefined,
+      );
+      expect(result).toMatchObject({ statusCode: 200 });
+      const body = JSON.parse((result as { body: string }).body) as {
+        shiftId: string;
+        positions: { positionCode: string; claimedByMemberId?: string; claimedByMe?: boolean }[];
+      };
+      expect(body.shiftId).toBe('shift-1');
+      expect(body.positions).toEqual([
+        { positionCode: 'DRIVER', claimedByMemberId: 'member-1', claimedByMe: true },
+        { positionCode: 'FF1' },
+      ]);
+    });
+
+    it('returns 404 when the shift does not exist', async () => {
+      mockFakeDoc([]);
+      const { handler } = await import('./handler.js');
+      const result = await handler(
+        buildEvent({
+          method: 'GET',
+          rawPath: '/api/v1/personnel/shifts/shift-missing',
+          body: undefined,
+        }),
+        {} as never,
+        () => undefined,
+      );
+      expect(result).toMatchObject({ statusCode: 404 });
+    });
+  });
+
+  describe('GET .../shifts/swaps/mine', () => {
+    it('returns only pending swaps where the caller is the proposer or the target', async () => {
+      mockFakeDoc([
+        buildDutyShift(VERIFIED_DEPT_ID, 'shift-1'),
+        {
+          pk: `DEPT#${DEPT_ID}#SHIFT#shift-1`,
+          sk: 'SWAP#1',
+          entityType: 'SHIFT_SWAP_REQUEST',
+          shiftId: 'shift-1',
+          positionCode: 'DRIVER',
+          fromMemberId: 'member-1',
+          toMemberId: 'member-2',
+          status: 'PENDING',
+          requiresOfficerApproval: true,
+          requestedAt: 1,
+        },
+        {
+          pk: `DEPT#${DEPT_ID}#SHIFT#shift-1`,
+          sk: 'SWAP#2',
+          entityType: 'SHIFT_SWAP_REQUEST',
+          shiftId: 'shift-1',
+          positionCode: 'FF1',
+          fromMemberId: 'member-9',
+          toMemberId: 'member-8',
+          status: 'PENDING',
+          requiresOfficerApproval: true,
+          requestedAt: 2,
+        },
+      ]);
+      const { handler } = await import('./handler.js');
+      const result = await handler(
+        buildEvent({
+          method: 'GET',
+          rawPath: '/api/v1/personnel/shifts/swaps/mine',
+          body: undefined,
+          sub: 'member-2',
+        }),
+        {} as never,
+        () => undefined,
+      );
+      expect(result).toMatchObject({ statusCode: 200 });
+      const body = JSON.parse((result as { body: string }).body) as {
+        swaps: { requestedAt: number }[];
+      };
+      expect(body.swaps.map((swap) => swap.requestedAt)).toEqual([1]);
+    });
+  });
+
+  describe('GET .../shifts/swaps/pending', () => {
+    it('rejects a non-officer with 403 on a Cedar deny', async () => {
+      mockFakeDoc([buildDutyShift(VERIFIED_DEPT_ID, 'shift-1')]);
+      authzSend.mockResolvedValue({ decision: Decision.DENY });
+      const { handler } = await import('./handler.js');
+      const result = await handler(
+        buildEvent({
+          method: 'GET',
+          rawPath: '/api/v1/personnel/shifts/swaps/pending',
+          body: undefined,
+          groups: 'MEMBER',
+          authorization: 'Bearer token',
+        }),
+        {} as never,
+        () => undefined,
+      );
+      expect(result).toMatchObject({ statusCode: 403 });
+    });
+
+    it('returns pending swaps that require officer approval when Cedar allows', async () => {
+      mockFakeDoc([
+        buildDutyShift(VERIFIED_DEPT_ID, 'shift-1'),
+        {
+          pk: `DEPT#${DEPT_ID}#SHIFT#shift-1`,
+          sk: 'SWAP#1',
+          entityType: 'SHIFT_SWAP_REQUEST',
+          shiftId: 'shift-1',
+          positionCode: 'DRIVER',
+          fromMemberId: 'member-1',
+          toMemberId: 'member-2',
+          status: 'PENDING',
+          requiresOfficerApproval: true,
+          requestedAt: 1,
+        },
+      ]);
+      authzSend.mockResolvedValue({ decision: Decision.ALLOW });
+      const { handler } = await import('./handler.js');
+      const result = await handler(
+        buildEvent({
+          method: 'GET',
+          rawPath: '/api/v1/personnel/shifts/swaps/pending',
+          body: undefined,
+          groups: 'OFFICER',
+          authorization: 'Bearer token',
+        }),
+        {} as never,
+        () => undefined,
+      );
+      expect(result).toMatchObject({ statusCode: 200 });
+      const body = JSON.parse((result as { body: string }).body) as {
+        swaps: { requestedAt: number }[];
+      };
+      expect(body.swaps.map((swap) => swap.requestedAt)).toEqual([1]);
+    });
   });
 });

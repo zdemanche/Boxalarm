@@ -6,6 +6,13 @@ import {
   type DynamoDBDocumentClient,
 } from '@aws-sdk/lib-dynamodb';
 import { buildDeptScopedPk, type VerifiedDeptId } from '@boxalarm/dept-scope';
+import {
+  listDeptShiftMetaItems,
+  mapWithConcurrency,
+  queryShiftItems,
+} from './coverageRepository.js';
+
+const SWAP_FETCH_CONCURRENCY = 10;
 
 export type ShiftSwapStatus = 'PENDING' | 'APPROVED' | 'DENIED';
 
@@ -85,6 +92,45 @@ export async function getShiftSwapRequest(
     requiresOfficerApproval: item.requiresOfficerApproval !== false,
     requestedAt: Number(item.requestedAt),
   };
+}
+
+export interface ShiftSwapListEntry extends ShiftSwapRequestRecord {
+  readonly shiftId: string;
+}
+
+export async function listPendingShiftSwaps(
+  doc: DynamoDBDocumentClient,
+  tableName: string,
+  deptId: VerifiedDeptId,
+): Promise<ShiftSwapListEntry[]> {
+  const shiftMetaItems = await listDeptShiftMetaItems(doc, tableName, deptId);
+  const perShift = await mapWithConcurrency(
+    shiftMetaItems,
+    SWAP_FETCH_CONCURRENCY,
+    async (meta) => {
+      const shiftId = String(meta.shiftId);
+      const items = await queryShiftItems(
+        doc,
+        tableName,
+        buildDeptScopedPk(deptId, 'SHIFT', shiftId),
+      );
+      return items
+        .filter(
+          (item) =>
+            typeof item.sk === 'string' && item.sk.startsWith('SWAP#') && item.status === 'PENDING',
+        )
+        .map((item): ShiftSwapListEntry => ({
+          shiftId,
+          positionCode: String(item.positionCode),
+          fromMemberId: String(item.fromMemberId),
+          toMemberId: String(item.toMemberId),
+          status: item.status as ShiftSwapStatus,
+          requiresOfficerApproval: item.requiresOfficerApproval !== false,
+          requestedAt: Number(item.requestedAt),
+        }));
+    },
+  );
+  return perShift.flat();
 }
 
 function cancellationReasonCodes(error: TransactionCanceledException): (string | undefined)[] {

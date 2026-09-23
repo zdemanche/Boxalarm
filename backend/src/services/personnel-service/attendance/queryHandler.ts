@@ -1,6 +1,7 @@
 import type { APIGatewayProxyResultV2 } from 'aws-lambda';
 import { QueryCommand } from '@aws-sdk/lib-dynamodb';
 import {
+  notFoundProblem,
   withAuthorization,
   serviceUnavailableProblem,
   type CedarPrincipalContext,
@@ -21,12 +22,11 @@ function logQueryFailure(reason: string, error: unknown, traceId: string): void 
   );
 }
 
-async function queryOwnAttendance(
+async function queryAttendanceFor(
   event: GuardEvent,
-  principal: CedarPrincipalContext,
+  memberId: string,
 ): Promise<APIGatewayProxyResultV2> {
   const traceId = extractTraceId(event);
-  const memberId = principal.sub;
 
   try {
     const { tableName } = readAttendanceTableConfig(process.env);
@@ -55,9 +55,31 @@ async function queryOwnAttendance(
   }
 }
 
+async function queryOwnAttendance(
+  event: GuardEvent,
+  principal: CedarPrincipalContext,
+): Promise<APIGatewayProxyResultV2> {
+  return queryAttendanceFor(event, principal.sub);
+}
+
+async function queryAttendanceOnBehalf(event: GuardEvent): Promise<APIGatewayProxyResultV2> {
+  const memberId = event.pathParameters?.memberId;
+  if (!memberId) {
+    return notFoundProblem(extractTraceId(event), 'memberId path parameter is required');
+  }
+  return queryAttendanceFor(event, memberId);
+}
+
 export const handler = withAuthorization(queryOwnAttendance, {
   actionType: 'Boxalarm::Action',
   actionId: 'ViewOwnAttendance',
   resourceType: 'Boxalarm::Member',
   resourceId: (event) => event.requestContext.authorizer?.lambda?.sub ?? '',
+});
+
+export const onBehalfHandler = withAuthorization(queryAttendanceOnBehalf, {
+  actionType: 'Boxalarm::Action',
+  actionId: 'ViewAttendanceOnBehalf',
+  resourceType: 'Boxalarm::Member',
+  resourceId: (event) => event.pathParameters?.memberId ?? '',
 });

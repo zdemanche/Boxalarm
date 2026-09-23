@@ -11,6 +11,7 @@ function buildEvent(
   options: {
     readonly headers?: Record<string, string> | undefined;
     readonly principal?: Record<string, unknown> | null;
+    readonly pathParameters?: Record<string, string>;
   } = {},
 ): GuardEvent {
   const principal = options.principal === null ? undefined : (options.principal ?? PRINCIPAL);
@@ -21,6 +22,7 @@ function buildEvent(
     rawQueryString: '',
     headers: 'headers' in options ? options.headers : { authorization: 'Bearer token' },
     body: body === undefined ? undefined : JSON.stringify(body),
+    pathParameters: options.pathParameters,
     requestContext: { authorizer: { lambda: principal } },
   } as unknown as GuardEvent;
 }
@@ -391,6 +393,68 @@ describe('handler', () => {
       logSpy.mock.calls.some((call) => (call[0] as string).includes('AttendanceRecorded')),
     ).toBe(true);
     logSpy.mockRestore();
+  });
+});
+
+describe('onBehalfHandler', () => {
+  const originalEnv = { ...process.env };
+
+  beforeEach(() => {
+    vi.resetModules();
+    process.env.VERIFIED_PERMISSIONS_POLICY_STORE_ID = 'ps-1';
+    process.env.PLATFORM_SERVICE_TABLE_NAME = 'platform-service';
+  });
+
+  afterEach(() => {
+    process.env = { ...originalEnv };
+    vi.doUnmock('@aws-sdk/client-verifiedpermissions');
+    vi.doUnmock('../dynamoClient.js');
+  });
+
+  it('records attendance for the target memberId, not the caller, when an officer is allowed by Cedar', async () => {
+    mockAuthzDecision('ALLOW');
+    const { send } = mockDynamo('OK');
+    const { onBehalfHandler } = await import('./handler.js');
+
+    const result = (await onBehalfHandler(
+      buildEvent(
+        { activityType: 'DRILL', refId: null, occurredAt: 1798000500, hours: 1 },
+        { pathParameters: { memberId: 'mbr-999' } },
+      ),
+    )) as APIGatewayProxyStructuredResultV2;
+
+    expect(result.statusCode).toBe(201);
+    const items = transactItemsFrom(send.mock.calls[1]?.[0]);
+    const attendanceItem = items.find((item) => item.entityType === 'ATTENDANCE_RECORD');
+    expect(attendanceItem?.pk).toBe('DEPT#NICHOLS#MEMBER#mbr-999');
+  });
+
+  it('denies (fails closed) when Cedar denies the on-behalf action', async () => {
+    mockAuthzDecision('DENY');
+    const { send } = mockDynamo('OK');
+    const { onBehalfHandler } = await import('./handler.js');
+
+    const result = await onBehalfHandler(
+      buildEvent(
+        { activityType: 'DRILL', occurredAt: 1, hours: 1 },
+        { pathParameters: { memberId: 'mbr-999' } },
+      ),
+    );
+
+    expect(result).toMatchObject({ statusCode: 403 });
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it('returns 404 when the memberId path parameter is missing', async () => {
+    mockAuthzDecision('ALLOW');
+    mockDynamo('OK');
+    const { onBehalfHandler } = await import('./handler.js');
+
+    const result = await onBehalfHandler(
+      buildEvent({ activityType: 'DRILL', occurredAt: 1, hours: 1 }, { pathParameters: {} }),
+    );
+
+    expect(result).toMatchObject({ statusCode: 404 });
   });
 });
 

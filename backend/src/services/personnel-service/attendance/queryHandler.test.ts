@@ -10,6 +10,7 @@ function buildEvent(
   options: {
     readonly headers?: Record<string, string> | undefined;
     readonly principal?: Record<string, unknown> | null;
+    readonly pathParameters?: Record<string, string>;
   } = {},
 ): GuardEvent {
   const principal = options.principal === null ? undefined : (options.principal ?? PRINCIPAL);
@@ -19,6 +20,7 @@ function buildEvent(
     rawPath: '/api/v1/personnel/attendance',
     rawQueryString: '',
     headers: 'headers' in options ? options.headers : { authorization: 'Bearer token' },
+    pathParameters: options.pathParameters,
     requestContext: { authorizer: { lambda: principal } },
   } as unknown as GuardEvent;
 }
@@ -146,5 +148,58 @@ describe('queryHandler', () => {
     expect(logged.originalError).toBeTruthy();
     expect(logged.reason).toBeTruthy();
     errorSpy.mockRestore();
+  });
+});
+
+describe('onBehalfHandler', () => {
+  const originalEnv = { ...process.env };
+
+  beforeEach(() => {
+    vi.resetModules();
+    process.env.VERIFIED_PERMISSIONS_POLICY_STORE_ID = 'ps-1';
+    process.env.PLATFORM_SERVICE_TABLE_NAME = 'platform-service';
+  });
+
+  afterEach(() => {
+    process.env = { ...originalEnv };
+    vi.doUnmock('@aws-sdk/client-verifiedpermissions');
+    vi.doUnmock('../dynamoClient.js');
+  });
+
+  it('queries GSI1 for the target memberId, not the caller, when Cedar allows', async () => {
+    mockAuthzDecision('ALLOW');
+    const client = mockDynamo('OK', [{ activityType: 'DRILL', occurredAt: 1 }]);
+    const { onBehalfHandler } = await import('./queryHandler.js');
+
+    const result = (await onBehalfHandler(
+      buildEvent({ pathParameters: { memberId: 'mbr-999' } }),
+    )) as APIGatewayProxyStructuredResultV2;
+
+    expect(result.statusCode).toBe(200);
+    const queryCall = client.send.mock.calls[0]?.[0] as {
+      input: { ExpressionAttributeValues: Record<string, string> };
+    };
+    expect(queryCall.input.ExpressionAttributeValues[':gsi1pk']).toBe('MEMBER#mbr-999');
+  });
+
+  it('denies (fails closed) when Cedar denies the on-behalf action', async () => {
+    mockAuthzDecision('DENY');
+    const client = mockDynamo('OK');
+    const { onBehalfHandler } = await import('./queryHandler.js');
+
+    const result = await onBehalfHandler(buildEvent({ pathParameters: { memberId: 'mbr-999' } }));
+
+    expect(result).toMatchObject({ statusCode: 403 });
+    expect(client.send).not.toHaveBeenCalled();
+  });
+
+  it('returns 404 when the memberId path parameter is missing', async () => {
+    mockAuthzDecision('ALLOW');
+    mockDynamo('OK');
+    const { onBehalfHandler } = await import('./queryHandler.js');
+
+    const result = await onBehalfHandler(buildEvent({ pathParameters: {} }));
+
+    expect(result).toMatchObject({ statusCode: 404 });
   });
 });

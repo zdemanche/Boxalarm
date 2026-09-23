@@ -3,6 +3,7 @@ import type { APIGatewayProxyResultV2 } from 'aws-lambda';
 import { TransactionCanceledException } from '@aws-sdk/client-dynamodb';
 import { TransactWriteCommand } from '@aws-sdk/lib-dynamodb';
 import {
+  notFoundProblem,
   withAuthorization,
   serviceUnavailableProblem,
   type CedarPrincipalContext,
@@ -105,9 +106,10 @@ function logAttendanceFailure(reason: string, error: unknown, traceId: string): 
   );
 }
 
-async function recordAttendance(
+async function recordAttendanceFor(
   event: GuardEvent,
-  principal: CedarPrincipalContext,
+  deptId: VerifiedDeptId,
+  memberId: string,
 ): Promise<APIGatewayProxyResultV2> {
   const traceId = extractTraceId(event);
   const input = validateAttendanceBody(event.body);
@@ -119,8 +121,6 @@ async function recordAttendance(
     );
   }
 
-  const deptId = toVerifiedDeptId(principal);
-  const memberId = principal.sub;
   const keys = buildAttendanceKeys(deptId, memberId, input.occurredAt);
   const year = new Date(input.occurredAt * 1000).getUTCFullYear();
 
@@ -212,9 +212,34 @@ async function recordAttendance(
   }
 }
 
-export const handler = withAuthorization(recordAttendance, {
+async function recordOwnAttendance(
+  event: GuardEvent,
+  principal: CedarPrincipalContext,
+): Promise<APIGatewayProxyResultV2> {
+  return recordAttendanceFor(event, toVerifiedDeptId(principal), principal.sub);
+}
+
+async function recordAttendanceOnBehalf(
+  event: GuardEvent,
+  principal: CedarPrincipalContext,
+): Promise<APIGatewayProxyResultV2> {
+  const memberId = event.pathParameters?.memberId;
+  if (!memberId) {
+    return notFoundProblem(extractTraceId(event), 'memberId path parameter is required');
+  }
+  return recordAttendanceFor(event, toVerifiedDeptId(principal), memberId);
+}
+
+export const handler = withAuthorization(recordOwnAttendance, {
   actionType: 'Boxalarm::Action',
   actionId: 'RecordAttendance',
   resourceType: 'Boxalarm::Member',
   resourceId: (event) => event.requestContext.authorizer?.lambda?.sub ?? '',
+});
+
+export const onBehalfHandler = withAuthorization(recordAttendanceOnBehalf, {
+  actionType: 'Boxalarm::Action',
+  actionId: 'RecordAttendanceOnBehalf',
+  resourceType: 'Boxalarm::Member',
+  resourceId: (event) => event.pathParameters?.memberId ?? '',
 });
