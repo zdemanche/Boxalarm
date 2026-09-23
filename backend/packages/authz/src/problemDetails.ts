@@ -61,6 +61,16 @@ export function serviceUnavailableProblem(traceId: string): ProblemResponse {
   );
 }
 
+export function dependencyUnavailableProblem(traceId: string): ProblemResponse {
+  return problemResponse(
+    503,
+    'https://boxalarm.dev/problems/dependency-unavailable',
+    'Dependency Unavailable',
+    'A required upstream dependency is temporarily unavailable.',
+    traceId,
+  );
+}
+
 export function notFoundProblem(traceId: string, detail: string): ProblemResponse {
   return problemResponse(
     404,

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   badRequestProblem,
+  dependencyUnavailableProblem,
   forbiddenProblem,
   notFoundProblem,
   serviceUnavailableProblem,
@@ -28,6 +29,26 @@ describe('serviceUnavailableProblem', () => {
     expect(body.status).toBe(503);
     expect(body.traceId).toBe('trace-xyz');
     expect(body.title).toBe('Service Unavailable');
+  });
+});
+
+describe('dependencyUnavailableProblem', () => {
+  it('returns a 503 RFC 7807 body distinct from serviceUnavailableProblem', () => {
+    const response = dependencyUnavailableProblem('trace-dep');
+    expect(response.statusCode).toBe(503);
+    expect(response.headers).toEqual({ 'content-type': 'application/problem+json' });
+    const body = JSON.parse(response.body) as {
+      status: number;
+      traceId: string;
+      type: string;
+      title: string;
+      detail: string;
+    };
+    expect(body.status).toBe(503);
+    expect(body.traceId).toBe('trace-dep');
+    expect(body.type).toBe('https://boxalarm.dev/problems/dependency-unavailable');
+    expect(body.title).toBe('Dependency Unavailable');
+    expect(body.detail).toBe('A required upstream dependency is temporarily unavailable.');
   });
 });
 
