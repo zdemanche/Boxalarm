@@ -1,36 +1,32 @@
-export interface LogFields {
-  readonly [key: string]: unknown;
-}
+import { createLogger } from '@boxalarm/logging';
 
-function emit(
-  sink: (line: string) => void,
-  level: 'info' | 'error',
+const logger = createLogger({ service: 'personnel-service' });
+
+export function logInfo(
   event: string,
   correlationId: string,
-  fields?: LogFields,
+  fields?: Record<string, unknown>,
 ): void {
-  sink(
-    JSON.stringify({
-      level,
-      event,
-      correlationId,
-      service: 'personnel-service',
-      ...fields,
-    }),
-  );
+  logger.info({ event, correlationId, ...fields });
 }
 
-export function logInfo(event: string, correlationId: string, fields?: LogFields): void {
-  emit(console.log, 'info', event, correlationId, fields);
+export function logWarn(
+  event: string,
+  correlationId: string,
+  fields?: Record<string, unknown>,
+): void {
+  logger.warn({ event, correlationId, ...fields });
 }
 
 export function logError(
   event: string,
   correlationId: string,
   error: unknown,
-  fields?: LogFields,
+  fields?: Record<string, unknown>,
 ): void {
-  emit(console.error, 'error', event, correlationId, {
+  logger.error({
+    event,
+    correlationId,
     message: error instanceof Error ? error.message : 'unknown error',
     ...fields,
   });

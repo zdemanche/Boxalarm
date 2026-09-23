@@ -4,6 +4,7 @@ import type {
   APIGatewayProxyStructuredResultV2,
 } from 'aws-lambda';
 import type { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
+import { extractTraceparent } from '@boxalarm/logging';
 import { toVerifiedDeptId } from '@boxalarm/dept-scope';
 import type { AuthorizerContext } from '../../../platform-service/authorizer/handler.js';
 import { getDocClient, readInventoryConfig } from '../../lib/dynamoDb.js';
@@ -23,6 +24,11 @@ export async function handler(
   void _context;
   void _callback;
   const correlationId = event.requestContext.requestId ?? randomUUID();
+  // W3C traceparent: propagate the caller's incoming header, or mint a fresh
+  // root-span one when this is the first hop — echoed back so the caller/tracing
+  // backend can join this response to the same trace. Working example of
+  // @boxalarm/logging's extractTraceparent; not yet adopted by other handlers.
+  const traceparent = extractTraceparent(event.headers);
   try {
     requireAdminGroup(event.requestContext.authorizer.lambda);
     const deptId = toVerifiedDeptId(event.requestContext.authorizer.lambda);
@@ -45,7 +51,7 @@ export async function handler(
     emitMetric('EquipmentAssetCreated');
     return {
       statusCode: 201,
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', traceparent },
       body: JSON.stringify(asset),
     };
   } catch (error) {
@@ -55,6 +61,7 @@ export async function handler(
       message: error instanceof Error ? error.message : String(error),
     });
     emitMetric('EquipmentAssetCreateFailed');
-    return toProblemResponse(error, event.rawPath, correlationId);
+    const problem = toProblemResponse(error, event.rawPath, correlationId);
+    return { ...problem, headers: { ...problem.headers, traceparent } };
   }
 }

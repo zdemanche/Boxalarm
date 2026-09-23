@@ -31,7 +31,7 @@ function emitRevocationMetric(outcome: 'Succeeded' | 'Failed' | 'Skipped', reaso
         Timestamp: Date.now(),
         CloudWatchMetrics: [
           {
-            Namespace: 'Boxalarm/SessionRevocation',
+            Namespace: 'Boxalarm/session-revocation',
             Dimensions: reason ? [[], ['Reason']] : [[]],
             Metrics: [{ Name: `Revocation${outcome}`, Unit: 'Count' }],
           },

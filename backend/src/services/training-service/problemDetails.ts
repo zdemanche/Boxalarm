@@ -30,6 +30,15 @@ function problemResponse(
 export const badRequestProblem = (traceId: string, detail: string): ProblemResponse =>
   problemResponse(400, 'https://boxalarm.dev/problems/bad-request', 'Bad Request', detail, traceId);
 
+export const certificationNotFoundProblem = (traceId: string): ProblemResponse =>
+  problemResponse(
+    404,
+    'https://boxalarm.dev/problems/certification-not-found',
+    'Certification Not Found',
+    'The requested certification does not exist.',
+    traceId,
+  );
+
 export const eventNotFoundProblem = (traceId: string): ProblemResponse =>
   problemResponse(
     404,

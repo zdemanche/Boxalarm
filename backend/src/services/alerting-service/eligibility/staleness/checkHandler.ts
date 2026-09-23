@@ -3,7 +3,7 @@ import { emitEmf } from '@boxalarm/metrics';
 import { createDynamoClient, readAlertingConfig } from '../dynamoClient.js';
 import { queryEligiblePartition } from '../selector.js';
 
-const METRIC_NAMESPACE = 'Boxalarm/AlertingEligibility';
+const METRIC_NAMESPACE = 'Boxalarm/alerting-eligibility';
 const STALENESS_THRESHOLD_SECONDS = 15 * 60;
 const STALENESS_THRESHOLD_MILLISECONDS = STALENESS_THRESHOLD_SECONDS * 1000;
 

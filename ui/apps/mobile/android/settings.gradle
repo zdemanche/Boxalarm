@@ -1,0 +1,8 @@
+// npm workspaces hoist node_modules to the repo root (boxalarm-ui/node_modules), three levels
+// up from here — not the RN template's default single-level-up assumption.
+pluginManagement { includeBuild("../../../node_modules/@react-native/gradle-plugin") }
+plugins { id("com.facebook.react.settings") }
+extensions.configure(com.facebook.react.ReactSettingsExtension){ ex -> ex.autolinkLibrariesFromCommand() }
+rootProject.name = "Boxalarm"
+include ':app'
+includeBuild('../../../node_modules/@react-native/gradle-plugin')

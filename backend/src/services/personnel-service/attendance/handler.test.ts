@@ -40,24 +40,41 @@ function mockAuthzDecision(decision: 'ALLOW' | 'DENY' | 'ERROR'): void {
   });
 }
 
-function mockDynamo(behavior: 'OK' | 'CONFLICT' | 'ERROR'): { send: ReturnType<typeof vi.fn> } {
-  const send = vi.fn();
-  if (behavior === 'OK') {
-    send.mockResolvedValue({});
-  } else if (behavior === 'CONFLICT') {
-    send.mockImplementation(async () => {
-      const { ConditionalCheckFailedException } = await import('@aws-sdk/client-dynamodb');
-      throw new ConditionalCheckFailedException({ message: 'conflict', $metadata: {} });
-    });
-  } else {
-    send.mockRejectedValue(new Error('DynamoDB unavailable'));
-  }
-  const client = { send };
+type DynamoSend = ReturnType<typeof vi.fn>;
+
+function mockDynamoWithSend(send: DynamoSend): void {
   vi.doMock('../dynamoClient.js', async (importOriginal) => {
     const actual = await importOriginal<typeof import('../dynamoClient.js')>();
-    return { ...actual, createDynamoClient: () => client };
+    return { ...actual, createDynamoClient: () => ({ send }) };
   });
-  return client;
+}
+
+function mockDynamo(behavior: 'OK' | 'CONFLICT' | 'ERROR'): { send: DynamoSend } {
+  const send = vi.fn(async (command: { constructor: { name: string } }) => {
+    if (command.constructor.name === 'GetCommand') {
+      return {};
+    }
+    if (behavior === 'OK') {
+      return {};
+    }
+    if (behavior === 'CONFLICT') {
+      const { TransactionCanceledException } = await import('@aws-sdk/client-dynamodb');
+      throw new TransactionCanceledException({
+        message: 'conflict',
+        $metadata: {},
+        CancellationReasons: [{ Code: 'ConditionalCheckFailed' }],
+      });
+    }
+    throw new Error('DynamoDB unavailable');
+  });
+  mockDynamoWithSend(send);
+  return { send };
+}
+
+function transactItemsFrom(call: unknown): Record<string, unknown>[] {
+  const input = (call as { input: { TransactItems: { Put: { Item: Record<string, unknown> } }[] } })
+    .input;
+  return input.TransactItems.map((entry) => entry.Put.Item);
 }
 
 describe('handler', () => {
@@ -79,7 +96,7 @@ describe('handler', () => {
     'creates an ATTENDANCE_RECORD under the member partition for activityType %s (AC1)',
     async (activityType) => {
       mockAuthzDecision('ALLOW');
-      const client = mockDynamo('OK');
+      const { send } = mockDynamo('OK');
       const { handler } = await import('./handler.js');
 
       const result = (await handler(
@@ -92,19 +109,17 @@ describe('handler', () => {
       )) as APIGatewayProxyStructuredResultV2;
 
       expect(result.statusCode).toBe(201);
-      const putCall = client.send.mock.calls[0]?.[0] as {
-        input: { Item: Record<string, unknown> };
-      };
-      expect(putCall.input.Item.pk).toBe('DEPT#NICHOLS#MEMBER#mbr-102');
-      expect(putCall.input.Item.sk).toBe('ATTENDANCE#1798000500');
-      expect(putCall.input.Item.entityType).toBe('ATTENDANCE_RECORD');
-      expect(putCall.input.Item.activityType).toBe(activityType);
+      const items = transactItemsFrom(send.mock.calls[1]?.[0]);
+      const attendanceItem = items.find((item) => item.entityType === 'ATTENDANCE_RECORD');
+      expect(attendanceItem?.pk).toBe('DEPT#NICHOLS#MEMBER#mbr-102');
+      expect(attendanceItem?.sk).toBe('ATTENDANCE#1798000500');
+      expect(attendanceItem?.activityType).toBe(activityType);
     },
   );
 
   it('links a CALL attendance record back to its originating dispatch via refId (AC2)', async () => {
     mockAuthzDecision('ALLOW');
-    const client = mockDynamo('OK');
+    const { send } = mockDynamo('OK');
     const { handler } = await import('./handler.js');
 
     await handler(
@@ -116,27 +131,138 @@ describe('handler', () => {
       }),
     );
 
-    const putCall = client.send.mock.calls[0]?.[0] as { input: { Item: Record<string, unknown> } };
-    expect(putCall.input.Item.refId).toBe('dispatch-4471');
+    const items = transactItemsFrom(send.mock.calls[1]?.[0]);
+    const attendanceItem = items.find((item) => item.entityType === 'ATTENDANCE_RECORD');
+    expect(attendanceItem?.refId).toBe('dispatch-4471');
   });
 
   it('constructs GSI1 as MEMBER#{memberId} / ATTENDANCE_RECORD#{occurredAt} (AC3, ticket test note)', async () => {
     mockAuthzDecision('ALLOW');
-    const client = mockDynamo('OK');
+    const { send } = mockDynamo('OK');
     const { handler } = await import('./handler.js');
 
     await handler(
       buildEvent({ activityType: 'DRILL', refId: null, occurredAt: 1798000500, hours: 1 }),
     );
 
-    const putCall = client.send.mock.calls[0]?.[0] as { input: { Item: Record<string, unknown> } };
-    expect(putCall.input.Item.gsi1pk).toBe('MEMBER#mbr-102');
-    expect(putCall.input.Item.gsi1sk).toBe('ATTENDANCE_RECORD#1798000500');
+    const items = transactItemsFrom(send.mock.calls[1]?.[0]);
+    const attendanceItem = items.find((item) => item.entityType === 'ATTENDANCE_RECORD');
+    expect(attendanceItem?.gsi1pk).toBe('MEMBER#mbr-102');
+    expect(attendanceItem?.gsi1sk).toBe('ATTENDANCE_RECORD#1798000500');
+  });
+
+  it('awards 0 points and writes no LOSAP_POINT_ENTRY when no rule config exists (AC5-adjacent, fail-closed)', async () => {
+    mockAuthzDecision('ALLOW');
+    const { send } = mockDynamo('OK');
+    const { handler } = await import('./handler.js');
+
+    const result = (await handler(
+      buildEvent({ activityType: 'DRILL', refId: null, occurredAt: 1798000500, hours: 1 }),
+    )) as APIGatewayProxyStructuredResultV2;
+
+    const body = JSON.parse(result.body ?? '{}') as { losapPointsAwarded: number };
+    expect(body.losapPointsAwarded).toBe(0);
+    const items = transactItemsFrom(send.mock.calls[1]?.[0]);
+    expect(items).toHaveLength(1);
+  });
+
+  it('signals the skip via a metric and a log line when no LOSAP config exists (P6)', async () => {
+    mockAuthzDecision('ALLOW');
+    mockDynamo('OK');
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    const { handler } = await import('./handler.js');
+
+    await handler(
+      buildEvent({ activityType: 'DRILL', refId: null, occurredAt: 1798000500, hours: 1 }),
+    );
+
+    expect(
+      logSpy.mock.calls.some((call) => (call[0] as string).includes('LosapAccrualSkipped')),
+    ).toBe(true);
+    expect(
+      logSpy.mock.calls.some((call) => (call[0] as string).includes('losap.accrual.skipped')),
+    ).toBe(true);
+    logSpy.mockRestore();
+  });
+
+  it('computes points from the active rule and writes a LOSAP_POINT_ENTRY referencing sourceRefId and ruleVersionId (AC2)', async () => {
+    mockAuthzDecision('ALLOW');
+    const send = vi.fn((command: { constructor: { name: string } }) => {
+      if (command.constructor.name === 'GetCommand') {
+        return Promise.resolve({
+          Item: {
+            value: { ruleVersionId: 'RULE-2026', pointsByActivityType: { DRILL: 3 } },
+            version: 1,
+          },
+        });
+      }
+      return Promise.resolve({});
+    });
+    mockDynamoWithSend(send);
+    const { handler } = await import('./handler.js');
+
+    const result = (await handler(
+      buildEvent({ activityType: 'DRILL', refId: null, occurredAt: 1798000500, hours: 1 }),
+    )) as APIGatewayProxyStructuredResultV2;
+
+    expect(result.statusCode).toBe(201);
+    const body = JSON.parse(result.body ?? '{}') as { losapPointsAwarded: number };
+    expect(body.losapPointsAwarded).toBe(3);
+
+    const items = transactItemsFrom(send.mock.calls[1]?.[0]);
+    const attendanceItem = items.find((item) => item.entityType === 'ATTENDANCE_RECORD');
+    const losapItem = items.find((item) => item.entityType === 'LOSAP_POINT_ENTRY');
+    expect(attendanceItem?.losapPointsAwarded).toBe(3);
+    expect(losapItem?.pk).toBe('DEPT#NICHOLS#MEMBER#mbr-102');
+    expect(losapItem?.points).toBe(3);
+    expect(losapItem?.sourceRefId).toBe('ATTENDANCE#1798000500');
+    expect(losapItem?.ruleVersionId).toBe('RULE-2026');
+    expect(losapItem?.gsi1pk).toBe('MEMBER#mbr-102');
+  });
+
+  it("retains each LOSAP_POINT_ENTRY's own ruleVersionId across a mid-year rule change (AC5, core-harm)", async () => {
+    mockAuthzDecision('ALLOW');
+    const send = vi
+      .fn()
+      .mockResolvedValueOnce({
+        Item: {
+          value: { ruleVersionId: 'RULE-2026-A', pointsByActivityType: { DRILL: 2 } },
+          version: 1,
+        },
+      })
+      .mockResolvedValueOnce({})
+      .mockResolvedValueOnce({
+        Item: {
+          value: { ruleVersionId: 'RULE-2026-B', pointsByActivityType: { DRILL: 5 } },
+          version: 2,
+        },
+      })
+      .mockResolvedValueOnce({});
+    mockDynamoWithSend(send);
+    const { handler } = await import('./handler.js');
+
+    await handler(
+      buildEvent({ activityType: 'DRILL', refId: null, occurredAt: 1798000500, hours: 1 }),
+    );
+    await handler(
+      buildEvent({ activityType: 'DRILL', refId: null, occurredAt: 1798100000, hours: 1 }),
+    );
+
+    const firstEntries = transactItemsFrom(send.mock.calls[1]?.[0]).filter(
+      (item) => item.entityType === 'LOSAP_POINT_ENTRY',
+    );
+    const secondEntries = transactItemsFrom(send.mock.calls[3]?.[0]).filter(
+      (item) => item.entityType === 'LOSAP_POINT_ENTRY',
+    );
+    expect(firstEntries[0]?.ruleVersionId).toBe('RULE-2026-A');
+    expect(firstEntries[0]?.points).toBe(2);
+    expect(secondEntries[0]?.ruleVersionId).toBe('RULE-2026-B');
+    expect(secondEntries[0]?.points).toBe(5);
   });
 
   it('denies (fails closed) when Cedar denies the action', async () => {
     mockAuthzDecision('DENY');
-    const client = mockDynamo('OK');
+    const { send } = mockDynamo('OK');
     const { handler } = await import('./handler.js');
 
     const result = await handler(
@@ -144,7 +270,7 @@ describe('handler', () => {
     );
 
     expect(result).toMatchObject({ statusCode: 403 });
-    expect(client.send).not.toHaveBeenCalled();
+    expect(send).not.toHaveBeenCalled();
   });
 
   it('denies (fails closed) when no Authorization header is present', async () => {
@@ -161,13 +287,13 @@ describe('handler', () => {
 
   it('denies (fails closed) with 503, never a defaulted allow, when Verified Permissions is unavailable (core-harm)', async () => {
     mockAuthzDecision('ERROR');
-    const client = mockDynamo('OK');
+    const { send } = mockDynamo('OK');
     const { handler } = await import('./handler.js');
 
     const result = await handler(buildEvent({ activityType: 'DRILL', occurredAt: 1, hours: 1 }));
 
     expect(result).toMatchObject({ statusCode: 503 });
-    expect(client.send).not.toHaveBeenCalled();
+    expect(send).not.toHaveBeenCalled();
   });
 
   it('returns 400 on an empty/null body', async () => {
@@ -202,6 +328,17 @@ describe('handler', () => {
 
     expect(wrongType).toMatchObject({ statusCode: 400 });
     expect(negative).toMatchObject({ statusCode: 400 });
+  });
+
+  it('returns 503 (fail-closed, no partial state) when the LOSAP config lookup fails', async () => {
+    mockAuthzDecision('ALLOW');
+    const send = vi.fn().mockRejectedValue(new Error('DynamoDB unavailable'));
+    mockDynamoWithSend(send);
+    const { handler } = await import('./handler.js');
+
+    const result = await handler(buildEvent({ activityType: 'DRILL', occurredAt: 1, hours: 1 }));
+
+    expect(result).toMatchObject({ statusCode: 503 });
   });
 
   it('returns 503 (fail-closed, no partial state) when the DynamoDB write fails', async () => {
