@@ -10,7 +10,12 @@ export interface BoxalarmUserPoolClientArgs {
   callbackUrls: string[];
   /** OAuth logout URLs (mobile: boxalarm://auth; web: derived from webOrigin). */
   logoutUrls: string[];
-  /** Optional Cognito explicit auth flows (SRP, refresh, etc.). */
+  /**
+   * Cognito explicit auth flows (SRP, refresh, etc.). Defaults to
+   * ["ALLOW_USER_SRP_AUTH", "ALLOW_REFRESH_TOKEN_AUTH"] when omitted — this component's
+   * contract is that OAuth+PKCE is applied uniformly, so the default must not fall
+   * back to Cognito's own (unreviewed) defaults.
+   */
   explicitAuthFlows?: string[];
   /**
    * Always false — public clients only (no client secret). Typed as `false` so
@@ -25,6 +30,8 @@ export interface BoxalarmUserPoolClientArgs {
 // this component rather than instantiating aws.cognito.UserPoolClient directly, so
 // custom:deptId self-service write access is structurally impossible, and OAuth+PKCE
 // (no client secret) is applied uniformly.
+const DEFAULT_EXPLICIT_AUTH_FLOWS = ["ALLOW_USER_SRP_AUTH", "ALLOW_REFRESH_TOKEN_AUTH"];
+
 export class BoxalarmUserPoolClient extends pulumi.ComponentResource {
   public readonly userPoolClient: aws.cognito.UserPoolClient;
 
@@ -59,9 +66,7 @@ export class BoxalarmUserPoolClient extends pulumi.ComponentResource {
         logoutUrls: args.logoutUrls,
         supportedIdentityProviders: ["COGNITO"],
         preventUserExistenceErrors: "ENABLED",
-        ...(args.explicitAuthFlows !== undefined
-          ? { explicitAuthFlows: args.explicitAuthFlows }
-          : {}),
+        explicitAuthFlows: args.explicitAuthFlows ?? DEFAULT_EXPLICIT_AUTH_FLOWS,
         ...(args.enableTokenRevocation !== undefined
           ? { enableTokenRevocation: args.enableTokenRevocation }
           : {}),

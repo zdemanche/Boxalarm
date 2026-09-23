@@ -85,6 +85,15 @@ describe("AlertingTable", () => {
     expect(sse?.kmsKeyArn).toBe(cmkArn);
   });
 
+  it("enables deletionProtectionEnabled — a replace-forcing schema change on this table is a total alert-path outage", async () => {
+    const { AlertingTable } = await import("../../components/data/alerting-table");
+    const alerting = new AlertingTable("alerting-deletion-protection", { env: "dev" });
+    await settle(alerting);
+
+    const deletionProtectionEnabled = await resolve(alerting.table.deletionProtectionEnabled);
+    expect(deletionProtectionEnabled).toBe(true);
+  });
+
   it("declares GSI1 and GSI2 with ALL projection", async () => {
     const { AlertingTable } = await import("../../components/data/alerting-table");
     const alerting = new AlertingTable("alerting-gsi", { env: "prod" });
