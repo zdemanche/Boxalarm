@@ -9,15 +9,3 @@ export function readMemberServiceConfig(env: NodeJS.ProcessEnv): MemberServiceCo
   }
   return { tableName };
 }
-
-export interface OutboxPublisherConfig extends MemberServiceConfig {
-  readonly busName: string;
-}
-
-export function readOutboxPublisherConfig(env: NodeJS.ProcessEnv): OutboxPublisherConfig {
-  const busName = env.PLATFORM_BUS_NAME;
-  if (!busName) {
-    throw new Error('PLATFORM_BUS_NAME is required and was not set');
-  }
-  return { ...readMemberServiceConfig(env), busName };
-}

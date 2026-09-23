@@ -60,7 +60,7 @@ function emitPersonnelMetric(
         Timestamp: Date.now(),
         CloudWatchMetrics: [
           {
-            Namespace: 'Boxalarm/Personnel',
+            Namespace: 'Boxalarm/personnel',
             Dimensions: reason ? [[], ['Reason']] : [[]],
             Metrics: [{ Name: outcome, Unit: 'Count' }],
           },

@@ -27,6 +27,7 @@ export interface OutOfServiceSummary {
 }
 
 export interface ApparatusListItem extends ApparatusRecord {
+  readonly apparatusId: string;
   readonly outOfService?: OutOfServiceSummary;
 }
 
@@ -86,7 +87,7 @@ function emitApparatusMetric(outcome: string, reason?: string): void {
         Timestamp: Date.now(),
         CloudWatchMetrics: [
           {
-            Namespace: 'Boxalarm/Apparatus',
+            Namespace: 'Boxalarm/apparatus',
             Dimensions: reason ? [[], ['Reason']] : [[]],
             Metrics: [{ Name: outcome, Unit: 'Count' }],
           },
@@ -112,7 +113,7 @@ async function withRepositoryErrorHandling<T>(
   }
 }
 
-interface ApparatusItem extends ApparatusRecord {
+export interface ApparatusItem extends ApparatusRecord {
   readonly apparatusId: string;
   readonly outOfServiceReason?: string;
   readonly outOfServiceStartAt?: number;
@@ -122,7 +123,7 @@ function apparatusIdFromRegistryKey(registryItemKey: string): string {
   return registryItemKey.slice(registryItemKey.lastIndexOf('#') + 1);
 }
 
-async function findApparatusItem(
+export async function findApparatusItem(
   client: DynamoDBDocumentClient,
   tableName: string,
   deptId: VerifiedDeptId,
@@ -347,14 +348,16 @@ export async function listApparatus(
     const items = output.Items ?? [];
     const filtered = statusFilter ? items.filter((item) => item.status === statusFilter) : items;
     return filtered.map((item): ApparatusListItem => {
+      const apparatusId = apparatusIdFromRegistryKey(item.pk as string);
       const unitId = item.unitId as string;
       const type = item.type as string;
       const status = item.status as ApparatusStatus;
       const startAt = item.outOfServiceStartAt as number | undefined;
       if (status !== 'OUT_OF_SERVICE' || startAt === undefined) {
-        return { unitId, type, status };
+        return { apparatusId, unitId, type, status };
       }
       return {
+        apparatusId,
         unitId,
         type,
         status,
