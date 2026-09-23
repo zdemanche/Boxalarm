@@ -65,12 +65,12 @@ describe('inventory ppe issue handler', () => {
     process.env = { ...originalEnv };
   });
 
-  it('rejects a request with no bearer token on the real exported handler (entrypoint)', async () => {
+  it('returns 401 (fail-closed) for a request with no bearer token on the real exported handler (entrypoint)', async () => {
     const { handler } = await import('./handler.js');
 
     const result = await handler(buildEvent(undefined, ADMIN, { memberId: 'MBR-1' }, VALID_BODY));
 
-    expect(result).toMatchObject({ statusCode: 403 });
+    expect(result).toMatchObject({ statusCode: 401 });
   });
 
   it('rejects a non-admin principal via Cedar deny (403)', async () => {

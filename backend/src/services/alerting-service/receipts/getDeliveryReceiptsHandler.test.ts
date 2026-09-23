@@ -101,13 +101,13 @@ describe('getDeliveryReceiptsHandler', () => {
     vi.doUnmock('./logger.js');
   });
 
-  it('returns 403 on a missing/malformed bearer token (fail-secure)', async () => {
+  it('returns 401 (fail-closed) on a missing/malformed bearer token (fail-secure)', async () => {
     mockVerifiedPermissions(() => Promise.resolve({ decision: 'ALLOW' }));
     const { handler } = await import('./getDeliveryReceiptsHandler.js');
     const result = await handler(
       buildEvent(OFFICER, {}, { dispatchId: 'NICHOLS-4471-1798000000' }),
     );
-    expect(result).toMatchObject({ statusCode: 403 });
+    expect(result).toMatchObject({ statusCode: 401 });
   });
 
   it('returns 503 when Verified Permissions is unavailable (fail-secure, never a defaulted allow)', async () => {

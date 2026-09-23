@@ -153,25 +153,25 @@ describe('handler (audit query entrypoint)', () => {
     expect(client.send).not.toHaveBeenCalled();
   });
 
-  it('returns 403 (fail-closed) when the request has no authenticated principal', async () => {
+  it('returns 401 (fail-closed) when the request has no authenticated principal', async () => {
     mockAuthzDecision('ALLOW');
     const client = mockDynamo('OK');
     const { handler } = await import('./handler.js');
 
     const result = await handler(buildEvent({ memberId: 'mbr-102' }, { principal: null }));
 
-    expect(result).toMatchObject({ statusCode: 403 });
+    expect(result).toMatchObject({ statusCode: 401 });
     expect(client.send).not.toHaveBeenCalled();
   });
 
-  it('returns 403 (fail-closed) when the request has no bearer token', async () => {
+  it('returns 401 (fail-closed) when the request has no bearer token', async () => {
     mockAuthzDecision('ALLOW');
     const client = mockDynamo('OK');
     const { handler } = await import('./handler.js');
 
     const result = await handler(buildEvent({ memberId: 'mbr-102' }, { headers: {} }));
 
-    expect(result).toMatchObject({ statusCode: 403 });
+    expect(result).toMatchObject({ statusCode: 401 });
     expect(client.send).not.toHaveBeenCalled();
   });
 

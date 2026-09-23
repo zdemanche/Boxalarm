@@ -79,7 +79,7 @@ describe('getComplianceHandler (entrypoint)', () => {
     expect(send).not.toHaveBeenCalled();
   });
 
-  it('returns 403 when the bearer token is missing (AC3)', async () => {
+  it('returns 401 (fail-closed) when the bearer token is missing (AC3)', async () => {
     const createGetComplianceHandler = await importHandler();
     const handler = createGetComplianceHandler({
       client: fakeDynamoClient(() => Promise.resolve({ Items: [] })),
@@ -88,7 +88,7 @@ describe('getComplianceHandler (entrypoint)', () => {
 
     const result = await handler(buildEvent({ from: '1798000000', to: '1798100000' }, ADMIN, {}));
 
-    expect(result).toMatchObject({ statusCode: 403 });
+    expect(result).toMatchObject({ statusCode: 401 });
   });
 
   it('returns 503 fail-closed when Verified Permissions is unavailable (AC3)', async () => {

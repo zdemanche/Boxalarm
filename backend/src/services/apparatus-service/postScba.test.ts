@@ -107,14 +107,14 @@ async function importHandler() {
 }
 
 describe('postScba handler', () => {
-  it('returns 403 forbidden when the bearer token is missing', async () => {
+  it('returns 401 (fail-closed) when the bearer token is missing', async () => {
     const createPostScbaHandler = await importHandler();
     const handler = createPostScbaHandler({
       client: fakeDynamoClient({ apparatusExists: true }),
       authzClient: fakeAuthzClient('ALLOW'),
     });
     const result = await handler(buildEvent('{}', 'ENGINE-2', PRINCIPAL, {}));
-    expect(result).toMatchObject({ statusCode: 403 });
+    expect(result).toMatchObject({ statusCode: 401 });
   });
 
   it('returns 403 forbidden on a Cedar deny', async () => {
