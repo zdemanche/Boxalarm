@@ -24,6 +24,8 @@ export interface ServiceLambdaArgs {
   /** Forbidden for alerting-service — ENI cold start is unacceptable on the alert path. */
   vpcConfig?: pulumi.Input<aws.types.input.lambda.FunctionVpcConfig>;
   roleName?: string;
+  /** Caps this role's effective permissions regardless of its own policy (E1-S13-INFRA). */
+  permissionsBoundaryArn?: pulumi.Input<string>;
 }
 
 /**
@@ -68,6 +70,7 @@ export class ServiceLambda extends pulumi.ComponentResource {
             },
           ],
         }),
+        permissionsBoundary: args.permissionsBoundaryArn,
       },
       { parent: this },
     );
