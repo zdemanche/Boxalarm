@@ -27,7 +27,7 @@ function emitSnapshotMetric(outcome: 'Updated' | 'Stale' | 'Failed'): void {
         Timestamp: Date.now(),
         CloudWatchMetrics: [
           {
-            Namespace: 'Boxalarm/PushToken',
+            Namespace: 'Boxalarm/push-token',
             Dimensions: [[]],
             Metrics: [{ Name: `EligibilitySnapshot${outcome}`, Unit: 'Count' }],
           },

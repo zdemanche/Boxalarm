@@ -1,6 +1,7 @@
 import { ConditionalCheckFailedException } from '@aws-sdk/client-dynamodb';
-import { QueryCommand, UpdateCommand, type DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
+import { UpdateCommand, type DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
 import { buildDeptScopedPk, type VerifiedDeptId } from '@boxalarm/dept-scope';
+import { queryShiftItems } from './coverageRepository.js';
 
 export type DutyShiftStatus = 'OPEN' | 'PARTIALLY_FILLED' | 'FULL';
 
@@ -20,15 +21,7 @@ export async function recalculateShiftStatus(
   const pk = buildDeptScopedPk(deptId, 'SHIFT', shiftId);
 
   for (let attempt = 0; attempt < MAX_RECALCULATE_ATTEMPTS; attempt += 1) {
-    const result = await doc.send(
-      new QueryCommand({
-        TableName: tableName,
-        KeyConditionExpression: 'pk = :shiftPk',
-        ExpressionAttributeValues: { ':shiftPk': pk },
-        ConsistentRead: true,
-      }),
-    );
-    const items = result.Items ?? [];
+    const items = await queryShiftItems(doc, tableName, pk);
     const shift = items.find((item) => item.sk === 'METADATA');
     if (!shift) {
       return { kind: 'NOT_FOUND' };

@@ -31,6 +31,16 @@ export function apparatusNotFoundProblem(traceId: string): ProblemResponse {
   );
 }
 
+export function checklistRunConflictProblem(traceId: string): ProblemResponse {
+  return problemResponse(
+    409,
+    'https://boxalarm.dev/problems/checklist-run-conflict',
+    'Conflict',
+    'A different checklist run already exists for this apparatus and completion time.',
+    traceId,
+  );
+}
+
 export function validationProblem(
   traceId: string,
   errors: readonly ValidationFieldError[],
