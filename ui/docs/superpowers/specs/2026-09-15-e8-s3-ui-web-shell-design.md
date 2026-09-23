@@ -1,6 +1,6 @@
 # E8-S3-UI — Web shell + role source fix
 
-Status: approved by issue #85 ACs + architecture.md Frontend §§4.1, 7.1 (autonomous cloud agent; interactive brainstorming gate skipped per cloud-agent no-clarification rule). Parent: boxalarm-backend#120.
+Status: approved by issue #85 ACs + architecture.md Frontend §§4.1, 7.1 (autonomous cloud agent; interactive brainstorming gate skipped per cloud-agent no-clarification rule). Parent: #103.
 
 ## Problem
 

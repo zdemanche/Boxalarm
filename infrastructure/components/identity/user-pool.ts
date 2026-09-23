@@ -7,7 +7,7 @@ export interface BoxalarmUserPoolArgs {
   env: string;
 }
 
-// boxalarm-docs#115: the shared Lambda authorizer in boxalarm-backend reads deptId
+// #180: the shared Lambda authorizer in boxalarm-backend reads deptId
 // only from the verified ACCESS token — never a header, body, or the ID token — so
 // this is the sole producer of that value. Every field here exists to satisfy one of
 // #115's acceptance criteria; see the inline notes below for which.

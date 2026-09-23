@@ -10,7 +10,7 @@ import type { HydrantStatus } from './hydrantKeys.js';
 import { problemResponse } from './httpProblem.js';
 import { logError } from './logger.js';
 
-// boxalarm-docs#71 / E5-S3 review: architecture.md marks hydrant writes officer-scoped
+// #77 / E5-S3 review: architecture.md marks hydrant writes officer-scoped
 // (PUT is Cognito(admin)); a hand-rolled "any non-empty cognito:groups" check let any
 // authenticated member create/mutate hydrant records. E8-S3's Cedar authorization
 // (packages/authz, merged) is now available, so this uses the real IsAuthorizedWithToken

@@ -1,23 +1,29 @@
-name: CI
+name: infrastructure
 
 on:
   push:
     branches: [main]
+    paths: ['infrastructure/**', '.github/workflows/infrastructure.yml']
   pull_request:
+    paths: ['infrastructure/**', '.github/workflows/infrastructure.yml']
 
 concurrency:
-  group: ci-${{ github.ref }}
+  group: infrastructure-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   verify:
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: infrastructure
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
+          cache-dependency-path: infrastructure/package-lock.json
       - run: npm ci
       - run: npm run lint
       - run: npm run format

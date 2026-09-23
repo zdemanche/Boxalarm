@@ -33,4 +33,4 @@ Alert receipt must not depend on the app being foregrounded, recently opened, or
 
 ## Getting started
 
-Not yet scaffolded — see [#1](https://github.com/zdemanche/boxalarm-ui/issues/1).
+Not yet scaffolded — see [#115](https://github.com/zdemanche/Boxalarm-monorepo/issues/115).

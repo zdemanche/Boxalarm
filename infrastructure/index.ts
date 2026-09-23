@@ -22,7 +22,7 @@ const config = new Config("boxalarm-infra");
 export const env = config.require("env");
 export const webOrigin = config.require("webOrigin");
 
-// boxalarm-docs#115 / #6: base identity + pre-token-generation trigger that puts
+// #180 / #6: base identity + pre-token-generation trigger that puts
 // custom:deptId on the ACCESS token for the shared authorizer.
 export const identity = new BoxalarmUserPool("identity", { env });
 export const userPoolId = identity.userPool.id;

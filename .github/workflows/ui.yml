@@ -1,23 +1,29 @@
-name: CI
+name: ui
 
 on:
   push:
     branches: [main]
+    paths: ['ui/**', '.github/workflows/ui.yml']
   pull_request:
+    paths: ['ui/**', '.github/workflows/ui.yml']
 
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ui-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   verify:
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ui
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
+          cache-dependency-path: ui/package-lock.json
       - run: npm ci
       - run: npm run lint
       - run: npm run format
