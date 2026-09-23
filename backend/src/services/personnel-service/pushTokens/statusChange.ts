@@ -46,7 +46,7 @@ function emitMemberStatusMetric(outcome: 'Changed' | 'Failed', reason?: string):
         Timestamp: Date.now(),
         CloudWatchMetrics: [
           {
-            Namespace: 'Boxalarm/PushToken',
+            Namespace: 'Boxalarm/push-token',
             Dimensions: reason ? [[], ['Reason']] : [[]],
             Metrics: [{ Name: `MemberStatus${outcome}`, Unit: 'Count' }],
           },

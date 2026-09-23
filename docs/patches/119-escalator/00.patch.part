@@ -1,0 +1,28 @@
+--- a/docs/architecture.md
++++ b/docs/architecture.md
+@@ -170,17 +170,16 @@
+   FanOut -->|conditional put per\ndispatchId#toneSequence#memberId#channel - N1.4| AlertDB
+   FanOut --> PushQ[[SQS push-queue]]
+   FanOut --> SmsQ[[SQS sms-queue]]
+-  FanOut --> VoiceQ[[SQS voice-queue]]
+ 
+   PushQ --> PushWorker[Push Worker Lambda] --> APNs[("APNs / FCM")]
+   SmsQ --> SmsWorker[SMS Worker Lambda] --> SMSVendor[("SMS vendor\n(non-AWS, TBD)")]
+-  VoiceQ --> VoiceWorker[Voice Worker Lambda] --> VoiceVendor[("Voice vendor\n(distinct from SMS, TBD)")]
++  VoiceQ[[SQS voice-queue]] --> VoiceWorker[Voice Worker Lambda] --> VoiceVendor[("Voice vendor\n(distinct from SMS, TBD)")]
+ 
+   APNs -.->|delivery/open receipt webhook| AlertDB
+   SMSVendor -.->|delivery status webhook| AlertDB
+   VoiceVendor -.->|call outcome webhook| AlertDB
+ 
+-  Escalator[Escalation Scheduler\nStep Functions / EventBridge Scheduler\npolls ack status per member, per tone] -->|"no ack on push OR sms\nat T+75s (N1.2: primary tier\nis parallel, not sequential)"| VoiceQ
++  Escalator[Escalation Scheduler\nEventBridge Scheduler\nvoice tier only — gated on no ack\nacross push AND sms at T+N] -->|"no ack on push AND sms\nat T+75s (N1.2: primary tier\nis parallel; voice is sole escalation)"| VoiceQ
+ 
+   ToneEval[Tone Evaluator\nEventBridge Scheduler one-time,\ndept-level, T+3:00 fires toneSequence=2\nT+6:00 fires toneSequence=3\nliteral in each schedule's payload] -->|predicate unmet:\nre-invoke Fan-Out with the\ntoneSequence from this payload| FanOut
+   AlertDB -->|roster + quals + ALERT_RULES_COPY\nin-table read (N1), N1.5-safe| ToneEval
+@@ -201,7 +200,7 @@
+ > **Exactly-once key (reconciled — CANONICAL, amended for department-level escalation — see §Department tone ladder below).** The enforced invariant is a DynamoDB conditional put on **`{dispatchId}#{toneSequence}#{memberId}#{channel}`** — per-channel, per-tone granularity. `toneSequence` (`1`|`2`|`3`) identifies which rung of the department-level tone ladder produced this send: tone 1 is the original CAD-triggered fan-out at T+0; tones 2/3 are department-level re-tones. This note is the authority wherever a section says otherwise (`dispatchId#memberId` alone is **wrong**, and `dispatchId#memberId#channel` without the tone component is now **also wrong** — both are silent-suppression defects and must not be implemented).
+ >
+ > - **Item shape:** `sk = RECEIPT#{memberId}#{channel}#{toneSequence}`, `idempotencyKey = {dispatchId}#{toneSequence}#{memberId}#{channel}`, guarded by `attribute_not_exists(idempotencyKey)`.
+-> - **Why per-channel:** a member escalates push → SMS → voice. A per-member key cannot detect a duplicate *voice* send after a push send, and a single mutable item overwrites each channel's `sentAt`/`deliveredAt`/`failureReason` on every escalation — destroying exactly the per-channel evidence F1.3 and F1.11 call life-safety audit evidence, and the evidence base for the N1.9 cutover decision. One immutable item per channel attempt preserves it.
++> - **Why per-channel:** a member is reached on push and SMS in parallel at T+0, then voice on escalation. A per-member key cannot detect a duplicate *voice* send after a push send, and a single mutable item overwrites each channel's `sentAt`/`deliveredAt`/`failureReason` on every escalation — destroying exactly the per-channel evidence F1.3 and F1.11 call life-safety audit evidence, and the evidence base for the N1.9 cutover decision. One immutable item per channel attempt preserves it.
