@@ -1,4 +1,4 @@
-import { QueryCommand } from '@aws-sdk/lib-dynamodb';
+import { GetCommand, QueryCommand } from '@aws-sdk/lib-dynamodb';
 import { buildDeptScopedPk, type VerifiedDeptId } from '@boxalarm/dept-scope';
 import type { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
 import { logError } from '../logger.js';
@@ -102,6 +102,21 @@ export async function queryEligiblePartition(
     exclusiveStartKey = result.LastEvaluatedKey as Record<string, unknown> | undefined;
   } while (exclusiveStartKey !== undefined);
   return items;
+}
+
+export async function getMemberEligibility(
+  ddb: DynamoDBDocumentClient,
+  tableName: string,
+  deptId: VerifiedDeptId,
+  memberId: string,
+): Promise<EligibilitySnapshotItem | undefined> {
+  const result = await ddb.send(
+    new GetCommand({
+      TableName: tableName,
+      Key: { pk: buildDeptScopedPk(deptId, 'ELIGIBILITY'), sk: `MEMBER#${memberId}` },
+    }),
+  );
+  return parseSnapshotItem(result.Item as Record<string, unknown> | undefined);
 }
 
 export async function queryEligibleMembers(
