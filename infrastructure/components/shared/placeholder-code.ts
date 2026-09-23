@@ -1,12 +1,9 @@
 import * as pulumi from "@pulumi/pulumi";
 
-export const PLACEHOLDER_LAMBDA_HANDLER = "index.handler";
-
-// TODO: E2-S1-INFRA — no backend Lambda artifact pipeline (code-bucket component,
-// CI bundling of backend/src/services/**) exists yet in this repo. Every new
-// service Lambda in this batch ships with this stub so the surrounding infra
-// (routes, IAM, queues, alarms) is provisionable and testable now; the real
-// handler code swaps in once that pipeline lands.
+/**
+ * Fail-closed 501 stub, used by lambda-code.ts's lambdaCode() helper for any
+ * service/function key backend/dist doesn't have a bundle for yet.
+ */
 export function placeholderLambdaCode(): pulumi.asset.Archive {
   return new pulumi.asset.AssetArchive({
     "index.js": new pulumi.asset.StringAsset(

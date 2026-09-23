@@ -4,7 +4,7 @@ import { ServiceLogGroup } from "../observability/service-log-group";
 import { HttpApi } from "../api/http-api";
 import { verifiedPermissionsPolicyStatement } from "../authz/policy-store";
 import { auditMutationDenyStatement } from "../data/platform-table";
-import { placeholderLambdaCode, PLACEHOLDER_LAMBDA_HANDLER } from "../shared/placeholder-code";
+import { lambdaCode, LAMBDA_HANDLER } from "../shared/lambda-code";
 import { requireEnv } from "../shared/env";
 
 export interface ConfigArgs {
@@ -41,8 +41,8 @@ export class Config extends pulumi.ComponentResource {
         env,
         serviceName: "platform-service",
         functionName: `boxalarm-${env}-platform-config`,
-        handler: PLACEHOLDER_LAMBDA_HANDLER,
-        code: placeholderLambdaCode(),
+        handler: LAMBDA_HANDLER,
+        code: lambdaCode("platform-service", "config"),
         logGroup: args.logGroup,
         environment: { PLATFORM_TABLE_NAME: args.platformTableName },
         additionalPolicyStatements: pulumi

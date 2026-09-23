@@ -21,7 +21,13 @@ export default tseslint.config(
   {
     languageOptions: {
       parserOptions: {
-        projectService: { allowDefaultProject: ['eslint.config.js'] },
+        projectService: {
+          allowDefaultProject: [
+            'eslint.config.js',
+            'scripts/bundle.mjs',
+            'scripts/lambda-manifest.mjs',
+          ],
+        },
         tsconfigRootDir: import.meta.dirname,
       },
     },

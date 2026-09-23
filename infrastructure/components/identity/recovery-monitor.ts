@@ -3,7 +3,7 @@ import * as aws from "@pulumi/aws";
 import { ServiceLambda } from "../observability/service-lambda";
 import { ServiceLogGroup } from "../observability/service-log-group";
 import { metricsNamespaceFor } from "../observability/observability-policy";
-import { placeholderLambdaCode, PLACEHOLDER_LAMBDA_HANDLER } from "../shared/placeholder-code";
+import { lambdaCode, LAMBDA_HANDLER } from "../shared/lambda-code";
 import { requireEnv } from "../shared/env";
 
 export interface RecoveryMonitorArgs {
@@ -117,8 +117,8 @@ export class RecoveryMonitor extends pulumi.ComponentResource {
         env,
         serviceName: "platform-service",
         functionName: `boxalarm-${env}-platform-credential-recovery-monitor`,
-        handler: PLACEHOLDER_LAMBDA_HANDLER,
-        code: placeholderLambdaCode(),
+        handler: LAMBDA_HANDLER,
+        code: lambdaCode("platform-service", "credential-recovery-monitor"),
         logGroup: args.logGroup,
       },
       { parent: this },

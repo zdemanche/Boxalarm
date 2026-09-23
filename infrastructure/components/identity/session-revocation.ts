@@ -5,7 +5,7 @@ import { HttpApi } from "../api/http-api";
 import { PlatformBus } from "../messaging/platform-bus";
 import { verifiedPermissionsPolicyStatement } from "../authz/policy-store";
 import { IamPolicyStatement } from "../observability/observability-policy";
-import { placeholderLambdaCode, PLACEHOLDER_LAMBDA_HANDLER } from "../shared/placeholder-code";
+import { lambdaCode, LAMBDA_HANDLER } from "../shared/lambda-code";
 import { requireEnv } from "../shared/env";
 
 export interface SessionRevocationArgs {
@@ -52,8 +52,8 @@ export class SessionRevocation extends pulumi.ComponentResource {
         env,
         serviceName: "platform-service",
         functionName: `boxalarm-${env}-platform-member-status-revocation`,
-        handler: PLACEHOLDER_LAMBDA_HANDLER,
-        code: placeholderLambdaCode(),
+        handler: LAMBDA_HANDLER,
+        code: lambdaCode("platform-service", "session-revocation-member-status"),
         logGroup: args.platformLogGroup,
         environment: { COGNITO_USER_POOL_ID: args.userPoolId },
         additionalPolicyStatements: cognitoRevocationStatements(args.userPoolArn),
@@ -81,8 +81,8 @@ export class SessionRevocation extends pulumi.ComponentResource {
         env,
         serviceName: "platform-service",
         functionName: `boxalarm-${env}-platform-device-loss-revocation`,
-        handler: PLACEHOLDER_LAMBDA_HANDLER,
-        code: placeholderLambdaCode(),
+        handler: LAMBDA_HANDLER,
+        code: lambdaCode("platform-service", "session-revocation-device-loss"),
         logGroup: args.platformLogGroup,
         environment: { COGNITO_USER_POOL_ID: args.userPoolId },
         additionalPolicyStatements: pulumi
