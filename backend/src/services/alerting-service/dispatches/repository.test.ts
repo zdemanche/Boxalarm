@@ -167,4 +167,59 @@ describe('createManualDispatch (real DynamoDB, AC2/AC4)', () => {
     expect(manualResult.outcome).toBe('created');
     expect(cadResult.outcome).toBe('created');
   });
+
+  it('mints a -SELFTEST- dispatchId and carries targetMemberId/selfTestId/channelsTested/isTest for a SELF_TEST submission, leaving MANUAL unaffected (E1-S8 AC1/AC3)', async () => {
+    const deptId = toVerifiedDeptId({ deptId: 'NICHOLS' });
+    const testId = `selftest-${randomUUID()}`;
+
+    const result = await createManualDispatch(client, TABLE_NAME, {
+      deptId,
+      dispatch: dispatchPayload(testId, 'SELF_TEST'),
+      idempotencyKey: deriveIngressIdempotencyKey(deptId, 'SELF_TEST', testId),
+      dispatchedAt: 1798000000,
+      targetMemberId: 'mbr-1',
+      selfTestId: testId,
+      channelsTested: ['PUSH', 'SMS'],
+    });
+
+    expect(result.outcome).toBe('created');
+    const dispatchId = result.outcome === 'created' ? result.dispatchId : '';
+    expect(dispatchId).toContain('-SELFTEST-');
+
+    const item = await client.send(
+      new GetCommand({
+        TableName: TABLE_NAME,
+        Key: { pk: `DEPT#${deptId}#DISPATCH#${dispatchId}`, sk: 'METADATA' },
+      }),
+    );
+    expect(item.Item).toMatchObject({
+      entityType: 'DISPATCH_ALERT',
+      sourceSystem: 'SELF_TEST',
+      isTest: true,
+      targetMemberId: 'mbr-1',
+      selfTestId: testId,
+      channelsTested: ['PUSH', 'SMS'],
+    });
+    expect(item.Item?.gsi2pk).toBeUndefined();
+    expect(item.Item?.gsi2sk).toBeUndefined();
+    expect(typeof item.Item?.ttl).toBe('number');
+
+    const manualResult = await createManualDispatch(client, TABLE_NAME, {
+      deptId,
+      dispatch: dispatchPayload(`manual-${randomUUID()}`, 'MANUAL'),
+      idempotencyKey: deriveIngressIdempotencyKey(deptId, 'MANUAL', `manual-${randomUUID()}`),
+      dispatchedAt: 1798000000,
+    });
+    expect(manualResult.outcome).toBe('created');
+    const manualId = manualResult.outcome === 'created' ? manualResult.dispatchId : '';
+    expect(manualId).toContain('-MANUAL-');
+    const manualItem = await client.send(
+      new GetCommand({
+        TableName: TABLE_NAME,
+        Key: { pk: `DEPT#${deptId}#DISPATCH#${manualId}`, sk: 'METADATA' },
+      }),
+    );
+    expect(manualItem.Item?.isTest).toBe(false);
+    expect(manualItem.Item?.targetMemberId).toBeUndefined();
+  });
 });

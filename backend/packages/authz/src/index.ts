@@ -8,6 +8,7 @@ export {
   dependencyUnavailableProblem,
   notFoundProblem,
   badRequestProblem,
+  tooManyRequestsProblem,
 } from './problemDetails.js';
 export type { ProblemResponse, ProblemDetailsBody, FieldError } from './problemDetails.js';
 export { emitAuthzMetric, emitInvocationMetric } from './metrics.js';
