@@ -87,6 +87,21 @@ export function MeHomeScreen() {
           onPress={() => navigation.navigate('Certifications' as never)}
         />
         <NavRow
+          label="Transcript"
+          tokens={tokens}
+          onPress={() => navigation.navigate('Transcript' as never)}
+        />
+        <NavRow
+          label="Notifications"
+          tokens={tokens}
+          onPress={() => navigation.navigate('Inbox' as never)}
+        />
+        <NavRow
+          label="Notification preferences"
+          tokens={tokens}
+          onPress={() => navigation.navigate('NotificationPreferences' as never)}
+        />
+        <NavRow
           label="Test my alert path"
           tokens={tokens}
           onPress={() => navigation.navigate('SelfTest' as never)}

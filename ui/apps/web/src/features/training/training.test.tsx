@@ -1,0 +1,215 @@
+import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { HttpResponse, http } from 'msw';
+import { setupServer } from 'msw/node';
+import { MemoryRouter, Route, Routes } from 'react-router-dom';
+import type { User, UserManager } from 'oidc-client-ts';
+import { afterAll, afterEach, beforeAll, expect, test, vi } from 'vitest';
+import { AuthProvider } from '../../auth/AuthContext';
+import { RequireRole } from '../../routing/RequireRole';
+import { CertificationsPage } from './CertificationsPage';
+import { CertificationsPanel } from './CertificationsPanel';
+import { TrainingEventsPage } from './TrainingEventsPage';
+import type { Certification, TrainingEvent } from './types';
+
+const server = setupServer();
+beforeAll(() => server.listen());
+afterEach(() => {
+  server.resetHandlers();
+  cleanup();
+});
+afterAll(() => server.close());
+
+function makeManager(groups: string[]): UserManager {
+  const user = {
+    access_token: 'access-token',
+    expired: false,
+    profile: { sub: 'training-1', 'cognito:groups': groups },
+  } as unknown as User;
+  return {
+    getUser: vi.fn(async () => user),
+    events: {
+      addUserLoaded: () => undefined,
+      removeUserLoaded: () => undefined,
+      addUserUnloaded: () => undefined,
+      removeUserUnloaded: () => undefined,
+      addSilentRenewError: () => undefined,
+      removeSilentRenewError: () => undefined,
+    },
+  } as unknown as UserManager;
+}
+
+function renderPage(element: React.ReactElement, groups: string[], path: string) {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  return render(
+    <QueryClientProvider client={client}>
+      <AuthProvider userManager={makeManager(groups)}>
+        <MemoryRouter initialEntries={[path]}>
+          <Routes>
+            <Route path={path} element={<RequireRole>{element}</RequireRole>} />
+          </Routes>
+        </MemoryRouter>
+      </AuthProvider>
+    </QueryClientProvider>,
+  );
+}
+
+function renderPanel(element: React.ReactElement, groups: string[]) {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  return render(
+    <QueryClientProvider client={client}>
+      <AuthProvider userManager={makeManager(groups)}>{element}</AuthProvider>
+    </QueryClientProvider>,
+  );
+}
+
+test('training officer sees the expiring tab sorted by expiry date', async () => {
+  server.use(
+    http.get('/api/v1/training/certifications/expiring', () =>
+      HttpResponse.json([
+        {
+          certId: 'CERT-2',
+          memberId: 'm-2',
+          certType: 'Hazmat',
+          expiryDate: '2026-02-01',
+          issuingAuthority: 'CT DESPP',
+          status: 'CURRENT',
+        },
+        {
+          certId: 'CERT-1',
+          memberId: 'm-1',
+          certType: 'FF1',
+          expiryDate: '2026-01-01',
+          issuingAuthority: 'CT DESPP',
+          status: 'CURRENT',
+        },
+      ]),
+    ),
+    http.get('/api/v1/personnel/members', () => HttpResponse.json({ items: [] })),
+  );
+
+  const user = userEvent.setup();
+  renderPage(<CertificationsPage />, ['TRAINING'], '/certifications');
+  await screen.findByRole('heading', { name: 'Certifications' });
+  await user.click(screen.getByRole('tab', { name: 'Expiring' }));
+
+  const rows = await screen.findAllByRole('row');
+  expect(rows[1]?.textContent).toContain('FF1');
+  expect(rows[2]?.textContent).toContain('Hazmat');
+});
+
+test('expiring tab renders an empty state instead of an error when none are due', async () => {
+  server.use(
+    http.get('/api/v1/training/certifications/expiring', () => HttpResponse.json([])),
+    http.get('/api/v1/personnel/members', () => HttpResponse.json({ items: [] })),
+  );
+
+  const user = userEvent.setup();
+  renderPage(<CertificationsPage />, ['TRAINING'], '/certifications');
+  await screen.findByRole('heading', { name: 'Certifications' });
+  await user.click(screen.getByRole('tab', { name: 'Expiring' }));
+
+  expect(
+    await screen.findByText('No certifications are due to expire within the configured window.'),
+  ).toBeTruthy();
+});
+
+test('training officer creates an event and it appears in start order; a member can sign up', async () => {
+  let events: TrainingEvent[] = [
+    {
+      eventId: 'evt-1',
+      title: 'Ladder drill',
+      category: 'Ladders',
+      startAt: Date.parse('2026-06-01T18:00:00Z'),
+      endAt: Date.parse('2026-06-01T20:00:00Z'),
+      signedUp: false,
+    },
+  ];
+
+  server.use(
+    http.get('/api/v1/training/events', () => HttpResponse.json(events)),
+    http.post('/api/v1/training/events', async ({ request }) => {
+      const body = (await request.json()) as Omit<TrainingEvent, 'eventId' | 'signedUp'>;
+      const created: TrainingEvent = { ...body, eventId: 'evt-2', signedUp: false };
+      events = [...events, created];
+      return HttpResponse.json(created, { status: 201 });
+    }),
+    http.post('/api/v1/training/events/:eventId/signup', ({ params }) => {
+      events = events.map((e) => (e.eventId === params.eventId ? { ...e, signedUp: true } : e));
+      return HttpResponse.json({ eventId: params.eventId }, { status: 201 });
+    }),
+  );
+
+  const user = userEvent.setup();
+  renderPage(<TrainingEventsPage />, ['TRAINING'], '/training/events');
+  await screen.findByText('Ladder drill');
+
+  await user.type(screen.getByLabelText('Title'), 'Hose drill');
+  await user.type(screen.getByLabelText('Category'), 'Hose');
+  await user.type(screen.getByLabelText('Starts'), '2026-07-01T09:00');
+  await user.type(screen.getByLabelText('Ends'), '2026-07-01T11:00');
+  await user.click(screen.getByRole('button', { name: 'Create event' }));
+  await screen.findByText('Hose drill');
+
+  const signUpButtons = screen.getAllByRole('button', { name: 'Sign up' });
+  await user.click(signUpButtons[0]!);
+
+  await waitFor(() => {
+    expect(screen.getByText(/Signed up/)).toBeTruthy();
+  });
+});
+
+test('training officer adds a certification and can revoke it; a non-training role has no controls', async () => {
+  let certifications: Certification[] = [];
+
+  server.use(
+    http.get('/api/v1/training/members/m-1/certifications', () =>
+      HttpResponse.json(certifications),
+    ),
+    http.post('/api/v1/training/members/m-1/certifications', async ({ request }) => {
+      const body = (await request.json()) as Omit<
+        Certification,
+        'certId' | 'memberId' | 'status' | 'attachmentS3Key'
+      >;
+      const created: Certification = {
+        ...body,
+        certId: 'CERT-1',
+        memberId: 'm-1',
+        attachmentS3Key: null,
+        status: 'CURRENT',
+      };
+      certifications = [...certifications, created];
+      return HttpResponse.json(created, { status: 201 });
+    }),
+    http.post('/api/v1/training/members/m-1/certifications/CERT-1/revoke', () => {
+      certifications = certifications.map((c) =>
+        c.certId === 'CERT-1' ? { ...c, status: 'REVOKED' } : c,
+      );
+      return HttpResponse.json(certifications[0]);
+    }),
+  );
+
+  const user = userEvent.setup();
+  renderPanel(<CertificationsPanel memberId="m-1" />, ['TRAINING']);
+  await screen.findByRole('heading', { name: 'Certifications' });
+
+  await user.type(screen.getByLabelText('Certification type'), 'FF1');
+  await user.type(screen.getByLabelText('Issue date'), '2024-01-01');
+  await user.type(screen.getByLabelText('Expiry date'), '2029-01-01');
+  await user.type(screen.getByLabelText('Issuing authority'), 'CT DESPP');
+  await user.click(screen.getByRole('button', { name: 'Add certification' }));
+
+  await screen.findByText(/FF1/);
+  await user.click(screen.getByRole('button', { name: 'Revoke' }));
+
+  await waitFor(() => {
+    expect(screen.getByText(/REVOKED/)).toBeTruthy();
+  });
+
+  cleanup();
+  renderPanel(<CertificationsPanel memberId="m-1" />, ['OFFICER']);
+  await screen.findByText(/FF1/);
+  expect(screen.queryByRole('form', { name: 'Add certification' })).toBeNull();
+  expect(screen.queryByRole('button', { name: 'Revoke' })).toBeNull();
+});

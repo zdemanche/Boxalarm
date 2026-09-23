@@ -2,6 +2,8 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useParams } from 'react-router-dom';
 import { useAuth } from '../../auth/AuthContext';
 import { ApiForbiddenGate } from '../../components/ApiForbiddenGate';
+import { CertificationsPanel } from '../training/CertificationsPanel';
+import { TranscriptPanel } from '../training/TranscriptPanel';
 import { getMember, updateMemberStatus } from './api';
 import type { MemberStatus } from './types';
 
@@ -12,6 +14,8 @@ export function MemberDetailPage() {
   const auth = useAuth();
   const queryClient = useQueryClient();
   const isAdmin = auth.roles.includes('ADMIN');
+
+  const isTraining = auth.roles.includes('TRAINING') || auth.roles.includes('ADMIN');
 
   const memberQuery = useQuery({
     queryKey: ['personnel', 'members', id],
@@ -95,6 +99,9 @@ export function MemberDetailPage() {
               <p role="alert">{statusMutation.error.message}</p>
             </ApiForbiddenGate>
           ) : null}
+
+          <CertificationsPanel memberId={member.memberId} />
+          {isTraining ? <TranscriptPanel memberId={member.memberId} /> : null}
         </>
       )}
     </main>
