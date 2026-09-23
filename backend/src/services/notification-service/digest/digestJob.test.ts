@@ -436,12 +436,14 @@ describe('digestJob handler (entrypoint-test obligation)', () => {
       return Promise.resolve({});
     });
     mockDdb(send);
-    const sendPushDigest = vi.fn().mockImplementation((_env: unknown, recipient: { memberId: string }) => {
-      if (recipient.memberId === 'MBR-FAIL') {
-        return Promise.reject(new Error('SNS throttled'));
-      }
-      return Promise.resolve(undefined);
-    });
+    const sendPushDigest = vi
+      .fn()
+      .mockImplementation((_env: unknown, recipient: { memberId: string }) => {
+        if (recipient.memberId === 'MBR-FAIL') {
+          return Promise.reject(new Error('SNS throttled'));
+        }
+        return Promise.resolve(undefined);
+      });
     const sendEmailDigest = vi.fn().mockResolvedValue(undefined);
     mockChannelSender(sendPushDigest, sendEmailDigest);
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);

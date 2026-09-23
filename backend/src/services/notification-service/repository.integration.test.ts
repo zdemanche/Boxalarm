@@ -86,7 +86,9 @@ describe('notification-service repository (real DynamoDB via LocalStack)', () =>
       Date.now(),
     );
 
-    await client.send(new TransactWriteCommand({ TransactItems: [{ Put: { TableName: TABLE_NAME, Item: item } }] }));
+    await client.send(
+      new TransactWriteCommand({ TransactItems: [{ Put: { TableName: TABLE_NAME, Item: item } }] }),
+    );
 
     const result = await client.send(
       new QueryCommand({
@@ -141,7 +143,9 @@ describe('notification-service repository (real DynamoDB via LocalStack)', () =>
       createdAt,
     );
 
-    await client.send(new TransactWriteCommand({ TransactItems: [{ Put: { TableName: TABLE_NAME, Item: item } }] }));
+    await client.send(
+      new TransactWriteCommand({ TransactItems: [{ Put: { TableName: TABLE_NAME, Item: item } }] }),
+    );
 
     const listResult = await client.send(
       new QueryCommand({

@@ -97,15 +97,19 @@ describe('inbox handler (entrypoint-test + authz-wiring obligations)', () => {
 
   it('POST /notifications/{id}/read marks readAt and returns it (AC6)', async () => {
     send.mockResolvedValue({ decision: Decision.ALLOW });
-    const dynamoSend = vi.fn().mockImplementation((command: { constructor: { name: string }; input: Record<string, unknown> }) => {
-      if (command.constructor.name === 'QueryCommand') {
-        expect(command.input.IndexName).toBe('GSI1');
-        return Promise.resolve({
-          Items: [{ sk: 'NOTIF#MBR-1#1#NOTIF-1', notificationId: 'NOTIF-1' }],
-        });
-      }
-      return Promise.resolve({});
-    });
+    const dynamoSend = vi
+      .fn()
+      .mockImplementation(
+        (command: { constructor: { name: string }; input: Record<string, unknown> }) => {
+          if (command.constructor.name === 'QueryCommand') {
+            expect(command.input.IndexName).toBe('GSI1');
+            return Promise.resolve({
+              Items: [{ sk: 'NOTIF#MBR-1#1#NOTIF-1', notificationId: 'NOTIF-1' }],
+            });
+          }
+          return Promise.resolve({});
+        },
+      );
     mockDdb(dynamoSend);
 
     const { markReadHandler } = await import('./handler.js');

@@ -304,7 +304,15 @@ async function sendDigestToMember(
       category: CERT_EXPIRY_CATEGORY,
     });
     emitOutcomeMetric(METRIC_NAMESPACE, 'DigestSendFailed');
-    await releaseDigestSlot(ddb, tableName, deptId, memberId, CERT_EXPIRY_CATEGORY, today, correlationId);
+    await releaseDigestSlot(
+      ddb,
+      tableName,
+      deptId,
+      memberId,
+      CERT_EXPIRY_CATEGORY,
+      today,
+      correlationId,
+    );
     throw error;
   }
 
@@ -313,7 +321,15 @@ async function sendDigestToMember(
   } catch (error) {
     logError('notification.digest.write_failed', error, correlationId, { memberId });
     emitOutcomeMetric(METRIC_NAMESPACE, 'DigestFailed');
-    await releaseDigestSlot(ddb, tableName, deptId, memberId, CERT_EXPIRY_CATEGORY, today, correlationId);
+    await releaseDigestSlot(
+      ddb,
+      tableName,
+      deptId,
+      memberId,
+      CERT_EXPIRY_CATEGORY,
+      today,
+      correlationId,
+    );
     throw error;
   }
 
