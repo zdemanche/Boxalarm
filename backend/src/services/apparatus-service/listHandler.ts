@@ -12,8 +12,17 @@ import {
   ApparatusRepositoryUnavailableError,
   isApparatusStatus,
   listApparatus,
+  type ApparatusListItem,
   type ApparatusStatus,
 } from './repository.js';
+
+type PublicApparatusListItem = Omit<ApparatusListItem, 'apparatusId'>;
+
+function toPublicListItem(item: ApparatusListItem): PublicApparatusListItem {
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const { apparatusId, ...publicItem } = item;
+  return publicItem;
+}
 
 function extractTraceId(event: GuardEvent): string {
   const traceparent = event.headers?.traceparent ?? event.headers?.Traceparent;
@@ -39,7 +48,7 @@ async function listRegistry(
     return {
       statusCode: 200,
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ apparatus }),
+      body: JSON.stringify({ apparatus: apparatus.map(toPublicListItem) }),
     };
   } catch (error) {
     if (error instanceof ApparatusRepositoryUnavailableError) {

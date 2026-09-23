@@ -86,4 +86,19 @@ describe("BoxalarmUserPoolClient", () => {
     expect(explicitAuthFlows).toEqual(["ALLOW_USER_SRP_AUTH", "ALLOW_REFRESH_TOKEN_AUTH"]);
     expect(supportedIdentityProviders).toEqual(["COGNITO"]);
   });
+
+  it("defaults explicitAuthFlows to SRP + refresh when the caller omits it, rather than falling back to Cognito's own defaults", async () => {
+    const client = new BoxalarmUserPoolClient("test-client-default-auth-flows", {
+      userPoolId: pulumi.output("pool-id"),
+      clientName: "web",
+      standardWriteAttributes: ["email", "name"],
+      callbackUrls: ["https://localhost:5173/auth/callback"],
+      logoutUrls: ["https://localhost:5173/"],
+      // explicitAuthFlows intentionally omitted — this is the production shape used
+      // by both real app clients in index.ts.
+    });
+
+    const explicitAuthFlows = await resolve(client.userPoolClient.explicitAuthFlows);
+    expect(explicitAuthFlows).toEqual(["ALLOW_USER_SRP_AUTH", "ALLOW_REFRESH_TOKEN_AUTH"]);
+  });
 });

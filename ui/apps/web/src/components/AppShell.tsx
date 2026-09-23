@@ -1,4 +1,5 @@
 import { Outlet, useLocation } from 'react-router-dom';
+import { DemoBanner } from './DemoBanner';
 import { LiveRegionProvider } from './LiveRegion';
 import { PrimaryNav } from './PrimaryNav';
 import { RouteErrorBoundary } from './RouteErrorBoundary';
@@ -9,6 +10,7 @@ export function AppShell() {
   return (
     <LiveRegionProvider>
       <SkipToContentLink />
+      {import.meta.env.VITE_DEMO === 'true' && <DemoBanner />}
       <PrimaryNav />
       {/* Keyed by path so navigating to a different route also recovers a tripped boundary,
           not just its own "Try again" button. */}
