@@ -33,7 +33,7 @@ export function emitInventoryMetric(
   // Both dimension sets on a failure: [] so a plain failure-rate alarm resolves, and
   // ['Reason'] so a DynamoDB outage is separable from a 404. Mirrors emitAuthzMetric.
   emitEmf(
-    'Boxalarm/Apparatus',
+    'Boxalarm/apparatus',
     `Inventory${operation}${outcome}`,
     reason ? [[], ['Reason']] : [[]],
     reason ? { Reason: reason } : {},

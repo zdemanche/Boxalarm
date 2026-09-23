@@ -5,7 +5,7 @@ import { emitOutcomeMetric } from '@boxalarm/metrics';
 import type { DynamoDBStreamEvent } from 'aws-lambda';
 import { createDdbClient, readPersonnelDdbConfig } from '../availability/dynamoClient.js';
 
-const METRIC_NAMESPACE = 'Boxalarm/PersonnelOutbox';
+const METRIC_NAMESPACE = 'Boxalarm/personnel-outbox';
 const PUT_EVENTS_BATCH_SIZE = 10;
 
 interface EventBridgeConfig {

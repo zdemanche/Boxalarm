@@ -130,7 +130,7 @@ async function recordAttendance(
     const rules = await getLosapPointRules(client, tableName, deptId);
     if (!rules) {
       logInfo('losap.accrual.skipped', traceId, { reason: 'NoRuleConfig', deptId, memberId });
-      emitOutcomeMetric('Boxalarm/Personnel', 'LosapAccrualSkipped', 'NoRuleConfig');
+      emitOutcomeMetric('Boxalarm/personnel', 'LosapAccrualSkipped', 'NoRuleConfig');
     }
     const losapPointsAwarded = rules
       ? computeLosapPoints(input.activityType, rules.pointsByActivityType)

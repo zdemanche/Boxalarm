@@ -19,7 +19,7 @@ import type { APIGatewayProxyResultV2 } from 'aws-lambda';
 import type { TransitionAction } from './expiryHandler.js';
 import { createDdbClient, readPersonnelDdbConfig } from './dynamoClient.js';
 
-const METRIC_NAMESPACE = 'Boxalarm/PersonnelAvailability';
+const METRIC_NAMESPACE = 'Boxalarm/personnel-availability';
 const MAX_EPOCH_SECONDS = 4_102_444_800;
 
 function conflictProblem(detail: string, traceId: string): APIGatewayProxyResultV2 {
