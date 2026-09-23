@@ -17,7 +17,10 @@ import { AlertingTable } from "./components/data/alerting-table";
 import { AuditTrail } from "./components/data/audit-trail";
 import { NerisConfig } from "./components/neris/neris-config";
 import { AlertingPlaneBoundary } from "./components/alerting/iam-boundary";
-import { MessagingAlerting } from "./components/alerting/messaging-alerting";
+import {
+  MessagingAlerting,
+  DEFAULT_WORKER_TIMEOUT_SECONDS,
+} from "./components/alerting/messaging-alerting";
 import { Escalation } from "./components/alerting/escalation";
 import { FanOut } from "./components/alerting/fan-out";
 import { ChannelWorkers } from "./components/alerting/channel-workers";
@@ -122,7 +125,10 @@ const alertingBoundaryArn = alertingPlaneBoundary.policy.arn;
 
 // E1-S2/S3-INFRA #28/#29: alerting messaging plane — SNS FIFO topic + per-channel SQS
 // FIFO queues/DLQs. Shares no resource with the LOB bus.
-export const messagingAlerting = new MessagingAlerting("messaging-alerting", { env });
+export const messagingAlerting = new MessagingAlerting("messaging-alerting", {
+  env,
+  workerTimeoutSeconds: DEFAULT_WORKER_TIMEOUT_SECONDS,
+});
 
 export const escalation = new Escalation("escalation", {
   env,
@@ -150,6 +156,7 @@ export const channelWorkers = new ChannelWorkers("channel-workers", {
   channelQueues: messagingAlerting.channelQueues,
   logGroup: alertingLogGroup,
   permissionsBoundaryArn: alertingBoundaryArn,
+  workerTimeoutSeconds: DEFAULT_WORKER_TIMEOUT_SECONDS,
 });
 
 // E1-S1/S5/S6-INFRA: manual dispatch ingress, response confirmation, roster, detail.

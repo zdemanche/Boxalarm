@@ -4,7 +4,12 @@ import { ServiceLambda } from "../observability/service-lambda";
 import { ServiceLogGroup } from "../observability/service-log-group";
 import { requireEnv } from "../shared/env";
 import { asyncStubCode } from "./stub-code";
-import { ALERTING_CHANNELS, AlertingChannel, ChannelQueue } from "./messaging-alerting";
+import {
+  ALERTING_CHANNELS,
+  AlertingChannel,
+  ChannelQueue,
+  DEFAULT_WORKER_TIMEOUT_SECONDS,
+} from "./messaging-alerting";
 
 // OQ-3 (SMS/voice vendor selection) is open — placeholder endpoints until a vendor is
 // chosen. Values are read verbatim by channels/httpProviderAdapter.ts at send time.
@@ -21,6 +26,8 @@ export interface ChannelWorkersArgs {
   channelQueues: Record<AlertingChannel, ChannelQueue>;
   logGroup: ServiceLogGroup;
   permissionsBoundaryArn?: pulumi.Input<string>;
+  /** Must match the value passed to MessagingAlerting — its queue visibility is 2x this. */
+  workerTimeoutSeconds?: number;
 }
 
 /**
@@ -39,6 +46,7 @@ export class ChannelWorkers extends pulumi.ComponentResource {
     requireEnv("ChannelWorkers", args.env);
     super("boxalarm:alerting:ChannelWorkers", name, {}, opts);
     const { env } = args;
+    const workerTimeoutSeconds = args.workerTimeoutSeconds ?? DEFAULT_WORKER_TIMEOUT_SECONDS;
 
     const workers: Partial<Record<AlertingChannel, ServiceLambda>> = {};
     const providerSecrets: Partial<Record<AlertingChannel, aws.secretsmanager.Secret>> = {};
@@ -111,6 +119,7 @@ export class ChannelWorkers extends pulumi.ComponentResource {
                 Resource: queueArn,
               },
             ]),
+          timeout: workerTimeoutSeconds,
           reservedConcurrentExecutions: 5,
           permissionsBoundaryArn: args.permissionsBoundaryArn,
         },

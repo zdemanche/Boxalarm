@@ -86,6 +86,11 @@ export class FanOut extends pulumi.ComponentResource {
           },
         ]),
         reservedConcurrentExecutions: 10,
+        // Fans out to up to 10 concurrent members at a time (fanOut.ts
+        // MAX_CONCURRENT_FANOUT_TASKS), each doing a transact write + an SNS publish —
+        // not bound by the API Gateway 29s ceiling since this is stream-triggered, not a
+        // route, so size it for a large roster rather than the AWS 3s default.
+        timeout: 30,
         permissionsBoundaryArn: args.permissionsBoundaryArn,
       },
       { parent: this },

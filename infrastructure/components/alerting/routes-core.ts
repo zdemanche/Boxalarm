@@ -107,6 +107,11 @@ export class RoutesCore extends pulumi.ComponentResource {
         },
         additionalPolicyStatements: dispatchIngressPolicyStatements,
         reservedConcurrentExecutions: 5,
+        // runFanOut loops serially per member (TransactWrite, then GetItem, then
+        // CreateSchedule) — the AWS default 3s is exceeded mid-roster well before 30-40
+        // members. 29s is the API Gateway HTTP API integration's own hard ceiling, so a
+        // larger Lambda timeout here would just be dead time.
+        timeout: 29,
         permissionsBoundaryArn: args.permissionsBoundaryArn,
       },
       { parent: this },
