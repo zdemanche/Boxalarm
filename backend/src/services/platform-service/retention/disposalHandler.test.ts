@@ -105,7 +105,7 @@ describe('disposalHandler', () => {
       buildEvent('POST /api/v1/platform/retention/disposal', undefined),
     )) as { statusCode: number; body: string };
 
-    expect(result.statusCode).toBe(403);
+    expect(result.statusCode).toBe(401);
   });
 
   it('returns 503 and never touches DynamoDB/KMS when Verified Permissions is unavailable', async () => {

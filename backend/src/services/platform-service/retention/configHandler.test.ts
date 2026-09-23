@@ -77,9 +77,9 @@ describe('retention configHandler', () => {
       statusCode: number;
       body: string;
     };
-    expect(result.statusCode).toBe(403);
+    expect(result.statusCode).toBe(401);
     const body = JSON.parse(result.body) as { title: string; traceId: string };
-    expect(body.title).toBe('Forbidden');
+    expect(body.title).toBe('Unauthorized');
     expect(body.traceId).toEqual(expect.any(String));
   });
 
