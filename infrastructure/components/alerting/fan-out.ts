@@ -104,6 +104,16 @@ export class FanOut extends pulumi.ComponentResource {
         eventSourceArn: args.alertingStreamArn,
         functionName: this.lambda.function.name,
         startingPosition: "LATEST",
+        // The handler returns { batchItemFailures } instead of throwing (see
+        // fanout/handler.ts) — without this, Lambda treats every invocation as a full
+        // success and checkpoints past a failed dispatch with nobody ever paged.
+        functionResponseTypes: ["ReportBatchItemFailures"],
+        // Isolate a poison-pill record to its own half of the batch instead of retrying
+        // (and blocking) the whole batch on every attempt.
+        bisectBatchOnFunctionError: true,
+        maximumRetryAttempts: 3,
+        // A DISPATCH_ALERT stream record older than this is no longer actionable.
+        maximumRecordAgeInSeconds: 3600,
         filterCriteria: {
           filters: [
             {
