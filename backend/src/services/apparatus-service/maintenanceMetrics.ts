@@ -23,5 +23,5 @@ function emitEmf(
 }
 
 export function emitMaintenanceMetric(outcome: 'Logged' | 'LogFailed'): void {
-  emitEmf('Boxalarm/Apparatus', `MaintenanceRecord${outcome}`, [[]], {});
+  emitEmf('Boxalarm/apparatus', `MaintenanceRecord${outcome}`, [[]], {});
 }

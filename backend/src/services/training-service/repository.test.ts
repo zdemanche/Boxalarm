@@ -7,8 +7,11 @@ import {
   createTrainingEvent,
   DuplicateSignupError,
   getTrainingEvent,
+  listEventAttendees,
   listMemberAttendanceEventIds,
+  listMemberAttendanceInRange,
   listTrainingEvents,
+  listTrainingEventsInRange,
   recordAttendanceHours,
 } from './repository.js';
 
@@ -40,7 +43,7 @@ describe('createTrainingEvent', () => {
     expect(item.pk).toBe(`DEPT#dept-001#TRAINING_EVENT#${result.eventId}`);
     expect(item.sk).toBe('METADATA');
     expect(item.gsi3pk).toBe('DEPT#dept-001#TRAINING_EVENT');
-    expect(item.gsi3sk).toBe('1000');
+    expect(item.gsi3sk).toBe('0000000001000');
     expect(captured!.input.ConditionExpression).toBe('attribute_not_exists(pk)');
   });
 });
@@ -109,6 +112,136 @@ describe('listMemberAttendanceEventIds', () => {
     });
     expect(captured!.input.ProjectionExpression).toBe('eventId');
     expect(ids).toEqual(new Set(['e1', 'e2']));
+  });
+});
+
+describe('listTrainingEventsInRange', () => {
+  it('queries GSI3 with a native zero-padded BETWEEN bound on gsi3sk instead of fetching the full dept history (AP26, AC2)', async () => {
+    let captured: { input: Record<string, unknown> } | undefined;
+    const client = fakeClient((command) => {
+      captured = command as { input: Record<string, unknown> };
+      return {
+        Items: [{ eventId: 'in-range', title: 't', category: 'ems', startAt: 1_500, endAt: 1_600 }],
+      };
+    });
+
+    const events = await listTrainingEventsInRange(client, CONFIG, DEPT_ID, {
+      from: 1_000,
+      to: 2_000,
+    });
+
+    expect(captured!.input.IndexName).toBe('GSI3');
+    expect(captured!.input.KeyConditionExpression).toBe(
+      'gsi3pk = :gsi3pk AND gsi3sk BETWEEN :from AND :to',
+    );
+    expect(captured!.input.ExpressionAttributeValues).toEqual({
+      ':gsi3pk': 'DEPT#dept-001#TRAINING_EVENT',
+      ':from': '0000000001000',
+      ':to': '0000000002000',
+    });
+    expect(events.map((event) => event.eventId)).toEqual(['in-range']);
+  });
+
+  it('returns an empty array when the date range spans zero TRAINING_EVENT rows', async () => {
+    const client = fakeClient(() => ({ Items: [] }));
+    expect(await listTrainingEventsInRange(client, CONFIG, DEPT_ID, { from: 0, to: 1 })).toEqual(
+      [],
+    );
+  });
+});
+
+describe('listEventAttendees', () => {
+  it('queries the base table for ATTENDEE# items in the event partition (AP26, AC2)', async () => {
+    let captured: { input: Record<string, unknown> } | undefined;
+    const client = fakeClient((command) => {
+      captured = command as { input: Record<string, unknown> };
+      return { Items: [{ memberId: 'member-1', category: 'ems', hours: 2 }] };
+    });
+
+    const attendees = await listEventAttendees(client, CONFIG, DEPT_ID, 'e1');
+
+    expect(captured!.input.KeyConditionExpression).toBe('pk = :pk AND begins_with(sk, :prefix)');
+    expect(captured!.input.ExpressionAttributeValues).toEqual({
+      ':pk': 'DEPT#dept-001#TRAINING_EVENT#e1',
+      ':prefix': 'ATTENDEE#',
+    });
+    expect(attendees).toEqual([{ memberId: 'member-1', category: 'ems', hours: 2 }]);
+  });
+
+  it('defaults hours to 0 for an attendee with no hours recorded yet', async () => {
+    const client = fakeClient(() => ({ Items: [{ memberId: 'member-1', category: 'ems' }] }));
+    const attendees = await listEventAttendees(client, CONFIG, DEPT_ID, 'e1');
+    expect(attendees).toEqual([{ memberId: 'member-1', category: 'ems', hours: 0 }]);
+  });
+});
+
+describe('listMemberAttendanceInRange', () => {
+  it('queries GSI1 for the attendance prefix and filters by the startAt encoded in gsi1sk (AP25, AC1/AC3)', async () => {
+    let captured: { input: Record<string, unknown> } | undefined;
+    const client = fakeClient((command) => {
+      captured = command as { input: Record<string, unknown> };
+      return {
+        Items: [
+          {
+            pk: 'DEPT#dept-001#TRAINING_EVENT#e1',
+            memberId: 'member-1',
+            category: 'fireground',
+            hours: 3,
+            gsi1sk: 'TRAINING_ATTENDANCE#150',
+          },
+          {
+            pk: 'DEPT#dept-001#TRAINING_EVENT#e2',
+            memberId: 'member-1',
+            category: 'ems',
+            hours: 9,
+            gsi1sk: 'TRAINING_ATTENDANCE#999',
+          },
+        ],
+      };
+    });
+
+    const records = await listMemberAttendanceInRange(client, CONFIG, DEPT_ID, 'member-1', {
+      from: 100,
+      to: 200,
+    });
+
+    expect(captured!.input.IndexName).toBe('GSI1');
+    expect(captured!.input.KeyConditionExpression).toBe(
+      'gsi1pk = :gsi1pk AND begins_with(gsi1sk, :prefix)',
+    );
+    expect(captured!.input.ExpressionAttributeValues).toEqual({
+      ':gsi1pk': 'MEMBER#member-1',
+      ':prefix': 'TRAINING_ATTENDANCE#',
+    });
+    expect(records).toEqual([{ memberId: 'member-1', category: 'fireground', hours: 3 }]);
+  });
+
+  it('excludes attendance recorded under a different department for the same memberId (tenant isolation)', async () => {
+    const client = fakeClient(() => ({
+      Items: [
+        {
+          pk: 'DEPT#dept-001#TRAINING_EVENT#e1',
+          memberId: 'member-1',
+          category: 'fireground',
+          hours: 3,
+          gsi1sk: 'TRAINING_ATTENDANCE#150',
+        },
+        {
+          pk: 'DEPT#dept-002#TRAINING_EVENT#e9',
+          memberId: 'member-1',
+          category: 'ems',
+          hours: 50,
+          gsi1sk: 'TRAINING_ATTENDANCE#150',
+        },
+      ],
+    }));
+
+    const records = await listMemberAttendanceInRange(client, CONFIG, DEPT_ID, 'member-1', {
+      from: 100,
+      to: 200,
+    });
+
+    expect(records).toEqual([{ memberId: 'member-1', category: 'fireground', hours: 3 }]);
   });
 });
 

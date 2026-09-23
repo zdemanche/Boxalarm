@@ -1,0 +1,4 @@
+config:
+  aws:region: us-east-1
+  boxalarm-infra:env: dev
+  boxalarm-infra:webOrigin: https://localhost:5173

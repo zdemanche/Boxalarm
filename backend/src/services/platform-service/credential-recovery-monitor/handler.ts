@@ -42,7 +42,7 @@ export function emitRecoveryMetric(
         Timestamp: Date.now(),
         CloudWatchMetrics: [
           {
-            Namespace: 'Boxalarm/CredentialRecovery',
+            Namespace: 'Boxalarm/credential-recovery',
             Dimensions: reason ? [[], ['Reason']] : [[]],
             Metrics: [{ Name: outcome, Unit: 'Count' }],
           },

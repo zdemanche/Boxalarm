@@ -87,7 +87,7 @@ function emitApparatusMetric(outcome: string, reason?: string): void {
         Timestamp: Date.now(),
         CloudWatchMetrics: [
           {
-            Namespace: 'Boxalarm/Apparatus',
+            Namespace: 'Boxalarm/apparatus',
             Dimensions: reason ? [[], ['Reason']] : [[]],
             Metrics: [{ Name: outcome, Unit: 'Count' }],
           },

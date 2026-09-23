@@ -2,6 +2,8 @@ import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
 import AWSXRay from 'aws-xray-sdk-core';
 
+export const GSI3_INDEX_NAME = 'GSI3';
+
 export interface PersonnelTableConfig {
   readonly tableName: string;
 }

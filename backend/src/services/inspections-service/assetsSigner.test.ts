@@ -95,9 +95,12 @@ describe('isSafeAssetFilename', () => {
 });
 
 describe('buildAssetKey', () => {
-  it('builds the {deptId}/PRE_PLAN/{prePlanId}/{filename} key per AC2', () => {
-    expect(buildAssetKey(DEPT_ID, 'PP-0044', 'diagram.pdf')).toBe(
+  it('builds the {deptId}/{entityType}/{entityId}/{filename} key per AC2/AC3', () => {
+    expect(buildAssetKey(DEPT_ID, 'PRE_PLAN', 'PP-0044', 'diagram.pdf')).toBe(
       'NICHOLS/PRE_PLAN/PP-0044/diagram.pdf',
+    );
+    expect(buildAssetKey(DEPT_ID, 'INSPECTION_RECORD', 'INS-1', 'photo.jpg')).toBe(
+      'NICHOLS/INSPECTION_RECORD/INS-1/photo.jpg',
     );
   });
 });
@@ -105,7 +108,14 @@ describe('buildAssetKey', () => {
 describe('createSignedUploadUrl', () => {
   it('signs the CloudFront URL for the exact prefixed key with a 10-minute expiry', () => {
     const signer = vi.fn().mockReturnValue('https://signed.example.com/x');
-    const url = createSignedUploadUrl(CONFIG, DEPT_ID, 'PP-0044', 'diagram.pdf', signer);
+    const url = createSignedUploadUrl(
+      CONFIG,
+      DEPT_ID,
+      'PRE_PLAN',
+      'PP-0044',
+      'diagram.pdf',
+      signer,
+    );
 
     expect(url).toBe('https://signed.example.com/x');
     expect(signer).toHaveBeenCalledTimes(1);

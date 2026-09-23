@@ -1,4 +1,3 @@
-import { randomUUID } from 'node:crypto';
 import {
   ConditionalCheckFailedException,
   TransactionCanceledException,
@@ -6,6 +5,7 @@ import {
 import { GetCommand, PutCommand, QueryCommand, TransactWriteCommand } from '@aws-sdk/lib-dynamodb';
 import { buildDeptScopedPk } from '@boxalarm/dept-scope';
 import type { VerifiedDeptId } from '@boxalarm/dept-scope';
+import { buildOutboxRecord } from '@boxalarm/outbox';
 import { getDocumentClient, readHydrantTableConfig } from './dynamoClient.js';
 import { logError } from './logger.js';
 import {
@@ -138,24 +138,25 @@ export async function updateHydrant(
     values[':gsi2sk'] = gsi2.gsi2sk;
   }
 
-  // No ttl here, deliberately (matches personnel-service's OUTBOX_ENTRY precedent): an
-  // unpublished event must never be silently dropped by a timer. inspections.hydrant.updated
-  // has no defined transport yet (architecture §4.2/§5 name neither a topic/queue nor an
-  // event-schema row for it) — that's a companion infra decision, out of this repo's reach,
-  // not something this write path should paper over by expiring the durable evidence of it.
-  const eventId = randomUUID();
-  const outboxItem = {
-    pk,
-    sk: `OUTBOX#${eventId}`,
-    entityType: 'OUTBOX_EVENT',
-    eventId,
-    eventTime: new Date(now).toISOString(),
-    eventType: 'inspections.hydrant.updated',
-    source: 'inspections-service',
+  // buildOutboxRecord's item carries no ttl, deliberately (matches personnel-service's
+  // OUTBOX_ENTRY precedent): an unpublished event must never be silently dropped by a timer.
+  const preUpdate = await getDocumentClient().send(
+    new GetCommand({ TableName: tableName, Key: { pk, sk: HYDRANT_SK }, ConsistentRead: true }),
+  );
+  const existing = preUpdate?.Item as Partial<HydrantRecord> | undefined;
+  const outboxRecord = buildOutboxRecord(
+    deptId,
+    'inspections-service',
+    'inspections.hydrant.updated',
     correlationId,
-    schemaVersion: '1.0',
-    payload: { hydrantId, deptId, ...patch },
-  };
+    {
+      hydrantId,
+      deptId,
+      ...(typeof existing?.latitude === 'number' ? { latitude: existing.latitude } : {}),
+      ...(typeof existing?.longitude === 'number' ? { longitude: existing.longitude } : {}),
+      ...patch,
+    },
+  );
 
   try {
     await getDocumentClient().send(
@@ -174,7 +175,7 @@ export async function updateHydrant(
           {
             Put: {
               TableName: tableName,
-              Item: outboxItem,
+              Item: outboxRecord,
             },
           },
         ],

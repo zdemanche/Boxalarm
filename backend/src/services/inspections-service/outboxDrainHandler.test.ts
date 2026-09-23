@@ -30,7 +30,7 @@ function outboxRecord(
 }
 
 const OUTBOX_ITEM = {
-  entityType: 'OUTBOX_RECORD',
+  entityType: 'OUTBOX_ENTRY',
   eventId: 'evt-1',
   eventTime: '2026-09-14T00:00:00.000Z',
   eventType: 'inspections.preplan.updated',
@@ -60,7 +60,7 @@ describe('outboxDrainHandler', () => {
     );
   });
 
-  it('publishes an INSERT of an OUTBOX_RECORD to EventBridge as the pre-plan-updated event (AC4)', async () => {
+  it('publishes an INSERT of an OUTBOX_ENTRY to EventBridge as the pre-plan-updated event (AC4)', async () => {
     const { createOutboxDrainHandler } = await import('./outboxDrainHandler.js');
     const send = vi.fn().mockResolvedValue({});
     const handler = createOutboxDrainHandler(fakeClient(send));
@@ -80,7 +80,7 @@ describe('outboxDrainHandler', () => {
     expect(detail.correlationId).toBe('PP-1');
   });
 
-  it('skips a stream record whose entityType is not OUTBOX_RECORD, publishing nothing', async () => {
+  it('skips a stream record whose entityType is not OUTBOX_ENTRY, publishing nothing', async () => {
     const { createOutboxDrainHandler } = await import('./outboxDrainHandler.js');
     const send = vi.fn().mockResolvedValue({});
     const handler = createOutboxDrainHandler(fakeClient(send));
@@ -91,7 +91,7 @@ describe('outboxDrainHandler', () => {
     expect(result).toEqual({ batchItemFailures: [] });
   });
 
-  it('skips a MODIFY/REMOVE record even when it carries an OUTBOX_RECORD image', async () => {
+  it('skips a MODIFY/REMOVE record even when it carries an OUTBOX_ENTRY image', async () => {
     const { createOutboxDrainHandler } = await import('./outboxDrainHandler.js');
     const send = vi.fn().mockResolvedValue({});
     const handler = createOutboxDrainHandler(fakeClient(send));
