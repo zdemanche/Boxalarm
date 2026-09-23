@@ -114,4 +114,80 @@ describe('getAccessToken', () => {
       getAccessToken(CONFIG, { fetchFn, cache, nowMs: () => 1_000_000 }),
     ).rejects.toThrow(/access_token/i);
   });
+
+  it('coalesces concurrent calls with an expired/empty cache into a single token request', async () => {
+    const { getAccessToken, createTokenCache } = await import('./tokenCache.js');
+    let resolveFetch: ((value: Response) => void) | undefined;
+    const fetchFn = vi.fn().mockImplementation(
+      () =>
+        new Promise<Response>((resolve) => {
+          resolveFetch = resolve;
+        }),
+    );
+    const cache = createTokenCache();
+
+    const first = getAccessToken(CONFIG, { fetchFn, cache, nowMs: () => 1_000_000 });
+    const second = getAccessToken(CONFIG, { fetchFn, cache, nowMs: () => 1_000_000 });
+
+    expect(fetchFn).toHaveBeenCalledTimes(1);
+    resolveFetch?.(jsonResponse({ access_token: 'token-shared', expires_in: 3600 }));
+
+    const [a, b] = await Promise.all([first, second]);
+    expect(a).toBe('token-shared');
+    expect(b).toBe('token-shared');
+    expect(fetchFn).toHaveBeenCalledTimes(1);
+    expect(cache.get()?.accessToken).toBe('token-shared');
+  });
+
+  it('clears the in-flight slot on failure so a later call retries instead of coalescing forever', async () => {
+    const { getAccessToken, createTokenCache } = await import('./tokenCache.js');
+    const fetchFn = vi
+      .fn()
+      .mockResolvedValueOnce(new Response('nope', { status: 500 }))
+      .mockResolvedValueOnce(jsonResponse({ access_token: 'token-retry', expires_in: 3600 }));
+    const cache = createTokenCache();
+
+    await expect(
+      getAccessToken(CONFIG, { fetchFn, cache, nowMs: () => 1_000_000 }),
+    ).rejects.toThrow(/500/);
+
+    const token = await getAccessToken(CONFIG, { fetchFn, cache, nowMs: () => 1_000_000 });
+    expect(token).toBe('token-retry');
+    expect(fetchFn).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not coalesce across distinct cache instances', async () => {
+    const { getAccessToken, createTokenCache } = await import('./tokenCache.js');
+    const fetchFn = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse({ access_token: 'token-a', expires_in: 3600 }))
+      .mockResolvedValueOnce(jsonResponse({ access_token: 'token-b', expires_in: 3600 }));
+
+    const [a, b] = await Promise.all([
+      getAccessToken(CONFIG, { fetchFn, cache: createTokenCache(), nowMs: () => 1_000_000 }),
+      getAccessToken(CONFIG, { fetchFn, cache: createTokenCache(), nowMs: () => 1_000_000 }),
+    ]);
+
+    expect(new Set([a, b])).toEqual(new Set(['token-a', 'token-b']));
+    expect(fetchFn).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('getTokenCache', () => {
+  beforeEach(() => {
+    vi.resetModules();
+  });
+
+  it('returns the same cache instance on repeated calls (module-scope singleton)', async () => {
+    const { getTokenCache } = await import('./tokenCache.js');
+    const a = getTokenCache();
+    const b = getTokenCache();
+    expect(a).toBe(b);
+  });
+
+  it('preserves a cached token across separate getTokenCache() calls', async () => {
+    const { getTokenCache } = await import('./tokenCache.js');
+    getTokenCache().set({ accessToken: 'persisted', expiresAtMs: 1_000_000 });
+    expect(getTokenCache().get()?.accessToken).toBe('persisted');
+  });
 });

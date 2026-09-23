@@ -1,4 +1,4 @@
-import { toVerifiedDeptId } from '@boxalarm/dept-scope';
+import { toVerifiedDeptId, type VerifiedDeptId } from '@boxalarm/dept-scope';
 import { emitOutcomeMetric } from '@boxalarm/metrics';
 import { getDocClient, readPersonnelTableConfig } from './dynamoClient.js';
 import {
@@ -9,12 +9,13 @@ import {
   type LosapPointsCalculator,
 } from './completeShiftAttendance.js';
 
-const METRIC_NAMESPACE = 'Boxalarm/PersonnelShiftAttendance';
+const METRIC_NAMESPACE = 'Boxalarm/personnel-shift-attendance';
 
 export interface ShiftCompletionPayload {
   readonly deptId: string;
   /** When set, complete only this shift. When omitted, sweep all ended claimed shifts for the dept. */
   readonly shiftId?: string;
+  /** Epoch milliseconds (matches DUTY_SHIFT.startAt/endAt). Defaults to Date.now() when omitted. */
   readonly asOf?: number;
 }
 
@@ -69,8 +70,15 @@ export const handler = async (
     throw error;
   }
 
-  const deptId = toVerifiedDeptId({ deptId: payload.deptId });
-  const now = payload.asOf ?? Math.floor(Date.now() / 1000);
+  let deptId: VerifiedDeptId;
+  try {
+    deptId = toVerifiedDeptId({ deptId: payload.deptId });
+  } catch (error) {
+    logError('shifts.completion.invalid_dept', error, 'unknown');
+    emitOutcomeMetric(METRIC_NAMESPACE, 'CompletionFailed', 'InvalidDeptId');
+    throw error;
+  }
+  const now = payload.asOf ?? Date.now();
   const { tableName } = readPersonnelTableConfig(process.env);
   const doc = getDocClient(process.env);
   const losapCalculator = deps.losapCalculator ?? zeroLosapCalculator;
@@ -98,12 +106,45 @@ export const handler = async (
       outcomes.push({ shiftId, outcome });
       if (outcome.kind === 'COMPLETED') {
         emitOutcomeMetric(METRIC_NAMESPACE, 'AttendanceRecorded');
+      } else if (outcome.kind === 'ATTENDANCE_CONFLICT') {
+        // A genuine attendance-record key collision, not a duplicate completion — meter and log
+        // distinctly so it never silently reads as success (PR #150 review, finding #2).
+        logError(
+          'shifts.completion.attendance_conflict',
+          new Error(`attendance key collision completing shift ${shiftId}`),
+          `${deptId}#${shiftId}`,
+        );
+        emitOutcomeMetric(METRIC_NAMESPACE, 'CompletionFailed', 'AttendanceConflict');
+      } else if (outcome.kind === 'SKIPPED_TOO_MANY_CLAIMS') {
+        logError(
+          'shifts.completion.too_many_claims',
+          new Error(`shift ${shiftId} has more claimed positions than one transaction supports`),
+          `${deptId}#${shiftId}`,
+          { claimedCount: outcome.claimedCount, maxSupported: outcome.maxSupported },
+        );
+        emitOutcomeMetric(METRIC_NAMESPACE, 'CompletionFailed', 'TooManyClaimedPositions');
       }
     } catch (error) {
+      // One malformed/failing shift must not abort every remaining shift in this invocation
+      // (PR #150 review, finding #4) — record the failure and continue the sweep.
       logError('shifts.completion.write_failed', error, `${deptId}#${shiftId}`);
       emitOutcomeMetric(METRIC_NAMESPACE, 'CompletionFailed', 'DynamoDbUnavailable');
-      throw error;
+      outcomes.push({
+        shiftId,
+        outcome: { kind: 'FAILED', reason: error instanceof Error ? error.message : String(error) },
+      });
     }
+  }
+
+  const allShiftsFailed =
+    shiftIds.length > 0 && outcomes.every((entry) => entry.outcome.kind === 'FAILED');
+  if (allShiftsFailed) {
+    const error = new Error(
+      `all ${shiftIds.length} shift(s) failed attendance completion in this invocation`,
+    );
+    logError('shifts.completion.all_failed', error, correlationId, { shiftCount: shiftIds.length });
+    emitOutcomeMetric(METRIC_NAMESPACE, 'CompletionFailed', 'AllShiftsFailed');
+    throw error;
   }
 
   return { outcomes };

@@ -1,4 +1,8 @@
+import { randomUUID } from 'node:crypto';
+import { createLogger } from '@boxalarm/logging';
 import type { NerisConfig } from './config.js';
+
+const logger = createLogger({ service: 'incident-service' });
 
 /** Refresh when remaining lifetime is at or below this skew (AC3). */
 export const NEAR_EXPIRY_SKEW_MS = 60_000;
@@ -27,6 +31,19 @@ export function createTokenCache(): TokenCache {
       entry = undefined;
     },
   };
+}
+
+let cachedTokenCache: TokenCache | undefined;
+
+/**
+ * Returns a module-scope singleton {@link TokenCache}, mirroring config.ts's
+ * cached-client pattern (`cachedSsmClient ??= ...`), so the near-expiry token
+ * reuse in {@link getAccessToken} survives across warm Lambda invocations
+ * instead of starting from an empty cache on every invocation.
+ */
+export function getTokenCache(cache?: TokenCache): TokenCache {
+  cachedTokenCache ??= cache ?? createTokenCache();
+  return cachedTokenCache;
 }
 
 export interface GetAccessTokenDeps {
@@ -68,6 +85,11 @@ async function requestAccessToken(
   });
 
   if (!response.ok) {
+    logger.error({
+      event: 'neris.token.http_error',
+      correlationId: randomUUID(),
+      status: response.status,
+    });
     throw new Error(`NERIS token endpoint returned HTTP ${response.status}`);
   }
 
@@ -75,10 +97,18 @@ async function requestAccessToken(
   try {
     body = (await response.json()) as TokenResponseBody;
   } catch {
+    logger.error({
+      event: 'neris.token.invalid_json',
+      correlationId: randomUUID(),
+    });
     throw new Error('NERIS token endpoint returned non-JSON body');
   }
 
   if (typeof body.access_token !== 'string' || body.access_token.length === 0) {
+    logger.error({
+      event: 'neris.token.missing_access_token',
+      correlationId: randomUUID(),
+    });
     throw new Error('NERIS token response missing access_token');
   }
 
@@ -89,6 +119,11 @@ async function requestAccessToken(
 
   return { accessToken: body.access_token, expiresInSeconds };
 }
+
+// Tracks an in-flight token request per TokenCache instance so concurrent
+// callers that both observe an expired/empty cache coalesce onto the same
+// request instead of each independently calling the NERIS token endpoint.
+const inFlightRequests = new WeakMap<TokenCache, Promise<string>>();
 
 /**
  * Returns a cached OAuth2 access token, refreshing when near expiry so the
@@ -107,12 +142,25 @@ export async function getAccessToken(
     return existing.accessToken;
   }
 
+  const pending = inFlightRequests.get(cache);
+  if (pending) {
+    return pending;
+  }
+
   const acquiredAt = nowMs();
-  const refreshed = await requestAccessToken(config, fetchFn);
-  const entry: CachedAccessToken = {
-    accessToken: refreshed.accessToken,
-    expiresAtMs: acquiredAt + refreshed.expiresInSeconds * 1000,
-  };
-  cache.set(entry);
-  return entry.accessToken;
+  const requestPromise = requestAccessToken(config, fetchFn)
+    .then((refreshed) => {
+      const entry: CachedAccessToken = {
+        accessToken: refreshed.accessToken,
+        expiresAtMs: acquiredAt + refreshed.expiresInSeconds * 1000,
+      };
+      cache.set(entry);
+      return entry.accessToken;
+    })
+    .finally(() => {
+      inFlightRequests.delete(cache);
+    });
+
+  inFlightRequests.set(cache, requestPromise);
+  return requestPromise;
 }

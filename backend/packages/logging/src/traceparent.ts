@@ -79,10 +79,20 @@ export function extractCorrelationId(headers?: HeaderBag): string {
   return randomUUID();
 }
 
+/**
+ * Propagate an incoming W3C traceparent header, or generate a fresh one.
+ *
+ * Per the W3C Trace Context spec, a service that receives no valid `traceparent`
+ * header is the root of a new trace: it must mint a brand-new trace-id and
+ * parent-id (span-id) rather than fail the request. Note this intentionally does
+ * NOT fall back through `extractCorrelationId` — that helper's own fallback can
+ * return a UUID (with dashes), which is not a valid 32-hex-char trace-id and
+ * would make `generateTraceparent` throw.
+ */
 export function extractTraceparent(headers?: HeaderBag): string {
   const existing = parseTraceparent(headerValue(headers, 'traceparent'));
   if (existing) {
     return `00-${existing.traceId}-${existing.parentId}-${existing.flags}`;
   }
-  return generateTraceparent(extractCorrelationId(headers));
+  return generateTraceparent();
 }

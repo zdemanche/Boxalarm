@@ -1,6 +1,15 @@
-import { ConditionalCheckFailedException } from '@aws-sdk/client-dynamodb';
-import { GetCommand, PutCommand, type DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
+import { TransactionCanceledException } from '@aws-sdk/client-dynamodb';
+import {
+  GetCommand,
+  TransactWriteCommand,
+  type DynamoDBDocumentClient,
+  type TransactWriteCommandInput,
+} from '@aws-sdk/lib-dynamodb';
 import { buildDeptScopedPk, type VerifiedDeptId } from '@boxalarm/dept-scope';
+import { createLogger } from '@boxalarm/logging';
+import { buildOutboxRecord } from '@boxalarm/outbox';
+
+const logger = createLogger({ service: 'platform-service' });
 
 export const DEPARTMENT_CONFIG_TYPES = [
   'STATIONS',
@@ -68,6 +77,7 @@ export interface PutDepartmentConfigInput {
   readonly configType: DepartmentConfigType;
   readonly value: Record<string, unknown>;
   readonly actorId: string;
+  readonly correlationId: string;
   readonly expectedVersion?: number;
   readonly now?: () => Date;
 }
@@ -90,9 +100,24 @@ export async function putDepartmentConfig(
   };
 
   const isCreate = input.expectedVersion === undefined;
-  try {
-    await docClient.send(
-      new PutCommand({
+
+  const outboxRecord = buildOutboxRecord(
+    input.deptId,
+    'platform-service',
+    'platform.config.updated',
+    input.correlationId,
+    {
+      configType: input.configType,
+      version: nextVersion,
+      value: input.value,
+      updatedBy: input.actorId,
+      deptId: input.deptId,
+    },
+  );
+
+  const transactItems: NonNullable<TransactWriteCommandInput['TransactItems']> = [
+    {
+      Put: {
         TableName: input.tableName,
         Item: item,
         ConditionExpression: isCreate
@@ -102,15 +127,26 @@ export async function putDepartmentConfig(
         ExpressionAttributeValues: isCreate
           ? undefined
           : { ':expectedVersion': input.expectedVersion },
-      }),
-    );
+      },
+    },
+    { Put: { TableName: input.tableName, Item: outboxRecord } },
+  ];
+
+  try {
+    await docClient.send(new TransactWriteCommand({ TransactItems: transactItems }));
   } catch (error) {
-    if (
-      error instanceof ConditionalCheckFailedException ||
-      (error instanceof Error && error.name === 'ConditionalCheckFailedException')
-    ) {
+    const cancellationReasons =
+      error instanceof TransactionCanceledException ? error.CancellationReasons : undefined;
+    if (cancellationReasons?.some((reason) => reason.Code === 'ConditionalCheckFailed')) {
       throw new ConflictError();
     }
+    logger.error({
+      event: 'platform.config.put.failed',
+      correlationId: input.correlationId,
+      configType: input.configType,
+      deptId: input.deptId,
+      message: error instanceof Error ? error.message : 'unknown error',
+    });
     throw error;
   }
 
