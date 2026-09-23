@@ -245,4 +245,51 @@ describe('maintainMemberSnapshot handler', () => {
     const { handler } = await import('./maintainMemberSnapshot.js');
     await expect(handler(buildSqsEvent([]), {} as never, () => undefined)).resolves.toBeUndefined();
   });
+
+  it('emits SnapshotPropagationLatencyMs with the elapsed ms from eventTime to now (AC5)', async () => {
+    vi.setSystemTime(new Date('2026-09-14T00:00:09.000Z'));
+    const { createHandler } = await import('./maintainMemberSnapshot.js');
+    const send = vi
+      .fn()
+      .mockResolvedValueOnce({ Item: undefined })
+      .mockResolvedValueOnce({ Item: undefined })
+      .mockResolvedValueOnce({})
+      .mockResolvedValueOnce({});
+    const handler = createHandler({ client: { send } as unknown as DynamoDBDocumentClient });
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+
+    await handler(buildSqsEvent([memberUpdatedRecord({})]), {} as never, () => undefined);
+
+    const emitted = logSpy.mock.calls
+      .map((call) => JSON.parse(call[0] as string) as Record<string, unknown>)
+      .find((entry) => entry.SnapshotPropagationLatencyMs !== undefined);
+    expect(emitted?.SnapshotPropagationLatencyMs).toBe(9000);
+    logSpy.mockRestore();
+    vi.useRealTimers();
+  });
+
+  it('clamps a future eventTime (clock skew) to 0 and logs a warning instead of throwing', async () => {
+    vi.setSystemTime(new Date('2026-09-13T23:59:00.000Z'));
+    const { createHandler } = await import('./maintainMemberSnapshot.js');
+    const send = vi
+      .fn()
+      .mockResolvedValueOnce({ Item: undefined })
+      .mockResolvedValueOnce({ Item: undefined })
+      .mockResolvedValueOnce({})
+      .mockResolvedValueOnce({});
+    const handler = createHandler({ client: { send } as unknown as DynamoDBDocumentClient });
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+    await handler(buildSqsEvent([memberUpdatedRecord({})]), {} as never, () => undefined);
+
+    const emitted = logSpy.mock.calls
+      .map((call) => JSON.parse(call[0] as string) as Record<string, unknown>)
+      .find((entry) => entry.SnapshotPropagationLatencyMs !== undefined);
+    expect(emitted?.SnapshotPropagationLatencyMs).toBe(0);
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('future_event_time'));
+    logSpy.mockRestore();
+    warnSpy.mockRestore();
+    vi.useRealTimers();
+  });
 });
