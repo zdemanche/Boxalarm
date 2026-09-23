@@ -101,4 +101,42 @@ describe("BoxalarmUserPoolClient", () => {
     const explicitAuthFlows = await resolve(client.userPoolClient.explicitAuthFlows);
     expect(explicitAuthFlows).toEqual(["ALLOW_USER_SRP_AUTH", "ALLOW_REFRESH_TOKEN_AUTH"]);
   });
+
+  it("sets 1h/1h/3650d token validity with revocation and rotation grace (E8-S8-INFRA AC1/AC4)", async () => {
+    const client = new BoxalarmUserPoolClient("test-client-session-policy", {
+      userPoolId: pulumi.output("pool-id"),
+      clientName: "web",
+      standardWriteAttributes: ["email", "name"],
+      callbackUrls: ["https://localhost:5173/auth/callback"],
+      logoutUrls: ["https://localhost:5173/"],
+      enableTokenRevocation: true,
+      accessTokenValidityHours: 1,
+      idTokenValidityHours: 1,
+      refreshTokenValidityDays: 3650,
+      refreshTokenRotationGraceSeconds: 60,
+    });
+
+    const [
+      accessTokenValidity,
+      idTokenValidity,
+      refreshTokenValidity,
+      units,
+      revocation,
+      rotation,
+    ] = await Promise.all([
+      resolve(client.userPoolClient.accessTokenValidity),
+      resolve(client.userPoolClient.idTokenValidity),
+      resolve(client.userPoolClient.refreshTokenValidity),
+      resolve(client.userPoolClient.tokenValidityUnits),
+      resolve(client.userPoolClient.enableTokenRevocation),
+      resolve(client.userPoolClient.refreshTokenRotation),
+    ]);
+
+    expect(accessTokenValidity).toBe(1);
+    expect(idTokenValidity).toBe(1);
+    expect(refreshTokenValidity).toBe(3650);
+    expect(units).toMatchObject({ accessToken: "hours", idToken: "hours", refreshToken: "days" });
+    expect(revocation).toBe(true);
+    expect(rotation).toMatchObject({ feature: "ENABLED", retryGracePeriodSeconds: 60 });
+  });
 });

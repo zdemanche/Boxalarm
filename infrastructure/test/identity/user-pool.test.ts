@@ -167,6 +167,38 @@ describe("BoxalarmUserPool", () => {
     expect(deletionProtection).toBe("ACTIVE");
   });
 
+  it("recovers via verified email first then verified phone, with no human step (E8-S2-INFRA AC1)", async () => {
+    const { BoxalarmUserPool } = await import("../../components/identity/user-pool");
+    const identity = new BoxalarmUserPool("test-identity-recovery", { env: "dev" });
+    await settle(identity);
+
+    const setting = await resolve(identity.userPool.accountRecoverySetting);
+    expect(setting?.recoveryMechanisms).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ name: "verifiedEmail", priority: 1 }),
+        expect.objectContaining({ name: "verifiedPhoneNumber", priority: 2 }),
+      ]),
+    );
+  });
+
+  it("scopes the Cognito SMS role's trust to this pool's external ID (confused-deputy hardening)", async () => {
+    const { BoxalarmUserPool } = await import("../../components/identity/user-pool");
+    const identity = new BoxalarmUserPool("test-identity-sms", { env: "dev" });
+    await settle(identity);
+
+    const [policy, smsConfig] = await Promise.all([
+      resolve(identity.smsRole.assumeRolePolicy),
+      resolve(identity.userPool.smsConfiguration),
+    ]);
+    const parsed = JSON.parse(policy) as {
+      Statement: Array<{ Condition?: Record<string, unknown> }>;
+    };
+    expect(parsed.Statement[0]?.Condition).toMatchObject({
+      StringEquals: { "sts:ExternalId": "boxalarm-dev-identity-sms" },
+    });
+    expect(smsConfig?.externalId).toBe("boxalarm-dev-identity-sms");
+  });
+
   it("provisions a Cognito-hosted domain with prefix boxalarm-{env}", async () => {
     const { BoxalarmUserPool } = await import("../../components/identity/user-pool");
     const identity = new BoxalarmUserPool("test-identity-domain", { env: "qa" });
