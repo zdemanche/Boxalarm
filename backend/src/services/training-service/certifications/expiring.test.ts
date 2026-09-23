@@ -89,6 +89,12 @@ describe('expiring.ts handler (entrypoint, AC3)', () => {
     const { createAuthzClient } = await import('@boxalarm/authz');
     createAuthzClient(process.env, decidingClient('ALLOW'));
     const { createDynamoClient } = await import('../dynamoClient.js');
+    // Fixture is computed relative to the real clock (5 days out, well within the
+    // 30-day lead time) rather than a hardcoded date, which previously went stale
+    // and started failing once the calendar caught up to the hardcoded expiryDate.
+    const dueSoon = new Date(Date.now() + 5 * 24 * 60 * 60 * 1000);
+    const expiryDate = dueSoon.toISOString().slice(0, 10);
+    const expiryYearMonth = expiryDate.slice(0, 7);
     const send = vi.fn((command: unknown) => {
       if (command instanceof GetCommand) {
         return { Item: { value: { certExpiryLeadDays: 30 } } };
@@ -96,14 +102,14 @@ describe('expiring.ts handler (entrypoint, AC3)', () => {
       if (command instanceof QueryCommand) {
         const gsi2pk = command.input.ExpressionAttributeValues?.[':gsi2pk'] as string;
         return {
-          Items: gsi2pk.includes('2026-09')
+          Items: gsi2pk.includes(expiryYearMonth)
             ? [
                 {
                   certId: 'CERT-1',
                   memberId: 'MBR-1',
                   certType: 'FF1',
                   issueDate: '2024-01-01',
-                  expiryDate: '2026-09-20',
+                  expiryDate,
                   issuingAuthority: 'CT DESPP',
                   attachmentS3Key: null,
                   status: 'CURRENT',

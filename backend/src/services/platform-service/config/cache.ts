@@ -35,14 +35,29 @@ function memoryStore(): CacheStore {
   };
 }
 
+const DEPT_PK_PREFIX = 'DEPT#';
+const CONFIG_SK_PREFIX = 'CONFIG#';
+
 function cacheKey(pk: string, sk: string): string {
-  return `${pk}|${sk}`;
+  const deptId = pk.startsWith(DEPT_PK_PREFIX) ? pk.slice(DEPT_PK_PREFIX.length) : pk;
+  const configType = sk.startsWith(CONFIG_SK_PREFIX) ? sk.slice(CONFIG_SK_PREFIX.length) : sk;
+  return `platform-service:department-config:${deptId}:${configType}`;
 }
 
 /**
  * Soft-dependency cache in front of DEPARTMENT_CONFIG reads.
- * Valkey (or any remote store) can be injected via `store`; failures fall through
- * to the DynamoDB loader so a cache outage never fails the request (E8-S4 AC3).
+ *
+ * `store` accepts any `CacheStore` implementation (e.g. a Valkey/ElastiCache-backed
+ * one), but as of this writing no such store is actually wired in anywhere —
+ * `createHandler()` in `handler.ts` always falls back to the process-local
+ * `memoryStore()` below, since no Valkey client dependency or endpoint config
+ * exists yet in this repo. That means cache state does not survive across
+ * separate Lambda execution environments except via container reuse, so the
+ * cross-invocation benefit at real concurrency is negligible today. Wiring a
+ * real remote store is tracked as a follow-up, not yet implemented here.
+ *
+ * Regardless of which store is injected, failures fall through to the
+ * DynamoDB loader so a cache outage never fails the request (E8-S4 AC3).
  */
 export function createConfigCache(options: ConfigCacheOptions): ConfigCache {
   const ttlMs = options.ttlMs;

@@ -19,7 +19,7 @@ import {
 import { fetchMemberTimelines, fetchAttendanceRecords } from '../lib/memberTimeline.js';
 import { computeMembershipTrend } from '../lib/membershipTrend.js';
 
-const METRIC_NAMESPACE = 'Boxalarm/Reporting';
+const METRIC_NAMESPACE = 'Boxalarm/reporting';
 const MAX_RANGE_MS = 731 * 24 * 60 * 60 * 1000;
 const DATE_ONLY_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 

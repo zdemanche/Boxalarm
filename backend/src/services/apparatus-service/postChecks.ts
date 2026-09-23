@@ -42,7 +42,7 @@ const CHECK_TRANSACT_INDEX = 0;
 const LOCK_TRANSACT_INDEX = 1;
 
 function emitChecksMetric(outcome: 'Created' | 'DuplicateAccepted' | 'Conflict' | 'Error'): void {
-  emitOutcomeMetric('Boxalarm/ApparatusService', `SubmitCheck${outcome}`);
+  emitOutcomeMetric('Boxalarm/apparatus-service', `SubmitCheck${outcome}`);
 }
 
 function logChecksError(operation: string, error: unknown, correlationId: string): void {

@@ -47,7 +47,7 @@ function emitPrePlanMetric(outcome: 'Created' | 'Failed', reason?: string): void
         Timestamp: Date.now(),
         CloudWatchMetrics: [
           {
-            Namespace: 'Boxalarm/Inspections',
+            Namespace: 'Boxalarm/inspections',
             Dimensions: reason ? [[], ['Reason']] : [[]],
             Metrics: [{ Name: `PrePlan${outcome}`, Unit: 'Count' }],
           },

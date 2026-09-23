@@ -1,14 +1,13 @@
-import { randomUUID } from 'node:crypto';
-import type {
-  APIGatewayProxyEventV2WithLambdaAuthorizer,
-  APIGatewayProxyStructuredResultV2,
-  Handler,
-} from 'aws-lambda';
+import type { APIGatewayProxyResultV2 } from 'aws-lambda';
 import type { KMSClient } from '@aws-sdk/client-kms';
 import type { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
+import {
+  extractTraceId,
+  withAuthorization,
+  type CedarPrincipalContext,
+  type GuardEvent,
+} from '@boxalarm/authz';
 import { toVerifiedDeptId, type VerifiedDeptId } from '@boxalarm/dept-scope';
-import type { AuthorizerContext } from '../authorizer/handler.js';
-import { assertChiefOrAdmin, ForbiddenError } from './authz.js';
 import { getDynamoDocClient, getKmsClient } from './awsClients.js';
 import { type DisposalCandidate, runDisposal } from './disposal.js';
 
@@ -25,12 +24,17 @@ interface ProblemDetails {
   readonly traceId: string;
 }
 
+// Bounds the blast radius of a single privileged request: an unbounded candidates array
+// drives a fully serial GetItem-per-candidate loop, risking excessive DynamoDB/KMS calls
+// or a Lambda timeout mid-batch.
+const MAX_CANDIDATES = 500;
+
 function problemResponse(
   status: number,
   title: string,
   detail: string,
   traceId: string,
-): APIGatewayProxyStructuredResultV2 {
+): APIGatewayProxyResultV2 {
   const body: ProblemDetails = { type: 'about:blank', title, status, detail, traceId };
   return {
     statusCode: status,
@@ -39,7 +43,7 @@ function problemResponse(
   };
 }
 
-function jsonResponse(status: number, payload: unknown): APIGatewayProxyStructuredResultV2 {
+function jsonResponse(status: number, payload: unknown): APIGatewayProxyResultV2 {
   return {
     statusCode: status,
     headers: { 'content-type': 'application/json' },
@@ -65,23 +69,6 @@ function errorContext(error: unknown): { reason: string; message: string } {
   };
 }
 
-function readAuthorizerContext(
-  event: APIGatewayProxyEventV2WithLambdaAuthorizer<AuthorizerContext>,
-): AuthorizerContext | undefined {
-  const context = event.requestContext.authorizer.lambda;
-  if (
-    !context ||
-    typeof context.sub !== 'string' ||
-    context.sub.length === 0 ||
-    typeof context.deptId !== 'string' ||
-    context.deptId.length === 0 ||
-    typeof context['cognito:groups'] !== 'string'
-  ) {
-    return undefined;
-  }
-  return context;
-}
-
 function parseCandidates(body: string | undefined): DisposalCandidate[] | { error: string } {
   let raw: unknown;
   try {
@@ -98,6 +85,9 @@ function parseCandidates(body: string | undefined): DisposalCandidate[] | { erro
   }
   if (!Array.isArray(candidates)) {
     return { error: 'candidates must be an array.' };
+  }
+  if (candidates.length > MAX_CANDIDATES) {
+    return { error: `candidates must not exceed ${MAX_CANDIDATES} entries.` };
   }
   const parsed: DisposalCandidate[] = [];
   for (const entry of candidates) {
@@ -125,7 +115,7 @@ async function handlePost(
   body: string | undefined,
   traceId: string,
   deps: Deps,
-): Promise<APIGatewayProxyStructuredResultV2> {
+): Promise<APIGatewayProxyResultV2> {
   const candidates = parseCandidates(body);
   if (!Array.isArray(candidates)) {
     return problemResponse(400, 'Bad Request', candidates.error, traceId);
@@ -150,40 +140,23 @@ async function handlePost(
 
 export function createHandler(
   deps: Deps = {},
-): Handler<
-  APIGatewayProxyEventV2WithLambdaAuthorizer<AuthorizerContext>,
-  APIGatewayProxyStructuredResultV2
-> {
-  return async (event) => {
-    const traceId = randomUUID();
-    const context = readAuthorizerContext(event);
-    if (!context) {
-      log(
-        'error',
-        'retention.disposal.authorizerContext.invalid',
-        { routeKey: event.routeKey },
-        traceId,
-      );
-      return problemResponse(401, 'Unauthorized', 'A valid session is required.', traceId);
-    }
-
-    let deptId: VerifiedDeptId;
-    try {
-      deptId = toVerifiedDeptId(context);
-      assertChiefOrAdmin(context['cognito:groups']);
-    } catch (error) {
-      if (error instanceof ForbiddenError) {
-        return problemResponse(403, 'Forbidden', 'CHIEF or ADMIN role is required.', traceId);
+): (event: GuardEvent) => Promise<APIGatewayProxyResultV2> {
+  return withAuthorization(
+    async (event: GuardEvent, principal: CedarPrincipalContext) => {
+      const traceId = extractTraceId(event);
+      const deptId = toVerifiedDeptId(principal);
+      if (event.routeKey !== 'POST /api/v1/platform/retention/disposal') {
+        return problemResponse(404, 'Not found', `No route for ${event.routeKey}.`, traceId);
       }
-      log('error', 'retention.disposal.authz.failed', errorContext(error), traceId);
-      return problemResponse(401, 'Unauthorized', 'A valid session is required.', traceId);
-    }
-
-    if (event.routeKey === 'POST /api/v1/platform/retention/disposal') {
-      return handlePost(deptId, context.sub, event.body, traceId, deps);
-    }
-    return problemResponse(404, 'Not found', `No route for ${event.routeKey}.`, traceId);
-  };
+      return handlePost(deptId, principal.sub, event.body, traceId, deps);
+    },
+    {
+      actionType: 'Boxalarm::Action',
+      actionId: 'RunRecordsDisposal',
+      resourceType: 'Boxalarm::Department',
+      resourceId: (event) => event.requestContext.authorizer?.lambda?.deptId ?? '',
+    },
+  );
 }
 
 export const handler = createHandler();

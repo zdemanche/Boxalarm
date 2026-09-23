@@ -100,11 +100,11 @@ async function authorizeHoursQuery(
         traceId,
         reason: error.reason,
       });
-      emitOutcomeMetric('Boxalarm/Training', METRIC_NAME, 'Error');
+      emitOutcomeMetric('Boxalarm/training', METRIC_NAME, 'Error');
       return serviceUnavailableProblem(traceId);
     }
     logError('training.hours.authorize_failed', error, { deptId, memberId, traceId });
-    emitOutcomeMetric('Boxalarm/Training', METRIC_NAME, 'Error');
+    emitOutcomeMetric('Boxalarm/training', METRIC_NAME, 'Error');
     return serviceUnavailableProblem(traceId);
   }
 }
@@ -150,7 +150,7 @@ export const handler = async (event: GuardEvent): Promise<APIGatewayProxyResultV
       );
       const categories = aggregateMemberHoursByCategory(records);
       logInfo('training.hours.queried', { deptId: principal.deptId, memberId, traceId });
-      emitOutcomeMetric('Boxalarm/Training', METRIC_NAME);
+      emitOutcomeMetric('Boxalarm/training', METRIC_NAME);
       return {
         statusCode: 200,
         headers: { 'content-type': 'application/json' },
@@ -178,7 +178,7 @@ export const handler = async (event: GuardEvent): Promise<APIGatewayProxyResultV
     );
     const members = aggregateRosterHoursByCategory(events, attendeesByEvent);
     logInfo('training.hours.queried', { deptId: principal.deptId, traceId, roster: true });
-    emitOutcomeMetric('Boxalarm/Training', METRIC_NAME);
+    emitOutcomeMetric('Boxalarm/training', METRIC_NAME);
     return {
       statusCode: 200,
       headers: { 'content-type': 'application/json' },
@@ -186,7 +186,7 @@ export const handler = async (event: GuardEvent): Promise<APIGatewayProxyResultV
     };
   } catch (error) {
     logError('training.hours.failed', error, { deptId: principal.deptId, memberId, traceId });
-    emitOutcomeMetric('Boxalarm/Training', METRIC_NAME, 'Error');
+    emitOutcomeMetric('Boxalarm/training', METRIC_NAME, 'Error');
     return serviceUnavailableProblem(traceId);
   }
 };

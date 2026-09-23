@@ -22,7 +22,7 @@ function emitChecklistMetric(outcome: 'Found' | 'NotFound' | 'Error'): void {
         Timestamp: Date.now(),
         CloudWatchMetrics: [
           {
-            Namespace: 'Boxalarm/ApparatusService',
+            Namespace: 'Boxalarm/apparatus-service',
             Dimensions: [[]],
             Metrics: [{ Name: `GetChecklist${outcome}`, Unit: 'Count' }],
           },

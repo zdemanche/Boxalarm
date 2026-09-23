@@ -5,6 +5,7 @@ import type {
 } from 'aws-lambda';
 import type { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
 import { buildDeptScopedPk, toVerifiedDeptId } from '@boxalarm/dept-scope';
+import { createLogger } from '@boxalarm/logging';
 import type { AuthorizerContext } from '../authorizer/handler.js';
 import { assertChiefOrAdmin, ForbiddenError } from '../export/authz.js';
 import { getDynamoDocClient } from '../export/awsClients.js';
@@ -17,6 +18,9 @@ import {
   putDepartmentConfig,
   type DepartmentConfigItem,
 } from './repository.js';
+import { validateConfigValue, type FieldError } from './schema.js';
+
+const logger = createLogger({ service: 'platform-service' });
 
 interface Deps {
   readonly docClient?: DynamoDBDocumentClient;
@@ -30,6 +34,7 @@ interface ProblemDetails {
   readonly status: number;
   readonly detail: string;
   readonly traceId: string;
+  readonly errors?: readonly FieldError[];
 }
 
 function problemResponse(
@@ -37,8 +42,16 @@ function problemResponse(
   title: string,
   detail: string,
   traceId: string,
+  errors?: readonly FieldError[],
 ): APIGatewayProxyStructuredResultV2 {
-  const body: ProblemDetails = { type: 'about:blank', title, status, detail, traceId };
+  const body: ProblemDetails = {
+    type: 'about:blank',
+    title,
+    status,
+    detail,
+    traceId,
+    ...(errors && errors.length > 0 ? { errors } : {}),
+  };
   return {
     statusCode: status,
     headers: { 'content-type': 'application/problem+json' },
@@ -135,6 +148,12 @@ export function createHandler(deps: Deps = {}): Handler {
         assertChiefOrAdmin(authorizer['cognito:groups'] ?? '');
       } catch (error) {
         if (error instanceof ForbiddenError) {
+          logger.warn({
+            event: 'platform.config.put.forbidden',
+            correlationId: traceId,
+            configType: configTypeRaw,
+            actorId: authorizer.sub,
+          });
           return problemResponse(403, 'Forbidden', error.message, traceId);
         }
         throw error;
@@ -149,6 +168,17 @@ export function createHandler(deps: Deps = {}): Handler {
 
       if (!body.value || typeof body.value !== 'object' || Array.isArray(body.value)) {
         return problemResponse(400, 'Bad Request', 'body.value must be a JSON object', traceId);
+      }
+
+      const fieldErrors = validateConfigValue(configTypeRaw, body.value as Record<string, unknown>);
+      if (fieldErrors.length > 0) {
+        return problemResponse(
+          400,
+          'Bad Request',
+          `body.value is not a valid ${configTypeRaw} config`,
+          traceId,
+          fieldErrors,
+        );
       }
 
       const expectedVersion =
@@ -173,12 +203,26 @@ export function createHandler(deps: Deps = {}): Handler {
           configType: configTypeRaw,
           value: body.value as Record<string, unknown>,
           actorId: authorizer.sub,
+          correlationId: traceId,
           ...(expectedVersion !== undefined ? { expectedVersion } : {}),
         });
         cache.invalidate(pk, sk);
+        logger.info({
+          event: 'platform.config.updated',
+          correlationId: traceId,
+          configType: configTypeRaw,
+          actorId: authorizer.sub,
+          version: saved.version,
+        });
         return jsonResponse(200, toConfigResponse(saved));
       } catch (error) {
         if (error instanceof ConflictError) {
+          logger.warn({
+            event: 'platform.config.put.conflict',
+            correlationId: traceId,
+            configType: configTypeRaw,
+            actorId: authorizer.sub,
+          });
           return problemResponse(
             409,
             'Conflict',
@@ -186,6 +230,13 @@ export function createHandler(deps: Deps = {}): Handler {
             traceId,
           );
         }
+        logger.error({
+          event: 'platform.config.put.failed',
+          correlationId: traceId,
+          configType: configTypeRaw,
+          actorId: authorizer.sub,
+          message: error instanceof Error ? error.message : 'unknown error',
+        });
         throw error;
       }
     }

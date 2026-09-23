@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { ConditionalCheckFailedException } from '@aws-sdk/client-dynamodb';
+import { TransactionCanceledException } from '@aws-sdk/client-dynamodb';
 import type { APIGatewayProxyEventV2WithLambdaAuthorizer } from 'aws-lambda';
 import type { AuthorizerContext } from '../authorizer/handler.js';
 import { createConfigCache } from './cache.js';
@@ -153,7 +153,7 @@ describe('department config handler', () => {
     });
     const result = (await handler(
       buildEvent('PUT', 'CHECKLIST_DEFAULTS', adminContext(), {
-        value: { items: ['oil'] },
+        value: { items: [{ code: 'OIL', label: 'Check oil', requiresPhoto: false }] },
       }),
       {} as never,
       () => undefined,
@@ -162,17 +162,71 @@ describe('department config handler', () => {
     expect(JSON.parse(result.body)).toMatchObject({
       configType: 'CHECKLIST_DEFAULTS',
       version: 1,
-      value: { items: ['oil'] },
+      value: { items: [{ code: 'OIL', label: 'Check oil', requiresPhoto: false }] },
+    });
+  });
+
+  it('PUT returns 400 with field-level errors when body.value does not match the configType schema', async () => {
+    const { createHandler } = await import('./handler.js');
+    const send = vi.fn();
+    const handler = createHandler({
+      docClient: fakeDocClient(send),
+      cache: createConfigCache({ ttlMs: 60_000 }),
+    });
+    const result = (await handler(
+      buildEvent('PUT', 'ALERT_RULES', adminContext(), {
+        // Arbitrary JSON with no recognized ALERT_RULES fields — this is the
+        // exact shape PR #145 accepted with zero validation (E8-S4 review round 2).
+        value: { arbitraryEscalationOverride: { disableAll: true } },
+      }),
+      {} as never,
+      () => undefined,
+    )) as { statusCode: number; body: string };
+    expect(result.statusCode).toBe(400);
+    expect(send).not.toHaveBeenCalled();
+    const body = JSON.parse(result.body) as {
+      errors?: readonly { field: string; message: string }[];
+    };
+    expect(body.errors).toContainEqual({
+      field: 'arbitraryEscalationOverride',
+      message: 'is not a recognized field',
+    });
+  });
+
+  it('PUT returns 400 with field-level errors for a malformed RETENTION value', async () => {
+    const { createHandler } = await import('./handler.js');
+    const send = vi.fn();
+    const handler = createHandler({
+      docClient: fakeDocClient(send),
+      cache: createConfigCache({ ttlMs: 60_000 }),
+    });
+    const result = (await handler(
+      buildEvent('PUT', 'RETENTION', adminContext(), {
+        value: { retentionYears: -1 },
+      }),
+      {} as never,
+      () => undefined,
+    )) as { statusCode: number; body: string };
+    expect(result.statusCode).toBe(400);
+    expect(send).not.toHaveBeenCalled();
+    const body = JSON.parse(result.body) as {
+      errors?: readonly { field: string; message: string }[];
+    };
+    expect(body.errors).toContainEqual({
+      field: 'retentionYears',
+      message: 'is required and must be a positive integer',
     });
   });
 
   it('PUT returns 409 when two admins race on the same expectedVersion', async () => {
     const { createHandler } = await import('./handler.js');
-    const send = vi
-      .fn()
-      .mockRejectedValue(
-        new ConditionalCheckFailedException({ message: 'conflict', $metadata: {} }),
-      );
+    const send = vi.fn().mockRejectedValue(
+      new TransactionCanceledException({
+        message: 'conflict',
+        $metadata: {},
+        CancellationReasons: [{ Code: 'ConditionalCheckFailed' }, { Code: 'None' }],
+      }),
+    );
     const handler = createHandler({
       docClient: fakeDocClient(send),
       cache: createConfigCache({ ttlMs: 60_000 }),

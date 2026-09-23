@@ -26,7 +26,7 @@ Consume from EventBridge. `notification-service` shares **no** queue, concurrenc
 
 ## Rules that are easy to get wrong
 
-> ⚠️ **Read [boxalarm-docs#11](https://github.com/zdemanche/boxalarm-docs/issues/11) before touching the alert path.** This seam produced a silent defect three review rounds running.
+> ⚠️ **Read [#12](https://github.com/zdemanche/Boxalarm-monorepo/issues/12) before touching the alert path.** This seam produced a silent defect three review rounds running.
 
 - **Routing and dedup both key on `channel`** (`push`/`sms`/`voice`). `channelTier` (`primary`/`escalation`) is escalation bookkeeping **only** — never a routing filter, never a dedup input. Getting this wrong means SMS silently never sends: no error, no DLQ, no receipt.
 - **One publish per `{member, channel}`** — the parallel push+SMS guarantee comes from two publishes, not two subscription filters on one.
@@ -41,4 +41,4 @@ RFC 7807 errors with `traceId` · W3C `traceparent` propagation · outbox patter
 
 ## Getting started
 
-Not yet scaffolded — see [#1](https://github.com/zdemanche/boxalarm-backend/issues/1).
+Not yet scaffolded — see [#26](https://github.com/zdemanche/Boxalarm-monorepo/issues/26).

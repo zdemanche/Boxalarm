@@ -167,6 +167,46 @@ describe('reportDefect handler', () => {
     expect(result).toMatchObject({ statusCode: 404 });
   });
 
+  it("returns 400 when photoS3Key is not scoped to the caller's department (cross-tenant reference)", async () => {
+    const { createReportDefectHandler } = await import('./reportDefectHandler.js');
+    const handler = createReportDefectHandler({
+      client: fakeDynamoClient({}),
+      authzClient: fakeAuthzClient('ALLOW'),
+    });
+    const result = await handler(
+      buildEvent(
+        JSON.stringify({
+          description: 'Leak',
+          severity: 'MAJOR',
+          photoS3Key: 'OTHERDEPT/defect/DEF-999/private.jpg',
+        }),
+      ),
+    );
+    expect(result).toMatchObject({ statusCode: 400 });
+    const body = JSON.parse((result as { body: string }).body) as {
+      errors?: readonly { field: string }[];
+    };
+    expect(body.errors).toContainEqual(expect.objectContaining({ field: 'photoS3Key' }));
+  });
+
+  it("rejects a photoS3Key using .. to escape the caller's department prefix", async () => {
+    const { createReportDefectHandler } = await import('./reportDefectHandler.js');
+    const handler = createReportDefectHandler({
+      client: fakeDynamoClient({}),
+      authzClient: fakeAuthzClient('ALLOW'),
+    });
+    const result = await handler(
+      buildEvent(
+        JSON.stringify({
+          description: 'Leak',
+          severity: 'MAJOR',
+          photoS3Key: 'NICHOLS/defect/../../OTHERDEPT/defect/DEF-999/private.jpg',
+        }),
+      ),
+    );
+    expect(result).toMatchObject({ statusCode: 400 });
+  });
+
   it('creates an OPEN defect, emits apparatus.defect.reported, and returns 201 (AC1)', async () => {
     const client = fakeDynamoClient({});
     const { createReportDefectHandler } = await import('./reportDefectHandler.js');

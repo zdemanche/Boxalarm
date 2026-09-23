@@ -95,7 +95,7 @@ describe('training-service client', () => {
     emitTrainingMetric('TrainingEventCreated');
     const noReason = JSON.parse(logSpy.mock.calls[0]?.[0] as string) as Record<string, unknown>;
     expect(noReason._aws).toMatchObject({
-      CloudWatchMetrics: [{ Namespace: 'Boxalarm/Training', Dimensions: [[]] }],
+      CloudWatchMetrics: [{ Namespace: 'Boxalarm/training', Dimensions: [[]] }],
     });
     expect(noReason.TrainingEventCreated).toBe(1);
     expect(noReason.Reason).toBeUndefined();

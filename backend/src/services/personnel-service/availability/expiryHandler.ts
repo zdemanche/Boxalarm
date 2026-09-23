@@ -4,7 +4,7 @@ import { buildDeptScopedPk, toVerifiedDeptId } from '@boxalarm/dept-scope';
 import { emitOutcomeMetric } from '@boxalarm/metrics';
 import { createDdbClient, parseMarkoffItem, readPersonnelDdbConfig } from './dynamoClient.js';
 
-const METRIC_NAMESPACE = 'Boxalarm/PersonnelAvailability';
+const METRIC_NAMESPACE = 'Boxalarm/personnel-availability';
 
 export type TransitionAction = 'ACTIVATE' | 'REVERT';
 
