@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { handleApparatusDefectReported } from './index.js';
 
 describe('handleApparatusDefectReported stub', () => {
-  it('logs a non-critical channel stub and never mentions alerting-service delivery', () => {
+  it('logs a non-critical channel stub and never mentions the alerting plane as a delivery target', () => {
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
 
     handleApparatusDefectReported(
@@ -21,7 +21,8 @@ describe('handleApparatusDefectReported stub', () => {
     expect(logSpy).toHaveBeenCalledTimes(1);
     const logged = JSON.parse(logSpy.mock.calls[0]?.[0] as string) as Record<string, unknown>;
     expect(logged.channelClass).toBe('non-critical');
-    expect(String(logged.message)).toContain('do not route via alerting-service');
+    expect(String(logged.message)).toContain('do not route via the alerting plane');
+    expect(String(logged.message)).not.toMatch(/alerting-service/);
     logSpy.mockRestore();
   });
 });

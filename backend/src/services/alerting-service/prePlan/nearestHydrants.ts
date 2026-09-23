@@ -69,8 +69,8 @@ function hasCoordinates(point: Pick<NearestHydrant, 'latitude' | 'longitude'>): 
 
 // ponytail: referenceLocation is always null on the real event path today — PRE_PLAN_COPY
 // carries no occupancy lat/long (Data Model §3.1) and the isolation boundary forbids reading
-// it from platform-service — so distance-based insertion is exercised only by direct unit
-// tests until a producer-side fix supplies a reference point. Refresh-in-place and
+// it from the LOB plane's occupancy config — so distance-based insertion is exercised only by
+// direct unit tests until a producer-side fix supplies a reference point. Refresh-in-place and
 // OUT_OF_SERVICE pruning remain fully functional without it.
 export function resolveNearestHydrants(
   existing: readonly NearestHydrant[],
