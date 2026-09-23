@@ -1,0 +1,258 @@
+{
+  "version": 1,
+  "source": { "sha256": "e862935a74ea7ca7d733650146bf397639e4ef7191e3d42edcc3b5b32cdd3fcc" },
+  "contracts": [
+    {
+      "id": "event-envelope",
+      "kind": "event-envelope",
+      "severity": "blocker",
+      "mustContain": ["eventId", "eventTime", "eventType", "source", "correlationId", "schemaVersion", "payload"],
+      "mustNotContain": [],
+      "mustMatch": [],
+      "source": "spine.md#Cross-Cutting Non-Negotiables"
+    },
+    {
+      "id": "error-envelope",
+      "kind": "error-envelope",
+      "severity": "blocker",
+      "mustContain": ["type", "title", "status", "detail", "traceId"],
+      "mustNotContain": [],
+      "mustMatch": [],
+      "source": "architecture.md:270 (API endpoints intro, RFC 7807 errors with traceId)"
+    },
+    {
+      "id": "endpoint-prefix",
+      "kind": "endpoint-prefix",
+      "severity": "blocker",
+      "mustContain": [],
+      "mustNotContain": [],
+      "mustMatch": ["['\\\"]/api/v1/"],
+      "source": "architecture.md:270 (Base path /api/v1/{service}/...)"
+    },
+    {
+      "id": "alerting-exactly-once-key-shape",
+      "kind": "key-shape",
+      "severity": "blocker",
+      "mustContain": [],
+      "mustNotContain": ["`${dispatchId}#${memberId}`", "`${dispatchId}#${memberId}#${channel}`"],
+      "mustMatch": ["\\$\\{dispatchId\\}#\\$\\{toneSequence\\}#\\$\\{memberId\\}#\\$\\{channel\\}"],
+      "source": "architecture.md:198-207 (Exactly-once key, CANONICAL, amended for department-level escalation)"
+    },
+    {
+      "id": "delivery-receipt-sk-shape",
+      "kind": "key-shape",
+      "severity": "blocker",
+      "mustContain": [],
+      "mustNotContain": [],
+      "mustMatch": ["RECEIPT#\\$\\{memberId\\}#\\$\\{channel\\}#\\$\\{toneSequence\\}"],
+      "source": "architecture.md:608 (DELIVERY_RECEIPT sk, amended segment order)"
+    },
+    {
+      "id": "mutual-aid-prompt-namespace",
+      "kind": "key-shape",
+      "severity": "blocker",
+      "mustContain": ["MAPROMPT#"],
+      "mustNotContain": ["RECEIPT#${memberId}#push#3", "RECEIPT#${memberId}#PUSH#3"],
+      "mustMatch": ["MAPROMPT#\\$\\{memberId\\}#PUSH"],
+      "source": "architecture.md:757 (Officer push item shape and idempotency, B3, fixed after review)"
+    },
+    {
+      "id": "mutual-aid-event-singleton-key",
+      "kind": "key-shape",
+      "severity": "blocker",
+      "mustContain": ["MUTUALAID#SINGLETON"],
+      "mustNotContain": [],
+      "mustMatch": [],
+      "source": "architecture.md:747 (MUTUAL_AID_EVENT sk, fixed singleton, one trigger per dispatch ever)"
+    },
+    {
+      "id": "tone-event-fire-guard-key",
+      "kind": "key-shape",
+      "severity": "blocker",
+      "mustContain": [],
+      "mustNotContain": [],
+      "mustMatch": ["TONE#\\$\\{toneSequence\\}(?!#)"],
+      "source": "architecture.md:725-737 (TONE_EVENT two item shapes, singleton fire-guard vs timestamped audit row)"
+    },
+    {
+      "id": "tone-sequence-literal-not-computed",
+      "kind": "other",
+      "severity": "blocker",
+      "mustContain": ["toneSequence"],
+      "mustNotContain": ["currentToneSequence + 1", "toneSequence + 1"],
+      "mustMatch": [],
+      "source": "architecture.md:203, 237 (toneSequence must be a stored literal in the schedule payload, never computed at fire time)"
+    },
+    {
+      "id": "payload-alerting-tone-escalated",
+      "kind": "event-payload",
+      "severity": "blocker",
+      "mustContain": ["dispatchId", "toneSequence", "firedAt", "outcome", "predicateSnapshot", "eligibleMemberCount"],
+      "mustNotContain": ["dispatchId: null", "toneSequence: null", "outcome: null"],
+      "mustMatch": [],
+      "source": "architecture.md:1601-1615 (alerting.tone.escalated payload)"
+    },
+    {
+      "id": "payload-alerting-mutual-aid-triggered",
+      "kind": "event-payload",
+      "severity": "blocker",
+      "mustContain": ["dispatchId", "triggeredAt", "reason", "predicateSnapshot", "adapterUsed", "officersNotified"],
+      "mustNotContain": ["dispatchId: null", "reason: null", "adapterUsed: null"],
+      "mustMatch": [],
+      "source": "architecture.md:1617-1631 (alerting.mutual_aid.triggered payload)"
+    },
+    {
+      "id": "payload-platform-config-alert-rules-updated",
+      "kind": "event-payload",
+      "severity": "blocker",
+      "mustContain": ["deptId", "toneLadder", "retoneRespondingMembers", "voiceEscalatesPerTone", "defaultRule", "callTypeOverrides"],
+      "mustNotContain": ["toneLadder: null", "defaultRule: null"],
+      "mustMatch": [],
+      "source": "architecture.md:1647-1662 (platform.config.alert_rules.updated payload)"
+    },
+    {
+      "id": "payload-alerting-dispatch-normalized",
+      "kind": "event-payload",
+      "severity": "blocker",
+      "mustContain": ["dispatchId", "memberId", "channel", "channelTier", "toneSequence"],
+      "mustNotContain": ["toneSequence: null", "channel: null"],
+      "mustMatch": [],
+      "source": "architecture.md:1562-1581 (alerting.dispatch.normalized payload, amended with toneSequence)"
+    },
+    {
+      "id": "payload-alerting-delivery-receipt",
+      "kind": "event-payload",
+      "severity": "blocker",
+      "mustContain": ["dispatchId", "memberId", "channel", "channelTier", "toneSequence", "status"],
+      "mustNotContain": ["toneSequence: null", "status: null"],
+      "mustMatch": [],
+      "source": "architecture.md:1583-1597 (alerting.delivery.receipt payload, amended with toneSequence)"
+    },
+    {
+      "id": "status-tone-ladder-status",
+      "kind": "status-map",
+      "severity": "warning",
+      "mustContain": ["ACTIVE", "HALTED_MANUAL", "COMPLETED"],
+      "mustNotContain": [],
+      "mustMatch": [],
+      "source": "architecture.md:593 (DISPATCH_ALERT.toneLadderStatus enum)"
+    },
+    {
+      "id": "status-ack-status",
+      "kind": "status-map",
+      "severity": "warning",
+      "mustContain": ["NONE", "RESPONDING", "NOT_RESPONDING", "DIRECT_TO_SCENE"],
+      "mustNotContain": [],
+      "mustMatch": [],
+      "source": "architecture.md:636 (DISPATCH_ROSTER_ENTRY.ackStatus enum)"
+    },
+    {
+      "id": "status-tone-event-outcome",
+      "kind": "status-map",
+      "severity": "warning",
+      "mustContain": ["FIRED", "FIRED_MANUAL_OVERRIDE", "SKIPPED_PREDICATE_MET", "SKIPPED_ALREADY_FIRED", "SKIPPED_MANUALLY_HALTED", "SKIPPED_NO_CONFIG"],
+      "mustNotContain": [],
+      "mustMatch": [],
+      "source": "architecture.md:737 (TONE_EVENT.outcome enum, amended with SKIPPED_NO_CONFIG)"
+    },
+    {
+      "id": "retention-self-test-run",
+      "kind": "retention-ttl",
+      "severity": "warning",
+      "mustContain": ["ttl"],
+      "mustNotContain": [],
+      "mustMatch": [],
+      "source": "architecture.md:770 (SELF_TEST_RUN ttl, 365 days)"
+    },
+    {
+      "id": "retention-canary-run",
+      "kind": "retention-ttl",
+      "severity": "warning",
+      "mustContain": ["ttl"],
+      "mustNotContain": [],
+      "mustMatch": [],
+      "source": "architecture.md:784 (CANARY_RUN ttl, 90 days)"
+    },
+    {
+      "id": "retention-notification-inbox",
+      "kind": "retention-ttl",
+      "severity": "warning",
+      "mustContain": ["ttl"],
+      "mustNotContain": [],
+      "mustMatch": [],
+      "source": "architecture.md:137 (NOTIFICATION item, ttl 180 days)"
+    },
+    {
+      "id": "retention-event-dedup",
+      "kind": "retention-ttl",
+      "severity": "warning",
+      "mustContain": ["ttl"],
+      "mustNotContain": [],
+      "mustMatch": [],
+      "source": "architecture.md:1442-1447 (EVENT_DEDUP table, ttl 48 hours)"
+    },
+    {
+      "id": "retention-outbox-entry",
+      "kind": "retention-ttl",
+      "severity": "warning",
+      "mustContain": ["ttl"],
+      "mustNotContain": [],
+      "mustMatch": [],
+      "source": "architecture.md:1442-1447 (OUTBOX_ENTRY table, ttl 7 days after sentAt)"
+    },
+    {
+      "id": "no-ttl-life-safety-evidence",
+      "kind": "retention-ttl",
+      "severity": "blocker",
+      "mustContain": [],
+      "mustNotContain": ["ttl:", "ttl ="],
+      "mustMatch": [],
+      "source": "architecture.md:1272 (DELIVERY_RECEIPT, ESCALATION_EVENT, DISPATCH_ALERT, DISPATCH_RESPONSE_RECORD, TONE_EVENT, MUTUAL_AID_EVENT: no TTL-based deletion)"
+    },
+    {
+      "id": "auth-no-mfa",
+      "kind": "auth",
+      "severity": "blocker",
+      "mustContain": ["MfaConfiguration", "OFF"],
+      "mustNotContain": ["MfaConfiguration: 'ON'", "MfaConfiguration: \"ON\"", "SoftwareTokenMfaConfiguration"],
+      "mustMatch": [],
+      "source": "architecture.md:443, 2500 (No MFA, anywhere; MfaConfiguration: OFF)"
+    },
+    {
+      "id": "auth-no-step-up",
+      "kind": "auth",
+      "severity": "blocker",
+      "mustContain": [],
+      "mustNotContain": ["requireStepUp", "reauthenticate", "mfaChallenge"],
+      "mustMatch": [],
+      "source": "architecture.md:2501 (No step-up re-authentication either - there is no re-prompt anywhere in the system)"
+    },
+    {
+      "id": "channel-tier-not-dedup-or-routing",
+      "kind": "other",
+      "severity": "blocker",
+      "mustContain": [],
+      "mustNotContain": ["hash(dispatchId, channelTier", "MessageDeduplicationId = channelTier", "filter channelTier", "subscribe channelTier"],
+      "mustMatch": [],
+      "source": "architecture.md:207, 1427, 1707 (channelTier is escalation-state bookkeeping ONLY, never a routing filter, never a dedup input)"
+    },
+    {
+      "id": "message-group-id-dispatch-id",
+      "kind": "other",
+      "severity": "warning",
+      "mustContain": ["MessageGroupId"],
+      "mustNotContain": ["MessageGroupId = toneSequence", "MessageGroupId = memberId"],
+      "mustMatch": [],
+      "source": "architecture.md:206, 1711 (MessageGroupId remains dispatchId, unchanged, spans every tone)"
+    },
+    {
+      "id": "notification-identity-dispatch-tone",
+      "kind": "other",
+      "severity": "blocker",
+      "mustContain": [],
+      "mustNotContain": [],
+      "mustMatch": ["apns-collapse-id.{0,40}\\$\\{dispatchId\\}#\\$\\{toneSequence\\}", "\\$\\{dispatchId\\}#\\$\\{toneSequence\\}"],
+      "source": "architecture.md:1882, 1889 (apns-collapse-id and Android notification id are {dispatchId}#{toneSequence}, never dispatchId alone)"
+    }
+  ]
+}

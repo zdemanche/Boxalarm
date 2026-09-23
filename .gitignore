@@ -1,0 +1,4 @@
+.DS_Store
+.analysis/
+.claude/sdlc.config.json
+.env

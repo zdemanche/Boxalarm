@@ -90,7 +90,7 @@ export async function verifyAccessToken(
   // never from a header, body, query or path parameter. Whitespace-only is rejected: it
   // survives a length check and would become the partition key `DEPT#   `.
   // E8-S1-INFRA MUST exclude custom:deptId from both app clients' WriteAttributes
-  // (boxalarm-docs#115) — Cognito defaults custom attributes to writable, and the access
+  // (#180) — Cognito defaults custom attributes to writable, and the access
   // token carries aws.cognito.signin.user.admin, so a member could otherwise self-write
   // deptId and hold a validly-signed token for another department.
   const deptId = payload['custom:deptId'];

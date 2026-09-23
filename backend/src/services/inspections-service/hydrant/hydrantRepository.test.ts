@@ -81,7 +81,13 @@ describe('updateHydrant (AC2)', () => {
   it('transacts the item update and an inspections.hydrant.updated outbox item, then returns the persisted record', async () => {
     ddbMock.on(TransactWriteCommand).resolves({});
     ddbMock.on(GetCommand).resolves({
-      Item: { pk: 'DEPT#NICHOLS#HYDRANT#HYD-0231', sk: 'METADATA', status: 'OUT_OF_SERVICE' },
+      Item: {
+        pk: 'DEPT#NICHOLS#HYDRANT#HYD-0231',
+        sk: 'METADATA',
+        status: 'OUT_OF_SERVICE',
+        latitude: 41.2417,
+        longitude: -73.2004,
+      },
     });
 
     const result = await updateHydrant(deptId, 'HYD-0231', { status: 'OUT_OF_SERVICE' }, 'corr-1');
@@ -91,12 +97,14 @@ describe('updateHydrant (AC2)', () => {
     const items = call?.args[0].input.TransactItems ?? [];
     expect(items).toHaveLength(2);
     expect(items[0]?.Update?.ConditionExpression).toBe('attribute_exists(pk)');
-    expect(items[1]?.Put?.Item?.entityType).toBe('OUTBOX_EVENT');
+    expect(items[1]?.Put?.Item?.entityType).toBe('OUTBOX_ENTRY');
     expect(items[1]?.Put?.Item?.eventType).toBe('inspections.hydrant.updated');
     expect(items[1]?.Put?.Item?.correlationId).toBe('corr-1');
     expect(items[1]?.Put?.Item?.payload).toMatchObject({
       hydrantId: 'HYD-0231',
       status: 'OUT_OF_SERVICE',
+      latitude: 41.2417,
+      longitude: -73.2004,
     });
   });
 

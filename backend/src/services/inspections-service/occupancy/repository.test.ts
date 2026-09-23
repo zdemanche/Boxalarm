@@ -52,7 +52,7 @@ beforeAll(async () => {
       ],
       GlobalSecondaryIndexes: [
         {
-          IndexName: 'gsi3',
+          IndexName: 'GSI3',
           KeySchema: [
             { AttributeName: 'gsi3pk', KeyType: 'HASH' },
             { AttributeName: 'gsi3sk', KeyType: 'RANGE' },
@@ -107,7 +107,7 @@ describe('occupancy repository (real DynamoDB via LocalStack)', () => {
     const queried = await doc.send(
       new QueryCommand({
         TableName: TABLE_NAME,
-        IndexName: 'gsi3',
+        IndexName: 'GSI3',
         KeyConditionExpression: 'gsi3pk = :gsi3pk',
         ExpressionAttributeValues: { ':gsi3pk': raw.Item?.gsi3pk as string },
       }),
@@ -127,7 +127,7 @@ describe('occupancy repository (real DynamoDB via LocalStack)', () => {
     const auditQuery = await doc.send(
       new QueryCommand({
         TableName: TABLE_NAME,
-        IndexName: 'gsi3',
+        IndexName: 'GSI3',
         KeyConditionExpression: 'gsi3pk = :gsi3pk',
         ExpressionAttributeValues: {
           ':gsi3pk': `DEPT#${DEPT_ID}#AUDIT#ENTITY#OCCUPANCY#${occupancyId}`,
@@ -224,7 +224,7 @@ describe('occupancy repository (real DynamoDB via LocalStack)', () => {
     const auditQuery = await doc.send(
       new QueryCommand({
         TableName: TABLE_NAME,
-        IndexName: 'gsi3',
+        IndexName: 'GSI3',
         KeyConditionExpression: 'gsi3pk = :gsi3pk',
         ExpressionAttributeValues: {
           ':gsi3pk': `DEPT#${DEPT_ID}#AUDIT#ENTITY#OCCUPANCY#${occupancyId}`,
@@ -270,7 +270,7 @@ describe('occupancy repository (real DynamoDB via LocalStack)', () => {
     const auditQuery = await doc.send(
       new QueryCommand({
         TableName: TABLE_NAME,
-        IndexName: 'gsi3',
+        IndexName: 'GSI3',
         KeyConditionExpression: 'gsi3pk = :gsi3pk',
         ExpressionAttributeValues: {
           ':gsi3pk': `DEPT#${DEPT_ID}#AUDIT#ENTITY#OCCUPANCY#${missingId}`,

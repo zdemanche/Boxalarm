@@ -82,7 +82,7 @@ function emitMapQueryMetric(cellCount: number, occupancyCount: number, hydrantCo
         Timestamp: Date.now(),
         CloudWatchMetrics: [
           {
-            Namespace: 'Boxalarm/InspectionsMap',
+            Namespace: 'Boxalarm/inspections-map',
             Dimensions: [[]],
             Metrics: [
               { Name: 'MapQueryIssued', Unit: 'Count' },
@@ -108,7 +108,7 @@ function emitMapQueryFailedMetric(reason: string): void {
         Timestamp: Date.now(),
         CloudWatchMetrics: [
           {
-            Namespace: 'Boxalarm/InspectionsMap',
+            Namespace: 'Boxalarm/inspections-map',
             Dimensions: [['Reason']],
             Metrics: [{ Name: 'MapQueryFailed', Unit: 'Count' }],
           },

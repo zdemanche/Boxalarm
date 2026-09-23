@@ -1,0 +1,581 @@
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
+import type { SNSClient } from '@aws-sdk/client-sns';
+import type { DynamoDBStreamEvent } from 'aws-lambda';
+
+interface FakeItem {
+  pk: string;
+  sk: string;
+  [key: string]: unknown;
+}
+
+function createFakeDdb(
+  seed: readonly FakeItem[] = [],
+  options: { failPut?: (item: FakeItem) => boolean; trackConcurrency?: boolean } = {},
+): {
+  send: DynamoDBDocumentClient['send'];
+  items: Map<string, FakeItem>;
+  getMaxInFlightWrites: () => number;
+} {
+  const items = new Map<string, FakeItem>();
+  for (const item of seed) {
+    items.set(`${item.pk}#${item.sk}`, item);
+  }
+  let inFlightWrites = 0;
+  let maxInFlightWrites = 0;
+  const send = vi.fn(async (command: unknown) => {
+    const name = (command as { constructor: { name: string } }).constructor.name;
+    const input = (command as { input: Record<string, unknown> }).input;
+    if (name === 'TransactWriteCommand') {
+      inFlightWrites += 1;
+      maxInFlightWrites = Math.max(maxInFlightWrites, inFlightWrites);
+      if (options.trackConcurrency) {
+        await new Promise((resolve) => setTimeout(resolve, 1));
+      }
+      try {
+        const txItems = input.TransactItems as ReadonlyArray<{
+          Put?: { Item: FakeItem; ConditionExpression?: string };
+        }>;
+        for (const txItem of txItems) {
+          if (txItem.Put) {
+            const key = `${txItem.Put.Item.pk}#${txItem.Put.Item.sk}`;
+            if (options.failPut?.(txItem.Put.Item)) {
+              throw new Error('ddb write failed');
+            }
+            if (txItem.Put.ConditionExpression === 'attribute_not_exists(idempotencyKey)') {
+              const existing = items.get(key);
+              if (existing) {
+                const error = Object.assign(new Error('duplicate'), {
+                  name: 'TransactionCanceledException',
+                  CancellationReasons: [{ Code: 'ConditionalCheckFailed' }],
+                });
+                throw error;
+              }
+            }
+            items.set(key, txItem.Put.Item);
+          }
+        }
+        return {};
+      } finally {
+        inFlightWrites -= 1;
+      }
+    }
+    if (name === 'GetCommand') {
+      const { Key } = input as { Key: { pk: string; sk: string } };
+      return { Item: items.get(`${Key.pk}#${Key.sk}`) };
+    }
+    if (name === 'UpdateCommand') {
+      const { Key, UpdateExpression, ExpressionAttributeValues } = input as {
+        Key: { pk: string; sk: string };
+        UpdateExpression: string;
+        ExpressionAttributeValues?: Record<string, unknown>;
+      };
+      const key = `${Key.pk}#${Key.sk}`;
+      const existing: FakeItem = items.get(key) ?? { pk: Key.pk, sk: Key.sk };
+      const setMatch = /SET (.+?)(?: REMOVE|$)/.exec(UpdateExpression);
+      if (setMatch) {
+        for (const assignment of setMatch[1]!.split(',')) {
+          const [field, placeholder] = assignment.split('=').map((part) => part.trim());
+          if (field && placeholder) {
+            existing[field] = ExpressionAttributeValues?.[placeholder];
+          }
+        }
+      }
+      const removeMatch = /REMOVE (.+)$/.exec(UpdateExpression);
+      if (removeMatch) {
+        for (const field of removeMatch[1]!.split(',').map((part) => part.trim())) {
+          delete existing[field];
+        }
+      }
+      items.set(key, existing);
+      return {};
+    }
+    if (name === 'QueryCommand') {
+      const query = input as { ExpressionAttributeValues: Record<string, string> };
+      return {
+        Items: [...items.values()].filter(
+          (item) => item.pk === query.ExpressionAttributeValues[':pk'],
+        ),
+      };
+    }
+    throw new Error(`handler.test.ts fake ddb: unsupported command ${name}`);
+  });
+  return {
+    send: send as DynamoDBDocumentClient['send'],
+    items,
+    getMaxInFlightWrites: () => maxInFlightWrites,
+  };
+}
+
+interface FakeSnsCall {
+  readonly TopicArn: string;
+  readonly MessageGroupId: string;
+  readonly MessageDeduplicationId: string;
+  readonly MessageAttributes: Record<string, { DataType: string; StringValue: string }>;
+}
+
+function createFakeSns(failOn?: (call: FakeSnsCall) => boolean): {
+  send: SNSClient['send'];
+  calls: FakeSnsCall[];
+} {
+  const calls: FakeSnsCall[] = [];
+  const send = vi.fn((command: unknown) => {
+    const input = (command as { input: FakeSnsCall }).input;
+    calls.push(input);
+    if (failOn?.(input)) {
+      return Promise.reject(new Error('SNS unavailable'));
+    }
+    return Promise.resolve({ MessageId: 'msg-1' });
+  });
+  return { send: send as SNSClient['send'], calls };
+}
+
+function memberSnapshot(overrides: Record<string, unknown> = {}): FakeItem {
+  const memberId = typeof overrides.memberId === 'string' ? overrides.memberId : 'mbr-1';
+  return {
+    pk: 'DEPT#NICHOLS#ELIGIBILITY',
+    sk: `MEMBER#${memberId}`,
+    entityType: 'MEMBER_ELIGIBILITY_SNAPSHOT',
+    memberId: 'mbr-1',
+    active: true,
+    quals: [],
+    roles: [],
+    contactChannels: [
+      { channel: 'PUSH', token: 'tok-1', platform: 'APNS', valid: true },
+      { channel: 'sms', token: '+15551234567' },
+    ],
+    availabilityState: 'AVAILABLE',
+    snapshotUpdatedAt: 1000,
+    ...overrides,
+  };
+}
+
+function dispatchAlertInsertEvent(dispatchId = 'NICHOLS-1-1798000000'): DynamoDBStreamEvent {
+  return {
+    Records: [
+      {
+        eventName: 'INSERT',
+        eventID: 'ev-1',
+        dynamodb: {
+          SequenceNumber: 'seq-1',
+          NewImage: {
+            pk: { S: `DEPT#NICHOLS#DISPATCH#${dispatchId}` },
+            sk: { S: 'METADATA' },
+            entityType: { S: 'DISPATCH_ALERT' },
+            dispatchId: { S: dispatchId },
+            deptId: { S: 'NICHOLS' },
+            incidentType: { S: 'STRUCTURE_FIRE' },
+            address: { S: '123 Main St' },
+            crossStreets: { S: 'Main & Elm' },
+            narrative: { S: 'Smoke showing' },
+            mapLink: { S: 'https://maps.example/1' },
+          },
+        },
+      },
+    ],
+  } as unknown as DynamoDBStreamEvent;
+}
+
+describe('fanout/handler', () => {
+  const originalEnv = { ...process.env };
+
+  beforeEach(() => {
+    vi.resetModules();
+    process.env.ALERTING_TABLE_NAME = 'alerting-table';
+    process.env.ALERTING_TOPIC_ARN = 'arn:aws:sns:us-east-1:1:boxalarm-dev-alerting-topic.fifo';
+  });
+
+  afterEach(() => {
+    process.env = { ...originalEnv };
+  });
+
+  it('exports a handler exercised by this test — one INSERT DISPATCH_ALERT record fans out (entrypoint test)', async () => {
+    const ddb = createFakeDdb([memberSnapshot()]);
+    const sns = createFakeSns();
+    vi.doMock('../eligibility/dynamoClient.js', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('../eligibility/dynamoClient.js')>();
+      return { ...actual, createDynamoClient: () => ddb as unknown as DynamoDBDocumentClient };
+    });
+    vi.doMock('./snsClient.js', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('./snsClient.js')>();
+      return { ...actual, createSnsClient: () => sns as unknown as SNSClient };
+    });
+
+    const { handler } = await import('./handler.js');
+    await handler(dispatchAlertInsertEvent());
+
+    expect(sns.calls).toHaveLength(2);
+  });
+
+  it('issues exactly one push publish and one SMS publish per eligible member — two distinct provider sends at T+0 (AC1, mandatory regression)', async () => {
+    const ddb = createFakeDdb([memberSnapshot()]);
+    const sns = createFakeSns();
+    vi.doMock('../eligibility/dynamoClient.js', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('../eligibility/dynamoClient.js')>();
+      return { ...actual, createDynamoClient: () => ddb as unknown as DynamoDBDocumentClient };
+    });
+    vi.doMock('./snsClient.js', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('./snsClient.js')>();
+      return { ...actual, createSnsClient: () => sns as unknown as SNSClient };
+    });
+
+    const { handler } = await import('./handler.js');
+    await handler(dispatchAlertInsertEvent());
+
+    const channels = sns.calls.map((call) => call.MessageAttributes.channel?.StringValue).sort();
+    expect(channels).toEqual(['push', 'sms']);
+    expect(sns.calls[0]!.MessageDeduplicationId).not.toBe(sns.calls[1]!.MessageDeduplicationId);
+  });
+
+  it('rejects a redelivered dispatch via the conditional put — exactly one receipt per member per channel, zero duplicate publishes (AC2)', async () => {
+    const ddb = createFakeDdb([memberSnapshot()]);
+    const sns = createFakeSns();
+    vi.doMock('../eligibility/dynamoClient.js', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('../eligibility/dynamoClient.js')>();
+      return { ...actual, createDynamoClient: () => ddb as unknown as DynamoDBDocumentClient };
+    });
+    vi.doMock('./snsClient.js', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('./snsClient.js')>();
+      return { ...actual, createSnsClient: () => sns as unknown as SNSClient };
+    });
+
+    const { handler } = await import('./handler.js');
+    const event = dispatchAlertInsertEvent();
+    await handler(event);
+    await handler(event);
+
+    expect(sns.calls).toHaveLength(2);
+    const receipts = [...ddb.items.values()].filter(
+      (item) => item.entityType === 'DELIVERY_RECEIPT',
+    );
+    expect(receipts).toHaveLength(2);
+  });
+
+  it('keys the dedup guard on channel, never channelTier — a tier-keyed key would collapse push and sms into one item (AC3, core-harm)', async () => {
+    const ddb = createFakeDdb([memberSnapshot()]);
+    const sns = createFakeSns();
+    vi.doMock('../eligibility/dynamoClient.js', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('../eligibility/dynamoClient.js')>();
+      return { ...actual, createDynamoClient: () => ddb as unknown as DynamoDBDocumentClient };
+    });
+    vi.doMock('./snsClient.js', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('./snsClient.js')>();
+      return { ...actual, createSnsClient: () => sns as unknown as SNSClient };
+    });
+
+    const { handler } = await import('./handler.js');
+    await handler(dispatchAlertInsertEvent());
+
+    const receipts = [...ddb.items.values()].filter(
+      (item) => item.entityType === 'DELIVERY_RECEIPT',
+    );
+    const keys = receipts.map((item) => item.idempotencyKey);
+    expect(new Set(keys).size).toBe(2);
+    expect(receipts.map((item) => item.channel).sort()).toEqual(['push', 'sms']);
+  });
+
+  it('skips a non-INSERT or non-DISPATCH_ALERT record without throwing', async () => {
+    const ddb = createFakeDdb();
+    const sns = createFakeSns();
+    vi.doMock('../eligibility/dynamoClient.js', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('../eligibility/dynamoClient.js')>();
+      return { ...actual, createDynamoClient: () => ddb as unknown as DynamoDBDocumentClient };
+    });
+    vi.doMock('./snsClient.js', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('./snsClient.js')>();
+      return { ...actual, createSnsClient: () => sns as unknown as SNSClient };
+    });
+
+    const { handler } = await import('./handler.js');
+    const event = {
+      Records: [
+        { eventName: 'MODIFY', dynamodb: { NewImage: { entityType: { S: 'DISPATCH_ALERT' } } } },
+        { eventName: 'INSERT', dynamodb: { NewImage: { entityType: { S: 'DELIVERY_RECEIPT' } } } },
+      ],
+    } as unknown as DynamoDBStreamEvent;
+
+    await expect(handler(event)).resolves.toEqual({ batchItemFailures: [] });
+    expect(sns.calls).toHaveLength(0);
+  });
+
+  it('emits zero publishes and does not throw for an empty eligible roster', async () => {
+    const ddb = createFakeDdb([]);
+    const sns = createFakeSns();
+    vi.doMock('../eligibility/dynamoClient.js', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('../eligibility/dynamoClient.js')>();
+      return { ...actual, createDynamoClient: () => ddb as unknown as DynamoDBDocumentClient };
+    });
+    vi.doMock('./snsClient.js', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('./snsClient.js')>();
+      return { ...actual, createSnsClient: () => sns as unknown as SNSClient };
+    });
+
+    const { handler } = await import('./handler.js');
+    await expect(handler(dispatchAlertInsertEvent())).resolves.toEqual({
+      batchItemFailures: [],
+    });
+    expect(sns.calls).toHaveLength(0);
+  });
+
+  it('skips only the push send when the member has no registered push token — SMS is unaffected (E1-S14 dependency)', async () => {
+    const ddb = createFakeDdb([
+      memberSnapshot({ contactChannels: [{ channel: 'sms', token: '+15551234567' }] }),
+    ]);
+    const sns = createFakeSns();
+    vi.doMock('../eligibility/dynamoClient.js', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('../eligibility/dynamoClient.js')>();
+      return { ...actual, createDynamoClient: () => ddb as unknown as DynamoDBDocumentClient };
+    });
+    vi.doMock('./snsClient.js', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('./snsClient.js')>();
+      return { ...actual, createSnsClient: () => sns as unknown as SNSClient };
+    });
+
+    const { handler } = await import('./handler.js');
+    await handler(dispatchAlertInsertEvent());
+
+    expect(sns.calls).toHaveLength(1);
+    expect(sns.calls[0]!.MessageAttributes.channel?.StringValue).toBe('sms');
+  });
+
+  it('reports the failing record as a batch item failure when one channel publish fails, without aborting the whole invocation — Streams redrives only that record (R3, no shard-blocking)', async () => {
+    const ddb = createFakeDdb([memberSnapshot()]);
+    const sns = createFakeSns((call) => call.MessageAttributes.channel?.StringValue === 'push');
+    vi.doMock('../eligibility/dynamoClient.js', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('../eligibility/dynamoClient.js')>();
+      return { ...actual, createDynamoClient: () => ddb as unknown as DynamoDBDocumentClient };
+    });
+    vi.doMock('./snsClient.js', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('./snsClient.js')>();
+      return { ...actual, createSnsClient: () => sns as unknown as SNSClient };
+    });
+
+    const { handler } = await import('./handler.js');
+    await expect(handler(dispatchAlertInsertEvent())).resolves.toEqual({
+      batchItemFailures: [{ itemIdentifier: 'seq-1' }],
+    });
+
+    expect(sns.calls).toHaveLength(2);
+  });
+
+  it('holds no import of the platform-service or incident-service tables anywhere in fanout/*.ts (AC4 isolation)', () => {
+    const files = ['handler.ts', 'idempotencyKey.ts', 'snsClient.ts'];
+    for (const file of files) {
+      const path = fileURLToPath(new URL(file, import.meta.url));
+      const source = readFileSync(path, 'utf8');
+      expect(source).not.toMatch(/platform-service/);
+      expect(source).not.toMatch(/incident-service/);
+    }
+  });
+
+  it('reports a batch item failure and emits ReceiptWriteFailed when the DELIVERY_RECEIPT write fails for a non-duplicate reason, without aborting the invocation (P5 regression)', async () => {
+    const ddb = createFakeDdb([memberSnapshot()], {
+      failPut: (item) => item.channel === 'push',
+    });
+    const sns = createFakeSns();
+    vi.doMock('../eligibility/dynamoClient.js', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('../eligibility/dynamoClient.js')>();
+      return { ...actual, createDynamoClient: () => ddb as unknown as DynamoDBDocumentClient };
+    });
+    vi.doMock('./snsClient.js', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('./snsClient.js')>();
+      return { ...actual, createSnsClient: () => sns as unknown as SNSClient };
+    });
+
+    const { handler } = await import('./handler.js');
+    await expect(handler(dispatchAlertInsertEvent())).resolves.toEqual({
+      batchItemFailures: [{ itemIdentifier: 'seq-1' }],
+    });
+
+    expect(sns.calls).toHaveLength(1);
+    expect(sns.calls[0]!.MessageAttributes.channel?.StringValue).toBe('sms');
+  });
+
+  it('reports a batch item failure for Streams redrive when a DISPATCH_ALERT record is missing dispatchId or deptId, without aborting other records in the batch (P6/R3 regression)', async () => {
+    const ddb = createFakeDdb();
+    const sns = createFakeSns();
+    vi.doMock('../eligibility/dynamoClient.js', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('../eligibility/dynamoClient.js')>();
+      return { ...actual, createDynamoClient: () => ddb as unknown as DynamoDBDocumentClient };
+    });
+    vi.doMock('./snsClient.js', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('./snsClient.js')>();
+      return { ...actual, createSnsClient: () => sns as unknown as SNSClient };
+    });
+
+    const { handler } = await import('./handler.js');
+    const event = {
+      Records: [
+        {
+          eventName: 'INSERT',
+          eventID: 'ev-malformed',
+          dynamodb: {
+            SequenceNumber: 'seq-malformed',
+            NewImage: {
+              entityType: { S: 'DISPATCH_ALERT' },
+              deptId: { S: 'NICHOLS' },
+            },
+          },
+        },
+      ],
+    } as unknown as DynamoDBStreamEvent;
+
+    await expect(handler(event)).resolves.toEqual({
+      batchItemFailures: [{ itemIdentifier: 'seq-malformed' }],
+    });
+    expect(sns.calls).toHaveLength(0);
+  });
+
+  it('re-publishes only the channel whose SNS publish failed on retry, and never double-publishes the channel that already succeeded (P7 exactly-once regression)', async () => {
+    const ddb = createFakeDdb([memberSnapshot()]);
+    let failPush = true;
+    const sns = createFakeSns(
+      (call) => failPush && call.MessageAttributes.channel?.StringValue === 'push',
+    );
+    vi.doMock('../eligibility/dynamoClient.js', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('../eligibility/dynamoClient.js')>();
+      return { ...actual, createDynamoClient: () => ddb as unknown as DynamoDBDocumentClient };
+    });
+    vi.doMock('./snsClient.js', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('./snsClient.js')>();
+      return { ...actual, createSnsClient: () => sns as unknown as SNSClient };
+    });
+
+    const { handler } = await import('./handler.js');
+    const event = dispatchAlertInsertEvent();
+    await expect(handler(event)).resolves.toEqual({
+      batchItemFailures: [{ itemIdentifier: 'seq-1' }],
+    });
+    expect(sns.calls).toHaveLength(2);
+
+    failPush = false;
+    await handler(event);
+
+    expect(sns.calls).toHaveLength(3);
+    const pushCalls = sns.calls.filter(
+      (call) => call.MessageAttributes.channel?.StringValue === 'push',
+    );
+    const smsCalls = sns.calls.filter(
+      (call) => call.MessageAttributes.channel?.StringValue === 'sms',
+    );
+    expect(pushCalls).toHaveLength(2);
+    expect(smsCalls).toHaveLength(1);
+
+    const receipts = [...ddb.items.values()].filter(
+      (item) => item.entityType === 'DELIVERY_RECEIPT',
+    );
+    expect(receipts).toHaveLength(2);
+    expect(receipts.every((item) => typeof item.sentAt === 'number')).toBe(true);
+  });
+
+  it('records sentAt only after the publish succeeds, and leaves failureReason (no sentAt) when the publish fails (P8 audit-evidence regression)', async () => {
+    const ddb = createFakeDdb([memberSnapshot()]);
+    const sns = createFakeSns((call) => call.MessageAttributes.channel?.StringValue === 'push');
+    vi.doMock('../eligibility/dynamoClient.js', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('../eligibility/dynamoClient.js')>();
+      return { ...actual, createDynamoClient: () => ddb as unknown as DynamoDBDocumentClient };
+    });
+    vi.doMock('./snsClient.js', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('./snsClient.js')>();
+      return { ...actual, createSnsClient: () => sns as unknown as SNSClient };
+    });
+
+    const { handler } = await import('./handler.js');
+    await expect(handler(dispatchAlertInsertEvent())).resolves.toEqual({
+      batchItemFailures: [{ itemIdentifier: 'seq-1' }],
+    });
+
+    const receipts = [...ddb.items.values()].filter(
+      (item) => item.entityType === 'DELIVERY_RECEIPT',
+    );
+    const pushReceipt = receipts.find((item) => item.channel === 'push');
+    const smsReceipt = receipts.find((item) => item.channel === 'sms');
+    expect(pushReceipt?.sentAt).toBeUndefined();
+    expect(pushReceipt?.failureReason).toBe('Error');
+    expect(smsReceipt?.sentAt).toEqual(expect.any(Number));
+    expect(smsReceipt?.failureReason).toBeUndefined();
+  });
+
+  it('emits a fan-out latency metric and records fanOutStartedAt/eligibleMemberCount on the DISPATCH_ALERT METADATA item (N1.1 SLO observability, P9 regression)', async () => {
+    const ddb = createFakeDdb([memberSnapshot()]);
+    const sns = createFakeSns();
+    vi.doMock('../eligibility/dynamoClient.js', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('../eligibility/dynamoClient.js')>();
+      return { ...actual, createDynamoClient: () => ddb as unknown as DynamoDBDocumentClient };
+    });
+    vi.doMock('./snsClient.js', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('./snsClient.js')>();
+      return { ...actual, createSnsClient: () => sns as unknown as SNSClient };
+    });
+
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    const { handler } = await import('./handler.js');
+    const dispatchId = 'NICHOLS-1-1798000000';
+    await handler(dispatchAlertInsertEvent(dispatchId));
+    const emitted = logSpy.mock.calls.map(
+      ([line]) => JSON.parse(line as string) as Record<string, unknown>,
+    );
+    logSpy.mockRestore();
+
+    const latencyMetric = emitted.find((entry) => entry.FanOutLatencyMs !== undefined);
+    expect(latencyMetric).toBeDefined();
+    expect(typeof latencyMetric?.FanOutLatencyMs).toBe('number');
+
+    const metadata = ddb.items.get(`DEPT#NICHOLS#DISPATCH#${dispatchId}#METADATA`);
+    expect(typeof metadata?.fanOutStartedAt).toBe('number');
+    expect(metadata?.eligibleMemberCount).toBe(1);
+  });
+
+  it('carries isTest through to the normalized envelope and the SNS MessageAttributes so a self-test/canary dispatch never reaches real channels unmarked (P10 regression)', async () => {
+    const ddb = createFakeDdb([memberSnapshot()]);
+    const sns = createFakeSns();
+    vi.doMock('../eligibility/dynamoClient.js', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('../eligibility/dynamoClient.js')>();
+      return { ...actual, createDynamoClient: () => ddb as unknown as DynamoDBDocumentClient };
+    });
+    vi.doMock('./snsClient.js', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('./snsClient.js')>();
+      return { ...actual, createSnsClient: () => sns as unknown as SNSClient };
+    });
+
+    const { handler } = await import('./handler.js');
+    const event = dispatchAlertInsertEvent();
+    const newImage = event.Records[0]!.dynamodb!.NewImage as unknown as Record<string, unknown>;
+    newImage.isTest = { BOOL: true };
+    newImage.sourceSystem = { S: 'SELF_TEST' };
+    await handler(event);
+
+    expect(sns.calls.every((call) => call.MessageAttributes.isTest?.StringValue === 'true')).toBe(
+      true,
+    );
+    const receipts = [...ddb.items.values()].filter(
+      (item) => item.entityType === 'DELIVERY_RECEIPT',
+    );
+    expect(receipts.every((item) => item.isTest === true)).toBe(true);
+  });
+
+  it('bounds fan-out concurrency instead of firing every member×channel task at once (P1 regression)', async () => {
+    const members = Array.from({ length: 12 }, (_, index) =>
+      memberSnapshot({ memberId: `mbr-${index}` }),
+    );
+    const ddb = createFakeDdb(members, { trackConcurrency: true });
+    const sns = createFakeSns();
+    vi.doMock('../eligibility/dynamoClient.js', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('../eligibility/dynamoClient.js')>();
+      return { ...actual, createDynamoClient: () => ddb as unknown as DynamoDBDocumentClient };
+    });
+    vi.doMock('./snsClient.js', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('./snsClient.js')>();
+      return { ...actual, createSnsClient: () => sns as unknown as SNSClient };
+    });
+
+    const { handler } = await import('./handler.js');
+    await handler(dispatchAlertInsertEvent());
+
+    expect(sns.calls).toHaveLength(24);
+    expect(ddb.getMaxInFlightWrites()).toBeGreaterThan(1);
+    expect(ddb.getMaxInFlightWrites()).toBeLessThanOrEqual(10);
+  });
+});
