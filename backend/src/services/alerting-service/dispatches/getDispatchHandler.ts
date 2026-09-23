@@ -8,7 +8,7 @@ import {
   createDynamoClient as createAlertingDynamoClient,
   readAlertingConfig,
 } from '../eligibility/dynamoClient.js';
-import { getPrePlanCopy, PrePlanCopyDependencyError } from '../preplan/prePlanCopyRepository.js';
+import { getPrePlanCopy, PrePlanCopyDependencyError } from '../prePlan/prePlanCopyRepository.js';
 import { getDynamoClient, readDispatchesConfig } from './dynamoClient.js';
 import { problemResponse } from './errorResponse.js';
 import { logError, logInfo } from './logger.js';
