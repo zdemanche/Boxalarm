@@ -37,6 +37,12 @@ const MemberDetailPage = lazy(() =>
     default: mod.MemberDetailPage,
   })),
 );
+const SettingsPage = lazy(() =>
+  import('./features/platform/SettingsPage').then((mod) => ({ default: mod.SettingsPage })),
+);
+const AuditLogPage = lazy(() =>
+  import('./features/platform/AuditLogPage').then((mod) => ({ default: mod.AuditLogPage })),
+);
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { staleTime: 30_000, retry: 1 } },
@@ -110,8 +116,8 @@ export function App() {
                   <Route path="apparatus/:id" element={roleGuarded(<ApparatusDetailPage />)} />
                   <Route path="schedule" element={placeholder('Schedule')} />
                   <Route path="reporting" element={placeholder('Reporting')} />
-                  <Route path="settings" element={placeholder('Settings')} />
-                  <Route path="audit-log" element={placeholder('Audit log')} />
+                  <Route path="settings" element={roleGuarded(<SettingsPage />)} />
+                  <Route path="audit-log" element={roleGuarded(<AuditLogPage />)} />
                 </Route>
                 <Route path="*" element={<Navigate to="/" replace />} />
               </Routes>

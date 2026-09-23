@@ -1,5 +1,13 @@
 import type { Apparatus, CreateApparatusInput } from '../features/apparatus/types';
 import type { CreateMemberInput, Member, MemberStatus } from '../features/personnel/types';
+import type {
+  AuditEntry,
+  ConfigResponse,
+  DisposalResult,
+  EditableConfigType,
+  ExportStatus,
+  RetentionConfig,
+} from '../features/platform/types';
 import type { ApiRequestOptions, ProblemDetails } from './apiClient';
 
 let members: Member[] = [
@@ -66,6 +74,34 @@ let apparatus: Apparatus[] = [
   { apparatusId: 'a-3', unitId: 'Rescue 1', type: 'Rescue', status: 'OUT_OF_SERVICE' },
   { apparatusId: 'a-4', unitId: 'Tanker 2', type: 'Tanker', status: 'IN_SERVICE' },
 ];
+
+const configStore = new Map<EditableConfigType, ConfigResponse>([
+  [
+    'ALERT_RULES',
+    {
+      configType: 'ALERT_RULES',
+      value: { escalationThresholdN: 90 },
+      version: 1,
+      updatedAt: '2026-08-01T00:00:00.000Z',
+      updatedBy: 'demo-admin',
+    },
+  ],
+]);
+
+let retentionConfig: RetentionConfig = { retentionYears: 7, version: 1, source: 'stored' };
+
+const auditEntries: AuditEntry[] = [
+  {
+    actorId: 'demo-admin',
+    ts: Date.parse('2026-08-01T00:00:00.000Z'),
+    action: 'UPDATE',
+    mutatedEntityType: 'DEPARTMENT_CONFIG',
+    mutatedEntityId: 'ALERT_RULES',
+    changedFields: { escalationThresholdN: { old: 60, new: 90 } },
+  },
+];
+
+let exportJobId = 0;
 
 function json(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data), {
@@ -144,6 +180,73 @@ export async function demoRequest(
       return updated;
     });
     return updated ? json(updated) : problem(404, 'Member not found');
+  }
+
+  if (parts[0] === 'platform' && parts[1] === 'config' && parts.length === 3) {
+    const configType = decodeURIComponent(parts[2] ?? '') as EditableConfigType;
+    if (method === 'GET') {
+      const stored = configStore.get(configType);
+      return stored ? json(stored) : problem(404, `config ${configType} not found`);
+    }
+    if (method === 'PUT') {
+      const existing = configStore.get(configType);
+      const nextVersion = (existing?.version ?? 0) + 1;
+      const saved: ConfigResponse = {
+        configType,
+        value: (body as { value: Record<string, unknown> }).value,
+        version: nextVersion,
+        updatedAt: new Date().toISOString(),
+        updatedBy: 'demo-admin',
+      };
+      configStore.set(configType, saved);
+      return json(saved);
+    }
+  }
+
+  if (path.startsWith('platform/audit') && method === 'GET') {
+    return json({ entries: auditEntries });
+  }
+
+  if (path === 'platform/export' && method === 'POST') {
+    exportJobId += 1;
+    return json({ jobId: `demo-export-${exportJobId}` }, 202);
+  }
+
+  if (parts[0] === 'platform' && parts[1] === 'export' && parts.length === 3 && method === 'GET') {
+    const status: ExportStatus = {
+      status: 'COMPLETE',
+      files: [{ table: 'members', url: '#demo-export-members' }],
+    };
+    return json(status);
+  }
+
+  if (path === 'platform/retention' && method === 'GET') {
+    return json(retentionConfig);
+  }
+
+  if (path === 'platform/retention' && method === 'PUT') {
+    const retentionYears = (body as { retentionYears: number }).retentionYears;
+    retentionConfig = {
+      retentionYears,
+      version: (retentionConfig.version ?? 0) + 1,
+      source: 'stored',
+    };
+    return json(retentionConfig);
+  }
+
+  if (path === 'platform/retention/disposal' && method === 'POST') {
+    const result: DisposalResult = {
+      retentionYearsUsed: retentionConfig.retentionYears,
+      hardDeleted: 0,
+      cryptoShredded: 0,
+      refused: [],
+    };
+    return json(result);
+  }
+
+  if (path === 'platform/sessions/revoke' && method === 'POST') {
+    const memberId = (body as { memberId: string }).memberId;
+    return json({ memberId, status: 'revoked' }, 202);
   }
 
   return problem(404, 'Not found');
