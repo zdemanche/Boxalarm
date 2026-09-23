@@ -109,6 +109,41 @@ describe('outbox publisher (entrypoint-test obligation)', () => {
     errorSpy.mockRestore();
   });
 
+  it('marks sentAt on a real sentAt: null row instead of endlessly hitting ConditionalCheckFailedException (chain test, core-harm)', async () => {
+    // Reproduces the exact item shape quals/repository.ts writes: sentAt is present
+    // as a NULL-typed attribute (not absent), and eventTime is an ISO string with no
+    // createdAt companion field.
+    let updateInput: { ConditionExpression?: string; ExpressionAttributeValues?: unknown };
+    const ddbSend = vi.fn().mockImplementation((command: { input: typeof updateInput }) => {
+      updateInput = command.input;
+      return Promise.resolve({});
+    });
+    mockDdb(ddbSend);
+    const ebSend = vi.fn().mockResolvedValue({ Entries: [{}] });
+    const { handler } = await import('./publisher.js');
+
+    const record = outboxRecord({
+      eventType: { S: 'personnel.eligibility.changed' },
+      eventTime: { S: '2026-01-01T00:00:00.000Z' },
+      sentAt: { NULL: true },
+    });
+
+    await handler(
+      { Records: [record] },
+      { eventBridgeClient: { send: ebSend } as unknown as EventBridgeClient },
+    );
+
+    expect(ddbSend).toHaveBeenCalledOnce();
+    expect(updateInput!.ConditionExpression).toBe('attribute_not_exists(sentAt) OR sentAt = :null');
+    expect((updateInput!.ExpressionAttributeValues as Record<string, unknown>)[':null']).toBeNull();
+
+    const putEventsCall = ebSend.mock.calls[0]?.[0] as {
+      input: { Entries: { Detail: string }[] };
+    };
+    const detail = JSON.parse(putEventsCall.input.Entries[0]!.Detail) as { eventTime: string };
+    expect(detail.eventTime).toBe('2026-01-01T00:00:00.000Z');
+  });
+
   it('treats a ConditionalCheckFailedException on mark-sent as already-handled, not an error', async () => {
     const conditionalError = Object.assign(new Error('already sent'), {
       name: 'ConditionalCheckFailedException',

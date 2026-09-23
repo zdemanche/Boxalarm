@@ -16,6 +16,14 @@ vi.mock('./repository.js', () => ({
   createManualDispatch: vi.fn(),
 }));
 
+vi.mock('../fanout/fanOut.js', () => ({
+  runFanOut: vi.fn().mockResolvedValue(undefined),
+}));
+
+vi.mock('../escalation/scheduleEscalation.js', () => ({
+  getSchedulerClient: vi.fn(() => ({})),
+}));
+
 interface DispatchAuthorizerContext {
   readonly sub: string;
   readonly deptId: string;
@@ -226,6 +234,38 @@ describe('handler (POST /api/v1/alerting/dispatches)', () => {
     const dispatchedAt = vi.mocked(createManualDispatch).mock.calls[0]?.[2]?.dispatchedAt;
     expect(dispatchedAt).toBeGreaterThan(1_000_000_000);
     expect(dispatchedAt).toBeLessThan(10_000_000_000);
+  });
+
+  it('invokes fan-out on a created dispatch, and a fan-out rejection does not affect the 201 ingress response', async () => {
+    const { authorizeManualDispatchSubmission } = await import('./authorization.js');
+    vi.mocked(authorizeManualDispatchSubmission).mockResolvedValue('ALLOWED');
+    const { createManualDispatch } = await import('./repository.js');
+    vi.mocked(createManualDispatch).mockResolvedValue({
+      outcome: 'created',
+      dispatchId: 'NICHOLS-MANUAL-1798000000-abc12345',
+    });
+    const { runFanOut } = await import('../fanout/fanOut.js');
+    vi.mocked(runFanOut).mockRejectedValue(new Error('scheduler unavailable'));
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    const { handler } = await import('./handler.js');
+    const event = buildEvent({
+      headers: AUTH_HEADERS,
+      authorizerContext: AUTH_CONTEXT,
+      body: JSON.stringify(VALID_BODY),
+    });
+    const result = (await handler(event, {} as never, () => undefined)) as { statusCode: number };
+
+    expect(result.statusCode).toBe(201);
+    expect(runFanOut).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      'alerting-dispatches',
+      'NICHOLS',
+      'NICHOLS-MANUAL-1798000000-abc12345',
+      expect.any(Number),
+    );
+    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('scheduler unavailable'));
   });
 
   it('emits a DispatchIngress business metric on both accept and reject (business-metrics obligation)', async () => {

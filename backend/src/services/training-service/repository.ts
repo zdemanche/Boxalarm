@@ -11,6 +11,11 @@ import { buildDeptScopedPk, type VerifiedDeptId } from '@boxalarm/dept-scope';
 import { logError, type TrainingConfig } from './client.js';
 
 const QUERY_PAGE_SIZE = 100;
+const EPOCH_SORT_WIDTH = 13;
+
+function padEpochSortKey(value: number): string {
+  return String(value).padStart(EPOCH_SORT_WIDTH, '0');
+}
 
 export interface TrainingEventInput {
   readonly title: string;
@@ -28,6 +33,21 @@ export interface AttendeeHoursInput {
   readonly hours: number;
 }
 
+export interface DateRange {
+  readonly from: number;
+  readonly to: number;
+}
+
+export interface AttendanceHoursRecord {
+  readonly memberId: string;
+  readonly category: string;
+  readonly hours: number;
+}
+
+export interface AttendanceRecord extends AttendanceHoursRecord {
+  readonly eventId: string;
+}
+
 export class DuplicateSignupError extends Error {
   constructor() {
     super('Member is already signed up for this training event');
@@ -42,6 +62,14 @@ function toTrainingEvent(item: Record<string, unknown>): TrainingEvent {
     category: item.category as string,
     startAt: item.startAt as number,
     endAt: item.endAt as number,
+  };
+}
+
+function toAttendanceHoursRecord(item: Record<string, unknown>): AttendanceHoursRecord {
+  return {
+    memberId: item.memberId as string,
+    category: item.category as string,
+    hours: typeof item.hours === 'number' ? item.hours : 0,
   };
 }
 
@@ -79,7 +107,7 @@ export async function createTrainingEvent(
         startAt: input.startAt,
         endAt: input.endAt,
         gsi3pk: buildDeptScopedPk(deptId, 'TRAINING_EVENT'),
-        gsi3sk: String(input.startAt),
+        gsi3sk: padEpochSortKey(input.startAt),
       },
       ConditionExpression: 'attribute_not_exists(pk)',
     }),
@@ -190,6 +218,93 @@ export async function listMemberAttendanceRecords(
   return items.map(toMemberAttendanceRecord);
 }
 
+export async function listTrainingEventsInRange(
+  client: DynamoDBDocumentClient,
+  config: TrainingConfig,
+  deptId: VerifiedDeptId,
+  range: DateRange,
+): Promise<readonly TrainingEvent[]> {
+  const items = await queryAllPages(
+    client,
+    (exclusiveStartKey) =>
+      new QueryCommand({
+        TableName: config.tableName,
+        IndexName: 'GSI3',
+        KeyConditionExpression: 'gsi3pk = :gsi3pk AND gsi3sk BETWEEN :from AND :to',
+        ExpressionAttributeValues: {
+          ':gsi3pk': buildDeptScopedPk(deptId, 'TRAINING_EVENT'),
+          ':from': padEpochSortKey(range.from),
+          ':to': padEpochSortKey(range.to),
+        },
+        ScanIndexForward: true,
+        Limit: QUERY_PAGE_SIZE,
+        ExclusiveStartKey: exclusiveStartKey,
+      }),
+  );
+  return items.map(toTrainingEvent);
+}
+
+export async function listEventAttendees(
+  client: DynamoDBDocumentClient,
+  config: TrainingConfig,
+  deptId: VerifiedDeptId,
+  eventId: string,
+): Promise<readonly AttendanceHoursRecord[]> {
+  const items = await queryAllPages(
+    client,
+    (exclusiveStartKey) =>
+      new QueryCommand({
+        TableName: config.tableName,
+        KeyConditionExpression: 'pk = :pk AND begins_with(sk, :prefix)',
+        ExpressionAttributeValues: {
+          ':pk': buildDeptScopedPk(deptId, 'TRAINING_EVENT', eventId),
+          ':prefix': 'ATTENDEE#',
+        },
+        Limit: QUERY_PAGE_SIZE,
+        ExclusiveStartKey: exclusiveStartKey,
+      }),
+  );
+  return items.map(toAttendanceHoursRecord);
+}
+
+const ATTENDANCE_PREFIX_LENGTH = 'TRAINING_ATTENDANCE#'.length;
+
+// ponytail: same unpadded-numeric-sort-key issue as listTrainingEventsInRange had — queries the
+// full begins_with(gsi1sk, 'TRAINING_ATTENDANCE#') prefix (as listMemberAttendanceEventIds
+// already does) and filters by the startAt encoded in gsi1sk app-side, rather than a
+// DynamoDB BETWEEN bound that would compare lexicographically
+export async function listMemberAttendanceInRange(
+  client: DynamoDBDocumentClient,
+  config: TrainingConfig,
+  deptId: VerifiedDeptId,
+  memberId: string,
+  range: DateRange,
+): Promise<readonly AttendanceHoursRecord[]> {
+  const deptPrefix = `${buildDeptScopedPk(deptId, 'TRAINING_EVENT')}#`;
+  const items = await queryAllPages(
+    client,
+    (exclusiveStartKey) =>
+      new QueryCommand({
+        TableName: config.tableName,
+        IndexName: 'GSI1',
+        KeyConditionExpression: 'gsi1pk = :gsi1pk AND begins_with(gsi1sk, :prefix)',
+        ExpressionAttributeValues: {
+          ':gsi1pk': `MEMBER#${memberId}`,
+          ':prefix': 'TRAINING_ATTENDANCE#',
+        },
+        Limit: QUERY_PAGE_SIZE,
+        ExclusiveStartKey: exclusiveStartKey,
+      }),
+  );
+  return items
+    .filter((item) => typeof item.pk === 'string' && item.pk.startsWith(deptPrefix))
+    .filter((item) => {
+      const startAt = Number(String(item.gsi1sk).slice(ATTENDANCE_PREFIX_LENGTH));
+      return startAt >= range.from && startAt <= range.to;
+    })
+    .map(toAttendanceHoursRecord);
+}
+
 export async function createSignupAttendance(
   client: DynamoDBDocumentClient,
   config: TrainingConfig,
@@ -225,6 +340,55 @@ export async function createSignupAttendance(
     }
     throw error;
   }
+}
+
+const ATTENDANCE_FAN_OUT_CONCURRENCY = 10;
+
+async function mapWithConcurrency<T, R>(
+  items: readonly T[],
+  concurrency: number,
+  fn: (item: T) => Promise<R>,
+): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let nextIndex = 0;
+  async function worker(): Promise<void> {
+    while (nextIndex < items.length) {
+      const index = nextIndex;
+      nextIndex += 1;
+      results[index] = await fn(items[index] as T);
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, () => worker()));
+  return results;
+}
+
+// Reuses listTrainingEventsInRange/listEventAttendees (E3-S5) rather than re-querying GSI3/the
+// base table inline, so the ISO report rides the same zero-padded gsi3sk BETWEEN bound as every
+// other range query on this table instead of a second, divergent implementation.
+export async function listAttendanceForPeriod(
+  client: DynamoDBDocumentClient,
+  config: TrainingConfig,
+  deptId: VerifiedDeptId,
+  periodStart: number,
+  periodEnd: number,
+): Promise<readonly AttendanceRecord[]> {
+  const events = await listTrainingEventsInRange(client, config, deptId, {
+    from: periodStart,
+    to: periodEnd,
+  });
+
+  const attendanceByEvent = await mapWithConcurrency(
+    events,
+    ATTENDANCE_FAN_OUT_CONCURRENCY,
+    async (event) => {
+      const attendees = await listEventAttendees(client, config, deptId, event.eventId);
+      return attendees
+        .filter((attendee) => attendee.hours > 0)
+        .map((attendee) => ({ ...attendee, eventId: event.eventId }));
+    },
+  );
+
+  return attendanceByEvent.flat();
 }
 
 export async function recordAttendanceHours(

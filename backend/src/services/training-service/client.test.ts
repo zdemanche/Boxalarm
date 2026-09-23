@@ -49,6 +49,12 @@ describe('training-service client', () => {
     expect(second).toBe(fakeClient);
   });
 
+  it('createDocumentClient returns a working X-Ray-wrapped document client when none is injected', async () => {
+    const { createDocumentClient } = await import('./client.js');
+    const client = createDocumentClient(process.env);
+    expect(typeof client.send).toBe('function');
+  });
+
   it('extractTraceId falls back to a random id, else parses the W3C traceparent header', async () => {
     const { extractTraceId } = await import('./client.js');
     expect(extractTraceId(buildEvent({}))).toMatch(/^[0-9a-f-]{36}$/);
@@ -89,7 +95,7 @@ describe('training-service client', () => {
     emitTrainingMetric('TrainingEventCreated');
     const noReason = JSON.parse(logSpy.mock.calls[0]?.[0] as string) as Record<string, unknown>;
     expect(noReason._aws).toMatchObject({
-      CloudWatchMetrics: [{ Namespace: 'Boxalarm/Training', Dimensions: [[]] }],
+      CloudWatchMetrics: [{ Namespace: 'Boxalarm/training', Dimensions: [[]] }],
     });
     expect(noReason.TrainingEventCreated).toBe(1);
     expect(noReason.Reason).toBeUndefined();

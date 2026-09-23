@@ -72,7 +72,7 @@ describe('handler', () => {
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
     await handler(buildEvent({ eventName: 'ForgotPassword' }), {} as never, () => undefined);
     const parsed = findMetricLine(logSpy, 'RecoveryStarted');
-    expect(parsed._aws.CloudWatchMetrics[0]?.Namespace).toBe('Boxalarm/CredentialRecovery');
+    expect(parsed._aws.CloudWatchMetrics[0]?.Namespace).toBe('Boxalarm/credential-recovery');
     expect(parsed._aws.CloudWatchMetrics[0]?.Dimensions).toEqual([[]]);
     expect(parsed._aws.CloudWatchMetrics[0]?.Metrics[0]).toEqual({
       Name: 'RecoveryStarted',
@@ -87,7 +87,7 @@ describe('handler', () => {
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
     await handler(buildEvent({ eventName: 'ConfirmForgotPassword' }), {} as never, () => undefined);
     const parsed = findMetricLine(logSpy, 'RecoveryCompleted');
-    expect(parsed._aws.CloudWatchMetrics[0]?.Namespace).toBe('Boxalarm/CredentialRecovery');
+    expect(parsed._aws.CloudWatchMetrics[0]?.Namespace).toBe('Boxalarm/credential-recovery');
     expect(parsed._aws.CloudWatchMetrics[0]?.Dimensions).toEqual([[]]);
     expect(parsed._aws.CloudWatchMetrics[0]?.Metrics[0]).toEqual({
       Name: 'RecoveryCompleted',
@@ -105,7 +105,7 @@ describe('handler', () => {
       () => undefined,
     );
     const parsed = findMetricLine(logSpy, 'RecoveryFailed');
-    expect(parsed._aws.CloudWatchMetrics[0]?.Namespace).toBe('Boxalarm/CredentialRecovery');
+    expect(parsed._aws.CloudWatchMetrics[0]?.Namespace).toBe('Boxalarm/credential-recovery');
     expect(parsed._aws.CloudWatchMetrics[0]?.Dimensions).toEqual([[], ['Reason']]);
     expect(parsed._aws.CloudWatchMetrics[0]?.Metrics[0]).toEqual({
       Name: 'RecoveryFailed',
@@ -125,7 +125,7 @@ describe('handler', () => {
     expect(logged).not.toContain('RecoveryCompleted');
     expect(logged).not.toContain('"RecoveryFailed":1');
     const parsed = findMetricLine(logSpy, 'RecoveryClassificationFailed');
-    expect(parsed._aws.CloudWatchMetrics[0]?.Namespace).toBe('Boxalarm/CredentialRecovery');
+    expect(parsed._aws.CloudWatchMetrics[0]?.Namespace).toBe('Boxalarm/credential-recovery');
     expect(parsed._aws.CloudWatchMetrics[0]?.Dimensions).toEqual([[], ['Reason']]);
     expect(parsed._aws.CloudWatchMetrics[0]?.Metrics[0]).toEqual({
       Name: 'RecoveryClassificationFailed',

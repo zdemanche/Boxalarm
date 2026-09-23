@@ -26,7 +26,7 @@ export function emitAuthzMetric(outcome: 'Allowed' | 'Denied', reason?: string):
   // Both dimension sets on a deny: [] so a plain deny-rate alarm resolves, and ['Reason']
   // so an outage is separable from a routine role denial. Mirrors emitAuthorizerMetric.
   emitEmf(
-    'Boxalarm/Authz',
+    'Boxalarm/authz',
     `Authz${outcome}`,
     reason ? [[], ['Reason']] : [[]],
     reason ? { Reason: reason } : {},
@@ -36,5 +36,5 @@ export function emitAuthzMetric(outcome: 'Allowed' | 'Denied', reason?: string):
 export function emitInvocationMetric(name: string): void {
   // Unconditional, no-threshold counter — every invocation pages the chief per the
   // "Anomalous access monitoring" requirement, since no re-auth control exists behind it.
-  emitEmf('Boxalarm/Authz', name, [[]], {});
+  emitEmf('Boxalarm/authz', name, [[]], {});
 }

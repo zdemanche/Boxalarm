@@ -87,7 +87,7 @@ function emitMetric(name: 'ExportInvoked' | 'ExportWorkerInvokeFailed'): void {
         Timestamp: Date.now(),
         CloudWatchMetrics: [
           {
-            Namespace: 'Boxalarm/Platform',
+            Namespace: 'Boxalarm/platform',
             Dimensions: [[]],
             Metrics: [{ Name: name, Unit: 'Count' }],
           },

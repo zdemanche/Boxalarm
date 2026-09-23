@@ -5,7 +5,7 @@ function emitEmf(metricName: string): void {
         Timestamp: Date.now(),
         CloudWatchMetrics: [
           {
-            Namespace: 'Boxalarm/Inspections',
+            Namespace: 'Boxalarm/inspections',
             Dimensions: [[]],
             Metrics: [{ Name: metricName, Unit: 'Count' }],
           },
@@ -17,7 +17,13 @@ function emitEmf(metricName: string): void {
 }
 
 export type InspectionMetricOutcome =
-  'Scheduled' | 'ScheduleFailed' | 'Conducted' | 'ConductFailed';
+  | 'Scheduled'
+  | 'ScheduleFailed'
+  | 'Conducted'
+  | 'ConductFailed'
+  | 'FieldCaptureSubmitted'
+  | 'FieldCaptureDuplicate'
+  | 'FieldCaptureFailed';
 
 export function emitInspectionMetric(outcome: InspectionMetricOutcome): void {
   emitEmf(`Inspection${outcome}`);

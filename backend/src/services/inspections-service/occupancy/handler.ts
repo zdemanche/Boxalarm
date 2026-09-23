@@ -55,7 +55,7 @@ function emitOccupancyMetric(outcome: string, reason?: string): void {
         Timestamp: Date.now(),
         CloudWatchMetrics: [
           {
-            Namespace: 'Boxalarm/Inspections/Occupancy',
+            Namespace: 'Boxalarm/inspections/occupancy',
             Dimensions: reason ? [[], ['Reason']] : [[]],
             Metrics: [{ Name: outcome, Unit: 'Count' }],
           },

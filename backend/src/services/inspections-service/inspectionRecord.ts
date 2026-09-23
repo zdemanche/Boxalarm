@@ -16,6 +16,7 @@ export interface InspectionItem {
   readonly conductedDate?: string;
   readonly conductedBy?: string;
   readonly violations: readonly Violation[];
+  readonly photoS3Keys?: readonly string[];
   readonly nextDueDate: string;
   readonly gsi2pk: string;
   readonly gsi2sk: string;
@@ -28,6 +29,7 @@ export interface ApiInspection {
   readonly conductedDate?: string;
   readonly conductedBy?: string;
   readonly violations: readonly Violation[];
+  readonly photoS3Keys?: readonly string[];
   readonly nextDueDate: string;
 }
 
@@ -91,15 +93,16 @@ export function toApiInspection(item: InspectionItem): ApiInspection {
     ...(item.conductedDate !== undefined && { conductedDate: item.conductedDate }),
     ...(item.conductedBy !== undefined && { conductedBy: item.conductedBy }),
     violations: item.violations,
+    ...(item.photoS3Keys !== undefined && { photoS3Keys: item.photoS3Keys }),
     nextDueDate: item.nextDueDate,
   };
 }
 
-function isNonEmptyString(value: unknown): value is string {
+export function isNonEmptyString(value: unknown): value is string {
   return typeof value === 'string' && value.trim().length > 0;
 }
 
-function isPkSafeString(value: unknown): value is string {
+export function isPkSafeString(value: unknown): value is string {
   return isNonEmptyString(value) && !value.includes('#');
 }
 

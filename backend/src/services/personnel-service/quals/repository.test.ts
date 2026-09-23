@@ -47,6 +47,24 @@ describe('putQual', () => {
     expect(qualPut?.Put?.Item.gsi1pk).toBe(`DEPT#${DEPT_ID}#MEMBER#MBR-0012`);
   });
 
+  it('writes the outbox row as entityType OUTBOX_ENTRY with sentAt: null, not the legacy OUTBOX/sent shape (issue #129)', async () => {
+    const send = vi.fn().mockResolvedValue({});
+    const client = fakeClient(send);
+    await putQual(client, TABLE, DEPT_ID, 'MBR-0012', 'INTERIOR', null, randomUUID());
+    const command = send.mock.calls[0]?.[0] as {
+      input: { TransactItems: { Put?: { Item: Record<string, unknown> } }[] };
+    };
+    const outboxPut = command.input.TransactItems.find(
+      (item) => item.Put?.Item.entityType === 'OUTBOX_ENTRY',
+    );
+    expect(outboxPut).toBeDefined();
+    expect(outboxPut?.Put?.Item.sentAt).toBeNull();
+    expect(outboxPut?.Put?.Item.sent).toBeUndefined();
+    expect(outboxPut?.Put?.Item.envelope).toBeUndefined();
+    expect(outboxPut?.Put?.Item.eventType).toBe('personnel.eligibility.changed');
+    expect(outboxPut?.Put?.Item.payload).toMatchObject({ memberId: 'MBR-0012' });
+  });
+
   it('throws and logs the original error, including cancellation reasons, when TransactWriteItems is cancelled', async () => {
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const cancellation = new TransactionCanceledException({

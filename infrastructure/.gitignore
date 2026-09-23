@@ -1,0 +1,11 @@
+node_modules/
+dist/
+coverage/
+.analysis/
+.env
+.env.*
+Pulumi.*.yaml.bak
+.pulumi/
+*.log
+.DS_Store
+.worktrees/

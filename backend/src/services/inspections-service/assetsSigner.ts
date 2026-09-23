@@ -11,6 +11,7 @@ export interface AssetsConfig {
 }
 
 let cachedSecretsClient: SecretsManagerClient | undefined;
+let cachedAssetsConfig: AssetsConfig | undefined;
 
 export function createSecretsManagerClient(client?: SecretsManagerClient): SecretsManagerClient {
   cachedSecretsClient ??= client ?? xray.captureAWSv3Client(new SecretsManagerClient({}));
@@ -21,6 +22,9 @@ export async function readAssetsConfig(
   env: NodeJS.ProcessEnv,
   secretsClient?: SecretsManagerClient,
 ): Promise<AssetsConfig> {
+  if (cachedAssetsConfig) {
+    return cachedAssetsConfig;
+  }
   const bucketName = env.PLATFORM_ASSETS_BUCKET_NAME;
   const cloudFrontDomain = env.PLATFORM_ASSETS_CLOUDFRONT_DOMAIN;
   const keyPairId = env.PLATFORM_ASSETS_CLOUDFRONT_KEY_PAIR_ID;
@@ -43,7 +47,8 @@ export async function readAssetsConfig(
   if (!privateKey) {
     throw new Error(`Secret ${privateKeySecretId} has no SecretString value`);
   }
-  return { bucketName, cloudFrontDomain, keyPairId, privateKey };
+  cachedAssetsConfig = { bucketName, cloudFrontDomain, keyPairId, privateKey };
+  return cachedAssetsConfig;
 }
 
 export type SignUrlFn = typeof getSignedUrl;
@@ -56,8 +61,13 @@ export function isSafeAssetFilename(filename: string): boolean {
   return SAFE_FILENAME_PATTERN.test(filename) && filename !== '.' && filename !== '..';
 }
 
-export function buildAssetKey(deptId: VerifiedDeptId, prePlanId: string, filename: string): string {
-  return `${deptId}/PRE_PLAN/${prePlanId}/${filename}`;
+export function buildAssetKey(
+  deptId: VerifiedDeptId,
+  entityType: string,
+  entityId: string,
+  filename: string,
+): string {
+  return `${deptId}/${entityType}/${entityId}/${filename}`;
 }
 
 export function createSignedAssetUrl(
@@ -77,9 +87,14 @@ export function createSignedAssetUrl(
 export function createSignedUploadUrl(
   config: AssetsConfig,
   deptId: VerifiedDeptId,
-  prePlanId: string,
+  entityType: string,
+  entityId: string,
   filename: string,
   signer: SignUrlFn = getSignedUrl,
 ): string {
-  return createSignedAssetUrl(config, buildAssetKey(deptId, prePlanId, filename), signer);
+  return createSignedAssetUrl(
+    config,
+    buildAssetKey(deptId, entityType, entityId, filename),
+    signer,
+  );
 }
