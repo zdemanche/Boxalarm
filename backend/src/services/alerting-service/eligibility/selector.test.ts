@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { toVerifiedDeptId } from '@boxalarm/dept-scope';
 import type { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
-import { parseSnapshotItem, queryEligibleMembers } from './selector.js';
+import { parseSnapshotItem, queryEligibleMembers, queryEligiblePartition } from './selector.js';
 
 const DEPT_ID = toVerifiedDeptId({ deptId: 'NICHOLS' });
 
@@ -72,6 +72,18 @@ describe('queryEligibleMembers (core-harm: a marked-off member must never be ret
       DEPT_ID,
     );
     expect(result).toEqual([]);
+  });
+
+  it('logs and skips a single malformed item instead of failing the whole partition query (R2)', async () => {
+    const send = vi.fn().mockResolvedValue({
+      Items: [snapshotItem(), { pk: 'DEPT#NICHOLS#ELIGIBILITY', sk: 'MEMBER#mbr-broken' }],
+    });
+    const result = await queryEligiblePartition(
+      { send } as unknown as DynamoDBDocumentClient,
+      'alerting-table',
+      DEPT_ID,
+    );
+    expect(result.map((m) => m.memberId)).toEqual(['mbr-1']);
   });
 
   it('queries only this department scoped ELIGIBILITY partition', async () => {

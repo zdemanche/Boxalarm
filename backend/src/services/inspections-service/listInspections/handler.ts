@@ -50,7 +50,7 @@ const list = withAuthorization(
           client.send(
             new QueryCommand({
               TableName: tableName,
-              IndexName: 'gsi2',
+              IndexName: 'GSI2',
               KeyConditionExpression: 'gsi2pk = :gsi2pkValue AND gsi2sk BETWEEN :lo AND :hi',
               ExpressionAttributeValues: {
                 ':gsi2pkValue': buildDueGsi2Pk(deptId, month),

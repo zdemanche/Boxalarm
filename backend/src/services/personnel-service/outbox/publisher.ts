@@ -5,7 +5,7 @@ import { emitOutcomeMetric } from '@boxalarm/metrics';
 import type { DynamoDBStreamEvent } from 'aws-lambda';
 import { createDdbClient, readPersonnelDdbConfig } from '../availability/dynamoClient.js';
 
-const METRIC_NAMESPACE = 'Boxalarm/PersonnelOutbox';
+const METRIC_NAMESPACE = 'Boxalarm/personnel-outbox';
 const PUT_EVENTS_BATCH_SIZE = 10;
 
 interface EventBridgeConfig {
@@ -65,6 +65,9 @@ interface PendingOutboxEntry {
 }
 
 function eventTimeIso(item: Record<string, unknown>): string {
+  if (typeof item.eventTime === 'string') {
+    return item.eventTime;
+  }
   const createdAt = item.createdAt;
   return typeof createdAt === 'number'
     ? new Date(createdAt * 1000).toISOString()
@@ -146,8 +149,11 @@ export const handler = async (
             TableName: tableName,
             Key: { pk, sk },
             UpdateExpression: 'SET sentAt = :now',
-            ConditionExpression: 'attribute_not_exists(sentAt)',
-            ExpressionAttributeValues: { ':now': Math.floor(Date.now() / 1000) },
+            // Writers set sentAt: null at insert time (a present NULL-typed attribute,
+            // not an absent one), so attribute_not_exists(sentAt) alone would always be
+            // false for them — this item would never actually get marked sent.
+            ConditionExpression: 'attribute_not_exists(sentAt) OR sentAt = :null',
+            ExpressionAttributeValues: { ':now': Math.floor(Date.now() / 1000), ':null': null },
           }),
         );
       } catch (error) {

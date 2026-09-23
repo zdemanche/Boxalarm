@@ -1,33 +1,80 @@
-import { ConditionalCheckFailedException } from '@aws-sdk/client-dynamodb';
+import {
+  ConditionalCheckFailedException,
+  ResourceNotFoundException,
+  TransactionCanceledException,
+} from '@aws-sdk/client-dynamodb';
 import type { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
 
 type FakeItem = Record<string, unknown>;
 
+/**
+ * The real secondary index names this fake will accept for QueryCommand's IndexName. A
+ * QueryCommand against any other IndexName is rejected the way real DynamoDB rejects a query
+ * against a nonexistent index, so a mismatched index-name constant (see PR #150 review, finding
+ * #1 — a local `GSI3_INDEX_NAME = 'gsi3'` shadowing the real uppercase `'GSI3'`) fails tests
+ * instead of silently matching everything.
+ */
+const KNOWN_INDEX_NAMES = new Set(['GSI3']);
+
 function itemKey(item: FakeItem): string {
   return `${item.pk as string}#${item.sk as string}`;
+}
+
+function resolveAttr(rawAttr: string, names: Record<string, string>): string | undefined {
+  return rawAttr.startsWith('#') ? names[rawAttr] : rawAttr;
 }
 
 function evaluateClause(
   clause: string,
   item: FakeItem | undefined,
   values: Record<string, unknown>,
+  names: Record<string, string>,
 ): boolean {
   const trimmed = clause.trim();
-  const exists = /^attribute_exists\((\w+)\)$/.exec(trimmed);
-  if (exists) {
-    const attr = exists[1] ?? '';
+  const existsFn = /^attribute_exists\(([#\w]+)\)$/.exec(trimmed);
+  if (existsFn) {
+    const attr = resolveAttr(existsFn[1] ?? '', names) ?? '';
     return item !== undefined && item[attr] !== undefined;
   }
-  const notExists = /^attribute_not_exists\((\w+)\)$/.exec(trimmed);
+  const notExists = /^attribute_not_exists\(([#\w]+)\)$/.exec(trimmed);
   if (notExists) {
-    const attr = notExists[1] ?? '';
+    const attr = resolveAttr(notExists[1] ?? '', names) ?? '';
     return item === undefined || item[attr] === undefined;
   }
-  const equals = /^(\w+)\s*=\s*(:\w+)$/.exec(trimmed);
+  const equals = /^(#?\w+)\s*=\s*(:\w+)$/.exec(trimmed);
   if (equals) {
-    const attr = equals[1] ?? '';
+    const attr = resolveAttr(equals[1] ?? '', names) ?? '';
     const valueKey = equals[2] ?? '';
     return item !== undefined && item[attr] === values[valueKey];
+  }
+  const notEquals = /^(#?\w+)\s*<>\s*(:\w+)$/.exec(trimmed);
+  if (notEquals) {
+    const attr = resolveAttr(notEquals[1] ?? '', names) ?? '';
+    const valueKey = notEquals[2] ?? '';
+    return item !== undefined && item[attr] !== values[valueKey];
+  }
+  const comparison = /^(#?\w+)\s*(<=|>=|<|>)\s*(:\w+)$/.exec(trimmed);
+  if (comparison) {
+    const attr = resolveAttr(comparison[1] ?? '', names) ?? '';
+    const op = comparison[2] ?? '';
+    const valueKey = comparison[3] ?? '';
+    const left = item?.[attr];
+    const right = values[valueKey];
+    if (typeof left !== 'number' || typeof right !== 'number') {
+      return false;
+    }
+    switch (op) {
+      case '<=':
+        return left <= right;
+      case '>=':
+        return left >= right;
+      case '<':
+        return left < right;
+      case '>':
+        return left > right;
+      default:
+        return false;
+    }
   }
   throw new Error(`testDynamoFake does not support condition clause: ${trimmed}`);
 }
@@ -36,14 +83,17 @@ function evaluateCondition(
   expression: string,
   item: FakeItem | undefined,
   values: Record<string, unknown>,
+  names: Record<string, string> = {},
 ): boolean {
   return expression.split(/\s+AND\s+/i).every((clause) => {
     const trimmed = clause.trim();
     const grouped = /^\((.*)\)$/.exec(trimmed);
     if (grouped) {
-      return (grouped[1] ?? '').split(/\s+OR\s+/i).some((sub) => evaluateClause(sub, item, values));
+      return (grouped[1] ?? '')
+        .split(/\s+OR\s+/i)
+        .some((sub) => evaluateClause(sub, item, values, names));
     }
-    return evaluateClause(trimmed, item, values);
+    return evaluateClause(trimmed, item, values, names);
   });
 }
 
@@ -54,22 +104,62 @@ function applyUpdate(
 ): FakeItem {
   const values = (input.ExpressionAttributeValues ?? {}) as Record<string, unknown>;
   const names = (input.ExpressionAttributeNames ?? {}) as Record<string, string>;
-  const setClause = (input.UpdateExpression as string).replace(/^SET\s+/i, '');
+  const expression = input.UpdateExpression as string;
   const next: FakeItem = { ...(existing ?? key) };
-  for (const assignment of setClause.split(',')) {
-    const parts = assignment.split('=').map((part) => part.trim());
-    const rawAttr = parts[0];
-    const rawValue = parts[1];
-    const attr = rawAttr?.startsWith('#') ? names[rawAttr] : rawAttr;
-    if (attr && rawValue !== undefined) {
-      next[attr] = values[rawValue];
+
+  const setMatch = /SET\s+(.+?)(?=\s+REMOVE\s+|$)/is.exec(expression);
+  if (setMatch) {
+    for (const assignment of (setMatch[1] ?? '').split(',')) {
+      const parts = assignment.split('=').map((part) => part.trim());
+      const rawAttr = parts[0];
+      const rawValue = parts[1];
+      const attr = rawAttr ? resolveAttr(rawAttr, names) : undefined;
+      if (attr && rawValue !== undefined) {
+        next[attr] = values[rawValue];
+      }
     }
   }
+
+  const removeMatch = /REMOVE\s+(.+)$/is.exec(expression);
+  if (removeMatch) {
+    for (const rawAttr of (removeMatch[1] ?? '').split(',')) {
+      const attr = resolveAttr(rawAttr.trim(), names);
+      if (attr) {
+        delete next[attr];
+      }
+    }
+  }
+
   return next;
+}
+
+interface TransactItem {
+  readonly Put?: {
+    readonly TableName: string;
+    readonly Item: FakeItem;
+    readonly ConditionExpression?: string;
+    readonly ExpressionAttributeValues?: Record<string, unknown>;
+    readonly ExpressionAttributeNames?: Record<string, string>;
+  };
+  readonly Update?: {
+    readonly TableName: string;
+    readonly Key: FakeItem;
+    readonly ConditionExpression?: string;
+    readonly UpdateExpression: string;
+    readonly ExpressionAttributeValues?: Record<string, unknown>;
+    readonly ExpressionAttributeNames?: Record<string, string>;
+  };
+  readonly ConditionCheck?: {
+    readonly Key: FakeItem;
+    readonly ConditionExpression: string;
+    readonly ExpressionAttributeValues?: Record<string, unknown>;
+    readonly ExpressionAttributeNames?: Record<string, string>;
+  };
 }
 
 export type FakeDocumentClient = DynamoDBDocumentClient & {
   readonly peek: (partitionKey: string, sortKey: string) => FakeItem | undefined;
+  readonly all: () => IterableIterator<FakeItem>;
 };
 
 export function createFakeDocumentClient(seed: readonly FakeItem[] = []): FakeDocumentClient {
@@ -88,9 +178,39 @@ export function createFakeDocumentClient(seed: readonly FakeItem[] = []): FakeDo
     }
 
     if (name === 'QueryCommand') {
-      const values = input.ExpressionAttributeValues as Record<string, unknown>;
-      const wantedPk = values[':shiftPk'];
-      const items = [...store.values()].filter((item) => item.pk === wantedPk);
+      const indexName = input.IndexName as string | undefined;
+      if (indexName !== undefined && !KNOWN_INDEX_NAMES.has(indexName)) {
+        return Promise.reject(
+          new ResourceNotFoundException({
+            message: `Cannot do operations on a non-existent index: ${indexName}`,
+            $metadata: {},
+          }),
+        );
+      }
+
+      const values = (input.ExpressionAttributeValues ?? {}) as Record<string, unknown>;
+      const names = (input.ExpressionAttributeNames ?? {}) as Record<string, string>;
+      let items = [...store.values()];
+
+      if (values[':shiftPk'] !== undefined) {
+        items = items.filter((item) => item.pk === values[':shiftPk']);
+      } else if (values[':gsi3pk'] !== undefined) {
+        items = items.filter((item) => item.gsi3pk === values[':gsi3pk']);
+        if (typeof values[':nowSk'] === 'string') {
+          items = items.filter(
+            (item) =>
+              typeof item.gsi3sk === 'string' && item.gsi3sk <= (values[':nowSk'] as string),
+          );
+        }
+      } else if (values[':pk'] !== undefined) {
+        items = items.filter((item) => item.pk === values[':pk']);
+      }
+
+      const filter = input.FilterExpression as string | undefined;
+      if (filter) {
+        items = items.filter((item) => evaluateCondition(filter, item, values, names));
+      }
+
       return Promise.resolve({ Items: items });
     }
 
@@ -100,7 +220,8 @@ export function createFakeDocumentClient(seed: readonly FakeItem[] = []): FakeDo
       const existing = store.get(lookupKey);
       const condition = input.ConditionExpression as string | undefined;
       const values = (input.ExpressionAttributeValues ?? {}) as Record<string, unknown>;
-      if (condition && !evaluateCondition(condition, existing, values)) {
+      const names = (input.ExpressionAttributeNames ?? {}) as Record<string, string>;
+      if (condition && !evaluateCondition(condition, existing, values, names)) {
         return Promise.reject(
           new ConditionalCheckFailedException({
             message: 'The conditional request failed',
@@ -112,11 +233,86 @@ export function createFakeDocumentClient(seed: readonly FakeItem[] = []): FakeDo
       return Promise.resolve({});
     }
 
+    if (name === 'TransactWriteCommand') {
+      const items = (input.TransactItems ?? []) as readonly TransactItem[];
+      const reasons: string[] = [];
+      let anyFailed = false;
+
+      for (const item of items) {
+        if (item.ConditionCheck) {
+          const { Key, ConditionExpression, ExpressionAttributeValues, ExpressionAttributeNames } =
+            item.ConditionCheck;
+          const existing = store.get(itemKey(Key));
+          const ok = evaluateCondition(
+            ConditionExpression,
+            existing,
+            ExpressionAttributeValues ?? {},
+            ExpressionAttributeNames ?? {},
+          );
+          reasons.push(ok ? 'None' : 'ConditionalCheckFailed');
+          if (!ok) anyFailed = true;
+        } else if (item.Update) {
+          const { Key, ConditionExpression, ExpressionAttributeValues, ExpressionAttributeNames } =
+            item.Update;
+          const existing = store.get(itemKey(Key));
+          const ok =
+            !ConditionExpression ||
+            evaluateCondition(
+              ConditionExpression,
+              existing,
+              ExpressionAttributeValues ?? {},
+              ExpressionAttributeNames ?? {},
+            );
+          reasons.push(ok ? 'None' : 'ConditionalCheckFailed');
+          if (!ok) anyFailed = true;
+        } else if (item.Put) {
+          const { Item, ConditionExpression, ExpressionAttributeValues, ExpressionAttributeNames } =
+            item.Put;
+          const existing = store.get(itemKey(Item));
+          const ok =
+            !ConditionExpression ||
+            evaluateCondition(
+              ConditionExpression,
+              existing,
+              ExpressionAttributeValues ?? {},
+              ExpressionAttributeNames ?? {},
+            );
+          reasons.push(ok ? 'None' : 'ConditionalCheckFailed');
+          if (!ok) anyFailed = true;
+        } else {
+          reasons.push('None');
+        }
+      }
+
+      if (anyFailed) {
+        return Promise.reject(
+          new TransactionCanceledException({
+            message:
+              'Transaction cancelled, please refer cancellation reasons for specific reasons',
+            CancellationReasons: reasons.map((Code) => ({ Code })),
+            $metadata: {},
+          }),
+        );
+      }
+
+      for (const item of items) {
+        if (item.Put) {
+          store.set(itemKey(item.Put.Item), item.Put.Item);
+        } else if (item.Update) {
+          const { Key } = item.Update;
+          store.set(itemKey(Key), applyUpdate(store.get(itemKey(Key)), Key, item.Update));
+        }
+      }
+      return Promise.resolve({});
+    }
+
     return Promise.reject(new Error(`testDynamoFake does not support command: ${name}`));
   };
 
   const peek = (partitionKey: string, sortKey: string): FakeItem | undefined =>
     store.get(`${partitionKey}#${sortKey}`);
 
-  return { send, peek } as unknown as FakeDocumentClient;
+  const all = (): IterableIterator<FakeItem> => store.values();
+
+  return { send, peek, all } as unknown as FakeDocumentClient;
 }

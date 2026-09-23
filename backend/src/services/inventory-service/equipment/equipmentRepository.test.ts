@@ -110,7 +110,7 @@ describe('listEquipmentAssets', () => {
     const client = fakeDocClient((command) => {
       expect(command).toBeInstanceOf(QueryCommand);
       const input = (command as QueryCommand).input;
-      expect(input.IndexName).toBe('gsi3');
+      expect(input.IndexName).toBe('GSI3');
       expect(input.ExpressionAttributeValues?.[':gsi3Pk']).toBe('DEPT#NICHOLS#EQUIPMENT_ASSET');
       return { Items: [] };
     });
@@ -121,7 +121,7 @@ describe('listEquipmentAssets', () => {
     const client = fakeDocClient((command) => {
       expect(command).toBeInstanceOf(QueryCommand);
       const input = (command as QueryCommand).input;
-      expect(input.IndexName).toBe('gsi1');
+      expect(input.IndexName).toBe('GSI1');
       expect(input.ExpressionAttributeValues?.[':gsi1Pk']).toBe('MEMBER#MBR-1');
       expect(input.FilterExpression).toBe('deptId = :deptId');
       expect(input.ExpressionAttributeValues?.[':deptId']).toBe('NICHOLS');
@@ -166,7 +166,7 @@ describe('listEquipmentAssets', () => {
   it('AC2: apparatus-filtered list queries gsi3 with a FilterExpression on assignedToType/Id', async () => {
     const client = fakeDocClient((command) => {
       const input = (command as QueryCommand).input;
-      expect(input.IndexName).toBe('gsi3');
+      expect(input.IndexName).toBe('GSI3');
       expect(input.FilterExpression).toBe('assignedToType = :type AND assignedToId = :id');
       expect(input.ExpressionAttributeValues).toMatchObject({
         ':type': 'APPARATUS',

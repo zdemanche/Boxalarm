@@ -34,6 +34,16 @@ export function notFoundProblem(traceId: string): ProblemResponse {
   );
 }
 
+export function notPendingProblem(traceId: string): ProblemResponse {
+  return problemResponse(
+    409,
+    'https://boxalarm.dev/problems/shift-swap-not-pending',
+    'Conflict',
+    'This shift swap request has already been resolved.',
+    traceId,
+  );
+}
+
 export function badRequestProblem(traceId: string, detail: string): ProblemResponse {
   return problemResponse(
     400,

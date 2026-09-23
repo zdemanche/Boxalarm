@@ -13,13 +13,14 @@ const ENV = { PLATFORM_TABLE_NAME: 'boxalarm-platform' };
 function event(
   body: unknown,
   groups = 'ADMIN',
+  headers: Record<string, string | undefined> = {},
 ): APIGatewayProxyEventV2WithLambdaAuthorizer<AuthorizerContext> {
   return {
     version: '2.0',
     routeKey: 'POST /api/v1/inventory/equipment',
     rawPath: '/api/v1/inventory/equipment',
     rawQueryString: '',
-    headers: {},
+    headers,
     requestContext: {
       requestId: 'req-1',
       authorizer: { lambda: { sub: 'member-1', deptId: 'NICHOLS', 'cognito:groups': groups } },
@@ -97,5 +98,39 @@ describe('handler (POST /api/v1/inventory/equipment)', () => {
     const client = fakeDocClient(() => ({}));
     await handler(event({ serialNumber: 'SN-1' }), undefined, undefined, ENV, client);
     expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('EquipmentAssetCreated'));
+  });
+
+  it('traceparent: propagates a valid incoming traceparent header on success', async () => {
+    const client = fakeDocClient(() => ({}));
+    const result = await handler(
+      event({ serialNumber: 'SN-1' }, 'ADMIN', {
+        traceparent: '00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01',
+      }),
+      undefined,
+      undefined,
+      ENV,
+      client,
+    );
+    expect(result.headers?.traceparent).toBe(
+      '00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01',
+    );
+  });
+
+  it('traceparent: generates a fresh valid traceparent (root span) when no header is sent', async () => {
+    const client = fakeDocClient(() => ({}));
+    const result = await handler(
+      event({ serialNumber: 'SN-1' }),
+      undefined,
+      undefined,
+      ENV,
+      client,
+    );
+    expect(result.headers?.traceparent).toMatch(/^[\da-f]{2}-[\da-f]{32}-[\da-f]{16}-[\da-f]{2}$/);
+  });
+
+  it('traceparent: still returned on the error path (400)', async () => {
+    const client = fakeDocClient(() => ({}));
+    const result = await handler(event({ serialNumber: '  ' }), undefined, undefined, ENV, client);
+    expect(result.headers?.traceparent).toMatch(/^[\da-f]{2}-[\da-f]{32}-[\da-f]{16}-[\da-f]{2}$/);
   });
 });

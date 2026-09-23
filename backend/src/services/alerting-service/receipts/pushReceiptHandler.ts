@@ -100,7 +100,7 @@ function emitInvalidTokenMetric(outcome: 'Invalidated' | 'Failed' | 'Skipped'): 
         Timestamp: Date.now(),
         CloudWatchMetrics: [
           {
-            Namespace: 'Boxalarm/PushToken',
+            Namespace: 'Boxalarm/push-token',
             Dimensions: [[]],
             Metrics: [{ Name: `PushToken${outcome}`, Unit: 'Count' }],
           },
