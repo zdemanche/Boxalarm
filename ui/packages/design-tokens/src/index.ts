@@ -114,6 +114,11 @@ export const statusPalette = {
 
 export type StatusRole = keyof (typeof statusPalette)['day'];
 
+// Widened shapes, same rationale as `PaletteColors` above: use these, not `typeof
+// surfacePalette.day` / `typeof statusPalette.day`, whenever a palette is chosen at runtime.
+export type SurfaceColors = Record<keyof (typeof surfacePalette)['day'], string>;
+export type StatusColors = Record<StatusRole, string>;
+
 export const typeScale = {
   display: { size: 28, lineHeight: 34, weight: 700 },
   title: { size: 22, lineHeight: 30, weight: 700 },
