@@ -95,6 +95,7 @@ export class Escalation extends pulumi.ComponentResource {
         },
         additionalPolicyStatements: escalationPolicy,
         reservedConcurrentExecutions: 5,
+        permissionsBoundaryArn: args.permissionsBoundaryArn,
       },
       { parent: this },
     );
