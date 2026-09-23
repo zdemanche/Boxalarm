@@ -50,6 +50,8 @@ export interface Incident {
 }
 
 export interface CreateIncidentInput {
+  /** Overrides the composed `{deptId}-{dispatchNumber}-{epochSeconds}` id (E6-S2 dispatch-linked creation). */
+  readonly incidentId?: string;
   readonly dispatchNumber: string;
   readonly epochSeconds: number;
   readonly nerisSchemaVersion: string;
