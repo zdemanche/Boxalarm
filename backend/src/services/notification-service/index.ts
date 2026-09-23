@@ -1,0 +1,43 @@
+/**
+ * notification-service consumer for apparatus.defect.reported (F4.3 / E4-S4).
+ *
+ * Routes to the apparatus-officer role on a **non-critical** channel only
+ * (in-app / push preference / digest) — never the alerting plane, never Critical Alerts.
+ *
+ * TODO: E3-S3 — implement once notification-service has preference + delivery patterns.
+ * Until then this stub exists so EventBridge wiring has a documented LOB sink and so
+ * agents do not invent alerting-service coupling for defect fan-out.
+ */
+export const service = { name: 'notification-service', plane: 'lob' } as const;
+
+export interface ApparatusDefectReportedPayload {
+  readonly defectId: string;
+  readonly apparatusId: string;
+  readonly unitLabel: string;
+  readonly reportedByMemberId: string;
+  readonly severity: string;
+  readonly photoS3Key?: string;
+  readonly outOfService: boolean;
+  readonly deptId: string;
+}
+
+export function handleApparatusDefectReported(
+  payload: ApparatusDefectReportedPayload,
+  correlationId: string,
+): void {
+  // TODO: E3-S3 — look up apparatus-officer recipients and enqueue a non-critical notification.
+  console.log(
+    JSON.stringify({
+      event: 'notification.apparatus_defect_reported.stub',
+      service: 'notification-service',
+      correlationId,
+      defectId: payload.defectId,
+      apparatusId: payload.apparatusId,
+      deptId: payload.deptId,
+      severity: payload.severity,
+      channelClass: 'non-critical',
+      message:
+        'Stub only — must use notification-service non-critical channel; do not route via alerting-service',
+    }),
+  );
+}

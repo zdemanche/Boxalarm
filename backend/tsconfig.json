@@ -1,0 +1,16 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": ".",
+    "outDir": "dist",
+    "tsBuildInfoFile": "dist/.tsbuildinfo"
+  },
+  "references": [
+    { "path": "packages/dept-scope" },
+    { "path": "packages/authz" },
+    { "path": "packages/outbox" },
+    { "path": "packages/metrics" },
+    { "path": "packages/logging" }
+  ],
+  "include": ["src", "test", "vitest.config.ts"]
+}
