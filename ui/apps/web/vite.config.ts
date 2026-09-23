@@ -5,6 +5,7 @@ import { defineConfig } from 'vitest/config';
 export default defineConfig({
   plugins: [react()],
   envPrefix: ['VITE_', 'COGNITO_'],
+  base: process.env.VITE_DEMO === 'true' ? '/Boxalarm-monorepo/' : '/',
   build: {
     rollupOptions: {
       input: {
