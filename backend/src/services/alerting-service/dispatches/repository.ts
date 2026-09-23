@@ -1,6 +1,10 @@
 import { randomUUID } from 'node:crypto';
 import { TransactionCanceledException } from '@aws-sdk/client-dynamodb';
-import { TransactWriteCommand, type DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
+import {
+  GetCommand,
+  TransactWriteCommand,
+  type DynamoDBDocumentClient,
+} from '@aws-sdk/lib-dynamodb';
 import { buildDeptScopedPk, type VerifiedDeptId } from '@boxalarm/dept-scope';
 import type { DispatchReceived, SourceSystem } from './dispatchIngressPort.js';
 import { logError, logInfo } from './logger.js';
@@ -116,5 +120,44 @@ export async function createManualDispatch(
       externalDispatchId: dispatch.externalDispatchId,
     });
     throw error;
+  }
+}
+
+export interface DispatchAlertItem {
+  readonly dispatchId: string;
+  // TODO(E1-S2): joined onto DISPATCH_ALERT by fan-out ingress (architecture Backend
+  // §1.4); createManualDispatch below does not write it — no ingress path in this repo
+  // does yet.
+  readonly occupancyId?: string;
+}
+
+export class DispatchLookupDependencyError extends Error {
+  readonly reason: string;
+
+  constructor(cause: unknown) {
+    super('DynamoDB is unavailable or returned an unexpected error');
+    this.name = 'DispatchLookupDependencyError';
+    this.cause = cause;
+    this.reason = cause instanceof Error ? cause.constructor.name : 'UnknownError';
+  }
+}
+
+export async function getDispatchById(
+  client: DynamoDBDocumentClient,
+  tableName: string,
+  deptId: VerifiedDeptId,
+  dispatchId: string,
+): Promise<DispatchAlertItem | undefined> {
+  try {
+    const output = await client.send(
+      new GetCommand({
+        TableName: tableName,
+        Key: { pk: buildDeptScopedPk(deptId, 'DISPATCH', dispatchId), sk: 'METADATA' },
+      }),
+    );
+    return output.Item as DispatchAlertItem | undefined;
+  } catch (error) {
+    logError('dispatches.get.failed', error, { deptId, dispatchId });
+    throw new DispatchLookupDependencyError(error);
   }
 }

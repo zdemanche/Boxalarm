@@ -14,6 +14,8 @@ import { getDynamoClient, readDispatchesConfig } from './dynamoClient.js';
 import { problemResponse } from './errorResponse.js';
 import { logError } from './logger.js';
 import { createManualDispatch } from './repository.js';
+import { runFanOut } from '../fanout/fanOut.js';
+import { getSchedulerClient } from '../escalation/scheduleEscalation.js';
 
 interface DispatchAuthorizerContext {
   readonly sub: string;
@@ -147,6 +149,23 @@ export const handler: Handler<DispatchEvent, APIGatewayProxyStructuredResultV2> 
     if (result.outcome === 'duplicate') {
       emitIngressMetric('Rejected', 'DuplicateSubmission');
       return problemResponse({ status: 409, title: 'Duplicate dispatch submission', traceId });
+    }
+
+    try {
+      await runFanOut(
+        getDynamoClient(),
+        getSchedulerClient(),
+        dynamoConfig.tableName,
+        deptId,
+        result.dispatchId,
+        Math.floor(Date.now() / 1000),
+      );
+    } catch (error) {
+      logError('dispatches.fanout.failed', error, {
+        traceId,
+        deptId,
+        dispatchId: result.dispatchId,
+      });
     }
 
     emitIngressMetric('Accepted');
