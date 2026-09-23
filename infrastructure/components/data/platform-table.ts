@@ -1,34 +1,17 @@
 import * as pulumi from "@pulumi/pulumi";
 import * as aws from "@pulumi/aws";
-
-const KNOWN_ENVS = new Set(["dev", "qa", "staging", "prod"]);
+import { IamPolicyStatement } from "../observability/observability-policy";
+import { requireEnv } from "../shared/env";
 
 export interface PlatformTableArgs {
   env: string;
-}
-
-export interface DenyIamPolicyStatement {
-  Sid: string;
-  Effect: "Deny";
-  Action: string[];
-  Resource: string;
-  Condition?: Record<string, Record<string, string[]>>;
-}
-
-function requireEnv(component: string, env: string): void {
-  if (typeof env !== "string" || env.length === 0) {
-    throw new Error(`${component}: env is required (received ${JSON.stringify(env)})`);
-  }
-  if (!KNOWN_ENVS.has(env)) {
-    throw new Error(`${component}: unknown env "${env}"`);
-  }
 }
 
 /**
  * Deny UpdateItem/DeleteItem on audit partition keys (DEPT#*#AUDIT#*).
  * Attach to any role that may write the platform table so audit rows are append-only.
  */
-export function auditMutationDenyStatement(tableArn: string): DenyIamPolicyStatement {
+export function auditMutationDenyStatement(tableArn: string): IamPolicyStatement {
   if (typeof tableArn !== "string" || tableArn.length === 0) {
     throw new Error(
       `auditMutationDenyStatement: tableArn is required (received ${JSON.stringify(tableArn)})`,
@@ -38,7 +21,16 @@ export function auditMutationDenyStatement(tableArn: string): DenyIamPolicyState
   return {
     Sid: "DenyAuditMutations",
     Effect: "Deny",
-    Action: ["dynamodb:UpdateItem", "dynamodb:DeleteItem"],
+    // PutItem and BatchWriteItem must be denied alongside UpdateItem/DeleteItem:
+    // PutItem on an existing pk/sk replaces the item wholesale, and BatchWriteItem
+    // carries both put and delete semantics under its own action name. Denying only
+    // Update/Delete leaves audit rows mutable via either of those two paths.
+    Action: [
+      "dynamodb:UpdateItem",
+      "dynamodb:DeleteItem",
+      "dynamodb:PutItem",
+      "dynamodb:BatchWriteItem",
+    ],
     Resource: tableArn,
     Condition: {
       "ForAllValues:StringLike": {
@@ -105,6 +97,9 @@ export class PlatformTable extends pulumi.ComponentResource {
         streamViewType: "NEW_AND_OLD_IMAGES",
         // AWS-managed encryption for DynamoDB (enabled; no customer CMK).
         serverSideEncryption: { enabled: true },
+        // PITR protects against in-window corruption, not against a replace-forcing
+        // schema change (renamed GSI attribute, etc.) destroying the table outright.
+        deletionProtectionEnabled: true,
       },
       { parent: this },
     );
