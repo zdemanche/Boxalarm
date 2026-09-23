@@ -132,7 +132,7 @@ describe('listInspections handler', () => {
     expect(body.items).toEqual([]);
   });
 
-  it('denies with 403 on a missing bearer token or invalid principal', async () => {
+  it('denies with 401 on a missing bearer token or invalid principal', async () => {
     const dynamo = fakeDynamoClient({});
     const { handler } = await loadHandler(vpClientDeciding('ALLOW'), dynamo);
 
@@ -141,8 +141,8 @@ describe('listInspections handler', () => {
       buildEvent(undefined, { authorization: 'Bearer token' }, null),
     );
 
-    expect(noToken).toMatchObject({ statusCode: 403 });
-    expect(noPrincipal).toMatchObject({ statusCode: 403 });
+    expect(noToken).toMatchObject({ statusCode: 401 });
+    expect(noPrincipal).toMatchObject({ statusCode: 401 });
   });
 
   it('returns 503, never a defaulted allow, when Verified Permissions is unavailable (core-harm)', async () => {

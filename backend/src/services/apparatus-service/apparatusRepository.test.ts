@@ -129,6 +129,107 @@ describe('createApparatusRepository', () => {
   });
 });
 
+describe('getApparatusDetail (AC3)', () => {
+  function fakeDetailClient(options: {
+    readonly apparatusItems?: Record<string, unknown>[];
+    readonly defectItems?: Record<string, unknown>[];
+    readonly testItems?: Record<string, unknown>[];
+  }): { readonly client: DynamoDBDocumentClient; readonly send: ReturnType<typeof vi.fn> } {
+    const send = vi.fn((command: unknown) => {
+      const input = (command as { input: Record<string, unknown> }).input;
+      const values = input.ExpressionAttributeValues as Record<string, unknown>;
+      const prefix = values?.[':prefix'];
+      if (prefix === 'DEFECT#') {
+        // Honor the real FilterExpression (#status = :open) so a fixture with a non-OPEN
+        // defect actually proves it gets excluded, rather than the fake client always
+        // returning the whole fixture regardless of what the handler filtered for.
+        const openValue = values?.[':open'];
+        const items = (options.defectItems ?? []).filter((item) => item.status === openValue);
+        return Promise.resolve({ Items: items });
+      }
+      if (prefix === 'TEST#') {
+        return Promise.resolve({ Items: options.testItems ?? [] });
+      }
+      return Promise.resolve({ Items: options.apparatusItems ?? [] });
+    });
+    return { client: fakeClient(send), send };
+  }
+
+  it('returns undefined when no apparatus matches the unitId', async () => {
+    const { client } = fakeDetailClient({ apparatusItems: [] });
+    const repository = createApparatusRepository(client, TABLE_NAME);
+
+    const result = await repository.getApparatusDetail(DEPT_ID, 'ENGINE-9');
+
+    expect(result).toBeUndefined();
+  });
+
+  it('composes base apparatus with open defects and the latest FAIL per testType', async () => {
+    const { client } = fakeDetailClient({
+      apparatusItems: [
+        { apparatusId: 'APP-ENGINE-2', unitId: 'ENGINE-2', type: 'ENGINE', status: 'IN_SERVICE' },
+      ],
+      defectItems: [
+        {
+          defectId: 'DEF-1',
+          description: 'Low tire pressure',
+          severity: 'MINOR',
+          reportedAt: 1798050000,
+          status: 'OPEN',
+        },
+        {
+          defectId: 'DEF-0',
+          description: 'Already repaired brake pad',
+          severity: 'MAJOR',
+          reportedAt: 1797000000,
+          status: 'CLOSED',
+        },
+      ],
+      testItems: [
+        { testType: 'HOSE', testDate: '2026-05-01', result: 'FAIL', nextDueDate: '2027-05-01' },
+        { testType: 'LADDER', testDate: '2026-04-01', result: 'PASS', nextDueDate: '2027-04-01' },
+      ],
+    });
+    const repository = createApparatusRepository(client, TABLE_NAME);
+
+    const result = await repository.getApparatusDetail(DEPT_ID, 'ENGINE-2');
+
+    expect(result).toEqual({
+      apparatusId: 'APP-ENGINE-2',
+      unitId: 'ENGINE-2',
+      type: 'ENGINE',
+      status: 'IN_SERVICE',
+      openDefects: [
+        {
+          defectId: 'DEF-1',
+          description: 'Low tire pressure',
+          severity: 'MINOR',
+          reportedAt: 1798050000,
+        },
+      ],
+      failedTests: [{ testType: 'HOSE', testDate: '2026-05-01', nextDueDate: '2027-05-01' }],
+    });
+  });
+
+  it('returns empty openDefects/failedTests when there are none', async () => {
+    const { client } = fakeDetailClient({
+      apparatusItems: [
+        { apparatusId: 'APP-ENGINE-2', unitId: 'ENGINE-2', type: 'ENGINE', status: 'IN_SERVICE' },
+      ],
+      defectItems: [],
+      testItems: [
+        { testType: 'HOSE', testDate: '2026-05-01', result: 'PASS', nextDueDate: '2027-05-01' },
+      ],
+    });
+    const repository = createApparatusRepository(client, TABLE_NAME);
+
+    const result = await repository.getApparatusDetail(DEPT_ID, 'ENGINE-2');
+
+    expect(result?.openDefects).toEqual([]);
+    expect(result?.failedTests).toEqual([]);
+  });
+});
+
 describe('getTableName', () => {
   const originalEnv = { ...process.env };
 

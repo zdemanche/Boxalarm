@@ -49,9 +49,9 @@ describe('responses handler through the real withAuthorization (AC3)', () => {
     expect(result.statusCode).toBe(403);
   });
 
-  it('returns 403 when the request carries no bearer token', async () => {
+  it('returns 401 (fail-closed) when the request carries no bearer token', async () => {
     const result = (await handler(buildEvent({ headers: {} }))) as { statusCode: number };
-    expect(result.statusCode).toBe(403);
+    expect(result.statusCode).toBe(401);
   });
 
   it('returns 503 (fail-closed) when Verified Permissions is unavailable', async () => {

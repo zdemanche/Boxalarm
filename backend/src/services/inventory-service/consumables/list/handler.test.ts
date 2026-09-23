@@ -53,12 +53,12 @@ describe('handler (GET /api/v1/inventory/consumables, entrypoint-test)', () => {
     process.env = { ...originalEnv };
   });
 
-  it('rejects a request with no bearer token on the real exported handler, before any dependency is touched (readiness/authz gate)', async () => {
+  it('returns 401 (fail-closed) for a request with no bearer token on the real exported handler, before any dependency is touched (readiness/authz gate)', async () => {
     const { handler } = await import('./handler.js');
 
     const result = await handler(buildEvent(MEMBER, {}));
 
-    expect(result).toMatchObject({ statusCode: 403 });
+    expect(result).toMatchObject({ statusCode: 401 });
   });
 
   it('returns 403 when Verified Permissions denies the ListConsumables action', async () => {

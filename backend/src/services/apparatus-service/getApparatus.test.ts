@@ -47,14 +47,23 @@ describe('getApparatus handler', () => {
     vi.restoreAllMocks();
   });
 
-  it('returns 200 with the apparatus detail', async () => {
+  it('returns 200 with the apparatus detail, incl. open defects and failed tests (AC3)', async () => {
     vi.doMock('./apparatusRepository.js', () => ({
       getApparatusRepository: () => ({
-        getApparatusByUnitId: vi.fn().mockResolvedValue({
+        getApparatusDetail: vi.fn().mockResolvedValue({
           apparatusId: 'APP-ENGINE-2',
           unitId: 'ENGINE-2',
           type: 'ENGINE',
           status: 'IN_SERVICE',
+          openDefects: [
+            {
+              defectId: 'DEF-1',
+              description: 'Low tire pressure',
+              severity: 'MINOR',
+              reportedAt: 1798050000,
+            },
+          ],
+          failedTests: [{ testType: 'HOSE', testDate: '2026-05-01', nextDueDate: '2027-05-01' }],
         }),
       }),
     }));
@@ -72,13 +81,52 @@ describe('getApparatus handler', () => {
       unitId: 'ENGINE-2',
       type: 'ENGINE',
       status: 'IN_SERVICE',
+      openDefects: [
+        {
+          defectId: 'DEF-1',
+          description: 'Low tire pressure',
+          severity: 'MINOR',
+          reportedAt: 1798050000,
+        },
+      ],
+      failedTests: [{ testType: 'HOSE', testDate: '2026-05-01', nextDueDate: '2027-05-01' }],
     });
+  });
+
+  it('returns 200 with empty openDefects/failedTests when there are none', async () => {
+    vi.doMock('./apparatusRepository.js', () => ({
+      getApparatusRepository: () => ({
+        getApparatusDetail: vi.fn().mockResolvedValue({
+          apparatusId: 'APP-ENGINE-2',
+          unitId: 'ENGINE-2',
+          type: 'ENGINE',
+          status: 'IN_SERVICE',
+          openDefects: [],
+          failedTests: [],
+        }),
+      }),
+    }));
+    const { handler } = await import('./getApparatus.js');
+
+    const result = await handler(
+      buildEvent(VALID_AUTH_CONTEXT, 'ENGINE-2'),
+      {} as never,
+      () => undefined,
+    );
+
+    expect(result).toMatchObject({ statusCode: 200 });
+    const body = JSON.parse((result as { body: string }).body) as {
+      openDefects: unknown[];
+      failedTests: unknown[];
+    };
+    expect(body.openDefects).toEqual([]);
+    expect(body.failedTests).toEqual([]);
   });
 
   it('returns 404 problem+json when no apparatus matches the unitId', async () => {
     vi.doMock('./apparatusRepository.js', () => ({
       getApparatusRepository: () => ({
-        getApparatusByUnitId: vi.fn().mockResolvedValue(undefined),
+        getApparatusDetail: vi.fn().mockResolvedValue(undefined),
       }),
     }));
     const { handler } = await import('./getApparatus.js');

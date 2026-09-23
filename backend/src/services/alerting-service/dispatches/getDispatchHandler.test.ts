@@ -45,10 +45,10 @@ describe('getDispatchHandler', () => {
     process.env = { ...originalEnv };
   });
 
-  it('returns 403 on a missing bearer token via the real exported handler, before any AWS call (entrypoint test)', async () => {
+  it('returns 401 (fail-closed) on a missing bearer token via the real exported handler, before any AWS call (entrypoint test)', async () => {
     const { handler } = await import('./getDispatchHandler.js');
     const result = await handler(buildEvent('DISPATCH-1', {}));
-    expect(result).toMatchObject({ statusCode: 403 });
+    expect(result).toMatchObject({ statusCode: 401 });
   });
 
   it('returns 403 on a Cedar deny', async () => {

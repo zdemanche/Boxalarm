@@ -6,7 +6,20 @@ import {
   notFoundProblem,
   serviceUnavailableProblem,
   tooManyRequestsProblem,
+  unauthorizedProblem,
 } from './problemDetails.js';
+
+describe('unauthorizedProblem', () => {
+  it('returns a 401 RFC 7807 application/problem+json body carrying the traceId', () => {
+    const response = unauthorizedProblem('trace-401');
+    expect(response.statusCode).toBe(401);
+    expect(response.headers).toEqual({ 'content-type': 'application/problem+json' });
+    const body = JSON.parse(response.body) as { status: number; traceId: string; title: string };
+    expect(body.status).toBe(401);
+    expect(body.traceId).toBe('trace-401');
+    expect(body.title).toBe('Unauthorized');
+  });
+});
 
 describe('forbiddenProblem', () => {
   it('returns a 403 RFC 7807 application/problem+json body carrying the traceId', () => {

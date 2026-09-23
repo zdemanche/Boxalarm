@@ -209,7 +209,7 @@ describe('alert-detail handler', () => {
     errorSpy.mockRestore();
   });
 
-  it('returns 403 (fail-closed) for a missing bearer token before any DynamoDB call', async () => {
+  it('returns 401 (fail-closed) for a missing bearer token before any DynamoDB call', async () => {
     const { createHandler } = await import('./handler.js');
     const sendSpy = vi.fn();
     const docClient = { send: sendSpy } as unknown as DynamoDBDocumentClient;
@@ -217,7 +217,7 @@ describe('alert-detail handler', () => {
 
     const result = await handler(buildEvent('NICHOLS-4471-1798000000', {}));
 
-    expect(result).toMatchObject({ statusCode: 403 });
+    expect(result).toMatchObject({ statusCode: 401 });
     expect(sendSpy).not.toHaveBeenCalled();
   });
 

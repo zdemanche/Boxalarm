@@ -41,6 +41,16 @@ function problemResponse(
   };
 }
 
+export function unauthorizedProblem(traceId: string): ProblemResponse {
+  return problemResponse(
+    401,
+    'https://boxalarm.dev/problems/unauthorized',
+    'Unauthorized',
+    'The request is missing a valid bearer token or authenticated principal.',
+    traceId,
+  );
+}
+
 export function forbiddenProblem(traceId: string): ProblemResponse {
   return problemResponse(
     403,

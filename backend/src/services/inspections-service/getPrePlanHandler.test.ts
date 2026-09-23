@@ -55,10 +55,10 @@ describe('getPrePlanHandler', () => {
     process.env = { ...originalEnv };
   });
 
-  it('returns 403 on a missing bearer token via the real exported handler, before any AWS call (entrypoint test)', async () => {
+  it('returns 401 on a missing bearer token via the real exported handler, before any AWS call (entrypoint test)', async () => {
     const { handler } = await import('./getPrePlanHandler.js');
     const result = await handler(buildEvent('OCC-1', {}));
-    expect(result).toMatchObject({ statusCode: 403 });
+    expect(result).toMatchObject({ statusCode: 401 });
   });
 
   it('returns 403 on a Cedar deny', async () => {

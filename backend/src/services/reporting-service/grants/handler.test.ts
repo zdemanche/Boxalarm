@@ -76,14 +76,14 @@ describe('grants/handler.ts (entrypoint)', () => {
     expect(result).toMatchObject({ statusCode: 403 });
   });
 
-  it('returns 403 when the bearer token is missing (no authorization decision made)', async () => {
+  it('returns 401 (fail-closed) when the bearer token is missing (no authorization decision made)', async () => {
     const { createDynamoClient } = await import('../client.js');
     createDynamoClient(process.env, fakeDynamoClient());
     const { handler } = await import('./handler.js');
 
     const result = await handler(buildEvent(undefined, {}));
 
-    expect(result).toMatchObject({ statusCode: 403 });
+    expect(result).toMatchObject({ statusCode: 401 });
   });
 
   it('returns 503 when Verified Permissions is unavailable (fail-closed)', async () => {

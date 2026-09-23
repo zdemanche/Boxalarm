@@ -77,7 +77,7 @@ describe('inventory lifecycle handler', () => {
 
     const result = await handler(buildEvent(undefined, ADMIN, { assetId: 'AS-0055' }, undefined));
 
-    expect(result).toMatchObject({ statusCode: 403 });
+    expect(result).toMatchObject({ statusCode: 401 });
   });
 
   it('rejects a non-admin principal (AC3)', async () => {

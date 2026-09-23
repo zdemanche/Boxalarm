@@ -141,11 +141,11 @@ describe('inventory-list handler', () => {
     );
   });
 
-  it('denies with 403 before invoking any dependency when the bearer token is missing (entrypoint test, exported handler)', async () => {
+  it('denies with 401 before invoking any dependency when the bearer token is missing (entrypoint test, exported handler)', async () => {
     const { handler } = await import('./handler.js');
     const result = (await handler(buildEvent({ unitId: 'ENGINE-2' }, PRINCIPAL, {}))) as {
       statusCode: number;
     };
-    expect(result.statusCode).toBe(403);
+    expect(result.statusCode).toBe(401);
   });
 });

@@ -52,12 +52,12 @@ describe('inventory ppe get handler', () => {
     process.env = { ...originalEnv };
   });
 
-  it('rejects a request with no bearer token on the real exported handler (entrypoint)', async () => {
+  it('returns 401 (fail-closed) for a request with no bearer token on the real exported handler (entrypoint)', async () => {
     const { handler } = await import('./handler.js');
 
     const result = await handler(buildEvent(undefined, MEMBER, { memberId: 'MBR-1' }));
 
-    expect(result).toMatchObject({ statusCode: 403 });
+    expect(result).toMatchObject({ statusCode: 401 });
   });
 
   it('returns 403 when Cedar denies another member requesting a different memberId (AC4 self-service boundary)', async () => {

@@ -19,10 +19,29 @@ export interface CreateApparatusInput {
   readonly status: ApparatusStatus;
 }
 
+export interface OpenDefectSummary {
+  readonly defectId: string;
+  readonly description: string;
+  readonly severity: string;
+  readonly reportedAt: number;
+}
+
+export interface FailedTestSummary {
+  readonly testType: string;
+  readonly testDate: string;
+  readonly nextDueDate: string;
+}
+
+export interface ApparatusDetail extends Apparatus {
+  readonly openDefects: readonly OpenDefectSummary[];
+  readonly failedTests: readonly FailedTestSummary[];
+}
+
 export interface ApparatusRepository {
   listApparatus(deptId: VerifiedDeptId): Promise<readonly Apparatus[]>;
   getApparatusByUnitId(deptId: VerifiedDeptId, unitId: string): Promise<Apparatus | undefined>;
   createApparatus(deptId: VerifiedDeptId, input: CreateApparatusInput): Promise<Apparatus>;
+  getApparatusDetail(deptId: VerifiedDeptId, unitId: string): Promise<ApparatusDetail | undefined>;
 }
 
 export class DuplicateApparatusError extends Error {
@@ -62,11 +81,42 @@ function toApparatus(item: Record<string, unknown>): Apparatus {
   };
 }
 
+function toOpenDefectSummary(item: Record<string, unknown>): OpenDefectSummary {
+  return {
+    defectId: item.defectId as string,
+    description: item.description as string,
+    severity: item.severity as string,
+    reportedAt: item.reportedAt as number,
+  };
+}
+
+function latestFailedTestsPerType(
+  items: readonly Record<string, unknown>[],
+): readonly FailedTestSummary[] {
+  const seenTestTypes = new Set<string>();
+  const failedTests: FailedTestSummary[] = [];
+  for (const item of items) {
+    const testType = item.testType as string;
+    if (seenTestTypes.has(testType)) {
+      continue;
+    }
+    seenTestTypes.add(testType);
+    if (item.result === 'FAIL') {
+      failedTests.push({
+        testType,
+        testDate: item.testDate as string,
+        nextDueDate: item.nextDueDate as string,
+      });
+    }
+  }
+  return failedTests;
+}
+
 export function createApparatusRepository(
   client: DynamoDBDocumentClient,
   tableName: string,
 ): ApparatusRepository {
-  return {
+  const repository: ApparatusRepository = {
     async listApparatus(deptId) {
       const result = await client.send(
         new QueryCommand({
@@ -124,7 +174,63 @@ export function createApparatusRepository(
       }
       return toApparatus(item);
     },
+
+    async getApparatusDetail(deptId, unitId) {
+      const apparatus = await repository.getApparatusByUnitId(deptId, unitId);
+      if (!apparatus) {
+        return undefined;
+      }
+      try {
+        const [defectsResult, testsResult] = await Promise.all([
+          client.send(
+            new QueryCommand({
+              TableName: tableName,
+              KeyConditionExpression: 'pk = :pk AND begins_with(sk, :prefix)',
+              FilterExpression: '#status = :open',
+              ExpressionAttributeNames: { '#status': 'status' },
+              ExpressionAttributeValues: {
+                ':pk': buildDeptScopedPk(deptId, 'APPARATUS', apparatus.apparatusId),
+                ':prefix': 'DEFECT#',
+                ':open': 'OPEN',
+              },
+            }),
+          ),
+          client.send(
+            new QueryCommand({
+              TableName: tableName,
+              KeyConditionExpression: 'pk = :pk AND begins_with(sk, :prefix)',
+              ExpressionAttributeValues: {
+                ':pk': buildDeptScopedPk(deptId, 'APPARATUS', apparatus.apparatusId),
+                ':prefix': 'TEST#',
+              },
+              ScanIndexForward: false,
+              // Newest-first + a small bound is enough to find the latest result per test
+              // type (at most 4: HOSE/LADDER/PUMP/AERIAL) without scanning a unit's entire
+              // lifetime test history on every hot GET /apparatus/{unitId} call.
+              Limit: 20,
+            }),
+          ),
+        ]);
+
+        return {
+          ...apparatus,
+          openDefects: (defectsResult.Items ?? []).map(toOpenDefectSummary),
+          failedTests: latestFailedTestsPerType(testsResult.Items ?? []),
+        };
+      } catch (error) {
+        console.error(
+          JSON.stringify({
+            event: 'apparatus.getDetail.failed',
+            deptId,
+            apparatusId: apparatus.apparatusId,
+            error: error instanceof Error ? error.message : String(error),
+          }),
+        );
+        throw error;
+      }
+    },
   };
+  return repository;
 }
 
 let cachedRepository: ApparatusRepository | undefined;

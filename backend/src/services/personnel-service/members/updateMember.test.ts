@@ -258,7 +258,7 @@ describe('updateMember handler', () => {
   it('exercises the exported handler (entrypoint test) on a pre-AWS-call denial path', async () => {
     const { handler } = await import('./updateMember.js');
     const result = await handler(buildEvent('mbr-1', undefined, undefined, SELF));
-    expect(result).toMatchObject({ statusCode: 403 });
+    expect(result).toMatchObject({ statusCode: 401 });
   });
 
   it('throws when PLATFORM_TABLE_NAME is unset (misconfigured deployment)', async () => {

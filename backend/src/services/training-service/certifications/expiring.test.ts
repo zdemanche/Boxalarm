@@ -54,12 +54,12 @@ function buildEventWithoutAuthorizer(): GuardEvent {
 }
 
 describe('expiring.ts handler (entrypoint, AC3)', () => {
-  it('returns 403 when the authorizer context is missing (unauthenticated boundary)', async () => {
+  it('returns 401 when the authorizer context is missing (unauthenticated boundary)', async () => {
     const { handler } = await import('./expiring.js');
 
     const result = await handler(buildEventWithoutAuthorizer());
 
-    expect(result).toMatchObject({ statusCode: 403 });
+    expect(result).toMatchObject({ statusCode: 401 });
   });
 
   it('returns 403 when Cedar denies the request', async () => {

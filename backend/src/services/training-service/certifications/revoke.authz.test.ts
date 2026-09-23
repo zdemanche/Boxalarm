@@ -48,7 +48,7 @@ describe('revoke.ts handler (auth-patterns fail-secure)', () => {
     expect(result).toMatchObject({ statusCode: 403 });
   });
 
-  it('returns 403 when the bearer token is missing', async () => {
+  it('returns 401 when the bearer token is missing', async () => {
     const { createAuthzClient } = await import('@boxalarm/authz');
     const send = vi.fn().mockResolvedValue({ decision: Decision.ALLOW });
     const client = { send } as unknown as VerifiedPermissionsClient;
@@ -59,7 +59,7 @@ describe('revoke.ts handler (auth-patterns fail-secure)', () => {
 
     const result = await handler(event);
 
-    expect(result).toMatchObject({ statusCode: 403 });
+    expect(result).toMatchObject({ statusCode: 401 });
     expect(send).not.toHaveBeenCalled();
   });
 

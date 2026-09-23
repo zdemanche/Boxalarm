@@ -210,7 +210,7 @@ describe('membership-trends handler', () => {
       buildEvent({ startDate: '2026-01-01', endDate: '2026-03-01' }, { headers: undefined }),
     );
 
-    expect(result).toMatchObject({ statusCode: 403 });
+    expect(result).toMatchObject({ statusCode: 401 });
   });
 
   it('returns 503 (fail-secure, never a defaulted allow) when Verified Permissions is unavailable (core-harm)', async () => {
