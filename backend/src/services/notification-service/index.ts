@@ -6,7 +6,7 @@
  *
  * TODO: E3-S3 — implement once notification-service has preference + delivery patterns.
  * Until then this stub exists so EventBridge wiring has a documented LOB sink and so
- * agents do not invent alerting-service coupling for defect fan-out.
+ * agents do not invent alerting-plane coupling for defect fan-out.
  */
 export const service = { name: 'notification-service', plane: 'lob' } as const;
 
@@ -37,7 +37,7 @@ export function handleApparatusDefectReported(
       severity: payload.severity,
       channelClass: 'non-critical',
       message:
-        'Stub only — must use notification-service non-critical channel; do not route via alerting-service',
+        'Stub only — must use notification-service non-critical channel; do not route via the alerting plane',
     }),
   );
 }
@@ -67,7 +67,7 @@ export function handleInventoryReorderDue(
       deptId: payload.deptId,
       channelClass: 'non-critical',
       message:
-        'Stub only — must use notification-service non-critical channel; do not route via alerting-service',
+        'Stub only — must use notification-service non-critical channel; do not route via the alerting plane',
     }),
   );
 }

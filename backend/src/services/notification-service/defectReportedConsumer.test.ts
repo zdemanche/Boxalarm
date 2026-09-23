@@ -21,7 +21,7 @@ describe('handleApparatusDefectReported stub', () => {
     expect(logSpy).toHaveBeenCalledTimes(1);
     const logged = JSON.parse(logSpy.mock.calls[0]?.[0] as string) as Record<string, unknown>;
     expect(logged.channelClass).toBe('non-critical');
-    expect(String(logged.message)).toContain('do not route via alerting-service');
+    expect(String(logged.message)).toContain('do not route via the alerting plane');
     logSpy.mockRestore();
   });
 });
