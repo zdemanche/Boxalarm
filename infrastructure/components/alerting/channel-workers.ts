@@ -82,8 +82,8 @@ export class ChannelWorkers extends pulumi.ComponentResource {
             [`${channelUpper}_PROVIDER_SECRET_ID`]: providerSecret.name,
           },
           additionalPolicyStatements: pulumi
-            .all([providerSecret.arn, sandboxSecret.arn])
-            .apply(([prodArn, sandboxArn]) => [
+            .all([providerSecret.arn, sandboxSecret.arn, queue.arn])
+            .apply(([prodArn, sandboxArn, queueArn]) => [
               {
                 Sid: "AlertingTableWrite",
                 Effect: "Allow" as const,
@@ -95,6 +95,20 @@ export class ChannelWorkers extends pulumi.ComponentResource {
                 Effect: "Allow" as const,
                 Action: ["secretsmanager:GetSecretValue"],
                 Resource: [prodArn, sandboxArn],
+              },
+              {
+                // Required for the SQS event source mapping to be creatable at all —
+                // CreateEventSourceMapping validates the execution role can call
+                // ReceiveMessage on the queue.
+                Sid: "OwnQueueConsumeOnly",
+                Effect: "Allow" as const,
+                Action: [
+                  "sqs:ReceiveMessage",
+                  "sqs:DeleteMessage",
+                  "sqs:GetQueueAttributes",
+                  "sqs:ChangeMessageVisibility",
+                ],
+                Resource: queueArn,
               },
             ]),
           reservedConcurrentExecutions: 5,

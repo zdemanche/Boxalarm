@@ -166,14 +166,28 @@ export class PushTokens extends pulumi.ComponentResource {
         code: asyncStubCode(),
         logGroup: args.alertingLogGroup,
         environment: { ALERTING_TABLE_NAME: args.alertingTableName },
-        additionalPolicyStatements: [
+        additionalPolicyStatements: this.memberUpdatedQueue.arn.apply((queueArn) => [
           {
             Sid: "AlertingTableWrite",
-            Effect: "Allow",
+            Effect: "Allow" as const,
             Action: ["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:UpdateItem"],
             Resource: args.alertingTableArn as string,
           },
-        ],
+          {
+            // Required for the SQS event source mapping to be creatable at all —
+            // CreateEventSourceMapping validates the execution role can call
+            // ReceiveMessage on the queue.
+            Sid: "OwnQueueConsumeOnly",
+            Effect: "Allow" as const,
+            Action: [
+              "sqs:ReceiveMessage",
+              "sqs:DeleteMessage",
+              "sqs:GetQueueAttributes",
+              "sqs:ChangeMessageVisibility",
+            ],
+            Resource: queueArn,
+          },
+        ]),
         reservedConcurrentExecutions: 5,
         permissionsBoundaryArn: args.alertingPermissionsBoundaryArn,
       },

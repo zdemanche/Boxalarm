@@ -45,32 +45,55 @@ export class FanOut extends pulumi.ComponentResource {
           ALERTING_TABLE_NAME: args.alertingTableName,
           ALERTING_TOPIC_ARN: args.alertingTopicArn,
         },
-        additionalPolicyStatements: args.escalation.scheduleResourcePattern.apply((pattern) => [
-          {
-            Sid: "AlertingTableReadWrite",
-            Effect: "Allow" as const,
-            Action: [
-              "dynamodb:Query",
-              "dynamodb:GetItem",
-              "dynamodb:PutItem",
-              "dynamodb:UpdateItem",
-              "dynamodb:TransactWriteItems",
-            ],
-            Resource: args.alertingTableArn as string,
-          },
-          {
-            Sid: "AlertingTopicPublish",
-            Effect: "Allow" as const,
-            Action: ["sns:Publish"],
-            Resource: args.alertingTopicArn as string,
-          },
-          {
-            Sid: "CreateEscalationSchedulesOnly",
-            Effect: "Allow" as const,
-            Action: ["scheduler:CreateSchedule"],
-            Resource: pattern,
-          },
-        ]),
+        additionalPolicyStatements: pulumi
+          .all([args.escalation.scheduleResourcePattern, args.alertingStreamArn])
+          .apply(([pattern, streamArn]) => [
+            {
+              Sid: "AlertingTableReadWrite",
+              Effect: "Allow" as const,
+              Action: [
+                "dynamodb:Query",
+                "dynamodb:GetItem",
+                "dynamodb:PutItem",
+                "dynamodb:UpdateItem",
+                "dynamodb:TransactWriteItems",
+              ],
+              Resource: args.alertingTableArn as string,
+            },
+            {
+              Sid: "AlertingTopicPublish",
+              Effect: "Allow" as const,
+              Action: ["sns:Publish"],
+              Resource: args.alertingTopicArn as string,
+            },
+            {
+              Sid: "CreateEscalationSchedulesOnly",
+              Effect: "Allow" as const,
+              Action: ["scheduler:CreateSchedule"],
+              Resource: pattern,
+            },
+            {
+              // Required for the DynamoDB-stream event source mapping to be creatable at
+              // all — CreateEventSourceMapping validates the execution role can call
+              // GetRecords/GetShardIterator/DescribeStream on the stream ARN.
+              Sid: "AlertingStreamRead",
+              Effect: "Allow" as const,
+              Action: [
+                "dynamodb:DescribeStream",
+                "dynamodb:GetRecords",
+                "dynamodb:GetShardIterator",
+              ],
+              Resource: streamArn,
+            },
+            {
+              // ListStreams has no ARN-level resource scoping (AWS-mandated wildcard,
+              // like the XRayWrite statement in observability-policy.ts).
+              Sid: "AlertingStreamListStreams",
+              Effect: "Allow" as const,
+              Action: ["dynamodb:ListStreams"],
+              Resource: "*",
+            },
+          ]),
         reservedConcurrentExecutions: 10,
         permissionsBoundaryArn: args.permissionsBoundaryArn,
       },
