@@ -1,3 +1,5 @@
+import { demoRequest } from './demoFixtures';
+
 export interface AuthTokenSource {
   getAccessToken: () => Promise<string | null>;
   renewSilently: () => Promise<string | null>;
@@ -29,6 +31,15 @@ export async function apiRequest(
   tokens: AuthTokenSource,
   options: ApiRequestOptions = {},
 ): Promise<Response> {
+  if (import.meta.env.VITE_DEMO === 'true') {
+    const response = await demoRequest(path, options);
+    if (!response.ok) {
+      const problem = (await response.json()) as ProblemDetails;
+      throw new ApiError(problem);
+    }
+    return response;
+  }
+
   const send = (token: string | null) =>
     fetch(`${API_BASE}${path}`, {
       ...options,

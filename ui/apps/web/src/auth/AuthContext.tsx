@@ -12,6 +12,43 @@ import { ErrorResponse, UserManager, WebStorageStateStore, type User } from 'oid
 import { buildOidcConfig } from './config';
 import { rolesFromProfile, type Role } from './roles';
 
+interface DemoRoleContextValue {
+  role: Role;
+  setRole: (role: Role) => void;
+}
+
+const DemoRoleContext = createContext<DemoRoleContextValue | undefined>(undefined);
+
+export function useDemoRole(): DemoRoleContextValue {
+  const ctx = useContext(DemoRoleContext);
+  if (!ctx) throw new Error('useDemoRole must be used within DemoAuthProvider');
+  return ctx;
+}
+
+function DemoAuthProvider({ children }: { children: ReactNode }) {
+  const [role, setRole] = useState<Role>('CHIEF');
+  const value = useMemo<AuthContextValue>(
+    () => ({
+      user: null,
+      roles: [role],
+      isAuthenticated: true,
+      isLoading: false,
+      signIn: () => Promise.resolve(),
+      signOut: () => Promise.resolve(),
+      completeSignIn: () => Promise.resolve(undefined),
+      getAccessToken: () => Promise.resolve('demo-token'),
+      renewSilently: () => Promise.resolve('demo-token'),
+    }),
+    [role],
+  );
+
+  return (
+    <DemoRoleContext.Provider value={{ role, setRole }}>
+      <AuthContext.Provider value={value}>{children}</AuthContext.Provider>
+    </DemoRoleContext.Provider>
+  );
+}
+
 export type { Role } from './roles';
 
 const RENEW_RETRY_MAX_DELAY_MS = 30_000;
@@ -58,7 +95,14 @@ export function createUserManager(): UserManager {
   });
 }
 
-export function AuthProvider({
+export function AuthProvider(props: { children: ReactNode; userManager?: UserManager }) {
+  if (import.meta.env.VITE_DEMO === 'true') {
+    return <DemoAuthProvider>{props.children}</DemoAuthProvider>;
+  }
+  return <RealAuthProvider {...props} />;
+}
+
+function RealAuthProvider({
   children,
   userManager,
 }: {

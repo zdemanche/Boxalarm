@@ -83,7 +83,9 @@ export function App() {
       <GlobalTokensStyle />
       <QueryClientProvider client={queryClient}>
         <AuthProvider>
-          <BrowserRouter>
+          <BrowserRouter
+            basename={import.meta.env.VITE_DEMO === 'true' ? '/Boxalarm-monorepo' : undefined}
+          >
             <Suspense fallback={null}>
               <Routes>
                 <Route path="/login" element={<LoginRoute />} />
