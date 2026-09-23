@@ -42,6 +42,12 @@ const PK_ASSIGNMENT =
 const REQUIRED_PK_PREFIX = 'DEPT#${deptId}';
 const BUILDER_CALL_PREFIX = 'buildDeptScopedPk(';
 
+// Reference data shared across every department (not per-tenant), so it is intentionally
+// NOT department-scoped: incident-service's SCHEMA_VERSION (architecture Data Model §3.2 —
+// one NERIS schema registry for the whole system). Each entry here is a deliberate,
+// documented exception to the dept-scoping invariant below, never a default.
+const KNOWN_GLOBAL_PK_LITERALS = new Set(['SCHEMA_VERSION']);
+
 function unwrapLiteral(value: string): string | undefined {
   const literalMatch = value.match(/^[`'"]([\s\S]*)[`'"]$/);
   if (literalMatch) {
@@ -76,6 +82,9 @@ export function findPkScopingViolations(sourceText: string): readonly string[] {
       }
     }
     const literal = unwrapLiteral(rhs);
+    if (literal !== undefined && KNOWN_GLOBAL_PK_LITERALS.has(literal)) {
+      continue;
+    }
     if (literal === undefined || !literal.startsWith(REQUIRED_PK_PREFIX)) {
       violations.push(match[0].trim());
     }

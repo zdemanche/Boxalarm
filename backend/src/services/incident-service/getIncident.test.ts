@@ -38,27 +38,37 @@ function buildEvent(
 
 const MEMBER_AUTH = { sub: 'member-1', deptId: 'NICHOLS', 'cognito:groups': 'MEMBER' };
 
+function mockRepository(getIncident: ReturnType<typeof vi.fn>): void {
+  vi.doMock('./repository.js', () => ({
+    getIncidentRepository: () => ({ getIncident }),
+    getDocumentClient: () => ({}),
+    getTableName: () => 'boxalarm-dev-incident',
+  }));
+}
+
 describe('getIncident handler', () => {
   beforeEach(() => {
     vi.resetModules();
+    vi.doMock('./secondaryRepository.js', () => ({
+      queryIncidentSecondaries: vi.fn().mockResolvedValue([]),
+    }));
   });
 
   afterEach(() => {
     vi.unmock('./repository.js');
+    vi.unmock('./secondaryRepository.js');
     vi.restoreAllMocks();
   });
 
   it('returns 200 with incident detail for an authenticated caller', async () => {
-    vi.doMock('./repository.js', () => ({
-      getIncidentRepository: () => ({
-        getIncident: vi.fn().mockResolvedValue({
-          incidentId: 'NICHOLS-4471-1798000000',
-          nerisSchemaVersion: '2026.2',
-          corePayload: { opaque: true },
-          status: 'DRAFT',
-        }),
+    mockRepository(
+      vi.fn().mockResolvedValue({
+        incidentId: 'NICHOLS-4471-1798000000',
+        nerisSchemaVersion: '2026.2',
+        corePayload: { opaque: true },
+        status: 'DRAFT',
       }),
-    }));
+    );
     const { handler } = await import('./getIncident.js');
 
     const result = await handler(
@@ -75,12 +85,40 @@ describe('getIncident handler', () => {
     });
   });
 
-  it('returns 404 when no incident matches', async () => {
-    vi.doMock('./repository.js', () => ({
-      getIncidentRepository: () => ({
-        getIncident: vi.fn().mockResolvedValue(undefined),
-      }),
+  it('includes only a Secondary module naming the caller as affected, unless the caller is admin/chief (E6-S6 AC1/AC3)', async () => {
+    mockRepository(
+      vi.fn().mockResolvedValue({ incidentId: 'NICHOLS-4471-1798000000', status: 'DRAFT' }),
+    );
+    vi.doMock('./secondaryRepository.js', () => ({
+      queryIncidentSecondaries: vi.fn().mockResolvedValue([
+        {
+          incidentId: 'NICHOLS-4471-1798000000',
+          secondaryType: 'EXPOSURE',
+          affectedMemberIds: ['member-1'],
+        },
+        {
+          incidentId: 'NICHOLS-4471-1798000000',
+          secondaryType: 'RESPONDER_SAFETY',
+          affectedMemberIds: ['someone-else'],
+        },
+      ]),
     }));
+    const { handler } = await import('./getIncident.js');
+
+    const result = await handler(
+      buildEvent(MEMBER_AUTH, 'NICHOLS-4471-1798000000'),
+      {} as never,
+      () => undefined,
+    );
+
+    const body = JSON.parse((result as { body: string }).body) as {
+      secondaryModules: { secondaryType: string }[];
+    };
+    expect(body.secondaryModules).toEqual([expect.objectContaining({ secondaryType: 'EXPOSURE' })]);
+  });
+
+  it('returns 404 when no incident matches', async () => {
+    mockRepository(vi.fn().mockResolvedValue(undefined));
     const { handler } = await import('./getIncident.js');
 
     const result = await handler(
