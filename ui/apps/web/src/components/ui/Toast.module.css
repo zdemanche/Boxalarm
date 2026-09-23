@@ -1,0 +1,39 @@
+.viewport {
+  position: fixed;
+  bottom: var(--bx-space-lg);
+  right: var(--bx-space-lg);
+  display: flex;
+  flex-direction: column;
+  gap: var(--bx-space-sm);
+  z-index: 950;
+  max-width: min(360px, calc(100vw - 32px));
+}
+
+.toast {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--bx-space-sm);
+  background: var(--bx-surface-raised);
+  border: 1px solid var(--bx-border);
+  border-left: 3px solid var(--bx-fg);
+  border-radius: var(--bx-radius-md);
+  padding: var(--bx-space-sm) var(--bx-space-md);
+  font-size: 14px;
+  color: var(--bx-fg);
+}
+
+.toast[data-tone='danger'] {
+  border-left-color: var(--bx-status-danger);
+}
+.toast[data-tone='ok'] {
+  border-left-color: var(--bx-status-ok);
+}
+
+.dismiss {
+  background: none;
+  border: none;
+  color: var(--bx-fg-muted);
+  cursor: pointer;
+  flex-shrink: 0;
+}

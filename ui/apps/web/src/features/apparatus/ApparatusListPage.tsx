@@ -3,8 +3,14 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import { useAuth } from '../../auth/AuthContext';
 import { ApiForbiddenGate } from '../../components/ApiForbiddenGate';
+import { Button } from '../../components/ui/Button';
+import { Card } from '../../components/ui/Card';
+import { DataTable, type DataTableColumn } from '../../components/ui/DataTable';
+import { StatusChip } from '../../components/ui/Chip';
+import { TextInput } from '../../components/ui/Field';
+import { PageHeader } from '../../components/ui/PageHeader';
 import { createApparatus, listApparatus } from './api';
-import type { CreateApparatusInput } from './types';
+import type { Apparatus, CreateApparatusInput } from './types';
 
 const emptyForm: CreateApparatusInput = { unitId: '', type: '' };
 
@@ -39,91 +45,78 @@ export function ApparatusListPage() {
     );
   }
 
-  return (
-    <main id="main-content" style={{ padding: 'var(--boxalarm-spacing-lg)' }}>
-      <h1 style={{ fontSize: 'var(--boxalarm-font-size-xl)', margin: 0 }}>Apparatus</h1>
-
-      {listQuery.isLoading ? (
-        <p>Loading registry…</p>
-      ) : (
-        <table
-          style={{
-            width: '100%',
-            marginTop: 'var(--boxalarm-spacing-lg)',
-            borderCollapse: 'collapse',
-          }}
+  const columns: DataTableColumn<Apparatus>[] = [
+    {
+      key: 'unitId',
+      header: 'Unit',
+      sortValue: (u) => u.unitId,
+      render: (u) => (
+        <Link
+          to={`/apparatus/${u.apparatusId}`}
+          style={{ fontFamily: 'var(--bx-font-mono)', fontWeight: 600 }}
         >
-          <thead>
-            <tr>
-              <th scope="col" style={{ textAlign: 'left' }}>
-                Unit ID
-              </th>
-              <th scope="col" style={{ textAlign: 'left' }}>
-                Type
-              </th>
-              <th scope="col" style={{ textAlign: 'left' }}>
-                Status
-              </th>
-            </tr>
-          </thead>
-          <tbody>
-            {(listQuery.data ?? []).map((unit) => (
-              <tr key={unit.apparatusId}>
-                <th scope="row" style={{ textAlign: 'left', fontWeight: 500 }}>
-                  <Link to={`/apparatus/${unit.apparatusId}`}>{unit.unitId}</Link>
-                </th>
-                <td>{unit.type}</td>
-                <td>{unit.status}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      )}
+          {u.unitId}
+        </Link>
+      ),
+    },
+    { key: 'type', header: 'Type', sortValue: (u) => u.type, render: (u) => u.type },
+    {
+      key: 'status',
+      header: 'Status',
+      sortValue: (u) => u.status,
+      render: (u) => (
+        <StatusChip status={u.status === 'IN_SERVICE' ? 'ok' : 'danger'}>
+          {u.status === 'IN_SERVICE' ? 'In service' : 'Out of service'}
+        </StatusChip>
+      ),
+    },
+  ];
+
+  return (
+    <main id="main-content">
+      <PageHeader title="Apparatus" />
+
+      <DataTable
+        caption="Apparatus registry"
+        rowKey={(u) => u.apparatusId}
+        columns={columns}
+        rows={listQuery.data ?? []}
+        loading={listQuery.isLoading}
+        emptyMessage="No apparatus yet."
+      />
 
       {canCreate ? (
-        <form
-          aria-label="Create apparatus"
-          onSubmit={(event: FormEvent) => {
-            event.preventDefault();
-            createMutation.mutate(form);
-          }}
-          style={{
-            marginTop: 'var(--boxalarm-spacing-xl)',
-            display: 'grid',
-            gap: 'var(--boxalarm-spacing-md)',
-            maxWidth: 480,
-          }}
-        >
-          <h2 style={{ fontSize: 'var(--boxalarm-font-size-lg)', margin: 0 }}>Add apparatus</h2>
-          <label style={{ display: 'grid', gap: 4 }}>
-            Unit ID
-            <input
-              name="unitId"
+        <Card title="Add apparatus" style={{ marginTop: 'var(--bx-space-lg)', maxWidth: 480 }}>
+          <form
+            aria-label="Create apparatus"
+            onSubmit={(event: FormEvent) => {
+              event.preventDefault();
+              createMutation.mutate(form);
+            }}
+            style={{ display: 'grid', gap: 'var(--bx-space-md)' }}
+          >
+            <TextInput
+              label="Unit ID"
               value={form.unitId}
               required
               onChange={(e) => setForm((prev) => ({ ...prev, unitId: e.target.value }))}
-              style={{ minHeight: 44, padding: '0 12px' }}
             />
-          </label>
-          <label style={{ display: 'grid', gap: 4 }}>
-            Type
-            <input
-              name="type"
+            <TextInput
+              label="Type"
               value={form.type}
               required
               onChange={(e) => setForm((prev) => ({ ...prev, type: e.target.value }))}
-              style={{ minHeight: 44, padding: '0 12px' }}
             />
-          </label>
-          {formError ? (
-            <p role="alert" aria-live="assertive">
-              {formError}
-            </p>
-          ) : null}
-          <button type="submit" style={{ minHeight: 44 }}>
-            Create apparatus
-          </button>
-        </form>
+            {formError ? (
+              <p role="alert" aria-live="assertive" style={{ color: 'var(--bx-status-danger)' }}>
+                {formError}
+              </p>
+            ) : null}
+            <Button type="submit" loading={createMutation.isPending}>
+              Create apparatus
+            </Button>
+          </form>
+        </Card>
       ) : null}
     </main>
   );

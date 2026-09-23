@@ -1,0 +1,45 @@
+.overlay {
+  position: fixed;
+  inset: 0;
+  background: var(--bx-scrim);
+  z-index: 900;
+}
+
+.content {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: min(480px, calc(100vw - 32px));
+  max-height: min(640px, calc(100vh - 32px));
+  overflow-y: auto;
+  background: var(--bx-surface-raised);
+  border: 1px solid var(--bx-border);
+  border-radius: var(--bx-radius-lg);
+  padding: var(--bx-space-lg);
+  z-index: 901;
+}
+
+.content:focus-visible {
+  outline: 3px solid var(--bx-focus);
+  outline-offset: 2px;
+}
+
+.title {
+  margin: 0 0 var(--bx-space-sm);
+  font-size: 18px;
+  font-weight: 700;
+}
+
+.description {
+  margin: 0 0 var(--bx-space-lg);
+  color: var(--bx-fg-muted);
+  font-size: 14px;
+}
+
+.footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--bx-space-sm);
+  margin-top: var(--bx-space-lg);
+}

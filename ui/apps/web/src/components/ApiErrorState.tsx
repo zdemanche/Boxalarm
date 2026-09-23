@@ -1,3 +1,7 @@
+import { Button } from './ui/Button';
+import { AlertTriangle } from './ui/icons';
+import styles from './StateScreen.module.css';
+
 /**
  * Generic, retryable error state for a non-403 API failure (a transient backend 500, an
  * offline fetch rejection, etc.) — distinct from ForbiddenState (403) and from
@@ -20,32 +24,18 @@ export function ApiErrorState({
 }) {
   const Heading = headingLevel;
   const body = (
-    <>
-      <Heading style={{ fontSize: 'var(--boxalarm-font-size-xl)', margin: 0 }}>
-        Something went wrong loading this page
-      </Heading>
+    <div className={styles.wrapper}>
+      <AlertTriangle size={28} className={styles.icon} aria-hidden="true" />
+      <Heading className={styles.title}>Something went wrong loading this page</Heading>
       <div role="alert">
-        <p style={{ marginTop: 'var(--boxalarm-spacing-md)' }}>
+        <p className={styles.message}>
           Try again, or contact your department administrator if the problem continues.
         </p>
       </div>
-      <button
-        type="button"
-        onClick={onRetry ?? (() => window.location.reload())}
-        style={{ marginTop: 'var(--boxalarm-spacing-md)', minHeight: 44 }}
-      >
-        Try again
-      </button>
-    </>
+      <Button onClick={onRetry ?? (() => window.location.reload())}>Try again</Button>
+    </div>
   );
 
-  if (embedded) {
-    return <section style={{ padding: 'var(--boxalarm-spacing-lg)' }}>{body}</section>;
-  }
-
-  return (
-    <main id="main-content" style={{ padding: 'var(--boxalarm-spacing-lg)' }}>
-      {body}
-    </main>
-  );
+  if (embedded) return body;
+  return <main id="main-content">{body}</main>;
 }

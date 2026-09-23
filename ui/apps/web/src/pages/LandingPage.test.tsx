@@ -1,12 +1,24 @@
 import { typography } from '@boxalarm/design-tokens';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { cleanup, render, screen } from '@testing-library/react';
+import { HttpResponse, http } from 'msw';
+import { setupServer } from 'msw/node';
 import { MemoryRouter } from 'react-router-dom';
-import { afterEach, expect, test, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, expect, test, vi } from 'vitest';
 import type { User, UserManager } from 'oidc-client-ts';
 import { AuthProvider } from '../auth/AuthContext';
 import { LandingPage } from './LandingPage';
 
-afterEach(cleanup);
+const server = setupServer(
+  http.get('/api/v1/apparatus', () => HttpResponse.json({ items: [] })),
+  http.get('/api/v1/personnel/members', () => HttpResponse.json({ items: [] })),
+);
+beforeAll(() => server.listen());
+afterEach(() => {
+  server.resetHandlers();
+  cleanup();
+});
+afterAll(() => server.close());
 
 function makeManager(profile: Record<string, unknown>): UserManager {
   const user = {
@@ -28,12 +40,15 @@ function makeManager(profile: Record<string, unknown>): UserManager {
 }
 
 function renderLanding(profile: Record<string, unknown>) {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
-    <AuthProvider userManager={makeManager(profile)}>
-      <MemoryRouter>
-        <LandingPage />
-      </MemoryRouter>
-    </AuthProvider>,
+    <QueryClientProvider client={client}>
+      <AuthProvider userManager={makeManager(profile)}>
+        <MemoryRouter>
+          <LandingPage />
+        </MemoryRouter>
+      </AuthProvider>
+    </QueryClientProvider>,
   );
 }
 

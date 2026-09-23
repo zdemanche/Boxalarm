@@ -1,7 +1,10 @@
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import { HttpResponse, http } from 'msw';
+import { setupServer } from 'msw/node';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import type { User, UserManager } from 'oidc-client-ts';
-import { afterEach, expect, test, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, expect, test, vi } from 'vitest';
 import { AuthProvider } from '../auth/AuthContext';
 import { AppShell } from '../components/AppShell';
 import { LandingPage } from '../pages/LandingPage';
@@ -9,7 +12,16 @@ import { PlaceholderPage } from '../pages/PlaceholderPage';
 import { RequireAuth } from '../routing/RequireAuth';
 import { RequireRole } from '../routing/RequireRole';
 
-afterEach(cleanup);
+const server = setupServer(
+  http.get('/api/v1/apparatus', () => HttpResponse.json({ items: [] })),
+  http.get('/api/v1/personnel/members', () => HttpResponse.json({ items: [] })),
+);
+beforeAll(() => server.listen());
+afterEach(() => {
+  server.resetHandlers();
+  cleanup();
+});
+afterAll(() => server.close());
 
 function makeManager(groups: string[]): UserManager {
   const user = {
@@ -32,55 +44,58 @@ function makeManager(groups: string[]): UserManager {
 }
 
 function renderShell(groups: string[], initialPath: string) {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
-    <AuthProvider userManager={makeManager(groups)}>
-      <MemoryRouter initialEntries={[initialPath]}>
-        <Routes>
-          <Route
-            path="/"
-            element={
-              <RequireAuth>
-                <AppShell />
-              </RequireAuth>
-            }
-          >
-            <Route index element={<LandingPage />} />
+    <QueryClientProvider client={client}>
+      <AuthProvider userManager={makeManager(groups)}>
+        <MemoryRouter initialEntries={[initialPath]}>
+          <Routes>
             <Route
-              path="alerts/diagnostics"
+              path="/"
               element={
-                <RequireRole>
-                  <PlaceholderPage title="Alert diagnostics" />
-                </RequireRole>
+                <RequireAuth>
+                  <AppShell />
+                </RequireAuth>
               }
-            />
-            <Route
-              path="settings"
-              element={
-                <RequireRole>
-                  <PlaceholderPage title="Settings" />
-                </RequireRole>
-              }
-            />
-            <Route
-              path="audit-log"
-              element={
-                <RequireRole>
-                  <PlaceholderPage title="Audit log" />
-                </RequireRole>
-              }
-            />
-            <Route
-              path="personnel"
-              element={
-                <RequireRole>
-                  <PlaceholderPage title="Personnel" />
-                </RequireRole>
-              }
-            />
-          </Route>
-        </Routes>
-      </MemoryRouter>
-    </AuthProvider>,
+            >
+              <Route index element={<LandingPage />} />
+              <Route
+                path="alerts/diagnostics"
+                element={
+                  <RequireRole>
+                    <PlaceholderPage title="Alert diagnostics" />
+                  </RequireRole>
+                }
+              />
+              <Route
+                path="settings"
+                element={
+                  <RequireRole>
+                    <PlaceholderPage title="Settings" />
+                  </RequireRole>
+                }
+              />
+              <Route
+                path="audit-log"
+                element={
+                  <RequireRole>
+                    <PlaceholderPage title="Audit log" />
+                  </RequireRole>
+                }
+              />
+              <Route
+                path="personnel"
+                element={
+                  <RequireRole>
+                    <PlaceholderPage title="Personnel" />
+                  </RequireRole>
+                }
+              />
+            </Route>
+          </Routes>
+        </MemoryRouter>
+      </AuthProvider>
+    </QueryClientProvider>,
   );
 }
 

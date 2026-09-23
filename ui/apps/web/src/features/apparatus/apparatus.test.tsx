@@ -94,7 +94,7 @@ test('APPARATUS create form adds a unit as IN_SERVICE', async () => {
   await user.click(screen.getByRole('button', { name: 'Create apparatus' }));
   await waitFor(() => {
     expect(screen.getByText('E1')).toBeTruthy();
-    expect(screen.getByText('IN_SERVICE')).toBeTruthy();
+    expect(screen.getByText('In service')).toBeTruthy();
   });
 });
 
@@ -126,5 +126,5 @@ test('detail shows status badge shell', async () => {
 
   renderApp(['CHIEF'], '/apparatus/a1');
   await screen.findByRole('heading', { name: 'L1' });
-  expect(screen.getByRole('status').textContent).toMatch(/Out of service/i);
+  expect(screen.getByText(/Out of service/i)).toBeTruthy();
 });

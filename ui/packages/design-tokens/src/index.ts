@@ -55,3 +55,112 @@ export type PaletteName = keyof typeof palette;
 // palette.cab : palette.day`), since that expression's type is a union of both literal palette
 // types, not either one alone.
 export type PaletteColors = Record<keyof (typeof palette)['day'], string>;
+
+// "Command console" design system additions (design.draft.md §2, a11y-spec.draft.md §1.1-1.2).
+// Additive only — `palette` and `spacing` above keep their original shape and values so the
+// pre-existing component and its tests don't break. Every ratio below is verified in
+// index.test.ts against `meetsAA` rather than asserted in a comment.
+export const surfacePalette = {
+  cab: {
+    bg: palette.cab.background,
+    surface: '#16171a',
+    surfaceRaised: '#1f2126',
+    fg: palette.cab.foreground,
+    fgMuted: '#a3a8b2',
+    fgFaint: '#7c828d',
+    border: '#6b7078',
+    borderStrong: '#9aa0aa',
+    borderDecorative: '#2a2d33',
+    focus: '#ffd166',
+    focusGap: palette.cab.background,
+    scrim: 'rgba(0,0,0,0.72)',
+    skeleton: '#2a2d33',
+  },
+  day: {
+    bg: palette.day.background,
+    surface: '#f4f5f7',
+    surfaceRaised: '#eceef1',
+    fg: palette.day.foreground,
+    fgMuted: '#4d525b',
+    fgFaint: '#5b616b',
+    border: '#767b85',
+    borderStrong: '#4d525b',
+    borderDecorative: '#e4e6ea',
+    focus: '#101114',
+    focusGap: palette.day.background,
+    scrim: 'rgba(16,17,20,0.55)',
+    skeleton: '#e4e6ea',
+  },
+} as const;
+
+export const statusPalette = {
+  cab: {
+    danger: '#ff6b5e',
+    warning: '#ffc247',
+    caution: '#ff9b3d',
+    ok: '#5ddb8a',
+    info: '#7cc4ff',
+    neutral: '#a3a8b2',
+  },
+  day: {
+    danger: '#c02418',
+    warning: '#6f4c00',
+    caution: '#8a4a00',
+    ok: '#0f6c34',
+    info: '#0b57d0',
+    neutral: '#4d525b',
+  },
+} as const;
+
+export type StatusRole = keyof (typeof statusPalette)['day'];
+
+export const typeScale = {
+  display: { size: 28, lineHeight: 34, weight: 700 },
+  title: { size: 22, lineHeight: 30, weight: 700 },
+  heading: { size: 18, lineHeight: 26, weight: 600 },
+  subheading: { size: 15, lineHeight: 22, weight: 600 },
+  body: { size: 15, lineHeight: 22, weight: 400 },
+  bodyDense: { size: 13, lineHeight: 18, weight: 400 },
+  label: { size: 13, lineHeight: 18, weight: 600 },
+  caption: { size: 12, lineHeight: 16, weight: 400 },
+  mono: { size: 13, lineHeight: 18, weight: 500 },
+} as const;
+
+// Extends the existing five-step `spacing` scale without altering it (design.draft.md §2.5).
+export const spacingScale = {
+  '2xs': 2,
+  xs: spacing.xs,
+  sm: spacing.sm,
+  md: spacing.md,
+  lg: spacing.lg,
+  xl: spacing.xl,
+  '2xl': 64,
+  '3xl': 96,
+} as const;
+
+export const radiusScale = { none: 0, sm: 4, md: 8, lg: 12, pill: 999 } as const;
+
+export const elevationShadow = {
+  raised: { day: '0 1px 2px rgba(16,17,20,0.10)', cab: 'none' },
+  overlay: { day: '0 8px 24px rgba(16,17,20,0.18)', cab: 'none' },
+} as const;
+
+export const motion = {
+  duration: { instant: 0, fast: 120, base: 200, slow: 320 },
+  easing: {
+    standard: 'cubic-bezier(0.2, 0, 0, 1)',
+    decelerate: 'cubic-bezier(0, 0, 0, 1)',
+    accelerate: 'cubic-bezier(0.3, 0, 1, 1)',
+  },
+} as const;
+
+export const targetSize = { office: 44, field: 56, gap: 8 } as const;
+
+export const breakpoints = { xs: 0, sm: 480, md: 768, lg: 1024, xl: 1440, xxl: 1920 } as const;
+
+// `ui` is web-only (self-hosted via @fontsource in apps/web); native has no webfont linking in
+// this repo and falls back to the platform default face, so RN code should not reference this.
+export const fontStack = {
+  ui: '"Inter Variable", Inter, -apple-system, "Segoe UI", Roboto, sans-serif',
+  mono: '"IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace',
+} as const;

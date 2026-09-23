@@ -1,7 +1,10 @@
 import { useQuery } from '@tanstack/react-query';
-import { Link, useParams } from 'react-router-dom';
+import { useParams } from 'react-router-dom';
 import { useAuth } from '../../auth/AuthContext';
 import { ApiForbiddenGate } from '../../components/ApiForbiddenGate';
+import { StatusChip } from '../../components/ui/Chip';
+import { PageHeader } from '../../components/ui/PageHeader';
+import { Skeleton } from '../../components/ui/Skeleton';
 import { getApparatus } from './api';
 
 export function ApparatusDetailPage() {
@@ -25,31 +28,35 @@ export function ApparatusDetailPage() {
   const unit = detailQuery.data;
 
   return (
-    <main id="main-content" style={{ padding: 'var(--boxalarm-spacing-lg)' }}>
-      <p>
-        <Link to="/apparatus">← Apparatus</Link>
-      </p>
+    <main id="main-content">
+      <PageHeader
+        title={unit?.unitId ?? '…'}
+        breadcrumbs={[{ label: 'Apparatus', to: '/apparatus' }, { label: unit?.unitId ?? '…' }]}
+        actions={
+          unit ? (
+            <StatusChip status={unit.status === 'IN_SERVICE' ? 'ok' : 'danger'}>
+              {unit.status === 'IN_SERVICE' ? 'In service' : 'Out of service'}
+            </StatusChip>
+          ) : undefined
+        }
+      />
       {detailQuery.isLoading || !unit ? (
-        <p>Loading apparatus…</p>
+        <Skeleton lines={3} />
       ) : (
-        <>
-          <h1 style={{ fontSize: 'var(--boxalarm-font-size-xl)', margin: 0 }}>{unit.unitId}</h1>
-          <p
-            role="status"
-            style={{
-              marginTop: 'var(--boxalarm-spacing-md)',
-              fontSize: 'var(--boxalarm-font-size-lg)',
-            }}
-          >
-            {unit.status === 'IN_SERVICE' ? 'In service' : 'Out of service'}
-          </p>
-          <dl style={{ marginTop: 'var(--boxalarm-spacing-lg)' }}>
-            <dt>Type</dt>
-            <dd>{unit.type}</dd>
-            <dt>Apparatus ID</dt>
-            <dd>{unit.apparatusId}</dd>
-          </dl>
-        </>
+        <dl
+          style={{
+            display: 'grid',
+            gridTemplateColumns: 'max-content 1fr',
+            columnGap: 'var(--bx-space-lg)',
+            rowGap: 'var(--bx-space-sm)',
+            fontSize: 14,
+          }}
+        >
+          <dt style={{ color: 'var(--bx-fg-muted)' }}>Type</dt>
+          <dd style={{ margin: 0 }}>{unit.type}</dd>
+          <dt style={{ color: 'var(--bx-fg-muted)' }}>Apparatus ID</dt>
+          <dd style={{ margin: 0, fontFamily: 'var(--bx-font-mono)' }}>{unit.apparatusId}</dd>
+        </dl>
       )}
     </main>
   );
