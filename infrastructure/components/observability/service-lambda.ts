@@ -4,6 +4,7 @@ import { ServiceName } from "./services";
 import { ServiceLogGroup } from "./service-log-group";
 import { IamPolicyStatement, observabilityPolicyStatements } from "./observability-policy";
 import { ACTIVE_TRACING_CONFIG } from "./xray-sampling";
+import { requireEnv } from "../shared/env";
 
 export interface ServiceLambdaArgs {
   env: string;
@@ -37,9 +38,7 @@ export class ServiceLambda extends pulumi.ComponentResource {
   public readonly rolePolicy: aws.iam.RolePolicy;
 
   constructor(name: string, args: ServiceLambdaArgs, opts?: pulumi.ComponentResourceOptions) {
-    if (typeof args.env !== "string" || args.env.length === 0) {
-      throw new Error(`ServiceLambda: env is required (received ${JSON.stringify(args.env)})`);
-    }
+    requireEnv("ServiceLambda", args.env);
     if (typeof args.functionName !== "string" || args.functionName.length === 0) {
       throw new Error(
         `ServiceLambda: functionName is required (received ${JSON.stringify(args.functionName)})`,
