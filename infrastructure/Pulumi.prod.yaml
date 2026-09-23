@@ -2,3 +2,4 @@ config:
   aws:region: us-east-1
   boxalarm-infra:env: prod
   boxalarm-infra:webOrigin: https://app.boxalarm.example
+  boxalarm-infra:deptId: nichols-fd
