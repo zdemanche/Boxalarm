@@ -112,7 +112,9 @@ describe('sendViaHttpProvider', () => {
 
   it('caches the resolved secret across sends on the hot delivery path (one GetSecretValueCommand for two sends)', async () => {
     const { client, send } = fakeSecretsClient('api-key-1');
-    globalThis.fetch = vi.fn<typeof fetch>().mockResolvedValue({ ok: true, status: 200 } as Response);
+    globalThis.fetch = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue({ ok: true, status: 200 } as Response);
     const { sendViaHttpProvider } = await import('./httpProviderAdapter.js');
 
     await sendViaHttpProvider('push', 'push-token-1', 'msg', process.env, client);

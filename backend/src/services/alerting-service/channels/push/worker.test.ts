@@ -83,10 +83,7 @@ describe('push channel worker (entrypoint-test obligation)', () => {
 
     const goodEvent = sqsEvent('push');
     const mixedEvent: SQSEvent = {
-      Records: [
-        { messageId: 'msg-poison', body: 'not-json' },
-        ...goodEvent.Records,
-      ],
+      Records: [{ messageId: 'msg-poison', body: 'not-json' }, ...goodEvent.Records],
     } as unknown as SQSEvent;
 
     const result = await handler(mixedEvent);

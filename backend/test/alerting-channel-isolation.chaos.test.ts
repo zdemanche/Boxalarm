@@ -103,7 +103,12 @@ describe('channel failure-domain isolation and no-SPOF chaos verification (E1-S1
     });
     await expect(smsHandler(dispatchEvent('sms'))).resolves.toEqual({ batchItemFailures: [] });
 
-    expect(sendMock).toHaveBeenCalledWith('sms', '+12035550100', expect.any(String), expect.anything());
+    expect(sendMock).toHaveBeenCalledWith(
+      'sms',
+      '+12035550100',
+      expect.any(String),
+      expect.anything(),
+    );
     expect(putCallsFor(ddbSendMock)).toBe(2);
   });
 
@@ -124,8 +129,18 @@ describe('channel failure-domain isolation and no-SPOF chaos verification (E1-S1
     await expect(pushHandler(dispatchEvent('push'))).resolves.toEqual({ batchItemFailures: [] });
     await expect(voiceHandler(dispatchEvent('voice'))).resolves.toEqual({ batchItemFailures: [] });
 
-    expect(sendMock).toHaveBeenCalledWith('push', 'push-token', expect.any(String), expect.anything());
-    expect(sendMock).toHaveBeenCalledWith('voice', '+12035550100', expect.any(String), expect.anything());
+    expect(sendMock).toHaveBeenCalledWith(
+      'push',
+      'push-token',
+      expect.any(String),
+      expect.anything(),
+    );
+    expect(sendMock).toHaveBeenCalledWith(
+      'voice',
+      '+12035550100',
+      expect.any(String),
+      expect.anything(),
+    );
     expect(putCallsFor(ddbSendMock)).toBe(3);
   });
 
@@ -143,7 +158,12 @@ describe('channel failure-domain isolation and no-SPOF chaos verification (E1-S1
     });
     await expect(pushHandler(dispatchEvent('push'))).resolves.toEqual({ batchItemFailures: [] });
 
-    expect(sendMock).toHaveBeenCalledWith('push', 'push-token', expect.any(String), expect.anything());
+    expect(sendMock).toHaveBeenCalledWith(
+      'push',
+      'push-token',
+      expect.any(String),
+      expect.anything(),
+    );
     expect(putCallsFor(ddbSendMock)).toBe(2);
   });
 });

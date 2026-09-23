@@ -47,7 +47,12 @@ export async function deliverChannelMessage(
   const correlationId = dispatchId;
   const resolved = resolveChannelTarget(channel, contactChannels);
   if (resolved.skipped) {
-    logInfo('alerting.channel.no_target', { correlationId, memberId, channel, reason: resolved.reason });
+    logInfo('alerting.channel.no_target', {
+      correlationId,
+      memberId,
+      channel,
+      reason: resolved.reason,
+    });
     emitOutcomeMetric(METRIC_NAMESPACE, 'NoTargetRegistered', channel);
     return;
   }
@@ -92,7 +97,11 @@ export async function deliverChannelMessage(
         return;
       }
     } else {
-      logError('alerting.channel.receipt_write_failed', error, { correlationId, memberId, channel });
+      logError('alerting.channel.receipt_write_failed', error, {
+        correlationId,
+        memberId,
+        channel,
+      });
       emitOutcomeMetric(METRIC_NAMESPACE, 'SendFailed', channel);
       throw error;
     }
@@ -119,7 +128,8 @@ async function reattemptClaimedFailure(
 ): Promise<boolean> {
   const existing = await ddb.send(new GetCommand({ TableName: tableName, Key: { pk, sk } }));
   const item = existing.Item;
-  const claimedButFailed = Boolean(item) && item?.failureReason != null && item?.deliveredAt == null;
+  const claimedButFailed =
+    Boolean(item) && item?.failureReason != null && item?.deliveredAt == null;
   if (!claimedButFailed) {
     return false;
   }
@@ -184,7 +194,10 @@ export function createChannelWorkerHandler(
         const snapshot = await ddb.send(
           new GetCommand({
             TableName: tableName,
-            Key: { pk: buildDeptScopedPk(deptId, 'ELIGIBILITY'), sk: `MEMBER#${envelope.memberId}` },
+            Key: {
+              pk: buildDeptScopedPk(deptId, 'ELIGIBILITY'),
+              sk: `MEMBER#${envelope.memberId}`,
+            },
           }),
         );
         contactChannels = snapshot.Item?.contactChannels as ContactChannelSnapshot[] | undefined;
@@ -212,7 +225,9 @@ export function createChannelWorkerHandler(
     const results = await Promise.allSettled(event.Records.map(processRecord));
     const batchItemFailures = results
       .map((result, index) =>
-        result.status === 'rejected' ? { itemIdentifier: event.Records[index]?.messageId ?? '' } : null,
+        result.status === 'rejected'
+          ? { itemIdentifier: event.Records[index]?.messageId ?? '' }
+          : null,
       )
       .filter((failure): failure is { itemIdentifier: string } => failure !== null);
 
