@@ -1,5 +1,5 @@
 // Cognito defaults custom attributes to writable by app clients (unlike standard
-// attributes, there is no separate "admin only" flag) — see boxalarm-docs#115 and
+// attributes, there is no separate "admin only" flag) — see #180 and
 // boxalarm-backend's tokenVerifier.ts. Any UserPoolClient's writeAttributes must be
 // built through this function, never assembled ad hoc, so a client can never end up
 // with self-service write access to a department-scoping or other custom attribute.

@@ -4,7 +4,7 @@
 // token — so without this, boxalarm-backend's authorizer (which reads custom:deptId
 // from the verified ACCESS token, never the ID token: tenancy must hold for
 // server-to-server API calls, which carry the access token) would deny every request.
-// See boxalarm-docs#115.
+// See #180.
 //
 // Deliberately does not throw or deny sign-in when custom:deptId is missing/blank:
 // that would block login entirely. The authorizer is where "no claim => denied" is

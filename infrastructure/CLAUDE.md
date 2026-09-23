@@ -2,14 +2,14 @@
 
 All AWS infrastructure for **Boxalarm**, a fire department operations platform replacing Chief360. Tenant zero: Nichols FD, Trumbull CT.
 
-**This repo is the only thing that touches AWS.** `boxalarm-ui` and `boxalarm-backend` are build-only — if a change provisions a resource, it belongs here.
-Pulumi (TypeScript), deployed via GitHub OIDC → central org role. Architecture and backlog live in [`boxalarm-docs`](https://github.com/zdemanche/boxalarm-docs).
+**This directory is the only thing that touches AWS.** `../ui/` and `../backend/` are build-only — if a change provisions a resource, it belongs here.
+Pulumi (TypeScript), deployed via GitHub OIDC → central org role. Architecture and backlog live at the monorepo root (`../docs/`, `../CLAUDE.md` for current state — this file's status section predates the build).
 
 ## Where things stand (2026-09-03)
 
-**Nothing is scaffolded yet.** The repo holds a README and bootstrap issue [#1](https://github.com/zdemanche/boxalarm-infrastructure/issues/1). Architecture v1.0 and a 90-story backlog are done in `boxalarm-docs`; the user has asked for a **decision gate before the build phase begins**, so do not start provisioning until they say go.
+**Nothing is scaffolded yet.** The repo holds a README and bootstrap issue [#178](https://github.com/zdemanche/Boxalarm-monorepo/issues/178). Architecture v1.0 and a 90-story backlog are done in `boxalarm-docs`; the user has asked for a **decision gate before the build phase begins**, so do not start provisioning until they say go.
 
-Work is tracked as `<KEY>-INFRA` issues here, each a sub-issue of its story in `boxalarm-backend`. Shared resources (HTTP API, tables, bus, outbox publisher, policy store) have one owner issue each — see the ownership map commented on #6. Epics and open questions stay in `boxalarm-docs`.
+Work is tracked as `<KEY>-INFRA` monorepo issues labelled `area:infrastructure`, each a sub-issue of its backend story. Shared resources (HTTP API, tables, bus, outbox publisher, policy store) have one owner issue each — see the ownership map commented on #180.
 
 ## Hard constraints
 

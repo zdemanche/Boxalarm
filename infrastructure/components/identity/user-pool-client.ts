@@ -26,7 +26,7 @@ export interface BoxalarmUserPoolClientArgs {
   enableTokenRevocation?: boolean;
 }
 
-// boxalarm-docs#115 / E8-S1-INFRA #6: every app client (mobile, web) must go through
+// #180 / E8-S1-INFRA #6: every app client (mobile, web) must go through
 // this component rather than instantiating aws.cognito.UserPoolClient directly, so
 // custom:deptId self-service write access is structurally impossible, and OAuth+PKCE
 // (no client secret) is applied uniformly.

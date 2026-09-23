@@ -1,0 +1,105 @@
+import { randomUUID } from 'node:crypto';
+import { TransactionCanceledException } from '@aws-sdk/client-dynamodb';
+import { TransactWriteCommand, type DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
+import { buildDeptScopedPk, type VerifiedDeptId } from '@boxalarm/dept-scope';
+import type { DispatchReceived } from './dispatchIngressPort.js';
+import { logError, logInfo } from './logger.js';
+
+export interface CreateManualDispatchInput {
+  readonly deptId: VerifiedDeptId;
+  readonly dispatch: DispatchReceived;
+  readonly idempotencyKey: string;
+  readonly dispatchedAt: number;
+}
+
+export type CreateManualDispatchResult =
+  { readonly outcome: 'created'; readonly dispatchId: string } | { readonly outcome: 'duplicate' };
+
+const LOCK_ITEM_INDEX = 0;
+
+function mintDispatchId(deptId: VerifiedDeptId, dispatchedAt: number): string {
+  return `${deptId}-MANUAL-${dispatchedAt}-${randomUUID().slice(0, 8)}`;
+}
+
+export async function createManualDispatch(
+  client: DynamoDBDocumentClient,
+  tableName: string,
+  input: CreateManualDispatchInput,
+): Promise<CreateManualDispatchResult> {
+  const { deptId, dispatch, idempotencyKey, dispatchedAt } = input;
+  const dispatchId = mintDispatchId(deptId, dispatchedAt);
+
+  const command = new TransactWriteCommand({
+    TransactItems: [
+      {
+        Put: {
+          TableName: tableName,
+          Item: {
+            pk: buildDeptScopedPk(
+              deptId,
+              'DISPATCH_IDEMPOTENCY',
+              dispatch.sourceSystem,
+              dispatch.externalDispatchId,
+            ),
+            sk: 'LOCK',
+            entityType: 'DISPATCH_IDEMPOTENCY_LOCK',
+            idempotencyKey,
+            dispatchId,
+            deptId,
+            createdAt: dispatchedAt,
+          },
+          ConditionExpression: 'attribute_not_exists(idempotencyKey)',
+        },
+      },
+      {
+        Put: {
+          TableName: tableName,
+          Item: {
+            pk: buildDeptScopedPk(deptId, 'DISPATCH', dispatchId),
+            sk: 'METADATA',
+            entityType: 'DISPATCH_ALERT',
+            dispatchId,
+            deptId,
+            sourceSystem: dispatch.sourceSystem,
+            incidentType: dispatch.incidentType,
+            address: dispatch.address,
+            crossStreets: dispatch.crossStreets,
+            unitsRequested: dispatch.unitsRequested,
+            narrative: dispatch.narrative,
+            idempotencyKey,
+            dispatchedAt,
+            createdAt: dispatchedAt,
+            toneLadderStatus: 'ACTIVE',
+            currentToneSequence: 1,
+            nextToneAt: null,
+            gsi2pk: buildDeptScopedPk(deptId),
+            gsi2sk: `DISPATCH#${dispatchedAt}`,
+          },
+          ConditionExpression: 'attribute_not_exists(pk)',
+        },
+      },
+    ],
+  });
+
+  try {
+    await client.send(command);
+    return { outcome: 'created', dispatchId };
+  } catch (error) {
+    if (error instanceof TransactionCanceledException) {
+      const lockReason = error.CancellationReasons?.[LOCK_ITEM_INDEX];
+      if (lockReason?.Code === 'ConditionalCheckFailed') {
+        logInfo('dispatches.create.duplicate', {
+          deptId,
+          externalDispatchId: dispatch.externalDispatchId,
+          cancellationReasons: error.CancellationReasons,
+        });
+        return { outcome: 'duplicate' };
+      }
+    }
+    logError('dispatches.create.failed', error, {
+      deptId,
+      externalDispatchId: dispatch.externalDispatchId,
+    });
+    throw error;
+  }
+}

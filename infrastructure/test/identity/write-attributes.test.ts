@@ -11,7 +11,7 @@ describe("clientWriteAttributes", () => {
   });
 
   it("throws rather than letting custom:deptId reach an app client's self-service write list", () => {
-    // boxalarm-docs#115 / boxalarm-backend tokenVerifier.ts: Cognito defaults custom
+    // #180 / boxalarm-backend tokenVerifier.ts: Cognito defaults custom
     // attributes to writable, so a member could self-assign a department unless this
     // is excluded. This structurally forbids it rather than relying on remembering to
     // omit it by hand at every call site.
