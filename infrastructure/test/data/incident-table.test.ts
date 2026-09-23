@@ -98,6 +98,15 @@ describe("IncidentTable", () => {
     expect(await resolve(incident.cmkArn)).toBe(cmkArn);
   });
 
+  it("enables deletionProtectionEnabled so a replace-forcing schema change can't destroy the table", async () => {
+    const { IncidentTable } = await import("../../components/data/incident-table");
+    const incident = new IncidentTable("incident-deletion-protection", { env: "dev" });
+    await settle(incident);
+
+    const deletionProtectionEnabled = await resolve(incident.table.deletionProtectionEnabled);
+    expect(deletionProtectionEnabled).toBe(true);
+  });
+
   it("declares GSI1 on gsi1pk/gsi1sk with ALL projection for DEPT#{deptId}/INCIDENT#{alarmAt}", async () => {
     const { IncidentTable } = await import("../../components/data/incident-table");
     const incident = new IncidentTable("incident-gsi", { env: "staging" });

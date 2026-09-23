@@ -1,48 +1,10 @@
 import * as pulumi from "@pulumi/pulumi";
 import * as aws from "@pulumi/aws";
-
-const KNOWN_ENVS = new Set(["dev", "qa", "staging", "prod"]);
+import { dynamodbCmkPolicy } from "./cmk-policy";
+import { requireEnv } from "../shared/env";
 
 export interface IncidentTableArgs {
   env: string;
-}
-
-function requireEnv(component: string, env: string): void {
-  if (typeof env !== "string" || env.length === 0) {
-    throw new Error(`${component}: env is required (received ${JSON.stringify(env)})`);
-  }
-  if (!KNOWN_ENVS.has(env)) {
-    throw new Error(`${component}: unknown env "${env}"`);
-  }
-}
-
-function dynamodbCmkPolicy(accountId: string): string {
-  return JSON.stringify({
-    Version: "2012-10-17",
-    Statement: [
-      {
-        Sid: "EnableRootAccountAdministration",
-        Effect: "Allow",
-        Principal: { AWS: `arn:aws:iam::${accountId}:root` },
-        Action: "kms:*",
-        Resource: "*",
-      },
-      {
-        Sid: "AllowDynamoDBService",
-        Effect: "Allow",
-        Principal: { Service: "dynamodb.amazonaws.com" },
-        Action: [
-          "kms:Encrypt",
-          "kms:Decrypt",
-          "kms:ReEncrypt*",
-          "kms:GenerateDataKey*",
-          "kms:DescribeKey",
-          "kms:CreateGrant",
-        ],
-        Resource: "*",
-      },
-    ],
-  });
 }
 
 /**
@@ -104,8 +66,13 @@ export class IncidentTable extends pulumi.ComponentResource {
           enabled: true,
           kmsKeyArn: this.cmk.arn,
         },
+        // A replace-forcing schema change here is a total outage of incident data.
+        // PITR alone doesn't guard against it.
+        deletionProtectionEnabled: true,
       },
-      { parent: this },
+      // Belt-and-suspenders alongside deletionProtectionEnabled: also refuse an
+      // outright pulumi destroy/replace of the table resource itself.
+      { parent: this, protect: true },
     );
 
     this.tableName = this.table.name;

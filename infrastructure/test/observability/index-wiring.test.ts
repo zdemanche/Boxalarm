@@ -113,6 +113,7 @@ describe("index.ts production wiring", () => {
           indexModule.httpApi.authorizer.id,
           indexModule.httpApi.authorizerLambda.function.arn,
           indexModule.httpApi.stage.id,
+          indexModule.httpApi.accessLogGroup.arn,
           indexModule.platformTable.table.arn,
           indexModule.incidentTable.table.arn,
           indexModule.alertingTable.table.arn,
@@ -122,8 +123,8 @@ describe("index.ts production wiring", () => {
         .apply(() => resolve()),
     );
 
-    // 10 services + identity pre-token-generation trigger.
-    expect(counts["aws:cloudwatch/logGroup:LogGroup"]).toBe(11);
+    // 10 services + identity pre-token-generation trigger + HTTP API access logs.
+    expect(counts["aws:cloudwatch/logGroup:LogGroup"]).toBe(12);
     expect(counts["aws:cloudwatch/dashboard:Dashboard"]).toBe(10);
     expect(counts["aws:xray/samplingRule:SamplingRule"]).toBe(2);
     expect(counts["aws:dynamodb/table:Table"]).toBe(3);
@@ -141,6 +142,7 @@ describe("index.ts production wiring", () => {
     const expectedLogGroupNames = new Set([
       ...SERVICES.map((serviceName) => `/aws/lambda/boxalarm-dev-${serviceName}`),
       "/aws/lambda/boxalarm-dev-identity-pre-token-generation",
+      "/aws/apigateway/boxalarm-dev-http-api-access",
     ]);
     const expectedDashboardNames = new Set(
       SERVICES.map((serviceName) => `boxalarm-dev-${serviceName}`),

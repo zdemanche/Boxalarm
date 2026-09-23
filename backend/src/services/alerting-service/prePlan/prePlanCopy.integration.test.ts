@@ -60,6 +60,7 @@ describe('PRE_PLAN_COPY consumers (real DynamoDB, AC1/AC2)', () => {
   beforeEach(() => {
     vi.resetModules();
     process.env.ALERTING_TABLE_NAME = TABLE_NAME;
+    process.env.VERIFIED_PERMISSIONS_POLICY_STORE_ID = 'ps-1';
     vi.doMock('../eligibility/dynamoClient.js', async (importOriginal) => {
       const actual = await importOriginal<typeof import('../eligibility/dynamoClient.js')>();
       return { ...actual, createDynamoClient: () => client };
@@ -130,5 +131,51 @@ describe('PRE_PLAN_COPY consumers (real DynamoDB, AC1/AC2)', () => {
     );
 
     expect(item.Item?.nearestHydrants).toEqual([]);
+  });
+
+  it('serves the panel read from a single GetCommand at the AC1 key, hydrants verbatim, against real DynamoDB (AC1/AC2)', async () => {
+    await client.send(
+      new PutCommand({
+        TableName: TABLE_NAME,
+        Item: {
+          pk: 'DEPT#NICHOLS#PREPLAN',
+          sk: 'OCCUPANCY#OCC-0500',
+          entityType: 'PRE_PLAN_COPY',
+          summary: 'Single-story commercial, roof access hazard',
+          hazards: ['ROOF_ACCESS'],
+          utilityShutoffs: [{ utility: 'electric', location: 'east wall' }],
+          nearestHydrants: [
+            { hydrantId: 'HYD-0500', status: 'IN_SERVICE', size: '6in', flowRatingGpm: 1200 },
+          ],
+        },
+      }),
+    );
+
+    const { createGetPrePlanPanelHandler } = await import('./getPrePlanPanelHandler.js');
+    const allowClient = {
+      send: vi.fn().mockResolvedValue({ decision: 'ALLOW' }),
+    } as unknown as import('@aws-sdk/client-verifiedpermissions').VerifiedPermissionsClient;
+    const wrapped = createGetPrePlanPanelHandler(client, allowClient);
+
+    const event = {
+      version: '2.0',
+      routeKey: 'GET /api/v1/alerting/occupancies/{occupancyId}/pre-plan',
+      rawPath: '/api/v1/alerting/occupancies/OCC-0500/pre-plan',
+      rawQueryString: '',
+      headers: { authorization: 'Bearer token' },
+      pathParameters: { occupancyId: 'OCC-0500' },
+      requestContext: {
+        authorizer: { lambda: { sub: 'member-1', deptId: 'NICHOLS', 'cognito:groups': 'member' } },
+      },
+    } as unknown as import('@boxalarm/authz').GuardEvent;
+
+    const result = await wrapped(event);
+
+    expect(result).toMatchObject({ statusCode: 200 });
+    const body = JSON.parse((result as { body: string }).body) as Record<string, unknown>;
+    expect(body.summary).toBe('Single-story commercial, roof access hazard');
+    expect(body.nearestHydrants).toEqual([
+      { hydrantId: 'HYD-0500', status: 'IN_SERVICE', size: '6in', flowRatingGpm: 1200 },
+    ]);
   });
 });
