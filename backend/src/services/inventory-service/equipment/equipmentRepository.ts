@@ -169,7 +169,7 @@ export async function listEquipmentAssets(
   if (filter.assignedToType === 'MEMBER' && filter.assignedToId) {
     const items = await queryAllPages(docClient, {
       TableName: tableName,
-      IndexName: 'gsi1',
+      IndexName: 'GSI1',
       KeyConditionExpression: 'gsi1pk = :gsi1Pk AND begins_with(gsi1sk, :prefix)',
       FilterExpression: 'deptId = :deptId',
       ExpressionAttributeValues: {
@@ -198,7 +198,7 @@ export async function listEquipmentAssets(
 
   const items = await queryAllPages(docClient, {
     TableName: tableName,
-    IndexName: 'gsi3',
+    IndexName: 'GSI3',
     KeyConditionExpression: 'gsi3pk = :gsi3Pk',
     ExpressionAttributeValues: expressionValues,
     ...(filterExpression ? { FilterExpression: filterExpression } : {}),

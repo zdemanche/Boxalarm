@@ -1,7 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
 import { toVerifiedDeptId } from '@boxalarm/dept-scope';
 import type { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
-import { parseSnapshotItem, queryEligibleMembers } from './selector.js';
+import {
+  getMemberEligibility,
+  parseSnapshotItem,
+  queryEligibleMembers,
+  queryEligiblePartition,
+} from './selector.js';
 
 const DEPT_ID = toVerifiedDeptId({ deptId: 'NICHOLS' });
 
@@ -74,6 +79,18 @@ describe('queryEligibleMembers (core-harm: a marked-off member must never be ret
     expect(result).toEqual([]);
   });
 
+  it('logs and skips a single malformed item instead of failing the whole partition query (R2)', async () => {
+    const send = vi.fn().mockResolvedValue({
+      Items: [snapshotItem(), { pk: 'DEPT#NICHOLS#ELIGIBILITY', sk: 'MEMBER#mbr-broken' }],
+    });
+    const result = await queryEligiblePartition(
+      { send } as unknown as DynamoDBDocumentClient,
+      'alerting-table',
+      DEPT_ID,
+    );
+    expect(result.map((m) => m.memberId)).toEqual(['mbr-1']);
+  });
+
   it('queries only this department scoped ELIGIBILITY partition', async () => {
     const send = vi.fn().mockResolvedValue({ Items: [] });
     await queryEligibleMembers(
@@ -85,5 +102,44 @@ describe('queryEligibleMembers (core-harm: a marked-off member must never be ret
       input: { ExpressionAttributeValues: Record<string, string> };
     };
     expect(call.input.ExpressionAttributeValues[':pk']).toBe('DEPT#NICHOLS#ELIGIBILITY');
+  });
+});
+
+describe('getMemberEligibility (self-test single-member lookup, E1-S8 AC1)', () => {
+  it('returns the snapshot for a found member via a single GetCommand keyed on MEMBER#{memberId}', async () => {
+    const send = vi.fn().mockResolvedValue({ Item: snapshotItem() });
+    const result = await getMemberEligibility(
+      { send } as unknown as DynamoDBDocumentClient,
+      'alerting-table',
+      DEPT_ID,
+      'mbr-1',
+    );
+    expect(result?.memberId).toBe('mbr-1');
+    const call = send.mock.calls[0]?.[0] as { input: { Key: Record<string, string> } };
+    expect(call.input.Key).toEqual({ pk: 'DEPT#NICHOLS#ELIGIBILITY', sk: 'MEMBER#mbr-1' });
+  });
+
+  it('returns undefined when the member has no MEMBER_ELIGIBILITY_SNAPSHOT item', async () => {
+    const send = vi.fn().mockResolvedValue({ Item: undefined });
+    const result = await getMemberEligibility(
+      { send } as unknown as DynamoDBDocumentClient,
+      'alerting-table',
+      DEPT_ID,
+      'mbr-missing',
+    );
+    expect(result).toBeUndefined();
+  });
+
+  it("still returns a member marked off — self-test exercises the caller's own path regardless of roster availability state", async () => {
+    const send = vi.fn().mockResolvedValue({
+      Item: snapshotItem({ availabilityState: 'MARKED_OFF' }),
+    });
+    const result = await getMemberEligibility(
+      { send } as unknown as DynamoDBDocumentClient,
+      'alerting-table',
+      DEPT_ID,
+      'mbr-1',
+    );
+    expect(result?.availabilityState).toBe('MARKED_OFF');
   });
 });
