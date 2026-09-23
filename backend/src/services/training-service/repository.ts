@@ -44,6 +44,10 @@ export interface AttendanceHoursRecord {
   readonly hours: number;
 }
 
+export interface AttendanceRecord extends AttendanceHoursRecord {
+  readonly eventId: string;
+}
+
 export class DuplicateSignupError extends Error {
   constructor() {
     super('Member is already signed up for this training event');
@@ -293,6 +297,55 @@ export async function createSignupAttendance(
     }
     throw error;
   }
+}
+
+const ATTENDANCE_FAN_OUT_CONCURRENCY = 10;
+
+async function mapWithConcurrency<T, R>(
+  items: readonly T[],
+  concurrency: number,
+  fn: (item: T) => Promise<R>,
+): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let nextIndex = 0;
+  async function worker(): Promise<void> {
+    while (nextIndex < items.length) {
+      const index = nextIndex;
+      nextIndex += 1;
+      results[index] = await fn(items[index] as T);
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, () => worker()));
+  return results;
+}
+
+// Reuses listTrainingEventsInRange/listEventAttendees (E3-S5) rather than re-querying GSI3/the
+// base table inline, so the ISO report rides the same zero-padded gsi3sk BETWEEN bound as every
+// other range query on this table instead of a second, divergent implementation.
+export async function listAttendanceForPeriod(
+  client: DynamoDBDocumentClient,
+  config: TrainingConfig,
+  deptId: VerifiedDeptId,
+  periodStart: number,
+  periodEnd: number,
+): Promise<readonly AttendanceRecord[]> {
+  const events = await listTrainingEventsInRange(client, config, deptId, {
+    from: periodStart,
+    to: periodEnd,
+  });
+
+  const attendanceByEvent = await mapWithConcurrency(
+    events,
+    ATTENDANCE_FAN_OUT_CONCURRENCY,
+    async (event) => {
+      const attendees = await listEventAttendees(client, config, deptId, event.eventId);
+      return attendees
+        .filter((attendee) => attendee.hours > 0)
+        .map((attendee) => ({ ...attendee, eventId: event.eventId }));
+    },
+  );
+
+  return attendanceByEvent.flat();
 }
 
 export async function recordAttendanceHours(
