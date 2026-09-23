@@ -143,6 +143,7 @@ export const sessionRevocation = new SessionRevocation("session-revocation", {
   userPoolId: identity.userPool.id,
   userPoolArn: identity.userPool.arn,
   policyStoreArn: policyStore.policyStoreArn,
+  policyStoreId: policyStore.policyStoreId,
   platformLogGroup,
   httpApi,
   platformBus,
@@ -158,6 +159,7 @@ export const personnelMembers = new Members("personnel-members", {
   platformTableName: platformTable.tableName,
   platformTableArn: platformTable.tableArn,
   policyStoreArn: policyStore.policyStoreArn,
+  policyStoreId: policyStore.policyStoreId,
   logGroup: personnelLogGroup,
   httpApi,
 });
@@ -167,6 +169,7 @@ export const platformConfig = new PlatformConfig("platform-config", {
   platformTableName: platformTable.tableName,
   platformTableArn: platformTable.tableArn,
   policyStoreArn: policyStore.policyStoreArn,
+  policyStoreId: policyStore.policyStoreId,
   logGroup: platformLogGroup,
   httpApi,
 });
@@ -199,6 +202,7 @@ export const platformRetention = new Retention("platform-retention", {
   platformTableName: platformTable.tableName,
   platformTableArn: platformTable.tableArn,
   policyStoreArn: policyStore.policyStoreArn,
+  policyStoreId: policyStore.policyStoreId,
   chiefNotificationTopicArn: chiefNotificationTopic.topicArn,
   logGroup: platformLogGroup,
   httpApi,

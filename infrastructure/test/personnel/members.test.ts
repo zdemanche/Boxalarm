@@ -54,6 +54,7 @@ describe("Members", () => {
       platformTableName: pulumi.output("platform-table"),
       platformTableArn: pulumi.output("arn:aws:dynamodb:us-east-1:123456789012:table/platform"),
       policyStoreArn: pulumi.output("arn:aws:verifiedpermissions::123456789012:policy-store/ps-1"),
+      policyStoreId: pulumi.output("ps-1"),
       logGroup,
       httpApi,
     });
@@ -84,5 +85,17 @@ describe("Members", () => {
     const members = await build();
     const policyJson = await resolve(members.createLambda.rolePolicy.policy);
     expect(policyJson).toContain("verifiedpermissions:IsAuthorizedWithToken");
+  });
+
+  it("wires VERIFIED_PERMISSIONS_POLICY_STORE_ID into every members Lambda's environment", async () => {
+    const members = await build();
+    const envs = await Promise.all(
+      [members.createLambda, members.listLambda, members.getLambda, members.updateStatusLambda].map(
+        (lambda) => resolve(lambda.function.environment),
+      ),
+    );
+    for (const env of envs) {
+      expect(env?.variables?.VERIFIED_PERMISSIONS_POLICY_STORE_ID).toBe("ps-1");
+    }
   });
 });

@@ -12,6 +12,7 @@ export interface MembersArgs {
   platformTableName: pulumi.Input<string>;
   platformTableArn: pulumi.Input<string>;
   policyStoreArn: pulumi.Input<string>;
+  policyStoreId: pulumi.Input<string>;
   logGroup: ServiceLogGroup;
   httpApi: HttpApi;
 }
@@ -49,7 +50,13 @@ export class Members extends pulumi.ComponentResource {
     super("boxalarm:personnel:Members", name, {}, opts);
     const { env } = args;
 
-    const baseEnvironment = { PERSONNEL_TABLE_NAME: args.platformTableName };
+    // Every members Lambda is granted verifiedpermissions:IsAuthorizedWithToken (below)
+    // but without this env var, readAuthzConfig() throws on every withAuthorization()
+    // call — the IAM grant alone is not enough for @boxalarm/authz's client to work.
+    const baseEnvironment = {
+      PERSONNEL_TABLE_NAME: args.platformTableName,
+      VERIFIED_PERMISSIONS_POLICY_STORE_ID: args.policyStoreId,
+    };
     const baseStatements = pulumi
       .all([TABLE_STATEMENT(args.platformTableArn), pulumi.output(args.policyStoreArn)])
       .apply(([table, policyStoreArn]) => [

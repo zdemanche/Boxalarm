@@ -12,6 +12,7 @@ export interface ConfigArgs {
   platformTableName: pulumi.Input<string>;
   platformTableArn: pulumi.Input<string>;
   policyStoreArn: pulumi.Input<string>;
+  policyStoreId: pulumi.Input<string>;
   logGroup: ServiceLogGroup;
   httpApi: HttpApi;
 }
@@ -44,7 +45,12 @@ export class Config extends pulumi.ComponentResource {
         handler: PLACEHOLDER_LAMBDA_HANDLER,
         code: placeholderLambdaCode(),
         logGroup: args.logGroup,
-        environment: { PLATFORM_TABLE_NAME: args.platformTableName },
+        environment: {
+          PLATFORM_TABLE_NAME: args.platformTableName,
+          // Granted verifiedpermissions:IsAuthorizedWithToken below — without this,
+          // readAuthzConfig() throws on every withAuthorization() call.
+          VERIFIED_PERMISSIONS_POLICY_STORE_ID: args.policyStoreId,
+        },
         additionalPolicyStatements: pulumi
           .all([pulumi.output(args.platformTableArn), pulumi.output(args.policyStoreArn)])
           .apply(([tableArn, policyStoreArn]) => [

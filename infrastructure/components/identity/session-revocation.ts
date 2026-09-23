@@ -13,6 +13,7 @@ export interface SessionRevocationArgs {
   userPoolId: pulumi.Input<string>;
   userPoolArn: pulumi.Input<string>;
   policyStoreArn: pulumi.Input<string>;
+  policyStoreId: pulumi.Input<string>;
   platformLogGroup: ServiceLogGroup;
   httpApi: HttpApi;
   platformBus: PlatformBus;
@@ -84,7 +85,12 @@ export class SessionRevocation extends pulumi.ComponentResource {
         handler: PLACEHOLDER_LAMBDA_HANDLER,
         code: placeholderLambdaCode(),
         logGroup: args.platformLogGroup,
-        environment: { COGNITO_USER_POOL_ID: args.userPoolId },
+        environment: {
+          COGNITO_USER_POOL_ID: args.userPoolId,
+          // Granted verifiedpermissions:IsAuthorizedWithToken below — without this,
+          // readAuthzConfig() throws on every withAuthorization() call.
+          VERIFIED_PERMISSIONS_POLICY_STORE_ID: args.policyStoreId,
+        },
         additionalPolicyStatements: pulumi
           .all([cognitoRevocationStatements(args.userPoolArn), pulumi.output(args.policyStoreArn)])
           .apply(([revocation, policyStoreArn]) => [

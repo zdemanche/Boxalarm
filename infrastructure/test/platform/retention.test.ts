@@ -66,11 +66,18 @@ describe("Retention", () => {
       platformTableName: pulumi.output("platform-table"),
       platformTableArn: pulumi.output("arn:aws:dynamodb:us-east-1:123456789012:table/platform"),
       policyStoreArn: pulumi.output("arn:aws:verifiedpermissions::123456789012:policy-store/ps-1"),
+      policyStoreId: pulumi.output("ps-1"),
       chiefNotificationTopicArn: pulumi.output("arn:aws:sns:us-east-1:123456789012:chief"),
       logGroup,
       httpApi,
     });
   }
+
+  it("wires VERIFIED_PERMISSIONS_POLICY_STORE_ID into the disposal Lambda's environment", async () => {
+    const retention = await build();
+    const env = await resolve(retention.disposalLambda.function.environment);
+    expect(env?.variables?.VERIFIED_PERMISSIONS_POLICY_STORE_ID).toBe("ps-1");
+  });
 
   it("scopes kms:ScheduleKeyDeletion to the archive CMKs only, never the live table CMKs (AC3)", async () => {
     const retention = await build();
