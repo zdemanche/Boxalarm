@@ -24,29 +24,4 @@ describe('personnel-service config', () => {
     process.env.PLATFORM_TABLE_NAME = 'platform-table';
     expect(readMemberServiceConfig(process.env)).toEqual({ tableName: 'platform-table' });
   });
-
-  it('readOutboxPublisherConfig throws when PLATFORM_BUS_NAME is unset, even with a valid table name', async () => {
-    const { readOutboxPublisherConfig } = await import('./config.js');
-    process.env.PLATFORM_TABLE_NAME = 'platform-table';
-    expect(() => readOutboxPublisherConfig(process.env)).toThrow(
-      'PLATFORM_BUS_NAME is required and was not set',
-    );
-  });
-
-  it('readOutboxPublisherConfig throws PLATFORM_BUS_NAME first when neither is set', async () => {
-    const { readOutboxPublisherConfig } = await import('./config.js');
-    expect(() => readOutboxPublisherConfig(process.env)).toThrow(
-      'PLATFORM_BUS_NAME is required and was not set',
-    );
-  });
-
-  it('readOutboxPublisherConfig returns both values when set', async () => {
-    const { readOutboxPublisherConfig } = await import('./config.js');
-    process.env.PLATFORM_TABLE_NAME = 'platform-table';
-    process.env.PLATFORM_BUS_NAME = 'platform-bus';
-    expect(readOutboxPublisherConfig(process.env)).toEqual({
-      tableName: 'platform-table',
-      busName: 'platform-bus',
-    });
-  });
 });

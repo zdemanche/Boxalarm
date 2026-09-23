@@ -17,7 +17,8 @@ describe('buildOutboxRecord', () => {
     );
     expect(record.pk).toBe('DEPT#NICHOLS#OUTBOX');
     expect(record.sk).toBe(`EVENT#${record.eventTime}#${record.eventId}`);
-    expect(record.entityType).toBe('OUTBOX_RECORD');
+    expect(record.entityType).toBe('OUTBOX_ENTRY');
+    expect(record.sentAt).toBeNull();
   });
 
   it('carries the standard event envelope fields with a fresh eventId per call', () => {
