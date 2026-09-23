@@ -42,7 +42,7 @@ function emitQualsWriteMetric(outcome: 'Succeeded' | 'Failed', reason?: string):
         Timestamp: Date.now(),
         CloudWatchMetrics: [
           {
-            Namespace: 'Boxalarm/PersonnelService',
+            Namespace: 'Boxalarm/personnel-service',
             Dimensions: reason ? [[], ['Reason']] : [[]],
             Metrics: [{ Name: `PersonnelQualsWrite${outcome}`, Unit: 'Count' }],
           },

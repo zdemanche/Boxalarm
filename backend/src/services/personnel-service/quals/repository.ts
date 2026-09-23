@@ -44,20 +44,21 @@ function logRepositoryError(event: string, error: unknown, context: Record<strin
   );
 }
 
-function buildOutboxEnvelope(correlationId: string, payload: EligibilityChangedPayload) {
+function buildOutboxEntry(
+  eventId: string,
+  correlationId: string,
+  payload: EligibilityChangedPayload,
+) {
   return {
-    entityType: 'OUTBOX' as const,
+    entityType: 'OUTBOX_ENTRY' as const,
+    eventId,
+    eventTime: new Date().toISOString(),
     eventType: EVENT_TYPE,
-    sent: false,
-    envelope: {
-      eventId: randomUUID(),
-      eventTime: new Date().toISOString(),
-      eventType: EVENT_TYPE,
-      source: EVENT_SOURCE,
-      correlationId,
-      schemaVersion: SCHEMA_VERSION,
-      payload,
-    },
+    source: EVENT_SOURCE,
+    correlationId,
+    schemaVersion: SCHEMA_VERSION,
+    payload,
+    sentAt: null,
   };
 }
 
@@ -162,10 +163,11 @@ export async function putQual(
     gsi1pk: buildDeptScopedPk(deptId, 'MEMBER', memberId),
     gsi1sk: `MEMBER_QUALIFICATION#${qualCode}`,
   };
+  const outboxEventId = randomUUID();
   const outboxItem = {
     pk,
-    sk: `OUTBOX#${randomUUID()}`,
-    ...buildOutboxEnvelope(correlationId, {
+    sk: `OUTBOX#${outboxEventId}`,
+    ...buildOutboxEntry(outboxEventId, correlationId, {
       deptId,
       memberId,
       qualCode,
@@ -239,6 +241,7 @@ export async function flipEligibilityOnCertExpired(
   const transactItems = heldQuals.flatMap((item) => {
     const qualCode = item.qualCode as string;
     const currentlyEligible = deriveCurrentlyEligible(certId, certStatus);
+    const flipOutboxEventId = randomUUID();
     flipped.push({ qualCode, grantedByCertId: certId, currentlyEligible });
     return [
       {
@@ -255,8 +258,8 @@ export async function flipEligibilityOnCertExpired(
           TableName: tableName,
           Item: {
             pk,
-            sk: `OUTBOX#${randomUUID()}`,
-            ...buildOutboxEnvelope(correlationId, {
+            sk: `OUTBOX#${flipOutboxEventId}`,
+            ...buildOutboxEntry(flipOutboxEventId, correlationId, {
               deptId,
               memberId,
               qualCode,

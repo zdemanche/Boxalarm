@@ -5,7 +5,7 @@ import type { SQSEvent } from 'aws-lambda';
 import { createDynamoClient, readAlertingConfig } from './dynamoClient.js';
 import type { AvailabilityState } from './selector.js';
 
-const METRIC_NAMESPACE = 'Boxalarm/AlertingEligibility';
+const METRIC_NAMESPACE = 'Boxalarm/alerting-eligibility';
 const DEDUP_TTL_SECONDS = 48 * 60 * 60;
 const CONSUMER_NAME = 'eligibility-consumer';
 
