@@ -107,10 +107,19 @@ describe("Export", () => {
     expect(name).toBe("boxalarm-dev-platform-export-readonly");
   });
 
-  it("expires the staging bucket's objects after 7 days and aborts stale multipart uploads", async () => {
+  it("names the staging bucket per env, not a global literal (prevents cross-env bucket adoption)", async () => {
     const exp = await build();
     const bucketName = await resolve(exp.stagingBucket.bucket);
-    expect(bucketName).toBe("boxalarm-exports-staging");
+    expect(bucketName).toBe("boxalarm-dev-exports-staging");
+  });
+
+  it("expires the staging bucket's objects after 7 days and aborts stale multipart uploads", async () => {
+    const exp = await build();
+    const rules = (await resolve(exp.stagingBucketLifecycle.rules)) ?? [];
+    expect(rules).toHaveLength(1);
+    expect(rules[0]?.status).toBe("Enabled");
+    expect(rules[0]?.expiration?.days).toBe(7);
+    expect(rules[0]?.abortIncompleteMultipartUpload?.daysAfterInitiation).toBe(7);
   });
 
   it("gates the ExportInvoked alarm on Sum >= 1 with no volume threshold, notifying the chief topic (AC2)", async () => {

@@ -27,6 +27,7 @@ export interface ExportArgs {
 /** E8-S6-INFRA #258 full department data export. */
 export class Export extends pulumi.ComponentResource {
   public readonly stagingBucket: aws.s3.Bucket;
+  public readonly stagingBucketLifecycle: aws.s3.BucketLifecycleConfigurationV2;
   public readonly workerRole: aws.iam.Role;
   public readonly workerRolePolicy: aws.iam.RolePolicy;
   public readonly workerLambda: aws.lambda.Function;
@@ -41,9 +42,15 @@ export class Export extends pulumi.ComponentResource {
     const { env } = args;
     const namespace = metricsNamespaceFor("platform-service");
 
+    // S3 bucket names are globally unique across ALL AWS accounts and regions.
+    // A bare "boxalarm-exports-staging" literal means only the first stack to
+    // deploy ever creates the bucket — in a single account (all stacks pinned
+    // to us-east-1), every other stack's CreateBucket silently no-ops and
+    // adopts the SAME bucket, so dev's export role can read prod's full
+    // department exports. Env-scoping the name gives each stack its own bucket.
     this.stagingBucket = new aws.s3.Bucket(
       `${name}-staging`,
-      { bucket: "boxalarm-exports-staging", forceDestroy: false },
+      { bucket: `boxalarm-${env}-exports-staging`, forceDestroy: false },
       { parent: this },
     );
 
@@ -68,7 +75,7 @@ export class Export extends pulumi.ComponentResource {
       { parent: this },
     );
 
-    new aws.s3.BucketLifecycleConfigurationV2(
+    this.stagingBucketLifecycle = new aws.s3.BucketLifecycleConfigurationV2(
       `${name}-staging-lifecycle`,
       {
         bucket: this.stagingBucket.id,
