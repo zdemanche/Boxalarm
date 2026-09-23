@@ -139,7 +139,6 @@ export const fanOut = new FanOut("fan-out", {
   alertingTableName: alertingTable.tableName,
   alertingStreamArn: alertingTable.streamArn,
   alertingTopicArn: messagingAlerting.topic.arn,
-  escalation,
   logGroup: alertingLogGroup,
   permissionsBoundaryArn: alertingBoundaryArn,
 });
@@ -160,6 +159,7 @@ export const routesCore = new RoutesCore("routes-core", {
   alertingTableArn: alertingTable.tableArn,
   alertingTableName: alertingTable.tableName,
   logGroup: alertingLogGroup,
+  escalation,
   permissionsBoundaryArn: alertingBoundaryArn,
 });
 

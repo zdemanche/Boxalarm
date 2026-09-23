@@ -24,8 +24,17 @@ export class Escalation extends pulumi.ComponentResource {
   public readonly scheduleGroup: aws.scheduler.ScheduleGroup;
   public readonly schedulerRole: aws.iam.Role;
   public readonly lambda: ServiceLambda;
-  /** ARN pattern scoping scheduler:CreateSchedule to schedules within this group only. */
-  public readonly scheduleResourcePattern: pulumi.Output<string>;
+  /**
+   * ARN patterns scoping scheduler:CreateSchedule to schedules this component owns.
+   * Two patterns, not one: `createEscalationSchedule` (scheduleEscalation.ts) sends no
+   * `GroupName` on CreateScheduleCommand, so every schedule actually lands in AWS's
+   * implicit `default` group today, not the dedicated `${groupName}` group created below.
+   * Granting only the dedicated group would deny every CreateSchedule call outright.
+   * Cross-seam contract: grant both so this keeps working if the backend starts passing
+   * `GroupName: ${groupName}` later; until then the dedicated ScheduleGroup resource is
+   * provisioned but unused.
+   */
+  public readonly scheduleResourcePattern: pulumi.Output<string[]>;
 
   constructor(name: string, args: EscalationArgs, opts?: pulumi.ComponentResourceOptions) {
     requireEnv("Escalation", args.env);
@@ -41,7 +50,12 @@ export class Escalation extends pulumi.ComponentResource {
 
     const region = aws.getRegionOutput({}, { parent: this });
     const caller = aws.getCallerIdentityOutput({}, { parent: this });
-    this.scheduleResourcePattern = pulumi.interpolate`arn:aws:scheduler:${region.name}:${caller.accountId}:schedule/${groupName}/*`;
+    this.scheduleResourcePattern = pulumi
+      .all([region.name, caller.accountId])
+      .apply(([regionName, accountId]) => [
+        `arn:aws:scheduler:${regionName}:${accountId}:schedule/default/*`,
+        `arn:aws:scheduler:${regionName}:${accountId}:schedule/${groupName}/*`,
+      ]);
 
     const escalationPolicy: pulumi.Input<IamPolicyStatement[]> = pulumi
       .all([args.alertingTableArn, args.alertingTopicArn])

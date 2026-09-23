@@ -36,19 +36,11 @@ async function resolve<T>(output: pulumi.Output<T>): Promise<T> {
 describe("FanOut event source mapping", () => {
   it("enables ReportBatchItemFailures and bounded retry so a failed dispatch is never silently dropped", async () => {
     const { ServiceLogGroup } = await import("../../components/observability/service-log-group");
-    const { Escalation } = await import("../../components/alerting/escalation");
     const { FanOut } = await import("../../components/alerting/fan-out");
 
     const logGroup = new ServiceLogGroup("alerting-lg", {
       env: "dev",
       serviceName: "alerting-service",
-    });
-    const escalation = new Escalation("escalation", {
-      env: "dev",
-      alertingTableArn: "arn:aws:dynamodb:us-east-1:123456789012:table/alerting",
-      alertingTopicArn: "arn:aws:sns:us-east-1:123456789012:alerting-topic.fifo",
-      alertingTableName: "boxalarm-dev-alerting-table",
-      logGroup,
     });
 
     const fanOut = new FanOut("fan-out", {
@@ -58,7 +50,6 @@ describe("FanOut event source mapping", () => {
       alertingStreamArn:
         "arn:aws:dynamodb:us-east-1:123456789012:table/alerting/stream/2026-01-01T00:00:00.000",
       alertingTopicArn: "arn:aws:sns:us-east-1:123456789012:alerting-topic.fifo",
-      escalation,
       logGroup,
     });
 

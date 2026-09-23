@@ -4,7 +4,6 @@ import { ServiceLambda } from "../observability/service-lambda";
 import { ServiceLogGroup } from "../observability/service-log-group";
 import { requireEnv } from "../shared/env";
 import { asyncStubCode } from "./stub-code";
-import { Escalation } from "./escalation";
 
 export interface FanOutArgs {
   env: string;
@@ -12,7 +11,6 @@ export interface FanOutArgs {
   alertingTableName: pulumi.Input<string>;
   alertingStreamArn: pulumi.Input<string>;
   alertingTopicArn: pulumi.Input<string>;
-  escalation: Escalation;
   logGroup: ServiceLogGroup;
   permissionsBoundaryArn?: pulumi.Input<string>;
 }
@@ -20,8 +18,13 @@ export interface FanOutArgs {
 /**
  * Fan-out Lambda (E1-S2-INFRA): triggered by the alerting-table DynamoDB Stream,
  * filtered to INSERT of DISPATCH_ALERT items, publishes one SNS FIFO message per
- * {member, channel} to the push/sms queues in parallel, and (E1-S3-INFRA) creates the
- * per-member voice escalation schedule.
+ * {member, channel} to the push/sms queues in parallel.
+ *
+ * Does NOT create voice escalation schedules — the backend stream handler
+ * (fanout/handler.ts) never calls the Scheduler. Escalation scheduling happens on the
+ * manual-dispatch ingress path instead (dispatches/handler.ts -> fanOut.ts ->
+ * createEscalationSchedule), so the scheduler-create/PassRole grants live on
+ * RoutesCore's dispatchIngress Lambda, not here (routes-core.ts).
  */
 export class FanOut extends pulumi.ComponentResource {
   public readonly lambda: ServiceLambda;
@@ -45,78 +48,45 @@ export class FanOut extends pulumi.ComponentResource {
           ALERTING_TABLE_NAME: args.alertingTableName,
           ALERTING_TOPIC_ARN: args.alertingTopicArn,
         },
-        additionalPolicyStatements: pulumi
-          .all([args.escalation.scheduleResourcePattern, args.alertingStreamArn])
-          .apply(([pattern, streamArn]) => [
-            {
-              Sid: "AlertingTableReadWrite",
-              Effect: "Allow" as const,
-              Action: [
-                "dynamodb:Query",
-                "dynamodb:GetItem",
-                "dynamodb:PutItem",
-                "dynamodb:UpdateItem",
-                "dynamodb:TransactWriteItems",
-              ],
-              Resource: args.alertingTableArn as string,
-            },
-            {
-              Sid: "AlertingTopicPublish",
-              Effect: "Allow" as const,
-              Action: ["sns:Publish"],
-              Resource: args.alertingTopicArn as string,
-            },
-            {
-              Sid: "CreateEscalationSchedulesOnly",
-              Effect: "Allow" as const,
-              Action: ["scheduler:CreateSchedule"],
-              Resource: pattern,
-            },
-            {
-              // Required for the DynamoDB-stream event source mapping to be creatable at
-              // all — CreateEventSourceMapping validates the execution role can call
-              // GetRecords/GetShardIterator/DescribeStream on the stream ARN.
-              Sid: "AlertingStreamRead",
-              Effect: "Allow" as const,
-              Action: [
-                "dynamodb:DescribeStream",
-                "dynamodb:GetRecords",
-                "dynamodb:GetShardIterator",
-              ],
-              Resource: streamArn,
-            },
-            {
-              // ListStreams has no ARN-level resource scoping (AWS-mandated wildcard,
-              // like the XRayWrite statement in observability-policy.ts).
-              Sid: "AlertingStreamListStreams",
-              Effect: "Allow" as const,
-              Action: ["dynamodb:ListStreams"],
-              Resource: "*",
-            },
-          ]),
+        additionalPolicyStatements: pulumi.output(args.alertingStreamArn).apply((streamArn) => [
+          {
+            Sid: "AlertingTableReadWrite",
+            Effect: "Allow" as const,
+            Action: [
+              "dynamodb:Query",
+              "dynamodb:GetItem",
+              "dynamodb:PutItem",
+              "dynamodb:UpdateItem",
+              "dynamodb:TransactWriteItems",
+            ],
+            Resource: args.alertingTableArn as string,
+          },
+          {
+            Sid: "AlertingTopicPublish",
+            Effect: "Allow" as const,
+            Action: ["sns:Publish"],
+            Resource: args.alertingTopicArn as string,
+          },
+          {
+            // Required for the DynamoDB-stream event source mapping to be creatable at
+            // all — CreateEventSourceMapping validates the execution role can call
+            // GetRecords/GetShardIterator/DescribeStream on the stream ARN.
+            Sid: "AlertingStreamRead",
+            Effect: "Allow" as const,
+            Action: ["dynamodb:DescribeStream", "dynamodb:GetRecords", "dynamodb:GetShardIterator"],
+            Resource: streamArn,
+          },
+          {
+            // ListStreams has no ARN-level resource scoping (AWS-mandated wildcard,
+            // like the XRayWrite statement in observability-policy.ts).
+            Sid: "AlertingStreamListStreams",
+            Effect: "Allow" as const,
+            Action: ["dynamodb:ListStreams"],
+            Resource: "*",
+          },
+        ]),
         reservedConcurrentExecutions: 10,
         permissionsBoundaryArn: args.permissionsBoundaryArn,
-      },
-      { parent: this },
-    );
-
-    new aws.iam.RolePolicy(
-      `${name}-pass-scheduler-role`,
-      {
-        role: this.lambda.role.id,
-        policy: args.escalation.schedulerRole.arn.apply((roleArn) =>
-          JSON.stringify({
-            Version: "2012-10-17",
-            Statement: [
-              {
-                Sid: "PassSchedulerRoleOnly",
-                Effect: "Allow",
-                Action: "iam:PassRole",
-                Resource: roleArn,
-              },
-            ],
-          }),
-        ),
       },
       { parent: this },
     );

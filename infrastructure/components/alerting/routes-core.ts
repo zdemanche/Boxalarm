@@ -6,6 +6,7 @@ import { requireEnv } from "../shared/env";
 import { httpStubCode } from "./stub-code";
 import { AlertingRoute } from "./route-lambda";
 import { policyStore } from "../authz/policy-store";
+import { Escalation } from "./escalation";
 
 export interface RoutesCoreArgs {
   env: string;
@@ -13,6 +14,13 @@ export interface RoutesCoreArgs {
   alertingTableArn: pulumi.Input<string>;
   alertingTableName: pulumi.Input<string>;
   logGroup: ServiceLogGroup;
+  /**
+   * Manual dispatch ingress (dispatches/handler.ts -> fanOut.ts) is the Lambda that
+   * actually calls createEscalationSchedule — the scheduler-create/PassRole grant and
+   * the ESCALATION_HANDLER_ARN/ESCALATION_SCHEDULER_ROLE_ARN env vars belong here, not
+   * on the stream fan-out Lambda (fan-out.ts no longer carries them).
+   */
+  escalation: Escalation;
   permissionsBoundaryArn?: pulumi.Input<string>;
 }
 
@@ -41,15 +49,42 @@ export class RoutesCore extends pulumi.ComponentResource {
     super("boxalarm:alerting:RoutesCore", name, {}, opts);
     const { env } = args;
 
-    const alertingTableStatements: IamPolicyStatement[] = [
-      {
-        Sid: "AlertingTableConditionalWrite",
-        Effect: "Allow",
-        Action: ["dynamodb:PutItem", "dynamodb:ConditionCheckItem", "dynamodb:TransactWriteItems"],
-        Resource: args.alertingTableArn as string,
-      },
-      verifiedPermissionsStatement(),
-    ];
+    // src/services/alerting-service/dispatches/handler.handler -> fanOut.ts -> runFanOut:
+    // queryEligibleMembers is a Query, readEscalationThresholdSeconds is a GetItem, and
+    // createEscalationSchedule needs scheduler:CreateSchedule + iam:PassRole on the
+    // escalation scheduler role. Without these, queryEligibleMembers throws, the error is
+    // swallowed (dispatches/handler.ts catches and still returns 201), and no roster
+    // entries or escalation schedules are ever written.
+    const dispatchIngressPolicyStatements: pulumi.Input<IamPolicyStatement[]> = pulumi
+      .all([args.escalation.scheduleResourcePattern, args.escalation.schedulerRole.arn])
+      .apply(([schedulePatterns, schedulerRoleArn]) => [
+        {
+          Sid: "AlertingTableConditionalWrite",
+          Effect: "Allow" as const,
+          Action: [
+            "dynamodb:PutItem",
+            "dynamodb:ConditionCheckItem",
+            "dynamodb:TransactWriteItems",
+            "dynamodb:Query",
+            "dynamodb:GetItem",
+          ],
+          Resource: args.alertingTableArn as string,
+        },
+        verifiedPermissionsStatement(),
+        {
+          Sid: "CreateEscalationSchedulesOnly",
+          Effect: "Allow" as const,
+          Action: ["scheduler:CreateSchedule"],
+          Resource: schedulePatterns,
+        },
+        {
+          Sid: "PassSchedulerRoleOnly",
+          Effect: "Allow" as const,
+          Action: ["iam:PassRole"],
+          Resource: schedulerRoleArn,
+          Condition: { StringEquals: { "iam:PassedToService": ["scheduler.amazonaws.com"] } },
+        },
+      ]);
 
     // src/services/alerting-service/dispatches/handler.handler
     this.dispatchIngress = new AlertingRoute(
@@ -67,8 +102,10 @@ export class RoutesCore extends pulumi.ComponentResource {
           ALERTING_DISPATCHES_TABLE_NAME: args.alertingTableName,
           ALERTING_TABLE_NAME: args.alertingTableName,
           VERIFIED_PERMISSIONS_POLICY_STORE_ID: policyStore.policyStoreId,
+          ESCALATION_HANDLER_ARN: args.escalation.lambda.function.arn,
+          ESCALATION_SCHEDULER_ROLE_ARN: args.escalation.schedulerRole.arn,
         },
-        additionalPolicyStatements: alertingTableStatements,
+        additionalPolicyStatements: dispatchIngressPolicyStatements,
         reservedConcurrentExecutions: 5,
         permissionsBoundaryArn: args.permissionsBoundaryArn,
       },
