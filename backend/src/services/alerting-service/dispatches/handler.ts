@@ -30,7 +30,7 @@ function emitIngressMetric(outcome: 'Accepted' | 'Rejected', reason?: string): v
         Timestamp: Date.now(),
         CloudWatchMetrics: [
           {
-            Namespace: 'Boxalarm/Alerting',
+            Namespace: 'Boxalarm/alerting',
             Dimensions: reason ? [[], ['Reason']] : [[]],
             Metrics: [{ Name: `DispatchIngress${outcome}`, Unit: 'Count' }],
           },

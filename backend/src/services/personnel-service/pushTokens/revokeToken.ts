@@ -26,7 +26,7 @@ function emitRevokeMetric(outcome: 'Revoked' | 'Failed', reason?: string): void 
         Timestamp: Date.now(),
         CloudWatchMetrics: [
           {
-            Namespace: 'Boxalarm/PushToken',
+            Namespace: 'Boxalarm/push-token',
             Dimensions: reason ? [[], ['Reason']] : [[]],
             Metrics: [{ Name: `PushToken${outcome}`, Unit: 'Count' }],
           },

@@ -13,5 +13,5 @@ export function logEvent(level: LogLevel, fields: LogFields): void {
 export function emitMetric(name: string, count = 1): void {
   // ponytail: count>1 callers don't exist yet; OutcomeMetric is count=1
   void count;
-  emitOutcomeMetric('Boxalarm/InventoryService', name);
+  emitOutcomeMetric('Boxalarm/inventory-service', name);
 }

@@ -8,7 +8,7 @@ import {
   type CedarPrincipalContext,
   type GuardEvent,
 } from '@boxalarm/authz';
-import { toVerifiedDeptId } from '@boxalarm/dept-scope';
+import { toVerifiedDeptId, type VerifiedDeptId } from '@boxalarm/dept-scope';
 import { createDynamoClient, readApparatusTableConfig } from './dynamoClient.js';
 import { createDefectPhotoUploadUrl, readDefectPhotoUploadConfig } from './defectPhotoUpload.js';
 import {
@@ -58,7 +58,7 @@ function emitDefectMetric(name: string): void {
         Timestamp: Date.now(),
         CloudWatchMetrics: [
           {
-            Namespace: 'Boxalarm/ApparatusService',
+            Namespace: 'Boxalarm/apparatus-service',
             Dimensions: [[]],
             Metrics: [{ Name: name, Unit: 'Count' }],
           },
@@ -69,8 +69,22 @@ function emitDefectMetric(name: string): void {
   );
 }
 
+/**
+ * A client-supplied (already-uploaded) photoS3Key must live under the caller's own
+ * department prefix. Without this check a client could reference another department's
+ * object key, which would then be persisted on the DEFECT record and propagated into the
+ * apparatus.defect.reported outbox payload — a cross-tenant reference leak that breaks the
+ * "{deptId} scopes everything" invariant this codebase otherwise enforces via
+ * buildDeptScopedPk on every partition key.
+ */
+function isDeptScopedPhotoKey(deptId: VerifiedDeptId, key: string): boolean {
+  const prefix = `${deptId}/defect/`;
+  return key.startsWith(prefix) && !key.includes('..') && !key.includes('//');
+}
+
 function validateBody(
   body: Record<string, unknown>,
+  deptId: VerifiedDeptId,
 ):
   | { readonly ok: true; readonly value: ValidatedDefectBody }
   | { readonly ok: false; readonly errors: readonly ValidationFieldError[] } {
@@ -93,6 +107,11 @@ function validateBody(
   if (body.photoS3Key !== undefined) {
     if (typeof body.photoS3Key !== 'string' || body.photoS3Key.length === 0) {
       errors.push({ field: 'photoS3Key', message: 'must be a non-empty string when provided' });
+    } else if (!isDeptScopedPhotoKey(deptId, body.photoS3Key)) {
+      errors.push({
+        field: 'photoS3Key',
+        message: `must be scoped to the caller's department (expected prefix "${deptId}/defect/")`,
+      });
     } else {
       photoS3Key = body.photoS3Key;
     }
@@ -188,7 +207,7 @@ async function reportDefect(
     return validationProblem(traceId, [{ field: 'body', message: 'must be valid JSON' }]);
   }
 
-  const validation = validateBody(rawBody);
+  const validation = validateBody(rawBody, deptId);
   if (!validation.ok) {
     return validationProblem(traceId, validation.errors);
   }

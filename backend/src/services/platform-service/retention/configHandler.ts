@@ -1,15 +1,18 @@
-import { randomUUID } from 'node:crypto';
-import type {
-  APIGatewayProxyEventV2WithLambdaAuthorizer,
-  APIGatewayProxyStructuredResultV2,
-  Handler,
-} from 'aws-lambda';
+import type { APIGatewayProxyResultV2 } from 'aws-lambda';
 import type { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
+import {
+  extractTraceId,
+  withAuthorization,
+  type CedarPrincipalContext,
+  type GuardEvent,
+} from '@boxalarm/authz';
 import { toVerifiedDeptId, type VerifiedDeptId } from '@boxalarm/dept-scope';
-import type { AuthorizerContext } from '../authorizer/handler.js';
-import { assertChiefOrAdmin, ForbiddenError } from './authz.js';
 import { getDynamoDocClient } from './awsClients.js';
-import { getRetentionConfig, putRetentionConfig } from './configRepository.js';
+import {
+  RetentionConfigConflictError,
+  getRetentionConfig,
+  putRetentionConfig,
+} from './configRepository.js';
 
 interface Deps {
   readonly docClient?: DynamoDBDocumentClient;
@@ -28,7 +31,7 @@ function problemResponse(
   title: string,
   detail: string,
   traceId: string,
-): APIGatewayProxyStructuredResultV2 {
+): APIGatewayProxyResultV2 {
   const body: ProblemDetails = { type: 'about:blank', title, status, detail, traceId };
   return {
     statusCode: status,
@@ -37,7 +40,7 @@ function problemResponse(
   };
 }
 
-function jsonResponse(status: number, payload: unknown): APIGatewayProxyStructuredResultV2 {
+function jsonResponse(status: number, payload: unknown): APIGatewayProxyResultV2 {
   return {
     statusCode: status,
     headers: { 'content-type': 'application/json' },
@@ -61,23 +64,6 @@ function errorContext(error: unknown): { reason: string; message: string } {
     reason: error instanceof Error ? error.constructor.name : 'UnknownError',
     message: error instanceof Error ? error.message : String(error),
   };
-}
-
-function readAuthorizerContext(
-  event: APIGatewayProxyEventV2WithLambdaAuthorizer<AuthorizerContext>,
-): AuthorizerContext | undefined {
-  const context = event.requestContext.authorizer.lambda;
-  if (
-    !context ||
-    typeof context.sub !== 'string' ||
-    context.sub.length === 0 ||
-    typeof context.deptId !== 'string' ||
-    context.deptId.length === 0 ||
-    typeof context['cognito:groups'] !== 'string'
-  ) {
-    return undefined;
-  }
-  return context;
 }
 
 function parseRetentionYears(body: string | undefined): number | { error: string } {
@@ -105,7 +91,7 @@ async function handleGet(
   deptId: VerifiedDeptId,
   traceId: string,
   deps: Deps,
-): Promise<APIGatewayProxyStructuredResultV2> {
+): Promise<APIGatewayProxyResultV2> {
   try {
     const docClient = getDynamoDocClient(deps.docClient);
     const config = await getRetentionConfig(docClient, deptId);
@@ -127,7 +113,7 @@ async function handlePut(
   body: string | undefined,
   traceId: string,
   deps: Deps,
-): Promise<APIGatewayProxyStructuredResultV2> {
+): Promise<APIGatewayProxyResultV2> {
   const parsed = parseRetentionYears(body);
   if (typeof parsed === 'object') {
     return problemResponse(400, 'Bad Request', parsed.error, traceId);
@@ -142,6 +128,10 @@ async function handlePut(
     });
     return jsonResponse(200, record);
   } catch (error) {
+    if (error instanceof RetentionConfigConflictError) {
+      log('error', 'retention.config.put.conflict', errorContext(error), traceId);
+      return problemResponse(409, 'Conflict', error.message, traceId);
+    }
     log('error', 'retention.config.put.failed', errorContext(error), traceId);
     return problemResponse(
       503,
@@ -152,43 +142,55 @@ async function handlePut(
   }
 }
 
+function resourceId(event: GuardEvent): string {
+  return event.requestContext.authorizer?.lambda?.deptId ?? '';
+}
+
+function createGetHandler(deps: Deps): (event: GuardEvent) => Promise<APIGatewayProxyResultV2> {
+  return withAuthorization(
+    async (event: GuardEvent, principal: CedarPrincipalContext) => {
+      const traceId = extractTraceId(event);
+      const deptId = toVerifiedDeptId(principal);
+      return handleGet(deptId, traceId, deps);
+    },
+    {
+      actionType: 'Boxalarm::Action',
+      actionId: 'ViewRetentionConfig',
+      resourceType: 'Boxalarm::Department',
+      resourceId,
+    },
+  );
+}
+
+function createPutHandler(deps: Deps): (event: GuardEvent) => Promise<APIGatewayProxyResultV2> {
+  return withAuthorization(
+    async (event: GuardEvent, principal: CedarPrincipalContext) => {
+      const traceId = extractTraceId(event);
+      const deptId = toVerifiedDeptId(principal);
+      return handlePut(deptId, principal.sub, event.body, traceId, deps);
+    },
+    {
+      actionType: 'Boxalarm::Action',
+      actionId: 'UpdateRetentionConfig',
+      resourceType: 'Boxalarm::Department',
+      resourceId,
+    },
+  );
+}
+
 export function createHandler(
   deps: Deps = {},
-): Handler<
-  APIGatewayProxyEventV2WithLambdaAuthorizer<AuthorizerContext>,
-  APIGatewayProxyStructuredResultV2
-> {
-  return async (event) => {
-    const traceId = randomUUID();
-    const context = readAuthorizerContext(event);
-    if (!context) {
-      log(
-        'error',
-        'retention.config.authorizerContext.invalid',
-        { routeKey: event.routeKey },
-        traceId,
-      );
-      return problemResponse(401, 'Unauthorized', 'A valid session is required.', traceId);
-    }
-
-    let deptId: VerifiedDeptId;
-    try {
-      deptId = toVerifiedDeptId(context);
-      assertChiefOrAdmin(context['cognito:groups']);
-    } catch (error) {
-      if (error instanceof ForbiddenError) {
-        return problemResponse(403, 'Forbidden', 'CHIEF or ADMIN role is required.', traceId);
-      }
-      log('error', 'retention.config.authz.failed', errorContext(error), traceId);
-      return problemResponse(401, 'Unauthorized', 'A valid session is required.', traceId);
-    }
-
+): (event: GuardEvent) => Promise<APIGatewayProxyResultV2> {
+  const getHandler = createGetHandler(deps);
+  const putHandler = createPutHandler(deps);
+  return async (event: GuardEvent): Promise<APIGatewayProxyResultV2> => {
     if (event.routeKey === 'GET /api/v1/platform/retention') {
-      return handleGet(deptId, traceId, deps);
+      return getHandler(event);
     }
     if (event.routeKey === 'PUT /api/v1/platform/retention') {
-      return handlePut(deptId, context.sub, event.body, traceId, deps);
+      return putHandler(event);
     }
+    const traceId = extractTraceId(event);
     return problemResponse(404, 'Not found', `No route for ${event.routeKey}.`, traceId);
   };
 }

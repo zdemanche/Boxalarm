@@ -56,8 +56,29 @@ export interface DefectPhotoUpload {
 
 const SAFE_FILENAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 
+// The CloudFront signed URL this module issues has no way to constrain the Content-Type or
+// size of what the client PUTs (CloudFront signed-URL policies only support date/IP
+// conditions), so this extension allowlist is the only control available in this repo against
+// a defect "photo" upload that is actually an .html/.svg/.js payload later served back from
+// the trusted assets.boxalarm.dev origin (stored-content/XSS risk).
+const ALLOWED_PHOTO_EXTENSIONS: ReadonlySet<string> = new Set([
+  'jpg',
+  'jpeg',
+  'png',
+  'heic',
+  'heif',
+  'webp',
+]);
+
 function isSafeFilename(filename: string): boolean {
-  return SAFE_FILENAME.test(filename);
+  if (!SAFE_FILENAME.test(filename)) {
+    return false;
+  }
+  const lastDot = filename.lastIndexOf('.');
+  if (lastDot <= 0 || lastDot === filename.length - 1) {
+    return false;
+  }
+  return ALLOWED_PHOTO_EXTENSIONS.has(filename.slice(lastDot + 1).toLowerCase());
 }
 
 export function createDefectPhotoUploadUrl(
@@ -66,7 +87,8 @@ export function createDefectPhotoUploadUrl(
 ): DefectPhotoUpload {
   if (!isSafeFilename(params.filename)) {
     throw new TypeError(
-      `photo filename must match ${SAFE_FILENAME}: received ${JSON.stringify(params.filename)}`,
+      `photo filename must match ${SAFE_FILENAME} with an allowed image extension ` +
+        `(${[...ALLOWED_PHOTO_EXTENSIONS].join(', ')}): received ${JSON.stringify(params.filename)}`,
     );
   }
   const photoS3Key = `${params.deptId}/defect/${params.defectId}/${params.filename}`;

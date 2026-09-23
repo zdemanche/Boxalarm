@@ -12,7 +12,7 @@ import {
 } from './configReader.js';
 import { createEventBridgeClient, publishDueEvent } from './publishDueEvents.js';
 
-const METRIC_NAMESPACE = 'Boxalarm/CertExpiryScanner';
+const METRIC_NAMESPACE = 'Boxalarm/cert-expiry-scanner';
 const SERVICE_NAME = 'training';
 const PUBLISH_CONCURRENCY = 10;
 

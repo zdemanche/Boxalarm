@@ -1,8 +1,9 @@
-import { ConditionalCheckFailedException, DynamoDBClient } from '@aws-sdk/client-dynamodb';
-import { DynamoDBDocumentClient, GetCommand, PutCommand } from '@aws-sdk/lib-dynamodb';
+import { DynamoDBClient, TransactionCanceledException } from '@aws-sdk/client-dynamodb';
+import { DynamoDBDocumentClient, GetCommand, TransactWriteCommand } from '@aws-sdk/lib-dynamodb';
 import { captureAWSv3Client } from 'aws-xray-sdk-core';
 import { assertNoDelimiter, buildDeptScopedPk } from '@boxalarm/dept-scope';
 import type { VerifiedDeptId } from '@boxalarm/dept-scope';
+import { buildOutboxRecord } from '@boxalarm/outbox';
 import {
   buildNerisIncidentId,
   isIncidentStatus,
@@ -16,6 +17,7 @@ export interface IncidentRepository {
     deptId: VerifiedDeptId,
     input: CreateIncidentInput,
     nowEpochSeconds: number,
+    traceId: string,
   ): Promise<Incident>;
   getIncident(deptId: VerifiedDeptId, incidentId: string): Promise<Incident | undefined>;
 }
@@ -91,7 +93,7 @@ export function createIncidentRepository(
   tableName: string,
 ): IncidentRepository {
   return {
-    async createIncident(deptId, input, nowEpochSeconds) {
+    async createIncident(deptId, input, nowEpochSeconds, traceId) {
       assertNoDelimiter(input.dispatchNumber, 'dispatchNumber');
       const status = resolveStatus(input);
       const incidentId = buildNerisIncidentId(deptId, input.dispatchNumber, input.epochSeconds);
@@ -123,16 +125,67 @@ export function createIncidentRepository(
         gsi1pk: buildDeptScopedPk(deptId),
         gsi1sk: `INCIDENT#${alarmAt}`,
       };
+
+      // Audit entry shape matches the sibling create-path precedent (memberRepository.ts's
+      // createMember, equipmentRepository.ts's writeAuditLogEntry): a durable AUDIT_LOG_ENTRY
+      // row co-located in this service's own table so it commits atomically with the entity.
+      const auditTs = Date.now();
+      const auditDate = new Date(auditTs).toISOString().slice(0, 10);
+      const auditItem = {
+        pk: buildDeptScopedPk(deptId, 'AUDIT', auditDate),
+        sk: `${auditTs}#INCIDENT#${incidentId}#${input.createdBy}`,
+        entityType: 'AUDIT_LOG_ENTRY',
+        mutatedEntityType: 'INCIDENT',
+        mutatedEntityId: incidentId,
+        action: 'CREATE',
+        actorId: input.createdBy,
+        changedFields: {
+          status: { old: null, new: status },
+          dispatchNumber: { old: null, new: input.dispatchNumber },
+        },
+        ts: auditTs,
+        gsi3pk: buildDeptScopedPk(deptId, 'AUDIT', 'ENTITY', 'INCIDENT', incidentId),
+        gsi3sk: String(auditTs),
+      };
+
+      // Lean payload (not the full corePayload) keeps the outbox item well under the
+      // per-item DynamoDB limit and matches the sibling outbox precedent (defectRepository.ts,
+      // hydrantRepository.ts) of publishing identifiers/summary fields, not the full entity.
+      const outboxRecord = buildOutboxRecord(
+        deptId,
+        'incident-service',
+        'incident.created',
+        traceId,
+        {
+          incidentId,
+          deptId,
+          dispatchNumber: input.dispatchNumber,
+          status,
+          createdBy: input.createdBy,
+        },
+      );
+
       try {
         await client.send(
-          new PutCommand({
-            TableName: tableName,
-            Item: item,
-            ConditionExpression: 'attribute_not_exists(pk)',
+          new TransactWriteCommand({
+            TransactItems: [
+              {
+                Put: {
+                  TableName: tableName,
+                  Item: item,
+                  ConditionExpression: 'attribute_not_exists(pk)',
+                },
+              },
+              { Put: { TableName: tableName, Item: auditItem } },
+              { Put: { TableName: tableName, Item: outboxRecord } },
+            ],
           }),
         );
       } catch (error) {
-        if (error instanceof ConditionalCheckFailedException) {
+        if (
+          error instanceof TransactionCanceledException &&
+          error.CancellationReasons?.[0]?.Code === 'ConditionalCheckFailed'
+        ) {
           throw new DuplicateIncidentError(incidentId);
         }
         throw error;

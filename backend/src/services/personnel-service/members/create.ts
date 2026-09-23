@@ -46,7 +46,7 @@ function emitMemberCreatedMetric(): void {
         Timestamp: Date.now(),
         CloudWatchMetrics: [
           {
-            Namespace: 'Boxalarm/Personnel',
+            Namespace: 'Boxalarm/personnel',
             Dimensions: [[]],
             Metrics: [{ Name: 'MemberCreated', Unit: 'Count' }],
           },
