@@ -7,8 +7,11 @@ import {
   UpdateCommand,
 } from '@aws-sdk/lib-dynamodb';
 import { buildDeptScopedPk, toVerifiedDeptId, type VerifiedDeptId } from '@boxalarm/dept-scope';
+import { emitEmf } from '@boxalarm/metrics';
 
 export const CONTACT_CHANNEL_SMS = 'sms';
+
+const LATENCY_METRIC_NAMESPACE = 'Boxalarm/AlertingEligibility';
 
 interface SnapshotDeps {
   readonly client?: DynamoDBDocumentClient;
@@ -194,6 +197,20 @@ async function processRecord(record: SQSRecord, deps: SnapshotDeps): Promise<voi
         },
       }),
     );
+
+    const latencyMs = Date.now() - snapshotUpdatedAt;
+    if (latencyMs < 0) {
+      console.warn(
+        JSON.stringify({
+          event: 'alerting.eligibility.snapshot_propagation.future_event_time',
+          service: 'alerting-service',
+          correlationId: memberId,
+          memberId,
+          latencyMs,
+        }),
+      );
+    }
+    emitEmf(LATENCY_METRIC_NAMESPACE, 'SnapshotPropagationLatencyMs', Math.max(latencyMs, 0), [[]]);
   } catch (error) {
     if (error instanceof ConditionalCheckFailedException) {
       emitSnapshotMetric('MemberEligibilitySnapshotSkipped', 'StaleEvent');
