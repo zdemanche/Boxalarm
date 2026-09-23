@@ -49,7 +49,7 @@ describe('emitCertificationMetric', () => {
       _aws: { CloudWatchMetrics: { Namespace: string }[] };
     };
     expect(created.CertificationCreated).toBe(1);
-    expect(created._aws.CloudWatchMetrics[0]?.Namespace).toBe('Boxalarm/Training');
+    expect(created._aws.CloudWatchMetrics[0]?.Namespace).toBe('Boxalarm/training');
 
     const failed = JSON.parse(logSpy.mock.calls[1]?.[0] as string) as {
       CertificationFailed: number;
@@ -73,7 +73,7 @@ describe('emitExpiryScanMetric', () => {
       _aws: { CloudWatchMetrics: { Namespace: string }[] };
     };
     expect(logged.CertificationsExpired).toBe(3);
-    expect(logged._aws.CloudWatchMetrics[0]?.Namespace).toBe('Boxalarm/Training');
+    expect(logged._aws.CloudWatchMetrics[0]?.Namespace).toBe('Boxalarm/training');
 
     logSpy.mockRestore();
   });

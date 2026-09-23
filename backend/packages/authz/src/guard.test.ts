@@ -195,7 +195,7 @@ describe('withAuthorization', () => {
     const event = buildEvent({ authorization: 'Bearer token' }, NON_PRIVILEGED[0]);
     // A caller-controlled deptId on the body/path/query must have zero effect — only
     // event.requestContext.authorizer.lambda.deptId (cryptographically verified by the
-    // Cognito authorizer, boxalarm-docs#115) is ever a legitimate source.
+    // Cognito authorizer, #180) is ever a legitimate source.
     Object.assign(event, {
       body: JSON.stringify({ deptId: 'dept-injected' }),
       pathParameters: { deptId: 'dept-injected' },

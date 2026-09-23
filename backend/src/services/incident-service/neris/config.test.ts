@@ -245,3 +245,99 @@ describe('readNerisConfig', () => {
     );
   });
 });
+
+describe('readNerisConfig caching', () => {
+  beforeEach(() => {
+    vi.resetModules();
+  });
+
+  it('caches the resolved config so a second call does not re-hit SSM or Secrets Manager', async () => {
+    const { readNerisConfig } = await import('./config.js');
+    const { client: ssmClient, send: ssmSend } = fakeSsmClient({
+      '/boxalarm/dev/neris/base-url': 'https://api-test.neris.fsri.org/v1',
+      '/boxalarm/dev/neris/user-agent': 'BoxalarmIncidentService-Dev/1.0',
+    });
+    const { client: secretsClient, send: secretsSend } = fakeSecretsClient(
+      JSON.stringify({ clientId: 'dev-client-id', clientSecret: 'dev-client-secret' }),
+    );
+
+    const first = await readNerisConfig(DEV_ENV, { ssmClient, secretsClient });
+    const second = await readNerisConfig(DEV_ENV, { ssmClient, secretsClient });
+
+    expect(second).toEqual(first);
+    // Two SSM params (base URL, User-Agent) fetched once total, not once per call.
+    expect(ssmSend).toHaveBeenCalledTimes(2);
+    expect(secretsSend).toHaveBeenCalledTimes(1);
+  });
+
+  it('ignores different deps on a second call once a config is already cached (matches the client-caching pattern)', async () => {
+    const { readNerisConfig } = await import('./config.js');
+    const { client: ssmClient } = fakeSsmClient({
+      '/boxalarm/dev/neris/base-url': 'https://api-test.neris.fsri.org/v1',
+      '/boxalarm/dev/neris/user-agent': 'BoxalarmIncidentService-Dev/1.0',
+    });
+    const { client: secretsClient } = fakeSecretsClient(
+      JSON.stringify({ clientId: 'dev-client-id', clientSecret: 'dev-client-secret' }),
+    );
+
+    const first = await readNerisConfig(DEV_ENV, { ssmClient, secretsClient });
+
+    const brokenSsmClient = { send: vi.fn().mockRejectedValue(new Error('should not be called')) };
+    const second = await readNerisConfig(DEV_ENV, {
+      ssmClient: brokenSsmClient as unknown as SSMClient,
+      secretsClient,
+    });
+
+    expect(second).toEqual(first);
+  });
+
+  it('coalesces concurrent config loads into a single SSM/Secrets Manager round trip', async () => {
+    const { readNerisConfig } = await import('./config.js');
+    const { client: ssmClient, send: ssmSend } = fakeSsmClient({
+      '/boxalarm/dev/neris/base-url': 'https://api-test.neris.fsri.org/v1',
+      '/boxalarm/dev/neris/user-agent': 'BoxalarmIncidentService-Dev/1.0',
+    });
+    const { client: secretsClient, send: secretsSend } = fakeSecretsClient(
+      JSON.stringify({ clientId: 'dev-client-id', clientSecret: 'dev-client-secret' }),
+    );
+
+    const [a, b] = await Promise.all([
+      readNerisConfig(DEV_ENV, { ssmClient, secretsClient }),
+      readNerisConfig(DEV_ENV, { ssmClient, secretsClient }),
+    ]);
+
+    expect(a).toEqual(b);
+    expect(ssmSend).toHaveBeenCalledTimes(2);
+    expect(secretsSend).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not cache a failed config load, so a later call retries', async () => {
+    const { readNerisConfig } = await import('./config.js');
+    // Same underlying SSM client instance throughout (module-scope client
+    // caching — a separate, already-covered concern — is not what's under
+    // test here); its first two GetParameter calls fail transiently, then
+    // it starts returning values, simulating a retry after a blip.
+    const values: Record<string, string> = {
+      '/boxalarm/dev/neris/base-url': 'https://api-test.neris.fsri.org/v1',
+      '/boxalarm/dev/neris/user-agent': 'BoxalarmIncidentService-Dev/1.0',
+    };
+    const send = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('SSM transiently unavailable'))
+      .mockRejectedValueOnce(new Error('SSM transiently unavailable'))
+      .mockImplementation((command: { input: { Name: string } }) => {
+        const name = command.input.Name;
+        return Promise.resolve({ Parameter: { Name: name, Value: values[name] } });
+      });
+    const ssmClient = { send } as unknown as SSMClient;
+    const { client: secretsClient } = fakeSecretsClient(
+      JSON.stringify({ clientId: 'dev-client-id', clientSecret: 'dev-client-secret' }),
+    );
+
+    await expect(readNerisConfig(DEV_ENV, { ssmClient, secretsClient })).rejects.toThrow();
+
+    await expect(readNerisConfig(DEV_ENV, { ssmClient, secretsClient })).resolves.toMatchObject({
+      baseUrl: 'https://api-test.neris.fsri.org/v1',
+    });
+  });
+});

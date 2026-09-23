@@ -1,3 +1,4 @@
+import { ConditionalCheckFailedException } from '@aws-sdk/client-dynamodb';
 import { GetCommand, PutCommand, type DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
 import { buildDeptScopedPk, type VerifiedDeptId } from '@boxalarm/dept-scope';
 
@@ -28,6 +29,14 @@ export interface PutRetentionConfigInput {
   readonly deptId: VerifiedDeptId;
   readonly retentionYears: number;
   readonly actorId: string;
+}
+
+/** Thrown when two concurrent PUTs both read the same version and race to write it. */
+export class RetentionConfigConflictError extends Error {
+  constructor(deptId: VerifiedDeptId) {
+    super(`Retention config for department "${deptId}" was updated concurrently`);
+    this.name = 'RetentionConfigConflictError';
+  }
 }
 
 function readTableName(): string {
@@ -106,8 +115,9 @@ export async function putRetentionConfig(
       Key: { pk: buildDeptScopedPk(input.deptId), sk: RETENTION_SK },
     }),
   );
-  const nextVersion =
-    existing.Item && typeof existing.Item.version === 'number' ? existing.Item.version + 1 : 1;
+  const existingVersion =
+    existing.Item && typeof existing.Item.version === 'number' ? existing.Item.version : undefined;
+  const nextVersion = existingVersion !== undefined ? existingVersion + 1 : 1;
 
   const item: RetentionConfigRecord = {
     pk: buildDeptScopedPk(input.deptId),
@@ -118,12 +128,25 @@ export async function putRetentionConfig(
     version: nextVersion,
   };
 
-  await client.send(
-    new PutCommand({
-      TableName: tableName,
-      Item: item,
-    }),
-  );
+  try {
+    await client.send(
+      new PutCommand({
+        TableName: tableName,
+        Item: item,
+        // Ties this write to the version just read above: two concurrent PUTs that both
+        // read version N can no longer both succeed at N+1 — the second write loses the
+        // race and fails the condition instead of silently dropping the first admin's
+        // change (which controls what disposal.ts treats as destroyable).
+        ConditionExpression: 'attribute_not_exists(pk) OR version = :expectedVersion',
+        ExpressionAttributeValues: { ':expectedVersion': existingVersion ?? 0 },
+      }),
+    );
+  } catch (error) {
+    if (error instanceof ConditionalCheckFailedException) {
+      throw new RetentionConfigConflictError(input.deptId);
+    }
+    throw error;
+  }
 
   return item;
 }

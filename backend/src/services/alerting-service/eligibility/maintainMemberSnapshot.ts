@@ -96,7 +96,7 @@ function emitSnapshotMetric(
         Timestamp: Date.now(),
         CloudWatchMetrics: [
           {
-            Namespace: 'Boxalarm/Alerting',
+            Namespace: 'Boxalarm/alerting',
             Dimensions: reason ? [[], ['Reason']] : [[]],
             Metrics: [{ Name: outcome, Unit: 'Count' }],
           },

@@ -1,0 +1,4 @@
+config:
+  aws:region: us-east-1
+  boxalarm-infra:env: staging
+  boxalarm-infra:webOrigin: https://staging.boxalarm.example

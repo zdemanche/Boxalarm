@@ -16,7 +16,7 @@ import {
 } from '../certificationExpiryScanner/configReader.js';
 import { createDynamoClient } from '../dynamoClient.js';
 
-const METRIC_NAMESPACE = 'Boxalarm/Training';
+const METRIC_NAMESPACE = 'Boxalarm/training';
 
 async function expiringCertificationsInner(
   event: GuardEvent,

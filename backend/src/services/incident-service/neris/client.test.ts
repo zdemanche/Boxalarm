@@ -171,6 +171,45 @@ describe('nerisFetch', () => {
   });
 });
 
+describe('getNerisClient', () => {
+  beforeEach(() => {
+    vi.resetModules();
+  });
+
+  it('returns the same client instance on repeated calls (module-scope singleton)', async () => {
+    const { getNerisClient } = await import('./client.js');
+    const a = getNerisClient(CONFIG);
+    const b = getNerisClient(CONFIG);
+    expect(a).toBe(b);
+  });
+
+  it('reuses the client and its token cache across separate calls, so a later invocation does not refetch a still-usable token', async () => {
+    const { getNerisClient } = await import('./client.js');
+
+    const fetchFn = vi.fn().mockImplementation((url: string) => {
+      if (String(url).endsWith('/token')) {
+        return Promise.resolve(
+          jsonResponse({ access_token: 'access-abc', expires_in: 3600, token_type: 'Bearer' }),
+        );
+      }
+      return Promise.resolve(jsonResponse({ ok: true }));
+    });
+
+    // First "invocation": wires deps, as a cold-start handler would.
+    const first = getNerisClient(CONFIG, { fetchFn, nowMs: () => 1_000_000 });
+    await first.fetch('/a');
+
+    // Second "invocation": calls getNerisClient again with no deps, the way a
+    // handler naively would — must still return the warm, cached client.
+    const second = getNerisClient(CONFIG);
+    await second.fetch('/b');
+
+    expect(second).toBe(first);
+    const tokenCalls = fetchFn.mock.calls.filter((c) => String(c[0]).endsWith('/token'));
+    expect(tokenCalls).toHaveLength(1);
+  });
+});
+
 describe('resolveUrl', () => {
   beforeEach(() => {
     vi.resetModules();
