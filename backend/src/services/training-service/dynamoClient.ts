@@ -50,9 +50,9 @@ function emitEmf(
 export type CertificationCreateOutcome = 'Created' | 'Failed' | 'Revoked';
 
 export function emitCertificationMetric(outcome: CertificationCreateOutcome): void {
-  emitEmf('Boxalarm/Training', `Certification${outcome}`, [[]], {});
+  emitEmf('Boxalarm/training', `Certification${outcome}`, [[]], {});
 }
 
 export function emitExpiryScanMetric(count: number): void {
-  emitEmfMetric('Boxalarm/Training', 'CertificationsExpired', count, [[]], {});
+  emitEmfMetric('Boxalarm/training', 'CertificationsExpired', count, [[]], {});
 }

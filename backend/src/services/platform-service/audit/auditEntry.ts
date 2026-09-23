@@ -188,7 +188,7 @@ function emitAuditMetric(
         Timestamp: Date.now(),
         CloudWatchMetrics: [
           {
-            Namespace: 'Boxalarm/PlatformService',
+            Namespace: 'Boxalarm/platform-service',
             Dimensions: reason ? [[], ['Reason']] : [[]],
             Metrics: [{ Name: name, Unit: 'Count' }],
           },

@@ -42,7 +42,7 @@ import { recalculateShiftStatus } from './recalculateShiftStatus.js';
 type ShiftEvent = APIGatewayProxyEventV2WithLambdaAuthorizer<AuthorizerContext>;
 
 const OFFICER_ROLES = new Set(['OFFICER', 'ADMIN', 'CHIEF']);
-const METRICS_NAMESPACE = 'Boxalarm/PersonnelService';
+const METRICS_NAMESPACE = 'Boxalarm/personnel-service';
 
 type ShiftRoute =
   | { readonly kind: 'COLLECTION' }
@@ -118,7 +118,7 @@ function emitShiftMetric(outcome: ShiftMetricOutcome): void {
         Timestamp: Date.now(),
         CloudWatchMetrics: [
           {
-            Namespace: 'Boxalarm/PersonnelService',
+            Namespace: 'Boxalarm/personnel-service',
             Dimensions: [[]],
             Metrics: [{ Name: outcome, Unit: 'Count' }],
           },

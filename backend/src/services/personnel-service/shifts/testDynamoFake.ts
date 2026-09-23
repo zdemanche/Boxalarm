@@ -1,10 +1,20 @@
 import {
   ConditionalCheckFailedException,
+  ResourceNotFoundException,
   TransactionCanceledException,
 } from '@aws-sdk/client-dynamodb';
 import type { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
 
 type FakeItem = Record<string, unknown>;
+
+/**
+ * The real secondary index names this fake will accept for QueryCommand's IndexName. A
+ * QueryCommand against any other IndexName is rejected the way real DynamoDB rejects a query
+ * against a nonexistent index, so a mismatched index-name constant (see PR #150 review, finding
+ * #1 — a local `GSI3_INDEX_NAME = 'gsi3'` shadowing the real uppercase `'GSI3'`) fails tests
+ * instead of silently matching everything.
+ */
+const KNOWN_INDEX_NAMES = new Set(['GSI3']);
 
 function itemKey(item: FakeItem): string {
   return `${item.pk as string}#${item.sk as string}`;
@@ -124,7 +134,13 @@ function applyUpdate(
 }
 
 interface TransactItem {
-  readonly Put?: { readonly TableName: string; readonly Item: FakeItem };
+  readonly Put?: {
+    readonly TableName: string;
+    readonly Item: FakeItem;
+    readonly ConditionExpression?: string;
+    readonly ExpressionAttributeValues?: Record<string, unknown>;
+    readonly ExpressionAttributeNames?: Record<string, string>;
+  };
   readonly Update?: {
     readonly TableName: string;
     readonly Key: FakeItem;
@@ -162,6 +178,16 @@ export function createFakeDocumentClient(seed: readonly FakeItem[] = []): FakeDo
     }
 
     if (name === 'QueryCommand') {
+      const indexName = input.IndexName as string | undefined;
+      if (indexName !== undefined && !KNOWN_INDEX_NAMES.has(indexName)) {
+        return Promise.reject(
+          new ResourceNotFoundException({
+            message: `Cannot do operations on a non-existent index: ${indexName}`,
+            $metadata: {},
+          }),
+        );
+      }
+
       const values = (input.ExpressionAttributeValues ?? {}) as Record<string, unknown>;
       const names = (input.ExpressionAttributeNames ?? {}) as Record<string, string>;
       let items = [...store.values()];
@@ -229,6 +255,20 @@ export function createFakeDocumentClient(seed: readonly FakeItem[] = []): FakeDo
           const { Key, ConditionExpression, ExpressionAttributeValues, ExpressionAttributeNames } =
             item.Update;
           const existing = store.get(itemKey(Key));
+          const ok =
+            !ConditionExpression ||
+            evaluateCondition(
+              ConditionExpression,
+              existing,
+              ExpressionAttributeValues ?? {},
+              ExpressionAttributeNames ?? {},
+            );
+          reasons.push(ok ? 'None' : 'ConditionalCheckFailed');
+          if (!ok) anyFailed = true;
+        } else if (item.Put) {
+          const { Item, ConditionExpression, ExpressionAttributeValues, ExpressionAttributeNames } =
+            item.Put;
+          const existing = store.get(itemKey(Item));
           const ok =
             !ConditionExpression ||
             evaluateCondition(

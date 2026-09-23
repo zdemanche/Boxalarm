@@ -4,7 +4,7 @@ import { emitOutcomeMetric } from '@boxalarm/metrics';
 import type { SQSEvent } from 'aws-lambda';
 import { createDynamoClient, readAlertingConfig } from '../eligibility/dynamoClient.js';
 
-const METRIC_NAMESPACE = 'Boxalarm/AlertingPrePlan';
+const METRIC_NAMESPACE = 'Boxalarm/alerting-pre-plan';
 const DEDUP_TTL_SECONDS = 48 * 60 * 60;
 const CONSUMER_NAME = 'preplan-copy-consumer';
 

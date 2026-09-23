@@ -97,4 +97,30 @@ describe('createDefectPhotoUploadUrl', () => {
       }),
     ).toThrow(TypeError);
   });
+
+  it.each([['photo.html'], ['photo.svg'], ['photo.js'], ['photo.exe'], ['photo']])(
+    'rejects a disallowed or missing file extension: %s',
+    (filename) => {
+      expect(() =>
+        createDefectPhotoUploadUrl(config, {
+          deptId,
+          defectId: 'DEF-0033',
+          filename,
+        }),
+      ).toThrow(TypeError);
+    },
+  );
+
+  it.each([['photo.jpg'], ['photo.JPEG'], ['photo.png'], ['photo.heic'], ['photo.webp']])(
+    'accepts an allowed image extension regardless of case: %s',
+    (filename) => {
+      expect(() =>
+        createDefectPhotoUploadUrl(config, {
+          deptId,
+          defectId: 'DEF-0033',
+          filename,
+        }),
+      ).not.toThrow();
+    },
+  );
 });
