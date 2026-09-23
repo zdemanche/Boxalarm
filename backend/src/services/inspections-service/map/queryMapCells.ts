@@ -40,7 +40,7 @@ function emitSkippedItemMetric(entityType: EntityType, reason: string): void {
         Timestamp: Date.now(),
         CloudWatchMetrics: [
           {
-            Namespace: 'Boxalarm/InspectionsMap',
+            Namespace: 'Boxalarm/inspections-map',
             Dimensions: [['EntityType', 'Reason']],
             Metrics: [{ Name: 'MapItemSkipped', Unit: 'Count' }],
           },

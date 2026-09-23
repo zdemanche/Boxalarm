@@ -47,7 +47,7 @@ function emitPrePlanMetric(outcome: 'Created' | 'Failed', reason?: string): void
         Timestamp: Date.now(),
         CloudWatchMetrics: [
           {
-            Namespace: 'Boxalarm/Inspections',
+            Namespace: 'Boxalarm/inspections',
             Dimensions: reason ? [[], ['Reason']] : [[]],
             Metrics: [{ Name: `PrePlan${outcome}`, Unit: 'Count' }],
           },
@@ -158,6 +158,7 @@ export function createPutPrePlanHandler(
           ? createSignedUploadUrl(
               assetsConfig,
               deptId,
+              'PRE_PLAN',
               prePlan.prePlanId,
               input.siteDiagramFilename,
               signer,
@@ -168,6 +169,7 @@ export function createPutPrePlanHandler(
           uploadUrl: createSignedUploadUrl(
             assetsConfig,
             deptId,
+            'PRE_PLAN',
             prePlan.prePlanId,
             filename,
             signer,

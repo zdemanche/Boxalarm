@@ -17,7 +17,7 @@ function emitEligibilityFlippedMetric(count: number): void {
         Timestamp: Date.now(),
         CloudWatchMetrics: [
           {
-            Namespace: 'Boxalarm/PersonnelService',
+            Namespace: 'Boxalarm/personnel-service',
             Dimensions: [[]],
             Metrics: [{ Name: 'EligibilityFlipped', Unit: 'Count' }],
           },
@@ -35,7 +35,7 @@ function emitEligibilityFlipFailedMetric(reason: string): void {
         Timestamp: Date.now(),
         CloudWatchMetrics: [
           {
-            Namespace: 'Boxalarm/PersonnelService',
+            Namespace: 'Boxalarm/personnel-service',
             Dimensions: [[], ['Reason']],
             Metrics: [{ Name: 'EligibilityFlipFailed', Unit: 'Count' }],
           },

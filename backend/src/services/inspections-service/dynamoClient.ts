@@ -1,5 +1,6 @@
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
+import xray from 'aws-xray-sdk-core';
 
 export interface InspectionsConfig {
   readonly tableName: string;
@@ -16,6 +17,7 @@ export function readInspectionsConfig(env: NodeJS.ProcessEnv): InspectionsConfig
 let cachedClient: DynamoDBDocumentClient | undefined;
 
 export function getDocumentClient(client?: DynamoDBDocumentClient): DynamoDBDocumentClient {
-  cachedClient ??= client ?? DynamoDBDocumentClient.from(new DynamoDBClient({}));
+  cachedClient ??=
+    client ?? DynamoDBDocumentClient.from(xray.captureAWSv3Client(new DynamoDBClient({})));
   return cachedClient;
 }

@@ -5,7 +5,7 @@ function emitEmf(metricName: string, reason?: string): void {
         Timestamp: Date.now(),
         CloudWatchMetrics: [
           {
-            Namespace: 'Boxalarm/Inventory',
+            Namespace: 'Boxalarm/inventory',
             Dimensions: reason ? [[], ['Reason']] : [[]],
             Metrics: [{ Name: metricName, Unit: 'Count' }],
           },

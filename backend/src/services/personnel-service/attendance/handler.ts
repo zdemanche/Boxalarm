@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { APIGatewayProxyResultV2 } from 'aws-lambda';
-import { ConditionalCheckFailedException } from '@aws-sdk/client-dynamodb';
-import { PutCommand } from '@aws-sdk/lib-dynamodb';
+import { TransactionCanceledException } from '@aws-sdk/client-dynamodb';
+import { TransactWriteCommand } from '@aws-sdk/lib-dynamodb';
 import {
   withAuthorization,
   serviceUnavailableProblem,
@@ -9,12 +9,17 @@ import {
   type GuardEvent,
 } from '@boxalarm/authz';
 import { buildDeptScopedPk, toVerifiedDeptId, type VerifiedDeptId } from '@boxalarm/dept-scope';
+import { emitOutcomeMetric } from '@boxalarm/metrics';
 import { createDynamoClient, readAttendanceTableConfig } from '../dynamoClient.js';
 import { conflictProblem, validationProblem } from './problemDetails.js';
 import { emitAttendanceMetric } from './metrics.js';
+import { logInfo } from '../lib/logger.js';
+import { getLosapPointRules } from '../losap/configRepository.js';
+import { computeLosapPoints } from '../losap/rules.js';
+import { buildLosapEntryItem } from '../losap/repository.js';
 
-const ACTIVITY_TYPES = ['CALL', 'DRILL', 'MEETING', 'WORK_DETAIL', 'STANDBY'] as const;
-type ActivityType = (typeof ACTIVITY_TYPES)[number];
+export const ACTIVITY_TYPES = ['CALL', 'DRILL', 'MEETING', 'WORK_DETAIL', 'STANDBY'] as const;
+export type ActivityType = (typeof ACTIVITY_TYPES)[number];
 
 interface AttendanceInput {
   readonly activityType: ActivityType;
@@ -117,30 +122,82 @@ async function recordAttendance(
   const deptId = toVerifiedDeptId(principal);
   const memberId = principal.sub;
   const keys = buildAttendanceKeys(deptId, memberId, input.occurredAt);
-  const item = {
-    ...keys,
-    entityType: 'ATTENDANCE_RECORD',
-    activityType: input.activityType,
-    refId: input.refId,
-    occurredAt: input.occurredAt,
-    hours: input.hours,
-    // TODO: E2-S3 F2.4 LOSAP point-rule computation is DEPARTMENT_CONFIG-driven and out of
-    // this ticket's ACs; flagged for backlog triage rather than invented here.
-    losapPointsAwarded: 0,
-  };
+  const year = new Date(input.occurredAt * 1000).getUTCFullYear();
 
   try {
     const { tableName } = readAttendanceTableConfig(process.env);
     const client = createDynamoClient(process.env);
+    const rules = await getLosapPointRules(client, tableName, deptId);
+    if (!rules) {
+      logInfo('losap.accrual.skipped', traceId, { reason: 'NoRuleConfig', deptId, memberId });
+      emitOutcomeMetric('Boxalarm/personnel', 'LosapAccrualSkipped', 'NoRuleConfig');
+    }
+    const losapPointsAwarded = rules
+      ? computeLosapPoints(input.activityType, rules.pointsByActivityType)
+      : 0;
+
+    const item = {
+      ...keys,
+      entityType: 'ATTENDANCE_RECORD',
+      activityType: input.activityType,
+      refId: input.refId,
+      occurredAt: input.occurredAt,
+      hours: input.hours,
+      losapPointsAwarded,
+    };
+
     await client.send(
-      new PutCommand({
-        TableName: tableName,
-        Item: item,
-        ConditionExpression: 'attribute_not_exists(sk)',
+      new TransactWriteCommand({
+        TransactItems: [
+          {
+            Put: {
+              TableName: tableName,
+              Item: item,
+              ConditionExpression: 'attribute_not_exists(sk)',
+            },
+          },
+          ...(rules
+            ? [
+                {
+                  Put: {
+                    TableName: tableName,
+                    Item: buildLosapEntryItem({
+                      deptId,
+                      memberId,
+                      year,
+                      activityType: input.activityType,
+                      points: losapPointsAwarded,
+                      sourceRefId: keys.sk,
+                      ruleVersionId: rules.ruleVersionId,
+                      entryId: randomUUID(),
+                    }),
+                    ConditionExpression: 'attribute_not_exists(sk)',
+                  },
+                },
+              ]
+            : []),
+        ],
       }),
     );
+
+    emitAttendanceMetric('Recorded');
+    return {
+      statusCode: 201,
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        activityType: item.activityType,
+        refId: item.refId,
+        occurredAt: item.occurredAt,
+        hours: item.hours,
+        losapPointsAwarded: item.losapPointsAwarded,
+      }),
+    };
   } catch (error) {
-    if (error instanceof ConditionalCheckFailedException) {
+    const cancellationReasons =
+      error instanceof TransactionCanceledException
+        ? (error.CancellationReasons ?? []).map((reason) => reason.Code)
+        : undefined;
+    if (cancellationReasons?.includes('ConditionalCheckFailed')) {
       logAttendanceFailure('DuplicateAttendanceSubmission', error, traceId);
       emitAttendanceMetric('Failed', 'DuplicateAttendanceSubmission');
       return conflictProblem(
@@ -153,19 +210,6 @@ async function recordAttendance(
     emitAttendanceMetric('Failed', reason);
     return serviceUnavailableProblem(traceId);
   }
-
-  emitAttendanceMetric('Recorded');
-  return {
-    statusCode: 201,
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({
-      activityType: item.activityType,
-      refId: item.refId,
-      occurredAt: item.occurredAt,
-      hours: item.hours,
-      losapPointsAwarded: item.losapPointsAwarded,
-    }),
-  };
 }
 
 export const handler = withAuthorization(recordAttendance, {
