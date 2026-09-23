@@ -13,7 +13,8 @@ export interface EventEnvelope<TPayload> {
 
 export type OutboxRecord<TPayload> = Readonly<Record<'pk' | 'sk', string>> &
   EventEnvelope<TPayload> & {
-    readonly entityType: 'OUTBOX_RECORD';
+    readonly entityType: 'OUTBOX_ENTRY';
+    readonly sentAt: string | null;
   };
 
 export function buildOutboxRecord<TPayload>(
@@ -28,7 +29,7 @@ export function buildOutboxRecord<TPayload>(
   return {
     pk: buildDeptScopedPk(deptId, 'OUTBOX'),
     sk: `EVENT#${eventTime}#${eventId}`,
-    entityType: 'OUTBOX_RECORD',
+    entityType: 'OUTBOX_ENTRY',
     eventId,
     eventTime,
     eventType,
@@ -36,5 +37,6 @@ export function buildOutboxRecord<TPayload>(
     correlationId,
     schemaVersion: '1.0',
     payload,
+    sentAt: null,
   };
 }

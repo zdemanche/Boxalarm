@@ -195,6 +195,37 @@ describe('toApiInspection (AC3)', () => {
     });
   });
 
+  it('passes photoS3Keys through when present (E5-S7 field capture)', () => {
+    const item: InspectionItem = {
+      pk: 'DEPT#dept-001#OCCUPANCY#OCC-1',
+      sk: 'INSPECTION#INS-3',
+      entityType: 'INSPECTION_RECORD',
+      scheduledDate: '2026-10-05',
+      violations: [],
+      photoS3Keys: ['dept-001/INSPECTION_RECORD/INS-3/photo.jpg'],
+      nextDueDate: '2026-10-05',
+      gsi2pk: 'DEPT#dept-001#DUE#INSPECTION_RECORD#2026-10',
+      gsi2sk: '2026-10-05#INS-3',
+    };
+    expect(toApiInspection(item).photoS3Keys).toEqual([
+      'dept-001/INSPECTION_RECORD/INS-3/photo.jpg',
+    ]);
+  });
+
+  it('omits photoS3Keys when absent', () => {
+    const item: InspectionItem = {
+      pk: 'DEPT#dept-001#OCCUPANCY#OCC-1',
+      sk: 'INSPECTION#INS-4',
+      entityType: 'INSPECTION_RECORD',
+      scheduledDate: '2026-10-05',
+      violations: [],
+      nextDueDate: '2026-10-05',
+      gsi2pk: 'DEPT#dept-001#DUE#INSPECTION_RECORD#2026-10',
+      gsi2sk: '2026-10-05#INS-4',
+    };
+    expect(toApiInspection(item)).not.toHaveProperty('photoS3Keys');
+  });
+
   it('omits conductedDate/conductedBy for a scheduled-but-not-yet-conducted item', () => {
     const item: InspectionItem = {
       pk: 'DEPT#dept-001#OCCUPANCY#OCC-1',

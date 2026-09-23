@@ -4,6 +4,7 @@ import {
   conflictProblem,
   internalErrorProblem,
   notFoundProblem,
+  notPendingProblem,
 } from './problemDetails.js';
 
 describe('conflictProblem', () => {
@@ -35,6 +36,17 @@ describe('badRequestProblem', () => {
     const body = JSON.parse(response.body) as { status: number; detail: string };
     expect(body.status).toBe(400);
     expect(body.detail).toBe('positionCode is required');
+  });
+});
+
+describe('notPendingProblem', () => {
+  it('returns a 409 RFC 7807 application/problem+json body distinct from conflictProblem', () => {
+    const response = notPendingProblem('trace-5');
+    expect(response.statusCode).toBe(409);
+    const body = JSON.parse(response.body) as { status: number; traceId: string; type: string };
+    expect(body.status).toBe(409);
+    expect(body.traceId).toBe('trace-5');
+    expect(body.type).toBe('https://boxalarm.dev/problems/shift-swap-not-pending');
   });
 });
 

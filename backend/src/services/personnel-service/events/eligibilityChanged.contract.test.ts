@@ -31,11 +31,13 @@ function outboxEnvelopeFrom(command: unknown): CapturedEnvelope {
   const input = (
     command as { input: { TransactItems: { Put?: { Item: Record<string, unknown> } }[] } }
   ).input;
-  const outboxPut = input.TransactItems.find((item) => item.Put?.Item.entityType === 'OUTBOX');
+  const outboxPut = input.TransactItems.find(
+    (item) => item.Put?.Item.entityType === 'OUTBOX_ENTRY',
+  );
   if (!outboxPut?.Put) {
-    throw new Error('no OUTBOX Put found in TransactItems');
+    throw new Error('no OUTBOX_ENTRY Put found in TransactItems');
   }
-  return outboxPut.Put.Item.envelope as CapturedEnvelope;
+  return outboxPut.Put.Item as unknown as CapturedEnvelope;
 }
 
 describe('personnel.eligibility.changed contract', () => {
