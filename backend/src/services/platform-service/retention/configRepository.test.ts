@@ -1,7 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { ConditionalCheckFailedException } from '@aws-sdk/client-dynamodb';
 import { GetCommand, PutCommand } from '@aws-sdk/lib-dynamodb';
 import { buildDeptScopedPk, toVerifiedDeptId } from '@boxalarm/dept-scope';
-import { getRetentionConfig, putRetentionConfig } from './configRepository.js';
+import {
+  RetentionConfigConflictError,
+  getRetentionConfig,
+  putRetentionConfig,
+} from './configRepository.js';
 
 const DEPT_ID = toVerifiedDeptId({ deptId: 'NICHOLS' });
 
@@ -38,6 +43,7 @@ describe('retention configRepository', () => {
         value: { retentionYears: 10 },
         version: 1,
       },
+      ConditionExpression: 'attribute_not_exists(pk) OR version = :expectedVersion',
     });
     expect(result).toMatchObject({
       configType: 'RETENTION',
@@ -109,5 +115,39 @@ describe('retention configRepository', () => {
     const put = send.mock.calls[1]?.[0] as PutCommand;
     expect(put.input.Item?.version).toBe(3);
     expect(put.input.Item?.value).toEqual({ retentionYears: 12 });
+    expect(put.input.ConditionExpression).toBe(
+      'attribute_not_exists(pk) OR version = :expectedVersion',
+    );
+    expect(put.input.ExpressionAttributeValues).toEqual({ ':expectedVersion': 2 });
+  });
+
+  it('throws RetentionConfigConflictError when a concurrent PUT already advanced the version', async () => {
+    const send = vi
+      .fn()
+      .mockResolvedValueOnce({
+        Item: {
+          pk: 'DEPT#NICHOLS',
+          sk: 'CONFIG#RETENTION',
+          entityType: 'DEPARTMENT_CONFIG',
+          configType: 'RETENTION',
+          value: { retentionYears: 7 },
+          version: 2,
+        },
+      })
+      .mockRejectedValueOnce(
+        new ConditionalCheckFailedException({
+          message: 'The conditional request failed',
+          $metadata: {},
+        }),
+      );
+    const client = fakeDocClient(send);
+
+    await expect(
+      putRetentionConfig(client, {
+        deptId: DEPT_ID,
+        retentionYears: 12,
+        actorId: 'MBR-0001',
+      }),
+    ).rejects.toThrow(RetentionConfigConflictError);
   });
 });

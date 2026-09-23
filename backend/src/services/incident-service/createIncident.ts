@@ -3,15 +3,20 @@ import type { AuthorizerContext } from '../platform-service/authorizer/handler.j
 import type { IncidentEvent } from './authContext.js';
 import {
   emitIncidentMetric,
-  getTraceId,
   nowEpochSeconds,
   problemResponse,
   readAuthorizerContext,
+  resolveTraceId,
 } from './authContext.js';
 import { isIncidentStatus, type CreateIncidentInput, type IncidentStatus } from './entity.js';
 import { DuplicateIncidentError, getIncidentRepository } from './repository.js';
 
 class ValidationError extends Error {}
+
+// Leaves headroom under DynamoDB's 400 KB item limit for the rest of the INCIDENT item
+// (keys, GSI attributes, NERIS metadata fields) so an oversized corePayload fails fast
+// with a clear 400 instead of surfacing as an opaque 503 from the DynamoDB write.
+const MAX_CORE_PAYLOAD_BYTES = 350_000;
 
 function parseJsonBody(event: IncidentEvent): unknown {
   if (!event.body) {
@@ -77,6 +82,12 @@ function parseCreateIncidentInput(body: unknown, createdBy: string): CreateIncid
   if (typeof corePayload !== 'object' || corePayload === null || Array.isArray(corePayload)) {
     throw new ValidationError('corePayload is required and must be a JSON object');
   }
+  const corePayloadBytes = Buffer.byteLength(JSON.stringify(corePayload), 'utf8');
+  if (corePayloadBytes > MAX_CORE_PAYLOAD_BYTES) {
+    throw new ValidationError(
+      `corePayload must not exceed ${MAX_CORE_PAYLOAD_BYTES} bytes when serialized; received ${corePayloadBytes} bytes`,
+    );
+  }
 
   let status: IncidentStatus | undefined;
   if (record.status !== undefined) {
@@ -120,7 +131,7 @@ function parseCreateIncidentInput(body: unknown, createdBy: string): CreateIncid
 export const handler: APIGatewayProxyHandlerV2WithLambdaAuthorizer<AuthorizerContext> = async (
   event,
 ) => {
-  const traceId = getTraceId(process.env);
+  const traceId = resolveTraceId(event.headers, event.requestContext.requestId);
 
   let deptId, isAdmin, sub;
   try {
@@ -164,7 +175,7 @@ export const handler: APIGatewayProxyHandlerV2WithLambdaAuthorizer<AuthorizerCon
 
   try {
     const repository = getIncidentRepository(process.env);
-    const incident = await repository.createIncident(deptId, input, nowEpochSeconds());
+    const incident = await repository.createIncident(deptId, input, nowEpochSeconds(), traceId);
     emitIncidentMetric('IncidentCreated');
     return {
       statusCode: 201,

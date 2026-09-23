@@ -38,7 +38,7 @@ function emitAuthorizerMetric(outcome: 'Allowed' | 'Denied', reason?: string): v
         Timestamp: Date.now(),
         CloudWatchMetrics: [
           {
-            Namespace: 'Boxalarm/Authorizer',
+            Namespace: 'Boxalarm/authorizer',
             // Both dimension sets on a deny: [] so a plain deny-rate alarm resolves, and
             // ['Reason'] so an outage is separable from routine expiry. Emitting only the
             // dimensioned variant makes the obvious alarm read zero.

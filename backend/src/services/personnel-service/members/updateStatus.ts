@@ -35,7 +35,7 @@ function emitStatusChangeMetric(newStatus: SettableStatus): void {
         Timestamp: Date.now(),
         CloudWatchMetrics: [
           {
-            Namespace: 'Boxalarm/Personnel',
+            Namespace: 'Boxalarm/personnel',
             Dimensions: [[], ['NewStatus']],
             Metrics: [{ Name: 'MemberStatusUpdated', Unit: 'Count' }],
           },

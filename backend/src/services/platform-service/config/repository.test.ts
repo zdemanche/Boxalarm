@@ -1,9 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
-import {
-  ConditionalCheckFailedException,
-  DynamoDBServiceException,
-} from '@aws-sdk/client-dynamodb';
-import type { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
+import { DynamoDBServiceException, TransactionCanceledException } from '@aws-sdk/client-dynamodb';
+import { TransactWriteCommand, type DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
 import { toVerifiedDeptId } from '@boxalarm/dept-scope';
 import {
   ConflictError,
@@ -16,12 +13,21 @@ function mockDocClient(send: ReturnType<typeof vi.fn>): DynamoDBDocumentClient {
   return { send } as unknown as DynamoDBDocumentClient;
 }
 
-interface PutCommandLike {
-  readonly input: {
-    readonly ConditionExpression?: string;
-    readonly Item?: { readonly version?: number };
-    readonly ExpressionAttributeValues?: Record<string, unknown>;
-  };
+interface PutItemLike {
+  readonly Put?:
+    | {
+        readonly TableName?: string | undefined;
+        readonly Item?: Record<string, unknown> | undefined;
+        readonly ConditionExpression?: string | undefined;
+        readonly ExpressionAttributeValues?: Record<string, unknown> | undefined;
+      }
+    | undefined;
+}
+
+function transactItems(send: ReturnType<typeof vi.fn>): readonly PutItemLike[] {
+  const call = send.mock.calls.find((c) => c[0] instanceof TransactWriteCommand)?.[0] as
+    TransactWriteCommand | undefined;
+  return call?.input.TransactItems ?? [];
 }
 
 describe('department config repository', () => {
@@ -64,15 +70,20 @@ describe('department config repository', () => {
       tableName: 'platform',
       deptId,
       configType: 'CHECKLIST_DEFAULTS',
-      value: { items: ['fuel'] },
+      value: { items: [{ code: 'FUEL', label: 'Fuel level', requiresPhoto: false }] },
       actorId: 'admin-1',
+      correlationId: 'trace-1',
       now: () => new Date('2026-09-15T12:00:00.000Z'),
     });
     expect(saved.version).toBe(1);
     expect(saved.sk).toBe('CONFIG#CHECKLIST_DEFAULTS');
     expect(saved.entityType).toBe('DEPARTMENT_CONFIG');
-    const createCmd = send.mock.calls[0]?.[0] as PutCommandLike;
-    expect(createCmd.input.ConditionExpression).toContain('attribute_not_exists(pk)');
+
+    const items = transactItems(send);
+    expect(items).toHaveLength(2);
+    const configPut = items[0]?.Put;
+    expect(configPut?.ConditionExpression).toContain('attribute_not_exists(pk)');
+    expect(configPut?.Item).toMatchObject({ version: 1, configType: 'CHECKLIST_DEFAULTS' });
   });
 
   it('putDepartmentConfig increments version with an optimistic lock on the prior version', async () => {
@@ -83,21 +94,56 @@ describe('department config repository', () => {
       configType: 'ALERT_RULES',
       value: { escalationThresholdN: 5 },
       actorId: 'admin-1',
+      correlationId: 'trace-2',
       expectedVersion: 4,
       now: () => new Date('2026-09-15T12:00:00.000Z'),
     });
     expect(saved.version).toBe(5);
-    const input = (send.mock.calls[0]?.[0] as PutCommandLike).input;
-    expect(input.Item?.version).toBe(5);
-    expect(input.ConditionExpression).toContain('#version = :expectedVersion');
-    expect(input.ExpressionAttributeValues?.[':expectedVersion']).toBe(4);
+
+    const items = transactItems(send);
+    const configPut = items[0]?.Put;
+    expect(configPut?.Item?.version).toBe(5);
+    expect(configPut?.ConditionExpression).toContain('#version = :expectedVersion');
+    expect(configPut?.ExpressionAttributeValues?.[':expectedVersion']).toBe(4);
   });
 
-  it('putDepartmentConfig maps ConditionalCheckFailedException to ConflictError', async () => {
+  it('putDepartmentConfig writes an outbox record in the same transaction (E8-S4 review round 2, PR #145)', async () => {
+    const send = vi.fn().mockResolvedValue({});
+    await putDepartmentConfig(mockDocClient(send), {
+      tableName: 'platform',
+      deptId,
+      configType: 'RETENTION',
+      value: { retentionYears: 10 },
+      actorId: 'admin-1',
+      correlationId: 'trace-3',
+      now: () => new Date('2026-09-15T12:00:00.000Z'),
+    });
+
+    const items = transactItems(send);
+    expect(items).toHaveLength(2);
+    const outboxItem = items[1]?.Put?.Item;
+    expect(outboxItem).toMatchObject({
+      entityType: 'OUTBOX_ENTRY',
+      eventType: 'platform.config.updated',
+      source: 'platform-service',
+      correlationId: 'trace-3',
+      pk: 'DEPT#nichols#OUTBOX',
+      payload: {
+        configType: 'RETENTION',
+        version: 1,
+        value: { retentionYears: 10 },
+        updatedBy: 'admin-1',
+        deptId,
+      },
+    });
+  });
+
+  it('putDepartmentConfig maps a ConditionalCheckFailed transaction cancellation to ConflictError', async () => {
     const send = vi.fn().mockRejectedValue(
-      new ConditionalCheckFailedException({
+      new TransactionCanceledException({
         message: 'conflict',
         $metadata: {},
+        CancellationReasons: [{ Code: 'ConditionalCheckFailed' }, { Code: 'None' }],
       }),
     );
     await expect(
@@ -107,6 +153,7 @@ describe('department config repository', () => {
         configType: 'ALERT_RULES',
         value: { escalationThresholdN: 5 },
         actorId: 'admin-1',
+        correlationId: 'trace-4',
         expectedVersion: 4,
       }),
     ).rejects.toBeInstanceOf(ConflictError);
@@ -128,6 +175,7 @@ describe('department config repository', () => {
         configType: 'STATIONS',
         value: { stations: [] },
         actorId: 'admin-1',
+        correlationId: 'trace-5',
       }),
     ).rejects.toBeInstanceOf(DynamoDBServiceException);
   });

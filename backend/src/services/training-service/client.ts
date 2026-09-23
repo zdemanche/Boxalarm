@@ -100,7 +100,7 @@ export function emitTrainingMetric(metricName: string, reason?: string): void {
         Timestamp: Date.now(),
         CloudWatchMetrics: [
           {
-            Namespace: 'Boxalarm/Training',
+            Namespace: 'Boxalarm/training',
             Dimensions: reason ? [[], ['Reason']] : [[]],
             Metrics: [{ Name: metricName, Unit: 'Count' }],
           },
