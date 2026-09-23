@@ -24,6 +24,7 @@ const mockConfig = Config as unknown as { API_BASE_URL: string };
 
 const mockAuthValue: AuthContextValue = {
   roles: ['MEMBER'],
+  memberId: 'MBR-TEST',
   isAuthenticated: true,
   isLoading: false,
   signIn: jest.fn(),

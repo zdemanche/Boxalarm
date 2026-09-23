@@ -21,6 +21,7 @@ jest.mock('react-native-config', () => ({
   default: {
     COGNITO_ISSUER: 'https://cognito-idp.us-east-1.amazonaws.com/us-east-1_test',
     COGNITO_NATIVE_CLIENT_ID: 'native-client',
+    API_BASE_URL: 'https://api.example.test',
   },
 }));
 
@@ -31,7 +32,7 @@ function base64url(value: string): string {
 function issuedTokens(
   overrides: Partial<{ accessToken: string; refreshToken: string; idToken: string }> = {},
 ) {
-  const idToken = `h.${base64url(JSON.stringify({ 'cognito:groups': ['OFFICER'] }))}.s`;
+  const idToken = `h.${base64url(JSON.stringify({ sub: 'MBR-1', 'cognito:groups': ['OFFICER'] }))}.s`;
   return {
     accessToken: 'access-1',
     refreshToken: 'refresh-1',
@@ -349,6 +350,61 @@ test('apiRequest (mobile) aborts rather than replaying unauthenticated when rene
     apiRequest('personnel/members', tokens, { apiBaseUrl: 'https://api.example.test' }),
   ).rejects.toBeInstanceOf(ApiError);
   expect(calls).toBe(1);
+});
+
+test('signOut sends the push-token DELETE before clearing stored credentials', async () => {
+  const stored = issuedTokens();
+  const deps = makeDeps();
+  withStored(deps, stored);
+  const calls: string[] = [];
+  globalThis.fetch = jest.fn(async (_url: string, init?: RequestInit) => {
+    calls.push(init?.method ?? 'GET');
+    return new Response(JSON.stringify({ revoked: true }), { status: 200 });
+  }) as unknown as typeof fetch;
+
+  let contextValue: ReturnType<typeof useAuth> | undefined;
+  function Capture() {
+    contextValue = useAuth();
+    return null;
+  }
+
+  await render(
+    <AuthProvider deps={deps}>
+      <Capture />
+    </AuthProvider>,
+  );
+  await waitFor(() => expect(contextValue?.isLoading).toBe(false));
+
+  await contextValue!.signOut();
+
+  expect(calls).toEqual(['DELETE']);
+  expect(deps.resetInternetCredentials).toHaveBeenCalledTimes(1);
+});
+
+test('signOut clears credentials even when the push-token DELETE fails', async () => {
+  const stored = issuedTokens();
+  const deps = makeDeps();
+  withStored(deps, stored);
+  globalThis.fetch = jest.fn(async () => {
+    throw new Error('offline');
+  }) as unknown as typeof fetch;
+
+  let contextValue: ReturnType<typeof useAuth> | undefined;
+  function Capture() {
+    contextValue = useAuth();
+    return null;
+  }
+
+  await render(
+    <AuthProvider deps={deps}>
+      <Capture />
+    </AuthProvider>,
+  );
+  await waitFor(() => expect(contextValue?.isLoading).toBe(false));
+
+  await contextValue!.signOut();
+
+  expect(deps.resetInternetCredentials).toHaveBeenCalledTimes(1);
 });
 
 afterEach(() => {

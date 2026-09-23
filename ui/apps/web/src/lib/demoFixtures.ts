@@ -1,3 +1,4 @@
+import { demoAlertsRequest } from '../features/alerts/demoFixtures';
 import type { Apparatus, CreateApparatusInput } from '../features/apparatus/types';
 import type { CreateMemberInput, Member, MemberStatus } from '../features/personnel/types';
 import type { ApiRequestOptions, ProblemDetails } from './apiClient';
@@ -86,6 +87,9 @@ export async function demoRequest(
   const method = (options.method ?? 'GET').toUpperCase();
   const body = options.body ? (JSON.parse(options.body as string) as Record<string, unknown>) : {};
   const parts = path.split('/');
+
+  const alertsResponse = demoAlertsRequest(path, method, body);
+  if (alertsResponse) return alertsResponse;
 
   if (path === 'apparatus' && method === 'GET') return json({ items: apparatus });
 

@@ -27,6 +27,9 @@ const ApparatusDetailPage = lazy(() =>
     default: mod.ApparatusDetailPage,
   })),
 );
+const AlertsRosterPage = lazy(() =>
+  import('./features/alerts/AlertsRosterPage').then((mod) => ({ default: mod.AlertsRosterPage })),
+);
 const PersonnelListPage = lazy(() =>
   import('./features/personnel/PersonnelListPage').then((mod) => ({
     default: mod.PersonnelListPage,
@@ -99,7 +102,7 @@ export function App() {
                   }
                 >
                   <Route index element={<LandingPage />} />
-                  <Route path="alerts/roster" element={placeholder('Live roster')} />
+                  <Route path="alerts/roster" element={roleGuarded(<AlertsRosterPage />)} />
                   <Route path="alerts/diagnostics" element={placeholder('Alert diagnostics')} />
                   <Route path="incidents" element={placeholder('Incidents')} />
                   <Route path="incidents/:id" element={placeholder('Incident detail')} />

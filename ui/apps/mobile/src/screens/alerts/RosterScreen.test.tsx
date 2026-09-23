@@ -27,14 +27,17 @@ test('lists each roster entry with name, response status, and quals', async () =
 });
 
 test('reflects a recorded response after submitResponse resolves', async () => {
-  await mockAlertsRepository.submitResponse(
-    mockRouteParams.dispatchId,
-    'RESPONDING',
-    '2026-09-13T15:00:00Z',
-  );
+  await mockAlertsRepository.submitResponse(mockRouteParams.dispatchId, 'RESPONDING', 15);
   const { findByText } = await render(<RosterScreen />);
 
-  expect(await findByText(/^responding$/i)).toBeTruthy();
+  expect(await findByText(/responding/i)).toBeTruthy();
+});
+
+test('a direct-to-scene response is labelled distinctly from a station response', async () => {
+  await mockAlertsRepository.submitResponse(mockRouteParams.dispatchId, 'DIRECT_TO_SCENE', 5);
+  const { findByText } = await render(<RosterScreen />);
+
+  expect(await findByText(/direct to scene/i)).toBeTruthy();
 });
 
 test('shows an honest offline state instead of a stale or empty roster - F1.7 requires connectivity', async () => {
