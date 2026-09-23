@@ -1,17 +1,18 @@
 import type { APIGatewayProxyHandlerV2WithLambdaAuthorizer } from 'aws-lambda';
+import { assertNoDelimiter } from '@boxalarm/dept-scope';
 import type { AuthorizerContext } from '../platform-service/authorizer/handler.js';
 import {
   emitIncidentMetric,
-  getTraceId,
   problemResponse,
   readAuthorizerContext,
+  resolveTraceId,
 } from './authContext.js';
 import { getIncidentRepository } from './repository.js';
 
 export const handler: APIGatewayProxyHandlerV2WithLambdaAuthorizer<AuthorizerContext> = async (
   event,
 ) => {
-  const traceId = getTraceId(process.env);
+  const traceId = resolveTraceId(event.headers, event.requestContext.requestId);
 
   let deptId;
   try {
@@ -35,6 +36,16 @@ export const handler: APIGatewayProxyHandlerV2WithLambdaAuthorizer<AuthorizerCon
   const incidentId = event.pathParameters?.incidentId;
   if (!incidentId) {
     return problemResponse(400, 'Bad Request', 'incidentId path parameter is required.', traceId);
+  }
+  try {
+    assertNoDelimiter(incidentId, 'incidentId');
+  } catch (error) {
+    return problemResponse(
+      400,
+      'Bad Request',
+      error instanceof Error ? error.message : 'incidentId path parameter is invalid.',
+      traceId,
+    );
   }
 
   try {

@@ -13,6 +13,7 @@ export {
   NEAR_EXPIRY_SKEW_MS,
   createTokenCache,
   getAccessToken,
+  getTokenCache,
   type CachedAccessToken,
   type FetchFn,
   type GetAccessTokenDeps,
@@ -20,6 +21,7 @@ export {
 } from './tokenCache.js';
 export {
   createNerisClient,
+  getNerisClient,
   resolveUrl,
   type CreateNerisClientDeps,
   type NerisClient,

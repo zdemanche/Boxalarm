@@ -1,0 +1,6 @@
+name: boxalarm-infra
+runtime:
+  name: nodejs
+  options:
+    typescript: true
+description: Boxalarm — Infrastructure

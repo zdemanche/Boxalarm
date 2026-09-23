@@ -54,6 +54,30 @@ describe('createConfigCache', () => {
     expect(loader).toHaveBeenCalledTimes(1);
   });
 
+  it('builds cache keys using the platform-service:department-config:{deptId}:{configType} convention', async () => {
+    const store = {
+      get: vi.fn(() => undefined),
+      set: vi.fn(),
+      delete: vi.fn(),
+    };
+    const cache = createConfigCache({ ttlMs: 60_000, now: () => 1_000, store });
+    const loader = vi.fn(() => Promise.resolve({ ok: true }));
+
+    await cache.getOrLoad('DEPT#nichols', 'CONFIG#ALERT_RULES', loader);
+    expect(store.get).toHaveBeenCalledWith(
+      'platform-service:department-config:nichols:ALERT_RULES',
+    );
+    expect(store.set).toHaveBeenCalledWith(
+      'platform-service:department-config:nichols:ALERT_RULES',
+      expect.anything(),
+    );
+
+    cache.invalidate('DEPT#nichols', 'CONFIG#ALERT_RULES');
+    expect(store.delete).toHaveBeenCalledWith(
+      'platform-service:department-config:nichols:ALERT_RULES',
+    );
+  });
+
   it('invalidates a key so the next read reloads from the loader', async () => {
     const loader = vi
       .fn()

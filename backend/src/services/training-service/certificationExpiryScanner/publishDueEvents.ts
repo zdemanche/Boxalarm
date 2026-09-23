@@ -7,7 +7,7 @@ import { buildDeptScopedPk, type VerifiedDeptId } from '@boxalarm/dept-scope';
 import { emitOutcomeMetric } from '@boxalarm/metrics';
 import { readTrainingDynamoConfig } from '../dynamoClient.js';
 
-const METRIC_NAMESPACE = 'Boxalarm/CertExpiryScanner';
+const METRIC_NAMESPACE = 'Boxalarm/cert-expiry-scanner';
 const EVENT_SOURCE = 'training-service';
 
 export interface EventBridgeBusConfig {

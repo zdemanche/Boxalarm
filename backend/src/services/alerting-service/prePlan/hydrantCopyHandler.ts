@@ -12,7 +12,7 @@ import {
   type NearestHydrant,
 } from './nearestHydrants.js';
 
-const METRIC_NAMESPACE = 'Boxalarm/AlertingPrePlan';
+const METRIC_NAMESPACE = 'Boxalarm/alerting-pre-plan';
 const MAX_NEAREST_HYDRANTS = 5;
 const MAX_UPDATE_ATTEMPTS = 3;
 

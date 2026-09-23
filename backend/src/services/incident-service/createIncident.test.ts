@@ -4,13 +4,14 @@ import type { IncidentEvent } from './authContext.js';
 function buildEvent(
   lambdaContext: Record<string, unknown> | undefined,
   body: unknown,
+  headers: Record<string, string> = {},
 ): IncidentEvent {
   return {
     version: '2.0',
     routeKey: 'POST /api/v1/incidents',
     rawPath: '/api/v1/incidents',
     rawQueryString: '',
-    headers: {},
+    headers,
     isBase64Encoded: false,
     body: body === undefined ? undefined : JSON.stringify(body),
     requestContext: {
@@ -91,7 +92,59 @@ describe('createIncident handler', () => {
         status: 'DRAFT',
       }),
       expect.any(Number),
+      expect.any(String),
     );
+  });
+
+  it('uses the caller W3C traceparent header as the problem-body traceId (regression for PR #149 finding 3)', async () => {
+    const { handler } = await import('./createIncident.js');
+
+    const result = await handler(
+      buildEvent(MEMBER_AUTH, VALID_BODY, {
+        traceparent: '00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01',
+      }),
+      {} as never,
+      () => undefined,
+    );
+
+    const body = JSON.parse((result as { body: string }).body) as Record<string, unknown>;
+    expect(body.traceId).toBe('4bf92f3577b34da6a3ce929d0e0e4736');
+  });
+
+  it('falls back to the API Gateway requestId when no traceparent header is sent', async () => {
+    const { handler } = await import('./createIncident.js');
+
+    const result = await handler(buildEvent(MEMBER_AUTH, VALID_BODY), {} as never, () => undefined);
+
+    const body = JSON.parse((result as { body: string }).body) as Record<string, unknown>;
+    expect(body.traceId).toBe('req-1');
+  });
+
+  it('returns 400 when corePayload serializes over the byte cap (regression for PR #149 finding 5)', async () => {
+    const { handler } = await import('./createIncident.js');
+    const oversizedCorePayload = { opaque: 'x'.repeat(400_000) };
+
+    const result = await handler(
+      buildEvent(ADMIN_AUTH, { ...VALID_BODY, corePayload: oversizedCorePayload }),
+      {} as never,
+      () => undefined,
+    );
+
+    expect(result).toMatchObject({ statusCode: 400 });
+    const body = JSON.parse((result as { body: string }).body) as Record<string, unknown>;
+    expect(body.detail).toMatch(/corePayload must not exceed/);
+  });
+
+  it('returns 401 when the authorizer context has no sub (regression for PR #149 finding 4)', async () => {
+    const { handler } = await import('./createIncident.js');
+
+    const result = await handler(
+      buildEvent({ deptId: 'NICHOLS', 'cognito:groups': 'ADMIN' }, VALID_BODY),
+      {} as never,
+      () => undefined,
+    );
+
+    expect(result).toMatchObject({ statusCode: 401 });
   });
 
   it('allows CHIEF to create an incident', async () => {
@@ -124,7 +177,12 @@ describe('createIncident handler', () => {
       () => undefined,
     );
 
-    expect(createIncident).toHaveBeenCalledWith('NICHOLS', expect.any(Object), expect.any(Number));
+    expect(createIncident).toHaveBeenCalledWith(
+      'NICHOLS',
+      expect.any(Object),
+      expect.any(Number),
+      expect.any(String),
+    );
   });
 
   it('returns 403 for a non-admin caller', async () => {
