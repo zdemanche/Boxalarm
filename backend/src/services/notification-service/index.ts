@@ -63,7 +63,7 @@ export function handleApparatusTestDue(
       dueDate: payload.dueDate,
       channelClass: 'non-critical',
       message:
-        'Stub only — must use notification-service non-critical channel; do not route via alerting-service',
+        'Stub only — must use notification-service non-critical channel; do not route via the alerting plane',
     }),
   );
 }
