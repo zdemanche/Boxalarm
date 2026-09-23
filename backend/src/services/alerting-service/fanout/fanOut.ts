@@ -5,6 +5,7 @@ import { emitOutcomeMetric } from '@boxalarm/metrics';
 import { queryEligibleMembers } from '../eligibility/selector.js';
 import { logError, logInfo } from '../dispatches/logger.js';
 import { createEscalationSchedule } from '../escalation/scheduleEscalation.js';
+import { scheduleDepartmentToneLadder } from '../escalation/toneLadder.js';
 
 const METRIC_NAMESPACE = 'Boxalarm/Alerting';
 const TONE_SEQUENCE_ONE = 1;
@@ -179,6 +180,14 @@ export async function runFanOut(
         memberId: member.memberId,
       });
       emitOutcomeMetric(METRIC_NAMESPACE, 'FanOutMemberFailed');
+    }
+  }
+
+  if (eligibleMembers.length > 0) {
+    try {
+      await scheduleDepartmentToneLadder(scheduler, ddb, tableName, deptId, dispatchId);
+    } catch (error) {
+      logError('alerting.fanout.toneLadderScheduleFailed', error, { deptId, dispatchId });
     }
   }
 

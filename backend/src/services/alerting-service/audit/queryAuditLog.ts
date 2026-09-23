@@ -100,6 +100,17 @@ async function queryDispatchTimeline(
   return items;
 }
 
+export async function queryMemberDispatchTimeline(
+  client: DynamoDBDocumentClient,
+  tableName: string,
+  deptId: VerifiedDeptId,
+  dispatchId: string,
+  memberId: string,
+): Promise<readonly Record<string, unknown>[]> {
+  const timeline = await queryDispatchTimeline(client, tableName, deptId, dispatchId);
+  return timeline.filter((entry) => entry.memberId === memberId);
+}
+
 export async function queryDepartmentAuditLog(
   client: DynamoDBDocumentClient,
   tableName: string,
