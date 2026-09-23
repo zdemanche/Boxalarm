@@ -1,4 +1,4 @@
-import type { Apparatus, CreateApparatusInput } from '../features/apparatus/types';
+import { apparatusDemoRequest } from '../features/apparatus/demoFixtures';
 import type { CreateMemberInput, Member, MemberStatus } from '../features/personnel/types';
 import type { ApiRequestOptions, ProblemDetails } from './apiClient';
 
@@ -60,13 +60,6 @@ let members: Member[] = [
   },
 ];
 
-let apparatus: Apparatus[] = [
-  { apparatusId: 'a-1', unitId: 'Engine 1', type: 'Engine', status: 'IN_SERVICE' },
-  { apparatusId: 'a-2', unitId: 'Ladder 1', type: 'Ladder', status: 'IN_SERVICE' },
-  { apparatusId: 'a-3', unitId: 'Rescue 1', type: 'Rescue', status: 'OUT_OF_SERVICE' },
-  { apparatusId: 'a-4', unitId: 'Tanker 2', type: 'Tanker', status: 'IN_SERVICE' },
-];
-
 function json(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data), {
     status,
@@ -87,23 +80,9 @@ export async function demoRequest(
   const body = options.body ? (JSON.parse(options.body as string) as Record<string, unknown>) : {};
   const parts = path.split('/');
 
-  if (path === 'apparatus' && method === 'GET') return json({ items: apparatus });
-
-  if (path === 'apparatus' && method === 'POST') {
-    const input = body as unknown as CreateApparatusInput;
-    const created: Apparatus = {
-      apparatusId: `a-${apparatus.length + 1}`,
-      unitId: input.unitId,
-      type: input.type,
-      status: 'IN_SERVICE',
-    };
-    apparatus = [...apparatus, created];
-    return json(created, 201);
-  }
-
-  if (parts[0] === 'apparatus' && parts.length === 2 && method === 'GET') {
-    const found = apparatus.find((a) => a.apparatusId === decodeURIComponent(parts[1] ?? ''));
-    return found ? json(found) : problem(404, 'Apparatus not found');
+  if (parts[0] === 'apparatus') {
+    const response = await apparatusDemoRequest(path, method, body);
+    if (response) return response;
   }
 
   if (path === 'personnel/members' && method === 'GET') return json({ items: members });

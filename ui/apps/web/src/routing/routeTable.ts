@@ -79,6 +79,13 @@ export const APP_ROUTES: readonly AppRoute[] = [
     showInNav: true,
   },
   {
+    path: '/apparatus/compliance',
+    navPath: '/apparatus/compliance',
+    label: 'Apparatus compliance',
+    roles: ['ADMIN', 'CHIEF'],
+    showInNav: true,
+  },
+  {
     path: '/apparatus/:id',
     navPath: '/apparatus',
     label: 'Apparatus detail',

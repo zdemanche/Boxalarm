@@ -79,3 +79,17 @@ test('the submit button label uses the cab palette token, not a hardcoded color,
 
   expect(label.props.style.color).toBe(palette.cab.background);
 });
+
+test('selecting out-of-service severity shows the OOS consequence without a separate step', async () => {
+  const { findByText, queryByText } = await render(<DefectReportScreen />);
+
+  expect(queryByText(/takes the unit out of service/i)).toBeNull();
+
+  await act(async () => {
+    fireEvent.press(await findByText('Out of service'));
+  });
+
+  expect(
+    await findByText('This takes the unit out of service and alerts the apparatus officer.'),
+  ).toBeTruthy();
+});

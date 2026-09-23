@@ -11,7 +11,7 @@ import {
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { mockChecksRepository } from '../../features/checks/mockChecksRepository';
+import { useChecksRepository } from '../../features/checks/apiChecksRepository';
 import type { DefectSeverity } from '../../features/checks/types';
 
 const SEVERITIES: { value: DefectSeverity; label: string }[] = [
@@ -26,12 +26,13 @@ export function DefectReportScreen() {
   const apparatusId = (route.params as { apparatusId: string }).apparatusId;
   const scheme = useColorScheme();
   const tokens = scheme === 'dark' ? palette.cab : palette.day;
+  const repository = useChecksRepository();
   const [description, setDescription] = useState('');
   const [severity, setSeverity] = useState<DefectSeverity>('MINOR');
   const [submitted, setSubmitted] = useState(false);
 
   const handleSubmit = () => {
-    void mockChecksRepository.submitDefect({ apparatusId, description, severity });
+    void repository.submitDefect({ apparatusId, description, severity });
     setSubmitted(true);
     // The confirmation replaces the whole screen, so a screen-reader user needs an explicit
     // announcement - there's no visible element left to shift focus onto naturally.
@@ -135,6 +136,18 @@ export function DefectReportScreen() {
             </TouchableOpacity>
           ))}
         </View>
+        {severity === 'OUT_OF_SERVICE' ? (
+          <Text
+            accessibilityRole="alert"
+            style={{
+              color: tokens.error,
+              fontSize: typography.size.sm,
+              marginTop: spacing.lg,
+            }}
+          >
+            This takes the unit out of service and alerts the apparatus officer.
+          </Text>
+        ) : null}
         <Text
           style={{
             color: tokens.foreground,

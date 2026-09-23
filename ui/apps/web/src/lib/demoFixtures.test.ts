@@ -15,8 +15,8 @@ afterEach(() => {
 
 test('lists apparatus fixtures without any network call', async () => {
   const response = await apiRequest('apparatus', tokens);
-  const body = (await response.json()) as { items: unknown[] };
-  expect(body.items.length).toBeGreaterThan(0);
+  const body = (await response.json()) as { apparatus: unknown[] };
+  expect(body.apparatus.length).toBeGreaterThan(0);
 });
 
 test('creates an apparatus unit and returns it back in the list', async () => {
@@ -28,8 +28,8 @@ test('creates an apparatus unit and returns it back in the list', async () => {
   expect(unit.unitId).toBe('Brush 1');
 
   const list = await apiRequest('apparatus', tokens);
-  const body = (await list.json()) as { items: { unitId: string }[] };
-  expect(body.items.some((a) => a.unitId === 'Brush 1')).toBe(true);
+  const body = (await list.json()) as { apparatus: { unitId: string }[] };
+  expect(body.apparatus.some((a) => a.unitId === 'Brush 1')).toBe(true);
 });
 
 test('gets a member fixture by id', async () => {

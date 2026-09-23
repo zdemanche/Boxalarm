@@ -27,5 +27,5 @@ test('selecting an in-service apparatus navigates to the check runner', async ()
   const { findByText } = await render(<ApparatusPickerScreen />);
 
   fireEvent.press(await findByText('ENGINE-2'));
-  expect(mockNavigate).toHaveBeenCalledWith('CheckRunner', { apparatusId: 'APP-ENGINE-2' });
+  expect(mockNavigate).toHaveBeenCalledWith('CheckRunner', { apparatusId: 'ENGINE-2' });
 });

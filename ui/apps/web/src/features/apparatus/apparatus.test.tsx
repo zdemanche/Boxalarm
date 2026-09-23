@@ -72,7 +72,7 @@ function renderApp(groups: string[], path = '/apparatus') {
 test('APPARATUS create form adds a unit as IN_SERVICE', async () => {
   const items: Apparatus[] = [];
   server.use(
-    http.get('/api/v1/apparatus', () => HttpResponse.json({ items })),
+    http.get('/api/v1/apparatus', () => HttpResponse.json({ apparatus: items })),
     http.post('/api/v1/apparatus', async ({ request }) => {
       const body = (await request.json()) as { unitId: string; type: string };
       const created: Apparatus = {
@@ -94,12 +94,12 @@ test('APPARATUS create form adds a unit as IN_SERVICE', async () => {
   await user.click(screen.getByRole('button', { name: 'Create apparatus' }));
   await waitFor(() => {
     expect(screen.getByText('E1')).toBeTruthy();
-    expect(screen.getByText('IN_SERVICE')).toBeTruthy();
+    expect(screen.getByText('In service')).toBeTruthy();
   });
 });
 
 test('CHIEF can open registry but does not see create control', async () => {
-  server.use(http.get('/api/v1/apparatus', () => HttpResponse.json({ items: [] })));
+  server.use(http.get('/api/v1/apparatus', () => HttpResponse.json({ apparatus: [] })));
 
   renderApp(['CHIEF']);
   await screen.findByRole('heading', { name: 'Apparatus' });
@@ -120,6 +120,8 @@ test('detail shows status badge shell', async () => {
         unitId: 'L1',
         type: 'Ladder',
         status: 'OUT_OF_SERVICE',
+        openDefects: [],
+        failedTests: [],
       }),
     ),
   );

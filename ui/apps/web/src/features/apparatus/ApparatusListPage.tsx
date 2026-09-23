@@ -4,9 +4,16 @@ import { Link } from 'react-router-dom';
 import { useAuth } from '../../auth/AuthContext';
 import { ApiForbiddenGate } from '../../components/ApiForbiddenGate';
 import { createApparatus, listApparatus } from './api';
+import { serviceStatusRole, StatusBadge } from './StatusBadge';
 import type { CreateApparatusInput } from './types';
 
 const emptyForm: CreateApparatusInput = { unitId: '', type: '' };
+
+function elapsedSince(epochSeconds: number): string {
+  const days = Math.floor((Date.now() / 1000 - epochSeconds) / 86400);
+  if (days <= 0) return 'today';
+  return `${days} day${days === 1 ? '' : 's'}`;
+}
 
 export function ApparatusListPage() {
   const auth = useAuth();
@@ -73,7 +80,24 @@ export function ApparatusListPage() {
                   <Link to={`/apparatus/${unit.apparatusId}`}>{unit.unitId}</Link>
                 </th>
                 <td>{unit.type}</td>
-                <td>{unit.status}</td>
+                <td>
+                  <StatusBadge
+                    role={serviceStatusRole(unit.status)}
+                    word={unit.status === 'IN_SERVICE' ? 'In service' : 'Out of service'}
+                  />
+                  {unit.status === 'OUT_OF_SERVICE' && unit.oosReason ? (
+                    <span
+                      style={{
+                        display: 'block',
+                        fontSize: 'var(--boxalarm-font-size-sm)',
+                        marginTop: 2,
+                      }}
+                    >
+                      {unit.oosReason}
+                      {unit.oosSince ? ` — ${elapsedSince(unit.oosSince)}` : null}
+                    </span>
+                  ) : null}
+                </td>
               </tr>
             ))}
           </tbody>
