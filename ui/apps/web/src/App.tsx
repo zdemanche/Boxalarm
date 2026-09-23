@@ -37,6 +37,14 @@ const MemberDetailPage = lazy(() =>
     default: mod.MemberDetailPage,
   })),
 );
+const SchedulePage = lazy(() =>
+  import('./features/schedule/SchedulePage').then((mod) => ({ default: mod.SchedulePage })),
+);
+const LosapSettingsPage = lazy(() =>
+  import('./features/losap/LosapSettingsPage').then((mod) => ({
+    default: mod.LosapSettingsPage,
+  })),
+);
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { staleTime: 30_000, retry: 1 } },
@@ -108,9 +116,9 @@ export function App() {
                   <Route path="certifications" element={placeholder('Certifications')} />
                   <Route path="apparatus" element={roleGuarded(<ApparatusListPage />)} />
                   <Route path="apparatus/:id" element={roleGuarded(<ApparatusDetailPage />)} />
-                  <Route path="schedule" element={placeholder('Schedule')} />
+                  <Route path="schedule" element={roleGuarded(<SchedulePage />)} />
                   <Route path="reporting" element={placeholder('Reporting')} />
-                  <Route path="settings" element={placeholder('Settings')} />
+                  <Route path="settings" element={roleGuarded(<LosapSettingsPage />)} />
                   <Route path="audit-log" element={placeholder('Audit log')} />
                 </Route>
                 <Route path="*" element={<Navigate to="/" replace />} />

@@ -11,8 +11,8 @@ import { useEffect, useState } from 'react';
 import { ScrollView, Text, TouchableOpacity, useColorScheme, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useAuth } from '../../auth/AuthContext';
-import { mockMeRepository } from '../../features/me/mockMeRepository';
-import type { MemberProfile } from '../../features/me/types';
+import { useMeRepository } from '../../features/me/apiMeRepository';
+import type { LosapTotal, MemberProfile, Qualification } from '../../features/me/types';
 
 function NavRow({
   label,
@@ -46,17 +46,26 @@ export function MeHomeScreen() {
   const navigation = useNavigation();
   const scheme = useColorScheme();
   const tokens = scheme === 'dark' ? palette.cab : palette.day;
+  const repository = useMeRepository();
   const [profile, setProfile] = useState<MemberProfile | null>(null);
+  const [quals, setQuals] = useState<Qualification[]>([]);
+  const [losap, setLosap] = useState<LosapTotal | null>(null);
 
   useEffect(() => {
     let cancelled = false;
-    mockMeRepository.getProfile().then((result) => {
+    repository.getProfile().then((result) => {
       if (!cancelled) setProfile(result);
+    });
+    repository.getQualifications().then((result) => {
+      if (!cancelled) setQuals(result);
+    });
+    repository.getLosapTotal().then((result) => {
+      if (!cancelled) setLosap(result);
     });
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [repository]);
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: tokens.background }}>
@@ -81,6 +90,36 @@ export function MeHomeScreen() {
             </Text>
           )}
         </View>
+        <NavRow
+          label="Edit profile"
+          tokens={tokens}
+          onPress={() => navigation.navigate('ProfileEdit' as never)}
+        />
+        <View
+          style={{
+            paddingHorizontal: spacing.lg,
+            paddingVertical: spacing.md,
+            borderBottomWidth: 1,
+            borderBottomColor: tokens.foreground + '22',
+          }}
+        >
+          <Text
+            accessibilityRole="header"
+            style={{ color: tokens.foreground, fontSize: typography.size.base, fontWeight: '600' }}
+          >
+            My qualifications
+          </Text>
+          {quals.map((qual) => (
+            <Text key={qual.qualCode} style={{ color: tokens.foreground, marginTop: spacing.xs }}>
+              {qual.qualCode} — {qual.currentlyEligible ? 'Eligible' : 'Not currently eligible'}
+            </Text>
+          ))}
+        </View>
+        <NavRow
+          label={losap ? `Attendance & LOSAP (${losap.totalPoints} pts this year)` : 'Attendance'}
+          tokens={tokens}
+          onPress={() => navigation.navigate('Attendance' as never)}
+        />
         <NavRow
           label="Certifications"
           tokens={tokens}

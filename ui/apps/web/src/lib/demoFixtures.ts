@@ -1,5 +1,8 @@
 import type { Apparatus, CreateApparatusInput } from '../features/apparatus/types';
+import { tryHandleLosapExtras } from '../features/losap/demoFixtures';
+import { tryHandlePersonnelExtras } from '../features/personnel/demoFixtures';
 import type { CreateMemberInput, Member, MemberStatus } from '../features/personnel/types';
+import { tryHandleScheduleExtras } from '../features/schedule/demoFixtures';
 import type { ApiRequestOptions, ProblemDetails } from './apiClient';
 
 let members: Member[] = [
@@ -145,6 +148,12 @@ export async function demoRequest(
     });
     return updated ? json(updated) : problem(404, 'Member not found');
   }
+
+  const extras =
+    tryHandleScheduleExtras(parts, method, body) ??
+    tryHandlePersonnelExtras(parts, method, body) ??
+    tryHandleLosapExtras(parts, method, body);
+  if (extras) return extras;
 
   return problem(404, 'Not found');
 }

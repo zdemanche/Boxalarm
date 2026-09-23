@@ -25,4 +25,8 @@ export interface ScheduleRepository {
   getShifts(): Promise<DutyShift[]>;
   claimPosition(shiftId: string, positionCode: string): Promise<ClaimResult>;
   markUnavailable(startAt: string, endAt: string, reason?: string): Promise<void>;
+  // F2.11: give-back and swap. Optional so the original two-method mock (still exercised by
+  // ShiftBoardScreen/AvailabilityScreen tests) needs no change to keep satisfying this interface.
+  releasePosition?(shiftId: string, positionCode: string): Promise<void>;
+  proposeSwap?(shiftId: string, positionCode: string, toMemberId: string): Promise<void>;
 }

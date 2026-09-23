@@ -20,7 +20,28 @@ export interface Certification {
   status: CertificationStatus;
 }
 
+export interface Qualification {
+  qualCode: string;
+  grantedByCertId: string | null;
+  currentlyEligible: boolean;
+}
+
+export interface ProfileUpdate {
+  phone?: string;
+  email?: string;
+  firstName?: string;
+  lastName?: string;
+}
+
+export interface LosapTotal {
+  year: number;
+  totalPoints: number;
+}
+
 export interface MeRepository {
   getProfile(): Promise<MemberProfile>;
   getCertifications(): Promise<Certification[]>;
+  getQualifications(): Promise<Qualification[]>;
+  updateProfile(update: ProfileUpdate): Promise<MemberProfile>;
+  getLosapTotal(): Promise<LosapTotal>;
 }

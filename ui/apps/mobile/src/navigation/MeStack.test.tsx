@@ -5,6 +5,7 @@ import { MeStack } from './MeStack';
 
 jest.mock('../auth/AuthContext', () => ({
   useAuth: () => ({ signOut: jest.fn(async () => {}) }),
+  useOptionalAuth: () => ({ isAuthenticated: false, memberId: null }),
 }));
 
 async function renderMeStack() {
