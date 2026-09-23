@@ -44,6 +44,20 @@ export function ApparatusPickerScreen() {
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: tokens.background }}>
+      <TouchableOpacity
+        accessibilityRole="button"
+        onPress={() => navigation.navigate('FieldCapture')}
+        style={{
+          minHeight: touchTarget.baseline.ios,
+          justifyContent: 'center',
+          paddingHorizontal: spacing.lg,
+          paddingTop: spacing.md,
+        }}
+      >
+        <Text style={{ color: tokens.accent, fontSize: typography.size.base, fontWeight: '600' }}>
+          Field capture
+        </Text>
+      </TouchableOpacity>
       {isOffline ? (
         <Text
           accessibilityRole="text"

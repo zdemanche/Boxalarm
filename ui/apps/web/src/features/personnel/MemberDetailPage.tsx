@@ -1,22 +1,45 @@
+import { FormEvent, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useParams } from 'react-router-dom';
 import { useAuth } from '../../auth/AuthContext';
 import { ApiForbiddenGate } from '../../components/ApiForbiddenGate';
+import { issueMemberPpe, listMemberPpe } from '../inventory/api';
+import type { IssuePpeInput } from '../inventory/types';
 import { getMember, updateMemberStatus } from './api';
 import type { MemberStatus } from './types';
 
 const STATUSES: MemberStatus[] = ['PROBATIONARY', 'ACTIVE', 'LOA', 'RETIRED'];
+const today = () => new Date().toISOString().slice(0, 10);
+const emptyPpeForm: IssuePpeInput = { itemType: '', size: '', issueDate: today() };
 
 export function MemberDetailPage() {
   const { id = '' } = useParams();
   const auth = useAuth();
   const queryClient = useQueryClient();
   const isAdmin = auth.roles.includes('ADMIN');
+  const [ppeForm, setPpeForm] = useState<IssuePpeInput>(emptyPpeForm);
+  const [ppeFormError, setPpeFormError] = useState<string | null>(null);
 
   const memberQuery = useQuery({
     queryKey: ['personnel', 'members', id],
     queryFn: () => getMember(auth, id),
     enabled: Boolean(id),
+  });
+
+  const ppeQuery = useQuery({
+    queryKey: ['inventory', 'ppe', id],
+    queryFn: () => listMemberPpe(auth, id),
+    enabled: Boolean(id),
+  });
+
+  const issuePpeMutation = useMutation({
+    mutationFn: (input: IssuePpeInput) => issueMemberPpe(auth, id, input),
+    onSuccess: async () => {
+      setPpeForm(emptyPpeForm);
+      setPpeFormError(null);
+      await queryClient.invalidateQueries({ queryKey: ['inventory', 'ppe', id] });
+    },
+    onError: (error: Error) => setPpeFormError(error.message),
   });
 
   const statusMutation = useMutation({
@@ -94,6 +117,88 @@ export function MemberDetailPage() {
             <ApiForbiddenGate error={statusMutation.error} embedded>
               <p role="alert">{statusMutation.error.message}</p>
             </ApiForbiddenGate>
+          ) : null}
+
+          <h2
+            style={{
+              fontSize: 'var(--boxalarm-font-size-lg)',
+              marginTop: 'var(--boxalarm-spacing-xl)',
+            }}
+          >
+            PPE
+          </h2>
+          {ppeQuery.isLoading ? (
+            <p>Loading PPE…</p>
+          ) : (ppeQuery.data ?? []).length === 0 ? (
+            <p>No PPE issued.</p>
+          ) : (
+            <ul>
+              {(ppeQuery.data ?? []).map((item) => (
+                <li key={item.ppeItemId}>
+                  {item.itemType} · size {item.size} · expires {item.nfpaExpiryDate} ·{' '}
+                  <strong
+                    style={
+                      item.status === 'EXPIRED' ? { color: 'var(--boxalarm-error)' } : undefined
+                    }
+                  >
+                    {item.status === 'EXPIRED' ? 'EXPIRED' : item.status}
+                  </strong>
+                </li>
+              ))}
+            </ul>
+          )}
+
+          {isAdmin ? (
+            <form
+              aria-label="Issue PPE"
+              onSubmit={(event: FormEvent) => {
+                event.preventDefault();
+                issuePpeMutation.mutate(ppeForm);
+              }}
+              style={{
+                marginTop: 'var(--boxalarm-spacing-lg)',
+                display: 'grid',
+                gap: 'var(--boxalarm-spacing-md)',
+                maxWidth: 480,
+              }}
+            >
+              <label style={{ display: 'grid', gap: 4 }}>
+                Item type
+                <input
+                  value={ppeForm.itemType}
+                  required
+                  onChange={(e) => setPpeForm((prev) => ({ ...prev, itemType: e.target.value }))}
+                  style={{ minHeight: 44, padding: '0 12px' }}
+                />
+              </label>
+              <label style={{ display: 'grid', gap: 4 }}>
+                Size
+                <input
+                  value={ppeForm.size}
+                  required
+                  onChange={(e) => setPpeForm((prev) => ({ ...prev, size: e.target.value }))}
+                  style={{ minHeight: 44, padding: '0 12px' }}
+                />
+              </label>
+              <label style={{ display: 'grid', gap: 4 }}>
+                Issue date
+                <input
+                  type="date"
+                  value={ppeForm.issueDate}
+                  required
+                  onChange={(e) => setPpeForm((prev) => ({ ...prev, issueDate: e.target.value }))}
+                  style={{ minHeight: 44, padding: '0 12px' }}
+                />
+              </label>
+              {ppeFormError ? (
+                <p role="alert" aria-live="assertive">
+                  {ppeFormError}
+                </p>
+              ) : null}
+              <button type="submit" style={{ minHeight: 44 }}>
+                Issue PPE
+              </button>
+            </form>
           ) : null}
         </>
       )}

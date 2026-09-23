@@ -87,6 +87,16 @@ export function MeHomeScreen() {
           onPress={() => navigation.navigate('Certifications' as never)}
         />
         <NavRow
+          label="My equipment"
+          tokens={tokens}
+          onPress={() => navigation.navigate('MyEquipment' as never)}
+        />
+        <NavRow
+          label="My PPE"
+          tokens={tokens}
+          onPress={() => navigation.navigate('MyPpe' as never)}
+        />
+        <NavRow
           label="Test my alert path"
           tokens={tokens}
           onPress={() => navigation.navigate('SelfTest' as never)}

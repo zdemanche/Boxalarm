@@ -2,6 +2,7 @@ import { useQuery } from '@tanstack/react-query';
 import { Link, useParams } from 'react-router-dom';
 import { useAuth } from '../../auth/AuthContext';
 import { ApiForbiddenGate } from '../../components/ApiForbiddenGate';
+import { listEquipment } from '../inventory/api';
 import { getApparatus } from './api';
 
 export function ApparatusDetailPage() {
@@ -11,6 +12,12 @@ export function ApparatusDetailPage() {
   const detailQuery = useQuery({
     queryKey: ['apparatus', id],
     queryFn: () => getApparatus(auth, id),
+    enabled: Boolean(id),
+  });
+
+  const equipmentQuery = useQuery({
+    queryKey: ['inventory', 'equipment', 'byApparatus', id],
+    queryFn: () => listEquipment(auth, { assignedToType: 'APPARATUS', assignedToId: id }),
     enabled: Boolean(id),
   });
 
@@ -49,6 +56,28 @@ export function ApparatusDetailPage() {
             <dt>Apparatus ID</dt>
             <dd>{unit.apparatusId}</dd>
           </dl>
+
+          <h2
+            style={{
+              fontSize: 'var(--boxalarm-font-size-lg)',
+              marginTop: 'var(--boxalarm-spacing-xl)',
+            }}
+          >
+            Assigned equipment
+          </h2>
+          {equipmentQuery.isLoading ? (
+            <p>Loading equipment…</p>
+          ) : (equipmentQuery.data ?? []).length === 0 ? (
+            <p>No equipment assigned.</p>
+          ) : (
+            <ul>
+              {(equipmentQuery.data ?? []).map((asset) => (
+                <li key={asset.assetId}>
+                  <Link to={`/inventory/${asset.assetId}`}>{asset.serialNumber}</Link>
+                </li>
+              ))}
+            </ul>
+          )}
         </>
       )}
     </main>
