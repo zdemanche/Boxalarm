@@ -76,15 +76,7 @@ async function getGrantsReport(
       body: JSON.stringify(report),
     };
   } catch (error) {
-    logError({
-      event: 'reporting.grants.get_failed',
-      service: 'reporting-service',
-      reason: error instanceof Error ? error.constructor.name : 'UnknownError',
-      message: error instanceof Error ? error.message : String(error),
-      stack: error instanceof Error ? error.stack : undefined,
-      correlationId: traceId,
-      deptId,
-    });
+    logError('reporting.grants.get_failed', error, { correlationId: traceId, deptId });
     emitOutcomeMetric(METRIC_NAMESPACE, METRIC_NAME, 'Failed');
     return serviceUnavailableProblem(traceId);
   }

@@ -1,15 +1,16 @@
 import pino from 'pino';
 
-const logger = pino({
-  level: process.env.LOG_LEVEL ?? 'info',
-  base: null,
-  timestamp: pino.stdTimeFunctions.isoTime,
-});
+export const logger = pino({ name: 'reporting-service' });
 
-export function logError(fields: Record<string, unknown>): void {
-  logger.error(fields);
-}
-
-export function logInfo(fields: Record<string, unknown>): void {
-  logger.info(fields);
+export function logError(
+  event: string,
+  error: unknown,
+  context: Record<string, unknown> = {},
+): void {
+  logger.error({
+    event,
+    ...context,
+    reason: error instanceof Error ? error.constructor.name : 'UnknownError',
+    message: error instanceof Error ? error.message : undefined,
+  });
 }

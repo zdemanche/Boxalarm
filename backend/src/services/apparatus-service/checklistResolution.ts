@@ -22,7 +22,7 @@ function readString(record: Record<string, unknown> | undefined, key: string): s
   return typeof value === 'string' ? value : undefined;
 }
 
-function apparatusIdFromPartitionKey(partitionKey: string): string | undefined {
+export function apparatusIdFromPartitionKey(partitionKey: string): string | undefined {
   const marker = '#APPARATUS#';
   const index = partitionKey.indexOf(marker);
   return index === -1 ? undefined : partitionKey.slice(index + marker.length);

@@ -1,7 +1,7 @@
 import { QueryCommand, type DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
 import { buildDeptScopedPk, type VerifiedDeptId } from '@boxalarm/dept-scope';
 import type { GrantsReportConfig } from '../client.js';
-import { logError as logErrorFields } from '../logger.js';
+import { logError } from '../logger.js';
 
 const FANOUT_CONCURRENCY = 5;
 
@@ -31,17 +31,6 @@ export interface ApparatusOosRecord {
 export interface ApparatusOosHistory {
   readonly records: readonly ApparatusOosRecord[];
   readonly totalOutOfServiceEvents: number;
-}
-
-function logError(event: string, error: unknown, fields: Record<string, unknown> = {}): void {
-  logErrorFields({
-    event,
-    service: 'reporting-service',
-    reason: error instanceof Error ? error.constructor.name : 'UnknownError',
-    message: error instanceof Error ? error.message : String(error),
-    stack: error instanceof Error ? error.stack : undefined,
-    ...fields,
-  });
 }
 
 async function queryAllPages(

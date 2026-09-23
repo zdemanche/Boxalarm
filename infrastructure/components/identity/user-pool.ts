@@ -2,6 +2,7 @@ import * as path from "path";
 import * as pulumi from "@pulumi/pulumi";
 import * as aws from "@pulumi/aws";
 import { RETENTION_DAYS_BY_ENV } from "../observability/service-log-group";
+import { ACTIVE_TRACING_CONFIG } from "../observability/xray-sampling";
 
 export interface BoxalarmUserPoolArgs {
   env: string;
@@ -96,18 +97,47 @@ export class BoxalarmUserPool extends pulumi.ComponentResource {
             path.join(__dirname, "pre-token-generation-handler.js"),
           ),
         }),
+        // Highest-availability-criticality Lambda in this component — if it fails,
+        // Cognito fails token generation and every sign-in fails. It doesn't go
+        // through the ServiceLambda factory (that would require an identity-service
+        // SERVICES entry, a bigger change), but at minimum matches ServiceLambda's
+        // JSON logging + Active tracing convention rather than being the one
+        // function in the repo with neither.
         loggingConfig: {
-          logFormat: "Text",
+          logFormat: "JSON",
           logGroup: this.functionLogGroup.name,
         },
+        tracingConfig: ACTIVE_TRACING_CONFIG,
       },
       { parent: this, dependsOn: [this.functionLogGroup] },
+    );
+
+    // Scoped by region/account rather than this.userPool.arn, so this permission can
+    // be created independently of (and before) the pool — the pool is given a
+    // dependsOn below. Referencing this.userPool.arn directly would force Pulumi to
+    // create the permission only after the pool exists, leaving a window where the
+    // pool has a V2 pre-token trigger it isn't yet allowed to invoke: any sign-in in
+    // that window fails token generation.
+    const region = aws.getRegionOutput({}, { parent: this });
+    const caller = aws.getCallerIdentityOutput({}, { parent: this });
+    this.invokePermission = new aws.lambda.Permission(
+      `${name}-fn-invoke-permission`,
+      {
+        action: "lambda:InvokeFunction",
+        function: this.preTokenGenerationFunction.name,
+        principal: "cognito-idp.amazonaws.com",
+        sourceArn: pulumi.interpolate`arn:aws:cognito-idp:${region.name}:${caller.accountId}:userpool/*`,
+      },
+      { parent: this },
     );
 
     this.userPool = new aws.cognito.UserPool(
       `${name}-pool`,
       {
         name: `boxalarm-${env}-users`,
+        // Unlike DynamoDB, Cognito has no PITR/restore path — losing this pool means
+        // every firefighter re-enrolls. ACTIVE, not the default INACTIVE.
+        deletionProtection: "ACTIVE",
         // Explicit OFF until MFA is productized — do not rely on Cognito's default.
         mfaConfiguration: "OFF",
         // AC1: dev-vs-prod separation lives at the environment/stack level (one pool
@@ -137,7 +167,11 @@ export class BoxalarmUserPool extends pulumi.ComponentResource {
           },
         },
       },
-      { parent: this },
+      // Pulumi's own accidental-destroy backstop — a stray `pulumi destroy` or a
+      // replace-forcing rename must not be able to take out the pool. dependsOn
+      // enforces that the trigger's invoke permission exists before the pool does,
+      // closing the sign-in-failure window described above.
+      { parent: this, protect: true, dependsOn: [this.invokePermission] },
     );
 
     this.domainName = `boxalarm-${env}`;
@@ -146,17 +180,6 @@ export class BoxalarmUserPool extends pulumi.ComponentResource {
       {
         domain: this.domainName,
         userPoolId: this.userPool.id,
-      },
-      { parent: this },
-    );
-
-    this.invokePermission = new aws.lambda.Permission(
-      `${name}-fn-invoke-permission`,
-      {
-        action: "lambda:InvokeFunction",
-        function: this.preTokenGenerationFunction.name,
-        principal: "cognito-idp.amazonaws.com",
-        sourceArn: this.userPool.arn,
       },
       { parent: this },
     );

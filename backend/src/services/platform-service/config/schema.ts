@@ -193,6 +193,46 @@ function validateChecklistDefaults(value: Record<string, unknown>): FieldError[]
   return errors;
 }
 
+function validateRidingPositions(value: Record<string, unknown>): FieldError[] {
+  const errors: FieldError[] = [];
+  for (const [apparatusType, positions] of Object.entries(value)) {
+    const prefix = apparatusType;
+    if (!Array.isArray(positions)) {
+      errors.push({ field: prefix, message: 'must be an array of riding positions' });
+      continue;
+    }
+    positions.forEach((position, index) => {
+      const positionPrefix = `${prefix}[${index}]`;
+      if (!isPlainObject(position)) {
+        errors.push({ field: positionPrefix, message: 'must be an object' });
+        return;
+      }
+      if (!isNonEmptyString(position.code)) {
+        errors.push({
+          field: `${positionPrefix}.code`,
+          message: 'is required and must be a non-empty string',
+        });
+      }
+      if (!isNonEmptyString(position.label)) {
+        errors.push({
+          field: `${positionPrefix}.label`,
+          message: 'is required and must be a non-empty string',
+        });
+      }
+      if (position.requiredQual !== undefined && !isNonEmptyString(position.requiredQual)) {
+        errors.push({
+          field: `${positionPrefix}.requiredQual`,
+          message: 'must be a non-empty string when provided',
+        });
+      }
+      errors.push(
+        ...unknownFieldErrors(position, ['code', 'label', 'requiredQual'], `${positionPrefix}.`),
+      );
+    });
+  }
+  return errors;
+}
+
 function validateRetention(value: Record<string, unknown>): FieldError[] {
   const errors: FieldError[] = [...unknownFieldErrors(value, ['retentionYears'])];
   if (
@@ -229,5 +269,7 @@ export function validateConfigValue(
       return validateChecklistDefaults(value);
     case 'RETENTION':
       return validateRetention(value);
+    case 'RIDING_POSITIONS':
+      return validateRidingPositions(value);
   }
 }
