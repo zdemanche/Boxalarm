@@ -41,3 +41,33 @@ export function handleApparatusDefectReported(
     }),
   );
 }
+
+export interface InventoryReorderDuePayload {
+  readonly itemId: string;
+  readonly itemName: string;
+  readonly currentQty: number;
+  readonly reorderThreshold: number;
+  readonly deptId: string;
+}
+
+export function handleInventoryReorderDue(
+  payload: InventoryReorderDuePayload,
+  correlationId: string,
+): void {
+  // TODO: E3-S3 — look up quartermaster/admin recipients and enqueue a non-critical notification.
+  console.log(
+    JSON.stringify({
+      event: 'notification.inventory_reorder_due.stub',
+      service: 'notification-service',
+      correlationId,
+      itemId: payload.itemId,
+      itemName: payload.itemName,
+      currentQty: payload.currentQty,
+      reorderThreshold: payload.reorderThreshold,
+      deptId: payload.deptId,
+      channelClass: 'non-critical',
+      message:
+        'Stub only — must use notification-service non-critical channel; do not route via alerting-service',
+    }),
+  );
+}

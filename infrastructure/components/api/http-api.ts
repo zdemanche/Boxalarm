@@ -2,7 +2,8 @@ import * as path from "path";
 import * as pulumi from "@pulumi/pulumi";
 import * as aws from "@pulumi/aws";
 import { ServiceLambda } from "../observability/service-lambda";
-import { ServiceLogGroup } from "../observability/service-log-group";
+import { ServiceLogGroup, RETENTION_DAYS_BY_ENV } from "../observability/service-log-group";
+import { requireEnv } from "../shared/env";
 
 export interface HttpApiArgs {
   env: string;
@@ -13,6 +14,22 @@ export interface HttpApiArgs {
   platformLogGroup: ServiceLogGroup;
   /** Override Cognito issuer; default is https://cognito-idp.{region}.amazonaws.com/{userPoolId}. */
   cognitoIssuer?: pulumi.Input<string>;
+  /**
+   * Stage-level steady-state request rate limit (requests/sec). Every request hits
+   * the authorizer Lambda (authorizerResultTtlInSeconds: 0, never cached) before any
+   * auth check, so an unthrottled stage lets an unauthenticated flood exhaust the
+   * account's shared regional Lambda concurrency pool — which alerting-service also
+   * draws from. Conservative default; later stories may need to tune it.
+   */
+  throttlingRateLimit?: number;
+  /** Stage-level burst capacity (requests). See throttlingRateLimit. */
+  throttlingBurstLimit?: number;
+  /**
+   * Reserved concurrency for the authorizer Lambda, so an unauthenticated request
+   * flood against this Lambda cannot starve concurrency the alerting path needs.
+   * Conservative default; later stories may need to tune it.
+   */
+  authorizerReservedConcurrency?: number;
 }
 
 /**
@@ -26,12 +43,11 @@ export class HttpApi extends pulumi.ComponentResource {
   public readonly authorizerLambda: ServiceLambda;
   public readonly invokePermission: aws.lambda.Permission;
   public readonly stage: aws.apigatewayv2.Stage;
+  public readonly accessLogGroup: aws.cloudwatch.LogGroup;
   public readonly apiEndpoint: pulumi.Output<string>;
 
   constructor(name: string, args: HttpApiArgs, opts?: pulumi.ComponentResourceOptions) {
-    if (typeof args.env !== "string" || args.env.length === 0) {
-      throw new Error(`HttpApi: env is required (received ${JSON.stringify(args.env)})`);
-    }
+    requireEnv("HttpApi", args.env);
 
     super("boxalarm:api:HttpApi", name, {}, opts);
     const { env } = args;
@@ -49,6 +65,9 @@ export class HttpApi extends pulumi.ComponentResource {
       args.cognitoIssuer ??
       pulumi.interpolate`https://cognito-idp.${aws.getRegionOutput({}, { parent: this }).name}.amazonaws.com/${args.userPoolId}`;
     const allowedClientIds = pulumi.all(args.allowedClientIds).apply((ids) => ids.join(","));
+    const throttlingRateLimit = args.throttlingRateLimit ?? 50;
+    const throttlingBurstLimit = args.throttlingBurstLimit ?? 100;
+    const authorizerReservedConcurrency = args.authorizerReservedConcurrency ?? 20;
 
     this.authorizerLambda = new ServiceLambda(
       `${name}-authorizer`,
@@ -68,6 +87,10 @@ export class HttpApi extends pulumi.ComponentResource {
           COGNITO_ISSUER: cognitoIssuer,
           COGNITO_ALLOWED_CLIENT_IDS: allowedClientIds,
         },
+        // Draws from the account's shared regional concurrency pool, which
+        // alerting-service Lambdas also draw from — must not be unbounded on an
+        // unauthenticated, uncached (authorizerResultTtlInSeconds: 0) path.
+        reservedConcurrentExecutions: authorizerReservedConcurrency,
       },
       { parent: this },
     );
@@ -99,14 +122,45 @@ export class HttpApi extends pulumi.ComponentResource {
       { parent: this },
     );
 
+    // With a fail-closed authorizer denying 100% of requests today, operators would
+    // otherwise have zero record of caller activity — no 401 rate, nothing to
+    // correlate against the authorizer's own logs.
+    this.accessLogGroup = new aws.cloudwatch.LogGroup(
+      `${name}-access-logs`,
+      {
+        name: `/aws/apigateway/boxalarm-${env}-http-api-access`,
+        retentionInDays: RETENTION_DAYS_BY_ENV[env],
+      },
+      { parent: this },
+    );
+
     this.stage = new aws.apigatewayv2.Stage(
       `${name}-stage`,
       {
         apiId: this.httpApi.id,
         name: "$default",
         autoDeploy: true,
+        // Every request invokes the authorizer Lambda from an unauthenticated caller
+        // (no caching — authorizerResultTtlInSeconds: 0), so request volume maps 1:1
+        // to Lambda invocations. Without a stage-level cap, a flood against this
+        // public endpoint can drive account concurrency to the ceiling and throttle
+        // alerting-service, which shares the same regional pool.
+        defaultRouteSettings: {
+          throttlingRateLimit,
+          throttlingBurstLimit,
+        },
+        accessLogSettings: {
+          destinationArn: this.accessLogGroup.arn,
+          format: JSON.stringify({
+            requestId: "$context.requestId",
+            status: "$context.status",
+            routeKey: "$context.routeKey",
+            integrationErrorMessage: "$context.integrationErrorMessage",
+            authorizerError: "$context.authorizer.error",
+          }),
+        },
       },
-      { parent: this },
+      { parent: this, dependsOn: [this.accessLogGroup] },
     );
 
     this.apiEndpoint = this.httpApi.apiEndpoint;

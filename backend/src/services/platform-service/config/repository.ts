@@ -18,6 +18,7 @@ export const DEPARTMENT_CONFIG_TYPES = [
   'ALERT_RULES',
   'CHECKLIST_DEFAULTS',
   'RETENTION',
+  'RIDING_POSITIONS',
 ] as const;
 
 export type DepartmentConfigType = (typeof DEPARTMENT_CONFIG_TYPES)[number];
