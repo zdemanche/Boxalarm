@@ -48,9 +48,11 @@ async function queryAttendanceFor(
         TableName: tableName,
         IndexName: 'GSI1',
         KeyConditionExpression: 'gsi1pk = :gsi1pk AND begins_with(gsi1sk, :prefix)',
+        FilterExpression: 'deptId = :deptId',
         ExpressionAttributeValues: {
           ':gsi1pk': `MEMBER#${memberId}`,
           ':prefix': 'ATTENDANCE_RECORD#',
+          ':deptId': deptId,
         },
         ScanIndexForward: true,
       }),

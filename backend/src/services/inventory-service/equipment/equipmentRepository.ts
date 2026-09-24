@@ -88,6 +88,7 @@ async function writeAuditLogEntry(
         gsi3pk: buildDeptScopedPk(deptId, 'AUDIT', 'ENTITY', 'EQUIPMENT_ASSET', assetId),
         gsi3sk: String(ts),
       },
+      ConditionExpression: 'attribute_not_exists(pk) AND attribute_not_exists(sk)',
     }),
   );
 }

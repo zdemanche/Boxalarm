@@ -225,7 +225,13 @@ export function createIncidentRepository(
                   ConditionExpression: 'attribute_not_exists(pk)',
                 },
               },
-              { Put: { TableName: tableName, Item: auditItem } },
+              {
+                Put: {
+                  TableName: tableName,
+                  Item: auditItem,
+                  ConditionExpression: 'attribute_not_exists(pk) AND attribute_not_exists(sk)',
+                },
+              },
               { Put: { TableName: tableName, Item: outboxRecord } },
             ],
           }),

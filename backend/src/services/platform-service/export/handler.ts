@@ -202,6 +202,7 @@ async function handlePost(
                 gsi3pk: buildDeptScopedPk(deptId, 'AUDIT', 'ENTITY', 'EXPORT_JOB', jobId),
                 gsi3sk: ts,
               },
+              ConditionExpression: 'attribute_not_exists(pk) AND attribute_not_exists(sk)',
             },
           },
         ],

@@ -166,6 +166,7 @@ async function writeDisposalAudit(
     new PutCommand({
       TableName: readTableName(),
       Item: item,
+      ConditionExpression: 'attribute_not_exists(pk) AND attribute_not_exists(sk)',
     }),
   );
 }
