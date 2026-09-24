@@ -10,15 +10,20 @@ interface StatusChipProps extends HTMLAttributes<HTMLSpanElement> {
 }
 
 /** Colour + glyph + word, per design.draft.md §2.3 / a11y-spec.draft.md §1.8. Never render a
- * status with colour alone — every call site supplies the word as `children`. */
+ * status with colour alone — every call site supplies the word as `children`.
+ *
+ * Fill/label use the opaque `--bx-chip-fill-*` / `--bx-chip-onfill-*` pairs (a11y-spec.md §1.2),
+ * not the status hue on a translucent tint of itself — a translucent fill's rendered contrast
+ * depends on whatever surface the chip sits on, which measured below AA on Cards and hovered
+ * DataTable rows (MAJOR-6). The opaque pair is a fixed, tested ratio regardless of placement. */
 export function StatusChip({ status, children, className, style, ...rest }: StatusChipProps) {
   const Icon = STATUS_ICON[status];
   return (
     <span
       className={[styles.chip, className].filter(Boolean).join(' ')}
       style={{
-        color: `var(--bx-status-${status})`,
-        background: `color-mix(in srgb, var(--bx-status-${status}) 14%, transparent)`,
+        color: `var(--bx-chip-onfill-${status})`,
+        background: `var(--bx-chip-fill-${status})`,
         ...style,
       }}
       data-status={status}

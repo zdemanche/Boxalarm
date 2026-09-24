@@ -7,6 +7,7 @@ import {
   radiusScale,
   spacing,
   spacingScale,
+  statusChipPalette,
   statusPalette,
   surfacePalette,
   targetSize,
@@ -27,6 +28,13 @@ function typeVars(prefix: string, scale: typeof typeScale) {
 function surfaceVars(theme: 'day' | 'cab') {
   const s = surfacePalette[theme];
   const status = statusPalette[theme];
+  const chip = statusChipPalette[theme];
+  const chipVars = Object.entries(chip)
+    .map(
+      ([role, { fill, onFill }]) =>
+        `  --bx-chip-fill-${role}: ${fill};\n  --bx-chip-onfill-${role}: ${onFill};`,
+    )
+    .join('\n');
   return `  --bx-bg: ${s.bg};
   --bx-surface: ${s.surface};
   --bx-surface-raised: ${s.surfaceRaised};
@@ -45,7 +53,8 @@ function surfaceVars(theme: 'day' | 'cab') {
   --bx-status-caution: ${status.caution};
   --bx-status-ok: ${status.ok};
   --bx-status-info: ${status.info};
-  --bx-status-neutral: ${status.neutral};`;
+  --bx-status-neutral: ${status.neutral};
+${chipVars}`;
 }
 
 // Generated from @boxalarm/design-tokens rather than hand-maintained, so it can never drift out

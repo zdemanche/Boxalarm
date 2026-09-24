@@ -9,6 +9,7 @@ import {
   radiusScale,
   spacing,
   spacingScale,
+  statusChipPalette,
   statusPalette,
   surfacePalette,
   touchTarget,
@@ -181,6 +182,37 @@ describe('statusPalette', () => {
       const roles = statusPalette[name];
       for (const hex of Object.values(roles)) {
         expect(meetsAA(surface, hex, 'normal')).toBe(true);
+      }
+    },
+  );
+});
+
+describe('statusChipPalette', () => {
+  // Regression for MAJOR-6: StatusChip previously drew status-hue text on a
+  // color-mix(status, transparent) background composited over whatever surface it sat on, which
+  // measured as low as 4.14:1 on a hovered DataTable row (day danger) - below the 4.5:1 AA floor
+  // for the chip's 12px/600 label text, despite the "AA by construction" claim. These fills are
+  // fully opaque, chosen from a11y-spec.md §1.2's approved chip table, so label:fill contrast is
+  // fixed and holds no matter what's behind the chip (Card, hovered row, Dialog).
+  test.each(['day', 'cab'] as const)(
+    '%s: every role clears normal-text AA for label on its own (opaque) fill',
+    (name) => {
+      const roles = statusChipPalette[name];
+      for (const { fill, onFill } of Object.values(roles)) {
+        expect(meetsAA(fill, onFill, 'normal')).toBe(true);
+      }
+    },
+  );
+
+  // Chip.tsx draws its 1px border with `currentColor` (== onFill), so the label:fill pair above
+  // also governs the border:fill (non-text, 3:1) contrast - restated here explicitly since it's
+  // the property Chip.tsx actually relies on for the visible boundary.
+  test.each(['day', 'cab'] as const)(
+    '%s: onFill (the chip border colour) clears non-text AA (3:1) against its own fill',
+    (name) => {
+      const roles = statusChipPalette[name];
+      for (const { fill, onFill } of Object.values(roles)) {
+        expect(meetsAA(fill, onFill, 'large')).toBe(true);
       }
     },
   );

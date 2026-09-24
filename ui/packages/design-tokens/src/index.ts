@@ -119,6 +119,37 @@ export type StatusRole = keyof (typeof statusPalette)['day'];
 export type SurfaceColors = Record<keyof (typeof surfacePalette)['day'], string>;
 export type StatusColors = Record<StatusRole, string>;
 
+// Opaque chip fill/label pairs, taken verbatim from a11y-spec.md §1.2's approved chip table
+// (each pair independently clears 7.6:1+ label:fill). `StatusChip` was previously drawing
+// `statusPalette` text on a `color-mix(status 14%, transparent)` background composited over
+// whatever surface it sat on - on the day palette that dropped as low as 4.14:1 on a hovered
+// DataTable row, below the 4.5:1 AA floor, despite the PR's "AA by construction" claim. These
+// fills are fully opaque, so label:fill contrast holds regardless of what's behind the chip;
+// the spec deliberately allows fill-vs-page contrast to be low (1.1-1.8:1) because the chip's
+// boundary is carried by `surfacePalette.border`, never by the fill. a11y-spec's table has one
+// row for "Pending / warn / offline" - both `warning` and `caution` map onto it, since the doc
+// doesn't distinguish a separate caution tier.
+export const statusChipPalette = {
+  cab: {
+    ok: { fill: '#0c3f22', onFill: '#d6f5e2' },
+    danger: { fill: '#7a1109', onFill: '#ffe9e6' },
+    warning: { fill: '#4a3300', onFill: '#ffeec2' },
+    caution: { fill: '#4a3300', onFill: '#ffeec2' },
+    info: { fill: '#0a2c4a', onFill: '#d9ecff' },
+    neutral: { fill: '#26282e', onFill: '#d6d8dd' },
+  },
+  day: {
+    ok: { fill: '#e3f5ea', onFill: '#0b4f26' },
+    danger: { fill: '#fde7e5', onFill: '#8c1a10' },
+    warning: { fill: '#fdf0d5', onFill: '#5a3d00' },
+    caution: { fill: '#fdf0d5', onFill: '#5a3d00' },
+    info: { fill: '#e5efff', onFill: '#0a459f' },
+    neutral: { fill: '#eceef1', onFill: '#33383f' },
+  },
+} as const;
+
+export type StatusChipColors = Record<StatusRole, { fill: string; onFill: string }>;
+
 export const typeScale = {
   display: { size: 28, lineHeight: 34, weight: 700 },
   title: { size: 22, lineHeight: 30, weight: 700 },
