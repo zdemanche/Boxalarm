@@ -1,8 +1,8 @@
 import { palette, spacing, touchTarget, typography } from '@boxalarm/design-tokens';
 import { useEffect, useState } from 'react';
 import { AccessibilityInfo, Text, TouchableOpacity, useColorScheme, View } from 'react-native';
-import { mockSyncRepository } from '../features/sync/mockSyncRepository';
 import type { SyncItem, SyncQueueStatus } from '../features/sync/types';
+import * as syncManager from './syncManager';
 
 function formatRelative(iso: string | null): string {
   if (!iso) return 'never';
@@ -21,23 +21,14 @@ export function SyncStatusBanner() {
   const [status, setStatus] = useState<SyncQueueStatus | null>(null);
   const [dismissed, setDismissed] = useState(false);
 
-  useEffect(() => {
-    let cancelled = false;
-    mockSyncRepository.getStatus().then((result) => {
-      if (!cancelled) setStatus(result);
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+  useEffect(() => syncManager.subscribe(setStatus), []);
 
+  // The retry outcome (synced vs. failed again) only settles once the drain finishes, and the
+  // status re-render above already carries that outcome for every viewer - so this announces
+  // the action taken, not a guessed result, and stays correct whichever way the retry resolves.
   const handleRetry = (item: SyncItem) => {
-    mockSyncRepository.retry(item.id).then((result) => {
-      mockSyncRepository.getStatus().then(setStatus);
-      AccessibilityInfo.announceForAccessibility(
-        result === 'SYNCED' ? `${item.label} synced` : `${item.label} failed to sync again`,
-      );
-    });
+    AccessibilityInfo.announceForAccessibility(`Retrying ${item.label}`);
+    void syncManager.retry(item.id);
   };
 
   if (!status || dismissed) return null;

@@ -1,8 +1,11 @@
 import { touchTarget } from '@boxalarm/design-tokens';
 import { act, fireEvent, render } from '@testing-library/react-native';
 import { AccessibilityInfo } from 'react-native';
+import { launchCamera } from 'react-native-image-picker';
 import { CheckRunnerScreen } from './CheckRunnerScreen';
 import { mockChecksRepository } from '../../features/checks/mockChecksRepository';
+
+const mockLaunchCamera = launchCamera as jest.Mock;
 
 const mockRoute = { params: { apparatusId: 'APP-ENGINE-2' } };
 const mockNavigate = jest.fn();
@@ -106,6 +109,10 @@ test('an item requiring a photo cannot be marked pass or fail until a photo is c
       items: [{ code: 'SCBA', label: 'SCBA units present and charged', requiresPhoto: true }],
     });
 
+  mockLaunchCamera.mockResolvedValueOnce({
+    didCancel: false,
+    assets: [{ uri: 'file:///tmp/scba.jpg', fileName: 'scba.jpg', type: 'image/jpeg' }],
+  });
   const { findByText, findByRole } = await render(<CheckRunnerScreen />);
   await findByText('SCBA units present and charged');
 
@@ -120,6 +127,31 @@ test('an item requiring a photo cannot be marked pass or fail until a photo is c
   expect(await findByRole('button', { name: 'Photo captured' })).toBeTruthy();
   expect((await findByRole('button', { name: 'Pass' })).props.accessibilityState.disabled).toBe(
     false,
+  );
+
+  templateSpy.mockRestore();
+});
+
+test('a camera error surfaces to the crew instead of silently leaving the item ungated', async () => {
+  const templateSpy = jest
+    .spyOn(mockChecksRepository, 'getChecklistTemplate')
+    .mockResolvedValueOnce({
+      templateId: 'CT-PHOTO',
+      name: 'Photo-required check',
+      items: [{ code: 'SCBA', label: 'SCBA units present and charged', requiresPhoto: true }],
+    });
+  mockLaunchCamera.mockResolvedValueOnce({ didCancel: false, errorCode: 'camera_unavailable' });
+
+  const { findByText, findByRole } = await render(<CheckRunnerScreen />);
+  await findByText('SCBA units present and charged');
+
+  await act(async () => {
+    fireEvent.press(await findByRole('button', { name: 'Add photo' }));
+  });
+
+  expect(await findByText('camera_unavailable')).toBeTruthy();
+  expect((await findByRole('button', { name: 'Pass' })).props.accessibilityState.disabled).toBe(
+    true,
   );
 
   templateSpy.mockRestore();

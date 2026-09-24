@@ -13,6 +13,8 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useChecksRepository } from '../../features/checks/apiChecksRepository';
 import type { ChecklistTemplate, ItemResult } from '../../features/checks/types';
 import type { ChecksStackParamList } from '../../navigation/ChecksStack';
+import { useOptionalConnectivity } from '../../sync/ConnectivityContext';
+import { capturePhoto } from '../../sync/photoCapture';
 
 function newIdempotencyKey(): string {
   return `check-${Date.now()}-${Math.random().toString(36).slice(2)}`;
@@ -28,12 +30,27 @@ export function CheckRunnerScreen() {
   const scheme = useColorScheme();
   const tokens = scheme === 'dark' ? palette.cab : palette.day;
   const repository = useChecksRepository();
+  const { isOnline } = useOptionalConnectivity();
   const [template, setTemplate] = useState<ChecklistTemplate | null>(null);
   const [results, setResults] = useState<Record<string, boolean>>({});
   const [photosCaptured, setPhotosCaptured] = useState<Record<string, boolean>>({});
+  const [photoError, setPhotoError] = useState<string | null>(null);
   const [startedAt] = useState(() => Date.now());
   const [idempotencyKey] = useState(newIdempotencyKey);
   const [completed, setCompleted] = useState(false);
+
+  const handleAddPhoto = async (code: string) => {
+    setPhotoError(null);
+    const result = await capturePhoto();
+    if (result.status === 'captured') {
+      setPhotosCaptured((prev) => ({ ...prev, [code]: true }));
+    } else if (result.status === 'error') {
+      // A capture failure must never be silently treated as "no photo needed" - the item stays
+      // gated and the crew is told why, instead of guessing at a blank camera result.
+      setPhotoError(result.message);
+      AccessibilityInfo.announceForAccessibility(`Photo capture failed: ${result.message}`);
+    }
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -63,6 +80,7 @@ export function CheckRunnerScreen() {
       durationSeconds,
       itemResults,
       idempotencyKey,
+      capturedOffline: !isOnline,
     });
     // Optimistic: the local write already happened above; the UI confirms immediately rather
     // than waiting on any promise settling.
@@ -110,6 +128,14 @@ export function CheckRunnerScreen() {
             Report a defect
           </Text>
         </TouchableOpacity>
+        {photoError ? (
+          <Text
+            accessibilityRole="alert"
+            style={{ color: tokens.error, fontSize: typography.size.sm, marginBottom: spacing.md }}
+          >
+            {photoError}
+          </Text>
+        ) : null}
         {template.items.map((item) => {
           const answer = results[item.code];
           const photoCaptured = photosCaptured[item.code] ?? false;
@@ -137,7 +163,7 @@ export function CheckRunnerScreen() {
                 <TouchableOpacity
                   accessibilityRole="button"
                   accessibilityLabel={photoCaptured ? 'Photo captured' : 'Add photo'}
-                  onPress={() => setPhotosCaptured((prev) => ({ ...prev, [item.code]: true }))}
+                  onPress={() => void handleAddPhoto(item.code)}
                   style={{
                     minHeight: touchTarget.baseline.ios,
                     justifyContent: 'center',
