@@ -15,7 +15,7 @@
     "@pulumi/pulumi": "3.261.0"
   },
   "devDependencies": {
-    "@types/node": "26.4.1",
+    "@types/node": "26.6.2",
     "eslint": "10.10.0",
     "eslint-config-prettier": "10.1.8",
     "prettier": "3.9.6",
