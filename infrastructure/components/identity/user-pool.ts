@@ -89,7 +89,7 @@ export class BoxalarmUserPool extends pulumi.ComponentResource {
       `${name}-fn`,
       {
         name: `boxalarm-${env}-identity-pre-token-generation`,
-        runtime: aws.lambda.Runtime.NodeJS20dX,
+        runtime: aws.lambda.Runtime.NodeJS22dX,
         handler: "pre-token-generation-handler.handler",
         role: this.functionRole.arn,
         code: new pulumi.asset.AssetArchive({
