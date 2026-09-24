@@ -35,12 +35,22 @@ export class Retention extends pulumi.ComponentResource {
 
     const caller = aws.getCallerIdentityOutput({}, { parent: this });
 
+    // Tagged rather than granted by fixed ARN below (see CryptoShredArchiveKeysOnly):
+    // the backend shreds the per-item item.kmsKeyId (disposal.ts), so the grant has to
+    // follow whichever keys carry this tag, not two ARNs pinned at synth time. Any
+    // future per-department/per-record archive CMK a later archive-writer Lambda
+    // creates is covered by this grant as long as it carries the same tag — no
+    // companion infra change needed when that writer lands.
+    const CRYPTO_SHRED_TAG_KEY = "boxalarm:crypto-shred";
+    const CRYPTO_SHRED_TAG_VALUE = "true";
+
     this.archivedIncidentCmk = new aws.kms.Key(
       `${name}-archived-incident-cmk`,
       {
         description: `Crypto-shred CMK for boxalarm-${env} archived incident records`,
         enableKeyRotation: true,
         policy: caller.accountId.apply(dynamodbCmkPolicy),
+        tags: { [CRYPTO_SHRED_TAG_KEY]: CRYPTO_SHRED_TAG_VALUE },
       },
       { parent: this },
     );
@@ -51,6 +61,7 @@ export class Retention extends pulumi.ComponentResource {
         description: `Crypto-shred CMK for boxalarm-${env} archived delivery receipts`,
         enableKeyRotation: true,
         policy: caller.accountId.apply(dynamodbCmkPolicy),
+        tags: { [CRYPTO_SHRED_TAG_KEY]: CRYPTO_SHRED_TAG_VALUE },
       },
       { parent: this },
     );
@@ -72,28 +83,47 @@ export class Retention extends pulumi.ComponentResource {
           VERIFIED_PERMISSIONS_POLICY_STORE_ID: args.policyStoreId,
         },
         additionalPolicyStatements: pulumi
-          .all([
-            args.platformTableArn,
-            this.archivedIncidentCmk.arn,
-            this.archivedDeliveryReceiptCmk.arn,
-            args.policyStoreArn,
-          ])
-          .apply(([tableArn, archivedIncidentArn, archivedReceiptArn, policyStoreArn]) => [
+          .all([args.platformTableArn, args.policyStoreArn])
+          .apply(([tableArn, policyStoreArn]) => [
             {
+              // GetItem: runDisposal does a consistent GetItem per candidate before
+              // deleting/shredding it (disposal.ts) — without it every candidate was
+              // refused and disposal did nothing. PutItem: writeDisposalAudit appends
+              // disposal's own AUDIT_LOG_ENTRY row (disposal.ts) — it was previously
+              // ungranted AND explicitly denied by auditMutationDenyStatement below,
+              // so even if GetItem were added, every run would destroy records with
+              // no audit trail. BatchWriteItem is dropped: the code never calls it.
               Sid: "DisposalLobClassAccess" as const,
               Effect: "Allow" as const,
-              Action: ["dynamodb:Query", "dynamodb:DeleteItem", "dynamodb:BatchWriteItem"],
+              Action: [
+                "dynamodb:Query",
+                "dynamodb:GetItem",
+                "dynamodb:PutItem",
+                "dynamodb:DeleteItem",
+              ],
               Resource: tableArn,
             },
             // No incident-table delete grant, and no alerting-table grant at
             // all (DELIVERY_RECEIPT/DISPATCH_ALERT stay unreachable) — the
-            // absence of those statements is the enforcement.
+            // absence of those statements is the enforcement. PutItem above is no
+            // longer blocked by this deny for the AUDIT_LOG_ENTRY insert — see
+            // auditMutationDenyStatement's doc comment in data/platform-table.ts.
             auditMutationDenyStatement(tableArn),
             {
+              // Scoped by tag, not two fixed ARNs: the backend shreds the per-item
+              // item.kmsKeyId (disposal.ts), which may not be either of the two CMKs
+              // this component provisions once a future archive-writer starts minting
+              // per-department/per-record keys. Tag-scoping means this grant covers
+              // any key so tagged without a companion infra change.
               Sid: "CryptoShredArchiveKeysOnly" as const,
               Effect: "Allow" as const,
               Action: ["kms:ScheduleKeyDeletion"],
-              Resource: [archivedIncidentArn, archivedReceiptArn],
+              Resource: "*",
+              Condition: {
+                StringEquals: {
+                  [`aws:ResourceTag/${CRYPTO_SHRED_TAG_KEY}`]: [CRYPTO_SHRED_TAG_VALUE],
+                },
+              },
             },
             verifiedPermissionsPolicyStatement(policyStoreArn),
           ]),
