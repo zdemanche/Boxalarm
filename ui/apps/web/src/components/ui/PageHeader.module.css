@@ -1,0 +1,50 @@
+.header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--bx-space-md);
+  padding-bottom: var(--bx-space-lg);
+  margin-bottom: var(--bx-space-lg);
+  border-bottom: 1px solid var(--bx-border-decorative);
+}
+
+.titleGroup {
+  display: flex;
+  flex-direction: column;
+  gap: var(--bx-space-xs);
+  min-width: 0;
+}
+
+.breadcrumbs {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--bx-fg-muted);
+  margin: 0;
+}
+
+.breadcrumbs a {
+  color: var(--bx-fg-muted);
+  text-decoration: none;
+}
+.breadcrumbs a:hover {
+  color: var(--bx-fg);
+  text-decoration: underline;
+}
+
+.title {
+  margin: 0;
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--bx-fg);
+  letter-spacing: -0.01em;
+}
+
+.actions {
+  display: flex;
+  align-items: center;
+  gap: var(--bx-space-sm);
+  flex-shrink: 0;
+}

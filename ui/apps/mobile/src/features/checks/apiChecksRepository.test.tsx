@@ -24,7 +24,7 @@ const mockConfig = Config as unknown as { API_BASE_URL: string };
 
 const mockAuthValue: AuthContextValue = {
   roles: ['MEMBER'],
-  memberId: 'MBR-TEST',
+  memberId: 'MBR-0001',
   isAuthenticated: true,
   isLoading: false,
   signIn: jest.fn(),
@@ -41,7 +41,7 @@ beforeEach(() => {
 
 test('a re-render with unchanged inputs does not refire the fetch effect (regression for the infinite-loop bug)', async () => {
   mockApiRequest.mockResolvedValue({
-    json: async () => ({ items: [] }),
+    json: async () => ({ apparatus: [] }),
   });
 
   // Mirrors ApparatusPickerScreen's own pattern: useChecksRepository() feeding a

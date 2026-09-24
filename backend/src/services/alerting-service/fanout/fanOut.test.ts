@@ -78,7 +78,7 @@ describe('runFanOut', () => {
     expect(fakeDdb.send).toHaveBeenCalledTimes(2);
     const mbr1Items = fakeDdb.puts.filter((item) => item.memberId === 'mbr-1');
     expect(mbr1Items.map((item) => item.sk)).toEqual(
-      expect.arrayContaining(['RECEIPT#mbr-1#PUSH#1', 'RECEIPT#mbr-1#SMS#1', 'ROSTER#mbr-1']),
+      expect.arrayContaining(['RECEIPT#mbr-1#push#1', 'RECEIPT#mbr-1#sms#1', 'ROSTER#mbr-1']),
     );
     const roster = mbr1Items.find((item) => item.entityType === 'DISPATCH_ROSTER_ENTRY');
     expect(roster).toMatchObject({ ackStatus: 'NONE', currentChannelTier: 'primary' });
@@ -113,7 +113,7 @@ describe('runFanOut', () => {
     vi.mocked(queryEligibleMembers).mockResolvedValue([{ memberId: 'mbr-1', quals: [] } as never]);
     const { runFanOut } = await import('./fanOut.js');
     const fakeDdb = createFakeDdb();
-    fakeDdb.failNextIdempotencyKeys.add('dispatch-1#1#mbr-1#PUSH');
+    fakeDdb.failNextIdempotencyKeys.add('dispatch-1#1#mbr-1#push');
 
     await expect(
       runFanOut(

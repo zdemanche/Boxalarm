@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { IncidentEvent } from './authContext.js';
+import type { CreateIncidentInput } from './entity.js';
 
 function buildEvent(
   lambdaContext: Record<string, unknown> | undefined,
@@ -241,6 +242,92 @@ describe('createIncident handler', () => {
     const result = await handler(buildEvent(ADMIN_AUTH, VALID_BODY), {} as never, () => undefined);
 
     expect(result).toMatchObject({ statusCode: 409 });
+  });
+
+  it('pre-populates from the DISPATCH_ALERT_COPY projection when dispatchId is given (E6-S2 AC1/AC2)', async () => {
+    const createIncident = vi
+      .fn()
+      .mockImplementation((_deptId: string, input: CreateIncidentInput) =>
+        Promise.resolve({
+          incidentId: input.incidentId,
+          sourceDispatchId: input.incidentId,
+          deptId: 'NICHOLS',
+          status: 'DRAFT',
+          ...input,
+        }),
+      );
+    vi.doMock('./repository.js', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('./repository.js')>();
+      return {
+        ...actual,
+        getIncidentRepository: () => ({ createIncident }),
+        getDocumentClient: () => ({}),
+        getTableName: () => 'boxalarm-dev-incident',
+      };
+    });
+    vi.doMock('./dispatchProjection.js', () => ({
+      getDispatchAlertCopy: vi.fn().mockResolvedValue({
+        dispatchId: 'NICHOLS-MANUAL-1798000000-abcd1234',
+        deptId: 'NICHOLS',
+        incidentType: 'STRUCTURE_FIRE',
+        address: '123 Main St',
+        crossStreets: 'Elm & 1st',
+        narrative: 'Smoke showing',
+        dispatchedAt: 1_798_000_000,
+      }),
+      queryIncidentResponseUnits: vi.fn().mockResolvedValue([{ unitId: 'E1' }]),
+      queryRosterCopy: vi.fn().mockResolvedValue([{ memberId: 'MBR-0034' }]),
+    }));
+    vi.doMock('./schemaVersion/repository.js', () => ({
+      createSchemaVersionRepository: () => ({
+        getActiveSchemaVersion: vi.fn().mockResolvedValue({ version: '2026.2' }),
+      }),
+    }));
+    const { handler } = await import('./createIncident.js');
+
+    const result = await handler(
+      buildEvent(ADMIN_AUTH, { dispatchId: 'NICHOLS-MANUAL-1798000000-abcd1234' }),
+      {} as never,
+      () => undefined,
+    );
+
+    expect(result).toMatchObject({ statusCode: 201 });
+    const body = JSON.parse((result as { body: string }).body) as Record<string, unknown>;
+    expect(body).toMatchObject({
+      incidentId: 'NICHOLS-MANUAL-1798000000-abcd1234',
+      incidentType: 'STRUCTURE_FIRE',
+      address: '123 Main St',
+      narrative: 'Smoke showing',
+      nerisSchemaVersion: '2026.2',
+      respondingUnits: [{ unitId: 'E1' }],
+      respondingMembers: [{ memberId: 'MBR-0034' }],
+    });
+    const [, createIncidentInput] = createIncident.mock.calls[0] as [string, CreateIncidentInput];
+    expect(createIncidentInput.incidentId).toBe('NICHOLS-MANUAL-1798000000-abcd1234');
+    expect(createIncidentInput.corePayload).toMatchObject({
+      address: '123 Main St',
+      narrative: 'Smoke showing',
+    });
+    vi.doUnmock('./dispatchProjection.js');
+    vi.doUnmock('./schemaVersion/repository.js');
+  });
+
+  it('returns 404 when no dispatch exists for the given dispatchId (E6-S2 AC3)', async () => {
+    vi.doMock('./dispatchProjection.js', () => ({
+      getDispatchAlertCopy: vi.fn().mockResolvedValue(undefined),
+      queryIncidentResponseUnits: vi.fn(),
+      queryRosterCopy: vi.fn(),
+    }));
+    const { handler } = await import('./createIncident.js');
+
+    const result = await handler(
+      buildEvent(ADMIN_AUTH, { dispatchId: 'NICHOLS-MISSING' }),
+      {} as never,
+      () => undefined,
+    );
+
+    expect(result).toMatchObject({ statusCode: 404 });
+    vi.doUnmock('./dispatchProjection.js');
   });
 
   it('returns 503 when DynamoDB is unavailable', async () => {

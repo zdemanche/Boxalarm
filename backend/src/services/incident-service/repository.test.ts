@@ -1,10 +1,15 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { TransactionCanceledException } from '@aws-sdk/client-dynamodb';
+import {
+  ConditionalCheckFailedException,
+  TransactionCanceledException,
+} from '@aws-sdk/client-dynamodb';
 import type { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
 import { toVerifiedDeptId } from '@boxalarm/dept-scope';
 import {
   DuplicateIncidentError,
+  IncidentNotFoundError,
   InvalidIncidentStatusError,
+  NarrativeTooLongError,
   createIncidentRepository,
   getDocumentClient,
   getTableName,
@@ -252,6 +257,243 @@ describe('createIncidentRepository', () => {
     await expect(
       repository.createIncident(DEPT_ID, BASE_INPUT, 1_798_000_100, TRACE_ID),
     ).rejects.toThrow('DynamoDB unavailable');
+  });
+
+  it('sets incidentId to an explicit override when provided (E6-S2 dispatch-linked creation)', async () => {
+    const send = vi.fn().mockResolvedValue({});
+    const repository = createIncidentRepository(fakeClient(send), TABLE_NAME);
+
+    const result = await repository.createIncident(
+      DEPT_ID,
+      { ...BASE_INPUT, incidentId: 'NICHOLS-MANUAL-1798000000-abcd1234' },
+      1_798_000_100,
+      TRACE_ID,
+    );
+
+    expect(result.incidentId).toBe('NICHOLS-MANUAL-1798000000-abcd1234');
+  });
+
+  it('updates the narrative denormalized field and corePayload.narrative (E6-S4 AC1)', async () => {
+    const send = vi.fn().mockResolvedValue({
+      Attributes: {
+        pk: 'DEPT#NICHOLS#INCIDENT#NICHOLS-4471-1798000000',
+        sk: 'METADATA',
+        incidentId: 'NICHOLS-4471-1798000000',
+        deptId: 'NICHOLS',
+        dispatchNumber: '4471',
+        epochSeconds: 1_798_000_000,
+        nerisSchemaVersion: '2026.2',
+        corePayload: { narrative: 'updated narrative' },
+        narrative: 'updated narrative',
+        status: 'DRAFT',
+        sourceDispatchId: 'NICHOLS-4471-1798000000',
+        createdBy: 'MBR-0034',
+        createdAt: 1,
+        updatedAt: 2,
+      },
+    });
+    const repository = createIncidentRepository(fakeClient(send), TABLE_NAME);
+
+    const result = await repository.updateNarrative(
+      DEPT_ID,
+      'NICHOLS-4471-1798000000',
+      'updated narrative',
+      2,
+    );
+
+    expect(result.narrative).toBe('updated narrative');
+    const [command] = send.mock.calls[0] as [{ input: Record<string, unknown> }];
+    expect(command.input).toMatchObject({
+      Key: { pk: 'DEPT#NICHOLS#INCIDENT#NICHOLS-4471-1798000000', sk: 'METADATA' },
+      ConditionExpression: 'attribute_exists(pk)',
+    });
+  });
+
+  it('rejects a narrative over the max length without writing (E6-S4 AC2)', async () => {
+    const send = vi.fn();
+    const repository = createIncidentRepository(fakeClient(send), TABLE_NAME);
+
+    await expect(
+      repository.updateNarrative(DEPT_ID, 'NICHOLS-4471-1798000000', 'x'.repeat(25_001), 2),
+    ).rejects.toThrow(NarrativeTooLongError);
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it('rejects a narrative update for a nonexistent incident as IncidentNotFoundError', async () => {
+    const send = vi
+      .fn()
+      .mockRejectedValue(
+        new ConditionalCheckFailedException({ message: 'missing', $metadata: {} }),
+      );
+    const repository = createIncidentRepository(fakeClient(send), TABLE_NAME);
+
+    await expect(repository.updateNarrative(DEPT_ID, 'NICHOLS-9999', 'test', 2)).rejects.toThrow(
+      IncidentNotFoundError,
+    );
+  });
+
+  it('replaces corePayload and status on a guided-completion update (E6-S3 AC2)', async () => {
+    const send = vi.fn().mockResolvedValue({
+      Attributes: {
+        pk: 'DEPT#NICHOLS#INCIDENT#NICHOLS-4471-1798000000',
+        sk: 'METADATA',
+        incidentId: 'NICHOLS-4471-1798000000',
+        deptId: 'NICHOLS',
+        dispatchNumber: '4471',
+        epochSeconds: 1_798_000_000,
+        nerisSchemaVersion: '2026.2',
+        corePayload: { incident_type: 'STRUCTURE_FIRE', action_taken: 'EXTINGUISH' },
+        status: 'VALIDATED',
+        sourceDispatchId: 'NICHOLS-4471-1798000000',
+        createdBy: 'MBR-0034',
+        createdAt: 1,
+        updatedAt: 2,
+      },
+    });
+    const repository = createIncidentRepository(fakeClient(send), TABLE_NAME);
+
+    const result = await repository.updateCorePayload(
+      DEPT_ID,
+      'NICHOLS-4471-1798000000',
+      { incident_type: 'STRUCTURE_FIRE', action_taken: 'EXTINGUISH' },
+      'VALIDATED',
+      2,
+    );
+
+    expect(result.status).toBe('VALIDATED');
+    const [command] = send.mock.calls[0] as [{ input: Record<string, unknown> }];
+    expect(command.input).toMatchObject({
+      Key: { pk: 'DEPT#NICHOLS#INCIDENT#NICHOLS-4471-1798000000', sk: 'METADATA' },
+      ConditionExpression: 'attribute_exists(pk)',
+    });
+  });
+
+  it(
+    'syncs the denormalized top-level incidentType/address fields from corePayload so search ' +
+      'summaries stay in sync after guided completion sets incident_type (regression for PR #316 MAJOR finding)',
+    async () => {
+      const send = vi.fn().mockResolvedValue({
+        Attributes: {
+          pk: 'DEPT#NICHOLS#INCIDENT#NICHOLS-4471-1798000000',
+          sk: 'METADATA',
+          incidentId: 'NICHOLS-4471-1798000000',
+          deptId: 'NICHOLS',
+          dispatchNumber: '4471',
+          epochSeconds: 1_798_000_000,
+          nerisSchemaVersion: '2026.2',
+          corePayload: {
+            incident_type: 'STRUCTURE_FIRE',
+            action_taken: 'EXTINGUISH',
+            address: '123 Main St',
+          },
+          incidentType: 'STRUCTURE_FIRE',
+          address: '123 Main St',
+          status: 'VALIDATED',
+          sourceDispatchId: 'NICHOLS-4471-1798000000',
+          createdBy: 'MBR-0034',
+          createdAt: 1,
+          updatedAt: 2,
+        },
+      });
+      const repository = createIncidentRepository(fakeClient(send), TABLE_NAME);
+
+      const result = await repository.updateCorePayload(
+        DEPT_ID,
+        'NICHOLS-4471-1798000000',
+        {
+          incident_type: 'STRUCTURE_FIRE',
+          action_taken: 'EXTINGUISH',
+          address: '123 Main St',
+        },
+        'VALIDATED',
+        2,
+      );
+
+      expect(result.incidentType).toBe('STRUCTURE_FIRE');
+      expect(result.address).toBe('123 Main St');
+      const [command] = send.mock.calls[0] as [
+        {
+          input: {
+            UpdateExpression: string;
+            ExpressionAttributeValues: Record<string, unknown>;
+          };
+        },
+      ];
+      expect(command.input.UpdateExpression).toMatch(/incidentType = :incidentType/);
+      expect(command.input.UpdateExpression).toMatch(/address = :address/);
+      expect(command.input.ExpressionAttributeValues[':incidentType']).toBe('STRUCTURE_FIRE');
+      expect(command.input.ExpressionAttributeValues[':address']).toBe('123 Main St');
+    },
+  );
+
+  it('leaves the denormalized top-level fields untouched when corePayload has no matching keys', async () => {
+    const send = vi.fn().mockResolvedValue({
+      Attributes: {
+        pk: 'DEPT#NICHOLS#INCIDENT#NICHOLS-4471-1798000000',
+        sk: 'METADATA',
+        incidentId: 'NICHOLS-4471-1798000000',
+        deptId: 'NICHOLS',
+        dispatchNumber: '4471',
+        epochSeconds: 1_798_000_000,
+        nerisSchemaVersion: '2026.2',
+        corePayload: { action_taken: 'EXTINGUISH' },
+        status: 'DRAFT',
+        sourceDispatchId: 'NICHOLS-4471-1798000000',
+        createdBy: 'MBR-0034',
+        createdAt: 1,
+        updatedAt: 2,
+      },
+    });
+    const repository = createIncidentRepository(fakeClient(send), TABLE_NAME);
+
+    await repository.updateCorePayload(
+      DEPT_ID,
+      'NICHOLS-4471-1798000000',
+      { action_taken: 'EXTINGUISH' },
+      'DRAFT',
+      2,
+    );
+
+    const [command] = send.mock.calls[0] as [{ input: { UpdateExpression: string } }];
+    expect(command.input.UpdateExpression).not.toMatch(/incidentType/);
+    expect(command.input.UpdateExpression).not.toMatch(/address/);
+  });
+
+  it('rejects updateCorePayload on a nonexistent incident as IncidentNotFoundError', async () => {
+    const send = vi
+      .fn()
+      .mockRejectedValue(
+        new ConditionalCheckFailedException({ message: 'missing', $metadata: {} }),
+      );
+    const repository = createIncidentRepository(fakeClient(send), TABLE_NAME);
+
+    await expect(
+      repository.updateCorePayload(DEPT_ID, 'NICHOLS-9999', {}, 'VALIDATED', 2),
+    ).rejects.toThrow(IncidentNotFoundError);
+  });
+
+  it('searches incidents by alarm-time range via GSI1, ordered by alarm time (E6-S10 AC1)', async () => {
+    const send = vi.fn().mockResolvedValue({
+      Items: [
+        { incidentId: 'A', incidentType: 'STRUCTURE_FIRE', alarmAt: 100, status: 'DRAFT' },
+        { incidentId: 'B', incidentType: 'VEHICLE_FIRE', alarmAt: 200, status: 'VALIDATED' },
+      ],
+    });
+    const repository = createIncidentRepository(fakeClient(send), TABLE_NAME);
+
+    const results = await repository.searchIncidents(DEPT_ID, { fromAlarmAt: 0, toAlarmAt: 300 });
+
+    expect(results.map((incident) => incident.incidentId)).toEqual(['A', 'B']);
+    const [command] = send.mock.calls[0] as [{ input: Record<string, unknown> }];
+    expect(command.input).toMatchObject({
+      TableName: TABLE_NAME,
+      IndexName: 'GSI1',
+      ExpressionAttributeValues: {
+        ':pk': 'DEPT#NICHOLS',
+        ':from': 'INCIDENT#0',
+        ':to': 'INCIDENT#300',
+      },
+    });
   });
 });
 

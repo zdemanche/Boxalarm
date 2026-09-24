@@ -42,20 +42,20 @@ interface StoredTokens {
   idToken: string;
 }
 
-function decodeIdTokenClaims(idToken: string): Record<string, unknown> | null {
+function decodeIdTokenClaims(idToken: string): Record<string, unknown> {
   try {
     const payload = idToken.split('.')[1];
-    if (!payload) return null;
+    if (!payload) return {};
     const normalized = payload.replace(/-/g, '+').replace(/_/g, '/');
     return JSON.parse(atob(normalized)) as Record<string, unknown>;
   } catch {
-    return null;
+    return {};
   }
 }
 
 function decodeRoles(idToken: string): Role[] {
   const claims = decodeIdTokenClaims(idToken);
-  const groups = claims?.['cognito:groups'];
+  const groups = claims['cognito:groups'];
   if (!Array.isArray(groups)) return ['MEMBER'];
   const roles = groups
     .filter((g): g is string => typeof g === 'string')
@@ -65,8 +65,7 @@ function decodeRoles(idToken: string): Role[] {
 }
 
 function decodeMemberId(idToken: string): string | null {
-  const claims = decodeIdTokenClaims(idToken);
-  const sub = claims?.sub;
+  const sub = decodeIdTokenClaims(idToken).sub;
   return typeof sub === 'string' && sub.length > 0 ? sub : null;
 }
 

@@ -1,0 +1,32 @@
+.list {
+  display: flex;
+  gap: var(--bx-space-xs);
+  border-bottom: 1px solid var(--bx-border-decorative);
+}
+
+.trigger {
+  appearance: none;
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  padding: var(--bx-space-sm) var(--bx-space-md);
+  min-height: var(--bx-target-office);
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--bx-fg-muted);
+  cursor: pointer;
+}
+
+.trigger[data-state='active'] {
+  color: var(--bx-fg);
+  border-bottom-color: var(--bx-fg);
+}
+
+.trigger:focus-visible {
+  outline: 3px solid var(--bx-focus);
+  outline-offset: -2px;
+}
+
+.content {
+  padding-top: var(--bx-space-lg);
+}

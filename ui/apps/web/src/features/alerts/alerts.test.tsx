@@ -157,3 +157,74 @@ test('submitting the manual entry form navigates the page to the new dispatch id
 
   await waitFor(() => expect(screen.getByRole('heading', { name: 'MVA' })).toBeTruthy());
 });
+
+test('a failed riding-board seat assignment surfaces an error instead of silently reverting', async () => {
+  server.use(
+    http.get('/api/v1/alerting/dispatches/D-2', () =>
+      HttpResponse.json({
+        dispatchId: 'D-2',
+        incidentType: 'Structure fire',
+        address: '18 Nichols Ave',
+        crossStreets: '',
+        mapLink: null,
+        narrative: '',
+        prePlan: null,
+      }),
+    ),
+    http.get('/api/v1/alerting/dispatches/D-2/roster', () =>
+      HttpResponse.json({
+        members: [
+          {
+            memberId: 'm-1',
+            name: 'Jordan Osei',
+            ackStatus: 'RESPONDING',
+            eta: null,
+            assignedApparatusId: null,
+            quals: ['FF1'],
+            lastAnsweredTone: 1,
+          },
+        ],
+      }),
+    ),
+    http.get('/api/v1/alerting/dispatches/D-2/receipts', () => HttpResponse.json({ receipts: [] })),
+    http.get('/api/v1/apparatus/riding-board/D-2', () =>
+      HttpResponse.json({
+        dispatchId: 'D-2',
+        apparatus: [
+          {
+            apparatusId: 'a-301',
+            unitId: 'Engine 301',
+            type: 'Engine',
+            status: 'IN_SERVICE',
+            assignable: true,
+            positions: [{ code: 'OFF', label: 'Officer' }],
+          },
+        ],
+      }),
+    ),
+    http.post('/api/v1/apparatus/riding-board/D-2/assign', () =>
+      HttpResponse.json(
+        {
+          type: 'about:blank',
+          title: 'Conflict',
+          status: 409,
+          detail: 'This seat was already assigned.',
+          traceId: 'trace-409',
+        },
+        { status: 409 },
+      ),
+    ),
+  );
+
+  const user = userEvent.setup();
+  renderPage(['OFFICER'], '/alerts/roster?dispatchId=D-2');
+
+  const select = await screen.findByLabelText(/officer/i);
+  await user.selectOptions(select, 'm-1');
+
+  expect(
+    await screen.findByText(
+      'This seat was changed by another officer. The board has been refreshed.',
+    ),
+  ).toBeTruthy();
+});

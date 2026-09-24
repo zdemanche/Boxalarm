@@ -140,6 +140,28 @@ test('admin can change status on detail without full reload; non-admin has no co
   expect(screen.queryByLabelText('Member status')).toBeNull();
 });
 
+test('CHIEF can issue PPE, consistent with inspections write-access (MAJOR-3)', async () => {
+  const member: Member = {
+    memberId: 'm1',
+    firstName: 'Sam',
+    lastName: 'Lee',
+    email: 'sam@example.com',
+    phone: '203-555-0199',
+    status: 'ACTIVE',
+    joinDate: '2020-01-01',
+    rank: 'Lt',
+    agencyId: 'NFD-1',
+  };
+  server.use(
+    http.get('/api/v1/personnel/members/m1', () => HttpResponse.json(member)),
+    http.get('/api/v1/inventory/ppe/m1', () => HttpResponse.json([])),
+  );
+
+  renderPersonnel(['CHIEF'], '/personnel/m1');
+  await screen.findByRole('heading', { name: 'Sam Lee' });
+  expect(screen.getByRole('form', { name: 'Issue PPE' })).toBeTruthy();
+});
+
 test('APPARATUS cannot open /personnel under §7.1 RequireRole', async () => {
   renderPersonnel(['APPARATUS']);
   await screen.findByRole('heading', { name: 'Forbidden' });

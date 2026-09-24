@@ -94,6 +94,11 @@ async function handleGetAlertDetail(
         narrative: item.narrative,
         eligibleMemberCount: item.eligibleMemberCount ?? null,
         fanOutStartedAt: item.fanOutStartedAt ?? null,
+        toneLadder: {
+          status: item.toneLadderStatus ?? 'ACTIVE',
+          currentToneSequence: item.currentToneSequence ?? 1,
+          nextToneAt: item.nextToneAt ?? null,
+        },
         prePlan,
       }),
     };
