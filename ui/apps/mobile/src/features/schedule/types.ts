@@ -32,7 +32,11 @@ export interface ScheduleRepository {
   // caller that may retry the same claim intent (e.g. ShiftDetailScreen's offline-queue reconnect
   // resubmit) must generate it once, up front, and pass the same value on every retry - a value
   // regenerated per attempt cannot function as an idempotency key across retries.
-  claimPosition(shiftId: string, positionCode: string, idempotencyKey?: string): Promise<ClaimResult>;
+  claimPosition(
+    shiftId: string,
+    positionCode: string,
+    idempotencyKey?: string,
+  ): Promise<ClaimResult>;
   markUnavailable(startAt: string, endAt: string, reason?: string): Promise<void>;
   // F2.11: give-back and swap. Optional so the original two-method mock (still exercised by
   // ShiftBoardScreen/AvailabilityScreen tests) needs no change to keep satisfying this interface.

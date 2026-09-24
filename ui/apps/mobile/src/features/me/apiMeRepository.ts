@@ -57,12 +57,16 @@ export function useMeRepository(): MeRepository {
               apiBaseUrl,
             })
           ).json()) as MemberProfile);
-        const response = await apiRequest(`personnel/members/${encodeURIComponent(memberId)}`, tokens, {
-          apiBaseUrl,
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(update),
-        });
+        const response = await apiRequest(
+          `personnel/members/${encodeURIComponent(memberId)}`,
+          tokens,
+          {
+            apiBaseUrl,
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(update),
+          },
+        );
         const echoed = (await response.json()) as Partial<MemberProfile>;
         const merged: MemberProfile = { ...base, ...update, ...echoed };
         cachedProfile = merged;
