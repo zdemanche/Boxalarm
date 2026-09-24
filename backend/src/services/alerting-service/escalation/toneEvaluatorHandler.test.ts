@@ -268,7 +268,7 @@ describe('toneEvaluatorHandler', () => {
     );
   });
 
-  it('does not let one failing member block or fail the rest of the roster (MAJOR #2 regression)', async () => {
+  it('throws and does not advance tone state when a member publish fails (MAJOR #2 regression)', async () => {
     const failingMember: FakeItem = {
       pk: ELIGIBILITY_PK,
       sk: 'MEMBER#mbr-fail',
@@ -290,13 +290,17 @@ describe('toneEvaluatorHandler', () => {
     vi.mocked(createSnsClient).mockReturnValue(sns as never);
 
     const { handler } = await import('./toneEvaluatorHandler.js');
-    const result = await handler({ deptId: 'NICHOLS', dispatchId: 'dispatch-1', toneSequence: 2 });
 
-    // The whole batch must not throw or abort just because mbr-fail's receipt write failed.
-    expect(result).toEqual({ outcome: 'FIRED' });
-    // mbr-1's receipt still gets written and published despite mbr-fail's concurrent failure.
+    await expect(
+      handler({ deptId: 'NICHOLS', dispatchId: 'dispatch-1', toneSequence: 2 }),
+    ).rejects.toThrow('ddb unavailable');
+
+    // mbr-1's receipt still gets attempted concurrently despite mbr-fail's failure.
     expect(items.get(`${PK}#RECEIPT#mbr-1#push#2`)).toBeDefined();
     expect(items.get(`${PK}#RECEIPT#mbr-fail#push#2`)).toBeUndefined();
+    // The tone must not be marked fired/advanced when a member's page failed to send.
+    expect(items.get(`${PK}#METADATA`)?.currentToneSequence).toBe(1);
+    expect(items.get(`${PK}#METADATA`)?.toneLadderStatus).toBe('ACTIVE');
   });
 
   it('does not evaluate a manually halted dispatch', async () => {

@@ -95,20 +95,27 @@ describe("Retention", () => {
     // Tag-scoped rather than pinned to the two CMKs provisioned here: the backend
     // shreds the per-item item.kmsKeyId, which a future archive-writer may mint
     // outside this component — tag scoping covers those keys without a companion
-    // infra change, as long as they carry the same tag.
+    // infra change, as long as they carry the same tag. Also scoped by env so one
+    // env's disposal role can't schedule deletion of another env's CMKs — all stacks
+    // share one account.
     expect(shred?.Condition).toEqual({
-      StringEquals: { "aws:ResourceTag/boxalarm:crypto-shred": ["true"] },
+      StringEquals: {
+        "aws:ResourceTag/boxalarm:crypto-shred": ["true"],
+        "aws:ResourceTag/boxalarm:env": ["dev"],
+      },
     });
   });
 
-  it("tags both archive CMKs with the crypto-shred tag the disposal role's grant is scoped by", async () => {
+  it("tags both archive CMKs with the crypto-shred tag and env the disposal role's grant is scoped by", async () => {
     const retention = await build();
     const [incidentTags, receiptTags] = await Promise.all([
       resolve(retention.archivedIncidentCmk.tags),
       resolve(retention.archivedDeliveryReceiptCmk.tags),
     ]);
     expect(incidentTags?.["boxalarm:crypto-shred"]).toBe("true");
+    expect(incidentTags?.["boxalarm:env"]).toBe("dev");
     expect(receiptTags?.["boxalarm:crypto-shred"]).toBe("true");
+    expect(receiptTags?.["boxalarm:env"]).toBe("dev");
   });
 
   it("grants no alerting-table permission and no incident-table delete (AC4)", async () => {
