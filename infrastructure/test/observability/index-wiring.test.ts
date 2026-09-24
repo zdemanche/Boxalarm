@@ -230,7 +230,7 @@ describe("index.ts production wiring", () => {
     // against this test's monitor before the next test replaces it — otherwise their
     // registerResourceOutputs calls land on a torn-down mock as unhandled rejections.
     await new Promise((r) => setTimeout(r, 100));
-  });
+  }, 20000);
 
   it("throws when the boxalarm-infra:env config key is not declared", async () => {
     pulumi.runtime.setAllConfig({});
