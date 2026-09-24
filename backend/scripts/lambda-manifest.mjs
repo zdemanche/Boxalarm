@@ -68,6 +68,111 @@ export const LAMBDA_ENTRIES = [
     entry: 'src/services/personnel-service/members/updateStatus.ts',
   },
   {
+    service: 'personnel-service',
+    function: 'members-update-profile',
+    entry: 'src/services/personnel-service/members/updateMember.ts',
+  },
+  {
+    service: 'personnel-service',
+    function: 'quals',
+    entry: 'src/services/personnel-service/quals/handler.ts',
+  },
+  {
+    service: 'personnel-service',
+    function: 'attendance-record',
+    entry: 'src/services/personnel-service/attendance/handler.ts',
+  },
+  {
+    service: 'personnel-service',
+    function: 'attendance-query',
+    entry: 'src/services/personnel-service/attendance/queryHandler.ts',
+  },
+  {
+    service: 'personnel-service',
+    function: 'availability-create',
+    entry: 'src/services/personnel-service/availability/handler.ts',
+  },
+  {
+    service: 'personnel-service',
+    function: 'availability-expiry',
+    entry: 'src/services/personnel-service/availability/expiryHandler.ts',
+  },
+  {
+    service: 'personnel-service',
+    function: 'losap-get-member-total',
+    entry: 'src/services/personnel-service/losap/getMemberLosap.ts',
+  },
+  {
+    service: 'personnel-service',
+    function: 'losap-update-rules',
+    entry: 'src/services/personnel-service/losap/updateRules.ts',
+  },
+  {
+    service: 'personnel-service',
+    function: 'losap-year-end-report',
+    entry: 'src/services/personnel-service/losap/yearEndReport.ts',
+  },
+  {
+    service: 'personnel-service',
+    function: 'shifts',
+    entry: 'src/services/personnel-service/shifts/handler.ts',
+  },
+  {
+    service: 'training-service',
+    function: 'certifications-create',
+    entry: 'src/services/training-service/certifications/create.ts',
+  },
+  {
+    service: 'training-service',
+    function: 'certifications-list',
+    entry: 'src/services/training-service/certifications/list.ts',
+  },
+  {
+    service: 'training-service',
+    function: 'certifications-revoke',
+    entry: 'src/services/training-service/certifications/revoke.ts',
+  },
+  {
+    service: 'training-service',
+    function: 'certifications-expiring',
+    entry: 'src/services/training-service/certifications/expiring.ts',
+  },
+  {
+    service: 'training-service',
+    function: 'certification-expiry-scanner',
+    entry: 'src/services/training-service/certificationExpiryScanner/handler.ts',
+  },
+  {
+    service: 'training-service',
+    function: 'events-create',
+    entry: 'src/services/training-service/createEventHandler.ts',
+  },
+  {
+    service: 'training-service',
+    function: 'events-list',
+    entry: 'src/services/training-service/listEventsHandler.ts',
+  },
+  {
+    service: 'training-service',
+    function: 'events-signup',
+    entry: 'src/services/training-service/signupHandler.ts',
+  },
+  {
+    service: 'training-service',
+    function: 'hours',
+    entry: 'src/services/training-service/hoursHandler.ts',
+  },
+  {
+    service: 'training-service',
+    function: 'reports-iso',
+    entry: 'src/services/training-service/reports/iso.ts',
+  },
+  {
+    service: 'training-service',
+    function: 'transcript-get',
+    entry: 'src/services/training-service/transcript/get.ts',
+  },
+  {
     service: 'incident-service',
     function: 'create',
     entry: 'src/services/incident-service/createIncident.ts',

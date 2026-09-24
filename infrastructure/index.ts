@@ -22,6 +22,16 @@ import { OutboxPublisher } from "./components/messaging/outbox-publisher";
 import { SessionRevocation } from "./components/identity/session-revocation";
 import { RecoveryMonitor } from "./components/identity/recovery-monitor";
 import { Members } from "./components/personnel/members";
+import { Quals } from "./components/personnel/quals";
+import { Attendance } from "./components/personnel/attendance";
+import { Availability } from "./components/personnel/availability";
+import { Losap } from "./components/personnel/losap";
+import { Shifts } from "./components/personnel/shifts";
+import { Certifications } from "./components/training/certifications";
+import { Events as TrainingEvents } from "./components/training/events";
+import { Hours as TrainingHours } from "./components/training/hours";
+import { Reports as TrainingReports } from "./components/training/reports";
+import { Transcript as TrainingTranscript } from "./components/training/transcript";
 import { Config as PlatformConfig } from "./components/platform/config";
 import { AuditRoute } from "./components/platform/audit-route";
 import { Export } from "./components/platform/export";
@@ -47,6 +57,11 @@ export const stack = getStack();
 const config = new Config("boxalarm-infra");
 export const env = config.require("env");
 export const webOrigin = config.require("webOrigin");
+// Single-tenant today (Nichols FD) — {deptId} is in every partition key so a second
+// department is additive later, not a rewrite (CLAUDE.md). The cert-expiry scanner
+// (E3-S3/S8-INFRA) has no HTTP caller to read deptId from a verified JWT, so it is
+// configured per stack instead.
+export const deptId = config.require("deptId");
 // Not yet published: the offline pipeline that normalizes the upstream
 // neris-framework XLSX/YAML feed into the JSON shape schemaVersion/
 // refreshScanner/handler.ts fetches doesn't have a URL yet (E6-S11-INFRA
@@ -188,6 +203,117 @@ export const personnelMembers = new Members("personnel-members", {
   httpApi,
 });
 
+// E2-S2 through E2-S11-INFRA (#204-#213): personnel domain routes beyond the roster CRUD
+// E2-S1-INFRA already wired above — all share the platform table (no dedicated
+// personnel table exists) and the shared policy store.
+export const personnelQuals = new Quals("personnel-quals", {
+  env,
+  platformTableName: platformTable.tableName,
+  platformTableArn: platformTable.tableArn,
+  policyStoreArn: policyStore.policyStoreArn,
+  policyStoreId: policyStore.policyStoreId,
+  logGroup: personnelLogGroup,
+  httpApi,
+});
+
+export const personnelAttendance = new Attendance("personnel-attendance", {
+  env,
+  platformTableName: platformTable.tableName,
+  platformTableArn: platformTable.tableArn,
+  policyStoreArn: policyStore.policyStoreArn,
+  policyStoreId: policyStore.policyStoreId,
+  logGroup: personnelLogGroup,
+  httpApi,
+});
+
+export const personnelAvailability = new Availability("personnel-availability", {
+  env,
+  platformTableName: platformTable.tableName,
+  platformTableArn: platformTable.tableArn,
+  policyStoreArn: policyStore.policyStoreArn,
+  policyStoreId: policyStore.policyStoreId,
+  logGroup: personnelLogGroup,
+  httpApi,
+});
+
+export const personnelLosap = new Losap("personnel-losap", {
+  env,
+  platformTableName: platformTable.tableName,
+  platformTableArn: platformTable.tableArn,
+  policyStoreArn: policyStore.policyStoreArn,
+  policyStoreId: policyStore.policyStoreId,
+  logGroup: personnelLogGroup,
+  httpApi,
+});
+
+export const personnelShifts = new Shifts("personnel-shifts", {
+  env,
+  platformTableName: platformTable.tableName,
+  platformTableArn: platformTable.tableArn,
+  policyStoreArn: policyStore.policyStoreArn,
+  policyStoreId: policyStore.policyStoreId,
+  logGroup: personnelLogGroup,
+  httpApi,
+});
+
+// E3-S1 through E3-S8-INFRA (#214-#221): training domain — certifications (with
+// attachments and the expiry scanner), events, hours, ISO reporting, transcript. All
+// share the platform table; the training-service log group already exists (services.ts).
+const trainingLogGroup = serviceLogGroupByName["training-service"];
+
+export const trainingCertifications = new Certifications("training-certifications", {
+  env,
+  deptId,
+  platformTableName: platformTable.tableName,
+  platformTableArn: platformTable.tableArn,
+  policyStoreArn: policyStore.policyStoreArn,
+  policyStoreId: policyStore.policyStoreId,
+  platformBusName: platformBus.busName,
+  platformBusArn: platformBus.busArn,
+  logGroup: trainingLogGroup,
+  httpApi,
+});
+
+export const trainingEvents = new TrainingEvents("training-events", {
+  env,
+  platformTableName: platformTable.tableName,
+  platformTableArn: platformTable.tableArn,
+  policyStoreArn: policyStore.policyStoreArn,
+  policyStoreId: policyStore.policyStoreId,
+  logGroup: trainingLogGroup,
+  httpApi,
+});
+
+export const trainingHours = new TrainingHours("training-hours", {
+  env,
+  platformTableName: platformTable.tableName,
+  platformTableArn: platformTable.tableArn,
+  policyStoreArn: policyStore.policyStoreArn,
+  policyStoreId: policyStore.policyStoreId,
+  logGroup: trainingLogGroup,
+  httpApi,
+});
+
+export const trainingReports = new TrainingReports("training-reports", {
+  env,
+  platformTableName: platformTable.tableName,
+  platformTableArn: platformTable.tableArn,
+  policyStoreArn: policyStore.policyStoreArn,
+  policyStoreId: policyStore.policyStoreId,
+  logGroup: trainingLogGroup,
+  httpApi,
+});
+
+export const trainingTranscript = new TrainingTranscript("training-transcript", {
+  env,
+  platformTableName: platformTable.tableName,
+  platformTableArn: platformTable.tableArn,
+  policyStoreArn: policyStore.policyStoreArn,
+  policyStoreId: policyStore.policyStoreId,
+  logGroup: trainingLogGroup,
+  httpApi,
+});
+
 export const platformConfig = new PlatformConfig("platform-config", {
   env,
   platformTableName: platformTable.tableName,
@@ -269,8 +395,6 @@ export const incident = new Incident("incident", {
   logGroup: incidentServiceLogGroup,
   httpApi,
 });
-
-export const deptId = config.require("deptId");
 
 // E1-S13-INFRA #38: alerting isolation as an enforced IAM boundary, attached to every
 // alerting-service role below.

@@ -34,6 +34,41 @@ export const ADMIN_ONLY_GROUPS = ["CHIEF", "ADMIN"] as const;
 
 export const VIEW_ACTIONS = ["ViewConfig"] as const;
 
+// E2/E3-INFRA (#204-#221): every action below is what withAuthorization's callers in
+// backend/src/services/{personnel,training}-service actually send (grepped, same rule as
+// above) — including quals/handler.ts, certifications/*.ts, transcript/get.ts and
+// reports/iso.ts, whose actionType/resourceType literals ('PersonnelService', 'Training',
+// 'Member', 'TrainingReport') were normalized to the Boxalarm::Action / Boxalarm::<Type>
+// convention every other route uses, so one schema can express a policy for all of them —
+// Verified Permissions treats actionType/resourceType as the literal, unqualified entity
+// type name, and there is no way to grant an action whose type isn't declared here.
+export const SELF_SERVICE_ACTIONS = [
+  "RecordAttendance",
+  "ViewOwnAttendance",
+  "MarkAvailability",
+  "ViewOwnLosapTotal",
+  "GetQuals",
+  "ViewTranscript",
+  "ViewCertifications",
+  "ViewTrainingHours",
+] as const;
+
+export const OFFICER_TIER_ACTIONS = [
+  "RecordAttendanceOnBehalf",
+  "ViewAttendanceOnBehalf",
+  "ApproveShiftSwap",
+  "ListPendingShiftSwaps",
+  "CreateTrainingEvent",
+  "RecordTrainingAttendance",
+  "UpdateQuals",
+  "CreateCertification",
+  "RevokeCertification",
+  "ViewExpiringCertifications",
+  "ViewIsoTrainingReport",
+  "ViewRosterTrainingHours",
+] as const;
+export const OFFICER_TIER_GROUPS = ["OFFICER", "TRAINING", "CHIEF", "ADMIN"] as const;
+
 // Department-scoping is NOT expressed here as a `when` clause comparing
 // principal/resource attributes. Two things rule that out for every action above:
 //   1. @boxalarm/authz's isAuthorized() calls IsAuthorizedWithTokenCommand with the
@@ -61,6 +96,9 @@ export const CEDAR_SCHEMA = JSON.stringify({
       // Resource types actually sent as resourceType by withAuthorization callers.
       Department: {},
       Member: {},
+      ShiftSwapRequest: {},
+      TrainingEvent: {},
+      TrainingReport: {},
     },
     actions: {
       ViewConfig: { appliesTo: { principalTypes: ["User"], resourceTypes: ["Department"] } },
@@ -77,6 +115,48 @@ export const CEDAR_SCHEMA = JSON.stringify({
       },
       UpdateMember: { appliesTo: { principalTypes: ["User"], resourceTypes: ["Member"] } },
       RevokeSession: { appliesTo: { principalTypes: ["User"], resourceTypes: ["Member"] } },
+      RecordAttendance: { appliesTo: { principalTypes: ["User"], resourceTypes: ["Member"] } },
+      RecordAttendanceOnBehalf: {
+        appliesTo: { principalTypes: ["User"], resourceTypes: ["Member"] },
+      },
+      ViewOwnAttendance: { appliesTo: { principalTypes: ["User"], resourceTypes: ["Member"] } },
+      ViewAttendanceOnBehalf: {
+        appliesTo: { principalTypes: ["User"], resourceTypes: ["Member"] },
+      },
+      MarkAvailability: { appliesTo: { principalTypes: ["User"], resourceTypes: ["Member"] } },
+      ViewOwnLosapTotal: { appliesTo: { principalTypes: ["User"], resourceTypes: ["Member"] } },
+      GetQuals: { appliesTo: { principalTypes: ["User"], resourceTypes: ["Member"] } },
+      UpdateQuals: { appliesTo: { principalTypes: ["User"], resourceTypes: ["Member"] } },
+      ViewTranscript: { appliesTo: { principalTypes: ["User"], resourceTypes: ["Member"] } },
+      ViewCertifications: { appliesTo: { principalTypes: ["User"], resourceTypes: ["Member"] } },
+      CreateCertification: {
+        appliesTo: { principalTypes: ["User"], resourceTypes: ["Member"] },
+      },
+      RevokeCertification: {
+        appliesTo: { principalTypes: ["User"], resourceTypes: ["Member"] },
+      },
+      ViewExpiringCertifications: {
+        appliesTo: { principalTypes: ["User"], resourceTypes: ["Department"] },
+      },
+      ViewIsoTrainingReport: {
+        appliesTo: { principalTypes: ["User"], resourceTypes: ["TrainingReport"] },
+      },
+      ViewTrainingHours: { appliesTo: { principalTypes: ["User"], resourceTypes: ["Member"] } },
+      ViewRosterTrainingHours: {
+        appliesTo: { principalTypes: ["User"], resourceTypes: ["Department"] },
+      },
+      CreateTrainingEvent: {
+        appliesTo: { principalTypes: ["User"], resourceTypes: ["Department"] },
+      },
+      RecordTrainingAttendance: {
+        appliesTo: { principalTypes: ["User"], resourceTypes: ["TrainingEvent"] },
+      },
+      ApproveShiftSwap: {
+        appliesTo: { principalTypes: ["User"], resourceTypes: ["ShiftSwapRequest"] },
+      },
+      ListPendingShiftSwaps: {
+        appliesTo: { principalTypes: ["User"], resourceTypes: ["Department"] },
+      },
     },
   },
 });
@@ -112,5 +192,28 @@ export function viewConfigPolicy(userPoolId: string): string {
     (g) => `principal in Boxalarm::UserGroup::"${groupEntityId(userPoolId, g)}"`,
   ).join(" || ");
   const actions = VIEW_ACTIONS.map((a) => `Boxalarm::Action::"${a}"`).join(", ");
+  return `permit (\n  principal,\n  action in [${actions}],\n  resource\n) when {\n  ${groupCheck}\n};`;
+}
+
+/**
+ * Own-record personnel/training actions (E2/E3-INFRA): every resourceId(event) call site
+ * for these actions passes the caller's own principal.sub (attendance/availability/losap)
+ * or a memberId the caller supplied for themself (quals/certifications/transcript/hours) —
+ * open to every role rather than gated by group.
+ */
+export function selfServiceActionsPolicy(): string {
+  const groupCheck = ROLE_GROUPS.map((g) => `principal in Boxalarm::UserGroup::"${g}"`).join(
+    " || ",
+  );
+  const actions = SELF_SERVICE_ACTIONS.map((a) => `Boxalarm::Action::"${a}"`).join(", ");
+  return `permit (\n  principal,\n  action in [${actions}],\n  resource\n) when {\n  ${groupCheck}\n};`;
+}
+
+/** On-behalf-of-others personnel/training actions — duty officer, training officer, or admin tier only. */
+export function officerTierActionsPolicy(): string {
+  const groupCheck = OFFICER_TIER_GROUPS.map(
+    (g) => `principal in Boxalarm::UserGroup::"${g}"`,
+  ).join(" || ");
+  const actions = OFFICER_TIER_ACTIONS.map((a) => `Boxalarm::Action::"${a}"`).join(", ");
   return `permit (\n  principal,\n  action in [${actions}],\n  resource\n) when {\n  ${groupCheck}\n};`;
 }
