@@ -19,6 +19,7 @@
 		13B07FB51A68108700A75B9A /* Images.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; name = Images.xcassets; path = Boxalarm/Images.xcassets; sourceTree = "<group>"; };
 		13B07FB61A68108700A75B9A /* Info.plist */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.plist.xml; name = Info.plist; path = Boxalarm/Info.plist; sourceTree = "<group>"; };
 		13B07FB81A68108700A75B9A /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.plist.xml; name = PrivacyInfo.xcprivacy; path = Boxalarm/PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
+		F00DFACE00000000000BEEF1 /* Boxalarm.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; name = Boxalarm.entitlements; path = Boxalarm/Boxalarm.entitlements; sourceTree = "<group>"; };
 		3B4392A12AC88292D35C810B /* Pods-Boxalarm.debug.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-Boxalarm.debug.xcconfig"; path = "Target Support Files/Pods-Boxalarm/Pods-Boxalarm.debug.xcconfig"; sourceTree = "<group>"; };
 		5709B34CF0A7D63546082F79 /* Pods-Boxalarm.release.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-Boxalarm.release.xcconfig"; path = "Target Support Files/Pods-Boxalarm/Pods-Boxalarm.release.xcconfig"; sourceTree = "<group>"; };
 		5DCACB8F33CDC322A6C60F78 /* libPods-Boxalarm.a */ = {isa = PBXFileReference; explicitFileType = archive.ar; includeInIndex = 0; path = "libPods-Boxalarm.a"; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -49,6 +50,7 @@
 				81AB9BB72411601600AC10FF /* LaunchScreen.storyboard */,
 				13B07FB81A68108700A75B9A /* PrivacyInfo.xcprivacy */,
 				6A9B10D0B0D2D886CA4973D7 /* Boxalarm-Bridging-Header.h */,
+				F00DFACE00000000000BEEF1 /* Boxalarm.entitlements */,
 			);
 			name = Boxalarm;
 			sourceTree = "<group>";
@@ -261,6 +263,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CLANG_ENABLE_MODULES = YES;
+				CODE_SIGN_ENTITLEMENTS = Boxalarm/Boxalarm.entitlements;
 				CURRENT_PROJECT_VERSION = 1;
 				ENABLE_BITCODE = NO;
 				INFOPLIST_FILE = Boxalarm/Info.plist;
@@ -293,6 +296,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CLANG_ENABLE_MODULES = YES;
+				CODE_SIGN_ENTITLEMENTS = Boxalarm/Boxalarm.entitlements;
 				CURRENT_PROJECT_VERSION = 1;
 				INFOPLIST_FILE = Boxalarm/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = Boxalarm;

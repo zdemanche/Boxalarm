@@ -1,4 +1,5 @@
 import { apiRequest, type AuthTokenSource } from '../../lib/apiClient';
+import { firebaseNativePushBridge } from './nativePushBridge';
 
 export type PushPlatform = 'APNS' | 'FCM';
 
@@ -13,24 +14,8 @@ export interface NativePushBridge {
   onTokenRefresh(listener: (token: DeviceToken) => void): () => void;
 }
 
-// TODO: E1-S14-UI - no native push SDK is linked in this repo yet (no APNs/Firebase bridge
-// module, no google-services.json per environment). This stands in until a native-focused pass
-// adds the real iOS/Android bridge; the HTTP registration/rotation/revocation lifecycle below is
-// real today and drives itself off whatever this returns.
-const unavailableBridge: NativePushBridge = {
-  async requestPermission() {
-    return false;
-  },
-  async getToken() {
-    return null;
-  },
-  onTokenRefresh() {
-    return () => {};
-  },
-};
-
 export function getNativePushBridge(): NativePushBridge {
-  return unavailableBridge;
+  return firebaseNativePushBridge;
 }
 
 export async function registerPushToken(

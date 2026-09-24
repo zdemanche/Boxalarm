@@ -115,8 +115,8 @@ async function getTranscriptInner(
 }
 
 export const handler = withAuthorization(getTranscriptInner, {
-  actionType: 'Training',
+  actionType: 'Boxalarm::Action',
   actionId: 'ViewTranscript',
-  resourceType: 'Member',
+  resourceType: 'Boxalarm::Member',
   resourceId: (event) => event.pathParameters?.memberId ?? '',
 });
