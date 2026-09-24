@@ -1,11 +1,12 @@
 import { ConditionalCheckFailedException } from '@aws-sdk/client-dynamodb';
 import {
   GetCommand,
-  PutCommand,
+  TransactWriteCommand,
   UpdateCommand,
   type DynamoDBDocumentClient,
 } from '@aws-sdk/lib-dynamodb';
 import { buildDeptScopedPk, type VerifiedDeptId } from '@boxalarm/dept-scope';
+import { buildOutboxRecord } from '@boxalarm/outbox';
 import type { AckStatus } from '../dispatchRosterEntry.js';
 import { parseSnapshotItem } from '../eligibility/selector.js';
 import { logError, logInfo } from '../dispatches/logger.js';
@@ -58,20 +59,44 @@ export async function recordResponse(
     return { outcome: 'ineligible' };
   }
 
+  const isTest = dispatch.Item.isTest === true;
+
   await client.send(
-    new PutCommand({
-      TableName: tableName,
-      Item: {
-        pk,
-        sk: `RESPONSE#${memberId}#${answeredAt}`,
-        entityType: 'DISPATCH_RESPONSE_RECORD',
-        memberId,
-        ackStatus,
-        toneSequence,
-        eta,
-        assignedApparatusId,
-        answeredAt,
-      },
+    new TransactWriteCommand({
+      TransactItems: [
+        {
+          Put: {
+            TableName: tableName,
+            Item: {
+              pk,
+              sk: `RESPONSE#${memberId}#${answeredAt}`,
+              entityType: 'DISPATCH_RESPONSE_RECORD',
+              memberId,
+              ackStatus,
+              toneSequence,
+              eta,
+              assignedApparatusId,
+              answeredAt,
+            },
+          },
+        },
+        ...(isTest
+          ? []
+          : [
+              {
+                Put: {
+                  TableName: tableName,
+                  Item: buildOutboxRecord(
+                    deptId,
+                    'alerting-service',
+                    'alerting.response.confirmed',
+                    dispatchId,
+                    { deptId, dispatchId, memberId, status: ackStatus, ackAt: answeredAt },
+                  ),
+                },
+              },
+            ]),
+      ],
     }),
   );
 

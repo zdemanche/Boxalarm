@@ -62,4 +62,9 @@ export const LAMBDA_ENTRIES = [
     function: 'members-update-status',
     entry: 'src/services/personnel-service/members/updateStatus.ts',
   },
+  {
+    service: 'alerting-service',
+    function: 'outbox-drain',
+    entry: 'src/services/alerting-service/outboxDrainHandler.ts',
+  },
 ];
