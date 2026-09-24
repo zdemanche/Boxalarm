@@ -1,5 +1,6 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { HttpResponse, http } from 'msw';
 import { setupServer } from 'msw/node';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
@@ -126,4 +127,51 @@ test('ADMIN landing on / redirects to first granted route', async () => {
   await waitFor(() => {
     expect(screen.getByRole('heading', { name: 'Alert diagnostics' })).toBeTruthy();
   });
+});
+
+// Regression for MAJOR-1: below 768px (and at 200% zoom), PrimaryNav's static sidebar is
+// display:none with no replacement, so the web app had no route navigation and no Sign out at
+// all. NavDrawer, opened from TopBar's hamburger button, is that replacement.
+test('NavDrawer: the hamburger button opens a dialog containing the granted nav links and Sign out', async () => {
+  const user = userEvent.setup();
+  renderShell(['CHIEF'], '/');
+  await screen.findByRole('heading', { name: 'Chief dashboard' });
+
+  // The dialog isn't in the DOM until opened.
+  expect(screen.queryByRole('dialog')).toBeNull();
+
+  await user.click(screen.getByRole('button', { name: 'Open navigation' }));
+
+  const dialog = await screen.findByRole('dialog');
+  const withinDialog = within(dialog);
+  expect(withinDialog.getByRole('navigation', { name: 'Primary' })).toBeTruthy();
+  expect(withinDialog.getByRole('link', { name: 'Dashboard' })).toBeTruthy();
+  expect(withinDialog.getByRole('link', { name: 'Audit log' })).toBeTruthy();
+  expect(withinDialog.getByRole('button', { name: 'Sign out' })).toBeTruthy();
+});
+
+test('NavDrawer: choosing a nav link inside the drawer navigates and closes the drawer', async () => {
+  const user = userEvent.setup();
+  renderShell(['CHIEF'], '/');
+  await screen.findByRole('heading', { name: 'Chief dashboard' });
+
+  await user.click(screen.getByRole('button', { name: 'Open navigation' }));
+  const dialog = await screen.findByRole('dialog');
+
+  await user.click(within(dialog).getByRole('link', { name: 'Audit log' }));
+
+  await screen.findByRole('heading', { name: 'Audit log' });
+  await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+});
+
+test('NavDrawer: Escape closes the drawer (Radix Dialog focus trap)', async () => {
+  const user = userEvent.setup();
+  renderShell(['CHIEF'], '/');
+  await screen.findByRole('heading', { name: 'Chief dashboard' });
+
+  await user.click(screen.getByRole('button', { name: 'Open navigation' }));
+  await screen.findByRole('dialog');
+
+  await user.keyboard('{Escape}');
+  await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
 });

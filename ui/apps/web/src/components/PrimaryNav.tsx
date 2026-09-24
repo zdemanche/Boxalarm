@@ -34,14 +34,21 @@ function iconFor(navPath: string): LucideIcon {
   return ICON_BY_PREFIX.find(([prefix]) => navPath.startsWith(prefix))?.[1] ?? LayoutDashboard;
 }
 
-export function PrimaryNav() {
-  const { roles, signOut, isAuthenticated } = useAuth();
+interface NavListContentProps {
+  /** Called after a nav link is clicked or Sign out is chosen — NavDrawer (MAJOR-1) passes this
+   * to close itself, so the drawer doesn't stay open behind the page it just navigated to. */
+  onNavigate?: () => void;
+}
+
+/** The nav's actual content — brand mark, link list, and Sign out — shared between the
+ * always-visible desktop sidebar (`PrimaryNav` below) and the below-`md` `NavDrawer`, so
+ * route/role/icon logic lives in exactly one place. */
+export function NavListContent({ onNavigate }: NavListContentProps) {
+  const { roles, signOut } = useAuth();
   const links = routesForRoles(roles);
 
-  if (!isAuthenticated) return null;
-
   return (
-    <nav aria-label="Primary" className={styles.sidebar}>
+    <>
       <div className={styles.brand}>
         <Flame size={18} aria-hidden="true" />
         Boxalarm
@@ -57,6 +64,7 @@ export function PrimaryNav() {
                   [styles.navLink, isActive ? styles.navLinkActive : ''].filter(Boolean).join(' ')
                 }
                 end={route.navPath === '/'}
+                onClick={onNavigate}
               >
                 <Icon size={18} aria-hidden="true" />
                 {route.label}
@@ -68,13 +76,28 @@ export function PrimaryNav() {
       <div className={styles.signOutWrap}>
         <button
           type="button"
-          onClick={() => void signOut()}
+          onClick={() => {
+            onNavigate?.();
+            void signOut();
+          }}
           className={styles.navLink}
           style={{ width: '100%' }}
         >
           Sign out
         </button>
       </div>
+    </>
+  );
+}
+
+export function PrimaryNav() {
+  const { isAuthenticated } = useAuth();
+
+  if (!isAuthenticated) return null;
+
+  return (
+    <nav aria-label="Primary" className={styles.sidebar}>
+      <NavListContent />
     </nav>
   );
 }

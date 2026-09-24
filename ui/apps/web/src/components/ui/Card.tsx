@@ -14,7 +14,11 @@ export function Card({ title, raised = false, className, children, ...rest }: Ca
         .join(' ')}
       {...rest}
     >
-      {title ? <h3 className={styles.cardTitle}>{title}</h3> : null}
+      {/* h2, not h3: every page that uses Card has exactly one <h1> (PageHeader or the page's
+          own heading) directly above it, with nothing at h2 in between — axe's heading-order
+          rule (run for real for the first time via tests/e2e/primary-nav.spec.ts's
+          mobile-chromium project, MAJOR-1) flagged the previous h3 as an invalid h1-to-h3 skip. */}
+      {title ? <h2 className={styles.cardTitle}>{title}</h2> : null}
       {children}
     </div>
   );

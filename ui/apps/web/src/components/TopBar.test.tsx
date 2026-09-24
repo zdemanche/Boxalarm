@@ -28,7 +28,7 @@ function makeManager(groups: string[]): UserManager {
 function renderTopBar() {
   return render(
     <AuthProvider userManager={makeManager(['CHIEF'])}>
-      <TopBar />
+      <TopBar onOpenNav={() => undefined} />
     </AuthProvider>,
   );
 }

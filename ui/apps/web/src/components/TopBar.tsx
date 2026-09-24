@@ -2,7 +2,7 @@ import { useAuth } from '../auth/AuthContext';
 import { useOnlineStatus } from '../lib/useOnlineStatus';
 import { usePalette } from '../lib/usePalette';
 import { IconButton } from './ui/Button';
-import { AlertTriangle, CheckCircle2, Moon, Sun } from './ui/icons';
+import { AlertTriangle, CheckCircle2, Menu, Moon, Sun } from './ui/icons';
 import styles from './AppShell.module.css';
 
 const ROLE_LABEL: Record<string, string> = {
@@ -14,7 +14,14 @@ const ROLE_LABEL: Record<string, string> = {
   CHIEF: 'Chief',
 };
 
-export function TopBar() {
+interface TopBarProps {
+  /** Opens NavDrawer — MAJOR-1 (PR #318 review): below `md` (767px) and at high browser zoom,
+   * PrimaryNav's static sidebar is hidden and this button is the only way to reach navigation
+   * and Sign out. Visible only below `md` (AppShell.module.css `.menuButton`). */
+  onOpenNav: () => void;
+}
+
+export function TopBar({ onOpenNav }: TopBarProps) {
   const { roles } = useAuth();
   const [palette, setPalette] = usePalette();
   const isCab = palette === 'cab';
@@ -29,17 +36,26 @@ export function TopBar() {
 
   return (
     <header className={styles.topbar} role="banner">
-      <div
-        className={styles.topbarLeft}
-        role="status"
-        title="Your browser's network connection. Does not reflect dispatch or server connectivity."
-      >
-        {isOnline ? (
-          <CheckCircle2 size={15} aria-hidden="true" />
-        ) : (
-          <AlertTriangle size={15} aria-hidden="true" />
-        )}
-        <span>Browser network: {isOnline ? 'online' : 'offline'}</span>
+      <div className={styles.topbarLeft}>
+        <IconButton
+          icon={Menu}
+          label="Open navigation"
+          onClick={onOpenNav}
+          size="sm"
+          className={styles.menuButton}
+        />
+        <div
+          className={styles.connectivity}
+          role="status"
+          title="Your browser's network connection. Does not reflect dispatch or server connectivity."
+        >
+          {isOnline ? (
+            <CheckCircle2 size={15} aria-hidden="true" />
+          ) : (
+            <AlertTriangle size={15} aria-hidden="true" />
+          )}
+          <span>Browser network: {isOnline ? 'online' : 'offline'}</span>
+        </div>
       </div>
       <div className={styles.topbarRight}>
         {primaryRole ? (
