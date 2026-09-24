@@ -4,7 +4,7 @@ import { ServiceLambda } from "../observability/service-lambda";
 import { ServiceLogGroup } from "../observability/service-log-group";
 import { IamPolicyStatement } from "../observability/observability-policy";
 import { requireEnv } from "../shared/env";
-import { invokeStubCode } from "./stub-code";
+import { lambdaCode, LAMBDA_HANDLER } from "../shared/lambda-code";
 
 export interface EscalationArgs {
   env: string;
@@ -24,6 +24,7 @@ export class Escalation extends pulumi.ComponentResource {
   public readonly scheduleGroup: aws.scheduler.ScheduleGroup;
   public readonly schedulerRole: aws.iam.Role;
   public readonly lambda: ServiceLambda;
+  public readonly toneEvaluatorLambda: ServiceLambda;
   /** ARN pattern scoping scheduler:CreateSchedule to schedules within this group only. */
   public readonly scheduleResourcePattern: pulumi.Output<string>;
 
@@ -72,8 +73,8 @@ export class Escalation extends pulumi.ComponentResource {
         env,
         serviceName: "alerting-service",
         functionName: `boxalarm-${env}-alerting-escalation`,
-        handler: "index.handler",
-        code: invokeStubCode(),
+        handler: LAMBDA_HANDLER,
+        code: lambdaCode("alerting-service", "escalation"),
         logGroup: args.logGroup,
         environment: {
           ALERTING_TABLE_NAME: args.alertingTableName,
@@ -81,6 +82,7 @@ export class Escalation extends pulumi.ComponentResource {
         },
         additionalPolicyStatements: escalationPolicy,
         reservedConcurrentExecutions: 5,
+        permissionsBoundaryArn: args.permissionsBoundaryArn,
       },
       { parent: this },
     );
@@ -104,19 +106,71 @@ export class Escalation extends pulumi.ComponentResource {
       { parent: this },
     );
 
-    new aws.iam.RolePolicy(
-      `${name}-scheduler-role-policy`,
+    // Tone-ladder evaluator (E1-S3/E1-S15-INFRA): fired by the tone-2/tone-3 one-time
+    // schedules toneLadder.ts creates via this same scheduler role, and itself schedules
+    // each member's voice escalation on the escalation Lambda above.
+    this.toneEvaluatorLambda = new ServiceLambda(
+      `${name}-tone-evaluator-fn`,
       {
-        role: this.schedulerRole.id,
-        policy: this.lambda.function.arn.apply((fnArn) =>
+        env,
+        serviceName: "alerting-service",
+        functionName: `boxalarm-${env}-alerting-tone-evaluator`,
+        handler: LAMBDA_HANDLER,
+        code: lambdaCode("alerting-service", "tone-evaluator"),
+        logGroup: args.logGroup,
+        environment: {
+          ALERTING_TABLE_NAME: args.alertingTableName,
+          ALERTING_TOPIC_ARN: args.alertingTopicArn,
+          ESCALATION_HANDLER_ARN: this.lambda.function.arn,
+          ESCALATION_SCHEDULER_ROLE_ARN: this.schedulerRole.arn,
+        },
+        additionalPolicyStatements: pulumi
+          .all([args.alertingTableArn, args.alertingTopicArn, this.scheduleResourcePattern])
+          .apply(([tableArn, topicArn, schedulePattern]) => [
+            {
+              Sid: "AlertingTableReadWrite",
+              Effect: "Allow" as const,
+              Action: [
+                "dynamodb:GetItem",
+                "dynamodb:Query",
+                "dynamodb:PutItem",
+                "dynamodb:UpdateItem",
+                "dynamodb:TransactWriteItems",
+              ],
+              Resource: tableArn,
+            },
+            {
+              Sid: "AlertingTopicPublish",
+              Effect: "Allow" as const,
+              Action: ["sns:Publish"],
+              Resource: topicArn,
+            },
+            {
+              Sid: "CreateEscalationSchedulesOnly",
+              Effect: "Allow" as const,
+              Action: ["scheduler:CreateSchedule"],
+              Resource: schedulePattern,
+            },
+          ]),
+        reservedConcurrentExecutions: 5,
+        permissionsBoundaryArn: args.permissionsBoundaryArn,
+      },
+      { parent: this },
+    );
+
+    new aws.iam.RolePolicy(
+      `${name}-tone-evaluator-pass-scheduler-role`,
+      {
+        role: this.toneEvaluatorLambda.role.id,
+        policy: this.schedulerRole.arn.apply((roleArn) =>
           JSON.stringify({
             Version: "2012-10-17",
             Statement: [
               {
-                Sid: "InvokeEscalationOnly",
+                Sid: "PassSchedulerRoleOnly",
                 Effect: "Allow",
-                Action: "lambda:InvokeFunction",
-                Resource: fnArn,
+                Action: "iam:PassRole",
+                Resource: roleArn,
               },
             ],
           }),
@@ -125,10 +179,34 @@ export class Escalation extends pulumi.ComponentResource {
       { parent: this },
     );
 
+    new aws.iam.RolePolicy(
+      `${name}-scheduler-role-policy`,
+      {
+        role: this.schedulerRole.id,
+        policy: pulumi
+          .all([this.lambda.function.arn, this.toneEvaluatorLambda.function.arn])
+          .apply(([escalationArn, toneEvaluatorArn]) =>
+            JSON.stringify({
+              Version: "2012-10-17",
+              Statement: [
+                {
+                  Sid: "InvokeEscalationAndToneEvaluatorOnly",
+                  Effect: "Allow",
+                  Action: "lambda:InvokeFunction",
+                  Resource: [escalationArn, toneEvaluatorArn],
+                },
+              ],
+            }),
+          ),
+      },
+      { parent: this },
+    );
+
     this.registerOutputs({
       scheduleGroup: this.scheduleGroup,
       schedulerRole: this.schedulerRole,
       lambda: this.lambda,
+      toneEvaluatorLambda: this.toneEvaluatorLambda,
     });
   }
 }

@@ -38,6 +38,7 @@ import { PushTokens } from "./components/alerting/push-tokens";
 import { RidingBoard } from "./components/alerting/riding-board";
 import { AlertingAlarms } from "./components/alerting/alarms";
 import { EligibilityStaleness } from "./components/alerting/staleness";
+import { AlertingCanary } from "./components/alerting/canary";
 
 export const stack = getStack();
 const config = new Config("boxalarm-infra");
@@ -277,6 +278,8 @@ export const routesCore = new RoutesCore("routes-core", {
   alertingTableArn: alertingTable.tableArn,
   alertingTableName: alertingTable.tableName,
   logGroup: alertingLogGroup,
+  escalation,
+  policyStoreId: policyStore.policyStoreId,
   permissionsBoundaryArn: alertingBoundaryArn,
 });
 
@@ -287,6 +290,7 @@ export const routesOps = new RoutesOps("routes-ops", {
   alertingTableArn: alertingTable.tableArn,
   alertingTableName: alertingTable.tableName,
   logGroup: alertingLogGroup,
+  policyStoreId: policyStore.policyStoreId,
   permissionsBoundaryArn: alertingBoundaryArn,
 });
 
@@ -301,6 +305,8 @@ export const pushTokens = new PushTokens("push-tokens", {
   alertingTableName: alertingTable.tableName,
   personnelLogGroup,
   alertingLogGroup,
+  policyStoreId: policyStore.policyStoreId,
+  busName: platformBus.busName,
   alertingPermissionsBoundaryArn: alertingBoundaryArn,
 });
 
@@ -311,6 +317,7 @@ export const ridingBoard = new RidingBoard("riding-board", {
   platformTableArn: platformTable.tableArn,
   platformTableName: platformTable.tableName,
   logGroup: apparatusLogGroup,
+  policyStoreId: policyStore.policyStoreId,
 });
 
 // E1-S11-INFRA #36: alerting-page topic, DLQ/failure alarms, non-prod fault injection.
@@ -321,6 +328,17 @@ export const alertingAlarms = new AlertingAlarms("alerting-alarms", {
 
 // E1-S13-INFRA #38: eligibility-snapshot staleness schedule + alarm.
 export const eligibilityStaleness = new EligibilityStaleness("eligibility-staleness", {
+  env,
+  deptId,
+  alertingTableArn: alertingTable.tableArn,
+  alertingTableName: alertingTable.tableName,
+  pageTopicArn: alertingAlarms.pageTopic.arn,
+  logGroup: alertingLogGroup,
+  permissionsBoundaryArn: alertingBoundaryArn,
+});
+
+// E1-S10-INFRA #230/#35: continuous production canary + on-call escalation alarms.
+export const alertingCanary = new AlertingCanary("alerting-canary", {
   env,
   deptId,
   alertingTableArn: alertingTable.tableArn,

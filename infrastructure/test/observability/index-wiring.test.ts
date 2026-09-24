@@ -111,6 +111,7 @@ describe("index.ts production wiring", () => {
       "boxalarm-infra:smsWebhookSecret": "test-sms-secret",
       "boxalarm-infra:voiceWebhookSecret": "test-voice-secret",
       "boxalarm-infra:pushWebhookSecret": "test-push-secret",
+      "boxalarm-infra:canaryMemberId": "test-canary-member",
     });
   });
 
@@ -186,6 +187,13 @@ describe("index.ts production wiring", () => {
           indexModule.ridingBoard.assignRoute.lambda.function.arn,
           indexModule.alertingAlarms.pageTopic.arn,
           indexModule.eligibilityStaleness.lambda.function.arn,
+          indexModule.escalation.toneEvaluatorLambda.function.arn,
+          indexModule.routesOps.canaryStatus.lambda.function.arn,
+          indexModule.routesOps.deviceReportState.lambda.function.arn,
+          indexModule.routesOps.diagnostics.lambda.function.arn,
+          indexModule.routesOps.diagnosticsSelf.lambda.function.arn,
+          indexModule.routesOps.deliveryBaseline.lambda.function.arn,
+          indexModule.alertingCanary.lambda.function.arn,
         ])
         .apply(() => resolve()),
     );
