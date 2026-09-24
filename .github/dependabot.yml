@@ -4,10 +4,18 @@ updates:
     directory: /backend
     schedule:
       interval: weekly
+    groups:
+      # lib-dynamodb peers on the exact client-dynamodb version; bump the SDK together.
+      aws-sdk:
+        patterns: ['@aws-sdk/*']
   - package-ecosystem: npm
     directory: /ui
     schedule:
       interval: weekly
+    groups:
+      # react-dom must match react exactly.
+      react:
+        patterns: ['react', 'react-dom', '@types/react', '@types/react-dom']
   - package-ecosystem: npm
     directory: /infrastructure
     schedule:

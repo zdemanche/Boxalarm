@@ -15,6 +15,7 @@ import { resolvePushTarget, resolveSmsTarget } from '../eligibility/resolvePushT
 import { logError, logInfo } from '../dispatches/logger.js';
 import { queryRoster } from '../roster/repository.js';
 import { createSnsClient, readFanOutTopicConfig } from '../fanout/snsClient.js';
+import { runWithConcurrencyLimit } from '../fanout/handler.js';
 import {
   deriveFanOutKey,
   deriveMessageDeduplicationId,
@@ -33,6 +34,7 @@ const METRIC_NAMESPACE = 'Boxalarm/Alerting';
 const CHANNEL_TIER = 'escalation';
 const VOICE_ESCALATION_DELAY_SECONDS = 75;
 const FAN_OUT_CHANNELS: readonly FanOutChannel[] = ['push', 'sms'];
+const MAX_CONCURRENT_TONE_TASKS = 10;
 
 export interface ToneEvaluatorPayload {
   readonly deptId: string;
@@ -224,34 +226,37 @@ async function fireTone(
   toneSequence: number,
   members: readonly EligibilitySnapshotItem[],
 ): Promise<void> {
-  const results = await Promise.allSettled(
-    members.map((member) =>
-      fireToneForMember(
-        ddb,
-        sns,
-        scheduler,
-        tableName,
-        topicArn,
-        deptId,
-        dispatchId,
-        dispatch,
-        toneSequence,
-        member,
-      ),
+  const results = await runWithConcurrencyLimit(members, MAX_CONCURRENT_TONE_TASKS, (member) =>
+    fireToneForMember(
+      ddb,
+      sns,
+      scheduler,
+      tableName,
+      topicArn,
+      deptId,
+      dispatchId,
+      dispatch,
+      toneSequence,
+      member,
     ),
   );
+  const failures: PromiseRejectedResult[] = [];
   results.forEach((result, index) => {
-    if (result.status === 'rejected') {
-      // One member's failure (e.g. a non-conditional DynamoDB or SNS error inside
-      // publishToneChannel) must never block or fail the rest of the roster's tone-out.
-      logError('alerting.toneLadder.memberFireFailed', result.reason, {
-        deptId,
-        dispatchId,
-        memberId: members[index]?.memberId,
-        toneSequence,
-      });
+    if (result.status !== 'rejected') {
+      return;
     }
+    failures.push(result);
+    logError('alerting.toneLadder.memberFireFailed', result.reason, {
+      deptId,
+      dispatchId,
+      memberId: members[index]?.memberId,
+      toneSequence,
+    });
   });
+  if (failures.length > 0) {
+    emitOutcomeMetric(METRIC_NAMESPACE, 'ToneFireFailed');
+    throw failures[0]!.reason;
+  }
 }
 
 export const handler = async (payload: unknown): Promise<{ outcome: ToneOutcome }> => {

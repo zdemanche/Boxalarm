@@ -100,7 +100,7 @@ test('apparatus registry passes axe for CHIEF', async ({ page }) => {
   await signInAs(page, ['CHIEF']);
   await page
     .getByRole('navigation', { name: 'Primary' })
-    .getByRole('link', { name: 'Apparatus' })
+    .getByRole('link', { name: 'Apparatus', exact: true })
     .click();
   await expect(page.getByRole('heading', { name: 'Apparatus' })).toBeVisible();
 

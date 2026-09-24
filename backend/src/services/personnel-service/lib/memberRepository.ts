@@ -133,6 +133,7 @@ export async function createMember(
               gsi3pk: buildDeptScopedPk(deptId, 'AUDIT', 'ENTITY', 'MEMBER', memberId),
               gsi3sk: changedAt,
             },
+            ConditionExpression: 'attribute_not_exists(pk) AND attribute_not_exists(sk)',
           },
         },
       ],
@@ -229,6 +230,7 @@ export async function updateMemberStatus(
               gsi3pk: buildDeptScopedPk(deptId, 'AUDIT', 'ENTITY', 'MEMBER', memberId),
               gsi3sk: changedAt,
             },
+            ConditionExpression: 'attribute_not_exists(pk) AND attribute_not_exists(sk)',
           },
         },
         {

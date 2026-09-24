@@ -43,6 +43,8 @@ export class Retention extends pulumi.ComponentResource {
     // companion infra change needed when that writer lands.
     const CRYPTO_SHRED_TAG_KEY = "boxalarm:crypto-shred";
     const CRYPTO_SHRED_TAG_VALUE = "true";
+    const ENV_TAG_KEY = "boxalarm:env";
+    const cryptoShredTags = { [CRYPTO_SHRED_TAG_KEY]: CRYPTO_SHRED_TAG_VALUE, [ENV_TAG_KEY]: env };
 
     this.archivedIncidentCmk = new aws.kms.Key(
       `${name}-archived-incident-cmk`,
@@ -50,7 +52,7 @@ export class Retention extends pulumi.ComponentResource {
         description: `Crypto-shred CMK for boxalarm-${env} archived incident records`,
         enableKeyRotation: true,
         policy: caller.accountId.apply(dynamodbCmkPolicy),
-        tags: { [CRYPTO_SHRED_TAG_KEY]: CRYPTO_SHRED_TAG_VALUE },
+        tags: cryptoShredTags,
       },
       { parent: this },
     );
@@ -61,7 +63,7 @@ export class Retention extends pulumi.ComponentResource {
         description: `Crypto-shred CMK for boxalarm-${env} archived delivery receipts`,
         enableKeyRotation: true,
         policy: caller.accountId.apply(dynamodbCmkPolicy),
-        tags: { [CRYPTO_SHRED_TAG_KEY]: CRYPTO_SHRED_TAG_VALUE },
+        tags: cryptoShredTags,
       },
       { parent: this },
     );
@@ -122,6 +124,7 @@ export class Retention extends pulumi.ComponentResource {
               Condition: {
                 StringEquals: {
                   [`aws:ResourceTag/${CRYPTO_SHRED_TAG_KEY}`]: [CRYPTO_SHRED_TAG_VALUE],
+                  [`aws:ResourceTag/${ENV_TAG_KEY}`]: [env],
                 },
               },
             },

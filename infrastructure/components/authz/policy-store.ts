@@ -103,7 +103,9 @@ export class PolicyStore extends pulumi.ComponentResource {
       `${name}-admin-actions`,
       {
         policyStoreId: this.policyStoreId,
-        definition: { static: { statement: adminActionsPolicy() } },
+        definition: {
+          static: { statement: pulumi.output(args.userPoolId).apply(adminActionsPolicy) },
+        },
       },
       { parent: this, dependsOn: [this.schema] },
     );
@@ -112,7 +114,9 @@ export class PolicyStore extends pulumi.ComponentResource {
       `${name}-view-config`,
       {
         policyStoreId: this.policyStoreId,
-        definition: { static: { statement: viewConfigPolicy() } },
+        definition: {
+          static: { statement: pulumi.output(args.userPoolId).apply(viewConfigPolicy) },
+        },
       },
       { parent: this, dependsOn: [this.schema] },
     );
