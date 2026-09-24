@@ -5,7 +5,7 @@ import { ServiceLogGroup } from "../observability/service-log-group";
 import { HttpApi } from "../api/http-api";
 import { observabilityPolicyStatements } from "../observability/observability-policy";
 import { ACTIVE_TRACING_CONFIG } from "../observability/xray-sampling";
-import { placeholderLambdaCode, PLACEHOLDER_LAMBDA_HANDLER } from "../shared/placeholder-code";
+import { lambdaCode, LAMBDA_HANDLER } from "../shared/lambda-code";
 import { requireEnv } from "../shared/env";
 
 export interface ExportArgs {
@@ -187,9 +187,9 @@ export class Export extends pulumi.ComponentResource {
       {
         name: `boxalarm-${env}-platform-export-worker`,
         runtime: aws.lambda.Runtime.NodeJS20dX,
-        handler: PLACEHOLDER_LAMBDA_HANDLER,
+        handler: LAMBDA_HANDLER,
         role: this.workerRole.arn,
-        code: placeholderLambdaCode(),
+        code: lambdaCode("platform-service", "export-worker"),
         timeout: 900,
         tracingConfig: ACTIVE_TRACING_CONFIG,
         loggingConfig: { logFormat: "JSON", logGroup: args.logGroup.logGroupName },
@@ -216,8 +216,8 @@ export class Export extends pulumi.ComponentResource {
         env,
         serviceName: "platform-service",
         functionName: `boxalarm-${env}-platform-export`,
-        handler: PLACEHOLDER_LAMBDA_HANDLER,
-        code: placeholderLambdaCode(),
+        handler: LAMBDA_HANDLER,
+        code: lambdaCode("platform-service", "export"),
         logGroup: args.logGroup,
         environment: {
           PLATFORM_TABLE_NAME: args.platformTableName,

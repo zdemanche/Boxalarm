@@ -6,7 +6,7 @@ import { HttpApi } from "../api/http-api";
 import { verifiedPermissionsPolicyStatement } from "../authz/policy-store";
 import { auditMutationDenyStatement } from "../data/platform-table";
 import { dynamodbCmkPolicy } from "../data/cmk-policy";
-import { placeholderLambdaCode, PLACEHOLDER_LAMBDA_HANDLER } from "../shared/placeholder-code";
+import { lambdaCode, LAMBDA_HANDLER } from "../shared/lambda-code";
 import { requireEnv } from "../shared/env";
 
 export interface RetentionArgs {
@@ -72,8 +72,8 @@ export class Retention extends pulumi.ComponentResource {
         env,
         serviceName: "platform-service",
         functionName: `boxalarm-${env}-platform-retention-disposal`,
-        handler: PLACEHOLDER_LAMBDA_HANDLER,
-        code: placeholderLambdaCode(),
+        handler: LAMBDA_HANDLER,
+        code: lambdaCode("platform-service", "retention-disposal"),
         logGroup: args.logGroup,
         environment: {
           PLATFORM_TABLE_NAME: args.platformTableName,

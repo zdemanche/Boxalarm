@@ -2,7 +2,7 @@ import * as pulumi from "@pulumi/pulumi";
 import * as aws from "@pulumi/aws";
 import { ServiceLambda } from "../observability/service-lambda";
 import { ServiceLogGroup } from "../observability/service-log-group";
-import { placeholderLambdaCode, PLACEHOLDER_LAMBDA_HANDLER } from "../shared/placeholder-code";
+import { lambdaCode, LAMBDA_HANDLER } from "../shared/lambda-code";
 import { requireEnv } from "../shared/env";
 
 export interface OutboxPublisherArgs {
@@ -44,8 +44,12 @@ export class OutboxPublisher extends pulumi.ComponentResource {
         env,
         serviceName: "platform-service",
         functionName: `boxalarm-${env}-platform-outbox-publisher`,
-        handler: PLACEHOLDER_LAMBDA_HANDLER,
-        code: placeholderLambdaCode(),
+        handler: LAMBDA_HANDLER,
+        // No matching handler in backend/src/services/platform-service yet (the
+        // existing outbox publisher, personnel-service/outbox/publisher.ts, is
+        // hardcoded to the personnel table, not this generic platform-table one)
+        // — stays on the placeholder fallback until that handler lands.
+        code: lambdaCode("platform-service", "outbox-publisher"),
         logGroup: args.logGroup,
         environment: {
           PLATFORM_TABLE_NAME: args.platformTableName,

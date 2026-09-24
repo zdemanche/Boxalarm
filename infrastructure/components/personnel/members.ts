@@ -4,7 +4,7 @@ import { ServiceLogGroup } from "../observability/service-log-group";
 import { HttpApi } from "../api/http-api";
 import { verifiedPermissionsPolicyStatement } from "../authz/policy-store";
 import { auditMutationDenyStatement } from "../data/platform-table";
-import { placeholderLambdaCode, PLACEHOLDER_LAMBDA_HANDLER } from "../shared/placeholder-code";
+import { lambdaCode, LAMBDA_HANDLER } from "../shared/lambda-code";
 import { requireEnv } from "../shared/env";
 
 export interface MembersArgs {
@@ -73,9 +73,8 @@ const UPDATE_STATUS_STATEMENT = (tableArn: pulumi.Input<string>) =>
 
 /**
  * E2-S1-INFRA #203 roster routes: create/list/get/updateStatus, each its own
- * placeholder-code Lambda (real handlers already exist in
- * backend/src/services/personnel-service/members — see TODO in
- * placeholder-code.ts) scoped to the platform-service table + policy store.
+ * Lambda bundled from backend/src/services/personnel-service/members via
+ * lambda-code.ts, scoped to the platform-service table + policy store.
  */
 export class Members extends pulumi.ComponentResource {
   public readonly createLambda: ServiceLambda;
@@ -105,8 +104,8 @@ export class Members extends pulumi.ComponentResource {
         env,
         serviceName: "personnel-service",
         functionName: `boxalarm-${env}-personnel-members-create`,
-        handler: PLACEHOLDER_LAMBDA_HANDLER,
-        code: placeholderLambdaCode(),
+        handler: LAMBDA_HANDLER,
+        code: lambdaCode("personnel-service", "members-create"),
         logGroup: args.logGroup,
         environment: baseEnvironment,
         additionalPolicyStatements: pulumi
@@ -127,8 +126,8 @@ export class Members extends pulumi.ComponentResource {
         env,
         serviceName: "personnel-service",
         functionName: `boxalarm-${env}-personnel-members-list`,
-        handler: PLACEHOLDER_LAMBDA_HANDLER,
-        code: placeholderLambdaCode(),
+        handler: LAMBDA_HANDLER,
+        code: lambdaCode("personnel-service", "members-list"),
         logGroup: args.logGroup,
         environment: baseEnvironment,
         additionalPolicyStatements: pulumi
@@ -149,8 +148,8 @@ export class Members extends pulumi.ComponentResource {
         env,
         serviceName: "personnel-service",
         functionName: `boxalarm-${env}-personnel-members-get`,
-        handler: PLACEHOLDER_LAMBDA_HANDLER,
-        code: placeholderLambdaCode(),
+        handler: LAMBDA_HANDLER,
+        code: lambdaCode("personnel-service", "members-get"),
         logGroup: args.logGroup,
         environment: baseEnvironment,
         additionalPolicyStatements: pulumi
@@ -171,8 +170,8 @@ export class Members extends pulumi.ComponentResource {
         env,
         serviceName: "personnel-service",
         functionName: `boxalarm-${env}-personnel-members-update-status`,
-        handler: PLACEHOLDER_LAMBDA_HANDLER,
-        code: placeholderLambdaCode(),
+        handler: LAMBDA_HANDLER,
+        code: lambdaCode("personnel-service", "members-update-status"),
         logGroup: args.logGroup,
         environment: baseEnvironment,
         // No personnel role holds any permission on the alerting-service or
