@@ -73,8 +73,8 @@ async function listCertificationsInner(
 }
 
 export const handler = withAuthorization(listCertificationsInner, {
-  actionType: 'Training',
+  actionType: 'Boxalarm::Action',
   actionId: 'ViewCertifications',
-  resourceType: 'Member',
+  resourceType: 'Boxalarm::Member',
   resourceId: (event) => event.pathParameters?.memberId ?? '',
 });

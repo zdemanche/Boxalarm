@@ -94,6 +94,7 @@ describe("index.ts production wiring", () => {
     pulumi.runtime.setAllConfig({
       "boxalarm-infra:env": "dev",
       "boxalarm-infra:webOrigin": "https://localhost:5173",
+      "boxalarm-infra:deptId": "nichols-fd",
     });
   });
 
@@ -139,6 +140,18 @@ describe("index.ts production wiring", () => {
           indexModule.sessionRevocation.deviceLossLambda.function.arn,
           indexModule.recoveryMonitor.trail.id,
           indexModule.personnelMembers.createLambda.function.arn,
+          indexModule.personnelMembers.updateProfileLambda.function.arn,
+          indexModule.personnelQuals.getLambda.function.arn,
+          indexModule.personnelAttendance.recordLambda.function.arn,
+          indexModule.personnelAvailability.createLambda.function.arn,
+          indexModule.personnelLosap.getMemberTotalLambda.function.arn,
+          indexModule.personnelShifts.lambda.function.arn,
+          indexModule.trainingCertifications.createLambda.function.arn,
+          indexModule.trainingCertifications.scannerLambda.function.arn,
+          indexModule.trainingEvents.createLambda.function.arn,
+          indexModule.trainingHours.lambda.function.arn,
+          indexModule.trainingReports.isoLambda.function.arn,
+          indexModule.trainingTranscript.getLambda.function.arn,
           indexModule.platformConfig.lambda.function.arn,
           indexModule.auditRoute.lambda.function.arn,
           indexModule.chiefNotificationTopic.topicArn,
