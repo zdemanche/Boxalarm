@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
 import { toVerifiedDeptId } from '@boxalarm/dept-scope';
+import { IncidentNotFoundError } from './repository.js';
 import { upsertResponseUnitTimes } from './responseUnitRepository.js';
 
 const DEPT_ID = toVerifiedDeptId({ deptId: 'NICHOLS' });
@@ -10,9 +11,21 @@ function fakeClient(send: (command: unknown) => unknown): DynamoDBDocumentClient
   return { send } as unknown as DynamoDBDocumentClient;
 }
 
+/** Routes the existence-check GetCommand and the RESPONSE# UpdateCommand to distinct mocks. */
+function fakeSendForExistingIncident(
+  updateResult: unknown,
+): ReturnType<typeof vi.fn> & ((command: unknown) => unknown) {
+  return vi.fn().mockImplementation((command: { input: { Key: { sk: string } } }) => {
+    if (command.input.Key.sk === 'METADATA') {
+      return Promise.resolve({ Item: { pk: command.input.Key.sk } });
+    }
+    return Promise.resolve(updateResult);
+  });
+}
+
 describe('upsertResponseUnitTimes', () => {
   it('independently sets each provided timestamp field (E6-S5 AC1)', async () => {
-    const send = vi.fn().mockResolvedValue({
+    const send = fakeSendForExistingIncident({
       Attributes: {
         incidentId: 'NICHOLS-4471-1798000000',
         unitId: 'E1',
@@ -30,7 +43,11 @@ describe('upsertResponseUnitTimes', () => {
     });
 
     expect(result).toMatchObject({ unitId: 'E1', dispatchedAt: 100, arrivedAt: 200 });
-    const [command] = send.mock.calls[0] as [{ input: { Key: unknown; UpdateExpression: string } }];
+    const [, updateCommand] = send.mock.calls as [
+      unknown,
+      [{ input: { Key: unknown; UpdateExpression: string } }],
+    ];
+    const [command] = updateCommand;
     expect(command.input.Key).toEqual({
       pk: 'DEPT#NICHOLS#INCIDENT#NICHOLS-4471-1798000000',
       sk: 'RESPONSE#E1',
@@ -41,9 +58,9 @@ describe('upsertResponseUnitTimes', () => {
   });
 
   it('keys distinct units under distinct sk values for the same incident (E6-S5 AC3)', async () => {
-    const send = vi
-      .fn()
-      .mockResolvedValue({ Attributes: { incidentId: 'X', unitId: 'MBR-1', unitType: 'MEMBER' } });
+    const send = fakeSendForExistingIncident({
+      Attributes: { incidentId: 'X', unitId: 'MBR-1', unitType: 'MEMBER' },
+    });
 
     await upsertResponseUnitTimes(fakeClient(send), TABLE_NAME, {
       deptId: DEPT_ID,
@@ -60,9 +77,27 @@ describe('upsertResponseUnitTimes', () => {
       times: { arrivedAt: 305 },
     });
 
-    const keys = send.mock.calls.map(
-      ([command]) => (command as { input: { Key: { sk: string } } }).input.Key.sk,
-    );
+    const keys = send.mock.calls
+      .map(([command]) => (command as { input: { Key: { sk: string } } }).input.Key.sk)
+      .filter((sk) => sk !== 'METADATA');
     expect(keys).toEqual(['RESPONSE#MBR-1', 'RESPONSE#E1']);
+  });
+
+  it('rejects with IncidentNotFoundError instead of creating an orphan RESPONSE# item for a bad incidentId', async () => {
+    const send = vi.fn().mockResolvedValue({});
+    const client = fakeClient(send);
+
+    await expect(
+      upsertResponseUnitTimes(client, TABLE_NAME, {
+        deptId: DEPT_ID,
+        incidentId: 'NICHOLS-9999',
+        unitId: 'E1',
+        unitType: 'APPARATUS',
+        times: { arrivedAt: 100 },
+      }),
+    ).rejects.toThrow(IncidentNotFoundError);
+
+    // Only the existence-check Get ran; no Update was ever sent for the nonexistent incident.
+    expect(send).toHaveBeenCalledTimes(1);
   });
 });
