@@ -76,6 +76,7 @@ async function queryDispatchTimeline(
   tableName: string,
   deptId: VerifiedDeptId,
   dispatchId: string,
+  memberId?: string,
 ): Promise<readonly Record<string, unknown>[]> {
   const items: Record<string, unknown>[] = [];
   let exclusiveStartKey: Record<string, unknown> | undefined;
@@ -84,12 +85,15 @@ async function queryDispatchTimeline(
       new QueryCommand({
         TableName: tableName,
         KeyConditionExpression: 'pk = :pk',
-        FilterExpression: 'entityType IN (:t0, :t1, :t2)',
+        FilterExpression: memberId
+          ? 'entityType IN (:t0, :t1, :t2) AND memberId = :memberId'
+          : 'entityType IN (:t0, :t1, :t2)',
         ExpressionAttributeValues: {
           ':pk': buildDeptScopedPk(deptId, 'DISPATCH', dispatchId),
           ':t0': TIMELINE_ENTITY_TYPES[0],
           ':t1': TIMELINE_ENTITY_TYPES[1],
           ':t2': TIMELINE_ENTITY_TYPES[2],
+          ...(memberId ? { ':memberId': memberId } : {}),
         },
         ...(exclusiveStartKey ? { ExclusiveStartKey: exclusiveStartKey } : {}),
       }),
@@ -107,8 +111,10 @@ export async function queryMemberDispatchTimeline(
   dispatchId: string,
   memberId: string,
 ): Promise<readonly Record<string, unknown>[]> {
-  const timeline = await queryDispatchTimeline(client, tableName, deptId, dispatchId);
-  return timeline.filter((entry) => entry.memberId === memberId);
+  // Push the memberId filter into the DynamoDB query itself instead of fetching the whole
+  // per-dispatch timeline and filtering in application code — fewer read units and less data
+  // transferred for dispatches with a large roster.
+  return queryDispatchTimeline(client, tableName, deptId, dispatchId, memberId);
 }
 
 export async function queryDepartmentAuditLog(
