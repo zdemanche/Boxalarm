@@ -3,6 +3,8 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useParams } from 'react-router-dom';
 import { useAuth } from '../../auth/AuthContext';
 import { ApiForbiddenGate } from '../../components/ApiForbiddenGate';
+import { listApparatus } from '../apparatus/api';
+import { listMembers } from '../personnel/api';
 import {
   assignEquipmentAsset,
   getEquipmentAsset,
@@ -30,6 +32,18 @@ export function EquipmentDetailPage() {
     queryKey: ['inventory', 'equipment', assetId],
     queryFn: () => getEquipmentAsset(auth, assetId),
     enabled: Boolean(assetId),
+  });
+
+  const membersQuery = useQuery({
+    queryKey: ['personnel', 'members'],
+    queryFn: () => listMembers(auth),
+    enabled: isAdmin && assignedToType === 'MEMBER',
+  });
+
+  const apparatusQuery = useQuery({
+    queryKey: ['apparatus'],
+    queryFn: () => listApparatus(auth),
+    enabled: isAdmin && assignedToType === 'APPARATUS',
   });
 
   const assignMutation = useMutation({
@@ -126,7 +140,10 @@ export function EquipmentDetailPage() {
                   <select
                     value={assignedToType}
                     disabled={retired}
-                    onChange={(e) => setAssignedToType(e.target.value as AssignedToType)}
+                    onChange={(e) => {
+                      setAssignedToType(e.target.value as AssignedToType);
+                      setAssignedToId('');
+                    }}
                     style={{ minHeight: 44 }}
                   >
                     <option value="MEMBER">Member</option>
@@ -134,14 +151,29 @@ export function EquipmentDetailPage() {
                   </select>
                 </label>
                 <label style={{ display: 'grid', gap: 4 }}>
-                  {assignedToType === 'MEMBER' ? 'Member ID' : 'Apparatus ID'}
-                  <input
+                  {assignedToType === 'MEMBER' ? 'Member' : 'Apparatus'}
+                  <select
                     value={assignedToId}
                     disabled={retired}
                     required
                     onChange={(e) => setAssignedToId(e.target.value)}
-                    style={{ minHeight: 44, padding: '0 12px' }}
-                  />
+                    style={{ minHeight: 44 }}
+                  >
+                    <option value="">
+                      {assignedToType === 'MEMBER' ? 'Select a member…' : 'Select an apparatus…'}
+                    </option>
+                    {assignedToType === 'MEMBER'
+                      ? (membersQuery.data ?? []).map((member) => (
+                          <option key={member.memberId} value={member.memberId}>
+                            {member.firstName} {member.lastName}
+                          </option>
+                        ))
+                      : (apparatusQuery.data ?? []).map((unit) => (
+                          <option key={unit.apparatusId} value={unit.apparatusId}>
+                            {unit.unitId} · {unit.type}
+                          </option>
+                        ))}
+                  </select>
                 </label>
                 <button type="submit" disabled={retired} style={{ minHeight: 44 }}>
                   Save assignment

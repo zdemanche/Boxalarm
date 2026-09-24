@@ -109,6 +109,23 @@ test('assignment shows on the asset detail (AC2)', async () => {
   let current = asset;
   server.use(
     http.get('/api/v1/inventory/equipment/eq-1', () => HttpResponse.json(current)),
+    http.get('/api/v1/personnel/members', () =>
+      HttpResponse.json({
+        items: [
+          {
+            memberId: 'm-1',
+            firstName: 'Alex',
+            lastName: 'Rivera',
+            email: 'alex@example.com',
+            phone: '203-555-0100',
+            status: 'ACTIVE',
+            joinDate: '2020-01-01',
+            rank: 'FF',
+            agencyId: 'NFD-1',
+          },
+        ],
+      }),
+    ),
     http.put('/api/v1/inventory/equipment/eq-1/assignment', async ({ request }) => {
       const body = (await request.json()) as { assignedToType: string; assignedToId: string };
       current = { ...current, ...body };
@@ -119,11 +136,48 @@ test('assignment shows on the asset detail (AC2)', async () => {
   const user = userEvent.setup();
   renderApp(['ADMIN'], '/inventory/eq-1');
   await screen.findByRole('heading', { name: 'SCBA-1' });
-  await user.type(screen.getByLabelText('Member ID'), 'm-1');
+  await user.selectOptions(await screen.findByLabelText('Member'), 'm-1');
   await user.click(screen.getByRole('button', { name: 'Save assignment' }));
   await waitFor(() => {
     expect(screen.getByText('MEMBER · m-1')).toBeTruthy();
   });
+});
+
+test('the member picker only offers members from the loaded list — no freeform ID entry (MAJOR-1)', async () => {
+  const asset: EquipmentAsset = {
+    assetId: 'eq-1',
+    deptId: 'd1',
+    serialNumber: 'SCBA-1',
+    location: 'Station 1',
+    lifecycleStatus: 'IN_SERVICE',
+  };
+  server.use(
+    http.get('/api/v1/inventory/equipment/eq-1', () => HttpResponse.json(asset)),
+    http.get('/api/v1/personnel/members', () =>
+      HttpResponse.json({
+        items: [
+          {
+            memberId: 'm-1',
+            firstName: 'Alex',
+            lastName: 'Rivera',
+            email: 'alex@example.com',
+            phone: '203-555-0100',
+            status: 'ACTIVE',
+            joinDate: '2020-01-01',
+            rank: 'FF',
+            agencyId: 'NFD-1',
+          },
+        ],
+      }),
+    ),
+  );
+
+  renderApp(['ADMIN'], '/inventory/eq-1');
+  await screen.findByRole('heading', { name: 'SCBA-1' });
+  const picker = (await screen.findByLabelText('Member')) as HTMLSelectElement;
+  expect(picker.tagName).toBe('SELECT');
+  const optionValues = Array.from(picker.options).map((option) => option.value);
+  expect(optionValues).toEqual(['', 'm-1']);
 });
 
 test('location change leaves assignment unchanged (AC3)', async () => {
@@ -139,6 +193,7 @@ test('location change leaves assignment unchanged (AC3)', async () => {
   let current = asset;
   server.use(
     http.get('/api/v1/inventory/equipment/eq-1', () => HttpResponse.json(current)),
+    http.get('/api/v1/personnel/members', () => HttpResponse.json({ items: [] })),
     http.put('/api/v1/inventory/equipment/eq-1/location', async ({ request }) => {
       const body = (await request.json()) as { location: string };
       current = { ...current, location: body.location };
@@ -165,11 +220,14 @@ test('a retired asset no longer appears when show retired is off, and its assign
     location: 'Station 1',
     lifecycleStatus: 'RETIRED',
   };
-  server.use(http.get('/api/v1/inventory/equipment/eq-9', () => HttpResponse.json(asset)));
+  server.use(
+    http.get('/api/v1/inventory/equipment/eq-9', () => HttpResponse.json(asset)),
+    http.get('/api/v1/personnel/members', () => HttpResponse.json({ items: [] })),
+  );
 
   renderApp(['ADMIN'], '/inventory/eq-9');
   await screen.findByRole('heading', { name: 'RETIRED-1' });
-  expect((screen.getByLabelText('Member ID') as HTMLInputElement).disabled).toBe(true);
+  expect((screen.getByLabelText('Member') as HTMLSelectElement).disabled).toBe(true);
 });
 
 test('a non-admin viewer sees no lifecycle transition control (AC3)', async () => {
