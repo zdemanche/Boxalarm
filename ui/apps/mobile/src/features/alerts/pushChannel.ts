@@ -6,7 +6,7 @@ export const DEFAULT_CHANNEL_ID = 'notifications-default';
 
 export type PushCategory = 'dispatch' | 'digest';
 
-export function categoryFromPushData(data: Record<string, unknown> | undefined): PushCategory {
+export function categoryFromPushData(data: { category?: unknown } | undefined): PushCategory {
   return data?.category === 'digest' ? 'digest' : 'dispatch';
 }
 

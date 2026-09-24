@@ -1,10 +1,11 @@
 import { Platform } from 'react-native';
 import notifee, { EventType } from '@notifee/react-native';
-import messaging from '@react-native-firebase/messaging';
+import * as messaging from '@react-native-firebase/messaging';
 import { navigateToAlertDetail } from '../../navigation/navigationRef';
 import { dispatchIdFromNotificationData, subscribePushNotificationRouting } from './pushRouting';
 
-const messagingInstance = messaging();
+const getInitialNotification = messaging.getInitialNotification as jest.Mock;
+const onNotificationOpenedApp = messaging.onNotificationOpenedApp as jest.Mock;
 
 jest.mock('../../navigation/navigationRef', () => ({
   navigateToAlertDetail: jest.fn(),
@@ -12,9 +13,9 @@ jest.mock('../../navigation/navigationRef', () => ({
 
 beforeEach(() => {
   (navigateToAlertDetail as jest.Mock).mockClear();
-  (messagingInstance.getInitialNotification as jest.Mock).mockClear();
+  getInitialNotification.mockClear();
   (notifee.getInitialNotification as jest.Mock).mockClear();
-  (messagingInstance.onNotificationOpenedApp as jest.Mock).mockClear();
+  onNotificationOpenedApp.mockClear();
   (notifee.onForegroundEvent as jest.Mock).mockClear();
 });
 
@@ -40,7 +41,7 @@ test('a cold-start open on Android navigates from the notifee-delivered initial 
 
 test('a cold-start open on iOS navigates from the FCM-delivered initial notification', async () => {
   Platform.OS = 'ios';
-  (messagingInstance.getInitialNotification as jest.Mock).mockResolvedValueOnce({
+  getInitialNotification.mockResolvedValueOnce({
     data: { dispatchId: 'DISP-3' },
   });
 
@@ -53,7 +54,7 @@ test('a cold-start open on iOS navigates from the FCM-delivered initial notifica
 
 test('a background-to-foreground open navigates via onNotificationOpenedApp', () => {
   let openedCallback: ((message: unknown) => void) | undefined;
-  (messagingInstance.onNotificationOpenedApp as jest.Mock).mockImplementationOnce((cb) => {
+  onNotificationOpenedApp.mockImplementationOnce((_instance: unknown, cb: (m: unknown) => void) => {
     openedCallback = cb;
     return () => {};
   });

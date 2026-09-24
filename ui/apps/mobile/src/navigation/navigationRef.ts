@@ -5,8 +5,5 @@ export const navigationRef = createNavigationContainerRef<AppTabsParamList>();
 
 export function navigateToAlertDetail(dispatchId: string): void {
   if (!navigationRef.isReady()) return;
-  navigationRef.navigate(
-    'Alerts' as never,
-    { screen: 'AlertDetail', params: { dispatchId } } as never,
-  );
+  navigationRef.navigate('Alerts', { screen: 'AlertDetail', params: { dispatchId } });
 }

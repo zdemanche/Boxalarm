@@ -20,7 +20,10 @@ jest.mock('react-native-config', () => ({
 // jest.mock for these with the behavior it needs; this default keeps every other test (which
 // only imports something that transitively pulls in the push modules) from crashing on load.
 jest.mock('@react-native-firebase/messaging', () => {
-  const instance = {
+  const instance = {};
+  return {
+    __esModule: true,
+    getMessaging: jest.fn(() => instance),
     getToken: jest.fn(async () => null),
     getAPNSToken: jest.fn(async () => null),
     registerDeviceForRemoteMessages: jest.fn(async () => undefined),
@@ -30,8 +33,6 @@ jest.mock('@react-native-firebase/messaging', () => {
     getInitialNotification: jest.fn(async () => null),
     setBackgroundMessageHandler: jest.fn(),
   };
-  const messaging = () => instance;
-  return { __esModule: true, default: messaging };
 });
 
 jest.mock('@notifee/react-native', () => {

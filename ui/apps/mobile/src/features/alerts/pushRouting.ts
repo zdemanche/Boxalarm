@@ -1,7 +1,13 @@
 import notifee, { EventType } from '@notifee/react-native';
 import { Platform } from 'react-native';
-import messaging from '@react-native-firebase/messaging';
+import {
+  getInitialNotification,
+  getMessaging,
+  onNotificationOpenedApp,
+} from '@react-native-firebase/messaging';
 import { navigateToAlertDetail } from '../../navigation/navigationRef';
+
+const messagingInstance = getMessaging();
 
 export function dispatchIdFromNotificationData(
   data: Record<string, unknown> | undefined,
@@ -17,7 +23,7 @@ async function routeToInitialNotification(): Promise<void> {
     if (dispatchId) navigateToAlertDetail(dispatchId);
     return;
   }
-  const initial = await messaging().getInitialNotification();
+  const initial = await getInitialNotification(messagingInstance);
   const dispatchId = dispatchIdFromNotificationData(initial?.data);
   if (dispatchId) navigateToAlertDetail(dispatchId);
 }
@@ -25,7 +31,7 @@ async function routeToInitialNotification(): Promise<void> {
 export function subscribePushNotificationRouting(): () => void {
   void routeToInitialNotification();
 
-  const unsubscribeOpened = messaging().onNotificationOpenedApp((remoteMessage) => {
+  const unsubscribeOpened = onNotificationOpenedApp(messagingInstance, (remoteMessage) => {
     const dispatchId = dispatchIdFromNotificationData(remoteMessage?.data);
     if (dispatchId) navigateToAlertDetail(dispatchId);
   });

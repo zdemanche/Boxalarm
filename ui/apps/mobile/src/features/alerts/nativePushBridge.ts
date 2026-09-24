@@ -1,16 +1,24 @@
 import notifee, { AuthorizationStatus } from '@notifee/react-native';
 import { Platform } from 'react-native';
 import Config from 'react-native-config';
-import messaging from '@react-native-firebase/messaging';
+import {
+  getAPNSToken,
+  getMessaging,
+  getToken,
+  onTokenRefresh,
+  registerDeviceForRemoteMessages,
+} from '@react-native-firebase/messaging';
 import type { DeviceToken, NativePushBridge } from './pushTokens';
+
+const messagingInstance = getMessaging();
 
 async function readDeviceToken(): Promise<DeviceToken | null> {
   if (Platform.OS === 'ios') {
-    await messaging().registerDeviceForRemoteMessages();
-    const token = await messaging().getAPNSToken();
+    await registerDeviceForRemoteMessages(messagingInstance);
+    const token = await getAPNSToken(messagingInstance);
     return token ? { platform: 'APNS', token } : null;
   }
-  const token = await messaging().getToken();
+  const token = await getToken(messagingInstance);
   return token ? { platform: 'FCM', token } : null;
 }
 
@@ -18,7 +26,7 @@ export const firebaseNativePushBridge: NativePushBridge = {
   async requestPermission() {
     const criticalAlertsGranted = Config.CRITICAL_ALERTS_ENTITLEMENT_GRANTED === 'true';
     const settings = await notifee.requestPermission({
-      ios: { critical: criticalAlertsGranted },
+      criticalAlert: criticalAlertsGranted,
     });
     return (
       settings.authorizationStatus === AuthorizationStatus.AUTHORIZED ||
@@ -29,7 +37,7 @@ export const firebaseNativePushBridge: NativePushBridge = {
   getToken: readDeviceToken,
 
   onTokenRefresh(listener) {
-    return messaging().onTokenRefresh(() => {
+    return onTokenRefresh(messagingInstance, () => {
       void readDeviceToken().then((device) => {
         if (device) listener(device);
       });
