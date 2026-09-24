@@ -35,6 +35,34 @@ const CHANNEL_TIER = 'escalation';
 const VOICE_ESCALATION_DELAY_SECONDS = 75;
 const FAN_OUT_CHANNELS: readonly FanOutChannel[] = ['push', 'sms'];
 const MAX_CONCURRENT_TONE_TASKS = 10;
+const GUARD_ITEM_INDEX = 0;
+const METADATA_ITEM_INDEX = 2;
+
+interface TransactCancellationError {
+  readonly name: string;
+  readonly CancellationReasons?: ReadonlyArray<{ readonly Code?: string }>;
+}
+
+function asTransactionCancellation(error: unknown): TransactCancellationError | undefined {
+  return error instanceof Error && error.name === 'TransactionCanceledException'
+    ? error
+    : undefined;
+}
+
+function isGuardConflict(error: unknown): boolean {
+  return (
+    asTransactionCancellation(error)?.CancellationReasons?.[GUARD_ITEM_INDEX]?.Code ===
+    'ConditionalCheckFailed'
+  );
+}
+
+function isMetadataAdvanceRejected(error: unknown): boolean {
+  const cancellation = asTransactionCancellation(error);
+  return (
+    cancellation?.CancellationReasons?.[GUARD_ITEM_INDEX]?.Code !== 'ConditionalCheckFailed' &&
+    cancellation?.CancellationReasons?.[METADATA_ITEM_INDEX]?.Code === 'ConditionalCheckFailed'
+  );
+}
 
 export interface ToneEvaluatorPayload {
   readonly deptId: string;
@@ -267,7 +295,39 @@ type ToneCommitResult = 'committed' | 'already_exists';
  * because the responder predicate is already met. Writing the guard before
  * `fireTone` made Scheduler retries return SKIPPED_ALREADY_FIRED and silently
  * suppressed unpublished members / tones 2 and 3.
+ *
+ * METADATA only advances when `currentToneSequence` is still behind this tone
+ * and the ladder is not COMPLETED / HALTED_MANUAL. A rejected advance still
+ * writes the fire-guard so retries stop; any other transaction cancel throws
+ * so Scheduler retries.
  */
+async function writeToneGuardItems(
+  ddb: DynamoDBDocumentClient,
+  transactItems: NonNullable<TransactWriteCommandInput['TransactItems']>,
+  correlationId: string,
+): Promise<ToneCommitResult> {
+  try {
+    await ddb.send(
+      new TransactWriteCommand({
+        TransactItems: transactItems,
+      }),
+    );
+    return 'committed';
+  } catch (error) {
+    if (isGuardConflict(error)) {
+      return 'already_exists';
+    }
+    logError('alerting.toneLadder.guardWriteFailed', error, {
+      correlationId,
+      cancellationReasons: asTransactionCancellation(error)?.CancellationReasons?.map(
+        (r) => r.Code,
+      ),
+    });
+    emitOutcomeMetric(METRIC_NAMESPACE, 'ToneEvaluationFailed');
+    throw error;
+  }
+}
+
 async function commitToneEvaluation(
   ddb: DynamoDBDocumentClient,
   tableName: string,
@@ -280,6 +340,7 @@ async function commitToneEvaluation(
   eligibleMemberCount: number,
   options: { readonly advanceMetadata: boolean },
 ): Promise<ToneCommitResult> {
+  const correlationId = `${dispatchId}#${toneSequence}`;
   const guardAndAudit: NonNullable<TransactWriteCommandInput['TransactItems']> = [
     {
       Put: {
@@ -312,35 +373,46 @@ async function commitToneEvaluation(
       },
     },
   ];
-  const transactItems = options.advanceMetadata
-    ? [
-        ...guardAndAudit,
-        {
-          Update: {
-            TableName: tableName,
-            Key: { pk, sk: 'METADATA' },
-            UpdateExpression: 'SET currentToneSequence = :tone, toneLadderStatus = :status',
-            ExpressionAttributeValues: {
-              ':tone': toneSequence,
-              ':status': toneSequence >= MUTUAL_AID_AFTER_TONE ? 'COMPLETED' : 'ACTIVE',
-            },
-          },
-        },
-      ]
-    : guardAndAudit;
+  if (!options.advanceMetadata) {
+    return writeToneGuardItems(ddb, guardAndAudit, correlationId);
+  }
   try {
     await ddb.send(
       new TransactWriteCommand({
-        TransactItems: transactItems,
+        TransactItems: [
+          ...guardAndAudit,
+          {
+            Update: {
+              TableName: tableName,
+              Key: { pk, sk: 'METADATA' },
+              UpdateExpression: 'SET currentToneSequence = :tone, toneLadderStatus = :status',
+              ConditionExpression:
+                'currentToneSequence < :tone AND toneLadderStatus <> :completed AND toneLadderStatus <> :halted',
+              ExpressionAttributeValues: {
+                ':tone': toneSequence,
+                ':status': toneSequence >= MUTUAL_AID_AFTER_TONE ? 'COMPLETED' : 'ACTIVE',
+                ':completed': 'COMPLETED',
+                ':halted': 'HALTED_MANUAL',
+              },
+            },
+          },
+        ],
       }),
     );
     return 'committed';
   } catch (error) {
-    if (error instanceof Error && error.name === 'TransactionCanceledException') {
+    if (isGuardConflict(error)) {
       return 'already_exists';
     }
+    if (isMetadataAdvanceRejected(error)) {
+      logInfo('alerting.toneLadder.metadataAdvanceSkipped', { correlationId, toneSequence });
+      return writeToneGuardItems(ddb, guardAndAudit, correlationId);
+    }
     logError('alerting.toneLadder.guardWriteFailed', error, {
-      correlationId: `${dispatchId}#${toneSequence}`,
+      correlationId,
+      cancellationReasons: asTransactionCancellation(error)?.CancellationReasons?.map(
+        (r) => r.Code,
+      ),
     });
     emitOutcomeMetric(METRIC_NAMESPACE, 'ToneEvaluationFailed');
     throw error;
@@ -392,7 +464,11 @@ export const handler = async (payload: unknown): Promise<{ outcome: ToneOutcome 
   }
 
   const existingGuard = await ddb.send(
-    new GetCommand({ TableName: tableName, Key: { pk, sk: `TONE#${toneSequence}` } }),
+    new GetCommand({
+      TableName: tableName,
+      Key: { pk, sk: `TONE#${toneSequence}` },
+      ConsistentRead: true,
+    }),
   );
   if (existingGuard.Item) {
     logInfo('alerting.toneLadder.alreadyEvaluated', { correlationId });
@@ -455,6 +531,7 @@ export const handler = async (payload: unknown): Promise<{ outcome: ToneOutcome 
   );
   if (fireCommit === 'already_exists') {
     logInfo('alerting.toneLadder.alreadyEvaluated', { correlationId });
+    return { outcome: 'SKIPPED_ALREADY_FIRED' };
   }
 
   if (toneSequence === TONE_SEQUENCE_THREE) {
