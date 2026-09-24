@@ -194,6 +194,73 @@ test('audit log lookup renders a readable diff; a 400 shows detail next to the i
   });
 });
 
+test('resubmitting the same audit lookup refreshes the results table', async () => {
+  let calls = 0;
+  server.use(
+    http.get('/api/v1/platform/audit', () => {
+      calls += 1;
+      if (calls === 1) {
+        return HttpResponse.json({
+          entries: [
+            {
+              actorId: 'admin-1',
+              ts: Date.parse('2026-01-01T00:00:00.000Z'),
+              action: 'UPDATE',
+              mutatedEntityType: 'DEPARTMENT_CONFIG',
+              mutatedEntityId: 'ALERT_RULES',
+              changedFields: { escalationThresholdN: { old: 60, new: 90 } },
+            },
+          ],
+        });
+      }
+      return HttpResponse.json({
+        entries: [
+          {
+            actorId: 'admin-1',
+            ts: Date.parse('2026-01-01T00:00:00.000Z'),
+            action: 'UPDATE',
+            mutatedEntityType: 'DEPARTMENT_CONFIG',
+            mutatedEntityId: 'ALERT_RULES',
+            changedFields: { escalationThresholdN: { old: 60, new: 90 } },
+          },
+          {
+            actorId: 'admin-2',
+            ts: Date.parse('2026-01-02T00:00:00.000Z'),
+            action: 'UPDATE',
+            mutatedEntityType: 'DEPARTMENT_CONFIG',
+            mutatedEntityId: 'ALERT_RULES',
+            changedFields: { escalationThresholdN: { old: 90, new: 120 } },
+          },
+        ],
+      });
+    }),
+  );
+
+  const user = userEvent.setup();
+  renderRoute(['ADMIN'], '/audit-log');
+  await screen.findByRole('heading', { name: 'Audit log' });
+
+  await user.type(screen.getByLabelText('Entity type'), 'DEPARTMENT_CONFIG');
+  await user.type(screen.getByLabelText('Entity ID'), 'ALERT_RULES');
+  await user.click(screen.getByRole('button', { name: 'Look up' }));
+
+  await waitFor(() => {
+    expect(screen.getByText(/escalationThresholdN: 60 → 90/)).toBeTruthy();
+  });
+  expect(screen.queryByText('No change history for this record.')).toBeNull();
+
+  // Resubmit the exact same lookup (same entityType/entityId) — this used to keep the same
+  // React Query data reference, so the effect filling the results table never re-ran and the
+  // page fell through to a false "No change history for this record."
+  await user.click(screen.getByRole('button', { name: 'Look up' }));
+
+  await waitFor(() => {
+    expect(screen.getByText(/escalationThresholdN: 90 → 120/)).toBeTruthy();
+  });
+  expect(screen.queryByText('No change history for this record.')).toBeNull();
+  expect(calls).toBe(2);
+});
+
 test('admin revokes a member’s sessions from /personnel/:id', async () => {
   const member: Member = {
     memberId: 'm1',

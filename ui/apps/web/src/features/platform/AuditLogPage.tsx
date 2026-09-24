@@ -1,14 +1,17 @@
-import { useEffect, useState, type FormEvent } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useRef, useState, type FormEvent } from 'react';
+import { useInfiniteQuery } from '@tanstack/react-query';
 import { useAuth } from '../../auth/AuthContext';
 import { ApiError } from '../../lib/apiClient';
 import { ApiForbiddenGate } from '../../components/ApiForbiddenGate';
 import { getAuditTrail } from './api';
-import type { AuditEntry } from './types';
 
 interface Query {
   entityType: string;
   entityId: string;
+  /** Bumped on every submit, including a resubmit of the same lookup, so the query key
+   * always changes and a fresh fetch always fires — same entityType/entityId would
+   * otherwise be an unchanged key that useQuery/useInfiniteQuery has no reason to refetch. */
+  nonce: number;
 }
 
 export function AuditLogPage() {
@@ -16,29 +19,25 @@ export function AuditLogPage() {
   const [entityType, setEntityType] = useState('');
   const [entityId, setEntityId] = useState('');
   const [submitted, setSubmitted] = useState<Query | null>(null);
-  const [cursor, setCursor] = useState<string | undefined>(undefined);
-  const [entries, setEntries] = useState<AuditEntry[]>([]);
+  const nextNonce = useRef(0);
 
-  const auditQuery = useQuery({
-    queryKey: ['platform', 'audit', submitted?.entityType, submitted?.entityId, cursor],
-    queryFn: () => getAuditTrail(auth, submitted!.entityType, submitted!.entityId, cursor),
+  const auditQuery = useInfiniteQuery({
+    queryKey: ['platform', 'audit', submitted?.entityType, submitted?.entityId, submitted?.nonce],
+    queryFn: ({ pageParam }) =>
+      getAuditTrail(auth, submitted!.entityType, submitted!.entityId, pageParam),
+    initialPageParam: undefined as string | undefined,
+    getNextPageParam: (lastPage) => lastPage.nextCursor,
     enabled: submitted !== null,
   });
 
-  useEffect(() => {
-    if (!auditQuery.data) return;
-    setEntries((prev) =>
-      cursor ? [...prev, ...auditQuery.data.entries] : auditQuery.data.entries,
-    );
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [auditQuery.data]);
-
   function handleSubmit(event: FormEvent) {
     event.preventDefault();
-    setCursor(undefined);
-    setEntries([]);
-    setSubmitted({ entityType, entityId });
+    nextNonce.current += 1;
+    setSubmitted({ entityType, entityId, nonce: nextNonce.current });
   }
+
+  const entries = auditQuery.data?.pages.flatMap((page) => page.entries) ?? [];
+  const nextCursor = auditQuery.data?.pages.at(-1)?.nextCursor;
 
   const error = auditQuery.error;
   const validationDetail =
@@ -148,10 +147,11 @@ export function AuditLogPage() {
                 ))}
               </tbody>
             </table>
-            {auditQuery.data?.nextCursor ? (
+            {nextCursor ? (
               <button
                 type="button"
-                onClick={() => setCursor(auditQuery.data?.nextCursor)}
+                onClick={() => void auditQuery.fetchNextPage()}
+                disabled={auditQuery.isFetchingNextPage}
                 style={{ minHeight: 44, marginTop: 'var(--boxalarm-spacing-md)' }}
               >
                 Load more
