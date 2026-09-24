@@ -54,7 +54,7 @@
     "@types/aws-lambda": "8.10.163",
     "@types/ngeohash": "0.6.8",
     "@types/node": "24.13.3",
-    "@vitest/coverage-v8": "3.2.7",
+    "@vitest/coverage-v8": "5.0.1",
     "aws-sdk-client-mock": "^4.1.0",
     "esbuild": "0.28.2",
     "eslint": "10.11.0",
