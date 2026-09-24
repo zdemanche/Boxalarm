@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { IncidentEvent } from './authContext.js';
-import { SECONDARY_SCHEMA_V_N } from './schemaVersion/fixtures.js';
+import { SECONDARY_SCHEMA_V_N, SECONDARY_SCHEMA_V_N_MINUS_1 } from './schemaVersion/fixtures.js';
 
 function buildEvent(
   lambdaContext: Record<string, unknown> | undefined,
@@ -40,13 +40,32 @@ function buildEvent(
 
 const MEMBER_AUTH = { sub: 'MBR-0099', deptId: 'NICHOLS', 'cognito:groups': 'MEMBER' };
 
+const BASE_INCIDENT = {
+  incidentId: 'NICHOLS-4471-1798000000',
+  deptId: 'NICHOLS',
+  dispatchNumber: '4471',
+  epochSeconds: 1_798_000_000,
+  nerisSchemaVersion: '2026.2',
+  corePayload: {},
+  status: 'DRAFT',
+  createdBy: 'MBR-0034',
+};
+
 function mockDeps(
-  overrides: { readonly putIncidentSecondary?: ReturnType<typeof vi.fn> } = {},
+  overrides: {
+    readonly putIncidentSecondary?: ReturnType<typeof vi.fn>;
+    readonly getIncident?: ReturnType<typeof vi.fn>;
+    readonly getSchemaVersion?: ReturnType<typeof vi.fn>;
+    readonly getSecondarySchemaDocument?: ReturnType<typeof vi.fn>;
+  } = {},
 ): void {
   process.env.INCIDENT_TABLE_NAME = 'boxalarm-dev-incident';
   vi.doMock('./repository.js', () => ({
     getDocumentClient: () => ({}),
     getTableName: () => 'boxalarm-dev-incident',
+    getIncidentRepository: () => ({
+      getIncident: overrides.getIncident ?? vi.fn().mockResolvedValue(BASE_INCIDENT),
+    }),
   }));
   vi.doMock('./secondaryRepository.js', () => ({
     putIncidentSecondary: overrides.putIncidentSecondary ?? vi.fn().mockResolvedValue(undefined),
@@ -57,10 +76,17 @@ function mockDeps(
         version: '2026.2',
         secondarySchemaS3Key: 'neris-schema/2026.2/secondary.json',
       }),
+      getSchemaVersion:
+        overrides.getSchemaVersion ??
+        vi.fn().mockResolvedValue({
+          version: '2026.2',
+          secondarySchemaS3Key: 'neris-schema/2026.2/secondary.json',
+        }),
     }),
   }));
   vi.doMock('./schemaVersion/s3Schema.js', () => ({
-    getSecondarySchemaDocument: vi.fn().mockResolvedValue(SECONDARY_SCHEMA_V_N),
+    getSecondarySchemaDocument:
+      overrides.getSecondarySchemaDocument ?? vi.fn().mockResolvedValue(SECONDARY_SCHEMA_V_N),
   }));
   vi.doMock('../platform-service/export/awsClients.js', () => ({ getS3Client: () => ({}) }));
 }
@@ -124,6 +150,78 @@ describe('putExposures handler', () => {
     expect(body.errors).toHaveLength(1);
     expect(body.errors[0]?.field).toBe('exposure_type');
     expect(body.errors[0]?.message).toMatch(/must be one of/);
+  });
+
+  it(
+    'validates an older incident against its own pinned (SUPERSEDED) Secondary schema version, ' +
+      'not the newer ACTIVE schema (regression for PR #316 CRITICAL finding)',
+    async () => {
+      const olderIncident = { ...BASE_INCIDENT, nerisSchemaVersion: '2026.1' };
+      const getSchemaVersion = vi.fn().mockImplementation((version: string) =>
+        Promise.resolve(
+          version === '2026.1'
+            ? {
+                version: '2026.1',
+                status: 'SUPERSEDED',
+                secondarySchemaS3Key: 'neris-schema/2026.1/secondary.json',
+              }
+            : undefined,
+        ),
+      );
+      const getSecondarySchemaDocument = vi
+        .fn()
+        .mockImplementation((_s3: unknown, _bucket: unknown, key: string) =>
+          Promise.resolve(
+            key === 'neris-schema/2026.1/secondary.json'
+              ? SECONDARY_SCHEMA_V_N_MINUS_1
+              : SECONDARY_SCHEMA_V_N,
+          ),
+        );
+      mockDeps({
+        getIncident: vi.fn().mockResolvedValue(olderIncident),
+        getSchemaVersion,
+        getSecondarySchemaDocument,
+      });
+      const { handler } = await import('./putExposures.js');
+
+      // BLOODBORNE is valid under the newer ACTIVE (2026.2) Secondary schema but NOT under
+      // this incident's own pinned 2026.1 schema — proving it validates against the pinned
+      // version, not whatever is ACTIVE now.
+      const result = await handler(
+        buildEvent(MEMBER_AUTH, {
+          secondaryType: 'EXPOSURE',
+          payload: { exposure_type: 'BLOODBORNE' },
+          affectedMemberIds: ['MBR-0034'],
+        }),
+        {} as never,
+        () => undefined,
+      );
+
+      expect(getSchemaVersion).toHaveBeenCalledWith('2026.1');
+      expect(result).toMatchObject({ statusCode: 400 });
+      const body = JSON.parse((result as { body: string }).body) as {
+        errors: { field: string; message: string }[];
+      };
+      expect(body.errors).toHaveLength(1);
+      expect(body.errors[0]?.field).toBe('exposure_type');
+    },
+  );
+
+  it('returns 404 when the incident does not exist', async () => {
+    mockDeps({ getIncident: vi.fn().mockResolvedValue(undefined) });
+    const { handler } = await import('./putExposures.js');
+
+    const result = await handler(
+      buildEvent(MEMBER_AUTH, {
+        secondaryType: 'EXPOSURE',
+        payload: { exposure_type: 'SMOKE' },
+        affectedMemberIds: ['MBR-0034'],
+      }),
+      {} as never,
+      () => undefined,
+    );
+
+    expect(result).toMatchObject({ statusCode: 404 });
   });
 
   it('returns 400 when affectedMemberIds is missing', async () => {

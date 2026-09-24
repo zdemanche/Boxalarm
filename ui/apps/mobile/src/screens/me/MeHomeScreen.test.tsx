@@ -5,7 +5,10 @@ const mockSignOut = jest.fn(async () => {});
 
 jest.mock('../../auth/AuthContext', () => ({
   useAuth: () => ({ signOut: mockSignOut }),
+  useOptionalAuth: () => ({ isAuthenticated: false, memberId: null }),
 }));
+
+jest.mock('react-native-config', () => ({ __esModule: true, default: {} }));
 
 const mockNavigate = jest.fn();
 jest.mock('@react-navigation/native', () => ({
@@ -22,6 +25,14 @@ test('shows the member profile once it loads', async () => {
 
   expect(await findByText('Jamie Rios')).toBeTruthy();
   expect(await findByText('Firefighter')).toBeTruthy();
+});
+
+test('lists held qualifications with eligibility (E2-S2)', async () => {
+  const { findByText } = await render(<MeHomeScreen />);
+
+  expect(await findByText(/INTERIOR/)).toBeTruthy();
+  expect(await findByText(/DRIVER_OPERATOR/)).toBeTruthy();
+  expect(await findByText(/Not currently eligible/)).toBeTruthy();
 });
 
 test('navigating to Certifications', async () => {

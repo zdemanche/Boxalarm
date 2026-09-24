@@ -281,20 +281,43 @@ export function createIncidentRepository(
     },
 
     async updateCorePayload(deptId, incidentId, corePayload, status, nowEpochSeconds) {
+      const setClauses = [
+        'corePayload = :corePayload',
+        '#status = :status',
+        'updatedAt = :updatedAt',
+      ];
+      const values: Record<string, unknown> = {
+        ':corePayload': corePayload,
+        ':status': status,
+        ':updatedAt': nowEpochSeconds,
+      };
+
+      // Keep the denormalized top-level fields createIncident also stores (and that
+      // searchIncidents.ts/GSI1 summaries and getIncident read directly, never corePayload)
+      // in sync whenever guided completion sets the corresponding corePayload field. Guided
+      // completion is the common path that finalizes incident_type, since it's optional at
+      // create and one of the two requiredFields this flow exists to fill in — leaving the
+      // top-level field unsynced would make search summaries go stale relative to corePayload.
+      const incidentType = corePayload.incident_type;
+      if (typeof incidentType === 'string') {
+        setClauses.push('incidentType = :incidentType');
+        values[':incidentType'] = incidentType;
+      }
+      const address = corePayload.address;
+      if (typeof address === 'string') {
+        setClauses.push('address = :address');
+        values[':address'] = address;
+      }
+
       try {
         const result = await client.send(
           new UpdateCommand({
             TableName: tableName,
             Key: { pk: buildDeptScopedPk(deptId, 'INCIDENT', incidentId), sk: 'METADATA' },
             ConditionExpression: 'attribute_exists(pk)',
-            UpdateExpression:
-              'SET corePayload = :corePayload, #status = :status, updatedAt = :updatedAt',
+            UpdateExpression: `SET ${setClauses.join(', ')}`,
             ExpressionAttributeNames: { '#status': 'status' },
-            ExpressionAttributeValues: {
-              ':corePayload': corePayload,
-              ':status': status,
-              ':updatedAt': nowEpochSeconds,
-            },
+            ExpressionAttributeValues: values,
             ReturnValues: 'ALL_NEW',
           }),
         );

@@ -1,5 +1,4 @@
-import { act, fireEvent, render } from '@testing-library/react-native';
-import { mockAlertsRepository } from '../../features/alerts/mockAlertsRepository';
+import { fireEvent, render } from '@testing-library/react-native';
 import { AlertsHomeScreen } from './AlertsHomeScreen';
 
 const mockNavigate = jest.fn();
@@ -7,27 +6,34 @@ jest.mock('@react-navigation/native', () => ({
   useNavigation: () => ({ navigate: mockNavigate }),
 }));
 
+let mockAuth: { roles: string[] } | undefined;
+jest.mock('../../auth/AuthContext', () => ({
+  useOptionalAuth: () => mockAuth,
+}));
+
 beforeEach(() => {
   mockNavigate.mockClear();
+  mockAuth = undefined;
 });
 
-test('shows an explanation and a way to send a test alert', async () => {
-  const { findByText, findByRole } = await render(<AlertsHomeScreen />);
+test('a member with no officer/chief role is not offered manual entry', async () => {
+  mockAuth = { roles: ['MEMBER'] };
+  const { queryByRole } = await render(<AlertsHomeScreen />);
 
-  expect(await findByText(/confirm your phone will page correctly/i)).toBeTruthy();
-  expect(await findByRole('button', { name: 'Send test alert' })).toBeTruthy();
+  expect(queryByRole('button', { name: 'Enter dispatch manually' })).toBeNull();
 });
 
-test('sending a test alert navigates to that dispatch once delivered', async () => {
+test('an officer is offered manual entry and it navigates to the entry form', async () => {
+  mockAuth = { roles: ['OFFICER'] };
   const { findByRole } = await render(<AlertsHomeScreen />);
 
-  await act(async () => {
-    fireEvent.press(await findByRole('button', { name: 'Send test alert' }));
-  });
+  fireEvent.press(await findByRole('button', { name: 'Enter dispatch manually' }));
+  expect(mockNavigate).toHaveBeenCalledWith('ManualEntry');
+});
 
-  const { dispatchId } = await mockAlertsRepository.triggerSelfTest();
-  expect(mockNavigate).toHaveBeenCalledWith('AlertDetail', {
-    dispatchId: expect.stringMatching(/^SELFTEST-/) as unknown as string,
-  });
-  expect(dispatchId).toBeTruthy();
+test('a chief is also offered manual entry', async () => {
+  mockAuth = { roles: ['CHIEF'] };
+  const { findByRole } = await render(<AlertsHomeScreen />);
+
+  expect(await findByRole('button', { name: 'Enter dispatch manually' })).toBeTruthy();
 });

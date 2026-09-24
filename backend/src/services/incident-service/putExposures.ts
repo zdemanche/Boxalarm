@@ -9,7 +9,7 @@ import {
   readAuthorizerContext,
   resolveTraceId,
 } from './authContext.js';
-import { getDocumentClient, getTableName } from './repository.js';
+import { getDocumentClient, getIncidentRepository, getTableName } from './repository.js';
 import { putIncidentSecondary } from './secondaryRepository.js';
 import { createSchemaVersionRepository } from './schemaVersion/repository.js';
 import { getSecondarySchemaDocument } from './schemaVersion/s3Schema.js';
@@ -127,11 +127,30 @@ export const handler: APIGatewayProxyHandlerV2WithLambdaAuthorizer<AuthorizerCon
   }
 
   try {
+    const repository = getIncidentRepository(process.env);
+    const incident = await repository.getIncident(deptId, incidentId);
+    if (!incident) {
+      return problemResponse(
+        404,
+        'Not Found',
+        `No incident found with incidentId "${incidentId}".`,
+        traceId,
+      );
+    }
+
     const client = getDocumentClient();
     const tableName = getTableName(process.env);
     const schemaVersionRepository = createSchemaVersionRepository(client, tableName);
-    const activeSchema = await schemaVersionRepository.getActiveSchemaVersion();
-    if (!activeSchema) {
+    // Validate against the schema version this incident was authored under, not whatever
+    // is newest: the scheduled refresh job can promote a new ACTIVE schema at any time, and
+    // re-validating an older incident against it would apply enum/requiredFields rules it was
+    // never authored under. Falls back to ACTIVE only when the pinned version can't be
+    // resolved at all (e.g. the 'UNVALIDATED' sentinel createIncident.ts's dispatch-linked
+    // path uses when no schema was ACTIVE yet at create time).
+    const schema =
+      (await schemaVersionRepository.getSchemaVersion(incident.nerisSchemaVersion)) ??
+      (await schemaVersionRepository.getActiveSchemaVersion());
+    if (!schema) {
       return problemResponse(
         503,
         'Service Unavailable',
@@ -142,7 +161,7 @@ export const handler: APIGatewayProxyHandlerV2WithLambdaAuthorizer<AuthorizerCon
     const secondarySchema = await getSecondarySchemaDocument(
       getS3Client(),
       process.env.NERIS_SCHEMA_BUCKET_NAME ?? '',
-      activeSchema.secondarySchemaS3Key,
+      schema.secondarySchemaS3Key,
     );
 
     const errors = validateSecondaryFields(secondarySchema, input.secondaryType, input.payload);

@@ -10,34 +10,40 @@ import {
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { mockChecksRepository } from '../../features/checks/mockChecksRepository';
+import { useChecksRepository } from '../../features/checks/apiChecksRepository';
 import type { ChecklistTemplate, ItemResult } from '../../features/checks/types';
 import type { ChecksStackParamList } from '../../navigation/ChecksStack';
 
+function newIdempotencyKey(): string {
+  return `check-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
 // N4.2: the whole point of this screen is that no step waits on a network round trip - every
 // pass/fail tap is a local, instant state update, and "Complete check" resolves the same way
-// (mockChecksRepository.submitChecklistRun is optimistic, matching @boxalarm/core's eventual
-// outbox-backed contract).
+// (the repository's submitChecklistRun is optimistic/local-first).
 export function CheckRunnerScreen() {
   const route = useRoute();
   const navigation = useNavigation<NavigationProp<ChecksStackParamList>>();
   const apparatusId = (route.params as { apparatusId: string }).apparatusId;
   const scheme = useColorScheme();
   const tokens = scheme === 'dark' ? palette.cab : palette.day;
+  const repository = useChecksRepository();
   const [template, setTemplate] = useState<ChecklistTemplate | null>(null);
   const [results, setResults] = useState<Record<string, boolean>>({});
+  const [photosCaptured, setPhotosCaptured] = useState<Record<string, boolean>>({});
   const [startedAt] = useState(() => Date.now());
+  const [idempotencyKey] = useState(newIdempotencyKey);
   const [completed, setCompleted] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
-    mockChecksRepository.getChecklistTemplate(apparatusId).then((result) => {
+    repository.getChecklistTemplate(apparatusId).then((result) => {
       if (!cancelled) setTemplate(result);
     });
     return () => {
       cancelled = true;
     };
-  }, [apparatusId]);
+  }, [apparatusId, repository]);
 
   if (!template) {
     return <SafeAreaView style={{ flex: 1, backgroundColor: tokens.background }} />;
@@ -51,11 +57,12 @@ export function CheckRunnerScreen() {
       pass: results[item.code] ?? false,
     }));
     const durationSeconds = Math.round((Date.now() - startedAt) / 1000);
-    void mockChecksRepository.submitChecklistRun({
+    void repository.submitChecklistRun({
       apparatusId,
       templateId: template.templateId,
       durationSeconds,
       itemResults,
+      idempotencyKey,
     });
     // Optimistic: the local write already happened above; the UI confirms immediately rather
     // than waiting on any promise settling.
@@ -105,6 +112,8 @@ export function CheckRunnerScreen() {
         </TouchableOpacity>
         {template.items.map((item) => {
           const answer = results[item.code];
+          const photoCaptured = photosCaptured[item.code] ?? false;
+          const needsPhoto = item.requiresPhoto && !photoCaptured;
           return (
             <View
               key={item.code}
@@ -124,9 +133,33 @@ export function CheckRunnerScreen() {
               >
                 {item.label}
               </Text>
+              {item.requiresPhoto ? (
+                <TouchableOpacity
+                  accessibilityRole="button"
+                  accessibilityLabel={photoCaptured ? 'Photo captured' : 'Add photo'}
+                  onPress={() => setPhotosCaptured((prev) => ({ ...prev, [item.code]: true }))}
+                  style={{
+                    minHeight: touchTarget.baseline.ios,
+                    justifyContent: 'center',
+                    marginBottom: spacing.sm,
+                  }}
+                >
+                  <Text
+                    style={{
+                      color: photoCaptured ? tokens.success : tokens.accent,
+                      fontSize: typography.size.sm,
+                      fontWeight: '600',
+                    }}
+                  >
+                    {photoCaptured ? 'Photo captured' : 'Add photo (required)'}
+                  </Text>
+                </TouchableOpacity>
+              ) : null}
               <View style={{ flexDirection: 'row', gap: spacing.sm }}>
                 <TouchableOpacity
                   accessibilityRole="button"
+                  disabled={needsPhoto}
+                  accessibilityState={{ disabled: needsPhoto }}
                   onPress={() => setResults((prev) => ({ ...prev, [item.code]: true }))}
                   style={{
                     flex: 1,
@@ -134,6 +167,7 @@ export function CheckRunnerScreen() {
                     alignItems: 'center',
                     justifyContent: 'center',
                     borderRadius: radius.default,
+                    opacity: needsPhoto ? 0.5 : 1,
                     backgroundColor: answer === true ? tokens.success : tokens.foreground + '11',
                   }}
                 >
@@ -148,6 +182,8 @@ export function CheckRunnerScreen() {
                 </TouchableOpacity>
                 <TouchableOpacity
                   accessibilityRole="button"
+                  disabled={needsPhoto}
+                  accessibilityState={{ disabled: needsPhoto }}
                   onPress={() => setResults((prev) => ({ ...prev, [item.code]: false }))}
                   style={{
                     flex: 1,
@@ -155,6 +191,7 @@ export function CheckRunnerScreen() {
                     alignItems: 'center',
                     justifyContent: 'center',
                     borderRadius: radius.default,
+                    opacity: needsPhoto ? 0.5 : 1,
                     backgroundColor: answer === false ? tokens.error : tokens.foreground + '11',
                   }}
                 >

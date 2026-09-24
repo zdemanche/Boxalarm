@@ -80,6 +80,30 @@ describe('putResponseTimes handler', () => {
     );
   });
 
+  it('returns 404 when the incident does not exist (regression for PR #316 MINOR finding)', async () => {
+    // Imported dynamically (post vi.resetModules()) so this is the exact same module
+    // instance putResponseTimes.ts's own `./repository.js` import resolves to — a static
+    // top-of-file import would be a different instantiation and fail `instanceof`.
+    const { IncidentNotFoundError } = await import('./repository.js');
+    const upsertResponseUnitTimes = vi
+      .fn()
+      .mockRejectedValue(new IncidentNotFoundError('NICHOLS-9999'));
+    vi.doMock('./responseUnitRepository.js', () => ({ upsertResponseUnitTimes }));
+    const { handler } = await import('./putResponseTimes.js');
+
+    const result = await handler(
+      buildEvent(
+        MEMBER_AUTH,
+        { unitId: 'E1', unitType: 'APPARATUS', arrivedAt: 200 },
+        { incidentId: 'NICHOLS-9999' },
+      ),
+      {} as never,
+      () => undefined,
+    );
+
+    expect(result).toMatchObject({ statusCode: 404 });
+  });
+
   it('returns 400 for an unknown unitType', async () => {
     const { handler } = await import('./putResponseTimes.js');
 

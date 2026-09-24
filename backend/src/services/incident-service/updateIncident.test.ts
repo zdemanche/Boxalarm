@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { IncidentEvent } from './authContext.js';
-import { CORE_SCHEMA_V_N } from './schemaVersion/fixtures.js';
+import { CORE_SCHEMA_V_N, CORE_SCHEMA_V_N_MINUS_1 } from './schemaVersion/fixtures.js';
 
 function buildEvent(
   lambdaContext: Record<string, unknown> | undefined,
@@ -55,6 +55,8 @@ function mockDeps(overrides: {
   readonly getIncident?: ReturnType<typeof vi.fn>;
   readonly updateCorePayload?: ReturnType<typeof vi.fn>;
   readonly activeSchema?: unknown;
+  readonly getSchemaVersion?: ReturnType<typeof vi.fn>;
+  readonly getCoreSchemaDocument?: ReturnType<typeof vi.fn>;
 }): void {
   vi.doMock('./repository.js', async (importOriginal) => {
     const actual = await importOriginal<typeof import('./repository.js')>();
@@ -79,10 +81,17 @@ function mockDeps(overrides: {
             ? { version: '2026.2', coreSchemaS3Key: 'neris-schema/2026.2/core.json' }
             : overrides.activeSchema,
         ),
+      getSchemaVersion:
+        overrides.getSchemaVersion ??
+        vi.fn().mockResolvedValue({
+          version: '2026.2',
+          coreSchemaS3Key: 'neris-schema/2026.2/core.json',
+        }),
     }),
   }));
   vi.doMock('./schemaVersion/s3Schema.js', () => ({
-    getCoreSchemaDocument: vi.fn().mockResolvedValue(CORE_SCHEMA_V_N),
+    getCoreSchemaDocument:
+      overrides.getCoreSchemaDocument ?? vi.fn().mockResolvedValue(CORE_SCHEMA_V_N),
   }));
   vi.doMock('../platform-service/export/awsClients.js', () => ({
     getS3Client: () => ({}),
@@ -162,6 +171,82 @@ describe('updateIncident handler', () => {
       'DRAFT',
       expect.any(Number),
     );
+  });
+
+  it(
+    'validates an older incident against its own pinned (SUPERSEDED) schema version, not the ' +
+      'newer ACTIVE schema (regression for PR #316 CRITICAL finding)',
+    async () => {
+      const olderIncident = { ...BASE_INCIDENT, nerisSchemaVersion: '2026.1' };
+      const getSchemaVersion = vi.fn().mockImplementation((version: string) =>
+        Promise.resolve(
+          version === '2026.1'
+            ? {
+                version: '2026.1',
+                status: 'SUPERSEDED',
+                coreSchemaS3Key: 'neris-schema/2026.1/core.json',
+              }
+            : undefined,
+        ),
+      );
+      const getCoreSchemaDocument = vi
+        .fn()
+        .mockImplementation((_s3: unknown, _bucket: unknown, key: string) =>
+          Promise.resolve(
+            key === 'neris-schema/2026.1/core.json' ? CORE_SCHEMA_V_N_MINUS_1 : CORE_SCHEMA_V_N,
+          ),
+        );
+      mockDeps({
+        getIncident: vi.fn().mockResolvedValue(olderIncident),
+        // ACTIVE has moved on to 2026.2, which added FALSE_ALARM as a valid incident_type.
+        activeSchema: { version: '2026.2', coreSchemaS3Key: 'neris-schema/2026.2/core.json' },
+        getSchemaVersion,
+        getCoreSchemaDocument,
+      });
+      const { handler } = await import('./updateIncident.js');
+
+      // FALSE_ALARM is valid under the newer ACTIVE (2026.2) schema but NOT under this
+      // incident's own pinned 2026.1 schema — proving it validates against the pinned
+      // version, not whatever is ACTIVE now.
+      const result = await handler(
+        buildEvent(MEMBER_AUTH, {
+          fields: { incident_type: 'FALSE_ALARM', action_taken: 'EXTINGUISH' },
+        }),
+        {} as never,
+        () => undefined,
+      );
+
+      expect(getSchemaVersion).toHaveBeenCalledWith('2026.1');
+      expect(result).toMatchObject({ statusCode: 400 });
+      const body = JSON.parse((result as { body: string }).body) as {
+        errors: { field: string; message: string }[];
+      };
+      expect(body.errors).toHaveLength(1);
+      expect(body.errors[0]?.field).toBe('incident_type');
+    },
+  );
+
+  it('falls back to the ACTIVE schema when the pinned version cannot be resolved (e.g. the UNVALIDATED sentinel)', async () => {
+    const unvalidatedIncident = { ...BASE_INCIDENT, nerisSchemaVersion: 'UNVALIDATED' };
+    const getSchemaVersion = vi.fn().mockResolvedValue(undefined);
+    const updateCorePayload = vi.fn().mockResolvedValue({ ...BASE_INCIDENT, status: 'VALIDATED' });
+    mockDeps({
+      getIncident: vi.fn().mockResolvedValue(unvalidatedIncident),
+      updateCorePayload,
+      getSchemaVersion,
+    });
+    const { handler } = await import('./updateIncident.js');
+
+    const result = await handler(
+      buildEvent(MEMBER_AUTH, {
+        fields: { incident_type: 'STRUCTURE_FIRE', action_taken: 'EXTINGUISH' },
+      }),
+      {} as never,
+      () => undefined,
+    );
+
+    expect(getSchemaVersion).toHaveBeenCalledWith('UNVALIDATED');
+    expect(result).toMatchObject({ statusCode: 200 });
   });
 
   it('returns 404 when the incident does not exist', async () => {

@@ -1,0 +1,82 @@
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--bx-fg);
+}
+
+.optional {
+  font-weight: 400;
+  color: var(--bx-fg-muted);
+}
+
+.control {
+  min-height: var(--bx-target-office);
+  padding: 0 var(--bx-space-sm);
+  font-size: 14px;
+  font-family: var(--bx-font-ui);
+  color: var(--bx-fg);
+  background: var(--bx-surface-raised);
+  border: 1px solid var(--bx-border);
+  border-radius: var(--bx-radius-md);
+}
+
+.control:focus-visible {
+  outline: 3px solid var(--bx-focus);
+  outline-offset: 1px;
+}
+
+.control[aria-invalid='true'] {
+  border-color: var(--bx-status-danger);
+}
+
+textarea.control {
+  min-height: 96px;
+  padding: var(--bx-space-sm);
+  resize: vertical;
+}
+
+.help {
+  font-size: 12px;
+  color: var(--bx-fg-faint);
+}
+
+.error {
+  font-size: 12px;
+  color: var(--bx-status-danger);
+  font-weight: 600;
+}
+
+.checkboxRow {
+  display: flex;
+  align-items: center;
+  gap: var(--bx-space-sm);
+}
+
+.checkboxRoot {
+  width: 22px;
+  height: 22px;
+  flex-shrink: 0;
+  border: 1px solid var(--bx-border-strong);
+  border-radius: var(--bx-radius-sm);
+  background: var(--bx-surface-raised);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.checkboxRoot[data-state='checked'] {
+  background: var(--bx-fg);
+  border-color: var(--bx-fg);
+  color: var(--bx-bg);
+}
+
+.checkboxRoot:focus-visible {
+  outline: 3px solid var(--bx-focus);
+  outline-offset: 2px;
+}

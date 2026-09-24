@@ -66,25 +66,49 @@ describe("Retention", () => {
       platformTableName: pulumi.output("platform-table"),
       platformTableArn: pulumi.output("arn:aws:dynamodb:us-east-1:123456789012:table/platform"),
       policyStoreArn: pulumi.output("arn:aws:verifiedpermissions::123456789012:policy-store/ps-1"),
+      policyStoreId: pulumi.output("ps-1"),
       chiefNotificationTopicArn: pulumi.output("arn:aws:sns:us-east-1:123456789012:chief"),
       logGroup,
       httpApi,
     });
   }
 
-  it("scopes kms:ScheduleKeyDeletion to the archive CMKs only, never the live table CMKs (AC3)", async () => {
+  it("wires VERIFIED_PERMISSIONS_POLICY_STORE_ID into the disposal Lambda's environment", async () => {
     const retention = await build();
-    const [rolePolicyStatements, archivedIncidentArn, archivedReceiptArn] = await Promise.all([
-      resolve(retention.disposalLambda.rolePolicy.policy),
-      resolve(retention.archivedIncidentCmk.arn),
-      resolve(retention.archivedDeliveryReceiptCmk.arn),
-    ]);
+    const env = await resolve(retention.disposalLambda.function.environment);
+    expect(env?.variables?.VERIFIED_PERMISSIONS_POLICY_STORE_ID).toBe("ps-1");
+  });
+
+  it("scopes kms:ScheduleKeyDeletion by the crypto-shred tag, not by two fixed CMK ARNs (AC3)", async () => {
+    const retention = await build();
+    const rolePolicyStatements = await resolve(retention.disposalLambda.rolePolicy.policy);
     const policy = JSON.parse(rolePolicyStatements) as {
-      Statement: Array<{ Sid: string; Action: string[]; Resource: string | string[] }>;
+      Statement: Array<{
+        Sid: string;
+        Action: string[];
+        Resource: string | string[];
+        Condition?: Record<string, Record<string, string[]>>;
+      }>;
     };
     const shred = policy.Statement.find((s) => s.Sid === "CryptoShredArchiveKeysOnly");
     expect(shred?.Action).toEqual(["kms:ScheduleKeyDeletion"]);
-    expect(shred?.Resource).toEqual([archivedIncidentArn, archivedReceiptArn]);
+    // Tag-scoped rather than pinned to the two CMKs provisioned here: the backend
+    // shreds the per-item item.kmsKeyId, which a future archive-writer may mint
+    // outside this component — tag scoping covers those keys without a companion
+    // infra change, as long as they carry the same tag.
+    expect(shred?.Condition).toEqual({
+      StringEquals: { "aws:ResourceTag/boxalarm:crypto-shred": ["true"] },
+    });
+  });
+
+  it("tags both archive CMKs with the crypto-shred tag the disposal role's grant is scoped by", async () => {
+    const retention = await build();
+    const [incidentTags, receiptTags] = await Promise.all([
+      resolve(retention.archivedIncidentCmk.tags),
+      resolve(retention.archivedDeliveryReceiptCmk.tags),
+    ]);
+    expect(incidentTags?.["boxalarm:crypto-shred"]).toBe("true");
+    expect(receiptTags?.["boxalarm:crypto-shred"]).toBe("true");
   });
 
   it("grants no alerting-table permission and no incident-table delete (AC4)", async () => {
@@ -92,6 +116,19 @@ describe("Retention", () => {
     const policyJson = await resolve(retention.disposalLambda.rolePolicy.policy);
     expect(policyJson).not.toContain("table/alerting");
     expect(policyJson).not.toContain("table/incident");
+  });
+
+  it("grants GetItem (per-candidate read) and PutItem (its own audit write), never BatchWriteItem", async () => {
+    const retention = await build();
+    const policyJson = await resolve(retention.disposalLambda.rolePolicy.policy);
+    const policy = JSON.parse(policyJson) as {
+      Statement: Array<{ Sid: string; Action: string[] }>;
+    };
+    const statement = policy.Statement.find((s) => s.Sid === "DisposalLobClassAccess");
+    expect(statement?.Action).toEqual(
+      expect.arrayContaining(["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:DeleteItem"]),
+    );
+    expect(statement?.Action).not.toContain("dynamodb:BatchWriteItem");
   });
 
   it("denies mutation on audit keys via the shared deny helper", async () => {
@@ -127,5 +164,19 @@ describe("Retention", () => {
     expect(threshold).toBe(0);
     expect(comparison).toBe("GreaterThanThreshold");
     expect(actions).toContain("arn:aws:sns:us-east-1:123456789012:chief");
+  });
+
+  it("watches the backend's actual DisposalInvoked metric, not raw AWS/Lambda Invocations", async () => {
+    const retention = await build();
+    const [namespace, metricName] = await Promise.all([
+      resolve(retention.invokedAlarm.namespace),
+      resolve(retention.invokedAlarm.metricName),
+    ]);
+    // disposal.ts's emitDisposalInvoked() only fires from inside runDisposal's
+    // finally block — i.e. when the business logic actually executes, not on every
+    // raw Lambda invocation (including a failed-auth/404 request from the scheduler,
+    // which previously paged the chief every single day regardless).
+    expect(namespace).toBe("Boxalarm/platform");
+    expect(metricName).toBe("DisposalInvoked");
   });
 });

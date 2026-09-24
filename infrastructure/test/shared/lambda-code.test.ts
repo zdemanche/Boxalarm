@@ -23,6 +23,28 @@ describe("lambdaCode (shared)", () => {
     expect(code).not.toBeInstanceOf(pulumi.asset.FileArchive);
   });
 
+  it("logs a Pulumi warning when falling back to the placeholder, so a missing bundle is loud", async () => {
+    existsSync.mockReturnValue(false);
+    const warnSpy = vi.spyOn(pulumi.log, "warn").mockResolvedValue();
+
+    lambdaCode("platform-service", "does-not-exist");
+
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining("no bundle found for platform-service/does-not-exist"),
+    );
+    warnSpy.mockRestore();
+  });
+
+  it("does not warn when the bundle exists", () => {
+    existsSync.mockReturnValue(true);
+    const warnSpy = vi.spyOn(pulumi.log, "warn").mockResolvedValue();
+
+    lambdaCode("platform-service", "audit");
+
+    expect(warnSpy).not.toHaveBeenCalled();
+    warnSpy.mockRestore();
+  });
+
   it("returns a FileArchive of backend/dist/<service>/<function> when the bundle exists", async () => {
     existsSync.mockReturnValue(true);
 

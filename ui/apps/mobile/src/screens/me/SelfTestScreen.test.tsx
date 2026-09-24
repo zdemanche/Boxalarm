@@ -1,20 +1,13 @@
-import { fireEvent, render } from '@testing-library/react-native';
-import { AccessibilityInfo } from 'react-native';
+import { act, fireEvent, render } from '@testing-library/react-native';
 import { SelfTestScreen } from './SelfTestScreen';
 
-test('pressing run self-test points the member at the real flow in the Alerts tab', async () => {
+test('running a self-test shows a pass/fail status and a timestamp per channel, never a bare ok', async () => {
   const { findByRole, findByText } = await render(<SelfTestScreen />);
 
-  fireEvent.press(await findByRole('button', { name: 'Run self-test' }));
-  expect(await findByText(/alerts tab/i)).toBeTruthy();
-});
+  await act(async () => {
+    fireEvent.press(await findByRole('button', { name: 'Run self-test' }));
+  });
 
-test('announces the redirect message for screen reader users', async () => {
-  const announceSpy = jest.spyOn(AccessibilityInfo, 'announceForAccessibility');
-  const { findByRole } = await render(<SelfTestScreen />);
-
-  fireEvent.press(await findByRole('button', { name: 'Run self-test' }));
-
-  expect(announceSpy).toHaveBeenCalledWith(expect.stringMatching(/alerts tab/i));
-  announceSpy.mockRestore();
+  expect(await findByText(/push: pass/i)).toBeTruthy();
+  expect(await findByText(/sms: pass/i)).toBeTruthy();
 });

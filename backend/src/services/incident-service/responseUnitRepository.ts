@@ -1,5 +1,6 @@
-import { UpdateCommand, type DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
+import { GetCommand, UpdateCommand, type DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
 import { buildDeptScopedPk, type VerifiedDeptId } from '@boxalarm/dept-scope';
+import { IncidentNotFoundError } from './repository.js';
 
 const TIME_FIELDS = ['dispatchedAt', 'enRouteAt', 'arrivedAt', 'clearedAt'] as const;
 type TimeField = (typeof TIME_FIELDS)[number];
@@ -44,6 +45,22 @@ export async function upsertResponseUnitTimes(
   tableName: string,
   input: ResponseUnitTimesInput,
 ): Promise<ResponseUnit> {
+  // Guard against a bad incidentId silently creating an orphan RESPONSE#{unitId} item: this
+  // Update's own ConditionExpression can't do it, since RESPONSE# is a different sk than
+  // METADATA and the first-ever write for a unit must still be allowed to create that item.
+  // So check the parent INCIDENT METADATA item exists first and 404 (as IncidentNotFoundError)
+  // if it doesn't, matching the pattern repository.ts's updateNarrative/updateCorePayload use.
+  const incidentCheck = await client.send(
+    new GetCommand({
+      TableName: tableName,
+      Key: { pk: buildDeptScopedPk(input.deptId, 'INCIDENT', input.incidentId), sk: 'METADATA' },
+      ProjectionExpression: 'pk',
+    }),
+  );
+  if (!incidentCheck.Item) {
+    throw new IncidentNotFoundError(input.incidentId);
+  }
+
   const setClauses = [
     'entityType = :entityType',
     'unitType = :unitType',

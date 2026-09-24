@@ -1,0 +1,52 @@
+.card {
+  background: var(--bx-surface);
+  border: 1px solid var(--bx-border-decorative);
+  border-radius: var(--bx-radius-lg);
+  padding: var(--bx-space-lg);
+}
+
+.cardRaised {
+  background: var(--bx-surface-raised);
+}
+
+.cardTitle {
+  margin: 0 0 var(--bx-space-sm);
+  font-size: var(--boxalarm-type-heading-size, 18px);
+  font-weight: 600;
+}
+
+.stat {
+  background: var(--bx-surface);
+  border: 1px solid var(--bx-border-decorative);
+  border-radius: var(--bx-radius-lg);
+  padding: var(--bx-space-md) var(--bx-space-lg);
+  display: flex;
+  flex-direction: column;
+  gap: var(--bx-space-xs);
+  min-width: 0;
+}
+
+.statLabel {
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: none;
+  letter-spacing: 0.02em;
+  color: var(--bx-fg-muted);
+}
+
+.statValue {
+  font-family: var(--bx-font-mono);
+  font-size: 28px;
+  font-weight: 700;
+  color: var(--bx-fg);
+  line-height: 1.15;
+}
+
+.statValueAlarm {
+  color: var(--bx-status-danger);
+}
+
+.statHint {
+  font-size: 12px;
+  color: var(--bx-fg-faint);
+}

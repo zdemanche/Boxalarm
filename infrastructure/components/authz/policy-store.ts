@@ -79,6 +79,11 @@ export class PolicyStore extends pulumi.ComponentResource {
             groupConfiguration: { groupEntityType: "Boxalarm::UserGroup" },
           },
         },
+        // Without this, Verified Permissions has no namespace/type to construct
+        // principal entities under for tokens from this identity source, so a
+        // Cognito principal may not resolve to a Boxalarm::User entity at all —
+        // every `principal in [Boxalarm::UserGroup::"..."]` check would then fail.
+        principalEntityType: "Boxalarm::User",
       },
       { parent: this, dependsOn: [this.schema] },
     );

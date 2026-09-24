@@ -57,7 +57,9 @@ describe("Export", () => {
       env: "dev",
       platformTableName: pulumi.output("platform-table"),
       platformTableArn: pulumi.output("arn:aws:dynamodb:us-east-1:123456789012:table/platform"),
+      incidentTableName: pulumi.output("incident-table"),
       incidentTableArn: pulumi.output("arn:aws:dynamodb:us-east-1:123456789012:table/incident"),
+      alertingTableName: pulumi.output("alerting-table"),
       alertingTableArn: pulumi.output("arn:aws:dynamodb:us-east-1:123456789012:table/alerting"),
       alertingCmkArn: pulumi.output("arn:aws:kms:us-east-1:123456789012:key/alerting-cmk"),
       incidentCmkArn: pulumi.output("arn:aws:kms:us-east-1:123456789012:key/incident-cmk"),
@@ -66,6 +68,13 @@ describe("Export", () => {
       httpApi,
     });
   }
+
+  it("wires the real alerting/incident table names into the worker's environment", async () => {
+    const exp = await build();
+    const env = await resolve(exp.workerLambda.environment);
+    expect(env?.variables?.ALERTING_TABLE_NAME).toBe("alerting-table");
+    expect(env?.variables?.INCIDENT_TABLE_NAME).toBe("incident-table");
+  });
 
   it("grants the worker role zero DynamoDB write actions, only read-only + decrypt + bucket write (AC1)", async () => {
     const exp = await build();
@@ -107,10 +116,19 @@ describe("Export", () => {
     expect(name).toBe("boxalarm-dev-platform-export-readonly");
   });
 
-  it("expires the staging bucket's objects after 7 days and aborts stale multipart uploads", async () => {
+  it("names the staging bucket per env, not a global literal (prevents cross-env bucket adoption)", async () => {
     const exp = await build();
     const bucketName = await resolve(exp.stagingBucket.bucket);
-    expect(bucketName).toBe("boxalarm-exports-staging");
+    expect(bucketName).toBe("boxalarm-dev-exports-staging");
+  });
+
+  it("expires the staging bucket's objects after 7 days and aborts stale multipart uploads", async () => {
+    const exp = await build();
+    const rules = (await resolve(exp.stagingBucketLifecycle.rules)) ?? [];
+    expect(rules).toHaveLength(1);
+    expect(rules[0]?.status).toBe("Enabled");
+    expect(rules[0]?.expiration?.days).toBe(7);
+    expect(rules[0]?.abortIncompleteMultipartUpload?.daysAfterInitiation).toBe(7);
   });
 
   it("gates the ExportInvoked alarm on Sum >= 1 with no volume threshold, notifying the chief topic (AC2)", async () => {
@@ -123,6 +141,33 @@ describe("Export", () => {
     expect(threshold).toBe(0);
     expect(comparison).toBe("GreaterThanThreshold");
     expect(actions).toContain("arn:aws:sns:us-east-1:123456789012:chief");
+  });
+
+  it("watches Boxalarm/platform — the namespace the backend actually emits ExportInvoked/ExportWorkerInvokeFailed/ExportFailed to", async () => {
+    const exp = await build();
+    const [invokedNs, workerFailedNs, exportFailedNs] = await Promise.all([
+      resolve(exp.invokedAlarm.namespace),
+      resolve(exp.workerFailedAlarm.namespace),
+      resolve(exp.exportFailedAlarm.namespace),
+    ]);
+    // NOT "Boxalarm/platform-service" (metricsNamespaceFor("platform-service")) —
+    // export/handler.ts and export/worker.ts emit to the literal "Boxalarm/platform".
+    expect(invokedNs).toBe("Boxalarm/platform");
+    expect(workerFailedNs).toBe("Boxalarm/platform");
+    expect(exportFailedNs).toBe("Boxalarm/platform");
+  });
+
+  it("grants the handler GetItem/PutItem/UpdateItem on the platform table, never the non-functional TransactWriteItems", async () => {
+    const exp = await build();
+    const policyJson = await resolve(exp.handlerLambda.rolePolicy.policy);
+    const policy = JSON.parse(policyJson) as {
+      Statement: Array<{ Sid: string; Action: string[] }>;
+    };
+    const statement = policy.Statement.find((s) => s.Sid === "ExportTableAccess");
+    expect(statement?.Action).toEqual(
+      expect.arrayContaining(["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:UpdateItem"]),
+    );
+    expect(policyJson).not.toContain("TransactWriteItems");
   });
 
   it("throws on absent or unknown env", async () => {
@@ -143,7 +188,9 @@ describe("Export", () => {
           env: "",
           platformTableName: pulumi.output("t"),
           platformTableArn: pulumi.output("arn"),
+          incidentTableName: pulumi.output("incident-table"),
           incidentTableArn: pulumi.output("arn"),
+          alertingTableName: pulumi.output("alerting-table"),
           alertingTableArn: pulumi.output("arn"),
           alertingCmkArn: pulumi.output("arn"),
           incidentCmkArn: pulumi.output("arn"),

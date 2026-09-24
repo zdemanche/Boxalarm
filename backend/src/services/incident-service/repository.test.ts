@@ -368,6 +368,97 @@ describe('createIncidentRepository', () => {
     });
   });
 
+  it(
+    'syncs the denormalized top-level incidentType/address fields from corePayload so search ' +
+      'summaries stay in sync after guided completion sets incident_type (regression for PR #316 MAJOR finding)',
+    async () => {
+      const send = vi.fn().mockResolvedValue({
+        Attributes: {
+          pk: 'DEPT#NICHOLS#INCIDENT#NICHOLS-4471-1798000000',
+          sk: 'METADATA',
+          incidentId: 'NICHOLS-4471-1798000000',
+          deptId: 'NICHOLS',
+          dispatchNumber: '4471',
+          epochSeconds: 1_798_000_000,
+          nerisSchemaVersion: '2026.2',
+          corePayload: {
+            incident_type: 'STRUCTURE_FIRE',
+            action_taken: 'EXTINGUISH',
+            address: '123 Main St',
+          },
+          incidentType: 'STRUCTURE_FIRE',
+          address: '123 Main St',
+          status: 'VALIDATED',
+          sourceDispatchId: 'NICHOLS-4471-1798000000',
+          createdBy: 'MBR-0034',
+          createdAt: 1,
+          updatedAt: 2,
+        },
+      });
+      const repository = createIncidentRepository(fakeClient(send), TABLE_NAME);
+
+      const result = await repository.updateCorePayload(
+        DEPT_ID,
+        'NICHOLS-4471-1798000000',
+        {
+          incident_type: 'STRUCTURE_FIRE',
+          action_taken: 'EXTINGUISH',
+          address: '123 Main St',
+        },
+        'VALIDATED',
+        2,
+      );
+
+      expect(result.incidentType).toBe('STRUCTURE_FIRE');
+      expect(result.address).toBe('123 Main St');
+      const [command] = send.mock.calls[0] as [
+        {
+          input: {
+            UpdateExpression: string;
+            ExpressionAttributeValues: Record<string, unknown>;
+          };
+        },
+      ];
+      expect(command.input.UpdateExpression).toMatch(/incidentType = :incidentType/);
+      expect(command.input.UpdateExpression).toMatch(/address = :address/);
+      expect(command.input.ExpressionAttributeValues[':incidentType']).toBe('STRUCTURE_FIRE');
+      expect(command.input.ExpressionAttributeValues[':address']).toBe('123 Main St');
+    },
+  );
+
+  it('leaves the denormalized top-level fields untouched when corePayload has no matching keys', async () => {
+    const send = vi.fn().mockResolvedValue({
+      Attributes: {
+        pk: 'DEPT#NICHOLS#INCIDENT#NICHOLS-4471-1798000000',
+        sk: 'METADATA',
+        incidentId: 'NICHOLS-4471-1798000000',
+        deptId: 'NICHOLS',
+        dispatchNumber: '4471',
+        epochSeconds: 1_798_000_000,
+        nerisSchemaVersion: '2026.2',
+        corePayload: { action_taken: 'EXTINGUISH' },
+        status: 'DRAFT',
+        sourceDispatchId: 'NICHOLS-4471-1798000000',
+        createdBy: 'MBR-0034',
+        createdAt: 1,
+        updatedAt: 2,
+      },
+    });
+    const repository = createIncidentRepository(fakeClient(send), TABLE_NAME);
+
+    await repository.updateCorePayload(
+      DEPT_ID,
+      'NICHOLS-4471-1798000000',
+      { action_taken: 'EXTINGUISH' },
+      'DRAFT',
+      2,
+    );
+
+    const [command] = send.mock.calls[0] as [{ input: { UpdateExpression: string } }];
+    expect(command.input.UpdateExpression).not.toMatch(/incidentType/);
+    expect(command.input.UpdateExpression).not.toMatch(/address/);
+  });
+
   it('rejects updateCorePayload on a nonexistent incident as IncidentNotFoundError', async () => {
     const send = vi
       .fn()

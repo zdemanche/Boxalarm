@@ -43,6 +43,9 @@ describe("OutboxPublisher", () => {
     return new OutboxPublisher("test-outbox", {
       env: "dev",
       platformTableName: pulumi.output("boxalarm-dev-platform-service"),
+      platformTableArn: pulumi.output(
+        "arn:aws:dynamodb:us-east-1:123456789012:table/boxalarm-dev-platform-service",
+      ),
       platformTableStreamArn: pulumi.output(
         "arn:aws:dynamodb:us-east-1:123456789012:table/x/stream/y",
       ),
@@ -53,6 +56,29 @@ describe("OutboxPublisher", () => {
       logGroup,
     });
   }
+
+  it("grants dynamodb:UpdateItem on the platform table so the publisher can mark entries sent", async () => {
+    const publisher = await build();
+    const policyJson = await resolve(publisher.lambda.rolePolicy.policy);
+    const policy = JSON.parse(policyJson) as {
+      Statement: Array<{ Sid: string; Action: string[]; Resource: string }>;
+    };
+    const statement = policy.Statement.find((s) => s.Sid === "MarkOutboxEntrySent");
+    expect(statement?.Action).toEqual(["dynamodb:UpdateItem"]);
+    expect(statement?.Resource).toBe(
+      "arn:aws:dynamodb:us-east-1:123456789012:table/boxalarm-dev-platform-service",
+    );
+  });
+
+  it("bounds the stream mapping's retry attempts and record age instead of the unbounded default", async () => {
+    const publisher = await build();
+    const [retries, maxAge] = await Promise.all([
+      resolve(publisher.eventSourceMapping.maximumRetryAttempts),
+      resolve(publisher.eventSourceMapping.maximumRecordAgeInSeconds),
+    ]);
+    expect(retries).toBeGreaterThan(0);
+    expect(maxAge).toBeGreaterThan(0);
+  });
 
   it("filters the DynamoDB stream to entityType = OUTBOX_ENTRY — the single-owner filter the ticket requires", async () => {
     const publisher = await build();

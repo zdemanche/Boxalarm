@@ -3,10 +3,7 @@ import * as aws from "@pulumi/aws";
 import { ServiceLambda } from "../observability/service-lambda";
 import { ServiceLogGroup } from "../observability/service-log-group";
 import { HttpApi } from "../api/http-api";
-import {
-  metricsNamespaceFor,
-  observabilityPolicyStatements,
-} from "../observability/observability-policy";
+import { observabilityPolicyStatements } from "../observability/observability-policy";
 import { ACTIVE_TRACING_CONFIG } from "../observability/xray-sampling";
 import { lambdaCode, LAMBDA_HANDLER } from "../shared/lambda-code";
 import { requireEnv } from "../shared/env";
@@ -15,7 +12,9 @@ export interface ExportArgs {
   env: string;
   platformTableName: pulumi.Input<string>;
   platformTableArn: pulumi.Input<string>;
+  incidentTableName: pulumi.Input<string>;
   incidentTableArn: pulumi.Input<string>;
+  alertingTableName: pulumi.Input<string>;
   alertingTableArn: pulumi.Input<string>;
   alertingCmkArn: pulumi.Input<string>;
   incidentCmkArn: pulumi.Input<string>;
@@ -27,6 +26,7 @@ export interface ExportArgs {
 /** E8-S6-INFRA #258 full department data export. */
 export class Export extends pulumi.ComponentResource {
   public readonly stagingBucket: aws.s3.Bucket;
+  public readonly stagingBucketLifecycle: aws.s3.BucketLifecycleConfigurationV2;
   public readonly workerRole: aws.iam.Role;
   public readonly workerRolePolicy: aws.iam.RolePolicy;
   public readonly workerLambda: aws.lambda.Function;
@@ -39,11 +39,22 @@ export class Export extends pulumi.ComponentResource {
     requireEnv("Export", args.env);
     super("boxalarm:platform:Export", name, {}, opts);
     const { env } = args;
-    const namespace = metricsNamespaceFor("platform-service");
+    // NOT metricsNamespaceFor("platform-service") (Boxalarm/platform-service): the
+    // backend emits ExportInvoked/ExportWorkerInvokeFailed/ExportFailed to the
+    // literal namespace "Boxalarm/platform" (export/handler.ts, export/worker.ts).
+    // Watching the wrong namespace meant these alarms — the stated compensating
+    // control for "Cedar role check alone" on every export — could never fire.
+    const namespace = "Boxalarm/platform";
 
+    // S3 bucket names are globally unique across ALL AWS accounts and regions.
+    // A bare "boxalarm-exports-staging" literal means only the first stack to
+    // deploy ever creates the bucket — in a single account (all stacks pinned
+    // to us-east-1), every other stack's CreateBucket silently no-ops and
+    // adopts the SAME bucket, so dev's export role can read prod's full
+    // department exports. Env-scoping the name gives each stack its own bucket.
     this.stagingBucket = new aws.s3.Bucket(
       `${name}-staging`,
-      { bucket: "boxalarm-exports-staging", forceDestroy: false },
+      { bucket: `boxalarm-${env}-exports-staging`, forceDestroy: false },
       { parent: this },
     );
 
@@ -68,7 +79,7 @@ export class Export extends pulumi.ComponentResource {
       { parent: this },
     );
 
-    new aws.s3.BucketLifecycleConfigurationV2(
+    this.stagingBucketLifecycle = new aws.s3.BucketLifecycleConfigurationV2(
       `${name}-staging-lifecycle`,
       {
         bucket: this.stagingBucket.id,
@@ -186,8 +197,11 @@ export class Export extends pulumi.ComponentResource {
           variables: {
             SERVICE_NAME: "platform-service",
             ENVIRONMENT: env,
-            ALERTING_TABLE_NAME: "",
-            INCIDENT_TABLE_NAME: "",
+            // worker.ts scans its tables in order starting with alerting-service
+            // (TABLES/ALERTING_TABLE_NAME) — empty strings made every Scan raise a
+            // ValidationException, so every export failed immediately.
+            ALERTING_TABLE_NAME: args.alertingTableName,
+            INCIDENT_TABLE_NAME: args.incidentTableName,
             PLATFORM_TABLE_NAME: args.platformTableName,
             EXPORT_BUCKET_NAME: this.stagingBucket.bucket,
           },
@@ -214,9 +228,16 @@ export class Export extends pulumi.ComponentResource {
           .all([args.platformTableArn, this.workerLambda.arn, this.stagingBucket.arn])
           .apply(([platformArn, workerArn, bucketArn]) => [
             {
+              // dynamodb:TransactWriteItems is not a real IAM action — DynamoDB
+              // authorizes each item inside a transaction as its own PutItem/
+              // UpdateItem/DeleteItem call. handlePost's TransactWriteCommand sends
+              // two Puts (the EXPORT_JOB item and its AUDIT_LOG_ENTRY), handleGet
+              // does a GetItem, and markJobFailed does an UpdateItem. Granting
+              // TransactWriteItems and no PutItem meant POST /platform/export was
+              // denied on every call.
               Sid: "ExportTableAccess" as const,
               Effect: "Allow" as const,
-              Action: ["dynamodb:TransactWriteItems", "dynamodb:GetItem", "dynamodb:UpdateItem"],
+              Action: ["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:UpdateItem"],
               Resource: platformArn,
             },
             {

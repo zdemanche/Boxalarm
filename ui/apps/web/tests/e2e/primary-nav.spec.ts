@@ -83,6 +83,16 @@ async function stubCognitoWithGroups(
   });
 }
 
+// MAJOR-1 (PR #318 review): below `md` (the new `mobile-chromium` project), PrimaryNav's static
+// sidebar is display:none and NavDrawer is closed until TopBar's hamburger button is used — open
+// it first so the assertions below see the same "Primary" nav landmark on every project.
+async function openNavIfCollapsed(page: Page): Promise<void> {
+  const menuButton = page.getByRole('button', { name: 'Open navigation' });
+  if (await menuButton.isVisible()) {
+    await menuButton.click();
+  }
+}
+
 const ALL_NAV_LABELS = [
   'Dashboard',
   'Live roster',
@@ -91,6 +101,7 @@ const ALL_NAV_LABELS = [
   'Personnel',
   'Certifications',
   'Apparatus',
+  'Apparatus compliance',
   'Schedule',
   'Reporting',
   'Settings',
@@ -111,6 +122,7 @@ for (const role of Object.keys(PERSONAS) as Role[]) {
 
       if (role === 'MEMBER') {
         await expect(page.getByRole('heading', { name: 'Member home' })).toBeVisible();
+        await openNavIfCollapsed(page);
         await expect(page.getByRole('navigation', { name: 'Primary' })).toBeVisible();
         for (const label of ALL_NAV_LABELS) {
           await expect(
@@ -120,6 +132,7 @@ for (const role of Object.keys(PERSONAS) as Role[]) {
         return;
       }
 
+      await openNavIfCollapsed(page);
       const nav = page.getByRole('navigation', { name: 'Primary' });
       await expect(nav).toBeVisible();
 
@@ -142,6 +155,7 @@ for (const role of Object.keys(PERSONAS) as Role[]) {
       await page.goto('/login');
       await page.getByRole('button', { name: 'Sign in' }).click();
       // Wait for auth to settle before deep-linking (full reload keeps localStorage session).
+      await openNavIfCollapsed(page);
       await expect(page.getByRole('navigation', { name: 'Primary' })).toBeVisible();
 
       await page.goto(forbiddenPath);
@@ -150,6 +164,28 @@ for (const role of Object.keys(PERSONAS) as Role[]) {
     });
   });
 }
+
+// MAJOR-1 (PR #318 review): this is the regression the desktop-only Playwright config couldn't
+// catch — the static sidebar's <nav aria-label="Primary"> and Sign out were unreachable below
+// 768px with no replacement. Runs on both projects: mobile-chromium exercises the drawer path,
+// chromium confirms the static sidebar still needs no hamburger.
+test('Primary nav and Sign out are reachable on every viewport this suite runs at', async ({
+  page,
+}) => {
+  const { publicKey, privateKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
+  const jwk = publicKey.export({ format: 'jwk' }) as JsonWebKey;
+  await stubCognitoWithGroups(page, privateKey, jwk, ['CHIEF']);
+
+  await page.goto('/login');
+  await page.getByRole('button', { name: 'Sign in' }).click();
+  await expect(page.getByRole('heading', { name: 'Chief dashboard' })).toBeVisible();
+
+  await openNavIfCollapsed(page);
+  const nav = page.getByRole('navigation', { name: 'Primary' });
+  await expect(nav).toBeVisible();
+  await expect(nav.getByRole('link', { name: 'Dashboard' })).toBeVisible();
+  await expect(nav.getByRole('button', { name: 'Sign out' })).toBeVisible();
+});
 
 test('CHIEF landing shows chief dashboard (cognito:groups, not roles claim)', async ({ page }) => {
   const { publicKey, privateKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
@@ -168,6 +204,9 @@ test('AppShell PrimaryNav passes axe for CHIEF', async ({ page }) => {
 
   await page.goto('/login');
   await page.getByRole('button', { name: 'Sign in' }).click();
+  // On the mobile-chromium project this opens NavDrawer, so the axe scan below also covers the
+  // MAJOR-1 replacement nav, not just the desktop sidebar.
+  await openNavIfCollapsed(page);
   await expect(page.getByRole('navigation', { name: 'Primary' })).toBeVisible();
 
   const results = await new AxeBuilder({ page }).analyze();
@@ -181,6 +220,7 @@ test('ForbiddenState after MEMBER deep-link passes axe', async ({ page }) => {
 
   await page.goto('/login');
   await page.getByRole('button', { name: 'Sign in' }).click();
+  await openNavIfCollapsed(page);
   await expect(page.getByRole('navigation', { name: 'Primary' })).toBeVisible();
 
   await page.goto(FORBIDDEN_PATH_BY_ROLE.MEMBER);
