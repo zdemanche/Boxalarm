@@ -133,6 +133,7 @@ export async function issuePpeAssignment(
         gsi3pk: buildDeptScopedPk(params.deptId, 'AUDIT', 'ENTITY', 'PPE_ASSIGNMENT', ppeItemId),
         gsi3sk: `${ts}`,
       },
+      ConditionExpression: 'attribute_not_exists(pk) AND attribute_not_exists(sk)',
     },
   };
 

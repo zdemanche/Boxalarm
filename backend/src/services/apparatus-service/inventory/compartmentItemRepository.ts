@@ -164,7 +164,13 @@ export async function putCompartmentItem(
               ConditionExpression: 'attribute_not_exists(pk) AND attribute_not_exists(sk)',
             },
           },
-          { Put: { TableName: tableName, Item: auditEntry } },
+          {
+            Put: {
+              TableName: tableName,
+              Item: auditEntry,
+              ConditionExpression: 'attribute_not_exists(pk) AND attribute_not_exists(sk)',
+            },
+          },
         ],
       }),
     );
@@ -207,7 +213,13 @@ export async function updateCompartmentItemQuantity(
               ExpressionAttributeValues: { ':quantity': quantity },
             },
           },
-          { Put: { TableName: tableName, Item: auditEntry } },
+          {
+            Put: {
+              TableName: tableName,
+              Item: auditEntry,
+              ConditionExpression: 'attribute_not_exists(pk) AND attribute_not_exists(sk)',
+            },
+          },
         ],
       }),
     );

@@ -150,7 +150,13 @@ export async function createOccupancy(
             },
           },
           { Put: { TableName: config.tableName, Item: addressIndexItem } },
-          { Put: { TableName: config.tableName, Item: auditItem } },
+          {
+            Put: {
+              TableName: config.tableName,
+              Item: auditItem,
+              ConditionExpression: 'attribute_not_exists(pk) AND attribute_not_exists(sk)',
+            },
+          },
         ],
       }),
     );
@@ -220,7 +226,13 @@ export async function updateOccupancy(
               ExpressionAttributeValues: updateValues,
             },
           },
-          { Put: { TableName: config.tableName, Item: auditItem } },
+          {
+            Put: {
+              TableName: config.tableName,
+              Item: auditItem,
+              ConditionExpression: 'attribute_not_exists(pk) AND attribute_not_exists(sk)',
+            },
+          },
         ],
       }),
     );
