@@ -987,7 +987,7 @@ describe('shifts handler — release/swap/approve routes', () => {
       expect(body.claimedByMemberId).toBe('member-1');
     });
 
-    it('never uses BatchWriteItem for the claim (test note): only Get/Update commands are issued', async () => {
+    it('never uses BatchWriteItem for the claim (test note): only Get/TransactWrite commands are issued', async () => {
       const fakeDoc = createFakeDocumentClient([
         buildDutyShift(VERIFIED_DEPT_ID, 'shift-1'),
         buildShiftPosition(VERIFIED_DEPT_ID, 'shift-1', 'DRIVER'),
