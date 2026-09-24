@@ -161,7 +161,12 @@ describe('canary handler', () => {
     try {
       const start = Math.floor(Date.now() / 1000);
       const { send, items } = createFakeDdb([
-        { pk: 'DEPT#NICHOLS#CANARY', sk: 'STATE', pendingTestId: 'canary-1', pendingRunAt: start - 2 },
+        {
+          pk: 'DEPT#NICHOLS#CANARY',
+          sk: 'STATE',
+          pendingTestId: 'canary-1',
+          pendingRunAt: start - 2,
+        },
         {
           pk: 'DEPT#NICHOLS#MEMBER#canary-device',
           sk: 'SELFTEST#canary-1',
