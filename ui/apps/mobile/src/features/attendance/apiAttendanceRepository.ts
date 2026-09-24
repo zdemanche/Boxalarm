@@ -26,9 +26,18 @@ export function useAttendanceRepository(): AttendanceRepository {
       async getOwnRecords(): Promise<AttendanceRecord[]> {
         const tokens = authRef.current;
         if (!tokens) return mockAttendanceRepository.getOwnRecords();
-        const response = await apiRequest('personnel/attendance', tokens, { apiBaseUrl });
-        const body = (await response.json()) as { records: AttendanceRecord[] };
-        return body.records;
+        try {
+          const response = await apiRequest('personnel/attendance', tokens, { apiBaseUrl });
+          const body = (await response.json()) as { records: AttendanceRecord[] };
+          return body.records;
+        } catch (error) {
+          // Auth (401/403) and server (5xx) errors are real signal - a revoked member or a
+          // stale token must not be masked by fake attendance data. Only a genuine
+          // network/offline failure (e.g. TypeError: Failed to fetch) falls back to the mock,
+          // matching useChecksRepository's precedent and this file's own record() method.
+          if (error instanceof ApiError) throw error;
+          return mockAttendanceRepository.getOwnRecords();
+        }
       },
 
       async record(entry): Promise<void> {
