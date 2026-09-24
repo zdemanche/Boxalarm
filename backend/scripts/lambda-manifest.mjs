@@ -167,4 +167,9 @@ export const LAMBDA_ENTRIES = [
     function: 'transcript-get',
     entry: 'src/services/training-service/transcript/get.ts',
   },
+  {
+    service: 'alerting-service',
+    function: 'outbox-drain',
+    entry: 'src/services/alerting-service/outboxDrainHandler.ts',
+  },
 ];

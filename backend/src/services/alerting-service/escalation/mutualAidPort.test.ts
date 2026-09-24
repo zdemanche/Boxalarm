@@ -12,7 +12,10 @@ interface FakeItem {
 
 function createFakeDdb(
   seed: readonly FakeItem[],
-  options: { readonly failPromptForMemberId?: string } = {},
+  options: {
+    readonly failPromptForMemberId?: string;
+    readonly failOutboxWrite?: boolean;
+  } = {},
 ): {
   send: DynamoDBDocumentClient['send'];
   items: Map<string, FakeItem>;
@@ -37,6 +40,9 @@ function createFakeDdb(
         put.Item.entityType === 'MUTUAL_AID_PROMPT' &&
         put.Item.memberId === options.failPromptForMemberId
       ) {
+        throw new Error('ddb unavailable');
+      }
+      if (options.failOutboxWrite && put.Item.entityType === 'OUTBOX_ENTRY') {
         throw new Error('ddb unavailable');
       }
       if (put.ConditionExpression && items.has(key)) {
@@ -129,6 +135,52 @@ describe('requestMutualAid', () => {
     expect(items.get('DEPT#NICHOLS#DISPATCH#dispatch-1#MAPROMPT#officer-1#PUSH')).toBeDefined();
     expect(items.has('DEPT#NICHOLS#DISPATCH#dispatch-1#MAPROMPT#mbr-1#PUSH')).toBe(false);
     expect(snsSend).toHaveBeenCalledTimes(1);
+
+    const outboxEntry = [...items.values()].find((item) => item.entityType === 'OUTBOX_ENTRY');
+    expect(outboxEntry).toMatchObject({
+      eventType: 'alerting.mutual_aid.triggered',
+      source: 'alerting-service',
+      payload: {
+        dispatchId: 'dispatch-1',
+        reason: 'TONE_3_PREDICATE_UNMET',
+        adapterUsed: 'OFFICER_MANUAL_PROMPT',
+        officersNotified: 1,
+      },
+    });
+  });
+
+  it('still reports success when the bridge outbox write fails (must never block or fail mutual aid)', async () => {
+    const officer: FakeItem = {
+      pk: ELIGIBILITY_PK,
+      sk: 'MEMBER#officer-1',
+      entityType: 'MEMBER_ELIGIBILITY_SNAPSHOT',
+      memberId: 'officer-1',
+      active: true,
+      quals: [],
+      roles: ['OFFICER'],
+      contactChannels: [{ channel: 'PUSH', token: 'tok', platform: 'ios', valid: true }],
+      availabilityState: 'AVAILABLE',
+      snapshotUpdatedAt: 0,
+    };
+    const { send } = createFakeDdb([officer], { failOutboxWrite: true });
+    const snsSend = vi.fn().mockResolvedValue({});
+    const sns = { send: snsSend } as unknown as SNSClient;
+
+    const result = await requestMutualAid({
+      ddb: { send } as unknown as DynamoDBDocumentClient,
+      sns,
+      tableName: 'alerting-table',
+      topicArn: 'arn:aws:sns:us-east-1:1:alerting-topic.fifo',
+      deptId: DEPT_ID,
+      dispatchId: 'dispatch-1',
+      reason: 'TONE_3_PREDICATE_UNMET',
+    });
+
+    expect(result).toEqual({
+      requested: true,
+      officersNotified: 1,
+      adapterUsed: 'OFFICER_MANUAL_PROMPT',
+    });
   });
 
   it('still notifies every other officer when one officer prompt fails (MAJOR #2 regression)', async () => {
