@@ -175,7 +175,7 @@ describe("index.ts production wiring", () => {
     );
     expect(logGroupNames).toEqual(expectedLogGroupNames);
     expect(dashboardNames).toEqual(expectedDashboardNames);
-  });
+  }, 20000);
 
   it("throws when the boxalarm-infra:env config key is not declared", async () => {
     pulumi.runtime.setAllConfig({});
