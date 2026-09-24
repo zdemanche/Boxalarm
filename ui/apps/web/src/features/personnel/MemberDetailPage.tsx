@@ -1,9 +1,12 @@
+import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useParams } from 'react-router-dom';
 import { useAuth } from '../../auth/AuthContext';
+import { ApiError } from '../../lib/apiClient';
 import { ApiForbiddenGate } from '../../components/ApiForbiddenGate';
 import { Badge } from '../../components/ui/Chip';
 import { PageHeader } from '../../components/ui/PageHeader';
+import { revokeMemberSessions } from '../platform/api';
 import { getMember, updateMemberStatus } from './api';
 import type { MemberStatus } from './types';
 
@@ -14,6 +17,37 @@ export function MemberDetailPage() {
   const auth = useAuth();
   const queryClient = useQueryClient();
   const isAdmin = auth.roles.includes('ADMIN');
+  const canRevokeSessions = auth.roles.includes('ADMIN') || auth.roles.includes('CHIEF');
+  const [revokeError, setRevokeError] = useState<string | null>(null);
+  const [revokeForbidden, setRevokeForbidden] = useState<unknown>(null);
+  const [revoked, setRevoked] = useState(false);
+
+  const revokeMutation = useMutation({
+    mutationFn: () => revokeMemberSessions(auth, id),
+    onSuccess: () => {
+      setRevokeError(null);
+      setRevokeForbidden(null);
+      setRevoked(true);
+    },
+    onError: (error: unknown) => {
+      if (error instanceof ApiError && error.problem.status === 403) {
+        setRevokeError(null);
+        setRevokeForbidden(error);
+        return;
+      }
+      setRevokeForbidden(null);
+      setRevokeError('Could not revoke this member’s sessions. Try again.');
+    },
+  });
+
+  function handleRevoke() {
+    if (
+      window.confirm('Revoke all sessions for this member? They will be signed out everywhere.')
+    ) {
+      setRevoked(false);
+      revokeMutation.mutate();
+    }
+  }
 
   const memberQuery = useQuery({
     queryKey: ['personnel', 'members', id],
@@ -115,6 +149,30 @@ export function MemberDetailPage() {
             <ApiForbiddenGate error={statusMutation.error} embedded>
               <p role="alert">{statusMutation.error.message}</p>
             </ApiForbiddenGate>
+          ) : null}
+
+          {canRevokeSessions ? (
+            <div style={{ marginTop: 'var(--boxalarm-spacing-lg)' }}>
+              <button
+                type="button"
+                onClick={handleRevoke}
+                disabled={revokeMutation.isPending}
+                style={{ minHeight: 44 }}
+              >
+                Revoke all sessions (lost device)
+              </button>
+              {revokeForbidden ? (
+                <ApiForbiddenGate error={revokeForbidden} embedded>
+                  <p role="alert">Could not revoke this member’s sessions.</p>
+                </ApiForbiddenGate>
+              ) : null}
+              {revokeError ? (
+                <p role="alert" aria-live="assertive">
+                  {revokeError}
+                </p>
+              ) : null}
+              {revoked ? <p role="status">Sessions revoked.</p> : null}
+            </div>
           ) : null}
         </>
       )}
