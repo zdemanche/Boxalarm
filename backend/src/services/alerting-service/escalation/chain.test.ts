@@ -163,8 +163,8 @@ describe('E1-S3 chain: fan-out -> schedule -> escalation-fired handler', () => {
     );
 
     expect(schedulerSend).toHaveBeenCalledTimes(2);
-    const pushBefore = alerting.items.get('DEPT#NICHOLS#DISPATCH#dispatch-1#RECEIPT#mbr-1#PUSH#1');
-    const smsBefore = alerting.items.get('DEPT#NICHOLS#DISPATCH#dispatch-1#RECEIPT#mbr-1#SMS#1');
+    const pushBefore = alerting.items.get('DEPT#NICHOLS#DISPATCH#dispatch-1#RECEIPT#mbr-1#push#1');
+    const smsBefore = alerting.items.get('DEPT#NICHOLS#DISPATCH#dispatch-1#RECEIPT#mbr-1#sms#1');
     expect(pushBefore).toBeDefined();
     expect(smsBefore).toBeDefined();
 
@@ -191,10 +191,10 @@ describe('E1-S3 chain: fan-out -> schedule -> escalation-fired handler', () => {
     expect(escalatedResult).toEqual({ outcome: 'ESCALATED' });
     expect(ackedResult).toEqual({ outcome: 'SKIPPED_ACKED' });
 
-    expect(alerting.items.get('DEPT#NICHOLS#DISPATCH#dispatch-1#RECEIPT#mbr-1#PUSH#1')).toEqual(
+    expect(alerting.items.get('DEPT#NICHOLS#DISPATCH#dispatch-1#RECEIPT#mbr-1#push#1')).toEqual(
       pushBefore,
     );
-    expect(alerting.items.get('DEPT#NICHOLS#DISPATCH#dispatch-1#RECEIPT#mbr-1#SMS#1')).toEqual(
+    expect(alerting.items.get('DEPT#NICHOLS#DISPATCH#dispatch-1#RECEIPT#mbr-1#sms#1')).toEqual(
       smsBefore,
     );
     expect(
