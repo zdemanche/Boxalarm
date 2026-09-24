@@ -181,7 +181,7 @@ describe("BoxalarmUserPool", () => {
     );
   });
 
-  it("scopes the Cognito SMS role's trust to this pool's external ID (confused-deputy hardening)", async () => {
+  it("scopes the Cognito SMS role's trust to this pool's external ID AND this account/a Cognito pool ARN (confused-deputy hardening)", async () => {
     const { BoxalarmUserPool } = await import("../../components/identity/user-pool");
     const identity = new BoxalarmUserPool("test-identity-sms", { env: "dev" });
     await settle(identity);
@@ -191,11 +191,24 @@ describe("BoxalarmUserPool", () => {
       resolve(identity.userPool.smsConfiguration),
     ]);
     const parsed = JSON.parse(policy) as {
-      Statement: Array<{ Condition?: Record<string, unknown> }>;
+      Statement: Array<{
+        Condition?: {
+          StringEquals?: Record<string, string>;
+          ArnLike?: Record<string, string>;
+        };
+      }>;
     };
-    expect(parsed.Statement[0]?.Condition).toMatchObject({
-      StringEquals: { "sts:ExternalId": "boxalarm-dev-identity-sms" },
+    // The external ID alone is guessable (it follows the same
+    // boxalarm-${env}-identity-sms pattern as the role name), so it isn't sufficient
+    // on its own — aws:SourceAccount and aws:SourceArn must also be present, pinning
+    // the assumption to THIS account and a Cognito user pool in it.
+    expect(parsed.Statement[0]?.Condition?.StringEquals).toMatchObject({
+      "sts:ExternalId": "boxalarm-dev-identity-sms",
+      "aws:SourceAccount": "123456789012",
     });
+    expect(parsed.Statement[0]?.Condition?.ArnLike?.["aws:SourceArn"]).toBe(
+      "arn:aws:cognito-idp:us-east-1:123456789012:userpool/*",
+    );
     expect(smsConfig?.externalId).toBe("boxalarm-dev-identity-sms");
   });
 

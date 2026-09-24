@@ -12,6 +12,7 @@ export interface ConfigArgs {
   platformTableName: pulumi.Input<string>;
   platformTableArn: pulumi.Input<string>;
   policyStoreArn: pulumi.Input<string>;
+  policyStoreId: pulumi.Input<string>;
   logGroup: ServiceLogGroup;
   httpApi: HttpApi;
 }
@@ -44,14 +45,26 @@ export class Config extends pulumi.ComponentResource {
         handler: LAMBDA_HANDLER,
         code: lambdaCode("platform-service", "config"),
         logGroup: args.logGroup,
-        environment: { PLATFORM_TABLE_NAME: args.platformTableName },
+        environment: {
+          PLATFORM_TABLE_NAME: args.platformTableName,
+          // Granted verifiedpermissions:IsAuthorizedWithToken below — without this,
+          // readAuthzConfig() throws on every withAuthorization() call.
+          VERIFIED_PERMISSIONS_POLICY_STORE_ID: args.policyStoreId,
+        },
         additionalPolicyStatements: pulumi
           .all([pulumi.output(args.platformTableArn), pulumi.output(args.policyStoreArn)])
           .apply(([tableArn, policyStoreArn]) => [
             {
+              // dynamodb:TransactWriteItems is not a real IAM action — DynamoDB
+              // authorizes each item inside a transaction as its own PutItem/
+              // UpdateItem/DeleteItem call. getDepartmentConfig does a GetItem;
+              // putDepartmentConfig's TransactWriteCommand sends two Puts (the
+              // config item and its outbox record), never an Update. Granting
+              // UpdateItem+TransactWriteItems and no PutItem meant PUT
+              // /platform/config was denied on every call.
               Sid: "ConfigTableAccess" as const,
               Effect: "Allow" as const,
-              Action: ["dynamodb:GetItem", "dynamodb:UpdateItem", "dynamodb:TransactWriteItems"],
+              Action: ["dynamodb:GetItem", "dynamodb:PutItem"],
               Resource: tableArn,
             },
             auditMutationDenyStatement(tableArn),

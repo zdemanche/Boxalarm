@@ -54,6 +54,7 @@ describe("Members", () => {
       platformTableName: pulumi.output("platform-table"),
       platformTableArn: pulumi.output("arn:aws:dynamodb:us-east-1:123456789012:table/platform"),
       policyStoreArn: pulumi.output("arn:aws:verifiedpermissions::123456789012:policy-store/ps-1"),
+      policyStoreId: pulumi.output("ps-1"),
       logGroup,
       httpApi,
     });
@@ -80,9 +81,69 @@ describe("Members", () => {
     expect(policy.Statement.some((s) => s.Sid === "DenyAuditMutations")).toBe(true);
   });
 
+  it("scopes list and get to read-only DynamoDB actions only (no write action of any kind)", async () => {
+    const members = await build();
+    const [listPolicyJson, getPolicyJson] = await Promise.all([
+      resolve(members.listLambda.rolePolicy.policy),
+      resolve(members.getLambda.rolePolicy.policy),
+    ]);
+    for (const policyJson of [listPolicyJson, getPolicyJson]) {
+      const policy = JSON.parse(policyJson) as { Statement: Array<{ Action: string[] }> };
+      const allActions = policy.Statement.flatMap((s) => s.Action);
+      const writeActions = allActions.filter((a) =>
+        /^dynamodb:(Put|Update|Delete|BatchWrite|TransactWrite)/.test(a),
+      );
+      expect(writeActions).toEqual([]);
+    }
+  });
+
+  it("grants list only Query on GSI3 and get only GetItem", async () => {
+    const members = await build();
+    const [listPolicyJson, getPolicyJson] = await Promise.all([
+      resolve(members.listLambda.rolePolicy.policy),
+      resolve(members.getLambda.rolePolicy.policy),
+    ]);
+    const listPolicy = JSON.parse(listPolicyJson) as {
+      Statement: Array<{ Sid: string; Action: string[]; Resource: string[] }>;
+    };
+    const listStatement = listPolicy.Statement.find((s) => s.Sid === "MembersListAccess");
+    expect(listStatement?.Action).toEqual(["dynamodb:Query"]);
+    expect(listStatement?.Resource[0]).toContain("/index/GSI3");
+
+    const getPolicy = JSON.parse(getPolicyJson) as {
+      Statement: Array<{ Sid: string; Action: string[] }>;
+    };
+    const getStatement = getPolicy.Statement.find((s) => s.Sid === "MembersGetAccess");
+    expect(getStatement?.Action).toEqual(["dynamodb:GetItem"]);
+  });
+
+  it("drops the non-functional dynamodb:TransactWriteItems action from every route", async () => {
+    const members = await build();
+    const policies = await Promise.all(
+      [members.createLambda, members.listLambda, members.getLambda, members.updateStatusLambda].map(
+        (lambda) => resolve(lambda.rolePolicy.policy),
+      ),
+    );
+    for (const policyJson of policies) {
+      expect(policyJson).not.toContain("TransactWriteItems");
+    }
+  });
+
   it("grants Verified Permissions IsAuthorizedWithToken to every members Lambda", async () => {
     const members = await build();
     const policyJson = await resolve(members.createLambda.rolePolicy.policy);
     expect(policyJson).toContain("verifiedpermissions:IsAuthorizedWithToken");
+  });
+
+  it("wires VERIFIED_PERMISSIONS_POLICY_STORE_ID into every members Lambda's environment", async () => {
+    const members = await build();
+    const envs = await Promise.all(
+      [members.createLambda, members.listLambda, members.getLambda, members.updateStatusLambda].map(
+        (lambda) => resolve(lambda.function.environment),
+      ),
+    );
+    for (const env of envs) {
+      expect(env?.variables?.VERIFIED_PERMISSIONS_POLICY_STORE_ID).toBe("ps-1");
+    }
   });
 });
