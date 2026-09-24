@@ -362,6 +362,65 @@ test('a 403 revoking sessions shows a generic message, not the raw server detail
   expect(document.body.textContent).not.toContain(SECRET_CEDAR_DETAIL);
 });
 
+test('a failed retention load shows an explicit error and disables Run disposal, instead of a silently-empty input', async () => {
+  server.use(
+    http.get('/api/v1/platform/config/STATIONS', () =>
+      HttpResponse.json(
+        { type: 'about:blank', title: 'Not Found', status: 404, traceId: 't1' },
+        { status: 404 },
+      ),
+    ),
+    http.get('/api/v1/platform/config/RANKS', () =>
+      HttpResponse.json(
+        { type: 'about:blank', title: 'Not Found', status: 404, traceId: 't1' },
+        { status: 404 },
+      ),
+    ),
+    http.get('/api/v1/platform/config/LOSAP_POINT_RULES', () =>
+      HttpResponse.json(
+        { type: 'about:blank', title: 'Not Found', status: 404, traceId: 't1' },
+        { status: 404 },
+      ),
+    ),
+    http.get('/api/v1/platform/config/ALERT_RULES', () =>
+      HttpResponse.json(
+        { type: 'about:blank', title: 'Not Found', status: 404, traceId: 't1' },
+        { status: 404 },
+      ),
+    ),
+    http.get('/api/v1/platform/config/CHECKLIST_DEFAULTS', () =>
+      HttpResponse.json(
+        { type: 'about:blank', title: 'Not Found', status: 404, traceId: 't1' },
+        { status: 404 },
+      ),
+    ),
+    http.get('/api/v1/platform/retention', () =>
+      HttpResponse.json(
+        {
+          type: 'about:blank',
+          title: 'Service Unavailable',
+          status: 503,
+          detail: 'Retention config unavailable',
+          traceId: 't7',
+        },
+        { status: 503 },
+      ),
+    ),
+  );
+
+  renderRoute(['ADMIN'], '/settings');
+
+  await waitFor(() => {
+    expect(screen.getByText('Something went wrong loading this page')).toBeTruthy();
+  });
+  // The empty/unset-looking retention input must not render — an admin who never sees an
+  // error could otherwise save over the real value with an unintentionally low one.
+  expect(screen.queryByLabelText('Retention period (years)')).toBeNull();
+  expect((screen.getByRole('button', { name: 'Run disposal' }) as HTMLButtonElement).disabled).toBe(
+    true,
+  );
+});
+
 test('resubmitting the same audit lookup refreshes the results table', async () => {
   let calls = 0;
   server.use(

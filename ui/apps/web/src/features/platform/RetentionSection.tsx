@@ -103,6 +103,10 @@ export function RetentionSection() {
       </h2>
       {retentionQuery.isLoading ? (
         <p>Loading retention configuration…</p>
+      ) : retentionQuery.error ? (
+        <ApiForbiddenGate error={retentionQuery.error} embedded>
+          <p role="alert">Unable to load the retention configuration.</p>
+        </ApiForbiddenGate>
       ) : (
         <form
           onSubmit={handleSubmit}
@@ -157,11 +161,19 @@ export function RetentionSection() {
       <button
         type="button"
         onClick={handleDisposal}
-        disabled={disposalMutation.isPending}
+        disabled={
+          disposalMutation.isPending || retentionQuery.isLoading || Boolean(retentionQuery.error)
+        }
         style={{ minHeight: 44, marginTop: 'var(--boxalarm-spacing-md)' }}
       >
         Run disposal
       </button>
+      {retentionQuery.error ? (
+        <p role="alert">
+          The retention period could not be confirmed, so disposal is disabled until it loads
+          successfully.
+        </p>
+      ) : null}
       {disposalForbidden ? (
         <ApiForbiddenGate error={disposalForbidden} embedded>
           <p role="alert">Disposal could not be run.</p>
