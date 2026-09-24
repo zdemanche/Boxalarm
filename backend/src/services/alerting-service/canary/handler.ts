@@ -12,6 +12,7 @@ import {
   upsertSelfTestRun,
 } from '../selfTest/selfTestRunRepository.js';
 import {
+  clearCanaryPointer,
   getCanaryPointer,
   putCanaryRun,
   setCanaryPointer,
@@ -69,6 +70,14 @@ async function completePendingRun(
     latencyMs,
     channelResults: (run?.channelResults as Record<string, unknown> | undefined) ?? {},
   });
+
+  // Clear the pointer now that this pendingTestId has been recorded, regardless of whether
+  // startNextRun below manages to arm a new one. Otherwise, if startNextRun's cooldown
+  // acquisition fails (the schedule can run more often than the 60s self-test cooldown), this
+  // same stale pendingTestId would be re-read and re-recorded on the next invocation — writing a
+  // duplicate CANARY_RUN item (keyed on ranAt, not testId) with an ever-growing latencyMs for a
+  // self-test that already resolved.
+  await clearCanaryPointer(ddb, tableName, deptId);
 
   emitOutcomeMetric(METRIC_NAMESPACE, result === 'PASS' ? 'CanaryPassed' : 'CanaryFailed');
   emitEmf(METRIC_NAMESPACE, 'CanaryLatencyMs', latencyMs, [[]], {}, 'Milliseconds');

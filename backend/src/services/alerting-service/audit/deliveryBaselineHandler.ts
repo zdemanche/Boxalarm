@@ -6,6 +6,7 @@ import {
   serviceUnavailableProblem,
   extractTraceId,
   type CedarPrincipalContext,
+  type FieldError,
   type GuardEvent,
 } from '@boxalarm/authz';
 import { toVerifiedDeptId } from '@boxalarm/dept-scope';
@@ -15,6 +16,7 @@ import { computeDeliveryBaseline } from './deliveryBaseline.js';
 
 const METRIC_NAMESPACE = 'Boxalarm/AlertingAudit';
 const MAX_PAGES = 200;
+const MAX_RANGE_SECONDS = 90 * 24 * 60 * 60;
 
 function parseRange(
   qs: Record<string, string | undefined> | null | undefined,
@@ -37,6 +39,13 @@ async function queryDeliveryBaseline(
   if (!range) {
     emitOutcomeMetric(METRIC_NAMESPACE, 'DeliveryBaselineQueryFailed', 'InvalidQueryParams');
     return badRequestProblem(traceId, 'Provide both from and to (epoch seconds, from <= to).');
+  }
+  if (range.to - range.from > MAX_RANGE_SECONDS) {
+    emitOutcomeMetric(METRIC_NAMESPACE, 'DeliveryBaselineQueryFailed', 'RangeTooWide');
+    const errors: FieldError[] = [
+      { field: 'to', detail: 'The from/to date range must not exceed 90 days.' },
+    ];
+    return badRequestProblem(traceId, errors);
   }
 
   try {

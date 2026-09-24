@@ -5,10 +5,10 @@ import {
   type DynamoDBDocumentClient,
 } from '@aws-sdk/lib-dynamodb';
 import { buildDeptScopedPk, type VerifiedDeptId } from '@boxalarm/dept-scope';
-import { randomUUID } from 'node:crypto';
 import { queryEligibleMembers, type EligibilitySnapshotItem } from '../eligibility/selector.js';
 import { resolvePushTarget } from '../eligibility/resolvePushTarget.js';
 import { logError, logInfo } from '../dispatches/logger.js';
+import { buildAlertingEnvelope } from './alertingEnvelope.js';
 
 export type MutualAidReason = 'TONE_3_PREDICATE_UNMET' | 'MANUAL';
 
@@ -26,10 +26,6 @@ export interface MutualAidResult {
   readonly requested: boolean;
   readonly officersNotified: number;
   readonly adapterUsed: string;
-}
-
-export interface MutualAidPort {
-  requestMutualAid(input: MutualAidRequestInput): Promise<MutualAidResult>;
 }
 
 const ADAPTER_NAME = 'OFFICER_MANUAL_PROMPT';
@@ -83,15 +79,14 @@ async function promptOfficer(
     await sns.send(
       new PublishCommand({
         TopicArn: topicArn,
-        Message: JSON.stringify({
-          eventId: randomUUID(),
-          eventTime: new Date().toISOString(),
-          eventType: 'alerting.mutual_aid.triggered',
-          source: 'alerting-service',
-          correlationId: dispatchId,
-          schemaVersion: '1.0',
-          payload: { dispatchId, memberId: officer.memberId, channel: 'push', mutualAid: true },
-        }),
+        Message: JSON.stringify(
+          buildAlertingEnvelope('alerting.mutual_aid.triggered', dispatchId, {
+            dispatchId,
+            memberId: officer.memberId,
+            channel: 'push',
+            mutualAid: true,
+          }),
+        ),
         MessageGroupId: dispatchId,
         MessageDeduplicationId: idempotencyKey,
         MessageAttributes: { channel: { DataType: 'String', StringValue: 'push' } },
@@ -108,63 +103,68 @@ async function promptOfficer(
   }
 }
 
-export const officerManualPromptAdapter: MutualAidPort = {
-  async requestMutualAid(input: MutualAidRequestInput): Promise<MutualAidResult> {
-    const { ddb, sns, tableName, topicArn, deptId, dispatchId, reason } = input;
-    const pk = buildDeptScopedPk(deptId, 'DISPATCH', dispatchId);
+export async function requestMutualAid(input: MutualAidRequestInput): Promise<MutualAidResult> {
+  const { ddb, sns, tableName, topicArn, deptId, dispatchId, reason } = input;
+  const pk = buildDeptScopedPk(deptId, 'DISPATCH', dispatchId);
 
-    try {
-      await ddb.send(
-        new TransactWriteCommand({
-          TransactItems: [
-            {
-              Put: {
-                TableName: tableName,
-                Item: {
-                  pk,
-                  sk: 'MUTUALAID#SINGLETON',
-                  entityType: 'MUTUAL_AID_EVENT',
-                  dispatchId,
-                  deptId,
-                  reason,
-                  adapterUsed: ADAPTER_NAME,
-                  triggeredAt: Math.floor(Date.now() / 1000),
-                },
-                ConditionExpression: 'attribute_not_exists(pk)',
+  try {
+    await ddb.send(
+      new TransactWriteCommand({
+        TransactItems: [
+          {
+            Put: {
+              TableName: tableName,
+              Item: {
+                pk,
+                sk: 'MUTUALAID#SINGLETON',
+                entityType: 'MUTUAL_AID_EVENT',
+                dispatchId,
+                deptId,
+                reason,
+                adapterUsed: ADAPTER_NAME,
+                triggeredAt: Math.floor(Date.now() / 1000),
               },
+              ConditionExpression: 'attribute_not_exists(pk)',
             },
-          ],
-        }),
-      );
-    } catch (error) {
-      if (error instanceof Error && error.name === 'TransactionCanceledException') {
-        logInfo('alerting.mutualAid.alreadyRequested', { deptId, dispatchId });
-        return { requested: false, officersNotified: 0, adapterUsed: ADAPTER_NAME };
-      }
-      logError('alerting.mutualAid.eventWriteFailed', error, { deptId, dispatchId });
-      throw error;
+          },
+        ],
+      }),
+    );
+  } catch (error) {
+    if (error instanceof Error && error.name === 'TransactionCanceledException') {
+      logInfo('alerting.mutualAid.alreadyRequested', { deptId, dispatchId });
+      return { requested: false, officersNotified: 0, adapterUsed: ADAPTER_NAME };
     }
+    logError('alerting.mutualAid.eventWriteFailed', error, { deptId, dispatchId });
+    throw error;
+  }
 
-    const eligibleMembers = await queryEligibleMembers(ddb, tableName, deptId);
-    const officers = eligibleMembers.filter((member) => member.roles.includes(OFFICER_ROLE));
+  const eligibleMembers = await queryEligibleMembers(ddb, tableName, deptId);
+  const officers = eligibleMembers.filter((member) => member.roles.includes(OFFICER_ROLE));
 
-    let officersNotified = 0;
-    for (const officer of officers) {
-      const notified = await promptOfficer(
-        ddb,
-        sns,
-        tableName,
-        topicArn,
-        deptId,
-        dispatchId,
-        officer,
-      );
-      if (notified) {
+  // promptOfficer already catches its own DynamoDB/SNS failures and resolves to false rather
+  // than throwing, so Promise.allSettled here is belt-and-suspenders: one officer's failure
+  // (caught or not) must never block or delay the rest of the officer roster being prompted.
+  const promptResults = await Promise.allSettled(
+    officers.map((officer) =>
+      promptOfficer(ddb, sns, tableName, topicArn, deptId, dispatchId, officer),
+    ),
+  );
+  let officersNotified = 0;
+  promptResults.forEach((result, index) => {
+    if (result.status === 'fulfilled') {
+      if (result.value) {
         officersNotified += 1;
       }
+      return;
     }
+    logError('alerting.mutualAid.promptFailed', result.reason, {
+      deptId,
+      dispatchId,
+      memberId: officers[index]?.memberId,
+    });
+  });
 
-    logInfo('alerting.mutualAid.requested', { deptId, dispatchId, reason, officersNotified });
-    return { requested: true, officersNotified, adapterUsed: ADAPTER_NAME };
-  },
-};
+  logInfo('alerting.mutualAid.requested', { deptId, dispatchId, reason, officersNotified });
+  return { requested: true, officersNotified, adapterUsed: ADAPTER_NAME };
+}

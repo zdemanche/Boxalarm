@@ -1,7 +1,11 @@
-import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import { HttpResponse, http } from 'msw';
+import { setupServer } from 'msw/node';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import type { User, UserManager } from 'oidc-client-ts';
-import { afterEach, expect, test, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, expect, test, vi } from 'vitest';
 import { AuthProvider } from '../auth/AuthContext';
 import { AppShell } from '../components/AppShell';
 import { LandingPage } from '../pages/LandingPage';
@@ -9,7 +13,16 @@ import { PlaceholderPage } from '../pages/PlaceholderPage';
 import { RequireAuth } from '../routing/RequireAuth';
 import { RequireRole } from '../routing/RequireRole';
 
-afterEach(cleanup);
+const server = setupServer(
+  http.get('/api/v1/apparatus', () => HttpResponse.json({ items: [] })),
+  http.get('/api/v1/personnel/members', () => HttpResponse.json({ items: [] })),
+);
+beforeAll(() => server.listen());
+afterEach(() => {
+  server.resetHandlers();
+  cleanup();
+});
+afterAll(() => server.close());
 
 function makeManager(groups: string[]): UserManager {
   const user = {
@@ -32,55 +45,58 @@ function makeManager(groups: string[]): UserManager {
 }
 
 function renderShell(groups: string[], initialPath: string) {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
-    <AuthProvider userManager={makeManager(groups)}>
-      <MemoryRouter initialEntries={[initialPath]}>
-        <Routes>
-          <Route
-            path="/"
-            element={
-              <RequireAuth>
-                <AppShell />
-              </RequireAuth>
-            }
-          >
-            <Route index element={<LandingPage />} />
+    <QueryClientProvider client={client}>
+      <AuthProvider userManager={makeManager(groups)}>
+        <MemoryRouter initialEntries={[initialPath]}>
+          <Routes>
             <Route
-              path="alerts/diagnostics"
+              path="/"
               element={
-                <RequireRole>
-                  <PlaceholderPage title="Alert diagnostics" />
-                </RequireRole>
+                <RequireAuth>
+                  <AppShell />
+                </RequireAuth>
               }
-            />
-            <Route
-              path="settings"
-              element={
-                <RequireRole>
-                  <PlaceholderPage title="Settings" />
-                </RequireRole>
-              }
-            />
-            <Route
-              path="audit-log"
-              element={
-                <RequireRole>
-                  <PlaceholderPage title="Audit log" />
-                </RequireRole>
-              }
-            />
-            <Route
-              path="personnel"
-              element={
-                <RequireRole>
-                  <PlaceholderPage title="Personnel" />
-                </RequireRole>
-              }
-            />
-          </Route>
-        </Routes>
-      </MemoryRouter>
-    </AuthProvider>,
+            >
+              <Route index element={<LandingPage />} />
+              <Route
+                path="alerts/diagnostics"
+                element={
+                  <RequireRole>
+                    <PlaceholderPage title="Alert diagnostics" />
+                  </RequireRole>
+                }
+              />
+              <Route
+                path="settings"
+                element={
+                  <RequireRole>
+                    <PlaceholderPage title="Settings" />
+                  </RequireRole>
+                }
+              />
+              <Route
+                path="audit-log"
+                element={
+                  <RequireRole>
+                    <PlaceholderPage title="Audit log" />
+                  </RequireRole>
+                }
+              />
+              <Route
+                path="personnel"
+                element={
+                  <RequireRole>
+                    <PlaceholderPage title="Personnel" />
+                  </RequireRole>
+                }
+              />
+            </Route>
+          </Routes>
+        </MemoryRouter>
+      </AuthProvider>
+    </QueryClientProvider>,
   );
 }
 
@@ -111,4 +127,51 @@ test('ADMIN landing on / redirects to first granted route', async () => {
   await waitFor(() => {
     expect(screen.getByRole('heading', { name: 'Alert diagnostics' })).toBeTruthy();
   });
+});
+
+// Regression for MAJOR-1: below 768px (and at 200% zoom), PrimaryNav's static sidebar is
+// display:none with no replacement, so the web app had no route navigation and no Sign out at
+// all. NavDrawer, opened from TopBar's hamburger button, is that replacement.
+test('NavDrawer: the hamburger button opens a dialog containing the granted nav links and Sign out', async () => {
+  const user = userEvent.setup();
+  renderShell(['CHIEF'], '/');
+  await screen.findByRole('heading', { name: 'Chief dashboard' });
+
+  // The dialog isn't in the DOM until opened.
+  expect(screen.queryByRole('dialog')).toBeNull();
+
+  await user.click(screen.getByRole('button', { name: 'Open navigation' }));
+
+  const dialog = await screen.findByRole('dialog');
+  const withinDialog = within(dialog);
+  expect(withinDialog.getByRole('navigation', { name: 'Primary' })).toBeTruthy();
+  expect(withinDialog.getByRole('link', { name: 'Dashboard' })).toBeTruthy();
+  expect(withinDialog.getByRole('link', { name: 'Audit log' })).toBeTruthy();
+  expect(withinDialog.getByRole('button', { name: 'Sign out' })).toBeTruthy();
+});
+
+test('NavDrawer: choosing a nav link inside the drawer navigates and closes the drawer', async () => {
+  const user = userEvent.setup();
+  renderShell(['CHIEF'], '/');
+  await screen.findByRole('heading', { name: 'Chief dashboard' });
+
+  await user.click(screen.getByRole('button', { name: 'Open navigation' }));
+  const dialog = await screen.findByRole('dialog');
+
+  await user.click(within(dialog).getByRole('link', { name: 'Audit log' }));
+
+  await screen.findByRole('heading', { name: 'Audit log' });
+  await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+});
+
+test('NavDrawer: Escape closes the drawer (Radix Dialog focus trap)', async () => {
+  const user = userEvent.setup();
+  renderShell(['CHIEF'], '/');
+  await screen.findByRole('heading', { name: 'Chief dashboard' });
+
+  await user.click(screen.getByRole('button', { name: 'Open navigation' }));
+  await screen.findByRole('dialog');
+
+  await user.keyboard('{Escape}');
+  await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
 });

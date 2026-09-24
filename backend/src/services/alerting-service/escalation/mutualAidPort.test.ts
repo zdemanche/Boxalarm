@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
 import type { SNSClient } from '@aws-sdk/client-sns';
 import { toVerifiedDeptId } from '@boxalarm/dept-scope';
-import { officerManualPromptAdapter } from './mutualAidPort.js';
+import { requestMutualAid } from './mutualAidPort.js';
 
 interface FakeItem {
   pk: string;
@@ -10,7 +10,10 @@ interface FakeItem {
   [key: string]: unknown;
 }
 
-function createFakeDdb(seed: readonly FakeItem[]): {
+function createFakeDdb(
+  seed: readonly FakeItem[],
+  options: { readonly failPromptForMemberId?: string } = {},
+): {
   send: DynamoDBDocumentClient['send'];
   items: Map<string, FakeItem>;
 } {
@@ -29,6 +32,13 @@ function createFakeDdb(seed: readonly FakeItem[]): {
     if (name === 'PutCommand') {
       const put = input as { Item: FakeItem; ConditionExpression?: string };
       const key = `${put.Item.pk}#${put.Item.sk}`;
+      if (
+        options.failPromptForMemberId &&
+        put.Item.entityType === 'MUTUAL_AID_PROMPT' &&
+        put.Item.memberId === options.failPromptForMemberId
+      ) {
+        throw new Error('ddb unavailable');
+      }
       if (put.ConditionExpression && items.has(key)) {
         const error = new Error('conditional check failed');
         error.name = 'ConditionalCheckFailedException';
@@ -67,7 +77,7 @@ function createFakeDdb(seed: readonly FakeItem[]): {
 const DEPT_ID = toVerifiedDeptId({ deptId: 'NICHOLS' });
 const ELIGIBILITY_PK = 'DEPT#NICHOLS#ELIGIBILITY';
 
-describe('officerManualPromptAdapter', () => {
+describe('requestMutualAid', () => {
   it('records the mutual-aid event once and prompts every eligible officer', async () => {
     const officer: FakeItem = {
       pk: ELIGIBILITY_PK,
@@ -97,7 +107,7 @@ describe('officerManualPromptAdapter', () => {
     const snsSend = vi.fn().mockResolvedValue({});
     const sns = { send: snsSend } as unknown as SNSClient;
 
-    const result = await officerManualPromptAdapter.requestMutualAid({
+    const result = await requestMutualAid({
       ddb: { send } as unknown as DynamoDBDocumentClient,
       sns,
       tableName: 'alerting-table',
@@ -121,6 +131,55 @@ describe('officerManualPromptAdapter', () => {
     expect(snsSend).toHaveBeenCalledTimes(1);
   });
 
+  it('still notifies every other officer when one officer prompt fails (MAJOR #2 regression)', async () => {
+    const officerOk: FakeItem = {
+      pk: ELIGIBILITY_PK,
+      sk: 'MEMBER#officer-ok',
+      entityType: 'MEMBER_ELIGIBILITY_SNAPSHOT',
+      memberId: 'officer-ok',
+      active: true,
+      quals: [],
+      roles: ['OFFICER'],
+      contactChannels: [{ channel: 'PUSH', token: 'tok', platform: 'ios', valid: true }],
+      availabilityState: 'AVAILABLE',
+      snapshotUpdatedAt: 0,
+    };
+    const officerFail: FakeItem = {
+      pk: ELIGIBILITY_PK,
+      sk: 'MEMBER#officer-fail',
+      entityType: 'MEMBER_ELIGIBILITY_SNAPSHOT',
+      memberId: 'officer-fail',
+      active: true,
+      quals: [],
+      roles: ['OFFICER'],
+      contactChannels: [{ channel: 'PUSH', token: 'tok', platform: 'ios', valid: true }],
+      availabilityState: 'AVAILABLE',
+      snapshotUpdatedAt: 0,
+    };
+    const { send } = createFakeDdb([officerOk, officerFail], {
+      failPromptForMemberId: 'officer-fail',
+    });
+    const snsSend = vi.fn().mockResolvedValue({});
+    const sns = { send: snsSend } as unknown as SNSClient;
+
+    const result = await requestMutualAid({
+      ddb: { send } as unknown as DynamoDBDocumentClient,
+      sns,
+      tableName: 'alerting-table',
+      topicArn: 'arn:aws:sns:us-east-1:1:alerting-topic.fifo',
+      deptId: DEPT_ID,
+      dispatchId: 'dispatch-1',
+      reason: 'TONE_3_PREDICATE_UNMET',
+    });
+
+    // Does not throw for the whole batch, and the surviving officer is still counted.
+    expect(result).toEqual({
+      requested: true,
+      officersNotified: 1,
+      adapterUsed: 'OFFICER_MANUAL_PROMPT',
+    });
+  });
+
   it('is a no-op the second time it is invoked for the same dispatch (singleton guard)', async () => {
     const existingEvent: FakeItem = {
       pk: 'DEPT#NICHOLS#DISPATCH#dispatch-1',
@@ -132,7 +191,7 @@ describe('officerManualPromptAdapter', () => {
     const snsSend = vi.fn();
     const sns = { send: snsSend } as unknown as SNSClient;
 
-    const result = await officerManualPromptAdapter.requestMutualAid({
+    const result = await requestMutualAid({
       ddb: { send } as unknown as DynamoDBDocumentClient,
       sns,
       tableName: 'alerting-table',

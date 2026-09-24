@@ -96,3 +96,31 @@ test('report a defect meets the N3.5 baseline touch target, not just its text he
   const link = await findByRole('button', { name: 'Report a defect' });
   expect(link.props.style.minHeight).toBe(touchTarget.baseline.ios);
 });
+
+test('an item requiring a photo cannot be marked pass or fail until a photo is captured', async () => {
+  const templateSpy = jest
+    .spyOn(mockChecksRepository, 'getChecklistTemplate')
+    .mockResolvedValueOnce({
+      templateId: 'CT-PHOTO',
+      name: 'Photo-required check',
+      items: [{ code: 'SCBA', label: 'SCBA units present and charged', requiresPhoto: true }],
+    });
+
+  const { findByText, findByRole } = await render(<CheckRunnerScreen />);
+  await findByText('SCBA units present and charged');
+
+  expect((await findByRole('button', { name: 'Pass' })).props.accessibilityState.disabled).toBe(
+    true,
+  );
+
+  await act(async () => {
+    fireEvent.press(await findByRole('button', { name: 'Add photo' }));
+  });
+
+  expect(await findByRole('button', { name: 'Photo captured' })).toBeTruthy();
+  expect((await findByRole('button', { name: 'Pass' })).props.accessibilityState.disabled).toBe(
+    false,
+  );
+
+  templateSpy.mockRestore();
+});

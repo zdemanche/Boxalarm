@@ -8,6 +8,7 @@ import { requireEnv } from "../shared/env";
 export interface OutboxPublisherArgs {
   env: string;
   platformTableName: pulumi.Input<string>;
+  platformTableArn: pulumi.Input<string>;
   platformTableStreamArn: pulumi.Input<string>;
   busName: pulumi.Input<string>;
   busArn: pulumi.Input<string>;
@@ -55,14 +56,28 @@ export class OutboxPublisher extends pulumi.ComponentResource {
           PLATFORM_BUS_NAME: args.busName,
           PLATFORM_EVENT_BUS_NAME: args.busName,
         },
-        additionalPolicyStatements: pulumi.output(args.busArn).apply((busArn) => [
-          {
-            Sid: "PublishToPlatformBus",
-            Effect: "Allow" as const,
-            Action: ["events:PutEvents"],
-            Resource: busArn,
-          },
-        ]),
+        additionalPolicyStatements: pulumi
+          .all([args.busArn, args.platformTableArn])
+          .apply(([busArn, tableArn]) => [
+            {
+              Sid: "PublishToPlatformBus",
+              Effect: "Allow" as const,
+              Action: ["events:PutEvents"],
+              Resource: busArn,
+            },
+            {
+              // The real publisher (personnel-service/outbox/publisher.ts) runs an
+              // UpdateItem to SET sentAt after each successful PutEvents. Without
+              // this grant that update is denied and the handler throws — and
+              // because the event is published BEFORE the failing update, every
+              // stream-mapping retry re-publishes it, flooding the bus with
+              // duplicates for as long as the mapping keeps retrying.
+              Sid: "MarkOutboxEntrySent" as const,
+              Effect: "Allow" as const,
+              Action: ["dynamodb:UpdateItem"],
+              Resource: tableArn,
+            },
+          ]),
       },
       { parent: this },
     );
@@ -75,6 +90,14 @@ export class OutboxPublisher extends pulumi.ComponentResource {
         startingPosition: "LATEST",
         batchSize: 10,
         bisectBatchOnFunctionError: true,
+        // Stream-mapping defaults are UNBOUNDED (-1) retry attempts and record age.
+        // Because PutEvents runs before the (previously-denied) sentAt UpdateItem,
+        // an unbounded retry re-published every event in the batch on every retry —
+        // duplicate personnel.member.updated events flooding the bus, each one
+        // re-driving session revocation, for up to the stream's 24h retention.
+        // Bounded here so a stuck shard fails out to onFailure instead.
+        maximumRetryAttempts: 5,
+        maximumRecordAgeInSeconds: 3600,
         filterCriteria: {
           filters: [
             {

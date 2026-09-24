@@ -8,8 +8,8 @@ import {
 } from '@aws-sdk/lib-dynamodb';
 import { buildDeptScopedPk, toVerifiedDeptId, type VerifiedDeptId } from '@boxalarm/dept-scope';
 import { emitOutcomeMetric } from '@boxalarm/metrics';
-import { randomUUID } from 'node:crypto';
 import { createDynamoClient, readAlertingConfig } from '../eligibility/dynamoClient.js';
+import { buildAlertingEnvelope } from './alertingEnvelope.js';
 import { queryEligibleMembers, type EligibilitySnapshotItem } from '../eligibility/selector.js';
 import { resolvePushTarget, resolveSmsTarget } from '../eligibility/resolvePushTarget.js';
 import { logError, logInfo } from '../dispatches/logger.js';
@@ -21,7 +21,7 @@ import {
   type FanOutChannel,
 } from '../fanout/idempotencyKey.js';
 import { createEscalationSchedule, getSchedulerClient } from './scheduleEscalation.js';
-import { officerManualPromptAdapter } from './mutualAidPort.js';
+import { requestMutualAid } from './mutualAidPort.js';
 import {
   isPredicateMet,
   readDepartmentToneConfig,
@@ -128,14 +128,8 @@ async function publishToneChannel(
   await sns.send(
     new PublishCommand({
       TopicArn: topicArn,
-      Message: JSON.stringify({
-        eventId: randomUUID(),
-        eventTime: new Date().toISOString(),
-        eventType: 'alerting.dispatch.normalized',
-        source: 'alerting-service',
-        correlationId: dispatchId,
-        schemaVersion: '1.0',
-        payload: {
+      Message: JSON.stringify(
+        buildAlertingEnvelope('alerting.dispatch.normalized', dispatchId, {
           dispatchId,
           memberId,
           channel,
@@ -145,8 +139,8 @@ async function publishToneChannel(
           address: dispatch.address,
           crossStreets: dispatch.crossStreets,
           narrative: dispatch.narrative,
-        },
-      }),
+        }),
+      ),
       MessageGroupId: dispatchId,
       MessageDeduplicationId: deriveMessageDeduplicationId({
         dispatchId,
@@ -163,6 +157,61 @@ async function publishToneChannel(
   );
 }
 
+async function fireToneForMember(
+  ddb: DynamoDBDocumentClient,
+  sns: SNSClient,
+  scheduler: Parameters<typeof createEscalationSchedule>[0],
+  tableName: string,
+  topicArn: string,
+  deptId: VerifiedDeptId,
+  dispatchId: string,
+  dispatch: DispatchMetadata,
+  toneSequence: number,
+  member: EligibilitySnapshotItem,
+): Promise<void> {
+  for (const channel of FAN_OUT_CHANNELS) {
+    if (channel === 'push' && resolvePushTarget(member.contactChannels).skipped) {
+      continue;
+    }
+    if (channel === 'sms' && resolveSmsTarget(member.contactChannels).skipped) {
+      continue;
+    }
+    await publishToneChannel(
+      ddb,
+      sns,
+      tableName,
+      topicArn,
+      deptId,
+      dispatchId,
+      dispatch,
+      member.memberId,
+      channel,
+      toneSequence,
+    );
+  }
+  try {
+    await createEscalationSchedule(
+      scheduler,
+      {
+        deptId,
+        dispatchId,
+        memberId: member.memberId,
+        toneSequence,
+        delaySeconds: VOICE_ESCALATION_DELAY_SECONDS,
+      },
+      ddb,
+      tableName,
+    );
+  } catch (error) {
+    logError('alerting.toneLadder.voiceScheduleFailed', error, {
+      deptId,
+      dispatchId,
+      memberId: member.memberId,
+      toneSequence,
+    });
+  }
+}
+
 async function fireTone(
   ddb: DynamoDBDocumentClient,
   sns: SNSClient,
@@ -175,49 +224,34 @@ async function fireTone(
   toneSequence: number,
   members: readonly EligibilitySnapshotItem[],
 ): Promise<void> {
-  for (const member of members) {
-    for (const channel of FAN_OUT_CHANNELS) {
-      if (channel === 'push' && resolvePushTarget(member.contactChannels).skipped) {
-        continue;
-      }
-      if (channel === 'sms' && resolveSmsTarget(member.contactChannels).skipped) {
-        continue;
-      }
-      await publishToneChannel(
+  const results = await Promise.allSettled(
+    members.map((member) =>
+      fireToneForMember(
         ddb,
         sns,
+        scheduler,
         tableName,
         topicArn,
         deptId,
         dispatchId,
         dispatch,
-        member.memberId,
-        channel,
         toneSequence,
-      );
-    }
-    try {
-      await createEscalationSchedule(
-        scheduler,
-        {
-          deptId,
-          dispatchId,
-          memberId: member.memberId,
-          toneSequence,
-          delaySeconds: VOICE_ESCALATION_DELAY_SECONDS,
-        },
-        ddb,
-        tableName,
-      );
-    } catch (error) {
-      logError('alerting.toneLadder.voiceScheduleFailed', error, {
+        member,
+      ),
+    ),
+  );
+  results.forEach((result, index) => {
+    if (result.status === 'rejected') {
+      // One member's failure (e.g. a non-conditional DynamoDB or SNS error inside
+      // publishToneChannel) must never block or fail the rest of the roster's tone-out.
+      logError('alerting.toneLadder.memberFireFailed', result.reason, {
         deptId,
         dispatchId,
-        memberId: member.memberId,
+        memberId: members[index]?.memberId,
         toneSequence,
       });
     }
-  }
+  });
 }
 
 export const handler = async (payload: unknown): Promise<{ outcome: ToneOutcome }> => {
@@ -350,7 +384,7 @@ export const handler = async (payload: unknown): Promise<{ outcome: ToneOutcome 
 
   if (toneSequence === TONE_SEQUENCE_THREE) {
     try {
-      await officerManualPromptAdapter.requestMutualAid({
+      await requestMutualAid({
         ddb,
         sns,
         tableName,

@@ -1,4 +1,5 @@
 import {
+  DeleteCommand,
   GetCommand,
   PutCommand,
   QueryCommand,
@@ -46,6 +47,19 @@ export async function setCanaryPointer(
         entityType: 'CANARY_STATE',
         ...pointer,
       },
+    }),
+  );
+}
+
+export async function clearCanaryPointer(
+  ddb: DynamoDBDocumentClient,
+  tableName: string,
+  deptId: VerifiedDeptId,
+): Promise<void> {
+  await ddb.send(
+    new DeleteCommand({
+      TableName: tableName,
+      Key: { pk: buildDeptScopedPk(deptId, 'CANARY'), sk: 'STATE' },
     }),
   );
 }

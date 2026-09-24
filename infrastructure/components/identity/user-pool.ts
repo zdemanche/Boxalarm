@@ -132,23 +132,43 @@ export class BoxalarmUserPool extends pulumi.ComponentResource {
       { parent: this },
     );
 
-    // E8-S2-INFRA #254: SNS external-ID trust so a confused-deputy caller other
-    // than Cognito for this exact pool cannot assume the role to send SMS.
+    // E8-S2-INFRA #254: confused-deputy hardening so only Cognito acting for THIS
+    // account/pool can assume the role to send SMS. The external ID alone doesn't
+    // hold that guarantee: it follows the same boxalarm-${env}-identity-sms pattern
+    // as the role name, so it's guessable from the role name itself — any other AWS
+    // account could create a user pool with snsCallerArn set to this role and that
+    // external ID, and Cognito (the service principal) would assume it on their
+    // behalf, sending SMS billed to Boxalarm (SMS pumping). aws:SourceAccount pins
+    // the call to this account; aws:SourceArn pins it to a Cognito user pool in this
+    // account/region (wildcarded on pool id to avoid a pool/role creation cycle,
+    // since the pool's own ARN isn't known until after it's created below).
     this.smsRole = new aws.iam.Role(
       `${name}-sms-role`,
       {
         name: `boxalarm-${env}-identity-sms`,
-        assumeRolePolicy: JSON.stringify({
-          Version: "2012-10-17",
-          Statement: [
-            {
-              Effect: "Allow",
-              Principal: { Service: "cognito-idp.amazonaws.com" },
-              Action: "sts:AssumeRole",
-              Condition: { StringEquals: { "sts:ExternalId": `boxalarm-${env}-identity-sms` } },
-            },
-          ],
-        }),
+        assumeRolePolicy: pulumi
+          .all([region.name, caller.accountId])
+          .apply(([regionName, accountId]) =>
+            JSON.stringify({
+              Version: "2012-10-17",
+              Statement: [
+                {
+                  Effect: "Allow",
+                  Principal: { Service: "cognito-idp.amazonaws.com" },
+                  Action: "sts:AssumeRole",
+                  Condition: {
+                    StringEquals: {
+                      "sts:ExternalId": `boxalarm-${env}-identity-sms`,
+                      "aws:SourceAccount": accountId,
+                    },
+                    ArnLike: {
+                      "aws:SourceArn": `arn:aws:cognito-idp:${regionName}:${accountId}:userpool/*`,
+                    },
+                  },
+                },
+              ],
+            }),
+          ),
       },
       { parent: this },
     );

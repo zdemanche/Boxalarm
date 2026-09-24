@@ -34,6 +34,7 @@ export interface ChecklistRunSubmission {
   templateId: string;
   durationSeconds: number;
   itemResults: ItemResult[];
+  idempotencyKey: string;
 }
 
 export type DefectSeverity = 'MINOR' | 'MAJOR' | 'OUT_OF_SERVICE';
@@ -42,6 +43,7 @@ export interface DefectSubmission {
   apparatusId: string;
   description: string;
   severity: DefectSeverity;
+  idempotencyKey: string;
 }
 
 export interface ChecksRepository {

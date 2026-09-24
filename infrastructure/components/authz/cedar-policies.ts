@@ -8,39 +8,98 @@ export const ROLE_GROUPS = [
 ] as const;
 export type RoleGroup = (typeof ROLE_GROUPS)[number];
 
-export const ADMIN_ONLY_ACTIONS = ["UpdateConfig", "ExportData", "DisposeRecords"] as const;
+// Action IDs are pinned to what @boxalarm/authz's withAuthorization callers actually
+// send (grep backend/packages/authz + the withAuthorization call sites), not aspirational
+// names — a mismatch here means Verified Permissions can never match a policy for that
+// action and the request falls through to the implicit DENY.
+//
+// RunRecordsDisposal / ViewRetentionConfig / UpdateRetentionConfig / UpdateMember are
+// live today (retention/disposalHandler.ts, retention/configHandler.ts,
+// members/updateMember.ts). ViewConfig / UpdateConfig / ExportData are not yet called —
+// config/handler.ts and export/authz.ts still gate on assertChiefOrAdmin, with a TODO to
+// swap to Cedar once this policy store ships — defined ahead of that swap so it isn't a
+// companion infra change later. RevokeSession is the same: deviceLossHandler.ts still
+// gates on a manual ADMIN_GROUPS check (TODO: E8-S3), defined ahead of time per the
+// audit finding that this schema doesn't yet cover session-revocation actions.
+export const ADMIN_ONLY_ACTIONS = [
+  "UpdateConfig",
+  "ExportData",
+  "RunRecordsDisposal",
+  "UpdateRetentionConfig",
+  "UpdateMember",
+  "RevokeSession",
+] as const;
 export const ADMIN_ONLY_GROUPS = ["CHIEF", "ADMIN"] as const;
 
+export const VIEW_ACTIONS = ["ViewConfig", "ViewRetentionConfig"] as const;
+
+// Department-scoping is NOT expressed here as a `when` clause comparing
+// principal/resource attributes. Two things rule that out for every action above:
+//   1. @boxalarm/authz's isAuthorized() calls IsAuthorizedWithTokenCommand with the
+//      caller's ACCESS token. Per the Verified Permissions docs, access-token claims
+//      map to the request's `context`, never to principal entity attributes — only ID
+//      tokens populate principal attributes. custom:deptId (the actual claim name) would
+//      need to be read via context, not principal.deptId.
+//   2. decide.ts's isAuthorized() passes only { entityType, entityId } for the resource,
+//      with no `entities` — so a resource attribute (e.g. resource.deptId) is never
+//      populated and any `when` clause referencing it evaluates to an error, which Cedar
+//      treats as an implicit DENY. This is a structural fact of how the call is built,
+//      not a schema problem this policy store can fix on its own.
+// Every action above already targets "my own department's resource" — every
+// resourceId(event) call site in the backend passes the caller's own verified deptId
+// (or a member scoped to it), so a same-department check would be tautological even if
+// it could be expressed. CLAUDE.md states the actual design point plainly: "Export and
+// destructive actions are gated by Cedar role check alone." Department isolation is
+// enforced where CLAUDE.md says it lives — dept-scoped DynamoDB keys built from the
+// verified JWT (buildDeptScopedPk) — not duplicated here.
 export const CEDAR_SCHEMA = JSON.stringify({
   Boxalarm: {
     entityTypes: {
-      User: {
-        shape: { type: "Record", attributes: { deptId: { type: "String" } } },
-        memberOfTypes: ["UserGroup"],
-      },
+      User: { memberOfTypes: ["UserGroup"] },
       UserGroup: {},
-      Resource: {
-        shape: { type: "Record", attributes: { deptId: { type: "String" } } },
-      },
+      // Resource types actually sent as resourceType by withAuthorization callers.
+      Department: {},
+      Member: {},
     },
     actions: {
-      ViewConfig: { appliesTo: { principalTypes: ["User"], resourceTypes: ["Resource"] } },
-      UpdateConfig: { appliesTo: { principalTypes: ["User"], resourceTypes: ["Resource"] } },
-      ExportData: { appliesTo: { principalTypes: ["User"], resourceTypes: ["Resource"] } },
-      DisposeRecords: { appliesTo: { principalTypes: ["User"], resourceTypes: ["Resource"] } },
+      ViewConfig: { appliesTo: { principalTypes: ["User"], resourceTypes: ["Department"] } },
+      UpdateConfig: { appliesTo: { principalTypes: ["User"], resourceTypes: ["Department"] } },
+      ExportData: { appliesTo: { principalTypes: ["User"], resourceTypes: ["Department"] } },
+      RunRecordsDisposal: {
+        appliesTo: { principalTypes: ["User"], resourceTypes: ["Department"] },
+      },
+      ViewRetentionConfig: {
+        appliesTo: { principalTypes: ["User"], resourceTypes: ["Department"] },
+      },
+      UpdateRetentionConfig: {
+        appliesTo: { principalTypes: ["User"], resourceTypes: ["Department"] },
+      },
+      UpdateMember: { appliesTo: { principalTypes: ["User"], resourceTypes: ["Member"] } },
+      RevokeSession: { appliesTo: { principalTypes: ["User"], resourceTypes: ["Member"] } },
     },
   },
 });
 
-/** AC1: PUT /platform/config → UpdateConfig; only CHIEF/ADMIN, department-scoped. */
+// Cedar's scope clause only accepts an entity LIST for the `action` element — `principal
+// in [group1, group2, ...]` is not valid Cedar grammar (only `principal in <single
+// entity>` is), so the group check has to move into a `when` clause as an OR of
+// individual `in` membership tests. The original `principal in [group1, group2]` form
+// here would have failed to parse at CreatePolicy time, not merely evaluated to DENY.
+
+/** AC1: admin-only actions (config writes, export, disposal, member/session admin) — CHIEF/ADMIN only. */
 export function adminActionsPolicy(): string {
-  const groups = ADMIN_ONLY_GROUPS.map((g) => `Boxalarm::UserGroup::"${g}"`).join(", ");
+  const groupCheck = ADMIN_ONLY_GROUPS.map((g) => `principal in Boxalarm::UserGroup::"${g}"`).join(
+    " || ",
+  );
   const actions = ADMIN_ONLY_ACTIONS.map((a) => `Boxalarm::Action::"${a}"`).join(", ");
-  return `permit (\n  principal in [${groups}],\n  action in [${actions}],\n  resource\n) when { principal.deptId == resource.deptId };`;
+  return `permit (\n  principal,\n  action in [${actions}],\n  resource\n) when {\n  ${groupCheck}\n};`;
 }
 
-/** Read access for every role, still department-scoped (N5.3). */
+/** Read access for every role (N5.3). */
 export function viewConfigPolicy(): string {
-  const groups = ROLE_GROUPS.map((g) => `Boxalarm::UserGroup::"${g}"`).join(", ");
-  return `permit (\n  principal in [${groups}],\n  action == Boxalarm::Action::"ViewConfig",\n  resource\n) when { principal.deptId == resource.deptId };`;
+  const groupCheck = ROLE_GROUPS.map((g) => `principal in Boxalarm::UserGroup::"${g}"`).join(
+    " || ",
+  );
+  const actions = VIEW_ACTIONS.map((a) => `Boxalarm::Action::"${a}"`).join(", ");
+  return `permit (\n  principal,\n  action in [${actions}],\n  resource\n) when {\n  ${groupCheck}\n};`;
 }

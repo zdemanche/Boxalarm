@@ -13,6 +13,8 @@ import { createDynamoClient, readAlertingConfig } from '../eligibility/dynamoCli
 import { logError } from '../dispatches/logger.js';
 import { putDeviceState } from './deviceStateRepository.js';
 
+const MAX_VERSION_STRING_LENGTH = 64;
+
 function requiredBoolean(
   body: Record<string, unknown>,
   field: string,
@@ -30,10 +32,15 @@ function requiredString(
   body: Record<string, unknown>,
   field: string,
   errors: FieldError[],
+  maxLength: number = MAX_VERSION_STRING_LENGTH,
 ): string {
   const value = body[field];
   if (typeof value !== 'string' || value.trim().length === 0) {
     errors.push({ field, detail: `${field} is required and must be a non-empty string` });
+    return '';
+  }
+  if (value.length > maxLength) {
+    errors.push({ field, detail: `${field} must be at most ${maxLength} characters` });
     return '';
   }
   return value;

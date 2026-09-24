@@ -85,6 +85,13 @@ describe("QueueConsumer", () => {
     expect(rulePattern).toContain("personnel.member.updated");
   });
 
+  it("caps the event source mapping's concurrency so a burst can't consume alerting-service's shared Lambda concurrency pool", async () => {
+    const consumer = await build();
+    await settle(consumer);
+    const scalingConfig = await resolve(consumer.eventSourceMapping.scalingConfig);
+    expect(scalingConfig?.maximumConcurrency).toBeGreaterThanOrEqual(2);
+  });
+
   it("alarms on DLQ depth above zero", async () => {
     const consumer = await build();
     await settle(consumer);

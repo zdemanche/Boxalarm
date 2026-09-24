@@ -41,7 +41,7 @@ describe("PolicyStore", () => {
     expect(names.sort()).toEqual(["ADMIN", "APPARATUS", "CHIEF", "MEMBER", "OFFICER", "TRAINING"]);
   });
 
-  it("scopes admin-only actions (export, disposal, UpdateConfig) to CHIEF/ADMIN only, department-scoped (AC1, AC5)", async () => {
+  it("scopes admin-only actions (export, disposal, UpdateConfig) to CHIEF/ADMIN only (AC1, AC5)", async () => {
     const store = await build();
     const statement = await resolve(store.adminActionsPolicy.definition);
     const text = statement?.static?.statement ?? "";
@@ -49,9 +49,102 @@ describe("PolicyStore", () => {
     expect(text).toContain('UserGroup::"ADMIN"');
     expect(text).not.toContain('UserGroup::"MEMBER"');
     expect(text).toContain('Action::"ExportData"');
-    expect(text).toContain('Action::"DisposeRecords"');
+    // Matches the actionId the backend actually sends (disposalHandler.ts), not the
+    // stale "DisposeRecords" name that never matched any real request.
+    expect(text).toContain('Action::"RunRecordsDisposal"');
     expect(text).toContain('Action::"UpdateConfig"');
-    expect(text).toContain("principal.deptId == resource.deptId");
+    // No principal/resource attribute comparison: the backend's access-token call maps
+    // claims to context (not principal attributes) and passes no resource entities, so
+    // a `when` clause referencing either would always error into an implicit DENY. See
+    // the comment in cedar-policies.ts for why role gating alone is correct here.
+    expect(text).not.toContain("deptId");
+    // Group membership is a single-entity `in` check per group, not a scope-clause
+    // list (`principal in [g1, g2]` is not valid Cedar grammar for principal/resource).
+    expect(text).toContain('principal in Boxalarm::UserGroup::"CHIEF"');
+    expect(text).toContain('principal in Boxalarm::UserGroup::"ADMIN"');
+  });
+
+  it("evaluates to ALLOW for a CHIEF request built the way decide.ts actually builds it", async () => {
+    const { CEDAR_SCHEMA, adminActionsPolicy, viewConfigPolicy } =
+      await import("../../components/authz/cedar-policies");
+    const { isAuthorized } =
+      (await import("@cedar-policy/cedar-wasm/nodejs")) as typeof import("@cedar-policy/cedar-wasm/nodejs");
+    const schema = JSON.parse(CEDAR_SCHEMA) as string;
+    const entities = [
+      {
+        uid: { type: "Boxalarm::User", id: "user-1" },
+        attrs: {},
+        parents: [{ type: "Boxalarm::UserGroup", id: "CHIEF" }],
+      },
+      { uid: { type: "Boxalarm::UserGroup", id: "CHIEF" }, attrs: {}, parents: [] },
+      { uid: { type: "Boxalarm::Department", id: "dept-1" }, attrs: {}, parents: [] },
+    ];
+
+    // decide.ts's isAuthorized() never passes principal/resource entity attributes —
+    // only entity ids and group membership, exactly as built here.
+    const disposal = isAuthorized({
+      principal: { type: "Boxalarm::User", id: "user-1" },
+      action: { type: "Boxalarm::Action", id: "RunRecordsDisposal" },
+      resource: { type: "Boxalarm::Department", id: "dept-1" },
+      context: {},
+      schema,
+      policies: { staticPolicies: adminActionsPolicy() },
+      entities,
+    });
+    expect(disposal.type).toBe("success");
+    if (disposal.type === "success") {
+      expect(disposal.response.decision).toBe("allow");
+    }
+
+    const viewRetention = isAuthorized({
+      principal: { type: "Boxalarm::User", id: "user-1" },
+      action: { type: "Boxalarm::Action", id: "ViewRetentionConfig" },
+      resource: { type: "Boxalarm::Department", id: "dept-1" },
+      context: {},
+      schema,
+      policies: { staticPolicies: viewConfigPolicy() },
+      entities,
+    });
+    expect(viewRetention.type).toBe("success");
+    if (viewRetention.type === "success") {
+      expect(viewRetention.response.decision).toBe("allow");
+    }
+  });
+
+  it("evaluates to DENY for a MEMBER requesting an admin-only action", async () => {
+    const { CEDAR_SCHEMA, adminActionsPolicy } =
+      await import("../../components/authz/cedar-policies");
+    const { isAuthorized } =
+      (await import("@cedar-policy/cedar-wasm/nodejs")) as typeof import("@cedar-policy/cedar-wasm/nodejs");
+    const schema = JSON.parse(CEDAR_SCHEMA) as string;
+    const entities = [
+      {
+        uid: { type: "Boxalarm::User", id: "user-2" },
+        attrs: {},
+        parents: [{ type: "Boxalarm::UserGroup", id: "MEMBER" }],
+      },
+      { uid: { type: "Boxalarm::UserGroup", id: "MEMBER" }, attrs: {}, parents: [] },
+      { uid: { type: "Boxalarm::Department", id: "dept-1" }, attrs: {}, parents: [] },
+    ];
+    const result = isAuthorized({
+      principal: { type: "Boxalarm::User", id: "user-2" },
+      action: { type: "Boxalarm::Action", id: "RunRecordsDisposal" },
+      resource: { type: "Boxalarm::Department", id: "dept-1" },
+      context: {},
+      schema,
+      policies: { staticPolicies: adminActionsPolicy() },
+      entities,
+    });
+    expect(result.type).toBe("success");
+    if (result.type === "success") {
+      expect(result.response.decision).toBe("deny");
+    }
+  });
+
+  it("sets principalEntityType so Cognito principals resolve to Boxalarm::User", async () => {
+    const store = await build();
+    const principalEntityType = await resolve(store.identitySource.principalEntityType);
+    expect(principalEntityType).toBe("Boxalarm::User");
   });
 
   it("declares no permit-all / default-allow policy — only the two scoped statements (AC4 fail-secure)", async () => {

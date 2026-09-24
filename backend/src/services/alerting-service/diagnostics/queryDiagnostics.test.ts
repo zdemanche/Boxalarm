@@ -20,15 +20,17 @@ function fakeClient(items: Record<string, Record<string, unknown>>): DynamoDBDoc
       };
       const pk = query.ExpressionAttributeValues[':pk'];
       const allowedEntityTypes = query.FilterExpression
-        ? Object.values(query.ExpressionAttributeValues).filter(
-            (value): value is string => typeof value === 'string' && value !== pk,
-          )
+        ? ['t0', 't1', 't2']
+            .map((key) => query.ExpressionAttributeValues[`:${key}`])
+            .filter((value): value is string => typeof value === 'string')
         : undefined;
+      const memberId = query.ExpressionAttributeValues[':memberId'] as string | undefined;
       return Promise.resolve({
         Items: Object.values(items).filter(
           (item) =>
             item.pk === pk &&
-            (!allowedEntityTypes || allowedEntityTypes.includes(item.entityType as string)),
+            (!allowedEntityTypes || allowedEntityTypes.includes(item.entityType as string)) &&
+            (!memberId || item.memberId === memberId),
         ),
       });
     }

@@ -84,4 +84,21 @@ describe('devices reportStateHandler', () => {
       { field: 'appVersion', detail: expect.stringContaining('appVersion') as string },
     ]);
   });
+
+  it('returns 400 with a field error when appVersion exceeds the max length (MINOR #10)', async () => {
+    mockVerifiedPermissions('ALLOW');
+    vi.doMock('../eligibility/dynamoClient.js', () => ({
+      createDynamoClient: vi.fn(() => ({})),
+      readAlertingConfig: vi.fn(() => ({ tableName: 'alerting-table' })),
+    }));
+
+    const { handler } = await import('./reportStateHandler.js');
+    const result = await handler(buildEvent({ ...VALID_BODY, appVersion: 'x'.repeat(65) }));
+
+    expect(result).toMatchObject({ statusCode: 400 });
+    const body = JSON.parse((result as { body: string }).body) as { errors: unknown[] };
+    expect(body.errors).toEqual([
+      { field: 'appVersion', detail: expect.stringContaining('64 characters') as string },
+    ]);
+  });
 });

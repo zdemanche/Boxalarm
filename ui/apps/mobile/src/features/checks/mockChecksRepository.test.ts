@@ -19,6 +19,7 @@ test('submitChecklistRun resolves without throwing (optimistic local-first write
       templateId: 'CT-01',
       durationSeconds: 74,
       itemResults: [{ code: 'TIRES', pass: true }],
+      idempotencyKey: 'check-test-1',
     }),
   ).resolves.toBeUndefined();
 });
@@ -29,6 +30,7 @@ test('submitDefect resolves without throwing', async () => {
       apparatusId: 'APP-ENGINE-2',
       description: 'Low tire pressure, rear axle',
       severity: 'MAJOR',
+      idempotencyKey: 'defect-test-1',
     }),
   ).resolves.toBeUndefined();
 });

@@ -7,16 +7,17 @@ import {
   readAuthorizerContext,
   resolveTraceId,
 } from './authContext.js';
-import { getIncidentRepository } from './repository.js';
+import { getDocumentClient, getIncidentRepository, getTableName } from './repository.js';
+import { queryIncidentSecondaries } from './secondaryRepository.js';
 
 export const handler: APIGatewayProxyHandlerV2WithLambdaAuthorizer<AuthorizerContext> = async (
   event,
 ) => {
   const traceId = resolveTraceId(event.headers, event.requestContext.requestId);
 
-  let deptId;
+  let deptId, isAdmin, sub;
   try {
-    ({ deptId } = readAuthorizerContext(event));
+    ({ deptId, isAdmin, sub } = readAuthorizerContext(event));
   } catch (error) {
     console.error(
       JSON.stringify({
@@ -59,10 +60,19 @@ export const handler: APIGatewayProxyHandlerV2WithLambdaAuthorizer<AuthorizerCon
         traceId,
       );
     }
+    const client = getDocumentClient();
+    const tableName = getTableName(process.env);
+    const secondaries = await queryIncidentSecondaries(client, tableName, deptId, incidentId);
+    // Narrower audience than the general incident read (fact sheet Data Ownership note):
+    // chief/admin see every module, everyone else only a module naming them as affected.
+    const secondaryModules = secondaries.filter(
+      (secondary) => isAdmin || secondary.affectedMemberIds.includes(sub),
+    );
+
     return {
       statusCode: 200,
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(incident),
+      body: JSON.stringify({ ...incident, secondaryModules }),
     };
   } catch (error) {
     console.error(

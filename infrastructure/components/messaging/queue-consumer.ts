@@ -12,6 +12,16 @@ export interface QueueConsumerArgs {
   lambdaRole: aws.iam.Role;
   maxReceiveCount?: number;
   batchSize?: number;
+  /**
+   * Caps how many concurrent Lambda executions this queue's event source mapping can
+   * drive. Left unset, SQS event source mappings have no concurrency ceiling of their
+   * own — a burst on this queue can consume account-level concurrency that
+   * alerting-service's Lambdas share from the same pool (alerting-service is not
+   * VPC-attached and has no reserved concurrency of its own to insulate it). Defaults
+   * to a small cap suited to LOB-plane traffic volumes; override for a consumer that
+   * legitimately needs more.
+   */
+  maximumConcurrency?: number;
 }
 
 /**
@@ -89,6 +99,7 @@ export class QueueConsumer extends pulumi.ComponentResource {
         eventSourceArn: this.queue.arn,
         functionName: args.lambda.name,
         batchSize: args.batchSize ?? 10,
+        scalingConfig: { maximumConcurrency: args.maximumConcurrency ?? 5 },
       },
       { parent: this },
     );

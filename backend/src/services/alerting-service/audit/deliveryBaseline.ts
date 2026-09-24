@@ -46,7 +46,7 @@ export function computeDeliveryBaseline(
     const responses = entry.timeline.filter(
       (item) => item.entityType === 'DISPATCH_RESPONSE_RECORD',
     );
-    const respondedMemberIds = new Set(receipts.map((receipt) => receipt.memberId as string));
+    const deliveredToMemberIds = new Set(receipts.map((receipt) => receipt.memberId as string));
 
     for (const receipt of receipts) {
       const memberId = receipt.memberId as string;
@@ -60,7 +60,7 @@ export function computeDeliveryBaseline(
       memberStats.set(memberId, stat);
     }
 
-    for (const memberId of respondedMemberIds) {
+    for (const memberId of deliveredToMemberIds) {
       const memberResponses = responses.filter((response) => response.memberId === memberId);
       const stat = memberStats.get(memberId) ?? { sent: 0, delivered: 0, missed: 0 };
       if (memberResponses.length === 0) {

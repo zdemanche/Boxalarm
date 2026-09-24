@@ -3,13 +3,23 @@ import Config from 'react-native-config';
 import { useOptionalAuth } from '../../auth/AuthContext';
 import { apiRequest, ApiError } from '../../lib/apiClient';
 import { mockChecksRepository } from './mockChecksRepository';
-import type { Apparatus, ChecksRepository } from './types';
+import type {
+  Apparatus,
+  ChecklistRunSubmission,
+  ChecklistTemplate,
+  ChecksRepository,
+  DefectSubmission,
+} from './types';
 
 /** ChecksRepository plus a way for callers to know the last getApparatus() call served
  * offline/fallback data instead of a real API response (undefined on the plain mock repo). */
 export type ChecksRepositoryWithFallbackFlag = ChecksRepository & {
   isApparatusFallback?: () => boolean;
 };
+
+function unitPath(unitId: string, suffix: string): string {
+  return `apparatus/${encodeURIComponent(unitId)}/${suffix}`;
+}
 
 /**
  * Prefers GET /api/v1/apparatus when authenticated + API base is configured;
@@ -52,9 +62,9 @@ export function useChecksRepository(): ChecksRepositoryWithFallbackFlag {
 
         try {
           const response = await apiRequest('apparatus', tokens, { apiBaseUrl });
-          const body = (await response.json()) as { items: Apparatus[] };
+          const body = (await response.json()) as { apparatus: Apparatus[] };
           lastGetApparatusWasFallback = false;
-          return body.items;
+          return body.apparatus;
         } catch (error) {
           if (error instanceof ApiError) {
             // Auth (401/403) and server (5xx) errors are real signal — e.g. a revoked member
@@ -71,6 +81,52 @@ export function useChecksRepository(): ChecksRepositoryWithFallbackFlag {
       },
       isApparatusFallback(): boolean {
         return lastGetApparatusWasFallback;
+      },
+
+      async getChecklistTemplate(unitId: string): Promise<ChecklistTemplate> {
+        const tokens = authRef.current;
+        if (!tokens) return mockChecksRepository.getChecklistTemplate(unitId);
+        try {
+          const response = await apiRequest(unitPath(unitId, 'checklist'), tokens, { apiBaseUrl });
+          return (await response.json()) as ChecklistTemplate;
+        } catch (error) {
+          if (error instanceof ApiError) throw error;
+          return mockChecksRepository.getChecklistTemplate(unitId);
+        }
+      },
+
+      async submitChecklistRun(run: ChecklistRunSubmission): Promise<void> {
+        const tokens = authRef.current;
+        if (!tokens) return mockChecksRepository.submitChecklistRun(run);
+        await apiRequest(unitPath(run.apparatusId, 'checks'), tokens, {
+          apiBaseUrl,
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            templateId: run.templateId,
+            completedBy: tokens.memberId ?? undefined,
+            completedAt: Math.floor(Date.now() / 1000),
+            durationSeconds: run.durationSeconds,
+            itemResults: run.itemResults,
+            idempotencyKey: run.idempotencyKey,
+            capturedOffline: false,
+          }),
+        });
+      },
+
+      async submitDefect(defect: DefectSubmission): Promise<void> {
+        const tokens = authRef.current;
+        if (!tokens) return mockChecksRepository.submitDefect(defect);
+        await apiRequest(unitPath(defect.apparatusId, 'defects'), tokens, {
+          apiBaseUrl,
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            description: defect.description,
+            severity: defect.severity,
+            idempotencyKey: defect.idempotencyKey,
+          }),
+        });
       },
     };
   }, [apiBaseUrl, isAuthenticated]);

@@ -28,3 +28,9 @@ export function useConnectivity(): ConnectivityContextValue {
   if (!ctx) throw new Error('useConnectivity must be used within ConnectivityProvider');
   return ctx;
 }
+
+/** Defaults to online outside ConnectivityProvider (e.g. a screen unit test with no providers),
+ * matching useOptionalAuth's degrade-gracefully pattern for data hooks. */
+export function useOptionalConnectivity(): ConnectivityContextValue {
+  return useContext(ConnectivityContext) ?? { isOnline: true };
+}

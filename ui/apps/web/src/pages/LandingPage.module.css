@@ -1,0 +1,26 @@
+.statGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: var(--bx-space-md);
+  margin-top: var(--bx-space-lg);
+}
+
+.callBanner {
+  display: flex;
+  align-items: center;
+  gap: var(--bx-space-sm);
+  padding: var(--bx-space-md) var(--bx-space-lg);
+  margin-top: var(--bx-space-lg);
+  border: 1px solid var(--bx-border-decorative);
+  border-radius: var(--bx-radius-lg);
+  background: var(--bx-surface);
+  color: var(--bx-fg-muted);
+  font-size: 14px;
+}
+
+.sectionGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: var(--bx-space-lg);
+  margin-top: var(--bx-space-lg);
+}

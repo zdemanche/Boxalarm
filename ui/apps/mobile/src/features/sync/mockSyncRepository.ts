@@ -35,4 +35,19 @@ export const mockSyncRepository: SyncRepository = {
     lastSyncAt = new Date().toISOString();
     return 'SYNCED';
   },
+
+  async enqueue(kind, label, idempotencyKey) {
+    const existing = ITEMS.find((item) => item.id === idempotencyKey);
+    if (existing) return existing;
+    const item = {
+      id: idempotencyKey,
+      kind,
+      label,
+      status: 'QUEUED' as const,
+      queuedAt: new Date().toISOString(),
+      lastError: null,
+    };
+    ITEMS = [...ITEMS, item];
+    return item;
+  },
 };
