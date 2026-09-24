@@ -1,10 +1,8 @@
-import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Link, useParams } from 'react-router-dom';
 import { useAuth } from '../../auth/AuthContext';
 import { ApiForbiddenGate } from '../../components/ApiForbiddenGate';
-import { PageHeader } from '../../components/ui/PageHeader';
-import { Skeleton } from '../../components/ui/Skeleton';
+import { Card, PageHeader, Skeleton, Tabs } from '../../components/ui';
 import { listEquipment } from '../inventory/api';
 import { getApparatus } from './api';
 import { InventoryTab } from './InventoryTab';
@@ -13,13 +11,9 @@ import { ScbaTab } from './ScbaTab';
 import { ServiceStatusControls } from './ServiceStatusControls';
 import { TestingTab } from './TestingTab';
 
-const TABS = ['Overview', 'Maintenance', 'SCBA', 'Testing', 'Inventory'] as const;
-type Tab = (typeof TABS)[number];
-
 export function ApparatusDetailPage() {
   const { id = '' } = useParams();
   const auth = useAuth();
-  const [tab, setTab] = useState<Tab>('Overview');
 
   const detailQuery = useQuery({
     queryKey: ['apparatus', id],
@@ -53,37 +47,39 @@ export function ApparatusDetailPage() {
         <Skeleton lines={3} />
       ) : (
         <>
-          <dl
-            style={{
-              display: 'grid',
-              gridTemplateColumns: 'max-content 1fr',
-              columnGap: 'var(--bx-space-lg)',
-              rowGap: 'var(--bx-space-sm)',
-              fontSize: 14,
-            }}
-          >
-            <dt style={{ color: 'var(--bx-fg-muted)' }}>Type</dt>
-            <dd style={{ margin: 0 }}>{unit.type}</dd>
-            <dt style={{ color: 'var(--bx-fg-muted)' }}>Apparatus ID</dt>
-            <dd style={{ margin: 0, fontFamily: 'var(--bx-font-mono)' }}>{unit.apparatusId}</dd>
-          </dl>
-          {unit.failedTests.length > 0 ? (
-            <div
-              role="alert"
+          <Card>
+            <dl
               style={{
-                marginTop: 'var(--boxalarm-spacing-md)',
-                color: 'var(--boxalarm-error)',
-                fontWeight: 600,
+                display: 'grid',
+                gridTemplateColumns: 'max-content 1fr',
+                columnGap: 'var(--bx-space-lg)',
+                rowGap: 'var(--bx-space-sm)',
+                fontSize: 14,
+                margin: 0,
               }}
             >
-              Failed tests: {unit.failedTests.map((t) => t.testType).join(', ')}
-            </div>
-          ) : null}
+              <dt style={{ color: 'var(--bx-fg-muted)' }}>Type</dt>
+              <dd style={{ margin: 0 }}>{unit.type}</dd>
+              <dt style={{ color: 'var(--bx-fg-muted)' }}>Apparatus ID</dt>
+              <dd style={{ margin: 0, fontFamily: 'var(--bx-font-mono)' }}>{unit.apparatusId}</dd>
+            </dl>
+            {unit.failedTests.length > 0 ? (
+              <div
+                role="alert"
+                style={{
+                  marginTop: 'var(--bx-space-md)',
+                  color: 'var(--bx-status-danger)',
+                  fontWeight: 600,
+                }}
+              >
+                Failed tests: {unit.failedTests.map((t) => t.testType).join(', ')}
+              </div>
+            ) : null}
+          </Card>
 
           <ServiceStatusControls unit={unit} />
 
-          <section style={{ marginTop: 'var(--boxalarm-spacing-lg)' }}>
-            <h2 style={{ fontSize: 'var(--boxalarm-font-size-lg)' }}>Open defects</h2>
+          <Card title="Open defects">
             {unit.openDefects.length === 0 ? (
               <p>No open defects.</p>
             ) : (
@@ -96,74 +92,52 @@ export function ApparatusDetailPage() {
                 ))}
               </ul>
             )}
-          </section>
+          </Card>
 
-          <div
-            role="tablist"
-            aria-label="Apparatus detail sections"
-            style={{
-              display: 'flex',
-              gap: 'var(--boxalarm-spacing-md)',
-              marginTop: 'var(--boxalarm-spacing-lg)',
-              borderBottom: '1px solid #0002',
-            }}
-          >
-            {TABS.map((name) => (
-              <button
-                key={name}
-                type="button"
-                role="tab"
-                aria-selected={tab === name}
-                onClick={() => setTab(name)}
-                style={{
-                  minHeight: 44,
-                  padding: '0 var(--boxalarm-spacing-sm)',
-                  background: 'none',
-                  border: 'none',
-                  borderBottom: tab === name ? '2px solid var(--boxalarm-accent)' : 'none',
-                  fontWeight: tab === name ? 700 : 400,
-                  cursor: 'pointer',
-                  color: 'var(--boxalarm-fg)',
-                }}
-              >
-                {name}
-              </button>
-            ))}
-          </div>
+          <Tabs
+            label="Apparatus detail sections"
+            items={[
+              {
+                value: 'maintenance',
+                label: 'Maintenance',
+                content: <MaintenanceTab apparatusId={unit.apparatusId} />,
+              },
+              {
+                value: 'scba',
+                label: 'SCBA',
+                content: <ScbaTab apparatusId={unit.apparatusId} />,
+              },
+              {
+                // Testing schedules are the one sub-resource the backend resolves and returns by
+                // display unit code, so it alone still takes unitId — see the tab-identifier note
+                // in the apparatus-service INFRA reconciliation ticket for the full picture.
+                value: 'testing',
+                label: 'Testing',
+                content: <TestingTab unitId={unit.unitId} />,
+              },
+              {
+                value: 'inventory',
+                label: 'Inventory',
+                content: <InventoryTab apparatusId={unit.apparatusId} />,
+              },
+            ]}
+          />
 
-          <div role="tabpanel" style={{ marginTop: 'var(--boxalarm-spacing-lg)' }}>
-            {/* Maintenance/SCBA/Inventory key their sub-resources on apparatusId, matching this
-                page's own detail fetch above (getApparatus(auth, id) where id is apparatusId).
-                Testing schedules are the one sub-resource the backend resolves and returns by
-                display unit code, so it alone still takes unitId — see the tab-identifier note
-                in the apparatus-service INFRA reconciliation ticket for the full picture. */}
-            {tab === 'Maintenance' ? <MaintenanceTab apparatusId={unit.apparatusId} /> : null}
-            {tab === 'SCBA' ? <ScbaTab apparatusId={unit.apparatusId} /> : null}
-            {tab === 'Testing' ? <TestingTab unitId={unit.unitId} /> : null}
-            {tab === 'Inventory' ? <InventoryTab apparatusId={unit.apparatusId} /> : null}
-          </div>
-
-          <h2
-            style={{
-              fontSize: 'var(--boxalarm-font-size-lg)',
-              marginTop: 'var(--boxalarm-spacing-xl)',
-            }}
-          >
-            Assigned equipment
-          </h2>
-          {equipmentQuery.isLoading ? (
-            <p>Loading equipment…</p>
-          ) : (equipmentQuery.data ?? []).length === 0 ? (
-            <p>No equipment assigned.</p>
-          ) : (
-            <ul>
-              {(equipmentQuery.data ?? []).map((asset) => (
-                <li key={asset.assetId}>
-                  <Link to={`/inventory/${asset.assetId}`}>{asset.serialNumber}</Link>
-                </li>
-              ))}
-            </ul>
-          )}
+          <Card title="Assigned equipment">
+            {equipmentQuery.isLoading ? (
+              <Skeleton lines={2} />
+            ) : (equipmentQuery.data ?? []).length === 0 ? (
+              <p>No equipment assigned.</p>
+            ) : (
+              <ul>
+                {(equipmentQuery.data ?? []).map((asset) => (
+                  <li key={asset.assetId}>
+                    <Link to={`/inventory/${asset.assetId}`}>{asset.serialNumber}</Link>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </Card>
         </>
       )}
     </main>

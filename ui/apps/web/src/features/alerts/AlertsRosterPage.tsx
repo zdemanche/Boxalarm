@@ -4,6 +4,15 @@ import { useSearchParams } from 'react-router-dom';
 import { useAuth } from '../../auth/AuthContext';
 import { ApiForbiddenGate } from '../../components/ApiForbiddenGate';
 import {
+  Button,
+  Card,
+  PageHeader,
+  Select,
+  Skeleton,
+  Textarea,
+  TextInput,
+} from '../../components/ui';
+import {
   assignRidingSeat,
   getDispatch,
   getReceipts,
@@ -66,91 +75,70 @@ function ManualEntryForm({ onCreated }: { onCreated: (dispatchId: string) => voi
   const errorFor = (field: string) => fieldErrors.find((e) => e.field === field)?.message;
 
   return (
-    <form
-      aria-label="Enter dispatch manually"
-      onSubmit={(event: FormEvent) => {
-        event.preventDefault();
-        mutation.mutate({
-          ...form,
-          unitsRequested: unitsText
-            .split(',')
-            .map((u) => u.trim())
-            .filter(Boolean),
-        });
-      }}
-      style={{
-        display: 'grid',
-        gap: 'var(--boxalarm-spacing-md)',
-        maxWidth: 480,
-        marginBottom: 'var(--boxalarm-spacing-xl)',
-      }}
+    <Card
+      title="Enter dispatch manually"
+      style={{ maxWidth: 480, marginBottom: 'var(--bx-space-xl)' }}
     >
-      <h2 style={{ fontSize: 'var(--boxalarm-font-size-lg)', margin: 0 }}>
-        Enter dispatch manually
-      </h2>
-      {(
-        [
-          ['incidentType', 'Incident type'],
-          ['address', 'Address'],
-          ['crossStreets', 'Cross streets'],
-        ] as const
-      ).map(([key, label]) => {
-        const message = errorFor(key);
-        return (
-          <label key={key} style={{ display: 'grid', gap: 4 }}>
-            {label}
-            <input
-              required
-              value={form[key]}
-              onChange={(e) => setForm((prev) => ({ ...prev, [key]: e.target.value }))}
-              style={{ minHeight: 44, padding: '0 12px' }}
-              aria-invalid={Boolean(message)}
-              aria-describedby={message ? `${key}-error` : undefined}
-            />
-            {message ? (
-              <span id={`${key}-error`} role="alert">
-                {message}
-              </span>
-            ) : null}
-          </label>
-        );
-      })}
-      <label style={{ display: 'grid', gap: 4 }}>
-        Units requested (comma separated, optional)
-        <input
+      <form
+        aria-label="Enter dispatch manually"
+        onSubmit={(event: FormEvent) => {
+          event.preventDefault();
+          mutation.mutate({
+            ...form,
+            unitsRequested: unitsText
+              .split(',')
+              .map((u) => u.trim())
+              .filter(Boolean),
+          });
+        }}
+        style={{ display: 'grid', gap: 'var(--bx-space-md)' }}
+      >
+        {(
+          [
+            ['incidentType', 'Incident type'],
+            ['address', 'Address'],
+            ['crossStreets', 'Cross streets'],
+          ] as const
+        ).map(([key, label]) => (
+          <TextInput
+            key={key}
+            label={label}
+            required
+            value={form[key]}
+            onChange={(e) => setForm((prev) => ({ ...prev, [key]: e.target.value }))}
+            error={errorFor(key)}
+          />
+        ))}
+        <TextInput
+          label="Units requested (comma separated)"
+          optional
           value={unitsText}
           onChange={(e) => setUnitsText(e.target.value)}
-          style={{ minHeight: 44, padding: '0 12px' }}
         />
-      </label>
-      <label style={{ display: 'grid', gap: 4 }}>
-        Narrative
-        <textarea
+        <Textarea
+          label="Narrative"
           required
           value={form.narrative}
           onChange={(e) => setForm((prev) => ({ ...prev, narrative: e.target.value }))}
-          aria-invalid={Boolean(errorFor('narrative'))}
+          error={errorFor('narrative')}
         />
-      </label>
-      <label style={{ display: 'grid', gap: 4 }}>
-        Operator-entered reference
-        <input
+        <TextInput
+          label="Operator-entered reference"
           required
           value={form.externalDispatchId}
           onChange={(e) => setForm((prev) => ({ ...prev, externalDispatchId: e.target.value }))}
-          style={{ minHeight: 44, padding: '0 12px' }}
-          aria-invalid={Boolean(errorFor('externalDispatchId'))}
+          error={errorFor('externalDispatchId')}
         />
-      </label>
-      {formError ? (
-        <p role="alert" aria-live="assertive">
-          {formError}
-        </p>
-      ) : null}
-      <button type="submit" disabled={mutation.isPending} style={{ minHeight: 44 }}>
-        {mutation.isPending ? 'Submitting…' : 'Submit dispatch'}
-      </button>
-    </form>
+        {formError ? (
+          <p role="alert" aria-live="assertive">
+            {formError}
+          </p>
+        ) : null}
+        <Button type="submit" loading={mutation.isPending}>
+          {mutation.isPending ? 'Submitting…' : 'Submit dispatch'}
+        </Button>
+      </form>
+    </Card>
   );
 }
 
@@ -178,43 +166,43 @@ function ReceiptsTable({ dispatchId }: { dispatchId: string }) {
   }
 
   return (
-    <section aria-labelledby="receipts-heading" style={{ marginTop: 'var(--boxalarm-spacing-lg)' }}>
-      <h2 id="receipts-heading" style={{ fontSize: 'var(--boxalarm-font-size-lg)' }}>
-        Delivery receipts
-      </h2>
-      <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-        <thead>
-          <tr>
-            <th scope="col" style={{ textAlign: 'left' }}>
-              Member
-            </th>
-            {RECEIPT_CHANNELS.map((channel) => (
-              <th key={channel} scope="col" style={{ textAlign: 'left' }}>
-                {channel.toUpperCase()}
+    <Card title="Delivery receipts" style={{ marginTop: 'var(--bx-space-lg)' }}>
+      <div role="region" aria-label="Delivery receipts" tabIndex={0} style={{ overflowX: 'auto' }}>
+        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+          <caption className="visually-hidden">Delivery receipts</caption>
+          <thead>
+            <tr>
+              <th scope="col" style={{ textAlign: 'left' }}>
+                Member
               </th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>
-          {[...byMember.entries()].map(([memberId, channels]) => (
-            <tr key={memberId}>
-              <th scope="row" style={{ textAlign: 'left', fontWeight: 500 }}>
-                {memberId}
-              </th>
-              {RECEIPT_CHANNELS.map((channel) => {
-                const receipt = channels.get(channel);
-                const label = !receipt
-                  ? '—'
-                  : receipt.status === 'SENT_UNCONFIRMED'
-                    ? 'Sent, not confirmed delivered'
-                    : receipt.status.charAt(0) + receipt.status.slice(1).toLowerCase();
-                return <td key={channel}>{label}</td>;
-              })}
+              {RECEIPT_CHANNELS.map((channel) => (
+                <th key={channel} scope="col" style={{ textAlign: 'left' }}>
+                  {channel.toUpperCase()}
+                </th>
+              ))}
             </tr>
-          ))}
-        </tbody>
-      </table>
-    </section>
+          </thead>
+          <tbody>
+            {[...byMember.entries()].map(([memberId, channels]) => (
+              <tr key={memberId}>
+                <th scope="row" style={{ textAlign: 'left', fontWeight: 500 }}>
+                  {memberId}
+                </th>
+                {RECEIPT_CHANNELS.map((channel) => {
+                  const receipt = channels.get(channel);
+                  const label = !receipt
+                    ? '—'
+                    : receipt.status === 'SENT_UNCONFIRMED'
+                      ? 'Sent, not confirmed delivered'
+                      : receipt.status.charAt(0) + receipt.status.slice(1).toLowerCase();
+                  return <td key={channel}>{label}</td>;
+                })}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </Card>
   );
 }
 
@@ -235,41 +223,41 @@ function RosterTable({ dispatchId }: { dispatchId: string }) {
   }
 
   return (
-    <section aria-labelledby="roster-heading">
-      <h2 id="roster-heading" style={{ fontSize: 'var(--boxalarm-font-size-lg)' }}>
-        Live roster
-      </h2>
-      <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-        <thead>
-          <tr>
-            <th scope="col" style={{ textAlign: 'left' }}>
-              Member
-            </th>
-            <th scope="col" style={{ textAlign: 'left' }}>
-              Status
-            </th>
-            <th scope="col" style={{ textAlign: 'left' }}>
-              Quals
-            </th>
-            <th scope="col" style={{ textAlign: 'left' }}>
-              Assigned
-            </th>
-          </tr>
-        </thead>
-        <tbody>
-          {(query.data ?? []).map((entry) => (
-            <tr key={entry.memberId}>
-              <th scope="row" style={{ textAlign: 'left', fontWeight: 500 }}>
-                {entry.name}
+    <Card title="Live roster">
+      <div role="region" aria-label="Live roster" tabIndex={0} style={{ overflowX: 'auto' }}>
+        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+          <caption className="visually-hidden">Live roster</caption>
+          <thead>
+            <tr>
+              <th scope="col" style={{ textAlign: 'left' }}>
+                Member
               </th>
-              <td>{ackLabel(entry.ackStatus)}</td>
-              <td>{entry.quals.join(', ')}</td>
-              <td>{entry.assignedApparatusId ?? '—'}</td>
+              <th scope="col" style={{ textAlign: 'left' }}>
+                Status
+              </th>
+              <th scope="col" style={{ textAlign: 'left' }}>
+                Quals
+              </th>
+              <th scope="col" style={{ textAlign: 'left' }}>
+                Assigned
+              </th>
             </tr>
-          ))}
-        </tbody>
-      </table>
-    </section>
+          </thead>
+          <tbody>
+            {(query.data ?? []).map((entry) => (
+              <tr key={entry.memberId}>
+                <th scope="row" style={{ textAlign: 'left', fontWeight: 500 }}>
+                  {entry.name}
+                </th>
+                <td>{ackLabel(entry.ackStatus)}</td>
+                <td>{entry.quals.join(', ')}</td>
+                <td>{entry.assignedApparatusId ?? '—'}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </Card>
   );
 }
 
@@ -335,61 +323,50 @@ function RidingBoardSection({ dispatchId }: { dispatchId: string }) {
   );
 
   return (
-    <section
-      aria-labelledby="riding-board-heading"
-      style={{ marginTop: 'var(--boxalarm-spacing-lg)' }}
-    >
-      <h2 id="riding-board-heading" style={{ fontSize: 'var(--boxalarm-font-size-lg)' }}>
-        Riding board
-      </h2>
+    <Card title="Riding board" style={{ marginTop: 'var(--bx-space-lg)' }}>
       {assignError ? (
-        <p role="alert" aria-live="assertive" style={{ color: 'var(--boxalarm-error)' }}>
+        <p role="alert" aria-live="assertive" style={{ color: 'var(--bx-status-danger)' }}>
           {assignError}
         </p>
       ) : null}
       {(boardQuery.data?.apparatus ?? []).map((unit) => (
-        <div key={unit.apparatusId} style={{ marginBottom: 'var(--boxalarm-spacing-md)' }}>
-          <h3 style={{ fontSize: 'var(--boxalarm-font-size-base)', margin: 0 }}>{unit.unitId}</h3>
+        <div key={unit.apparatusId} style={{ marginBottom: 'var(--bx-space-md)' }}>
+          <h3 style={{ fontSize: 15, fontWeight: 600, margin: 0 }}>{unit.unitId}</h3>
           {!unit.assignable ? (
-            <p style={{ color: 'var(--boxalarm-error)' }}>
+            <p style={{ color: 'var(--bx-status-danger)' }}>
               Out of service{unit.outOfServiceReason ? `: ${unit.outOfServiceReason}` : ''}
             </p>
           ) : null}
           <ul>
             {unit.positions.map((position) => (
               <li key={position.code}>
-                <label>
-                  {position.label}
-                  {position.assignment?.qualStatus === 'UNMET'
-                    ? ' (missing qualification)'
-                    : ''}:{' '}
-                  <select
-                    disabled={!unit.assignable}
-                    value={position.assignment?.memberId ?? ''}
-                    onChange={(e) =>
-                      assignMutation.mutate({
-                        unitId: unit.unitId,
-                        positionCode: position.code,
-                        memberId: e.target.value || null,
-                        expectedVersion: position.assignment?.version ?? 0,
-                      })
-                    }
-                  >
-                    <option value="">Unassigned</option>
-                    {assignable.map((member) => (
-                      <option key={member.memberId} value={member.memberId}>
-                        {member.name}
-                        {member.ackStatus === 'DIRECT_TO_SCENE' ? ' (direct to scene)' : ''}
-                      </option>
-                    ))}
-                  </select>
-                </label>
+                <Select
+                  label={`${position.label}${position.assignment?.qualStatus === 'UNMET' ? ' (missing qualification)' : ''}`}
+                  disabled={!unit.assignable}
+                  value={position.assignment?.memberId ?? ''}
+                  onChange={(e) =>
+                    assignMutation.mutate({
+                      unitId: unit.unitId,
+                      positionCode: position.code,
+                      memberId: e.target.value || null,
+                      expectedVersion: position.assignment?.version ?? 0,
+                    })
+                  }
+                >
+                  <option value="">Unassigned</option>
+                  {assignable.map((member) => (
+                    <option key={member.memberId} value={member.memberId}>
+                      {member.name}
+                      {member.ackStatus === 'DIRECT_TO_SCENE' ? ' (direct to scene)' : ''}
+                    </option>
+                  ))}
+                </Select>
               </li>
             ))}
           </ul>
         </div>
       ))}
-    </section>
+    </Card>
   );
 }
 
@@ -407,13 +384,11 @@ function DispatchHeader({ dispatchId }: { dispatchId: string }) {
       </ApiForbiddenGate>
     );
   }
-  if (!query.data) return <p>Loading dispatch…</p>;
+  if (!query.data) return <Skeleton lines={3} />;
 
   return (
-    <div>
-      <h1 style={{ fontSize: 'var(--boxalarm-font-size-xl)', margin: 0 }}>
-        {query.data.incidentType}
-      </h1>
+    <Card>
+      <h2 style={{ fontSize: 20, fontWeight: 700, margin: 0 }}>{query.data.incidentType}</h2>
       <p>{query.data.address}</p>
       {query.data.crossStreets ? <p>Cross streets: {query.data.crossStreets}</p> : null}
       {query.data.mapLink ? (
@@ -423,7 +398,7 @@ function DispatchHeader({ dispatchId }: { dispatchId: string }) {
       ) : null}
       <p>{query.data.narrative}</p>
       <PrePlanPanel prePlan={query.data.prePlan} />
-    </div>
+    </Card>
   );
 }
 
@@ -441,35 +416,23 @@ export function AlertsRosterPage() {
   const canEnterManually = auth.roles.some((r) => r === 'OFFICER' || r === 'CHIEF');
 
   return (
-    <main id="main-content" style={{ padding: 'var(--boxalarm-spacing-lg)' }}>
-      {!dispatchId ? (
-        <h1 style={{ fontSize: 'var(--boxalarm-font-size-xl)' }}>Live roster</h1>
-      ) : null}
+    <main id="main-content">
+      <PageHeader title={!dispatchId ? 'Live roster' : 'Alert'} />
 
       {canEnterManually ? (
         <ManualEntryForm onCreated={(id) => setSearchParams({ dispatchId: id })} />
       ) : null}
 
-      <label
-        style={{
-          display: 'grid',
-          gap: 4,
-          maxWidth: 320,
-          marginBottom: 'var(--boxalarm-spacing-lg)',
+      <TextInput
+        label="Dispatch ID"
+        defaultValue={dispatchId ?? ''}
+        onKeyDown={(e) => {
+          if (e.key !== 'Enter') return;
+          const value = (e.target as HTMLInputElement).value.trim();
+          if (value) setSearchParams({ dispatchId: value });
         }}
-      >
-        Dispatch ID
-        <input
-          defaultValue={dispatchId ?? ''}
-          onKeyDown={(e) => {
-            if (e.key !== 'Enter') return;
-            const value = (e.target as HTMLInputElement).value.trim();
-            if (value) setSearchParams({ dispatchId: value });
-          }}
-          style={{ minHeight: 44, padding: '0 12px' }}
-          aria-label="Dispatch ID"
-        />
-      </label>
+        style={{ maxWidth: 320, marginBottom: 'var(--bx-space-lg)' }}
+      />
 
       {dispatchId ? (
         <>

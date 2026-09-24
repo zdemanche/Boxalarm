@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useAuth } from '../../auth/AuthContext';
 import { ApiError } from '../../lib/apiClient';
 import { ApiForbiddenGate } from '../../components/ApiForbiddenGate';
+import { Button, Card, Skeleton, Textarea } from '../../components/ui';
 import { getConfig, putConfig } from './api';
 import type { ConfigResponse, EditableConfigType } from './types';
 
@@ -93,19 +94,11 @@ export function JsonConfigEditor({
     saveMutation.mutate(parsed as Record<string, unknown>);
   }
 
-  const inputId = `config-input-${configType}`;
-
   return (
-    <section
-      aria-labelledby={`config-heading-${configType}`}
-      style={{ marginTop: 'var(--boxalarm-spacing-xl)' }}
-    >
-      <h2 id={`config-heading-${configType}`} style={{ fontSize: 'var(--boxalarm-font-size-lg)' }}>
-        {label}
-      </h2>
-      <p style={{ fontSize: 'var(--boxalarm-font-size-sm)', opacity: 0.8 }}>{helpText}</p>
+    <Card title={label} style={{ marginTop: 'var(--bx-space-xl)' }}>
+      <p style={{ fontSize: 12, color: 'var(--bx-fg-muted)' }}>{helpText}</p>
       {configQuery.isLoading ? (
-        <p>Loading {label}…</p>
+        <Skeleton lines={3} />
       ) : configQuery.error ? (
         <ApiForbiddenGate error={configQuery.error} embedded>
           <p role="alert">Unable to load {label}.</p>
@@ -113,27 +106,15 @@ export function JsonConfigEditor({
       ) : (
         <form
           onSubmit={handleSubmit}
-          style={{
-            display: 'grid',
-            gap: 'var(--boxalarm-spacing-sm)',
-            maxWidth: 640,
-          }}
+          style={{ display: 'grid', gap: 'var(--bx-space-sm)', maxWidth: 640 }}
         >
-          <label htmlFor={inputId} style={{ display: 'grid', gap: 4 }}>
-            {label} (JSON)
-            <textarea
-              id={inputId}
-              value={draft}
-              onChange={(e) => setDraft(e.target.value)}
-              rows={8}
-              style={{
-                fontFamily: 'monospace',
-                fontSize: 'var(--boxalarm-font-size-sm)',
-                padding: 'var(--boxalarm-spacing-sm)',
-                borderRadius: 'var(--boxalarm-radius-default)',
-              }}
-            />
-          </label>
+          <Textarea
+            label={`${label} (JSON)`}
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            rows={8}
+            style={{ fontFamily: 'var(--bx-font-mono)' }}
+          />
           {forbiddenError ? (
             <ApiForbiddenGate error={forbiddenError} embedded>
               <p role="alert">Could not save {label}.</p>
@@ -149,15 +130,11 @@ export function JsonConfigEditor({
               {conflictMessage}
             </p>
           ) : null}
-          <button
-            type="submit"
-            disabled={saveMutation.isPending}
-            style={{ minHeight: 44, width: 'fit-content' }}
-          >
+          <Button type="submit" loading={saveMutation.isPending} style={{ width: 'fit-content' }}>
             Save {label}
-          </button>
+          </Button>
         </form>
       )}
-    </section>
+    </Card>
   );
 }

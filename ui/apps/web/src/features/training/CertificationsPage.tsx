@@ -2,9 +2,11 @@ import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useAuth } from '../../auth/AuthContext';
 import { ApiForbiddenGate } from '../../components/ApiForbiddenGate';
+import { DataTable, PageHeader, Select, type DataTableColumn } from '../../components/ui';
 import { listMembers } from '../personnel/api';
 import { listExpiringCertifications } from './api';
 import { CertificationsPanel } from './CertificationsPanel';
+import type { ExpiringCertification } from './types';
 
 type Tab = 'certifications' | 'expiring';
 
@@ -23,43 +25,30 @@ function ExpiringTab() {
     );
   }
 
-  if (expiringQuery.isLoading) {
-    return <p>Loading expiring certifications…</p>;
-  }
-
   const rows = [...(expiringQuery.data ?? [])].sort((a, b) =>
     a.expiryDate.localeCompare(b.expiryDate),
   );
 
-  if (rows.length === 0) {
-    return <p>No certifications are due to expire within the configured window.</p>;
-  }
+  const columns: DataTableColumn<ExpiringCertification>[] = [
+    { key: 'memberId', header: 'Member', render: (r) => r.memberId },
+    { key: 'certType', header: 'Certification', render: (r) => r.certType },
+    {
+      key: 'expiryDate',
+      header: 'Expires',
+      sortValue: (r) => r.expiryDate,
+      render: (r) => r.expiryDate,
+    },
+  ];
 
   return (
-    <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-      <thead>
-        <tr>
-          <th scope="col" style={{ textAlign: 'left' }}>
-            Member
-          </th>
-          <th scope="col" style={{ textAlign: 'left' }}>
-            Certification
-          </th>
-          <th scope="col" style={{ textAlign: 'left' }}>
-            Expires
-          </th>
-        </tr>
-      </thead>
-      <tbody>
-        {rows.map((row) => (
-          <tr key={row.certId}>
-            <td>{row.memberId}</td>
-            <td>{row.certType}</td>
-            <td>{row.expiryDate}</td>
-          </tr>
-        ))}
-      </tbody>
-    </table>
+    <DataTable
+      caption="Expiring certifications"
+      rowKey={(r) => r.certId}
+      columns={columns}
+      rows={rows}
+      loading={expiringQuery.isLoading}
+      emptyMessage="No certifications are due to expire within the configured window."
+    />
   );
 }
 
@@ -74,24 +63,20 @@ export function CertificationsPage() {
   });
 
   return (
-    <main id="main-content" style={{ padding: 'var(--boxalarm-spacing-lg)' }}>
-      <h1 style={{ fontSize: 'var(--boxalarm-font-size-xl)', margin: 0 }}>Certifications</h1>
+    <main id="main-content">
+      <PageHeader title="Certifications" />
 
       <div
         role="tablist"
         aria-label="Certifications views"
-        style={{
-          display: 'flex',
-          gap: 'var(--boxalarm-spacing-sm)',
-          marginTop: 'var(--boxalarm-spacing-md)',
-        }}
+        style={{ display: 'flex', gap: 'var(--bx-space-sm)' }}
       >
         <button
           type="button"
           role="tab"
           aria-selected={tab === 'certifications'}
           onClick={() => setTab('certifications')}
-          style={{ minHeight: 44 }}
+          style={{ minHeight: 44, padding: '0 var(--bx-space-md)' }}
         >
           Certifications
         </button>
@@ -100,33 +85,31 @@ export function CertificationsPage() {
           role="tab"
           aria-selected={tab === 'expiring'}
           onClick={() => setTab('expiring')}
-          style={{ minHeight: 44 }}
+          style={{ minHeight: 44, padding: '0 var(--bx-space-md)' }}
         >
           Expiring
         </button>
       </div>
 
       {tab === 'certifications' ? (
-        <div style={{ marginTop: 'var(--boxalarm-spacing-lg)' }}>
-          <label style={{ display: 'grid', gap: 4, maxWidth: 320 }}>
-            Member
-            <select
-              value={selectedMemberId}
-              onChange={(e) => setSelectedMemberId(e.target.value)}
-              style={{ minHeight: 44 }}
-            >
-              <option value="">Select a member…</option>
-              {(membersQuery.data ?? []).map((member) => (
-                <option key={member.memberId} value={member.memberId}>
-                  {member.lastName}, {member.firstName}
-                </option>
-              ))}
-            </select>
-          </label>
+        <div style={{ marginTop: 'var(--bx-space-lg)' }}>
+          <Select
+            label="Member"
+            value={selectedMemberId}
+            onChange={(e) => setSelectedMemberId(e.target.value)}
+            style={{ maxWidth: 320 }}
+          >
+            <option value="">Select a member…</option>
+            {(membersQuery.data ?? []).map((member) => (
+              <option key={member.memberId} value={member.memberId}>
+                {member.lastName}, {member.firstName}
+              </option>
+            ))}
+          </Select>
           {selectedMemberId ? <CertificationsPanel memberId={selectedMemberId} /> : null}
         </div>
       ) : (
-        <div style={{ marginTop: 'var(--boxalarm-spacing-lg)' }}>
+        <div style={{ marginTop: 'var(--bx-space-lg)' }}>
           <ExpiringTab />
         </div>
       )}

@@ -3,7 +3,16 @@ import { useInfiniteQuery } from '@tanstack/react-query';
 import { useAuth } from '../../auth/AuthContext';
 import { ApiError } from '../../lib/apiClient';
 import { ApiForbiddenGate } from '../../components/ApiForbiddenGate';
+import {
+  Button,
+  Card,
+  DataTable,
+  PageHeader,
+  TextInput,
+  type DataTableColumn,
+} from '../../components/ui';
 import { getAuditTrail } from './api';
+import type { AuditEntry } from './types';
 
 interface Query {
   entityType: string;
@@ -43,119 +52,90 @@ export function AuditLogPage() {
   const validationDetail =
     error instanceof ApiError && error.problem.status === 400 ? error.problem.detail : null;
 
+  const columns: DataTableColumn<AuditEntry>[] = [
+    { key: 'ts', header: 'Timestamp', render: (e) => new Date(e.ts).toLocaleString() },
+    { key: 'actorId', header: 'Actor', render: (e) => e.actorId },
+    { key: 'action', header: 'Action', render: (e) => e.action },
+    {
+      key: 'changedFields',
+      header: 'Changed fields',
+      render: (entry) =>
+        Object.keys(entry.changedFields).length === 0 ? (
+          '—'
+        ) : (
+          <ul style={{ margin: 0, paddingLeft: 'var(--bx-space-md)' }}>
+            {Object.entries(entry.changedFields).map(([field, diff]) => {
+              const { old: oldValue, new: newValue } = diff as { old: unknown; new: unknown };
+              return (
+                <li key={field}>
+                  {field}: {JSON.stringify(oldValue)} → {JSON.stringify(newValue)}
+                </li>
+              );
+            })}
+          </ul>
+        ),
+    },
+  ];
+
   return (
-    <main id="main-content" style={{ padding: 'var(--boxalarm-spacing-lg)' }}>
-      <h1 style={{ fontSize: 'var(--boxalarm-font-size-xl)', margin: 0 }}>Audit log</h1>
-      <form
-        aria-label="Look up audit history"
-        onSubmit={handleSubmit}
-        style={{
-          display: 'grid',
-          gap: 'var(--boxalarm-spacing-md)',
-          maxWidth: 480,
-          marginTop: 'var(--boxalarm-spacing-lg)',
-        }}
-      >
-        <label style={{ display: 'grid', gap: 4 }}>
-          Entity type
-          <input
+    <main id="main-content">
+      <PageHeader title="Audit log" />
+      <Card style={{ maxWidth: 480 }}>
+        <form
+          aria-label="Look up audit history"
+          onSubmit={handleSubmit}
+          style={{ display: 'grid', gap: 'var(--bx-space-md)' }}
+        >
+          <TextInput
+            label="Entity type"
             value={entityType}
             required
             onChange={(e) => setEntityType(e.target.value)}
-            style={{ minHeight: 44, padding: '0 12px' }}
           />
-        </label>
-        <label style={{ display: 'grid', gap: 4 }}>
-          Entity ID
-          <input
+          <TextInput
+            label="Entity ID"
             value={entityId}
             required
             onChange={(e) => setEntityId(e.target.value)}
-            style={{ minHeight: 44, padding: '0 12px' }}
           />
-        </label>
-        {validationDetail ? (
-          <p role="alert" aria-live="assertive">
-            {validationDetail}
-          </p>
-        ) : null}
-        <button type="submit" style={{ minHeight: 44, width: 'fit-content' }}>
-          Look up
-        </button>
-      </form>
+          {validationDetail ? (
+            <p role="alert" aria-live="assertive">
+              {validationDetail}
+            </p>
+          ) : null}
+          <Button type="submit" style={{ width: 'fit-content' }}>
+            Look up
+          </Button>
+        </form>
+      </Card>
 
       {submitted ? (
-        auditQuery.isLoading && entries.length === 0 ? (
-          <p>Loading history…</p>
-        ) : error && !validationDetail ? (
+        error && !validationDetail ? (
           <ApiForbiddenGate error={error}>
             <p>Unexpected error</p>
           </ApiForbiddenGate>
-        ) : entries.length === 0 && !validationDetail ? (
+        ) : entries.length === 0 && !validationDetail && !auditQuery.isLoading ? (
           <p>No change history for this record.</p>
-        ) : entries.length > 0 ? (
+        ) : entries.length > 0 || auditQuery.isLoading ? (
           <>
-            <table
-              style={{
-                width: '100%',
-                marginTop: 'var(--boxalarm-spacing-lg)',
-                borderCollapse: 'collapse',
-              }}
-            >
-              <thead>
-                <tr>
-                  <th scope="col" style={{ textAlign: 'left' }}>
-                    Timestamp
-                  </th>
-                  <th scope="col" style={{ textAlign: 'left' }}>
-                    Actor
-                  </th>
-                  <th scope="col" style={{ textAlign: 'left' }}>
-                    Action
-                  </th>
-                  <th scope="col" style={{ textAlign: 'left' }}>
-                    Changed fields
-                  </th>
-                </tr>
-              </thead>
-              <tbody>
-                {entries.map((entry) => (
-                  <tr key={`${entry.ts}-${entry.actorId}`}>
-                    <td>{new Date(entry.ts).toLocaleString()}</td>
-                    <td>{entry.actorId}</td>
-                    <td>{entry.action}</td>
-                    <td>
-                      {Object.keys(entry.changedFields).length === 0 ? (
-                        '—'
-                      ) : (
-                        <ul style={{ margin: 0, paddingLeft: 'var(--boxalarm-spacing-md)' }}>
-                          {Object.entries(entry.changedFields).map(([field, diff]) => {
-                            const { old: oldValue, new: newValue } = diff as {
-                              old: unknown;
-                              new: unknown;
-                            };
-                            return (
-                              <li key={field}>
-                                {field}: {JSON.stringify(oldValue)} → {JSON.stringify(newValue)}
-                              </li>
-                            );
-                          })}
-                        </ul>
-                      )}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+            <DataTable
+              caption="Audit history"
+              rowKey={(e) => `${e.ts}-${e.actorId}`}
+              columns={columns}
+              rows={entries}
+              loading={auditQuery.isLoading && entries.length === 0}
+              emptyMessage="No change history for this record."
+            />
             {nextCursor ? (
-              <button
+              <Button
                 type="button"
+                variant="secondary"
                 onClick={() => void auditQuery.fetchNextPage()}
-                disabled={auditQuery.isFetchingNextPage}
-                style={{ minHeight: 44, marginTop: 'var(--boxalarm-spacing-md)' }}
+                loading={auditQuery.isFetchingNextPage}
+                style={{ marginTop: 'var(--bx-space-md)' }}
               >
                 Load more
-              </button>
+              </Button>
             ) : null}
           </>
         ) : null

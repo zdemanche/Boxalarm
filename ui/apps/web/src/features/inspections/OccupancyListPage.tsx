@@ -3,8 +3,17 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import { useAuth } from '../../auth/AuthContext';
 import { ApiForbiddenGate } from '../../components/ApiForbiddenGate';
+import {
+  Button,
+  Card,
+  DataTable,
+  PageHeader,
+  Textarea,
+  TextInput,
+  type DataTableColumn,
+} from '../../components/ui';
 import { createOccupancy, listOccupancies } from './api';
-import type { CreateOccupancyInput } from './types';
+import type { CreateOccupancyInput, Occupancy } from './types';
 
 function splitLines(value: string): string[] {
   return value
@@ -47,106 +56,82 @@ export function OccupancyListPage() {
     );
   }
 
-  return (
-    <main id="main-content" style={{ padding: 'var(--boxalarm-spacing-lg)' }}>
-      <h1 style={{ fontSize: 'var(--boxalarm-font-size-xl)', margin: 0 }}>Occupancies</h1>
+  const columns: DataTableColumn<Occupancy>[] = [
+    {
+      key: 'address',
+      header: 'Address',
+      sortValue: (o) => o.address,
+      render: (o) => <Link to={`/inspections/occupancies/${o.occupancyId}`}>{o.address}</Link>,
+    },
+    {
+      key: 'occupancyType',
+      header: 'Type',
+      sortValue: (o) => o.occupancyType,
+      render: (o) => o.occupancyType,
+    },
+    {
+      key: 'hazards',
+      header: 'Hazards',
+      render: (o) => (o.hazards.length > 0 ? o.hazards.join(', ') : '—'),
+    },
+  ];
 
-      {listQuery.isLoading ? (
-        <p>Loading occupancies…</p>
-      ) : (
-        <table
-          style={{
-            width: '100%',
-            marginTop: 'var(--boxalarm-spacing-lg)',
-            borderCollapse: 'collapse',
-          }}
-        >
-          <thead>
-            <tr>
-              <th scope="col" style={{ textAlign: 'left' }}>
-                Address
-              </th>
-              <th scope="col" style={{ textAlign: 'left' }}>
-                Type
-              </th>
-              <th scope="col" style={{ textAlign: 'left' }}>
-                Hazards
-              </th>
-            </tr>
-          </thead>
-          <tbody>
-            {(listQuery.data ?? []).map((occupancy) => (
-              <tr key={occupancy.occupancyId}>
-                <th scope="row" style={{ textAlign: 'left', fontWeight: 500 }}>
-                  <Link to={`/inspections/occupancies/${occupancy.occupancyId}`}>
-                    {occupancy.address}
-                  </Link>
-                </th>
-                <td>{occupancy.occupancyType}</td>
-                <td>{occupancy.hazards.length > 0 ? occupancy.hazards.join(', ') : '—'}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      )}
+  return (
+    <main id="main-content">
+      <PageHeader title="Occupancies" />
+
+      <DataTable
+        caption="Occupancy registry"
+        rowKey={(o) => o.occupancyId}
+        columns={columns}
+        rows={listQuery.data ?? []}
+        loading={listQuery.isLoading}
+        emptyMessage="No occupancies registered yet."
+      />
 
       {canWrite ? (
-        <form
-          aria-label="Register occupancy"
-          onSubmit={(event: FormEvent) => {
-            event.preventDefault();
-            createMutation.mutate({
-              address,
-              occupancyType,
-              contacts: [],
-              hazards: splitLines(hazardsText),
-            });
-          }}
-          style={{
-            marginTop: 'var(--boxalarm-spacing-xl)',
-            display: 'grid',
-            gap: 'var(--boxalarm-spacing-md)',
-            maxWidth: 480,
-          }}
-        >
-          <h2 style={{ fontSize: 'var(--boxalarm-font-size-lg)', margin: 0 }}>
-            Register occupancy
-          </h2>
-          <label style={{ display: 'grid', gap: 4 }}>
-            Address
-            <input
+        <Card title="Register occupancy" style={{ marginTop: 'var(--bx-space-xl)', maxWidth: 480 }}>
+          <form
+            aria-label="Register occupancy"
+            onSubmit={(event: FormEvent) => {
+              event.preventDefault();
+              createMutation.mutate({
+                address,
+                occupancyType,
+                contacts: [],
+                hazards: splitLines(hazardsText),
+              });
+            }}
+            style={{ display: 'grid', gap: 'var(--bx-space-md)' }}
+          >
+            <TextInput
+              label="Address"
               value={address}
               required
               onChange={(e) => setAddress(e.target.value)}
-              style={{ minHeight: 44, padding: '0 12px' }}
             />
-          </label>
-          <label style={{ display: 'grid', gap: 4 }}>
-            Occupancy type
-            <input
+            <TextInput
+              label="Occupancy type"
               value={occupancyType}
               required
               onChange={(e) => setOccupancyType(e.target.value)}
-              style={{ minHeight: 44, padding: '0 12px' }}
             />
-          </label>
-          <label style={{ display: 'grid', gap: 4 }}>
-            Hazards (one per line, optional)
-            <textarea
+            <Textarea
+              label="Hazards (one per line)"
+              optional
               value={hazardsText}
               onChange={(e) => setHazardsText(e.target.value)}
-              style={{ minHeight: 88, padding: 8 }}
             />
-          </label>
-          {formError ? (
-            <p role="alert" aria-live="assertive">
-              {formError}
-            </p>
-          ) : null}
-          <button type="submit" style={{ minHeight: 44 }}>
-            Save occupancy
-          </button>
-        </form>
+            {formError ? (
+              <p role="alert" aria-live="assertive">
+                {formError}
+              </p>
+            ) : null}
+            <Button type="submit" loading={createMutation.isPending}>
+              Save occupancy
+            </Button>
+          </form>
+        </Card>
       ) : null}
     </main>
   );

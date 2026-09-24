@@ -2,8 +2,16 @@ import { FormEvent, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useAuth } from '../../auth/AuthContext';
 import { ApiForbiddenGate } from '../../components/ApiForbiddenGate';
+import {
+  Button,
+  Card,
+  DataTable,
+  Skeleton,
+  TextInput,
+  type DataTableColumn,
+} from '../../components/ui';
 import { createInventoryItem, getInventory, updateInventoryQuantity } from './api';
-import type { CreateInventoryItemInput } from './types';
+import type { CompartmentItem, CreateInventoryItemInput } from './types';
 
 const emptyForm: CreateInventoryItemInput = { compartmentCode: '', itemName: '', quantity: 1 };
 
@@ -44,107 +52,90 @@ export function InventoryTab({ apparatusId }: { apparatusId: string }) {
     );
   }
 
+  const columns: DataTableColumn<CompartmentItem>[] = [
+    { key: 'itemName', header: 'Item', sortValue: (i) => i.itemName, render: (i) => i.itemName },
+    {
+      key: 'quantity',
+      header: 'Quantity',
+      sortValue: (i) => i.quantity,
+      render: (i) => (
+        <TextInput
+          label={`Quantity for ${i.itemName}`}
+          type="number"
+          min="0"
+          defaultValue={i.quantity}
+          style={{ width: 80 }}
+          onBlur={(e) => {
+            const quantity = Number(e.target.value);
+            if (Number.isInteger(quantity) && quantity !== i.quantity) {
+              quantityMutation.mutate({ itemId: i.itemId, quantity });
+            }
+          }}
+        />
+      ),
+    },
+  ];
+
   return (
     <section>
-      <h2 style={{ fontSize: 'var(--boxalarm-font-size-lg)' }}>Compartment inventory</h2>
+      <h2 style={{ fontSize: 17, fontWeight: 600 }}>Compartment inventory</h2>
       {query.isLoading ? (
-        <p>Loading inventory…</p>
+        <Skeleton lines={3} />
       ) : (query.data ?? []).length === 0 ? (
         <p>No inventory recorded for this unit.</p>
       ) : (
         (query.data ?? []).map((group) => (
-          <div key={group.compartmentCode} style={{ marginTop: 'var(--boxalarm-spacing-md)' }}>
-            <h3 style={{ fontSize: 'var(--boxalarm-font-size-base)' }}>{group.compartmentCode}</h3>
-            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-              <thead>
-                <tr>
-                  <th scope="col" style={{ textAlign: 'left' }}>
-                    Item
-                  </th>
-                  <th scope="col" style={{ textAlign: 'left' }}>
-                    Quantity
-                  </th>
-                </tr>
-              </thead>
-              <tbody>
-                {group.items.map((item) => (
-                  <tr key={item.itemId}>
-                    <th scope="row" style={{ textAlign: 'left', fontWeight: 400 }}>
-                      {item.itemName}
-                    </th>
-                    <td>
-                      <label>
-                        <span className="visually-hidden">Quantity for {item.itemName}</span>
-                        <input
-                          type="number"
-                          min="0"
-                          defaultValue={item.quantity}
-                          style={{ minHeight: 44, width: 80 }}
-                          onBlur={(e) => {
-                            const quantity = Number(e.target.value);
-                            if (Number.isInteger(quantity) && quantity !== item.quantity) {
-                              quantityMutation.mutate({ itemId: item.itemId, quantity });
-                            }
-                          }}
-                        />
-                      </label>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+          <Card
+            key={group.compartmentCode}
+            title={group.compartmentCode}
+            style={{ marginTop: 'var(--bx-space-md)' }}
+          >
+            <DataTable
+              caption={`${group.compartmentCode} inventory`}
+              rowKey={(i) => i.itemId}
+              columns={columns}
+              rows={group.items}
+              emptyMessage="No items in this compartment."
+            />
+          </Card>
         ))
       )}
 
-      <form
-        aria-label="Add inventory item"
-        onSubmit={(event: FormEvent) => {
-          event.preventDefault();
-          createMutation.mutate(form);
-        }}
-        style={{
-          display: 'grid',
-          gap: 'var(--boxalarm-spacing-sm)',
-          maxWidth: 480,
-          marginTop: 'var(--boxalarm-spacing-lg)',
-        }}
-      >
-        <h3 style={{ fontSize: 'var(--boxalarm-font-size-base)', margin: 0 }}>Add item</h3>
-        <label style={{ display: 'grid', gap: 4 }}>
-          Compartment
-          <input
+      <Card title="Add item" style={{ marginTop: 'var(--bx-space-lg)', maxWidth: 480 }}>
+        <form
+          aria-label="Add inventory item"
+          onSubmit={(event: FormEvent) => {
+            event.preventDefault();
+            createMutation.mutate(form);
+          }}
+          style={{ display: 'grid', gap: 'var(--bx-space-sm)' }}
+        >
+          <TextInput
+            label="Compartment"
             value={form.compartmentCode}
             required
             onChange={(e) => setForm((prev) => ({ ...prev, compartmentCode: e.target.value }))}
-            style={{ minHeight: 44, padding: '0 12px' }}
           />
-        </label>
-        <label style={{ display: 'grid', gap: 4 }}>
-          Item name
-          <input
+          <TextInput
+            label="Item name"
             value={form.itemName}
             required
             onChange={(e) => setForm((prev) => ({ ...prev, itemName: e.target.value }))}
-            style={{ minHeight: 44, padding: '0 12px' }}
           />
-        </label>
-        <label style={{ display: 'grid', gap: 4 }}>
-          Quantity
-          <input
+          <TextInput
+            label="Quantity"
             type="number"
             min="0"
             value={form.quantity}
             required
             onChange={(e) => setForm((prev) => ({ ...prev, quantity: Number(e.target.value) }))}
-            style={{ minHeight: 44, padding: '0 12px' }}
           />
-        </label>
-        {createMutation.error ? <p role="alert">{createMutation.error.message}</p> : null}
-        <button type="submit" style={{ minHeight: 44, maxWidth: 240 }}>
-          Add item
-        </button>
-      </form>
+          {createMutation.error ? <p role="alert">{createMutation.error.message}</p> : null}
+          <Button type="submit" loading={createMutation.isPending} style={{ maxWidth: 240 }}>
+            Add item
+          </Button>
+        </form>
+      </Card>
     </section>
   );
 }

@@ -1,8 +1,9 @@
 import { FormEvent, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Link, useParams } from 'react-router-dom';
+import { useParams } from 'react-router-dom';
 import { useAuth } from '../../auth/AuthContext';
 import { ApiForbiddenGate } from '../../components/ApiForbiddenGate';
+import { Button, Card, PageHeader, Skeleton, Tabs, Textarea, TextInput } from '../../components/ui';
 import { getOccupancy, getPrePlan, putPrePlan, updateOccupancy, uploadPrePlanFile } from './api';
 import type { UtilityShutoff } from './types';
 
@@ -91,286 +92,236 @@ export function OccupancyDetailPage() {
 
   const occupancy = occupancyQuery.data;
 
-  return (
-    <main id="main-content" style={{ padding: 'var(--boxalarm-spacing-lg)' }}>
-      <p>
-        <Link to="/inspections/occupancies">← Occupancies</Link>
-      </p>
-      {occupancyQuery.isLoading || !occupancy ? (
-        <p>Loading occupancy…</p>
-      ) : (
-        <>
-          <h1 style={{ fontSize: 'var(--boxalarm-font-size-xl)', margin: 0 }}>
-            {occupancy.address}
-          </h1>
+  const detailsPanel = occupancy ? (
+    <>
+      <Card>
+        <dl style={{ margin: 0 }}>
+          <dt>Type</dt>
+          <dd>{occupancy.occupancyType}</dd>
+          <dt>Contacts</dt>
+          <dd>
+            {occupancy.contacts.length > 0
+              ? occupancy.contacts.map((c) => `${c.name} (${c.role}) ${c.phone}`).join('; ')
+              : '—'}
+          </dd>
+          <dt>Hazards</dt>
+          <dd>{occupancy.hazards.length > 0 ? occupancy.hazards.join(', ') : '—'}</dd>
+        </dl>
+      </Card>
 
-          <div
-            role="tablist"
-            aria-label="Occupancy sections"
-            style={{
-              display: 'flex',
-              gap: 'var(--boxalarm-spacing-sm)',
-              marginTop: 'var(--boxalarm-spacing-lg)',
+      {canWrite ? (
+        <Card title="Edit hazards" style={{ marginTop: 'var(--bx-space-xl)', maxWidth: 480 }}>
+          <form
+            aria-label="Edit hazards"
+            onSubmit={(event: FormEvent) => {
+              event.preventDefault();
+              hazardsMutation.mutate();
             }}
+            style={{ display: 'grid', gap: 'var(--bx-space-md)' }}
           >
-            {(['details', 'preplan'] as const).map((value) => (
-              <button
-                key={value}
-                type="button"
-                role="tab"
-                aria-selected={tab === value}
-                onClick={() => setTab(value)}
-                style={{
-                  minHeight: 44,
-                  padding: '0 var(--boxalarm-spacing-md)',
-                  fontWeight: tab === value ? 700 : 400,
-                }}
-              >
-                {value === 'details' ? 'Details' : 'Pre-plan'}
-              </button>
-            ))}
-          </div>
+            <Textarea
+              label="Hazards (one per line)"
+              value={hazardsText}
+              onChange={(e) => setHazardsText(e.target.value)}
+            />
+            <Button type="submit" loading={hazardsMutation.isPending}>
+              Save hazards
+            </Button>
+          </form>
+        </Card>
+      ) : null}
 
-          {tab === 'details' ? (
-            <section role="tabpanel" aria-label="Details">
-              <dl style={{ marginTop: 'var(--boxalarm-spacing-lg)' }}>
-                <dt>Type</dt>
-                <dd>{occupancy.occupancyType}</dd>
-                <dt>Contacts</dt>
-                <dd>
-                  {occupancy.contacts.length > 0
-                    ? occupancy.contacts.map((c) => `${c.name} (${c.role}) ${c.phone}`).join('; ')
-                    : '—'}
-                </dd>
-                <dt>Hazards</dt>
-                <dd>{occupancy.hazards.length > 0 ? occupancy.hazards.join(', ') : '—'}</dd>
-              </dl>
+      {hazardsMutation.error ? (
+        <ApiForbiddenGate error={hazardsMutation.error} embedded>
+          <p role="alert">Unable to save changes</p>
+        </ApiForbiddenGate>
+      ) : null}
+    </>
+  ) : null;
 
-              {canWrite ? (
-                <form
-                  aria-label="Edit hazards"
-                  onSubmit={(event: FormEvent) => {
-                    event.preventDefault();
-                    hazardsMutation.mutate();
-                  }}
-                  style={{
-                    marginTop: 'var(--boxalarm-spacing-xl)',
-                    display: 'grid',
-                    gap: 'var(--boxalarm-spacing-md)',
-                    maxWidth: 480,
-                  }}
-                >
-                  <h2 style={{ fontSize: 'var(--boxalarm-font-size-lg)', margin: 0 }}>
-                    Edit hazards
-                  </h2>
-                  <label style={{ display: 'grid', gap: 4 }}>
-                    Hazards (one per line)
-                    <textarea
-                      value={hazardsText}
-                      onChange={(e) => setHazardsText(e.target.value)}
-                      style={{ minHeight: 88, padding: 8 }}
-                    />
-                  </label>
-                  <button type="submit" style={{ minHeight: 44 }}>
-                    Save hazards
-                  </button>
-                </form>
-              ) : null}
-
-              {hazardsMutation.error ? (
-                <ApiForbiddenGate error={hazardsMutation.error} embedded>
-                  <p role="alert">Unable to save changes</p>
-                </ApiForbiddenGate>
-              ) : null}
-            </section>
-          ) : (
-            <section role="tabpanel" aria-label="Pre-plan">
-              {prePlanQuery.isLoading ? (
-                <p>Loading pre-plan…</p>
-              ) : prePlanQuery.data ? (
-                <dl style={{ marginTop: 'var(--boxalarm-spacing-lg)' }}>
-                  <dt>Site diagram</dt>
-                  <dd>
-                    {prePlanQuery.data.siteDiagramUrl ? (
-                      <a href={prePlanQuery.data.siteDiagramUrl}>View diagram</a>
-                    ) : (
-                      '—'
-                    )}
-                  </dd>
-                  <dt>Attachments</dt>
-                  <dd>
-                    {prePlanQuery.data.attachmentUrls.length > 0 ? (
-                      <ul>
-                        {prePlanQuery.data.attachmentUrls.map((a) => (
-                          <li key={a.key}>
-                            <a href={a.url}>{a.key}</a>
-                          </li>
-                        ))}
-                      </ul>
-                    ) : (
-                      '—'
-                    )}
-                  </dd>
-                  <dt>Utility shutoffs</dt>
-                  <dd>
-                    {prePlanQuery.data.utilityShutoffs.length > 0
-                      ? prePlanQuery.data.utilityShutoffs
-                          .map((s) => `${s.utility}: ${s.location}`)
-                          .join('; ')
-                      : '—'}
-                  </dd>
-                  <dt>Hazards</dt>
-                  <dd>
-                    {prePlanQuery.data.hazards.length > 0
-                      ? prePlanQuery.data.hazards.join(', ')
-                      : '—'}
-                  </dd>
-                </dl>
+  const prePlanPanel = (
+    <>
+      {prePlanQuery.isLoading ? (
+        <Skeleton lines={4} />
+      ) : prePlanQuery.data ? (
+        <Card>
+          <dl style={{ margin: 0 }}>
+            <dt>Site diagram</dt>
+            <dd>
+              {prePlanQuery.data.siteDiagramUrl ? (
+                <a href={prePlanQuery.data.siteDiagramUrl}>View diagram</a>
               ) : (
-                <p>No pre-plan is on file.</p>
+                '—'
               )}
+            </dd>
+            <dt>Attachments</dt>
+            <dd>
+              {prePlanQuery.data.attachmentUrls.length > 0 ? (
+                <ul>
+                  {prePlanQuery.data.attachmentUrls.map((a) => (
+                    <li key={a.key}>
+                      <a href={a.url}>{a.key}</a>
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                '—'
+              )}
+            </dd>
+            <dt>Utility shutoffs</dt>
+            <dd>
+              {prePlanQuery.data.utilityShutoffs.length > 0
+                ? prePlanQuery.data.utilityShutoffs
+                    .map((s) => `${s.utility}: ${s.location}`)
+                    .join('; ')
+                : '—'}
+            </dd>
+            <dt>Hazards</dt>
+            <dd>
+              {prePlanQuery.data.hazards.length > 0 ? prePlanQuery.data.hazards.join(', ') : '—'}
+            </dd>
+          </dl>
+        </Card>
+      ) : (
+        <p>No pre-plan is on file.</p>
+      )}
 
-              {canWrite ? (
-                <form
-                  aria-label="Save pre-plan"
-                  onSubmit={(event: FormEvent) => {
-                    event.preventDefault();
-                    setUploadStatus(null);
-                    prePlanMutation.mutate();
-                  }}
-                  style={{
-                    marginTop: 'var(--boxalarm-spacing-xl)',
-                    display: 'grid',
-                    gap: 'var(--boxalarm-spacing-md)',
-                    maxWidth: 480,
-                  }}
-                >
-                  <h2 style={{ fontSize: 'var(--boxalarm-font-size-lg)', margin: 0 }}>
-                    Update pre-plan
-                  </h2>
-                  <label style={{ display: 'grid', gap: 4 }}>
-                    Site diagram
-                    <input
-                      type="file"
-                      accept={PREPLAN_FILE_ACCEPT}
-                      onChange={(e) => {
-                        const file = e.target.files?.[0] ?? null;
-                        if (file && oversizedFileNames([file]).length > 0) {
-                          setFileError(
-                            `${file.name} is larger than the 20MB limit for pre-plan files.`,
-                          );
-                          e.target.value = '';
-                          setDiagramFile(null);
-                          return;
-                        }
-                        setFileError(null);
-                        setDiagramFile(file);
-                      }}
-                    />
-                  </label>
-                  <label style={{ display: 'grid', gap: 4 }}>
-                    Attachments
-                    <input
-                      type="file"
-                      multiple
-                      accept={PREPLAN_FILE_ACCEPT}
-                      onChange={(e) => {
-                        const files = Array.from(e.target.files ?? []);
-                        const oversized = oversizedFileNames(files);
-                        if (oversized.length > 0) {
-                          setFileError(
-                            `${oversized.join(', ')} ${oversized.length === 1 ? 'is' : 'are'} larger than the 20MB limit for pre-plan files. Remove or replace before saving.`,
-                          );
-                          e.target.value = '';
-                          setAttachmentFiles([]);
-                          return;
-                        }
-                        setFileError(null);
-                        setAttachmentFiles(files);
-                      }}
-                    />
-                  </label>
-                  {fileError ? (
-                    <p role="alert" aria-live="assertive">
-                      {fileError}
-                    </p>
-                  ) : null}
-                  <fieldset style={{ display: 'grid', gap: 'var(--boxalarm-spacing-sm)' }}>
-                    <legend>Utility shutoffs</legend>
-                    {shutoffs.map((shutoff, index) => (
-                      <div
-                        key={index}
-                        style={{ display: 'flex', gap: 'var(--boxalarm-spacing-sm)' }}
-                      >
-                        <label style={{ display: 'grid', gap: 4, flex: 1 }}>
-                          Utility
-                          <input
-                            value={shutoff.utility}
-                            onChange={(e) =>
-                              setShutoffs((prev) =>
-                                prev.map((s, i) =>
-                                  i === index ? { ...s, utility: e.target.value } : s,
-                                ),
-                              )
-                            }
-                            style={{ minHeight: 44, padding: '0 12px' }}
-                          />
-                        </label>
-                        <label style={{ display: 'grid', gap: 4, flex: 1 }}>
-                          Location
-                          <input
-                            value={shutoff.location}
-                            onChange={(e) =>
-                              setShutoffs((prev) =>
-                                prev.map((s, i) =>
-                                  i === index ? { ...s, location: e.target.value } : s,
-                                ),
-                              )
-                            }
-                            style={{ minHeight: 44, padding: '0 12px' }}
-                          />
-                        </label>
-                      </div>
-                    ))}
-                    <button
-                      type="button"
-                      onClick={() =>
-                        setShutoffs((prev) => [...prev, { utility: '', location: '' }])
-                      }
-                      style={{ minHeight: 44 }}
-                    >
-                      Add shutoff
-                    </button>
-                  </fieldset>
-                  <label style={{ display: 'grid', gap: 4 }}>
-                    Hazards (one per line)
-                    <textarea
-                      value={prePlanHazardsText}
-                      onChange={(e) => setPrePlanHazardsText(e.target.value)}
-                      style={{ minHeight: 88, padding: 8 }}
-                    />
-                  </label>
-                  <button
-                    type="submit"
-                    disabled={prePlanMutation.isPending}
-                    style={{ minHeight: 44 }}
-                  >
-                    Save pre-plan
-                  </button>
-                  <p role="status" aria-live="polite">
-                    {uploadStatus}
-                  </p>
-                </form>
-              ) : null}
+      {canWrite ? (
+        <Card title="Update pre-plan" style={{ marginTop: 'var(--bx-space-xl)', maxWidth: 480 }}>
+          <form
+            aria-label="Save pre-plan"
+            onSubmit={(event: FormEvent) => {
+              event.preventDefault();
+              setUploadStatus(null);
+              prePlanMutation.mutate();
+            }}
+            style={{ display: 'grid', gap: 'var(--bx-space-md)' }}
+          >
+            <label style={{ display: 'grid', gap: 4 }}>
+              Site diagram
+              <input
+                type="file"
+                accept={PREPLAN_FILE_ACCEPT}
+                onChange={(e) => {
+                  const file = e.target.files?.[0] ?? null;
+                  if (file && oversizedFileNames([file]).length > 0) {
+                    setFileError(`${file.name} is larger than the 20MB limit for pre-plan files.`);
+                    e.target.value = '';
+                    setDiagramFile(null);
+                    return;
+                  }
+                  setFileError(null);
+                  setDiagramFile(file);
+                }}
+              />
+            </label>
+            <label style={{ display: 'grid', gap: 4 }}>
+              Attachments
+              <input
+                type="file"
+                multiple
+                accept={PREPLAN_FILE_ACCEPT}
+                onChange={(e) => {
+                  const files = Array.from(e.target.files ?? []);
+                  const oversized = oversizedFileNames(files);
+                  if (oversized.length > 0) {
+                    setFileError(
+                      `${oversized.join(', ')} ${oversized.length === 1 ? 'is' : 'are'} larger than the 20MB limit for pre-plan files. Remove or replace before saving.`,
+                    );
+                    e.target.value = '';
+                    setAttachmentFiles([]);
+                    return;
+                  }
+                  setFileError(null);
+                  setAttachmentFiles(files);
+                }}
+              />
+            </label>
+            {fileError ? (
+              <p role="alert" aria-live="assertive">
+                {fileError}
+              </p>
+            ) : null}
+            <fieldset
+              style={{ display: 'grid', gap: 'var(--bx-space-sm)', border: 'none', padding: 0 }}
+            >
+              <legend>Utility shutoffs</legend>
+              {shutoffs.map((shutoff, index) => (
+                <div key={index} style={{ display: 'flex', gap: 'var(--bx-space-sm)' }}>
+                  <TextInput
+                    label="Utility"
+                    value={shutoff.utility}
+                    onChange={(e) =>
+                      setShutoffs((prev) =>
+                        prev.map((s, i) => (i === index ? { ...s, utility: e.target.value } : s)),
+                      )
+                    }
+                    style={{ flex: 1 }}
+                  />
+                  <TextInput
+                    label="Location"
+                    value={shutoff.location}
+                    onChange={(e) =>
+                      setShutoffs((prev) =>
+                        prev.map((s, i) => (i === index ? { ...s, location: e.target.value } : s)),
+                      )
+                    }
+                    style={{ flex: 1 }}
+                  />
+                </div>
+              ))}
+              <Button
+                type="button"
+                variant="secondary"
+                onClick={() => setShutoffs((prev) => [...prev, { utility: '', location: '' }])}
+              >
+                Add shutoff
+              </Button>
+            </fieldset>
+            <Textarea
+              label="Hazards (one per line)"
+              value={prePlanHazardsText}
+              onChange={(e) => setPrePlanHazardsText(e.target.value)}
+            />
+            <Button type="submit" loading={prePlanMutation.isPending}>
+              Save pre-plan
+            </Button>
+            <p role="status" aria-live="polite">
+              {uploadStatus}
+            </p>
+          </form>
+        </Card>
+      ) : null}
 
-              {prePlanMutation.error ? (
-                <ApiForbiddenGate error={prePlanMutation.error} embedded>
-                  <p role="alert">Unable to save pre-plan</p>
-                </ApiForbiddenGate>
-              ) : null}
-            </section>
-          )}
-        </>
+      {prePlanMutation.error ? (
+        <ApiForbiddenGate error={prePlanMutation.error} embedded>
+          <p role="alert">Unable to save pre-plan</p>
+        </ApiForbiddenGate>
+      ) : null}
+    </>
+  );
+
+  return (
+    <main id="main-content">
+      <PageHeader
+        title={occupancy?.address ?? '…'}
+        breadcrumbs={[
+          { label: 'Occupancies', to: '/inspections/occupancies' },
+          { label: occupancy?.address ?? '…' },
+        ]}
+      />
+      {occupancyQuery.isLoading || !occupancy ? (
+        <Skeleton lines={3} />
+      ) : (
+        <Tabs
+          label="Occupancy sections"
+          value={tab}
+          onValueChange={(value) => setTab(value as Tab)}
+          items={[
+            { value: 'details', label: 'Details', content: detailsPanel },
+            { value: 'preplan', label: 'Pre-plan', content: prePlanPanel },
+          ]}
+        />
       )}
     </main>
   );

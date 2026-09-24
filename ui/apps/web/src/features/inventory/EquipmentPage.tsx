@@ -3,8 +3,20 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import { useAuth } from '../../auth/AuthContext';
 import { ApiForbiddenGate } from '../../components/ApiForbiddenGate';
+import {
+  Button,
+  Card,
+  Checkbox,
+  DataTable,
+  PageHeader,
+  Skeleton,
+  StatusChip,
+  Tabs,
+  TextInput,
+  type DataTableColumn,
+} from '../../components/ui';
 import { createEquipmentAsset, listConsumables, listEquipment } from './api';
-import type { CreateEquipmentAssetInput } from './types';
+import type { ConsumableStock, CreateEquipmentAssetInput, EquipmentAsset } from './types';
 
 const emptyForm: CreateEquipmentAssetInput = { serialNumber: '', location: '' };
 type Tab = 'equipment' | 'consumables';
@@ -52,192 +64,130 @@ export function EquipmentPage() {
     (asset) => showRetired || asset.lifecycleStatus !== 'RETIRED',
   );
 
+  const equipmentColumns: DataTableColumn<EquipmentAsset>[] = [
+    {
+      key: 'serialNumber',
+      header: 'Serial number',
+      sortValue: (a) => a.serialNumber,
+      render: (a) => <Link to={`/inventory/${a.assetId}`}>{a.serialNumber}</Link>,
+    },
+    { key: 'location', header: 'Location', render: (a) => a.location || '—' },
+    {
+      key: 'assignment',
+      header: 'Assignment',
+      render: (a) => (a.assignedToType ? `${a.assignedToType} · ${a.assignedToId}` : 'Unassigned'),
+    },
+    { key: 'lifecycleStatus', header: 'Lifecycle', render: (a) => a.lifecycleStatus },
+  ];
+
+  const consumableColumns: DataTableColumn<ConsumableStock>[] = [
+    { key: 'itemName', header: 'Item', sortValue: (c) => c.itemName, render: (c) => c.itemName },
+    { key: 'stockLevel', header: 'Stock level', render: (c) => c.stockLevel },
+    { key: 'reorderThreshold', header: 'Reorder threshold', render: (c) => c.reorderThreshold },
+    {
+      key: 'status',
+      header: 'Status',
+      render: (c) =>
+        c.reorderFlagged ? (
+          <StatusChip status="warning">Reorder needed</StatusChip>
+        ) : (
+          <StatusChip status="ok">OK</StatusChip>
+        ),
+    },
+  ];
+
   return (
-    <main id="main-content" style={{ padding: 'var(--boxalarm-spacing-lg)' }}>
-      <h1 style={{ fontSize: 'var(--boxalarm-font-size-xl)', margin: 0 }}>Inventory</h1>
+    <main id="main-content">
+      <PageHeader title="Inventory" />
 
-      <div
-        role="tablist"
-        aria-label="Inventory sections"
-        style={{
-          display: 'flex',
-          gap: 'var(--boxalarm-spacing-sm)',
-          marginTop: 'var(--boxalarm-spacing-lg)',
-        }}
-      >
-        {(['equipment', 'consumables'] as const).map((value) => (
-          <button
-            key={value}
-            type="button"
-            role="tab"
-            aria-selected={tab === value}
-            onClick={() => setTab(value)}
-            style={{
-              minHeight: 44,
-              padding: '0 var(--boxalarm-spacing-md)',
-              fontWeight: tab === value ? 700 : 400,
-            }}
-          >
-            {value === 'equipment' ? 'Equipment' : 'Consumables'}
-          </button>
-        ))}
-      </div>
-
-      {tab === 'equipment' ? (
-        <section role="tabpanel" aria-label="Equipment">
-          <label
-            style={{ display: 'inline-flex', gap: 4, marginTop: 'var(--boxalarm-spacing-lg)' }}
-          >
-            <input
-              type="checkbox"
-              checked={showRetired}
-              onChange={(e) => setShowRetired(e.target.checked)}
-            />
-            Show retired assets
-          </label>
-
-          {equipmentQuery.isLoading ? (
-            <p>Loading equipment…</p>
-          ) : (
-            <table
-              style={{
-                width: '100%',
-                marginTop: 'var(--boxalarm-spacing-md)',
-                borderCollapse: 'collapse',
-              }}
-            >
-              <thead>
-                <tr>
-                  <th scope="col" style={{ textAlign: 'left' }}>
-                    Serial number
-                  </th>
-                  <th scope="col" style={{ textAlign: 'left' }}>
-                    Location
-                  </th>
-                  <th scope="col" style={{ textAlign: 'left' }}>
-                    Assignment
-                  </th>
-                  <th scope="col" style={{ textAlign: 'left' }}>
-                    Lifecycle
-                  </th>
-                </tr>
-              </thead>
-              <tbody>
-                {equipment.map((asset) => (
-                  <tr key={asset.assetId}>
-                    <th scope="row" style={{ textAlign: 'left', fontWeight: 500 }}>
-                      <Link to={`/inventory/${asset.assetId}`}>{asset.serialNumber}</Link>
-                    </th>
-                    <td>{asset.location || '—'}</td>
-                    <td>
-                      {asset.assignedToType
-                        ? `${asset.assignedToType} · ${asset.assignedToId}`
-                        : 'Unassigned'}
-                    </td>
-                    <td>{asset.lifecycleStatus}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
-
-          {canWrite ? (
-            <form
-              aria-label="Register equipment"
-              onSubmit={(event: FormEvent) => {
-                event.preventDefault();
-                createMutation.mutate(form);
-              }}
-              style={{
-                marginTop: 'var(--boxalarm-spacing-xl)',
-                display: 'grid',
-                gap: 'var(--boxalarm-spacing-md)',
-                maxWidth: 480,
-              }}
-            >
-              <h2 style={{ fontSize: 'var(--boxalarm-font-size-lg)', margin: 0 }}>
-                Register equipment
-              </h2>
-              <label style={{ display: 'grid', gap: 4 }}>
-                Serial number
-                <input
-                  name="serialNumber"
-                  value={form.serialNumber}
-                  required
-                  onChange={(e) => setForm((prev) => ({ ...prev, serialNumber: e.target.value }))}
-                  style={{ minHeight: 44, padding: '0 12px' }}
+      <Tabs
+        label="Inventory sections"
+        value={tab}
+        onValueChange={(value) => setTab(value as Tab)}
+        items={[
+          {
+            value: 'equipment',
+            label: 'Equipment',
+            content: (
+              <>
+                <Checkbox
+                  label="Show retired assets"
+                  checked={showRetired}
+                  onCheckedChange={setShowRetired}
                 />
-              </label>
-              <label style={{ display: 'grid', gap: 4 }}>
-                Location
-                <input
-                  name="location"
-                  value={form.location}
-                  onChange={(e) => setForm((prev) => ({ ...prev, location: e.target.value }))}
-                  style={{ minHeight: 44, padding: '0 12px' }}
-                />
-              </label>
-              {formError ? (
-                <p role="alert" aria-live="assertive">
-                  {formError}
-                </p>
-              ) : null}
-              <button type="submit" style={{ minHeight: 44 }}>
-                Register asset
-              </button>
-            </form>
-          ) : null}
-        </section>
-      ) : (
-        <section role="tabpanel" aria-label="Consumables">
-          {consumablesQuery.isLoading ? (
-            <p>Loading consumables…</p>
-          ) : (
-            <table
-              style={{
-                width: '100%',
-                marginTop: 'var(--boxalarm-spacing-md)',
-                borderCollapse: 'collapse',
-              }}
-            >
-              <thead>
-                <tr>
-                  <th scope="col" style={{ textAlign: 'left' }}>
-                    Item
-                  </th>
-                  <th scope="col" style={{ textAlign: 'left' }}>
-                    Stock level
-                  </th>
-                  <th scope="col" style={{ textAlign: 'left' }}>
-                    Reorder threshold
-                  </th>
-                  <th scope="col" style={{ textAlign: 'left' }}>
-                    Status
-                  </th>
-                </tr>
-              </thead>
-              <tbody>
-                {(consumablesQuery.data ?? []).map((item) => (
-                  <tr key={item.itemId}>
-                    <th scope="row" style={{ textAlign: 'left', fontWeight: 500 }}>
-                      {item.itemName}
-                    </th>
-                    <td>{item.stockLevel}</td>
-                    <td>{item.reorderThreshold}</td>
-                    <td>
-                      {item.reorderFlagged ? (
-                        <span style={{ color: 'var(--boxalarm-error)' }}>⚠ Reorder needed</span>
-                      ) : (
-                        'OK'
-                      )}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
-        </section>
-      )}
+
+                {equipmentQuery.isLoading ? (
+                  <Skeleton lines={4} />
+                ) : (
+                  <DataTable
+                    caption="Equipment"
+                    rowKey={(a) => a.assetId}
+                    columns={equipmentColumns}
+                    rows={equipment}
+                    emptyMessage="No equipment registered yet."
+                  />
+                )}
+
+                {canWrite ? (
+                  <Card
+                    title="Register equipment"
+                    style={{ marginTop: 'var(--bx-space-xl)', maxWidth: 480 }}
+                  >
+                    <form
+                      aria-label="Register equipment"
+                      onSubmit={(event: FormEvent) => {
+                        event.preventDefault();
+                        createMutation.mutate(form);
+                      }}
+                      style={{ display: 'grid', gap: 'var(--bx-space-md)' }}
+                    >
+                      <TextInput
+                        label="Serial number"
+                        name="serialNumber"
+                        value={form.serialNumber}
+                        required
+                        onChange={(e) =>
+                          setForm((prev) => ({ ...prev, serialNumber: e.target.value }))
+                        }
+                      />
+                      <TextInput
+                        label="Location"
+                        name="location"
+                        optional
+                        value={form.location}
+                        onChange={(e) => setForm((prev) => ({ ...prev, location: e.target.value }))}
+                      />
+                      {formError ? (
+                        <p role="alert" aria-live="assertive">
+                          {formError}
+                        </p>
+                      ) : null}
+                      <Button type="submit" loading={createMutation.isPending}>
+                        Register asset
+                      </Button>
+                    </form>
+                  </Card>
+                ) : null}
+              </>
+            ),
+          },
+          {
+            value: 'consumables',
+            label: 'Consumables',
+            content: consumablesQuery.isLoading ? (
+              <Skeleton lines={4} />
+            ) : (
+              <DataTable
+                caption="Consumables"
+                rowKey={(c) => c.itemId}
+                columns={consumableColumns}
+                rows={consumablesQuery.data ?? []}
+                emptyMessage="No consumables tracked yet."
+              />
+            ),
+          },
+        ]}
+      />
     </main>
   );
 }

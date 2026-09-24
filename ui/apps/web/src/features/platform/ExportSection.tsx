@@ -3,6 +3,7 @@ import { useMutation, useQuery } from '@tanstack/react-query';
 import { useAuth } from '../../auth/AuthContext';
 import { ApiError } from '../../lib/apiClient';
 import { ApiForbiddenGate } from '../../components/ApiForbiddenGate';
+import { Button, Card } from '../../components/ui';
 import { startExport, getExportStatus } from './api';
 
 const EXPORT_POLL_INTERVAL_MS = 3_000;
@@ -53,18 +54,15 @@ export function ExportSection() {
   const status = statusQuery.data?.status;
 
   return (
-    <section aria-labelledby="export-heading" style={{ marginTop: 'var(--boxalarm-spacing-xl)' }}>
-      <h2 id="export-heading" style={{ fontSize: 'var(--boxalarm-font-size-lg)' }}>
-        Full department export
-      </h2>
-      <button
+    <Card title="Full department export">
+      <Button
         type="button"
         onClick={handleExport}
-        disabled={startMutation.isPending}
-        style={{ minHeight: 44 }}
+        loading={startMutation.isPending}
+        variant="danger"
       >
         Export department data
-      </button>
+      </Button>
       {startForbidden ? (
         <ApiForbiddenGate error={startForbidden} embedded>
           <p role="alert">Could not start the export.</p>
@@ -92,6 +90,6 @@ export function ExportSection() {
       ) : jobId ? (
         <p role="status">Export in progress…</p>
       ) : null}
-    </section>
+    </Card>
   );
 }
