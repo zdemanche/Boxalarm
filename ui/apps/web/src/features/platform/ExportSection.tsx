@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { useAuth } from '../../auth/AuthContext';
+import { ApiForbiddenGate } from '../../components/ApiForbiddenGate';
 import { startExport, getExportStatus } from './api';
 
 const EXPORT_POLL_INTERVAL_MS = 3_000;
@@ -58,7 +59,11 @@ export function ExportSection() {
           {startError}
         </p>
       ) : null}
-      {jobId && status === 'FAILED' ? (
+      {jobId && statusQuery.error ? (
+        <ApiForbiddenGate error={statusQuery.error} embedded>
+          <p role="alert">Could not check export status.</p>
+        </ApiForbiddenGate>
+      ) : jobId && status === 'FAILED' ? (
         <p role="alert">The export failed. Try again.</p>
       ) : jobId && status === 'COMPLETE' && statusQuery.data?.status === 'COMPLETE' ? (
         <ul>
