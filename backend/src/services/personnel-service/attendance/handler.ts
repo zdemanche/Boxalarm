@@ -151,6 +151,13 @@ async function recordAttendanceFor(
   try {
     const { tableName } = readAttendanceTableConfig(process.env);
     const client = createDynamoClient(process.env);
+
+    const exists = await memberExists(client, tableName, deptId, memberId);
+    if (!exists) {
+      emitAttendanceMetric('Failed', 'MemberNotFound');
+      return notFoundProblem(traceId, 'Member was not found');
+    }
+
     const rules = await getLosapPointRules(client, tableName, deptId);
     if (!rules) {
       logInfo('losap.accrual.skipped', traceId, { reason: 'NoRuleConfig', deptId, memberId });
