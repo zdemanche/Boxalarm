@@ -2,6 +2,7 @@ import { useEffect, useState, type FormEvent } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useAuth } from '../../auth/AuthContext';
 import { ApiError } from '../../lib/apiClient';
+import { ApiForbiddenGate } from '../../components/ApiForbiddenGate';
 import { getConfig, putConfig } from './api';
 import type { ConfigResponse, EditableConfigType } from './types';
 
@@ -33,6 +34,7 @@ export function JsonConfigEditor({
   const [draft, setDraft] = useState('{}');
   const [formError, setFormError] = useState<string | null>(null);
   const [conflictMessage, setConflictMessage] = useState<string | null>(null);
+  const [forbiddenError, setForbiddenError] = useState<unknown>(null);
 
   useEffect(() => {
     if (configQuery.data !== undefined) {
@@ -46,20 +48,29 @@ export function JsonConfigEditor({
     onSuccess: (saved) => {
       setConflictMessage(null);
       setFormError(null);
+      setForbiddenError(null);
       queryClient.setQueryData(queryKey, saved);
     },
     onError: async (error: unknown) => {
       if (error instanceof ApiError && error.problem.status === 409) {
+        setForbiddenError(null);
         setConflictMessage(
           'This config was updated by someone else. Showing the latest value — review and save again.',
         );
         await queryClient.invalidateQueries({ queryKey });
         return;
       }
+      if (error instanceof ApiError && error.problem.status === 403) {
+        setFormError(null);
+        setForbiddenError(error);
+        return;
+      }
       if (error instanceof ApiError) {
+        setForbiddenError(null);
         setFormError(error.problem.detail ?? error.problem.title);
         return;
       }
+      setForbiddenError(null);
       setFormError('Could not save. Try again.');
     },
   });
@@ -67,6 +78,7 @@ export function JsonConfigEditor({
   function handleSubmit(event: FormEvent) {
     event.preventDefault();
     setFormError(null);
+    setForbiddenError(null);
     let parsed: unknown;
     try {
       parsed = JSON.parse(draft);
@@ -95,7 +107,9 @@ export function JsonConfigEditor({
       {configQuery.isLoading ? (
         <p>Loading {label}…</p>
       ) : configQuery.error ? (
-        <p role="alert">Unable to load {label}.</p>
+        <ApiForbiddenGate error={configQuery.error} embedded>
+          <p role="alert">Unable to load {label}.</p>
+        </ApiForbiddenGate>
       ) : (
         <form
           onSubmit={handleSubmit}
@@ -120,6 +134,11 @@ export function JsonConfigEditor({
               }}
             />
           </label>
+          {forbiddenError ? (
+            <ApiForbiddenGate error={forbiddenError} embedded>
+              <p role="alert">Could not save {label}.</p>
+            </ApiForbiddenGate>
+          ) : null}
           {formError ? (
             <p role="alert" aria-live="assertive">
               {formError}

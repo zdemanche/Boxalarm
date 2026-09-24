@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { useAuth } from '../../auth/AuthContext';
+import { ApiError } from '../../lib/apiClient';
 import { ApiForbiddenGate } from '../../components/ApiForbiddenGate';
 import { startExport, getExportStatus } from './api';
 
@@ -10,14 +11,24 @@ export function ExportSection() {
   const auth = useAuth();
   const [jobId, setJobId] = useState<string | null>(null);
   const [startError, setStartError] = useState<string | null>(null);
+  const [startForbidden, setStartForbidden] = useState<unknown>(null);
 
   const startMutation = useMutation({
     mutationFn: () => startExport(auth),
     onSuccess: (result) => {
       setStartError(null);
+      setStartForbidden(null);
       setJobId(result.jobId);
     },
-    onError: () => setStartError('Could not start the export. Try again.'),
+    onError: (error: unknown) => {
+      if (error instanceof ApiError && error.problem.status === 403) {
+        setStartError(null);
+        setStartForbidden(error);
+        return;
+      }
+      setStartForbidden(null);
+      setStartError('Could not start the export. Try again.');
+    },
   });
 
   const statusQuery = useQuery({
@@ -54,6 +65,11 @@ export function ExportSection() {
       >
         Export department data
       </button>
+      {startForbidden ? (
+        <ApiForbiddenGate error={startForbidden} embedded>
+          <p role="alert">Could not start the export.</p>
+        </ApiForbiddenGate>
+      ) : null}
       {startError ? (
         <p role="alert" aria-live="assertive">
           {startError}

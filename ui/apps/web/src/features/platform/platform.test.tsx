@@ -194,6 +194,174 @@ test('audit log lookup renders a readable diff; a 400 shows detail next to the i
   });
 });
 
+/** Default MSW handlers so /settings can render (all config GETs empty + a stored retention
+ * config), reused by the 403 no-leak tests below. */
+function settingsDefaultHandlers() {
+  return [
+    http.get('/api/v1/platform/config/STATIONS', () =>
+      HttpResponse.json(
+        { type: 'about:blank', title: 'Not Found', status: 404, traceId: 't1' },
+        { status: 404 },
+      ),
+    ),
+    http.get('/api/v1/platform/config/RANKS', () =>
+      HttpResponse.json(
+        { type: 'about:blank', title: 'Not Found', status: 404, traceId: 't1' },
+        { status: 404 },
+      ),
+    ),
+    http.get('/api/v1/platform/config/LOSAP_POINT_RULES', () =>
+      HttpResponse.json(
+        { type: 'about:blank', title: 'Not Found', status: 404, traceId: 't1' },
+        { status: 404 },
+      ),
+    ),
+    http.get('/api/v1/platform/config/ALERT_RULES', () =>
+      HttpResponse.json(
+        { type: 'about:blank', title: 'Not Found', status: 404, traceId: 't1' },
+        { status: 404 },
+      ),
+    ),
+    http.get('/api/v1/platform/config/CHECKLIST_DEFAULTS', () =>
+      HttpResponse.json(
+        { type: 'about:blank', title: 'Not Found', status: 404, traceId: 't1' },
+        { status: 404 },
+      ),
+    ),
+    http.get('/api/v1/platform/retention', () =>
+      HttpResponse.json({ retentionYears: 7, version: 1, source: 'stored' }),
+    ),
+  ];
+}
+
+const SECRET_CEDAR_DETAIL = 'caller is not a CHIEF or ADMIN';
+
+test('a 403 saving a config shows a generic message, not the raw server detail', async () => {
+  server.use(
+    ...settingsDefaultHandlers(),
+    http.put('/api/v1/platform/config/ALERT_RULES', () =>
+      HttpResponse.json(
+        {
+          type: 'about:blank',
+          title: 'Forbidden',
+          status: 403,
+          detail: SECRET_CEDAR_DETAIL,
+          traceId: 't3',
+        },
+        { status: 403 },
+      ),
+    ),
+  );
+
+  const user = userEvent.setup();
+  renderRoute(['ADMIN'], '/settings');
+  const textarea = await screen.findByLabelText('Alert rule timing (JSON)');
+  fireEvent.change(textarea, { target: { value: '{"escalationThresholdN":90}' } });
+  await user.click(screen.getByRole('button', { name: 'Save Alert rule timing' }));
+
+  await waitFor(() => {
+    expect(screen.getByText('You do not have access to this page.')).toBeTruthy();
+  });
+  expect(screen.queryByText(SECRET_CEDAR_DETAIL)).toBeNull();
+  expect(document.body.textContent).not.toContain(SECRET_CEDAR_DETAIL);
+});
+
+test('a 403 running disposal shows a generic message, not the raw server detail', async () => {
+  server.use(
+    ...settingsDefaultHandlers(),
+    http.post('/api/v1/platform/retention/disposal', () =>
+      HttpResponse.json(
+        {
+          type: 'about:blank',
+          title: 'Forbidden',
+          status: 403,
+          detail: SECRET_CEDAR_DETAIL,
+          traceId: 't4',
+        },
+        { status: 403 },
+      ),
+    ),
+  );
+
+  const user = userEvent.setup();
+  renderRoute(['ADMIN'], '/settings');
+  await user.click(await screen.findByRole('button', { name: 'Run disposal' }));
+
+  await waitFor(() => {
+    expect(screen.getByText('You do not have access to this page.')).toBeTruthy();
+  });
+  expect(screen.queryByText(SECRET_CEDAR_DETAIL)).toBeNull();
+  expect(document.body.textContent).not.toContain(SECRET_CEDAR_DETAIL);
+});
+
+test('a 403 starting an export shows a generic message, not the raw server detail', async () => {
+  server.use(
+    ...settingsDefaultHandlers(),
+    http.post('/api/v1/platform/export', () =>
+      HttpResponse.json(
+        {
+          type: 'about:blank',
+          title: 'Forbidden',
+          status: 403,
+          detail: SECRET_CEDAR_DETAIL,
+          traceId: 't5',
+        },
+        { status: 403 },
+      ),
+    ),
+  );
+
+  const user = userEvent.setup();
+  renderRoute(['ADMIN'], '/settings');
+  await user.click(await screen.findByRole('button', { name: 'Export department data' }));
+
+  await waitFor(() => {
+    expect(screen.getByText('You do not have access to this page.')).toBeTruthy();
+  });
+  expect(screen.queryByText(SECRET_CEDAR_DETAIL)).toBeNull();
+  expect(document.body.textContent).not.toContain(SECRET_CEDAR_DETAIL);
+});
+
+test('a 403 revoking sessions shows a generic message, not the raw server detail', async () => {
+  const member: Member = {
+    memberId: 'm1',
+    firstName: 'Sam',
+    lastName: 'Lee',
+    email: 'sam@example.com',
+    phone: '203-555-0199',
+    status: 'ACTIVE',
+    joinDate: '2020-01-01',
+    rank: 'Lt',
+    agencyId: 'NFD-1',
+  };
+  server.use(
+    http.get('/api/v1/personnel/members/m1', () => HttpResponse.json(member)),
+    http.post('/api/v1/platform/sessions/revoke', () =>
+      HttpResponse.json(
+        {
+          type: 'about:blank',
+          title: 'Forbidden',
+          status: 403,
+          detail: SECRET_CEDAR_DETAIL,
+          traceId: 't6',
+        },
+        { status: 403 },
+      ),
+    ),
+  );
+
+  const user = userEvent.setup();
+  renderRoute(['ADMIN'], '/personnel/m1');
+  await screen.findByRole('heading', { name: 'Sam Lee' });
+  await user.click(screen.getByRole('button', { name: 'Revoke all sessions (lost device)' }));
+
+  await waitFor(() => {
+    expect(screen.getByText('You do not have access to this page.')).toBeTruthy();
+  });
+  expect(screen.queryByText(SECRET_CEDAR_DETAIL)).toBeNull();
+  expect(document.body.textContent).not.toContain(SECRET_CEDAR_DETAIL);
+});
+
 test('resubmitting the same audit lookup refreshes the results table', async () => {
   let calls = 0;
   server.use(

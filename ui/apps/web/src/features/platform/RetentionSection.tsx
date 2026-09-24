@@ -2,6 +2,7 @@ import { useEffect, useState, type FormEvent } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useAuth } from '../../auth/AuthContext';
 import { ApiError } from '../../lib/apiClient';
+import { ApiForbiddenGate } from '../../components/ApiForbiddenGate';
 import { getRetentionConfig, putRetentionConfig, runDisposal } from './api';
 import { LIFE_SAFETY_RECORD_CLASSES, type DisposalResult } from './types';
 
@@ -18,8 +19,10 @@ export function RetentionSection() {
 
   const [years, setYears] = useState('');
   const [formError, setFormError] = useState<string | null>(null);
+  const [formForbidden, setFormForbidden] = useState<unknown>(null);
   const [disposalResult, setDisposalResult] = useState<DisposalResult | null>(null);
   const [disposalError, setDisposalError] = useState<string | null>(null);
+  const [disposalForbidden, setDisposalForbidden] = useState<unknown>(null);
 
   useEffect(() => {
     if (retentionQuery.data) {
@@ -31,14 +34,22 @@ export function RetentionSection() {
     mutationFn: (retentionYears: number) => putRetentionConfig(auth, retentionYears),
     onSuccess: async () => {
       setFormError(null);
+      setFormForbidden(null);
       await queryClient.invalidateQueries({ queryKey: RETENTION_QUERY_KEY });
     },
     onError: async (error: unknown) => {
       if (error instanceof ApiError && error.problem.status === 409) {
+        setFormForbidden(null);
         setFormError('Retention was updated concurrently. Showing the latest value.');
         await queryClient.invalidateQueries({ queryKey: RETENTION_QUERY_KEY });
         return;
       }
+      if (error instanceof ApiError && error.problem.status === 403) {
+        setFormError(null);
+        setFormForbidden(error);
+        return;
+      }
+      setFormForbidden(null);
       setFormError('Could not save the retention period.');
     },
   });
@@ -47,13 +58,23 @@ export function RetentionSection() {
     mutationFn: () => runDisposal(auth),
     onSuccess: (result) => {
       setDisposalError(null);
+      setDisposalForbidden(null);
       setDisposalResult(result);
     },
-    onError: () => setDisposalError('Disposal could not be run. Try again.'),
+    onError: (error: unknown) => {
+      if (error instanceof ApiError && error.problem.status === 403) {
+        setDisposalError(null);
+        setDisposalForbidden(error);
+        return;
+      }
+      setDisposalForbidden(null);
+      setDisposalError('Disposal could not be run. Try again.');
+    },
   });
 
   function handleSubmit(event: FormEvent) {
     event.preventDefault();
+    setFormForbidden(null);
     const parsed = Number(years);
     if (!Number.isInteger(parsed) || parsed < 1) {
       setFormError('Retention period must be a positive whole number of years.');
@@ -99,6 +120,11 @@ export function RetentionSection() {
               style={{ minHeight: 44, padding: '0 12px' }}
             />
           </label>
+          {formForbidden ? (
+            <ApiForbiddenGate error={formForbidden} embedded>
+              <p role="alert">Could not save the retention period.</p>
+            </ApiForbiddenGate>
+          ) : null}
           {formError ? (
             <p role="alert" aria-live="assertive">
               {formError}
@@ -136,6 +162,11 @@ export function RetentionSection() {
       >
         Run disposal
       </button>
+      {disposalForbidden ? (
+        <ApiForbiddenGate error={disposalForbidden} embedded>
+          <p role="alert">Disposal could not be run.</p>
+        </ApiForbiddenGate>
+      ) : null}
       {disposalError ? (
         <p role="alert" aria-live="assertive">
           {disposalError}

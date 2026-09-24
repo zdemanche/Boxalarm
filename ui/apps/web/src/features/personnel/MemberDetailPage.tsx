@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useParams } from 'react-router-dom';
 import { useAuth } from '../../auth/AuthContext';
+import { ApiError } from '../../lib/apiClient';
 import { ApiForbiddenGate } from '../../components/ApiForbiddenGate';
 import { revokeMemberSessions } from '../platform/api';
 import { getMember, updateMemberStatus } from './api';
@@ -16,15 +17,25 @@ export function MemberDetailPage() {
   const isAdmin = auth.roles.includes('ADMIN');
   const canRevokeSessions = auth.roles.includes('ADMIN') || auth.roles.includes('CHIEF');
   const [revokeError, setRevokeError] = useState<string | null>(null);
+  const [revokeForbidden, setRevokeForbidden] = useState<unknown>(null);
   const [revoked, setRevoked] = useState(false);
 
   const revokeMutation = useMutation({
     mutationFn: () => revokeMemberSessions(auth, id),
     onSuccess: () => {
       setRevokeError(null);
+      setRevokeForbidden(null);
       setRevoked(true);
     },
-    onError: () => setRevokeError('Could not revoke this member’s sessions. Try again.'),
+    onError: (error: unknown) => {
+      if (error instanceof ApiError && error.problem.status === 403) {
+        setRevokeError(null);
+        setRevokeForbidden(error);
+        return;
+      }
+      setRevokeForbidden(null);
+      setRevokeError('Could not revoke this member’s sessions. Try again.');
+    },
   });
 
   function handleRevoke() {
@@ -129,6 +140,11 @@ export function MemberDetailPage() {
               >
                 Revoke all sessions (lost device)
               </button>
+              {revokeForbidden ? (
+                <ApiForbiddenGate error={revokeForbidden} embedded>
+                  <p role="alert">Could not revoke this member’s sessions.</p>
+                </ApiForbiddenGate>
+              ) : null}
               {revokeError ? (
                 <p role="alert" aria-live="assertive">
                   {revokeError}
