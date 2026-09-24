@@ -41,7 +41,7 @@ beforeEach(() => {
 
 test('a re-render with unchanged inputs does not refire the fetch effect (regression for the infinite-loop bug)', async () => {
   mockApiRequest.mockResolvedValue({
-    json: async () => ({ items: [] }),
+    json: async () => ({ apparatus: [] }),
   });
 
   // Mirrors ApparatusPickerScreen's own pattern: useChecksRepository() feeding a

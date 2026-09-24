@@ -35,7 +35,53 @@ test('submitting a defect report calls submitDefect with the entered description
     apparatusId: 'APP-ENGINE-2',
     description: 'Low tire pressure, rear axle',
     severity: 'MAJOR',
+    idempotencyKey: expect.any(String),
   });
+  submitSpy.mockRestore();
+});
+
+test('a failed submission does not show the confirmation and surfaces an error instead', async () => {
+  const submitSpy = jest
+    .spyOn(mockChecksRepository, 'submitDefect')
+    .mockRejectedValueOnce(new Error('Network request failed'));
+  const { findByText, findByPlaceholderText, queryByText } = await render(<DefectReportScreen />);
+
+  await act(async () => {
+    fireEvent.changeText(await findByPlaceholderText('Describe the defect'), 'Brake noise');
+  });
+  await act(async () => {
+    fireEvent.press(await findByText('Submit defect report'));
+  });
+
+  expect(await findByText('Network request failed')).toBeTruthy();
+  expect(queryByText('Defect reported')).toBeNull();
+  submitSpy.mockRestore();
+});
+
+test('a retry after a failure reuses the same idempotency key, so a resent report cannot be recorded twice', async () => {
+  const submitSpy = jest
+    .spyOn(mockChecksRepository, 'submitDefect')
+    .mockRejectedValueOnce(new Error('Network request failed'))
+    .mockResolvedValueOnce(undefined);
+  const { findByText, findByPlaceholderText } = await render(<DefectReportScreen />);
+
+  await act(async () => {
+    fireEvent.changeText(await findByPlaceholderText('Describe the defect'), 'Brake noise');
+  });
+  await act(async () => {
+    fireEvent.press(await findByText('Submit defect report'));
+  });
+  await findByText('Network request failed');
+  await act(async () => {
+    fireEvent.press(await findByText('Submit defect report'));
+  });
+  await findByText('Defect reported');
+
+  expect(submitSpy).toHaveBeenCalledTimes(2);
+  const firstCall = submitSpy.mock.calls[0]?.[0];
+  const secondCall = submitSpy.mock.calls[1]?.[0];
+  expect(firstCall?.idempotencyKey).toEqual(expect.any(String));
+  expect(secondCall?.idempotencyKey).toBe(firstCall?.idempotencyKey);
   submitSpy.mockRestore();
 });
 
@@ -78,4 +124,18 @@ test('the submit button label uses the cab palette token, not a hardcoded color,
   const label = await findByText('Submit defect report');
 
   expect(label.props.style.color).toBe(palette.cab.background);
+});
+
+test('selecting out-of-service severity shows the OOS consequence without a separate step', async () => {
+  const { findByText, queryByText } = await render(<DefectReportScreen />);
+
+  expect(queryByText(/takes the unit out of service/i)).toBeNull();
+
+  await act(async () => {
+    fireEvent.press(await findByText('Out of service'));
+  });
+
+  expect(
+    await findByText('This takes the unit out of service and alerts the apparatus officer.'),
+  ).toBeTruthy();
 });

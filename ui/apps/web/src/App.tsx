@@ -27,6 +27,9 @@ const ApparatusDetailPage = lazy(() =>
     default: mod.ApparatusDetailPage,
   })),
 );
+const CompliancePage = lazy(() =>
+  import('./features/apparatus/CompliancePage').then((mod) => ({ default: mod.CompliancePage })),
+);
 const PersonnelListPage = lazy(() =>
   import('./features/personnel/PersonnelListPage').then((mod) => ({
     default: mod.PersonnelListPage,
@@ -124,6 +127,7 @@ export function App() {
                   <Route path="certifications" element={roleGuarded(<CertificationsPage />)} />
                   <Route path="training/events" element={roleGuarded(<TrainingEventsPage />)} />
                   <Route path="apparatus" element={roleGuarded(<ApparatusListPage />)} />
+                  <Route path="apparatus/compliance" element={roleGuarded(<CompliancePage />)} />
                   <Route path="apparatus/:id" element={roleGuarded(<ApparatusDetailPage />)} />
                   <Route path="schedule" element={placeholder('Schedule')} />
                   <Route path="reporting" element={placeholder('Reporting')} />

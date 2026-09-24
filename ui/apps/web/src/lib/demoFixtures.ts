@@ -1,4 +1,4 @@
-import type { Apparatus, CreateApparatusInput } from '../features/apparatus/types';
+import { apparatusDemoRequest } from '../features/apparatus/demoFixtures';
 import type { CreateMemberInput, Member, MemberStatus } from '../features/personnel/types';
 import type {
   AuditEntry,
@@ -69,17 +69,6 @@ let members: Member[] = [
   },
 ];
 
-// Demo/seed data only — Nichols FD's actual fleet. Never hardcode these names, or the count of
-// five, in a component, layout, or piece of logic: every department has its own apparatus, and
-// everything else renders from the per-department apparatus data the API returns.
-let apparatus: Apparatus[] = [
-  { apparatusId: 'a-1', unitId: 'Rescue 300', type: 'Rescue', status: 'IN_SERVICE' },
-  { apparatusId: 'a-2', unitId: 'Engine 301', type: 'Engine', status: 'IN_SERVICE' },
-  { apparatusId: 'a-3', unitId: 'Truck 304', type: 'Truck', status: 'OUT_OF_SERVICE' },
-  { apparatusId: 'a-4', unitId: 'Engine 305', type: 'Engine', status: 'IN_SERVICE' },
-  { apparatusId: 'a-5', unitId: 'Squad 309', type: 'Squad', status: 'IN_SERVICE' },
-];
-
 const configStore = new Map<EditableConfigType, ConfigResponse>([
   [
     'ALERT_RULES',
@@ -131,23 +120,9 @@ export async function demoRequest(
   const trainingResponse = await trainingDemoRequest(path, options);
   if (trainingResponse) return trainingResponse;
 
-  if (path === 'apparatus' && method === 'GET') return json({ items: apparatus });
-
-  if (path === 'apparatus' && method === 'POST') {
-    const input = body as unknown as CreateApparatusInput;
-    const created: Apparatus = {
-      apparatusId: `a-${apparatus.length + 1}`,
-      unitId: input.unitId,
-      type: input.type,
-      status: 'IN_SERVICE',
-    };
-    apparatus = [...apparatus, created];
-    return json(created, 201);
-  }
-
-  if (parts[0] === 'apparatus' && parts.length === 2 && method === 'GET') {
-    const found = apparatus.find((a) => a.apparatusId === decodeURIComponent(parts[1] ?? ''));
-    return found ? json(found) : problem(404, 'Apparatus not found');
+  if (parts[0] === 'apparatus') {
+    const response = await apparatusDemoRequest(path, method, body);
+    if (response) return response;
   }
 
   if (path === 'personnel/members' && method === 'GET') return json({ items: members });

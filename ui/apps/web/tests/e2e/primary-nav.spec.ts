@@ -101,6 +101,7 @@ const ALL_NAV_LABELS = [
   'Personnel',
   'Certifications',
   'Apparatus',
+  'Apparatus compliance',
   'Schedule',
   'Reporting',
   'Settings',

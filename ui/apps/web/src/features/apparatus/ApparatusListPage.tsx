@@ -14,6 +14,12 @@ import type { Apparatus, CreateApparatusInput } from './types';
 
 const emptyForm: CreateApparatusInput = { unitId: '', type: '' };
 
+function formatElapsed(elapsedSeconds: number): string {
+  const days = Math.floor(elapsedSeconds / 86400);
+  if (days <= 0) return 'today';
+  return `${days} day${days === 1 ? '' : 's'}`;
+}
+
 export function ApparatusListPage() {
   const auth = useAuth();
   const queryClient = useQueryClient();
@@ -65,9 +71,16 @@ export function ApparatusListPage() {
       header: 'Status',
       sortValue: (u) => u.status,
       render: (u) => (
-        <StatusChip status={u.status === 'IN_SERVICE' ? 'ok' : 'danger'}>
-          {u.status === 'IN_SERVICE' ? 'In service' : 'Out of service'}
-        </StatusChip>
+        <>
+          <StatusChip status={u.status === 'IN_SERVICE' ? 'ok' : 'danger'}>
+            {u.status === 'IN_SERVICE' ? 'In service' : 'Out of service'}
+          </StatusChip>
+          {u.status === 'OUT_OF_SERVICE' && u.outOfService ? (
+            <span style={{ display: 'block', fontSize: 12, marginTop: 2 }}>
+              {u.outOfService.reason} — {formatElapsed(u.outOfService.elapsedSeconds)}
+            </span>
+          ) : null}
+        </>
       ),
     },
   ];

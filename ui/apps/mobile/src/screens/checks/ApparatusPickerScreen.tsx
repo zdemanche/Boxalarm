@@ -80,7 +80,7 @@ export function ApparatusPickerScreen() {
             <TouchableOpacity
               accessibilityRole="button"
               disabled={!inService}
-              onPress={() => navigation.navigate('CheckRunner', { apparatusId: item.apparatusId })}
+              onPress={() => navigation.navigate('CheckRunner', { apparatusId: item.unitId })}
               style={{
                 minHeight: touchTarget.baseline.ios,
                 justifyContent: 'center',
