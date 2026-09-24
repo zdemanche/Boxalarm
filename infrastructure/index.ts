@@ -391,7 +391,6 @@ export const alertingCanary = new AlertingCanary("alerting-canary", {
   pageTopicArn: alertingAlarms.pageTopic.arn,
   logGroup: alertingLogGroup,
   permissionsBoundaryArn: alertingBoundaryArn,
->>>>>>> origin/main
 });
 
 // Stack outputs for boxalarm-ui / later children.
