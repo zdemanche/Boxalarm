@@ -38,9 +38,37 @@ interface FakeItem {
   [key: string]: unknown;
 }
 
+function applyMetadataUpdate(
+  items: Map<string, FakeItem>,
+  update: {
+    Key: { pk: string; sk: string };
+    ExpressionAttributeValues: Record<string, unknown>;
+  },
+): void {
+  const key = `${update.Key.pk}#${update.Key.sk}`;
+  const existing = items.get(key) ?? { pk: update.Key.pk, sk: update.Key.sk };
+  items.set(key, {
+    ...existing,
+    currentToneSequence: update.ExpressionAttributeValues[':tone'],
+    toneLadderStatus: update.ExpressionAttributeValues[':status'],
+  });
+}
+
+function publishedMemberIds(sns: { send: ReturnType<typeof vi.fn> }): string[] {
+  return sns.send.mock.calls.map((call) => {
+    const message = JSON.parse((call[0] as { input: { Message: string } }).input.Message) as {
+      payload: { memberId: string };
+    };
+    return message.payload.memberId;
+  });
+}
+
 function createFakeDdb(
   seed: readonly FakeItem[],
-  options: { readonly failReceiptForMemberId?: string } = {},
+  options: {
+    readonly failReceiptForMemberId?: string;
+    readonly failReceiptTimes?: number;
+  } = {},
 ): {
   send: DynamoDBDocumentClient['send'];
   sns: { send: ReturnType<typeof vi.fn> };
@@ -50,6 +78,10 @@ function createFakeDdb(
   for (const item of seed) {
     items.set(`${item.pk}#${item.sk}`, item);
   }
+  let remainingReceiptFailures =
+    options.failReceiptForMemberId === undefined
+      ? 0
+      : (options.failReceiptTimes ?? Number.POSITIVE_INFINITY);
   const sns = { send: vi.fn().mockResolvedValue({}) };
   const send = vi.fn((command: unknown) => {
     const name = (command as { constructor: { name: string } }).constructor.name;
@@ -72,10 +104,11 @@ function createFakeDdb(
       const put = input as { Item: FakeItem; ConditionExpression?: string };
       const key = `${put.Item.pk}#${put.Item.sk}`;
       if (
-        options.failReceiptForMemberId &&
+        remainingReceiptFailures > 0 &&
         put.Item.entityType === 'DELIVERY_RECEIPT' &&
         put.Item.memberId === options.failReceiptForMemberId
       ) {
+        remainingReceiptFailures -= 1;
         throw new Error('ddb unavailable');
       }
       if (put.ConditionExpression && items.has(key)) {
@@ -87,17 +120,13 @@ function createFakeDdb(
       return Promise.resolve({});
     }
     if (name === 'UpdateCommand') {
-      const update = input as {
-        Key: { pk: string; sk: string };
-        ExpressionAttributeValues: Record<string, unknown>;
-      };
-      const key = `${update.Key.pk}#${update.Key.sk}`;
-      const existing = items.get(key) ?? { pk: update.Key.pk, sk: update.Key.sk };
-      items.set(key, {
-        ...existing,
-        currentToneSequence: update.ExpressionAttributeValues[':tone'],
-        toneLadderStatus: update.ExpressionAttributeValues[':status'],
-      });
+      applyMetadataUpdate(
+        items,
+        input as {
+          Key: { pk: string; sk: string };
+          ExpressionAttributeValues: Record<string, unknown>;
+        },
+      );
       return Promise.resolve({});
     }
     if (name === 'TransactWriteCommand') {
@@ -118,6 +147,15 @@ function createFakeDdb(
         if (txItem.Put) {
           const put = txItem.Put as { Item: FakeItem };
           items.set(`${put.Item.pk}#${put.Item.sk}`, put.Item);
+        }
+        if (txItem.Update) {
+          applyMetadataUpdate(
+            items,
+            txItem.Update as {
+              Key: { pk: string; sk: string };
+              ExpressionAttributeValues: Record<string, unknown>;
+            },
+          );
         }
       }
       return Promise.resolve({});
@@ -287,8 +325,68 @@ describe('toneEvaluatorHandler', () => {
     expect(items.get(`${PK}#RECEIPT#mbr-1#push#2`)).toBeDefined();
     expect(items.get(`${PK}#RECEIPT#mbr-fail#push#2`)).toBeUndefined();
     // The tone must not be marked fired/advanced when a member's page failed to send.
+    expect(items.get(`${PK}#TONE#2`)).toBeUndefined();
     expect(items.get(`${PK}#METADATA`)?.currentToneSequence).toBe(1);
     expect(items.get(`${PK}#METADATA`)?.toneLadderStatus).toBe('ACTIVE');
+  });
+
+  it('retries fireTone after a thrown first evaluation and pages remaining members', async () => {
+    const failingMember: FakeItem = {
+      pk: ELIGIBILITY_PK,
+      sk: 'MEMBER#mbr-fail',
+      entityType: 'MEMBER_ELIGIBILITY_SNAPSHOT',
+      memberId: 'mbr-fail',
+      active: true,
+      quals: [],
+      roles: [],
+      contactChannels: [{ channel: 'PUSH', token: 'tok', platform: 'ios', valid: true }],
+      availabilityState: 'AVAILABLE',
+      snapshotUpdatedAt: 0,
+    };
+    const { send, sns, items } = createFakeDdb([METADATA_ITEM, ELIGIBLE_MEMBER, failingMember], {
+      failReceiptForMemberId: 'mbr-fail',
+      failReceiptTimes: 1,
+    });
+    const { createDynamoClient } = await import('../eligibility/dynamoClient.js');
+    const { createSnsClient } = await import('../fanout/snsClient.js');
+    vi.mocked(createDynamoClient).mockReturnValue({ send } as unknown as DynamoDBDocumentClient);
+    vi.mocked(createSnsClient).mockReturnValue(sns as never);
+
+    const { handler } = await import('./toneEvaluatorHandler.js');
+    const payload = { deptId: 'NICHOLS', dispatchId: 'dispatch-1', toneSequence: 2 };
+
+    await expect(handler(payload)).rejects.toThrow('ddb unavailable');
+    expect(items.get(`${PK}#TONE#2`)).toBeUndefined();
+    expect(items.get(`${PK}#RECEIPT#mbr-1#push#2`)).toBeDefined();
+    expect(items.get(`${PK}#RECEIPT#mbr-fail#push#2`)).toBeUndefined();
+    expect(items.get(`${PK}#METADATA`)?.currentToneSequence).toBe(1);
+
+    const retry = await handler(payload);
+
+    expect(retry).toEqual({ outcome: 'FIRED' });
+    expect(items.get(`${PK}#RECEIPT#mbr-fail#push#2`)).toBeDefined();
+    expect(items.get(`${PK}#TONE#2`)).toBeDefined();
+    expect(items.get(`${PK}#METADATA`)?.currentToneSequence).toBe(2);
+    expect(publishedMemberIds(sns)).toEqual(['mbr-1', 'mbr-fail']);
+  });
+
+  it('returns SKIPPED_ALREADY_FIRED on a second successful evaluation of the same tone', async () => {
+    const { send, sns, items } = createFakeDdb([METADATA_ITEM, ELIGIBLE_MEMBER]);
+    const { createDynamoClient } = await import('../eligibility/dynamoClient.js');
+    const { createSnsClient } = await import('../fanout/snsClient.js');
+    vi.mocked(createDynamoClient).mockReturnValue({ send } as unknown as DynamoDBDocumentClient);
+    vi.mocked(createSnsClient).mockReturnValue(sns as never);
+
+    const { handler } = await import('./toneEvaluatorHandler.js');
+    const payload = { deptId: 'NICHOLS', dispatchId: 'dispatch-1', toneSequence: 2 };
+
+    await expect(handler(payload)).resolves.toEqual({ outcome: 'FIRED' });
+    expect(sns.send).toHaveBeenCalledTimes(1);
+    expect(items.get(`${PK}#TONE#2`)).toBeDefined();
+
+    await expect(handler(payload)).resolves.toEqual({ outcome: 'SKIPPED_ALREADY_FIRED' });
+    expect(sns.send).toHaveBeenCalledTimes(1);
+    expect(publishedMemberIds(sns)).toEqual(['mbr-1']);
   });
 
   it('does not evaluate a manually halted dispatch', async () => {
