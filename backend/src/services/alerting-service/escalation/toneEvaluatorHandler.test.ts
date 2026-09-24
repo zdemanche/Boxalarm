@@ -186,6 +186,18 @@ describe('toneEvaluatorHandler', () => {
     expect(publishedMessage.payload.toneSequence).toBe(2);
     expect(items.get(`${PK}#TONE#2`)).toBeDefined();
     expect(items.get(`${PK}#METADATA`)?.currentToneSequence).toBe(2);
+
+    const outboxEntry = [...items.values()].find((item) => item.entityType === 'OUTBOX_ENTRY');
+    expect(outboxEntry).toMatchObject({
+      eventType: 'alerting.tone.escalated',
+      source: 'alerting-service',
+      payload: {
+        dispatchId: 'dispatch-1',
+        toneSequence: 2,
+        outcome: 'FIRED',
+        eligibleMemberCount: 0,
+      },
+    });
   });
 
   it('does not re-fire a tone that already ran (at-least-once Scheduler delivery)', async () => {

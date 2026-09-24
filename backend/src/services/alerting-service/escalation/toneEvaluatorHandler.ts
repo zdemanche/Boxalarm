@@ -7,6 +7,7 @@ import {
   type DynamoDBDocumentClient,
 } from '@aws-sdk/lib-dynamodb';
 import { buildDeptScopedPk, toVerifiedDeptId, type VerifiedDeptId } from '@boxalarm/dept-scope';
+import { buildOutboxRecord } from '@boxalarm/outbox';
 import { emitOutcomeMetric } from '@boxalarm/metrics';
 import { createDynamoClient, readAlertingConfig } from '../eligibility/dynamoClient.js';
 import { buildAlertingEnvelope } from './alertingEnvelope.js';
@@ -303,6 +304,14 @@ export const handler = async (payload: unknown): Promise<{ outcome: ToneOutcome 
   const predicateMet = isPredicateMet(roster, toneConfig);
   const outcome: ToneOutcome = predicateMet ? 'SKIPPED_PREDICATE_MET' : 'FIRED';
   const evaluatedAt = Math.floor(Date.now() / 1000);
+  const respondingCount = roster.filter(
+    (entry) => entry.ackStatus === 'RESPONDING' || entry.ackStatus === 'DIRECT_TO_SCENE',
+  ).length;
+  const predicateSnapshot = {
+    minResponders: toneConfig.minResponders,
+    requiredQuals: toneConfig.requiredQuals,
+    respondingCount,
+  };
 
   try {
     await ddb.send(
@@ -335,6 +344,25 @@ export const handler = async (payload: unknown): Promise<{ outcome: ToneOutcome 
                 outcome,
                 eligibleMemberCount: roster.length,
               },
+            },
+          },
+          {
+            Put: {
+              TableName: tableName,
+              Item: buildOutboxRecord(
+                deptId,
+                'alerting-service',
+                'alerting.tone.escalated',
+                correlationId,
+                {
+                  dispatchId,
+                  toneSequence,
+                  firedAt: evaluatedAt,
+                  outcome,
+                  predicateSnapshot,
+                  eligibleMemberCount: roster.length,
+                },
+              ),
             },
           },
         ],
