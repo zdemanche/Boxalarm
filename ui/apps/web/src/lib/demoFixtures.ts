@@ -29,6 +29,9 @@ import type {
   ExportStatus,
   RetentionConfig,
 } from '../features/platform/types';
+import { tryHandleLosapExtras } from '../features/losap/demoFixtures';
+import { tryHandlePersonnelExtras } from '../features/personnel/demoFixtures';
+import { tryHandleScheduleExtras } from '../features/schedule/demoFixtures';
 import type { ApiRequestOptions, ProblemDetails } from './apiClient';
 import { trainingDemoRequest } from './trainingDemoFixtures';
 
@@ -635,6 +638,12 @@ export async function demoRequest(
     inspections = [...inspections, created];
     return json(created, 201);
   }
+
+  const extras =
+    tryHandleScheduleExtras(parts, method, body) ??
+    tryHandlePersonnelExtras(parts, method, body) ??
+    tryHandleLosapExtras(parts, method, body);
+  if (extras) return extras;
 
   return problem(404, 'Not found');
 }

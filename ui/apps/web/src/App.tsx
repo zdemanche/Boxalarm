@@ -85,6 +85,14 @@ const InspectionsPage = lazy(() =>
 const MapPage = lazy(() =>
   import('./features/inspections/MapPage').then((mod) => ({ default: mod.MapPage })),
 );
+const SchedulePage = lazy(() =>
+  import('./features/schedule/SchedulePage').then((mod) => ({ default: mod.SchedulePage })),
+);
+const LosapSettingsPage = lazy(() =>
+  import('./features/losap/LosapSettingsPage').then((mod) => ({
+    default: mod.LosapSettingsPage,
+  })),
+);
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { staleTime: 30_000, retry: 1 } },
@@ -171,9 +179,10 @@ export function App() {
                   <Route path="inspections/hydrants" element={roleGuarded(<HydrantsPage />)} />
                   <Route path="inspections/map" element={roleGuarded(<MapPage />)} />
                   <Route path="inspections" element={roleGuarded(<InspectionsPage />)} />
-                  <Route path="schedule" element={placeholder('Schedule')} />
+                  <Route path="schedule" element={roleGuarded(<SchedulePage />)} />
                   <Route path="reporting" element={placeholder('Reporting')} />
                   <Route path="settings" element={roleGuarded(<SettingsPage />)} />
+                  <Route path="settings/losap" element={roleGuarded(<LosapSettingsPage />)} />
                   <Route path="audit-log" element={roleGuarded(<AuditLogPage />)} />
                 </Route>
                 <Route path="*" element={<Navigate to="/" replace />} />

@@ -3,7 +3,7 @@ import { useNavigation, type NavigationProp } from '@react-navigation/native';
 import { useEffect, useState } from 'react';
 import { FlatList, Text, TouchableOpacity, useColorScheme } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { mockScheduleRepository } from '../../features/schedule/mockScheduleRepository';
+import { useScheduleRepository } from '../../features/schedule/apiScheduleRepository';
 import type { DutyShift, ShiftStatus } from '../../features/schedule/types';
 import type { ScheduleStackParamList } from '../../navigation/ScheduleStack';
 
@@ -22,17 +22,18 @@ export function ShiftBoardScreen() {
   const navigation = useNavigation<NavigationProp<ScheduleStackParamList>>();
   const scheme = useColorScheme();
   const tokens = scheme === 'dark' ? palette.cab : palette.day;
+  const repository = useScheduleRepository();
   const [shifts, setShifts] = useState<DutyShift[]>([]);
 
   useEffect(() => {
     let cancelled = false;
-    mockScheduleRepository.getShifts().then((result) => {
+    repository.getShifts().then((result) => {
       if (!cancelled) setShifts(result);
     });
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [repository]);
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: tokens.background }}>

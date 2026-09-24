@@ -170,6 +170,13 @@ export const APP_ROUTES: readonly AppRoute[] = [
     showInNav: true,
   },
   {
+    path: '/settings/losap',
+    navPath: '/settings',
+    label: 'LOSAP settings',
+    roles: ['ADMIN'],
+    showInNav: false,
+  },
+  {
     path: '/audit-log',
     navPath: '/audit-log',
     label: 'Audit log',

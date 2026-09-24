@@ -4,8 +4,8 @@ import { useEffect, useState } from 'react';
 import { Text, TouchableOpacity, View } from 'react-native';
 import { Button, Screen, useTheme, type SurfaceTheme } from '../../components/ui';
 import { useAuth } from '../../auth/AuthContext';
-import { mockMeRepository } from '../../features/me/mockMeRepository';
-import type { MemberProfile } from '../../features/me/types';
+import { useMeRepository } from '../../features/me/apiMeRepository';
+import type { LosapTotal, MemberProfile, Qualification } from '../../features/me/types';
 
 function NavRow({
   label,
@@ -38,17 +38,26 @@ export function MeHomeScreen() {
   const { signOut } = useAuth();
   const navigation = useNavigation();
   const theme = useTheme();
+  const repository = useMeRepository();
   const [profile, setProfile] = useState<MemberProfile | null>(null);
+  const [quals, setQuals] = useState<Qualification[]>([]);
+  const [losap, setLosap] = useState<LosapTotal | null>(null);
 
   useEffect(() => {
     let cancelled = false;
-    mockMeRepository.getProfile().then((result) => {
+    repository.getProfile().then((result) => {
       if (!cancelled) setProfile(result);
+    });
+    repository.getQualifications().then((result) => {
+      if (!cancelled) setQuals(result);
+    });
+    repository.getLosapTotal().then((result) => {
+      if (!cancelled) setLosap(result);
     });
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [repository]);
 
   return (
     <Screen>
@@ -71,6 +80,36 @@ export function MeHomeScreen() {
           </Text>
         )}
       </View>
+      <NavRow
+        label="Edit profile"
+        theme={theme}
+        onPress={() => navigation.navigate('ProfileEdit' as never)}
+      />
+      <View
+        style={{
+          paddingHorizontal: spacing.lg,
+          paddingVertical: spacing.md,
+          borderBottomWidth: 1,
+          borderBottomColor: theme.borderDecorative,
+        }}
+      >
+        <Text
+          accessibilityRole="header"
+          style={{ color: theme.fg, fontSize: typeScale.body.size, fontWeight: '600' }}
+        >
+          My qualifications
+        </Text>
+        {quals.map((qual) => (
+          <Text key={qual.qualCode} style={{ color: theme.fg, marginTop: spacing.xs }}>
+            {qual.qualCode} — {qual.currentlyEligible ? 'Eligible' : 'Not currently eligible'}
+          </Text>
+        ))}
+      </View>
+      <NavRow
+        label={losap ? `Attendance & LOSAP (${losap.totalPoints} pts this year)` : 'Attendance'}
+        theme={theme}
+        onPress={() => navigation.navigate('Attendance' as never)}
+      />
       <NavRow
         label="Certifications"
         theme={theme}
