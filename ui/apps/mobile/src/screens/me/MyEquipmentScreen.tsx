@@ -1,14 +1,13 @@
-import { palette, spacing, typography } from '@boxalarm/design-tokens';
+import { spacing, typeScale } from '@boxalarm/design-tokens';
 import { useEffect, useState } from 'react';
-import { FlatList, Text, useColorScheme, View } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { FlatList, Text, View } from 'react-native';
+import { Screen, useTheme } from '../../components/ui';
 import { useAuth } from '../../auth/AuthContext';
 import { useInventoryRepository } from '../../features/inventory/apiInventoryRepository';
 import type { EquipmentAsset } from '../../features/inventory/types';
 
 export function MyEquipmentScreen() {
-  const scheme = useColorScheme();
-  const tokens = scheme === 'dark' ? palette.cab : palette.day;
+  const theme = useTheme();
   const repository = useInventoryRepository();
   const { memberId } = useAuth();
   const [equipment, setEquipment] = useState<EquipmentAsset[]>([]);
@@ -25,13 +24,12 @@ export function MyEquipmentScreen() {
   }, [repository, memberId]);
 
   return (
-    <SafeAreaView style={{ flex: 1, backgroundColor: tokens.background }}>
+    <Screen scroll={false}>
       <FlatList
         data={equipment}
         keyExtractor={(item) => item.assetId}
-        contentContainerStyle={{ padding: spacing.lg }}
         ListEmptyComponent={
-          <Text style={{ color: tokens.foreground, fontSize: typography.size.base }}>
+          <Text style={{ color: theme.fg, fontSize: typeScale.body.size }}>
             No equipment assigned to you.
           </Text>
         }
@@ -40,31 +38,18 @@ export function MyEquipmentScreen() {
             style={{
               paddingVertical: spacing.md,
               borderBottomWidth: 1,
-              borderBottomColor: tokens.foreground + '22',
+              borderBottomColor: theme.borderDecorative,
             }}
           >
-            <Text
-              style={{
-                color: tokens.foreground,
-                fontSize: typography.size.base,
-                fontWeight: '600',
-              }}
-            >
+            <Text style={{ color: theme.fg, fontSize: typeScale.body.size, fontWeight: '600' }}>
               {item.serialNumber}
             </Text>
-            <Text
-              style={{
-                color: tokens.foreground,
-                opacity: 0.7,
-                fontSize: typography.size.sm,
-                marginTop: 2,
-              }}
-            >
+            <Text style={{ color: theme.fgMuted, fontSize: typeScale.caption.size, marginTop: 2 }}>
               {item.location} · {item.lifecycleStatus}
             </Text>
           </View>
         )}
       />
-    </SafeAreaView>
+    </Screen>
   );
 }

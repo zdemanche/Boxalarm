@@ -1,8 +1,9 @@
 import { FormEvent, useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useAuth } from '../../auth/AuthContext';
+import { Button, Card, StatusChip, TextInput } from '../../components/ui';
 import { setServiceStatus } from './api';
-import { serviceStatusRole, StatusBadge } from './StatusBadge';
+import { serviceStatusRole } from './StatusBadge';
 import type { ApparatusDetail } from './types';
 
 function formatElapsed(elapsedSeconds: number): string {
@@ -31,12 +32,11 @@ export function ServiceStatusControls({ unit }: { unit: ApparatusDetail }) {
   });
 
   return (
-    <section style={{ marginTop: 'var(--boxalarm-spacing-lg)' }}>
-      <p role="status" style={{ fontSize: 'var(--boxalarm-font-size-lg)' }}>
-        <StatusBadge
-          role={serviceStatusRole(unit.status)}
-          word={unit.status === 'IN_SERVICE' ? 'In service' : 'Out of service'}
-        />
+    <Card title="Service status">
+      <p role="status">
+        <StatusChip status={serviceStatusRole(unit.status)}>
+          {unit.status === 'IN_SERVICE' ? 'In service' : 'Out of service'}
+        </StatusChip>
       </p>
       {unit.status === 'OUT_OF_SERVICE' && unit.outOfService ? (
         <p>
@@ -57,40 +57,28 @@ export function ServiceStatusControls({ unit }: { unit: ApparatusDetail }) {
             }
             mutation.mutate({ status: 'OUT_OF_SERVICE', reason: reason.trim() });
           }}
-          style={{
-            display: 'grid',
-            gap: 'var(--boxalarm-spacing-sm)',
-            maxWidth: 480,
-            marginTop: 'var(--boxalarm-spacing-md)',
-          }}
+          style={{ display: 'grid', gap: 'var(--bx-space-sm)', maxWidth: 480, marginTop: 16 }}
         >
-          <label style={{ display: 'grid', gap: 4 }}>
-            Reason
-            <input
-              value={reason}
-              onChange={(e) => setReason(e.target.value)}
-              required
-              style={{ minHeight: 44, padding: '0 12px' }}
-            />
-          </label>
-          {formError ? (
-            <p role="alert" aria-live="assertive">
-              {formError}
-            </p>
-          ) : null}
-          <button type="submit" style={{ minHeight: 44, maxWidth: 240 }}>
+          <TextInput
+            label="Reason"
+            value={reason}
+            onChange={(e) => setReason(e.target.value)}
+            required
+            error={formError ?? undefined}
+          />
+          <Button type="submit" style={{ maxWidth: 240 }}>
             Place out of service
-          </button>
+          </Button>
         </form>
       ) : (
-        <button
+        <Button
           type="button"
           onClick={() => mutation.mutate({ status: 'IN_SERVICE' })}
-          style={{ minHeight: 44, marginTop: 'var(--boxalarm-spacing-md)' }}
+          style={{ marginTop: 16 }}
         >
           Return to service
-        </button>
+        </Button>
       )}
-    </section>
+    </Card>
   );
 }

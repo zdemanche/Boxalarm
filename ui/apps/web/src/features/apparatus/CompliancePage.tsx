@@ -1,9 +1,17 @@
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { Link } from 'react-router-dom';
 import { useAuth } from '../../auth/AuthContext';
 import { ApiForbiddenGate } from '../../components/ApiForbiddenGate';
+import {
+  DataTable,
+  PageHeader,
+  Skeleton,
+  StatusChip,
+  TextInput,
+  type DataTableColumn,
+} from '../../components/ui';
 import { getCompliance } from './api';
+import type { ComplianceEntry } from './types';
 
 function daysAgo(days: number): string {
   return new Date(Date.now() - days * 86400_000).toISOString().slice(0, 10);
@@ -31,86 +39,57 @@ export function CompliancePage() {
     );
   }
 
-  return (
-    <main id="main-content" style={{ padding: 'var(--boxalarm-spacing-lg)' }}>
-      <p>
-        <Link to="/apparatus">← Apparatus</Link>
-      </p>
-      <h1 style={{ fontSize: 'var(--boxalarm-font-size-xl)', margin: 0 }}>Check compliance</h1>
+  const columns: DataTableColumn<ComplianceEntry>[] = [
+    { key: 'unitId', header: 'Unit', sortValue: (e) => e.unitId, render: (e) => e.unitId },
+    {
+      key: 'expected',
+      header: 'Expected',
+      sortValue: (e) => e.expectedChecks,
+      render: (e) => e.expectedChecks,
+    },
+    {
+      key: 'actual',
+      header: 'Actual',
+      sortValue: (e) => e.actualChecks,
+      render: (e) => e.actualChecks,
+    },
+    {
+      key: 'compliant',
+      header: 'Compliant',
+      sortValue: (e) => (e.compliant ? 1 : 0),
+      render: (e) => (
+        <StatusChip status={e.compliant ? 'ok' : 'danger'}>{e.compliant ? 'Yes' : 'No'}</StatusChip>
+      ),
+    },
+  ];
 
-      <div
-        style={{
-          display: 'flex',
-          gap: 'var(--boxalarm-spacing-md)',
-          marginTop: 'var(--boxalarm-spacing-md)',
-        }}
-      >
-        <label style={{ display: 'grid', gap: 4 }}>
-          From
-          <input
-            type="date"
-            value={from}
-            onChange={(e) => setFrom(e.target.value)}
-            style={{ minHeight: 44, padding: '0 12px' }}
-          />
-        </label>
-        <label style={{ display: 'grid', gap: 4 }}>
-          To
-          <input
-            type="date"
-            value={to}
-            onChange={(e) => setTo(e.target.value)}
-            style={{ minHeight: 44, padding: '0 12px' }}
-          />
-        </label>
+  return (
+    <main id="main-content">
+      <PageHeader
+        title="Check compliance"
+        breadcrumbs={[{ label: 'Apparatus', to: '/apparatus' }, { label: 'Compliance' }]}
+      />
+
+      <div style={{ display: 'flex', gap: 'var(--bx-space-md)' }}>
+        <TextInput
+          label="From"
+          type="date"
+          value={from}
+          onChange={(e) => setFrom(e.target.value)}
+        />
+        <TextInput label="To" type="date" value={to} onChange={(e) => setTo(e.target.value)} />
       </div>
 
       {query.isLoading ? (
-        <p>Loading compliance report…</p>
+        <Skeleton lines={4} />
       ) : (
-        <table
-          style={{
-            width: '100%',
-            marginTop: 'var(--boxalarm-spacing-lg)',
-            borderCollapse: 'collapse',
-          }}
-        >
-          <thead>
-            <tr>
-              <th scope="col" style={{ textAlign: 'left' }}>
-                Unit
-              </th>
-              <th scope="col" style={{ textAlign: 'left' }}>
-                Expected
-              </th>
-              <th scope="col" style={{ textAlign: 'left' }}>
-                Actual
-              </th>
-              <th scope="col" style={{ textAlign: 'left' }}>
-                Compliant
-              </th>
-            </tr>
-          </thead>
-          <tbody>
-            {(query.data ?? []).map((entry) => (
-              <tr key={entry.unitId}>
-                <th scope="row" style={{ textAlign: 'left', fontWeight: 500 }}>
-                  {entry.unitId}
-                </th>
-                <td>{entry.expectedChecks}</td>
-                <td>{entry.actualChecks}</td>
-                <td
-                  style={{
-                    color: entry.compliant ? 'var(--boxalarm-success)' : 'var(--boxalarm-error)',
-                    fontWeight: 600,
-                  }}
-                >
-                  {entry.compliant ? 'Yes' : 'No'}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        <DataTable
+          caption="Check compliance by unit"
+          rowKey={(e) => e.unitId}
+          columns={columns}
+          rows={query.data ?? []}
+          emptyMessage="No compliance data for this range."
+        />
       )}
     </main>
   );

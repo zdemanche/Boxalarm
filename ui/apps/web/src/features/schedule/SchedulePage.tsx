@@ -1,14 +1,22 @@
 import { FormEvent, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import type { StatusRole } from '@boxalarm/design-tokens';
 import { useAuth } from '../../auth/AuthContext';
 import { ApiForbiddenGate } from '../../components/ApiForbiddenGate';
+import { Button, Card, PageHeader, Skeleton, StatusChip, TextInput } from '../../components/ui';
 import { approveShiftSwap, createShift, getShiftCoverage, listShifts } from './api';
 import type { CoverageStatus, CreateShiftPosition } from './types';
 
-const COVERAGE_LABEL: Record<CoverageStatus, string> = {
-  covered: '✓ Covered',
-  short: '△ Short',
-  'qual-gapped': '✕ Missing qual',
+const COVERAGE_STATUS: Record<CoverageStatus, StatusRole> = {
+  covered: 'ok',
+  short: 'warning',
+  'qual-gapped': 'danger',
+};
+
+const COVERAGE_WORD: Record<CoverageStatus, string> = {
+  covered: 'Covered',
+  short: 'Short',
+  'qual-gapped': 'Missing qual',
 };
 
 function toEpochSeconds(localDateTime: string): number {
@@ -51,87 +59,72 @@ function CreateShiftForm({ onCreated }: { onCreated: () => void }) {
   });
 
   return (
-    <form
-      aria-label="New shift"
-      onSubmit={(event: FormEvent) => {
-        event.preventDefault();
-        createMutation.mutate();
-      }}
-      style={{
-        marginTop: 'var(--boxalarm-spacing-xl)',
-        display: 'grid',
-        gap: 'var(--boxalarm-spacing-md)',
-        maxWidth: 480,
-      }}
-    >
-      <h2 style={{ fontSize: 'var(--boxalarm-font-size-lg)', margin: 0 }}>New shift</h2>
-      <label style={{ display: 'grid', gap: 4 }}>
-        Start
-        <input
+    <Card title="New shift" style={{ marginTop: 'var(--bx-space-xl)', maxWidth: 480 }}>
+      <form
+        aria-label="New shift"
+        onSubmit={(event: FormEvent) => {
+          event.preventDefault();
+          createMutation.mutate();
+        }}
+        style={{ display: 'grid', gap: 'var(--bx-space-md)' }}
+      >
+        <TextInput
+          label="Start"
           type="datetime-local"
           value={startAt}
           onChange={(e) => setStartAt(e.target.value)}
           required
-          style={{ minHeight: 44, padding: '0 12px' }}
         />
-      </label>
-      <label style={{ display: 'grid', gap: 4 }}>
-        End
-        <input
+        <TextInput
+          label="End"
           type="datetime-local"
           value={endAt}
           onChange={(e) => setEndAt(e.target.value)}
           required
-          style={{ minHeight: 44, padding: '0 12px' }}
         />
-      </label>
-      <label style={{ display: 'grid', gap: 4 }}>
-        Station ID
-        <input
+        <TextInput
+          label="Station ID"
           value={stationId}
           onChange={(e) => setStationId(e.target.value)}
           required
-          style={{ minHeight: 44, padding: '0 12px' }}
         />
-      </label>
-      {positions.map((position, index) => (
-        <fieldset key={index} style={{ display: 'flex', gap: 'var(--boxalarm-spacing-sm)' }}>
-          <legend>Position {index + 1}</legend>
-          <label style={{ display: 'grid', gap: 4 }}>
-            Position code
-            <input
+        {positions.map((position, index) => (
+          <fieldset
+            key={index}
+            style={{ display: 'flex', gap: 'var(--bx-space-sm)', border: 'none', padding: 0 }}
+          >
+            <legend>Position {index + 1}</legend>
+            <TextInput
+              label="Position code"
               value={position.positionCode}
               onChange={(e) =>
                 setPositions((prev) =>
                   prev.map((p, i) => (i === index ? { ...p, positionCode: e.target.value } : p)),
                 )
               }
-              style={{ minHeight: 44, padding: '0 12px' }}
             />
-          </label>
-          <label style={{ display: 'grid', gap: 4 }}>
-            Required qual (optional)
-            <input
+            <TextInput
+              label="Required qual"
+              optional
               value={position.requiredQual ?? ''}
               onChange={(e) =>
                 setPositions((prev) =>
                   prev.map((p, i) => (i === index ? { ...p, requiredQual: e.target.value } : p)),
                 )
               }
-              style={{ minHeight: 44, padding: '0 12px' }}
             />
-          </label>
-        </fieldset>
-      ))}
-      {createMutation.error ? (
-        <p role="alert" aria-live="assertive">
-          {createMutation.error.message}
-        </p>
-      ) : null}
-      <button type="submit" style={{ minHeight: 44 }}>
-        Create shift
-      </button>
-    </form>
+          </fieldset>
+        ))}
+        {createMutation.error ? (
+          <p role="alert" aria-live="assertive">
+            {createMutation.error.message}
+          </p>
+        ) : null}
+        <Button type="submit" loading={createMutation.isPending}>
+          Create shift
+        </Button>
+      </form>
+    </Card>
   );
 }
 
@@ -151,21 +144,26 @@ function CoverageSection() {
   }
 
   return (
-    <section style={{ marginTop: 'var(--boxalarm-spacing-xl)' }}>
-      <h2 style={{ fontSize: 'var(--boxalarm-font-size-lg)', margin: 0 }}>Coverage</h2>
+    <Card title="Coverage" style={{ marginTop: 'var(--bx-space-xl)' }}>
       {coverageQuery.isLoading ? (
-        <p>Loading coverage…</p>
+        <Skeleton lines={3} />
       ) : (
         <ul style={{ listStyle: 'none', padding: 0 }}>
           {(coverageQuery.data ?? []).map((shift) => (
-            <li key={shift.shiftId} style={{ padding: 'var(--boxalarm-spacing-sm) 0' }}>
-              <strong>{shift.stationId}</strong> — {COVERAGE_LABEL[shift.status]}
-              <ul style={{ listStyle: 'none', paddingLeft: 'var(--boxalarm-spacing-md)' }}>
+            <li key={shift.shiftId} style={{ padding: 'var(--bx-space-sm) 0' }}>
+              <strong>{shift.stationId}</strong>{' '}
+              <StatusChip status={COVERAGE_STATUS[shift.status]}>
+                {COVERAGE_WORD[shift.status]}
+              </StatusChip>
+              <ul style={{ listStyle: 'none', paddingLeft: 'var(--bx-space-md)' }}>
                 {shift.positions
                   .filter((position) => position.status !== 'covered')
                   .map((position) => (
                     <li key={position.positionCode}>
-                      {position.positionCode} — {COVERAGE_LABEL[position.status]}
+                      {position.positionCode} —{' '}
+                      <StatusChip status={COVERAGE_STATUS[position.status]}>
+                        {COVERAGE_WORD[position.status]}
+                      </StatusChip>
                       {position.status === 'qual-gapped' && position.requiredQual
                         ? ` (${position.requiredQual})`
                         : ''}
@@ -176,7 +174,7 @@ function CoverageSection() {
           ))}
         </ul>
       )}
-    </section>
+    </Card>
   );
 }
 
@@ -193,37 +191,30 @@ function SwapApprovalForm() {
   });
 
   return (
-    <section style={{ marginTop: 'var(--boxalarm-spacing-xl)' }}>
-      <h2 style={{ fontSize: 'var(--boxalarm-font-size-lg)', margin: 0 }}>Approve shift swap</h2>
+    <Card title="Approve shift swap" style={{ marginTop: 'var(--bx-space-xl)' }}>
       <form
         aria-label="Approve shift swap"
         onSubmit={(event: FormEvent) => {
           event.preventDefault();
           approveMutation.mutate();
         }}
-        style={{ display: 'flex', gap: 'var(--boxalarm-spacing-sm)', alignItems: 'end' }}
+        style={{ display: 'flex', gap: 'var(--bx-space-sm)', alignItems: 'end' }}
       >
-        <label style={{ display: 'grid', gap: 4 }}>
-          Shift ID
-          <input
-            value={shiftId}
-            onChange={(e) => setShiftId(e.target.value)}
-            required
-            style={{ minHeight: 44, padding: '0 12px' }}
-          />
-        </label>
-        <label style={{ display: 'grid', gap: 4 }}>
-          Swap ID
-          <input
-            value={swapId}
-            onChange={(e) => setSwapId(e.target.value)}
-            required
-            style={{ minHeight: 44, padding: '0 12px' }}
-          />
-        </label>
-        <button type="submit" style={{ minHeight: 44 }}>
+        <TextInput
+          label="Shift ID"
+          value={shiftId}
+          onChange={(e) => setShiftId(e.target.value)}
+          required
+        />
+        <TextInput
+          label="Swap ID"
+          value={swapId}
+          onChange={(e) => setSwapId(e.target.value)}
+          required
+        />
+        <Button type="submit" loading={approveMutation.isPending}>
           Approve
-        </button>
+        </Button>
       </form>
       {approveMutation.error ? (
         <p role="alert" aria-live="assertive">
@@ -231,7 +222,7 @@ function SwapApprovalForm() {
         </p>
       ) : null}
       {approveMutation.isSuccess ? <p role="status">Swap approved.</p> : null}
-    </section>
+    </Card>
   );
 }
 
@@ -253,15 +244,15 @@ export function SchedulePage() {
   }
 
   return (
-    <main id="main-content" style={{ padding: 'var(--boxalarm-spacing-lg)' }}>
-      <h1 style={{ fontSize: 'var(--boxalarm-font-size-xl)', margin: 0 }}>Schedule</h1>
+    <main id="main-content">
+      <PageHeader title="Schedule" />
 
       {shiftsQuery.isLoading ? (
-        <p>Loading shifts…</p>
+        <Skeleton lines={4} />
       ) : (
-        <ul style={{ listStyle: 'none', padding: 0, marginTop: 'var(--boxalarm-spacing-lg)' }}>
+        <ul style={{ listStyle: 'none', padding: 0 }}>
           {(shiftsQuery.data ?? []).map((shift) => (
-            <li key={shift.shiftId} style={{ padding: 'var(--boxalarm-spacing-sm) 0' }}>
+            <li key={shift.shiftId} style={{ padding: 'var(--bx-space-sm) 0' }}>
               <strong>{shift.stationId}</strong> — {new Date(shift.startAt * 1000).toLocaleString()}{' '}
               — {shift.status}
             </li>

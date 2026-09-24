@@ -2,6 +2,7 @@ import { FormEvent, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useAuth } from '../../auth/AuthContext';
 import { ApiForbiddenGate } from '../../components/ApiForbiddenGate';
+import { Button, Card, Select, Skeleton, TextInput } from '../../components/ui';
 import { createTestRecord, getTestingSchedules } from './api';
 import type { CreateTestRecordInput, TestType } from './types';
 
@@ -38,9 +39,9 @@ export function TestingTab({ unitId }: { unitId: string }) {
 
   return (
     <section>
-      <h2 style={{ fontSize: 'var(--boxalarm-font-size-lg)' }}>Testing schedules</h2>
+      <h2 style={{ fontSize: 17, fontWeight: 600 }}>Testing schedules</h2>
       {scheduleQuery.isLoading ? (
-        <p>Loading testing schedules…</p>
+        <Skeleton lines={2} />
       ) : scheduleForUnit.length === 0 ? (
         <p>No scheduled tests for this unit.</p>
       ) : (
@@ -53,62 +54,49 @@ export function TestingTab({ unitId }: { unitId: string }) {
         </ul>
       )}
 
-      <form
-        aria-label="Log test record"
-        onSubmit={(event: FormEvent) => {
-          event.preventDefault();
-          mutation.mutate(form);
-        }}
-        style={{
-          display: 'grid',
-          gap: 'var(--boxalarm-spacing-sm)',
-          maxWidth: 480,
-          marginTop: 'var(--boxalarm-spacing-lg)',
-        }}
-      >
-        <h3 style={{ fontSize: 'var(--boxalarm-font-size-base)', margin: 0 }}>Log test record</h3>
-        <label style={{ display: 'grid', gap: 4 }}>
-          Test type
-          <select
+      <Card title="Log test record" style={{ marginTop: 'var(--bx-space-lg)', maxWidth: 480 }}>
+        <form
+          aria-label="Log test record"
+          onSubmit={(event: FormEvent) => {
+            event.preventDefault();
+            mutation.mutate(form);
+          }}
+          style={{ display: 'grid', gap: 'var(--bx-space-sm)' }}
+        >
+          <Select
+            label="Test type"
             value={form.testType}
             onChange={(e) => setForm((prev) => ({ ...prev, testType: e.target.value as TestType }))}
-            style={{ minHeight: 44 }}
           >
             {TEST_TYPES.map((type) => (
               <option key={type} value={type}>
                 {type}
               </option>
             ))}
-          </select>
-        </label>
-        <label style={{ display: 'grid', gap: 4 }}>
-          Result
-          <select
+          </Select>
+          <Select
+            label="Result"
             value={form.result}
             onChange={(e) =>
               setForm((prev) => ({ ...prev, result: e.target.value as 'PASS' | 'FAIL' }))
             }
-            style={{ minHeight: 44 }}
           >
             <option value="PASS">Pass</option>
             <option value="FAIL">Fail</option>
-          </select>
-        </label>
-        <label style={{ display: 'grid', gap: 4 }}>
-          Next due date
-          <input
+          </Select>
+          <TextInput
+            label="Next due date"
             type="date"
             value={form.nextDueDate}
             required
             onChange={(e) => setForm((prev) => ({ ...prev, nextDueDate: e.target.value }))}
-            style={{ minHeight: 44, padding: '0 12px' }}
           />
-        </label>
-        {mutation.error ? <p role="alert">{mutation.error.message}</p> : null}
-        <button type="submit" style={{ minHeight: 44, maxWidth: 240 }}>
-          Save test record
-        </button>
-      </form>
+          {mutation.error ? <p role="alert">{mutation.error.message}</p> : null}
+          <Button type="submit" loading={mutation.isPending} style={{ maxWidth: 240 }}>
+            Save test record
+          </Button>
+        </form>
+      </Card>
     </section>
   );
 }

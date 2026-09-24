@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useAuth } from '../../auth/AuthContext';
 import { ApiError } from '../../lib/apiClient';
 import { ApiForbiddenGate } from '../../components/ApiForbiddenGate';
+import { Button, Card, Skeleton, TextInput } from '../../components/ui';
 import { getRetentionConfig, putRetentionConfig, runDisposal } from './api';
 import { LIFE_SAFETY_RECORD_CLASSES, type DisposalResult } from './types';
 
@@ -94,15 +95,9 @@ export function RetentionSection() {
   }
 
   return (
-    <section
-      aria-labelledby="retention-heading"
-      style={{ marginTop: 'var(--boxalarm-spacing-xl)' }}
-    >
-      <h2 id="retention-heading" style={{ fontSize: 'var(--boxalarm-font-size-lg)' }}>
-        Records retention
-      </h2>
+    <Card title="Records retention">
       {retentionQuery.isLoading ? (
-        <p>Loading retention configuration…</p>
+        <Skeleton lines={2} />
       ) : retentionQuery.error ? (
         <ApiForbiddenGate error={retentionQuery.error} embedded>
           <p role="alert">Unable to load the retention configuration.</p>
@@ -110,46 +105,29 @@ export function RetentionSection() {
       ) : (
         <form
           onSubmit={handleSubmit}
-          style={{ display: 'grid', gap: 'var(--boxalarm-spacing-sm)', maxWidth: 320 }}
+          style={{ display: 'grid', gap: 'var(--bx-space-sm)', maxWidth: 320 }}
         >
-          <label htmlFor="retention-years" style={{ display: 'grid', gap: 4 }}>
-            Retention period (years)
-            <input
-              id="retention-years"
-              type="number"
-              min={1}
-              step={1}
-              value={years}
-              onChange={(e) => setYears(e.target.value)}
-              style={{ minHeight: 44, padding: '0 12px' }}
-            />
-          </label>
+          <TextInput
+            label="Retention period (years)"
+            type="number"
+            min={1}
+            step={1}
+            value={years}
+            onChange={(e) => setYears(e.target.value)}
+            error={formError ?? undefined}
+          />
           {formForbidden ? (
             <ApiForbiddenGate error={formForbidden} embedded>
               <p role="alert">Could not save the retention period.</p>
             </ApiForbiddenGate>
           ) : null}
-          {formError ? (
-            <p role="alert" aria-live="assertive">
-              {formError}
-            </p>
-          ) : null}
-          <button
-            type="submit"
-            disabled={saveMutation.isPending}
-            style={{ minHeight: 44, width: 'fit-content' }}
-          >
+          <Button type="submit" loading={saveMutation.isPending} style={{ width: 'fit-content' }}>
             Save retention period
-          </button>
+          </Button>
         </form>
       )}
 
-      <h3
-        style={{
-          fontSize: 'var(--boxalarm-font-size-base)',
-          marginTop: 'var(--boxalarm-spacing-lg)',
-        }}
-      >
+      <h3 style={{ fontSize: 17, fontWeight: 600, marginTop: 'var(--bx-space-lg)' }}>
         Not subject to automatic disposal
       </h3>
       <ul>
@@ -158,16 +136,16 @@ export function RetentionSection() {
         ))}
       </ul>
 
-      <button
+      <Button
         type="button"
+        variant="danger"
         onClick={handleDisposal}
-        disabled={
-          disposalMutation.isPending || retentionQuery.isLoading || Boolean(retentionQuery.error)
-        }
-        style={{ minHeight: 44, marginTop: 'var(--boxalarm-spacing-md)' }}
+        loading={disposalMutation.isPending}
+        disabled={retentionQuery.isLoading || Boolean(retentionQuery.error)}
+        style={{ marginTop: 'var(--bx-space-md)' }}
       >
         Run disposal
-      </button>
+      </Button>
       {retentionQuery.error ? (
         <p role="alert">
           The retention period could not be confirmed, so disposal is disabled until it loads
@@ -190,6 +168,6 @@ export function RetentionSection() {
           {disposalResult.refused.length} refused.
         </p>
       ) : null}
-    </section>
+    </Card>
   );
 }
