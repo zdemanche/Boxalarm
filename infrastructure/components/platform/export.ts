@@ -221,9 +221,16 @@ export class Export extends pulumi.ComponentResource {
           .all([args.platformTableArn, this.workerLambda.arn, this.stagingBucket.arn])
           .apply(([platformArn, workerArn, bucketArn]) => [
             {
+              // dynamodb:TransactWriteItems is not a real IAM action — DynamoDB
+              // authorizes each item inside a transaction as its own PutItem/
+              // UpdateItem/DeleteItem call. handlePost's TransactWriteCommand sends
+              // two Puts (the EXPORT_JOB item and its AUDIT_LOG_ENTRY), handleGet
+              // does a GetItem, and markJobFailed does an UpdateItem. Granting
+              // TransactWriteItems and no PutItem meant POST /platform/export was
+              // denied on every call.
               Sid: "ExportTableAccess" as const,
               Effect: "Allow" as const,
-              Action: ["dynamodb:TransactWriteItems", "dynamodb:GetItem", "dynamodb:UpdateItem"],
+              Action: ["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:UpdateItem"],
               Resource: platformArn,
             },
             {

@@ -134,6 +134,19 @@ describe("Export", () => {
     expect(actions).toContain("arn:aws:sns:us-east-1:123456789012:chief");
   });
 
+  it("grants the handler GetItem/PutItem/UpdateItem on the platform table, never the non-functional TransactWriteItems", async () => {
+    const exp = await build();
+    const policyJson = await resolve(exp.handlerLambda.rolePolicy.policy);
+    const policy = JSON.parse(policyJson) as {
+      Statement: Array<{ Sid: string; Action: string[] }>;
+    };
+    const statement = policy.Statement.find((s) => s.Sid === "ExportTableAccess");
+    expect(statement?.Action).toEqual(
+      expect.arrayContaining(["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:UpdateItem"]),
+    );
+    expect(policyJson).not.toContain("TransactWriteItems");
+  });
+
   it("throws on absent or unknown env", async () => {
     const { Export } = await import("../../components/platform/export");
     const logGroup = new ServiceLogGroup("test-export-log-group-bad", {
