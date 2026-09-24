@@ -170,6 +170,7 @@ async function recordAttendanceFor(
     const item = {
       ...keys,
       entityType: 'ATTENDANCE_RECORD',
+      deptId,
       activityType: input.activityType,
       refId: input.refId,
       occurredAt: input.occurredAt,

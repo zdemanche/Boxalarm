@@ -105,6 +105,20 @@ describe('queryHandler', () => {
     expect(JSON.parse(result.body ?? '{}')).toEqual({ records });
   });
 
+  it('filters GSI1 results by the caller deptId, since gsi1pk carries no dept segment (MAJOR #4 regression)', async () => {
+    mockAuthzDecision('ALLOW');
+    const client = mockDynamo('OK', []);
+    const { onBehalfHandler } = await import('./queryHandler.js');
+
+    await onBehalfHandler(buildEvent({ pathParameters: { memberId: 'mbr-999' } }));
+
+    const queryCall = client.send.mock.calls[1]?.[0] as {
+      input: { FilterExpression: string; ExpressionAttributeValues: Record<string, string> };
+    };
+    expect(queryCall.input.FilterExpression).toBe('deptId = :deptId');
+    expect(queryCall.input.ExpressionAttributeValues[':deptId']).toBe('NICHOLS');
+  });
+
   it('denies (fails closed) when Cedar denies the action', async () => {
     mockAuthzDecision('DENY');
     const client = mockDynamo('OK');

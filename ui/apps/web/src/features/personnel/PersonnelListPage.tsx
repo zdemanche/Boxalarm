@@ -73,6 +73,7 @@ export function PersonnelListPage() {
     {
       key: 'name',
       header: 'Name',
+      isRowHeader: true,
       sortValue: (m) => `${m.lastName}, ${m.firstName}`,
       render: (m) => (
         <Link to={`/personnel/${m.memberId}`} style={{ fontWeight: 600 }}>
