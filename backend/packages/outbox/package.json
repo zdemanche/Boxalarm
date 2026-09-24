@@ -6,6 +6,13 @@
   "main": "./src/index.ts",
   "types": "./src/index.ts",
   "dependencies": {
-    "@boxalarm/dept-scope": "*"
+    "@aws-sdk/client-dynamodb": "3.1131.0",
+    "@aws-sdk/client-eventbridge": "3.1131.0",
+    "@aws-sdk/lib-dynamodb": "3.1131.0",
+    "@aws-sdk/util-dynamodb": "3.996.9",
+    "@boxalarm/dept-scope": "*",
+    "@boxalarm/logging": "*",
+    "@boxalarm/metrics": "*",
+    "aws-xray-sdk-core": "3.12.0"
   }
 }

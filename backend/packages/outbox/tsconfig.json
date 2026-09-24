@@ -6,6 +6,6 @@
     "outDir": "dist",
     "tsBuildInfoFile": "dist/.tsbuildinfo"
   },
-  "references": [{ "path": "../dept-scope" }],
+  "references": [{ "path": "../dept-scope" }, { "path": "../logging" }, { "path": "../metrics" }],
   "include": ["src"]
 }

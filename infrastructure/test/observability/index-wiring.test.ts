@@ -94,6 +94,7 @@ describe("index.ts production wiring", () => {
     pulumi.runtime.setAllConfig({
       "boxalarm-infra:env": "dev",
       "boxalarm-infra:webOrigin": "https://localhost:5173",
+      "boxalarm-infra:nerisSchemaSourceUrl": "https://schema.example.test/neris",
     });
   });
 
