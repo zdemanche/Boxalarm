@@ -78,6 +78,7 @@ function buildAuditLogPut(params: AuditLogParams): TransactWriteItem {
         gsi3pk,
         gsi3sk: `${params.ts}`,
       },
+      ConditionExpression: 'attribute_not_exists(pk) AND attribute_not_exists(sk)',
     },
   };
 }

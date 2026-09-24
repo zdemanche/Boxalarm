@@ -117,6 +117,7 @@ export async function putLosapPointRules(
                 ),
                 gsi3sk: changedAt,
               },
+              ConditionExpression: 'attribute_not_exists(pk) AND attribute_not_exists(sk)',
             },
           },
         ],

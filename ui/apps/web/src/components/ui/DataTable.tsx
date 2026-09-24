@@ -10,6 +10,7 @@ export interface DataTableColumn<T> {
   render: (row: T) => ReactNode;
   sortValue?: (row: T) => string | number;
   align?: 'left' | 'right';
+  isRowHeader?: boolean;
 }
 
 interface DataTableProps<T> {
@@ -117,11 +118,17 @@ export function DataTable<T>({
           ) : (
             sortedRows.map((row) => (
               <tr key={rowKey(row)}>
-                {columns.map((col) => (
-                  <td key={col.key} style={{ textAlign: col.align ?? 'left' }}>
-                    {col.render(row)}
-                  </td>
-                ))}
+                {columns.map((col) =>
+                  col.isRowHeader ? (
+                    <th key={col.key} scope="row" style={{ textAlign: col.align ?? 'left' }}>
+                      {col.render(row)}
+                    </th>
+                  ) : (
+                    <td key={col.key} style={{ textAlign: col.align ?? 'left' }}>
+                      {col.render(row)}
+                    </td>
+                  ),
+                )}
               </tr>
             ))
           )}
