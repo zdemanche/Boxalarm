@@ -57,7 +57,9 @@ describe("Export", () => {
       env: "dev",
       platformTableName: pulumi.output("platform-table"),
       platformTableArn: pulumi.output("arn:aws:dynamodb:us-east-1:123456789012:table/platform"),
+      incidentTableName: pulumi.output("incident-table"),
       incidentTableArn: pulumi.output("arn:aws:dynamodb:us-east-1:123456789012:table/incident"),
+      alertingTableName: pulumi.output("alerting-table"),
       alertingTableArn: pulumi.output("arn:aws:dynamodb:us-east-1:123456789012:table/alerting"),
       alertingCmkArn: pulumi.output("arn:aws:kms:us-east-1:123456789012:key/alerting-cmk"),
       incidentCmkArn: pulumi.output("arn:aws:kms:us-east-1:123456789012:key/incident-cmk"),
@@ -66,6 +68,13 @@ describe("Export", () => {
       httpApi,
     });
   }
+
+  it("wires the real alerting/incident table names into the worker's environment", async () => {
+    const exp = await build();
+    const env = await resolve(exp.workerLambda.environment);
+    expect(env?.variables?.ALERTING_TABLE_NAME).toBe("alerting-table");
+    expect(env?.variables?.INCIDENT_TABLE_NAME).toBe("incident-table");
+  });
 
   it("grants the worker role zero DynamoDB write actions, only read-only + decrypt + bucket write (AC1)", async () => {
     const exp = await build();
@@ -165,7 +174,9 @@ describe("Export", () => {
           env: "",
           platformTableName: pulumi.output("t"),
           platformTableArn: pulumi.output("arn"),
+          incidentTableName: pulumi.output("incident-table"),
           incidentTableArn: pulumi.output("arn"),
+          alertingTableName: pulumi.output("alerting-table"),
           alertingTableArn: pulumi.output("arn"),
           alertingCmkArn: pulumi.output("arn"),
           incidentCmkArn: pulumi.output("arn"),

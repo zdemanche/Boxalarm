@@ -15,7 +15,9 @@ export interface ExportArgs {
   env: string;
   platformTableName: pulumi.Input<string>;
   platformTableArn: pulumi.Input<string>;
+  incidentTableName: pulumi.Input<string>;
   incidentTableArn: pulumi.Input<string>;
+  alertingTableName: pulumi.Input<string>;
   alertingTableArn: pulumi.Input<string>;
   alertingCmkArn: pulumi.Input<string>;
   incidentCmkArn: pulumi.Input<string>;
@@ -193,8 +195,11 @@ export class Export extends pulumi.ComponentResource {
           variables: {
             SERVICE_NAME: "platform-service",
             ENVIRONMENT: env,
-            ALERTING_TABLE_NAME: "",
-            INCIDENT_TABLE_NAME: "",
+            // worker.ts scans its tables in order starting with alerting-service
+            // (TABLES/ALERTING_TABLE_NAME) — empty strings made every Scan raise a
+            // ValidationException, so every export failed immediately.
+            ALERTING_TABLE_NAME: args.alertingTableName,
+            INCIDENT_TABLE_NAME: args.incidentTableName,
             PLATFORM_TABLE_NAME: args.platformTableName,
             EXPORT_BUCKET_NAME: this.stagingBucket.bucket,
           },
