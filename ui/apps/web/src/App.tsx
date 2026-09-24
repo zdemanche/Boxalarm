@@ -56,6 +56,35 @@ const TrainingEventsPage = lazy(() =>
     default: mod.TrainingEventsPage,
   })),
 );
+const EquipmentPage = lazy(() =>
+  import('./features/inventory/EquipmentPage').then((mod) => ({ default: mod.EquipmentPage })),
+);
+const EquipmentDetailPage = lazy(() =>
+  import('./features/inventory/EquipmentDetailPage').then((mod) => ({
+    default: mod.EquipmentDetailPage,
+  })),
+);
+const OccupancyListPage = lazy(() =>
+  import('./features/inspections/OccupancyListPage').then((mod) => ({
+    default: mod.OccupancyListPage,
+  })),
+);
+const OccupancyDetailPage = lazy(() =>
+  import('./features/inspections/OccupancyDetailPage').then((mod) => ({
+    default: mod.OccupancyDetailPage,
+  })),
+);
+const HydrantsPage = lazy(() =>
+  import('./features/inspections/HydrantsPage').then((mod) => ({ default: mod.HydrantsPage })),
+);
+const InspectionsPage = lazy(() =>
+  import('./features/inspections/InspectionsPage').then((mod) => ({
+    default: mod.InspectionsPage,
+  })),
+);
+const MapPage = lazy(() =>
+  import('./features/inspections/MapPage').then((mod) => ({ default: mod.MapPage })),
+);
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { staleTime: 30_000, retry: 1 } },
@@ -129,6 +158,19 @@ export function App() {
                   <Route path="apparatus" element={roleGuarded(<ApparatusListPage />)} />
                   <Route path="apparatus/compliance" element={roleGuarded(<CompliancePage />)} />
                   <Route path="apparatus/:id" element={roleGuarded(<ApparatusDetailPage />)} />
+                  <Route path="inventory" element={roleGuarded(<EquipmentPage />)} />
+                  <Route path="inventory/:assetId" element={roleGuarded(<EquipmentDetailPage />)} />
+                  <Route
+                    path="inspections/occupancies"
+                    element={roleGuarded(<OccupancyListPage />)}
+                  />
+                  <Route
+                    path="inspections/occupancies/:id"
+                    element={roleGuarded(<OccupancyDetailPage />)}
+                  />
+                  <Route path="inspections/hydrants" element={roleGuarded(<HydrantsPage />)} />
+                  <Route path="inspections/map" element={roleGuarded(<MapPage />)} />
+                  <Route path="inspections" element={roleGuarded(<InspectionsPage />)} />
                   <Route path="schedule" element={placeholder('Schedule')} />
                   <Route path="reporting" element={placeholder('Reporting')} />
                   <Route path="settings" element={roleGuarded(<SettingsPage />)} />

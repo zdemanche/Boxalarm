@@ -4,6 +4,8 @@ import { DiagnosticsScreen } from '../screens/me/DiagnosticsScreen';
 import { InboxScreen } from '../screens/me/InboxScreen';
 import { MeHomeScreen } from '../screens/me/MeHomeScreen';
 import { NotificationPreferencesScreen } from '../screens/me/NotificationPreferencesScreen';
+import { MyEquipmentScreen } from '../screens/me/MyEquipmentScreen';
+import { MyPpeScreen } from '../screens/me/MyPpeScreen';
 import { SelfTestScreen } from '../screens/me/SelfTestScreen';
 import { TranscriptScreen } from '../screens/me/TranscriptScreen';
 
@@ -15,6 +17,8 @@ export type MeStackParamList = {
   Transcript: undefined;
   Inbox: undefined;
   NotificationPreferences: undefined;
+  MyEquipment: undefined;
+  MyPpe: undefined;
   SelfTest: undefined;
   Diagnostics: undefined;
 };
@@ -33,6 +37,12 @@ export function MeStack() {
         component={NotificationPreferencesScreen}
         options={{ title: 'Notification preferences' }}
       />
+      <Stack.Screen
+        name="MyEquipment"
+        component={MyEquipmentScreen}
+        options={{ title: 'My equipment' }}
+      />
+      <Stack.Screen name="MyPpe" component={MyPpeScreen} options={{ title: 'My PPE' }} />
       <Stack.Screen name="SelfTest" component={SelfTestScreen} options={{ title: 'Self-test' }} />
       <Stack.Screen name="Diagnostics" component={DiagnosticsScreen} />
     </Stack.Navigator>

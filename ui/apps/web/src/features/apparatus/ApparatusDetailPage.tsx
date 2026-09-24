@@ -1,11 +1,12 @@
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { useParams } from 'react-router-dom';
+import { Link, useParams } from 'react-router-dom';
 import { useAuth } from '../../auth/AuthContext';
 import { ApiForbiddenGate } from '../../components/ApiForbiddenGate';
 import { StatusChip } from '../../components/ui/Chip';
 import { PageHeader } from '../../components/ui/PageHeader';
 import { Skeleton } from '../../components/ui/Skeleton';
+import { listEquipment } from '../inventory/api';
 import { getApparatus } from './api';
 import { InventoryTab } from './InventoryTab';
 import { MaintenanceTab } from './MaintenanceTab';
@@ -24,6 +25,12 @@ export function ApparatusDetailPage() {
   const detailQuery = useQuery({
     queryKey: ['apparatus', id],
     queryFn: () => getApparatus(auth, id),
+    enabled: Boolean(id),
+  });
+
+  const equipmentQuery = useQuery({
+    queryKey: ['inventory', 'equipment', 'byApparatus', id],
+    queryFn: () => listEquipment(auth, { assignedToType: 'APPARATUS', assignedToId: id }),
     enabled: Boolean(id),
   });
 
@@ -143,6 +150,28 @@ export function ApparatusDetailPage() {
             {tab === 'Testing' ? <TestingTab unitId={unit.unitId} /> : null}
             {tab === 'Inventory' ? <InventoryTab apparatusId={unit.apparatusId} /> : null}
           </div>
+
+          <h2
+            style={{
+              fontSize: 'var(--boxalarm-font-size-lg)',
+              marginTop: 'var(--boxalarm-spacing-xl)',
+            }}
+          >
+            Assigned equipment
+          </h2>
+          {equipmentQuery.isLoading ? (
+            <p>Loading equipment…</p>
+          ) : (equipmentQuery.data ?? []).length === 0 ? (
+            <p>No equipment assigned.</p>
+          ) : (
+            <ul>
+              {(equipmentQuery.data ?? []).map((asset) => (
+                <li key={asset.assetId}>
+                  <Link to={`/inventory/${asset.assetId}`}>{asset.serialNumber}</Link>
+                </li>
+              ))}
+            </ul>
+          )}
         </>
       )}
     </main>
