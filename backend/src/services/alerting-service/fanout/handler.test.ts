@@ -3,6 +3,7 @@ import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
 import type { SNSClient } from '@aws-sdk/client-sns';
+import type { SchedulerClient } from '@aws-sdk/client-scheduler';
 import type { DynamoDBStreamEvent } from 'aws-lambda';
 
 interface FakeItem {
@@ -93,8 +94,17 @@ function createFakeDdb(
       return {};
     }
     if (name === 'PutCommand') {
-      const { Item } = input as { Item: FakeItem };
-      items.set(`${Item.pk}#${Item.sk}`, Item);
+      const { Item, ConditionExpression } = input as {
+        Item: FakeItem;
+        ConditionExpression?: string;
+      };
+      const key = `${Item.pk}#${Item.sk}`;
+      if (ConditionExpression === 'attribute_not_exists(pk)' && items.has(key)) {
+        const error = new Error('conditional check failed');
+        error.name = 'ConditionalCheckFailedException';
+        throw error;
+      }
+      items.set(key, Item);
       return {};
     }
     if (name === 'QueryCommand') {
@@ -135,6 +145,35 @@ function createFakeSns(failOn?: (call: FakeSnsCall) => boolean): {
     return Promise.resolve({ MessageId: 'msg-1' });
   });
   return { send: send as SNSClient['send'], calls };
+}
+
+function createFakeScheduler(options: { failCreate?: (name: string) => Error | undefined } = {}): {
+  send: SchedulerClient['send'];
+  createdNames: string[];
+  attemptedNames: string[];
+} {
+  const createdNames: string[] = [];
+  const attemptedNames: string[] = [];
+  const send = vi.fn((command: unknown) => {
+    const ctorName = (command as { constructor: { name: string } }).constructor.name;
+    if (ctorName !== 'CreateScheduleCommand') {
+      throw new Error(`handler.test.ts fake scheduler: unsupported command ${ctorName}`);
+    }
+    const { Name } = (command as { input: { Name: string } }).input;
+    attemptedNames.push(Name);
+    const failure = options.failCreate?.(Name);
+    if (failure) {
+      return Promise.reject(failure);
+    }
+    if (createdNames.includes(Name)) {
+      const error = new Error('schedule already exists');
+      error.name = 'ConflictException';
+      return Promise.reject(error);
+    }
+    createdNames.push(Name);
+    return Promise.resolve({});
+  });
+  return { send: send as SchedulerClient['send'], createdNames, attemptedNames };
 }
 
 function memberSnapshot(overrides: Record<string, unknown> = {}): FakeItem {
@@ -428,6 +467,17 @@ describe('fanout/handler', () => {
     vi.resetModules();
     process.env.ALERTING_TABLE_NAME = 'alerting-table';
     process.env.ALERTING_TOPIC_ARN = 'arn:aws:sns:us-east-1:1:boxalarm-dev-alerting-topic.fifo';
+    process.env.ESCALATION_HANDLER_ARN = 'arn:aws:lambda:us-east-1:1:function:escalation';
+    process.env.ESCALATION_SCHEDULER_ROLE_ARN = 'arn:aws:iam::1:role/scheduler';
+    process.env.TONE_EVALUATOR_HANDLER_ARN = 'arn:aws:lambda:us-east-1:1:function:tone-evaluator';
+    const defaultScheduler = createFakeScheduler();
+    vi.doMock('../escalation/scheduleEscalation.js', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('../escalation/scheduleEscalation.js')>();
+      return {
+        ...actual,
+        getSchedulerClient: () => ({ send: defaultScheduler.send }) as unknown as SchedulerClient,
+      };
+    });
   });
 
   afterEach(() => {
@@ -820,5 +870,80 @@ describe('fanout/handler', () => {
     expect(sns.calls).toHaveLength(24);
     expect(ddb.getMaxInFlightWrites()).toBeGreaterThan(1);
     expect(ddb.getMaxInFlightWrites()).toBeLessThanOrEqual(10);
+  });
+
+  it('schedules tone-1 escalation and the department tone ladder exactly once per member/tone even when the stream record is redelivered (idempotent scheduling)', async () => {
+    const ddb = createFakeDdb([memberSnapshot({ memberId: 'mbr-1' })]);
+    const sns = createFakeSns();
+    const scheduler = createFakeScheduler();
+    vi.doMock('../eligibility/dynamoClient.js', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('../eligibility/dynamoClient.js')>();
+      return { ...actual, createDynamoClient: () => ddb as unknown as DynamoDBDocumentClient };
+    });
+    vi.doMock('./snsClient.js', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('./snsClient.js')>();
+      return { ...actual, createSnsClient: () => sns as unknown as SNSClient };
+    });
+    vi.doMock('../escalation/scheduleEscalation.js', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('../escalation/scheduleEscalation.js')>();
+      return {
+        ...actual,
+        getSchedulerClient: () => ({ send: scheduler.send }) as unknown as SchedulerClient,
+      };
+    });
+
+    const { handler } = await import('./handler.js');
+    const event = dispatchAlertInsertEvent();
+
+    await expect(handler(event)).resolves.toEqual({ batchItemFailures: [] });
+    await expect(handler(event)).resolves.toEqual({ batchItemFailures: [] });
+
+    expect(new Set(scheduler.attemptedNames)).toEqual(
+      new Set([
+        'esc-NICHOLS-NICHOLS-1-1798000000-mbr-1-1',
+        'tone-NICHOLS-NICHOLS-1-1798000000-2',
+        'tone-NICHOLS-NICHOLS-1-1798000000-3',
+      ]),
+    );
+    expect(scheduler.attemptedNames).toHaveLength(6);
+    expect(scheduler.createdNames).toHaveLength(3);
+    expect(sns.calls).toHaveLength(2);
+
+    const roster = ddb.items.get('DEPT#NICHOLS#DISPATCH#NICHOLS-1-1798000000#ROSTER#mbr-1');
+    expect(roster?.entityType).toBe('DISPATCH_ROSTER_ENTRY');
+    expect(roster?.ackStatus).toBe('NONE');
+  });
+
+  it('still sends both tone-1 channel publishes when the escalation schedule create fails, then fails the batch item so Streams retries (core-harm, not silently swallowed)', async () => {
+    const ddb = createFakeDdb([memberSnapshot({ memberId: 'mbr-1' })]);
+    const sns = createFakeSns();
+    const scheduler = createFakeScheduler({
+      failCreate: (name) =>
+        name.startsWith('esc-') ? new Error('scheduler unavailable') : undefined,
+    });
+    vi.doMock('../eligibility/dynamoClient.js', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('../eligibility/dynamoClient.js')>();
+      return { ...actual, createDynamoClient: () => ddb as unknown as DynamoDBDocumentClient };
+    });
+    vi.doMock('./snsClient.js', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('./snsClient.js')>();
+      return { ...actual, createSnsClient: () => sns as unknown as SNSClient };
+    });
+    vi.doMock('../escalation/scheduleEscalation.js', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('../escalation/scheduleEscalation.js')>();
+      return {
+        ...actual,
+        getSchedulerClient: () => ({ send: scheduler.send }) as unknown as SchedulerClient,
+      };
+    });
+
+    const { handler } = await import('./handler.js');
+    await expect(handler(dispatchAlertInsertEvent())).resolves.toEqual({
+      batchItemFailures: [{ itemIdentifier: 'seq-1' }],
+    });
+
+    expect(sns.calls).toHaveLength(2);
+    const channels = sns.calls.map((call) => call.MessageAttributes.channel?.StringValue).sort();
+    expect(channels).toEqual(['push', 'sms']);
   });
 });

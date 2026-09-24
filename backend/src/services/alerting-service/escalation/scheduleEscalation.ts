@@ -81,18 +81,32 @@ export async function createEscalationSchedule(
   const fireAt = Math.floor(Date.now() / 1000) + delaySeconds;
   const scheduleName = `esc-${deptId}-${dispatchId}-${memberId}-${toneSequence}`.slice(0, 64);
 
-  await scheduler.send(
-    new CreateScheduleCommand({
-      Name: scheduleName,
-      ScheduleExpression: `at(${new Date(fireAt * 1000).toISOString().slice(0, 19)})`,
-      FlexibleTimeWindow: { Mode: FlexibleTimeWindowMode.OFF },
-      Target: {
-        Arn: config.escalationHandlerArn,
-        RoleArn: config.schedulerRoleArn,
-        Input: JSON.stringify({ deptId, dispatchId, memberId, toneSequence, channel: 'voice' }),
-      },
-    }),
-  );
+  try {
+    await scheduler.send(
+      new CreateScheduleCommand({
+        Name: scheduleName,
+        ScheduleExpression: `at(${new Date(fireAt * 1000).toISOString().slice(0, 19)})`,
+        FlexibleTimeWindow: { Mode: FlexibleTimeWindowMode.OFF },
+        Target: {
+          Arn: config.escalationHandlerArn,
+          RoleArn: config.schedulerRoleArn,
+          Input: JSON.stringify({ deptId, dispatchId, memberId, toneSequence, channel: 'voice' }),
+        },
+      }),
+    );
+  } catch (error) {
+    if (error instanceof Error && error.name === 'ConflictException') {
+      logInfo('alerting.escalation.schedule_already_exists', {
+        deptId,
+        dispatchId,
+        memberId,
+        toneSequence,
+        scheduleName,
+      });
+      return scheduleName;
+    }
+    throw error;
+  }
 
   return scheduleName;
 }
