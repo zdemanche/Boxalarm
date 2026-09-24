@@ -90,4 +90,61 @@ describe('Toast', () => {
     expect(screen.queryByText('First')).toBeNull();
     expect(screen.getByText('Second')).toBeTruthy();
   });
+
+  // Stabilizes the API the README pointed consumers at ("a toast with an action") without
+  // actually implementing it.
+  test('an action calls its onClick and dismisses the toast', async () => {
+    const user = userEvent.setup();
+    const onClick = vi.fn();
+
+    function UndoTrigger() {
+      const { showToast } = useToast();
+      return (
+        <button
+          type="button"
+          onClick={() => showToast('Member removed.', 'default', { label: 'Undo', onClick })}
+        >
+          Remove
+        </button>
+      );
+    }
+
+    render(
+      <ToastProvider>
+        <UndoTrigger />
+      </ToastProvider>,
+    );
+
+    await user.click(screen.getByRole('button', { name: 'Remove' }));
+    expect(screen.getByText('Member removed.')).toBeTruthy();
+
+    await user.click(screen.getByRole('button', { name: 'Undo' }));
+    expect(onClick).toHaveBeenCalledTimes(1);
+    expect(screen.queryByText('Member removed.')).toBeNull();
+  });
+
+  test('a toast with no action renders no action button, only Dismiss', async () => {
+    const user = userEvent.setup();
+    renderWithProvider();
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+    expect(screen.getAllByRole('button', { name: 'Dismiss' }).length).toBe(1);
+    expect(screen.getByRole('status').querySelectorAll('button').length).toBe(1);
+  });
+
+  // Regression: the auto-dismiss timer used to be fired-and-forgotten, so dismissing a toast
+  // early (or unmounting the provider) left a stale setTimeout that could later call setState on
+  // an unmounted component. Manually dismissing must clear its timer, not just remove the toast.
+  test('manually dismissing a toast clears its pending auto-dismiss timer', () => {
+    vi.useFakeTimers();
+    const clearSpy = vi.spyOn(globalThis, 'clearTimeout');
+    render(
+      <ToastProvider>
+        <Trigger />
+      </ToastProvider>,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }));
+    expect(clearSpy).toHaveBeenCalled();
+    clearSpy.mockRestore();
+  });
 });

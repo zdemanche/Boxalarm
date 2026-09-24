@@ -126,10 +126,13 @@ should prefer an undo affordance (a toast with an action) over a confirm dialog 
 ```tsx
 const { showToast } = useToast(); // needs <ToastProvider> mounted once near the app root
 showToast('Riding assignment saved.', 'ok');
+showToast('Member removed.', 'default', { label: 'Undo', onClick: restoreMember });
 ```
 
 `ToastProvider` renders its own `role="status"` live region — no separate announcement call
-needed. `tone?: 'default' | 'ok' | 'danger'`.
+needed. `tone?: 'default' | 'ok' | 'danger'`, `action?: { label: string; onClick: () => void }` —
+the optional single control this doc points to above for a reversible action over a
+ConfirmDialog; choosing it also dismisses the toast.
 
 ## Skeleton / SkeletonBlock
 
