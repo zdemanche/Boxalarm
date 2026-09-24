@@ -73,6 +73,7 @@ describe("RoutesOps webhook routes", () => {
       alertingTableArn: "arn:aws:dynamodb:us-east-1:123456789012:table/alerting",
       alertingTableName: "boxalarm-dev-alerting-table",
       logGroup: alertingLogGroup,
+      policyStoreId: "policy-store-id",
     });
 
     await new Promise((r) => setImmediate(r));

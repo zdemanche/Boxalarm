@@ -5,10 +5,8 @@ import { ServiceLambda } from "../observability/service-lambda";
 import { ServiceLogGroup } from "../observability/service-log-group";
 import { IamPolicyStatement } from "../observability/observability-policy";
 import { requireEnv } from "../shared/env";
-import { httpStubCode, asyncStubCode } from "./stub-code";
+import { lambdaCode, LAMBDA_HANDLER } from "../shared/lambda-code";
 import { AlertingRoute } from "./route-lambda";
-import { policyStore } from "../authz/policy-store";
-import { platformBus } from "../messaging/platform-bus";
 
 export interface PushTokensArgs {
   env: string;
@@ -19,6 +17,8 @@ export interface PushTokensArgs {
   alertingTableName: pulumi.Input<string>;
   personnelLogGroup: ServiceLogGroup;
   alertingLogGroup: ServiceLogGroup;
+  policyStoreId: pulumi.Input<string>;
+  busName: pulumi.Input<string>;
   alertingPermissionsBoundaryArn?: pulumi.Input<string>;
 }
 
@@ -58,7 +58,7 @@ export class PushTokens extends pulumi.ComponentResource {
       PERSONNEL_TABLE_NAME: args.platformTableName,
       PLATFORM_TABLE_NAME: args.platformTableName,
       PLATFORM_SERVICE_TABLE_NAME: args.platformTableName,
-      VERIFIED_PERMISSIONS_POLICY_STORE_ID: policyStore.policyStoreId,
+      VERIFIED_PERMISSIONS_POLICY_STORE_ID: args.policyStoreId,
     };
 
     // src/services/personnel-service/pushTokens/registerToken.handler
@@ -70,8 +70,8 @@ export class PushTokens extends pulumi.ComponentResource {
         logGroup: args.personnelLogGroup,
         serviceName: "personnel-service",
         functionName: `boxalarm-${env}-personnel-push-tokens-register`,
-        handler: "index.handler",
-        code: httpStubCode(),
+        handler: LAMBDA_HANDLER,
+        code: lambdaCode("personnel-service", "push-tokens-register"),
         routeKey: "POST /api/v1/personnel/members/{memberId}/push-tokens",
         environment: personnelEnv,
         additionalPolicyStatements: personnelTableStatements,
@@ -89,8 +89,8 @@ export class PushTokens extends pulumi.ComponentResource {
         logGroup: args.personnelLogGroup,
         serviceName: "personnel-service",
         functionName: `boxalarm-${env}-personnel-push-tokens-revoke`,
-        handler: "index.handler",
-        code: httpStubCode(),
+        handler: LAMBDA_HANDLER,
+        code: lambdaCode("personnel-service", "push-tokens-revoke"),
         routeKey: "DELETE /api/v1/personnel/members/{memberId}/push-tokens",
         environment: personnelEnv,
         additionalPolicyStatements: personnelTableStatements,
@@ -120,7 +120,7 @@ export class PushTokens extends pulumi.ComponentResource {
       `${name}-member-updated-rule`,
       {
         name: `boxalarm-${env}-alerting-member-updated`,
-        eventBusName: platformBus.busName,
+        eventBusName: args.busName,
         eventPattern: JSON.stringify({ "detail-type": ["personnel.member.updated"] }),
       },
       { parent: this },
@@ -151,7 +151,7 @@ export class PushTokens extends pulumi.ComponentResource {
 
     new aws.cloudwatch.EventTarget(
       `${name}-member-updated-target`,
-      { rule: rule.name, eventBusName: platformBus.busName, arn: this.memberUpdatedQueue.arn },
+      { rule: rule.name, eventBusName: args.busName, arn: this.memberUpdatedQueue.arn },
       { parent: this },
     );
 
@@ -162,8 +162,8 @@ export class PushTokens extends pulumi.ComponentResource {
         env,
         serviceName: "alerting-service",
         functionName: `boxalarm-${env}-alerting-member-updated-consumer`,
-        handler: "index.handler",
-        code: asyncStubCode(),
+        handler: LAMBDA_HANDLER,
+        code: lambdaCode("alerting-service", "member-updated-consumer"),
         logGroup: args.alertingLogGroup,
         environment: { ALERTING_TABLE_NAME: args.alertingTableName },
         additionalPolicyStatements: [

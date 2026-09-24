@@ -3,9 +3,8 @@ import { HttpApi } from "../api/http-api";
 import { ServiceLogGroup } from "../observability/service-log-group";
 import { IamPolicyStatement } from "../observability/observability-policy";
 import { requireEnv } from "../shared/env";
-import { httpStubCode } from "./stub-code";
+import { lambdaCode, LAMBDA_HANDLER } from "../shared/lambda-code";
 import { AlertingRoute } from "./route-lambda";
-import { policyStore } from "../authz/policy-store";
 
 export interface RoutesOpsArgs {
   env: string;
@@ -13,6 +12,7 @@ export interface RoutesOpsArgs {
   alertingTableArn: pulumi.Input<string>;
   alertingTableName: pulumi.Input<string>;
   logGroup: ServiceLogGroup;
+  policyStoreId: pulumi.Input<string>;
   permissionsBoundaryArn?: pulumi.Input<string>;
 }
 
@@ -31,6 +31,11 @@ export class RoutesOps extends pulumi.ComponentResource {
   public readonly audit: AlertingRoute;
   public readonly receiptsGet: AlertingRoute;
   public readonly webhooks: Record<VendorChannel, AlertingRoute>;
+  public readonly canaryStatus: AlertingRoute;
+  public readonly deviceReportState: AlertingRoute;
+  public readonly diagnostics: AlertingRoute;
+  public readonly diagnosticsSelf: AlertingRoute;
+  public readonly deliveryBaseline: AlertingRoute;
 
   constructor(name: string, args: RoutesOpsArgs, opts?: pulumi.ComponentResourceOptions) {
     requireEnv("RoutesOps", args.env);
@@ -53,12 +58,12 @@ export class RoutesOps extends pulumi.ComponentResource {
         logGroup: args.logGroup,
         serviceName: "alerting-service",
         functionName: `boxalarm-${env}-alerting-self-test-post`,
-        handler: "index.handler",
-        code: httpStubCode(),
+        handler: LAMBDA_HANDLER,
+        code: lambdaCode("alerting-service", "self-test-post"),
         routeKey: "POST /api/v1/alerting/self-test",
         environment: {
           ALERTING_TABLE_NAME: args.alertingTableName,
-          VERIFIED_PERMISSIONS_POLICY_STORE_ID: policyStore.policyStoreId,
+          VERIFIED_PERMISSIONS_POLICY_STORE_ID: args.policyStoreId,
         },
         additionalPolicyStatements: [
           {
@@ -84,12 +89,12 @@ export class RoutesOps extends pulumi.ComponentResource {
         logGroup: args.logGroup,
         serviceName: "alerting-service",
         functionName: `boxalarm-${env}-alerting-self-test-get`,
-        handler: "index.handler",
-        code: httpStubCode(),
+        handler: LAMBDA_HANDLER,
+        code: lambdaCode("alerting-service", "self-test-get"),
         routeKey: "GET /api/v1/alerting/self-test/{testId}",
         environment: {
           ALERTING_TABLE_NAME: args.alertingTableName,
-          VERIFIED_PERMISSIONS_POLICY_STORE_ID: policyStore.policyStoreId,
+          VERIFIED_PERMISSIONS_POLICY_STORE_ID: args.policyStoreId,
         },
         additionalPolicyStatements: [
           {
@@ -115,12 +120,12 @@ export class RoutesOps extends pulumi.ComponentResource {
         logGroup: args.logGroup,
         serviceName: "alerting-service",
         functionName: `boxalarm-${env}-alerting-audit`,
-        handler: "index.handler",
-        code: httpStubCode(),
+        handler: LAMBDA_HANDLER,
+        code: lambdaCode("alerting-service", "audit"),
         routeKey: "GET /api/v1/alerting/audit",
         environment: {
           ALERTING_TABLE_NAME: args.alertingTableName,
-          VERIFIED_PERMISSIONS_POLICY_STORE_ID: policyStore.policyStoreId,
+          VERIFIED_PERMISSIONS_POLICY_STORE_ID: args.policyStoreId,
         },
         additionalPolicyStatements: pulumi.output(args.alertingTableArn).apply((tableArn) => [
           {
@@ -146,12 +151,12 @@ export class RoutesOps extends pulumi.ComponentResource {
         logGroup: args.logGroup,
         serviceName: "alerting-service",
         functionName: `boxalarm-${env}-alerting-receipts-get`,
-        handler: "index.handler",
-        code: httpStubCode(),
+        handler: LAMBDA_HANDLER,
+        code: lambdaCode("alerting-service", "receipts-get"),
         routeKey: "GET /api/v1/alerting/dispatches/{dispatchId}/receipts",
         environment: {
           ALERTING_TABLE_NAME: args.alertingTableName,
-          VERIFIED_PERMISSIONS_POLICY_STORE_ID: policyStore.policyStoreId,
+          VERIFIED_PERMISSIONS_POLICY_STORE_ID: args.policyStoreId,
         },
         additionalPolicyStatements: [
           {
@@ -192,6 +197,11 @@ export class RoutesOps extends pulumi.ComponentResource {
     // each webhook Lambda's environment carries only its own channel's config key.
     const config = new pulumi.Config("boxalarm-infra");
     const webhooks: Partial<Record<VendorChannel, AlertingRoute>> = {};
+    const webhookFunctionKey: Record<VendorChannel, string> = {
+      sms: "sms-receipt-webhook",
+      voice: "voice-receipt-webhook",
+      push: "push-receipt-webhook",
+    };
 
     for (const channel of VENDOR_CHANNELS) {
       webhooks[channel] = new AlertingRoute(
@@ -202,8 +212,8 @@ export class RoutesOps extends pulumi.ComponentResource {
           logGroup: args.logGroup,
           serviceName: "alerting-service",
           functionName: `boxalarm-${env}-alerting-${channel}-receipt-webhook`,
-          handler: "index.handler",
-          code: httpStubCode(),
+          handler: LAMBDA_HANDLER,
+          code: lambdaCode("alerting-service", webhookFunctionKey[channel]),
           routeKey: webhookRouteKeys[channel],
           authorized: false,
           environment: {
@@ -226,12 +236,173 @@ export class RoutesOps extends pulumi.ComponentResource {
     }
     this.webhooks = webhooks as Record<VendorChannel, AlertingRoute>;
 
+    // src/services/alerting-service/canary/statusHandler.handler
+    this.canaryStatus = new AlertingRoute(
+      `${name}-canary-status`,
+      {
+        env,
+        httpApi: args.httpApi,
+        logGroup: args.logGroup,
+        serviceName: "alerting-service",
+        functionName: `boxalarm-${env}-alerting-canary-status`,
+        handler: LAMBDA_HANDLER,
+        code: lambdaCode("alerting-service", "canary-status"),
+        routeKey: "GET /api/v1/alerting/canary/status",
+        environment: {
+          ALERTING_TABLE_NAME: args.alertingTableName,
+          VERIFIED_PERMISSIONS_POLICY_STORE_ID: args.policyStoreId,
+        },
+        additionalPolicyStatements: [
+          {
+            Sid: "AlertingTableCanaryQuery",
+            Effect: "Allow",
+            Action: ["dynamodb:Query"],
+            Resource: args.alertingTableArn as string,
+          },
+          verifiedPermissionsStatement,
+        ],
+        reservedConcurrentExecutions: 3,
+        permissionsBoundaryArn: args.permissionsBoundaryArn,
+      },
+      { parent: this },
+    );
+
+    // src/services/alerting-service/devices/reportStateHandler.handler
+    this.deviceReportState = new AlertingRoute(
+      `${name}-device-report-state`,
+      {
+        env,
+        httpApi: args.httpApi,
+        logGroup: args.logGroup,
+        serviceName: "alerting-service",
+        functionName: `boxalarm-${env}-alerting-device-report-state`,
+        handler: LAMBDA_HANDLER,
+        code: lambdaCode("alerting-service", "device-report-state"),
+        routeKey: "POST /api/v1/alerting/devices/state",
+        environment: {
+          ALERTING_TABLE_NAME: args.alertingTableName,
+          VERIFIED_PERMISSIONS_POLICY_STORE_ID: args.policyStoreId,
+        },
+        additionalPolicyStatements: [
+          {
+            Sid: "AlertingTableDeviceStateWrite",
+            Effect: "Allow",
+            Action: ["dynamodb:PutItem", "dynamodb:GetItem"],
+            Resource: args.alertingTableArn as string,
+          },
+          verifiedPermissionsStatement,
+        ],
+        reservedConcurrentExecutions: 5,
+        permissionsBoundaryArn: args.permissionsBoundaryArn,
+      },
+      { parent: this },
+    );
+
+    // src/services/alerting-service/diagnostics/handler.handler — "why didn't I get the
+    // page" for another member (E1-S12).
+    this.diagnostics = new AlertingRoute(
+      `${name}-diagnostics`,
+      {
+        env,
+        httpApi: args.httpApi,
+        logGroup: args.logGroup,
+        serviceName: "alerting-service",
+        functionName: `boxalarm-${env}-alerting-diagnostics`,
+        handler: LAMBDA_HANDLER,
+        code: lambdaCode("alerting-service", "diagnostics"),
+        routeKey: "GET /api/v1/alerting/dispatches/{dispatchId}/diagnostics/{memberId}",
+        environment: {
+          ALERTING_TABLE_NAME: args.alertingTableName,
+          VERIFIED_PERMISSIONS_POLICY_STORE_ID: args.policyStoreId,
+        },
+        additionalPolicyStatements: [
+          {
+            Sid: "AlertingTableDiagnosticsRead",
+            Effect: "Allow",
+            Action: ["dynamodb:GetItem", "dynamodb:Query"],
+            Resource: args.alertingTableArn as string,
+          },
+          verifiedPermissionsStatement,
+        ],
+        reservedConcurrentExecutions: 3,
+        permissionsBoundaryArn: args.permissionsBoundaryArn,
+      },
+      { parent: this },
+    );
+
+    // src/services/alerting-service/diagnostics/selfHandler.handler — own diagnosis.
+    this.diagnosticsSelf = new AlertingRoute(
+      `${name}-diagnostics-self`,
+      {
+        env,
+        httpApi: args.httpApi,
+        logGroup: args.logGroup,
+        serviceName: "alerting-service",
+        functionName: `boxalarm-${env}-alerting-diagnostics-self`,
+        handler: LAMBDA_HANDLER,
+        code: lambdaCode("alerting-service", "diagnostics-self"),
+        routeKey: "GET /api/v1/alerting/dispatches/{dispatchId}/diagnostics",
+        environment: {
+          ALERTING_TABLE_NAME: args.alertingTableName,
+          VERIFIED_PERMISSIONS_POLICY_STORE_ID: args.policyStoreId,
+        },
+        additionalPolicyStatements: [
+          {
+            Sid: "AlertingTableDiagnosticsSelfRead",
+            Effect: "Allow",
+            Action: ["dynamodb:GetItem", "dynamodb:Query"],
+            Resource: args.alertingTableArn as string,
+          },
+          verifiedPermissionsStatement,
+        ],
+        reservedConcurrentExecutions: 3,
+        permissionsBoundaryArn: args.permissionsBoundaryArn,
+      },
+      { parent: this },
+    );
+
+    // src/services/alerting-service/audit/deliveryBaselineHandler.handler (E1-S15).
+    this.deliveryBaseline = new AlertingRoute(
+      `${name}-delivery-baseline`,
+      {
+        env,
+        httpApi: args.httpApi,
+        logGroup: args.logGroup,
+        serviceName: "alerting-service",
+        functionName: `boxalarm-${env}-alerting-delivery-baseline`,
+        handler: LAMBDA_HANDLER,
+        code: lambdaCode("alerting-service", "delivery-baseline"),
+        routeKey: "GET /api/v1/alerting/delivery-baseline",
+        environment: {
+          ALERTING_TABLE_NAME: args.alertingTableName,
+          VERIFIED_PERMISSIONS_POLICY_STORE_ID: args.policyStoreId,
+        },
+        additionalPolicyStatements: pulumi.output(args.alertingTableArn).apply((tableArn) => [
+          {
+            Sid: "AlertingTableAndIndexQueryOnly",
+            Effect: "Allow" as const,
+            Action: ["dynamodb:Query"],
+            Resource: [tableArn, `${tableArn}/index/GSI1`, `${tableArn}/index/GSI2`],
+          },
+          verifiedPermissionsStatement,
+        ]),
+        reservedConcurrentExecutions: 3,
+        permissionsBoundaryArn: args.permissionsBoundaryArn,
+      },
+      { parent: this },
+    );
+
     this.registerOutputs({
       selfTestPost: this.selfTestPost,
       selfTestGet: this.selfTestGet,
       audit: this.audit,
       receiptsGet: this.receiptsGet,
       webhooks: this.webhooks,
+      canaryStatus: this.canaryStatus,
+      deviceReportState: this.deviceReportState,
+      diagnostics: this.diagnostics,
+      diagnosticsSelf: this.diagnosticsSelf,
+      deliveryBaseline: this.deliveryBaseline,
     });
   }
 }

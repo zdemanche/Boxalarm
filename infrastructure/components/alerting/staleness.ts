@@ -3,7 +3,7 @@ import * as aws from "@pulumi/aws";
 import { ServiceLambda } from "../observability/service-lambda";
 import { ServiceLogGroup } from "../observability/service-log-group";
 import { requireEnv } from "../shared/env";
-import { invokeStubCode } from "./stub-code";
+import { lambdaCode, LAMBDA_HANDLER } from "../shared/lambda-code";
 
 export interface EligibilityStalenessArgs {
   env: string;
@@ -45,8 +45,8 @@ export class EligibilityStaleness extends pulumi.ComponentResource {
         env,
         serviceName: "alerting-service",
         functionName: `boxalarm-${env}-alerting-eligibility-staleness-check`,
-        handler: "index.handler",
-        code: invokeStubCode(),
+        handler: LAMBDA_HANDLER,
+        code: lambdaCode("alerting-service", "eligibility-staleness-check"),
         logGroup: args.logGroup,
         environment: { ALERTING_TABLE_NAME: args.alertingTableName, DEPT_ID: deptId },
         additionalPolicyStatements: [

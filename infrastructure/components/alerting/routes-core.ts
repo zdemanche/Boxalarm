@@ -1,11 +1,12 @@
 import * as pulumi from "@pulumi/pulumi";
+import * as aws from "@pulumi/aws";
 import { HttpApi } from "../api/http-api";
 import { ServiceLogGroup } from "../observability/service-log-group";
 import { IamPolicyStatement } from "../observability/observability-policy";
 import { requireEnv } from "../shared/env";
-import { httpStubCode } from "./stub-code";
+import { lambdaCode, LAMBDA_HANDLER } from "../shared/lambda-code";
 import { AlertingRoute } from "./route-lambda";
-import { policyStore } from "../authz/policy-store";
+import { Escalation } from "./escalation";
 
 export interface RoutesCoreArgs {
   env: string;
@@ -13,6 +14,8 @@ export interface RoutesCoreArgs {
   alertingTableArn: pulumi.Input<string>;
   alertingTableName: pulumi.Input<string>;
   logGroup: ServiceLogGroup;
+  escalation: Escalation;
+  policyStoreId: pulumi.Input<string>;
   permissionsBoundaryArn?: pulumi.Input<string>;
 }
 
@@ -41,17 +44,31 @@ export class RoutesCore extends pulumi.ComponentResource {
     super("boxalarm:alerting:RoutesCore", name, {}, opts);
     const { env } = args;
 
-    const alertingTableStatements: IamPolicyStatement[] = [
-      {
-        Sid: "AlertingTableConditionalWrite",
-        Effect: "Allow",
-        Action: ["dynamodb:PutItem", "dynamodb:ConditionCheckItem", "dynamodb:TransactWriteItems"],
-        Resource: args.alertingTableArn as string,
-      },
-      verifiedPermissionsStatement(),
-    ];
+    const alertingTableStatements: pulumi.Input<IamPolicyStatement[]> =
+      args.escalation.scheduleResourcePattern.apply((schedulePattern) => [
+        {
+          Sid: "AlertingTableConditionalWrite",
+          Effect: "Allow" as const,
+          Action: [
+            "dynamodb:PutItem",
+            "dynamodb:ConditionCheckItem",
+            "dynamodb:TransactWriteItems",
+          ],
+          Resource: args.alertingTableArn as string,
+        },
+        {
+          Sid: "CreateEscalationSchedulesOnly",
+          Effect: "Allow" as const,
+          Action: ["scheduler:CreateSchedule"],
+          Resource: schedulePattern,
+        },
+        verifiedPermissionsStatement(),
+      ]);
 
-    // src/services/alerting-service/dispatches/handler.handler
+    // src/services/alerting-service/dispatches/handler.handler — the manual/degraded-mode
+    // ingress route; it calls runFanOut synchronously (fanout/fanOut.ts), which schedules
+    // the tone-1 voice escalation and the tone-2/3 evaluator timers on the same scheduler
+    // role/group as the stream-driven fan-out path.
     this.dispatchIngress = new AlertingRoute(
       `${name}-dispatch-ingress`,
       {
@@ -60,17 +77,41 @@ export class RoutesCore extends pulumi.ComponentResource {
         logGroup: args.logGroup,
         serviceName: "alerting-service",
         functionName: `boxalarm-${env}-alerting-dispatches-create`,
-        handler: "index.handler",
-        code: httpStubCode(),
+        handler: LAMBDA_HANDLER,
+        code: lambdaCode("alerting-service", "dispatches-create"),
         routeKey: "POST /api/v1/alerting/dispatches",
         environment: {
           ALERTING_DISPATCHES_TABLE_NAME: args.alertingTableName,
           ALERTING_TABLE_NAME: args.alertingTableName,
-          VERIFIED_PERMISSIONS_POLICY_STORE_ID: policyStore.policyStoreId,
+          VERIFIED_PERMISSIONS_POLICY_STORE_ID: args.policyStoreId,
+          ESCALATION_HANDLER_ARN: args.escalation.lambda.function.arn,
+          ESCALATION_SCHEDULER_ROLE_ARN: args.escalation.schedulerRole.arn,
+          TONE_EVALUATOR_HANDLER_ARN: args.escalation.toneEvaluatorLambda.function.arn,
         },
         additionalPolicyStatements: alertingTableStatements,
         reservedConcurrentExecutions: 5,
         permissionsBoundaryArn: args.permissionsBoundaryArn,
+      },
+      { parent: this },
+    );
+
+    new aws.iam.RolePolicy(
+      `${name}-dispatch-ingress-pass-scheduler-role`,
+      {
+        role: this.dispatchIngress.lambda.role.id,
+        policy: args.escalation.schedulerRole.arn.apply((roleArn) =>
+          JSON.stringify({
+            Version: "2012-10-17",
+            Statement: [
+              {
+                Sid: "PassSchedulerRoleOnly",
+                Effect: "Allow",
+                Action: "iam:PassRole",
+                Resource: roleArn,
+              },
+            ],
+          }),
+        ),
       },
       { parent: this },
     );
@@ -84,12 +125,12 @@ export class RoutesCore extends pulumi.ComponentResource {
         logGroup: args.logGroup,
         serviceName: "alerting-service",
         functionName: `boxalarm-${env}-alerting-responses`,
-        handler: "index.handler",
-        code: httpStubCode(),
+        handler: LAMBDA_HANDLER,
+        code: lambdaCode("alerting-service", "responses"),
         routeKey: "POST /api/v1/alerting/dispatches/{dispatchId}/responses",
         environment: {
           ALERTING_TABLE_NAME: args.alertingTableName,
-          VERIFIED_PERMISSIONS_POLICY_STORE_ID: policyStore.policyStoreId,
+          VERIFIED_PERMISSIONS_POLICY_STORE_ID: args.policyStoreId,
         },
         additionalPolicyStatements: [
           {
@@ -120,12 +161,12 @@ export class RoutesCore extends pulumi.ComponentResource {
         logGroup: args.logGroup,
         serviceName: "alerting-service",
         functionName: `boxalarm-${env}-alerting-roster`,
-        handler: "index.handler",
-        code: httpStubCode(),
+        handler: LAMBDA_HANDLER,
+        code: lambdaCode("alerting-service", "roster"),
         routeKey: "GET /api/v1/alerting/dispatches/{dispatchId}/roster",
         environment: {
           ALERTING_TABLE_NAME: args.alertingTableName,
-          VERIFIED_PERMISSIONS_POLICY_STORE_ID: policyStore.policyStoreId,
+          VERIFIED_PERMISSIONS_POLICY_STORE_ID: args.policyStoreId,
         },
         additionalPolicyStatements: [
           {
@@ -151,12 +192,12 @@ export class RoutesCore extends pulumi.ComponentResource {
         logGroup: args.logGroup,
         serviceName: "alerting-service",
         functionName: `boxalarm-${env}-alerting-dispatch-detail`,
-        handler: "index.handler",
-        code: httpStubCode(),
+        handler: LAMBDA_HANDLER,
+        code: lambdaCode("alerting-service", "dispatch-detail"),
         routeKey: "GET /api/v1/alerting/dispatches/{dispatchId}",
         environment: {
           ALERTING_TABLE_NAME: args.alertingTableName,
-          VERIFIED_PERMISSIONS_POLICY_STORE_ID: policyStore.policyStoreId,
+          VERIFIED_PERMISSIONS_POLICY_STORE_ID: args.policyStoreId,
         },
         additionalPolicyStatements: [
           {

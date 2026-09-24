@@ -3,7 +3,7 @@ import * as aws from "@pulumi/aws";
 import { ServiceLambda } from "../observability/service-lambda";
 import { ServiceLogGroup } from "../observability/service-log-group";
 import { requireEnv } from "../shared/env";
-import { asyncStubCode } from "./stub-code";
+import { lambdaCode, LAMBDA_HANDLER } from "../shared/lambda-code";
 import { Escalation } from "./escalation";
 
 export interface FanOutArgs {
@@ -38,8 +38,8 @@ export class FanOut extends pulumi.ComponentResource {
         env,
         serviceName: "alerting-service",
         functionName: `boxalarm-${env}-alerting-fan-out`,
-        handler: "index.handler",
-        code: asyncStubCode(),
+        handler: LAMBDA_HANDLER,
+        code: lambdaCode("alerting-service", "fan-out"),
         logGroup: args.logGroup,
         environment: {
           ALERTING_TABLE_NAME: args.alertingTableName,

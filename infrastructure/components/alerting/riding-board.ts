@@ -2,9 +2,8 @@ import * as pulumi from "@pulumi/pulumi";
 import { HttpApi } from "../api/http-api";
 import { ServiceLogGroup } from "../observability/service-log-group";
 import { requireEnv } from "../shared/env";
-import { httpStubCode } from "./stub-code";
+import { lambdaCode, LAMBDA_HANDLER } from "../shared/lambda-code";
 import { AlertingRoute } from "./route-lambda";
-import { policyStore } from "../authz/policy-store";
 
 export interface RidingBoardArgs {
   env: string;
@@ -12,6 +11,7 @@ export interface RidingBoardArgs {
   platformTableArn: pulumi.Input<string>;
   platformTableName: pulumi.Input<string>;
   logGroup: ServiceLogGroup;
+  policyStoreId: pulumi.Input<string>;
 }
 
 /**
@@ -35,7 +35,7 @@ export class RidingBoard extends pulumi.ComponentResource {
 
     const environment = {
       PLATFORM_TABLE_NAME: args.platformTableName,
-      VERIFIED_PERMISSIONS_POLICY_STORE_ID: policyStore.policyStoreId,
+      VERIFIED_PERMISSIONS_POLICY_STORE_ID: args.policyStoreId,
     };
     const verifiedPermissionsStatement = {
       Sid: "VerifiedPermissionsIsAuthorized",
@@ -53,8 +53,8 @@ export class RidingBoard extends pulumi.ComponentResource {
         logGroup: args.logGroup,
         serviceName: "apparatus-service",
         functionName: `boxalarm-${env}-apparatus-riding-board-get`,
-        handler: "index.handler",
-        code: httpStubCode(),
+        handler: LAMBDA_HANDLER,
+        code: lambdaCode("apparatus-service", "riding-board-get"),
         routeKey: "GET /api/v1/apparatus/riding-board/{dispatchId}",
         environment,
         additionalPolicyStatements: [
@@ -80,8 +80,8 @@ export class RidingBoard extends pulumi.ComponentResource {
         logGroup: args.logGroup,
         serviceName: "apparatus-service",
         functionName: `boxalarm-${env}-apparatus-riding-board-assign`,
-        handler: "index.handler",
-        code: httpStubCode(),
+        handler: LAMBDA_HANDLER,
+        code: lambdaCode("apparatus-service", "riding-board-assign"),
         routeKey: "POST /api/v1/apparatus/riding-board/{dispatchId}/assignments",
         environment,
         additionalPolicyStatements: [
