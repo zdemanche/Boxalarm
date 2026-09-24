@@ -48,6 +48,5 @@ export const handler = withAuthorization(getCanaryStatus, {
   actionType: 'AlertingService',
   actionId: 'ViewCanaryStatus',
   resourceType: 'AlertingDispatches',
-  resourceId: (event) =>
-    toVerifiedDeptId({ deptId: event.requestContext.authorizer?.lambda?.deptId ?? '' }),
+  resourceId: (event) => event.requestContext.authorizer?.lambda?.deptId ?? '',
 });
