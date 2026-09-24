@@ -7,29 +7,32 @@ import type { CreateInventoryItemInput } from './types';
 
 const emptyForm: CreateInventoryItemInput = { compartmentCode: '', itemName: '', quantity: 1 };
 
-export function InventoryTab({ unitId }: { unitId: string }) {
+// Takes the apparatus's apparatusId (not its display unitId) — matches ApparatusDetailPage's
+// own detail fetch and the real backend's inventory endpoints, which key directly on
+// apparatusId (apparatus-service inventory/compartmentItemRepository.ts).
+export function InventoryTab({ apparatusId }: { apparatusId: string }) {
   const auth = useAuth();
   const queryClient = useQueryClient();
   const [form, setForm] = useState(emptyForm);
 
   const query = useQuery({
-    queryKey: ['apparatus', unitId, 'inventory'],
-    queryFn: () => getInventory(auth, unitId),
+    queryKey: ['apparatus', apparatusId, 'inventory'],
+    queryFn: () => getInventory(auth, apparatusId),
   });
 
   const createMutation = useMutation({
-    mutationFn: (input: CreateInventoryItemInput) => createInventoryItem(auth, unitId, input),
+    mutationFn: (input: CreateInventoryItemInput) => createInventoryItem(auth, apparatusId, input),
     onSuccess: () => {
       setForm(emptyForm);
-      void queryClient.invalidateQueries({ queryKey: ['apparatus', unitId, 'inventory'] });
+      void queryClient.invalidateQueries({ queryKey: ['apparatus', apparatusId, 'inventory'] });
     },
   });
 
   const quantityMutation = useMutation({
     mutationFn: (input: { itemId: string; quantity: number }) =>
-      updateInventoryQuantity(auth, unitId, input.itemId, input.quantity),
+      updateInventoryQuantity(auth, apparatusId, input.itemId, input.quantity),
     onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: ['apparatus', unitId, 'inventory'] });
+      void queryClient.invalidateQueries({ queryKey: ['apparatus', apparatusId, 'inventory'] });
     },
   });
 

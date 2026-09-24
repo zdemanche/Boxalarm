@@ -111,11 +111,15 @@ export function ApparatusDetailPage() {
           </div>
 
           <div role="tabpanel" style={{ marginTop: 'var(--boxalarm-spacing-lg)' }}>
-            {tab === 'Overview' ? null : null}
-            {tab === 'Maintenance' ? <MaintenanceTab unitId={unit.unitId} /> : null}
-            {tab === 'SCBA' ? <ScbaTab unitId={unit.unitId} /> : null}
+            {/* Maintenance/SCBA/Inventory key their sub-resources on apparatusId, matching this
+                page's own detail fetch above (getApparatus(auth, id) where id is apparatusId).
+                Testing schedules are the one sub-resource the backend resolves and returns by
+                display unit code, so it alone still takes unitId — see the tab-identifier note
+                in the apparatus-service INFRA reconciliation ticket for the full picture. */}
+            {tab === 'Maintenance' ? <MaintenanceTab apparatusId={unit.apparatusId} /> : null}
+            {tab === 'SCBA' ? <ScbaTab apparatusId={unit.apparatusId} /> : null}
             {tab === 'Testing' ? <TestingTab unitId={unit.unitId} /> : null}
-            {tab === 'Inventory' ? <InventoryTab unitId={unit.unitId} /> : null}
+            {tab === 'Inventory' ? <InventoryTab apparatusId={unit.apparatusId} /> : null}
           </div>
         </>
       )}

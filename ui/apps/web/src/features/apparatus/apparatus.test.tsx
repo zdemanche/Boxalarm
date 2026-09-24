@@ -152,3 +152,103 @@ test('detail renders the OOS reason and elapsed time from the real backend neste
   await screen.findByRole('heading', { name: 'L1' });
   expect(await screen.findByText(/Aerial hydraulic leak since 2 days ago/i)).toBeTruthy();
 });
+
+// apparatusId ('a1') and unitId ('L1') are deliberately different strings in these tests so a
+// tab that's handed the wrong identifier fails to match anything, instead of accidentally
+// passing because the two happened to be equal.
+function mockDetail() {
+  return http.get('/api/v1/apparatus/a1', () =>
+    HttpResponse.json({
+      apparatusId: 'a1',
+      unitId: 'L1',
+      type: 'Ladder',
+      status: 'IN_SERVICE',
+      openDefects: [],
+      failedTests: [],
+    }),
+  );
+}
+
+test('SCBA tab filters the due-soon list by apparatusId, matching the page detail fetch (finding #3/#4)', async () => {
+  server.use(
+    mockDetail(),
+    http.get('/api/v1/apparatus/scba/testing-schedules', () =>
+      HttpResponse.json({
+        dueSoon: [
+          {
+            apparatusId: 'a1',
+            scbaUnitId: 'SCBA-1',
+            cylinderId: 'C-1',
+            testType: 'SCBA_FLOW',
+            dueDate: '2026-10-01',
+          },
+          {
+            apparatusId: 'a-other',
+            scbaUnitId: 'SCBA-9',
+            cylinderId: 'C-9',
+            testType: 'SCBA_FLOW',
+            dueDate: '2026-10-01',
+          },
+        ],
+      }),
+    ),
+  );
+
+  const user = userEvent.setup();
+  renderApp(['CHIEF'], '/apparatus/a1');
+  await screen.findByRole('heading', { name: 'L1' });
+  await user.click(screen.getByRole('tab', { name: 'SCBA' }));
+
+  expect(await screen.findByText(/SCBA-1/)).toBeTruthy();
+  expect(screen.queryByText(/SCBA-9/)).toBeNull();
+});
+
+test('Testing tab filters the schedule by the display unitId, which is what the backend testing-schedules endpoint returns (finding #4)', async () => {
+  server.use(
+    mockDetail(),
+    http.get('/api/v1/apparatus/testing-schedules', () =>
+      HttpResponse.json([
+        { unitId: 'L1', testType: 'HOSE', nextDueDate: '2026-11-01' },
+        { unitId: 'other-unit', testType: 'PUMP', nextDueDate: '2026-11-05' },
+      ]),
+    ),
+  );
+
+  const user = userEvent.setup();
+  renderApp(['CHIEF'], '/apparatus/a1');
+  await screen.findByRole('heading', { name: 'L1' });
+  await user.click(screen.getByRole('tab', { name: 'Testing' }));
+
+  expect(await screen.findByText(/HOSE due 2026-11-01/)).toBeTruthy();
+  // "PUMP" alone also matches an <option> in the unrelated "Log test record" select below, so
+  // assert on the schedule-list wording specifically.
+  expect(screen.queryByText(/PUMP due 2026-11-05/)).toBeNull();
+});
+
+test('Maintenance tab fetches from the apparatusId-keyed endpoint, matching the page detail fetch (finding #4)', async () => {
+  server.use(
+    mockDetail(),
+    http.get('/api/v1/apparatus/a1/maintenance', () =>
+      HttpResponse.json({
+        records: [
+          {
+            apparatusId: 'a1',
+            performedAt: 1700000000,
+            description: 'Oil change',
+            vendor: 'Acme',
+            cost: 120,
+            scheduledNextAt: null,
+          },
+        ],
+        nextScheduled: null,
+      }),
+    ),
+  );
+
+  const user = userEvent.setup();
+  renderApp(['CHIEF'], '/apparatus/a1');
+  await screen.findByRole('heading', { name: 'L1' });
+  await user.click(screen.getByRole('tab', { name: 'Maintenance' }));
+
+  expect(await screen.findByText('Oil change')).toBeTruthy();
+});
