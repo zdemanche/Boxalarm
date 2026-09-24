@@ -29,9 +29,7 @@ const requestMutualAid = vi
     adapterUsed: 'OFFICER_MANUAL_PROMPT',
   });
 vi.mock('./mutualAidPort.js', () => ({
-  officerManualPromptAdapter: {
-    requestMutualAid: (...args: unknown[]) => requestMutualAid(...args),
-  },
+  requestMutualAid: (...args: unknown[]) => requestMutualAid(...args),
 }));
 
 interface FakeItem {

@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
 import type { SNSClient } from '@aws-sdk/client-sns';
 import { toVerifiedDeptId } from '@boxalarm/dept-scope';
-import { officerManualPromptAdapter } from './mutualAidPort.js';
+import { requestMutualAid } from './mutualAidPort.js';
 
 interface FakeItem {
   pk: string;
@@ -77,7 +77,7 @@ function createFakeDdb(
 const DEPT_ID = toVerifiedDeptId({ deptId: 'NICHOLS' });
 const ELIGIBILITY_PK = 'DEPT#NICHOLS#ELIGIBILITY';
 
-describe('officerManualPromptAdapter', () => {
+describe('requestMutualAid', () => {
   it('records the mutual-aid event once and prompts every eligible officer', async () => {
     const officer: FakeItem = {
       pk: ELIGIBILITY_PK,
@@ -107,7 +107,7 @@ describe('officerManualPromptAdapter', () => {
     const snsSend = vi.fn().mockResolvedValue({});
     const sns = { send: snsSend } as unknown as SNSClient;
 
-    const result = await officerManualPromptAdapter.requestMutualAid({
+    const result = await requestMutualAid({
       ddb: { send } as unknown as DynamoDBDocumentClient,
       sns,
       tableName: 'alerting-table',
@@ -162,7 +162,7 @@ describe('officerManualPromptAdapter', () => {
     const snsSend = vi.fn().mockResolvedValue({});
     const sns = { send: snsSend } as unknown as SNSClient;
 
-    const result = await officerManualPromptAdapter.requestMutualAid({
+    const result = await requestMutualAid({
       ddb: { send } as unknown as DynamoDBDocumentClient,
       sns,
       tableName: 'alerting-table',
@@ -191,7 +191,7 @@ describe('officerManualPromptAdapter', () => {
     const snsSend = vi.fn();
     const sns = { send: snsSend } as unknown as SNSClient;
 
-    const result = await officerManualPromptAdapter.requestMutualAid({
+    const result = await requestMutualAid({
       ddb: { send } as unknown as DynamoDBDocumentClient,
       sns,
       tableName: 'alerting-table',

@@ -21,7 +21,7 @@ import {
   type FanOutChannel,
 } from '../fanout/idempotencyKey.js';
 import { createEscalationSchedule, getSchedulerClient } from './scheduleEscalation.js';
-import { officerManualPromptAdapter } from './mutualAidPort.js';
+import { requestMutualAid } from './mutualAidPort.js';
 import {
   isPredicateMet,
   readDepartmentToneConfig,
@@ -390,7 +390,7 @@ export const handler = async (payload: unknown): Promise<{ outcome: ToneOutcome 
 
   if (toneSequence === TONE_SEQUENCE_THREE) {
     try {
-      await officerManualPromptAdapter.requestMutualAid({
+      await requestMutualAid({
         ddb,
         sns,
         tableName,
