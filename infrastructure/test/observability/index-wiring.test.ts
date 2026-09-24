@@ -58,13 +58,26 @@ describe("index.ts production wiring", () => {
             state.arn = `arn:aws:verifiedpermissions::123456789012:policy-store/${args.name}-id`;
           }
           if (args.type === "aws:cloudwatch/eventBus:EventBus") {
-            state.arn = `arn:aws:events:us-east-1:123456789012:event-bus/${args.inputs.name}`;
+            state.arn = `arn:aws:events:us-east-1:123456789012:event-bus/${args.inputs.name ?? args.name}`;
           }
           if (args.type === "aws:sqs/queue:Queue") {
             state.arn = `arn:aws:sqs:us-east-1:123456789012:${args.inputs.name ?? args.name}`;
+            state.url = `https://sqs.us-east-1.amazonaws.com/123456789012/${args.inputs.name ?? args.name}`;
           }
           if (args.type === "aws:sns/topic:Topic") {
             state.arn = `arn:aws:sns:us-east-1:123456789012:${args.inputs.name ?? args.name}`;
+          }
+          if (args.type === "aws:cloudwatch/eventRule:EventRule") {
+            state.arn = `arn:aws:events:us-east-1:123456789012:rule/${args.inputs.name ?? args.name}`;
+          }
+          if (args.type === "aws:scheduler/scheduleGroup:ScheduleGroup") {
+            state.arn = `arn:aws:scheduler:us-east-1:123456789012:schedule-group/${args.inputs.name ?? args.name}`;
+          }
+          if (args.type === "aws:iam/policy:Policy") {
+            state.arn = `arn:aws:iam::123456789012:policy/${args.inputs.name ?? args.name}`;
+          }
+          if (args.type === "aws:apigatewayv2/integration:Integration") {
+            state.id = `${args.name}-integration-id`;
           }
           return { id: `${args.name}-id`, state };
         },
@@ -94,7 +107,12 @@ describe("index.ts production wiring", () => {
     pulumi.runtime.setAllConfig({
       "boxalarm-infra:env": "dev",
       "boxalarm-infra:webOrigin": "https://localhost:5173",
+      "boxalarm-infra:nerisSchemaSourceUrl": "https://schema.example.test/neris",
       "boxalarm-infra:deptId": "nichols-fd",
+      "boxalarm-infra:smsWebhookSecret": "test-sms-secret",
+      "boxalarm-infra:voiceWebhookSecret": "test-voice-secret",
+      "boxalarm-infra:pushWebhookSecret": "test-push-secret",
+      "boxalarm-infra:canaryMemberId": "test-canary-member",
     });
   });
 
@@ -157,6 +175,38 @@ describe("index.ts production wiring", () => {
           indexModule.chiefNotificationTopic.topicArn,
           indexModule.platformExport.handlerLambda.function.arn,
           indexModule.platformRetention.disposalLambda.function.arn,
+          indexModule.alertingPlaneBoundary.policy.arn,
+          indexModule.messagingAlerting.topic.arn,
+          indexModule.escalation.lambda.function.arn,
+          indexModule.fanOut.lambda.function.arn,
+          indexModule.channelWorkers.workers.push.function.arn,
+          indexModule.channelWorkers.workers.sms.function.arn,
+          indexModule.channelWorkers.workers.voice.function.arn,
+          indexModule.routesCore.dispatchIngress.lambda.function.arn,
+          indexModule.routesCore.responses.lambda.function.arn,
+          indexModule.routesCore.roster.lambda.function.arn,
+          indexModule.routesCore.detail.lambda.function.arn,
+          indexModule.routesOps.selfTestPost.lambda.function.arn,
+          indexModule.routesOps.selfTestGet.lambda.function.arn,
+          indexModule.routesOps.audit.lambda.function.arn,
+          indexModule.routesOps.receiptsGet.lambda.function.arn,
+          indexModule.routesOps.webhooks.sms.lambda.function.arn,
+          indexModule.routesOps.webhooks.voice.lambda.function.arn,
+          indexModule.routesOps.webhooks.push.lambda.function.arn,
+          indexModule.pushTokens.registerRoute.lambda.function.arn,
+          indexModule.pushTokens.revokeRoute.lambda.function.arn,
+          indexModule.pushTokens.memberUpdatedConsumer.function.arn,
+          indexModule.ridingBoard.getRoute.lambda.function.arn,
+          indexModule.ridingBoard.assignRoute.lambda.function.arn,
+          indexModule.alertingAlarms.pageTopic.arn,
+          indexModule.eligibilityStaleness.lambda.function.arn,
+          indexModule.escalation.toneEvaluatorLambda.function.arn,
+          indexModule.routesOps.canaryStatus.lambda.function.arn,
+          indexModule.routesOps.deviceReportState.lambda.function.arn,
+          indexModule.routesOps.diagnostics.lambda.function.arn,
+          indexModule.routesOps.diagnosticsSelf.lambda.function.arn,
+          indexModule.routesOps.deliveryBaseline.lambda.function.arn,
+          indexModule.alertingCanary.lambda.function.arn,
         ])
         .apply(() => resolve()),
     );
@@ -187,6 +237,12 @@ describe("index.ts production wiring", () => {
     );
     expect(logGroupNames).toEqual(expectedLogGroupNames);
     expect(dashboardNames).toEqual(expectedDashboardNames);
+
+    // Let every nested ComponentResource's derived-policy resource registrations
+    // (RolePolicy/Route/Integration built from `.apply()`-derived IAM statements) settle
+    // against this test's monitor before the next test replaces it — otherwise their
+    // registerResourceOutputs calls land on a torn-down mock as unhandled rejections.
+    await new Promise((r) => setTimeout(r, 100));
   }, 20000);
 
   it("throws when the boxalarm-infra:env config key is not declared", async () => {
