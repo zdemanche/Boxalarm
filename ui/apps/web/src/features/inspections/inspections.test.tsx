@@ -132,6 +132,45 @@ test('a forced write without permission renders the 403 problem (AC4)', async ()
   await screen.findByRole('heading', { name: 'Forbidden' });
 });
 
+test('pre-plan file inputs restrict type and reject oversized files client-side (MAJOR-2)', async () => {
+  server.use(
+    http.get('/api/v1/inspections/occupancies/occ-1', () =>
+      HttpResponse.json({
+        occupancyId: 'occ-1',
+        address: '9 Elm St',
+        occupancyType: 'Residential',
+        contacts: [],
+        hazards: [],
+      }),
+    ),
+    http.get('/api/v1/inspections/occupancies/occ-1/pre-plan', () =>
+      HttpResponse.json(
+        { type: 'about:blank', title: 'Not Found', status: 404, traceId: 't1' },
+        { status: 404 },
+      ),
+    ),
+  );
+
+  const user = userEvent.setup();
+  renderApp(['CHIEF'], '/inspections/occupancies/occ-1');
+  await screen.findByRole('heading', { name: '9 Elm St' });
+  await user.click(screen.getByRole('tab', { name: 'Pre-plan' }));
+
+  const diagramInput = screen.getByLabelText('Site diagram') as HTMLInputElement;
+  expect(diagramInput.accept).toContain('application/pdf');
+  expect(diagramInput.accept).toContain('image/png');
+
+  const oversizedFile = new File([new Uint8Array(21 * 1024 * 1024)], 'floorplan.pdf', {
+    type: 'application/pdf',
+  });
+  await user.upload(diagramInput, oversizedFile);
+
+  const alert = await screen.findByRole('alert');
+  expect(alert.textContent).toContain('floorplan.pdf');
+  expect(alert.textContent).toContain('larger than the 20MB limit');
+  expect(diagramInput.files?.length ?? 0).toBe(0);
+});
+
 test('an out-of-service hydrant is distinguished by text and icon, not color alone (AC3)', async () => {
   server.use(
     http.get('/api/v1/inspections/hydrants', () =>

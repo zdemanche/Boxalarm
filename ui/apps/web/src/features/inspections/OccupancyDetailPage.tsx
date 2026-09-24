@@ -8,6 +8,14 @@ import type { UtilityShutoff } from './types';
 
 type Tab = 'details' | 'preplan';
 
+/** Site diagrams and supporting attachments only — the file types a pre-plan needs. */
+const PREPLAN_FILE_ACCEPT = '.pdf,.png,.jpg,.jpeg,application/pdf,image/png,image/jpeg';
+const MAX_PREPLAN_FILE_BYTES = 20 * 1024 * 1024; // 20MB — generous for a scanned floor plan/photo
+
+function oversizedFileNames(files: File[]): string[] {
+  return files.filter((file) => file.size > MAX_PREPLAN_FILE_BYTES).map((file) => file.name);
+}
+
 function splitLines(value: string): string[] {
   return value
     .split('\n')
@@ -27,6 +35,7 @@ export function OccupancyDetailPage() {
   const [shutoffs, setShutoffs] = useState<UtilityShutoff[]>([]);
   const [prePlanHazardsText, setPrePlanHazardsText] = useState('');
   const [uploadStatus, setUploadStatus] = useState<string | null>(null);
+  const [fileError, setFileError] = useState<string | null>(null);
 
   const occupancyQuery = useQuery({
     queryKey: ['inspections', 'occupancies', id],
@@ -243,7 +252,20 @@ export function OccupancyDetailPage() {
                     Site diagram
                     <input
                       type="file"
-                      onChange={(e) => setDiagramFile(e.target.files?.[0] ?? null)}
+                      accept={PREPLAN_FILE_ACCEPT}
+                      onChange={(e) => {
+                        const file = e.target.files?.[0] ?? null;
+                        if (file && oversizedFileNames([file]).length > 0) {
+                          setFileError(
+                            `${file.name} is larger than the 20MB limit for pre-plan files.`,
+                          );
+                          e.target.value = '';
+                          setDiagramFile(null);
+                          return;
+                        }
+                        setFileError(null);
+                        setDiagramFile(file);
+                      }}
                     />
                   </label>
                   <label style={{ display: 'grid', gap: 4 }}>
@@ -251,9 +273,28 @@ export function OccupancyDetailPage() {
                     <input
                       type="file"
                       multiple
-                      onChange={(e) => setAttachmentFiles(Array.from(e.target.files ?? []))}
+                      accept={PREPLAN_FILE_ACCEPT}
+                      onChange={(e) => {
+                        const files = Array.from(e.target.files ?? []);
+                        const oversized = oversizedFileNames(files);
+                        if (oversized.length > 0) {
+                          setFileError(
+                            `${oversized.join(', ')} ${oversized.length === 1 ? 'is' : 'are'} larger than the 20MB limit for pre-plan files. Remove or replace before saving.`,
+                          );
+                          e.target.value = '';
+                          setAttachmentFiles([]);
+                          return;
+                        }
+                        setFileError(null);
+                        setAttachmentFiles(files);
+                      }}
                     />
                   </label>
+                  {fileError ? (
+                    <p role="alert" aria-live="assertive">
+                      {fileError}
+                    </p>
+                  ) : null}
                   <fieldset style={{ display: 'grid', gap: 'var(--boxalarm-spacing-sm)' }}>
                     <legend>Utility shutoffs</legend>
                     {shutoffs.map((shutoff, index) => (
