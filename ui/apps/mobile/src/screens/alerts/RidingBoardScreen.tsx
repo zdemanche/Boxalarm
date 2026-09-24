@@ -17,6 +17,13 @@ function formatClockTime(epochMs: number): string {
   return new Date(epochMs).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 }
 
+interface PendingAssignment {
+  unitId: string;
+  positionCode: string;
+  memberId: string;
+  version: number;
+}
+
 // E1-S18-UI: the officer's riding board. Members come from the response roster (name, quals,
 // ETA, direct-to-scene distinction); seats come from apparatus-service's riding board. The
 // member's own one-tap response flow (AlertDetailScreen) is untouched by this screen.
@@ -30,7 +37,7 @@ export function RidingBoardScreen() {
   const [apparatus, setApparatus] = useState<RidingBoardApparatus[]>([]);
   const [roster, setRoster] = useState<RosterEntry[]>([]);
   const [openSeat, setOpenSeat] = useState<{ unitId: string; positionCode: string } | null>(null);
-  const [pending, setPending] = useState<Set<string>>(new Set());
+  const [pending, setPending] = useState<Map<string, PendingAssignment>>(new Map());
   const [conflict, setConflict] = useState<string | null>(null);
   const [sessionExpired, setSessionExpired] = useState(false);
   const [staleSince, setStaleSince] = useState<number | null>(null);
@@ -78,6 +85,55 @@ export function RidingBoardScreen() {
     };
   }, [dispatchId, repository]);
 
+  // The offline branch below only ever added to `pending` and returned - nothing flushed or
+  // retried it on reconnect, so an offline assignment showed "Pending sync" forever and was
+  // silently lost. Keep a ref mirror of `pending` so the flush effect (keyed only on `isOnline`,
+  // so it fires once per reconnect rather than looping) always reads the latest queued
+  // assignments without needing `pending` itself in its dependency array.
+  const pendingRef = useRef(pending);
+  useEffect(() => {
+    pendingRef.current = pending;
+  }, [pending]);
+
+  useEffect(() => {
+    if (!isOnline || pendingRef.current.size === 0) return;
+    let cancelled = false;
+
+    const flush = async () => {
+      const queued = [...pendingRef.current];
+      for (const [seatKey, assignment] of queued) {
+        if (cancelled) return;
+        try {
+          await repository.assignRidingSeat(dispatchId, {
+            unitId: assignment.unitId,
+            positionCode: assignment.positionCode,
+            memberId: assignment.memberId,
+            expectedVersion: assignment.version,
+          });
+          if (cancelled) return;
+          setPending((prev) => {
+            const next = new Map(prev);
+            next.delete(seatKey);
+            return next;
+          });
+        } catch {
+          // Leave it queued - the next reconnect (or a future retry trigger) will try again.
+          // A stale version will surface as a 409 through the same assign() path once the
+          // officer is back online and can see/resolve it interactively.
+        }
+      }
+      if (!cancelled) {
+        const board = await repository.getRidingBoard(dispatchId).catch(() => null);
+        if (board && !cancelled) setApparatus(board.apparatus);
+      }
+    };
+
+    void flush();
+    return () => {
+      cancelled = true;
+    };
+  }, [isOnline, dispatchId, repository]);
+
   const memberById = new Map(roster.map((entry) => [entry.memberId, entry]));
   const assignable = roster.filter(
     (entry) => entry.ackStatus === 'RESPONDING' || entry.ackStatus === 'DIRECT_TO_SCENE',
@@ -92,7 +148,11 @@ export function RidingBoardScreen() {
     const seatKey = `${unitId}#${positionCode}`;
     setOpenSeat(null);
     if (!isOnline) {
-      setPending((prev) => new Set(prev).add(seatKey));
+      setPending((prev) => {
+        const next = new Map(prev);
+        next.set(seatKey, { unitId, positionCode, memberId, version });
+        return next;
+      });
       return;
     }
     try {

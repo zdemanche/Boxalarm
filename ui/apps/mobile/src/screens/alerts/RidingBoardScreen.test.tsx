@@ -1,4 +1,4 @@
-import { act, fireEvent, render } from '@testing-library/react-native';
+import { act, fireEvent, render, waitFor } from '@testing-library/react-native';
 import { mockAlertsRepository } from '../../features/alerts/mockAlertsRepository';
 import { ApiError } from '../../lib/apiClient';
 import { RidingBoardScreen } from './RidingBoardScreen';
@@ -56,9 +56,11 @@ beforeEach(async () => {
   await mockAlertsRepository.submitResponse(dispatchId, 'RESPONDING', 10);
   mockRouteParams.dispatchId = dispatchId;
   mockConnectivity.isOnline = true;
+  mockRepository.assignRidingSeat.mockReset();
   mockRepository.assignRidingSeat.mockImplementation((...args) =>
     mockAlertsRepository.assignRidingSeat(...args),
   );
+  mockRepository.getRidingBoard.mockReset();
   mockRepository.getRidingBoard.mockImplementation((...args) =>
     mockAlertsRepository.getRidingBoard(...args),
   );
@@ -180,4 +182,27 @@ test('a poll failure surfaces a stale-data indicator instead of silently keeping
   const { findByText } = await render(<RidingBoardScreen />);
 
   expect(await findByText(/data stopped updating/i)).toBeTruthy();
+});
+
+test('an offline assignment is queued as "Pending sync" and flushed automatically once reconnected', async () => {
+  mockConnectivity.isOnline = false;
+
+  const screen = await render(<RidingBoardScreen />);
+  await screen.findByText('Engine 301');
+  await attemptAssignment(screen);
+
+  expect(await screen.findByText(/pending sync/i)).toBeTruthy();
+  expect(mockRepository.assignRidingSeat).not.toHaveBeenCalled();
+
+  mockConnectivity.isOnline = true;
+  await act(async () => {
+    screen.rerender(<RidingBoardScreen />);
+  });
+
+  await waitFor(() => {
+    expect(mockRepository.assignRidingSeat).toHaveBeenCalledTimes(1);
+  });
+  await waitFor(() => {
+    expect(screen.queryByText(/pending sync/i)).toBeNull();
+  });
 });
