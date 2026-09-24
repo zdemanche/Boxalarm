@@ -8,7 +8,7 @@ await Promise.all(
       outfile: `dist/${service}/${fn}/index.mjs`,
       bundle: true,
       platform: 'node',
-      target: 'node22',
+      target: 'node20',
       format: 'esm',
       sourcemap: true,
       external: ['@aws-sdk/*'],
