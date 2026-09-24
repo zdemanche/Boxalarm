@@ -60,11 +60,15 @@ let members: Member[] = [
   },
 ];
 
+// Demo/seed data only — Nichols FD's actual fleet. Never hardcode these names, or the count of
+// five, in a component, layout, or piece of logic: every department has its own apparatus, and
+// everything else renders from the per-department apparatus data the API returns.
 let apparatus: Apparatus[] = [
-  { apparatusId: 'a-1', unitId: 'Engine 1', type: 'Engine', status: 'IN_SERVICE' },
-  { apparatusId: 'a-2', unitId: 'Ladder 1', type: 'Ladder', status: 'IN_SERVICE' },
-  { apparatusId: 'a-3', unitId: 'Rescue 1', type: 'Rescue', status: 'OUT_OF_SERVICE' },
-  { apparatusId: 'a-4', unitId: 'Tanker 2', type: 'Tanker', status: 'IN_SERVICE' },
+  { apparatusId: 'a-1', unitId: 'Rescue 300', type: 'Rescue', status: 'IN_SERVICE' },
+  { apparatusId: 'a-2', unitId: 'Engine 301', type: 'Engine', status: 'IN_SERVICE' },
+  { apparatusId: 'a-3', unitId: 'Truck 304', type: 'Truck', status: 'OUT_OF_SERVICE' },
+  { apparatusId: 'a-4', unitId: 'Engine 305', type: 'Engine', status: 'IN_SERVICE' },
+  { apparatusId: 'a-5', unitId: 'Squad 309', type: 'Squad', status: 'IN_SERVICE' },
 ];
 
 function json(data: unknown, status = 200): Response {

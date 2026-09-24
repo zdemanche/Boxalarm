@@ -1,0 +1,25 @@
+.wrapper {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--bx-space-sm);
+  padding: var(--bx-space-2xl) var(--bx-space-lg);
+  max-width: 60ch;
+}
+
+.icon {
+  color: var(--bx-status-danger);
+}
+
+.title {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--bx-fg);
+}
+
+.message {
+  margin: 0;
+  color: var(--bx-fg-muted);
+  font-size: 14px;
+}

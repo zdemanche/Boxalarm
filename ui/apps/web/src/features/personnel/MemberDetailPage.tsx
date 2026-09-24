@@ -1,7 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Link, useParams } from 'react-router-dom';
+import { useParams } from 'react-router-dom';
 import { useAuth } from '../../auth/AuthContext';
 import { ApiForbiddenGate } from '../../components/ApiForbiddenGate';
+import { Badge } from '../../components/ui/Chip';
+import { PageHeader } from '../../components/ui/PageHeader';
 import { getMember, updateMemberStatus } from './api';
 import type { MemberStatus } from './types';
 
@@ -38,30 +40,38 @@ export function MemberDetailPage() {
   const member = memberQuery.data;
 
   return (
-    <main id="main-content" style={{ padding: 'var(--boxalarm-spacing-lg)' }}>
-      <p>
-        <Link to="/personnel">← Personnel</Link>
-      </p>
+    <main id="main-content">
+      <PageHeader
+        title={member ? `${member.firstName} ${member.lastName}` : '…'}
+        breadcrumbs={[
+          { label: 'Personnel', to: '/personnel' },
+          { label: member ? `${member.firstName} ${member.lastName}` : '…' },
+        ]}
+        actions={member ? <Badge>{member.status}</Badge> : undefined}
+      />
       {memberQuery.isLoading || !member ? (
         <p>Loading member…</p>
       ) : (
         <>
-          <h1 style={{ fontSize: 'var(--boxalarm-font-size-xl)', margin: 0 }}>
-            {member.firstName} {member.lastName}
-          </h1>
-          <dl style={{ marginTop: 'var(--boxalarm-spacing-lg)' }}>
-            <dt>Status</dt>
-            <dd>{member.status}</dd>
-            <dt>Email</dt>
-            <dd>{member.email}</dd>
-            <dt>Phone</dt>
-            <dd>{member.phone}</dd>
-            <dt>Rank</dt>
-            <dd>{member.rank}</dd>
-            <dt>Agency ID</dt>
-            <dd>{member.agencyId}</dd>
-            <dt>Join date</dt>
-            <dd>{member.joinDate}</dd>
+          <dl
+            style={{
+              display: 'grid',
+              gridTemplateColumns: 'max-content 1fr',
+              columnGap: 'var(--bx-space-lg)',
+              rowGap: 'var(--bx-space-sm)',
+              fontSize: 14,
+            }}
+          >
+            <dt style={{ color: 'var(--bx-fg-muted)' }}>Email</dt>
+            <dd style={{ margin: 0 }}>{member.email}</dd>
+            <dt style={{ color: 'var(--bx-fg-muted)' }}>Phone</dt>
+            <dd style={{ margin: 0, fontFamily: 'var(--bx-font-mono)' }}>{member.phone}</dd>
+            <dt style={{ color: 'var(--bx-fg-muted)' }}>Rank</dt>
+            <dd style={{ margin: 0 }}>{member.rank}</dd>
+            <dt style={{ color: 'var(--bx-fg-muted)' }}>Agency ID</dt>
+            <dd style={{ margin: 0 }}>{member.agencyId}</dd>
+            <dt style={{ color: 'var(--bx-fg-muted)' }}>Join date</dt>
+            <dd style={{ margin: 0 }}>{member.joinDate}</dd>
           </dl>
 
           {isAdmin ? (
@@ -70,7 +80,9 @@ export function MemberDetailPage() {
                 display: 'grid',
                 gap: 4,
                 maxWidth: 320,
-                marginTop: 'var(--boxalarm-spacing-lg)',
+                marginTop: 'var(--bx-space-lg)',
+                fontSize: 13,
+                fontWeight: 600,
               }}
             >
               Change status
@@ -79,7 +91,16 @@ export function MemberDetailPage() {
                 value={member.status}
                 disabled={statusMutation.isPending}
                 onChange={(e) => statusMutation.mutate(e.target.value as MemberStatus)}
-                style={{ minHeight: 44 }}
+                style={{
+                  minHeight: 'var(--bx-target-office)',
+                  padding: '0 var(--bx-space-sm)',
+                  fontSize: 14,
+                  fontWeight: 400,
+                  background: 'var(--bx-surface-raised)',
+                  color: 'var(--bx-fg)',
+                  border: '1px solid var(--bx-border)',
+                  borderRadius: 'var(--bx-radius-md)',
+                }}
               >
                 {STATUSES.map((status) => (
                   <option key={status} value={status}>
