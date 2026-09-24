@@ -169,7 +169,7 @@ describe('coverageRepository (real DynamoDB via LocalStack)', () => {
     it('emits an alarmable metric alongside the warn log when the dept roster has zero members (V2)', async () => {
       const emptyDeptId = toVerifiedDeptId({ deptId: `NOMEMBERS-METRIC-${Date.now()}` });
       const logSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
-      let emittedMetric = false;
+      let emittedMetric: boolean;
       try {
         await buildEligibleQualCodeIndex(client, TABLE_NAME, emptyDeptId, 'corr-3');
         emittedMetric = logSpy.mock.calls.some(([line]) =>
