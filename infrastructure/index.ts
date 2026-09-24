@@ -27,6 +27,9 @@ import { AuditRoute } from "./components/platform/audit-route";
 import { Export } from "./components/platform/export";
 import { Retention } from "./components/platform/retention";
 import { ChiefNotificationTopic } from "./components/shared/chief-notifications";
+import { Reporting } from "./components/reporting/reporting";
+import { Incident } from "./components/incident/incident";
+import { SchemaRefresh } from "./components/incident/schema-refresh";
 import { AlertingPlaneBoundary } from "./components/alerting/iam-boundary";
 import { MessagingAlerting } from "./components/alerting/messaging-alerting";
 import { Escalation } from "./components/alerting/escalation";
@@ -44,6 +47,12 @@ export const stack = getStack();
 const config = new Config("boxalarm-infra");
 export const env = config.require("env");
 export const webOrigin = config.require("webOrigin");
+// Not yet published: the offline pipeline that normalizes the upstream
+// neris-framework XLSX/YAML feed into the JSON shape schemaVersion/
+// refreshScanner/handler.ts fetches doesn't have a URL yet (E6-S11-INFRA
+// #246's own scope note). Required config, set out-of-band per env once
+// that pipeline exists, rather than a guessed literal.
+export const nerisSchemaSourceUrl = config.require("nerisSchemaSourceUrl");
 
 // #180 / #6: base identity + pre-token-generation trigger that puts
 // custom:deptId on the ACCESS token for the shared authorizer.
@@ -222,6 +231,42 @@ export const platformRetention = new Retention("platform-retention", {
   policyStoreId: policyStore.policyStoreId,
   chiefNotificationTopicArn: chiefNotificationTopic.topicArn,
   logGroup: platformLogGroup,
+  httpApi,
+});
+
+export const reporting = new Reporting("reporting", {
+  env,
+  platformTableName: platformTable.tableName,
+  platformTableArn: platformTable.tableArn,
+  policyStoreArn: policyStore.policyStoreArn,
+  policyStoreId: policyStore.policyStoreId,
+  logGroup: serviceLogGroupByName["reporting-service"],
+  httpApi,
+});
+
+const incidentServiceLogGroup = serviceLogGroupByName["incident-service"];
+
+export const incidentSchemaRefresh = new SchemaRefresh("incident-schema-refresh", {
+  env,
+  incidentTableName: incidentTable.tableName,
+  incidentTableArn: incidentTable.tableArn,
+  incidentCmkArn: incidentTable.cmkArn,
+  nerisSchemaSourceUrl,
+  logGroup: incidentServiceLogGroup,
+});
+
+export const incident = new Incident("incident", {
+  env,
+  incidentTableName: incidentTable.tableName,
+  incidentTableArn: incidentTable.tableArn,
+  incidentCmkArn: incidentTable.cmkArn,
+  busName: platformBus.busName,
+  busArn: platformBus.busArn,
+  nerisSchemaBucketArn: incidentSchemaRefresh.bucket.arn,
+  nerisSchemaBucketName: incidentSchemaRefresh.bucket.bucket,
+  policyStoreArn: policyStore.policyStoreArn,
+  policyStoreId: policyStore.policyStoreId,
+  logGroup: incidentServiceLogGroup,
   httpApi,
 });
 

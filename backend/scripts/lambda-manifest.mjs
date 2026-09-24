@@ -43,6 +43,11 @@ export const LAMBDA_ENTRIES = [
     entry: 'src/services/platform-service/retention/disposalHandler.ts',
   },
   {
+    service: 'platform-service',
+    function: 'outbox-publisher',
+    entry: 'src/services/platform-service/outbox-publisher/handler.ts',
+  },
+  {
     service: 'personnel-service',
     function: 'members-create',
     entry: 'src/services/personnel-service/members/create.ts',
@@ -61,6 +66,71 @@ export const LAMBDA_ENTRIES = [
     service: 'personnel-service',
     function: 'members-update-status',
     entry: 'src/services/personnel-service/members/updateStatus.ts',
+  },
+  {
+    service: 'incident-service',
+    function: 'create',
+    entry: 'src/services/incident-service/createIncident.ts',
+  },
+  {
+    service: 'incident-service',
+    function: 'update',
+    entry: 'src/services/incident-service/updateIncident.ts',
+  },
+  {
+    service: 'incident-service',
+    function: 'narrative',
+    entry: 'src/services/incident-service/putNarrative.ts',
+  },
+  {
+    service: 'incident-service',
+    function: 'response-times',
+    entry: 'src/services/incident-service/putResponseTimes.ts',
+  },
+  {
+    service: 'incident-service',
+    function: 'exposures',
+    entry: 'src/services/incident-service/putExposures.ts',
+  },
+  {
+    service: 'incident-service',
+    function: 'get',
+    entry: 'src/services/incident-service/getIncident.ts',
+  },
+  {
+    service: 'incident-service',
+    function: 'search',
+    entry: 'src/services/incident-service/searchIncidents.ts',
+  },
+  {
+    service: 'incident-service',
+    function: 'dispatch-alert-consumer',
+    entry: 'src/services/incident-service/dispatchAlertConsumer.ts',
+  },
+  {
+    service: 'incident-service',
+    function: 'dispatch-response-consumer',
+    entry: 'src/services/incident-service/dispatchResponseConsumer.ts',
+  },
+  {
+    service: 'incident-service',
+    function: 'schema-version-refresh',
+    entry: 'src/services/incident-service/schemaVersion/refreshScanner/handler.ts',
+  },
+  {
+    service: 'reporting-service',
+    function: 'losap-year-end',
+    entry: 'src/services/reporting-service/losap/handler.ts',
+  },
+  {
+    service: 'reporting-service',
+    function: 'grants',
+    entry: 'src/services/reporting-service/grants/handler.ts',
+  },
+  {
+    service: 'reporting-service',
+    function: 'membership-trends',
+    entry: 'src/services/reporting-service/membershipTrends/handler.ts',
   },
   {
     service: 'alerting-service',
