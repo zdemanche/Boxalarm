@@ -44,6 +44,20 @@ export function ApparatusPickerScreen() {
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: tokens.background }}>
+      <TouchableOpacity
+        accessibilityRole="button"
+        onPress={() => navigation.navigate('FieldCapture')}
+        style={{
+          minHeight: touchTarget.baseline.ios,
+          justifyContent: 'center',
+          paddingHorizontal: spacing.lg,
+          paddingTop: spacing.md,
+        }}
+      >
+        <Text style={{ color: tokens.accent, fontSize: typography.size.base, fontWeight: '600' }}>
+          Field capture
+        </Text>
+      </TouchableOpacity>
       {isOffline ? (
         <Text
           accessibilityRole="text"
@@ -80,7 +94,7 @@ export function ApparatusPickerScreen() {
             <TouchableOpacity
               accessibilityRole="button"
               disabled={!inService}
-              onPress={() => navigation.navigate('CheckRunner', { apparatusId: item.apparatusId })}
+              onPress={() => navigation.navigate('CheckRunner', { apparatusId: item.unitId })}
               style={{
                 minHeight: touchTarget.baseline.ios,
                 justifyContent: 'center',

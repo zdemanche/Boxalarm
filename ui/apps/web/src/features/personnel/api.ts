@@ -1,5 +1,13 @@
 import { apiRequest, type AuthTokenSource } from '../../lib/apiClient';
-import type { CreateMemberInput, Member, MemberStatus } from './types';
+import type {
+  AttendanceActivityType,
+  AttendanceRecord,
+  CreateMemberInput,
+  LosapTotal,
+  Member,
+  MemberStatus,
+  Qualification,
+} from './types';
 
 export async function listMembers(tokens: AuthTokenSource): Promise<Member[]> {
   const response = await apiRequest('personnel/members', tokens);
@@ -39,4 +47,67 @@ export async function updateMemberStatus(
     },
   );
   return (await response.json()) as Member;
+}
+
+export async function getQuals(
+  tokens: AuthTokenSource,
+  memberId: string,
+): Promise<Qualification[]> {
+  const response = await apiRequest(
+    `personnel/members/${encodeURIComponent(memberId)}/quals`,
+    tokens,
+  );
+  return (await response.json()) as Qualification[];
+}
+
+export async function putQual(
+  tokens: AuthTokenSource,
+  memberId: string,
+  qualCode: string,
+  grantedByCertId: string | null,
+): Promise<Qualification> {
+  const response = await apiRequest(
+    `personnel/members/${encodeURIComponent(memberId)}/quals`,
+    tokens,
+    {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ qualCode, grantedByCertId }),
+    },
+  );
+  return (await response.json()) as Qualification;
+}
+
+export async function getMemberLosap(
+  tokens: AuthTokenSource,
+  memberId: string,
+): Promise<LosapTotal> {
+  const response = await apiRequest(
+    `personnel/members/${encodeURIComponent(memberId)}/losap`,
+    tokens,
+  );
+  return (await response.json()) as LosapTotal;
+}
+
+export async function listOwnAttendance(tokens: AuthTokenSource): Promise<AttendanceRecord[]> {
+  const response = await apiRequest('personnel/attendance', tokens);
+  const body = (await response.json()) as { records: AttendanceRecord[] };
+  return body.records;
+}
+
+export async function recordAttendance(
+  tokens: AuthTokenSource,
+  input: {
+    activityType: AttendanceActivityType;
+    refId: string | null;
+    occurredAt: number;
+    hours: number;
+  },
+): Promise<AttendanceRecord> {
+  const response = await apiRequest('personnel/attendance', tokens, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  });
+  return (await response.json()) as AttendanceRecord;
 }

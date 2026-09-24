@@ -176,6 +176,7 @@ describe('getApparatusDetail (AC3)', () => {
           severity: 'MINOR',
           reportedAt: 1798050000,
           status: 'OPEN',
+          photoS3Key: 'dept-1/defect/DEF-1/tire.jpg',
         },
         {
           defectId: 'DEF-0',
@@ -205,10 +206,34 @@ describe('getApparatusDetail (AC3)', () => {
           description: 'Low tire pressure',
           severity: 'MINOR',
           reportedAt: 1798050000,
+          photoS3Key: 'dept-1/defect/DEF-1/tire.jpg',
         },
       ],
       failedTests: [{ testType: 'HOSE', testDate: '2026-05-01', nextDueDate: '2027-05-01' }],
     });
+  });
+
+  it('returns a null photoS3Key when the defect has no photo', async () => {
+    const { client } = fakeDetailClient({
+      apparatusItems: [
+        { apparatusId: 'APP-ENGINE-2', unitId: 'ENGINE-2', type: 'ENGINE', status: 'IN_SERVICE' },
+      ],
+      defectItems: [
+        {
+          defectId: 'DEF-2',
+          description: 'Cracked mirror',
+          severity: 'MINOR',
+          reportedAt: 1798050100,
+          status: 'OPEN',
+        },
+      ],
+      testItems: [],
+    });
+    const repository = createApparatusRepository(client, TABLE_NAME);
+
+    const result = await repository.getApparatusDetail(DEPT_ID, 'ENGINE-2');
+
+    expect(result?.openDefects[0]?.photoS3Key).toBeNull();
   });
 
   it('returns empty openDefects/failedTests when there are none', async () => {

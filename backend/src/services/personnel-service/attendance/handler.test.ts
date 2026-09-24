@@ -11,6 +11,7 @@ function buildEvent(
   options: {
     readonly headers?: Record<string, string> | undefined;
     readonly principal?: Record<string, unknown> | null;
+    readonly pathParameters?: Record<string, string>;
   } = {},
 ): GuardEvent {
   const principal = options.principal === null ? undefined : (options.principal ?? PRINCIPAL);
@@ -21,6 +22,7 @@ function buildEvent(
     rawQueryString: '',
     headers: 'headers' in options ? options.headers : { authorization: 'Bearer token' },
     body: body === undefined ? undefined : JSON.stringify(body),
+    pathParameters: options.pathParameters,
     requestContext: { authorizer: { lambda: principal } },
   } as unknown as GuardEvent;
 }
@@ -50,23 +52,27 @@ function mockDynamoWithSend(send: DynamoSend): void {
 }
 
 function mockDynamo(behavior: 'OK' | 'CONFLICT' | 'ERROR'): { send: DynamoSend } {
-  const send = vi.fn(async (command: { constructor: { name: string } }) => {
-    if (command.constructor.name === 'GetCommand') {
-      return {};
-    }
-    if (behavior === 'OK') {
-      return {};
-    }
-    if (behavior === 'CONFLICT') {
-      const { TransactionCanceledException } = await import('@aws-sdk/client-dynamodb');
-      throw new TransactionCanceledException({
-        message: 'conflict',
-        $metadata: {},
-        CancellationReasons: [{ Code: 'ConditionalCheckFailed' }],
-      });
-    }
-    throw new Error('DynamoDB unavailable');
-  });
+  const send = vi.fn(
+    async (command: { constructor: { name: string }; input?: { Key?: { sk?: string } } }) => {
+      if (command.constructor.name === 'GetCommand') {
+        // The memberExists GetCommand (sk: 'METADATA') always finds the member; the LOSAP
+        // rule-config GetCommand (a different sk) keeps returning "no config" by default.
+        return command.input?.Key?.sk === 'METADATA' ? { Item: { entityType: 'MEMBER' } } : {};
+      }
+      if (behavior === 'OK') {
+        return {};
+      }
+      if (behavior === 'CONFLICT') {
+        const { TransactionCanceledException } = await import('@aws-sdk/client-dynamodb');
+        throw new TransactionCanceledException({
+          message: 'conflict',
+          $metadata: {},
+          CancellationReasons: [{ Code: 'ConditionalCheckFailed' }],
+        });
+      }
+      throw new Error('DynamoDB unavailable');
+    },
+  );
   mockDynamoWithSend(send);
   return { send };
 }
@@ -109,7 +115,7 @@ describe('handler', () => {
       )) as APIGatewayProxyStructuredResultV2;
 
       expect(result.statusCode).toBe(201);
-      const items = transactItemsFrom(send.mock.calls[1]?.[0]);
+      const items = transactItemsFrom(send.mock.calls[2]?.[0]);
       const attendanceItem = items.find((item) => item.entityType === 'ATTENDANCE_RECORD');
       expect(attendanceItem?.pk).toBe('DEPT#NICHOLS#MEMBER#mbr-102');
       expect(attendanceItem?.sk).toBe('ATTENDANCE#1798000500');
@@ -131,7 +137,7 @@ describe('handler', () => {
       }),
     );
 
-    const items = transactItemsFrom(send.mock.calls[1]?.[0]);
+    const items = transactItemsFrom(send.mock.calls[2]?.[0]);
     const attendanceItem = items.find((item) => item.entityType === 'ATTENDANCE_RECORD');
     expect(attendanceItem?.refId).toBe('dispatch-4471');
   });
@@ -145,7 +151,7 @@ describe('handler', () => {
       buildEvent({ activityType: 'DRILL', refId: null, occurredAt: 1798000500, hours: 1 }),
     );
 
-    const items = transactItemsFrom(send.mock.calls[1]?.[0]);
+    const items = transactItemsFrom(send.mock.calls[2]?.[0]);
     const attendanceItem = items.find((item) => item.entityType === 'ATTENDANCE_RECORD');
     expect(attendanceItem?.gsi1pk).toBe('MEMBER#mbr-102');
     expect(attendanceItem?.gsi1sk).toBe('ATTENDANCE_RECORD#1798000500');
@@ -162,7 +168,7 @@ describe('handler', () => {
 
     const body = JSON.parse(result.body ?? '{}') as { losapPointsAwarded: number };
     expect(body.losapPointsAwarded).toBe(0);
-    const items = transactItemsFrom(send.mock.calls[1]?.[0]);
+    const items = transactItemsFrom(send.mock.calls[2]?.[0]);
     expect(items).toHaveLength(1);
   });
 
@@ -209,7 +215,7 @@ describe('handler', () => {
     const body = JSON.parse(result.body ?? '{}') as { losapPointsAwarded: number };
     expect(body.losapPointsAwarded).toBe(3);
 
-    const items = transactItemsFrom(send.mock.calls[1]?.[0]);
+    const items = transactItemsFrom(send.mock.calls[2]?.[0]);
     const attendanceItem = items.find((item) => item.entityType === 'ATTENDANCE_RECORD');
     const losapItem = items.find((item) => item.entityType === 'LOSAP_POINT_ENTRY');
     expect(attendanceItem?.losapPointsAwarded).toBe(3);
@@ -224,6 +230,7 @@ describe('handler', () => {
     mockAuthzDecision('ALLOW');
     const send = vi
       .fn()
+      .mockResolvedValueOnce({ Item: { entityType: 'MEMBER' } }) // memberExists (call 1)
       .mockResolvedValueOnce({
         Item: {
           value: { ruleVersionId: 'RULE-2026-A', pointsByActivityType: { DRILL: 2 } },
@@ -231,6 +238,7 @@ describe('handler', () => {
         },
       })
       .mockResolvedValueOnce({})
+      .mockResolvedValueOnce({ Item: { entityType: 'MEMBER' } }) // memberExists (call 2)
       .mockResolvedValueOnce({
         Item: {
           value: { ruleVersionId: 'RULE-2026-B', pointsByActivityType: { DRILL: 5 } },
@@ -248,10 +256,10 @@ describe('handler', () => {
       buildEvent({ activityType: 'DRILL', refId: null, occurredAt: 1798100000, hours: 1 }),
     );
 
-    const firstEntries = transactItemsFrom(send.mock.calls[1]?.[0]).filter(
+    const firstEntries = transactItemsFrom(send.mock.calls[2]?.[0]).filter(
       (item) => item.entityType === 'LOSAP_POINT_ENTRY',
     );
-    const secondEntries = transactItemsFrom(send.mock.calls[3]?.[0]).filter(
+    const secondEntries = transactItemsFrom(send.mock.calls[5]?.[0]).filter(
       (item) => item.entityType === 'LOSAP_POINT_ENTRY',
     );
     expect(firstEntries[0]?.ruleVersionId).toBe('RULE-2026-A');
@@ -391,6 +399,111 @@ describe('handler', () => {
       logSpy.mock.calls.some((call) => (call[0] as string).includes('AttendanceRecorded')),
     ).toBe(true);
     logSpy.mockRestore();
+  });
+
+  it("returns 404 and writes nothing when memberId does not exist in the caller's department (MAJOR, PR #320 review)", async () => {
+    mockAuthzDecision('ALLOW');
+    const send = vi.fn((command: { constructor: { name: string } }) => {
+      if (command.constructor.name === 'GetCommand') {
+        return Promise.resolve({ Item: undefined });
+      }
+      return Promise.resolve({});
+    });
+    mockDynamoWithSend(send);
+    const { handler } = await import('./handler.js');
+
+    const result = await handler(buildEvent({ activityType: 'DRILL', occurredAt: 1, hours: 1 }));
+
+    expect(result).toMatchObject({ statusCode: 404 });
+    expect(
+      send.mock.calls.some((call) => call[0].constructor.name === 'TransactWriteCommand'),
+    ).toBe(false);
+  });
+});
+
+describe('onBehalfHandler', () => {
+  const originalEnv = { ...process.env };
+
+  beforeEach(() => {
+    vi.resetModules();
+    process.env.VERIFIED_PERMISSIONS_POLICY_STORE_ID = 'ps-1';
+    process.env.PLATFORM_SERVICE_TABLE_NAME = 'platform-service';
+  });
+
+  afterEach(() => {
+    process.env = { ...originalEnv };
+    vi.doUnmock('@aws-sdk/client-verifiedpermissions');
+    vi.doUnmock('../dynamoClient.js');
+  });
+
+  it('records attendance for the target memberId, not the caller, when an officer is allowed by Cedar', async () => {
+    mockAuthzDecision('ALLOW');
+    const { send } = mockDynamo('OK');
+    const { onBehalfHandler } = await import('./handler.js');
+
+    const result = (await onBehalfHandler(
+      buildEvent(
+        { activityType: 'DRILL', refId: null, occurredAt: 1798000500, hours: 1 },
+        { pathParameters: { memberId: 'mbr-999' } },
+      ),
+    )) as APIGatewayProxyStructuredResultV2;
+
+    expect(result.statusCode).toBe(201);
+    const items = transactItemsFrom(send.mock.calls[2]?.[0]);
+    const attendanceItem = items.find((item) => item.entityType === 'ATTENDANCE_RECORD');
+    expect(attendanceItem?.pk).toBe('DEPT#NICHOLS#MEMBER#mbr-999');
+  });
+
+  it('denies (fails closed) when Cedar denies the on-behalf action', async () => {
+    mockAuthzDecision('DENY');
+    const { send } = mockDynamo('OK');
+    const { onBehalfHandler } = await import('./handler.js');
+
+    const result = await onBehalfHandler(
+      buildEvent(
+        { activityType: 'DRILL', occurredAt: 1, hours: 1 },
+        { pathParameters: { memberId: 'mbr-999' } },
+      ),
+    );
+
+    expect(result).toMatchObject({ statusCode: 403 });
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it('returns 404 when the memberId path parameter is missing', async () => {
+    mockAuthzDecision('ALLOW');
+    mockDynamo('OK');
+    const { onBehalfHandler } = await import('./handler.js');
+
+    const result = await onBehalfHandler(
+      buildEvent({ activityType: 'DRILL', occurredAt: 1, hours: 1 }, { pathParameters: {} }),
+    );
+
+    expect(result).toMatchObject({ statusCode: 404 });
+  });
+
+  it("returns 404 and writes nothing when the target memberId does not exist in the caller's department (MAJOR, PR #320 review)", async () => {
+    mockAuthzDecision('ALLOW');
+    const send = vi.fn((command: { constructor: { name: string } }) => {
+      if (command.constructor.name === 'GetCommand') {
+        return Promise.resolve({ Item: undefined });
+      }
+      return Promise.resolve({});
+    });
+    mockDynamoWithSend(send);
+    const { onBehalfHandler } = await import('./handler.js');
+
+    const result = await onBehalfHandler(
+      buildEvent(
+        { activityType: 'DRILL', occurredAt: 1, hours: 1 },
+        { pathParameters: { memberId: 'mbr-other-dept' } },
+      ),
+    );
+
+    expect(result).toMatchObject({ statusCode: 404 });
+    expect(
+      send.mock.calls.some((call) => call[0].constructor.name === 'TransactWriteCommand'),
+    ).toBe(false);
   });
 });
 

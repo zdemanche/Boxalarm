@@ -26,6 +26,12 @@ class ValidationError extends Error {}
 
 class DispatchNotFoundError extends Error {}
 
+// Sentinel `nerisSchemaVersion` pin for a dispatch-linked incident created before any NERIS
+// schema version has ever been published as ACTIVE. It is not a real schema-registry version
+// and will never resolve via schemaVersionRepository.getSchemaVersion(); the edit/completion
+// paths (updateIncident.ts, putExposures.ts) treat that miss as "no pinned schema to honor"
+// and fall back to whatever is ACTIVE at edit time, since there is no earlier schema this
+// incident could have been authored under.
 const UNVALIDATED_SCHEMA_VERSION = 'UNVALIDATED';
 
 // Leaves headroom under DynamoDB's 400 KB item limit for the rest of the INCIDENT item

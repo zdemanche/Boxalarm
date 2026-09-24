@@ -258,4 +258,44 @@ describe("HttpApi", () => {
         }),
     ).toThrow(/env is required/);
   });
+
+  it("route() wires an AWS_PROXY integration to an authorized route for the given service Lambda", async () => {
+    const { ServiceLogGroup } = await import("../../components/observability/service-log-group");
+    const { ServiceLambda } = await import("../../components/observability/service-lambda");
+    const { HttpApi } = await import("../../components/api/http-api");
+
+    const logGroup = new ServiceLogGroup("platform-log-group-api-route", {
+      env: "dev",
+      serviceName: "platform-service",
+    });
+    const api = new HttpApi("http-api-route", {
+      env: "dev",
+      userPoolId: "pool",
+      allowedClientIds: ["a"],
+      platformLogGroup: logGroup,
+    });
+    await settle(api);
+
+    const lambda = new ServiceLambda("route-lambda", {
+      env: "dev",
+      serviceName: "platform-service",
+      functionName: "boxalarm-dev-platform-config",
+      handler: "index.handler",
+      code: new pulumi.asset.AssetArchive({}),
+      logGroup,
+    });
+    const { route, integration } = api.route("config-route", {
+      routeKey: "GET /api/v1/platform/config",
+      lambda,
+    });
+
+    const [integrationType, routeKey, authType] = await Promise.all([
+      resolve(integration.integrationType),
+      resolve(route.routeKey),
+      resolve(route.authorizationType),
+    ]);
+    expect(integrationType).toBe("AWS_PROXY");
+    expect(routeKey).toBe("GET /api/v1/platform/config");
+    expect(authType).toBe("CUSTOM");
+  });
 });

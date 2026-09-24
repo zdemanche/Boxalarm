@@ -36,6 +36,7 @@ export const PERSONAS: Record<Role, { groups: Role[]; expectedNavLabels: readonl
       'Reporting',
       'Settings',
       'Audit log',
+      'Apparatus compliance',
     ],
   },
   CHIEF: {
@@ -49,6 +50,7 @@ export const PERSONAS: Record<Role, { groups: Role[]; expectedNavLabels: readonl
       'Apparatus',
       'Reporting',
       'Audit log',
+      'Apparatus compliance',
     ],
   },
 };

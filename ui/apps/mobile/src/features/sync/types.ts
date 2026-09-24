@@ -26,4 +26,7 @@ export interface SyncRepository {
   // F7.7's "never silently dropped" applies here too: a failed item stays queued until retried,
   // never dropped automatically.
   retry(itemId: string): Promise<'SYNCED' | 'FAILED'>;
+  // E5-S7: queue a new outbox entry (e.g. a field capture) with a caller-supplied, stable
+  // idempotency key so a drain-time retry after a partial failure never double-submits.
+  enqueue(kind: string, label: string, idempotencyKey: string): Promise<SyncItem>;
 }

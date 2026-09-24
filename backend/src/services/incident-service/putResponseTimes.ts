@@ -8,7 +8,7 @@ import {
   readAuthorizerContext,
   resolveTraceId,
 } from './authContext.js';
-import { getDocumentClient, getTableName } from './repository.js';
+import { IncidentNotFoundError, getDocumentClient, getTableName } from './repository.js';
 import { upsertResponseUnitTimes, type ResponseUnitTimesInput } from './responseUnitRepository.js';
 
 class ValidationError extends Error {}
@@ -129,6 +129,9 @@ export const handler: APIGatewayProxyHandlerV2WithLambdaAuthorizer<AuthorizerCon
       body: JSON.stringify(unit),
     };
   } catch (error) {
+    if (error instanceof IncidentNotFoundError) {
+      return problemResponse(404, 'Not Found', error.message, traceId);
+    }
     console.error(
       JSON.stringify({
         event: 'incident.responseTimes.failed',

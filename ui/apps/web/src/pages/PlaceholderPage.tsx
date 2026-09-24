@@ -1,8 +1,17 @@
+import { PageHeader } from '../components/ui/PageHeader';
+import { EmptyState } from '../components/ui/EmptyState';
+import { ClipboardList } from '../components/ui/icons';
+
 /** Placeholder until sibling domain issues ship page bodies. */
 export function PlaceholderPage({ title }: { title: string }) {
   return (
-    <main id="main-content" style={{ padding: 'var(--boxalarm-spacing-lg)' }}>
-      <h1 style={{ fontSize: 'var(--boxalarm-font-size-xl)', margin: 0 }}>{title}</h1>
+    <main id="main-content">
+      <PageHeader title={title} />
+      <EmptyState
+        icon={ClipboardList}
+        title="This screen isn't built yet"
+        description="A sibling ticket ships this page's content on top of the command-console components."
+      />
     </main>
   );
 }

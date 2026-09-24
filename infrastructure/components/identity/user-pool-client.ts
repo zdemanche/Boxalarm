@@ -24,6 +24,15 @@ export interface BoxalarmUserPoolClientArgs {
   generateSecret?: false;
   /** Token revocation can be enabled later (E8 follow-up / #86). */
   enableTokenRevocation?: boolean;
+  /**
+   * E8-S8-INFRA #259: 1h/1h/3650d on both clients, no asymmetry, revocation is
+   * the only control that ends a session (OQ-24). Rotation grace period is
+   * seconds, capped at 60 by the provider.
+   */
+  accessTokenValidityHours?: number;
+  idTokenValidityHours?: number;
+  refreshTokenValidityDays?: number;
+  refreshTokenRotationGraceSeconds?: number;
 }
 
 // #180 / E8-S1-INFRA #6: every app client (mobile, web) must go through
@@ -69,6 +78,24 @@ export class BoxalarmUserPoolClient extends pulumi.ComponentResource {
         explicitAuthFlows: args.explicitAuthFlows ?? DEFAULT_EXPLICIT_AUTH_FLOWS,
         ...(args.enableTokenRevocation !== undefined
           ? { enableTokenRevocation: args.enableTokenRevocation }
+          : {}),
+        ...(args.accessTokenValidityHours !== undefined ||
+        args.idTokenValidityHours !== undefined ||
+        args.refreshTokenValidityDays !== undefined
+          ? {
+              accessTokenValidity: args.accessTokenValidityHours,
+              idTokenValidity: args.idTokenValidityHours,
+              refreshTokenValidity: args.refreshTokenValidityDays,
+              tokenValidityUnits: { accessToken: "hours", idToken: "hours", refreshToken: "days" },
+            }
+          : {}),
+        ...(args.refreshTokenRotationGraceSeconds !== undefined
+          ? {
+              refreshTokenRotation: {
+                feature: "ENABLED",
+                retryGracePeriodSeconds: args.refreshTokenRotationGraceSeconds,
+              },
+            }
           : {}),
       },
       { parent: this },

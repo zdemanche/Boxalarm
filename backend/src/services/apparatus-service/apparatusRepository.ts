@@ -24,6 +24,7 @@ export interface OpenDefectSummary {
   readonly description: string;
   readonly severity: string;
   readonly reportedAt: number;
+  readonly photoS3Key: string | null;
 }
 
 export interface FailedTestSummary {
@@ -87,6 +88,7 @@ function toOpenDefectSummary(item: Record<string, unknown>): OpenDefectSummary {
     description: item.description as string,
     severity: item.severity as string,
     reportedAt: item.reportedAt as number,
+    photoS3Key: (item.photoS3Key as string | null | undefined) ?? null,
   };
 }
 

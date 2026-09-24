@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
+import { QueryCommand } from '@aws-sdk/lib-dynamodb';
 import { buildDeptScopedPk, toVerifiedDeptId } from '@boxalarm/dept-scope';
 import { claimShiftPosition, ShiftPositionWriteError } from './claimShiftPosition.js';
 import { createFakeDocumentClient } from './testDynamoFake.js';
@@ -46,6 +47,31 @@ describe('claimShiftPosition', () => {
   it.todo(
     'AC2 (Tier-1 concurrency benchmark): exactly one of two simultaneous claims wins against real DynamoDB — architecture F2.9 Testing matrix requires an APIRequestContext run against a provisioned table; this build-only repo has no deployed table (internal/plan.md §3), so this benchmark is a tracked residual owned by the boxalarm-infrastructure/e2e suite, not covered by the in-memory fake above',
   );
+
+  it('writes an OUTBOX_ENTRY for personnel.shift.claimed in the same transaction (PR #320 review, MAJOR)', async () => {
+    const doc = createFakeDocumentClient([
+      buildDutyShift(DEPT_ID, SHIFT_ID),
+      buildShiftPosition(DEPT_ID, SHIFT_ID, 'DRIVER'),
+    ]);
+
+    await claimShiftPosition(doc, TABLE, DEPT_ID, SHIFT_ID, 'DRIVER', 'MBR-0012');
+
+    const outboxPk = buildDeptScopedPk(DEPT_ID, 'OUTBOX', 'MBR-0012');
+    const result = (await doc.send(
+      new QueryCommand({
+        TableName: TABLE,
+        KeyConditionExpression: 'pk = :shiftPk',
+        ExpressionAttributeValues: { ':shiftPk': outboxPk },
+      }),
+    )) as { Items?: Record<string, unknown>[] };
+    expect(result.Items).toHaveLength(1);
+    expect(result.Items?.[0]).toMatchObject({
+      entityType: 'OUTBOX_ENTRY',
+      eventType: 'personnel.shift.claimed',
+      deptId: DEPT_ID,
+      memberId: 'MBR-0012',
+    });
+  });
 
   it('returns NOT_FOUND for a shiftId/positionCode that does not exist', async () => {
     const doc = createFakeDocumentClient([]);
@@ -133,6 +159,6 @@ describe('claimShiftPosition', () => {
       'utf8',
     );
     expect(source).not.toContain('BatchWriteItemCommand');
-    expect(source).toContain('UpdateCommand');
+    expect(source).toContain('TransactWriteCommand');
   });
 });

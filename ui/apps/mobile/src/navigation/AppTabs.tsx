@@ -1,6 +1,7 @@
-import { palette, touchTarget, typography } from '@boxalarm/design-tokens';
+import { targetSize, typeScale } from '@boxalarm/design-tokens';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
-import { useColorScheme } from 'react-native';
+import { Text } from 'react-native';
+import { useTheme } from '../components/ui/theme';
 import { AlertsStack } from './AlertsStack';
 import { ChecksStack } from './ChecksStack';
 import { MeStack } from './MeStack';
@@ -18,26 +19,40 @@ export type AppTabsParamList = {
 
 const Tab = createBottomTabNavigator<AppTabsParamList>();
 
+// Text glyphs, not an icon library — see components/ui/README.md (no react-native-svg link
+// step to verify in this repo's CI).
+const TAB_GLYPH: Record<keyof AppTabsParamList, string> = {
+  Alerts: '▲',
+  Checks: '■',
+  Schedule: '◷',
+  Me: '●',
+};
+
 export function AppTabs() {
-  const scheme = useColorScheme();
-  const tokens = scheme === 'dark' ? palette.cab : palette.day;
+  const theme = useTheme();
 
   return (
     <Tab.Navigator
       initialRouteName="Alerts"
-      screenOptions={{
+      screenOptions={({ route }) => ({
         headerShown: false,
-        tabBarActiveTintColor: tokens.accent,
-        tabBarInactiveTintColor: tokens.foreground,
+        tabBarActiveTintColor: theme.fg,
+        tabBarInactiveTintColor: theme.fgMuted,
         tabBarStyle: {
-          backgroundColor: tokens.background,
+          backgroundColor: theme.surface,
+          borderTopColor: theme.borderDecorative,
           // Glove-sized targets (N3.5): taller bar than the platform default so each tab's
-          // hit area clears the 44/48pt baseline with room to spare.
-          height: touchTarget.baseline.ios + 24,
+          // hit area clears the field floor with room to spare.
+          height: targetSize.field + 24,
           paddingTop: 8,
         },
-        tabBarLabelStyle: { fontSize: typography.size.xs },
-      }}
+        tabBarLabelStyle: { fontSize: typeScale.caption.size, fontWeight: '600' },
+        tabBarIcon: ({ color }) => (
+          <Text style={{ color, fontSize: 18 }} accessible={false}>
+            {TAB_GLYPH[route.name]}
+          </Text>
+        ),
+      })}
     >
       <Tab.Screen name="Alerts" component={AlertsStack} />
       <Tab.Screen name="Checks" component={ChecksStack} />
