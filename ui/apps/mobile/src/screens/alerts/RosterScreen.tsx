@@ -1,6 +1,6 @@
 import { palette, spacing, typography } from '@boxalarm/design-tokens';
 import { useRoute } from '@react-navigation/native';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { FlatList, Text, useColorScheme, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useAlertsRepository } from '../../features/alerts/apiAlertsRepository';
@@ -9,10 +9,17 @@ import type { RosterEntry } from '../../features/alerts/types';
 import { useConnectivity } from '../../sync/ConnectivityContext';
 
 const REFETCH_INTERVAL_MS = 10_000;
+// Backoff cap for repeated poll failures - retries slow down rather than hammering a struggling
+// backend, but never wait longer than a minute during an active incident.
+const MAX_BACKOFF_MS = 60_000;
 
 function formatEta(etaSeconds: number | null): string | null {
   if (etaSeconds === null) return null;
   return new Date(etaSeconds * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+}
+
+function formatClockTime(epochMs: number): string {
+  return new Date(epochMs).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 }
 
 // F1.7: live roster is one row per member, reflecting each member's current answer. It requires
@@ -26,22 +33,49 @@ export function RosterScreen() {
   const { isOnline } = useConnectivity();
   const repository = useAlertsRepository();
   const [roster, setRoster] = useState<RosterEntry[]>([]);
+  const [staleSince, setStaleSince] = useState<number | null>(null);
+  const failureCountRef = useRef(0);
 
   useEffect(() => {
     if (!isOnline) return;
     let cancelled = false;
+    let timeoutId: ReturnType<typeof setTimeout> | undefined;
 
+    const scheduleNext = (delayMs: number) => {
+      timeoutId = setTimeout(load, delayMs);
+    };
+
+    // A poll failure used to be an unhandled rejection: no error, no staleness indicator, and
+    // stale roster data could silently persist indefinitely. Now a failure is caught, backs off
+    // (so a struggling backend isn't hammered every 10s during an incident), and surfaces a
+    // "stopped updating" indicator instead of quietly continuing to show old data as if it were
+    // current.
     const load = () => {
-      repository.getRoster(dispatchId).then((result) => {
-        if (!cancelled) setRoster(result);
-      });
+      repository
+        .getRoster(dispatchId)
+        .then((result) => {
+          if (cancelled) return;
+          setRoster(result);
+          setStaleSince(null);
+          failureCountRef.current = 0;
+          scheduleNext(REFETCH_INTERVAL_MS);
+        })
+        .catch(() => {
+          if (cancelled) return;
+          failureCountRef.current += 1;
+          setStaleSince((prev) => prev ?? Date.now());
+          const backoffMs = Math.min(
+            REFETCH_INTERVAL_MS * 2 ** failureCountRef.current,
+            MAX_BACKOFF_MS,
+          );
+          scheduleNext(backoffMs);
+        });
     };
 
     load();
-    const interval = setInterval(load, REFETCH_INTERVAL_MS);
     return () => {
       cancelled = true;
-      clearInterval(interval);
+      if (timeoutId) clearTimeout(timeoutId);
     };
   }, [dispatchId, isOnline, repository]);
 
@@ -65,6 +99,14 @@ export function RosterScreen() {
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: tokens.background }}>
+      {staleSince ? (
+        <Text
+          accessibilityRole="alert"
+          style={{ color: tokens.warning, padding: spacing.sm, fontSize: typography.size.sm }}
+        >
+          {`Data stopped updating at ${formatClockTime(staleSince)} — retrying…`}
+        </Text>
+      ) : null}
       <FlatList
         data={roster}
         keyExtractor={(item) => item.memberId}

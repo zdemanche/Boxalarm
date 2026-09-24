@@ -12,10 +12,24 @@ jest.mock('../../sync/ConnectivityContext', () => ({
   useConnectivity: () => mockConnectivity,
 }));
 
+// A controllable repository that delegates to mockAlertsRepository by default, so existing
+// behavior is unchanged, but lets a test override getRoster to reject - needed to exercise the
+// poll-failure/stale-indicator path that a plain setInterval-with-no-.catch() can't surface.
+const mockRepository = {
+  getRoster: jest.fn((...args: Parameters<typeof mockAlertsRepository.getRoster>) =>
+    mockAlertsRepository.getRoster(...args),
+  ),
+};
+
+jest.mock('../../features/alerts/apiAlertsRepository', () => ({
+  useAlertsRepository: () => mockRepository,
+}));
+
 beforeEach(async () => {
   const { dispatchId } = await mockAlertsRepository.triggerSelfTest();
   mockRouteParams.dispatchId = dispatchId;
   mockConnectivity.isOnline = true;
+  mockRepository.getRoster.mockImplementation((...args) => mockAlertsRepository.getRoster(...args));
 });
 
 test('lists each roster entry with name, response status, and quals', async () => {
@@ -46,4 +60,12 @@ test('shows an honest offline state instead of a stale or empty roster - F1.7 re
 
   expect(await findByText(/offline.*will resume/i)).toBeTruthy();
   expect(queryByText('Jamie Rios')).toBeNull();
+});
+
+test('a poll failure surfaces a stale-data indicator instead of silently keeping the old roster forever', async () => {
+  mockRepository.getRoster.mockRejectedValue(new TypeError('Failed to fetch'));
+
+  const { findByText } = await render(<RosterScreen />);
+
+  expect(await findByText(/data stopped updating/i)).toBeTruthy();
 });

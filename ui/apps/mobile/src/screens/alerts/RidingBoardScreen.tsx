@@ -1,6 +1,6 @@
 import { palette, radius, spacing, touchTarget, typography } from '@boxalarm/design-tokens';
 import { useRoute } from '@react-navigation/native';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { FlatList, Text, TouchableOpacity, useColorScheme, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useAlertsRepository } from '../../features/alerts/apiAlertsRepository';
@@ -9,6 +9,13 @@ import { ApiError } from '../../lib/apiClient';
 import { useConnectivity } from '../../sync/ConnectivityContext';
 
 const REFETCH_INTERVAL_MS = 10_000;
+// Backoff cap for repeated poll failures - retries slow down rather than hammering a struggling
+// backend, but never wait longer than a minute during an active incident.
+const MAX_BACKOFF_MS = 60_000;
+
+function formatClockTime(epochMs: number): string {
+  return new Date(epochMs).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+}
 
 // E1-S18-UI: the officer's riding board. Members come from the response roster (name, quals,
 // ETA, direct-to-scene distinction); seats come from apparatus-service's riding board. The
@@ -26,22 +33,48 @@ export function RidingBoardScreen() {
   const [pending, setPending] = useState<Set<string>>(new Set());
   const [conflict, setConflict] = useState<string | null>(null);
   const [sessionExpired, setSessionExpired] = useState(false);
+  const [staleSince, setStaleSince] = useState<number | null>(null);
+  const failureCountRef = useRef(0);
 
   useEffect(() => {
     let cancelled = false;
-    const load = () => {
-      repository.getRidingBoard(dispatchId).then((board) => {
-        if (!cancelled) setApparatus(board.apparatus);
-      });
-      repository.getRoster(dispatchId).then((result) => {
-        if (!cancelled) setRoster(result);
-      });
+    let timeoutId: ReturnType<typeof setTimeout> | undefined;
+
+    const scheduleNext = (delayMs: number) => {
+      timeoutId = setTimeout(load, delayMs);
     };
+
+    // A poll failure used to be an unhandled rejection: no error, no staleness indicator, and
+    // stale live data could silently persist indefinitely. Now a failure is caught, backs off
+    // (so a struggling backend isn't hammered every 10s during an incident), and surfaces a
+    // "stopped updating" indicator instead of quietly continuing to show old data as if it were
+    // current.
+    const load = () => {
+      Promise.all([repository.getRidingBoard(dispatchId), repository.getRoster(dispatchId)])
+        .then(([board, rosterResult]) => {
+          if (cancelled) return;
+          setApparatus(board.apparatus);
+          setRoster(rosterResult);
+          setStaleSince(null);
+          failureCountRef.current = 0;
+          scheduleNext(REFETCH_INTERVAL_MS);
+        })
+        .catch(() => {
+          if (cancelled) return;
+          failureCountRef.current += 1;
+          setStaleSince((prev) => prev ?? Date.now());
+          const backoffMs = Math.min(
+            REFETCH_INTERVAL_MS * 2 ** failureCountRef.current,
+            MAX_BACKOFF_MS,
+          );
+          scheduleNext(backoffMs);
+        });
+    };
+
     load();
-    const interval = setInterval(load, REFETCH_INTERVAL_MS);
     return () => {
       cancelled = true;
-      clearInterval(interval);
+      if (timeoutId) clearTimeout(timeoutId);
     };
   }, [dispatchId, repository]);
 
@@ -104,6 +137,14 @@ export function RidingBoardScreen() {
           style={{ color: tokens.error, padding: spacing.sm, fontSize: typography.size.sm }}
         >
           {conflict}
+        </Text>
+      ) : null}
+      {staleSince ? (
+        <Text
+          accessibilityRole="alert"
+          style={{ color: tokens.warning, padding: spacing.sm, fontSize: typography.size.sm }}
+        >
+          {`Data stopped updating at ${formatClockTime(staleSince)} — retrying…`}
         </Text>
       ) : null}
       <FlatList

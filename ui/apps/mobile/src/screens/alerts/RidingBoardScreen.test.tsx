@@ -173,3 +173,11 @@ test('a network failure during assignment is reported as a connectivity problem,
 
   expect(await screen.findByText(/could not reach the server/i)).toBeTruthy();
 });
+
+test('a poll failure surfaces a stale-data indicator instead of silently keeping the old board forever', async () => {
+  mockRepository.getRidingBoard.mockRejectedValue(new TypeError('Failed to fetch'));
+
+  const { findByText } = await render(<RidingBoardScreen />);
+
+  expect(await findByText(/data stopped updating/i)).toBeTruthy();
+});
