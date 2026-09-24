@@ -78,3 +78,49 @@ test('CHIEF dashboard never claims "No active call" — shows an honest not-wire
   expect(screen.queryByText(/no active call/i)).toBeNull();
   expect(screen.getByText(/active-call status isn.t wired to this dashboard yet/i)).toBeTruthy();
 });
+
+// Regression for MAJOR-3: routeTable.ts grants /apparatus to APPARATUS|CHIEF only, but OFFICER
+// is a DASHBOARD_ROLES member and this dashboard used to fetch apparatus for every dashboard
+// role regardless — an OFFICER's dashboard triggered a request Cedar denies with 403 on every
+// visit, and the failure rendered as a clean "0 / 0 apparatus in service" tile.
+test('OFFICER dashboard never requests apparatus (routeTable denies it) and shows no apparatus tiles', async () => {
+  let apparatusRequested = false;
+  server.use(
+    http.get('/api/v1/apparatus', () => {
+      apparatusRequested = true;
+      return HttpResponse.json({ items: [] });
+    }),
+  );
+
+  renderLanding({ sub: 'm1', 'cognito:groups': ['OFFICER'] });
+  await screen.findByRole('heading', { name: 'Officer dashboard' });
+  // Members is granted to OFFICER, so that tile should still render.
+  await screen.findByText('Active members');
+
+  expect(apparatusRequested).toBe(false);
+  expect(screen.queryByText('Apparatus in service')).toBeNull();
+  expect(screen.queryByText('Out of service')).toBeNull();
+});
+
+// Regression for MAJOR-3: a failed query (offline, 500, or a 403 that slips through role gating)
+// used to fall through `data ?? []`, so the tile silently read "0 / 0" — a failure rendered as a
+// healthy zero, and the project's ApiError/ApiForbiddenGate convention was never invoked.
+test('a failed apparatus query renders the generic ApiErrorState, never a "0 / 0" tile', async () => {
+  server.use(
+    http.get('/api/v1/apparatus', () =>
+      HttpResponse.json(
+        {
+          type: 'about:blank',
+          title: 'Internal Server Error',
+          status: 500,
+          traceId: 'trace-1',
+        },
+        { status: 500 },
+      ),
+    ),
+  );
+
+  renderLanding({ sub: 'm1', 'cognito:groups': ['CHIEF'] });
+  await screen.findByRole('heading', { name: 'Something went wrong loading this page' });
+  expect(screen.queryByText(/0 \/ 0/)).toBeNull();
+});

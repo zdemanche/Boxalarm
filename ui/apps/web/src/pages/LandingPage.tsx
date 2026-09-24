@@ -5,6 +5,7 @@ import { useAuth, type Role } from '../auth/AuthContext';
 import { canAccessPath, firstGrantedNavPath } from '../routing/routeTable';
 import { listApparatus } from '../features/apparatus/api';
 import { listMembers } from '../features/personnel/api';
+import { ApiForbiddenGate } from '../components/ApiForbiddenGate';
 import { Card, Stat } from '../components/ui/Card';
 import styles from './LandingPage.module.css';
 
@@ -36,11 +37,40 @@ function primaryRole(roles: Role[]): Role {
 
 function CommandConsole() {
   const auth = useAuth();
-  const apparatusQuery = useQuery({ queryKey: ['apparatus'], queryFn: () => listApparatus(auth) });
+  // MAJOR-3 (PR #318 review): §7.1 grants /apparatus to APPARATUS|CHIEF only and /personnel to
+  // OFFICER|TRAINING|ADMIN|CHIEF only, but this dashboard used to fetch both unconditionally for
+  // every DASHBOARD_ROLES member — e.g. an OFFICER (who can't read /apparatus) or an APPARATUS
+  // officer (who can't read /personnel) triggered a query that Cedar denies with 403 on every
+  // dashboard visit. Gate each query on the same route table the rest of the app uses, so a role
+  // that can't read a resource never requests it.
+  const canViewApparatus = canAccessPath('/apparatus', auth.roles);
+  const canViewMembers = canAccessPath('/personnel', auth.roles);
+
+  const apparatusQuery = useQuery({
+    queryKey: ['apparatus'],
+    queryFn: () => listApparatus(auth),
+    enabled: canViewApparatus,
+  });
   const membersQuery = useQuery({
     queryKey: ['personnel', 'members'],
     queryFn: () => listMembers(auth),
+    enabled: canViewMembers,
   });
+
+  // MAJOR-3: a failed query (offline, 500, or a 403 that slips through the gate above) used to
+  // fall through to `?? []`, so the tile silently read "0 / 0 apparatus in service" — a failure
+  // rendered as a clean, healthy zero. Route it through the project's ApiError/ApiForbiddenGate
+  // convention (same pattern as ApparatusListPage/PersonnelListPage) instead: a 403 renders
+  // ForbiddenState, anything else renders the generic retryable ApiErrorState. `embedded` +
+  // `headingLevel="h2"` because LandingPage already owns the page's one <h1>.
+  const queryError = apparatusQuery.error ?? membersQuery.error;
+  if (queryError) {
+    return (
+      <ApiForbiddenGate error={queryError} embedded>
+        {null}
+      </ApiForbiddenGate>
+    );
+  }
 
   const apparatus = apparatusQuery.data ?? [];
   const inService = apparatus.filter((a) => a.status === 'IN_SERVICE').length;
@@ -61,19 +91,25 @@ function CommandConsole() {
       </div>
 
       <div className={styles.statGrid}>
-        <Stat
-          label="Apparatus in service"
-          value={apparatusQuery.isLoading ? '—' : `${inService} / ${apparatus.length}`}
-        />
-        <Stat
-          label="Out of service"
-          value={apparatusQuery.isLoading ? '—' : outOfService}
-          alarm={outOfService > 0}
-        />
-        <Stat
-          label="Active members"
-          value={membersQuery.isLoading ? '—' : `${activeMembers} / ${members.length}`}
-        />
+        {canViewApparatus ? (
+          <>
+            <Stat
+              label="Apparatus in service"
+              value={apparatusQuery.isLoading ? '—' : `${inService} / ${apparatus.length}`}
+            />
+            <Stat
+              label="Out of service"
+              value={apparatusQuery.isLoading ? '—' : outOfService}
+              alarm={outOfService > 0}
+            />
+          </>
+        ) : null}
+        {canViewMembers ? (
+          <Stat
+            label="Active members"
+            value={membersQuery.isLoading ? '—' : `${activeMembers} / ${members.length}`}
+          />
+        ) : null}
         <Stat label="Expiring certifications" value="—" hint="Not yet wired to this screen" />
       </div>
 
