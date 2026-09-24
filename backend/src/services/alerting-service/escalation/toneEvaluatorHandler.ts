@@ -8,8 +8,8 @@ import {
 } from '@aws-sdk/lib-dynamodb';
 import { buildDeptScopedPk, toVerifiedDeptId, type VerifiedDeptId } from '@boxalarm/dept-scope';
 import { emitOutcomeMetric } from '@boxalarm/metrics';
-import { randomUUID } from 'node:crypto';
 import { createDynamoClient, readAlertingConfig } from '../eligibility/dynamoClient.js';
+import { buildAlertingEnvelope } from './alertingEnvelope.js';
 import { queryEligibleMembers, type EligibilitySnapshotItem } from '../eligibility/selector.js';
 import { resolvePushTarget, resolveSmsTarget } from '../eligibility/resolvePushTarget.js';
 import { logError, logInfo } from '../dispatches/logger.js';
@@ -128,14 +128,8 @@ async function publishToneChannel(
   await sns.send(
     new PublishCommand({
       TopicArn: topicArn,
-      Message: JSON.stringify({
-        eventId: randomUUID(),
-        eventTime: new Date().toISOString(),
-        eventType: 'alerting.dispatch.normalized',
-        source: 'alerting-service',
-        correlationId: dispatchId,
-        schemaVersion: '1.0',
-        payload: {
+      Message: JSON.stringify(
+        buildAlertingEnvelope('alerting.dispatch.normalized', dispatchId, {
           dispatchId,
           memberId,
           channel,
@@ -145,8 +139,8 @@ async function publishToneChannel(
           address: dispatch.address,
           crossStreets: dispatch.crossStreets,
           narrative: dispatch.narrative,
-        },
-      }),
+        }),
+      ),
       MessageGroupId: dispatchId,
       MessageDeduplicationId: deriveMessageDeduplicationId({
         dispatchId,

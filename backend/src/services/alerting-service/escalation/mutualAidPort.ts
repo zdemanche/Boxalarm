@@ -5,10 +5,10 @@ import {
   type DynamoDBDocumentClient,
 } from '@aws-sdk/lib-dynamodb';
 import { buildDeptScopedPk, type VerifiedDeptId } from '@boxalarm/dept-scope';
-import { randomUUID } from 'node:crypto';
 import { queryEligibleMembers, type EligibilitySnapshotItem } from '../eligibility/selector.js';
 import { resolvePushTarget } from '../eligibility/resolvePushTarget.js';
 import { logError, logInfo } from '../dispatches/logger.js';
+import { buildAlertingEnvelope } from './alertingEnvelope.js';
 
 export type MutualAidReason = 'TONE_3_PREDICATE_UNMET' | 'MANUAL';
 
@@ -79,15 +79,14 @@ async function promptOfficer(
     await sns.send(
       new PublishCommand({
         TopicArn: topicArn,
-        Message: JSON.stringify({
-          eventId: randomUUID(),
-          eventTime: new Date().toISOString(),
-          eventType: 'alerting.mutual_aid.triggered',
-          source: 'alerting-service',
-          correlationId: dispatchId,
-          schemaVersion: '1.0',
-          payload: { dispatchId, memberId: officer.memberId, channel: 'push', mutualAid: true },
-        }),
+        Message: JSON.stringify(
+          buildAlertingEnvelope('alerting.mutual_aid.triggered', dispatchId, {
+            dispatchId,
+            memberId: officer.memberId,
+            channel: 'push',
+            mutualAid: true,
+          }),
+        ),
         MessageGroupId: dispatchId,
         MessageDeduplicationId: idempotencyKey,
         MessageAttributes: { channel: { DataType: 'String', StringValue: 'push' } },
