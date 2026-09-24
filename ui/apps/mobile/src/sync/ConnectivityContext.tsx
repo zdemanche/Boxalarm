@@ -1,23 +1,32 @@
-import { createContext, useContext, useState, type ReactNode } from 'react';
+import NetInfo from '@react-native-community/netinfo';
+import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
 
-// Real connectivity detection (RN NetInfo, per architecture.md's sync engine section) is
-// @boxalarm/core's scope, not built yet. This models just the shape screens need - a single
-// isOnline flag - so the sync banner and per-screen offline states (RosterScreen) can be built
-// now and swap to real detection later without a UI rewrite.
 export interface ConnectivityContextValue {
   isOnline: boolean;
 }
 
 const ConnectivityContext = createContext<ConnectivityContextValue | undefined>(undefined);
 
+/** `initialIsOnline` forces a fixed value (used by tests and any screen that needs to exercise
+ * the offline state deterministically); when omitted, isOnline tracks real NetInfo state. */
 export function ConnectivityProvider({
   children,
-  initialIsOnline = true,
+  initialIsOnline,
 }: {
   children: ReactNode;
   initialIsOnline?: boolean;
 }) {
-  const [isOnline] = useState(initialIsOnline);
+  const [isOnline, setIsOnline] = useState(initialIsOnline ?? true);
+
+  useEffect(() => {
+    if (initialIsOnline !== undefined) return;
+    const unsubscribe = NetInfo.addEventListener((state) => {
+      setIsOnline(state.isConnected === true);
+    });
+    NetInfo.fetch().then((state) => setIsOnline(state.isConnected === true));
+    return unsubscribe;
+  }, [initialIsOnline]);
+
   return (
     <ConnectivityContext.Provider value={{ isOnline }}>{children}</ConnectivityContext.Provider>
   );

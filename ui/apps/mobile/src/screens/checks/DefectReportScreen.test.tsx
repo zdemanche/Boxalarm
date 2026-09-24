@@ -2,6 +2,7 @@ import { palette, touchTarget } from '@boxalarm/design-tokens';
 import { act, fireEvent, render } from '@testing-library/react-native';
 import * as ReactNative from 'react-native';
 import { AccessibilityInfo } from 'react-native';
+import { launchCamera } from 'react-native-image-picker';
 import { DefectReportScreen } from './DefectReportScreen';
 import { mockChecksRepository } from '../../features/checks/mockChecksRepository';
 
@@ -11,9 +12,46 @@ jest.mock('@react-navigation/native', () => ({
   useNavigation: () => ({ goBack: jest.fn() }),
 }));
 
-test('mentions that a photo attachment is not yet connected', async () => {
-  const { findByText } = await render(<DefectReportScreen />);
-  expect(await findByText(/not yet connected/i)).toBeTruthy();
+const mockLaunchCamera = launchCamera as jest.Mock;
+
+test('attaching a photo carries its local uri and filename into the submission', async () => {
+  mockLaunchCamera.mockResolvedValueOnce({
+    didCancel: false,
+    assets: [{ uri: 'file:///tmp/defect.jpg', fileName: 'defect.jpg', type: 'image/jpeg' }],
+  });
+  const submitSpy = jest.spyOn(mockChecksRepository, 'submitDefect');
+  const { findByText, findByPlaceholderText, findByRole } = await render(<DefectReportScreen />);
+
+  await act(async () => {
+    fireEvent.changeText(await findByPlaceholderText('Describe the defect'), 'Cracked mirror');
+  });
+  await act(async () => {
+    fireEvent.press(await findByRole('button', { name: 'Add photo' }));
+  });
+  expect(await findByText(/photo attached: defect\.jpg/i)).toBeTruthy();
+
+  await act(async () => {
+    fireEvent.press(await findByText('Submit defect report'));
+  });
+
+  expect(submitSpy).toHaveBeenCalledWith(
+    expect.objectContaining({
+      photoLocalUri: 'file:///tmp/defect.jpg',
+      photoFileName: 'defect.jpg',
+    }),
+  );
+  submitSpy.mockRestore();
+});
+
+test('a camera error surfaces without blocking submission of a report with no photo', async () => {
+  mockLaunchCamera.mockResolvedValueOnce({ didCancel: false, errorCode: 'camera_unavailable' });
+  const { findByRole, findByText } = await render(<DefectReportScreen />);
+
+  await act(async () => {
+    fireEvent.press(await findByRole('button', { name: 'Add photo' }));
+  });
+
+  expect(await findByText('camera_unavailable')).toBeTruthy();
 });
 
 test('submitting a defect report calls submitDefect with the entered description and severity', async () => {

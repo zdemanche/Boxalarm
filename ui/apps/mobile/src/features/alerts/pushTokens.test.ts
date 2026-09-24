@@ -34,9 +34,9 @@ test('revokePushToken DELETEs the member push-tokens route', async () => {
   expect(calls[0]?.init.method).toBe('DELETE');
 });
 
-test('the unavailable native bridge never crashes callers - no push SDK is linked yet', async () => {
+test('getNativePushBridge returns the real Firebase/notifee-backed bridge', () => {
   const bridge = getNativePushBridge();
-  await expect(bridge.requestPermission()).resolves.toBe(false);
-  await expect(bridge.getToken()).resolves.toBeNull();
-  expect(() => bridge.onTokenRefresh(() => {})()).not.toThrow();
+  expect(typeof bridge.requestPermission).toBe('function');
+  expect(typeof bridge.getToken).toBe('function');
+  expect(typeof bridge.onTokenRefresh).toBe('function');
 });

@@ -201,8 +201,8 @@ async function createCertificationInner(
 }
 
 export const handler = withAuthorization(createCertificationInner, {
-  actionType: 'Training',
+  actionType: 'Boxalarm::Action',
   actionId: 'CreateCertification',
-  resourceType: 'Member',
+  resourceType: 'Boxalarm::Member',
   resourceId: (event) => event.pathParameters?.memberId ?? '',
 });

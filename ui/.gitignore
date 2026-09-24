@@ -41,3 +41,5 @@ local.properties
 .kotlin/
 *.jsbundle
 .metro-health-check*
+google-services.json
+GoogleService-Info.plist

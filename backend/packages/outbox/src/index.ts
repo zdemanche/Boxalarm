@@ -1,6 +1,14 @@
 import { randomUUID } from 'node:crypto';
 import { buildDeptScopedPk, type VerifiedDeptId } from '@boxalarm/dept-scope';
 
+export {
+  createOutboxDrainHandler,
+  createOutboxDrainClients,
+  readOutboxDrainConfig,
+  type OutboxDrainClients,
+  type OutboxDrainConfig,
+} from './drainHandler.js';
+
 export interface EventEnvelope<TPayload> {
   readonly eventId: string;
   readonly eventTime: string;
