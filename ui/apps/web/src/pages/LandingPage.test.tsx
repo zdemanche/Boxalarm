@@ -67,3 +67,14 @@ test('the heading uses the design-token type scale, matching the sign-in page', 
   const heading = await screen.findByRole('heading', { name: 'Member home' });
   expect(heading.style.fontSize).toBe(`${typography.size.xl}px`);
 });
+
+// Regression for MAJOR-2: the dashboard used to hardcode "No active call." as fact in a
+// role="status" live region regardless of whether a call was actually active. There is no
+// incidents/dispatch feature in this app yet, so the honest state is an explicit
+// "not wired" placeholder, not a fabricated claim.
+test('CHIEF dashboard never claims "No active call" — shows an honest not-wired placeholder instead', async () => {
+  renderLanding({ sub: 'm1', 'cognito:groups': ['CHIEF'] });
+  await screen.findByRole('heading', { name: 'Chief dashboard' });
+  expect(screen.queryByText(/no active call/i)).toBeNull();
+  expect(screen.getByText(/active-call status isn.t wired to this dashboard yet/i)).toBeTruthy();
+});

@@ -6,7 +6,6 @@ import { canAccessPath, firstGrantedNavPath } from '../routing/routeTable';
 import { listApparatus } from '../features/apparatus/api';
 import { listMembers } from '../features/personnel/api';
 import { Card, Stat } from '../components/ui/Card';
-import { CheckCircle2 } from '../components/ui/icons';
 import styles from './LandingPage.module.css';
 
 const ROLE_PRIORITY: readonly Role[] = [
@@ -51,9 +50,14 @@ function CommandConsole() {
 
   return (
     <>
-      <div className={styles.callBanner} role="status">
-        <CheckCircle2 size={18} aria-hidden="true" />
-        No active call.
+      {/* MAJOR-2 (PR #318 review): this used to hardcode "No active call." with a green
+          checkmark in a role="status" live region, stated as fact regardless of whether a call
+          was actually active — a false operational claim on the CHIEF/OFFICER dashboard of a
+          life-safety dispatch app. There is no incidents/dispatch feature in this app yet to
+          wire a real answer to, so this is an honest "not wired" placeholder (matching the
+          shift/certification cards below) instead of a fabricated status. */}
+      <div className={styles.callBanner}>
+        Active-call status isn&rsquo;t wired to this dashboard yet.
       </div>
 
       <div className={styles.statGrid}>
