@@ -5,6 +5,7 @@ import {
   type DynamoDBDocumentClient,
 } from '@aws-sdk/lib-dynamodb';
 import { buildDeptScopedPk, type VerifiedDeptId } from '@boxalarm/dept-scope';
+import { buildOutboxRecord } from '@boxalarm/outbox';
 import { queryEligibleMembers, type EligibilitySnapshotItem } from '../eligibility/selector.js';
 import { resolvePushTarget } from '../eligibility/resolvePushTarget.js';
 import { logError, logInfo } from '../dispatches/logger.js';
@@ -106,6 +107,7 @@ async function promptOfficer(
 export async function requestMutualAid(input: MutualAidRequestInput): Promise<MutualAidResult> {
   const { ddb, sns, tableName, topicArn, deptId, dispatchId, reason } = input;
   const pk = buildDeptScopedPk(deptId, 'DISPATCH', dispatchId);
+  const triggeredAt = Math.floor(Date.now() / 1000);
 
   try {
     await ddb.send(
@@ -122,7 +124,7 @@ export async function requestMutualAid(input: MutualAidRequestInput): Promise<Mu
                 deptId,
                 reason,
                 adapterUsed: ADAPTER_NAME,
-                triggeredAt: Math.floor(Date.now() / 1000),
+                triggeredAt,
               },
               ConditionExpression: 'attribute_not_exists(pk)',
             },
@@ -164,6 +166,30 @@ export async function requestMutualAid(input: MutualAidRequestInput): Promise<Mu
       memberId: officers[index]?.memberId,
     });
   });
+
+  try {
+    await ddb.send(
+      new PutCommand({
+        TableName: tableName,
+        Item: buildOutboxRecord(
+          deptId,
+          'alerting-service',
+          'alerting.mutual_aid.triggered',
+          dispatchId,
+          {
+            dispatchId,
+            triggeredAt,
+            reason,
+            predicateSnapshot: { officerCount: officers.length },
+            adapterUsed: ADAPTER_NAME,
+            officersNotified,
+          },
+        ),
+      }),
+    );
+  } catch (error) {
+    logError('alerting.mutualAid.bridgeOutboxWriteFailed', error, { deptId, dispatchId });
+  }
 
   logInfo('alerting.mutualAid.requested', { deptId, dispatchId, reason, officersNotified });
   return { requested: true, officersNotified, adapterUsed: ADAPTER_NAME };

@@ -132,4 +132,9 @@ export const LAMBDA_ENTRIES = [
     function: 'membership-trends',
     entry: 'src/services/reporting-service/membershipTrends/handler.ts',
   },
+  {
+    service: 'alerting-service',
+    function: 'outbox-drain',
+    entry: 'src/services/alerting-service/outboxDrainHandler.ts',
+  },
 ];
