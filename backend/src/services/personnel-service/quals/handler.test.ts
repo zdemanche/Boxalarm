@@ -62,9 +62,9 @@ beforeEach(() => {
 describe('getQualsHandler', () => {
   it('wires the GetQuals action against the Member resource (AC3 self-read)', () => {
     expect(capturedOptions.find((options) => options.actionId === 'GetQuals')).toMatchObject({
-      actionType: 'PersonnelService',
+      actionType: 'Boxalarm::Action',
       actionId: 'GetQuals',
-      resourceType: 'Member',
+      resourceType: 'Boxalarm::Member',
     });
   });
 
@@ -108,9 +108,9 @@ describe('getQualsHandler', () => {
 describe('putQualsHandler', () => {
   it('wires the UpdateQuals action against the Member resource (AC1 admin-write)', () => {
     expect(capturedOptions.find((options) => options.actionId === 'UpdateQuals')).toMatchObject({
-      actionType: 'PersonnelService',
+      actionType: 'Boxalarm::Action',
       actionId: 'UpdateQuals',
-      resourceType: 'Member',
+      resourceType: 'Boxalarm::Member',
     });
   });
 

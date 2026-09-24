@@ -1,7 +1,8 @@
-import { useMemo, useRef } from 'react';
+import { useEffect, useMemo, useRef } from 'react';
 import Config from 'react-native-config';
 import { useOptionalAuth } from '../../auth/AuthContext';
 import { apiRequest, ApiError } from '../../lib/apiClient';
+import * as syncManager from '../../sync/syncManager';
 import { mockChecksRepository } from './mockChecksRepository';
 import type {
   Apparatus,
@@ -43,6 +44,11 @@ export function useChecksRepository(): ChecksRepositoryWithFallbackFlag {
   // memoized object on every render.
   const authRef = useRef(auth);
   authRef.current = auth;
+
+  useEffect(() => {
+    const tokens = apiBaseUrl && isAuthenticated ? (authRef.current ?? null) : null;
+    syncManager.configure(tokens, apiBaseUrl || null);
+  }, [apiBaseUrl, isAuthenticated]);
 
   return useMemo<ChecksRepositoryWithFallbackFlag>(() => {
     if (!apiBaseUrl || !isAuthenticated) {
@@ -98,35 +104,31 @@ export function useChecksRepository(): ChecksRepositoryWithFallbackFlag {
       async submitChecklistRun(run: ChecklistRunSubmission): Promise<void> {
         const tokens = authRef.current;
         if (!tokens) return mockChecksRepository.submitChecklistRun(run);
-        await apiRequest(unitPath(run.apparatusId, 'checks'), tokens, {
-          apiBaseUrl,
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            templateId: run.templateId,
-            completedBy: tokens.memberId ?? undefined,
-            completedAt: Math.floor(Date.now() / 1000),
-            durationSeconds: run.durationSeconds,
-            itemResults: run.itemResults,
-            idempotencyKey: run.idempotencyKey,
-            capturedOffline: false,
-          }),
+        await syncManager.enqueueChecklistRun(run.apparatusId, run.idempotencyKey, {
+          templateId: run.templateId,
+          completedBy: tokens.memberId ?? undefined,
+          completedAt: Math.floor(Date.now() / 1000),
+          durationSeconds: run.durationSeconds,
+          itemResults: run.itemResults,
+          idempotencyKey: run.idempotencyKey,
+          capturedOffline: run.capturedOffline ?? false,
         });
       },
 
       async submitDefect(defect: DefectSubmission): Promise<void> {
         const tokens = authRef.current;
         if (!tokens) return mockChecksRepository.submitDefect(defect);
-        await apiRequest(unitPath(defect.apparatusId, 'defects'), tokens, {
-          apiBaseUrl,
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
+        await syncManager.enqueueDefect(
+          defect.apparatusId,
+          defect.idempotencyKey,
+          {
             description: defect.description,
             severity: defect.severity,
             idempotencyKey: defect.idempotencyKey,
-          }),
-        });
+            ...(defect.photoFileName ? { photo: { filename: defect.photoFileName } } : {}),
+          },
+          defect.photoLocalUri,
+        );
       },
     };
   }, [apiBaseUrl, isAuthenticated]);

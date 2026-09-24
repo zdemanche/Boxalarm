@@ -2,7 +2,14 @@ import * as pulumi from "@pulumi/pulumi";
 import * as aws from "@pulumi/aws";
 import { IamPolicyStatement } from "../observability/observability-policy";
 import { requireEnv } from "../shared/env";
-import { ROLE_GROUPS, CEDAR_SCHEMA, adminActionsPolicy, viewConfigPolicy } from "./cedar-policies";
+import {
+  ROLE_GROUPS,
+  CEDAR_SCHEMA,
+  adminActionsPolicy,
+  viewConfigPolicy,
+  selfServiceActionsPolicy,
+  officerTierActionsPolicy,
+} from "./cedar-policies";
 
 export interface PolicyStoreArgs {
   env: string;
@@ -43,6 +50,8 @@ export class PolicyStore extends pulumi.ComponentResource {
   public readonly roleGroups: aws.cognito.UserGroup[];
   public readonly adminActionsPolicy: aws.verifiedpermissions.Policy;
   public readonly viewConfigPolicy: aws.verifiedpermissions.Policy;
+  public readonly selfServiceActionsPolicy: aws.verifiedpermissions.Policy;
+  public readonly officerTierActionsPolicy: aws.verifiedpermissions.Policy;
 
   constructor(name: string, args: PolicyStoreArgs, opts?: pulumi.ComponentResourceOptions) {
     requireEnv("PolicyStore", args.env);
@@ -117,6 +126,25 @@ export class PolicyStore extends pulumi.ComponentResource {
         definition: {
           static: { statement: pulumi.output(args.userPoolId).apply(viewConfigPolicy) },
         },
+      },
+      { parent: this, dependsOn: [this.schema] },
+    );
+
+    // E2/E3-INFRA (#204-#221): personnel/training own-record and officer-tier actions.
+    this.selfServiceActionsPolicy = new aws.verifiedpermissions.Policy(
+      `${name}-self-service-actions`,
+      {
+        policyStoreId: this.policyStoreId,
+        definition: { static: { statement: selfServiceActionsPolicy() } },
+      },
+      { parent: this, dependsOn: [this.schema] },
+    );
+
+    this.officerTierActionsPolicy = new aws.verifiedpermissions.Policy(
+      `${name}-officer-tier-actions`,
+      {
+        policyStoreId: this.policyStoreId,
+        definition: { static: { statement: officerTierActionsPolicy() } },
       },
       { parent: this, dependsOn: [this.schema] },
     );

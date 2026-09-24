@@ -7,6 +7,7 @@ import {
   type TransactWriteCommandInput,
 } from '@aws-sdk/lib-dynamodb';
 import { buildDeptScopedPk, toVerifiedDeptId, type VerifiedDeptId } from '@boxalarm/dept-scope';
+import { buildOutboxRecord } from '@boxalarm/outbox';
 import { emitOutcomeMetric } from '@boxalarm/metrics';
 import { createDynamoClient, readAlertingConfig } from '../eligibility/dynamoClient.js';
 import { buildAlertingEnvelope } from './alertingEnvelope.js';
@@ -36,7 +37,7 @@ const VOICE_ESCALATION_DELAY_SECONDS = 75;
 const FAN_OUT_CHANNELS: readonly FanOutChannel[] = ['push', 'sms'];
 const MAX_CONCURRENT_TONE_TASKS = 10;
 const GUARD_ITEM_INDEX = 0;
-const METADATA_ITEM_INDEX = 2;
+const METADATA_ITEM_INDEX = 3;
 
 interface TransactCancellationError {
   readonly name: string;
@@ -338,6 +339,11 @@ async function commitToneEvaluation(
   evaluatedAt: number,
   outcome: ToneOutcome,
   eligibleMemberCount: number,
+  predicateSnapshot: {
+    readonly minResponders: number;
+    readonly requiredQuals: readonly string[];
+    readonly respondingCount: number;
+  },
   options: { readonly advanceMetadata: boolean },
 ): Promise<ToneCommitResult> {
   const correlationId = `${dispatchId}#${toneSequence}`;
@@ -370,6 +376,25 @@ async function commitToneEvaluation(
           outcome,
           eligibleMemberCount,
         },
+      },
+    },
+    {
+      Put: {
+        TableName: tableName,
+        Item: buildOutboxRecord(
+          deptId,
+          'alerting-service',
+          'alerting.tone.escalated',
+          correlationId,
+          {
+            dispatchId,
+            toneSequence,
+            firedAt: evaluatedAt,
+            outcome,
+            predicateSnapshot,
+            eligibleMemberCount,
+          },
+        ),
       },
     },
   ];
@@ -480,6 +505,14 @@ export const handler = async (payload: unknown): Promise<{ outcome: ToneOutcome 
   const predicateMet = isPredicateMet(roster, toneConfig);
   const outcome: ToneOutcome = predicateMet ? 'SKIPPED_PREDICATE_MET' : 'FIRED';
   const evaluatedAt = Math.floor(Date.now() / 1000);
+  const respondingCount = roster.filter(
+    (entry) => entry.ackStatus === 'RESPONDING' || entry.ackStatus === 'DIRECT_TO_SCENE',
+  ).length;
+  const predicateSnapshot = {
+    minResponders: toneConfig.minResponders,
+    requiredQuals: toneConfig.requiredQuals,
+    respondingCount,
+  };
 
   if (predicateMet) {
     const skipCommit = await commitToneEvaluation(
@@ -492,6 +525,7 @@ export const handler = async (payload: unknown): Promise<{ outcome: ToneOutcome 
       evaluatedAt,
       outcome,
       roster.length,
+      predicateSnapshot,
       { advanceMetadata: false },
     );
     if (skipCommit === 'already_exists') {
@@ -527,6 +561,7 @@ export const handler = async (payload: unknown): Promise<{ outcome: ToneOutcome 
     evaluatedAt,
     outcome,
     eligibleMembers.length,
+    predicateSnapshot,
     { advanceMetadata: true },
   );
   if (fireCommit === 'already_exists') {

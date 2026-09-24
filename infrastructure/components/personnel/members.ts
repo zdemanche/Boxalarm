@@ -81,6 +81,7 @@ export class Members extends pulumi.ComponentResource {
   public readonly listLambda: ServiceLambda;
   public readonly getLambda: ServiceLambda;
   public readonly updateStatusLambda: ServiceLambda;
+  public readonly updateProfileLambda: ServiceLambda;
 
   constructor(name: string, args: MembersArgs, opts?: pulumi.ComponentResourceOptions) {
     requireEnv("Members", args.env);
@@ -198,11 +199,49 @@ export class Members extends pulumi.ComponentResource {
       { parent: this },
     );
 
+    // E2-S6-INFRA #208: member self-service profile/contact update. UpdateMember is an
+    // ADMIN_ONLY_ACTION in cedar-policies.ts today (grep for it) — updateMember.ts's
+    // resourceId is the caller-supplied memberId path param, not principal.sub, so
+    // opening this action to every role before the handler enforces memberId ===
+    // principal.sub would let any member edit any other member's profile in the same
+    // department. Wiring the route without widening the grant; the self-check belongs in
+    // updateMember.ts (backend, out of this infra ticket's footprint).
+    this.updateProfileLambda = new ServiceLambda(
+      `${name}-update-profile`,
+      {
+        env,
+        serviceName: "personnel-service",
+        functionName: `boxalarm-${env}-personnel-members-update-profile`,
+        handler: LAMBDA_HANDLER,
+        code: lambdaCode("personnel-service", "members-update-profile"),
+        logGroup: args.logGroup,
+        environment: baseEnvironment,
+        additionalPolicyStatements: pulumi
+          .all([args.platformTableArn, vpStatement])
+          .apply(([tableArn, vp]) => [
+            {
+              Sid: "MembersUpdateProfileAccess" as const,
+              Effect: "Allow" as const,
+              Action: ["dynamodb:UpdateItem", "dynamodb:PutItem"],
+              Resource: [tableArn],
+            },
+            ...vp,
+          ]),
+      },
+      { parent: this },
+    );
+    args.httpApi.route(
+      `${name}-update-profile-route`,
+      { routeKey: "PUT /api/v1/personnel/members/{memberId}", lambda: this.updateProfileLambda },
+      { parent: this },
+    );
+
     this.registerOutputs({
       createLambda: this.createLambda,
       listLambda: this.listLambda,
       getLambda: this.getLambda,
       updateStatusLambda: this.updateStatusLambda,
+      updateProfileLambda: this.updateProfileLambda,
     });
   }
 }

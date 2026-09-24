@@ -63,8 +63,8 @@ async function getIsoReportInner(
 }
 
 export const handler = withAuthorization(getIsoReportInner, {
-  actionType: 'Training',
+  actionType: 'Boxalarm::Action',
   actionId: 'ViewIsoTrainingReport',
-  resourceType: 'TrainingReport',
+  resourceType: 'Boxalarm::TrainingReport',
   resourceId: () => 'iso',
 });

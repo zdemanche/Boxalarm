@@ -45,10 +45,6 @@ export class OutboxPublisher extends pulumi.ComponentResource {
         serviceName: "platform-service",
         functionName: `boxalarm-${env}-platform-outbox-publisher`,
         handler: LAMBDA_HANDLER,
-        // No matching handler in backend/src/services/platform-service yet (the
-        // existing outbox publisher, personnel-service/outbox/publisher.ts, is
-        // hardcoded to the personnel table, not this generic platform-table one)
-        // — stays on the placeholder fallback until that handler lands.
         code: lambdaCode("platform-service", "outbox-publisher"),
         logGroup: args.logGroup,
         environment: {
@@ -66,10 +62,9 @@ export class OutboxPublisher extends pulumi.ComponentResource {
               Resource: busArn,
             },
             {
-              // The real publisher (personnel-service/outbox/publisher.ts) runs an
-              // UpdateItem to SET sentAt after each successful PutEvents. Without
-              // this grant that update is denied and the handler throws — and
-              // because the event is published BEFORE the failing update, every
+              // The handler runs an UpdateItem to SET sentAt after each successful
+              // PutEvents. Without this grant that update is denied — and because
+              // the event is published BEFORE the failing update, every
               // stream-mapping retry re-publishes it, flooding the bus with
               // duplicates for as long as the mapping keeps retrying.
               Sid: "MarkOutboxEntrySent" as const,

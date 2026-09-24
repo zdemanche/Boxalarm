@@ -85,8 +85,8 @@ async function revokeCertificationInner(
 }
 
 export const handler = withAuthorization(revokeCertificationInner, {
-  actionType: 'Training',
+  actionType: 'Boxalarm::Action',
   actionId: 'RevokeCertification',
-  resourceType: 'Member',
+  resourceType: 'Boxalarm::Member',
   resourceId: (event) => event.pathParameters?.memberId ?? '',
 });
