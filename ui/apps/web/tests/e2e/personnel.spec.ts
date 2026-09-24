@@ -76,6 +76,7 @@ async function signInAs(page: Page, groups: string[]): Promise<void> {
 
   await page.goto('/login');
   await page.getByRole('button', { name: 'Sign in' }).click();
+  await page.waitForURL('/');
 }
 
 test('roster table headers are associated with cells and the page passes axe (AC4)', async ({
