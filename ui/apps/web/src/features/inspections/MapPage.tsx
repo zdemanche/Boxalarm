@@ -3,7 +3,7 @@ import { useQuery } from '@tanstack/react-query';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../../auth/AuthContext';
 import { ApiForbiddenGate } from '../../components/ApiForbiddenGate';
-import { Button, Card, PageHeader, StatusChip, Tabs } from '../../components/ui';
+import { Button, Card, PageHeader, Tabs } from '../../components/ui';
 import { LeafletMap } from './LeafletMap';
 import { queryMap } from './api';
 import { mergeHydrants, mergeOccupancies, panBoundingBox, zoomBoundingBox } from './mapProvider';
@@ -101,54 +101,56 @@ export function MapPage() {
             value: 'list',
             label: 'List view',
             content: (
-              <>
-                <Card title="Occupancies" style={{ marginTop: 'var(--bx-space-md)' }}>
-                  {occupancyList.length === 0 ? (
-                    <p>No occupancies in view.</p>
-                  ) : (
-                    <ul>
-                      {occupancyList.map((occupancy) => (
-                        <li key={occupancy.occupancyId}>
-                          <Link to={`/inspections/occupancies/${occupancy.occupancyId}`}>
-                            {occupancy.occupancyId}
-                          </Link>{' '}
-                          ({occupancy.latitude.toFixed(4)}, {occupancy.longitude.toFixed(4)})
-                        </li>
-                      ))}
-                    </ul>
-                  )}
-                </Card>
-
-                <Card title="Hydrants" style={{ marginTop: 'var(--bx-space-lg)' }}>
-                  {hydrantList.length === 0 ? (
-                    <p>No hydrants in view.</p>
-                  ) : (
-                    <ul>
-                      {hydrantList.map((hydrant) => (
-                        <li key={hydrant.hydrantId}>
-                          {hydrant.hydrantId} ({hydrant.latitude.toFixed(4)},{' '}
-                          {hydrant.longitude.toFixed(4)}) —{' '}
-                          <StatusChip
-                            status={hydrant.status === 'OUT_OF_SERVICE' ? 'danger' : 'ok'}
-                          >
-                            {hydrant.status === 'OUT_OF_SERVICE' ? 'Out of service' : 'In service'}
-                          </StatusChip>
-                          <a
-                            href={`https://www.openstreetmap.org/?mlat=${hydrant.latitude}&mlon=${hydrant.longitude}#map=18/${hydrant.latitude}/${hydrant.longitude}`}
-                            style={{ marginLeft: 'var(--bx-space-sm)' }}
-                          >
-                            Open map
-                          </a>
-                        </li>
-                      ))}
-                    </ul>
-                  )}
-                </Card>
-              </>
+              <p style={{ marginTop: 'var(--bx-space-md)' }}>
+                See the accessible occupancy and hydrant lists below.
+              </p>
             ),
           },
         ]}
       />
+
+      <Card title="Occupancies" style={{ marginTop: 'var(--bx-space-lg)' }}>
+        {occupancyList.length === 0 ? (
+          <p>No occupancies in view.</p>
+        ) : (
+          <ul>
+            {occupancyList.map((occupancy) => (
+              <li key={occupancy.occupancyId}>
+                <Link to={`/inspections/occupancies/${occupancy.occupancyId}`}>
+                  {occupancy.occupancyId}
+                </Link>{' '}
+                ({occupancy.latitude.toFixed(4)}, {occupancy.longitude.toFixed(4)})
+              </li>
+            ))}
+          </ul>
+        )}
+      </Card>
+
+      <Card title="Hydrants" style={{ marginTop: 'var(--bx-space-lg)' }}>
+        {hydrantList.length === 0 ? (
+          <p>No hydrants in view.</p>
+        ) : (
+          <ul>
+            {hydrantList.map((hydrant) => (
+              <li key={hydrant.hydrantId}>
+                {hydrant.hydrantId} ({hydrant.latitude.toFixed(4)}, {hydrant.longitude.toFixed(4)})
+                —{' '}
+                {hydrant.status === 'OUT_OF_SERVICE' ? (
+                  <span style={{ color: 'var(--bx-status-danger)' }}>⊘ Out of service</span>
+                ) : (
+                  <span>● In service</span>
+                )}
+                <a
+                  href={`https://www.openstreetmap.org/?mlat=${hydrant.latitude}&mlon=${hydrant.longitude}#map=18/${hydrant.latitude}/${hydrant.longitude}`}
+                  style={{ marginLeft: 'var(--bx-space-sm)' }}
+                >
+                  Open map
+                </a>
+              </li>
+            ))}
+          </ul>
+        )}
+      </Card>
     </main>
   );
 }
