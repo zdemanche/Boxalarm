@@ -43,6 +43,16 @@ const SettingsPage = lazy(() =>
 const AuditLogPage = lazy(() =>
   import('./features/platform/AuditLogPage').then((mod) => ({ default: mod.AuditLogPage })),
 );
+const CertificationsPage = lazy(() =>
+  import('./features/training/CertificationsPage').then((mod) => ({
+    default: mod.CertificationsPage,
+  })),
+);
+const TrainingEventsPage = lazy(() =>
+  import('./features/training/TrainingEventsPage').then((mod) => ({
+    default: mod.TrainingEventsPage,
+  })),
+);
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { staleTime: 30_000, retry: 1 } },
@@ -111,7 +121,8 @@ export function App() {
                   <Route path="incidents/:id" element={placeholder('Incident detail')} />
                   <Route path="personnel" element={roleGuarded(<PersonnelListPage />)} />
                   <Route path="personnel/:id" element={roleGuarded(<MemberDetailPage />)} />
-                  <Route path="certifications" element={placeholder('Certifications')} />
+                  <Route path="certifications" element={roleGuarded(<CertificationsPage />)} />
+                  <Route path="training/events" element={roleGuarded(<TrainingEventsPage />)} />
                   <Route path="apparatus" element={roleGuarded(<ApparatusListPage />)} />
                   <Route path="apparatus/:id" element={roleGuarded(<ApparatusDetailPage />)} />
                   <Route path="schedule" element={placeholder('Schedule')} />

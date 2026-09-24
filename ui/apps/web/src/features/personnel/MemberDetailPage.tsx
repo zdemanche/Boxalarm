@@ -7,6 +7,8 @@ import { ApiForbiddenGate } from '../../components/ApiForbiddenGate';
 import { Badge } from '../../components/ui/Chip';
 import { PageHeader } from '../../components/ui/PageHeader';
 import { revokeMemberSessions } from '../platform/api';
+import { CertificationsPanel } from '../training/CertificationsPanel';
+import { TranscriptPanel } from '../training/TranscriptPanel';
 import { getMember, updateMemberStatus } from './api';
 import type { MemberStatus } from './types';
 
@@ -48,6 +50,8 @@ export function MemberDetailPage() {
       revokeMutation.mutate();
     }
   }
+
+  const isTraining = auth.roles.includes('TRAINING') || auth.roles.includes('ADMIN');
 
   const memberQuery = useQuery({
     queryKey: ['personnel', 'members', id],
@@ -174,6 +178,8 @@ export function MemberDetailPage() {
               {revoked ? <p role="status">Sessions revoked.</p> : null}
             </div>
           ) : null}
+          <CertificationsPanel memberId={member.memberId} />
+          {isTraining ? <TranscriptPanel memberId={member.memberId} /> : null}
         </>
       )}
     </main>

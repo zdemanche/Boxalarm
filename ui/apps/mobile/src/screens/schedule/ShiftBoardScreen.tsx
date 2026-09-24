@@ -40,6 +40,23 @@ export function ShiftBoardScreen() {
         data={shifts}
         keyExtractor={(item) => item.shiftId}
         contentContainerStyle={{ padding: spacing.lg }}
+        ListHeaderComponent={
+          <TouchableOpacity
+            accessibilityRole="button"
+            onPress={() => navigation.navigate('TrainingEvents' as never)}
+            style={{
+              minHeight: touchTarget.baseline.ios,
+              justifyContent: 'center',
+              paddingBottom: spacing.md,
+            }}
+          >
+            <Text
+              style={{ color: tokens.accent, fontSize: typography.size.base, fontWeight: '600' }}
+            >
+              Training events
+            </Text>
+          </TouchableOpacity>
+        }
         renderItem={({ item }) => (
           <TouchableOpacity
             accessibilityRole="button"

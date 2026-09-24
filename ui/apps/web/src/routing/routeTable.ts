@@ -72,6 +72,13 @@ export const APP_ROUTES: readonly AppRoute[] = [
     showInNav: true,
   },
   {
+    path: '/training/events',
+    navPath: '/training/events',
+    label: 'Training events',
+    roles: ['TRAINING', 'ADMIN'],
+    showInNav: true,
+  },
+  {
     path: '/apparatus',
     navPath: '/apparatus',
     label: 'Apparatus',
