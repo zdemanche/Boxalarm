@@ -127,7 +127,10 @@ test('assignment shows on the asset detail (AC2)', async () => {
       }),
     ),
     http.put('/api/v1/inventory/equipment/eq-1/assignment', async ({ request }) => {
-      const body = (await request.json()) as { assignedToType: string; assignedToId: string };
+      const body = (await request.json()) as Pick<
+        EquipmentAsset,
+        'assignedToType' | 'assignedToId'
+      >;
       current = { ...current, ...body };
       return HttpResponse.json(current);
     }),
