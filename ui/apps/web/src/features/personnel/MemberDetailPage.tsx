@@ -17,6 +17,9 @@ export function MemberDetailPage() {
   const auth = useAuth();
   const queryClient = useQueryClient();
   const isAdmin = auth.roles.includes('ADMIN');
+  // Matches the inspections write-access precedent (ADMIN || CHIEF) — PPE issuance is a new
+  // control added in this PR, unlike the pre-existing ADMIN-only member-status gate below.
+  const canIssuePpe = isAdmin || auth.roles.includes('CHIEF');
   const [ppeForm, setPpeForm] = useState<IssuePpeInput>(emptyPpeForm);
   const [ppeFormError, setPpeFormError] = useState<string | null>(null);
 
@@ -148,7 +151,7 @@ export function MemberDetailPage() {
             </ul>
           )}
 
-          {isAdmin ? (
+          {canIssuePpe ? (
             <form
               aria-label="Issue PPE"
               onSubmit={(event: FormEvent) => {

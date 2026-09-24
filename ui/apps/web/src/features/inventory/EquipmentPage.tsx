@@ -12,7 +12,7 @@ type Tab = 'equipment' | 'consumables';
 export function EquipmentPage() {
   const auth = useAuth();
   const queryClient = useQueryClient();
-  const isAdmin = auth.roles.includes('ADMIN');
+  const canWrite = auth.roles.includes('ADMIN') || auth.roles.includes('CHIEF');
   const [tab, setTab] = useState<Tab>('equipment');
   const [showRetired, setShowRetired] = useState(false);
   const [form, setForm] = useState<CreateEquipmentAssetInput>(emptyForm);
@@ -141,7 +141,7 @@ export function EquipmentPage() {
             </table>
           )}
 
-          {isAdmin ? (
+          {canWrite ? (
             <form
               aria-label="Register equipment"
               onSubmit={(event: FormEvent) => {

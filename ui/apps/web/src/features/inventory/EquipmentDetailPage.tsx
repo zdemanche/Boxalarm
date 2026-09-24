@@ -23,7 +23,7 @@ export function EquipmentDetailPage() {
   const { assetId = '' } = useParams();
   const auth = useAuth();
   const queryClient = useQueryClient();
-  const isAdmin = auth.roles.includes('ADMIN');
+  const canWrite = auth.roles.includes('ADMIN') || auth.roles.includes('CHIEF');
   const [assignedToType, setAssignedToType] = useState<AssignedToType>('MEMBER');
   const [assignedToId, setAssignedToId] = useState('');
   const [location, setLocation] = useState('');
@@ -37,13 +37,13 @@ export function EquipmentDetailPage() {
   const membersQuery = useQuery({
     queryKey: ['personnel', 'members'],
     queryFn: () => listMembers(auth),
-    enabled: isAdmin && assignedToType === 'MEMBER',
+    enabled: canWrite && assignedToType === 'MEMBER',
   });
 
   const apparatusQuery = useQuery({
     queryKey: ['apparatus'],
     queryFn: () => listApparatus(auth),
-    enabled: isAdmin && assignedToType === 'APPARATUS',
+    enabled: canWrite && assignedToType === 'APPARATUS',
   });
 
   const assignMutation = useMutation({
@@ -118,7 +118,7 @@ export function EquipmentDetailPage() {
             </dd>
           </dl>
 
-          {isAdmin ? (
+          {canWrite ? (
             <>
               <form
                 aria-label="Assign asset"

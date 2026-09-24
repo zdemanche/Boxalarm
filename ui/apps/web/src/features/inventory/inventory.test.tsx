@@ -245,6 +245,30 @@ test('a non-admin viewer sees no lifecycle transition control (AC3)', async () =
   expect(screen.queryByRole('button', { name: /Move to/ })).toBeNull();
 });
 
+test('CHIEF has the same equipment write access as ADMIN, consistent with inspections (MAJOR-3)', async () => {
+  const asset: EquipmentAsset = {
+    assetId: 'eq-1',
+    deptId: 'd1',
+    serialNumber: 'SCBA-1',
+    location: 'Station 1',
+    lifecycleStatus: 'IN_SERVICE',
+  };
+  server.use(
+    http.get('/api/v1/inventory/equipment', () => HttpResponse.json({ items: [] })),
+    http.get('/api/v1/inventory/equipment/eq-1', () => HttpResponse.json(asset)),
+    http.get('/api/v1/personnel/members', () => HttpResponse.json({ items: [] })),
+  );
+
+  renderApp(['CHIEF']);
+  await screen.findByRole('heading', { name: 'Inventory' });
+  expect(screen.getByRole('form', { name: 'Register equipment' })).toBeTruthy();
+
+  cleanup();
+  renderApp(['CHIEF'], '/inventory/eq-1');
+  await screen.findByRole('heading', { name: 'SCBA-1' });
+  expect(screen.getByRole('form', { name: 'Assign asset' })).toBeTruthy();
+});
+
 test('below-threshold consumables are flagged (AC1)', async () => {
   server.use(
     http.get('/api/v1/inventory/equipment', () => HttpResponse.json({ items: [] })),
