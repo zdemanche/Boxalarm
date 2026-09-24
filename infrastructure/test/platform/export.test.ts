@@ -143,6 +143,20 @@ describe("Export", () => {
     expect(actions).toContain("arn:aws:sns:us-east-1:123456789012:chief");
   });
 
+  it("watches Boxalarm/platform — the namespace the backend actually emits ExportInvoked/ExportWorkerInvokeFailed/ExportFailed to", async () => {
+    const exp = await build();
+    const [invokedNs, workerFailedNs, exportFailedNs] = await Promise.all([
+      resolve(exp.invokedAlarm.namespace),
+      resolve(exp.workerFailedAlarm.namespace),
+      resolve(exp.exportFailedAlarm.namespace),
+    ]);
+    // NOT "Boxalarm/platform-service" (metricsNamespaceFor("platform-service")) —
+    // export/handler.ts and export/worker.ts emit to the literal "Boxalarm/platform".
+    expect(invokedNs).toBe("Boxalarm/platform");
+    expect(workerFailedNs).toBe("Boxalarm/platform");
+    expect(exportFailedNs).toBe("Boxalarm/platform");
+  });
+
   it("grants the handler GetItem/PutItem/UpdateItem on the platform table, never the non-functional TransactWriteItems", async () => {
     const exp = await build();
     const policyJson = await resolve(exp.handlerLambda.rolePolicy.policy);

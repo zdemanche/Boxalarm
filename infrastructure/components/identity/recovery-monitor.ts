@@ -2,7 +2,6 @@ import * as pulumi from "@pulumi/pulumi";
 import * as aws from "@pulumi/aws";
 import { ServiceLambda } from "../observability/service-lambda";
 import { ServiceLogGroup } from "../observability/service-log-group";
-import { metricsNamespaceFor } from "../observability/observability-policy";
 import { placeholderLambdaCode, PLACEHOLDER_LAMBDA_HANDLER } from "../shared/placeholder-code";
 import { requireEnv } from "../shared/env";
 
@@ -31,7 +30,13 @@ export class RecoveryMonitor extends pulumi.ComponentResource {
     requireEnv("RecoveryMonitor", args.env);
     super("boxalarm:identity:RecoveryMonitor", name, {}, opts);
     const { env } = args;
-    const namespace = metricsNamespaceFor("platform-service");
+    // NOT metricsNamespaceFor("platform-service") (Boxalarm/platform-service): the
+    // backend emits RecoveryFailed/RecoveryClassificationFailed (and
+    // RecoveryStarted/RecoveryCompleted) to the literal namespace
+    // "Boxalarm/credential-recovery" (credential-recovery-monitor/handler.ts).
+    // Watching the wrong namespace meant these account-takeover alarms could never
+    // fire.
+    const namespace = "Boxalarm/credential-recovery";
 
     const caller = aws.getCallerIdentityOutput({}, { parent: this });
     const region = aws.getRegionOutput({}, { parent: this });

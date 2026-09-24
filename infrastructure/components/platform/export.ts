@@ -3,10 +3,7 @@ import * as aws from "@pulumi/aws";
 import { ServiceLambda } from "../observability/service-lambda";
 import { ServiceLogGroup } from "../observability/service-log-group";
 import { HttpApi } from "../api/http-api";
-import {
-  metricsNamespaceFor,
-  observabilityPolicyStatements,
-} from "../observability/observability-policy";
+import { observabilityPolicyStatements } from "../observability/observability-policy";
 import { ACTIVE_TRACING_CONFIG } from "../observability/xray-sampling";
 import { placeholderLambdaCode, PLACEHOLDER_LAMBDA_HANDLER } from "../shared/placeholder-code";
 import { requireEnv } from "../shared/env";
@@ -42,7 +39,12 @@ export class Export extends pulumi.ComponentResource {
     requireEnv("Export", args.env);
     super("boxalarm:platform:Export", name, {}, opts);
     const { env } = args;
-    const namespace = metricsNamespaceFor("platform-service");
+    // NOT metricsNamespaceFor("platform-service") (Boxalarm/platform-service): the
+    // backend emits ExportInvoked/ExportWorkerInvokeFailed/ExportFailed to the
+    // literal namespace "Boxalarm/platform" (export/handler.ts, export/worker.ts).
+    // Watching the wrong namespace meant these alarms — the stated compensating
+    // control for "Cedar role check alone" on every export — could never fire.
+    const namespace = "Boxalarm/platform";
 
     // S3 bucket names are globally unique across ALL AWS accounts and regions.
     // A bare "boxalarm-exports-staging" literal means only the first stack to
