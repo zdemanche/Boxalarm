@@ -14,7 +14,15 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useOptionalAuth } from '../../auth/AuthContext';
 import { useScheduleRepository } from '../../features/schedule/apiScheduleRepository';
 import type { DutyShift } from '../../features/schedule/types';
+import { ApiError } from '../../lib/apiClient';
 import { useOptionalConnectivity } from '../../sync/ConnectivityContext';
+
+// Mirrors ProfileEditScreen's error-handling pattern: a 403 gets its own message, everything
+// else (offline, 409, 500) gets a generic retry prompt, shown on screen and announced for a
+// screen-reader user who isn't focused on this row when the result lands.
+function describeError(e: unknown, forbiddenMessage: string, fallbackMessage: string): string {
+  return e instanceof ApiError && e.problem.status === 403 ? forbiddenMessage : fallbackMessage;
+}
 
 // F2.9: a claim made offline (or, here, mid-flight) is queued as PENDING in the UI, never shown
 // as confirmed, until the server round trip either confirms or rejects it as already taken -
@@ -33,6 +41,7 @@ export function ShiftDetailScreen() {
   const [shift, setShift] = useState<DutyShift | null>(null);
   const [claimState, setClaimState] = useState<Record<string, ClaimUiState>>({});
   const [swapTargetMemberId, setSwapTargetMemberId] = useState('');
+  const [error, setError] = useState<string | null>(null);
   const pendingClaims = useRef(new Set<string>());
 
   useEffect(() => {
@@ -94,18 +103,42 @@ export function ShiftDetailScreen() {
   }, [isOnline]);
 
   const handleGiveBack = (positionCode: string) => {
-    repository.releasePosition?.(shiftId, positionCode).then(() => {
-      setClaimState((prev) => ({ ...prev, [positionCode]: 'open' }));
-      AccessibilityInfo.announceForAccessibility('Given back');
-    });
+    setError(null);
+    repository
+      .releasePosition?.(shiftId, positionCode)
+      .then(() => {
+        setClaimState((prev) => ({ ...prev, [positionCode]: 'open' }));
+        AccessibilityInfo.announceForAccessibility('Given back');
+      })
+      .catch((e: unknown) => {
+        const message = describeError(
+          e,
+          'You do not have access to give back this position.',
+          'Could not give back this position. Try again.',
+        );
+        setError(message);
+        AccessibilityInfo.announceForAccessibility(message);
+      });
   };
 
   const handleProposeSwap = (positionCode: string) => {
     if (!swapTargetMemberId.trim()) return;
-    repository.proposeSwap?.(shiftId, positionCode, swapTargetMemberId.trim()).then(() => {
-      setSwapTargetMemberId('');
-      AccessibilityInfo.announceForAccessibility('Swap proposed, pending approval');
-    });
+    setError(null);
+    repository
+      .proposeSwap?.(shiftId, positionCode, swapTargetMemberId.trim())
+      .then(() => {
+        setSwapTargetMemberId('');
+        AccessibilityInfo.announceForAccessibility('Swap proposed, pending approval');
+      })
+      .catch((e: unknown) => {
+        const message = describeError(
+          e,
+          'You do not have access to propose this swap.',
+          'Could not propose swap. Try again.',
+        );
+        setError(message);
+        AccessibilityInfo.announceForAccessibility(message);
+      });
   };
 
   if (!shift) {
@@ -115,6 +148,18 @@ export function ShiftDetailScreen() {
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: tokens.background }}>
       <ScrollView contentContainerStyle={{ padding: spacing.lg }}>
+        {error ? (
+          <Text
+            accessibilityRole="alert"
+            style={{
+              color: tokens.error,
+              marginBottom: spacing.md,
+              fontSize: typography.size.sm,
+            }}
+          >
+            {error}
+          </Text>
+        ) : null}
         {shift.positions.map((position) => {
           const state = claimState[position.positionCode] ?? 'open';
           const isMine =
