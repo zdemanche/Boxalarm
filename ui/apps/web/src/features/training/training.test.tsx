@@ -1,4 +1,4 @@
-import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { HttpResponse, http } from 'msw';
@@ -157,6 +157,50 @@ test('training officer creates an event and it appears in start order; a member 
 
   await waitFor(() => {
     expect(screen.getByText(/Signed up/)).toBeTruthy();
+  });
+});
+
+test('training officer records post-event hours for an attendee via the hours form', async () => {
+  const events: TrainingEvent[] = [
+    {
+      eventId: 'evt-1',
+      title: 'Ladder drill',
+      category: 'Ladders',
+      startAt: Date.parse('2020-01-01T18:00:00Z'),
+      endAt: Date.parse('2020-01-01T20:00:00Z'),
+      signedUp: false,
+    },
+  ];
+
+  let recordedBody: unknown;
+  server.use(
+    http.get('/api/v1/training/events', () => HttpResponse.json(events)),
+    http.post('/api/v1/training/events/:eventId/signup', async ({ request }) => {
+      const body = (await request.json().catch(() => undefined)) as
+        | { attendees?: unknown }
+        | undefined;
+      if (body?.attendees !== undefined) {
+        recordedBody = body;
+        return HttpResponse.json({ eventId: 'evt-1', attendeeCount: 1 });
+      }
+      return HttpResponse.json({ eventId: 'evt-1' }, { status: 201 });
+    }),
+  );
+
+  const user = userEvent.setup();
+  renderPage(<TrainingEventsPage />, ['TRAINING'], '/training/events');
+  await screen.findByText('Ladder drill');
+
+  const form = screen.getByRole('form', { name: 'Record hours for Ladder drill' });
+  await user.type(within(form).getByLabelText('Member ID'), 'm-1');
+  await user.type(within(form).getByLabelText('Hours'), '2');
+  await user.click(within(form).getByRole('button', { name: 'Record hours' }));
+
+  await waitFor(() => {
+    expect(recordedBody).toEqual({ attendees: [{ memberId: 'm-1', hours: 2 }] });
+  });
+  await waitFor(() => {
+    expect((within(form).getByLabelText('Member ID') as HTMLInputElement).value).toBe('');
   });
 });
 
