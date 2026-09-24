@@ -163,9 +163,10 @@ export const targetSize = { office: 44, field: 56, gap: 8 } as const;
 
 export const breakpoints = { xs: 0, sm: 480, md: 768, lg: 1024, xl: 1440, xxl: 1920 } as const;
 
-// `ui` is web-only (self-hosted via @fontsource in apps/web); native has no webfont linking in
-// this repo and falls back to the platform default face, so RN code should not reference this.
+// System fonts only — no webfont, no remote asset (design.md §2.4: "Font stacks — system only, no
+// webfont, no remote asset"). Both surfaces render off the platform's default UI/monospace faces;
+// nothing here is ever linked as a webfont, self-hosted or otherwise, on web or native.
 export const fontStack = {
-  ui: '"Inter Variable", Inter, -apple-system, "Segoe UI", Roboto, sans-serif',
-  mono: '"IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace',
+  ui: '-apple-system, "SF Pro Text", Roboto, "Segoe UI", system-ui, sans-serif',
+  mono: 'ui-monospace, SFMono-Regular, "Roboto Mono", Menlo, monospace',
 } as const;
