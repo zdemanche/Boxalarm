@@ -1,4 +1,4 @@
-import { cleanup, render, screen } from '@testing-library/react';
+import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, test, vi } from 'vitest';
 import { ConfirmDialog, Dialog } from './Dialog';
@@ -88,5 +88,66 @@ describe('ConfirmDialog', () => {
       />,
     );
     expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Cancel' }));
+  });
+
+  function deferred<T>() {
+    let resolve!: (value: T) => void;
+    let reject!: (reason: unknown) => void;
+    const promise = new Promise<T>((res, rej) => {
+      resolve = res;
+      reject = rej;
+    });
+    return { promise, resolve, reject };
+  }
+
+  test('async onConfirm: shows a busy confirm button, disables Cancel, and closes on success', async () => {
+    const user = userEvent.setup();
+    const onOpenChange = vi.fn();
+    const { promise, resolve } = deferred<void>();
+    render(
+      <ConfirmDialog
+        open
+        onOpenChange={onOpenChange}
+        title="Place Engine 301 out of service?"
+        consequence="It will be removed from riding assignments."
+        confirmLabel="Place out of service"
+        onConfirm={() => promise}
+      />,
+    );
+
+    await user.click(screen.getByRole('button', { name: 'Place out of service' }));
+    const confirmButton = screen.getByRole('button', { name: 'Place out of service' });
+    expect(confirmButton.getAttribute('aria-busy')).toBe('true');
+    expect(screen.getByRole('button', { name: 'Cancel' }).getAttribute('disabled')).not.toBeNull();
+    expect(onOpenChange).not.toHaveBeenCalled();
+
+    resolve();
+    await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false));
+  });
+
+  test('async onConfirm: a rejection keeps the dialog open and shows the error inline', async () => {
+    const user = userEvent.setup();
+    const onOpenChange = vi.fn();
+    const { promise, reject } = deferred<void>();
+    render(
+      <ConfirmDialog
+        open
+        onOpenChange={onOpenChange}
+        title="Place Engine 301 out of service?"
+        consequence="It will be removed from riding assignments."
+        confirmLabel="Place out of service"
+        onConfirm={() => promise}
+      />,
+    );
+
+    await user.click(screen.getByRole('button', { name: 'Place out of service' }));
+    reject(new Error('Network unreachable.'));
+    await waitFor(() => expect(screen.getByRole('alert').textContent).toBe('Network unreachable.'));
+
+    expect(onOpenChange).not.toHaveBeenCalledWith(false);
+    // Pending has cleared, so the confirm button is no longer busy and Cancel works again.
+    expect(
+      screen.getByRole('button', { name: 'Place out of service' }).getAttribute('aria-busy'),
+    ).toBeNull();
   });
 });
