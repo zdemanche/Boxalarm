@@ -1,3 +1,4 @@
+import { demoAlertsRequest } from '../features/alerts/demoFixtures';
 import { apparatusDemoRequest } from '../features/apparatus/demoFixtures';
 import type {
   AssignedToType,
@@ -252,6 +253,9 @@ export async function demoRequest(
 
   const trainingResponse = await trainingDemoRequest(path, options);
   if (trainingResponse) return trainingResponse;
+
+  const alertsResponse = demoAlertsRequest(path, method, body);
+  if (alertsResponse) return alertsResponse;
 
   if (parts[0] === 'apparatus') {
     const response = await apparatusDemoRequest(path, method, body);

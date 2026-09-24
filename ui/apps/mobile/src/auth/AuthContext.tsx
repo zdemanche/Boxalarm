@@ -16,7 +16,9 @@ import {
   type AuthorizeResult,
   type RefreshResult,
 } from 'react-native-app-auth';
+import Config from 'react-native-config';
 import * as Keychain from 'react-native-keychain';
+import { revokePushToken } from '../features/alerts/pushTokens';
 import { buildOidcConfig } from './config';
 
 const KEYCHAIN_SERVER = 'boxalarm-auth';
@@ -254,6 +256,19 @@ export function AuthProvider({
         applyTokens(tokens);
       },
       signOut: async () => {
+        // E1-S14-UI AC5: the DELETE must be sent before local credentials are cleared, so a
+        // signed-out device stops receiving pages. Best-effort: sign-out must never be blocked
+        // by a network failure.
+        const stored = await readStoredTokens(depsRef.current).catch(() => null);
+        const apiBaseUrl = Config.API_BASE_URL;
+        const memberId = stored ? decodeMemberId(stored.idToken) : null;
+        if (stored && memberId && apiBaseUrl) {
+          await revokePushToken(
+            memberId,
+            { getAccessToken: async () => stored.accessToken, renewSilently: async () => null },
+            apiBaseUrl,
+          ).catch(() => undefined);
+        }
         await depsRef.current.resetInternetCredentials({ server: KEYCHAIN_SERVER });
         applyTokens(null);
       },

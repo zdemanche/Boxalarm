@@ -1,26 +1,19 @@
 import { spacing, typeScale } from '@boxalarm/design-tokens';
 import { useNavigation, type NavigationProp } from '@react-navigation/native';
-import { useState } from 'react';
 import { Text } from 'react-native';
+import { useOptionalAuth } from '../../auth/AuthContext';
 import { Button, Screen, useTheme } from '../../components/ui';
-import { mockAlertsRepository } from '../../features/alerts/mockAlertsRepository';
 import type { AlertsStackParamList } from '../../navigation/AlertsStack';
 
-// F1.10: self-test reuses the real alert payload/fan-out shape, so this entry point produces a
-// real DispatchAlert the member can view, respond to, and see the roster/tone-ladder for -
-// exercising the same screens the dispatch-received path will use once backend access lands.
+// E1-S1-UI: officer-only degraded-mode fallback for when no CAD feed exists or it is down
+// (N1.8). Self-test moved to the Me tab (E1-S8-UI) - one real flow, not two entry points.
 export function AlertsHomeScreen() {
   const navigation = useNavigation<NavigationProp<AlertsStackParamList>>();
   const theme = useTheme();
-  const [sending, setSending] = useState(false);
-
-  const handleSelfTest = () => {
-    setSending(true);
-    mockAlertsRepository.triggerSelfTest().then((result) => {
-      setSending(false);
-      navigation.navigate('AlertDetail', { dispatchId: result.dispatchId });
-    });
-  };
+  const auth = useOptionalAuth();
+  const canEnterManually = (auth?.roles ?? []).some(
+    (role) => role === 'OFFICER' || role === 'CHIEF',
+  );
 
   return (
     <Screen scroll={false}>
@@ -28,7 +21,7 @@ export function AlertsHomeScreen() {
         accessibilityRole="header"
         style={{ color: theme.fg, fontSize: typeScale.title.size, fontWeight: '700' }}
       >
-        Self-test
+        Alerts
       </Text>
       <Text
         style={{
@@ -38,14 +31,11 @@ export function AlertsHomeScreen() {
           marginBottom: spacing.lg,
         }}
       >
-        Send a test alert to confirm your phone will page correctly, then respond to it the same way
-        you would a real dispatch.
+        Active dispatches appear here as they come in.
       </Text>
-      <Button
-        label={sending ? 'Sending...' : 'Send test alert'}
-        onPress={handleSelfTest}
-        disabled={sending}
-      />
+      {canEnterManually ? (
+        <Button label="Enter dispatch manually" onPress={() => navigation.navigate('ManualEntry')} />
+      ) : null}
     </Screen>
   );
 }
