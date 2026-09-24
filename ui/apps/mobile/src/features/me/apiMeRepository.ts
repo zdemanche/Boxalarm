@@ -3,7 +3,29 @@ import Config from 'react-native-config';
 import { useOptionalAuth } from '../../auth/AuthContext';
 import { apiRequest } from '../../lib/apiClient';
 import { mockMeRepository } from './mockMeRepository';
-import type { LosapTotal, MemberProfile, MeRepository, Qualification } from './types';
+import type {
+  LosapTotal,
+  MemberProfile,
+  MeRepository,
+  ProfileUpdate,
+  Qualification,
+} from './types';
+
+// Mirrors personnel-service's updateMember.ts UPDATABLE_FIELDS - the only MemberProfile keys the
+// PUT can ever echo back (plus memberId/updatedAt, which aren't part of MemberProfile and must
+// not leak into it).
+const ECHOABLE_PROFILE_FIELDS = ['firstName', 'lastName', 'email', 'phone'] as const;
+
+function pickEchoedProfileFields(body: unknown): ProfileUpdate {
+  if (typeof body !== 'object' || body === null) return {};
+  const record = body as Record<string, unknown>;
+  const picked: ProfileUpdate = {};
+  for (const field of ECHOABLE_PROFILE_FIELDS) {
+    const value = record[field];
+    if (typeof value === 'string') picked[field] = value;
+  }
+  return picked;
+}
 
 /** Prefers the real personnel-service member endpoints when online + authenticated + API base
  * configured; falls back to the local mock otherwise - same pattern as useChecksRepository. */
@@ -67,7 +89,7 @@ export function useMeRepository(): MeRepository {
             body: JSON.stringify(update),
           },
         );
-        const echoed = (await response.json()) as Partial<MemberProfile>;
+        const echoed = pickEchoedProfileFields(await response.json());
         const merged: MemberProfile = { ...base, ...update, ...echoed };
         cachedProfile = merged;
         return merged;
