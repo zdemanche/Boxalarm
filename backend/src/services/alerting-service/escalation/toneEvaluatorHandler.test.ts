@@ -82,7 +82,7 @@ function evaluateMetadataCondition(
 function throwTransactionCanceled(reasons: ReadonlyArray<{ readonly Code: string }>): never {
   const error = new Error('Transaction cancelled');
   error.name = 'TransactionCanceledException';
-  (error as { CancellationReasons: ReadonlyArray<{ readonly Code: string }> }).CancellationReasons =
+  (error as unknown as { CancellationReasons: ReadonlyArray<{ readonly Code: string }> }).CancellationReasons =
     reasons;
   throw error;
 }
