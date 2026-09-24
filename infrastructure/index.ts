@@ -27,6 +27,18 @@ import { AuditRoute } from "./components/platform/audit-route";
 import { Export } from "./components/platform/export";
 import { Retention } from "./components/platform/retention";
 import { ChiefNotificationTopic } from "./components/shared/chief-notifications";
+import { AlertingPlaneBoundary } from "./components/alerting/iam-boundary";
+import { MessagingAlerting } from "./components/alerting/messaging-alerting";
+import { Escalation } from "./components/alerting/escalation";
+import { FanOut } from "./components/alerting/fan-out";
+import { ChannelWorkers } from "./components/alerting/channel-workers";
+import { RoutesCore } from "./components/alerting/routes-core";
+import { RoutesOps } from "./components/alerting/routes-ops";
+import { PushTokens } from "./components/alerting/push-tokens";
+import { RidingBoard } from "./components/alerting/riding-board";
+import { AlertingAlarms } from "./components/alerting/alarms";
+import { EligibilityStaleness } from "./components/alerting/staleness";
+import { AlertingCanary } from "./components/alerting/canary";
 
 export const stack = getStack();
 const config = new Config("boxalarm-infra");
@@ -89,7 +101,9 @@ const serviceLogGroupByName = Object.fromEntries(
   SERVICES.map((s, i) => [s, serviceLogGroups[i]]),
 ) as Record<ServiceName, ServiceLogGroup>;
 const platformLogGroup = serviceLogGroupByName["platform-service"];
+const alertingLogGroup = serviceLogGroupByName["alerting-service"];
 const personnelLogGroup = serviceLogGroupByName["personnel-service"];
+const apparatusLogGroup = serviceLogGroupByName["apparatus-service"];
 
 export const serviceDashboards = SERVICES.map(
   (serviceName) => new ServiceDashboard(`${serviceName}-dashboard`, { env, serviceName }),
@@ -209,6 +223,129 @@ export const platformRetention = new Retention("platform-retention", {
   chiefNotificationTopicArn: chiefNotificationTopic.topicArn,
   logGroup: platformLogGroup,
   httpApi,
+});
+
+export const deptId = config.require("deptId");
+
+// E1-S13-INFRA #38: alerting isolation as an enforced IAM boundary, attached to every
+// alerting-service role below.
+export const alertingPlaneBoundary = new AlertingPlaneBoundary("alerting-plane-boundary", {
+  env,
+  platformTableArn: platformTable.tableArn,
+  platformStreamArn: platformTable.streamArn,
+  incidentTableArn: incidentTable.tableArn,
+  incidentStreamArn: incidentTable.streamArn,
+});
+const alertingBoundaryArn = alertingPlaneBoundary.policy.arn;
+
+// E1-S2/S3-INFRA #28/#29: alerting messaging plane — SNS FIFO topic + per-channel SQS
+// FIFO queues/DLQs. Shares no resource with the LOB bus.
+export const messagingAlerting = new MessagingAlerting("messaging-alerting", { env });
+
+export const escalation = new Escalation("escalation", {
+  env,
+  alertingTableArn: alertingTable.tableArn,
+  alertingTopicArn: messagingAlerting.topic.arn,
+  alertingTableName: alertingTable.tableName,
+  logGroup: alertingLogGroup,
+  permissionsBoundaryArn: alertingBoundaryArn,
+});
+
+export const fanOut = new FanOut("fan-out", {
+  env,
+  alertingTableArn: alertingTable.tableArn,
+  alertingTableName: alertingTable.tableName,
+  alertingStreamArn: alertingTable.streamArn,
+  alertingTopicArn: messagingAlerting.topic.arn,
+  escalation,
+  logGroup: alertingLogGroup,
+  permissionsBoundaryArn: alertingBoundaryArn,
+});
+
+export const channelWorkers = new ChannelWorkers("channel-workers", {
+  env,
+  alertingTableArn: alertingTable.tableArn,
+  alertingTableName: alertingTable.tableName,
+  channelQueues: messagingAlerting.channelQueues,
+  logGroup: alertingLogGroup,
+  permissionsBoundaryArn: alertingBoundaryArn,
+});
+
+// E1-S1/S5/S6-INFRA: manual dispatch ingress, response confirmation, roster, detail.
+export const routesCore = new RoutesCore("routes-core", {
+  env,
+  httpApi,
+  alertingTableArn: alertingTable.tableArn,
+  alertingTableName: alertingTable.tableName,
+  logGroup: alertingLogGroup,
+  escalation,
+  policyStoreId: policyStore.policyStoreId,
+  permissionsBoundaryArn: alertingBoundaryArn,
+});
+
+// E1-S4/S8/S9-INFRA: self-test, audit, and provider delivery-receipt routes.
+export const routesOps = new RoutesOps("routes-ops", {
+  env,
+  httpApi,
+  alertingTableArn: alertingTable.tableArn,
+  alertingTableName: alertingTable.tableName,
+  logGroup: alertingLogGroup,
+  policyStoreId: policyStore.policyStoreId,
+  permissionsBoundaryArn: alertingBoundaryArn,
+});
+
+// E1-S14-INFRA #39: push-token routes (platform table) + member-updated consumer
+// (alerting table only).
+export const pushTokens = new PushTokens("push-tokens", {
+  env,
+  httpApi,
+  platformTableArn: platformTable.tableArn,
+  platformTableName: platformTable.tableName,
+  alertingTableArn: alertingTable.tableArn,
+  alertingTableName: alertingTable.tableName,
+  personnelLogGroup,
+  alertingLogGroup,
+  policyStoreId: policyStore.policyStoreId,
+  busName: platformBus.busName,
+  alertingPermissionsBoundaryArn: alertingBoundaryArn,
+});
+
+// E1-S18-INFRA #111 (partial — see riding-board.ts for the deviation from the ticket).
+export const ridingBoard = new RidingBoard("riding-board", {
+  env,
+  httpApi,
+  platformTableArn: platformTable.tableArn,
+  platformTableName: platformTable.tableName,
+  logGroup: apparatusLogGroup,
+  policyStoreId: policyStore.policyStoreId,
+});
+
+// E1-S11-INFRA #36: alerting-page topic, DLQ/failure alarms, non-prod fault injection.
+export const alertingAlarms = new AlertingAlarms("alerting-alarms", {
+  env,
+  channelQueues: messagingAlerting.channelQueues,
+});
+
+// E1-S13-INFRA #38: eligibility-snapshot staleness schedule + alarm.
+export const eligibilityStaleness = new EligibilityStaleness("eligibility-staleness", {
+  env,
+  deptId,
+  alertingTableArn: alertingTable.tableArn,
+  alertingTableName: alertingTable.tableName,
+  pageTopicArn: alertingAlarms.pageTopic.arn,
+  logGroup: alertingLogGroup,
+  permissionsBoundaryArn: alertingBoundaryArn,
+});
+
+// E1-S10-INFRA #230/#35: continuous production canary + on-call escalation alarms.
+export const alertingCanary = new AlertingCanary("alerting-canary", {
+  env,
+  deptId,
+  alertingTableArn: alertingTable.tableArn,
+  alertingTableName: alertingTable.tableName,
+  pageTopicArn: alertingAlarms.pageTopic.arn,
+  logGroup: alertingLogGroup,
+  permissionsBoundaryArn: alertingBoundaryArn,
 });
 
 // Stack outputs for boxalarm-ui / later children.
