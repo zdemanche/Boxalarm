@@ -19,7 +19,12 @@ export interface DutyShift {
 
 // F2.9: an atomic claim either succeeds or discovers the position was already taken - never a
 // silent "maybe." The UI shows PENDING between the tap and this result, never CLAIMED early.
-export type ClaimResult = 'CLAIMED' | 'ALREADY_TAKEN';
+// ALREADY_MINE mirrors the backend's claimShiftPosition.ts ClaimOutcome: this exact member
+// already holds the position (an idempotent retry, e.g. a reconnect resubmit of a claim that
+// actually succeeded before the connection dropped) - never conflate this with ALREADY_TAKEN
+// (the backend's CONFLICT: someone else holds it), or a successful resubmit misleadingly reads
+// as a lost shift.
+export type ClaimResult = 'CLAIMED' | 'ALREADY_MINE' | 'ALREADY_TAKEN';
 
 export interface ScheduleRepository {
   getShifts(): Promise<DutyShift[]>;

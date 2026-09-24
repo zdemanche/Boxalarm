@@ -73,7 +73,10 @@ export function ShiftDetailScreen() {
     setClaimState((prev) => ({ ...prev, [positionCode]: 'pending' }));
     repository.claimPosition(shiftId, positionCode).then((result) => {
       pendingClaims.current.delete(positionCode);
-      const next: ClaimUiState = result === 'CLAIMED' ? 'claimed_by_you' : 'already_taken';
+      // ALREADY_MINE (this member already holds it - e.g. a reconnect resubmit of a claim that
+      // actually succeeded before the connection dropped) reads the same as a fresh CLAIMED:
+      // only ALREADY_TAKEN (someone else holds it) is the honest "you lost this one" outcome.
+      const next: ClaimUiState = result === 'ALREADY_TAKEN' ? 'already_taken' : 'claimed_by_you';
       setClaimState((prev) => ({ ...prev, [positionCode]: next }));
       // Pending resolves in place (no screen swap), so a screen-reader user focused elsewhere
       // wouldn't otherwise notice the outcome land.

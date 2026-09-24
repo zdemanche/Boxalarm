@@ -52,21 +52,38 @@ export function useScheduleRepository(): ScheduleRepository {
           return mockScheduleRepository.claimPosition(shiftId, positionCode);
         }
         try {
-          await apiRequest(`personnel/shifts/${encodeURIComponent(shiftId)}/claim`, tokens, {
-            apiBaseUrl,
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              positionCode,
-              idempotencyKey: `${shiftId}#${positionCode}#${Date.now()}`,
-            }),
-          });
-          return 'CLAIMED';
+          const response = await apiRequest(
+            `personnel/shifts/${encodeURIComponent(shiftId)}/claim`,
+            tokens,
+            {
+              apiBaseUrl,
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                positionCode,
+                idempotencyKey: `${shiftId}#${positionCode}#${Date.now()}`,
+              }),
+            },
+          );
+          // The backend's claimShiftPosition.ts distinguishes a fresh CLAIMED from an idempotent
+          // ALREADY_MINE (this member already holds it) - both are 2xx successes, structurally
+          // identical apart from `kind`, never a thrown ApiError. Read the outcome off the body
+          // when the (not-yet-wired) endpoint sends one; default to CLAIMED for a bare 2xx with
+          // no body so today's minimal contract still behaves as before.
+          let outcome: 'CLAIMED' | 'ALREADY_MINE' = 'CLAIMED';
+          try {
+            const body = (await response.json()) as { outcome?: string };
+            if (body?.outcome === 'ALREADY_MINE') outcome = 'ALREADY_MINE';
+          } catch {
+            // No/invalid JSON body - treat as a fresh claim.
+          }
+          return outcome;
         } catch (error) {
-          if (
-            error instanceof ApiError &&
-            (error.problem.status === 409 || error.problem.status === 412)
-          ) {
+          // 409 is the backend's CONFLICT outcome (problemDetails.ts conflictProblem) - someone
+          // else holds the position. This is the only claim-failure status this codebase defines
+          // for this route; a 412 check previously lived here too, but nothing anywhere in the
+          // backend ever returns 412 for a shift claim, so it could never actually fire.
+          if (error instanceof ApiError && error.problem.status === 409) {
             return 'ALREADY_TAKEN';
           }
           throw error;
