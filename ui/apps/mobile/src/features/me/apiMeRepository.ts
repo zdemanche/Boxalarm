@@ -20,6 +20,10 @@ export function useMeRepository(): MeRepository {
       return mockMeRepository;
     }
 
+    // Cached from the last getProfile()/updateProfile() response so updateProfile can merge onto
+    // a known-complete profile without firing a redundant GET first (see updateProfile below).
+    let cachedProfile: MemberProfile | null = null;
+
     return {
       ...mockMeRepository,
 
@@ -31,25 +35,38 @@ export function useMeRepository(): MeRepository {
           tokens,
           { apiBaseUrl },
         );
-        return (await response.json()) as MemberProfile;
+        const profile = (await response.json()) as MemberProfile;
+        cachedProfile = profile;
+        return profile;
       },
 
       async updateProfile(update): Promise<MemberProfile> {
         const tokens = authRef.current;
         if (!tokens) return mockMeRepository.updateProfile(update);
-        const currentResponse = await apiRequest(
-          `personnel/members/${encodeURIComponent(memberId)}`,
-          tokens,
-          { apiBaseUrl },
-        );
-        const current = (await currentResponse.json()) as MemberProfile;
-        await apiRequest(`personnel/members/${encodeURIComponent(memberId)}`, tokens, {
+        // personnel-service's updateMember.ts PUT handler echoes back only the fields it changed
+        // (`{ memberId, updatedAt, ...updates }`), not the full member record, so this merges
+        // onto the profile already cached from getProfile() instead of firing a GET first purely
+        // to have something to merge onto - the PUT round trip alone is enough in the common case
+        // (ProfileEditScreen always calls getProfile() before allowing a save). Only falls back
+        // to a GET here if updateProfile() is somehow called before this repository has ever
+        // fetched a profile.
+        const base: MemberProfile =
+          cachedProfile ??
+          ((await (
+            await apiRequest(`personnel/members/${encodeURIComponent(memberId)}`, tokens, {
+              apiBaseUrl,
+            })
+          ).json()) as MemberProfile);
+        const response = await apiRequest(`personnel/members/${encodeURIComponent(memberId)}`, tokens, {
           apiBaseUrl,
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(update),
         });
-        return { ...current, ...update };
+        const echoed = (await response.json()) as Partial<MemberProfile>;
+        const merged: MemberProfile = { ...base, ...update, ...echoed };
+        cachedProfile = merged;
+        return merged;
       },
 
       async getQualifications(): Promise<Qualification[]> {
