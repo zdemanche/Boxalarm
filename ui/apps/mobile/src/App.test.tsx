@@ -2,6 +2,7 @@ import { palette, radius, touchTarget } from '@boxalarm/design-tokens';
 import { render } from '@testing-library/react-native';
 import { getInternetCredentials } from 'react-native-keychain';
 import { App } from './App';
+import * as outboxStore from './sync/outboxStore';
 
 jest.mock('react-native-config', () => ({
   __esModule: true,
@@ -90,7 +91,28 @@ test('the authenticated shell shows the persistent sync-status banner above the 
     storage: 'keychain',
   } as unknown as Awaited<ReturnType<typeof getInternetCredentials>>);
 
+  await outboxStore.insert({
+    id: 'seed-1',
+    kind: 'CHECKLIST_RUN',
+    label: 'Truck check — ENGINE-2',
+    method: 'POST',
+    path: 'apparatus/ENGINE-2/checks',
+    body: '{}',
+    stage: 'CREATE',
+    photoLocalUri: null,
+    photoS3Key: null,
+    photoUploadUrl: null,
+    status: 'QUEUED',
+    attempts: 0,
+    lastError: null,
+    queuedAt: new Date().toISOString(),
+    nextAttemptAt: Date.now() + 60_000,
+    syncedAt: null,
+  });
+
   const { findByText } = await render(<App />);
 
   expect(await findByText(/waiting to sync/i)).toBeTruthy();
+
+  await outboxStore.remove('seed-1');
 });

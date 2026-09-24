@@ -44,6 +44,8 @@
 		<key>NSAllowsLocalNetworking</key>
 		<true/>
 	</dict>
+	<key>NSCameraUsageDescription</key>
+	<string>Boxalarm uses the camera to attach photos to apparatus checks and defect reports.</string>
 	<key>NSFaceIDUsageDescription</key>
 	<string>Boxalarm uses Face ID to protect your saved sign-in session.</string>
 	<key>NSLocationWhenInUseUsageDescription</key>

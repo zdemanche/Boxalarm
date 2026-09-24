@@ -11,8 +11,10 @@ import {
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { Button } from '../../components/ui';
 import { useChecksRepository } from '../../features/checks/apiChecksRepository';
 import type { DefectSeverity } from '../../features/checks/types';
+import { capturePhoto, type CapturedPhoto } from '../../sync/photoCapture';
 
 const SEVERITIES: { value: DefectSeverity; label: string }[] = [
   { value: 'MINOR', label: 'Minor' },
@@ -36,15 +38,34 @@ export function DefectReportScreen() {
   const [submitted, setSubmitted] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
+  const [photo, setPhoto] = useState<CapturedPhoto | null>(null);
+  const [photoError, setPhotoError] = useState<string | null>(null);
   // Stable across retries of the same report, so a resend after a real failure can't create a
   // duplicate defect record server-side (same pattern as CheckRunnerScreen's idempotencyKey).
   const [idempotencyKey] = useState(newIdempotencyKey);
+
+  const handleAddPhoto = async () => {
+    setPhotoError(null);
+    const result = await capturePhoto();
+    if (result.status === 'captured') {
+      setPhoto(result.photo);
+    } else if (result.status === 'error') {
+      setPhotoError(result.message);
+      AccessibilityInfo.announceForAccessibility(`Photo capture failed: ${result.message}`);
+    }
+  };
 
   const handleSubmit = async () => {
     setSubmitting(true);
     setSubmitError(null);
     try {
-      await repository.submitDefect({ apparatusId, description, severity, idempotencyKey });
+      await repository.submitDefect({
+        apparatusId,
+        description,
+        severity,
+        idempotencyKey,
+        ...(photo ? { photoLocalUri: photo.uri, photoFileName: photo.fileName } : {}),
+      });
       setSubmitted(true);
       // The confirmation replaces the whole screen, so a screen-reader user needs an explicit
       // announcement - there's no visible element left to shift focus onto naturally.
@@ -173,16 +194,28 @@ export function DefectReportScreen() {
             This takes the unit out of service and alerts the apparatus officer.
           </Text>
         ) : null}
-        <Text
-          style={{
-            color: tokens.foreground,
-            opacity: 0.6,
-            fontSize: typography.size.sm,
-            marginTop: spacing.lg,
-          }}
-        >
-          Photo attachment is not yet connected.
-        </Text>
+        <View style={{ marginTop: spacing.lg }}>
+          <Button
+            label={photo ? 'Retake photo' : 'Add photo'}
+            variant="secondary"
+            onPress={() => void handleAddPhoto()}
+          />
+          {photo ? (
+            <Text
+              style={{ color: tokens.success, fontSize: typography.size.sm, marginTop: spacing.sm }}
+            >
+              Photo attached: {photo.fileName}
+            </Text>
+          ) : null}
+          {photoError ? (
+            <Text
+              accessibilityRole="alert"
+              style={{ color: tokens.error, fontSize: typography.size.sm, marginTop: spacing.sm }}
+            >
+              {photoError}
+            </Text>
+          ) : null}
+        </View>
         {submitError ? (
           <Text
             accessibilityRole="alert"

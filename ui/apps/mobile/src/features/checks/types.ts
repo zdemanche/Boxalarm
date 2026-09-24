@@ -35,6 +35,7 @@ export interface ChecklistRunSubmission {
   durationSeconds: number;
   itemResults: ItemResult[];
   idempotencyKey: string;
+  capturedOffline?: boolean;
 }
 
 export type DefectSeverity = 'MINOR' | 'MAJOR' | 'OUT_OF_SERVICE';
@@ -44,6 +45,8 @@ export interface DefectSubmission {
   description: string;
   severity: DefectSeverity;
   idempotencyKey: string;
+  photoLocalUri?: string;
+  photoFileName?: string;
 }
 
 export interface ChecksRepository {
