@@ -166,7 +166,7 @@ let occupancies: Occupancy[] = [
   },
 ];
 
-let prePlans: Record<string, PrePlanView> = {};
+const prePlans: Record<string, PrePlanView> = {};
 
 let hydrants: Hydrant[] = [
   {
