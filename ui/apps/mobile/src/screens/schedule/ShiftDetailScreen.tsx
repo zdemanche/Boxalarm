@@ -43,6 +43,11 @@ export function ShiftDetailScreen() {
   const [swapTargetMemberId, setSwapTargetMemberId] = useState('');
   const [error, setError] = useState<string | null>(null);
   const pendingClaims = useRef(new Set<string>());
+  // Generated once per claim intent (in handleClaim) and reused verbatim by every resolveClaim
+  // call for that intent, including the reconnect-resubmit retry below - a value regenerated per
+  // attempt (as this used to be, inline in apiScheduleRepository.ts) cannot function as an
+  // idempotency key across retries.
+  const claimIdempotencyKeys = useRef(new Map<string, string>());
 
   useEffect(() => {
     let cancelled = false;
@@ -71,8 +76,10 @@ export function ShiftDetailScreen() {
 
   const resolveClaim = (positionCode: string) => {
     setClaimState((prev) => ({ ...prev, [positionCode]: 'pending' }));
-    repository.claimPosition(shiftId, positionCode).then((result) => {
+    const idempotencyKey = claimIdempotencyKeys.current.get(positionCode);
+    repository.claimPosition(shiftId, positionCode, idempotencyKey).then((result) => {
       pendingClaims.current.delete(positionCode);
+      claimIdempotencyKeys.current.delete(positionCode);
       // ALREADY_MINE (this member already holds it - e.g. a reconnect resubmit of a claim that
       // actually succeeded before the connection dropped) reads the same as a fresh CLAIMED:
       // only ALREADY_TAKEN (someone else holds it) is the honest "you lost this one" outcome.
@@ -86,9 +93,16 @@ export function ShiftDetailScreen() {
 
   const handleClaim = (positionCode: string) => {
     setClaimState((prev) => ({ ...prev, [positionCode]: 'pending' }));
+    if (!claimIdempotencyKeys.current.has(positionCode)) {
+      claimIdempotencyKeys.current.set(
+        positionCode,
+        `${shiftId}#${positionCode}#${Date.now()}#${Math.random().toString(36).slice(2)}`,
+      );
+    }
     if (!isOnline) {
       // Claiming is not queueable server-side (must be atomic, no double-booking) - the pending
-      // claim is retried in full once connectivity returns, in resolveClaim's onSuccess path.
+      // claim is retried in full once connectivity returns, in resolveClaim's onSuccess path,
+      // reusing the idempotency key generated just above.
       pendingClaims.current.add(positionCode);
       AccessibilityInfo.announceForAccessibility('Pending. Waiting for a connection.');
       return;

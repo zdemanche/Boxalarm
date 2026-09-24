@@ -46,7 +46,7 @@ export function useScheduleRepository(): ScheduleRepository {
         }
       },
 
-      async claimPosition(shiftId, positionCode): Promise<ClaimResult> {
+      async claimPosition(shiftId, positionCode, idempotencyKey): Promise<ClaimResult> {
         const tokens = authRef.current;
         if (!tokens || !isOnline) {
           return mockScheduleRepository.claimPosition(shiftId, positionCode);
@@ -61,7 +61,11 @@ export function useScheduleRepository(): ScheduleRepository {
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({
                 positionCode,
-                idempotencyKey: `${shiftId}#${positionCode}#${Date.now()}`,
+                // Reuse the caller-supplied key (generated once per claim intent) when given, so
+                // a reconnect retry of the same intent carries the same idempotency key. Only a
+                // caller with no retry concept (or a direct one-off call) falls back to
+                // generating one here.
+                idempotencyKey: idempotencyKey ?? `${shiftId}#${positionCode}#${Date.now()}`,
               }),
             },
           );
