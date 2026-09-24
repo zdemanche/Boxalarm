@@ -126,7 +126,9 @@ for (const role of Object.keys(PERSONAS) as Role[]) {
         await expect(page.getByRole('navigation', { name: 'Primary' })).toBeVisible();
         for (const label of ALL_NAV_LABELS) {
           await expect(
-            page.getByRole('navigation', { name: 'Primary' }).getByRole('link', { name: label }),
+            page
+              .getByRole('navigation', { name: 'Primary' })
+              .getByRole('link', { name: label, exact: true }),
           ).toHaveCount(0);
         }
         return;
@@ -137,11 +139,11 @@ for (const role of Object.keys(PERSONAS) as Role[]) {
       await expect(nav).toBeVisible();
 
       for (const label of persona.expectedNavLabels) {
-        await expect(nav.getByRole('link', { name: label })).toBeVisible();
+        await expect(nav.getByRole('link', { name: label, exact: true })).toBeVisible();
       }
       for (const label of ALL_NAV_LABELS) {
         if (!persona.expectedNavLabels.includes(label)) {
-          await expect(nav.getByRole('link', { name: label })).toHaveCount(0);
+          await expect(nav.getByRole('link', { name: label, exact: true })).toHaveCount(0);
         }
       }
     });
