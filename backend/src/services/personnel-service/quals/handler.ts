@@ -161,15 +161,15 @@ async function innerPutQualsHandler(
 }
 
 export const getQualsHandler = withAuthorization(innerGetQualsHandler, {
-  actionType: 'PersonnelService',
+  actionType: 'Boxalarm::Action',
   actionId: 'GetQuals',
-  resourceType: 'Member',
+  resourceType: 'Boxalarm::Member',
   resourceId: (event) => event.pathParameters?.memberId ?? '',
 });
 
 export const putQualsHandler = withAuthorization(innerPutQualsHandler, {
-  actionType: 'PersonnelService',
+  actionType: 'Boxalarm::Action',
   actionId: 'UpdateQuals',
-  resourceType: 'Member',
+  resourceType: 'Boxalarm::Member',
   resourceId: (event) => event.pathParameters?.memberId ?? '',
 });

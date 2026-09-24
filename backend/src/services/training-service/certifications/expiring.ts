@@ -63,7 +63,7 @@ async function expiringCertificationsInner(
 }
 
 export const handler = withAuthorization(expiringCertificationsInner, {
-  actionType: 'Training',
+  actionType: 'Boxalarm::Action',
   actionId: 'ViewExpiringCertifications',
   resourceType: 'Boxalarm::Department',
   resourceId: (event) => event.requestContext.authorizer?.lambda?.deptId ?? '',

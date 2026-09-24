@@ -44,7 +44,11 @@ describe('recordResponse (real DynamoDB, AC1/AC5/core-harm)', () => {
     await container.stop();
   });
 
-  async function putDispatchAlert(dispatchId: string, currentToneSequence = 1): Promise<void> {
+  async function putDispatchAlert(
+    dispatchId: string,
+    currentToneSequence = 1,
+    isTest = false,
+  ): Promise<void> {
     const deptId = toVerifiedDeptId({ deptId: 'NICHOLS' });
     await client.send(
       new PutCommand({
@@ -56,8 +60,25 @@ describe('recordResponse (real DynamoDB, AC1/AC5/core-harm)', () => {
           dispatchId,
           deptId,
           currentToneSequence,
+          isTest,
         },
       }),
+    );
+  }
+
+  async function queryOutboxEntriesForDispatch(
+    deptId: string,
+    dispatchId: string,
+  ): Promise<readonly Record<string, unknown>[]> {
+    const result = await client.send(
+      new QueryCommand({
+        TableName: TABLE_NAME,
+        KeyConditionExpression: 'pk = :pk',
+        ExpressionAttributeValues: { ':pk': `DEPT#${deptId}#OUTBOX` },
+      }),
+    );
+    return ((result.Items ?? []) as Record<string, unknown>[]).filter(
+      (item) => (item.payload as Record<string, unknown> | undefined)?.dispatchId === dispatchId,
     );
   }
 
@@ -295,5 +316,57 @@ describe('recordResponse (real DynamoDB, AC1/AC5/core-harm)', () => {
       }),
     );
     expect(roster.Item?.lastAnsweredTone).toBe(2);
+  });
+
+  it('writes an alerting.response.confirmed OUTBOX_ENTRY for the platform-bus bridge (chain: alerting -> incident)', async () => {
+    const deptId = toVerifiedDeptId({ deptId: 'NICHOLS' });
+    const dispatchId = 'NICHOLS-4471-OUTBOX';
+    await putDispatchAlert(dispatchId);
+    await putEligibilitySnapshot('MBR-0012');
+
+    await recordResponse(client, TABLE_NAME, {
+      deptId,
+      dispatchId,
+      memberId: 'MBR-0012',
+      ackStatus: 'RESPONDING',
+      eta: 6,
+      assignedApparatusId: null,
+      answeredAt: 1798000700,
+    });
+
+    const entries = await queryOutboxEntriesForDispatch(deptId, dispatchId);
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toMatchObject({
+      entityType: 'OUTBOX_ENTRY',
+      eventType: 'alerting.response.confirmed',
+      source: 'alerting-service',
+      payload: {
+        deptId,
+        dispatchId,
+        memberId: 'MBR-0012',
+        status: 'RESPONDING',
+        ackAt: 1798000700,
+      },
+    });
+  });
+
+  it('does not bridge a self-test dispatch response onto the platform bus', async () => {
+    const deptId = toVerifiedDeptId({ deptId: 'NICHOLS' });
+    const dispatchId = 'NICHOLS-4471-SELFTEST';
+    await putDispatchAlert(dispatchId, 1, true);
+    await putEligibilitySnapshot('MBR-0012');
+
+    await recordResponse(client, TABLE_NAME, {
+      deptId,
+      dispatchId,
+      memberId: 'MBR-0012',
+      ackStatus: 'RESPONDING',
+      eta: 6,
+      assignedApparatusId: null,
+      answeredAt: 1798000800,
+    });
+
+    const entries = await queryOutboxEntriesForDispatch(deptId, dispatchId);
+    expect(entries).toHaveLength(0);
   });
 });

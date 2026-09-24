@@ -8,7 +8,9 @@ import type {
   DynamoDBStreamEvent,
   Handler,
 } from 'aws-lambda';
-import { logError } from './logger.js';
+import { logError } from './dispatches/logger.js';
+
+const EVENT_SOURCE = 'alerting-service';
 
 export interface EventBusConfig {
   readonly eventBusName: string;
@@ -34,11 +36,9 @@ export function createEventBridgeClient(
 }
 
 interface OutboxStreamRecord {
-  readonly entityType: 'OUTBOX_ENTRY';
   readonly eventId: string;
   readonly eventTime: string;
   readonly eventType: string;
-  readonly source: string;
   readonly correlationId: string;
   readonly schemaVersion: string;
   readonly payload: Record<string, unknown>;
@@ -54,7 +54,6 @@ function toOutboxStreamRecord(
     typeof value.eventId !== 'string' ||
     typeof value.eventTime !== 'string' ||
     typeof value.eventType !== 'string' ||
-    typeof value.source !== 'string' ||
     typeof value.correlationId !== 'string' ||
     typeof value.schemaVersion !== 'string' ||
     typeof value.payload !== 'object' ||
@@ -63,11 +62,9 @@ function toOutboxStreamRecord(
     return undefined;
   }
   return {
-    entityType: 'OUTBOX_ENTRY',
     eventId: value.eventId,
     eventTime: value.eventTime,
     eventType: value.eventType,
-    source: value.source,
     correlationId: value.correlationId,
     schemaVersion: value.schemaVersion,
     payload: value.payload as Record<string, unknown>,
@@ -105,13 +102,13 @@ async function publishOutboxBatch(
       new PutEventsCommand({
         Entries: records.map((record) => ({
           EventBusName: eventBusName,
-          Source: record.source,
+          Source: EVENT_SOURCE,
           DetailType: record.eventType,
           Detail: JSON.stringify({
             eventId: record.eventId,
             eventTime: record.eventTime,
             eventType: record.eventType,
-            source: record.source,
+            source: EVENT_SOURCE,
             correlationId: record.correlationId,
             schemaVersion: record.schemaVersion,
             payload: record.payload,
@@ -129,10 +126,7 @@ async function publishOutboxBatch(
       );
     }
   } catch (error) {
-    logError({
-      event: 'outbox.publish_failed',
-      service: 'inspections-service',
-      reason: error instanceof Error ? error.constructor.name : 'UnknownError',
+    logError('bridge.publish_failed', error, {
       eventTypes: records.map((record) => record.eventType),
       eventIds: records.map((record) => record.eventId),
     });
