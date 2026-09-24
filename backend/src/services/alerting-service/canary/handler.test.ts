@@ -1,4 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import {
+  ConditionalCheckFailedException,
+  TransactionCanceledException,
+} from '@aws-sdk/client-dynamodb';
 import type { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
 
 vi.mock('../eligibility/dynamoClient.js', () => ({
@@ -42,11 +46,17 @@ function createFakeDdb(seed: readonly FakeItem[] = []): {
           items.set(key, put.Item);
           return Promise.resolve({});
         }
-        const error = new Error('conditional check failed');
-        error.name = 'ConditionalCheckFailedException';
-        throw error;
+        throw new ConditionalCheckFailedException({
+          message: 'conditional check failed',
+          $metadata: {},
+        });
       }
       items.set(key, put.Item);
+      return Promise.resolve({});
+    }
+    if (name === 'DeleteCommand') {
+      const del = input as { Key: { pk: string; sk: string } };
+      items.delete(`${del.Key.pk}#${del.Key.sk}`);
       return Promise.resolve({});
     }
     if (name === 'TransactWriteCommand') {
@@ -59,13 +69,13 @@ function createFakeDdb(seed: readonly FakeItem[] = []): {
         );
       });
       if (failedIndex !== -1) {
-        const error = new Error('conditional check failed');
-        error.name = 'TransactionCanceledException';
-        (error as unknown as { CancellationReasons: { Code: string }[] }).CancellationReasons =
-          transactItems.map((_, i) => ({
+        throw new TransactionCanceledException({
+          message: 'conditional check failed',
+          $metadata: {},
+          CancellationReasons: transactItems.map((_, i) => ({
             Code: i === failedIndex ? 'ConditionalCheckFailed' : 'None',
-          }));
-        throw error;
+          })),
+        });
       }
       for (const txItem of transactItems) {
         if (txItem.Put) {
@@ -144,5 +154,51 @@ describe('canary handler', () => {
 
     const canaryRun = [...items.values()].find((item) => item.entityType === 'CANARY_RUN');
     expect(canaryRun).toMatchObject({ result: 'FAIL', testId: 'canary-1' });
+  });
+
+  it('does not reprocess a stale pointer and duplicate the CANARY_RUN record when the next self-test cooldown fails to acquire (MAJOR #1 regression)', async () => {
+    vi.useFakeTimers();
+    try {
+      const start = Math.floor(Date.now() / 1000);
+      const { send, items } = createFakeDdb([
+        { pk: 'DEPT#NICHOLS#CANARY', sk: 'STATE', pendingTestId: 'canary-1', pendingRunAt: start - 2 },
+        {
+          pk: 'DEPT#NICHOLS#MEMBER#canary-device',
+          sk: 'SELFTEST#canary-1',
+          entityType: 'SELF_TEST_RUN',
+          overallResult: 'PASS',
+          channelResults: { PUSH: { ok: true, ms: 100 } },
+        },
+        // A cooldown that is still held (e.g. from a concurrent/retried self-test run) —
+        // acquireSelfTestCooldown will fail on startNextRun for both invocations below.
+        {
+          pk: 'DEPT#NICHOLS#MEMBER#canary-device',
+          sk: 'SELFTEST_COOLDOWN',
+          entityType: 'SELF_TEST_COOLDOWN',
+          expiresAt: start + 60,
+        },
+      ]);
+      const { createDynamoClient } = await import('../eligibility/dynamoClient.js');
+      vi.mocked(createDynamoClient).mockReturnValue({ send } as unknown as DynamoDBDocumentClient);
+
+      const { handler } = await import('./handler.js');
+      await handler();
+
+      let canaryRuns = [...items.values()].filter((item) => item.entityType === 'CANARY_RUN');
+      expect(canaryRuns).toHaveLength(1);
+      expect(canaryRuns[0]).toMatchObject({ result: 'PASS', testId: 'canary-1' });
+      // The pointer must be cleared even though startNextRun could not acquire the cooldown —
+      // otherwise the next invocation re-reads this same stale pendingTestId.
+      expect(items.get('DEPT#NICHOLS#CANARY#STATE')).toBeUndefined();
+
+      // Simulate the next EventBridge tick, still inside the held cooldown window.
+      vi.setSystemTime((start + 30) * 1000);
+      await handler();
+
+      canaryRuns = [...items.values()].filter((item) => item.entityType === 'CANARY_RUN');
+      expect(canaryRuns).toHaveLength(1); // no duplicate FAIL/PASS record, no growing latencyMs
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
