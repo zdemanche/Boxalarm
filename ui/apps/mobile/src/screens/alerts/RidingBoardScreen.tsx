@@ -5,6 +5,7 @@ import { FlatList, Text, TouchableOpacity, useColorScheme, View } from 'react-na
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useAlertsRepository } from '../../features/alerts/apiAlertsRepository';
 import type { RidingBoardApparatus, RosterEntry } from '../../features/alerts/types';
+import { ApiError } from '../../lib/apiClient';
 import { useConnectivity } from '../../sync/ConnectivityContext';
 
 const REFETCH_INTERVAL_MS = 10_000;
@@ -24,6 +25,7 @@ export function RidingBoardScreen() {
   const [openSeat, setOpenSeat] = useState<{ unitId: string; positionCode: string } | null>(null);
   const [pending, setPending] = useState<Set<string>>(new Set());
   const [conflict, setConflict] = useState<string | null>(null);
+  const [sessionExpired, setSessionExpired] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -67,12 +69,30 @@ export function RidingBoardScreen() {
         memberId,
         expectedVersion: version,
       });
+      setConflict(null);
       const board = await repository.getRidingBoard(dispatchId);
       setApparatus(board.apparatus);
-    } catch {
-      setConflict(`${unitId} / ${positionCode} was reassigned by another officer. Refreshed.`);
-      const board = await repository.getRidingBoard(dispatchId);
-      setApparatus(board.apparatus);
+    } catch (error) {
+      // Every error used to collapse into one hardcoded "reassigned by another officer" message,
+      // which mislabels a genuine network/auth/server failure as a version conflict during an
+      // active incident. Branch on the actual problem status so the officer sees what really
+      // happened, and reserve the reassignment-conflict copy for an actual 409.
+      if (error instanceof ApiError) {
+        if (error.problem.status === 401) {
+          setSessionExpired(true);
+          setConflict('Your session has expired. Sign in again to continue assigning seats.');
+        } else if (error.problem.status === 403) {
+          setConflict('You are not authorized to assign riding-board seats.');
+        } else if (error.problem.status === 409) {
+          setConflict(`${unitId} / ${positionCode} was reassigned by another officer. Refreshed.`);
+        } else {
+          setConflict(error.problem.detail ?? 'Could not update the assignment. Refreshed.');
+        }
+      } else {
+        setConflict('Could not reach the server. Check your connection and try again.');
+      }
+      const board = await repository.getRidingBoard(dispatchId).catch(() => null);
+      if (board) setApparatus(board.apparatus);
     }
   };
 
@@ -123,7 +143,7 @@ export function RidingBoardScreen() {
                     {position.assignment?.qualStatus === 'UNMET' ? ' · Missing qualification' : ''}
                     {isPending ? ' · Pending sync' : ''}
                   </Text>
-                  {unit.assignable ? (
+                  {unit.assignable && !sessionExpired ? (
                     <TouchableOpacity
                       accessibilityRole="button"
                       onPress={() =>
