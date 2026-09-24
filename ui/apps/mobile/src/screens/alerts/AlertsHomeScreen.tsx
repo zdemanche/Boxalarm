@@ -34,7 +34,10 @@ export function AlertsHomeScreen() {
         Active dispatches appear here as they come in.
       </Text>
       {canEnterManually ? (
-        <Button label="Enter dispatch manually" onPress={() => navigation.navigate('ManualEntry')} />
+        <Button
+          label="Enter dispatch manually"
+          onPress={() => navigation.navigate('ManualEntry')}
+        />
       ) : null}
     </Screen>
   );

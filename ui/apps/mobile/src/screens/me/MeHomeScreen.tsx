@@ -120,11 +120,7 @@ export function MeHomeScreen() {
         theme={theme}
         onPress={() => navigation.navigate('MyEquipment' as never)}
       />
-      <NavRow
-        label="My PPE"
-        theme={theme}
-        onPress={() => navigation.navigate('MyPpe' as never)}
-      />
+      <NavRow label="My PPE" theme={theme} onPress={() => navigation.navigate('MyPpe' as never)} />
       <NavRow
         label="Transcript"
         theme={theme}
