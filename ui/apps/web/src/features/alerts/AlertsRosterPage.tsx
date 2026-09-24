@@ -276,6 +276,7 @@ function RosterTable({ dispatchId }: { dispatchId: string }) {
 function RidingBoardSection({ dispatchId }: { dispatchId: string }) {
   const auth = useAuth();
   const queryClient = useQueryClient();
+  const [assignError, setAssignError] = useState<string | null>(null);
   const boardQuery = useQuery({
     queryKey: ['alerts', 'riding-board', dispatchId],
     queryFn: () => getRidingBoard(auth, dispatchId),
@@ -294,8 +295,31 @@ function RidingBoardSection({ dispatchId }: { dispatchId: string }) {
       memberId: string | null;
       expectedVersion: number;
     }) => assignRidingSeat(auth, dispatchId, input),
-    onSuccess: () =>
-      queryClient.invalidateQueries({ queryKey: ['alerts', 'riding-board', dispatchId] }),
+    onSuccess: () => setAssignError(null),
+    onError: (error: unknown) => {
+      // Mirrors ManualEntryForm's error branching above: a failed seat assignment must not
+      // fail silently - the officer needs to know whether it was a version conflict (another
+      // officer just assigned this seat), an auth problem, or something else, since the
+      // <select>'s value only re-syncs from query data on the next successful render.
+      const problem = (error as { problem?: { status?: number; detail?: string } }).problem;
+      if (problem?.status === 409) {
+        setAssignError('This seat was changed by another officer. The board has been refreshed.');
+      } else if (problem?.status === 401) {
+        setAssignError('Your session has expired. Sign in again to continue.');
+      } else if (problem?.status === 403) {
+        setAssignError('You are not authorized to assign riding-board seats.');
+      } else {
+        setAssignError(
+          problem?.detail ?? 'Could not update the assignment. The board has been refreshed.',
+        );
+      }
+    },
+    onSettled: () => {
+      // Explicitly reconcile the board either way - on success the new assignment should show,
+      // and on failure the <select> must be pulled back to the server's actual value rather
+      // than silently keeping whatever the user last picked.
+      void queryClient.invalidateQueries({ queryKey: ['alerts', 'riding-board', dispatchId] });
+    },
   });
 
   if (boardQuery.error) {
@@ -318,6 +342,11 @@ function RidingBoardSection({ dispatchId }: { dispatchId: string }) {
       <h2 id="riding-board-heading" style={{ fontSize: 'var(--boxalarm-font-size-lg)' }}>
         Riding board
       </h2>
+      {assignError ? (
+        <p role="alert" aria-live="assertive" style={{ color: 'var(--boxalarm-error)' }}>
+          {assignError}
+        </p>
+      ) : null}
       {(boardQuery.data?.apparatus ?? []).map((unit) => (
         <div key={unit.apparatusId} style={{ marginBottom: 'var(--boxalarm-spacing-md)' }}>
           <h3 style={{ fontSize: 'var(--boxalarm-font-size-base)', margin: 0 }}>{unit.unitId}</h3>
