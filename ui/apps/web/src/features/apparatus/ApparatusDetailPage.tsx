@@ -3,7 +3,6 @@ import { useQuery } from '@tanstack/react-query';
 import { Link, useParams } from 'react-router-dom';
 import { useAuth } from '../../auth/AuthContext';
 import { ApiForbiddenGate } from '../../components/ApiForbiddenGate';
-import { StatusChip } from '../../components/ui/Chip';
 import { PageHeader } from '../../components/ui/PageHeader';
 import { Skeleton } from '../../components/ui/Skeleton';
 import { listEquipment } from '../inventory/api';
@@ -49,13 +48,6 @@ export function ApparatusDetailPage() {
       <PageHeader
         title={unit?.unitId ?? '…'}
         breadcrumbs={[{ label: 'Apparatus', to: '/apparatus' }, { label: unit?.unitId ?? '…' }]}
-        actions={
-          unit ? (
-            <StatusChip status={unit.status === 'IN_SERVICE' ? 'ok' : 'danger'}>
-              {unit.status === 'IN_SERVICE' ? 'In service' : 'Out of service'}
-            </StatusChip>
-          ) : undefined
-        }
       />
       {detailQuery.isLoading || !unit ? (
         <Skeleton lines={3} />
@@ -75,7 +67,7 @@ export function ApparatusDetailPage() {
             <dt style={{ color: 'var(--bx-fg-muted)' }}>Apparatus ID</dt>
             <dd style={{ margin: 0, fontFamily: 'var(--bx-font-mono)' }}>{unit.apparatusId}</dd>
           </dl>
-            {unit.failedTests.length > 0 ? (
+          {unit.failedTests.length > 0 ? (
             <div
               role="alert"
               style={{
