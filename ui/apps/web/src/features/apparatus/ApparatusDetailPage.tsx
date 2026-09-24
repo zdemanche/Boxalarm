@@ -3,6 +3,9 @@ import { useQuery } from '@tanstack/react-query';
 import { Link, useParams } from 'react-router-dom';
 import { useAuth } from '../../auth/AuthContext';
 import { ApiForbiddenGate } from '../../components/ApiForbiddenGate';
+import { PageHeader } from '../../components/ui/PageHeader';
+import { Skeleton } from '../../components/ui/Skeleton';
+import { listEquipment } from '../inventory/api';
 import { getApparatus } from './api';
 import { InventoryTab } from './InventoryTab';
 import { MaintenanceTab } from './MaintenanceTab';
@@ -24,6 +27,12 @@ export function ApparatusDetailPage() {
     enabled: Boolean(id),
   });
 
+  const equipmentQuery = useQuery({
+    queryKey: ['inventory', 'equipment', 'byApparatus', id],
+    queryFn: () => listEquipment(auth, { assignedToType: 'APPARATUS', assignedToId: id }),
+    enabled: Boolean(id),
+  });
+
   if (detailQuery.error) {
     return (
       <ApiForbiddenGate error={detailQuery.error}>
@@ -35,17 +44,29 @@ export function ApparatusDetailPage() {
   const unit = detailQuery.data;
 
   return (
-    <main id="main-content" style={{ padding: 'var(--boxalarm-spacing-lg)' }}>
-      <p>
-        <Link to="/apparatus">← Apparatus</Link>
-      </p>
+    <main id="main-content">
+      <PageHeader
+        title={unit?.unitId ?? '…'}
+        breadcrumbs={[{ label: 'Apparatus', to: '/apparatus' }, { label: unit?.unitId ?? '…' }]}
+      />
       {detailQuery.isLoading || !unit ? (
-        <p>Loading apparatus…</p>
+        <Skeleton lines={3} />
       ) : (
         <>
-          <h1 style={{ fontSize: 'var(--boxalarm-font-size-xl)', margin: 0 }}>{unit.unitId}</h1>
-          <p style={{ marginTop: 'var(--boxalarm-spacing-xs)' }}>{unit.type}</p>
-
+          <dl
+            style={{
+              display: 'grid',
+              gridTemplateColumns: 'max-content 1fr',
+              columnGap: 'var(--bx-space-lg)',
+              rowGap: 'var(--bx-space-sm)',
+              fontSize: 14,
+            }}
+          >
+            <dt style={{ color: 'var(--bx-fg-muted)' }}>Type</dt>
+            <dd style={{ margin: 0 }}>{unit.type}</dd>
+            <dt style={{ color: 'var(--bx-fg-muted)' }}>Apparatus ID</dt>
+            <dd style={{ margin: 0, fontFamily: 'var(--bx-font-mono)' }}>{unit.apparatusId}</dd>
+          </dl>
           {unit.failedTests.length > 0 ? (
             <div
               role="alert"
@@ -111,12 +132,38 @@ export function ApparatusDetailPage() {
           </div>
 
           <div role="tabpanel" style={{ marginTop: 'var(--boxalarm-spacing-lg)' }}>
-            {tab === 'Overview' ? null : null}
-            {tab === 'Maintenance' ? <MaintenanceTab unitId={unit.unitId} /> : null}
-            {tab === 'SCBA' ? <ScbaTab unitId={unit.unitId} /> : null}
+            {/* Maintenance/SCBA/Inventory key their sub-resources on apparatusId, matching this
+                page's own detail fetch above (getApparatus(auth, id) where id is apparatusId).
+                Testing schedules are the one sub-resource the backend resolves and returns by
+                display unit code, so it alone still takes unitId — see the tab-identifier note
+                in the apparatus-service INFRA reconciliation ticket for the full picture. */}
+            {tab === 'Maintenance' ? <MaintenanceTab apparatusId={unit.apparatusId} /> : null}
+            {tab === 'SCBA' ? <ScbaTab apparatusId={unit.apparatusId} /> : null}
             {tab === 'Testing' ? <TestingTab unitId={unit.unitId} /> : null}
-            {tab === 'Inventory' ? <InventoryTab unitId={unit.unitId} /> : null}
+            {tab === 'Inventory' ? <InventoryTab apparatusId={unit.apparatusId} /> : null}
           </div>
+
+          <h2
+            style={{
+              fontSize: 'var(--boxalarm-font-size-lg)',
+              marginTop: 'var(--boxalarm-spacing-xl)',
+            }}
+          >
+            Assigned equipment
+          </h2>
+          {equipmentQuery.isLoading ? (
+            <p>Loading equipment…</p>
+          ) : (equipmentQuery.data ?? []).length === 0 ? (
+            <p>No equipment assigned.</p>
+          ) : (
+            <ul>
+              {(equipmentQuery.data ?? []).map((asset) => (
+                <li key={asset.assetId}>
+                  <Link to={`/inventory/${asset.assetId}`}>{asset.serialNumber}</Link>
+                </li>
+              ))}
+            </ul>
+          )}
         </>
       )}
     </main>

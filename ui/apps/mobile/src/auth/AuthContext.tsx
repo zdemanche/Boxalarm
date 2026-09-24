@@ -16,7 +16,9 @@ import {
   type AuthorizeResult,
   type RefreshResult,
 } from 'react-native-app-auth';
+import Config from 'react-native-config';
 import * as Keychain from 'react-native-keychain';
+import { revokePushToken } from '../features/alerts/pushTokens';
 import { buildOidcConfig } from './config';
 
 const KEYCHAIN_SERVER = 'boxalarm-auth';
@@ -40,20 +42,20 @@ interface StoredTokens {
   idToken: string;
 }
 
-function decodeIdTokenClaims(idToken: string): Record<string, unknown> | null {
+function decodeIdTokenClaims(idToken: string): Record<string, unknown> {
   try {
     const payload = idToken.split('.')[1];
-    if (!payload) return null;
+    if (!payload) return {};
     const normalized = payload.replace(/-/g, '+').replace(/_/g, '/');
     return JSON.parse(atob(normalized)) as Record<string, unknown>;
   } catch {
-    return null;
+    return {};
   }
 }
 
 function decodeRoles(idToken: string): Role[] {
   const claims = decodeIdTokenClaims(idToken);
-  const groups = claims?.['cognito:groups'];
+  const groups = claims['cognito:groups'];
   if (!Array.isArray(groups)) return ['MEMBER'];
   const roles = groups
     .filter((g): g is string => typeof g === 'string')
@@ -63,9 +65,8 @@ function decodeRoles(idToken: string): Role[] {
 }
 
 function decodeMemberId(idToken: string): string | null {
-  const claims = decodeIdTokenClaims(idToken);
-  const sub = claims?.sub;
-  return typeof sub === 'string' ? sub : null;
+  const sub = decodeIdTokenClaims(idToken).sub;
+  return typeof sub === 'string' && sub.length > 0 ? sub : null;
 }
 
 function msUntilExpiry(tokens: StoredTokens): number {
@@ -255,6 +256,19 @@ export function AuthProvider({
         applyTokens(tokens);
       },
       signOut: async () => {
+        // E1-S14-UI AC5: the DELETE must be sent before local credentials are cleared, so a
+        // signed-out device stops receiving pages. Best-effort: sign-out must never be blocked
+        // by a network failure.
+        const stored = await readStoredTokens(depsRef.current).catch(() => null);
+        const apiBaseUrl = Config.API_BASE_URL;
+        const memberId = stored ? decodeMemberId(stored.idToken) : null;
+        if (stored && memberId && apiBaseUrl) {
+          await revokePushToken(
+            memberId,
+            { getAccessToken: async () => stored.accessToken, renewSilently: async () => null },
+            apiBaseUrl,
+          ).catch(() => undefined);
+        }
         await depsRef.current.resetInternetCredentials({ server: KEYCHAIN_SERVER });
         applyTokens(null);
       },

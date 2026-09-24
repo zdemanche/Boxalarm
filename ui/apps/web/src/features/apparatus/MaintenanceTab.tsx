@@ -7,21 +7,24 @@ import type { CreateMaintenanceInput } from './types';
 
 const emptyForm = { description: '', vendor: '', cost: '' };
 
-export function MaintenanceTab({ unitId }: { unitId: string }) {
+// Takes the apparatus's apparatusId (not its display unitId) — matches ApparatusDetailPage's
+// own detail fetch and the real backend's maintenance endpoint, which keys directly on
+// apparatusId (apparatus-service postMaintenance.ts).
+export function MaintenanceTab({ apparatusId }: { apparatusId: string }) {
   const auth = useAuth();
   const queryClient = useQueryClient();
   const [form, setForm] = useState(emptyForm);
 
   const query = useQuery({
-    queryKey: ['apparatus', unitId, 'maintenance'],
-    queryFn: () => getMaintenance(auth, unitId),
+    queryKey: ['apparatus', apparatusId, 'maintenance'],
+    queryFn: () => getMaintenance(auth, apparatusId),
   });
 
   const mutation = useMutation({
-    mutationFn: (input: CreateMaintenanceInput) => createMaintenance(auth, unitId, input),
+    mutationFn: (input: CreateMaintenanceInput) => createMaintenance(auth, apparatusId, input),
     onSuccess: () => {
       setForm(emptyForm);
-      void queryClient.invalidateQueries({ queryKey: ['apparatus', unitId, 'maintenance'] });
+      void queryClient.invalidateQueries({ queryKey: ['apparatus', apparatusId, 'maintenance'] });
     },
   });
 

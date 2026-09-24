@@ -29,6 +29,15 @@ All AWS infrastructure for **[Boxalarm](https://github.com/zdemanche/boxalarm-do
 
 Per-environment NERIS base URL, OAuth credentials, and a distinct `User-Agent`. Dev traffic must never reach the NERIS production host.
 
+## Deploying
+
+`lambdaCode()` (`components/shared/lambda-code.ts`) wires each Lambda to `../backend/dist/<service>/<function>/index.mjs`
+when that bundle exists, and otherwise falls back to a fail-closed 501 placeholder — so `pulumi preview`/`pulumi up`
+never fail outright for a missing build. **Always run `cd backend && npm run bundle` before deploying** so every
+service/function key resolves to real code; a stale or missing bundle silently redeploys that Lambda back to the
+501 stub. `lambdaCode()` logs a Pulumi warning for every fallback it takes — check `pulumi preview`/`pulumi up`
+output for `lambdaCode: no bundle found for ...` before proceeding with any deploy.
+
 ## Getting started
 
 Wave 1 foundations are in progress — see [PR #90](https://github.com/zdemanche/boxalarm-infrastructure/pull/90) and the open `-INFRA` issues. Stacks: `dev`, `qa`, `staging`, `prod` (`Pulumi.<env>.yaml`).

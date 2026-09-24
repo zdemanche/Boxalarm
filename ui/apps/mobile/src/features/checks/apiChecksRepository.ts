@@ -124,6 +124,7 @@ export function useChecksRepository(): ChecksRepositoryWithFallbackFlag {
           body: JSON.stringify({
             description: defect.description,
             severity: defect.severity,
+            idempotencyKey: defect.idempotencyKey,
           }),
         });
       },

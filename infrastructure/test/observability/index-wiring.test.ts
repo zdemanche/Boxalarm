@@ -53,6 +53,19 @@ describe("index.ts production wiring", () => {
           if (args.type === "aws:cognito/userPool:UserPool") {
             state.arn = `arn:aws:cognito-idp:us-east-1:123456789012:userpool/${args.name}`;
           }
+          if (args.type === "aws:verifiedpermissions/policyStore:PolicyStore") {
+            state.policyStoreId = `${args.name}-id`;
+            state.arn = `arn:aws:verifiedpermissions::123456789012:policy-store/${args.name}-id`;
+          }
+          if (args.type === "aws:cloudwatch/eventBus:EventBus") {
+            state.arn = `arn:aws:events:us-east-1:123456789012:event-bus/${args.inputs.name}`;
+          }
+          if (args.type === "aws:sqs/queue:Queue") {
+            state.arn = `arn:aws:sqs:us-east-1:123456789012:${args.inputs.name ?? args.name}`;
+          }
+          if (args.type === "aws:sns/topic:Topic") {
+            state.arn = `arn:aws:sns:us-east-1:123456789012:${args.inputs.name ?? args.name}`;
+          }
           return { id: `${args.name}-id`, state };
         },
         call: (args: pulumi.runtime.MockCallArgs) => {
@@ -119,6 +132,18 @@ describe("index.ts production wiring", () => {
           indexModule.alertingTable.table.arn,
           indexModule.auditTrail.trail.id,
           indexModule.nerisConfig.secret.arn,
+          indexModule.policyStore.policyStoreId,
+          indexModule.platformBus.busName,
+          indexModule.outboxPublisher.lambda.function.arn,
+          indexModule.sessionRevocation.memberStatusLambda.function.arn,
+          indexModule.sessionRevocation.deviceLossLambda.function.arn,
+          indexModule.recoveryMonitor.trail.id,
+          indexModule.personnelMembers.createLambda.function.arn,
+          indexModule.platformConfig.lambda.function.arn,
+          indexModule.auditRoute.lambda.function.arn,
+          indexModule.chiefNotificationTopic.topicArn,
+          indexModule.platformExport.handlerLambda.function.arn,
+          indexModule.platformRetention.disposalLambda.function.arn,
         ])
         .apply(() => resolve()),
     );

@@ -47,4 +47,14 @@ export const mockScheduleRepository: ScheduleRepository = {
   async markUnavailable() {
     return undefined;
   },
+
+  async releasePosition(shiftId, positionCode) {
+    const shift = SHIFTS.find((s) => s.shiftId === shiftId);
+    const position = shift?.positions.find((p) => p.positionCode === positionCode);
+    if (position) position.claimedByMemberId = null;
+  },
+
+  async proposeSwap() {
+    return undefined;
+  },
 };

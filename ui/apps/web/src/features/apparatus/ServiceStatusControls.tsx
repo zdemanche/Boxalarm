@@ -5,8 +5,8 @@ import { setServiceStatus } from './api';
 import { serviceStatusRole, StatusBadge } from './StatusBadge';
 import type { ApparatusDetail } from './types';
 
-function elapsedSince(epochSeconds: number): string {
-  const days = Math.floor((Date.now() / 1000 - epochSeconds) / 86400);
+function formatElapsed(elapsedSeconds: number): string {
+  const days = Math.floor(elapsedSeconds / 86400);
   if (days <= 0) return 'today';
   return `${days} day${days === 1 ? '' : 's'}`;
 }
@@ -38,10 +38,9 @@ export function ServiceStatusControls({ unit }: { unit: ApparatusDetail }) {
           word={unit.status === 'IN_SERVICE' ? 'In service' : 'Out of service'}
         />
       </p>
-      {unit.status === 'OUT_OF_SERVICE' && unit.oosReason ? (
+      {unit.status === 'OUT_OF_SERVICE' && unit.outOfService ? (
         <p>
-          {unit.oosReason}
-          {unit.oosSince ? ` since ${elapsedSince(unit.oosSince)} ago` : null}
+          {unit.outOfService.reason} since {formatElapsed(unit.outOfService.elapsedSeconds)} ago
         </p>
       ) : null}
 

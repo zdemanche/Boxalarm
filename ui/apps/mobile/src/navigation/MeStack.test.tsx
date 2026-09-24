@@ -3,9 +3,15 @@ import { act, fireEvent, render } from '@testing-library/react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { MeStack } from './MeStack';
 
-jest.mock('../auth/AuthContext', () => ({
-  useAuth: () => ({ signOut: jest.fn(async () => {}) }),
-}));
+// One stable object, like the real context value - a fresh object per call re-fires every
+// effect keyed on the auth value and loops the render.
+jest.mock('../auth/AuthContext', () => {
+  const auth = { isAuthenticated: false, memberId: null };
+  return {
+    useAuth: () => ({ signOut: jest.fn(async () => {}) }),
+    useOptionalAuth: () => auth,
+  };
+});
 
 async function renderMeStack() {
   return await render(

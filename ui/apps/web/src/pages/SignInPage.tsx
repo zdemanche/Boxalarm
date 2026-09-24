@@ -2,17 +2,11 @@ import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import { radius, spacing, typography } from '@boxalarm/design-tokens';
 import { useAuth } from '../auth/AuthContext';
 import { buildForgotPasswordUrl } from '../auth/config';
+import { Flame } from '../components/ui/icons';
+import styles from './SignInPage.module.css';
 
-const containerStyle: CSSProperties = {
-  display: 'flex',
-  flexDirection: 'column',
-  alignItems: 'center',
-  justifyContent: 'center',
-  minHeight: '100vh',
-  gap: spacing.lg,
-  padding: spacing.lg,
-};
-
+// These two inline styles are pinned by SignInPage.test.tsx (mobile design-system parity) —
+// keep the values, not just the intent, if this file changes again.
 const headingStyle: CSSProperties = {
   fontSize: typography.size.display,
   margin: 0,
@@ -67,19 +61,31 @@ export function SignInPage() {
   };
 
   return (
-    <main style={containerStyle}>
-      <h1 style={headingStyle}>Boxalarm</h1>
-      <button type="button" onClick={handleSignIn} style={buttonStyle}>
-        Sign in
-      </button>
-      <button type="button" onClick={handleForgotPassword} style={linkButtonStyle}>
-        Forgot password
-      </button>
-      {error && (
-        <p ref={errorRef} role="alert" aria-live="assertive" tabIndex={-1}>
-          {error}
-        </p>
-      )}
+    <main className={styles.page}>
+      <div className={styles.brand}>
+        <Flame size={28} aria-hidden="true" />
+        <h1 style={headingStyle}>Boxalarm</h1>
+      </div>
+      <p className={styles.tagline}>Sign in to your department's command console.</p>
+      <div className={styles.actions}>
+        <button type="button" onClick={handleSignIn} style={buttonStyle}>
+          Sign in
+        </button>
+        <button type="button" onClick={handleForgotPassword} style={linkButtonStyle}>
+          Forgot password
+        </button>
+        {error && (
+          <p
+            ref={errorRef}
+            role="alert"
+            aria-live="assertive"
+            tabIndex={-1}
+            className={styles.error}
+          >
+            {error}
+          </p>
+        )}
+      </div>
     </main>
   );
 }

@@ -43,6 +43,7 @@ export interface DefectSubmission {
   apparatusId: string;
   description: string;
   severity: DefectSeverity;
+  idempotencyKey: string;
 }
 
 export interface ChecksRepository {

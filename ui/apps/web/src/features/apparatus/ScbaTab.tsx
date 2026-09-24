@@ -12,7 +12,10 @@ const emptyForm: CreateScbaInput = {
   hydroTestDate: '',
 };
 
-export function ScbaTab({ unitId }: { unitId: string }) {
+// Takes the apparatus's apparatusId (not its display unitId) — matches ApparatusDetailPage's
+// own detail fetch and ScbaDueEntry.apparatusId (backend scbaRecord.ts parseScbaDueItem, which
+// never resolves to the display unit code), so the due-soon filter below actually matches.
+export function ScbaTab({ apparatusId }: { apparatusId: string }) {
   const auth = useAuth();
   const queryClient = useQueryClient();
   const [form, setForm] = useState(emptyForm);
@@ -24,7 +27,7 @@ export function ScbaTab({ unitId }: { unitId: string }) {
   });
 
   const mutation = useMutation({
-    mutationFn: (input: CreateScbaInput) => createScbaRecord(auth, unitId, input),
+    mutationFn: (input: CreateScbaInput) => createScbaRecord(auth, apparatusId, input),
     onSuccess: (created) => {
       setRecords((prev) => [created, ...prev]);
       setForm(emptyForm);
@@ -40,7 +43,7 @@ export function ScbaTab({ unitId }: { unitId: string }) {
     );
   }
 
-  const dueForUnit = (dueSoonQuery.data ?? []).filter((entry) => entry.apparatusId === unitId);
+  const dueForUnit = (dueSoonQuery.data ?? []).filter((entry) => entry.apparatusId === apparatusId);
 
   return (
     <section>

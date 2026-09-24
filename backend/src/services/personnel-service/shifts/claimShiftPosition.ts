@@ -1,5 +1,10 @@
-import { ConditionalCheckFailedException } from '@aws-sdk/client-dynamodb';
-import { GetCommand, UpdateCommand, type DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
+import { randomUUID } from 'node:crypto';
+import { TransactionCanceledException } from '@aws-sdk/client-dynamodb';
+import {
+  GetCommand,
+  TransactWriteCommand,
+  type DynamoDBDocumentClient,
+} from '@aws-sdk/lib-dynamodb';
 import { buildDeptScopedPk, type VerifiedDeptId } from '@boxalarm/dept-scope';
 
 export type ClaimOutcome =
@@ -30,6 +35,7 @@ export async function claimShiftPosition(
   const pk = buildDeptScopedPk(deptId, 'SHIFT', shiftId);
   const sk = `POSITION#${positionCode}`;
   const claimedAt = Date.now();
+  const eventId = randomUUID();
 
   try {
     const shiftMetadata = await doc.send(
@@ -50,19 +56,48 @@ export async function claimShiftPosition(
     const gsi1sk = typeof startAt === 'number' ? `SHIFT_POSITION#${startAt}` : undefined;
 
     await doc.send(
-      new UpdateCommand({
-        TableName: tableName,
-        Key: { pk, sk },
-        ConditionExpression: 'attribute_exists(pk) AND attribute_not_exists(claimedByMemberId)',
-        UpdateExpression:
-          gsi1sk === undefined
-            ? 'SET claimedByMemberId = :memberId, claimedAt = :claimedAt'
-            : 'SET claimedByMemberId = :memberId, claimedAt = :claimedAt, gsi1pk = :gsi1pk, gsi1sk = :gsi1sk',
-        ExpressionAttributeValues: {
-          ':memberId': memberId,
-          ':claimedAt': claimedAt,
-          ...(gsi1sk === undefined ? {} : { ':gsi1pk': `MEMBER#${memberId}`, ':gsi1sk': gsi1sk }),
-        },
+      new TransactWriteCommand({
+        TransactItems: [
+          {
+            Update: {
+              TableName: tableName,
+              Key: { pk, sk },
+              ConditionExpression:
+                'attribute_exists(pk) AND attribute_not_exists(claimedByMemberId)',
+              UpdateExpression:
+                gsi1sk === undefined
+                  ? 'SET claimedByMemberId = :memberId, claimedAt = :claimedAt'
+                  : 'SET claimedByMemberId = :memberId, claimedAt = :claimedAt, gsi1pk = :gsi1pk, gsi1sk = :gsi1sk',
+              ExpressionAttributeValues: {
+                ':memberId': memberId,
+                ':claimedAt': claimedAt,
+                ...(gsi1sk === undefined
+                  ? {}
+                  : { ':gsi1pk': `MEMBER#${memberId}`, ':gsi1sk': gsi1sk }),
+              },
+            },
+          },
+          {
+            Put: {
+              TableName: tableName,
+              Item: {
+                pk: buildDeptScopedPk(deptId, 'OUTBOX', memberId),
+                sk: `EVT#${eventId}`,
+                entityType: 'OUTBOX_ENTRY',
+                eventId,
+                eventTime: new Date(claimedAt).toISOString(),
+                eventType: 'personnel.shift.claimed',
+                source: 'personnel-service',
+                correlationId: shiftId,
+                schemaVersion: '1.0',
+                deptId,
+                memberId,
+                payload: { shiftId, positionCode, memberId, deptId },
+                sentAt: null,
+              },
+            },
+          },
+        ],
       }),
     );
     return { kind: 'CLAIMED', claimedAt };
@@ -70,7 +105,11 @@ export async function claimShiftPosition(
     if (error instanceof ShiftPositionWriteError) {
       throw error;
     }
-    if (!(error instanceof ConditionalCheckFailedException)) {
+    if (!(error instanceof TransactionCanceledException)) {
+      throw new ShiftPositionWriteError(error);
+    }
+    const reasons = error.CancellationReasons?.map((reason) => reason.Code) ?? [];
+    if (reasons[0] !== 'ConditionalCheckFailed') {
       throw new ShiftPositionWriteError(error);
     }
   }

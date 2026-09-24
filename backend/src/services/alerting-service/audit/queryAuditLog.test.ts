@@ -6,6 +6,7 @@ import {
   encodeCursor,
   queryDepartmentAuditLog,
   queryMemberDeliveryHistory,
+  queryMemberDispatchTimeline,
 } from './queryAuditLog.js';
 
 const DEPT_ID = toVerifiedDeptId({ deptId: 'NICHOLS' });
@@ -150,6 +151,36 @@ describe('queryDepartmentAuditLog (AC1/AC4)', () => {
     const page = await queryDepartmentAuditLog(client, 'alerting-table', DEPT_ID, 100, 200);
 
     expect(page.nextCursor).toBe(encodeCursor({ pk: 'x', sk: 'y' }));
+  });
+});
+
+describe('queryMemberDispatchTimeline (MINOR #8: server-side memberId filter)', () => {
+  it('pushes the memberId filter into the DynamoDB FilterExpression instead of filtering in application code', async () => {
+    const client = mockClient(() =>
+      Promise.resolve({
+        Items: [{ entityType: 'DELIVERY_RECEIPT', memberId: 'mbr-1', sk: 'RECEIPT#mbr-1#push#1' }],
+      }),
+    );
+
+    const timeline = await queryMemberDispatchTimeline(
+      client,
+      'alerting-table',
+      DEPT_ID,
+      'D-1',
+      'mbr-1',
+    );
+
+    expect(timeline).toHaveLength(1);
+    const call = (client.send as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as {
+      input: {
+        FilterExpression: string;
+        ExpressionAttributeValues: Record<string, unknown>;
+      };
+    };
+    expect(call.input.FilterExpression).toBe(
+      'entityType IN (:t0, :t1, :t2) AND memberId = :memberId',
+    );
+    expect(call.input.ExpressionAttributeValues[':memberId']).toBe('mbr-1');
   });
 });
 

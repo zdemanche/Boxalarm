@@ -8,8 +8,23 @@ export interface PlatformTableArgs {
 }
 
 /**
- * Deny UpdateItem/DeleteItem on audit partition keys (DEPT#*#AUDIT#*).
- * Attach to any role that may write the platform table so audit rows are append-only.
+ * Deny UpdateItem/DeleteItem/BatchWriteItem on audit partition keys
+ * (DEPT#*#AUDIT#*). Attach to any role that may write the platform table so an
+ * existing audit row can never be mutated or removed once written.
+ *
+ * PutItem is deliberately NOT denied here. Every legitimate writer of an
+ * AUDIT_LOG_ENTRY — updateStatus's transaction (memberRepository.ts), createMember,
+ * the export handler, retention disposal's own audit write — creates its audit row
+ * with a fresh, timestamp-suffixed sort key via PutItem as part of its own
+ * transaction; that is the only way audit rows are ever written (there is no
+ * separate audit-writer service, and no outbox-relay path for them yet). Denying
+ * PutItem blocked those legitimate inserts outright (member status changes could
+ * never complete, so the personnel.member.updated event that feeds session
+ * revocation was never emitted; retention disposal could never record what it
+ * destroyed). BatchWriteItem is still denied even though nothing here uses it: it
+ * carries delete semantics under its own action name, so leaving it un-denied would
+ * reopen a mutation path this statement exists to close, at no cost since no writer
+ * needs it.
  */
 export function auditMutationDenyStatement(tableArn: string): IamPolicyStatement {
   if (typeof tableArn !== "string" || tableArn.length === 0) {
@@ -21,16 +36,7 @@ export function auditMutationDenyStatement(tableArn: string): IamPolicyStatement
   return {
     Sid: "DenyAuditMutations",
     Effect: "Deny",
-    // PutItem and BatchWriteItem must be denied alongside UpdateItem/DeleteItem:
-    // PutItem on an existing pk/sk replaces the item wholesale, and BatchWriteItem
-    // carries both put and delete semantics under its own action name. Denying only
-    // Update/Delete leaves audit rows mutable via either of those two paths.
-    Action: [
-      "dynamodb:UpdateItem",
-      "dynamodb:DeleteItem",
-      "dynamodb:PutItem",
-      "dynamodb:BatchWriteItem",
-    ],
+    Action: ["dynamodb:UpdateItem", "dynamodb:DeleteItem", "dynamodb:BatchWriteItem"],
     Resource: tableArn,
     Condition: {
       "ForAllValues:StringLike": {

@@ -1,5 +1,15 @@
-import { DynamoDBClient, TransactionCanceledException } from '@aws-sdk/client-dynamodb';
-import { DynamoDBDocumentClient, GetCommand, TransactWriteCommand } from '@aws-sdk/lib-dynamodb';
+import {
+  ConditionalCheckFailedException,
+  DynamoDBClient,
+  TransactionCanceledException,
+} from '@aws-sdk/client-dynamodb';
+import {
+  DynamoDBDocumentClient,
+  GetCommand,
+  QueryCommand,
+  TransactWriteCommand,
+  UpdateCommand,
+} from '@aws-sdk/lib-dynamodb';
 import { captureAWSv3Client } from 'aws-xray-sdk-core';
 import { assertNoDelimiter, buildDeptScopedPk } from '@boxalarm/dept-scope';
 import type { VerifiedDeptId } from '@boxalarm/dept-scope';
@@ -12,6 +22,11 @@ import {
   type IncidentStatus,
 } from './entity.js';
 
+export interface SearchIncidentsInput {
+  readonly fromAlarmAt: number;
+  readonly toAlarmAt: number;
+}
+
 export interface IncidentRepository {
   createIncident(
     deptId: VerifiedDeptId,
@@ -20,6 +35,39 @@ export interface IncidentRepository {
     traceId: string,
   ): Promise<Incident>;
   getIncident(deptId: VerifiedDeptId, incidentId: string): Promise<Incident | undefined>;
+  updateNarrative(
+    deptId: VerifiedDeptId,
+    incidentId: string,
+    narrative: string,
+    nowEpochSeconds: number,
+  ): Promise<Incident>;
+  updateCorePayload(
+    deptId: VerifiedDeptId,
+    incidentId: string,
+    corePayload: Readonly<Record<string, unknown>>,
+    status: IncidentStatus,
+    nowEpochSeconds: number,
+  ): Promise<Incident>;
+  searchIncidents(
+    deptId: VerifiedDeptId,
+    input: SearchIncidentsInput,
+  ): Promise<readonly Incident[]>;
+}
+
+export class IncidentNotFoundError extends Error {
+  constructor(incidentId: string) {
+    super(`no incident found with incidentId "${incidentId}"`);
+    this.name = 'IncidentNotFoundError';
+  }
+}
+
+export const MAX_NARRATIVE_LENGTH = 25_000;
+
+export class NarrativeTooLongError extends Error {
+  constructor(length: number) {
+    super(`narrative must not exceed ${MAX_NARRATIVE_LENGTH} characters; received ${length}`);
+    this.name = 'NarrativeTooLongError';
+  }
 }
 
 export class DuplicateIncidentError extends Error {
@@ -96,7 +144,8 @@ export function createIncidentRepository(
     async createIncident(deptId, input, nowEpochSeconds, traceId) {
       assertNoDelimiter(input.dispatchNumber, 'dispatchNumber');
       const status = resolveStatus(input);
-      const incidentId = buildNerisIncidentId(deptId, input.dispatchNumber, input.epochSeconds);
+      const incidentId =
+        input.incidentId ?? buildNerisIncidentId(deptId, input.dispatchNumber, input.epochSeconds);
       const alarmAt = input.alarmAt ?? input.epochSeconds;
       const item = {
         pk: buildDeptScopedPk(deptId, 'INCIDENT', incidentId),
@@ -204,6 +253,97 @@ export function createIncidentRepository(
         }),
       );
       return result.Item ? toIncident(result.Item as Record<string, unknown>) : undefined;
+    },
+
+    async updateNarrative(deptId, incidentId, narrative, nowEpochSeconds) {
+      if (narrative.length > MAX_NARRATIVE_LENGTH) {
+        throw new NarrativeTooLongError(narrative.length);
+      }
+      try {
+        const result = await client.send(
+          new UpdateCommand({
+            TableName: tableName,
+            Key: { pk: buildDeptScopedPk(deptId, 'INCIDENT', incidentId), sk: 'METADATA' },
+            ConditionExpression: 'attribute_exists(pk)',
+            UpdateExpression:
+              'SET narrative = :narrative, corePayload.narrative = :narrative, updatedAt = :updatedAt',
+            ExpressionAttributeValues: { ':narrative': narrative, ':updatedAt': nowEpochSeconds },
+            ReturnValues: 'ALL_NEW',
+          }),
+        );
+        return toIncident(result.Attributes as Record<string, unknown>);
+      } catch (error) {
+        if (error instanceof ConditionalCheckFailedException) {
+          throw new IncidentNotFoundError(incidentId);
+        }
+        throw error;
+      }
+    },
+
+    async updateCorePayload(deptId, incidentId, corePayload, status, nowEpochSeconds) {
+      const setClauses = [
+        'corePayload = :corePayload',
+        '#status = :status',
+        'updatedAt = :updatedAt',
+      ];
+      const values: Record<string, unknown> = {
+        ':corePayload': corePayload,
+        ':status': status,
+        ':updatedAt': nowEpochSeconds,
+      };
+
+      // Keep the denormalized top-level fields createIncident also stores (and that
+      // searchIncidents.ts/GSI1 summaries and getIncident read directly, never corePayload)
+      // in sync whenever guided completion sets the corresponding corePayload field. Guided
+      // completion is the common path that finalizes incident_type, since it's optional at
+      // create and one of the two requiredFields this flow exists to fill in — leaving the
+      // top-level field unsynced would make search summaries go stale relative to corePayload.
+      const incidentType = corePayload.incident_type;
+      if (typeof incidentType === 'string') {
+        setClauses.push('incidentType = :incidentType');
+        values[':incidentType'] = incidentType;
+      }
+      const address = corePayload.address;
+      if (typeof address === 'string') {
+        setClauses.push('address = :address');
+        values[':address'] = address;
+      }
+
+      try {
+        const result = await client.send(
+          new UpdateCommand({
+            TableName: tableName,
+            Key: { pk: buildDeptScopedPk(deptId, 'INCIDENT', incidentId), sk: 'METADATA' },
+            ConditionExpression: 'attribute_exists(pk)',
+            UpdateExpression: `SET ${setClauses.join(', ')}`,
+            ExpressionAttributeNames: { '#status': 'status' },
+            ExpressionAttributeValues: values,
+            ReturnValues: 'ALL_NEW',
+          }),
+        );
+        return toIncident(result.Attributes as Record<string, unknown>);
+      } catch (error) {
+        if (error instanceof ConditionalCheckFailedException) {
+          throw new IncidentNotFoundError(incidentId);
+        }
+        throw error;
+      }
+    },
+
+    async searchIncidents(deptId, input) {
+      const result = await client.send(
+        new QueryCommand({
+          TableName: tableName,
+          IndexName: 'GSI1',
+          KeyConditionExpression: 'gsi1pk = :pk AND gsi1sk BETWEEN :from AND :to',
+          ExpressionAttributeValues: {
+            ':pk': buildDeptScopedPk(deptId),
+            ':from': `INCIDENT#${input.fromAlarmAt}`,
+            ':to': `INCIDENT#${input.toAlarmAt}`,
+          },
+        }),
+      );
+      return (result.Items ?? []).map((item) => toIncident(item as Record<string, unknown>));
     },
   };
 }

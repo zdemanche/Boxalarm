@@ -9,9 +9,30 @@ import {
   resolveTraceId,
 } from './authContext.js';
 import { isIncidentStatus, type CreateIncidentInput, type IncidentStatus } from './entity.js';
-import { DuplicateIncidentError, getIncidentRepository } from './repository.js';
+import {
+  DuplicateIncidentError,
+  getDocumentClient,
+  getIncidentRepository,
+  getTableName,
+} from './repository.js';
+import {
+  getDispatchAlertCopy,
+  queryIncidentResponseUnits,
+  queryRosterCopy,
+} from './dispatchProjection.js';
+import { createSchemaVersionRepository } from './schemaVersion/repository.js';
 
 class ValidationError extends Error {}
+
+class DispatchNotFoundError extends Error {}
+
+// Sentinel `nerisSchemaVersion` pin for a dispatch-linked incident created before any NERIS
+// schema version has ever been published as ACTIVE. It is not a real schema-registry version
+// and will never resolve via schemaVersionRepository.getSchemaVersion(); the edit/completion
+// paths (updateIncident.ts, putExposures.ts) treat that miss as "no pinned schema to honor"
+// and fall back to whatever is ACTIVE at edit time, since there is no earlier schema this
+// incident could have been authored under.
+const UNVALIDATED_SCHEMA_VERSION = 'UNVALIDATED';
 
 // Leaves headroom under DynamoDB's 400 KB item limit for the rest of the INCIDENT item
 // (keys, GSI attributes, NERIS metadata fields) so an oversized corePayload fails fast
@@ -128,6 +149,55 @@ function parseCreateIncidentInput(body: unknown, createdBy: string): CreateIncid
   };
 }
 
+function readDispatchId(body: unknown): string | undefined {
+  if (typeof body !== 'object' || body === null || Array.isArray(body)) {
+    return undefined;
+  }
+  const dispatchId = (body as Record<string, unknown>).dispatchId;
+  return typeof dispatchId === 'string' && dispatchId.trim().length > 0 ? dispatchId : undefined;
+}
+
+/**
+ * E6-S2: builds a pre-populated CreateIncidentInput from the DISPATCH_ALERT_COPY
+ * projection this service maintains from `dispatch.alert.received` (see
+ * dispatchAlertConsumer.ts) — never a direct read against alerting-service's table.
+ */
+async function buildInputFromDispatch(
+  deptId: Parameters<typeof getDispatchAlertCopy>[2],
+  dispatchId: string,
+  createdBy: string,
+): Promise<CreateIncidentInput> {
+  const client = getDocumentClient();
+  const tableName = getTableName(process.env);
+  const copy = await getDispatchAlertCopy(client, tableName, deptId, dispatchId);
+  if (!copy) {
+    throw new DispatchNotFoundError(dispatchId);
+  }
+
+  const schemaVersionRepository = createSchemaVersionRepository(client, tableName);
+  const activeSchema = await schemaVersionRepository.getActiveSchemaVersion();
+
+  return {
+    incidentId: dispatchId,
+    dispatchNumber: dispatchId,
+    epochSeconds: copy.dispatchedAt,
+    nerisSchemaVersion: activeSchema?.version ?? UNVALIDATED_SCHEMA_VERSION,
+    corePayload: {
+      incident_type: copy.incidentType,
+      address: copy.address,
+      cross_streets: copy.crossStreets,
+      narrative: copy.narrative,
+    },
+    incidentType: copy.incidentType,
+    address: copy.address,
+    narrative: copy.narrative,
+    alarmAt: copy.dispatchedAt,
+    dispatchAt: copy.dispatchedAt,
+    status: 'DRAFT',
+    createdBy,
+  };
+}
+
 export const handler: APIGatewayProxyHandlerV2WithLambdaAuthorizer<AuthorizerContext> = async (
   event,
 ) => {
@@ -162,9 +232,22 @@ export const handler: APIGatewayProxyHandlerV2WithLambdaAuthorizer<AuthorizerCon
   }
 
   let input: CreateIncidentInput;
+  let dispatchId: string | undefined;
   try {
-    input = parseCreateIncidentInput(parseJsonBody(event), sub);
+    const body = parseJsonBody(event);
+    dispatchId = readDispatchId(body);
+    input = dispatchId
+      ? await buildInputFromDispatch(deptId, dispatchId, sub)
+      : parseCreateIncidentInput(body, sub);
   } catch (error) {
+    if (error instanceof DispatchNotFoundError) {
+      return problemResponse(
+        404,
+        'Not Found',
+        `No dispatch alert found for dispatchId "${error.message}".`,
+        traceId,
+      );
+    }
     return problemResponse(
       400,
       'Bad Request',
@@ -177,10 +260,20 @@ export const handler: APIGatewayProxyHandlerV2WithLambdaAuthorizer<AuthorizerCon
     const repository = getIncidentRepository(process.env);
     const incident = await repository.createIncident(deptId, input, nowEpochSeconds(), traceId);
     emitIncidentMetric('IncidentCreated');
+    let respondingUnits: readonly Record<string, unknown>[] = [];
+    let respondingMembers: readonly unknown[] = [];
+    if (dispatchId) {
+      const client = getDocumentClient();
+      const tableName = getTableName(process.env);
+      [respondingUnits, respondingMembers] = await Promise.all([
+        queryIncidentResponseUnits(client, tableName, deptId, incident.incidentId),
+        queryRosterCopy(client, tableName, deptId, incident.incidentId),
+      ]);
+    }
     return {
       statusCode: 201,
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(incident),
+      body: JSON.stringify({ ...incident, respondingUnits, respondingMembers }),
     };
   } catch (error) {
     if (error instanceof DuplicateIncidentError) {

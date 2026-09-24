@@ -1,0 +1,27 @@
+.wrapper {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--bx-space-sm);
+  padding: var(--bx-space-2xl) var(--bx-space-lg);
+  border: 1px dashed var(--bx-border-decorative);
+  border-radius: var(--bx-radius-lg);
+  color: var(--bx-fg-muted);
+}
+
+.icon {
+  color: var(--bx-fg-faint);
+}
+
+.title {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--bx-fg);
+}
+
+.description {
+  margin: 0;
+  font-size: 14px;
+  max-width: 52ch;
+}

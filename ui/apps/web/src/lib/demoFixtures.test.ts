@@ -51,3 +51,37 @@ test('updates a member status through the fixture store', async () => {
   const member = (await response.json()) as { status: string };
   expect(member.status).toBe('ACTIVE');
 });
+
+test('gets and puts department config through the fixture store', async () => {
+  const initial = await apiRequest('platform/config/ALERT_RULES', tokens);
+  const config = (await initial.json()) as { value: { escalationThresholdN: number } };
+  expect(config.value.escalationThresholdN).toBe(90);
+
+  const saved = await apiRequest('platform/config/ALERT_RULES', tokens, {
+    method: 'PUT',
+    body: JSON.stringify({ value: { escalationThresholdN: 120 } }),
+  });
+  const savedConfig = (await saved.json()) as { value: { escalationThresholdN: number } };
+  expect(savedConfig.value.escalationThresholdN).toBe(120);
+});
+
+test('an unset config type is a 404 fixture', async () => {
+  await expect(apiRequest('platform/config/STATIONS', tokens)).rejects.toBeInstanceOf(ApiError);
+});
+
+test('starts and polls a demo export job to COMPLETE', async () => {
+  const started = await apiRequest('platform/export', tokens, { method: 'POST' });
+  const { jobId } = (await started.json()) as { jobId: string };
+  const status = await apiRequest(`platform/export/${jobId}`, tokens);
+  const body = (await status.json()) as { status: string };
+  expect(body.status).toBe('COMPLETE');
+});
+
+test('revokes a member session through the fixture store', async () => {
+  const response = await apiRequest('platform/sessions/revoke', tokens, {
+    method: 'POST',
+    body: JSON.stringify({ memberId: 'm-1' }),
+  });
+  const body = (await response.json()) as { status: string };
+  expect(body.status).toBe('revoked');
+});
