@@ -40,7 +40,10 @@ interface FakeItem {
   [key: string]: unknown;
 }
 
-function createFakeDdb(seed: readonly FakeItem[]): {
+function createFakeDdb(
+  seed: readonly FakeItem[],
+  options: { readonly failReceiptForMemberId?: string } = {},
+): {
   send: DynamoDBDocumentClient['send'];
   sns: { send: ReturnType<typeof vi.fn> };
   items: Map<string, FakeItem>;
@@ -70,6 +73,13 @@ function createFakeDdb(seed: readonly FakeItem[]): {
     if (name === 'PutCommand') {
       const put = input as { Item: FakeItem; ConditionExpression?: string };
       const key = `${put.Item.pk}#${put.Item.sk}`;
+      if (
+        options.failReceiptForMemberId &&
+        put.Item.entityType === 'DELIVERY_RECEIPT' &&
+        put.Item.memberId === options.failReceiptForMemberId
+      ) {
+        throw new Error('ddb unavailable');
+      }
       if (put.ConditionExpression && items.has(key)) {
         const error = new Error('conditional check failed');
         error.name = 'ConditionalCheckFailedException';
@@ -246,6 +256,37 @@ describe('toneEvaluatorHandler', () => {
         reason: 'TONE_3_PREDICATE_UNMET',
       }),
     );
+  });
+
+  it('does not let one failing member block or fail the rest of the roster (MAJOR #2 regression)', async () => {
+    const failingMember: FakeItem = {
+      pk: ELIGIBILITY_PK,
+      sk: 'MEMBER#mbr-fail',
+      entityType: 'MEMBER_ELIGIBILITY_SNAPSHOT',
+      memberId: 'mbr-fail',
+      active: true,
+      quals: [],
+      roles: [],
+      contactChannels: [{ channel: 'PUSH', token: 'tok', platform: 'ios', valid: true }],
+      availabilityState: 'AVAILABLE',
+      snapshotUpdatedAt: 0,
+    };
+    const { send, sns, items } = createFakeDdb([METADATA_ITEM, ELIGIBLE_MEMBER, failingMember], {
+      failReceiptForMemberId: 'mbr-fail',
+    });
+    const { createDynamoClient } = await import('../eligibility/dynamoClient.js');
+    const { createSnsClient } = await import('../fanout/snsClient.js');
+    vi.mocked(createDynamoClient).mockReturnValue({ send } as unknown as DynamoDBDocumentClient);
+    vi.mocked(createSnsClient).mockReturnValue(sns as never);
+
+    const { handler } = await import('./toneEvaluatorHandler.js');
+    const result = await handler({ deptId: 'NICHOLS', dispatchId: 'dispatch-1', toneSequence: 2 });
+
+    // The whole batch must not throw or abort just because mbr-fail's receipt write failed.
+    expect(result).toEqual({ outcome: 'FIRED' });
+    // mbr-1's receipt still gets written and published despite mbr-fail's concurrent failure.
+    expect(items.get(`${PK}#RECEIPT#mbr-1#push#2`)).toBeDefined();
+    expect(items.get(`${PK}#RECEIPT#mbr-fail#push#2`)).toBeUndefined();
   });
 
   it('does not evaluate a manually halted dispatch', async () => {

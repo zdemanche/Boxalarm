@@ -148,21 +148,26 @@ export const officerManualPromptAdapter: MutualAidPort = {
     const eligibleMembers = await queryEligibleMembers(ddb, tableName, deptId);
     const officers = eligibleMembers.filter((member) => member.roles.includes(OFFICER_ROLE));
 
+    // promptOfficer already catches its own DynamoDB/SNS failures and resolves to false rather
+    // than throwing, so Promise.allSettled here is belt-and-suspenders: one officer's failure
+    // (caught or not) must never block or delay the rest of the officer roster being prompted.
+    const promptResults = await Promise.allSettled(
+      officers.map((officer) => promptOfficer(ddb, sns, tableName, topicArn, deptId, dispatchId, officer)),
+    );
     let officersNotified = 0;
-    for (const officer of officers) {
-      const notified = await promptOfficer(
-        ddb,
-        sns,
-        tableName,
-        topicArn,
+    promptResults.forEach((result, index) => {
+      if (result.status === 'fulfilled') {
+        if (result.value) {
+          officersNotified += 1;
+        }
+        return;
+      }
+      logError('alerting.mutualAid.promptFailed', result.reason, {
         deptId,
         dispatchId,
-        officer,
-      );
-      if (notified) {
-        officersNotified += 1;
-      }
-    }
+        memberId: officers[index]?.memberId,
+      });
+    });
 
     logInfo('alerting.mutualAid.requested', { deptId, dispatchId, reason, officersNotified });
     return { requested: true, officersNotified, adapterUsed: ADAPTER_NAME };

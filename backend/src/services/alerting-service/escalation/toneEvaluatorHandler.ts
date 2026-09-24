@@ -163,6 +163,61 @@ async function publishToneChannel(
   );
 }
 
+async function fireToneForMember(
+  ddb: DynamoDBDocumentClient,
+  sns: SNSClient,
+  scheduler: Parameters<typeof createEscalationSchedule>[0],
+  tableName: string,
+  topicArn: string,
+  deptId: VerifiedDeptId,
+  dispatchId: string,
+  dispatch: DispatchMetadata,
+  toneSequence: number,
+  member: EligibilitySnapshotItem,
+): Promise<void> {
+  for (const channel of FAN_OUT_CHANNELS) {
+    if (channel === 'push' && resolvePushTarget(member.contactChannels).skipped) {
+      continue;
+    }
+    if (channel === 'sms' && resolveSmsTarget(member.contactChannels).skipped) {
+      continue;
+    }
+    await publishToneChannel(
+      ddb,
+      sns,
+      tableName,
+      topicArn,
+      deptId,
+      dispatchId,
+      dispatch,
+      member.memberId,
+      channel,
+      toneSequence,
+    );
+  }
+  try {
+    await createEscalationSchedule(
+      scheduler,
+      {
+        deptId,
+        dispatchId,
+        memberId: member.memberId,
+        toneSequence,
+        delaySeconds: VOICE_ESCALATION_DELAY_SECONDS,
+      },
+      ddb,
+      tableName,
+    );
+  } catch (error) {
+    logError('alerting.toneLadder.voiceScheduleFailed', error, {
+      deptId,
+      dispatchId,
+      memberId: member.memberId,
+      toneSequence,
+    });
+  }
+}
+
 async function fireTone(
   ddb: DynamoDBDocumentClient,
   sns: SNSClient,
@@ -175,49 +230,34 @@ async function fireTone(
   toneSequence: number,
   members: readonly EligibilitySnapshotItem[],
 ): Promise<void> {
-  for (const member of members) {
-    for (const channel of FAN_OUT_CHANNELS) {
-      if (channel === 'push' && resolvePushTarget(member.contactChannels).skipped) {
-        continue;
-      }
-      if (channel === 'sms' && resolveSmsTarget(member.contactChannels).skipped) {
-        continue;
-      }
-      await publishToneChannel(
+  const results = await Promise.allSettled(
+    members.map((member) =>
+      fireToneForMember(
         ddb,
         sns,
+        scheduler,
         tableName,
         topicArn,
         deptId,
         dispatchId,
         dispatch,
-        member.memberId,
-        channel,
         toneSequence,
-      );
-    }
-    try {
-      await createEscalationSchedule(
-        scheduler,
-        {
-          deptId,
-          dispatchId,
-          memberId: member.memberId,
-          toneSequence,
-          delaySeconds: VOICE_ESCALATION_DELAY_SECONDS,
-        },
-        ddb,
-        tableName,
-      );
-    } catch (error) {
-      logError('alerting.toneLadder.voiceScheduleFailed', error, {
+        member,
+      ),
+    ),
+  );
+  results.forEach((result, index) => {
+    if (result.status === 'rejected') {
+      // One member's failure (e.g. a non-conditional DynamoDB or SNS error inside
+      // publishToneChannel) must never block or fail the rest of the roster's tone-out.
+      logError('alerting.toneLadder.memberFireFailed', result.reason, {
         deptId,
         dispatchId,
-        memberId: member.memberId,
+        memberId: members[index]?.memberId,
         toneSequence,
       });
     }
-  }
+  });
 }
 
 export const handler = async (payload: unknown): Promise<{ outcome: ToneOutcome }> => {
