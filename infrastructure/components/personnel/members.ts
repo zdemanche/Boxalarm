@@ -17,19 +17,57 @@ export interface MembersArgs {
   httpApi: HttpApi;
 }
 
-const TABLE_STATEMENT = (tableArn: pulumi.Input<string>) =>
+// Per-route IAM, scoped to what each real handler (backend/src/services/personnel-service/
+// members/*.ts) actually calls — not a shared read+write grant across all four routes.
+// dynamodb:TransactWriteItems is not a real IAM action (DynamoDB authorizes each item in a
+// transaction as its own PutItem/UpdateItem/DeleteItem call), so it was granting nothing;
+// dropped everywhere below rather than carried forward as dead weight.
+
+/** list.ts: Query on GSI3 only — read-only route, no write action of any kind. */
+const LIST_STATEMENT = (tableArn: pulumi.Input<string>) =>
   pulumi.output(tableArn).apply((arn) => [
     {
-      Sid: "MembersTableAccess" as const,
+      Sid: "MembersListAccess" as const,
       Effect: "Allow" as const,
-      Action: [
-        "dynamodb:GetItem",
-        "dynamodb:PutItem",
-        "dynamodb:UpdateItem",
-        "dynamodb:TransactWriteItems",
-        "dynamodb:Query",
-      ],
-      Resource: [arn, `${arn}/index/GSI3`],
+      Action: ["dynamodb:Query"],
+      Resource: [`${arn}/index/GSI3`],
+    },
+  ]);
+
+/** get.ts: GetItem only — read-only route, no write action of any kind. */
+const GET_STATEMENT = (tableArn: pulumi.Input<string>) =>
+  pulumi.output(tableArn).apply((arn) => [
+    {
+      Sid: "MembersGetAccess" as const,
+      Effect: "Allow" as const,
+      Action: ["dynamodb:GetItem"],
+      Resource: [arn],
+    },
+  ]);
+
+/** create.ts: PutItem for the new MEMBER row plus its AUDIT_LOG_ENTRY (one TransactWriteCommand of two Puts). */
+const CREATE_STATEMENT = (tableArn: pulumi.Input<string>) =>
+  pulumi.output(tableArn).apply((arn) => [
+    {
+      Sid: "MembersCreateAccess" as const,
+      Effect: "Allow" as const,
+      Action: ["dynamodb:PutItem"],
+      Resource: [arn],
+    },
+  ]);
+
+/**
+ * updateStatus.ts: GetItem (reads the member before validating the transition),
+ * UpdateItem (the member row), PutItem (the AUDIT_LOG_ENTRY row and the OUTBOX_ENTRY
+ * row, both in the same transaction — memberRepository.ts's updateMemberStatus).
+ */
+const UPDATE_STATUS_STATEMENT = (tableArn: pulumi.Input<string>) =>
+  pulumi.output(tableArn).apply((arn) => [
+    {
+      Sid: "MembersUpdateStatusAccess" as const,
+      Effect: "Allow" as const,
+      Action: ["dynamodb:GetItem", "dynamodb:UpdateItem", "dynamodb:PutItem"],
+      Resource: [arn],
     },
   ]);
 
@@ -57,12 +95,9 @@ export class Members extends pulumi.ComponentResource {
       PERSONNEL_TABLE_NAME: args.platformTableName,
       VERIFIED_PERMISSIONS_POLICY_STORE_ID: args.policyStoreId,
     };
-    const baseStatements = pulumi
-      .all([TABLE_STATEMENT(args.platformTableArn), pulumi.output(args.policyStoreArn)])
-      .apply(([table, policyStoreArn]) => [
-        ...table,
-        verifiedPermissionsPolicyStatement(policyStoreArn),
-      ]);
+    const vpStatement = pulumi
+      .output(args.policyStoreArn)
+      .apply((policyStoreArn) => [verifiedPermissionsPolicyStatement(policyStoreArn)]);
 
     this.createLambda = new ServiceLambda(
       `${name}-create`,
@@ -74,7 +109,9 @@ export class Members extends pulumi.ComponentResource {
         code: placeholderLambdaCode(),
         logGroup: args.logGroup,
         environment: baseEnvironment,
-        additionalPolicyStatements: baseStatements,
+        additionalPolicyStatements: pulumi
+          .all([CREATE_STATEMENT(args.platformTableArn), vpStatement])
+          .apply(([table, vp]) => [...table, ...vp]),
       },
       { parent: this },
     );
@@ -94,7 +131,9 @@ export class Members extends pulumi.ComponentResource {
         code: placeholderLambdaCode(),
         logGroup: args.logGroup,
         environment: baseEnvironment,
-        additionalPolicyStatements: baseStatements,
+        additionalPolicyStatements: pulumi
+          .all([LIST_STATEMENT(args.platformTableArn), vpStatement])
+          .apply(([table, vp]) => [...table, ...vp]),
       },
       { parent: this },
     );
@@ -114,7 +153,9 @@ export class Members extends pulumi.ComponentResource {
         code: placeholderLambdaCode(),
         logGroup: args.logGroup,
         environment: baseEnvironment,
-        additionalPolicyStatements: baseStatements,
+        additionalPolicyStatements: pulumi
+          .all([GET_STATEMENT(args.platformTableArn), vpStatement])
+          .apply(([table, vp]) => [...table, ...vp]),
       },
       { parent: this },
     );
@@ -136,10 +177,16 @@ export class Members extends pulumi.ComponentResource {
         environment: baseEnvironment,
         // No personnel role holds any permission on the alerting-service or
         // incident-service tables (issue AC4) — statements below are scoped to
-        // the platform table alone, plus the audit-key mutation deny.
+        // the platform table alone, plus the audit-key mutation deny (which now
+        // allows the PutItem this route's own audit write needs — see
+        // auditMutationDenyStatement's doc comment in data/platform-table.ts).
         additionalPolicyStatements: pulumi
-          .all([baseStatements, pulumi.output(args.platformTableArn)])
-          .apply(([statements, tableArn]) => [...statements, auditMutationDenyStatement(tableArn)]),
+          .all([UPDATE_STATUS_STATEMENT(args.platformTableArn), vpStatement, args.platformTableArn])
+          .apply(([table, vp, tableArn]) => [
+            ...table,
+            ...vp,
+            auditMutationDenyStatement(tableArn),
+          ]),
       },
       { parent: this },
     );
