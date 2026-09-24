@@ -207,6 +207,10 @@ export const ridingBoard = new RidingBoard("riding-board", {
 export const alertingAlarms = new AlertingAlarms("alerting-alarms", {
   env,
   channelQueues: messagingAlerting.channelQueues,
+  fanOutFunctionName: fanOut.lambda.function.name,
+  escalationFunctionName: escalation.lambda.function.name,
+  memberUpdatedDlq: pushTokens.memberUpdatedDlq,
+  pageEmail: config.get("alertingPageEmail"),
 });
 
 // E1-S13-INFRA #38: eligibility-snapshot staleness schedule + alarm.
