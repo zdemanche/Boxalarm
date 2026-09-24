@@ -1,0 +1,44 @@
+.toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--bx-space-md);
+  margin-bottom: var(--bx-space-md);
+}
+
+.group {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--bx-space-sm);
+}
+
+.searchWrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.searchIcon {
+  position: absolute;
+  left: 10px;
+  color: var(--bx-fg-faint);
+  pointer-events: none;
+}
+
+.searchInput {
+  min-height: var(--bx-target-office);
+  padding: 0 var(--bx-space-sm) 0 34px;
+  font-size: 14px;
+  color: var(--bx-fg);
+  background: var(--bx-surface-raised);
+  border: 1px solid var(--bx-border);
+  border-radius: var(--bx-radius-md);
+  min-width: 220px;
+}
+
+.searchInput:focus-visible {
+  outline: 3px solid var(--bx-focus);
+  outline-offset: 1px;
+}

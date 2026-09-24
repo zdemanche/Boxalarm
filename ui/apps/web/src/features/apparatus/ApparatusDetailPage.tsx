@@ -1,16 +1,35 @@
+import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Link, useParams } from 'react-router-dom';
 import { useAuth } from '../../auth/AuthContext';
 import { ApiForbiddenGate } from '../../components/ApiForbiddenGate';
+import { PageHeader } from '../../components/ui/PageHeader';
+import { Skeleton } from '../../components/ui/Skeleton';
+import { listEquipment } from '../inventory/api';
 import { getApparatus } from './api';
+import { InventoryTab } from './InventoryTab';
+import { MaintenanceTab } from './MaintenanceTab';
+import { ScbaTab } from './ScbaTab';
+import { ServiceStatusControls } from './ServiceStatusControls';
+import { TestingTab } from './TestingTab';
+
+const TABS = ['Overview', 'Maintenance', 'SCBA', 'Testing', 'Inventory'] as const;
+type Tab = (typeof TABS)[number];
 
 export function ApparatusDetailPage() {
   const { id = '' } = useParams();
   const auth = useAuth();
+  const [tab, setTab] = useState<Tab>('Overview');
 
   const detailQuery = useQuery({
     queryKey: ['apparatus', id],
     queryFn: () => getApparatus(auth, id),
+    enabled: Boolean(id),
+  });
+
+  const equipmentQuery = useQuery({
+    queryKey: ['inventory', 'equipment', 'byApparatus', id],
+    queryFn: () => listEquipment(auth, { assignedToType: 'APPARATUS', assignedToId: id }),
     enabled: Boolean(id),
   });
 
@@ -25,30 +44,126 @@ export function ApparatusDetailPage() {
   const unit = detailQuery.data;
 
   return (
-    <main id="main-content" style={{ padding: 'var(--boxalarm-spacing-lg)' }}>
-      <p>
-        <Link to="/apparatus">← Apparatus</Link>
-      </p>
+    <main id="main-content">
+      <PageHeader
+        title={unit?.unitId ?? '…'}
+        breadcrumbs={[{ label: 'Apparatus', to: '/apparatus' }, { label: unit?.unitId ?? '…' }]}
+      />
       {detailQuery.isLoading || !unit ? (
-        <p>Loading apparatus…</p>
+        <Skeleton lines={3} />
       ) : (
         <>
-          <h1 style={{ fontSize: 'var(--boxalarm-font-size-xl)', margin: 0 }}>{unit.unitId}</h1>
-          <p
-            role="status"
+          <dl
             style={{
-              marginTop: 'var(--boxalarm-spacing-md)',
-              fontSize: 'var(--boxalarm-font-size-lg)',
+              display: 'grid',
+              gridTemplateColumns: 'max-content 1fr',
+              columnGap: 'var(--bx-space-lg)',
+              rowGap: 'var(--bx-space-sm)',
+              fontSize: 14,
             }}
           >
-            {unit.status === 'IN_SERVICE' ? 'In service' : 'Out of service'}
-          </p>
-          <dl style={{ marginTop: 'var(--boxalarm-spacing-lg)' }}>
-            <dt>Type</dt>
-            <dd>{unit.type}</dd>
-            <dt>Apparatus ID</dt>
-            <dd>{unit.apparatusId}</dd>
+            <dt style={{ color: 'var(--bx-fg-muted)' }}>Type</dt>
+            <dd style={{ margin: 0 }}>{unit.type}</dd>
+            <dt style={{ color: 'var(--bx-fg-muted)' }}>Apparatus ID</dt>
+            <dd style={{ margin: 0, fontFamily: 'var(--bx-font-mono)' }}>{unit.apparatusId}</dd>
           </dl>
+          {unit.failedTests.length > 0 ? (
+            <div
+              role="alert"
+              style={{
+                marginTop: 'var(--boxalarm-spacing-md)',
+                color: 'var(--boxalarm-error)',
+                fontWeight: 600,
+              }}
+            >
+              Failed tests: {unit.failedTests.map((t) => t.testType).join(', ')}
+            </div>
+          ) : null}
+
+          <ServiceStatusControls unit={unit} />
+
+          <section style={{ marginTop: 'var(--boxalarm-spacing-lg)' }}>
+            <h2 style={{ fontSize: 'var(--boxalarm-font-size-lg)' }}>Open defects</h2>
+            {unit.openDefects.length === 0 ? (
+              <p>No open defects.</p>
+            ) : (
+              <ul>
+                {unit.openDefects.map((defect) => (
+                  <li key={defect.defectId}>
+                    {defect.description} — {defect.severity} —{' '}
+                    {new Date(defect.reportedAt * 1000).toLocaleDateString()}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </section>
+
+          <div
+            role="tablist"
+            aria-label="Apparatus detail sections"
+            style={{
+              display: 'flex',
+              gap: 'var(--boxalarm-spacing-md)',
+              marginTop: 'var(--boxalarm-spacing-lg)',
+              borderBottom: '1px solid #0002',
+            }}
+          >
+            {TABS.map((name) => (
+              <button
+                key={name}
+                type="button"
+                role="tab"
+                aria-selected={tab === name}
+                onClick={() => setTab(name)}
+                style={{
+                  minHeight: 44,
+                  padding: '0 var(--boxalarm-spacing-sm)',
+                  background: 'none',
+                  border: 'none',
+                  borderBottom: tab === name ? '2px solid var(--boxalarm-accent)' : 'none',
+                  fontWeight: tab === name ? 700 : 400,
+                  cursor: 'pointer',
+                  color: 'var(--boxalarm-fg)',
+                }}
+              >
+                {name}
+              </button>
+            ))}
+          </div>
+
+          <div role="tabpanel" style={{ marginTop: 'var(--boxalarm-spacing-lg)' }}>
+            {/* Maintenance/SCBA/Inventory key their sub-resources on apparatusId, matching this
+                page's own detail fetch above (getApparatus(auth, id) where id is apparatusId).
+                Testing schedules are the one sub-resource the backend resolves and returns by
+                display unit code, so it alone still takes unitId — see the tab-identifier note
+                in the apparatus-service INFRA reconciliation ticket for the full picture. */}
+            {tab === 'Maintenance' ? <MaintenanceTab apparatusId={unit.apparatusId} /> : null}
+            {tab === 'SCBA' ? <ScbaTab apparatusId={unit.apparatusId} /> : null}
+            {tab === 'Testing' ? <TestingTab unitId={unit.unitId} /> : null}
+            {tab === 'Inventory' ? <InventoryTab apparatusId={unit.apparatusId} /> : null}
+          </div>
+
+          <h2
+            style={{
+              fontSize: 'var(--boxalarm-font-size-lg)',
+              marginTop: 'var(--boxalarm-spacing-xl)',
+            }}
+          >
+            Assigned equipment
+          </h2>
+          {equipmentQuery.isLoading ? (
+            <p>Loading equipment…</p>
+          ) : (equipmentQuery.data ?? []).length === 0 ? (
+            <p>No equipment assigned.</p>
+          ) : (
+            <ul>
+              {(equipmentQuery.data ?? []).map((asset) => (
+                <li key={asset.assetId}>
+                  <Link to={`/inventory/${asset.assetId}`}>{asset.serialNumber}</Link>
+                </li>
+              ))}
+            </ul>
+          )}
         </>
       )}
     </main>

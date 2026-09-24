@@ -35,7 +35,7 @@ test('confirming Responding with an ETA records the response and shows it back',
     fireEvent.press(await findByRole('button', { name: 'Responding' }));
   });
   await act(async () => {
-    fireEvent.changeText(await findByPlaceholderText('ETA (optional)'), '15 minutes');
+    fireEvent.changeText(await findByPlaceholderText('ETA in minutes'), '15');
   });
   await act(async () => {
     fireEvent.press(await findByRole('button', { name: 'Confirm' }));
@@ -75,6 +75,22 @@ test('Confirm shares the oversized touch target with Responding/Not responding (
   const confirmButton = await findByRole('button', { name: 'Confirm' });
 
   expect(confirmButton.props.style.minHeight).toBe(touchTarget.oversized.ios);
+});
+
+test('tapping Direct to scene is distinct in text from Responding', async () => {
+  const { findByRole, findByText, findByPlaceholderText } = await render(<AlertDetailScreen />);
+
+  await act(async () => {
+    fireEvent.press(await findByRole('button', { name: 'Direct to scene' }));
+  });
+  await act(async () => {
+    fireEvent.changeText(await findByPlaceholderText('ETA in minutes'), '5');
+  });
+  await act(async () => {
+    fireEvent.press(await findByRole('button', { name: 'Confirm' }));
+  });
+
+  expect(await findByText(/you responded: direct to scene/i)).toBeTruthy();
 });
 
 test('viewing the roster navigates with the dispatch id', async () => {

@@ -28,9 +28,16 @@ import {
   buildEligibleQualCodeIndex,
   fetchDeptShiftsWithPositions,
   listDeptShiftMetaItems,
+  queryShiftItems,
 } from './coverageRepository.js';
+import { claimShiftPosition } from './claimShiftPosition.js';
 import { releaseShiftPosition } from './releaseShiftPosition.js';
-import { approveShiftSwap, getShiftSwapRequest, proposeShiftSwap } from './shiftSwap.js';
+import {
+  approveShiftSwap,
+  getShiftSwapRequest,
+  listPendingShiftSwaps,
+  proposeShiftSwap,
+} from './shiftSwap.js';
 import {
   badRequestProblem,
   conflictProblem,
@@ -46,10 +53,16 @@ const METRICS_NAMESPACE = 'Boxalarm/personnel-service';
 
 type ShiftRoute =
   | { readonly kind: 'COLLECTION' }
+  | { readonly kind: 'SINGLE'; readonly shiftId: string }
+  | { readonly kind: 'CLAIM'; readonly shiftId: string }
   | { readonly kind: 'RELEASE'; readonly shiftId: string }
   | { readonly kind: 'SWAP'; readonly shiftId: string }
   | { readonly kind: 'APPROVE_SWAP'; readonly shiftId: string; readonly swapId: string }
+  | { readonly kind: 'SWAPS_MINE' }
+  | { readonly kind: 'SWAPS_PENDING' }
   | { readonly kind: 'UNKNOWN' };
+
+const RESERVED_SHIFT_SEGMENTS = new Set(['coverage', 'swaps']);
 
 function parseShiftRoute(rawPath: string): ShiftRoute {
   const segments = rawPath.split('/').filter((segment) => segment.length > 0);
@@ -60,6 +73,18 @@ function parseShiftRoute(rawPath: string): ShiftRoute {
   const rest = segments.slice(shiftsIndex + 1);
   if (rest.length === 0) {
     return { kind: 'COLLECTION' };
+  }
+  if (rest.length === 2 && rest[0] === 'swaps' && rest[1] === 'mine') {
+    return { kind: 'SWAPS_MINE' };
+  }
+  if (rest.length === 2 && rest[0] === 'swaps' && rest[1] === 'pending') {
+    return { kind: 'SWAPS_PENDING' };
+  }
+  if (rest.length === 1 && !RESERVED_SHIFT_SEGMENTS.has(rest[0] as string)) {
+    return { kind: 'SINGLE', shiftId: rest[0] as string };
+  }
+  if (rest.length === 2 && rest[1] === 'claim') {
+    return { kind: 'CLAIM', shiftId: rest[0] as string };
   }
   if (rest.length === 2 && rest[1] === 'release') {
     return { kind: 'RELEASE', shiftId: rest[0] as string };
@@ -103,6 +128,9 @@ function jsonResponse(status: number, body: unknown): APIGatewayProxyResultV2 {
 type ShiftMetricOutcome =
   | 'ShiftCreated'
   | 'ShiftCreateFailed'
+  | 'ShiftClaimed'
+  | 'ShiftClaimFailed'
+  | 'ShiftClaimRecalculateFailed'
   | 'ShiftReleased'
   | 'ShiftReleaseFailed'
   | 'ShiftReleaseRecalculateFailed'
@@ -167,6 +195,34 @@ async function decideOfficerSwapApproval(
   } catch (error) {
     if (error instanceof AuthzUnavailableError) {
       logHandlerError('shifts.swap.approve.authz_unavailable', correlationId, error);
+      return 'UNAVAILABLE';
+    }
+    throw error;
+  }
+}
+
+async function decideOfficerSwapsListAuthorized(
+  event: ShiftEvent,
+  deptId: VerifiedDeptId,
+  correlationId: string,
+): Promise<SwapApprovalDecision> {
+  const token = extractBearerToken(event);
+  if (!token) {
+    return 'DENY';
+  }
+  try {
+    const client = createAuthzClient(process.env);
+    const config = readAuthzConfig(process.env);
+    const allowed = await isCedarAuthorized(client, config, token, {
+      actionType: 'Boxalarm::Action',
+      actionId: 'ListPendingShiftSwaps',
+      resourceType: 'Boxalarm::Department',
+      resourceId: deptId,
+    });
+    return allowed ? 'ALLOW' : 'DENY';
+  } catch (error) {
+    if (error instanceof AuthzUnavailableError) {
+      logHandlerError('shifts.swaps.pending.authz_unavailable', correlationId, error);
       return 'UNAVAILABLE';
     }
     throw error;
@@ -279,6 +335,234 @@ async function handleCreate(
     stationId: input.stationId,
     positions: input.positions,
   });
+}
+
+async function handleClaim(
+  event: ShiftEvent,
+  correlationId: string,
+  shiftId: string,
+): Promise<APIGatewayProxyResultV2> {
+  const context = event.requestContext.authorizer.lambda;
+
+  let rawBody: unknown;
+  try {
+    rawBody = event.body ? (JSON.parse(event.body) as unknown) : undefined;
+  } catch (error) {
+    logHandlerError('shifts.claim.invalid_json', correlationId, error);
+    return badRequestProblem(correlationId, 'body must be valid JSON');
+  }
+  const body = (rawBody ?? {}) as Partial<Record<string, unknown>>;
+  const positionCode = body.positionCode;
+  if (typeof positionCode !== 'string' || positionCode.length === 0) {
+    return badRequestProblem(
+      correlationId,
+      'positionCode is required and must be a non-empty string',
+    );
+  }
+
+  const deptId = resolveVerifiedDeptId(context, 'shifts.claim.invalid_dept', correlationId);
+  if (deptId === undefined) {
+    return problemResponse(
+      500,
+      'Internal Server Error',
+      'department context is invalid',
+      correlationId,
+    );
+  }
+  const memberId = context.sub;
+
+  let tableName: string;
+  let docClient: DynamoDBDocumentClient;
+  let outcome;
+  try {
+    ({ tableName } = readPersonnelTableConfig(process.env));
+    docClient = getDocClient(process.env);
+    outcome = await claimShiftPosition(
+      docClient,
+      tableName,
+      deptId,
+      shiftId,
+      positionCode,
+      memberId,
+    );
+  } catch (error) {
+    logHandlerError('shifts.claim.write_failed', correlationId, error);
+    emitShiftMetric('ShiftClaimFailed');
+    return problemResponse(
+      503,
+      'Service Unavailable',
+      'shift position could not be claimed',
+      correlationId,
+    );
+  }
+
+  if (outcome.kind === 'NOT_FOUND') {
+    emitShiftMetric('ShiftClaimFailed');
+    return notFoundProblem(correlationId);
+  }
+  if (outcome.kind === 'CONFLICT') {
+    emitShiftMetric('ShiftClaimFailed');
+    return conflictProblem(correlationId);
+  }
+
+  try {
+    await recalculateShiftStatus(docClient, tableName, deptId, shiftId);
+  } catch (error) {
+    logHandlerError('shifts.claim.recalculate_failed', correlationId, error);
+    emitShiftMetric('ShiftClaimRecalculateFailed');
+  }
+
+  emitShiftMetric('ShiftClaimed');
+  return jsonResponse(outcome.kind === 'ALREADY_MINE' ? 200 : 201, {
+    shiftId,
+    positionCode,
+    claimedByMemberId: memberId,
+    claimedAt: outcome.claimedAt,
+  });
+}
+
+async function handleGetShift(
+  event: ShiftEvent,
+  correlationId: string,
+  shiftId: string,
+): Promise<APIGatewayProxyResultV2> {
+  const context = event.requestContext.authorizer.lambda;
+  const deptId = resolveVerifiedDeptId(context, 'shifts.get.invalid_dept', correlationId);
+  if (deptId === undefined) {
+    return problemResponse(
+      500,
+      'Internal Server Error',
+      'department context is invalid',
+      correlationId,
+    );
+  }
+  const memberId = context.sub;
+
+  try {
+    const { tableName } = readPersonnelTableConfig(process.env);
+    const docClient = getDocClient(process.env);
+    const items = await queryShiftItems(
+      docClient,
+      tableName,
+      buildDeptScopedPk(deptId, 'SHIFT', shiftId),
+    );
+    const metadata = items.find((item) => item.sk === 'METADATA');
+    if (metadata === undefined) {
+      return notFoundProblem(correlationId);
+    }
+    const positions = items
+      .filter((item) => typeof item.sk === 'string' && item.sk.startsWith('POSITION#'))
+      .map((item) => ({
+        positionCode: String(item.positionCode),
+        ...(item.requiredQual !== undefined ? { requiredQual: item.requiredQual as string } : {}),
+        ...(item.claimedByMemberId !== undefined
+          ? {
+              claimedByMemberId: item.claimedByMemberId as string,
+              claimedByMe: item.claimedByMemberId === memberId,
+            }
+          : {}),
+      }));
+    return jsonResponse(200, {
+      shiftId,
+      startAt: Number(metadata.startAt),
+      endAt: Number(metadata.endAt),
+      stationId: String(metadata.stationId),
+      status: String(metadata.status),
+      positions,
+    });
+  } catch (error) {
+    logHandlerError('shifts.get.query_failed', correlationId, error);
+    return problemResponse(
+      503,
+      'Service Unavailable',
+      'shift could not be retrieved',
+      correlationId,
+    );
+  }
+}
+
+async function handleListMySwaps(
+  event: ShiftEvent,
+  correlationId: string,
+): Promise<APIGatewayProxyResultV2> {
+  const context = event.requestContext.authorizer.lambda;
+  const deptId = resolveVerifiedDeptId(context, 'shifts.swaps.mine.invalid_dept', correlationId);
+  if (deptId === undefined) {
+    return problemResponse(
+      500,
+      'Internal Server Error',
+      'department context is invalid',
+      correlationId,
+    );
+  }
+  const memberId = context.sub;
+
+  try {
+    const { tableName } = readPersonnelTableConfig(process.env);
+    const docClient = getDocClient(process.env);
+    const swaps = await listPendingShiftSwaps(docClient, tableName, deptId);
+    const mine = swaps.filter(
+      (swap) => swap.fromMemberId === memberId || swap.toMemberId === memberId,
+    );
+    return jsonResponse(200, { swaps: mine });
+  } catch (error) {
+    logHandlerError('shifts.swaps.mine.query_failed', correlationId, error);
+    return problemResponse(
+      503,
+      'Service Unavailable',
+      'pending shift swaps could not be listed',
+      correlationId,
+    );
+  }
+}
+
+async function handleListPendingSwaps(
+  event: ShiftEvent,
+  correlationId: string,
+): Promise<APIGatewayProxyResultV2> {
+  const context = event.requestContext.authorizer.lambda;
+  const deptId = resolveVerifiedDeptId(context, 'shifts.swaps.pending.invalid_dept', correlationId);
+  if (deptId === undefined) {
+    return problemResponse(
+      500,
+      'Internal Server Error',
+      'department context is invalid',
+      correlationId,
+    );
+  }
+
+  const decision = await decideOfficerSwapsListAuthorized(event, deptId, correlationId);
+  if (decision === 'UNAVAILABLE') {
+    return problemResponse(
+      503,
+      'Service Unavailable',
+      'authorization could not be determined',
+      correlationId,
+    );
+  }
+  if (decision === 'DENY') {
+    return problemResponse(
+      403,
+      'Forbidden',
+      'officer or admin role is required to view pending shift swaps',
+      correlationId,
+    );
+  }
+
+  try {
+    const { tableName } = readPersonnelTableConfig(process.env);
+    const docClient = getDocClient(process.env);
+    const swaps = await listPendingShiftSwaps(docClient, tableName, deptId);
+    return jsonResponse(200, { swaps: swaps.filter((swap) => swap.requiresOfficerApproval) });
+  } catch (error) {
+    logHandlerError('shifts.swaps.pending.query_failed', correlationId, error);
+    return problemResponse(
+      503,
+      'Service Unavailable',
+      'pending shift swaps could not be listed',
+      correlationId,
+    );
+  }
 }
 
 async function handleRelease(
@@ -636,6 +920,9 @@ export const handler: Handler<ShiftEvent, APIGatewayProxyResultV2> = async (even
   if (method === 'POST' && route.kind === 'RELEASE') {
     return handleRelease(event, correlationId, route.shiftId);
   }
+  if (method === 'POST' && route.kind === 'CLAIM') {
+    return handleClaim(event, correlationId, route.shiftId);
+  }
   if (method === 'POST' && route.kind === 'SWAP') {
     return handleSwap(event, correlationId, route.shiftId);
   }
@@ -649,8 +936,17 @@ export const handler: Handler<ShiftEvent, APIGatewayProxyResultV2> = async (even
     if (event.requestContext.http.path.endsWith('/coverage')) {
       return handleCoverage(event, correlationId);
     }
+    if (route.kind === 'SWAPS_MINE') {
+      return handleListMySwaps(event, correlationId);
+    }
+    if (route.kind === 'SWAPS_PENDING') {
+      return handleListPendingSwaps(event, correlationId);
+    }
     if (route.kind === 'COLLECTION') {
       return handleList(event, correlationId);
+    }
+    if (route.kind === 'SINGLE') {
+      return handleGetShift(event, correlationId, route.shiftId);
     }
   }
   return problemResponse(

@@ -1,4 +1,6 @@
 import type { ProblemDetails } from '../lib/apiClient';
+import { Ban } from './ui/icons';
+import styles from './StateScreen.module.css';
 
 /** Fixed, generic 403 copy. The server's `detail` (and Cedar policy/action names it can
  * contain) is intentionally not rendered — see security finding on PR #93 review round 2:
@@ -20,23 +22,15 @@ export function ForbiddenState({
 }) {
   const Heading = headingLevel;
   const body = (
-    <>
-      <Heading style={{ fontSize: 'var(--boxalarm-font-size-xl)', margin: 0 }}>
-        {problem?.title ?? 'Forbidden'}
-      </Heading>
+    <div className={styles.wrapper}>
+      <Ban size={28} className={styles.icon} aria-hidden="true" />
+      <Heading className={styles.title}>{problem?.title ?? 'Forbidden'}</Heading>
       <div role="alert">
-        <p style={{ marginTop: 'var(--boxalarm-spacing-md)' }}>{GENERIC_FORBIDDEN_MESSAGE}</p>
+        <p className={styles.message}>{GENERIC_FORBIDDEN_MESSAGE}</p>
       </div>
-    </>
+    </div>
   );
 
-  if (embedded) {
-    return <section style={{ padding: 'var(--boxalarm-spacing-lg)' }}>{body}</section>;
-  }
-
-  return (
-    <main id="main-content" style={{ padding: 'var(--boxalarm-spacing-lg)' }}>
-      {body}
-    </main>
-  );
+  if (embedded) return body;
+  return <main id="main-content">{body}</main>;
 }

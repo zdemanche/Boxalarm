@@ -1,0 +1,180 @@
+.shell {
+  display: grid;
+  grid-template-columns: var(--bx-sidebar-width, 232px) 1fr;
+  grid-template-rows: 56px 1fr;
+  grid-template-areas: 'sidebar topbar' 'sidebar main';
+  min-height: 100vh;
+}
+
+@media (max-width: 767px) {
+  .shell {
+    grid-template-columns: 1fr;
+    grid-template-areas: 'topbar' 'main';
+  }
+  .sidebar {
+    display: none;
+  }
+  /* MAJOR-1 (PR #318 review): the static sidebar above is hidden here with no replacement,
+     which left the web app with no route navigation and no Sign out below 768px (and at 200%
+     zoom on a 1280px window). TopBar's hamburger button (hidden at md and up, see .menuButton
+     below) opens NavDrawer as the reflow-safe replacement, per docs/design.md:286 ("Sidebar
+     collapses to a top drawer"). */
+  .menuButton {
+    display: inline-flex;
+  }
+}
+
+.sidebar {
+  grid-area: sidebar;
+  background: var(--bx-surface);
+  border-right: 1px solid var(--bx-border-decorative);
+  display: flex;
+  flex-direction: column;
+  padding: var(--bx-space-md) 0;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: var(--bx-space-sm);
+  padding: 0 var(--bx-space-md) var(--bx-space-md);
+  font-weight: 700;
+  font-size: 15px;
+  color: var(--bx-fg);
+  letter-spacing: -0.01em;
+}
+
+.navList {
+  list-style: none;
+  margin: 0;
+  padding: 0 var(--bx-space-sm);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+  overflow-y: auto;
+}
+
+.navLink {
+  display: flex;
+  align-items: center;
+  gap: var(--bx-space-sm);
+  min-height: var(--bx-target-office);
+  padding: 0 var(--bx-space-sm);
+  border-radius: var(--bx-radius-md);
+  color: var(--bx-fg-muted);
+  text-decoration: none;
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.navLink:hover {
+  background: var(--bx-surface-raised);
+  color: var(--bx-fg);
+}
+
+.navLinkActive {
+  background: var(--bx-surface-raised);
+  color: var(--bx-fg);
+  font-weight: 700;
+  box-shadow: inset 2px 0 0 var(--bx-fg);
+}
+
+.signOutWrap {
+  padding: var(--bx-space-sm);
+  border-top: 1px solid var(--bx-border-decorative);
+}
+
+/* NavDrawer — the below-md replacement for .sidebar (MAJOR-1). */
+.menuButton {
+  /* Shown only below md; see the max-width: 767px block above. */
+  display: none;
+}
+
+.drawerOverlay {
+  position: fixed;
+  inset: 0;
+  background: var(--bx-scrim);
+  z-index: 950;
+}
+
+.drawerContent {
+  position: fixed;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  width: min(280px, 84vw);
+  background: var(--bx-surface);
+  border-right: 1px solid var(--bx-border-decorative);
+  z-index: 951;
+  transform: translateX(-100%);
+  transition: transform var(--bx-duration-base) var(--bx-ease-standard);
+}
+
+.drawerContent[data-state='open'] {
+  transform: translateX(0);
+}
+
+.drawerContent:focus-visible {
+  outline: 3px solid var(--bx-focus);
+  outline-offset: -3px;
+}
+
+.drawerNav {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  padding: var(--bx-space-md) 0;
+  overflow-y: auto;
+}
+
+.drawerClose {
+  position: absolute;
+  top: var(--bx-space-sm);
+  right: var(--bx-space-sm);
+}
+
+.topbar {
+  grid-area: topbar;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--bx-space-md);
+  padding: 0 var(--bx-space-lg);
+  border-bottom: 1px solid var(--bx-border-decorative);
+  background: var(--bx-bg);
+}
+
+.topbarLeft {
+  display: flex;
+  align-items: center;
+  gap: var(--bx-space-sm);
+  font-size: 14px;
+  color: var(--bx-fg-muted);
+  min-width: 0;
+}
+
+.connectivity {
+  display: flex;
+  align-items: center;
+  gap: var(--bx-space-sm);
+  min-width: 0;
+}
+
+.topbarRight {
+  display: flex;
+  align-items: center;
+  gap: var(--bx-space-sm);
+  flex-shrink: 0;
+}
+
+.roleLabel {
+  font-size: 13px;
+  color: var(--bx-fg-muted);
+}
+
+.main {
+  grid-area: main;
+  padding: var(--bx-space-lg);
+  overflow-x: hidden;
+}

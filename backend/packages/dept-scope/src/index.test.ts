@@ -116,4 +116,12 @@ describe('findPkScopingViolations', () => {
       findPkScopingViolations('import { string } from "io-ts"; const pk = string;'),
     ).toHaveLength(1);
   });
+
+  it('allows the documented global (non-dept-scoped) SCHEMA_VERSION reference-data pk', () => {
+    expect(findPkScopingViolations("pk: 'SCHEMA_VERSION',")).toEqual([]);
+  });
+
+  it('still flags an undocumented bare literal pk that is not on the global allowlist', () => {
+    expect(findPkScopingViolations("pk: 'SOME_OTHER_GLOBAL',")).toHaveLength(1);
+  });
 });

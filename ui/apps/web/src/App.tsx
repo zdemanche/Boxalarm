@@ -27,6 +27,12 @@ const ApparatusDetailPage = lazy(() =>
     default: mod.ApparatusDetailPage,
   })),
 );
+const CompliancePage = lazy(() =>
+  import('./features/apparatus/CompliancePage').then((mod) => ({ default: mod.CompliancePage })),
+);
+const AlertsRosterPage = lazy(() =>
+  import('./features/alerts/AlertsRosterPage').then((mod) => ({ default: mod.AlertsRosterPage })),
+);
 const PersonnelListPage = lazy(() =>
   import('./features/personnel/PersonnelListPage').then((mod) => ({
     default: mod.PersonnelListPage,
@@ -35,6 +41,59 @@ const PersonnelListPage = lazy(() =>
 const MemberDetailPage = lazy(() =>
   import('./features/personnel/MemberDetailPage').then((mod) => ({
     default: mod.MemberDetailPage,
+  })),
+);
+const SettingsPage = lazy(() =>
+  import('./features/platform/SettingsPage').then((mod) => ({ default: mod.SettingsPage })),
+);
+const AuditLogPage = lazy(() =>
+  import('./features/platform/AuditLogPage').then((mod) => ({ default: mod.AuditLogPage })),
+);
+const CertificationsPage = lazy(() =>
+  import('./features/training/CertificationsPage').then((mod) => ({
+    default: mod.CertificationsPage,
+  })),
+);
+const TrainingEventsPage = lazy(() =>
+  import('./features/training/TrainingEventsPage').then((mod) => ({
+    default: mod.TrainingEventsPage,
+  })),
+);
+const EquipmentPage = lazy(() =>
+  import('./features/inventory/EquipmentPage').then((mod) => ({ default: mod.EquipmentPage })),
+);
+const EquipmentDetailPage = lazy(() =>
+  import('./features/inventory/EquipmentDetailPage').then((mod) => ({
+    default: mod.EquipmentDetailPage,
+  })),
+);
+const OccupancyListPage = lazy(() =>
+  import('./features/inspections/OccupancyListPage').then((mod) => ({
+    default: mod.OccupancyListPage,
+  })),
+);
+const OccupancyDetailPage = lazy(() =>
+  import('./features/inspections/OccupancyDetailPage').then((mod) => ({
+    default: mod.OccupancyDetailPage,
+  })),
+);
+const HydrantsPage = lazy(() =>
+  import('./features/inspections/HydrantsPage').then((mod) => ({ default: mod.HydrantsPage })),
+);
+const InspectionsPage = lazy(() =>
+  import('./features/inspections/InspectionsPage').then((mod) => ({
+    default: mod.InspectionsPage,
+  })),
+);
+const MapPage = lazy(() =>
+  import('./features/inspections/MapPage').then((mod) => ({ default: mod.MapPage })),
+);
+const SchedulePage = lazy(() =>
+  import('./features/schedule/SchedulePage').then((mod) => ({ default: mod.SchedulePage })),
+);
+const LosapSettingsPage = lazy(() =>
+  import('./features/losap/LosapSettingsPage').then((mod) => ({
+    default: mod.LosapSettingsPage,
   })),
 );
 
@@ -99,19 +158,35 @@ export function App() {
                   }
                 >
                   <Route index element={<LandingPage />} />
-                  <Route path="alerts/roster" element={placeholder('Live roster')} />
+                  <Route path="alerts/roster" element={roleGuarded(<AlertsRosterPage />)} />
                   <Route path="alerts/diagnostics" element={placeholder('Alert diagnostics')} />
                   <Route path="incidents" element={placeholder('Incidents')} />
                   <Route path="incidents/:id" element={placeholder('Incident detail')} />
                   <Route path="personnel" element={roleGuarded(<PersonnelListPage />)} />
                   <Route path="personnel/:id" element={roleGuarded(<MemberDetailPage />)} />
-                  <Route path="certifications" element={placeholder('Certifications')} />
+                  <Route path="certifications" element={roleGuarded(<CertificationsPage />)} />
+                  <Route path="training/events" element={roleGuarded(<TrainingEventsPage />)} />
                   <Route path="apparatus" element={roleGuarded(<ApparatusListPage />)} />
+                  <Route path="apparatus/compliance" element={roleGuarded(<CompliancePage />)} />
                   <Route path="apparatus/:id" element={roleGuarded(<ApparatusDetailPage />)} />
-                  <Route path="schedule" element={placeholder('Schedule')} />
+                  <Route path="inventory" element={roleGuarded(<EquipmentPage />)} />
+                  <Route path="inventory/:assetId" element={roleGuarded(<EquipmentDetailPage />)} />
+                  <Route
+                    path="inspections/occupancies"
+                    element={roleGuarded(<OccupancyListPage />)}
+                  />
+                  <Route
+                    path="inspections/occupancies/:id"
+                    element={roleGuarded(<OccupancyDetailPage />)}
+                  />
+                  <Route path="inspections/hydrants" element={roleGuarded(<HydrantsPage />)} />
+                  <Route path="inspections/map" element={roleGuarded(<MapPage />)} />
+                  <Route path="inspections" element={roleGuarded(<InspectionsPage />)} />
+                  <Route path="schedule" element={roleGuarded(<SchedulePage />)} />
                   <Route path="reporting" element={placeholder('Reporting')} />
-                  <Route path="settings" element={placeholder('Settings')} />
-                  <Route path="audit-log" element={placeholder('Audit log')} />
+                  <Route path="settings" element={roleGuarded(<SettingsPage />)} />
+                  <Route path="settings/losap" element={roleGuarded(<LosapSettingsPage />)} />
+                  <Route path="audit-log" element={roleGuarded(<AuditLogPage />)} />
                 </Route>
                 <Route path="*" element={<Navigate to="/" replace />} />
               </Routes>

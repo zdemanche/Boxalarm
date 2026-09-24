@@ -1,9 +1,17 @@
 import { mockAlertsRepository } from './mockAlertsRepository';
 
-test('triggerSelfTest resolves a delivered result with a dispatch id', async () => {
+test('triggerSelfTest resolves a testId and dispatch id', async () => {
   const result = await mockAlertsRepository.triggerSelfTest();
-  expect(result.status).toBe('DELIVERED');
+  expect(result.testId).toBeTruthy();
   expect(result.dispatchId).toBeTruthy();
+});
+
+test('getSelfTestRun resolves per-channel results, never a bare ok', async () => {
+  const { testId } = await mockAlertsRepository.triggerSelfTest();
+  const run = await mockAlertsRepository.getSelfTestRun(testId);
+  expect(run.overallResult).toBe('PASS');
+  expect(run.channelResults.PUSH?.ok).toBe(true);
+  expect(run.channelsTested).toEqual(['PUSH', 'SMS']);
 });
 
 test('getDispatch resolves the self-test dispatch by id', async () => {
@@ -20,14 +28,51 @@ test('getRoster resolves a roster containing only the calling member', async () 
   expect(roster[0]?.ackStatus).toBe('UNANSWERED');
 });
 
-test('submitResponse updates the roster entry and completes the tone ladder', async () => {
+test('submitResponse updates the roster entry, converts ETA minutes to epoch seconds, and completes the tone ladder', async () => {
   const { dispatchId } = await mockAlertsRepository.triggerSelfTest();
-  await mockAlertsRepository.submitResponse(dispatchId, 'RESPONDING', '2026-09-13T15:00:00Z');
+  const before = Math.floor(Date.now() / 1000);
+  await mockAlertsRepository.submitResponse(dispatchId, 'RESPONDING', 15);
 
   const roster = await mockAlertsRepository.getRoster(dispatchId);
   expect(roster[0]?.ackStatus).toBe('RESPONDING');
-  expect(roster[0]?.eta).toBe('2026-09-13T15:00:00Z');
+  expect(roster[0]?.eta).toBeGreaterThanOrEqual(before + 15 * 60 - 5);
 
   const dispatch = await mockAlertsRepository.getDispatch(dispatchId);
-  expect(dispatch.toneLadder.status).toBe('COMPLETED');
+  expect(dispatch.toneLadder?.status).toBe('COMPLETED');
+});
+
+test('submitManualDispatch creates a real, retrievable dispatch', async () => {
+  const { dispatchId } = await mockAlertsRepository.submitManualDispatch({
+    incidentType: 'Structure fire',
+    address: '12 Elm St',
+    crossStreets: 'Main & Elm',
+    unitsRequested: ['Engine 301'],
+    narrative: 'Smoke showing',
+    externalDispatchId: 'ext-1',
+  });
+
+  const dispatch = await mockAlertsRepository.getDispatch(dispatchId);
+  expect(dispatch.incidentType).toBe('Structure fire');
+  expect(dispatch.isSelfTest).toBe(false);
+});
+
+test('assignRidingSeat records an assignment the riding board then returns', async () => {
+  const { dispatchId } = await mockAlertsRepository.submitManualDispatch({
+    incidentType: 'MVA',
+    address: '1 Main St',
+    crossStreets: 'N/A',
+    unitsRequested: [],
+    narrative: '',
+    externalDispatchId: 'ext-2',
+  });
+
+  await mockAlertsRepository.assignRidingSeat(dispatchId, {
+    unitId: 'Engine 301',
+    positionCode: 'OFF',
+    memberId: 'MBR-0012',
+    expectedVersion: 0,
+  });
+
+  const board = await mockAlertsRepository.getRidingBoard(dispatchId);
+  expect(board.dispatchId).toBe(dispatchId);
 });

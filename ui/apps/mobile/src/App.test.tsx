@@ -68,9 +68,9 @@ test('a valid stored session lands on the AppTabs shell (Alerts · Checks · Sch
     storage: 'keychain',
   } as unknown as Awaited<ReturnType<typeof getInternetCredentials>>);
 
-  const { findByText } = await render(<App />);
+  const { findAllByText, findByText } = await render(<App />);
 
-  expect(await findByText('Alerts')).toBeTruthy();
+  expect((await findAllByText('Alerts')).length).toBeGreaterThan(0);
   expect(await findByText('Checks')).toBeTruthy();
   expect(await findByText('Schedule')).toBeTruthy();
   expect(await findByText('Me')).toBeTruthy();

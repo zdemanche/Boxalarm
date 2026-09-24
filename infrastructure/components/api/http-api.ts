@@ -174,6 +174,47 @@ export class HttpApi extends pulumi.ComponentResource {
   }
 
   /**
+   * Reusable wiring for a later INFRA child's own service Lambda: AWS_PROXY
+   * integration + invoke permission + an authorizedRoute target. One call
+   * replaces the integration/permission/route triple every route needs.
+   */
+  route(
+    name: string,
+    args: { routeKey: string; lambda: ServiceLambda },
+    opts?: pulumi.ComponentResourceOptions,
+  ): { route: aws.apigatewayv2.Route; integration: aws.apigatewayv2.Integration } {
+    const integration = new aws.apigatewayv2.Integration(
+      `${name}-integration`,
+      {
+        apiId: this.httpApi.id,
+        integrationType: "AWS_PROXY",
+        integrationUri: args.lambda.function.invokeArn,
+        payloadFormatVersion: "2.0",
+      },
+      { parent: this, ...opts },
+    );
+
+    new aws.lambda.Permission(
+      `${name}-invoke`,
+      {
+        action: "lambda:InvokeFunction",
+        function: args.lambda.function.name,
+        principal: "apigateway.amazonaws.com",
+        sourceArn: pulumi.interpolate`${this.httpApi.executionArn}/*/*`,
+      },
+      { parent: this, ...opts },
+    );
+
+    const route = this.authorizedRoute(
+      `${name}-route`,
+      { routeKey: args.routeKey, target: pulumi.interpolate`integrations/${integration.id}` },
+      opts,
+    );
+
+    return { route, integration };
+  }
+
+  /**
    * Mandatory route factory for later INFRA children (#6): every route must attach
    * this API's REQUEST authorizer. Open (NONE) routes are not permitted here.
    */

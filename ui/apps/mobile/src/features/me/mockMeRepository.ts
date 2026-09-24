@@ -1,18 +1,36 @@
-import type { MeRepository } from './types';
+import type { MeRepository, MemberProfile } from './types';
 
 // No backend access exists yet (boxalarm-backend/boxalarm-infrastructure) - this mock stands
 // in for the eventual platform-service client, matching MeRepository's interface exactly so
 // swapping it later touches this one file, not the screens.
+let profile: MemberProfile = {
+  memberId: 'MBR-0012',
+  firstName: 'Jamie',
+  lastName: 'Rios',
+  rank: 'Firefighter',
+  email: 'jrios@example.org',
+  phone: '(203) 555-0142',
+};
+
 export const mockMeRepository: MeRepository = {
   async getProfile() {
-    return {
-      memberId: 'MBR-0012',
-      firstName: 'Jamie',
-      lastName: 'Rios',
-      rank: 'Firefighter',
-      email: 'jrios@example.org',
-      phone: '(203) 555-0142',
-    };
+    return profile;
+  },
+
+  async updateProfile(update) {
+    profile = { ...profile, ...update };
+    return profile;
+  },
+
+  async getQualifications() {
+    return [
+      { qualCode: 'INTERIOR', grantedByCertId: 'CERT-0091', currentlyEligible: true },
+      { qualCode: 'DRIVER_OPERATOR', grantedByCertId: 'CERT-0104', currentlyEligible: false },
+    ];
+  },
+
+  async getLosapTotal() {
+    return { year: new Date().getFullYear(), totalPoints: 12 };
   },
 
   async getCertifications() {
