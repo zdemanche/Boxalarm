@@ -1,12 +1,20 @@
 export type ApparatusStatus = 'IN_SERVICE' | 'OUT_OF_SERVICE';
 
+// Matches the backend's ApparatusListItem.outOfService shape (apparatus-service repository.ts) —
+// the real API nests the OOS reason/start-time/elapsed-time under one object, never as flat
+// top-level fields on Apparatus.
+export interface OutOfServiceSummary {
+  reason: string;
+  startAt: number;
+  elapsedSeconds: number;
+}
+
 export interface Apparatus {
   apparatusId: string;
   unitId: string;
   type: string;
   status: ApparatusStatus;
-  oosReason?: string | null;
-  oosSince?: number | null;
+  outOfService?: OutOfServiceSummary;
 }
 
 export interface CreateApparatusInput {

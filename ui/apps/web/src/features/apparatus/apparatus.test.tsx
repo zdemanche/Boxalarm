@@ -130,3 +130,25 @@ test('detail shows status badge shell', async () => {
   await screen.findByRole('heading', { name: 'L1' });
   expect(screen.getByRole('status').textContent).toMatch(/Out of service/i);
 });
+
+test('detail renders the OOS reason and elapsed time from the real backend nested outOfService shape', async () => {
+  server.use(
+    http.get('/api/v1/apparatus/a1', () =>
+      HttpResponse.json({
+        apparatusId: 'a1',
+        unitId: 'L1',
+        type: 'Ladder',
+        status: 'OUT_OF_SERVICE',
+        // Real API shape (apparatus-service repository.ts ApparatusListItem.outOfService) —
+        // never the flat oosReason/oosSince fields.
+        outOfService: { reason: 'Aerial hydraulic leak', startAt: 0, elapsedSeconds: 2 * 86400 },
+        openDefects: [],
+        failedTests: [],
+      }),
+    ),
+  );
+
+  renderApp(['CHIEF'], '/apparatus/a1');
+  await screen.findByRole('heading', { name: 'L1' });
+  expect(await screen.findByText(/Aerial hydraulic leak since 2 days ago/i)).toBeTruthy();
+});

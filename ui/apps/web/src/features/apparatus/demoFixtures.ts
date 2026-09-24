@@ -34,8 +34,13 @@ let apparatus: Apparatus[] = [
     unitId: 'Truck 304',
     type: 'Ladder',
     status: 'OUT_OF_SERVICE',
-    oosReason: 'Aerial hydraulic leak',
-    oosSince: Math.floor(Date.now() / 1000) - 2 * 86400,
+    outOfService: {
+      reason: 'Aerial hydraulic leak',
+      startAt: Math.floor(Date.now() / 1000) - 2 * 86400,
+      // Recomputed live from startAt on every read below (withLiveElapsed), same as the real
+      // API — this seed value is just the value at module load.
+      elapsedSeconds: 2 * 86400,
+    },
   },
   { apparatusId: 'a-4', unitId: 'Engine 305', type: 'Engine', status: 'IN_SERVICE' },
   { apparatusId: 'a-5', unitId: 'Squad 309', type: 'Squad', status: 'IN_SERVICE' },
@@ -63,8 +68,21 @@ function findByApparatusId(apparatusId: string): Apparatus | undefined {
   return apparatus.find((a) => a.apparatusId === apparatusId);
 }
 
+// Mirrors the real backend (repository.ts): elapsedSeconds is derived from startAt at read
+// time, not stored, so it stays correct across a long-lived demo session.
+function withLiveElapsed(unit: Apparatus): Apparatus {
+  if (!unit.outOfService) return unit;
+  return {
+    ...unit,
+    outOfService: {
+      ...unit.outOfService,
+      elapsedSeconds: Math.max(0, Math.floor(Date.now() / 1000) - unit.outOfService.startAt),
+    },
+  };
+}
+
 function toDetail(unit: Apparatus): ApparatusDetail {
-  return { ...unit, openDefects: [], failedTests: [] };
+  return { ...withLiveElapsed(unit), openDefects: [], failedTests: [] };
 }
 
 export async function apparatusDemoRequest(
@@ -75,7 +93,9 @@ export async function apparatusDemoRequest(
   const parts = path.split('/');
   if (parts[0] !== 'apparatus') return undefined;
 
-  if (path === 'apparatus' && method === 'GET') return json({ apparatus });
+  if (path === 'apparatus' && method === 'GET') {
+    return json({ apparatus: apparatus.map(withLiveElapsed) });
+  }
 
   if (path === 'apparatus' && method === 'POST') {
     const input = body as unknown as CreateApparatusInput;
@@ -123,8 +143,14 @@ export async function apparatusDemoRequest(
   if (parts[2] === 'service-status' && method === 'PUT') {
     const status = body.status as Apparatus['status'];
     unit.status = status;
-    unit.oosReason = status === 'OUT_OF_SERVICE' ? (body.reason as string) : null;
-    unit.oosSince = status === 'OUT_OF_SERVICE' ? Math.floor(Date.now() / 1000) : null;
+    unit.outOfService =
+      status === 'OUT_OF_SERVICE'
+        ? {
+            reason: body.reason as string,
+            startAt: Math.floor(Date.now() / 1000),
+            elapsedSeconds: 0,
+          }
+        : undefined;
     return new Response(null, { status: 204 });
   }
 
