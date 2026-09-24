@@ -1,7 +1,7 @@
 # Boxalarm
 
 Fire department operations platform. Replacement for Chief360.
-Tenant zero: **Nichols Fire Department, Trumbull CT 06615.**
+Tenant zero: **a volunteer fire department, our first customer.**
 
 > A *box alarm* is the dispatch assignment for a structure fire — the call that puts a full complement on the road.
 
