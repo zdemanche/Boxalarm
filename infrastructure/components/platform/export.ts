@@ -186,7 +186,7 @@ export class Export extends pulumi.ComponentResource {
       `${name}-worker-fn`,
       {
         name: `boxalarm-${env}-platform-export-worker`,
-        runtime: aws.lambda.Runtime.NodeJS20dX,
+        runtime: aws.lambda.Runtime.NodeJS22dX,
         handler: LAMBDA_HANDLER,
         role: this.workerRole.arn,
         code: lambdaCode("platform-service", "export-worker"),

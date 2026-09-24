@@ -25,13 +25,14 @@ export const ADMIN_ONLY_ACTIONS = [
   "UpdateConfig",
   "ExportData",
   "RunRecordsDisposal",
+  "ViewRetentionConfig",
   "UpdateRetentionConfig",
   "UpdateMember",
   "RevokeSession",
 ] as const;
 export const ADMIN_ONLY_GROUPS = ["CHIEF", "ADMIN"] as const;
 
-export const VIEW_ACTIONS = ["ViewConfig", "ViewRetentionConfig"] as const;
+export const VIEW_ACTIONS = ["ViewConfig"] as const;
 
 // Department-scoping is NOT expressed here as a `when` clause comparing
 // principal/resource attributes. Two things rule that out for every action above:
@@ -86,20 +87,30 @@ export const CEDAR_SCHEMA = JSON.stringify({
 // individual `in` membership tests. The original `principal in [group1, group2]` form
 // here would have failed to parse at CreatePolicy time, not merely evaluated to DENY.
 
+// Verified Permissions Cognito identity sources scope group entity IDs to the pool
+// they came from — "<userPoolId>|<groupName>", never the bare group name — since
+// Cognito groups are only unique within their own user pool. A policy referencing
+// Boxalarm::UserGroup::"CHIEF" literally can never match and every action gated by
+// it silently falls through to the implicit DENY. See AWS docs:
+// https://docs.aws.amazon.com/verifiedpermissions/latest/userguide/identity-sources-cognito.md
+function groupEntityId(userPoolId: string, groupName: string): string {
+  return `${userPoolId}|${groupName}`;
+}
+
 /** AC1: admin-only actions (config writes, export, disposal, member/session admin) — CHIEF/ADMIN only. */
-export function adminActionsPolicy(): string {
-  const groupCheck = ADMIN_ONLY_GROUPS.map((g) => `principal in Boxalarm::UserGroup::"${g}"`).join(
-    " || ",
-  );
+export function adminActionsPolicy(userPoolId: string): string {
+  const groupCheck = ADMIN_ONLY_GROUPS.map(
+    (g) => `principal in Boxalarm::UserGroup::"${groupEntityId(userPoolId, g)}"`,
+  ).join(" || ");
   const actions = ADMIN_ONLY_ACTIONS.map((a) => `Boxalarm::Action::"${a}"`).join(", ");
   return `permit (\n  principal,\n  action in [${actions}],\n  resource\n) when {\n  ${groupCheck}\n};`;
 }
 
 /** Read access for every role (N5.3). */
-export function viewConfigPolicy(): string {
-  const groupCheck = ROLE_GROUPS.map((g) => `principal in Boxalarm::UserGroup::"${g}"`).join(
-    " || ",
-  );
+export function viewConfigPolicy(userPoolId: string): string {
+  const groupCheck = ROLE_GROUPS.map(
+    (g) => `principal in Boxalarm::UserGroup::"${groupEntityId(userPoolId, g)}"`,
+  ).join(" || ");
   const actions = VIEW_ACTIONS.map((a) => `Boxalarm::Action::"${a}"`).join(", ");
   return `permit (\n  principal,\n  action in [${actions}],\n  resource\n) when {\n  ${groupCheck}\n};`;
 }

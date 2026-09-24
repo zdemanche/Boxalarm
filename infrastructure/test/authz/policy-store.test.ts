@@ -45,14 +45,17 @@ describe("PolicyStore", () => {
     const store = await build();
     const statement = await resolve(store.adminActionsPolicy.definition);
     const text = statement?.static?.statement ?? "";
-    expect(text).toContain('UserGroup::"CHIEF"');
-    expect(text).toContain('UserGroup::"ADMIN"');
-    expect(text).not.toContain('UserGroup::"MEMBER"');
+    // Cognito identity source group entity IDs are "<userPoolId>|<groupName>" — a bare
+    // group name never matches, so the pool-id prefix must be present.
+    expect(text).toContain('UserGroup::"pool-1|CHIEF"');
+    expect(text).toContain('UserGroup::"pool-1|ADMIN"');
+    expect(text).not.toContain('UserGroup::"pool-1|MEMBER"');
     expect(text).toContain('Action::"ExportData"');
     // Matches the actionId the backend actually sends (disposalHandler.ts), not the
     // stale "DisposeRecords" name that never matched any real request.
     expect(text).toContain('Action::"RunRecordsDisposal"');
     expect(text).toContain('Action::"UpdateConfig"');
+    expect(text).toContain('Action::"ViewRetentionConfig"');
     // No principal/resource attribute comparison: the backend's access-token call maps
     // claims to context (not principal attributes) and passes no resource entities, so
     // a `when` clause referencing either would always error into an implicit DENY. See
@@ -60,8 +63,14 @@ describe("PolicyStore", () => {
     expect(text).not.toContain("deptId");
     // Group membership is a single-entity `in` check per group, not a scope-clause
     // list (`principal in [g1, g2]` is not valid Cedar grammar for principal/resource).
-    expect(text).toContain('principal in Boxalarm::UserGroup::"CHIEF"');
-    expect(text).toContain('principal in Boxalarm::UserGroup::"ADMIN"');
+    expect(text).toContain('principal in Boxalarm::UserGroup::"pool-1|CHIEF"');
+    expect(text).toContain('principal in Boxalarm::UserGroup::"pool-1|ADMIN"');
+  });
+
+  it("does not grant ViewRetentionConfig to every role (MINOR #6 regression)", async () => {
+    const store = await build();
+    const view = await resolve(store.viewConfigPolicy.definition);
+    expect(view?.static?.statement ?? "").not.toContain('Action::"ViewRetentionConfig"');
   });
 
   it("evaluates to ALLOW for a CHIEF request built the way decide.ts actually builds it", async () => {
@@ -74,9 +83,9 @@ describe("PolicyStore", () => {
       {
         uid: { type: "Boxalarm::User", id: "user-1" },
         attrs: {},
-        parents: [{ type: "Boxalarm::UserGroup", id: "CHIEF" }],
+        parents: [{ type: "Boxalarm::UserGroup", id: "pool-1|CHIEF" }],
       },
-      { uid: { type: "Boxalarm::UserGroup", id: "CHIEF" }, attrs: {}, parents: [] },
+      { uid: { type: "Boxalarm::UserGroup", id: "pool-1|CHIEF" }, attrs: {}, parents: [] },
       { uid: { type: "Boxalarm::Department", id: "dept-1" }, attrs: {}, parents: [] },
     ];
 
@@ -88,7 +97,7 @@ describe("PolicyStore", () => {
       resource: { type: "Boxalarm::Department", id: "dept-1" },
       context: {},
       schema,
-      policies: { staticPolicies: adminActionsPolicy() },
+      policies: { staticPolicies: adminActionsPolicy("pool-1") },
       entities,
     });
     expect(disposal.type).toBe("success");
@@ -102,12 +111,26 @@ describe("PolicyStore", () => {
       resource: { type: "Boxalarm::Department", id: "dept-1" },
       context: {},
       schema,
-      policies: { staticPolicies: viewConfigPolicy() },
+      policies: { staticPolicies: adminActionsPolicy("pool-1") },
       entities,
     });
     expect(viewRetention.type).toBe("success");
     if (viewRetention.type === "success") {
       expect(viewRetention.response.decision).toBe("allow");
+    }
+
+    const viewConfig = isAuthorized({
+      principal: { type: "Boxalarm::User", id: "user-1" },
+      action: { type: "Boxalarm::Action", id: "ViewConfig" },
+      resource: { type: "Boxalarm::Department", id: "dept-1" },
+      context: {},
+      schema,
+      policies: { staticPolicies: viewConfigPolicy("pool-1") },
+      entities,
+    });
+    expect(viewConfig.type).toBe("success");
+    if (viewConfig.type === "success") {
+      expect(viewConfig.response.decision).toBe("allow");
     }
   });
 
@@ -121,9 +144,9 @@ describe("PolicyStore", () => {
       {
         uid: { type: "Boxalarm::User", id: "user-2" },
         attrs: {},
-        parents: [{ type: "Boxalarm::UserGroup", id: "MEMBER" }],
+        parents: [{ type: "Boxalarm::UserGroup", id: "pool-1|MEMBER" }],
       },
-      { uid: { type: "Boxalarm::UserGroup", id: "MEMBER" }, attrs: {}, parents: [] },
+      { uid: { type: "Boxalarm::UserGroup", id: "pool-1|MEMBER" }, attrs: {}, parents: [] },
       { uid: { type: "Boxalarm::Department", id: "dept-1" }, attrs: {}, parents: [] },
     ];
     const result = isAuthorized({
@@ -132,7 +155,7 @@ describe("PolicyStore", () => {
       resource: { type: "Boxalarm::Department", id: "dept-1" },
       context: {},
       schema,
-      policies: { staticPolicies: adminActionsPolicy() },
+      policies: { staticPolicies: adminActionsPolicy("pool-1") },
       entities,
     });
     expect(result.type).toBe("success");
