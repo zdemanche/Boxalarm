@@ -48,11 +48,11 @@
     "pino": "10.3.1"
   },
   "devDependencies": {
-    "@eslint/js": "9.39.5",
+    "@eslint/js": "10.0.1",
     "@testcontainers/localstack": "12.1.0",
     "@types/aws-lambda": "8.10.163",
     "@types/ngeohash": "0.6.8",
-    "@types/node": "20.19.43",
+    "@types/node": "22.20.4",
     "@vitest/coverage-v8": "3.2.7",
     "aws-sdk-client-mock": "^4.1.0",
     "eslint": "10.11.0",
