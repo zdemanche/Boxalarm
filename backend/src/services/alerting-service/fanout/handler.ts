@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { PublishCommand, type SNSClient } from '@aws-sdk/client-sns';
+import type { SchedulerClient } from '@aws-sdk/client-scheduler';
 import {
   GetCommand,
   TransactWriteCommand,
@@ -13,6 +14,8 @@ import type { DynamoDBBatchResponse, DynamoDBRecord, DynamoDBStreamEvent } from 
 import { createDynamoClient, readAlertingConfig } from '../eligibility/dynamoClient.js';
 import { getMemberEligibility, queryEligibleMembers } from '../eligibility/selector.js';
 import { resolvePushTarget, resolveSmsTarget } from '../eligibility/resolvePushTarget.js';
+import { getSchedulerClient } from '../escalation/scheduleEscalation.js';
+import { scheduleRealtimeFanOutEscalation } from './fanOut.js';
 import {
   SELF_TEST_METRIC_NAMESPACE,
   upsertSelfTestRun,
@@ -299,6 +302,7 @@ async function sendOne(
 async function fanOutOneDispatch(
   ddb: DynamoDBDocumentClient,
   sns: SNSClient,
+  scheduler: SchedulerClient,
   tableName: string,
   topicArn: string,
   dispatch: DispatchAlertRecord,
@@ -353,8 +357,28 @@ async function fanOutOneDispatch(
     const failures = results.filter(
       (result): result is PromiseRejectedResult => result.status === 'rejected',
     );
+
+    let schedulingError: Error | undefined;
+    try {
+      await scheduleRealtimeFanOutEscalation(
+        ddb,
+        scheduler,
+        tableName,
+        dispatch.deptId,
+        dispatch.dispatchId,
+        eligibleMembers.map((member) => ({ memberId: member.memberId, quals: member.quals })),
+      );
+    } catch (error) {
+      schedulingError = error instanceof Error ? error : new Error(String(error));
+      logError('fanout.escalation_schedule_failed', error, dispatch.dispatchId);
+      emitOutcomeMetric(METRIC_NAMESPACE, 'EscalationScheduleFailed');
+    }
+
     if (failures.length > 0) {
       throw failures[0]!.reason;
+    }
+    if (schedulingError) {
+      throw schedulingError;
     }
   } finally {
     emitEmf(METRIC_NAMESPACE, 'FanOutLatencyMs', Date.now() - fanOutStartedMs, [[]]);
@@ -465,6 +489,7 @@ export const handler = async (event: DynamoDBStreamEvent): Promise<DynamoDBBatch
   const { topicArn } = readFanOutTopicConfig(process.env);
   const ddb = createDynamoClient(process.env);
   const sns = createSnsClient(process.env);
+  const scheduler = getSchedulerClient();
 
   for (const record of event.Records) {
     let dispatch: DispatchAlertRecord | undefined;
@@ -481,7 +506,7 @@ export const handler = async (event: DynamoDBStreamEvent): Promise<DynamoDBBatch
       if (dispatch.targetMemberId) {
         await fanOutSelfTestDispatch(ddb, sns, tableName, topicArn, dispatch);
       } else {
-        await fanOutOneDispatch(ddb, sns, tableName, topicArn, dispatch);
+        await fanOutOneDispatch(ddb, sns, scheduler, tableName, topicArn, dispatch);
       }
     } catch (error) {
       logError('fanout.dispatch_failed', error, dispatch.dispatchId);

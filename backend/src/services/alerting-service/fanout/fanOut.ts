@@ -1,4 +1,8 @@
-import { TransactWriteCommand, type DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
+import {
+  PutCommand,
+  TransactWriteCommand,
+  type DynamoDBDocumentClient,
+} from '@aws-sdk/lib-dynamodb';
 import type { SchedulerClient } from '@aws-sdk/client-scheduler';
 import { buildDeptScopedPk, type VerifiedDeptId } from '@boxalarm/dept-scope';
 import { emitOutcomeMetric } from '@boxalarm/metrics';
@@ -143,6 +147,52 @@ async function fanOutOneMember(
     );
   } catch (error) {
     logError('alerting.fanout.schedule_failed', error, { deptId, dispatchId, memberId });
+  }
+}
+
+async function ensureRosterEntry(
+  ddb: DynamoDBDocumentClient,
+  tableName: string,
+  deptId: VerifiedDeptId,
+  dispatchId: string,
+  memberId: string,
+  quals: readonly string[],
+): Promise<void> {
+  try {
+    await ddb.send(
+      new PutCommand({
+        TableName: tableName,
+        Item: buildRosterItem(deptId, dispatchId, memberId, quals),
+        ConditionExpression: 'attribute_not_exists(pk)',
+      }),
+    );
+  } catch (error) {
+    if (error instanceof Error && error.name === 'ConditionalCheckFailedException') {
+      return;
+    }
+    throw error;
+  }
+}
+
+export async function scheduleRealtimeFanOutEscalation(
+  ddb: DynamoDBDocumentClient,
+  scheduler: SchedulerClient,
+  tableName: string,
+  deptId: VerifiedDeptId,
+  dispatchId: string,
+  members: ReadonlyArray<{ readonly memberId: string; readonly quals: readonly string[] }>,
+): Promise<void> {
+  for (const member of members) {
+    await ensureRosterEntry(ddb, tableName, deptId, dispatchId, member.memberId, member.quals);
+    await createEscalationSchedule(
+      scheduler,
+      { deptId, dispatchId, memberId: member.memberId, toneSequence: TONE_SEQUENCE_ONE },
+      ddb,
+      tableName,
+    );
+  }
+  if (members.length > 0) {
+    await scheduleDepartmentToneLadder(scheduler, ddb, tableName, deptId, dispatchId);
   }
 }
 

@@ -83,18 +83,25 @@ async function createToneSchedule(
 ): Promise<void> {
   const fireAt = Math.floor(Date.now() / 1000) + delaySeconds;
   const scheduleName = `tone-${deptId}-${dispatchId}-${toneSequence}`.slice(0, 64);
-  await scheduler.send(
-    new CreateScheduleCommand({
-      Name: scheduleName,
-      ScheduleExpression: `at(${new Date(fireAt * 1000).toISOString().slice(0, 19)})`,
-      FlexibleTimeWindow: { Mode: FlexibleTimeWindowMode.OFF },
-      Target: {
-        Arn: config.toneEvaluatorHandlerArn,
-        RoleArn: config.schedulerRoleArn,
-        Input: JSON.stringify({ deptId, dispatchId, toneSequence }),
-      },
-    }),
-  );
+  try {
+    await scheduler.send(
+      new CreateScheduleCommand({
+        Name: scheduleName,
+        ScheduleExpression: `at(${new Date(fireAt * 1000).toISOString().slice(0, 19)})`,
+        FlexibleTimeWindow: { Mode: FlexibleTimeWindowMode.OFF },
+        Target: {
+          Arn: config.toneEvaluatorHandlerArn,
+          RoleArn: config.schedulerRoleArn,
+          Input: JSON.stringify({ deptId, dispatchId, toneSequence }),
+        },
+      }),
+    );
+  } catch (error) {
+    if (error instanceof Error && error.name === 'ConflictException') {
+      return;
+    }
+    throw error;
+  }
 }
 
 export async function scheduleDepartmentToneLadder(
