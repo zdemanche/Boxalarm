@@ -16,7 +16,9 @@ import {
   type AuthorizeResult,
   type RefreshResult,
 } from 'react-native-app-auth';
+import Config from 'react-native-config';
 import * as Keychain from 'react-native-keychain';
+import { revokePushToken } from '../features/alerts/pushTokens';
 import { buildOidcConfig } from './config';
 
 const KEYCHAIN_SERVER = 'boxalarm-auth';
@@ -40,22 +42,31 @@ interface StoredTokens {
   idToken: string;
 }
 
-function decodeRoles(idToken: string): Role[] {
+function decodeIdTokenClaims(idToken: string): Record<string, unknown> {
   try {
     const payload = idToken.split('.')[1];
-    if (!payload) return ['MEMBER'];
+    if (!payload) return {};
     const normalized = payload.replace(/-/g, '+').replace(/_/g, '/');
-    const claims = JSON.parse(atob(normalized)) as Record<string, unknown>;
-    const groups = claims['cognito:groups'];
-    if (!Array.isArray(groups)) return ['MEMBER'];
-    const roles = groups
-      .filter((g): g is string => typeof g === 'string')
-      .map((g) => g.toUpperCase())
-      .filter((role): role is Role => KNOWN_ROLES.includes(role as Role));
-    return roles.length > 0 ? roles : ['MEMBER'];
+    return JSON.parse(atob(normalized)) as Record<string, unknown>;
   } catch {
-    return ['MEMBER'];
+    return {};
   }
+}
+
+function decodeRoles(idToken: string): Role[] {
+  const claims = decodeIdTokenClaims(idToken);
+  const groups = claims['cognito:groups'];
+  if (!Array.isArray(groups)) return ['MEMBER'];
+  const roles = groups
+    .filter((g): g is string => typeof g === 'string')
+    .map((g) => g.toUpperCase())
+    .filter((role): role is Role => KNOWN_ROLES.includes(role as Role));
+  return roles.length > 0 ? roles : ['MEMBER'];
+}
+
+function decodeMemberId(idToken: string): string | null {
+  const sub = decodeIdTokenClaims(idToken).sub;
+  return typeof sub === 'string' && sub.length > 0 ? sub : null;
 }
 
 function msUntilExpiry(tokens: StoredTokens): number {
@@ -114,6 +125,7 @@ async function writeStoredTokens(deps: AuthDeps, tokens: StoredTokens): Promise<
 
 interface AuthState {
   roles: Role[];
+  memberId: string | null;
   isAuthenticated: boolean;
   isLoading: boolean;
 }
@@ -142,6 +154,7 @@ export function AuthProvider({
   const config = useMemo(() => buildOidcConfig(), []);
   const [state, setState] = useState<AuthState>({
     roles: [],
+    memberId: null,
     isAuthenticated: false,
     isLoading: true,
   });
@@ -152,6 +165,7 @@ export function AuthProvider({
   const applyTokens = useCallback((tokens: StoredTokens | null) => {
     setState({
       roles: tokens ? decodeRoles(tokens.idToken) : [],
+      memberId: tokens ? decodeMemberId(tokens.idToken) : null,
       isAuthenticated: tokens !== null,
       isLoading: false,
     });
@@ -242,6 +256,19 @@ export function AuthProvider({
         applyTokens(tokens);
       },
       signOut: async () => {
+        // E1-S14-UI AC5: the DELETE must be sent before local credentials are cleared, so a
+        // signed-out device stops receiving pages. Best-effort: sign-out must never be blocked
+        // by a network failure.
+        const stored = await readStoredTokens(depsRef.current).catch(() => null);
+        const apiBaseUrl = Config.API_BASE_URL;
+        const memberId = stored ? decodeMemberId(stored.idToken) : null;
+        if (stored && memberId && apiBaseUrl) {
+          await revokePushToken(
+            memberId,
+            { getAccessToken: async () => stored.accessToken, renewSilently: async () => null },
+            apiBaseUrl,
+          ).catch(() => undefined);
+        }
         await depsRef.current.resetInternetCredentials({ server: KEYCHAIN_SERVER });
         applyTokens(null);
       },

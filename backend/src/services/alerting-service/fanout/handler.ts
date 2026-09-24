@@ -93,7 +93,7 @@ function logInfo(event: string, correlationId: string, extra: Record<string, unk
   );
 }
 
-async function runWithConcurrencyLimit<T>(
+export async function runWithConcurrencyLimit<T>(
   tasks: readonly T[],
   limit: number,
   fn: (task: T) => Promise<void>,

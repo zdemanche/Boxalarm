@@ -3,8 +3,14 @@ import { Component, type ReactNode } from 'react';
 import { StatusBar, Text, View } from 'react-native';
 import { initialWindowMetrics, SafeAreaProvider } from 'react-native-safe-area-context';
 import { AuthProvider } from './auth/AuthContext';
+import { usePushTokenRegistration } from './features/alerts/usePushTokenRegistration';
 import { RootNavigator } from './navigation/RootNavigator';
 import { ConnectivityProvider } from './sync/ConnectivityContext';
+
+function PushTokenSync() {
+  usePushTokenRegistration();
+  return null;
+}
 
 class ConfigErrorBoundary extends Component<{ children: ReactNode }, { failed: boolean }> {
   state = { failed: false };
@@ -39,6 +45,7 @@ export function App() {
         <ConnectivityProvider>
           <AuthProvider>
             <StatusBar barStyle="default" />
+            <PushTokenSync />
             <RootNavigator />
           </AuthProvider>
         </ConnectivityProvider>

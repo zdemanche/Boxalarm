@@ -1,8 +1,13 @@
 import { randomUUID } from 'node:crypto';
 import type { APIGatewayProxyResultV2 } from 'aws-lambda';
 import { TransactionCanceledException } from '@aws-sdk/client-dynamodb';
-import { TransactWriteCommand } from '@aws-sdk/lib-dynamodb';
 import {
+  GetCommand,
+  TransactWriteCommand,
+  type DynamoDBDocumentClient,
+} from '@aws-sdk/lib-dynamodb';
+import {
+  notFoundProblem,
   withAuthorization,
   serviceUnavailableProblem,
   type CedarPrincipalContext,
@@ -41,6 +46,26 @@ export function buildAttendanceKeys(
     gsi1pk: `MEMBER#${memberId}`,
     gsi1sk: `ATTENDANCE_RECORD#${occurredAt}`,
   };
+}
+
+/**
+ * Confirms memberId belongs to the caller's own department before it is used to read or
+ * write attendance data. Without this check, a client-supplied memberId can be used to
+ * reach across department boundaries (see PR #320 review, CRITICAL finding #1).
+ */
+export async function memberExists(
+  client: DynamoDBDocumentClient,
+  tableName: string,
+  deptId: VerifiedDeptId,
+  memberId: string,
+): Promise<boolean> {
+  const result = await client.send(
+    new GetCommand({
+      TableName: tableName,
+      Key: { pk: buildDeptScopedPk(deptId, 'MEMBER', memberId), sk: 'METADATA' },
+    }),
+  );
+  return result.Item !== undefined;
 }
 
 function isActivityType(value: unknown): value is ActivityType {
@@ -105,9 +130,10 @@ function logAttendanceFailure(reason: string, error: unknown, traceId: string): 
   );
 }
 
-async function recordAttendance(
+async function recordAttendanceFor(
   event: GuardEvent,
-  principal: CedarPrincipalContext,
+  deptId: VerifiedDeptId,
+  memberId: string,
 ): Promise<APIGatewayProxyResultV2> {
   const traceId = extractTraceId(event);
   const input = validateAttendanceBody(event.body);
@@ -119,14 +145,19 @@ async function recordAttendance(
     );
   }
 
-  const deptId = toVerifiedDeptId(principal);
-  const memberId = principal.sub;
   const keys = buildAttendanceKeys(deptId, memberId, input.occurredAt);
   const year = new Date(input.occurredAt * 1000).getUTCFullYear();
 
   try {
     const { tableName } = readAttendanceTableConfig(process.env);
     const client = createDynamoClient(process.env);
+
+    const exists = await memberExists(client, tableName, deptId, memberId);
+    if (!exists) {
+      emitAttendanceMetric('Failed', 'MemberNotFound');
+      return notFoundProblem(traceId, 'Member was not found');
+    }
+
     const rules = await getLosapPointRules(client, tableName, deptId);
     if (!rules) {
       logInfo('losap.accrual.skipped', traceId, { reason: 'NoRuleConfig', deptId, memberId });
@@ -139,6 +170,7 @@ async function recordAttendance(
     const item = {
       ...keys,
       entityType: 'ATTENDANCE_RECORD',
+      deptId,
       activityType: input.activityType,
       refId: input.refId,
       occurredAt: input.occurredAt,
@@ -212,9 +244,34 @@ async function recordAttendance(
   }
 }
 
-export const handler = withAuthorization(recordAttendance, {
+async function recordOwnAttendance(
+  event: GuardEvent,
+  principal: CedarPrincipalContext,
+): Promise<APIGatewayProxyResultV2> {
+  return recordAttendanceFor(event, toVerifiedDeptId(principal), principal.sub);
+}
+
+async function recordAttendanceOnBehalf(
+  event: GuardEvent,
+  principal: CedarPrincipalContext,
+): Promise<APIGatewayProxyResultV2> {
+  const memberId = event.pathParameters?.memberId;
+  if (!memberId) {
+    return notFoundProblem(extractTraceId(event), 'memberId path parameter is required');
+  }
+  return recordAttendanceFor(event, toVerifiedDeptId(principal), memberId);
+}
+
+export const handler = withAuthorization(recordOwnAttendance, {
   actionType: 'Boxalarm::Action',
   actionId: 'RecordAttendance',
   resourceType: 'Boxalarm::Member',
   resourceId: (event) => event.requestContext.authorizer?.lambda?.sub ?? '',
+});
+
+export const onBehalfHandler = withAuthorization(recordAttendanceOnBehalf, {
+  actionType: 'Boxalarm::Action',
+  actionId: 'RecordAttendanceOnBehalf',
+  resourceType: 'Boxalarm::Member',
+  resourceId: (event) => event.pathParameters?.memberId ?? '',
 });

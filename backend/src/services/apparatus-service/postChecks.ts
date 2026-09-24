@@ -145,7 +145,13 @@ async function postChecks(
                 ConditionExpression: 'attribute_not_exists(pk)',
               },
             },
-            { Put: { TableName: deps.tableName, Item: auditEntry } },
+            {
+              Put: {
+                TableName: deps.tableName,
+                Item: auditEntry,
+                ConditionExpression: 'attribute_not_exists(pk) AND attribute_not_exists(sk)',
+              },
+            },
           ],
         }),
       );

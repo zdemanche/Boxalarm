@@ -1,10 +1,12 @@
-import { render } from '@testing-library/react-native';
+import { act, render } from '@testing-library/react-native';
 import { mockAlertsRepository } from '../../features/alerts/mockAlertsRepository';
 import { RosterScreen } from './RosterScreen';
 
 const mockRouteParams: { dispatchId: string } = { dispatchId: '' };
+const mockIsFocused = { current: true };
 jest.mock('@react-navigation/native', () => ({
   useRoute: () => ({ params: mockRouteParams }),
+  useIsFocused: () => mockIsFocused.current,
 }));
 
 const mockConnectivity: { isOnline: boolean } = { isOnline: true };
@@ -12,10 +14,26 @@ jest.mock('../../sync/ConnectivityContext', () => ({
   useConnectivity: () => mockConnectivity,
 }));
 
+// A controllable repository that delegates to mockAlertsRepository by default, so existing
+// behavior is unchanged, but lets a test override getRoster to reject - needed to exercise the
+// poll-failure/stale-indicator path that a plain setInterval-with-no-.catch() can't surface.
+const mockRepository = {
+  getRoster: jest.fn((...args: Parameters<typeof mockAlertsRepository.getRoster>) =>
+    mockAlertsRepository.getRoster(...args),
+  ),
+};
+
+jest.mock('../../features/alerts/apiAlertsRepository', () => ({
+  useAlertsRepository: () => mockRepository,
+}));
+
 beforeEach(async () => {
   const { dispatchId } = await mockAlertsRepository.triggerSelfTest();
   mockRouteParams.dispatchId = dispatchId;
   mockConnectivity.isOnline = true;
+  mockIsFocused.current = true;
+  mockRepository.getRoster.mockReset();
+  mockRepository.getRoster.mockImplementation((...args) => mockAlertsRepository.getRoster(...args));
 });
 
 test('lists each roster entry with name, response status, and quals', async () => {
@@ -27,14 +45,17 @@ test('lists each roster entry with name, response status, and quals', async () =
 });
 
 test('reflects a recorded response after submitResponse resolves', async () => {
-  await mockAlertsRepository.submitResponse(
-    mockRouteParams.dispatchId,
-    'RESPONDING',
-    '2026-09-13T15:00:00Z',
-  );
+  await mockAlertsRepository.submitResponse(mockRouteParams.dispatchId, 'RESPONDING', 15);
   const { findByText } = await render(<RosterScreen />);
 
-  expect(await findByText(/^responding$/i)).toBeTruthy();
+  expect(await findByText(/responding/i)).toBeTruthy();
+});
+
+test('a direct-to-scene response is labelled distinctly from a station response', async () => {
+  await mockAlertsRepository.submitResponse(mockRouteParams.dispatchId, 'DIRECT_TO_SCENE', 5);
+  const { findByText } = await render(<RosterScreen />);
+
+  expect(await findByText(/direct to scene/i)).toBeTruthy();
 });
 
 test('shows an honest offline state instead of a stale or empty roster - F1.7 requires connectivity', async () => {
@@ -43,4 +64,42 @@ test('shows an honest offline state instead of a stale or empty roster - F1.7 re
 
   expect(await findByText(/offline.*will resume/i)).toBeTruthy();
   expect(queryByText('Jamie Rios')).toBeNull();
+});
+
+test('a poll failure surfaces a stale-data indicator instead of silently keeping the old roster forever', async () => {
+  mockRepository.getRoster.mockRejectedValue(new TypeError('Failed to fetch'));
+
+  const { findByText } = await render(<RosterScreen />);
+
+  expect(await findByText(/data stopped updating/i)).toBeTruthy();
+});
+
+test('polling stops while the screen is unfocused and resumes immediately once it regains focus', async () => {
+  jest.useFakeTimers();
+  try {
+    const screen = await render(<RosterScreen />);
+    await screen.findByText('Jamie Rios');
+    expect(mockRepository.getRoster).toHaveBeenCalledTimes(1);
+
+    // React Navigation's native-stack keeps a screen mounted when navigating away from it -
+    // simulate that by dropping focus without unmounting.
+    mockIsFocused.current = false;
+    await act(async () => {
+      screen.rerender(<RosterScreen />);
+    });
+
+    await act(async () => {
+      jest.advanceTimersByTime(60_000);
+    });
+    expect(mockRepository.getRoster).toHaveBeenCalledTimes(1);
+
+    mockIsFocused.current = true;
+    await act(async () => {
+      screen.rerender(<RosterScreen />);
+    });
+
+    expect(mockRepository.getRoster).toHaveBeenCalledTimes(2);
+  } finally {
+    jest.useRealTimers();
+  }
 });

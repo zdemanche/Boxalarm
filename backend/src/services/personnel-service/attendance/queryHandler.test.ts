@@ -10,6 +10,7 @@ function buildEvent(
   options: {
     readonly headers?: Record<string, string> | undefined;
     readonly principal?: Record<string, unknown> | null;
+    readonly pathParameters?: Record<string, string>;
   } = {},
 ): GuardEvent {
   const principal = options.principal === null ? undefined : (options.principal ?? PRINCIPAL);
@@ -19,6 +20,7 @@ function buildEvent(
     rawPath: '/api/v1/personnel/attendance',
     rawQueryString: '',
     headers: 'headers' in options ? options.headers : { authorization: 'Bearer token' },
+    pathParameters: options.pathParameters,
     requestContext: { authorizer: { lambda: principal } },
   } as unknown as GuardEvent;
 }
@@ -39,15 +41,20 @@ function mockAuthzDecision(decision: 'ALLOW' | 'DENY' | 'ERROR'): void {
 }
 
 function mockDynamo(
-  behavior: 'OK' | 'ERROR',
+  behavior: 'OK' | 'ERROR' | 'MEMBER_NOT_FOUND',
   items: unknown[] = [],
 ): { send: ReturnType<typeof vi.fn> } {
-  const send = vi.fn();
-  if (behavior === 'OK') {
-    send.mockResolvedValue({ Items: items });
-  } else {
-    send.mockRejectedValue(new Error('DynamoDB unavailable'));
-  }
+  const send = vi.fn((command: { constructor: { name: string } }) => {
+    if (behavior === 'ERROR') {
+      return Promise.reject(new Error('DynamoDB unavailable'));
+    }
+    if (command.constructor.name === 'GetCommand') {
+      return Promise.resolve({
+        Item: behavior === 'MEMBER_NOT_FOUND' ? undefined : { entityType: 'MEMBER' },
+      });
+    }
+    return Promise.resolve({ Items: items });
+  });
   const client = { send };
   vi.doMock('../dynamoClient.js', async (importOriginal) => {
     const actual = await importOriginal<typeof import('../dynamoClient.js')>();
@@ -83,7 +90,7 @@ describe('queryHandler', () => {
     const result = (await handler(buildEvent())) as APIGatewayProxyStructuredResultV2;
 
     expect(result.statusCode).toBe(200);
-    const queryCall = client.send.mock.calls[0]?.[0] as {
+    const queryCall = client.send.mock.calls[1]?.[0] as {
       input: {
         IndexName: string;
         KeyConditionExpression: string;
@@ -96,6 +103,20 @@ describe('queryHandler', () => {
     expect(queryCall.input.ExpressionAttributeValues[':prefix']).toBe('ATTENDANCE_RECORD#');
     expect(queryCall.input.ScanIndexForward).toBe(true);
     expect(JSON.parse(result.body ?? '{}')).toEqual({ records });
+  });
+
+  it('filters GSI1 results by the caller deptId, since gsi1pk carries no dept segment (MAJOR #4 regression)', async () => {
+    mockAuthzDecision('ALLOW');
+    const client = mockDynamo('OK', []);
+    const { onBehalfHandler } = await import('./queryHandler.js');
+
+    await onBehalfHandler(buildEvent({ pathParameters: { memberId: 'mbr-999' } }));
+
+    const queryCall = client.send.mock.calls[1]?.[0] as {
+      input: { FilterExpression: string; ExpressionAttributeValues: Record<string, string> };
+    };
+    expect(queryCall.input.FilterExpression).toBe('deptId = :deptId');
+    expect(queryCall.input.ExpressionAttributeValues[':deptId']).toBe('NICHOLS');
   });
 
   it('denies (fails closed) when Cedar denies the action', async () => {
@@ -146,5 +167,105 @@ describe('queryHandler', () => {
     expect(logged.originalError).toBeTruthy();
     expect(logged.reason).toBeTruthy();
     errorSpy.mockRestore();
+  });
+
+  it('returns 404 and never queries GSI1 when the caller is not a known member of the department', async () => {
+    mockAuthzDecision('ALLOW');
+    const client = mockDynamo('MEMBER_NOT_FOUND');
+    const { handler } = await import('./queryHandler.js');
+
+    const result = await handler(buildEvent());
+
+    expect(result).toMatchObject({ statusCode: 404 });
+    expect(
+      client.send.mock.calls.some(
+        (call) =>
+          (call[0] as { constructor: { name: string } }).constructor.name === 'QueryCommand',
+      ),
+    ).toBe(false);
+  });
+});
+
+describe('onBehalfHandler', () => {
+  const originalEnv = { ...process.env };
+
+  beforeEach(() => {
+    vi.resetModules();
+    process.env.VERIFIED_PERMISSIONS_POLICY_STORE_ID = 'ps-1';
+    process.env.PLATFORM_SERVICE_TABLE_NAME = 'platform-service';
+  });
+
+  afterEach(() => {
+    process.env = { ...originalEnv };
+    vi.doUnmock('@aws-sdk/client-verifiedpermissions');
+    vi.doUnmock('../dynamoClient.js');
+  });
+
+  it('queries GSI1 for the target memberId, not the caller, when Cedar allows', async () => {
+    mockAuthzDecision('ALLOW');
+    const client = mockDynamo('OK', [{ activityType: 'DRILL', occurredAt: 1 }]);
+    const { onBehalfHandler } = await import('./queryHandler.js');
+
+    const result = (await onBehalfHandler(
+      buildEvent({ pathParameters: { memberId: 'mbr-999' } }),
+    )) as APIGatewayProxyStructuredResultV2;
+
+    expect(result.statusCode).toBe(200);
+    const queryCall = client.send.mock.calls[1]?.[0] as {
+      input: { ExpressionAttributeValues: Record<string, string> };
+    };
+    expect(queryCall.input.ExpressionAttributeValues[':gsi1pk']).toBe('MEMBER#mbr-999');
+  });
+
+  it("rejects (fails closed) a cross-department read: 404, never a Query, when the target memberId is not a member of the caller's department (CRITICAL, PR #320 review)", async () => {
+    mockAuthzDecision('ALLOW');
+    const client = mockDynamo('MEMBER_NOT_FOUND');
+    const { onBehalfHandler } = await import('./queryHandler.js');
+
+    const result = await onBehalfHandler(
+      buildEvent({ pathParameters: { memberId: 'mbr-other-dept' } }),
+    );
+
+    expect(result).toMatchObject({ statusCode: 404 });
+    expect(
+      client.send.mock.calls.some(
+        (call) =>
+          (call[0] as { constructor: { name: string } }).constructor.name === 'QueryCommand',
+      ),
+    ).toBe(false);
+  });
+
+  it("scopes the dept-membership check to the caller's own department (GetCommand keyed by pk, not a bare memberId)", async () => {
+    mockAuthzDecision('ALLOW');
+    const client = mockDynamo('OK', [{ activityType: 'DRILL', occurredAt: 1 }]);
+    const { onBehalfHandler } = await import('./queryHandler.js');
+
+    await onBehalfHandler(buildEvent({ pathParameters: { memberId: 'mbr-999' } }));
+
+    const getCall = client.send.mock.calls[0]?.[0] as {
+      input: { Key: { pk: string; sk: string } };
+    };
+    expect(getCall.input.Key).toEqual({ pk: 'DEPT#NICHOLS#MEMBER#mbr-999', sk: 'METADATA' });
+  });
+
+  it('denies (fails closed) when Cedar denies the on-behalf action', async () => {
+    mockAuthzDecision('DENY');
+    const client = mockDynamo('OK');
+    const { onBehalfHandler } = await import('./queryHandler.js');
+
+    const result = await onBehalfHandler(buildEvent({ pathParameters: { memberId: 'mbr-999' } }));
+
+    expect(result).toMatchObject({ statusCode: 403 });
+    expect(client.send).not.toHaveBeenCalled();
+  });
+
+  it('returns 404 when the memberId path parameter is missing', async () => {
+    mockAuthzDecision('ALLOW');
+    mockDynamo('OK');
+    const { onBehalfHandler } = await import('./queryHandler.js');
+
+    const result = await onBehalfHandler(buildEvent({ pathParameters: {} }));
+
+    expect(result).toMatchObject({ statusCode: 404 });
   });
 });

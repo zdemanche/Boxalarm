@@ -18,5 +18,10 @@ export default defineConfig({
       COGNITO_HOSTED_UI_ORIGIN: 'https://boxalarm.auth.us-east-1.amazoncognito.com',
     },
   },
-  projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'] } }],
+  projects: [
+    { name: 'chromium', use: { ...devices['Desktop Chrome'] } },
+    // MAJOR-1/MAJOR-7 (PR #318 review): the desktop-only project above never exercises the
+    // below-md layout, so it couldn't catch the sidebar being display:none with no replacement.
+    { name: 'mobile-chromium', use: { ...devices['Pixel 7'] } },
+  ],
 });

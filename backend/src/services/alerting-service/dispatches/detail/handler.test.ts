@@ -69,6 +69,7 @@ describe('alert-detail handler', () => {
       mapLink: 'https://www.google.com/maps/search/?api=1&query=123%20Main%20St',
       eligibleMemberCount: null,
       fanOutStartedAt: null,
+      toneLadder: { status: 'ACTIVE', currentToneSequence: 1, nextToneAt: null },
       prePlan: null,
     });
   });

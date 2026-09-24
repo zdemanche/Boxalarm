@@ -5,11 +5,11 @@ import { emitOutcomeMetric } from '@boxalarm/metrics';
 import { queryEligibleMembers } from '../eligibility/selector.js';
 import { logError, logInfo } from '../dispatches/logger.js';
 import { createEscalationSchedule } from '../escalation/scheduleEscalation.js';
+import { scheduleDepartmentToneLadder } from '../escalation/toneLadder.js';
+import { deriveFanOutKey, type FanOutChannel } from './idempotencyKey.js';
 
 const METRIC_NAMESPACE = 'Boxalarm/Alerting';
 const TONE_SEQUENCE_ONE = 1;
-
-export type PrimaryChannel = 'PUSH' | 'SMS';
 
 export type RosterAckStatus = 'NONE' | 'RESPONDING' | 'NOT_RESPONDING' | 'DIRECT_TO_SCENE';
 
@@ -47,13 +47,18 @@ function buildReceiptItem(
   deptId: VerifiedDeptId,
   dispatchId: string,
   memberId: string,
-  channel: PrimaryChannel,
+  channel: FanOutChannel,
   dispatchedAt: number,
 ): Record<string, unknown> {
-  const idempotencyKey = `${dispatchId}#${TONE_SEQUENCE_ONE}#${memberId}#${channel}`;
+  const { sk, idempotencyKey } = deriveFanOutKey({
+    dispatchId,
+    toneSequence: TONE_SEQUENCE_ONE,
+    memberId,
+    channel,
+  });
   return {
     pk: buildDeptScopedPk(deptId, 'DISPATCH', dispatchId),
-    sk: `RECEIPT#${memberId}#${channel}#${TONE_SEQUENCE_ONE}`,
+    sk,
     entityType: 'DELIVERY_RECEIPT',
     dispatchId,
     memberId,
@@ -94,8 +99,8 @@ async function fanOutOneMember(
   memberId: string,
   quals: readonly string[],
 ): Promise<void> {
-  const pushItem = buildReceiptItem(deptId, dispatchId, memberId, 'PUSH', dispatchedAt);
-  const smsItem = buildReceiptItem(deptId, dispatchId, memberId, 'SMS', dispatchedAt);
+  const pushItem = buildReceiptItem(deptId, dispatchId, memberId, 'push', dispatchedAt);
+  const smsItem = buildReceiptItem(deptId, dispatchId, memberId, 'sms', dispatchedAt);
   const rosterItem = buildRosterItem(deptId, dispatchId, memberId, quals);
 
   try {
@@ -179,6 +184,14 @@ export async function runFanOut(
         memberId: member.memberId,
       });
       emitOutcomeMetric(METRIC_NAMESPACE, 'FanOutMemberFailed');
+    }
+  }
+
+  if (eligibleMembers.length > 0) {
+    try {
+      await scheduleDepartmentToneLadder(scheduler, ddb, tableName, deptId, dispatchId);
+    } catch (error) {
+      logError('alerting.fanout.toneLadderScheduleFailed', error, { deptId, dispatchId });
     }
   }
 
