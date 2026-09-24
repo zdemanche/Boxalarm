@@ -74,4 +74,26 @@ describe("MessagingAlerting", () => {
       expect(dlqName).toBe(`boxalarm-dev-alerting-${channel}-dlq.fifo`);
     }
   });
+
+  // FIFO head-of-line blocking (MAJOR): the backend publisher sets
+  // MessageGroupId: dispatchId, so every member of one dispatch on one channel shares a
+  // FIFO group and a stuck member blocks every later member for up to
+  // maxReceiveCount(3) x visibilityTimeoutSeconds. This pins the documented 2x-worker-
+  // timeout formula so a future change to the multiplier is deliberate, not accidental —
+  // see the analysis comment in messaging-alerting.ts for why neither a smaller
+  // multiplier nor an infra-side MessageGroupId change was made here.
+  it("sizes queue visibility at exactly 2x the worker timeout (documented FIFO head-of-line trade-off)", async () => {
+    mockResources();
+    const { MessagingAlerting } = await import("../../components/alerting/messaging-alerting");
+    const messaging = new MessagingAlerting("messaging-visibility", {
+      env: "dev",
+      workerTimeoutSeconds: 20,
+    });
+    for (const channel of ["push", "sms", "voice"] as const) {
+      const visibility = await resolve(
+        messaging.channelQueues[channel].queue.visibilityTimeoutSeconds,
+      );
+      expect(visibility).toBe(40);
+    }
+  });
 });
