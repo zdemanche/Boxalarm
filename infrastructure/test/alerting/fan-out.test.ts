@@ -50,6 +50,7 @@ describe("FanOut event source mapping", () => {
       alertingStreamArn:
         "arn:aws:dynamodb:us-east-1:123456789012:table/alerting/stream/2026-01-01T00:00:00.000",
       alertingTopicArn: "arn:aws:sns:us-east-1:123456789012:alerting-topic.fifo",
+      alertingTableCmkArn: "arn:aws:kms:us-east-1:123456789012:key/alerting-cmk",
       logGroup,
     });
 

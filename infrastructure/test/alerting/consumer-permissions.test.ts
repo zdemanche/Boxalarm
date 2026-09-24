@@ -180,6 +180,7 @@ describe("alerting-plane consumer IAM: every SQS/stream consumer can read its ow
       alertingTableName: "boxalarm-dev-alerting-table",
       alertingStreamArn: streamArn,
       alertingTopicArn: "arn:aws:sns:us-east-1:123456789012:alerting-topic.fifo",
+      alertingTableCmkArn: "arn:aws:kms:us-east-1:123456789012:key/alerting-cmk",
       logGroup,
     });
 

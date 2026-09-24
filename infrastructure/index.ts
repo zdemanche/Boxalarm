@@ -145,6 +145,7 @@ export const fanOut = new FanOut("fan-out", {
   alertingTableName: alertingTable.tableName,
   alertingStreamArn: alertingTable.streamArn,
   alertingTopicArn: messagingAlerting.topic.arn,
+  alertingTableCmkArn: alertingTable.cmkArn,
   logGroup: alertingLogGroup,
   permissionsBoundaryArn: alertingBoundaryArn,
 });

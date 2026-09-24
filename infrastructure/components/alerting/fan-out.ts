@@ -11,6 +11,10 @@ export interface FanOutArgs {
   alertingTableName: pulumi.Input<string>;
   alertingStreamArn: pulumi.Input<string>;
   alertingTopicArn: pulumi.Input<string>;
+  /** The alerting table's customer-managed KMS key — DynamoDB requires the calling
+   *  principal to hold kms:Decrypt (and friends) directly, not just the table's own
+   *  service-linked grant, on a CMK-encrypted table. */
+  alertingTableCmkArn: pulumi.Input<string>;
   logGroup: ServiceLogGroup;
   permissionsBoundaryArn?: pulumi.Input<string>;
 }
@@ -34,6 +38,7 @@ export class FanOut extends pulumi.ComponentResource {
     requireEnv("FanOut", args.env);
     super("boxalarm:alerting:FanOut", name, {}, opts);
     const { env } = args;
+    const region = aws.getRegionOutput({}, { parent: this });
 
     this.lambda = new ServiceLambda(
       `${name}-fn`,
@@ -48,43 +53,63 @@ export class FanOut extends pulumi.ComponentResource {
           ALERTING_TABLE_NAME: args.alertingTableName,
           ALERTING_TOPIC_ARN: args.alertingTopicArn,
         },
-        additionalPolicyStatements: pulumi.output(args.alertingStreamArn).apply((streamArn) => [
-          {
-            Sid: "AlertingTableReadWrite",
-            Effect: "Allow" as const,
-            Action: [
-              "dynamodb:Query",
-              "dynamodb:GetItem",
-              "dynamodb:PutItem",
-              "dynamodb:UpdateItem",
-              "dynamodb:TransactWriteItems",
-            ],
-            Resource: args.alertingTableArn as string,
-          },
-          {
-            Sid: "AlertingTopicPublish",
-            Effect: "Allow" as const,
-            Action: ["sns:Publish"],
-            Resource: args.alertingTopicArn as string,
-          },
-          {
-            // Required for the DynamoDB-stream event source mapping to be creatable at
-            // all — CreateEventSourceMapping validates the execution role can call
-            // GetRecords/GetShardIterator/DescribeStream on the stream ARN.
-            Sid: "AlertingStreamRead",
-            Effect: "Allow" as const,
-            Action: ["dynamodb:DescribeStream", "dynamodb:GetRecords", "dynamodb:GetShardIterator"],
-            Resource: streamArn,
-          },
-          {
-            // ListStreams has no ARN-level resource scoping (AWS-mandated wildcard,
-            // like the XRayWrite statement in observability-policy.ts).
-            Sid: "AlertingStreamListStreams",
-            Effect: "Allow" as const,
-            Action: ["dynamodb:ListStreams"],
-            Resource: "*",
-          },
-        ]),
+        additionalPolicyStatements: pulumi
+          .all([args.alertingStreamArn, args.alertingTableCmkArn, region.name])
+          .apply(([streamArn, cmkArn, regionName]) => [
+            {
+              Sid: "AlertingTableReadWrite",
+              Effect: "Allow" as const,
+              Action: [
+                "dynamodb:Query",
+                "dynamodb:GetItem",
+                "dynamodb:PutItem",
+                "dynamodb:UpdateItem",
+                "dynamodb:TransactWriteItems",
+              ],
+              Resource: args.alertingTableArn as string,
+            },
+            {
+              Sid: "AlertingTopicPublish",
+              Effect: "Allow" as const,
+              Action: ["sns:Publish"],
+              Resource: args.alertingTopicArn as string,
+            },
+            {
+              // Required for the DynamoDB-stream event source mapping to be creatable at
+              // all — CreateEventSourceMapping validates the execution role can call
+              // GetRecords/GetShardIterator/DescribeStream on the stream ARN.
+              Sid: "AlertingStreamRead",
+              Effect: "Allow" as const,
+              Action: [
+                "dynamodb:DescribeStream",
+                "dynamodb:GetRecords",
+                "dynamodb:GetShardIterator",
+              ],
+              Resource: streamArn,
+            },
+            {
+              // ListStreams has no ARN-level resource scoping (AWS-mandated wildcard,
+              // like the XRayWrite statement in observability-policy.ts).
+              Sid: "AlertingStreamListStreams",
+              Effect: "Allow" as const,
+              Action: ["dynamodb:ListStreams"],
+              Resource: "*",
+            },
+            {
+              // The alerting table is encrypted with a customer-managed KMS key
+              // (data/cmk-policy.ts). DynamoDB requires the *calling* principal to hold
+              // these actions directly on the CMK for a CMK-encrypted table/stream —
+              // the table's own service-linked access is not enough. Scoped to calls
+              // made via DynamoDB so this role can't use the key for anything else.
+              Sid: "AlertingTableCmkAccess",
+              Effect: "Allow" as const,
+              Action: ["kms:Decrypt", "kms:Encrypt", "kms:GenerateDataKey*", "kms:DescribeKey"],
+              Resource: cmkArn,
+              Condition: {
+                StringEquals: { "kms:ViaService": [`dynamodb.${regionName}.amazonaws.com`] },
+              },
+            },
+          ]),
         reservedConcurrentExecutions: 10,
         // Fans out to up to 10 concurrent members at a time (fanOut.ts
         // MAX_CONCURRENT_FANOUT_TASKS), each doing a transact write + an SNS publish —
