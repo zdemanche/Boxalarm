@@ -207,4 +207,9 @@ export const LAMBDA_ENTRIES = [
     function: 'riding-board-assign',
     entry: 'src/services/apparatus-service/ridingBoard/assignHandler.ts',
   },
+  {
+    service: 'alerting-service',
+    function: 'outbox-drain',
+    entry: 'src/services/alerting-service/outboxDrainHandler.ts',
+  },
 ];

@@ -6,6 +6,7 @@ import {
   type DynamoDBDocumentClient,
 } from '@aws-sdk/lib-dynamodb';
 import { buildDeptScopedPk, type VerifiedDeptId } from '@boxalarm/dept-scope';
+import { buildOutboxRecord } from '@boxalarm/outbox';
 import type { DispatchReceived, SourceSystem } from './dispatchIngressPort.js';
 import { logError, logInfo } from './logger.js';
 
@@ -97,6 +98,30 @@ export async function createManualDispatch(
           ConditionExpression: 'attribute_not_exists(pk)',
         },
       },
+      ...(isTest
+        ? []
+        : [
+            {
+              Put: {
+                TableName: tableName,
+                Item: buildOutboxRecord(
+                  deptId,
+                  'alerting-service',
+                  'dispatch.alert.received',
+                  dispatchId,
+                  {
+                    deptId,
+                    dispatchId,
+                    incidentType: dispatch.incidentType,
+                    address: dispatch.address,
+                    crossStreets: dispatch.crossStreets,
+                    narrative: dispatch.narrative,
+                    dispatchedAt,
+                  },
+                ),
+              },
+            },
+          ]),
     ],
   });
 
