@@ -165,4 +165,18 @@ describe("Retention", () => {
     expect(comparison).toBe("GreaterThanThreshold");
     expect(actions).toContain("arn:aws:sns:us-east-1:123456789012:chief");
   });
+
+  it("watches the backend's actual DisposalInvoked metric, not raw AWS/Lambda Invocations", async () => {
+    const retention = await build();
+    const [namespace, metricName] = await Promise.all([
+      resolve(retention.invokedAlarm.namespace),
+      resolve(retention.invokedAlarm.metricName),
+    ]);
+    // disposal.ts's emitDisposalInvoked() only fires from inside runDisposal's
+    // finally block — i.e. when the business logic actually executes, not on every
+    // raw Lambda invocation (including a failed-auth/404 request from the scheduler,
+    // which previously paged the chief every single day regardless).
+    expect(namespace).toBe("Boxalarm/platform");
+    expect(metricName).toBe("DisposalInvoked");
+  });
 });

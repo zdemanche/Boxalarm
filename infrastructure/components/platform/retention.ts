@@ -190,13 +190,28 @@ export class Retention extends pulumi.ComponentResource {
       { parent: this },
     );
 
+    // The daily schedule invokes the disposal Lambda directly (target.arn above, not
+    // an HTTP-shaped call) — but disposalHandler.ts's handler is written only for
+    // API-Gateway-shaped requests: it requires a bearer token and checks
+    // event.routeKey, so a raw Scheduler invocation gets a 401/404 and disposes
+    // nothing. Giving disposalHandler.ts a non-HTTP scheduled entry point is a
+    // backend change outside this infra-only PR's footprint. What IS fixable here:
+    // watching AWS/Lambda Invocations meant this alarm fired on every scheduled
+    // attempt regardless of whether disposal logic ever ran, paging the chief daily
+    // and burying real manual disposals in the noise. Watching the backend's own
+    // DisposalInvoked metric instead (disposal.ts's emitDisposalInvoked(), which
+    // only fires from inside runDisposal's finally block — i.e. only when the
+    // business logic actually executes, not on a failed-auth/404 request) means the
+    // alarm goes quiet on today's non-functional scheduled runs instead of paging
+    // on them, while still firing correctly for every real disposal a chief runs
+    // manually. See export.ts/recovery-monitor.ts for the same
+    // watch-what-the-backend-actually-emits fix applied to their alarms.
     this.invokedAlarm = new aws.cloudwatch.MetricAlarm(
       `${name}-invoked-alarm`,
       {
         name: `boxalarm-${env}-platform-retention-disposal-invoked`,
-        namespace: "AWS/Lambda",
-        metricName: "Invocations",
-        dimensions: { FunctionName: this.disposalLambda.function.name },
+        namespace: "Boxalarm/platform",
+        metricName: "DisposalInvoked",
         statistic: "Sum",
         period: 3600,
         evaluationPeriods: 1,
