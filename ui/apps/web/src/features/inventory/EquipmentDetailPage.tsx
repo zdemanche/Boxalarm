@@ -1,8 +1,17 @@
 import { FormEvent, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Link, useParams } from 'react-router-dom';
+import { useParams } from 'react-router-dom';
 import { useAuth } from '../../auth/AuthContext';
 import { ApiForbiddenGate } from '../../components/ApiForbiddenGate';
+import {
+  Button,
+  Card,
+  PageHeader,
+  Select,
+  Skeleton,
+  StatusChip,
+  TextInput,
+} from '../../components/ui';
 import { listApparatus } from '../apparatus/api';
 import { listMembers } from '../personnel/api';
 import {
@@ -86,78 +95,70 @@ export function EquipmentDetailPage() {
   const retired = asset?.lifecycleStatus === 'RETIRED';
 
   return (
-    <main id="main-content" style={{ padding: 'var(--boxalarm-spacing-lg)' }}>
-      <p>
-        <Link to="/inventory">← Inventory</Link>
-      </p>
+    <main id="main-content">
+      <PageHeader
+        title={asset?.serialNumber ?? '…'}
+        breadcrumbs={[
+          { label: 'Inventory', to: '/inventory' },
+          { label: asset?.serialNumber ?? '…' },
+        ]}
+      />
       {assetQuery.isLoading || !asset ? (
-        <p>Loading asset…</p>
+        <Skeleton lines={3} />
       ) : (
         <>
-          <h1 style={{ fontSize: 'var(--boxalarm-font-size-xl)', margin: 0 }}>
-            {asset.serialNumber}
-          </h1>
-          <p
-            role="status"
-            style={{
-              marginTop: 'var(--boxalarm-spacing-md)',
-              fontSize: 'var(--boxalarm-font-size-lg)',
-            }}
-          >
-            {asset.lifecycleStatus}
-          </p>
-
-          <dl style={{ marginTop: 'var(--boxalarm-spacing-lg)' }}>
-            <dt>Location</dt>
-            <dd>{asset.location || '—'}</dd>
-            <dt>Assignment</dt>
-            <dd>
-              {asset.assignedToType
-                ? `${asset.assignedToType} · ${asset.assignedToId}`
-                : 'Unassigned'}
-            </dd>
-          </dl>
+          <Card>
+            <p role="status">
+              <StatusChip status={retired ? 'neutral' : 'ok'}>{asset.lifecycleStatus}</StatusChip>
+            </p>
+            <dl style={{ margin: 0 }}>
+              <dt>Location</dt>
+              <dd>{asset.location || '—'}</dd>
+              <dt>Assignment</dt>
+              <dd>
+                {asset.assignedToType
+                  ? `${asset.assignedToType} · ${asset.assignedToId}`
+                  : 'Unassigned'}
+              </dd>
+            </dl>
+          </Card>
 
           {canWrite ? (
             <>
-              <form
-                aria-label="Assign asset"
-                onSubmit={(event: FormEvent) => {
-                  event.preventDefault();
-                  assignMutation.mutate();
-                }}
+              <Card
+                title="Assign"
                 style={{
-                  marginTop: 'var(--boxalarm-spacing-xl)',
-                  display: 'grid',
-                  gap: 'var(--boxalarm-spacing-md)',
+                  marginTop: 'var(--bx-space-xl)',
                   maxWidth: 480,
                   opacity: retired ? 0.5 : 1,
                 }}
               >
-                <h2 style={{ fontSize: 'var(--boxalarm-font-size-lg)', margin: 0 }}>Assign</h2>
-                <label style={{ display: 'grid', gap: 4 }}>
-                  Assign to
-                  <select
+                <form
+                  aria-label="Assign asset"
+                  onSubmit={(event: FormEvent) => {
+                    event.preventDefault();
+                    assignMutation.mutate();
+                  }}
+                  style={{ display: 'grid', gap: 'var(--bx-space-md)' }}
+                >
+                  <Select
+                    label="Assign to"
                     value={assignedToType}
                     disabled={retired}
                     onChange={(e) => {
                       setAssignedToType(e.target.value as AssignedToType);
                       setAssignedToId('');
                     }}
-                    style={{ minHeight: 44 }}
                   >
                     <option value="MEMBER">Member</option>
                     <option value="APPARATUS">Apparatus</option>
-                  </select>
-                </label>
-                <label style={{ display: 'grid', gap: 4 }}>
-                  {assignedToType === 'MEMBER' ? 'Member' : 'Apparatus'}
-                  <select
+                  </Select>
+                  <Select
+                    label={assignedToType === 'MEMBER' ? 'Member' : 'Apparatus'}
                     value={assignedToId}
                     disabled={retired}
                     required
                     onChange={(e) => setAssignedToId(e.target.value)}
-                    style={{ minHeight: 44 }}
                   >
                     <option value="">
                       {assignedToType === 'MEMBER' ? 'Select a member…' : 'Select an apparatus…'}
@@ -173,65 +174,51 @@ export function EquipmentDetailPage() {
                             {unit.unitId} · {unit.type}
                           </option>
                         ))}
-                  </select>
-                </label>
-                <button type="submit" disabled={retired} style={{ minHeight: 44 }}>
-                  Save assignment
-                </button>
-                {retired ? <p aria-live="polite">Retired assets cannot be assigned.</p> : null}
-              </form>
+                  </Select>
+                  <Button type="submit" disabled={retired} loading={assignMutation.isPending}>
+                    Save assignment
+                  </Button>
+                  {retired ? <p aria-live="polite">Retired assets cannot be assigned.</p> : null}
+                </form>
+              </Card>
 
-              <form
-                aria-label="Change location"
-                onSubmit={(event: FormEvent) => {
-                  event.preventDefault();
-                  locationMutation.mutate();
-                }}
-                style={{
-                  marginTop: 'var(--boxalarm-spacing-xl)',
-                  display: 'grid',
-                  gap: 'var(--boxalarm-spacing-md)',
-                  maxWidth: 480,
-                }}
-              >
-                <h2 style={{ fontSize: 'var(--boxalarm-font-size-lg)', margin: 0 }}>Location</h2>
-                <label style={{ display: 'grid', gap: 4 }}>
-                  New location
-                  <input
+              <Card title="Location" style={{ marginTop: 'var(--bx-space-xl)', maxWidth: 480 }}>
+                <form
+                  aria-label="Change location"
+                  onSubmit={(event: FormEvent) => {
+                    event.preventDefault();
+                    locationMutation.mutate();
+                  }}
+                  style={{ display: 'grid', gap: 'var(--bx-space-md)' }}
+                >
+                  <TextInput
+                    label="New location"
                     value={location}
                     required
                     onChange={(e) => setLocation(e.target.value)}
-                    style={{ minHeight: 44, padding: '0 12px' }}
                   />
-                </label>
-                <button type="submit" style={{ minHeight: 44 }}>
-                  Save location
-                </button>
-              </form>
+                  <Button type="submit" loading={locationMutation.isPending}>
+                    Save location
+                  </Button>
+                </form>
+              </Card>
 
               {NEXT_LIFECYCLE[asset.lifecycleStatus].length > 0 ? (
-                <div style={{ marginTop: 'var(--boxalarm-spacing-xl)' }}>
-                  <h2 style={{ fontSize: 'var(--boxalarm-font-size-lg)', margin: 0 }}>Lifecycle</h2>
-                  <div
-                    style={{
-                      display: 'flex',
-                      gap: 'var(--boxalarm-spacing-sm)',
-                      marginTop: 'var(--boxalarm-spacing-md)',
-                    }}
-                  >
+                <Card title="Lifecycle" style={{ marginTop: 'var(--bx-space-xl)' }}>
+                  <div style={{ display: 'flex', gap: 'var(--bx-space-sm)' }}>
                     {NEXT_LIFECYCLE[asset.lifecycleStatus].map((target) => (
-                      <button
+                      <Button
                         key={target}
                         type="button"
-                        disabled={lifecycleMutation.isPending}
+                        variant="secondary"
+                        loading={lifecycleMutation.isPending}
                         onClick={() => lifecycleMutation.mutate(target)}
-                        style={{ minHeight: 44 }}
                       >
                         Move to {target}
-                      </button>
+                      </Button>
                     ))}
                   </div>
-                </div>
+                </Card>
               ) : null}
             </>
           ) : null}

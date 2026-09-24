@@ -1,8 +1,10 @@
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../../auth/AuthContext';
 import { ApiForbiddenGate } from '../../components/ApiForbiddenGate';
+import { Button, Card, PageHeader, StatusChip, Tabs } from '../../components/ui';
+import { LeafletMap } from './LeafletMap';
 import { queryMap } from './api';
 import { mergeHydrants, mergeOccupancies, panBoundingBox, zoomBoundingBox } from './mapProvider';
 import type { BoundingBox, MapHydrant, MapOccupancy } from './types';
@@ -14,14 +16,12 @@ const NICHOLS_FD_CENTER: BoundingBox = {
   maxLng: -73.17,
 };
 
-type View = 'map' | 'list';
-
 export function MapPage() {
   const auth = useAuth();
+  const navigate = useNavigate();
   const [bbox, setBbox] = useState<BoundingBox>(NICHOLS_FD_CENTER);
   const [occupancies, setOccupancies] = useState<Map<string, MapOccupancy>>(new Map());
   const [hydrants, setHydrants] = useState<Map<string, MapHydrant>>(new Map());
-  const [view, setView] = useState<View>('map');
 
   const mapQuery = useQuery({
     queryKey: ['inspections', 'map', bbox.minLat, bbox.minLng, bbox.maxLat, bbox.maxLng],
@@ -50,164 +50,105 @@ export function MapPage() {
   const hydrantList = Array.from(hydrants.values());
 
   return (
-    <main id="main-content" style={{ padding: 'var(--boxalarm-spacing-lg)' }}>
-      <h1 style={{ fontSize: 'var(--boxalarm-font-size-xl)', margin: 0 }}>Map</h1>
+    <main id="main-content">
+      <PageHeader title="Map" />
 
       <div
         role="group"
         aria-label="Pan and zoom"
-        style={{
-          display: 'flex',
-          gap: 'var(--boxalarm-spacing-sm)',
-          marginTop: 'var(--boxalarm-spacing-lg)',
-        }}
+        style={{ display: 'flex', gap: 'var(--bx-space-sm)' }}
       >
-        <button type="button" onClick={() => pan(latSpan * 0.5, 0)} style={{ minHeight: 44 }}>
+        <Button type="button" variant="secondary" onClick={() => pan(latSpan * 0.5, 0)}>
           Pan north
-        </button>
-        <button type="button" onClick={() => pan(-latSpan * 0.5, 0)} style={{ minHeight: 44 }}>
+        </Button>
+        <Button type="button" variant="secondary" onClick={() => pan(-latSpan * 0.5, 0)}>
           Pan south
-        </button>
-        <button type="button" onClick={() => pan(0, -lngSpan * 0.5)} style={{ minHeight: 44 }}>
+        </Button>
+        <Button type="button" variant="secondary" onClick={() => pan(0, -lngSpan * 0.5)}>
           Pan west
-        </button>
-        <button type="button" onClick={() => pan(0, lngSpan * 0.5)} style={{ minHeight: 44 }}>
+        </Button>
+        <Button type="button" variant="secondary" onClick={() => pan(0, lngSpan * 0.5)}>
           Pan east
-        </button>
-        <button type="button" onClick={() => zoom(0.5)} style={{ minHeight: 44 }}>
+        </Button>
+        <Button type="button" variant="secondary" onClick={() => zoom(0.5)}>
           Zoom in
-        </button>
-        <button type="button" onClick={() => zoom(2)} style={{ minHeight: 44 }}>
+        </Button>
+        <Button type="button" variant="secondary" onClick={() => zoom(2)}>
           Zoom out
-        </button>
+        </Button>
       </div>
 
-      <div
-        role="tablist"
-        aria-label="Map display"
-        style={{
-          display: 'flex',
-          gap: 'var(--boxalarm-spacing-sm)',
-          marginTop: 'var(--boxalarm-spacing-md)',
-        }}
-      >
-        {(['map', 'list'] as const).map((value) => (
-          <button
-            key={value}
-            type="button"
-            role="tab"
-            aria-selected={view === value}
-            onClick={() => setView(value)}
-            style={{
-              minHeight: 44,
-              padding: '0 var(--boxalarm-spacing-md)',
-              fontWeight: view === value ? 700 : 400,
-            }}
-          >
-            {value === 'map' ? 'Map view' : 'List view'}
-          </button>
-        ))}
-      </div>
+      <Tabs
+        label="Map display"
+        items={[
+          {
+            value: 'map',
+            label: 'Map view',
+            content: (
+              <div style={{ marginTop: 'var(--bx-space-md)' }}>
+                <LeafletMap
+                  bbox={bbox}
+                  occupancies={occupancyList}
+                  hydrants={hydrantList}
+                  onOccupancySelect={(occupancyId) =>
+                    navigate(`/inspections/occupancies/${occupancyId}`)
+                  }
+                />
+              </div>
+            ),
+          },
+          {
+            value: 'list',
+            label: 'List view',
+            content: (
+              <>
+                <Card title="Occupancies" style={{ marginTop: 'var(--bx-space-md)' }}>
+                  {occupancyList.length === 0 ? (
+                    <p>No occupancies in view.</p>
+                  ) : (
+                    <ul>
+                      {occupancyList.map((occupancy) => (
+                        <li key={occupancy.occupancyId}>
+                          <Link to={`/inspections/occupancies/${occupancy.occupancyId}`}>
+                            {occupancy.occupancyId}
+                          </Link>{' '}
+                          ({occupancy.latitude.toFixed(4)}, {occupancy.longitude.toFixed(4)})
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </Card>
 
-      {view === 'map' ? (
-        <div
-          aria-hidden="true"
-          style={{
-            position: 'relative',
-            marginTop: 'var(--boxalarm-spacing-md)',
-            width: '100%',
-            height: 320,
-            border: '1px solid var(--boxalarm-fg)',
-            overflow: 'hidden',
-          }}
-        >
-          {occupancyList.map((occupancy) => (
-            <span
-              key={occupancy.occupancyId}
-              title={occupancy.occupancyId}
-              style={{
-                position: 'absolute',
-                left: `${((occupancy.longitude - bbox.minLng) / lngSpan) * 100}%`,
-                top: `${(1 - (occupancy.latitude - bbox.minLat) / latSpan) * 100}%`,
-                width: 8,
-                height: 8,
-                borderRadius: '50%',
-                background: 'var(--boxalarm-accent)',
-              }}
-            />
-          ))}
-          {hydrantList.map((hydrant) => (
-            <span
-              key={hydrant.hydrantId}
-              title={hydrant.hydrantId}
-              style={{
-                position: 'absolute',
-                left: `${((hydrant.longitude - bbox.minLng) / lngSpan) * 100}%`,
-                top: `${(1 - (hydrant.latitude - bbox.minLat) / latSpan) * 100}%`,
-                width: 8,
-                height: 8,
-                background:
-                  hydrant.status === 'OUT_OF_SERVICE'
-                    ? 'var(--boxalarm-error)'
-                    : 'var(--boxalarm-success)',
-              }}
-            />
-          ))}
-        </div>
-      ) : null}
-
-      <section
-        aria-label="Occupancies and hydrants in view"
-        style={{ marginTop: 'var(--boxalarm-spacing-lg)' }}
-      >
-        <h2 style={{ fontSize: 'var(--boxalarm-font-size-lg)', margin: 0 }}>Occupancies</h2>
-        {occupancyList.length === 0 ? (
-          <p>No occupancies in view.</p>
-        ) : (
-          <ul>
-            {occupancyList.map((occupancy) => (
-              <li key={occupancy.occupancyId}>
-                <Link to={`/inspections/occupancies/${occupancy.occupancyId}`}>
-                  {occupancy.occupancyId}
-                </Link>{' '}
-                ({occupancy.latitude.toFixed(4)}, {occupancy.longitude.toFixed(4)})
-              </li>
-            ))}
-          </ul>
-        )}
-
-        <h2
-          style={{
-            fontSize: 'var(--boxalarm-font-size-lg)',
-            marginTop: 'var(--boxalarm-spacing-lg)',
-          }}
-        >
-          Hydrants
-        </h2>
-        {hydrantList.length === 0 ? (
-          <p>No hydrants in view.</p>
-        ) : (
-          <ul>
-            {hydrantList.map((hydrant) => (
-              <li key={hydrant.hydrantId}>
-                {hydrant.hydrantId} ({hydrant.latitude.toFixed(4)}, {hydrant.longitude.toFixed(4)})
-                —{' '}
-                {hydrant.status === 'OUT_OF_SERVICE' ? (
-                  <span style={{ color: 'var(--boxalarm-error)' }}>⊘ Out of service</span>
-                ) : (
-                  <span>● In service</span>
-                )}
-                <a
-                  href={`https://www.openstreetmap.org/?mlat=${hydrant.latitude}&mlon=${hydrant.longitude}#map=18/${hydrant.latitude}/${hydrant.longitude}`}
-                  style={{ marginLeft: 'var(--boxalarm-spacing-sm)' }}
-                >
-                  Open map
-                </a>
-              </li>
-            ))}
-          </ul>
-        )}
-      </section>
+                <Card title="Hydrants" style={{ marginTop: 'var(--bx-space-lg)' }}>
+                  {hydrantList.length === 0 ? (
+                    <p>No hydrants in view.</p>
+                  ) : (
+                    <ul>
+                      {hydrantList.map((hydrant) => (
+                        <li key={hydrant.hydrantId}>
+                          {hydrant.hydrantId} ({hydrant.latitude.toFixed(4)},{' '}
+                          {hydrant.longitude.toFixed(4)}) —{' '}
+                          <StatusChip
+                            status={hydrant.status === 'OUT_OF_SERVICE' ? 'danger' : 'ok'}
+                          >
+                            {hydrant.status === 'OUT_OF_SERVICE' ? 'Out of service' : 'In service'}
+                          </StatusChip>
+                          <a
+                            href={`https://www.openstreetmap.org/?mlat=${hydrant.latitude}&mlon=${hydrant.longitude}#map=18/${hydrant.latitude}/${hydrant.longitude}`}
+                            style={{ marginLeft: 'var(--bx-space-sm)' }}
+                          >
+                            Open map
+                          </a>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </Card>
+              </>
+            ),
+          },
+        ]}
+      />
     </main>
   );
 }

@@ -1,6 +1,7 @@
 import { FormEvent, useState } from 'react';
 import { useMutation } from '@tanstack/react-query';
 import { useAuth } from '../../auth/AuthContext';
+import { Button, Card, PageHeader, TextInput } from '../../components/ui';
 import type { AttendanceActivityType } from '../personnel/types';
 import { updateLosapRules } from './api';
 
@@ -36,51 +37,46 @@ export function LosapSettingsPage() {
   });
 
   return (
-    <main id="main-content" style={{ padding: 'var(--boxalarm-spacing-lg)' }}>
-      <h1 style={{ fontSize: 'var(--boxalarm-font-size-xl)', margin: 0 }}>Settings</h1>
-      <section style={{ marginTop: 'var(--boxalarm-spacing-lg)' }}>
-        <h2 style={{ fontSize: 'var(--boxalarm-font-size-lg)', margin: 0 }}>LOSAP point rules</h2>
+    <main id="main-content">
+      <PageHeader
+        title="LOSAP point rules"
+        breadcrumbs={[{ label: 'Settings', to: '/settings' }, { label: 'LOSAP' }]}
+      />
+      <Card>
         <form
           aria-label="LOSAP point rules"
           onSubmit={(event: FormEvent) => {
             event.preventDefault();
             saveMutation.mutate();
           }}
-          style={{
-            marginTop: 'var(--boxalarm-spacing-md)',
-            display: 'grid',
-            gap: 'var(--boxalarm-spacing-md)',
-            maxWidth: 320,
-          }}
+          style={{ display: 'grid', gap: 'var(--bx-space-md)', maxWidth: 320 }}
         >
           {ACTIVITY_TYPES.map((type) => (
-            <label key={type} style={{ display: 'grid', gap: 4 }}>
-              {type} points
-              <input
-                type="number"
-                min="0"
-                step="1"
-                value={points[type]}
-                onChange={(e) => setPoints((prev) => ({ ...prev, [type]: e.target.value }))}
-                style={{ minHeight: 44, padding: '0 12px' }}
-              />
-            </label>
+            <TextInput
+              key={type}
+              label={`${type} points`}
+              type="number"
+              min="0"
+              step="1"
+              value={points[type]}
+              onChange={(e) => setPoints((prev) => ({ ...prev, [type]: e.target.value }))}
+            />
           ))}
           {saveMutation.error ? (
             <p role="alert" aria-live="assertive">
               {saveMutation.error.message}
             </p>
           ) : null}
-          <button type="submit" style={{ minHeight: 44 }}>
+          <Button type="submit" style={{ width: 'fit-content' }}>
             Save rules
-          </button>
+          </Button>
         </form>
         {saveMutation.data ? (
-          <p role="status" style={{ marginTop: 'var(--boxalarm-spacing-sm)' }}>
+          <p role="status" style={{ marginTop: 'var(--bx-space-sm)' }}>
             Saved as rule version {saveMutation.data.ruleVersionId}.
           </p>
         ) : null}
-      </section>
+      </Card>
     </main>
   );
 }

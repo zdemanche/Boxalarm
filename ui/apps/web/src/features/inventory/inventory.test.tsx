@@ -296,6 +296,7 @@ test('below-threshold consumables are flagged (AC1)', async () => {
   await screen.findByRole('heading', { name: 'Inventory' });
   await user.click(screen.getByRole('tab', { name: 'Consumables' }));
   await waitFor(() => {
-    expect(screen.getByText('⚠ Reorder needed')).toBeTruthy();
+    const chip = screen.getByText('Reorder needed');
+    expect(chip.closest('[data-status="warning"]')).toBeTruthy();
   });
 });

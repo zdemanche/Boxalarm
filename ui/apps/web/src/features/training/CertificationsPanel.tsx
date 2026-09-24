@@ -2,6 +2,7 @@ import { FormEvent, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useAuth } from '../../auth/AuthContext';
 import { ApiForbiddenGate } from '../../components/ApiForbiddenGate';
+import { Button, Card, Skeleton, TextInput } from '../../components/ui';
 import {
   createCertification,
   listCertifications,
@@ -88,19 +89,17 @@ export function CertificationsPanel({ memberId }: { memberId: string }) {
   }
 
   return (
-    <section aria-label="Certifications" style={{ marginTop: 'var(--boxalarm-spacing-lg)' }}>
-      <h2 style={{ fontSize: 'var(--boxalarm-font-size-lg)', margin: 0 }}>Certifications</h2>
-
+    <Card title="Certifications" style={{ marginTop: 'var(--bx-space-lg)' }}>
       {certsQuery.isLoading ? (
-        <p>Loading certifications…</p>
+        <Skeleton lines={3} />
       ) : (
-        <ul style={{ listStyle: 'none', margin: 'var(--boxalarm-spacing-md) 0', padding: 0 }}>
+        <ul style={{ listStyle: 'none', margin: 0, padding: 0 }}>
           {(certsQuery.data ?? []).map((cert) => (
             <li
               key={cert.certId}
               style={{
-                padding: 'var(--boxalarm-spacing-sm) 0',
-                borderBottom: '1px solid var(--boxalarm-fg)',
+                padding: 'var(--bx-space-sm) 0',
+                borderBottom: '1px solid var(--bx-border-decorative)',
               }}
             >
               <strong>{cert.certType}</strong> — {cert.status} · expires {cert.expiryDate} ·{' '}
@@ -114,14 +113,15 @@ export function CertificationsPanel({ memberId }: { memberId: string }) {
               {isTraining && cert.status !== 'REVOKED' ? (
                 <>
                   {' '}
-                  <button
+                  <Button
                     type="button"
+                    variant="danger"
+                    size="sm"
                     onClick={() => revokeMutation.mutate(cert.certId)}
-                    disabled={revokeMutation.isPending}
-                    style={{ minHeight: 44 }}
+                    loading={revokeMutation.isPending}
                   >
                     Revoke
-                  </button>
+                  </Button>
                 </>
               ) : null}
             </li>
@@ -131,15 +131,15 @@ export function CertificationsPanel({ memberId }: { memberId: string }) {
       )}
 
       {pendingUpload ? (
-        <div role="alert" style={{ marginTop: 'var(--boxalarm-spacing-sm)' }}>
+        <div role="alert" style={{ marginTop: 'var(--bx-space-sm)' }}>
           <p>{uploadError}</p>
-          <button
+          <Button
             type="button"
+            variant="secondary"
             onClick={() => void attemptUpload(pendingUpload)}
-            style={{ minHeight: 44 }}
           >
             Retry upload
-          </button>
+          </Button>
         </div>
       ) : null}
 
@@ -148,53 +148,38 @@ export function CertificationsPanel({ memberId }: { memberId: string }) {
           onSubmit={onSubmit}
           aria-label="Add certification"
           style={{
-            marginTop: 'var(--boxalarm-spacing-lg)',
+            marginTop: 'var(--bx-space-lg)',
             display: 'grid',
-            gap: 'var(--boxalarm-spacing-md)',
+            gap: 'var(--bx-space-md)',
             maxWidth: 480,
           }}
         >
-          <h3 style={{ fontSize: 'var(--boxalarm-font-size-base)', margin: 0 }}>
-            Add certification
-          </h3>
-          <label style={{ display: 'grid', gap: 4 }}>
-            Certification type
-            <input
-              value={form.certType}
-              onChange={(e) => setForm((prev) => ({ ...prev, certType: e.target.value }))}
-              required
-              style={{ minHeight: 44, padding: '0 12px' }}
-            />
-          </label>
-          <label style={{ display: 'grid', gap: 4 }}>
-            Issue date
-            <input
-              type="date"
-              value={form.issueDate}
-              onChange={(e) => setForm((prev) => ({ ...prev, issueDate: e.target.value }))}
-              required
-              style={{ minHeight: 44, padding: '0 12px' }}
-            />
-          </label>
-          <label style={{ display: 'grid', gap: 4 }}>
-            Expiry date
-            <input
-              type="date"
-              value={form.expiryDate}
-              onChange={(e) => setForm((prev) => ({ ...prev, expiryDate: e.target.value }))}
-              required
-              style={{ minHeight: 44, padding: '0 12px' }}
-            />
-          </label>
-          <label style={{ display: 'grid', gap: 4 }}>
-            Issuing authority
-            <input
-              value={form.issuingAuthority}
-              onChange={(e) => setForm((prev) => ({ ...prev, issuingAuthority: e.target.value }))}
-              required
-              style={{ minHeight: 44, padding: '0 12px' }}
-            />
-          </label>
+          <TextInput
+            label="Certification type"
+            value={form.certType}
+            onChange={(e) => setForm((prev) => ({ ...prev, certType: e.target.value }))}
+            required
+          />
+          <TextInput
+            label="Issue date"
+            type="date"
+            value={form.issueDate}
+            onChange={(e) => setForm((prev) => ({ ...prev, issueDate: e.target.value }))}
+            required
+          />
+          <TextInput
+            label="Expiry date"
+            type="date"
+            value={form.expiryDate}
+            onChange={(e) => setForm((prev) => ({ ...prev, expiryDate: e.target.value }))}
+            required
+          />
+          <TextInput
+            label="Issuing authority"
+            value={form.issuingAuthority}
+            onChange={(e) => setForm((prev) => ({ ...prev, issuingAuthority: e.target.value }))}
+            required
+          />
           <label style={{ display: 'grid', gap: 4 }}>
             Attachment (optional)
             <input
@@ -208,11 +193,11 @@ export function CertificationsPanel({ memberId }: { memberId: string }) {
               {formError}
             </p>
           ) : null}
-          <button type="submit" disabled={createMutation.isPending} style={{ minHeight: 44 }}>
+          <Button type="submit" loading={createMutation.isPending}>
             Add certification
-          </button>
+          </Button>
         </form>
       ) : null}
-    </section>
+    </Card>
   );
 }

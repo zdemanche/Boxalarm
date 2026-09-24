@@ -2,6 +2,7 @@ import { FormEvent, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useAuth } from '../../auth/AuthContext';
 import { ApiForbiddenGate } from '../../components/ApiForbiddenGate';
+import { Button, Card, PageHeader, Skeleton, TextInput } from '../../components/ui';
 import { createTrainingEvent, listTrainingEvents, recordEventHours, signUpForEvent } from './api';
 import type { TrainingEvent } from './types';
 
@@ -40,37 +41,27 @@ function HoursForm({ event }: { event: TrainingEvent }) {
         e.preventDefault();
         mutation.mutate();
       }}
-      style={{
-        display: 'flex',
-        gap: 'var(--boxalarm-spacing-sm)',
-        alignItems: 'end',
-        marginTop: 8,
-      }}
+      style={{ display: 'flex', gap: 'var(--bx-space-sm)', alignItems: 'end', marginTop: 8 }}
     >
-      <label style={{ display: 'grid', gap: 4 }}>
-        Member ID
-        <input
-          value={memberId}
-          onChange={(e) => setMemberId(e.target.value)}
-          required
-          style={{ minHeight: 44, padding: '0 12px' }}
-        />
-      </label>
-      <label style={{ display: 'grid', gap: 4 }}>
-        Hours
-        <input
-          type="number"
-          min={0}
-          step="0.25"
-          value={hours}
-          onChange={(e) => setHours(e.target.value)}
-          required
-          style={{ minHeight: 44, padding: '0 12px', width: 80 }}
-        />
-      </label>
-      <button type="submit" disabled={mutation.isPending} style={{ minHeight: 44 }}>
+      <TextInput
+        label="Member ID"
+        value={memberId}
+        onChange={(e) => setMemberId(e.target.value)}
+        required
+      />
+      <TextInput
+        label="Hours"
+        type="number"
+        min={0}
+        step="0.25"
+        value={hours}
+        onChange={(e) => setHours(e.target.value)}
+        required
+        style={{ width: 80 }}
+      />
+      <Button type="submit" loading={mutation.isPending}>
         Record hours
-      </button>
+      </Button>
     </form>
   );
 }
@@ -121,19 +112,19 @@ export function TrainingEventsPage() {
   const now = Date.now();
 
   return (
-    <main id="main-content" style={{ padding: 'var(--boxalarm-spacing-lg)' }}>
-      <h1 style={{ fontSize: 'var(--boxalarm-font-size-xl)', margin: 0 }}>Training events</h1>
+    <main id="main-content">
+      <PageHeader title="Training events" />
 
       {eventsQuery.isLoading ? (
-        <p>Loading events…</p>
+        <Skeleton lines={4} />
       ) : (
-        <ul style={{ listStyle: 'none', margin: 'var(--boxalarm-spacing-lg) 0', padding: 0 }}>
+        <ul style={{ listStyle: 'none', margin: 'var(--bx-space-lg) 0', padding: 0 }}>
           {events.map((event) => (
             <li
               key={event.eventId}
               style={{
-                padding: 'var(--boxalarm-spacing-md) 0',
-                borderBottom: '1px solid var(--boxalarm-fg)',
+                padding: 'var(--bx-space-md) 0',
+                borderBottom: '1px solid var(--bx-border-decorative)',
               }}
             >
               <strong>{event.title}</strong> ({event.category}) —{' '}
@@ -142,14 +133,15 @@ export function TrainingEventsPage() {
               {!event.signedUp ? (
                 <>
                   {' '}
-                  <button
+                  <Button
                     type="button"
+                    variant="secondary"
+                    size="sm"
                     onClick={() => signUpMutation.mutate(event.eventId)}
-                    disabled={signUpMutation.isPending}
-                    style={{ minHeight: 44 }}
+                    loading={signUpMutation.isPending}
                   >
                     Sign up
-                  </button>
+                  </Button>
                 </>
               ) : null}
               {isTraining && event.startAt <= now ? <HoursForm event={event} /> : null}
@@ -160,61 +152,46 @@ export function TrainingEventsPage() {
       )}
 
       {isTraining ? (
-        <form
-          onSubmit={onSubmit}
-          aria-label="Create training event"
-          style={{
-            display: 'grid',
-            gap: 'var(--boxalarm-spacing-md)',
-            maxWidth: 480,
-          }}
-        >
-          <h2 style={{ fontSize: 'var(--boxalarm-font-size-lg)', margin: 0 }}>Create event</h2>
-          <label style={{ display: 'grid', gap: 4 }}>
-            Title
-            <input
+        <Card title="Create event" style={{ maxWidth: 480 }}>
+          <form
+            onSubmit={onSubmit}
+            aria-label="Create training event"
+            style={{ display: 'grid', gap: 'var(--bx-space-md)' }}
+          >
+            <TextInput
+              label="Title"
               value={form.title}
               onChange={(e) => setForm((prev) => ({ ...prev, title: e.target.value }))}
               required
-              style={{ minHeight: 44, padding: '0 12px' }}
             />
-          </label>
-          <label style={{ display: 'grid', gap: 4 }}>
-            Category
-            <input
+            <TextInput
+              label="Category"
               value={form.category}
               onChange={(e) => setForm((prev) => ({ ...prev, category: e.target.value }))}
               required
-              style={{ minHeight: 44, padding: '0 12px' }}
             />
-          </label>
-          <label style={{ display: 'grid', gap: 4 }}>
-            Starts
-            <input
+            <TextInput
+              label="Starts"
               type="datetime-local"
               onChange={(e) => setForm((prev) => ({ ...prev, startAt: toEpochMs(e.target.value) }))}
               required
-              style={{ minHeight: 44, padding: '0 12px' }}
             />
-          </label>
-          <label style={{ display: 'grid', gap: 4 }}>
-            Ends
-            <input
+            <TextInput
+              label="Ends"
               type="datetime-local"
               onChange={(e) => setForm((prev) => ({ ...prev, endAt: toEpochMs(e.target.value) }))}
               required
-              style={{ minHeight: 44, padding: '0 12px' }}
             />
-          </label>
-          {formError ? (
-            <p role="alert" aria-live="assertive">
-              {formError}
-            </p>
-          ) : null}
-          <button type="submit" disabled={createMutation.isPending} style={{ minHeight: 44 }}>
-            Create event
-          </button>
-        </form>
+            {formError ? (
+              <p role="alert" aria-live="assertive">
+                {formError}
+              </p>
+            ) : null}
+            <Button type="submit" loading={createMutation.isPending}>
+              Create event
+            </Button>
+          </form>
+        </Card>
       ) : null}
     </main>
   );

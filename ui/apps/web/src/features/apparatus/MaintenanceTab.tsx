@@ -2,6 +2,7 @@ import { FormEvent, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useAuth } from '../../auth/AuthContext';
 import { ApiForbiddenGate } from '../../components/ApiForbiddenGate';
+import { Button, Card, Skeleton, TextInput } from '../../components/ui';
 import { createMaintenance, getMaintenance } from './api';
 import type { CreateMaintenanceInput } from './types';
 
@@ -40,9 +41,9 @@ export function MaintenanceTab({ apparatusId }: { apparatusId: string }) {
 
   return (
     <section>
-      <h2 style={{ fontSize: 'var(--boxalarm-font-size-lg)' }}>Maintenance</h2>
+      <h2 style={{ fontSize: 17, fontWeight: 600 }}>Maintenance</h2>
       {query.isLoading ? (
-        <p>Loading maintenance history…</p>
+        <Skeleton lines={3} />
       ) : records.length === 0 ? (
         <p>No maintenance recorded for this unit.</p>
       ) : (
@@ -50,10 +51,13 @@ export function MaintenanceTab({ apparatusId }: { apparatusId: string }) {
           {records.map((record) => (
             <li
               key={record.performedAt}
-              style={{ padding: 'var(--boxalarm-spacing-sm) 0', borderBottom: '1px solid #0002' }}
+              style={{
+                padding: 'var(--bx-space-sm) 0',
+                borderBottom: '1px solid var(--bx-border-decorative)',
+              }}
             >
               <strong>{record.description}</strong> — {record.vendor} — ${record.cost.toFixed(2)}
-              <div style={{ fontSize: 'var(--boxalarm-font-size-sm)' }}>
+              <div style={{ fontSize: 13, color: 'var(--bx-fg-muted)' }}>
                 {new Date(record.performedAt * 1000).toLocaleDateString()}
                 {record.scheduledNextAt
                   ? ` — next scheduled ${new Date(record.scheduledNextAt * 1000).toLocaleDateString()}`
@@ -64,58 +68,46 @@ export function MaintenanceTab({ apparatusId }: { apparatusId: string }) {
         </ul>
       )}
 
-      <form
-        aria-label="Log maintenance"
-        onSubmit={(event: FormEvent) => {
-          event.preventDefault();
-          const cost = Number(form.cost);
-          mutation.mutate({ description: form.description, vendor: form.vendor, cost });
-        }}
-        style={{
-          display: 'grid',
-          gap: 'var(--boxalarm-spacing-sm)',
-          maxWidth: 480,
-          marginTop: 'var(--boxalarm-spacing-lg)',
-        }}
+      <Card
+        title="Log maintenance event"
+        style={{ marginTop: 'var(--bx-space-lg)', maxWidth: 480 }}
       >
-        <h3 style={{ fontSize: 'var(--boxalarm-font-size-base)', margin: 0 }}>
-          Log maintenance event
-        </h3>
-        <label style={{ display: 'grid', gap: 4 }}>
-          Description
-          <input
+        <form
+          aria-label="Log maintenance"
+          onSubmit={(event: FormEvent) => {
+            event.preventDefault();
+            const cost = Number(form.cost);
+            mutation.mutate({ description: form.description, vendor: form.vendor, cost });
+          }}
+          style={{ display: 'grid', gap: 'var(--bx-space-sm)' }}
+        >
+          <TextInput
+            label="Description"
             value={form.description}
             required
             onChange={(e) => setForm((prev) => ({ ...prev, description: e.target.value }))}
-            style={{ minHeight: 44, padding: '0 12px' }}
           />
-        </label>
-        <label style={{ display: 'grid', gap: 4 }}>
-          Vendor
-          <input
+          <TextInput
+            label="Vendor"
             value={form.vendor}
             required
             onChange={(e) => setForm((prev) => ({ ...prev, vendor: e.target.value }))}
-            style={{ minHeight: 44, padding: '0 12px' }}
           />
-        </label>
-        <label style={{ display: 'grid', gap: 4 }}>
-          Cost
-          <input
+          <TextInput
+            label="Cost"
             type="number"
             step="0.01"
             min="0"
             value={form.cost}
             required
             onChange={(e) => setForm((prev) => ({ ...prev, cost: e.target.value }))}
-            style={{ minHeight: 44, padding: '0 12px' }}
           />
-        </label>
-        {mutation.error ? <p role="alert">{mutation.error.message}</p> : null}
-        <button type="submit" style={{ minHeight: 44, maxWidth: 240 }}>
-          Log maintenance
-        </button>
-      </form>
+          {mutation.error ? <p role="alert">{mutation.error.message}</p> : null}
+          <Button type="submit" loading={mutation.isPending} style={{ maxWidth: 240 }}>
+            Log maintenance
+          </Button>
+        </form>
+      </Card>
     </section>
   );
 }

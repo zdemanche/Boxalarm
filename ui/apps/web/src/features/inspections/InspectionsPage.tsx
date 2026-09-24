@@ -2,6 +2,7 @@ import { FormEvent, Fragment, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useAuth } from '../../auth/AuthContext';
 import { ApiForbiddenGate } from '../../components/ApiForbiddenGate';
+import { Button, Card, PageHeader, Select, Skeleton, TextInput } from '../../components/ui';
 import { conductInspection, listDueInspections, scheduleInspection } from './api';
 import type { Violation, ViolationStatus } from './types';
 
@@ -55,227 +56,212 @@ export function InspectionsPage() {
   const inspections = listQuery.data ?? [];
 
   return (
-    <main id="main-content" style={{ padding: 'var(--boxalarm-spacing-lg)' }}>
-      <h1 style={{ fontSize: 'var(--boxalarm-font-size-xl)', margin: 0 }}>Inspections</h1>
+    <main id="main-content">
+      <PageHeader title="Inspections" />
 
       {listQuery.isLoading ? (
-        <p>Loading inspections…</p>
+        <Skeleton lines={4} />
       ) : (
-        <table
-          style={{
-            width: '100%',
-            marginTop: 'var(--boxalarm-spacing-lg)',
-            borderCollapse: 'collapse',
-          }}
-        >
-          <thead>
-            <tr>
-              <th scope="col" style={{ textAlign: 'left' }}>
-                Occupancy
-              </th>
-              <th scope="col" style={{ textAlign: 'left' }}>
-                Due date
-              </th>
-              <th scope="col" style={{ textAlign: 'left' }}>
-                Conducted
-              </th>
-              <th scope="col" style={{ textAlign: 'left' }}>
-                Violations
-              </th>
-              {canWrite ? (
+        <div role="region" aria-label="Inspections due" tabIndex={0} style={{ overflowX: 'auto' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+            <caption className="visually-hidden">Inspections due</caption>
+            <thead>
+              <tr>
                 <th scope="col" style={{ textAlign: 'left' }}>
-                  Actions
+                  Occupancy
                 </th>
-              ) : null}
-            </tr>
-          </thead>
-          <tbody>
-            {inspections.map((inspection) => (
-              <Fragment key={inspection.inspectionId}>
-                <tr>
-                  <th scope="row" style={{ textAlign: 'left', fontWeight: 500 }}>
-                    {inspection.occupancyId}
+                <th scope="col" style={{ textAlign: 'left' }}>
+                  Due date
+                </th>
+                <th scope="col" style={{ textAlign: 'left' }}>
+                  Conducted
+                </th>
+                <th scope="col" style={{ textAlign: 'left' }}>
+                  Violations
+                </th>
+                {canWrite ? (
+                  <th scope="col" style={{ textAlign: 'left' }}>
+                    Actions
                   </th>
-                  <td>{inspection.nextDueDate}</td>
-                  <td>
-                    {inspection.conductedDate
-                      ? `${inspection.conductedDate} by ${inspection.conductedBy}`
-                      : 'Not yet conducted'}
-                  </td>
-                  <td>
-                    {inspection.violations.length === 0
-                      ? '—'
-                      : inspection.violations.map((v) => `${v.code} (${v.status})`).join(', ')}
-                  </td>
-                  {canWrite ? (
-                    <td>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setConductingId(inspection.inspectionId);
-                          setViolations(
-                            inspection.violations.length > 0 ? inspection.violations : [],
-                          );
-                        }}
-                        style={{ minHeight: 44 }}
-                      >
-                        Conduct
-                      </button>
-                    </td>
-                  ) : null}
-                </tr>
-                {conductingId === inspection.inspectionId ? (
-                  <tr>
-                    <td colSpan={5}>
-                      <form
-                        aria-label={`Conduct inspection ${inspection.inspectionId}`}
-                        onSubmit={(event: FormEvent) => {
-                          event.preventDefault();
-                          conductMutation.mutate({
-                            occId: inspection.occupancyId,
-                            inspectionId: inspection.inspectionId,
-                          });
-                        }}
-                        style={{
-                          display: 'grid',
-                          gap: 'var(--boxalarm-spacing-md)',
-                          padding: 'var(--boxalarm-spacing-md)',
-                          maxWidth: 640,
-                        }}
-                      >
-                        <fieldset style={{ display: 'grid', gap: 'var(--boxalarm-spacing-sm)' }}>
-                          <legend>Violations</legend>
-                          {violations.map((violation, index) => (
-                            <div
-                              key={index}
-                              style={{ display: 'flex', gap: 'var(--boxalarm-spacing-sm)' }}
-                            >
-                              <label style={{ display: 'grid', gap: 4 }}>
-                                Code
-                                <input
-                                  value={violation.code}
-                                  onChange={(e) =>
-                                    setViolations((prev) =>
-                                      prev.map((v, i) =>
-                                        i === index ? { ...v, code: e.target.value } : v,
-                                      ),
-                                    )
-                                  }
-                                  style={{ minHeight: 44, padding: '0 12px' }}
-                                />
-                              </label>
-                              <label style={{ display: 'grid', gap: 4, flex: 1 }}>
-                                Description
-                                <input
-                                  value={violation.description}
-                                  onChange={(e) =>
-                                    setViolations((prev) =>
-                                      prev.map((v, i) =>
-                                        i === index ? { ...v, description: e.target.value } : v,
-                                      ),
-                                    )
-                                  }
-                                  style={{ minHeight: 44, padding: '0 12px' }}
-                                />
-                              </label>
-                              <label style={{ display: 'grid', gap: 4 }}>
-                                Status
-                                <select
-                                  value={violation.status}
-                                  onChange={(e) =>
-                                    setViolations((prev) =>
-                                      prev.map((v, i) =>
-                                        i === index
-                                          ? { ...v, status: e.target.value as ViolationStatus }
-                                          : v,
-                                      ),
-                                    )
-                                  }
-                                  style={{ minHeight: 44 }}
-                                >
-                                  <option value="open">Open</option>
-                                  <option value="resolved">Resolved</option>
-                                </select>
-                              </label>
-                            </div>
-                          ))}
-                          <button
-                            type="button"
-                            onClick={() =>
-                              setViolations((prev) => [...prev, { ...emptyViolation }])
-                            }
-                            style={{ minHeight: 44 }}
-                          >
-                            Add violation
-                          </button>
-                        </fieldset>
-                        <div style={{ display: 'flex', gap: 'var(--boxalarm-spacing-sm)' }}>
-                          <button type="submit" style={{ minHeight: 44 }}>
-                            Save conduct
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => setConductingId(null)}
-                            style={{ minHeight: 44 }}
-                          >
-                            Cancel
-                          </button>
-                        </div>
-                      </form>
-                    </td>
-                  </tr>
                 ) : null}
-              </Fragment>
-            ))}
-          </tbody>
-        </table>
+              </tr>
+            </thead>
+            <tbody>
+              {inspections.map((inspection) => (
+                <Fragment key={inspection.inspectionId}>
+                  <tr>
+                    <th scope="row" style={{ textAlign: 'left', fontWeight: 500 }}>
+                      {inspection.occupancyId}
+                    </th>
+                    <td>{inspection.nextDueDate}</td>
+                    <td>
+                      {inspection.conductedDate
+                        ? `${inspection.conductedDate} by ${inspection.conductedBy}`
+                        : 'Not yet conducted'}
+                    </td>
+                    <td>
+                      {inspection.violations.length === 0
+                        ? '—'
+                        : inspection.violations.map((v) => `${v.code} (${v.status})`).join(', ')}
+                    </td>
+                    {canWrite ? (
+                      <td>
+                        <Button
+                          type="button"
+                          variant="secondary"
+                          size="sm"
+                          onClick={() => {
+                            setConductingId(inspection.inspectionId);
+                            setViolations(
+                              inspection.violations.length > 0 ? inspection.violations : [],
+                            );
+                          }}
+                        >
+                          Conduct
+                        </Button>
+                      </td>
+                    ) : null}
+                  </tr>
+                  {conductingId === inspection.inspectionId ? (
+                    <tr>
+                      <td colSpan={5}>
+                        <Card style={{ maxWidth: 640 }}>
+                          <form
+                            aria-label={`Conduct inspection ${inspection.inspectionId}`}
+                            onSubmit={(event: FormEvent) => {
+                              event.preventDefault();
+                              conductMutation.mutate({
+                                occId: inspection.occupancyId,
+                                inspectionId: inspection.inspectionId,
+                              });
+                            }}
+                            style={{ display: 'grid', gap: 'var(--bx-space-md)' }}
+                          >
+                            <fieldset
+                              style={{
+                                display: 'grid',
+                                gap: 'var(--bx-space-sm)',
+                                border: 'none',
+                                padding: 0,
+                              }}
+                            >
+                              <legend>Violations</legend>
+                              {violations.map((violation, index) => (
+                                <div
+                                  key={index}
+                                  style={{ display: 'flex', gap: 'var(--bx-space-sm)' }}
+                                >
+                                  <TextInput
+                                    label="Code"
+                                    value={violation.code}
+                                    onChange={(e) =>
+                                      setViolations((prev) =>
+                                        prev.map((v, i) =>
+                                          i === index ? { ...v, code: e.target.value } : v,
+                                        ),
+                                      )
+                                    }
+                                  />
+                                  <TextInput
+                                    label="Description"
+                                    value={violation.description}
+                                    onChange={(e) =>
+                                      setViolations((prev) =>
+                                        prev.map((v, i) =>
+                                          i === index ? { ...v, description: e.target.value } : v,
+                                        ),
+                                      )
+                                    }
+                                    style={{ flex: 1 }}
+                                  />
+                                  <Select
+                                    label="Status"
+                                    value={violation.status}
+                                    onChange={(e) =>
+                                      setViolations((prev) =>
+                                        prev.map((v, i) =>
+                                          i === index
+                                            ? { ...v, status: e.target.value as ViolationStatus }
+                                            : v,
+                                        ),
+                                      )
+                                    }
+                                  >
+                                    <option value="open">Open</option>
+                                    <option value="resolved">Resolved</option>
+                                  </Select>
+                                </div>
+                              ))}
+                              <Button
+                                type="button"
+                                variant="secondary"
+                                onClick={() =>
+                                  setViolations((prev) => [...prev, { ...emptyViolation }])
+                                }
+                              >
+                                Add violation
+                              </Button>
+                            </fieldset>
+                            <div style={{ display: 'flex', gap: 'var(--bx-space-sm)' }}>
+                              <Button type="submit" loading={conductMutation.isPending}>
+                                Save conduct
+                              </Button>
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                onClick={() => setConductingId(null)}
+                              >
+                                Cancel
+                              </Button>
+                            </div>
+                          </form>
+                        </Card>
+                      </td>
+                    </tr>
+                  ) : null}
+                </Fragment>
+              ))}
+            </tbody>
+          </table>
+        </div>
       )}
 
       {canWrite ? (
-        <form
-          aria-label="Schedule inspection"
-          onSubmit={(event: FormEvent) => {
-            event.preventDefault();
-            scheduleMutation.mutate();
-          }}
-          style={{
-            marginTop: 'var(--boxalarm-spacing-xl)',
-            display: 'grid',
-            gap: 'var(--boxalarm-spacing-md)',
-            maxWidth: 480,
-          }}
+        <Card
+          title="Schedule inspection"
+          style={{ marginTop: 'var(--bx-space-xl)', maxWidth: 480 }}
         >
-          <h2 style={{ fontSize: 'var(--boxalarm-font-size-lg)', margin: 0 }}>
-            Schedule inspection
-          </h2>
-          <label style={{ display: 'grid', gap: 4 }}>
-            Occupancy ID
-            <input
+          <form
+            aria-label="Schedule inspection"
+            onSubmit={(event: FormEvent) => {
+              event.preventDefault();
+              scheduleMutation.mutate();
+            }}
+            style={{ display: 'grid', gap: 'var(--bx-space-md)' }}
+          >
+            <TextInput
+              label="Occupancy ID"
               value={occupancyId}
               required
               onChange={(e) => setOccupancyId(e.target.value)}
-              style={{ minHeight: 44, padding: '0 12px' }}
             />
-          </label>
-          <label style={{ display: 'grid', gap: 4 }}>
-            Scheduled date
-            <input
+            <TextInput
+              label="Scheduled date"
               type="date"
               value={scheduledDate}
               required
               onChange={(e) => setScheduledDate(e.target.value)}
-              style={{ minHeight: 44, padding: '0 12px' }}
             />
-          </label>
-          {scheduleError ? (
-            <p role="alert" aria-live="assertive">
-              {scheduleError}
-            </p>
-          ) : null}
-          <button type="submit" style={{ minHeight: 44 }}>
-            Schedule
-          </button>
-        </form>
+            {scheduleError ? (
+              <p role="alert" aria-live="assertive">
+                {scheduleError}
+              </p>
+            ) : null}
+            <Button type="submit" loading={scheduleMutation.isPending}>
+              Schedule
+            </Button>
+          </form>
+        </Card>
       ) : null}
     </main>
   );

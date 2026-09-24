@@ -2,6 +2,15 @@ import { FormEvent, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useAuth } from '../../auth/AuthContext';
 import { ApiForbiddenGate } from '../../components/ApiForbiddenGate';
+import {
+  Button,
+  Card,
+  DataTable,
+  PageHeader,
+  StatusChip,
+  TextInput,
+  type DataTableColumn,
+} from '../../components/ui';
 import { createHydrant, listHydrants, updateHydrant } from './api';
 import type { CreateHydrantInput, Hydrant } from './types';
 
@@ -59,177 +68,150 @@ export function HydrantsPage() {
     );
   }
 
-  return (
-    <main id="main-content" style={{ padding: 'var(--boxalarm-spacing-lg)' }}>
-      <h1 style={{ fontSize: 'var(--boxalarm-font-size-xl)', margin: 0 }}>Hydrants</h1>
-
-      {listQuery.isLoading ? (
-        <p>Loading hydrants…</p>
-      ) : (
-        <table
-          style={{
-            width: '100%',
-            marginTop: 'var(--boxalarm-spacing-lg)',
-            borderCollapse: 'collapse',
-          }}
-        >
-          <thead>
-            <tr>
-              <th scope="col" style={{ textAlign: 'left' }}>
-                Hydrant
-              </th>
-              <th scope="col" style={{ textAlign: 'left' }}>
-                Size
-              </th>
-              <th scope="col" style={{ textAlign: 'left' }}>
-                Flow rating
-              </th>
-              <th scope="col" style={{ textAlign: 'left' }}>
-                Next flow test due
-              </th>
-              <th scope="col" style={{ textAlign: 'left' }}>
-                Status
-              </th>
-              {canWrite ? (
-                <th scope="col" style={{ textAlign: 'left' }}>
-                  Actions
-                </th>
-              ) : null}
-            </tr>
-          </thead>
-          <tbody>
-            {(listQuery.data ?? []).map((hydrant: Hydrant) => (
-              <tr key={hydrant.hydrantId}>
-                <th scope="row" style={{ textAlign: 'left', fontWeight: 500 }}>
-                  {hydrant.hydrantId}
-                </th>
-                <td>{hydrant.size}</td>
-                <td>{hydrant.flowRatingGpm} gpm</td>
-                <td>{hydrant.nextFlowTestDue}</td>
-                <td>
-                  {hydrant.status === 'OUT_OF_SERVICE' ? (
-                    <span style={{ color: 'var(--boxalarm-error)' }}>⊘ Out of service</span>
-                  ) : (
-                    <span>● In service</span>
-                  )}
-                </td>
-                {canWrite ? (
-                  <td style={{ display: 'flex', gap: 'var(--boxalarm-spacing-sm)' }}>
-                    <button
-                      type="button"
-                      onClick={() =>
-                        flowTestMutation.mutate({
-                          hydrantId: hydrant.hydrantId,
-                          date: new Date().toISOString().slice(0, 10),
-                        })
-                      }
-                      style={{ minHeight: 44 }}
-                    >
-                      Record flow test
-                    </button>
-                    {hydrant.status !== 'OUT_OF_SERVICE' ? (
-                      <button
-                        type="button"
-                        onClick={() => markOosMutation.mutate(hydrant.hydrantId)}
-                        style={{ minHeight: 44 }}
-                      >
-                        Mark out of service
-                      </button>
-                    ) : null}
-                  </td>
+  const columns: DataTableColumn<Hydrant>[] = [
+    {
+      key: 'hydrantId',
+      header: 'Hydrant',
+      sortValue: (h) => h.hydrantId,
+      render: (h) => h.hydrantId,
+    },
+    { key: 'size', header: 'Size', sortValue: (h) => h.size, render: (h) => h.size },
+    {
+      key: 'flowRatingGpm',
+      header: 'Flow rating',
+      sortValue: (h) => h.flowRatingGpm,
+      render: (h) => `${h.flowRatingGpm} gpm`,
+    },
+    {
+      key: 'nextFlowTestDue',
+      header: 'Next flow test due',
+      sortValue: (h) => h.nextFlowTestDue,
+      render: (h) => h.nextFlowTestDue,
+    },
+    {
+      key: 'status',
+      header: 'Status',
+      sortValue: (h) => h.status,
+      render: (h) => (
+        <StatusChip status={h.status === 'OUT_OF_SERVICE' ? 'danger' : 'ok'}>
+          {h.status === 'OUT_OF_SERVICE' ? 'Out of service' : 'In service'}
+        </StatusChip>
+      ),
+    },
+    ...(canWrite
+      ? [
+          {
+            key: 'actions',
+            header: 'Actions',
+            render: (h: Hydrant) => (
+              <div style={{ display: 'flex', gap: 'var(--bx-space-sm)' }}>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  onClick={() =>
+                    flowTestMutation.mutate({
+                      hydrantId: h.hydrantId,
+                      date: new Date().toISOString().slice(0, 10),
+                    })
+                  }
+                >
+                  Record flow test
+                </Button>
+                {h.status !== 'OUT_OF_SERVICE' ? (
+                  <Button
+                    type="button"
+                    variant="danger"
+                    size="sm"
+                    onClick={() => markOosMutation.mutate(h.hydrantId)}
+                  >
+                    Mark out of service
+                  </Button>
                 ) : null}
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      )}
+              </div>
+            ),
+          } satisfies DataTableColumn<Hydrant>,
+        ]
+      : []),
+  ];
+
+  return (
+    <main id="main-content">
+      <PageHeader title="Hydrants" />
+
+      <DataTable
+        caption="Hydrant registry"
+        rowKey={(h) => h.hydrantId}
+        columns={columns}
+        rows={listQuery.data ?? []}
+        loading={listQuery.isLoading}
+        emptyMessage="No hydrants registered yet."
+      />
 
       {canWrite ? (
-        <form
-          aria-label="Register hydrant"
-          onSubmit={(event: FormEvent) => {
-            event.preventDefault();
-            createMutation.mutate(form);
-          }}
-          style={{
-            marginTop: 'var(--boxalarm-spacing-xl)',
-            display: 'grid',
-            gap: 'var(--boxalarm-spacing-md)',
-            maxWidth: 480,
-          }}
-        >
-          <h2 style={{ fontSize: 'var(--boxalarm-font-size-lg)', margin: 0 }}>Register hydrant</h2>
-          <label style={{ display: 'grid', gap: 4 }}>
-            Hydrant ID
-            <input
+        <Card title="Register hydrant" style={{ marginTop: 'var(--bx-space-xl)', maxWidth: 480 }}>
+          <form
+            aria-label="Register hydrant"
+            onSubmit={(event: FormEvent) => {
+              event.preventDefault();
+              createMutation.mutate(form);
+            }}
+            style={{ display: 'grid', gap: 'var(--bx-space-md)' }}
+          >
+            <TextInput
+              label="Hydrant ID"
               value={form.hydrantId}
               required
               onChange={(e) => setForm((prev) => ({ ...prev, hydrantId: e.target.value }))}
-              style={{ minHeight: 44, padding: '0 12px' }}
             />
-          </label>
-          <label style={{ display: 'grid', gap: 4 }}>
-            Latitude
-            <input
+            <TextInput
+              label="Latitude"
               type="number"
               step="any"
               value={form.latitude}
               required
               onChange={(e) => setForm((prev) => ({ ...prev, latitude: Number(e.target.value) }))}
-              style={{ minHeight: 44, padding: '0 12px' }}
             />
-          </label>
-          <label style={{ display: 'grid', gap: 4 }}>
-            Longitude
-            <input
+            <TextInput
+              label="Longitude"
               type="number"
               step="any"
               value={form.longitude}
               required
               onChange={(e) => setForm((prev) => ({ ...prev, longitude: Number(e.target.value) }))}
-              style={{ minHeight: 44, padding: '0 12px' }}
             />
-          </label>
-          <label style={{ display: 'grid', gap: 4 }}>
-            Size
-            <input
+            <TextInput
+              label="Size"
               value={form.size}
               required
               onChange={(e) => setForm((prev) => ({ ...prev, size: e.target.value }))}
-              style={{ minHeight: 44, padding: '0 12px' }}
             />
-          </label>
-          <label style={{ display: 'grid', gap: 4 }}>
-            Flow rating (gpm)
-            <input
+            <TextInput
+              label="Flow rating (gpm)"
               type="number"
               value={form.flowRatingGpm}
               required
               onChange={(e) =>
                 setForm((prev) => ({ ...prev, flowRatingGpm: Number(e.target.value) }))
               }
-              style={{ minHeight: 44, padding: '0 12px' }}
             />
-          </label>
-          <label style={{ display: 'grid', gap: 4 }}>
-            Next flow test due
-            <input
+            <TextInput
+              label="Next flow test due"
               type="date"
               value={form.nextFlowTestDue}
               required
               onChange={(e) => setForm((prev) => ({ ...prev, nextFlowTestDue: e.target.value }))}
-              style={{ minHeight: 44, padding: '0 12px' }}
             />
-          </label>
-          {formError ? (
-            <p role="alert" aria-live="assertive">
-              {formError}
-            </p>
-          ) : null}
-          <button type="submit" style={{ minHeight: 44 }}>
-            Save hydrant
-          </button>
-        </form>
+            {formError ? (
+              <p role="alert" aria-live="assertive">
+                {formError}
+              </p>
+            ) : null}
+            <Button type="submit" loading={createMutation.isPending}>
+              Save hydrant
+            </Button>
+          </form>
+        </Card>
       ) : null}
     </main>
   );

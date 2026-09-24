@@ -192,5 +192,6 @@ test('an out-of-service hydrant is distinguished by text and icon, not color alo
 
   renderApp(['CHIEF'], '/inspections/hydrants');
   await screen.findByText('HYD-1');
-  expect(screen.getByText('⊘ Out of service')).toBeTruthy();
+  const statusChip = screen.getByText('Out of service');
+  expect(statusChip.closest('[data-status="danger"]')).toBeTruthy();
 });

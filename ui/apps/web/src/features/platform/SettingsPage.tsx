@@ -1,3 +1,5 @@
+import { Link } from 'react-router-dom';
+import { Card, PageHeader } from '../../components/ui';
 import { ExportSection } from './ExportSection';
 import { JsonConfigEditor } from './JsonConfigEditor';
 import { RetentionSection } from './RetentionSection';
@@ -38,8 +40,12 @@ const CONFIG_SECTIONS: {
 
 export function SettingsPage() {
   return (
-    <main id="main-content" style={{ padding: 'var(--boxalarm-spacing-lg)' }}>
-      <h1 style={{ fontSize: 'var(--boxalarm-font-size-xl)', margin: 0 }}>Settings</h1>
+    <main id="main-content">
+      <PageHeader title="Settings" />
+      <Card title="LOSAP">
+        <p>Points awarded per attendance activity type for the length-of-service award program.</p>
+        <Link to="/settings/losap">LOSAP point rules</Link>
+      </Card>
       {CONFIG_SECTIONS.map((section) => (
         <JsonConfigEditor
           key={section.configType}
