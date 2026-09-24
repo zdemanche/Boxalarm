@@ -25,7 +25,16 @@ const VARIANT_CLASS: Record<ButtonVariant, string | undefined> = {
 };
 
 export const Button = forwardRef<HTMLButtonElement, ButtonProps>(function Button(
-  { variant = 'primary', size = 'md', loading = false, disabled, className, children, ...rest },
+  {
+    variant = 'primary',
+    size = 'md',
+    loading = false,
+    disabled,
+    className,
+    children,
+    onClick,
+    ...rest
+  },
   ref,
 ) {
   return (
@@ -35,8 +44,20 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(function Button
       className={[styles.button, SIZE_CLASS[size], VARIANT_CLASS[variant], className]
         .filter(Boolean)
         .join(' ')}
-      disabled={disabled || loading}
+      // `loading` never sets the native `disabled` attribute — a disabled button drops focus to
+      // <body> the instant it's set, stranding keyboard/screen-reader users on submit
+      // (docs/a11y-spec.md:367: "never disabled"). It stays focusable and its accessible state is
+      // carried by aria-disabled + aria-busy; activation is a no-op below instead.
+      disabled={disabled}
+      aria-disabled={loading || disabled || undefined}
       aria-busy={loading || undefined}
+      onClick={(event) => {
+        if (loading) {
+          event.preventDefault();
+          return;
+        }
+        onClick?.(event);
+      }}
       {...rest}
     >
       {loading ? <Loader2 className={styles.spinner} size={16} aria-hidden="true" /> : null}
