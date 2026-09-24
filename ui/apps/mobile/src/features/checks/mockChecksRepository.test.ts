@@ -30,6 +30,7 @@ test('submitDefect resolves without throwing', async () => {
       apparatusId: 'APP-ENGINE-2',
       description: 'Low tire pressure, rear axle',
       severity: 'MAJOR',
+      idempotencyKey: 'defect-test-1',
     }),
   ).resolves.toBeUndefined();
 });
