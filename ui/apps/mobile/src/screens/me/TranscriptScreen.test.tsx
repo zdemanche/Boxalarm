@@ -1,7 +1,7 @@
-import { fireEvent, render } from '@testing-library/react-native';
+import { render } from '@testing-library/react-native';
 import { useOptionalAuth, type AuthContextValue } from '../../auth/AuthContext';
 import { apiRequest } from '../../lib/apiClient';
-import { InboxScreen } from './InboxScreen';
+import { TranscriptScreen } from './TranscriptScreen';
 
 jest.mock('../../lib/apiClient', () => {
   const actual = jest.requireActual('../../lib/apiClient');
@@ -32,45 +32,36 @@ beforeEach(() => {
   mockUseOptionalAuth.mockReturnValue(mockAuthValue);
 });
 
-test('opening an unread notification marks it read', async () => {
+test('renders certifications and hours by category from the API', async () => {
   mockApiRequest.mockImplementation(async (path: string) => {
-    if (path === 'notifications') {
+    if (path === 'training/members/MBR-0001/transcript') {
       return {
         json: async () => ({
-          items: [
-            {
-              notificationId: 'n-1',
-              category: 'CERT_EXPIRY',
-              summary: '1 item expiring',
-              createdAt: 1,
-              readAt: null,
-            },
+          memberId: 'MBR-0001',
+          certifications: [
+            { certId: 'CERT-1', certType: 'FF1', issuingAuthority: 'CT DESPP', expiryDate: '2027-01-01', status: 'CURRENT' },
           ],
+          attendance: [],
+          hoursByCategory: { Ladders: 4 },
         }),
       };
     }
     return { json: async () => ({}) };
   });
 
-  const { findByText } = await render(<InboxScreen />);
+  const { findByText } = await render(<TranscriptScreen />);
 
-  const row = await findByText('1 item expiring');
-  fireEvent.press(row);
-
-  expect(mockApiRequest).toHaveBeenCalledWith(
-    'notifications/n-1/read',
-    mockAuthValue,
-    expect.objectContaining({ method: 'POST' }),
-  );
+  expect(await findByText('FF1 — CURRENT')).toBeTruthy();
+  expect(await findByText('Ladders: 4h')).toBeTruthy();
 });
 
-test('shows an error message instead of hanging when the notifications fetch fails', async () => {
+test('shows an error message instead of hanging when the transcript fetch fails', async () => {
   mockApiRequest.mockRejectedValue(new Error('network error'));
 
-  const { findByRole } = await render(<InboxScreen />);
+  const { findByRole } = await render(<TranscriptScreen />);
 
   const alert = await findByRole('alert');
   expect(alert.props.children).toBe(
-    'Notifications could not be loaded. Check your connection and try again.',
+    'Transcript could not be loaded. Check your connection and try again.',
   );
 });

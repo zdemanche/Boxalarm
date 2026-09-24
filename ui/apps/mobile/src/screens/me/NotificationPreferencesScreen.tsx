@@ -15,13 +15,23 @@ export function NotificationPreferencesScreen() {
   const auth = useOptionalAuth();
   const apiBaseUrl = Config.API_BASE_URL;
   const [preferences, setPreferences] = useState<NotificationPreference[]>([]);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
     if (!auth?.isAuthenticated || !apiBaseUrl) return;
-    getNotificationPreferences(auth, apiBaseUrl).then((result) => {
-      if (!cancelled) setPreferences(result);
-    });
+    setLoadError(null);
+    getNotificationPreferences(auth, apiBaseUrl)
+      .then((result) => {
+        if (!cancelled) setPreferences(result);
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setLoadError(
+            'Notification preferences could not be loaded. Check your connection and try again.',
+          );
+        }
+      });
     return () => {
       cancelled = true;
     };
@@ -45,6 +55,18 @@ export function NotificationPreferencesScreen() {
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: tokens.background }}>
       <ScrollView contentContainerStyle={{ padding: spacing.lg }}>
+        {loadError ? (
+          <Text
+            accessibilityRole="alert"
+            style={{
+              color: tokens.error,
+              fontSize: typography.size.sm,
+              marginBottom: spacing.md,
+            }}
+          >
+            {loadError}
+          </Text>
+        ) : null}
         <View
           style={{
             minHeight: touchTarget.baseline.ios,

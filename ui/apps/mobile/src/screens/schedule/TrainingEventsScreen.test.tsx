@@ -63,3 +63,14 @@ test('signing up for a training event marks it signed up', async () => {
     expect.objectContaining({ method: 'POST' }),
   );
 });
+
+test('shows an error message instead of hanging when the events fetch fails', async () => {
+  mockApiRequest.mockRejectedValue(new Error('network error'));
+
+  const { findByRole } = await render(<TrainingEventsScreen />);
+
+  const alert = await findByRole('alert');
+  expect(alert.props.children).toBe(
+    'Training events could not be loaded. Check your connection and try again.',
+  );
+});

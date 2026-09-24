@@ -25,13 +25,21 @@ export function TranscriptScreen() {
   const auth = useOptionalAuth();
   const apiBaseUrl = Config.API_BASE_URL;
   const [transcript, setTranscript] = useState<Transcript | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
     if (!auth?.isAuthenticated || !apiBaseUrl || !auth.memberId) return;
-    getTranscript(auth, apiBaseUrl, auth.memberId).then((result) => {
-      if (!cancelled) setTranscript(result);
-    });
+    setLoadError(null);
+    getTranscript(auth, apiBaseUrl, auth.memberId)
+      .then((result) => {
+        if (!cancelled) setTranscript(result);
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setLoadError('Transcript could not be loaded. Check your connection and try again.');
+        }
+      });
     return () => {
       cancelled = true;
     };
@@ -49,6 +57,19 @@ export function TranscriptScreen() {
         >
           Transcript
         </Text>
+
+        {loadError ? (
+          <Text
+            accessibilityRole="alert"
+            style={{
+              color: tokens.error,
+              fontSize: typography.size.sm,
+              marginTop: spacing.md,
+            }}
+          >
+            {loadError}
+          </Text>
+        ) : null}
 
         {transcript ? (
           <TouchableOpacity

@@ -13,15 +13,23 @@ export function InboxScreen() {
   const auth = useOptionalAuth();
   const apiBaseUrl = Config.API_BASE_URL;
   const [items, setItems] = useState<NotificationItem[]>([]);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   const canFetch = Boolean(auth?.isAuthenticated && apiBaseUrl);
 
   useEffect(() => {
     let cancelled = false;
     if (!canFetch || !auth) return;
-    getNotifications(auth, apiBaseUrl!).then((result) => {
-      if (!cancelled) setItems(result);
-    });
+    setLoadError(null);
+    getNotifications(auth, apiBaseUrl!)
+      .then((result) => {
+        if (!cancelled) setItems(result);
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setLoadError('Notifications could not be loaded. Check your connection and try again.');
+        }
+      });
     return () => {
       cancelled = true;
     };
@@ -39,6 +47,19 @@ export function InboxScreen() {
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: tokens.background }}>
+      {loadError ? (
+        <Text
+          accessibilityRole="alert"
+          style={{
+            color: tokens.error,
+            fontSize: typography.size.sm,
+            paddingHorizontal: spacing.lg,
+            paddingTop: spacing.md,
+          }}
+        >
+          {loadError}
+        </Text>
+      ) : null}
       <FlatList
         data={items}
         keyExtractor={(item) => item.notificationId}

@@ -17,10 +17,16 @@ export function TrainingEventsScreen() {
   const auth = useOptionalAuth();
   const apiBaseUrl = Config.API_BASE_URL;
   const [events, setEvents] = useState<TrainingEvent[]>([]);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   const load = () => {
     if (!auth?.isAuthenticated || !apiBaseUrl) return;
-    getTrainingEvents(auth, apiBaseUrl).then(setEvents);
+    setLoadError(null);
+    getTrainingEvents(auth, apiBaseUrl)
+      .then(setEvents)
+      .catch(() => {
+        setLoadError('Training events could not be loaded. Check your connection and try again.');
+      });
   };
 
   useEffect(load, [auth, apiBaseUrl]);
@@ -33,6 +39,19 @@ export function TrainingEventsScreen() {
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: tokens.background }}>
+      {loadError ? (
+        <Text
+          accessibilityRole="alert"
+          style={{
+            color: tokens.error,
+            fontSize: typography.size.sm,
+            paddingHorizontal: spacing.lg,
+            paddingTop: spacing.md,
+          }}
+        >
+          {loadError}
+        </Text>
+      ) : null}
       <FlatList
         data={events}
         keyExtractor={(item) => item.eventId}

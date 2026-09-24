@@ -1,7 +1,7 @@
-import { fireEvent, render } from '@testing-library/react-native';
+import { render } from '@testing-library/react-native';
 import { useOptionalAuth, type AuthContextValue } from '../../auth/AuthContext';
 import { apiRequest } from '../../lib/apiClient';
-import { InboxScreen } from './InboxScreen';
+import { NotificationPreferencesScreen } from './NotificationPreferencesScreen';
 
 jest.mock('../../lib/apiClient', () => {
   const actual = jest.requireActual('../../lib/apiClient');
@@ -32,45 +32,31 @@ beforeEach(() => {
   mockUseOptionalAuth.mockReturnValue(mockAuthValue);
 });
 
-test('opening an unread notification marks it read', async () => {
+test('renders the certification expiry preference from the API', async () => {
   mockApiRequest.mockImplementation(async (path: string) => {
-    if (path === 'notifications') {
+    if (path === 'notifications/preferences') {
       return {
         json: async () => ({
-          items: [
-            {
-              notificationId: 'n-1',
-              category: 'CERT_EXPIRY',
-              summary: '1 item expiring',
-              createdAt: 1,
-              readAt: null,
-            },
-          ],
+          preferences: [{ category: 'CERT_EXPIRY', channels: { push: false, email: true } }],
         }),
       };
     }
     return { json: async () => ({}) };
   });
 
-  const { findByText } = await render(<InboxScreen />);
+  const { findByLabelText } = await render(<NotificationPreferencesScreen />);
 
-  const row = await findByText('1 item expiring');
-  fireEvent.press(row);
-
-  expect(mockApiRequest).toHaveBeenCalledWith(
-    'notifications/n-1/read',
-    mockAuthValue,
-    expect.objectContaining({ method: 'POST' }),
-  );
+  const toggle = await findByLabelText('Certification expiry push notifications');
+  expect(toggle.props.value).toBe(false);
 });
 
-test('shows an error message instead of hanging when the notifications fetch fails', async () => {
+test('shows an error message instead of hanging when the preferences fetch fails', async () => {
   mockApiRequest.mockRejectedValue(new Error('network error'));
 
-  const { findByRole } = await render(<InboxScreen />);
+  const { findByRole } = await render(<NotificationPreferencesScreen />);
 
   const alert = await findByRole('alert');
   expect(alert.props.children).toBe(
-    'Notifications could not be loaded. Check your connection and try again.',
+    'Notification preferences could not be loaded. Check your connection and try again.',
   );
 });
