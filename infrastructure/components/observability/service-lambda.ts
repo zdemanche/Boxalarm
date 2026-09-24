@@ -102,7 +102,7 @@ export class ServiceLambda extends pulumi.ComponentResource {
       `${name}-fn`,
       {
         name: args.functionName,
-        runtime: args.runtime ?? aws.lambda.Runtime.NodeJS20dX,
+        runtime: args.runtime ?? aws.lambda.Runtime.NodeJS22dX,
         handler: args.handler,
         role: this.role.arn,
         code: args.code,
