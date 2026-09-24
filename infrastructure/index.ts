@@ -132,6 +132,7 @@ export const platformBus = new PlatformBus("platform-bus", { env });
 export const outboxPublisher = new OutboxPublisher("outbox-publisher", {
   env,
   platformTableName: platformTable.tableName,
+  platformTableArn: platformTable.tableArn,
   platformTableStreamArn: platformTable.streamArn,
   busName: platformBus.busName,
   busArn: platformBus.busArn,
