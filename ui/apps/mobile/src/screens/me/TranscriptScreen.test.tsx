@@ -40,7 +40,13 @@ test('renders certifications and hours by category from the API', async () => {
         json: async () => ({
           memberId: 'MBR-0001',
           certifications: [
-            { certId: 'CERT-1', certType: 'FF1', issuingAuthority: 'CT DESPP', expiryDate: '2027-01-01', status: 'CURRENT' },
+            {
+              certId: 'CERT-1',
+              certType: 'FF1',
+              issuingAuthority: 'CT DESPP',
+              expiryDate: '2027-01-01',
+              status: 'CURRENT',
+            },
           ],
           attendance: [],
           hoursByCategory: { Ladders: 4 },

@@ -177,8 +177,7 @@ test('training officer records post-event hours for an attendee via the hours fo
     http.get('/api/v1/training/events', () => HttpResponse.json(events)),
     http.post('/api/v1/training/events/:eventId/signup', async ({ request }) => {
       const body = (await request.json().catch(() => undefined)) as
-        | { attendees?: unknown }
-        | undefined;
+        { attendees?: unknown } | undefined;
       if (body?.attendees !== undefined) {
         recordedBody = body;
         return HttpResponse.json({ eventId: 'evt-1', attendeeCount: 1 });
