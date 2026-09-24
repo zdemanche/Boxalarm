@@ -57,15 +57,19 @@ export class RidingBoard extends pulumi.ComponentResource {
         code: httpStubCode(),
         routeKey: "GET /api/v1/apparatus/riding-board/{dispatchId}",
         environment,
-        additionalPolicyStatements: [
+        // getRidingBoard fans out to listApparatusForBoard (Query on GSI3),
+        // getRidingPositionsConfig (GetItem), listSeatAssignments (Query on the table),
+        // and readMemberQualCodes (Query on the table) — repository.ts. Both the table
+        // and its GSI3 index need to be granted, or the GSI3 query gets AccessDenied.
+        additionalPolicyStatements: pulumi.output(args.platformTableArn).apply((tableArn) => [
           {
-            Sid: "PlatformTableReadOnly",
-            Effect: "Allow",
+            Sid: "PlatformTableAndGsi3ReadOnly",
+            Effect: "Allow" as const,
             Action: ["dynamodb:GetItem", "dynamodb:Query"],
-            Resource: args.platformTableArn as string,
+            Resource: [tableArn, `${tableArn}/index/GSI3`],
           },
           verifiedPermissionsStatement,
-        ],
+        ]),
         reservedConcurrentExecutions: 5,
       },
       { parent: this },
@@ -84,15 +88,26 @@ export class RidingBoard extends pulumi.ComponentResource {
         code: httpStubCode(),
         routeKey: "POST /api/v1/apparatus/riding-board/{dispatchId}/assignments",
         environment,
-        additionalPolicyStatements: [
+        // assignSeat: findApparatusItem (Query on GSI3, via apparatus-service's shared
+        // repository), the history/priorSeat reads (GetItem), and the assignment itself
+        // (TransactWriteCommand — not UpdateItem, which was granted but never called;
+        // repository.ts). TransactWriteItems only ever targets the base table (a GSI
+        // can't be a TransactWriteItems target), so it's scoped to the table alone.
+        additionalPolicyStatements: pulumi.output(args.platformTableArn).apply((tableArn) => [
           {
-            Sid: "PlatformTableReadWrite",
-            Effect: "Allow",
-            Action: ["dynamodb:GetItem", "dynamodb:Query", "dynamodb:UpdateItem"],
-            Resource: args.platformTableArn as string,
+            Sid: "PlatformTableAndGsi3ReadOnly",
+            Effect: "Allow" as const,
+            Action: ["dynamodb:GetItem", "dynamodb:Query"],
+            Resource: [tableArn, `${tableArn}/index/GSI3`],
+          },
+          {
+            Sid: "PlatformTableTransactWrite",
+            Effect: "Allow" as const,
+            Action: ["dynamodb:TransactWriteItems"],
+            Resource: tableArn,
           },
           verifiedPermissionsStatement,
-        ],
+        ]),
         reservedConcurrentExecutions: 5,
       },
       { parent: this },
