@@ -19,17 +19,23 @@ export function TrainingEventsScreen() {
   const [events, setEvents] = useState<TrainingEvent[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
 
-  const load = () => {
+  useEffect(() => {
+    let cancelled = false;
     if (!auth?.isAuthenticated || !apiBaseUrl) return;
     setLoadError(null);
     getTrainingEvents(auth, apiBaseUrl)
-      .then(setEvents)
+      .then((result) => {
+        if (!cancelled) setEvents(result);
+      })
       .catch(() => {
-        setLoadError('Training events could not be loaded. Check your connection and try again.');
+        if (!cancelled) {
+          setLoadError('Training events could not be loaded. Check your connection and try again.');
+        }
       });
-  };
-
-  useEffect(load, [auth, apiBaseUrl]);
+    return () => {
+      cancelled = true;
+    };
+  }, [auth, apiBaseUrl]);
 
   const onSignUp = async (eventId: string) => {
     if (!auth || !apiBaseUrl) return;
