@@ -182,6 +182,7 @@ async function postChecks(
         if (!existingLockItem) {
           throw new Error(
             'Idempotency lock reported a conflict but the lock item could not be read back',
+            { cause: error },
           );
         }
         const existingCheck = await deps.client.send(
@@ -197,6 +198,7 @@ async function postChecks(
         if (!existingCheck.Item) {
           throw new Error(
             'Idempotency lock exists but the referenced checklist run could not be read back',
+            { cause: error },
           );
         }
         emitChecksMetric('DuplicateAccepted');
@@ -218,6 +220,7 @@ async function postChecks(
       if (!existingItem) {
         throw new Error(
           'Checklist run conditional write failed but the existing item could not be read back',
+          { cause: error },
         );
       }
       if (existingItem.idempotencyKey === validation.value.idempotencyKey) {
