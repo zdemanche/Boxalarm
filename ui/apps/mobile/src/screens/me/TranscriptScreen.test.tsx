@@ -1,7 +1,8 @@
 import { render } from '@testing-library/react-native';
 import { useOptionalAuth, type AuthContextValue } from '../../auth/AuthContext';
 import { apiRequest } from '../../lib/apiClient';
-import { TranscriptScreen } from './TranscriptScreen';
+import type { Transcript } from '../../features/training/types';
+import { TranscriptScreen, toCsv } from './TranscriptScreen';
 
 jest.mock('../../lib/apiClient', () => {
   const actual = jest.requireActual('../../lib/apiClient');
@@ -64,4 +65,48 @@ test('shows an error message instead of hanging when the transcript fetch fails'
   expect(alert.props.children).toBe(
     'Transcript could not be loaded. Check your connection and try again.',
   );
+});
+
+describe('toCsv', () => {
+  const baseTranscript: Transcript = {
+    memberId: 'MBR-0001',
+    certifications: [],
+    attendance: [],
+    hoursByCategory: {},
+  };
+
+  test('quotes a field containing a comma', () => {
+    const csv = toCsv({
+      ...baseTranscript,
+      certifications: [
+        {
+          certId: 'CERT-1',
+          certType: 'FF1, Recruit',
+          issuingAuthority: 'CT DESPP',
+          expiryDate: '2027-01-01',
+          status: 'CURRENT',
+        },
+      ],
+    });
+
+    expect(csv).toContain('"FF1, Recruit",CURRENT,2027-01-01');
+  });
+
+  test('defuses a leading formula character in a user-entered field', () => {
+    const csv = toCsv({
+      ...baseTranscript,
+      hoursByCategory: { '=SUM(A1:A9)': 3, '+cmd': 1, '-1+1': 2, '@evil': 4 },
+    });
+
+    expect(csv).toContain("'=SUM(A1:A9),3");
+    expect(csv).toContain("'+cmd,1");
+    expect(csv).toContain("'-1+1,2");
+    expect(csv).toContain("'@evil,4");
+  });
+
+  test('leaves an ordinary field untouched', () => {
+    const csv = toCsv({ ...baseTranscript, hoursByCategory: { Ladders: 4 } });
+
+    expect(csv).toContain('Ladders,4');
+  });
 });

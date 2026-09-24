@@ -7,14 +7,31 @@ import { useOptionalAuth } from '../../auth/AuthContext';
 import { getTranscript } from '../../features/training/api';
 import type { Transcript } from '../../features/training/types';
 
-function toCsv(transcript: Transcript): string {
-  const lines = ['certType,status,expiryDate'];
-  for (const cert of transcript.certifications) {
-    lines.push(`${cert.certType},${cert.status},${cert.expiryDate}`);
+const FORMULA_PREFIX_PATTERN = /^[=+\-@]/;
+
+// Quote fields containing a delimiter/quote/newline, and defuse a leading =, +, -, or @ (CSV
+// injection: those trigger formula evaluation in Excel/Sheets/Numbers when the file is opened)
+// by prefixing with a single quote before applying the standard escaping.
+function csvField(value: string | number): string {
+  let str = String(value);
+  if (FORMULA_PREFIX_PATTERN.test(str)) {
+    str = `'${str}`;
   }
-  lines.push('', 'category,hours');
+  return /[",\n]/.test(str) ? `"${str.replace(/"/g, '""')}"` : str;
+}
+
+function csvRow(fields: readonly (string | number)[]): string {
+  return fields.map(csvField).join(',');
+}
+
+export function toCsv(transcript: Transcript): string {
+  const lines = [csvRow(['certType', 'status', 'expiryDate'])];
+  for (const cert of transcript.certifications) {
+    lines.push(csvRow([cert.certType, cert.status, cert.expiryDate]));
+  }
+  lines.push('', csvRow(['category', 'hours']));
   for (const [category, hours] of Object.entries(transcript.hoursByCategory)) {
-    lines.push(`${category},${hours}`);
+    lines.push(csvRow([category, hours]));
   }
   return lines.join('\n');
 }
