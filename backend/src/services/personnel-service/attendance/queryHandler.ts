@@ -7,8 +7,9 @@ import {
   type CedarPrincipalContext,
   type GuardEvent,
 } from '@boxalarm/authz';
+import { toVerifiedDeptId, type VerifiedDeptId } from '@boxalarm/dept-scope';
 import { createDynamoClient, readAttendanceTableConfig } from '../dynamoClient.js';
-import { extractTraceId } from './handler.js';
+import { extractTraceId, memberExists } from './handler.js';
 
 function logQueryFailure(reason: string, error: unknown, traceId: string): void {
   console.error(
@@ -24,6 +25,7 @@ function logQueryFailure(reason: string, error: unknown, traceId: string): void 
 
 async function queryAttendanceFor(
   event: GuardEvent,
+  deptId: VerifiedDeptId,
   memberId: string,
 ): Promise<APIGatewayProxyResultV2> {
   const traceId = extractTraceId(event);
@@ -31,6 +33,16 @@ async function queryAttendanceFor(
   try {
     const { tableName } = readAttendanceTableConfig(process.env);
     const client = createDynamoClient(process.env);
+
+    // Cross-department read guard: without this, a client-supplied memberId (from the
+    // on-behalf path's pathParameters) would be used to key the GSI1 query directly, letting
+    // any officer with ViewAttendanceOnBehalf read any member's attendance history in any
+    // department. See PR #320 review, CRITICAL finding #1.
+    const exists = await memberExists(client, tableName, deptId, memberId);
+    if (!exists) {
+      return notFoundProblem(traceId, 'Member was not found');
+    }
+
     const result = await client.send(
       new QueryCommand({
         TableName: tableName,
@@ -59,15 +71,18 @@ async function queryOwnAttendance(
   event: GuardEvent,
   principal: CedarPrincipalContext,
 ): Promise<APIGatewayProxyResultV2> {
-  return queryAttendanceFor(event, principal.sub);
+  return queryAttendanceFor(event, toVerifiedDeptId(principal), principal.sub);
 }
 
-async function queryAttendanceOnBehalf(event: GuardEvent): Promise<APIGatewayProxyResultV2> {
+async function queryAttendanceOnBehalf(
+  event: GuardEvent,
+  principal: CedarPrincipalContext,
+): Promise<APIGatewayProxyResultV2> {
   const memberId = event.pathParameters?.memberId;
   if (!memberId) {
     return notFoundProblem(extractTraceId(event), 'memberId path parameter is required');
   }
-  return queryAttendanceFor(event, memberId);
+  return queryAttendanceFor(event, toVerifiedDeptId(principal), memberId);
 }
 
 export const handler = withAuthorization(queryOwnAttendance, {

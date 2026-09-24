@@ -1,7 +1,11 @@
 import { randomUUID } from 'node:crypto';
 import type { APIGatewayProxyResultV2 } from 'aws-lambda';
 import { TransactionCanceledException } from '@aws-sdk/client-dynamodb';
-import { TransactWriteCommand } from '@aws-sdk/lib-dynamodb';
+import {
+  GetCommand,
+  TransactWriteCommand,
+  type DynamoDBDocumentClient,
+} from '@aws-sdk/lib-dynamodb';
 import {
   notFoundProblem,
   withAuthorization,
@@ -42,6 +46,26 @@ export function buildAttendanceKeys(
     gsi1pk: `MEMBER#${memberId}`,
     gsi1sk: `ATTENDANCE_RECORD#${occurredAt}`,
   };
+}
+
+/**
+ * Confirms memberId belongs to the caller's own department before it is used to read or
+ * write attendance data. Without this check, a client-supplied memberId can be used to
+ * reach across department boundaries (see PR #320 review, CRITICAL finding #1).
+ */
+export async function memberExists(
+  client: DynamoDBDocumentClient,
+  tableName: string,
+  deptId: VerifiedDeptId,
+  memberId: string,
+): Promise<boolean> {
+  const result = await client.send(
+    new GetCommand({
+      TableName: tableName,
+      Key: { pk: buildDeptScopedPk(deptId, 'MEMBER', memberId), sk: 'METADATA' },
+    }),
+  );
+  return result.Item !== undefined;
 }
 
 function isActivityType(value: unknown): value is ActivityType {
