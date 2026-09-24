@@ -1,8 +1,9 @@
 import { targetSize, typeScale } from '@boxalarm/design-tokens';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
+import type { NavigatorScreenParams } from '@react-navigation/native';
 import { Text } from 'react-native';
 import { useTheme } from '../components/ui/theme';
-import { AlertsStack } from './AlertsStack';
+import { AlertsStack, type AlertsStackParamList } from './AlertsStack';
 import { ChecksStack } from './ChecksStack';
 import { MeStack } from './MeStack';
 import { ScheduleStack } from './ScheduleStack';
@@ -11,7 +12,7 @@ import { ScheduleStack } from './ScheduleStack';
 // All four are real stacks as of phase 7; Alerts is scoped to the self-test round trip until
 // boxalarm-backend access lands for the general dispatch-received path.
 export type AppTabsParamList = {
-  Alerts: undefined;
+  Alerts: NavigatorScreenParams<AlertsStackParamList> | undefined;
   Checks: undefined;
   Schedule: undefined;
   Me: undefined;
