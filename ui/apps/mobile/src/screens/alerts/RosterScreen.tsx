@@ -1,5 +1,5 @@
 import { palette, spacing, typography } from '@boxalarm/design-tokens';
-import { useRoute } from '@react-navigation/native';
+import { useIsFocused, useRoute } from '@react-navigation/native';
 import { useEffect, useRef, useState } from 'react';
 import { FlatList, Text, useColorScheme, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -30,6 +30,7 @@ export function RosterScreen() {
   const { dispatchId } = route.params as { dispatchId: string };
   const scheme = useColorScheme();
   const tokens = scheme === 'dark' ? palette.cab : palette.day;
+  const isFocused = useIsFocused();
   const { isOnline } = useConnectivity();
   const repository = useAlertsRepository();
   const [roster, setRoster] = useState<RosterEntry[]>([]);
@@ -37,7 +38,11 @@ export function RosterScreen() {
   const failureCountRef = useRef(0);
 
   useEffect(() => {
-    if (!isOnline) return;
+    // React Navigation's native-stack keeps prior screens mounted (e.g. AlertDetail -> Roster
+    // -> RidingBoard leaves Roster mounted underneath), so without this guard a backgrounded
+    // screen's poll keeps running indefinitely - tripling live network/battery load. Stop
+    // polling while not focused and resume (with an immediate load) when it regains focus.
+    if (!isOnline || !isFocused) return;
     let cancelled = false;
     let timeoutId: ReturnType<typeof setTimeout> | undefined;
 
@@ -77,7 +82,7 @@ export function RosterScreen() {
       cancelled = true;
       if (timeoutId) clearTimeout(timeoutId);
     };
-  }, [dispatchId, isOnline, repository]);
+  }, [dispatchId, isOnline, isFocused, repository]);
 
   if (!isOnline) {
     return (

@@ -1,5 +1,5 @@
 import { palette, radius, spacing, touchTarget, typography } from '@boxalarm/design-tokens';
-import { useRoute } from '@react-navigation/native';
+import { useIsFocused, useRoute } from '@react-navigation/native';
 import { useEffect, useRef, useState } from 'react';
 import { FlatList, Text, TouchableOpacity, useColorScheme, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -32,6 +32,7 @@ export function RidingBoardScreen() {
   const { dispatchId } = route.params as { dispatchId: string };
   const scheme = useColorScheme();
   const tokens = scheme === 'dark' ? palette.cab : palette.day;
+  const isFocused = useIsFocused();
   const { isOnline } = useConnectivity();
   const repository = useAlertsRepository();
   const [apparatus, setApparatus] = useState<RidingBoardApparatus[]>([]);
@@ -44,6 +45,13 @@ export function RidingBoardScreen() {
   const failureCountRef = useRef(0);
 
   useEffect(() => {
+    // React Navigation's native-stack keeps prior screens mounted (AlertDetail -> Roster ->
+    // RidingBoard leaves Roster mounted underneath), so without this guard a backgrounded
+    // screen's poll keeps running indefinitely - tripling live network/battery load. Stop
+    // polling while not focused and resume (with an immediate load, not a stale wait) when it
+    // regains focus.
+    if (!isFocused) return;
+
     let cancelled = false;
     let timeoutId: ReturnType<typeof setTimeout> | undefined;
 
@@ -83,7 +91,7 @@ export function RidingBoardScreen() {
       cancelled = true;
       if (timeoutId) clearTimeout(timeoutId);
     };
-  }, [dispatchId, repository]);
+  }, [dispatchId, repository, isFocused]);
 
   // The offline branch below only ever added to `pending` and returned - nothing flushed or
   // retried it on reconnect, so an offline assignment showed "Pending sync" forever and was

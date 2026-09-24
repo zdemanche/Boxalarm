@@ -1,10 +1,12 @@
-import { render } from '@testing-library/react-native';
+import { act, render } from '@testing-library/react-native';
 import { mockAlertsRepository } from '../../features/alerts/mockAlertsRepository';
 import { RosterScreen } from './RosterScreen';
 
 const mockRouteParams: { dispatchId: string } = { dispatchId: '' };
+const mockIsFocused = { current: true };
 jest.mock('@react-navigation/native', () => ({
   useRoute: () => ({ params: mockRouteParams }),
+  useIsFocused: () => mockIsFocused.current,
 }));
 
 const mockConnectivity: { isOnline: boolean } = { isOnline: true };
@@ -29,6 +31,8 @@ beforeEach(async () => {
   const { dispatchId } = await mockAlertsRepository.triggerSelfTest();
   mockRouteParams.dispatchId = dispatchId;
   mockConnectivity.isOnline = true;
+  mockIsFocused.current = true;
+  mockRepository.getRoster.mockReset();
   mockRepository.getRoster.mockImplementation((...args) => mockAlertsRepository.getRoster(...args));
 });
 
@@ -68,4 +72,34 @@ test('a poll failure surfaces a stale-data indicator instead of silently keeping
   const { findByText } = await render(<RosterScreen />);
 
   expect(await findByText(/data stopped updating/i)).toBeTruthy();
+});
+
+test('polling stops while the screen is unfocused and resumes immediately once it regains focus', async () => {
+  jest.useFakeTimers();
+  try {
+    const screen = await render(<RosterScreen />);
+    await screen.findByText('Jamie Rios');
+    expect(mockRepository.getRoster).toHaveBeenCalledTimes(1);
+
+    // React Navigation's native-stack keeps a screen mounted when navigating away from it -
+    // simulate that by dropping focus without unmounting.
+    mockIsFocused.current = false;
+    await act(async () => {
+      screen.rerender(<RosterScreen />);
+    });
+
+    await act(async () => {
+      jest.advanceTimersByTime(60_000);
+    });
+    expect(mockRepository.getRoster).toHaveBeenCalledTimes(1);
+
+    mockIsFocused.current = true;
+    await act(async () => {
+      screen.rerender(<RosterScreen />);
+    });
+
+    expect(mockRepository.getRoster).toHaveBeenCalledTimes(2);
+  } finally {
+    jest.useRealTimers();
+  }
 });

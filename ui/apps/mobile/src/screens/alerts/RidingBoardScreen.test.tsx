@@ -4,8 +4,10 @@ import { ApiError } from '../../lib/apiClient';
 import { RidingBoardScreen } from './RidingBoardScreen';
 
 const mockRouteParams: { dispatchId: string } = { dispatchId: '' };
+const mockIsFocused = { current: true };
 jest.mock('@react-navigation/native', () => ({
   useRoute: () => ({ params: mockRouteParams }),
+  useIsFocused: () => mockIsFocused.current,
 }));
 
 const mockConnectivity: { isOnline: boolean } = { isOnline: true };
@@ -56,6 +58,7 @@ beforeEach(async () => {
   await mockAlertsRepository.submitResponse(dispatchId, 'RESPONDING', 10);
   mockRouteParams.dispatchId = dispatchId;
   mockConnectivity.isOnline = true;
+  mockIsFocused.current = true;
   mockRepository.assignRidingSeat.mockReset();
   mockRepository.assignRidingSeat.mockImplementation((...args) =>
     mockAlertsRepository.assignRidingSeat(...args),
@@ -205,4 +208,35 @@ test('an offline assignment is queued as "Pending sync" and flushed automaticall
   await waitFor(() => {
     expect(screen.queryByText(/pending sync/i)).toBeNull();
   });
+});
+
+test('polling stops while the screen is unfocused and resumes immediately once it regains focus', async () => {
+  jest.useFakeTimers();
+  try {
+    const screen = await render(<RidingBoardScreen />);
+    await screen.findByText('Engine 301');
+    expect(mockRepository.getRidingBoard).toHaveBeenCalledTimes(1);
+
+    // React Navigation's native-stack keeps a screen mounted when navigating away from it
+    // (e.g. to another screen further up the AlertsStack) - simulate that by dropping focus
+    // without unmounting.
+    mockIsFocused.current = false;
+    await act(async () => {
+      screen.rerender(<RidingBoardScreen />);
+    });
+
+    await act(async () => {
+      jest.advanceTimersByTime(60_000);
+    });
+    expect(mockRepository.getRidingBoard).toHaveBeenCalledTimes(1);
+
+    mockIsFocused.current = true;
+    await act(async () => {
+      screen.rerender(<RidingBoardScreen />);
+    });
+
+    expect(mockRepository.getRidingBoard).toHaveBeenCalledTimes(2);
+  } finally {
+    jest.useRealTimers();
+  }
 });
