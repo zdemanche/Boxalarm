@@ -1,0 +1,149 @@
+.layout {
+  display: grid;
+  gap: var(--bx-space-lg);
+  align-items: start;
+}
+
+@media (min-width: 1024px) {
+  .layout {
+    grid-template-columns: 16rem minmax(0, 1fr);
+  }
+}
+
+@media (min-width: 1440px) {
+  .layout {
+    grid-template-columns: 16rem minmax(0, 1fr) 18rem;
+  }
+}
+
+.steps {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: var(--bx-space-xs);
+}
+
+.stepButton {
+  width: 100%;
+  min-height: var(--bx-target-office);
+  padding: var(--bx-space-sm) var(--bx-space-md);
+  text-align: left;
+  border: 1px solid var(--bx-border-decorative);
+  border-radius: var(--bx-radius-md);
+  background: var(--bx-surface);
+  color: inherit;
+  font: inherit;
+}
+
+.stepButton[aria-current='step'] {
+  font-weight: 700;
+  border-color: var(--bx-fg);
+}
+
+.panel {
+  display: grid;
+  gap: var(--bx-space-md);
+}
+
+.fields {
+  display: grid;
+  gap: var(--bx-space-md);
+}
+
+@media (min-width: 1440px) {
+  .fields {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .span {
+    grid-column: 1 / -1;
+  }
+}
+
+.summary {
+  display: grid;
+  gap: var(--bx-space-md);
+}
+
+.mark {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--bx-space-xs);
+  align-items: center;
+}
+
+.unit {
+  display: grid;
+  gap: var(--bx-space-sm);
+  padding: var(--bx-space-md);
+  border: 1px solid var(--bx-border-decorative);
+  border-radius: var(--bx-radius-md);
+  background: var(--bx-surface);
+}
+
+.times {
+  display: grid;
+  gap: var(--bx-space-md);
+}
+
+@media (min-width: 1024px) {
+  .times {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+.timeField {
+  display: grid;
+  gap: var(--bx-space-xs);
+  align-content: start;
+}
+
+.mono {
+  font-family: var(--bx-font-mono);
+}
+
+.count {
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.issues {
+  display: grid;
+  gap: var(--bx-space-sm);
+  padding: var(--bx-space-md);
+  border: 1px solid var(--bx-border-decorative);
+  border-radius: var(--bx-radius-md);
+  background: var(--bx-surface);
+}
+
+.issues h2 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.moduleList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: var(--bx-space-sm);
+}
+
+.module {
+  display: grid;
+  gap: var(--bx-space-2xs);
+  padding: var(--bx-space-md);
+  border: 1px solid var(--bx-border-decorative);
+  border-radius: var(--bx-radius-md);
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--bx-space-sm);
+}
+
+.narrative {
+  min-height: 12rem;
+}
