@@ -78,7 +78,8 @@ function mockDeps(options: {
 describe('submissionWorker handler (SQS trigger)', () => {
   beforeEach(() => {
     vi.resetModules();
-    process.env.NERIS_SUBMISSION_SCHEDULER_ROLE_ARN = 'arn:aws:iam::111122223333:role/neris-submission-scheduler';
+    process.env.NERIS_SUBMISSION_SCHEDULER_ROLE_ARN =
+      'arn:aws:iam::111122223333:role/neris-submission-scheduler';
   });
 
   afterEach(() => {
@@ -183,7 +184,8 @@ describe('submissionWorker handler (SQS trigger)', () => {
 describe('submissionWorker handler (EventBridge Scheduler retry trigger)', () => {
   beforeEach(() => {
     vi.resetModules();
-    process.env.NERIS_SUBMISSION_SCHEDULER_ROLE_ARN = 'arn:aws:iam::111122223333:role/neris-submission-scheduler';
+    process.env.NERIS_SUBMISSION_SCHEDULER_ROLE_ARN =
+      'arn:aws:iam::111122223333:role/neris-submission-scheduler';
   });
 
   afterEach(() => {
