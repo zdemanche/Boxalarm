@@ -101,6 +101,20 @@ describe("Certifications — certExpiredReactor stream consumer (#221)", () => {
     expect(comparison).toBe("GreaterThanThreshold");
   });
 
+  it("grants the reactor sqs:SendMessage on its on-failure queue so exhausted records reach it", async () => {
+    const certifications = await build();
+    const [policyJson, queueArn] = await Promise.all([
+      resolve(certifications.certExpiredReactorStreamPolicy.policy),
+      resolve(certifications.certExpiredReactorOnFailureQueue.arn),
+    ]);
+    const policy = JSON.parse(policyJson) as {
+      Statement: Array<{ Sid: string; Action: string[]; Resource: string }>;
+    };
+    const statement = policy.Statement.find((s) => s.Sid === "SendToOnFailureQueue");
+    expect(statement?.Action).toEqual(["sqs:SendMessage"]);
+    expect(statement?.Resource).toBe(queueArn);
+  });
+
   it("alarms on the EligibilityFlipFailed metric under the exact namespace the reactor emits", async () => {
     const certifications = await build();
     const [namespace, metricName] = await Promise.all([
