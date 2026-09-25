@@ -1,5 +1,5 @@
 import NetInfo from '@react-native-community/netinfo';
-import { apiRequest, type AuthTokenSource } from '../lib/apiClient';
+import { ApiError, apiRequest, type AuthTokenSource } from '../lib/apiClient';
 import type { SyncQueueStatus } from '../features/sync/types';
 import * as outbox from './outbox';
 import type { OutboxKind, OutboxRow } from './outbox';
@@ -85,6 +85,26 @@ export async function retry(id: string): Promise<void> {
   void drain();
 }
 
+export async function discard(id: string): Promise<void> {
+  await outbox.discard(id);
+  await notify();
+}
+
+// A 4xx means the server refused this request as sent, so an identical retry cannot succeed -
+// except 408 (timeout) and 429 (throttled), which are transient. 401 never reaches here as
+// permanent in practice: apiRequest already renewed the token once, and a still-expired session
+// is recoverable by signing in again, so it is treated as transient too.
+function isPermanentRejection(error: unknown): boolean {
+  if (!(error instanceof ApiError)) return false;
+  const { status } = error.problem;
+  return status >= 400 && status < 500 && status !== 401 && status !== 408 && status !== 429;
+}
+
+function describeError(error: unknown): string {
+  if (error instanceof ApiError) return error.problem.detail ?? error.problem.title;
+  return error instanceof Error ? error.message : String(error);
+}
+
 function guessPhotoContentType(uri: string): string {
   const extension = uri.split('.').pop()?.toLowerCase();
   switch (extension) {
@@ -168,7 +188,11 @@ export async function drain(): Promise<void> {
         await outbox.markSynced(row.id);
         lastSyncAt = new Date().toISOString();
       } catch (error) {
-        await outbox.markFailed(row.id, error instanceof Error ? error.message : String(error));
+        if (isPermanentRejection(error)) {
+          await outbox.markRejected(row.id, describeError(error));
+        } else {
+          await outbox.markFailed(row.id, describeError(error));
+        }
       }
       await notify();
     }

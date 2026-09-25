@@ -47,7 +47,9 @@ export async function find(id: string): Promise<OutboxRow | undefined> {
 
 export async function listDrainable(now: number): Promise<OutboxRow[]> {
   const rows = await store.all();
-  return rows.filter((row) => row.status !== 'SYNCING' && row.nextAttemptAt <= now);
+  return rows.filter(
+    (row) => row.status !== 'SYNCING' && row.status !== 'REJECTED' && row.nextAttemptAt <= now,
+  );
 }
 
 export async function markSyncing(id: string): Promise<void> {
@@ -77,12 +79,25 @@ export async function markFailed(id: string, error: string): Promise<void> {
   });
 }
 
+export async function markRejected(id: string, error: string): Promise<void> {
+  const row = await store.find(id);
+  await store.update(id, {
+    status: 'REJECTED',
+    attempts: (row?.attempts ?? 0) + 1,
+    lastError: error,
+  });
+}
+
 export async function markSynced(id: string): Promise<void> {
   await store.remove(id);
 }
 
 export async function retry(id: string): Promise<void> {
   await store.update(id, { status: 'QUEUED', nextAttemptAt: Date.now() });
+}
+
+export async function discard(id: string): Promise<void> {
+  await store.remove(id);
 }
 
 export async function advanceStage(

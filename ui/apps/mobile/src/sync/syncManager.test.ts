@@ -1,10 +1,17 @@
-import { apiRequest } from '../lib/apiClient';
+import { ApiError, apiRequest } from '../lib/apiClient';
 import * as store from './outboxStore';
 import * as syncManager from './syncManager';
 
-jest.mock('../lib/apiClient', () => ({ apiRequest: jest.fn() }));
+jest.mock('../lib/apiClient', () => ({
+  ...jest.requireActual('../lib/apiClient'),
+  apiRequest: jest.fn(),
+}));
 
 const mockApiRequest = apiRequest as jest.Mock;
+function problem(status: number, title: string): ApiError {
+  return new ApiError({ type: 'about:blank', title, status, traceId: 't' });
+}
+
 const tokens = { getAccessToken: jest.fn(), renewSilently: jest.fn() };
 
 async function clearOutbox(): Promise<void> {
@@ -170,4 +177,47 @@ test('the first drain after app start recovers a row left SYNCING by a killed pr
     );
     await expect(freshStore.find('orphan-1')).resolves.toBeUndefined();
   });
+});
+
+test('a 4xx validation rejection is terminal (REJECTED): kept for the user, never auto-retried', async () => {
+  mockApiRequest.mockRejectedValueOnce(problem(422, 'Checklist template is retired'));
+
+  await syncManager.enqueueChecklistRun('ENGINE-2', 'check-422', { templateId: 'CT-OLD' });
+  await flush();
+
+  const row = await store.find('check-422');
+  expect(row?.status).toBe('REJECTED');
+  expect(row?.lastError).toMatch(/template is retired/i);
+
+  mockApiRequest.mockClear();
+  await store.update('check-422', { nextAttemptAt: 0 });
+  await syncManager.drain();
+  expect(mockApiRequest).not.toHaveBeenCalled();
+});
+
+test.each([408, 429, 500, 503])('HTTP %i stays a transient FAILED with backoff', async (status) => {
+  mockApiRequest.mockRejectedValueOnce(problem(status, 'try later'));
+
+  await syncManager.enqueueChecklistRun('ENGINE-2', `check-${status}`, {});
+  await flush();
+
+  expect((await store.find(`check-${status}`))?.status).toBe('FAILED');
+});
+
+test('a REJECTED item can be manually retried or discarded', async () => {
+  mockApiRequest.mockRejectedValueOnce(problem(400, 'Bad payload'));
+  await syncManager.enqueueChecklistRun('ENGINE-2', 'check-400', {});
+  await flush();
+  expect((await store.find('check-400'))?.status).toBe('REJECTED');
+
+  mockApiRequest.mockResolvedValueOnce({ json: async () => ({}) });
+  await syncManager.retry('check-400');
+  await flush();
+  await expect(store.find('check-400')).resolves.toBeUndefined();
+
+  mockApiRequest.mockRejectedValueOnce(problem(400, 'Bad payload'));
+  await syncManager.enqueueChecklistRun('ENGINE-2', 'check-discard', {});
+  await flush();
+  await syncManager.discard('check-discard');
+  await expect(store.find('check-discard')).resolves.toBeUndefined();
 });
