@@ -21,7 +21,7 @@ export interface FanOutArgs {
  * Fan-out Lambda (E1-S2-INFRA): triggered by the alerting-table DynamoDB Stream,
  * filtered to INSERT of DISPATCH_ALERT items, publishes one SNS FIFO message per
  * {member, channel} to the push/sms queues in parallel, and (E1-S3-INFRA) creates the
- * per-member voice escalation schedule.
+ * per-member voice escalation schedule and the department tone-2/3 evaluator timers.
  */
 export class FanOut extends pulumi.ComponentResource {
   public readonly lambda: ServiceLambda;
@@ -41,9 +41,16 @@ export class FanOut extends pulumi.ComponentResource {
         handler: LAMBDA_HANDLER,
         code: lambdaCode("alerting-service", "fan-out"),
         logGroup: args.logGroup,
+        // The stream path schedules each member's tone-1 voice escalation and the
+        // department tone-2/3 ladder (fanout/fanOut.ts scheduleRealtimeFanOutEscalation);
+        // scheduleEscalation.ts / toneLadder.ts throw when these are unset, which fails
+        // the whole dispatch record.
         environment: {
           ALERTING_TABLE_NAME: args.alertingTableName,
           ALERTING_TOPIC_ARN: args.alertingTopicArn,
+          ESCALATION_HANDLER_ARN: args.escalation.lambda.function.arn,
+          ESCALATION_SCHEDULER_ROLE_ARN: args.escalation.schedulerRole.arn,
+          TONE_EVALUATOR_HANDLER_ARN: args.escalation.toneEvaluatorLambda.function.arn,
         },
         additionalPolicyStatements: args.escalation.scheduleResourcePattern.apply((pattern) => [
           {
