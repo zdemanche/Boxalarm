@@ -15,6 +15,8 @@ export interface AlertingOutboxDrainArgs {
   busArn: pulumi.Input<string>;
   logGroup: ServiceLogGroup;
   permissionsBoundaryArn: pulumi.Input<string>;
+  /** AlertingAlarms' page topic: a stalled bridge silently drops incident dispatch data. */
+  pageTopicArn: pulumi.Input<string>;
 }
 
 /** Must match the backend drain's metricNamespace (alerting-service/outboxDrainHandler.ts). */
@@ -178,6 +180,7 @@ export class AlertingOutboxDrain extends pulumi.ComponentResource {
         evaluationPeriods: 1,
         threshold: 0,
         comparisonOperator: "GreaterThanThreshold",
+        alarmActions: [args.pageTopicArn],
       },
       { parent: this },
     );
@@ -194,6 +197,7 @@ export class AlertingOutboxDrain extends pulumi.ComponentResource {
         threshold: 0,
         comparisonOperator: "GreaterThanThreshold",
         treatMissingData: "notBreaching",
+        alarmActions: [args.pageTopicArn],
       },
       { parent: this },
     );
@@ -210,6 +214,7 @@ export class AlertingOutboxDrain extends pulumi.ComponentResource {
         threshold: 0,
         comparisonOperator: "GreaterThanThreshold",
         treatMissingData: "notBreaching",
+        alarmActions: [args.pageTopicArn],
       },
       { parent: this },
     );

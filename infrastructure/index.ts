@@ -550,6 +550,7 @@ export const alertingCanary = new AlertingCanary("alerting-canary", {
 // PR #324 follow-up: alerting-table outbox -> platform-bus bridge (the allow-listed,
 // one-way path incident-service's dispatch/roster consumers depend on).
 export const alertingOutboxDrain = new AlertingOutboxDrain("alerting-outbox-drain", {
+  pageTopicArn: alertingAlarms.pageTopic.arn,
   env,
   alertingTableName: alertingTable.tableName,
   alertingTableArn: alertingTable.tableArn,

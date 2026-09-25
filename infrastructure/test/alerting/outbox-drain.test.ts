@@ -43,6 +43,7 @@ const STREAM_ARN = `${TABLE_ARN}/stream/2026-01-01T00:00:00.000`;
 const CMK_ARN = "arn:aws:kms:us-east-1:123456789012:key/alerting-cmk";
 const BUS_ARN = "arn:aws:events:us-east-1:123456789012:event-bus/boxalarm-dev-platform-bus";
 const BOUNDARY_ARN = "arn:aws:iam::123456789012:policy/boxalarm-dev-alerting-plane-boundary";
+const PAGE_TOPIC_ARN = "arn:aws:sns:us-east-1:123456789012:boxalarm-dev-alerting-page";
 
 type Statement = {
   Sid: string;
@@ -68,8 +69,20 @@ describe("AlertingOutboxDrain", () => {
       busArn: pulumi.output(BUS_ARN),
       logGroup,
       permissionsBoundaryArn: pulumi.output(BOUNDARY_ARN),
+      pageTopicArn: pulumi.output(PAGE_TOPIC_ARN),
     });
   }
+
+  it("routes every bridge alarm to the alerting page topic", async () => {
+    const drain = await build();
+    for (const alarm of [
+      drain.onFailureAlarm,
+      drain.publishFailedAlarm,
+      drain.eventTypeRejectedAlarm,
+    ]) {
+      expect(await resolve(alarm.alarmActions)).toEqual([PAGE_TOPIC_ARN]);
+    }
+  });
 
   async function statements(drain: Awaited<ReturnType<typeof build>>): Promise<Statement[]> {
     const policyJson = await resolve(drain.lambda.rolePolicy.policy);
