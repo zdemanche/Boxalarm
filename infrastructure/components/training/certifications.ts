@@ -49,6 +49,7 @@ export class Certifications extends pulumi.ComponentResource {
   public readonly scannerSchedule: aws.scheduler.Schedule;
   public readonly certExpiredReactorLambda: ServiceLambda;
   public readonly certExpiredReactorOnFailureQueue: aws.sqs.Queue;
+  public readonly certExpiredReactorStreamPolicy: aws.iam.RolePolicy;
   public readonly certExpiredReactorEventSourceMapping: aws.lambda.EventSourceMapping;
   public readonly certExpiredReactorOnFailureAlarm: aws.cloudwatch.MetricAlarm;
   public readonly eligibilityFlipFailedAlarm: aws.cloudwatch.MetricAlarm;
@@ -337,28 +338,38 @@ export class Certifications extends pulumi.ComponentResource {
       { parent: this },
     );
 
-    new aws.iam.RolePolicy(
+    this.certExpiredReactorStreamPolicy = new aws.iam.RolePolicy(
       `${name}-cert-expired-reactor-stream-read-policy`,
       {
         role: this.certExpiredReactorLambda.role.id,
-        policy: pulumi.output(args.platformTableStreamArn).apply((streamArn) =>
-          JSON.stringify({
-            Version: "2012-10-17",
-            Statement: [
-              {
-                Sid: "ReadPlatformTableStream",
-                Effect: "Allow",
-                Action: [
-                  "dynamodb:GetRecords",
-                  "dynamodb:GetShardIterator",
-                  "dynamodb:DescribeStream",
-                  "dynamodb:ListStreams",
-                ],
-                Resource: streamArn,
-              },
-            ],
-          }),
-        ),
+        policy: pulumi
+          .all([args.platformTableStreamArn, this.certExpiredReactorOnFailureQueue.arn])
+          .apply(([streamArn, onFailureQueueArn]) =>
+            JSON.stringify({
+              Version: "2012-10-17",
+              Statement: [
+                {
+                  Sid: "ReadPlatformTableStream",
+                  Effect: "Allow",
+                  Action: [
+                    "dynamodb:GetRecords",
+                    "dynamodb:GetShardIterator",
+                    "dynamodb:DescribeStream",
+                    "dynamodb:ListStreams",
+                  ],
+                  Resource: streamArn,
+                },
+                {
+                  // The on-failure destination is written with this execution role;
+                  // without it, exhausted records are dropped instead of queued.
+                  Sid: "SendToOnFailureQueue",
+                  Effect: "Allow",
+                  Action: ["sqs:SendMessage"],
+                  Resource: onFailureQueueArn,
+                },
+              ],
+            }),
+          ),
       },
       { parent: this },
     );
