@@ -72,6 +72,7 @@ function HoursForm({ event }: { event: TrainingEvent }) {
       <Button type="submit" loading={mutation.isPending}>
         Record hours
       </Button>
+      {mutation.error ? <p role="alert">Hours not recorded: {mutation.error.message}</p> : null}
     </form>
   );
 }
@@ -124,6 +125,10 @@ export function TrainingEventsPage() {
   return (
     <main id="main-content">
       <PageHeader title="Training events" />
+
+      {signUpMutation.error ? (
+        <p role="alert">Sign-up failed: {signUpMutation.error.message}</p>
+      ) : null}
 
       {eventsQuery.isLoading ? (
         <Skeleton lines={4} />

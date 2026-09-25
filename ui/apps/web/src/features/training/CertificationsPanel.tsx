@@ -2,7 +2,7 @@ import { FormEvent, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useAuth } from '../../auth/AuthContext';
 import { ApiForbiddenGate } from '../../components/ApiForbiddenGate';
-import { Button, Card, Skeleton, TextInput } from '../../components/ui';
+import { Button, Card, ConfirmDialog, Skeleton, TextInput } from '../../components/ui';
 import {
   createCertification,
   listCertifications,
@@ -35,6 +35,7 @@ export function CertificationsPanel({ memberId }: { memberId: string }) {
   const [formError, setFormError] = useState<string | null>(null);
   const [pendingUpload, setPendingUpload] = useState<PendingUpload | null>(null);
   const [uploadError, setUploadError] = useState<string | null>(null);
+  const [revokeTarget, setRevokeTarget] = useState<Certification | null>(null);
 
   const certsQuery = useQuery({
     queryKey,
@@ -117,8 +118,7 @@ export function CertificationsPanel({ memberId }: { memberId: string }) {
                     type="button"
                     variant="danger"
                     size="sm"
-                    onClick={() => revokeMutation.mutate(cert.certId)}
-                    loading={revokeMutation.isPending}
+                    onClick={() => setRevokeTarget(cert)}
                   >
                     Revoke
                   </Button>
@@ -198,6 +198,22 @@ export function CertificationsPanel({ memberId }: { memberId: string }) {
           </Button>
         </form>
       ) : null}
+
+      {/* Revoke is irreversible: confirm, naming the certification (PR #321 review m2/m3).
+          The dialog shows a failed revoke inline instead of closing blind. */}
+      <ConfirmDialog
+        open={revokeTarget !== null}
+        onOpenChange={(open) => {
+          if (!open) setRevokeTarget(null);
+        }}
+        title={`Revoke ${revokeTarget?.certType ?? 'certification'}?`}
+        consequence={`${revokeTarget?.certType ?? 'This certification'} (${revokeTarget?.issuingAuthority ?? ''}) will be marked revoked for this member. This cannot be undone.`}
+        confirmLabel="Revoke certification"
+        danger
+        onConfirm={async () => {
+          if (revokeTarget) await revokeMutation.mutateAsync(revokeTarget.certId);
+        }}
+      />
     </Card>
   );
 }
