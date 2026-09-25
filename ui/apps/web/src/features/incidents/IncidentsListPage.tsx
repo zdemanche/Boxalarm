@@ -1,5 +1,5 @@
-import { FormEvent, useEffect, useRef, useState } from 'react';
-import { useMutation, useQuery } from '@tanstack/react-query';
+import { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../../auth/AuthContext';
 import { ApiError } from '../../lib/apiClient';
@@ -8,12 +8,12 @@ import { Button } from '../../components/ui/Button';
 import { Card } from '../../components/ui/Card';
 import { DataTable, type DataTableColumn } from '../../components/ui/DataTable';
 import { StatusChip } from '../../components/ui/Chip';
-import { DatePicker, TextInput } from '../../components/ui/Field';
+import { Checkbox, DatePicker, TextInput } from '../../components/ui/Field';
 import { PageHeader } from '../../components/ui/PageHeader';
-import { ToolbarGroup } from '../../components/ui/Toolbar';
 import { createIncidentFromDispatch, searchIncidents } from './api';
-import { focusFieldById } from './focusField';
+import { dateInputToEpoch, epochToDateInput, formatDate } from './format';
 import type { Incident, IncidentStatus } from './types';
+import styles from './IncidentsList.module.css';
 
 const STATUS_ROLE: Record<IncidentStatus, 'neutral' | 'info' | 'warning' | 'ok' | 'danger'> = {
   DRAFT: 'neutral',
@@ -31,28 +31,24 @@ const STATUS_LABEL: Record<IncidentStatus, string> = {
   REJECTED: 'Rejected',
 };
 
-function toDateInput(epochSeconds: number): string {
-  return new Date(epochSeconds * 1000).toISOString().slice(0, 10);
-}
-
-function fromDateInput(value: string, endOfDay: boolean): number {
-  const ms = Date.parse(`${value}T${endOfDay ? '23:59:59' : '00:00:00'}Z`);
-  return Math.floor(ms / 1000);
-}
+const STATUS_ORDER: IncidentStatus[] = ['DRAFT', 'VALIDATED', 'SUBMITTED', 'ACCEPTED', 'REJECTED'];
 
 const DEFAULT_RANGE_DAYS = 90;
+
+function StatusCell({ status }: { status: IncidentStatus }) {
+  return <StatusChip status={STATUS_ROLE[status]}>{STATUS_LABEL[status]}</StatusChip>;
+}
 
 export function IncidentsListPage() {
   const auth = useAuth();
   const navigate = useNavigate();
-  // §7.1: /incidents is OFFICER|CHIEF; createIncident.ts requires isAdmin (ADMIN or CHIEF), and
-  // ADMIN cannot reach this route — CHIEF is the only client-verifiable role for the gate.
-  const canCreate = auth.roles.includes('CHIEF');
+  const queryClient = useQueryClient();
+  const canCreate = auth.roles.includes('CHIEF') || auth.roles.includes('OFFICER');
 
   const now = Math.floor(Date.now() / 1000);
-  const [fromDate, setFromDate] = useState(toDateInput(now - DEFAULT_RANGE_DAYS * 86400));
-  const [toDate, setToDate] = useState(toDateInput(now));
-
+  const [fromDate, setFromDate] = useState(epochToDateInput(now - DEFAULT_RANGE_DAYS * 86400));
+  const [toDate, setToDate] = useState(epochToDateInput(now));
+  const [selectedStatuses, setSelectedStatuses] = useState<IncidentStatus[]>([]);
   const [dispatchId, setDispatchId] = useState('');
   const errorRef = useRef<HTMLDivElement>(null);
 
@@ -60,14 +56,15 @@ export function IncidentsListPage() {
     queryKey: ['incidents', fromDate, toDate],
     queryFn: () =>
       searchIncidents(auth, {
-        fromAlarmAt: fromDateInput(fromDate, false),
-        toAlarmAt: fromDateInput(toDate, true),
+        fromAlarmAt: dateInputToEpoch(fromDate, false),
+        toAlarmAt: dateInputToEpoch(toDate, true),
       }),
   });
 
   const createMutation = useMutation({
     mutationFn: () => createIncidentFromDispatch(auth, { dispatchId }),
     onSuccess: (created) => {
+      queryClient.setQueryData(['incident', created.incidentId], created);
       setDispatchId('');
       navigate(`/incidents/${created.incidentId}`);
     },
@@ -77,78 +74,220 @@ export function IncidentsListPage() {
     if (createMutation.error) errorRef.current?.focus();
   }, [createMutation.error]);
 
-  if (listQuery.error) {
-    return (
-      <ApiForbiddenGate error={listQuery.error}>
-        <p>Unexpected error</p>
-      </ApiForbiddenGate>
-    );
-  }
+  const ranged = useMemo(
+    () => [...(listQuery.data ?? [])].sort((a, b) => (a.alarmAt ?? 0) - (b.alarmAt ?? 0)),
+    [listQuery.data],
+  );
+  const visible =
+    selectedStatuses.length === 0
+      ? ranged
+      : ranged.filter((incident) => selectedStatuses.includes(incident.status));
+  const attention = ranged.filter(
+    (incident) => incident.status === 'DRAFT' || incident.status === 'REJECTED',
+  );
+  const draftCount = attention.filter((incident) => incident.status === 'DRAFT').length;
+  const rejectedCount = attention.filter((incident) => incident.status === 'REJECTED').length;
+  const filtersActive =
+    selectedStatuses.length > 0 ||
+    fromDate !== epochToDateInput(now - DEFAULT_RANGE_DAYS * 86400) ||
+    toDate !== epochToDateInput(now);
 
   const columns: DataTableColumn<Incident>[] = [
     {
-      key: 'incidentType',
-      header: 'Type',
-      sortValue: (i) => i.incidentType ?? '',
+      key: 'dispatchNumber',
+      header: 'Report',
+      sortValue: (incident) => incident.dispatchNumber,
       isRowHeader: true,
-      render: (i) => (
-        <Link to={`/incidents/${i.incidentId}`} style={{ fontWeight: 600 }}>
-          {i.incidentType ?? 'Unclassified'}
+      render: (incident) => (
+        <Link to={`/incidents/${incident.incidentId}`} className={styles.mono}>
+          {incident.dispatchNumber}
         </Link>
       ),
     },
     {
+      key: 'incidentType',
+      header: 'Type',
+      sortValue: (incident) => incident.incidentType ?? '',
+      render: (incident) => incident.incidentType ?? 'Unclassified',
+    },
+    {
       key: 'address',
       header: 'Address',
-      sortValue: (i) => i.address ?? '',
-      render: (i) => i.address ?? '—',
+      sortValue: (incident) => incident.address ?? '',
+      render: (incident) => incident.address ?? '—',
     },
     {
       key: 'alarmAt',
       header: 'Date',
-      sortValue: (i) => i.alarmAt ?? 0,
-      render: (i) => (i.alarmAt ? new Date(i.alarmAt * 1000).toLocaleDateString() : '—'),
+      sortValue: (incident) => incident.alarmAt ?? 0,
+      render: (incident) => formatDate(incident.alarmAt),
     },
     {
       key: 'status',
       header: 'Status',
-      sortValue: (i) => i.status,
-      render: (i) => (
-        <StatusChip status={STATUS_ROLE[i.status]}>{STATUS_LABEL[i.status]}</StatusChip>
-      ),
+      sortValue: (incident) => incident.status,
+      render: (incident) => <StatusCell status={incident.status} />,
     },
   ];
 
   const createError =
     createMutation.error instanceof ApiError ? createMutation.error.problem : null;
+  const loadError = listQuery.error;
+  const forbidden = loadError instanceof ApiError && loadError.problem.status === 403;
+
+  if (forbidden) {
+    return (
+      <ApiForbiddenGate error={loadError}>
+        <p>Unexpected error</p>
+      </ApiForbiddenGate>
+    );
+  }
+
+  const emptyMessage =
+    !listQuery.isLoading && ranged.length === 0
+      ? filtersActive
+        ? 'No incident reports in this range.'
+        : 'No incident reports yet. Reports are created from dispatches — your first one appears after your first call.'
+      : 'No incidents match these filters.';
+
+  function clearFilters() {
+    const nextNow = Math.floor(Date.now() / 1000);
+    setFromDate(epochToDateInput(nextNow - DEFAULT_RANGE_DAYS * 86400));
+    setToDate(epochToDateInput(nextNow));
+    setSelectedStatuses([]);
+  }
+
+  function toggleStatus(status: IncidentStatus, checked: boolean) {
+    setSelectedStatuses((current) =>
+      checked ? [...current, status] : current.filter((item) => item !== status),
+    );
+  }
 
   return (
     <main id="main-content">
       <PageHeader title="Incidents" />
+      <p className="visually-hidden" aria-live="polite">
+        {listQuery.isLoading
+          ? 'Loading incidents.'
+          : listQuery.data
+            ? `${visible.length} incidents. ${attention.length} need attention.`
+            : ''}
+      </p>
 
-      <ToolbarGroup>
-        <DatePicker
-          label="From"
-          value={fromDate}
-          max={toDate}
-          onChange={(e) => setFromDate(e.target.value)}
-        />
-        <DatePicker
-          label="To"
-          value={toDate}
-          min={fromDate}
-          onChange={(e) => setToDate(e.target.value)}
-        />
-      </ToolbarGroup>
+      <section className={styles.section} aria-labelledby="incident-filters-heading">
+        <h2 id="incident-filters-heading">Filters</h2>
+        <div className={styles.filters}>
+          <DatePicker
+            label="From"
+            value={fromDate}
+            max={toDate}
+            onChange={(event) => setFromDate(event.target.value)}
+          />
+          <DatePicker
+            label="To"
+            value={toDate}
+            min={fromDate}
+            onChange={(event) => setToDate(event.target.value)}
+          />
+          <fieldset className={styles.statusSet}>
+            <legend>Status</legend>
+            {STATUS_ORDER.map((status) => (
+              <Checkbox
+                key={status}
+                label={STATUS_LABEL[status]}
+                checked={selectedStatuses.includes(status)}
+                onCheckedChange={(checked) => toggleStatus(status, checked)}
+              />
+            ))}
+          </fieldset>
+          <Button type="button" variant="secondary" onClick={clearFilters}>
+            Clear filters
+          </Button>
+        </div>
+      </section>
 
-      <DataTable
-        caption="Incident search results"
-        rowKey={(i) => i.incidentId}
-        columns={columns}
-        rows={listQuery.data ?? []}
-        loading={listQuery.isLoading}
-        emptyMessage="No incidents in this date range."
-      />
+      {loadError ? (
+        <div role="alert" tabIndex={-1}>
+          <h2>We couldn&apos;t load incidents.</h2>
+          <p>
+            {loadError instanceof ApiError && loadError.problem.status === 400
+              ? 'The incident request was rejected by the server.'
+              : 'Try again. The date range you chose is still here.'}
+          </p>
+          <Button type="button" onClick={() => void listQuery.refetch()}>
+            Try again
+          </Button>
+        </div>
+      ) : (
+        <>
+          <section className={styles.section} aria-labelledby="needs-attention-heading">
+            <h2 id="needs-attention-heading">Needs attention</h2>
+            <p className={styles.muted}>
+              {attention.length === 0
+                ? 'Nothing needs attention.'
+                : `${attention.length} incidents need attention: ${draftCount} drafts, ${rejectedCount} rejected.`}
+            </p>
+            {attention.length > 0 ? (
+              <ul className={styles.attentionList}>
+                {attention.map((incident) => (
+                  <li key={incident.incidentId} className={styles.attentionItem}>
+                    <Link to={`/incidents/${incident.incidentId}`} className={styles.mono}>
+                      {incident.dispatchNumber}
+                    </Link>
+                    <span className={styles.attentionMeta}>
+                      <span>{incident.incidentType ?? 'Unclassified'}</span>
+                      <span>{incident.address ?? '—'}</span>
+                      <span>{formatDate(incident.alarmAt)}</span>
+                      <StatusCell status={incident.status} />
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            ) : null}
+          </section>
+
+          <section className={styles.section} aria-labelledby="all-incidents-heading">
+            <h2 id="all-incidents-heading">All incidents</h2>
+            <div className={styles.table}>
+              <DataTable
+                caption="Incident search results, ordered by alarm time"
+                rowKey={(incident) => incident.incidentId}
+                columns={columns}
+                rows={visible}
+                loading={listQuery.isLoading}
+                emptyMessage={
+                  <>
+                    <p>{emptyMessage}</p>
+                    {filtersActive ? (
+                      <Button type="button" variant="secondary" onClick={clearFilters}>
+                        Clear filters
+                      </Button>
+                    ) : null}
+                  </>
+                }
+              />
+            </div>
+            <ul
+              className={styles.cards}
+              aria-label="Incident search results, ordered by alarm time"
+            >
+              {visible.map((incident) => (
+                <li key={incident.incidentId}>
+                  <Link to={`/incidents/${incident.incidentId}`} className={styles.card}>
+                    <span className={styles.mono}>{incident.dispatchNumber}</span>
+                    <span>{incident.incidentType ?? 'Unclassified'}</span>
+                    <span>{incident.address ?? '—'}</span>
+                    <span className={styles.cardMeta}>
+                      <span>{formatDate(incident.alarmAt)}</span>
+                      <StatusCell status={incident.status} />
+                    </span>
+                  </Link>
+                </li>
+              ))}
+            </ul>
+          </section>
+        </>
+      )}
 
       {canCreate ? (
         <Card
@@ -167,10 +306,10 @@ export function IncidentsListPage() {
               label="Dispatch ID"
               value={dispatchId}
               required
-              onChange={(e) => setDispatchId(e.target.value)}
+              onChange={(event) => setDispatchId(event.target.value)}
             />
             {createError ? (
-              <div ref={errorRef} tabIndex={-1} role="alert" aria-live="assertive">
+              <div ref={errorRef} tabIndex={-1} role="alert">
                 <p style={{ fontWeight: 600, margin: 0 }}>{createError.title}</p>
                 {createError.detail ? <p style={{ margin: 0 }}>{createError.detail}</p> : null}
               </div>

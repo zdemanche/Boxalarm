@@ -23,14 +23,72 @@ export interface Incident {
   updatedAt: number;
 }
 
+export type ResponseUnitType = 'APPARATUS' | 'MEMBER';
+
+export interface ResponseUnit {
+  incidentId: string;
+  unitId: string;
+  unitType: ResponseUnitType;
+  dispatchedAt?: number;
+  enRouteAt?: number;
+  arrivedAt?: number;
+  clearedAt?: number;
+  assignedPositions?: string[];
+}
+
+export interface RespondingMember {
+  memberId: string;
+  status?: string;
+}
+
+export interface IncidentSecondary {
+  incidentId: string;
+  secondaryType: string;
+  payload: Record<string, string>;
+  affectedMemberIds: string[];
+  complete?: boolean;
+  updatedAt: number;
+}
+
+/** GET adds modules the caller is allowed to see. Units ride along when the API includes them. */
+export interface IncidentDetail extends Incident {
+  secondaryModules?: IncidentSecondary[];
+  respondingUnits?: ResponseUnit[];
+  respondingMembers?: RespondingMember[];
+}
+
 export interface CreateIncidentInput {
   dispatchId: string;
 }
 
-export type GetIncidentResponse = Incident;
-export type CreateIncidentResponse = Incident;
+export type GetIncidentResponse = IncidentDetail;
+export type CreateIncidentResponse = IncidentDetail;
 
 export interface SearchIncidentsParams {
   fromAlarmAt: number;
   toAlarmAt: number;
 }
+
+export interface UpdateIncidentInput {
+  fields: Record<string, string>;
+}
+
+export interface PutExposureInput {
+  secondaryType: string;
+  payload: Record<string, string>;
+  affectedMemberIds: string[];
+}
+
+export interface PutExposureResponse {
+  incidentId: string;
+  secondaryType: string;
+  payload: Record<string, string>;
+  affectedMemberIds: string[];
+  complete: boolean;
+  updatedAt: number;
+}
+
+export const MAX_NARRATIVE_LENGTH = 25_000;
+
+export const TIME_FIELDS = ['dispatchedAt', 'enRouteAt', 'arrivedAt', 'clearedAt'] as const;
+export type TimeField = (typeof TIME_FIELDS)[number];
