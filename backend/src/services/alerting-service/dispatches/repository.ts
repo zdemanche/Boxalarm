@@ -6,7 +6,7 @@ import {
   type DynamoDBDocumentClient,
 } from '@aws-sdk/lib-dynamodb';
 import { buildDeptScopedPk, type VerifiedDeptId } from '@boxalarm/dept-scope';
-import { buildOutboxRecord } from '@boxalarm/outbox';
+import { buildBridgeOutboxRecord } from '../platformBusBridge.js';
 import type { DispatchReceived, SourceSystem } from './dispatchIngressPort.js';
 import { logError, logInfo } from './logger.js';
 
@@ -104,21 +104,15 @@ export async function createManualDispatch(
             {
               Put: {
                 TableName: tableName,
-                Item: buildOutboxRecord(
+                Item: buildBridgeOutboxRecord(deptId, 'dispatch.alert.received', dispatchId, {
                   deptId,
-                  'alerting-service',
-                  'dispatch.alert.received',
                   dispatchId,
-                  {
-                    deptId,
-                    dispatchId,
-                    incidentType: dispatch.incidentType,
-                    address: dispatch.address,
-                    crossStreets: dispatch.crossStreets,
-                    narrative: dispatch.narrative,
-                    dispatchedAt,
-                  },
-                ),
+                  incidentType: dispatch.incidentType,
+                  address: dispatch.address,
+                  crossStreets: dispatch.crossStreets,
+                  narrative: dispatch.narrative,
+                  dispatchedAt,
+                }),
               },
             },
           ]),
