@@ -26,6 +26,8 @@ export interface FanOutArgs {
 export class FanOut extends pulumi.ComponentResource {
   public readonly lambda: ServiceLambda;
   public readonly eventSourceMapping: aws.lambda.EventSourceMapping;
+  /** Stream records that exhausted their retries land here instead of vanishing. */
+  public readonly onFailureQueue: aws.sqs.Queue;
 
   constructor(name: string, args: FanOutArgs, opts?: pulumi.ComponentResourceOptions) {
     requireEnv("FanOut", args.env);
@@ -106,12 +108,60 @@ export class FanOut extends pulumi.ComponentResource {
       { parent: this },
     );
 
+    this.onFailureQueue = new aws.sqs.Queue(
+      `${name}-onfailure-queue`,
+      {
+        name: `boxalarm-${env}-alerting-fan-out-onfailure`,
+        messageRetentionSeconds: 1209600,
+      },
+      { parent: this },
+    );
+
+    // The ESM (running as this role) sends the failed-batch record to the on-failure
+    // destination; without SendMessage the destination write fails too.
+    const onFailurePolicy = new aws.iam.RolePolicy(
+      `${name}-onfailure-send`,
+      {
+        role: this.lambda.role.id,
+        policy: this.onFailureQueue.arn.apply((queueArn) =>
+          JSON.stringify({
+            Version: "2012-10-17",
+            Statement: [
+              {
+                Sid: "SendToOwnOnFailureQueue",
+                Effect: "Allow",
+                Action: ["sqs:SendMessage"],
+                Resource: queueArn,
+              },
+            ],
+          }),
+        ),
+      },
+      { parent: this },
+    );
+
     this.eventSourceMapping = new aws.lambda.EventSourceMapping(
       `${name}-event-source`,
       {
         eventSourceArn: args.alertingStreamArn,
         functionName: this.lambda.function.name,
         startingPosition: "LATEST",
+        // fanout/handler.ts never throws: a malformed record or a failed dispatch is
+        // *returned* as { batchItemFailures }. Without this, Lambda treats that return as
+        // full success and checkpoints past the failed dispatch — nobody is paged.
+        functionResponseTypes: ["ReportBatchItemFailures"],
+        // Split a poison-pill record away from the healthy dispatches in its batch.
+        bisectBatchOnFunctionError: true,
+        // Stream-mapping defaults are UNBOUNDED retries/age: one stuck record would block
+        // every later dispatch on its shard for the stream's 24h retention. Retries are
+        // safe (receipts and schedules are idempotent), so bound them and fail out to the
+        // on-failure queue (alarmed) instead.
+        maximumRetryAttempts: 3,
+        // The whole tone ladder is done within minutes; a dispatch still unsent after
+        // 15 minutes is a missed page to investigate from the on-failure queue, not one
+        // to deliver late.
+        maximumRecordAgeInSeconds: 900,
+        destinationConfig: { onFailure: { destinationArn: this.onFailureQueue.arn } },
         filterCriteria: {
           filters: [
             {
@@ -123,9 +173,13 @@ export class FanOut extends pulumi.ComponentResource {
           ],
         },
       },
-      { parent: this },
+      { parent: this, dependsOn: [onFailurePolicy] },
     );
 
-    this.registerOutputs({ lambda: this.lambda, eventSourceMapping: this.eventSourceMapping });
+    this.registerOutputs({
+      lambda: this.lambda,
+      eventSourceMapping: this.eventSourceMapping,
+      onFailureQueue: this.onFailureQueue,
+    });
   }
 }

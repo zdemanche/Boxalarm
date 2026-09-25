@@ -7,8 +7,11 @@ import {
   STREAM_ARN,
   TABLE_ARN,
   TOPIC_ARN,
+  esmFor,
   installMocks,
+  isGranted,
   lambdaEnv,
+  statementsForRole,
   settle,
 } from "./mock-harness";
 
@@ -58,5 +61,18 @@ describe("FanOut — escalation scheduling wiring", { timeout: 30_000 }, () => {
     expect(env.TONE_EVALUATOR_HANDLER_ARN).toBe(
       "arn:aws:lambda:us-east-1:123456789012:function:boxalarm-dev-alerting-tone-evaluator",
     );
+  });
+
+  it("reports per-record batch failures, bisects, and bounds retries into an on-failure queue", async () => {
+    await build();
+    const esm = esmFor(FAN_OUT).inputs;
+    expect(esm.functionResponseTypes).toEqual(["ReportBatchItemFailures"]);
+    expect(esm.bisectBatchOnFunctionError).toBe(true);
+    expect(esm.maximumRetryAttempts).toBe(3);
+    expect(esm.maximumRecordAgeInSeconds).toBe(900);
+    const onFailureArn =
+      "arn:aws:sqs:us-east-1:123456789012:boxalarm-dev-alerting-fan-out-onfailure";
+    expect(esm.destinationConfig).toEqual({ onFailure: { destinationArn: onFailureArn } });
+    expect(isGranted(statementsForRole(FAN_OUT), "sqs:SendMessage", onFailureArn)).toBe(true);
   });
 });
