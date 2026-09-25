@@ -16,6 +16,10 @@ export interface EnqueueInput {
   readonly photoLocalUri?: string;
 }
 
+// Create-only by design: the id is the client idempotency key, so re-enqueueing an id already in
+// the outbox is a no-op that keeps the ORIGINAL payload (any changed fields are dropped). There is
+// no edit/merge or cross-device conflict handling - if an update (PUT/PATCH) path is ever queued
+// here, it needs update-in-place and a conflict strategy rather than this dedup.
 export async function enqueue(input: EnqueueInput): Promise<OutboxRow> {
   const existing = await store.find(input.id);
   if (existing) return existing;
