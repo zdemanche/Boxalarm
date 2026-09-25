@@ -52,8 +52,10 @@ export async function upsertResponseUnitTimes(
   input: ResponseUnitTimesInput,
   traceId: string,
 ): Promise<ResponseUnit> {
-  const incidentPk = buildDeptScopedPk(input.deptId, 'INCIDENT', input.incidentId);
-  const responseUnitKey = { pk: incidentPk, sk: `RESPONSE#${input.unitId}` };
+  const responseUnitKey = {
+    pk: buildDeptScopedPk(input.deptId, 'INCIDENT', input.incidentId),
+    sk: `RESPONSE#${input.unitId}`,
+  };
 
   const setClauses = [
     'entityType = :entityType',
@@ -100,7 +102,10 @@ export async function upsertResponseUnitTimes(
           {
             ConditionCheck: {
               TableName: tableName,
-              Key: { pk: incidentPk, sk: 'METADATA' },
+              Key: {
+                pk: buildDeptScopedPk(input.deptId, 'INCIDENT', input.incidentId),
+                sk: 'METADATA',
+              },
               ConditionExpression: 'attribute_exists(pk)',
             },
           },
