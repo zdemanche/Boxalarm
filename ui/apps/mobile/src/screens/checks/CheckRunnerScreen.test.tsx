@@ -175,3 +175,35 @@ test('a checklist API error shows a message and retry instead of a blank screen 
 
   templateSpy.mockRestore();
 });
+
+test('a failed local save does not confirm the check, and a retry reuses the idempotency key (C1)', async () => {
+  const submitSpy = jest
+    .spyOn(mockChecksRepository, 'submitChecklistRun')
+    .mockRejectedValueOnce(new Error('storage full'));
+  const { findByText, findAllByText, findByRole, queryByText } = await render(
+    <CheckRunnerScreen />,
+  );
+
+  await findByText('Tires and wheels');
+  for (const button of await findAllByText('Pass')) {
+    await act(async () => {
+      fireEvent.press(button);
+    });
+  }
+  await act(async () => {
+    fireEvent.press(await findByText('Complete check'));
+  });
+
+  expect((await findByRole('alert')).props.children).toBe(
+    'The check could not be saved on this device. Try again.',
+  );
+  expect(queryByText(/^check complete$/i)).toBeNull();
+
+  await act(async () => {
+    fireEvent.press(await findByText('Complete check'));
+  });
+  expect(await findByRole('header')).toBeTruthy();
+  const [first, second] = submitSpy.mock.calls;
+  expect(second?.[0].idempotencyKey).toBe(first?.[0].idempotencyKey);
+  submitSpy.mockRestore();
+});

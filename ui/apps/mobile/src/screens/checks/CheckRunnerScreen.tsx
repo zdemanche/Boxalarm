@@ -23,7 +23,7 @@ function newIdempotencyKey(): string {
 
 // N4.2: the whole point of this screen is that no step waits on a network round trip - every
 // pass/fail tap is a local, instant state update, and "Complete check" resolves the same way
-// (the repository's submitChecklistRun is optimistic/local-first).
+// (the repository's submitChecklistRun writes to the local outbox; it never waits on the API).
 export function CheckRunnerScreen() {
   const route = useRoute();
   const navigation = useNavigation<NavigationProp<ChecksStackParamList>>();
@@ -41,6 +41,8 @@ export function CheckRunnerScreen() {
   const [startedAt] = useState(() => Date.now());
   const [idempotencyKey] = useState(newIdempotencyKey);
   const [completed, setCompleted] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
 
   const handleAddPhoto = async (code: string) => {
     setPhotoError(null);
@@ -122,22 +124,35 @@ export function CheckRunnerScreen() {
 
   const allAnswered = template.items.every((item) => item.code in results);
 
-  const handleComplete = () => {
+  const handleComplete = async () => {
+    if (submitting) return;
     const itemResults: ItemResult[] = template.items.map((item) => ({
       code: item.code,
       pass: results[item.code] ?? false,
     }));
     const durationSeconds = Math.round((Date.now() - startedAt) / 1000);
-    void repository.submitChecklistRun({
-      apparatusId,
-      templateId: template.templateId,
-      durationSeconds,
-      itemResults,
-      idempotencyKey,
-      capturedOffline: !isOnline,
-    });
-    // Optimistic: the local write already happened above; the UI confirms immediately rather
-    // than waiting on any promise settling.
+    setSubmitting(true);
+    setSubmitError(null);
+    try {
+      // Signed in, this is a local outbox enqueue (no network round trip), so awaiting it keeps
+      // N4.2's instant confirmation while guaranteeing the run was persisted before we say so.
+      // The same idempotencyKey is reused on retry, so a retried enqueue can't double-submit.
+      await repository.submitChecklistRun({
+        apparatusId,
+        templateId: template.templateId,
+        durationSeconds,
+        itemResults,
+        idempotencyKey,
+        capturedOffline: !isOnline,
+      });
+    } catch {
+      const message = 'The check could not be saved on this device. Try again.';
+      setSubmitError(message);
+      AccessibilityInfo.announceForAccessibility(message);
+      setSubmitting(false);
+      return;
+    }
+    setSubmitting(false);
     setCompleted(true);
     // The confirmation replaces the whole screen, so a screen-reader user needs an explicit
     // announcement - there's no visible element left to shift focus onto naturally.
@@ -288,10 +303,20 @@ export function CheckRunnerScreen() {
             </View>
           );
         })}
+        {submitError ? (
+          <Text
+            accessibilityRole="alert"
+            style={{ color: tokens.error, fontSize: typography.size.sm, marginTop: spacing.md }}
+          >
+            {submitError}
+          </Text>
+        ) : null}
         {allAnswered && (
           <TouchableOpacity
             accessibilityRole="button"
-            onPress={handleComplete}
+            disabled={submitting}
+            accessibilityState={{ disabled: submitting }}
+            onPress={() => void handleComplete()}
             style={{
               minHeight: touchTarget.oversized.ios,
               alignItems: 'center',
