@@ -38,6 +38,29 @@ export class MessagingAlerting extends pulumi.ComponentResource {
     super("boxalarm:alerting:MessagingAlerting", name, {}, opts);
     const { env } = args;
     const workerTimeoutSeconds = args.workerTimeoutSeconds ?? DEFAULT_WORKER_TIMEOUT_SECONDS;
+    // FIFO head-of-line trade-off: keep this at 2x the worker timeout, no tighter.
+    //
+    // Every publisher sets MessageGroupId: dispatchId: fanout/handler.ts,
+    // escalation/snsClient.ts, escalation/toneEvaluatorHandler.ts and
+    // escalation/mutualAidPort.ts. So every member of one dispatch on one channel
+    // shares a FIFO group. One member stuck behind a slow or failing vendor call
+    // holds up every later member in that group until it is deleted or
+    // dead-lettered. Worst case that is maxReceiveCount (3) x visibility, about 90s
+    // at the default 15s worker timeout. The per-queue oldest-message alarm (120s,
+    // alarms.ts) sits just above that bound.
+    //
+    // Fix considered and deferred: scoping MessageGroupId to `{dispatchId}#{memberId}`
+    // would remove the block. Nothing here needs cross-member ordering within a
+    // dispatch: each receipt is keyed per {dispatchId}#{toneSequence}#{memberId}#{channel}
+    // and workers handle members independently. That change lives in the backend
+    // publishers and alters FIFO dedup/ordering semantics on the alert path (see #12),
+    // so it is a tracked backend follow-up, not an infra edit.
+    //
+    // Going below 2x to shrink the window from the infra side was rejected. It narrows
+    // the margin between the worker's Lambda timeout and message re-visibility, so an
+    // in-flight vendor send could be redelivered and sent twice. A duplicate
+    // SMS/voice/push page is worse than a slower one. The 2x formula is pinned by
+    // test/alerting/timeouts.test.ts.
     const visibilityTimeoutSeconds = workerTimeoutSeconds * 2;
 
     this.topic = new aws.sns.Topic(
