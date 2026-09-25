@@ -23,11 +23,23 @@ export const BRIDGE_EVENT_TYPES = [
 
 export type BridgeEventType = (typeof BRIDGE_EVENT_TYPES)[number];
 
+/**
+ * Outbox rows are only a hand-off to the stream-triggered drain (stream retention is
+ * 24h), and they duplicate fields that already live permanently on the source item.
+ * The alerting table's TTL on `ttl` reaps them after this window; the resulting
+ * REMOVE stream records are ignored by every reader.
+ */
+export const BRIDGE_OUTBOX_TTL_SECONDS = 7 * 24 * 60 * 60;
+
+export type BridgeOutboxRecord<TPayload> = OutboxRecord<TPayload> & { readonly ttl: number };
+
 export function buildBridgeOutboxRecord<TPayload>(
   deptId: VerifiedDeptId,
   eventType: BridgeEventType,
   correlationId: string,
   payload: TPayload,
-): OutboxRecord<TPayload> {
-  return buildOutboxRecord(deptId, ALERTING_SOURCE, eventType, correlationId, payload);
+): BridgeOutboxRecord<TPayload> {
+  const record = buildOutboxRecord(deptId, ALERTING_SOURCE, eventType, correlationId, payload);
+  const eventTimeSeconds = Math.floor(Date.parse(record.eventTime) / 1000);
+  return { ...record, ttl: eventTimeSeconds + BRIDGE_OUTBOX_TTL_SECONDS };
 }
