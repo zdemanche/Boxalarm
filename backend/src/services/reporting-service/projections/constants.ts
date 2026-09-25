@@ -1,3 +1,6 @@
+/** EventBridge bus the later infra bundle attaches the projection rule to. */
+export const REPORTING_PLATFORM_BUS = 'boxalarm-{env}-platform-bus';
+
 /** SQS queue the later infra bundle subscribes to `boxalarm-{env}-platform-bus`. */
 export const REPORTING_PROJECTION_QUEUE = 'reporting-projection-queue';
 
