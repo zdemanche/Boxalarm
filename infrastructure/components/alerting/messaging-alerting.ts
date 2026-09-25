@@ -5,6 +5,13 @@ import { requireEnv } from "../shared/env";
 export type AlertingChannel = "push" | "sms" | "voice";
 export const ALERTING_CHANNELS: readonly AlertingChannel[] = ["push", "sms", "voice"];
 
+/**
+ * Channel-worker Lambda timeout (seconds): a secret fetch plus one vendor HTTPS call.
+ * Shared by MessagingAlerting (queue visibility = 2x this) and ChannelWorkers (the
+ * Lambda's own timeout) so the two cannot drift apart.
+ */
+export const DEFAULT_WORKER_TIMEOUT_SECONDS = 15;
+
 export interface MessagingAlertingArgs {
   env: string;
   /** Worker Lambda timeout per channel (seconds); queue visibility is set to 2x this. */
@@ -30,7 +37,7 @@ export class MessagingAlerting extends pulumi.ComponentResource {
     requireEnv("MessagingAlerting", args.env);
     super("boxalarm:alerting:MessagingAlerting", name, {}, opts);
     const { env } = args;
-    const workerTimeoutSeconds = args.workerTimeoutSeconds ?? 15;
+    const workerTimeoutSeconds = args.workerTimeoutSeconds ?? DEFAULT_WORKER_TIMEOUT_SECONDS;
     const visibilityTimeoutSeconds = workerTimeoutSeconds * 2;
 
     this.topic = new aws.sns.Topic(

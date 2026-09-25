@@ -4,7 +4,12 @@ import { ServiceLambda } from "../observability/service-lambda";
 import { ServiceLogGroup } from "../observability/service-log-group";
 import { requireEnv } from "../shared/env";
 import { lambdaCode, LAMBDA_HANDLER } from "../shared/lambda-code";
-import { ALERTING_CHANNELS, AlertingChannel, ChannelQueue } from "./messaging-alerting";
+import {
+  ALERTING_CHANNELS,
+  AlertingChannel,
+  ChannelQueue,
+  DEFAULT_WORKER_TIMEOUT_SECONDS,
+} from "./messaging-alerting";
 import { grantAlertingCmk } from "./alerting-cmk";
 
 // OQ-3 (SMS/voice vendor selection) is open — placeholder endpoints until a vendor is
@@ -24,6 +29,8 @@ export interface ChannelWorkersArgs {
   channelQueues: Record<AlertingChannel, ChannelQueue>;
   logGroup: ServiceLogGroup;
   permissionsBoundaryArn?: pulumi.Input<string>;
+  /** Must match the value MessagingAlerting sized the queue visibility timeout from. */
+  workerTimeoutSeconds?: number;
 }
 
 /**
@@ -109,6 +116,7 @@ export class ChannelWorkers extends pulumi.ComponentResource {
               },
             ]),
           reservedConcurrentExecutions: 5,
+          timeout: args.workerTimeoutSeconds ?? DEFAULT_WORKER_TIMEOUT_SECONDS,
           permissionsBoundaryArn: args.permissionsBoundaryArn,
         },
         { parent: this },

@@ -105,6 +105,9 @@ export class FanOut extends pulumi.ComponentResource {
             },
           ]),
         reservedConcurrentExecutions: 10,
+        // Eligibility query, concurrent per-member receipt write + SNS publish, then
+        // serial per-member escalation scheduling — far beyond the 3s default.
+        timeout: 30,
         permissionsBoundaryArn: args.permissionsBoundaryArn,
       },
       { parent: this },

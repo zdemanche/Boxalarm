@@ -105,6 +105,10 @@ export class RoutesCore extends pulumi.ComponentResource {
         },
         additionalPolicyStatements: alertingTableStatements,
         reservedConcurrentExecutions: 5,
+        // Serial per-member TransactWrite + GetItem + CreateSchedule for the whole
+        // roster; 3s ends a 30-40 member dispatch mid-roster. 29s stays under the
+        // HTTP API's 30s integration ceiling.
+        timeout: 29,
         permissionsBoundaryArn: args.permissionsBoundaryArn,
       },
       { parent: this },

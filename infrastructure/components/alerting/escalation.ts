@@ -94,6 +94,8 @@ export class Escalation extends pulumi.ComponentResource {
         },
         additionalPolicyStatements: escalationPolicy,
         reservedConcurrentExecutions: 5,
+        // Roster GetItem, TransactWrite, SNS publish — explicit rather than the 3s default.
+        timeout: 15,
         permissionsBoundaryArn: args.permissionsBoundaryArn,
       },
       { parent: this },
@@ -166,6 +168,8 @@ export class Escalation extends pulumi.ComponentResource {
             },
           ]),
         reservedConcurrentExecutions: 5,
+        // Roster query, re-page publishes, and per-member escalation scheduling.
+        timeout: 30,
         permissionsBoundaryArn: args.permissionsBoundaryArn,
       },
       { parent: this },
