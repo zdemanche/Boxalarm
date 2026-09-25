@@ -26,6 +26,7 @@ export class OutboxPublisher extends pulumi.ComponentResource {
   public readonly onFailureQueue: aws.sqs.Queue;
   public readonly eventSourceMapping: aws.lambda.EventSourceMapping;
   public readonly onFailureAlarm: aws.cloudwatch.MetricAlarm;
+  public readonly onFailureSendPolicy: aws.iam.RolePolicy;
 
   constructor(name: string, args: OutboxPublisherArgs, opts?: pulumi.ComponentResourceOptions) {
     requireEnv("OutboxPublisher", args.env);
@@ -125,6 +126,30 @@ export class OutboxPublisher extends pulumi.ComponentResource {
                   "dynamodb:ListStreams",
                 ],
                 Resource: streamArn,
+              },
+            ],
+          }),
+        ),
+      },
+      { parent: this },
+    );
+
+    // The mapping's on-failure destination is written by the Lambda service using
+    // this function's execution role. Without SendMessage, records that exhaust their
+    // retries are dropped instead of landing on the alarmed queue.
+    this.onFailureSendPolicy = new aws.iam.RolePolicy(
+      `${name}-onfailure-send-policy`,
+      {
+        role: this.lambda.role.id,
+        policy: this.onFailureQueue.arn.apply((queueArn) =>
+          JSON.stringify({
+            Version: "2012-10-17",
+            Statement: [
+              {
+                Sid: "SendToOnFailureQueue",
+                Effect: "Allow",
+                Action: ["sqs:SendMessage"],
+                Resource: queueArn,
               },
             ],
           }),
