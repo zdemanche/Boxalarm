@@ -152,6 +152,19 @@ export const auditTrail = new AuditTrail("audit-trail", {
   alertingTableArn: alertingTable.table.arn,
 });
 
+// E1-S13-INFRA #38: alerting isolation as an enforced IAM boundary, attached to every
+// alerting-service role below. Relocated here (was after incidentSchemaRefresh/incident)
+// so alertingBoundaryArn exists before personnelQuals/personnelAvailability/
+// trainingCertifications instantiate their own alerting-service Lambdas (ELIG-INFRA).
+export const alertingPlaneBoundary = new AlertingPlaneBoundary("alerting-plane-boundary", {
+  env,
+  platformTableArn: platformTable.tableArn,
+  platformStreamArn: platformTable.streamArn,
+  incidentTableArn: incidentTable.tableArn,
+  incidentStreamArn: incidentTable.streamArn,
+});
+const alertingBoundaryArn = alertingPlaneBoundary.policy.arn;
+
 // E6-S7-INFRA #68: NERIS per-env secret + SSM (values out-of-band).
 export const nerisConfig = new NerisConfig("neris", { env });
 
@@ -214,6 +227,11 @@ export const personnelQuals = new Quals("personnel-quals", {
   policyStoreId: policyStore.policyStoreId,
   logGroup: personnelLogGroup,
   httpApi,
+  platformBus,
+  alertingTableArn: alertingTable.tableArn,
+  alertingTableName: alertingTable.tableName,
+  alertingLogGroup,
+  alertingPermissionsBoundaryArn: alertingBoundaryArn,
 });
 
 export const personnelAttendance = new Attendance("personnel-attendance", {
@@ -234,6 +252,11 @@ export const personnelAvailability = new Availability("personnel-availability", 
   policyStoreId: policyStore.policyStoreId,
   logGroup: personnelLogGroup,
   httpApi,
+  platformBus,
+  alertingTableArn: alertingTable.tableArn,
+  alertingTableName: alertingTable.tableName,
+  alertingLogGroup,
+  alertingPermissionsBoundaryArn: alertingBoundaryArn,
 });
 
 export const personnelLosap = new Losap("personnel-losap", {
@@ -248,6 +271,7 @@ export const personnelLosap = new Losap("personnel-losap", {
 
 export const personnelShifts = new Shifts("personnel-shifts", {
   env,
+  deptId,
   platformTableName: platformTable.tableName,
   platformTableArn: platformTable.tableArn,
   policyStoreArn: policyStore.policyStoreArn,
@@ -270,6 +294,7 @@ export const trainingCertifications = new Certifications("training-certification
   policyStoreId: policyStore.policyStoreId,
   platformBusName: platformBus.busName,
   platformBusArn: platformBus.busArn,
+  platformTableStreamArn: platformTable.streamArn,
   logGroup: trainingLogGroup,
   httpApi,
 });
@@ -395,17 +420,6 @@ export const incident = new Incident("incident", {
   logGroup: incidentServiceLogGroup,
   httpApi,
 });
-
-// E1-S13-INFRA #38: alerting isolation as an enforced IAM boundary, attached to every
-// alerting-service role below.
-export const alertingPlaneBoundary = new AlertingPlaneBoundary("alerting-plane-boundary", {
-  env,
-  platformTableArn: platformTable.tableArn,
-  platformStreamArn: platformTable.streamArn,
-  incidentTableArn: incidentTable.tableArn,
-  incidentStreamArn: incidentTable.streamArn,
-});
-const alertingBoundaryArn = alertingPlaneBoundary.policy.arn;
 
 // E1-S2/S3-INFRA #28/#29: alerting messaging plane — SNS FIFO topic + per-channel SQS
 // FIFO queues/DLQs. Shares no resource with the LOB bus.

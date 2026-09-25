@@ -6,6 +6,8 @@ import { HttpApi } from "../api/http-api";
 import { verifiedPermissionsPolicyStatement } from "../authz/policy-store";
 import { lambdaCode, LAMBDA_HANDLER } from "../shared/lambda-code";
 import { requireEnv } from "../shared/env";
+import { PlatformBus } from "../messaging/platform-bus";
+import { QueueConsumer } from "../messaging/queue-consumer";
 
 export interface AvailabilityArgs {
   env: string;
@@ -15,6 +17,11 @@ export interface AvailabilityArgs {
   policyStoreId: pulumi.Input<string>;
   logGroup: ServiceLogGroup;
   httpApi: HttpApi;
+  platformBus: PlatformBus;
+  alertingTableArn: pulumi.Input<string>;
+  alertingTableName: pulumi.Input<string>;
+  alertingLogGroup: ServiceLogGroup;
+  alertingPermissionsBoundaryArn?: pulumi.Input<string>;
 }
 
 /**
@@ -28,6 +35,8 @@ export class Availability extends pulumi.ComponentResource {
   public readonly expiryLambda: ServiceLambda;
   public readonly createLambda: ServiceLambda;
   public readonly schedulerRole: aws.iam.Role;
+  public readonly availabilityChangedConsumer: ServiceLambda;
+  public readonly availabilityChangedQueueConsumer: QueueConsumer;
 
   constructor(name: string, args: AvailabilityArgs, opts?: pulumi.ComponentResourceOptions) {
     requireEnv("Availability", args.env);
@@ -142,10 +151,50 @@ export class Availability extends pulumi.ComponentResource {
       { parent: this },
     );
 
+    // #207: personnel.availability.changed -> availability-snapshot-queue ->
+    // alerting-service's eligibility/consumer.ts, alerting-table-only (IAM boundary).
+    this.availabilityChangedConsumer = new ServiceLambda(
+      `${name}-availability-changed-consumer`,
+      {
+        env,
+        serviceName: "alerting-service",
+        functionName: `boxalarm-${env}-alerting-availability-changed-consumer`,
+        handler: LAMBDA_HANDLER,
+        code: lambdaCode("alerting-service", "availability-changed-consumer"),
+        logGroup: args.alertingLogGroup,
+        environment: { ALERTING_TABLE_NAME: args.alertingTableName },
+        additionalPolicyStatements: pulumi.output(args.alertingTableArn).apply((arn) => [
+          {
+            Sid: "AlertingTableWrite" as const,
+            Effect: "Allow" as const,
+            Action: ["dynamodb:TransactWriteItems"],
+            Resource: [arn],
+          },
+        ]),
+        permissionsBoundaryArn: args.alertingPermissionsBoundaryArn,
+      },
+      { parent: this },
+    );
+
+    this.availabilityChangedQueueConsumer = args.platformBus.addQueueConsumer(
+      `${name}-availability-changed-queue-consumer`,
+      {
+        env,
+        ruleName: `boxalarm-${env}-availability-changed`,
+        eventPattern: JSON.stringify({ "detail-type": ["personnel.availability.changed"] }),
+        queueName: `boxalarm-${env}-availability-snapshot-queue`,
+        lambda: this.availabilityChangedConsumer.function,
+        lambdaRole: this.availabilityChangedConsumer.role,
+        maxReceiveCount: 5,
+      },
+      { parent: this },
+    );
+
     this.registerOutputs({
       expiryLambda: this.expiryLambda,
       createLambda: this.createLambda,
       schedulerRole: this.schedulerRole,
+      availabilityChangedConsumer: this.availabilityChangedConsumer,
     });
   }
 }

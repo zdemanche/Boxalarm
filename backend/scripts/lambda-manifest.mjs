@@ -387,4 +387,24 @@ export const LAMBDA_ENTRIES = [
     function: 'outbox-drain',
     entry: 'src/services/alerting-service/outboxDrainHandler.ts',
   },
+  {
+    service: 'personnel-service',
+    function: 'cert-expired-reactor',
+    entry: 'src/services/personnel-service/events/certExpiredReactor.ts',
+  },
+  {
+    service: 'alerting-service',
+    function: 'eligibility-changed-consumer',
+    entry: 'src/services/alerting-service/eligibility/eligibilityChangedConsumer.ts',
+  },
+  {
+    service: 'alerting-service',
+    function: 'availability-changed-consumer',
+    entry: 'src/services/alerting-service/eligibility/consumer.ts',
+  },
+  {
+    service: 'personnel-service',
+    function: 'shift-completion',
+    entry: 'src/services/personnel-service/shifts/completionHandler.ts',
+  },
 ];
