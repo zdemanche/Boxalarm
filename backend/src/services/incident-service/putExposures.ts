@@ -166,18 +166,13 @@ export const handler: APIGatewayProxyHandlerV2WithLambdaAuthorizer<AuthorizerCon
 
     const errors = validateSecondaryFields(secondarySchema, input.secondaryType, input.payload);
     if (errors.length > 0) {
-      return {
-        statusCode: 400,
-        headers: { 'Content-Type': 'application/problem+json' },
-        body: JSON.stringify({
-          type: 'about:blank',
-          title: 'Bad Request',
-          status: 400,
-          detail: 'One or more fields failed NERIS Secondary enumeration validation.',
-          traceId,
-          errors,
-        }),
-      };
+      return problemResponse(
+        400,
+        'Bad Request',
+        'One or more fields failed NERIS Secondary enumeration validation.',
+        traceId,
+        { errors },
+      );
     }
 
     const missing = missingRequiredSecondaryFields(

@@ -144,18 +144,13 @@ export const handler: APIGatewayProxyHandlerV2WithLambdaAuthorizer<AuthorizerCon
 
     const errors = validateCoreFields(coreSchema, fields);
     if (errors.length > 0) {
-      return {
-        statusCode: 400,
-        headers: { 'Content-Type': 'application/problem+json' },
-        body: JSON.stringify({
-          type: 'about:blank',
-          title: 'Bad Request',
-          status: 400,
-          detail: 'One or more fields failed NERIS enumeration validation.',
-          traceId,
-          errors,
-        }),
-      };
+      return problemResponse(
+        400,
+        'Bad Request',
+        'One or more fields failed NERIS enumeration validation.',
+        traceId,
+        { errors },
+      );
     }
 
     const mergedFields = { ...incident.corePayload, ...fields } as Record<string, string>;

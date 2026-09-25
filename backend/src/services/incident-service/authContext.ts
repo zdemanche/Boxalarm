@@ -67,16 +67,21 @@ export function resolveTraceId(headers: APIGatewayProxyEventHeaders, fallback: s
   return fallback;
 }
 
+/**
+ * RFC 7807 problem+json response. `extensions` carries problem-specific members (e.g.
+ * per-field validation `errors`); it cannot override the standard members.
+ */
 export function problemResponse(
   status: number,
   title: string,
   detail: string,
   traceId: string,
+  extensions: Readonly<Record<string, unknown>> = {},
 ): ProblemResponse {
   return {
     statusCode: status,
     headers: { 'Content-Type': 'application/problem+json' },
-    body: JSON.stringify({ type: 'about:blank', title, status, detail, traceId }),
+    body: JSON.stringify({ ...extensions, type: 'about:blank', title, status, detail, traceId }),
   };
 }
 

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { APIGatewayProxyEventHeaders } from 'aws-lambda';
-import { readAuthorizerContext, resolveTraceId } from './authContext.js';
+import { problemResponse, readAuthorizerContext, resolveTraceId } from './authContext.js';
 import type { IncidentEvent } from './authContext.js';
 
 function buildEvent(lambdaContext: Record<string, unknown> | undefined): IncidentEvent {
@@ -64,5 +64,37 @@ describe('readAuthorizerContext', () => {
 
   it('throws when the authorizer context is absent entirely', () => {
     expect(() => readAuthorizerContext(buildEvent(undefined))).toThrow();
+  });
+});
+
+describe('problemResponse', () => {
+  it('builds an RFC 7807 problem+json body carrying the traceId', () => {
+    const response = problemResponse(404, 'Not Found', 'missing', 'trace-1');
+    expect(response.statusCode).toBe(404);
+    expect(response.headers['Content-Type']).toBe('application/problem+json');
+    expect(JSON.parse(response.body)).toEqual({
+      type: 'about:blank',
+      title: 'Not Found',
+      status: 404,
+      detail: 'missing',
+      traceId: 'trace-1',
+    });
+  });
+
+  it('merges extension members such as per-field errors', () => {
+    const errors = [{ field: 'incident_type', message: 'not in enumeration' }];
+    const body = JSON.parse(
+      problemResponse(400, 'Bad Request', 'invalid', 'trace-1', { errors }).body,
+    ) as Record<string, unknown>;
+    expect(body.errors).toEqual(errors);
+    expect(body.status).toBe(400);
+  });
+
+  it('never lets an extension override a standard member', () => {
+    const body = JSON.parse(
+      problemResponse(400, 'Bad Request', 'invalid', 'trace-1', { status: 200, traceId: 'x' }).body,
+    ) as Record<string, unknown>;
+    expect(body.status).toBe(400);
+    expect(body.traceId).toBe('trace-1');
   });
 });
