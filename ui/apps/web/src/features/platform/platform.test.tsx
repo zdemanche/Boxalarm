@@ -517,3 +517,32 @@ test('admin revokes a member’s sessions from /personnel/:id', async () => {
     expect(screen.getByText('Sessions revoked.')).toBeTruthy();
   });
 });
+
+test('a 400 saving a config lists the RFC 7807 field-level errors (m1)', async () => {
+  server.use(
+    ...settingsDefaultHandlers(),
+    http.put('/api/v1/platform/config/ALERT_RULES', () =>
+      HttpResponse.json(
+        {
+          type: 'about:blank',
+          title: 'Bad Request',
+          status: 400,
+          detail: 'The config value failed validation.',
+          traceId: 't7',
+          errors: [{ field: 'escalationThresholdN', message: 'must be a positive integer' }],
+        },
+        { status: 400 },
+      ),
+    ),
+  );
+
+  const user = userEvent.setup();
+  renderRoute(['ADMIN'], '/settings');
+  const textarea = await screen.findByLabelText('Alert rule timing (JSON)');
+  fireEvent.change(textarea, { target: { value: '{"escalationThresholdN":-1}' } });
+  await user.click(screen.getByRole('button', { name: 'Save Alert rule timing' }));
+
+  expect(await screen.findByText('The config value failed validation.')).toBeTruthy();
+  expect(screen.getByText('escalationThresholdN')).toBeTruthy();
+  expect(screen.getByText(/must be a positive integer/)).toBeTruthy();
+});

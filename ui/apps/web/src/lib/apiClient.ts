@@ -5,6 +5,12 @@ export interface AuthTokenSource {
   renewSilently: () => Promise<string | null>;
 }
 
+/** RFC 7807 field-level validation entry (backend `validationProblem` / config `FieldError`). */
+export interface ProblemFieldError {
+  field: string;
+  message: string;
+}
+
 export interface ProblemDetails {
   type: string;
   title: string;
@@ -12,6 +18,7 @@ export interface ProblemDetails {
   detail?: string;
   instance?: string;
   traceId: string;
+  errors?: readonly ProblemFieldError[];
 }
 
 export class ApiError extends Error {
