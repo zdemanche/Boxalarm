@@ -1,4 +1,5 @@
 import { demoAlertsRequest } from '../features/alerts/demoFixtures';
+import { incidentsDemoRequest } from '../features/incidents/demoFixtures';
 import { apparatusDemoRequest } from '../features/apparatus/demoFixtures';
 import type {
   AssignedToType,
@@ -250,6 +251,11 @@ export async function demoRequest(
   path = requestPath ?? path;
   const query = new URLSearchParams(queryString ?? '');
   const parts = path.split('/');
+
+  if (parts[0] === 'incidents') {
+    const incidentsResponse = await incidentsDemoRequest(path, method, body, query);
+    if (incidentsResponse) return incidentsResponse;
+  }
 
   const trainingResponse = await trainingDemoRequest(path, options);
   if (trainingResponse) return trainingResponse;
