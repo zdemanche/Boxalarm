@@ -7,6 +7,7 @@ import { lambdaCode } from "../shared/lambda-code";
 import { requireEnv } from "../shared/env";
 import { PlatformBus } from "../messaging/platform-bus";
 import { QueueConsumer } from "../messaging/queue-consumer";
+import { grantAlertingCmk } from "../alerting/alerting-cmk";
 
 export interface QualsArgs {
   env: string;
@@ -18,6 +19,8 @@ export interface QualsArgs {
   httpApi: HttpApi;
   platformBus: PlatformBus;
   alertingTableArn: pulumi.Input<string>;
+  /** Alerting-table CMK — every role touching the table needs it (alerting-cmk.ts). */
+  alertingCmkArn: pulumi.Input<string>;
   alertingTableName: pulumi.Input<string>;
   alertingLogGroup: ServiceLogGroup;
   alertingPermissionsBoundaryArn?: pulumi.Input<string>;
@@ -135,6 +138,13 @@ export class Quals extends pulumi.ComponentResource {
         lambdaRole: this.eligibilityChangedConsumer.role,
         maxReceiveCount: 5,
       },
+      { parent: this },
+    );
+
+    grantAlertingCmk(
+      name,
+      { eligibilityChangedConsumer: this.eligibilityChangedConsumer.role },
+      args.alertingCmkArn,
       { parent: this },
     );
 

@@ -4,6 +4,7 @@ import { ServiceLambda } from "../observability/service-lambda";
 import { ServiceLogGroup } from "../observability/service-log-group";
 import { requireEnv } from "../shared/env";
 import { lambdaCode, LAMBDA_HANDLER } from "../shared/lambda-code";
+import { grantAlertingCmk } from "./alerting-cmk";
 
 const DEFAULT_SCHEDULE_RATE_MINUTES = 2;
 const CANARY_METRIC_NAMESPACE = "Boxalarm/AlertingCanary";
@@ -13,6 +14,8 @@ export interface AlertingCanaryArgs {
   env: string;
   deptId: string;
   alertingTableArn: pulumi.Input<string>;
+  /** Alerting-table CMK — every role touching the table needs it (alerting-cmk.ts). */
+  alertingCmkArn: pulumi.Input<string>;
   alertingTableName: pulumi.Input<string>;
   pageTopicArn: pulumi.Input<string>;
   logGroup: ServiceLogGroup;
@@ -161,6 +164,8 @@ export class AlertingCanary extends pulumi.ComponentResource {
       },
       { parent: this },
     );
+
+    grantAlertingCmk(name, { canary: this.lambda.role }, args.alertingCmkArn, { parent: this });
 
     this.registerOutputs({
       lambda: this.lambda,

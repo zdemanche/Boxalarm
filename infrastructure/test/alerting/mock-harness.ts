@@ -59,6 +59,36 @@ export function installMocks(config: Record<string, string> = {}): void {
           case "aws:secretsmanager/secret:Secret":
             state.arn = `arn:aws:secretsmanager:${REGION}:${ACCOUNT_ID}:secret:${physical}`;
             break;
+          case "aws:dynamodb/table:Table":
+            state.arn = `arn:aws:dynamodb:${REGION}:${ACCOUNT_ID}:table/${physical}`;
+            state.streamArn = `${state.arn as string}/stream/2026-01-01T00:00:00.000`;
+            break;
+          case "aws:kms/key:Key":
+            state.arn = `arn:aws:kms:${REGION}:${ACCOUNT_ID}:key/${args.name}`;
+            break;
+          case "aws:iam/policy:Policy":
+            state.arn = `arn:aws:iam::${ACCOUNT_ID}:policy/${physical}`;
+            break;
+          case "aws:cloudwatch/eventBus:EventBus":
+            state.arn = `arn:aws:events:${REGION}:${ACCOUNT_ID}:event-bus/${physical}`;
+            break;
+          case "aws:cloudwatch/eventRule:EventRule":
+            state.arn = `arn:aws:events:${REGION}:${ACCOUNT_ID}:rule/${physical}`;
+            break;
+          case "aws:scheduler/scheduleGroup:ScheduleGroup":
+            state.arn = `arn:aws:scheduler:${REGION}:${ACCOUNT_ID}:schedule-group/${physical}`;
+            break;
+          case "aws:s3/bucket:Bucket":
+            state.arn = `arn:aws:s3:::${(args.inputs.bucket as string | undefined) ?? args.name}`;
+            state.bucket = args.inputs.bucket ?? args.name;
+            break;
+          case "aws:cognito/userPool:UserPool":
+            state.arn = `arn:aws:cognito-idp:${REGION}:${ACCOUNT_ID}:userpool/${args.name}`;
+            break;
+          case "aws:verifiedpermissions/policyStore:PolicyStore":
+            state.policyStoreId = `${args.name}-id`;
+            state.arn = `arn:aws:verifiedpermissions::${ACCOUNT_ID}:policy-store/${args.name}-id`;
+            break;
           case "aws:apigatewayv2/api:Api":
             state.apiEndpoint = `https://${args.name}.execute-api.${REGION}.amazonaws.com`;
             state.executionArn = `arn:aws:execute-api:${REGION}:${ACCOUNT_ID}:${args.name}`;
@@ -83,6 +113,27 @@ export function installMocks(config: Record<string, string> = {}): void {
     "boxalarm-infra:webOrigin": "https://localhost:5173",
     ...config,
   });
+}
+
+/** Full-stack config (index.ts requires these). */
+export const STACK_CONFIG: Record<string, string> = {
+  "boxalarm-infra:nerisSchemaSourceUrl": "https://schema.example.test/neris",
+  "boxalarm-infra:deptId": "nichols-fd",
+  "boxalarm-infra:smsWebhookSecret": "test-sms-secret",
+  "boxalarm-infra:voiceWebhookSecret": "test-voice-secret",
+  "boxalarm-infra:pushWebhookSecret": "test-push-secret",
+  "boxalarm-infra:canaryMemberId": "test-canary-member",
+};
+
+/** Waits until no new mocked resources appear — index.ts registers many via apply(). */
+export async function settleStack(): Promise<void> {
+  let previous = -1;
+  let stableRounds = 0;
+  while (stableRounds < 5) {
+    await new Promise((r) => setTimeout(r, 20));
+    stableRounds = resources.length === previous ? stableRounds + 1 : 0;
+    previous = resources.length;
+  }
 }
 
 /** Lets pending Output.apply chains register their resources with the mock monitor. */
@@ -202,6 +253,7 @@ export async function buildSchedulingChain() {
   const escalation = new Escalation("escalation", {
     env: "dev",
     alertingTableArn: TABLE_ARN,
+    alertingCmkArn: CMK_ARN,
     alertingTopicArn: TOPIC_ARN,
     alertingTableName: "boxalarm-dev-alerting-table",
     logGroup: alertingLogGroup,
@@ -210,6 +262,7 @@ export async function buildSchedulingChain() {
   const fanOut = new FanOut("fan-out", {
     env: "dev",
     alertingTableArn: TABLE_ARN,
+    alertingCmkArn: CMK_ARN,
     alertingTableName: "boxalarm-dev-alerting-table",
     alertingStreamArn: STREAM_ARN,
     alertingTopicArn: TOPIC_ARN,
@@ -221,6 +274,7 @@ export async function buildSchedulingChain() {
     env: "dev",
     httpApi,
     alertingTableArn: TABLE_ARN,
+    alertingCmkArn: CMK_ARN,
     alertingTableName: "boxalarm-dev-alerting-table",
     logGroup: alertingLogGroup,
     escalation,

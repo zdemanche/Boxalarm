@@ -5,6 +5,7 @@ import { ServiceLogGroup } from "../observability/service-log-group";
 import { requireEnv } from "../shared/env";
 import { lambdaCode, LAMBDA_HANDLER } from "../shared/lambda-code";
 import { ALERTING_CHANNELS, AlertingChannel, ChannelQueue } from "./messaging-alerting";
+import { grantAlertingCmk } from "./alerting-cmk";
 
 // OQ-3 (SMS/voice vendor selection) is open — placeholder endpoints until a vendor is
 // chosen. Values are read verbatim by channels/httpProviderAdapter.ts at send time.
@@ -17,6 +18,8 @@ const PLACEHOLDER_ENDPOINT_URL: Record<AlertingChannel, string> = {
 export interface ChannelWorkersArgs {
   env: string;
   alertingTableArn: pulumi.Input<string>;
+  /** Alerting-table CMK — every role touching the table needs it (alerting-cmk.ts). */
+  alertingCmkArn: pulumi.Input<string>;
   alertingTableName: pulumi.Input<string>;
   channelQueues: Record<AlertingChannel, ChannelQueue>;
   logGroup: ServiceLogGroup;
@@ -127,6 +130,13 @@ export class ChannelWorkers extends pulumi.ComponentResource {
     this.workers = workers as Record<AlertingChannel, ServiceLambda>;
     this.providerSecrets = providerSecrets as Record<AlertingChannel, aws.secretsmanager.Secret>;
     this.sandboxSecrets = sandboxSecrets as Record<AlertingChannel, aws.secretsmanager.Secret>;
+
+    grantAlertingCmk(
+      name,
+      Object.fromEntries(ALERTING_CHANNELS.map((channel) => [channel, this.workers[channel].role])),
+      args.alertingCmkArn,
+      { parent: this },
+    );
 
     this.registerOutputs({ workers: this.workers });
   }

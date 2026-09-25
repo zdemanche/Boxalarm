@@ -4,6 +4,7 @@ import { MessagingAlerting } from "../../components/alerting/messaging-alerting"
 import { ChannelWorkers } from "../../components/alerting/channel-workers";
 import {
   BOUNDARY_ARN,
+  CMK_ARN,
   TABLE_ARN,
   installMocks,
   isGranted,
@@ -24,6 +25,7 @@ async function buildWorkers() {
   const workers = new ChannelWorkers("channel-workers", {
     env: "dev",
     alertingTableArn: TABLE_ARN,
+    alertingCmkArn: CMK_ARN,
     alertingTableName: "boxalarm-dev-alerting-table",
     channelQueues: messaging.channelQueues,
     logGroup,

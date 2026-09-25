@@ -62,6 +62,7 @@ describe("PushTokens — member-updated consumer IAM isolation (#208 AC3)", () =
       platformTableArn: pulumi.output("arn:aws:dynamodb:us-east-1:123456789012:table/platform"),
       platformTableName: pulumi.output("platform-table"),
       alertingTableArn: pulumi.output("arn:aws:dynamodb:us-east-1:123456789012:table/alerting"),
+      alertingCmkArn: "arn:aws:kms:us-east-1:123456789012:key/alerting-cmk",
       alertingTableName: pulumi.output("alerting-table"),
       personnelLogGroup,
       alertingLogGroup,

@@ -5,10 +5,13 @@ import { ServiceLogGroup } from "../observability/service-log-group";
 import { requireEnv } from "../shared/env";
 import { lambdaCode, LAMBDA_HANDLER } from "../shared/lambda-code";
 import { Escalation } from "./escalation";
+import { grantAlertingCmk } from "./alerting-cmk";
 
 export interface FanOutArgs {
   env: string;
   alertingTableArn: pulumi.Input<string>;
+  /** Alerting-table CMK — every role touching the table needs it (alerting-cmk.ts). */
+  alertingCmkArn: pulumi.Input<string>;
   alertingTableName: pulumi.Input<string>;
   alertingStreamArn: pulumi.Input<string>;
   alertingTopicArn: pulumi.Input<string>;
@@ -160,6 +163,11 @@ export class FanOut extends pulumi.ComponentResource {
       { parent: this },
     );
 
+    // Stream records of a CMK-encrypted table are decrypted with the same key.
+    const cmkPolicies = grantAlertingCmk(name, { fanOut: this.lambda.role }, args.alertingCmkArn, {
+      parent: this,
+    });
+
     this.eventSourceMapping = new aws.lambda.EventSourceMapping(
       `${name}-event-source`,
       {
@@ -193,7 +201,7 @@ export class FanOut extends pulumi.ComponentResource {
           ],
         },
       },
-      { parent: this, dependsOn: [onFailurePolicy] },
+      { parent: this, dependsOn: [onFailurePolicy, ...cmkPolicies] },
     );
 
     this.registerOutputs({

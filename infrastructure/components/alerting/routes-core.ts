@@ -7,11 +7,14 @@ import { requireEnv } from "../shared/env";
 import { lambdaCode, LAMBDA_HANDLER } from "../shared/lambda-code";
 import { AlertingRoute } from "./route-lambda";
 import { Escalation } from "./escalation";
+import { grantAlertingCmk } from "./alerting-cmk";
 
 export interface RoutesCoreArgs {
   env: string;
   httpApi: HttpApi;
   alertingTableArn: pulumi.Input<string>;
+  /** Alerting-table CMK — every role touching the table needs it (alerting-cmk.ts). */
+  alertingCmkArn: pulumi.Input<string>;
   alertingTableName: pulumi.Input<string>;
   logGroup: ServiceLogGroup;
   escalation: Escalation;
@@ -223,6 +226,18 @@ export class RoutesCore extends pulumi.ComponentResource {
         reservedConcurrentExecutions: 5,
         permissionsBoundaryArn: args.permissionsBoundaryArn,
       },
+      { parent: this },
+    );
+
+    grantAlertingCmk(
+      name,
+      {
+        dispatchIngress: this.dispatchIngress.lambda.role,
+        responses: this.responses.lambda.role,
+        roster: this.roster.lambda.role,
+        detail: this.detail.lambda.role,
+      },
+      args.alertingCmkArn,
       { parent: this },
     );
 

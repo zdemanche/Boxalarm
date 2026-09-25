@@ -5,10 +5,13 @@ import { ServiceLogGroup } from "../observability/service-log-group";
 import { IamPolicyStatement } from "../observability/observability-policy";
 import { requireEnv } from "../shared/env";
 import { lambdaCode, LAMBDA_HANDLER } from "../shared/lambda-code";
+import { grantAlertingCmk } from "./alerting-cmk";
 
 export interface EscalationArgs {
   env: string;
   alertingTableArn: pulumi.Input<string>;
+  /** Alerting-table CMK — every role touching the table needs it (alerting-cmk.ts). */
+  alertingCmkArn: pulumi.Input<string>;
   alertingTopicArn: pulumi.Input<string>;
   alertingTableName: pulumi.Input<string>;
   logGroup: ServiceLogGroup;
@@ -209,6 +212,16 @@ export class Escalation extends pulumi.ComponentResource {
             }),
           ),
       },
+      { parent: this },
+    );
+
+    grantAlertingCmk(
+      name,
+      {
+        escalation: this.lambda.role,
+        toneEvaluator: this.toneEvaluatorLambda.role,
+      },
+      args.alertingCmkArn,
       { parent: this },
     );
 

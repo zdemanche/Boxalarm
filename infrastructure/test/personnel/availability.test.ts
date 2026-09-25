@@ -70,6 +70,7 @@ describe("Availability — availability-changed consumer (#207)", () => {
       httpApi,
       platformBus,
       alertingTableArn: pulumi.output("arn:aws:dynamodb:us-east-1:123456789012:table/alerting"),
+      alertingCmkArn: "arn:aws:kms:us-east-1:123456789012:key/alerting-cmk",
       alertingTableName: pulumi.output("alerting-table"),
       alertingLogGroup,
       alertingPermissionsBoundaryArn: pulumi.output(

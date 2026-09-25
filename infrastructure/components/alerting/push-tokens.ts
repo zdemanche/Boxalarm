@@ -7,6 +7,7 @@ import { IamPolicyStatement } from "../observability/observability-policy";
 import { requireEnv } from "../shared/env";
 import { lambdaCode, LAMBDA_HANDLER } from "../shared/lambda-code";
 import { AlertingRoute } from "./route-lambda";
+import { grantAlertingCmk } from "./alerting-cmk";
 
 export interface PushTokensArgs {
   env: string;
@@ -14,6 +15,8 @@ export interface PushTokensArgs {
   platformTableArn: pulumi.Input<string>;
   platformTableName: pulumi.Input<string>;
   alertingTableArn: pulumi.Input<string>;
+  /** Alerting-table CMK — every role touching the table needs it (alerting-cmk.ts). */
+  alertingCmkArn: pulumi.Input<string>;
   alertingTableName: pulumi.Input<string>;
   personnelLogGroup: ServiceLogGroup;
   alertingLogGroup: ServiceLogGroup;
@@ -228,6 +231,13 @@ export class PushTokens extends pulumi.ComponentResource {
         threshold: 0,
         comparisonOperator: "GreaterThanThreshold",
       },
+      { parent: this },
+    );
+
+    grantAlertingCmk(
+      name,
+      { memberUpdatedConsumer: this.memberUpdatedConsumer.role },
+      args.alertingCmkArn,
       { parent: this },
     );
 
