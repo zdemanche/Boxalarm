@@ -432,4 +432,44 @@ export const LAMBDA_ENTRIES = [
     function: 'shift-completion',
     entry: 'src/services/personnel-service/shifts/completionHandler.ts',
   },
+  {
+    service: 'reporting-service',
+    function: 'cutover-decision-get',
+    entry: 'src/services/reporting-service/cutoverDecision/get.ts',
+  },
+  {
+    service: 'reporting-service',
+    function: 'cutover-decision-post',
+    entry: 'src/services/reporting-service/cutoverDecision/post.ts',
+  },
+  {
+    service: 'reporting-service',
+    function: 'projections',
+    entry: 'src/services/reporting-service/projections/handler.ts',
+  },
+  {
+    service: 'reporting-service',
+    function: 'dashboard',
+    entry: 'src/services/reporting-service/dashboard/handler.ts',
+  },
+  {
+    service: 'reporting-service',
+    function: 'response-times',
+    entry: 'src/services/reporting-service/responseTimes/handler.ts',
+  },
+  {
+    service: 'reporting-service',
+    function: 'iso',
+    entry: 'src/services/reporting-service/iso/handler.ts',
+  },
+  {
+    service: 'reporting-service',
+    function: 'export',
+    entry: 'src/services/reporting-service/export/handler.ts',
+  },
+  {
+    service: 'reporting-service',
+    function: 'export-worker',
+    entry: 'src/services/reporting-service/export/worker.ts',
+  },
 ];
