@@ -110,6 +110,12 @@ describe("OutboxPublisher", () => {
     expect(statement?.Resource).toBe(queueArn);
   });
 
+  it("honours the drain handler's batchItemFailures (ReportBatchItemFailures) so a failed publish is retried, not skipped", async () => {
+    const publisher = await build();
+    const responseTypes = await resolve(publisher.eventSourceMapping.functionResponseTypes);
+    expect(responseTypes).toEqual(["ReportBatchItemFailures"]);
+  });
+
   it("bisects the batch on function error so one bad record doesn't stall the whole stream", async () => {
     const publisher = await build();
     const bisect = await resolve(publisher.eventSourceMapping.bisectBatchOnFunctionError);

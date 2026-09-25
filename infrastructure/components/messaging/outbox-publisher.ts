@@ -86,6 +86,11 @@ export class OutboxPublisher extends pulumi.ComponentResource {
         startingPosition: "LATEST",
         batchSize: 10,
         bisectBatchOnFunctionError: true,
+        // The shared drain handler reports a failed PutEvents by RETURNING
+        // batchItemFailures, not by throwing. Without this flag Lambda ignores that
+        // response, counts the batch as successful and advances past the failed
+        // records, so events that were never published are lost.
+        functionResponseTypes: ["ReportBatchItemFailures"],
         // Stream-mapping defaults are UNBOUNDED (-1) retry attempts and record age.
         // Because PutEvents runs before the (previously-denied) sentAt UpdateItem,
         // an unbounded retry re-published every event in the batch on every retry —
