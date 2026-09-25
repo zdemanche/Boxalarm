@@ -4,7 +4,13 @@ import { ServiceLambda } from "../observability/service-lambda";
 import { ServiceLogGroup } from "../observability/service-log-group";
 import { requireEnv } from "../shared/env";
 import { lambdaCode, LAMBDA_HANDLER } from "../shared/lambda-code";
-import { ALERTING_CHANNELS, AlertingChannel, ChannelQueue } from "./messaging-alerting";
+import {
+  ALERTING_CHANNELS,
+  AlertingChannel,
+  ChannelQueue,
+  DEFAULT_WORKER_TIMEOUT_SECONDS,
+} from "./messaging-alerting";
+import { grantAlertingCmk } from "./alerting-cmk";
 
 // OQ-3 (SMS/voice vendor selection) is open — placeholder endpoints until a vendor is
 // chosen. Values are read verbatim by channels/httpProviderAdapter.ts at send time.
@@ -17,10 +23,14 @@ const PLACEHOLDER_ENDPOINT_URL: Record<AlertingChannel, string> = {
 export interface ChannelWorkersArgs {
   env: string;
   alertingTableArn: pulumi.Input<string>;
+  /** Alerting-table CMK — every role touching the table needs it (alerting-cmk.ts). */
+  alertingCmkArn: pulumi.Input<string>;
   alertingTableName: pulumi.Input<string>;
   channelQueues: Record<AlertingChannel, ChannelQueue>;
   logGroup: ServiceLogGroup;
   permissionsBoundaryArn?: pulumi.Input<string>;
+  /** Must match the value MessagingAlerting sized the queue visibility timeout from. */
+  workerTimeoutSeconds?: number;
 }
 
 /**
@@ -82,8 +92,16 @@ export class ChannelWorkers extends pulumi.ComponentResource {
             [`${channelUpper}_PROVIDER_SECRET_ID`]: providerSecret.name,
           },
           additionalPolicyStatements: pulumi
-            .all([providerSecret.arn, sandboxSecret.arn])
-            .apply(([prodArn, sandboxArn]) => [
+            .all([providerSecret.arn, sandboxSecret.arn, queue.arn])
+            .apply(([prodArn, sandboxArn, queueArn]) => [
+              {
+                // The SQS event source mapping polls as this role; without these,
+                // CreateEventSourceMapping is rejected and the channel never drains.
+                Sid: "ConsumeOwnChannelQueueOnly",
+                Effect: "Allow" as const,
+                Action: ["sqs:ReceiveMessage", "sqs:DeleteMessage", "sqs:GetQueueAttributes"],
+                Resource: queueArn,
+              },
               {
                 Sid: "AlertingTableWrite",
                 Effect: "Allow" as const,
@@ -98,6 +116,7 @@ export class ChannelWorkers extends pulumi.ComponentResource {
               },
             ]),
           reservedConcurrentExecutions: 5,
+          timeout: args.workerTimeoutSeconds ?? DEFAULT_WORKER_TIMEOUT_SECONDS,
           permissionsBoundaryArn: args.permissionsBoundaryArn,
         },
         { parent: this },
@@ -119,6 +138,13 @@ export class ChannelWorkers extends pulumi.ComponentResource {
     this.workers = workers as Record<AlertingChannel, ServiceLambda>;
     this.providerSecrets = providerSecrets as Record<AlertingChannel, aws.secretsmanager.Secret>;
     this.sandboxSecrets = sandboxSecrets as Record<AlertingChannel, aws.secretsmanager.Secret>;
+
+    grantAlertingCmk(
+      name,
+      Object.fromEntries(ALERTING_CHANNELS.map((channel) => [channel, this.workers[channel].role])),
+      args.alertingCmkArn,
+      { parent: this },
+    );
 
     this.registerOutputs({ workers: this.workers });
   }

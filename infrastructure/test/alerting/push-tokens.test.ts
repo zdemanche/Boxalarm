@@ -62,6 +62,7 @@ describe("PushTokens — member-updated consumer IAM isolation (#208 AC3)", () =
       platformTableArn: pulumi.output("arn:aws:dynamodb:us-east-1:123456789012:table/platform"),
       platformTableName: pulumi.output("platform-table"),
       alertingTableArn: pulumi.output("arn:aws:dynamodb:us-east-1:123456789012:table/alerting"),
+      alertingCmkArn: "arn:aws:kms:us-east-1:123456789012:key/alerting-cmk",
       alertingTableName: pulumi.output("alerting-table"),
       personnelLogGroup,
       alertingLogGroup,
@@ -96,15 +97,5 @@ describe("PushTokens — member-updated consumer IAM isolation (#208 AC3)", () =
     expect(queueName).toBe("boxalarm-dev-alerting-member-updated-queue");
     const parsed = JSON.parse(redrive as string) as { maxReceiveCount: number };
     expect(parsed.maxReceiveCount).toBe(5);
-  });
-
-  it("alarms when the member-updated DLQ has depth (#208)", async () => {
-    const pushTokens = await build();
-    const [threshold, comparison] = await Promise.all([
-      resolve(pushTokens.memberUpdatedDlqDepthAlarm.threshold),
-      resolve(pushTokens.memberUpdatedDlqDepthAlarm.comparisonOperator),
-    ]);
-    expect(threshold).toBe(0);
-    expect(comparison).toBe("GreaterThanThreshold");
   });
 });

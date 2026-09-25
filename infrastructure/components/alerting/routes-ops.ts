@@ -5,11 +5,14 @@ import { IamPolicyStatement } from "../observability/observability-policy";
 import { requireEnv } from "../shared/env";
 import { lambdaCode, LAMBDA_HANDLER } from "../shared/lambda-code";
 import { AlertingRoute } from "./route-lambda";
+import { grantAlertingCmk } from "./alerting-cmk";
 
 export interface RoutesOpsArgs {
   env: string;
   httpApi: HttpApi;
   alertingTableArn: pulumi.Input<string>;
+  /** Alerting-table CMK — every role touching the table needs it (alerting-cmk.ts). */
+  alertingCmkArn: pulumi.Input<string>;
   alertingTableName: pulumi.Input<string>;
   logGroup: ServiceLogGroup;
   policyStoreId: pulumi.Input<string>;
@@ -389,6 +392,29 @@ export class RoutesOps extends pulumi.ComponentResource {
         reservedConcurrentExecutions: 3,
         permissionsBoundaryArn: args.permissionsBoundaryArn,
       },
+      { parent: this },
+    );
+
+    grantAlertingCmk(
+      name,
+      {
+        selfTestPost: this.selfTestPost.lambda.role,
+        selfTestGet: this.selfTestGet.lambda.role,
+        audit: this.audit.lambda.role,
+        receiptsGet: this.receiptsGet.lambda.role,
+        ...Object.fromEntries(
+          VENDOR_CHANNELS.map((channel) => [
+            `${channel}Webhook`,
+            this.webhooks[channel].lambda.role,
+          ]),
+        ),
+        canaryStatus: this.canaryStatus.lambda.role,
+        deviceReportState: this.deviceReportState.lambda.role,
+        diagnostics: this.diagnostics.lambda.role,
+        diagnosticsSelf: this.diagnosticsSelf.lambda.role,
+        deliveryBaseline: this.deliveryBaseline.lambda.role,
+      },
+      args.alertingCmkArn,
       { parent: this },
     );
 

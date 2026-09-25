@@ -71,6 +71,7 @@ describe("RoutesOps webhook routes", () => {
       env: "dev",
       httpApi,
       alertingTableArn: "arn:aws:dynamodb:us-east-1:123456789012:table/alerting",
+      alertingCmkArn: "arn:aws:kms:us-east-1:123456789012:key/alerting-cmk",
       alertingTableName: "boxalarm-dev-alerting-table",
       logGroup: alertingLogGroup,
       policyStoreId: "policy-store-id",

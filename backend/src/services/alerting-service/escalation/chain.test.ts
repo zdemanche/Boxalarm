@@ -99,6 +99,7 @@ describe('E1-S3 chain: fan-out -> schedule -> escalation-fired handler', () => {
     process.env.ALERTING_TABLE_NAME = 'alerting-table';
     process.env.ESCALATION_HANDLER_ARN = 'arn:aws:lambda:us-east-1:1:function:escalation';
     process.env.ESCALATION_SCHEDULER_ROLE_ARN = 'arn:aws:iam::1:role/scheduler';
+    process.env.ESCALATION_SCHEDULE_GROUP_NAME = 'boxalarm-dev-alerting-escalation';
     process.env.ALERTING_TOPIC_ARN = 'arn:aws:sns:us-east-1:1:alerting-topic.fifo';
   });
 

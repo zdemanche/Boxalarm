@@ -8,6 +8,7 @@ import { lambdaCode, LAMBDA_HANDLER } from "../shared/lambda-code";
 import { requireEnv } from "../shared/env";
 import { PlatformBus } from "../messaging/platform-bus";
 import { QueueConsumer } from "../messaging/queue-consumer";
+import { grantAlertingCmk } from "../alerting/alerting-cmk";
 
 export interface AvailabilityArgs {
   env: string;
@@ -19,6 +20,8 @@ export interface AvailabilityArgs {
   httpApi: HttpApi;
   platformBus: PlatformBus;
   alertingTableArn: pulumi.Input<string>;
+  /** Alerting-table CMK — every role touching the table needs it (alerting-cmk.ts). */
+  alertingCmkArn: pulumi.Input<string>;
   alertingTableName: pulumi.Input<string>;
   alertingLogGroup: ServiceLogGroup;
   alertingPermissionsBoundaryArn?: pulumi.Input<string>;
@@ -187,6 +190,13 @@ export class Availability extends pulumi.ComponentResource {
         lambdaRole: this.availabilityChangedConsumer.role,
         maxReceiveCount: 5,
       },
+      { parent: this },
+    );
+
+    grantAlertingCmk(
+      name,
+      { availabilityChangedConsumer: this.availabilityChangedConsumer.role },
+      args.alertingCmkArn,
       { parent: this },
     );
 

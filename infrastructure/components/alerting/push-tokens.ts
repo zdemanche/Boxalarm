@@ -7,6 +7,7 @@ import { IamPolicyStatement } from "../observability/observability-policy";
 import { requireEnv } from "../shared/env";
 import { lambdaCode, LAMBDA_HANDLER } from "../shared/lambda-code";
 import { AlertingRoute } from "./route-lambda";
+import { grantAlertingCmk } from "./alerting-cmk";
 
 export interface PushTokensArgs {
   env: string;
@@ -14,6 +15,8 @@ export interface PushTokensArgs {
   platformTableArn: pulumi.Input<string>;
   platformTableName: pulumi.Input<string>;
   alertingTableArn: pulumi.Input<string>;
+  /** Alerting-table CMK — every role touching the table needs it (alerting-cmk.ts). */
+  alertingCmkArn: pulumi.Input<string>;
   alertingTableName: pulumi.Input<string>;
   personnelLogGroup: ServiceLogGroup;
   alertingLogGroup: ServiceLogGroup;
@@ -34,7 +37,6 @@ export class PushTokens extends pulumi.ComponentResource {
   public readonly memberUpdatedConsumer: ServiceLambda;
   public readonly memberUpdatedQueue: aws.sqs.Queue;
   public readonly memberUpdatedDlq: aws.sqs.Queue;
-  public readonly memberUpdatedDlqDepthAlarm: aws.cloudwatch.MetricAlarm;
 
   constructor(name: string, args: PushTokensArgs, opts?: pulumi.ComponentResourceOptions) {
     requireEnv("PushTokens", args.env);
@@ -215,19 +217,13 @@ export class PushTokens extends pulumi.ComponentResource {
       { parent: this },
     );
 
-    this.memberUpdatedDlqDepthAlarm = new aws.cloudwatch.MetricAlarm(
-      `${name}-member-updated-dlq-depth-alarm`,
-      {
-        name: `boxalarm-${env}-alerting-member-updated-dlq-depth`,
-        namespace: "AWS/SQS",
-        metricName: "ApproximateNumberOfMessagesVisible",
-        dimensions: { QueueName: this.memberUpdatedDlq.name },
-        statistic: "Maximum",
-        period: 300,
-        evaluationPeriods: 1,
-        threshold: 0,
-        comparisonOperator: "GreaterThanThreshold",
-      },
+    // The member-updated DLQ alarm lives in AlertingAlarms (alarms.ts), which owns the
+    // alerting-page topic it must page through.
+
+    grantAlertingCmk(
+      name,
+      { memberUpdatedConsumer: this.memberUpdatedConsumer.role },
+      args.alertingCmkArn,
       { parent: this },
     );
 

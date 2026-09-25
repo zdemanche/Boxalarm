@@ -4,11 +4,14 @@ import { ServiceLambda } from "../observability/service-lambda";
 import { ServiceLogGroup } from "../observability/service-log-group";
 import { requireEnv } from "../shared/env";
 import { lambdaCode, LAMBDA_HANDLER } from "../shared/lambda-code";
+import { grantAlertingCmk } from "./alerting-cmk";
 
 export interface EligibilityStalenessArgs {
   env: string;
   deptId: string;
   alertingTableArn: pulumi.Input<string>;
+  /** Alerting-table CMK — every role touching the table needs it (alerting-cmk.ts). */
+  alertingCmkArn: pulumi.Input<string>;
   alertingTableName: pulumi.Input<string>;
   pageTopicArn: pulumi.Input<string>;
   logGroup: ServiceLogGroup;
@@ -122,6 +125,10 @@ export class EligibilityStaleness extends pulumi.ComponentResource {
       },
       { parent: this },
     );
+
+    grantAlertingCmk(name, { stalenessCheck: this.lambda.role }, args.alertingCmkArn, {
+      parent: this,
+    });
 
     this.registerOutputs({ lambda: this.lambda, schedule: this.schedule, alarm: this.alarm });
   }
