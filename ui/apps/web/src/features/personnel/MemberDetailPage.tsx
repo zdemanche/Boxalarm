@@ -2,6 +2,7 @@ import { FormEvent, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useParams } from 'react-router-dom';
 import { useAuth } from '../../auth/AuthContext';
+import { canManageTraining } from '../../auth/roles';
 import { ApiError } from '../../lib/apiClient';
 import { ApiForbiddenGate } from '../../components/ApiForbiddenGate';
 import { Badge } from '../../components/ui/Chip';
@@ -259,7 +260,7 @@ export function MemberDetailPage() {
     revokeMutation.mutate();
   }
 
-  const isTraining = auth.roles.includes('TRAINING') || auth.roles.includes('ADMIN');
+  const isTraining = canManageTraining(auth.roles);
   // Matches the inspections write-access precedent (ADMIN || CHIEF) — PPE issuance is a new
   // control added in this PR, unlike the pre-existing ADMIN-only member-status gate below.
   const canIssuePpe = isAdmin || auth.roles.includes('CHIEF');

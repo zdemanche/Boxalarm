@@ -25,3 +25,9 @@ export function rolesFromProfile(profile: Record<string, unknown>): Role[] {
 
   return roles.length > 0 ? roles : ['MEMBER'];
 }
+
+/** Training-record management (certifications, events, hours, transcripts): TRAINING or ADMIN.
+ * One definition instead of per-file role checks (PR #321 review m10). */
+export function canManageTraining(roles: readonly Role[]): boolean {
+  return roles.includes('TRAINING') || roles.includes('ADMIN');
+}

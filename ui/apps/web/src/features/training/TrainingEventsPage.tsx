@@ -1,6 +1,7 @@
 import { FormEvent, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useAuth } from '../../auth/AuthContext';
+import { canManageTraining } from '../../auth/roles';
 import { ApiForbiddenGate } from '../../components/ApiForbiddenGate';
 import { Button, Card, PageHeader, Skeleton, TextInput } from '../../components/ui';
 import { createTrainingEvent, listTrainingEvents, recordEventHours, signUpForEvent } from './api';
@@ -80,7 +81,7 @@ function HoursForm({ event }: { event: TrainingEvent }) {
 export function TrainingEventsPage() {
   const auth = useAuth();
   const queryClient = useQueryClient();
-  const isTraining = auth.roles.includes('TRAINING') || auth.roles.includes('ADMIN');
+  const isTraining = canManageTraining(auth.roles);
   const [form, setForm] = useState<EventFormState>(emptyForm);
   const [formError, setFormError] = useState<string | null>(null);
 

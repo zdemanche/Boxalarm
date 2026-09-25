@@ -1,6 +1,7 @@
 import { FormEvent, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useAuth } from '../../auth/AuthContext';
+import { canManageTraining } from '../../auth/roles';
 import { ApiForbiddenGate } from '../../components/ApiForbiddenGate';
 import { Button, Card, ConfirmDialog, Skeleton, TextInput } from '../../components/ui';
 import {
@@ -27,7 +28,7 @@ interface PendingUpload {
 export function CertificationsPanel({ memberId }: { memberId: string }) {
   const auth = useAuth();
   const queryClient = useQueryClient();
-  const isTraining = auth.roles.includes('TRAINING') || auth.roles.includes('ADMIN');
+  const isTraining = canManageTraining(auth.roles);
   const queryKey = ['training', 'certifications', memberId];
 
   const [form, setForm] = useState<CreateCertificationInput>(emptyForm);
