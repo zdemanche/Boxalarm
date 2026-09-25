@@ -33,6 +33,11 @@ const CompliancePage = lazy(() =>
 const AlertsRosterPage = lazy(() =>
   import('./features/alerts/AlertsRosterPage').then((mod) => ({ default: mod.AlertsRosterPage })),
 );
+const AlertsDiagnosticsPage = lazy(() =>
+  import('./features/alerts/AlertsDiagnosticsPage').then((mod) => ({
+    default: mod.AlertsDiagnosticsPage,
+  })),
+);
 const PersonnelListPage = lazy(() =>
   import('./features/personnel/PersonnelListPage').then((mod) => ({
     default: mod.PersonnelListPage,
@@ -159,7 +164,10 @@ export function App() {
                 >
                   <Route index element={<LandingPage />} />
                   <Route path="alerts/roster" element={roleGuarded(<AlertsRosterPage />)} />
-                  <Route path="alerts/diagnostics" element={placeholder('Alert diagnostics')} />
+                  <Route
+                    path="alerts/diagnostics"
+                    element={roleGuarded(<AlertsDiagnosticsPage />)}
+                  />
                   <Route path="incidents" element={placeholder('Incidents')} />
                   <Route path="incidents/:id" element={placeholder('Incident detail')} />
                   <Route path="personnel" element={roleGuarded(<PersonnelListPage />)} />

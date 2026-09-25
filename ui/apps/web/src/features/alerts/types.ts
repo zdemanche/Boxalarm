@@ -97,3 +97,58 @@ export interface RidingBoard {
   dispatchId: string;
   apparatus: RidingBoardApparatus[];
 }
+
+export type TimelineEntityType = 'DELIVERY_RECEIPT' | 'ESCALATION_EVENT' | 'DISPATCH_RESPONSE_RECORD';
+
+// Raw items from the DISPATCH pk (alerting-service audit/queryAuditLog.ts
+// queryMemberDispatchTimeline) - fields present depend on entityType, so most are optional.
+export interface DiagnosticsTimelineEntry {
+  entityType: TimelineEntityType | string;
+  channel?: string;
+  toneSequence?: number;
+  status?: string;
+  sentAt?: number;
+  deliveredAt?: number | null;
+  openedAt?: number | null;
+  escalatedAt?: number;
+  reason?: string;
+  answeredAt?: number;
+  ackStatus?: string;
+}
+
+export interface DeviceState {
+  memberId: string;
+  notificationPermission: boolean;
+  criticalAlertPermission: boolean;
+  batteryOptimizationExempt: boolean;
+  appVersion: string;
+  osVersion: string;
+  reportedAt: number;
+}
+
+export type Diagnosis = 'ON_ROSTER' | 'NOT_ON_ELIGIBLE_ROSTER';
+
+export interface DiagnosticsResult {
+  dispatchId: string;
+  memberId: string;
+  diagnosis: Diagnosis;
+  timeline: DiagnosticsTimelineEntry[];
+  deviceState: DeviceState | null;
+}
+
+export type CanaryResult = 'PASS' | 'FAIL';
+
+export interface CanaryRun {
+  ranAt: number;
+  result: CanaryResult;
+  latencyMs: number;
+  channelResults: Record<string, unknown>;
+}
+
+export interface CanaryStatus {
+  healthy: boolean;
+  latestResult: CanaryResult | null;
+  latestLatencyMs: number | null;
+  latestRanAt: number | null;
+  runs: CanaryRun[];
+}

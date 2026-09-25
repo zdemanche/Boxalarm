@@ -8,6 +8,7 @@ import type { User, UserManager } from 'oidc-client-ts';
 import { afterAll, afterEach, beforeAll, expect, test, vi } from 'vitest';
 import { AuthProvider } from '../../auth/AuthContext';
 import { RequireRole } from '../../routing/RequireRole';
+import { AlertsDiagnosticsPage } from './AlertsDiagnosticsPage';
 import { AlertsRosterPage } from './AlertsRosterPage';
 
 const server = setupServer();
@@ -49,6 +50,28 @@ function renderPage(groups: string[], path = '/alerts/roster') {
               element={
                 <RequireRole>
                   <AlertsRosterPage />
+                </RequireRole>
+              }
+            />
+          </Routes>
+        </MemoryRouter>
+      </AuthProvider>
+    </QueryClientProvider>,
+  );
+}
+
+function renderDiagnosticsPage(groups: string[]) {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  return render(
+    <QueryClientProvider client={client}>
+      <AuthProvider userManager={makeManager(groups)}>
+        <MemoryRouter initialEntries={['/alerts/diagnostics']}>
+          <Routes>
+            <Route
+              path="/alerts/diagnostics"
+              element={
+                <RequireRole>
+                  <AlertsDiagnosticsPage />
                 </RequireRole>
               }
             />
@@ -227,4 +250,102 @@ test('a failed riding-board seat assignment surfaces an error instead of silentl
       'This seat was changed by another officer. The board has been refreshed.',
     ),
   ).toBeTruthy();
+});
+
+test('diagnostics renders the delivery timeline for a member on the eligible roster', async () => {
+  server.use(
+    http.get('/api/v1/alerting/dispatches/D-3/diagnostics/m-2', () =>
+      HttpResponse.json({
+        dispatchId: 'D-3',
+        memberId: 'm-2',
+        diagnosis: 'ON_ROSTER',
+        timeline: [
+          {
+            entityType: 'DELIVERY_RECEIPT',
+            channel: 'PUSH',
+            toneSequence: 1,
+            status: 'DELIVERED',
+            sentAt: 1700000000,
+            deliveredAt: 1700000005,
+            openedAt: null,
+          },
+        ],
+        deviceState: {
+          memberId: 'm-2',
+          notificationPermission: true,
+          criticalAlertPermission: true,
+          batteryOptimizationExempt: true,
+          appVersion: '1.4.0',
+          osVersion: 'iOS 18.1',
+          reportedAt: 1700000000,
+        },
+      }),
+    ),
+    http.get('/api/v1/alerting/canary/status', () =>
+      HttpResponse.json({
+        healthy: true,
+        latestResult: 'PASS',
+        latestLatencyMs: 1800,
+        latestRanAt: Math.floor(Date.now() / 1000),
+        runs: [],
+      }),
+    ),
+  );
+
+  const user = userEvent.setup();
+  renderDiagnosticsPage(['ADMIN']);
+  await user.type(screen.getByLabelText('Dispatch ID'), 'D-3');
+  await user.type(screen.getByLabelText('Member ID'), 'm-2');
+
+  expect(await screen.findByText('Delivered')).toBeTruthy();
+  expect(await screen.findByText(/Notification permission: OK/)).toBeTruthy();
+});
+
+test('diagnostics states the member was not on the eligible roster, distinct from sent-not-delivered', async () => {
+  server.use(
+    http.get('/api/v1/alerting/dispatches/D-4/diagnostics/m-9', () =>
+      HttpResponse.json({
+        dispatchId: 'D-4',
+        memberId: 'm-9',
+        diagnosis: 'NOT_ON_ELIGIBLE_ROSTER',
+        timeline: [],
+        deviceState: null,
+      }),
+    ),
+    http.get('/api/v1/alerting/canary/status', () =>
+      HttpResponse.json({
+        healthy: true,
+        latestResult: 'PASS',
+        latestLatencyMs: 1800,
+        latestRanAt: Math.floor(Date.now() / 1000),
+        runs: [],
+      }),
+    ),
+  );
+
+  const user = userEvent.setup();
+  renderDiagnosticsPage(['ADMIN']);
+  await user.type(screen.getByLabelText('Dispatch ID'), 'D-4');
+  await user.type(screen.getByLabelText('Member ID'), 'm-9');
+
+  expect(await screen.findByText('Not on the eligible roster')).toBeTruthy();
+  expect(screen.queryByText(/Sent, not yet delivered/)).toBeNull();
+});
+
+test('canary panel shows unhealthy with text when the last run is stale even though it passed', async () => {
+  server.use(
+    http.get('/api/v1/alerting/canary/status', () =>
+      HttpResponse.json({
+        healthy: true,
+        latestResult: 'PASS',
+        latestLatencyMs: 1200,
+        latestRanAt: Math.floor(Date.now() / 1000) - 600,
+        runs: [{ ranAt: Math.floor(Date.now() / 1000) - 600, result: 'PASS', latencyMs: 1200, channelResults: {} }],
+      }),
+    ),
+  );
+
+  renderDiagnosticsPage(['ADMIN']);
+
+  expect(await screen.findByText('Unhealthy — last run is stale')).toBeTruthy();
 });

@@ -6,7 +6,7 @@ import { Button, Card, Skeleton, TextInput } from '../../components/ui';
 import { createMaintenance, getMaintenance } from './api';
 import type { CreateMaintenanceInput } from './types';
 
-const emptyForm = { description: '', vendor: '', cost: '' };
+const emptyForm = { description: '', vendor: '', cost: '', scheduledNextAt: '' };
 
 // Takes the apparatus's apparatusId (not its display unitId) — matches ApparatusDetailPage's
 // own detail fetch and the real backend's maintenance endpoint, which keys directly on
@@ -77,7 +77,14 @@ export function MaintenanceTab({ apparatusId }: { apparatusId: string }) {
           onSubmit={(event: FormEvent) => {
             event.preventDefault();
             const cost = Number(form.cost);
-            mutation.mutate({ description: form.description, vendor: form.vendor, cost });
+            mutation.mutate({
+              description: form.description,
+              vendor: form.vendor,
+              cost,
+              scheduledNextAt: form.scheduledNextAt
+                ? Math.floor(new Date(form.scheduledNextAt).getTime() / 1000)
+                : null,
+            });
           }}
           style={{ display: 'grid', gap: 'var(--bx-space-sm)' }}
         >
@@ -101,6 +108,13 @@ export function MaintenanceTab({ apparatusId }: { apparatusId: string }) {
             value={form.cost}
             required
             onChange={(e) => setForm((prev) => ({ ...prev, cost: e.target.value }))}
+          />
+          <TextInput
+            label="Next scheduled"
+            type="date"
+            optional
+            value={form.scheduledNextAt}
+            onChange={(e) => setForm((prev) => ({ ...prev, scheduledNextAt: e.target.value }))}
           />
           {mutation.error ? <p role="alert">{mutation.error.message}</p> : null}
           <Button type="submit" loading={mutation.isPending} style={{ maxWidth: 240 }}>
