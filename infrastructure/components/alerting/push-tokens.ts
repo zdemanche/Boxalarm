@@ -37,7 +37,6 @@ export class PushTokens extends pulumi.ComponentResource {
   public readonly memberUpdatedConsumer: ServiceLambda;
   public readonly memberUpdatedQueue: aws.sqs.Queue;
   public readonly memberUpdatedDlq: aws.sqs.Queue;
-  public readonly memberUpdatedDlqDepthAlarm: aws.cloudwatch.MetricAlarm;
 
   constructor(name: string, args: PushTokensArgs, opts?: pulumi.ComponentResourceOptions) {
     requireEnv("PushTokens", args.env);
@@ -218,21 +217,8 @@ export class PushTokens extends pulumi.ComponentResource {
       { parent: this },
     );
 
-    this.memberUpdatedDlqDepthAlarm = new aws.cloudwatch.MetricAlarm(
-      `${name}-member-updated-dlq-depth-alarm`,
-      {
-        name: `boxalarm-${env}-alerting-member-updated-dlq-depth`,
-        namespace: "AWS/SQS",
-        metricName: "ApproximateNumberOfMessagesVisible",
-        dimensions: { QueueName: this.memberUpdatedDlq.name },
-        statistic: "Maximum",
-        period: 300,
-        evaluationPeriods: 1,
-        threshold: 0,
-        comparisonOperator: "GreaterThanThreshold",
-      },
-      { parent: this },
-    );
+    // The member-updated DLQ alarm lives in AlertingAlarms (alarms.ts), which owns the
+    // alerting-page topic it must page through.
 
     grantAlertingCmk(
       name,
