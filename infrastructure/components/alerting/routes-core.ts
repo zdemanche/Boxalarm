@@ -57,6 +57,17 @@ export class RoutesCore extends pulumi.ComponentResource {
           Resource: args.alertingTableArn as string,
         },
         {
+          // runFanOut reads before it writes: queryEligibleMembers is a Query on the
+          // ELIGIBILITY partition (eligibility/selector.ts), and the escalation-threshold /
+          // tone-ladder config reads are GetItems (scheduleEscalation.ts, toneLadder.ts).
+          // Without these the synchronous fan-out fails, is logged, and ingress still
+          // returns 201 with nobody paged.
+          Sid: "AlertingTableRead",
+          Effect: "Allow" as const,
+          Action: ["dynamodb:Query", "dynamodb:GetItem"],
+          Resource: args.alertingTableArn as string,
+        },
+        {
           Sid: "CreateEscalationSchedulesOnly",
           Effect: "Allow" as const,
           Action: ["scheduler:CreateSchedule"],
