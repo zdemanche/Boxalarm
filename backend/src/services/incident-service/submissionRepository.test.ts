@@ -3,7 +3,11 @@ import { TransactionCanceledException } from '@aws-sdk/client-dynamodb';
 import type { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
 import { toVerifiedDeptId } from '@boxalarm/dept-scope';
 import { IncidentNotFoundError } from './repository.js';
-import { SubmissionConflictError, createSubmissionRepository } from './submissionRepository.js';
+import {
+  SubmissionConflictError,
+  SubmissionRetryConflictError,
+  createSubmissionRepository,
+} from './submissionRepository.js';
 
 const DEPT_ID = toVerifiedDeptId({ deptId: 'NICHOLS' });
 const TABLE_NAME = 'boxalarm-dev-incident';
@@ -244,5 +248,127 @@ describe('createSubmissionRepository.appendSubmissionAttempt', () => {
         1_798_000_200,
       ),
     ).rejects.toBeInstanceOf(IncidentNotFoundError);
+  });
+});
+
+describe('createSubmissionRepository.getSubmission', () => {
+  it('reads the incident row directly with a consistent GetItem on the dept-scoped key (AC4)', async () => {
+    const send = vi.fn().mockResolvedValue({
+      Item: {
+        status: 'REJECTED',
+        submissionStatus: 'FAILED',
+        submissionFailureReason: 'NERIS rejected the submission with HTTP 400',
+      },
+    });
+    const repository = createSubmissionRepository(fakeClient(send), TABLE_NAME);
+
+    const result = await repository.getSubmission(DEPT_ID, INCIDENT_ID);
+
+    expect(result).toEqual({
+      incidentId: INCIDENT_ID,
+      status: 'REJECTED',
+      submissionStatus: 'FAILED',
+      submissionFailureReason: 'NERIS rejected the submission with HTTP 400',
+    });
+    const [command] = send.mock.calls[0] as [{ input: Record<string, unknown> }];
+    expect(command.input).toMatchObject({
+      TableName: TABLE_NAME,
+      Key: { pk: `DEPT#NICHOLS#INCIDENT#${INCIDENT_ID}`, sk: 'METADATA' },
+      ConsistentRead: true,
+    });
+  });
+
+  it('omits submissionFailureReason unless the submission status is FAILED', async () => {
+    const send = vi.fn().mockResolvedValue({
+      Item: {
+        status: 'SUBMITTED',
+        submissionStatus: 'RETRYING',
+        submissionFailureReason: 'stale reason',
+      },
+    });
+    const repository = createSubmissionRepository(fakeClient(send), TABLE_NAME);
+
+    const result = await repository.getSubmission(DEPT_ID, INCIDENT_ID);
+
+    expect(result).toEqual({
+      incidentId: INCIDENT_ID,
+      status: 'SUBMITTED',
+      submissionStatus: 'RETRYING',
+    });
+  });
+
+  it('returns undefined when the incident is not in the caller dept', async () => {
+    const send = vi.fn().mockResolvedValue({});
+    const repository = createSubmissionRepository(fakeClient(send), TABLE_NAME);
+
+    await expect(repository.getSubmission(DEPT_ID, INCIDENT_ID)).resolves.toBeUndefined();
+  });
+});
+
+describe('createSubmissionRepository.retrySubmission', () => {
+  it('sets submissionStatus RETRYING only from FAILED and writes a neris.incident.submitted outbox row, without a NERIS_SUBMISSION_ATTEMPT (AC2)', async () => {
+    const send = vi.fn().mockResolvedValue({});
+    const repository = createSubmissionRepository(fakeClient(send), TABLE_NAME);
+
+    const result = await repository.retrySubmission(DEPT_ID, INCIDENT_ID, 1_798_000_300, TRACE_ID);
+
+    expect(result).toEqual({ submissionStatus: 'RETRYING' });
+    const [command] = send.mock.calls[0] as [
+      {
+        input: {
+          TransactItems: [
+            { Update: Record<string, unknown> },
+            { Put: { Item: Record<string, unknown> } },
+          ];
+        };
+      },
+    ];
+    expect(command.input.TransactItems).toHaveLength(2);
+    const update = command.input.TransactItems[0].Update;
+    expect(update).toMatchObject({
+      TableName: TABLE_NAME,
+      Key: { pk: `DEPT#NICHOLS#INCIDENT#${INCIDENT_ID}`, sk: 'METADATA' },
+      ConditionExpression: 'attribute_exists(pk) AND submissionStatus = :failed',
+    });
+    expect(update.ExpressionAttributeValues).toMatchObject({
+      ':failed': 'FAILED',
+      ':retrying': 'RETRYING',
+      ':updatedAt': 1_798_000_300,
+    });
+    expect(String(update.UpdateExpression)).toContain('submissionStatus = :retrying');
+    expect(String(update.UpdateExpression)).toContain('REMOVE submissionFailureReason');
+    const outboxItem = command.input.TransactItems[1].Put.Item;
+    expect(outboxItem).toMatchObject({
+      entityType: 'OUTBOX_ENTRY',
+      eventType: 'neris.incident.submitted',
+      source: 'incident-service',
+      correlationId: TRACE_ID,
+      payload: { incidentId: INCIDENT_ID, deptId: 'NICHOLS' },
+    });
+    expect(outboxItem.entityType).not.toBe('NERIS_SUBMISSION_ATTEMPT');
+  });
+
+  it('throws IncidentNotFoundError when the incident does not exist', async () => {
+    const send = vi
+      .fn()
+      .mockRejectedValueOnce(conditionalCheckFailed([{}]))
+      .mockResolvedValueOnce({});
+    const repository = createSubmissionRepository(fakeClient(send), TABLE_NAME);
+
+    await expect(
+      repository.retrySubmission(DEPT_ID, INCIDENT_ID, 1_798_000_300, TRACE_ID),
+    ).rejects.toBeInstanceOf(IncidentNotFoundError);
+  });
+
+  it('throws SubmissionRetryConflictError when submissionStatus is not FAILED', async () => {
+    const send = vi
+      .fn()
+      .mockRejectedValueOnce(conditionalCheckFailed([{}]))
+      .mockResolvedValueOnce({ Item: { status: 'SUBMITTED', submissionStatus: 'SUBMITTED' } });
+    const repository = createSubmissionRepository(fakeClient(send), TABLE_NAME);
+
+    await expect(
+      repository.retrySubmission(DEPT_ID, INCIDENT_ID, 1_798_000_300, TRACE_ID),
+    ).rejects.toBeInstanceOf(SubmissionRetryConflictError);
   });
 });

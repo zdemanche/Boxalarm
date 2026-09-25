@@ -238,6 +238,16 @@ export const LAMBDA_ENTRIES = [
     entry: 'src/services/incident-service/outboxDrainHandler.ts',
   },
   {
+    service: 'incident-service',
+    function: 'submission-get',
+    entry: 'src/services/incident-service/getSubmission.ts',
+  },
+  {
+    service: 'incident-service',
+    function: 'submission-retry',
+    entry: 'src/services/incident-service/retrySubmission.ts',
+  },
+  {
     service: 'reporting-service',
     function: 'losap-year-end',
     entry: 'src/services/reporting-service/losap/handler.ts',

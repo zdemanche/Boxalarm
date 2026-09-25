@@ -30,6 +30,34 @@ export class SubmissionConflictError extends Error {
   }
 }
 
+export class SubmissionRetryConflictError extends Error {
+  constructor(incidentId: string, currentStatus: string) {
+    super(
+      `incident "${incidentId}" submission is not FAILED and cannot be retried (current submission status "${currentStatus}")`,
+    );
+    this.name = 'SubmissionRetryConflictError';
+  }
+}
+
+function isSubmissionStatus(value: unknown): value is SubmissionStatus {
+  return typeof value === 'string' && (SUBMISSION_STATUSES as readonly string[]).includes(value);
+}
+
+function toSubmissionRecord(incidentId: string, item: Record<string, unknown>): SubmissionRecord {
+  const submissionStatus = isSubmissionStatus(item.submissionStatus)
+    ? item.submissionStatus
+    : undefined;
+  const failureReason = item.submissionFailureReason;
+  return {
+    incidentId,
+    status: typeof item.status === 'string' ? item.status : '',
+    ...(submissionStatus !== undefined ? { submissionStatus } : {}),
+    ...(submissionStatus === 'FAILED' && typeof failureReason === 'string'
+      ? { submissionFailureReason: failureReason }
+      : {}),
+  };
+}
+
 export interface SubmissionAttemptInput {
   readonly outcome: SubmissionOutcome;
   readonly httpStatus: number;
@@ -46,6 +74,17 @@ export interface EnqueueSubmissionResult {
   readonly submissionStatus: 'SUBMITTED';
 }
 
+export interface SubmissionRecord {
+  readonly incidentId: string;
+  readonly status: string;
+  readonly submissionStatus?: SubmissionStatus;
+  readonly submissionFailureReason?: string;
+}
+
+export interface RetrySubmissionResult {
+  readonly submissionStatus: 'RETRYING';
+}
+
 export interface SubmissionRepository {
   enqueueSubmission(
     deptId: VerifiedDeptId,
@@ -60,10 +99,13 @@ export interface SubmissionRepository {
     terminal: boolean,
     nowEpochSeconds: number,
   ): Promise<AppendSubmissionAttemptResult>;
-}
-
-function incidentKey(deptId: VerifiedDeptId, incidentId: string): Record<string, string> {
-  return { pk: buildDeptScopedPk(deptId, 'INCIDENT', incidentId), sk: 'METADATA' };
+  getSubmission(deptId: VerifiedDeptId, incidentId: string): Promise<SubmissionRecord | undefined>;
+  retrySubmission(
+    deptId: VerifiedDeptId,
+    incidentId: string,
+    nowEpochSeconds: number,
+    traceId: string,
+  ): Promise<RetrySubmissionResult>;
 }
 
 export function createSubmissionRepository(
@@ -72,7 +114,6 @@ export function createSubmissionRepository(
 ): SubmissionRepository {
   return {
     async enqueueSubmission(deptId, incidentId, nowEpochSeconds, traceId) {
-      const key = incidentKey(deptId, incidentId);
       const outboxRecord = buildOutboxRecord(
         deptId,
         'incident-service',
@@ -91,7 +132,7 @@ export function createSubmissionRepository(
               {
                 Update: {
                   TableName: tableName,
-                  Key: key,
+                  Key: { pk: buildDeptScopedPk(deptId, 'INCIDENT', incidentId), sk: 'METADATA' },
                   ConditionExpression: 'attribute_exists(pk) AND #status = :validated',
                   UpdateExpression:
                     'SET #status = :submitted, submissionStatus = :submitted, updatedAt = :updatedAt',
@@ -112,7 +153,12 @@ export function createSubmissionRepository(
           error instanceof TransactionCanceledException &&
           error.CancellationReasons?.[0]?.Code === 'ConditionalCheckFailed'
         ) {
-          const existing = await client.send(new GetCommand({ TableName: tableName, Key: key }));
+          const existing = await client.send(
+            new GetCommand({
+              TableName: tableName,
+              Key: { pk: buildDeptScopedPk(deptId, 'INCIDENT', incidentId), sk: 'METADATA' },
+            }),
+          );
           if (!existing.Item) {
             throw new IncidentNotFoundError(incidentId);
           }
@@ -132,7 +178,6 @@ export function createSubmissionRepository(
     },
 
     async appendSubmissionAttempt(deptId, incidentId, attempt, terminal, nowEpochSeconds) {
-      const key = incidentKey(deptId, incidentId);
       const attemptedAt = new Date().toISOString();
 
       const submissionStatus: SubmissionStatus =
@@ -145,7 +190,7 @@ export function createSubmissionRepository(
             : undefined;
 
       const attemptItem = {
-        pk: key.pk,
+        pk: buildDeptScopedPk(deptId, 'INCIDENT', incidentId),
         sk: `SUBMISSION#${attemptedAt}`,
         entityType: 'NERIS_SUBMISSION_ATTEMPT',
         incidentId,
@@ -201,7 +246,7 @@ export function createSubmissionRepository(
               {
                 Update: {
                   TableName: tableName,
-                  Key: key,
+                  Key: { pk: buildDeptScopedPk(deptId, 'INCIDENT', incidentId), sk: 'METADATA' },
                   ConditionExpression: 'attribute_exists(pk)',
                   UpdateExpression: `SET ${setClauses.join(', ')}`,
                   ...(Object.keys(names).length > 0 ? { ExpressionAttributeNames: names } : {}),
@@ -233,6 +278,86 @@ export function createSubmissionRepository(
       }
 
       return { submissionStatus };
+    },
+
+    async getSubmission(deptId, incidentId) {
+      const existing = await client.send(
+        new GetCommand({
+          TableName: tableName,
+          Key: { pk: buildDeptScopedPk(deptId, 'INCIDENT', incidentId), sk: 'METADATA' },
+          ConsistentRead: true,
+        }),
+      );
+      if (!existing.Item) {
+        return undefined;
+      }
+      return toSubmissionRecord(incidentId, existing.Item as Record<string, unknown>);
+    },
+
+    async retrySubmission(deptId, incidentId, nowEpochSeconds, traceId) {
+      const outboxRecord = buildOutboxRecord(
+        deptId,
+        'incident-service',
+        'neris.incident.submitted',
+        traceId,
+        {
+          incidentId,
+          deptId,
+        },
+      );
+
+      try {
+        await client.send(
+          new TransactWriteCommand({
+            TransactItems: [
+              {
+                Update: {
+                  TableName: tableName,
+                  Key: { pk: buildDeptScopedPk(deptId, 'INCIDENT', incidentId), sk: 'METADATA' },
+                  ConditionExpression: 'attribute_exists(pk) AND submissionStatus = :failed',
+                  UpdateExpression:
+                    'SET submissionStatus = :retrying, updatedAt = :updatedAt REMOVE submissionFailureReason',
+                  ExpressionAttributeValues: {
+                    ':failed': 'FAILED' satisfies SubmissionStatus,
+                    ':retrying': 'RETRYING' satisfies SubmissionStatus,
+                    ':updatedAt': nowEpochSeconds,
+                  },
+                },
+              },
+              { Put: { TableName: tableName, Item: outboxRecord } },
+            ],
+          }),
+        );
+      } catch (error) {
+        if (
+          error instanceof TransactionCanceledException &&
+          error.CancellationReasons?.[0]?.Code === 'ConditionalCheckFailed'
+        ) {
+          const existing = await client.send(
+            new GetCommand({
+              TableName: tableName,
+              Key: { pk: buildDeptScopedPk(deptId, 'INCIDENT', incidentId), sk: 'METADATA' },
+            }),
+          );
+          if (!existing.Item) {
+            throw new IncidentNotFoundError(incidentId);
+          }
+          throw new SubmissionRetryConflictError(
+            incidentId,
+            String(existing.Item.submissionStatus ?? existing.Item.status),
+          );
+        }
+        logger.error({
+          event: 'neris.submission.retry_failed',
+          correlationId: traceId,
+          deptId,
+          incidentId,
+          message: error instanceof Error ? error.message : undefined,
+        });
+        throw error;
+      }
+
+      return { submissionStatus: 'RETRYING' };
     },
   };
 }
