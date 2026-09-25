@@ -151,6 +151,12 @@ test('training officer creates an event and it appears in start order; a member 
   await user.type(screen.getByLabelText('Ends'), '2026-07-01T11:00');
   await user.click(screen.getByRole('button', { name: 'Create event' }));
   await screen.findByText('Hose drill');
+  // M9: the date inputs are controlled, so a reset form really is empty and the next create
+  // can't pass `required` while posting startAt/endAt = 0.
+  await waitFor(() => {
+    expect((screen.getByLabelText('Starts') as HTMLInputElement).value).toBe('');
+    expect((screen.getByLabelText('Ends') as HTMLInputElement).value).toBe('');
+  });
 
   const signUpButtons = screen.getAllByRole('button', { name: 'Sign up' });
   await user.click(signUpButtons[0]!);
