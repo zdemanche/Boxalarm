@@ -1,5 +1,6 @@
 import type { APIGatewayProxyResultV2 } from 'aws-lambda';
 import {
+  badRequestProblem,
   extractTraceId,
   serviceUnavailableProblem,
   withAuthorization,
@@ -10,6 +11,7 @@ import { toVerifiedDeptId } from '@boxalarm/dept-scope';
 import { emitOutcomeMetric } from '@boxalarm/metrics';
 import { createDynamoDocClient, readReportingServiceConfig } from '../awsClients.js';
 import { logError } from '../logger.js';
+import { readDeliveryBaseline } from './deliveryBaseline.js';
 import { getCutoverDecision } from './repository.js';
 
 const METRICS_NAMESPACE = 'Boxalarm/ReportingService';
@@ -19,6 +21,14 @@ async function innerGetCutoverDecisionHandler(
   principal: CedarPrincipalContext,
 ): Promise<APIGatewayProxyResultV2> {
   const traceId = extractTraceId(event);
+  const fromRaw = event.queryStringParameters?.from;
+  const toRaw = event.queryStringParameters?.to;
+  const wantsBaseline = fromRaw !== undefined || toRaw !== undefined;
+  const from = Number(fromRaw);
+  const to = Number(toRaw);
+  if (wantsBaseline && (!Number.isFinite(from) || !Number.isFinite(to) || from > to)) {
+    return badRequestProblem(traceId, 'from and to are required epoch seconds with from <= to');
+  }
   const deptId = toVerifiedDeptId(principal);
   const config = readReportingServiceConfig(process.env);
   const client = createDynamoDocClient();
@@ -26,6 +36,9 @@ async function innerGetCutoverDecisionHandler(
   try {
     const record = await getCutoverDecision(client, config.tableName, deptId);
     const retainedPagingRequired = !record || record.decision !== 'accept';
+    const deliveryBaseline = wantsBaseline
+      ? await readDeliveryBaseline(process.env, event, from, to)
+      : undefined;
     emitOutcomeMetric(METRICS_NAMESPACE, 'ReportingCutoverDecisionGetSucceeded');
     return {
       statusCode: 200,
@@ -35,6 +48,7 @@ async function innerGetCutoverDecisionHandler(
         decider: record?.decider ?? null,
         decidedAt: record?.decidedAt ?? null,
         retainedPagingRequired,
+        ...(deliveryBaseline ? { deliveryBaseline } : {}),
       }),
     };
   } catch (error) {

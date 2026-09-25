@@ -96,9 +96,9 @@ describe('cutover decision get handler', () => {
     });
     const result = (await handler(buildEvent())) as { statusCode: number; body: string };
     expect(result.statusCode).toBe(200);
-    expect((JSON.parse(result.body) as { retainedPagingRequired: boolean }).retainedPagingRequired).toBe(
-      true,
-    );
+    expect(
+      (JSON.parse(result.body) as { retainedPagingRequired: boolean }).retainedPagingRequired,
+    ).toBe(true);
   });
 
   it('reports retainedPagingRequired false only when the latest decision is accept', async () => {

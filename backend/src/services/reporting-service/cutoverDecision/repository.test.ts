@@ -28,7 +28,11 @@ describe('getCutoverDecision', () => {
       Item: { decision: 'accept', decider: 'member-0001', decidedAt: 1700000000000 },
     });
     const result = await getCutoverDecision(client, tableName, deptId);
-    expect(result).toEqual({ decision: 'accept', decider: 'member-0001', decidedAt: 1700000000000 });
+    expect(result).toEqual({
+      decision: 'accept',
+      decider: 'member-0001',
+      decidedAt: 1700000000000,
+    });
   });
 
   it('reads by the dept-scoped CUTOVER_DECISION pk and CURRENT sk', async () => {
@@ -53,7 +57,9 @@ describe('recordCutoverDecision', () => {
     send.mockResolvedValue({});
     await recordCutoverDecision(client, tableName, deptId, record);
     const [command] = send.mock.calls[0] as [
-      { input: { TransactItems: { Put: { Item: { sk: string }; ConditionExpression?: string } }[] } },
+      {
+        input: { TransactItems: { Put: { Item: { sk: string }; ConditionExpression?: string } }[] };
+      },
     ];
     const items = command.input.TransactItems;
     expect(items).toHaveLength(2);

@@ -89,12 +89,11 @@ describe('cutover decision post handler', () => {
       buildEvent({ body: JSON.stringify({ decision: 'accept', decider: 'someone-else' }) }),
     )) as { statusCode: number; body: string };
     expect(result.statusCode).toBe(200);
-    expect(recordCutoverDecision).toHaveBeenCalledWith(
-      {},
-      'platform-table',
-      'NICHOLS',
-      { decision: 'accept', decider: 'member-0007', decidedAt: 1700000000000 },
-    );
+    expect(recordCutoverDecision).toHaveBeenCalledWith({}, 'platform-table', 'NICHOLS', {
+      decision: 'accept',
+      decider: 'member-0007',
+      decidedAt: 1700000000000,
+    });
     expect(JSON.parse(result.body)).toEqual({
       decision: 'accept',
       decider: 'member-0007',
@@ -105,12 +104,11 @@ describe('cutover decision post handler', () => {
   it('persists a defer decision', async () => {
     vi.mocked(recordCutoverDecision).mockResolvedValue(undefined);
     await handler(buildEvent({ body: JSON.stringify({ decision: 'defer' }) }));
-    expect(recordCutoverDecision).toHaveBeenCalledWith(
-      {},
-      'platform-table',
-      'NICHOLS',
-      { decision: 'defer', decider: 'member-0007', decidedAt: 1700000000000 },
-    );
+    expect(recordCutoverDecision).toHaveBeenCalledWith({}, 'platform-table', 'NICHOLS', {
+      decision: 'defer',
+      decider: 'member-0007',
+      decidedAt: 1700000000000,
+    });
   });
 
   it('returns 400 with no DynamoDB call when decision is absent', async () => {
@@ -126,9 +124,10 @@ describe('cutover decision post handler', () => {
   });
 
   it('returns 400 when decision is wrong-typed (number)', async () => {
-    const result = (await handler(
-      buildEvent({ body: JSON.stringify({ decision: 1 }) }),
-    )) as { statusCode: number; body: string };
+    const result = (await handler(buildEvent({ body: JSON.stringify({ decision: 1 }) }))) as {
+      statusCode: number;
+      body: string;
+    };
     expect(result.statusCode).toBe(400);
     expect(recordCutoverDecision).not.toHaveBeenCalled();
   });
@@ -142,9 +141,10 @@ describe('cutover decision post handler', () => {
   });
 
   it('returns 400 when decision is a string outside the enum', async () => {
-    const result = (await handler(
-      buildEvent({ body: JSON.stringify({ decision: 'maybe' }) }),
-    )) as { statusCode: number; body: string };
+    const result = (await handler(buildEvent({ body: JSON.stringify({ decision: 'maybe' }) }))) as {
+      statusCode: number;
+      body: string;
+    };
     expect(result.statusCode).toBe(400);
     expect(recordCutoverDecision).not.toHaveBeenCalled();
   });

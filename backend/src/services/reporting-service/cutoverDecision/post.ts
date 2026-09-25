@@ -45,10 +45,7 @@ async function innerPostCutoverDecisionHandler(
   const traceId = extractTraceId(event);
   const decision = parseDecision(event.body);
   if (!decision) {
-    return badRequestProblem(
-      traceId,
-      "decision is required and must be 'accept' or 'defer'",
-    );
+    return badRequestProblem(traceId, "decision is required and must be 'accept' or 'defer'");
   }
 
   const deptId = toVerifiedDeptId(principal);
