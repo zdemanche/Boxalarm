@@ -1,40 +1,53 @@
 # infrastructure
 
 ## Purpose & Boundaries
-All Pulumi IaC for every AWS resource across every environment (dev/qa/staging/prod) - the sole owner of AWS deploys. Lives exclusively in the `boxalarm-infrastructure` repo; `boxalarm-backend` and `boxalarm-ui` are build-only and carry no IaC. Wires the 10 backend services to API Gateway, DynamoDB, EventBridge, SNS/SQS, Step Functions/EventBridge Scheduler, Cognito, Verified Permissions, ElastiCache, and S3.
+
+All Pulumi IaC for every environment (dev/qa/staging/prod, not every stage necessarily used by this single-department deployment). Sole owner of every AWS resource and all Pulumi state — the `boxalarm-infrastructure` repo. Wires the 10 backend services to API Gateway, DynamoDB, EventBridge, SNS/SQS, Cognito, Verified Permissions, S3. Deploys via GitHub OIDC → central org role. Contains no application/business logic of its own.
 
 ## Interfaces
-Not an API surface - deploys via GitHub OIDC to a central org role. Root `Pulumi.yaml` with per-environment stack config; state backend unset (Pulumi Cloud) - `pulumi stack export|import` moves it to org S3 later, not yet done.
+
+None (no API surface) — this component provisions the infrastructure other components run on and call.
 
 ## Data Ownership
-No application data. Owns: 3 DynamoDB tables (`alerting-service`, `incident-service`, `platform-service` - on-demand, PITR on, Streams on all three), the alerting-plane messaging component `messaging-alerting.ts` (dedicated SNS FIFO topic, per-channel SQS FIFO + DLQ, reserved Lambda concurrency, defined separately from `messaging.ts` for every other domain), the LOB `boxalarm-{env}-platform-bus` EventBridge bus and its per-consumer SQS + DLQ, two S3 buckets (`nichols-boxalarm-platform-assets`, `boxalarm-incident-assets`) plus a short-lived `boxalarm-exports-staging` bucket, ElastiCache Serverless Valkey (VPC-only), Cognito user pool + Verified Permissions policy store per environment.
 
-## Events Produced
-None (infrastructure, not a runtime service).
+None directly, but provisions and configures:
 
-## Events Consumed
-None.
+- **3 DynamoDB tables** — `alerting-service` (customer-managed KMS), `incident-service` (customer-managed KMS), `platform-service` (AWS-managed KMS, cost grounds). All on-demand, PITR on, Streams on.
+- **2 S3 buckets** — `nichols-boxalarm-platform-assets`, `boxalarm-incident-assets` — plus a third short-lived `boxalarm-exports-staging` (7-day lifecycle, temporary by design). Block Public Access on, SSE-S3 (SSE-KMS for incident bucket), versioning off, `AbortIncompleteMultipartUpload` at 7 days, Intelligent-Tiering with IA transition at 60 days.
+- **Messaging:** SNS FIFO alerting topic + per-channel SQS FIFO queues/DLQs; EventBridge bus `boxalarm-{env}-platform-bus` + rule-routed SQS queues/DLQs (11 total SQS queues across both planes); EventBridge Scheduler for one-time timers.
+- **Cognito** user pool (single pool per environment, `MfaConfiguration: OFF`).
+- **Verified Permissions** policy store (one per environment, Cedar policies).
+- **ElastiCache Serverless (Valkey)** — VPC-only; the alert path's Lambdas are explicitly excluded from this VPC.
+- **API Gateway HTTP API** (not REST API) + Lambda authorizer.
+
+## Events Produced / Consumed
+
+None directly — provisions the transport (SNS/SQS/EventBridge) that every other component's events flow through.
 
 ## Dependencies
-- Internal: every one of the 10 backend services and both frontend build targets depend on this repo's deployed resources; this repo depends on none of them (build-only elsewhere, deploy-only here).
-- External: AWS (all resources), GitHub OIDC (deploy auth), Pulumi Cloud (state backend, until migrated to org S3).
+
+**Internal:** every backend service depends on this component for its runtime infrastructure. No backend/frontend repo contains any IaC of its own.
+
+**External:** AWS (all regions pinned `us-east-1`), GitHub OIDC (deploy auth), Pulumi Cloud (state backend, unset explicitly — `pulumi stack export|import` moves it to org S3 later per project handoff notes, not stated in this architecture document itself).
 
 ## Gotchas & Constraints
-- Alerting-plane infra gets its own SNS topic, SQS queues, DLQs, Lambda functions, and reserved concurrency, structurally separate (`messaging-alerting.ts`) from every other domain's shared `messaging.ts` - no consumer outside the alerting domain ever subscribes to the alerting topic, and this must be enforced as an IAM boundary, not a naming convention: `alerting-service` execution roles hold **no IAM permission** to read/write `platform-service` or `incident-service` tables.
-- Lambdas are VPC-less by default (avoids ENI cold-start on the alert path); the one exception is ElastiCache Valkey, which is VPC-only - services that use it attach to a VPC, but **no alerting-plane Lambda does**.
-- DLQ `RedrivePolicy`: `maxReceiveCount: 3` on alerting queues, `3-5` elsewhere (tighter on alerting so a poison message escalates to a human before burning the 5s p99 fan-out budget on retries).
-- Customer-managed KMS key for `alerting-service` and `incident-service` tables; AWS-managed keys for `platform-service` on cost grounds.
-- CloudTrail enabled including DynamoDB data events on the alerting table; audit entries and delivery receipts archived to S3 with Object Lock in compliance mode.
-- All resources pinned to a U.S. region - a NERIS vendor obligation (N6.1), not a preference; a multi-region or global-edge design would violate it.
-- No self-hosted broker (no Kafka/RabbitMQ) - AWS-native pay-per-use only, consistent with the no-24/7-staffed-support constraint.
-- Resource naming is `boxalarm-{env}-*` everywhere; any `moonaan-prod-*` name appearing in the source document is template boilerplate to be read as `boxalarm-{env}-*`.
-- PITR gives RPO <= 5 minutes for all three tables; RTO target <= 4 hours (LOB) and <= 1 hour (alerting, flagged optimistic - no multi-region standby exists) - a release-gate restore drill must measure and record the actual RTO.
-- Region loss and SNS-topic/table-level failure are accepted residual risks with no infra-level mitigation in v1 - compensated procedurally by the N1.9 parallel tone-out run, not by infrastructure redundancy.
+
+- **`alerting-service`'s execution roles hold literally no IAM permission on `platform-service`/`incident-service` tables** — this is the enforcement mechanism for the whole N1.5/N1.7 isolation invariant; a future code change cannot quietly reintroduce the coupling because the permission simply does not exist to be exploited.
+- **No alerting-plane Lambda attaches to a VPC** — Valkey is VPC-only and is the one exception; the alert path deliberately avoids ENI cold-start latency by staying VPC-less, reaching AWS services over TLS-protected, IAM-authenticated public endpoints. Gateway endpoints for DynamoDB/S3 are provisioned in the Valkey VPC for the services that do attach.
+- **`alerting-service` deploys have no maintenance window, ever** — every Lambda deploys via a versioned alias with CodeDeploy canary/linear traffic shift; the N1.6 canary is the deployment gate (not a separate synthetic check); existing CloudWatch alarms double as automatic rollback triggers.
+- **DLQ `maxReceiveCount`: 3 on alerting-plane queues (tighter — escalate to a human faster, don't burn the 5s p99 budget on retries), 3-5 on LOB-plane queues.**
+- **DR targets:** PITR on all three tables gives RPO ≤ 5 minutes. RTO ≤ 4 hours for the LOB plane; a **target** (not yet proven) of ≤ 1 hour for the alerting plane, flagged as optimistic — a release-gate restore drill must measure the actual RTO and replace this target with evidence.
+- **CloudTrail enabled including DynamoDB data events on the alerting table** — audit entries and delivery receipts archived to S3 with Object Lock in compliance mode; the IAM write path for audit entries is kept separate from the services whose mutations they record.
+- **Repo topology is fixed and non-negotiable per requirements:** 4 repos (`boxalarm-ui`, `boxalarm-backend`, `boxalarm-infrastructure`, `boxalarm-docs`), never a monorepo, never per-service repos — UI and backend are build-only, this repo is the single owner of Pulumi state and the only thing that touches AWS. **Note:** per the project's own working handoff (CLAUDE.md), the repos have since been consolidated into one monorepo (`Boxalarm-monorepo`) with `backend/`, `ui/`, `infrastructure/` directories — this is a post-architecture-document operational change, not a revision to this document's repo-topology section.
+- **No dollar figure existed for the "hard budget constraint" until a back-of-envelope estimate was added** (~$120-175/month total, not a quote) — the two largest, least-certain lines are the Valkey per-cache floor cost (~$40-50/mo, AWS-side, resolvable without a vendor decision) and SMS/voice vendor costs (~$60-95/mo combined, blocked on OQ-3).
 
 ## Source Sections
-- Backend section 0 Governing decision (API Gateway house-standard reconciliation), lines 106-110
-- Backend section 3 Tech stack, lines 413-429
-- Eventing section 1 Design rule (alerting is its own isolated messaging plane), lines 1460-1466
-- Cross-Cutting - Repository Topology, lines 2445-2458
-- Cross-Cutting - Data Protection Retention & DR (encryption, CloudTrail, network posture, RPO/RTO), lines 2494-2507
-- Data Model section 1 Summary recommendation (three-table layout), lines 488-501
+
+- Backend §0 Governing decision, house-standard reconciliation (API Gateway) (`:110-114`)
+- Backend §3 Tech stack table (`:448-464`)
+- Backend §4.5 Deployment strategy (`:499-509`)
+- Data Model §7 Cost and performance considerations, §7.1 Monthly cost estimate (`:1445-1477`)
+- Data Model §8 S3 conventions (`:1479-1488`)
+- Cross-Cutting: Data Protection & DR (encryption, network posture, RPO/RTO) (`:2617-2629`)
+- Cross-Cutting: Repository Topology (`:2568-2581`)
+- Eventing Architecture §1 Design rule — alerting's own isolated messaging infra (`:1559-1565`)

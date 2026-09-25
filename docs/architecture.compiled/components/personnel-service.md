@@ -1,58 +1,72 @@
 # personnel-service
 
 ## Purpose & Boundaries
-Roster, qualifications, attendance, LOSAP points, availability, duty shifts, and open-shift signup. Publishes the eligibility/roster events `alerting-service` denormalizes into its own snapshot — this service never blocks or is called synchronously by the alert hot path (N1.5).
+
+Roster, qualifications, attendance, LOSAP points, availability, duty shifts, open-shift signup. Service 3 of 10, Wave 1. Logical service; physical table is the shared `platform-service` table.
 
 ## Interfaces
+
 Base path `/api/v1/personnel/...`.
 
-| Method | Path | Auth |
-|---|---|---|
-| GET / POST | `/members` | Cognito / Cognito(admin) |
-| GET / PUT | `/members/{memberId}` | Cognito |
-| PUT | `/members/{memberId}/status` | Cognito(admin) |
-| GET / PUT | `/members/{memberId}/quals` | Cognito / Cognito(admin) |
-| POST | `/attendance` | Cognito |
-| GET | `/members/{memberId}/losap` | Cognito |
-| GET | `/losap/year-end` | Cognito(admin) |
-| POST | `/members/{memberId}/availability` | Cognito |
-| GET / POST | `/shifts` | Cognito / Cognito(admin) |
-| POST | `/shifts/{shiftId}/claim` (atomic, no double-booking) | Cognito |
-| POST | `/shifts/{shiftId}/release` | Cognito |
-| POST | `/shifts/{shiftId}/swap` | Cognito |
-| GET | `/shifts/coverage` | Cognito(admin) |
+| Method | Path | Description | Auth |
+|---|---|---|---|
+| GET | `/members` | List roster (F2.1) | Cognito |
+| POST | `/members` | Create member | Cognito(admin) |
+| GET | `/members/{memberId}` | Member detail | Cognito |
+| PUT | `/members/{memberId}` | Update / self-service profile (F2.6) | Cognito |
+| PUT | `/members/{memberId}/status` | Status change: active/probationary/LOA/retired | Cognito(admin) |
+| GET \| PUT | `/members/{memberId}/quals` | Qualifications held / update (F2.2) | Cognito / Cognito(admin) |
+| POST | `/attendance` | Record attendance: call/drill/meeting/detail/standby (F2.3) | Cognito |
+| GET | `/members/{memberId}/losap` | LOSAP running point total (F2.4, per-member only — year-end aggregate is reporting-service's) | Cognito |
+| POST | `/members/{memberId}/availability` | Mark unavailable / return (F2.5) | Cognito |
+| GET | `/shifts` | List duty shifts (F2.8) | Cognito |
+| POST | `/shifts` | Define shift w/ required positions/quals | Cognito(admin) |
+| POST | `/shifts/{shiftId}/claim` | Atomic open-shift claim, no double-booking (F2.9) | Cognito |
+| POST | `/shifts/{shiftId}/release` | Release a claimed shift (F2.11) | Cognito |
+| POST | `/shifts/{shiftId}/swap` | Propose swap, officer-approval gated | Cognito |
+| GET | `/shifts/coverage` | Coverage view: covered/short/qual-gapped (F2.10) | Cognito(admin) |
+| GET | `/health/liveness` \| `/health/readiness` | Health | none |
 
 ## Data Ownership
-On the shared `platform-service` table:
-- `MEMBER` — `pk=DEPT#{deptId}#MEMBER#{memberId}`, `sk=METADATA`. `roles: MEMBER|OFFICER|TRAINING|APPARATUS|ADMIN|CHIEF`.
-- `MEMBER_QUALIFICATION` — `sk=QUAL#{qualCode}`, `currentlyEligible` derived false if granting cert expired.
-- `ATTENDANCE_RECORD` — `sk=ATTENDANCE#{occurredAt}`.
-- `LOSAP_POINT_ENTRY` — `sk=LOSAP#{year}#{entryId}`, `ruleVersionId` for configurable points-per-activity.
-- `AVAILABILITY_MARKOFF` — `sk=MARKOFF#{startAt}`, `affectsAlerting: Boolean` — event-propagated into the alerting snapshot, never read cross-service by alerting at fan-out time.
-- `DUTY_SHIFT` — `sk=METADATA`, `status: OPEN|PARTIALLY_FILLED|FULL|CANCELLED`.
-- `SHIFT_POSITION` — `sk=POSITION#{positionCode}`. Claim is `UpdateItem` with `ConditionExpression attribute_not_exists(claimedByMemberId)` — atomic no-double-booking without a lock table.
-- `SHIFT_SWAP_REQUEST` — `sk=SWAP#{requestedAt}`.
+
+On `platform-service` physical table.
+
+- **MEMBER** — `pk=DEPT#{deptId}#MEMBER#{memberId}`, `sk=METADATA`. `firstName`/`lastName`/`phone`/`email`/`agencyId` **PII**. `roles`: `MEMBER`|`OFFICER`|`TRAINING`|`APPARATUS`|`ADMIN`|`CHIEF`.
+- **MEMBER_QUALIFICATION** — `sk=QUAL#{qualCode}`. `currentlyEligible` derived (false if granting cert expired).
+- **ATTENDANCE_RECORD** — `sk=ATTENDANCE#{occurredAt}`. `activityType`, `refId`, `hours`, `losapPointsAwarded`.
+- **LOSAP_POINT_ENTRY** — `sk=LOSAP#{year}#{entryId}`. `points`, `sourceRefId`, `ruleVersionId`.
+- **AVAILABILITY_MARKOFF** — `sk=MARKOFF#{startAt}`. `affectsAlerting` boolean — **event-propagated into `MEMBER_ELIGIBILITY_SNAPSHOT.availabilityState` only, never read cross-service at fan-out time.**
+- **DUTY_SHIFT** — `pk=DEPT#{deptId}#SHIFT#{shiftId}`, `sk=METADATA`.
+- **SHIFT_POSITION** — `sk=POSITION#{positionCode}`. `claimedByMemberId` absent until claimed; claim is `UpdateItem` with `ConditionExpression attribute_not_exists(claimedByMemberId)` — atomic no-double-booking without a lock table.
+- **SHIFT_SWAP_REQUEST** — `sk=SWAP#{requestedAt}`. `requiresOfficerApproval`.
 
 ## Events Produced
-- `personnel.member.updated`, `personnel.eligibility.changed`, `personnel.availability.changed` — consumed by `alerting-service` to maintain `MEMBER_ELIGIBILITY_SNAPSHOT`. Outbox pattern.
-- `personnel.attendance.recorded` — `{memberId, activityType, activityId, losapPoints}` → LOSAP Accrual + Reporting Projections consumers.
-- `scheduling.coverage_gap.detected` (Shift Coverage Scanner, scheduled) → `notification-service`.
+
+- `personnel.member.updated`, `personnel.eligibility.changed`, `personnel.availability.changed` — outbox pattern, for eligibility-affecting changes. **Consumed by alerting-service to maintain `MEMBER_ELIGIBILITY_SNAPSHOT`.**
+- `personnel.attendance.recorded` — outbox. Consumers: LOSAP Accrual Service (handler within personnel-service itself), Reporting Projections (handler within reporting-service).
 
 ## Events Consumed
-None on the alert hot path (deliberately — this service is never a synchronous dependency of alerting).
+
+None named directly.
 
 ## Dependencies
-- **Internal**: `alerting-service` (one-way event consumer of eligibility changes, never the reverse), `notification-service` (coverage-gap notifications), `training-service` (cert-driven qual currency via `MEMBER_QUALIFICATION.grantedByCertId`), `reporting-service` (LOSAP/attendance rollups read GSIs on this table).
-- **External**: none named.
+
+**Internal:** `alerting-service` (one-way, event-driven only — personnel-service never reads or is read by alerting-service synchronously). `reporting-service` reads this service's data via GSIs on the shared table (no API call).
+
+**External:** none named.
 
 ## Gotchas & Constraints
-- Snapshot staleness (a member added/removed mid-shift) is an accepted, documented tradeoff for keeping alerting's eligibility read denormalized rather than a live cross-service call.
-- Shift-claim atomicity (F2.9) depends on reading current DynamoDB state directly — `SHIFT_POSITION` claim state is explicitly never cached.
-- CT LOSAP statutory point rules are unresolved (OQ-12) — `LOSAP_POINT_ENTRY`/`DEPARTMENT_CONFIG#LOSAP_POINT_RULES` are modeled generically to absorb whatever the statute requires; actual rule content not yet specified.
+
+- **`AVAILABILITY_MARKOFF.affectsAlerting` is event-propagated, never read cross-service at fan-out time** — a prior version of this document incorrectly described a direct read; alerting-service's execution role holds no permission on this table at all, so such a read would fail closed at runtime regardless.
+- **Shift claim atomicity depends on reading current DynamoDB state directly — never cached.** `SHIFT_POSITION` claim state is explicitly on the "never cached" list.
+- **LOSAP year-end reporting is NOT owned here** — `/api/v1/personnel/losap/year-end` was a duplicate of `reporting-service`'s `/api/v1/reporting/losap/year-end` and was removed (N-3, decided). This service keeps only the per-member running total.
+- **CT LOSAP statutory point rules are unresolved (OQ-12)** — `LOSAP_POINT_ENTRY`/`DEPARTMENT_CONFIG#LOSAP_POINT_RULES` modeled generically (configurable rule set) to absorb whatever the statute requires; actual rule content not yet specified.
 
 ## Source Sections
-- Backend §1.1 Bounded contexts (service #3), lines 118-142
-- API endpoints, personnel-service, lines 306-327
-- Data Model §3.3 MEMBER through SHIFT_SWAP_REQUEST, lines 884-1005
-- Data Model §4 Access patterns 10, 11b-22, lines 1302-1315
-- Eventing §3-5 (personnel/attendance flow), lines 1520-1544, 1676-1698
+
+- Backend §1.1 Service inventory (`:120-146`)
+- Backend §2 personnel-service API endpoints (`:312-333`)
+- Data Model §3.3 MEMBER, MEMBER_QUALIFICATION, ATTENDANCE_RECORD, LOSAP_POINT_ENTRY, AVAILABILITY_MARKOFF, DUTY_SHIFT, SHIFT_POSITION, SHIFT_SWAP_REQUEST (`:937-1058`)
+- Data Model §4 Access patterns 10, 11b-22 (`:1376-1389`)
+- Events §Other domains, producer/consumer table (personnel.* events) (`:1787-1817`)
+- Open Questions OQ-12 CT LOSAP statutory rules (`:2711`)
