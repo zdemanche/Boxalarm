@@ -76,6 +76,37 @@ describe('secondaryRepository', () => {
     });
   });
 
+  it('refuses a secondaryType or incidentId containing the key delimiter without writing', async () => {
+    const send = vi.fn().mockResolvedValue({});
+    const base = {
+      incidentId: 'NICHOLS-4471-1798000000',
+      secondaryType: 'EXPOSURE',
+      payload: {},
+      affectedMemberIds: [],
+      updatedAt: 1,
+    };
+
+    await expect(
+      putIncidentSecondary(
+        fakeClient(send),
+        TABLE_NAME,
+        DEPT_ID,
+        { ...base, secondaryType: 'EXPOSURE#X' },
+        TRACE_ID,
+      ),
+    ).rejects.toThrow(/secondaryType/);
+    await expect(
+      putIncidentSecondary(
+        fakeClient(send),
+        TABLE_NAME,
+        DEPT_ID,
+        { ...base, incidentId: 'A#B' },
+        TRACE_ID,
+      ),
+    ).rejects.toThrow(/incidentId/);
+    expect(send).not.toHaveBeenCalled();
+  });
+
   it('returns each Secondary module as its own distinct item (E6-S6 AC3)', async () => {
     const send = vi.fn().mockResolvedValue({
       Items: [

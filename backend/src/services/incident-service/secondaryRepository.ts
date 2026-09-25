@@ -3,7 +3,7 @@ import {
   TransactWriteCommand,
   type DynamoDBDocumentClient,
 } from '@aws-sdk/lib-dynamodb';
-import { buildDeptScopedPk, type VerifiedDeptId } from '@boxalarm/dept-scope';
+import { assertNoDelimiter, buildDeptScopedPk, type VerifiedDeptId } from '@boxalarm/dept-scope';
 import { buildOutboxRecord } from '@boxalarm/outbox';
 
 export interface IncidentSecondary {
@@ -22,6 +22,9 @@ export async function putIncidentSecondary(
   secondary: IncidentSecondary,
   traceId: string,
 ): Promise<void> {
+  // Enforced here, not only at the API boundary, since both values become key segments.
+  assertNoDelimiter(secondary.incidentId, 'incidentId');
+  assertNoDelimiter(secondary.secondaryType, 'secondaryType');
   const outboxRecord = buildOutboxRecord(
     deptId,
     'incident-service',
