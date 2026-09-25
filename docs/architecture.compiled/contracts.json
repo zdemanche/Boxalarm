@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "source": { "sha256": "e862935a74ea7ca7d733650146bf397639e4ef7191e3d42edcc3b5b32cdd3fcc" },
+  "source": { "sha256": "bf82b5634184aa43b430eb5b6923c87e7d667147875eaf51836b734b56e964fa" },
   "contracts": [
     {
       "id": "event-envelope",
@@ -12,148 +12,310 @@
       "source": "spine.md#Cross-Cutting Non-Negotiables"
     },
     {
+      "id": "endpoint-prefix",
+      "kind": "endpoint-prefix",
+      "severity": "blocker",
+      "mustContain": [],
+      "mustNotContain": [],
+      "mustMatch": ["['\"]\\/api\\/v1\\/"],
+      "source": "architecture.md:274 (API base path convention; notification-service is the one documented exception using bare /notifications paths)"
+    },
+    {
       "id": "error-envelope",
       "kind": "error-envelope",
       "severity": "blocker",
       "mustContain": ["type", "title", "status", "detail", "traceId"],
       "mustNotContain": [],
       "mustMatch": [],
-      "source": "architecture.md:270 (API endpoints intro, RFC 7807 errors with traceId)"
+      "source": "architecture.md:274 (RFC 7807 errors with traceId)"
     },
     {
-      "id": "endpoint-prefix",
-      "kind": "endpoint-prefix",
+      "id": "auth-no-mfa",
+      "kind": "auth",
       "severity": "blocker",
-      "mustContain": [],
+      "mustContain": ["MfaConfiguration"],
       "mustNotContain": [],
-      "mustMatch": ["['\\\"]/api/v1/"],
-      "source": "architecture.md:270 (Base path /api/v1/{service}/...)"
+      "mustMatch": ["MfaConfiguration\\s*:\\s*['\"]?OFF"],
+      "source": "architecture.md:478 (no MFA, no step-up, no session timeout — N5.2, canonical)"
     },
     {
-      "id": "alerting-exactly-once-key-shape",
+      "id": "auth-jwt-validation",
+      "kind": "auth",
+      "severity": "blocker",
+      "mustContain": ["aws-jwt-verify"],
+      "mustNotContain": [],
+      "mustMatch": [],
+      "source": "architecture.md:474 (centralized Lambda authorizer JWT validation library)"
+    },
+    {
+      "id": "key-shape-exactly-once",
       "kind": "key-shape",
       "severity": "blocker",
       "mustContain": [],
-      "mustNotContain": ["`${dispatchId}#${memberId}`", "`${dispatchId}#${memberId}#${channel}`"],
+      "mustNotContain": ["${dispatchId}#${memberId}}", "${dispatchId}#${memberId}#${channel}}"],
       "mustMatch": ["\\$\\{dispatchId\\}#\\$\\{toneSequence\\}#\\$\\{memberId\\}#\\$\\{channel\\}"],
-      "source": "architecture.md:198-207 (Exactly-once key, CANONICAL, amended for department-level escalation)"
+      "source": "architecture.md:200-209 (exactly-once idempotencyKey, canonical — per-channel, per-tone; dispatchId#memberId alone and dispatchId#memberId#channel without toneSequence are both named silent-suppression defects)"
     },
     {
-      "id": "delivery-receipt-sk-shape",
-      "kind": "key-shape",
+      "id": "dynamo-keys-delivery-receipt-sk",
+      "kind": "dynamo-keys",
       "severity": "blocker",
       "mustContain": [],
       "mustNotContain": [],
       "mustMatch": ["RECEIPT#\\$\\{memberId\\}#\\$\\{channel\\}#\\$\\{toneSequence\\}"],
-      "source": "architecture.md:608 (DELIVERY_RECEIPT sk, amended segment order)"
+      "source": "architecture.md:661 (DELIVERY_RECEIPT sk shape)"
     },
     {
-      "id": "mutual-aid-prompt-namespace",
-      "kind": "key-shape",
+      "id": "dynamo-keys-eligibility-snapshot-pk",
+      "kind": "dynamo-keys",
       "severity": "blocker",
-      "mustContain": ["MAPROMPT#"],
-      "mustNotContain": ["RECEIPT#${memberId}#push#3", "RECEIPT#${memberId}#PUSH#3"],
-      "mustMatch": ["MAPROMPT#\\$\\{memberId\\}#PUSH"],
-      "source": "architecture.md:757 (Officer push item shape and idempotency, B3, fixed after review)"
+      "mustContain": ["#ELIGIBILITY"],
+      "mustNotContain": [],
+      "mustMatch": [],
+      "source": "architecture.md:720 (MEMBER_ELIGIBILITY_SNAPSHOT pk = DEPT#{deptId}#ELIGIBILITY)"
     },
     {
-      "id": "mutual-aid-event-singleton-key",
-      "kind": "key-shape",
+      "id": "dynamo-keys-mutual-aid-singleton",
+      "kind": "dynamo-keys",
       "severity": "blocker",
       "mustContain": ["MUTUALAID#SINGLETON"],
       "mustNotContain": [],
       "mustMatch": [],
-      "source": "architecture.md:747 (MUTUAL_AID_EVENT sk, fixed singleton, one trigger per dispatch ever)"
+      "source": "architecture.md:800 (MUTUAL_AID_EVENT sk, fixed, one trigger per dispatch ever)"
     },
     {
-      "id": "tone-event-fire-guard-key",
-      "kind": "key-shape",
+      "id": "dynamo-keys-mutual-aid-prompt",
+      "kind": "dynamo-keys",
       "severity": "blocker",
       "mustContain": [],
+      "mustNotContain": ["RECEIPT#${memberId}#PUSH#3", "RECEIPT#${memberId}#push#3"],
+      "mustMatch": ["MAPROMPT#\\$\\{memberId\\}#PUSH"],
+      "source": "architecture.md:810 (officer mutual-aid prompt namespace, disjoint from RECEIPT# to prevent collision with an already-toned officer's receipt)"
+    },
+    {
+      "id": "status-map-incident",
+      "kind": "status-map",
+      "severity": "warning",
+      "mustContain": ["DRAFT", "VALIDATED", "SUBMITTED", "ACCEPTED", "REJECTED"],
       "mustNotContain": [],
-      "mustMatch": ["TONE#\\$\\{toneSequence\\}(?!#)"],
-      "source": "architecture.md:725-737 (TONE_EVENT two item shapes, singleton fire-guard vs timestamped audit row)"
+      "mustMatch": [],
+      "source": "architecture.md:865 (INCIDENT.status enum)"
     },
     {
-      "id": "tone-sequence-literal-not-computed",
-      "kind": "other",
-      "severity": "blocker",
-      "mustContain": ["toneSequence"],
-      "mustNotContain": ["currentToneSequence + 1", "toneSequence + 1"],
+      "id": "status-map-tone-ladder",
+      "kind": "status-map",
+      "severity": "warning",
+      "mustContain": ["ACTIVE", "HALTED_MANUAL", "COMPLETED"],
+      "mustNotContain": [],
       "mustMatch": [],
-      "source": "architecture.md:203, 237 (toneSequence must be a stored literal in the schedule payload, never computed at fire time)"
+      "source": "architecture.md:646 (DISPATCH_ALERT.toneLadderStatus enum)"
     },
     {
-      "id": "payload-alerting-tone-escalated",
-      "kind": "event-payload",
-      "severity": "blocker",
-      "mustContain": ["dispatchId", "toneSequence", "firedAt", "outcome", "predicateSnapshot", "eligibleMemberCount"],
-      "mustNotContain": ["dispatchId: null", "toneSequence: null", "outcome: null"],
+      "id": "status-map-tone-event-outcome",
+      "kind": "status-map",
+      "severity": "warning",
+      "mustContain": ["FIRED", "FIRED_MANUAL_OVERRIDE", "SKIPPED_PREDICATE_MET", "SKIPPED_ALREADY_FIRED", "SKIPPED_MANUALLY_HALTED", "SKIPPED_NO_CONFIG"],
+      "mustNotContain": [],
       "mustMatch": [],
-      "source": "architecture.md:1601-1615 (alerting.tone.escalated payload)"
+      "source": "architecture.md:790 (TONE_EVENT.outcome enum)"
     },
     {
-      "id": "payload-alerting-mutual-aid-triggered",
-      "kind": "event-payload",
-      "severity": "blocker",
-      "mustContain": ["dispatchId", "triggeredAt", "reason", "predicateSnapshot", "adapterUsed", "officersNotified"],
-      "mustNotContain": ["dispatchId: null", "reason: null", "adapterUsed: null"],
+      "id": "status-map-ack-status",
+      "kind": "status-map",
+      "severity": "warning",
+      "mustContain": ["NONE", "RESPONDING", "NOT_RESPONDING", "DIRECT_TO_SCENE"],
+      "mustNotContain": [],
       "mustMatch": [],
-      "source": "architecture.md:1617-1631 (alerting.mutual_aid.triggered payload)"
+      "source": "architecture.md:689 (DISPATCH_ROSTER_ENTRY.ackStatus enum)"
     },
     {
-      "id": "payload-platform-config-alert-rules-updated",
-      "kind": "event-payload",
-      "severity": "blocker",
-      "mustContain": ["deptId", "toneLadder", "retoneRespondingMembers", "voiceEscalatesPerTone", "defaultRule", "callTypeOverrides"],
-      "mustNotContain": ["toneLadder: null", "defaultRule: null"],
+      "id": "status-map-neris-submission-outcome",
+      "kind": "status-map",
+      "severity": "warning",
+      "mustContain": ["SUCCESS", "RATE_LIMITED", "VALIDATION_ERROR", "SERVER_ERROR"],
+      "mustNotContain": [],
       "mustMatch": [],
-      "source": "architecture.md:1647-1662 (platform.config.alert_rules.updated payload)"
+      "source": "architecture.md:907 (NERIS_SUBMISSION_ATTEMPT.outcome enum)"
+    },
+    {
+      "id": "event-type-alerting-dispatch-received",
+      "kind": "event-type",
+      "severity": "blocker",
+      "mustContain": ["alerting.dispatch.received"],
+      "mustNotContain": ["dispatch.alert.received"],
+      "mustMatch": [],
+      "source": "architecture.md:262-264,1803 (renamed from dispatch.alert.received, N-5 decided)"
+    },
+    {
+      "id": "event-type-alerting-dispatch-normalized",
+      "kind": "event-type",
+      "severity": "blocker",
+      "mustContain": ["alerting.dispatch.normalized"],
+      "mustNotContain": [],
+      "mustMatch": [],
+      "source": "architecture.md:1661,1804"
+    },
+    {
+      "id": "event-type-alerting-delivery-receipt",
+      "kind": "event-type",
+      "severity": "blocker",
+      "mustContain": ["alerting.delivery.receipt"],
+      "mustNotContain": [],
+      "mustMatch": [],
+      "source": "architecture.md:1686,1806"
+    },
+    {
+      "id": "event-type-alerting-escalation-triggered",
+      "kind": "event-type",
+      "severity": "blocker",
+      "mustContain": ["alerting.escalation.triggered"],
+      "mustNotContain": [],
+      "mustMatch": [],
+      "source": "architecture.md:1706,1805"
+    },
+    {
+      "id": "event-type-alerting-tone-escalated",
+      "kind": "event-type",
+      "severity": "blocker",
+      "mustContain": ["alerting.tone.escalated"],
+      "mustNotContain": [],
+      "mustMatch": [],
+      "source": "architecture.md:1708,1807"
+    },
+    {
+      "id": "event-type-alerting-mutual-aid-triggered",
+      "kind": "event-type",
+      "severity": "blocker",
+      "mustContain": ["alerting.mutual_aid.triggered"],
+      "mustNotContain": [],
+      "mustMatch": [],
+      "source": "architecture.md:1728,1808"
+    },
+    {
+      "id": "event-type-alerting-canary-result",
+      "kind": "event-type",
+      "severity": "warning",
+      "mustContain": ["alerting.canary.result"],
+      "mustNotContain": [],
+      "mustMatch": [],
+      "source": "architecture.md:1748,1810"
+    },
+    {
+      "id": "event-type-platform-config-alert-rules-updated",
+      "kind": "event-type",
+      "severity": "blocker",
+      "mustContain": ["platform.config.alert_rules.updated"],
+      "mustNotContain": [],
+      "mustMatch": [],
+      "source": "architecture.md:1766,1809"
+    },
+    {
+      "id": "event-type-training-expiry-due",
+      "kind": "event-type",
+      "severity": "blocker",
+      "mustContain": ["training.expiry.due"],
+      "mustNotContain": ["cert.expiry.due"],
+      "mustMatch": [],
+      "source": "architecture.md:262-264,1789 (renamed from cert.expiry.due, N-5 decided)"
+    },
+    {
+      "id": "event-type-inventory-expiry-due",
+      "kind": "event-type",
+      "severity": "blocker",
+      "mustContain": ["inventory.expiry.due"],
+      "mustNotContain": ["ppe.expiry.due"],
+      "mustMatch": [],
+      "source": "architecture.md:262-264,1791 (renamed from ppe.expiry.due, N-5 decided)"
+    },
+    {
+      "id": "event-type-apparatus-defect-reported",
+      "kind": "event-type",
+      "severity": "blocker",
+      "mustContain": ["apparatus.defect.reported"],
+      "mustNotContain": [],
+      "mustMatch": [],
+      "source": "architecture.md:1552 (previously undefined, now specified)"
+    },
+    {
+      "id": "event-type-inventory-reorder-due",
+      "kind": "event-type",
+      "severity": "blocker",
+      "mustContain": ["inventory.reorder.due"],
+      "mustNotContain": [],
+      "mustMatch": [],
+      "source": "architecture.md:1553 (previously undefined, now specified)"
+    },
+    {
+      "id": "event-type-neris-incident-submitted",
+      "kind": "event-type",
+      "severity": "warning",
+      "mustContain": ["neris.incident.submitted"],
+      "mustNotContain": [],
+      "mustMatch": [],
+      "source": "architecture.md:1792,1814"
+    },
+    {
+      "id": "event-type-neris-submission-failed",
+      "kind": "event-type",
+      "severity": "warning",
+      "mustContain": ["neris.submission.failed"],
+      "mustNotContain": [],
+      "mustMatch": [],
+      "source": "architecture.md:1793,1815"
+    },
+    {
+      "id": "event-type-scheduling-coverage-gap-detected",
+      "kind": "event-type",
+      "severity": "warning",
+      "mustContain": ["scheduling.coverage_gap.detected"],
+      "mustNotContain": [],
+      "mustMatch": [],
+      "source": "architecture.md:1794,1816 (deliberately left alone — already agrees with its topic name)"
     },
     {
       "id": "payload-alerting-dispatch-normalized",
       "kind": "event-payload",
       "severity": "blocker",
-      "mustContain": ["dispatchId", "memberId", "channel", "channelTier", "toneSequence"],
-      "mustNotContain": ["toneSequence: null", "channel: null"],
+      "mustContain": ["dispatchId", "memberId", "channel", "channelTier", "toneSequence", "incidentType", "address", "narrative"],
+      "mustNotContain": ["channel: null", "toneSequence: null", "channelTier: null"],
       "mustMatch": [],
-      "source": "architecture.md:1562-1581 (alerting.dispatch.normalized payload, amended with toneSequence)"
+      "source": "architecture.md:1661-1684 (alerting.dispatch.normalized payload)"
     },
     {
       "id": "payload-alerting-delivery-receipt",
       "kind": "event-payload",
       "severity": "blocker",
       "mustContain": ["dispatchId", "memberId", "channel", "channelTier", "toneSequence", "status"],
-      "mustNotContain": ["toneSequence: null", "status: null"],
+      "mustNotContain": ["toneSequence: null", "channel: null"],
       "mustMatch": [],
-      "source": "architecture.md:1583-1597 (alerting.delivery.receipt payload, amended with toneSequence)"
+      "source": "architecture.md:1686-1704 (alerting.delivery.receipt payload)"
     },
     {
-      "id": "status-tone-ladder-status",
-      "kind": "status-map",
-      "severity": "warning",
-      "mustContain": ["ACTIVE", "HALTED_MANUAL", "COMPLETED"],
-      "mustNotContain": [],
+      "id": "payload-alerting-tone-escalated",
+      "kind": "event-payload",
+      "severity": "blocker",
+      "mustContain": ["dispatchId", "toneSequence", "outcome", "predicateSnapshot", "eligibleMemberCount"],
+      "mustNotContain": ["toneSequence: null", "predicateSnapshot: null"],
       "mustMatch": [],
-      "source": "architecture.md:593 (DISPATCH_ALERT.toneLadderStatus enum)"
+      "source": "architecture.md:1708-1726 (alerting.tone.escalated payload)"
     },
     {
-      "id": "status-ack-status",
-      "kind": "status-map",
-      "severity": "warning",
-      "mustContain": ["NONE", "RESPONDING", "NOT_RESPONDING", "DIRECT_TO_SCENE"],
-      "mustNotContain": [],
+      "id": "payload-alerting-mutual-aid-triggered",
+      "kind": "event-payload",
+      "severity": "blocker",
+      "mustContain": ["dispatchId", "reason", "predicateSnapshot", "adapterUsed", "officersNotified"],
+      "mustNotContain": ["adapterUsed: null", "officersNotified: null"],
       "mustMatch": [],
-      "source": "architecture.md:636 (DISPATCH_ROSTER_ENTRY.ackStatus enum)"
+      "source": "architecture.md:1728-1746 (alerting.mutual_aid.triggered payload)"
     },
     {
-      "id": "status-tone-event-outcome",
-      "kind": "status-map",
-      "severity": "warning",
-      "mustContain": ["FIRED", "FIRED_MANUAL_OVERRIDE", "SKIPPED_PREDICATE_MET", "SKIPPED_ALREADY_FIRED", "SKIPPED_MANUALLY_HALTED", "SKIPPED_NO_CONFIG"],
-      "mustNotContain": [],
+      "id": "payload-platform-config-alert-rules-updated",
+      "kind": "event-payload",
+      "severity": "blocker",
+      "mustContain": ["deptId", "toneLadder", "retoneRespondingMembers", "voiceEscalatesPerTone", "defaultRule", "callTypeOverrides"],
+      "mustNotContain": ["voiceEscalatesPerTone: null", "retoneRespondingMembers: null"],
       "mustMatch": [],
-      "source": "architecture.md:737 (TONE_EVENT.outcome enum, amended with SKIPPED_NO_CONFIG)"
+      "source": "architecture.md:1766-1785 (platform.config.alert_rules.updated payload)"
     },
     {
       "id": "retention-self-test-run",
@@ -162,7 +324,7 @@
       "mustContain": ["ttl"],
       "mustNotContain": [],
       "mustMatch": [],
-      "source": "architecture.md:770 (SELF_TEST_RUN ttl, 365 days)"
+      "source": "architecture.md:823,1326 (SELF_TEST_RUN ttl, 365 days)"
     },
     {
       "id": "retention-canary-run",
@@ -171,88 +333,16 @@
       "mustContain": ["ttl"],
       "mustNotContain": [],
       "mustMatch": [],
-      "source": "architecture.md:784 (CANARY_RUN ttl, 90 days)"
+      "source": "architecture.md:837,1327 (CANARY_RUN ttl, 90 days)"
     },
     {
-      "id": "retention-notification-inbox",
+      "id": "retention-notification",
       "kind": "retention-ttl",
       "severity": "warning",
       "mustContain": ["ttl"],
       "mustNotContain": [],
       "mustMatch": [],
-      "source": "architecture.md:137 (NOTIFICATION item, ttl 180 days)"
-    },
-    {
-      "id": "retention-event-dedup",
-      "kind": "retention-ttl",
-      "severity": "warning",
-      "mustContain": ["ttl"],
-      "mustNotContain": [],
-      "mustMatch": [],
-      "source": "architecture.md:1442-1447 (EVENT_DEDUP table, ttl 48 hours)"
-    },
-    {
-      "id": "retention-outbox-entry",
-      "kind": "retention-ttl",
-      "severity": "warning",
-      "mustContain": ["ttl"],
-      "mustNotContain": [],
-      "mustMatch": [],
-      "source": "architecture.md:1442-1447 (OUTBOX_ENTRY table, ttl 7 days after sentAt)"
-    },
-    {
-      "id": "no-ttl-life-safety-evidence",
-      "kind": "retention-ttl",
-      "severity": "blocker",
-      "mustContain": [],
-      "mustNotContain": ["ttl:", "ttl ="],
-      "mustMatch": [],
-      "source": "architecture.md:1272 (DELIVERY_RECEIPT, ESCALATION_EVENT, DISPATCH_ALERT, DISPATCH_RESPONSE_RECORD, TONE_EVENT, MUTUAL_AID_EVENT: no TTL-based deletion)"
-    },
-    {
-      "id": "auth-no-mfa",
-      "kind": "auth",
-      "severity": "blocker",
-      "mustContain": ["MfaConfiguration", "OFF"],
-      "mustNotContain": ["MfaConfiguration: 'ON'", "MfaConfiguration: \"ON\"", "SoftwareTokenMfaConfiguration"],
-      "mustMatch": [],
-      "source": "architecture.md:443, 2500 (No MFA, anywhere; MfaConfiguration: OFF)"
-    },
-    {
-      "id": "auth-no-step-up",
-      "kind": "auth",
-      "severity": "blocker",
-      "mustContain": [],
-      "mustNotContain": ["requireStepUp", "reauthenticate", "mfaChallenge"],
-      "mustMatch": [],
-      "source": "architecture.md:2501 (No step-up re-authentication either - there is no re-prompt anywhere in the system)"
-    },
-    {
-      "id": "channel-tier-not-dedup-or-routing",
-      "kind": "other",
-      "severity": "blocker",
-      "mustContain": [],
-      "mustNotContain": ["hash(dispatchId, channelTier", "MessageDeduplicationId = channelTier", "filter channelTier", "subscribe channelTier"],
-      "mustMatch": [],
-      "source": "architecture.md:207, 1427, 1707 (channelTier is escalation-state bookkeeping ONLY, never a routing filter, never a dedup input)"
-    },
-    {
-      "id": "message-group-id-dispatch-id",
-      "kind": "other",
-      "severity": "warning",
-      "mustContain": ["MessageGroupId"],
-      "mustNotContain": ["MessageGroupId = toneSequence", "MessageGroupId = memberId"],
-      "mustMatch": [],
-      "source": "architecture.md:206, 1711 (MessageGroupId remains dispatchId, unchanged, spans every tone)"
-    },
-    {
-      "id": "notification-identity-dispatch-tone",
-      "kind": "other",
-      "severity": "blocker",
-      "mustContain": [],
-      "mustNotContain": [],
-      "mustMatch": ["apns-collapse-id.{0,40}\\$\\{dispatchId\\}#\\$\\{toneSequence\\}", "\\$\\{dispatchId\\}#\\$\\{toneSequence\\}"],
-      "source": "architecture.md:1882, 1889 (apns-collapse-id and Android notification id are {dispatchId}#{toneSequence}, never dispatchId alone)"
+      "source": "architecture.md:141 (NOTIFICATION item ttl, 180 days)"
     }
   ]
 }

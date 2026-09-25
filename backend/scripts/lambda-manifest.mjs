@@ -223,6 +223,31 @@ export const LAMBDA_ENTRIES = [
     entry: 'src/services/incident-service/schemaVersion/refreshScanner/handler.ts',
   },
   {
+    service: 'incident-service',
+    function: 'submit',
+    entry: 'src/services/incident-service/submit.ts',
+  },
+  {
+    service: 'incident-service',
+    function: 'submission-worker',
+    entry: 'src/services/incident-service/neris/submissionWorker.ts',
+  },
+  {
+    service: 'incident-service',
+    function: 'outbox-drain',
+    entry: 'src/services/incident-service/outboxDrainHandler.ts',
+  },
+  {
+    service: 'incident-service',
+    function: 'submission-get',
+    entry: 'src/services/incident-service/getSubmission.ts',
+  },
+  {
+    service: 'incident-service',
+    function: 'submission-retry',
+    entry: 'src/services/incident-service/retrySubmission.ts',
+  },
+  {
     service: 'reporting-service',
     function: 'losap-year-end',
     entry: 'src/services/reporting-service/losap/handler.ts',
@@ -386,6 +411,26 @@ export const LAMBDA_ENTRIES = [
     service: 'alerting-service',
     function: 'outbox-drain',
     entry: 'src/services/alerting-service/outboxDrainHandler.ts',
+  },
+  {
+    service: 'personnel-service',
+    function: 'cert-expired-reactor',
+    entry: 'src/services/personnel-service/events/certExpiredReactor.ts',
+  },
+  {
+    service: 'alerting-service',
+    function: 'eligibility-changed-consumer',
+    entry: 'src/services/alerting-service/eligibility/eligibilityChangedConsumer.ts',
+  },
+  {
+    service: 'alerting-service',
+    function: 'availability-changed-consumer',
+    entry: 'src/services/alerting-service/eligibility/consumer.ts',
+  },
+  {
+    service: 'personnel-service',
+    function: 'shift-completion',
+    entry: 'src/services/personnel-service/shifts/completionHandler.ts',
   },
   {
     service: 'reporting-service',

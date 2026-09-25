@@ -96,6 +96,16 @@ const LosapSettingsPage = lazy(() =>
     default: mod.LosapSettingsPage,
   })),
 );
+const IncidentsListPage = lazy(() =>
+  import('./features/incidents/IncidentsListPage').then((mod) => ({
+    default: mod.IncidentsListPage,
+  })),
+);
+const IncidentDetailPage = lazy(() =>
+  import('./features/incidents/IncidentDetailPage').then((mod) => ({
+    default: mod.IncidentDetailPage,
+  })),
+);
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { staleTime: 30_000, retry: 1 } },
@@ -142,9 +152,7 @@ export function App() {
       <GlobalTokensStyle />
       <QueryClientProvider client={queryClient}>
         <AuthProvider>
-          <BrowserRouter
-            basename={import.meta.env.VITE_DEMO === 'true' ? '/Boxalarm-monorepo' : undefined}
-          >
+          <BrowserRouter basename={import.meta.env.BASE_URL.replace(/\/$/, '') || undefined}>
             <Suspense fallback={null}>
               <Routes>
                 <Route path="/login" element={<LoginRoute />} />
@@ -160,8 +168,8 @@ export function App() {
                   <Route index element={<LandingPage />} />
                   <Route path="alerts/roster" element={roleGuarded(<AlertsRosterPage />)} />
                   <Route path="alerts/diagnostics" element={placeholder('Alert diagnostics')} />
-                  <Route path="incidents" element={placeholder('Incidents')} />
-                  <Route path="incidents/:id" element={placeholder('Incident detail')} />
+                  <Route path="incidents" element={roleGuarded(<IncidentsListPage />)} />
+                  <Route path="incidents/:id" element={roleGuarded(<IncidentDetailPage />)} />
                   <Route path="personnel" element={roleGuarded(<PersonnelListPage />)} />
                   <Route path="personnel/:id" element={roleGuarded(<MemberDetailPage />)} />
                   <Route path="certifications" element={roleGuarded(<CertificationsPage />)} />

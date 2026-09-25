@@ -34,6 +34,7 @@ export class PushTokens extends pulumi.ComponentResource {
   public readonly memberUpdatedConsumer: ServiceLambda;
   public readonly memberUpdatedQueue: aws.sqs.Queue;
   public readonly memberUpdatedDlq: aws.sqs.Queue;
+  public readonly memberUpdatedDlqDepthAlarm: aws.cloudwatch.MetricAlarm;
 
   constructor(name: string, args: PushTokensArgs, opts?: pulumi.ComponentResourceOptions) {
     requireEnv("PushTokens", args.env);
@@ -186,6 +187,46 @@ export class PushTokens extends pulumi.ComponentResource {
         eventSourceArn: this.memberUpdatedQueue.arn,
         functionName: this.memberUpdatedConsumer.function.name,
         functionResponseTypes: ["ReportBatchItemFailures"],
+      },
+      { parent: this },
+    );
+
+    // The event source mapping cannot drain the queue unless the consumer role
+    // can receive and delete. Without this, personnel.member.updated lands and
+    // sits until it ages into the DLQ, and the alerting snapshot never updates.
+    new aws.iam.RolePolicy(
+      `${name}-member-updated-consume-policy`,
+      {
+        role: this.memberUpdatedConsumer.role.id,
+        policy: this.memberUpdatedQueue.arn.apply((arn) =>
+          JSON.stringify({
+            Version: "2012-10-17",
+            Statement: [
+              {
+                Sid: "ConsumeMemberUpdatedQueue",
+                Effect: "Allow",
+                Action: ["sqs:ReceiveMessage", "sqs:DeleteMessage", "sqs:GetQueueAttributes"],
+                Resource: arn,
+              },
+            ],
+          }),
+        ),
+      },
+      { parent: this },
+    );
+
+    this.memberUpdatedDlqDepthAlarm = new aws.cloudwatch.MetricAlarm(
+      `${name}-member-updated-dlq-depth-alarm`,
+      {
+        name: `boxalarm-${env}-alerting-member-updated-dlq-depth`,
+        namespace: "AWS/SQS",
+        metricName: "ApproximateNumberOfMessagesVisible",
+        dimensions: { QueueName: this.memberUpdatedDlq.name },
+        statistic: "Maximum",
+        period: 300,
+        evaluationPeriods: 1,
+        threshold: 0,
+        comparisonOperator: "GreaterThanThreshold",
       },
       { parent: this },
     );

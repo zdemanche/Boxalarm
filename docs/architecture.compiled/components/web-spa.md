@@ -1,54 +1,61 @@
 # web-spa
 
 ## Purpose & Boundaries
-Single responsive React SPA serving officer/chief/training/apparatus/admin desk workflows - dashboards (F8), config (F9), NERIS report authoring/review (F7), back-office data entry (F5/F6), live alert roster (F1.7) and tone-ladder controls (F1.14). Not a native surface - no offline requirement, no critical-alert entitlement. Lives at `apps/web` in the `boxalarm-ui` repo. No MFE shell/remote split (single team, single release train, hard budget constraint) - deliberately not designed as independently-deployed remotes.
+
+Single responsive React SPA serving officer/chief/training/apparatus/admin desk workflows — F8 dashboards, F9 config, NERIS report authoring/review, F5/F6 back-office data entry. **No MFE shell/remote split** (requirements §8) — one frontend team, one release cadence; the functional footprint doesn't justify Module Federation's cost. No PWA — mobile is exclusively the native app. Lives in the `boxalarm-ui` repo, `apps/web` workspace.
 
 ## Interfaces
-15 routes, base app shell with role-filtered `PrimaryNav`:
 
-| Route | Access |
-|---|---|
-| `/login` | public - Cognito hosted flow, no MFA challenge |
-| `/` (dashboard) | chief, officer |
-| `/alerts/roster` | officer, chief - live roster + tone-ladder panel (current tone, predicate gaps, next-fire countdown, per-member lastAnsweredTone, Advance/Halt controls, amendment F1.14) |
-| `/alerts/diagnostics` | officer, chief, admin - N8.3 self-diagnosis |
-| `/incidents`, `/incidents/:id` | officer, chief |
-| `/personnel`, `/personnel/:id` | officer, training, admin, chief |
-| `/certifications` | training, admin |
-| `/apparatus`, `/apparatus/:id` | apparatus, chief |
-| `/schedule` | officer, admin |
-| `/reporting` | chief, admin, training |
-| `/settings` | admin |
-| `/audit-log` | admin, chief |
+15 routes, role-gated. Route-level code splitting (`React.lazy`) per N4.1 (<2s interactive on cellular).
 
-Route-level code splitting (`React.lazy`) on every route per N4.1 (<2s interactive on cellular).
+| Route | Access | Notes |
+|---|---|---|
+| `/login` | public | Cognito hosted flow, self-service recovery (F9.1), no MFA challenge |
+| `/` (dashboard) | chief, officer | F8.1 |
+| `/alerts/roster` | officer, chief | F1.7 live roster; tone-ladder panel + officer-gated Advance/Halt (F1.14) |
+| `/alerts/diagnostics` | officer, chief, admin | N8.3 self-diagnosis (§5.4) |
+| `/incidents`, `/incidents/:id` | officer, chief | F7.9 search; F7 guided NERIS form (F7.2-F7.7) |
+| `/personnel`, `/personnel/:id` | officer, training, admin, chief | F2.1 roster, member detail |
+| `/certifications` | training, admin | F3.1-F3.6 |
+| `/apparatus`, `/apparatus/:id` | apparatus, chief | F4.1 registry; checks/defects/OOS/maintenance/SCBA/testing (F4.2-F4.9) |
+| `/schedule` | officer, admin | F2.8-F2.11 |
+| `/reporting` | chief, admin, training | F8.2-F8.7 |
+| `/settings` | admin | F9.3 department config |
+| `/audit-log` | admin, chief | F9.4 |
+
+Consumes: `CoreAPI` (platform-service + all LOB services), `AlertAPI` (alerting-service), `NERISAPI` (incident-service, via backend proxy — never calls NERIS directly), `AuthAPI` (Cognito).
 
 ## Data Ownership
-None (client). TanStack Query in-memory cache, no offline persistence requirement (office connectivity assumed).
 
-## Events Produced
-None directly - consumes backend REST APIs across all 10 services via `@boxalarm/core`'s generated API client.
+None — pure client, TanStack Query in-memory cache only (no offline requirement on web, unlike mobile).
 
-## Events Consumed
-None directly (no client-side eventing).
+## Events Produced / Consumed
+
+None directly — all state changes go through the REST API; no direct event-bus participation from the browser.
 
 ## Dependencies
-- Internal: `@boxalarm/core` (domain types, API client, NERIS enum validation), `@boxalarm/design-tokens`, `@boxalarm/i18n` (shared packages, same `boxalarm-ui` workspace). Backend: `alerting-service`, `platform-service` (Cognito/Verified Permissions), and all other 8 backend services via their REST surfaces.
-- External: `oidc-client-ts` (Cognito OIDC, Authorization Code + PKCE, `automaticSilentRenew` on, no idle-timeout logout), CloudWatch RUM (loaded once at app root, web-only per house standard).
+
+**Internal:** every backend service via `CoreAPI`/`AlertAPI`/`NERISAPI`/`AuthAPI` (see architecture Frontend §2 diagram). Shared packages: `@boxalarm/core` (domain types, API client, validation), `@boxalarm/design-tokens` (CSS custom properties), `@boxalarm/i18n`.
+
+**External:** `oidc-client-ts` (Cognito OIDC, Authorization Code + PKCE, `automaticSilentRenew` on, no idle-timeout logout), CloudWatch RUM (web-only, loaded once at app root), Moonaan Design System components.
 
 ## Gotchas & Constraints
-- No login prompt, MFA challenge, or step-up re-authentication anywhere on this surface (Cross-Cutting - Session and re-authentication policy) - a re-authentication prompt appearing on any screen is a documented test failure, not a hardening improvement.
-- `POST /platform/export` and destructive admin actions succeed on a valid admin session with no challenge; must be asserted 403 for non-admin roles (Cedar-gated alone) and to raise their invocation alarm.
-- Full keyboard operability required on this console (N7); WCAG 2.1 AA via two contrast-qualified palettes (daylight-legible, dark-cab) beyond ordinary light/dark, both independently AA-checked.
-- Selector priority for E2E tests: `getByRole()` > `getByLabel()` > `getByText()` > `getByTestId()` last resort - no CSS/XPath/id selectors.
-- `@axe-core/playwright` in the same Playwright spec files driving each critical flow, not a separate a11y-only job; critical/serious violations fail the build.
+
+- **No re-authentication prompt anywhere, ever** — `POST /platform/export` and destructive admin actions succeed on a valid admin session with no challenge; a re-auth prompt appearing on any surface is a **test failure**, not a hardening improvement.
+- **No MFE topology** — revisit only if a second department needs an independently deployed, differently-branded surface, or if route count/team size outgrow one release train.
+- **UI components are NOT shared with the native app** — DOM vs. native rendering targets differ too much; only design tokens (raw values) and domain logic (`@boxalarm/core`) are shared.
+- **Accessibility (N7):** WCAG 2.1 AA target, `@axe-core/playwright` in CI failing on critical/serious violations; two contrast-qualified palettes (daylight-legible, dark-cab) beyond ordinary light/dark, both independently AA-checked.
+- **Incident report authoring (F7) is primarily a web-console workflow** — native is limited to viewing/status; this can move if officers report needing to write reports from the truck (open assumption, not confirmed).
+- **Storybook + a11y addon** for component development; **CSS Modules** for static styling; **jotai** for local/atomic state alongside React Context for auth/theme/sync.
+- **Route auth is enforced server-side via Verified Permissions on every endpoint** — client-side role filtering (`PrimaryNav`) is UX convenience only, never the actual authorization boundary.
 
 ## Source Sections
-- Frontend section 1 Topology rationale (no MFE), lines 1747-1751
-- Frontend section 2 Application topology, lines 1755-1813
-- Frontend section 4.1 Web SPA component hierarchy, lines 1826-1850
-- Frontend section 6 Shared dependency list, lines 1900-1924
-- Frontend section 7.1 Web SPA routes, lines 1926-1948
-- Frontend section 8 Accessibility, lines 1956-1966
-- Testing section 3 Playwright E2E Test Plan (full section), lines 2216-2298
-- Cross-Cutting - Session and re-authentication policy, lines 2500-2501
+
+- Frontend Architecture §1 Topology rationale — why no MFE (`:1870-1877`)
+- Frontend Architecture §2 Application topology diagram (`:1878-1936`)
+- Frontend Architecture §4.1 Web SPA component hierarchy (`:1949-1973`)
+- Frontend Architecture §6 Shared dependency list (`:2023-2047`)
+- Frontend Architecture §7.1 Web SPA routes (`:2049-2071`)
+- Frontend Architecture §8 Accessibility (`:2079-2089`)
+- Frontend Architecture Open questions/assumptions (`:2101-2113`)
+- Cross-Cutting: Session and re-authentication policy (`:2623`)
