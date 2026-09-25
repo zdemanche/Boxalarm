@@ -97,4 +97,14 @@ describe("PushTokens — member-updated consumer IAM isolation (#208 AC3)", () =
     const parsed = JSON.parse(redrive as string) as { maxReceiveCount: number };
     expect(parsed.maxReceiveCount).toBe(5);
   });
+
+  it("alarms when the member-updated DLQ has depth (#208)", async () => {
+    const pushTokens = await build();
+    const [threshold, comparison] = await Promise.all([
+      resolve(pushTokens.memberUpdatedDlqDepthAlarm.threshold),
+      resolve(pushTokens.memberUpdatedDlqDepthAlarm.comparisonOperator),
+    ]);
+    expect(threshold).toBe(0);
+    expect(comparison).toBe("GreaterThanThreshold");
+  });
 });
