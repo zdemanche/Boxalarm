@@ -205,7 +205,12 @@ export class AlertingAlarms extends pulumi.ComponentResource {
           name: `boxalarm-${env}-alerting-${channel}-delivery-failure-rate`,
           namespace: `Boxalarm/AlertingChannel`,
           metricName: "SendFailed",
-          dimensions: { channel },
+          // Cross-seam contract: deliverChannelMessage.ts emits
+          // emitOutcomeMetric("Boxalarm/AlertingChannel", "SendFailed", channel), and
+          // @boxalarm/metrics publishes that reason under the `Reason` dimension (dimension
+          // sets [] and ["Reason"]). There is no `channel` dimension — alarming on one
+          // matched no series, so this alarm could never fire.
+          dimensions: { Reason: channel },
           statistic: "Sum",
           comparisonOperator: "GreaterThanThreshold",
           threshold: 0,

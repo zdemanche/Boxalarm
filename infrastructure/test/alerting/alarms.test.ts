@@ -102,6 +102,9 @@ describe("AlertingAlarms — every alert-path failure mode pages", { timeout: 30
       "ApproximateNumberOfMessagesVisible",
       { QueueName: "boxalarm-dev-alerting-member-updated-dlq" },
     ],
+    ["boxalarm-dev-alerting-push-delivery-failure-rate", "SendFailed", { Reason: "push" }],
+    ["boxalarm-dev-alerting-sms-delivery-failure-rate", "SendFailed", { Reason: "sms" }],
+    ["boxalarm-dev-alerting-voice-delivery-failure-rate", "SendFailed", { Reason: "voice" }],
     [
       "boxalarm-dev-alerting-sms-oldest-message-age",
       "ApproximateAgeOfOldestMessage",
