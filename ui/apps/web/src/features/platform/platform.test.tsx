@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { HttpResponse, http } from 'msw';
@@ -16,7 +16,6 @@ import type { ConfigResponse } from './types';
 
 const server = setupServer();
 beforeAll(() => server.listen());
-beforeEach(() => vi.spyOn(window, 'confirm').mockReturnValue(true));
 afterEach(() => {
   server.resetHandlers();
   cleanup();
@@ -286,6 +285,10 @@ test('a 403 running disposal shows a generic message, not the raw server detail'
   const user = userEvent.setup();
   renderRoute(['ADMIN'], '/settings');
   await user.click(await screen.findByRole('button', { name: 'Run disposal' }));
+  const disposalDialog = await screen.findByRole('dialog', {
+    name: 'Permanently dispose of records older than 7 years?',
+  });
+  await user.click(within(disposalDialog).getByRole('button', { name: 'Run disposal' }));
 
   await waitFor(() => {
     expect(screen.getByText('You do not have access to this page.')).toBeTruthy();
@@ -314,6 +317,10 @@ test('a 403 starting an export shows a generic message, not the raw server detai
   const user = userEvent.setup();
   renderRoute(['ADMIN'], '/settings');
   await user.click(await screen.findByRole('button', { name: 'Export department data' }));
+  const exportDialog = await screen.findByRole('dialog', {
+    name: "Export all of your department's data?",
+  });
+  await user.click(within(exportDialog).getByRole('button', { name: 'Export department data' }));
 
   await waitFor(() => {
     expect(screen.getByText('You do not have access to this page.')).toBeTruthy();
@@ -354,6 +361,10 @@ test('a 403 revoking sessions shows a generic message, not the raw server detail
   renderRoute(['ADMIN'], '/personnel/m1');
   await screen.findByRole('heading', { name: 'Sam Lee' });
   await user.click(screen.getByRole('button', { name: 'Revoke all sessions (lost device)' }));
+  const revokeDialog = await screen.findByRole('dialog', {
+    name: 'Revoke all sessions for Sam Lee?',
+  });
+  await user.click(within(revokeDialog).getByRole('button', { name: 'Revoke sessions' }));
 
   await waitFor(() => {
     expect(screen.getByText('You do not have access to this page.')).toBeTruthy();
@@ -512,6 +523,10 @@ test('admin revokes a member’s sessions from /personnel/:id', async () => {
   renderRoute(['ADMIN'], '/personnel/m1');
   await screen.findByRole('heading', { name: 'Sam Lee' });
   await user.click(screen.getByRole('button', { name: 'Revoke all sessions (lost device)' }));
+  const revokeDialog = await screen.findByRole('dialog', {
+    name: 'Revoke all sessions for Sam Lee?',
+  });
+  await user.click(within(revokeDialog).getByRole('button', { name: 'Revoke sessions' }));
 
   await waitFor(() => {
     expect(screen.getByText('Sessions revoked.')).toBeTruthy();
