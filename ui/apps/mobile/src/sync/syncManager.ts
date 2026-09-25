@@ -9,6 +9,8 @@ type Listener = (status: SyncQueueStatus) => void;
 let tokens: AuthTokenSource | null = null;
 let apiBaseUrl: string | null = null;
 let draining = false;
+// Set once the startup reconciliation of stranded SYNCING rows has run for this process.
+let recoveredOrphans = false;
 let lastSyncAt: string | null = null;
 const listeners = new Set<Listener>();
 
@@ -149,6 +151,11 @@ export async function drain(): Promise<void> {
   if (draining || !tokens || !apiBaseUrl) return;
   draining = true;
   try {
+    // Runs inside the draining lock so no row of this process can be genuinely mid-sync.
+    if (!recoveredOrphans) {
+      await outbox.recoverOrphanedSyncing();
+      recoveredOrphans = true;
+    }
     const netState = await NetInfo.fetch();
     if (netState.isConnected !== true) return;
 

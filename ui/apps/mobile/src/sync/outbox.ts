@@ -54,6 +54,17 @@ export async function markSyncing(id: string): Promise<void> {
   await store.update(id, { status: 'SYNCING' });
 }
 
+// A row is only SYNCING while this process's drain() is working on it, so any SYNCING row found
+// before the first drain of a process was stranded by a kill/crash mid-sync. Without this reset
+// listDrainable would exclude it forever. Safe to re-POST: the row id is the idempotency key.
+export async function recoverOrphanedSyncing(): Promise<void> {
+  const rows = await store.all();
+  const orphaned = rows.filter((row) => row.status === 'SYNCING');
+  await Promise.all(
+    orphaned.map((row) => store.update(row.id, { status: 'QUEUED', nextAttemptAt: Date.now() })),
+  );
+}
+
 export async function markFailed(id: string, error: string): Promise<void> {
   const row = await store.find(id);
   const attempts = (row?.attempts ?? 0) + 1;

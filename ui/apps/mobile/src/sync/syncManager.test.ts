@@ -139,3 +139,35 @@ test('re-enqueueing the same idempotency key while the first is still queued is 
 
   expect(mockApiRequest).toHaveBeenCalledTimes(1);
 });
+
+test('the first drain after app start recovers a row left SYNCING by a killed process', async () => {
+  await jest.isolateModulesAsync(async () => {
+    // jest.requireActual/requireMock resolve through the isolated registry, so these are fresh
+    // module instances (fresh fake DB, never-drained syncManager) - i.e. a new app process.
+    const freshStore = jest.requireActual<typeof store>('./outboxStore');
+    const freshOutbox = jest.requireActual<typeof import('./outbox')>('./outbox');
+    const freshApi = jest.requireMock<{ apiRequest: jest.Mock }>('../lib/apiClient');
+    freshApi.apiRequest.mockResolvedValue({ json: async () => ({}) });
+
+    await freshOutbox.enqueue({
+      id: 'orphan-1',
+      kind: 'CHECKLIST_RUN',
+      label: 'Truck check — ENGINE-2',
+      path: 'apparatus/ENGINE-2/checks',
+      body: {},
+    });
+    await freshOutbox.markSyncing('orphan-1');
+
+    const freshManager = jest.requireActual<typeof syncManager>('./syncManager');
+    freshManager.configure(tokens, 'https://api.example.com');
+    await freshManager.drain();
+    await flush();
+
+    expect(freshApi.apiRequest).toHaveBeenCalledWith(
+      'apparatus/ENGINE-2/checks',
+      tokens,
+      expect.anything(),
+    );
+    await expect(freshStore.find('orphan-1')).resolves.toBeUndefined();
+  });
+});

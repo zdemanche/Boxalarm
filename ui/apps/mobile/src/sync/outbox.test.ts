@@ -144,3 +144,30 @@ test('retry clears FAILED status and makes the row immediately due again', async
   expect(row?.status).toBe('QUEUED');
   expect(row!.nextAttemptAt).toBeLessThanOrEqual(Date.now());
 });
+
+test('recoverOrphanedSyncing returns rows stranded in SYNCING (app killed mid-upload) to the queue', async () => {
+  await outbox.enqueue({
+    id: 'ORPHAN-1',
+    kind: 'DEFECT',
+    label: 'killed mid-upload',
+    path: 'apparatus/ENGINE-2/defects',
+    body: {},
+  });
+  await outbox.markSyncing('ORPHAN-1');
+  await outbox.enqueue({
+    id: 'NOT-ORPHAN',
+    kind: 'DEFECT',
+    label: 'backing off',
+    path: 'apparatus/ENGINE-2/defects',
+    body: {},
+  });
+  await outbox.markFailed('NOT-ORPHAN', 'boom');
+  const failedBefore = await store.find('NOT-ORPHAN');
+
+  await outbox.recoverOrphanedSyncing();
+
+  const recovered = await store.find('ORPHAN-1');
+  expect(recovered?.status).toBe('QUEUED');
+  expect((await outbox.listDrainable(Date.now())).map((row) => row.id)).toContain('ORPHAN-1');
+  expect(await store.find('NOT-ORPHAN')).toEqual(failedBefore);
+});
