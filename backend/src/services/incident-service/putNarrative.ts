@@ -98,6 +98,7 @@ export const handler: APIGatewayProxyHandlerV2WithLambdaAuthorizer<AuthorizerCon
       incidentId,
       narrative,
       nowEpochSeconds(),
+      traceId,
     );
     emitIncidentMetric('IncidentNarrativeUpdated');
     return {

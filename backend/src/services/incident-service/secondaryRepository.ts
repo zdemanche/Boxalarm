@@ -1,5 +1,10 @@
-import { PutCommand, QueryCommand, type DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
+import {
+  QueryCommand,
+  TransactWriteCommand,
+  type DynamoDBDocumentClient,
+} from '@aws-sdk/lib-dynamodb';
 import { buildDeptScopedPk, type VerifiedDeptId } from '@boxalarm/dept-scope';
+import { buildOutboxRecord } from '@boxalarm/outbox';
 
 export interface IncidentSecondary {
   readonly incidentId: string;
@@ -9,25 +14,47 @@ export interface IncidentSecondary {
   readonly updatedAt: number;
 }
 
+/** Writes the Secondary module and its `incident.secondary.updated` OUTBOX_ENTRY atomically. */
 export async function putIncidentSecondary(
   client: DynamoDBDocumentClient,
   tableName: string,
   deptId: VerifiedDeptId,
   secondary: IncidentSecondary,
+  traceId: string,
 ): Promise<void> {
+  const outboxRecord = buildOutboxRecord(
+    deptId,
+    'incident-service',
+    'incident.secondary.updated',
+    traceId,
+    {
+      incidentId: secondary.incidentId,
+      deptId,
+      secondaryType: secondary.secondaryType,
+      affectedMemberIds: secondary.affectedMemberIds,
+      updatedAt: secondary.updatedAt,
+    },
+  );
   await client.send(
-    new PutCommand({
-      TableName: tableName,
-      Item: {
-        pk: buildDeptScopedPk(deptId, 'INCIDENT', secondary.incidentId),
-        sk: `SECONDARY#${secondary.secondaryType}`,
-        entityType: 'INCIDENT_SECONDARY',
-        incidentId: secondary.incidentId,
-        secondaryType: secondary.secondaryType,
-        payload: secondary.payload,
-        affectedMemberIds: secondary.affectedMemberIds,
-        updatedAt: secondary.updatedAt,
-      },
+    new TransactWriteCommand({
+      TransactItems: [
+        {
+          Put: {
+            TableName: tableName,
+            Item: {
+              pk: buildDeptScopedPk(deptId, 'INCIDENT', secondary.incidentId),
+              sk: `SECONDARY#${secondary.secondaryType}`,
+              entityType: 'INCIDENT_SECONDARY',
+              incidentId: secondary.incidentId,
+              secondaryType: secondary.secondaryType,
+              payload: secondary.payload,
+              affectedMemberIds: secondary.affectedMemberIds,
+              updatedAt: secondary.updatedAt,
+            },
+          },
+        },
+        { Put: { TableName: tableName, Item: outboxRecord } },
+      ],
     }),
   );
 }

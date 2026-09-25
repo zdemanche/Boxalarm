@@ -121,7 +121,12 @@ export const handler: APIGatewayProxyHandlerV2WithLambdaAuthorizer<AuthorizerCon
   try {
     const client = getDocumentClient();
     const tableName = getTableName(process.env);
-    const unit = await upsertResponseUnitTimes(client, tableName, { deptId, incidentId, ...input });
+    const unit = await upsertResponseUnitTimes(
+      client,
+      tableName,
+      { deptId, incidentId, ...input },
+      traceId,
+    );
     emitIncidentMetric('IncidentResponseTimesUpdated');
     return {
       statusCode: 200,

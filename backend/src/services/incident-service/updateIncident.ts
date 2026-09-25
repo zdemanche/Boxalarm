@@ -168,6 +168,7 @@ export const handler: APIGatewayProxyHandlerV2WithLambdaAuthorizer<AuthorizerCon
       mergedFields,
       nextStatus,
       nowEpochSeconds(),
+      traceId,
     );
 
     emitIncidentMetric('IncidentUpdated');

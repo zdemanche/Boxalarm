@@ -186,13 +186,19 @@ export const handler: APIGatewayProxyHandlerV2WithLambdaAuthorizer<AuthorizerCon
       input.payload,
     );
     const updatedAt = nowEpochSeconds();
-    await putIncidentSecondary(client, tableName, deptId, {
-      incidentId,
-      secondaryType: input.secondaryType,
-      payload: input.payload,
-      affectedMemberIds: input.affectedMemberIds,
-      updatedAt,
-    });
+    await putIncidentSecondary(
+      client,
+      tableName,
+      deptId,
+      {
+        incidentId,
+        secondaryType: input.secondaryType,
+        payload: input.payload,
+        affectedMemberIds: input.affectedMemberIds,
+        updatedAt,
+      },
+      traceId,
+    );
 
     emitIncidentMetric('IncidentSecondaryUpdated');
     return {
