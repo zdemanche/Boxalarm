@@ -82,8 +82,16 @@ export class ChannelWorkers extends pulumi.ComponentResource {
             [`${channelUpper}_PROVIDER_SECRET_ID`]: providerSecret.name,
           },
           additionalPolicyStatements: pulumi
-            .all([providerSecret.arn, sandboxSecret.arn])
-            .apply(([prodArn, sandboxArn]) => [
+            .all([providerSecret.arn, sandboxSecret.arn, queue.arn])
+            .apply(([prodArn, sandboxArn, queueArn]) => [
+              {
+                // The SQS event source mapping polls as this role; without these,
+                // CreateEventSourceMapping is rejected and the channel never drains.
+                Sid: "ConsumeOwnChannelQueueOnly",
+                Effect: "Allow" as const,
+                Action: ["sqs:ReceiveMessage", "sqs:DeleteMessage", "sqs:GetQueueAttributes"],
+                Resource: queueArn,
+              },
               {
                 Sid: "AlertingTableWrite",
                 Effect: "Allow" as const,

@@ -75,4 +75,17 @@ describe("FanOut — escalation scheduling wiring", { timeout: 30_000 }, () => {
     expect(esm.destinationConfig).toEqual({ onFailure: { destinationArn: onFailureArn } });
     expect(isGranted(statementsForRole(FAN_OUT), "sqs:SendMessage", onFailureArn)).toBe(true);
   });
+
+  it("can read the alerting-table stream its event source mapping polls", async () => {
+    await build();
+    const statements = statementsForRole(FAN_OUT);
+    for (const action of [
+      "dynamodb:DescribeStream",
+      "dynamodb:GetRecords",
+      "dynamodb:GetShardIterator",
+    ]) {
+      expect(isGranted(statements, action, STREAM_ARN)).toBe(true);
+    }
+    expect(isGranted(statements, "dynamodb:ListStreams", "*")).toBe(true);
+  });
 });

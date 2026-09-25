@@ -55,32 +55,52 @@ export class FanOut extends pulumi.ComponentResource {
           TONE_EVALUATOR_HANDLER_ARN: args.escalation.toneEvaluatorLambda.function.arn,
           ESCALATION_SCHEDULE_GROUP_NAME: args.escalation.scheduleGroupName,
         },
-        additionalPolicyStatements: args.escalation.scheduleResourcePattern.apply((pattern) => [
-          {
-            Sid: "AlertingTableReadWrite",
-            Effect: "Allow" as const,
-            Action: [
-              "dynamodb:Query",
-              "dynamodb:GetItem",
-              "dynamodb:PutItem",
-              "dynamodb:UpdateItem",
-              "dynamodb:TransactWriteItems",
-            ],
-            Resource: args.alertingTableArn as string,
-          },
-          {
-            Sid: "AlertingTopicPublish",
-            Effect: "Allow" as const,
-            Action: ["sns:Publish"],
-            Resource: args.alertingTopicArn as string,
-          },
-          {
-            Sid: "CreateEscalationSchedulesOnly",
-            Effect: "Allow" as const,
-            Action: ["scheduler:CreateSchedule"],
-            Resource: pattern,
-          },
-        ]),
+        additionalPolicyStatements: pulumi
+          .all([args.escalation.scheduleResourcePattern, args.alertingStreamArn])
+          .apply(([pattern, streamArn]) => [
+            {
+              // The stream event source mapping reads as this role.
+              Sid: "ReadAlertingTableStream",
+              Effect: "Allow" as const,
+              Action: [
+                "dynamodb:DescribeStream",
+                "dynamodb:GetRecords",
+                "dynamodb:GetShardIterator",
+              ],
+              Resource: streamArn,
+            },
+            {
+              // ListStreams has no resource-level scoping — AWS requires "*".
+              Sid: "ListStreams",
+              Effect: "Allow" as const,
+              Action: ["dynamodb:ListStreams"],
+              Resource: "*",
+            },
+            {
+              Sid: "AlertingTableReadWrite",
+              Effect: "Allow" as const,
+              Action: [
+                "dynamodb:Query",
+                "dynamodb:GetItem",
+                "dynamodb:PutItem",
+                "dynamodb:UpdateItem",
+                "dynamodb:TransactWriteItems",
+              ],
+              Resource: args.alertingTableArn as string,
+            },
+            {
+              Sid: "AlertingTopicPublish",
+              Effect: "Allow" as const,
+              Action: ["sns:Publish"],
+              Resource: args.alertingTopicArn as string,
+            },
+            {
+              Sid: "CreateEscalationSchedulesOnly",
+              Effect: "Allow" as const,
+              Action: ["scheduler:CreateSchedule"],
+              Resource: pattern,
+            },
+          ]),
         reservedConcurrentExecutions: 10,
         permissionsBoundaryArn: args.permissionsBoundaryArn,
       },
