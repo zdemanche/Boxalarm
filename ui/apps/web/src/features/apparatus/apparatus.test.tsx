@@ -8,7 +8,7 @@ import type { User, UserManager } from 'oidc-client-ts';
 import { afterAll, afterEach, beforeAll, expect, test, vi } from 'vitest';
 import { AuthProvider } from '../../auth/AuthContext';
 import { RequireRole } from '../../routing/RequireRole';
-import { ApparatusDetailPage } from './ApparatusDetailPage';
+import { ApparatusDetailPage, defectPhotoSrc } from './ApparatusDetailPage';
 import { ApparatusListPage } from './ApparatusListPage';
 import type { Apparatus } from './types';
 
@@ -251,4 +251,120 @@ test('Maintenance tab fetches from the apparatusId-keyed endpoint, matching the 
   await user.click(screen.getByRole('tab', { name: 'Maintenance' }));
 
   expect(await screen.findByText('Oil change')).toBeTruthy();
+});
+
+test('logging maintenance with a next-scheduled date sends scheduledNextAt', async () => {
+  let capturedBody: { scheduledNextAt?: number | null } | undefined;
+  server.use(
+    mockDetail(),
+    http.get('/api/v1/apparatus/a1/maintenance', () =>
+      HttpResponse.json({ records: [], nextScheduled: null }),
+    ),
+    http.post('/api/v1/apparatus/a1/maintenance', async ({ request }) => {
+      capturedBody = (await request.json()) as { scheduledNextAt?: number | null };
+      return HttpResponse.json(
+        {
+          apparatusId: 'a1',
+          performedAt: 1700000000,
+          description: 'Brake service',
+          vendor: 'Acme',
+          cost: 200,
+          scheduledNextAt: capturedBody.scheduledNextAt ?? null,
+        },
+        { status: 201 },
+      );
+    }),
+  );
+
+  const user = userEvent.setup();
+  renderApp(['CHIEF'], '/apparatus/a1');
+  await screen.findByRole('heading', { name: 'L1' });
+  await user.click(screen.getByRole('tab', { name: 'Maintenance' }));
+
+  await user.type(await screen.findByLabelText('Description'), 'Brake service');
+  await user.type(screen.getByLabelText('Vendor'), 'Acme');
+  await user.type(screen.getByLabelText('Cost'), '200');
+  await user.type(screen.getByLabelText(/Next scheduled/), '2026-12-01');
+  await user.click(screen.getByRole('button', { name: 'Log maintenance' }));
+
+  await waitFor(() => expect(capturedBody?.scheduledNextAt).toBeTypeOf('number'));
+});
+
+test('open defects render the photo from the signed URL and ignore a bare S3 key', async () => {
+  const signed = 'https://assets.example/NICHOLS/defect/DEF-1/tire.jpg?Signature=abc&Key-Pair-Id=k';
+  server.use(
+    http.get('/api/v1/apparatus/a1', () =>
+      HttpResponse.json({
+        apparatusId: 'a1',
+        unitId: 'Engine 301',
+        type: 'Engine',
+        status: 'IN_SERVICE',
+        openDefects: [
+          {
+            defectId: 'DEF-1',
+            description: 'Low tire pressure, rear axle',
+            severity: 'MAJOR',
+            reportedAt: 1700000000,
+            photoS3Key: 'NICHOLS/defect/DEF-1/tire.jpg',
+            photoUrl: signed,
+          },
+          {
+            defectId: 'DEF-2',
+            description: 'Marker light out',
+            severity: 'MINOR',
+            reportedAt: 1700001000,
+            photoS3Key: 'NICHOLS/defect/DEF-2/light.jpg',
+            photoUrl: null,
+          },
+        ],
+        failedTests: [],
+      }),
+    ),
+  );
+
+  renderApp(['CHIEF'], '/apparatus/a1');
+  await screen.findByRole('heading', { name: 'Engine 301' });
+
+  const photo = await screen.findByRole('img', { name: 'Low tire pressure, rear axle' });
+  expect(photo.getAttribute('src')).toBe(signed);
+  expect(screen.getByText('Major')).toBeTruthy();
+  expect(
+    screen.getByText('Photo on file. The apparatus record did not include a signed photo URL.'),
+  ).toBeTruthy();
+  expect(screen.queryByRole('img', { name: 'Marker light out' })).toBeNull();
+  expect(
+    defectPhotoSrc({
+      defectId: 'DEF-2',
+      description: 'Marker light out',
+      severity: 'MINOR',
+      reportedAt: 0,
+      photoS3Key: 'NICHOLS/defect/DEF-2/light.jpg',
+    }),
+  ).toBeNull();
+});
+
+test('the apparatus due-soon panel lists a unit inside the reminder window and omits one outside it', async () => {
+  const now = Math.floor(Date.now() / 1000);
+  server.use(
+    http.get('/api/v1/apparatus', () =>
+      HttpResponse.json({
+        apparatus: [
+          { apparatusId: 'a1', unitId: 'Engine 301', type: 'Engine', status: 'IN_SERVICE' },
+          { apparatusId: 'a2', unitId: 'Truck 304', type: 'Ladder', status: 'IN_SERVICE' },
+        ],
+      }),
+    ),
+    http.get('/api/v1/apparatus/a1/maintenance', () =>
+      HttpResponse.json({ records: [], nextScheduled: now + 10 * 86400 }),
+    ),
+    http.get('/api/v1/apparatus/a2/maintenance', () =>
+      HttpResponse.json({ records: [], nextScheduled: now + 200 * 86400 }),
+    ),
+  );
+
+  renderApp(['CHIEF']);
+  await screen.findByRole('heading', { name: 'Apparatus' });
+
+  expect(await screen.findByText(/Engine 301: due/)).toBeTruthy();
+  expect(screen.queryByText(/Truck 304: due/)).toBeNull();
 });

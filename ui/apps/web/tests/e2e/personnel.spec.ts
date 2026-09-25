@@ -114,3 +114,79 @@ test('roster table headers are associated with cells and the page passes axe (AC
   const results = await new AxeBuilder({ page }).include('table').analyze();
   expect(results.violations).toEqual([]);
 });
+
+test('member transcript tab renders certs/attendance/hours and passes axe (#153 AC4/F3.6)', async ({
+  page,
+}) => {
+  await page.route('**/api/v1/personnel/members/m-2', (route) =>
+    route.fulfill({
+      json: {
+        memberId: 'm-2',
+        firstName: 'Jordan',
+        lastName: 'Osei',
+        email: 'josei@nicholsfd.org',
+        phone: '203-555-0122',
+        status: 'ACTIVE',
+        joinDate: '2015-09-01',
+        rank: 'Deputy Chief',
+        agencyId: 'nichols-fd',
+      },
+    }),
+  );
+  await page.route('**/api/v1/personnel/members/m-2/quals', (route) => route.fulfill({ json: [] }));
+  await page.route('**/api/v1/personnel/members/m-2/losap', (route) =>
+    route.fulfill({ json: { memberId: 'm-2', year: 2026, totalPoints: 40 } }),
+  );
+  await page.route('**/api/v1/inventory/ppe/m-2', (route) => route.fulfill({ json: [] }));
+  await page.route('**/api/v1/training/members/m-2/certifications', (route) =>
+    route.fulfill({
+      json: [
+        {
+          certId: 'cert-1',
+          memberId: 'm-2',
+          certType: 'FF1',
+          issueDate: '2020-01-01',
+          expiryDate: '2028-01-01',
+          issuingAuthority: 'State Fire Academy',
+          attachmentS3Key: null,
+          status: 'CURRENT',
+        },
+      ],
+    }),
+  );
+  await page.route('**/api/v1/training/members/m-2/transcript', (route) =>
+    route.fulfill({
+      json: {
+        memberId: 'm-2',
+        certifications: [
+          {
+            certId: 'cert-1',
+            memberId: 'm-2',
+            certType: 'FF1',
+            issueDate: '2020-01-01',
+            expiryDate: '2028-01-01',
+            issuingAuthority: 'State Fire Academy',
+            attachmentS3Key: null,
+            status: 'CURRENT',
+          },
+        ],
+        attendance: [{ eventId: 'evt-1', category: 'Drill', hours: 2, startAt: 1700000000000 }],
+        hoursByCategory: { Drill: 2 },
+      },
+    }),
+  );
+
+  await signInAs(page, ['TRAINING']);
+  await page.goto('/personnel/m-2');
+  await expect(page.getByRole('heading', { name: 'Jordan Osei' })).toBeVisible();
+  const transcript = page.getByRole('heading', { name: 'Transcript' }).locator('..');
+  await expect(transcript).toBeVisible();
+  await expect(
+    transcript.getByText('FF1 — CURRENT · expires 2028-01-01', { exact: true }),
+  ).toBeVisible();
+  await expect(page.getByText(/Drill — 2h on/)).toBeVisible();
+  await expect(page.getByText('Drill: 2h')).toBeVisible();
+
+  const results = await new AxeBuilder({ page }).analyze();
+  expect(results.violations).toEqual([]);
+});

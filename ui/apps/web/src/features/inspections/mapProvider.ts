@@ -1,16 +1,19 @@
+import type { ComponentType } from 'react';
 import type { BoundingBox, MapHydrant, MapOccupancy } from './types';
 
 /**
- * Port the map screen renders through (E5-S6 AC1/AC2) — no vendor map SDK import anywhere in
- * this module or its renderers. `StubMapRenderer` in MapPage.tsx is the only implementation
- * until a real one (Leaflet/MapLibre/etc.) is installed and wired to this same interface.
+ * Port the map screen renders through (E5-S6). This module stays free of any map vendor SDK.
+ * `leafletMapProvider` is one implementation behind the port; MapPage never imports the vendor.
  */
+export interface MapViewProps {
+  bbox: BoundingBox;
+  occupancies: readonly MapOccupancy[];
+  hydrants: readonly MapHydrant[];
+  onOccupancySelect: (occupancyId: string) => void;
+}
+
 export interface MapProvider {
-  render(props: {
-    bbox: BoundingBox;
-    occupancies: readonly MapOccupancy[];
-    hydrants: readonly MapHydrant[];
-  }): unknown;
+  MapView: ComponentType<MapViewProps>;
 }
 
 export const PAN_STEP_DEGREES = 0.01;

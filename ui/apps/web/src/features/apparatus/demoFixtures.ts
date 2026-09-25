@@ -58,7 +58,21 @@ const checklistTemplate: ChecklistTemplate = {
   ],
 };
 
-const maintenanceByUnit = new Map<string, MaintenanceRecord[]>();
+const maintenanceByUnit = new Map<string, MaintenanceRecord[]>([
+  [
+    'a-2',
+    [
+      {
+        apparatusId: 'a-2',
+        performedAt: Math.floor(Date.now() / 1000) - 60 * 86400,
+        description: 'Annual pump service',
+        vendor: 'Nichols Fire Apparatus',
+        cost: 850,
+        scheduledNextAt: Math.floor(Date.now() / 1000) + 14 * 86400,
+      },
+    ],
+  ],
+]);
 const scbaByUnit = new Map<string, ScbaRecord[]>();
 const scbaDueSoon: ScbaDueEntry[] = [];
 const testingSchedule: TestingScheduleEntry[] = [];
@@ -81,8 +95,23 @@ function withLiveElapsed(unit: Apparatus): Apparatus {
   };
 }
 
+const ENGINE_301_TIRE_PHOTO = '/demo/engine-301-tire.svg';
+
 function toDetail(unit: Apparatus): ApparatusDetail {
-  return { ...withLiveElapsed(unit), openDefects: [], failedTests: [] };
+  const openDefects =
+    unit.apparatusId === 'a-2'
+      ? [
+          {
+            defectId: 'DEF-301-TIRE',
+            description: 'Low tire pressure, rear axle',
+            severity: 'MAJOR' as const,
+            reportedAt: Math.floor(Date.now() / 1000) - 2 * 3600,
+            photoS3Key: 'NICHOLS/defect/DEF-301-TIRE/tire.jpg',
+            photoUrl: ENGINE_301_TIRE_PHOTO,
+          },
+        ]
+      : [];
+  return { ...withLiveElapsed(unit), openDefects, failedTests: [] };
 }
 
 export async function apparatusDemoRequest(

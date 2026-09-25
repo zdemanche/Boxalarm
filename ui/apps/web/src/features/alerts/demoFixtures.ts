@@ -1,5 +1,8 @@
 import type {
+  CanaryStatus,
   DeliveryReceipt,
+  DeviceState,
+  DiagnosticsResult,
   DispatchAlert,
   ManualDispatchInput,
   RidingBoard,
@@ -11,6 +14,41 @@ const DISPATCHES = new Map<string, DispatchAlert>();
 const ROSTERS = new Map<string, RosterEntry[]>();
 const RECEIPTS = new Map<string, DeliveryReceipt[]>();
 const RIDING_BOARDS = new Map<string, RidingBoard>();
+
+const DEVICE_STATES = new Map<string, DeviceState>([
+  [
+    'm-2',
+    {
+      memberId: 'm-2',
+      notificationPermission: true,
+      criticalAlertPermission: true,
+      batteryOptimizationExempt: true,
+      appVersion: '1.4.0',
+      osVersion: 'iOS 18.1',
+      reportedAt: Math.floor(Date.now() / 1000) - 3600,
+    },
+  ],
+]);
+
+const CANARY_RUNS: readonly {
+  ranAt: number;
+  result: 'PASS' | 'FAIL';
+  latencyMs: number;
+  channelResults: Record<string, unknown>;
+}[] = [
+  {
+    ranAt: Math.floor(Date.now() / 1000) - 90,
+    result: 'PASS',
+    latencyMs: 1800,
+    channelResults: { push: 'PASS', sms: 'PASS', voice: 'PASS' },
+  },
+  {
+    ranAt: Math.floor(Date.now() / 1000) - 210,
+    result: 'PASS',
+    latencyMs: 2100,
+    channelResults: { push: 'PASS', sms: 'PASS', voice: 'PASS' },
+  },
+];
 
 // Nichols FD's real apparatus (tenant data - never hardcoded outside fixtures/test data).
 function seedRidingBoard(dispatchId: string): RidingBoard {
@@ -193,6 +231,51 @@ export function demoAlertsRequest(
     const dispatchId = decodeURIComponent(parts[2] ?? '');
     ensureSeeded(dispatchId);
     return json({ receipts: RECEIPTS.get(dispatchId) ?? [] });
+  }
+
+  if (
+    parts[0] === 'alerting' &&
+    parts[1] === 'dispatches' &&
+    parts[3] === 'diagnostics' &&
+    parts.length === 5 &&
+    method === 'GET'
+  ) {
+    const dispatchId = decodeURIComponent(parts[2] ?? '');
+    const memberId = decodeURIComponent(parts[4] ?? '');
+    ensureSeeded(dispatchId);
+    const roster = ROSTERS.get(dispatchId) ?? [];
+    const onEligibleRoster = roster.some((entry) => entry.memberId === memberId);
+    const receipts = onEligibleRoster
+      ? (RECEIPTS.get(dispatchId) ?? []).filter((r) => r.memberId === memberId)
+      : [];
+    const result: DiagnosticsResult = {
+      dispatchId,
+      memberId,
+      diagnosis: onEligibleRoster ? 'ON_ROSTER' : 'NOT_ON_ELIGIBLE_ROSTER',
+      timeline: receipts.map((r) => ({
+        entityType: 'DELIVERY_RECEIPT',
+        channel: r.channel,
+        toneSequence: r.toneSequence,
+        status: r.status,
+        sentAt: r.sentAt,
+        deliveredAt: r.deliveredAt,
+        openedAt: r.openedAt,
+      })),
+      deviceState: DEVICE_STATES.get(memberId) ?? null,
+    };
+    return json(result);
+  }
+
+  if (path === 'alerting/canary/status' && method === 'GET') {
+    const latest = CANARY_RUNS[0];
+    const status: CanaryStatus = {
+      healthy: latest?.result === 'PASS',
+      latestResult: latest?.result ?? null,
+      latestLatencyMs: latest?.latencyMs ?? null,
+      latestRanAt: latest?.ranAt ?? null,
+      runs: [...CANARY_RUNS],
+    };
+    return json(status);
   }
 
   if (

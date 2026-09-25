@@ -4,8 +4,8 @@ import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../../auth/AuthContext';
 import { ApiForbiddenGate } from '../../components/ApiForbiddenGate';
 import { Button, Card, PageHeader, Tabs } from '../../components/ui';
-import { LeafletMap } from './LeafletMap';
 import { queryMap } from './api';
+import { leafletMapProvider } from './leafletMapProvider';
 import { mergeHydrants, mergeOccupancies, panBoundingBox, zoomBoundingBox } from './mapProvider';
 import type { BoundingBox, MapHydrant, MapOccupancy } from './types';
 
@@ -48,6 +48,7 @@ export function MapPage() {
 
   const occupancyList = Array.from(occupancies.values());
   const hydrantList = Array.from(hydrants.values());
+  const MapView = leafletMapProvider.MapView;
 
   return (
     <main id="main-content">
@@ -86,7 +87,7 @@ export function MapPage() {
             label: 'Map view',
             content: (
               <div style={{ marginTop: 'var(--bx-space-md)' }}>
-                <LeafletMap
+                <MapView
                   bbox={bbox}
                   occupancies={occupancyList}
                   hydrants={hydrantList}

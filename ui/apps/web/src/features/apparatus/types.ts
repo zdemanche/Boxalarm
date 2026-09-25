@@ -27,6 +27,9 @@ export interface OpenDefectSummary {
   description: string;
   severity: 'MINOR' | 'MAJOR' | 'OUT_OF_SERVICE';
   reportedAt: number;
+  photoS3Key: string | null;
+  /** Signed read URL when the apparatus detail payload includes one. An S3 key is not a URL. */
+  photoUrl?: string | null;
 }
 
 export interface FailedTestSummary {

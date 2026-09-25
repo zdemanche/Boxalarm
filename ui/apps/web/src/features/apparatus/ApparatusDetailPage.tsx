@@ -1,8 +1,9 @@
+import type { StatusRole } from '@boxalarm/design-tokens';
 import { useQuery } from '@tanstack/react-query';
 import { Link, useParams } from 'react-router-dom';
 import { useAuth } from '../../auth/AuthContext';
 import { ApiForbiddenGate } from '../../components/ApiForbiddenGate';
-import { Card, PageHeader, Skeleton, Tabs } from '../../components/ui';
+import { Card, PageHeader, Skeleton, StatusChip, Tabs } from '../../components/ui';
 import { listEquipment } from '../inventory/api';
 import { getApparatus } from './api';
 import { InventoryTab } from './InventoryTab';
@@ -10,6 +11,33 @@ import { MaintenanceTab } from './MaintenanceTab';
 import { ScbaTab } from './ScbaTab';
 import { ServiceStatusControls } from './ServiceStatusControls';
 import { TestingTab } from './TestingTab';
+import type { OpenDefectSummary } from './types';
+
+const SEVERITY_WORD: Record<OpenDefectSummary['severity'], string> = {
+  MINOR: 'Minor',
+  MAJOR: 'Major',
+  OUT_OF_SERVICE: 'Out of service',
+};
+
+const SEVERITY_STATUS: Record<OpenDefectSummary['severity'], StatusRole> = {
+  MINOR: 'warning',
+  MAJOR: 'caution',
+  OUT_OF_SERVICE: 'danger',
+};
+
+/** A signed http(s) URL or a same-origin path. An S3 key is not a displayable photo. */
+export function defectPhotoSrc(defect: OpenDefectSummary): string | null {
+  const candidate = defect.photoUrl?.trim();
+  if (!candidate) return null;
+  if (candidate.startsWith('/') && !candidate.startsWith('//')) return candidate;
+  try {
+    const url = new URL(candidate);
+    if (url.protocol === 'https:' || url.protocol === 'http:') return candidate;
+  } catch {
+    return null;
+  }
+  return null;
+}
 
 export function ApparatusDetailPage() {
   const { id = '' } = useParams();
@@ -83,13 +111,66 @@ export function ApparatusDetailPage() {
             {unit.openDefects.length === 0 ? (
               <p>No open defects.</p>
             ) : (
-              <ul>
-                {unit.openDefects.map((defect) => (
-                  <li key={defect.defectId}>
-                    {defect.description} — {defect.severity} —{' '}
-                    {new Date(defect.reportedAt * 1000).toLocaleDateString()}
-                  </li>
-                ))}
+              <ul style={{ listStyle: 'none', padding: 0, margin: 0 }}>
+                {unit.openDefects.map((defect) => {
+                  const photo = defectPhotoSrc(defect);
+                  const reported = new Date(defect.reportedAt * 1000);
+                  return (
+                    <li
+                      key={defect.defectId}
+                      style={{
+                        display: 'flex',
+                        gap: 'var(--bx-space-md)',
+                        alignItems: 'flex-start',
+                        padding: 'var(--bx-space-md) 0',
+                        borderBottom: '1px solid var(--bx-border-decorative)',
+                      }}
+                    >
+                      {photo ? (
+                        <img
+                          src={photo}
+                          alt={defect.description}
+                          width={120}
+                          height={90}
+                          style={{
+                            width: 120,
+                            height: 90,
+                            objectFit: 'cover',
+                            borderRadius: 8,
+                            flexShrink: 0,
+                          }}
+                        />
+                      ) : null}
+                      <div>
+                        <strong>{defect.description}</strong>
+                        <div
+                          style={{
+                            display: 'flex',
+                            gap: 'var(--bx-space-sm)',
+                            alignItems: 'center',
+                            marginTop: 'var(--bx-space-xs)',
+                          }}
+                        >
+                          <StatusChip status={SEVERITY_STATUS[defect.severity]}>
+                            {SEVERITY_WORD[defect.severity]}
+                          </StatusChip>
+                          <time dateTime={reported.toISOString()}>
+                            {reported.toLocaleDateString()}
+                          </time>
+                        </div>
+                        {photo ? null : defect.photoS3Key ? (
+                          <p style={{ margin: 'var(--bx-space-xs) 0 0', fontSize: 13 }}>
+                            Photo on file. The apparatus record did not include a signed photo URL.
+                          </p>
+                        ) : (
+                          <p style={{ margin: 'var(--bx-space-xs) 0 0', fontSize: 13 }}>
+                            No photo.
+                          </p>
+                        )}
+                      </div>
+                    </li>
+                  );
+                })}
               </ul>
             )}
           </Card>
