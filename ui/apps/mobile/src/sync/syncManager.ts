@@ -106,11 +106,27 @@ export async function discard(id: string): Promise<void> {
   await notify();
 }
 
+// The defect POST's signed photo URL is short-lived (CloudFront canned policy, ~10 min), and the
+// API has no way to re-issue one: an idempotent replay of the POST returns the existing defect
+// without an uploadUrl. So an expired URL can never succeed - the defect itself is already
+// saved, only its photo is lost - and is surfaced to the user instead of retried forever.
+class PhotoUploadUrlExpiredError extends Error {
+  constructor() {
+    super('Photo upload link expired - the defect was reported without its photo');
+  }
+}
+
+function signedUrlExpiresAtMs(url: string): number | null {
+  const match = /[?&]Expires=(\d+)/.exec(url);
+  return match ? Number(match[1]) * 1000 : null;
+}
+
 // A 4xx means the server refused this request as sent, so an identical retry cannot succeed -
 // except 408 (timeout) and 429 (throttled), which are transient. 401 never reaches here as
 // permanent in practice: apiRequest already renewed the token once, and a still-expired session
 // is recoverable by signing in again, so it is treated as transient too.
 function isPermanentRejection(error: unknown): boolean {
+  if (error instanceof PhotoUploadUrlExpiredError) return true;
   if (!(error instanceof ApiError)) return false;
   const { status } = error.problem;
   return status >= 400 && status < 500 && status !== 401 && status !== 408 && status !== 429;
@@ -139,6 +155,8 @@ function guessPhotoContentType(uri: string): string {
 
 async function uploadPhoto(row: OutboxRow): Promise<void> {
   if (!row.photoLocalUri || !row.photoUploadUrl) return;
+  const expiresAtMs = signedUrlExpiresAtMs(row.photoUploadUrl);
+  if (expiresAtMs !== null && Date.now() >= expiresAtMs) throw new PhotoUploadUrlExpiredError();
   const fileResponse = await fetch(row.photoLocalUri);
   const blob = await fileResponse.blob();
   const uploadResponse = await fetch(row.photoUploadUrl, {
@@ -146,6 +164,8 @@ async function uploadPhoto(row: OutboxRow): Promise<void> {
     body: blob,
     headers: { 'Content-Type': guessPhotoContentType(row.photoLocalUri) },
   });
+  // CloudFront answers an expired or otherwise invalid signature with 403.
+  if (uploadResponse.status === 403) throw new PhotoUploadUrlExpiredError();
   if (!uploadResponse.ok) {
     throw new Error(`Photo upload failed with status ${uploadResponse.status}`);
   }

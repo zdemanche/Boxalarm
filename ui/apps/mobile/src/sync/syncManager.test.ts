@@ -302,3 +302,51 @@ test('an item enqueued while a drain is already running is still sent by that dr
   await expect(store.find('check-first')).resolves.toBeUndefined();
   await expect(store.find('check-during')).resolves.toBeUndefined();
 });
+
+async function enqueuePhotoDefect(id: string, uploadUrl: string, putStatus: number) {
+  mockApiRequest.mockResolvedValueOnce({
+    json: async () => ({ uploadUrl, photoS3Key: 'dept/defect/1/x.jpg' }),
+  });
+  const fetchSpy = jest
+    .spyOn(globalThis, 'fetch')
+    .mockImplementation(async (input: RequestInfo | URL) => {
+      if (input === 'file:///tmp/defect.jpg') {
+        return { blob: async () => new Blob(['x']) } as Response;
+      }
+      return { ok: putStatus < 400, status: putStatus } as Response;
+    });
+  await syncManager.enqueueDefect(
+    'ENGINE-2',
+    id,
+    { description: 'x', severity: 'MINOR', photo: { filename: 'x.jpg' } },
+    'file:///tmp/defect.jpg',
+  );
+  await flush();
+  return fetchSpy;
+}
+
+test('an already-expired signed upload URL is not PUT; the item is REJECTED with a clear reason', async () => {
+  const expiredUrl = 'https://cdn.example.com/signed?Expires=1700000000&Signature=s&Key-Pair-Id=k';
+  const fetchSpy = await enqueuePhotoDefect('defect-expired', expiredUrl, 200);
+
+  expect(fetchSpy).not.toHaveBeenCalledWith(expiredUrl, expect.anything());
+  const row = await store.find('defect-expired');
+  expect(row?.status).toBe('REJECTED');
+  expect(row?.stage).toBe('UPLOAD_PHOTO');
+  expect(row?.lastError).toMatch(/upload link expired/i);
+  fetchSpy.mockRestore();
+});
+
+test('a 403 from the signed upload URL (expired/invalid signature) is REJECTED, not retried forever', async () => {
+  const future = Math.floor(Date.now() / 1000) + 600;
+  const fetchSpy = await enqueuePhotoDefect(
+    'defect-403',
+    `https://cdn.example.com/signed?Expires=${future}&Signature=s&Key-Pair-Id=k`,
+    403,
+  );
+
+  const row = await store.find('defect-403');
+  expect(row?.status).toBe('REJECTED');
+  expect(row?.lastError).toMatch(/upload link expired/i);
+  fetchSpy.mockRestore();
+});
