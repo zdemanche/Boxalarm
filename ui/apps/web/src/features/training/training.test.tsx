@@ -356,3 +356,22 @@ test('a failed transcript export is reported instead of an unhandled rejection (
 
   expect(await screen.findByText('The CSV export failed. Try again.')).toBeTruthy();
 });
+
+test('certifications views are a full tabs pattern: tabpanel, aria-controls, arrow keys (m7)', async () => {
+  server.use(
+    http.get('/api/v1/training/certifications/expiring', () => HttpResponse.json([])),
+    http.get('/api/v1/personnel/members', () => HttpResponse.json({ items: [] })),
+  );
+
+  const user = userEvent.setup();
+  renderPage(<CertificationsPage />, ['TRAINING'], '/certifications');
+  const certsTab = await screen.findByRole('tab', { name: 'Certifications' });
+  const panel = screen.getByRole('tabpanel');
+  expect(certsTab.getAttribute('aria-controls')).toBe(panel.id);
+
+  certsTab.focus();
+  await user.keyboard('{ArrowRight}');
+  const expiringTab = screen.getByRole('tab', { name: 'Expiring' });
+  expect(document.activeElement).toBe(expiringTab);
+  expect(expiringTab.getAttribute('aria-selected')).toBe('true');
+});
