@@ -9,14 +9,30 @@ type Listener = (status: SyncQueueStatus) => void;
 let tokens: AuthTokenSource | null = null;
 let apiBaseUrl: string | null = null;
 let draining = false;
+// Set when drain() is called while one is already running, so the running drain loops once more
+// instead of silently skipping an entry enqueued after it listed the outbox.
+let drainRequested = false;
+let unsubscribeNetInfo: (() => void) | null = null;
 // Set once the startup reconciliation of stranded SYNCING rows has run for this process.
 let recoveredOrphans = false;
 let lastSyncAt: string | null = null;
 const listeners = new Set<Listener>();
 
+// Called on every auth/config change (apiChecksRepository's effect). While signed in, a NetInfo
+// listener drains on reconnect; on sign-out it is removed so repeated login/logout cycles never
+// stack listeners. Entries queued while signed out are drained as soon as tokens arrive.
 export function configure(nextTokens: AuthTokenSource | null, nextApiBaseUrl: string | null): void {
   tokens = nextTokens;
   apiBaseUrl = nextApiBaseUrl;
+  if (tokens && apiBaseUrl) {
+    unsubscribeNetInfo ??= NetInfo.addEventListener((state) => {
+      if (state.isConnected === true) void drain();
+    });
+    void drain();
+  } else if (unsubscribeNetInfo) {
+    unsubscribeNetInfo();
+    unsubscribeNetInfo = null;
+  }
 }
 
 export function subscribe(listener: Listener): () => void {
@@ -168,8 +184,13 @@ async function processEntry(id: string): Promise<void> {
 }
 
 export async function drain(): Promise<void> {
-  if (draining || !tokens || !apiBaseUrl) return;
+  if (!tokens || !apiBaseUrl) return;
+  if (draining) {
+    drainRequested = true;
+    return;
+  }
   draining = true;
+  drainRequested = false;
   try {
     // Runs inside the draining lock so no row of this process can be genuinely mid-sync.
     if (!recoveredOrphans) {
@@ -199,8 +220,5 @@ export async function drain(): Promise<void> {
   } finally {
     draining = false;
   }
+  if (drainRequested) void drain();
 }
-
-NetInfo.addEventListener((state) => {
-  if (state.isConnected === true) void drain();
-});

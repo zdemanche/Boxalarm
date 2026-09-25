@@ -1,3 +1,4 @@
+import NetInfo from '@react-native-community/netinfo';
 import { ApiError, apiRequest } from '../lib/apiClient';
 import * as store from './outboxStore';
 import * as syncManager from './syncManager';
@@ -30,6 +31,8 @@ beforeEach(async () => {
   await clearOutbox();
   mockApiRequest.mockReset();
   syncManager.configure(tokens, 'https://api.example.com');
+  // configure() kicks off its own drain; let it settle so it can't race the test's first drain.
+  await flush();
 });
 
 test('enqueueChecklistRun POSTs to the apparatus checks path and clears the outbox on success', async () => {
@@ -220,4 +223,82 @@ test('a REJECTED item can be manually retried or discarded', async () => {
   await flush();
   await syncManager.discard('check-discard');
   await expect(store.find('check-discard')).resolves.toBeUndefined();
+});
+
+const mockAddEventListener = NetInfo.addEventListener as jest.Mock;
+
+test('configuring tokens drains items that were queued while signed out', async () => {
+  syncManager.configure(null, null);
+  mockApiRequest.mockResolvedValue({ json: async () => ({}) });
+
+  await syncManager.enqueueChecklistRun('ENGINE-2', 'check-signed-out', {});
+  await flush();
+  expect(mockApiRequest).not.toHaveBeenCalled();
+
+  syncManager.configure(tokens, 'https://api.example.com');
+  await flush();
+
+  expect(mockApiRequest).toHaveBeenCalledTimes(1);
+  await expect(store.find('check-signed-out')).resolves.toBeUndefined();
+});
+
+test('the reconnect listener is registered once while configured and removed on sign-out', async () => {
+  syncManager.configure(null, null);
+  mockAddEventListener.mockClear();
+  const unsubscribe = jest.fn();
+  mockAddEventListener.mockReturnValue(unsubscribe);
+
+  syncManager.configure(tokens, 'https://api.example.com');
+  syncManager.configure(tokens, 'https://api.example.com');
+  await flush();
+  expect(mockAddEventListener).toHaveBeenCalledTimes(1);
+
+  syncManager.configure(null, null);
+  expect(unsubscribe).toHaveBeenCalledTimes(1);
+
+  syncManager.configure(tokens, 'https://api.example.com');
+  await flush();
+  expect(mockAddEventListener).toHaveBeenCalledTimes(2);
+});
+
+test('regaining connectivity drains the outbox', async () => {
+  syncManager.configure(null, null);
+  mockAddEventListener.mockClear();
+  syncManager.configure(tokens, 'https://api.example.com');
+  await flush();
+  const onChange = mockAddEventListener.mock.calls[0][0] as (state: {
+    isConnected: boolean;
+  }) => void;
+
+  mockApiRequest.mockRejectedValueOnce(new Error('Network request failed'));
+  await syncManager.enqueueChecklistRun('ENGINE-2', 'check-reconnect', {});
+  await flush();
+  await store.update('check-reconnect', { nextAttemptAt: 0 });
+
+  mockApiRequest.mockResolvedValueOnce({ json: async () => ({}) });
+  onChange({ isConnected: true });
+  await flush();
+
+  await expect(store.find('check-reconnect')).resolves.toBeUndefined();
+});
+
+test('an item enqueued while a drain is already running is still sent by that drain cycle', async () => {
+  let resolveFirst: (value: { json: () => Promise<Record<string, never>> }) => void = () => {};
+  mockApiRequest
+    .mockReturnValueOnce(
+      new Promise((resolve) => {
+        resolveFirst = resolve;
+      }),
+    )
+    .mockResolvedValue({ json: async () => ({}) });
+
+  await syncManager.enqueueChecklistRun('ENGINE-2', 'check-first', {});
+  await flush();
+  await syncManager.enqueueChecklistRun('ENGINE-2', 'check-during', {});
+  resolveFirst({ json: async () => ({}) });
+  await flush();
+  await flush();
+
+  await expect(store.find('check-first')).resolves.toBeUndefined();
+  await expect(store.find('check-during')).resolves.toBeUndefined();
 });
