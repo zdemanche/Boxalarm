@@ -11,6 +11,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useChecksRepository } from '../../features/checks/apiChecksRepository';
+import { ApiError } from '../../lib/apiClient';
 import type { ChecklistTemplate, ItemResult } from '../../features/checks/types';
 import type { ChecksStackParamList } from '../../navigation/ChecksStack';
 import { useOptionalConnectivity } from '../../sync/ConnectivityContext';
@@ -32,6 +33,8 @@ export function CheckRunnerScreen() {
   const repository = useChecksRepository();
   const { isOnline } = useOptionalConnectivity();
   const [template, setTemplate] = useState<ChecklistTemplate | null>(null);
+  const [templateError, setTemplateError] = useState<string | null>(null);
+  const [templateAttempt, setTemplateAttempt] = useState(0);
   const [results, setResults] = useState<Record<string, boolean>>({});
   const [photosCaptured, setPhotosCaptured] = useState<Record<string, boolean>>({});
   const [photoError, setPhotoError] = useState<string | null>(null);
@@ -54,13 +57,64 @@ export function CheckRunnerScreen() {
 
   useEffect(() => {
     let cancelled = false;
-    repository.getChecklistTemplate(apparatusId).then((result) => {
-      if (!cancelled) setTemplate(result);
-    });
+    setTemplateError(null);
+    // The repository already falls back to the local template on a network error and rethrows
+    // only real API errors (403/404/5xx) - those must be shown, not left as a blank screen
+    // (PR #321 review M10).
+    repository
+      .getChecklistTemplate(apparatusId)
+      .then((result) => {
+        if (!cancelled) setTemplate(result);
+      })
+      .catch((error: unknown) => {
+        if (cancelled) return;
+        const message =
+          error instanceof ApiError && error.problem.status === 403
+            ? 'You do not have access to this apparatus checklist.'
+            : 'The checklist could not be loaded.';
+        setTemplateError(message);
+        AccessibilityInfo.announceForAccessibility(message);
+      });
     return () => {
       cancelled = true;
     };
-  }, [apparatusId, repository]);
+  }, [apparatusId, repository, templateAttempt]);
+
+  if (!template && templateError) {
+    return (
+      <SafeAreaView
+        style={{
+          flex: 1,
+          backgroundColor: tokens.background,
+          alignItems: 'center',
+          justifyContent: 'center',
+          padding: spacing.lg,
+        }}
+      >
+        <Text
+          accessibilityRole="alert"
+          style={{ color: tokens.error, fontSize: typography.size.base, marginBottom: spacing.md }}
+        >
+          {templateError}
+        </Text>
+        <TouchableOpacity
+          accessibilityRole="button"
+          onPress={() => setTemplateAttempt((n) => n + 1)}
+          style={{
+            minHeight: touchTarget.oversized.ios,
+            minWidth: 160,
+            alignItems: 'center',
+            justifyContent: 'center',
+            backgroundColor: tokens.accent,
+            borderRadius: radius.default,
+            paddingHorizontal: spacing.lg,
+          }}
+        >
+          <Text style={{ color: tokens.background, fontWeight: '700' }}>Try again</Text>
+        </TouchableOpacity>
+      </SafeAreaView>
+    );
+  }
 
   if (!template) {
     return <SafeAreaView style={{ flex: 1, backgroundColor: tokens.background }} />;
