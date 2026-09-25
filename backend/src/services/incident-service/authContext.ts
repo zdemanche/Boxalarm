@@ -12,15 +12,18 @@ export interface IncidentAuthContext {
   readonly deptId: VerifiedDeptId;
   readonly sub: string;
   readonly isAdmin: boolean;
+  /** ADMIN, CHIEF, or OFFICER — submission status read and manual retry. */
+  readonly canManageSubmission: boolean;
 }
 
 const ADMIN_GROUPS = new Set(['ADMIN', 'CHIEF']);
+const SUBMISSION_GROUPS = new Set(['ADMIN', 'CHIEF', 'OFFICER']);
 
 // TODO(E8-S3): replace with a Verified Permissions IsAuthorizedWithToken Cedar check once the
 // admin/officer role policy exists; this parses the authorizer's already-verified
 // cognito:groups claim as an interim, fail-secure stand-in, not a permanent substitute.
-function isAdminFromGroups(groups: string): boolean {
-  return groups.split(' ').some((group) => ADMIN_GROUPS.has(group));
+function hasGroup(groups: string, allowed: ReadonlySet<string>): boolean {
+  return groups.split(' ').some((group) => allowed.has(group));
 }
 
 export function readAuthorizerContext(event: IncidentEvent): IncidentAuthContext {
@@ -35,10 +38,12 @@ export function readAuthorizerContext(event: IncidentEvent): IncidentAuthContext
     throw new Error('authorizer context sub is required and was not present on the event');
   }
   const rawGroups = lambdaContext?.['cognito:groups'];
+  const groups = typeof rawGroups === 'string' ? rawGroups : '';
   return {
     deptId: toVerifiedDeptId({ deptId: rawDeptId }),
     sub: rawSub,
-    isAdmin: isAdminFromGroups(typeof rawGroups === 'string' ? rawGroups : ''),
+    isAdmin: hasGroup(groups, ADMIN_GROUPS),
+    canManageSubmission: hasGroup(groups, SUBMISSION_GROUPS),
   };
 }
 
