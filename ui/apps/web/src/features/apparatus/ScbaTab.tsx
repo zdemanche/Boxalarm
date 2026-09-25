@@ -13,10 +13,10 @@ const emptyForm: CreateScbaInput = {
   hydroTestDate: '',
 };
 
-// Takes the apparatus's apparatusId (not its display unitId) — matches ApparatusDetailPage's
-// own detail fetch and ScbaDueEntry.apparatusId (backend scbaRecord.ts parseScbaDueItem, which
-// never resolves to the display unit code), so the due-soon filter below actually matches.
-export function ScbaTab({ apparatusId }: { apparatusId: string }) {
+// POST /apparatus/{unitId}/scba resolves the unit by its display unitId (backend postScba.ts,
+// via GSI3), and stores the resolved apparatusId on the SCBA and due items. So the write goes
+// to unitId and the due-soon filter matches on apparatusId.
+export function ScbaTab({ unitId, apparatusId }: { unitId: string; apparatusId: string }) {
   const auth = useAuth();
   const queryClient = useQueryClient();
   const [form, setForm] = useState(emptyForm);
@@ -28,7 +28,7 @@ export function ScbaTab({ apparatusId }: { apparatusId: string }) {
   });
 
   const mutation = useMutation({
-    mutationFn: (input: CreateScbaInput) => createScbaRecord(auth, apparatusId, input),
+    mutationFn: (input: CreateScbaInput) => createScbaRecord(auth, unitId, input),
     onSuccess: (created) => {
       setRecords((prev) => [created, ...prev]);
       setForm(emptyForm);
