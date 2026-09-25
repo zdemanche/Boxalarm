@@ -1,7 +1,7 @@
 import { FormEvent, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useAuth } from '../../auth/AuthContext';
-import { ApiForbiddenGate } from '../../components/ApiForbiddenGate';
+import { ApiError } from '../../lib/apiClient';
 import { Button, Card, Skeleton, TextInput } from '../../components/ui';
 import { createScbaRecord, getScbaDueSoon } from './api';
 import type { CreateScbaInput, ScbaRecord } from './types';
@@ -36,13 +36,13 @@ export function ScbaTab({ unitId, apparatusId }: { unitId: string; apparatusId: 
     },
   });
 
-  if (dueSoonQuery.error) {
-    return (
-      <ApiForbiddenGate error={dueSoonQuery.error} embedded>
-        <p>Unexpected error</p>
-      </ApiForbiddenGate>
-    );
-  }
+  // A failed due-soon read is reported inline in its own section; it must not take down the
+  // "Log SCBA record" form below, which writes to a different endpoint (PR #321 review M3).
+  // 403 copy stays generic, never the problem detail (ForbiddenState rule, PR #93 review).
+  const dueSoonErrorMessage =
+    dueSoonQuery.error instanceof ApiError && dueSoonQuery.error.problem.status === 403
+      ? 'You do not have access to the SCBA due-soon list.'
+      : 'The SCBA due-soon list could not be loaded.';
 
   const dueForUnit = (dueSoonQuery.data ?? []).filter((entry) => entry.apparatusId === apparatusId);
 
@@ -73,6 +73,18 @@ export function ScbaTab({ unitId, apparatusId }: { unitId: string; apparatusId: 
       <h3 style={{ fontSize: 15, fontWeight: 600 }}>Due soon</h3>
       {dueSoonQuery.isLoading ? (
         <Skeleton lines={2} />
+      ) : dueSoonQuery.error ? (
+        <div role="alert">
+          <p>{dueSoonErrorMessage}</p>
+          <Button
+            type="button"
+            variant="secondary"
+            size="sm"
+            onClick={() => void dueSoonQuery.refetch()}
+          >
+            Try again
+          </Button>
+        </div>
       ) : dueForUnit.length === 0 ? (
         <p>Nothing due soon for this unit.</p>
       ) : (

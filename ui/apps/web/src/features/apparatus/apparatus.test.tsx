@@ -474,3 +474,23 @@ test('Inventory quantity edits PUT to /inventory/{itemId} and surface a failed s
   expect(putPath).toBe('inventory/i1');
   expect((screen.getByLabelText('Quantity for Halligan') as HTMLInputElement).value).toBe('2');
 });
+
+test('a failed SCBA due-soon read is shown inline and keeps the log form usable (M3)', async () => {
+  server.use(
+    mockDetail(),
+    http.get('/api/v1/apparatus/scba/testing-schedules', () =>
+      HttpResponse.json(
+        { type: 'about:blank', title: 'Service Unavailable', status: 503, traceId: 't' },
+        { status: 503 },
+      ),
+    ),
+  );
+
+  const user = userEvent.setup();
+  renderApp(['CHIEF'], '/apparatus/L1');
+  await screen.findByRole('heading', { name: 'L1' });
+  await user.click(screen.getByRole('tab', { name: 'SCBA' }));
+
+  expect(await screen.findByText('The SCBA due-soon list could not be loaded.')).toBeTruthy();
+  expect(screen.getByRole('form', { name: 'Log SCBA record' })).toBeTruthy();
+});
