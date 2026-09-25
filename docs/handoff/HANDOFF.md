@@ -8,7 +8,7 @@ Goal: finish every codeable open issue, one PR per bundle of related issues. Rea
 - **#354 merged** — Pages base path is now derived from the repo name (repo renamed to `zdemanche/Boxalarm`). Live at https://zdemanche.github.io/Boxalarm/.
 - **59 issues closed** as already implemented, each with an evidence comment. Triage tables: `docs/handoff/triage/` (verdict + file evidence + concrete gap per issue). Issue bodies' "Current state" sections are stale — trust the triage tables and the code.
 
-## In-flight bundles (one ticket each in `docs/handoff/tickets/`)
+## Bundles (all sdlc runs stopped 2026-09-25; drafts are unaudited snapshots) (one ticket each in `docs/handoff/tickets/`)
 
 Each ticket is the full spec: scope, standing notes, decisions, and the issue bodies. Implement against the ticket, run the directory's tests/lint, open one PR that `Closes` the listed issues.
 
@@ -20,9 +20,9 @@ Each ticket is the full spec: scope, standing notes, decisions, and the issue bo
 | E5-INFRA | infrastructure | #195–#202 | Not started. Ticket carries a decision: add thin `handler` re-export entry files in `backend/` where `lambda-code.ts`'s `index.handler` has nothing to bind to |
 | E4-INFRA | infrastructure | #181–#194 | Not started. Likely hits the same missing-`handler`-export problem — apply the E5 decision |
 | PLATFORM-INFRA | infrastructure | #216 #232 #233 #257 #260 #237 #211 | Not started. Notification-service has no infra at all; #233 is life-safety (status change doesn't revoke push tokens) |
-| E6-UI | ui/apps/web | #163–#167 #170 | Not started — incidents UI (routes are placeholders today) |
+| E6-UI | ui/apps/web | #163–#167 #170 | Draft **#359** — `features/incidents/` started, not yet routed (routes are placeholders today) |
 | MOBILE-UI | ui/apps/mobile | #143 #144 #122 #153 #160 | Not started. Ticket carries the #160 decision (self route exists; recent-dispatch picker deferred) |
-| E7-BACKEND | backend | #248 #94 #99 #97 #100 #40 | Not started — reporting service is mostly unbuilt |
+| E7-BACKEND | backend | #248 #94 #99 #97 #100 #40 | Draft **#360** — only `cutoverDecision/` (#40) started; reporting service otherwise unbuilt |
 
 Several infra bundles all append to `infrastructure/index.ts` — merge them one at a time.
 
