@@ -28,7 +28,7 @@ const ROLE_LABEL: Record<Role, string> = {
 };
 
 // Command-console dashboards are shown for roles that manage the department; a plain member's
-// home stays a simple summary (design.draft.md §4.4 — member read-only scope).
+// home stays a simple summary (docs/design.md §4.4 — member read-only scope).
 const DASHBOARD_ROLES: readonly Role[] = ['CHIEF', 'ADMIN', 'OFFICER', 'APPARATUS'];
 
 function primaryRole(roles: Role[]): Role {
