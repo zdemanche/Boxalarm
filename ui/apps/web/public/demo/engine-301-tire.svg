@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="320" height="180" viewBox="0 0 320 180" role="img" aria-label="Engine 301 rear tire">
+  <rect width="320" height="180" fill="#141519"/>
+  <circle cx="108" cy="90" r="52" fill="none" stroke="#d6d8dd" stroke-width="10"/>
+  <circle cx="108" cy="90" r="18" fill="#3c4149"/>
+  <text x="176" y="86" fill="#d6d8dd" font-family="sans-serif" font-size="16">Engine 301</text>
+  <text x="176" y="110" fill="#a2a7b0" font-family="sans-serif" font-size="13">Rear tire, low pressure</text>
+</svg>

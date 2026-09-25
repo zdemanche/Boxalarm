@@ -98,7 +98,8 @@ export interface RidingBoard {
   apparatus: RidingBoardApparatus[];
 }
 
-export type TimelineEntityType = 'DELIVERY_RECEIPT' | 'ESCALATION_EVENT' | 'DISPATCH_RESPONSE_RECORD';
+export type TimelineEntityType =
+  'DELIVERY_RECEIPT' | 'ESCALATION_EVENT' | 'DISPATCH_RESPONSE_RECORD';
 
 // Raw items from the DISPATCH pk (alerting-service audit/queryAuditLog.ts
 // queryMemberDispatchTimeline) - fields present depend on entityType, so most are optional.

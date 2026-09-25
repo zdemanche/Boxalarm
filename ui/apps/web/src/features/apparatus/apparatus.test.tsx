@@ -8,7 +8,7 @@ import type { User, UserManager } from 'oidc-client-ts';
 import { afterAll, afterEach, beforeAll, expect, test, vi } from 'vitest';
 import { AuthProvider } from '../../auth/AuthContext';
 import { RequireRole } from '../../routing/RequireRole';
-import { ApparatusDetailPage } from './ApparatusDetailPage';
+import { ApparatusDetailPage, defectPhotoSrc } from './ApparatusDetailPage';
 import { ApparatusListPage } from './ApparatusListPage';
 import type { Apparatus } from './types';
 
@@ -288,6 +288,59 @@ test('logging maintenance with a next-scheduled date sends scheduledNextAt', asy
   await user.click(screen.getByRole('button', { name: 'Log maintenance' }));
 
   await waitFor(() => expect(capturedBody?.scheduledNextAt).toBeTypeOf('number'));
+});
+
+test('open defects render the photo from the signed URL and ignore a bare S3 key', async () => {
+  const signed = 'https://assets.example/NICHOLS/defect/DEF-1/tire.jpg?Signature=abc&Key-Pair-Id=k';
+  server.use(
+    http.get('/api/v1/apparatus/a1', () =>
+      HttpResponse.json({
+        apparatusId: 'a1',
+        unitId: 'Engine 301',
+        type: 'Engine',
+        status: 'IN_SERVICE',
+        openDefects: [
+          {
+            defectId: 'DEF-1',
+            description: 'Low tire pressure, rear axle',
+            severity: 'MAJOR',
+            reportedAt: 1700000000,
+            photoS3Key: 'NICHOLS/defect/DEF-1/tire.jpg',
+            photoUrl: signed,
+          },
+          {
+            defectId: 'DEF-2',
+            description: 'Marker light out',
+            severity: 'MINOR',
+            reportedAt: 1700001000,
+            photoS3Key: 'NICHOLS/defect/DEF-2/light.jpg',
+            photoUrl: null,
+          },
+        ],
+        failedTests: [],
+      }),
+    ),
+  );
+
+  renderApp(['CHIEF'], '/apparatus/a1');
+  await screen.findByRole('heading', { name: 'Engine 301' });
+
+  const photo = await screen.findByRole('img', { name: 'Low tire pressure, rear axle' });
+  expect(photo.getAttribute('src')).toBe(signed);
+  expect(screen.getByText('Major')).toBeTruthy();
+  expect(
+    screen.getByText('Photo on file. The apparatus record did not include a signed photo URL.'),
+  ).toBeTruthy();
+  expect(screen.queryByRole('img', { name: 'Marker light out' })).toBeNull();
+  expect(
+    defectPhotoSrc({
+      defectId: 'DEF-2',
+      description: 'Marker light out',
+      severity: 'MINOR',
+      reportedAt: 0,
+      photoS3Key: 'NICHOLS/defect/DEF-2/light.jpg',
+    }),
+  ).toBeNull();
 });
 
 test('the apparatus due-soon panel lists a unit inside the reminder window and omits one outside it', async () => {

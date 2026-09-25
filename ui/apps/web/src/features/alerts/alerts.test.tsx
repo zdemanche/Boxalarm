@@ -294,7 +294,7 @@ test('diagnostics renders the delivery timeline for a member on the eligible ros
 
   const user = userEvent.setup();
   renderDiagnosticsPage(['ADMIN']);
-  await user.type(screen.getByLabelText('Dispatch ID'), 'D-3');
+  await user.type(await screen.findByLabelText('Dispatch ID'), 'D-3');
   await user.type(screen.getByLabelText('Member ID'), 'm-2');
 
   expect(await screen.findByText('Delivered')).toBeTruthy();
@@ -325,7 +325,7 @@ test('diagnostics states the member was not on the eligible roster, distinct fro
 
   const user = userEvent.setup();
   renderDiagnosticsPage(['ADMIN']);
-  await user.type(screen.getByLabelText('Dispatch ID'), 'D-4');
+  await user.type(await screen.findByLabelText('Dispatch ID'), 'D-4');
   await user.type(screen.getByLabelText('Member ID'), 'm-9');
 
   expect(await screen.findByText('Not on the eligible roster')).toBeTruthy();
@@ -340,7 +340,14 @@ test('canary panel shows unhealthy with text when the last run is stale even tho
         latestResult: 'PASS',
         latestLatencyMs: 1200,
         latestRanAt: Math.floor(Date.now() / 1000) - 600,
-        runs: [{ ranAt: Math.floor(Date.now() / 1000) - 600, result: 'PASS', latencyMs: 1200, channelResults: {} }],
+        runs: [
+          {
+            ranAt: Math.floor(Date.now() / 1000) - 600,
+            result: 'PASS',
+            latencyMs: 1200,
+            channelResults: {},
+          },
+        ],
       }),
     ),
   );

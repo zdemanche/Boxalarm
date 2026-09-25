@@ -133,9 +133,7 @@ test('member transcript tab renders certs/attendance/hours and passes axe (#153 
       },
     }),
   );
-  await page.route('**/api/v1/personnel/members/m-2/quals', (route) =>
-    route.fulfill({ json: [] }),
-  );
+  await page.route('**/api/v1/personnel/members/m-2/quals', (route) => route.fulfill({ json: [] }));
   await page.route('**/api/v1/personnel/members/m-2/losap', (route) =>
     route.fulfill({ json: { memberId: 'm-2', year: 2026, totalPoints: 40 } }),
   );
@@ -181,8 +179,9 @@ test('member transcript tab renders certs/attendance/hours and passes axe (#153 
   await signInAs(page, ['TRAINING']);
   await page.goto('/personnel/m-2');
   await expect(page.getByRole('heading', { name: 'Jordan Osei' })).toBeVisible();
-  await expect(page.getByRole('heading', { name: 'Transcript' })).toBeVisible();
-  await expect(page.getByText('FF1 — CURRENT · expires 2028-01-01')).toBeVisible();
+  const transcript = page.getByRole('heading', { name: 'Transcript' }).locator('..');
+  await expect(transcript).toBeVisible();
+  await expect(transcript.getByText('FF1 — CURRENT · expires 2028-01-01', { exact: true })).toBeVisible();
   await expect(page.getByText(/Drill — 2h on/)).toBeVisible();
   await expect(page.getByText('Drill: 2h')).toBeVisible();
 

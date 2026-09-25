@@ -19,8 +19,10 @@ function timelineLabel(entry: DiagnosticsTimelineEntry): string {
     if (entry.status === 'FAILED') return 'Failed';
     return 'Sent, not confirmed delivered';
   }
-  if (entry.entityType === 'ESCALATION_EVENT') return `Escalated${entry.reason ? ` — ${entry.reason}` : ''}`;
-  if (entry.entityType === 'DISPATCH_RESPONSE_RECORD') return `Response logged — ${entry.ackStatus ?? ''}`;
+  if (entry.entityType === 'ESCALATION_EVENT')
+    return `Escalated${entry.reason ? ` — ${entry.reason}` : ''}`;
+  if (entry.entityType === 'DISPATCH_RESPONSE_RECORD')
+    return `Response logged — ${entry.ackStatus ?? ''}`;
   return entry.entityType;
 }
 
@@ -38,7 +40,10 @@ function DeviceCheckPanel({ deviceState }: { deviceState: DeviceState | null }) 
   }
   const checks: { label: string; ok: boolean }[] = [
     { label: 'Notification permission', ok: deviceState.notificationPermission },
-    { label: 'Critical-alert / full-screen-intent permission', ok: deviceState.criticalAlertPermission },
+    {
+      label: 'Critical-alert / full-screen-intent permission',
+      ok: deviceState.criticalAlertPermission,
+    },
     { label: 'Battery-optimization exemption', ok: deviceState.batteryOptimizationExempt },
   ];
   return (
@@ -85,8 +90,8 @@ function TimelineTable({ dispatchId, memberId }: { dispatchId: string; memberId:
       <Card title="Diagnosis">
         <StatusChip status="danger">Not on the eligible roster</StatusChip>
         <p>
-          This member had no delivery record for this dispatch because they were not on the
-          eligible roster — this is distinct from a page that was sent but not delivered.
+          This member had no delivery record for this dispatch because they were not on the eligible
+          roster — this is distinct from a page that was sent but not delivered.
         </p>
       </Card>
     );
@@ -98,7 +103,12 @@ function TimelineTable({ dispatchId, memberId }: { dispatchId: string; memberId:
         {timeline.length === 0 ? (
           <p>Sent, not yet delivered — no timeline entries recorded.</p>
         ) : (
-          <div role="region" aria-label="Delivery timeline" tabIndex={0} style={{ overflowX: 'auto' }}>
+          <div
+            role="region"
+            aria-label="Delivery timeline"
+            tabIndex={0}
+            style={{ overflowX: 'auto' }}
+          >
             <table style={{ width: '100%', borderCollapse: 'collapse' }}>
               <caption className="visually-hidden">Delivery timeline</caption>
               <thead>
@@ -216,7 +226,9 @@ export function AlertsDiagnosticsPage() {
     <main id="main-content">
       <PageHeader title="Alert diagnostics" />
 
-      <div style={{ display: 'flex', gap: 'var(--bx-space-md)', marginBottom: 'var(--bx-space-lg)' }}>
+      <div
+        style={{ display: 'flex', gap: 'var(--bx-space-md)', marginBottom: 'var(--bx-space-lg)' }}
+      >
         <TextInput
           label="Dispatch ID"
           value={dispatchId}
