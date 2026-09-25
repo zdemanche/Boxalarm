@@ -1,7 +1,7 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useAuth } from '../../auth/AuthContext';
-import { ApiError, type ProblemFieldError } from '../../lib/apiClient';
+import { ApiError, problemFieldErrors, type ProblemFieldError } from '../../lib/apiClient';
 import { ApiForbiddenGate } from '../../components/ApiForbiddenGate';
 import { Button, Card, Skeleton, Textarea } from '../../components/ui';
 import { getConfig, putConfig } from './api';
@@ -73,8 +73,8 @@ export function JsonConfigEditor({
         setForbiddenError(null);
         setFormError(error.problem.detail ?? error.problem.title);
         // RFC 7807 validation problems carry field-level errors; show each one (PR #321 m1).
-        if (error.problem.status === 400 && error.problem.errors?.length) {
-          setFieldErrors(error.problem.errors);
+        if (error.problem.status === 400) {
+          setFieldErrors(problemFieldErrors(error.problem));
         }
         return;
       }

@@ -561,3 +561,34 @@ test('a 400 saving a config lists the RFC 7807 field-level errors (m1)', async (
   expect(screen.getByText('escalationThresholdN')).toBeTruthy();
   expect(screen.getByText(/must be a positive integer/)).toBeTruthy();
 });
+
+test('malformed RFC 7807 errors entries are dropped, not rendered (m1)', async () => {
+  server.use(
+    ...settingsDefaultHandlers(),
+    http.put('/api/v1/platform/config/ALERT_RULES', () =>
+      HttpResponse.json(
+        {
+          type: 'about:blank',
+          title: 'Bad Request',
+          status: 400,
+          detail: 'The config value failed validation.',
+          traceId: 't8',
+          errors: [{ field: 'ok', message: 'is kept' }, { field: 7 }, 'junk'],
+        },
+        { status: 400 },
+      ),
+    ),
+  );
+
+  const user = userEvent.setup();
+  renderRoute(['ADMIN'], '/settings');
+  const textarea = await screen.findByLabelText('Alert rule timing (JSON)');
+  fireEvent.change(textarea, { target: { value: '{"escalationThresholdN":-1}' } });
+  await user.click(screen.getByRole('button', { name: 'Save Alert rule timing' }));
+
+  const alert = (await screen.findByText('The config value failed validation.')).closest(
+    '[role="alert"]',
+  );
+  expect(alert?.querySelectorAll('li').length).toBe(1);
+  expect(screen.getByText(/is kept/)).toBeTruthy();
+});
