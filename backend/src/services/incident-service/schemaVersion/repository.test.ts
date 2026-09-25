@@ -105,6 +105,17 @@ describe('createSchemaVersionRepository', () => {
     expect(send).toHaveBeenCalledTimes(1);
   });
 
+  it('shares the default pointer cache across repositories, since handlers build one per request', async () => {
+    vi.resetModules();
+    const { createSchemaVersionRepository: freshFactory } = await import('./repository.js');
+    const send = vi.fn().mockResolvedValue({ Item: { activeVersion: '2026.2' } });
+
+    await freshFactory(fakeClient(send), TABLE_NAME).getActiveVersionNumber();
+    await freshFactory(fakeClient(send), TABLE_NAME).getActiveVersionNumber();
+
+    expect(send).toHaveBeenCalledTimes(1);
+  });
+
   it('returns undefined when an incident-validated version (N-1) is looked up after N is published (AC2)', async () => {
     const send = vi.fn().mockResolvedValueOnce({
       Item: {

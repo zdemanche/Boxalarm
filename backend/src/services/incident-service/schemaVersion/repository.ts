@@ -44,10 +44,15 @@ export interface SchemaVersionRepository {
   getActiveSchemaVersion(): Promise<SchemaVersion | undefined>;
 }
 
+// Module scope, not per call: handlers build a repository per request, so a default
+// cache created inside the factory never survived past one invocation and the
+// ACTIVE_POINTER lookup was never actually cached across requests.
+const sharedActivePointerCache = createConfigCache({ ttlMs: SCHEMA_VERSION_CACHE_TTL_MS });
+
 export function createSchemaVersionRepository(
   client: DynamoDBDocumentClient,
   tableName: string,
-  cache: ConfigCache = createConfigCache({ ttlMs: SCHEMA_VERSION_CACHE_TTL_MS }),
+  cache: ConfigCache = sharedActivePointerCache,
 ): SchemaVersionRepository {
   return {
     async publishSchemaVersion(input) {
