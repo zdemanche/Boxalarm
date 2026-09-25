@@ -41,6 +41,7 @@ import { Reporting } from "./components/reporting/reporting";
 import { Incident } from "./components/incident/incident";
 import { SchemaRefresh } from "./components/incident/schema-refresh";
 import { IncidentOutboxDrain } from "./components/incident/outbox-drain";
+import { NerisSubmissionWorker } from "./components/incident/submission-worker";
 import { AlertingPlaneBoundary } from "./components/alerting/iam-boundary";
 import { MessagingAlerting } from "./components/alerting/messaging-alerting";
 import { Escalation } from "./components/alerting/escalation";
@@ -433,6 +434,19 @@ export const incidentOutboxDrain = new IncidentOutboxDrain("incident-outbox-drai
   incidentCmkArn: incidentTable.cmkArn,
   busName: platformBus.busName,
   busArn: platformBus.busArn,
+  logGroup: incidentServiceLogGroup,
+});
+
+// NERIS submission worker: consumes neris.incident.submitted off the platform bus and
+// schedules its own backoff retries via EventBridge Scheduler.
+export const nerisSubmissionWorker = new NerisSubmissionWorker("neris-submission-worker", {
+  env,
+  incidentTableName: incidentTable.tableName,
+  incidentTableArn: incidentTable.tableArn,
+  incidentCmkArn: incidentTable.cmkArn,
+  busName: platformBus.busName,
+  busArn: platformBus.busArn,
+  nerisCredentialsSecretArn: nerisConfig.secret.arn,
   logGroup: incidentServiceLogGroup,
 });
 

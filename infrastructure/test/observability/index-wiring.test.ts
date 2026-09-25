@@ -155,6 +155,7 @@ describe("index.ts production wiring", () => {
           indexModule.platformBus.busName,
           indexModule.outboxPublisher.lambda.function.arn,
           indexModule.incidentOutboxDrain.lambda.function.arn,
+          indexModule.nerisSubmissionWorker.lambda.function.arn,
           indexModule.sessionRevocation.memberStatusLambda.function.arn,
           indexModule.sessionRevocation.deviceLossLambda.function.arn,
           indexModule.recoveryMonitor.trail.id,
