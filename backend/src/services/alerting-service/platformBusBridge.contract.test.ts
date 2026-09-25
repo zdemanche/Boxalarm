@@ -73,7 +73,7 @@ describe('platform-bus bridge contract (alerting-service producer -> incident-se
     const consumer = createDispatchAlertConsumer({ client: { send } as never });
     await expect(
       consumer(sqsEventFromDetail(detail), {} as never, () => undefined),
-    ).resolves.toBeUndefined();
+    ).resolves.toEqual({ batchItemFailures: [] });
 
     expect(send).toHaveBeenCalledTimes(1);
     const [command] = send.mock.calls[0] as [{ input: { Item: Record<string, unknown> } }];
@@ -105,7 +105,7 @@ describe('platform-bus bridge contract (alerting-service producer -> incident-se
     const consumer = createDispatchResponseConsumer({ client: { send } as never });
     await expect(
       consumer(sqsEventFromDetail(detail), {} as never, () => undefined),
-    ).resolves.toBeUndefined();
+    ).resolves.toEqual({ batchItemFailures: [] });
 
     expect(send).toHaveBeenCalledTimes(1);
     const [command] = send.mock.calls[0] as [{ input: { Item: Record<string, unknown> } }];
