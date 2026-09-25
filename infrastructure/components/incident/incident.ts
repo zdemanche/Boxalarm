@@ -367,6 +367,7 @@ export class Incident extends pulumi.ComponentResource {
         lambda: dispatchAlertLambda.function,
         lambdaRole: dispatchAlertLambda.role,
         maxReceiveCount: 5,
+        reportBatchItemFailures: true,
       },
       { parent: this },
     );
@@ -407,6 +408,7 @@ export class Incident extends pulumi.ComponentResource {
         lambda: dispatchResponseLambda.function,
         lambdaRole: dispatchResponseLambda.role,
         maxReceiveCount: 5,
+        reportBatchItemFailures: true,
       },
       { parent: this },
     );
