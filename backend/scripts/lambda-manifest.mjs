@@ -387,4 +387,14 @@ export const LAMBDA_ENTRIES = [
     function: 'outbox-drain',
     entry: 'src/services/alerting-service/outboxDrainHandler.ts',
   },
+  {
+    service: 'reporting-service',
+    function: 'cutover-decision-get',
+    entry: 'src/services/reporting-service/cutoverDecision/get.ts',
+  },
+  {
+    service: 'reporting-service',
+    function: 'cutover-decision-post',
+    entry: 'src/services/reporting-service/cutoverDecision/post.ts',
+  },
 ];
