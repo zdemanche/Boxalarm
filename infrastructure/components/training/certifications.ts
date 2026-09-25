@@ -16,15 +16,17 @@ export interface CertificationsArgs {
   policyStoreId: pulumi.Input<string>;
   platformBusName: pulumi.Input<string>;
   platformBusArn: pulumi.Input<string>;
+  platformTableStreamArn: pulumi.Input<string>;
   logGroup: ServiceLogGroup;
   httpApi: HttpApi;
 }
 
 /**
  * E3-S1/S2/S8-INFRA (#214, #215, #221): certification records, plus the lead-time expiry
- * scanner that also gates alerting eligibility currency (#221 propagates via the
- * cert.expiry.due platform-bus event certExpiredReactor.ts consumes — its consumer wiring
- * belongs to E2-S1's outbox-publisher/platform-bus foundation, already generic).
+ * scanner that also gates alerting eligibility currency. #221's propagation chain is a
+ * DynamoDB Streams consumer on the platform table (events/certExpiredReactor.ts, filtered to
+ * entityType=CERTIFICATION) — a second, independent stream mapping alongside the shared
+ * OutboxPublisher's own OUTBOX_ENTRY-filtered mapping, not something that foundation covers.
  * Training records share the platform table (no dedicated training table exists) — both
  * TRAINING_TABLE_NAME (client.ts) and TRAINING_DYNAMO_TABLE_NAME (dynamoClient.ts) point
  * at it, and PLATFORM_CONFIG_DYNAMO_TABLE_NAME (per-dept CONFIG#ALERT_RULES lead-time) too.
@@ -45,6 +47,11 @@ export class Certifications extends pulumi.ComponentResource {
   public readonly expiringLambda: ServiceLambda;
   public readonly scannerLambda: ServiceLambda;
   public readonly scannerSchedule: aws.scheduler.Schedule;
+  public readonly certExpiredReactorLambda: ServiceLambda;
+  public readonly certExpiredReactorOnFailureQueue: aws.sqs.Queue;
+  public readonly certExpiredReactorEventSourceMapping: aws.lambda.EventSourceMapping;
+  public readonly certExpiredReactorOnFailureAlarm: aws.cloudwatch.MetricAlarm;
+  public readonly eligibilityFlipFailedAlarm: aws.cloudwatch.MetricAlarm;
 
   constructor(name: string, args: CertificationsArgs, opts?: pulumi.ComponentResourceOptions) {
     requireEnv("Certifications", args.env);
@@ -266,12 +273,135 @@ export class Certifications extends pulumi.ComponentResource {
       { parent: this },
     );
 
+    // #114/#204/#221: platform-table stream -> certExpiredReactor.ts, filtered to
+    // entityType=CERTIFICATION at the EventSourceMapping (not in code) so no other
+    // entityType invokes this Lambda. readPersonnelServiceConfig (awsClients.ts) requires
+    // both PERSONNEL_TABLE_NAME and PLATFORM_BUS_NAME, even though this reactor only writes
+    // to the table itself — flipEligibilityOnCertExpired publishes via the same OUTBOX_ENTRY
+    // shape the already-deployed shared OutboxPublisher consumes, so no events:PutEvents grant.
+    this.certExpiredReactorLambda = new ServiceLambda(
+      `${name}-cert-expired-reactor`,
+      {
+        env,
+        serviceName: "personnel-service",
+        functionName: `boxalarm-${env}-personnel-cert-expired-reactor`,
+        handler: LAMBDA_HANDLER,
+        code: lambdaCode("personnel-service", "cert-expired-reactor"),
+        logGroup: args.logGroup,
+        environment: {
+          PERSONNEL_TABLE_NAME: args.platformTableName,
+          PLATFORM_BUS_NAME: args.platformBusName,
+        },
+        additionalPolicyStatements: pulumi.output(args.platformTableArn).apply((tableArn) => [
+          {
+            Sid: "CertExpiredReactorAccess" as const,
+            Effect: "Allow" as const,
+            Action: ["dynamodb:Query", "dynamodb:TransactWriteItems"],
+            Resource: [tableArn],
+          },
+        ]),
+      },
+      { parent: this },
+    );
+
+    this.certExpiredReactorOnFailureQueue = new aws.sqs.Queue(
+      `${name}-cert-expired-reactor-onfailure`,
+      { name: `boxalarm-${env}-cert-expired-reactor-onfailure` },
+      { parent: this },
+    );
+
+    this.certExpiredReactorEventSourceMapping = new aws.lambda.EventSourceMapping(
+      `${name}-cert-expired-reactor-esm`,
+      {
+        eventSourceArn: args.platformTableStreamArn,
+        functionName: this.certExpiredReactorLambda.function.name,
+        startingPosition: "LATEST",
+        batchSize: 10,
+        bisectBatchOnFunctionError: true,
+        maximumRetryAttempts: 5,
+        maximumRecordAgeInSeconds: 3600,
+        functionResponseTypes: ["ReportBatchItemFailures"],
+        filterCriteria: {
+          filters: [
+            {
+              pattern: JSON.stringify({
+                dynamodb: { NewImage: { entityType: { S: ["CERTIFICATION"] } } },
+              }),
+            },
+          ],
+        },
+        destinationConfig: {
+          onFailure: { destinationArn: this.certExpiredReactorOnFailureQueue.arn },
+        },
+      },
+      { parent: this },
+    );
+
+    new aws.iam.RolePolicy(
+      `${name}-cert-expired-reactor-stream-read-policy`,
+      {
+        role: this.certExpiredReactorLambda.role.id,
+        policy: pulumi.output(args.platformTableStreamArn).apply((streamArn) =>
+          JSON.stringify({
+            Version: "2012-10-17",
+            Statement: [
+              {
+                Sid: "ReadPlatformTableStream",
+                Effect: "Allow",
+                Action: [
+                  "dynamodb:GetRecords",
+                  "dynamodb:GetShardIterator",
+                  "dynamodb:DescribeStream",
+                  "dynamodb:ListStreams",
+                ],
+                Resource: streamArn,
+              },
+            ],
+          }),
+        ),
+      },
+      { parent: this },
+    );
+
+    this.certExpiredReactorOnFailureAlarm = new aws.cloudwatch.MetricAlarm(
+      `${name}-cert-expired-reactor-onfailure-alarm`,
+      {
+        name: `boxalarm-${env}-cert-expired-reactor-onfailure-depth`,
+        namespace: "AWS/SQS",
+        metricName: "ApproximateNumberOfMessagesVisible",
+        dimensions: { QueueName: this.certExpiredReactorOnFailureQueue.name },
+        statistic: "Maximum",
+        period: 300,
+        evaluationPeriods: 1,
+        threshold: 0,
+        comparisonOperator: "GreaterThanThreshold",
+      },
+      { parent: this },
+    );
+
+    this.eligibilityFlipFailedAlarm = new aws.cloudwatch.MetricAlarm(
+      `${name}-eligibility-flip-failed-alarm`,
+      {
+        name: `boxalarm-${env}-training-eligibility-flip-failed`,
+        namespace: "Boxalarm/personnel-service",
+        metricName: "EligibilityFlipFailed",
+        statistic: "Sum",
+        period: 300,
+        evaluationPeriods: 1,
+        threshold: 0,
+        comparisonOperator: "GreaterThanThreshold",
+        treatMissingData: "notBreaching",
+      },
+      { parent: this },
+    );
+
     this.registerOutputs({
       createLambda: this.createLambda,
       listLambda: this.listLambda,
       revokeLambda: this.revokeLambda,
       expiringLambda: this.expiringLambda,
       scannerLambda: this.scannerLambda,
+      certExpiredReactorLambda: this.certExpiredReactorLambda,
     });
   }
 }

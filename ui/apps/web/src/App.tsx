@@ -147,9 +147,7 @@ export function App() {
       <GlobalTokensStyle />
       <QueryClientProvider client={queryClient}>
         <AuthProvider>
-          <BrowserRouter
-            basename={import.meta.env.VITE_DEMO === 'true' ? '/Boxalarm-monorepo' : undefined}
-          >
+          <BrowserRouter basename={import.meta.env.BASE_URL.replace(/\/$/, '') || undefined}>
             <Suspense fallback={null}>
               <Routes>
                 <Route path="/login" element={<LoginRoute />} />
