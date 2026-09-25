@@ -112,6 +112,19 @@ describe("IncidentOutboxDrain", () => {
     expect(bySid("IncidentCmkAccess")?.Resource).toBe(CMK_ARN);
   });
 
+  it("grants sqs:SendMessage on its own on-failure queue so exhausted records reach it", async () => {
+    const drain = await build();
+    const [policyJson, queueArn] = await Promise.all([
+      resolve(drain.onFailureSendPolicy.policy),
+      resolve(drain.onFailureQueue.arn),
+    ]);
+    const statement = (JSON.parse(policyJson) as PolicyDoc).Statement.find(
+      (s) => s.Sid === "SendToOnFailureQueue",
+    );
+    expect(statement?.Action).toEqual(["sqs:SendMessage"]);
+    expect(statement?.Resource).toBe(queueArn);
+  });
+
   it("grants stream read on the incident table stream only", async () => {
     const drain = await build();
     const policy = JSON.parse(await resolve(drain.streamReadPolicy.policy)) as PolicyDoc;

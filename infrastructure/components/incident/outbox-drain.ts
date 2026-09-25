@@ -34,6 +34,7 @@ export class IncidentOutboxDrain extends pulumi.ComponentResource {
   public readonly eventSourceMapping: aws.lambda.EventSourceMapping;
   public readonly onFailureAlarm: aws.cloudwatch.MetricAlarm;
   public readonly streamReadPolicy: aws.iam.RolePolicy;
+  public readonly onFailureSendPolicy: aws.iam.RolePolicy;
 
   constructor(name: string, args: IncidentOutboxDrainArgs, opts?: pulumi.ComponentResourceOptions) {
     requireEnv("IncidentOutboxDrain", args.env);
@@ -148,7 +149,7 @@ export class IncidentOutboxDrain extends pulumi.ComponentResource {
 
     // The on-failure destination is written by the Lambda service using the
     // function's execution role.
-    new aws.iam.RolePolicy(
+    this.onFailureSendPolicy = new aws.iam.RolePolicy(
       `${name}-onfailure-send-policy`,
       {
         role: this.lambda.role.id,
