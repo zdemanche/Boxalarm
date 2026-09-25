@@ -267,7 +267,7 @@ export async function apparatusDemoRequest(
     return json(item, 201);
   }
 
-  if (parts[2] === 'inventory' && parts[4] === 'quantity' && method === 'PUT') {
+  if (parts[2] === 'inventory' && parts.length === 4 && method === 'PUT') {
     const itemId = decodeURIComponent(parts[3] ?? '');
     const groups = inventoryByUnit.get(apparatusId) ?? [];
     for (const group of groups) {

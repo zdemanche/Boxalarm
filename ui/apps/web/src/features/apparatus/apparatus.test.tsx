@@ -440,3 +440,37 @@ test('service-status changes go to the unitId-keyed route (C2)', async () => {
 
   await waitFor(() => expect(putPath).toBe('L1'));
 });
+
+test('Inventory quantity edits PUT to /inventory/{itemId} and surface a failed save (M2)', async () => {
+  let putPath: string | undefined;
+  server.use(
+    mockDetail(),
+    http.get('/api/v1/apparatus/a1/inventory', () =>
+      HttpResponse.json({
+        compartments: [
+          { compartmentCode: 'C1', items: [{ itemId: 'i1', itemName: 'Halligan', quantity: 2 }] },
+        ],
+      }),
+    ),
+    http.put('/api/v1/apparatus/a1/inventory/:itemId', ({ params }) => {
+      putPath = `inventory/${String(params.itemId)}`;
+      return HttpResponse.json(
+        { type: 'about:blank', title: 'Service Unavailable', status: 503, traceId: 't' },
+        { status: 503 },
+      );
+    }),
+  );
+
+  const user = userEvent.setup();
+  renderApp(['CHIEF'], '/apparatus/L1');
+  await screen.findByRole('heading', { name: 'L1' });
+  await user.click(screen.getByRole('tab', { name: 'Inventory' }));
+  const input = await screen.findByLabelText('Quantity for Halligan');
+  await user.clear(input);
+  await user.type(input, '5');
+  await user.tab();
+
+  expect(await screen.findByText(/Quantity not saved/)).toBeTruthy();
+  expect(putPath).toBe('inventory/i1');
+  expect((screen.getByLabelText('Quantity for Halligan') as HTMLInputElement).value).toBe('2');
+});
