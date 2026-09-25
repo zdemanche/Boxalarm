@@ -52,6 +52,7 @@ import { RidingBoard } from "./components/alerting/riding-board";
 import { AlertingAlarms } from "./components/alerting/alarms";
 import { EligibilityStaleness } from "./components/alerting/staleness";
 import { AlertingCanary } from "./components/alerting/canary";
+import { AlertingOutboxDrain } from "./components/alerting/outbox-drain";
 
 export const stack = getStack();
 const config = new Config("boxalarm-infra");
@@ -542,6 +543,20 @@ export const alertingCanary = new AlertingCanary("alerting-canary", {
   alertingCmkArn: alertingTable.cmkArn,
   alertingTableName: alertingTable.tableName,
   pageTopicArn: alertingAlarms.pageTopic.arn,
+  logGroup: alertingLogGroup,
+  permissionsBoundaryArn: alertingBoundaryArn,
+});
+
+// PR #324 follow-up: alerting-table outbox -> platform-bus bridge (the allow-listed,
+// one-way path incident-service's dispatch/roster consumers depend on).
+export const alertingOutboxDrain = new AlertingOutboxDrain("alerting-outbox-drain", {
+  env,
+  alertingTableName: alertingTable.tableName,
+  alertingTableArn: alertingTable.tableArn,
+  alertingStreamArn: alertingTable.streamArn,
+  alertingCmkArn: alertingTable.cmkArn,
+  busName: platformBus.busName,
+  busArn: platformBus.busArn,
   logGroup: alertingLogGroup,
   permissionsBoundaryArn: alertingBoundaryArn,
 });

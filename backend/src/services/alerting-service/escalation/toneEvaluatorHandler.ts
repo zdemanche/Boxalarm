@@ -7,7 +7,7 @@ import {
   type TransactWriteCommandInput,
 } from '@aws-sdk/lib-dynamodb';
 import { buildDeptScopedPk, toVerifiedDeptId, type VerifiedDeptId } from '@boxalarm/dept-scope';
-import { buildOutboxRecord } from '@boxalarm/outbox';
+import { buildBridgeOutboxRecord } from '../platformBusBridge.js';
 import { emitOutcomeMetric } from '@boxalarm/metrics';
 import { createDynamoClient, readAlertingConfig } from '../eligibility/dynamoClient.js';
 import { buildAlertingEnvelope } from './alertingEnvelope.js';
@@ -381,20 +381,14 @@ async function commitToneEvaluation(
     {
       Put: {
         TableName: tableName,
-        Item: buildOutboxRecord(
-          deptId,
-          'alerting-service',
-          'alerting.tone.escalated',
-          correlationId,
-          {
-            dispatchId,
-            toneSequence,
-            firedAt: evaluatedAt,
-            outcome,
-            predicateSnapshot,
-            eligibleMemberCount,
-          },
-        ),
+        Item: buildBridgeOutboxRecord(deptId, 'alerting.tone.escalated', correlationId, {
+          dispatchId,
+          toneSequence,
+          firedAt: evaluatedAt,
+          outcome,
+          predicateSnapshot,
+          eligibleMemberCount,
+        }),
       },
     },
   ];

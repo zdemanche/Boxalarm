@@ -5,7 +5,7 @@ import {
   type DynamoDBDocumentClient,
 } from '@aws-sdk/lib-dynamodb';
 import { buildDeptScopedPk, type VerifiedDeptId } from '@boxalarm/dept-scope';
-import { buildOutboxRecord } from '@boxalarm/outbox';
+import { buildBridgeOutboxRecord } from '../platformBusBridge.js';
 import { queryEligibleMembers, type EligibilitySnapshotItem } from '../eligibility/selector.js';
 import { resolvePushTarget } from '../eligibility/resolvePushTarget.js';
 import { logError, logInfo } from '../dispatches/logger.js';
@@ -171,20 +171,14 @@ export async function requestMutualAid(input: MutualAidRequestInput): Promise<Mu
     await ddb.send(
       new PutCommand({
         TableName: tableName,
-        Item: buildOutboxRecord(
-          deptId,
-          'alerting-service',
-          'alerting.mutual_aid.triggered',
+        Item: buildBridgeOutboxRecord(deptId, 'alerting.mutual_aid.triggered', dispatchId, {
           dispatchId,
-          {
-            dispatchId,
-            triggeredAt,
-            reason,
-            predicateSnapshot: { officerCount: officers.length },
-            adapterUsed: ADAPTER_NAME,
-            officersNotified,
-          },
-        ),
+          triggeredAt,
+          reason,
+          predicateSnapshot: { officerCount: officers.length },
+          adapterUsed: ADAPTER_NAME,
+          officersNotified,
+        }),
       }),
     );
   } catch (error) {
