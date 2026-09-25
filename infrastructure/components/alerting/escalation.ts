@@ -27,6 +27,13 @@ export class Escalation extends pulumi.ComponentResource {
   public readonly toneEvaluatorLambda: ServiceLambda;
   /** ARN pattern scoping scheduler:CreateSchedule to schedules within this group only. */
   public readonly scheduleResourcePattern: pulumi.Output<string>;
+  /**
+   * Cross-seam contract: every Lambda that creates schedules gets this as
+   * ESCALATION_SCHEDULE_GROUP_NAME and passes it as CreateSchedule's GroupName
+   * (scheduleEscalation.ts / toneLadder.ts). Without it the schedule lands in the
+   * `default` group, outside scheduleResourcePattern, and is denied.
+   */
+  public readonly scheduleGroupName: pulumi.Output<string>;
 
   constructor(name: string, args: EscalationArgs, opts?: pulumi.ComponentResourceOptions) {
     requireEnv("Escalation", args.env);
@@ -39,6 +46,8 @@ export class Escalation extends pulumi.ComponentResource {
       { name: groupName },
       { parent: this },
     );
+
+    this.scheduleGroupName = this.scheduleGroup.name;
 
     const region = aws.getRegionOutput({}, { parent: this });
     const caller = aws.getCallerIdentityOutput({}, { parent: this });
@@ -123,6 +132,7 @@ export class Escalation extends pulumi.ComponentResource {
           ALERTING_TOPIC_ARN: args.alertingTopicArn,
           ESCALATION_HANDLER_ARN: this.lambda.function.arn,
           ESCALATION_SCHEDULER_ROLE_ARN: this.schedulerRole.arn,
+          ESCALATION_SCHEDULE_GROUP_NAME: this.scheduleGroupName,
         },
         additionalPolicyStatements: pulumi
           .all([args.alertingTableArn, args.alertingTopicArn, this.scheduleResourcePattern])

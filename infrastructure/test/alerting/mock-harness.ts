@@ -1,4 +1,9 @@
 import * as pulumi from "@pulumi/pulumi";
+import { ServiceLogGroup } from "../../components/observability/service-log-group";
+import { HttpApi } from "../../components/api/http-api";
+import { Escalation } from "../../components/alerting/escalation";
+import { FanOut } from "../../components/alerting/fan-out";
+import { RoutesCore } from "../../components/alerting/routes-core";
 
 /**
  * Shared Pulumi-mock harness for the alerting-chain tests: records every mocked
@@ -177,3 +182,57 @@ export const STREAM_ARN = `${TABLE_ARN}/stream/2026-01-01T00:00:00.000`;
 export const TOPIC_ARN = `arn:aws:sns:${REGION}:${ACCOUNT_ID}:boxalarm-dev-alerting-topic.fifo`;
 export const CMK_ARN = `arn:aws:kms:${REGION}:${ACCOUNT_ID}:key/alerting-cmk`;
 export const BOUNDARY_ARN = `arn:aws:iam::${ACCOUNT_ID}:policy/boxalarm-dev-alerting-plane-boundary`;
+
+/** The escalation → fan-out → dispatch-ingress slice of the alerting chain, wired as index.ts does. */
+export async function buildSchedulingChain() {
+  const alertingLogGroup = new ServiceLogGroup("alerting-lg", {
+    env: "dev",
+    serviceName: "alerting-service",
+  });
+  const platformLogGroup = new ServiceLogGroup("platform-lg", {
+    env: "dev",
+    serviceName: "platform-service",
+  });
+  const httpApi = new HttpApi("http-api", {
+    env: "dev",
+    userPoolId: "pool-1",
+    allowedClientIds: ["client-1"],
+    platformLogGroup,
+  });
+  const escalation = new Escalation("escalation", {
+    env: "dev",
+    alertingTableArn: TABLE_ARN,
+    alertingTopicArn: TOPIC_ARN,
+    alertingTableName: "boxalarm-dev-alerting-table",
+    logGroup: alertingLogGroup,
+    permissionsBoundaryArn: BOUNDARY_ARN,
+  });
+  const fanOut = new FanOut("fan-out", {
+    env: "dev",
+    alertingTableArn: TABLE_ARN,
+    alertingTableName: "boxalarm-dev-alerting-table",
+    alertingStreamArn: STREAM_ARN,
+    alertingTopicArn: TOPIC_ARN,
+    escalation,
+    logGroup: alertingLogGroup,
+    permissionsBoundaryArn: BOUNDARY_ARN,
+  });
+  const routesCore = new RoutesCore("routes-core", {
+    env: "dev",
+    httpApi,
+    alertingTableArn: TABLE_ARN,
+    alertingTableName: "boxalarm-dev-alerting-table",
+    logGroup: alertingLogGroup,
+    escalation,
+    policyStoreId: "policy-store-id",
+    permissionsBoundaryArn: BOUNDARY_ARN,
+  });
+  await settle();
+  return { alertingLogGroup, httpApi, escalation, fanOut, routesCore };
+}
+
+export const SCHEDULING_LAMBDAS = [
+  "boxalarm-dev-alerting-fan-out",
+  "boxalarm-dev-alerting-dispatches-create",
+  "boxalarm-dev-alerting-tone-evaluator",
+] as const;

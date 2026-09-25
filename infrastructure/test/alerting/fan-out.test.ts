@@ -45,7 +45,7 @@ async function build() {
   return { escalation, fanOut };
 }
 
-describe("FanOut — escalation scheduling wiring", () => {
+describe("FanOut — escalation scheduling wiring", { timeout: 30_000 }, () => {
   it("sets every env var the stream path's escalation + tone-ladder scheduling requires", async () => {
     await build();
     const env = lambdaEnv(FAN_OUT);

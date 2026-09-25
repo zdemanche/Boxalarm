@@ -159,8 +159,17 @@ function createFakeScheduler(options: { failCreate?: (name: string) => Error | u
     if (ctorName !== 'CreateScheduleCommand') {
       throw new Error(`handler.test.ts fake scheduler: unsupported command ${ctorName}`);
     }
-    const { Name } = (command as { input: { Name: string } }).input;
+    const { Name, GroupName } = (command as { input: { Name: string; GroupName?: string } }).input;
     attemptedNames.push(Name);
+    // Mirrors the IAM grant: scheduler:CreateSchedule is scoped to the dedicated group
+    // only, so a schedule without GroupName (the implicit `default` group) is denied.
+    if (GroupName !== 'boxalarm-dev-alerting-escalation') {
+      const denied = new Error(
+        `not authorized to create schedule in group ${GroupName ?? 'default'}`,
+      );
+      denied.name = 'AccessDeniedException';
+      return Promise.reject(denied);
+    }
     const failure = options.failCreate?.(Name);
     if (failure) {
       return Promise.reject(failure);
@@ -469,6 +478,7 @@ describe('fanout/handler', () => {
     process.env.ALERTING_TOPIC_ARN = 'arn:aws:sns:us-east-1:1:boxalarm-dev-alerting-topic.fifo';
     process.env.ESCALATION_HANDLER_ARN = 'arn:aws:lambda:us-east-1:1:function:escalation';
     process.env.ESCALATION_SCHEDULER_ROLE_ARN = 'arn:aws:iam::1:role/scheduler';
+    process.env.ESCALATION_SCHEDULE_GROUP_NAME = 'boxalarm-dev-alerting-escalation';
     process.env.TONE_EVALUATOR_HANDLER_ARN = 'arn:aws:lambda:us-east-1:1:function:tone-evaluator';
     const defaultScheduler = createFakeScheduler();
     vi.doMock('../escalation/scheduleEscalation.js', async (importOriginal) => {
