@@ -77,3 +77,45 @@ describe('TopBar connectivity status', () => {
     expect(status.textContent).toContain('online');
   });
 });
+
+// m5 (PR #321 review): with no stored palette the CSS follows prefers-color-scheme, so under a
+// dark OS the cab palette is already showing and the toggle must offer "day", not "cab".
+describe('TopBar palette toggle', () => {
+  function mockMatchMedia(dark: boolean) {
+    vi.stubGlobal(
+      'matchMedia',
+      vi.fn((query: string) => ({
+        matches: dark && query === '(prefers-color-scheme: dark)',
+        media: query,
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+      })),
+    );
+  }
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    window.localStorage.clear();
+  });
+
+  test('unset palette under a dark OS offers the day palette', async () => {
+    window.localStorage.clear();
+    mockMatchMedia(true);
+    renderTopBar();
+    expect(await screen.findByRole('button', { name: 'Switch to day palette' })).toBeTruthy();
+  });
+
+  test('unset palette under a light OS offers the cab palette', async () => {
+    window.localStorage.clear();
+    mockMatchMedia(false);
+    renderTopBar();
+    expect(await screen.findByRole('button', { name: 'Switch to cab palette' })).toBeTruthy();
+  });
+
+  test('a stored choice wins over the OS scheme', async () => {
+    window.localStorage.setItem('bx-palette', 'day');
+    mockMatchMedia(true);
+    renderTopBar();
+    expect(await screen.findByRole('button', { name: 'Switch to cab palette' })).toBeTruthy();
+  });
+});
