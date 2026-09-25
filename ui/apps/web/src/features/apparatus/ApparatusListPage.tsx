@@ -10,6 +10,7 @@ import { StatusChip } from '../../components/ui/Chip';
 import { TextInput } from '../../components/ui/Field';
 import { PageHeader } from '../../components/ui/PageHeader';
 import { createApparatus, listApparatus } from './api';
+import { MaintenanceDueSoonPanel } from './MaintenanceDueSoonPanel';
 import type { Apparatus, CreateApparatusInput } from './types';
 
 const emptyForm: CreateApparatusInput = { unitId: '', type: '' };
@@ -97,6 +98,8 @@ export function ApparatusListPage() {
         loading={listQuery.isLoading}
         emptyMessage="No apparatus yet."
       />
+
+      <MaintenanceDueSoonPanel apparatus={listQuery.data ?? []} />
 
       {canCreate ? (
         <Card title="Add apparatus" style={{ marginTop: 'var(--bx-space-lg)', maxWidth: 480 }}>

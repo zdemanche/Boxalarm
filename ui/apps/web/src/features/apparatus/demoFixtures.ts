@@ -58,7 +58,21 @@ const checklistTemplate: ChecklistTemplate = {
   ],
 };
 
-const maintenanceByUnit = new Map<string, MaintenanceRecord[]>();
+const maintenanceByUnit = new Map<string, MaintenanceRecord[]>([
+  [
+    'a-2',
+    [
+      {
+        apparatusId: 'a-2',
+        performedAt: Math.floor(Date.now() / 1000) - 60 * 86400,
+        description: 'Annual pump service',
+        vendor: 'Nichols Fire Apparatus',
+        cost: 850,
+        scheduledNextAt: Math.floor(Date.now() / 1000) + 14 * 86400,
+      },
+    ],
+  ],
+]);
 const scbaByUnit = new Map<string, ScbaRecord[]>();
 const scbaDueSoon: ScbaDueEntry[] = [];
 const testingSchedule: TestingScheduleEntry[] = [];

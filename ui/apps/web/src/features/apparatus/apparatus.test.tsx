@@ -252,3 +252,66 @@ test('Maintenance tab fetches from the apparatusId-keyed endpoint, matching the 
 
   expect(await screen.findByText('Oil change')).toBeTruthy();
 });
+
+test('logging maintenance with a next-scheduled date sends scheduledNextAt', async () => {
+  let capturedBody: { scheduledNextAt?: number | null } | undefined;
+  server.use(
+    mockDetail(),
+    http.get('/api/v1/apparatus/a1/maintenance', () =>
+      HttpResponse.json({ records: [], nextScheduled: null }),
+    ),
+    http.post('/api/v1/apparatus/a1/maintenance', async ({ request }) => {
+      capturedBody = (await request.json()) as { scheduledNextAt?: number | null };
+      return HttpResponse.json(
+        {
+          apparatusId: 'a1',
+          performedAt: 1700000000,
+          description: 'Brake service',
+          vendor: 'Acme',
+          cost: 200,
+          scheduledNextAt: capturedBody.scheduledNextAt ?? null,
+        },
+        { status: 201 },
+      );
+    }),
+  );
+
+  const user = userEvent.setup();
+  renderApp(['CHIEF'], '/apparatus/a1');
+  await screen.findByRole('heading', { name: 'L1' });
+  await user.click(screen.getByRole('tab', { name: 'Maintenance' }));
+
+  await user.type(await screen.findByLabelText('Description'), 'Brake service');
+  await user.type(screen.getByLabelText('Vendor'), 'Acme');
+  await user.type(screen.getByLabelText('Cost'), '200');
+  await user.type(screen.getByLabelText(/Next scheduled/), '2026-12-01');
+  await user.click(screen.getByRole('button', { name: 'Log maintenance' }));
+
+  await waitFor(() => expect(capturedBody?.scheduledNextAt).toBeTypeOf('number'));
+});
+
+test('the apparatus due-soon panel lists a unit inside the reminder window and omits one outside it', async () => {
+  const now = Math.floor(Date.now() / 1000);
+  server.use(
+    http.get('/api/v1/apparatus', () =>
+      HttpResponse.json({
+        apparatus: [
+          { apparatusId: 'a1', unitId: 'Engine 301', type: 'Engine', status: 'IN_SERVICE' },
+          { apparatusId: 'a2', unitId: 'Truck 304', type: 'Ladder', status: 'IN_SERVICE' },
+        ],
+      }),
+    ),
+    http.get('/api/v1/apparatus/a1/maintenance', () =>
+      HttpResponse.json({ records: [], nextScheduled: now + 10 * 86400 }),
+    ),
+    http.get('/api/v1/apparatus/a2/maintenance', () =>
+      HttpResponse.json({ records: [], nextScheduled: now + 200 * 86400 }),
+    ),
+  );
+
+  renderApp(['CHIEF']);
+  await screen.findByRole('heading', { name: 'Apparatus' });
+
+  expect(await screen.findByText(/Engine 301: due/)).toBeTruthy();
+  expect(screen.queryByText(/Truck 304: due/)).toBeNull();
+});
