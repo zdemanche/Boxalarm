@@ -31,3 +31,18 @@ export function rolesFromProfile(profile: Record<string, unknown>): Role[] {
 export function canManageTraining(roles: readonly Role[]): boolean {
   return roles.includes('TRAINING') || roles.includes('ADMIN');
 }
+
+/** Highest-authority first. Cognito group order is arbitrary, so anything that shows a single
+ * role (dashboard choice, the top-bar label) picks by this order, never roles[0]. */
+export const ROLE_PRIORITY: readonly Role[] = [
+  'CHIEF',
+  'ADMIN',
+  'OFFICER',
+  'TRAINING',
+  'APPARATUS',
+  'MEMBER',
+];
+
+export function primaryRole(roles: readonly Role[]): Role {
+  return ROLE_PRIORITY.find((role) => roles.includes(role)) ?? 'MEMBER';
+}

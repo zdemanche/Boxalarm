@@ -25,9 +25,9 @@ function makeManager(groups: string[]): UserManager {
   } as unknown as UserManager;
 }
 
-function renderTopBar() {
+function renderTopBar(groups: string[] = ['CHIEF']) {
   return render(
-    <AuthProvider userManager={makeManager(['CHIEF'])}>
+    <AuthProvider userManager={makeManager(groups)}>
       <TopBar onOpenNav={() => undefined} />
     </AuthProvider>,
   );
@@ -118,4 +118,11 @@ describe('TopBar palette toggle', () => {
     renderTopBar();
     expect(await screen.findByRole('button', { name: 'Switch to cab palette' })).toBeTruthy();
   });
+});
+
+// m12 (PR #321 review): Cognito group order is arbitrary, so the label uses ROLE_PRIORITY.
+test('labels the user with the highest-priority role, not the first group', async () => {
+  renderTopBar(['MEMBER', 'TRAINING', 'CHIEF']);
+  expect(await screen.findByText('Chief')).toBeTruthy();
+  expect(screen.queryByText('Member')).toBeNull();
 });
