@@ -40,6 +40,7 @@ import { ChiefNotificationTopic } from "./components/shared/chief-notifications"
 import { Reporting } from "./components/reporting/reporting";
 import { Incident } from "./components/incident/incident";
 import { SchemaRefresh } from "./components/incident/schema-refresh";
+import { IncidentOutboxDrain } from "./components/incident/outbox-drain";
 import { AlertingPlaneBoundary } from "./components/alerting/iam-boundary";
 import { MessagingAlerting } from "./components/alerting/messaging-alerting";
 import { Escalation } from "./components/alerting/escalation";
@@ -419,6 +420,20 @@ export const incident = new Incident("incident", {
   policyStoreId: policyStore.policyStoreId,
   logGroup: incidentServiceLogGroup,
   httpApi,
+});
+
+// Incident-table outbox → platform-bus. The platform OutboxPublisher only reads the
+// platform table's stream; without this, incident-service OUTBOX_ENTRY rows are never
+// published.
+export const incidentOutboxDrain = new IncidentOutboxDrain("incident-outbox-drain", {
+  env,
+  incidentTableName: incidentTable.tableName,
+  incidentTableArn: incidentTable.tableArn,
+  incidentTableStreamArn: incidentTable.streamArn,
+  incidentCmkArn: incidentTable.cmkArn,
+  busName: platformBus.busName,
+  busArn: platformBus.busArn,
+  logGroup: incidentServiceLogGroup,
 });
 
 // E1-S2/S3-INFRA #28/#29: alerting messaging plane — SNS FIFO topic + per-channel SQS
