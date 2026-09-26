@@ -5,6 +5,7 @@ import {
   BOUNDARY_ARN,
   CMK_ARN,
   TABLE_ARN,
+  alarmByName,
   installMocks,
   resourcesOfType,
   settle,
@@ -38,5 +39,11 @@ describe("EligibilityStaleness", { timeout: 30_000 }, () => {
       (r) => r.inputs.name === "boxalarm-dev-alerting-staleness-scheduler",
     );
     expect(role?.inputs.permissionsBoundary).toBe(BOUNDARY_ARN);
+  });
+
+  it("keeps the SnapshotStale alarm dashboard-only (no page) until the backend metric is fixed", async () => {
+    await build();
+    const alarm = alarmByName("boxalarm-dev-alerting-eligibility-snapshot-stale");
+    expect(alarm.inputs.alarmActions ?? []).toEqual([]);
   });
 });

@@ -130,7 +130,12 @@ export class EligibilityStaleness extends pulumi.ComponentResource {
         period: 300,
         evaluationPeriods: 1,
         treatMissingData: "notBreaching",
-        alarmActions: [args.pageTopicArn],
+        // Deliberately NO alarmActions (dashboard-only) until the backend measures propagation
+        // lag instead of absolute snapshot age (boxalarm-backend#32, pre-monorepo number; see
+        // the class comment and the PR #326 review). As measured today, any member unchanged
+        // for 15 minutes is "stale", so this alarm sits in ALARM permanently and routing it to
+        // alerting-page would bury real pages under a constant noise floor. Restore
+        // `alarmActions: [args.pageTopicArn]` when the metric is fixed.
       },
       { parent: this },
     );
