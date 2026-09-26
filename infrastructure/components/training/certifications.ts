@@ -159,6 +159,23 @@ export class Certifications extends pulumi.ComponentResource {
       { parent: this },
     );
 
+    // expiring.ts: readCertExpiryLeadDays GetItems CONFIG#ALERT_RULES from the base table;
+    // queryCertificationsDueInMonth Queries GSI2 (AP 13) — IAM needs the index ARN for that.
+    const expiringStatement = pulumi.output(args.platformTableArn).apply((arn) => [
+      {
+        Sid: "CertificationsExpiringConfigRead" as const,
+        Effect: "Allow" as const,
+        Action: ["dynamodb:GetItem"],
+        Resource: [arn],
+      },
+      {
+        Sid: "CertificationsExpiringDueQuery" as const,
+        Effect: "Allow" as const,
+        Action: ["dynamodb:Query"],
+        Resource: [`${arn}/index/GSI2`],
+      },
+    ]);
+
     this.expiringLambda = new ServiceLambda(
       `${name}-expiring`,
       {
@@ -173,7 +190,7 @@ export class Certifications extends pulumi.ComponentResource {
           PLATFORM_CONFIG_DYNAMO_TABLE_NAME: args.platformTableName,
         },
         additionalPolicyStatements: pulumi
-          .all([readOnlyStatement, vpStatement])
+          .all([expiringStatement, vpStatement])
           .apply(([table, vp]) => [...table, ...vp]),
       },
       { parent: this },
@@ -203,15 +220,19 @@ export class Certifications extends pulumi.ComponentResource {
           .all([args.platformTableArn, args.platformBusArn])
           .apply(([tableArn, busArn]) => [
             {
+              // GetItem: readCertExpiryLeadDays (CONFIG#ALERT_RULES); PutItem/UpdateItem:
+              // publishDueEvent's CERT_EXPIRY_FLAG dedup marker.
               Sid: "CertExpiryScannerTableAccess" as const,
               Effect: "Allow" as const,
-              Action: [
-                "dynamodb:GetItem",
-                "dynamodb:PutItem",
-                "dynamodb:UpdateItem",
-                "dynamodb:Query",
-              ],
+              Action: ["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:UpdateItem"],
               Resource: [tableArn],
+            },
+            {
+              // queryCertificationsDueInMonth: GSI2 (AP 13).
+              Sid: "CertExpiryScannerDueQuery" as const,
+              Effect: "Allow" as const,
+              Action: ["dynamodb:Query"],
+              Resource: [`${tableArn}/index/GSI2`],
             },
             {
               Sid: "CertExpiryScannerPublish" as const,
