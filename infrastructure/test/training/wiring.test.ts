@@ -13,6 +13,7 @@ import {
   alarmByName,
   installMocks,
   isGranted,
+  lambdaEnv,
   resourcesOfType,
   settle,
   statementsForRole,
@@ -215,6 +216,75 @@ describe("training Lambdas: env and IAM match their handlers", { timeout: 30_000
     for (const role of mutating) {
       const deny = statementsForRole(role).find((st) => st.Sid === "DenyAuditMutations");
       expect(deny?.Effect, role).toBe("Deny");
+    }
+  });
+
+  // Env keys each handler's config readers require on its live path (traced from the
+  // bundled handler: readTrainingConfig, readTrainingDynamoConfig,
+  // readPlatformConfigDynamoConfig, readPlatformEventBusConfig, readScannerDeptId,
+  // readPersonnelServiceConfig, and @boxalarm/authz's readAuthzConfig). The
+  // certifications-create CloudFront variables are deliberately absent — see the
+  // certifications.ts docstring (attachment uploads fail closed with a 503).
+  const VP = "VERIFIED_PERMISSIONS_POLICY_STORE_ID";
+  const REQUIRED_ENV: Record<string, string[]> = {
+    "boxalarm-dev-training-certifications-create": ["TRAINING_DYNAMO_TABLE_NAME", VP],
+    "boxalarm-dev-training-certifications-list": ["TRAINING_DYNAMO_TABLE_NAME", VP],
+    "boxalarm-dev-training-certifications-revoke": ["TRAINING_DYNAMO_TABLE_NAME", VP],
+    "boxalarm-dev-training-certifications-expiring": [
+      "TRAINING_DYNAMO_TABLE_NAME",
+      "PLATFORM_CONFIG_DYNAMO_TABLE_NAME",
+      VP,
+    ],
+    "boxalarm-dev-training-cert-expiry-scanner": [
+      "TRAINING_DYNAMO_TABLE_NAME",
+      "PLATFORM_CONFIG_DYNAMO_TABLE_NAME",
+      "PLATFORM_EVENT_BUS_NAME",
+      "TRAINING_SCANNER_DEPT_ID",
+    ],
+    "boxalarm-dev-personnel-cert-expired-reactor": ["PERSONNEL_TABLE_NAME", "PLATFORM_BUS_NAME"],
+    "boxalarm-dev-training-events-create": ["TRAINING_TABLE_NAME", VP],
+    "boxalarm-dev-training-events-list": ["TRAINING_TABLE_NAME"],
+    "boxalarm-dev-training-events-signup": ["TRAINING_TABLE_NAME", VP],
+    "boxalarm-dev-training-hours": ["TRAINING_TABLE_NAME", VP],
+    "boxalarm-dev-training-reports-iso": ["TRAINING_TABLE_NAME", VP],
+    "boxalarm-dev-training-transcript-get": [
+      "TRAINING_TABLE_NAME",
+      "TRAINING_DYNAMO_TABLE_NAME",
+      VP,
+    ],
+  };
+
+  it.each(Object.entries(REQUIRED_ENV))(
+    "%s carries every env key its handler requires",
+    async (fn, keys) => {
+      await build();
+      const env = lambdaEnv(fn);
+      for (const key of keys) {
+        expect(env[key], `${fn} ${key}`).toBeTruthy();
+      }
+    },
+  );
+
+  it("every Cedar-gated training Lambda can call Verified Permissions", async () => {
+    await build();
+    for (const [fn, keys] of Object.entries(REQUIRED_ENV)) {
+      if (!keys.includes(VP)) {
+        continue;
+      }
+      expect(
+        isGranted(statementsForRole(fn), "verifiedpermissions:IsAuthorizedWithToken", (r) =>
+          r.includes("policy-store"),
+        ),
+        fn,
+      ).toBe(true);
+    }
+  });
+
+  it("the cert-expired reactor can Query and Update/Put the platform table (qual flip + outbox)", async () => {
+    await build();
+    const s = statementsForRole("boxalarm-dev-personnel-cert-expired-reactor");
+    for (const action of ["dynamodb:Query", "dynamodb:UpdateItem", "dynamodb:PutItem"]) {
+      expect(isGranted(s, action, TABLE), action).toBe(true);
     }
   });
 });

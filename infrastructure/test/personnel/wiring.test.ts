@@ -3,6 +3,7 @@ import * as pulumi from "@pulumi/pulumi";
 import { ServiceLogGroup } from "../../components/observability/service-log-group";
 import { HttpApi } from "../../components/api/http-api";
 import { PlatformBus } from "../../components/messaging/platform-bus";
+import { Attendance } from "../../components/personnel/attendance";
 import { Availability } from "../../components/personnel/availability";
 import { Losap } from "../../components/personnel/losap";
 import { Members } from "../../components/personnel/members";
@@ -70,6 +71,7 @@ async function build() {
   };
   new Members("members", common);
   new Losap("losap", common);
+  new Attendance("attendance", common);
   new Quals("quals", { ...common, ...alerting });
   new Availability("availability", { ...common, ...alerting });
   new Shifts("shifts", { ...common, deptId: "nichols-fd" });
@@ -216,6 +218,97 @@ describe("personnel Lambdas: env and IAM match their handlers", { timeout: 30_00
     for (const role of mutating) {
       const deny = statementsForRole(role).find((st) => st.Sid === "DenyAuditMutations");
       expect(deny?.Effect, role).toBe("Deny");
+    }
+  });
+
+  // Env keys each handler's config readers require on its live path (traced from the
+  // bundled handler: readPersonnelConfig, readAttendanceTableConfig, readMemberServiceConfig,
+  // readPersonnelServiceConfig, readPersonnelDdbConfig, readSchedulerConfig,
+  // readPersonnelTableConfig, readAlertingConfig, and @boxalarm/authz's readAuthzConfig).
+  const VP = "VERIFIED_PERMISSIONS_POLICY_STORE_ID";
+  const REQUIRED_ENV: Record<string, string[]> = {
+    "boxalarm-dev-personnel-members-create": ["PERSONNEL_TABLE_NAME"],
+    "boxalarm-dev-personnel-members-list": ["PERSONNEL_TABLE_NAME"],
+    "boxalarm-dev-personnel-members-get": ["PERSONNEL_TABLE_NAME"],
+    "boxalarm-dev-personnel-members-update-status": ["PERSONNEL_TABLE_NAME"],
+    "boxalarm-dev-personnel-members-update-profile": ["PLATFORM_TABLE_NAME", VP],
+    "boxalarm-dev-personnel-quals-get": ["PERSONNEL_TABLE_NAME", "PLATFORM_BUS_NAME", VP],
+    "boxalarm-dev-personnel-quals-put": ["PERSONNEL_TABLE_NAME", "PLATFORM_BUS_NAME", VP],
+    "boxalarm-dev-alerting-eligibility-changed-consumer": ["ALERTING_TABLE_NAME"],
+    "boxalarm-dev-personnel-attendance-record": ["PLATFORM_SERVICE_TABLE_NAME", VP],
+    "boxalarm-dev-personnel-attendance-record-on-behalf": ["PLATFORM_SERVICE_TABLE_NAME", VP],
+    "boxalarm-dev-personnel-attendance-query": ["PLATFORM_SERVICE_TABLE_NAME", VP],
+    "boxalarm-dev-personnel-attendance-query-on-behalf": ["PLATFORM_SERVICE_TABLE_NAME", VP],
+    "boxalarm-dev-personnel-availability-create": [
+      "PLATFORM_TABLE_NAME",
+      VP,
+      "AVAILABILITY_EXPIRY_HANDLER_ARN",
+      "AVAILABILITY_SCHEDULER_ROLE_ARN",
+    ],
+    "boxalarm-dev-personnel-availability-expiry": ["PLATFORM_TABLE_NAME"],
+    "boxalarm-dev-alerting-availability-changed-consumer": ["ALERTING_TABLE_NAME"],
+    "boxalarm-dev-personnel-losap-member-total": ["PLATFORM_SERVICE_TABLE_NAME", VP],
+    "boxalarm-dev-personnel-losap-update-rules": ["PLATFORM_SERVICE_TABLE_NAME"],
+    "boxalarm-dev-personnel-losap-year-end-report": [
+      "PERSONNEL_TABLE_NAME",
+      "PLATFORM_SERVICE_TABLE_NAME",
+    ],
+    "boxalarm-dev-personnel-shifts": ["PLATFORM_TABLE_NAME", VP],
+    "boxalarm-dev-personnel-shift-completion": ["PLATFORM_TABLE_NAME"],
+  };
+
+  it.each(Object.entries(REQUIRED_ENV))(
+    "%s carries every env key its handler requires",
+    async (fn, keys) => {
+      await build();
+      const env = lambdaEnv(fn);
+      for (const key of keys) {
+        expect(env[key], `${fn} ${key}`).toBeTruthy();
+      }
+    },
+  );
+
+  describe("attendance", () => {
+    it("record (self + on-behalf) can GetItem (member, LOSAP rules) and PutItem (record + LOSAP entry)", async () => {
+      await build();
+      for (const fn of [
+        "boxalarm-dev-personnel-attendance-record",
+        "boxalarm-dev-personnel-attendance-record-on-behalf",
+      ]) {
+        const s = statementsForRole(fn);
+        expect(isGranted(s, "dynamodb:GetItem", TABLE), fn).toBe(true);
+        expect(isGranted(s, "dynamodb:PutItem", TABLE), fn).toBe(true);
+        expect(isGranted(s, "dynamodb:UpdateItem", TABLE), fn).toBe(false);
+      }
+    });
+
+    it("query (self + on-behalf) can Query GSI1 and GetItem the member, read-only", async () => {
+      await build();
+      for (const fn of [
+        "boxalarm-dev-personnel-attendance-query",
+        "boxalarm-dev-personnel-attendance-query-on-behalf",
+      ]) {
+        const s = statementsForRole(fn);
+        expect(isGranted(s, "dynamodb:Query", `${TABLE}/index/GSI1`), fn).toBe(true);
+        expect(isGranted(s, "dynamodb:GetItem", TABLE), fn).toBe(true);
+        expect(isGranted(s, "dynamodb:PutItem", TABLE), fn).toBe(false);
+      }
+    });
+  });
+
+  it("every Cedar-gated personnel Lambda can call Verified Permissions", async () => {
+    await build();
+    for (const [fn, keys] of Object.entries(REQUIRED_ENV)) {
+      if (!keys.includes(VP)) {
+        continue;
+      }
+      const s = statementsForRole(fn);
+      expect(
+        isGranted(s, "verifiedpermissions:IsAuthorizedWithToken", (r) =>
+          r.includes("policy-store"),
+        ),
+        fn,
+      ).toBe(true);
     }
   });
 });
