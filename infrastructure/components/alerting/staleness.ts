@@ -32,6 +32,7 @@ export class EligibilityStaleness extends pulumi.ComponentResource {
   public readonly lambda: ServiceLambda;
   public readonly schedule: aws.scheduler.Schedule;
   public readonly alarm: aws.cloudwatch.MetricAlarm;
+  public readonly errorsAlarm: aws.cloudwatch.MetricAlarm;
 
   constructor(
     name: string,
@@ -140,10 +141,35 @@ export class EligibilityStaleness extends pulumi.ComponentResource {
       { parent: this },
     );
 
+    // The SnapshotStale alarm treats missing data as notBreaching, so a check that throws
+    // (checkHandler) would otherwise go silent. This one pages.
+    this.errorsAlarm = new aws.cloudwatch.MetricAlarm(
+      `${name}-errors-alarm`,
+      {
+        name: `boxalarm-${env}-alerting-eligibility-staleness-check-errors`,
+        namespace: "AWS/Lambda",
+        metricName: "Errors",
+        dimensions: { FunctionName: this.lambda.function.name },
+        statistic: "Sum",
+        comparisonOperator: "GreaterThanThreshold",
+        threshold: 0,
+        period: 60,
+        evaluationPeriods: 1,
+        treatMissingData: "notBreaching",
+        alarmActions: [args.pageTopicArn],
+      },
+      { parent: this },
+    );
+
     grantAlertingCmk(name, { stalenessCheck: this.lambda.role }, args.alertingCmkArn, {
       parent: this,
     });
 
-    this.registerOutputs({ lambda: this.lambda, schedule: this.schedule, alarm: this.alarm });
+    this.registerOutputs({
+      lambda: this.lambda,
+      schedule: this.schedule,
+      alarm: this.alarm,
+      errorsAlarm: this.errorsAlarm,
+    });
   }
 }

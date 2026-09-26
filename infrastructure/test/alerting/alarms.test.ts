@@ -21,6 +21,7 @@ async function build(env = "dev") {
     memberUpdatedDlq: new aws.sqs.Queue("member-updated-dlq", {
       name: "boxalarm-dev-alerting-member-updated-dlq",
     }),
+    memberUpdatedFunctionName: "boxalarm-dev-alerting-member-updated-consumer",
   });
   await settle();
   return alarms;
@@ -122,6 +123,11 @@ describe("AlertingAlarms — every alert-path failure mode pages", { timeout: 30
       "boxalarm-dev-alerting-member-updated-dlq-not-empty",
       "ApproximateNumberOfMessagesVisible",
       { QueueName: "boxalarm-dev-alerting-member-updated-dlq" },
+    ],
+    [
+      "boxalarm-dev-alerting-member-updated-consumer-errors",
+      "Errors",
+      { FunctionName: "boxalarm-dev-alerting-member-updated-consumer" },
     ],
     ["boxalarm-dev-alerting-push-delivery-failure-rate", "SendFailed", { Reason: "push" }],
     ["boxalarm-dev-alerting-sms-delivery-failure-rate", "SendFailed", { Reason: "sms" }],

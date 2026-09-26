@@ -96,3 +96,14 @@ describe("AlertingCanary schedule is config-driven per stack", { timeout: 30_000
     }
   });
 });
+
+describe("AlertingCanary pages on its own Lambda Errors", { timeout: 30_000 }, () => {
+  it("routes the canary Errors alarm to the page topic", async () => {
+    await build();
+    const alarm = alarmByName("boxalarm-dev-alerting-canary-errors").inputs;
+    expect(alarm.namespace).toBe("AWS/Lambda");
+    expect(alarm.metricName).toBe("Errors");
+    expect(alarm.dimensions).toEqual({ FunctionName: "boxalarm-dev-alerting-canary" });
+    expect(alarm.alarmActions).toEqual([PAGE_TOPIC_ARN]);
+  });
+});

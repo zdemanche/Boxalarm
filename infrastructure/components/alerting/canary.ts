@@ -35,6 +35,7 @@ export class AlertingCanary extends pulumi.ComponentResource {
   public readonly schedule: aws.scheduler.Schedule;
   public readonly failureAlarm: aws.cloudwatch.MetricAlarm;
   public readonly latencyAlarm: aws.cloudwatch.MetricAlarm;
+  public readonly errorsAlarm: aws.cloudwatch.MetricAlarm;
 
   constructor(name: string, args: AlertingCanaryArgs, opts?: pulumi.ComponentResourceOptions) {
     requireEnv("AlertingCanary", args.env);
@@ -176,6 +177,25 @@ export class AlertingCanary extends pulumi.ComponentResource {
       { parent: this },
     );
 
+    // A canary Lambda that throws (e.g. missing config) emits no CanaryFailed of its own.
+    this.errorsAlarm = new aws.cloudwatch.MetricAlarm(
+      `${name}-errors-alarm`,
+      {
+        name: `boxalarm-${env}-alerting-canary-errors`,
+        namespace: "AWS/Lambda",
+        metricName: "Errors",
+        dimensions: { FunctionName: this.lambda.function.name },
+        statistic: "Sum",
+        comparisonOperator: "GreaterThanThreshold",
+        threshold: 0,
+        period: 60,
+        evaluationPeriods: 1,
+        treatMissingData: "notBreaching",
+        alarmActions: [args.pageTopicArn],
+      },
+      { parent: this },
+    );
+
     grantAlertingCmk(name, { canary: this.lambda.role }, args.alertingCmkArn, { parent: this });
 
     this.registerOutputs({
@@ -183,6 +203,7 @@ export class AlertingCanary extends pulumi.ComponentResource {
       schedule: this.schedule,
       failureAlarm: this.failureAlarm,
       latencyAlarm: this.latencyAlarm,
+      errorsAlarm: this.errorsAlarm,
     });
   }
 }

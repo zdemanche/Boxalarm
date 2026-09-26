@@ -548,6 +548,7 @@ export const alertingAlarms = new AlertingAlarms("alerting-alarms", {
   escalationFunctionName: escalation.lambda.function.name,
   toneEvaluatorFunctionName: escalation.toneEvaluatorLambda.function.name,
   memberUpdatedDlq: pushTokens.memberUpdatedDlq,
+  memberUpdatedFunctionName: pushTokens.memberUpdatedConsumer.function.name,
 });
 
 // E1-S13-INFRA #38: eligibility-snapshot staleness schedule + alarm.

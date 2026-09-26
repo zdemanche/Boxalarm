@@ -14,6 +14,7 @@ export interface AlertingAlarmsArgs {
   escalationFunctionName: pulumi.Input<string>;
   toneEvaluatorFunctionName: pulumi.Input<string>;
   memberUpdatedDlq: aws.sqs.Queue;
+  memberUpdatedFunctionName: pulumi.Input<string>;
 }
 
 /** Stack config key for the alerting-page email subscription. */
@@ -170,6 +171,15 @@ export class AlertingAlarms extends pulumi.ComponentResource {
       period: 60,
       evaluationPeriods: 1,
     });
+
+    // The consumer throws on a bad record or a DynamoDB failure; the DLQ alarm only fires
+    // after 5 receives, so page on the errors themselves too.
+    lambdaAlarm(
+      "member-updated-errors-alarm",
+      args.memberUpdatedFunctionName,
+      "Errors",
+      `boxalarm-${env}-alerting-member-updated-consumer-errors`,
+    );
 
     for (const channel of ALERTING_CHANNELS) {
       const dlq = args.channelQueues[channel].dlq;

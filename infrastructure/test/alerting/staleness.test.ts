@@ -46,4 +46,15 @@ describe("EligibilityStaleness", { timeout: 30_000 }, () => {
     const alarm = alarmByName("boxalarm-dev-alerting-eligibility-snapshot-stale");
     expect(alarm.inputs.alarmActions ?? []).toEqual([]);
   });
+
+  it("pages on the staleness Lambda's own Errors (the stale alarm goes silent if it throws)", async () => {
+    await build();
+    const alarm = alarmByName("boxalarm-dev-alerting-eligibility-staleness-check-errors").inputs;
+    expect(alarm.namespace).toBe("AWS/Lambda");
+    expect(alarm.metricName).toBe("Errors");
+    expect(alarm.dimensions).toEqual({
+      FunctionName: "boxalarm-dev-alerting-eligibility-staleness-check",
+    });
+    expect(alarm.alarmActions).toEqual([PAGE_TOPIC_ARN]);
+  });
 });
