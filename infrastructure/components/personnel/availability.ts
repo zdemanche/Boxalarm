@@ -4,6 +4,7 @@ import { ServiceLambda } from "../observability/service-lambda";
 import { ServiceLogGroup } from "../observability/service-log-group";
 import { HttpApi } from "../api/http-api";
 import { verifiedPermissionsPolicyStatement } from "../authz/policy-store";
+import { auditMutationDenyStatement } from "../data/platform-table";
 import { lambdaCode, LAMBDA_HANDLER } from "../shared/lambda-code";
 import { requireEnv } from "../shared/env";
 import { PlatformBus } from "../messaging/platform-bus";
@@ -53,6 +54,8 @@ export class Availability extends pulumi.ComponentResource {
         Action: ["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:UpdateItem"],
         Resource: [arn],
       },
+      // F9.4: holding table-wide UpdateItem, never on a DEPT#*#AUDIT#* row.
+      auditMutationDenyStatement(arn),
     ]);
 
     this.expiryLambda = new ServiceLambda(

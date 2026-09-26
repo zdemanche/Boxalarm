@@ -3,6 +3,7 @@ import { ServiceLambda } from "../observability/service-lambda";
 import { ServiceLogGroup } from "../observability/service-log-group";
 import { HttpApi } from "../api/http-api";
 import { verifiedPermissionsPolicyStatement } from "../authz/policy-store";
+import { auditMutationDenyStatement } from "../data/platform-table";
 import { lambdaCode, LAMBDA_HANDLER } from "../shared/lambda-code";
 import { requireEnv } from "../shared/env";
 
@@ -61,6 +62,7 @@ export class Events extends pulumi.ComponentResource {
         Action: ["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:UpdateItem"],
         Resource: [arn],
       },
+      auditMutationDenyStatement(arn),
     ]);
     const vpStatement = pulumi
       .output(args.policyStoreArn)

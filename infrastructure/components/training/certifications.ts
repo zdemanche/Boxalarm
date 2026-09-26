@@ -4,6 +4,7 @@ import { ServiceLambda } from "../observability/service-lambda";
 import { ServiceLogGroup } from "../observability/service-log-group";
 import { HttpApi } from "../api/http-api";
 import { verifiedPermissionsPolicyStatement } from "../authz/policy-store";
+import { auditMutationDenyStatement } from "../data/platform-table";
 import { lambdaCode, LAMBDA_HANDLER } from "../shared/lambda-code";
 import { requireEnv } from "../shared/env";
 
@@ -107,6 +108,7 @@ export class Certifications extends pulumi.ComponentResource {
         Action: ["dynamodb:GetItem", "dynamodb:UpdateItem", "dynamodb:PutItem"],
         Resource: [arn],
       },
+      auditMutationDenyStatement(arn),
     ]);
 
     this.createLambda = new ServiceLambda(
@@ -265,6 +267,7 @@ export class Certifications extends pulumi.ComponentResource {
               Action: ["events:PutEvents"],
               Resource: busArn,
             },
+            auditMutationDenyStatement(tableArn),
           ]),
       },
       { parent: this },
@@ -405,6 +408,7 @@ export class Certifications extends pulumi.ComponentResource {
             Action: ["dynamodb:Query", "dynamodb:UpdateItem", "dynamodb:PutItem"],
             Resource: [tableArn],
           },
+          auditMutationDenyStatement(tableArn),
         ]),
       },
       { parent: this },

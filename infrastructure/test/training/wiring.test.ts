@@ -201,4 +201,20 @@ describe("training Lambdas: env and IAM match their handlers", { timeout: 30_000
       expect(isGranted(s, "dynamodb:Query", TABLE)).toBe(false);
     });
   });
+
+  it("every role holding UpdateItem/DeleteItem on the platform table carries the audit-row deny (MIN-3)", async () => {
+    await build();
+    const roles = resourcesOfType("aws:iam/role:Role").map((r) => r.inputs.name as string);
+    const mutating = roles.filter((role) => {
+      const s = statementsForRole(role);
+      return (
+        isGranted(s, "dynamodb:UpdateItem", TABLE) || isGranted(s, "dynamodb:DeleteItem", TABLE)
+      );
+    });
+    expect(mutating.length).toBeGreaterThan(0);
+    for (const role of mutating) {
+      const deny = statementsForRole(role).find((st) => st.Sid === "DenyAuditMutations");
+      expect(deny?.Effect, role).toBe("Deny");
+    }
+  });
 });

@@ -4,6 +4,7 @@ import { ServiceLambda } from "../observability/service-lambda";
 import { ServiceLogGroup } from "../observability/service-log-group";
 import { HttpApi } from "../api/http-api";
 import { verifiedPermissionsPolicyStatement } from "../authz/policy-store";
+import { auditMutationDenyStatement } from "../data/platform-table";
 import { lambdaCode, LAMBDA_HANDLER } from "../shared/lambda-code";
 import { requireEnv } from "../shared/env";
 
@@ -69,6 +70,7 @@ export class Shifts extends pulumi.ComponentResource {
               Resource: [tableArn, `${tableArn}/index/GSI3`],
             },
             verifiedPermissionsPolicyStatement(policyStoreArn),
+            auditMutationDenyStatement(tableArn),
           ]),
       },
       { parent: this },
@@ -114,6 +116,7 @@ export class Shifts extends pulumi.ComponentResource {
             Action: ["dynamodb:PutItem", "dynamodb:UpdateItem"],
             Resource: [tableArn],
           },
+          auditMutationDenyStatement(tableArn),
         ]),
       },
       { parent: this },
