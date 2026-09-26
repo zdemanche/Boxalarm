@@ -244,6 +244,37 @@ describe("PolicyStore", () => {
       },
     );
 
+    it("ALLOWs a MEMBER SelfUpdateMember but keeps UpdateMember (another member) admin-only", async () => {
+      const { CEDAR_SCHEMA, adminActionsPolicy, selfServiceActionsPolicy } =
+        await import("../../components/authz/cedar-policies");
+      const { isAuthorized } =
+        (await import("@cedar-policy/cedar-wasm/nodejs")) as typeof import("@cedar-policy/cedar-wasm/nodejs");
+      const decide = (action: string) => {
+        const result = isAuthorized({
+          principal: { type: "Boxalarm::User", id: "pool-1|user-1" },
+          action: { type: "Boxalarm::Action", id: action },
+          resource: member,
+          context: {},
+          schema: JSON.parse(CEDAR_SCHEMA) as string,
+          policies: {
+            staticPolicies: `${selfServiceActionsPolicy("pool-1")}\n${adminActionsPolicy("pool-1")}`,
+          },
+          entities: [
+            {
+              uid: { type: "Boxalarm::User", id: "pool-1|user-1" },
+              attrs: {},
+              parents: [{ type: "Boxalarm::UserGroup", id: "pool-1|MEMBER" }],
+            },
+            { uid: { type: "Boxalarm::UserGroup", id: "pool-1|MEMBER" }, attrs: {}, parents: [] },
+            { uid: member, attrs: {}, parents: [] },
+          ],
+        });
+        return result.type === "success" ? result.response.decision : "error";
+      };
+      expect(decide("SelfUpdateMember")).toBe("allow");
+      expect(decide("UpdateMember")).toBe("deny");
+    });
+
     it.each(["MEMBER", "APPARATUS"])("DENYs %s on officer-tier actions", async (group) => {
       expect(await decideFor(group, "UpdateQuals", member, "officer")).toBe("deny");
       expect(await decideFor(group, "RevokeCertification", member, "officer")).toBe("deny");

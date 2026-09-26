@@ -43,6 +43,11 @@ export const VIEW_ACTIONS = ["ViewConfig"] as const;
 // Verified Permissions treats actionType/resourceType as the literal, unqualified entity
 // type name, and there is no way to grant an action whose type isn't declared here.
 export const SELF_SERVICE_ACTIONS = [
+  // F2.6 / AP 12: a member editing their OWN profile. updateMember.ts routes a request to
+  // this action only when the path memberId is the caller's sub, and re-checks that
+  // against the verified principal before writing; editing anyone else is UpdateMember
+  // (ADMIN_ONLY_ACTIONS above).
+  "SelfUpdateMember",
   "RecordAttendance",
   "ViewOwnAttendance",
   "MarkAvailability",
@@ -114,6 +119,7 @@ export const CEDAR_SCHEMA = JSON.stringify({
         appliesTo: { principalTypes: ["User"], resourceTypes: ["Department"] },
       },
       UpdateMember: { appliesTo: { principalTypes: ["User"], resourceTypes: ["Member"] } },
+      SelfUpdateMember: { appliesTo: { principalTypes: ["User"], resourceTypes: ["Member"] } },
       RevokeSession: { appliesTo: { principalTypes: ["User"], resourceTypes: ["Member"] } },
       RecordAttendance: { appliesTo: { principalTypes: ["User"], resourceTypes: ["Member"] } },
       RecordAttendanceOnBehalf: {
