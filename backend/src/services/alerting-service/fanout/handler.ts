@@ -415,6 +415,7 @@ async function fanOutSelfTestDispatch(
       ),
       overallResult: 'FAIL',
       eligibilityReason: 'member not found',
+      completedAtMs: Date.now(),
     });
     return;
   }
@@ -473,6 +474,7 @@ async function fanOutSelfTestDispatch(
     channelResults,
     overallResult,
     ...(eligibilityReason ? { eligibilityReason } : {}),
+    completedAtMs: Date.now(),
   });
   emitOutcomeMetric(
     SELF_TEST_METRIC_NAMESPACE,

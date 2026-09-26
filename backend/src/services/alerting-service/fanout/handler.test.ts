@@ -293,7 +293,9 @@ describe('fanout/handler self-test branch (E1-S8 AC1/AC2/AC3/AC4/AC5)', () => {
     });
 
     const { handler } = await import('./handler.js');
+    const beforeMs = Date.now();
     await handler(selfTestDispatchInsertEvent());
+    const afterMs = Date.now();
 
     expect(sns.calls).toHaveLength(2);
     const receipts = [...ddb.items.values()].filter(
@@ -305,6 +307,9 @@ describe('fanout/handler self-test branch (E1-S8 AC1/AC2/AC3/AC4/AC5)', () => {
     const run = ddb.items.get('DEPT#NICHOLS#MEMBER#mbr-1#SELFTEST#1798000000');
     expect(run?.entityType).toBe('SELF_TEST_RUN');
     expect(run?.overallResult).toBe('PASS');
+    // The canary measures its latency against this completion stamp (canary/handler.ts).
+    expect(run?.completedAtMs).toBeGreaterThanOrEqual(beforeMs);
+    expect(run?.completedAtMs).toBeLessThanOrEqual(afterMs);
     const channelResults = run?.channelResults as Record<string, { ok: boolean; ms: number }>;
     expect(channelResults.PUSH?.ok).toBe(true);
     expect(channelResults.SMS?.ok).toBe(true);

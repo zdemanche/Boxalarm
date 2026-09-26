@@ -35,6 +35,8 @@ export interface DeliverChannelMessageParams {
   readonly contactChannels: readonly ContactChannelSnapshot[] | undefined;
   readonly message: string;
   readonly env: NodeJS.ProcessEnv;
+  /** Self-test/canary message — sent with the sandbox provider credentials. */
+  readonly isTest?: boolean;
 }
 
 export async function deliverChannelMessage(
@@ -44,6 +46,7 @@ export async function deliverChannelMessage(
 ): Promise<void> {
   const { deptId, dispatchId, memberId, channel, toneSequence, contactChannels, message, env } =
     params;
+  const isTest = params.isTest === true;
   const correlationId = dispatchId;
   const resolved = resolveChannelTarget(channel, contactChannels);
   if (resolved.skipped) {
@@ -108,7 +111,7 @@ export async function deliverChannelMessage(
   }
 
   try {
-    await sendViaHttpProvider(channel, resolved.target, message, env);
+    await sendViaHttpProvider(channel, resolved.target, message, env, { isTest });
   } catch (error) {
     logError('alerting.channel.send_failed', error, { correlationId, memberId, channel });
     emitOutcomeMetric(METRIC_NAMESPACE, 'SendFailed', channel);
@@ -219,6 +222,7 @@ export function createChannelWorkerHandler(
         contactChannels,
         message: `${envelope.incidentType} — ${envelope.address}`,
         env: process.env,
+        isTest: envelope.isTest,
       });
     }
 

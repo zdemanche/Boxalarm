@@ -7,10 +7,10 @@ import { alarmByName, installMocks, resourcesOfType, settle } from "./mock-harne
 
 const PAGE_TOPIC_ARN = "arn:aws:sns:us-east-1:123456789012:boxalarm-dev-alerting-page";
 
-async function build() {
-  const messaging = new MessagingAlerting("messaging-alerting", { env: "dev" });
+async function build(env = "dev") {
+  const messaging = new MessagingAlerting("messaging-alerting", { env });
   const alarms = new AlertingAlarms("alerting-alarms", {
-    env: "dev",
+    env,
     channelQueues: messaging.channelQueues,
     fanOutFunctionName: "boxalarm-dev-alerting-fan-out",
     fanOutOnFailureQueue: new aws.sqs.Queue("fan-out-onfailure", {
@@ -21,6 +21,7 @@ async function build() {
     memberUpdatedDlq: new aws.sqs.Queue("member-updated-dlq", {
       name: "boxalarm-dev-alerting-member-updated-dlq",
     }),
+    memberUpdatedFunctionName: "boxalarm-dev-alerting-member-updated-consumer",
   });
   await settle();
   return alarms;
@@ -53,6 +54,27 @@ describe("AlertingAlarms — page routing", { timeout: 30_000 }, () => {
       true,
     );
     warn.mockRestore();
+  });
+
+  it("fails preview in prod when no page email is configured", async () => {
+    installMocks({ "boxalarm-infra:env": "prod" });
+    await expect(build("prod")).rejects.toThrow(/alertingPageEmail is required in prod/);
+  });
+
+  it("subscribes the configured email in prod", async () => {
+    installMocks({
+      "boxalarm-infra:env": "prod",
+      "boxalarm-infra:alertingPageEmail": "oncall@example.test",
+    });
+    await build("prod");
+    const subscriptions = resourcesOfType("aws:sns/topicSubscription:TopicSubscription").filter(
+      (s) => s.inputs.topic === "arn:aws:sns:us-east-1:123456789012:boxalarm-prod-alerting-page",
+    );
+    expect(subscriptions).toHaveLength(1);
+    expect(subscriptions[0]!.inputs).toMatchObject({
+      protocol: "email",
+      endpoint: "oncall@example.test",
+    });
   });
 });
 
@@ -101,6 +123,11 @@ describe("AlertingAlarms — every alert-path failure mode pages", { timeout: 30
       "boxalarm-dev-alerting-member-updated-dlq-not-empty",
       "ApproximateNumberOfMessagesVisible",
       { QueueName: "boxalarm-dev-alerting-member-updated-dlq" },
+    ],
+    [
+      "boxalarm-dev-alerting-member-updated-consumer-errors",
+      "Errors",
+      { FunctionName: "boxalarm-dev-alerting-member-updated-consumer" },
     ],
     ["boxalarm-dev-alerting-push-delivery-failure-rate", "SendFailed", { Reason: "push" }],
     ["boxalarm-dev-alerting-sms-delivery-failure-rate", "SendFailed", { Reason: "sms" }],

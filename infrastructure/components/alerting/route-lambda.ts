@@ -6,6 +6,20 @@ import { ServiceLogGroup } from "../observability/service-log-group";
 import { ServiceName } from "../observability/services";
 import { IamPolicyStatement } from "../observability/observability-policy";
 
+/**
+ * The Verified Permissions grant every Cognito-authorized route Lambda needs: @boxalarm/authz
+ * calls IsAuthorizedWithToken in-handler. Shared by every route component so the statement is
+ * written once.
+ */
+export function verifiedPermissionsStatement(): IamPolicyStatement {
+  return {
+    Sid: "VerifiedPermissionsIsAuthorized",
+    Effect: "Allow",
+    Action: ["verifiedpermissions:IsAuthorizedWithToken"],
+    Resource: "*",
+  };
+}
+
 export interface AlertingRouteArgs {
   env: string;
   httpApi: HttpApi;

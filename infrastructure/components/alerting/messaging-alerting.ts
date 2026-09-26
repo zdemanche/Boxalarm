@@ -12,6 +12,12 @@ export const ALERTING_CHANNELS: readonly AlertingChannel[] = ["push", "sms", "vo
  */
 export const DEFAULT_WORKER_TIMEOUT_SECONDS = 15;
 
+/**
+ * Memory (MB) for the paging-path Lambdas: fan-out, the channel workers, escalation and the
+ * tone evaluator. Lambda CPU scales with memory, so the 128 MB default would slow every page.
+ */
+export const ALERT_PATH_MEMORY_MB = 512;
+
 export interface MessagingAlertingArgs {
   env: string;
   /** Worker Lambda timeout per channel (seconds); queue visibility is set to 2x this. */
@@ -80,7 +86,14 @@ export class MessagingAlerting extends pulumi.ComponentResource {
       ALERTING_CHANNELS.map((channel) => {
         const dlq = new aws.sqs.Queue(
           `${name}-${channel}-dlq`,
-          { name: `boxalarm-${env}-alerting-${channel}-dlq.fifo`, fifoQueue: true },
+          {
+            name: `boxalarm-${env}-alerting-${channel}-dlq.fifo`,
+            fifoQueue: true,
+            // 14 days (the SQS maximum), like the fan-out on-failure queue. A FIFO DLQ keeps
+            // the original enqueue timestamp, so at the 4-day default the evidence of a missed
+            // page could expire over a long weekend before anyone inspects it.
+            messageRetentionSeconds: 1_209_600,
+          },
           { parent: this },
         );
 

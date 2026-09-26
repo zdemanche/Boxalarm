@@ -14,6 +14,7 @@ export interface AlertingAlarmsArgs {
   escalationFunctionName: pulumi.Input<string>;
   toneEvaluatorFunctionName: pulumi.Input<string>;
   memberUpdatedDlq: aws.sqs.Queue;
+  memberUpdatedFunctionName: pulumi.Input<string>;
 }
 
 /** Stack config key for the alerting-page email subscription. */
@@ -25,10 +26,10 @@ export const ALERTING_PAGE_EMAIL_CONFIG_KEY = "alertingPageEmail";
  * pages through, an alarm on every alert-path failure mode, and a per-channel
  * fault-injection SSM switch present in dev/qa/staging only (never prod).
  *
- * The page subscription is config-driven (`boxalarm-infra:alertingPageEmail`, optional).
- * Who carries the pager is still open (#5), so this is a mechanism, not the final
- * on-call route — but an unset value is warned about at preview/up time rather than
- * leaving the topic silently unsubscribed.
+ * The page subscription is config-driven (`boxalarm-infra:alertingPageEmail`). Who carries
+ * the pager is still open (#5), so this is a mechanism, not the final on-call route. It is
+ * REQUIRED in prod — a prod stack whose alerting alarms page nobody fails preview — and
+ * warned about at preview/up time in every other stack.
  */
 export class AlertingAlarms extends pulumi.ComponentResource {
   public readonly pageTopic: aws.sns.Topic;
@@ -52,6 +53,13 @@ export class AlertingAlarms extends pulumi.ComponentResource {
         `${name}-page-email-subscription`,
         { topic: this.pageTopic.arn, protocol: "email", endpoint: pageEmail },
         { parent: this },
+      );
+    } else if (env === "prod") {
+      throw new Error(
+        `AlertingAlarms: boxalarm-infra:${ALERTING_PAGE_EMAIL_CONFIG_KEY} is required in prod — ` +
+          `without it boxalarm-prod-alerting-page has no subscription and every alerting ` +
+          `alarm pages nobody. Set it with \`pulumi config set ${ALERTING_PAGE_EMAIL_CONFIG_KEY} ` +
+          `<address> --stack prod\`.`,
       );
     } else {
       pulumi.log.warn(
@@ -163,6 +171,15 @@ export class AlertingAlarms extends pulumi.ComponentResource {
       period: 60,
       evaluationPeriods: 1,
     });
+
+    // The consumer throws on a bad record or a DynamoDB failure; the DLQ alarm only fires
+    // after 5 receives, so page on the errors themselves too.
+    lambdaAlarm(
+      "member-updated-errors-alarm",
+      args.memberUpdatedFunctionName,
+      "Errors",
+      `boxalarm-${env}-alerting-member-updated-consumer-errors`,
+    );
 
     for (const channel of ALERTING_CHANNELS) {
       const dlq = args.channelQueues[channel].dlq;

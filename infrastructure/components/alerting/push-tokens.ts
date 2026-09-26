@@ -6,8 +6,10 @@ import { ServiceLogGroup } from "../observability/service-log-group";
 import { IamPolicyStatement } from "../observability/observability-policy";
 import { requireEnv } from "../shared/env";
 import { lambdaCode, LAMBDA_HANDLER } from "../shared/lambda-code";
-import { AlertingRoute } from "./route-lambda";
+import { AlertingRoute, verifiedPermissionsStatement } from "./route-lambda";
 import { grantAlertingCmk } from "./alerting-cmk";
+
+const MEMBER_UPDATED_RESERVED_CONCURRENCY = 5;
 
 export interface PushTokensArgs {
   env: string;
@@ -37,6 +39,8 @@ export class PushTokens extends pulumi.ComponentResource {
   public readonly memberUpdatedConsumer: ServiceLambda;
   public readonly memberUpdatedQueue: aws.sqs.Queue;
   public readonly memberUpdatedDlq: aws.sqs.Queue;
+  public readonly memberUpdatedRule: aws.cloudwatch.EventRule;
+  public readonly memberUpdatedEventSource: aws.lambda.EventSourceMapping;
 
   constructor(name: string, args: PushTokensArgs, opts?: pulumi.ComponentResourceOptions) {
     requireEnv("PushTokens", args.env);
@@ -47,15 +51,18 @@ export class PushTokens extends pulumi.ComponentResource {
       {
         Sid: "PlatformTableReadWrite",
         Effect: "Allow",
-        Action: ["dynamodb:GetItem", "dynamodb:TransactWriteItems"],
+        // registerToken/revokeToken issue one TransactWriteCommand with an Update (member
+        // METADATA) and a Put (OUTBOX_ENTRY). DynamoDB authorizes each transaction item as
+        // its own action, so TransactWriteItems alone authorizes nothing.
+        Action: [
+          "dynamodb:GetItem",
+          "dynamodb:TransactWriteItems",
+          "dynamodb:UpdateItem",
+          "dynamodb:PutItem",
+        ],
         Resource: args.platformTableArn as string,
       },
-      {
-        Sid: "VerifiedPermissionsIsAuthorized",
-        Effect: "Allow",
-        Action: ["verifiedpermissions:IsAuthorizedWithToken"],
-        Resource: "*",
-      },
+      verifiedPermissionsStatement(),
     ];
     const personnelEnv = {
       PERSONNEL_TABLE_NAME: args.platformTableName,
@@ -119,15 +126,23 @@ export class PushTokens extends pulumi.ComponentResource {
       { parent: this },
     );
 
+    // Match the producer too, not just the detail-type: the platform outbox publisher puts
+    // each row under its own `source` (packages/outbox drainHandler, no override), and every
+    // personnel.member.updated writer stamps `personnel-service`. Without it any producer on
+    // the platform bus could inject eligibility/contact changes into the alerting snapshot.
     const rule = new aws.cloudwatch.EventRule(
       `${name}-member-updated-rule`,
       {
         name: `boxalarm-${env}-alerting-member-updated`,
         eventBusName: args.busName,
-        eventPattern: JSON.stringify({ "detail-type": ["personnel.member.updated"] }),
+        eventPattern: JSON.stringify({
+          source: ["personnel-service"],
+          "detail-type": ["personnel.member.updated"],
+        }),
       },
       { parent: this },
     );
+    this.memberUpdatedRule = rule;
 
     new aws.sqs.QueuePolicy(
       `${name}-member-updated-queue-policy`,
@@ -177,18 +192,21 @@ export class PushTokens extends pulumi.ComponentResource {
             Resource: args.alertingTableArn as string,
           },
         ],
-        reservedConcurrentExecutions: 5,
+        reservedConcurrentExecutions: MEMBER_UPDATED_RESERVED_CONCURRENCY,
         permissionsBoundaryArn: args.alertingPermissionsBoundaryArn,
       },
       { parent: this },
     );
 
-    new aws.lambda.EventSourceMapping(
+    this.memberUpdatedEventSource = new aws.lambda.EventSourceMapping(
       `${name}-member-updated-event-source`,
       {
         eventSourceArn: this.memberUpdatedQueue.arn,
         functionName: this.memberUpdatedConsumer.function.name,
         functionResponseTypes: ["ReportBatchItemFailures"],
+        // Pinned to reserved concurrency: throttled receives count toward maxReceiveCount,
+        // so a bulk roster change could otherwise push member updates to the DLQ early.
+        scalingConfig: { maximumConcurrency: MEMBER_UPDATED_RESERVED_CONCURRENCY },
       },
       { parent: this },
     );

@@ -162,9 +162,7 @@ export const auditTrail = new AuditTrail("audit-trail", {
 export const alertingPlaneBoundary = new AlertingPlaneBoundary("alerting-plane-boundary", {
   env,
   platformTableArn: platformTable.tableArn,
-  platformStreamArn: platformTable.streamArn,
   incidentTableArn: incidentTable.tableArn,
-  incidentStreamArn: incidentTable.streamArn,
 });
 const alertingBoundaryArn = alertingPlaneBoundary.policy.arn;
 
@@ -550,6 +548,7 @@ export const alertingAlarms = new AlertingAlarms("alerting-alarms", {
   escalationFunctionName: escalation.lambda.function.name,
   toneEvaluatorFunctionName: escalation.toneEvaluatorLambda.function.name,
   memberUpdatedDlq: pushTokens.memberUpdatedDlq,
+  memberUpdatedFunctionName: pushTokens.memberUpdatedConsumer.function.name,
 });
 
 // E1-S13-INFRA #38: eligibility-snapshot staleness schedule + alarm.

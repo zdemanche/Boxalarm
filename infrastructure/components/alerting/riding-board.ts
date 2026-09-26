@@ -3,7 +3,7 @@ import { HttpApi } from "../api/http-api";
 import { ServiceLogGroup } from "../observability/service-log-group";
 import { requireEnv } from "../shared/env";
 import { lambdaCode, LAMBDA_HANDLER } from "../shared/lambda-code";
-import { AlertingRoute } from "./route-lambda";
+import { AlertingRoute, verifiedPermissionsStatement } from "./route-lambda";
 
 export interface RidingBoardArgs {
   env: string;
@@ -40,12 +40,7 @@ export class RidingBoard extends pulumi.ComponentResource {
     // Cast like the table ARN below: ServiceLambda deep-resolves nested Outputs.
     const apparatusIndexArn =
       pulumi.interpolate`${args.platformTableArn}/index/GSI3` as unknown as string;
-    const verifiedPermissionsStatement = {
-      Sid: "VerifiedPermissionsIsAuthorized",
-      Effect: "Allow" as const,
-      Action: ["verifiedpermissions:IsAuthorizedWithToken"],
-      Resource: "*",
-    };
+    const vpStatement = verifiedPermissionsStatement();
 
     // src/services/apparatus-service/ridingBoard/handler.getRidingBoardHandler
     this.getRoute = new AlertingRoute(
@@ -75,7 +70,7 @@ export class RidingBoard extends pulumi.ComponentResource {
             Action: ["dynamodb:Query"],
             Resource: apparatusIndexArn,
           },
-          verifiedPermissionsStatement,
+          vpStatement,
         ],
         reservedConcurrentExecutions: 5,
       },
@@ -120,7 +115,7 @@ export class RidingBoard extends pulumi.ComponentResource {
             Action: ["dynamodb:Query"],
             Resource: apparatusIndexArn,
           },
-          verifiedPermissionsStatement,
+          vpStatement,
         ],
         reservedConcurrentExecutions: 5,
       },

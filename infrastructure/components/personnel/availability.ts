@@ -170,7 +170,10 @@ export class Availability extends pulumi.ComponentResource {
           {
             Sid: "AlertingTableWrite" as const,
             Effect: "Allow" as const,
-            Action: ["dynamodb:TransactWriteItems"],
+            // eligibility/consumer.ts writes one TransactWriteCommand: a Put (EVENT_DEDUP) and an
+            // Update (MEMBER_ELIGIBILITY_SNAPSHOT). DynamoDB authorizes each transaction item as
+            // its own action, so TransactWriteItems alone authorizes nothing.
+            Action: ["dynamodb:TransactWriteItems", "dynamodb:PutItem", "dynamodb:UpdateItem"],
             Resource: [arn],
           },
         ]),
