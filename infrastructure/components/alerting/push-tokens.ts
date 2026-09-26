@@ -47,7 +47,15 @@ export class PushTokens extends pulumi.ComponentResource {
       {
         Sid: "PlatformTableReadWrite",
         Effect: "Allow",
-        Action: ["dynamodb:GetItem", "dynamodb:TransactWriteItems"],
+        // registerToken/revokeToken issue one TransactWriteCommand with an Update (member
+        // METADATA) and a Put (OUTBOX_ENTRY). DynamoDB authorizes each transaction item as
+        // its own action, so TransactWriteItems alone authorizes nothing.
+        Action: [
+          "dynamodb:GetItem",
+          "dynamodb:TransactWriteItems",
+          "dynamodb:UpdateItem",
+          "dynamodb:PutItem",
+        ],
         Resource: args.platformTableArn as string,
       },
       {

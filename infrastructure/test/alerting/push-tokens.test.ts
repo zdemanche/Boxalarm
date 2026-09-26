@@ -82,6 +82,28 @@ describe("PushTokens — member-updated consumer IAM isolation (#208 AC3)", () =
     expect(policyJson).not.toContain("table/incident");
   });
 
+  it("grants register/revoke every item action of their TransactWriteCommand (Update + Put)", async () => {
+    const pushTokens = await build();
+    for (const route of [pushTokens.registerRoute, pushTokens.revokeRoute]) {
+      const policyJson = await resolve(route.lambda.rolePolicy.policy);
+      const statements = (
+        JSON.parse(policyJson) as {
+          Statement: { Sid?: string; Action: string[]; Resource: string }[];
+        }
+      ).Statement;
+      const platform = statements.find((s) => s.Sid === "PlatformTableReadWrite");
+      expect(platform?.Resource).toBe("arn:aws:dynamodb:us-east-1:123456789012:table/platform");
+      expect([...(platform?.Action ?? [])].sort()).toEqual(
+        [
+          "dynamodb:GetItem",
+          "dynamodb:PutItem",
+          "dynamodb:TransactWriteItems",
+          "dynamodb:UpdateItem",
+        ].sort(),
+      );
+    }
+  });
+
   it("does not VPC-attach the member-updated consumer", async () => {
     const pushTokens = await build();
     const vpcConfig = await resolve(pushTokens.memberUpdatedConsumer.function.vpcConfig);
