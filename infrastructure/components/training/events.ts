@@ -40,6 +40,16 @@ export class Events extends pulumi.ComponentResource {
         Resource: [arn],
       },
     ]);
+    // listEventsHandler: listTrainingEvents Queries GSI3, listMemberAttendanceEventIds
+    // Queries GSI1 — read-only, index-only.
+    const listStatement = pulumi.output(args.platformTableArn).apply((arn) => [
+      {
+        Sid: "TrainingEventsListAccess" as const,
+        Effect: "Allow" as const,
+        Action: ["dynamodb:Query"],
+        Resource: [`${arn}/index/GSI3`, `${arn}/index/GSI1`],
+      },
+    ]);
     const vpStatement = pulumi
       .output(args.policyStoreArn)
       .apply((policyStoreArn) => [verifiedPermissionsPolicyStatement(policyStoreArn)]);
@@ -79,7 +89,7 @@ export class Events extends pulumi.ComponentResource {
         code: lambdaCode("training-service", "events-list"),
         logGroup: args.logGroup,
         environment: { TRAINING_TABLE_NAME: args.platformTableName },
-        additionalPolicyStatements: tableStatement,
+        additionalPolicyStatements: listStatement,
       },
       { parent: this },
     );

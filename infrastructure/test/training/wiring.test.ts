@@ -3,6 +3,7 @@ import * as pulumi from "@pulumi/pulumi";
 import { ServiceLogGroup } from "../../components/observability/service-log-group";
 import { HttpApi } from "../../components/api/http-api";
 import { Certifications } from "../../components/training/certifications";
+import { Events } from "../../components/training/events";
 import {
   ACCOUNT_ID,
   REGION,
@@ -19,7 +20,9 @@ import {
  */
 
 const TABLE = `arn:aws:dynamodb:${REGION}:${ACCOUNT_ID}:table/boxalarm-dev-platform-service`;
+const GSI1 = `${TABLE}/index/GSI1`;
 const GSI2 = `${TABLE}/index/GSI2`;
+const GSI3 = `${TABLE}/index/GSI3`;
 
 beforeEach(() => {
   installMocks();
@@ -53,6 +56,7 @@ async function build() {
     platformBusArn: `arn:aws:events:${REGION}:${ACCOUNT_ID}:event-bus/boxalarm-dev-platform-bus`,
     platformTableStreamArn: `${TABLE}/stream/2026-01-01T00:00:00.000`,
   });
+  new Events("events", common);
   await settle();
 }
 
@@ -75,6 +79,16 @@ describe("training Lambdas: env and IAM match their handlers", { timeout: 30_000
       expect(isGranted(s, "dynamodb:PutItem", TABLE)).toBe(true);
       expect(isGranted(s, "dynamodb:UpdateItem", TABLE)).toBe(true);
       expect(isGranted(s, "events:PutEvents", (r) => r.includes("event-bus/"))).toBe(true);
+    });
+  });
+
+  describe("events", () => {
+    it("list can Query GSI3 (events) and GSI1 (my signups) and holds no write action", async () => {
+      await build();
+      const s = statementsForRole("boxalarm-dev-training-events-list");
+      expect(isGranted(s, "dynamodb:Query", GSI3)).toBe(true);
+      expect(isGranted(s, "dynamodb:Query", GSI1)).toBe(true);
+      expect(isGranted(s, "dynamodb:PutItem", TABLE)).toBe(false);
     });
   });
 });
