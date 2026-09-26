@@ -25,7 +25,20 @@ const validPayload = {
 
 describe('parseChannelEnvelope', () => {
   it('parses a valid alerting.dispatch.normalized envelope for the expected channel', () => {
-    expect(parseChannelEnvelope(body(validPayload), 'push')).toEqual(validPayload);
+    expect(parseChannelEnvelope(body(validPayload), 'push')).toEqual({
+      ...validPayload,
+      isTest: false,
+    });
+  });
+
+  it('carries isTest=true through for a self-test/canary message (selects sandbox credentials)', () => {
+    expect(parseChannelEnvelope(body({ ...validPayload, isTest: true }), 'push').isTest).toBe(true);
+  });
+
+  it('treats any isTest other than boolean true as a real page (never downgrades a real dispatch)', () => {
+    for (const isTest of [false, 'true', 1, null]) {
+      expect(parseChannelEnvelope(body({ ...validPayload, isTest }), 'push').isTest).toBe(false);
+    }
   });
 
   it('throws when the body is empty', () => {

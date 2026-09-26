@@ -52,6 +52,7 @@ describe('deliverChannelMessage', () => {
       'tok-1',
       baseParams.message,
       baseParams.env,
+      { isTest: false },
     );
   });
 
@@ -180,6 +181,7 @@ describe('deliverChannelMessage', () => {
       'tok-1',
       baseParams.message,
       baseParams.env,
+      { isTest: false },
     );
     const updateCall = send.mock.calls.find(
       (call) => (call[0] as { constructor: { name: string } }).constructor.name === 'UpdateCommand',

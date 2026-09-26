@@ -10,6 +10,8 @@ export interface ChannelEnvelopePayload {
   readonly toneSequence: number;
   readonly incidentType: string;
   readonly address: string;
+  /** Self-test/canary dispatch — fan-out stamps it; anything but `true` is a real page. */
+  readonly isTest: boolean;
 }
 
 export function parseChannelEnvelope(
@@ -44,7 +46,8 @@ export function parseChannelEnvelope(
   }
   assertNoDelimiter(dispatchId, 'dispatchId');
   assertNoDelimiter(memberId, 'memberId');
-  return { deptId, dispatchId, memberId, channel, toneSequence, incidentType, address };
+  const isTest = payload?.isTest === true;
+  return { deptId, dispatchId, memberId, channel, toneSequence, incidentType, address, isTest };
 }
 
 export function noTargetReason(channel: ChannelName): string {
