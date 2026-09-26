@@ -37,6 +37,7 @@ export class PushTokens extends pulumi.ComponentResource {
   public readonly memberUpdatedConsumer: ServiceLambda;
   public readonly memberUpdatedQueue: aws.sqs.Queue;
   public readonly memberUpdatedDlq: aws.sqs.Queue;
+  public readonly memberUpdatedRule: aws.cloudwatch.EventRule;
 
   constructor(name: string, args: PushTokensArgs, opts?: pulumi.ComponentResourceOptions) {
     requireEnv("PushTokens", args.env);
@@ -122,15 +123,23 @@ export class PushTokens extends pulumi.ComponentResource {
       { parent: this },
     );
 
+    // Match the producer too, not just the detail-type: the platform outbox publisher puts
+    // each row under its own `source` (packages/outbox drainHandler, no override), and every
+    // personnel.member.updated writer stamps `personnel-service`. Without it any producer on
+    // the platform bus could inject eligibility/contact changes into the alerting snapshot.
     const rule = new aws.cloudwatch.EventRule(
       `${name}-member-updated-rule`,
       {
         name: `boxalarm-${env}-alerting-member-updated`,
         eventBusName: args.busName,
-        eventPattern: JSON.stringify({ "detail-type": ["personnel.member.updated"] }),
+        eventPattern: JSON.stringify({
+          source: ["personnel-service"],
+          "detail-type": ["personnel.member.updated"],
+        }),
       },
       { parent: this },
     );
+    this.memberUpdatedRule = rule;
 
     new aws.sqs.QueuePolicy(
       `${name}-member-updated-queue-policy`,

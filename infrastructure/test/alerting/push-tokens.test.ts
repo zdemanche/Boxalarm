@@ -104,6 +104,16 @@ describe("PushTokens — member-updated consumer IAM isolation (#208 AC3)", () =
     }
   });
 
+  it("routes personnel.member.updated only from personnel-service onto the consumer queue", async () => {
+    const pushTokens = await build();
+    const patternJson = await resolve(pushTokens.memberUpdatedRule.eventPattern);
+    const pattern = JSON.parse(patternJson ?? "null") as Record<string, unknown>;
+    expect(pattern).toEqual({
+      source: ["personnel-service"],
+      "detail-type": ["personnel.member.updated"],
+    });
+  });
+
   it("does not VPC-attach the member-updated consumer", async () => {
     const pushTokens = await build();
     const vpcConfig = await resolve(pushTokens.memberUpdatedConsumer.function.vpcConfig);
