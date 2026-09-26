@@ -86,7 +86,14 @@ export class MessagingAlerting extends pulumi.ComponentResource {
       ALERTING_CHANNELS.map((channel) => {
         const dlq = new aws.sqs.Queue(
           `${name}-${channel}-dlq`,
-          { name: `boxalarm-${env}-alerting-${channel}-dlq.fifo`, fifoQueue: true },
+          {
+            name: `boxalarm-${env}-alerting-${channel}-dlq.fifo`,
+            fifoQueue: true,
+            // 14 days (the SQS maximum), like the fan-out on-failure queue. A FIFO DLQ keeps
+            // the original enqueue timestamp, so at the 4-day default the evidence of a missed
+            // page could expire over a long weekend before anyone inspects it.
+            messageRetentionSeconds: 1_209_600,
+          },
           { parent: this },
         );
 
