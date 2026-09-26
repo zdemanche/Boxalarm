@@ -5,6 +5,8 @@ import {
   MessagingAlerting,
 } from "../../components/alerting/messaging-alerting";
 import { ChannelWorkers } from "../../components/alerting/channel-workers";
+import { HttpApi } from "../../components/api/http-api";
+import { ROUTES_OPS_TIMEOUT_SECONDS, RoutesOps } from "../../components/alerting/routes-ops";
 import {
   BOUNDARY_ARN,
   CMK_ARN,
@@ -68,3 +70,45 @@ describe(
     });
   },
 );
+
+describe("RoutesOps routes set an explicit 10s timeout", { timeout: 30_000 }, () => {
+  it("every routes-ops Lambda (authorized routes and vendor webhooks) → 10s", async () => {
+    installMocks({
+      "boxalarm-infra:smsWebhookSecret": "s",
+      "boxalarm-infra:voiceWebhookSecret": "v",
+      "boxalarm-infra:pushWebhookSecret": "p",
+    });
+    const logGroup = new ServiceLogGroup("alerting-lg", {
+      env: "dev",
+      serviceName: "alerting-service",
+    });
+    const httpApi = new HttpApi("http-api", {
+      env: "dev",
+      userPoolId: "pool-1",
+      allowedClientIds: ["client-1"],
+      platformLogGroup: new ServiceLogGroup("platform-lg", {
+        env: "dev",
+        serviceName: "platform-service",
+      }),
+    });
+    new RoutesOps("routes-ops", {
+      env: "dev",
+      httpApi,
+      alertingTableArn: TABLE_ARN,
+      alertingCmkArn: CMK_ARN,
+      alertingTableName: "boxalarm-dev-alerting-table",
+      logGroup,
+      policyStoreId: "policy-store-id",
+      permissionsBoundaryArn: BOUNDARY_ARN,
+    });
+    await settle();
+    const opsLambdas = resourcesOfType("aws:lambda/function:Function").filter((fn) =>
+      (fn.name as string).startsWith("routes-ops-"),
+    );
+    expect(ROUTES_OPS_TIMEOUT_SECONDS).toBe(10);
+    expect(opsLambdas).toHaveLength(12);
+    for (const fn of opsLambdas) {
+      expect(fn.inputs.timeout, fn.inputs.name as string).toBe(ROUTES_OPS_TIMEOUT_SECONDS);
+    }
+  });
+});

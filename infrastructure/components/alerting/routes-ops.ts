@@ -20,6 +20,13 @@ export interface RoutesOpsArgs {
 }
 
 type VendorChannel = "sms" | "voice" | "push";
+
+/**
+ * Every ops route sets an explicit timeout rather than the AWS 3s default: audit and
+ * delivery-baseline run two index queries plus a Verified Permissions round trip, and the
+ * vendor webhooks need cold-start headroom. Well under the HTTP API's 30s integration cap.
+ */
+export const ROUTES_OPS_TIMEOUT_SECONDS = 10;
 const VENDOR_CHANNELS: readonly VendorChannel[] = ["sms", "voice", "push"];
 
 /**
@@ -78,6 +85,7 @@ export class RoutesOps extends pulumi.ComponentResource {
           verifiedPermissionsStatement,
         ],
         reservedConcurrentExecutions: 3,
+        timeout: ROUTES_OPS_TIMEOUT_SECONDS,
         permissionsBoundaryArn: args.permissionsBoundaryArn,
       },
       { parent: this },
@@ -109,6 +117,7 @@ export class RoutesOps extends pulumi.ComponentResource {
           verifiedPermissionsStatement,
         ],
         reservedConcurrentExecutions: 3,
+        timeout: ROUTES_OPS_TIMEOUT_SECONDS,
         permissionsBoundaryArn: args.permissionsBoundaryArn,
       },
       { parent: this },
@@ -140,6 +149,7 @@ export class RoutesOps extends pulumi.ComponentResource {
           verifiedPermissionsStatement,
         ]),
         reservedConcurrentExecutions: 3,
+        timeout: ROUTES_OPS_TIMEOUT_SECONDS,
         permissionsBoundaryArn: args.permissionsBoundaryArn,
       },
       { parent: this },
@@ -171,6 +181,7 @@ export class RoutesOps extends pulumi.ComponentResource {
           verifiedPermissionsStatement,
         ],
         reservedConcurrentExecutions: 3,
+        timeout: ROUTES_OPS_TIMEOUT_SECONDS,
         permissionsBoundaryArn: args.permissionsBoundaryArn,
       },
       { parent: this },
@@ -232,6 +243,7 @@ export class RoutesOps extends pulumi.ComponentResource {
             },
           ],
           reservedConcurrentExecutions: 5,
+          timeout: ROUTES_OPS_TIMEOUT_SECONDS,
           permissionsBoundaryArn: args.permissionsBoundaryArn,
         },
         { parent: this },
@@ -265,6 +277,7 @@ export class RoutesOps extends pulumi.ComponentResource {
           verifiedPermissionsStatement,
         ],
         reservedConcurrentExecutions: 3,
+        timeout: ROUTES_OPS_TIMEOUT_SECONDS,
         permissionsBoundaryArn: args.permissionsBoundaryArn,
       },
       { parent: this },
@@ -296,6 +309,7 @@ export class RoutesOps extends pulumi.ComponentResource {
           verifiedPermissionsStatement,
         ],
         reservedConcurrentExecutions: 5,
+        timeout: ROUTES_OPS_TIMEOUT_SECONDS,
         permissionsBoundaryArn: args.permissionsBoundaryArn,
       },
       { parent: this },
@@ -328,6 +342,7 @@ export class RoutesOps extends pulumi.ComponentResource {
           verifiedPermissionsStatement,
         ],
         reservedConcurrentExecutions: 3,
+        timeout: ROUTES_OPS_TIMEOUT_SECONDS,
         permissionsBoundaryArn: args.permissionsBoundaryArn,
       },
       { parent: this },
@@ -359,6 +374,7 @@ export class RoutesOps extends pulumi.ComponentResource {
           verifiedPermissionsStatement,
         ],
         reservedConcurrentExecutions: 3,
+        timeout: ROUTES_OPS_TIMEOUT_SECONDS,
         permissionsBoundaryArn: args.permissionsBoundaryArn,
       },
       { parent: this },
@@ -390,6 +406,7 @@ export class RoutesOps extends pulumi.ComponentResource {
           verifiedPermissionsStatement,
         ]),
         reservedConcurrentExecutions: 3,
+        timeout: ROUTES_OPS_TIMEOUT_SECONDS,
         permissionsBoundaryArn: args.permissionsBoundaryArn,
       },
       { parent: this },
