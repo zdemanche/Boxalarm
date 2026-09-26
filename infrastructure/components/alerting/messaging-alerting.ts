@@ -12,6 +12,12 @@ export const ALERTING_CHANNELS: readonly AlertingChannel[] = ["push", "sms", "vo
  */
 export const DEFAULT_WORKER_TIMEOUT_SECONDS = 15;
 
+/**
+ * Memory (MB) for the paging-path Lambdas: fan-out, the channel workers, escalation and the
+ * tone evaluator. Lambda CPU scales with memory, so the 128 MB default would slow every page.
+ */
+export const ALERT_PATH_MEMORY_MB = 512;
+
 export interface MessagingAlertingArgs {
   env: string;
   /** Worker Lambda timeout per channel (seconds); queue visibility is set to 2x this. */

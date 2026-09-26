@@ -6,6 +6,7 @@ import { IamPolicyStatement } from "../observability/observability-policy";
 import { requireEnv } from "../shared/env";
 import { lambdaCode, LAMBDA_HANDLER } from "../shared/lambda-code";
 import { grantAlertingCmk } from "./alerting-cmk";
+import { ALERT_PATH_MEMORY_MB } from "./messaging-alerting";
 
 export interface EscalationArgs {
   env: string;
@@ -96,6 +97,7 @@ export class Escalation extends pulumi.ComponentResource {
         reservedConcurrentExecutions: 5,
         // Roster GetItem, TransactWrite, SNS publish — explicit rather than the 3s default.
         timeout: 15,
+        memorySize: ALERT_PATH_MEMORY_MB,
         permissionsBoundaryArn: args.permissionsBoundaryArn,
       },
       { parent: this },
@@ -170,6 +172,7 @@ export class Escalation extends pulumi.ComponentResource {
         reservedConcurrentExecutions: 5,
         // Roster query, re-page publishes, and per-member escalation scheduling.
         timeout: 30,
+        memorySize: ALERT_PATH_MEMORY_MB,
         permissionsBoundaryArn: args.permissionsBoundaryArn,
       },
       { parent: this },

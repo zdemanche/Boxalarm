@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { ServiceLogGroup } from "../../components/observability/service-log-group";
 import {
+  ALERT_PATH_MEMORY_MB,
   DEFAULT_WORKER_TIMEOUT_SECONDS,
   MessagingAlerting,
 } from "../../components/alerting/messaging-alerting";
@@ -112,3 +113,38 @@ describe("RoutesOps routes set an explicit 10s timeout", { timeout: 30_000 }, ()
     }
   });
 });
+
+describe(
+  "paging-path Lambdas set explicit memory (not the 128 MB default)",
+  { timeout: 30_000 },
+  () => {
+    it("fan-out, escalation, tone-evaluator and every channel worker → 512 MB", async () => {
+      await buildSchedulingChain();
+      const messaging = new MessagingAlerting("messaging-alerting", { env: "dev" });
+      new ChannelWorkers("channel-workers", {
+        env: "dev",
+        alertingTableArn: TABLE_ARN,
+        alertingCmkArn: CMK_ARN,
+        alertingTableName: "boxalarm-dev-alerting-table",
+        channelQueues: messaging.channelQueues,
+        logGroup: new ServiceLogGroup("alerting-lg-2", {
+          env: "dev",
+          serviceName: "alerting-service",
+        }),
+        permissionsBoundaryArn: BOUNDARY_ARN,
+      });
+      await settle();
+      expect(ALERT_PATH_MEMORY_MB).toBe(512);
+      for (const functionName of [
+        "boxalarm-dev-alerting-fan-out",
+        "boxalarm-dev-alerting-escalation",
+        "boxalarm-dev-alerting-tone-evaluator",
+        "boxalarm-dev-alerting-push-worker",
+        "boxalarm-dev-alerting-sms-worker",
+        "boxalarm-dev-alerting-voice-worker",
+      ]) {
+        expect(lambdaByName(functionName).inputs.memorySize, functionName).toBe(512);
+      }
+    });
+  },
+);

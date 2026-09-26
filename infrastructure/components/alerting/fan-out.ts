@@ -6,6 +6,7 @@ import { requireEnv } from "../shared/env";
 import { lambdaCode, LAMBDA_HANDLER } from "../shared/lambda-code";
 import { Escalation } from "./escalation";
 import { grantAlertingCmk } from "./alerting-cmk";
+import { ALERT_PATH_MEMORY_MB } from "./messaging-alerting";
 
 export interface FanOutArgs {
   env: string;
@@ -108,6 +109,7 @@ export class FanOut extends pulumi.ComponentResource {
         // Eligibility query, concurrent per-member receipt write + SNS publish, then
         // serial per-member escalation scheduling — far beyond the 3s default.
         timeout: 30,
+        memorySize: ALERT_PATH_MEMORY_MB,
         permissionsBoundaryArn: args.permissionsBoundaryArn,
       },
       { parent: this },

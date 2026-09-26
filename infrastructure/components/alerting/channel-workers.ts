@@ -5,6 +5,7 @@ import { ServiceLogGroup } from "../observability/service-log-group";
 import { requireEnv } from "../shared/env";
 import { lambdaCode, LAMBDA_HANDLER } from "../shared/lambda-code";
 import {
+  ALERT_PATH_MEMORY_MB,
   ALERTING_CHANNELS,
   AlertingChannel,
   ChannelQueue,
@@ -123,6 +124,7 @@ export class ChannelWorkers extends pulumi.ComponentResource {
             ]),
           reservedConcurrentExecutions: 5,
           timeout: args.workerTimeoutSeconds ?? DEFAULT_WORKER_TIMEOUT_SECONDS,
+          memorySize: ALERT_PATH_MEMORY_MB,
           permissionsBoundaryArn: args.permissionsBoundaryArn,
         },
         { parent: this },
