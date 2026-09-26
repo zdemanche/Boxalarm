@@ -5,6 +5,7 @@ import { HttpApi } from "../../components/api/http-api";
 import { Certifications } from "../../components/training/certifications";
 import { Events } from "../../components/training/events";
 import { Hours } from "../../components/training/hours";
+import { Reports } from "../../components/training/reports";
 import {
   ACCOUNT_ID,
   REGION,
@@ -59,6 +60,7 @@ async function build() {
   });
   new Events("events", common);
   new Hours("hours", common);
+  new Reports("reports", common);
   await settle();
 }
 
@@ -99,6 +101,15 @@ describe("training Lambdas: env and IAM match their handlers", { timeout: 30_000
       await build();
       const s = statementsForRole("boxalarm-dev-training-hours");
       expect(isGranted(s, "dynamodb:Query", GSI1)).toBe(true);
+      expect(isGranted(s, "dynamodb:Query", GSI3)).toBe(true);
+      expect(isGranted(s, "dynamodb:Query", TABLE)).toBe(true);
+    });
+  });
+
+  describe("reports", () => {
+    it("ISO report can Query GSI3 (events in period) and the base table (attendees)", async () => {
+      await build();
+      const s = statementsForRole("boxalarm-dev-training-reports-iso");
       expect(isGranted(s, "dynamodb:Query", GSI3)).toBe(true);
       expect(isGranted(s, "dynamodb:Query", TABLE)).toBe(true);
     });
