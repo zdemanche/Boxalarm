@@ -39,10 +39,16 @@ export const VIEW_ACTIONS = ["ViewConfig"] as const;
 // above) — including quals/handler.ts, certifications/*.ts, transcript/get.ts and
 // reports/iso.ts, whose actionType/resourceType literals ('PersonnelService', 'Training',
 // 'Member', 'TrainingReport') were normalized to the Boxalarm::Action / Boxalarm::<Type>
-// convention every other route uses, so one schema can express a policy for all of them —
-// Verified Permissions treats actionType/resourceType as the literal, unqualified entity
-// type name, and there is no way to grant an action whose type isn't declared here.
+// convention every other route uses, so one schema can express a policy for all of them.
+// decide.ts sends those namespace-qualified type names (Boxalarm::Action,
+// Boxalarm::Member, ...) verbatim, and the namespaced schema below only declares
+// Boxalarm::-qualified types — an unqualified or unknown type can never match a policy.
 export const SELF_SERVICE_ACTIONS = [
+  // F2.6 / AP 12: a member editing their OWN profile. updateMember.ts routes a request to
+  // this action only when the path memberId is the caller's sub, and re-checks that
+  // against the verified principal before writing; editing anyone else is UpdateMember
+  // (ADMIN_ONLY_ACTIONS above).
+  "SelfUpdateMember",
   "RecordAttendance",
   "ViewOwnAttendance",
   "MarkAvailability",
@@ -114,6 +120,7 @@ export const CEDAR_SCHEMA = JSON.stringify({
         appliesTo: { principalTypes: ["User"], resourceTypes: ["Department"] },
       },
       UpdateMember: { appliesTo: { principalTypes: ["User"], resourceTypes: ["Member"] } },
+      SelfUpdateMember: { appliesTo: { principalTypes: ["User"], resourceTypes: ["Member"] } },
       RevokeSession: { appliesTo: { principalTypes: ["User"], resourceTypes: ["Member"] } },
       RecordAttendance: { appliesTo: { principalTypes: ["User"], resourceTypes: ["Member"] } },
       RecordAttendanceOnBehalf: {
@@ -196,23 +203,28 @@ export function viewConfigPolicy(userPoolId: string): string {
 }
 
 /**
- * Own-record personnel/training actions (E2/E3-INFRA): every resourceId(event) call site
- * for these actions passes the caller's own principal.sub (attendance/availability/losap)
- * or a memberId the caller supplied for themself (quals/certifications/transcript/hours) —
- * open to every role rather than gated by group.
+ * Every-role personnel/training actions (E2/E3-INFRA). Two different scopes live here:
+ *  - Own-record: attendance, availability, LOSAP total and SelfUpdateMember act on the
+ *    caller's own principal.sub (the handler derives it, or rejects a path memberId that is
+ *    not the caller's).
+ *  - In-department read: GetQuals, ViewCertifications, ViewTranscript and ViewTrainingHours
+ *    take an arbitrary path memberId and nothing checks it is the caller's — any member may
+ *    read any same-department member's quals, certifications (including attachmentS3Key),
+ *    transcript and hours. The architecture's "Cognito" auth on those routes permits that;
+ *    the department boundary is enforced by the dept-scoped keys, not by Cedar (see above).
  */
-export function selfServiceActionsPolicy(): string {
-  const groupCheck = ROLE_GROUPS.map((g) => `principal in Boxalarm::UserGroup::"${g}"`).join(
-    " || ",
-  );
+export function selfServiceActionsPolicy(userPoolId: string): string {
+  const groupCheck = ROLE_GROUPS.map(
+    (g) => `principal in Boxalarm::UserGroup::"${groupEntityId(userPoolId, g)}"`,
+  ).join(" || ");
   const actions = SELF_SERVICE_ACTIONS.map((a) => `Boxalarm::Action::"${a}"`).join(", ");
   return `permit (\n  principal,\n  action in [${actions}],\n  resource\n) when {\n  ${groupCheck}\n};`;
 }
 
 /** On-behalf-of-others personnel/training actions — duty officer, training officer, or admin tier only. */
-export function officerTierActionsPolicy(): string {
+export function officerTierActionsPolicy(userPoolId: string): string {
   const groupCheck = OFFICER_TIER_GROUPS.map(
-    (g) => `principal in Boxalarm::UserGroup::"${g}"`,
+    (g) => `principal in Boxalarm::UserGroup::"${groupEntityId(userPoolId, g)}"`,
   ).join(" || ");
   const actions = OFFICER_TIER_ACTIONS.map((a) => `Boxalarm::Action::"${a}"`).join(", ");
   return `permit (\n  principal,\n  action in [${actions}],\n  resource\n) when {\n  ${groupCheck}\n};`;
