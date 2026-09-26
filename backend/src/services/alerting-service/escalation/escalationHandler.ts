@@ -4,6 +4,7 @@ import { emitOutcomeMetric } from '@boxalarm/metrics';
 import { createDynamoClient, readAlertingConfig } from '../eligibility/dynamoClient.js';
 import { logError, logInfo } from '../dispatches/logger.js';
 import { parseRosterItem } from '../fanout/fanOut.js';
+import { deriveFanOutKey } from '../fanout/idempotencyKey.js';
 import { readDispatchAlertText, type DispatchAlertText } from '../channels/channelEnvelope.js';
 import { getSnsClient, publishEscalationTriggered, readAlertingTopicConfig } from './snsClient.js';
 
@@ -104,7 +105,16 @@ export const handler = async (payload: unknown): Promise<{ outcome: EscalationOu
   }
 
   const escalatedAt = Math.floor(Date.now() / 1000);
-  const idempotencyKey = `${dispatchId}#${toneSequence}#${memberId}#VOICE`;
+  // Same canonical producer key as fan-out and the tone evaluator (lowercase channel). The voice
+  // worker writes its own send guard under RECEIPT#{memberId}#VOICE#{toneSequence}; sharing that
+  // key made whichever write landed second lose — the worker duplicate-skipped the call, or this
+  // transaction cancelled and never recorded the escalation.
+  const { sk: receiptSk, idempotencyKey } = deriveFanOutKey({
+    dispatchId,
+    toneSequence,
+    memberId,
+    channel: 'voice',
+  });
 
   // Publish before the DynamoDB write, not after: publishEscalationTriggered carries a
   // deterministic SNS FIFO MessageDeduplicationId (dispatchId#toneSequence#memberId#voice), so a
@@ -152,12 +162,12 @@ export const handler = async (payload: unknown): Promise<{ outcome: EscalationOu
               TableName: tableName,
               Item: {
                 pk,
-                sk: `RECEIPT#${memberId}#VOICE#${toneSequence}`,
+                sk: receiptSk,
                 entityType: 'DELIVERY_RECEIPT',
                 dispatchId,
                 memberId,
                 deptId,
-                channel: 'VOICE',
+                channel: 'voice',
                 channelTier: 'escalation',
                 toneSequence,
                 sentAt: escalatedAt,

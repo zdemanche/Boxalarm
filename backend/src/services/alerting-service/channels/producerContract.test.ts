@@ -9,9 +9,10 @@
  * the parser.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { ConditionalCheckFailedException } from '@aws-sdk/client-dynamodb';
 import type { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
 import type { SNSClient } from '@aws-sdk/client-sns';
-import type { DynamoDBStreamEvent } from 'aws-lambda';
+import type { DynamoDBStreamEvent, SQSEvent } from 'aws-lambda';
 import { parseChannelEnvelope, type ChannelName } from './channelEnvelope.js';
 
 interface FakeItem {
@@ -70,7 +71,9 @@ function createFakeDdb(seed: readonly FakeItem[]): {
       case 'PutCommand': {
         const put = input as { Item: FakeItem; ConditionExpression?: string };
         if (!conditionHolds(put.Item, put.ConditionExpression)) {
-          return Promise.reject(conditionFailed('ConditionalCheckFailedException'));
+          return Promise.reject(
+            new ConditionalCheckFailedException({ message: 'exists', $metadata: {} }),
+          );
         }
         items.set(keyOf(put.Item), put.Item);
         return Promise.resolve({});
@@ -141,6 +144,7 @@ function memberSnapshot(memberId: string, roles: readonly string[] = []): FakeIt
       { channel: 'PUSH', token: `tok-${memberId}`, platform: 'APNS', valid: true },
       { channel: 'sms', token: '+15551234567', valid: true },
       { channel: 'SMS', phoneNumber: '+15551234567', valid: true },
+      { channel: 'VOICE', phoneNumber: '+15557654321', valid: true },
     ],
     availabilityState: 'AVAILABLE',
     snapshotUpdatedAt: 1000,
@@ -223,6 +227,31 @@ function mockAwsClients(ddb: DynamoDBDocumentClient, sns: SNSClient): void {
   }));
 }
 
+type ProviderSpy = ReturnType<typeof providerSpy>;
+
+function providerSpy() {
+  return vi
+    .fn<(channel: string, target: string, message: string, env: unknown) => Promise<void>>()
+    .mockResolvedValue(undefined);
+}
+
+/**
+ * Hands a captured publish to the real channel worker for its routed channel, exactly as the
+ * SQS subscription would (rawMessageDelivery: body === Message), sharing the producer's table.
+ */
+async function deliverThroughWorker(
+  publish: PublishInput,
+  sendViaHttpProvider: ProviderSpy,
+): Promise<{ batchItemFailures: { itemIdentifier: string }[] }> {
+  vi.doMock('./httpProviderAdapter.js', () => ({ sendViaHttpProvider }));
+  const { createChannelWorkerHandler } = await import('./deliverChannelMessage.js');
+  const worker = createChannelWorkerHandler(routedChannel(publish));
+  const event = {
+    Records: [{ messageId: publish.MessageDeduplicationId, body: publish.Message }],
+  } as unknown as SQSEvent;
+  return worker(event);
+}
+
 describe('alerting topic producer -> channel worker contract', () => {
   const originalEnv = { ...process.env };
 
@@ -240,6 +269,7 @@ describe('alerting topic producer -> channel worker contract', () => {
     vi.doUnmock('../escalation/snsClient.js');
     vi.doUnmock('../escalation/scheduleEscalation.js');
     vi.doUnmock('../fanout/fanOut.js');
+    vi.doUnmock('./httpProviderAdapter.js');
     vi.restoreAllMocks();
   });
 
@@ -367,6 +397,59 @@ describe('alerting topic producer -> channel worker contract', () => {
     const payload = (JSON.parse(sns.published[0]!.Message) as { payload: Record<string, unknown> })
       .payload;
     expect(payload.isTest).toBe(false);
+  });
+
+  it('chain: fan-out push + sms pages reach the provider through the real workers', async () => {
+    const ddb = createFakeDdb([memberSnapshot('mbr-1')]);
+    const sns = createFakeSns();
+    mockAwsClients(ddb.client, sns.client);
+    const { handler } = await import('../fanout/handler.js');
+    await handler(dispatchAlertInsertEvent());
+    const sendViaHttpProvider = providerSpy();
+
+    for (const publish of sns.published) {
+      expect(await deliverThroughWorker(publish, sendViaHttpProvider)).toEqual({
+        batchItemFailures: [],
+      });
+    }
+
+    expect(sendViaHttpProvider.mock.calls.map((call) => call.slice(0, 3)).sort()).toEqual([
+      ['push', 'tok-mbr-1', 'STRUCTURE_FIRE — 123 Main St'],
+      ['sms', '+15551234567', 'STRUCTURE_FIRE — 123 Main St'],
+    ]);
+  });
+
+  it('chain: a voice escalation reaches the provider through the real voice worker (receipt keys do not collide)', async () => {
+    const ddb = createFakeDdb([
+      METADATA_ITEM,
+      memberSnapshot('mbr-1'),
+      unackedRosterEntry('mbr-1'),
+    ]);
+    const sns = createFakeSns();
+    mockAwsClients(ddb.client, sns.client);
+    const { handler } = await import('../escalation/escalationHandler.js');
+    const escalation = {
+      deptId: 'NICHOLS',
+      dispatchId: DISPATCH_ID,
+      memberId: 'mbr-1',
+      toneSequence: 1,
+      channel: 'voice' as const,
+    };
+    expect(await handler(escalation)).toEqual({ outcome: 'ESCALATED' });
+    const sendViaHttpProvider = providerSpy();
+
+    expect(await deliverThroughWorker(sns.published[0]!, sendViaHttpProvider)).toEqual({
+      batchItemFailures: [],
+    });
+
+    expect(sendViaHttpProvider).toHaveBeenCalledTimes(1);
+    expect(sendViaHttpProvider.mock.calls[0]!.slice(0, 3)).toEqual([
+      'voice',
+      '+15557654321',
+      'STRUCTURE_FIRE — 123 Main St',
+    ]);
+    // A Scheduler retry of the same escalation is still absorbed by the producer's own guard.
+    expect(await handler(escalation)).toEqual({ outcome: 'SKIPPED_ALREADY_ESCALATED' });
   });
 
   it('a published Message with deptId stripped is still rejected by the parser (negative control)', async () => {

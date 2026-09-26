@@ -199,9 +199,9 @@ describe('E1-S3 chain: fan-out -> schedule -> escalation-fired handler', () => {
       smsBefore,
     );
     expect(
-      alerting.items.get('DEPT#NICHOLS#DISPATCH#dispatch-1#RECEIPT#mbr-1#VOICE#1'),
+      alerting.items.get('DEPT#NICHOLS#DISPATCH#dispatch-1#RECEIPT#mbr-1#voice#1'),
     ).toBeDefined();
-    expect(alerting.items.has('DEPT#NICHOLS#DISPATCH#dispatch-1#RECEIPT#mbr-2#VOICE#1')).toBe(
+    expect(alerting.items.has('DEPT#NICHOLS#DISPATCH#dispatch-1#RECEIPT#mbr-2#voice#1')).toBe(
       false,
     );
 
