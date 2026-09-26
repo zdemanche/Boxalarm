@@ -64,10 +64,14 @@ export class AlertingCanary extends pulumi.ComponentResource {
           {
             Sid: "AlertingTableCanaryReadWrite",
             Effect: "Allow",
+            // canary/handler.ts: Get (pointer, self-test run), Put (pointer, CANARY_RUN,
+            // self-test run, cooldown), Delete (clearCanaryPointer), and createManualDispatch's
+            // TransactWriteCommand, whose Put items are authorized as PutItem.
             Action: [
               "dynamodb:GetItem",
               "dynamodb:PutItem",
               "dynamodb:UpdateItem",
+              "dynamodb:DeleteItem",
               "dynamodb:Query",
               "dynamodb:TransactWriteItems",
             ],
