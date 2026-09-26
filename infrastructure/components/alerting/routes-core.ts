@@ -5,7 +5,7 @@ import { ServiceLogGroup } from "../observability/service-log-group";
 import { IamPolicyStatement } from "../observability/observability-policy";
 import { requireEnv } from "../shared/env";
 import { lambdaCode, LAMBDA_HANDLER } from "../shared/lambda-code";
-import { AlertingRoute } from "./route-lambda";
+import { AlertingRoute, verifiedPermissionsStatement } from "./route-lambda";
 import { Escalation } from "./escalation";
 import { grantAlertingCmk } from "./alerting-cmk";
 
@@ -20,15 +20,6 @@ export interface RoutesCoreArgs {
   escalation: Escalation;
   policyStoreId: pulumi.Input<string>;
   permissionsBoundaryArn?: pulumi.Input<string>;
-}
-
-function verifiedPermissionsStatement(): IamPolicyStatement {
-  return {
-    Sid: "VerifiedPermissionsIsAuthorized",
-    Effect: "Allow",
-    Action: ["verifiedpermissions:IsAuthorizedWithToken"],
-    Resource: "*",
-  };
 }
 
 /**

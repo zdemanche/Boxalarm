@@ -1,10 +1,9 @@
 import * as pulumi from "@pulumi/pulumi";
 import { HttpApi } from "../api/http-api";
 import { ServiceLogGroup } from "../observability/service-log-group";
-import { IamPolicyStatement } from "../observability/observability-policy";
 import { requireEnv } from "../shared/env";
 import { lambdaCode, LAMBDA_HANDLER } from "../shared/lambda-code";
-import { AlertingRoute } from "./route-lambda";
+import { AlertingRoute, verifiedPermissionsStatement } from "./route-lambda";
 import { grantAlertingCmk } from "./alerting-cmk";
 
 export interface RoutesOpsArgs {
@@ -52,12 +51,7 @@ export class RoutesOps extends pulumi.ComponentResource {
     super("boxalarm:alerting:RoutesOps", name, {}, opts);
     const { env } = args;
 
-    const verifiedPermissionsStatement: IamPolicyStatement = {
-      Sid: "VerifiedPermissionsIsAuthorized",
-      Effect: "Allow",
-      Action: ["verifiedpermissions:IsAuthorizedWithToken"],
-      Resource: "*",
-    };
+    const vpStatement = verifiedPermissionsStatement();
 
     // src/services/alerting-service/selfTest/postHandler.handler
     this.selfTestPost = new AlertingRoute(
@@ -82,7 +76,7 @@ export class RoutesOps extends pulumi.ComponentResource {
             Action: ["dynamodb:PutItem", "dynamodb:TransactWriteItems", "dynamodb:Query"],
             Resource: args.alertingTableArn as string,
           },
-          verifiedPermissionsStatement,
+          vpStatement,
         ],
         reservedConcurrentExecutions: 3,
         timeout: ROUTES_OPS_TIMEOUT_SECONDS,
@@ -114,7 +108,7 @@ export class RoutesOps extends pulumi.ComponentResource {
             Action: ["dynamodb:Query", "dynamodb:GetItem"],
             Resource: args.alertingTableArn as string,
           },
-          verifiedPermissionsStatement,
+          vpStatement,
         ],
         reservedConcurrentExecutions: 3,
         timeout: ROUTES_OPS_TIMEOUT_SECONDS,
@@ -146,7 +140,7 @@ export class RoutesOps extends pulumi.ComponentResource {
             Action: ["dynamodb:Query"],
             Resource: [tableArn, `${tableArn}/index/GSI1`, `${tableArn}/index/GSI2`],
           },
-          verifiedPermissionsStatement,
+          vpStatement,
         ]),
         reservedConcurrentExecutions: 3,
         timeout: ROUTES_OPS_TIMEOUT_SECONDS,
@@ -178,7 +172,7 @@ export class RoutesOps extends pulumi.ComponentResource {
             Action: ["dynamodb:Query"],
             Resource: args.alertingTableArn as string,
           },
-          verifiedPermissionsStatement,
+          vpStatement,
         ],
         reservedConcurrentExecutions: 3,
         timeout: ROUTES_OPS_TIMEOUT_SECONDS,
@@ -274,7 +268,7 @@ export class RoutesOps extends pulumi.ComponentResource {
             Action: ["dynamodb:Query"],
             Resource: args.alertingTableArn as string,
           },
-          verifiedPermissionsStatement,
+          vpStatement,
         ],
         reservedConcurrentExecutions: 3,
         timeout: ROUTES_OPS_TIMEOUT_SECONDS,
@@ -306,7 +300,7 @@ export class RoutesOps extends pulumi.ComponentResource {
             Action: ["dynamodb:PutItem", "dynamodb:GetItem"],
             Resource: args.alertingTableArn as string,
           },
-          verifiedPermissionsStatement,
+          vpStatement,
         ],
         reservedConcurrentExecutions: 5,
         timeout: ROUTES_OPS_TIMEOUT_SECONDS,
@@ -339,7 +333,7 @@ export class RoutesOps extends pulumi.ComponentResource {
             Action: ["dynamodb:GetItem", "dynamodb:Query"],
             Resource: args.alertingTableArn as string,
           },
-          verifiedPermissionsStatement,
+          vpStatement,
         ],
         reservedConcurrentExecutions: 3,
         timeout: ROUTES_OPS_TIMEOUT_SECONDS,
@@ -371,7 +365,7 @@ export class RoutesOps extends pulumi.ComponentResource {
             Action: ["dynamodb:GetItem", "dynamodb:Query"],
             Resource: args.alertingTableArn as string,
           },
-          verifiedPermissionsStatement,
+          vpStatement,
         ],
         reservedConcurrentExecutions: 3,
         timeout: ROUTES_OPS_TIMEOUT_SECONDS,
@@ -403,7 +397,7 @@ export class RoutesOps extends pulumi.ComponentResource {
             Action: ["dynamodb:Query"],
             Resource: [tableArn, `${tableArn}/index/GSI1`, `${tableArn}/index/GSI2`],
           },
-          verifiedPermissionsStatement,
+          vpStatement,
         ]),
         reservedConcurrentExecutions: 3,
         timeout: ROUTES_OPS_TIMEOUT_SECONDS,

@@ -6,7 +6,7 @@ import { ServiceLogGroup } from "../observability/service-log-group";
 import { IamPolicyStatement } from "../observability/observability-policy";
 import { requireEnv } from "../shared/env";
 import { lambdaCode, LAMBDA_HANDLER } from "../shared/lambda-code";
-import { AlertingRoute } from "./route-lambda";
+import { AlertingRoute, verifiedPermissionsStatement } from "./route-lambda";
 import { grantAlertingCmk } from "./alerting-cmk";
 
 export interface PushTokensArgs {
@@ -58,12 +58,7 @@ export class PushTokens extends pulumi.ComponentResource {
         ],
         Resource: args.platformTableArn as string,
       },
-      {
-        Sid: "VerifiedPermissionsIsAuthorized",
-        Effect: "Allow",
-        Action: ["verifiedpermissions:IsAuthorizedWithToken"],
-        Resource: "*",
-      },
+      verifiedPermissionsStatement(),
     ];
     const personnelEnv = {
       PERSONNEL_TABLE_NAME: args.platformTableName,
