@@ -6,7 +6,9 @@ import {
   BOUNDARY_ARN,
   CMK_ARN,
   TABLE_ARN,
+  esmFor,
   installMocks,
+  lambdaByName,
   isGranted,
   lambdaEnv,
   settle,
@@ -87,3 +89,17 @@ describe("ChannelWorkers — sandbox credentials reach each worker", { timeout: 
     },
   );
 });
+
+describe(
+  "ChannelWorkers — SQS ESM concurrency matches reserved concurrency",
+  { timeout: 30_000 },
+  () => {
+    it.each(["push", "sms", "voice"])("%s worker", async (channel) => {
+      await buildWorkers();
+      const functionName = `boxalarm-dev-alerting-${channel}-worker`;
+      const reserved = lambdaByName(functionName).inputs.reservedConcurrentExecutions as number;
+      expect(reserved).toBe(5);
+      expect(esmFor(functionName).inputs.scalingConfig).toEqual({ maximumConcurrency: reserved });
+    });
+  },
+);

@@ -9,6 +9,8 @@ import { lambdaCode, LAMBDA_HANDLER } from "../shared/lambda-code";
 import { AlertingRoute, verifiedPermissionsStatement } from "./route-lambda";
 import { grantAlertingCmk } from "./alerting-cmk";
 
+const MEMBER_UPDATED_RESERVED_CONCURRENCY = 5;
+
 export interface PushTokensArgs {
   env: string;
   httpApi: HttpApi;
@@ -38,6 +40,7 @@ export class PushTokens extends pulumi.ComponentResource {
   public readonly memberUpdatedQueue: aws.sqs.Queue;
   public readonly memberUpdatedDlq: aws.sqs.Queue;
   public readonly memberUpdatedRule: aws.cloudwatch.EventRule;
+  public readonly memberUpdatedEventSource: aws.lambda.EventSourceMapping;
 
   constructor(name: string, args: PushTokensArgs, opts?: pulumi.ComponentResourceOptions) {
     requireEnv("PushTokens", args.env);
@@ -189,18 +192,21 @@ export class PushTokens extends pulumi.ComponentResource {
             Resource: args.alertingTableArn as string,
           },
         ],
-        reservedConcurrentExecutions: 5,
+        reservedConcurrentExecutions: MEMBER_UPDATED_RESERVED_CONCURRENCY,
         permissionsBoundaryArn: args.alertingPermissionsBoundaryArn,
       },
       { parent: this },
     );
 
-    new aws.lambda.EventSourceMapping(
+    this.memberUpdatedEventSource = new aws.lambda.EventSourceMapping(
       `${name}-member-updated-event-source`,
       {
         eventSourceArn: this.memberUpdatedQueue.arn,
         functionName: this.memberUpdatedConsumer.function.name,
         functionResponseTypes: ["ReportBatchItemFailures"],
+        // Pinned to reserved concurrency: throttled receives count toward maxReceiveCount,
+        // so a bulk roster change could otherwise push member updates to the DLQ early.
+        scalingConfig: { maximumConcurrency: MEMBER_UPDATED_RESERVED_CONCURRENCY },
       },
       { parent: this },
     );

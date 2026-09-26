@@ -114,6 +114,16 @@ describe("PushTokens — member-updated consumer IAM isolation (#208 AC3)", () =
     });
   });
 
+  it("caps the member-updated ESM at the consumer's reserved concurrency", async () => {
+    const pushTokens = await build();
+    const [reserved, esmScaling] = await Promise.all([
+      resolve(pushTokens.memberUpdatedConsumer.function.reservedConcurrentExecutions),
+      resolve(pushTokens.memberUpdatedEventSource.scalingConfig),
+    ]);
+    expect(reserved).toBe(5);
+    expect(esmScaling).toEqual({ maximumConcurrency: 5 });
+  });
+
   it("does not VPC-attach the member-updated consumer", async () => {
     const pushTokens = await build();
     const vpcConfig = await resolve(pushTokens.memberUpdatedConsumer.function.vpcConfig);

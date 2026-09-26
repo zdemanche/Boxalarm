@@ -24,6 +24,14 @@ const PLACEHOLDER_ENDPOINT_URL: Record<AlertingChannel, string> = {
   voice: "https://voice-provider.not-yet-selected.invalid",
 };
 
+/**
+ * Reserved concurrency per channel worker. The SQS event source mapping's
+ * maximumConcurrency is pinned to the same value: when pollers outrun reserved concurrency
+ * the invocations are throttled, and each throttled receive counts toward maxReceiveCount,
+ * pushing pages to the DLQ early.
+ */
+export const WORKER_RESERVED_CONCURRENCY = 5;
+
 export interface ChannelWorkersArgs {
   env: string;
   alertingTableArn: pulumi.Input<string>;
@@ -122,7 +130,7 @@ export class ChannelWorkers extends pulumi.ComponentResource {
                 Resource: [prodArn, sandboxArn],
               },
             ]),
-          reservedConcurrentExecutions: 5,
+          reservedConcurrentExecutions: WORKER_RESERVED_CONCURRENCY,
           timeout: args.workerTimeoutSeconds ?? DEFAULT_WORKER_TIMEOUT_SECONDS,
           memorySize: ALERT_PATH_MEMORY_MB,
           permissionsBoundaryArn: args.permissionsBoundaryArn,
@@ -136,6 +144,7 @@ export class ChannelWorkers extends pulumi.ComponentResource {
           eventSourceArn: queue.arn,
           functionName: worker.function.name,
           functionResponseTypes: ["ReportBatchItemFailures"],
+          scalingConfig: { maximumConcurrency: WORKER_RESERVED_CONCURRENCY },
         },
         { parent: this },
       );
