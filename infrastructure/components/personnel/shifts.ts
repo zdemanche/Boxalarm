@@ -55,12 +55,15 @@ export class Shifts extends pulumi.ComponentResource {
           .all([args.platformTableArn, args.policyStoreArn])
           .apply(([tableArn, policyStoreArn]) => [
             {
+              // ConditionCheckItem: proposeShiftSwap's transaction opens with a
+              // ConditionCheck item (shiftSwap.ts), which IAM authorizes on its own action.
               Sid: "ShiftsTableAccess" as const,
               Effect: "Allow" as const,
               Action: [
                 "dynamodb:GetItem",
                 "dynamodb:PutItem",
                 "dynamodb:UpdateItem",
+                "dynamodb:ConditionCheckItem",
                 "dynamodb:Query",
               ],
               Resource: [tableArn, `${tableArn}/index/GSI3`],

@@ -161,4 +161,16 @@ describe("personnel Lambdas: env and IAM match their handlers", { timeout: 30_00
       expect(isGranted(s, "dynamodb:UpdateItem", TABLE)).toBe(true);
     });
   });
+
+  describe("shifts router", () => {
+    it("can ConditionCheckItem (swap proposal) plus Get/Put/Update and Query table + GSI3", async () => {
+      await build();
+      const s = statementsForRole("boxalarm-dev-personnel-shifts");
+      expect(isGranted(s, "dynamodb:ConditionCheckItem", TABLE)).toBe(true);
+      for (const action of ["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:UpdateItem"]) {
+        expect(isGranted(s, action, TABLE), action).toBe(true);
+      }
+      expect(isGranted(s, "dynamodb:Query", `${TABLE}/index/GSI3`)).toBe(true);
+    });
+  });
 });
