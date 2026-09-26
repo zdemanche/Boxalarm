@@ -62,8 +62,12 @@ export class Quals extends pulumi.ComponentResource {
     super("boxalarm:personnel:Quals", name, {}, opts);
     const { env } = args;
 
+    // readPersonnelServiceConfig (awsClients.ts) throws unless BOTH the table and bus names
+    // are set, on GET and PUT alike — the bus name is required even though quals publishes
+    // via the outbox, not events:PutEvents.
     const baseEnvironment = {
       PERSONNEL_TABLE_NAME: args.platformTableName,
+      PLATFORM_BUS_NAME: args.platformBus.busName,
       VERIFIED_PERMISSIONS_POLICY_STORE_ID: args.policyStoreId,
     };
     const withAuthz = (table: pulumi.Output<IamPolicyStatement[]>) =>

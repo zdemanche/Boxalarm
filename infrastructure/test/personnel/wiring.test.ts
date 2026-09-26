@@ -11,6 +11,7 @@ import {
   REGION,
   installMocks,
   isGranted,
+  lambdaEnv,
   settle,
   statementsForRole,
 } from "../alerting/mock-harness";
@@ -74,6 +75,19 @@ describe("personnel Lambdas: env and IAM match their handlers", { timeout: 30_00
       expect(isGranted(s, "dynamodb:Query", TABLE)).toBe(true);
       expect(isGranted(s, "dynamodb:PutItem", TABLE)).toBe(false);
       expect(isGranted(s, "dynamodb:UpdateItem", TABLE)).toBe(false);
+    });
+
+    it("GET and PUT carry every env key readPersonnelServiceConfig requires", async () => {
+      await build();
+      for (const fn of ["boxalarm-dev-personnel-quals-get", "boxalarm-dev-personnel-quals-put"]) {
+        expect(Object.keys(lambdaEnv(fn))).toEqual(
+          expect.arrayContaining([
+            "PERSONNEL_TABLE_NAME",
+            "PLATFORM_BUS_NAME",
+            "VERIFIED_PERMISSIONS_POLICY_STORE_ID",
+          ]),
+        );
+      }
     });
 
     it("PUT can GetItem (member + cert lookups) and PutItem (qual + outbox transaction)", async () => {
