@@ -67,3 +67,23 @@ describe("ChannelWorkers — placeholder provider endpoints", { timeout: 30_000 
     },
   );
 });
+
+describe("ChannelWorkers — sandbox credentials reach each worker", { timeout: 30_000 }, () => {
+  it.each(["push", "sms", "voice"])(
+    "%s worker gets its own prod and sandbox secret IDs, and can read both",
+    async (channel) => {
+      await buildWorkers();
+      const upper = channel.toUpperCase();
+      const env = lambdaEnv(`boxalarm-dev-alerting-${channel}-worker`);
+      expect(env[`${upper}_PROVIDER_SECRET_ID`]).toBe(
+        `boxalarm-dev-alerting-${channel}-provider-credentials`,
+      );
+      expect(env[`${upper}_PROVIDER_SANDBOX_SECRET_ID`]).toBe(
+        `boxalarm-dev-alerting-${channel}-provider-sandbox-credentials`,
+      );
+      const statements = statementsForRole(`boxalarm-dev-alerting-${channel}-worker`);
+      const sandboxArn = `arn:aws:secretsmanager:us-east-1:123456789012:secret:boxalarm-dev-alerting-${channel}-provider-sandbox-credentials`;
+      expect(isGranted(statements, "secretsmanager:GetSecretValue", sandboxArn)).toBe(true);
+    },
+  );
+});

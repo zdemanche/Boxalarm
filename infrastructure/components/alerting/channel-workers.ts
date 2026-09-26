@@ -40,8 +40,8 @@ export interface ChannelWorkersArgs {
  * Push/SMS/voice channel worker Lambdas (E1-S2/S3-INFRA). Each has its own queue, DLQ,
  * reserved concurrency and provider secret — no worker can read another channel's queue
  * or secret (E1-S11-INFRA isolation). Self-test sandbox secrets (E1-S8-INFRA) are
- * provisioned alongside; wiring the worker to select sandbox-vs-prod credentials on
- * `isTest` is a backend change, not owned here.
+ * provisioned alongside and passed as `{CH}_PROVIDER_SANDBOX_SECRET_ID`; the worker
+ * selects them for `isTest` messages (channels/httpProviderAdapter.ts).
  */
 export class ChannelWorkers extends pulumi.ComponentResource {
   public readonly workers: Record<AlertingChannel, ServiceLambda>;
@@ -93,6 +93,9 @@ export class ChannelWorkers extends pulumi.ComponentResource {
             ALERTING_TABLE_NAME: args.alertingTableName,
             [`${channelUpper}_PROVIDER_ENDPOINT_URL`]: PLACEHOLDER_ENDPOINT_URL[channel],
             [`${channelUpper}_PROVIDER_SECRET_ID`]: providerSecret.name,
+            // Self-test and canary messages (isTest=true) must authenticate with the
+            // sandbox/loopback credentials, never the prod ones (architecture §1.3).
+            [`${channelUpper}_PROVIDER_SANDBOX_SECRET_ID`]: sandboxSecret.name,
           },
           additionalPolicyStatements: pulumi
             .all([providerSecret.arn, sandboxSecret.arn, queue.arn])
