@@ -5,8 +5,10 @@ import {
   BOUNDARY_ARN,
   CMK_ARN,
   TABLE_ARN,
+  alarmByName,
   installMocks,
   isGranted,
+  resourcesOfType,
   settle,
   statementsForRole,
 } from "./mock-harness";
@@ -16,6 +18,14 @@ const PAGE_TOPIC_ARN = "arn:aws:sns:us-east-1:123456789012:boxalarm-dev-alerting
 beforeEach(() => {
   installMocks({ "boxalarm-infra:canaryMemberId": "test-canary-member" });
 });
+
+function scheduleInputs(): Record<string, unknown> {
+  const schedule = resourcesOfType("aws:scheduler/schedule:Schedule").find(
+    (r) => r.inputs.name === "boxalarm-dev-alerting-nichols-fd-canary",
+  );
+  if (!schedule) throw new Error("no canary schedule");
+  return schedule.inputs;
+}
 
 async function build() {
   const canary = new AlertingCanary("canary", {
@@ -56,3 +66,33 @@ describe(
     }
   },
 );
+
+describe("AlertingCanary schedule is config-driven per stack", { timeout: 30_000 }, () => {
+  const ALARMS = [
+    "boxalarm-dev-alerting-canary-failed",
+    "boxalarm-dev-alerting-canary-latency-high",
+  ];
+
+  it("defaults OFF: schedule DISABLED and its breaching-on-missing alarms do not page", async () => {
+    await build();
+    expect(scheduleInputs().state).toBe("DISABLED");
+    for (const alarm of ALARMS) {
+      expect(alarmByName(alarm).inputs.actionsEnabled, alarm).toBe(false);
+    }
+  });
+
+  it("runs only when the stack sets canaryEnabled=true, at the configured rate", async () => {
+    installMocks({
+      "boxalarm-infra:canaryMemberId": "test-canary-member",
+      "boxalarm-infra:canaryEnabled": "true",
+      "boxalarm-infra:canaryScheduleRateMinutes": "5",
+    });
+    await build();
+    expect(scheduleInputs().state).toBe("ENABLED");
+    expect(scheduleInputs().scheduleExpression).toBe("rate(5 minutes)");
+    for (const alarm of ALARMS) {
+      expect(alarmByName(alarm).inputs.actionsEnabled, alarm).toBe(true);
+      expect(alarmByName(alarm).inputs.alarmActions).toEqual([PAGE_TOPIC_ARN]);
+    }
+  });
+});

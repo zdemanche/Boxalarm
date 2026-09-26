@@ -44,6 +44,10 @@ export class AlertingCanary extends pulumi.ComponentResource {
     const config = new pulumi.Config("boxalarm-infra");
     const rateMinutes =
       config.getNumber("canaryScheduleRateMinutes") ?? DEFAULT_SCHEDULE_RATE_MINUTES;
+    // Off unless a stack opts in with `boxalarm-infra:canaryEnabled: true`. Every tick sends
+    // to the canary member on every channel, so a stack runs it only on purpose. While it is
+    // off, its breaching-on-missing alarms must not page, so their actions are disabled too.
+    const canaryEnabled = config.getBoolean("canaryEnabled") ?? false;
     const canaryMemberId = config.requireSecret("canaryMemberId");
 
     this.lambda = new ServiceLambda(
@@ -129,6 +133,7 @@ export class AlertingCanary extends pulumi.ComponentResource {
       {
         name: `boxalarm-${env}-alerting-${deptId}-canary`,
         scheduleExpression: `rate(${rateMinutes} minutes)`,
+        state: canaryEnabled ? "ENABLED" : "DISABLED",
         flexibleTimeWindow: { mode: "OFF" },
         target: { arn: this.lambda.function.arn, roleArn: schedulerRole.arn },
       },
@@ -147,6 +152,7 @@ export class AlertingCanary extends pulumi.ComponentResource {
         period: 300,
         evaluationPeriods: 1,
         treatMissingData: "breaching",
+        actionsEnabled: canaryEnabled,
         alarmActions: [args.pageTopicArn],
       },
       { parent: this },
@@ -164,6 +170,7 @@ export class AlertingCanary extends pulumi.ComponentResource {
         period: 300,
         evaluationPeriods: 1,
         treatMissingData: "breaching",
+        actionsEnabled: canaryEnabled,
         alarmActions: [args.pageTopicArn],
       },
       { parent: this },
