@@ -4,6 +4,7 @@ import { emitOutcomeMetric } from '@boxalarm/metrics';
 import { createDynamoClient, readAlertingConfig } from '../eligibility/dynamoClient.js';
 import { logError, logInfo } from '../dispatches/logger.js';
 import { parseRosterItem } from '../fanout/fanOut.js';
+import { readDispatchAlertText, type DispatchAlertText } from '../channels/channelEnvelope.js';
 import { getSnsClient, publishEscalationTriggered, readAlertingTopicConfig } from './snsClient.js';
 
 const METRIC_NAMESPACE = 'Boxalarm/Alerting';
@@ -85,6 +86,23 @@ export const handler = async (payload: unknown): Promise<{ outcome: EscalationOu
     return { outcome: 'SKIPPED_ACKED' };
   }
 
+  // The voice worker speaks incidentType/address, so source them from the dispatch's METADATA
+  // item exactly as the tone evaluator does. A missing item still pages (placeholder text,
+  // isTest=false): this member has not acked, and a silent skip is the worse failure.
+  let dispatch: DispatchAlertText;
+  try {
+    const metadata = await ddb.send(
+      new GetCommand({ TableName: tableName, Key: { pk, sk: 'METADATA' } }),
+    );
+    if (!metadata.Item) {
+      logInfo('alerting.escalation.dispatch_metadata_missing', { correlationId });
+    }
+    dispatch = readDispatchAlertText(metadata.Item ?? {});
+  } catch (error) {
+    logError('alerting.escalation.read_failed', error, { correlationId });
+    throw error;
+  }
+
   const escalatedAt = Math.floor(Date.now() / 1000);
   const idempotencyKey = `${dispatchId}#${toneSequence}#${memberId}#VOICE`;
 
@@ -101,6 +119,7 @@ export const handler = async (payload: unknown): Promise<{ outcome: EscalationOu
       dispatchId,
       memberId,
       toneSequence,
+      dispatch,
     });
   } catch (error) {
     logError('alerting.escalation.publish_failed', error, { correlationId });

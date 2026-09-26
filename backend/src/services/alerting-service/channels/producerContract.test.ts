@@ -163,6 +163,17 @@ const METADATA_ITEM: FakeItem = {
   currentToneSequence: 1,
 };
 
+function unackedRosterEntry(memberId: string): FakeItem {
+  return {
+    pk: DISPATCH_PK,
+    sk: `ROSTER#${memberId}`,
+    entityType: 'DISPATCH_ROSTER_ENTRY',
+    memberId,
+    ackStatus: 'NONE',
+    currentChannelTier: 'primary',
+  };
+}
+
 function dispatchAlertInsertEvent(): DynamoDBStreamEvent {
   return {
     Records: [
@@ -303,6 +314,59 @@ describe('alerting topic producer -> channel worker contract', () => {
       const payload = (JSON.parse(publish.Message) as { payload: Record<string, unknown> }).payload;
       expect(payload).toMatchObject({ isTest: false, channelTier: 'escalation' });
     }
+  });
+
+  it('voice escalation: the published Message parses for the voice worker with the dispatch text', async () => {
+    const ddb = createFakeDdb([{ ...METADATA_ITEM, isTest: true }, unackedRosterEntry('mbr-1')]);
+    const sns = createFakeSns();
+    mockAwsClients(ddb.client, sns.client);
+    const { handler } = await import('../escalation/escalationHandler.js');
+
+    const result = await handler({
+      deptId: 'NICHOLS',
+      dispatchId: DISPATCH_ID,
+      memberId: 'mbr-1',
+      toneSequence: 2,
+      channel: 'voice',
+    });
+
+    expect(result).toEqual({ outcome: 'ESCALATED' });
+    expect(sns.published).toHaveLength(1);
+    const publish = sns.published[0]!;
+    expect(routedChannel(publish)).toBe('voice');
+    expect(parseChannelEnvelope(publish.Message, 'voice')).toEqual({
+      deptId: 'NICHOLS',
+      dispatchId: DISPATCH_ID,
+      memberId: 'mbr-1',
+      channel: 'voice',
+      toneSequence: 2,
+      incidentType: 'STRUCTURE_FIRE',
+      address: '123 Main St',
+    });
+    const payload = (JSON.parse(publish.Message) as { payload: Record<string, unknown> }).payload;
+    expect(payload).toMatchObject({ isTest: true, channelTier: 'escalation' });
+    expect(publish.MessageGroupId).toBe(DISPATCH_ID);
+  });
+
+  it('voice escalation still pages a parseable Message when the dispatch METADATA item is gone', async () => {
+    const ddb = createFakeDdb([unackedRosterEntry('mbr-1')]);
+    const sns = createFakeSns();
+    mockAwsClients(ddb.client, sns.client);
+    const { handler } = await import('../escalation/escalationHandler.js');
+
+    await handler({
+      deptId: 'NICHOLS',
+      dispatchId: DISPATCH_ID,
+      memberId: 'mbr-1',
+      toneSequence: 1,
+      channel: 'voice',
+    });
+
+    const parsed = parseChannelEnvelope(sns.published[0]!.Message, 'voice');
+    expect(parsed).toMatchObject({ deptId: 'NICHOLS', incidentType: 'DISPATCH' });
+    const payload = (JSON.parse(sns.published[0]!.Message) as { payload: Record<string, unknown> })
+      .payload;
+    expect(payload.isTest).toBe(false);
   });
 
   it('a published Message with deptId stripped is still rejected by the parser (negative control)', async () => {
