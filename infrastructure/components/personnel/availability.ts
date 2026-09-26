@@ -4,6 +4,7 @@ import { ServiceLambda } from "../observability/service-lambda";
 import { ServiceLogGroup } from "../observability/service-log-group";
 import { HttpApi } from "../api/http-api";
 import { verifiedPermissionsPolicyStatement } from "../authz/policy-store";
+import { auditMutationDenyStatement } from "../data/platform-table";
 import { lambdaCode, LAMBDA_HANDLER } from "../shared/lambda-code";
 import { requireEnv } from "../shared/env";
 import { PlatformBus } from "../messaging/platform-bus";
@@ -53,6 +54,8 @@ export class Availability extends pulumi.ComponentResource {
         Action: ["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:UpdateItem"],
         Resource: [arn],
       },
+      // F9.4: holding table-wide UpdateItem, never on a DEPT#*#AUDIT#* row.
+      auditMutationDenyStatement(arn),
     ]);
 
     this.expiryLambda = new ServiceLambda(
@@ -109,6 +112,12 @@ export class Availability extends pulumi.ComponentResource {
       { parent: this },
     );
 
+    // availability/handler.ts creates/deletes schedules named avail-* in the default
+    // group of this account and region only.
+    const region = aws.getRegionOutput({}, { parent: this });
+    const caller = aws.getCallerIdentityOutput({}, { parent: this });
+    const scheduleResourcePattern = pulumi.interpolate`arn:aws:scheduler:${region.name}:${caller.accountId}:schedule/default/avail-*`;
+
     this.createLambda = new ServiceLambda(
       `${name}-create`,
       {
@@ -125,15 +134,20 @@ export class Availability extends pulumi.ComponentResource {
           AVAILABILITY_SCHEDULER_ROLE_ARN: this.schedulerRole.arn,
         },
         additionalPolicyStatements: pulumi
-          .all([tableStatement, pulumi.output(args.policyStoreArn), this.schedulerRole.arn])
-          .apply(([table, policyStoreArn, schedulerRoleArn]) => [
+          .all([
+            tableStatement,
+            pulumi.output(args.policyStoreArn),
+            this.schedulerRole.arn,
+            scheduleResourcePattern,
+          ])
+          .apply(([table, policyStoreArn, schedulerRoleArn, schedulePattern]) => [
             ...table,
             verifiedPermissionsPolicyStatement(policyStoreArn),
             {
               Sid: "AvailabilityManageSchedules" as const,
               Effect: "Allow" as const,
               Action: ["scheduler:CreateSchedule", "scheduler:DeleteSchedule"],
-              Resource: `arn:aws:scheduler:*:*:schedule/default/avail-*`,
+              Resource: schedulePattern,
             },
             {
               Sid: "AvailabilityPassSchedulerRole" as const,
@@ -168,12 +182,12 @@ export class Availability extends pulumi.ComponentResource {
         environment: { ALERTING_TABLE_NAME: args.alertingTableName },
         additionalPolicyStatements: pulumi.output(args.alertingTableArn).apply((arn) => [
           {
+            // eligibility/consumer.ts: one transaction of Put (dedup marker) + Update
+            // (MEMBER_ELIGIBILITY_SNAPSHOT) items, authorized item-by-item —
+            // dynamodb:TransactWriteItems is not an IAM action.
             Sid: "AlertingTableWrite" as const,
             Effect: "Allow" as const,
-            // eligibility/consumer.ts writes one TransactWriteCommand: a Put (EVENT_DEDUP) and an
-            // Update (MEMBER_ELIGIBILITY_SNAPSHOT). DynamoDB authorizes each transaction item as
-            // its own action, so TransactWriteItems alone authorizes nothing.
-            Action: ["dynamodb:TransactWriteItems", "dynamodb:PutItem", "dynamodb:UpdateItem"],
+            Action: ["dynamodb:PutItem", "dynamodb:UpdateItem"],
             Resource: [arn],
           },
         ]),
