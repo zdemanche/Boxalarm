@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { parseChannelEnvelope, resolveChannelTarget } from './channelEnvelope.js';
+import {
+  parseChannelEnvelope,
+  parseMutualAidPromptEnvelope,
+  resolveChannelTarget,
+} from './channelEnvelope.js';
 
 function body(payload: Record<string, unknown>): string {
   return JSON.stringify({
@@ -66,6 +70,38 @@ describe('parseChannelEnvelope', () => {
     expect(() =>
       parseChannelEnvelope(body({ ...validPayload, dispatchId: 'dispatch#1' }), 'push'),
     ).toThrow(/dispatchId/);
+  });
+});
+
+describe('parseMutualAidPromptEnvelope', () => {
+  const prompt = {
+    alertKind: 'mutual_aid_prompt',
+    deptId: 'NICHOLS',
+    dispatchId: 'dispatch-1',
+    memberId: 'officer-1',
+    channel: 'push',
+    incidentType: 'structure-fire',
+    address: '12 Main St',
+  };
+
+  it('returns undefined for a dispatch page so the caller parses it as one', () => {
+    expect(parseMutualAidPromptEnvelope(body(validPayload), 'push')).toBeUndefined();
+  });
+
+  it('parses a mutual-aid prompt, which carries no toneSequence', () => {
+    expect(parseMutualAidPromptEnvelope(body(prompt), 'push')).toEqual(prompt);
+  });
+
+  it('throws when a mutual-aid prompt is missing deptId', () => {
+    const rest: Record<string, unknown> = { ...prompt };
+    delete rest.deptId;
+    expect(() => parseMutualAidPromptEnvelope(body(rest), 'push')).toThrow(
+      'mutual-aid prompt envelope failed shape validation',
+    );
+  });
+
+  it('throws when a mutual-aid prompt is routed to a non-push worker', () => {
+    expect(() => parseMutualAidPromptEnvelope(body(prompt), 'sms')).toThrow(/channel=push/);
   });
 });
 

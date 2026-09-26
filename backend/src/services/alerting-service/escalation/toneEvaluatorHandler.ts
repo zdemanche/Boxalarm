@@ -570,6 +570,7 @@ export const handler = async (payload: unknown): Promise<{ outcome: ToneOutcome 
         topicArn,
         deptId,
         dispatchId,
+        dispatch,
         reason: 'TONE_3_PREDICATE_UNMET',
       });
     } catch (error) {

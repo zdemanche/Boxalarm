@@ -135,6 +135,89 @@ export function parseChannelEnvelope(
   return { deptId, dispatchId, memberId, channel, toneSequence, incidentType, address };
 }
 
+/**
+ * Officer mutual-aid prompt (F1.13): rides the push queue with `alertKind: 'mutual_aid_prompt'`
+ * and deliberately no toneSequence — the push worker branches on alertKind and guards it in its
+ * own namespace rather than a per-tone RECEIPT# key an officer toned at tone 3 already holds.
+ */
+export interface MutualAidPromptPayload {
+  readonly alertKind: 'mutual_aid_prompt';
+  readonly deptId: string;
+  readonly dispatchId: string;
+  readonly memberId: string;
+  readonly channel: 'push';
+  readonly incidentType: string;
+  readonly address: string;
+}
+
+export interface MutualAidPromptPagePayload extends MutualAidPromptPayload {
+  readonly isTest: boolean;
+}
+
+export interface MutualAidPromptInput {
+  readonly deptId: VerifiedDeptId;
+  readonly dispatchId: string;
+  readonly memberId: string;
+  readonly dispatch: DispatchAlertText;
+}
+
+export function buildMutualAidPromptPayload(
+  input: MutualAidPromptInput,
+): MutualAidPromptPagePayload {
+  return {
+    alertKind: 'mutual_aid_prompt',
+    deptId: input.deptId,
+    dispatchId: input.dispatchId,
+    memberId: input.memberId,
+    channel: 'push',
+    incidentType: textOrFallback(input.dispatch.incidentType, INCIDENT_TYPE_FALLBACK),
+    address: textOrFallback(input.dispatch.address, ADDRESS_FALLBACK),
+    isTest: input.dispatch.isTest,
+  };
+}
+
+/**
+ * Returns undefined when the body is not a mutual-aid prompt (the caller then parses it as a
+ * dispatch page); throws when it claims to be one but is malformed or misrouted.
+ */
+export function parseMutualAidPromptEnvelope(
+  body: string,
+  expectedChannel: ChannelName,
+): MutualAidPromptPayload | undefined {
+  const raw = JSON.parse(body) as Record<string, unknown>;
+  const payload = raw.payload as Record<string, unknown> | undefined;
+  if (payload?.alertKind !== 'mutual_aid_prompt') {
+    return undefined;
+  }
+  const { deptId, dispatchId, memberId, channel, incidentType, address } = payload;
+  if (
+    typeof deptId !== 'string' ||
+    typeof dispatchId !== 'string' ||
+    typeof memberId !== 'string' ||
+    channel !== 'push' ||
+    typeof incidentType !== 'string' ||
+    typeof address !== 'string'
+  ) {
+    throw new Error('mutual-aid prompt envelope failed shape validation');
+  }
+  if (channel !== expectedChannel) {
+    throw new Error(
+      `mutual-aid prompt routed to the ${expectedChannel} worker carries channel=${channel}`,
+    );
+  }
+  assertNoDelimiter(dispatchId, 'dispatchId');
+  assertNoDelimiter(memberId, 'memberId');
+  return {
+    alertKind: 'mutual_aid_prompt',
+    deptId,
+    dispatchId,
+    memberId,
+    channel,
+    incidentType,
+    address,
+  };
+}
+
 export function noTargetReason(channel: ChannelName): string {
   return `${channel}: no target registered`;
 }

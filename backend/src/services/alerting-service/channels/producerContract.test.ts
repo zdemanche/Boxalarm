@@ -13,7 +13,11 @@ import { ConditionalCheckFailedException } from '@aws-sdk/client-dynamodb';
 import type { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
 import type { SNSClient } from '@aws-sdk/client-sns';
 import type { DynamoDBStreamEvent, SQSEvent } from 'aws-lambda';
-import { parseChannelEnvelope, type ChannelName } from './channelEnvelope.js';
+import {
+  parseChannelEnvelope,
+  parseMutualAidPromptEnvelope,
+  type ChannelName,
+} from './channelEnvelope.js';
 
 interface FakeItem {
   pk: string;
@@ -450,6 +454,68 @@ describe('alerting topic producer -> channel worker contract', () => {
     ]);
     // A Scheduler retry of the same escalation is still absorbed by the producer's own guard.
     expect(await handler(escalation)).toEqual({ outcome: 'SKIPPED_ALREADY_ESCALATED' });
+  });
+
+  it('tone 3 + mutual aid: every page and the officer prompt parse, and all reach the provider through the push/sms workers', async () => {
+    const ddb = createFakeDdb([METADATA_ITEM, memberSnapshot('officer-1', ['OFFICER'])]);
+    const sns = createFakeSns();
+    mockAwsClients(ddb.client, sns.client);
+    const { handler } = await import('../escalation/toneEvaluatorHandler.js');
+
+    expect(await handler({ deptId: 'NICHOLS', dispatchId: DISPATCH_ID, toneSequence: 3 })).toEqual({
+      outcome: 'FIRED',
+    });
+
+    const prompts = sns.published.filter(
+      (publish) =>
+        parseMutualAidPromptEnvelope(publish.Message, routedChannel(publish)) !== undefined,
+    );
+    const pages = sns.published.filter((publish) => !prompts.includes(publish));
+    expect(pages.map(routedChannel).sort()).toEqual(['push', 'sms']);
+    for (const publish of pages) {
+      expect(parseChannelEnvelope(publish.Message, routedChannel(publish))).toMatchObject({
+        deptId: 'NICHOLS',
+        memberId: 'officer-1',
+        toneSequence: 3,
+      });
+    }
+    expect(prompts).toHaveLength(1);
+    const prompt = prompts[0]!;
+    expect(routedChannel(prompt)).toBe('push');
+    expect(parseMutualAidPromptEnvelope(prompt.Message, 'push')).toEqual({
+      alertKind: 'mutual_aid_prompt',
+      deptId: 'NICHOLS',
+      dispatchId: DISPATCH_ID,
+      memberId: 'officer-1',
+      channel: 'push',
+      incidentType: 'STRUCTURE_FIRE',
+      address: '123 Main St',
+    });
+    expect(
+      (JSON.parse(prompt.Message) as { payload: Record<string, unknown> }).payload,
+    ).toMatchObject({ isTest: false });
+    // A misrouted prompt is rejected, not silently delivered as a page.
+    expect(() => parseMutualAidPromptEnvelope(prompt.Message, 'sms')).toThrow(/channel=push/);
+
+    const sendViaHttpProvider = providerSpy();
+    for (const publish of sns.published) {
+      expect(await deliverThroughWorker(publish, sendViaHttpProvider)).toEqual({
+        batchItemFailures: [],
+      });
+    }
+    // The officer's tone-3 push and the mutual-aid prompt are both delivered: neither guard
+    // suppresses the other.
+    expect(sendViaHttpProvider.mock.calls.map((call) => call.slice(0, 3)).sort()).toEqual([
+      ['push', 'tok-officer-1', 'MUTUAL AID REQUESTED — STRUCTURE_FIRE — 123 Main St'],
+      ['push', 'tok-officer-1', 'STRUCTURE_FIRE — 123 Main St'],
+      ['sms', '+15551234567', 'STRUCTURE_FIRE — 123 Main St'],
+    ]);
+
+    // Redelivery of the same SQS messages is absorbed by the worker guards.
+    for (const publish of sns.published) {
+      await deliverThroughWorker(publish, sendViaHttpProvider);
+    }
+    expect(sendViaHttpProvider).toHaveBeenCalledTimes(3);
   });
 
   it('a published Message with deptId stripped is still rejected by the parser (negative control)', async () => {
