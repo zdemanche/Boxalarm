@@ -109,6 +109,12 @@ export class Availability extends pulumi.ComponentResource {
       { parent: this },
     );
 
+    // availability/handler.ts creates/deletes schedules named avail-* in the default
+    // group of this account and region only.
+    const region = aws.getRegionOutput({}, { parent: this });
+    const caller = aws.getCallerIdentityOutput({}, { parent: this });
+    const scheduleResourcePattern = pulumi.interpolate`arn:aws:scheduler:${region.name}:${caller.accountId}:schedule/default/avail-*`;
+
     this.createLambda = new ServiceLambda(
       `${name}-create`,
       {
@@ -125,15 +131,20 @@ export class Availability extends pulumi.ComponentResource {
           AVAILABILITY_SCHEDULER_ROLE_ARN: this.schedulerRole.arn,
         },
         additionalPolicyStatements: pulumi
-          .all([tableStatement, pulumi.output(args.policyStoreArn), this.schedulerRole.arn])
-          .apply(([table, policyStoreArn, schedulerRoleArn]) => [
+          .all([
+            tableStatement,
+            pulumi.output(args.policyStoreArn),
+            this.schedulerRole.arn,
+            scheduleResourcePattern,
+          ])
+          .apply(([table, policyStoreArn, schedulerRoleArn, schedulePattern]) => [
             ...table,
             verifiedPermissionsPolicyStatement(policyStoreArn),
             {
               Sid: "AvailabilityManageSchedules" as const,
               Effect: "Allow" as const,
               Action: ["scheduler:CreateSchedule", "scheduler:DeleteSchedule"],
-              Resource: `arn:aws:scheduler:*:*:schedule/default/avail-*`,
+              Resource: schedulePattern,
             },
             {
               Sid: "AvailabilityPassSchedulerRole" as const,

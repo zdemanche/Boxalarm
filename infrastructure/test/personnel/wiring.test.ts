@@ -173,4 +173,15 @@ describe("personnel Lambdas: env and IAM match their handlers", { timeout: 30_00
       expect(isGranted(s, "dynamodb:Query", `${TABLE}/index/GSI3`)).toBe(true);
     });
   });
+
+  describe("availability create", () => {
+    it("scopes schedule management to this account and region's avail-* schedules (MIN-1)", async () => {
+      await build();
+      const s = statementsForRole("boxalarm-dev-personnel-availability-create");
+      const manage = s.find((st) => st.Sid === "AvailabilityManageSchedules");
+      expect(manage?.Resource).toBe(
+        `arn:aws:scheduler:${REGION}:${ACCOUNT_ID}:schedule/default/avail-*`,
+      );
+    });
+  });
 });
