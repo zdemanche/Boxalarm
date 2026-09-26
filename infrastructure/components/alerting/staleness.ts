@@ -80,6 +80,8 @@ export class EligibilityStaleness extends pulumi.ComponentResource {
             },
           ],
         }),
+        // Same alerting-plane boundary as the canary and escalation scheduler roles.
+        permissionsBoundary: args.permissionsBoundaryArn,
       },
       { parent: this },
     );
@@ -91,7 +93,14 @@ export class EligibilityStaleness extends pulumi.ComponentResource {
         policy: this.lambda.function.arn.apply((fnArn) =>
           JSON.stringify({
             Version: "2012-10-17",
-            Statement: [{ Effect: "Allow", Action: "lambda:InvokeFunction", Resource: fnArn }],
+            Statement: [
+              {
+                Sid: "InvokeStalenessCheckOnly",
+                Effect: "Allow",
+                Action: "lambda:InvokeFunction",
+                Resource: fnArn,
+              },
+            ],
           }),
         ),
       },
