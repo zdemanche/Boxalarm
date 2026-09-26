@@ -32,11 +32,12 @@ export class Events extends pulumi.ComponentResource {
     super("boxalarm:training:Events", name, {}, opts);
     const { env } = args;
 
-    const tableStatement = pulumi.output(args.platformTableArn).apply((arn) => [
+    // createEventHandler: createTrainingEvent is a single Put.
+    const createStatement = pulumi.output(args.platformTableArn).apply((arn) => [
       {
-        Sid: "TrainingEventsTableAccess" as const,
+        Sid: "TrainingEventsCreateAccess" as const,
         Effect: "Allow" as const,
-        Action: ["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:Query"],
+        Action: ["dynamodb:PutItem"],
         Resource: [arn],
       },
     ]);
@@ -79,7 +80,7 @@ export class Events extends pulumi.ComponentResource {
           VERIFIED_PERMISSIONS_POLICY_STORE_ID: args.policyStoreId,
         },
         additionalPolicyStatements: pulumi
-          .all([tableStatement, vpStatement])
+          .all([createStatement, vpStatement])
           .apply(([table, vp]) => [...table, ...vp]),
       },
       { parent: this },

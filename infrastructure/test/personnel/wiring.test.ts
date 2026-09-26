@@ -4,6 +4,7 @@ import { ServiceLogGroup } from "../../components/observability/service-log-grou
 import { HttpApi } from "../../components/api/http-api";
 import { PlatformBus } from "../../components/messaging/platform-bus";
 import { Availability } from "../../components/personnel/availability";
+import { Losap } from "../../components/personnel/losap";
 import { Members } from "../../components/personnel/members";
 import { Quals } from "../../components/personnel/quals";
 import { Shifts } from "../../components/personnel/shifts";
@@ -67,6 +68,7 @@ async function build() {
     alertingPermissionsBoundaryArn: BOUNDARY_ARN,
   };
   new Members("members", common);
+  new Losap("losap", common);
   new Quals("quals", { ...common, ...alerting });
   new Availability("availability", { ...common, ...alerting });
   new Shifts("shifts", { ...common, deptId: "nichols-fd" });
@@ -182,6 +184,21 @@ describe("personnel Lambdas: env and IAM match their handlers", { timeout: 30_00
       expect(manage?.Resource).toBe(
         `arn:aws:scheduler:${REGION}:${ACCOUNT_ID}:schedule/default/avail-*`,
       );
+    });
+  });
+
+  describe("losap least privilege (MIN-2)", () => {
+    it("member total holds base-table Query only; year-end adds GSI3 (listMembers)", async () => {
+      await build();
+      const total = statementsForRole("boxalarm-dev-personnel-losap-member-total");
+      expect(isGranted(total, "dynamodb:Query", TABLE)).toBe(true);
+      expect(isGranted(total, "dynamodb:Query", `${TABLE}/index/GSI1`)).toBe(false);
+      expect(isGranted(total, "dynamodb:Query", `${TABLE}/index/GSI3`)).toBe(false);
+      expect(isGranted(total, "dynamodb:GetItem", TABLE)).toBe(false);
+
+      const yearEnd = statementsForRole("boxalarm-dev-personnel-losap-year-end-report");
+      expect(isGranted(yearEnd, "dynamodb:Query", TABLE)).toBe(true);
+      expect(isGranted(yearEnd, "dynamodb:Query", `${TABLE}/index/GSI3`)).toBe(true);
     });
   });
 });

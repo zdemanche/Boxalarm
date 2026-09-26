@@ -162,4 +162,43 @@ describe("training Lambdas: env and IAM match their handlers", { timeout: 30_000
       });
     });
   });
+
+  describe("least privilege (MIN-2)", () => {
+    const WRITES = ["dynamodb:PutItem", "dynamodb:UpdateItem", "dynamodb:DeleteItem"];
+
+    it("certifications create holds PutItem only", async () => {
+      await build();
+      const s = statementsForRole("boxalarm-dev-training-certifications-create");
+      expect(isGranted(s, "dynamodb:PutItem", TABLE)).toBe(true);
+      for (const action of ["dynamodb:GetItem", "dynamodb:UpdateItem", "dynamodb:Query"]) {
+        expect(isGranted(s, action, TABLE), action).toBe(false);
+      }
+    });
+
+    it("certifications list holds base-table Query only", async () => {
+      await build();
+      const s = statementsForRole("boxalarm-dev-training-certifications-list");
+      expect(isGranted(s, "dynamodb:Query", TABLE)).toBe(true);
+      for (const action of [...WRITES, "dynamodb:GetItem"]) {
+        expect(isGranted(s, action, TABLE), action).toBe(false);
+      }
+    });
+
+    it("certifications revoke holds GetItem + UpdateItem + PutItem, no Query", async () => {
+      await build();
+      const s = statementsForRole("boxalarm-dev-training-certifications-revoke");
+      for (const action of ["dynamodb:GetItem", "dynamodb:UpdateItem", "dynamodb:PutItem"]) {
+        expect(isGranted(s, action, TABLE), action).toBe(true);
+      }
+      expect(isGranted(s, "dynamodb:Query", TABLE)).toBe(false);
+    });
+
+    it("events create holds PutItem only", async () => {
+      await build();
+      const s = statementsForRole("boxalarm-dev-training-events-create");
+      expect(isGranted(s, "dynamodb:PutItem", TABLE)).toBe(true);
+      expect(isGranted(s, "dynamodb:GetItem", TABLE)).toBe(false);
+      expect(isGranted(s, "dynamodb:Query", TABLE)).toBe(false);
+    });
+  });
 });

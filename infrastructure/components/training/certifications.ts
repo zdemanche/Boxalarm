@@ -80,19 +80,31 @@ export class Certifications extends pulumi.ComponentResource {
     const vpStatement = pulumi
       .output(args.policyStoreArn)
       .apply((policyStoreArn) => [verifiedPermissionsPolicyStatement(policyStoreArn)]);
-    const readWriteStatement = pulumi.output(args.platformTableArn).apply((arn) => [
+    // Per-Lambda least privilege, scoped to what each handler actually calls.
+    // create.ts: createCertification is one transaction of two Puts (cert + audit row).
+    const createStatement = pulumi.output(args.platformTableArn).apply((arn) => [
       {
-        Sid: "CertificationsReadWriteAccess" as const,
+        Sid: "CertificationsCreateAccess" as const,
         Effect: "Allow" as const,
-        Action: ["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:UpdateItem", "dynamodb:Query"],
+        Action: ["dynamodb:PutItem"],
         Resource: [arn],
       },
     ]);
-    const readOnlyStatement = pulumi.output(args.platformTableArn).apply((arn) => [
+    // list.ts: listCertificationsForMember is a base-table Query.
+    const listStatement = pulumi.output(args.platformTableArn).apply((arn) => [
       {
-        Sid: "CertificationsReadAccess" as const,
+        Sid: "CertificationsListAccess" as const,
         Effect: "Allow" as const,
-        Action: ["dynamodb:GetItem", "dynamodb:Query"],
+        Action: ["dynamodb:Query"],
+        Resource: [arn],
+      },
+    ]);
+    // revoke.ts: GetItem (current status), then one transaction of Update (cert) + Put (audit).
+    const revokeStatement = pulumi.output(args.platformTableArn).apply((arn) => [
+      {
+        Sid: "CertificationsRevokeAccess" as const,
+        Effect: "Allow" as const,
+        Action: ["dynamodb:GetItem", "dynamodb:UpdateItem", "dynamodb:PutItem"],
         Resource: [arn],
       },
     ]);
@@ -108,7 +120,7 @@ export class Certifications extends pulumi.ComponentResource {
         logGroup: args.logGroup,
         environment: baseEnvironment,
         additionalPolicyStatements: pulumi
-          .all([readWriteStatement, vpStatement])
+          .all([createStatement, vpStatement])
           .apply(([table, vp]) => [...table, ...vp]),
       },
       { parent: this },
@@ -133,7 +145,7 @@ export class Certifications extends pulumi.ComponentResource {
         logGroup: args.logGroup,
         environment: baseEnvironment,
         additionalPolicyStatements: pulumi
-          .all([readOnlyStatement, vpStatement])
+          .all([listStatement, vpStatement])
           .apply(([table, vp]) => [...table, ...vp]),
       },
       { parent: this },
@@ -158,7 +170,7 @@ export class Certifications extends pulumi.ComponentResource {
         logGroup: args.logGroup,
         environment: baseEnvironment,
         additionalPolicyStatements: pulumi
-          .all([readWriteStatement, vpStatement])
+          .all([revokeStatement, vpStatement])
           .apply(([table, vp]) => [...table, ...vp]),
       },
       { parent: this },
