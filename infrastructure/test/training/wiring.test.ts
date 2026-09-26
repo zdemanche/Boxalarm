@@ -6,6 +6,7 @@ import { Certifications } from "../../components/training/certifications";
 import { Events } from "../../components/training/events";
 import { Hours } from "../../components/training/hours";
 import { Reports } from "../../components/training/reports";
+import { Transcript } from "../../components/training/transcript";
 import {
   ACCOUNT_ID,
   REGION,
@@ -61,6 +62,7 @@ async function build() {
   new Events("events", common);
   new Hours("hours", common);
   new Reports("reports", common);
+  new Transcript("transcript", common);
   await settle();
 }
 
@@ -112,6 +114,15 @@ describe("training Lambdas: env and IAM match their handlers", { timeout: 30_000
       const s = statementsForRole("boxalarm-dev-training-reports-iso");
       expect(isGranted(s, "dynamodb:Query", GSI3)).toBe(true);
       expect(isGranted(s, "dynamodb:Query", TABLE)).toBe(true);
+    });
+  });
+
+  describe("transcript", () => {
+    it("can Query the base table (certifications) and GSI1 (attendance history)", async () => {
+      await build();
+      const s = statementsForRole("boxalarm-dev-training-transcript-get");
+      expect(isGranted(s, "dynamodb:Query", TABLE)).toBe(true);
+      expect(isGranted(s, "dynamodb:Query", GSI1)).toBe(true);
     });
   });
 });
