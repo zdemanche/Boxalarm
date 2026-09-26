@@ -116,6 +116,18 @@ describe("Availability — availability-changed consumer (#207)", () => {
     expect(policyJson).not.toContain("table/incident");
   });
 
+  it("grants the availability-changed consumer every item action of its transaction (Put + Update)", async () => {
+    const availability = await build();
+    const policyJson = await resolve(availability.availabilityChangedConsumer.rolePolicy.policy);
+    const statements = (
+      JSON.parse(policyJson) as { Statement: { Sid?: string; Action: string[] }[] }
+    ).Statement;
+    const write = statements.find((s) => s.Sid === "AlertingTableWrite");
+    expect(write?.Action).toEqual(
+      expect.arrayContaining(["dynamodb:PutItem", "dynamodb:UpdateItem"]),
+    );
+  });
+
   it("does not VPC-attach the availability-changed consumer", async () => {
     const availability = await build();
     const vpcConfig = await resolve(availability.availabilityChangedConsumer.function.vpcConfig);
