@@ -145,7 +145,7 @@ describe('personnel availability handler', () => {
 
     expect(result).toMatchObject({ statusCode: 201 });
     const inputs = schedulerSend.mock.calls.map(
-      (call) => (call[0] as { input: { Name: string } }).input,
+      (call) => (call[0] as { input: { Name: string; ActionAfterCompletion: string } }).input,
     );
     const names = inputs.map((input) => input.Name);
     expect(names).toHaveLength(2);
@@ -154,6 +154,8 @@ describe('personnel availability handler', () => {
       expect(name.length).toBeLessThanOrEqual(64);
       expect(name).toMatch(/^avail-[0-9a-f]{40}-(start|end)$/);
     }
+    // SUG-1: one-time schedules delete themselves after firing.
+    expect(inputs.every((input) => input.ActionAfterCompletion === 'DELETE')).toBe(true);
   });
 
   it('derives a deterministic schedule base name per (dept, member, startAt)', async () => {

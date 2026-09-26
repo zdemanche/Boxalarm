@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import {
+  ActionAfterCompletion,
   SchedulerClient,
   CreateScheduleCommand,
   DeleteScheduleCommand,
@@ -261,6 +262,9 @@ export async function createAvailability(
         new CreateScheduleCommand({
           Name: scheduleName,
           ScheduleExpression: `at(${new Date(schedule.at * 1000).toISOString().slice(0, 19)})`,
+          // One-time at() schedules otherwise linger after firing and accumulate toward the
+          // account's Scheduler quota (#327 review SUG-1).
+          ActionAfterCompletion: ActionAfterCompletion.DELETE,
           FlexibleTimeWindow: { Mode: FlexibleTimeWindowMode.OFF },
           Target: {
             Arn: schedulerConfig.expiryHandlerFunctionArn,
