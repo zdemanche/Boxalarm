@@ -8,6 +8,7 @@ import {
   TABLE_ARN,
   installMocks,
   isGranted,
+  lambdaEnv,
   settle,
   statementsForRole,
 } from "./mock-harness";
@@ -49,4 +50,20 @@ describe("ChannelWorkers — each worker can drain only its own queue", { timeou
       expect(isGranted(statements, "sqs:ReceiveMessage", queueArn(other))).toBe(false);
     }
   });
+});
+
+describe("ChannelWorkers — placeholder provider endpoints", { timeout: 30_000 }, () => {
+  it.each(["push", "sms", "voice"])(
+    "%s worker's default endpoint is on the RFC 2606 reserved .invalid TLD",
+    async (channel) => {
+      await buildWorkers();
+      const url = new URL(
+        lambdaEnv(`boxalarm-dev-alerting-${channel}-worker`)[
+          `${channel.toUpperCase()}_PROVIDER_ENDPOINT_URL`
+        ]!,
+      );
+      expect(url.protocol).toBe("https:");
+      expect(url.hostname.endsWith(".invalid")).toBe(true);
+    },
+  );
 });

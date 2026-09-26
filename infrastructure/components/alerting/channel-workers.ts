@@ -13,11 +13,14 @@ import {
 import { grantAlertingCmk } from "./alerting-cmk";
 
 // OQ-3 (SMS/voice vendor selection) is open — placeholder endpoints until a vendor is
-// chosen. Values are read verbatim by channels/httpProviderAdapter.ts at send time.
+// chosen. Values are read verbatim by channels/httpProviderAdapter.ts at send time, which
+// POSTs the member's target, the dispatch narrative and the Bearer provider secret. The
+// placeholders therefore use the RFC 2606 reserved `.invalid` TLD, which can never resolve,
+// so nothing is ever sent to a domain the project does not control.
 const PLACEHOLDER_ENDPOINT_URL: Record<AlertingChannel, string> = {
-  push: "https://push-provider.not-yet-selected.boxalarm.dev",
-  sms: "https://sms-provider.not-yet-selected.boxalarm.dev",
-  voice: "https://voice-provider.not-yet-selected.boxalarm.dev",
+  push: "https://push-provider.not-yet-selected.invalid",
+  sms: "https://sms-provider.not-yet-selected.invalid",
+  voice: "https://voice-provider.not-yet-selected.invalid",
 };
 
 export interface ChannelWorkersArgs {
