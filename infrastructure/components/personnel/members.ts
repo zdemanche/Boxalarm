@@ -215,7 +215,14 @@ export class Members extends pulumi.ComponentResource {
         handler: LAMBDA_HANDLER,
         code: lambdaCode("personnel-service", "members-update-profile"),
         logGroup: args.logGroup,
-        environment: baseEnvironment,
+        // updateMember.ts reads PLATFORM_TABLE_NAME (config.ts readMemberServiceConfig),
+        // not PERSONNEL_TABLE_NAME like the other members routes.
+        environment: {
+          PLATFORM_TABLE_NAME: args.platformTableName,
+          VERIFIED_PERMISSIONS_POLICY_STORE_ID: args.policyStoreId,
+        },
+        // UpdateItem (member row) + PutItem (outbox row), one transaction; plus the
+        // audit-key mutation deny every table-wide UpdateItem holder carries (F9.4).
         additionalPolicyStatements: pulumi
           .all([args.platformTableArn, vpStatement])
           .apply(([tableArn, vp]) => [
@@ -226,6 +233,7 @@ export class Members extends pulumi.ComponentResource {
               Resource: [tableArn],
             },
             ...vp,
+            auditMutationDenyStatement(tableArn),
           ]),
       },
       { parent: this },

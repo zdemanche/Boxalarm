@@ -3,6 +3,7 @@ import * as pulumi from "@pulumi/pulumi";
 import { ServiceLogGroup } from "../../components/observability/service-log-group";
 import { HttpApi } from "../../components/api/http-api";
 import { PlatformBus } from "../../components/messaging/platform-bus";
+import { Members } from "../../components/personnel/members";
 import { Quals } from "../../components/personnel/quals";
 import {
   ACCOUNT_ID,
@@ -63,6 +64,7 @@ async function build() {
     alertingLogGroup,
     alertingPermissionsBoundaryArn: BOUNDARY_ARN,
   };
+  new Members("members", common);
   new Quals("quals", { ...common, ...alerting });
   await settle();
 }
@@ -95,6 +97,23 @@ describe("personnel Lambdas: env and IAM match their handlers", { timeout: 30_00
       const s = statementsForRole("boxalarm-dev-personnel-quals-put");
       expect(isGranted(s, "dynamodb:GetItem", TABLE)).toBe(true);
       expect(isGranted(s, "dynamodb:PutItem", TABLE)).toBe(true);
+    });
+  });
+
+  describe("members update-profile", () => {
+    it("carries PLATFORM_TABLE_NAME, the variable readMemberServiceConfig requires", async () => {
+      await build();
+      const env = lambdaEnv("boxalarm-dev-personnel-members-update-profile");
+      expect(env.PLATFORM_TABLE_NAME).toBe("boxalarm-dev-platform-service");
+      expect(env.VERIFIED_PERMISSIONS_POLICY_STORE_ID).toBe("ps-1");
+    });
+
+    it("can UpdateItem + PutItem and carries the audit-key mutation deny", async () => {
+      await build();
+      const s = statementsForRole("boxalarm-dev-personnel-members-update-profile");
+      expect(isGranted(s, "dynamodb:UpdateItem", TABLE)).toBe(true);
+      expect(isGranted(s, "dynamodb:PutItem", TABLE)).toBe(true);
+      expect(s.some((st) => st.Sid === "DenyAuditMutations" && st.Effect === "Deny")).toBe(true);
     });
   });
 });
