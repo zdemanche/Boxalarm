@@ -57,6 +57,9 @@ export class Certifications extends pulumi.ComponentResource {
   public readonly expiringLambda: ServiceLambda;
   public readonly scannerLambda: ServiceLambda;
   public readonly scannerSchedule: aws.scheduler.Schedule;
+  public readonly scannerDlq: aws.sqs.Queue;
+  public readonly scannerDlqAlarm: aws.cloudwatch.MetricAlarm;
+  public readonly scannerErrorsAlarm: aws.cloudwatch.MetricAlarm;
   public readonly certExpiredReactorLambda: ServiceLambda;
   public readonly certExpiredReactorOnFailureQueue: aws.sqs.Queue;
   public readonly certExpiredReactorStreamPolicy: aws.iam.RolePolicy;
@@ -255,6 +258,48 @@ export class Certifications extends pulumi.ComponentResource {
       { parent: this },
     );
 
+    // Mirrors shifts.ts's completion schedule: retry, DLQ + depth alarm, and an Errors alarm,
+    // so a failing daily run (AccessDenied, throttle, or an unflipped expired cert — the
+    // handler fails the invocation for those) never goes unnoticed.
+    this.scannerDlq = new aws.sqs.Queue(
+      `${name}-scanner-dlq`,
+      { name: `boxalarm-${env}-training-cert-expiry-scanner-dlq` },
+      { parent: this },
+    );
+
+    this.scannerDlqAlarm = new aws.cloudwatch.MetricAlarm(
+      `${name}-scanner-dlq-depth-alarm`,
+      {
+        name: `boxalarm-${env}-training-cert-expiry-scanner-dlq-depth`,
+        namespace: "AWS/SQS",
+        metricName: "ApproximateNumberOfMessagesVisible",
+        dimensions: { QueueName: this.scannerDlq.name },
+        statistic: "Maximum",
+        period: 300,
+        evaluationPeriods: 1,
+        threshold: 0,
+        comparisonOperator: "GreaterThanThreshold",
+      },
+      { parent: this },
+    );
+
+    this.scannerErrorsAlarm = new aws.cloudwatch.MetricAlarm(
+      `${name}-scanner-errors-alarm`,
+      {
+        name: `boxalarm-${env}-training-cert-expiry-scanner-errors`,
+        namespace: "AWS/Lambda",
+        metricName: "Errors",
+        dimensions: { FunctionName: this.scannerLambda.function.name },
+        statistic: "Sum",
+        period: 300,
+        evaluationPeriods: 1,
+        threshold: 0,
+        comparisonOperator: "GreaterThanThreshold",
+        treatMissingData: "notBreaching",
+      },
+      { parent: this },
+    );
+
     const schedulerRole = new aws.iam.Role(
       `${name}-scanner-scheduler-role`,
       {
@@ -277,19 +322,27 @@ export class Certifications extends pulumi.ComponentResource {
       `${name}-scanner-scheduler-role-policy`,
       {
         role: schedulerRole.id,
-        policy: this.scannerLambda.function.arn.apply((arn) =>
-          JSON.stringify({
-            Version: "2012-10-17",
-            Statement: [
-              {
-                Sid: "InvokeCertExpiryScanner",
-                Effect: "Allow",
-                Action: "lambda:InvokeFunction",
-                Resource: arn,
-              },
-            ],
-          }),
-        ),
+        policy: pulumi
+          .all([this.scannerLambda.function.arn, this.scannerDlq.arn])
+          .apply(([lambdaArn, dlqArn]) =>
+            JSON.stringify({
+              Version: "2012-10-17",
+              Statement: [
+                {
+                  Sid: "InvokeCertExpiryScanner",
+                  Effect: "Allow",
+                  Action: "lambda:InvokeFunction",
+                  Resource: lambdaArn,
+                },
+                {
+                  Sid: "CertExpirySchedulerDlq",
+                  Effect: "Allow",
+                  Action: "sqs:SendMessage",
+                  Resource: dlqArn,
+                },
+              ],
+            }),
+          ),
       },
       { parent: this },
     );
@@ -300,7 +353,12 @@ export class Certifications extends pulumi.ComponentResource {
         name: `boxalarm-${env}-training-cert-expiry-scanner-daily`,
         scheduleExpression: "rate(1 day)",
         flexibleTimeWindow: { mode: "OFF" },
-        target: { arn: this.scannerLambda.function.arn, roleArn: schedulerRole.arn },
+        target: {
+          arn: this.scannerLambda.function.arn,
+          roleArn: schedulerRole.arn,
+          retryPolicy: { maximumRetryAttempts: 3, maximumEventAgeInSeconds: 3600 },
+          deadLetterConfig: { arn: this.scannerDlq.arn },
+        },
       },
       { parent: this },
     );

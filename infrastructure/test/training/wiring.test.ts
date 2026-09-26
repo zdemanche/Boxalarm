@@ -10,8 +10,10 @@ import { Transcript } from "../../components/training/transcript";
 import {
   ACCOUNT_ID,
   REGION,
+  alarmByName,
   installMocks,
   isGranted,
+  resourcesOfType,
   settle,
   statementsForRole,
 } from "../alerting/mock-harness";
@@ -131,6 +133,33 @@ describe("training Lambdas: env and IAM match their handlers", { timeout: 30_000
       const s = statementsForRole("boxalarm-dev-training-transcript-get");
       expect(isGranted(s, "dynamodb:Query", TABLE)).toBe(true);
       expect(isGranted(s, "dynamodb:Query", GSI1)).toBe(true);
+    });
+  });
+
+  describe("cert-expiry scanner schedule (MAJ-5)", () => {
+    it("retries, dead-letters to a DLQ the scheduler role can write, and alarms", async () => {
+      await build();
+      const schedule = resourcesOfType("aws:scheduler/schedule:Schedule").find(
+        (r) => r.inputs.name === "boxalarm-dev-training-cert-expiry-scanner-daily",
+      );
+      const target = schedule?.inputs.target as {
+        retryPolicy?: { maximumRetryAttempts: number };
+        deadLetterConfig?: { arn: string };
+      };
+      expect(target.retryPolicy?.maximumRetryAttempts).toBe(3);
+      const dlqArn = `arn:aws:sqs:${REGION}:${ACCOUNT_ID}:boxalarm-dev-training-cert-expiry-scanner-dlq`;
+      expect(target.deadLetterConfig?.arn).toBe(dlqArn);
+
+      const schedulerStatements = statementsForRole("boxalarm-dev-training-cert-expiry-scheduler");
+      expect(isGranted(schedulerStatements, "sqs:SendMessage", dlqArn)).toBe(true);
+
+      const dlqAlarm = alarmByName("boxalarm-dev-training-cert-expiry-scanner-dlq-depth");
+      expect(dlqAlarm.inputs.threshold).toBe(0);
+      const errors = alarmByName("boxalarm-dev-training-cert-expiry-scanner-errors");
+      expect(errors.inputs.metricName).toBe("Errors");
+      expect(errors.inputs.dimensions).toEqual({
+        FunctionName: "boxalarm-dev-training-cert-expiry-scanner",
+      });
     });
   });
 });
