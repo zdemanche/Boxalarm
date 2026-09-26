@@ -201,18 +201,18 @@ export function viewConfigPolicy(userPoolId: string): string {
  * or a memberId the caller supplied for themself (quals/certifications/transcript/hours) —
  * open to every role rather than gated by group.
  */
-export function selfServiceActionsPolicy(): string {
-  const groupCheck = ROLE_GROUPS.map((g) => `principal in Boxalarm::UserGroup::"${g}"`).join(
-    " || ",
-  );
+export function selfServiceActionsPolicy(userPoolId: string): string {
+  const groupCheck = ROLE_GROUPS.map(
+    (g) => `principal in Boxalarm::UserGroup::"${groupEntityId(userPoolId, g)}"`,
+  ).join(" || ");
   const actions = SELF_SERVICE_ACTIONS.map((a) => `Boxalarm::Action::"${a}"`).join(", ");
   return `permit (\n  principal,\n  action in [${actions}],\n  resource\n) when {\n  ${groupCheck}\n};`;
 }
 
 /** On-behalf-of-others personnel/training actions — duty officer, training officer, or admin tier only. */
-export function officerTierActionsPolicy(): string {
+export function officerTierActionsPolicy(userPoolId: string): string {
   const groupCheck = OFFICER_TIER_GROUPS.map(
-    (g) => `principal in Boxalarm::UserGroup::"${g}"`,
+    (g) => `principal in Boxalarm::UserGroup::"${groupEntityId(userPoolId, g)}"`,
   ).join(" || ");
   const actions = OFFICER_TIER_ACTIONS.map((a) => `Boxalarm::Action::"${a}"`).join(", ");
   return `permit (\n  principal,\n  action in [${actions}],\n  resource\n) when {\n  ${groupCheck}\n};`;

@@ -135,7 +135,9 @@ export class PolicyStore extends pulumi.ComponentResource {
       `${name}-self-service-actions`,
       {
         policyStoreId: this.policyStoreId,
-        definition: { static: { statement: selfServiceActionsPolicy() } },
+        definition: {
+          static: { statement: pulumi.output(args.userPoolId).apply(selfServiceActionsPolicy) },
+        },
       },
       { parent: this, dependsOn: [this.schema] },
     );
@@ -144,7 +146,9 @@ export class PolicyStore extends pulumi.ComponentResource {
       `${name}-officer-tier-actions`,
       {
         policyStoreId: this.policyStoreId,
-        definition: { static: { statement: officerTierActionsPolicy() } },
+        definition: {
+          static: { statement: pulumi.output(args.userPoolId).apply(officerTierActionsPolicy) },
+        },
       },
       { parent: this, dependsOn: [this.schema] },
     );
