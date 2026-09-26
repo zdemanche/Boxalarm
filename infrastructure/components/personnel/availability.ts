@@ -168,9 +168,12 @@ export class Availability extends pulumi.ComponentResource {
         environment: { ALERTING_TABLE_NAME: args.alertingTableName },
         additionalPolicyStatements: pulumi.output(args.alertingTableArn).apply((arn) => [
           {
+            // eligibility/consumer.ts: one transaction of Put (dedup marker) + Update
+            // (MEMBER_ELIGIBILITY_SNAPSHOT) items, authorized item-by-item —
+            // dynamodb:TransactWriteItems is not an IAM action.
             Sid: "AlertingTableWrite" as const,
             Effect: "Allow" as const,
-            Action: ["dynamodb:TransactWriteItems"],
+            Action: ["dynamodb:PutItem", "dynamodb:UpdateItem"],
             Resource: [arn],
           },
         ]),

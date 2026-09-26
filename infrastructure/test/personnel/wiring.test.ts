@@ -3,8 +3,10 @@ import * as pulumi from "@pulumi/pulumi";
 import { ServiceLogGroup } from "../../components/observability/service-log-group";
 import { HttpApi } from "../../components/api/http-api";
 import { PlatformBus } from "../../components/messaging/platform-bus";
+import { Availability } from "../../components/personnel/availability";
 import { Members } from "../../components/personnel/members";
 import { Quals } from "../../components/personnel/quals";
+import { Shifts } from "../../components/personnel/shifts";
 import {
   ACCOUNT_ID,
   CMK_ARN,
@@ -66,6 +68,8 @@ async function build() {
   };
   new Members("members", common);
   new Quals("quals", { ...common, ...alerting });
+  new Availability("availability", { ...common, ...alerting });
+  new Shifts("shifts", { ...common, deptId: "nichols-fd" });
   await settle();
 }
 
@@ -114,6 +118,47 @@ describe("personnel Lambdas: env and IAM match their handlers", { timeout: 30_00
       expect(isGranted(s, "dynamodb:UpdateItem", TABLE)).toBe(true);
       expect(isGranted(s, "dynamodb:PutItem", TABLE)).toBe(true);
       expect(s.some((st) => st.Sid === "DenyAuditMutations" && st.Effect === "Deny")).toBe(true);
+    });
+  });
+
+  describe("transactions are granted item-by-item (TransactWriteItems is not an IAM action)", () => {
+    const ROLES = [
+      "boxalarm-dev-personnel-members-create",
+      "boxalarm-dev-personnel-members-update-status",
+      "boxalarm-dev-personnel-members-update-profile",
+      "boxalarm-dev-personnel-quals-put",
+      "boxalarm-dev-personnel-availability-create",
+      "boxalarm-dev-personnel-availability-expiry",
+      "boxalarm-dev-alerting-availability-changed-consumer",
+      "boxalarm-dev-personnel-shifts",
+      "boxalarm-dev-personnel-shift-completion",
+    ];
+
+    it("no personnel role relies on dynamodb:TransactWriteItems", async () => {
+      await build();
+      for (const role of ROLES) {
+        const actions = statementsForRole(role).flatMap((st) =>
+          Array.isArray(st.Action) ? st.Action : [st.Action],
+        );
+        expect(actions, role).not.toContain("dynamodb:TransactWriteItems");
+      }
+    });
+
+    it("availability-changed consumer can Put (dedup) + Update (snapshot) on the alerting table", async () => {
+      await build();
+      const s = statementsForRole("boxalarm-dev-alerting-availability-changed-consumer");
+      expect(isGranted(s, "dynamodb:PutItem", ALERTING_TABLE)).toBe(true);
+      expect(isGranted(s, "dynamodb:UpdateItem", ALERTING_TABLE)).toBe(true);
+      expect(isGranted(s, "dynamodb:PutItem", TABLE)).toBe(false);
+    });
+
+    it("shift completion can Query table + GSI3 and Put/Update the table", async () => {
+      await build();
+      const s = statementsForRole("boxalarm-dev-personnel-shift-completion");
+      expect(isGranted(s, "dynamodb:Query", TABLE)).toBe(true);
+      expect(isGranted(s, "dynamodb:Query", `${TABLE}/index/GSI3`)).toBe(true);
+      expect(isGranted(s, "dynamodb:PutItem", TABLE)).toBe(true);
+      expect(isGranted(s, "dynamodb:UpdateItem", TABLE)).toBe(true);
     });
   });
 });

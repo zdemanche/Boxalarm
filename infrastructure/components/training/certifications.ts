@@ -316,9 +316,13 @@ export class Certifications extends pulumi.ComponentResource {
         },
         additionalPolicyStatements: pulumi.output(args.platformTableArn).apply((tableArn) => [
           {
+            // flipEligibilityOnCertExpired: Query (held quals), then one transaction of
+            // Update (QUAL row) + Put (OUTBOX row) items. IAM authorizes each transaction
+            // item as its own UpdateItem/PutItem — dynamodb:TransactWriteItems is not an
+            // IAM action and grants nothing.
             Sid: "CertExpiredReactorAccess" as const,
             Effect: "Allow" as const,
-            Action: ["dynamodb:Query", "dynamodb:TransactWriteItems"],
+            Action: ["dynamodb:Query", "dynamodb:UpdateItem", "dynamodb:PutItem"],
             Resource: [tableArn],
           },
         ]),
