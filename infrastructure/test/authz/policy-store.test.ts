@@ -313,13 +313,15 @@ describe("PolicyStore", () => {
     expect(principalEntityType).toBe("Boxalarm::User");
   });
 
-  it("declares no permit-all / default-allow policy — only the two scoped statements (AC4 fail-secure)", async () => {
+  it("declares no permit-all / default-allow policy — only the four role-gated statements (AC4 fail-secure)", async () => {
     const store = await build();
-    const [admin, view] = await Promise.all([
+    const defs = await Promise.all([
       resolve(store.adminActionsPolicy.definition),
       resolve(store.viewConfigPolicy.definition),
+      resolve(store.selfServiceActionsPolicy.definition),
+      resolve(store.officerTierActionsPolicy.definition),
     ]);
-    for (const def of [admin, view]) {
+    for (const def of defs) {
       expect(def?.static?.statement).not.toMatch(
         /permit\s*\(\s*principal\s*,\s*action\s*,\s*resource\s*\)\s*;/,
       );

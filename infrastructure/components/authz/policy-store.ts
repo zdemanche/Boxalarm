@@ -106,8 +106,9 @@ export class PolicyStore extends pulumi.ComponentResource {
         ),
     );
 
-    // AC4: no permit-all/default-allow policy exists — only these two,
-    // department-scoped, role-gated statements.
+    // AC4: no permit-all/default-allow policy exists — only these four role-gated
+    // statements (admin actions, view config, self-service, officer tier); department
+    // scoping lives in the dept-scoped DynamoDB keys (see cedar-policies.ts).
     this.adminActionsPolicy = new aws.verifiedpermissions.Policy(
       `${name}-admin-actions`,
       {

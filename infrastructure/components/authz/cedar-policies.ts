@@ -39,9 +39,10 @@ export const VIEW_ACTIONS = ["ViewConfig"] as const;
 // above) — including quals/handler.ts, certifications/*.ts, transcript/get.ts and
 // reports/iso.ts, whose actionType/resourceType literals ('PersonnelService', 'Training',
 // 'Member', 'TrainingReport') were normalized to the Boxalarm::Action / Boxalarm::<Type>
-// convention every other route uses, so one schema can express a policy for all of them —
-// Verified Permissions treats actionType/resourceType as the literal, unqualified entity
-// type name, and there is no way to grant an action whose type isn't declared here.
+// convention every other route uses, so one schema can express a policy for all of them.
+// decide.ts sends those namespace-qualified type names (Boxalarm::Action,
+// Boxalarm::Member, ...) verbatim, and the namespaced schema below only declares
+// Boxalarm::-qualified types — an unqualified or unknown type can never match a policy.
 export const SELF_SERVICE_ACTIONS = [
   // F2.6 / AP 12: a member editing their OWN profile. updateMember.ts routes a request to
   // this action only when the path memberId is the caller's sub, and re-checks that

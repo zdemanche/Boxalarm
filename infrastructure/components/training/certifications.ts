@@ -247,8 +247,9 @@ export class Certifications extends pulumi.ComponentResource {
           .all([args.platformTableArn, args.platformBusArn])
           .apply(([tableArn, busArn]) => [
             {
-              // GetItem: readCertExpiryLeadDays (CONFIG#ALERT_RULES); PutItem/UpdateItem:
-              // publishDueEvent's CERT_EXPIRY_FLAG dedup marker.
+              // GetItem: readCertExpiryLeadDays (CONFIG#ALERT_RULES). PutItem/UpdateItem:
+              // publishDueEvent's CERT_EXPIRY_FLAG dedup marker, and the EXPIRED flip's
+              // transaction (Update on the cert row + Put of its audit row).
               Sid: "CertExpiryScannerTableAccess" as const,
               Effect: "Allow" as const,
               Action: ["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:UpdateItem"],
