@@ -202,10 +202,15 @@ export function viewConfigPolicy(userPoolId: string): string {
 }
 
 /**
- * Own-record personnel/training actions (E2/E3-INFRA): every resourceId(event) call site
- * for these actions passes the caller's own principal.sub (attendance/availability/losap)
- * or a memberId the caller supplied for themself (quals/certifications/transcript/hours) —
- * open to every role rather than gated by group.
+ * Every-role personnel/training actions (E2/E3-INFRA). Two different scopes live here:
+ *  - Own-record: attendance, availability, LOSAP total and SelfUpdateMember act on the
+ *    caller's own principal.sub (the handler derives it, or rejects a path memberId that is
+ *    not the caller's).
+ *  - In-department read: GetQuals, ViewCertifications, ViewTranscript and ViewTrainingHours
+ *    take an arbitrary path memberId and nothing checks it is the caller's — any member may
+ *    read any same-department member's quals, certifications (including attachmentS3Key),
+ *    transcript and hours. The architecture's "Cognito" auth on those routes permits that;
+ *    the department boundary is enforced by the dept-scoped keys, not by Cedar (see above).
  */
 export function selfServiceActionsPolicy(userPoolId: string): string {
   const groupCheck = ROLE_GROUPS.map(
