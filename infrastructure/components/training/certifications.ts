@@ -22,11 +22,21 @@ export interface CertificationsArgs {
 }
 
 /**
- * E3-S1/S2/S8-INFRA (#214, #215, #221): certification records, plus the lead-time expiry
- * scanner that also gates alerting eligibility currency. #221's propagation chain is a
- * DynamoDB Streams consumer on the platform table (events/certExpiredReactor.ts, filtered to
- * entityType=CERTIFICATION) — a second, independent stream mapping alongside the shared
- * OutboxPublisher's own OUTBOX_ENTRY-filtered mapping, not something that foundation covers.
+ * E3-S1/S2/S8-INFRA (#214, #215, #221): certification records, plus the daily expiry scanner.
+ *
+ * #221 chain (expiry -> alerting eligibility), end to end:
+ *   1. The daily scanner (certificationExpiryScanner/handler.ts) writes status=EXPIRED on
+ *      every CURRENT certification past its expiryDate (certifications/expiryScan.ts's
+ *      flipExpiredCertifications, conditional on CURRENT, with an audit row). It also
+ *      publishes the lead-time cert.expiry.due notification — that event is a reminder
+ *      only; nothing consumes it for eligibility.
+ *   2. That status write reaches events/certExpiredReactor.ts through a DynamoDB Streams
+ *      mapping on the platform table, filtered to entityType=CERTIFICATION — a second,
+ *      independent stream mapping alongside the shared OutboxPublisher's OUTBOX_ENTRY one.
+ *      A manual revoke (status=REVOKED) takes the same path.
+ *   3. The reactor sets MEMBER_QUALIFICATION.currentlyEligible=false and writes a
+ *      personnel.eligibility.changed outbox row, which the OutboxPublisher delivers to the
+ *      alerting eligibility snapshot (quals.ts's eligibility-changed consumer).
  * Training records share the platform table (no dedicated training table exists) — both
  * TRAINING_TABLE_NAME (client.ts) and TRAINING_DYNAMO_TABLE_NAME (dynamoClient.ts) point
  * at it, and PLATFORM_CONFIG_DYNAMO_TABLE_NAME (per-dept CONFIG#ALERT_RULES lead-time) too.
