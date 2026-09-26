@@ -162,9 +162,7 @@ export const auditTrail = new AuditTrail("audit-trail", {
 export const alertingPlaneBoundary = new AlertingPlaneBoundary("alerting-plane-boundary", {
   env,
   platformTableArn: platformTable.tableArn,
-  platformStreamArn: platformTable.streamArn,
   incidentTableArn: incidentTable.tableArn,
-  incidentStreamArn: incidentTable.streamArn,
 });
 const alertingBoundaryArn = alertingPlaneBoundary.policy.arn;
 
