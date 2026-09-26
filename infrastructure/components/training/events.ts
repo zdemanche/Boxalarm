@@ -50,6 +50,17 @@ export class Events extends pulumi.ComponentResource {
         Resource: [`${arn}/index/GSI3`, `${arn}/index/GSI1`],
       },
     ]);
+    // signupHandler: getTrainingEvent (GetItem), self-signup createSignupAttendance (PutItem),
+    // and officer attendance recording — recordAttendanceHours, a transaction of Update
+    // items that IAM authorizes as UpdateItem.
+    const signupStatement = pulumi.output(args.platformTableArn).apply((arn) => [
+      {
+        Sid: "TrainingEventsSignupAccess" as const,
+        Effect: "Allow" as const,
+        Action: ["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:UpdateItem"],
+        Resource: [arn],
+      },
+    ]);
     const vpStatement = pulumi
       .output(args.policyStoreArn)
       .apply((policyStoreArn) => [verifiedPermissionsPolicyStatement(policyStoreArn)]);
@@ -113,7 +124,7 @@ export class Events extends pulumi.ComponentResource {
           VERIFIED_PERMISSIONS_POLICY_STORE_ID: args.policyStoreId,
         },
         additionalPolicyStatements: pulumi
-          .all([tableStatement, vpStatement])
+          .all([signupStatement, vpStatement])
           .apply(([table, vp]) => [...table, ...vp]),
       },
       { parent: this },

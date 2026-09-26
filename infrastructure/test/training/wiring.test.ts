@@ -96,6 +96,14 @@ describe("training Lambdas: env and IAM match their handlers", { timeout: 30_000
       expect(isGranted(s, "dynamodb:Query", GSI1)).toBe(true);
       expect(isGranted(s, "dynamodb:PutItem", TABLE)).toBe(false);
     });
+
+    it("signup can GetItem the event, PutItem a self-signup and UpdateItem officer attendance", async () => {
+      await build();
+      const s = statementsForRole("boxalarm-dev-training-events-signup");
+      expect(isGranted(s, "dynamodb:GetItem", TABLE)).toBe(true);
+      expect(isGranted(s, "dynamodb:PutItem", TABLE)).toBe(true);
+      expect(isGranted(s, "dynamodb:UpdateItem", TABLE)).toBe(true);
+    });
   });
 
   describe("hours", () => {
