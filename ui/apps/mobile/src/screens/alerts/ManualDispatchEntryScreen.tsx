@@ -75,6 +75,13 @@ export function ManualDispatchEntryScreen() {
           .filter(Boolean),
       };
       const { dispatchId } = await repository.submitManualDispatch(input);
+      // M1: this screen stays mounted under the pushed Roster, so a stale town choice would
+      // carry into the next (possibly mutual-aid) call and verify the wrong town's plan.
+      // Reset everything, like the web form does on success.
+      setForm(EMPTY_FORM);
+      setUnitsText('');
+      setLocalityChoice(null);
+      setOtherTown('');
       navigation.navigate('Roster', { dispatchId });
     } catch (error) {
       if (error instanceof ApiError) {

@@ -66,3 +66,28 @@ test('R3-A: the locality choice is required, and "Other town" sends the typed to
   );
   submit.mockRestore();
 });
+
+test('M1: a successful submit resets the form, so the next call starts with no town chosen', async () => {
+  const { getByLabelText, findByRole, findAllByRole } = await render(
+    <ManualDispatchEntryScreen />,
+  );
+
+  await fireEvent.changeText(getByLabelText('Incident type'), 'Structure fire');
+  await fireEvent.changeText(getByLabelText('Address'), '12 Elm St');
+  await fireEvent.changeText(getByLabelText(/^Units requested/), 'E1, L1');
+  await fireEvent.press(await findByRole('radio', { name: 'Trumbull' }));
+  await fireEvent.changeText(getByLabelText('Operator-entered reference'), 'ext-3');
+  await fireEvent.press(await findByRole('button', { name: 'Submit dispatch' }));
+  expect(mockNavigate).toHaveBeenCalledTimes(1);
+
+  // The screen stays mounted under Roster: coming back must not carry "Trumbull" forward.
+  const radios = await findAllByRole('radio');
+  expect(radios.length).toBeGreaterThan(1);
+  for (const radio of radios) {
+    expect(radio.props.accessibilityState).toEqual({ checked: false });
+  }
+  expect(getByLabelText('Incident type').props.value).toBe('');
+  expect(getByLabelText('Address').props.value).toBe('');
+  expect(getByLabelText(/^Units requested/).props.value).toBe('');
+  expect(getByLabelText('Operator-entered reference').props.value).toBe('');
+});
