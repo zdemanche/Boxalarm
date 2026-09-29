@@ -430,7 +430,9 @@ export function normalizeAddress(
     let limit = tokens.length;
     if (ZIP.test(tokens[limit - 1] ?? '')) limit -= 1;
     if (limit > 2 && STATE_CODES.has(tokens[limit - 1] as string)) limit -= 1;
-    const place = trailingPlace(tokens.slice(2, limit), known);
+    // Built-in places only: the key must never depend on department data (a department's
+    // extra names only classify words already outside the key).
+    const place = trailingPlace(tokens.slice(2, limit), knownLocalities());
     limit -= place;
     let stop = limit;
     for (let i = 2; i < limit; i += 1) {

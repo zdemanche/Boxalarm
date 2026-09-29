@@ -334,4 +334,16 @@ describe('normalizeAddress', () => {
       },
     );
   });
+
+  it('round-3 minor 1: a department home name never changes the key, in any branch', () => {
+    const extra = new Set(['PLATTSVILLE']);
+    for (const raw of [
+      '123 Broadway Plattsville',
+      '123 Main St Plattsville',
+      '123 Route 111 Plattsville',
+      '12 Oak Ct Plattsville CT',
+    ]) {
+      expect(normalizeAddress(raw, extra)?.key, raw).toBe(normalizeAddress(raw)?.key);
+    }
+  });
 });
