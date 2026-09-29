@@ -346,4 +346,18 @@ describe('normalizeAddress', () => {
       expect(normalizeAddress(raw, extra)?.key, raw).toBe(normalizeAddress(raw)?.key);
     }
   });
+
+  it('round-3 minor 6: "Upper"/"Lower" before a known place is part of the town, not a unit', () => {
+    expect(normalizeAddress('12 Main St Upper Stepney')).toMatchObject({
+      key: '12 MAIN ST',
+      unit: null,
+      town: 'UPPER STEPNEY',
+      ambiguous: false,
+    });
+    expect(normalizeAddress('12 Main St Upper')).toMatchObject({ unit: 'UPPER', town: null });
+    expect(normalizeAddress('12 Main St Apt 4 Upper Stepney')).toMatchObject({
+      unit: '4',
+      town: 'UPPER STEPNEY',
+    });
+  });
 });

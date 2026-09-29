@@ -216,7 +216,10 @@ function isUnitStart(tokens: readonly string[], i: number): boolean {
  * words (REAR, BSMT, ...). A designator only takes the next token if that token is not itself
  * a street type. Returns the units and whatever is left.
  */
-function extractUnits(tokens: readonly string[]): {
+function extractUnits(
+  tokens: readonly string[],
+  known: ReadonlySet<string> = new Set(),
+): {
   units: string[];
   labels: string[];
   rest: string[];
@@ -233,7 +236,8 @@ function extractUnits(tokens: readonly string[]): {
       i += 1;
       continue;
     }
-    if (STANDALONE_UNITS.has(token)) {
+    // "UPPER STEPNEY" is a place, not an upper unit in Stepney (round-3 minor 6).
+    if (STANDALONE_UNITS.has(token) && !startsPlace(tokens, i, known)) {
       units.push(token);
       labels.push(token);
       continue;
@@ -252,6 +256,16 @@ function extractUnits(tokens: readonly string[]): {
     rest.push(token);
   }
   return { units, labels, rest };
+}
+
+/** Whether a known place (up to three words) starts at tokens[i]. */
+function startsPlace(tokens: readonly string[], i: number, known: ReadonlySet<string>): boolean {
+  for (let length = 3; length >= 2; length -= 1) {
+    if (i + length <= tokens.length && known.has(tokens.slice(i, i + length).join(' '))) {
+      return true;
+    }
+  }
+  return false;
 }
 
 /** Longest run of words at the end of `words` (up to three) that is a known place. */
@@ -455,8 +469,8 @@ export function normalizeAddress(
     return null;
   }
 
-  const fromRemainder = extractUnits(remainder);
-  const fromTail = extractUnits(tokenize(tailParts.join(' ')));
+  const fromRemainder = extractUnits(remainder, known);
+  const fromTail = extractUnits(tokenize(tailParts.join(' ')), known);
   const units = [...fromRemainder.units, ...fromTail.units];
   const unitLabels = [...fromRemainder.labels, ...fromTail.labels];
 

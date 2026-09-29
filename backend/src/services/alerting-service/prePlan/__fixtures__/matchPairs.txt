@@ -189,7 +189,9 @@ DIFF | trumbull | 12 Main St, Trumbull, NY || 12 Main St
 DIFF | trumbull | 12 Main St, Trumbull, NY 06611 || 12 Main St
 // --- monroe home: Stepney
 DIFF | monroe | 12 Main St, Trumbull || 12 Main St
-DIFF | monroe | 12 Main St Upper Stepney || 12 Main St, Stepney
+// Relabelled SAME (round-3 minor 6): "Upper Stepney" is now read as the village, not an UPPER unit;
+// for a Monroe home set Upper Stepney and Stepney are both home, so the same street address is the same building.
+SAME | monroe | 12 Main St Upper Stepney || 12 Main St, Stepney
 SAME | monroe | 12 Main St, Stepney || 12 Main St
 // --- Town-less dispatch vs town-less copy (policy: VERIFIED)
 DIFF | trumbull | 123 Main St || 123 Main St
