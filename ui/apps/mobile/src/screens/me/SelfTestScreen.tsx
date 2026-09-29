@@ -1,29 +1,77 @@
-import { palette, radius, spacing, touchTarget, typography } from '@boxalarm/design-tokens';
+import { spacing, typeScale, type StatusRole } from '@boxalarm/design-tokens';
 import { useCallback, useRef, useState } from 'react';
-import { AccessibilityInfo, Text, TouchableOpacity, useColorScheme, View } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { AccessibilityInfo, Platform, Text, View } from 'react-native';
+import { Button, Screen, StatusChip, useTheme } from '../../components/ui';
 import { useAlertsRepository } from '../../features/alerts/apiAlertsRepository';
 import type { SelfTestRun } from '../../features/alerts/types';
+import {
+  useAlertReadiness,
+  type ReadinessItem,
+  type ReadinessStatus,
+} from '../../features/alerts/useAlertReadiness';
 
 const POLL_INTERVAL_MS = 1_500;
 const MAX_POLLS = 20;
 
 const CHANNEL_LABEL: Record<string, string> = { PUSH: 'Push', SMS: 'SMS', VOICE: 'Voice' };
 
+const READINESS_CHIP: Record<ReadinessStatus, { role: StatusRole; label: string }> = {
+  ok: { role: 'ok', label: 'Ready' },
+  fail: { role: 'danger', label: 'Fix' },
+  warn: { role: 'caution', label: 'Check' },
+  unknown: { role: 'neutral', label: 'Unknown' },
+};
+
 function formatTimestamp(seconds: number): string {
   return new Date(seconds * 1000).toLocaleTimeString();
 }
 
-// E1-S8-UI: the one real "Test my alert path" flow, reachable from the Me tab. Consolidated -
-// the Alerts tab no longer has its own self-test entry point. Canary-safe: this never touches
-// the member's alert history or any roster view (it is not fetched by either screen).
+function ReadinessRow({ item }: { item: ReadinessItem }) {
+  const theme = useTheme();
+  const chip = READINESS_CHIP[item.status];
+  return (
+    <View
+      style={{
+        minHeight: 72,
+        paddingVertical: spacing.sm,
+        borderBottomWidth: 1,
+        borderBottomColor: theme.borderDecorative,
+        gap: spacing.xs,
+      }}
+    >
+      <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.sm }}>
+        <StatusChip status={chip.role} label={chip.label} />
+        <Text
+          style={{ color: theme.fg, fontSize: typeScale.heading.size, fontWeight: '600', flex: 1 }}
+        >
+          {item.label}
+        </Text>
+      </View>
+      <Text style={{ color: theme.fg, fontSize: typeScale.body.size }}>{item.detail}</Text>
+      {item.status !== 'ok' && item.fix ? (
+        <Button
+          label={item.fixLabel ?? 'Fix'}
+          variant={item.status === 'fail' ? 'danger' : 'secondary'}
+          accessibilityLabel={`${item.fixLabel ?? 'Fix'}: ${item.label}`}
+          onPress={item.fix}
+        />
+      ) : null}
+    </View>
+  );
+}
+
+// F-15 / a11y-spec N4: (1) the device readiness checklist, evaluated locally and offline, then
+// (2) a real test page through the real fan-out, then the only question that proves anything:
+// did the phone actually ring? Server-side "delivered" says nothing about the volume switch,
+// Do Not Disturb, or a Sleep Focus. Canary-safe: never touches alert history or the roster.
 export function SelfTestScreen() {
-  const scheme = useColorScheme();
-  const tokens = scheme === 'dark' ? palette.cab : palette.day;
+  const theme = useTheme();
   const repository = useAlertsRepository();
+  const readiness = useAlertReadiness();
   const [run, setRun] = useState<SelfTestRun | null>(null);
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [rang, setRang] = useState<'yes' | 'no' | null>(null);
   const cancelledRef = useRef(false);
 
   const poll = useCallback(
@@ -38,8 +86,8 @@ export function SelfTestScreen() {
       setRunning(false);
       AccessibilityInfo.announceForAccessibility(
         result.overallResult === 'PASS'
-          ? 'Self-test complete. All channels passed.'
-          : 'Self-test complete. Check the results below.',
+          ? 'Test page sent on every channel. Did your phone ring?'
+          : 'Test failed on at least one channel. Check the results below.',
       );
     },
     [repository],
@@ -49,6 +97,7 @@ export function SelfTestScreen() {
     setRunning(true);
     setError(null);
     setRun(null);
+    setRang(null);
     try {
       const { testId } = await repository.triggerSelfTest();
       await poll(testId, 0);
@@ -58,52 +107,83 @@ export function SelfTestScreen() {
     }
   };
 
+  const answerRang = (answer: 'yes' | 'no') => {
+    setRang(answer);
+    AccessibilityInfo.announceForAccessibility(
+      answer === 'yes'
+        ? 'Good. This phone rang for a test page.'
+        : 'This phone did not ring. Follow the steps below before your next call.',
+    );
+  };
+
+  const failing = (readiness.items ?? []).filter((item) => item.status !== 'ok');
+  const finished = run !== null && run.overallResult !== 'RUNNING';
+
   return (
-    <SafeAreaView style={{ flex: 1, backgroundColor: tokens.background, padding: spacing.lg }}>
+    <Screen>
       <Text
         accessibilityRole="header"
-        style={{ color: tokens.foreground, fontSize: typography.size.lg, fontWeight: '700' }}
+        style={{ color: theme.fg, fontSize: typeScale.title.size, fontWeight: '700' }}
       >
         Test my alert path
       </Text>
+
       <Text
+        accessibilityRole="header"
         style={{
-          color: tokens.foreground,
-          opacity: 0.7,
-          fontSize: typography.size.base,
-          marginTop: spacing.sm,
-          marginBottom: spacing.lg,
+          color: theme.fg,
+          fontSize: typeScale.heading.size,
+          fontWeight: '700',
+          marginTop: spacing.lg,
         }}
       >
-        Sends a synthetic dispatch through the same fan-out path as a real alert and shows what
-        arrived on each channel.
+        Is this phone ready?
       </Text>
-      <TouchableOpacity
-        accessibilityRole="button"
-        accessibilityLabel="Run self-test"
-        disabled={running}
-        onPress={() => void runSelfTest()}
+      {readiness.items === null ? (
+        <Text style={{ color: theme.fgMuted, fontSize: typeScale.body.size }}>
+          Checking this phone…
+        </Text>
+      ) : (
+        <View accessibilityLiveRegion="polite">
+          {readiness.items.map((item) => (
+            <ReadinessRow key={item.id} item={item} />
+          ))}
+        </View>
+      )}
+
+      <Text
+        accessibilityRole="header"
         style={{
-          minHeight: touchTarget.baseline.ios,
-          alignItems: 'center',
-          justifyContent: 'center',
-          backgroundColor: tokens.accent,
-          borderRadius: radius.default,
-          paddingHorizontal: spacing.lg,
-          opacity: running ? 0.6 : 1,
+          color: theme.fg,
+          fontSize: typeScale.heading.size,
+          fontWeight: '700',
+          marginTop: spacing.lg,
+          marginBottom: spacing.sm,
         }}
       >
-        <Text
-          style={{ color: tokens.background, fontSize: typography.size.base, fontWeight: '600' }}
-        >
-          {running ? 'Running…' : 'Run self-test'}
-        </Text>
-      </TouchableOpacity>
+        Send a test page
+      </Text>
+      <Text style={{ color: theme.fg, fontSize: typeScale.body.size, marginBottom: spacing.md }}>
+        Sends a test page - marked as a test, not a real call - through the same path as a real one,
+        on every channel. Put the phone down the way you leave it at night, then check it rang.
+      </Text>
+      <Button
+        label={running ? 'Running…' : 'Run self-test'}
+        accessibilityLabel="Run self-test"
+        size="alert"
+        fullWidth
+        loading={running}
+        onPress={() => void runSelfTest()}
+      />
 
       {error ? (
         <Text
           accessibilityRole="alert"
-          style={{ color: tokens.error, fontSize: typography.size.base, marginTop: spacing.lg }}
+          style={{
+            color: theme.status.danger,
+            fontSize: typeScale.body.size,
+            marginTop: spacing.lg,
+          }}
         >
           {error}
         </Text>
@@ -118,8 +198,8 @@ export function SelfTestScreen() {
               <View key={channel} style={{ marginTop: spacing.sm }}>
                 <Text
                   style={{
-                    color: !result ? tokens.foreground : result.ok ? tokens.success : tokens.error,
-                    fontSize: typography.size.base,
+                    color: !result ? theme.fg : result.ok ? theme.status.ok : theme.status.danger,
+                    fontSize: typeScale.body.size,
                     fontWeight: '600',
                   }}
                 >
@@ -127,7 +207,7 @@ export function SelfTestScreen() {
                   {run.runAt ? ` · ${formatTimestamp(run.runAt)}` : ''}
                 </Text>
                 {result && !result.ok && result.reason ? (
-                  <Text style={{ color: tokens.error, fontSize: typography.size.sm }}>
+                  <Text style={{ color: theme.status.danger, fontSize: typeScale.body.size }}>
                     {channel.toLowerCase()}: {result.reason}
                   </Text>
                 ) : null}
@@ -136,6 +216,65 @@ export function SelfTestScreen() {
           })}
         </View>
       ) : null}
-    </SafeAreaView>
+
+      {finished ? (
+        <View style={{ marginTop: spacing.lg, gap: spacing.md }}>
+          <Text
+            accessibilityRole="header"
+            style={{ color: theme.fg, fontSize: typeScale.heading.size, fontWeight: '700' }}
+          >
+            Did your phone ring?
+          </Text>
+          <View
+            accessibilityRole="radiogroup"
+            accessibilityLabel="Did your phone ring?"
+            style={{ gap: spacing.md }}
+          >
+            <Button
+              label="Yes, it rang"
+              size="alert"
+              fullWidth
+              variant={rang === 'yes' ? 'primary' : 'secondary'}
+              selected={rang === 'yes'}
+              onPress={() => answerRang('yes')}
+            />
+            <Button
+              label="No, it didn't ring"
+              size="alert"
+              fullWidth
+              variant={rang === 'no' ? 'danger' : 'secondary'}
+              selected={rang === 'no'}
+              onPress={() => answerRang('no')}
+            />
+          </View>
+          {rang === 'yes' ? (
+            <StatusChip status="ok" label="This phone rang for a test page" />
+          ) : null}
+          {rang === 'no' ? (
+            <View accessibilityRole="alert" style={{ gap: spacing.sm }}>
+              <StatusChip status="danger" label="This phone did not ring" />
+              <Text style={{ color: theme.fg, fontSize: typeScale.body.size }}>
+                You may not hear a real page. Before your next call:
+              </Text>
+              {failing.map((item) => (
+                <Text key={item.id} style={{ color: theme.fg, fontSize: typeScale.body.size }}>
+                  • Fix &quot;{item.label}&quot; above.
+                </Text>
+              ))}
+              <Text style={{ color: theme.fg, fontSize: typeScale.body.size }}>
+                •{' '}
+                {Platform.OS === 'ios'
+                  ? 'Set the ring/silent switch to ring, turn the ringer volume up, and allow Boxalarm in every Focus (Sleep, Do Not Disturb).'
+                  : 'Turn the alarm volume up - pages ring on the alarm volume, not the ringer - and check Bedtime / Do Not Disturb lets Boxalarm through.'}
+              </Text>
+              <Text style={{ color: theme.fg, fontSize: typeScale.body.size }}>
+                • Run the test again. If it still doesn't ring, tell your officer - text and voice
+                pages still reach you, and radio tone-out is unchanged.
+              </Text>
+            </View>
+          ) : null}
+        </View>
+      ) : null}
+    </Screen>
   );
 }

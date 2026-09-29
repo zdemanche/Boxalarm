@@ -4,9 +4,11 @@ import { FlatList, RefreshControl, Text, TouchableOpacity, View } from 'react-na
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useOptionalAuth } from '../../auth/AuthContext';
 import { Button, StatusChip, useTheme } from '../../components/ui';
+import { AlertReadinessBanner } from '../../features/alerts/AlertReadinessBanner';
 import { useAlertsRepository } from '../../features/alerts/apiAlertsRepository';
 import { formatClock, formatElapsed } from '../../features/alerts/elapsed';
 import { useActiveDispatches, type ActiveCall } from '../../features/alerts/useActiveDispatches';
+import { useAlertReadiness } from '../../features/alerts/useAlertReadiness';
 import type { AlertsStackParamList } from '../../navigation/AlertsStack';
 
 /** 72dp: the alert-path target floor (a11y-spec §1.11) - this row opens a live call. */
@@ -69,6 +71,7 @@ export function AlertsHomeScreen() {
   const auth = useOptionalAuth();
   const repository = useAlertsRepository();
   const active = useActiveDispatches(repository);
+  const readiness = useAlertReadiness();
   const canEnterManually = (auth?.roles ?? []).some(
     (role) => role === 'OFFICER' || role === 'CHIEF',
   );
@@ -84,6 +87,15 @@ export function AlertsHomeScreen() {
       >
         Alerts
       </Text>
+      <AlertReadinessBanner
+        blocking={readiness.blocking}
+        onSeeAll={() =>
+          // Up to the tab navigator: the self-test checklist lives in the Me stack.
+          (navigation.navigate as (name: string, params: object) => void)('Me', {
+            screen: 'SelfTest',
+          })
+        }
+      />
       {unreachable ? (
         <View
           accessibilityLiveRegion="polite"

@@ -4,6 +4,8 @@ import { useEffect, useState } from 'react';
 import { Text, TouchableOpacity, View } from 'react-native';
 import { Button, Screen, useTheme, type SurfaceTheme } from '../../components/ui';
 import { useAuth } from '../../auth/AuthContext';
+import { AlertReadinessBanner } from '../../features/alerts/AlertReadinessBanner';
+import { useAlertReadiness } from '../../features/alerts/useAlertReadiness';
 import { useMeRepository } from '../../features/me/apiMeRepository';
 import type { LosapTotal, MemberProfile, Qualification } from '../../features/me/types';
 
@@ -42,6 +44,7 @@ export function MeHomeScreen() {
   const [profile, setProfile] = useState<MemberProfile | null>(null);
   const [quals, setQuals] = useState<Qualification[]>([]);
   const [losap, setLosap] = useState<LosapTotal | null>(null);
+  const readiness = useAlertReadiness();
 
   useEffect(() => {
     let cancelled = false;
@@ -61,6 +64,10 @@ export function MeHomeScreen() {
 
   return (
     <Screen>
+      <AlertReadinessBanner
+        blocking={readiness.blocking}
+        onSeeAll={() => navigation.navigate('SelfTest' as never)}
+      />
       <View style={{ alignItems: 'center', marginBottom: spacing.md }}>
         <Text
           accessibilityRole="header"
