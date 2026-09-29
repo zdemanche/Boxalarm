@@ -8,10 +8,17 @@ import {
   type CedarPrincipalContext,
   type GuardEvent,
 } from '@boxalarm/authz';
-import { buildDeptScopedPk, toVerifiedDeptId } from '@boxalarm/dept-scope';
+import { toVerifiedDeptId } from '@boxalarm/dept-scope';
 import { TransactionCanceledException } from '@aws-sdk/client-dynamodb';
-import { GetCommand, TransactWriteCommand } from '@aws-sdk/lib-dynamodb';
 import { createDynamoClient, readPersonnelConfig } from '../dynamoClient.js';
+import {
+  parseDeviceId,
+  withRegisteredDevice,
+  writePushDevices,
+  type ContactChannelEntry,
+} from './pushDevices.js';
+
+export type { ContactChannelEntry } from './pushDevices.js';
 
 const ALLOWED_PLATFORMS = ['APNS', 'FCM'] as const;
 type Platform = (typeof ALLOWED_PLATFORMS)[number];
@@ -19,14 +26,11 @@ type Platform = (typeof ALLOWED_PLATFORMS)[number];
 export interface RegisterTokenBody {
   readonly platform: Platform;
   readonly token: string;
-}
-
-export interface ContactChannelEntry {
-  readonly channel: string;
-  readonly platform?: string;
-  readonly token?: string;
-  readonly valid?: boolean;
-  readonly registeredAt?: number;
+  /**
+   * The app installation registering (pushDevices.ts). Optional for app builds that predate
+   * multi-device support; without it the registration replaces the member's legacy entry.
+   */
+  readonly deviceId?: string;
 }
 
 export function parseRegisterBody(raw: string | undefined | null): RegisterTokenBody {
@@ -45,7 +49,8 @@ export function parseRegisterBody(raw: string | undefined | null): RegisterToken
   if (typeof platform !== 'string' || !ALLOWED_PLATFORMS.includes(platform as Platform)) {
     throw new Error('platform is required and must be one of APNS, FCM');
   }
-  return { platform: platform as Platform, token };
+  const deviceId = parseDeviceId(body.deviceId);
+  return { platform: platform as Platform, token, ...(deviceId ? { deviceId } : {}) };
 }
 
 function extractTraceId(event: GuardEvent): string {
@@ -98,60 +103,22 @@ async function registerToken(
   }
 
   const deptId = toVerifiedDeptId(principal);
-  const pk = buildDeptScopedPk(deptId, 'MEMBER', memberId);
   const client = createDynamoClient(process.env);
   const config = readPersonnelConfig(process.env);
 
-  const existing = await client.send(
-    new GetCommand({ TableName: config.tableName, Key: { pk, sk: 'METADATA' } }),
-  );
-  if (!existing.Item) {
-    return notFoundProblem(traceId, `member ${memberId} was not found`);
-  }
+  const entry: ContactChannelEntry & { token: string } = {
+    channel: 'PUSH',
+    platform: body.platform,
+    token: body.token,
+    valid: true,
+    registeredAt: Date.now(),
+    ...(body.deviceId ? { deviceId: body.deviceId } : {}),
+  };
 
-  const currentChannels =
-    (existing.Item.contactChannels as ContactChannelEntry[] | undefined) ?? [];
-  const registeredAt = Date.now();
-  const contactChannels: ContactChannelEntry[] = [
-    ...currentChannels.filter((entry) => entry.channel !== 'PUSH'),
-    { channel: 'PUSH', platform: body.platform, token: body.token, valid: true, registeredAt },
-  ];
-
-  const eventId = randomUUID();
-
+  let outcome;
   try {
-    await client.send(
-      new TransactWriteCommand({
-        TransactItems: [
-          {
-            Update: {
-              TableName: config.tableName,
-              Key: { pk, sk: 'METADATA' },
-              ConditionExpression: 'attribute_exists(pk)',
-              UpdateExpression: 'SET contactChannels = :cc, updatedAt = :ts',
-              ExpressionAttributeValues: { ':cc': contactChannels, ':ts': registeredAt },
-            },
-          },
-          {
-            Put: {
-              TableName: config.tableName,
-              Item: {
-                pk: buildDeptScopedPk(deptId, 'OUTBOX', memberId),
-                sk: `EVT#${eventId}`,
-                entityType: 'OUTBOX_ENTRY',
-                eventId,
-                eventTime: new Date(registeredAt).toISOString(),
-                eventType: 'personnel.member.updated',
-                source: 'personnel-service',
-                correlationId: memberId,
-                schemaVersion: '1.0',
-                payload: { memberId, deptId, contactChannels },
-                sentAt: null,
-              },
-            },
-          },
-        ],
-      }),
+    outcome = await writePushDevices(client, config.tableName, deptId, memberId, (current) =>
+      withRegisteredDevice(current, entry),
     );
   } catch (error) {
     const cancellationReasons =
@@ -169,15 +136,12 @@ async function registerToken(
         cancellationReasons,
       }),
     );
-    if (
-      error instanceof TransactionCanceledException &&
-      cancellationReasons?.includes('ConditionalCheckFailed')
-    ) {
-      emitPushTokenMetric('Failed', 'ConditionalCheckFailed');
-      return notFoundProblem(traceId, `member ${memberId} was not found`);
-    }
     emitPushTokenMetric('Failed', 'UnknownError');
     throw error;
+  }
+  if (outcome === 'not_found') {
+    emitPushTokenMetric('Failed', 'MemberNotFound');
+    return notFoundProblem(traceId, `member ${memberId} was not found`);
   }
 
   console.log(
@@ -186,6 +150,7 @@ async function registerToken(
       service: 'personnel-service',
       correlationId: traceId,
       memberId,
+      deviceId: body.deviceId ?? null,
     }),
   );
   emitPushTokenMetric('Registered');
@@ -193,7 +158,12 @@ async function registerToken(
   return {
     statusCode: 200,
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ memberId, channel: 'PUSH', registered: true }),
+    body: JSON.stringify({
+      memberId,
+      channel: 'PUSH',
+      registered: true,
+      ...(body.deviceId ? { deviceId: body.deviceId } : {}),
+    }),
   };
 }
 

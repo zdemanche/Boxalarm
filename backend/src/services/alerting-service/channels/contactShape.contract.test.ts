@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import { phoneContactEntries, pushEntriesFrom } from '../eligibility/contactProjection.js';
-import { resolvePushTarget, resolveSmsTarget } from '../eligibility/resolvePushTarget.js';
+import {
+  resolvePushTarget,
+  resolvePushTargets,
+  resolveSmsTarget,
+} from '../eligibility/resolvePushTarget.js';
 import { resolveChannelTarget } from './channelEnvelope.js';
 
 /**
@@ -73,5 +77,32 @@ describe('contact channel shape: snapshot writer ↔ producers ↔ channel worke
     const invalid = { ...writerSms!, valid: false };
     expect(resolveSmsTarget([invalid]).skipped).toBe(true);
     expect(resolveChannelTarget('sms', [invalid]).skipped).toBe(true);
+  });
+
+  // Multi-device: registerToken writes one PUSH entry per installation; the projection keeps
+  // them all, the producer publishes once, and the worker sends to each.
+  it('every registered device survives the projection and is a worker target', () => {
+    const phone = {
+      channel: 'PUSH',
+      platform: 'APNS',
+      token: 'tok-phone',
+      deviceId: 'phone',
+      valid: true,
+    };
+    const tablet = {
+      channel: 'PUSH',
+      platform: 'FCM',
+      token: 'tok-tablet',
+      deviceId: 'tablet',
+      valid: true,
+    };
+    const dead = { channel: 'PUSH', token: 'tok-dead', deviceId: 'old', valid: false };
+    const kept = pushEntriesFrom([phone, tablet, dead, writerSms]);
+    expect(kept).toEqual([phone, tablet, dead]);
+    expect(resolvePushTarget(kept).skipped).toBe(false);
+    expect(resolvePushTargets(kept)).toEqual([
+      { token: 'tok-phone', platform: 'APNS', deviceKey: 'phone' },
+      { token: 'tok-tablet', platform: 'FCM', deviceKey: 'tablet' },
+    ]);
   });
 });

@@ -69,7 +69,12 @@ describe('deliverChannelMessage', () => {
     expect(
       (send.mock.calls[1]?.[0] as { input: { ExpressionAttributeValues: Record<string, unknown> } })
         .input.ExpressionAttributeValues,
-    ).toEqual({ ':sent': 'SENT', ':completedAtMs': expect.any(Number) as number });
+    ).toEqual({
+      ':sent': 'SENT',
+      ':completedAtMs': expect.any(Number) as number,
+      // Per-device outcome under the one per-channel guard (multi-device push).
+      ':deviceSends': { 'token-65dcf16ea3dfa490': 'SENT' },
+    });
     expect(putInput.Item.pk).toBe('DEPT#NICHOLS#DISPATCH#dispatch-1');
     expect(putInput.Item.sk).toBe('RECEIPT#mbr-1#PUSH#1');
     expect(putInput.Item.idempotencyKey).toBe('dispatch-1#1#mbr-1#PUSH');
@@ -461,6 +466,7 @@ describe('deliverChannelMessage — direct APNs/FCM push path', () => {
       ':reason': 'PUSH_TOKEN_INVALID APNS_BadDeviceToken',
       ':failed': 'FAILED',
       ':completedAtMs': expect.any(Number) as number,
+      ':deviceSends': { 'token-65dcf16ea3dfa490': 'INVALID' },
     });
     // Never marked SENT.
     expect(
@@ -550,6 +556,7 @@ describe('deliverChannelMessage — direct APNs/FCM push path', () => {
       ':reason': 'APNs responded 503 ServiceUnavailable',
       ':failed': 'FAILED',
       ':completedAtMs': expect.any(Number) as number,
+      ':deviceSends': {},
     });
     errorSpy.mockRestore();
   });
@@ -571,6 +578,7 @@ describe('deliverChannelMessage — direct APNs/FCM push path', () => {
       ':reason': 'sandbox endpoint unreachable',
       ':failed': 'FAILED',
       ':completedAtMs': expect.any(Number) as number,
+      ':deviceSends': {},
     });
     const metrics = logSpy.mock.calls.map(([line]) => String(line));
     expect(metrics.some((line) => line.includes('"TestSendFailed"'))).toBe(true);
@@ -727,9 +735,171 @@ describe('deliverChannelMessage — self-test configuration refusal (review M5)'
       ':reason': 'PUSH_TEST_REFUSED FCM_SENDER_ID_MISMATCH',
       ':failed': 'FAILED',
       ':completedAtMs': expect.any(Number) as number,
+      ':deviceSends': { 'token-65dcf16ea3dfa490': 'REFUSED' },
     });
     expect(
       inputs.some((input) => (input.Key as { sk?: string } | undefined)?.sk === 'MEMBER#mbr-1'),
     ).toBe(false);
+  });
+});
+
+// Multi-device push: the exactly-once key stays per member per channel per tone (one publish,
+// one guard); the worker sends to every valid device under it and keeps per-device outcomes.
+describe('deliverChannelMessage — multi-device push', () => {
+  const PHONE = {
+    channel: 'PUSH',
+    platform: 'APNS',
+    token: 'a'.repeat(64),
+    deviceId: 'phone',
+    valid: true,
+  };
+  const TABLET = {
+    channel: 'PUSH',
+    platform: 'FCM',
+    token: 'tok-tablet',
+    deviceId: 'tablet',
+    valid: true,
+  };
+  const params: DeliverChannelMessageParams = { ...baseParams, contactChannels: [PHONE, TABLET] };
+
+  function mockPush(sendPush: ReturnType<typeof vi.fn>): void {
+    vi.doMock('./httpProviderAdapter.js', () => ({ sendViaHttpProvider: vi.fn() }));
+    vi.doMock('./push/pushProviderAdapter.js', async (importOriginal) => ({
+      ...(await importOriginal<typeof import('./push/pushProviderAdapter.js')>()),
+      sendPush,
+    }));
+  }
+
+  function updates(send: ReturnType<typeof vi.fn>) {
+    return send.mock.calls
+      .map((call) => call[0] as { constructor: { name: string }; input: Record<string, unknown> })
+      .filter((command) => command.constructor.name === 'UpdateCommand')
+      .map((command) => command.input);
+  }
+
+  it('pages every registered device under the one per-channel guard and idempotency key', async () => {
+    const sendPush = vi.fn().mockResolvedValue({ outcome: 'sent' });
+    mockPush(sendPush);
+    const send = vi.fn().mockResolvedValue({});
+    const { deliverChannelMessage } = await import('./deliverChannelMessage.js');
+
+    await deliverChannelMessage(fakeDdb(send), 'alerting-table', params);
+
+    expect(sendPush).toHaveBeenCalledTimes(2);
+    expect(
+      sendPush.mock.calls.map(([n, platform]) => [
+        (n as { token: string }).token,
+        platform as string,
+      ]),
+    ).toEqual([
+      [PHONE.token, 'APNS'],
+      ['tok-tablet', 'FCM'],
+    ]);
+    for (const [notification] of sendPush.mock.calls) {
+      expect((notification as { idempotencyKey: string }).idempotencyKey).toBe(
+        'dispatch-1#1#mbr-1#PUSH',
+      );
+    }
+    const puts = send.mock.calls.filter(
+      (call) => (call[0] as { constructor: { name: string } }).constructor.name === 'PutCommand',
+    );
+    expect(puts).toHaveLength(1);
+    expect(updates(send)[0]?.ExpressionAttributeValues).toMatchObject({
+      ':sent': 'SENT',
+      ':deviceSends': { phone: 'SENT', tablet: 'SENT' },
+    });
+  });
+
+  it('one device accepted, one transiently failed: FAILED and rethrown, and the redelivery sends only to the failed device', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const sendPush = vi
+      .fn()
+      .mockImplementation((n: { token: string }) =>
+        n.token === 'tok-tablet'
+          ? Promise.reject(new Error('FCM 503'))
+          : Promise.resolve({ outcome: 'sent' }),
+      );
+    mockPush(sendPush);
+    const send = vi.fn().mockResolvedValue({});
+    const { deliverChannelMessage } = await import('./deliverChannelMessage.js');
+
+    await expect(deliverChannelMessage(fakeDdb(send), 'alerting-table', params)).rejects.toThrow(
+      'FCM 503',
+    );
+    expect(updates(send)[0]?.ExpressionAttributeValues).toMatchObject({
+      ':failed': 'FAILED',
+      ':deviceSends': { phone: 'SENT' },
+    });
+
+    // Redelivery: the claim collides, the recorded failure is re-claimed, and the phone that
+    // already rang is skipped.
+    vi.resetModules();
+    const redeliverySendPush = vi.fn().mockResolvedValue({ outcome: 'sent' });
+    mockPush(redeliverySendPush);
+    const redelivery = vi.fn((command: { constructor: { name: string } }) => {
+      if (command.constructor.name === 'PutCommand') {
+        return Promise.reject(
+          new ConditionalCheckFailedException({ message: 'exists', $metadata: {} }),
+        );
+      }
+      if (command.constructor.name === 'GetCommand') {
+        return Promise.resolve({
+          Item: {
+            deliveredAt: null,
+            failureReason: 'FCM 503',
+            sendState: 'FAILED',
+            sentAt: 1,
+            deviceSends: { phone: 'SENT' },
+          },
+        });
+      }
+      return Promise.resolve({});
+    });
+    const again = await import('./deliverChannelMessage.js');
+    await again.deliverChannelMessage(fakeDdb(redelivery), 'alerting-table', params);
+
+    expect(redeliverySendPush).toHaveBeenCalledTimes(1);
+    expect((redeliverySendPush.mock.calls[0]![0] as { token: string }).token).toBe('tok-tablet');
+    expect(updates(redelivery).at(-1)?.ExpressionAttributeValues).toMatchObject({
+      ':sent': 'SENT',
+      ':deviceSends': { phone: 'SENT', tablet: 'SENT' },
+    });
+    errorSpy.mockRestore();
+  });
+
+  it('a dead tablet token does not fail the page the phone received, and only the dead token is invalidated', async () => {
+    const sendPush = vi
+      .fn()
+      .mockImplementation((n: { token: string }) =>
+        Promise.resolve(
+          n.token === 'tok-tablet'
+            ? { outcome: 'invalid_token', reason: 'FCM_UNREGISTERED' }
+            : { outcome: 'sent' },
+        ),
+      );
+    mockPush(sendPush);
+    const send = vi.fn(
+      (command: { constructor: { name: string }; input: { Key?: { sk?: string } } }) =>
+        Promise.resolve(
+          command.constructor.name === 'GetCommand' && command.input.Key?.sk === 'MEMBER#mbr-1'
+            ? { Item: { contactVersion: 1, contactChannels: [PHONE, TABLET] } }
+            : {},
+        ),
+    );
+    const { deliverChannelMessage } = await import('./deliverChannelMessage.js');
+
+    await expect(
+      deliverChannelMessage(fakeDdb(send), 'alerting-table', params),
+    ).resolves.toBeUndefined();
+
+    const all = updates(send);
+    const invalidation = all.find((input) => (input.Key as { sk: string }).sk === 'MEMBER#mbr-1');
+    expect(invalidation?.ExpressionAttributeValues).toMatchObject({
+      ':contactChannels': [PHONE, { ...TABLET, valid: false }],
+    });
+    expect(all.at(-1)?.ExpressionAttributeValues).toMatchObject({
+      ':sent': 'SENT',
+      ':deviceSends': { phone: 'SENT', tablet: 'INVALID' },
+    });
   });
 });

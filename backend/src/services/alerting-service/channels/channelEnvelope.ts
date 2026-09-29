@@ -1,5 +1,9 @@
 import { assertNoDelimiter, type VerifiedDeptId } from '@boxalarm/dept-scope';
-import { contactPhone, findContactEntry } from '../eligibility/resolvePushTarget.js';
+import {
+  contactPhone,
+  findContactEntry,
+  resolvePushTargets,
+} from '../eligibility/resolvePushTarget.js';
 
 export type ChannelName = 'push' | 'sms' | 'voice';
 
@@ -234,6 +238,8 @@ export interface ContactChannelSnapshot {
   readonly platform?: string;
   readonly token?: string;
   readonly phoneNumber?: string;
+  /** PUSH only: the registering app installation; one PUSH entry per device. */
+  readonly deviceId?: string;
 }
 
 export type ResolveChannelTargetResult =
@@ -246,7 +252,8 @@ export type ResolveChannelTargetResult =
  * decide which channels to publish from the same snapshot with the same findContactEntry,
  * so both sides accept the same shapes - a mismatch means the producer publishes and the worker silently finds no
  * target (the recurring SMS-never-sends defect, #12). Accepted, case-insensitively:
- *  - push: a PUSH entry's token (registerToken.ts);
+ *  - push: a PUSH entry's token (registerToken.ts) - here the first device; the push worker
+ *    sends to every device (resolvePushTargets);
  *  - sms: an SMS entry's phone, as phoneNumber (eligibility/contactProjection.ts projects the
  *    member's phone into { channel: 'SMS', phoneNumber }) or the legacy `token`;
  *  - voice: a VOICE entry's phone (projected from the same phone), else the SMS phone.
@@ -257,7 +264,7 @@ export function resolveChannelTarget(
 ): ResolveChannelTargetResult {
   const target =
     channel === 'push'
-      ? findContactEntry(contactChannels, 'PUSH')?.token
+      ? resolvePushTargets(contactChannels)[0]?.token
       : channel === 'sms'
         ? contactPhone(findContactEntry(contactChannels, 'SMS'))
         : (contactPhone(findContactEntry(contactChannels, 'VOICE')) ??

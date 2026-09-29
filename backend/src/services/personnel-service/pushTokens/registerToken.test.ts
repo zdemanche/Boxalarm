@@ -43,6 +43,16 @@ describe('parseRegisterBody', () => {
     );
   });
 
+  it('parses an optional deviceId and rejects an unusable one', async () => {
+    const { parseRegisterBody } = await import('./registerToken.js');
+    expect(
+      parseRegisterBody(JSON.stringify({ platform: 'APNS', token: 'tok-1', deviceId: 'dev-1' })),
+    ).toEqual({ platform: 'APNS', token: 'tok-1', deviceId: 'dev-1' });
+    expect(() =>
+      parseRegisterBody(JSON.stringify({ platform: 'APNS', token: 'tok-1', deviceId: 'a#b' })),
+    ).toThrow('deviceId');
+  });
+
   it('parses a valid body', async () => {
     const { parseRegisterBody } = await import('./registerToken.js');
     expect(parseRegisterBody(JSON.stringify({ platform: 'FCM', token: 'tok-1' }))).toEqual({
@@ -320,6 +330,56 @@ describe('registerToken handler', () => {
 
     expect(result.statusCode).toBe(403);
     expect(send).not.toHaveBeenCalled();
+    vi.doUnmock('../dynamoClient.js');
+    vi.doUnmock('@boxalarm/authz');
+  });
+
+  // Multi-device (design review item 4): signing in on a tablet used to replace the phone's
+  // PUSH entry, silently ending the phone's pages.
+  it('adds a second device instead of replacing the first', async () => {
+    const phone = {
+      channel: 'PUSH',
+      platform: 'APNS',
+      token: 'tok-phone',
+      deviceId: 'phone',
+      valid: true,
+      registeredAt: 1,
+    };
+    const send = vi
+      .fn()
+      .mockImplementation((command: { constructor: { name: string } }) =>
+        Promise.resolve(
+          command.constructor.name === 'GetCommand'
+            ? { Item: { pk: 'x', sk: 'METADATA', contactChannels: [phone], updatedAt: 3 } }
+            : {},
+        ),
+      );
+    vi.doMock('../dynamoClient.js', () => ({
+      createDynamoClient: () => ({ send }) as unknown as DynamoDBDocumentClient,
+      readPersonnelConfig: () => ({ tableName: 'personnel-table' }),
+    }));
+    vi.doMock('@boxalarm/authz', async () => {
+      const actual = await vi.importActual<typeof import('@boxalarm/authz')>('@boxalarm/authz');
+      return { ...actual, withAuthorization: (inner: unknown) => inner };
+    });
+
+    const { handler } = await import('./registerToken.js');
+    await (handler as unknown as (e: GuardEvent, p: CedarPrincipalContext) => Promise<unknown>)(
+      buildEvent('mbr-102', { platform: 'FCM', token: 'tok-tablet', deviceId: 'tablet' }),
+      PRINCIPAL,
+    );
+
+    const transact = send.mock.calls[1]?.[0] as {
+      input: {
+        TransactItems: [
+          { Update: { ExpressionAttributeValues: { ':cc': { deviceId?: string }[] } } },
+          { Put: { Item: { payload: { contactChannels: unknown[] } } } },
+        ];
+      };
+    };
+    const devices = transact.input.TransactItems[0].Update.ExpressionAttributeValues[':cc'];
+    expect(devices.map((entry) => entry.deviceId)).toEqual(['tablet', 'phone']);
+    expect(transact.input.TransactItems[1].Put.Item.payload.contactChannels).toEqual(devices);
     vi.doUnmock('../dynamoClient.js');
     vi.doUnmock('@boxalarm/authz');
   });
