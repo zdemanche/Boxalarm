@@ -33,18 +33,54 @@ function fakeIncident(corePayload: Record<string, unknown> = { incident_type: 'S
   };
 }
 
+const DEPT_NERIS_ID = 'FD09190828';
+
 function mockDeps(options: {
   readonly httpStatus?: number;
+  readonly responseBody?: unknown;
   readonly fetchError?: Error;
   readonly incidentExists?: boolean;
   readonly production?: boolean;
+  readonly nerisIncidentId?: string;
+  readonly departmentNerisId?: string | null;
 }) {
+  const incident = {
+    ...fakeIncident(),
+    ...(options.nerisIncidentId ? { nerisIncidentId: options.nerisIncidentId } : {}),
+  };
   const getIncident = vi
     .fn()
-    .mockResolvedValue(options.incidentExists === false ? undefined : fakeIncident());
+    .mockResolvedValue(options.incidentExists === false ? undefined : incident);
   vi.doMock('../repository.js', async (importOriginal) => {
     const actual = await importOriginal<typeof import('../repository.js')>();
-    return { ...actual, getIncidentRepository: () => ({ getIncident }) };
+    return {
+      ...actual,
+      getIncidentRepository: () => ({ getIncident }),
+      getDocumentClient: () => ({ send: vi.fn() }),
+      getTableName: () => 'incident-table',
+    };
+  });
+  vi.doMock('../nerisSettings.js', async (importOriginal) => {
+    const actual = await importOriginal<typeof import('../nerisSettings.js')>();
+    return {
+      ...actual,
+      getNerisDeptSettings: () =>
+        Promise.resolve({
+          ...actual.DEFAULT_NERIS_SETTINGS,
+          ...(options.departmentNerisId === null
+            ? {}
+            : { departmentNerisId: options.departmentNerisId ?? DEPT_NERIS_ID }),
+          unitNerisIds: { E1: 'FD09190828S001U001' },
+        }),
+    };
+  });
+  vi.doMock('../dispatchProjection.js', async (importOriginal) => {
+    const actual = await importOriginal<typeof import('../dispatchProjection.js')>();
+    return {
+      ...actual,
+      queryIncidentResponseUnits: () =>
+        Promise.resolve([{ unitId: 'E1', unitType: 'APPARATUS', dispatchedAt: 1_798_000_060 }]),
+    };
   });
 
   const appendSubmissionAttempt = vi.fn().mockResolvedValue({ submissionStatus: 'RETRYING' });
@@ -53,16 +89,35 @@ function mockDeps(options: {
     return { ...actual, getSubmissionRepository: () => ({ appendSubmissionAttempt }) };
   });
 
+  const status = options.httpStatus ?? 201;
+  const body =
+    options.responseBody ??
+    (status === 201
+      ? {
+          neris_id: `${DEPT_NERIS_ID}|4471|1798000000`,
+          incident_status: { status: 'SUBMITTED' },
+        }
+      : status === 422
+        ? {
+            detail: [
+              { loc: ['body', 'dispatch', 'call_create'], msg: 'Field required', type: 'missing' },
+            ],
+          }
+        : {});
   const fetchFn = options.fetchError
     ? vi.fn().mockRejectedValue(options.fetchError)
-    : vi.fn().mockResolvedValue({ status: options.httpStatus ?? 200 });
+    : vi
+        .fn()
+        .mockImplementation(() =>
+          Promise.resolve(new Response(status === 204 ? null : JSON.stringify(body), { status })),
+        );
   vi.doMock('./index.js', async (importOriginal) => {
     const actual = await importOriginal<typeof import('./index.js')>();
     return {
       ...actual,
       readNerisConfig: () =>
         Promise.resolve({
-          baseUrl: 'https://dev.neris.fsri.org',
+          baseUrl: 'https://api-test.neris.fsri.org/v1',
           userAgent: 'boxalarm/dev',
           clientId: 'c',
           clientSecret: 's',
@@ -75,6 +130,14 @@ function mockDeps(options: {
   return { getIncident, appendSubmissionAttempt, fetchFn };
 }
 
+function unmockAll(): void {
+  vi.unmock('../repository.js');
+  vi.unmock('../submissionRepository.js');
+  vi.unmock('../nerisSettings.js');
+  vi.unmock('../dispatchProjection.js');
+  vi.unmock('./index.js');
+}
+
 describe('submissionWorker handler (SQS trigger)', () => {
   beforeEach(() => {
     vi.resetModules();
@@ -84,14 +147,12 @@ describe('submissionWorker handler (SQS trigger)', () => {
 
   afterEach(() => {
     delete process.env.NERIS_SUBMISSION_SCHEDULER_ROLE_ARN;
-    vi.unmock('../repository.js');
-    vi.unmock('../submissionRepository.js');
-    vi.unmock('./index.js');
+    unmockAll();
     vi.restoreAllMocks();
   });
 
   it('finalizes SUCCESS on a 2xx response with no retry scheduled (AC4)', async () => {
-    const { appendSubmissionAttempt } = mockDeps({ httpStatus: 202 });
+    const { appendSubmissionAttempt } = mockDeps({ httpStatus: 201 });
     const { createHandler } = await import('./submissionWorker.js');
     const schedulerSend = vi.fn();
     const handler = createHandler({ schedulerClient: { send: schedulerSend } as never });
@@ -103,7 +164,15 @@ describe('submissionWorker handler (SQS trigger)', () => {
     expect(appendSubmissionAttempt).toHaveBeenCalledWith(
       'NICHOLS',
       INCIDENT_ID,
-      expect.objectContaining({ outcome: 'SUCCESS', httpStatus: 202, retryCount: 0 }),
+      expect.objectContaining({
+        outcome: 'SUCCESS',
+        httpStatus: 201,
+        retryCount: 0,
+        operation: 'CREATE',
+        nerisIncidentId: `${DEPT_NERIS_ID}|4471|1798000000`,
+        nerisStatus: 'SUBMITTED',
+        payloadHash: expect.stringMatching(/^[0-9a-f]{64}$/) as unknown,
+      }),
       true,
       expect.any(Number),
     );
@@ -168,6 +237,126 @@ describe('submissionWorker handler (SQS trigger)', () => {
     expect(schedulerSend).toHaveBeenCalledTimes(1);
   });
 
+  it('creates with POST /incident/{department NERIS id} — the spec path, not /incidents', async () => {
+    const { fetchFn } = mockDeps({ httpStatus: 201 });
+    const { createHandler } = await import('./submissionWorker.js');
+    const handler = createHandler({ schedulerClient: { send: vi.fn() } as never });
+
+    await handler(
+      { Records: [sqsRecord(submittedEnvelope('NICHOLS', INCIDENT_ID))] },
+      FAKE_CONTEXT,
+      () => undefined,
+    );
+
+    const [path, init] = fetchFn.mock.calls[0] as [string, RequestInit];
+    expect(path).toBe(`/incident/${DEPT_NERIS_ID}`);
+    expect(init.method).toBe('POST');
+    const body = JSON.parse(init.body as string) as Record<string, Record<string, unknown>>;
+    expect(body.base).toMatchObject({
+      department_neris_id: DEPT_NERIS_ID,
+      incident_number: '4471',
+    });
+    expect(body.dispatch).toMatchObject({ incident_number: '4471' });
+    expect(body.dispatch!.unit_responses).toEqual([
+      expect.objectContaining({ reported_unit_id: 'E1', unit_neris_id: 'FD09190828S001U001' }),
+    ]);
+  });
+
+  it('replaces by NERIS id (PUT /incident/{entity}/{neris id}, pipes encoded) once NERIS has the record', async () => {
+    const nerisIncidentId = `${DEPT_NERIS_ID}|4471|1798000000`;
+    const { fetchFn, appendSubmissionAttempt } = mockDeps({
+      httpStatus: 200,
+      responseBody: { last_modified: '2026-09-29T10:00:00Z' },
+      nerisIncidentId,
+    });
+    const { createHandler } = await import('./submissionWorker.js');
+    const handler = createHandler({ schedulerClient: { send: vi.fn() } as never });
+
+    await handler(
+      { Records: [sqsRecord(submittedEnvelope('NICHOLS', INCIDENT_ID))] },
+      FAKE_CONTEXT,
+      () => undefined,
+    );
+
+    const [path, init] = fetchFn.mock.calls[0] as [string, RequestInit];
+    expect(path).toBe(`/incident/${DEPT_NERIS_ID}/${encodeURIComponent(nerisIncidentId)}`);
+    expect(init.method).toBe('PUT');
+    expect(appendSubmissionAttempt).toHaveBeenCalledWith(
+      'NICHOLS',
+      INCIDENT_ID,
+      expect.objectContaining({ outcome: 'SUCCESS', operation: 'UPDATE', nerisIncidentId }),
+      true,
+      expect.any(Number),
+    );
+  });
+
+  it('records NERIS 422 issues on the attempt and in the failure reason', async () => {
+    const { appendSubmissionAttempt } = mockDeps({ httpStatus: 422 });
+    const { createHandler } = await import('./submissionWorker.js');
+    const handler = createHandler({ schedulerClient: { send: vi.fn() } as never });
+
+    await handler(
+      { Records: [sqsRecord(submittedEnvelope('NICHOLS', INCIDENT_ID))] },
+      FAKE_CONTEXT,
+      () => undefined,
+    );
+
+    expect(appendSubmissionAttempt).toHaveBeenCalledWith(
+      'NICHOLS',
+      INCIDENT_ID,
+      expect.objectContaining({
+        outcome: 'VALIDATION_ERROR',
+        errors: [{ path: 'dispatch.call_create', code: 'missing', message: 'Field required' }],
+        failureReason: expect.stringContaining('dispatch.call_create: Field required') as unknown,
+      }),
+      true,
+      expect.any(Number),
+    );
+  });
+
+  it('fails terminally as NOT_CONFIGURED, without calling NERIS, when the department has no NERIS id', async () => {
+    const { appendSubmissionAttempt, fetchFn } = mockDeps({ departmentNerisId: null });
+    const { createHandler } = await import('./submissionWorker.js');
+    const handler = createHandler({ schedulerClient: { send: vi.fn() } as never });
+
+    await handler(
+      { Records: [sqsRecord(submittedEnvelope('NICHOLS', INCIDENT_ID))] },
+      FAKE_CONTEXT,
+      () => undefined,
+    );
+
+    expect(fetchFn).not.toHaveBeenCalled();
+    expect(appendSubmissionAttempt).toHaveBeenCalledWith(
+      'NICHOLS',
+      INCIDENT_ID,
+      expect.objectContaining({ outcome: 'NOT_CONFIGURED' }),
+      true,
+      expect.any(Number),
+    );
+  });
+
+  it('treats a 401/403 as CLIENT_ERROR — terminal, and not a rejection of the report', async () => {
+    const { appendSubmissionAttempt } = mockDeps({ httpStatus: 403 });
+    const { createHandler } = await import('./submissionWorker.js');
+    const schedulerSend = vi.fn();
+    const handler = createHandler({ schedulerClient: { send: schedulerSend } as never });
+
+    await handler(
+      { Records: [sqsRecord(submittedEnvelope('NICHOLS', INCIDENT_ID))] },
+      FAKE_CONTEXT,
+      () => undefined,
+    );
+
+    expect(appendSubmissionAttempt).toHaveBeenCalledWith(
+      'NICHOLS',
+      INCIDENT_ID,
+      expect.objectContaining({ outcome: 'CLIENT_ERROR', httpStatus: 403 }),
+      true,
+      expect.any(Number),
+    );
+    expect(schedulerSend).not.toHaveBeenCalled();
+  });
+
   it('never a silent drop: a malformed SQS record is logged, returned as batchItemFailures, and never appends an attempt (core-harm row)', async () => {
     const { appendSubmissionAttempt } = mockDeps({ httpStatus: 200 });
     const { createHandler } = await import('./submissionWorker.js');
@@ -190,9 +379,7 @@ describe('submissionWorker handler (EventBridge Scheduler retry trigger)', () =>
 
   afterEach(() => {
     delete process.env.NERIS_SUBMISSION_SCHEDULER_ROLE_ARN;
-    vi.unmock('../repository.js');
-    vi.unmock('../submissionRepository.js');
-    vi.unmock('./index.js');
+    unmockAll();
     vi.restoreAllMocks();
   });
 

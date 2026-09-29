@@ -26,3 +26,18 @@ export {
   type CreateNerisClientDeps,
   type NerisClient,
 } from './client.js';
+export {
+  NERIS_INCIDENT_STATUSES,
+  NERIS_PATHS,
+  OPEN_NERIS_STATUSES,
+  isNerisIncidentStatus,
+  type NerisIncidentStatus,
+} from './paths.js';
+export {
+  createNerisApi,
+  parseNerisIssues,
+  type NerisApi,
+  type NerisFailure,
+  type NerisIssue,
+  type NerisResult,
+} from './api.js';

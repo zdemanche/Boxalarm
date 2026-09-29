@@ -120,6 +120,18 @@ function toIncident(item: Record<string, unknown>): Incident {
     createdBy: item.createdBy as string,
     createdAt: item.createdAt as number,
     updatedAt: item.updatedAt as number,
+    ...(typeof item.lockedAt === 'number' ? { lockedAt: item.lockedAt } : {}),
+    ...(typeof item.lockedBy === 'string' ? { lockedBy: item.lockedBy } : {}),
+    ...(typeof item.submissionStatus === 'string'
+      ? { submissionStatus: item.submissionStatus }
+      : {}),
+    ...(typeof item.nerisIncidentId === 'string' ? { nerisIncidentId: item.nerisIncidentId } : {}),
+    ...(typeof item.nerisStatus === 'string' ? { nerisStatus: item.nerisStatus } : {}),
+    ...(typeof item.nerisStatusAt === 'number' ? { nerisStatusAt: item.nerisStatusAt } : {}),
+    ...(typeof item.firstSubmittedAt === 'number'
+      ? { firstSubmittedAt: item.firstSubmittedAt }
+      : {}),
+    ...(typeof item.lastPayloadHash === 'string' ? { lastPayloadHash: item.lastPayloadHash } : {}),
   };
 }
 

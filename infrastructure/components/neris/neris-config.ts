@@ -3,10 +3,15 @@ import * as aws from "@pulumi/aws";
 import { IamPolicyStatement } from "../observability/observability-policy";
 import { requireEnv } from "../shared/env";
 
-/** Documented NERIS non-prod API host (N6.4 — never used from prod). */
-export const NERIS_DEV_BASE_URL = "https://api-test.neris.fsri.org";
-/** Documented NERIS production API host. */
-export const NERIS_PROD_BASE_URL = "https://api.neris.fsri.org";
+// Both NERIS OpenAPI documents (prod v1.4.78, test v1.5.1, checked 2026-09-29) declare their
+// server as `https://<host>/v1`: `<host>/health` is a 404 and `<host>/v1/health` a 200. The
+// backend client resolves every path (`/token`, `/incident/{entity}`, ...) against this base,
+// so the `/v1` prefix belongs here — without it every NERIS call, the token request included,
+// misses the API.
+/** Documented NERIS non-prod API base (N6.4 — never used from prod). */
+export const NERIS_DEV_BASE_URL = "https://api-test.neris.fsri.org/v1";
+/** Documented NERIS production API base. */
+export const NERIS_PROD_BASE_URL = "https://api.neris.fsri.org/v1";
 
 const NON_PROD_ENVS = new Set(["dev", "qa", "staging"]);
 

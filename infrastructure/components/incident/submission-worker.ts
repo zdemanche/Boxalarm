@@ -80,7 +80,7 @@ export class NerisSubmissionWorker extends pulumi.ComponentResource {
         handler: LAMBDA_HANDLER,
         code: lambdaCode("incident-service", "submission-worker"),
         logGroup: args.logGroup,
-        // One outbound NERIS POST plus SSM/Secrets reads on a cold start; the 3s Lambda
+        // One outbound NERIS POST/PUT plus SSM/Secrets reads on a cold start; the 3s Lambda
         // default would misclassify a slow NERIS response as a failure. Kept under the
         // queue's default 30s visibility timeout, which AWS requires.
         timeout: 25,
@@ -105,10 +105,17 @@ export class NerisSubmissionWorker extends pulumi.ComponentResource {
           .apply(([tableArn, cmkArn, secretArn, schedulePattern]) => [
             {
               // getIncident + appendSubmissionAttempt's TransactWrite (attempt Put,
-              // submission Update, optional neris.submission.failed outbox Put).
+              // submission Update, last-accepted-payload / open-status / outbox Puts).
+              // Query: the NERIS settings copy (DEPT#…#NERIS) and the incident's RESPONSE#
+              // unit rows the payload is built from.
               Sid: "IncidentSubmissionAccess" as const,
               Effect: "Allow" as const,
-              Action: ["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:UpdateItem"],
+              Action: [
+                "dynamodb:GetItem",
+                "dynamodb:PutItem",
+                "dynamodb:UpdateItem",
+                "dynamodb:Query",
+              ],
               Resource: [tableArn],
             },
             {

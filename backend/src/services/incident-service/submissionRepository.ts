@@ -13,6 +13,10 @@ export const SUBMISSION_OUTCOMES = [
   'RATE_LIMITED',
   'VALIDATION_ERROR',
   'SERVER_ERROR',
+  /** A 4xx other than 422/429 (auth, WAF, unknown record): not a verdict on the report. */
+  'CLIENT_ERROR',
+  /** The department has no NERIS id yet, or NERIS submissions are switched off. */
+  'NOT_CONFIGURED',
 ] as const;
 
 export type SubmissionOutcome = (typeof SUBMISSION_OUTCOMES)[number];
@@ -64,7 +68,31 @@ export interface SubmissionAttemptInput {
   readonly retryCount: number;
   readonly nerisEnvironment: 'DEV' | 'PROD';
   readonly failureReason?: string;
+  /** CREATE = POST /incident/{entity}; UPDATE = PUT /incident/{entity}/{nerisId}. */
+  readonly operation?: 'CREATE' | 'UPDATE';
+  /** NERIS's id for the record, once it has one. */
+  readonly nerisIncidentId?: string;
+  /** NERIS lifecycle status returned by the create (a PUT returns none). */
+  readonly nerisStatus?: string;
+  readonly payloadHash?: string;
+  /** The payload NERIS accepted, kept (one row) so a later resubmission can show its diff. */
+  readonly acceptedPayload?: Readonly<Record<string, unknown>>;
+  /** NERIS's own 422 issues, verbatim, for the submission ledger. */
+  readonly errors?: readonly {
+    readonly path: string;
+    readonly code: string;
+    readonly message: string;
+  }[];
 }
+
+/** Poller work-list row: one per incident whose NERIS status is not final yet. */
+export function nerisOpenKey(deptId: VerifiedDeptId, incidentId: string) {
+  return { pk: buildDeptScopedPk(deptId, 'NERIS_OPEN'), sk: incidentId };
+}
+
+export const LAST_PAYLOAD_SK = 'NERIS#LAST_PAYLOAD';
+
+const OPEN_STATUSES = new Set(['SUBMITTED', 'PENDING_INCIDENT_DATA', 'PENDING_APPROVAL']);
 
 export interface AppendSubmissionAttemptResult {
   readonly submissionStatus: SubmissionStatus;
@@ -188,6 +216,7 @@ export function createSubmissionRepository(
           : attempt.outcome === 'VALIDATION_ERROR'
             ? 'REJECTED'
             : undefined;
+      const success = attempt.outcome === 'SUCCESS';
 
       const attemptItem = {
         pk: buildDeptScopedPk(deptId, 'INCIDENT', incidentId),
@@ -200,6 +229,12 @@ export function createSubmissionRepository(
         httpStatus: attempt.httpStatus,
         retryCount: attempt.retryCount,
         nerisEnvironment: attempt.nerisEnvironment,
+        ...(attempt.operation ? { operation: attempt.operation } : {}),
+        ...(attempt.nerisIncidentId ? { nerisIncidentId: attempt.nerisIncidentId } : {}),
+        ...(attempt.nerisStatus ? { nerisStatus: attempt.nerisStatus } : {}),
+        ...(attempt.payloadHash ? { payloadHash: attempt.payloadHash } : {}),
+        ...(attempt.failureReason ? { failureReason: attempt.failureReason } : {}),
+        ...(attempt.errors && attempt.errors.length > 0 ? { errors: attempt.errors } : {}),
       };
 
       const setClauses = [
@@ -222,6 +257,25 @@ export function createSubmissionRepository(
         names['#status'] = 'status';
         values[':incidentStatus'] = incidentStatus;
       }
+      if (success) {
+        setClauses.push(
+          'firstSubmittedAt = if_not_exists(firstSubmittedAt, :updatedAt)',
+          'lastSubmittedAt = :updatedAt',
+        );
+        if (attempt.nerisIncidentId) {
+          setClauses.push('nerisIncidentId = :nerisIncidentId');
+          values[':nerisIncidentId'] = attempt.nerisIncidentId;
+        }
+        if (attempt.payloadHash) {
+          setClauses.push('lastPayloadHash = :payloadHash');
+          values[':payloadHash'] = attempt.payloadHash;
+        }
+        // A create reports NERIS's status; a PUT does not, and the record re-enters NERIS's
+        // queue, so it reads as SUBMITTED until the poller fetches the real one.
+        setClauses.push('nerisStatus = :nerisStatus', 'nerisStatusAt = :updatedAt');
+        values[':nerisStatus'] = attempt.nerisStatus ?? 'SUBMITTED';
+      }
+      const watchStatus = success && OPEN_STATUSES.has(attempt.nerisStatus ?? 'SUBMITTED');
 
       const failedOutboxRecord =
         submissionStatus === 'FAILED'
@@ -229,6 +283,9 @@ export function createSubmissionRepository(
               incidentId,
               deptId,
               reason: attempt.failureReason ?? attempt.outcome,
+              // reporting-service's projection (projections/events.ts) reads these two names.
+              failureReason: attempt.failureReason ?? attempt.outcome,
+              httpStatus: attempt.httpStatus,
             })
           : undefined;
 
@@ -255,6 +312,63 @@ export function createSubmissionRepository(
               },
               ...(failedOutboxRecord
                 ? [{ Put: { TableName: tableName, Item: failedOutboxRecord } }]
+                : []),
+              ...(success && attempt.acceptedPayload
+                ? [
+                    {
+                      Put: {
+                        TableName: tableName,
+                        Item: {
+                          pk: buildDeptScopedPk(deptId, 'INCIDENT', incidentId),
+                          sk: LAST_PAYLOAD_SK,
+                          entityType: 'NERIS_LAST_PAYLOAD',
+                          payload: attempt.acceptedPayload,
+                          payloadHash: attempt.payloadHash,
+                          acceptedAt: attemptedAt,
+                        },
+                      },
+                    },
+                  ]
+                : []),
+              ...(watchStatus && attempt.nerisIncidentId
+                ? [
+                    {
+                      Put: {
+                        TableName: tableName,
+                        Item: {
+                          ...nerisOpenKey(deptId, incidentId),
+                          entityType: 'NERIS_OPEN_SUBMISSION',
+                          incidentId,
+                          nerisIncidentId: attempt.nerisIncidentId,
+                          since: nowEpochSeconds,
+                        },
+                      },
+                    },
+                  ]
+                : []),
+              ...(success
+                ? [
+                    {
+                      Put: {
+                        TableName: tableName,
+                        Item: buildOutboxRecord(
+                          deptId,
+                          'incident-service',
+                          'neris.incident.transmitted',
+                          incidentId,
+                          {
+                            incidentId,
+                            deptId,
+                            operation: attempt.operation ?? 'CREATE',
+                            ...(attempt.nerisIncidentId
+                              ? { nerisIncidentId: attempt.nerisIncidentId }
+                              : {}),
+                            nerisStatus: attempt.nerisStatus ?? 'SUBMITTED',
+                          },
+                        ),
+                      },
+                    },
+                  ]
                 : []),
             ],
           }),
