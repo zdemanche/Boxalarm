@@ -9,8 +9,22 @@ import { AlertReadinessBanner } from '../../features/alerts/AlertReadinessBanner
 import { useAlertsRepository } from '../../features/alerts/apiAlertsRepository';
 import { formatClock, formatElapsed } from '../../features/alerts/elapsed';
 import { useActiveDispatches, type ActiveCall } from '../../features/alerts/useActiveDispatches';
+import type { DetailFailure } from '../../features/alerts/useAlertDetail';
 import { useAlertReadiness } from '../../features/alerts/useAlertReadiness';
 import type { AlertsStackParamList } from '../../navigation/AlertsStack';
+
+// Review m7: "can't reach" and "refused" need different words - a refusal will not fix itself
+// by moving to signal.
+function failureLead(failure: DetailFailure | null): string {
+  switch (failure) {
+    case 'refused':
+      return 'Boxalarm refused the call list for this sign-in - tell your officer.';
+    case 'server':
+      return "Boxalarm's server had a problem loading the call list.";
+    default:
+      return "Can't reach Boxalarm.";
+  }
+}
 
 /** 72dp: the alert-path target floor (a11y-spec §1.11) - this row opens a live call. */
 const CALL_ROW_MIN_HEIGHT = 72;
@@ -58,7 +72,7 @@ function CallRow({ call, onOpen }: { call: ActiveCall; onOpen: () => void }) {
         {formatElapsed(dispatchedMs)}
       </Text>
       {call.fromPageOnly ? (
-        <StatusChip status="warning" label="Received on this phone - not confirmed" />
+        <StatusChip status="warning" label="Received on this phone - not in the server list yet" />
       ) : null}
     </TouchableOpacity>
   );
@@ -120,8 +134,8 @@ export function AlertsHomeScreen() {
         >
           <Text style={{ color: theme.fg, fontSize: typeScale.body.size }}>
             {active.source === 'cached' && asOf
-              ? `▲ Can't reach Boxalarm. Showing active calls saved on this phone at ${asOf} - they may have changed.`
-              : "▲ Can't reach Boxalarm, and no call list is saved on this phone yet."}
+              ? `▲ ${failureLead(active.failure)} Showing active calls saved on this phone at ${asOf} - they may have changed.`
+              : `▲ ${failureLead(active.failure)} No call list is saved on this phone yet.`}
           </Text>
         </View>
       ) : asOf ? (

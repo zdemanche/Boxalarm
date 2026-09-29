@@ -28,10 +28,21 @@ export interface ActiveDispatchesState {
   refresh: () => Promise<void>;
 }
 
-async function withRecentPages(calls: ActiveDispatchSummary[], now: number): Promise<ActiveCall[]> {
+/**
+ * Even when the server list loads, a page received in the last couple of minutes that the list
+ * does not include yet (index lag) is shown - "No active calls" while the phone is ringing is the
+ * wrong answer (review m7).
+ */
+export const UNLISTED_PAGE_WINDOW_MS = 2 * 60_000;
+
+async function withRecentPages(
+  calls: ActiveDispatchSummary[],
+  now: number,
+  windowMs: number = RECENT_PAGE_WINDOW_MS,
+): Promise<ActiveCall[]> {
   const known = new Set(calls.map((c) => c.dispatchId));
   const pages = (await recentPages()).filter(
-    (page) => !known.has(page.dispatchId) && now - page.receivedAt <= RECENT_PAGE_WINDOW_MS,
+    (page) => !known.has(page.dispatchId) && now - page.receivedAt <= windowMs,
   );
   return [
     ...calls.map((c) => ({ ...c, fromPageOnly: false })),
@@ -80,7 +91,9 @@ export function useActiveDispatches(
       if (isStale()) return;
       settledRef.current = true;
       const now = Date.now();
-      setCalls(list.dispatches.map((d) => ({ ...d, fromPageOnly: false })));
+      const merged = await withRecentPages(list.dispatches, now, UNLISTED_PAGE_WINDOW_MS);
+      if (isStale()) return;
+      setCalls(merged);
       setSource('live');
       setUpdatedAt(now);
       setTruncated(list.truncated);

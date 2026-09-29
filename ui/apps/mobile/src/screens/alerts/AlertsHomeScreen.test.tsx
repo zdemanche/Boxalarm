@@ -2,6 +2,7 @@ import notifee from '@notifee/react-native';
 import { act, fireEvent, render } from '@testing-library/react-native';
 import { rememberAlertPayload } from '../../features/alerts/alertPayload';
 import { mockAlertsRepository } from '../../features/alerts/mockAlertsRepository';
+import { ApiError } from '../../lib/apiClient';
 import { AlertsHomeScreen } from './AlertsHomeScreen';
 
 const mockNavigate = jest.fn();
@@ -115,7 +116,38 @@ describe('active call list (alert-ux C3)', () => {
     const { findByText } = await render(<AlertsHomeScreen />);
 
     expect(await findByText('9 Oak Ave')).toBeTruthy();
-    expect(await findByText(/received on this phone - not confirmed/i)).toBeTruthy();
+    expect(await findByText(/received on this phone - not in the server list yet/i)).toBeTruthy();
+  });
+
+  test('a page just received that the server list does not include yet is still shown (review m7)', async () => {
+    jest
+      .spyOn(mockAlertsRepository, 'listActiveDispatches')
+      .mockResolvedValue({ dispatches: [], asOf: now, truncated: false });
+    await rememberAlertPayload({
+      dispatchId: 'D-JUST-NOW',
+      incidentType: 'Structure fire',
+      address: '4 New Rd',
+      receivedAt: Date.now() - 10_000,
+    });
+
+    const { findByText, queryByText } = await render(<AlertsHomeScreen />);
+
+    expect(await findByText('4 New Rd')).toBeTruthy();
+    expect(queryByText(/no active calls/i)).toBeNull();
+  });
+
+  test('a refused list is worded as refused, not as no signal (review m7)', async () => {
+    jest
+      .spyOn(mockAlertsRepository, 'listActiveDispatches')
+      .mockRejectedValue(
+        new ApiError({ type: 'about:blank', title: 'Forbidden', status: 403, traceId: 't' }),
+      );
+    jest.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const { findByText, queryByText } = await render(<AlertsHomeScreen />);
+
+    expect(await findByText(/refused the call list/i)).toBeTruthy();
+    expect(queryByText(/can't reach/i)).toBeNull();
   });
 
   test('pull-to-refresh and the Refresh button both reload the list', async () => {
