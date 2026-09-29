@@ -71,17 +71,18 @@ export async function readRevokedAt(
 let cachedAuthorizerClient: DynamoDBDocumentClient | undefined;
 
 /**
- * The authorizer's client: ONE attempt with tight timeouts. It sits in front of every route,
- * including responding to a call, so a slow table must surface as "unavailable" (handled by
- * the fail-open/fail-closed rule in revocationCheck.ts) within a bounded time rather than
- * holding the request through the SDK's default retries.
+ * The authorizer's client: two attempts with tight timeouts (~600 ms worst case before
+ * backoff). It sits in front of every route, including responding to a call, so a slow table
+ * must surface as "unavailable" (handled by the fail-open/fail-closed rule in
+ * revocationCheck.ts) within a bounded time; the one retry absorbs a single dropped
+ * connection on a cold instance, which has no cached answer to fall back on.
  */
 export function getAuthorizerStoreClient(): DynamoDBDocumentClient {
   cachedAuthorizerClient ??= DynamoDBDocumentClient.from(
     captureAWSv3Client(
       new DynamoDBClient({
-        maxAttempts: 1,
-        requestHandler: { connectionTimeout: 200, requestTimeout: 400 },
+        maxAttempts: 2,
+        requestHandler: { connectionTimeout: 100, requestTimeout: 200 },
       }),
     ),
   );

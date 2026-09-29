@@ -523,6 +523,45 @@ describe('handler: server-side revocation check (M1)', () => {
     expect(result).toMatchObject({ isAuthorized: true, context: { sub: 'member-0012' } });
   });
 
+  it.each([
+    'POST /api/v1/alerting/dispatches',
+    'POST /api/v1/alerting/dispatches/{dispatchId}/tone-ladder/advance',
+    'POST /api/v1/alerting/dispatches/{dispatchId}/mutual-aid/trigger',
+    'POST /api/v1/apparatus/riding-board/{dispatchId}/assignments',
+    'POST /api/v1/personnel/members/{memberId}/push-tokens',
+  ])(
+    'FAILS OPEN on the alerting-plane route %s and emits the RevocationCheckFailOpen metric',
+    async (routeKey) => {
+      const logSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+      const { handler, keyPair } = await loadWithKey();
+      readRevokedAt.mockRejectedValue(new Error('TimeoutError'));
+      const token = signAccessToken(keyPair, baseAccessTokenPayload());
+
+      const result = await handler(eventFor(token, routeKey), {} as never, () => undefined);
+
+      expect(result).toMatchObject({ isAuthorized: true });
+      const metric = logSpy.mock.calls
+        .map(([line]) => String(line))
+        .find((line) => line.includes('"RevocationCheckFailOpen":1'));
+      expect(metric).toBeDefined();
+    },
+  );
+
+  it('FAILS OPEN on any route when running as the alerting authorizer', async () => {
+    process.env.REVOCATION_CHECK_FAIL_OPEN = 'true';
+    const { handler, keyPair } = await loadWithKey();
+    readRevokedAt.mockRejectedValue(new Error('down'));
+    const token = signAccessToken(keyPair, baseAccessTokenPayload());
+
+    const result = await handler(
+      eventFor(token, 'GET /api/v1/alerting/delivery-baseline'),
+      {} as never,
+      () => undefined,
+    );
+
+    expect(result).toMatchObject({ isAuthorized: true });
+  });
+
   it('FAILS CLOSED on every other route when the store cannot be read', async () => {
     const { handler, keyPair } = await loadWithKey();
     readRevokedAt.mockRejectedValue(new Error('timeout'));

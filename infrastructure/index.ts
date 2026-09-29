@@ -941,3 +941,4 @@ export const PLATFORM_BUS_NAME = platformBus.busName;
 // Review M4: every route is registered by now. Fix the reserved alerting routes' per-route
 // throttles, and fail the deploy if one of them was renamed and never registered.
 httpApi.sealRouteSettings({ requireAll: true });
+export const httpApiAlarms = httpApi.addAlarms(chiefNotificationTopic.topicArn);

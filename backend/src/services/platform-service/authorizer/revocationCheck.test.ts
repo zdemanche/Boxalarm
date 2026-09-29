@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { CACHE_TTL_MS, createRevocationChecker, FAIL_OPEN_ROUTE_KEYS } from './revocationCheck.js';
+import { CACHE_TTL_MS, createRevocationChecker, revocationFailsOpen } from './revocationCheck.js';
 
 const MEMBER = { deptId: 'NICHOLS', sub: 'sub-1' };
 
@@ -64,13 +64,44 @@ describe('createRevocationChecker', () => {
   });
 });
 
-describe('FAIL_OPEN_ROUTE_KEYS', () => {
-  it('is only the responder read/respond path - never dispatch creation or an admin route', () => {
-    expect([...FAIL_OPEN_ROUTE_KEYS].sort()).toEqual([
-      'GET /api/v1/alerting/dispatches',
-      'GET /api/v1/alerting/dispatches/{dispatchId}',
-      'GET /api/v1/alerting/dispatches/{dispatchId}/roster',
-      'POST /api/v1/alerting/dispatches/{dispatchId}/responses',
-    ]);
+// Review of fix/access-control, MAJOR 1: an LOB-table blip must never 403 the alerting plane.
+describe('revocationFailsOpen', () => {
+  it.each([
+    'POST /api/v1/alerting/dispatches',
+    'GET /api/v1/alerting/dispatches',
+    'GET /api/v1/alerting/dispatches/{dispatchId}',
+    'GET /api/v1/alerting/dispatches/{dispatchId}/roster',
+    'POST /api/v1/alerting/dispatches/{dispatchId}/responses',
+    'POST /api/v1/alerting/dispatches/{dispatchId}/tone-ladder/advance',
+    'POST /api/v1/alerting/dispatches/{dispatchId}/tone-ladder/halt',
+    'POST /api/v1/alerting/dispatches/{dispatchId}/mutual-aid/trigger',
+    'POST /api/v1/alerting/dispatches/{dispatchId}/mutual-aid/acknowledge',
+    'GET /api/v1/apparatus/riding-board/{dispatchId}',
+    'POST /api/v1/apparatus/riding-board/{dispatchId}/assignments',
+    'POST /api/v1/personnel/members/{memberId}/push-tokens',
+    'DELETE /api/v1/personnel/members/{memberId}/push-tokens',
+    'GET /api/v1/alerting/dispatches/{dispatchId}/receipts',
+  ])('fails open for the alerting-plane route %s on any authorizer', (routeKey) => {
+    expect(revocationFailsOpen(routeKey, {})).toBe(true);
+  });
+
+  it.each([
+    'GET /api/v1/personnel/members',
+    'PUT /api/v1/personnel/members/{memberId}/status',
+    'POST /api/v1/platform/export',
+    'POST /api/v1/platform/sessions/revoke',
+    'GET /api/v1/apparatus',
+    'PUT /api/v1/incidents/{incidentId}/exposures',
+  ])('fails closed for the LOB route %s on the main authorizer', (routeKey) => {
+    expect(revocationFailsOpen(routeKey, {})).toBe(false);
+  });
+
+  it('fails open for every route when running as the alerting authorizer', () => {
+    expect(
+      revocationFailsOpen('GET /api/v1/alerting/anything-new', {
+        REVOCATION_CHECK_FAIL_OPEN: 'true',
+      }),
+    ).toBe(true);
+    expect(revocationFailsOpen('GET /x', { REVOCATION_CHECK_FAIL_OPEN: 'true' })).toBe(true);
   });
 });

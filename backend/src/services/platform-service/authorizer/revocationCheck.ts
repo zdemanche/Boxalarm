@@ -8,31 +8,37 @@
  *
  * Store unavailable (throttle, timeout, outage) - the rule:
  *  - A stale cached answer for the member is used if there is one.
- *  - Otherwise the alerting read/respond routes below FAIL OPEN. Those are how a responder
- *    sees the call and says they are coming; the revocation store is platform-table data
- *    they do not otherwise depend on, and "a login prompt on the alert path is an alerting
- *    failure" (CLAUDE.md). Failing closed would let an LOB-table outage stop a department
- *    answering a call. The residual risk - a revoked token keeps reading/answering a call
- *    for the length of the outage - is bounded by the token's own 1-hour life and was
- *    already the behaviour before this check existed.
- *  - Every other route FAILS CLOSED (403): they read/write the same platform/LOB tables, so
- *    an outage of the store has already taken them down, and failing closed costs nothing.
+ *  - Otherwise every ALERTING-PLANE route FAILS OPEN: responding and the roster, but also
+ *    manual dispatch (the N1.8 degraded-mode path), tone-ladder advance/halt, mutual aid,
+ *    the riding board, push-token registration and the alerting ops reads. None of them
+ *    reads the platform table; the revocation store is the only thing coupling them to it,
+ *    and "an outage in reporting, training or inventory must never degrade alert delivery"
+ *    (backend/CLAUDE.md). The residual - a revoked token keeps using the alerting plane for
+ *    the length of a platform-table outage - is bounded by the token's own 1-hour life, is
+ *    what happened before this check existed, and alarms (RevocationCheckFailOpen).
+ *  - Every other (LOB) route FAILS CLOSED (403): those routes read and write the platform
+ *    and LOB tables themselves, so a store outage has already taken them down.
+ * An alerting-plane route is recognised two ways, either being enough: the alerting
+ * authorizer Lambda runs with REVOCATION_CHECK_FAIL_OPEN=true (every route it serves is
+ * alerting-plane - infrastructure/components/api/http-api.ts ALERTING_PLANE_ROUTES), and
+ * the route key itself matches ALERTING_PLANE_ROUTE_PATTERNS, so a route wired to the main
+ * authorizer by mistake still fails open.
  */
 export const CACHE_TTL_MS = 30_000;
 const MAX_CACHE_ENTRIES = 5_000;
 
-/**
- * Route keys that fail open when the store cannot be read. Kept to the read/respond path a
- * responder uses during a call; manual dispatch, ladder controls and every admin route are
- * deliberately not here. Mirrored by infrastructure/components/api/http-api.ts
- * ALERTING_RESERVED_ROUTES (which reserves throttle capacity for these plus manual dispatch).
- */
-export const FAIL_OPEN_ROUTE_KEYS: ReadonlySet<string> = new Set([
-  'GET /api/v1/alerting/dispatches',
-  'GET /api/v1/alerting/dispatches/{dispatchId}',
-  'GET /api/v1/alerting/dispatches/{dispatchId}/roster',
-  'POST /api/v1/alerting/dispatches/{dispatchId}/responses',
-]);
+export const ALERTING_PLANE_ROUTE_PATTERNS: readonly RegExp[] = [
+  /^[A-Z]+ \/api\/v1\/alerting\//,
+  /^[A-Z]+ \/api\/v1\/apparatus\/riding-board\//,
+  /^[A-Z]+ \/api\/v1\/personnel\/members\/\{memberId\}\/push-tokens$/,
+];
+
+export function revocationFailsOpen(routeKey: string, env: NodeJS.ProcessEnv): boolean {
+  return (
+    env.REVOCATION_CHECK_FAIL_OPEN === 'true' ||
+    ALERTING_PLANE_ROUTE_PATTERNS.some((pattern) => pattern.test(routeKey))
+  );
+}
 
 export type RevocationDecision = 'allow' | 'revoked' | 'unavailable';
 

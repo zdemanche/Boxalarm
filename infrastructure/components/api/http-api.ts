@@ -38,7 +38,7 @@ export interface HttpApiArgs {
    */
   authorizerReservedConcurrency?: number;
   /**
-   * Reserved concurrency for the second authorizer that serves only ALERTING_RESERVED_ROUTES
+   * Reserved concurrency for the second authorizer that serves only ALERTING_PLANE_ROUTES
    * (review M4), so a flood of junk tokens on any other route cannot exhaust the
    * authorizer capacity a responder needs to see and answer a call.
    */
@@ -51,23 +51,43 @@ export interface RouteThrottle {
 }
 
 /**
- * Review M4: the routes a department needs during a call get capacity no other route can
- * consume - their own per-route throttle bucket (stage routeSettings) and their own
- * authorizer Lambda with its own reserved concurrency. Everything else shares the default
- * route throttle and the main authorizer. The four read/respond routes are also the ones the
- * authorizer fails open on when the revocation store is down (backend
- * platform-service/authorizer/revocationCheck.ts FAIL_OPEN_ROUTE_KEYS); manual dispatch
- * (the N1.8 degraded-mode path) is reserved here but never fails open.
+ * The alerting plane's authenticated routes. Each is served by the alerting authorizer, which
+ * (a) has its own reserved concurrency and each route its own stage throttle bucket (review
+ * M4), so a flood elsewhere cannot consume their capacity, and (b) runs with
+ * REVOCATION_CHECK_FAIL_OPEN=true, so a platform-table outage can never 403 them (review of
+ * fix/access-control, MAJOR 1 - backend platform-service/authorizer/revocationCheck.ts). An
+ * outage in the LOB plane must never degrade alerting (backend/CLAUDE.md).
  *
- * Sized for a volunteer department of dozens: a whole roster answering inside a few
- * seconds fits the responses burst; manual dispatch is a handful of officers.
+ * Every route key here must be registered through authorizedRoute(); index.ts seals with
+ * requireAll, so a renamed or removed route fails the deploy instead of silently moving back
+ * to the LOB authorizer. The vendor receipt webhooks are not here: they use no authorizer.
  */
-export const ALERTING_RESERVED_ROUTES: Readonly<Record<string, RouteThrottle>> = {
+const DEFAULT_ALERTING_THROTTLE: RouteThrottle = { rateLimit: 50, burstLimit: 100 };
+
+export const ALERTING_PLANE_ROUTES: Readonly<Record<string, RouteThrottle>> = {
   "POST /api/v1/alerting/dispatches": { rateLimit: 5, burstLimit: 10 },
   "GET /api/v1/alerting/dispatches": { rateLimit: 25, burstLimit: 50 },
   "GET /api/v1/alerting/dispatches/{dispatchId}": { rateLimit: 25, burstLimit: 50 },
   "GET /api/v1/alerting/dispatches/{dispatchId}/roster": { rateLimit: 25, burstLimit: 50 },
   "POST /api/v1/alerting/dispatches/{dispatchId}/responses": { rateLimit: 25, burstLimit: 50 },
+  "POST /api/v1/alerting/dispatches/{dispatchId}/tone-ladder/advance": DEFAULT_ALERTING_THROTTLE,
+  "POST /api/v1/alerting/dispatches/{dispatchId}/tone-ladder/halt": DEFAULT_ALERTING_THROTTLE,
+  "POST /api/v1/alerting/dispatches/{dispatchId}/mutual-aid/trigger": DEFAULT_ALERTING_THROTTLE,
+  "POST /api/v1/alerting/dispatches/{dispatchId}/mutual-aid/acknowledge": DEFAULT_ALERTING_THROTTLE,
+  "GET /api/v1/apparatus/riding-board/{dispatchId}": DEFAULT_ALERTING_THROTTLE,
+  "POST /api/v1/apparatus/riding-board/{dispatchId}/assignments": DEFAULT_ALERTING_THROTTLE,
+  "POST /api/v1/personnel/members/{memberId}/push-tokens": DEFAULT_ALERTING_THROTTLE,
+  "DELETE /api/v1/personnel/members/{memberId}/push-tokens": DEFAULT_ALERTING_THROTTLE,
+  "GET /api/v1/alerting/dispatches/{dispatchId}/receipts": DEFAULT_ALERTING_THROTTLE,
+  "GET /api/v1/alerting/dispatches/{dispatchId}/diagnostics": DEFAULT_ALERTING_THROTTLE,
+  "GET /api/v1/alerting/dispatches/{dispatchId}/diagnostics/{memberId}": DEFAULT_ALERTING_THROTTLE,
+  "GET /api/v1/alerting/home-locality": DEFAULT_ALERTING_THROTTLE,
+  "GET /api/v1/alerting/audit": DEFAULT_ALERTING_THROTTLE,
+  "GET /api/v1/alerting/canary/status": DEFAULT_ALERTING_THROTTLE,
+  "GET /api/v1/alerting/delivery-baseline": DEFAULT_ALERTING_THROTTLE,
+  "POST /api/v1/alerting/devices/state": DEFAULT_ALERTING_THROTTLE,
+  "POST /api/v1/alerting/self-test": DEFAULT_ALERTING_THROTTLE,
+  "GET /api/v1/alerting/self-test/{testId}": DEFAULT_ALERTING_THROTTLE,
 };
 
 /**
@@ -91,13 +111,15 @@ export class HttpApi extends pulumi.ComponentResource {
   public readonly authorizer: aws.apigatewayv2.Authorizer;
   public readonly authorizerLambda: ServiceLambda;
   public readonly invokePermission: aws.lambda.Permission;
-  /** M4: serves ALERTING_RESERVED_ROUTES only, with its own reserved concurrency. */
+  /** M4: serves ALERTING_PLANE_ROUTES only, with its own reserved concurrency. */
   public readonly alertingAuthorizer: aws.apigatewayv2.Authorizer;
   public readonly alertingAuthorizerLambda: ServiceLambda;
   public readonly alertingInvokePermission: aws.lambda.Permission;
   /** Reserved routes registered so far, keyed by route key (see sealRouteSettings). */
   private readonly reservedRoutes = new Map<string, aws.apigatewayv2.Route>();
   private routeSettingsSealed = false;
+  private readonly env: string;
+  private readonly name: string;
   private resolveRouteSettings!: (
     settings: pulumi.Input<aws.types.input.apigatewayv2.StageRouteSetting>[],
   ) => void;
@@ -110,6 +132,8 @@ export class HttpApi extends pulumi.ComponentResource {
 
     super("boxalarm:api:HttpApi", name, {}, opts);
     const { env } = args;
+    this.env = env;
+    this.name = name;
 
     this.httpApi = new aws.apigatewayv2.Api(
       `${name}-api`,
@@ -216,7 +240,8 @@ export class HttpApi extends pulumi.ComponentResource {
         handler: LAMBDA_HANDLER,
         code: lambdaCode("platform-service", "authorizer", denyAllAuthorizerCode),
         logGroup: args.platformLogGroup,
-        environment: authorizerEnvironment,
+        // Every route it serves is alerting-plane: a revocation-store outage fails open here.
+        environment: { ...authorizerEnvironment, REVOCATION_CHECK_FAIL_OPEN: "true" },
         additionalPolicyStatements: authorizerStatements,
         reservedConcurrentExecutions: alertingAuthorizerReservedConcurrency,
       },
@@ -368,7 +393,7 @@ export class HttpApi extends pulumi.ComponentResource {
     },
     opts?: pulumi.ComponentResourceOptions,
   ): aws.apigatewayv2.Route {
-    const reserved = Object.prototype.hasOwnProperty.call(ALERTING_RESERVED_ROUTES, args.routeKey);
+    const reserved = Object.prototype.hasOwnProperty.call(ALERTING_PLANE_ROUTES, args.routeKey);
     const route = new aws.apigatewayv2.Route(
       name,
       {
@@ -395,15 +420,46 @@ export class HttpApi extends pulumi.ComponentResource {
   }
 
   /**
+   * Security/availability alarms on the authorizers, sent to `topicArn` (the chief topic).
+   * Called from index.ts once that topic exists.
+   *  - RevocationCheckFailOpen: the revocation store could not be read and an alerting-plane
+   *    request was let through on the token alone. Every occurrence is worth a look: while it
+   *    lasts, a revoked session still reaches the alerting plane.
+   */
+  addAlarms(topicArn: pulumi.Input<string>): { failOpen: aws.cloudwatch.MetricAlarm } {
+    const env = this.env;
+    const failOpen = new aws.cloudwatch.MetricAlarm(
+      `${this.name}-revocation-fail-open-alarm`,
+      {
+        name: `boxalarm-${env}-authorizer-revocation-check-fail-open`,
+        alarmDescription:
+          "The session-revocation store was unreadable and alerting-plane requests were " +
+          "allowed on the token alone; revoked sessions are not being refused.",
+        namespace: "Boxalarm/authorizer",
+        metricName: "RevocationCheckFailOpen",
+        statistic: "Sum",
+        period: 60,
+        evaluationPeriods: 1,
+        threshold: 0,
+        comparisonOperator: "GreaterThanThreshold",
+        treatMissingData: "notBreaching",
+        alarmActions: [topicArn],
+      },
+      { parent: this },
+    );
+    return { failOpen };
+  }
+
+  /**
    * Fixes the stage's per-route throttles to the reserved routes registered so far. Each
    * setting reads its route's routeKey Output, so the stage update waits for the route to
    * exist (API Gateway rejects settings for an unknown route). Idempotent; the first call
-   * wins. With requireAll, throws unless every ALERTING_RESERVED_ROUTES key was registered -
+   * wins. With requireAll, throws unless every ALERTING_PLANE_ROUTES key was registered -
    * a renamed route would otherwise silently lose its reserved capacity.
    */
   sealRouteSettings(options: { requireAll?: boolean } = {}): void {
     if (options.requireAll) {
-      const missing = Object.keys(ALERTING_RESERVED_ROUTES).filter(
+      const missing = Object.keys(ALERTING_PLANE_ROUTES).filter(
         (key) => !this.reservedRoutes.has(key),
       );
       if (missing.length > 0) {
@@ -419,8 +475,8 @@ export class HttpApi extends pulumi.ComponentResource {
     this.resolveRouteSettings(
       [...this.reservedRoutes.entries()].map(([key, route]) => ({
         routeKey: route.routeKey,
-        throttlingRateLimit: ALERTING_RESERVED_ROUTES[key]!.rateLimit,
-        throttlingBurstLimit: ALERTING_RESERVED_ROUTES[key]!.burstLimit,
+        throttlingRateLimit: ALERTING_PLANE_ROUTES[key]!.rateLimit,
+        throttlingBurstLimit: ALERTING_PLANE_ROUTES[key]!.burstLimit,
       })),
     );
   }

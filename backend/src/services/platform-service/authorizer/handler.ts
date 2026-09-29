@@ -6,7 +6,7 @@ import type {
 } from 'aws-lambda';
 import { createVerifier, readAuthorizerConfig, verifyAccessTokenClaims } from './tokenVerifier.js';
 import type { AccessTokenVerifier, VerifiedAccessToken } from './tokenVerifier.js';
-import { createRevocationChecker, FAIL_OPEN_ROUTE_KEYS } from './revocationCheck.js';
+import { createRevocationChecker, revocationFailsOpen } from './revocationCheck.js';
 import type { RevocationChecker } from './revocationCheck.js';
 import { getAuthorizerStoreClient, readRevokedAt } from './revocationStore.js';
 
@@ -71,6 +71,24 @@ function emitAuthorizerMetric(outcome: 'Allowed' | 'Denied', reason?: string): v
   );
 }
 
+function emitRevocationFailOpenMetric(): void {
+  console.log(
+    JSON.stringify({
+      _aws: {
+        Timestamp: Date.now(),
+        CloudWatchMetrics: [
+          {
+            Namespace: 'Boxalarm/authorizer',
+            Dimensions: [[]],
+            Metrics: [{ Name: 'RevocationCheckFailOpen', Unit: 'Count' }],
+          },
+        ],
+      },
+      RevocationCheckFailOpen: 1,
+    }),
+  );
+}
+
 export const handler: Handler<APIGatewayRequestAuthorizerEventV2, AuthorizerResult> = async (
   event,
 ) => {
@@ -100,7 +118,7 @@ export const handler: Handler<APIGatewayRequestAuthorizerEventV2, AuthorizerResu
       return { isAuthorized: false };
     }
     if (revocation === 'unavailable') {
-      const failOpen = FAIL_OPEN_ROUTE_KEYS.has(event.routeKey);
+      const failOpen = revocationFailsOpen(event.routeKey, process.env);
       console.error(
         JSON.stringify({
           event: failOpen ? 'authorizer.revocationCheck.failOpen' : 'authorizer.denied',
@@ -113,6 +131,8 @@ export const handler: Handler<APIGatewayRequestAuthorizerEventV2, AuthorizerResu
         return { isAuthorized: false };
       }
       emitAuthorizerMetric('Allowed', 'RevocationCheckFailOpen');
+      // Its own metric so the alarm is a plain Sum > 0 (infra http-api.ts addAlarms).
+      emitRevocationFailOpenMetric();
       return { isAuthorized: true, context };
     }
     emitAuthorizerMetric('Allowed');

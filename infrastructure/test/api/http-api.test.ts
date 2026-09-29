@@ -281,7 +281,7 @@ describe("HttpApi", () => {
     }
 
     it("routes the reserved alerting routes through their own authorizer with its own concurrency", async () => {
-      const { ALERTING_RESERVED_ROUTES } = await import("../../components/api/http-api");
+      const { ALERTING_PLANE_ROUTES } = await import("../../components/api/http-api");
       const api = await buildApi("authorizer");
       const reserved = api.authorizedRoute("respond", {
         routeKey: "POST /api/v1/alerting/dispatches/{dispatchId}/responses",
@@ -306,9 +306,51 @@ describe("HttpApi", () => {
       expect(fnName).toBe("boxalarm-dev-platform-authorizer-alerting");
       // Same verification and revocation check as the main authorizer.
       expect(env?.variables?.PLATFORM_TABLE_NAME).toBe("platform-table");
-      expect(Object.keys(ALERTING_RESERVED_ROUTES)).toContain(
+      expect(Object.keys(ALERTING_PLANE_ROUTES)).toContain(
         "POST /api/v1/alerting/dispatches/{dispatchId}/responses",
       );
+      await settle(api);
+    });
+
+    // Review of fix/access-control, MAJOR 1: every alerting-plane route must fail open on a
+    // revocation-store outage, so every one must sit on the alerting authorizer.
+    it("runs the alerting authorizer with REVOCATION_CHECK_FAIL_OPEN and covers the whole alerting plane", async () => {
+      const { ALERTING_PLANE_ROUTES } = await import("../../components/api/http-api");
+      const api = await buildApi("fail-open");
+      const env = await resolve(api.alertingAuthorizerLambda.function.environment);
+      const mainEnv = await resolve(api.authorizerLambda.function.environment);
+
+      expect(env?.variables?.REVOCATION_CHECK_FAIL_OPEN).toBe("true");
+      expect(mainEnv?.variables?.REVOCATION_CHECK_FAIL_OPEN).toBeUndefined();
+      expect(Object.keys(ALERTING_PLANE_ROUTES)).toEqual(
+        expect.arrayContaining([
+          "POST /api/v1/alerting/dispatches",
+          "POST /api/v1/alerting/dispatches/{dispatchId}/tone-ladder/advance",
+          "POST /api/v1/alerting/dispatches/{dispatchId}/tone-ladder/halt",
+          "POST /api/v1/alerting/dispatches/{dispatchId}/mutual-aid/trigger",
+          "POST /api/v1/alerting/dispatches/{dispatchId}/mutual-aid/acknowledge",
+          "POST /api/v1/apparatus/riding-board/{dispatchId}/assignments",
+          "POST /api/v1/personnel/members/{memberId}/push-tokens",
+        ]),
+      );
+      api.sealRouteSettings();
+      await settle(api);
+    });
+
+    it("alarms the given topic on every RevocationCheckFailOpen", async () => {
+      const api = await buildApi("fail-open-alarm");
+      api.sealRouteSettings();
+      const { failOpen } = api.addAlarms("arn:aws:sns:us-east-1:123456789012:chief");
+      const [metric, namespace, threshold, actions] = await Promise.all([
+        resolve(failOpen.metricName),
+        resolve(failOpen.namespace),
+        resolve(failOpen.threshold),
+        resolve(failOpen.alarmActions),
+      ]);
+      expect(metric).toBe("RevocationCheckFailOpen");
+      expect(namespace).toBe("Boxalarm/authorizer");
+      expect(threshold).toBe(0);
+      expect(actions).toEqual(["arn:aws:sns:us-east-1:123456789012:chief"]);
       await settle(api);
     });
 
