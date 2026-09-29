@@ -14,10 +14,14 @@
  */
 
 export interface NormalizedAddress {
-  /** House number + street name + suffix, unit removed — the lookup key. */
+  /** House number + street name + suffix, unit and locality removed — the lookup key. */
   readonly key: string;
   /** The unit/apartment/suite designator(s), or null when the address carries none. */
   readonly unit: string | null;
+  /** Town/city, or null when the address carries none. Compared, never part of the key. */
+  readonly town: string | null;
+  /** 5-digit ZIP, or null. */
+  readonly zip: string | null;
 }
 
 /** Spelled-out forms mapped to the USPS abbreviation both sides are compared in. */
@@ -111,6 +115,66 @@ const UNIT_DESIGNATORS = new Set([
   '#',
 ]);
 
+const STATE_CODES = new Set(
+  (
+    'AL AK AZ AR CA CO CT DE DC FL GA HI ID IL IN IA KS KY LA ME MD MA MI MN MS MO MT NE NV NH ' +
+    'NJ NM NY NC ND OH OK OR PA RI SC SD TN TX UT VT VA WA WV WI WY PR'
+  ).split(' '),
+);
+const STATE_NAMES = new Set([
+  'ALABAMA',
+  'ALASKA',
+  'ARIZONA',
+  'ARKANSAS',
+  'CALIFORNIA',
+  'COLORADO',
+  'CONNECTICUT',
+  'DELAWARE',
+  'FLORIDA',
+  'GEORGIA',
+  'HAWAII',
+  'IDAHO',
+  'ILLINOIS',
+  'INDIANA',
+  'IOWA',
+  'KANSAS',
+  'KENTUCKY',
+  'LOUISIANA',
+  'MAINE',
+  'MARYLAND',
+  'MASSACHUSETTS',
+  'MICHIGAN',
+  'MINNESOTA',
+  'MISSISSIPPI',
+  'MISSOURI',
+  'MONTANA',
+  'NEBRASKA',
+  'NEVADA',
+  'NEW HAMPSHIRE',
+  'NEW JERSEY',
+  'NEW MEXICO',
+  'NEW YORK',
+  'NORTH CAROLINA',
+  'NORTH DAKOTA',
+  'OHIO',
+  'OKLAHOMA',
+  'OREGON',
+  'PENNSYLVANIA',
+  'RHODE ISLAND',
+  'SOUTH CAROLINA',
+  'SOUTH DAKOTA',
+  'TENNESSEE',
+  'TEXAS',
+  'UTAH',
+  'VERMONT',
+  'VIRGINIA',
+  'WASHINGTON',
+  'WEST VIRGINIA',
+  'WISCONSIN',
+  'WYOMING',
+]);
+const ZIP = /^(\d{5})(?:-\d{4})?$/;
+
 const HOUSE_NUMBER = /^\d+[A-Z]?(?:-\d+[A-Z]?)?$/;
 const UNIT_TOKEN = /^[A-Z0-9]+(?:-[A-Z0-9]+)?$/;
 
@@ -149,6 +213,42 @@ function extractUnits(tokens: readonly string[]): { units: string[]; rest: strin
     rest.push(token);
   }
   return { units, rest };
+}
+
+/**
+ * "TRUMBULL CT 06611" -> town TRUMBULL, zip 06611. A trailing ZIP and state (code or name) are
+ * peeled off; whatever words remain are the town. Runs only on text after the street, so a
+ * state code that is also a suffix ("CT" = Court) is never taken from the street itself.
+ */
+function parseLocality(tokens: readonly string[]): { town: string | null; zip: string | null } {
+  const words = [...tokens];
+  let zip: string | null = null;
+  const zipMatch = ZIP.exec(words[words.length - 1] ?? '');
+  if (zipMatch) {
+    zip = zipMatch[1] as string;
+    words.pop();
+  }
+  // Names were aliased by tokenize ("NORTH CAROLINA" -> "N CAROLINA"); compare both forms.
+  const lastTwo = words.slice(-2).join(' ');
+  if (words.length >= 2 && (STATE_NAMES.has(lastTwo) || STATE_NAMES.has(unalias(lastTwo)))) {
+    words.splice(-2);
+  } else if (
+    words.length >= 1 &&
+    (STATE_CODES.has(words[words.length - 1] as string) ||
+      STATE_NAMES.has(words[words.length - 1] as string))
+  ) {
+    words.pop();
+  }
+  return { town: words.length > 0 ? words.join(' ') : null, zip };
+}
+
+const UNALIAS: Readonly<Record<string, string>> = { N: 'NORTH', S: 'SOUTH', W: 'WEST' };
+
+function unalias(words: string): string {
+  return words
+    .split(' ')
+    .map((word) => UNALIAS[word] ?? word)
+    .join(' ');
 }
 
 /** Index of the last token of the street name, or -1 when no street-type suffix is present. */
@@ -203,10 +303,18 @@ export function normalizeAddress(raw: string): NormalizedAddress | null {
   const fromTail = extractUnits(tokenize(tailParts.join(' ')));
   const units = [...fromRemainder.units, ...fromTail.units];
 
-  // Anything else after the street on the street line (before any comma) stays in the key:
-  // it may be a town ("123 MAIN ST TRUMBULL"), and dropping it could merge two buildings.
+  // Locality is whatever follows the street: on a comma-less line ("123 MAIN ST TRUMBULL CT
+  // 06611") and/or after the first comma ("123 Main St, Trumbull, CT"). Extra words make the
+  // town longer, never shorter, so they can only cause a (safe) mismatch. Without a suffix the
+  // street's end is unknown, so those words stay in the key instead.
+  const localityTokens = [...(end >= 0 ? fromRemainder.rest : []), ...fromTail.rest];
+  const { town, zip } = parseLocality(localityTokens);
+  const key = end >= 0 ? street : [...street, ...fromRemainder.rest];
+
   return {
-    key: [...street, ...fromRemainder.rest].join(' '),
+    key: key.join(' '),
     unit: units.length > 0 ? units.join(' ') : null,
+    town,
+    zip,
   };
 }

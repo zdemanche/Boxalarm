@@ -63,6 +63,8 @@ function prePlanCopy(
     utilityShutoffs: [],
     snapshotUpdatedAt: extra.snapshotUpdatedAt ?? 1,
     ...(normalized?.unit ? { addressUnit: normalized.unit } : {}),
+    ...(normalized?.town ? { addressTown: normalized.town } : {}),
+    ...(normalized?.zip ? { addressZip: normalized.zip } : {}),
     ...(normalized ? prePlanAddressIndexKeys(DEPT_ID, normalized.key, occupancyId) : {}),
     ...(extra.location
       ? { ...extra.location, ...prePlanGeoIndexKeys(DEPT_ID, extra.location, occupancyId) }
@@ -148,6 +150,40 @@ describe('findPrePlanByAddress', () => {
     await expect(findPrePlanByAddress(client, TABLE, DEPT_ID, '1 Main St')).rejects.toThrow(
       'ThrottlingException',
     );
+  });
+});
+
+describe('findPrePlanByAddress — locality and distance (MAJOR-2)', () => {
+  it('rejects a same-key pre-plan in another town when both sides name a town', async () => {
+    const { client } = fakeIndex([prePlanCopy('OCC-T', '123 Main St, Trumbull, CT 06611')]);
+    expect(
+      await findPrePlanByAddress(client, TABLE, DEPT_ID, '123 Main St, Bridgeport, CT'),
+    ).toBeUndefined();
+    expect(
+      (await findPrePlanByAddress(client, TABLE, DEPT_ID, '123 MAIN ST TRUMBULL CT'))?.occupancyId,
+    ).toBe('OCC-T');
+  });
+
+  it('rejects a differing ZIP, and matches when only one side names a locality', async () => {
+    const { client } = fakeIndex([prePlanCopy('OCC-T', '123 Main St, Trumbull, CT 06611')]);
+    expect(
+      await findPrePlanByAddress(client, TABLE, DEPT_ID, '123 Main St, CT 06604'),
+    ).toBeUndefined();
+    expect((await findPrePlanByAddress(client, TABLE, DEPT_ID, '123 Main St'))?.occupancyId).toBe(
+      'OCC-T',
+    );
+  });
+
+  it('rejects an address match more than 150 m from the dispatch coordinates', async () => {
+    const { client } = fakeIndex([
+      prePlanCopy('OCC-FAR', '123 Main St', { location: offset(400) }),
+    ]);
+    expect(
+      await findPrePlanByAddress(client, TABLE, DEPT_ID, '123 Main St', ORIGIN),
+    ).toBeUndefined();
+    expect(
+      (await findPrePlanByAddress(client, TABLE, DEPT_ID, '123 Main St', offset(350)))?.occupancyId,
+    ).toBe('OCC-FAR');
   });
 });
 

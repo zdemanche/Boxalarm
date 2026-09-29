@@ -260,6 +260,24 @@ describe('prePlanCopyHandler (entrypoint-test obligation, AC1)', () => {
     expect(update?.UpdateExpression).not.toContain('nearestHydrants');
   });
 
+  it('stores the parsed town and ZIP beside the key so a dispatch in another town is rejected', async () => {
+    const send = vi.fn().mockResolvedValue({});
+    mockDdb(send);
+    const { handler } = await import('./prePlanCopyHandler.js');
+
+    await handler(sqsEvent({ ...FULL_PAYLOAD, address: '123 Main St, Trumbull, CT 06611' }));
+
+    const values =
+      (send.mock.calls[0]?.[0] as TransactInput).input.TransactItems.find((item) => item.Update)
+        ?.Update?.ExpressionAttributeValues ?? {};
+    expect(values).toMatchObject({
+      ':addressKey': '123 MAIN ST',
+      ':addressTown': 'TRUMBULL',
+      ':addressZip': '06611',
+      ':gsi1pk': 'DEPT#NICHOLS#PREPLAN_ADDR#123 MAIN ST',
+    });
+  });
+
   it('writes no geo index keys when the occupancy has no coordinates (address match only)', async () => {
     const send = vi.fn().mockResolvedValue({});
     mockDdb(send);

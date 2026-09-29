@@ -45,7 +45,7 @@ async function matchPrePlan(
   dispatchPoint: GeoPoint | undefined,
 ): Promise<PrePlanCopyItem | undefined> {
   const byAddress = item.address
-    ? await findPrePlanByAddress(client, tableName, deptId, item.address)
+    ? await findPrePlanByAddress(client, tableName, deptId, item.address, dispatchPoint)
     : undefined;
   if (byAddress || !dispatchPoint) {
     return byAddress;

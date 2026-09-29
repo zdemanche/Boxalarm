@@ -62,21 +62,67 @@ describe('normalizeAddress', () => {
     expect(normalizeAddress('1 Ocean Dr, Miami, FL 33139')).toEqual({
       key: '1 OCEAN DR',
       unit: null,
+      town: 'MIAMI',
+      zip: '33139',
     });
     expect(normalizeAddress('5 Elm St, Trumbull, CT 06611')).toEqual({
       key: '5 ELM ST',
       unit: null,
+      town: 'TRUMBULL',
+      zip: '06611',
+    });
+  });
+
+  describe('locality (MAJOR-2: kept, compared, never part of the key)', () => {
+    it.each([
+      ['123 Main St, Trumbull, CT 06611', 'TRUMBULL', '06611'],
+      ['123 MAIN ST TRUMBULL CT 06611', 'TRUMBULL', '06611'],
+      ['123 Main St Trumbull CT', 'TRUMBULL', null],
+      ['123 Main St, Bridgeport, Connecticut', 'BRIDGEPORT', null],
+      ['123 Main St, Apt 4, Trumbull, CT 06611-1234', 'TRUMBULL', '06611'],
+      ['123 Main St Apt 4 Trumbull CT 06611', 'TRUMBULL', '06611'],
+      ['123 Main St, New Canaan, New York 10001', 'NEW CANAAN', '10001'],
+      ['123 Main St', null, null],
+      ['123 Main St, CT 06611', null, '06611'],
+    ])('%s -> town %s, zip %s', (raw, town, zip) => {
+      expect(normalizeAddress(raw)).toMatchObject({ key: '123 MAIN ST', town, zip });
+    });
+
+    it('a comma-less CAD address keys the same as the comma form', () => {
+      expect(normalizeAddress('123 MAIN ST TRUMBULL CT 06611')?.key).toBe(
+        normalizeAddress('123 Main Street, Trumbull, CT')?.key,
+      );
+    });
+
+    it('never peels a state code off the street itself ("12 Oak Ct" keeps its Court)', () => {
+      expect(normalizeAddress('12 Oak Ct')).toMatchObject({ key: '12 OAK CT', town: null });
+      expect(normalizeAddress('12 Oak Ct CT 06611')).toMatchObject({
+        key: '12 OAK CT',
+        town: null,
+        zip: '06611',
+      });
+    });
+
+    it('two towns on one street keep one key but different towns', () => {
+      const trumbull = normalizeAddress('123 Main St, Trumbull, CT');
+      const bridgeport = normalizeAddress('123 Main St, Bridgeport, CT');
+      expect(trumbull?.key).toBe(bridgeport?.key);
+      expect(trumbull?.town).not.toBe(bridgeport?.town);
     });
   });
 
   it('does not treat a designator embedded in a street name as a unit', () => {
-    expect(normalizeAddress('10 Aptos Way')).toEqual({ key: '10 APTOS WAY', unit: null });
-    expect(normalizeAddress('10 Unity Rd')).toEqual({ key: '10 UNITY RD', unit: null });
+    expect(normalizeAddress('10 Aptos Way')).toMatchObject({ key: '10 APTOS WAY', unit: null });
+    expect(normalizeAddress('10 Unity Rd')).toMatchObject({ key: '10 UNITY RD', unit: null });
   });
 
   it('keeps a hyphenated house-number range but splits other hyphens', () => {
     expect(normalizeAddress('12-14 Main St')?.key).toBe('12-14 MAIN ST');
-    expect(normalizeAddress('12 Main St - rear')?.key).toBe('12 MAIN ST REAR');
+    // "rear" lands in the locality, where it can only cause a safe mismatch.
+    expect(normalizeAddress('12 Main St - rear')).toMatchObject({
+      key: '12 MAIN ST',
+      town: 'REAR',
+    });
   });
 
   it('never emits the pk delimiter, so the key is safe inside a department-scoped key', () => {
@@ -110,12 +156,12 @@ describe('normalizeAddress', () => {
       ['100 Unit St', '100 UNIT ST'],
       ['8 Apartment Row', '8 APARTMENT ROW'],
     ])('%s keeps its street (%s)', (raw, key) => {
-      expect(normalizeAddress(raw)).toEqual({ key, unit: null });
+      expect(normalizeAddress(raw)).toMatchObject({ key, unit: null });
     });
 
     it('still strips a real unit that follows the street suffix', () => {
-      expect(normalizeAddress('100 Lot Rd Lot 7')).toEqual({ key: '100 LOT RD', unit: '7' });
-      expect(normalizeAddress('40 Building Rd, Building 2')).toEqual({
+      expect(normalizeAddress('100 Lot Rd Lot 7')).toMatchObject({ key: '100 LOT RD', unit: '7' });
+      expect(normalizeAddress('40 Building Rd, Building 2')).toMatchObject({
         key: '40 BUILDING RD',
         unit: '2',
       });

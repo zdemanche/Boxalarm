@@ -1,6 +1,6 @@
 import { QueryCommand, type DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
 import type { VerifiedDeptId } from '@boxalarm/dept-scope';
-import { normalizeAddress } from './addressKey.js';
+import { normalizeAddress, type NormalizedAddress } from './addressKey.js';
 import {
   ADDRESS_INDEX_NAME,
   GEO_INDEX_NAME,
@@ -27,12 +27,21 @@ export interface PrePlanCopyItem {
   readonly summary?: string;
   readonly address?: string;
   readonly addressUnit?: string;
+  readonly addressTown?: string;
+  readonly addressZip?: string;
   readonly hazards?: readonly string[];
   readonly utilityShutoffs?: readonly UtilityShutoff[];
   readonly latitude?: number;
   readonly longitude?: number;
   readonly snapshotUpdatedAt?: number;
 }
+
+/**
+ * An address match is rejected when the dispatch and the occupancy both carry coordinates and
+ * they are farther apart than this — same key, different place (a street that crosses a town
+ * line, or a normalizer collision).
+ */
+export const ADDRESS_MATCH_MAX_DISTANCE_METERS = 150;
 
 /** A dispatch coordinate within this distance of an occupancy is treated as that occupancy. */
 export const PREPLAN_MATCH_RADIUS_METERS = 50;
@@ -75,8 +84,26 @@ function newestFirst(a: PrePlanCopyItem, b: PrePlanCopyItem): number {
   );
 }
 
+/** Rejects a candidate whose town or ZIP differs — only when both sides carry one. */
+function sameLocality(dispatch: NormalizedAddress, candidate: PrePlanCopyItem): boolean {
+  if (dispatch.town && candidate.addressTown && dispatch.town !== candidate.addressTown) {
+    return false;
+  }
+  return !(dispatch.zip && candidate.addressZip && dispatch.zip !== candidate.addressZip);
+}
+
+/** Rejects a candidate far from the dispatch point — only when both sides carry coordinates. */
+function closeEnough(dispatchPoint: GeoPoint | undefined, candidate: PrePlanCopyItem): boolean {
+  const location = { latitude: candidate.latitude, longitude: candidate.longitude };
+  if (!dispatchPoint || !isGeoPoint(location)) {
+    return true;
+  }
+  return haversineMeters(dispatchPoint, location) <= ADDRESS_MATCH_MAX_DISTANCE_METERS;
+}
+
 /**
- * The pre-plan whose normalized street address equals the dispatch's. Several occupancies can
+ * The pre-plan whose normalized street address equals the dispatch's, in the same town/ZIP
+ * (when both say) and within 150 m (when both have coordinates). Several occupancies can
  * share a street address (units in one building); prefer the one whose unit matches the
  * dispatch's, then a building-level (no-unit) pre-plan, then the most recently updated.
  */
@@ -85,6 +112,7 @@ export async function findPrePlanByAddress(
   tableName: string,
   deptId: VerifiedDeptId,
   address: string,
+  dispatchPoint?: GeoPoint,
 ): Promise<PrePlanCopyItem | undefined> {
   const normalized = normalizeAddress(address);
   if (!normalized) {
@@ -97,7 +125,11 @@ export async function findPrePlanByAddress(
     ExpressionAttributeValues: { ':gsi1pk': prePlanAddressPartition(deptId, normalized.key) },
     Limit: ADDRESS_CANDIDATE_LIMIT,
   });
-  const candidates = items.filter(isPrePlanCopy).sort(newestFirst);
+  const candidates = items
+    .filter(isPrePlanCopy)
+    .filter((candidate) => sameLocality(normalized, candidate))
+    .filter((candidate) => closeEnough(dispatchPoint, candidate))
+    .sort(newestFirst);
   const unitRank = (candidate: PrePlanCopyItem): number => {
     const unit = candidate.addressUnit ?? null;
     if (normalized.unit !== null && unit === normalized.unit) return 0;

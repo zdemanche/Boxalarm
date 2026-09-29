@@ -155,6 +155,8 @@ function buildCopyUpdate(
   if (normalized) {
     assign('addressKey', normalized.key);
     assign('addressUnit', normalized.unit ?? undefined);
+    assign('addressTown', normalized.town ?? undefined);
+    assign('addressZip', normalized.zip ?? undefined);
     const addressIndex = prePlanAddressIndexKeys(deptId, normalized.key, payload.occupancyId);
     assign('gsi1pk', addressIndex.gsi1pk);
     assign('gsi1sk', addressIndex.gsi1sk);
