@@ -1,5 +1,6 @@
 import notifee, { AndroidImportance, AndroidVisibility } from '@notifee/react-native';
 import { Platform } from 'react-native';
+import { kvGet, kvSet } from '../../sync/kvStore';
 import { alertReadinessNative } from './alertReadiness';
 
 /**
@@ -30,7 +31,10 @@ export function categoryFromPushData(data: { category?: unknown } | undefined): 
 // The id last resolved from a successful DND-access read. A transient read error keeps it rather
 // than flipping to `-v2` (review m1): flipping would recreate a deleted id - and Android restores
 // a re-created channel id with the member's old settings for it, muted or not.
+// Persisted (round 2 m2-3): a fresh process - e.g. the headless task for a page - whose first
+// read fails must not fall back to `-v2` either.
 let lastKnownCriticalId: string | null = null;
+const LAST_CRITICAL_CHANNEL_KEY = 'critical-channel-id';
 
 /** The critical channel id this device should post on right now. Never throws. */
 export async function currentCriticalChannelId(): Promise<string> {
@@ -38,14 +42,37 @@ export async function currentCriticalChannelId(): Promise<string> {
   if (!native) return CRITICAL_CHANNEL_ID;
   try {
     const { dndAccessGranted } = await native.getReadiness();
-    lastKnownCriticalId = dndAccessGranted ? CRITICAL_CHANNEL_DND_ID : CRITICAL_CHANNEL_ID;
-    return lastKnownCriticalId;
+    const id = dndAccessGranted ? CRITICAL_CHANNEL_DND_ID : CRITICAL_CHANNEL_ID;
+    if (id !== lastKnownCriticalId) {
+      lastKnownCriticalId = id;
+      await kvSet(LAST_CRITICAL_CHANNEL_KEY, id);
+    }
+    return id;
   } catch {
+    if (!lastKnownCriticalId) {
+      lastKnownCriticalId = (await kvGet<string>(LAST_CRITICAL_CHANNEL_KEY))?.value ?? null;
+    }
     return lastKnownCriticalId ?? CRITICAL_CHANNEL_ID;
   }
 }
 
-/** Test seam. */
+/**
+ * Deleting a channel removes the notifications posted on it - including a page that is ringing
+ * right now (round 2 m2-3). Stale channels are only deleted when no dispatch page is showing; if
+ * that cannot be read, deletion waits for the next foreground.
+ */
+async function aDispatchPageIsShowing(): Promise<boolean> {
+  try {
+    const shown = await notifee.getDisplayedNotifications();
+    return shown.some((entry) =>
+      (entry.id ?? entry.notification?.id ?? '').startsWith('dispatch:'),
+    );
+  } catch {
+    return true;
+  }
+}
+
+/** Test seam: forgets the in-memory id (a fresh process); the persisted one stays. */
 export function resetCriticalChannelIdForTest(): void {
   lastKnownCriticalId = null;
 }
@@ -85,7 +112,7 @@ export async function ensureNotificationChannels(
       criticalId = await currentCriticalChannelId();
       await native.createCriticalChannel(criticalId, CRITICAL_CHANNEL_NAME);
       createdNatively = true;
-      if (options.deleteStale) {
+      if (options.deleteStale && !(await aDispatchPageIsShowing())) {
         const stale = [
           ...RETIRED_CRITICAL_CHANNEL_IDS,
           criticalId === CRITICAL_CHANNEL_ID ? CRITICAL_CHANNEL_DND_ID : CRITICAL_CHANNEL_ID,

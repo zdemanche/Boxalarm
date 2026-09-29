@@ -138,3 +138,36 @@ test('a transient DND-access read error keeps the last known channel instead of 
 
   await expect(ensureNotificationChannels()).resolves.toBe(CRITICAL_CHANNEL_DND_ID);
 });
+
+test('stale channels are not deleted while a dispatch page is showing (deleting would cancel it)', async () => {
+  Platform.OS = 'android';
+  const native = installNative(true);
+  (notifee.getDisplayedNotifications as jest.Mock).mockResolvedValueOnce([
+    { id: 'dispatch:D-RINGING', notification: { id: 'dispatch:D-RINGING' } },
+  ]);
+
+  await ensureNotificationChannels({ deleteStale: true });
+
+  expect(native.createCriticalChannel).toHaveBeenCalled();
+  expect(native.deleteChannel).not.toHaveBeenCalled();
+});
+
+test('if the shown notifications cannot be read, deletion waits', async () => {
+  Platform.OS = 'android';
+  const native = installNative(true);
+  (notifee.getDisplayedNotifications as jest.Mock).mockRejectedValueOnce(new Error('boom'));
+
+  await ensureNotificationChannels({ deleteStale: true });
+
+  expect(native.deleteChannel).not.toHaveBeenCalled();
+});
+
+test('the last known channel id survives a fresh process whose first read fails', async () => {
+  Platform.OS = 'android';
+  const native = installNative(true);
+  await ensureNotificationChannels(); // learns and persists -v2-dnd
+  resetCriticalChannelIdForTest(); // new process
+  native.getReadiness.mockRejectedValueOnce(new Error('transient'));
+
+  await expect(ensureNotificationChannels()).resolves.toBe(CRITICAL_CHANNEL_DND_ID);
+});
