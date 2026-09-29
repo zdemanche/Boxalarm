@@ -98,8 +98,18 @@ export async function putPrePlan(
 // The presigned S3 PUT is not an API route, so it bypasses apiRequest — and with it
 // apiRequest's non-2xx check. An expired URL or a rejected upload must surface as a failed
 // save, never as "Pre-plan saved." with the file silently missing.
-export async function uploadPrePlanFile(uploadUrl: string, file: File): Promise<void> {
-  const response = await fetch(uploadUrl, { method: 'PUT', body: file });
+// The PUT is signed over Content-Type: send exactly the type the API returned with the URL,
+// or S3 refuses it. Falls back to the file's own type for an older API.
+export async function uploadPrePlanFile(
+  uploadUrl: string,
+  file: File,
+  contentType?: string,
+): Promise<void> {
+  const response = await fetch(uploadUrl, {
+    method: 'PUT',
+    body: file,
+    headers: { 'Content-Type': contentType ?? file.type },
+  });
   if (!response.ok) {
     throw new Error(`Uploading ${file.name} failed (HTTP ${response.status}).`);
   }

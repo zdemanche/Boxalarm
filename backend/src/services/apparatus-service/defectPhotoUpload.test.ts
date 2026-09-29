@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { toVerifiedDeptId } from '@boxalarm/dept-scope';
 import {
   createDefectPhotoUploadUrl,
+  presignPut,
   readDefectPhotoUploadConfig,
   resignDefectPhotoUploadUrl,
 } from './defectPhotoUpload.js';
@@ -42,11 +43,13 @@ describe('createDefectPhotoUploadUrl', () => {
       'boxalarm-dev-platform-assets',
       'NICHOLS/defect/DEF-0033/photo.jpg',
       600,
+      'image/jpeg',
     );
+    expect(result.contentType).toBe('image/jpeg');
     expect(result.uploadUrl).toContain('boxalarm-dev-platform-assets.s3.us-east-1.amazonaws.com');
   });
 
-  it.each([['sub/photo.jpg'], ['../photo.jpg']])(
+  it.each([['sub/photo.jpg'], ['../photo.jpg'], ['photo.svg'], ['photo.pdf'], ['photo.html']])(
     'rejects a prefix-escaping filename without presigning: %s',
     async (filename) => {
       const presign = fakePresign();
@@ -96,11 +99,24 @@ describe('resignDefectPhotoUploadUrl', () => {
     ).rejects.toThrow(TypeError);
     await expect(
       resignDefectPhotoUploadUrl(config, deptId, 'NICHOLS/defect/D-1/p.jpg', presign),
-    ).resolves.toBe('https://signed');
+    ).resolves.toEqual({ uploadUrl: 'https://signed', contentType: 'image/jpeg' });
     expect(presign).toHaveBeenCalledWith(
       'boxalarm-dev-platform-assets',
       'NICHOLS/defect/D-1/p.jpg',
       600,
+      'image/jpeg',
     );
+  });
+});
+
+describe('presignPut (real SigV4 presigner, no network)', () => {
+  it('signs the Content-Type, so S3 refuses any other type on the PUT (review minor 11)', async () => {
+    const originalEnv = { ...process.env };
+    process.env.AWS_REGION = 'us-east-1';
+    process.env.AWS_ACCESS_KEY_ID = 'AKIDEXAMPLE';
+    process.env.AWS_SECRET_ACCESS_KEY = 'secret';
+    const url = new URL(await presignPut('bucket', 'NICHOLS/defect/D-1/p.jpg', 600, 'image/jpeg'));
+    process.env = originalEnv;
+    expect(url.searchParams.get('X-Amz-SignedHeaders')).toContain('content-type');
   });
 });

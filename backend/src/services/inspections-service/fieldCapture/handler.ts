@@ -14,6 +14,7 @@ import { getDocumentClient, readInspectionsConfig } from '../dynamoClient.js';
 import {
   buildAssetKey,
   createSignedUploadUrl,
+  requireUploadContentType,
   readAssetsConfig,
   type AssetsConfig,
   type SignUrlFn,
@@ -67,10 +68,12 @@ function signPhotoUploads(
   keys: readonly string[],
   assetsConfig: AssetsConfig,
   signer: SignUrlFn | undefined,
-): Promise<{ filename: string; uploadUrl: string }[]> {
+): Promise<{ filename: string; contentType: string; uploadUrl: string }[]> {
   return Promise.all(
     keys.map(async (key) => ({
       filename: key.slice(key.lastIndexOf('/') + 1),
+      // The PUT is signed with this type; the client must send it as Content-Type.
+      contentType: requireUploadContentType(key),
       uploadUrl: await createSignedUploadUrl(assetsConfig, key, signer),
     })),
   );

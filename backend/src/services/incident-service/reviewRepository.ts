@@ -42,6 +42,8 @@ function metadataKey(deptId: VerifiedDeptId, incidentId: string) {
   return { pk: buildDeptScopedPk(deptId, 'INCIDENT', incidentId), sk: 'METADATA' };
 }
 
+const AUDIT_CREATE_ONCE = 'attribute_not_exists(pk) AND attribute_not_exists(sk)';
+
 function auditItem(
   deptId: VerifiedDeptId,
   incidentId: string,
@@ -185,6 +187,8 @@ export async function lockIncident(
                 status: { old: input.previousStatus, new: status },
                 lockedAt: { old: null, new: input.nowEpochSeconds },
               }),
+              // An audit row is written once and never replaced.
+              ConditionExpression: AUDIT_CREATE_ONCE,
             },
           },
           ...outbox.map((Item) => ({ Put: { TableName: tableName, Item } })),
@@ -264,6 +268,7 @@ export async function unlockIncident(
                 },
                 { reason: input.reason },
               ),
+              ConditionExpression: AUDIT_CREATE_ONCE,
             },
           },
           {

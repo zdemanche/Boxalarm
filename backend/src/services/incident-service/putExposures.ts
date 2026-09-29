@@ -6,6 +6,7 @@ import {
   emitIncidentMetric,
   nowEpochSeconds,
   problemResponse,
+  readAuthorizerContext,
   readIncidentWriteRequest,
 } from './authContext.js';
 import {
@@ -15,7 +16,12 @@ import {
   getTableName,
 } from './repository.js';
 import { IncidentLockedError, lockedProblem } from './lock.js';
-import { putIncidentSecondary } from './secondaryRepository.js';
+import {
+  SecondaryConflictError,
+  getIncidentSecondary,
+  putIncidentSecondary,
+  type IncidentSecondary,
+} from './secondaryRepository.js';
 import { createSchemaVersionRepository } from './schemaVersion/repository.js';
 import { getSecondarySchemaDocument } from './schemaVersion/s3Schema.js';
 import { getS3Client } from '../platform-service/export/awsClients.js';
@@ -28,6 +34,8 @@ interface ParsedExposureInput {
   readonly secondaryType: string;
   readonly payload: Record<string, string>;
   readonly affectedMemberIds: readonly string[];
+  /** The version the client last read; a mismatch is a 409, not a silent overwrite. */
+  readonly expectedVersion?: number;
 }
 
 function parseInput(record: Record<string, unknown>): ParsedExposureInput {
@@ -60,7 +68,60 @@ function parseInput(record: Record<string, unknown>): ParsedExposureInput {
     );
   }
 
-  return { secondaryType, payload: stringPayload, affectedMemberIds };
+  const expectedVersion = record.expectedVersion;
+  if (
+    expectedVersion !== undefined &&
+    (typeof expectedVersion !== 'number' ||
+      !Number.isInteger(expectedVersion) ||
+      expectedVersion < 0)
+  ) {
+    throw new RequestValidationError('expectedVersion must be a non-negative integer when present');
+  }
+
+  return {
+    secondaryType,
+    payload: stringPayload,
+    affectedMemberIds,
+    ...(expectedVersion !== undefined ? { expectedVersion } : {}),
+  };
+}
+
+function sameMembers(a: readonly string[], b: readonly string[]): boolean {
+  const left = new Set(a);
+  const right = new Set(b);
+  return left.size === right.size && [...left].every((id) => right.has(id));
+}
+
+/**
+ * Who may write a responder-exposure module (review M3). Reads were already narrowed to the
+ * affected member and chief/admin (getIncident.ts); writes were open to any member, so one
+ * member could erase an exposure naming a colleague - cancer-presumption evidence.
+ *  - Officer tier (OFFICER/CHIEF/ADMIN) records and corrects any module.
+ *  - Any other member only a module that names them, and cannot change who it names: on a
+ *    new module they may name only themselves; on an existing one the named set must stay
+ *    exactly as it is.
+ * Returns the 403 detail, or undefined when allowed.
+ */
+export function exposureWriteDenial(
+  caller: { readonly sub: string; readonly isOfficerTier: boolean },
+  existing: IncidentSecondary | undefined,
+  nextAffectedMemberIds: readonly string[],
+): string | undefined {
+  if (caller.isOfficerTier) {
+    return undefined;
+  }
+  if (!existing) {
+    return nextAffectedMemberIds.length === 1 && nextAffectedMemberIds[0] === caller.sub
+      ? undefined
+      : 'A member may record only their own exposure; naming other members is an officer action.';
+  }
+  if (!existing.affectedMemberIds.includes(caller.sub)) {
+    return 'Only an officer, or a member this exposure record names, may change it.';
+  }
+  if (!sameMembers(existing.affectedMemberIds, nextAffectedMemberIds)) {
+    return 'Only an officer may change which members an exposure record names.';
+  }
+  return undefined;
 }
 
 export const handler: APIGatewayProxyHandlerV2WithLambdaAuthorizer<AuthorizerContext> = async (
@@ -71,6 +132,8 @@ export const handler: APIGatewayProxyHandlerV2WithLambdaAuthorizer<AuthorizerCon
     return request.response;
   }
   const { traceId, deptId, incidentId, input: input } = request;
+  // readIncidentWriteRequest already proved the context is readable.
+  const caller = readAuthorizerContext(event);
 
   try {
     const repository = getIncidentRepository(process.env);
@@ -89,6 +152,39 @@ export const handler: APIGatewayProxyHandlerV2WithLambdaAuthorizer<AuthorizerCon
 
     const client = getDocumentClient();
     const tableName = getTableName(process.env);
+
+    const existing = await getIncidentSecondary(
+      client,
+      tableName,
+      deptId,
+      incidentId,
+      input.secondaryType,
+    );
+    const denial = exposureWriteDenial(caller, existing, input.affectedMemberIds);
+    if (denial) {
+      console.error(
+        JSON.stringify({
+          event: 'incident.exposures.denied',
+          reason: 'NotOfficerOrAffectedMember',
+          correlationId: traceId,
+          deptId,
+          incidentId,
+          actorId: caller.sub,
+        }),
+      );
+      emitIncidentMetric('IncidentSecondaryWriteDenied');
+      return problemResponse(403, 'Forbidden', denial, traceId);
+    }
+    if (input.expectedVersion !== undefined && input.expectedVersion !== (existing?.version ?? 0)) {
+      return problemResponse(
+        409,
+        'Conflict',
+        'The exposure record changed since it was read; reload it and retry.',
+        traceId,
+        { currentVersion: existing?.version ?? 0 },
+      );
+    }
+
     const schemaVersionRepository = createSchemaVersionRepository(client, tableName);
     // Validate against the schema version this incident was authored under, not whatever
     // is newest: the scheduled refresh job can promote a new ACTIVE schema at any time, and
@@ -130,7 +226,7 @@ export const handler: APIGatewayProxyHandlerV2WithLambdaAuthorizer<AuthorizerCon
       input.payload,
     );
     const updatedAt = nowEpochSeconds();
-    await putIncidentSecondary(
+    const version = await putIncidentSecondary(
       client,
       tableName,
       deptId,
@@ -142,6 +238,7 @@ export const handler: APIGatewayProxyHandlerV2WithLambdaAuthorizer<AuthorizerCon
         updatedAt,
       },
       traceId,
+      { previous: existing, actorId: caller.sub },
     );
 
     emitIncidentMetric('IncidentSecondaryUpdated');
@@ -155,6 +252,7 @@ export const handler: APIGatewayProxyHandlerV2WithLambdaAuthorizer<AuthorizerCon
         affectedMemberIds: input.affectedMemberIds,
         complete: missing.length === 0,
         updatedAt,
+        version,
       }),
     };
   } catch (error) {
@@ -163,6 +261,14 @@ export const handler: APIGatewayProxyHandlerV2WithLambdaAuthorizer<AuthorizerCon
     }
     if (error instanceof IncidentNotFoundError) {
       return problemResponse(404, 'Not Found', error.message, traceId);
+    }
+    if (error instanceof SecondaryConflictError) {
+      return problemResponse(
+        409,
+        'Conflict',
+        'The exposure record changed while this request was in flight; reload it and retry.',
+        traceId,
+      );
     }
     console.error(
       JSON.stringify({

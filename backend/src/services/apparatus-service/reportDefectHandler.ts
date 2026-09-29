@@ -167,7 +167,10 @@ function validateBody(
   };
 }
 
-function toResponseBody(defect: DefectRecord, uploadUrl?: string): Record<string, unknown> {
+function toResponseBody(
+  defect: DefectRecord,
+  upload?: { uploadUrl: string; contentType: string },
+): Record<string, unknown> {
   return {
     defectId: defect.defectId,
     apparatusId: defect.apparatusId,
@@ -179,7 +182,9 @@ function toResponseBody(defect: DefectRecord, uploadUrl?: string): Record<string
     reportedAt: defect.reportedAt,
     photoS3Key: defect.photoS3Key,
     outOfService: defect.outOfService,
-    ...(uploadUrl !== undefined ? { uploadUrl } : {}),
+    ...(upload !== undefined
+      ? { uploadUrl: upload.uploadUrl, uploadContentType: upload.contentType }
+      : {}),
   };
 }
 
@@ -194,7 +199,7 @@ async function replayedDefectResponse(
   photoFilename: string | undefined,
   deptId: VerifiedDeptId,
 ): Promise<APIGatewayProxyResultV2> {
-  const uploadUrl =
+  const upload =
     photoFilename && existing.photoS3Key
       ? await resignDefectPhotoUploadUrl(
           await readDefectPhotoUploadConfig(process.env),
@@ -205,7 +210,7 @@ async function replayedDefectResponse(
   return {
     statusCode: 200,
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify(toResponseBody(existing, uploadUrl)),
+    body: JSON.stringify(toResponseBody(existing, upload)),
   };
 }
 
@@ -270,18 +275,18 @@ async function reportDefect(
 
   const defectId = deps.newDefectId();
   let photoS3Key = value.photoS3Key ?? null;
-  let uploadUrl: string | undefined;
+  let upload: { uploadUrl: string; contentType: string } | undefined;
 
   if (value.photoFilename) {
     try {
       const config = await readDefectPhotoUploadConfig(process.env);
-      const upload = await createDefectPhotoUploadUrl(config, {
+      const created = await createDefectPhotoUploadUrl(config, {
         deptId,
         defectId,
         filename: value.photoFilename,
       });
-      photoS3Key = upload.photoS3Key;
-      uploadUrl = upload.uploadUrl;
+      photoS3Key = created.photoS3Key;
+      upload = { uploadUrl: created.uploadUrl, contentType: created.contentType };
     } catch (error) {
       if (error instanceof TypeError) {
         console.error(
@@ -380,7 +385,7 @@ async function reportDefect(
   return {
     statusCode: 201,
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify(toResponseBody(defect, uploadUrl)),
+    body: JSON.stringify(toResponseBody(defect, upload)),
   };
 }
 

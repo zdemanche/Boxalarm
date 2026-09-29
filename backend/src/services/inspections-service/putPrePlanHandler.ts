@@ -7,7 +7,8 @@ import { toVerifiedDeptId } from '@boxalarm/dept-scope';
 import { createDynamoClient, readInspectionsTableConfig } from './platformTable.js';
 import {
   createSignedUploadUrl,
-  isSafeAssetFilename,
+  isAllowedUploadFilename,
+  requireUploadContentType,
   readAssetsConfig,
   type SignUrlFn,
 } from './assetsSigner.js';
@@ -74,7 +75,7 @@ function isStringArray(value: unknown): value is string[] {
 }
 
 function isSafeFilenameArray(value: unknown): value is string[] {
-  return isStringArray(value) && value.every((entry) => isSafeAssetFilename(entry));
+  return isStringArray(value) && value.every((entry) => isAllowedUploadFilename(entry));
 }
 
 function isUtilityShutoffArray(value: unknown): value is UtilityShutoff[] {
@@ -104,7 +105,7 @@ export function parsePrePlanInput(body: string | undefined | null): PrePlanInput
   if (
     parsed.siteDiagramFilename !== undefined &&
     (typeof parsed.siteDiagramFilename !== 'string' ||
-      !isSafeAssetFilename(parsed.siteDiagramFilename))
+      !isAllowedUploadFilename(parsed.siteDiagramFilename))
   ) {
     return undefined;
   }
@@ -160,6 +161,8 @@ export function createPutPrePlanHandler(
         const attachmentUploadUrls = await Promise.all(
           input.attachmentFilenames.map(async (filename, index) => ({
             filename,
+            // The PUT is signed with this type; the client must send it as Content-Type.
+            contentType: requireUploadContentType(filename),
             uploadUrl: await createSignedUploadUrl(
               assetsConfig,
               prePlan.attachmentS3Keys[index] ?? '',
@@ -173,7 +176,12 @@ export function createPutPrePlanHandler(
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify({
             prePlanId: prePlan.prePlanId,
-            ...(siteDiagramUploadUrl ? { siteDiagramUploadUrl } : {}),
+            ...(siteDiagramUploadUrl && prePlan.siteDiagramS3Key
+              ? {
+                  siteDiagramUploadUrl,
+                  siteDiagramContentType: requireUploadContentType(prePlan.siteDiagramS3Key),
+                }
+              : {}),
             attachmentUploadUrls,
             utilityShutoffs: prePlan.utilityShutoffs,
             hazards: prePlan.hazards,

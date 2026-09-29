@@ -14,6 +14,8 @@ export interface IncidentAuthContext {
   readonly isAdmin: boolean;
   /** ADMIN, CHIEF, or OFFICER — submission status read and manual retry. */
   readonly canManageSubmission: boolean;
+  /** ADMIN, CHIEF, or OFFICER — may record or correct any responder-exposure module. */
+  readonly isOfficerTier: boolean;
 }
 
 const ADMIN_GROUPS = new Set(['ADMIN', 'CHIEF']);
@@ -44,6 +46,7 @@ export function readAuthorizerContext(event: IncidentEvent): IncidentAuthContext
     sub: rawSub,
     isAdmin: hasGroup(groups, ADMIN_GROUPS),
     canManageSubmission: hasGroup(groups, SUBMISSION_GROUPS),
+    isOfficerTier: hasGroup(groups, SUBMISSION_GROUPS),
   };
 }
 

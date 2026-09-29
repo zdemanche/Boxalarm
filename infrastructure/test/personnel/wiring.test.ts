@@ -48,6 +48,8 @@ async function build() {
   const httpApi = new HttpApi("http-api", {
     env: "dev",
     userPoolId: "pool-1",
+    platformTableName: "platform-table",
+    platformTableArn: "arn:aws:dynamodb:us-east-1:123456789012:table/platform",
     allowedClientIds: ["client-1"],
     platformLogGroup: logGroup,
   });
@@ -72,6 +74,7 @@ async function build() {
   };
   new Members("members", {
     ...common,
+    chiefNotificationTopicArn: "arn:aws:sns:us-east-1:123456789012:chief",
     userPoolId: "us-east-1_pool",
     userPoolArn: "arn:aws:cognito-idp:us-east-1:123456789012:userpool/us-east-1_pool",
   });

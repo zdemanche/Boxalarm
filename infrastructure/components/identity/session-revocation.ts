@@ -1,4 +1,5 @@
 import * as pulumi from "@pulumi/pulumi";
+import * as aws from "@pulumi/aws";
 import { ServiceLambda } from "../observability/service-lambda";
 import { ServiceLogGroup } from "../observability/service-log-group";
 import { HttpApi } from "../api/http-api";
@@ -17,20 +18,44 @@ export interface SessionRevocationArgs {
   platformLogGroup: ServiceLogGroup;
   httpApi: HttpApi;
   platformBus: PlatformBus;
+  /** Member rows: the status consumer acts on the row's current status, not the event's. */
+  platformTableName: pulumi.Input<string>;
+  platformTableArn: pulumi.Input<string>;
+  /** Every credential reset notifies the chief, like every export. */
+  chiefNotificationTopicArn: pulumi.Input<string>;
 }
 
-/** IAM for a Lambda calling cognitoRevocationClient.ts's two admin APIs, scoped to one pool. */
+/** IAM for a Lambda calling cognitoRevocationClient.ts's admin APIs, scoped to one pool. */
 function cognitoRevocationStatements(
   userPoolArn: pulumi.Input<string>,
+  actions: readonly string[],
 ): pulumi.Output<IamPolicyStatement[]> {
   return pulumi.output(userPoolArn).apply((arn) => [
     {
       Sid: "RevokeAndInspectSessions",
       Effect: "Allow" as const,
-      Action: ["cognito-idp:AdminUserGlobalSignOut", "cognito-idp:AdminGetUser"],
+      Action: [...actions],
       Resource: arn,
     },
   ]);
+}
+
+const SIGN_OUT_ACTIONS = ["cognito-idp:AdminUserGlobalSignOut", "cognito-idp:AdminGetUser"];
+
+/**
+ * M1: every revocation path writes DEPT#{deptId}#SESSION_REVOCATION#{sub}, which the
+ * authorizer checks each token's iat against. Put on those keys only.
+ */
+function revocationMarkerStatement(tableArn: string): IamPolicyStatement {
+  return {
+    Sid: "WriteSessionRevocationMarker",
+    Effect: "Allow",
+    Action: ["dynamodb:PutItem"],
+    Resource: tableArn,
+    Condition: {
+      "ForAllValues:StringLike": { "dynamodb:LeadingKeys": ["DEPT#*#SESSION_REVOCATION#*"] },
+    },
+  };
 }
 
 /**
@@ -38,9 +63,58 @@ function cognitoRevocationStatements(
  * consumer off the platform bus, and the admin device-loss route. Session
  * validity (1h/1h/3650d + rotation) is set on the app clients in index.ts.
  */
+/**
+ * M2: device loss removes the member's PUSH contact channel - the same transaction
+ * personnel-service's push-token DELETE writes (member METADATA update + OUTBOX put).
+ * DynamoDB authorizes each transaction item as its own action, so each is key-scoped.
+ */
+function pushInvalidationStatements(tableArn: string): IamPolicyStatement[] {
+  return [
+    {
+      Sid: "ReadMemberForPushInvalidation",
+      Effect: "Allow",
+      Action: ["dynamodb:GetItem"],
+      Resource: tableArn,
+      Condition: { "ForAllValues:StringLike": { "dynamodb:LeadingKeys": ["DEPT#*#MEMBER#*"] } },
+    },
+    {
+      // Review minor 9: only the two attributes the push invalidation writes (plus the key),
+      // not every attribute of every member row.
+      Sid: "InvalidateMemberPush",
+      Effect: "Allow",
+      Action: ["dynamodb:UpdateItem"],
+      Resource: tableArn,
+      Condition: {
+        "ForAllValues:StringLike": { "dynamodb:LeadingKeys": ["DEPT#*#MEMBER#*"] },
+        "ForAllValues:StringEquals": {
+          "dynamodb:Attributes": ["pk", "sk", "contactChannels", "updatedAt"],
+        },
+      },
+    },
+    {
+      Sid: "EmitMemberUpdatedOutbox",
+      Effect: "Allow",
+      Action: ["dynamodb:PutItem"],
+      Resource: tableArn,
+      Condition: { "ForAllValues:StringLike": { "dynamodb:LeadingKeys": ["DEPT#*#OUTBOX#*"] } },
+    },
+    {
+      Sid: "TransactPushInvalidation",
+      Effect: "Allow",
+      Action: ["dynamodb:TransactWriteItems"],
+      Resource: tableArn,
+    },
+  ];
+}
+
 export class SessionRevocation extends pulumi.ComponentResource {
   public readonly memberStatusLambda: ServiceLambda;
+  public readonly memberStatusConsumer: ReturnType<PlatformBus["addQueueConsumer"]>;
   public readonly deviceLossLambda: ServiceLambda;
+  public readonly credentialResetLambda: ServiceLambda;
+  public readonly credentialResetInvokedAlarm: aws.cloudwatch.MetricAlarm;
+  public readonly loginEnableFailedAlarm: aws.cloudwatch.MetricAlarm;
+  public readonly deviceLossInvokedAlarm: aws.cloudwatch.MetricAlarm;
 
   constructor(name: string, args: SessionRevocationArgs, opts?: pulumi.ComponentResourceOptions) {
     requireEnv("SessionRevocation", args.env);
@@ -56,13 +130,39 @@ export class SessionRevocation extends pulumi.ComponentResource {
         handler: LAMBDA_HANDLER,
         code: lambdaCode("platform-service", "session-revocation-member-status"),
         logGroup: args.platformLogGroup,
-        environment: { COGNITO_USER_POOL_ID: args.userPoolId },
-        additionalPolicyStatements: cognitoRevocationStatements(args.userPoolArn),
+        environment: {
+          COGNITO_USER_POOL_ID: args.userPoolId,
+          PLATFORM_TABLE_NAME: args.platformTableName,
+        },
+        // C1: LOA/RETIRED disables the login (sign-out alone let the same password back in);
+        // a return to ACTIVE enables it again. GetItem reads the member row's current status.
+        additionalPolicyStatements: pulumi
+          .all([
+            cognitoRevocationStatements(args.userPoolArn, [
+              ...SIGN_OUT_ACTIONS,
+              "cognito-idp:AdminDisableUser",
+              "cognito-idp:AdminEnableUser",
+            ]),
+            pulumi.output(args.platformTableArn),
+          ])
+          .apply(([cognito, tableArn]) => [
+            ...cognito,
+            {
+              Sid: "ReadMemberStatus",
+              Effect: "Allow" as const,
+              Action: ["dynamodb:GetItem"],
+              Resource: tableArn,
+              Condition: {
+                "ForAllValues:StringLike": { "dynamodb:LeadingKeys": ["DEPT#*#MEMBER#*"] },
+              },
+            },
+            revocationMarkerStatement(tableArn),
+          ]),
       },
       { parent: this },
     );
 
-    args.platformBus.addQueueConsumer(
+    this.memberStatusConsumer = args.platformBus.addQueueConsumer(
       `${name}-member-status-consumer`,
       {
         env,
@@ -72,6 +172,8 @@ export class SessionRevocation extends pulumi.ComponentResource {
         lambda: this.memberStatusLambda.function,
         lambdaRole: this.memberStatusLambda.role,
         maxReceiveCount: 5,
+        // The handler returns partial batch failures (review minor 15): only failed records retry.
+        reportBatchItemFailures: true,
       },
       { parent: this },
     );
@@ -90,12 +192,19 @@ export class SessionRevocation extends pulumi.ComponentResource {
           // Granted verifiedpermissions:IsAuthorizedWithToken below — without this,
           // readAuthzConfig() throws on every withAuthorization() call.
           VERIFIED_PERMISSIONS_POLICY_STORE_ID: args.policyStoreId,
+          PLATFORM_TABLE_NAME: args.platformTableName,
         },
         additionalPolicyStatements: pulumi
-          .all([cognitoRevocationStatements(args.userPoolArn), pulumi.output(args.policyStoreArn)])
-          .apply(([revocation, policyStoreArn]) => [
+          .all([
+            cognitoRevocationStatements(args.userPoolArn, SIGN_OUT_ACTIONS),
+            pulumi.output(args.policyStoreArn),
+            pulumi.output(args.platformTableArn),
+          ])
+          .apply(([revocation, policyStoreArn, tableArn]) => [
             ...revocation,
             verifiedPermissionsPolicyStatement(policyStoreArn),
+            revocationMarkerStatement(tableArn),
+            ...pushInvalidationStatements(tableArn),
           ]),
       },
       { parent: this },
@@ -107,9 +216,112 @@ export class SessionRevocation extends pulumi.ComponentResource {
       { parent: this },
     );
 
+    // C1: the compromised-password kill switch. Cedar ResetMemberCredentials (CHIEF/ADMIN).
+    this.credentialResetLambda = new ServiceLambda(
+      `${name}-credential-reset`,
+      {
+        env,
+        serviceName: "platform-service",
+        functionName: `boxalarm-${env}-platform-credential-reset`,
+        handler: LAMBDA_HANDLER,
+        code: lambdaCode("platform-service", "session-revocation-credential-reset"),
+        logGroup: args.platformLogGroup,
+        environment: {
+          COGNITO_USER_POOL_ID: args.userPoolId,
+          VERIFIED_PERMISSIONS_POLICY_STORE_ID: args.policyStoreId,
+          PLATFORM_TABLE_NAME: args.platformTableName,
+        },
+        additionalPolicyStatements: pulumi
+          .all([
+            cognitoRevocationStatements(args.userPoolArn, [
+              ...SIGN_OUT_ACTIONS,
+              "cognito-idp:AdminResetUserPassword",
+            ]),
+            pulumi.output(args.policyStoreArn),
+            pulumi.output(args.platformTableArn),
+          ])
+          .apply(([revocation, policyStoreArn, tableArn]) => [
+            ...revocation,
+            verifiedPermissionsPolicyStatement(policyStoreArn),
+            revocationMarkerStatement(tableArn),
+          ]),
+      },
+      { parent: this },
+    );
+
+    args.httpApi.route(
+      `${name}-credential-reset-route`,
+      {
+        routeKey: "POST /api/v1/platform/sessions/reset-credentials",
+        lambda: this.credentialResetLambda,
+      },
+      { parent: this },
+    );
+
+    // withAuthorization's alarmOnInvocation counter (Boxalarm/authz) - no threshold: an admin
+    // session is one password with no second factor, so every reset is worth a look.
+    this.credentialResetInvokedAlarm = new aws.cloudwatch.MetricAlarm(
+      `${name}-credential-reset-invoked-alarm`,
+      {
+        name: `boxalarm-${env}-platform-credential-reset-invoked`,
+        namespace: "Boxalarm/authz",
+        metricName: "ResetMemberCredentialsInvoked",
+        statistic: "Sum",
+        period: 60,
+        evaluationPeriods: 1,
+        threshold: 0,
+        comparisonOperator: "GreaterThanThreshold",
+        treatMissingData: "notBreaching",
+        alarmActions: [args.chiefNotificationTopicArn],
+      },
+      { parent: this },
+    );
+
+    // Device loss signs the member out everywhere; like a credential reset, every use reaches
+    // the chief (withAuthorization's alarmOnInvocation counter, Boxalarm/authz).
+    this.deviceLossInvokedAlarm = new aws.cloudwatch.MetricAlarm(
+      `${name}-device-loss-invoked-alarm`,
+      {
+        name: `boxalarm-${env}-platform-device-loss-invoked`,
+        namespace: "Boxalarm/authz",
+        metricName: "RevokeSessionInvoked",
+        statistic: "Sum",
+        period: 60,
+        evaluationPeriods: 1,
+        threshold: 0,
+        comparisonOperator: "GreaterThanThreshold",
+        treatMissingData: "notBreaching",
+        alarmActions: [args.chiefNotificationTopicArn],
+      },
+      { parent: this },
+    );
+
+    // Review MAJOR 2 / minor 10: a failed enable leaves a member who is ACTIVE on the roster
+    // unable to sign in or refresh - a login failure on the alert path. The record retries
+    // and then DLQs; this alarms on the first failure rather than waiting for the DLQ.
+    this.loginEnableFailedAlarm = new aws.cloudwatch.MetricAlarm(
+      `${name}-login-enable-failed-alarm`,
+      {
+        name: `boxalarm-${env}-platform-login-enable-failed`,
+        alarmDescription:
+          "Re-enabling a returning member's login failed: they cannot sign in until it succeeds.",
+        namespace: "Boxalarm/session-revocation",
+        metricName: "LoginEnableFailed",
+        statistic: "Sum",
+        period: 60,
+        evaluationPeriods: 1,
+        threshold: 0,
+        comparisonOperator: "GreaterThanThreshold",
+        treatMissingData: "notBreaching",
+        alarmActions: [args.chiefNotificationTopicArn],
+      },
+      { parent: this },
+    );
+
     this.registerOutputs({
       memberStatusLambda: this.memberStatusLambda,
       deviceLossLambda: this.deviceLossLambda,
+      credentialResetLambda: this.credentialResetLambda,
     });
   }
 }

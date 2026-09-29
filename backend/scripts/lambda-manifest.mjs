@@ -25,6 +25,11 @@ export const LAMBDA_ENTRIES = [
   },
   {
     service: 'platform-service',
+    function: 'session-revocation-credential-reset',
+    entry: 'src/services/platform-service/session-revocation/credentialResetHandler.ts',
+  },
+  {
+    service: 'platform-service',
     function: 'audit',
     entry: 'src/services/platform-service/audit/handler.ts',
   },

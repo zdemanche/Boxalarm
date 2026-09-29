@@ -4,9 +4,12 @@ import {
   buildAssetKey,
   createSignedAssetUrl,
   createSignedUploadUrl,
+  isAllowedUploadFilename,
   isSafeAssetFilename,
   presignAssetUrl,
   readAssetsConfig,
+  safeResponseOverrides,
+  uploadContentTypeFor,
 } from './assetsSigner.js';
 
 const DEPT_ID = toVerifiedDeptId({ deptId: 'NICHOLS' });
@@ -108,4 +111,77 @@ describe('presignAssetUrl (real SigV4 presigner, no network)', () => {
       expect(url.hostname).not.toContain('cloudfront');
     },
   );
+});
+
+// Review MINOR 4: an upload could be .html/.svg served back to a browser on the bucket origin.
+describe('upload allowlist and safe GET overrides', () => {
+  it('allows documents and photos, refuses page/script types', () => {
+    for (const ok of ['plan.pdf', 'photo.JPG', 'img.heic', 'sheet.xlsx']) {
+      expect(isAllowedUploadFilename(ok), ok).toBe(true);
+    }
+    for (const bad of ['page.html', 'logo.svg', 'x.js', 'noext', 'trailing.']) {
+      expect(isAllowedUploadFilename(bad), bad).toBe(false);
+    }
+  });
+
+  it('maps an extension to its content type case-insensitively', () => {
+    expect(uploadContentTypeFor('A/B/photo.JPEG')).toBe('image/jpeg');
+    expect(uploadContentTypeFor('x.html')).toBeUndefined();
+  });
+
+  it('forces the GET response type from the extension, and a download for anything else', () => {
+    expect(safeResponseOverrides('N/PRE_PLAN/P/plan.pdf')).toEqual({
+      ResponseContentType: 'application/pdf',
+    });
+    expect(safeResponseOverrides('N/PRE_PLAN/P/legacy.html')).toEqual({
+      ResponseContentType: 'application/octet-stream',
+      ResponseContentDisposition: 'attachment',
+    });
+  });
+
+  it('signs the response-content-type override into a real presigned GET', async () => {
+    const originalEnv = { ...process.env };
+    process.env.AWS_REGION = 'us-east-1';
+    process.env.AWS_ACCESS_KEY_ID = 'AKIDEXAMPLE';
+    process.env.AWS_SECRET_ACCESS_KEY = 'secret';
+    const url = new URL(
+      await presignAssetUrl({
+        bucketName: 'boxalarm-dev-platform-assets',
+        key: 'NICHOLS/PRE_PLAN/PP-1/legacy.html',
+        method: 'GET',
+        expiresInSeconds: 600,
+      }),
+    );
+    process.env = originalEnv;
+    expect(url.searchParams.get('response-content-type')).toBe('application/octet-stream');
+    expect(url.searchParams.get('response-content-disposition')).toBe('attachment');
+  });
+
+  it('signs the allowlisted Content-Type into a real presigned PUT (review minor 11)', async () => {
+    const originalEnv = { ...process.env };
+    process.env.AWS_REGION = 'us-east-1';
+    process.env.AWS_ACCESS_KEY_ID = 'AKIDEXAMPLE';
+    process.env.AWS_SECRET_ACCESS_KEY = 'secret';
+    const url = new URL(
+      await presignAssetUrl({
+        bucketName: 'boxalarm-dev-platform-assets',
+        key: 'NICHOLS/PRE_PLAN/PP-1/plan.pdf',
+        method: 'PUT',
+        expiresInSeconds: 600,
+      }),
+    );
+    process.env = originalEnv;
+    expect(url.searchParams.get('X-Amz-SignedHeaders')).toContain('content-type');
+  });
+
+  it('refuses to presign a PUT for a key outside the allowlist', async () => {
+    await expect(
+      presignAssetUrl({
+        bucketName: 'b',
+        key: 'NICHOLS/PRE_PLAN/PP-1/page.html',
+        method: 'PUT',
+        expiresInSeconds: 600,
+      }),
+    ).rejects.toThrow(TypeError);
+  });
 });

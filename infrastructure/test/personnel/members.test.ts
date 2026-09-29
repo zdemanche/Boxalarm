@@ -46,6 +46,8 @@ describe("Members", () => {
     const httpApi = new HttpApi("test-members-http-api", {
       env: "dev",
       userPoolId: pulumi.output("pool-1"),
+      platformTableName: "platform-table",
+      platformTableArn: "arn:aws:dynamodb:us-east-1:123456789012:table/platform",
       allowedClientIds: [pulumi.output("client-1")],
       platformLogGroup: logGroup,
     });
@@ -61,8 +63,29 @@ describe("Members", () => {
       ),
       logGroup,
       httpApi,
+      chiefNotificationTopicArn: pulumi.output("arn:aws:sns:us-east-1:123456789012:chief"),
     });
   }
+
+  // Review M5: every LOA/RETIRED change ends sessions and stops paging - the chief hears of each.
+  it("alarms the chief on every LOA and every RETIRED change, with no threshold", async () => {
+    const members = await build();
+    for (const status of ["LOA", "RETIRED"] as const) {
+      const alarm = members.deactivationAlarms[status];
+      const [metricName, namespace, dimensions, threshold, actions] = await Promise.all([
+        resolve(alarm.metricName),
+        resolve(alarm.namespace),
+        resolve(alarm.dimensions),
+        resolve(alarm.threshold),
+        resolve(alarm.alarmActions),
+      ]);
+      expect(metricName).toBe("MemberStatusUpdated");
+      expect(namespace).toBe("Boxalarm/personnel");
+      expect(dimensions).toEqual({ NewStatus: status });
+      expect(threshold).toBe(0);
+      expect(actions).toEqual(["arn:aws:sns:us-east-1:123456789012:chief"]);
+    }
+  });
 
   // create.ts provisions the member's login and keys the member on its sub.
   it("lets only the create Lambda manage logins, in this pool, and tells it the pool id", async () => {

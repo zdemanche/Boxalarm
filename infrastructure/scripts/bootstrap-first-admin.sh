@@ -11,19 +11,20 @@
 # Refuses to run once the department has any ADMIN or CHIEF: after that, use the web app.
 # Asks you to re-type the department id (or pass --yes), because a typo would create an
 # admin in a department that does not exist. If a run created the login but failed before
-# assigning the role, running it again with the same arguments finishes the job.
+# assigning the role, running it again with the same arguments plus --resume finishes the
+# job - only for a login that has never signed in, so an existing member is never promoted.
 # Don't run it twice at once for the same department.
 #
 # Usage:
 #   bootstrap-first-admin.sh <env> --dept-id NICHOLS --email chief@example.org \
 #     --first-name Pat --last-name Doe --phone +12035550100 --rank Chief \
-#     --agency-id NICHOLS-FD [--role CHIEF|ADMIN] [--join-date YYYY-MM-DD] [--yes]
+#     --agency-id NICHOLS-FD [--role CHIEF|ADMIN] [--join-date YYYY-MM-DD] [--yes] [--resume]
 # Needs the AWS CLI v2 and jq, with credentials for the stack's account. AWS_REGION defaults
 # to us-east-1 (every stack is pinned there).
 set -euo pipefail
 
 usage() {
-  sed -n '18,22p' "$0" | sed 's/^# \{0,1\}//' >&2
+  sed -n '19,23p' "$0" | sed 's/^# \{0,1\}//' >&2
   exit 2
 }
 
@@ -34,11 +35,17 @@ shift
 
 role=ADMIN
 confirmed=0
+resume=0
 join_date="$(date -u +%Y-%m-%d)"
 dept_id="" email="" first_name="" last_name="" phone="" rank="" agency_id=""
 while [[ $# -gt 0 ]]; do
   if [[ "$1" == "--yes" ]]; then
     confirmed=1
+    shift
+    continue
+  fi
+  if [[ "$1" == "--resume" ]]; then
+    resume=1
     shift
     continue
   fi
@@ -61,6 +68,12 @@ for required in dept_id email first_name last_name phone rank agency_id; do
   [[ -n "${!required}" ]] || { echo "missing --${required//_/-}" >&2; usage; }
 done
 [[ "$role" =~ ^(ADMIN|CHIEF)$ ]] || { echo "--role must be ADMIN or CHIEF" >&2; exit 2; }
+# The department id becomes a partition-key segment (DEPT#{deptId}#...) and the Cognito
+# custom:deptId (1-64 chars); '#', quotes and spaces would corrupt either.
+[[ "$dept_id" =~ ^[A-Za-z0-9_-]{1,64}$ ]] || {
+  echo "--dept-id must be 1-64 characters of A-Z, a-z, 0-9, '_' or '-'" >&2
+  exit 2
+}
 export AWS_REGION="${AWS_REGION:-us-east-1}"
 
 create_fn="boxalarm-${env}-personnel-members-create"
@@ -71,10 +84,11 @@ pool_id="$(aws lambda get-function-configuration --function-name "$create_fn" \
 [[ -n "$pool_id" && "$pool_id" != "None" ]] || { echo "no COGNITO_USER_POOL_ID on $create_fn" >&2; exit 1; }
 
 # Per department: the pool is shared, so another department's admin must not block this one.
+# Filtered with jq --arg, never by splicing the id into a JMESPath query string.
 for group in ADMIN CHIEF; do
   existing="$(aws cognito-idp list-users-in-group --user-pool-id "$pool_id" --group-name "$group" \
-    --query "length(Users[?Attributes[?Name=='custom:deptId' && Value=='${dept_id}']])" \
-    --output text)"
+    --output json | jq --arg dept "$dept_id" \
+    '[.Users[] | select(any(.Attributes[]; .Name == "custom:deptId" and .Value == $dept))] | length')"
   if [[ "$existing" != "0" ]]; then
     echo "refusing: ${dept_id} already has a member in $group - add members from the web app" >&2
     exit 1
@@ -126,12 +140,25 @@ create_event="$(jq -nc --argjson principal "$principal" --arg body "$create_body
     body: $body, isBase64Encoded: false}')"
 created="$(invoke "$create_fn" "$create_event" 409)"
 if [[ "$created" == "__STATUS_409__" ]]; then
-  # A login already exists for this email - an earlier run that stopped before the role step.
-  # Resume only if that login belongs to this department.
+  # A login already exists for this email. That is either an earlier run that stopped before
+  # the role step, or an existing member - and promoting an existing member to ADMIN/CHIEF
+  # silently would be a privilege grant nobody asked for. Resume only when asked to, for a
+  # login in this department that has never signed in (still on its temporary password).
   login="$(aws cognito-idp admin-get-user --user-pool-id "$pool_id" --username "$email" --output json)"
   login_dept="$(jq -r '.UserAttributes[] | select(.Name == "custom:deptId") | .Value' <<<"$login")"
+  login_status="$(jq -r '.UserStatus' <<<"$login")"
   if [[ "$login_dept" != "$dept_id" ]]; then
     echo "refusing: ${email} already has a login in department '${login_dept}'" >&2
+    exit 1
+  fi
+  if [[ "$resume" -ne 1 ]]; then
+    echo "refusing: ${email} already has a login in ${dept_id}. If an earlier run of this" >&2
+    echo "script stopped before assigning the role, re-run with --resume." >&2
+    exit 1
+  fi
+  if [[ "$login_status" != "FORCE_CHANGE_PASSWORD" ]]; then
+    echo "refusing: ${email} has already signed in (status ${login_status}), so it is an" >&2
+    echo "existing member, not an unfinished bootstrap - assign roles from the web app." >&2
     exit 1
   fi
   member_id="$(jq -r '.UserAttributes[] | select(.Name == "sub") | .Value' <<<"$login")"

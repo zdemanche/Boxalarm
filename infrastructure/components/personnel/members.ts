@@ -1,4 +1,5 @@
 import * as pulumi from "@pulumi/pulumi";
+import * as aws from "@pulumi/aws";
 import { ServiceLambda } from "../observability/service-lambda";
 import { ServiceLogGroup } from "../observability/service-log-group";
 import { HttpApi } from "../api/http-api";
@@ -17,6 +18,8 @@ export interface MembersArgs {
   userPoolArn: pulumi.Input<string>;
   logGroup: ServiceLogGroup;
   httpApi: HttpApi;
+  /** Every LOA/RETIRED change notifies the chief (review M5). */
+  chiefNotificationTopicArn: pulumi.Input<string>;
 }
 
 // Per-route IAM, scoped to what each real handler (backend/src/services/personnel-service/
@@ -138,6 +141,8 @@ export class Members extends pulumi.ComponentResource {
   public readonly updateStatusLambda: ServiceLambda;
   public readonly updateProfileLambda: ServiceLambda;
   public readonly updateRolesLambda: ServiceLambda;
+  /** Keyed by the status that alarms: LOA, RETIRED. */
+  public readonly deactivationAlarms: Record<"LOA" | "RETIRED", aws.cloudwatch.MetricAlarm>;
 
   constructor(name: string, args: MembersArgs, opts?: pulumi.ComponentResourceOptions) {
     requireEnv("Members", args.env);
@@ -258,6 +263,33 @@ export class Members extends pulumi.ComponentResource {
       },
       { parent: this },
     );
+
+    // Review M5: LOA/RETIRED ends the member's sessions and removes them from paging. With a
+    // single-factor officer password able to do that, every such change reaches the chief -
+    // no threshold, like export. The handler's MemberStatusUpdated EMF carries NewStatus.
+    const deactivationAlarm = (status: "LOA" | "RETIRED") =>
+      new aws.cloudwatch.MetricAlarm(
+        `${name}-status-${status.toLowerCase()}-alarm`,
+        {
+          name: `boxalarm-${env}-personnel-member-set-${status.toLowerCase()}`,
+          alarmDescription: `A member was set to ${status}: their sessions end and they stop being paged.`,
+          namespace: "Boxalarm/personnel",
+          metricName: "MemberStatusUpdated",
+          dimensions: { NewStatus: status },
+          statistic: "Sum",
+          period: 60,
+          evaluationPeriods: 1,
+          threshold: 0,
+          comparisonOperator: "GreaterThanThreshold",
+          treatMissingData: "notBreaching",
+          alarmActions: [args.chiefNotificationTopicArn],
+        },
+        { parent: this },
+      );
+    this.deactivationAlarms = {
+      LOA: deactivationAlarm("LOA"),
+      RETIRED: deactivationAlarm("RETIRED"),
+    };
 
     // E2-S6-INFRA #208: member self-service profile/contact update (F2.6, AP 12). One route,
     // two Cedar actions: updateMember.ts authorizes SelfUpdateMember (every role, via the

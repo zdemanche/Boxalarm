@@ -8,8 +8,9 @@ import type { Context, DynamoDBStreamEvent, SQSEvent } from 'aws-lambda';
  * A status change made through the deployed route (PUT /members/{memberId}/status ->
  * members/updateStatus.ts -> updateMemberStatus) must reach both consumers that act on it,
  * with only the AWS transports faked:
- *  - session revocation (platform-service memberStatusRevocationHandler) reads `status` and
- *    ends every session on LOA/RETIRED;
+ *  - session revocation (platform-service memberStatusRevocationHandler) reads `status`: on
+ *    LOA/RETIRED it marks the member revoked, disables the login and ends every session; on
+ *    a return to ACTIVE it enables the login again;
  *  - the alerting eligibility snapshot (memberUpdatedHandler) reads `active`, which is what
  *    stops the member being paged.
  * The event used to carry only previousStatus/newStatus, so both silently did nothing.
@@ -38,6 +39,8 @@ afterEach(() => {
   vi.restoreAllMocks();
   vi.doUnmock('../../alerting-service/eligibility/dynamoClient.js');
   vi.doUnmock('../../platform-service/session-revocation/cognitoRevocationClient.js');
+  vi.doUnmock('../../platform-service/session-revocation/memberAccessStore.js');
+  vi.doUnmock('../../platform-service/authorizer/revocationStore.js');
 });
 
 async function statusChangeEvent(
@@ -110,17 +113,52 @@ function sqs(body: string): SQSEvent {
   return { Records: [{ messageId: 'msg-1', body }] } as unknown as SQSEvent;
 }
 
-async function revokedMembers(body: string): Promise<string[]> {
+interface RevocationOutcome {
+  readonly signedOut: string[];
+  readonly disabled: string[];
+  readonly enabled: string[];
+  readonly marked: string[];
+}
+
+async function revocationOutcome(body: string): Promise<RevocationOutcome> {
+  const usernames = (fn: ReturnType<typeof vi.fn>) =>
+    fn.mock.calls.map((call) => (call[1] as { username: string }).username);
   const revokeMemberSession = vi.fn().mockResolvedValue(undefined);
+  const disableMemberLogin = vi.fn().mockResolvedValue(undefined);
+  const enableMemberLogin = vi.fn().mockResolvedValue(undefined);
   vi.doMock('../../platform-service/session-revocation/cognitoRevocationClient.js', () => ({
     createRevocationClient: () => ({}),
     readRevocationConfig: () => ({ userPoolId: 'us-east-1_pool' }),
+    resolveMemberDeptId: () => Promise.resolve('NICHOLS'),
     revokeMemberSession,
+    disableMemberLogin,
+    enableMemberLogin,
+  }));
+  // The consumer acts on the member row's status; with no row it falls back to the event's,
+  // which is the contract under test here.
+  vi.doMock('../../platform-service/session-revocation/memberAccessStore.js', () => ({
+    readPlatformTableName: () => 'platform-table',
+    getAccessStoreClient: () => ({}),
+    readMemberStatus: () => Promise.resolve(undefined),
+  }));
+  const writeRevocationMarker = vi.fn().mockResolvedValue(1);
+  vi.doMock('../../platform-service/authorizer/revocationStore.js', () => ({
+    writeRevocationMarker,
   }));
   const { handler } =
     await import('../../platform-service/session-revocation/memberStatusRevocationHandler.js');
   await handler(sqs(body), {} as Context, () => undefined);
-  return revokeMemberSession.mock.calls.map((call) => (call[1] as { username: string }).username);
+  return {
+    signedOut: usernames(revokeMemberSession),
+    disabled: usernames(disableMemberLogin),
+    enabled: usernames(enableMemberLogin),
+    marked: writeRevocationMarker.mock.calls.map(
+      (call) =>
+        (call[2] as { deptId: string; sub: string }).deptId +
+        '/' +
+        (call[2] as { sub: string }).sub,
+    ),
+  };
 }
 
 async function snapshotActive(body: string): Promise<unknown> {
@@ -147,7 +185,13 @@ describe('personnel.member.updated (status) producer -> revocation and alerting 
     async (newStatus) => {
       const body = await statusChangeEvent('ACTIVE', newStatus);
 
-      await expect(revokedMembers(body)).resolves.toEqual(['mbr-7']);
+      // C1/M1: signed out, the login disabled, and existing access tokens marked revoked.
+      await expect(revocationOutcome(body)).resolves.toEqual({
+        signedOut: ['mbr-7'],
+        disabled: ['mbr-7'],
+        enabled: [],
+        marked: ['NICHOLS/mbr-7'],
+      });
       await expect(snapshotActive(body)).resolves.toBe(false);
     },
   );
@@ -155,7 +199,12 @@ describe('personnel.member.updated (status) producer -> revocation and alerting 
   it('a member returned to ACTIVE is paged again and not signed out', async () => {
     const body = await statusChangeEvent('LOA', 'ACTIVE');
 
-    await expect(revokedMembers(body)).resolves.toEqual([]);
+    await expect(revocationOutcome(body)).resolves.toEqual({
+      signedOut: [],
+      disabled: [],
+      enabled: ['mbr-7'],
+      marked: [],
+    });
     await expect(snapshotActive(body)).resolves.toBe(true);
   });
 });

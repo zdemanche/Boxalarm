@@ -4,8 +4,11 @@ import type {
   APIGatewaySimpleAuthorizerWithContextResult,
   Handler,
 } from 'aws-lambda';
-import { createVerifier, readAuthorizerConfig, verifyAccessToken } from './tokenVerifier.js';
+import { createVerifier, readAuthorizerConfig, verifyAccessTokenClaims } from './tokenVerifier.js';
 import type { AccessTokenVerifier, VerifiedAccessToken } from './tokenVerifier.js';
+import { createRevocationChecker, revocationFailsOpen } from './revocationCheck.js';
+import type { RevocationChecker } from './revocationCheck.js';
+import { getAuthorizerStoreClient, readRevokedAt } from './revocationStore.js';
 
 export type AuthorizerContext = VerifiedAccessToken;
 
@@ -17,6 +20,21 @@ let cachedVerifier: AccessTokenVerifier | undefined;
 function getVerifier(env: NodeJS.ProcessEnv): AccessTokenVerifier {
   cachedVerifier ??= createVerifier(readAuthorizerConfig(env));
   return cachedVerifier;
+}
+
+let cachedChecker: RevocationChecker | undefined;
+
+function getRevocationChecker(env: NodeJS.ProcessEnv): RevocationChecker {
+  if (!cachedChecker) {
+    const tableName = env.PLATFORM_TABLE_NAME;
+    if (!tableName) {
+      throw new Error('PLATFORM_TABLE_NAME is required and was not set');
+    }
+    cachedChecker = createRevocationChecker((deptId, sub) =>
+      readRevokedAt(getAuthorizerStoreClient(), tableName, deptId, sub),
+    );
+  }
+  return cachedChecker;
 }
 
 function extractBearerToken(event: APIGatewayRequestAuthorizerEventV2): string | undefined {
@@ -53,6 +71,24 @@ function emitAuthorizerMetric(outcome: 'Allowed' | 'Denied', reason?: string): v
   );
 }
 
+function emitRevocationFailOpenMetric(): void {
+  console.log(
+    JSON.stringify({
+      _aws: {
+        Timestamp: Date.now(),
+        CloudWatchMetrics: [
+          {
+            Namespace: 'Boxalarm/authorizer',
+            Dimensions: [[]],
+            Metrics: [{ Name: 'RevocationCheckFailOpen', Unit: 'Count' }],
+          },
+        ],
+      },
+      RevocationCheckFailOpen: 1,
+    }),
+  );
+}
+
 export const handler: Handler<APIGatewayRequestAuthorizerEventV2, AuthorizerResult> = async (
   event,
 ) => {
@@ -64,7 +100,41 @@ export const handler: Handler<APIGatewayRequestAuthorizerEventV2, AuthorizerResu
 
   try {
     const verifier = getVerifier(process.env);
-    const context = await verifyAccessToken(verifier, token);
+    const checker = getRevocationChecker(process.env);
+    const { principal: context, issuedAt } = await verifyAccessTokenClaims(verifier, token);
+
+    // M1: an access token is verified offline and lives an hour; a revoked member's token
+    // must stop working now. See revocationCheck.ts for the cache and the fail-open rule.
+    const revocation = await checker.check({ deptId: context.deptId, sub: context.sub, issuedAt });
+    if (revocation === 'revoked') {
+      console.error(
+        JSON.stringify({
+          event: 'authorizer.denied',
+          reason: 'SessionRevoked',
+          routeKey: event.routeKey,
+        }),
+      );
+      emitAuthorizerMetric('Denied', 'SessionRevoked');
+      return { isAuthorized: false };
+    }
+    if (revocation === 'unavailable') {
+      const failOpen = revocationFailsOpen(event.routeKey, process.env);
+      console.error(
+        JSON.stringify({
+          event: failOpen ? 'authorizer.revocationCheck.failOpen' : 'authorizer.denied',
+          reason: 'RevocationStoreUnavailable',
+          routeKey: event.routeKey,
+        }),
+      );
+      if (!failOpen) {
+        emitAuthorizerMetric('Denied', 'RevocationStoreUnavailable');
+        return { isAuthorized: false };
+      }
+      emitAuthorizerMetric('Allowed', 'RevocationCheckFailOpen');
+      // Its own metric so the alarm is a plain Sum > 0 (infra http-api.ts addAlarms).
+      emitRevocationFailOpenMetric();
+      return { isAuthorized: true, context };
+    }
     emitAuthorizerMetric('Allowed');
     return { isAuthorized: true, context };
   } catch (error) {

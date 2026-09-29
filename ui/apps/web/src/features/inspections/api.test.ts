@@ -40,9 +40,14 @@ test('uploadPrePlanFile PUTs the file body to the presigned URL', async () => {
   const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 200 }));
   vi.stubGlobal('fetch', fetchMock);
 
-  await uploadPrePlanFile(UPLOAD_URL, file);
+  await uploadPrePlanFile(UPLOAD_URL, file, 'application/pdf');
 
-  expect(fetchMock).toHaveBeenCalledWith(UPLOAD_URL, { method: 'PUT', body: file });
+  // The URL is signed over Content-Type: the PUT must send the type the API returned.
+  expect(fetchMock).toHaveBeenCalledWith(UPLOAD_URL, {
+    method: 'PUT',
+    body: file,
+    headers: { 'Content-Type': 'application/pdf' },
+  });
 });
 
 test('uploadPrePlanFile rejects when S3 refuses the upload (expired URL), so the save is not reported as done', async () => {

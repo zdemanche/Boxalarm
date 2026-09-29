@@ -38,17 +38,26 @@ describe('createAttachmentUploadUrl', () => {
       'boxalarm-dev-platform-assets',
       'NICHOLS/CERTIFICATION/CERT-1/cpr-card.pdf',
       600,
+      'application/pdf',
     );
+    expect(result.contentType).toBe('application/pdf');
   });
 
-  it.each([['sub/card.pdf'], ['../card.pdf'], ['card.pdf?x=1'], ['card.pdf#frag'], ['%2e%2e']])(
-    'rejects an unsafe filename without presigning: %s',
-    async (filename) => {
-      const presign = fakePresign();
-      await expect(
-        createAttachmentUploadUrl(config, { deptId, certId: 'CERT-1', filename }, presign),
-      ).rejects.toThrow(TypeError);
-      expect(presign).not.toHaveBeenCalled();
-    },
-  );
+  it.each([
+    ['sub/card.pdf'],
+    ['../card.pdf'],
+    ['card.pdf?x=1'],
+    ['card.pdf#frag'],
+    ['%2e%2e'],
+    // Review MINOR 4: not a document or photo.
+    ['card.html'],
+    ['card.svg'],
+    ['card'],
+  ])('rejects an unsafe filename without presigning: %s', async (filename) => {
+    const presign = fakePresign();
+    await expect(
+      createAttachmentUploadUrl(config, { deptId, certId: 'CERT-1', filename }, presign),
+    ).rejects.toThrow(TypeError);
+    expect(presign).not.toHaveBeenCalled();
+  });
 });

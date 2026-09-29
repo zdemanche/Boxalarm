@@ -78,10 +78,19 @@ function normalizeGroups(raw: unknown): string {
   return typeof raw === 'string' ? raw : '';
 }
 
-export async function verifyAccessToken(
+export interface VerifiedAccessTokenClaims {
+  readonly principal: VerifiedAccessToken;
+  /**
+   * Token issue time, epoch seconds - compared against the member's revokedAt (M1). Not part
+   * of the authorizer context. A token without iat reads as 0, i.e. older than any revocation.
+   */
+  readonly issuedAt: number;
+}
+
+export async function verifyAccessTokenClaims(
   verifier: AccessTokenVerifier,
   token: string,
-): Promise<VerifiedAccessToken> {
+): Promise<VerifiedAccessTokenClaims> {
   const payload = await verifier.verify(token);
   if (typeof payload.sub !== 'string' || payload.sub.trim().length === 0) {
     throw new Error('sub claim is required and was empty');
@@ -98,8 +107,18 @@ export async function verifyAccessToken(
     throw new Error('custom:deptId claim is required and was not present on the verified token');
   }
   return {
-    sub: payload.sub,
-    deptId,
-    'cognito:groups': normalizeGroups(payload['cognito:groups']),
+    principal: {
+      sub: payload.sub,
+      deptId,
+      'cognito:groups': normalizeGroups(payload['cognito:groups']),
+    },
+    issuedAt: typeof payload.iat === 'number' ? payload.iat : 0,
   };
+}
+
+export async function verifyAccessToken(
+  verifier: AccessTokenVerifier,
+  token: string,
+): Promise<VerifiedAccessToken> {
+  return (await verifyAccessTokenClaims(verifier, token)).principal;
 }

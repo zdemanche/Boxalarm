@@ -182,7 +182,11 @@ describe('fieldCapture handler', () => {
       inspection: { photoS3Keys?: string[] };
     };
     expect(body.photoUploadUrls).toEqual([
-      { filename: 'photo.jpg', uploadUrl: 'https://signed.example.com/upload' },
+      {
+        filename: 'photo.jpg',
+        contentType: 'image/jpeg',
+        uploadUrl: 'https://signed.example.com/upload',
+      },
     ]);
     expect(body.inspection.photoS3Keys).toEqual(['NICHOLS/INSPECTION_RECORD/INS-1/photo.jpg']);
     expect(signer).toHaveBeenCalledWith({
@@ -236,7 +240,11 @@ describe('fieldCapture handler', () => {
     };
     expect(body.idempotencyOutcome).toBe('duplicate');
     expect(body.photoUploadUrls).toEqual([
-      { filename: 'photo.jpg', uploadUrl: 'https://signed.example.com/resume' },
+      {
+        filename: 'photo.jpg',
+        contentType: 'image/jpeg',
+        uploadUrl: 'https://signed.example.com/resume',
+      },
     ]);
   });
 
