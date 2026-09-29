@@ -75,9 +75,9 @@ describe('invalidateMemberPush (M2)', () => {
       ],
     });
 
-    await expect(invalidateMemberPush(client, 'tbl', 'NICHOLS', 'sub-1', 'trace-1')).resolves.toBe(
-      'invalidated',
-    );
+    await expect(
+      invalidateMemberPush(client, 'tbl', 'NICHOLS', 'sub-1', 'trace-1', 'admin-1'),
+    ).resolves.toBe('invalidated');
 
     const transact = commands.find((c) => c.name === 'TransactWriteCommand');
     const items = transact?.input.TransactItems as Array<Record<string, Record<string, unknown>>>;
@@ -90,25 +90,31 @@ describe('invalidateMemberPush (M2)', () => {
       pk: 'DEPT#NICHOLS#OUTBOX#sub-1',
       eventType: 'personnel.member.updated',
       source: 'personnel-service',
-      payload: { memberId: 'sub-1', deptId: 'NICHOLS', contactChannels: remaining },
+      payload: {
+        memberId: 'sub-1',
+        deptId: 'NICHOLS',
+        contactChannels: remaining,
+        // Review minor 9: the real producer and actor, since `source` must read personnel-service.
+        changedBy: { service: 'platform-service', reason: 'DEVICE_LOSS', actorId: 'admin-1' },
+      },
     });
   });
 
   it('writes nothing when the member has no PUSH entry', async () => {
     const { client, commands } = docWith({ contactChannels: [{ channel: 'SMS' }] });
 
-    await expect(invalidateMemberPush(client, 'tbl', 'NICHOLS', 'sub-1', 't')).resolves.toBe(
-      'no-push-entry',
-    );
+    await expect(
+      invalidateMemberPush(client, 'tbl', 'NICHOLS', 'sub-1', 't', 'admin-1'),
+    ).resolves.toBe('no-push-entry');
     expect(commands.map((c) => c.name)).toEqual(['GetCommand']);
   });
 
   it('writes nothing when the member row does not exist', async () => {
     const { client, commands } = docWith(undefined);
 
-    await expect(invalidateMemberPush(client, 'tbl', 'NICHOLS', 'sub-1', 't')).resolves.toBe(
-      'no-member',
-    );
+    await expect(
+      invalidateMemberPush(client, 'tbl', 'NICHOLS', 'sub-1', 't', 'admin-1'),
+    ).resolves.toBe('no-member');
     expect(commands).toHaveLength(1);
   });
 
@@ -118,9 +124,9 @@ describe('invalidateMemberPush (M2)', () => {
       contactChannels: [{ channel: 'push', token: 't' }, { channel: 'Sms' }],
     });
 
-    await expect(invalidateMemberPush(client, 'tbl', 'NICHOLS', 'sub-1', 't')).resolves.toBe(
-      'invalidated',
-    );
+    await expect(
+      invalidateMemberPush(client, 'tbl', 'NICHOLS', 'sub-1', 't', 'admin-1'),
+    ).resolves.toBe('invalidated');
     const transact = commands.find((c) => c.name === 'TransactWriteCommand');
     const items = transact?.input.TransactItems as Array<Record<string, Record<string, unknown>>>;
     expect(items[0]?.Update).toMatchObject({
@@ -159,9 +165,9 @@ describe('invalidateMemberPush (M2)', () => {
       },
     } as unknown as DynamoDBDocumentClient;
 
-    await expect(invalidateMemberPush(client, 'tbl', 'NICHOLS', 'sub-1', 't')).resolves.toBe(
-      'invalidated',
-    );
+    await expect(
+      invalidateMemberPush(client, 'tbl', 'NICHOLS', 'sub-1', 't', 'admin-1'),
+    ).resolves.toBe('invalidated');
     const second = (inputs[1]?.TransactItems as Array<Record<string, Record<string, unknown>>>)[0];
     expect(second?.Update).toMatchObject({
       ExpressionAttributeValues: { ':cc': [{ channel: 'SMS' }], ':readUpdatedAt': 2 },
@@ -183,7 +189,7 @@ describe('invalidateMemberPush (M2)', () => {
     } as unknown as DynamoDBDocumentClient;
 
     await expect(
-      invalidateMemberPush(client, 'tbl', 'NICHOLS', 'sub-1', 't'),
+      invalidateMemberPush(client, 'tbl', 'NICHOLS', 'sub-1', 't', 'admin-1'),
     ).rejects.toBeInstanceOf(TransactionCanceledException);
   });
 });

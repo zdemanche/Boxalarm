@@ -150,6 +150,7 @@ describe('deviceLossHandler', () => {
       'dept-001',
       'mbr-102',
       expect.any(String),
+      'admin-1',
     );
   });
 

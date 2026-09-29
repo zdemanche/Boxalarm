@@ -178,9 +178,14 @@ describe("SessionRevocation (review C1)", () => {
     >;
     const bySid = Object.fromEntries(statements.map((s) => [s.Sid, s]));
 
-    expect(bySid.InvalidateMemberPush?.Action).toEqual(["dynamodb:GetItem", "dynamodb:UpdateItem"]);
+    expect(bySid.ReadMemberForPushInvalidation?.Action).toEqual(["dynamodb:GetItem"]);
+    expect(bySid.InvalidateMemberPush?.Action).toEqual(["dynamodb:UpdateItem"]);
+    // Review minor 9: only the attributes the invalidation writes.
     expect(bySid.InvalidateMemberPush?.Condition).toEqual({
       "ForAllValues:StringLike": { "dynamodb:LeadingKeys": ["DEPT#*#MEMBER#*"] },
+      "ForAllValues:StringEquals": {
+        "dynamodb:Attributes": ["pk", "sk", "contactChannels", "updatedAt"],
+      },
     });
     expect(bySid.EmitMemberUpdatedOutbox?.Condition).toEqual({
       "ForAllValues:StringLike": { "dynamodb:LeadingKeys": ["DEPT#*#OUTBOX#*"] },

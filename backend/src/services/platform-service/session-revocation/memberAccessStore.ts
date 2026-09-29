@@ -72,7 +72,9 @@ const MAX_PUSH_WRITE_ATTEMPTS = 3;
  * rather than called because that route only lets a member revoke their own token: the
  * member row loses its push entries and a personnel.member.updated outbox row carries the
  * new contactChannels to the alerting eligibility snapshot. `source` is personnel-service
- * because that is the only producer the alerting-plane rule accepts for this event.
+ * because that is the only producer the alerting-plane rule accepts for this event; the
+ * payload's `changedBy` records who actually made the change (platform-service device loss,
+ * and the admin), so the event is not mistaken for the member's own push-token revoke.
  *
  * Every push entry is dropped, not only the lost phone's: nothing identifies which entry is
  * that device, and the global sign-out already makes every device sign in again, which is
@@ -93,6 +95,7 @@ export async function invalidateMemberPush(
   deptId: string,
   memberId: string,
   correlationId: string,
+  actorId: string,
 ): Promise<PushInvalidationResult> {
   const verifiedDeptId = toVerifiedDeptId({ deptId });
   const pk = buildDeptScopedPk(verifiedDeptId, 'MEMBER', memberId);
@@ -150,7 +153,12 @@ export async function invalidateMemberPush(
                   source: 'personnel-service',
                   correlationId,
                   schemaVersion: '1.0',
-                  payload: { memberId, deptId, contactChannels },
+                  payload: {
+                    memberId,
+                    deptId,
+                    contactChannels,
+                    changedBy: { service: 'platform-service', reason: 'DEVICE_LOSS', actorId },
+                  },
                   sentAt: null,
                 },
               },

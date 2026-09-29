@@ -243,6 +243,7 @@ export const handler: Handler<
       authorizerContext.deptId,
       memberId,
       traceId,
+      authorizerContext.sub,
     );
   } catch (error) {
     console.error(

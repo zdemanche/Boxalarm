@@ -71,11 +71,25 @@ function revocationMarkerStatement(tableArn: string): IamPolicyStatement {
 function pushInvalidationStatements(tableArn: string): IamPolicyStatement[] {
   return [
     {
-      Sid: "InvalidateMemberPush",
+      Sid: "ReadMemberForPushInvalidation",
       Effect: "Allow",
-      Action: ["dynamodb:GetItem", "dynamodb:UpdateItem"],
+      Action: ["dynamodb:GetItem"],
       Resource: tableArn,
       Condition: { "ForAllValues:StringLike": { "dynamodb:LeadingKeys": ["DEPT#*#MEMBER#*"] } },
+    },
+    {
+      // Review minor 9: only the two attributes the push invalidation writes (plus the key),
+      // not every attribute of every member row.
+      Sid: "InvalidateMemberPush",
+      Effect: "Allow",
+      Action: ["dynamodb:UpdateItem"],
+      Resource: tableArn,
+      Condition: {
+        "ForAllValues:StringLike": { "dynamodb:LeadingKeys": ["DEPT#*#MEMBER#*"] },
+        "ForAllValues:StringEquals": {
+          "dynamodb:Attributes": ["pk", "sk", "contactChannels", "updatedAt"],
+        },
+      },
     },
     {
       Sid: "EmitMemberUpdatedOutbox",
