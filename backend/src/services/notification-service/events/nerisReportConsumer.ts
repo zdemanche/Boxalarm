@@ -57,7 +57,7 @@ export function toNerisReportReminder({ eventType, payload }: EventEnvelope): Ne
       : eventType === FAILED
         ? "couldn't be processed by NERIS: check the submission and resubmit"
         : eventType === MISSING
-          ? 'is no longer listed by NERIS: check with NERIS whether it was removed, then resubmit'
+          ? 'is no longer listed by NERIS: open the report and resubmit it, and Boxalarm will send it to NERIS again'
           : `didn't reach NERIS${reason ? ` (${reason.slice(0, 200)})` : ''}: fix it and retry`;
   return {
     deptId: requireString(payload, 'deptId', eventType),

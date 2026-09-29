@@ -331,12 +331,34 @@ async function attemptSubmission(
   }
 
   const expectedNerisId = expectedNerisIncidentId(settings.departmentNerisId, nerisPayload);
-  let operation: 'CREATE' | 'UPDATE' | 'ADOPT' = incident.nerisIncidentId ? 'UPDATE' : 'CREATE';
+  // A record reconciliation gave up on (NERIS stopped listing it) cannot be PUT to — NERIS
+  // no longer has that id. Forget it and create the record again (round 2b, R3); the adopt
+  // lookup below still finds it if NERIS lists it again after all.
+  let knownNerisId = incident.nerisIncidentId;
+  const recreate =
+    knownNerisId !== undefined &&
+    fresh?.nerisMissingAt !== undefined &&
+    (await submissionRepository.forgetMissingNerisRecord(
+      payload.deptId,
+      payload.incidentId,
+      knownNerisId,
+    ));
+  if (recreate) {
+    logger.info({
+      event: 'neris.submission.recreate_missing',
+      correlationId: payload.incidentId,
+      deptId: payload.deptId,
+      incidentId: payload.incidentId,
+      previousNerisIncidentId: knownNerisId,
+    });
+    knownNerisId = undefined;
+  }
+  let operation: 'CREATE' | 'UPDATE' | 'ADOPT' = knownNerisId ? 'UPDATE' : 'CREATE';
 
   let httpStatus: number;
   let outcome: SubmissionOutcome;
   let issues: readonly NerisIssue[] = [];
-  let nerisIncidentId = incident.nerisIncidentId;
+  let nerisIncidentId = knownNerisId;
   let nerisStatus: string | undefined;
   try {
     const config = await readNerisConfig(process.env);
@@ -359,7 +381,7 @@ async function attemptSubmission(
 
     let result;
     if (!nerisIncidentId) {
-      const mayExist = incident.pendingNerisId !== undefined || payload.retryCount > 0;
+      const mayExist = recreate || incident.pendingNerisId !== undefined || payload.retryCount > 0;
       const existing = mayExist ? await adopt() : undefined;
       if (existing) {
         nerisIncidentId = existing;

@@ -153,6 +153,7 @@ function toIncident(item: Record<string, unknown>): Incident {
       : {}),
     ...(typeof item.lastPayloadHash === 'string' ? { lastPayloadHash: item.lastPayloadHash } : {}),
     ...(typeof item.pendingNerisId === 'string' ? { pendingNerisId: item.pendingNerisId } : {}),
+    ...(typeof item.nerisMissingAt === 'number' ? { nerisMissingAt: item.nerisMissingAt } : {}),
     ...(typeof item.contentVersion === 'number' ? { contentVersion: item.contentVersion } : {}),
     ...(typeof item.lockedContentVersion === 'number'
       ? { lockedContentVersion: item.lockedContentVersion }

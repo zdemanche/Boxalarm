@@ -57,7 +57,7 @@ describe('createSubmissionRepository.enqueueSubmission', () => {
       TableName: TABLE_NAME,
       Key: { pk: `DEPT#NICHOLS#INCIDENT#${INCIDENT_ID}`, sk: 'METADATA' },
       ConditionExpression:
-        'attribute_exists(pk) AND #status = :validated AND attribute_exists(lockedAt) AND attribute_not_exists(nerisIncidentId) AND (attribute_not_exists(submissionStatus) OR (submissionStatus <> :queued AND submissionStatus <> :retrying) OR attribute_not_exists(submissionActivityAt) OR submissionActivityAt < :staleBefore)',
+        'attribute_exists(pk) AND #status = :validated AND attribute_exists(lockedAt) AND (attribute_not_exists(nerisIncidentId) OR attribute_exists(nerisMissingAt)) AND (attribute_not_exists(submissionStatus) OR (submissionStatus <> :queued AND submissionStatus <> :retrying) OR attribute_not_exists(submissionActivityAt) OR submissionActivityAt < :staleBefore)',
     });
     const outboxItem = command.input.TransactItems[1].Put.Item;
     expect(outboxItem).toMatchObject({
@@ -117,6 +117,20 @@ describe('createSubmissionRepository.enqueueSubmission', () => {
     await expect(
       repository.enqueueSubmission(DEPT_ID, INCIDENT_ID, 1_798_000_100, TRACE_ID),
     ).rejects.toMatchObject({ reason: 'IN_NERIS' });
+  });
+
+  it('lets submit re-send a record NERIS no longer has (round 2b, R3)', async () => {
+    const send = vi.fn().mockResolvedValue({});
+    const repository = createSubmissionRepository(fakeClient(send), TABLE_NAME);
+    await repository.enqueueSubmission(DEPT_ID, INCIDENT_ID, 1_798_000_100, TRACE_ID);
+    const update = (
+      send.mock.calls[0]![0] as {
+        input: { TransactItems: { Update?: { ConditionExpression: string } }[] };
+      }
+    ).input.TransactItems[0]!.Update!;
+    expect(update.ConditionExpression).toContain(
+      '(attribute_not_exists(nerisIncidentId) OR attribute_exists(nerisMissingAt))',
+    );
   });
 
   it('refuses while a submission is already in flight (no duplicate CREATE)', async () => {
@@ -544,5 +558,40 @@ describe('createSubmissionRepository.retrySubmission', () => {
     await expect(
       repository.retrySubmission(DEPT_ID, INCIDENT_ID, 1_798_000_300, TRACE_ID),
     ).rejects.toBeInstanceOf(SubmissionRetryConflictError);
+  });
+});
+
+describe('createSubmissionRepository.forgetMissingNerisRecord (round 2b, R3)', () => {
+  const OLD_ID = 'FD09190828|4471|1798000000';
+
+  it('removes the NERIS id, status and missing markers, keeping the old id', async () => {
+    const send = vi.fn().mockResolvedValue({});
+    const repository = createSubmissionRepository(fakeClient(send), TABLE_NAME);
+    await expect(repository.forgetMissingNerisRecord(DEPT_ID, INCIDENT_ID, OLD_ID)).resolves.toBe(
+      true,
+    );
+    const input = (send.mock.calls[0]![0] as { input: Record<string, unknown> }).input;
+    expect(input).toMatchObject({
+      Key: { pk: `DEPT#NICHOLS#INCIDENT#${INCIDENT_ID}`, sk: 'METADATA' },
+      ConditionExpression:
+        'attribute_exists(pk) AND nerisIncidentId = :nerisId AND attribute_exists(nerisMissingAt)',
+      ExpressionAttributeValues: { ':nerisId': OLD_ID },
+    });
+    expect(input.UpdateExpression).toMatch(/^SET previousNerisIncidentId = :nerisId REMOVE /);
+    for (const attribute of ['nerisIncidentId', 'nerisStatus', 'nerisMissingAt']) {
+      expect(input.UpdateExpression).toContain(attribute);
+    }
+  });
+
+  it('answers false when the report is no longer marked missing under that id', async () => {
+    const send = vi
+      .fn()
+      .mockRejectedValue(
+        Object.assign(new Error('x'), { name: 'ConditionalCheckFailedException' }),
+      );
+    const repository = createSubmissionRepository(fakeClient(send), TABLE_NAME);
+    await expect(repository.forgetMissingNerisRecord(DEPT_ID, INCIDENT_ID, OLD_ID)).resolves.toBe(
+      false,
+    );
   });
 });

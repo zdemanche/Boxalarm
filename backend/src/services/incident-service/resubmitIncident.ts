@@ -94,7 +94,9 @@ async function inner(
       schema: context.nerisApi,
     });
     const diff = diffPayloads(previous ?? {}, current);
-    if (previous && diff.length === 0) {
+    // A record NERIS no longer has (given up on by reconciliation) is re-sent even unchanged:
+    // the worker creates it again (round 2b, R3).
+    if (previous && diff.length === 0 && incident.nerisMissingAt === undefined) {
       return {
         statusCode: 200,
         headers: { 'Content-Type': 'application/json' },

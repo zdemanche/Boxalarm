@@ -420,4 +420,29 @@ describe('POST /incidents/{id}/resubmit', () => {
     expect(json).toMatchObject({ status: 'UNCHANGED', diff: [] });
     expect(review.enqueueResubmission).not.toHaveBeenCalled();
   });
+
+  it('resends an unchanged report that NERIS no longer has, so the worker re-creates it (round 2b, R3)', async () => {
+    const context = {
+      incident: incident({ nerisIncidentId, lockedAt: ALARM + 900, nerisMissingAt: ALARM + 99 }),
+      units: [COMPLETE_UNIT],
+      settings: settings(),
+      nerisApi: compiled,
+    };
+    mockContext(context);
+    const { buildNerisIncidentPayload } = await import('./neris/payload.js');
+    review.getLastAcceptedPayload.mockResolvedValue(
+      buildNerisIncidentPayload({
+        incident: context.incident as never,
+        units: context.units,
+        departmentNerisId: 'FD09190828',
+        unitNerisIds: context.settings.unitNerisIds,
+        schema: compiled as never,
+      }),
+    );
+    review.enqueueResubmission.mockResolvedValue(undefined);
+    const { statusCode, json } = await call('./resubmitIncident.js', route);
+    expect(statusCode).toBe(202);
+    expect(json).toMatchObject({ status: 'QUEUED', diff: [] });
+    expect(review.enqueueResubmission).toHaveBeenCalled();
+  });
 });

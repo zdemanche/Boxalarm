@@ -53,11 +53,13 @@ function mockDeps(options: {
   readonly existsInNeris?: boolean;
   readonly departmentNerisId?: string | null;
   readonly submissionsEnabled?: boolean;
+  readonly nerisMissingAt?: number;
 }) {
   const incident = {
     ...fakeIncident(),
     ...(options.nerisIncidentId ? { nerisIncidentId: options.nerisIncidentId } : {}),
     ...(options.pendingNerisId ? { pendingNerisId: options.pendingNerisId } : {}),
+    ...(options.nerisMissingAt ? { nerisMissingAt: options.nerisMissingAt } : {}),
   };
   const getIncident = vi
     .fn()
@@ -103,11 +105,16 @@ function mockDeps(options: {
 
   const appendSubmissionAttempt = vi.fn().mockResolvedValue({ submissionStatus: 'RETRYING' });
   const markCreateInFlight = vi.fn().mockResolvedValue(undefined);
+  const forgetMissingNerisRecord = vi.fn().mockResolvedValue(true);
   vi.doMock('../submissionRepository.js', async (importOriginal) => {
     const actual = await importOriginal<typeof import('../submissionRepository.js')>();
     return {
       ...actual,
-      getSubmissionRepository: () => ({ appendSubmissionAttempt, markCreateInFlight }),
+      getSubmissionRepository: () => ({
+        appendSubmissionAttempt,
+        markCreateInFlight,
+        forgetMissingNerisRecord,
+      }),
     };
   });
 
@@ -155,7 +162,13 @@ function mockDeps(options: {
     };
   });
 
-  return { getIncident, appendSubmissionAttempt, markCreateInFlight, fetchFn };
+  return {
+    getIncident,
+    appendSubmissionAttempt,
+    markCreateInFlight,
+    forgetMissingNerisRecord,
+    fetchFn,
+  };
 }
 
 function unmockAll(): void {
@@ -317,6 +330,45 @@ describe('submissionWorker handler (SQS trigger)', () => {
       true,
       expect.any(Number),
     );
+  });
+
+  it('re-creates a record NERIS no longer has instead of PUTting to its old id (round 2b, R3)', async () => {
+    const oldId = `${DEPT_NERIS_ID}|4471|1798000000`;
+    const { fetchFn, appendSubmissionAttempt, forgetMissingNerisRecord, markCreateInFlight } =
+      mockDeps({ nerisIncidentId: oldId, nerisMissingAt: 1_798_100_000 });
+    const { createHandler } = await import('./submissionWorker.js');
+    await createHandler({ schedulerClient: { send: vi.fn() } as never })(
+      { Records: [sqsRecord(submittedEnvelope('NICHOLS', INCIDENT_ID))] },
+      FAKE_CONTEXT,
+      () => undefined,
+    );
+    expect(forgetMissingNerisRecord).toHaveBeenCalledWith('NICHOLS', INCIDENT_ID, oldId);
+    // Looked up first (NERIS might list it again), then created — never a PUT to the old id.
+    const methods = fetchFn.mock.calls.map(([, init]) => (init as RequestInit).method);
+    expect(methods).toEqual(['GET', 'POST']);
+    expect(markCreateInFlight).toHaveBeenCalled();
+    expect(appendSubmissionAttempt).toHaveBeenCalledWith(
+      'NICHOLS',
+      INCIDENT_ID,
+      expect.objectContaining({ outcome: 'SUCCESS', operation: 'CREATE' }),
+      true,
+      expect.any(Number),
+    );
+  });
+
+  it('does not forget the NERIS id of a record that is not marked missing', async () => {
+    const { forgetMissingNerisRecord } = mockDeps({
+      httpStatus: 200,
+      responseBody: { last_modified: '2026-09-29T10:00:00Z' },
+      nerisIncidentId: `${DEPT_NERIS_ID}|4471|1798000000`,
+    });
+    const { createHandler } = await import('./submissionWorker.js');
+    await createHandler({ schedulerClient: { send: vi.fn() } as never })(
+      { Records: [sqsRecord(submittedEnvelope('NICHOLS', INCIDENT_ID))] },
+      FAKE_CONTEXT,
+      () => undefined,
+    );
+    expect(forgetMissingNerisRecord).not.toHaveBeenCalled();
   });
 
   it('records NERIS 422 issues on the attempt and in the failure reason', async () => {
