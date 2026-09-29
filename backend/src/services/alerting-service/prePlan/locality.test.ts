@@ -85,6 +85,32 @@ describe('judgeLocality', () => {
     });
   });
 
+  describe('m3: a towns-only home set (no home ZIPs) does not let a ZIP alone verify', () => {
+    const TOWNS_ONLY = parseHomeLocality({ towns: ['Trumbull', 'Nichols'], state: 'CT' })!;
+
+    it.each([
+      ['12 Main St, Bridgeport, CT 06611', '12 Main St 06611'],
+      ['12 Main St, Bridgeport 06611', '12 Main St, CT 06611'],
+      ['12 Main St, Trumbull, CT 06606', '12 Main St 06611'],
+    ] as const)('%s vs copy %s is never VERIFIED', (dispatch, copy) => {
+      expect(judge(dispatch, copy, TOWNS_ONLY)).not.toBe('VERIFIED');
+    });
+
+    it('still verifies a home-town dispatch against a ZIP-only (town-less, so home) copy', () => {
+      expect(judge('12 Main St, Trumbull, CT 06611', '12 Main St 06611', TOWNS_ONLY)).toBe(
+        'VERIFIED',
+      );
+      expect(judge('12 Main St, Nichols', '12 Main St 06611', TOWNS_ONLY)).toBe('VERIFIED');
+    });
+
+    it('a ZIP-only copy outside configured home ZIPs cannot confirm a dispatch town', () => {
+      expect(judge('12 Main St, Bridgeport, CT 06606', '12 Main St 06606')).toBe('UNVERIFIED');
+      expect(judge('12 Main St, Trumbull, CT 06606', '12 Main St 06606')).toBe('UNVERIFIED');
+      // With no town named on the dispatch, the explicit ZIP agreement still stands.
+      expect(judge('12 Main St 06606', '12 Main St 06606')).toBe('VERIFIED');
+    });
+  });
+
   it('verifies nothing when no home locality is configured', () => {
     expect(judge('123 Main St', '123 Main St', NO_HOME_LOCALITY)).toBe('UNVERIFIED');
     expect(judge('123 Main St, Trumbull, CT', '123 Main St', NO_HOME_LOCALITY)).toBe('UNVERIFIED');
