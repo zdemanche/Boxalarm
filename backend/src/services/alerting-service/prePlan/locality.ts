@@ -80,52 +80,61 @@ export type LocalityVerdict = 'VERIFIED' | 'UNVERIFIED' | 'REJECT';
 
 type Comparison = 'agree' | 'conflict' | 'unknown' | 'none';
 
-function compare(
-  dispatchValue: string | null,
-  copyValue: string | null,
-  copyIsHome: boolean,
-  homeSet: ReadonlySet<string>,
-): Comparison {
+/** A dispatch part against one known value (the copy's own). */
+function compareValue(dispatchValue: string | null, copyValue: string | null): Comparison {
   if (dispatchValue === null) return 'none';
-  if (copyValue !== null) {
-    if (dispatchValue === copyValue) return 'agree';
-    // Two names for the same home area (Nichols vs Trumbull) agree.
-    if (homeSet.has(dispatchValue) && homeSet.has(copyValue)) return 'agree';
-    return 'conflict';
-  }
-  if (copyIsHome && homeSet.size > 0) return homeSet.has(dispatchValue) ? 'agree' : 'conflict';
-  return 'unknown';
+  if (copyValue === null) return 'unknown';
+  return dispatchValue === copyValue ? 'agree' : 'conflict';
+}
+
+/** A dispatch part against the whole home set (Nichols and Trumbull both agree). */
+function compareHome(dispatchValue: string | null, homeSet: ReadonlySet<string>): Comparison {
+  if (dispatchValue === null) return 'none';
+  if (homeSet.size === 0) return 'unknown';
+  return homeSet.has(dispatchValue) ? 'agree' : 'conflict';
 }
 
 /**
  * Whether a same-key candidate is this dispatch's place:
  *  - REJECT: the two name different places (town, ZIP or state) with nothing agreeing.
- *  - VERIFIED: some part of the locality positively agrees and nothing conflicts — or the
- *    dispatch names no locality and the copy's is the department's home area — and neither
+ *  - VERIFIED: some part of the locality positively agrees and nothing conflicts, and neither
  *    address parsed ambiguously.
  *  - UNVERIFIED: anything else. Still shown, but flagged "verify address".
- * A copy with no town, ZIP or state of its own is in the home locality.
+ *
+ * A copy is in the home area when every locality part it carries (town, ZIP, state) is in the
+ * home set — including a copy that carries none. Such a copy is judged against the WHOLE home
+ * set, part by part: its missing parts are the home set's, never "unknown". (Judging a
+ * ZIP-only home copy by its ZIP alone would let "Bridgeport, CT 06611" verify against it while
+ * the same dispatch against a town-less copy is correctly unverified.)
  */
 export function judgeLocality(
   dispatch: NormalizedAddress,
   copy: NormalizedAddress,
   home: HomeLocality,
 ): LocalityVerdict {
-  const copyIsHome = copy.town === null && copy.zip === null && copy.state === null;
   const homeKnown = home.towns.size > 0 || home.zips.size > 0;
-  const town = compare(dispatch.town, copy.town, copyIsHome, home.towns);
-  const zip = compare(dispatch.zip, copy.zip, copyIsHome, home.zips);
-  const homeStates = new Set(home.state ? [home.state] : []);
-  const state = compare(dispatch.state, copy.state, copyIsHome, homeStates);
+  const homeStates: ReadonlySet<string> = new Set(home.state ? [home.state] : []);
+  const inSet = (value: string | null, set: ReadonlySet<string>) =>
+    value === null || set.has(value);
+  const copyHome =
+    homeKnown &&
+    inSet(copy.town, home.towns) &&
+    inSet(copy.zip, home.zips) &&
+    inSet(copy.state, homeStates);
+
+  const town = copyHome
+    ? compareHome(dispatch.town, home.towns)
+    : compareValue(dispatch.town, copy.town);
+  const zip = copyHome
+    ? compareHome(dispatch.zip, home.zips)
+    : compareValue(dispatch.zip, copy.zip);
+  const state = copyHome
+    ? compareHome(dispatch.state, homeStates)
+    : compareValue(dispatch.state, copy.state);
 
   let verdict: LocalityVerdict;
   if (dispatch.town === null && dispatch.zip === null && dispatch.state === null) {
-    const copyInHome =
-      homeKnown &&
-      (copyIsHome ||
-        (copy.town !== null && home.towns.has(copy.town)) ||
-        (copy.zip !== null && home.zips.has(copy.zip)));
-    verdict = copyInHome ? 'VERIFIED' : 'UNVERIFIED';
+    verdict = copyHome ? 'VERIFIED' : 'UNVERIFIED';
   } else if (state === 'conflict') {
     verdict = zip === 'agree' ? 'UNVERIFIED' : 'REJECT';
   } else if (zip === 'conflict') {

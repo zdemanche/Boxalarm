@@ -51,6 +51,39 @@ describe('judgeLocality', () => {
     expect(judge(dispatch, copy)).toBe(verdict);
   });
 
+  describe('R3-B: a partly-localized home copy inherits the rest of the home set', () => {
+    it.each([
+      ['12 Main St, Bridgeport, CT 06611', '12 Main St 06611'],
+      ['12 Main St, Stratford, CT 06611', '12 Main St, CT 06611'],
+      ['12 Main St, Bridgeport, 06611', '12 Main St, CT'],
+      ['12 Main St, Monroe, CT 06611', '12 Main St, Trumbull'],
+      ['12 Main St, Trumbull, CT 06606', '12 Main St, Nichols'],
+      ['12 Main St, Trumbull, CT 06606', '12 Main St, 06611'],
+    ] as const)('%s vs copy %s is never VERIFIED', (dispatch, copy) => {
+      expect(judge(dispatch, copy)).not.toBe('VERIFIED');
+    });
+
+    it('is judged exactly like a fully town-less copy', () => {
+      for (const dispatch of [
+        '12 Main St, Bridgeport, CT 06611',
+        '12 Main St, Trumbull, CT 06606',
+        '12 Main St, Nichols, CT 06611',
+      ]) {
+        expect(judge(dispatch, '12 Main St 06611'), dispatch).toBe(judge(dispatch, '12 Main St'));
+        expect(judge(dispatch, '12 Main St, Nichols'), dispatch).toBe(
+          judge(dispatch, '12 Main St'),
+        );
+      }
+    });
+
+    it('still verifies genuine agreement', () => {
+      expect(judge('12 Main St, Trumbull, CT 06611', '12 Main St 06611')).toBe('VERIFIED');
+      expect(judge('12 Main St, Nichols, CT 06611', '12 Main St, Trumbull, CT 06611')).toBe(
+        'VERIFIED',
+      );
+    });
+  });
+
   it('verifies nothing when no home locality is configured', () => {
     expect(judge('123 Main St', '123 Main St', NO_HOME_LOCALITY)).toBe('UNVERIFIED');
     expect(judge('123 Main St, Trumbull, CT', '123 Main St', NO_HOME_LOCALITY)).toBe('UNVERIFIED');
