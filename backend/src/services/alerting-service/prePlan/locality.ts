@@ -10,7 +10,7 @@ import { localityKey, type NormalizedAddress } from './addressKey.js';
  * mutual-aid dispatch to "123 Main St, Bridgeport" be told apart from Trumbull's 123 Main St.
  *
  * Source, in order (docs/runbooks/alert-context-replay.md, "Home locality"):
- *  1. the alerting-table item pk=DEPT#{deptId}#CONFIG, sk=HOME_LOCALITY
+ *  1. the alerting-table item DEPT#{deptId}#CONFIG / HOME_LOCALITY (partition / sort key)
  *     ({ towns: string[], zips: string[], state?: string }) — editable per department;
  *  2. the ALERTING_HOME_LOCALITY env var (same JSON), set by infrastructure from the stack
  *     config `boxalarm-infra:alertingHomeLocality` (default seeded per stack deptId);
