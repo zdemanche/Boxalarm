@@ -12,6 +12,7 @@ import {
   buildNerisIncidentPayload,
   hasIncidentCategory,
   casualtyIssues,
+  hasCivilianFfDetails,
   type NerisPayload,
   type ResponseUnitRow,
 } from './neris/payload.js';
@@ -467,6 +468,15 @@ export function localValidation(input: LocalValidationInput): {
     });
   } else if (Array.isArray(casualties)) {
     const entries: unknown[] = casualties;
+    const civilianFf = entries.filter(hasCivilianFfDetails).length;
+    if (civilianFf > 0) {
+      warnings.push({
+        path: 'fields.casualty_rescues',
+        code: 'CASUALTY_FF_DETAILS_IGNORED',
+        section: 'core',
+        message: `${civilianFf === 1 ? 'A civilian casualty has' : `${civilianFf} civilian casualties have`} firefighter-injury details (job, duty, PPE). They are only sent for firefighters, so they will be left out.`,
+      });
+    }
     const untyped = entries.filter((entry) => {
       const type = (entry as { type?: unknown } | null)?.type;
       return typeof type !== 'string' || type.length === 0;
