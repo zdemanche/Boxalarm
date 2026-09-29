@@ -113,7 +113,9 @@ function seedDispatch(dispatchId: string, input?: Partial<DispatchAlert>): Dispa
       summary: 'Two-story wood-frame occupancy, residential above commercial.',
       hazards: ['Rooftop solar array'],
       utilityShutoffs: [{ utility: 'Gas', location: 'Rear exterior wall' }],
-      nearestHydrants: [{ hydrantId: 'H-014', size: '4"', flowRatingGpm: 1000 }],
+      nearestHydrants: [
+        { hydrantId: 'H-014', distanceMeters: 60, size: '4"', flowRatingGpm: 1000, flowClass: 'A' },
+      ],
     },
   };
 }

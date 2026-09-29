@@ -1,6 +1,24 @@
 import { palette, spacing, typography } from '@boxalarm/design-tokens';
 import { Text, useColorScheme, View } from 'react-native';
-import type { PrePlanEnrichment } from './types';
+import type { NearestHydrant, PrePlanEnrichment } from './types';
+
+/** "H-014 · 90 m · 6-inch · 1000 gpm (class A)" - one glanceable line per hydrant. */
+function describeHydrant(hydrant: NearestHydrant): string {
+  const flow =
+    hydrant.flowRatingGpm !== undefined
+      ? `${hydrant.flowRatingGpm} gpm${hydrant.flowClass ? ` (class ${hydrant.flowClass})` : ''}`
+      : hydrant.flowClass
+        ? `class ${hydrant.flowClass}`
+        : undefined;
+  return [
+    hydrant.hydrantId,
+    hydrant.distanceMeters !== undefined ? `${hydrant.distanceMeters} m` : undefined,
+    hydrant.size,
+    flow,
+  ]
+    .filter((part): part is string => Boolean(part))
+    .join(' · ');
+}
 
 // E1-S17-UI / E5-S8-UI: pre-plan/hydrant enrichment, sourced only from the alerting-service
 // dispatch-detail response (N1.5 - never a call to /inspections/*). Renders nothing (no empty
@@ -95,9 +113,7 @@ export function PrePlanPanel({ prePlan }: { prePlan: PrePlanEnrichment | null | 
               key={hydrant.hydrantId}
               style={{ color: tokens.foreground, fontSize: typography.size.sm, marginTop: 2 }}
             >
-              {hydrant.hydrantId}
-              {hydrant.size ? ` · ${hydrant.size}` : ''}
-              {hydrant.flowRatingGpm ? ` · ${hydrant.flowRatingGpm} gpm` : ''}
+              {describeHydrant(hydrant)}
             </Text>
           ))}
         </View>

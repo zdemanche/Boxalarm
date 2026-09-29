@@ -15,11 +15,18 @@ export interface UtilityShutoff {
   location: string;
 }
 
+/** NFPA 291 hydrant marking class (rated flow): AA >=1500, A 1000-1499, B 500-999, C <500 gpm. */
+export type HydrantFlowClass = 'AA' | 'A' | 'B' | 'C';
+
+// Nearest in-service hydrants to the matched occupancy, nearest first (alerting-service
+// prePlan/nearestHydrants.ts). distanceMeters/flowClass are absent from older responses.
 export interface NearestHydrant {
   hydrantId: string;
   status?: string;
   size?: string;
   flowRatingGpm?: number;
+  flowClass?: HydrantFlowClass;
+  distanceMeters?: number;
 }
 
 export interface PrePlanEnrichment {

@@ -1,5 +1,23 @@
 import { Card } from '../../components/ui';
-import type { PrePlanEnrichment } from './types';
+import type { NearestHydrant, PrePlanEnrichment } from './types';
+
+/** "H-014 · 90 m · 6-inch · 1000 gpm (class A)" - one glanceable line per hydrant. */
+function describeHydrant(hydrant: NearestHydrant): string {
+  const flow =
+    hydrant.flowRatingGpm !== undefined
+      ? `${hydrant.flowRatingGpm} gpm${hydrant.flowClass ? ` (class ${hydrant.flowClass})` : ''}`
+      : hydrant.flowClass
+        ? `class ${hydrant.flowClass}`
+        : undefined;
+  return [
+    hydrant.hydrantId,
+    hydrant.distanceMeters !== undefined ? `${hydrant.distanceMeters} m` : undefined,
+    hydrant.size,
+    flow,
+  ]
+    .filter((part): part is string => Boolean(part))
+    .join(' · ');
+}
 
 // E1-S17-UI / E5-S8-UI: same alerting-route enrichment as mobile (N1.5 - never /inspections/*).
 export function PrePlanPanel({ prePlan }: { prePlan: PrePlanEnrichment | null | undefined }) {
@@ -48,11 +66,7 @@ export function PrePlanPanel({ prePlan }: { prePlan: PrePlanEnrichment | null | 
           <h3 style={{ fontSize: 15, fontWeight: 600 }}>Nearest hydrants</h3>
           <ul>
             {prePlan.nearestHydrants.map((hydrant) => (
-              <li key={hydrant.hydrantId}>
-                {hydrant.hydrantId}
-                {hydrant.size ? ` · ${hydrant.size}` : ''}
-                {hydrant.flowRatingGpm ? ` · ${hydrant.flowRatingGpm} gpm` : ''}
-              </li>
+              <li key={hydrant.hydrantId}>{describeHydrant(hydrant)}</li>
             ))}
           </ul>
         </div>
