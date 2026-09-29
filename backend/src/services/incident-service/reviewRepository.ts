@@ -134,7 +134,9 @@ export async function lockIncident(
               Key: metadataKey(input.deptId, input.incidentId),
               ConditionExpression:
                 'attribute_exists(pk) AND attribute_not_exists(lockedAt) AND updatedAt = :reviewed',
-              UpdateExpression: `SET lockedAt = :now, lockedBy = :actor, updatedAt = :now, #status = :status${
+              // updatedAt is left alone: it marks content edits, which the ledger's
+              // editedSinceSubmission compares against lastSubmittedAt; lock/unlock are not edits.
+              UpdateExpression: `SET lockedAt = :now, lockedBy = :actor, #status = :status${
                 input.submit ? ', submissionStatus = :queued REMOVE submissionFailureReason' : ''
               }`,
               ExpressionAttributeNames: { '#status': 'status' },
@@ -204,7 +206,7 @@ export async function unlockIncident(
               Key: metadataKey(input.deptId, input.incidentId),
               ConditionExpression: `attribute_exists(pk) AND attribute_exists(lockedAt) AND (${NOT_IN_FLIGHT})`,
               UpdateExpression:
-                'REMOVE lockedAt, lockedBy SET unlockedAt = :now, unlockedBy = :actor, lastUnlockReason = :reason, updatedAt = :now',
+                'REMOVE lockedAt, lockedBy SET unlockedAt = :now, unlockedBy = :actor, lastUnlockReason = :reason',
               ExpressionAttributeValues: {
                 ':now': input.nowEpochSeconds,
                 ':actor': input.actorId,
