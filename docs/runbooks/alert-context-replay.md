@@ -57,6 +57,8 @@ Run it once per department. The timeout is 15 minutes. If a very large departmen
 
 Occupancy addresses carry no town, so the dispatch detail needs each department's **home locality** to tell "123 Main St" in Trumbull from "123 Main St, Bridgeport" on a mutual-aid call. The home locality is the set of towns, villages and ZIPs the department's own addresses are written with.
 
+**The home set must be one street-numbering area**: one town and its villages or sections (Trumbull with Nichols, Long Hill and Trumbull Center). Any two home names are treated as the same place, because in Connecticut street numbers are per town and a village shares its town's Main St. Two towns in one set would make "12 Main St, Monroe" match Trumbull's 12 Main St unflagged. A department whose first-due area spans two towns needs a separate matching area per town, which is not supported yet: list only the town its pre-plans are written for. The detail Lambda logs `preplan_copy.home_locality_multi_town` (once per container) when a set names more than one Connecticut town.
+
 A pre-plan is shown as a plain match ("Pre-plan for …") only when both addresses parsed unambiguously **and** the locality is verified:
 
 - the dispatch names a home town, village or ZIP, either in its address or through the dispatcher's **locality choice**; and

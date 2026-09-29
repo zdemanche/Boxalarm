@@ -4,6 +4,7 @@ import { toVerifiedDeptId } from '@boxalarm/dept-scope';
 import { normalizeAddress } from './addressKey.js';
 import {
   NO_HOME_LOCALITY,
+  homeTownsThatAreTowns,
   judgeLocality,
   loadHomeLocality,
   parseHomeLocality,
@@ -221,5 +222,39 @@ describe('loadHomeLocality', () => {
       expect(metrics).toContain('HomeLocalityFormMissing');
       expect(metrics).not.toMatch(/"HomeLocalityMissing"/);
     });
+  });
+});
+
+describe('m2: the home set must be one street-numbering area', () => {
+  const client = (send: ReturnType<typeof vi.fn>) =>
+    ({ send }) as unknown as DynamoDBDocumentClient;
+  it('counts only CT towns, not villages', () => {
+    expect(homeTownsThatAreTowns(HOME)).toEqual(['TRUMBULL']);
+    const twoTowns = parseHomeLocality({ towns: ['Monroe', 'Stepney', 'Trumbull'] })!;
+    expect(homeTownsThatAreTowns(twoTowns)).toEqual(['MONROE', 'TRUMBULL']);
+  });
+
+  it('logs a home set naming two towns, once per department', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const send = vi.fn().mockResolvedValue({ Item: { towns: ['Monroe', 'Trumbull'] } });
+    const dept = toVerifiedDeptId({ deptId: 'TWOTOWN' });
+    await loadHomeLocality(client(send), 'alerting', dept, {});
+    await loadHomeLocality(client(send), 'alerting', dept, {});
+    const lines = errorSpy.mock.calls
+      .map(([line]) => String(line))
+      .filter((line) => line.includes('preplan_copy.home_locality_multi_town'));
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toContain('MONROE');
+    errorSpy.mockRestore();
+  });
+
+  it('does not log the tenant-zero set (one town and its villages)', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const send = vi.fn().mockResolvedValue({
+      Item: { towns: ['Trumbull', 'Nichols', 'Long Hill', 'Trumbull Center'], zips: ['06611'] },
+    });
+    await loadHomeLocality(client(send), 'alerting', toVerifiedDeptId({ deptId: 'ONE' }), {});
+    expect(errorSpy.mock.calls.join('\n')).not.toContain('multi_town');
+    errorSpy.mockRestore();
   });
 });

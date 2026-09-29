@@ -5,6 +5,11 @@
  * verified — unflagged — ADDRESS. Override with `boxalarm-infra:alertingHomeLocality` (JSON),
  * or per department at runtime with the alerting-table item DEPT#{deptId}#CONFIG /
  * HOME_LOCALITY (docs/runbooks/alert-context-replay.md, "Home locality").
+ *
+ * The set must be ONE street-numbering area: a single town and its villages/sections. Any two
+ * home names are treated as the same place, so listing two towns would let "12 Main St,
+ * Monroe" verify against Trumbull's 12 Main St. The backend logs
+ * preplan_copy.home_locality_multi_town when a set names more than one CT town.
  */
 export interface HomeLocalityConfig {
   towns: string[];

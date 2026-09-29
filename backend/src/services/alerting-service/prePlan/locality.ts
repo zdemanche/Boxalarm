@@ -3,6 +3,7 @@ import { buildDeptScopedPk, type VerifiedDeptId } from '@boxalarm/dept-scope';
 import { emitOutcomeMetric } from '@boxalarm/metrics';
 import { logError } from '../dispatches/logger.js';
 import { localityKey, type NormalizedAddress } from './addressKey.js';
+import { CT_TOWNS } from './knownLocalities.js';
 
 /**
  * A department's home locality: every town, village and ZIP its own addresses are written
@@ -18,6 +19,13 @@ import { localityKey, type NormalizedAddress } from './addressKey.js';
  *     `boxalarm-infra:alertingHomeLocality` (default seeded per stack deptId);
  *  3. none — then nothing is verified against the home area (town-less copies and home-town
  *     dispatches are flagged); only an explicit same town/ZIP on both sides still verifies.
+ */
+/*
+ * The home set must be ONE street-numbering area: a single town and its villages/sections
+ * (round-4 m2). Any two home names are treated as the same place, which is right for
+ * "Nichols" vs "Trumbull" (one Main St) and wrong for two towns ("12 Main St, Monroe" and
+ * "12 Main St, Trumbull" are different buildings). A set naming more than one CT town is
+ * logged (preplan_copy.home_locality_multi_town) and should be split per department.
  */
 export interface HomeLocality {
   /** Town/village names as configured, for display (the manual-entry locality choice). */
@@ -84,6 +92,29 @@ function fromEnv(env: NodeJS.ProcessEnv, deptId: VerifiedDeptId): HomeLocality |
   return home;
 }
 
+let ctTownKeys: ReadonlySet<string> | undefined;
+const warnedMultiTown = new Set<string>();
+
+/** Home names that are CT towns (not villages): more than one breaks the one-area rule. */
+export function homeTownsThatAreTowns(home: HomeLocality): string[] {
+  ctTownKeys ??= new Set(CT_TOWNS.map(localityKey));
+  return [...home.towns].filter((town) => ctTownKeys?.has(town));
+}
+
+/** Logged once per department per container: the matcher still runs, as configured. */
+function warnIfMultiTown(home: HomeLocality, deptId: VerifiedDeptId): HomeLocality {
+  const towns = homeTownsThatAreTowns(home);
+  if (towns.length > 1 && !warnedMultiTown.has(deptId)) {
+    warnedMultiTown.add(deptId);
+    logError(
+      'preplan_copy.home_locality_multi_town',
+      new Error('the home locality names more than one town; it must be one numbering area'),
+      { deptId, towns },
+    );
+  }
+  return home;
+}
+
 /** A present-but-unusable home locality is never silent (round-3 minor 3). */
 function reportInvalid(source: 'item' | 'env', deptId: VerifiedDeptId, error: unknown): void {
   logError('preplan_copy.home_locality_invalid', error, { deptId, source });
@@ -110,13 +141,13 @@ export async function loadHomeLocality(
       new GetCommand({ TableName: tableName, Key: homeLocalityKey(deptId) }),
     );
     const configured = parseHomeLocality(Item);
-    if (configured) return configured;
+    if (configured) return warnIfMultiTown(configured, deptId);
     if (Item) reportInvalid('item', deptId, new Error('no usable towns or zips'));
   } catch (error) {
     logError('preplan_copy.home_locality_read_failed', error, { deptId });
   }
   const fallback = fromEnv(env, deptId);
-  if (fallback) return fallback;
+  if (fallback) return warnIfMultiTown(fallback, deptId);
   // Served with no home set: every address match is flagged (alarmed in infrastructure,
   // pre-plan-copies.ts); the form offers only "Other town".
   logError('preplan_copy.home_locality_missing', new Error('no home locality configured'), {
