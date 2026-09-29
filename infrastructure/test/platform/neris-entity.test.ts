@@ -118,14 +118,16 @@ describe("NerisEntity", () => {
 
   it("sends a crashed sync to a failure queue with no automatic retry, and can alarm on it", async () => {
     const entity = await build();
-    const [retries, destination, queueArn] = await resolve(
+    const [retries, destination, queueArn, maxAge] = await resolve(
       pulumi.all([
         entity.workerInvokeConfig.maximumRetryAttempts,
         entity.workerInvokeConfig.destinationConfig,
         entity.workerFailureQueue.arn,
+        entity.workerInvokeConfig.maximumEventAgeInSeconds,
       ]),
     );
     expect(retries).toBe(0);
+    expect(maxAge).toBe(60);
     expect(destination?.onFailure?.destination).toBe(queueArn);
     const alarm = entity.alarmOnSyncFailure(
       "arn:aws:sns:us-east-1:123456789012:boxalarm-dev-chief-notifications",

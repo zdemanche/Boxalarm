@@ -13,6 +13,8 @@ const logger = createLogger({ service: 'platform-service' });
 export interface SyncJob {
   readonly deptId: string;
   readonly correlationId: string;
+  /** The sync this job was started for (PUT's markSyncing time). */
+  readonly syncStartedAt?: string;
 }
 
 /**
@@ -34,6 +36,19 @@ export const handler: Handler<SyncJob, void> = async (job) => {
     });
     return;
   }
+  // A job for an earlier sync (delayed in the async queue, or superseded by a newer PUT)
+  // must not run the newer request or save over it (round 2c, Q4).
+  if (job.syncStartedAt !== undefined && row.syncStartedAt !== job.syncStartedAt) {
+    logger.warn({
+      event: 'platform.neris.entity.stale_job',
+      correlationId: job.correlationId,
+      deptId,
+      jobStartedAt: job.syncStartedAt,
+      rowStartedAt: row.syncStartedAt,
+    });
+    return;
+  }
+  const syncStartedAt = row.syncStartedAt;
   let record;
   try {
     const config = await getDepartmentConfig(client, { tableName, deptId, configType: 'NERIS' });
@@ -50,7 +65,23 @@ export const handler: Handler<SyncJob, void> = async (job) => {
       row.requestedBy ?? 'unknown',
       new Date(),
     );
-    await saveEntityRecord(client, tableName, deptId, record, job.correlationId);
+    const saved = await saveEntityRecord(
+      client,
+      tableName,
+      deptId,
+      record,
+      job.correlationId,
+      syncStartedAt,
+    );
+    if (saved === 'stale') {
+      logger.warn({
+        event: 'platform.neris.entity.stale_save',
+        correlationId: job.correlationId,
+        deptId,
+        syncStartedAt,
+      });
+      return;
+    }
   } catch (error) {
     // Recorded as FAILED so GET says why at once instead of SYNCING until it goes stale
     // (round 2, N9); rethrown so the invoke's on-failure destination (and its alarm) see it.
@@ -62,7 +93,9 @@ export const handler: Handler<SyncJob, void> = async (job) => {
       message,
     });
     emitOutcomeMetric('Boxalarm/platform-service', 'NerisEntitySyncFailed');
-    await markSyncFailed(client, tableName, deptId, message, new Date()).catch(() => undefined);
+    await markSyncFailed(client, tableName, deptId, message, new Date(), syncStartedAt).catch(
+      () => undefined,
+    );
     throw error;
   }
   logger.info({

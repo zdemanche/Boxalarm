@@ -310,4 +310,40 @@ describe('syncEntity: idempotent create (round 2, N9)', () => {
     );
     expect(fns.getEntity).not.toHaveBeenCalled();
   });
+
+  it('saves only over the sync it ran for, and reports a superseded save as stale (round 2c, Q4)', async () => {
+    const { TransactionCanceledException } = await import('@aws-sdk/client-dynamodb');
+    const record = {
+      departmentNerisId: ENTITY,
+      stations: [],
+      units: [],
+      errors: [],
+      syncedAt: NOW.toISOString(),
+      syncedBy: 'MBR-0001',
+    };
+    const send = vi.fn().mockRejectedValue(
+      new TransactionCanceledException({
+        message: 'cancelled',
+        $metadata: {},
+        CancellationReasons: [{ Code: 'ConditionalCheckFailed' }, { Code: 'None' }],
+      }),
+    );
+    await expect(
+      saveEntityRecord(
+        { send } as unknown as DynamoDBDocumentClient,
+        'platform-table',
+        toVerifiedDeptId({ deptId: 'NICHOLS' }),
+        record,
+        'trace',
+        't1',
+      ),
+    ).resolves.toBe('stale');
+    const put = (
+      send.mock.calls[0]![0] as { input: { TransactItems: { Put: Record<string, unknown> }[] } }
+    ).input.TransactItems[0]!.Put;
+    expect(put).toMatchObject({
+      ConditionExpression: 'syncStatus = :syncing AND syncStartedAt = :started',
+      ExpressionAttributeValues: { ':syncing': 'SYNCING', ':started': 't1' },
+    });
+  });
 });
