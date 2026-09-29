@@ -109,6 +109,9 @@ function route(req: Recorded, res: ServerResponse): void {
     return send(res, 200, { access_token: TOKEN, expires_in: 3600, token_type: 'Bearer' });
   }
 
+  if (req.headers.authorization === 'Bearer revoked-token') {
+    return send(res, 401, { detail: 'Token revoked' });
+  }
   if (req.headers.authorization !== `Bearer ${TOKEN}`) {
     return send(res, 401, { detail: 'Not authenticated' });
   }
@@ -417,6 +420,26 @@ describe('NERIS client against a fake NERIS server', () => {
       /HTTP 401/,
     );
     expect(requests.map((r) => r.url)).toEqual(['/v1/token']);
+  });
+
+  it('drops a revoked cached token on 401 and retries once with a fresh one', async () => {
+    const cache = createTokenCache();
+    cache.set({ accessToken: 'revoked-token', expiresAtMs: Date.now() + 3_600_000 });
+    const client = createNerisApi(
+      createNerisClient(
+        { baseUrl, userAgent: USER_AGENT, clientId: CLIENT_ID, clientSecret: CLIENT_SECRET },
+        { tokenCache: cache },
+      ),
+    );
+    await expect(client.validateIncident(ENTITY, PAYLOAD)).resolves.toEqual({
+      ok: true,
+      httpStatus: 204,
+    });
+    expect(requests.map((r) => `${r.method} ${r.url}`)).toEqual([
+      `POST /v1/incident/${ENTITY}/validate`,
+      'POST /v1/token',
+      `POST /v1/incident/${ENTITY}/validate`,
+    ]);
   });
 
   it('abandons a hung NERIS call at the timeout instead of outliving the Lambda (review M2)', async () => {

@@ -86,18 +86,27 @@ export function createNerisClient(
   return {
     async fetch(pathOrUrl: string, init?: RequestInit): Promise<Response> {
       const url = resolveUrl(config.baseUrl, pathOrUrl);
-      const accessToken = await getAccessToken(config, {
-        fetchFn,
-        cache: tokenCache,
-        nowMs,
-        timeoutMs,
-      });
-      const headers = mergeHeaders(init, config.userAgent, accessToken);
-      return fetchFn(url, {
-        ...init,
-        headers,
-        signal: init?.signal ?? AbortSignal.timeout(timeoutMs),
-      });
+      const send = async (): Promise<Response> => {
+        const accessToken = await getAccessToken(config, {
+          fetchFn,
+          cache: tokenCache,
+          nowMs,
+          timeoutMs,
+        });
+        return fetchFn(url, {
+          ...init,
+          headers: mergeHeaders(init, config.userAgent, accessToken),
+          signal: init?.signal ?? AbortSignal.timeout(timeoutMs),
+        });
+      };
+      const response = await send();
+      if (response.status !== 401) {
+        return response;
+      }
+      // A cached token NERIS no longer honours (revoked or rotated server-side) would
+      // otherwise fail every call until it expired: drop it and try once with a fresh one.
+      tokenCache.clear();
+      return send();
     },
   };
 }
