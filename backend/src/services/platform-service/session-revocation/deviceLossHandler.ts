@@ -15,7 +15,11 @@ import {
   revokeMemberSession,
 } from './cognitoRevocationClient.js';
 import type { RevocationConfig } from './cognitoRevocationClient.js';
-import { getAccessStoreClient, readPlatformTableName } from './memberAccessStore.js';
+import {
+  getAccessStoreClient,
+  invalidateMemberPush,
+  readPlatformTableName,
+} from './memberAccessStore.js';
 import { writeRevocationMarker } from '../authorizer/revocationStore.js';
 
 // TODO: E8-S3 — replace with Cedar IsAuthorizedWithToken once Verified Permissions ships.
@@ -182,6 +186,17 @@ export const handler: Handler<
     );
   }
 
+  // M2 - per-device revocation is not available, so this is a member-wide sign-out. The
+  // architecture promises "per-device revocation"; what exists today cannot deliver it:
+  //  - Cognito device tracking does not apply to the hosted-UI authorization-code flow both
+  //    apps use, so there is no device key to forget (AdminForgetDevice).
+  //  - RevokeToken revokes one refresh token but needs the token itself; nothing stores
+  //    which refresh token (or origin_jti) belongs to which phone.
+  // Cost: the member's other devices lose their refresh tokens too and need one interactive
+  // sign-in - an admin must tell the member. Path to real per-device revocation: record the
+  // access token's origin_jti (stable across a device's refreshes) against the device at
+  // push-token registration, and have the authorizer deny that origin_jti instead of the
+  // whole member.
   try {
     await revokeMemberSession(client, { userPoolId, username: memberId, correlationId: traceId });
   } catch (error) {
@@ -202,5 +217,33 @@ export const handler: Handler<
     );
   }
 
-  return { statusCode: 202, body: JSON.stringify({ memberId, status: 'revoked' }) };
+  // M2: the lost phone must stop showing dispatches on its lock screen.
+  let push: Awaited<ReturnType<typeof invalidateMemberPush>>;
+  try {
+    push = await invalidateMemberPush(
+      getAccessStoreClient(),
+      tableName,
+      authorizerContext.deptId,
+      memberId,
+      traceId,
+    );
+  } catch (error) {
+    console.error(
+      JSON.stringify({
+        event: 'deviceLossRevocation.pushInvalidationFailed',
+        message: error instanceof Error ? error.message : undefined,
+        memberId,
+        traceId,
+      }),
+    );
+    // Sessions are already revoked; the whole call is idempotent, so a retry finishes it.
+    return problemDetails(
+      503,
+      'Service Unavailable',
+      'Sessions were revoked but the device push registration could not be removed; retry.',
+      traceId,
+    );
+  }
+
+  return { statusCode: 202, body: JSON.stringify({ memberId, status: 'revoked', push }) };
 };

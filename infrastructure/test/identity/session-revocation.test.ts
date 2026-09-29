@@ -169,4 +169,22 @@ describe("SessionRevocation (review C1)", () => {
     expect(threshold).toBe(0);
     expect(actions).toEqual(["arn:aws:sns:us-east-1:123456789012:chief"]);
   });
+
+  // M2: the lost phone must stop getting dispatch pushes.
+  it("lets device loss drop the member's PUSH channel and emit the outbox event, key-scoped", async () => {
+    const sr = await build();
+    const statements = (await statementsOf(sr.deviceLossLambda)) as Array<
+      Statement & { Condition?: unknown }
+    >;
+    const bySid = Object.fromEntries(statements.map((s) => [s.Sid, s]));
+
+    expect(bySid.InvalidateMemberPush?.Action).toEqual(["dynamodb:GetItem", "dynamodb:UpdateItem"]);
+    expect(bySid.InvalidateMemberPush?.Condition).toEqual({
+      "ForAllValues:StringLike": { "dynamodb:LeadingKeys": ["DEPT#*#MEMBER#*"] },
+    });
+    expect(bySid.EmitMemberUpdatedOutbox?.Condition).toEqual({
+      "ForAllValues:StringLike": { "dynamodb:LeadingKeys": ["DEPT#*#OUTBOX#*"] },
+    });
+    expect(bySid.TransactPushInvalidation?.Action).toEqual(["dynamodb:TransactWriteItems"]);
+  });
 });

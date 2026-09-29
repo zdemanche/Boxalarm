@@ -59,15 +59,19 @@ describe('deviceLossHandler', () => {
   const originalEnv = { ...process.env };
 
   let writeRevocationMarker: ReturnType<typeof vi.fn>;
+  let invalidateMemberPush: ReturnType<typeof vi.fn>;
 
   beforeEach(() => {
     vi.resetModules();
     process.env.COGNITO_USER_POOL_ID = 'pool-1';
     process.env.PLATFORM_TABLE_NAME = 'platform-table';
     writeRevocationMarker = vi.fn().mockResolvedValue(1_700_000_000);
+    invalidateMemberPush = vi.fn().mockResolvedValue('invalidated');
     vi.doMock('./memberAccessStore.js', () => ({
       readPlatformTableName: () => 'platform-table',
       getAccessStoreClient: () => ({}),
+      invalidateMemberPush: (...args: unknown[]) =>
+        invalidateMemberPush(...args) as Promise<string>,
     }));
     vi.doMock('../authorizer/revocationStore.js', () => ({
       writeRevocationMarker: (...args: unknown[]) =>
@@ -110,6 +114,70 @@ describe('deviceLossHandler', () => {
       reason: 'DEVICE_LOSS',
       actorId: 'admin-1',
     });
+  });
+
+  // M2: the stolen phone kept receiving dispatch pushes (type + address on the lock screen).
+  it('removes the member push registration after revoking, in the caller department', async () => {
+    const order: string[] = [];
+    const revokeMemberSession = vi.fn(() => {
+      order.push('signOut');
+      return Promise.resolve();
+    });
+    invalidateMemberPush.mockImplementation(() => {
+      order.push('push');
+      return Promise.resolve('invalidated');
+    });
+    mockRevocationClient({ revokeMemberSession });
+    const { handler } = await import('./deviceLossHandler.js');
+
+    const result = (await handler(
+      buildEvent('ADMIN', JSON.stringify({ memberId: 'mbr-102' })),
+      {} as never,
+      () => undefined,
+    )) as APIGatewayProxyStructuredResultV2;
+
+    expect(result.statusCode).toBe(202);
+    expect(JSON.parse(result.body as string)).toEqual({
+      memberId: 'mbr-102',
+      status: 'revoked',
+      push: 'invalidated',
+    });
+    expect(order).toEqual(['signOut', 'push']);
+    expect(invalidateMemberPush).toHaveBeenCalledWith(
+      {},
+      'platform-table',
+      'dept-001',
+      'mbr-102',
+      expect.any(String),
+    );
+  });
+
+  it('answers 503 (retryable) when the push registration cannot be removed', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    invalidateMemberPush.mockRejectedValue(new Error('TransactionCanceled'));
+    mockRevocationClient({ revokeMemberSession: vi.fn().mockResolvedValue(undefined) });
+    const { handler } = await import('./deviceLossHandler.js');
+
+    const result = (await handler(
+      buildEvent('ADMIN', JSON.stringify({ memberId: 'mbr-102' })),
+      {} as never,
+      () => undefined,
+    )) as APIGatewayProxyStructuredResultV2;
+
+    expect(result.statusCode).toBe(503);
+  });
+
+  it('does not touch the push registration when the target is in another department', async () => {
+    mockRevocationClient({ resolveMemberDeptId: vi.fn().mockResolvedValue('dept-999') });
+    const { handler } = await import('./deviceLossHandler.js');
+
+    await handler(
+      buildEvent('ADMIN', JSON.stringify({ memberId: 'mbr-102' })),
+      {} as never,
+      () => undefined,
+    );
+
+    expect(invalidateMemberPush).not.toHaveBeenCalled();
   });
 
   it('answers 503 without signing out when the marker cannot be written', async () => {

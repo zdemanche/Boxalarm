@@ -63,6 +63,36 @@ function revocationMarkerStatement(tableArn: string): IamPolicyStatement {
  * consumer off the platform bus, and the admin device-loss route. Session
  * validity (1h/1h/3650d + rotation) is set on the app clients in index.ts.
  */
+/**
+ * M2: device loss removes the member's PUSH contact channel - the same transaction
+ * personnel-service's push-token DELETE writes (member METADATA update + OUTBOX put).
+ * DynamoDB authorizes each transaction item as its own action, so each is key-scoped.
+ */
+function pushInvalidationStatements(tableArn: string): IamPolicyStatement[] {
+  return [
+    {
+      Sid: "InvalidateMemberPush",
+      Effect: "Allow",
+      Action: ["dynamodb:GetItem", "dynamodb:UpdateItem"],
+      Resource: tableArn,
+      Condition: { "ForAllValues:StringLike": { "dynamodb:LeadingKeys": ["DEPT#*#MEMBER#*"] } },
+    },
+    {
+      Sid: "EmitMemberUpdatedOutbox",
+      Effect: "Allow",
+      Action: ["dynamodb:PutItem"],
+      Resource: tableArn,
+      Condition: { "ForAllValues:StringLike": { "dynamodb:LeadingKeys": ["DEPT#*#OUTBOX#*"] } },
+    },
+    {
+      Sid: "TransactPushInvalidation",
+      Effect: "Allow",
+      Action: ["dynamodb:TransactWriteItems"],
+      Resource: tableArn,
+    },
+  ];
+}
+
 export class SessionRevocation extends pulumi.ComponentResource {
   public readonly memberStatusLambda: ServiceLambda;
   public readonly deviceLossLambda: ServiceLambda;
@@ -155,6 +185,7 @@ export class SessionRevocation extends pulumi.ComponentResource {
             ...revocation,
             verifiedPermissionsPolicyStatement(policyStoreArn),
             revocationMarkerStatement(tableArn),
+            ...pushInvalidationStatements(tableArn),
           ]),
       },
       { parent: this },
