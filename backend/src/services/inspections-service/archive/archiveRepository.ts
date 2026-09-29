@@ -15,8 +15,9 @@ import { buildOutboxRecord } from '@boxalarm/outbox';
  * Archive takes the record off the department list, address, map and due-date indexes, blocks further
  * writes (putPrePlan / updateHydrant condition on attribute_not_exists(archivedAt)), and emits
  * the entity's usual inspections.*.updated event with `archived: true` in the same
- * transaction, so the alerting consumer tombstones its copy (index keys removed) in order
- * with every other event for that entity. There is no un-archive.
+ * transaction, so the alerting consumer tombstones its copy (index keys removed). The
+ * consumer applies a tombstone whatever its eventTime (only its dedup marker guards it) and
+ * never applies anything after one — delivery order is not relied on. There is no un-archive.
  */
 
 export class ArchiveTargetNotFoundError extends Error {
@@ -159,8 +160,8 @@ export async function archiveOccupancy(
         },
       },
       {
-        // Emitted whether or not a pre-plan exists yet, so a pre-plan written concurrently
-        // is still tombstoned by an event ordered after it.
+        // Emitted whether or not a pre-plan exists yet, so a pre-plan written concurrently is
+        // still tombstoned (the consumer applies tombstones regardless of eventTime).
         Put: {
           TableName: tableName,
           Item: buildOutboxRecord(

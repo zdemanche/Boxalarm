@@ -245,9 +245,16 @@ export const handler = async (event: SQSEvent): Promise<SQSBatchResponse> => {
                 TableName: tableName,
                 Key: prePlanCopyKey(deptId, payload.occupancyId),
                 UpdateExpression,
-                // Newer than what is stored, and never over a tombstone: there is no un-archive.
-                ConditionExpression:
-                  '(attribute_not_exists(prePlanUpdatedAt) OR :snapshotUpdatedAt > prePlanUpdatedAt) AND attribute_not_exists(archivedAt)',
+                // An update: newer than what is stored, and never over a tombstone (there is no
+                // un-archive). A tombstone: unconditional beyond its dedup marker — event times
+                // are stamped before commit, so a pre-plan save racing the archive can carry a
+                // later eventTime, and a watermark would then discard the tombstone for good.
+                ...(payload.archived
+                  ? {}
+                  : {
+                      ConditionExpression:
+                        '(attribute_not_exists(prePlanUpdatedAt) OR :snapshotUpdatedAt > prePlanUpdatedAt) AND attribute_not_exists(archivedAt)',
+                    }),
                 ExpressionAttributeValues: values,
               },
             },

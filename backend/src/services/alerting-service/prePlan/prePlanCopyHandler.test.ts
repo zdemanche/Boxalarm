@@ -312,7 +312,8 @@ describe('prePlanCopyHandler (entrypoint-test obligation, AC1)', () => {
     expect(update?.Key).toEqual({ pk: 'DEPT#NICHOLS#PREPLAN', sk: 'OCCUPANCY#OCC-0231' });
     expect(update?.UpdateExpression).toContain('archivedAt = :snapshotUpdatedAt');
     expect(update?.UpdateExpression).toContain('REMOVE gsi1pk, gsi1sk, gsi2pk, gsi2sk');
-    expect(update?.ConditionExpression).toContain('attribute_not_exists(archivedAt)');
+    // N1: no watermark on a tombstone — a racing save with a later eventTime cannot void it.
+    expect(update?.ConditionExpression).toBeUndefined();
     // An archive event is complete as it is — no "missing fields" alarm.
     expect(errorSpy).not.toHaveBeenCalledWith(
       expect.stringContaining('preplan_copy.written_with_missing_fields'),

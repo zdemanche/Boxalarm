@@ -171,7 +171,8 @@ describe('hydrantCopyHandler (entrypoint)', () => {
     expect(update?.Key).toEqual({ pk: 'DEPT#NICHOLS#HYDRANT', sk: 'HYDRANT#HYD-0231' });
     expect(update?.UpdateExpression).toContain('archivedAt = :hydrantUpdatedAt');
     expect(update?.UpdateExpression).toContain('REMOVE gsi2pk, gsi2sk');
-    expect(update?.ConditionExpression).toContain('attribute_not_exists(archivedAt)');
+    // N1: no watermark on a tombstone — a racing update with a later eventTime cannot void it.
+    expect(update?.ConditionExpression).toBeUndefined();
     expect(update).not.toHaveProperty('ExpressionAttributeNames');
   });
 

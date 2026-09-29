@@ -181,8 +181,14 @@ export const handler = async (event: SQSEvent): Promise<SQSBatchResponse> => {
                 TableName: tableName,
                 Key: hydrantCopyKey(deptId, payload.hydrantId),
                 ...update,
-                ConditionExpression:
-                  '(attribute_not_exists(hydrantUpdatedAt) OR :hydrantUpdatedAt > hydrantUpdatedAt) AND attribute_not_exists(archivedAt)',
+                // A tombstone is unconditional beyond its dedup marker (see prePlanCopyHandler):
+                // a racing update with a later pre-commit eventTime must not discard it.
+                ...(payload.archived
+                  ? {}
+                  : {
+                      ConditionExpression:
+                        '(attribute_not_exists(hydrantUpdatedAt) OR :hydrantUpdatedAt > hydrantUpdatedAt) AND attribute_not_exists(archivedAt)',
+                    }),
               },
             },
           ],
