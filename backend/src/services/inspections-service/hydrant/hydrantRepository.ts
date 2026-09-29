@@ -65,7 +65,7 @@ const BATCH_GET_MAX_ATTEMPTS = 5;
  * status, size, flow rating), not just the patched fields, so the alerting plane's
  * HYDRANT_COPY can be built from any single event — including the first one it ever sees.
  */
-function buildHydrantEventPayload(
+export function buildHydrantEventPayload(
   deptId: VerifiedDeptId,
   hydrantId: string,
   state: Partial<HydrantRecord>,

@@ -90,7 +90,7 @@ export async function getPrePlan(
 }
 
 /** The occupancy fields a dispatch needs to find and describe this pre-plan. */
-interface OccupancyContext {
+export interface OccupancyContext {
   readonly address: string;
   readonly normalizedAddress: string;
   readonly occupancyType: string;
@@ -98,7 +98,7 @@ interface OccupancyContext {
   readonly longitude?: number;
 }
 
-async function getOccupancyContext(
+export async function getOccupancyContext(
   doc: DynamoDBDocumentClient,
   tableName: string,
   deptId: VerifiedDeptId,
@@ -142,6 +142,34 @@ function buildSummary(occupancy: OccupancyContext): string {
   return [label, occupancy.address.trim()].filter((part) => part.length > 0).join(' — ');
 }
 
+/**
+ * The inspections.preplan.updated payload: everything the alerting copy needs to find this
+ * pre-plan from a dispatch (address, coordinates) and to show it (summary, hazards,
+ * shut-offs). Shared by putPrePlan and the alert-context replay so both emit the same shape.
+ */
+export function buildPrePlanEventPayload(
+  deptId: VerifiedDeptId,
+  occupancyId: string,
+  prePlanId: string,
+  occupancy: OccupancyContext,
+  plan: Pick<PrePlanItem, 'hazards' | 'utilityShutoffs'>,
+): Record<string, unknown> {
+  return {
+    deptId,
+    occupancyId,
+    prePlanId,
+    summary: buildSummary(occupancy),
+    occupancyType: occupancy.occupancyType,
+    address: occupancy.address,
+    normalizedAddress: occupancy.normalizedAddress,
+    ...(occupancy.latitude !== undefined && occupancy.longitude !== undefined
+      ? { latitude: occupancy.latitude, longitude: occupancy.longitude }
+      : {}),
+    hazards: plan.hazards,
+    utilityShutoffs: plan.utilityShutoffs,
+  };
+}
+
 export async function putPrePlan(
   doc: DynamoDBDocumentClient,
   tableName: string,
@@ -176,20 +204,7 @@ export async function putPrePlan(
     'inspections-service',
     'inspections.preplan.updated',
     prePlanId,
-    {
-      deptId,
-      occupancyId,
-      prePlanId,
-      summary: buildSummary(occupancy),
-      occupancyType: occupancy.occupancyType,
-      address: occupancy.address,
-      normalizedAddress: occupancy.normalizedAddress,
-      ...(occupancy.latitude !== undefined && occupancy.longitude !== undefined
-        ? { latitude: occupancy.latitude, longitude: occupancy.longitude }
-        : {}),
-      hazards: input.hazards,
-      utilityShutoffs: input.utilityShutoffs,
-    },
+    buildPrePlanEventPayload(deptId, occupancyId, prePlanId, occupancy, input),
   );
 
   try {

@@ -42,6 +42,7 @@ import { Equipment as InventoryEquipment } from "./components/inventory/equipmen
 import { Consumables as InventoryConsumables } from "./components/inventory/consumables";
 import { Ppe as InventoryPpe } from "./components/inventory/ppe";
 import { Occupancies } from "./components/inspections/occupancies";
+import { AlertContextReplay } from "./components/inspections/alert-context-replay";
 import { Hydrants } from "./components/inspections/hydrants";
 import { Records as InspectionRecords } from "./components/inspections/records";
 import { InspectionsMap } from "./components/inspections/map";
@@ -441,6 +442,17 @@ export const inspectionsOccupancies = new Occupancies("inspections-occupancies",
 });
 
 export const inspectionsHydrants = new Hydrants("inspections-hydrants", inspectionsBase);
+
+// Post-deploy backfill / normalizer replay for the alerting pre-plan and hydrant copies.
+export const inspectionsAlertContextReplay = new AlertContextReplay(
+  "inspections-alert-context-replay",
+  {
+    env,
+    platformTableName: platformTable.tableName,
+    platformTableArn: platformTable.tableArn,
+    logGroup: inspectionsLogGroup,
+  },
+);
 
 export const inspectionsRecords = new InspectionRecords("inspections-records", {
   ...inspectionsBase,

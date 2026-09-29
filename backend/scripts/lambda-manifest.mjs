@@ -711,6 +711,13 @@ export const LAMBDA_ENTRIES = [
     entry: 'src/services/inspections-service/hydrant/updateHydrantHandler.ts',
   },
   {
+    // Not a route: invoked by hand after deploy and after an alerting address-normalizer
+    // change (docs/runbooks/alert-context-replay.md).
+    service: 'inspections-service',
+    function: 'alert-context-replay',
+    entry: 'src/services/inspections-service/replay/alertContextReplayHandler.ts',
+  },
+  {
     service: 'inspections-service',
     function: 'inspections-list',
     entry: 'src/services/inspections-service/listInspections/handler.ts',
