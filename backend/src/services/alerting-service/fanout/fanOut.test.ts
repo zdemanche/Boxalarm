@@ -13,26 +13,24 @@ vi.mock('../escalation/toneLadder.js', () => ({
 
 const DEPT_ID = toVerifiedDeptId({ deptId: 'NICHOLS' });
 
-function createFakeDdb(existingRosterMembers: readonly string[] = []): {
-  send: DynamoDBDocumentClient['send'];
-  puts: Record<string, unknown>[];
-} {
-  const puts: Record<string, unknown>[] = [];
+interface SentUpdate {
+  readonly Key: { pk: string; sk: string };
+  readonly UpdateExpression: string;
+  readonly ConditionExpression?: string;
+  readonly ExpressionAttributeValues: Record<string, unknown>;
+}
+
+function createFakeDdb(): { send: DynamoDBDocumentClient['send']; updates: SentUpdate[] } {
+  const updates: SentUpdate[] = [];
   const send = vi.fn((command: unknown) => {
     const name = (command as { constructor: { name: string } }).constructor.name;
-    const input = (command as { input: { Item: Record<string, unknown> } }).input;
-    if (name !== 'PutCommand') {
+    if (name !== 'UpdateCommand') {
       throw new Error(`fanOut.test fake ddb: unexpected ${name}`);
     }
-    if (existingRosterMembers.includes(input.Item.memberId as string)) {
-      const error = new Error('conditional check failed');
-      error.name = 'ConditionalCheckFailedException';
-      throw error;
-    }
-    puts.push(input.Item);
+    updates.push((command as { input: SentUpdate }).input);
     return Promise.resolve({});
   });
-  return { send, puts };
+  return { send, updates };
 }
 
 describe('scheduleRealtimeFanOutEscalation', () => {
@@ -49,7 +47,7 @@ describe('scheduleRealtimeFanOutEscalation', () => {
     process.env = { ...originalEnv };
   });
 
-  it('writes a roster entry per member and never a delivery receipt (receipts are the stream fan-out producer`s alone)', async () => {
+  it('seeds a roster row per member and never writes a delivery receipt', async () => {
     const { scheduleRealtimeFanOutEscalation } = await import('./fanOut.js');
     const fakeDdb = createFakeDdb();
 
@@ -65,14 +63,40 @@ describe('scheduleRealtimeFanOutEscalation', () => {
       ],
     );
 
-    expect(fakeDdb.puts.map((item) => item.sk)).toEqual(['ROSTER#mbr-1', 'ROSTER#mbr-2']);
-    expect(fakeDdb.puts.some((item) => item.entityType === 'DELIVERY_RECEIPT')).toBe(false);
-    expect(fakeDdb.puts[0]).toMatchObject({
-      entityType: 'DISPATCH_ROSTER_ENTRY',
-      quals: ['INTERIOR'],
-      ackStatus: 'NONE',
-      currentChannelTier: 'primary',
+    expect(fakeDdb.updates.map((update) => update.Key.sk)).toEqual([
+      'ROSTER#mbr-1',
+      'ROSTER#mbr-2',
+    ]);
+    expect(fakeDdb.updates[0]?.ExpressionAttributeValues).toMatchObject({
+      ':rosterEntityType': 'DISPATCH_ROSTER_ENTRY',
+      ':rosterQuals': ['INTERIOR'],
+      ':rosterNone': 'NONE',
+      ':rosterPrimary': 'primary',
+      ':rosterZero': 0,
     });
+  });
+
+  // Review MAJOR-1: a member may answer before this runs. Every field is seeded only where
+  // absent, with no condition, so an existing answer is kept and the row still gets the
+  // currentChannelTier / escalationLevel the escalation handler needs.
+  it('seeds each field with if_not_exists and no condition, so an earlier answer survives', async () => {
+    const { scheduleRealtimeFanOutEscalation } = await import('./fanOut.js');
+    const fakeDdb = createFakeDdb();
+
+    await scheduleRealtimeFanOutEscalation(
+      { send: fakeDdb.send } as unknown as DynamoDBDocumentClient,
+      { send: vi.fn() } as unknown as SchedulerClient,
+      'alerting-table',
+      DEPT_ID,
+      'dispatch-1',
+      [{ memberId: 'mbr-1', quals: [] }],
+    );
+
+    const update = fakeDdb.updates[0]!;
+    expect(update.ConditionExpression).toBeUndefined();
+    for (const field of ['quals', 'ackStatus', 'currentChannelTier', 'escalationLevel']) {
+      expect(update.UpdateExpression).toContain(`${field} = if_not_exists(${field},`);
+    }
   });
 
   it('creates a tone-1 escalation schedule per member and the department tone ladder once', async () => {
@@ -101,24 +125,6 @@ describe('scheduleRealtimeFanOutEscalation', () => {
       'alerting-table',
     );
     expect(scheduleDepartmentToneLadder).toHaveBeenCalledTimes(1);
-  });
-
-  it('keeps an existing roster entry (a retried fan-out must not reset an ack) and still schedules', async () => {
-    const { createEscalationSchedule } = await import('../escalation/scheduleEscalation.js');
-    const { scheduleRealtimeFanOutEscalation } = await import('./fanOut.js');
-    const fakeDdb = createFakeDdb(['mbr-1']);
-
-    await scheduleRealtimeFanOutEscalation(
-      { send: fakeDdb.send } as unknown as DynamoDBDocumentClient,
-      { send: vi.fn() } as unknown as SchedulerClient,
-      'alerting-table',
-      DEPT_ID,
-      'dispatch-1',
-      [{ memberId: 'mbr-1', quals: [] }],
-    );
-
-    expect(fakeDdb.puts).toEqual([]);
-    expect(createEscalationSchedule).toHaveBeenCalledTimes(1);
   });
 
   it('schedules no tone ladder for an empty audience', async () => {

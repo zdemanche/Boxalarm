@@ -1,4 +1,4 @@
-import { PutCommand, type DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
+import { UpdateCommand, type DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
 import type { SchedulerClient } from '@aws-sdk/client-scheduler';
 import { buildDeptScopedPk, type VerifiedDeptId } from '@boxalarm/dept-scope';
 import { createEscalationSchedule } from '../escalation/scheduleEscalation.js';
@@ -44,24 +44,13 @@ export function parseRosterItem(
   return { pk, sk, entityType, memberId, ackStatus, currentChannelTier };
 }
 
-function buildRosterItem(
-  deptId: VerifiedDeptId,
-  dispatchId: string,
-  memberId: string,
-  quals: readonly string[],
-): Record<string, unknown> {
-  return {
-    pk: buildDeptScopedPk(deptId, 'DISPATCH', dispatchId),
-    sk: `ROSTER#${memberId}`,
-    entityType: 'DISPATCH_ROSTER_ENTRY',
-    memberId,
-    quals,
-    ackStatus: 'NONE',
-    currentChannelTier: 'primary',
-    escalationLevel: 0,
-  };
-}
-
+/**
+ * Seeds the member's roster row for this dispatch. Every field is `if_not_exists`: a member can
+ * answer (responses/repository.ts) before the fan-out gets here - the pages go out first - and
+ * that answer must survive, while the row still gets the currentChannelTier / escalationLevel
+ * the escalation handler requires (review MAJOR-1: an answer-first row had neither, and the
+ * member's 75 s escalation failed its parse and paged on-call).
+ */
 async function ensureRosterEntry(
   ddb: DynamoDBDocumentClient,
   tableName: string,
@@ -70,20 +59,29 @@ async function ensureRosterEntry(
   memberId: string,
   quals: readonly string[],
 ): Promise<void> {
-  try {
-    await ddb.send(
-      new PutCommand({
-        TableName: tableName,
-        Item: buildRosterItem(deptId, dispatchId, memberId, quals),
-        ConditionExpression: 'attribute_not_exists(pk)',
-      }),
-    );
-  } catch (error) {
-    if (error instanceof Error && error.name === 'ConditionalCheckFailedException') {
-      return;
-    }
-    throw error;
-  }
+  await ddb.send(
+    new UpdateCommand({
+      TableName: tableName,
+      Key: { pk: buildDeptScopedPk(deptId, 'DISPATCH', dispatchId), sk: `ROSTER#${memberId}` },
+      UpdateExpression: ROSTER_SEED_EXPRESSION,
+      ExpressionAttributeValues: rosterSeedValues(memberId, quals),
+    }),
+  );
+}
+
+/** The roster row's required fields, each seeded only where absent. */
+const ROSTER_SEED_EXPRESSION =
+  'SET entityType = :rosterEntityType, memberId = :rosterMemberId, quals = if_not_exists(quals, :rosterQuals), ackStatus = if_not_exists(ackStatus, :rosterNone), currentChannelTier = if_not_exists(currentChannelTier, :rosterPrimary), escalationLevel = if_not_exists(escalationLevel, :rosterZero)';
+
+function rosterSeedValues(memberId: string, quals: readonly string[]): Record<string, unknown> {
+  return {
+    ':rosterEntityType': 'DISPATCH_ROSTER_ENTRY',
+    ':rosterMemberId': memberId,
+    ':rosterQuals': quals,
+    ':rosterNone': 'NONE',
+    ':rosterPrimary': 'primary',
+    ':rosterZero': 0,
+  };
 }
 
 export async function scheduleRealtimeFanOutEscalation(

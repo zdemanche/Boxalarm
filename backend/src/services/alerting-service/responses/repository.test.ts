@@ -194,6 +194,9 @@ describe('recordResponse (real DynamoDB, AC1/AC5/core-harm)', () => {
       assignedApparatusId: 'APP-ENGINE-2',
       lastAnsweredTone: 1,
       quals: ['INTERIOR', 'DRIVER_OP'],
+      // Seeded for the escalation handler when the answer creates the row (review MAJOR-1).
+      currentChannelTier: 'primary',
+      escalationLevel: 0,
     });
 
     const responses = await client.send(

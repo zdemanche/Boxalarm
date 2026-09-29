@@ -247,6 +247,17 @@ describe('C1: manual dispatch -> stream fan-out pages every eligible member at t
       expect(receipt.toneSequence?.N).toBe('1');
     }
     expect(loggedMetric('DuplicateSkipped')).toBe(false);
+    const { Item: roster } = await lowLevel.send(
+      new GetItemCommand({
+        TableName: TABLE_NAME,
+        Key: { pk: { S: `DEPT#${DEPT}#DISPATCH#${dispatchId}` }, sk: { S: 'ROSTER#mbr-1' } },
+      }),
+    );
+    expect(roster).toMatchObject({
+      ackStatus: { S: 'NONE' },
+      currentChannelTier: { S: 'primary' },
+      escalationLevel: { N: '0' },
+    });
   }, 60_000);
 
   it('a tone-1 receipt pre-written by any other writer is caught on the first pass (DuplicateSkippedFirstPass is alarmed)', async () => {

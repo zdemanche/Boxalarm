@@ -262,8 +262,10 @@ async function applyToRoster(
       new UpdateCommand({
         TableName: tableName,
         Key: { pk, sk: `ROSTER#${memberId}` },
+        // currentChannelTier / escalationLevel seeded where absent: an answer can land before the
+        // fan-out seeds the row, and the escalation handler requires both (review MAJOR-1).
         UpdateExpression:
-          'SET entityType = :entityType, memberId = :memberId, ackStatus = :ackStatus, ackAt = :ackAt, ackAtMs = :ackAtMs, ackReceivedAtMs = :receivedAtMs, eta = :eta, assignedApparatusId = :assignedApparatusId, lastAnsweredTone = :toneSequence, quals = :quals',
+          'SET entityType = :entityType, memberId = :memberId, ackStatus = :ackStatus, ackAt = :ackAt, ackAtMs = :ackAtMs, ackReceivedAtMs = :receivedAtMs, eta = :eta, assignedApparatusId = :assignedApparatusId, lastAnsweredTone = :toneSequence, quals = :quals, currentChannelTier = if_not_exists(currentChannelTier, :primary), escalationLevel = if_not_exists(escalationLevel, :zero)',
         ConditionExpression:
           '(attribute_not_exists(ackAtMs) AND (attribute_not_exists(ackAt) OR :ackAt >= ackAt)) OR :ackAtMs > ackAtMs OR (:ackAtMs = ackAtMs AND :receivedAtMs > ackReceivedAtMs)',
         ExpressionAttributeValues: {
@@ -277,6 +279,8 @@ async function applyToRoster(
           ':assignedApparatusId': answer.assignedApparatusId,
           ':toneSequence': toneSequence,
           ':quals': quals,
+          ':primary': 'primary',
+          ':zero': 0,
         },
       }),
     );

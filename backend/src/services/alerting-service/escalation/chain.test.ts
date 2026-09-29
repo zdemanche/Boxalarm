@@ -20,7 +20,13 @@ function applyUpdate(
   const setClause = updateExpression.replace(/^SET /, '').split(' REMOVE ')[0] ?? '';
   for (const assignment of setClause.split(/,(?![^(]*\))/)) {
     const [field, valueRef] = assignment.split('=').map((part) => part.trim());
-    if (field && valueRef && valueRef in values) {
+    if (!field || !valueRef) {
+      continue;
+    }
+    const ifNotExists = /^if_not_exists\([^,]+,\s*(:\w+)\)$/.exec(valueRef);
+    if (ifNotExists) {
+      existing[field] ??= values[ifNotExists[1]!];
+    } else if (valueRef in values) {
       existing[field] = values[valueRef];
     }
   }
@@ -252,5 +258,78 @@ describe('E1-S3 chain: fan-out -> schedule -> escalation-fired handler', () => {
     );
 
     expect(snsSend).toHaveBeenCalledTimes(1);
+  });
+
+  // Review MAJOR-1: the pages go out before the fan-out seeds roster rows, so a fast lock-screen
+  // answer can create the row first. It must still carry what the escalation handler needs.
+  it('an answer recorded before the fan-out seeds the roster is kept, and the 75 s escalation skips it as acked', async () => {
+    const alerting = createFakeDdb([
+      eligibleMember('mbr-1'),
+      {
+        pk: 'DEPT#NICHOLS#DISPATCH#dispatch-2',
+        sk: 'METADATA',
+        entityType: 'DISPATCH_ALERT',
+        dispatchId: 'dispatch-2',
+        deptId: 'NICHOLS',
+        currentToneSequence: 1,
+        isTest: false,
+      },
+    ]);
+    vi.doMock('../eligibility/dynamoClient.js', async (importOriginal) => ({
+      ...(await importOriginal<typeof import('../eligibility/dynamoClient.js')>()),
+      createDynamoClient: () => ({ send: alerting.send }) as unknown as DynamoDBDocumentClient,
+    }));
+    vi.doMock('./scheduleEscalation.js', async (importOriginal) => ({
+      ...(await importOriginal<typeof import('./scheduleEscalation.js')>()),
+      getSchedulerClient: () => ({ send: vi.fn().mockResolvedValue({}) }),
+    }));
+    vi.doMock('../fanout/snsClient.js', async (importOriginal) => ({
+      ...(await importOriginal<typeof import('../fanout/snsClient.js')>()),
+      createSnsClient: () => ({ send: vi.fn().mockResolvedValue({}) }) as unknown as SNSClient,
+    }));
+    const snsSend = vi.fn().mockResolvedValue({});
+    vi.doMock('./snsClient.js', async (importOriginal) => ({
+      ...(await importOriginal<typeof import('./snsClient.js')>()),
+      getSnsClient: () => ({ send: snsSend }) as unknown as SNSClient,
+    }));
+
+    const { recordResponse } = await import('../responses/repository.js');
+    const { toVerifiedDeptId } = await import('@boxalarm/dept-scope');
+    const answered = await recordResponse(
+      { send: alerting.send } as unknown as DynamoDBDocumentClient,
+      'alerting-table',
+      {
+        deptId: toVerifiedDeptId({ deptId: 'NICHOLS' }),
+        dispatchId: 'dispatch-2',
+        memberId: 'mbr-1',
+        ackStatus: 'RESPONDING',
+        eta: null,
+        assignedApparatusId: null,
+        answeredAt: 1798000001,
+      },
+    );
+    expect(answered).toMatchObject({ outcome: 'recorded', roster: 'APPLIED' });
+
+    const { handler: fanOutHandler } = await import('../fanout/handler.js');
+    expect(await fanOutHandler(dispatchAlertInsert('dispatch-2'))).toEqual({
+      batchItemFailures: [],
+    });
+    expect(alerting.items.get('DEPT#NICHOLS#DISPATCH#dispatch-2#ROSTER#mbr-1')).toMatchObject({
+      ackStatus: 'RESPONDING',
+      currentChannelTier: 'primary',
+      escalationLevel: 0,
+    });
+
+    const { handler: escalationHandler } = await import('./escalationHandler.js');
+    await expect(
+      escalationHandler({
+        deptId: 'NICHOLS',
+        dispatchId: 'dispatch-2',
+        memberId: 'mbr-1',
+        toneSequence: 1,
+        channel: 'voice',
+      }),
+    ).resolves.toEqual({ outcome: 'SKIPPED_ACKED' });
+    expect(snsSend).not.toHaveBeenCalled();
   });
 });
