@@ -5,11 +5,14 @@ import type {
   SQSEvent,
   SQSRecord,
 } from 'aws-lambda';
-import { ConditionalCheckFailedException } from '@aws-sdk/client-dynamodb';
+import {
+  ConditionalCheckFailedException,
+  TransactionCanceledException,
+} from '@aws-sdk/client-dynamodb';
 import {
   GetCommand,
   PutCommand,
-  UpdateCommand,
+  TransactWriteCommand,
   type DynamoDBDocumentClient,
 } from '@aws-sdk/lib-dynamodb';
 import { buildDeptScopedPk, toVerifiedDeptId, type VerifiedDeptId } from '@boxalarm/dept-scope';
@@ -110,7 +113,7 @@ function nextAssignedPositions(
   return withoutPrevious;
 }
 
-type UpdateOutcome = 'updated' | 'stale';
+type UpdateOutcome = 'updated' | 'stale' | 'locked';
 
 async function updateResponseUnit(
   client: DynamoDBDocumentClient,
@@ -139,26 +142,47 @@ async function updateResponseUnit(
 
     try {
       await client.send(
-        new UpdateCommand({
-          TableName: tableName,
-          Key: key,
-          ConditionExpression:
-            'attribute_not_exists(pk) OR if_not_exists(assignedPositions, :emptyList) = :priorPositions',
-          UpdateExpression:
-            'SET entityType = :entityType, unitType = :unitType, unitId = :unitId, assignedPositions = :next, assignedPositionsUpdatedAt = :new',
-          ExpressionAttributeValues: {
-            ':entityType': 'INCIDENT_RESPONSE_UNIT',
-            ':unitType': 'APPARATUS',
-            ':unitId': apparatusId,
-            ':next': nextPositions,
-            ':priorPositions': priorPositions,
-            ':emptyList': [],
-            ':new': eventUpdatedAt,
-          },
+        new TransactWriteCommand({
+          TransactItems: [
+            {
+              Update: {
+                TableName: tableName,
+                Key: key,
+                ConditionExpression:
+                  'attribute_not_exists(pk) OR if_not_exists(assignedPositions, :emptyList) = :priorPositions',
+                UpdateExpression:
+                  'SET entityType = :entityType, unitType = :unitType, unitId = :unitId, assignedPositions = :next, assignedPositionsUpdatedAt = :new',
+                ExpressionAttributeValues: {
+                  ':entityType': 'INCIDENT_RESPONSE_UNIT',
+                  ':unitType': 'APPARATUS',
+                  ':unitId': apparatusId,
+                  ':next': nextPositions,
+                  ':priorPositions': priorPositions,
+                  ':emptyList': [],
+                  ':new': eventUpdatedAt,
+                },
+              },
+            },
+            {
+              // Staffing feeds NERIS unit responses: a report locked for review (or already
+              // sent) is not changed behind the officer's back (review M5). A missing report
+              // (the dispatch is still running) passes: it cannot be locked yet.
+              ConditionCheck: {
+                TableName: tableName,
+                Key: { pk: key.pk, sk: 'METADATA' },
+                ConditionExpression: 'attribute_not_exists(lockedAt)',
+              },
+            },
+          ],
         }),
       );
       return 'updated';
     } catch (error) {
+      if (error instanceof TransactionCanceledException) {
+        const reasons = error.CancellationReasons ?? [];
+        if (reasons[1]?.Code === 'ConditionalCheckFailed') return 'locked';
+        if (reasons[0]?.Code === 'ConditionalCheckFailed') continue;
+      }
       if (error instanceof ConditionalCheckFailedException) {
         continue;
       }
@@ -223,6 +247,19 @@ async function processRecord(record: SQSRecord, deps: RidingAssignmentConsumerDe
     );
     if (outcome === 'stale') {
       emitOutcomeMetric(METRIC_NAMESPACE, 'RidingAssignmentSkipped', 'StaleEvent');
+      return;
+    }
+    if (outcome === 'locked') {
+      console.warn(
+        JSON.stringify({
+          event: 'incident.ridingAssignment.reportLocked',
+          service: 'incident-service',
+          correlationId: eventId,
+          deptId,
+          incidentId: dispatchId,
+        }),
+      );
+      emitOutcomeMetric(METRIC_NAMESPACE, 'RidingAssignmentSkipped', 'ReportLocked');
       return;
     }
   } catch (error) {

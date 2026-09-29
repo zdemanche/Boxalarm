@@ -13,6 +13,16 @@ import { problemResponse, type ProblemResponse } from './authContext.js';
 
 export const NOT_LOCKED_CONDITION = 'attribute_not_exists(lockedAt)';
 
+/**
+ * Every content write (fields, narrative, unit times, exposures, NERIS modules) bumps the
+ * report's METADATA contentVersion in the same transaction. Lock pins the version the
+ * officer validated, so any edit in between — unit times included — fails the lock with
+ * CHANGED_SINCE_REVIEW (review M5). Use with {@link CONTENT_VERSION_VALUES}.
+ */
+export const BUMP_CONTENT_VERSION =
+  'contentVersion = if_not_exists(contentVersion, :cvZero) + :cvOne';
+export const CONTENT_VERSION_VALUES = { ':cvZero': 0, ':cvOne': 1 } as const;
+
 export class IncidentLockedError extends Error {
   constructor(incidentId: string) {
     super(`incident "${incidentId}" is locked for review and cannot be edited`);

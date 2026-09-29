@@ -34,6 +34,7 @@ function incident(overrides: Record<string, unknown> = {}) {
     createdBy: 'MBR-0034',
     createdAt: ALARM,
     updatedAt: ALARM + 500,
+    contentVersion: 4,
     ...overrides,
   };
 }
@@ -166,7 +167,7 @@ describe('POST /incidents/{id}/lock', () => {
     expect(review.lockIncident).not.toHaveBeenCalled();
   });
 
-  it('locks a clean report, pinned to the updatedAt it validated', async () => {
+  it('locks a clean report, pinned to the contentVersion it validated', async () => {
     mockContext({
       incident: incident(),
       units: [COMPLETE_UNIT],
@@ -181,7 +182,7 @@ describe('POST /incidents/{id}/lock', () => {
     expect(review.lockIncident).toHaveBeenCalledWith(
       expect.anything(),
       'incident-table',
-      expect.objectContaining({ reviewedUpdatedAt: ALARM + 500, submit: false }),
+      expect.objectContaining({ reviewedContentVersion: 4, submit: false }),
     );
   });
 

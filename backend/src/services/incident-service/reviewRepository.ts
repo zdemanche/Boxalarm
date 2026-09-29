@@ -92,8 +92,11 @@ export interface LockInput {
   readonly deptId: VerifiedDeptId;
   readonly incidentId: string;
   readonly actorId: string;
-  /** The row's updatedAt when it was validated: a change since then fails the lock. */
-  readonly reviewedUpdatedAt: number;
+  /**
+   * The report's contentVersion when it was validated: any content write since then — unit
+   * times and exposures included — fails the lock (review M5).
+   */
+  readonly reviewedContentVersion: number;
   readonly previousStatus: IncidentStatus;
   /** Queue the NERIS submission in the same transaction (department autoSubmitOnLock). */
   readonly submit: boolean;
@@ -135,7 +138,11 @@ export async function lockIncident(
             Update: {
               TableName: tableName,
               Key: metadataKey(input.deptId, input.incidentId),
-              ConditionExpression: `attribute_exists(pk) AND attribute_not_exists(lockedAt) AND updatedAt = :reviewed AND ${NOT_IN_FLIGHT}`,
+              ConditionExpression: `attribute_exists(pk) AND attribute_not_exists(lockedAt) AND ${
+                input.reviewedContentVersion === 0
+                  ? '(attribute_not_exists(contentVersion) OR contentVersion = :reviewed)'
+                  : 'contentVersion = :reviewed'
+              } AND ${NOT_IN_FLIGHT}`,
               // updatedAt is left alone: it marks content edits, which the ledger's
               // editedSinceSubmission compares against lastSubmittedAt; lock/unlock are not edits.
               UpdateExpression: `SET lockedAt = :now, lockedBy = :actor, #status = :status${
@@ -147,7 +154,7 @@ export async function lockIncident(
               ExpressionAttributeValues: {
                 ':now': input.nowEpochSeconds,
                 ':actor': input.actorId,
-                ':reviewed': input.reviewedUpdatedAt,
+                ':reviewed': input.reviewedContentVersion,
                 ':status': status,
                 ...inFlightValues(),
                 ...(input.submit ? { ':activityAt': new Date().toISOString() } : {}),

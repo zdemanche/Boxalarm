@@ -47,6 +47,21 @@ function stubSend(
     );
 }
 
+/** The RESPONSE# Update inside the consumer's transaction, shaped like a sent command. */
+function responseUnitUpdate(
+  send: ReturnType<typeof vi.fn>,
+): [{ input: Record<string, unknown> }] | undefined {
+  const transact = send.mock.calls.find(
+    (call) =>
+      (call[0] as { constructor: { name: string } }).constructor.name === 'TransactWriteCommand',
+  );
+  if (!transact) return undefined;
+  const items = (
+    transact[0] as { input: { TransactItems: { Update?: Record<string, unknown> }[] } }
+  ).input.TransactItems;
+  return [{ input: items[0]!.Update! }];
+}
+
 describe('ridingAssignmentConsumer handler (entrypoint, AC6)', () => {
   it('adds the memberId to assignedPositions on the INCIDENT_RESPONSE_UNIT row', async () => {
     const send = stubSend((command) => {
@@ -62,9 +77,7 @@ describe('ridingAssignmentConsumer handler (entrypoint, AC6)', () => {
       () => undefined,
     );
 
-    const updateCall = send.mock.calls.find(
-      (call) => (call[0] as { constructor: { name: string } }).constructor.name === 'UpdateCommand',
-    );
+    const updateCall = responseUnitUpdate(send);
     expect(updateCall).toBeDefined();
     const values = (
       updateCall?.[0] as { input: { ExpressionAttributeValues: Record<string, unknown> } }
@@ -94,9 +107,7 @@ describe('ridingAssignmentConsumer handler (entrypoint, AC6)', () => {
       () => undefined,
     );
 
-    const updateCall = send.mock.calls.find(
-      (call) => (call[0] as { constructor: { name: string } }).constructor.name === 'UpdateCommand',
-    );
+    const updateCall = responseUnitUpdate(send);
     const values = (
       updateCall?.[0] as { input: { ExpressionAttributeValues: Record<string, unknown> } }
     ).input.ExpressionAttributeValues;
@@ -130,9 +141,7 @@ describe('ridingAssignmentConsumer handler (entrypoint, AC6)', () => {
       () => undefined,
     );
 
-    const updateCall = send.mock.calls.find(
-      (call) => (call[0] as { constructor: { name: string } }).constructor.name === 'UpdateCommand',
-    );
+    const updateCall = responseUnitUpdate(send);
     const values = (
       updateCall?.[0] as { input: { ExpressionAttributeValues: Record<string, unknown> } }
     ).input.ExpressionAttributeValues;
@@ -158,9 +167,7 @@ describe('ridingAssignmentConsumer handler (entrypoint, AC6)', () => {
       () => undefined,
     );
 
-    const updateCall = send.mock.calls.find(
-      (call) => (call[0] as { constructor: { name: string } }).constructor.name === 'UpdateCommand',
-    );
+    const updateCall = responseUnitUpdate(send);
     expect(updateCall).toBeUndefined();
   });
 
@@ -215,9 +222,44 @@ describe('ridingAssignmentConsumer handler (entrypoint, AC6)', () => {
     );
 
     expect(result).toEqual({ batchItemFailures: [{ itemIdentifier: 'bad' }] });
-    const updateCall = send.mock.calls.find(
-      (call) => (call[0] as { constructor: { name: string } }).constructor.name === 'UpdateCommand',
-    );
+    const updateCall = responseUnitUpdate(send);
     expect(updateCall).toBeDefined();
+  });
+
+  it('does not change staffing on a report locked for review, and consumes the event', async () => {
+    const { TransactionCanceledException } = await import('@aws-sdk/client-dynamodb');
+    const send = stubSend((command) => {
+      if (command.constructor.name === 'TransactWriteCommand') {
+        throw new TransactionCanceledException({
+          message: 'cancelled',
+          $metadata: {},
+          CancellationReasons: [{ Code: 'None' }, { Code: 'ConditionalCheckFailed' }],
+        });
+      }
+      return {};
+    });
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const { createHandler } = await import('./ridingAssignmentConsumer.js');
+    const handler = createHandler({ client: { send } as unknown as DynamoDBDocumentClient });
+
+    const result = await handler(
+      { Records: [{ messageId: 'm1', body: detailBody() }] } as unknown as SQSEvent,
+      {} as never,
+      () => undefined,
+    );
+
+    expect(result).toEqual({ batchItemFailures: [] });
+    const transact = send.mock.calls.find(
+      (call) =>
+        (call[0] as { constructor: { name: string } }).constructor.name === 'TransactWriteCommand',
+    );
+    const items = (transact![0] as { input: { TransactItems: Record<string, unknown>[] } }).input
+      .TransactItems;
+    expect(items[1]).toMatchObject({
+      ConditionCheck: {
+        Key: { sk: 'METADATA' },
+        ConditionExpression: 'attribute_not_exists(lockedAt)',
+      },
+    });
   });
 });

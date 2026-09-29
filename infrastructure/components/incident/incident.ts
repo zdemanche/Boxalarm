@@ -360,7 +360,13 @@ export class Incident extends pulumi.ComponentResource {
     // condition; getSubmission.ts is a single consistent GetItem. Role gating is the
     // handlers' authorizer-group check (submit: ADMIN/CHIEF; status and retry: OFFICER and
     // up), not Cedar, so no Verified Permissions grant.
-    const submissionRoutes = [
+    const submissionRoutes: {
+      key: string;
+      fn: string;
+      routeKey: string;
+      actions: string[];
+      schema?: boolean;
+    }[] = [
       {
         key: "submit",
         fn: "submit",
@@ -371,8 +377,11 @@ export class Incident extends pulumi.ComponentResource {
         key: "submission-get",
         fn: "submission-get",
         routeKey: "GET /api/v1/incidents/{incidentId}/submission",
-        // Query: the ledger's SUBMISSION# attempts and NERIS#STATUS# history rows.
+        // Query: the ledger's SUBMISSION# attempts and NERIS#STATUS# history rows, the
+        // NERIS settings copy and RESPONSE# rows; S3: the schema pin — editedSinceSubmission
+        // hashes the payload the report would send now (review M5).
         actions: ["dynamodb:GetItem", "dynamodb:Query"],
+        schema: true,
       },
       {
         key: "submission-retry",
@@ -380,7 +389,7 @@ export class Incident extends pulumi.ComponentResource {
         routeKey: "POST /api/v1/incidents/{incidentId}/submission/retry",
         actions: ["dynamodb:UpdateItem", "dynamodb:PutItem", "dynamodb:GetItem"],
       },
-    ] as const;
+    ];
     const submissionLambdas = submissionRoutes.map((route) => {
       const lambda = new ServiceLambda(
         `${name}-${route.key}`,
@@ -391,10 +400,16 @@ export class Incident extends pulumi.ComponentResource {
           handler: LAMBDA_HANDLER,
           code: lambdaCode("incident-service", route.fn),
           logGroup: args.logGroup,
-          environment: baseEnvironment,
+          environment: route.schema
+            ? { ...baseEnvironment, NERIS_SCHEMA_BUCKET_NAME: args.nerisSchemaBucketName }
+            : baseEnvironment,
           additionalPolicyStatements: pulumi
-            .all([cmkStatement, args.incidentTableArn])
-            .apply(([cmk, tableArn]) => [
+            .all([
+              cmkStatement,
+              args.incidentTableArn,
+              SCHEMA_S3_READ_STATEMENT(args.nerisSchemaBucketArn),
+            ])
+            .apply(([cmk, tableArn, s3]) => [
               {
                 Sid: "IncidentSubmissionAccess" as const,
                 Effect: "Allow" as const,
@@ -402,6 +417,7 @@ export class Incident extends pulumi.ComponentResource {
                 Resource: [tableArn],
               },
               ...cmk,
+              ...(route.schema ? s3 : []),
             ]),
         },
         { parent: this },

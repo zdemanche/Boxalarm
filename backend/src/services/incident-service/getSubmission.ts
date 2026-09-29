@@ -10,6 +10,32 @@ import {
 import { getSubmissionRepository } from './submissionRepository.js';
 import { getDocumentClient, getTableName } from './repository.js';
 import { querySubmissionLedger } from './reviewRepository.js';
+import { loadReportContext } from './reportContext.js';
+import { buildNerisIncidentPayload, payloadHash } from './neris/payload.js';
+import type { VerifiedDeptId } from '@boxalarm/dept-scope';
+
+/**
+ * Edited since NERIS last accepted it: the payload the report would send now hashes
+ * differently from the one NERIS accepted. Any content edit counts — unit times, riding
+ * staffing and modules included — and a lock, unlock or failed send does not (review M5).
+ */
+async function editedSinceAccepted(
+  deptId: VerifiedDeptId,
+  incidentId: string,
+  lastPayloadHash: string | undefined,
+): Promise<boolean> {
+  if (!lastPayloadHash) return false;
+  const context = await loadReportContext(deptId, incidentId);
+  if (!context?.nerisApi || !context.settings.departmentNerisId) return false;
+  const current = buildNerisIncidentPayload({
+    incident: context.incident,
+    units: context.units,
+    departmentNerisId: context.settings.departmentNerisId,
+    unitNerisIds: context.settings.unitNerisIds,
+    schema: context.nerisApi,
+  });
+  return payloadHash(current) !== lastPayloadHash;
+}
 
 export const handler: APIGatewayProxyHandlerV2WithLambdaAuthorizer<AuthorizerContext> = async (
   event,
@@ -78,10 +104,11 @@ export const handler: APIGatewayProxyHandlerV2WithLambdaAuthorizer<AuthorizerCon
       deptId,
       incidentId,
     );
-    const editedSinceSubmission =
-      record.lastSubmittedAt !== undefined &&
-      record.updatedAt !== undefined &&
-      record.updatedAt > record.lastSubmittedAt;
+    const editedSinceSubmission = await editedSinceAccepted(
+      deptId,
+      incidentId,
+      record.lastPayloadHash,
+    );
     return {
       statusCode: 200,
       headers: { 'Content-Type': 'application/json' },

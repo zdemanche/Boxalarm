@@ -78,7 +78,7 @@ async function inner(
       deptId,
       incidentId,
       actorId: principal.sub,
-      reviewedUpdatedAt: context.incident.updatedAt,
+      reviewedContentVersion: context.incident.contentVersion ?? 0,
       previousStatus: context.incident.status,
       submit,
       nowEpochSeconds: lockedAt,

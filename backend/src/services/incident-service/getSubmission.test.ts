@@ -51,6 +51,7 @@ describe('getSubmission handler', () => {
   afterEach(() => {
     vi.unmock('./submissionRepository.js');
     vi.unmock('./reviewRepository.js');
+    vi.unmock('./reportContext.js');
     vi.restoreAllMocks();
   });
 
@@ -90,7 +91,14 @@ describe('getSubmission handler', () => {
     expect(result).toMatchObject({ statusCode: 400 });
   });
 
+  function mockContext(context: unknown = undefined) {
+    vi.doMock('./reportContext.js', () => ({
+      loadReportContext: () => Promise.resolve(context),
+    }));
+  }
+
   function mockLedger(ledger = { attempts: [], statusHistory: [] }) {
+    mockContext();
     vi.doMock('./reviewRepository.js', async (importOriginal) => {
       const actual = await importOriginal<typeof import('./reviewRepository.js')>();
       return { ...actual, querySubmissionLedger: () => Promise.resolve(ledger) };
@@ -137,6 +145,26 @@ describe('getSubmission handler', () => {
       { status: 'REJECTED', at: '2026-09-30T09:00:00Z', current: true },
     ];
     mockLedger({ attempts, statusHistory } as never);
+    // The report as it stands now builds a payload whose hash is not 'abc': edited.
+    mockContext({
+      incident: {
+        incidentId: INCIDENT_ID,
+        deptId: 'NICHOLS',
+        dispatchNumber: '4471',
+        epochSeconds: 1_798_000_000,
+        nerisSchemaVersion: 'v',
+        corePayload: { incident_type: 'FIRE||STRUCTURE_FIRE||CHIMNEY_FIRE' },
+        status: 'REJECTED',
+        sourceDispatchId: INCIDENT_ID,
+        createdBy: 'MBR-0034',
+        createdAt: 1,
+        updatedAt: 1,
+      },
+      units: [],
+      settings: { departmentNerisId: 'FD09190828', unitNerisIds: {} },
+      nerisApi: (await import('./neris/fixtures/neris-api-1.5.1.json', { with: { type: 'json' } }))
+        .default,
+    });
     vi.doMock('./submissionRepository.js', async (importOriginal) => {
       const actual = await importOriginal<typeof import('./submissionRepository.js')>();
       return {

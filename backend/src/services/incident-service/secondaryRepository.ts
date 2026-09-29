@@ -7,6 +7,8 @@ import { assertNoDelimiter, buildDeptScopedPk, type VerifiedDeptId } from '@boxa
 import { buildOutboxRecord } from '@boxalarm/outbox';
 import { IncidentNotFoundError, isConditionFailureAt } from './repository.js';
 import {
+  BUMP_CONTENT_VERSION,
+  CONTENT_VERSION_VALUES,
   IncidentLockedError,
   NOT_LOCKED_CONDITION,
   explainMetadataConditionFailure,
@@ -65,14 +67,20 @@ export async function putIncidentSecondary(
           },
           { Put: { TableName: tableName, Item: outboxRecord } },
           {
-            // The parent report must exist and not be locked for review (lock.ts).
-            ConditionCheck: {
+            // The parent report must exist and not be locked for review, and the module is
+            // content: bump contentVersion (lock.ts).
+            Update: {
               TableName: tableName,
               Key: {
                 pk: buildDeptScopedPk(deptId, 'INCIDENT', secondary.incidentId),
                 sk: 'METADATA',
               },
               ConditionExpression: `attribute_exists(pk) AND ${NOT_LOCKED_CONDITION}`,
+              UpdateExpression: `SET ${BUMP_CONTENT_VERSION}, updatedAt = :metadataUpdatedAt`,
+              ExpressionAttributeValues: {
+                ...CONTENT_VERSION_VALUES,
+                ':metadataUpdatedAt': secondary.updatedAt,
+              },
             },
           },
         ],

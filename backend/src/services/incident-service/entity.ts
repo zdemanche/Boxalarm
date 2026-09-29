@@ -59,6 +59,8 @@ export interface Incident {
   readonly nerisStatusAt?: number;
   /** Epoch seconds NERIS first accepted the record (drives the 72-hour compliance tile). */
   readonly firstSubmittedAt?: number;
+  /** Bumped by every content write; the review lock pins it (review M5). */
+  readonly contentVersion?: number;
   /** The NERIS id a create in progress will produce (set before the POST; review M2). */
   readonly pendingNerisId?: string;
   /** sha256 of the last payload NERIS accepted; a differing hash means edits await resubmission. */

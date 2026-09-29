@@ -40,14 +40,14 @@ const LOCK = {
   deptId: DEPT,
   incidentId: ID,
   actorId: 'MBR-0034',
-  reviewedUpdatedAt: 1_798_000_500,
+  reviewedContentVersion: 7,
   previousStatus: 'DRAFT' as const,
   nowEpochSeconds: 1_798_003_000,
   traceId: 'trace',
 };
 
 describe('lockIncident', () => {
-  it('locks conditionally on the reviewed updatedAt, audits, and emits incident.report.locked', async () => {
+  it('locks conditionally on the reviewed contentVersion, audits, and emits incident.report.locked', async () => {
     const send = vi.fn().mockResolvedValue({});
     const result = await lockIncident(client(send), 'table', { ...LOCK, submit: false });
 
@@ -55,8 +55,8 @@ describe('lockIncident', () => {
     const [update, audit, locked, ...rest] = transactItems(send);
     expect(update!.Update).toMatchObject({
       ConditionExpression:
-        'attribute_exists(pk) AND attribute_not_exists(lockedAt) AND updatedAt = :reviewed AND (attribute_not_exists(submissionStatus) OR (submissionStatus <> :queued AND submissionStatus <> :retrying) OR attribute_not_exists(submissionActivityAt) OR submissionActivityAt < :staleBefore)',
-      ExpressionAttributeValues: { ':reviewed': 1_798_000_500, ':status': 'VALIDATED' },
+        'attribute_exists(pk) AND attribute_not_exists(lockedAt) AND contentVersion = :reviewed AND (attribute_not_exists(submissionStatus) OR (submissionStatus <> :queued AND submissionStatus <> :retrying) OR attribute_not_exists(submissionActivityAt) OR submissionActivityAt < :staleBefore)',
+      ExpressionAttributeValues: { ':reviewed': 7, ':status': 'VALIDATED' },
     });
     expect(String(update!.Update!.UpdateExpression)).not.toContain('updatedAt =');
     expect(audit!.Put!.Item).toMatchObject({ entityType: 'AUDIT_LOG_ENTRY', action: 'LOCK' });

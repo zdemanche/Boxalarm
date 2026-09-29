@@ -10,6 +10,8 @@ import { assertNoDelimiter, buildDeptScopedPk } from '@boxalarm/dept-scope';
 import type { VerifiedDeptId } from '@boxalarm/dept-scope';
 import { buildOutboxRecord, type OutboxRecord } from '@boxalarm/outbox';
 import {
+  BUMP_CONTENT_VERSION,
+  CONTENT_VERSION_VALUES,
   IncidentLockedError,
   NOT_LOCKED_CONDITION,
   explainMetadataConditionFailure,
@@ -138,6 +140,7 @@ function toIncident(item: Record<string, unknown>): Incident {
       : {}),
     ...(typeof item.lastPayloadHash === 'string' ? { lastPayloadHash: item.lastPayloadHash } : {}),
     ...(typeof item.pendingNerisId === 'string' ? { pendingNerisId: item.pendingNerisId } : {}),
+    ...(typeof item.contentVersion === 'number' ? { contentVersion: item.contentVersion } : {}),
   };
 }
 
@@ -194,6 +197,11 @@ export function createIncidentRepository(
                 // Locked reports reject every edit (lock.ts), atomically with the write.
                 ConditionExpression: `attribute_exists(pk) AND ${NOT_LOCKED_CONDITION}`,
                 ...update,
+                UpdateExpression: `${update.UpdateExpression}, ${BUMP_CONTENT_VERSION}`,
+                ExpressionAttributeValues: {
+                  ...update.ExpressionAttributeValues,
+                  ...CONTENT_VERSION_VALUES,
+                },
               },
             },
             { Put: { TableName: tableName, Item: outboxRecord } },

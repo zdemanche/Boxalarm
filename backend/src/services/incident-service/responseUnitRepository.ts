@@ -7,6 +7,8 @@ import { buildDeptScopedPk, type VerifiedDeptId } from '@boxalarm/dept-scope';
 import { buildOutboxRecord } from '@boxalarm/outbox';
 import { IncidentNotFoundError, isConditionFailureAt } from './repository.js';
 import {
+  BUMP_CONTENT_VERSION,
+  CONTENT_VERSION_VALUES,
   IncidentLockedError,
   NOT_LOCKED_CONDITION,
   explainMetadataConditionFailure,
@@ -105,14 +107,20 @@ export async function upsertResponseUnitTimes(
           // the first-ever write for a unit must still create it. The parent INCIDENT
           // METADATA existence check rides in the same transaction instead.
           {
-            ConditionCheck: {
+            // ...that it is not locked for review, and a unit-time edit is a content edit:
+            // it bumps contentVersion so a lock pinned before it fails (lock.ts).
+            Update: {
               TableName: tableName,
               Key: {
                 pk: buildDeptScopedPk(input.deptId, 'INCIDENT', input.incidentId),
                 sk: 'METADATA',
               },
-              // ...and that it is not locked for review (lock.ts).
               ConditionExpression: `attribute_exists(pk) AND ${NOT_LOCKED_CONDITION}`,
+              UpdateExpression: `SET ${BUMP_CONTENT_VERSION}, updatedAt = :metadataUpdatedAt`,
+              ExpressionAttributeValues: {
+                ...CONTENT_VERSION_VALUES,
+                ':metadataUpdatedAt': Math.floor(Date.now() / 1000),
+              },
             },
           },
           {
