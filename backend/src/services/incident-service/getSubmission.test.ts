@@ -45,10 +45,12 @@ const INCIDENT_ID = 'NICHOLS-4471-1798000000';
 describe('getSubmission handler', () => {
   beforeEach(() => {
     vi.resetModules();
+    process.env.INCIDENT_TABLE_NAME = 'incident-table';
   });
 
   afterEach(() => {
     vi.unmock('./submissionRepository.js');
+    vi.unmock('./reviewRepository.js');
     vi.restoreAllMocks();
   });
 
@@ -88,7 +90,97 @@ describe('getSubmission handler', () => {
     expect(result).toMatchObject({ statusCode: 400 });
   });
 
+  function mockLedger(ledger = { attempts: [], statusHistory: [] }) {
+    vi.doMock('./reviewRepository.js', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('./reviewRepository.js')>();
+      return { ...actual, querySubmissionLedger: () => Promise.resolve(ledger) };
+    });
+  }
+
+  const EMPTY_LEDGER_FIELDS = {
+    nerisIncidentId: null,
+    nerisStatus: null,
+    nerisStatusAt: null,
+    lockedAt: null,
+    lockedBy: null,
+    payloadHash: null,
+    firstSubmittedAt: null,
+    editedSinceSubmission: false,
+    attempts: [],
+    statusHistory: [],
+  };
+
+  it('returns the full submission ledger: attempts, NERIS id and status history', async () => {
+    const attempts = [
+      {
+        attempt: 1,
+        attemptedAt: '2026-09-29T10:00:00.000Z',
+        outcome: 'VALIDATION_ERROR',
+        httpStatus: 422,
+        retryCount: 0,
+        errors: [{ path: 'dispatch.call_create', code: 'missing', message: 'Field required' }],
+      },
+      {
+        attempt: 2,
+        attemptedAt: '2026-09-29T11:00:00.000Z',
+        outcome: 'SUCCESS',
+        httpStatus: 201,
+        retryCount: 0,
+        operation: 'CREATE',
+        nerisIncidentId: 'FD09190828|4471|1798000000',
+        payloadHash: 'abc',
+        errors: [],
+      },
+    ];
+    const statusHistory = [
+      { status: 'SUBMITTED', at: '2026-09-29T11:00:00Z', current: false },
+      { status: 'REJECTED', at: '2026-09-30T09:00:00Z', current: true },
+    ];
+    mockLedger({ attempts, statusHistory } as never);
+    vi.doMock('./submissionRepository.js', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('./submissionRepository.js')>();
+      return {
+        ...actual,
+        getSubmissionRepository: () => ({
+          getSubmission: () =>
+            Promise.resolve({
+              incidentId: INCIDENT_ID,
+              status: 'REJECTED',
+              submissionStatus: 'ACCEPTED',
+              nerisIncidentId: 'FD09190828|4471|1798000000',
+              nerisStatus: 'REJECTED',
+              nerisStatusAt: 1_798_090_000,
+              lockedAt: 1_798_003_000,
+              lockedBy: 'MBR-0034',
+              lastPayloadHash: 'abc',
+              firstSubmittedAt: 1_798_003_600,
+              lastSubmittedAt: 1_798_003_600,
+              updatedAt: 1_798_095_000,
+            }),
+        }),
+      };
+    });
+    const { handler } = await import('./getSubmission.js');
+
+    const result = await handler(
+      buildEvent(OFFICER_AUTH, INCIDENT_ID),
+      {} as never,
+      () => undefined,
+    );
+
+    const body = JSON.parse((result as { body: string }).body) as Record<string, unknown>;
+    expect(body).toMatchObject({
+      nerisIncidentId: 'FD09190828|4471|1798000000',
+      nerisStatus: 'REJECTED',
+      payloadHash: 'abc',
+      editedSinceSubmission: true,
+      attempts,
+      statusHistory,
+    });
+  });
+
   it('returns 200 with submissionStatus and the failure reason when FAILED, read for the caller dept (AC4)', async () => {
+    mockLedger();
     const getSubmission = vi.fn().mockResolvedValue({
       incidentId: INCIDENT_ID,
       status: 'REJECTED',
@@ -110,11 +202,13 @@ describe('getSubmission handler', () => {
       status: 'REJECTED',
       submissionStatus: 'FAILED',
       submissionFailureReason: 'NERIS rejected the submission with HTTP 400',
+      ...EMPTY_LEDGER_FIELDS,
     });
     expect(getSubmission).toHaveBeenCalledWith('NICHOLS', INCIDENT_ID);
   });
 
   it('lets an officer read submission status', async () => {
+    mockLedger();
     const getSubmission = vi.fn().mockResolvedValue({
       incidentId: INCIDENT_ID,
       status: 'SUBMITTED',
@@ -138,6 +232,7 @@ describe('getSubmission handler', () => {
       incidentId: INCIDENT_ID,
       status: 'SUBMITTED',
       submissionStatus: 'RETRYING',
+      ...EMPTY_LEDGER_FIELDS,
     });
   });
 

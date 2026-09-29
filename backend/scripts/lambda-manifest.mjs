@@ -263,6 +263,47 @@ export const LAMBDA_ENTRIES = [
     function: 'submission-retry',
     entry: 'src/services/incident-service/retrySubmission.ts',
   },
+  // NERIS loop: validation, review lock, resubmission, status sync, reconciliation.
+  {
+    service: 'incident-service',
+    function: 'validate',
+    entry: 'src/services/incident-service/validateIncident.ts',
+  },
+  {
+    service: 'incident-service',
+    function: 'lock',
+    entry: 'src/services/incident-service/lockIncident.ts',
+  },
+  {
+    service: 'incident-service',
+    function: 'unlock',
+    entry: 'src/services/incident-service/unlockIncident.ts',
+  },
+  {
+    service: 'incident-service',
+    function: 'resubmit',
+    entry: 'src/services/incident-service/resubmitIncident.ts',
+  },
+  {
+    service: 'incident-service',
+    function: 'no-activity-report',
+    entry: 'src/services/incident-service/noActivityReport.ts',
+  },
+  {
+    service: 'incident-service',
+    function: 'neris-settings-consumer',
+    entry: 'src/services/incident-service/nerisSettingsConsumer.ts',
+  },
+  {
+    service: 'incident-service',
+    function: 'neris-status-poller',
+    entry: 'src/services/incident-service/neris/statusPoller.ts',
+  },
+  {
+    service: 'incident-service',
+    function: 'neris-reconciliation',
+    entry: 'src/services/incident-service/neris/reconciliation.ts',
+  },
   {
     service: 'reporting-service',
     function: 'losap-year-end',

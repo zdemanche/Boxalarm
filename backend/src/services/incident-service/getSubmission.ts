@@ -8,6 +8,8 @@ import {
   resolveTraceId,
 } from './authContext.js';
 import { getSubmissionRepository } from './submissionRepository.js';
+import { getDocumentClient, getTableName } from './repository.js';
+import { querySubmissionLedger } from './reviewRepository.js';
 
 export const handler: APIGatewayProxyHandlerV2WithLambdaAuthorizer<AuthorizerContext> = async (
   event,
@@ -68,6 +70,18 @@ export const handler: APIGatewayProxyHandlerV2WithLambdaAuthorizer<AuthorizerCon
         traceId,
       );
     }
+    // The ledger (also served as GET .../submissions): every attempt with its NERIS id,
+    // payload hash and NERIS's own errors, plus every NERIS status the poller has seen.
+    const ledger = await querySubmissionLedger(
+      getDocumentClient(),
+      getTableName(process.env),
+      deptId,
+      incidentId,
+    );
+    const editedSinceSubmission =
+      record.lastSubmittedAt !== undefined &&
+      record.updatedAt !== undefined &&
+      record.updatedAt > record.lastSubmittedAt;
     return {
       statusCode: 200,
       headers: { 'Content-Type': 'application/json' },
@@ -78,6 +92,16 @@ export const handler: APIGatewayProxyHandlerV2WithLambdaAuthorizer<AuthorizerCon
         ...(record.submissionFailureReason !== undefined
           ? { submissionFailureReason: record.submissionFailureReason }
           : {}),
+        nerisIncidentId: record.nerisIncidentId ?? null,
+        nerisStatus: record.nerisStatus ?? null,
+        nerisStatusAt: record.nerisStatusAt ?? null,
+        lockedAt: record.lockedAt ?? null,
+        lockedBy: record.lockedBy ?? null,
+        payloadHash: record.lastPayloadHash ?? null,
+        firstSubmittedAt: record.firstSubmittedAt ?? null,
+        editedSinceSubmission,
+        attempts: ledger.attempts,
+        statusHistory: ledger.statusHistory,
       }),
     };
   } catch (error) {

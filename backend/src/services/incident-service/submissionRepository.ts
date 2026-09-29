@@ -52,6 +52,13 @@ function toSubmissionRecord(incidentId: string, item: Record<string, unknown>): 
     ? item.submissionStatus
     : undefined;
   const failureReason = item.submissionFailureReason;
+  const ledgerFields = Object.fromEntries(
+    LEDGER_FIELDS.flatMap((field) =>
+      typeof item[field] === 'string' || typeof item[field] === 'number'
+        ? [[field, item[field]]]
+        : [],
+    ),
+  );
   return {
     incidentId,
     status: typeof item.status === 'string' ? item.status : '',
@@ -59,8 +66,22 @@ function toSubmissionRecord(incidentId: string, item: Record<string, unknown>): 
     ...(submissionStatus === 'FAILED' && typeof failureReason === 'string'
       ? { submissionFailureReason: failureReason }
       : {}),
+    ...ledgerFields,
   };
 }
+
+/** METADATA attributes the submission ledger reports when present. */
+const LEDGER_FIELDS = [
+  'nerisIncidentId',
+  'nerisStatus',
+  'nerisStatusAt',
+  'lockedAt',
+  'lockedBy',
+  'lastPayloadHash',
+  'firstSubmittedAt',
+  'lastSubmittedAt',
+  'updatedAt',
+] as const;
 
 export interface SubmissionAttemptInput {
   readonly outcome: SubmissionOutcome;
@@ -107,6 +128,15 @@ export interface SubmissionRecord {
   readonly status: string;
   readonly submissionStatus?: SubmissionStatus;
   readonly submissionFailureReason?: string;
+  readonly nerisIncidentId?: string;
+  readonly nerisStatus?: string;
+  readonly nerisStatusAt?: number;
+  readonly lockedAt?: number;
+  readonly lockedBy?: string;
+  readonly lastPayloadHash?: string;
+  readonly firstSubmittedAt?: number;
+  readonly lastSubmittedAt?: number;
+  readonly updatedAt?: number;
 }
 
 export interface RetrySubmissionResult {
