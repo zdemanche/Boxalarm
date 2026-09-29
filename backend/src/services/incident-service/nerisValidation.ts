@@ -455,8 +455,18 @@ export function localValidation(input: LocalValidationInput): {
   // and the casualty outcome codes, never demographics) must fit NERIS. An entry without a type
   // is never sent as `{}` — it blocks here instead.
   const casualties = core.casualty_rescues;
-  if (casualties !== undefined && casualties !== null) {
-    const entries = Array.isArray(casualties) ? casualties : [casualties];
+  if (casualties !== undefined && casualties !== null && !Array.isArray(casualties)) {
+    // NERIS takes a list; anything else would be dropped from the payload without a word
+    // (round 2b, R1), so it blocks instead.
+    blocking.push({
+      path: 'fields.casualty_rescues',
+      code: 'CASUALTY_INCOMPLETE',
+      section: 'core',
+      message:
+        'The casualties and rescues are not stored as a list, so none of them can be sent to NERIS. Re-enter them.',
+    });
+  } else if (Array.isArray(casualties)) {
+    const entries: unknown[] = casualties;
     const untyped = entries.filter((entry) => {
       const type = (entry as { type?: unknown } | null)?.type;
       return typeof type !== 'string' || type.length === 0;

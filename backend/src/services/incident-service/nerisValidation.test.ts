@@ -364,6 +364,14 @@ describe('casualties and rescues', () => {
     }
   });
 
+  it('blocks casualties stored as a single object rather than a list (round 2b, R1)', () => {
+    for (const api of [NERIS_API, undefined]) {
+      const result = withCasualties({ type: 'NONFF' }, api);
+      const issue = result.blocking.find((i) => i.code === 'CASUALTY_INCOMPLETE');
+      expect(issue?.message).toMatch(/not stored as a list/);
+    }
+  });
+
   it('blocks a bad outcome code but not a bad demographic that is never sent', () => {
     const bad = withCasualties(
       [{ type: 'NONFF', casualty: { injury_or_noninjury: { type: 'INJURED_SOMEWHAT' } } }],
