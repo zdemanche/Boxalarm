@@ -65,8 +65,10 @@ test('sign-out asks first and warns that the phone will stop receiving pages', a
 
   expect(mockSignOut).not.toHaveBeenCalled();
   const [title, message, buttons] = alertSpy.mock.calls[0]!;
-  expect(title).toMatch(/stop getting app pages/i);
-  expect(message).toMatch(/stop on every phone or tablet you use/i);
+  expect(title).toBe('Sign out and stop getting pages on this phone?');
+  expect(message).toMatch(
+    /^Boxalarm pages stop on this phone until you sign in again; your other signed-in devices keep getting pages\./,
+  );
   expect(message).toMatch(/continue only if they are set up for you/i);
   const cancel = buttons!.find((button) => button.style === 'cancel')!;
   const confirm = buttons!.find((button) => button.style === 'destructive')!;
@@ -82,4 +84,12 @@ test('sign-out asks first and warns that the phone will stop receiving pages', a
 test('without a phone number on file, sign-out does not promise text or voice pages', () => {
   expect(signOutWarning('')).toMatch(/no phone number is on file/i);
   expect(signOutWarning('203-555-0100')).toMatch(/to 203-555-0100 continue only if/);
+});
+
+test('the Sign out button names the consequence for this phone', async () => {
+  const { findByRole } = await render(<MeHomeScreen />);
+
+  expect(
+    await findByRole('button', { name: 'Sign out. Boxalarm pages stop on this phone.' }),
+  ).toBeTruthy();
 });

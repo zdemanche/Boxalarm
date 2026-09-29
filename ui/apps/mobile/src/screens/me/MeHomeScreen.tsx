@@ -35,14 +35,15 @@ function NavRow({
 }
 
 /**
- * Sign-out is not a routine tap on this app. The server keeps one app registration per member
- * (personnel-service pushTokens) and sign-out deletes it, so app pages stop on EVERY device the
- * member uses, not just this one (alert-ux C7, review MJ-5) - say that, and do not promise text or
- * voice pages the member may not have. Staying signed in is the default.
+ * Sign-out is not a routine tap on this app: it removes THIS installation's push registration
+ * (personnel-service pushTokens, one registration per device since fix/page-chain), so this phone
+ * stops being paged while the member's other signed-in devices keep getting pages (alert-ux C7,
+ * review MJ-5 / round 2 C-9). Text or voice pages are mentioned only as conditional. Staying signed
+ * in is the default.
  */
 export function signOutWarning(phone: string | null | undefined): string {
   const appPages =
-    'Pages to the Boxalarm app stop on every phone or tablet you use until you sign in again.';
+    'Boxalarm pages stop on this phone until you sign in again; your other signed-in devices keep getting pages.';
   const other = phone
     ? ` Text and voice pages to ${phone} continue only if they are set up for you - check with your officer if you are not sure.`
     : ' No phone number is on file, so you would get no text or voice pages either.';
@@ -51,7 +52,7 @@ export function signOutWarning(phone: string | null | undefined): string {
 
 export function confirmSignOut(signOut: () => Promise<void>, phone?: string | null): void {
   Alert.alert(
-    'Sign out and stop getting app pages?',
+    'Sign out and stop getting pages on this phone?',
     signOutWarning(phone),
     [
       { text: 'Stay signed in', style: 'cancel' },
@@ -177,7 +178,7 @@ export function MeHomeScreen() {
         <Button
           label="Sign out"
           variant="danger"
-          accessibilityLabel="Sign out. Boxalarm app pages stop on all your devices."
+          accessibilityLabel="Sign out. Boxalarm pages stop on this phone."
           onPress={() => confirmSignOut(signOut, profile?.phone)}
         />
       </View>
