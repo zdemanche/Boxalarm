@@ -246,7 +246,14 @@ function isPermanentRejection(error: unknown): boolean {
   return status >= 400 && status < 500 && status !== 401 && status !== 408 && status !== 429;
 }
 
+/**
+ * lastError of a row the server answered 401 even after a silent renewal. Still retried (a
+ * session can recover), but it is not "no signal" and must not be worded as such (review m9).
+ */
+export const SIGN_IN_REJECTED = "The server did not accept this phone's sign-in";
+
 function describeError(error: unknown): string {
+  if (error instanceof ApiError && error.problem.status === 401) return SIGN_IN_REJECTED;
   if (error instanceof ApiError) return error.problem.detail ?? error.problem.title;
   return error instanceof Error ? error.message : String(error);
 }

@@ -240,6 +240,17 @@ test('a 409 from the server reads "Not on the roster" with a resend', async () =
   ).toBeTruthy();
 });
 
+test('a 401 reads as a sign-in problem, not as no signal (review m9)', async () => {
+  postOutcome = async () => {
+    throw new ApiError({ type: 'about:blank', title: 'Unauthorized', status: 401, traceId: 't' });
+  };
+  await renderScreen();
+
+  await tap(/^Not responding/);
+
+  expect(await screen.findByText('Not sent - sign-in problem')).toBeTruthy();
+});
+
 test('each answer carries a clientAnswerId and answeredAtMs', async () => {
   await renderScreen();
   await tap(/^Not responding/);

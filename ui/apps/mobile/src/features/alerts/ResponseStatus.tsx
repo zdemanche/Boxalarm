@@ -67,6 +67,14 @@ export function responseDeliveryCopy(delivery: ResponseDelivery): Copy {
           "The server got this answer but did not put it on the officer's roster. Send it again, or tell your officer by radio.",
         spoken: "not recorded on the officer's roster",
       };
+    case 'signInRejected':
+      return {
+        role: 'danger',
+        chip: 'Not sent - sign-in problem',
+        detail:
+          "Saved on this phone, but the server did not accept this phone's sign-in, so the officer cannot see it. It keeps retrying - tell your officer by radio.",
+        spoken: 'not sent, the server did not accept this phone’s sign-in',
+      };
     case 'disputed':
       return {
         role: 'danger',

@@ -670,6 +670,17 @@ describe('alert responses (RESPONSE)', () => {
     expect((await store.find('response-sup'))?.lastError).toBe(syncManager.RESPONSE_NOT_RECORDED);
   });
 
+  test('a 401 that survives renewal is retried but recorded as a sign-in problem, not a network one', async () => {
+    mockApiRequest.mockRejectedValueOnce(problem(401, 'Unauthorized'));
+
+    await syncManager.enqueueResponse('response-401', 'D8', 'x', { ackStatus: 'RESPONDING' });
+    await flush();
+
+    const row = await store.find('response-401');
+    expect(row?.status).toBe('FAILED');
+    expect(row?.lastError).toBe(syncManager.SIGN_IN_REJECTED);
+  });
+
   test('answers to different calls do not supersede each other', async () => {
     mockApiRequest.mockRejectedValue(new Error('Network request failed'));
 

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { AccessibilityInfo, Platform } from 'react-native';
-import { RESPONSE_NOT_RECORDED } from '../../sync/syncManager';
+import { RESPONSE_NOT_RECORDED, SIGN_IN_REJECTED } from '../../sync/syncManager';
 import { useOutboxItem, type OutboxItemState } from '../../sync/useOutboxItem';
 import { ackStatusLabel } from './ackStatus';
 import {
@@ -35,7 +35,8 @@ export type ResponseDelivery =
   | 'unconfirmed'
   | 'unsaved'
   | 'notRecorded'
-  | 'disputed';
+  | 'disputed'
+  | 'signInRejected';
 
 export interface MyAnswer {
   ackStatus: ResponseAnswer;
@@ -69,7 +70,7 @@ export function deliveryFor(
     case 'SYNCING':
       return isOnline ? 'sending' : 'queued';
     case 'FAILED':
-      return 'queued';
+      return lastError === SIGN_IN_REJECTED ? 'signInRejected' : 'queued';
     case 'REJECTED':
       return lastError === RESPONSE_NOT_RECORDED ? 'notRecorded' : 'refused';
     case 'SYNCED':
@@ -108,6 +109,8 @@ export function deliveryAnnouncement(answer: MyAnswer, delivery: ResponseDeliver
       return `Your change to ${what} did not reach the officer's roster. Send it again, or tell your officer by radio.`;
     case 'disputed':
       return `The officer's roster does not show your answer, ${what}. Send it again or keep what the roster shows.`;
+    case 'signInRejected':
+      return `Your response, ${what}, is not sent: the server did not accept this phone's sign-in. It keeps retrying. Tell your officer by radio.`;
   }
 }
 
@@ -242,7 +245,8 @@ export function useAlertResponse(
         delivery === 'refused' ||
         delivery === 'unsaved' ||
         delivery === 'notRecorded' ||
-        delivery === 'disputed',
+        delivery === 'disputed' ||
+        delivery === 'signInRejected',
     );
   }, [answer, delivery]);
 
