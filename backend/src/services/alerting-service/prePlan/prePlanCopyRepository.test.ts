@@ -10,6 +10,7 @@ import {
   findPrePlanByAddress,
   findPrePlanNear,
   MAX_HYDRANTS_PER_CELL,
+  PrePlanLookupIncompleteError,
   type PrePlanMatch,
 } from './prePlanCopyRepository.js';
 
@@ -553,14 +554,14 @@ describe('capped reads are reported, never silent (minor 9)', () => {
     return { send, client: { send } as unknown as DynamoDBDocumentClient };
   }
 
-  it('an address lookup that hits its cap shows no pre-plan (a partial set cannot be resolved) and says why', async () => {
+  it('N7: an address lookup that hits its cap is "unavailable" (throws), never "no match", and says why', async () => {
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
     const { client, send } = endlessIndex(prePlanCopy('OCC-1', '123 Main St'));
 
-    expect(
-      await findPrePlanByAddress(client, TABLE, DEPT_ID, '123 Main St', undefined, HOME),
-    ).toBeUndefined();
+    await expect(
+      findPrePlanByAddress(client, TABLE, DEPT_ID, '123 Main St', undefined, HOME),
+    ).rejects.toBeInstanceOf(PrePlanLookupIncompleteError);
 
     expect(send).toHaveBeenCalledTimes(5);
     expect(errorSpy.mock.calls.join('\n')).toContain('preplan_copy.query_truncated');

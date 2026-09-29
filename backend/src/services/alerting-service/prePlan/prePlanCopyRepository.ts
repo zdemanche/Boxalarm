@@ -55,6 +55,14 @@ const MAX_PAGES_PER_QUERY = 5;
 const ADDRESS_CANDIDATE_LIMIT = 25;
 const METRIC_NAMESPACE = 'Boxalarm/alerting-pre-plan';
 
+/** The address read hit its cap: the detail shows "pre-plan unavailable", never "no match". */
+export class PrePlanLookupIncompleteError extends Error {
+  constructor(key: string) {
+    super(`address candidates for "${key}" exceeded the read cap`);
+    this.name = 'PrePlanLookupIncompleteError';
+  }
+}
+
 interface QueryResult {
   readonly items: Record<string, unknown>[];
   /** The page cap stopped the read with items left: the result is a subset. */
@@ -222,9 +230,10 @@ export async function findPrePlanByAddress(
     Limit: ADDRESS_CANDIDATE_LIMIT,
   });
   if (truncated) {
-    // Unit resolution over a partial candidate set could pick the wrong plan: show none.
+    // Unit resolution over a partial candidate set could pick the wrong plan, and "no match"
+    // would be a lie: report the lookup as unavailable.
     reportTruncation('address', deptId, normalized.key);
-    return undefined;
+    throw new PrePlanLookupIncompleteError(normalized.key);
   }
   // Each candidate is re-read from its own address (never trusting stored unit/town fields,
   // which an older normalizer may have written) and judged against the dispatch's locality.
