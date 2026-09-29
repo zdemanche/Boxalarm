@@ -31,6 +31,8 @@ export interface RegisterTokenBody {
    * multi-device support; without it the registration replaces the member's legacy entry.
    */
   readonly deviceId?: string;
+  /** Optional, APNS only: `development` | `production` (default). */
+  readonly apnsEnvironment?: 'development' | 'production';
 }
 
 export function parseRegisterBody(raw: string | undefined | null): RegisterTokenBody {
@@ -50,7 +52,21 @@ export function parseRegisterBody(raw: string | undefined | null): RegisterToken
     throw new Error('platform is required and must be one of APNS, FCM');
   }
   const deviceId = parseDeviceId(body.deviceId);
-  return { platform: platform as Platform, token, ...(deviceId ? { deviceId } : {}) };
+  const apnsEnvironment = body.apnsEnvironment;
+  if (
+    apnsEnvironment !== undefined &&
+    apnsEnvironment !== null &&
+    apnsEnvironment !== 'development' &&
+    apnsEnvironment !== 'production'
+  ) {
+    throw new Error('apnsEnvironment, if present, must be development or production');
+  }
+  return {
+    platform: platform as Platform,
+    token,
+    ...(deviceId ? { deviceId } : {}),
+    ...(platform === 'APNS' && apnsEnvironment ? { apnsEnvironment } : {}),
+  };
 }
 
 function extractTraceId(event: GuardEvent): string {
@@ -113,6 +129,7 @@ async function registerToken(
     valid: true,
     registeredAt: Date.now(),
     ...(body.deviceId ? { deviceId: body.deviceId } : {}),
+    ...(body.apnsEnvironment ? { apnsEnvironment: body.apnsEnvironment } : {}),
   };
 
   let outcome;

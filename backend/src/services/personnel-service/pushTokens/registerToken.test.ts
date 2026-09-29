@@ -53,6 +53,27 @@ describe('parseRegisterBody', () => {
     ).toThrow('deviceId');
   });
 
+  // Review MAJOR-2: the APNs environment travels with the token so the worker uses the
+  // matching host; omitted means production, and it is ignored for FCM.
+  it('parses an optional APNs environment and rejects an unknown one', async () => {
+    const { parseRegisterBody } = await import('./registerToken.js');
+    expect(
+      parseRegisterBody(
+        JSON.stringify({ platform: 'APNS', token: 't', apnsEnvironment: 'development' }),
+      ),
+    ).toEqual({ platform: 'APNS', token: 't', apnsEnvironment: 'development' });
+    expect(
+      parseRegisterBody(
+        JSON.stringify({ platform: 'FCM', token: 't', apnsEnvironment: 'production' }),
+      ),
+    ).toEqual({ platform: 'FCM', token: 't' });
+    expect(() =>
+      parseRegisterBody(
+        JSON.stringify({ platform: 'APNS', token: 't', apnsEnvironment: 'sandbox' }),
+      ),
+    ).toThrow('apnsEnvironment');
+  });
+
   it('parses a valid body', async () => {
     const { parseRegisterBody } = await import('./registerToken.js');
     expect(parseRegisterBody(JSON.stringify({ platform: 'FCM', token: 'tok-1' }))).toEqual({

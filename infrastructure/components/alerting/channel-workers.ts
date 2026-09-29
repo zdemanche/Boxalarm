@@ -42,6 +42,9 @@ const PLACEHOLDER_ENDPOINT_URL: Record<VendorChannel, string> = {
  *   }                                     //   Alerts entitlement (#4) is granted
  *   `time-sensitive` relies on the app's Time Sensitive Notifications capability
  *   (ui/apps/mobile/ios/Boxalarm/Boxalarm.entitlements); `critical` on #4.
+ *   Each iOS device registers the APNs environment its build is signed for; the worker uses
+ *   `apns` for production devices (the default) and `apnsSandbox` for development-signed ones,
+ *   for real pages and self-test/canary pushes alike (a token only works on its own host).
  *   The sandbox secret always targets api.sandbox.push.apple.com and is refused if it
  *   declares "production".
  *
@@ -54,8 +57,10 @@ const PLACEHOLDER_ENDPOINT_URL: Record<VendorChannel, string> = {
  * service account must be in the app's own Firebase project (another project gets
  * SENDER_ID_MISMATCH on every self-test).
  *
- * Self-test and canary messages (isTest) read only the sandbox secrets and fail closed when
- * one is unset (architecture §1.3).
+ * Self-test and canary messages (isTest) ring the member's real device: APNs by the device's
+ * environment as above, with a payload labelled TEST; FCM with the FCM sandbox secret,
+ * validate_only, failing closed when it is unset. Isolation for a test is its one-member
+ * audience, its TEST label and no escalation - not a separate APNs host.
  */
 export interface PushGatewaySecrets {
   apns: aws.secretsmanager.Secret;
@@ -118,7 +123,7 @@ export class ChannelWorkers extends pulumi.ComponentResource {
       apns: pushSecret("apns", "APNs .p8 token-auth key (values set out-of-band)"),
       apnsSandbox: pushSecret(
         "apns-sandbox",
-        "APNs sandbox credentials for self-test/canary (E1-S8)",
+        "APNs credentials for development-signed (Xcode) app builds (sandbox host)",
       ),
       fcm: pushSecret("fcm", "FCM service-account JSON (values set out-of-band)"),
       fcmSandbox: pushSecret(
@@ -221,8 +226,7 @@ function pushWorkerCredentials(secrets: PushGatewaySecrets): WorkerCredentials {
     environment: {
       APNS_SECRET_ID: secrets.apns.name,
       FCM_SECRET_ID: secrets.fcm.name,
-      // Self-test and canary messages (isTest=true) must use the sandbox credentials, never
-      // the prod ones (architecture §1.3).
+      // APNs: development-signed devices (any message); FCM: self-test/canary (validate_only).
       APNS_SANDBOX_SECRET_ID: secrets.apnsSandbox.name,
       FCM_SANDBOX_SECRET_ID: secrets.fcmSandbox.name,
     },

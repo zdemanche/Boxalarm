@@ -18,7 +18,14 @@ export interface PushNotification {
   readonly collapseKey: string;
   /** The dispatch's own fields, sent as their own keys so the app need not parse `body`. */
   readonly alert?: PushAlertFields | undefined;
+  /**
+   * A self-test/canary push. It reaches the real device through the real gateway, so it is
+   * labelled: the title says TEST and the data carries `test: "true"`.
+   */
+  readonly isTest?: boolean | undefined;
 }
+
+export const TEST_TITLE_PREFIX = 'TEST — ';
 
 export interface PushAlertFields {
   readonly incidentType: string;
@@ -145,11 +152,15 @@ function routingFields(notification: PushNotification): Record<string, string> {
       ? { toneSequence: String(notification.toneSequence) }
       : {}),
     ...alertFields(notification),
+    ...(notification.isTest ? { test: 'true' } : {}),
   };
 }
 
 function boundedTitle(notification: PushNotification): string {
-  return truncateUtf8(notification.title, PUSH_TEXT_MAX_BYTES.title);
+  const title = notification.isTest
+    ? `${TEST_TITLE_PREFIX}${notification.title}`
+    : notification.title;
+  return truncateUtf8(title, PUSH_TEXT_MAX_BYTES.title);
 }
 
 function boundedBody(notification: PushNotification): string {

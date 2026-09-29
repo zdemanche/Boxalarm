@@ -13,6 +13,8 @@ export interface ContactChannelSnapshot {
    * has one PUSH entry per device; entries registered before multi-device support carry none.
    */
   readonly deviceId?: string;
+  /** PUSH, iOS only: the token's APNs environment (`development` | `production`, default). */
+  readonly apnsEnvironment?: string;
 }
 
 export type ContactChannelKey = 'PUSH' | 'SMS' | 'VOICE';
@@ -54,6 +56,8 @@ export type ResolvePushTargetResult =
 export interface PushDeviceTarget {
   readonly token: string;
   readonly platform?: string;
+  /** `development` for a development-signed iOS build; otherwise production. */
+  readonly apnsEnvironment?: 'development' | 'production';
   /** Stable per device: the installation id, else a digest of the token (legacy entries). */
   readonly deviceKey: string;
 }
@@ -85,6 +89,9 @@ export function resolvePushTargets(
     targets.push({
       token: entry.token,
       ...(entry.platform ? { platform: entry.platform } : {}),
+      ...(entry.apnsEnvironment === 'development' || entry.apnsEnvironment === 'production'
+        ? { apnsEnvironment: entry.apnsEnvironment }
+        : {}),
       deviceKey:
         typeof entry.deviceId === 'string' && entry.deviceId.length > 0
           ? entry.deviceId

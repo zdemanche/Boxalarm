@@ -68,7 +68,10 @@ interface DeliverChannelMessageCommon {
   /** Push only: the dispatch's own fields, sent to the app as their own keys. */
   readonly alert?: PushAlertFields;
   readonly env: NodeJS.ProcessEnv;
-  /** Self-test/canary message — sent with the sandbox provider credentials. */
+  /**
+   * Self-test/canary message: labelled TEST; APNs on the device's own environment, FCM
+   * validate_only with its sandbox credentials, SMS/voice with the sandbox vendor credentials.
+   */
   readonly isTest?: boolean;
 }
 
@@ -214,7 +217,7 @@ interface GuardRef {
 
 /**
  * Per-device progress of one push page, on its per-channel send guard: SENT (the gateway
- * accepted it), INVALID (the token is dead), REFUSED (a self-test the sandbox refused for a
+ * accepted it), INVALID (the token is dead), REFUSED (a self-test the provider refused for a
  * configuration reason). A redelivery after a transient failure skips the SENT and INVALID
  * devices, so a member's phone is not buzzed twice because their tablet's gateway call failed.
  */
@@ -325,10 +328,9 @@ async function deliverPushToDevices(
       reason: result.reason,
       isTest,
     });
-    // A self-test goes to the APNs sandbox host, which rejects every production (TestFlight /
-    // App Store) token, so its rejections say nothing about the gateway configuration or the
-    // token. It gets its own metric (TokenInvalid feeds the misconfiguration alarm) and never
-    // disables a token.
+    // A self-test's rejection fails that test (the member sees it) but never disables a token or
+    // feeds the paging misconfiguration alarm (TokenInvalid): a test must not change what real
+    // pages do. A really dead token is invalidated by the next real page.
     emitOutcomeMetric(METRIC_NAMESPACE, isTest ? 'TestTokenInvalid' : 'TokenInvalid', channel);
     invalidReasons.push(result.reason);
     if (isTest) {
@@ -406,10 +408,14 @@ function sendPushToDevice(
       // Per-tone notification identity (architecture §5.1 B4): tone 2 never collapses into 1.
       collapseKey: isPrompt ? `${dispatchId}#MUTUALAID` : `${dispatchId}#${params.toneSequence}`,
       ...(params.alert ? { alert: params.alert } : {}),
+      ...(params.isTest === true ? { isTest: true } : {}),
     },
     platform,
     env,
-    { isTest: params.isTest === true },
+    {
+      isTest: params.isTest === true,
+      ...(device.apnsEnvironment ? { apnsEnvironment: device.apnsEnvironment } : {}),
+    },
   );
 }
 

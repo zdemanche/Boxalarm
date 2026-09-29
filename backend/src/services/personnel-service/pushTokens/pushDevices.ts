@@ -25,6 +25,12 @@ export interface ContactChannelEntry {
   readonly valid?: boolean;
   readonly registeredAt?: number;
   readonly deviceId?: string;
+  /**
+   * iOS: the APNs environment the app build is signed for - `development` (Xcode) or
+   * `production` (TestFlight / App Store). The push worker sends on that environment's host;
+   * an entry without it is production.
+   */
+  readonly apnsEnvironment?: 'development' | 'production';
 }
 
 /** Bounds the fan to one member's devices; the oldest registration is dropped past it. */

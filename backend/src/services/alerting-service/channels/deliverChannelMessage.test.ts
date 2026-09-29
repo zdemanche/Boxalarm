@@ -810,6 +810,26 @@ describe('deliverChannelMessage — multi-device push', () => {
     });
   });
 
+  // Review MAJOR-2: each iOS device is sent on its own build's APNs environment, for a real
+  // page and a labelled self-test alike.
+  it('sends each device on its registered APNs environment, and labels a self-test', async () => {
+    const sendPush = vi.fn().mockResolvedValue({ outcome: 'sent' });
+    mockPush(sendPush);
+    const { deliverChannelMessage } = await import('./deliverChannelMessage.js');
+
+    await deliverChannelMessage(fakeDdb(vi.fn().mockResolvedValue({})), 'alerting-table', {
+      ...params,
+      isTest: true,
+      contactChannels: [{ ...PHONE, apnsEnvironment: 'development' }, TABLET],
+    });
+
+    const calls = sendPush.mock.calls as [{ isTest?: boolean }, string, unknown, object][];
+    expect(calls.map(([n, , , options]) => [n.isTest, options])).toEqual([
+      [true, { isTest: true, apnsEnvironment: 'development' }],
+      [true, { isTest: true }],
+    ]);
+  });
+
   it('one device accepted, one transiently failed: FAILED and rethrown, and the redelivery sends only to the failed device', async () => {
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const sendPush = vi

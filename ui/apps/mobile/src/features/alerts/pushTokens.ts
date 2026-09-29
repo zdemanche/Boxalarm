@@ -1,3 +1,4 @@
+import Config from 'react-native-config';
 import { apiRequest, type AuthTokenSource } from '../../lib/apiClient';
 import { getDeviceInstallationId } from './deviceInstallationId';
 import { firebaseNativePushBridge } from './nativePushBridge';
@@ -20,6 +21,19 @@ export function getNativePushBridge(): NativePushBridge {
 }
 
 /**
+ * The APNs environment this build's `aps-environment` entitlement is signed for: `development`
+ * for a debug build installed from Xcode, `production` for TestFlight and App Store builds. The
+ * backend sends every push - self-test included - on this environment's host, because a token
+ * only works on its own. `APNS_ENVIRONMENT` in the build's .env overrides it (e.g. a release
+ * build signed for development).
+ */
+export function apnsEnvironment(): 'development' | 'production' {
+  const configured = (Config as Record<string, string | undefined>).APNS_ENVIRONMENT;
+  if (configured === 'development' || configured === 'production') return configured;
+  return __DEV__ ? 'development' : 'production';
+}
+
+/**
  * Registers this installation's token. `deviceId` makes it one of the member's devices rather
  * than a replacement for their only one: signing in here never stops another device's pages.
  */
@@ -34,7 +48,11 @@ export async function registerPushToken(
     apiBaseUrl,
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ ...device, deviceId }),
+    body: JSON.stringify({
+      ...device,
+      deviceId,
+      ...(device.platform === 'APNS' ? { apnsEnvironment: apnsEnvironment() } : {}),
+    }),
   });
 }
 

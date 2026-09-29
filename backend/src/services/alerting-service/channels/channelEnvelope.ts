@@ -278,6 +278,8 @@ export interface ContactChannelSnapshot {
   readonly phoneNumber?: string;
   /** PUSH only: the registering app installation; one PUSH entry per device. */
   readonly deviceId?: string;
+  /** PUSH, iOS only: the token's APNs environment (`development` | `production`, default). */
+  readonly apnsEnvironment?: string;
 }
 
 export type ResolveChannelTargetResult =

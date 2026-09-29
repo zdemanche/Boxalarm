@@ -21,11 +21,28 @@ test('registerPushToken POSTs the device token to the member push-tokens route',
   expect(calls[0]?.url).toBe('https://api.example.test/api/v1/personnel/members/MBR-1/push-tokens');
   expect(calls[0]?.init.method).toBe('POST');
   // deviceId: one PUSH entry per installation, so this device never replaces another.
+  // apnsEnvironment: the backend sends on this build's APNs host (Jest runs as a __DEV__ build).
   expect(JSON.parse(calls[0]?.init.body as string)).toEqual({
     platform: 'APNS',
     token: 'device-token',
     deviceId: '0b6f1c2e-5d0a-4d9e-9b51-1c2f3a4b5c6d',
+    apnsEnvironment: 'development',
   });
+});
+
+test('an FCM registration carries no APNs environment', async () => {
+  const calls: { init: RequestInit }[] = [];
+  globalThis.fetch = jest.fn(async (_url: string, init: RequestInit) => {
+    calls.push({ init });
+    return new Response(JSON.stringify({ registered: true }), { status: 200 });
+  }) as unknown as typeof fetch;
+
+  await registerPushToken('MBR-1', tokens, 'https://api.example.test', {
+    platform: 'FCM',
+    token: 'fcm-token',
+  });
+
+  expect(JSON.parse(calls[0]?.init.body as string)).not.toHaveProperty('apnsEnvironment');
 });
 
 test("revokePushToken DELETEs only this installation's entry", async () => {
