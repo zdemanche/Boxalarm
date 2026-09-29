@@ -45,16 +45,45 @@ To reverse this, change the payload builder (`incident-service/neris/payload.ts`
 | Minor 15 test fidelity | Mostly fixed. The fake server is strict, and there are tests for lock/submit/retry/riding enforcement and for schedule-name uniqueness. There are no axe unit checks, because only `@axe-core/playwright` is installed (open, below). |
 | Minor 16 digest-only rejections | Fixed by M6's immediate inbox item. |
 
+## Round 2 dispositions
+
+The round-2 review (`.analysis/neris-loop-review-round2.md`) approved with minors. Fixed on the branch:
+
+| Finding | Outcome |
+|---|---|
+| N1 failure after success | A create refused with any 422 while the NERIS id can be predicted is looked up first and adopted. A failure write is conditional on the report not being ACCEPTED. A miss is treated as superseded, and no retry is scheduled. |
+| N2 send after unlock/edit | The worker re-reads the report (strongly consistent) right before the POST/PUT. It abandons without sending if the report is unlocked, no longer in flight, or its `contentVersion` moved. The lock pins `lockedContentVersion`, and the lock's context reads are consistent. |
+| N3 staffing missed the pin | The riding consumer bumps `contentVersion` in the same transaction as the staffing write, conditioned on not locked. |
+| N4 untyped casualty | Blocks lock (`CASUALTY_INCOMPLETE`). It is never sent as `{}`. |
+| N5 casualty decision | Outcome codes are sent (decision above). |
+| N6 missing-record loop | Given up on after 3 nightly checks: `nerisMissingAt` is set and `neris.incident.missing` goes to the owner, the locker and the officers. There are alarms on NerisStatusPollExpired, ReconciliationDriftDetected and NerisRecordMissing. |
+| N7 kill switch | Submit and retry answer 409 `SUBMISSIONS_DISABLED` or `NOT_CONFIGURED`. A retry already scheduled is recorded without a notice or an alarm. |
+| N8 schema version skew | `GET /incidents/neris-schema?version=` serves the report's pin. The web asks for it. |
+| N9 entity sync | The row gets a FAILED state with its reason. The worker has no async retry and an on-failure SQS destination with an alarm. A failed invoke resets the row. Before a create, the existing station or unit is looked up by station id or CAD designation. |
+| N10 timeout budget | 4 s per call. One report per invocation, a 90 s worker timeout and a 540 s queue visibility timeout. |
+| N11 consistent lock reads | Folded into N2. |
+| UNDETERMINED mixed | Blocks lock (`UNDETERMINED_WITH_TYPES`). |
+| Fake server fidelity | PUT bodies are validated. A duplicate create is refused. The entity GET is served. |
+| Axe | Playwright axe covers the fire-protection step with a filled module. |
+
+Deliberately not done (reviewer: skip):
+
+- **N12 remainder:** string patterns and formats are not compiled into the schema.
+- **N14:** `editedSinceSubmission` still has edge-case false positives, and the poll cost is unchanged.
+- **S2:** free-text fields inside modules.
+- **S3:** empty `additional_attributes`.
+- **Minor 14:** below.
+
 ## Still open
 
 - **Unverified against a live NERIS account.** No authenticated call has been made:
   - 201/422 bodies;
-  - the duplicate-create response, which the code assumes is 409 or a 422 saying it "already exists";
+  - the duplicate-create response. The code now adopts on any 409 or 422 once the record can be found by id;
   - approval-status behaviour;
   - the entity/station/unit responses.
 
   Paths, auth and payload shapes are checked against both live OpenAPI documents only.
 - **Minor 14.** The scheduled NERIS jobs sweep `NERIS_SCANNER_DEPT_ID` (a comma list, from Pulumi `deptId`). This matches the other scanners. A second department means a config change, not a code change.
 - **Push/email for NERIS failures** still arrive through the daily digest; only the inbox item is immediate.
-- **Axe checks** for the new panels need a unit-level axe package. There are none in the web app today, and no dependency was added.
+- **Axe unit checks** for the new panels need a unit-level axe package, which the web app does not have. The Playwright axe e2e now covers the module editor with a module filled in.
 - **The web module editor** does not refresh an open draft when the same module changes elsewhere.
