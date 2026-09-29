@@ -76,6 +76,8 @@ interface Recorded {
 let server: Server;
 let baseUrl: string;
 const requests: Recorded[] = [];
+/** Records this fake NERIS already holds: a second create of the same id is refused. */
+const created = new Set<string>();
 
 function send(res: ServerResponse, status: number, body?: unknown): void {
   res.writeHead(status, { 'content-type': 'application/json' });
@@ -128,13 +130,24 @@ function route(req: Recorded, res: ServerResponse): void {
     if (!/^(FD|VN|FM|FA)\d{8}$/.test(segments[1]!)) return send(res, 422, { detail: 'bad entity' });
     const detail = nerisDetail(payload);
     if (detail.length > 0) return send(res, 422, { detail });
+    // NERIS ids are deterministic (entity|number|call_create): a repeat create is refused.
+    // The real duplicate response is undocumented; this is the shape the worker must survive.
+    if (created.has(NERIS_ID)) {
+      return invalid(res, ['body'], 'Incident already exists', 'value_error');
+    }
+    created.add(NERIS_ID);
     return send(res, 201, {
       neris_id: NERIS_ID,
       incident_status: { status: 'SUBMITTED', last_modified: '2026-09-29T10:00:00Z' },
     });
   }
   if (segments[0] === 'incident' && segments.length === 3 && segments[2] === NERIS_ID) {
-    if (req.method === 'PUT') return send(res, 200, { last_modified: '2026-09-29T11:00:00Z' });
+    if (req.method === 'PUT') {
+      // PUT by id takes the same IncidentPayload as create, validated the same way.
+      const detail = nerisDetail(payload);
+      if (detail.length > 0) return send(res, 422, { detail });
+      return send(res, 200, { last_modified: '2026-09-29T11:00:00Z' });
+    }
     if (req.method === 'GET') {
       return send(res, 200, {
         neris_id: NERIS_ID,
@@ -178,6 +191,21 @@ function route(req: Recorded, res: ServerResponse): void {
       );
     }
     return send(res, 201, { neris_uid: 'nar-1', month_year: payload.month_year });
+  }
+  if (segments[0] === 'entity' && segments.length === 2 && req.method === 'GET') {
+    return send(res, 200, {
+      neris_id: ENTITY,
+      name: 'Nichols FD',
+      stations: [
+        {
+          neris_id: `${ENTITY}S001`,
+          station_id: 'STA1',
+          units: [
+            { neris_id: `${ENTITY}S001U001`, cad_designation_1: 'E1', type: 'ENGINE_STRUCT' },
+          ],
+        },
+      ],
+    });
   }
   if (segments[0] === 'entity' && segments[2] === 'station' && req.method === 'POST') {
     if (segments.length === 3) return send(res, 201, { neris_id: `${ENTITY}S001`, version: 1 });
@@ -243,6 +271,7 @@ const PAYLOAD = {
 describe('NERIS client against a fake NERIS server', () => {
   beforeEach(() => {
     requests.length = 0;
+    created.clear();
   });
 
   it('gets a client_credentials token under /v1 and sends Bearer + User-Agent on the create', async () => {
@@ -352,6 +381,38 @@ describe('NERIS client against a fake NERIS server', () => {
     });
     const encoded = `/v1/incident/${ENTITY}/${encodeURIComponent(NERIS_ID)}`;
     expect(requests.filter((r) => r.url === encoded).map((r) => r.method)).toEqual(['PUT', 'GET']);
+  });
+
+  it('validates a PUT by id like a create', async () => {
+    await expect(api().replaceIncident(ENTITY, NERIS_ID, { base: {} })).resolves.toMatchObject({
+      ok: false,
+      kind: 'validation',
+      httpStatus: 422,
+    });
+  });
+
+  it('refuses a second create of the same record; the record can then be found by id', async () => {
+    const client = api();
+    await expect(client.createIncident(ENTITY, PAYLOAD)).resolves.toMatchObject({ ok: true });
+    const again = await client.createIncident(ENTITY, PAYLOAD);
+    expect(again).toMatchObject({ ok: false, kind: 'validation', httpStatus: 422 });
+    await expect(client.getIncidentStatus(ENTITY, NERIS_ID)).resolves.toMatchObject({
+      ok: true,
+    });
+  });
+
+  it('reads the stations and units NERIS holds for the entity', async () => {
+    await expect(api().getEntity(ENTITY)).resolves.toEqual({
+      ok: true,
+      httpStatus: 200,
+      stations: [
+        {
+          nerisId: `${ENTITY}S001`,
+          stationId: 'STA1',
+          units: [{ nerisId: `${ENTITY}S001U001`, cadDesignation: 'E1' }],
+        },
+      ],
+    });
   });
 
   it('reads the status history, dropping values outside TypeIncidentStatusValue', async () => {
