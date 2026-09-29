@@ -294,6 +294,35 @@ describe('iOS taps on raw-APNs dispatch notifications (review round 2 N3)', () =
     );
   });
 
+  test('explicit keys AppDelegate copies from the page win over the body, and dispatchedAt is the dispatch time (round 2 C-4)', () => {
+    nativeWrite({
+      'boxalarm.pendingAlertTap': {
+        dispatchId: 'DISP-KEYS',
+        tappedAt: nowSeconds(),
+        deliveredAt: nowSeconds() - 60,
+        title: 'STRUCTURE FIRE · TONE 2',
+        body: 'something else entirely',
+        incidentType: 'Structure fire',
+        address: '21 Main St',
+        crossStreets: 'Elm / Oak',
+        dispatchedAt: '1700000000',
+      },
+    });
+    coldStart();
+
+    subscribePushNotificationRouting();
+
+    expect(navigateToAlertDetail).toHaveBeenCalledWith(
+      'DISP-KEYS',
+      expect.objectContaining({
+        incidentType: 'Structure fire',
+        address: '21 Main St',
+        crossStreets: 'Elm / Oak',
+        dispatchedAt: 1_700_000_000_000,
+      }),
+    );
+  });
+
   test('a malformed record is discarded without navigating', () => {
     nativeWrite({ 'boxalarm.pendingAlertTap': { dispatchId: 7, tappedAt: nowSeconds() } });
     coldStart();

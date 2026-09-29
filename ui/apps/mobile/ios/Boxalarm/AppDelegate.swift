@@ -119,7 +119,17 @@ extension AppDelegate {
         "title": content.title,
         "body": content.body,
       ]
-      if let tone = userInfo["toneSequence"] as? String { record["toneSequence"] = tone }
+      // The server's explicit keys (fix/page-chain pushPayload: incidentType, address,
+      // crossStreets, dispatchedAt as epoch seconds) win over parsing the body in JS, and give
+      // the alert screen the dispatch time instead of "RECEIVED" (round 2 C-4). Strings or
+      // numbers are copied as sent; JS reads both.
+      for key in ["toneSequence", "incidentType", "address", "crossStreets", "dispatchedAt"] {
+        if let value = userInfo[key] as? String, !value.isEmpty {
+          record[key] = value
+        } else if let value = userInfo[key] as? NSNumber {
+          record[key] = value
+        }
+      }
       if isResponseAction { record["action"] = actionId }
       UserDefaults.standard.set(record, forKey: pendingAlertTapKey)
     }
