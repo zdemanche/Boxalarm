@@ -429,7 +429,16 @@ async function fanOutOneDispatch(
 
     const { tasks, skipped } = planFanOut(dispatch, audience);
 
+    if (!isSelfTest) {
+      // Alarmed below a department minimum (design review M6): a deptId mismatch, a dead
+      // eligibility consumer or a mass mark-off all look like "paged nobody" and nothing else.
+      emitEmf(METRIC_NAMESPACE, 'EligibleMemberCount', audience.length, [[]]);
+    }
     if (tasks.length === 0 && !isSelfTest) {
+      // Nobody could be paged on any channel. Alarmed.
+      logError('fanout.empty_roster', new Error('no member could be paged'), dispatch.dispatchId, {
+        eligibleMemberCount: audience.length,
+      });
       emitOutcomeMetric(METRIC_NAMESPACE, 'EmptyRoster');
       return;
     }

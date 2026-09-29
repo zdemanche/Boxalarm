@@ -235,6 +235,27 @@ describe("AlertingAlarms — every alert-path failure mode pages", { timeout: 30
     });
   });
 
+  // Cross-seam: fanout/handler.ts emits EmptyRoster (count) and EligibleMemberCount (value)
+  // in Boxalarm/alerting-fan-out for every real dispatch.
+  it("pages on an empty roster and on a roster below the configured minimum (design review M6)", async () => {
+    await build();
+    expect(alarmByName("boxalarm-dev-alerting-fan-out-empty-roster").inputs).toMatchObject({
+      namespace: "Boxalarm/alerting-fan-out",
+      metricName: "EmptyRoster",
+      comparisonOperator: "GreaterThanThreshold",
+      threshold: 0,
+      alarmActions: [PAGE_TOPIC_ARN],
+    });
+    expect(alarmByName("boxalarm-dev-alerting-fan-out-small-roster").inputs).toMatchObject({
+      namespace: "Boxalarm/alerting-fan-out",
+      metricName: "EligibleMemberCount",
+      statistic: "Minimum",
+      comparisonOperator: "LessThanThreshold",
+      threshold: 3,
+      alarmActions: [PAGE_TOPIC_ARN],
+    });
+  });
+
   it("gives every alarm it owns a page action", async () => {
     await build();
     const alarms = resourcesOfType("aws:cloudwatch/metricAlarm:MetricAlarm");

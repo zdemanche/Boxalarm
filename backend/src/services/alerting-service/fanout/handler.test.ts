@@ -629,11 +629,21 @@ describe('fanout/handler', () => {
       return { ...actual, createSnsClient: () => sns as unknown as SNSClient };
     });
 
+    const logSpy = vi.spyOn(console, 'log');
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
     const { handler } = await import('./handler.js');
     await expect(handler(dispatchAlertInsertEvent())).resolves.toEqual({
       batchItemFailures: [],
     });
     expect(sns.calls).toHaveLength(0);
+    // Both alarmed (design review M6): nobody paged, and an eligible count of zero.
+    const metrics = logSpy.mock.calls.map(([line]) => String(line));
+    expect(metrics.some((line) => line.includes('"Name":"EmptyRoster"'))).toBe(true);
+    expect(metrics.some((line) => line.includes('"EligibleMemberCount":0'))).toBe(true);
+    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('fanout.empty_roster'));
+    logSpy.mockRestore();
+    errorSpy.mockRestore();
   });
 
   it('skips only the push send when the member has no registered push token — SMS is unaffected (E1-S14 dependency)', async () => {

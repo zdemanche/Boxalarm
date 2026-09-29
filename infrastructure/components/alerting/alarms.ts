@@ -22,6 +22,13 @@ export interface AlertingAlarmsArgs {
   memberUpdatedFunctionName: pulumi.Input<string>;
 }
 
+/**
+ * Stack config key: the fewest eligible members a real dispatch may reach before it pages
+ * on-call (default DEFAULT_MIN_ELIGIBLE_MEMBERS). Set it near the department's usual turnout.
+ */
+export const MIN_ELIGIBLE_MEMBERS_CONFIG_KEY = "alertingMinEligibleMembers";
+export const DEFAULT_MIN_ELIGIBLE_MEMBERS = 3;
+
 /** Stack config key for the alerting-page email subscription. */
 export const ALERTING_PAGE_EMAIL_CONFIG_KEY = "alertingPageEmail";
 
@@ -271,6 +278,39 @@ export class AlertingAlarms extends pulumi.ComponentResource {
       statistic: "Sum",
       comparisonOperator: "GreaterThanThreshold",
       threshold: 0,
+      period: 60,
+      evaluationPeriods: 1,
+    });
+
+    // Design review M6: a real dispatch that could page nobody, or too few. A deptId mismatch,
+    // a dead eligibility consumer or a mass mark-off otherwise looks exactly like a quiet night.
+    pageAlarm("fan-out-empty-roster-alarm", {
+      name: `boxalarm-${env}-alerting-fan-out-empty-roster`,
+      alarmDescription:
+        "A real dispatch fanned out to nobody: no eligible member had any reachable channel. Check the eligibility snapshot " +
+        "(DEPT#{deptId}#ELIGIBILITY in the alerting table) for the dispatch's deptId, the member-updated / availability consumers' DLQs, " +
+        "and that the stack deptId matches the members' custom:deptId. Radio tone-out (N1.9) is the page of record until fixed.",
+      namespace: FAN_OUT_METRIC_NAMESPACE,
+      metricName: "EmptyRoster",
+      statistic: "Sum",
+      comparisonOperator: "GreaterThanThreshold",
+      threshold: 0,
+      period: 60,
+      evaluationPeriods: 1,
+    });
+    const minEligible =
+      new pulumi.Config("boxalarm-infra").getNumber(MIN_ELIGIBLE_MEMBERS_CONFIG_KEY) ??
+      DEFAULT_MIN_ELIGIBLE_MEMBERS;
+    pageAlarm("fan-out-small-roster-alarm", {
+      name: `boxalarm-${env}-alerting-fan-out-small-roster`,
+      alarmDescription:
+        `A real dispatch reached fewer than ${minEligible} eligible members (stack config ${MIN_ELIGIBLE_MEMBERS_CONFIG_KEY}). ` +
+        "Usually members missing from the eligibility snapshot or marked off; check the snapshot and the eligibility consumers.",
+      namespace: FAN_OUT_METRIC_NAMESPACE,
+      metricName: "EligibleMemberCount",
+      statistic: "Minimum",
+      comparisonOperator: "LessThanThreshold",
+      threshold: minEligible,
       period: 60,
       evaluationPeriods: 1,
     });
