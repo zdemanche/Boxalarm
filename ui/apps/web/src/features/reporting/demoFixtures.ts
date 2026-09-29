@@ -247,8 +247,18 @@ export function reportingDemoRequest(
       rejectionRate: 0,
       submittedCount: 6,
       rejectedCount: 0,
+      validationRejectedCount: 0,
       eligibleCount: 6,
-      openDrafts: [{ id: 'i-2', ageHours: 240, owner: 'm-2', status: 'DRAFT', locked: false }],
+      openDrafts: [
+        {
+          id: 'i-2',
+          ageHours: 240,
+          owner: 'm-2',
+          ownerName: 'Lt. Dana Owens',
+          status: 'DRAFT',
+          locked: false,
+        },
+      ],
     };
     return json(compliance);
   }

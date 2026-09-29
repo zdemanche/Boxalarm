@@ -152,7 +152,10 @@ export interface ReportExportJob {
 export interface NerisOpenDraft {
   id: string;
   ageHours: number;
+  /** Cognito sub of the report's owner; never shown on screen. */
   owner: string;
+  /** Display name of the owner; null when the member record can't be found. */
+  ownerName: string | null;
   status: string;
   locked: boolean;
 }
@@ -165,6 +168,8 @@ export interface NerisCompliance {
   rejectionRate: number | null;
   submittedCount: number;
   rejectedCount: number;
+  /** Reports NERIS refused at send time (validation); included in rejectedCount and the rate. */
+  validationRejectedCount: number;
   eligibleCount: number;
   /** Oldest first, at most 20. */
   openDrafts: NerisOpenDraft[];

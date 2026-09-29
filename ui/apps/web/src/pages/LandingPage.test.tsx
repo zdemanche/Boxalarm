@@ -26,6 +26,7 @@ const server = setupServer(
       rejectionRate: null,
       submittedCount: 0,
       rejectedCount: 0,
+      validationRejectedCount: 0,
       eligibleCount: 0,
       openDrafts: [],
     }),
@@ -349,11 +350,26 @@ test('NERIS compliance tile shows the on-time and rejection rates and the oldest
         submittedWithin72hPct: 87.5,
         rejectionRate: 12.5,
         submittedCount: 8,
-        rejectedCount: 1,
+        rejectedCount: 2,
+        validationRejectedCount: 1,
         eligibleCount: 8,
         openDrafts: [
-          { id: 'i-old', ageHours: 130, owner: 'm-3', status: 'DRAFT', locked: false },
-          { id: 'i-new', ageHours: 20, owner: 'm-4', status: 'VALIDATED', locked: true },
+          {
+            id: 'i-old',
+            ageHours: 130,
+            owner: 'sub-3',
+            ownerName: 'Capt. Ana Rivera',
+            status: 'DRAFT',
+            locked: false,
+          },
+          {
+            id: 'i-new',
+            ageHours: 20,
+            owner: 'sub-4',
+            ownerName: null,
+            status: 'VALIDATED',
+            locked: true,
+          },
         ],
       }),
     ),
@@ -366,12 +382,18 @@ test('NERIS compliance tile shows the on-time and rejection rates and the oldest
   expect(await card.findByText('87.5%')).toBeTruthy();
   expect(card.getByText('Submitted within 72 h')).toBeTruthy();
   expect(card.getByText('12.5%')).toBeTruthy();
-  expect(card.getByText('1 of 8 submitted were returned.')).toBeTruthy();
+  expect(
+    card.getByText(
+      '2 of 8 submitted were returned, including 1 refused by NERIS validation when sent.',
+    ),
+  ).toBeTruthy();
   expect(card.getByText('Open drafts')).toBeTruthy();
   const old = card.getByRole('link', { name: 'Incident i-old' });
   expect(old.getAttribute('href')).toBe('/incidents/i-old');
-  expect(card.getByText(/5 days old · m-3/)).toBeTruthy();
-  expect(card.getByText(/20 h old · m-4 · locked/)).toBeTruthy();
+  expect(card.getByText(/5 days old · Capt\. Ana Rivera/)).toBeTruthy();
+  // No display name: a plain fallback, never the raw Cognito sub.
+  expect(card.getByText(/20 h old · Unknown member · locked/)).toBeTruthy();
+  expect(card.queryByText(/sub-3|sub-4/)).toBeNull();
 });
 
 test('NERIS compliance tile explains null rates instead of showing zero', async () => {

@@ -32,7 +32,7 @@ function DraftItem({ draft, canOpen }: { draft: NerisOpenDraft; canOpen: boolean
       )}
       <span className={styles.meta}>
         {' · '}
-        {formatAge(draft.ageHours)} · {draft.owner || 'no owner'}
+        {formatAge(draft.ageHours)} · {draft.ownerName?.trim() || 'Unknown member'}
         {draft.locked ? ' · locked' : ''}
       </span>
     </li>
@@ -90,7 +90,11 @@ export function NerisComplianceTile() {
             hint={
               data.rejectionRate === null
                 ? `Nothing was submitted to NERIS in the last ${data.windowDays} days.`
-                : `${data.rejectedCount} of ${data.submittedCount} submitted were returned.`
+                : `${data.rejectedCount} of ${data.submittedCount} submitted were returned${
+                    data.validationRejectedCount > 0
+                      ? `, including ${data.validationRejectedCount} refused by NERIS validation when sent`
+                      : ''
+                  }.`
             }
             alarm={(data.rejectionRate ?? 0) > 0}
           />
