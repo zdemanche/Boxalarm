@@ -26,8 +26,10 @@ import type { AlertsRepository } from './types';
  * - unconfirmed: saved in an earlier session and no longer queued, but the server roster does
  *   not show it - resend to be sure
  * - unsaved: the phone could not even store it (storage failure) - nothing is on its way
- * - notRecorded: the server took the request but says the roster was not updated with it
- *   (a 409 / `superseded` outcome) - resend to be sure
+ * - notRecorded: the server answered 409 with a code other than SUPERSEDED - the answer is not
+ *   on the roster; resend to be sure
+ * - superseded: 409 SUPERSEDED - recorded, but a newer answer (maybe another device's) is the
+ *   one on the roster; both are shown
  * - disputed: the officer's roster shows a different answer from this phone's last one; both
  *   are shown, never silently swapped
  */
@@ -214,9 +216,10 @@ export function useAlertResponse(
     local && server && server.answer.ackStatus === local.answer.ackStatus,
   );
 
-  // Review CR-3: a 200 does not prove the roster took the answer (the server can drop a change
-  // stamped in the same second as the previous one). Once an answer this visit is delivered,
-  // re-read the member's own roster row after a short settle and compare.
+  // Review CR-3: belt and braces. The page-chain server reports an answer that is not current as
+  // 409; a server without that change could drop a same-second change while answering 200. Once
+  // an answer this visit is delivered, re-read the member's own roster row after a short settle
+  // and compare.
   const verifiedRef = useRef<string | null>(null);
   useEffect(() => {
     if (item.state !== 'SYNCED' || !outboxId || verifiedRef.current === outboxId) return;

@@ -92,8 +92,8 @@ export function etaFor(
 /**
  * The POST body. eta is absolute epoch seconds from the moment the member answered (an answer
  * that waits in the queue still means "N minutes from when I tapped"), or null when none was
- * chosen. etaSource / etaQualifier / clientAnswerId / answeredAtMs
- * are ignored by today's handler; the page-chain backend work reads them.
+ * chosen. The page-chain server uses clientAnswerId (replay guard) and answeredAtMs (ordering);
+ * it currently ignores etaSource / etaQualifier, which are sent for the roster to adopt later.
  */
 export function responseBody(
   ackStatus: ResponseAnswer,
