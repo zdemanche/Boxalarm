@@ -31,6 +31,8 @@ async function build() {
   const httpApi = new HttpApi("http-api", {
     env: "dev",
     userPoolId: "pool-1",
+    platformTableName: "platform-table",
+    platformTableArn: "arn:aws:dynamodb:us-east-1:123456789012:table/platform",
     allowedClientIds: ["client-1"],
     platformLogGroup: logGroup,
   });
@@ -178,6 +180,8 @@ describe("apparatus-service routes", { timeout: 30_000 }, () => {
     const httpApi = new HttpApi("http-api-bad", {
       env: "dev",
       userPoolId: "pool-1",
+      platformTableName: "platform-table",
+      platformTableArn: "arn:aws:dynamodb:us-east-1:123456789012:table/platform",
       allowedClientIds: ["client-1"],
       platformLogGroup: logGroup,
     });

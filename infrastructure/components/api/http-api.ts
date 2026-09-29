@@ -13,6 +13,12 @@ export interface HttpApiArgs {
   allowedClientIds: pulumi.Input<string>[];
   /** Shared platform-service log group (one per env). */
   platformLogGroup: ServiceLogGroup;
+  /**
+   * Holds the per-member session revocation markers (DEPT#{deptId}#SESSION_REVOCATION#{sub})
+   * the authorizer checks every token's iat against (review M1).
+   */
+  platformTableName: pulumi.Input<string>;
+  platformTableArn: pulumi.Input<string>;
   /** Override Cognito issuer; default is https://cognito-idp.{region}.amazonaws.com/{userPoolId}. */
   cognitoIssuer?: pulumi.Input<string>;
   /**
@@ -96,7 +102,22 @@ export class HttpApi extends pulumi.ComponentResource {
           COGNITO_USER_POOL_ID: args.userPoolId,
           COGNITO_ISSUER: cognitoIssuer,
           COGNITO_ALLOWED_CLIENT_IDS: allowedClientIds,
+          PLATFORM_TABLE_NAME: args.platformTableName,
         },
+        // Revocation markers only - the authorizer reads nothing else from the table.
+        additionalPolicyStatements: pulumi.output(args.platformTableArn).apply((tableArn) => [
+          {
+            Sid: "ReadSessionRevocationMarkers",
+            Effect: "Allow" as const,
+            Action: ["dynamodb:GetItem"],
+            Resource: tableArn,
+            Condition: {
+              "ForAllValues:StringLike": {
+                "dynamodb:LeadingKeys": ["DEPT#*#SESSION_REVOCATION#*"],
+              },
+            },
+          },
+        ]),
         // Draws from the account's shared regional concurrency pool, which
         // alerting-service Lambdas also draw from — must not be unbounded on an
         // unauthenticated, uncached (authorizerResultTtlInSeconds: 0) path.
@@ -115,8 +136,14 @@ export class HttpApi extends pulumi.ComponentResource {
         authorizerPayloadFormatVersion: "2.0",
         enableSimpleResponses: true,
         identitySources: ["$request.header.Authorization"],
-        // Never cache an allow decision: a revoked session (the only control that ends
-        // access - sessions never expire) must stop working on the next request.
+        // Never cache an allow decision at the gateway. On its own this does NOT make a
+        // revoked session stop on the next request: access tokens are verified offline and
+        // stay valid for their 1-hour life after a global sign-out. What ends them is the
+        // authorizer's server-side revocation check (backend platform-service/authorizer/
+        // revocationCheck.ts): tokens issued at or before the member's revokedAt are refused,
+        // with the marker cached per warm instance for up to 30 s. So revocation takes effect
+        // within ~30 s, not on the literal next request - and a gateway cache here would
+        // stretch that by its own TTL.
         authorizerResultTtlInSeconds: 0,
       },
       { parent: this },

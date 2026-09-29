@@ -86,6 +86,18 @@ function mockCreateVerifierWithFetcher(fetcher: Fetcher): void {
   });
 }
 
+// The revocation store (M1) is a DynamoDB read; every test gets a store that answers "never
+// revoked" unless it swaps readRevokedAt for something else.
+let readRevokedAt: ReturnType<typeof vi.fn>;
+
+function mockRevocationStore(): void {
+  readRevokedAt = vi.fn().mockResolvedValue(undefined);
+  vi.doMock('./revocationStore.js', () => ({
+    getAuthorizerStoreClient: () => ({}),
+    readRevokedAt: (...args: unknown[]) => readRevokedAt(...args) as Promise<number | undefined>,
+  }));
+}
+
 describe('handler', () => {
   const originalEnv = { ...process.env };
 
@@ -94,11 +106,14 @@ describe('handler', () => {
     process.env.COGNITO_USER_POOL_ID = USER_POOL_ID;
     process.env.COGNITO_ISSUER = ISSUER;
     process.env.COGNITO_ALLOWED_CLIENT_IDS = WEB_CLIENT_ID;
+    process.env.PLATFORM_TABLE_NAME = 'platform-table';
+    mockRevocationStore();
   });
 
   afterEach(() => {
     process.env = { ...originalEnv };
     vi.unmock('./tokenVerifier.js');
+    vi.unmock('./revocationStore.js');
     vi.restoreAllMocks();
   });
 
@@ -401,5 +416,132 @@ describe('handler', () => {
     await handler(buildEvent({ authorization: `Bearer ${token}` }), {} as never, () => undefined);
 
     expect(fetchCalls).toHaveLength(1);
+  });
+});
+
+describe('handler: server-side revocation check (M1)', () => {
+  const originalEnv = { ...process.env };
+
+  beforeEach(() => {
+    vi.resetModules();
+    process.env.COGNITO_USER_POOL_ID = USER_POOL_ID;
+    process.env.COGNITO_ISSUER = ISSUER;
+    process.env.COGNITO_ALLOWED_CLIENT_IDS = WEB_CLIENT_ID;
+    process.env.PLATFORM_TABLE_NAME = 'platform-table';
+    mockRevocationStore();
+    vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+  });
+
+  afterEach(() => {
+    process.env = { ...originalEnv };
+    vi.unmock('./tokenVerifier.js');
+    vi.unmock('./revocationStore.js');
+    vi.restoreAllMocks();
+  });
+
+  async function loadWithKey(): Promise<{
+    handler: (typeof import('./handler.js'))['handler'];
+    keyPair: TestKeyPair;
+  }> {
+    const keyPair = generateTestKeyPair('kid-1');
+    const { createVerifier } = await import('./tokenVerifier.js');
+    const verifier = createVerifier({
+      userPoolId: USER_POOL_ID,
+      issuer: ISSUER,
+      allowedClientIds: [WEB_CLIENT_ID],
+    });
+    verifier.cacheJwks({ keys: [keyPair.jwk as never] });
+    vi.resetModules();
+    vi.doMock('./tokenVerifier.js', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('./tokenVerifier.js')>();
+      return { ...actual, createVerifier: () => verifier };
+    });
+    const { handler } = await import('./handler.js');
+    return { handler, keyPair };
+  }
+
+  function eventFor(token: string, routeKey: string): APIGatewayRequestAuthorizerEventV2 {
+    return { ...buildEvent({ authorization: `Bearer ${token}` }), routeKey };
+  }
+
+  it('denies a still-unexpired access token issued before the member was revoked', async () => {
+    const { handler, keyPair } = await loadWithKey();
+    const issuedAt = nowSeconds() - 600;
+    readRevokedAt.mockResolvedValue(nowSeconds() - 60);
+    const token = signAccessToken(keyPair, baseAccessTokenPayload({ iat: issuedAt }));
+
+    const result = await handler(
+      eventFor(token, 'GET /api/v1/personnel/members'),
+      {} as never,
+      () => undefined,
+    );
+
+    expect(result).toEqual({ isAuthorized: false });
+    expect(readRevokedAt).toHaveBeenCalledWith({}, 'platform-table', DEPT_ID, 'member-0012');
+  });
+
+  it('denies a revoked token on the alerting respond route too - revocation is not an outage', async () => {
+    const { handler, keyPair } = await loadWithKey();
+    readRevokedAt.mockResolvedValue(nowSeconds());
+    const token = signAccessToken(keyPair, baseAccessTokenPayload({ iat: nowSeconds() - 30 }));
+
+    const result = await handler(
+      eventFor(token, 'POST /api/v1/alerting/dispatches/{dispatchId}/responses'),
+      {} as never,
+      () => undefined,
+    );
+
+    expect(result).toEqual({ isAuthorized: false });
+  });
+
+  it('allows a token minted after the revocation (a re-enabled member, or another device after refresh)', async () => {
+    const { handler, keyPair } = await loadWithKey();
+    readRevokedAt.mockResolvedValue(nowSeconds() - 600);
+    const token = signAccessToken(keyPair, baseAccessTokenPayload({ iat: nowSeconds() - 5 }));
+
+    const result = await handler(
+      eventFor(token, 'GET /api/v1/personnel/members'),
+      {} as never,
+      () => undefined,
+    );
+
+    expect(result).toMatchObject({ isAuthorized: true });
+  });
+
+  it('FAILS OPEN on an alerting read/respond route when the store cannot be read', async () => {
+    const { handler, keyPair } = await loadWithKey();
+    readRevokedAt.mockRejectedValue(new Error('ProvisionedThroughputExceeded'));
+    const token = signAccessToken(keyPair, baseAccessTokenPayload());
+
+    const result = await handler(
+      eventFor(token, 'POST /api/v1/alerting/dispatches/{dispatchId}/responses'),
+      {} as never,
+      () => undefined,
+    );
+
+    expect(result).toMatchObject({ isAuthorized: true, context: { sub: 'member-0012' } });
+  });
+
+  it('FAILS CLOSED on every other route when the store cannot be read', async () => {
+    const { handler, keyPair } = await loadWithKey();
+    readRevokedAt.mockRejectedValue(new Error('timeout'));
+    const token = signAccessToken(keyPair, baseAccessTokenPayload());
+
+    for (const routeKey of ['GET /api/v1/personnel/members', 'POST /api/v1/platform/export']) {
+      const result = await handler(eventFor(token, routeKey), {} as never, () => undefined);
+      expect(result, routeKey).toEqual({ isAuthorized: false });
+    }
+  });
+
+  it('reads the store once per member per cache window, not once per request', async () => {
+    const { handler, keyPair } = await loadWithKey();
+    const token = signAccessToken(keyPair, baseAccessTokenPayload());
+
+    for (let i = 0; i < 3; i += 1) {
+      await handler(eventFor(token, 'GET /api/v1/personnel/members'), {} as never, () => undefined);
+    }
+
+    expect(readRevokedAt).toHaveBeenCalledTimes(1);
   });
 });

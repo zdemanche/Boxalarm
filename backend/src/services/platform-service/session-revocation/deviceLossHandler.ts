@@ -15,6 +15,8 @@ import {
   revokeMemberSession,
 } from './cognitoRevocationClient.js';
 import type { RevocationConfig } from './cognitoRevocationClient.js';
+import { getAccessStoreClient, readPlatformTableName } from './memberAccessStore.js';
+import { writeRevocationMarker } from '../authorizer/revocationStore.js';
 
 // TODO: E8-S3 — replace with Cedar IsAuthorizedWithToken once Verified Permissions ships.
 const ADMIN_GROUPS = new Set(['CHIEF', 'ADMIN']);
@@ -89,8 +91,10 @@ export const handler: Handler<
   }
 
   let config: RevocationConfig;
+  let tableName: string;
   try {
     config = readRevocationConfig(process.env);
+    tableName = readPlatformTableName(process.env);
   } catch (error) {
     console.error(
       JSON.stringify({
@@ -149,6 +153,33 @@ export const handler: Handler<
       }),
     );
     return problemDetails(403, 'Forbidden', 'memberId is not in the caller’s department.', traceId);
+  }
+
+  // M1: refuse the access token the lost device already holds - it is verified offline and
+  // would otherwise keep working for up to an hour. The member-wide marker costs the other
+  // devices nothing extra: the global sign-out below already ends every refresh token.
+  try {
+    await writeRevocationMarker(getAccessStoreClient(), tableName, {
+      deptId: authorizerContext.deptId,
+      sub: memberId,
+      reason: 'DEVICE_LOSS',
+      actorId: authorizerContext.sub,
+    });
+  } catch (error) {
+    console.error(
+      JSON.stringify({
+        event: 'deviceLossRevocation.markerFailed',
+        message: error instanceof Error ? error.message : undefined,
+        memberId,
+        traceId,
+      }),
+    );
+    return problemDetails(
+      503,
+      'Service Unavailable',
+      'Session revocation is temporarily unavailable.',
+      traceId,
+    );
   }
 
   try {

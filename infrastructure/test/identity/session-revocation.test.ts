@@ -58,6 +58,8 @@ async function build() {
   const httpApi = new HttpApi("test-sr-http-api", {
     env: "dev",
     userPoolId: pulumi.output("pool-1"),
+    platformTableName: "platform-table",
+    platformTableArn: "arn:aws:dynamodb:us-east-1:123456789012:table/platform",
     allowedClientIds: [pulumi.output("client-1")],
     platformLogGroup,
   });
@@ -116,7 +118,23 @@ describe("SessionRevocation (review C1)", () => {
     const env = await resolve(sr.memberStatusLambda.function.environment);
 
     expect(env?.variables?.PLATFORM_TABLE_NAME).toBe("platform-table");
-    expect(actionsOn(statements, TABLE_ARN)).toEqual(["dynamodb:GetItem"]);
+    expect(actionsOn(statements, TABLE_ARN)).toEqual(["dynamodb:GetItem", "dynamodb:PutItem"]);
+  });
+
+  // M1: every revocation path writes the marker the authorizer checks token iat against.
+  it("lets every revocation path write the session revocation marker, and only that key", async () => {
+    const sr = await build();
+    for (const lambda of [sr.memberStatusLambda, sr.deviceLossLambda, sr.credentialResetLambda]) {
+      const statements = await statementsOf(lambda);
+      const marker = statements.find((s) => s.Sid === "WriteSessionRevocationMarker") as
+        (Statement & { Condition: unknown }) | undefined;
+      expect(marker?.Action).toEqual(["dynamodb:PutItem"]);
+      expect(marker?.Condition).toEqual({
+        "ForAllValues:StringLike": { "dynamodb:LeadingKeys": ["DEPT#*#SESSION_REVOCATION#*"] },
+      });
+      const env = await resolve(lambda.function.environment);
+      expect(env?.variables?.PLATFORM_TABLE_NAME).toBe("platform-table");
+    }
   });
 
   it("wires the admin reset-password-and-sign-out route with only the calls it makes", async () => {

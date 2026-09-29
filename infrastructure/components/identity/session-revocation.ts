@@ -43,6 +43,22 @@ function cognitoRevocationStatements(
 const SIGN_OUT_ACTIONS = ["cognito-idp:AdminUserGlobalSignOut", "cognito-idp:AdminGetUser"];
 
 /**
+ * M1: every revocation path writes DEPT#{deptId}#SESSION_REVOCATION#{sub}, which the
+ * authorizer checks each token's iat against. Put on those keys only.
+ */
+function revocationMarkerStatement(tableArn: string): IamPolicyStatement {
+  return {
+    Sid: "WriteSessionRevocationMarker",
+    Effect: "Allow",
+    Action: ["dynamodb:PutItem"],
+    Resource: tableArn,
+    Condition: {
+      "ForAllValues:StringLike": { "dynamodb:LeadingKeys": ["DEPT#*#SESSION_REVOCATION#*"] },
+    },
+  };
+}
+
+/**
  * E8-S8-INFRA #259 revocation resources: member-status-revocation-queue
  * consumer off the platform bus, and the admin device-loss route. Session
  * validity (1h/1h/3650d + rotation) is set on the app clients in index.ts.
@@ -93,6 +109,7 @@ export class SessionRevocation extends pulumi.ComponentResource {
                 "ForAllValues:StringLike": { "dynamodb:LeadingKeys": ["DEPT#*#MEMBER#*"] },
               },
             },
+            revocationMarkerStatement(tableArn),
           ]),
       },
       { parent: this },
@@ -126,15 +143,18 @@ export class SessionRevocation extends pulumi.ComponentResource {
           // Granted verifiedpermissions:IsAuthorizedWithToken below — without this,
           // readAuthzConfig() throws on every withAuthorization() call.
           VERIFIED_PERMISSIONS_POLICY_STORE_ID: args.policyStoreId,
+          PLATFORM_TABLE_NAME: args.platformTableName,
         },
         additionalPolicyStatements: pulumi
           .all([
             cognitoRevocationStatements(args.userPoolArn, SIGN_OUT_ACTIONS),
             pulumi.output(args.policyStoreArn),
+            pulumi.output(args.platformTableArn),
           ])
-          .apply(([revocation, policyStoreArn]) => [
+          .apply(([revocation, policyStoreArn, tableArn]) => [
             ...revocation,
             verifiedPermissionsPolicyStatement(policyStoreArn),
+            revocationMarkerStatement(tableArn),
           ]),
       },
       { parent: this },
@@ -159,6 +179,7 @@ export class SessionRevocation extends pulumi.ComponentResource {
         environment: {
           COGNITO_USER_POOL_ID: args.userPoolId,
           VERIFIED_PERMISSIONS_POLICY_STORE_ID: args.policyStoreId,
+          PLATFORM_TABLE_NAME: args.platformTableName,
         },
         additionalPolicyStatements: pulumi
           .all([
@@ -167,10 +188,12 @@ export class SessionRevocation extends pulumi.ComponentResource {
               "cognito-idp:AdminResetUserPassword",
             ]),
             pulumi.output(args.policyStoreArn),
+            pulumi.output(args.platformTableArn),
           ])
-          .apply(([revocation, policyStoreArn]) => [
+          .apply(([revocation, policyStoreArn, tableArn]) => [
             ...revocation,
             verifiedPermissionsPolicyStatement(policyStoreArn),
+            revocationMarkerStatement(tableArn),
           ]),
       },
       { parent: this },

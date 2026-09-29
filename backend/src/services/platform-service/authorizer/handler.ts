@@ -4,8 +4,11 @@ import type {
   APIGatewaySimpleAuthorizerWithContextResult,
   Handler,
 } from 'aws-lambda';
-import { createVerifier, readAuthorizerConfig, verifyAccessToken } from './tokenVerifier.js';
+import { createVerifier, readAuthorizerConfig, verifyAccessTokenClaims } from './tokenVerifier.js';
 import type { AccessTokenVerifier, VerifiedAccessToken } from './tokenVerifier.js';
+import { createRevocationChecker, FAIL_OPEN_ROUTE_KEYS } from './revocationCheck.js';
+import type { RevocationChecker } from './revocationCheck.js';
+import { getAuthorizerStoreClient, readRevokedAt } from './revocationStore.js';
 
 export type AuthorizerContext = VerifiedAccessToken;
 
@@ -17,6 +20,21 @@ let cachedVerifier: AccessTokenVerifier | undefined;
 function getVerifier(env: NodeJS.ProcessEnv): AccessTokenVerifier {
   cachedVerifier ??= createVerifier(readAuthorizerConfig(env));
   return cachedVerifier;
+}
+
+let cachedChecker: RevocationChecker | undefined;
+
+function getRevocationChecker(env: NodeJS.ProcessEnv): RevocationChecker {
+  if (!cachedChecker) {
+    const tableName = env.PLATFORM_TABLE_NAME;
+    if (!tableName) {
+      throw new Error('PLATFORM_TABLE_NAME is required and was not set');
+    }
+    cachedChecker = createRevocationChecker((deptId, sub) =>
+      readRevokedAt(getAuthorizerStoreClient(), tableName, deptId, sub),
+    );
+  }
+  return cachedChecker;
 }
 
 function extractBearerToken(event: APIGatewayRequestAuthorizerEventV2): string | undefined {
@@ -64,7 +82,39 @@ export const handler: Handler<APIGatewayRequestAuthorizerEventV2, AuthorizerResu
 
   try {
     const verifier = getVerifier(process.env);
-    const context = await verifyAccessToken(verifier, token);
+    const checker = getRevocationChecker(process.env);
+    const { principal: context, issuedAt } = await verifyAccessTokenClaims(verifier, token);
+
+    // M1: an access token is verified offline and lives an hour; a revoked member's token
+    // must stop working now. See revocationCheck.ts for the cache and the fail-open rule.
+    const revocation = await checker.check({ deptId: context.deptId, sub: context.sub, issuedAt });
+    if (revocation === 'revoked') {
+      console.error(
+        JSON.stringify({
+          event: 'authorizer.denied',
+          reason: 'SessionRevoked',
+          routeKey: event.routeKey,
+        }),
+      );
+      emitAuthorizerMetric('Denied', 'SessionRevoked');
+      return { isAuthorized: false };
+    }
+    if (revocation === 'unavailable') {
+      const failOpen = FAIL_OPEN_ROUTE_KEYS.has(event.routeKey);
+      console.error(
+        JSON.stringify({
+          event: failOpen ? 'authorizer.revocationCheck.failOpen' : 'authorizer.denied',
+          reason: 'RevocationStoreUnavailable',
+          routeKey: event.routeKey,
+        }),
+      );
+      if (!failOpen) {
+        emitAuthorizerMetric('Denied', 'RevocationStoreUnavailable');
+        return { isAuthorized: false };
+      }
+      emitAuthorizerMetric('Allowed', 'RevocationCheckFailOpen');
+      return { isAuthorized: true, context };
+    }
     emitAuthorizerMetric('Allowed');
     return { isAuthorized: true, context };
   } catch (error) {

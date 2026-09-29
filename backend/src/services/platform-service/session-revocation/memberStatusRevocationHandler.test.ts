@@ -27,7 +27,18 @@ function mockCognito(overrides: Record<string, unknown>): void {
     revokeMemberSession: vi.fn().mockResolvedValue(undefined),
     disableMemberLogin: vi.fn().mockResolvedValue(undefined),
     enableMemberLogin: vi.fn().mockResolvedValue(undefined),
+    resolveMemberDeptId: vi.fn().mockResolvedValue('NICHOLS'),
     ...overrides,
+  }));
+}
+
+let writeRevocationMarker: ReturnType<typeof vi.fn>;
+
+function mockMarker(): void {
+  writeRevocationMarker = vi.fn().mockResolvedValue(1_700_000_000);
+  vi.doMock('../authorizer/revocationStore.js', () => ({
+    writeRevocationMarker: (...args: unknown[]) =>
+      writeRevocationMarker(...args) as Promise<number>,
   }));
 }
 
@@ -47,12 +58,14 @@ describe('memberStatusRevocationHandler', () => {
     process.env.COGNITO_USER_POOL_ID = 'pool-1';
     process.env.PLATFORM_TABLE_NAME = 'platform-table';
     mockStore(() => Promise.resolve(undefined));
+    mockMarker();
   });
 
   afterEach(() => {
     process.env = { ...originalEnv };
     vi.unmock('./cognitoRevocationClient.js');
     vi.unmock('./memberAccessStore.js');
+    vi.unmock('../authorizer/revocationStore.js');
     vi.restoreAllMocks();
   });
 
@@ -161,6 +174,65 @@ describe('memberStatusRevocationHandler', () => {
       {},
       { userPoolId: 'pool-1', username: 'mbr-102', correlationId: 'corr-1' },
     );
+  });
+
+  // M1: already-issued access tokens are verified offline; the marker is what stops them.
+  it('writes the revocation marker before disabling, keyed on the event deptId', async () => {
+    const calls: string[] = [];
+    writeRevocationMarker.mockImplementation(() => {
+      calls.push('marker');
+      return Promise.resolve(1);
+    });
+    const disableMemberLogin = vi.fn(() => {
+      calls.push('disable');
+      return Promise.resolve();
+    });
+    mockCognito({ disableMemberLogin });
+
+    const { handler } = await import('./memberStatusRevocationHandler.js');
+    const event = {
+      ...memberUpdatedEvent('mbr-102', 'RETIRED'),
+      payload: { deptId: 'NICHOLS', memberId: 'mbr-102', status: 'RETIRED' },
+    };
+    await handler({ Records: [sqsRecord(event)] }, {} as never, () => undefined);
+
+    expect(calls).toEqual(['marker', 'disable']);
+    expect(writeRevocationMarker).toHaveBeenCalledWith({}, 'platform-table', {
+      deptId: 'NICHOLS',
+      sub: 'mbr-102',
+      reason: 'MEMBER_STATUS',
+    });
+  });
+
+  it('resolves the department from Cognito for a legacy event without deptId', async () => {
+    const resolveMemberDeptId = vi.fn().mockResolvedValue('LEGACY-DEPT');
+    mockCognito({ resolveMemberDeptId });
+
+    const { handler } = await import('./memberStatusRevocationHandler.js');
+    await handler(
+      { Records: [sqsRecord(memberUpdatedEvent('mbr-102', 'LOA'))] },
+      {} as never,
+      () => undefined,
+    );
+
+    expect(writeRevocationMarker).toHaveBeenCalledWith(
+      {},
+      'platform-table',
+      expect.objectContaining({ deptId: 'LEGACY-DEPT', sub: 'mbr-102' }),
+    );
+  });
+
+  it('writes no marker when the member returns to ACTIVE', async () => {
+    mockCognito({});
+
+    const { handler } = await import('./memberStatusRevocationHandler.js');
+    await handler(
+      { Records: [sqsRecord(memberUpdatedEvent('mbr-102', 'ACTIVE'))] },
+      {} as never,
+      () => undefined,
+    );
+
+    expect(writeRevocationMarker).not.toHaveBeenCalled();
   });
 
   it('acts on the member row, not the event: a stale LOA event for a member now ACTIVE re-enables instead of disabling', async () => {

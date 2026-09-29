@@ -56,6 +56,8 @@ describe("RoutesOps webhook routes", () => {
     const httpApi = new HttpApi("http-api", {
       env: "dev",
       userPoolId: "pool-1",
+      platformTableName: "platform-table",
+      platformTableArn: "arn:aws:dynamodb:us-east-1:123456789012:table/platform",
       allowedClientIds: ["client-1"],
       platformLogGroup: new ServiceLogGroup("platform-lg", {
         env: "dev",

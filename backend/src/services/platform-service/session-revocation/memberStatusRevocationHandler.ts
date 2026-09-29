@@ -6,8 +6,10 @@ import {
   disableMemberLogin,
   enableMemberLogin,
   readRevocationConfig,
+  resolveMemberDeptId,
   revokeMemberSession,
 } from './cognitoRevocationClient.js';
+import { writeRevocationMarker } from '../authorizer/revocationStore.js';
 import type { RevocationConfig } from './cognitoRevocationClient.js';
 import {
   getAccessStoreClient,
@@ -123,12 +125,26 @@ async function resolveEffectiveStatus(
 async function applyStatus(
   client: CognitoIdentityProviderClient,
   userPoolId: string,
+  tableName: string,
   payload: MemberStatusChangedPayload,
   status: string,
 ): Promise<void> {
   const input = { userPoolId, username: payload.memberId, correlationId: payload.correlationId };
   if (REVOKING_STATUSES.has(status)) {
-    // Disable first: once it lands no new sign-in or refresh can succeed, so the sign-out
+    // M1: the marker makes the authorizer refuse the access tokens already issued (they are
+    // verified offline and would otherwise live out their hour). A member with no department
+    // attribute holds no token the authorizer accepts, so there is nothing to mark.
+    const deptId =
+      payload.deptId ??
+      (await resolveMemberDeptId(client, { userPoolId, username: payload.memberId }));
+    if (deptId) {
+      await writeRevocationMarker(getAccessStoreClient(), tableName, {
+        deptId,
+        sub: payload.memberId,
+        reason: 'MEMBER_STATUS',
+      });
+    }
+    // Disable next: once it lands no new sign-in or refresh can succeed, so the sign-out
     // that follows cannot race a refresh that re-mints a session.
     await disableMemberLogin(client, input);
     await revokeMemberSession(client, input);
@@ -184,7 +200,7 @@ export const handler: Handler<SQSEvent, void> = async (event) => {
 
       try {
         const status = await resolveEffectiveStatus(payload, tableName);
-        await applyStatus(client, userPoolId, payload, status);
+        await applyStatus(client, userPoolId, tableName, payload, status);
       } catch (error) {
         // UserNotFoundException is not retryable -- no-op instead of DLQ-storming.
         if (error instanceof UserNotFoundException) {

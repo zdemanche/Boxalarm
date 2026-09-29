@@ -56,6 +56,8 @@ describe("Availability — availability-changed consumer (#207)", () => {
     const httpApi = new HttpApi("test-availability-http-api", {
       env: "dev",
       userPoolId: pulumi.output("pool-1"),
+      platformTableName: "platform-table",
+      platformTableArn: "arn:aws:dynamodb:us-east-1:123456789012:table/platform",
       allowedClientIds: [pulumi.output("client-1")],
       platformLogGroup: logGroup,
     });

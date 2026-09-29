@@ -48,8 +48,18 @@ function mockDeps(overrides: Partial<Mocks> = {}): Mocks {
     const actual = await vi.importActual<typeof import('@boxalarm/authz')>('@boxalarm/authz');
     return { ...actual, withAuthorization: (inner: unknown) => inner };
   });
+  vi.doMock('./memberAccessStore.js', () => ({
+    readPlatformTableName: () => 'platform-table',
+    getAccessStoreClient: () => ({}),
+  }));
+  vi.doMock('../authorizer/revocationStore.js', () => ({
+    writeRevocationMarker: (...args: unknown[]) =>
+      writeRevocationMarker(...args) as Promise<number>,
+  }));
   return mocks;
 }
+
+let writeRevocationMarker: ReturnType<typeof vi.fn>;
 
 async function load(): Promise<Inner> {
   const { handler } = await import('./credentialResetHandler.js');
@@ -59,6 +69,7 @@ async function load(): Promise<Inner> {
 describe('credentialResetHandler', () => {
   beforeEach(() => {
     vi.resetModules();
+    writeRevocationMarker = vi.fn().mockResolvedValue(1_700_000_000);
     vi.spyOn(console, 'log').mockImplementation(() => undefined);
     vi.spyOn(console, 'error').mockImplementation(() => undefined);
   });
@@ -66,7 +77,32 @@ describe('credentialResetHandler', () => {
   afterEach(() => {
     vi.doUnmock('./cognitoRevocationClient.js');
     vi.doUnmock('@boxalarm/authz');
+    vi.doUnmock('./memberAccessStore.js');
+    vi.doUnmock('../authorizer/revocationStore.js');
     vi.restoreAllMocks();
+  });
+
+  it('marks the member revoked (M1) so already-issued access tokens stop working', async () => {
+    mockDeps();
+    const handler = await load();
+
+    await handler(buildEvent({ memberId: 'sub-9' }), ADMIN);
+
+    expect(writeRevocationMarker).toHaveBeenCalledWith({}, 'platform-table', {
+      deptId: 'NICHOLS',
+      sub: 'sub-9',
+      reason: 'CREDENTIAL_RESET',
+      actorId: 'admin-1',
+    });
+  });
+
+  it('answers 503 and changes nothing in Cognito when the marker cannot be written', async () => {
+    const mocks = mockDeps();
+    writeRevocationMarker.mockRejectedValue(new Error('dynamo down'));
+    const handler = await load();
+
+    expect((await handler(buildEvent({ memberId: 'sub-9' }), ADMIN)).statusCode).toBe(503);
+    expect(mocks.resetMemberPassword).not.toHaveBeenCalled();
   });
 
   it('resets the password BEFORE signing out, so the old password cannot mint a surviving session', async () => {

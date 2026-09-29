@@ -18,6 +18,8 @@ import {
   resolveMemberDeptId,
   revokeMemberSession,
 } from './cognitoRevocationClient.js';
+import { getAccessStoreClient, readPlatformTableName } from './memberAccessStore.js';
+import { writeRevocationMarker } from '../authorizer/revocationStore.js';
 
 let cachedClient: CognitoIdentityProviderClient | undefined;
 
@@ -66,6 +68,7 @@ async function resetCredentials(
   }
 
   const { userPoolId } = readRevocationConfig(process.env);
+  const tableName = readPlatformTableName(process.env);
   const client = getClient();
 
   let targetDeptId: string | undefined;
@@ -87,6 +90,24 @@ async function resetCredentials(
   if (targetDeptId !== principal.deptId) {
     log('credentialReset.denied', { reason: 'CrossDepartmentTarget', memberId, traceId });
     return forbiddenProblem(traceId);
+  }
+
+  // M1: refuse the access tokens already issued - they are verified offline and would
+  // otherwise keep working for up to an hour after the reset.
+  try {
+    await writeRevocationMarker(getAccessStoreClient(), tableName, {
+      deptId: principal.deptId,
+      sub: memberId,
+      reason: 'CREDENTIAL_RESET',
+      actorId: principal.sub,
+    });
+  } catch (error) {
+    log('credentialReset.markerFailed', {
+      memberId,
+      traceId,
+      message: error instanceof Error ? error.message : undefined,
+    });
+    return serviceUnavailableProblem(traceId);
   }
 
   const input = { userPoolId, username: memberId, correlationId: traceId };

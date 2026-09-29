@@ -113,6 +113,8 @@ describe("HttpApi", () => {
     const api = new HttpApi("http-api", {
       env: "dev",
       userPoolId: "us-east-1_pool",
+      platformTableName: "platform-table",
+      platformTableArn: "arn:aws:dynamodb:us-east-1:123456789012:table/platform",
       allowedClientIds: ["web-client-id", "mobile-client-id"],
       platformLogGroup: logGroup,
       cognitoIssuer: "https://cognito-idp.us-east-1.amazonaws.com/us-east-1_pool",
@@ -216,6 +218,47 @@ describe("HttpApi", () => {
     expect(endpoint).toContain("execute-api");
   });
 
+  // Review M1: access tokens are verified offline and live an hour after a sign-out; the
+  // authorizer refuses tokens issued before the member's revocation marker.
+  it("gives the authorizer the revocation-marker table and a read of the marker keys only", async () => {
+    const { ServiceLogGroup } = await import("../../components/observability/service-log-group");
+    const { HttpApi } = await import("../../components/api/http-api");
+
+    const logGroup = new ServiceLogGroup("platform-log-group-revocation", {
+      env: "dev",
+      serviceName: "platform-service",
+    });
+    const api = new HttpApi("http-api-revocation", {
+      env: "dev",
+      userPoolId: "us-east-1_pool",
+      platformTableName: "platform-table",
+      platformTableArn: "arn:aws:dynamodb:us-east-1:123456789012:table/platform",
+      allowedClientIds: ["web-client-id"],
+      platformLogGroup: logGroup,
+    });
+    await settle(api);
+
+    const [envVars, policy] = await Promise.all([
+      resolve(api.authorizerLambda.function.environment),
+      resolve(api.authorizerLambda.rolePolicy.policy),
+    ]);
+    expect(envVars?.variables?.PLATFORM_TABLE_NAME).toBe("platform-table");
+    const statements = (JSON.parse(policy) as { Statement: Array<Record<string, unknown>> })
+      .Statement;
+    const dynamo = statements.filter((st) => JSON.stringify(st.Action).includes("dynamodb:"));
+    expect(dynamo).toEqual([
+      {
+        Sid: "ReadSessionRevocationMarkers",
+        Effect: "Allow",
+        Action: ["dynamodb:GetItem"],
+        Resource: "arn:aws:dynamodb:us-east-1:123456789012:table/platform",
+        Condition: {
+          "ForAllValues:StringLike": { "dynamodb:LeadingKeys": ["DEPT#*#SESSION_REVOCATION#*"] },
+        },
+      },
+    ]);
+  });
+
   it("authorizedRoute always attaches CUSTOM + this authorizer (no open routes)", async () => {
     const { ServiceLogGroup } = await import("../../components/observability/service-log-group");
     const { HttpApi } = await import("../../components/api/http-api");
@@ -227,6 +270,8 @@ describe("HttpApi", () => {
     const api = new HttpApi("http-api-route", {
       env: "dev",
       userPoolId: "us-east-1_pool",
+      platformTableName: "platform-table",
+      platformTableArn: "arn:aws:dynamodb:us-east-1:123456789012:table/platform",
       allowedClientIds: ["web-client-id"],
       platformLogGroup: logGroup,
     });
@@ -256,6 +301,8 @@ describe("HttpApi", () => {
         new HttpApi("http-api-bad", {
           env: undefined as unknown as string,
           userPoolId: "pool",
+          platformTableName: "platform-table",
+          platformTableArn: "arn:aws:dynamodb:us-east-1:123456789012:table/platform",
           allowedClientIds: ["a"],
           platformLogGroup: logGroup,
         }),
@@ -274,6 +321,8 @@ describe("HttpApi", () => {
     const api = new HttpApi("http-api-route", {
       env: "dev",
       userPoolId: "pool",
+      platformTableName: "platform-table",
+      platformTableArn: "arn:aws:dynamodb:us-east-1:123456789012:table/platform",
       allowedClientIds: ["a"],
       platformLogGroup: logGroup,
     });

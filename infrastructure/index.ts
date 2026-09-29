@@ -177,6 +177,8 @@ export const httpApi = new HttpApi("http-api", {
   userPoolId: identity.userPool.id,
   allowedClientIds: [webUserPoolClient.userPoolClient.id, mobileUserPoolClient.userPoolClient.id],
   platformLogGroup,
+  platformTableName: platformTable.tableName,
+  platformTableArn: platformTable.tableArn,
 });
 
 // Shared data plane tables (ownership: #84 platform, #62 incident, #48 alerting). The

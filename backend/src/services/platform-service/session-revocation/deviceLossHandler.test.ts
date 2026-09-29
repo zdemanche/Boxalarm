@@ -58,15 +58,75 @@ function mockRevocationClient(overrides: {
 describe('deviceLossHandler', () => {
   const originalEnv = { ...process.env };
 
+  let writeRevocationMarker: ReturnType<typeof vi.fn>;
+
   beforeEach(() => {
     vi.resetModules();
     process.env.COGNITO_USER_POOL_ID = 'pool-1';
+    process.env.PLATFORM_TABLE_NAME = 'platform-table';
+    writeRevocationMarker = vi.fn().mockResolvedValue(1_700_000_000);
+    vi.doMock('./memberAccessStore.js', () => ({
+      readPlatformTableName: () => 'platform-table',
+      getAccessStoreClient: () => ({}),
+    }));
+    vi.doMock('../authorizer/revocationStore.js', () => ({
+      writeRevocationMarker: (...args: unknown[]) =>
+        writeRevocationMarker(...args) as Promise<number>,
+    }));
   });
 
   afterEach(() => {
     process.env = { ...originalEnv };
     vi.unmock('./cognitoRevocationClient.js');
+    vi.unmock('./memberAccessStore.js');
+    vi.unmock('../authorizer/revocationStore.js');
     vi.restoreAllMocks();
+  });
+
+  it('marks the member revoked (M1) before signing out, so the lost device token stops now', async () => {
+    const order: string[] = [];
+    writeRevocationMarker.mockImplementation(() => {
+      order.push('marker');
+      return Promise.resolve(1);
+    });
+    const revokeMemberSession = vi.fn(() => {
+      order.push('signOut');
+      return Promise.resolve();
+    });
+    mockRevocationClient({ revokeMemberSession });
+    const { handler } = await import('./deviceLossHandler.js');
+
+    const result = (await handler(
+      buildEvent('CHIEF', JSON.stringify({ memberId: 'mbr-102' })),
+      {} as never,
+      () => undefined,
+    )) as APIGatewayProxyStructuredResultV2;
+
+    expect(result.statusCode).toBe(202);
+    expect(order).toEqual(['marker', 'signOut']);
+    expect(writeRevocationMarker).toHaveBeenCalledWith({}, 'platform-table', {
+      deptId: 'dept-001',
+      sub: 'mbr-102',
+      reason: 'DEVICE_LOSS',
+      actorId: 'admin-1',
+    });
+  });
+
+  it('answers 503 without signing out when the marker cannot be written', async () => {
+    writeRevocationMarker.mockRejectedValue(new Error('dynamo down'));
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const revokeMemberSession = vi.fn();
+    mockRevocationClient({ revokeMemberSession });
+    const { handler } = await import('./deviceLossHandler.js');
+
+    const result = (await handler(
+      buildEvent('CHIEF', JSON.stringify({ memberId: 'mbr-102' })),
+      {} as never,
+      () => undefined,
+    )) as APIGatewayProxyStructuredResultV2;
+
+    expect(result.statusCode).toBe(503);
+    expect(revokeMemberSession).not.toHaveBeenCalled();
   });
 
   it('denies (403, fail-secure) when the caller has no CHIEF/ADMIN group', async () => {
