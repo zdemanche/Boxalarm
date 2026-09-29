@@ -1,5 +1,6 @@
 import { GetCommand, type DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
 import { buildDeptScopedPk, type VerifiedDeptId } from '@boxalarm/dept-scope';
+import { emitOutcomeMetric } from '@boxalarm/metrics';
 import { logError } from '../dispatches/logger.js';
 import { localityKey, type NormalizedAddress } from './addressKey.js';
 
@@ -35,6 +36,8 @@ export const NO_HOME_LOCALITY: HomeLocality = {
 
 export const HOME_LOCALITY_SK = 'HOME_LOCALITY';
 
+const METRIC_NAMESPACE = 'Boxalarm/alerting-pre-plan';
+
 export function homeLocalityKey(deptId: VerifiedDeptId) {
   return { pk: buildDeptScopedPk(deptId, 'CONFIG'), sk: HOME_LOCALITY_SK };
 }
@@ -69,11 +72,21 @@ function fromEnv(env: NodeJS.ProcessEnv, deptId: VerifiedDeptId): HomeLocality |
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
-  } catch {
+  } catch (error) {
+    reportInvalid('env', deptId, error);
     return undefined;
   }
   const forDept = (parsed as { deptId?: unknown } | null)?.deptId;
-  return forDept === deptId ? parseHomeLocality(parsed) : undefined;
+  if (forDept !== deptId) return undefined;
+  const home = parseHomeLocality(parsed);
+  if (!home) reportInvalid('env', deptId, new Error('no usable towns or zips'));
+  return home;
+}
+
+/** A present-but-unusable home locality is never silent (round-3 minor 3). */
+function reportInvalid(source: 'item' | 'env', deptId: VerifiedDeptId, error: unknown): void {
+  logError('preplan_copy.home_locality_invalid', error, { deptId, source });
+  emitOutcomeMetric(METRIC_NAMESPACE, 'HomeLocalityInvalid', source);
 }
 
 /** Never throws: a failed read degrades to "unverifiable" (every match flagged), not to none. */
@@ -89,10 +102,18 @@ export async function loadHomeLocality(
     );
     const configured = parseHomeLocality(Item);
     if (configured) return configured;
+    if (Item) reportInvalid('item', deptId, new Error('no usable towns or zips'));
   } catch (error) {
     logError('preplan_copy.home_locality_read_failed', error, { deptId });
   }
-  return fromEnv(env, deptId) ?? NO_HOME_LOCALITY;
+  const fallback = fromEnv(env, deptId);
+  if (fallback) return fallback;
+  // Served with no home set: every address match will be flagged. Alarmable.
+  logError('preplan_copy.home_locality_missing', new Error('no home locality configured'), {
+    deptId,
+  });
+  emitOutcomeMetric(METRIC_NAMESPACE, 'HomeLocalityMissing');
+  return NO_HOME_LOCALITY;
 }
 
 export type LocalityVerdict = 'VERIFIED' | 'UNVERIFIED' | 'REJECT';

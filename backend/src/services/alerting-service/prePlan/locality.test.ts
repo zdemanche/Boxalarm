@@ -146,4 +146,41 @@ describe('loadHomeLocality', () => {
     expect(await loadHomeLocality(client(send), 'alerting', DEPT_ID, {})).toBe(NO_HOME_LOCALITY);
     errorSpy.mockRestore();
   });
+
+  describe('minor 3: an unusable or missing home set is logged and counted', () => {
+    const run = async (item: unknown, env: NodeJS.ProcessEnv) => {
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+      const logSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+      const send = vi.fn().mockResolvedValue(item === undefined ? {} : { Item: item });
+      const home = await loadHomeLocality(client(send), 'alerting', DEPT_ID, env);
+      const errors = errorSpy.mock.calls.join('\n');
+      const metrics = logSpy.mock.calls.join('\n');
+      errorSpy.mockRestore();
+      logSpy.mockRestore();
+      return { home, errors, metrics };
+    };
+
+    it('an unparseable HOME_LOCALITY item', async () => {
+      const { home, errors, metrics } = await run(
+        { towns: 'Trumbull' },
+        { ALERTING_HOME_LOCALITY: JSON.stringify({ deptId: 'NICHOLS', towns: ['Trumbull'] }) },
+      );
+      expect([...home.towns]).toEqual(['TRUMBULL']);
+      expect(errors).toContain('preplan_copy.home_locality_invalid');
+      expect(metrics).toContain('HomeLocalityInvalid');
+    });
+
+    it('an unparseable env default', async () => {
+      const { errors, metrics } = await run(undefined, { ALERTING_HOME_LOCALITY: '{not json' });
+      expect(errors).toContain('preplan_copy.home_locality_invalid');
+      expect(metrics).toContain('HomeLocalityInvalid');
+    });
+
+    it('a dispatch served with no home set at all', async () => {
+      const { home, errors, metrics } = await run(undefined, {});
+      expect(home).toBe(NO_HOME_LOCALITY);
+      expect(errors).toContain('preplan_copy.home_locality_missing');
+      expect(metrics).toContain('HomeLocalityMissing');
+    });
+  });
 });
