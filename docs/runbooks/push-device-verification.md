@@ -21,9 +21,54 @@ Send each page from the stack under test (a manual dispatch or a self-test), wit
 
 | # | Check | Pass when |
 |---|---|---|
-| 9 | Page with the app killed, screen off, Do Not Disturb on | A full-screen dispatch notification appears on the `dispatch-critical` channel. |
+| 9 | Page with the app killed, screen off, Do Not Disturb on, **DND access granted** | A full-screen dispatch notification appears on the `dispatch-critical-v2-dnd` channel, over the lock screen, and the alarm sound plays through DND. |
 | 10 | Page with the app **open in the foreground** | The same notification is posted (the `onMessage` handler). |
 | 11 | Tap on the notification: app cold, app warm | The app opens on that dispatch's alert detail. |
 | 12 | Phone offline for more than 10 minutes, then back online | Old pages do **not** ring (600s TTL). |
+
+## Alert experience (`fix/mobile-alert-screen`)
+
+None of this could run in CI (no Xcode or Android SDK there): the Kotlin module, manifest, MainActivity and AppDelegate changes were written without compiling. Run it on **a Pixel (Android 14 or 15), a Samsung (One UI 6+, Android 14+) and an iPhone (iOS 17+)**, release builds.
+
+### Build and first run
+
+| # | Device | Check | Pass when |
+|---|---|---|---|
+| 13 | Pixel, Samsung | The release build compiles and starts | `AlertReadinessModule`/`AlertReadinessPackage` compile, the module is reachable from JS in bridgeless mode (`NativeModules.BoxalarmAlertReadiness` is not undefined - the readiness checklist shows DND / full-screen rows as Ready or Fix, never "Unknown"). If it is undefined under the new architecture, the legacy-module interop is not picking it up and the module needs a TurboModule spec. |
+| 14 | Pixel, Samsung (upgrade install over a build with `dispatch-critical`) | Settings > Apps > Boxalarm > Notifications | Only `Dispatch pages` (`dispatch-critical-v2` or `-v2-dnd`) and `Notifications` exist; the old `Dispatch alerts` channel is gone. |
+| 15 | Pixel, Samsung | Channel sound | The `Dispatch pages` channel's sound is the phone's **alarm** sound, and it plays on the alarm volume (turn media and ringer volume to 0, alarm volume up: the page is still loud). No fire-tone asset exists in the repo; bundling one is a follow-up (`res/raw` + `.caf`). |
+
+### Do Not Disturb, Bedtime, full-screen (Android)
+
+| # | Device | Check | Pass when |
+|---|---|---|---|
+| 16 | Pixel, Samsung | Fresh install, sign in, open Alerts | Red banner "This phone may not wake you for a page" names "Ring through Do Not Disturb" (and, on Android 14+, full-screen if not granted). |
+| 17 | Pixel, Samsung | Banner Fix → guided dialog → Open settings | The system "Do Not Disturb access" list opens; after allowing Boxalarm and returning, the banner line clears and the channel is now `dispatch-critical-v2-dnd` (Settings shows its "Override Do Not Disturb" on). On Samsung check the list is reachable (One UI sometimes files it under "Apps that can interrupt"); if the intent fails, the fallback opens the app's notification settings. |
+| 18 | Pixel | **Bedtime mode** on, screen off, app killed, page | Screen turns on, full-screen alert shows over the lock screen, alarm sound loops until the call is opened, answered from the notification, or the notification is dismissed. |
+| 19 | Samsung | **Do Not Disturb** on (and separately **Sleep mode**), screen off, page | Same as 18. Also run once with battery optimization on (default) and once with Boxalarm set to "Unrestricted". |
+| 20 | Pixel, Samsung (Android 14+) | Revoke "Full screen notifications" for Boxalarm, page with screen off | Readiness banner names full-screen; the page falls back to a heads-up (not silent). Fix button opens the per-app full-screen setting (`ACTION_MANAGE_APP_USE_FULL_SCREEN_INTENT`). |
+| 21 | Pixel, Samsung | After the full-screen alert, press back / switch to another tab, then lock and wake the phone | The rest of the app is **not** shown over the lock screen (`setShowWhenLocked(false)` on leaving the alert). Open the app normally while unlocked, lock, wake: the keyguard shows, not the app. |
+
+### Answering from the notification
+
+| # | Device | Check | Pass when |
+|---|---|---|---|
+| 22 | Pixel, Samsung | Locked phone, app killed, page, tap **Responding** on the notification (no unlock) | The alarm stops; the notification is replaced by "Responding — ... Sent." within a few seconds; the officer's roster shows Responding with an ETA 10 minutes out. |
+| 23 | Pixel, Samsung | Same with airplane mode on | Notification says "NOT SENT YET - saved on this phone"; turn airplane mode off and open the app: the answer drains and the alert screen shows "Sent". |
+| 24 | Pixel | Responding from the notification, then open the call and change to Not responding | Roster ends on Not responding (the newer answer is never overtaken by the older one). |
+| 25 | iPhone | Requires the alerting service to send `aps.category = "DISPATCH"` (**not implemented server-side yet**). Long-press a page, tap Responding | Face ID / passcode, the app opens on the call with Responding selected and "Sent". Until the backend sends the category, no buttons appear - record that as expected. |
+
+### Alert screen and list
+
+| # | Device | Check | Pass when |
+|---|---|---|---|
+| 26 | All | Airplane mode, then tap a page (Android) / a delivered page (iPhone) | The address and incident type paint immediately from the page; the narrative area says it couldn't load, with the reassurance and a Retry; the answer buttons work and show "Not sent yet". Never a blank screen. |
+| 27 | All | Swipe the page notification away, open Boxalarm | The call is listed on the Alerts tab and opens. Offline, the last list is shown with its "saved at" time. |
+| 28 | iPhone | Cold-start tap on a page | Address shows at once (AppDelegate now records the notification's title/body with the tap). |
+| 29 | All | VoiceOver / TalkBack on, page arrives, open it | "Incoming call. {type} at {address}... Are you responding?" is spoken first; focus is on the header; the rotor offers Responding / Direct / Not responding; after answering, the button reads its delivery state. |
+| 30 | iPhone | Settings > Notifications > Boxalarm set to **Deliver Quietly** (provisional) | The red readiness banner names notifications as delivered quietly. |
+| 31 | iPhone | **Silent switch on + Sleep Focus**, page | Time-sensitive: breaks through Sleep Focus if allowed, but **no sound on silent** - expected until Critical Alerts (#4). The self-test "Did your phone ring?" → No path tells the member to set the switch to ring. |
+| 32 | All | Me > Test my alert path | Checklist rows match the device state; after the test page, "Did your phone ring?" is asked; "No" lists the failing checks. |
+| 33 | All | Me > Sign out | A confirmation warns the phone will stop receiving pages; "Stay signed in" is the default. |
 
 Record the device model, OS version, build number and stack for each run in the release notes.
