@@ -112,12 +112,11 @@ export async function pollRecord(
       : current.status === 'REJECTED'
         ? 'REJECTED'
         : undefined;
-  const pk = metadataKey.pk;
   const historyRows = result.history.slice(-40).map((entry) => ({
     Put: {
       TableName: tableName,
       Item: {
-        pk,
+        pk: buildDeptScopedPk(deptId, 'INCIDENT', open.incidentId),
         sk: `NERIS#STATUS#${entry.lastModified}#${entry.status}`,
         entityType: 'NERIS_STATUS_HISTORY',
         status: entry.status,

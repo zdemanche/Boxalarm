@@ -5,7 +5,7 @@ import { buildDeptScopedPk, toVerifiedDeptId } from '@boxalarm/dept-scope';
 import { buildOutboxRecord } from '@boxalarm/outbox';
 import { emitIncidentMetric, problemResponse, resolveTraceId } from './authContext.js';
 import { getDocumentClient, getTableName } from './repository.js';
-import { getNerisDeptSettings, nerisSettingsPk } from './nerisSettings.js';
+import { getNerisDeptSettings } from './nerisSettings.js';
 import { nerisApiFromEnv } from './reportContext.js';
 import { describeNerisIssue } from './nerisValidation.js';
 import { readJsonObject } from './routeInput.js';
@@ -65,7 +65,7 @@ async function inner(
         { code: 'NOT_CONFIGURED' },
       );
     }
-    const pk = nerisSettingsPk(deptId);
+    const pk = buildDeptScopedPk(deptId, 'NERIS');
     const existing = await client.send(
       new GetCommand({ TableName: tableName, Key: { pk, sk: `NO_ACTIVITY#${month}` } }),
     );

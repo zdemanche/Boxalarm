@@ -386,7 +386,6 @@ export async function querySubmissionLedger(
   deptId: VerifiedDeptId,
   incidentId: string,
 ): Promise<{ attempts: LedgerAttempt[]; statusHistory: LedgerStatusEntry[] }> {
-  const pk = buildDeptScopedPk(deptId, 'INCIDENT', incidentId);
   const query = async (prefix: string) => {
     const items: Record<string, unknown>[] = [];
     let start: Record<string, unknown> | undefined;
@@ -395,7 +394,10 @@ export async function querySubmissionLedger(
         new QueryCommand({
           TableName: tableName,
           KeyConditionExpression: 'pk = :pk AND begins_with(sk, :prefix)',
-          ExpressionAttributeValues: { ':pk': pk, ':prefix': prefix },
+          ExpressionAttributeValues: {
+            ':pk': buildDeptScopedPk(deptId, 'INCIDENT', incidentId),
+            ':prefix': prefix,
+          },
           ExclusiveStartKey: start,
         }),
       );

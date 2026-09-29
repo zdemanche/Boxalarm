@@ -71,10 +71,6 @@ export function parseRules(value: unknown): NerisDepartmentRules {
   };
 }
 
-export function nerisSettingsPk(deptId: VerifiedDeptId): string {
-  return buildDeptScopedPk(deptId, 'NERIS');
-}
-
 export async function getNerisDeptSettings(
   client: DynamoDBDocumentClient,
   tableName: string,
@@ -84,7 +80,7 @@ export async function getNerisDeptSettings(
     new QueryCommand({
       TableName: tableName,
       KeyConditionExpression: 'pk = :pk',
-      ExpressionAttributeValues: { ':pk': nerisSettingsPk(deptId) },
+      ExpressionAttributeValues: { ':pk': buildDeptScopedPk(deptId, 'NERIS') },
     }),
   );
   const items = (result.Items ?? []) as Record<string, unknown>[];
@@ -142,7 +138,7 @@ export async function putNerisSettingsProjection(
       new PutCommand({
         TableName: tableName,
         Item: {
-          pk: nerisSettingsPk(deptId),
+          pk: buildDeptScopedPk(deptId, 'NERIS'),
           sk: 'SETTINGS',
           entityType: 'NERIS_SETTINGS_COPY',
           ...projection,
@@ -172,7 +168,7 @@ export async function putNerisEntityProjection(
       new PutCommand({
         TableName: tableName,
         Item: {
-          pk: nerisSettingsPk(deptId),
+          pk: buildDeptScopedPk(deptId, 'NERIS'),
           sk: 'ENTITY',
           entityType: 'NERIS_ENTITY_COPY',
           ...projection,

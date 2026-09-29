@@ -11,7 +11,7 @@ import { buildOutboxRecord } from '@boxalarm/outbox';
 import { createLogger } from '@boxalarm/logging';
 import { emitOutcomeMetric } from '@boxalarm/metrics';
 import { getDocumentClient, getTableName } from '../repository.js';
-import { getNerisDeptSettings, nerisSettingsPk } from '../nerisSettings.js';
+import { getNerisDeptSettings } from '../nerisSettings.js';
 import { nerisApiFromEnv } from '../reportContext.js';
 import type { NerisApi, NerisListedIncident } from './api.js';
 import { scannerDeptIds } from './statusPoller.js';
@@ -152,7 +152,7 @@ export async function remindNoActivity(
   const { month, from, to } = previousMonth(now);
   const incidents = await queryIncidentsBetween(client, tableName, deptId, from, to);
   if (incidents.length > 0) return 'not_needed';
-  const pk = nerisSettingsPk(deptId);
+  const pk = buildDeptScopedPk(deptId, 'NERIS');
   const filed = await client.send(
     new GetCommand({ TableName: tableName, Key: { pk, sk: `NO_ACTIVITY#${month}` } }),
   );
@@ -248,7 +248,7 @@ export async function reconcileDepartment(
     return undefined;
   }
   const drift = diffAgainstNeris(local, listed.incidents, listed.truncated);
-  const pk = nerisSettingsPk(deptId);
+  const pk = buildDeptScopedPk(deptId, 'NERIS');
   const summary = {
     pk,
     sk: 'RECONCILIATION#LAST',
