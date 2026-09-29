@@ -165,6 +165,53 @@ describe('pollRecord', () => {
   });
 });
 
+describe('stale reads and history keys (review minors 2, 11)', () => {
+  it('writes only over the NERIS record and status it read, and drops a superseded read', async () => {
+    const { TransactionCanceledException } = await import('@aws-sdk/client-dynamodb');
+    const send = vi.fn((command: Command) => {
+      if (command.constructor.name === 'GetCommand') return Promise.resolve({ Item: METADATA });
+      return Promise.reject(
+        new TransactionCanceledException({
+          message: 'cancelled',
+          $metadata: {},
+          CancellationReasons: [{ Code: 'ConditionalCheckFailed' }],
+        }),
+      );
+    });
+    const outcome = await pollRecord(
+      { send } as unknown as DynamoDBDocumentClient,
+      'table',
+      api([
+        { status: 'REJECTED', current: true, lastModified: '' },
+        { status: 'SUBMITTED', current: false, lastModified: '' },
+      ]),
+      DEPT,
+      'FD09190828',
+      OPEN,
+      1_798_100_000,
+    );
+    expect(outcome).toBe('unchanged');
+    const transact = send.mock.calls
+      .map(([c]) => c)
+      .find((c) => c.constructor.name === 'TransactWriteCommand')!;
+    const items = transact.input.TransactItems as Record<string, Record<string, unknown>>[];
+    expect(items[0]!.Update).toMatchObject({
+      ConditionExpression:
+        'attribute_exists(pk) AND nerisIncidentId = :nerisId AND nerisStatus = :previous',
+      ExpressionAttributeValues: {
+        ':nerisId': OPEN.nerisIncidentId,
+        ':previous': 'PENDING_APPROVAL',
+      },
+    });
+    const keys = items
+      .filter(
+        (i) => (i.Put?.Item as { entityType?: string })?.entityType === 'NERIS_STATUS_HISTORY',
+      )
+      .map((i) => (i.Put!.Item as { sk: string }).sk);
+    expect(new Set(keys).size).toBe(2);
+  });
+});
+
 describe('runStatusPoll', () => {
   it('reads the work list per scanner department and keeps going past a failing record', async () => {
     process.env.INCIDENT_TABLE_NAME = 'table';

@@ -12,7 +12,7 @@ import { buildDeptScopedPk, toVerifiedDeptId, type VerifiedDeptId } from '@boxal
 import { buildOutboxRecord } from '@boxalarm/outbox';
 import { createLogger } from '@boxalarm/logging';
 import { emitOutcomeMetric } from '@boxalarm/metrics';
-import { getDocumentClient, getTableName } from '../repository.js';
+import { getDocumentClient, getTableName, isConditionFailureAt } from '../repository.js';
 import { getNerisDeptSettings } from '../nerisSettings.js';
 import { nerisOpenKey } from '../submissionRepository.js';
 import { OPEN_NERIS_STATUSES, type NerisIncidentStatus } from './paths.js';
@@ -87,8 +87,9 @@ export async function applyStatusChange(
   metadata: Record<string, unknown>,
   nowEpochSeconds: number,
   options: { readonly requeue?: boolean } = {},
-): Promise<void> {
+): Promise<'applied' | 'superseded'> {
   const final = !OPEN_NERIS_STATUSES.has(current.status);
+  const previous = typeof metadata.nerisStatus === 'string' ? metadata.nerisStatus : undefined;
   const eventType = EVENT_FOR_STATUS[current.status];
   const localStatus =
     current.status === 'APPROVED'
@@ -96,12 +97,13 @@ export async function applyStatusChange(
       : current.status === 'REJECTED'
         ? 'REJECTED'
         : undefined;
-  const historyRows = history.slice(-40).map((entry) => ({
+  const historyRows = history.slice(-40).map((entry, index) => ({
     Put: {
       TableName: tableName,
       Item: {
         pk: buildDeptScopedPk(deptId, 'INCIDENT', open.incidentId),
-        sk: `NERIS#STATUS#${entry.lastModified}#${entry.status}`,
+        // A missing last_modified must not collapse distinct entries onto one key (minor 11).
+        sk: `NERIS#STATUS#${entry.lastModified || `unknown-${String(index).padStart(2, '0')}`}#${entry.status}`,
         entityType: 'NERIS_STATUS_HISTORY',
         status: entry.status,
         at: entry.lastModified,
@@ -109,71 +111,92 @@ export async function applyStatusChange(
       },
     },
   }));
-  await client.send(
-    new TransactWriteCommand({
-      TransactItems: [
-        {
-          Update: {
-            TableName: tableName,
-            Key: { pk: buildDeptScopedPk(deptId, 'INCIDENT', open.incidentId), sk: 'METADATA' },
-            ConditionExpression: 'attribute_exists(pk)',
-            UpdateExpression: `SET nerisStatus = :status, nerisStatusAt = :now${localStatus ? ', #status = :local' : ''}`,
-            ...(localStatus ? { ExpressionAttributeNames: { '#status': 'status' } } : {}),
-            ExpressionAttributeValues: {
-              ':status': current.status,
-              ':now': nowEpochSeconds,
-              ...(localStatus ? { ':local': localStatus } : {}),
+  try {
+    await client.send(
+      new TransactWriteCommand({
+        TransactItems: [
+          {
+            Update: {
+              TableName: tableName,
+              Key: { pk: buildDeptScopedPk(deptId, 'INCIDENT', open.incidentId), sk: 'METADATA' },
+              // Only over the state this status was read against: the same NERIS record and
+              // the status it had then. A resubmission (new send) or a newer poll that landed
+              // in between wins, and this stale read is dropped (review minor 2).
+              ConditionExpression: `attribute_exists(pk) AND nerisIncidentId = :nerisId AND ${
+                previous === undefined
+                  ? 'attribute_not_exists(nerisStatus)'
+                  : 'nerisStatus = :previous'
+              }`,
+              UpdateExpression: `SET nerisStatus = :status, nerisStatusAt = :now${localStatus ? ', #status = :local' : ''}`,
+              ...(localStatus ? { ExpressionAttributeNames: { '#status': 'status' } } : {}),
+              ExpressionAttributeValues: {
+                ':status': current.status,
+                ':now': nowEpochSeconds,
+                ':nerisId': open.nerisIncidentId,
+                ...(previous === undefined ? {} : { ':previous': previous }),
+                ...(localStatus ? { ':local': localStatus } : {}),
+              },
             },
           },
-        },
-        ...historyRows,
-        ...(final
-          ? [{ Delete: { TableName: tableName, Key: nerisOpenKey(deptId, open.incidentId) } }]
-          : options.requeue
+          ...historyRows,
+          ...(final
+            ? [{ Delete: { TableName: tableName, Key: nerisOpenKey(deptId, open.incidentId) } }]
+            : options.requeue
+              ? [
+                  {
+                    Put: {
+                      TableName: tableName,
+                      Item: {
+                        ...nerisOpenKey(deptId, open.incidentId),
+                        entityType: 'NERIS_OPEN_SUBMISSION',
+                        incidentId: open.incidentId,
+                        nerisIncidentId: open.nerisIncidentId,
+                        since: nowEpochSeconds,
+                        nextPollAt: nowEpochSeconds,
+                        failures: 0,
+                      },
+                    },
+                  },
+                ]
+              : []),
+          ...(eventType
             ? [
                 {
                   Put: {
                     TableName: tableName,
-                    Item: {
-                      ...nerisOpenKey(deptId, open.incidentId),
-                      entityType: 'NERIS_OPEN_SUBMISSION',
-                      incidentId: open.incidentId,
-                      nerisIncidentId: open.nerisIncidentId,
-                      since: nowEpochSeconds,
-                      nextPollAt: nowEpochSeconds,
-                      failures: 0,
-                    },
+                    Item: buildOutboxRecord(
+                      deptId,
+                      'incident-service',
+                      eventType,
+                      open.incidentId,
+                      {
+                        incidentId: open.incidentId,
+                        deptId,
+                        nerisIncidentId: open.nerisIncidentId,
+                        nerisStatus: current.status,
+                        previousNerisStatus:
+                          typeof metadata.nerisStatus === 'string' ? metadata.nerisStatus : null,
+                        incidentNumber:
+                          typeof metadata.dispatchNumber === 'string'
+                            ? metadata.dispatchNumber
+                            : open.incidentId,
+                        ownerId: typeof metadata.createdBy === 'string' ? metadata.createdBy : null,
+                        lockedBy: typeof metadata.lockedBy === 'string' ? metadata.lockedBy : null,
+                        statusAt: current.lastModified,
+                      },
+                    ),
                   },
                 },
               ]
             : []),
-        ...(eventType
-          ? [
-              {
-                Put: {
-                  TableName: tableName,
-                  Item: buildOutboxRecord(deptId, 'incident-service', eventType, open.incidentId, {
-                    incidentId: open.incidentId,
-                    deptId,
-                    nerisIncidentId: open.nerisIncidentId,
-                    nerisStatus: current.status,
-                    previousNerisStatus:
-                      typeof metadata.nerisStatus === 'string' ? metadata.nerisStatus : null,
-                    incidentNumber:
-                      typeof metadata.dispatchNumber === 'string'
-                        ? metadata.dispatchNumber
-                        : open.incidentId,
-                    ownerId: typeof metadata.createdBy === 'string' ? metadata.createdBy : null,
-                    lockedBy: typeof metadata.lockedBy === 'string' ? metadata.lockedBy : null,
-                    statusAt: current.lastModified,
-                  }),
-                },
-              },
-            ]
-          : []),
-      ],
-    }),
-  );
+        ],
+      }),
+    );
+  } catch (error) {
+    if (isConditionFailureAt(error, 0)) return 'superseded';
+    throw error;
+  }
+  return 'applied';
 }
 
 export async function pollRecord(
@@ -215,7 +238,7 @@ export async function pollRecord(
   if (metadata.nerisStatus === current.status) {
     return 'unchanged';
   }
-  await applyStatusChange(
+  const applied = await applyStatusChange(
     client,
     tableName,
     deptId,
@@ -225,7 +248,7 @@ export async function pollRecord(
     metadata,
     nowEpochSeconds,
   );
-  return 'changed';
+  return applied === 'applied' ? 'changed' : 'unchanged';
 }
 
 /**
