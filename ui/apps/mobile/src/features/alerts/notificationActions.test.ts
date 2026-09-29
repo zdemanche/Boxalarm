@@ -52,6 +52,7 @@ beforeEach(async () => {
 test('only the two response action ids map to answers', () => {
   expect(answerFromActionId('respond:RESPONDING')).toBe('RESPONDING');
   expect(answerFromActionId('respond:NOT_RESPONDING')).toBe('NOT_RESPONDING');
+  expect(answerFromActionId('respond:DIRECT_TO_SCENE')).toBe('DIRECT_TO_SCENE');
   expect(answerFromActionId('respond:UNANSWERED')).toBeNull();
   expect(answerFromActionId('default')).toBeNull();
   expect(answerFromActionId(undefined)).toBeNull();
@@ -76,6 +77,19 @@ test('Responding from the notification goes through the outbox and the notificat
   // The replacement is quiet - it must not re-ring the page it answers.
   expect(last.android.channelId).toBe('notifications-default');
   await expect(getLocalAnswer('D-ACT')).resolves.toMatchObject({ ackStatus: 'RESPONDING' });
+});
+
+test('answering from the notification cancels the 60 s cap so it cannot overwrite the answer', async () => {
+  mockApiRequest.mockResolvedValue({ json: async () => ({}) });
+  const cancelTrigger = notifee.cancelTriggerNotification as jest.Mock;
+  cancelTrigger.mockClear();
+
+  await handleNotificationEvent(actionPress('respond:DIRECT_TO_SCENE'));
+
+  expect(cancelTrigger).toHaveBeenCalledWith('dispatch:D-ACT');
+  expect(JSON.parse(mockApiRequest.mock.calls[0]![2].body as string)).toMatchObject({
+    ackStatus: 'DIRECT_TO_SCENE',
+  });
 });
 
 test('with no signal the answer is kept on the phone and the notification says NOT SENT YET', async () => {
@@ -118,6 +132,7 @@ test('iOS registers the DISPATCH category with both answers', async () => {
   expect(setCategories).toHaveBeenCalledWith([IOS_DISPATCH_CATEGORY]);
   expect(IOS_DISPATCH_CATEGORY.actions?.map((a) => a.id)).toEqual([
     'respond:RESPONDING',
+    'respond:DIRECT_TO_SCENE',
     'respond:NOT_RESPONDING',
   ]);
 });

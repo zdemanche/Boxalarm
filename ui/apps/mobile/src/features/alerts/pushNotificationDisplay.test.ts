@@ -43,7 +43,7 @@ test('a dispatch push displays on the critical channel with a full-screen action
   });
   expect(
     call.android.actions.map((a: { pressAction: { id: string } }) => a.pressAction.id),
-  ).toEqual(['respond:RESPONDING', 'respond:NOT_RESPONDING']);
+  ).toEqual(['respond:RESPONDING', 'respond:DIRECT_TO_SCENE', 'respond:NOT_RESPONDING']);
   // One notification per call, carrying the page so a tap opens the address with no fetch.
   expect(call.id).toBe('dispatch:DISP-1');
   expect(call.data).toEqual({
@@ -167,4 +167,29 @@ test('opening the call silences its looping notification', async () => {
   await silenceDispatchNotification('DISP-1');
 
   expect(cancel).toHaveBeenCalledWith('dispatch:DISP-1');
+});
+
+test('a page schedules a 60 s cap that replaces the looping alarm with a quiet copy of the same page', async () => {
+  Platform.OS = 'android';
+  const createTrigger = notifee.createTriggerNotification as jest.Mock;
+  createTrigger.mockClear();
+  const before = Date.now();
+
+  await displayPushNotification({ dispatchId: 'DISP-CAP', title: 'MVA', body: 'MVA — 1 Main St' });
+
+  const [notification, trigger] = createTrigger.mock.calls[0]!;
+  expect(notification.id).toBe('dispatch:DISP-CAP');
+  expect(notification.android).toMatchObject({ loopSound: false, onlyAlertOnce: true });
+  expect(notification.android.actions).toHaveLength(3);
+  expect(trigger.timestamp).toBeGreaterThanOrEqual(before + 60_000);
+});
+
+test('silencing also cancels the pending cap', async () => {
+  Platform.OS = 'android';
+  const cancelTrigger = notifee.cancelTriggerNotification as jest.Mock;
+  cancelTrigger.mockClear();
+
+  await silenceDispatchNotification('DISP-1');
+
+  expect(cancelTrigger).toHaveBeenCalledWith('dispatch:DISP-1');
 });

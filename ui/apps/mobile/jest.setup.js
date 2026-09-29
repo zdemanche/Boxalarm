@@ -191,6 +191,8 @@ jest.mock('@notifee/react-native', () => {
     onForegroundEvent: jest.fn(() => () => {}),
     onBackgroundEvent: jest.fn(),
     cancelDisplayedNotification: jest.fn(async () => undefined),
+    cancelTriggerNotification: jest.fn(async () => undefined),
+    createTriggerNotification: jest.fn(async () => 'trigger'),
     setNotificationCategories: jest.fn(async () => undefined),
     getNotificationSettings: jest.fn(async () => ({ authorizationStatus: 1 })),
     isChannelBlocked: jest.fn(async () => false),
@@ -211,6 +213,7 @@ jest.mock('@notifee/react-native', () => {
     AndroidImportance: { NONE: 0, MIN: 1, LOW: 2, DEFAULT: 3, HIGH: 4 },
     AndroidCategory: { ALARM: 'alarm', CALL: 'call', STATUS: 'status' },
     AndroidVisibility: { PRIVATE: 0, PUBLIC: 1, SECRET: -1 },
+    TriggerType: { TIMESTAMP: 0, INTERVAL: 1 },
     AuthorizationStatus: { NOT_DETERMINED: -1, DENIED: 0, AUTHORIZED: 1, PROVISIONAL: 2 },
     EventType: { DISMISSED: 0, PRESS: 1, ACTION_PRESS: 2, DELIVERED: 3, APP_BLOCKED: 4 },
   };

@@ -15,10 +15,15 @@ import { ackStatusLabel } from './ackStatus';
 import { alertPayloadFromNotificationData } from './alertPayload';
 import { queueAlertResponse, type ResponseAnswer } from './alertResponses';
 import { DEFAULT_CHANNEL_ID } from './pushChannel';
+import { dispatchNotificationId } from './notificationIds';
 
 /** The action ids a page's notification carries; the same ids on Android and iOS. */
 const RESPOND_PREFIX = 'respond:';
-const ACTION_ANSWERS: readonly ResponseAnswer[] = ['RESPONDING', 'NOT_RESPONDING'];
+const ACTION_ANSWERS: readonly ResponseAnswer[] = [
+  'RESPONDING',
+  'DIRECT_TO_SCENE',
+  'NOT_RESPONDING',
+];
 
 export function answerFromActionId(actionId: string | undefined): ResponseAnswer | null {
   if (!actionId?.startsWith(RESPOND_PREFIX)) return null;
@@ -27,8 +32,11 @@ export function answerFromActionId(actionId: string | undefined): ResponseAnswer
 }
 
 /** Android: shade / lock-screen buttons, handled headlessly (no launchActivity - no unlock). */
+// Android shows at most three actions, so there is no Silence button here: dismissing the page,
+// opening it, or the 60 s cap stops the alarm, and the alert screen has a Silence button.
 export const ANDROID_RESPONSE_ACTIONS: AndroidAction[] = [
   { title: 'Responding', pressAction: { id: `${RESPOND_PREFIX}RESPONDING` } },
+  { title: 'Direct to scene', pressAction: { id: `${RESPOND_PREFIX}DIRECT_TO_SCENE` } },
   { title: 'Not responding', pressAction: { id: `${RESPOND_PREFIX}NOT_RESPONDING` } },
 ];
 
@@ -44,6 +52,7 @@ export const IOS_DISPATCH_CATEGORY: IOSNotificationCategory = {
   id: IOS_DISPATCH_CATEGORY_ID,
   actions: [
     { id: `${RESPOND_PREFIX}RESPONDING`, title: 'Responding', foreground: true },
+    { id: `${RESPOND_PREFIX}DIRECT_TO_SCENE`, title: 'Direct to scene', foreground: true },
     {
       id: `${RESPOND_PREFIX}NOT_RESPONDING`,
       title: 'Not responding',
@@ -106,6 +115,10 @@ export async function answerFromNotification(
     Object.entries(rawData ?? {}).filter(([, v]) => typeof v === 'string'),
   ) as Record<string, string>;
   try {
+    // The 60 s cap must not later overwrite the answer notification.
+    await notifee
+      .cancelTriggerNotification(dispatchNotificationId(payload.dispatchId))
+      .catch((error: unknown) => console.warn('[push] cancelling the ring cap failed', error));
     ensureSyncConfigured();
     const outboxId = await queueAlertResponse(payload.dispatchId, answer, null);
     await showAnswerNotification(notificationId, data, answer, 'Saved on this phone. Sending…');

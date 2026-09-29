@@ -2,6 +2,7 @@ import notifee, {
   AndroidCategory,
   AndroidImportance,
   AndroidVisibility,
+  TriggerType,
 } from '@notifee/react-native';
 import { Platform } from 'react-native';
 import {
@@ -10,6 +11,7 @@ import {
   rememberAlertPayload,
 } from './alertPayload';
 import { ANDROID_RESPONSE_ACTIONS } from './notificationActions';
+import { dispatchNotificationId } from './notificationIds';
 import {
   categoryFromPushData,
   CRITICAL_CHANNEL_ID,
@@ -26,10 +28,7 @@ export interface PushMessageData {
   [key: string]: unknown;
 }
 
-/** One notification per call: tone 2 replaces tone 1 in the shade instead of stacking. */
-export function dispatchNotificationId(dispatchId: string): string {
-  return `dispatch:${dispatchId}`;
-}
+export { dispatchNotificationId } from './notificationIds';
 
 /**
  * The critical channel to post a page on, created if needed. Posting to a channel that does not
@@ -45,9 +44,26 @@ async function criticalChannel(): Promise<string> {
   }
 }
 
-/** Stops a page ringing: the member has the call open (or answered it from the notification). */
+/** a11y-spec §3.1 #2: the alarm sounds "until acknowledged or 60 s". */
+export const RING_CAP_MS = 60_000;
+
+/**
+ * Cancels the pending 60 s cap for a page - it must never fire after the member answered (it would
+ * replace the "Sent" notification with a "stopped ringing" one).
+ */
+export async function cancelRingCap(dispatchId: string): Promise<void> {
+  if (Platform.OS !== 'android') return;
+  try {
+    await notifee.cancelTriggerNotification(dispatchNotificationId(dispatchId));
+  } catch (error) {
+    console.warn('[push] cancelling the ring cap failed', error);
+  }
+}
+
+/** Stops a page ringing: the member acted on it (answered, Silence, or opened it unlocked). */
 export async function silenceDispatchNotification(dispatchId: string): Promise<void> {
   if (Platform.OS !== 'android') return;
+  await cancelRingCap(dispatchId);
   try {
     await notifee.cancelDisplayedNotification(dispatchNotificationId(dispatchId));
   } catch (error) {
@@ -97,6 +113,48 @@ export async function displayPushNotification(
         : {}),
     },
   });
+
+  if (payload) await scheduleRingCap(payload, channelId, data);
+}
+
+/**
+ * After RING_CAP_MS the insistent alarm is replaced, under the same id, by the same page that no
+ * longer loops (onlyAlertOnce: the replacement makes no sound). It stays in the shade with its
+ * answer buttons. A timestamp trigger without AlarmManager is inexact: under Doze it can fire
+ * late, so the cap is "at least 60 s" (runbook row 18). Never throws - the page is already up.
+ */
+async function scheduleRingCap(
+  payload: NonNullable<ReturnType<typeof alertPayloadFromPushData>>,
+  channelId: string,
+  data: PushMessageData | undefined,
+): Promise<void> {
+  try {
+    await notifee.createTriggerNotification(
+      {
+        id: dispatchNotificationId(payload.dispatchId),
+        title: data?.title ?? 'Dispatch alert',
+        body: `${data?.body ?? ''}\nStill unanswered - alarm stopped after 60 s.`.trim(),
+        data: { ...alertPayloadToNotificationData(payload), category: 'dispatch' },
+        android: {
+          channelId,
+          importance: AndroidImportance.HIGH,
+          pressAction: { id: 'default' },
+          category: AndroidCategory.ALARM,
+          onlyAlertOnce: true,
+          loopSound: false,
+          autoCancel: false,
+          visibility: AndroidVisibility.PUBLIC,
+          actions: ANDROID_RESPONSE_ACTIONS,
+        },
+      },
+      { type: TriggerType.TIMESTAMP, timestamp: Date.now() + RING_CAP_MS },
+    );
+  } catch (error) {
+    console.warn(
+      '[push] scheduling the 60 s ring cap failed; the page loops until acted on',
+      error,
+    );
+  }
 }
 
 async function rememberPagePayload(
