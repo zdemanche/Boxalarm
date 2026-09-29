@@ -428,4 +428,84 @@ describe('pre-plan + hydrant copies -> dispatch detail (real DynamoDB with the a
       expect(body.nearestHydrants?.[0]?.distanceMeters).toBeLessThan(2010);
     });
   });
+
+  describe('archive tombstones through the real keys (review N14)', () => {
+    let n = 0;
+    const view = async (address: string, extra: Record<string, unknown> = {}) => {
+      n += 1;
+      await putDispatch(`NICHOLS-ARCHIVE-${n}`, address, extra);
+      return detail(`NICHOLS-ARCHIVE-${n}`);
+    };
+
+    it('an archived occupancy stops matching, stays archived, and a racing later save cannot revive it', async () => {
+      const cedar = { latitude: 41.33, longitude: -73.3 };
+      await consumePrePlan(
+        {
+          deptId: 'NICHOLS',
+          occupancyId: 'OCC-CEDAR',
+          summary: 'Cedar',
+          address: '55 Cedar Ln',
+          hazards: ['TRUSS_ROOF'],
+          utilityShutoffs: [],
+          ...cedar,
+        },
+        '2026-09-10T00:00:00Z',
+      );
+      expect((await view('55 Cedar Ln')).prePlan).toMatchObject({ matchType: 'ADDRESS' });
+
+      // N1: the archive's eventTime is OLDER than the stored save — it must still apply.
+      await consumePrePlan(
+        { deptId: 'NICHOLS', occupancyId: 'OCC-CEDAR', archived: true },
+        '2026-09-09T00:00:00Z',
+      );
+      expect((await view('55 Cedar Ln')).prePlan).toBeNull();
+      expect((await view('I-95 NB exit 27', cedar)).prePlan).toBeNull();
+
+      // A later ordinary event (a replay, a racing save) never overwrites the tombstone.
+      await consumePrePlan(
+        {
+          deptId: 'NICHOLS',
+          occupancyId: 'OCC-CEDAR',
+          summary: 'Cedar',
+          address: '55 Cedar Ln',
+          hazards: ['TRUSS_ROOF'],
+          utilityShutoffs: [],
+          ...cedar,
+        },
+        '2026-09-20T00:00:00Z',
+      );
+      expect((await view('55 Cedar Ln')).prePlan).toBeNull();
+      const copy = await client.send(
+        new GetCommand({
+          TableName: TABLE_NAME,
+          Key: { pk: 'DEPT#NICHOLS#PREPLAN', sk: 'OCCUPANCY#OCC-CEDAR' },
+        }),
+      );
+      expect(copy.Item).toMatchObject({ archivedAt: Date.parse('2026-09-09T00:00:00Z') });
+      expect(copy.Item).not.toHaveProperty('gsi1pk');
+      expect(copy.Item).not.toHaveProperty('gsi2pk');
+    });
+
+    it('an archived hydrant drops off every nearest-hydrant list for good', async () => {
+      const spot = { latitude: 41.37, longitude: -73.33 };
+      await consumeHydrant(
+        { deptId: 'NICHOLS', hydrantId: 'HYD-GONE', status: 'IN_SERVICE', ...spot },
+        '2026-09-10T00:00:00Z',
+      );
+      expect(
+        (await view('I-95 NB exit 28', spot)).nearestHydrants?.map((h) => h.hydrantId),
+      ).toEqual(['HYD-GONE']);
+
+      await consumeHydrant(
+        { deptId: 'NICHOLS', hydrantId: 'HYD-GONE', archived: true },
+        '2026-09-11T00:00:00Z',
+      );
+      await consumeHydrant(
+        { deptId: 'NICHOLS', hydrantId: 'HYD-GONE', status: 'IN_SERVICE', ...spot },
+        '2026-09-12T00:00:00Z',
+      );
+
+      expect((await view('I-95 NB exit 28', spot)).nearestHydrants ?? []).toEqual([]);
+    });
+  });
 });
