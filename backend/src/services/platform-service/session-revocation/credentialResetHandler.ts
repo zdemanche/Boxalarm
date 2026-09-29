@@ -67,8 +67,30 @@ async function resetCredentials(
     return badRequestProblem(traceId, 'memberId is required and must be a non-empty string.');
   }
 
-  const { userPoolId } = readRevocationConfig(process.env);
-  const tableName = readPlatformTableName(process.env);
+  // A missing env var is a deploy fault; answer it as problem+json with the traceId like
+  // every other failure here (review minor 13), not an unshaped 500.
+  let userPoolId: string;
+  let tableName: string;
+  try {
+    ({ userPoolId } = readRevocationConfig(process.env));
+    tableName = readPlatformTableName(process.env);
+  } catch (error) {
+    log('credentialReset.configError', {
+      traceId,
+      message: error instanceof Error ? error.message : undefined,
+    });
+    return {
+      statusCode: 500,
+      headers: { 'content-type': 'application/problem+json' },
+      body: JSON.stringify({
+        type: 'about:blank',
+        title: 'Internal Server Error',
+        status: 500,
+        detail: 'Credential reset is misconfigured.',
+        traceId,
+      }),
+    };
+  }
   const client = getClient();
 
   let targetDeptId: string | undefined;

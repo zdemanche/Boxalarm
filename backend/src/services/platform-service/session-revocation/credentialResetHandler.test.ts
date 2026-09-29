@@ -153,6 +153,25 @@ describe('credentialResetHandler', () => {
     expect(mocks.resetMemberPassword).not.toHaveBeenCalled();
   });
 
+  it('answers a problem+json 500 with the traceId when its config is missing (review minor 13)', async () => {
+    mockDeps();
+    vi.doMock('./cognitoRevocationClient.js', () => ({
+      readRevocationConfig: () => {
+        throw new Error('COGNITO_USER_POOL_ID is required and was not set');
+      },
+      createRevocationClient: () => ({}),
+    }));
+    const handler = await load();
+
+    const result = await handler(buildEvent({ memberId: 'sub-9' }), ADMIN);
+
+    expect(result.statusCode).toBe(500);
+    const body = JSON.parse(result.body) as { status: number; traceId: string };
+    expect(body.status).toBe(500);
+    expect(body.traceId).toEqual(expect.any(String));
+    expect(writeRevocationMarker).not.toHaveBeenCalled();
+  });
+
   it('answers 400 without a memberId', async () => {
     mockDeps();
     const handler = await load();
