@@ -231,6 +231,47 @@ describe('POST /incidents/{id}/lock', () => {
     expect((json.warnings as { code: string }[]).map((w) => w.code)).toContain('NERIS_UNREACHABLE');
   });
 
+  it('locks when the NERIS config or secret cannot be read, with a warning instead of a 503', async () => {
+    vi.doMock('./reportContext.js', () => ({
+      loadReportContext: () =>
+        Promise.resolve({
+          incident: incident(),
+          units: [COMPLETE_UNIT],
+          settings: settings(),
+          nerisApi: compiled,
+        }),
+      nerisApiFromEnv: () =>
+        Promise.reject(
+          new Error('Secret boxalarm-dev-neris-client-credentials has no SecretString value'),
+        ),
+    }));
+    review.lockIncident.mockResolvedValue({ status: 'VALIDATED' });
+    const { statusCode, json } = await call('./lockIncident.js', route);
+    expect(statusCode).toBe(200);
+    expect((json.warnings as { code: string }[]).map((w) => w.code)).toContain('NERIS_UNREACHABLE');
+
+    vi.resetModules();
+    mockReview();
+    vi.doMock('./reportContext.js', () => ({
+      loadReportContext: () =>
+        Promise.resolve({
+          incident: incident(),
+          units: [COMPLETE_UNIT],
+          settings: settings(),
+          nerisApi: compiled,
+        }),
+      nerisApiFromEnv: () => Promise.reject(new Error('ThrottlingException')),
+    }));
+    const validated = await call(
+      './validateIncident.js',
+      'POST /api/v1/incidents/{incidentId}/validate',
+      {
+        mode: 'both',
+      },
+    );
+    expect(validated.statusCode).toBe(200);
+  });
+
   it('answers 409 for an already-locked report and for a report edited during review', async () => {
     mockContext({ incident: incident({ lockedAt: ALARM + 900 }), units: [], settings: settings() });
     expect((await call('./lockIncident.js', route)).json.code).toBe('ALREADY_LOCKED');

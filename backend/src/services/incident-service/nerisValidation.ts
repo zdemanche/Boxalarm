@@ -470,7 +470,11 @@ export function describeNerisIssue(issue: NerisIssue): ValidationIssue {
 }
 
 export interface NerisValidationInput {
-  readonly api: NerisApi;
+  /**
+   * Built lazily inside the try: reading the NERIS config (SSM) or OAuth secret can fail —
+   * the secret is set out-of-band — and that must be a warning, never a 503 on validate/lock.
+   */
+  readonly api: () => Promise<NerisApi>;
   readonly payload: NerisPayload;
   readonly departmentNerisId: string;
   readonly now: () => Date;
@@ -482,7 +486,8 @@ export async function nerisRoundTrip(input: NerisValidationInput): Promise<{
   nerisValidatedAt: string | null;
 }> {
   try {
-    const result = await input.api.validateIncident(input.departmentNerisId, input.payload);
+    const api = await input.api();
+    const result = await api.validateIncident(input.departmentNerisId, input.payload);
     if (result.ok) {
       return { blocking: [], warnings: [], nerisValidatedAt: input.now().toISOString() };
     }
@@ -571,7 +576,7 @@ export async function runValidation(input: RunValidationInput): Promise<Validati
         schema: input.nerisApi,
       });
       const neris = await nerisRoundTrip({
-        api: await input.api(),
+        api: input.api,
         payload,
         departmentNerisId,
         now: input.now ?? (() => new Date()),
