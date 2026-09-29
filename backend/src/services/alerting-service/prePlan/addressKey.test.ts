@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
-import { knownLocalities, normalizeAddress } from './addressKey.js';
+import { knownLocalities, normalizeAddress, parseTownChoice } from './addressKey.js';
 
 describe('normalizeAddress', () => {
   it.each([
@@ -358,6 +358,31 @@ describe('normalizeAddress', () => {
     expect(normalizeAddress('12 Main St Apt 4 Upper Stepney')).toMatchObject({
       unit: '4',
       town: 'UPPER STEPNEY',
+    });
+  });
+});
+
+describe('parseTownChoice (round-4 m4)', () => {
+  it.each([
+    ['Trumbull', { town: 'TRUMBULL', zip: null, state: null }],
+    ['Trumbull, CT', { town: 'TRUMBULL', zip: null, state: 'CT' }],
+    ['Town of Trumbull', { town: 'TRUMBULL', zip: null, state: null }],
+    ['City of Bridgeport, Connecticut', { town: 'BRIDGEPORT', zip: null, state: 'CT' }],
+    ['Trumbull CT 06611', { town: 'TRUMBULL', zip: '06611', state: 'CT' }],
+    ['06611', { town: null, zip: '06611', state: null }],
+    ['North Haven', { town: 'N HAVEN', zip: null, state: null }],
+    // An unknown place is kept as typed (compared form), so it can still conflict.
+    ['Bpt, CT', { town: 'BPT', zip: null, state: 'CT' }],
+    ['  ', { town: null, zip: null, state: null }],
+  ] as const)('%s', (typed, expected) => {
+    expect(parseTownChoice(typed)).toEqual(expected);
+  });
+
+  it('knows a department home village passed in', () => {
+    expect(parseTownChoice('Village of Tashua, CT', new Set(['TASHUA']))).toEqual({
+      town: 'TASHUA',
+      zip: null,
+      state: 'CT',
     });
   });
 });

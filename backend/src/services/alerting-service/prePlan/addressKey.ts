@@ -282,6 +282,8 @@ interface Locality {
   readonly state: string | null;
   /** Words were left that are not a known place. */
   readonly unknownWords: boolean;
+  /** Those words (empty when none are left), in compared form. */
+  readonly rest: string;
 }
 
 /**
@@ -309,11 +311,48 @@ function parseLocality(tokens: readonly string[], known: ReadonlySet<string>): L
     state = last;
     words.pop();
   }
-  if (words.length === 0) return { town: null, zip, state, unknownWords: false };
+  if (words.length === 0) return { town: null, zip, state, unknownWords: false, rest: '' };
   const joined = words.join(' ');
   return known.has(joined)
-    ? { town: joined, zip, state, unknownWords: false }
-    : { town: null, zip, state, unknownWords: true };
+    ? { town: joined, zip, state, unknownWords: false, rest: '' }
+    : { town: null, zip, state, unknownWords: true, rest: joined };
+}
+
+/** "Town of Trumbull", "City of Bridgeport": the municipal prefix is not part of the name. */
+const MUNICIPAL_PREFIXES = new Set(['TOWN', 'CITY', 'VILLAGE', 'BOROUGH', 'BORO']);
+
+export interface TownChoice {
+  readonly town: string | null;
+  readonly zip: string | null;
+  readonly state: string | null;
+}
+
+/**
+ * A town typed by the dispatcher (the "Other town" choice), read like an address tail:
+ * "Trumbull, CT", "Town of Trumbull", "Trumbull 06611" and "06611" all name Trumbull's area,
+ * so typing the home town when the home list failed to load still works (round-4 m4). A name
+ * that is not a known place is kept as typed, in compared form, so it still conflicts with
+ * a pre-plan's town rather than silently disappearing.
+ */
+export function parseTownChoice(
+  raw: string,
+  extraLocalities: ReadonlySet<string> = new Set(),
+): TownChoice {
+  const known =
+    extraLocalities.size === 0
+      ? knownLocalities()
+      : new Set([...knownLocalities(), ...extraLocalities]);
+  let words = localityKey(raw)
+    .split(' ')
+    .filter((word) => word.length > 0);
+  while (words.length > 2 && MUNICIPAL_PREFIXES.has(words[0] as string) && words[1] === 'OF') {
+    words = words.slice(2);
+  }
+  const whole = words.join(' ');
+  // A known place as typed wins over peeling a "state" off it.
+  if (known.has(whole)) return { town: whole, zip: null, state: null };
+  const parsed = parseLocality(words, known);
+  return { town: parsed.town ?? (parsed.rest || null), zip: parsed.zip, state: parsed.state };
 }
 
 /** "RT 111", "US RT 1", "HWY 8": a numbered route right after the house number, or null. */

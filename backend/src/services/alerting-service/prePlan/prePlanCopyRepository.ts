@@ -2,7 +2,7 @@ import { QueryCommand, type DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb
 import type { VerifiedDeptId } from '@boxalarm/dept-scope';
 import { emitOutcomeMetric } from '@boxalarm/metrics';
 import { logError } from '../dispatches/logger.js';
-import { localityKey, normalizeAddress, type NormalizedAddress } from './addressKey.js';
+import { normalizeAddress, parseTownChoice, type NormalizedAddress } from './addressKey.js';
 import { judgeLocality, type HomeLocality } from './locality.js';
 import {
   ADDRESS_INDEX_NAME,
@@ -127,21 +127,37 @@ function isPrePlanCopy(
 }
 
 /**
- * The dispatcher's locality choice supplies the town the address itself did not name. When
- * the address does name one and the two disagree (outside the home set, where two names can
- * mean the same area) the parse is ambiguous — flagged, never silently resolved either way.
+ * The dispatcher's locality choice supplies the town (and any ZIP/state typed with it) the
+ * address itself did not name. The typed town is read like an address tail ("Trumbull, CT",
+ * "Town of Trumbull", "06611"; round-4 m4). When the address does name a part and the two
+ * disagree (for towns: outside the home set, where two names can mean the same area) the
+ * parse is ambiguous — flagged, never silently resolved either way.
  */
 function withDispatchLocality(
   normalized: NormalizedAddress,
   dispatchLocality: { readonly town: string } | undefined,
   home: HomeLocality,
 ): NormalizedAddress {
-  const chosen = dispatchLocality ? localityKey(dispatchLocality.town) : '';
-  if (chosen.length === 0) return normalized;
-  if (normalized.town === null) return { ...normalized, town: chosen };
-  const sameArea =
-    normalized.town === chosen || (home.towns.has(normalized.town) && home.towns.has(chosen));
-  return sameArea ? normalized : { ...normalized, ambiguous: true };
+  if (!dispatchLocality) return normalized;
+  const chosen = parseTownChoice(dispatchLocality.town, home.towns);
+  let result = normalized;
+  let conflict = false;
+  if (chosen.town !== null) {
+    if (result.town === null) result = { ...result, town: chosen.town };
+    else
+      conflict ||=
+        result.town !== chosen.town &&
+        !(home.towns.has(result.town) && home.towns.has(chosen.town));
+  }
+  if (chosen.zip !== null) {
+    if (result.zip === null) result = { ...result, zip: chosen.zip };
+    else conflict ||= result.zip !== chosen.zip;
+  }
+  if (chosen.state !== null) {
+    if (result.state === null) result = { ...result, state: chosen.state };
+    else conflict ||= result.state !== chosen.state;
+  }
+  return conflict ? { ...result, ambiguous: true } : result;
 }
 
 function withBuildingUnit(

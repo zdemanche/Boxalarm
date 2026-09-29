@@ -297,6 +297,30 @@ describe('findPrePlanByAddress — locality against the home set (round-2 A)', (
       expect(await byAddress(trumbull, '123 Main St', HOME, { town: 'Bpt' })).toBeUndefined();
     });
 
+    it('m4: a typed town is read like an address tail (state, "Town of", ZIP)', async () => {
+      const trumbull = [prePlanCopy('OCC-T', '123 Main St')];
+      for (const town of [
+        'Trumbull, CT',
+        'trumbull ct',
+        'Town of Trumbull',
+        'City of Trumbull, Connecticut',
+        'Nichols CT 06611',
+        '06611',
+      ]) {
+        expect(await byAddress(trumbull, '123 Main St', HOME, { town }), town).toMatchObject({
+          matchType: 'ADDRESS',
+          copy: { occupancyId: 'OCC-T' },
+        });
+      }
+      for (const town of ['Bridgeport, CT', 'City of Bridgeport', 'Bridgeport 06604', '06604']) {
+        expect(await byAddress(trumbull, '123 Main St', HOME, { town }), town).toBeUndefined();
+      }
+      // A typed ZIP that disagrees with the address's own ZIP is flagged, not resolved.
+      expect(
+        await byAddress(trumbull, '123 Main St, Trumbull 06611', HOME, { town: 'Trumbull 06604' }),
+      ).toMatchObject({ matchType: 'ADDRESS_UNVERIFIED' });
+    });
+
     it('an address naming one town and a locality choice naming another is flagged, not resolved', async () => {
       expect(
         await byAddress(
