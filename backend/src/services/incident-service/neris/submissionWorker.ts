@@ -323,7 +323,15 @@ async function attemptSubmission(
     } else {
       result = await api.createIncident(entity, nerisPayload);
       // NERIS refusing a create as a duplicate means an earlier attempt landed: adopt it.
-      if (!result.ok && (result.httpStatus === 409 || looksLikeDuplicate(result.issues))) {
+      // Any 409/422 on a create whose id we can predict: look it up first. NERIS's duplicate
+      // response is undocumented (both specs list only 201/422), so the wording is not
+      // trusted — a record that exists is adopted, whatever the 422 says (round 2, N1).
+      if (
+        !result.ok &&
+        (result.httpStatus === 409 ||
+          (result.httpStatus === 422 && expectedNerisId !== undefined) ||
+          looksLikeDuplicate(result.issues))
+      ) {
         const existing = await adopt();
         if (existing) {
           nerisIncidentId = existing;
@@ -375,7 +383,7 @@ async function attemptSubmission(
     ? retryScheduleName({ ...payload, retryCount: payload.retryCount + 1 })
     : undefined;
 
-  await submissionRepository.appendSubmissionAttempt(
+  const appended = await submissionRepository.appendSubmissionAttempt(
     payload.deptId,
     payload.incidentId,
     {
@@ -399,7 +407,7 @@ async function attemptSubmission(
 
   emitOutcomeMetric(METRIC_NAMESPACE, OUTCOME_METRIC[outcome]);
 
-  if (canRetry) {
+  if (canRetry && !appended.superseded) {
     const delaySeconds = Math.min(
       BASE_BACKOFF_SECONDS * 2 ** payload.retryCount,
       MAX_BACKOFF_SECONDS,

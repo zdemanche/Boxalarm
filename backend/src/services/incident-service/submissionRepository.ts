@@ -176,6 +176,8 @@ const OPEN_STATUSES = new Set(['SUBMITTED', 'PENDING_INCIDENT_DATA', 'PENDING_AP
 
 export interface AppendSubmissionAttemptResult {
   readonly submissionStatus: SubmissionStatus;
+  /** A concurrent attempt already succeeded: this failure was not recorded (round 2, N5). */
+  readonly superseded?: true;
 }
 
 export interface EnqueueSubmissionResult {
@@ -361,6 +363,7 @@ export function createSubmissionRepository(
       ];
       const names: Record<string, string> = {};
       const values: Record<string, unknown> = {
+        ...(attempt.outcome === 'SUCCESS' ? {} : { ':acceptedStatus': 'ACCEPTED' }),
         ':submissionStatus': submissionStatus,
         ':attemptedAt': attemptedAt,
         ':updatedAt': nowEpochSeconds,
@@ -430,7 +433,12 @@ export function createSubmissionRepository(
                 Update: {
                   TableName: tableName,
                   Key: { pk: buildDeptScopedPk(deptId, 'INCIDENT', incidentId), sk: 'METADATA' },
-                  ConditionExpression: 'attribute_exists(pk)',
+                  // A failure never replaces a success: when two workers race (an SQS
+                  // duplicate, or a retry released while the old trigger was still alive), a
+                  // late 422/401 must not turn an ACCEPTED report into FAILED/REJECTED.
+                  ConditionExpression: success
+                    ? 'attribute_exists(pk)'
+                    : 'attribute_exists(pk) AND (attribute_not_exists(submissionStatus) OR submissionStatus <> :acceptedStatus)',
                   UpdateExpression: `SET ${setClauses.join(', ')}${success ? ' REMOVE pendingNerisId' : ''}`,
                   ...(Object.keys(names).length > 0 ? { ExpressionAttributeNames: names } : {}),
                   ExpressionAttributeValues: values,
@@ -504,6 +512,25 @@ export function createSubmissionRepository(
           error instanceof TransactionCanceledException &&
           error.CancellationReasons?.[1]?.Code === 'ConditionalCheckFailed'
         ) {
+          if (!success) {
+            const current = await client.send(
+              new GetCommand({
+                TableName: tableName,
+                Key: { pk: buildDeptScopedPk(deptId, 'INCIDENT', incidentId), sk: 'METADATA' },
+                ConsistentRead: true,
+              }),
+            );
+            if (current.Item?.submissionStatus === 'ACCEPTED') {
+              logger.warn({
+                event: 'neris.submission.failure_superseded',
+                correlationId: incidentId,
+                deptId,
+                incidentId,
+                outcome: attempt.outcome,
+              });
+              return { submissionStatus: 'ACCEPTED', superseded: true };
+            }
+          }
           throw new IncidentNotFoundError(incidentId);
         }
         logger.error({

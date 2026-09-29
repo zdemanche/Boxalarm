@@ -450,6 +450,52 @@ describe('submissionWorker handler (SQS trigger)', () => {
     );
   });
 
+  it('looks up and adopts on a plain 422 create when the record exists, whatever the wording (round 2, N1)', async () => {
+    const { fetchFn, appendSubmissionAttempt } = mockDeps({ httpStatus: 422 });
+    fetchFn.mockImplementation((_path: string, init?: RequestInit) =>
+      Promise.resolve(
+        init?.method === 'POST'
+          ? new Response(
+              JSON.stringify({
+                detail: [{ loc: ['body'], msg: 'Record conflict', type: 'value_error' }],
+              }),
+              { status: 422 },
+            )
+          : init?.method === 'GET'
+            ? new Response(JSON.stringify({ incident_status: { status: 'SUBMITTED' } }), {
+                status: 200,
+              })
+            : new Response(JSON.stringify({ last_modified: 'x' }), { status: 200 }),
+      ),
+    );
+    const { createHandler } = await import('./submissionWorker.js');
+    await createHandler({ schedulerClient: { send: vi.fn() } as never })(
+      { Records: [sqsRecord(submittedEnvelope('NICHOLS', INCIDENT_ID))] },
+      FAKE_CONTEXT,
+      () => undefined,
+    );
+    expect(appendSubmissionAttempt).toHaveBeenCalledWith(
+      'NICHOLS',
+      INCIDENT_ID,
+      expect.objectContaining({ outcome: 'SUCCESS', operation: 'ADOPT' }),
+      true,
+      expect.any(Number),
+    );
+  });
+
+  it('does not schedule a retry for a failure a concurrent success superseded (round 2, N5)', async () => {
+    const { appendSubmissionAttempt } = mockDeps({ httpStatus: 503 });
+    appendSubmissionAttempt.mockResolvedValue({ submissionStatus: 'ACCEPTED', superseded: true });
+    const { createHandler } = await import('./submissionWorker.js');
+    const schedulerSend = vi.fn();
+    await createHandler({ schedulerClient: { send: schedulerSend } as never })(
+      { Records: [sqsRecord(submittedEnvelope('NICHOLS', INCIDENT_ID))] },
+      FAKE_CONTEXT,
+      () => undefined,
+    );
+    expect(schedulerSend).not.toHaveBeenCalled();
+  });
+
   it('schedules each retry under a unique, self-deleting name recorded on the attempt (review M3)', async () => {
     const { appendSubmissionAttempt } = mockDeps({ httpStatus: 503 });
     const { createHandler, RETRY_SCHEDULE_PREFIX } = await import('./submissionWorker.js');

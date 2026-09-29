@@ -392,6 +392,38 @@ describe('createSubmissionRepository.appendSubmissionAttempt (NERIS ledger field
   });
 });
 
+describe('createSubmissionRepository.appendSubmissionAttempt (race with a success, round 2 N5)', () => {
+  it('conditions a failure on the report not already ACCEPTED, and reports it superseded', async () => {
+    const send = vi
+      .fn()
+      .mockRejectedValueOnce(
+        new TransactionCanceledException({
+          message: 'cancelled',
+          $metadata: {},
+          CancellationReasons: [{ Code: 'None' }, { Code: 'ConditionalCheckFailed' }],
+        }),
+      )
+      .mockResolvedValueOnce({ Item: { submissionStatus: 'ACCEPTED' } });
+    const repository = createSubmissionRepository(fakeClient(send), TABLE_NAME);
+
+    const result = await repository.appendSubmissionAttempt(
+      DEPT_ID,
+      INCIDENT_ID,
+      { outcome: 'VALIDATION_ERROR', httpStatus: 422, retryCount: 0, nerisEnvironment: 'DEV' },
+      true,
+      1_798_000_200,
+    );
+
+    expect(result).toEqual({ submissionStatus: 'ACCEPTED', superseded: true });
+    const [command] = send.mock.calls[0] as [
+      { input: { TransactItems: { Update?: { ConditionExpression: string } }[] } },
+    ];
+    expect(command.input.TransactItems[1]!.Update!.ConditionExpression).toBe(
+      'attribute_exists(pk) AND (attribute_not_exists(submissionStatus) OR submissionStatus <> :acceptedStatus)',
+    );
+  });
+});
+
 describe('createSubmissionRepository.getSubmission', () => {
   it('reads the incident row directly with a consistent GetItem on the dept-scoped key (AC4)', async () => {
     const send = vi.fn().mockResolvedValue({

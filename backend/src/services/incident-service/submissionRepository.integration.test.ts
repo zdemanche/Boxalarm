@@ -126,6 +126,14 @@ describe('submissionRepository (real DynamoDB via LocalStack)', () => {
       false,
       1_798_000_300,
     );
-    expect(second).toEqual({ submissionStatus: 'RETRYING' });
+    // A later failure in the same cycle cannot replace the success (round 2, N5).
+    expect(second).toEqual({ submissionStatus: 'ACCEPTED', superseded: true });
+    const afterSecond = await client.send(
+      new GetCommand({
+        TableName: TABLE_NAME,
+        Key: { pk: buildDeptScopedPk(DEPT_ID, 'INCIDENT', incidentId), sk: 'METADATA' },
+      }),
+    );
+    expect(afterSecond.Item?.submissionStatus).toBe('ACCEPTED');
   });
 });
