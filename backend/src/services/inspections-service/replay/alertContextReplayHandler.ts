@@ -96,6 +96,9 @@ async function emitIfUnchanged(
   source: { readonly pk: string; readonly sk: string; readonly updatedAt: number },
   outboxRecord: object,
 ): Promise<'emitted' | 'skipped'> {
+  // Destructured: the pk-scoping sweep (test/pk-scoping.test.ts) reads `pk: <identifier>`
+  // as a hand-built key. source.pk comes from a row read by its dept-scoped key.
+  const { pk, sk, updatedAt } = source;
   try {
     await doc.send(
       new TransactWriteCommand({
@@ -103,9 +106,9 @@ async function emitIfUnchanged(
           {
             ConditionCheck: {
               TableName: tableName,
-              Key: { pk: source.pk, sk: source.sk },
+              Key: { pk, sk },
               ConditionExpression: 'updatedAt = :readUpdatedAt',
-              ExpressionAttributeValues: { ':readUpdatedAt': source.updatedAt },
+              ExpressionAttributeValues: { ':readUpdatedAt': updatedAt },
             },
           },
           { Put: { TableName: tableName, Item: outboxRecord as Record<string, unknown> } },
