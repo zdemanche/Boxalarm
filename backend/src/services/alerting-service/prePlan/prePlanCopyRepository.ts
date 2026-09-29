@@ -77,13 +77,6 @@ function isPrePlanCopy(
   return item.entityType === 'PRE_PLAN_COPY' && typeof item.occupancyId === 'string';
 }
 
-function newestFirst(a: PrePlanCopyItem, b: PrePlanCopyItem): number {
-  return (
-    (b.snapshotUpdatedAt ?? 0) - (a.snapshotUpdatedAt ?? 0) ||
-    a.occupancyId.localeCompare(b.occupancyId)
-  );
-}
-
 /** Rejects a candidate whose town or ZIP differs — only when both sides carry one. */
 function sameLocality(dispatch: NormalizedAddress, candidate: PrePlanCopyItem): boolean {
   if (dispatch.town && candidate.addressTown && dispatch.town !== candidate.addressTown) {
@@ -101,11 +94,73 @@ function closeEnough(dispatchPoint: GeoPoint | undefined, candidate: PrePlanCopy
   return haversineMeters(dispatchPoint, location) <= ADDRESS_MATCH_MAX_DISTANCE_METERS;
 }
 
+/** How a pre-plan was tied to the dispatch — shown to the crew, never hidden. */
+export type PrePlanMatchType =
+  'ADDRESS' | 'ADDRESS_BUILDING' | 'UNIT_MISMATCH' | 'NEARBY' | 'CANDIDATES';
+
+export interface PrePlanCandidate {
+  readonly copy: PrePlanCopyItem;
+  /** Meters from the dispatch point, when both have coordinates. */
+  readonly distanceMeters?: number;
+}
+
+export type PrePlanMatch =
+  | {
+      readonly matchType: Exclude<PrePlanMatchType, 'CANDIDATES'>;
+      readonly copy: PrePlanCopyItem;
+      readonly distanceMeters?: number;
+    }
+  | { readonly matchType: 'CANDIDATES'; readonly candidates: readonly PrePlanCandidate[] };
+
 /**
- * The pre-plan whose normalized street address equals the dispatch's, in the same town/ZIP
- * (when both say) and within 150 m (when both have coordinates). Several occupancies can
- * share a street address (units in one building); prefer the one whose unit matches the
- * dispatch's, then a building-level (no-unit) pre-plan, then the most recently updated.
+ * Picks among same-address copies only when the choice is unambiguous; a wrong pre-plan is
+ * worse than none, so anything else is returned as CANDIDATES for the crew to choose from.
+ *  - the dispatch's own unit (exactly one) -> ADDRESS
+ *  - else the building-level plan (exactly one) -> ADDRESS when the dispatch named no unit,
+ *    ADDRESS_BUILDING when it did
+ *  - else a lone plan for some other unit -> UNIT_MISMATCH (flagged)
+ *  - else (several, or duplicates of the same unit) -> CANDIDATES
+ */
+export function resolveUnit(
+  dispatchUnit: string | null,
+  candidates: readonly PrePlanCopyItem[],
+): PrePlanMatch | undefined {
+  if (candidates.length === 0) {
+    return undefined;
+  }
+  const asCandidates = (): PrePlanMatch => ({
+    matchType: 'CANDIDATES',
+    candidates: [...candidates].sort(byUnit).map((copy) => ({ copy })),
+  });
+  if (dispatchUnit !== null) {
+    const sameUnit = candidates.filter((c) => c.addressUnit === dispatchUnit);
+    if (sameUnit.length === 1)
+      return { matchType: 'ADDRESS', copy: sameUnit[0] as PrePlanCopyItem };
+    if (sameUnit.length > 1) return asCandidates();
+  }
+  const building = candidates.filter((c) => c.addressUnit === undefined);
+  if (building.length === 1) {
+    return {
+      matchType: dispatchUnit === null ? 'ADDRESS' : 'ADDRESS_BUILDING',
+      copy: building[0] as PrePlanCopyItem,
+    };
+  }
+  if (building.length === 0 && candidates.length === 1) {
+    return { matchType: 'UNIT_MISMATCH', copy: candidates[0] as PrePlanCopyItem };
+  }
+  return asCandidates();
+}
+
+function byUnit(a: PrePlanCopyItem, b: PrePlanCopyItem): number {
+  return (
+    (a.addressUnit ?? '').localeCompare(b.addressUnit ?? '') ||
+    a.occupancyId.localeCompare(b.occupancyId)
+  );
+}
+
+/**
+ * The pre-plan(s) whose normalized street address equals the dispatch's, in the same town/ZIP
+ * (when both say) and within 150 m (when both have coordinates), resolved by unit.
  */
 export async function findPrePlanByAddress(
   client: DynamoDBDocumentClient,
@@ -113,7 +168,7 @@ export async function findPrePlanByAddress(
   deptId: VerifiedDeptId,
   address: string,
   dispatchPoint?: GeoPoint,
-): Promise<PrePlanCopyItem | undefined> {
+): Promise<PrePlanMatch | undefined> {
   const normalized = normalizeAddress(address);
   if (!normalized) {
     return undefined;
@@ -128,15 +183,8 @@ export async function findPrePlanByAddress(
   const candidates = items
     .filter(isPrePlanCopy)
     .filter((candidate) => sameLocality(normalized, candidate))
-    .filter((candidate) => closeEnough(dispatchPoint, candidate))
-    .sort(newestFirst);
-  const unitRank = (candidate: PrePlanCopyItem): number => {
-    const unit = candidate.addressUnit ?? null;
-    if (normalized.unit !== null && unit === normalized.unit) return 0;
-    if (unit === null) return 1;
-    return 2;
-  };
-  return [...candidates].sort((a, b) => unitRank(a) - unitRank(b))[0];
+    .filter((candidate) => closeEnough(dispatchPoint, candidate));
+  return resolveUnit(normalized.unit, candidates);
 }
 
 /** The pre-plan whose occupancy is nearest `point`, if one lies within the match radius. */

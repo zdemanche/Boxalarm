@@ -8,6 +8,7 @@ import {
   findNearestHydrants,
   findPrePlanByAddress,
   findPrePlanNear,
+  type PrePlanMatch,
 } from './prePlanCopyRepository.js';
 
 const DEPT_ID = toVerifiedDeptId({ deptId: 'NICHOLS' });
@@ -89,13 +90,18 @@ function hydrantCopy(
   };
 }
 
+/** The single matched occupancy, or undefined (no match / candidates). */
+function matchedId(match: PrePlanMatch | undefined): string | undefined {
+  return match && match.matchType !== 'CANDIDATES' ? match.copy.occupancyId : undefined;
+}
+
 describe('findPrePlanByAddress', () => {
   it('matches a differently spelled dispatch address to the pre-plan (Street/St, case, punctuation, city tail)', async () => {
     const { client, send } = fakeIndex([prePlanCopy('OCC-1', '123 Main Street')]);
 
     const found = await findPrePlanByAddress(client, TABLE, DEPT_ID, '123 main st., Trumbull CT');
 
-    expect(found?.occupancyId).toBe('OCC-1');
+    expect(found).toMatchObject({ matchType: 'ADDRESS', copy: { occupancyId: 'OCC-1' } });
     expect(send).toHaveBeenCalledOnce();
     const input = send.mock.calls[0]?.[0].input;
     expect(input?.IndexName).toBe('GSI1');
@@ -115,32 +121,64 @@ describe('findPrePlanByAddress', () => {
     expect(send).not.toHaveBeenCalled();
   });
 
-  it('prefers the unit-matched pre-plan, then the building-level one, among occupancies sharing a street address', async () => {
-    const { client } = fakeIndex([
-      prePlanCopy('OCC-APT2', '40 Oak Ave Apt 2', { snapshotUpdatedAt: 9 }),
-      prePlanCopy('OCC-BLDG', '40 Oak Ave', { snapshotUpdatedAt: 1 }),
-      prePlanCopy('OCC-APT7', '40 Oak Ave Apt 7', { snapshotUpdatedAt: 5 }),
-    ]);
+  describe('unit resolution (MAJOR-3: never silently pick one of several unit plans)', () => {
+    const apt = (unit: string, updated = 1) =>
+      prePlanCopy(`OCC-APT${unit}`, `40 Oak Ave Apt ${unit}`, { snapshotUpdatedAt: updated });
+    const building = prePlanCopy('OCC-BLDG', '40 Oak Ave');
+    const lookup = async (items: Record<string, unknown>[], address: string) =>
+      findPrePlanByAddress(fakeIndex(items).client, TABLE, DEPT_ID, address);
 
-    expect(
-      (await findPrePlanByAddress(client, TABLE, DEPT_ID, '40 Oak Avenue #7'))?.occupancyId,
-    ).toBe('OCC-APT7');
-    expect((await findPrePlanByAddress(client, TABLE, DEPT_ID, '40 Oak Avenue'))?.occupancyId).toBe(
-      'OCC-BLDG',
-    );
-    expect(
-      (await findPrePlanByAddress(client, TABLE, DEPT_ID, '40 Oak Avenue Apt 3'))?.occupancyId,
-    ).toBe('OCC-BLDG');
-  });
+    it('returns the exact unit match as ADDRESS', async () => {
+      expect(await lookup([apt('2'), building, apt('7')], '40 Oak Avenue #7')).toMatchObject({
+        matchType: 'ADDRESS',
+        copy: { occupancyId: 'OCC-APT7' },
+      });
+    });
 
-  it('falls back to the most recently updated unit when there is no building-level pre-plan', async () => {
-    const { client } = fakeIndex([
-      prePlanCopy('OCC-APT2', '40 Oak Ave Apt 2', { snapshotUpdatedAt: 9 }),
-      prePlanCopy('OCC-APT7', '40 Oak Ave Apt 7', { snapshotUpdatedAt: 5 }),
-    ]);
-    expect((await findPrePlanByAddress(client, TABLE, DEPT_ID, '40 Oak Ave'))?.occupancyId).toBe(
-      'OCC-APT2',
-    );
+    it('returns the building-level plan as ADDRESS when the dispatch names no unit', async () => {
+      expect(await lookup([apt('2'), building], '40 Oak Avenue')).toMatchObject({
+        matchType: 'ADDRESS',
+        copy: { occupancyId: 'OCC-BLDG' },
+      });
+    });
+
+    it('returns the building-level plan as ADDRESS_BUILDING for a unit with no plan of its own', async () => {
+      expect(await lookup([apt('2'), building], '40 Oak Avenue Apt 3')).toMatchObject({
+        matchType: 'ADDRESS_BUILDING',
+        copy: { occupancyId: 'OCC-BLDG' },
+      });
+    });
+
+    it('flags a lone plan for a different unit as UNIT_MISMATCH', async () => {
+      expect(await lookup([apt('2')], '40 Oak Avenue Apt 3')).toMatchObject({
+        matchType: 'UNIT_MISMATCH',
+        copy: { occupancyId: 'OCC-APT2' },
+      });
+      expect(await lookup([apt('2')], '40 Oak Avenue')).toMatchObject({
+        matchType: 'UNIT_MISMATCH',
+      });
+    });
+
+    it('returns every unit plan as CANDIDATES instead of the newest one (strip-mall case)', async () => {
+      for (const address of ['40 Oak Ave', '40 Oak Ave Unit C']) {
+        const match = await lookup([apt('A', 9), apt('B', 1)], address);
+        expect(match?.matchType).toBe('CANDIDATES');
+        expect(
+          match?.matchType === 'CANDIDATES'
+            ? match.candidates.map((c) => c.copy.addressUnit)
+            : undefined,
+        ).toEqual(['A', 'B']);
+      }
+    });
+
+    it('returns duplicates of one unit (or two building-level plans) as CANDIDATES', async () => {
+      const dupe = prePlanCopy('OCC-BLDG-2', '40 Oak Avenue');
+      expect((await lookup([building, dupe], '40 Oak Ave'))?.matchType).toBe('CANDIDATES');
+      const dupeUnit = prePlanCopy('OCC-APT2-B', '40 Oak Ave #2');
+      expect((await lookup([apt('2'), dupeUnit], '40 Oak Ave Apt 2'))?.matchType).toBe(
+        'CANDIDATES',
+      );
+    });
   });
 
   it('propagates a read failure to the caller (the detail handler degrades it)', async () => {
@@ -160,7 +198,7 @@ describe('findPrePlanByAddress — locality and distance (MAJOR-2)', () => {
       await findPrePlanByAddress(client, TABLE, DEPT_ID, '123 Main St, Bridgeport, CT'),
     ).toBeUndefined();
     expect(
-      (await findPrePlanByAddress(client, TABLE, DEPT_ID, '123 MAIN ST TRUMBULL CT'))?.occupancyId,
+      matchedId(await findPrePlanByAddress(client, TABLE, DEPT_ID, '123 MAIN ST TRUMBULL CT')),
     ).toBe('OCC-T');
   });
 
@@ -169,7 +207,7 @@ describe('findPrePlanByAddress — locality and distance (MAJOR-2)', () => {
     expect(
       await findPrePlanByAddress(client, TABLE, DEPT_ID, '123 Main St, CT 06604'),
     ).toBeUndefined();
-    expect((await findPrePlanByAddress(client, TABLE, DEPT_ID, '123 Main St'))?.occupancyId).toBe(
+    expect(matchedId(await findPrePlanByAddress(client, TABLE, DEPT_ID, '123 Main St'))).toBe(
       'OCC-T',
     );
   });
@@ -182,7 +220,7 @@ describe('findPrePlanByAddress — locality and distance (MAJOR-2)', () => {
       await findPrePlanByAddress(client, TABLE, DEPT_ID, '123 Main St', ORIGIN),
     ).toBeUndefined();
     expect(
-      (await findPrePlanByAddress(client, TABLE, DEPT_ID, '123 Main St', offset(350)))?.occupancyId,
+      matchedId(await findPrePlanByAddress(client, TABLE, DEPT_ID, '123 Main St', offset(350))),
     ).toBe('OCC-FAR');
   });
 });

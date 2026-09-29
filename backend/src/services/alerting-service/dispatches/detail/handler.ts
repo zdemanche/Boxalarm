@@ -47,8 +47,14 @@ async function matchPrePlan(
   const byAddress = item.address
     ? await findPrePlanByAddress(client, tableName, deptId, item.address, dispatchPoint)
     : undefined;
-  if (byAddress || !dispatchPoint) {
-    return byAddress;
+  if (byAddress) {
+    // Until the response can say how a plan was matched, only an unambiguous match is shown.
+    return byAddress.matchType === 'ADDRESS' || byAddress.matchType === 'ADDRESS_BUILDING'
+      ? byAddress.copy
+      : undefined;
+  }
+  if (!dispatchPoint) {
+    return undefined;
   }
   return findPrePlanNear(client, tableName, deptId, dispatchPoint);
 }
