@@ -11,6 +11,7 @@ import {
   onNavigationStateChange,
 } from '../../navigation/navigationRef';
 import { etaFor, queueAlertResponse } from './alertResponses';
+import { markInitialAlertRoutingSettled } from './lockScreenPresentation';
 import { answerFromActionId, handleNotificationEvent } from './notificationActions';
 import {
   alertPayloadFromNotificationData,
@@ -133,8 +134,19 @@ function subscribeIosAlertTaps(): () => void {
   };
 }
 
+/** If the initial notification never resolves, stop holding the lock-screen flag after this. */
+const INITIAL_ROUTING_GRACE_MS = 5_000;
+
 export function subscribePushNotificationRouting(): () => void {
-  void routeToInitialNotification();
+  const grace = setTimeout(markInitialAlertRoutingSettled, INITIAL_ROUTING_GRACE_MS);
+  routeToInitialNotification()
+    .catch((error: unknown) =>
+      console.error('[push] routing the launch notification failed', error),
+    )
+    .finally(() => {
+      clearTimeout(grace);
+      markInitialAlertRoutingSettled();
+    });
 
   const unsubscribeOpened = onNotificationOpenedApp(messagingInstance, (remoteMessage) => {
     openAlert(payloadFromRemoteMessage(remoteMessage));
@@ -152,6 +164,7 @@ export function subscribePushNotificationRouting(): () => void {
   const unsubscribeIosTaps = Platform.OS === 'ios' ? subscribeIosAlertTaps() : () => {};
 
   return () => {
+    clearTimeout(grace);
     unsubscribeOpened();
     unsubscribeForeground();
     unsubscribeIosTaps();

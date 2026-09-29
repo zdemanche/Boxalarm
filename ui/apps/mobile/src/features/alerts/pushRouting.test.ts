@@ -12,6 +12,8 @@ let mockNavigationListener: (() => void) | undefined;
 jest.mock('../../navigation/navigationRef', () => ({
   navigateToAlertDetail: jest.fn(),
   isNavigationReady: jest.fn(() => mockNavigationReady),
+  hasPendingAlertNavigation: jest.fn(() => false),
+  navigationRef: { isReady: () => false, getCurrentRoute: () => undefined },
   onNavigationStateChange: jest.fn((listener: () => void) => {
     mockNavigationListener = listener;
     return () => {};

@@ -13,6 +13,7 @@ interface AlertReadinessNative {
   openDndAccessSettings(): Promise<boolean>;
   openFullScreenIntentSettings(): Promise<boolean>;
   setShowWhenLocked(show: boolean): void;
+  isKeyguardLocked(): Promise<boolean>;
 }
 
 /** Null on iOS, and on an Android build without the module (e.g. Jest). */
@@ -80,5 +81,17 @@ export function setAlertShowsOverLockScreen(show: boolean): void {
     alertReadinessNative()?.setShowWhenLocked(show);
   } catch (error) {
     console.warn('[readiness] setShowWhenLocked failed', error);
+  }
+}
+
+/** True/false on Android with the module; null when it cannot be known (iOS, no module, error). */
+export async function isDeviceLocked(): Promise<boolean | null> {
+  const native = alertReadinessNative();
+  if (!native) return null;
+  try {
+    return await native.isKeyguardLocked();
+  } catch (error) {
+    console.warn('[readiness] reading the keyguard state failed', error);
+    return null;
   }
 }

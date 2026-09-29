@@ -47,7 +47,9 @@ None of this could run in CI (no Xcode or Android SDK there): the Kotlin module,
 | 18 | Pixel | **Bedtime mode** on, screen off, app killed, page | Screen turns on, full-screen alert shows over the lock screen, alarm sound loops until the call is opened, answered from the notification, or the notification is dismissed. |
 | 19 | Samsung | **Do Not Disturb** on (and separately **Sleep mode**), screen off, page | Same as 18. Also run once with battery optimization on (default) and once with Boxalarm set to "Unrestricted". |
 | 20 | Pixel, Samsung (Android 14+) | Revoke "Full screen notifications" for Boxalarm, page with screen off | Readiness banner names full-screen; the page falls back to a heads-up (not silent). Fix button opens the per-app full-screen setting (`ACTION_MANAGE_APP_USE_FULL_SCREEN_INTENT`). |
-| 21 | Pixel, Samsung | After the full-screen alert, press back / switch to another tab, then lock and wake the phone | The rest of the app is **not** shown over the lock screen (`setShowWhenLocked(false)` on leaving the alert). Open the app normally while unlocked, lock, wake: the keyguard shows, not the app. |
+| 21 | Pixel, Samsung | After the full-screen alert, press back / switch to another tab, then lock and wake the phone | The rest of the app is **not** shown over the lock screen (cleared by the navigation-state check once no alert is focused). Open the app normally while unlocked, lock, wake: the keyguard shows, not the app. |
+| 21a | Pixel, Samsung | **Second page while locked**: leave the app on call A's alert screen, lock the phone, page call B | Screen turns on and call B's alert (B's address) shows **over the lock screen and keeps ringing** until answered, Silence is tapped, or the notification is dismissed. It must not flash and drop back to the keyguard, and the notification must not disappear. Back from B shows A underneath. |
+| 21b | Pixel | Page while unlocked with the app open on another tab | The alert opens and the alarm stops on its own (unlocked + app active); with the phone locked it keeps ringing until the member acts. |
 
 ### Answering from the notification
 

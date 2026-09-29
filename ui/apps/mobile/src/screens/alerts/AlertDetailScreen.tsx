@@ -1,8 +1,9 @@
 import { radius, spacing, statusChipPalette, typeScale } from '@boxalarm/design-tokens';
 import { useNavigation, useRoute, type NavigationProp } from '@react-navigation/native';
-import { useEffect, useRef, useState, type ComponentRef } from 'react';
+import { useCallback, useEffect, useRef, useState, type ComponentRef } from 'react';
 import {
   AccessibilityInfo,
+  AppState,
   findNodeHandle,
   Linking,
   Platform,
@@ -18,7 +19,7 @@ import { useOptionalAuth } from '../../auth/AuthContext';
 import { useTheme } from '../../components/ui';
 import { useAlertsRepository } from '../../features/alerts/apiAlertsRepository';
 import type { AlertPayload } from '../../features/alerts/alertPayload';
-import { setAlertShowsOverLockScreen } from '../../features/alerts/alertReadiness';
+import { isDeviceLocked, setAlertShowsOverLockScreen } from '../../features/alerts/alertReadiness';
 import { ETA_CHOICES_MINUTES, type ResponseAnswer } from '../../features/alerts/alertResponses';
 import { formatClock, formatElapsed } from '../../features/alerts/elapsed';
 import { matchNotice, PrePlanPanel } from '../../features/alerts/PrePlanPanel';
@@ -161,18 +162,31 @@ export function AlertDetailScreen() {
   const headerRef = useRef<ComponentRef<typeof Text>>(null);
   const announcedRef = useRef<string | null>(null);
 
-  // The call is open: stop the looping alarm. Leaving the alert (another tab, back, a pushed
-  // screen) ends its show-over-lock-screen, so the rest of the app is not open on a locked phone.
-  useEffect(() => {
+  // Lock screen and alarm (review CR-2). While this alert is focused it asks to stay over the
+  // keyguard; turning that off belongs to the navigation-state check (lockScreenPresentation),
+  // never to this screen's blur or unmount - that raced a second page arriving on a locked phone.
+  // The looping alarm stops when the member does something (answers, ETA, Silence) or when the
+  // alert is focused on an unlocked phone in use - never merely because a screen mounted.
+  const silence = useCallback(() => {
     void silenceDispatchNotification(dispatchId);
-    const unsubscribeBlur = navigation.addListener?.('blur', () =>
-      setAlertShowsOverLockScreen(false),
-    );
-    return () => {
-      unsubscribeBlur?.();
-      setAlertShowsOverLockScreen(false);
+  }, [dispatchId]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const onFocus = () => {
+      setAlertShowsOverLockScreen(true);
+      if (AppState.currentState !== 'active') return;
+      void isDeviceLocked().then((locked) => {
+        if (!cancelled && locked === false) silence();
+      });
     };
-  }, [dispatchId, navigation]);
+    onFocus();
+    const unsubscribeFocus = navigation.addListener?.('focus', onFocus);
+    return () => {
+      cancelled = true;
+      unsubscribeFocus?.();
+    };
+  }, [navigation, silence]);
 
   // Elapsed time is read on demand (never announced every tick) - refresh it twice a minute.
   useEffect(() => {
@@ -199,6 +213,7 @@ export function AlertDetailScreen() {
   // phone (outbox, with a 10 min ETA the chips below change in one more tap) and the status
   // block says exactly whether it has reached the server.
   const respond = (answer: ResponseAnswer, etaMinutes?: number) => {
+    silence();
     void response.respond(answer, etaMinutes);
   };
 
@@ -348,6 +363,31 @@ export function AlertDetailScreen() {
             onPress={() => respond('NOT_RESPONDING')}
           />
         </View>
+
+        {Platform.OS === 'android' ? (
+          <TouchableOpacity
+            accessibilityRole="button"
+            accessibilityLabel="Silence the alarm without answering"
+            onPress={() => {
+              silence();
+              AccessibilityInfo.announceForAccessibility(
+                'Alarm silenced. You have not answered yet.',
+              );
+            }}
+            style={{
+              minHeight: ALERT_TARGET,
+              alignItems: 'center',
+              justifyContent: 'center',
+              borderRadius: radius.default,
+              borderWidth: 2,
+              borderColor: theme.borderStrong,
+            }}
+          >
+            <Text style={{ color: theme.fg, fontSize: typeScale.heading.size, fontWeight: '700' }}>
+              Silence alarm
+            </Text>
+          </TouchableOpacity>
+        ) : null}
 
         {answer && answer.ackStatus !== 'NOT_RESPONDING' ? (
           <View accessibilityRole="radiogroup" accessibilityLabel="Your ETA" style={{ gap: 8 }}>

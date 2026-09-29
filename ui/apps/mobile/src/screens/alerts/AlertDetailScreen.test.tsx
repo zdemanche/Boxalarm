@@ -1,5 +1,6 @@
 import { act, fireEvent, render } from '@testing-library/react-native';
-import { AccessibilityInfo } from 'react-native';
+import notifee from '@notifee/react-native';
+import { AccessibilityInfo, AppState, NativeModules, Platform } from 'react-native';
 import { mockAlertsRepository } from '../../features/alerts/mockAlertsRepository';
 import { AlertDetailScreen } from './AlertDetailScreen';
 
@@ -308,4 +309,74 @@ test('a detail answered for another dispatch is ignored, not shown', async () =>
 
   expect(await findByText('21 Main St')).toBeTruthy();
   expect(queryByText('9 Wrong Rd')).toBeNull();
+});
+
+describe('alarm silencing and lock screen (review CR-2)', () => {
+  const nativeModules = NativeModules as { BoxalarmAlertReadiness?: unknown };
+  let locked: boolean;
+  let setShowWhenLocked: jest.Mock;
+
+  beforeEach(() => {
+    Platform.OS = 'android';
+    locked = true;
+    setShowWhenLocked = jest.fn();
+    nativeModules.BoxalarmAlertReadiness = {
+      isKeyguardLocked: jest.fn(async () => locked),
+      setShowWhenLocked,
+    };
+    (notifee.cancelDisplayedNotification as jest.Mock).mockClear();
+  });
+
+  afterEach(() => {
+    delete nativeModules.BoxalarmAlertReadiness;
+    Platform.OS = 'ios';
+  });
+
+  test('on a locked phone, opening the alert keeps it ringing and over the lock screen until the member acts', async () => {
+    const view = await render(<AlertDetailScreen />);
+    await view.findByRole('button', { name: RESPONDING });
+    await act(async () => {});
+
+    expect(notifee.cancelDisplayedNotification).not.toHaveBeenCalled();
+    expect(setShowWhenLocked).toHaveBeenCalledWith(true);
+    expect(setShowWhenLocked).not.toHaveBeenCalledWith(false);
+
+    await act(async () => {
+      fireEvent.press(await view.findByRole('button', { name: RESPONDING }));
+    });
+    expect(notifee.cancelDisplayedNotification).toHaveBeenCalledWith(`dispatch:${dispatchId}`);
+  });
+
+  test('unmounting the alert screen does not clear show-over-lock-screen (navigation state owns that)', async () => {
+    const view = await render(<AlertDetailScreen />);
+    await view.findByRole('button', { name: RESPONDING });
+    view.unmount();
+
+    expect(setShowWhenLocked).not.toHaveBeenCalledWith(false);
+  });
+
+  test('on an unlocked phone in use, opening the alert silences it', async () => {
+    locked = false;
+    const appState = AppState as unknown as { currentState: unknown };
+    const original = appState.currentState;
+    appState.currentState = 'active';
+    const view = await render(<AlertDetailScreen />);
+    await view.findByRole('button', { name: RESPONDING });
+    await act(async () => {});
+    appState.currentState = original;
+
+    expect(notifee.cancelDisplayedNotification).toHaveBeenCalledWith(`dispatch:${dispatchId}`);
+  });
+
+  test('Silence stops the alarm without answering', async () => {
+    const view = await render(<AlertDetailScreen />);
+    await act(async () => {
+      fireEvent.press(
+        await view.findByRole('button', { name: 'Silence the alarm without answering' }),
+      );
+    });
+
+    expect(notifee.cancelDisplayedNotification).toHaveBeenCalledWith(`dispatch:${dispatchId}`);
+    expect(view.queryByText(/your response:/i)).toBeNull();
+  });
 });

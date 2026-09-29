@@ -1,6 +1,7 @@
 package com.boxalarm.mobile
 
 import android.app.Activity
+import android.app.KeyguardManager
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.content.Context
@@ -133,6 +134,14 @@ class AlertReadinessModule(private val reactContext: ReactApplicationContext) :
       ),
       promise,
     )
+  }
+
+  /** Whether the keyguard is up - the alert screen only silences a ringing page on its own
+   * when the member can actually see it (unlocked, app active). */
+  @ReactMethod
+  fun isKeyguardLocked(promise: Promise) {
+    val keyguard = reactContext.getSystemService(Context.KEYGUARD_SERVICE) as KeyguardManager
+    promise.resolve(keyguard.isKeyguardLocked)
   }
 
   /** The alert screen asks to be shown over the lock screen; everything else is not. */

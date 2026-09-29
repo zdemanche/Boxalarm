@@ -25,6 +25,10 @@ export function navigateToAlertDetail(dispatchId: string, payload?: AlertPayload
   navigateNow(dispatchId, payload);
 }
 
+export function hasPendingAlertNavigation(): boolean {
+  return pendingAlert !== null;
+}
+
 /** Wired to NavigationContainer onReady (RootNavigator). */
 export function flushPendingAlertNavigation(): void {
   if (!pendingAlert || !navigationRef.isReady()) return;
