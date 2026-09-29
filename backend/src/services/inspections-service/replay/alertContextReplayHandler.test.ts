@@ -70,7 +70,7 @@ function fakeTable(options: { failConditionFor?: string } = {}) {
       }
       case 'TransactWriteCommand': {
         const items = input.TransactItems as Array<{
-          ConditionCheck?: { Key: { pk: string } };
+          ConditionCheck?: { Key: { pk: string; sk: string } };
           Put?: { Item: Record<string, unknown> };
         }>;
         if (
@@ -87,7 +87,8 @@ function fakeTable(options: { failConditionFor?: string } = {}) {
         }
         writes.push({
           conditionCheck: items[0]?.ConditionCheck,
-          outbox: items[1]?.Put?.Item,
+          archiveCheck: items.length === 3 ? items[1]?.ConditionCheck : undefined,
+          outbox: items.find((item) => item.Put)?.Put?.Item,
         });
         return Promise.resolve({});
       }
@@ -119,8 +120,8 @@ describe('alert-context replay (post-deploy backfill / normalizer replay)', () =
     expect(result).toEqual({
       deptId: 'NICHOLS',
       dryRun: false,
-      prePlans: { emitted: 1, skippedConcurrentEdit: 0, skippedNoPrePlan: 1 },
-      hydrants: { emitted: 2, skippedConcurrentEdit: 0 },
+      prePlans: { emitted: 1, skippedConcurrentEdit: 0, skippedArchived: 0, skippedNoPrePlan: 1 },
+      hydrants: { emitted: 2, skippedConcurrentEdit: 0, skippedArchived: 0 },
     });
     const events = writes.map((write) => write.outbox as Record<string, unknown>);
     expect(events.map((event) => event.eventType)).toEqual([
@@ -157,7 +158,7 @@ describe('alert-context replay (post-deploy backfill / normalizer replay)', () =
     expect(writes.map((write) => write.conditionCheck)).toEqual([
       expect.objectContaining({
         Key: { pk: 'DEPT#NICHOLS#OCCUPANCY#OCC-1', sk: 'PREPLAN#PP-1' },
-        ConditionExpression: 'updatedAt = :readUpdatedAt',
+        ConditionExpression: 'updatedAt = :readUpdatedAt AND attribute_not_exists(archivedAt)',
         ExpressionAttributeValues: { ':readUpdatedAt': 1000 },
       }),
       expect.objectContaining({
@@ -174,7 +175,7 @@ describe('alert-context replay (post-deploy backfill / normalizer replay)', () =
 
     const result = await createAlertContextReplayHandler(client)({ deptId: 'NICHOLS' });
 
-    expect(result.hydrants).toEqual({ emitted: 1, skippedConcurrentEdit: 1 });
+    expect(result.hydrants).toEqual({ emitted: 1, skippedConcurrentEdit: 1, skippedArchived: 0 });
     expect(writes).toHaveLength(2);
   });
 
@@ -212,5 +213,53 @@ describe('alert-context replay (post-deploy backfill / normalizer replay)', () =
     await expect(replay({ deptId: '' })).rejects.toThrow(/deptId/);
     await expect(replay({ deptId: 'A#B' })).rejects.toThrow(/deptId/);
     expect(send).not.toHaveBeenCalled();
+  });
+
+  it('N3: never re-emits an archived hydrant, and conditions a pre-plan on its occupancy not being archived', async () => {
+    const { createAlertContextReplayHandler } = await import('./alertContextReplayHandler.js');
+    const archived = HYDRANTS['HYD-2'];
+    HYDRANTS['HYD-2'] = { ...archived, archivedAt: 99 };
+    try {
+      const { writes, client } = fakeTable();
+
+      const result = await createAlertContextReplayHandler(client)({ deptId: 'NICHOLS' });
+
+      expect(result.hydrants).toEqual({ emitted: 1, skippedConcurrentEdit: 0, skippedArchived: 1 });
+      expect(writes[0]?.archiveCheck).toEqual(
+        expect.objectContaining({
+          Key: { pk: 'DEPT#NICHOLS#OCCUPANCY#OCC-1', sk: 'METADATA' },
+          ConditionExpression: 'attribute_exists(pk) AND attribute_not_exists(archivedAt)',
+        }),
+      );
+    } finally {
+      HYDRANTS['HYD-2'] = archived!;
+    }
+  });
+
+  it('N3: counts a pre-plan whose occupancy was archived during the run as skippedArchived', async () => {
+    const { createAlertContextReplayHandler } = await import('./alertContextReplayHandler.js');
+    const { client, send } = fakeTable();
+    const original = send.getMockImplementation()!;
+    send.mockImplementation((command: Command) => {
+      const items = command.input.TransactItems as Array<{ ConditionCheck?: unknown }> | undefined;
+      if (command.constructor.name === 'TransactWriteCommand' && items?.length === 3) {
+        return Promise.reject(
+          new TransactionCanceledException({
+            message: 'cancelled',
+            $metadata: {},
+            CancellationReasons: [
+              { Code: 'None' },
+              { Code: 'ConditionalCheckFailed' },
+              { Code: 'None' },
+            ],
+          }),
+        );
+      }
+      return original(command);
+    });
+
+    const result = await createAlertContextReplayHandler(client)({ deptId: 'NICHOLS' });
+
+    expect(result.prePlans).toMatchObject({ emitted: 0, skippedArchived: 1 });
   });
 });

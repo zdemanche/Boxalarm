@@ -42,6 +42,8 @@ export interface AlertContextReplayRequest {
 export interface ReplayCounts {
   readonly emitted: number;
   readonly skippedConcurrentEdit: number;
+  /** Archived (or archived during the run): never re-emitted, so a tombstone is never undone. */
+  readonly skippedArchived: number;
   readonly skippedNoPrePlan?: number;
 }
 
@@ -89,16 +91,31 @@ function isConditionFailure(error: unknown): boolean {
   );
 }
 
-/** Puts the outbox record only if the source item still carries the updatedAt we read. */
+/**
+ * Puts the outbox record only if the source item still carries the updatedAt we read and is
+ * not archived — and, for a pre-plan, its occupancy is not archived either (`archivedOn`).
+ */
 async function emitIfUnchanged(
   doc: DynamoDBDocumentClient,
   tableName: string,
   source: { readonly pk: string; readonly sk: string; readonly updatedAt: number },
   outboxRecord: object,
-): Promise<'emitted' | 'skipped'> {
+  archivedOn?: { readonly pk: string; readonly sk: string },
+): Promise<'emitted' | 'skipped' | 'archived'> {
   // Destructured: the pk-scoping sweep (test/pk-scoping.test.ts) reads `pk: <identifier>`
   // as a hand-built key. source.pk comes from a row read by its dept-scoped key.
   const { pk, sk, updatedAt } = source;
+  const archiveChecks = archivedOn
+    ? [
+        {
+          ConditionCheck: {
+            TableName: tableName,
+            Key: { ...archivedOn },
+            ConditionExpression: 'attribute_exists(pk) AND attribute_not_exists(archivedAt)',
+          },
+        },
+      ]
+    : [];
   try {
     await doc.send(
       new TransactWriteCommand({
@@ -107,18 +124,21 @@ async function emitIfUnchanged(
             ConditionCheck: {
               TableName: tableName,
               Key: { pk, sk },
-              ConditionExpression: 'updatedAt = :readUpdatedAt',
+              ConditionExpression:
+                'updatedAt = :readUpdatedAt AND attribute_not_exists(archivedAt)',
               ExpressionAttributeValues: { ':readUpdatedAt': updatedAt },
             },
           },
+          ...archiveChecks,
           { Put: { TableName: tableName, Item: outboxRecord as Record<string, unknown> } },
         ],
       }),
     );
     return 'emitted';
   } catch (error) {
-    if (isConditionFailure(error)) return 'skipped';
-    throw error;
+    if (!isConditionFailure(error)) throw error;
+    const reasons = (error as TransactionCanceledException).CancellationReasons ?? [];
+    return archivedOn && reasons[1]?.Code === 'ConditionalCheckFailed' ? 'archived' : 'skipped';
   }
 }
 
@@ -130,6 +150,7 @@ async function replayPrePlans(
 ): Promise<ReplayCounts> {
   let emitted = 0;
   let skippedConcurrentEdit = 0;
+  let skippedArchived = 0;
   let skippedNoPrePlan = 0;
   for (const occupancyId of await listIds(doc, tableName, deptId, 'OCCUPANCY', 'occupancyId')) {
     const plan = await getPrePlan(doc, tableName, deptId, occupancyId);
@@ -162,11 +183,13 @@ async function replayPrePlans(
         plan.prePlanId,
         buildPrePlanEventPayload(deptId, occupancyId, plan.prePlanId, occupancy, plan),
       ),
+      { pk: buildDeptScopedPk(deptId, 'OCCUPANCY', occupancyId), sk: 'METADATA' },
     );
     if (outcome === 'emitted') emitted += 1;
+    else if (outcome === 'archived') skippedArchived += 1;
     else skippedConcurrentEdit += 1;
   }
-  return { emitted, skippedConcurrentEdit, skippedNoPrePlan };
+  return { emitted, skippedConcurrentEdit, skippedArchived, skippedNoPrePlan };
 }
 
 async function replayHydrants(
@@ -177,12 +200,17 @@ async function replayHydrants(
 ): Promise<ReplayCounts> {
   let emitted = 0;
   let skippedConcurrentEdit = 0;
+  let skippedArchived = 0;
   for (const hydrantId of await listIds(doc, tableName, deptId, 'HYDRANT', 'hydrantId')) {
     const pk = buildDeptScopedPk(deptId, 'HYDRANT', hydrantId);
     const { Item: hydrant } = await doc.send(
       new GetCommand({ TableName: tableName, Key: { pk, sk: HYDRANT_SK }, ConsistentRead: true }),
     );
     if (!hydrant || typeof hydrant.updatedAt !== 'number') {
+      continue;
+    }
+    if (hydrant.archivedAt !== undefined) {
+      skippedArchived += 1;
       continue;
     }
     if (dryRun) {
@@ -204,7 +232,7 @@ async function replayHydrants(
     if (outcome === 'emitted') emitted += 1;
     else skippedConcurrentEdit += 1;
   }
-  return { emitted, skippedConcurrentEdit };
+  return { emitted, skippedConcurrentEdit, skippedArchived };
 }
 
 export function createAlertContextReplayHandler(docClient?: DynamoDBDocumentClient) {
