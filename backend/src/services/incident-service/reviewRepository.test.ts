@@ -64,6 +64,19 @@ describe('lockIncident', () => {
     expect(rest).toEqual([]);
   });
 
+  it('marks an auto-submit of a report NERIS already holds as a resubmission', async () => {
+    const send = vi.fn().mockResolvedValue({});
+    await lockIncident(client(send), 'table', { ...LOCK, submit: true, alreadyInNeris: true });
+    const events = transactItems(send)
+      .map((i) => (i.Put?.Item as { eventType?: string } | undefined)?.eventType)
+      .filter(Boolean);
+    expect(events).toEqual([
+      'incident.report.locked',
+      'neris.incident.submitted',
+      'neris.incident.resubmitted',
+    ]);
+  });
+
   it('queues the NERIS submission in the same transaction when asked to', async () => {
     const send = vi.fn().mockResolvedValue({});
     const result = await lockIncident(client(send), 'table', { ...LOCK, submit: true });

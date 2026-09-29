@@ -84,7 +84,9 @@ export const handler: APIGatewayProxyHandlerV2WithLambdaAuthorizer<AuthorizerCon
             ? 'NOT_LOCKED'
             : error.reason === 'IN_FLIGHT'
               ? 'SUBMISSION_IN_FLIGHT'
-              : 'NOT_VALIDATED',
+              : error.reason === 'IN_NERIS'
+                ? 'USE_RESUBMIT'
+                : 'NOT_VALIDATED',
       });
     }
     console.error(

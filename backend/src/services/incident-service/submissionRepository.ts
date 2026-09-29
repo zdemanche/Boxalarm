@@ -61,7 +61,7 @@ export function isInFlight(item: Record<string, unknown>, nowMs: number = Date.n
   return typeof activity === 'string' && activity >= inFlightValues(nowMs)[':staleBefore'];
 }
 
-export type SubmissionConflictReason = 'NOT_VALIDATED' | 'NOT_LOCKED' | 'IN_FLIGHT';
+export type SubmissionConflictReason = 'NOT_VALIDATED' | 'NOT_LOCKED' | 'IN_FLIGHT' | 'IN_NERIS';
 
 export class SubmissionConflictError extends Error {
   constructor(
@@ -74,7 +74,9 @@ export class SubmissionConflictError extends Error {
         ? `incident "${incidentId}" must be locked by an officer before it is submitted to NERIS`
         : reason === 'IN_FLIGHT'
           ? `incident "${incidentId}" already has a NERIS submission in progress`
-          : `incident "${incidentId}" is not VALIDATED and cannot be submitted (current status "${currentStatus}")`,
+          : reason === 'IN_NERIS'
+            ? `NERIS already holds incident "${incidentId}": send the correction with resubmit, which shows what changed`
+            : `incident "${incidentId}" is not VALIDATED and cannot be submitted (current status "${currentStatus}")`,
     );
     this.name = 'SubmissionConflictError';
   }
@@ -259,7 +261,9 @@ export function createSubmissionRepository(
                   TableName: tableName,
                   Key: { pk: buildDeptScopedPk(deptId, 'INCIDENT', incidentId), sk: 'METADATA' },
                   // Only a report an officer has reviewed and locked, with no send in flight.
-                  ConditionExpression: `attribute_exists(pk) AND #status = :validated AND attribute_exists(lockedAt) AND ${NOT_IN_FLIGHT_CONDITION}`,
+                  // A report NERIS already holds goes through resubmit (diff + PUT by id), not
+                  // a second submit (review minor 4).
+                  ConditionExpression: `attribute_exists(pk) AND #status = :validated AND attribute_exists(lockedAt) AND attribute_not_exists(nerisIncidentId) AND ${NOT_IN_FLIGHT_CONDITION}`,
                   UpdateExpression:
                     'SET #status = :submitted, submissionStatus = :submitted, submissionActivityAt = :activityAt, updatedAt = :updatedAt',
                   ExpressionAttributeNames: { '#status': 'status' },
@@ -298,7 +302,9 @@ export function createSubmissionRepository(
               ? 'NOT_LOCKED'
               : isInFlight(item)
                 ? 'IN_FLIGHT'
-                : 'NOT_VALIDATED',
+                : typeof item.nerisIncidentId === 'string'
+                  ? 'IN_NERIS'
+                  : 'NOT_VALIDATED',
           );
         }
         logger.error({

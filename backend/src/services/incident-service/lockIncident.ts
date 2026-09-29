@@ -81,6 +81,7 @@ async function inner(
       reviewedContentVersion: context.incident.contentVersion ?? 0,
       previousStatus: context.incident.status,
       submit,
+      alreadyInNeris: context.incident.nerisIncidentId !== undefined,
       nowEpochSeconds: lockedAt,
       traceId,
     });

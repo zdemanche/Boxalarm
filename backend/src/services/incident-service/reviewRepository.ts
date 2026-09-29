@@ -100,6 +100,8 @@ export interface LockInput {
   readonly previousStatus: IncidentStatus;
   /** Queue the NERIS submission in the same transaction (department autoSubmitOnLock). */
   readonly submit: boolean;
+  /** NERIS already holds this report: an auto-submit is a resubmission (PUT by id). */
+  readonly alreadyInNeris?: boolean;
   readonly nowEpochSeconds: number;
   readonly traceId: string;
 }
@@ -127,6 +129,21 @@ export async function lockIncident(
             input.traceId,
             { incidentId: input.incidentId, deptId: input.deptId, submissionStatus: 'SUBMITTED' },
           ),
+          ...(input.alreadyInNeris
+            ? [
+                buildOutboxRecord(
+                  input.deptId,
+                  'incident-service',
+                  'neris.incident.resubmitted',
+                  input.traceId,
+                  {
+                    incidentId: input.incidentId,
+                    deptId: input.deptId,
+                    requestedBy: input.actorId,
+                  },
+                ),
+              ]
+            : []),
         ]
       : []),
   ];

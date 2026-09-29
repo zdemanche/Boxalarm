@@ -57,7 +57,7 @@ describe('createSubmissionRepository.enqueueSubmission', () => {
       TableName: TABLE_NAME,
       Key: { pk: `DEPT#NICHOLS#INCIDENT#${INCIDENT_ID}`, sk: 'METADATA' },
       ConditionExpression:
-        'attribute_exists(pk) AND #status = :validated AND attribute_exists(lockedAt) AND (attribute_not_exists(submissionStatus) OR (submissionStatus <> :queued AND submissionStatus <> :retrying) OR attribute_not_exists(submissionActivityAt) OR submissionActivityAt < :staleBefore)',
+        'attribute_exists(pk) AND #status = :validated AND attribute_exists(lockedAt) AND attribute_not_exists(nerisIncidentId) AND (attribute_not_exists(submissionStatus) OR (submissionStatus <> :queued AND submissionStatus <> :retrying) OR attribute_not_exists(submissionActivityAt) OR submissionActivityAt < :staleBefore)',
     });
     const outboxItem = command.input.TransactItems[1].Put.Item;
     expect(outboxItem).toMatchObject({
@@ -103,6 +103,20 @@ describe('createSubmissionRepository.enqueueSubmission', () => {
     await expect(
       repository.enqueueSubmission(DEPT_ID, INCIDENT_ID, 1_798_000_100, TRACE_ID),
     ).rejects.toMatchObject({ reason: 'NOT_LOCKED' });
+  });
+
+  it('sends a report NERIS already holds to resubmit instead (review minor 4)', async () => {
+    const send = vi
+      .fn()
+      .mockRejectedValueOnce(conditionalCheckFailed([{}]))
+      .mockResolvedValueOnce({
+        Item: { status: 'VALIDATED', lockedAt: 1, nerisIncidentId: 'FD09190828|4471|1798000000' },
+      });
+    const repository = createSubmissionRepository(fakeClient(send), TABLE_NAME);
+
+    await expect(
+      repository.enqueueSubmission(DEPT_ID, INCIDENT_ID, 1_798_000_100, TRACE_ID),
+    ).rejects.toMatchObject({ reason: 'IN_NERIS' });
   });
 
   it('refuses while a submission is already in flight (no duplicate CREATE)', async () => {
