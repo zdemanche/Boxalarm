@@ -254,3 +254,58 @@ test('viewing the roster navigates with the dispatch id', async () => {
   fireEvent.press(await findByRole('button', { name: 'View roster' }));
   expect(mockNavigate).toHaveBeenCalledWith('Roster', { dispatchId });
 });
+
+test('the same screen re-rendered for a second call shows the second call - never the first call’s address (review CR-1)', async () => {
+  const pageA = { ...PAGE, dispatchId: 'DISP-A', address: '1 First St', incidentType: 'MVA' };
+  const pageB = { ...PAGE, dispatchId: 'DISP-B', address: '2 Second Ave', incidentType: 'Alarm' };
+  jest.spyOn(console, 'warn').mockImplementation(() => {});
+  const getDispatch = jest.spyOn(mockAlertsRepository, 'getDispatch').mockResolvedValueOnce({
+    dispatchId: 'DISP-A',
+    incidentType: 'MVA',
+    address: '1 First St',
+    crossStreets: '',
+    mapLink: 'https://maps.example/a',
+    narrative: 'Call A narrative',
+    isSelfTest: false,
+  });
+  mockRouteParams.dispatchId = 'DISP-A';
+  mockRouteParams.payload = pageA;
+  const view = await render(<AlertDetailScreen />);
+  expect(await view.findByText('Call A narrative')).toBeTruthy();
+
+  // Call B arrives while offline: same instance, new params, fetch fails.
+  getDispatch.mockRejectedValueOnce(new TypeError('Network request failed'));
+  mockRouteParams.dispatchId = 'DISP-B';
+  mockRouteParams.payload = pageB;
+  await act(async () => {
+    view.rerender(<AlertDetailScreen />);
+  });
+
+  expect(await view.findByText('2 Second Ave')).toBeTruthy();
+  expect(view.queryByText('1 First St')).toBeNull();
+  expect(view.queryByText('Call A narrative')).toBeNull();
+  expect(view.queryByRole('button', { name: 'Open the address in maps' })).toBeNull();
+  expect(
+    await view.findByText(/the address above came with the page and is correct/i),
+  ).toBeTruthy();
+});
+
+test('a detail answered for another dispatch is ignored, not shown', async () => {
+  jest.spyOn(console, 'error').mockImplementation(() => {});
+  jest.spyOn(mockAlertsRepository, 'getDispatch').mockResolvedValue({
+    dispatchId: 'SOMETHING-ELSE',
+    incidentType: 'MVA',
+    address: '9 Wrong Rd',
+    crossStreets: '',
+    mapLink: null,
+    narrative: '',
+    isSelfTest: false,
+  });
+  mockRouteParams.dispatchId = PAGE.dispatchId;
+  mockRouteParams.payload = PAGE;
+
+  const { findByText, queryByText } = await render(<AlertDetailScreen />);
+
+  expect(await findByText('21 Main St')).toBeTruthy();
+  expect(queryByText('9 Wrong Rd')).toBeNull();
+});

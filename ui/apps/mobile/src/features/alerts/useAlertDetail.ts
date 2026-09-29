@@ -41,10 +41,18 @@ export interface AlertDetailState {
   retry: () => void;
 }
 
+/**
+ * Never mixes calls: a payload or detail that belongs to another dispatch (a screen instance
+ * reused for a second call, a late response for the previous one) is ignored, so the address
+ * shown is always this call's.
+ */
 function headerFrom(
-  payload: AlertPayload | null,
-  detail: DispatchAlert | null,
+  dispatchId: string,
+  pagePayload: AlertPayload | null,
+  dispatchDetail: DispatchAlert | null,
 ): AlertHeader | null {
+  const payload = pagePayload?.dispatchId === dispatchId ? pagePayload : null;
+  const detail = dispatchDetail?.dispatchId === dispatchId ? dispatchDetail : null;
   if (!payload && !detail) return null;
   const address = detail?.address || payload?.address || '';
   return {
@@ -80,7 +88,13 @@ export function useAlertDetail(
 
   useEffect(() => {
     let cancelled = false;
-    const fromRoute = routePayloadRef.current;
+    // A new call on the same screen instance: drop everything that belonged to the last one.
+    liveLoadedRef.current = false;
+    setDetail(null);
+    setDetailCachedAt(null);
+    const fromRoute =
+      routePayloadRef.current?.dispatchId === dispatchId ? routePayloadRef.current : undefined;
+    setPayload(fromRoute ?? null);
     if (fromRoute) {
       setPayload(fromRoute);
       void rememberAlertPayload(fromRoute);
@@ -91,6 +105,7 @@ export function useAlertDetail(
     }
     void cachedDispatchDetail(dispatchId).then((cached) => {
       if (cancelled || !cached || liveLoadedRef.current) return;
+      if (cached.detail.dispatchId !== dispatchId) return;
       setDetail(cached.detail);
       setDetailCachedAt(cached.updatedAt);
     });
@@ -106,6 +121,15 @@ export function useAlertDetail(
     repository.getDispatch(dispatchId).then(
       (result) => {
         if (cancelled) return;
+        if (result.dispatchId !== dispatchId) {
+          console.error('[alert] dispatch detail answered for another call; ignored', {
+            asked: dispatchId,
+            got: result.dispatchId,
+          });
+          setFailure('server');
+          setStatus('failed');
+          return;
+        }
         liveLoadedRef.current = true;
         setDetail(result);
         setDetailCachedAt(null);
@@ -127,8 +151,8 @@ export function useAlertDetail(
   const retry = useCallback(() => setAttempt((n) => n + 1), []);
 
   return {
-    header: headerFrom(payload, detail),
-    detail,
+    header: headerFrom(dispatchId, payload, detail),
+    detail: detail?.dispatchId === dispatchId ? detail : null,
     detailCachedAt,
     status,
     failure,

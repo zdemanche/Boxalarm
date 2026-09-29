@@ -37,7 +37,14 @@ export function AlertsStack() {
           </RequireRole>
         )}
       </Stack.Screen>
-      <Stack.Screen name="AlertDetail" component={AlertDetailScreen} options={{ title: 'Alert' }} />
+      {/* One screen per call: a second page is pushed on top of the first instead of replacing
+          the first call's params in a reused screen (design.md §4.3 "stacked, never replaces"). */}
+      <Stack.Screen
+        name="AlertDetail"
+        component={AlertDetailScreen}
+        options={{ title: 'Alert' }}
+        getId={({ params }) => params.dispatchId}
+      />
       <Stack.Screen name="Roster" component={RosterScreen} options={{ title: 'Roster' }} />
       <Stack.Screen name="RidingBoard" options={{ title: 'Riding board' }}>
         {() => (
