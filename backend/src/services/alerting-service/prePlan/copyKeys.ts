@@ -5,12 +5,12 @@ import { encodeGeohash, type GeoPoint } from './geo.js';
  * Alerting-table keys for the read-only copies of LOB pre-plan and hydrant data. Both copies
  * are written only by alerting-owned consumers and read only by the dispatch-detail route.
  *
- * PRE_PLAN_COPY   pk = DEPT#{d}#PREPLAN              sk = OCCUPANCY#{occupancyId}
+ * PRE_PLAN_COPY   partition DEPT#{d}#PREPLAN         sk OCCUPANCY#{occupancyId}
  *   GSI1 (address)  gsi1pk = DEPT#{d}#PREPLAN_ADDR#{normalized street key}
  *                   gsi1sk = OCCUPANCY#{occupancyId}
  *   GSI2 (location) gsi2pk = DEPT#{d}#PREPLAN_GEO#{geohash6}
  *                   gsi2sk = {geohash9}#{occupancyId}
- * HYDRANT_COPY    pk = DEPT#{d}#HYDRANT              sk = HYDRANT#{hydrantId}
+ * HYDRANT_COPY    partition DEPT#{d}#HYDRANT         sk HYDRANT#{hydrantId}
  *   GSI2 (location) gsi2pk = DEPT#{d}#HYDRANT_GEO#{geohash5}
  *                   gsi2sk = {geohash9}#{hydrantId}
  *
