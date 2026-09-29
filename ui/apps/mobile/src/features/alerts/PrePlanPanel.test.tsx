@@ -129,3 +129,19 @@ test('labels an out-of-service hydrant "OUT OF SERVICE" in text and in the error
   expect(oos.props.style).toMatchObject({ fontWeight: '700' });
   expect(await findByText('H-210 · 210 m')).toBeTruthy();
 });
+
+test('shows the nearest hydrants even when no pre-plan matched', async () => {
+  const { findByText } = await render(
+    <PrePlanPanel
+      prePlan={null}
+      nearestHydrants={[{ hydrantId: 'H-40', status: 'IN_SERVICE', distanceMeters: 40 }]}
+    />,
+  );
+  expect(await findByText('No pre-plan matched this address.')).toBeTruthy();
+  expect(await findByText('H-40 · 40 m')).toBeTruthy();
+});
+
+test('says the hydrant list is unavailable when that read failed', async () => {
+  const { findByRole } = await render(<PrePlanPanel prePlan={null} hydrantsUnavailable />);
+  expect((await findByRole('alert')).props.children).toBe('Hydrant list unavailable right now.');
+});

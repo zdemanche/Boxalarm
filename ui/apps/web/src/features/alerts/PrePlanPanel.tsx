@@ -115,39 +115,48 @@ function ShutoffList({ shutoffs }: { shutoffs: readonly UtilityShutoff[] }) {
   );
 }
 
-// E1-S17-UI / E5-S8-UI: same alerting-route enrichment as mobile (N1.5 - never /inspections/*).
-export function PrePlanPanel({
-  prePlan,
-  unavailable = false,
+const HYDRANTS_UNAVAILABLE_TEXT = 'Hydrant list unavailable right now.';
+
+function HydrantSection({
+  hydrants,
+  unavailable,
 }: {
-  prePlan: PrePlanEnrichment | null | undefined;
-  /** The lookup failed: say so, never "no pre-plan" (a throttle is not an empty binder). */
-  unavailable?: boolean;
+  hydrants: readonly NearestHydrant[];
+  unavailable: boolean;
 }) {
   if (unavailable) {
     return (
-      <Card title="Pre-plan">
-        <p role="note" style={noticeStyle(true)}>
-          {UNAVAILABLE_TEXT}
-        </p>
-      </Card>
+      <p role="note" style={noticeStyle(true)}>
+        {HYDRANTS_UNAVAILABLE_TEXT}
+      </p>
     );
   }
-
-  if (prePlan === undefined) return null;
-
-  if (prePlan === null) {
-    return (
-      <Card title="Pre-plan">
-        <p>{NO_MATCH_TEXT}</p>
-      </Card>
-    );
-  }
-
-  const notice = matchNotice(prePlan);
-
+  if (hydrants.length === 0) return null;
   return (
-    <Card title="Pre-plan">
+    <div>
+      <h3 style={{ fontSize: 15, fontWeight: 600 }}>Nearest hydrants</h3>
+      <ul aria-label="Nearest hydrants">
+        {hydrants.map((hydrant) => (
+          <li
+            key={hydrant.hydrantId}
+            style={
+              isOutOfService(hydrant)
+                ? { color: 'var(--bx-status-danger)', fontWeight: 700 }
+                : undefined
+            }
+          >
+            {describeHydrant(hydrant)}
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+function MatchedPrePlan({ prePlan }: { prePlan: PrePlanEnrichment }) {
+  const notice = matchNotice(prePlan);
+  return (
+    <>
       {notice ? (
         <p role={notice.warning ? 'note' : undefined} style={noticeStyle(notice.warning)}>
           {notice.text}
@@ -173,26 +182,42 @@ export function PrePlanPanel({
       {prePlan.summary ? <p>{prePlan.summary}</p> : null}
       <HazardList hazards={prePlan.hazards} />
       <ShutoffList shutoffs={prePlan.utilityShutoffs} />
+    </>
+  );
+}
 
-      {prePlan.nearestHydrants.length > 0 ? (
-        <div>
-          <h3 style={{ fontSize: 15, fontWeight: 600 }}>Nearest hydrants</h3>
-          <ul>
-            {prePlan.nearestHydrants.map((hydrant) => (
-              <li
-                key={hydrant.hydrantId}
-                style={
-                  isOutOfService(hydrant)
-                    ? { color: 'var(--bx-status-danger)', fontWeight: 700 }
-                    : undefined
-                }
-              >
-                {describeHydrant(hydrant)}
-              </li>
-            ))}
-          </ul>
-        </div>
+// E1-S17-UI / E5-S8-UI: same alerting-route enrichment as mobile (N1.5 - never /inspections/*).
+// Nearest hydrants render whether or not a pre-plan matched: the top-level list when the
+// server sends one (it includes flagged out-of-service hydrants), else the pre-plan's own.
+export function PrePlanPanel({
+  prePlan,
+  unavailable = false,
+  nearestHydrants,
+  hydrantsUnavailable = false,
+}: {
+  prePlan: PrePlanEnrichment | null | undefined;
+  /** The lookup failed: say so, never "no pre-plan" (a throttle is not an empty binder). */
+  unavailable?: boolean;
+  nearestHydrants?: readonly NearestHydrant[];
+  hydrantsUnavailable?: boolean;
+}) {
+  const hydrants = nearestHydrants ?? prePlan?.nearestHydrants ?? [];
+  if (!unavailable && prePlan === undefined && hydrants.length === 0 && !hydrantsUnavailable) {
+    return null;
+  }
+
+  return (
+    <Card title="Pre-plan">
+      {unavailable ? (
+        <p role="note" style={noticeStyle(true)}>
+          {UNAVAILABLE_TEXT}
+        </p>
+      ) : prePlan === null ? (
+        <p>{NO_MATCH_TEXT}</p>
+      ) : prePlan ? (
+        <MatchedPrePlan prePlan={prePlan} />
       ) : null}
+      <HydrantSection hydrants={hydrants} unavailable={hydrantsUnavailable} />
     </Card>
   );
 }

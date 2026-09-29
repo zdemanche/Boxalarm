@@ -186,6 +186,7 @@ describe('alert-detail handler', () => {
       expect(result).toMatchObject({ statusCode: 200 });
       const body = JSON.parse((result as { body: string }).body) as {
         prePlan: { nearestHydrants: Array<Record<string, unknown>> } & Record<string, unknown>;
+        nearestHydrants: Array<Record<string, unknown>>;
       };
       expect(body.prePlan).toMatchObject({
         matchType: 'ADDRESS',
@@ -195,17 +196,24 @@ describe('alert-detail handler', () => {
         hazards: ['LPG_TANK_REAR'],
         utilityShutoffs: [{ utility: 'GAS', location: 'rear of building' }],
       });
-      expect(body.prePlan.nearestHydrants.map((h) => h.hydrantId)).toEqual([
+      expect(body.nearestHydrants.map((h) => h.hydrantId)).toEqual([
         'H-OOS',
         'H-80',
         'H-150',
         'H-300',
       ]);
-      expect(body.prePlan.nearestHydrants[0]).toMatchObject({
+      expect(body.nearestHydrants[0]).toMatchObject({
         hydrantId: 'H-OOS',
         status: 'OUT_OF_SERVICE',
       });
-      expect(body.prePlan.nearestHydrants[1]).toMatchObject({
+      // The legacy per-plan list (rendered by older clients with no status label) never
+      // carries an out-of-service hydrant.
+      expect(body.prePlan.nearestHydrants.map((h) => h.hydrantId)).toEqual([
+        'H-80',
+        'H-150',
+        'H-300',
+      ]);
+      expect(body.nearestHydrants[1]).toMatchObject({
         hydrantId: 'H-80',
         status: 'IN_SERVICE',
         size: '6-inch',
@@ -274,7 +282,12 @@ describe('alert-detail handler', () => {
 
       const body = JSON.parse((result as { body: string }).body) as Record<string, unknown>;
       expect(body.prePlan).toBeNull();
-      expect(queries.mock.calls.every((call) => call[0].IndexName === 'GSI1')).toBe(true);
+      // No nearby-pre-plan query (only the address lookup and the dispatch-point hydrant search).
+      expect(
+        queries.mock.calls.some((call) =>
+          `${call[0].ExpressionAttributeValues[':gsi2pk'] as string}`.includes('PREPLAN_GEO'),
+        ),
+      ).toBe(false);
     });
 
     it('returns a lone plan for another unit flagged UNIT_MISMATCH, with its unit', async () => {
@@ -364,12 +377,51 @@ describe('alert-detail handler', () => {
       expect(result).toMatchObject({ statusCode: 200 });
       const body = JSON.parse((result as { body: string }).body) as {
         prePlan: { hazards: string[]; nearestHydrants: unknown[] };
-      };
+      } & Record<string, unknown>;
       expect(body.prePlan.hazards).toEqual(['LPG_TANK_REAR']);
       expect(body.prePlan.nearestHydrants).toEqual([]);
+      expect('nearestHydrants' in body).toBe(false);
+      expect(body.nearestHydrantsUnavailable).toBe(true);
       const logged = errorSpy.mock.calls.map((call) => call[0] as string).join('\n');
       expect(logged).toContain('dispatches.detail.hydrant_read_failed');
       errorSpy.mockRestore();
+    });
+
+    it('lists the nearest hydrants to the dispatch coordinates even when no pre-plan matched (minor 5)', async () => {
+      const { createHandler } = await import('./handler.js');
+      const docClient = routedClient({
+        dispatch: { ...DISPATCH_ITEM, address: '14 Main St', ...OCCUPANCY_POINT },
+        queries: (input) => {
+          const pk = input.ExpressionAttributeValues[':gsi2pk'];
+          return Promise.resolve({
+            Items:
+              typeof pk === 'string' && pk.includes('HYDRANT_GEO') ? [hydrantAt('H-40', 40)] : [],
+          });
+        },
+      });
+      const handler = createHandler({ authzClient: fakeAuthzClient('ALLOW'), docClient });
+
+      const body = JSON.parse(
+        ((await handler(buildEvent('NICHOLS-4471-1798000000'))) as { body: string }).body,
+      ) as { prePlan: unknown; nearestHydrants: Array<Record<string, unknown>> };
+
+      expect(body.prePlan).toBeNull();
+      expect(body.nearestHydrants).toEqual([
+        expect.objectContaining({ hydrantId: 'H-40', distanceMeters: 40 }),
+      ]);
+    });
+
+    it('omits nearestHydrants when there is no reference point at all (no match, no coordinates)', async () => {
+      const { createHandler } = await import('./handler.js');
+      const docClient = routedClient({ queries: () => Promise.resolve({ Items: [] }) });
+      const handler = createHandler({ authzClient: fakeAuthzClient('ALLOW'), docClient });
+
+      const body = JSON.parse(
+        ((await handler(buildEvent('NICHOLS-4471-1798000000'))) as { body: string }).body,
+      ) as Record<string, unknown>;
+
+      expect(body.prePlan).toBeNull();
+      expect('nearestHydrants' in body).toBe(false);
     });
 
     it('never treats a prePlanRef (pre-plan id) as an occupancy id', async () => {

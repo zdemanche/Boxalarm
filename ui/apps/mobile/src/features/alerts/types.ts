@@ -94,6 +94,13 @@ export interface DispatchAlert {
   prePlan?: PrePlanEnrichment | null;
   /** The server could not look the pre-plan up (prePlan is then absent) - not "none on file". */
   prePlanUnavailable?: boolean;
+  /**
+   * Nearest hydrants to the matched building or the dispatch's own coordinates - present with
+   * or without a pre-plan match; includes flagged OUT_OF_SERVICE hydrants. Absent when there
+   * is no reference point (or from an older server).
+   */
+  nearestHydrants?: NearestHydrant[];
+  nearestHydrantsUnavailable?: boolean;
 }
 
 export interface SelfTestChannelResult {

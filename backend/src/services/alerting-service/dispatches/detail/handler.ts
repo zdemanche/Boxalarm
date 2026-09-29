@@ -17,7 +17,7 @@ import { toMutualAidView, type MutualAidView } from '../../ladderControls/shared
 import { getDispatchDetail, getMutualAidEvent } from './repository.js';
 import { buildMapLink } from './mapLink.js';
 import { dataUnavailableProblem } from './problemDetails.js';
-import { PRE_PLAN_UNAVAILABLE, fetchPrePlan } from './prePlanContext.js';
+import { PRE_PLAN_UNAVAILABLE, fetchDispatchContext } from './prePlanContext.js';
 
 const METRICS_NAMESPACE = 'Boxalarm/Alerting';
 
@@ -70,8 +70,8 @@ async function handleGetAlertDetail(
       return notFoundProblem(traceId, `No dispatch alert found for dispatchId "${dispatchId}"`);
     }
 
-    const [prePlan, mutualAid] = await Promise.all([
-      fetchPrePlan(doc, config.tableName, deptId, item, traceId),
+    const [context, mutualAid] = await Promise.all([
+      fetchDispatchContext(doc, config.tableName, deptId, item, traceId),
       fetchMutualAid(doc, config.tableName, deptId, dispatchId, traceId),
     ]);
 
@@ -99,7 +99,13 @@ async function handleGetAlertDetail(
         // null = no pre-plan matched; on a failed lookup the key is omitted and
         // prePlanUnavailable says so (the mutualAid precedent above), so the crew reads
         // "unavailable", never "no pre-plan on file".
-        ...(prePlan === PRE_PLAN_UNAVAILABLE ? { prePlanUnavailable: true } : { prePlan }),
+        ...(context.prePlan === PRE_PLAN_UNAVAILABLE
+          ? { prePlanUnavailable: true }
+          : { prePlan: context.prePlan }),
+        // Nearest hydrants stand on their own: shown with or without a pre-plan match
+        // whenever there is a reference point (matched building or dispatch coordinates).
+        ...(context.nearestHydrants ? { nearestHydrants: context.nearestHydrants } : {}),
+        ...(context.hydrantsUnavailable ? { nearestHydrantsUnavailable: true } : {}),
       }),
     };
   } catch (error) {

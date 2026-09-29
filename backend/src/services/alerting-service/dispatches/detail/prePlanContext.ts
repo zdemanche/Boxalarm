@@ -5,7 +5,7 @@ import { logError } from '../logger.js';
 import type { DispatchAlertItem } from './repository.js';
 import { normalizeAddress } from '../../prePlan/addressKey.js';
 import { isGeoPoint, type GeoPoint } from '../../prePlan/geo.js';
-import type { NearestHydrant } from '../../prePlan/nearestHydrants.js';
+import { isOutOfService, type NearestHydrant } from '../../prePlan/nearestHydrants.js';
 import {
   findNearestHydrants,
   findPrePlanByAddress,
@@ -47,6 +47,7 @@ export interface PrePlanView {
   readonly summary?: string;
   readonly hazards: readonly string[];
   readonly utilityShutoffs: readonly UtilityShutoff[];
+  /** Legacy: usable hydrants only. The top-level nearestHydrants is the full list. */
   readonly nearestHydrants: readonly NearestHydrant[];
   readonly candidates?: readonly PrePlanCandidateView[];
 }
@@ -90,23 +91,37 @@ async function matchPrePlan(
   return dispatchPoint ? findPrePlanNear(client, tableName, deptId, dispatchPoint) : undefined;
 }
 
+/** Pre-plan and hydrant context for one dispatch (the detail response's enrichment). */
+export interface DispatchContext {
+  readonly prePlan: PrePlanView | null | typeof PRE_PLAN_UNAVAILABLE;
+  /**
+   * Nearest hydrants (usable ones plus nearer out-of-service ones, flagged) to the matched
+   * building, else to the dispatch's own coordinates. Undefined when there is no reference
+   * point at all; also undefined (with hydrantsUnavailable) when the read failed.
+   */
+  readonly nearestHydrants?: readonly NearestHydrant[];
+  readonly hydrantsUnavailable?: true;
+}
+
 /**
  * Pre-plan + hydrant context for the dispatch. Read-side enrichment only — it runs after the
  * page went out and reads nothing but the alerting table's copies. A failed lookup is reported
  * as PRE_PLAN_UNAVAILABLE (the response then says prePlanUnavailable, never "no pre-plan");
- * a failed hydrant read leaves an empty hydrant list; neither fails the dispatch detail.
+ * a failed hydrant read is reported as hydrantsUnavailable; neither fails the dispatch detail.
+ * Hydrants are looked up whether or not a pre-plan matched — they matter on every call.
  */
-export async function fetchPrePlan(
+export async function fetchDispatchContext(
   client: DynamoDBDocumentClient,
   tableName: string,
   deptId: VerifiedDeptId,
   item: DispatchAlertItem,
   traceId: string,
-): Promise<PrePlanView | null | typeof PRE_PLAN_UNAVAILABLE> {
+): Promise<DispatchContext> {
   const dispatchLocation = { latitude: item.latitude, longitude: item.longitude };
   const dispatchPoint = isGeoPoint(dispatchLocation) ? dispatchLocation : undefined;
 
   let match: PrePlanMatch | undefined;
+  let unavailable = false;
   try {
     match = await matchPrePlan(client, tableName, deptId, item, dispatchPoint);
   } catch (error) {
@@ -116,25 +131,35 @@ export async function fetchPrePlan(
     });
     emitOutcomeMetric(METRICS_NAMESPACE, 'AlertDetailPrePlanUnavailable');
     // Never reported as "no pre-plan": a throttle must not tell a crew the building has none.
-    return PRE_PLAN_UNAVAILABLE;
+    unavailable = true;
   }
-  if (!match) {
-    emitOutcomeMetric(METRICS_NAMESPACE, 'AlertDetailPrePlanNoMatch');
-    return null;
+  if (!unavailable) {
+    emitOutcomeMetric(
+      METRICS_NAMESPACE,
+      match ? 'AlertDetailPrePlanMatched' : 'AlertDetailPrePlanNoMatch',
+      match?.matchType,
+    );
   }
-  emitOutcomeMetric(METRICS_NAMESPACE, 'AlertDetailPrePlanMatched', match.matchType);
 
-  const primary = match.matchType === 'CANDIDATES' ? match.candidates[0]?.copy : match.copy;
+  const primary =
+    match === undefined
+      ? undefined
+      : match.matchType === 'CANDIDATES'
+        ? match.candidates[0]?.copy
+        : match.copy;
   // NEARBY: the dispatch point is the truth; otherwise the matched building's own location.
   const hydrantReference =
-    match.matchType === 'NEARBY'
+    match?.matchType === 'NEARBY'
       ? dispatchPoint
       : ((primary ? pointOf(primary) : undefined) ?? dispatchPoint);
-  let nearestHydrants: readonly NearestHydrant[] = [];
+
+  let nearestHydrants: readonly NearestHydrant[] | undefined;
+  let hydrantsUnavailable = false;
   if (hydrantReference) {
     try {
       nearestHydrants = await findNearestHydrants(client, tableName, deptId, hydrantReference);
     } catch (error) {
+      hydrantsUnavailable = true;
       logError('dispatches.detail.hydrant_read_failed', error, {
         traceId,
         dispatchId: item.dispatchId,
@@ -142,6 +167,20 @@ export async function fetchPrePlan(
     }
   }
 
+  return {
+    prePlan: unavailable ? PRE_PLAN_UNAVAILABLE : match ? toView(match, nearestHydrants) : null,
+    ...(nearestHydrants ? { nearestHydrants } : {}),
+    ...(hydrantsUnavailable ? { hydrantsUnavailable: true as const } : {}),
+  };
+}
+
+function toView(
+  match: PrePlanMatch,
+  nearestHydrants: readonly NearestHydrant[] | undefined,
+): PrePlanView {
+  // prePlan.nearestHydrants is the pre-provenance field older clients render with no status
+  // label, so it keeps usable hydrants only; current clients read the top-level list.
+  const legacyHydrants = (nearestHydrants ?? []).filter((hydrant) => !isOutOfService(hydrant));
   if (match.matchType === 'CANDIDATES') {
     const candidates = match.candidates.map(candidateView);
     return {
@@ -150,7 +189,7 @@ export async function fetchPrePlan(
       unit: null,
       hazards: [],
       utilityShutoffs: [],
-      nearestHydrants,
+      nearestHydrants: legacyHydrants,
       candidates,
     };
   }
@@ -163,6 +202,6 @@ export async function fetchPrePlan(
     ...(copy.summary ? { summary: copy.summary } : {}),
     hazards: copy.hazards ?? [],
     utilityShutoffs: copy.utilityShutoffs ?? [],
-    nearestHydrants,
+    nearestHydrants: legacyHydrants,
   };
 }

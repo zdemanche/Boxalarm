@@ -145,3 +145,36 @@ test('labels an out-of-service hydrant in text ("OUT OF SERVICE"), not by colour
   expect(oos.style.fontWeight).toBe('700');
   expect(screen.getByText('H-210 · 210 m').style.fontWeight).toBe('');
 });
+
+test('shows the nearest hydrants even when no pre-plan matched (minor 5)', () => {
+  render(
+    <PrePlanPanel
+      prePlan={null}
+      nearestHydrants={[{ hydrantId: 'H-40', status: 'IN_SERVICE', distanceMeters: 40 }]}
+    />,
+  );
+  expect(screen.getByText('No pre-plan matched this address.')).toBeTruthy();
+  expect(screen.getByRole('list', { name: 'Nearest hydrants' }).textContent).toBe('H-40 · 40 m');
+});
+
+test('prefers the top-level hydrant list (with flagged OOS) over the legacy per-plan list', () => {
+  render(
+    <PrePlanPanel
+      prePlan={{ ...BASE, nearestHydrants: [{ hydrantId: 'H-80', distanceMeters: 80 }] }}
+      nearestHydrants={[
+        { hydrantId: 'H-15', status: 'OUT_OF_SERVICE', distanceMeters: 15 },
+        { hydrantId: 'H-80', status: 'IN_SERVICE', distanceMeters: 80 },
+      ]}
+    />,
+  );
+  const items = screen.getByRole('list', { name: 'Nearest hydrants' }).querySelectorAll('li');
+  expect([...items].map((li) => li.textContent)).toEqual([
+    'H-15 · 15 m · OUT OF SERVICE',
+    'H-80 · 80 m',
+  ]);
+});
+
+test('says the hydrant list is unavailable when that read failed', () => {
+  render(<PrePlanPanel prePlan={null} hydrantsUnavailable />);
+  expect(screen.getByRole('note').textContent).toBe('Hydrant list unavailable right now.');
+});

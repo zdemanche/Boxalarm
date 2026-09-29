@@ -175,13 +175,13 @@ describe('pre-plan + hydrant copies -> dispatch detail (real DynamoDB with the a
         summary?: string;
         hazards: string[];
         utilityShutoffs: unknown[];
-        nearestHydrants: Array<{
-          hydrantId: string;
-          status?: string;
-          distanceMeters: number;
-          flowClass?: string;
-        }>;
       } | null;
+      nearestHydrants?: Array<{
+        hydrantId: string;
+        status?: string;
+        distanceMeters: number;
+        flowClass?: string;
+      }>;
     };
   }
 
@@ -224,13 +224,13 @@ describe('pre-plan + hydrant copies -> dispatch detail (real DynamoDB with the a
       utilityShutoffs: [{ utility: 'gas', location: 'rear yard' }],
     });
     // HYD-OOS (15 m) is listed first and flagged — not hidden, not counted.
-    expect(body.prePlan?.nearestHydrants.map((h) => [h.hydrantId, h.status])).toEqual([
+    expect(body.nearestHydrants?.map((h) => [h.hydrantId, h.status])).toEqual([
       ['HYD-OOS', 'OUT_OF_SERVICE'],
       ['HYD-90', 'IN_SERVICE'],
       ['HYD-210', 'IN_SERVICE'],
       ['HYD-400', 'IN_SERVICE'],
     ]);
-    expect(body.prePlan?.nearestHydrants[1]).toMatchObject({ distanceMeters: 90, flowClass: 'AA' });
+    expect(body.nearestHydrants?.[1]).toMatchObject({ distanceMeters: 90, flowClass: 'AA' });
   });
 
   it('a later out-of-service event flags that hydrant on the next dispatch view', async () => {
@@ -242,7 +242,7 @@ describe('pre-plan + hydrant copies -> dispatch detail (real DynamoDB with the a
 
     const body = await detail('NICHOLS-MANUAL-2');
 
-    expect(body.prePlan?.nearestHydrants.map((h) => [h.hydrantId, h.status])).toEqual([
+    expect(body.nearestHydrants?.map((h) => [h.hydrantId, h.status])).toEqual([
       ['HYD-OOS', 'OUT_OF_SERVICE'],
       ['HYD-90', 'OUT_OF_SERVICE'],
       ['HYD-210', 'IN_SERVICE'],

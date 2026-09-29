@@ -261,6 +261,8 @@ export function AlertDetailScreen() {
         <PrePlanPanel
           prePlan={dispatch.prePlan}
           unavailable={dispatch.prePlanUnavailable === true}
+          {...(dispatch.nearestHydrants ? { nearestHydrants: dispatch.nearestHydrants } : {})}
+          hydrantsUnavailable={dispatch.nearestHydrantsUnavailable === true}
         />
 
         <TouchableOpacity
