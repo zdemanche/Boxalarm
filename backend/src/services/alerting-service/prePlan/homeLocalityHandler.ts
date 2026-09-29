@@ -27,7 +27,7 @@ export function createHomeLocalityHandler(
       );
       return {
         statusCode: 200,
-        headers: { 'content-type': 'application/json', 'cache-control': 'max-age=300' },
+        headers: { 'content-type': 'application/json', 'cache-control': 'private, max-age=300' },
         body: JSON.stringify({
           towns: home.names,
           zips: [...home.zips],

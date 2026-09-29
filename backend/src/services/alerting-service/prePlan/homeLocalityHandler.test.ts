@@ -45,10 +45,13 @@ describe('GET /api/v1/alerting/home-locality', () => {
       event(),
     )) as {
       statusCode: number;
+      headers: Record<string, string>;
       body: string;
     };
 
     expect(result.statusCode).toBe(200);
+    // Authenticated, per-department data: never stored by a shared cache.
+    expect(result.headers).toMatchObject({ 'cache-control': 'private, max-age=300' });
     expect(JSON.parse(result.body)).toEqual({
       towns: ['Trumbull', 'Long Hill'],
       zips: ['06611'],
