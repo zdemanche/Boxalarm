@@ -207,4 +207,10 @@ describe("SessionRevocation (review C1)", () => {
     expect(threshold).toBe(0);
     expect(actions).toEqual(["arn:aws:sns:us-east-1:123456789012:chief"]);
   });
+
+  it("reports partial batch failures on the status consumer (review minor 15)", async () => {
+    const sr = await build();
+    const types = await resolve(sr.memberStatusConsumer.eventSourceMapping.functionResponseTypes);
+    expect(types).toEqual(["ReportBatchItemFailures"]);
+  });
 });

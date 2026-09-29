@@ -288,7 +288,9 @@ describe('memberStatusRevocationHandler', () => {
     };
     await expect(
       handler({ Records: [sqsRecord(event)] }, {} as never, () => undefined),
-    ).rejects.toThrow('dynamo down');
+    ).resolves.toMatchObject({
+      batchItemFailures: [expect.anything()],
+    });
     expect(disableMemberLogin).not.toHaveBeenCalled();
     expect(enableMemberLogin).not.toHaveBeenCalled();
   });
@@ -309,7 +311,7 @@ describe('memberStatusRevocationHandler', () => {
         {} as never,
         () => undefined,
       ),
-    ).resolves.toBeUndefined();
+    ).resolves.toEqual({ batchItemFailures: [] });
     expect(revokeMemberSession).not.toHaveBeenCalled();
   });
 
@@ -352,7 +354,9 @@ describe('memberStatusRevocationHandler', () => {
     };
     const event: SQSEvent = { Records: [sqsRecord(rolesChange)] };
 
-    await expect(handler(event, {} as never, () => undefined)).resolves.toBeUndefined();
+    await expect(handler(event, {} as never, () => undefined)).resolves.toEqual({
+      batchItemFailures: [],
+    });
     expect(revokeMemberSession).not.toHaveBeenCalled();
   });
 
@@ -398,7 +402,9 @@ describe('memberStatusRevocationHandler', () => {
 
     await expect(
       handler({ Records: [sqsRecord(garbage)] }, {} as never, () => undefined),
-    ).rejects.toThrow('payload.memberId is required');
+    ).resolves.toMatchObject({
+      batchItemFailures: [expect.anything()],
+    });
   });
 
   it('rethrows (never swallows) on malformed payload — empty status — so SQS retries and the DLQ catches it', async () => {
@@ -413,9 +419,9 @@ describe('memberStatusRevocationHandler', () => {
     const malformed = memberUpdatedEvent('mbr-102', ' ');
     const event: SQSEvent = { Records: [sqsRecord(malformed)] };
 
-    await expect(handler(event, {} as never, () => undefined)).rejects.toThrow(
-      'payload.status is required',
-    );
+    await expect(handler(event, {} as never, () => undefined)).resolves.toMatchObject({
+      batchItemFailures: [expect.anything()],
+    });
     expect(revokeMemberSession).not.toHaveBeenCalled();
   });
 
@@ -431,9 +437,9 @@ describe('memberStatusRevocationHandler', () => {
     const malformed = memberUpdatedEvent('   ', 'LOA');
     const event: SQSEvent = { Records: [sqsRecord(malformed)] };
 
-    await expect(handler(event, {} as never, () => undefined)).rejects.toThrow(
-      'payload.memberId is required',
-    );
+    await expect(handler(event, {} as never, () => undefined)).resolves.toMatchObject({
+      batchItemFailures: [expect.anything()],
+    });
   });
 
   it('rethrows when a record has the wrong eventType for this queue', async () => {
@@ -451,9 +457,9 @@ describe('memberStatusRevocationHandler', () => {
     };
     const event: SQSEvent = { Records: [sqsRecord(wrongEvent)] };
 
-    await expect(handler(event, {} as never, () => undefined)).rejects.toThrow(
-      'unexpected eventType',
-    );
+    await expect(handler(event, {} as never, () => undefined)).resolves.toMatchObject({
+      batchItemFailures: [expect.anything()],
+    });
     expect(revokeMemberSession).not.toHaveBeenCalled();
   });
 
@@ -474,9 +480,9 @@ describe('memberStatusRevocationHandler', () => {
       ],
     };
 
-    await expect(handler(event, {} as never, () => undefined)).rejects.toThrow(
-      'payload.status is required',
-    );
+    await expect(handler(event, {} as never, () => undefined)).resolves.toMatchObject({
+      batchItemFailures: [expect.anything()],
+    });
     expect(revokeMemberSession).toHaveBeenCalledWith(
       {},
       { userPoolId: 'pool-1', username: 'mbr-200', correlationId: 'corr-1' },
@@ -494,9 +500,9 @@ describe('memberStatusRevocationHandler', () => {
     const { handler } = await import('./memberStatusRevocationHandler.js');
     const event: SQSEvent = { Records: [sqsRecord(memberUpdatedEvent('mbr-102', 'LOA'))] };
 
-    await expect(handler(event, {} as never, () => undefined)).rejects.toThrow(
-      'Cognito unreachable',
-    );
+    await expect(handler(event, {} as never, () => undefined)).resolves.toMatchObject({
+      batchItemFailures: [expect.anything()],
+    });
   });
 
   it('no-ops (logged, non-retryable) when the member is unknown to Cognito, avoiding a DLQ storm', async () => {
@@ -512,7 +518,9 @@ describe('memberStatusRevocationHandler', () => {
     const { handler } = await import('./memberStatusRevocationHandler.js');
     const event: SQSEvent = { Records: [sqsRecord(memberUpdatedEvent('mbr-ghost', 'LOA'))] };
 
-    await expect(handler(event, {} as never, () => undefined)).resolves.toBeUndefined();
+    await expect(handler(event, {} as never, () => undefined)).resolves.toEqual({
+      batchItemFailures: [],
+    });
   });
 
   it('logs and rethrows when the revocation config is missing (e.g. COGNITO_USER_POOL_ID unset)', async () => {
@@ -528,12 +536,60 @@ describe('memberStatusRevocationHandler', () => {
     const { handler } = await import('./memberStatusRevocationHandler.js');
     const event: SQSEvent = { Records: [sqsRecord(memberUpdatedEvent('mbr-102', 'LOA'))] };
 
+    // A config error fails the whole batch: nothing in it can succeed.
     await expect(handler(event, {} as never, () => undefined)).rejects.toThrow(
       'COGNITO_USER_POOL_ID is required',
     );
     expect(errorSpy).toHaveBeenCalledWith(
       expect.stringContaining('memberStatusRevocation.configError'),
     );
+  });
+
+  // Review minor 15: only failed records are retried, so good ones are not re-applied.
+  it('reports only the failed record in the batch response', async () => {
+    const revokeMemberSession = vi.fn().mockResolvedValue(undefined);
+    mockCognito({ revokeMemberSession });
+
+    const { handler } = await import('./memberStatusRevocationHandler.js');
+    const result = await handler(
+      {
+        Records: [
+          sqsRecord(memberUpdatedEvent('mbr-bad', ''), 'msg-bad'),
+          sqsRecord(memberUpdatedEvent('mbr-200', 'RETIRED'), 'msg-good'),
+        ],
+      },
+      {} as never,
+      () => undefined,
+    );
+
+    expect(result).toEqual({ batchItemFailures: [{ itemIdentifier: 'msg-bad' }] });
+    expect(revokeMemberSession).toHaveBeenCalledTimes(1);
+  });
+
+  it("retries a member's later records after one of theirs fails, never out of order", async () => {
+    const disableMemberLogin = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('throttled'))
+      .mockResolvedValue(undefined);
+    const enableMemberLogin = vi.fn().mockResolvedValue(undefined);
+    mockCognito({ disableMemberLogin, enableMemberLogin });
+
+    const { handler } = await import('./memberStatusRevocationHandler.js');
+    const result = await handler(
+      {
+        Records: [
+          sqsRecord(memberUpdatedEvent('mbr-9', 'LOA'), 'msg-1'),
+          sqsRecord(memberUpdatedEvent('mbr-9', 'ACTIVE'), 'msg-2'),
+        ],
+      },
+      {} as never,
+      () => undefined,
+    );
+
+    expect(result).toEqual({
+      batchItemFailures: [{ itemIdentifier: 'msg-1' }, { itemIdentifier: 'msg-2' }],
+    });
+    expect(enableMemberLogin).not.toHaveBeenCalled();
   });
 
   // Review of fix/access-control, MAJOR 2: LOA set by mistake and corrected to ACTIVE a
@@ -689,7 +745,9 @@ describe('memberStatusRevocationHandler', () => {
 
       await expect(
         handler({ Records: [sqsRecord(withDept('mbr-9', 'LOA'))] }, {} as never, () => undefined),
-      ).rejects.toThrow('kept changing');
+      ).resolves.toMatchObject({
+        batchItemFailures: [expect.anything()],
+      });
     });
   });
 });

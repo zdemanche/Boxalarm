@@ -109,6 +109,7 @@ function pushInvalidationStatements(tableArn: string): IamPolicyStatement[] {
 
 export class SessionRevocation extends pulumi.ComponentResource {
   public readonly memberStatusLambda: ServiceLambda;
+  public readonly memberStatusConsumer: ReturnType<PlatformBus["addQueueConsumer"]>;
   public readonly deviceLossLambda: ServiceLambda;
   public readonly credentialResetLambda: ServiceLambda;
   public readonly credentialResetInvokedAlarm: aws.cloudwatch.MetricAlarm;
@@ -160,7 +161,7 @@ export class SessionRevocation extends pulumi.ComponentResource {
       { parent: this },
     );
 
-    args.platformBus.addQueueConsumer(
+    this.memberStatusConsumer = args.platformBus.addQueueConsumer(
       `${name}-member-status-consumer`,
       {
         env,
@@ -170,6 +171,8 @@ export class SessionRevocation extends pulumi.ComponentResource {
         lambda: this.memberStatusLambda.function,
         lambdaRole: this.memberStatusLambda.role,
         maxReceiveCount: 5,
+        // The handler returns partial batch failures (review minor 15): only failed records retry.
+        reportBatchItemFailures: true,
       },
       { parent: this },
     );

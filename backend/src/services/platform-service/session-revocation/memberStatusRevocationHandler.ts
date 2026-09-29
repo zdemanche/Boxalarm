@@ -1,6 +1,6 @@
 import { UserNotFoundException } from '@aws-sdk/client-cognito-identity-provider';
 import type { CognitoIdentityProviderClient } from '@aws-sdk/client-cognito-identity-provider';
-import type { Handler, SQSEvent, SQSRecord } from 'aws-lambda';
+import type { Handler, SQSBatchResponse, SQSEvent, SQSRecord } from 'aws-lambda';
 import {
   createRevocationClient,
   disableMemberLogin,
@@ -224,7 +224,14 @@ async function applyStatus(
   }
 }
 
-export const handler: Handler<SQSEvent, void> = async (event) => {
+/**
+ * Partial batch response (review minor 15): only the records that failed are retried, so a
+ * good record in a batch with a bad one is not re-applied (re-writing its revocation marker
+ * and repeating its Cognito calls). A config error still fails the whole batch - nothing in
+ * it can succeed. Needs ReportBatchItemFailures on the event source mapping
+ * (infrastructure/components/identity/session-revocation.ts).
+ */
+export const handler: Handler<SQSEvent, SQSBatchResponse> = async (event) => {
   let config: RevocationConfig;
   let tableName: string;
   try {
@@ -285,24 +292,33 @@ export const handler: Handler<SQSEvent, void> = async (event) => {
   const results = (
     await Promise.all(
       [...byMember.values()].map(async (records) => {
-        const settled: PromiseSettledResult<void>[] = [];
+        const failed: string[] = [];
         for (const record of records) {
-          settled.push(
-            await processRecord(record).then(
-              (value): PromiseSettledResult<void> => ({ status: 'fulfilled', value }),
-              (reason: unknown): PromiseSettledResult<void> => ({ status: 'rejected', reason }),
-            ),
-          );
+          // Once one of a member's records fails, retry the rest after it rather than apply
+          // them out of order.
+          if (failed.length > 0) {
+            failed.push(record.messageId);
+            continue;
+          }
+          try {
+            await processRecord(record);
+          } catch (error) {
+            console.error(
+              JSON.stringify({
+                event: 'memberStatusRevocation.recordFailed',
+                messageId: record.messageId,
+                reason: error instanceof Error ? error.constructor.name : 'UnknownError',
+                message: error instanceof Error ? error.message : undefined,
+                service: 'platform-service',
+              }),
+            );
+            failed.push(record.messageId);
+          }
         }
-        return settled;
+        return failed;
       }),
     )
   ).flat();
 
-  const failure = results.find(
-    (result): result is PromiseRejectedResult => result.status === 'rejected',
-  );
-  if (failure) {
-    throw failure.reason;
-  }
+  return { batchItemFailures: results.map((itemIdentifier) => ({ itemIdentifier })) };
 };
