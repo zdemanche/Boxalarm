@@ -3,12 +3,9 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useParams } from 'react-router-dom';
 import { useAuth } from '../../auth/AuthContext';
 import { canManageTraining } from '../../auth/roles';
-import { ApiError } from '../../lib/apiClient';
 import { ApiForbiddenGate } from '../../components/ApiForbiddenGate';
 import { Badge } from '../../components/ui/Chip';
-import { ConfirmDialog } from '../../components/ui/Dialog';
 import { PageHeader } from '../../components/ui/PageHeader';
-import { revokeMemberSessions } from '../platform/api';
 import { CertificationsPanel } from '../training/CertificationsPanel';
 import { TranscriptPanel } from '../training/TranscriptPanel';
 import { issueMemberPpe, listMemberPpe } from '../inventory/api';
@@ -24,6 +21,7 @@ import {
 } from './api';
 import type { AttendanceActivityType, MemberStatus } from './types';
 import { RolesSection } from './RolesSection';
+import { AccountSecuritySection, canUseAccountKillSwitches } from './AccountSecuritySection';
 
 const STATUSES: MemberStatus[] = ['PROBATIONARY', 'ACTIVE', 'LOA', 'RETIRED'];
 const ACTIVITY_TYPES: AttendanceActivityType[] = [
@@ -231,37 +229,8 @@ export function MemberDetailPage() {
   const auth = useAuth();
   const queryClient = useQueryClient();
   const isAdmin = auth.roles.includes('ADMIN');
-  const canRevokeSessions = auth.roles.includes('ADMIN') || auth.roles.includes('CHIEF');
   // Role assignment is CHIEF/ADMIN only - not OFFICER, who could otherwise promote themselves.
-  const canManageRoles = canRevokeSessions;
-  const [revokeError, setRevokeError] = useState<string | null>(null);
-  const [revokeForbidden, setRevokeForbidden] = useState<unknown>(null);
-  const [revoked, setRevoked] = useState(false);
-  const [confirmRevokeOpen, setConfirmRevokeOpen] = useState(false);
-
-  const revokeMutation = useMutation({
-    mutationFn: () => revokeMemberSessions(auth, id),
-    onSuccess: () => {
-      setRevokeError(null);
-      setRevokeForbidden(null);
-      setRevoked(true);
-    },
-    onError: (error: unknown) => {
-      if (error instanceof ApiError && error.problem.status === 403) {
-        setRevokeError(null);
-        setRevokeForbidden(error);
-        return;
-      }
-      setRevokeForbidden(null);
-      setRevokeError('Could not revoke this member’s sessions. Try again.');
-    },
-  });
-
-  // ConfirmDialog names the member (PR #321 review m3). Role check alone gates it - no step-up.
-  function handleRevoke() {
-    setRevoked(false);
-    revokeMutation.mutate();
-  }
+  const canManageRoles = canUseAccountKillSwitches(auth.roles);
 
   const isTraining = canManageTraining(auth.roles);
   // Matches the inspections write-access precedent (ADMIN || CHIEF) — PPE issuance is a new
@@ -390,38 +359,7 @@ export function MemberDetailPage() {
 
           <RolesSection member={member} canEdit={canManageRoles} />
 
-          {canRevokeSessions ? (
-            <div style={{ marginTop: 'var(--boxalarm-spacing-lg)' }}>
-              <button
-                type="button"
-                onClick={() => setConfirmRevokeOpen(true)}
-                disabled={revokeMutation.isPending}
-                style={{ minHeight: 44 }}
-              >
-                Revoke all sessions (lost device)
-              </button>
-              {revokeForbidden ? (
-                <ApiForbiddenGate error={revokeForbidden} embedded>
-                  <p role="alert">Could not revoke this member’s sessions.</p>
-                </ApiForbiddenGate>
-              ) : null}
-              {revokeError ? (
-                <p role="alert" aria-live="assertive">
-                  {revokeError}
-                </p>
-              ) : null}
-              {revoked ? <p role="status">Sessions revoked.</p> : null}
-              <ConfirmDialog
-                open={confirmRevokeOpen}
-                onOpenChange={setConfirmRevokeOpen}
-                title={`Revoke all sessions for ${member.firstName} ${member.lastName}?`}
-                consequence={`${member.firstName} ${member.lastName} will be signed out on every device and must sign in again.`}
-                confirmLabel="Revoke sessions"
-                onConfirm={handleRevoke}
-                danger
-              />
-            </div>
-          ) : null}
+          <AccountSecuritySection member={member} />
           <CertificationsPanel memberId={member.memberId} />
           {isTraining ? <TranscriptPanel memberId={member.memberId} /> : null}
           <h2

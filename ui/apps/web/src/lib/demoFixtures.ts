@@ -414,7 +414,12 @@ export async function demoRequest(
 
   if (path === 'platform/sessions/revoke' && method === 'POST') {
     const memberId = (body as { memberId: string }).memberId;
-    return json({ memberId, status: 'revoked' }, 202);
+    return json({ memberId, status: 'revoked', push: 'invalidated' }, 202);
+  }
+
+  if (path === 'platform/sessions/reset-credentials' && method === 'POST') {
+    const memberId = (body as { memberId: string }).memberId;
+    return json({ memberId, status: 'password-reset-and-signed-out' }, 202);
   }
 
   if (path === 'inventory/equipment' && method === 'GET') {

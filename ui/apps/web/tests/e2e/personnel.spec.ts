@@ -237,7 +237,7 @@ test('the roles editor and its confirm dialog pass axe (F2.7)', async ({ page })
   await form.getByRole('button', { name: 'Review role changes' }).click();
   const dialog = page.getByRole('dialog', { name: 'Change roles for Sam Lee?' });
   await expect(dialog).toBeVisible();
-  await expect(dialog.getByText(/Revoke all sessions/)).toBeVisible();
+  await expect(dialog.getByText(/Report device lost/)).toBeVisible();
 
   const dialogResults = await new AxeBuilder({ page }).include('[role="dialog"]').analyze();
   expect(dialogResults.violations).toEqual([]);

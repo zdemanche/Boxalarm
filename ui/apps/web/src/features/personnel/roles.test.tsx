@@ -141,7 +141,7 @@ test('removing ADMIN or CHIEF warns that rights last until the session refreshes
 
   const dialog = await screen.findByRole('dialog', { name: 'Change roles for Sam Lee?' });
   expect(within(dialog).getByText(/Until then Sam can still change roles/)).toBeTruthy();
-  expect(within(dialog).getByText(/Revoke all sessions/)).toBeTruthy();
+  expect(within(dialog).getByText(/Report device lost/)).toBeTruthy();
 });
 
 test('granting a role shows no session warning', async () => {
@@ -154,7 +154,7 @@ test('granting a role shows no session warning', async () => {
   await user.click(within(form).getByRole('button', { name: 'Review role changes' }));
 
   const dialog = await screen.findByRole('dialog', { name: 'Change roles for Sam Lee?' });
-  expect(within(dialog).queryByText(/Revoke all sessions/)).toBeNull();
+  expect(within(dialog).queryByText(/Report device lost/)).toBeNull();
 });
 
 test("shows the server's own words when the save fails, and keeps the dialog open", async () => {

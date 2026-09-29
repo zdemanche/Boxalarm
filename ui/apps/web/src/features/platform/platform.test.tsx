@@ -360,14 +360,16 @@ test('a 403 revoking sessions shows a generic message, not the raw server detail
   const user = userEvent.setup();
   renderRoute(['ADMIN'], '/personnel/m1');
   await screen.findByRole('heading', { name: 'Sam Lee' });
-  await user.click(screen.getByRole('button', { name: 'Revoke all sessions (lost device)' }));
+  await user.click(screen.getByRole('button', { name: 'Report device lost' }));
   const revokeDialog = await screen.findByRole('dialog', {
-    name: 'Revoke all sessions for Sam Lee?',
+    name: 'Report a lost device for Sam Lee?',
   });
-  await user.click(within(revokeDialog).getByRole('button', { name: 'Revoke sessions' }));
+  await user.click(within(revokeDialog).getByRole('button', { name: 'Sign out everywhere' }));
 
   await waitFor(() => {
-    expect(screen.getByText('You do not have access to this page.')).toBeTruthy();
+    expect(
+      within(revokeDialog).getByText('You are not allowed to do this. Only a chief or admin can.'),
+    ).toBeTruthy();
   });
   expect(screen.queryByText(SECRET_CEDAR_DETAIL)).toBeNull();
   expect(document.body.textContent).not.toContain(SECRET_CEDAR_DETAIL);
@@ -522,14 +524,14 @@ test('admin revokes a member’s sessions from /personnel/:id', async () => {
   const user = userEvent.setup();
   renderRoute(['ADMIN'], '/personnel/m1');
   await screen.findByRole('heading', { name: 'Sam Lee' });
-  await user.click(screen.getByRole('button', { name: 'Revoke all sessions (lost device)' }));
+  await user.click(screen.getByRole('button', { name: 'Report device lost' }));
   const revokeDialog = await screen.findByRole('dialog', {
-    name: 'Revoke all sessions for Sam Lee?',
+    name: 'Report a lost device for Sam Lee?',
   });
-  await user.click(within(revokeDialog).getByRole('button', { name: 'Revoke sessions' }));
+  await user.click(within(revokeDialog).getByRole('button', { name: 'Sign out everywhere' }));
 
   await waitFor(() => {
-    expect(screen.getByText('Sessions revoked.')).toBeTruthy();
+    expect(screen.getByText(/Sam Lee is signed out everywhere/)).toBeTruthy();
   });
 });
 

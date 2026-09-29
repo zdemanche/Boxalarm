@@ -154,7 +154,7 @@ export function RolesSection({ member, canEdit }: { member: Member; canEdit: boo
         consequence={
           `${summary}. This takes effect within an hour, when ${member.firstName}'s app next refreshes.` +
           (removesManagerRole
-            ? ` Until then ${member.firstName} can still change roles. To cut that off now, also use Revoke all sessions on this page.`
+            ? ` Until then ${member.firstName} can still change roles. To cut that off now, also use Report device lost on this page.`
             : '')
         }
         confirmLabel="Save roles"

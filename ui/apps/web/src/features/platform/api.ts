@@ -82,11 +82,33 @@ export async function runDisposal(tokens: AuthTokenSource): Promise<DisposalResu
   return (await response.json()) as DisposalResult;
 }
 
+/**
+ * Report a member's device lost (CHIEF/ADMIN, Cedar RevokeSession): every session is signed
+ * out, already-issued tokens stop within about 30 s, and the member's push registration is
+ * removed so the lost phone stops showing dispatches.
+ */
 export async function revokeMemberSessions(
   tokens: AuthTokenSource,
   memberId: string,
-): Promise<{ memberId: string; status: string }> {
+): Promise<{ memberId: string; status: string; push?: string }> {
   const response = await apiRequest('platform/sessions/revoke', tokens, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ memberId }),
+  });
+  return (await response.json()) as { memberId: string; status: string; push?: string };
+}
+
+/**
+ * The compromised-password kill switch (CHIEF/ADMIN, Cedar ResetMemberCredentials): the
+ * current password stops working and every session is signed out. The member sets a new
+ * password through the self-service "forgot password" flow.
+ */
+export async function resetMemberCredentials(
+  tokens: AuthTokenSource,
+  memberId: string,
+): Promise<{ memberId: string; status: string }> {
+  const response = await apiRequest('platform/sessions/reset-credentials', tokens, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ memberId }),
