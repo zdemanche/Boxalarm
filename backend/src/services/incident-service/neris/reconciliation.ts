@@ -17,7 +17,6 @@ import type { NerisApi, NerisListedIncident } from './api.js';
 import { applyStatusChange, scannerDeptIds } from './statusPoller.js';
 import { nerisOpenKey } from '../submissionRepository.js';
 import { isNerisIncidentStatus } from './paths.js';
-import { toNerisIncidentNumber } from './payload.js';
 import { DEFAULT_TIME_ZONE, previousMonthOf, zonedMonth, zonedMonthBounds } from './zonedTime.js';
 
 const logger = createLogger({ service: 'incident-service' });
@@ -67,7 +66,6 @@ export function diffAgainstNeris(
   const drift: Drift[] = [];
   const remoteById = new Map(remote.map((record) => [record.nerisId, record]));
   const localIds = new Set(local.map((record) => record.nerisIncidentId));
-  const localNumbers = new Set(local.map((record) => toNerisIncidentNumber(record.dispatchNumber)));
   for (const record of local) {
     const found = remoteById.get(record.nerisIncidentId);
     if (!found) {
@@ -94,7 +92,8 @@ export function diffAgainstNeris(
   if (!truncated) {
     for (const record of remote) {
       if (localIds.has(record.nerisId)) continue;
-      if (record.incidentNumber && localNumbers.has(record.incidentNumber)) continue;
+      // No skip by incident number: a second NERIS record with the same number but another
+      // call_create is exactly the duplicate this check exists to find (review minor 10).
       drift.push({
         kind: 'UNKNOWN_IN_NERIS',
         nerisIncidentId: record.nerisId,

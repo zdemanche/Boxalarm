@@ -73,6 +73,31 @@ describe('diffAgainstNeris', () => {
     ]);
   });
 
+  it('flags a second NERIS record that reuses a local incident number (a duplicate)', () => {
+    const drift = diffAgainstNeris(
+      [
+        {
+          incidentId: 'L1',
+          nerisIncidentId: ID('4471'),
+          nerisStatus: 'APPROVED',
+          dispatchNumber: '4471',
+        },
+      ],
+      [
+        { nerisId: ID('4471'), incidentNumber: '4471', status: 'APPROVED' },
+        { nerisId: 'FD09190828|4471|1798009999', incidentNumber: '4471', status: 'SUBMITTED' },
+      ],
+      false,
+    );
+    expect(drift).toEqual([
+      {
+        kind: 'UNKNOWN_IN_NERIS',
+        nerisIncidentId: 'FD09190828|4471|1798009999',
+        nerisStatus: 'SUBMITTED',
+      },
+    ]);
+  });
+
   it('does not guess about missing records when the NERIS listing was truncated', () => {
     expect(diffAgainstNeris(local, [{ nerisId: ID('4471'), status: 'APPROVED' }], true)).toEqual(
       [],
