@@ -65,7 +65,7 @@ describe('createHydrant (AC1)', () => {
     ddbMock.on(TransactWriteCommand).resolves({});
     await createHydrant(deptId, createInput);
     const items = ddbMock.commandCalls(TransactWriteCommand)[0]?.args[0].input.TransactItems;
-    expect(items).toHaveLength(2);
+    expect(items).toHaveLength(3);
     expect(items?.[0]?.Put?.ConditionExpression).toBe('attribute_not_exists(pk)');
     expect(items?.[1]?.Put?.Item).toEqual({
       pk: 'DEPT#NICHOLS#HYDRANT#HYD-0231',
@@ -74,6 +74,25 @@ describe('createHydrant (AC1)', () => {
       hydrantId: 'HYD-0231',
       gsi3pk: 'DEPT#NICHOLS#HYDRANT',
       gsi3sk: 'HYD-0231',
+    });
+  });
+
+  it('emits inspections.hydrant.updated with the full hydrant state in the same transaction, so a new hydrant reaches the alerting nearest-hydrant lookup', async () => {
+    ddbMock.on(TransactWriteCommand).resolves({});
+    await createHydrant(deptId, createInput);
+    const items = ddbMock.commandCalls(TransactWriteCommand)[0]?.args[0].input.TransactItems;
+    const outbox = items?.[2]?.Put?.Item as Record<string, unknown> | undefined;
+    expect(outbox?.entityType).toBe('OUTBOX_ENTRY');
+    expect(outbox?.eventType).toBe('inspections.hydrant.updated');
+    expect(outbox?.payload).toEqual({
+      hydrantId: 'HYD-0231',
+      deptId: 'NICHOLS',
+      latitude: 41.2417,
+      longitude: -73.2004,
+      status: 'IN_SERVICE',
+      size: '6-inch',
+      flowRatingGpm: 1000,
+      nextFlowTestDue: '2027-01-10',
     });
   });
 
@@ -122,6 +141,36 @@ describe('updateHydrant (AC2)', () => {
       status: 'OUT_OF_SERVICE',
       latitude: 41.2417,
       longitude: -73.2004,
+    });
+  });
+
+  it('carries the merged post-update state (size, flow rating, location) so the alerting copy is complete from any one event', async () => {
+    ddbMock.on(TransactWriteCommand).resolves({});
+    ddbMock.on(GetCommand).resolves({
+      Item: {
+        pk: 'DEPT#NICHOLS#HYDRANT#HYD-0231',
+        sk: 'METADATA',
+        status: 'IN_SERVICE',
+        latitude: 41.2417,
+        longitude: -73.2004,
+        size: '6-inch',
+        flowRatingGpm: 1250,
+        nextFlowTestDue: '2027-01-10',
+      },
+    });
+
+    await updateHydrant(deptId, 'HYD-0231', { status: 'OUT_OF_SERVICE' }, 'corr-1');
+
+    const items = ddbMock.commandCalls(TransactWriteCommand)[0]?.args[0].input.TransactItems ?? [];
+    expect(items[1]?.Put?.Item?.payload).toEqual({
+      hydrantId: 'HYD-0231',
+      deptId: 'NICHOLS',
+      latitude: 41.2417,
+      longitude: -73.2004,
+      status: 'OUT_OF_SERVICE',
+      size: '6-inch',
+      flowRatingGpm: 1250,
+      nextFlowTestDue: '2027-01-10',
     });
   });
 

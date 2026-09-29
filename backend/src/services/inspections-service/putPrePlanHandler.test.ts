@@ -24,6 +24,13 @@ function buildEvent(
   } as unknown as GuardEvent;
 }
 
+const OCCUPANCY = {
+  occupancyId: 'OCC-1',
+  address: '12 Oak Street',
+  normalizedAddress: '12 OAK STREET',
+  occupancyType: 'MULTI_FAMILY',
+};
+
 function allowClient(): VerifiedPermissionsClient {
   return {
     send: vi.fn().mockResolvedValue({ decision: Decision.ALLOW }),
@@ -135,7 +142,11 @@ describe('putPrePlanHandler', () => {
 
   it('writes the pre-plan and returns signed upload URLs on success (AC1/AC2)', async () => {
     const { createPutPrePlanHandler } = await import('./putPrePlanHandler.js');
-    const send = vi.fn().mockResolvedValueOnce({ Items: [] }).mockResolvedValueOnce({});
+    const send = vi
+      .fn()
+      .mockResolvedValueOnce({ Items: [] })
+      .mockResolvedValueOnce({ Item: OCCUPANCY })
+      .mockResolvedValueOnce({});
     const signer = vi.fn().mockResolvedValue('https://signed.example.com/x');
     const wrapped = createPutPrePlanHandler(fakeDoc(send), signer, allowClient());
     const result = await wrapped(
@@ -180,6 +191,7 @@ describe('putPrePlanHandler', () => {
     const send = vi
       .fn()
       .mockResolvedValueOnce({ Items: [] })
+      .mockResolvedValueOnce({ Item: OCCUPANCY })
       .mockRejectedValueOnce(
         new TransactionCanceledException({
           message: 'cancelled',
@@ -197,6 +209,7 @@ describe('putPrePlanHandler', () => {
     const send = vi
       .fn()
       .mockResolvedValueOnce({ Items: [] })
+      .mockResolvedValueOnce({ Item: OCCUPANCY })
       .mockRejectedValueOnce(
         new TransactionCanceledException({
           message: 'cancelled',
@@ -218,6 +231,7 @@ describe('putPrePlanHandler', () => {
     const send = vi
       .fn()
       .mockResolvedValueOnce({ Items: [] })
+      .mockResolvedValueOnce({ Item: OCCUPANCY })
       .mockRejectedValueOnce(new Error('ProvisionedThroughputExceededException'));
     const wrapped = createPutPrePlanHandler(fakeDoc(send), vi.fn(), allowClient());
     const result = await wrapped(buildEvent('{}'));
@@ -226,7 +240,11 @@ describe('putPrePlanHandler', () => {
 
   it('defaults an absent body to empty hazards/utilityShutoffs/files (200)', async () => {
     const { createPutPrePlanHandler } = await import('./putPrePlanHandler.js');
-    const send = vi.fn().mockResolvedValueOnce({ Items: [] }).mockResolvedValueOnce({});
+    const send = vi
+      .fn()
+      .mockResolvedValueOnce({ Items: [] })
+      .mockResolvedValueOnce({ Item: OCCUPANCY })
+      .mockResolvedValueOnce({});
     const wrapped = createPutPrePlanHandler(fakeDoc(send), vi.fn(), allowClient());
     const result = await wrapped(buildEvent(undefined));
     expect(result).toMatchObject({ statusCode: 200 });

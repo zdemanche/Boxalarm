@@ -60,6 +60,33 @@ const HYDRANT_LIST_SK = 'LIST';
 const BATCH_GET_MAX_KEYS = 100;
 const BATCH_GET_MAX_ATTEMPTS = 5;
 
+/**
+ * The inspections.hydrant.updated payload: the hydrant's whole post-write state (location,
+ * status, size, flow rating), not just the patched fields, so the alerting plane's
+ * HYDRANT_COPY can be built from any single event — including the first one it ever sees.
+ */
+function buildHydrantEventPayload(
+  deptId: VerifiedDeptId,
+  hydrantId: string,
+  state: Partial<HydrantRecord>,
+): Record<string, unknown> {
+  return {
+    hydrantId,
+    deptId,
+    ...(typeof state.latitude === 'number' ? { latitude: state.latitude } : {}),
+    ...(typeof state.longitude === 'number' ? { longitude: state.longitude } : {}),
+    ...(typeof state.status === 'string' ? { status: state.status } : {}),
+    ...(typeof state.size === 'string' ? { size: state.size } : {}),
+    ...(typeof state.flowRatingGpm === 'number' ? { flowRatingGpm: state.flowRatingGpm } : {}),
+    ...(typeof state.lastFlowTestDate === 'string'
+      ? { lastFlowTestDate: state.lastFlowTestDate }
+      : {}),
+    ...(typeof state.nextFlowTestDue === 'string'
+      ? { nextFlowTestDue: state.nextFlowTestDue }
+      : {}),
+  };
+}
+
 export class HydrantAlreadyExistsError extends Error {
   constructor(hydrantId: string) {
     super(`hydrant "${hydrantId}" already exists`);
@@ -107,6 +134,16 @@ export async function createHydrant(
     gsi3sk: input.hydrantId,
   };
 
+  // A new hydrant must reach the alerting plane's nearest-hydrant lookup too, not only later
+  // edits — otherwise it is invisible on every dispatch until someone happens to update it.
+  const outboxRecord = buildOutboxRecord(
+    deptId,
+    'inspections-service',
+    'inspections.hydrant.updated',
+    input.hydrantId,
+    buildHydrantEventPayload(deptId, input.hydrantId, item),
+  );
+
   try {
     await getDocumentClient().send(
       new TransactWriteCommand({
@@ -119,6 +156,7 @@ export async function createHydrant(
             },
           },
           { Put: { TableName: tableName, Item: listIndexItem } },
+          { Put: { TableName: tableName, Item: outboxRecord } },
         ],
       }),
     );
@@ -234,13 +272,7 @@ export async function updateHydrant(
     'inspections-service',
     'inspections.hydrant.updated',
     correlationId,
-    {
-      hydrantId,
-      deptId,
-      ...(typeof existing?.latitude === 'number' ? { latitude: existing.latitude } : {}),
-      ...(typeof existing?.longitude === 'number' ? { longitude: existing.longitude } : {}),
-      ...patch,
-    },
+    buildHydrantEventPayload(deptId, hydrantId, { ...existing, ...patch }),
   );
 
   try {
