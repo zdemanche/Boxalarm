@@ -1,6 +1,7 @@
 import { generateKeyPairSync, sign, type KeyObject } from 'node:crypto';
 import AxeBuilder from '@axe-core/playwright';
 import { expect, test, type Page } from '@playwright/test';
+import { DEMO_NERIS_SCHEMA } from '../../src/features/incidents/nerisSchemaFixture';
 
 const ISSUER = 'https://cognito-idp.us-east-1.amazonaws.com/us-east-1_test';
 const CLIENT_ID = 'test-web-client';
@@ -112,6 +113,13 @@ const incident = {
   respondingMembers: [{ memberId: 'm-rivera', status: 'RESPONDING' }],
 };
 
+const VALIDATION_REPORT = {
+  blocking: [],
+  warnings: [],
+  nerisValidatedAt: null,
+  sectionsComplete: { core: true, dispatch: true, units: true, narrative: true },
+};
+
 const nerisSchema = {
   version: '2026.2+neris-1.5.1',
   apiVersion: '1.5.1',
@@ -133,6 +141,11 @@ test('incident list and report pass axe on the default, error, and validated sta
     const url = route.request().url();
     if (url.includes('/incidents/neris-schema')) {
       await route.fulfill({ json: nerisSchema });
+      return;
+    }
+    if (url.endsWith('/incidents/i-1/validate')) {
+      // "What's blocking lock" runs when the report opens: answer it as the API does.
+      await route.fulfill({ json: VALIDATION_REPORT });
       return;
     }
     if (url.includes('/incidents/i-1')) {
@@ -169,4 +182,50 @@ test('incident list and report pass axe on the default, error, and validated sta
   ).toBeVisible();
   const reviewResults = await new AxeBuilder({ page }).include('main').analyze();
   expect(reviewResults.violations).toEqual([]);
+});
+
+test('the NERIS module editors pass axe with a module filled in', async ({ page }) => {
+  const draft = {
+    ...incident,
+    status: 'DRAFT',
+    corePayload: {
+      ...incident.corePayload,
+      smoke_alarm: {
+        presence: {
+          type: 'PRESENT',
+          working: false,
+          alarm_types: ['HARDWIRED'],
+          operation: { alerted_failed_other: { type: 'OPERATED_ALERTED_OCCUPANT' } },
+        },
+      },
+    },
+  };
+  await page.route('**/api/v1/incidents**', async (route) => {
+    const url = route.request().url();
+    if (url.includes('/incidents/neris-schema')) {
+      await route.fulfill({ json: DEMO_NERIS_SCHEMA });
+      return;
+    }
+    if (url.endsWith('/incidents/i-1/validate')) {
+      // "What's blocking lock" runs when the report opens: answer it as the API does.
+      await route.fulfill({ json: VALIDATION_REPORT });
+      return;
+    }
+    if (url.includes('/incidents/i-1')) {
+      await route.fulfill({ json: draft });
+      return;
+    }
+    await route.fulfill({ json: { incidents: [draft] } });
+  });
+
+  await signInAs(page, ['OFFICER', 'CHIEF']);
+  await page.goto('/incidents/i-1');
+  await expect(page.getByRole('heading', { level: 1 })).toContainText('14 Elm St');
+  await page.getByRole('button', { name: 'Fire protection systems' }).click();
+  const smoke = page.getByRole('region', { name: 'Smoke alarm' });
+  await expect(smoke.getByRole('radio', { name: 'Present', exact: true })).toBeChecked();
+  await expect(smoke.getByRole('group', { name: 'Working' })).toBeVisible();
+
+  const results = await new AxeBuilder({ page }).include('main').analyze();
+  expect(results.violations).toEqual([]);
 });
