@@ -535,4 +535,161 @@ describe('memberStatusRevocationHandler', () => {
       expect.stringContaining('memberStatusRevocation.configError'),
     );
   });
+
+  // Review of fix/access-control, MAJOR 2: LOA set by mistake and corrected to ACTIVE a
+  // moment later must never leave the member disabled in Cognito.
+  describe('status race (MAJOR 2)', () => {
+    function withDept(memberId: string, status: string): Record<string, unknown> {
+      return {
+        ...memberUpdatedEvent(memberId, status),
+        payload: { deptId: 'NICHOLS', memberId, status },
+      };
+    }
+
+    function fakeCognito(): { state: () => string; calls: string[] } {
+      let loginState = 'enabled';
+      const calls: string[] = [];
+      mockCognito({
+        disableMemberLogin: vi.fn(() => {
+          calls.push('disable');
+          loginState = 'disabled';
+          return Promise.resolve();
+        }),
+        enableMemberLogin: vi.fn(() => {
+          calls.push('enable');
+          loginState = 'enabled';
+          return Promise.resolve();
+        }),
+        revokeMemberSession: vi.fn(() => {
+          calls.push('signOut');
+          return Promise.resolve();
+        }),
+      });
+      return { state: () => loginState, calls };
+    }
+
+    const tick = () => new Promise((resolve) => setImmediate(resolve));
+
+    it('interleaved LOA and ACTIVE handlers leave the ACTIVE member enabled', async () => {
+      let row = 'LOA';
+      mockStore(() => Promise.resolve(row));
+      const cognito = fakeCognito();
+      // Hold the LOA handler after it has read LOA, until the ACTIVE handler has finished.
+      let releaseLoa!: () => void;
+      const loaGate = new Promise<void>((resolve) => {
+        releaseLoa = resolve;
+      });
+      writeRevocationMarker.mockImplementation(async () => {
+        await loaGate;
+        return 1;
+      });
+
+      const { handler } = await import('./memberStatusRevocationHandler.js');
+      const loa = handler(
+        { Records: [sqsRecord(withDept('mbr-9', 'LOA'), 'msg-loa')] },
+        {} as never,
+        () => undefined,
+      );
+      for (let i = 0; i < 5; i += 1) await tick();
+
+      row = 'ACTIVE'; // the officer's correction lands
+      await handler(
+        { Records: [sqsRecord(withDept('mbr-9', 'ACTIVE'), 'msg-active')] },
+        {} as never,
+        () => undefined,
+      );
+      expect(cognito.state()).toBe('enabled');
+
+      releaseLoa(); // the stale LOA handler now disables...
+      await loa;
+
+      // ...re-reads ACTIVE, and re-enables.
+      expect(cognito.calls).toEqual(['enable', 'disable', 'signOut', 'enable']);
+      expect(cognito.state()).toBe('enabled');
+    });
+
+    it('interleaved ACTIVE and LOA handlers leave the LOA member disabled', async () => {
+      let row = 'ACTIVE';
+      mockStore(() => Promise.resolve(row));
+      let loginState = 'enabled';
+      const calls: string[] = [];
+      // Hold the ACTIVE handler's enable until the LOA handler has disabled and signed out.
+      let releaseActive!: () => void;
+      const activeGate = new Promise<void>((resolve) => {
+        releaseActive = resolve;
+      });
+      mockCognito({
+        enableMemberLogin: vi.fn(async () => {
+          await activeGate;
+          calls.push('enable');
+          loginState = 'enabled';
+        }),
+        disableMemberLogin: vi.fn(() => {
+          calls.push('disable');
+          loginState = 'disabled';
+          return Promise.resolve();
+        }),
+        revokeMemberSession: vi.fn(() => Promise.resolve()),
+      });
+      const { handler } = await import('./memberStatusRevocationHandler.js');
+
+      const active = handler(
+        { Records: [sqsRecord(withDept('mbr-9', 'ACTIVE'), 'msg-active')] },
+        {} as never,
+        () => undefined,
+      );
+      for (let i = 0; i < 5; i += 1) await tick();
+      row = 'LOA';
+      const loa = handler(
+        { Records: [sqsRecord(withDept('mbr-9', 'LOA'), 'msg-loa')] },
+        {} as never,
+        () => undefined,
+      );
+      for (let i = 0; i < 5; i += 1) await tick();
+      expect(loginState).toBe('disabled');
+
+      releaseActive(); // the stale enable lands after the disable...
+      await Promise.all([active, loa]);
+
+      // ...and its re-read of LOA disables again.
+      expect(calls).toEqual(['disable', 'enable', 'disable']);
+      expect(loginState).toBe('disabled');
+    });
+
+    it("processes one member's records in arrival order within a batch", async () => {
+      let row = 'ACTIVE';
+      mockStore(() => Promise.resolve(row));
+      const cognito = fakeCognito();
+      const { handler } = await import('./memberStatusRevocationHandler.js');
+      // Without a deptId there is no re-read: order alone decides the final state.
+      row = 'ACTIVE';
+      await handler(
+        {
+          Records: [
+            sqsRecord(memberUpdatedEvent('mbr-9', 'LOA'), 'msg-1'),
+            sqsRecord(memberUpdatedEvent('mbr-9', 'ACTIVE'), 'msg-2'),
+          ],
+        },
+        {} as never,
+        () => undefined,
+      );
+
+      expect(cognito.calls).toEqual(['disable', 'signOut', 'enable']);
+      expect(cognito.state()).toBe('enabled');
+    });
+
+    it('gives up after three rounds of a status that keeps flipping, so SQS retries', async () => {
+      let reads = 0;
+      mockStore(() => {
+        reads += 1;
+        return Promise.resolve(reads % 2 === 1 ? 'LOA' : 'ACTIVE');
+      });
+      fakeCognito();
+      const { handler } = await import('./memberStatusRevocationHandler.js');
+
+      await expect(
+        handler({ Records: [sqsRecord(withDept('mbr-9', 'LOA'))] }, {} as never, () => undefined),
+      ).rejects.toThrow('kept changing');
+    });
+  });
 });

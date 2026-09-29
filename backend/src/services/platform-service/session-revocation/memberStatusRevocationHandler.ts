@@ -58,6 +58,15 @@ function unwrapEnvelope(rawBody: string): MemberStatusEnvelope {
   return parsed as MemberStatusEnvelope;
 }
 
+function memberKeyOf(record: SQSRecord): string | undefined {
+  try {
+    const memberId = unwrapEnvelope(record.body).payload?.memberId;
+    return typeof memberId === 'string' ? memberId : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 function safeExtractCorrelationId(record: SQSRecord): string | undefined {
   try {
     const envelope = unwrapEnvelope(record.body);
@@ -109,9 +118,10 @@ function parseMemberStatusEvent(record: SQSRecord): MemberStatusChangedPayload |
 async function resolveEffectiveStatus(
   payload: MemberStatusChangedPayload,
   tableName: string,
+  fallback: string,
 ): Promise<string> {
   if (!payload.deptId) {
-    return payload.status;
+    return fallback;
   }
   const current = await readMemberStatus(
     getAccessStoreClient(),
@@ -119,7 +129,66 @@ async function resolveEffectiveStatus(
     payload.deptId,
     payload.memberId,
   );
-  return current ?? payload.status;
+  return current ?? fallback;
+}
+
+type LoginState = 'disabled' | 'enabled' | 'untouched';
+
+function loginStateFor(status: string): LoginState {
+  if (REVOKING_STATUSES.has(status)) {
+    return 'disabled';
+  }
+  return RESTORING_STATUSES.has(status) ? 'enabled' : 'untouched';
+}
+
+const MAX_RECONCILE_ROUNDS = 3;
+
+/**
+ * Review of fix/access-control, MAJOR 2: reading the row and then acting is a race. An
+ * officer sets LOA by mistake and corrects it to ACTIVE a moment later: the LOA record reads
+ * LOA, the ACTIVE record reads ACTIVE and enables, then the LOA record disables - leaving an
+ * ACTIVE member locked out of Cognito with nothing to repair it.
+ *
+ * So after acting, re-read the row (consistent read) and, if the login state it calls for
+ * differs from what was just applied, apply that instead. Whichever handler makes the LAST
+ * Cognito call re-reads after it, so the final Cognito state always matches the row as of a
+ * moment after every call; a row write later than that re-read raises its own event. The
+ * alternative - a FIFO queue grouped by member - was rejected: EventBridge's SQS target takes
+ * only a static MessageGroupId, so it would serialise every member behind one group, and the
+ * queue replacement is a riskier change than this bounded loop. Records for one member within
+ * a batch are also processed in order (see the handler).
+ */
+async function convergeLoginState(
+  client: CognitoIdentityProviderClient,
+  userPoolId: string,
+  tableName: string,
+  payload: MemberStatusChangedPayload,
+): Promise<void> {
+  let status = await resolveEffectiveStatus(payload, tableName, payload.status);
+  for (let round = 1; round <= MAX_RECONCILE_ROUNDS; round += 1) {
+    await applyStatus(client, userPoolId, tableName, payload, status);
+    if (!payload.deptId) {
+      return; // A legacy event names no department: there is no row to re-read.
+    }
+    const after = await resolveEffectiveStatus(payload, tableName, status);
+    if (loginStateFor(after) === loginStateFor(status)) {
+      return;
+    }
+    console.log(
+      JSON.stringify({
+        event: 'memberStatusRevocation.reconciled',
+        memberId: payload.memberId,
+        applied: status,
+        current: after,
+        round,
+        correlationId: payload.correlationId,
+        service: 'platform-service',
+      }),
+    );
+    status = after;
+  }
+  // Still changing after three rounds: let SQS retry the record rather than guess.
+  throw new Error(`member ${payload.memberId} status kept changing while being applied`);
 }
 
 async function applyStatus(
@@ -173,43 +242,62 @@ export const handler: Handler<SQSEvent, void> = async (event) => {
   const { userPoolId } = config;
   const client = getClient();
 
-  // Records are processed concurrently: revokeMemberSession calls are independent, and
-  // running them serially made invocation duration grow linearly with batch size while
-  // also letting one malformed record block every later record in the same batch.
-  const results = await Promise.allSettled(
-    event.Records.map(async (record) => {
-      let payload: MemberStatusChangedPayload | undefined;
-      try {
-        payload = parseMemberStatusEvent(record);
-      } catch (error) {
-        console.error(
-          JSON.stringify({
-            event: 'memberStatusRevocation.malformedPayload',
-            message: error instanceof Error ? error.message : undefined,
-            messageId: record.messageId,
-            correlationId: safeExtractCorrelationId(record),
-            service: 'platform-service',
-          }),
-        );
-        throw error;
-      }
+  // Members are processed concurrently - revocations are independent, and running them all
+  // serially made duration grow with batch size - but one member's records run in arrival
+  // order, so a batch holding LOA then ACTIVE for the same member cannot interleave with
+  // itself (MAJOR 2; convergeLoginState covers records in different batches).
+  const byMember = new Map<string, SQSRecord[]>();
+  for (const record of event.Records) {
+    const key = memberKeyOf(record) ?? `unparsed:${record.messageId}`;
+    byMember.set(key, [...(byMember.get(key) ?? []), record]);
+  }
+  const processRecord = async (record: SQSRecord): Promise<void> => {
+    let payload: MemberStatusChangedPayload | undefined;
+    try {
+      payload = parseMemberStatusEvent(record);
+    } catch (error) {
+      console.error(
+        JSON.stringify({
+          event: 'memberStatusRevocation.malformedPayload',
+          message: error instanceof Error ? error.message : undefined,
+          messageId: record.messageId,
+          correlationId: safeExtractCorrelationId(record),
+          service: 'platform-service',
+        }),
+      );
+      throw error;
+    }
 
-      if (!payload) {
+    if (!payload) {
+      return;
+    }
+
+    try {
+      await convergeLoginState(client, userPoolId, tableName, payload);
+    } catch (error) {
+      // UserNotFoundException is not retryable -- no-op instead of DLQ-storming.
+      if (error instanceof UserNotFoundException) {
         return;
       }
-
-      try {
-        const status = await resolveEffectiveStatus(payload, tableName);
-        await applyStatus(client, userPoolId, tableName, payload, status);
-      } catch (error) {
-        // UserNotFoundException is not retryable -- no-op instead of DLQ-storming.
-        if (error instanceof UserNotFoundException) {
-          return;
+      throw error;
+    }
+  };
+  const results = (
+    await Promise.all(
+      [...byMember.values()].map(async (records) => {
+        const settled: PromiseSettledResult<void>[] = [];
+        for (const record of records) {
+          settled.push(
+            await processRecord(record).then(
+              (value): PromiseSettledResult<void> => ({ status: 'fulfilled', value }),
+              (reason: unknown): PromiseSettledResult<void> => ({ status: 'rejected', reason }),
+            ),
+          );
         }
-        throw error;
-      }
-    }),
-  );
+        return settled;
+      }),
+    )
+  ).flat();
 
   const failure = results.find(
     (result): result is PromiseRejectedResult => result.status === 'rejected',

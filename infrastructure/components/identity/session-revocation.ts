@@ -98,6 +98,7 @@ export class SessionRevocation extends pulumi.ComponentResource {
   public readonly deviceLossLambda: ServiceLambda;
   public readonly credentialResetLambda: ServiceLambda;
   public readonly credentialResetInvokedAlarm: aws.cloudwatch.MetricAlarm;
+  public readonly loginEnableFailedAlarm: aws.cloudwatch.MetricAlarm;
 
   constructor(name: string, args: SessionRevocationArgs, opts?: pulumi.ComponentResourceOptions) {
     requireEnv("SessionRevocation", args.env);
@@ -247,6 +248,28 @@ export class SessionRevocation extends pulumi.ComponentResource {
         name: `boxalarm-${env}-platform-credential-reset-invoked`,
         namespace: "Boxalarm/authz",
         metricName: "ResetMemberCredentialsInvoked",
+        statistic: "Sum",
+        period: 60,
+        evaluationPeriods: 1,
+        threshold: 0,
+        comparisonOperator: "GreaterThanThreshold",
+        treatMissingData: "notBreaching",
+        alarmActions: [args.chiefNotificationTopicArn],
+      },
+      { parent: this },
+    );
+
+    // Review MAJOR 2 / minor 10: a failed enable leaves a member who is ACTIVE on the roster
+    // unable to sign in or refresh - a login failure on the alert path. The record retries
+    // and then DLQs; this alarms on the first failure rather than waiting for the DLQ.
+    this.loginEnableFailedAlarm = new aws.cloudwatch.MetricAlarm(
+      `${name}-login-enable-failed-alarm`,
+      {
+        name: `boxalarm-${env}-platform-login-enable-failed`,
+        alarmDescription:
+          "Re-enabling a returning member's login failed: they cannot sign in until it succeeds.",
+        namespace: "Boxalarm/session-revocation",
+        metricName: "LoginEnableFailed",
         statistic: "Sum",
         period: 60,
         evaluationPeriods: 1,

@@ -187,4 +187,19 @@ describe("SessionRevocation (review C1)", () => {
     });
     expect(bySid.TransactPushInvalidation?.Action).toEqual(["dynamodb:TransactWriteItems"]);
   });
+
+  it("alarms the chief on the first failed login re-enable (review MAJOR 2)", async () => {
+    const sr = await build();
+    const alarm = sr.loginEnableFailedAlarm;
+    const [metricName, namespace, threshold, actions] = await Promise.all([
+      resolve(alarm.metricName),
+      resolve(alarm.namespace),
+      resolve(alarm.threshold),
+      resolve(alarm.alarmActions),
+    ]);
+    expect(metricName).toBe("LoginEnableFailed");
+    expect(namespace).toBe("Boxalarm/session-revocation");
+    expect(threshold).toBe(0);
+    expect(actions).toEqual(["arn:aws:sns:us-east-1:123456789012:chief"]);
+  });
 });

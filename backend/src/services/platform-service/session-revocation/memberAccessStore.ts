@@ -24,10 +24,10 @@ export function getAccessStoreClient(override?: DynamoDBDocumentClient): DynamoD
 
 /**
  * The member row's current status, or undefined when there is no row. Session revocation
- * acts on this rather than on the status an event carries: the queue is standard SQS and a
- * batch is processed concurrently, so LOA -> ACTIVE in quick succession can be handled out
- * of order. Acting on the event would leave a returned member disabled (or a member on
- * leave enabled); acting on the row converges on the latest write whatever the order.
+ * acts on this rather than on the status an event carries: the queue is standard SQS, so
+ * LOA -> ACTIVE in quick succession can be delivered out of order. Reading the row is not
+ * enough on its own (the row can change between the read and the Cognito call), so the
+ * consumer re-reads after acting and reconciles - see convergeLoginState.
  */
 export async function readMemberStatus(
   docClient: DynamoDBDocumentClient,
