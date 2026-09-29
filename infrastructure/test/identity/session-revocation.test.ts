@@ -213,4 +213,14 @@ describe("SessionRevocation (review C1)", () => {
     const types = await resolve(sr.memberStatusConsumer.eventSourceMapping.functionResponseTypes);
     expect(types).toEqual(["ReportBatchItemFailures"]);
   });
+
+  it("alarms the chief on every device-loss report", async () => {
+    const sr = await build();
+    const [metric, namespace, threshold] = await Promise.all([
+      resolve(sr.deviceLossInvokedAlarm.metricName),
+      resolve(sr.deviceLossInvokedAlarm.namespace),
+      resolve(sr.deviceLossInvokedAlarm.threshold),
+    ]);
+    expect([metric, namespace, threshold]).toEqual(["RevokeSessionInvoked", "Boxalarm/authz", 0]);
+  });
 });

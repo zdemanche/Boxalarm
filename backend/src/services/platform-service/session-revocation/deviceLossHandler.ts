@@ -1,13 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import { UserNotFoundException } from '@aws-sdk/client-cognito-identity-provider';
 import type { CognitoIdentityProviderClient } from '@aws-sdk/client-cognito-identity-provider';
-import type {
-  APIGatewayProxyEventHeaders,
-  APIGatewayProxyEventV2WithLambdaAuthorizer,
-  APIGatewayProxyStructuredResultV2,
-  Handler,
-} from 'aws-lambda';
-import type { AuthorizerContext } from '../authorizer/handler.js';
+import type { APIGatewayProxyEventHeaders, APIGatewayProxyStructuredResultV2 } from 'aws-lambda';
+import { withAuthorization, type CedarPrincipalContext, type GuardEvent } from '@boxalarm/authz';
 import {
   createRevocationClient,
   readRevocationConfig,
@@ -21,9 +16,6 @@ import {
   readPlatformTableName,
 } from './memberAccessStore.js';
 import { writeRevocationMarker } from '../authorizer/revocationStore.js';
-
-// TODO: E8-S3 — replace with Cedar IsAuthorizedWithToken once Verified Permissions ships.
-const ADMIN_GROUPS = new Set(['CHIEF', 'ADMIN']);
 
 let cachedClient: CognitoIdentityProviderClient | undefined;
 
@@ -51,12 +43,7 @@ function problemDetails(
   };
 }
 
-function isCallerAdmin(context: AuthorizerContext): boolean {
-  const groups = context['cognito:groups'].split(' ').filter((group) => group.length > 0);
-  return groups.some((group) => ADMIN_GROUPS.has(group));
-}
-
-function readMemberId(body: string | undefined): string | undefined {
+function readMemberId(body: string | undefined | null): string | undefined {
   if (!body) {
     return undefined;
   }
@@ -70,19 +57,11 @@ function readMemberId(body: string | undefined): string | undefined {
   return typeof memberId === 'string' && memberId.trim().length > 0 ? memberId : undefined;
 }
 
-export const handler: Handler<
-  APIGatewayProxyEventV2WithLambdaAuthorizer<AuthorizerContext>,
-  APIGatewayProxyStructuredResultV2
-> = async (event) => {
-  const traceId = extractTraceId(event.headers);
-  const authorizerContext = event.requestContext.authorizer.lambda;
-
-  if (!isCallerAdmin(authorizerContext)) {
-    console.error(
-      JSON.stringify({ event: 'deviceLossRevocation.denied', reason: 'InsufficientRole', traceId }),
-    );
-    return problemDetails(403, 'Forbidden', 'CHIEF or ADMIN role is required.', traceId);
-  }
+async function revokeLostDevice(
+  event: GuardEvent,
+  authorizerContext: CedarPrincipalContext,
+): Promise<APIGatewayProxyStructuredResultV2> {
+  const traceId = extractTraceId(event.headers ?? {});
 
   const memberId = readMemberId(event.body);
   if (!memberId) {
@@ -264,4 +243,18 @@ export const handler: Handler<
   }
 
   return { statusCode: 202, body: JSON.stringify({ memberId, status: 'revoked', push }) };
-};
+}
+
+/**
+ * POST /api/v1/platform/sessions/revoke - report a device lost. Gated by the Cedar
+ * RevokeSession action (CHIEF/ADMIN, ADMIN_ONLY_ACTIONS) instead of the hand-written group
+ * check it used to carry (original review minor 10), and alarmed on every invocation like
+ * the other kill switch (ResetMemberCredentials).
+ */
+export const handler = withAuthorization(revokeLostDevice, {
+  actionType: 'Boxalarm::Action',
+  actionId: 'RevokeSession',
+  resourceType: 'Boxalarm::Member',
+  resourceId: (event) => readMemberId(event.body) ?? '',
+  alarmOnInvocation: 'RevokeSessionInvoked',
+});

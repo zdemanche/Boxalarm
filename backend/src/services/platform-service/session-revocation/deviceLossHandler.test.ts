@@ -77,6 +77,18 @@ describe('deviceLossHandler', () => {
       writeRevocationMarker: (...args: unknown[]) =>
         writeRevocationMarker(...args) as Promise<number>,
     }));
+    // Cedar (RevokeSession) is exercised by the wiring test below and by infrastructure's
+    // cedar-coverage test; here the guard passes the verified principal straight through.
+    vi.doMock('@boxalarm/authz', async () => {
+      const actual = await vi.importActual<typeof import('@boxalarm/authz')>('@boxalarm/authz');
+      return {
+        ...actual,
+        withAuthorization:
+          (inner: (event: unknown, principal: unknown) => unknown) =>
+          (event: { requestContext: { authorizer: { lambda: unknown } } }) =>
+            inner(event, event.requestContext.authorizer.lambda),
+      };
+    });
   });
 
   afterEach(() => {
@@ -84,7 +96,27 @@ describe('deviceLossHandler', () => {
     vi.unmock('./cognitoRevocationClient.js');
     vi.unmock('./memberAccessStore.js');
     vi.unmock('../authorizer/revocationStore.js');
+    vi.doUnmock('@boxalarm/authz');
     vi.restoreAllMocks();
+  });
+
+  it('is gated by the Cedar RevokeSession action and alarms on every invocation', async () => {
+    const withAuthorization = vi.fn((inner: unknown) => inner);
+    vi.doMock('@boxalarm/authz', async () => {
+      const actual = await vi.importActual<typeof import('@boxalarm/authz')>('@boxalarm/authz');
+      return { ...actual, withAuthorization };
+    });
+    await import('./deviceLossHandler.js');
+
+    expect(withAuthorization).toHaveBeenCalledWith(
+      expect.any(Function),
+      expect.objectContaining({
+        actionType: 'Boxalarm::Action',
+        actionId: 'RevokeSession',
+        resourceType: 'Boxalarm::Member',
+        alarmOnInvocation: 'RevokeSessionInvoked',
+      }),
+    );
   });
 
   it('marks the member revoked (M1) before signing out, so the lost device token stops now', async () => {
@@ -102,8 +134,6 @@ describe('deviceLossHandler', () => {
 
     const result = (await handler(
       buildEvent('CHIEF', JSON.stringify({ memberId: 'mbr-102' })),
-      {} as never,
-      () => undefined,
     )) as APIGatewayProxyStructuredResultV2;
 
     expect(result.statusCode).toBe(202);
@@ -133,8 +163,6 @@ describe('deviceLossHandler', () => {
 
     const result = (await handler(
       buildEvent('ADMIN', JSON.stringify({ memberId: 'mbr-102' })),
-      {} as never,
-      () => undefined,
     )) as APIGatewayProxyStructuredResultV2;
 
     expect(result.statusCode).toBe(202);
@@ -162,8 +190,6 @@ describe('deviceLossHandler', () => {
 
     const result = (await handler(
       buildEvent('ADMIN', JSON.stringify({ memberId: 'mbr-102' })),
-      {} as never,
-      () => undefined,
     )) as APIGatewayProxyStructuredResultV2;
 
     expect(result.statusCode).toBe(503);
@@ -173,11 +199,7 @@ describe('deviceLossHandler', () => {
     mockRevocationClient({ resolveMemberDeptId: vi.fn().mockResolvedValue('dept-999') });
     const { handler } = await import('./deviceLossHandler.js');
 
-    await handler(
-      buildEvent('ADMIN', JSON.stringify({ memberId: 'mbr-102' })),
-      {} as never,
-      () => undefined,
-    );
+    await handler(buildEvent('ADMIN', JSON.stringify({ memberId: 'mbr-102' })));
 
     expect(invalidateMemberPush).not.toHaveBeenCalled();
   });
@@ -191,40 +213,10 @@ describe('deviceLossHandler', () => {
 
     const result = (await handler(
       buildEvent('CHIEF', JSON.stringify({ memberId: 'mbr-102' })),
-      {} as never,
-      () => undefined,
     )) as APIGatewayProxyStructuredResultV2;
 
     expect(result.statusCode).toBe(503);
     expect(revokeMemberSession).not.toHaveBeenCalled();
-  });
-
-  it('denies (403, fail-secure) when the caller has no CHIEF/ADMIN group', async () => {
-    const revokeMemberSession = vi.fn();
-    mockRevocationClient({ revokeMemberSession });
-    const { handler } = await import('./deviceLossHandler.js');
-
-    const result = (await handler(
-      buildEvent('officer', JSON.stringify({ memberId: 'mbr-102' })),
-      {} as never,
-      () => undefined,
-    )) as APIGatewayProxyStructuredResultV2;
-
-    expect(result.statusCode).toBe(403);
-    expect(revokeMemberSession).not.toHaveBeenCalled();
-  });
-
-  it('denies (403, fail-secure) when cognito:groups is empty', async () => {
-    mockRevocationClient({});
-    const { handler } = await import('./deviceLossHandler.js');
-
-    const result = (await handler(
-      buildEvent('', JSON.stringify({ memberId: 'mbr-102' })),
-      {} as never,
-      () => undefined,
-    )) as APIGatewayProxyStructuredResultV2;
-
-    expect(result.statusCode).toBe(403);
   });
 
   it('returns 400 when memberId is absent', async () => {
@@ -233,8 +225,6 @@ describe('deviceLossHandler', () => {
 
     const result = (await handler(
       buildEvent('CHIEF', JSON.stringify({})),
-      {} as never,
-      () => undefined,
     )) as APIGatewayProxyStructuredResultV2;
 
     expect(result.statusCode).toBe(400);
@@ -246,8 +236,6 @@ describe('deviceLossHandler', () => {
 
     const result = (await handler(
       buildEvent('ADMIN', JSON.stringify({ memberId: '' })),
-      {} as never,
-      () => undefined,
     )) as APIGatewayProxyStructuredResultV2;
 
     expect(result.statusCode).toBe(400);
@@ -259,8 +247,6 @@ describe('deviceLossHandler', () => {
 
     const result = (await handler(
       buildEvent('ADMIN', JSON.stringify({ memberId: 12345 })),
-      {} as never,
-      () => undefined,
     )) as APIGatewayProxyStructuredResultV2;
 
     expect(result.statusCode).toBe(400);
@@ -272,8 +258,6 @@ describe('deviceLossHandler', () => {
 
     const result = (await handler(
       buildEvent('ADMIN', undefined),
-      {} as never,
-      () => undefined,
     )) as APIGatewayProxyStructuredResultV2;
 
     expect(result.statusCode).toBe(400);
@@ -286,8 +270,6 @@ describe('deviceLossHandler', () => {
 
     const result = (await handler(
       buildEvent('CHIEF', JSON.stringify({ memberId: 'mbr-102' })),
-      {} as never,
-      () => undefined,
     )) as APIGatewayProxyStructuredResultV2;
 
     expect(result.statusCode).toBe(202);
@@ -307,8 +289,6 @@ describe('deviceLossHandler', () => {
 
     const result = (await handler(
       buildEvent('ADMIN', JSON.stringify({ memberId: 'mbr-ghost' })),
-      {} as never,
-      () => undefined,
     )) as APIGatewayProxyStructuredResultV2;
 
     expect(result.statusCode).toBe(404);
@@ -322,8 +302,6 @@ describe('deviceLossHandler', () => {
 
     const result = (await handler(
       buildEvent('CHIEF', JSON.stringify({ memberId: 'mbr-102' })),
-      {} as never,
-      () => undefined,
     )) as APIGatewayProxyStructuredResultV2;
 
     expect(result.statusCode).toBe(503);
@@ -339,8 +317,6 @@ describe('deviceLossHandler', () => {
 
     const result = (await handler(
       buildEvent('CHIEF', JSON.stringify({ memberId: 'mbr-other-dept' }), 'dept-001'),
-      {} as never,
-      () => undefined,
     )) as APIGatewayProxyStructuredResultV2;
 
     expect(result.statusCode).toBe(403);
@@ -357,8 +333,6 @@ describe('deviceLossHandler', () => {
 
     const result = (await handler(
       buildEvent('CHIEF', JSON.stringify({ memberId: 'mbr-unresolved' })),
-      {} as never,
-      () => undefined,
     )) as APIGatewayProxyStructuredResultV2;
 
     expect(result.statusCode).toBe(403);
@@ -378,8 +352,6 @@ describe('deviceLossHandler', () => {
 
     const result = (await handler(
       buildEvent('CHIEF', JSON.stringify({ memberId: 'mbr-102' })),
-      {} as never,
-      () => undefined,
     )) as APIGatewayProxyStructuredResultV2;
 
     expect(result.statusCode).toBe(500);
@@ -394,8 +366,6 @@ describe('deviceLossHandler', () => {
 
     const result = (await handler(
       buildEvent('CHIEF', JSON.stringify({ memberId: 'mbr-102' })),
-      {} as never,
-      () => undefined,
     )) as APIGatewayProxyStructuredResultV2;
 
     expect(result.statusCode).toBe(202);
@@ -407,9 +377,7 @@ describe('deviceLossHandler', () => {
     const { handler } = await import('./deviceLossHandler.js');
 
     const result = (await handler(
-      buildEvent('officer', JSON.stringify({ memberId: 'mbr-102' })),
-      {} as never,
-      () => undefined,
+      buildEvent('CHIEF', JSON.stringify({})),
     )) as APIGatewayProxyStructuredResultV2;
 
     const parsed = JSON.parse(result.body ?? '{}') as { traceId?: string; type?: string };

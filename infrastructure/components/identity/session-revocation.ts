@@ -114,6 +114,7 @@ export class SessionRevocation extends pulumi.ComponentResource {
   public readonly credentialResetLambda: ServiceLambda;
   public readonly credentialResetInvokedAlarm: aws.cloudwatch.MetricAlarm;
   public readonly loginEnableFailedAlarm: aws.cloudwatch.MetricAlarm;
+  public readonly deviceLossInvokedAlarm: aws.cloudwatch.MetricAlarm;
 
   constructor(name: string, args: SessionRevocationArgs, opts?: pulumi.ComponentResourceOptions) {
     requireEnv("SessionRevocation", args.env);
@@ -265,6 +266,25 @@ export class SessionRevocation extends pulumi.ComponentResource {
         name: `boxalarm-${env}-platform-credential-reset-invoked`,
         namespace: "Boxalarm/authz",
         metricName: "ResetMemberCredentialsInvoked",
+        statistic: "Sum",
+        period: 60,
+        evaluationPeriods: 1,
+        threshold: 0,
+        comparisonOperator: "GreaterThanThreshold",
+        treatMissingData: "notBreaching",
+        alarmActions: [args.chiefNotificationTopicArn],
+      },
+      { parent: this },
+    );
+
+    // Device loss signs the member out everywhere; like a credential reset, every use reaches
+    // the chief (withAuthorization's alarmOnInvocation counter, Boxalarm/authz).
+    this.deviceLossInvokedAlarm = new aws.cloudwatch.MetricAlarm(
+      `${name}-device-loss-invoked-alarm`,
+      {
+        name: `boxalarm-${env}-platform-device-loss-invoked`,
+        namespace: "Boxalarm/authz",
+        metricName: "RevokeSessionInvoked",
         statistic: "Sum",
         period: 60,
         evaluationPeriods: 1,
