@@ -7,6 +7,7 @@ import {
   CRITICAL_CHANNEL_ID,
   DEFAULT_CHANNEL_ID,
   ensureNotificationChannels,
+  resetCriticalChannelIdForTest,
 } from './pushChannel';
 
 const nativeModules = NativeModules as { BoxalarmAlertReadiness?: unknown };
@@ -29,6 +30,7 @@ function installNative(dndAccessGranted: boolean, createFails = false) {
 }
 
 afterEach(() => {
+  resetCriticalChannelIdForTest();
   delete nativeModules.BoxalarmAlertReadiness;
   jest.restoreAllMocks();
 });
@@ -66,7 +68,9 @@ test('with DND access granted, the critical channel is recreated under the -dnd 
   Platform.OS = 'android';
   const native = installNative(true);
 
-  await expect(ensureNotificationChannels()).resolves.toBe(CRITICAL_CHANNEL_DND_ID);
+  await expect(ensureNotificationChannels({ deleteStale: true })).resolves.toBe(
+    CRITICAL_CHANNEL_DND_ID,
+  );
 
   expect(native.createCriticalChannel).toHaveBeenCalledWith(
     CRITICAL_CHANNEL_DND_ID,
@@ -80,7 +84,9 @@ test('without DND access, the plain versioned channel is used and the retired on
   Platform.OS = 'android';
   const native = installNative(false);
 
-  await expect(ensureNotificationChannels()).resolves.toBe(CRITICAL_CHANNEL_ID);
+  await expect(ensureNotificationChannels({ deleteStale: true })).resolves.toBe(
+    CRITICAL_CHANNEL_ID,
+  );
 
   expect(native.createCriticalChannel).toHaveBeenCalledWith(
     CRITICAL_CHANNEL_ID,
@@ -109,4 +115,26 @@ test('ensureNotificationChannels is a no-op on iOS, which has no channel concept
   await ensureNotificationChannels();
 
   expect(createChannel).not.toHaveBeenCalled();
+});
+
+test('the page path never deletes a channel (a concurrent page may be posting to it)', async () => {
+  Platform.OS = 'android';
+  const native = installNative(true);
+
+  await ensureNotificationChannels();
+
+  expect(native.createCriticalChannel).toHaveBeenCalledWith(
+    CRITICAL_CHANNEL_DND_ID,
+    expect.any(String),
+  );
+  expect(native.deleteChannel).not.toHaveBeenCalled();
+});
+
+test('a transient DND-access read error keeps the last known channel instead of flipping to -v2', async () => {
+  Platform.OS = 'android';
+  const native = installNative(true);
+  await ensureNotificationChannels();
+  native.getReadiness.mockRejectedValueOnce(new Error('transient'));
+
+  await expect(ensureNotificationChannels()).resolves.toBe(CRITICAL_CHANNEL_DND_ID);
 });

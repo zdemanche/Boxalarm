@@ -27,29 +27,52 @@ export function categoryFromPushData(data: { category?: unknown } | undefined): 
   return data?.category === 'digest' ? 'digest' : 'dispatch';
 }
 
+// The id last resolved from a successful DND-access read. A transient read error keeps it rather
+// than flipping to `-v2` (review m1): flipping would recreate a deleted id - and Android restores
+// a re-created channel id with the member's old settings for it, muted or not.
+let lastKnownCriticalId: string | null = null;
+
 /** The critical channel id this device should post on right now. Never throws. */
 export async function currentCriticalChannelId(): Promise<string> {
   const native = alertReadinessNative();
   if (!native) return CRITICAL_CHANNEL_ID;
   try {
     const { dndAccessGranted } = await native.getReadiness();
-    return dndAccessGranted ? CRITICAL_CHANNEL_DND_ID : CRITICAL_CHANNEL_ID;
+    lastKnownCriticalId = dndAccessGranted ? CRITICAL_CHANNEL_DND_ID : CRITICAL_CHANNEL_ID;
+    return lastKnownCriticalId;
   } catch {
-    return CRITICAL_CHANNEL_ID;
+    return lastKnownCriticalId ?? CRITICAL_CHANNEL_ID;
   }
+}
+
+/** Test seam. */
+export function resetCriticalChannelIdForTest(): void {
+  lastKnownCriticalId = null;
 }
 
 export async function channelForCategory(category: PushCategory): Promise<string> {
   return category === 'dispatch' ? currentCriticalChannelId() : DEFAULT_CHANNEL_ID;
 }
 
+export interface EnsureChannelsOptions {
+  /**
+   * Delete the superseded critical channels. Only on app start / return to the foreground
+   * (usePushNotificationRouting) - never on the page path, where a delete could remove the channel
+   * a concurrently arriving page is being posted to (review m1).
+   */
+  deleteStale?: boolean;
+}
+
 /**
- * Creates the channels. Safe to call repeatedly (app start, every return to the foreground, and
- * before posting a page): the critical channel is (re)created under the id that matches the
- * current DND access, so granting access in Settings takes effect as soon as the member returns.
+ * Creates the channels. Safe to call repeatedly: the critical channel is (re)created under the id
+ * that matches the current DND access, so granting access in Settings takes effect as soon as the
+ * member returns. Creating an existing channel is a no-op for its settings, so calling this before
+ * every page guarantees the channel exists without resetting anything the member chose.
  * Resolves with the critical channel id to post on.
  */
-export async function ensureNotificationChannels(): Promise<string> {
+export async function ensureNotificationChannels(
+  options: EnsureChannelsOptions = {},
+): Promise<string> {
   if (Platform.OS !== 'android') return CRITICAL_CHANNEL_ID;
   const native = alertReadinessNative();
   let criticalId = CRITICAL_CHANNEL_ID;
@@ -62,11 +85,13 @@ export async function ensureNotificationChannels(): Promise<string> {
       criticalId = await currentCriticalChannelId();
       await native.createCriticalChannel(criticalId, CRITICAL_CHANNEL_NAME);
       createdNatively = true;
-      const stale = [
-        ...RETIRED_CRITICAL_CHANNEL_IDS,
-        criticalId === CRITICAL_CHANNEL_ID ? CRITICAL_CHANNEL_DND_ID : CRITICAL_CHANNEL_ID,
-      ];
-      await Promise.all(stale.map((id) => native.deleteChannel(id)));
+      if (options.deleteStale) {
+        const stale = [
+          ...RETIRED_CRITICAL_CHANNEL_IDS,
+          criticalId === CRITICAL_CHANNEL_ID ? CRITICAL_CHANNEL_DND_ID : CRITICAL_CHANNEL_ID,
+        ];
+        await Promise.all(stale.map((id) => native.deleteChannel(id)));
+      }
     } catch (error) {
       console.error('[push] creating the native critical channel failed; using notifee', error);
     }

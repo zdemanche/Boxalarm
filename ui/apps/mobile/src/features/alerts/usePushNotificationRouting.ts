@@ -5,7 +5,7 @@ import { ensureNotificationChannels } from './pushChannel';
 import { subscribePushNotificationRouting } from './pushRouting';
 
 function ensureChannels(): void {
-  ensureNotificationChannels().catch((error: unknown) => {
+  ensureNotificationChannels({ deleteStale: true }).catch((error: unknown) => {
     console.error('[push] creating notification channels failed', error);
   });
 }

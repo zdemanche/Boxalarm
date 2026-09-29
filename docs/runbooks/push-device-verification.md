@@ -35,7 +35,8 @@ None of this could run in CI (no Xcode or Android SDK there): the Kotlin module,
 | # | Device | Check | Pass when |
 |---|---|---|---|
 | 13 | Pixel, Samsung | The release build compiles and starts | `AlertReadinessModule`/`AlertReadinessPackage` compile, the module is reachable from JS in bridgeless mode (`NativeModules.BoxalarmAlertReadiness` is not undefined - the readiness checklist shows DND / full-screen rows as Ready or Fix, never "Unknown"). If it is undefined under the new architecture, the legacy-module interop is not picking it up and the module needs a TurboModule spec. |
-| 14 | Pixel, Samsung (upgrade install over a build with `dispatch-critical`) | Settings > Apps > Boxalarm > Notifications | Only `Dispatch pages` (`dispatch-critical-v2` or `-v2-dnd`) and `Notifications` exist; the old `Dispatch alerts` channel is gone. |
+| 14 | Pixel, Samsung (upgrade install over a build with `dispatch-critical`) | Settings > Apps > Boxalarm > Notifications | Only `Dispatch pages` (`dispatch-critical-v2` or `-v2-dnd`) and `Notifications` exist; the old `Dispatch alerts` channel is gone (stale channels are deleted on app start/foreground only, never while posting a page). |
+| 14a | Pixel | Grant DND access, set `Dispatch pages` to Silent, revoke DND access, return to the app, re-grant it | **Known Android behaviour:** re-creating a deleted channel id restores the member's old settings for it, so the channel comes back Silent. The readiness banner must name "Dispatch page sound" as silent. |
 | 15 | Pixel, Samsung | Channel sound | The `Dispatch pages` channel's sound is the phone's **alarm** sound, and it plays on the alarm volume (turn media and ringer volume to 0, alarm volume up: the page is still loud). No fire-tone asset exists in the repo; bundling one is a follow-up (`res/raw` + `.caf`). |
 
 ### Do Not Disturb, Bedtime, full-screen (Android)
