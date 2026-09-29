@@ -15,6 +15,7 @@ import { getDocumentClient, getIncidentRepository, getTableName } from '../repos
 import { getSubmissionRepository, type SubmissionOutcome } from '../submissionRepository.js';
 import { getNerisDeptSettings } from '../nerisSettings.js';
 import { queryIncidentResponseUnits } from '../dispatchProjection.js';
+import { loadSchema } from '../reportContext.js';
 
 const METRIC_NAMESPACE = 'Boxalarm/incident-service';
 export const MAX_SUBMISSION_RETRIES = 5;
@@ -186,10 +187,15 @@ async function attemptSubmission(
   const client = getDocumentClient();
   const tableName = getTableName(process.env);
   const settings = await getNerisDeptSettings(client, tableName, payload.deptId);
-  if (!settings.departmentNerisId || !settings.submissionsEnabled) {
+  // Nothing is sent without the NERIS payload schema: every module is deep-picked to it,
+  // which is what keeps undeclared (and personal) keys from ever leaving Boxalarm.
+  const { nerisApi } = await loadSchema(incident);
+  if (!settings.departmentNerisId || !settings.submissionsEnabled || !nerisApi) {
     const failureReason = !settings.departmentNerisId
       ? 'The department NERIS id is not set (platform config NERIS.departmentNerisId)'
-      : 'NERIS submissions are switched off for this department';
+      : !settings.submissionsEnabled
+        ? 'NERIS submissions are switched off for this department'
+        : "The NERIS schema hasn't been downloaded yet (daily schema refresh)";
     await submissionRepository.appendSubmissionAttempt(
       payload.deptId,
       payload.incidentId,
@@ -218,6 +224,7 @@ async function attemptSubmission(
     units: units as unknown as ResponseUnitRow[],
     departmentNerisId: settings.departmentNerisId,
     unitNerisIds: settings.unitNerisIds,
+    schema: nerisApi,
   });
   const hash = payloadHash(nerisPayload);
   const operation = incident.nerisIncidentId ? 'UPDATE' : 'CREATE';

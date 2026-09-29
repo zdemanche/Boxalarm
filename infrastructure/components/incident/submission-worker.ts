@@ -15,6 +15,9 @@ export interface NerisSubmissionWorkerArgs {
   busName: pulumi.Input<string>;
   busArn: pulumi.Input<string>;
   nerisCredentialsSecretArn: pulumi.Input<string>;
+  /** Schema pins: the worker deep-picks every payload to the compiled NERIS schema. */
+  nerisSchemaBucketArn: pulumi.Input<string>;
+  nerisSchemaBucketName: pulumi.Input<string>;
   logGroup: ServiceLogGroup;
 }
 
@@ -90,6 +93,7 @@ export class NerisSubmissionWorker extends pulumi.ComponentResource {
           NERIS_USER_AGENT_PARAM: `/boxalarm/${env}/neris/user-agent`,
           NERIS_CREDENTIALS_SECRET_ID: args.nerisCredentialsSecretArn,
           NERIS_SUBMISSION_SCHEDULER_ROLE_ARN: this.schedulerRole.arn,
+          NERIS_SCHEMA_BUCKET_NAME: args.nerisSchemaBucketName,
           // neris/config.ts decides prod vs non-prod from STAGE ?? BOXALARM_ENV;
           // ServiceLambda only sets ENVIRONMENT. Without this, prod would treat itself
           // as non-prod and fail closed against the NERIS production host (N6.4).
@@ -101,8 +105,16 @@ export class NerisSubmissionWorker extends pulumi.ComponentResource {
             args.incidentCmkArn,
             args.nerisCredentialsSecretArn,
             this.scheduleResourcePattern,
+            args.nerisSchemaBucketArn,
           ])
-          .apply(([tableArn, cmkArn, secretArn, schedulePattern]) => [
+          .apply(([tableArn, cmkArn, secretArn, schedulePattern, bucketArn]) => [
+            {
+              // The compiled NERIS payload schema pinned with the report's schema version.
+              Sid: "ReadNerisSchemaPins" as const,
+              Effect: "Allow" as const,
+              Action: ["s3:GetObject"],
+              Resource: [`${bucketArn}/neris-schema/*`],
+            },
             {
               // getIncident + appendSubmissionAttempt's TransactWrite (attempt Put,
               // submission Update, last-accepted-payload / open-status / outbox Puts).

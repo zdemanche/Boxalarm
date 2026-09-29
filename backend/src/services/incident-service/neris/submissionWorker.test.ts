@@ -17,7 +17,9 @@ function submittedEnvelope(deptId: string, incidentId: string): unknown {
   return { detail: { payload: { deptId, incidentId } } };
 }
 
-function fakeIncident(corePayload: Record<string, unknown> = { incident_type: 'STRUCTURE_FIRE' }) {
+function fakeIncident(
+  corePayload: Record<string, unknown> = { incident_type: 'FIRE||STRUCTURE_FIRE||CHIMNEY_FIRE' },
+) {
   return {
     incidentId: INCIDENT_ID,
     deptId: DEPT_ID,
@@ -74,6 +76,12 @@ function mockDeps(options: {
         }),
     };
   });
+  vi.doMock('../reportContext.js', () => ({
+    loadSchema: async () => ({
+      nerisApi: (await import('./fixtures/neris-api-1.5.1.json', { with: { type: 'json' } }))
+        .default,
+    }),
+  }));
   vi.doMock('../dispatchProjection.js', async (importOriginal) => {
     const actual = await importOriginal<typeof import('../dispatchProjection.js')>();
     return {
@@ -135,6 +143,7 @@ function unmockAll(): void {
   vi.unmock('../submissionRepository.js');
   vi.unmock('../nerisSettings.js');
   vi.unmock('../dispatchProjection.js');
+  vi.unmock('../reportContext.js');
   vi.unmock('./index.js');
 }
 

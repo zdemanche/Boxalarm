@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import type { Incident } from '../entity.js';
 import { NERIS_INCIDENT_NUMBER_PATTERN } from './paths.js';
+import { PAYLOAD_ROOT, deepPick, moduleNode, type CompiledNerisSchema } from './apiSchema.js';
 
 /**
  * Builds the NERIS `IncidentPayload` (POST /incident/{entity}, /validate, and PUT by id)
@@ -14,12 +15,36 @@ import { NERIS_INCIDENT_NUMBER_PATTERN } from './paths.js';
  *   2. NERIS-shaped modules an editor stored on `corePayload` under their NERIS key
  *      (`base`, `dispatch`, `aids`, `fire_detail`, `smoke_alarm`, ...).
  *
- * Fire-only guardrail (no PHI, ever): `medical_details` is sent only when a MEDICAL
- * incident type is present, and then only `patient_care_evaluation`, `patient_status` and
- * `transport_disposition` — never `patient_care_report_id` or anything else that could
- * identify a patient. Casualty modules pass through only NERIS's own fields, which hold no
- * names ("Think Numbers NOT Names").
+ * The whole payload is then deep-picked to the NERIS schema compiled from the NERIS
+ * OpenAPI document (neris/apiSchema.ts): every module, at every depth, keeps only the keys
+ * its NERIS sub-schema declares, so a stray or nested local key (a name, a note) is never
+ * transmitted.
+ *
+ * Fire-only guardrail (no PHI, ever — project decision on the review's M9):
+ *   - `medical_details` is sent only when a MEDICAL incident type is present, and then only
+ *     `patient_care_evaluation`, `patient_status` and `transport_disposition` — never
+ *     `patient_care_report_id`.
+ *   - `casualty_rescues` sends only the fields NERIS marks required, at every depth. The
+ *     optional civilian demographics (birth month/year, gender, race) are never sent, and a
+ *     name-like key is dropped wherever it appears ("Think Numbers NOT Names").
  */
+
+/** Never sent at any depth of any module, whatever a schema version declares. */
+export const NEVER_SENT_KEYS: ReadonlySet<string> = new Set([
+  'birth_month_year',
+  'gender',
+  'race',
+  'patient_care_report_id',
+  'first_name',
+  'last_name',
+  'full_name',
+  'patient_name',
+  'date_of_birth',
+  'dob',
+  'ssn',
+  'phone',
+  'email',
+]);
 
 export type NerisPayload = Record<string, unknown>;
 
@@ -116,6 +141,8 @@ export interface BuildPayloadInput {
   readonly units: readonly ResponseUnitRow[];
   readonly departmentNerisId: string;
   readonly unitNerisIds: Readonly<Record<string, string>>;
+  /** The compiled NERIS payload schema every module is deep-picked to. */
+  readonly schema: CompiledNerisSchema;
 }
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
@@ -278,7 +305,21 @@ export function buildNerisIncidentPayload(input: BuildPayloadInput): NerisPayloa
   if (medical) {
     payload.medical_details = medical;
   }
-  return payload;
+  const casualtyNode = moduleNode(input.schema, 'casualty_rescues');
+  if (payload.casualty_rescues !== undefined && casualtyNode) {
+    const casualties = deepPick(input.schema, casualtyNode, payload.casualty_rescues, {
+      requiredOnly: true,
+      denyKeys: NEVER_SENT_KEYS,
+    });
+    if (Array.isArray(casualties) && casualties.length > 0) {
+      payload.casualty_rescues = casualties;
+    } else {
+      delete payload.casualty_rescues;
+    }
+  }
+  return (deepPick(input.schema, { k: 'ref', n: PAYLOAD_ROOT }, payload, {
+    denyKeys: NEVER_SENT_KEYS,
+  }) ?? {}) as NerisPayload;
 }
 
 /** Key-order-independent JSON, so the same record always hashes the same. */

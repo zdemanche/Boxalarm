@@ -74,6 +74,15 @@ async function inner(
         { code: 'NOT_CONFIGURED' },
       );
     }
+    if (!context.nerisApi) {
+      return problemResponse(
+        409,
+        'Conflict',
+        "The NERIS schema hasn't been downloaded yet, so nothing can be sent. It refreshes daily.",
+        traceId,
+        { code: 'NOT_CONFIGURED' },
+      );
+    }
     const client = getDocumentClient();
     const tableName = getTableName(process.env);
     const previous = await getLastAcceptedPayload(client, tableName, deptId, incidentId);
@@ -82,6 +91,7 @@ async function inner(
       units: context.units,
       departmentNerisId: settings.departmentNerisId,
       unitNerisIds: settings.unitNerisIds,
+      schema: context.nerisApi,
     });
     const diff = diffPayloads(previous ?? {}, current);
     if (previous && diff.length === 0) {

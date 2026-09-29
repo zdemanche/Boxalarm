@@ -27,7 +27,7 @@ export interface ReportContext {
  * back to ACTIVE; undefined when none is published or no bucket is configured, in which case
  * only the structural and department rules run.
  */
-async function loadSchema(
+export async function loadSchema(
   incident: Incident,
 ): Promise<{ schema?: NerisSchemaDocument; nerisApi?: CompiledNerisSchema }> {
   const bucket = process.env.NERIS_SCHEMA_BUCKET_NAME;

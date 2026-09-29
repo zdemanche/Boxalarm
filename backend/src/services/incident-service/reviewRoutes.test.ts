@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Decision } from '@aws-sdk/client-verifiedpermissions';
 import { DEFAULT_NERIS_SETTINGS } from './nerisSettings.js';
 import { CHIEF_AUTH, OFFICER_AUTH, buildIncidentEvent } from './testEvents.js';
+import compiled from './neris/fixtures/neris-api-1.5.1.json' with { type: 'json' };
 
 /** validate / lock / unlock / resubmit routes, with Verified Permissions and storage faked. */
 
@@ -119,7 +120,12 @@ describe('POST /incidents/{id}/validate', () => {
   const route = 'POST /api/v1/incidents/{incidentId}/validate';
 
   it('authorizes ValidateIncidentReport on the Boxalarm::Incident and returns the report', async () => {
-    mockContext({ incident: incident(), units: [COMPLETE_UNIT], settings: settings() });
+    mockContext({
+      incident: incident(),
+      units: [COMPLETE_UNIT],
+      settings: settings(),
+      nerisApi: compiled,
+    });
     const { statusCode, json } = await call('./validateIncident.js', route, { mode: 'both' });
 
     expect(statusCode).toBe(200);
@@ -161,7 +167,12 @@ describe('POST /incidents/{id}/lock', () => {
   });
 
   it('locks a clean report, pinned to the updatedAt it validated', async () => {
-    mockContext({ incident: incident(), units: [COMPLETE_UNIT], settings: settings() });
+    mockContext({
+      incident: incident(),
+      units: [COMPLETE_UNIT],
+      settings: settings(),
+      nerisApi: compiled,
+    });
     review.lockIncident.mockResolvedValue({ status: 'VALIDATED' });
     const { statusCode, json } = await call('./lockIncident.js', route, { attest: true });
 
@@ -208,7 +219,12 @@ describe('POST /incidents/{id}/lock', () => {
 
   it('locks through a NERIS outage, reporting it as a warning', async () => {
     validateIncident.mockRejectedValue(new Error('ETIMEDOUT'));
-    mockContext({ incident: incident(), units: [COMPLETE_UNIT], settings: settings() });
+    mockContext({
+      incident: incident(),
+      units: [COMPLETE_UNIT],
+      settings: settings(),
+      nerisApi: compiled,
+    });
     review.lockIncident.mockResolvedValue({ status: 'VALIDATED' });
     const { statusCode, json } = await call('./lockIncident.js', route);
     expect(statusCode).toBe(200);
@@ -221,7 +237,12 @@ describe('POST /incidents/{id}/lock', () => {
 
     vi.resetModules();
     mockReview();
-    mockContext({ incident: incident(), units: [COMPLETE_UNIT], settings: settings() });
+    mockContext({
+      incident: incident(),
+      units: [COMPLETE_UNIT],
+      settings: settings(),
+      nerisApi: compiled,
+    });
     const { ReviewConflictError } = await import('./reviewRepository.js');
     review.lockIncident.mockRejectedValue(new ReviewConflictError('CHANGED_SINCE_REVIEW'));
     const { statusCode, json } = await call('./lockIncident.js', route);
@@ -294,6 +315,7 @@ describe('POST /incidents/{id}/resubmit', () => {
       incident: incident({ nerisIncidentId, lockedAt: ALARM + 900, narrative: 'Corrected.' }),
       units: [COMPLETE_UNIT],
       settings: settings(),
+      nerisApi: compiled,
     });
     review.getLastAcceptedPayload.mockResolvedValue({
       base: { outcome_narrative: 'Dumpster fire, knocked down.' },
@@ -320,6 +342,7 @@ describe('POST /incidents/{id}/resubmit', () => {
       incident: incident({ nerisIncidentId, lockedAt: ALARM + 900 }),
       units: [COMPLETE_UNIT],
       settings: settings(),
+      nerisApi: compiled,
     };
     mockContext(context);
     const { buildNerisIncidentPayload } = await import('./neris/payload.js');
@@ -329,6 +352,7 @@ describe('POST /incidents/{id}/resubmit', () => {
         units: context.units,
         departmentNerisId: 'FD09190828',
         unitNerisIds: context.settings.unitNerisIds,
+        schema: compiled as never,
       }),
     );
     const { statusCode, json } = await call('./resubmitIncident.js', route);

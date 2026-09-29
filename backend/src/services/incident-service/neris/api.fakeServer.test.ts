@@ -312,6 +312,7 @@ describe('NERIS client against a fake NERIS server', () => {
       units: [{ unitId: 'E1', unitType: 'APPARATUS', dispatchedAt: 1_798_000_060 }],
       departmentNerisId: ENTITY,
       unitNerisIds: {},
+      schema: SCHEMA,
     });
     await expect(api().validateIncident(ENTITY, payload)).resolves.toEqual({
       ok: true,

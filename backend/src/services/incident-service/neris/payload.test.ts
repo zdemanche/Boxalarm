@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Incident } from '../entity.js';
+import type { CompiledNerisSchema } from './apiSchema.js';
+import compiled from './fixtures/neris-api-1.5.1.json' with { type: 'json' };
 import {
   buildNerisIncidentPayload,
   canonicalJson,
@@ -29,7 +31,13 @@ function incident(overrides: Partial<Incident> = {}): Incident {
   };
 }
 
-const BASE_INPUT = { units: [], departmentNerisId: 'FD09190828', unitNerisIds: {} };
+const SCHEMA = compiled as unknown as CompiledNerisSchema;
+const BASE_INPUT = {
+  units: [],
+  departmentNerisId: 'FD09190828',
+  unitNerisIds: {},
+  schema: SCHEMA,
+};
 
 describe('buildNerisIncidentPayload', () => {
   it('derives base, incident_types and dispatch from the incident', () => {
@@ -174,6 +182,61 @@ describe('buildNerisIncidentPayload', () => {
       incident: incident({ corePayload: {} }),
     });
     expect(payload.incident_types).toEqual([{ type: 'UNDETERMINED' }]);
+  });
+});
+
+describe('fire-only guardrail: nothing beyond the NERIS schema, no casualty demographics or names', () => {
+  it('deep-picks every module: nested undeclared keys never leave Boxalarm', () => {
+    const payload = buildNerisIncidentPayload({
+      ...BASE_INPUT,
+      incident: incident({
+        corePayload: {
+          incident_type: 'FIRE||STRUCTURE_FIRE||ROOM_AND_CONTENTS_FIRE',
+          base: { location: { street: 'Main St', owner_name: 'Jane Doe' } },
+          smoke_alarm: {
+            presence: { type: 'PRESENT', working: true, homeowner_name: 'Jane Doe' },
+            notes: 'called by Jane',
+          },
+          aids: [
+            {
+              department_neris_id: 'FD09190001',
+              aid_type: 'SUPPORT_AID',
+              aid_direction: 'GIVEN',
+              officer_name: 'Capt. Smith',
+            },
+          ],
+        },
+      }),
+    });
+
+    expect(payload.smoke_alarm).toEqual({ presence: { type: 'PRESENT', working: true } });
+    expect(payload.aids).toEqual([
+      { department_neris_id: 'FD09190001', aid_type: 'SUPPORT_AID', aid_direction: 'GIVEN' },
+    ]);
+    expect(JSON.stringify(payload)).not.toMatch(/Jane|Smith|called by/);
+  });
+
+  it('sends only the required casualty fields: no birth month/year, gender, race or names', () => {
+    const payload = buildNerisIncidentPayload({
+      ...BASE_INPUT,
+      incident: incident({
+        corePayload: {
+          incident_type: 'FIRE||STRUCTURE_FIRE||ROOM_AND_CONTENTS_FIRE',
+          casualty_rescues: [
+            {
+              type: 'NONFF',
+              birth_month_year: '04/1961',
+              gender: 'FEMALE',
+              race: 'WHITE',
+              name: 'Jane Doe',
+              casualty: { injury_or_noninjury: { type: 'INJURED_NONFATAL', cause: 'EXPOSURE' } },
+            },
+          ],
+        },
+      }),
+    });
+    expect(payload.casualty_rescues).toEqual([{ type: 'NONFF' }]);
+    expect(JSON.stringify(payload)).not.toMatch(/1961|FEMALE|WHITE|Jane/);
   });
 });
 

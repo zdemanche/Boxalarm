@@ -555,7 +555,9 @@ export async function runValidation(input: RunValidationInput): Promise<Validati
 
   if (input.mode !== 'local') {
     const departmentNerisId = input.settings.departmentNerisId;
-    if (!departmentNerisId || !input.api) {
+    if (departmentNerisId && input.api && !input.nerisApi) {
+      warnings.push(unreachable("the NERIS schema hasn't been downloaded yet"));
+    } else if (!departmentNerisId || !input.api || !input.nerisApi) {
       if (!warnings.some((issue) => issue.code === 'DEPARTMENT_NOT_REGISTERED')) {
         warnings.push(unreachable("the department's NERIS id isn't set"));
       }
@@ -566,6 +568,7 @@ export async function runValidation(input: RunValidationInput): Promise<Validati
         units: input.units,
         departmentNerisId,
         unitNerisIds: input.settings.unitNerisIds,
+        schema: input.nerisApi,
       });
       const neris = await nerisRoundTrip({
         api: await input.api(),

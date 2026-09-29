@@ -69,6 +69,8 @@ describe("NerisSubmissionWorker", () => {
       busName: pulumi.output(`boxalarm-${env}-platform-bus`),
       busArn: pulumi.output(BUS_ARN),
       nerisCredentialsSecretArn: pulumi.output(SECRET_ARN),
+      nerisSchemaBucketArn: pulumi.output("arn:aws:s3:::boxalarm-dev-incident-assets"),
+      nerisSchemaBucketName: pulumi.output("boxalarm-dev-incident-assets"),
       logGroup,
     });
   }

@@ -616,6 +616,8 @@ export const nerisSubmissionWorker = new NerisSubmissionWorker("neris-submission
   busName: platformBus.busName,
   busArn: platformBus.busArn,
   nerisCredentialsSecretArn: nerisConfig.secret.arn,
+  nerisSchemaBucketArn: incidentSchemaRefresh.bucket.arn,
+  nerisSchemaBucketName: incidentSchemaRefresh.bucket.bucket,
   logGroup: incidentServiceLogGroup,
 });
 
