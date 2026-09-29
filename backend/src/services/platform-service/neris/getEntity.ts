@@ -24,17 +24,27 @@ async function inner(
     const tableName = process.env.PLATFORM_TABLE_NAME;
     if (!tableName) throw new Error('PLATFORM_TABLE_NAME is required and was not set');
     const record = await getEntityRecord(getDynamoDocClient(), tableName, deptId);
-    const body = record
-      ? {
-          status: record.errors.length > 0 ? 'PARTIAL' : 'SYNCED',
-          departmentNerisId: record.departmentNerisId,
-          stations: record.stations,
-          units: record.units,
-          errors: record.errors,
-          syncedAt: record.syncedAt,
-          syncedBy: record.syncedBy,
-        }
-      : { status: 'NOT_SYNCED', stations: [], units: [], errors: [] };
+    const body =
+      record?.syncStatus === 'SYNCING'
+        ? {
+            status: 'SYNCING',
+            syncStartedAt: record.syncStartedAt ?? null,
+            departmentNerisId: record.departmentNerisId ?? null,
+            stations: record.stations ?? [],
+            units: record.units ?? [],
+            errors: record.errors ?? [],
+          }
+        : record?.syncedAt
+          ? {
+              status: (record.errors ?? []).length > 0 ? 'PARTIAL' : 'SYNCED',
+              departmentNerisId: record.departmentNerisId,
+              stations: record.stations ?? [],
+              units: record.units ?? [],
+              errors: record.errors ?? [],
+              syncedAt: record.syncedAt,
+              syncedBy: record.syncedBy,
+            }
+          : { status: 'NOT_SYNCED', stations: [], units: [], errors: [] };
     return {
       statusCode: 200,
       headers: { 'content-type': 'application/json' },

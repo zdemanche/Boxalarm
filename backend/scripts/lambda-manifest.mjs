@@ -45,6 +45,11 @@ export const LAMBDA_ENTRIES = [
   },
   {
     service: 'platform-service',
+    function: 'neris-entity-sync-worker',
+    entry: 'src/services/platform-service/neris/syncWorker.ts',
+  },
+  {
+    service: 'platform-service',
     function: 'export',
     entry: 'src/services/platform-service/export/handler.ts',
   },

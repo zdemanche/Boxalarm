@@ -87,25 +87,29 @@ describe("NerisEntity", () => {
     );
   });
 
-  it("gives only the sync (PUT) NERIS credentials; the read is one GetItem", async () => {
+  it("keeps NERIS credentials in the async worker; PUT only starts the sync and invokes it", async () => {
     const entity = await build();
     const get = JSON.parse(await resolve(entity.getLambda.rolePolicy.policy)) as PolicyDoc;
     const put = JSON.parse(await resolve(entity.putLambda.rolePolicy.policy)) as PolicyDoc;
-    expect(get.Statement.find((s) => s.Sid === "NerisEntityRead")?.Action).toEqual([
-      "dynamodb:GetItem",
-    ]);
+    const worker = JSON.parse(await resolve(entity.workerLambda.rolePolicy.policy)) as PolicyDoc;
     expect(get.Statement.some((s) => s.Sid.startsWith("NerisGet"))).toBe(false);
-    expect(put.Statement.find((s) => s.Sid === "NerisEntitySyncAccess")?.Action).toEqual([
+    expect(put.Statement.some((s) => s.Sid.startsWith("NerisGet"))).toBe(false);
+    expect(worker.Statement.some((s) => s.Sid.startsWith("NerisGet"))).toBe(true);
+    expect(put.Statement.find((s) => s.Sid === "NerisEntitySyncStart")?.Action).toEqual([
       "dynamodb:GetItem",
-      "dynamodb:PutItem",
+      "dynamodb:UpdateItem",
     ]);
-    expect(put.Statement.some((s) => s.Sid.startsWith("NerisGet"))).toBe(true);
-    const env = await resolve(entity.putLambda.function.environment);
-    expect(env?.variables).toMatchObject({
-      PLATFORM_TABLE_NAME: "boxalarm-dev-platform-service",
-      VERIFIED_PERMISSIONS_POLICY_STORE_ID: "ps-1",
+    expect(put.Statement.find((s) => s.Sid === "InvokeNerisEntitySyncWorker")?.Resource).toBe(
+      "arn:aws:lambda:us-east-1:123456789012:function:boxalarm-dev-platform-neris-entity-sync-worker",
+    );
+    const workerEnv = await resolve(entity.workerLambda.function.environment);
+    expect(workerEnv?.variables).toMatchObject({
       NERIS_CREDENTIALS_SECRET_ID: CREDENTIALS_ARN,
       BOXALARM_ENV: "dev",
     });
+    const putEnv = await resolve(entity.putLambda.function.environment);
+    expect(putEnv?.variables?.NERIS_ENTITY_SYNC_WORKER).toBe(
+      "boxalarm-dev-platform-neris-entity-sync-worker",
+    );
   });
 });

@@ -1,6 +1,7 @@
 import {
   GetCommand,
   TransactWriteCommand,
+  UpdateCommand,
   type DynamoDBDocumentClient,
 } from '@aws-sdk/lib-dynamodb';
 import { buildDeptScopedPk, type VerifiedDeptId } from '@boxalarm/dept-scope';
@@ -189,7 +190,8 @@ export interface SyncedUnit {
   readonly unitId: string;
   readonly stationId: string;
   readonly nerisId?: string;
-  readonly status: 'CREATED' | 'UPDATED' | 'FAILED' | 'SKIPPED';
+  /** RETAINED: registered by an earlier sync and not in this request; its NERIS id is kept. */
+  readonly status: 'CREATED' | 'UPDATED' | 'FAILED' | 'SKIPPED' | 'RETAINED';
 }
 
 export interface EntitySyncRecord {
@@ -201,15 +203,26 @@ export interface EntitySyncRecord {
   readonly syncedBy: string;
 }
 
+/** The stored row: the last completed sync, plus a sync that is running now, if any. */
+export interface EntitySyncRow extends Partial<EntitySyncRecord> {
+  readonly syncStatus?: 'SYNCING' | 'SYNCED' | 'PARTIAL';
+  readonly pendingRequest?: { readonly stations: readonly StationInput[] };
+  readonly syncStartedAt?: string;
+  readonly requestedBy?: string;
+}
+
+/** A SYNCING row older than this was abandoned (worker timeout is 5 minutes). */
+export const SYNC_STALE_MS = 15 * 60 * 1000;
+
 export async function getEntityRecord(
   client: DynamoDBDocumentClient,
   tableName: string,
   deptId: VerifiedDeptId,
-): Promise<EntitySyncRecord | undefined> {
+): Promise<EntitySyncRow | undefined> {
   const result = await client.send(
     new GetCommand({ TableName: tableName, Key: { pk: buildDeptScopedPk(deptId), sk: ENTITY_SK } }),
   );
-  return result.Item as EntitySyncRecord | undefined;
+  return result.Item as EntitySyncRow | undefined;
 }
 
 function describe(failure: NerisFailure): string {
@@ -223,15 +236,20 @@ export async function syncEntity(
   api: NerisApi,
   departmentNerisId: string,
   request: { readonly stations: readonly StationInput[] },
-  previous: EntitySyncRecord | undefined,
+  previous: EntitySyncRow | undefined,
   actorId: string,
   now: Date,
 ): Promise<EntitySyncRecord> {
+  // Ids from an earlier sync are only reused under the same NERIS entity: after the
+  // department id changes they name another entity's stations and units (review minor 8).
+  const sameEntity = previous?.departmentNerisId === departmentNerisId;
+  const previousStations = sameEntity ? (previous?.stations ?? []) : [];
+  const previousUnits = sameEntity ? (previous?.units ?? []) : [];
   const knownStations = new Map(
-    (previous?.stations ?? []).filter((s) => s.nerisId).map((s) => [s.stationId, s.nerisId!]),
+    previousStations.filter((s) => s.nerisId).map((s) => [s.stationId, s.nerisId!]),
   );
   const knownUnits = new Map(
-    (previous?.units ?? []).filter((u) => u.nerisId).map((u) => [u.unitId, u.nerisId!]),
+    previousUnits.filter((u) => u.nerisId).map((u) => [u.unitId, u.nerisId!]),
   );
   const stations: SyncedStation[] = [];
   const units: SyncedUnit[] = [];
@@ -311,14 +329,65 @@ export async function syncEntity(
       }
     }
   }
+  // A unit left out of this request keeps the NERIS id it already has: dropping it would
+  // make re-adding it create a duplicate NERIS unit.
+  const requested = new Set(units.map((u) => u.unitId));
+  const retained: SyncedUnit[] = previousUnits
+    .filter((u) => u.nerisId && !requested.has(u.unitId))
+    .map((u) => ({ ...u, status: 'RETAINED' as const }));
+  const requestedStations = new Set(stations.map((s) => s.stationId));
+  const retainedStations = previousStations.filter(
+    (s) => s.nerisId && !requestedStations.has(s.stationId),
+  );
   return {
     departmentNerisId,
-    stations,
-    units,
+    stations: [...stations, ...retainedStations],
+    units: [...units, ...retained],
     errors,
     syncedAt: now.toISOString(),
     syncedBy: actorId,
   };
+}
+
+/**
+ * Starts a sync: records the request as SYNCING unless one is already running (and not
+ * abandoned). The worker (syncWorker.ts) then makes the NERIS calls asynchronously — one per
+ * station and unit can outlast API Gateway's 30 s limit (review minor 8).
+ */
+export async function markSyncing(
+  client: DynamoDBDocumentClient,
+  tableName: string,
+  deptId: VerifiedDeptId,
+  request: { readonly stations: readonly StationInput[] },
+  actorId: string,
+  now: Date,
+): Promise<'started' | 'already_running'> {
+  try {
+    await client.send(
+      new UpdateCommand({
+        TableName: tableName,
+        Key: { pk: buildDeptScopedPk(deptId), sk: ENTITY_SK },
+        ConditionExpression:
+          'attribute_not_exists(syncStatus) OR syncStatus <> :syncing OR syncStartedAt < :staleBefore',
+        UpdateExpression:
+          'SET entityType = :type, syncStatus = :syncing, pendingRequest = :request, syncStartedAt = :now, requestedBy = :actor',
+        ExpressionAttributeValues: {
+          ':type': 'NERIS_ENTITY_SYNC',
+          ':syncing': 'SYNCING',
+          ':request': request,
+          ':now': now.toISOString(),
+          ':actor': actorId,
+          ':staleBefore': new Date(now.getTime() - SYNC_STALE_MS).toISOString(),
+        },
+      }),
+    );
+    return 'started';
+  } catch (error) {
+    if (error instanceof Error && error.name === 'ConditionalCheckFailedException') {
+      return 'already_running';
+    }
+    throw error;
+  }
 }
 
 export async function saveEntityRecord(
@@ -339,6 +408,7 @@ export async function saveEntityRecord(
               sk: ENTITY_SK,
               entityType: 'NERIS_ENTITY_SYNC',
               ...record,
+              syncStatus: record.errors.length > 0 ? 'PARTIAL' : 'SYNCED',
             },
           },
         },

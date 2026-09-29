@@ -22,14 +22,14 @@ export interface NerisEntityArgs {
 
 /**
  * GET/PUT /api/v1/platform/neris/entity (platform-service/neris/{get,put}Entity.ts): the
- * department's stations and units registered with its NERIS entity. Only the PUT calls
- * NERIS, so only it reads the OAuth secret. The PUT reads CONFIG#NERIS and NERIS#ENTITY
- * (GetItem) and writes the NERIS#ENTITY row plus its neris.entity.synced outbox record in one
- * transaction (two PutItems); the GET is a single GetItem.
+ * department's stations and units registered with its NERIS entity. The PUT starts a sync
+ * (202) and the sync worker makes the NERIS calls asynchronously, so only the worker reads
+ * the OAuth secret; the GET is a single GetItem.
  */
 export class NerisEntity extends pulumi.ComponentResource {
   public readonly getLambda: ServiceLambda;
   public readonly putLambda: ServiceLambda;
+  public readonly workerLambda: ServiceLambda;
 
   constructor(name: string, args: NerisEntityArgs, opts?: pulumi.ComponentResourceOptions) {
     requireEnv("NerisEntity", args.env);
@@ -66,6 +66,43 @@ export class NerisEntity extends pulumi.ComponentResource {
       { parent: this },
     );
 
+    // The NERIS calls run here, asynchronously (one per station and unit can outlast API
+    // Gateway's 30 s limit). Reads the pending request and CONFIG#NERIS, saves the result
+    // with its outbox record (two PutItems in one transaction). Only it reads the secret.
+    this.workerLambda = new ServiceLambda(
+      `${name}-sync-worker`,
+      {
+        env,
+        serviceName: "platform-service",
+        functionName: `boxalarm-${env}-platform-neris-entity-sync-worker`,
+        handler: LAMBDA_HANDLER,
+        code: lambdaCode("platform-service", "neris-entity-sync-worker"),
+        logGroup: args.logGroup,
+        timeout: 300,
+        environment: {
+          PLATFORM_TABLE_NAME: args.platformTableName,
+          NERIS_BASE_URL_PARAM: `/boxalarm/${env}/neris/base-url`,
+          NERIS_USER_AGENT_PARAM: `/boxalarm/${env}/neris/user-agent`,
+          NERIS_CREDENTIALS_SECRET_ID: args.nerisCredentialsSecretArn,
+          BOXALARM_ENV: env,
+        },
+        additionalPolicyStatements: pulumi
+          .all([args.platformTableArn, args.nerisCredentialsSecretArn])
+          .apply(([tableArn, secretArn]): IamPolicyStatement[] => [
+            {
+              Sid: "NerisEntitySyncAccess",
+              Effect: "Allow",
+              Action: ["dynamodb:GetItem", "dynamodb:PutItem"],
+              Resource: tableArn,
+            },
+            auditMutationDenyStatement(tableArn),
+            ...nerisClientPolicyStatements(secretArn, env),
+          ]),
+      },
+      { parent: this },
+    );
+
+    // PUT validates, marks the row SYNCING (UpdateItem) and invokes the worker; no NERIS.
     this.putLambda = new ServiceLambda(
       `${name}-put`,
       {
@@ -75,27 +112,27 @@ export class NerisEntity extends pulumi.ComponentResource {
         handler: LAMBDA_HANDLER,
         code: lambdaCode("platform-service", "neris-entity-put"),
         logGroup: args.logGroup,
-        // One NERIS call per station and unit, sequential.
-        timeout: 60,
         environment: {
           ...baseEnvironment,
-          NERIS_BASE_URL_PARAM: `/boxalarm/${env}/neris/base-url`,
-          NERIS_USER_AGENT_PARAM: `/boxalarm/${env}/neris/user-agent`,
-          NERIS_CREDENTIALS_SECRET_ID: args.nerisCredentialsSecretArn,
-          BOXALARM_ENV: env,
+          NERIS_ENTITY_SYNC_WORKER: this.workerLambda.function.name,
         },
         additionalPolicyStatements: pulumi
-          .all([args.platformTableArn, args.policyStoreArn, args.nerisCredentialsSecretArn])
-          .apply(([tableArn, policyStoreArn, secretArn]): IamPolicyStatement[] => [
+          .all([args.platformTableArn, args.policyStoreArn, this.workerLambda.function.arn])
+          .apply(([tableArn, policyStoreArn, workerArn]): IamPolicyStatement[] => [
             {
-              Sid: "NerisEntitySyncAccess",
+              Sid: "NerisEntitySyncStart",
               Effect: "Allow",
-              Action: ["dynamodb:GetItem", "dynamodb:PutItem"],
+              Action: ["dynamodb:GetItem", "dynamodb:UpdateItem"],
               Resource: tableArn,
             },
             auditMutationDenyStatement(tableArn),
             verifiedPermissionsPolicyStatement(policyStoreArn),
-            ...nerisClientPolicyStatements(secretArn, env),
+            {
+              Sid: "InvokeNerisEntitySyncWorker",
+              Effect: "Allow",
+              Action: ["lambda:InvokeFunction"],
+              Resource: workerArn,
+            },
           ]),
       },
       { parent: this },
@@ -112,6 +149,10 @@ export class NerisEntity extends pulumi.ComponentResource {
       { parent: this },
     );
 
-    this.registerOutputs({ getLambda: this.getLambda, putLambda: this.putLambda });
+    this.registerOutputs({
+      getLambda: this.getLambda,
+      putLambda: this.putLambda,
+      workerLambda: this.workerLambda,
+    });
   }
 }

@@ -1,10 +1,16 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { vpSend, ddbSend, syncEntity } = vi.hoisted(() => ({
+const { vpSend, ddbSend, syncEntity, lambdaSend } = vi.hoisted(() => ({
   vpSend: vi.fn(),
   ddbSend: vi.fn(),
   syncEntity: vi.fn(),
+  lambdaSend: vi.fn(),
 }));
+
+vi.mock('@aws-sdk/client-lambda', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@aws-sdk/client-lambda')>();
+  return { ...actual, LambdaClient: vi.fn().mockImplementation(() => ({ send: lambdaSend })) };
+});
 
 vi.mock('@aws-sdk/client-verifiedpermissions', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@aws-sdk/client-verifiedpermissions')>();
@@ -25,6 +31,7 @@ vi.mock('./entitySync.js', async (importOriginal) => {
 
 process.env.VERIFIED_PERMISSIONS_POLICY_STORE_ID = 'ps-1';
 process.env.PLATFORM_TABLE_NAME = 'platform-table';
+process.env.NERIS_ENTITY_SYNC_WORKER = 'boxalarm-dev-platform-neris-entity-sync-worker';
 
 import { Decision } from '@aws-sdk/client-verifiedpermissions';
 import { handler as putHandler } from './putEntity.js';
@@ -89,7 +96,7 @@ describe('PUT /platform/neris/entity', () => {
     expect(syncEntity).not.toHaveBeenCalled();
   });
 
-  it('syncs and saves the record with its outbox event', async () => {
+  it('starts the sync asynchronously: marks SYNCING, invokes the worker, answers 202', async () => {
     ddbSend.mockImplementation((command: Command) =>
       Promise.resolve(
         command.constructor.name === 'GetCommand' &&
@@ -98,27 +105,42 @@ describe('PUT /platform/neris/entity', () => {
           : {},
       ),
     );
-    syncEntity.mockResolvedValue({
-      departmentNerisId: 'FD09190828',
-      stations: [],
-      units: [],
-      errors: [],
-      syncedAt: '2026-09-29T12:00:00.000Z',
-      syncedBy: 'chief-1',
+    lambdaSend.mockResolvedValue({ StatusCode: 202 });
+    const result = (await putHandler(event(VALID))) as { statusCode: number; body: string };
+    expect(result.statusCode).toBe(202);
+    expect((JSON.parse(result.body) as { status: string }).status).toBe('SYNCING');
+    const update = ddbSend.mock.calls
+      .map(([c]) => c as Command)
+      .find((c) => c.constructor.name === 'UpdateCommand')!;
+    expect(update.input.ExpressionAttributeValues).toMatchObject({
+      ':syncing': 'SYNCING',
+      ':request': VALID,
     });
-    const result = (await putHandler(event(VALID))) as { statusCode: number };
-    expect(result.statusCode).toBe(200);
-    expect(syncEntity).toHaveBeenCalledWith(
-      expect.anything(),
-      'FD09190828',
-      VALID,
-      undefined,
-      'chief-1',
-      expect.any(Date),
-    );
-    expect(
-      ddbSend.mock.calls.some(([c]) => (c as Command).constructor.name === 'TransactWriteCommand'),
-    ).toBe(true);
+    const invoke = (lambdaSend.mock.calls[0]![0] as { input: Record<string, unknown> }).input;
+    expect(invoke).toMatchObject({
+      FunctionName: 'boxalarm-dev-platform-neris-entity-sync-worker',
+      InvocationType: 'Event',
+    });
+    expect(syncEntity).not.toHaveBeenCalled();
+  });
+
+  it('refuses a second sync while one is running', async () => {
+    ddbSend.mockImplementation((command: Command) => {
+      if (command.constructor.name === 'UpdateCommand') {
+        return Promise.reject(
+          Object.assign(new Error('x'), { name: 'ConditionalCheckFailedException' }),
+        );
+      }
+      return Promise.resolve(
+        (command.input.Key as { sk: string }).sk === 'CONFIG#NERIS'
+          ? { Item: { value: { departmentNerisId: 'FD09190828' } } }
+          : {},
+      );
+    });
+    const result = (await putHandler(event(VALID))) as { statusCode: number; body: string };
+    expect(result.statusCode).toBe(409);
+    expect((JSON.parse(result.body) as { code: string }).code).toBe('SYNC_RUNNING');
+    expect(lambdaSend).not.toHaveBeenCalled();
   });
 });
 

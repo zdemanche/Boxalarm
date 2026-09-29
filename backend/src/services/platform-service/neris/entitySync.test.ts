@@ -147,6 +147,50 @@ describe('syncEntity', () => {
     expect(record.units.map((u) => u.status)).toEqual(['UPDATED', 'CREATED']);
   });
 
+  it('keeps the NERIS ids of units left out of the request instead of losing them (review minor 8)', async () => {
+    const previous: EntitySyncRecord = {
+      departmentNerisId: ENTITY,
+      stations: [{ stationId: 'STA1', nerisId: `${ENTITY}S001`, status: 'CREATED' }],
+      units: [
+        { unitId: 'E1', stationId: 'STA1', nerisId: `${ENTITY}S001U001`, status: 'CREATED' },
+        { unitId: 'R9', stationId: 'STA1', nerisId: `${ENTITY}S001U009`, status: 'CREATED' },
+      ],
+      errors: [],
+      syncedAt: '2026-09-01T00:00:00.000Z',
+      syncedBy: 'MBR-0001',
+    };
+    const { api } = fakeApi({
+      createUnit: vi
+        .fn()
+        .mockResolvedValue({ ok: true, httpStatus: 201, nerisId: `${ENTITY}S001U002` }),
+    });
+    const record = await syncEntity(api, ENTITY, REQUEST, previous, 'MBR-0001', NOW);
+    expect(record.units).toContainEqual({
+      unitId: 'R9',
+      stationId: 'STA1',
+      nerisId: `${ENTITY}S001U009`,
+      status: 'RETAINED',
+    });
+  });
+
+  it('does not reuse station or unit ids after the department NERIS id changed', async () => {
+    const previous: EntitySyncRecord = {
+      departmentNerisId: 'FD00000001',
+      stations: [{ stationId: 'STA1', nerisId: 'FD00000001S001', status: 'CREATED' }],
+      units: [
+        { unitId: 'E1', stationId: 'STA1', nerisId: 'FD00000001S001U001', status: 'CREATED' },
+      ],
+      errors: [],
+      syncedAt: '2026-09-01T00:00:00.000Z',
+      syncedBy: 'MBR-0001',
+    };
+    const { api, fns } = fakeApi();
+    const record = await syncEntity(api, ENTITY, REQUEST, previous, 'MBR-0001', NOW);
+    expect(fns.createStation).toHaveBeenCalled();
+    expect(fns.patchStation).not.toHaveBeenCalled();
+    expect(record.units.some((u) => u.nerisId?.startsWith('FD00000001'))).toBe(false);
+  });
+
   it("skips a station's units when the station itself could not be registered", async () => {
     const { api } = fakeApi({
       createStation: vi
