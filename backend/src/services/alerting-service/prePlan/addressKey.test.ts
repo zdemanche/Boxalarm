@@ -19,7 +19,7 @@ describe('normalizeAddress', () => {
     ['900 Rte. 25', '900 RT 25'],
     ['12 First Street', '12 1ST ST'],
     ['12 1st St', '12 1ST ST'],
-    ['Café Plaza Drive', 'CAFE PLAZA DR'],
+    ['12 Café Plaza Drive', '12 CAFE PLAZA DR'],
   ])('%s -> %s', (raw, key) => {
     expect(normalizeAddress(raw)?.key).toBe(key);
   });
@@ -80,8 +80,9 @@ describe('normalizeAddress', () => {
   });
 
   it('never emits the pk delimiter, so the key is safe inside a department-scoped key', () => {
-    expect(normalizeAddress('12 Main St #4')?.key).not.toContain('#');
-    expect(normalizeAddress('#12 Main St')?.key).not.toContain('#');
+    const normalized = normalizeAddress('12 Main St #4');
+    expect(normalized?.key).toBe('12 MAIN ST');
+    expect(normalized?.key).not.toContain('#');
   });
 
   it('is deterministic and idempotent', () => {
@@ -96,4 +97,57 @@ describe('normalizeAddress', () => {
       expect(normalizeAddress(raw)).toBeNull();
     },
   );
+
+  describe('designator words used as street names (MAJOR-1: never collapse to the house number)', () => {
+    it.each([
+      ['100 Lot Rd', '100 LOT RD'],
+      ['40 Building Rd', '40 BUILDING RD'],
+      ['9 Floor Ct', '9 FLOOR CT'],
+      ['12 Rm Rd', '12 RM RD'],
+      ['5 Space Ln', '5 SPACE LN'],
+      ['123 Ste Marie Ave', '123 STE MARIE AVE'],
+      ['7 Suite Way', '7 SUITE WAY'],
+      ['100 Unit St', '100 UNIT ST'],
+      ['8 Apartment Row', '8 APARTMENT ROW'],
+    ])('%s keeps its street (%s)', (raw, key) => {
+      expect(normalizeAddress(raw)).toEqual({ key, unit: null });
+    });
+
+    it('still strips a real unit that follows the street suffix', () => {
+      expect(normalizeAddress('100 Lot Rd Lot 7')).toEqual({ key: '100 LOT RD', unit: '7' });
+      expect(normalizeAddress('40 Building Rd, Building 2')).toEqual({
+        key: '40 BUILDING RD',
+        unit: '2',
+      });
+    });
+
+    it('two different designator-named streets at one number never share a key', () => {
+      const keys = ['100 Lot Rd', '100 Space Ln', '100 Floor Ct'].map(
+        (raw) => normalizeAddress(raw)?.key,
+      );
+      expect(new Set(keys).size).toBe(3);
+    });
+
+    it('a designator never consumes a street-type token', () => {
+      expect(normalizeAddress('12 Main St, Apt Rd')?.unit).toBeNull();
+    });
+  });
+
+  describe('addresses it cannot read confidently get no key (minor 6)', () => {
+    it.each([
+      ['Main St', 'no house number'],
+      ['Main St & Elm St', 'an intersection'],
+      ['#12 Main St', 'a unit where the house number should be'],
+      ['123', 'a house number alone'],
+      ['123 4', 'no alphabetic street token'],
+      ['123 Apt 4', 'unit-only after the number'],
+    ])('%s (%s) -> null', (raw) => {
+      expect(normalizeAddress(raw)).toBeNull();
+    });
+  });
+
+  it('keeps 12 and 12A (and 1 and 11) apart', () => {
+    expect(normalizeAddress('12 Main St')?.key).not.toBe(normalizeAddress('12A Main St')?.key);
+    expect(normalizeAddress('1 Main St')?.key).not.toBe(normalizeAddress('11 Main St')?.key);
+  });
 });
