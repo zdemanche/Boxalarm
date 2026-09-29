@@ -4,14 +4,23 @@
  * to make equivalent spellings of the same address collapse to the same key — "123 Main
  * Street, Apt 4" and "123 main st." both become "123 MAIN ST" (unit "4" / none).
  *
- * A wrong pre-plan is worse than none, so the parser is conservative: an address it cannot
- * read confidently (no house number, no street name) gets no key and never matches, and a
- * unit designator is only stripped where it cannot be part of the street name — after the
- * street suffix, or after the first comma — so "100 Lot Rd" stays "100 LOT RD".
+ * A wrong pre-plan is worse than none, so the parser is conservative and says when it
+ * guessed. An address it cannot read at all (no house number, no street name) gets no key.
+ * One it can read but not confidently — no street suffix, words after the street that are
+ * neither a unit nor a known place — is returned with `ambiguous: true`, and the matcher
+ * (locality.ts) will then only ever show its match flagged "verify address".
  *
- * Changing the rules changes stored keys: re-emit every pre-plan afterwards
- * (docs/runbooks/alert-context-replay.md).
+ * The street runs from the house number to the LAST street-type word before any unit, town
+ * or state ("123 Mount St Joseph Rd", "123 Fox Run Rd"), so a later suffix never becomes a
+ * "town". A unit designator is stripped only after the street or after the first comma, so
+ * "100 Lot Rd" stays "100 LOT RD". Route numbers stay in the key ("123 RT 111").
+ *
+ * The key never depends on per-department data (only on the built-in place list), so the
+ * copy consumer and the dispatch side always compute the same key. Changing the rules
+ * changes stored keys: re-emit every pre-plan afterwards (docs/runbooks/alert-context-replay.md).
  */
+
+import { CT_TOWNS, CT_VILLAGES } from './knownLocalities.js';
 
 export interface NormalizedAddress {
   /** House number + street name + suffix, unit and locality removed — the lookup key. */
@@ -67,6 +76,7 @@ const ALIASES: Readonly<Record<string, string>> = {
   ROUTE: 'RT',
   RTE: 'RT',
   MOUNT: 'MT',
+  SAINT: 'ST',
   NORTH: 'N',
   SOUTH: 'S',
   EAST: 'E',
@@ -132,68 +142,50 @@ const UNIT_DESIGNATORS = new Set([
   '#',
 ]);
 
+/** Part-of-building words that are a unit on their own ("123 Main St Rear"). */
+const STANDALONE_UNITS = new Set(['REAR', 'FRONT', 'BSMT', 'BASEMENT', 'LOWER', 'UPPER']);
+
+const ORDINAL = /^\d+(?:ST|ND|RD|TH)$/;
+
 const STATE_CODES = new Set(
   (
     'AL AK AZ AR CA CO CT DE DC FL GA HI ID IL IN IA KS KY LA ME MD MA MI MN MS MO MT NE NV NH ' +
     'NJ NM NY NC ND OH OK OR PA RI SC SD TN TX UT VT VA WA WV WI WY PR'
   ).split(' '),
 );
-const STATE_NAMES = new Set([
-  'ALABAMA',
-  'ALASKA',
-  'ARIZONA',
-  'ARKANSAS',
-  'CALIFORNIA',
-  'COLORADO',
-  'CONNECTICUT',
-  'DELAWARE',
-  'FLORIDA',
-  'GEORGIA',
-  'HAWAII',
-  'IDAHO',
-  'ILLINOIS',
-  'INDIANA',
-  'IOWA',
-  'KANSAS',
-  'KENTUCKY',
-  'LOUISIANA',
-  'MAINE',
-  'MARYLAND',
-  'MASSACHUSETTS',
-  'MICHIGAN',
-  'MINNESOTA',
-  'MISSISSIPPI',
-  'MISSOURI',
-  'MONTANA',
-  'NEBRASKA',
-  'NEVADA',
-  'NEW HAMPSHIRE',
-  'NEW JERSEY',
-  'NEW MEXICO',
-  'NEW YORK',
-  'NORTH CAROLINA',
-  'NORTH DAKOTA',
-  'OHIO',
-  'OKLAHOMA',
-  'OREGON',
-  'PENNSYLVANIA',
-  'RHODE ISLAND',
-  'SOUTH CAROLINA',
-  'SOUTH DAKOTA',
-  'TENNESSEE',
-  'TEXAS',
-  'UTAH',
-  'VERMONT',
-  'VIRGINIA',
-  'WASHINGTON',
-  'WEST VIRGINIA',
-  'WISCONSIN',
-  'WYOMING',
-]);
-const ZIP = /^(\d{5})(?:-\d{4})?$/;
 
+/** Full state names in compared form, mapped to their code. */
+const STATE_NAMES: ReadonlyMap<string, string> = new Map(
+  (
+    [
+      ['CONNECTICUT', 'CT'],
+      ['NEW YORK', 'NY'],
+      ['MASSACHUSETTS', 'MA'],
+      ['RHODE ISLAND', 'RI'],
+      ['NEW JERSEY', 'NJ'],
+      ['PENNSYLVANIA', 'PA'],
+      ['VERMONT', 'VT'],
+      ['NEW HAMPSHIRE', 'NH'],
+      ['MAINE', 'ME'],
+    ] as const
+  ).map(([name, code]) => [localityKey(name), code]),
+);
+
+const ZIP = /^(\d{5})(?:-\d{4})?$/;
 const HOUSE_NUMBER = /^\d+[A-Z]?(?:-\d+[A-Z]?)?$/;
+const ROUTE_NUMBER = /^\d+[A-Z]?$/;
 const UNIT_TOKEN = /^[A-Z0-9]+(?:-[A-Z0-9]+)?$/;
+const STATE_ROUTE = /^([A-Z]{2})-(\d+[A-Z]?)$/;
+
+const DIRECTIONALS = new Set(['N', 'S', 'E', 'W', 'NE', 'NW', 'SE', 'SW']);
+
+let builtInLocalities: ReadonlySet<string> | undefined;
+
+/** Connecticut towns + local villages, in compared form. */
+export function knownLocalities(): ReadonlySet<string> {
+  builtInLocalities ??= new Set([...CT_TOWNS, ...CT_VILLAGES].map(localityKey));
+  return builtInLocalities;
+}
 
 function tokenize(text: string): string[] {
   return (
@@ -208,15 +200,34 @@ function tokenize(text: string): string[] {
   );
 }
 
+function isUnitStart(tokens: readonly string[], i: number): boolean {
+  const token = tokens[i] as string;
+  return (
+    UNIT_DESIGNATORS.has(token) ||
+    STANDALONE_UNITS.has(token) ||
+    (ORDINAL.test(token) && tokens[i + 1] === 'FLOOR')
+  );
+}
+
 /**
- * Pulls "<designator> [NO|#] <unit>" pairs out of `tokens`, returning the units and whatever is
- * left. A designator only takes the next token if that token is not itself a street type.
+ * Pulls units out of `tokens`: "<designator> [NO|#] <unit>", "2ND FLOOR", and part-of-building
+ * words (REAR, BSMT, ...). A designator only takes the next token if that token is not itself
+ * a street type. Returns the units and whatever is left.
  */
 function extractUnits(tokens: readonly string[]): { units: string[]; rest: string[] } {
   const units: string[] = [];
   const rest: string[] = [];
   for (let i = 0; i < tokens.length; i += 1) {
     const token = tokens[i] as string;
+    if (ORDINAL.test(token) && tokens[i + 1] === 'FLOOR') {
+      units.push(token);
+      i += 1;
+      continue;
+    }
+    if (STANDALONE_UNITS.has(token)) {
+      units.push(token);
+      continue;
+    }
     if (UNIT_DESIGNATORS.has(token)) {
       let next = i + 1;
       if (tokens[next] === 'NO' || (token !== '#' && tokens[next] === '#')) next += 1;
@@ -232,16 +243,27 @@ function extractUnits(tokens: readonly string[]): { units: string[]; rest: strin
   return { units, rest };
 }
 
+/** Longest run of words at the end of `words` (up to three) that is a known place. */
+function trailingPlace(words: readonly string[], known: ReadonlySet<string>): number {
+  for (let length = Math.min(3, words.length); length >= 1; length -= 1) {
+    if (known.has(words.slice(-length).join(' '))) return length;
+  }
+  return 0;
+}
+
+interface Locality {
+  readonly town: string | null;
+  readonly zip: string | null;
+  readonly state: string | null;
+  /** Words were left that are not a known place. */
+  readonly unknownWords: boolean;
+}
+
 /**
- * "TRUMBULL CT 06611" -> town TRUMBULL, zip 06611. A trailing ZIP and state (code or name) are
- * peeled off; whatever words remain are the town. Runs only on text after the street, so a
- * state code that is also a suffix ("CT" = Court) is never taken from the street itself.
+ * "TRUMBULL CT 06611" -> town TRUMBULL, zip 06611, state CT. A trailing ZIP and state (code
+ * or name) are peeled off; the remaining words are a town only if they are a known place.
  */
-function parseLocality(tokens: readonly string[]): {
-  town: string | null;
-  zip: string | null;
-  state: string | null;
-} {
+function parseLocality(tokens: readonly string[], known: ReadonlySet<string>): Locality {
   const words = [...tokens];
   let zip: string | null = null;
   let state: string | null = null;
@@ -250,79 +272,164 @@ function parseLocality(tokens: readonly string[]): {
     zip = zipMatch[1] as string;
     words.pop();
   }
-  // Names were aliased by tokenize ("NORTH CAROLINA" -> "N CAROLINA"); compare both forms.
   const lastTwo = words.slice(-2).join(' ');
-  if (words.length >= 2 && (STATE_NAMES.has(lastTwo) || STATE_NAMES.has(unalias(lastTwo)))) {
-    state = unalias(lastTwo);
+  const last = words[words.length - 1] ?? '';
+  if (words.length >= 2 && STATE_NAMES.has(lastTwo)) {
+    state = STATE_NAMES.get(lastTwo) as string;
     words.splice(-2);
-  } else if (
-    words.length >= 1 &&
-    (STATE_CODES.has(words[words.length - 1] as string) ||
-      STATE_NAMES.has(words[words.length - 1] as string))
-  ) {
-    state = words.pop() as string;
+  } else if (STATE_NAMES.has(last)) {
+    state = STATE_NAMES.get(last) as string;
+    words.pop();
+  } else if (STATE_CODES.has(last)) {
+    state = last;
+    words.pop();
   }
-  return { town: words.length > 0 ? words.join(' ') : null, zip, state: stateCode(state) };
+  if (words.length === 0) return { town: null, zip, state, unknownWords: false };
+  const joined = words.join(' ');
+  return known.has(joined)
+    ? { town: joined, zip, state, unknownWords: false }
+    : { town: null, zip, state, unknownWords: true };
 }
 
-const UNALIAS: Readonly<Record<string, string>> = { N: 'NORTH', S: 'SOUTH', W: 'WEST' };
-
-/** "CONNECTICUT" -> "CT" so a code and a name compare equal (only the names we list). */
-const STATE_NAME_CODES: Readonly<Record<string, string>> = {
-  CONNECTICUT: 'CT',
-  'NEW YORK': 'NY',
-  MASSACHUSETTS: 'MA',
-  'RHODE ISLAND': 'RI',
-  'NEW JERSEY': 'NJ',
-};
-
-function stateCode(state: string | null): string | null {
-  return state === null ? null : (STATE_NAME_CODES[state] ?? state);
+/** "RT 111", "US RT 1", "HWY 8": a numbered route right after the house number, or null. */
+function routeAt(tokens: readonly string[]): { route: string[]; length: number } | null {
+  const [a, b, c] = [tokens[1], tokens[2], tokens[3]];
+  const stateRoute = a ? STATE_ROUTE.exec(a) : null;
+  if (stateRoute && STATE_CODES.has(stateRoute[1] as string)) {
+    return { route: ['RT', stateRoute[2] as string], length: 1 };
+  }
+  if ((a === 'RT' || a === 'HWY') && b && ROUTE_NUMBER.test(b)) {
+    return { route: ['RT', b], length: 2 };
+  }
+  if (a === 'US' && (b === 'RT' || b === 'HWY') && c && ROUTE_NUMBER.test(c)) {
+    return { route: ['US', 'RT', c], length: 3 };
+  }
+  if (a && STATE_CODES.has(a) && b === 'RT' && c && ROUTE_NUMBER.test(c)) {
+    return { route: ['RT', c], length: 3 };
+  }
+  return null;
 }
 
-function unalias(words: string): string {
-  return words
-    .split(' ')
-    .map((word) => UNALIAS[word] ?? word)
-    .join(' ');
-}
-
-/** Index of the last token of the street name, or -1 when no street-type suffix is present. */
-function streetEnd(tokens: readonly string[]): number {
-  // Start at 2: the house number and at least one name token come first, so a designator word
-  // used as a street name ("40 Building Rd") is read as the name, not as a unit.
+/**
+ * Where a street with a suffix ends: the last street-type word before any unit — except a
+ * final state code standing right after the street or after a known place ("12 OAK CT CT",
+ * "12 OAK CT TRUMBULL CT"), which is the state, not a second "Court".
+ */
+function suffixedStreetEnd(tokens: readonly string[]): number {
+  let first = -1;
   for (let i = 2; i < tokens.length; i += 1) {
     if (STREET_TYPES.has(tokens[i] as string)) {
-      let end = i;
-      while (end + 1 < tokens.length && STREET_TRAILERS.has(tokens[end + 1] as string)) {
-        end += 1;
-      }
-      return end;
+      first = i;
+      break;
     }
   }
-  return -1;
+  if (first < 0) return -1;
+  let limit = tokens.length;
+  if (ZIP.test(tokens[limit - 1] ?? '')) limit -= 1;
+  const last = tokens[limit - 1] ?? '';
+  if (limit - 1 > first && STATE_CODES.has(last)) {
+    const between = tokens.slice(first + 1, limit - 1);
+    const isPlace = (words: readonly string[]) =>
+      words.length === 0 || trailingPlace(words, knownLocalities()) === words.length;
+    // "N HAVEN" is a place; "N" alone is a trailer ("MAIN ST N CT").
+    if (isPlace(between) || isPlace(between.filter((t) => !STREET_TRAILERS.has(t)))) {
+      limit -= 1;
+    }
+  }
+  let end = first;
+  for (let i = first + 1; i < limit; i += 1) {
+    if (isUnitStart(tokens, i)) break;
+    if (STREET_TYPES.has(tokens[i] as string)) end = i;
+  }
+  return end;
 }
 
-export function normalizeAddress(raw: string): NormalizedAddress | null {
-  const text = raw.normalize('NFKD').replace(/[̀-ͯ]/g, '').toUpperCase();
+/**
+ * Trailers after the street: EXT always; a directional only when it ends the line or a unit
+ * follows ("MAIN ST N", "MAIN ST N APT 4") — never before a word, which is a town ("MAIN ST
+ * NORTH HAVEN").
+ */
+function extendTrailers(tokens: readonly string[], end: number): number {
+  let result = end;
+  for (let i = end + 1; i < tokens.length; i += 1) {
+    const token = tokens[i] as string;
+    if (token === 'EXT') {
+      result = i;
+      continue;
+    }
+    const next = i + 1;
+    const nextIsTail =
+      next >= tokens.length ||
+      isUnitStart(tokens, next) ||
+      ZIP.test(tokens[next] as string) ||
+      (STATE_CODES.has(tokens[next] as string) && next === tokens.length - 1);
+    if (DIRECTIONALS.has(token) && nextIsTail) {
+      result = i;
+      continue;
+    }
+    break;
+  }
+  return result;
+}
+
+/**
+ * @param extraLocalities place names beyond the built-in list (a department's home villages).
+ *   They only decide whether trailing words are a town; they never change the key.
+ */
+export function normalizeAddress(
+  raw: string,
+  extraLocalities: ReadonlySet<string> = new Set(),
+): NormalizedAddress | null {
+  const text = raw
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toUpperCase();
   const [streetPart = '', ...tailParts] = text.split(',');
   const tokens = tokenize(streetPart);
+  const known =
+    extraLocalities.size > 0
+      ? new Set([...knownLocalities(), ...extraLocalities])
+      : knownLocalities();
 
-  if (!HOUSE_NUMBER.test(tokens[0] ?? '')) {
-    return null;
-  }
+  if (!HOUSE_NUMBER.test(tokens[0] ?? '')) return null;
+  if (tokens.some((token, i) => token === 'PO' && tokens[i + 1] === 'BOX')) return null;
 
   let street: string[];
   let remainder: string[];
-  const end = streetEnd(tokens);
-  if (end >= 0) {
+  let ambiguous = false;
+
+  const route = routeAt(tokens);
+  const suffixEnd = route ? -1 : suffixedStreetEnd(tokens);
+  if (route) {
+    const end = extendTrailers(tokens, route.length);
+    street = [tokens[0] as string, ...route.route, ...tokens.slice(route.length + 1, end + 1)];
+    remainder = tokens.slice(end + 1);
+  } else if (suffixEnd >= 0) {
+    const end = extendTrailers(tokens, suffixEnd);
     street = tokens.slice(0, end + 1);
     remainder = tokens.slice(end + 1);
+    // "123 Unit 4 Main St": a designator with a number inside the street name.
+    ambiguous = street.some(
+      (token, i) => i > 0 && UNIT_DESIGNATORS.has(token) && /\d/.test(street[i + 1] ?? ''),
+    );
   } else {
-    // No recognisable suffix ("900 Route 25"): only an explicit "#" can start a unit.
-    const hash = tokens.indexOf('#', 1);
-    street = hash >= 0 ? tokens.slice(0, hash) : tokens;
-    remainder = hash >= 0 ? tokens.slice(hash) : [];
+    // No suffix ("123 Broadway"): where the street ends is a guess. Peel a trailing ZIP, state
+    // and known place, stop at the first unit; the parse is ambiguous either way.
+    ambiguous = true;
+    let limit = tokens.length;
+    if (ZIP.test(tokens[limit - 1] ?? '')) limit -= 1;
+    if (limit > 2 && STATE_CODES.has(tokens[limit - 1] as string)) limit -= 1;
+    const place = trailingPlace(tokens.slice(2, limit), known);
+    limit -= place;
+    let stop = limit;
+    for (let i = 2; i < limit; i += 1) {
+      if (isUnitStart(tokens, i)) {
+        stop = i;
+        break;
+      }
+    }
+    street = tokens.slice(0, stop);
+    remainder = tokens.slice(stop);
   }
 
   if (
@@ -330,7 +437,7 @@ export function normalizeAddress(raw: string): NormalizedAddress | null {
     !street.slice(1).some((token) => /[A-Z]/.test(token)) ||
     // "123 Apt 4": with no suffix to anchor it, a designator right after the number means
     // there is no street name to key on.
-    (end < 0 && UNIT_DESIGNATORS.has(street[1] as string))
+    (!route && suffixEnd < 0 && UNIT_DESIGNATORS.has(street[1] as string))
   ) {
     return null;
   }
@@ -339,21 +446,25 @@ export function normalizeAddress(raw: string): NormalizedAddress | null {
   const fromTail = extractUnits(tokenize(tailParts.join(' ')));
   const units = [...fromRemainder.units, ...fromTail.units];
 
-  // Locality is whatever follows the street: on a comma-less line ("123 MAIN ST TRUMBULL CT
-  // 06611") and/or after the first comma ("123 Main St, Trumbull, CT"). Extra words make the
-  // town longer, never shorter, so they can only cause a (safe) mismatch. Without a suffix the
-  // street's end is unknown, so those words stay in the key instead.
-  const localityTokens = [...(end >= 0 ? fromRemainder.rest : []), ...fromTail.rest];
-  const { town, zip, state } = parseLocality(localityTokens);
-  const key = end >= 0 ? street : [...street, ...fromRemainder.rest];
+  const lineLocality = parseLocality(fromRemainder.rest, known);
+  const tailLocality = parseLocality(fromTail.rest, known);
+  const pick = <K extends 'town' | 'zip' | 'state'>(field: K): string | null => {
+    const a = lineLocality[field];
+    const b = tailLocality[field];
+    if (a !== null && b !== null && a !== b) ambiguous = true;
+    return b ?? a;
+  };
+  const town = pick('town');
+  const zip = pick('zip');
+  const state = pick('state');
+  if (lineLocality.unknownWords || tailLocality.unknownWords) ambiguous = true;
 
   return {
-    key: key.join(' '),
+    key: street.join(' '),
     unit: units.length > 0 ? units.join(' ') : null,
     town,
     zip,
     state,
-    // A town read off a comma-less line is a guess about where the street ended.
-    ambiguous: end >= 0 && fromRemainder.rest.length > 0 && town !== null,
+    ambiguous,
   };
 }

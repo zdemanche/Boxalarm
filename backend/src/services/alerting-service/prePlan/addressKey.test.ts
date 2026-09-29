@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { normalizeAddress } from './addressKey.js';
+import { readFileSync } from 'node:fs';
+import { knownLocalities, normalizeAddress } from './addressKey.js';
 
 describe('normalizeAddress', () => {
   it.each([
@@ -62,10 +63,11 @@ describe('normalizeAddress', () => {
     expect(normalizeAddress('1 Ocean Dr, Miami, FL 33139')).toEqual({
       key: '1 OCEAN DR',
       unit: null,
-      town: 'MIAMI',
+      // Not a known place: never guessed to be a town, and the parse is flagged ambiguous.
+      town: null,
       zip: '33139',
       state: 'FL',
-      ambiguous: false,
+      ambiguous: true,
     });
     expect(normalizeAddress('5 Elm St, Trumbull, CT 06611')).toEqual({
       key: '5 ELM ST',
@@ -122,10 +124,10 @@ describe('normalizeAddress', () => {
 
   it('keeps a hyphenated house-number range but splits other hyphens', () => {
     expect(normalizeAddress('12-14 Main St')?.key).toBe('12-14 MAIN ST');
-    // "rear" lands in the locality, where it can only cause a safe mismatch.
+    // "rear" is a part-of-building unit.
     expect(normalizeAddress('12 Main St - rear')).toMatchObject({
       key: '12 MAIN ST',
-      town: 'REAR',
+      unit: 'REAR',
     });
   });
 
@@ -199,5 +201,135 @@ describe('normalizeAddress', () => {
   it('keeps 12 and 12A (and 1 and 11) apart', () => {
     expect(normalizeAddress('12 Main St')?.key).not.toBe(normalizeAddress('12A Main St')?.key);
     expect(normalizeAddress('1 Main St')?.key).not.toBe(normalizeAddress('11 Main St')?.key);
+  });
+
+  describe('round-2 B: the street runs to its last suffix; only known places become towns', () => {
+    it.each([
+      ['123 Mount St Joseph Rd', '123 MT ST JOSEPH RD'],
+      ['123 Fox Run Rd', '123 FOX RUN RD'],
+      ['123 Mill Run Rd', '123 MILL RUN RD'],
+      ['123 Village Sq Dr', '123 VILLAGE SQ DR'],
+      ['2 Lakeview Ter Way', '2 LAKEVIEW TER WAY'],
+      ['123 Saint Johns Pl', '123 ST JOHNS PL'],
+      ['123 Old Town Rd Ext N', '123 OLD TOWN RD EXT N'],
+    ])('%s -> %s, no "town" made of a suffix', (raw, key) => {
+      expect(normalizeAddress(raw)).toMatchObject({ key, town: null, ambiguous: false });
+    });
+
+    it('a comma-less known town is read as the town (and the state is not a second Court)', () => {
+      expect(normalizeAddress('12 Main St North Haven CT')).toMatchObject({
+        key: '12 MAIN ST',
+        town: 'N HAVEN',
+        state: 'CT',
+        ambiguous: false,
+      });
+      expect(normalizeAddress('12 Main St West Haven')).toMatchObject({
+        key: '12 MAIN ST',
+        town: 'W HAVEN',
+      });
+      expect(normalizeAddress('12 Oak Ct Trumbull Ct')).toMatchObject({
+        key: '12 OAK CT',
+        town: 'TRUMBULL',
+        state: 'CT',
+      });
+      expect(normalizeAddress('12 MAIN ST TRUMBULL CT 06611')).toMatchObject({
+        key: '12 MAIN ST',
+        town: 'TRUMBULL',
+        ambiguous: false,
+      });
+    });
+
+    it('a directional is folded into the street only when nothing but a unit follows', () => {
+      expect(normalizeAddress('12 Main St W')).toMatchObject({ key: '12 MAIN ST W', town: null });
+      expect(normalizeAddress('123 Main St N Apt 4')).toMatchObject({
+        key: '123 MAIN ST N',
+        unit: '4',
+      });
+    });
+
+    it('trailing words that are not a known place are never a town: the parse is ambiguous', () => {
+      for (const raw of ['123 Kings Hwy Cutoff', '12 Main St Fl 2', '123 Main St Rear Bldg']) {
+        expect(normalizeAddress(raw), raw).toMatchObject({ town: null, ambiguous: true });
+      }
+      expect(normalizeAddress('123 Kings Hwy Cutoff')?.key).toBe('123 KINGS HWY');
+    });
+
+    it('a department home village is a place only when passed in, and never changes the key', () => {
+      expect(normalizeAddress('123 Main St Plattsville')).toMatchObject({ ambiguous: true });
+      expect(normalizeAddress('123 Main St Plattsville', new Set(['PLATTSVILLE']))).toMatchObject({
+        key: '123 MAIN ST',
+        town: 'PLATTSVILLE',
+        ambiguous: false,
+      });
+    });
+
+    it.each([
+      ['123 Route 111', '123 RT 111'],
+      ['123 Rte 111', '123 RT 111'],
+      ['123 Rt. 111', '123 RT 111'],
+      ['123 CT-111', '123 RT 111'],
+      ['123 CT Route 111', '123 RT 111'],
+      ['123 US Hwy 1', '123 US RT 1'],
+      ['123 US Highway 1', '123 US RT 1'],
+    ])('keeps the route number in the key: %s -> %s', (raw, key) => {
+      expect(normalizeAddress(raw)).toMatchObject({ key, town: null, ambiguous: false });
+    });
+
+    it('a route with a comma-less town keeps town and state out of the key', () => {
+      expect(normalizeAddress('123 Route 111 Monroe CT')).toMatchObject({
+        key: '123 RT 111',
+        town: 'MONROE',
+        state: 'CT',
+      });
+    });
+
+    it('a street with no suffix is always ambiguous (its end is a guess)', () => {
+      expect(normalizeAddress('123 Broadway')).toMatchObject({
+        key: '123 BROADWAY',
+        ambiguous: true,
+      });
+      expect(normalizeAddress('123 Broadway Apt 4')).toMatchObject({
+        key: '123 BROADWAY',
+        unit: '4',
+      });
+    });
+
+    it('part-of-building words are units, and "2nd Floor" is a floor unit', () => {
+      expect(normalizeAddress('123 Main St Rear')).toMatchObject({
+        unit: 'REAR',
+        ambiguous: false,
+      });
+      expect(normalizeAddress('12 Main St 2nd Floor Rear')).toMatchObject({ unit: '2ND REAR' });
+    });
+
+    it('PO boxes are not addresses', () => {
+      expect(normalizeAddress('PO Box 123')).toBeNull();
+      expect(normalizeAddress('123 PO Box')).toBeNull();
+    });
+  });
+
+  describe("the round-2 reviewer's adversarial corpus", () => {
+    const corpus = readFileSync(new URL('./__fixtures__/addressCases.txt', import.meta.url), 'utf8')
+      .split('\n')
+      .filter((line) => line.length > 0);
+
+    it('is loaded', () => {
+      expect(corpus.length).toBeGreaterThan(130);
+    });
+
+    it.each(corpus)(
+      '%j parses deterministically, never keys a "#", never guesses an unknown town',
+      (raw) => {
+        const once = normalizeAddress(raw);
+        expect(normalizeAddress(raw)).toEqual(once);
+        if (once) {
+          expect(once.key).not.toContain('#');
+          expect(once.key.split(' ')[0]).toMatch(/^\d/);
+          if (once.town !== null) {
+            expect(knownLocalities().has(once.town), once.town).toBe(true);
+          }
+        }
+      },
+    );
   });
 });

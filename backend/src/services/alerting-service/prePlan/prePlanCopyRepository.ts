@@ -209,7 +209,8 @@ export async function findPrePlanByAddress(
   dispatchPoint: GeoPoint | undefined,
   home: HomeLocality,
 ): Promise<PrePlanMatch | undefined> {
-  const normalized = normalizeAddress(address);
+  // Home village names count as places when reading trailing words (never for the key).
+  const normalized = normalizeAddress(address, home.towns);
   if (!normalized) {
     return undefined;
   }
@@ -231,7 +232,7 @@ export async function findPrePlanByAddress(
     .filter(isPrePlanCopy)
     .filter((candidate) => closeEnough(dispatchPoint, candidate))
     .flatMap((candidate) => {
-      const parsed = candidate.address ? normalizeAddress(candidate.address) : null;
+      const parsed = candidate.address ? normalizeAddress(candidate.address, home.towns) : null;
       if (!parsed || parsed.key !== normalized.key) {
         // Indexed under a key the current rules no longer give its address (written by an
         // older normalizer; the replay re-keys it): under today's rules it is another street.

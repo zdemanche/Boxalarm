@@ -227,6 +227,8 @@ describe('findPrePlanByAddress — locality against the home set (round-2 A)', (
     for (const address of [
       '123 Main St',
       '123 Main St, Trumbull, CT',
+      '123 MAIN ST TRUMBULL CT 06611',
+      '123 Main St Nichols',
       '123 Main St, Nichols, CT',
       '123 Main St, Long Hill',
       '123 Main St, CT 06611',
@@ -286,6 +288,90 @@ describe('findPrePlanByAddress — locality against the home set (round-2 A)', (
   it('never trusts a stored unit written by older rules — the unit is re-read from the address', async () => {
     const stale = { ...prePlanCopy('OCC-LOT', '100 Lot Rd'), addressUnit: 'RD' };
     expect(await byAddress([stale], '100 Lot Rd')).toMatchObject({ matchType: 'ADDRESS' });
+  });
+});
+
+describe("no unflagged false match (round-2 B: the reviewer's examples)", () => {
+  const UNFLAGGED = new Set(['ADDRESS', 'ADDRESS_BUILDING']);
+  // [pre-plan on file, dispatch] — different places that older rules gave one key.
+  const pairs: Array<[string, string]> = [
+    ['123 Mount St', '123 Mount St Joseph Rd'],
+    ['123 Mount St Joseph Rd', '123 Mount St'],
+    ['123 Mill Run', '123 Mill Run Rd'],
+    ['123 Fox Run', '123 Fox Run Rd'],
+    ['123 Kings Hwy', '123 Kings Hwy Cutoff'],
+    ['123 Kings Hwy Cutoff', '123 Kings Hwy'],
+    ['123 Village Sq', '123 Village Sq Dr'],
+    ['2 Lakeview Ter', '2 Lakeview Ter Way'],
+    ['12 Main St N', '12 Main St North Haven CT'],
+    ['12 Main St W', '12 Main St West Haven'],
+    ['12 Main St', '12 Main St North Haven CT'],
+    ['12 Main St', '12 Main St West Haven'],
+    ['12 Main St', '12 Main St New Haven CT 06510'],
+    ['123 Main St', '123 Main St, Bridgeport, CT'],
+    ['123 Main St', '123 Main St Stratford'],
+    ['123 US Hwy 1', '123 US Hwy 11'],
+    ['123 Route 111', '123 Route 25'],
+    ['12 Main St', '12A Main St'],
+    ['100 Lot Rd', '100 Space Ln'],
+    ['123 Main St', '123 Main St, Springfield, MA'],
+  ];
+
+  it.each(pairs)(
+    'pre-plan %j is never an unflagged match for dispatch %j',
+    async (onFile, dispatch) => {
+      // Index the copy under every key either address could produce, so only the matcher decides.
+      const copy = prePlanCopy('OCC-ON-FILE', onFile);
+      const dispatchKey = normalizeAddress(dispatch)?.key;
+      const items = [
+        copy,
+        ...(dispatchKey
+          ? [{ ...copy, ...prePlanAddressIndexKeys(DEPT_ID, dispatchKey, 'OCC-ON-FILE') }]
+          : []),
+      ];
+      const match = await findPrePlanByAddress(
+        fakeIndex(items).client,
+        TABLE,
+        DEPT_ID,
+        dispatch,
+        undefined,
+        HOME,
+      );
+      expect(match === undefined || !UNFLAGGED.has(match.matchType), JSON.stringify(match)).toBe(
+        true,
+      );
+    },
+  );
+
+  it('flags (rather than drops) a same-key match whose parse involved a guess', async () => {
+    const match = await findPrePlanByAddress(
+      fakeIndex([prePlanCopy('OCC-K', '123 Kings Hwy')]).client,
+      TABLE,
+      DEPT_ID,
+      '123 Kings Hwy Cutoff',
+      undefined,
+      HOME,
+    );
+    expect(match).toMatchObject({ matchType: 'ADDRESS_UNVERIFIED' });
+  });
+
+  it('still verifies the same place written differently', async () => {
+    for (const [onFile, dispatch] of [
+      ['123 Mount St Joseph Rd', '123 MOUNT SAINT JOSEPH ROAD'],
+      ['123 Route 111', '123 CT-111'],
+      ['12 Main St', '12 MAIN ST TRUMBULL CT 06611'],
+      ['12 Main St', '12 Main Street Rear'],
+    ] as const) {
+      const match = await findPrePlanByAddress(
+        fakeIndex([prePlanCopy('OCC-SAME', onFile)]).client,
+        TABLE,
+        DEPT_ID,
+        dispatch,
+        undefined,
+        HOME,
+      );
+      expect(match?.matchType, `${onFile} vs ${dispatch}`).toMatch(/^ADDRESS(_BUILDING)?$/);
+    }
   });
 });
 

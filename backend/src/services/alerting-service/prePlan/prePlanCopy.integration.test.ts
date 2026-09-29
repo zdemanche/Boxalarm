@@ -333,6 +333,13 @@ describe('pre-plan + hydrant copies -> dispatch detail (real DynamoDB with the a
       expect((await lookup('5 Main St, Bridgeport, CT')).prePlan).toBeNull();
       // Round-2 A: a town-less (home) pre-plan never matches a dispatch in another town.
       expect((await lookup('12 Oak Ln, Bridgeport, CT')).prePlan).toBeNull();
+      // Round-2 B: a comma-less known town is the town; a later suffix is part of the street.
+      expect((await lookup('5 MAIN ST TRUMBULL CT 06611')).prePlan).toMatchObject({
+        matchType: 'ADDRESS',
+        hazards: ['HAZARD-OCC-TRUMBULL'],
+      });
+      await plan('OCC-MOUNT', '7 Mount St');
+      expect((await lookup('7 Mount St Joseph Rd')).prePlan).toBeNull();
       expect((await lookup('5 Main Street, Trumbull, CT 06611')).prePlan).toMatchObject({
         matchType: 'ADDRESS',
         hazards: ['HAZARD-OCC-TRUMBULL'],
