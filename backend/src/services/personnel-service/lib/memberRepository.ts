@@ -83,7 +83,7 @@ function toMember(item: Record<string, unknown>): Member {
  *
  * The member row, its audit row and a `personnel.member.updated` outbox entry are one
  * transaction. The event carries `phone` and `roles`, which the alerting plane projects into
- * the member's eligibility snapshot (alerting-service eligibility/memberUpdatedHandler.ts):
+ * the member's eligibility snapshot (the alerting plane's member-updated consumer):
  * `phone` becomes the SMS and VOICE contact entries every SMS page and voice escalation
  * resolves its target from. Without it a new member had no snapshot until they registered a
  * push token, and then only a push entry - no SMS, no voice (design review C2).
