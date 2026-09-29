@@ -146,6 +146,7 @@ describe('updateHydrantInner (business logic, AC2/AC3)', () => {
   });
 
   it('fails closed with 503 when DynamoDB is unavailable (never a defaulted success)', async () => {
+    ddbMock.on(GetCommand).resolves({ Item: { hydrantId: 'HYD-0231', updatedAt: 1 } });
     ddbMock.on(TransactWriteCommand).rejects(new Error('simulated outage'));
     const body = JSON.stringify({ status: 'OUT_OF_SERVICE' });
     const result = (await updateHydrantInner(buildEvent({ body }), validPrincipal)) as {
