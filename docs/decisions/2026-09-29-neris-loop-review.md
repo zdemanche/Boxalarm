@@ -107,6 +107,8 @@ Known items. These are not another review round:
 - The R6 matching gaps listed above.
 - The fake server answers `GET` for records it never created.
 - A re-created record whose old id NERIS returns to listing after the POST is left as a duplicate in NERIS. The nightly reconciliation reports it as `UNKNOWN_IN_NERIS` new drift.
+- (Round 2d, K1) If the PUT of an ADOPT re-create fails, the old id is not kept, and later attempts no longer look it up. After a false "missing", an edited incident number or `call_create`, and a refused PUT, a retry could POST a second record. Fix when touched: keep `previousNerisIncidentId` in the lookup while the report has no NERIS id.
+- (Round 2d, K2) The adopt lookup accepts any record found by id, including one NERIS marks deleted. Skip DELETED candidates once NERIS's behaviour is confirmed.
 
 ## Still open
 
@@ -114,7 +116,9 @@ Known items. These are not another review round:
   - 201/422 bodies;
   - the duplicate-create response. The code now adopts on any 409 or 422 once the record can be found by id;
   - approval-status behaviour;
-  - the entity/station/unit responses.
+  - the entity/station/unit responses;
+  - which statuses the incident list returns;
+  - whether a deleted record can still be read by id.
 
   Paths, auth and payload shapes are checked against both live OpenAPI documents only.
 - **Minor 14.** The scheduled NERIS jobs sweep `NERIS_SCANNER_DEPT_ID` (a comma list, from Pulumi `deptId`). This matches the other scanners. A second department means a config change, not a code change.
