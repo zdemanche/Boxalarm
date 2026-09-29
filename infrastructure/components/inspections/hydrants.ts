@@ -11,6 +11,7 @@ export class Hydrants extends pulumi.ComponentResource {
   public readonly listLambda: ServiceLambda;
   public readonly createLambda: ServiceLambda;
   public readonly updateLambda: ServiceLambda;
+  public readonly archiveLambda: ServiceLambda;
 
   constructor(name: string, args: InspectionsBaseArgs, opts?: pulumi.ComponentResourceOptions) {
     requireEnv("Hydrants", args.env);
@@ -62,7 +63,25 @@ export class Hydrants extends pulumi.ComponentResource {
       ],
     });
 
+    // archiveHydrant (archive/archiveRepository.ts): GetItem, then one transaction of Update
+    // (archivedAt, map/due keys removed) + Update (LIST row off GSI3) + Put (audit, archive outbox row).
+    this.archiveLambda = inspectionsRoute(this, name, args, {
+      fn: "hydrants-archive",
+      routeKey: "POST /api/v1/inspections/hydrants/{hydrantId}/archive",
+      environment,
+      cedar: true,
+      mutatesTable: true,
+      statements: ({ tableArn }) => [
+        dynamoGrant(
+          "HydrantArchive",
+          ["dynamodb:GetItem", "dynamodb:UpdateItem", "dynamodb:PutItem"],
+          [tableArn],
+        ),
+      ],
+    });
+
     this.registerOutputs({
+      archiveLambda: this.archiveLambda,
       listLambda: this.listLambda,
       createLambda: this.createLambda,
       updateLambda: this.updateLambda,

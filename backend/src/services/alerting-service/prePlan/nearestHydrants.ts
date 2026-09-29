@@ -1,20 +1,25 @@
-export interface GeoPoint {
-  readonly latitude: number;
-  readonly longitude: number;
-}
+import { haversineMeters, isGeoPoint, type GeoPoint } from './geo.js';
 
-export interface NearestHydrant {
-  readonly hydrantId: string;
-  readonly status?: string;
-  readonly latitude?: number;
-  readonly longitude?: number;
-  readonly size?: string;
-  readonly flowRatingGpm?: number;
+export const MAX_NEAREST_HYDRANTS = 5;
+
+/** NFPA 291 marking class, from rated flow at 20 psi residual. */
+export type FlowClass = 'AA' | 'A' | 'B' | 'C';
+
+export function flowClassFor(flowRatingGpm: number | undefined): FlowClass | undefined {
+  if (typeof flowRatingGpm !== 'number' || !Number.isFinite(flowRatingGpm) || flowRatingGpm < 0) {
+    return undefined;
+  }
+  if (flowRatingGpm >= 1500) return 'AA';
+  if (flowRatingGpm >= 1000) return 'A';
+  if (flowRatingGpm >= 500) return 'B';
+  return 'C';
 }
 
 export interface HydrantUpdatePayload {
   readonly hydrantId: string;
   readonly deptId: string;
+  /** The hydrant was archived: tombstone its copy (inspections archive/archiveRepository.ts). */
+  readonly archived?: true;
   readonly status?: string;
   readonly latitude?: number;
   readonly longitude?: number;
@@ -33,87 +38,94 @@ export function parseHydrantUpdatePayload(payload: unknown): HydrantUpdatePayloa
     throw new Error('inspections.hydrant.updated payload is missing deptId');
   }
   const status = typeof raw?.status === 'string' ? raw.status : undefined;
-  const latitude = typeof raw?.latitude === 'number' ? raw.latitude : undefined;
-  const longitude = typeof raw?.longitude === 'number' ? raw.longitude : undefined;
+  const location = { latitude: raw?.latitude, longitude: raw?.longitude };
   const size = typeof raw?.size === 'string' ? raw.size : undefined;
   const flowRatingGpm = typeof raw?.flowRatingGpm === 'number' ? raw.flowRatingGpm : undefined;
   return {
     hydrantId,
     deptId,
+    ...(raw?.archived === true ? { archived: true as const } : {}),
     ...(status !== undefined ? { status } : {}),
-    ...(latitude !== undefined ? { latitude } : {}),
-    ...(longitude !== undefined ? { longitude } : {}),
+    // Both or neither: a half-located hydrant cannot be placed on the geo index.
+    ...(isGeoPoint(location) ? { latitude: location.latitude, longitude: location.longitude } : {}),
     ...(size !== undefined ? { size } : {}),
     ...(flowRatingGpm !== undefined ? { flowRatingGpm } : {}),
   };
 }
 
-const EARTH_RADIUS_METERS = 6_371_000;
-
-function toRadians(degrees: number): number {
-  return (degrees * Math.PI) / 180;
+/** A HYDRANT_COPY item as the geo index returns it. */
+export interface HydrantCopy {
+  readonly hydrantId: string;
+  readonly archivedAt?: number;
+  readonly latitude?: number;
+  readonly longitude?: number;
+  readonly status?: string;
+  readonly size?: string;
+  readonly flowRatingGpm?: number;
 }
 
-function haversineMeters(a: GeoPoint, b: GeoPoint): number {
-  const dLat = toRadians(b.latitude - a.latitude);
-  const dLon = toRadians(b.longitude - a.longitude);
-  const lat1 = toRadians(a.latitude);
-  const lat2 = toRadians(b.latitude);
-  const h = Math.sin(dLat / 2) ** 2 + Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLon / 2) ** 2;
-  return 2 * EARTH_RADIUS_METERS * Math.asin(Math.sqrt(h));
+/** One entry of the dispatch detail's prePlan.nearestHydrants. */
+export interface NearestHydrant {
+  readonly hydrantId: string;
+  readonly status?: string;
+  readonly size?: string;
+  readonly flowRatingGpm?: number;
+  readonly flowClass?: FlowClass;
+  readonly latitude: number;
+  readonly longitude: number;
+  readonly distanceMeters: number;
 }
 
-function hasCoordinates(point: Pick<NearestHydrant, 'latitude' | 'longitude'>): point is GeoPoint {
-  return typeof point.latitude === 'number' && typeof point.longitude === 'number';
+export function isOutOfService(hydrant: { readonly status?: string }): boolean {
+  return hydrant.status === 'OUT_OF_SERVICE';
 }
 
-// ponytail: referenceLocation is always null on the real event path today — PRE_PLAN_COPY
-// carries no occupancy lat/long (Data Model §3.1) and the isolation boundary forbids reading
-// it from the LOB plane's occupancy config — so distance-based insertion is exercised only by
-// direct unit tests until a producer-side fix supplies a reference point. Refresh-in-place and
-// OUT_OF_SERVICE pruning remain fully functional without it.
-export function resolveNearestHydrants(
-  existing: readonly NearestHydrant[],
-  update: HydrantUpdatePayload,
-  referenceLocation: GeoPoint | null,
-  maxResults = 5,
+/**
+ * The closest `maxResults` usable hydrants to `reference`, nearest first — plus every
+ * OUT_OF_SERVICE hydrant nearer than the last usable one listed (or, with no usable hydrant
+ * at all, the nearest `maxResults` of them), marked by its status and not counted toward the
+ * usable ones. A crew must be told the hydrant in front of the building is bagged, not left
+ * to lay in from it by habit. Copies with no location or archived are skipped; ties break on
+ * hydrantId so the list is stable between refreshes.
+ */
+export function rankNearestHydrants(
+  reference: GeoPoint,
+  candidates: readonly HydrantCopy[],
+  maxResults = MAX_NEAREST_HYDRANTS,
 ): readonly NearestHydrant[] {
-  const isOutOfService = update.status === 'OUT_OF_SERVICE';
-  const withoutUpdated = existing.filter((hydrant) => hydrant.hydrantId !== update.hydrantId);
-
-  if (isOutOfService) {
-    return withoutUpdated;
+  const byId = new Map<string, { readonly hydrant: NearestHydrant; readonly exact: number }>();
+  for (const hydrant of candidates) {
+    if (hydrant.archivedAt !== undefined) continue;
+    const location = { latitude: hydrant.latitude, longitude: hydrant.longitude };
+    if (!isGeoPoint(location) || byId.has(hydrant.hydrantId)) continue;
+    const flowClass = flowClassFor(hydrant.flowRatingGpm);
+    const exact = haversineMeters(reference, location);
+    byId.set(hydrant.hydrantId, {
+      exact,
+      hydrant: {
+        hydrantId: hydrant.hydrantId,
+        ...(hydrant.status !== undefined ? { status: hydrant.status } : {}),
+        ...(hydrant.size !== undefined ? { size: hydrant.size } : {}),
+        ...(hydrant.flowRatingGpm !== undefined ? { flowRatingGpm: hydrant.flowRatingGpm } : {}),
+        ...(flowClass !== undefined ? { flowClass } : {}),
+        latitude: location.latitude,
+        longitude: location.longitude,
+        distanceMeters: Math.round(exact),
+      },
+    });
   }
-
-  const updatedEntry: NearestHydrant = {
-    hydrantId: update.hydrantId,
-    ...(update.status !== undefined ? { status: update.status } : {}),
-    ...(update.latitude !== undefined ? { latitude: update.latitude } : {}),
-    ...(update.longitude !== undefined ? { longitude: update.longitude } : {}),
-    ...(update.size !== undefined ? { size: update.size } : {}),
-    ...(update.flowRatingGpm !== undefined ? { flowRatingGpm: update.flowRatingGpm } : {}),
-  };
-
-  const wasReferenced = existing.some((hydrant) => hydrant.hydrantId === update.hydrantId);
-  if (wasReferenced) {
-    return existing.map((hydrant) =>
-      hydrant.hydrantId === update.hydrantId ? { ...hydrant, ...updatedEntry } : hydrant,
-    );
-  }
-
-  if (referenceLocation === null || !hasCoordinates(updatedEntry)) {
-    return existing;
-  }
-
-  const ranked = [...withoutUpdated, updatedEntry]
-    .map((hydrant) => ({
-      hydrant,
-      distance: hasCoordinates(hydrant)
-        ? haversineMeters(referenceLocation, hydrant)
-        : Number.POSITIVE_INFINITY,
-    }))
-    .sort((a, b) => a.distance - b.distance)
-    .slice(0, maxResults);
-
-  return ranked.map((entry) => entry.hydrant);
+  const ordered = [...byId.values()].sort(
+    (a, b) => a.exact - b.exact || a.hydrant.hydrantId.localeCompare(b.hydrant.hydrantId),
+  );
+  const usable = ordered.filter((entry) => !isOutOfService(entry.hydrant)).slice(0, maxResults);
+  const outOfService = ordered.filter((entry) => isOutOfService(entry.hydrant));
+  const cutoff =
+    usable.length > 0 ? (usable[usable.length - 1] as (typeof usable)[number]).exact : undefined;
+  const flagged =
+    cutoff === undefined
+      ? outOfService.slice(0, maxResults)
+      : outOfService.filter((entry) => entry.exact < cutoff);
+  return [...usable, ...flagged]
+    .sort((a, b) => a.exact - b.exact || a.hydrant.hydrantId.localeCompare(b.hydrant.hydrantId))
+    .map((entry) => entry.hydrant);
 }

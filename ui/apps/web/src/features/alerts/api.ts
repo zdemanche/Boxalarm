@@ -12,6 +12,7 @@ import type {
   RidingBoard,
   RosterEntry,
   TriggerMutualAidResult,
+  HomeLocality,
 } from './types';
 
 export async function getDispatch(
@@ -98,6 +99,15 @@ export async function getDiagnostics(
 export async function getCanaryStatus(tokens: AuthTokenSource): Promise<CanaryStatus> {
   const response = await apiRequest('alerting/canary/status', tokens);
   return (await response.json()) as CanaryStatus;
+}
+
+/**
+ * The department's home towns/villages for the manual-entry locality choice. A failure is not
+ * fatal to the form: it then offers only "Other town".
+ */
+export async function getHomeLocality(tokens: AuthTokenSource): Promise<HomeLocality> {
+  const response = await apiRequest('alerting/home-locality', tokens);
+  return (await response.json()) as HomeLocality;
 }
 
 export async function submitManualDispatch(

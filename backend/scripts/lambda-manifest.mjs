@@ -379,6 +379,24 @@ export const LAMBDA_ENTRIES = [
     entry: 'src/services/alerting-service/eligibility/memberUpdatedHandler.ts',
   },
   {
+    // GET /api/v1/alerting/home-locality: manual-entry locality choices.
+    service: 'alerting-service',
+    function: 'home-locality',
+    entry: 'src/services/alerting-service/prePlan/homeLocalityHandler.ts',
+  },
+  {
+    // inspections.preplan.updated -> PRE_PLAN_COPY (dispatch-detail pre-plan context).
+    service: 'alerting-service',
+    function: 'preplan-copy-consumer',
+    entry: 'src/services/alerting-service/prePlan/prePlanCopyHandler.ts',
+  },
+  {
+    // inspections.hydrant.updated -> HYDRANT_COPY (dispatch-detail nearest hydrants).
+    service: 'alerting-service',
+    function: 'hydrant-copy-consumer',
+    entry: 'src/services/alerting-service/prePlan/hydrantCopyHandler.ts',
+  },
+  {
     service: 'alerting-service',
     function: 'canary',
     entry: 'src/services/alerting-service/canary/handler.ts',
@@ -708,6 +726,23 @@ export const LAMBDA_ENTRIES = [
     service: 'inspections-service',
     function: 'hydrants-update',
     entry: 'src/services/inspections-service/hydrant/updateHydrantHandler.ts',
+  },
+  {
+    service: 'inspections-service',
+    function: 'hydrants-archive',
+    entry: 'src/services/inspections-service/archive/archiveHydrantHandler.ts',
+  },
+  {
+    service: 'inspections-service',
+    function: 'occupancies-archive',
+    entry: 'src/services/inspections-service/archive/archiveOccupancyHandler.ts',
+  },
+  {
+    // Not a route: invoked by hand after deploy and after an alerting address-normalizer
+    // change (docs/runbooks/alert-context-replay.md).
+    service: 'inspections-service',
+    function: 'alert-context-replay',
+    entry: 'src/services/inspections-service/replay/alertContextReplayHandler.ts',
   },
   {
     service: 'inspections-service',

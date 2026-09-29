@@ -2,6 +2,20 @@ import type { VerifiedDeptId } from '@boxalarm/dept-scope';
 
 export type SourceSystem = 'CAD' | 'MANUAL' | 'SELF_TEST';
 
+/**
+ * Where the incident is, as the dispatcher chose it: one of the department's home towns or
+ * villages (HOME), or another town typed in (OTHER). Enrichment only — the pre-plan lookup
+ * uses it to confirm a street address is in this department's area; fan-out never reads it.
+ * Only `town` is matched on; `choice` is stored for the record (which list the dispatcher
+ * picked from) and is not read by the matcher.
+ */
+export interface DispatchLocality {
+  readonly town: string;
+  readonly choice: 'HOME' | 'OTHER';
+}
+
+export const MAX_LOCALITY_TOWN_LENGTH = 80;
+
 export interface DispatchReceived {
   readonly sourceSystem: SourceSystem;
   readonly incidentType: string;
@@ -10,6 +24,8 @@ export interface DispatchReceived {
   readonly unitsRequested: readonly string[];
   readonly narrative: string;
   readonly externalDispatchId: string;
+  /** Absent from callers that predate it (accepted; the pre-plan is then never verified). */
+  readonly locality?: DispatchLocality;
 }
 
 export interface FieldError {
@@ -18,7 +34,12 @@ export interface FieldError {
 }
 
 export type NormalizeResult =
-  | { readonly ok: true; readonly value: DispatchReceived }
+  | {
+      readonly ok: true;
+      readonly value: DispatchReceived;
+      /** A malformed `locality` that was dropped rather than rejected (round-4 m1). */
+      readonly droppedLocality?: FieldError;
+    }
   | { readonly ok: false; readonly errors: readonly FieldError[] };
 
 export interface DispatchIngressPort {
@@ -63,6 +84,43 @@ function optionalStringArray(
   return value;
 }
 
+/**
+ * The optional `locality` field. Absent is accepted (older callers). Present but malformed is
+ * DROPPED, never a 400: locality is enrichment, and enrichment must never gate or delay a page
+ * (round-4 m1). The dispatch is then treated as naming no locality, so any pre-plan shown for
+ * it is flagged VERIFY ADDRESS. The caller logs and counts the drop.
+ */
+function optionalLocality(body: Record<string, unknown>): {
+  readonly locality?: DispatchLocality;
+  readonly dropped?: FieldError;
+} {
+  const value = body.locality;
+  if (value === undefined) {
+    return {};
+  }
+  if (!isRecord(value)) {
+    return {
+      dropped: { field: 'locality', message: 'locality was not an object { town, choice }' },
+    };
+  }
+  const town = typeof value.town === 'string' ? value.town.trim() : '';
+  const hasControlCharacter = [...town].some((character) => character.charCodeAt(0) < 0x20);
+  if (town.length === 0 || town.length > MAX_LOCALITY_TOWN_LENGTH || hasControlCharacter) {
+    return {
+      dropped: {
+        field: 'locality.town',
+        message: `locality.town was not a town name of 1-${MAX_LOCALITY_TOWN_LENGTH} characters`,
+      },
+    };
+  }
+  if (value.choice !== 'HOME' && value.choice !== 'OTHER') {
+    return {
+      dropped: { field: 'locality.choice', message: "locality.choice was not 'HOME' or 'OTHER'" },
+    };
+  }
+  return { locality: { town, choice: value.choice } };
+}
+
 export function normalizeManualEntry(rawPayload: unknown): NormalizeResult {
   if (!isRecord(rawPayload)) {
     return {
@@ -78,6 +136,7 @@ export function normalizeManualEntry(rawPayload: unknown): NormalizeResult {
   const narrative = requiredString(rawPayload, 'narrative', errors);
   const externalDispatchId = requiredString(rawPayload, 'externalDispatchId', errors);
   const unitsRequested = optionalStringArray(rawPayload, 'unitsRequested', errors);
+  const { locality, dropped } = optionalLocality(rawPayload);
 
   if (externalDispatchId.includes('#')) {
     errors.push({
@@ -100,7 +159,9 @@ export function normalizeManualEntry(rawPayload: unknown): NormalizeResult {
       unitsRequested,
       narrative,
       externalDispatchId,
+      ...(locality ? { locality } : {}),
     },
+    ...(dropped ? { droppedLocality: dropped } : {}),
   };
 }
 

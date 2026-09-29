@@ -766,7 +766,10 @@ describe("PolicyStore", () => {
         (JSON.parse(CEDAR_SCHEMA) as { Boxalarm: { actions: Record<string, unknown> } }).Boxalarm
           .actions,
       );
-      expect([...sent].sort()).toEqual([...MEMBER_ACTIONS, ...OFFICER_ACTIONS].sort());
+      // Plus the CHIEF/ADMIN-only archive actions (ADMIN_ONLY_ACTIONS).
+      expect([...sent].sort()).toEqual(
+        [...MEMBER_ACTIONS, ...OFFICER_ACTIONS, "ArchiveOccupancy", "ArchiveHydrant"].sort(),
+      );
       expect([...sent].filter((a) => !declared.includes(a))).toEqual([]);
       expect([...actionTypes]).toEqual(["Boxalarm::Action"]);
 
@@ -953,5 +956,23 @@ describe("PolicyStore", () => {
           allowedClientIds: [pulumi.output("web-client")],
         }),
     ).toThrow(/env is required/);
+  });
+});
+
+describe("inspections archive actions (MAJOR-6)", () => {
+  it("are CHIEF/ADMIN-only, on the Occupancy / Hydrant resource types", async () => {
+    const { ADMIN_ONLY_ACTIONS, CEDAR_SCHEMA, INSPECTIONS_OFFICER_ACTIONS } =
+      await import("../../components/authz/cedar-policies");
+    expect(ADMIN_ONLY_ACTIONS).toEqual(
+      expect.arrayContaining(["ArchiveOccupancy", "ArchiveHydrant"]),
+    );
+    expect(INSPECTIONS_OFFICER_ACTIONS as readonly string[]).not.toContain("ArchiveOccupancy");
+    const actions = (
+      JSON.parse(CEDAR_SCHEMA) as {
+        Boxalarm: { actions: Record<string, { appliesTo: { resourceTypes: string[] } }> };
+      }
+    ).Boxalarm.actions;
+    expect(actions.ArchiveOccupancy?.appliesTo.resourceTypes).toEqual(["Occupancy"]);
+    expect(actions.ArchiveHydrant?.appliesTo.resourceTypes).toEqual(["Hydrant"]);
   });
 });

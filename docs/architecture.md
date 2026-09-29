@@ -280,6 +280,7 @@ Base path `/api/v1/{service}/...`, JSON camelCase, RFC 7807 errors with `traceId
 | POST | `/api/v1/alerting/ingress/{adapter}` | CAD/vendor dispatch ingress (adapter-specific payload) | Vendor |
 | POST | `/api/v1/alerting/dispatches` | Manual dispatch entry (degraded-mode fallback, N1.8) | Cognito(admin) |
 | GET | `/api/v1/alerting/dispatches/{dispatchId}` | Dispatch detail incl. normalized alert content (F1.8); response extended with a `toneLadder` object (`status`, `currentToneSequence`, `nextToneAt`, `predicateGaps`) per F1.14, amendment | Cognito |
+| GET | `/api/v1/alerting/home-locality` | The department's home towns/villages/ZIPs for the manual-entry locality choice; degrades to an empty list, `cache-control: private` | Cognito |
 | GET | `/api/v1/alerting/dispatches/{dispatchId}/roster` | Live response roster: responding/ETA/quals/apparatus (F1.7) | Cognito |
 | POST | `/api/v1/alerting/dispatches/{dispatchId}/responses` | Member response confirmation + ETA (F1.6) | Cognito |
 | GET | `/api/v1/alerting/dispatches/{dispatchId}/receipts` | Per-member sent/delivered/opened receipts (F1.3) | Cognito(admin) |
@@ -636,6 +637,7 @@ Streams: **on** (feeds a future OSI pipeline if CQRS is adopted later; not consu
 | `latitude` / `longitude` | Number | | `41.2429` / `-73.2007` |
 | `mapLink` | String | Generated deep link | `https://maps...` |
 | `narrative` | String | Dispatch narrative text | `Smoke showing, 2nd floor` |
+| `locality` | Map (optional) | Enrichment only: the dispatcher's town choice `{ town, choice: HOME \| OTHER }` from manual entry. Used only to verify a pre-plan address match (docs/runbooks/alert-context-replay.md, "Home locality"); fan-out never reads it. A malformed value is dropped at ingress, never a 400. | `{ "town": "Nichols", "choice": "HOME" }` |
 | `hydrantRefs` | List\<String\> | Hydrant IDs (platform-service) | `["HYD-0231"]` |
 | `prePlanRefs` | List\<String\> | Pre-plan IDs (platform-service) | `["PP-0044"]` |
 | `dispatchedAt` | Number (epoch) | | `1798000000` |

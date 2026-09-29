@@ -35,6 +35,8 @@ export interface OccupancyRecord {
   readonly hazards: readonly string[];
   readonly latitude?: number;
   readonly longitude?: number;
+  /** Set by archive (archive/archiveRepository.ts); an archived occupancy is read-only. */
+  readonly archivedAt?: number;
 }
 
 let cachedDocumentClient: DynamoDBDocumentClient | undefined;
@@ -54,6 +56,7 @@ function itemToRecord(item: Record<string, unknown>): OccupancyRecord {
     hazards: item.hazards as readonly string[],
     ...(typeof item.latitude === 'number' ? { latitude: item.latitude } : {}),
     ...(typeof item.longitude === 'number' ? { longitude: item.longitude } : {}),
+    ...(typeof item.archivedAt === 'number' ? { archivedAt: item.archivedAt } : {}),
   };
 }
 
@@ -304,7 +307,7 @@ export async function updateOccupancy(
             Update: {
               TableName: config.tableName,
               Key: { pk: buildDeptScopedPk(deptId, 'OCCUPANCY', occupancyId), sk: OCCUPANCY_SK },
-              ConditionExpression: 'attribute_exists(pk)',
+              ConditionExpression: 'attribute_exists(pk) AND attribute_not_exists(archivedAt)',
               UpdateExpression: `SET ${setClauses.join(', ')}`,
               ExpressionAttributeNames: updateNames,
               ExpressionAttributeValues: updateValues,

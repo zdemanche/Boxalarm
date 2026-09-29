@@ -3,7 +3,11 @@ import type { APIGatewayProxyStructuredResultV2 } from 'aws-lambda';
 import { toVerifiedDeptId } from '@boxalarm/dept-scope';
 import { withAuthorization } from '@boxalarm/authz';
 import type { CedarPrincipalContext, GuardEvent } from '@boxalarm/authz';
-import { HydrantNotFoundError, updateHydrant } from './hydrantRepository.js';
+import {
+  HydrantNotFoundError,
+  HydrantUpdateConflictError,
+  updateHydrant,
+} from './hydrantRepository.js';
 import type { UpdateHydrantInput } from './hydrantRepository.js';
 import { HYDRANT_ID_PATTERN, isValidCalendarDate } from './hydrantKeys.js';
 import type { HydrantStatus } from './hydrantKeys.js';
@@ -148,7 +152,12 @@ export async function updateHydrantInner(
       body: JSON.stringify(hydrant),
     };
   } catch (error) {
-    const reason = error instanceof HydrantNotFoundError ? 'NotFound' : 'DynamoDbError';
+    const reason =
+      error instanceof HydrantNotFoundError
+        ? 'NotFound'
+        : error instanceof HydrantUpdateConflictError
+          ? 'Conflict'
+          : 'DynamoDbError';
     logError({
       event: 'hydrant.update.failed',
       correlationId,
@@ -159,6 +168,9 @@ export async function updateHydrantInner(
     emitMetric('HydrantWriteFailed', reason);
     if (error instanceof HydrantNotFoundError) {
       return problemResponse(404, 'Hydrant not found', error.message, traceId);
+    }
+    if (error instanceof HydrantUpdateConflictError) {
+      return problemResponse(409, 'Hydrant update conflict', error.message, traceId);
     }
     return problemResponse(
       503,

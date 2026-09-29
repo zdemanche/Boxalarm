@@ -43,6 +43,7 @@ import { Equipment as InventoryEquipment } from "./components/inventory/equipmen
 import { Consumables as InventoryConsumables } from "./components/inventory/consumables";
 import { Ppe as InventoryPpe } from "./components/inventory/ppe";
 import { Occupancies } from "./components/inspections/occupancies";
+import { AlertContextReplay } from "./components/inspections/alert-context-replay";
 import { Hydrants } from "./components/inspections/hydrants";
 import { Records as InspectionRecords } from "./components/inspections/records";
 import { InspectionsMap } from "./components/inspections/map";
@@ -70,6 +71,8 @@ import { RoutesLadderControls } from "./components/alerting/routes-ladder-contro
 import { PushTokens } from "./components/alerting/push-tokens";
 import { RidingBoard } from "./components/alerting/riding-board";
 import { AlertingAlarms } from "./components/alerting/alarms";
+import { PrePlanCopies } from "./components/alerting/pre-plan-copies";
+import { homeLocalityLacksZips, resolveHomeLocality } from "./components/alerting/home-locality";
 import { EligibilityStaleness } from "./components/alerting/staleness";
 import { AlertingCanary } from "./components/alerting/canary";
 import { AlertingOutboxDrain } from "./components/alerting/outbox-drain";
@@ -456,6 +459,17 @@ export const inspectionsOccupancies = new Occupancies("inspections-occupancies",
 
 export const inspectionsHydrants = new Hydrants("inspections-hydrants", inspectionsBase);
 
+// Post-deploy backfill / normalizer replay for the alerting pre-plan and hydrant copies.
+export const inspectionsAlertContextReplay = new AlertContextReplay(
+  "inspections-alert-context-replay",
+  {
+    env,
+    platformTableName: platformTable.tableName,
+    platformTableArn: platformTable.tableArn,
+    logGroup: inspectionsLogGroup,
+  },
+);
+
 export const inspectionsRecords = new InspectionRecords("inspections-records", {
   ...inspectionsBase,
   assetsBucketName: platformAssets.bucketName,
@@ -641,6 +655,20 @@ export const channelWorkers = new ChannelWorkers("channel-workers", {
 });
 
 // E1-S1/S5/S6-INFRA: manual dispatch ingress, response confirmation, roster, detail.
+const alertingHomeLocality = resolveHomeLocality(deptId, config.get("alertingHomeLocality"));
+if (alertingHomeLocality === undefined) {
+  pulumi.log.warn(
+    `No home locality for deptId ${deptId}: set boxalarm-infra:alertingHomeLocality, or every ` +
+      `pre-plan address match on the dispatch detail is shown "verify address".`,
+  );
+}
+if (homeLocalityLacksZips(alertingHomeLocality)) {
+  pulumi.log.warn(
+    `The home locality for deptId ${deptId} lists no ZIPs: add the home ZIPs to ` +
+      `boxalarm-infra:alertingHomeLocality, or a pre-plan whose address carries only a ZIP is ` +
+      `always shown "verify address" (docs/runbooks/alert-context-replay.md).`,
+  );
+}
 export const routesCore = new RoutesCore("routes-core", {
   env,
   httpApi,
@@ -651,6 +679,7 @@ export const routesCore = new RoutesCore("routes-core", {
   escalation,
   policyStoreId: policyStore.policyStoreId,
   permissionsBoundaryArn: alertingBoundaryArn,
+  ...(alertingHomeLocality !== undefined ? { homeLocality: alertingHomeLocality } : {}),
 });
 
 // E1-S4/S8/S9-INFRA: self-test, audit, and provider delivery-receipt routes.
@@ -739,6 +768,20 @@ export const routesLadderControls = new RoutesLadderControls("routes-ladder-cont
   logGroup: alertingLogGroup,
   policyStoreId: policyStore.policyStoreId,
   pageTopicArn: alertingAlarms.pageTopic.arn,
+  permissionsBoundaryArn: alertingBoundaryArn,
+});
+
+// E5-S4/E5-S8: inspections pre-plan/hydrant events -> alerting-owned PRE_PLAN_COPY /
+// HYDRANT_COPY projections the dispatch detail reads. Declared after alertingAlarms so a
+// dead-lettered copy event pages through the alerting-page topic.
+export const prePlanCopies = new PrePlanCopies("pre-plan-copies", {
+  env,
+  alertingTableArn: alertingTable.tableArn,
+  alertingCmkArn: alertingTable.cmkArn,
+  alertingTableName: alertingTable.tableName,
+  busName: platformBus.busName,
+  pageTopicArn: alertingAlarms.pageTopic.arn,
+  logGroup: alertingLogGroup,
   permissionsBoundaryArn: alertingBoundaryArn,
 });
 

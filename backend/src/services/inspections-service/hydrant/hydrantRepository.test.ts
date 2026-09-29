@@ -12,6 +12,7 @@ import { toVerifiedDeptId } from '@boxalarm/dept-scope';
 import {
   HydrantAlreadyExistsError,
   HydrantNotFoundError,
+  HydrantUpdateConflictError,
   createHydrant,
   listHydrants,
   queryHydrantsDueWithin,
@@ -65,7 +66,7 @@ describe('createHydrant (AC1)', () => {
     ddbMock.on(TransactWriteCommand).resolves({});
     await createHydrant(deptId, createInput);
     const items = ddbMock.commandCalls(TransactWriteCommand)[0]?.args[0].input.TransactItems;
-    expect(items).toHaveLength(2);
+    expect(items).toHaveLength(3);
     expect(items?.[0]?.Put?.ConditionExpression).toBe('attribute_not_exists(pk)');
     expect(items?.[1]?.Put?.Item).toEqual({
       pk: 'DEPT#NICHOLS#HYDRANT#HYD-0231',
@@ -74,6 +75,25 @@ describe('createHydrant (AC1)', () => {
       hydrantId: 'HYD-0231',
       gsi3pk: 'DEPT#NICHOLS#HYDRANT',
       gsi3sk: 'HYD-0231',
+    });
+  });
+
+  it('emits inspections.hydrant.updated with the full hydrant state in the same transaction, so a new hydrant reaches the alerting nearest-hydrant lookup', async () => {
+    ddbMock.on(TransactWriteCommand).resolves({});
+    await createHydrant(deptId, createInput);
+    const items = ddbMock.commandCalls(TransactWriteCommand)[0]?.args[0].input.TransactItems;
+    const outbox = items?.[2]?.Put?.Item as Record<string, unknown> | undefined;
+    expect(outbox?.entityType).toBe('OUTBOX_ENTRY');
+    expect(outbox?.eventType).toBe('inspections.hydrant.updated');
+    expect(outbox?.payload).toEqual({
+      hydrantId: 'HYD-0231',
+      deptId: 'NICHOLS',
+      latitude: 41.2417,
+      longitude: -73.2004,
+      status: 'IN_SERVICE',
+      size: '6-inch',
+      flowRatingGpm: 1000,
+      nextFlowTestDue: '2027-01-10',
     });
   });
 
@@ -113,7 +133,9 @@ describe('updateHydrant (AC2)', () => {
     const call = ddbMock.commandCalls(TransactWriteCommand)[0];
     const items = call?.args[0].input.TransactItems ?? [];
     expect(items).toHaveLength(2);
-    expect(items[0]?.Update?.ConditionExpression).toBe('attribute_exists(pk)');
+    expect(items[0]?.Update?.ConditionExpression).toBe(
+      'attribute_exists(pk) AND attribute_not_exists(archivedAt) AND attribute_not_exists(updatedAt)',
+    );
     expect(items[1]?.Put?.Item?.entityType).toBe('OUTBOX_ENTRY');
     expect(items[1]?.Put?.Item?.eventType).toBe('inspections.hydrant.updated');
     expect(items[1]?.Put?.Item?.correlationId).toBe('corr-1');
@@ -122,6 +144,36 @@ describe('updateHydrant (AC2)', () => {
       status: 'OUT_OF_SERVICE',
       latitude: 41.2417,
       longitude: -73.2004,
+    });
+  });
+
+  it('carries the merged post-update state (size, flow rating, location) so the alerting copy is complete from any one event', async () => {
+    ddbMock.on(TransactWriteCommand).resolves({});
+    ddbMock.on(GetCommand).resolves({
+      Item: {
+        pk: 'DEPT#NICHOLS#HYDRANT#HYD-0231',
+        sk: 'METADATA',
+        status: 'IN_SERVICE',
+        latitude: 41.2417,
+        longitude: -73.2004,
+        size: '6-inch',
+        flowRatingGpm: 1250,
+        nextFlowTestDue: '2027-01-10',
+      },
+    });
+
+    await updateHydrant(deptId, 'HYD-0231', { status: 'OUT_OF_SERVICE' }, 'corr-1');
+
+    const items = ddbMock.commandCalls(TransactWriteCommand)[0]?.args[0].input.TransactItems ?? [];
+    expect(items[1]?.Put?.Item?.payload).toEqual({
+      hydrantId: 'HYD-0231',
+      deptId: 'NICHOLS',
+      latitude: 41.2417,
+      longitude: -73.2004,
+      status: 'OUT_OF_SERVICE',
+      size: '6-inch',
+      flowRatingGpm: 1250,
+      nextFlowTestDue: '2027-01-10',
     });
   });
 
@@ -174,6 +226,7 @@ describe('updateHydrant (AC2)', () => {
   });
 
   it('fails closed (rethrows) on a non-conditional transaction failure', async () => {
+    ddbMock.on(GetCommand).resolves({ Item: { hydrantId: 'HYD-0231', updatedAt: 1 } });
     ddbMock.on(TransactWriteCommand).rejects(
       new TransactionCanceledException({
         message: 'Transaction cancelled',
@@ -261,5 +314,60 @@ describe('listHydrants (web Hydrants page)', () => {
     ddbMock.on(QueryCommand).resolves({ Items: [] });
     await expect(listHydrants(deptId)).resolves.toEqual([]);
     expect(ddbMock.commandCalls(BatchGetCommand)).toHaveLength(0);
+  });
+
+  describe('optimistic concurrency (minor 1: a concurrent edit cannot resurrect a stale status)', () => {
+    const conflict = () =>
+      new TransactionCanceledException({
+        message: 'Transaction cancelled',
+        $metadata: {},
+        CancellationReasons: [{ Code: 'ConditionalCheckFailed' }, { Code: 'None' }],
+      });
+
+    it('conditions the write on the updatedAt the event payload was merged from', async () => {
+      ddbMock.on(GetCommand).resolves({
+        Item: { hydrantId: 'HYD-0231', status: 'IN_SERVICE', updatedAt: 111 },
+      });
+      ddbMock.on(TransactWriteCommand).resolves({});
+      await updateHydrant(deptId, 'HYD-0231', { lastFlowTestDate: '2026-09-01' }, 'corr-1');
+      const update =
+        ddbMock.commandCalls(TransactWriteCommand)[0]?.args[0].input.TransactItems?.[0]?.Update;
+      expect(update?.ConditionExpression).toContain('updatedAt = :readUpdatedAt');
+      expect(update?.ExpressionAttributeValues?.[':readUpdatedAt']).toBe(111);
+    });
+
+    it('re-reads and re-merges when the hydrant changed underneath — the event carries the newer status', async () => {
+      ddbMock
+        .on(GetCommand)
+        .resolvesOnce({ Item: { hydrantId: 'HYD-0231', status: 'IN_SERVICE', updatedAt: 1 } })
+        .resolvesOnce({ Item: { hydrantId: 'HYD-0231', status: 'OUT_OF_SERVICE', updatedAt: 2 } })
+        .resolves({ Item: { hydrantId: 'HYD-0231', status: 'OUT_OF_SERVICE', updatedAt: 3 } });
+      ddbMock.on(TransactWriteCommand).rejectsOnce(conflict()).resolves({});
+
+      await updateHydrant(deptId, 'HYD-0231', { lastFlowTestDate: '2026-09-01' }, 'corr-1');
+
+      const calls = ddbMock.commandCalls(TransactWriteCommand);
+      expect(calls).toHaveLength(2);
+      const retried = calls[1]?.args[0].input.TransactItems;
+      expect(retried?.[0]?.Update?.ExpressionAttributeValues?.[':readUpdatedAt']).toBe(2);
+      expect(retried?.[1]?.Put?.Item?.payload).toMatchObject({ status: 'OUT_OF_SERVICE' });
+    });
+
+    it('gives up with HydrantUpdateConflictError after three conflicting attempts', async () => {
+      ddbMock.on(GetCommand).resolves({ Item: { hydrantId: 'HYD-0231', updatedAt: 1 } });
+      ddbMock.on(TransactWriteCommand).rejects(conflict());
+      await expect(
+        updateHydrant(deptId, 'HYD-0231', { status: 'OUT_OF_SERVICE' }, 'corr-1'),
+      ).rejects.toBeInstanceOf(HydrantUpdateConflictError);
+      expect(ddbMock.commandCalls(TransactWriteCommand)).toHaveLength(3);
+    });
+
+    it('is not found (no write) when the hydrant is archived', async () => {
+      ddbMock.on(GetCommand).resolves({ Item: { hydrantId: 'HYD-0231', archivedAt: 5 } });
+      await expect(
+        updateHydrant(deptId, 'HYD-0231', { status: 'OUT_OF_SERVICE' }, 'corr-1'),
+      ).rejects.toBeInstanceOf(HydrantNotFoundError);
+      expect(ddbMock.commandCalls(TransactWriteCommand)).toHaveLength(0);
+    });
   });
 });

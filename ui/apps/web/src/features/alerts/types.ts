@@ -15,18 +15,62 @@ export interface UtilityShutoff {
   location: string;
 }
 
+/** NFPA 291 hydrant marking class (rated flow): AA >=1500, A 1000-1499, B 500-999, C <500 gpm. */
+export type HydrantFlowClass = 'AA' | 'A' | 'B' | 'C';
+
+// Nearest hydrants to the matched occupancy, nearest first (alerting-service
+// prePlan/nearestHydrants.ts): up to five usable ones, plus any OUT_OF_SERVICE hydrant nearer
+// than the last of them (status says which). distanceMeters/flowClass are absent from older
+// responses.
 export interface NearestHydrant {
   hydrantId: string;
   status?: string;
   size?: string;
   flowRatingGpm?: number;
+  flowClass?: HydrantFlowClass;
+  distanceMeters?: number;
 }
 
-export interface PrePlanEnrichment {
+/**
+ * How the server tied the pre-plan to this dispatch (alerting dispatches/detail/prePlanContext.ts).
+ * Only ADDRESS is this building's own plan. Everything else, ADDRESS_BUILDING included (the
+ * building's plan for a unit that has none of its own), is shown flagged "VERIFY ADDRESS",
+ * never as the call's plan.
+ */
+export type PrePlanMatchType =
+  'ADDRESS' | 'ADDRESS_BUILDING' | 'ADDRESS_UNVERIFIED' | 'UNIT_MISMATCH' | 'NEARBY' | 'CANDIDATES';
+
+/** One of several pre-plans the crew must choose between (matchType CANDIDATES). */
+export interface PrePlanCandidate {
+  occupancyId: string;
+  matchedAddress: string;
+  unit: string | null;
   summary?: string;
   hazards: string[];
   utilityShutoffs: UtilityShutoff[];
+  distanceMeters?: number;
+}
+
+export interface PrePlanEnrichment {
+  /** Absent only from a server that predates match provenance. */
+  matchType?: PrePlanMatchType;
+  matchedAddress?: string;
+  unit?: string | null;
+  /** NEARBY only: meters from the dispatch location. */
+  distanceMeters?: number;
+  /** ADDRESS_BUILDING: the dispatched unit ("BLDG 2", "REAR") the building-level plan does not cover. */
+  dispatchUnit?: string;
+  /**
+   * Legacy line for clients without matchType support (the server prefixes it with the
+   * provenance for anything but a plain ADDRESS match). Render occupancySummary instead
+   * whenever matchType is present.
+   */
+  summary?: string;
+  occupancySummary?: string;
+  hazards: string[];
+  utilityShutoffs: UtilityShutoff[];
   nearestHydrants: NearestHydrant[];
+  candidates?: PrePlanCandidate[];
 }
 
 export type ToneLadderStatus = 'ACTIVE' | 'HALTED_MANUAL' | 'COMPLETED';
@@ -56,6 +100,17 @@ export interface DispatchAlert {
   mapLink: string | null;
   narrative: string;
   prePlan?: PrePlanEnrichment | null;
+  /** The server could not look the pre-plan up (prePlan is then absent) - not "none on file". */
+  prePlanUnavailable?: boolean;
+  /**
+   * Nearest hydrants to the matched building or the dispatch's own coordinates - present with
+   * or without a pre-plan match; includes flagged OUT_OF_SERVICE hydrants. Absent when there
+   * is no reference point (or from an older server).
+   */
+  nearestHydrants?: NearestHydrant[];
+  nearestHydrantsUnavailable?: boolean;
+  /** The server's geo read hit its cap: a nearer hydrant may be missing. */
+  nearestHydrantsIncomplete?: boolean;
   toneLadder?: ToneLadder;
   /** null = not requested; absent = the server could not read it (state unknown). */
   mutualAid?: MutualAid | null;
@@ -126,6 +181,12 @@ export interface DeliveryReceipt {
   failureReason: string | null;
 }
 
+/** Where the incident is: a home town/village, or another town typed in (R3-A). */
+export interface DispatchLocality {
+  town: string;
+  choice: 'HOME' | 'OTHER';
+}
+
 export interface ManualDispatchInput {
   incidentType: string;
   address: string;
@@ -133,6 +194,14 @@ export interface ManualDispatchInput {
   unitsRequested: string[];
   narrative: string;
   externalDispatchId: string;
+  locality?: DispatchLocality;
+}
+
+/** GET alerting/home-locality: the department's home towns/villages. */
+export interface HomeLocality {
+  towns: string[];
+  zips: string[];
+  state: string | null;
 }
 
 export interface FieldError {

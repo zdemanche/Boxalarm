@@ -1,6 +1,11 @@
 import { randomUUID } from 'node:crypto';
 import { TransactionCanceledException } from '@aws-sdk/client-dynamodb';
-import { DynamoDBDocumentClient, QueryCommand, TransactWriteCommand } from '@aws-sdk/lib-dynamodb';
+import {
+  DynamoDBDocumentClient,
+  GetCommand,
+  QueryCommand,
+  TransactWriteCommand,
+} from '@aws-sdk/lib-dynamodb';
 import { buildDeptScopedPk, type VerifiedDeptId } from '@boxalarm/dept-scope';
 import { buildOutboxRecord } from '@boxalarm/outbox';
 import { buildAssetKey } from './assetsSigner.js';
@@ -84,6 +89,87 @@ export async function getPrePlan(
   }
 }
 
+/** The occupancy fields a dispatch needs to find and describe this pre-plan. */
+export interface OccupancyContext {
+  readonly address: string;
+  readonly normalizedAddress: string;
+  readonly occupancyType: string;
+  readonly latitude?: number;
+  readonly longitude?: number;
+}
+
+export async function getOccupancyContext(
+  doc: DynamoDBDocumentClient,
+  tableName: string,
+  deptId: VerifiedDeptId,
+  occupancyId: string,
+): Promise<OccupancyContext> {
+  let item: Record<string, unknown> | undefined;
+  try {
+    const output = await doc.send(
+      new GetCommand({
+        TableName: tableName,
+        Key: { pk: buildDeptScopedPk(deptId, 'OCCUPANCY', occupancyId), sk: 'METADATA' },
+      }),
+    );
+    item = output.Item;
+  } catch (error) {
+    logError({
+      event: 'preplan.occupancy_read_failed',
+      service: 'inspections-service',
+      reason: error instanceof Error ? error.constructor.name : 'UnknownError',
+      deptId,
+      occupancyId,
+    });
+    throw new PrePlanDependencyError(error);
+  }
+  if (!item) {
+    throw new OccupancyNotFoundError(occupancyId);
+  }
+  return {
+    address: typeof item.address === 'string' ? item.address : '',
+    normalizedAddress: typeof item.normalizedAddress === 'string' ? item.normalizedAddress : '',
+    occupancyType: typeof item.occupancyType === 'string' ? item.occupancyType : '',
+    ...(typeof item.latitude === 'number' ? { latitude: item.latitude } : {}),
+    ...(typeof item.longitude === 'number' ? { longitude: item.longitude } : {}),
+  };
+}
+
+/** "MULTI_FAMILY" + "12 Oak St" -> "Multi family — 12 Oak St": the one line an alert shows. */
+function buildSummary(occupancy: OccupancyContext): string {
+  const type = occupancy.occupancyType.replace(/_/g, ' ').trim().toLowerCase();
+  const label = type ? type.charAt(0).toUpperCase() + type.slice(1) : '';
+  return [label, occupancy.address.trim()].filter((part) => part.length > 0).join(' — ');
+}
+
+/**
+ * The inspections.preplan.updated payload: everything the alerting copy needs to find this
+ * pre-plan from a dispatch (address, coordinates) and to show it (summary, hazards,
+ * shut-offs). Shared by putPrePlan and the alert-context replay so both emit the same shape.
+ */
+export function buildPrePlanEventPayload(
+  deptId: VerifiedDeptId,
+  occupancyId: string,
+  prePlanId: string,
+  occupancy: OccupancyContext,
+  plan: Pick<PrePlanItem, 'hazards' | 'utilityShutoffs'>,
+): Record<string, unknown> {
+  return {
+    deptId,
+    occupancyId,
+    prePlanId,
+    summary: buildSummary(occupancy),
+    occupancyType: occupancy.occupancyType,
+    address: occupancy.address,
+    normalizedAddress: occupancy.normalizedAddress,
+    ...(occupancy.latitude !== undefined && occupancy.longitude !== undefined
+      ? { latitude: occupancy.latitude, longitude: occupancy.longitude }
+      : {}),
+    hazards: plan.hazards,
+    utilityShutoffs: plan.utilityShutoffs,
+  };
+}
+
 export async function putPrePlan(
   doc: DynamoDBDocumentClient,
   tableName: string,
@@ -92,6 +178,10 @@ export async function putPrePlan(
   input: PrePlanInput,
 ): Promise<PrePlanItem> {
   const existing = await getPrePlan(doc, tableName, deptId, occupancyId);
+  // Occupancy address and coordinates are immutable after create (UpdateOccupancyInput
+  // carries only contacts/hazards), so reading them here cannot race a move, and a pre-plan
+  // event is the only one the alerting copy needs to locate this occupancy.
+  const occupancy = await getOccupancyContext(doc, tableName, deptId, occupancyId);
   const isCreate = existing === undefined;
   const prePlanId = existing?.prePlanId ?? randomUUID();
   const item: PrePlanItem = {
@@ -114,13 +204,7 @@ export async function putPrePlan(
     'inspections-service',
     'inspections.preplan.updated',
     prePlanId,
-    {
-      deptId,
-      occupancyId,
-      prePlanId,
-      hazards: input.hazards,
-      utilityShutoffs: input.utilityShutoffs,
-    },
+    buildPrePlanEventPayload(deptId, occupancyId, prePlanId, occupancy, input),
   );
 
   try {
@@ -131,7 +215,8 @@ export async function putPrePlan(
             ConditionCheck: {
               TableName: tableName,
               Key: { pk: buildDeptScopedPk(deptId, 'OCCUPANCY', occupancyId), sk: 'METADATA' },
-              ConditionExpression: 'attribute_exists(pk)',
+              // An archived occupancy takes no new pre-plan (archive/archiveRepository.ts).
+              ConditionExpression: 'attribute_exists(pk) AND attribute_not_exists(archivedAt)',
             },
           },
           {

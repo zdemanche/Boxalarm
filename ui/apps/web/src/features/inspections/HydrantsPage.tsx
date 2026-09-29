@@ -11,6 +11,7 @@ import {
   TextInput,
   type DataTableColumn,
 } from '../../components/ui';
+import { ApiError } from '../../lib/apiClient';
 import { createHydrant, listHydrants, updateHydrant } from './api';
 import type { CreateHydrantInput, Hydrant } from './types';
 
@@ -29,6 +30,7 @@ export function HydrantsPage() {
   const canWrite = auth.roles.includes('ADMIN') || auth.roles.includes('CHIEF');
   const [form, setForm] = useState<CreateHydrantInput>(emptyForm);
   const [formError, setFormError] = useState<string | null>(null);
+  const [updateError, setUpdateError] = useState<string | null>(null);
 
   const listQuery = useQuery({
     queryKey: ['inspections', 'hydrants'],
@@ -45,19 +47,34 @@ export function HydrantsPage() {
     onError: (error: Error) => setFormError(error.message),
   });
 
+  // A failed status change must never be silent: an inspector who marked a hydrant out of
+  // service has to know when it did not take (a 409 means someone else changed it first).
+  const onUpdateError = (hydrantId: string, action: string) => (error: Error) => {
+    const status = error instanceof ApiError ? error.problem.status : undefined;
+    setUpdateError(
+      status === 409
+        ? `${hydrantId} was changed by someone else just now - ${action} was not saved. Reload and try again.`
+        : `${action} for ${hydrantId} was not saved${status ? ` (HTTP ${status})` : ''}. Try again.`,
+    );
+  };
+
   const markOosMutation = useMutation({
     mutationFn: (hydrantId: string) => updateHydrant(auth, hydrantId, { status: 'OUT_OF_SERVICE' }),
+    onMutate: () => setUpdateError(null),
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ['inspections', 'hydrants'] });
     },
+    onError: (error: Error, hydrantId) => onUpdateError(hydrantId, 'Marking out of service')(error),
   });
 
   const flowTestMutation = useMutation({
     mutationFn: ({ hydrantId, date }: { hydrantId: string; date: string }) =>
       updateHydrant(auth, hydrantId, { lastFlowTestDate: date, status: 'IN_SERVICE' }),
+    onMutate: () => setUpdateError(null),
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ['inspections', 'hydrants'] });
     },
+    onError: (error: Error, { hydrantId }) => onUpdateError(hydrantId, 'The flow test')(error),
   });
 
   if (listQuery.error) {
@@ -138,6 +155,12 @@ export function HydrantsPage() {
   return (
     <main id="main-content">
       <PageHeader title="Hydrants" />
+
+      {updateError ? (
+        <p role="alert" style={{ color: 'var(--bx-status-danger)', fontWeight: 600 }}>
+          {updateError}
+        </p>
+      ) : null}
 
       <DataTable
         caption="Hydrant registry"

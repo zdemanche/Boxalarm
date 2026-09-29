@@ -1,7 +1,12 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { LocalstackContainer, type StartedLocalStackContainer } from '@testcontainers/localstack';
 import { CreateTableCommand, DynamoDBClient } from '@aws-sdk/client-dynamodb';
-import { DynamoDBDocumentClient, PutCommand, type GetCommand } from '@aws-sdk/lib-dynamodb';
+import {
+  DynamoDBDocumentClient,
+  PutCommand,
+  QueryCommand,
+  type GetCommand,
+} from '@aws-sdk/lib-dynamodb';
 import { Decision } from '@aws-sdk/client-verifiedpermissions';
 import type { VerifiedPermissionsClient } from '@aws-sdk/client-verifiedpermissions';
 import { buildDeptScopedPk, toVerifiedDeptId } from '@boxalarm/dept-scope';
@@ -47,10 +52,23 @@ describe('alert-detail handler (real DynamoDB, AC2 — pre-plan isolation from t
         AttributeDefinitions: [
           { AttributeName: 'pk', AttributeType: 'S' },
           { AttributeName: 'sk', AttributeType: 'S' },
+          { AttributeName: 'gsi1pk', AttributeType: 'S' },
+          { AttributeName: 'gsi1sk', AttributeType: 'S' },
         ],
         KeySchema: [
           { AttributeName: 'pk', KeyType: 'HASH' },
           { AttributeName: 'sk', KeyType: 'RANGE' },
+        ],
+        // The address lookup's index (alerting-table.ts GSI1), so a no-match is a real miss.
+        GlobalSecondaryIndexes: [
+          {
+            IndexName: 'GSI1',
+            KeySchema: [
+              { AttributeName: 'gsi1pk', KeyType: 'HASH' },
+              { AttributeName: 'gsi1sk', KeyType: 'RANGE' },
+            ],
+            Projection: { ProjectionType: 'ALL' },
+          },
         ],
         BillingMode: 'PAY_PER_REQUEST',
       }),
@@ -90,7 +108,7 @@ describe('alert-detail handler (real DynamoDB, AC2 — pre-plan isolation from t
     );
   }
 
-  it('renders full core content with prePlan null when the DISPATCH_ALERT carries no prePlanRefs yet (E1-S1 gap)', async () => {
+  it('renders full core content with prePlan null when no pre-plan copy matches the dispatch address', async () => {
     const { createHandler } = await import('./handler.js');
     const dispatchId = 'NICHOLS-preplan-absent';
     await putDispatchAlert(dispatchId);
@@ -109,16 +127,16 @@ describe('alert-detail handler (real DynamoDB, AC2 — pre-plan isolation from t
     });
   });
 
-  it('core-harm: renders full core content with prePlan null when the pre-plan-copy read faults — the fault never propagates to the alert-path response', async () => {
+  it('core-harm: renders full core content with prePlanUnavailable (not "no pre-plan") when the pre-plan-copy read faults — the fault never propagates to the alert-path response', async () => {
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const { createHandler } = await import('./handler.js');
     const dispatchId = 'NICHOLS-preplan-fault';
-    await putDispatchAlert(dispatchId, { prePlanRefs: ['OCC-0231'] });
+    await putDispatchAlert(dispatchId);
 
+    // Every pre-plan/hydrant lookup is a Query on a copy index; fault all of them.
     const faultingClient = {
-      send: (command: GetCommand) => {
-        const key = (command.input as { Key?: { pk?: string } }).Key;
-        if (key?.pk?.includes('PREPLAN')) {
+      send: (command: GetCommand | QueryCommand) => {
+        if (command instanceof QueryCommand) {
           return Promise.reject(new Error('PRE_PLAN_COPY read fault'));
         }
         return realClient.send(command);
@@ -133,8 +151,9 @@ describe('alert-detail handler (real DynamoDB, AC2 — pre-plan isolation from t
     expect(body).toMatchObject({
       incidentType: 'STRUCTURE_FIRE',
       address: '123 Main St',
-      prePlan: null,
+      prePlanUnavailable: true,
     });
+    expect('prePlan' in body).toBe(false);
     const logged = errorSpy.mock.calls.map((call) => call[0] as string).join('\n');
     expect(logged).toContain('dispatches.detail.preplan_read_failed');
     errorSpy.mockRestore();

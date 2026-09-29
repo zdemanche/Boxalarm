@@ -60,9 +60,45 @@ const HYDRANT_LIST_SK = 'LIST';
 const BATCH_GET_MAX_KEYS = 100;
 const BATCH_GET_MAX_ATTEMPTS = 5;
 
+/**
+ * The inspections.hydrant.updated payload: the hydrant's whole post-write state (location,
+ * status, size, flow rating), not just the patched fields, so the alerting plane's
+ * HYDRANT_COPY can be built from any single event — including the first one it ever sees.
+ */
+export function buildHydrantEventPayload(
+  deptId: VerifiedDeptId,
+  hydrantId: string,
+  state: Partial<HydrantRecord>,
+): Record<string, unknown> {
+  return {
+    hydrantId,
+    deptId,
+    ...(typeof state.latitude === 'number' ? { latitude: state.latitude } : {}),
+    ...(typeof state.longitude === 'number' ? { longitude: state.longitude } : {}),
+    ...(typeof state.status === 'string' ? { status: state.status } : {}),
+    ...(typeof state.size === 'string' ? { size: state.size } : {}),
+    ...(typeof state.flowRatingGpm === 'number' ? { flowRatingGpm: state.flowRatingGpm } : {}),
+    ...(typeof state.lastFlowTestDate === 'string'
+      ? { lastFlowTestDate: state.lastFlowTestDate }
+      : {}),
+    ...(typeof state.nextFlowTestDue === 'string'
+      ? { nextFlowTestDue: state.nextFlowTestDue }
+      : {}),
+  };
+}
+
 export class HydrantAlreadyExistsError extends Error {
   constructor(hydrantId: string) {
     super(`hydrant "${hydrantId}" already exists`);
+  }
+}
+
+const MAX_UPDATE_ATTEMPTS = 3;
+
+/** The hydrant kept changing under this edit; the caller should retry the request. */
+export class HydrantUpdateConflictError extends Error {
+  constructor(hydrantId: string) {
+    super(`hydrant "${hydrantId}" was modified concurrently; retry the update`);
   }
 }
 
@@ -107,6 +143,16 @@ export async function createHydrant(
     gsi3sk: input.hydrantId,
   };
 
+  // A new hydrant must reach the alerting plane's nearest-hydrant lookup too, not only later
+  // edits — otherwise it is invisible on every dispatch until someone happens to update it.
+  const outboxRecord = buildOutboxRecord(
+    deptId,
+    'inspections-service',
+    'inspections.hydrant.updated',
+    input.hydrantId,
+    buildHydrantEventPayload(deptId, input.hydrantId, item),
+  );
+
   try {
     await getDocumentClient().send(
       new TransactWriteCommand({
@@ -119,6 +165,7 @@ export async function createHydrant(
             },
           },
           { Put: { TableName: tableName, Item: listIndexItem } },
+          { Put: { TableName: tableName, Item: outboxRecord } },
         ],
       }),
     );
@@ -225,62 +272,80 @@ export async function updateHydrant(
 
   // buildOutboxRecord's item carries no ttl, deliberately (matches personnel-service's
   // OUTBOX_ENTRY precedent): an unpublished event must never be silently dropped by a timer.
-  const preUpdate = await getDocumentClient().send(
-    new GetCommand({ TableName: tableName, Key: { pk, sk: HYDRANT_SK }, ConsistentRead: true }),
-  );
-  const existing = preUpdate?.Item as Partial<HydrantRecord> | undefined;
-  const outboxRecord = buildOutboxRecord(
-    deptId,
-    'inspections-service',
-    'inspections.hydrant.updated',
-    correlationId,
-    {
-      hydrantId,
-      deptId,
-      ...(typeof existing?.latitude === 'number' ? { latitude: existing.latitude } : {}),
-      ...(typeof existing?.longitude === 'number' ? { longitude: existing.longitude } : {}),
-      ...patch,
-    },
-  );
-
-  try {
-    await getDocumentClient().send(
-      new TransactWriteCommand({
-        TransactItems: [
-          {
-            Update: {
-              TableName: tableName,
-              Key: { pk, sk: HYDRANT_SK },
-              ConditionExpression: 'attribute_exists(pk)',
-              UpdateExpression: `SET ${setClauses.join(', ')}`,
-              ExpressionAttributeValues: values,
-              ...(Object.keys(names).length > 0 ? { ExpressionAttributeNames: names } : {}),
-            },
-          },
-          {
-            Put: {
-              TableName: tableName,
-              Item: outboxRecord,
-            },
-          },
-        ],
-      }),
+  //
+  // The event carries the merged post-write state, so the write is conditioned on the row
+  // still being the one that state was merged from (optimistic concurrency on updatedAt).
+  // Otherwise two concurrent edits could each emit the other's stale field — an
+  // OUT_OF_SERVICE hydrant re-published as IN_SERVICE by a flow-test edit that read first.
+  for (let attempt = 1; ; attempt += 1) {
+    const preUpdate = await getDocumentClient().send(
+      new GetCommand({ TableName: tableName, Key: { pk, sk: HYDRANT_SK }, ConsistentRead: true }),
     );
-  } catch (error) {
-    if (error instanceof TransactionCanceledException) {
-      logError({
-        event: 'hydrant.update.transact_failed',
-        service: 'inspections-service',
-        correlationId,
-        hydrantId,
-        reasons: error.CancellationReasons?.map((reason) => reason.Code),
-        message: error.message,
-      });
-      if (error.CancellationReasons?.[0]?.Code === 'ConditionalCheckFailed') {
-        throw new HydrantNotFoundError(hydrantId);
-      }
+    const existing = preUpdate?.Item as Partial<HydrantRecord> | undefined;
+    if (!existing || (existing as { archivedAt?: unknown }).archivedAt !== undefined) {
+      throw new HydrantNotFoundError(hydrantId);
     }
-    throw error;
+    const readUpdatedAt = typeof existing.updatedAt === 'number' ? existing.updatedAt : undefined;
+    const outboxRecord = buildOutboxRecord(
+      deptId,
+      'inspections-service',
+      'inspections.hydrant.updated',
+      correlationId,
+      buildHydrantEventPayload(deptId, hydrantId, { ...existing, ...patch }),
+    );
+
+    try {
+      await getDocumentClient().send(
+        new TransactWriteCommand({
+          TransactItems: [
+            {
+              Update: {
+                TableName: tableName,
+                Key: { pk, sk: HYDRANT_SK },
+                // An archived hydrant takes no further edits (archive/archiveRepository.ts).
+                ConditionExpression:
+                  'attribute_exists(pk) AND attribute_not_exists(archivedAt) AND ' +
+                  (readUpdatedAt === undefined
+                    ? 'attribute_not_exists(updatedAt)'
+                    : 'updatedAt = :readUpdatedAt'),
+                UpdateExpression: `SET ${setClauses.join(', ')}`,
+                ExpressionAttributeValues: {
+                  ...values,
+                  ...(readUpdatedAt === undefined ? {} : { ':readUpdatedAt': readUpdatedAt }),
+                },
+                ...(Object.keys(names).length > 0 ? { ExpressionAttributeNames: names } : {}),
+              },
+            },
+            {
+              Put: {
+                TableName: tableName,
+                Item: outboxRecord,
+              },
+            },
+          ],
+        }),
+      );
+      break;
+    } catch (error) {
+      if (error instanceof TransactionCanceledException) {
+        logError({
+          event: 'hydrant.update.transact_failed',
+          service: 'inspections-service',
+          correlationId,
+          hydrantId,
+          attempt,
+          reasons: error.CancellationReasons?.map((reason) => reason.Code),
+          message: error.message,
+        });
+        if (error.CancellationReasons?.[0]?.Code === 'ConditionalCheckFailed') {
+          // Edited (or archived/deleted) since the read: re-read and retry; the re-read
+          // raises HydrantNotFoundError if it is gone or archived.
+          if (attempt < MAX_UPDATE_ATTEMPTS) continue;
+          throw new HydrantUpdateConflictError(hydrantId);
+        }
+      }
+      throw error;
+    }
   }
 
   const persisted = await getDocumentClient().send(

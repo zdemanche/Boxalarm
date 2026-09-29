@@ -12,6 +12,7 @@ import type {
   RidingBoard,
   RosterEntry,
   SelfTestRun,
+  HomeLocality,
 } from './types';
 
 function buildApiAlertsRepository(tokens: AuthTokenSource, apiBaseUrl: string): AlertsRepository {
@@ -40,6 +41,10 @@ function buildApiAlertsRepository(tokens: AuthTokenSource, apiBaseUrl: string): 
         mapLink: string | null;
         narrative: string;
         prePlan: DispatchAlert['prePlan'];
+        prePlanUnavailable?: boolean;
+        nearestHydrants?: DispatchAlert['nearestHydrants'];
+        nearestHydrantsUnavailable?: boolean;
+        nearestHydrantsIncomplete?: boolean;
       };
       return {
         dispatchId: body.dispatchId,
@@ -50,6 +55,10 @@ function buildApiAlertsRepository(tokens: AuthTokenSource, apiBaseUrl: string): 
         narrative: body.narrative,
         isSelfTest: false,
         prePlan: body.prePlan,
+        ...(body.prePlanUnavailable === true ? { prePlanUnavailable: true } : {}),
+        ...(body.nearestHydrants ? { nearestHydrants: body.nearestHydrants } : {}),
+        ...(body.nearestHydrantsUnavailable === true ? { nearestHydrantsUnavailable: true } : {}),
+        ...(body.nearestHydrantsIncomplete === true ? { nearestHydrantsIncomplete: true } : {}),
       };
     },
 
@@ -81,6 +90,11 @@ function buildApiAlertsRepository(tokens: AuthTokenSource, apiBaseUrl: string): 
       });
       const body = (await response.json()) as { dispatchId: string };
       return { dispatchId: body.dispatchId };
+    },
+
+    async getHomeLocality(): Promise<HomeLocality> {
+      const response = await req('alerting/home-locality');
+      return (await response.json()) as HomeLocality;
     },
 
     async getReceipts(dispatchId): Promise<DeliveryReceipt[]> {

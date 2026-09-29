@@ -77,6 +77,7 @@ function toOccupancyResponseBody(record: OccupancyRecord): Record<string, unknow
     hazards: record.hazards,
     latitude: record.latitude,
     longitude: record.longitude,
+    ...(record.archivedAt !== undefined ? { archivedAt: record.archivedAt } : {}),
   };
 }
 

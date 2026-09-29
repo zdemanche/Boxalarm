@@ -25,6 +25,7 @@ export class Occupancies extends pulumi.ComponentResource {
   public readonly updateLambda: ServiceLambda;
   public readonly prePlanGetLambda: ServiceLambda;
   public readonly prePlanPutLambda: ServiceLambda;
+  public readonly archiveLambda: ServiceLambda;
 
   constructor(name: string, args: OccupanciesArgs, opts?: pulumi.ComponentResourceOptions) {
     requireEnv("Occupancies", args.env);
@@ -114,7 +115,26 @@ export class Occupancies extends pulumi.ComponentResource {
       ],
     });
 
+    // archiveOccupancy (archive/archiveRepository.ts): GetItem (pre-read), then one
+    // transaction of Update (METADATA archivedAt, map keys removed) + Update (LIST, ADDR#
+    // index rows off GSI3) + Put (audit row, inspections.preplan.updated archive outbox row).
+    this.archiveLambda = inspectionsRoute(this, name, args, {
+      fn: "occupancies-archive",
+      routeKey: "POST /api/v1/inspections/occupancies/{id}/archive",
+      environment: { PLATFORM_TABLE_NAME: args.platformTableName },
+      cedar: true,
+      mutatesTable: true,
+      statements: ({ tableArn }) => [
+        dynamoGrant(
+          "OccupancyArchive",
+          ["dynamodb:GetItem", "dynamodb:UpdateItem", "dynamodb:PutItem"],
+          [tableArn],
+        ),
+      ],
+    });
+
     this.registerOutputs({
+      archiveLambda: this.archiveLambda,
       listLambda: this.listLambda,
       createLambda: this.createLambda,
       getLambda: this.getLambda,

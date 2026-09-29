@@ -81,6 +81,8 @@ const ROUTES: Record<string, string> = {
   "GET /api/v1/inspections/hydrants": fn("hydrants-list"),
   "POST /api/v1/inspections/hydrants": fn("hydrants-create"),
   "PUT /api/v1/inspections/hydrants/{hydrantId}": fn("hydrants-update"),
+  "POST /api/v1/inspections/hydrants/{hydrantId}/archive": fn("hydrants-archive"),
+  "POST /api/v1/inspections/occupancies/{id}/archive": fn("occupancies-archive"),
   "GET /api/v1/inspections": fn("inspections-list"),
   "POST /api/v1/inspections": fn("inspections-record"),
   "GET /api/v1/inspections/map": fn("map"),
@@ -91,7 +93,7 @@ describe(
   "inspections Lambdas: routes, env and IAM match their handlers",
   { timeout: 30_000 },
   () => {
-    it("deploys exactly the 13 routes the UI calls, each behind the shared REQUEST authorizer", async () => {
+    it("deploys exactly the 15 routes the UI and admins call, each behind the shared REQUEST authorizer", async () => {
       await build();
       const routes = resourcesOfType("aws:apigatewayv2/route:Route");
       expect(routes.map((r) => r.inputs.routeKey).sort()).toEqual(Object.keys(ROUTES).sort());
@@ -129,6 +131,8 @@ describe(
       [fn("hydrants-list")]: ["PLATFORM_TABLE_NAME"],
       [fn("hydrants-create")]: ["PLATFORM_TABLE_NAME", VP],
       [fn("hydrants-update")]: ["PLATFORM_TABLE_NAME", VP],
+      [fn("hydrants-archive")]: ["PLATFORM_TABLE_NAME", VP],
+      [fn("occupancies-archive")]: ["PLATFORM_TABLE_NAME", VP],
       [fn("inspections-list")]: ["PLATFORM_TABLE_NAME", VP],
       [fn("inspections-record")]: ["PLATFORM_TABLE_NAME", VP],
       [fn("map")]: ["PLATFORM_TABLE_NAME", VP],
@@ -240,6 +244,20 @@ describe(
         }
       });
 
+      it.each(["occupancies-archive", "hydrants-archive"])(
+        "%s: GetItem + UpdateItem (index rows off GSI3) + PutItem (audit, outbox), audit rows still denied",
+        async (suffix) => {
+          await build();
+          const s = statementsForRole(fn(suffix));
+          for (const action of ["dynamodb:GetItem", "dynamodb:UpdateItem", "dynamodb:PutItem"]) {
+            expect(isGranted(s, action, TABLE), action).toBe(true);
+          }
+          expect(s.some((st) => st.Effect === "Deny" && st.Sid === "DenyAuditMutations")).toBe(
+            true,
+          );
+        },
+      );
+
       it("inspections list: Query GSI2 only; map: Query GSI3 only", async () => {
         await build();
         const list = statementsForRole(fn("inspections-list"));
@@ -338,7 +356,9 @@ describe(
       expect(mutating.sort()).toEqual(
         [
           fn("occupancies-update"),
+          fn("occupancies-archive"),
           fn("hydrants-update"),
+          fn("hydrants-archive"),
           fn("inspections-record"),
           fn("field-capture"),
         ].sort(),

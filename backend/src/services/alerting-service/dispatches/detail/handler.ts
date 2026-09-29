@@ -14,43 +14,12 @@ import { emitOutcomeMetric } from '@boxalarm/metrics';
 import { createDynamoClient, readAlertingConfig } from '../../eligibility/dynamoClient.js';
 import { logError } from '../logger.js';
 import { toMutualAidView, type MutualAidView } from '../../ladderControls/shared.js';
-import {
-  getDispatchDetail,
-  getMutualAidEvent,
-  getPrePlanCopy,
-  type PrePlanCopyItem,
-} from './repository.js';
+import { getDispatchDetail, getMutualAidEvent } from './repository.js';
 import { buildMapLink } from './mapLink.js';
 import { dataUnavailableProblem } from './problemDetails.js';
+import { PRE_PLAN_UNAVAILABLE, fetchDispatchContext } from './prePlanContext.js';
 
 const METRICS_NAMESPACE = 'Boxalarm/Alerting';
-
-// TODO(E1-S1/architecture): DISPATCH_ALERT.prePlanRefs holds pre-plan IDs (e.g. "PP-0044",
-// architecture.md:637) but PRE_PLAN_COPY.sk is keyed by occupancyId (e.g. "OCCUPANCY#OCC-0231",
-// architecture.md:734) — two different identifier spaces. alerting-service's data model carries
-// no occupancyId anywhere, so there is currently no correct value to pass here; this lookup is a
-// documented no-op (always misses, AC2's error boundary renders prePlan: null) until either
-// DISPATCH_ALERT gains an occupancyId (an ingress/architecture change owned by another story) or
-// PRE_PLAN_COPY grows a prePlanId-keyed access path. Do not "fix" by treating prePlanRef as an
-// occupancyId — that reintroduces the silent-miss bug this comment documents.
-async function fetchPrePlan(
-  client: DynamoDBDocumentClient,
-  tableName: string,
-  deptId: VerifiedDeptId,
-  prePlanRef: string | undefined,
-  traceId: string,
-): Promise<PrePlanCopyItem | null> {
-  if (!prePlanRef) {
-    return null;
-  }
-  try {
-    const item = await getPrePlanCopy(client, tableName, deptId, prePlanRef);
-    return item ?? null;
-  } catch (error) {
-    logError('dispatches.detail.preplan_read_failed', error, { traceId, prePlanRef });
-    return null;
-  }
-}
 
 const UNAVAILABLE = Symbol('unavailable');
 
@@ -101,14 +70,10 @@ async function handleGetAlertDetail(
       return notFoundProblem(traceId, `No dispatch alert found for dispatchId "${dispatchId}"`);
     }
 
-    const prePlan = await fetchPrePlan(
-      doc,
-      config.tableName,
-      deptId,
-      item.prePlanRefs?.[0],
-      traceId,
-    );
-    const mutualAid = await fetchMutualAid(doc, config.tableName, deptId, dispatchId, traceId);
+    const [context, mutualAid] = await Promise.all([
+      fetchDispatchContext(doc, config.tableName, deptId, item, traceId),
+      fetchMutualAid(doc, config.tableName, deptId, dispatchId, traceId),
+    ]);
 
     emitOutcomeMetric(METRICS_NAMESPACE, 'AlertDetailViewed');
     return {
@@ -131,7 +96,17 @@ async function handleGetAlertDetail(
         // null = not requested; the key is omitted when the read failed, so an officer's
         // screen shows "unknown" rather than "not requested" (see fetchMutualAid).
         ...(mutualAid === UNAVAILABLE ? {} : { mutualAid }),
-        prePlan,
+        // null = no pre-plan matched; on a failed lookup the key is omitted and
+        // prePlanUnavailable says so (the mutualAid precedent above), so the crew reads
+        // "unavailable", never "no pre-plan on file".
+        ...(context.prePlan === PRE_PLAN_UNAVAILABLE
+          ? { prePlanUnavailable: true }
+          : { prePlan: context.prePlan }),
+        // Nearest hydrants stand on their own: shown with or without a pre-plan match
+        // whenever there is a reference point (matched building or dispatch coordinates).
+        ...(context.nearestHydrants ? { nearestHydrants: context.nearestHydrants } : {}),
+        ...(context.hydrantsUnavailable ? { nearestHydrantsUnavailable: true } : {}),
+        ...(context.hydrantsIncomplete ? { nearestHydrantsIncomplete: true } : {}),
       }),
     };
   } catch (error) {

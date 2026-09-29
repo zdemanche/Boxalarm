@@ -146,10 +146,15 @@ test('an officer sees the manual entry form and, given a dispatch id, the roster
 });
 
 test('submitting the manual entry form navigates the page to the new dispatch id', async () => {
+  let posted: Record<string, unknown> | undefined;
   server.use(
-    http.post('/api/v1/alerting/dispatches', async () =>
-      HttpResponse.json({ dispatchId: 'D-9' }, { status: 201 }),
+    http.get('/api/v1/alerting/home-locality', () =>
+      HttpResponse.json({ towns: ['Trumbull', 'Nichols'], zips: ['06611'], state: 'CT' }),
     ),
+    http.post('/api/v1/alerting/dispatches', async ({ request }) => {
+      posted = (await request.json()) as Record<string, unknown>;
+      return HttpResponse.json({ dispatchId: 'D-9' }, { status: 201 });
+    }),
     http.get('/api/v1/alerting/dispatches/D-9', () =>
       HttpResponse.json({
         dispatchId: 'D-9',
@@ -174,11 +179,18 @@ test('submitting the manual entry form navigates the page to the new dispatch id
   await user.type(await screen.findByLabelText('Incident type'), 'MVA');
   await user.type(screen.getByLabelText('Address'), '1 Main St');
   await user.type(screen.getByLabelText('Cross streets'), 'N/A');
+  await screen.findByRole('option', { name: 'Nichols' });
+  await user.selectOptions(screen.getByLabelText(/Town \/ village/), 'Nichols');
   await user.type(screen.getByLabelText('Narrative'), 'MVA with injuries');
   await user.type(screen.getByLabelText('Operator-entered reference'), 'ext-9');
   await user.click(screen.getByRole('button', { name: 'Submit dispatch' }));
 
   await waitFor(() => expect(screen.getByRole('heading', { name: 'MVA' })).toBeTruthy());
+  // R3-A: the locality rides alongside the address, which is sent as typed.
+  expect(posted).toMatchObject({
+    address: '1 Main St',
+    locality: { town: 'Nichols', choice: 'HOME' },
+  });
 });
 
 test('a failed riding-board seat assignment surfaces an error instead of silently reverting', async () => {
@@ -403,4 +415,53 @@ test('canary panel shows unhealthy with text when the last run is stale even tho
   renderDiagnosticsPage(['ADMIN']);
 
   expect(await screen.findByText('Unhealthy — last run is stale')).toBeTruthy();
+});
+
+test('R3-A: the manual entry requires a locality; "Other town" sends the typed town', async () => {
+  let posted: Record<string, unknown> | undefined;
+  server.use(
+    // The home list is unavailable: the form still works, offering only "Other town".
+    http.get('/api/v1/alerting/home-locality', () => HttpResponse.json({}, { status: 503 })),
+    http.post('/api/v1/alerting/dispatches', async ({ request }) => {
+      posted = (await request.json()) as Record<string, unknown>;
+      return HttpResponse.json({ dispatchId: 'D-10' }, { status: 201 });
+    }),
+    http.get('/api/v1/alerting/dispatches/D-10', () =>
+      HttpResponse.json({
+        dispatchId: 'D-10',
+        incidentType: 'Fire',
+        address: '123 Main St',
+        crossStreets: '',
+        mapLink: null,
+        narrative: '',
+        prePlan: null,
+      }),
+    ),
+    http.get('/api/v1/alerting/dispatches/D-10/roster', () => HttpResponse.json({ members: [] })),
+    http.get('/api/v1/alerting/dispatches/D-10/receipts', () =>
+      HttpResponse.json({ receipts: [] }),
+    ),
+    http.get('/api/v1/apparatus/riding-board/D-10', () =>
+      HttpResponse.json({ dispatchId: 'D-10', apparatus: [] }),
+    ),
+  );
+  const user = userEvent.setup();
+  renderPage(['CHIEF']);
+
+  await user.type(await screen.findByLabelText('Incident type'), 'Fire');
+  await user.type(screen.getByLabelText('Address'), '123 Main St');
+  await user.type(screen.getByLabelText('Cross streets'), 'N/A');
+  await user.type(screen.getByLabelText('Narrative'), 'Mutual aid');
+  await user.type(screen.getByLabelText('Operator-entered reference'), 'ext-10');
+  const town = screen.getByLabelText(/Town \/ village/) as HTMLSelectElement;
+  expect(town.required).toBe(true);
+  expect([...town.options].map((option) => option.textContent)).toEqual(['Choose…', 'Other town…']);
+  await user.selectOptions(town, '__other__');
+  expect((screen.getByLabelText('Other town name') as HTMLInputElement).maxLength).toBe(80);
+  await user.type(screen.getByLabelText('Other town name'), 'Bridgeport');
+  await user.click(screen.getByRole('button', { name: 'Submit dispatch' }));
+
+  await waitFor(() => expect(posted).toBeDefined());
+  expect(posted?.locality).toEqual({ town: 'Bridgeport', choice: 'OTHER' });
+  expect(posted?.address).toBe('123 Main St');
 });
