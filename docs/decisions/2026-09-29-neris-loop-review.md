@@ -74,6 +74,25 @@ Deliberately not done (reviewer: skip):
 - **S3:** empty `additional_attributes`.
 - **Minor 14:** below.
 
+## Round 2b dispositions
+
+| Finding | Outcome |
+|---|---|
+| R1 non-list casualties | Block lock (`CASUALTY_INCOMPLETE`). |
+| R2 firefighter codes on a civilian | `ff_injury_details` is sent only for FF casualties. A civilian casualty carrying it gets the warning `CASUALTY_FF_DETAILS_IGNORED`. |
+| R3 no way back from missing | Resubmit (even unchanged) or submit reaches the worker. The worker forgets the dropped id, keeping it as `previousNerisIncidentId` and leaving the ledger rows untouched. It then runs adopt-then-create (POST). The inbox text says to resubmit. |
+| R4 nightly drift pages | The alarm watches `ReconciliationNewDrift`, which counts drift keys not seen on the previous night. A given-up record that NERIS lists again has `nerisMissingAt` cleared. |
+| R5 unit query | Now consistent. |
+| R6 entity sync | A SYNCING row older than 6 minutes (the worker timeout plus margin) is reported FAILED ("timed out") and may be restarted. |
+
+Left from R6:
+
+- Units are matched only within their station, so a unit moved to another station is created again.
+- An out-of-service NERIS station or unit with the same id is adopted.
+- When `station_id` has duplicates in NERIS, the first match wins.
+
+Left from the round-2b fidelity note: the fake server answers `GET` by id for records it never created. The "genuine 422, no record" branch is covered by the mocked worker tests only.
+
 ## Still open
 
 - **Unverified against a live NERIS account.** No authenticated call has been made:

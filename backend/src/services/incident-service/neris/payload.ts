@@ -347,7 +347,27 @@ export function sendableCasualties(schema: CompiledNerisSchema, value: unknown):
     denyKeys: NEVER_SENT_KEYS,
     codedValuesUnder: CASUALTY_CODED_SUBTREES,
   });
-  return Array.isArray(picked) ? picked : [];
+  return Array.isArray(picked) ? picked.map(withoutCivilianFfDetails) : [];
+}
+
+/** True when a stored casualty entry is civilian but carries firefighter-injury details. */
+export function hasCivilianFfDetails(entry: unknown): boolean {
+  const record = asRecord(entry);
+  const injury = asRecord(asRecord(record?.casualty)?.injury_or_noninjury);
+  return record?.type !== 'FF' && injury?.ff_injury_details !== undefined;
+}
+
+/**
+ * Firefighter-injury details (job classification, duty, PPE) describe a firefighter: they
+ * are sent only on an FF casualty, never on a civilian one (round 2b, R2).
+ */
+function withoutCivilianFfDetails(entry: unknown): unknown {
+  if (!hasCivilianFfDetails(entry)) return entry;
+  const record = asRecord(entry)!;
+  const casualty = asRecord(record.casualty)!;
+  const injury = { ...asRecord(casualty.injury_or_noninjury)! };
+  delete injury.ff_injury_details;
+  return { ...record, casualty: { ...casualty, injury_or_noninjury: injury } };
 }
 
 /**

@@ -346,6 +346,7 @@ describe('reconcileDepartment: missing records (round 2, N6)', () => {
               Items: [
                 { incidentId: 'L3', nerisIncidentId: ID('4473'), nerisMissingAt: 1_790_000_000 },
                 { incidentId: 'L4', nerisIncidentId: ID('4474'), nerisMissingChecks: 2 },
+                { incidentId: 'L5', nerisIncidentId: ID('4475'), nerisMissingAt: 1_790_000_000 },
               ],
             }
           : {},
@@ -359,7 +360,7 @@ describe('reconcileDepartment: missing records (round 2, N6)', () => {
           Promise.resolve({
             ok: true,
             httpStatus: 200,
-            incidents: [{ nerisId: ID('4474') }],
+            incidents: [{ nerisId: ID('4474') }, { nerisId: ID('4475') }],
             truncated: false,
           }),
       } as unknown as NerisApi,
@@ -368,11 +369,72 @@ describe('reconcileDepartment: missing records (round 2, N6)', () => {
       new Date('2026-09-29T03:00:00Z'),
       'corr',
     );
+    // L5 was given up on but NERIS lists it again: its marker is cleared, not unknown drift.
     expect(result?.drift).toEqual([]);
-    const reset = sent.find((c) => c.constructor.name === 'UpdateCommand')!;
-    expect(reset.input).toMatchObject({
-      Key: { pk: 'DEPT#NICHOLS#INCIDENT#L4', sk: 'METADATA' },
-      UpdateExpression: 'REMOVE nerisMissingChecks, nerisMissingSince',
+    const resets = sent.filter((c) => c.constructor.name === 'UpdateCommand');
+    expect(resets.map((c) => (c.input.Key as { pk: string }).pk)).toEqual([
+      'DEPT#NICHOLS#INCIDENT#L4',
+      'DEPT#NICHOLS#INCIDENT#L5',
+    ]);
+    expect(resets[1]!.input.UpdateExpression).toBe(
+      'REMOVE nerisMissingChecks, nerisMissingSince, nerisMissingAt',
+    );
+  });
+});
+
+describe('reconcileDepartment: only new drift is published (round 2b, R4)', () => {
+  function run(previousKeys: string[] | undefined) {
+    const sent: Command[] = [];
+    const send = vi.fn((command: Command) => {
+      sent.push(command);
+      return Promise.resolve(
+        command.constructor.name === 'QueryCommand'
+          ? { Items: [] }
+          : command.constructor.name === 'GetCommand'
+            ? previousKeys
+              ? { Item: { driftKeys: previousKeys } }
+              : {}
+            : {},
+      );
+    });
+    const result = reconcileDepartment(
+      { send } as unknown as DynamoDBDocumentClient,
+      'table',
+      {
+        listIncidents: () =>
+          Promise.resolve({
+            ok: true,
+            httpStatus: 200,
+            incidents: [{ nerisId: ID('9001') }],
+            truncated: false,
+          }),
+      } as unknown as NerisApi,
+      DEPT,
+      'FD09190828',
+      new Date('2026-09-29T03:00:00Z'),
+      'corr',
+    );
+    return { sent, result };
+  }
+
+  it('publishes drift the first night it is seen', async () => {
+    const { sent, result } = run(undefined);
+    expect((await result)?.newDriftCount).toBe(1);
+    expect(sent.some((c) => c.constructor.name === 'TransactWriteCommand')).toBe(true);
+  });
+
+  it('does not publish (or page) again for drift already reported, but keeps the run record', async () => {
+    const { sent, result } = run([`UNKNOWN_IN_NERIS#${ID('9001')}`]);
+    const outcome = await result;
+    expect(outcome?.drift).toHaveLength(1);
+    expect(outcome?.newDriftCount).toBe(0);
+    expect(sent.some((c) => c.constructor.name === 'TransactWriteCommand')).toBe(false);
+    const put = sent.find((c) => c.constructor.name === 'PutCommand')!;
+    expect(put.input.Item).toMatchObject({
+      sk: 'RECONCILIATION#LAST',
+      driftCount: 1,
+      newDriftCount: 0,
+      driftKeys: [`UNKNOWN_IN_NERIS#${ID('9001')}`],
     });
   });
 });

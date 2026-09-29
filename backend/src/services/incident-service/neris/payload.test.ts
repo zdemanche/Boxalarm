@@ -250,7 +250,14 @@ describe('fire-only guardrail: nothing beyond the NERIS schema, no casualty demo
             {
               type: 'NONFF',
               gender: 'MALE',
-              casualty: { injury_or_noninjury: { type: 'INJURED_NONFATAL', cause: 'EXPOSURE' } },
+              casualty: {
+                injury_or_noninjury: {
+                  type: 'INJURED_NONFATAL',
+                  cause: 'EXPOSURE',
+                  // Firefighter-only details on a civilian: never sent (round 2b, R2).
+                  ff_injury_details: { job_classification: 'VOLUNTEER', ppe_items: ['SCBA'] },
+                },
+              },
             },
           ],
         },

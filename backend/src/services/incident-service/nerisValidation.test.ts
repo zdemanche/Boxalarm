@@ -364,6 +364,33 @@ describe('casualties and rescues', () => {
     }
   });
 
+  it('blocks casualties stored as a single object rather than a list (round 2b, R1)', () => {
+    for (const api of [NERIS_API, undefined]) {
+      const result = withCasualties({ type: 'NONFF' }, api);
+      const issue = result.blocking.find((i) => i.code === 'CASUALTY_INCOMPLETE');
+      expect(issue?.message).toMatch(/not stored as a list/);
+    }
+  });
+
+  it('warns that firefighter-injury details on a civilian casualty are left out (round 2b, R2)', () => {
+    const result = withCasualties(
+      [
+        {
+          type: 'NONFF',
+          casualty: {
+            injury_or_noninjury: {
+              type: 'INJURED_NONFATAL',
+              ff_injury_details: { job_classification: 'VOLUNTEER' },
+            },
+          },
+        },
+      ],
+      NERIS_API,
+    );
+    expect(codes(result.warnings)).toContain('CASUALTY_FF_DETAILS_IGNORED');
+    expect(codes(result.blocking)).not.toContain('CASUALTY_INCOMPLETE');
+  });
+
   it('blocks a bad outcome code but not a bad demographic that is never sent', () => {
     const bad = withCasualties(
       [{ type: 'NONFF', casualty: { injury_or_noninjury: { type: 'INJURED_SOMEWHAT' } } }],

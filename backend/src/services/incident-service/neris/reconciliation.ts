@@ -40,8 +40,8 @@ export const MISSING_MAX_CHECKS = 3;
  *    department. `MISSING_IN_NERIS` (deleted or superseded there), `STATUS_MISMATCH`
  *    (NERIS moved on and we did not see it) and `UNKNOWN_IN_NERIS` (a record NERIS holds for
  *    the department that Boxalarm never sent — another system, or a double entry) are
- *    published once as `neris.reconciliation.drift_detected` and kept on the department's
- *    last-run row. A truncated NERIS listing skips the two "missing" checks rather than
+ *    kept on the department's last-run row; drift not seen on the previous run is published as
+ *    `neris.reconciliation.drift_detected` and counted by the alarmed ReconciliationNewDrift. A truncated NERIS listing skips the two "missing" checks rather than
  *    guessing.
  * 2. No-activity months: when the previous month closed with zero local incidents and no
  *    no-activity report on file, `neris.no_activity.due` goes out once for that month so the
@@ -65,7 +65,20 @@ export interface LocalSubmitted {
   readonly dispatchNumber: string;
   /** Nights in a row this record was missing from NERIS (reset when it is seen again). */
   readonly missingChecks?: number;
+  /**
+   * Given up on as no longer in NERIS (`nerisMissingAt`): not reported missing again, and
+   * if NERIS lists it again its marker is cleared rather than it showing as unknown drift.
+   */
+  readonly givenUp?: boolean;
 }
+
+/** One drift finding's identity across nights: new drift is what the alarm pages on. */
+export function driftKey(entry: Drift): string {
+  return `${entry.kind}#${entry.nerisIncidentId}`;
+}
+
+/** Drift keys kept on the last-run row to tell new drift from drift already reported. */
+const MAX_DRIFT_KEYS = 1_000;
 
 export function diffAgainstNeris(
   local: readonly LocalSubmitted[],
@@ -78,7 +91,7 @@ export function diffAgainstNeris(
   for (const record of local) {
     const found = remoteById.get(record.nerisIncidentId);
     if (!found) {
-      if (!truncated) {
+      if (!truncated && !record.givenUp) {
         drift.push({
           kind: 'MISSING_IN_NERIS',
           incidentId: record.incidentId,
@@ -225,7 +238,7 @@ export async function reconcileDepartment(
   departmentNerisId: string,
   now: Date,
   correlationId: string,
-): Promise<{ drift: Drift[]; truncated: boolean } | undefined> {
+): Promise<{ drift: Drift[]; truncated: boolean; newDriftCount: number } | undefined> {
   const toAlarmAt = Math.floor(now.getTime() / 1000);
   const local = (
     await queryIncidentsBetween(
@@ -236,10 +249,7 @@ export async function reconcileDepartment(
       toAlarmAt,
     )
   ).flatMap((item) =>
-    typeof item.incidentId === 'string' &&
-    typeof item.nerisIncidentId === 'string' &&
-    // Given up on and already reported: not re-counted as drift every night.
-    item.nerisMissingAt === undefined
+    typeof item.incidentId === 'string' && typeof item.nerisIncidentId === 'string'
       ? [
           {
             incidentId: item.incidentId,
@@ -249,6 +259,7 @@ export async function reconcileDepartment(
             ...(typeof item.nerisMissingChecks === 'number'
               ? { missingChecks: item.nerisMissingChecks }
               : {}),
+            ...(item.nerisMissingAt !== undefined ? { givenUp: true } : {}),
           },
         ]
       : [],
@@ -266,6 +277,18 @@ export async function reconcileDepartment(
   const drift = diffAgainstNeris(local, listed.incidents, listed.truncated);
   const repaired = await repairDrift(client, tableName, deptId, drift, listed.incidents, now);
   await clearFoundAgain(client, tableName, deptId, local, listed.incidents);
+  // Drift already reported on an earlier night is not new: the alarm and the event are for
+  // what changed, so a persisting difference does not page the chief every night (R4).
+  const previous = (
+    await client.send(
+      new GetCommand({
+        TableName: tableName,
+        Key: { pk: buildDeptScopedPk(deptId, 'NERIS'), sk: 'RECONCILIATION#LAST' },
+      }),
+    )
+  ).Item as { driftKeys?: unknown } | undefined;
+  const seen = new Set(Array.isArray(previous?.driftKeys) ? (previous.driftKeys as string[]) : []);
+  const newDrift = drift.filter((entry) => !seen.has(driftKey(entry)));
   const pk = buildDeptScopedPk(deptId, 'NERIS');
   const summary = {
     pk,
@@ -278,8 +301,10 @@ export async function reconcileDepartment(
     driftCount: drift.length,
     repairedCount: repaired,
     drift: drift.slice(0, MAX_DRIFT_IN_EVENT),
+    newDriftCount: newDrift.length,
+    driftKeys: drift.map(driftKey).slice(0, MAX_DRIFT_KEYS),
   };
-  if (drift.length === 0) {
+  if (newDrift.length === 0) {
     await client.send(new PutCommand({ TableName: tableName, Item: summary }));
   } else {
     await client.send(
@@ -297,6 +322,8 @@ export async function reconcileDepartment(
                 {
                   deptId,
                   driftCount: drift.length,
+                  newDriftCount: newDrift.length,
+                  newDrift: newDrift.slice(0, MAX_DRIFT_IN_EVENT),
                   counts: {
                     MISSING_IN_NERIS: drift.filter((d) => d.kind === 'MISSING_IN_NERIS').length,
                     STATUS_MISMATCH: drift.filter((d) => d.kind === 'STATUS_MISMATCH').length,
@@ -311,10 +338,13 @@ export async function reconcileDepartment(
       }),
     );
   }
-  return { drift, truncated: listed.truncated };
+  return { drift, truncated: listed.truncated, newDriftCount: newDrift.length };
 }
 
-/** A record counted missing that NERIS lists again starts its count over. */
+/**
+ * A record counted missing that NERIS lists again starts its count over; one given up on
+ * (`nerisMissingAt`) is no longer missing at all (round 2b, R4).
+ */
 async function clearFoundAgain(
   client: DynamoDBDocumentClient,
   tableName: string,
@@ -324,14 +354,16 @@ async function clearFoundAgain(
 ): Promise<void> {
   const remoteIds = new Set(remote.map((record) => record.nerisId));
   for (const record of local) {
-    if (!record.missingChecks || !remoteIds.has(record.nerisIncidentId)) continue;
+    if ((!record.missingChecks && !record.givenUp) || !remoteIds.has(record.nerisIncidentId)) {
+      continue;
+    }
     await client
       .send(
         new UpdateCommand({
           TableName: tableName,
           Key: { pk: buildDeptScopedPk(deptId, 'INCIDENT', record.incidentId), sk: 'METADATA' },
           ConditionExpression: 'attribute_exists(pk) AND nerisIncidentId = :nerisId',
-          UpdateExpression: 'REMOVE nerisMissingChecks, nerisMissingSince',
+          UpdateExpression: 'REMOVE nerisMissingChecks, nerisMissingSince, nerisMissingAt',
           ExpressionAttributeValues: { ':nerisId': record.nerisIncidentId },
         }),
       )
@@ -587,12 +619,17 @@ export async function runReconciliation(
         correlationId,
         deptId,
         driftCount: result.drift.length,
+        newDriftCount: result.newDriftCount,
         truncated: result.truncated,
       });
       emitOutcomeMetric(
         METRIC_NAMESPACE,
         result.drift.length > 0 ? 'ReconciliationDriftDetected' : 'ReconciliationClean',
       );
+      // The alarmed metric: only drift not already reported on an earlier night.
+      if (result.newDriftCount > 0) {
+        emitOutcomeMetric(METRIC_NAMESPACE, 'ReconciliationNewDrift');
+      }
     } catch (error) {
       logger.error({
         event: 'neris.reconciliation.failed',

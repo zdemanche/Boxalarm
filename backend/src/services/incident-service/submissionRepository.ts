@@ -235,6 +235,17 @@ export interface SubmissionRepository {
     incidentId: string,
     expectedNerisId: string,
   ): Promise<void>;
+  /**
+   * A record reconciliation gave up on as no longer in NERIS (`nerisMissingAt`) is sent again
+   * as a create: its NERIS id, status and missing markers are removed from the report (the
+   * id is kept as `previousNerisIncidentId`; the submission ledger rows are untouched).
+   * False when the report no longer carries that id or is no longer marked missing.
+   */
+  forgetMissingNerisRecord(
+    deptId: VerifiedDeptId,
+    incidentId: string,
+    nerisIncidentId: string,
+  ): Promise<boolean>;
 }
 
 export function createSubmissionRepository(
@@ -265,7 +276,7 @@ export function createSubmissionRepository(
                   // Only a report an officer has reviewed and locked, with no send in flight.
                   // A report NERIS already holds goes through resubmit (diff + PUT by id), not
                   // a second submit (review minor 4).
-                  ConditionExpression: `attribute_exists(pk) AND #status = :validated AND attribute_exists(lockedAt) AND attribute_not_exists(nerisIncidentId) AND ${NOT_IN_FLIGHT_CONDITION}`,
+                  ConditionExpression: `attribute_exists(pk) AND #status = :validated AND attribute_exists(lockedAt) AND (attribute_not_exists(nerisIncidentId) OR attribute_exists(nerisMissingAt)) AND ${NOT_IN_FLIGHT_CONDITION}`,
                   UpdateExpression:
                     'SET #status = :submitted, submissionStatus = :submitted, submissionActivityAt = :activityAt, updatedAt = :updatedAt',
                   ExpressionAttributeNames: { '#status': 'status' },
@@ -304,7 +315,7 @@ export function createSubmissionRepository(
               ? 'NOT_LOCKED'
               : isInFlight(item)
                 ? 'IN_FLIGHT'
-                : typeof item.nerisIncidentId === 'string'
+                : typeof item.nerisIncidentId === 'string' && item.nerisMissingAt === undefined
                   ? 'IN_NERIS'
                   : 'NOT_VALIDATED',
           );
@@ -565,6 +576,28 @@ export function createSubmissionRepository(
           },
         }),
       );
+    },
+
+    async forgetMissingNerisRecord(deptId, incidentId, nerisIncidentId) {
+      try {
+        await client.send(
+          new UpdateCommand({
+            TableName: tableName,
+            Key: { pk: buildDeptScopedPk(deptId, 'INCIDENT', incidentId), sk: 'METADATA' },
+            ConditionExpression:
+              'attribute_exists(pk) AND nerisIncidentId = :nerisId AND attribute_exists(nerisMissingAt)',
+            UpdateExpression:
+              'SET previousNerisIncidentId = :nerisId REMOVE nerisIncidentId, nerisStatus, nerisStatusAt, pendingNerisId, nerisMissingAt, nerisMissingChecks, nerisMissingSince',
+            ExpressionAttributeValues: { ':nerisId': nerisIncidentId },
+          }),
+        );
+        return true;
+      } catch (error) {
+        if (error instanceof Error && error.name === 'ConditionalCheckFailedException') {
+          return false;
+        }
+        throw error;
+      }
     },
 
     async getSubmission(deptId, incidentId) {

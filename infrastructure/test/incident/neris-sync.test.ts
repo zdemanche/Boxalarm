@@ -162,7 +162,7 @@ describe("NerisSync", () => {
     );
     expect(alarms.map(([namespace, metric]) => `${namespace}/${metric}`)).toEqual([
       "Boxalarm/neris-status-poller/NerisStatusPollExpired",
-      "Boxalarm/neris-reconciliation/ReconciliationDriftDetected",
+      "Boxalarm/neris-reconciliation/ReconciliationNewDrift",
       "Boxalarm/neris-reconciliation/NerisRecordMissing",
     ]);
     for (const [, , actions] of alarms) {

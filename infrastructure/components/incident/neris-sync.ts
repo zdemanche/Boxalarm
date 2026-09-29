@@ -230,8 +230,10 @@ export class NerisSync extends pulumi.ComponentResource {
         [
           "drift-detected",
           "Boxalarm/neris-reconciliation",
-          "ReconciliationDriftDetected",
-          "The nightly NERIS reconciliation found reports whose NERIS state differs from Boxalarm's (see the department's RECONCILIATION#LAST row).",
+          // New drift only (round 2b, R4): a difference that persists night after night (e.g.
+          // records another system filed) pages once, not every night.
+          "ReconciliationNewDrift",
+          "The nightly NERIS reconciliation found new differences between NERIS and Boxalarm (see the department's RECONCILIATION#LAST row).",
         ],
         [
           "record-missing",

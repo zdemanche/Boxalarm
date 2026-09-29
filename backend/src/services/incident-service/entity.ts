@@ -65,6 +65,11 @@ export interface Incident {
   readonly lockedContentVersion?: number;
   /** The NERIS id a create in progress will produce (set before the POST; review M2). */
   readonly pendingNerisId?: string;
+  /**
+   * Epoch seconds reconciliation gave up on the record as no longer in NERIS (round 2, N6).
+   * The next send forgets `nerisIncidentId` and creates the record again (round 2b, R3).
+   */
+  readonly nerisMissingAt?: number;
   /** sha256 of the last payload NERIS accepted; a differing hash means edits await resubmission. */
   readonly lastPayloadHash?: string;
 }
