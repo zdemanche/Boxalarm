@@ -23,7 +23,7 @@ function CallRow({ call, onOpen }: { call: ActiveCall; onOpen: () => void }) {
   return (
     <TouchableOpacity
       accessibilityRole="button"
-      accessibilityLabel={`${type} at ${address}. Dispatched ${formatClock(dispatchedMs)}, ${formatElapsed(dispatchedMs)}.${tone}${call.fromPageOnly ? ' Received on this phone; not confirmed by the server.' : ''} Open call.`}
+      accessibilityLabel={`${type} at ${address}. ${call.fromPageOnly ? 'Received' : 'Dispatched'} ${formatClock(dispatchedMs)}, ${formatElapsed(dispatchedMs)}.${tone}${call.fromPageOnly ? ' Received on this phone; not confirmed by the server.' : ''} Open call.`}
       onPress={onOpen}
       style={{
         minHeight: CALL_ROW_MIN_HEIGHT,
@@ -53,7 +53,8 @@ function CallRow({ call, onOpen }: { call: ActiveCall; onOpen: () => void }) {
       <Text
         style={{ color: theme.fgMuted, fontSize: typeScale.mono.size, fontFamily: 'monospace' }}
       >
-        {formatClock(dispatchedMs)} · {formatElapsed(dispatchedMs)}
+        {call.fromPageOnly ? 'received' : 'dispatched'} {formatClock(dispatchedMs)} ·{' '}
+        {formatElapsed(dispatchedMs)}
       </Text>
       {call.fromPageOnly ? (
         <StatusChip status="warning" label="Received on this phone - not confirmed" />
@@ -164,6 +165,8 @@ export function AlertsHomeScreen() {
                   address: item.address ?? '',
                   ...(item.crossStreets ? { crossStreets: item.crossStreets } : {}),
                   toneSequence: item.toneSequence,
+                  // A server row's time is the dispatch time; a page-only row's is receipt.
+                  ...(item.fromPageOnly ? {} : { dispatchedAt: item.dispatchedAt * 1000 }),
                   receivedAt: item.dispatchedAt * 1000,
                 },
               })

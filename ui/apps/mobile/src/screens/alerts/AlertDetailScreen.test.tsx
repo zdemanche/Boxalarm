@@ -399,3 +399,34 @@ describe('alarm silencing and lock screen (review CR-2)', () => {
     expect(view.queryByText(/your response:/i)).toBeNull();
   });
 });
+
+describe('dispatch time (review MJ-2)', () => {
+  test('a payload-only time is labelled "received", not shown as the dispatch time', async () => {
+    jest.spyOn(mockAlertsRepository, 'getDispatch').mockImplementation(() => new Promise(() => {}));
+    mockRouteParams.dispatchId = PAGE.dispatchId;
+    mockRouteParams.payload = { ...PAGE, receivedAt: new Date(2026, 0, 1, 2, 10).getTime() };
+
+    const { findByText } = await render(<AlertDetailScreen />);
+
+    expect(await findByText(/^RECEIVED 02:10 · /)).toBeTruthy();
+  });
+
+  test("the server's dispatch time wins over this phone's receipt time", async () => {
+    jest.spyOn(mockAlertsRepository, 'getDispatch').mockResolvedValue({
+      dispatchId: PAGE.dispatchId,
+      incidentType: 'Structure fire',
+      address: '21 Main St',
+      crossStreets: '',
+      mapLink: null,
+      narrative: '',
+      isSelfTest: false,
+      dispatchedAt: Math.floor(new Date(2026, 0, 1, 1, 5).getTime() / 1000),
+    });
+    mockRouteParams.dispatchId = PAGE.dispatchId;
+    mockRouteParams.payload = { ...PAGE, receivedAt: new Date(2026, 0, 1, 2, 10).getTime() };
+
+    const { findByText } = await render(<AlertDetailScreen />);
+
+    expect(await findByText(/^DISPATCHED 01:05 · /)).toBeTruthy();
+  });
+});

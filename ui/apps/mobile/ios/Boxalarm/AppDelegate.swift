@@ -113,6 +113,9 @@ extension AppDelegate {
       var record: [String: Any] = [
         "dispatchId": dispatchId,
         "tappedAt": Date().timeIntervalSince1970,
+        // When the page arrived, not when it was tapped: a page tapped 45 min late must not read
+        // "just now".
+        "deliveredAt": response.notification.date.timeIntervalSince1970,
         "title": content.title,
         "body": content.body,
       ]

@@ -273,6 +273,27 @@ describe('iOS taps on raw-APNs dispatch notifications (review round 2 N3)', () =
     expect((await store.all()).filter((row) => row.path.includes('DISP-ACTION'))).toHaveLength(1);
   });
 
+  test('the page time is when iOS delivered it, not when it was tapped (review MJ-2)', () => {
+    const deliveredAt = nowSeconds() - 300;
+    nativeWrite({
+      'boxalarm.pendingAlertTap': {
+        dispatchId: 'DISP-LATE',
+        tappedAt: nowSeconds(),
+        deliveredAt,
+        title: 'MVA',
+        body: 'MVA — 1 Main St',
+      },
+    });
+    coldStart();
+
+    subscribePushNotificationRouting();
+
+    expect(navigateToAlertDetail).toHaveBeenCalledWith(
+      'DISP-LATE',
+      expect.objectContaining({ receivedAt: deliveredAt * 1000 }),
+    );
+  });
+
   test('a malformed record is discarded without navigating', () => {
     nativeWrite({ 'boxalarm.pendingAlertTap': { dispatchId: 7, tappedAt: nowSeconds() } });
     coldStart();

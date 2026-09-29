@@ -40,7 +40,7 @@ async function withRecentPages(calls: ActiveDispatchSummary[], now: number): Pro
       incidentType: page.incidentType,
       address: page.address || null,
       crossStreets: page.crossStreets ?? null,
-      dispatchedAt: Math.floor(page.receivedAt / 1000),
+      dispatchedAt: Math.floor((page.dispatchedAt ?? page.receivedAt) / 1000),
       toneSequence: page.toneSequence ?? 1,
       fromPageOnly: true,
     })),

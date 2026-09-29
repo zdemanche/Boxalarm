@@ -67,6 +67,8 @@ export const IOS_PENDING_ALERT_TAP_MAX_AGE_SECONDS = 600;
 interface PendingIosTap {
   dispatchId?: unknown;
   tappedAt?: unknown;
+  /** Epoch seconds the notification was delivered (UNNotification.date). */
+  deliveredAt?: unknown;
   /** A notification action ("respond:RESPONDING") pressed instead of a plain tap. */
   action?: unknown;
   title?: unknown;
@@ -85,7 +87,9 @@ function readPendingIosTap(nowMs: number): AlertPayload | null {
     Settings.set({ [IOS_PENDING_ALERT_TAP_KEY]: null });
     return null;
   }
-  return alertPayloadFromPushData(pending as Record<string, unknown>, (tappedAt as number) * 1000);
+  const receivedSeconds =
+    typeof pending.deliveredAt === 'number' ? pending.deliveredAt : (tappedAt as number);
+  return alertPayloadFromPushData(pending as Record<string, unknown>, receivedSeconds * 1000);
 }
 
 /**

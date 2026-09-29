@@ -27,8 +27,11 @@ export interface AlertHeader {
   address: string;
   crossStreets: string;
   toneSequence: number | null;
-  /** Epoch ms, or null when neither the page nor the server said. */
-  dispatchedAt: number | null;
+  /**
+   * When: the server's dispatch time when known, else when this phone received the page -
+   * labelled as such, so an old call tapped late never reads "just now" as its dispatch time.
+   */
+  time: { at: number; kind: 'dispatched' | 'received' } | null;
 }
 
 export interface AlertDetailState {
@@ -60,7 +63,13 @@ function headerFrom(
     address,
     crossStreets: detail?.crossStreets || payload?.crossStreets || '',
     toneSequence: detail?.toneLadder?.currentToneSequence ?? payload?.toneSequence ?? null,
-    dispatchedAt: payload?.receivedAt ?? (detail?.dispatchedAt ? detail.dispatchedAt * 1000 : null),
+    time: detail?.dispatchedAt
+      ? { at: detail.dispatchedAt * 1000, kind: 'dispatched' }
+      : payload?.dispatchedAt
+        ? { at: payload.dispatchedAt, kind: 'dispatched' }
+        : payload
+          ? { at: payload.receivedAt, kind: 'received' }
+          : null,
   };
 }
 

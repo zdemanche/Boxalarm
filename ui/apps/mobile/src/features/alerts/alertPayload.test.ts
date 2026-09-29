@@ -42,7 +42,8 @@ test('explicit incidentType/address/crossStreets/dispatchedAt keys win over the 
     incidentType: 'Structure fire',
     address: '21 Main St',
     crossStreets: 'Elm / Oak',
-    receivedAt: 1_700_000_000_000,
+    dispatchedAt: 1_700_000_000_000,
+    receivedAt: 5,
   });
 });
 
@@ -53,6 +54,7 @@ test('no dispatchId means there is nothing to open', () => {
 
 test('a payload round-trips through the notification data map (strings only)', () => {
   const payload = {
+    dispatchedAt: 1_700_000_000_000,
     dispatchId: 'D1',
     incidentType: 'MVA',
     address: '1 Main St',

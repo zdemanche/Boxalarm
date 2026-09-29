@@ -12,7 +12,10 @@ export interface AlertPayload {
   address: string;
   crossStreets?: string;
   toneSequence?: number;
-  /** Epoch ms: dispatch time when the payload carries it, else when this phone received it. */
+  /** Epoch ms the server dispatched the call, when the page carries it (review MJ-2). */
+  dispatchedAt?: number;
+  /** Epoch ms this phone received the page (iOS: the notification's delivery date). Shown as
+   * "received", never as the dispatch time. */
   receivedAt: number;
 }
 
@@ -49,8 +52,10 @@ export function alertPayloadFromPushData(data: PushData, receivedAt: number): Al
     ...(crossStreets ? { crossStreets } : {}),
     ...(Number.isInteger(tone) && tone > 0 ? { toneSequence: tone } : {}),
     // dispatchedAt, when the server adds it, is epoch seconds like every other alerting time.
-    receivedAt:
-      Number.isFinite(dispatchedAt) && dispatchedAt > 0 ? dispatchedAt * 1000 : receivedAt,
+    ...(Number.isFinite(dispatchedAt) && dispatchedAt > 0
+      ? { dispatchedAt: dispatchedAt * 1000 }
+      : {}),
+    receivedAt,
   };
 }
 
@@ -62,6 +67,9 @@ export function alertPayloadToNotificationData(payload: AlertPayload): Record<st
     address: payload.address,
     ...(payload.crossStreets ? { crossStreets: payload.crossStreets } : {}),
     ...(payload.toneSequence ? { toneSequence: String(payload.toneSequence) } : {}),
+    ...(payload.dispatchedAt
+      ? { dispatchedAt: String(Math.floor(payload.dispatchedAt / 1000)) }
+      : {}),
     receivedAt: String(payload.receivedAt),
   };
 }

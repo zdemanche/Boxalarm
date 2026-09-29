@@ -235,12 +235,12 @@ export function AlertDetailScreen() {
   const answer = response.answer;
   const selected = (value: ResponseAnswer) => answer?.ackStatus === value;
   const verify = dispatch?.prePlan ? matchNotice(dispatch.prePlan) : null;
-  const dispatchedAt = header?.dispatchedAt ?? null;
+  const time = header?.time ?? null;
   const tone = header?.toneSequence ?? null;
   const statusStrip = [
     tone ? `TONE ${tone}` : null,
-    dispatchedAt ? formatClock(dispatchedAt) : null,
-    dispatchedAt ? formatElapsed(dispatchedAt, now) : null,
+    time ? `${time.kind === 'received' ? 'RECEIVED' : 'DISPATCHED'} ${formatClock(time.at)}` : null,
+    time ? formatElapsed(time.at, now) : null,
   ]
     .filter(Boolean)
     .join(' · ');
