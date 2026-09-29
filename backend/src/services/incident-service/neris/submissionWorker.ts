@@ -271,6 +271,9 @@ async function attemptSubmission(
       : !settings.submissionsEnabled
         ? 'NERIS submissions are switched off for this department'
         : "The NERIS schema hasn't been downloaded yet (daily schema refresh)";
+    // Switched off on purpose (a retry scheduled before the switch was flipped): record it
+    // on the ledger, but it is not a failure to page the chief or notify officers about.
+    const deliberate = Boolean(settings.departmentNerisId) && !settings.submissionsEnabled;
     await submissionRepository.appendSubmissionAttempt(
       payload.deptId,
       payload.incidentId,
@@ -280,12 +283,15 @@ async function attemptSubmission(
         retryCount: payload.retryCount,
         nerisEnvironment,
         failureReason,
-        notify: notifyFor(incident),
+        ...(deliberate ? {} : { notify: notifyFor(incident) }),
       },
       true,
       Math.floor(Date.now() / 1000),
     );
-    emitOutcomeMetric(METRIC_NAMESPACE, OUTCOME_METRIC.NOT_CONFIGURED);
+    emitOutcomeMetric(
+      METRIC_NAMESPACE,
+      deliberate ? 'SubmissionsDisabled' : OUTCOME_METRIC.NOT_CONFIGURED,
+    );
     return;
   }
 

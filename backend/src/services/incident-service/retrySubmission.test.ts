@@ -43,13 +43,32 @@ const OFFICER_AUTH = { sub: 'MBR-0002', deptId: 'NICHOLS', 'cognito:groups': 'OF
 const MEMBER_AUTH = { sub: 'MBR-0099', deptId: 'NICHOLS', 'cognito:groups': 'MEMBER' };
 const INCIDENT_ID = 'NICHOLS-4471-1798000000';
 
+function mockSettings(overrides: Record<string, unknown>): void {
+  vi.doMock('./nerisSettings.js', async (importOriginal) => {
+    const actual = await importOriginal<typeof import('./nerisSettings.js')>();
+    return {
+      ...actual,
+      getNerisDeptSettings: () =>
+        Promise.resolve({
+          ...actual.DEFAULT_NERIS_SETTINGS,
+          departmentNerisId: 'FD09190828',
+          ...overrides,
+        }),
+    };
+  });
+}
+
 describe('retrySubmission handler', () => {
   beforeEach(() => {
     vi.resetModules();
+    vi.stubEnv('INCIDENT_TABLE_NAME', 'incident-table');
+    mockSettings({});
   });
 
   afterEach(() => {
     vi.unmock('./submissionRepository.js');
+    vi.unmock('./nerisSettings.js');
+    vi.unstubAllEnvs();
     vi.restoreAllMocks();
   });
 
@@ -181,5 +200,31 @@ describe('retrySubmission handler', () => {
     const body = JSON.parse((result as { body: string }).body) as Record<string, unknown>;
     expect(body.type).toBe('about:blank');
     expect(body.traceId).toBeDefined();
+  });
+  it('refuses with 409 SUBMISSIONS_DISABLED, without queuing, when the kill switch is off', async () => {
+    mockSettings({ submissionsEnabled: false });
+    const repoCall = vi.fn();
+    vi.doMock('./submissionRepository.js', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('./submissionRepository.js')>();
+      return { ...actual, getSubmissionRepository: () => ({ retrySubmission: repoCall }) };
+    });
+    const { handler } = await import('./retrySubmission.js');
+
+    const result = await handler(buildEvent(ADMIN_AUTH, INCIDENT_ID), {} as never, () => undefined);
+
+    expect(result).toMatchObject({ statusCode: 409 });
+    const body = JSON.parse((result as { body: string }).body) as Record<string, unknown>;
+    expect(body.code).toBe('SUBMISSIONS_DISABLED');
+    expect(repoCall).not.toHaveBeenCalled();
+  });
+
+  it('refuses with 409 NOT_CONFIGURED when the department has no NERIS id', async () => {
+    mockSettings({ departmentNerisId: undefined });
+    const { handler } = await import('./retrySubmission.js');
+
+    const result = await handler(buildEvent(ADMIN_AUTH, INCIDENT_ID), {} as never, () => undefined);
+
+    expect(result).toMatchObject({ statusCode: 409 });
+    expect(JSON.parse((result as { body: string }).body)).toMatchObject({ code: 'NOT_CONFIGURED' });
   });
 });

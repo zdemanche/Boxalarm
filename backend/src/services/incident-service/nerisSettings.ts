@@ -49,6 +49,33 @@ export const DEFAULT_NERIS_SETTINGS: NerisDeptSettings = {
   unitNerisIds: {},
 };
 
+/**
+ * Why nothing may be sent for this department right now (a deliberate setting, not a
+ * failure), or undefined when sending is allowed. Submit and retry answer 409 with this
+ * instead of queuing a send that could only fail, notify officers and page the chief.
+ */
+export function sendingBlocked(
+  settings: NerisDeptSettings,
+):
+  | { readonly code: 'SUBMISSIONS_DISABLED' | 'NOT_CONFIGURED'; readonly message: string }
+  | undefined {
+  if (!settings.submissionsEnabled) {
+    return {
+      code: 'SUBMISSIONS_DISABLED',
+      message:
+        'NERIS submissions are switched off for the department. An admin can turn them back on under Settings > NERIS.',
+    };
+  }
+  if (!settings.departmentNerisId) {
+    return {
+      code: 'NOT_CONFIGURED',
+      message:
+        "The department's NERIS id isn't set, so nothing can be sent. An admin can add it under Settings > NERIS.",
+    };
+  }
+  return undefined;
+}
+
 function asRecord(value: unknown): Record<string, unknown> | undefined {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
     ? (value as Record<string, unknown>)

@@ -8,7 +8,8 @@ import {
   readAuthorizerContext,
   resolveTraceId,
 } from './authContext.js';
-import { IncidentNotFoundError } from './repository.js';
+import { getNerisDeptSettings, sendingBlocked } from './nerisSettings.js';
+import { IncidentNotFoundError, getDocumentClient, getTableName } from './repository.js';
 import { SubmissionRetryConflictError, getSubmissionRepository } from './submissionRepository.js';
 
 export const handler: APIGatewayProxyHandlerV2WithLambdaAuthorizer<AuthorizerContext> = async (
@@ -60,6 +61,14 @@ export const handler: APIGatewayProxyHandlerV2WithLambdaAuthorizer<AuthorizerCon
   }
 
   try {
+    // The department kill switch is a deliberate setting: refuse clearly here rather than
+    // queue a send the worker could only fail (inbox items to officers, NotConfigured alarm).
+    const blocked = sendingBlocked(
+      await getNerisDeptSettings(getDocumentClient(), getTableName(process.env), deptId),
+    );
+    if (blocked) {
+      return problemResponse(409, 'Conflict', blocked.message, traceId, { code: blocked.code });
+    }
     const repository = getSubmissionRepository(process.env);
     const result = await repository.retrySubmission(deptId, incidentId, nowEpochSeconds(), traceId);
     emitIncidentMetric('IncidentSubmissionRetryEnqueued');

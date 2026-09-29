@@ -52,6 +52,7 @@ function mockDeps(options: {
   /** NERIS already holds the record (GET by id answers 200). */
   readonly existsInNeris?: boolean;
   readonly departmentNerisId?: string | null;
+  readonly submissionsEnabled?: boolean;
 }) {
   const incident = {
     ...fakeIncident(),
@@ -80,6 +81,7 @@ function mockDeps(options: {
           ...(options.departmentNerisId === null
             ? {}
             : { departmentNerisId: options.departmentNerisId ?? DEPT_NERIS_ID }),
+          ...(options.submissionsEnabled === false ? { submissionsEnabled: false } : {}),
           unitNerisIds: { E1: 'FD09190828S001U001' },
         }),
     };
@@ -360,6 +362,23 @@ describe('submissionWorker handler (SQS trigger)', () => {
       true,
       expect.any(Number),
     );
+  });
+
+  it('records a send stopped by the kill switch without notifying officers', async () => {
+    const { appendSubmissionAttempt, fetchFn } = mockDeps({ submissionsEnabled: false });
+    const { createHandler } = await import('./submissionWorker.js');
+    const handler = createHandler({ schedulerClient: { send: vi.fn() } as never });
+
+    await handler(
+      { Records: [sqsRecord(submittedEnvelope('NICHOLS', INCIDENT_ID))] },
+      FAKE_CONTEXT,
+      () => undefined,
+    );
+
+    expect(fetchFn).not.toHaveBeenCalled();
+    const attempt = appendSubmissionAttempt.mock.calls[0]?.[2] as Record<string, unknown>;
+    expect(attempt).toMatchObject({ outcome: 'NOT_CONFIGURED' });
+    expect(attempt).not.toHaveProperty('notify');
   });
 
   it('treats a 401/403 as CLIENT_ERROR — terminal, and not a rejection of the report', async () => {
