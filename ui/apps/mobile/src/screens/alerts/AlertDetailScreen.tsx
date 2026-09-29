@@ -258,7 +258,10 @@ export function AlertDetailScreen() {
           )}
         </View>
 
-        <PrePlanPanel prePlan={dispatch.prePlan} />
+        <PrePlanPanel
+          prePlan={dispatch.prePlan}
+          unavailable={dispatch.prePlanUnavailable === true}
+        />
 
         <TouchableOpacity
           accessibilityRole="button"

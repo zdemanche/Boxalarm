@@ -17,7 +17,7 @@ import { toMutualAidView, type MutualAidView } from '../../ladderControls/shared
 import { getDispatchDetail, getMutualAidEvent } from './repository.js';
 import { buildMapLink } from './mapLink.js';
 import { dataUnavailableProblem } from './problemDetails.js';
-import { fetchPrePlan } from './prePlanContext.js';
+import { PRE_PLAN_UNAVAILABLE, fetchPrePlan } from './prePlanContext.js';
 
 const METRICS_NAMESPACE = 'Boxalarm/Alerting';
 
@@ -96,7 +96,10 @@ async function handleGetAlertDetail(
         // null = not requested; the key is omitted when the read failed, so an officer's
         // screen shows "unknown" rather than "not requested" (see fetchMutualAid).
         ...(mutualAid === UNAVAILABLE ? {} : { mutualAid }),
-        prePlan,
+        // null = no pre-plan matched; on a failed lookup the key is omitted and
+        // prePlanUnavailable says so (the mutualAid precedent above), so the crew reads
+        // "unavailable", never "no pre-plan on file".
+        ...(prePlan === PRE_PLAN_UNAVAILABLE ? { prePlanUnavailable: true } : { prePlan }),
       }),
     };
   } catch (error) {

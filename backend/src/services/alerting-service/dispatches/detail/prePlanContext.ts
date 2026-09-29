@@ -19,6 +19,9 @@ import {
 
 const METRICS_NAMESPACE = 'Boxalarm/Alerting';
 
+/** The pre-plan lookup itself failed — distinct from "no pre-plan matched" (null). */
+export const PRE_PLAN_UNAVAILABLE = Symbol('prePlanUnavailable');
+
 /** One pre-plan among several the crew must choose between (matchType CANDIDATES). */
 interface PrePlanCandidateView {
   readonly occupancyId: string;
@@ -89,9 +92,9 @@ async function matchPrePlan(
 
 /**
  * Pre-plan + hydrant context for the dispatch. Read-side enrichment only — it runs after the
- * page went out and reads nothing but the alerting table's copies. Any failure degrades to
- * prePlan: null (or, if only the hydrant read fails, an empty hydrant list); it never fails
- * the dispatch detail.
+ * page went out and reads nothing but the alerting table's copies. A failed lookup is reported
+ * as PRE_PLAN_UNAVAILABLE (the response then says prePlanUnavailable, never "no pre-plan");
+ * a failed hydrant read leaves an empty hydrant list; neither fails the dispatch detail.
  */
 export async function fetchPrePlan(
   client: DynamoDBDocumentClient,
@@ -99,7 +102,7 @@ export async function fetchPrePlan(
   deptId: VerifiedDeptId,
   item: DispatchAlertItem,
   traceId: string,
-): Promise<PrePlanView | null> {
+): Promise<PrePlanView | null | typeof PRE_PLAN_UNAVAILABLE> {
   const dispatchLocation = { latitude: item.latitude, longitude: item.longitude };
   const dispatchPoint = isGeoPoint(dispatchLocation) ? dispatchLocation : undefined;
 
@@ -111,7 +114,9 @@ export async function fetchPrePlan(
       traceId,
       dispatchId: item.dispatchId,
     });
-    return null;
+    emitOutcomeMetric(METRICS_NAMESPACE, 'AlertDetailPrePlanUnavailable');
+    // Never reported as "no pre-plan": a throttle must not tell a crew the building has none.
+    return PRE_PLAN_UNAVAILABLE;
   }
   if (!match) {
     emitOutcomeMetric(METRICS_NAMESPACE, 'AlertDetailPrePlanNoMatch');

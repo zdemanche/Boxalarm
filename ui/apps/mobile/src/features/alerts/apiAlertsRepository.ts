@@ -40,6 +40,7 @@ function buildApiAlertsRepository(tokens: AuthTokenSource, apiBaseUrl: string): 
         mapLink: string | null;
         narrative: string;
         prePlan: DispatchAlert['prePlan'];
+        prePlanUnavailable?: boolean;
       };
       return {
         dispatchId: body.dispatchId,
@@ -50,6 +51,7 @@ function buildApiAlertsRepository(tokens: AuthTokenSource, apiBaseUrl: string): 
         narrative: body.narrative,
         isSelfTest: false,
         prePlan: body.prePlan,
+        ...(body.prePlanUnavailable === true ? { prePlanUnavailable: true } : {}),
       };
     },
 

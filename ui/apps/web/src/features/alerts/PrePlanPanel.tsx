@@ -70,6 +70,10 @@ export function matchNotice(prePlan: PrePlanEnrichment): { text: string; warning
   }
 }
 
+export const UNAVAILABLE_TEXT =
+  'Pre-plan unavailable right now. This does not mean there is no pre-plan for this address.';
+export const NO_MATCH_TEXT = 'No pre-plan matched this address.';
+
 const noticeStyle = (warning: boolean) =>
   warning
     ? {
@@ -112,13 +116,30 @@ function ShutoffList({ shutoffs }: { shutoffs: readonly UtilityShutoff[] }) {
 }
 
 // E1-S17-UI / E5-S8-UI: same alerting-route enrichment as mobile (N1.5 - never /inspections/*).
-export function PrePlanPanel({ prePlan }: { prePlan: PrePlanEnrichment | null | undefined }) {
+export function PrePlanPanel({
+  prePlan,
+  unavailable = false,
+}: {
+  prePlan: PrePlanEnrichment | null | undefined;
+  /** The lookup failed: say so, never "no pre-plan" (a throttle is not an empty binder). */
+  unavailable?: boolean;
+}) {
+  if (unavailable) {
+    return (
+      <Card title="Pre-plan">
+        <p role="note" style={noticeStyle(true)}>
+          {UNAVAILABLE_TEXT}
+        </p>
+      </Card>
+    );
+  }
+
   if (prePlan === undefined) return null;
 
   if (prePlan === null) {
     return (
       <Card title="Pre-plan">
-        <p>No pre-plan on file for this address.</p>
+        <p>{NO_MATCH_TEXT}</p>
       </Card>
     );
   }

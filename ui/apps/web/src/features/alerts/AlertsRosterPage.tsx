@@ -398,7 +398,10 @@ function DispatchHeader({ dispatchId }: { dispatchId: string }) {
         </a>
       ) : null}
       <p>{query.data.narrative}</p>
-      <PrePlanPanel prePlan={query.data.prePlan} />
+      <PrePlanPanel
+        prePlan={query.data.prePlan}
+        unavailable={query.data.prePlanUnavailable === true}
+      />
     </Card>
   );
 }

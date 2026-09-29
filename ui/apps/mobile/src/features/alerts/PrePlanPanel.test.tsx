@@ -29,9 +29,19 @@ test('renders the matched pre-plan with nearest hydrants, distance and flow clas
   expect(await findByText('H-210 · 210 m')).toBeTruthy();
 });
 
-test('says so when no pre-plan is on file for the address', async () => {
+test('says no pre-plan matched when none did', async () => {
   const { findByText } = await render(<PrePlanPanel prePlan={null} />);
-  expect(await findByText('No pre-plan on file for this address.')).toBeTruthy();
+  expect(await findByText('No pre-plan matched this address.')).toBeTruthy();
+});
+
+test('announces the pre-plan as unavailable - never "none" - when the lookup failed', async () => {
+  const { findByRole, queryByText } = await render(
+    <PrePlanPanel prePlan={undefined} unavailable />,
+  );
+  expect((await findByRole('alert')).props.children).toBe(
+    'Pre-plan unavailable right now. This does not mean there is no pre-plan for this address.',
+  );
+  expect(queryByText(/No pre-plan matched/)).toBeNull();
 });
 
 const BASE = { hazards: [], utilityShutoffs: [], nearestHydrants: [] };

@@ -113,7 +113,7 @@ describe('alert-detail handler', () => {
     expect(body.fanOutStartedAt).toBe(1798000002);
   });
 
-  it('AC2: renders full core content with prePlan null when the pre-plan copy read throws — isolation from the alert-path failure domain', async () => {
+  it('AC2: renders full core content and says the pre-plan is unavailable (never "none") when the lookup throws — isolation from the alert-path failure domain', async () => {
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const { createHandler } = await import('./handler.js');
     const docClient = routedClient({
@@ -125,7 +125,8 @@ describe('alert-detail handler', () => {
 
     expect(result).toMatchObject({ statusCode: 200 });
     const body = JSON.parse((result as { body: string }).body) as Record<string, unknown>;
-    expect(body.prePlan).toBeNull();
+    expect('prePlan' in body).toBe(false);
+    expect(body.prePlanUnavailable).toBe(true);
     expect(body.address).toBe('123 Main St');
     expect(body.narrative).toBe('Smoke showing, 2nd floor');
     const logged = errorSpy.mock.calls.map((call) => call[0] as string).join('\n');

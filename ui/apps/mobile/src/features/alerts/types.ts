@@ -92,6 +92,8 @@ export interface DispatchAlert {
   isSelfTest: boolean;
   toneLadder?: ToneLadder;
   prePlan?: PrePlanEnrichment | null;
+  /** The server could not look the pre-plan up (prePlan is then absent) - not "none on file". */
+  prePlanUnavailable?: boolean;
 }
 
 export interface SelfTestChannelResult {

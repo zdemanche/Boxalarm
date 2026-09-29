@@ -4,6 +4,10 @@ import type { NearestHydrant, PrePlanEnrichment, UtilityShutoff } from './types'
 
 type Tokens = (typeof palette)[keyof typeof palette];
 
+export const UNAVAILABLE_TEXT =
+  'Pre-plan unavailable right now. This does not mean there is no pre-plan for this address.';
+export const NO_MATCH_TEXT = 'No pre-plan matched this address.';
+
 /** Listed only when nearer than a usable one - so the crew knows not to lay in from it. */
 function isOutOfService(hydrant: NearestHydrant): boolean {
   return hydrant.status === 'OUT_OF_SERVICE';
@@ -124,9 +128,42 @@ function ShutoffList({
 // E1-S17-UI / E5-S8-UI: pre-plan/hydrant enrichment, sourced only from the alerting-service
 // dispatch-detail response (N1.5 - never a call to /inspections/*). Renders nothing (no empty
 // shell, no spinner) when the dispatch carries no pre-plan copy, per AC2.
-export function PrePlanPanel({ prePlan }: { prePlan: PrePlanEnrichment | null | undefined }) {
+export function PrePlanPanel({
+  prePlan,
+  unavailable = false,
+}: {
+  prePlan: PrePlanEnrichment | null | undefined;
+  /** The lookup failed: say so, never "no pre-plan" (a throttle is not an empty binder). */
+  unavailable?: boolean;
+}) {
   const scheme = useColorScheme();
   const tokens = scheme === 'dark' ? palette.cab : palette.day;
+
+  if (unavailable) {
+    return (
+      <View style={{ marginTop: spacing.lg }}>
+        <Text
+          accessibilityRole="header"
+          style={{ color: tokens.foreground, fontSize: typography.size.lg, fontWeight: '700' }}
+        >
+          Pre-plan
+        </Text>
+        <Text
+          accessibilityRole="alert"
+          style={{
+            color: tokens.warning,
+            fontSize: typography.size.base,
+            fontWeight: '700',
+            borderLeftWidth: 4,
+            borderLeftColor: tokens.warning,
+            paddingLeft: spacing.sm,
+          }}
+        >
+          {UNAVAILABLE_TEXT}
+        </Text>
+      </View>
+    );
+  }
 
   if (prePlan === undefined) return null;
 
@@ -140,7 +177,7 @@ export function PrePlanPanel({ prePlan }: { prePlan: PrePlanEnrichment | null | 
           Pre-plan
         </Text>
         <Text style={{ color: tokens.foreground, opacity: 0.7, fontSize: typography.size.base }}>
-          No pre-plan on file for this address.
+          {NO_MATCH_TEXT}
         </Text>
       </View>
     );

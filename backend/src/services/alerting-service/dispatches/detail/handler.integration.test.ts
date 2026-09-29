@@ -127,7 +127,7 @@ describe('alert-detail handler (real DynamoDB, AC2 — pre-plan isolation from t
     });
   });
 
-  it('core-harm: renders full core content with prePlan null when the pre-plan-copy read faults — the fault never propagates to the alert-path response', async () => {
+  it('core-harm: renders full core content with prePlanUnavailable (not "no pre-plan") when the pre-plan-copy read faults — the fault never propagates to the alert-path response', async () => {
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const { createHandler } = await import('./handler.js');
     const dispatchId = 'NICHOLS-preplan-fault';
@@ -151,8 +151,9 @@ describe('alert-detail handler (real DynamoDB, AC2 — pre-plan isolation from t
     expect(body).toMatchObject({
       incidentType: 'STRUCTURE_FIRE',
       address: '123 Main St',
-      prePlan: null,
+      prePlanUnavailable: true,
     });
+    expect('prePlan' in body).toBe(false);
     const logged = errorSpy.mock.calls.map((call) => call[0] as string).join('\n');
     expect(logged).toContain('dispatches.detail.preplan_read_failed');
     errorSpy.mockRestore();

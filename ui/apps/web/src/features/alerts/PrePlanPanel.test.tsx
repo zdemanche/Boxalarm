@@ -49,9 +49,17 @@ test('still renders a hydrant from an older response with no distance or class',
   expect(screen.getByText('H-014 · 4" · 1000 gpm')).toBeTruthy();
 });
 
-test('says so when no pre-plan is on file for the address', () => {
+test('says no pre-plan matched when none did', () => {
   render(<PrePlanPanel prePlan={null} />);
-  expect(screen.getByText('No pre-plan on file for this address.')).toBeTruthy();
+  expect(screen.getByText('No pre-plan matched this address.')).toBeTruthy();
+});
+
+test('says the pre-plan is unavailable - never "none" - when the lookup failed (minor 4)', () => {
+  render(<PrePlanPanel prePlan={undefined} unavailable />);
+  expect(screen.getByRole('note').textContent).toBe(
+    'Pre-plan unavailable right now. This does not mean there is no pre-plan for this address.',
+  );
+  expect(screen.queryByText(/No pre-plan matched/)).toBeNull();
 });
 
 const BASE = { hazards: [], utilityShutoffs: [], nearestHydrants: [] };
