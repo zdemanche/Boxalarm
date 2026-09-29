@@ -70,14 +70,6 @@ export function ManualDispatchEntryScreen() {
   const localityError =
     errorFor('locality') ?? errorFor('locality.town') ?? errorFor('locality.choice');
 
-  // Android announces the error through its live region; iOS has no live regions, so announce
-  // it explicitly (m8).
-  useEffect(() => {
-    if (localityError && Platform.OS === 'ios') {
-      AccessibilityInfo.announceForAccessibility(localityError);
-    }
-  }, [localityError]);
-
   const submit = async () => {
     setFieldErrors([]);
     setFormError(null);
@@ -86,7 +78,11 @@ export function ManualDispatchEntryScreen() {
         ? { town: otherTown.trim(), choice: 'OTHER' as const }
         : { town: localityChoice ?? '', choice: 'HOME' as const };
     if (locality.town.length === 0) {
-      setFieldErrors([{ field: 'locality', message: 'Choose the town or village.' }]);
+      const message = 'Choose the town or village.';
+      setFieldErrors([{ field: 'locality', message }]);
+      // Android announces it through the live region; iOS has none, so announce it on every
+      // failed submit, repeated ones included (m8, round-4b S2).
+      if (Platform.OS === 'ios') AccessibilityInfo.announceForAccessibility(message);
       return;
     }
     setSubmitting(true);

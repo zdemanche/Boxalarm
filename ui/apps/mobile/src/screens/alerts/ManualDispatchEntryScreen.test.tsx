@@ -112,6 +112,8 @@ describe('m8: locality choice accessibility', () => {
     const announce = jest
       .spyOn(AccessibilityInfo, 'announceForAccessibility')
       .mockImplementation(() => undefined);
+    // react-native's jest setup already mocks it: drop calls made by earlier tests.
+    announce.mockClear();
     const { findByRole, findByText } = await render(<ManualDispatchEntryScreen />);
 
     await fireEvent.press(await findByRole('button', { name: 'Submit dispatch' }));
@@ -120,6 +122,10 @@ describe('m8: locality choice accessibility', () => {
     expect(error.props.accessibilityLiveRegion).toBe('polite');
     expect(Platform.OS).toBe('ios');
     expect(announce).toHaveBeenCalledWith('Choose the town or village.');
+
+    // S2: a repeated failed submit announces the same error again.
+    await fireEvent.press(await findByRole('button', { name: 'Submit dispatch' }));
+    expect(announce).toHaveBeenCalledTimes(2);
     announce.mockRestore();
   });
 
