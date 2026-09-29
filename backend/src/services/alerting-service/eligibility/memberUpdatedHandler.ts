@@ -109,48 +109,50 @@ function seedDefaults(
 }
 
 /**
- * The eligibility fields (active, quals, availabilityState), guarded on the snapshot-wide
- * snapshotUpdatedAt. Roles and contact channels have their own guarded writes. Undefined when
- * the event carries none of these fields.
+ * Each eligibility field has its own clock; no shared field guards anything (review
+ * CRITICAL-1). `active` was guarded on the snapshot-wide snapshotUpdatedAt, which the
+ * availability consumer also advances - so a retirement or LOA delivered after a newer
+ * availability change (another queue, a retry, a DLQ redrive) was dropped as stale, and the
+ * retired member kept getting SMS pages and voice calls.
+ *  - active -> activeUpdatedAt;
+ *  - availabilityState -> availabilityUpdatedAt (the availability consumer's clock too);
+ *  - quals -> qualsUpdatedAt (eligibilityChangedConsumer's clock too).
+ * snapshotUpdatedAt is only "last applied write" for the staleness report; it guards nothing.
  */
-function buildMergeExpression(payload: MemberUpdatedPayload, snapshotUpdatedAt: number) {
-  const setClauses = [
-    'entityType = :entityType',
-    'memberId = :memberId',
-    'snapshotUpdatedAt = :snapshotUpdatedAt',
-  ];
-  const values: Record<string, unknown> = {
-    ':entityType': 'MEMBER_ELIGIBILITY_SNAPSHOT',
-    ':memberId': payload.memberId,
-    ':snapshotUpdatedAt': snapshotUpdatedAt,
-  };
-  const set = new Set<string>();
-  const assign = (field: keyof MemberUpdatedPayload, value: unknown) => {
-    if (value !== undefined) {
-      setClauses.push(`${field} = :${field}`);
-      values[`:${field}`] = value;
-      set.add(field);
-    }
-  };
-  assign('active', payload.active);
-  assign('quals', payload.quals);
-  assign('availabilityState', payload.availabilityState);
-  if (set.size === 0) {
-    return undefined;
-  }
-  seedDefaults(setClauses, values, set);
-  return {
-    UpdateExpression: `SET ${setClauses.join(', ')}`,
-    ConditionExpression:
-      'attribute_not_exists(snapshotUpdatedAt) OR snapshotUpdatedAt < :snapshotUpdatedAt',
-    ExpressionAttributeNames: ATTRIBUTE_NAMES,
-    ExpressionAttributeValues: values,
-  };
+const FIELD_CLOCKS = [
+  ['active', 'activeUpdatedAt'],
+  ['availabilityState', 'availabilityUpdatedAt'],
+  ['quals', 'qualsUpdatedAt'],
+] as const;
+
+function buildFieldExpressions(payload: MemberUpdatedPayload, eventTime: number) {
+  return FIELD_CLOCKS.filter(([field]) => payload[field] !== undefined).map(([field, clock]) => {
+    const setClauses = [
+      'entityType = :entityType',
+      'memberId = :memberId',
+      `${field} = :value`,
+      `${clock} = :eventTime`,
+      'snapshotUpdatedAt = :eventTime',
+    ];
+    const values: Record<string, unknown> = {
+      ':entityType': 'MEMBER_ELIGIBILITY_SNAPSHOT',
+      ':memberId': payload.memberId,
+      ':value': payload[field],
+      ':eventTime': eventTime,
+    };
+    seedDefaults(setClauses, values, new Set([field]));
+    return {
+      UpdateExpression: `SET ${setClauses.join(', ')}`,
+      ConditionExpression: `attribute_not_exists(${clock}) OR ${clock} < :eventTime`,
+      ExpressionAttributeNames: ATTRIBUTE_NAMES,
+      ExpressionAttributeValues: values,
+    };
+  });
 }
 
 /**
- * Roles carry their own rolesUpdatedAt, as quals carry qualsUpdatedAt: availability, push-token
- * and status events advance snapshotUpdatedAt on their own schedule, and guarding roles on it
+ * Roles carry their own rolesUpdatedAt, as every field does: availability, push-token and
+ * status events advance snapshotUpdatedAt on their own schedule, and guarding roles on it
  * silently discarded a role change whenever any newer unrelated event landed first - the new
  * officer was then never prompted for mutual aid, and re-saving the (unchanged) roles emitted
  * nothing that could repair it.
@@ -249,7 +251,7 @@ export const handler = async (event: SQSEvent): Promise<SQSBatchResponse> => {
     const pk = buildDeptScopedPk(deptId, 'ELIGIBILITY');
     const snapshotUpdatedAt = Date.parse(envelope.eventTime);
     const updates = [
-      buildMergeExpression(payload, snapshotUpdatedAt),
+      ...buildFieldExpressions(payload, snapshotUpdatedAt),
       payload.roles !== undefined
         ? buildRolesExpression(payload.roles, payload.memberId, snapshotUpdatedAt)
         : undefined,

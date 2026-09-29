@@ -132,7 +132,8 @@ describe('memberUpdatedHandler', () => {
 
     expect(contactWrite(send)?.ExpressionAttributeValues[':contactChannels']).toEqual([]);
     const eligibility = (send.mock.calls[0]?.[0] as SentUpdate).input;
-    expect(eligibility.ExpressionAttributeValues[':active']).toBe(false);
+    expect(eligibility.ExpressionAttributeValues[':value']).toBe(false);
+    expect(eligibility.UpdateExpression).toContain('active = :value');
   });
 
   it('a register-only event (no quals/roles/availabilityState) does not clear those fields (P6 regression)', async () => {
@@ -254,7 +255,7 @@ describe('memberUpdatedHandler', () => {
       (call) => (call[0] as { input: { ConditionExpression: string } }).input.ConditionExpression,
     );
     expect(conditions).toEqual([
-      'attribute_not_exists(snapshotUpdatedAt) OR snapshotUpdatedAt < :snapshotUpdatedAt',
+      'attribute_not_exists(activeUpdatedAt) OR activeUpdatedAt < :eventTime',
       'attribute_not_exists(rolesUpdatedAt) OR rolesUpdatedAt < :rolesUpdatedAt',
     ]);
   });
@@ -278,7 +279,7 @@ describe('memberUpdatedHandler', () => {
     };
     expect(updateCall.input.UpdateExpression).not.toContain('contactChannels');
     expect(updateCall.input.ExpressionAttributeValues[':contactChannels']).toBeUndefined();
-    expect(updateCall.input.ExpressionAttributeValues[':active']).toBe(true);
+    expect(updateCall.input.ExpressionAttributeValues[':value']).toBe(true);
   });
 
   it('discards a stale/redelivered event (ConditionalCheckFailedException) without throwing (last-writer-wins)', async () => {

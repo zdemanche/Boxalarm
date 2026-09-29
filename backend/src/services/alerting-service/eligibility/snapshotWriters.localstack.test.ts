@@ -160,4 +160,61 @@ describe('eligibility snapshot writers are accepted by DynamoDB', () => {
     expect((await snapshot('mbr-c'))?.quals).toEqual(['DRIVER', 'INTERIOR']);
     expect((await snapshot('mbr-c'))?.roles).toEqual([]);
   }, 60_000);
+
+  // Review CRITICAL-1: a retirement delivered after a newer availability change (another queue,
+  // a retry, a DLQ redrive) used to be dropped as stale; the member kept getting SMS/voice.
+  it('a retirement (T1) applied after an availability change (T2 > T1) still takes the member out of every page', async () => {
+    const { handler: memberHandler } = await import('./memberUpdatedHandler.js');
+    const { handler: availability } = await import('./consumer.js');
+    const { queryEligibleMembers } = await import('./selector.js');
+    const { toVerifiedDeptId } = await import('@boxalarm/dept-scope');
+
+    await memberHandler(
+      memberUpdated('2026-09-14T00:00:00.000Z', {
+        memberId: 'mbr-ret',
+        phone: '+12035550142',
+        roles: ['MEMBER'],
+        contactChannels: [{ channel: 'PUSH', token: 'tok-ret', deviceId: 'phone', valid: true }],
+      }),
+    );
+    const availabilityAt = (iso: string, state: string): SQSEvent =>
+      ({
+        Records: [
+          {
+            messageId: `a-${iso}`,
+            body: JSON.stringify({
+              detail: {
+                eventId: `avail-${iso}`,
+                eventTime: iso,
+                payload: { deptId: DEPT, memberId: 'mbr-ret', availabilityState: state },
+              },
+            }),
+          },
+        ],
+      }) as unknown as SQSEvent;
+    await availability(availabilityAt('2026-09-14T00:00:20.000Z', 'AVAILABLE'));
+
+    // The retirement (T1 = +10 s) arrives last, as statusChange emits it.
+    await memberHandler(
+      memberUpdated('2026-09-14T00:00:10.000Z', {
+        memberId: 'mbr-ret',
+        status: 'RETIRED',
+        active: false,
+        contactChannels: [],
+      }),
+    );
+
+    const snap = await snapshot('mbr-ret');
+    expect(snap).toMatchObject({ active: false, availabilityState: 'AVAILABLE' });
+    const audience = await queryEligibleMembers(
+      docClient,
+      TABLE,
+      toVerifiedDeptId({ deptId: DEPT }),
+    );
+    expect(audience.map((member) => member.memberId)).not.toContain('mbr-ret');
+
+    // And an older availability event can no longer revert a newer one either.
+    await availability(availabilityAt('2026-09-14T00:00:15.000Z', 'MARKED_OFF'));
+    expect((await snapshot('mbr-ret'))?.availabilityState).toBe('AVAILABLE');
+  }, 60_000);
 });
