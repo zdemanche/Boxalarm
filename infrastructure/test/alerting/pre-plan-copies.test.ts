@@ -127,6 +127,7 @@ describe.each(CONSUMERS)("PrePlanCopies — $key consumer", (consumer) => {
     expect(esm.inputs.eventSourceArn).toBe(
       `arn:aws:sqs:us-east-1:123456789012:boxalarm-dev-alerting-${consumer.key}-queue`,
     );
+    expect(esm.inputs.functionResponseTypes).toEqual(["ReportBatchItemFailures"]);
     expect(esm.inputs.scalingConfig).toEqual({
       maximumConcurrency: PRE_PLAN_COPY_RESERVED_CONCURRENCY,
     });

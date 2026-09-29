@@ -209,28 +209,28 @@ describe('prePlanCopyHandler (entrypoint-test obligation, AC1)', () => {
     errorSpy.mockRestore();
   });
 
-  it('re-throws on a non-conditional DynamoDB failure — fail-closed, no partial write swallowed', async () => {
+  it('reports a non-conditional DynamoDB failure for redelivery — fail-closed, nothing swallowed', async () => {
     const send = vi.fn().mockRejectedValue(new Error('ProvisionedThroughputExceededException'));
     mockDdb(send);
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const { handler } = await import('./prePlanCopyHandler.js');
 
-    await expect(handler(sqsEvent({ deptId: 'NICHOLS', occupancyId: 'OCC-0231' }))).rejects.toThrow(
-      'ProvisionedThroughputExceededException',
-    );
+    await expect(
+      handler(sqsEvent({ deptId: 'NICHOLS', occupancyId: 'OCC-0231' })),
+    ).resolves.toEqual({ batchItemFailures: [{ itemIdentifier: 'msg-1' }] });
     expect(errorSpy).toHaveBeenCalled();
     errorSpy.mockRestore();
   });
 
-  it('re-throws on a malformed envelope before any write is attempted', async () => {
+  it('reports a malformed envelope as a batch item failure before any write is attempted', async () => {
     const send = vi.fn();
     mockDdb(send);
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const { handler } = await import('./prePlanCopyHandler.js');
 
-    await expect(handler(sqsEvent({ deptId: 'NICHOLS' }))).rejects.toThrow(
-      'inspections.preplan.updated event failed shape validation',
-    );
+    await expect(handler(sqsEvent({ deptId: 'NICHOLS' }))).resolves.toEqual({
+      batchItemFailures: [{ itemIdentifier: 'msg-1' }],
+    });
     expect(send).not.toHaveBeenCalled();
     errorSpy.mockRestore();
   });
@@ -330,7 +330,7 @@ describe('prePlanCopyHandler (entrypoint-test obligation, AC1)', () => {
       handler({
         Records: [{ messageId: 'msg-1', body: JSON.stringify(envelope(FULL_PAYLOAD)) }],
       } as unknown as SQSEvent),
-    ).rejects.toThrow('missing detail');
+    ).resolves.toEqual({ batchItemFailures: [{ itemIdentifier: 'msg-1' }] });
     expect(send).not.toHaveBeenCalled();
     errorSpy.mockRestore();
   });

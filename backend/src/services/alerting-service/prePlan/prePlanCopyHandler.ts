@@ -1,7 +1,7 @@
 import { TransactWriteCommand } from '@aws-sdk/lib-dynamodb';
 import { buildDeptScopedPk, toVerifiedDeptId, type VerifiedDeptId } from '@boxalarm/dept-scope';
 import { emitOutcomeMetric } from '@boxalarm/metrics';
-import type { SQSEvent } from 'aws-lambda';
+import type { SQSBatchResponse, SQSEvent } from 'aws-lambda';
 import { createDynamoClient, readAlertingConfig } from '../eligibility/dynamoClient.js';
 import { normalizeAddress } from './addressKey.js';
 import { prePlanAddressIndexKeys, prePlanCopyKey, prePlanGeoIndexKeys } from './copyKeys.js';
@@ -196,23 +196,33 @@ function buildCopyUpdate(
   return { UpdateExpression: `SET ${setClauses.join(', ')}`, values };
 }
 
-export const handler = async (event: SQSEvent): Promise<void> => {
+/**
+ * Reports failures per message (the event source mapping sets ReportBatchItemFailures): a
+ * malformed or unwritable record is retried — and eventually dead-lettered — on its own,
+ * never taking the valid records of its batch down with it.
+ */
+export const handler = async (event: SQSEvent): Promise<SQSBatchResponse> => {
+  const batchItemFailures: SQSBatchResponse['batchItemFailures'] = [];
   const { tableName } = readAlertingConfig(process.env);
   const ddb = createDynamoClient(process.env);
 
   for (const record of event.Records) {
     let envelope: PrePlanUpdatedEnvelope;
+    let deptId: VerifiedDeptId;
+    let update: ReturnType<typeof buildCopyUpdate>;
     try {
       envelope = parseEnvelope(record.body);
+      deptId = toVerifiedDeptId({ deptId: envelope.payload.deptId });
+      // Keys are built here too: an id carrying the pk delimiter is a malformed event.
+      update = buildCopyUpdate(deptId, envelope.payload, Date.parse(envelope.eventTime));
     } catch (error) {
       logError('preplan_copy.malformed_event', error, record.messageId);
-      throw error;
+      batchItemFailures.push({ itemIdentifier: record.messageId });
+      continue;
     }
 
     const { eventId, payload } = envelope;
-    const snapshotUpdatedAt = Date.parse(envelope.eventTime);
-    const deptId = toVerifiedDeptId({ deptId: payload.deptId });
-    const { UpdateExpression, values } = buildCopyUpdate(deptId, payload, snapshotUpdatedAt);
+    const { UpdateExpression, values } = update;
 
     try {
       await ddb.send(
@@ -265,7 +275,8 @@ export const handler = async (event: SQSEvent): Promise<void> => {
       }
       logError('preplan_copy.write_failed', error, eventId, { occupancyId: payload.occupancyId });
       emitOutcomeMetric(METRIC_NAMESPACE, 'PrePlanCopyFailed');
-      throw error;
+      batchItemFailures.push({ itemIdentifier: record.messageId });
+      continue;
     }
 
     // The address is what makes the copy findable from a dispatch: without it the copy is
@@ -289,4 +300,5 @@ export const handler = async (event: SQSEvent): Promise<void> => {
 
     emitOutcomeMetric(METRIC_NAMESPACE, 'PrePlanCopyUpdated');
   }
+  return { batchItemFailures };
 };

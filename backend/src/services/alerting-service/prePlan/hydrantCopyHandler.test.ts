@@ -188,19 +188,19 @@ describe('hydrantCopyHandler (entrypoint)', () => {
     vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const { handler } = await import('./hydrantCopyHandler.js');
 
-    await expect(handler(sqsEvent(FULL_PAYLOAD))).resolves.toBeUndefined();
+    await expect(handler(sqsEvent(FULL_PAYLOAD))).resolves.toEqual({ batchItemFailures: [] });
     expect(send).toHaveBeenCalledOnce();
   });
 
-  it('re-throws a non-conditional DynamoDB failure so SQS redelivers it', async () => {
+  it('reports a non-conditional DynamoDB failure as a batch item failure so SQS redelivers just it', async () => {
     const send = vi.fn().mockRejectedValue(new Error('ProvisionedThroughputExceededException'));
     mockDdb(send);
     vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const { handler } = await import('./hydrantCopyHandler.js');
 
-    await expect(handler(sqsEvent(FULL_PAYLOAD))).rejects.toThrow(
-      'ProvisionedThroughputExceededException',
-    );
+    await expect(handler(sqsEvent(FULL_PAYLOAD))).resolves.toEqual({
+      batchItemFailures: [{ itemIdentifier: 'msg-1' }],
+    });
   });
 
   it('rejects an envelope at the top level of the SQS body before any write', async () => {
@@ -213,7 +213,7 @@ describe('hydrantCopyHandler (entrypoint)', () => {
       handler({
         Records: [{ messageId: 'msg-1', body: JSON.stringify(envelope(FULL_PAYLOAD)) }],
       } as unknown as SQSEvent),
-    ).rejects.toThrow('missing detail');
+    ).resolves.toEqual({ batchItemFailures: [{ itemIdentifier: 'msg-1' }] });
     expect(send).not.toHaveBeenCalled();
   });
 
@@ -223,7 +223,31 @@ describe('hydrantCopyHandler (entrypoint)', () => {
     vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const { handler } = await import('./hydrantCopyHandler.js');
 
-    await expect(handler(sqsEvent({ deptId: 'NICHOLS' }))).rejects.toThrow(/hydrantId/);
+    await expect(handler(sqsEvent({ deptId: 'NICHOLS' }))).resolves.toEqual({
+      batchItemFailures: [{ itemIdentifier: 'msg-1' }],
+    });
     expect(send).not.toHaveBeenCalled();
+  });
+
+  it('a poison message fails alone: the valid records in its batch are still written (minor 3)', async () => {
+    const send = vi.fn().mockResolvedValue({});
+    mockDdb(send);
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const { handler } = await import('./hydrantCopyHandler.js');
+    const good = sqsEvent(FULL_PAYLOAD).Records[0]!;
+
+    const result = await handler({
+      Records: [
+        { ...good, messageId: 'good-1' },
+        { messageId: 'poison', body: '{not json' },
+        { ...good, messageId: 'good-2' },
+        { ...good, messageId: 'bad-id', body: good.body.replaceAll('HYD-0231', 'HYD#0231') },
+      ],
+    } as unknown as SQSEvent);
+
+    expect(result).toEqual({
+      batchItemFailures: [{ itemIdentifier: 'poison' }, { itemIdentifier: 'bad-id' }],
+    });
+    expect(send).toHaveBeenCalledTimes(2);
   });
 });

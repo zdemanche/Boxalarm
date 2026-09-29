@@ -1,7 +1,7 @@
 import { TransactWriteCommand } from '@aws-sdk/lib-dynamodb';
 import { buildDeptScopedPk, toVerifiedDeptId, type VerifiedDeptId } from '@boxalarm/dept-scope';
 import { emitOutcomeMetric } from '@boxalarm/metrics';
-import type { SQSEvent } from 'aws-lambda';
+import type { SQSBatchResponse, SQSEvent } from 'aws-lambda';
 import { createDynamoClient, readAlertingConfig } from '../eligibility/dynamoClient.js';
 import { hydrantCopyKey, hydrantGeoIndexKeys } from './copyKeys.js';
 import { isGeoPoint } from './geo.js';
@@ -132,22 +132,33 @@ function buildCopyUpdate(
   };
 }
 
-export const handler = async (event: SQSEvent): Promise<void> => {
+/**
+ * Reports failures per message (the event source mapping sets ReportBatchItemFailures): a
+ * malformed or unwritable record is retried — and eventually dead-lettered — on its own,
+ * never taking the valid records of its batch down with it.
+ */
+export const handler = async (event: SQSEvent): Promise<SQSBatchResponse> => {
+  const batchItemFailures: SQSBatchResponse['batchItemFailures'] = [];
   const { tableName } = readAlertingConfig(process.env);
   const ddb = createDynamoClient(process.env);
 
   for (const record of event.Records) {
     let envelope: HydrantUpdatedEnvelope;
+    let deptId: VerifiedDeptId;
+    let update: ReturnType<typeof buildCopyUpdate>;
     try {
       envelope = parseEnvelope(record.body);
+      deptId = toVerifiedDeptId({ deptId: envelope.payload.deptId });
+      // Keys are built here too: an id carrying the pk delimiter is a malformed event.
+      update = buildCopyUpdate(deptId, envelope.payload, Date.parse(envelope.eventTime));
+      hydrantCopyKey(deptId, envelope.payload.hydrantId);
     } catch (error) {
       logError('hydrant_copy.malformed_event', error, record.messageId);
-      throw error;
+      batchItemFailures.push({ itemIdentifier: record.messageId });
+      continue;
     }
 
     const { eventId, payload } = envelope;
-    const hydrantUpdatedAt = Date.parse(envelope.eventTime);
-    const deptId = toVerifiedDeptId({ deptId: payload.deptId });
 
     try {
       await ddb.send(
@@ -169,7 +180,7 @@ export const handler = async (event: SQSEvent): Promise<void> => {
               Update: {
                 TableName: tableName,
                 Key: hydrantCopyKey(deptId, payload.hydrantId),
-                ...buildCopyUpdate(deptId, payload, hydrantUpdatedAt),
+                ...update,
                 ConditionExpression:
                   '(attribute_not_exists(hydrantUpdatedAt) OR :hydrantUpdatedAt > hydrantUpdatedAt) AND attribute_not_exists(archivedAt)',
               },
@@ -195,7 +206,8 @@ export const handler = async (event: SQSEvent): Promise<void> => {
       }
       logError('hydrant_copy.write_failed', error, eventId, { hydrantId: payload.hydrantId });
       emitOutcomeMetric(METRIC_NAMESPACE, 'HydrantCopyFailed');
-      throw error;
+      batchItemFailures.push({ itemIdentifier: record.messageId });
+      continue;
     }
 
     if (payload.archived) {
@@ -214,4 +226,5 @@ export const handler = async (event: SQSEvent): Promise<void> => {
     }
     emitOutcomeMetric(METRIC_NAMESPACE, 'HydrantCopyUpdated');
   }
+  return { batchItemFailures };
 };

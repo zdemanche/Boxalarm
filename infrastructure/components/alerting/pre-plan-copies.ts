@@ -197,6 +197,9 @@ export class PrePlanCopies extends pulumi.ComponentResource {
         eventSourceArn: queue.arn,
         functionName: lambda.function.name,
         batchSize: 10,
+        // The handlers return batchItemFailures: a poison message is retried (and DLQ'd)
+        // alone instead of dragging its nine batch-mates to the DLQ with it.
+        functionResponseTypes: ["ReportBatchItemFailures"],
         // Pinned to reserved concurrency: throttled receives count toward maxReceiveCount.
         scalingConfig: { maximumConcurrency: PRE_PLAN_COPY_RESERVED_CONCURRENCY },
       },
