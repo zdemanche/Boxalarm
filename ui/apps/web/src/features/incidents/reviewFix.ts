@@ -13,12 +13,17 @@ import { TIME_FIELDS } from './types';
 export type IssueTarget =
   | { kind: 'unitTime'; unitId: string; field: TimeField }
   | { kind: 'field'; name: string }
+  | { kind: 'module'; name: string }
   | { kind: 'narrative' };
 
 export function parseIssuePath(path: string): IssueTarget | undefined {
   if (path === 'narrative') return { kind: 'narrative' };
   if (path.startsWith('fields.') && path.length > 'fields.'.length) {
     return { kind: 'field', name: path.slice('fields.'.length) };
+  }
+  // `modules.<name>` (MODULE_REQUIRED / MODULE_INCOMPLETE): that module's editor.
+  if (path.startsWith('modules.') && path.length > 'modules.'.length) {
+    return { kind: 'module', name: path.slice('modules.'.length).split('.')[0] ?? '' };
   }
   if (path.startsWith('units.')) {
     const rest = path.slice('units.'.length);
@@ -41,7 +46,9 @@ export async function applyValidationFix(
   fix: ValidationFix,
 ): Promise<Partial<IncidentDetail>> {
   const target = parseIssuePath(fix.path);
-  if (!target) throw new Error(`This fix can't be applied here (${fix.path}).`);
+  if (!target || target.kind === 'module') {
+    throw new Error(`This fix can't be applied here (${fix.path}).`);
+  }
   if (target.kind === 'narrative') {
     return putNarrative(tokens, incident.incidentId, String(fix.value));
   }
@@ -87,6 +94,7 @@ const FIELD_STEP: Record<string, string> = {
 export function focusTargetFor(issue: ValidationIssue): { stepId: string; fieldId?: string } {
   const target = parseIssuePath(issue.path);
   if (target?.kind === 'narrative') return { stepId: 'narrative', fieldId: 'field-narrative' };
+  if (target?.kind === 'module') return { stepId: 'modules', fieldId: `module-${target.name}` };
   if (target?.kind === 'unitTime') {
     return {
       stepId: 'units',

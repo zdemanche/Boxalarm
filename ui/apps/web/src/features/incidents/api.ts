@@ -193,6 +193,25 @@ export async function resubmitIncident(
   return (await response.json()) as ResubmitResponse;
 }
 
+/** One NERIS module editor's value. 400 carries `errors[{field, message}]` with paths inside it. */
+export async function putModule(
+  tokens: AuthTokenSource,
+  incidentId: string,
+  module: string,
+  value: Record<string, unknown>,
+): Promise<GetIncidentResponse> {
+  const response = await apiRequest(
+    `${incidentPath(incidentId)}/modules/${encodeURIComponent(module)}`,
+    tokens,
+    {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ value }),
+    },
+  );
+  return (await response.json()) as GetIncidentResponse;
+}
+
 /** Any role. 503 NERIS_SCHEMA_UNAVAILABLE until the daily refresh has downloaded the schema. */
 export async function getNerisSchema(tokens: AuthTokenSource): Promise<NerisSchemaResponse> {
   const response = await apiRequest('incidents/neris-schema', tokens);

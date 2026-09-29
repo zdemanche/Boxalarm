@@ -1,5 +1,6 @@
 import type { ProblemDetails } from '../../lib/apiClient';
 import { CORE_SCHEMA, SECONDARY_SCHEMA } from './nerisSchema';
+import { EDITABLE_MODULES, modulesForIncident } from './nerisModuleSchema';
 import { DEMO_NERIS_SCHEMA } from './nerisSchemaFixture';
 import type {
   CreateIncidentInput,
@@ -60,6 +61,19 @@ let incidents: Incident[] = [
     corePayload: {
       incident_type: 'FIRE||STRUCTURE_FIRE||ROOM_AND_CONTENTS_FIRE',
       action_taken: 'EXTINGUISH',
+      smoke_alarm: {
+        presence: {
+          type: 'PRESENT',
+          working: true,
+          alarm_types: ['HARDWIRED', 'INTERCONNECTED'],
+          operation: {
+            alerted_failed_other: {
+              type: 'OPERATED_ALERTED_OCCUPANT',
+              occupant_action: 'EVACUATED',
+            },
+          },
+        },
+      },
       address: '14 Elm St, Trumbull, CT',
       narrative: 'Working fire, first floor kitchen, extinguished on arrival of Engine 301.',
     },
@@ -236,6 +250,16 @@ function demoValidation(incident: Incident, mode: string) {
       section: 'core',
     });
   }
+  const incidentType = stringFields(incident.corePayload).incident_type ?? '';
+  for (const { module, required } of modulesForIncident(incidentType, incident.corePayload)) {
+    if (!required || incident.corePayload[module] !== undefined) continue;
+    blocking.push({
+      path: `modules.${module}`,
+      code: 'MODULE_REQUIRED',
+      message: `Structure fires need the ${module.replaceAll('_', ' ')}.`,
+      section: 'fire',
+    });
+  }
   const units = unitsByIncident.get(incident.incidentId) ?? [];
   for (const unit of units) {
     if (unit.arrivedAt === undefined && unit.dispatchedAt !== undefined) {
@@ -393,7 +417,7 @@ export async function incidentsDemoRequest(
     });
   }
 
-  const editRoutes = ['narrative', 'response-times', 'exposures'];
+  const editRoutes = ['narrative', 'response-times', 'exposures', 'modules'];
   if (
     incident.lockedAt &&
     method === 'PUT' &&
@@ -584,6 +608,32 @@ export async function incidentsDemoRequest(
     }
     submissionByIncident.set(incidentId, 'RETRYING');
     return json({ incidentId, submissionStatus: 'RETRYING' }, 202);
+  }
+
+  // Demo module save: the real server validates against the NERIS sub-schema; the demo only
+  // insists on the `presence` choice every editable module requires.
+  if (parts[2] === 'modules' && parts.length === 4 && method === 'PUT') {
+    const module = parts[3] ?? '';
+    if (!(EDITABLE_MODULES as readonly string[]).includes(module)) {
+      return problem(400, 'Bad Request', 'module must be one of the editable NERIS modules.');
+    }
+    const value = body.value;
+    const presence =
+      typeof value === 'object' && value !== null
+        ? (value as Record<string, unknown>).presence
+        : undefined;
+    if (typeof presence !== 'object' || presence === null || !('type' in presence)) {
+      return problem(400, 'Bad Request', `The ${module.replaceAll('_', ' ')} is not complete.`, [
+        { field: 'presence', message: 'is required' },
+      ]);
+    }
+    const updated: Incident = {
+      ...incident,
+      corePayload: { ...incident.corePayload, [module]: value },
+      updatedAt: nowSeconds,
+    };
+    incidents = incidents.map((item) => (item.incidentId === incidentId ? updated : item));
+    return json(toDetail(updated));
   }
 
   if (parts[2] === 'narrative' && method === 'PUT') {

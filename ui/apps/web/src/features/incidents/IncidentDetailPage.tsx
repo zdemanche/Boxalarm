@@ -14,12 +14,14 @@ import {
   getSubmission,
   problemCode,
   putExposure,
+  putModule,
   putNarrative,
   putResponseTimes,
   retrySubmission,
   submitIncident,
   updateIncident,
 } from './api';
+import { FireProtectionStep } from './FireProtectionStep';
 import { focusFieldById } from './focusField';
 import { IncidentTypePicker, type IncidentTypesState } from './IncidentTypePicker';
 import { NerisReviewPanel } from './NerisReviewPanel';
@@ -28,6 +30,7 @@ import { SubmissionLedger } from './SubmissionLedger';
 import { coreStrings, dateTimeLocalToEpoch, epochToDateTimeLocal, formatTimestamp } from './format';
 import { CORE_SCHEMA, fieldLabel, SECONDARY_SCHEMA, SECONDARY_TYPES } from './nerisSchema';
 import { useNerisSchema } from './nerisIncidentTypes';
+import { modulesForIncident, type JsonRecord } from './nerisModuleSchema';
 import type {
   IncidentDetail,
   IncidentSecondary,
@@ -95,6 +98,7 @@ const STEPS = [
   { id: 'dispatch', title: 'Dispatch and times' },
   { id: 'location', title: 'Location' },
   { id: 'type', title: 'Incident type and actions' },
+  { id: 'modules', title: 'Fire protection systems' },
   { id: 'units', title: 'Apparatus and personnel' },
   { id: 'narrative', title: 'Narrative' },
   { id: 'exposure', title: 'Exposure and responder safety' },
@@ -123,8 +127,14 @@ function mergeDetail(current: IncidentDetail, patch: Partial<IncidentDetail>): I
 function IncidentReport({ incident }: { incident: IncidentDetail }) {
   const auth = useAuth();
   const queryClient = useQueryClient();
+  const nerisModules = modulesForIncident(
+    coreStrings(incident.corePayload).incident_type ?? '',
+    incident.corePayload,
+  );
   const steps = STEPS.filter(
-    (step) => step.id !== 'exposure' || incident.secondaryModules !== undefined,
+    (step) =>
+      (step.id !== 'exposure' || incident.secondaryModules !== undefined) &&
+      (step.id !== 'modules' || nerisModules.length > 0),
   );
   const [step, setStep] = useState(0);
   const [fields, setFields] = useState(() => coreStrings(incident.corePayload));
@@ -346,6 +356,18 @@ function IncidentReport({ incident }: { incident: IncidentDetail }) {
       );
     } finally {
       setSaving(false);
+    }
+  }
+
+  /** Module editor Save: PUT the value, cache the incident, hand back what the server stored. */
+  async function saveModule(module: string, value: JsonRecord): Promise<unknown> {
+    try {
+      const updated = await putModule(auth, incident.incidentId, module, value);
+      writeIncident(updated);
+      return updated.corePayload[module];
+    } catch (error) {
+      noteLocked(error);
+      throw error;
     }
   }
 
@@ -701,6 +723,31 @@ function IncidentReport({ incident }: { incident: IncidentDetail }) {
               onClick={() => void saveCore(['incident_type', 'action_taken'], true)}
             >
               Save and continue
+            </Button>
+          </div>
+        </div>
+      );
+    }
+
+    if (stepId === 'modules') {
+      return (
+        <div className={styles.panel}>
+          <p>
+            NERIS asks structure fire reports for the alarms and suppression systems found on scene.
+            Save each one; they can be changed until the report is locked.
+          </p>
+          <FireProtectionStep
+            modules={nerisModules}
+            corePayload={incident.corePayload}
+            schema={nerisSchema.data}
+            loading={nerisSchema.isLoading}
+            locked={locked}
+            onRetry={() => void nerisSchema.refetch()}
+            onSave={saveModule}
+          />
+          <div className={styles.actions}>
+            <Button type="button" onClick={() => selectStep(step + 1)}>
+              Continue
             </Button>
           </div>
         </div>
