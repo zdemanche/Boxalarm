@@ -100,3 +100,28 @@ test('a self-test page is never added to the recent pages the offline Alerts lis
   expect((await recentPages()).map((page) => page.dispatchId)).not.toContain('SELFTEST-9');
   expect(isSelfTestPayload({ incidentType: 'Self-test' })).toBe(true);
 });
+
+test('a later tone with an empty address does not blank the address in the offline list (review m5)', async () => {
+  await rememberAlertPayload({
+    dispatchId: 'D-TONES',
+    incidentType: 'MVA',
+    address: '1 Main St',
+    crossStreets: 'Elm',
+    receivedAt: 100,
+  });
+  await rememberAlertPayload({
+    dispatchId: 'D-TONES',
+    incidentType: 'MVA',
+    address: '',
+    toneSequence: 2,
+    receivedAt: 500,
+  });
+
+  const listed = (await recentPages()).find((page) => page.dispatchId === 'D-TONES');
+  expect(listed).toMatchObject({
+    address: '1 Main St',
+    crossStreets: 'Elm',
+    toneSequence: 2,
+    receivedAt: 100,
+  });
+});

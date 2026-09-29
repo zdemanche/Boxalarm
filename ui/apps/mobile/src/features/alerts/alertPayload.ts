@@ -95,24 +95,40 @@ export function isSelfTestPayload(payload: Pick<AlertPayload, 'incidentType'>): 
 /** Keeps the first receipt time: tone 2 of the same call must not reset "3 min ago". */
 export async function rememberAlertPayload(payload: AlertPayload): Promise<void> {
   const existing = await kvGet<AlertPayload>(payloadKey(payload.dispatchId));
-  const receivedAt = Math.min(existing?.value.receivedAt ?? payload.receivedAt, payload.receivedAt);
-  await kvSet(payloadKey(payload.dispatchId), {
-    ...existing?.value,
-    ...payload,
-    receivedAt,
-    ...(payload.address ? {} : { address: existing?.value.address ?? '' }),
-  });
+  const merged = mergePayload(existing?.value ?? null, payload);
+  await kvSet(payloadKey(payload.dispatchId), merged);
   // A test page is not a call: it must never show in the offline Alerts list (review m13).
   if (isSelfTestPayload(payload)) return;
   const recent = (await kvGet<AlertPayload[]>(RECENT_PAGES_KEY))?.value ?? [];
-  const merged = { ...payload, receivedAt };
+  // The same merge as the per-call record (review m5): a later tone with an empty address or no
+  // cross streets must not blank what the offline list already knows.
+  const previous = recent.find((p) => p.dispatchId === payload.dispatchId) ?? null;
+  const listed = mergePayload(previous ?? existing?.value ?? null, payload);
   await kvSet(
     RECENT_PAGES_KEY,
-    [merged, ...recent.filter((p) => p.dispatchId !== payload.dispatchId)].slice(
+    [listed, ...recent.filter((p) => p.dispatchId !== payload.dispatchId)].slice(
       0,
       RECENT_PAGES_LIMIT,
     ),
   );
+}
+
+/** Newer fields win, but never with an empty value, and the first receipt time is kept. */
+function mergePayload(existing: AlertPayload | null, next: AlertPayload): AlertPayload {
+  if (!existing) return next;
+  return {
+    ...existing,
+    ...next,
+    receivedAt: Math.min(existing.receivedAt, next.receivedAt),
+    address: next.address || existing.address,
+    incidentType: next.incidentType || existing.incidentType,
+    ...(next.crossStreets || existing.crossStreets
+      ? { crossStreets: next.crossStreets || existing.crossStreets }
+      : {}),
+    ...(next.dispatchedAt || existing.dispatchedAt
+      ? { dispatchedAt: next.dispatchedAt ?? existing.dispatchedAt }
+      : {}),
+  };
 }
 
 const RECENT_PAGES_KEY = 'recent-pages';
