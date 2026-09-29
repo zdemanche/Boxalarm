@@ -105,7 +105,9 @@ export class RoutesOps extends pulumi.ComponentResource {
           {
             Sid: "AlertingTableSelfTestRead",
             Effect: "Allow",
-            Action: ["dynamodb:Query", "dynamodb:GetItem"],
+            // GetItem reads the run and the channel workers' send guards it is decided from;
+            // UpdateItem records the verdict once (selfTest/evaluateSelfTestRun.ts).
+            Action: ["dynamodb:Query", "dynamodb:GetItem", "dynamodb:UpdateItem"],
             Resource: args.alertingTableArn as string,
           },
           vpStatement,

@@ -54,6 +54,24 @@ function createFakeDdb(seed: readonly FakeItem[] = []): {
       items.set(key, put.Item);
       return Promise.resolve({});
     }
+    if (name === 'UpdateCommand') {
+      // completeSelfTestRun: SET a = :a, ... (the RUNNING condition is not modelled).
+      const update = input as {
+        Key: { pk: string; sk: string };
+        UpdateExpression: string;
+        ExpressionAttributeValues: Record<string, unknown>;
+      };
+      const key = `${update.Key.pk}#${update.Key.sk}`;
+      const existing: FakeItem = items.get(key) ?? { ...update.Key };
+      for (const assignment of update.UpdateExpression.replace(/^SET /, '').split(',')) {
+        const [field, placeholder] = assignment.split('=').map((part) => part.trim());
+        if (field && placeholder) {
+          existing[field] = update.ExpressionAttributeValues[placeholder];
+        }
+      }
+      items.set(key, existing);
+      return Promise.resolve({});
+    }
     if (name === 'DeleteCommand') {
       const del = input as { Key: { pk: string; sk: string } };
       items.delete(`${del.Key.pk}#${del.Key.sk}`);

@@ -27,7 +27,8 @@ async function postSelfTest(
   const traceId = extractTraceId(event);
   const deptId = toVerifiedDeptId(principal);
   const memberId = principal.sub;
-  const runAt = Math.floor(Date.now() / 1000);
+  const runAtMs = Date.now();
+  const runAt = Math.floor(runAtMs / 1000);
   const testId = `${memberId}-${runAt}-${randomUUID().slice(0, 8)}`;
 
   const normalized = selfTestAdapter.normalize({ testId });
@@ -107,6 +108,7 @@ async function postSelfTest(
         channelsTested: SELF_TEST_CHANNELS,
         channelResults: {},
         overallResult: 'RUNNING',
+        runAtMs,
       },
       { onlyIfAbsent: true },
     );

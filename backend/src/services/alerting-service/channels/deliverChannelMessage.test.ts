@@ -69,7 +69,7 @@ describe('deliverChannelMessage', () => {
     expect(
       (send.mock.calls[1]?.[0] as { input: { ExpressionAttributeValues: Record<string, unknown> } })
         .input.ExpressionAttributeValues,
-    ).toEqual({ ':sent': 'SENT' });
+    ).toEqual({ ':sent': 'SENT', ':completedAtMs': expect.any(Number) as number });
     expect(putInput.Item.pk).toBe('DEPT#NICHOLS#DISPATCH#dispatch-1');
     expect(putInput.Item.sk).toBe('RECEIPT#mbr-1#PUSH#1');
     expect(putInput.Item.idempotencyKey).toBe('dispatch-1#1#mbr-1#PUSH');
@@ -460,6 +460,7 @@ describe('deliverChannelMessage — direct APNs/FCM push path', () => {
     expect(guardFailure?.input.ExpressionAttributeValues).toEqual({
       ':reason': 'PUSH_TOKEN_INVALID APNS_BadDeviceToken',
       ':failed': 'FAILED',
+      ':completedAtMs': expect.any(Number) as number,
     });
     // Never marked SENT.
     expect(
@@ -548,8 +549,34 @@ describe('deliverChannelMessage — direct APNs/FCM push path', () => {
     expect(commandsNamed(send, 'UpdateCommand')[0]?.input.ExpressionAttributeValues).toEqual({
       ':reason': 'APNs responded 503 ServiceUnavailable',
       ':failed': 'FAILED',
+      ':completedAtMs': expect.any(Number) as number,
     });
     errorSpy.mockRestore();
+  });
+
+  // Design review C3: the self-test/canary result is this guard. A sandbox provider error is
+  // that run's FAIL; redelivering it would only dead-letter a synthetic page and page on-call.
+  it('a self-test provider error is recorded FAILED with its completion time and not rethrown', async () => {
+    const sendPush = vi.fn().mockRejectedValue(new Error('sandbox endpoint unreachable'));
+    mockPush(sendPush);
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    const send = vi.fn().mockResolvedValue({});
+    const { deliverChannelMessage } = await import('./deliverChannelMessage.js');
+
+    await expect(
+      deliverChannelMessage(fakeDdb(send), 'alerting-table', { ...baseParams, isTest: true }),
+    ).resolves.toBeUndefined();
+    expect(commandsNamed(send, 'UpdateCommand')[0]?.input.ExpressionAttributeValues).toEqual({
+      ':reason': 'sandbox endpoint unreachable',
+      ':failed': 'FAILED',
+      ':completedAtMs': expect.any(Number) as number,
+    });
+    const metrics = logSpy.mock.calls.map(([line]) => String(line));
+    expect(metrics.some((line) => line.includes('"TestSendFailed"'))).toBe(true);
+    expect(metrics.some((line) => line.includes('"SendFailed"'))).toBe(false);
+    errorSpy.mockRestore();
+    logSpy.mockRestore();
   });
 });
 
@@ -699,6 +726,7 @@ describe('deliverChannelMessage — self-test configuration refusal (review M5)'
     expect(inputs.at(-1)?.ExpressionAttributeValues).toEqual({
       ':reason': 'PUSH_TEST_REFUSED FCM_SENDER_ID_MISMATCH',
       ':failed': 'FAILED',
+      ':completedAtMs': expect.any(Number) as number,
     });
     expect(
       inputs.some((input) => (input.Key as { sk?: string } | undefined)?.sk === 'MEMBER#mbr-1'),

@@ -12,14 +12,18 @@ import { buildDeptScopedPk, toVerifiedDeptId, type VerifiedDeptId } from '@boxal
 import { emitEmf, emitOutcomeMetric } from '@boxalarm/metrics';
 import type { DynamoDBBatchResponse, DynamoDBRecord, DynamoDBStreamEvent } from 'aws-lambda';
 import { createDynamoClient, readAlertingConfig } from '../eligibility/dynamoClient.js';
-import { getMemberEligibility, queryEligibleMembers } from '../eligibility/selector.js';
+import {
+  getMemberEligibility,
+  queryEligibleMembers,
+  type EligibilitySnapshotItem,
+} from '../eligibility/selector.js';
 import { resolvePushTarget, resolveSmsTarget } from '../eligibility/resolvePushTarget.js';
 import { buildChannelPagePayload } from '../channels/channelEnvelope.js';
 import { getSchedulerClient } from '../escalation/scheduleEscalation.js';
 import { scheduleRealtimeFanOutEscalation } from './fanOut.js';
 import {
   SELF_TEST_METRIC_NAMESPACE,
-  upsertSelfTestRun,
+  recordSelfTestFanOut,
   type SelfTestChannelResult,
 } from '../selfTest/selfTestRunRepository.js';
 import {
@@ -310,6 +314,81 @@ async function sendOne(
   emitOutcomeMetric(METRIC_NAMESPACE, 'PublishAccepted');
 }
 
+interface PlannedFanOut {
+  readonly tasks: readonly FanOutTask[];
+  /** Channels a member could not be published on, keyed `${memberId}#${CHANNEL}`. */
+  readonly skipped: ReadonlyMap<string, string>;
+}
+
+/**
+ * Which member x channel pages to publish. Push and SMS each need the target the worker will
+ * resolve (the same lookup, resolvePushTarget.ts); a member without one is skipped and counted
+ * instead of published and dropped at the worker. A self-test/canary counts its skips in its
+ * own namespace, so a canary member without a phone never trips the paging SmsSkipped alarm.
+ */
+function planFanOut(
+  dispatch: DispatchAlertRecord,
+  members: readonly EligibilitySnapshotItem[],
+): PlannedFanOut {
+  const isSelfTest = dispatch.targetMemberId !== undefined;
+  const tasks: FanOutTask[] = [];
+  const skipped = new Map<string, string>();
+  for (const member of members) {
+    for (const channel of FAN_OUT_CHANNELS) {
+      // SMS: publishing a page the worker cannot resolve would be dropped there as
+      // NoTargetRegistered. Skipped here it is counted and alarmed (SmsSkipped) instead.
+      const target =
+        channel === 'push'
+          ? resolvePushTarget(member.contactChannels)
+          : resolveSmsTarget(member.contactChannels);
+      if (target.skipped) {
+        const metric = channel === 'push' ? 'PushSkipped' : 'SmsSkipped';
+        logInfo(`fanout.${channel}.skipped`, dispatch.dispatchId, {
+          memberId: member.memberId,
+          reason: target.reason,
+          isSelfTest,
+        });
+        if (isSelfTest) {
+          emitOutcomeMetric(SELF_TEST_METRIC_NAMESPACE, 'SelfTestChannelFailed', metric);
+        } else {
+          emitOutcomeMetric(METRIC_NAMESPACE, metric);
+        }
+        skipped.set(`${member.memberId}#${channel.toUpperCase()}`, target.reason);
+        continue;
+      }
+      tasks.push({ memberId: member.memberId, channel });
+    }
+  }
+  return { tasks, skipped };
+}
+
+/**
+ * The audience: every eligible member for a real dispatch; for a self-test/canary dispatch, the
+ * one targeted member (eligible or not - the run reports why a real page would miss them).
+ */
+async function resolveAudience(
+  ddb: DynamoDBDocumentClient,
+  tableName: string,
+  dispatch: DispatchAlertRecord,
+): Promise<readonly EligibilitySnapshotItem[]> {
+  if (dispatch.targetMemberId === undefined) {
+    return queryEligibleMembers(ddb, tableName, dispatch.deptId);
+  }
+  const member = await getMemberEligibility(
+    ddb,
+    tableName,
+    dispatch.deptId,
+    dispatch.targetMemberId,
+  );
+  return member ? [member] : [];
+}
+
+/**
+ * The single fan-out path, for real dispatches and for self-test/canary dispatches alike
+ * (architecture §1.3: "a canary that tests a parallel, simplified path is a canary that lies").
+ * A test differs only in its audience (one member), in never scheduling escalation or the tone
+ * ladder, and in recording its run for evaluateSelfTestRun instead of failing the stream record.
+ */
 async function fanOutOneDispatch(
   ddb: DynamoDBDocumentClient,
   sns: SNSClient,
@@ -319,9 +398,10 @@ async function fanOutOneDispatch(
   dispatch: DispatchAlertRecord,
 ): Promise<void> {
   const fanOutStartedMs = Date.now();
+  const isSelfTest = dispatch.targetMemberId !== undefined;
 
   try {
-    const eligibleMembers = await queryEligibleMembers(ddb, tableName, dispatch.deptId);
+    const audience = await resolveAudience(ddb, tableName, dispatch);
 
     // fanOutAttempts tells the first attempt from a stream retry, so a duplicate on the first
     // pass (another writer pre-empted tone 1) can be alarmed without paging on every retry.
@@ -336,7 +416,7 @@ async function fanOutOneDispatch(
           'SET fanOutStartedAt = :startedAt, eligibleMemberCount = :count, fanOutAttempts = if_not_exists(fanOutAttempts, :zero) + :one',
         ExpressionAttributeValues: {
           ':startedAt': Math.floor(fanOutStartedMs / 1000),
-          ':count': eligibleMembers.length,
+          ':count': audience.length,
           ':zero': 0,
           ':one': 1,
         },
@@ -345,39 +425,9 @@ async function fanOutOneDispatch(
     );
     const firstPass = started?.Attributes?.fanOutAttempts === 1;
 
-    const tasks: FanOutTask[] = [];
-    for (const member of eligibleMembers) {
-      for (const channel of FAN_OUT_CHANNELS) {
-        if (channel === 'push') {
-          const pushTarget = resolvePushTarget(member.contactChannels);
-          if (pushTarget.skipped) {
-            logInfo('fanout.push.skipped', dispatch.dispatchId, {
-              memberId: member.memberId,
-              reason: pushTarget.reason,
-            });
-            emitOutcomeMetric(METRIC_NAMESPACE, 'PushSkipped');
-            continue;
-          }
-        }
-        if (channel === 'sms') {
-          // The same lookup the worker and the tone evaluator use: publishing an SMS the
-          // worker cannot resolve would be dropped there as NoTargetRegistered. Skipped here,
-          // it is counted and alarmed instead (SmsSkipped) - an eligible member with no phone.
-          const smsTarget = resolveSmsTarget(member.contactChannels);
-          if (smsTarget.skipped) {
-            logInfo('fanout.sms.skipped', dispatch.dispatchId, {
-              memberId: member.memberId,
-              reason: smsTarget.reason,
-            });
-            emitOutcomeMetric(METRIC_NAMESPACE, 'SmsSkipped');
-            continue;
-          }
-        }
-        tasks.push({ memberId: member.memberId, channel });
-      }
-    }
+    const { tasks, skipped } = planFanOut(dispatch, audience);
 
-    if (tasks.length === 0) {
+    if (tasks.length === 0 && !isSelfTest) {
       emitOutcomeMetric(METRIC_NAMESPACE, 'EmptyRoster');
       return;
     }
@@ -385,6 +435,11 @@ async function fanOutOneDispatch(
     const results = await runWithConcurrencyLimit(tasks, MAX_CONCURRENT_FANOUT_TASKS, (task) =>
       sendOne(ddb, sns, tableName, topicArn, dispatch, task, firstPass),
     );
+
+    if (isSelfTest) {
+      await recordSelfTestPublished(ddb, tableName, dispatch, audience[0], tasks, results, skipped);
+      return;
+    }
 
     const failures = results.filter(
       (result): result is PromiseRejectedResult => result.status === 'rejected',
@@ -398,7 +453,7 @@ async function fanOutOneDispatch(
         tableName,
         dispatch.deptId,
         dispatch.dispatchId,
-        eligibleMembers.map((member) => ({ memberId: member.memberId, quals: member.quals })),
+        audience.map((member) => ({ memberId: member.memberId, quals: member.quals })),
       );
     } catch (error) {
       schedulingError = error instanceof Error ? error : new Error(String(error));
@@ -417,101 +472,81 @@ async function fanOutOneDispatch(
   }
 }
 
-async function fanOutSelfTestDispatch(
+function eligibilityReasonFor(member: EligibilitySnapshotItem): string | undefined {
+  if (!member.active) {
+    return 'member is inactive — a real dispatch would not page you';
+  }
+  return member.availabilityState !== 'AVAILABLE'
+    ? `member is ${member.availabilityState} — a real dispatch would not page you`
+    : undefined;
+}
+
+/**
+ * The fan-out's record of a self-test/canary run: what was published, and why anything was
+ * not. It never decides PASS - a published page passes only when its worker records it SENT
+ * (selfTest/evaluateSelfTestRun.ts). It never throws either: a self-test is not retried by
+ * stream redrive, its failure is reported to the member.
+ */
+async function recordSelfTestPublished(
   ddb: DynamoDBDocumentClient,
-  sns: SNSClient,
   tableName: string,
-  topicArn: string,
   dispatch: DispatchAlertRecord,
+  member: EligibilitySnapshotItem | undefined,
+  tasks: readonly FanOutTask[],
+  results: readonly PromiseSettledResult<void>[],
+  skipped: ReadonlyMap<string, string>,
 ): Promise<void> {
   const memberId = dispatch.targetMemberId!;
   const runAt = Math.floor(Date.now() / 1000);
   const testId = dispatch.selfTestId ?? String(runAt);
   const channelsTested = dispatch.channelsTested ?? FAN_OUT_CHANNELS.map((c) => c.toUpperCase());
 
-  const member = await getMemberEligibility(ddb, tableName, dispatch.deptId, memberId);
+  const channelResults: Record<string, SelfTestChannelResult> = {};
+  const publishedChannels: string[] = [];
   if (!member) {
     logInfo('fanout.selfTest.memberNotFound', dispatch.dispatchId, { memberId, testId });
-    emitOutcomeMetric(SELF_TEST_METRIC_NAMESPACE, 'SelfTestFailed', 'MemberNotFound');
-    await upsertSelfTestRun(ddb, tableName, {
-      deptId: dispatch.deptId,
-      memberId,
-      testId,
-      runAt,
-      channelsTested,
-      channelResults: Object.fromEntries(
-        channelsTested.map((channel) => [
-          channel,
-          { ok: false, ms: 0, reason: 'member not found' },
-        ]),
-      ),
-      overallResult: 'FAIL',
-      eligibilityReason: 'member not found',
-      completedAtMs: Date.now(),
-    });
-    return;
-  }
-
-  const eligibilityReason = !member.active
-    ? 'member is inactive — a real dispatch would not page you'
-    : member.availabilityState !== 'AVAILABLE'
-      ? `member is ${member.availabilityState} — a real dispatch would not page you`
-      : undefined;
-
-  const channelResults: Record<string, SelfTestChannelResult> = {};
-
-  for (const channel of FAN_OUT_CHANNELS) {
-    if (channel === 'push') {
-      const pushTarget = resolvePushTarget(member.contactChannels);
-      if (pushTarget.skipped) {
-        channelResults.PUSH = { ok: false, ms: 0, reason: pushTarget.reason };
-        emitOutcomeMetric(SELF_TEST_METRIC_NAMESPACE, 'SelfTestChannelFailed', 'PushSkipped');
-        continue;
-      }
-    }
-    if (channel === 'sms') {
-      const smsTarget = resolveSmsTarget(member.contactChannels);
-      if (smsTarget.skipped) {
-        channelResults.SMS = { ok: false, ms: 0, reason: smsTarget.reason };
-        emitOutcomeMetric(SELF_TEST_METRIC_NAMESPACE, 'SelfTestChannelFailed', 'SmsSkipped');
-        continue;
-      }
-    }
-    const startedMs = Date.now();
-    try {
-      await sendOne(ddb, sns, tableName, topicArn, dispatch, { memberId, channel });
-      channelResults[channel.toUpperCase()] = { ok: true, ms: Date.now() - startedMs };
-      emitOutcomeMetric(SELF_TEST_METRIC_NAMESPACE, 'SelfTestChannelPassed');
-    } catch (error) {
-      logError('fanout.selfTest.channelFailed', error, dispatch.dispatchId, { memberId, channel });
-      channelResults[channel.toUpperCase()] = {
-        ok: false,
-        ms: Date.now() - startedMs,
-        reason: `send failed (${error instanceof Error ? error.constructor.name : 'UnknownError'})`,
-      };
-      emitOutcomeMetric(SELF_TEST_METRIC_NAMESPACE, 'SelfTestChannelFailed', 'SendFailed');
+    for (const channel of channelsTested) {
+      channelResults[channel] = { ok: false, ms: 0, reason: 'member not found' };
     }
   }
+  for (const [key, reason] of skipped) {
+    channelResults[key.split('#')[1]!] = { ok: false, ms: 0, reason };
+  }
+  tasks.forEach((task, index) => {
+    const channel = task.channel.toUpperCase();
+    const result = results[index];
+    if (result?.status === 'fulfilled') {
+      publishedChannels.push(channel);
+      return;
+    }
+    const error: unknown = result?.reason;
+    logError('fanout.selfTest.channelFailed', error, dispatch.dispatchId, { memberId, channel });
+    emitOutcomeMetric(SELF_TEST_METRIC_NAMESPACE, 'SelfTestChannelFailed', 'SendFailed');
+    channelResults[channel] = {
+      ok: false,
+      ms: 0,
+      reason: `send failed (${error instanceof Error ? error.constructor.name : 'UnknownError'})`,
+    };
+  });
 
-  const overallResult =
-    eligibilityReason === undefined && Object.values(channelResults).every((result) => result.ok)
-      ? 'PASS'
-      : 'FAIL';
-  await upsertSelfTestRun(ddb, tableName, {
+  const eligibilityReason = member
+    ? eligibilityReasonFor(member)
+    : 'member not found — no eligibility snapshot';
+  await recordSelfTestFanOut(ddb, tableName, {
     deptId: dispatch.deptId,
     memberId,
     testId,
     runAt,
+    dispatchId: dispatch.dispatchId,
     channelsTested,
+    publishedChannels,
     channelResults,
-    overallResult,
     ...(eligibilityReason ? { eligibilityReason } : {}),
-    completedAtMs: Date.now(),
+    nowMs: Date.now(),
   });
-  emitOutcomeMetric(
-    SELF_TEST_METRIC_NAMESPACE,
-    overallResult === 'PASS' ? 'SelfTestPassed' : 'SelfTestFailed',
-  );
+  if (publishedChannels.length === 0) {
+    emitOutcomeMetric(SELF_TEST_METRIC_NAMESPACE, 'SelfTestFailed');
+  }
 }
 
 function recordItemIdentifier(record: DynamoDBRecord): string {
@@ -537,11 +572,7 @@ export const handler = async (event: DynamoDBStreamEvent): Promise<DynamoDBBatch
       continue;
     }
     try {
-      if (dispatch.targetMemberId) {
-        await fanOutSelfTestDispatch(ddb, sns, tableName, topicArn, dispatch);
-      } else {
-        await fanOutOneDispatch(ddb, sns, scheduler, tableName, topicArn, dispatch);
-      }
+      await fanOutOneDispatch(ddb, sns, scheduler, tableName, topicArn, dispatch);
     } catch (error) {
       logError('fanout.dispatch_failed', error, dispatch.dispatchId);
       return { batchItemFailures: [{ itemIdentifier: recordItemIdentifier(record) }] };

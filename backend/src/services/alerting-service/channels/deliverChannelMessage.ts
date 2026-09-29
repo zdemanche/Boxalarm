@@ -189,7 +189,15 @@ export async function deliverChannelMessage(
   try {
     result = await sendToProvider(params, resolved.target, idempotencyKey, isTest);
   } catch (error) {
-    logError('alerting.channel.send_failed', error, { correlationId, memberId, channel });
+    logError('alerting.channel.send_failed', error, { correlationId, memberId, channel, isTest });
+    if (isTest) {
+      // A self-test/canary send the provider (sandbox) refused is that run's FAIL - its result
+      // is read from this guard (selfTest/evaluateSelfTestRun.ts). Redelivering it would only
+      // dead-letter a synthetic page and page on-call through the channel DLQ alarm.
+      emitOutcomeMetric(METRIC_NAMESPACE, 'TestSendFailed', channel);
+      await recordClaimedFailure(ddb, tableName, pk, sk, error);
+      return;
+    }
     emitOutcomeMetric(METRIC_NAMESPACE, 'SendFailed', channel);
     await recordClaimedFailure(ddb, tableName, pk, sk, error);
     throw error;
@@ -398,11 +406,13 @@ async function recordClaimedFailure(
       new UpdateCommand({
         TableName: tableName,
         Key: { pk, sk },
-        UpdateExpression: 'SET failureReason = :reason, sendState = :failed',
+        UpdateExpression:
+          'SET failureReason = :reason, sendState = :failed, completedAtMs = :completedAtMs',
         ConditionExpression: 'attribute_exists(idempotencyKey)',
         ExpressionAttributeValues: {
           ':reason': error instanceof Error ? error.message : String(error),
           ':failed': SEND_STATE_FAILED,
+          ':completedAtMs': Date.now(),
         },
       }),
     );
@@ -412,7 +422,8 @@ async function recordClaimedFailure(
 }
 
 /**
- * Marks the guard SENT so it is never taken over as abandoned. A failed write is only logged:
+ * Marks the guard SENT so it is never taken over as abandoned, and is what a self-test/canary
+ * run passes on. A failed write is only logged:
  * the page went out, and the worst case is one duplicate send after the stale window - for a
  * page, a duplicate is the safe side of a miss.
  */
@@ -427,9 +438,11 @@ async function recordSent(
       new UpdateCommand({
         TableName: tableName,
         Key: { pk, sk },
-        UpdateExpression: 'SET sendState = :sent',
+        // completedAtMs: when the provider accepted it - the end of a self-test/canary run's
+        // ingress-to-delivery latency (selfTest/evaluateSelfTestRun.ts).
+        UpdateExpression: 'SET sendState = :sent, completedAtMs = :completedAtMs',
         ConditionExpression: 'attribute_exists(idempotencyKey)',
-        ExpressionAttributeValues: { ':sent': SEND_STATE_SENT },
+        ExpressionAttributeValues: { ':sent': SEND_STATE_SENT, ':completedAtMs': Date.now() },
       }),
     );
   } catch (error) {
