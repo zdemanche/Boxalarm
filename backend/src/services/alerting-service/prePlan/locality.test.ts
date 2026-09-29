@@ -174,11 +174,15 @@ describe('loadHomeLocality', () => {
   });
 
   describe('minor 3: an unusable or missing home set is logged and counted', () => {
-    const run = async (item: unknown, env: NodeJS.ProcessEnv) => {
+    const run = async (
+      item: unknown,
+      env: NodeJS.ProcessEnv,
+      purpose: 'dispatch' | 'form' = 'dispatch',
+    ) => {
       const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
       const logSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
       const send = vi.fn().mockResolvedValue(item === undefined ? {} : { Item: item });
-      const home = await loadHomeLocality(client(send), 'alerting', DEPT_ID, env);
+      const home = await loadHomeLocality(client(send), 'alerting', DEPT_ID, env, purpose);
       const errors = errorSpy.mock.calls.join('\n');
       const metrics = logSpy.mock.calls.join('\n');
       errorSpy.mockRestore();
@@ -207,6 +211,15 @@ describe('loadHomeLocality', () => {
       expect(home).toBe(NO_HOME_LOCALITY);
       expect(errors).toContain('preplan_copy.home_locality_missing');
       expect(metrics).toContain('HomeLocalityMissing');
+      expect(metrics).not.toContain('HomeLocalityFormMissing');
+    });
+
+    it('m7: a form load with no home set is counted apart from HomeLocalityMissing', async () => {
+      const { home, errors, metrics } = await run(undefined, {}, 'form');
+      expect(home).toBe(NO_HOME_LOCALITY);
+      expect(errors).toContain('"purpose":"form"');
+      expect(metrics).toContain('HomeLocalityFormMissing');
+      expect(metrics).not.toMatch(/"HomeLocalityMissing"/);
     });
   });
 });

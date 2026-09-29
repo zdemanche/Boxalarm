@@ -187,6 +187,35 @@ describe.each(CONSUMERS)("PrePlanCopies — $key consumer", (consumer) => {
   });
 });
 
+describe("PrePlanCopies — home-locality alarms (round-4 m7)", () => {
+  it.each([
+    ["home-locality-invalid", "HomeLocalityInvalid"],
+    ["home-locality-missing", "HomeLocalityMissing"],
+  ])("%s alarms on %s through the alerting-page topic", async (key, metricName) => {
+    await build();
+    const alarm = alarmByName(`boxalarm-dev-alerting-${key}`);
+    expect(alarm.inputs).toMatchObject({
+      namespace: "Boxalarm/alerting-pre-plan",
+      metricName,
+      statistic: "Sum",
+      comparisonOperator: "GreaterThanThreshold",
+      threshold: 0,
+      treatMissingData: "notBreaching",
+      alarmActions: [PAGE_TOPIC_ARN],
+    });
+    // Dimensionless: the backend's emitOutcomeMetric always publishes the plain [] set.
+    expect(alarm.inputs.dimensions).toBeUndefined();
+  });
+
+  it("never alarms on a manual-entry form load (HomeLocalityFormMissing)", async () => {
+    await build();
+    const metrics = resourcesOfType("aws:cloudwatch/metricAlarm:MetricAlarm").map(
+      (alarm) => alarm.inputs.metricName,
+    );
+    expect(metrics).not.toContain("HomeLocalityFormMissing");
+  });
+});
+
 describe("PrePlanCopies — component outputs", () => {
   it("exposes both consumers' queues for wiring and alarms", async () => {
     const copies = await build();

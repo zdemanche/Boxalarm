@@ -23,6 +23,7 @@ export function createHomeLocalityHandler(
         readAlertingConfig(process.env).tableName,
         deptId,
         process.env,
+        'form',
       );
       return {
         statusCode: 200,

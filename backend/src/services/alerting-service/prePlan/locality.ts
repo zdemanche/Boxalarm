@@ -90,12 +90,20 @@ function reportInvalid(source: 'item' | 'env', deptId: VerifiedDeptId, error: un
   emitOutcomeMetric(METRIC_NAMESPACE, 'HomeLocalityInvalid', source);
 }
 
+/**
+ * Why the home set is being loaded. Only a dispatch detail served without one counts as
+ * `HomeLocalityMissing` (alarmed: every pre-plan on that alert is flagged); a manual-entry
+ * form load counts separately as `HomeLocalityFormMissing` (round-4 m7).
+ */
+export type HomeLocalityPurpose = 'dispatch' | 'form';
+
 /** Never throws: a failed read degrades to "unverifiable" (every match flagged), not to none. */
 export async function loadHomeLocality(
   client: DynamoDBDocumentClient,
   tableName: string,
   deptId: VerifiedDeptId,
   env: NodeJS.ProcessEnv,
+  purpose: HomeLocalityPurpose = 'dispatch',
 ): Promise<HomeLocality> {
   try {
     const { Item } = await client.send(
@@ -109,11 +117,16 @@ export async function loadHomeLocality(
   }
   const fallback = fromEnv(env, deptId);
   if (fallback) return fallback;
-  // Served with no home set: every address match will be flagged. Alarmable.
+  // Served with no home set: every address match is flagged (alarmed in infrastructure,
+  // pre-plan-copies.ts); the form offers only "Other town".
   logError('preplan_copy.home_locality_missing', new Error('no home locality configured'), {
     deptId,
+    purpose,
   });
-  emitOutcomeMetric(METRIC_NAMESPACE, 'HomeLocalityMissing');
+  emitOutcomeMetric(
+    METRIC_NAMESPACE,
+    purpose === 'dispatch' ? 'HomeLocalityMissing' : 'HomeLocalityFormMissing',
+  );
   return NO_HOME_LOCALITY;
 }
 

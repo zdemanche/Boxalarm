@@ -58,6 +58,7 @@ describe('GET /api/v1/alerting/home-locality', () => {
 
   it('degrades to an empty list (the form then offers only "Other town"), never an error', async () => {
     vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
     const { createHomeLocalityHandler } = await import('./homeLocalityHandler.js');
     const docClient = {
       send: vi.fn().mockRejectedValue(new Error('throttled')),
@@ -72,6 +73,11 @@ describe('GET /api/v1/alerting/home-locality', () => {
 
     expect(result.statusCode).toBe(200);
     expect(JSON.parse(result.body)).toEqual({ towns: [], zips: [], state: null });
+    // m7: a form load is counted apart from the alarmed dispatch-detail HomeLocalityMissing.
+    const metrics = logSpy.mock.calls.join('\n');
+    expect(metrics).toContain('HomeLocalityFormMissing');
+    expect(metrics).not.toMatch(/"HomeLocalityMissing"/);
+    logSpy.mockRestore();
   });
 
   it('is 403 on a Cedar deny', async () => {

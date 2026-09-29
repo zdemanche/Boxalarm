@@ -67,9 +67,16 @@ const SPECS = {
  * Nothing here is on the page path: fan-out never reads these copies, and a dead consumer
  * only means an alert shows no (or stale) pre-plan — which is why the DLQ still pages.
  */
+/** Backend namespace of the pre-plan matcher's metrics (prePlan/locality.ts). */
+export const PRE_PLAN_METRIC_NAMESPACE = "Boxalarm/alerting-pre-plan";
+
 export class PrePlanCopies extends pulumi.ComponentResource {
   public readonly prePlan: CopyConsumer;
   public readonly hydrant: CopyConsumer;
+  /** The home-locality config is unusable (item or stack default present but not parseable). */
+  public readonly homeLocalityInvalidAlarm: aws.cloudwatch.MetricAlarm;
+  /** A dispatch detail was served with no home locality: every pre-plan on it is flagged. */
+  public readonly homeLocalityMissingAlarm: aws.cloudwatch.MetricAlarm;
 
   constructor(name: string, args: PrePlanCopiesArgs, opts?: pulumi.ComponentResourceOptions) {
     requireEnv("PrePlanCopies", args.env);
@@ -83,6 +90,43 @@ export class PrePlanCopies extends pulumi.ComponentResource {
       { prePlanCopy: this.prePlan.lambda.role, hydrantCopy: this.hydrant.lambda.role },
       args.alertingCmkArn,
       { parent: this },
+    );
+
+    // Round-4 m7: the home-locality config is what lets a pre-plan be shown unflagged. When it
+    // is broken or missing nothing pages late, but every alert's pre-plan says VERIFY ADDRESS,
+    // so it alarms through the same alerting-page topic as the copy DLQs above. Only the
+    // dispatch-detail count is alarmed; a manual-entry form load is counted separately
+    // (HomeLocalityFormMissing) and never alarms.
+    const localityAlarm = (key: string, metricName: string, description: string) =>
+      new aws.cloudwatch.MetricAlarm(
+        `${name}-${key}-alarm`,
+        {
+          name: `boxalarm-${args.env}-alerting-${key}`,
+          alarmDescription: description,
+          namespace: PRE_PLAN_METRIC_NAMESPACE,
+          metricName,
+          statistic: "Sum",
+          comparisonOperator: "GreaterThanThreshold",
+          threshold: 0,
+          period: 300,
+          evaluationPeriods: 1,
+          treatMissingData: "notBreaching",
+          alarmActions: [args.pageTopicArn],
+        },
+        { parent: this },
+      );
+    this.homeLocalityInvalidAlarm = localityAlarm(
+      "home-locality-invalid",
+      "HomeLocalityInvalid",
+      "The department HOME_LOCALITY item or the ALERTING_HOME_LOCALITY stack default is present " +
+        "but unusable; pre-plans fall back to the next source or are all flagged. See " +
+        "docs/runbooks/alert-context-replay.md, Home locality.",
+    );
+    this.homeLocalityMissingAlarm = localityAlarm(
+      "home-locality-missing",
+      "HomeLocalityMissing",
+      "A dispatch detail was served with no home locality, so every pre-plan match is flagged " +
+        "VERIFY ADDRESS. See docs/runbooks/alert-context-replay.md, Home locality.",
     );
 
     this.registerOutputs({
