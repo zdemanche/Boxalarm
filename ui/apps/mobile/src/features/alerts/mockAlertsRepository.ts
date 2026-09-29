@@ -76,6 +76,25 @@ export const mockAlertsRepository: AlertsRepository = {
     return dispatch;
   },
 
+  // Manual entries made on this device (self-tests are not calls).
+  async listActiveDispatches() {
+    const now = Math.floor(Date.now() / 1000);
+    return {
+      dispatches: [...DISPATCHES.values()]
+        .filter((d) => !d.isSelfTest)
+        .map((d) => ({
+          dispatchId: d.dispatchId,
+          incidentType: d.incidentType,
+          address: d.address,
+          crossStreets: d.crossStreets,
+          dispatchedAt: d.dispatchedAt ?? now,
+          toneSequence: d.toneLadder?.currentToneSequence ?? 1,
+        })),
+      asOf: now,
+      truncated: false,
+    };
+  },
+
   async getRoster(dispatchId) {
     return ROSTERS.get(dispatchId) ?? [];
   },
@@ -115,6 +134,7 @@ export const mockAlertsRepository: AlertsRepository = {
       mapLink: null,
       narrative: input.narrative,
       isSelfTest: false,
+      dispatchedAt: Math.floor(Date.now() / 1000),
     });
     ROSTERS.set(dispatchId, []);
     return { dispatchId };

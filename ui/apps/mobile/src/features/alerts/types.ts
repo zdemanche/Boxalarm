@@ -117,6 +117,25 @@ export interface DispatchAlert {
   nearestHydrantsIncomplete?: boolean;
 }
 
+/** One row of GET alerting/dispatches?status=active (dispatches/list/handler.ts). */
+export interface ActiveDispatchSummary {
+  dispatchId: string;
+  incidentType: string | null;
+  address: string | null;
+  crossStreets: string | null;
+  /** Epoch seconds. */
+  dispatchedAt: number;
+  toneSequence: number;
+}
+
+export interface ActiveDispatchList {
+  dispatches: ActiveDispatchSummary[];
+  /** Epoch seconds the server answered for. */
+  asOf: number;
+  /** The server capped the list - there may be more active calls than shown. */
+  truncated: boolean;
+}
+
 export interface SelfTestChannelResult {
   ok: boolean;
   ms: number;
@@ -208,6 +227,8 @@ export interface AlertsRepository {
   triggerSelfTest(): Promise<{ testId: string; dispatchId: string }>;
   getSelfTestRun(testId: string): Promise<SelfTestRun>;
   getDispatch(dispatchId: string): Promise<DispatchAlert>;
+  /** The department's active calls - the in-app path to a call whose notification is gone. */
+  listActiveDispatches(): Promise<ActiveDispatchList>;
   getRoster(dispatchId: string): Promise<RosterEntry[]>;
   /**
    * Saves the answer on the phone and starts sending it; resolves with the outbox row carrying it

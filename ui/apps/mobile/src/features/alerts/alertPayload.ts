@@ -85,6 +85,24 @@ export async function rememberAlertPayload(payload: AlertPayload): Promise<void>
     receivedAt,
     ...(payload.address ? {} : { address: existing?.value.address ?? '' }),
   });
+  const recent = (await kvGet<AlertPayload[]>(RECENT_PAGES_KEY))?.value ?? [];
+  const merged = { ...payload, receivedAt };
+  await kvSet(
+    RECENT_PAGES_KEY,
+    [merged, ...recent.filter((p) => p.dispatchId !== payload.dispatchId)].slice(
+      0,
+      RECENT_PAGES_LIMIT,
+    ),
+  );
+}
+
+const RECENT_PAGES_KEY = 'recent-pages';
+const RECENT_PAGES_LIMIT = 10;
+
+/** Pages this phone received, newest first - the Alerts list's fallback when the server list
+ * cannot be read, so a swiped-away notification never takes the call with it. */
+export async function recentPages(): Promise<AlertPayload[]> {
+  return (await kvGet<AlertPayload[]>(RECENT_PAGES_KEY))?.value ?? [];
 }
 
 export async function cachedAlertPayload(dispatchId: string): Promise<AlertPayload | null> {

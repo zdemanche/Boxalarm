@@ -5,6 +5,7 @@ import { apiRequest, type ApiRequestOptions, type AuthTokenSource } from '../../
 import { etaFor, queueAlertResponse } from './alertResponses';
 import { mockAlertsRepository } from './mockAlertsRepository';
 import type {
+  ActiveDispatchList,
   AlertsRepository,
   DeliveryReceipt,
   DispatchAlert,
@@ -87,6 +88,36 @@ function buildApiAlertsRepository(tokens: AuthTokenSource, apiBaseUrl: string): 
         ...(body.nearestHydrants ? { nearestHydrants: body.nearestHydrants } : {}),
         ...(body.nearestHydrantsUnavailable === true ? { nearestHydrantsUnavailable: true } : {}),
         ...(body.nearestHydrantsIncomplete === true ? { nearestHydrantsIncomplete: true } : {}),
+      };
+    },
+
+    async listActiveDispatches(): Promise<ActiveDispatchList> {
+      const response = await req('alerting/dispatches?status=active', {
+        timeoutMs: ALERT_DETAIL_TIMEOUT_MS,
+      });
+      const body = (await response.json()) as {
+        dispatches: {
+          dispatchId: string;
+          incidentType: string | null;
+          address: string | null;
+          crossStreets: string | null;
+          dispatchedAt: number;
+          toneLadder?: { currentToneSequence?: number };
+        }[];
+        asOf: number;
+        truncated?: boolean;
+      };
+      return {
+        dispatches: body.dispatches.map((d) => ({
+          dispatchId: d.dispatchId,
+          incidentType: d.incidentType,
+          address: d.address,
+          crossStreets: d.crossStreets,
+          dispatchedAt: d.dispatchedAt,
+          toneSequence: d.toneLadder?.currentToneSequence ?? 1,
+        })),
+        asOf: body.asOf,
+        truncated: body.truncated === true,
       };
     },
 
