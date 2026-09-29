@@ -21,20 +21,37 @@ export function isEditableModule(value: unknown): value is EditableModule {
   return typeof value === 'string' && (EDITABLE_MODULES as readonly string[]).includes(value);
 }
 
+/** A schema version string as the refresh writes it (`<feed>+neris-<apiVersion>`). */
+const VERSION_PATTERN = /^[\w.+-]{1,100}$/;
+
 /**
- * GET /api/v1/incidents/neris-schema — what the web picker and module editors render from:
- * the NERIS incident types (TypeIncidentValue, with readable labels) and the sub-schema of
- * each editable module, taken from the NERIS OpenAPI document the daily refresh compiled.
- * The server validates edits against these same nodes, so the two cannot drift.
+ * GET /api/v1/incidents/neris-schema[?version=<nerisSchemaVersion>] — what the web picker and
+ * module editors render from: the NERIS incident types (TypeIncidentValue, with readable
+ * labels) and the sub-schema of each editable module, taken from the NERIS OpenAPI document
+ * the daily refresh compiled.
+ *
+ * With `version` (the report's `nerisSchemaVersion`) it serves that pin's compiled schema —
+ * the same rule reportContext.loadSchema and putModule validate with (the pin when it has a
+ * NERIS schema, else ACTIVE) — so an editor never offers a value the server will refuse
+ * for that report (round 2, N8). Without it, ACTIVE.
  */
 async function inner(event: GuardEvent): Promise<APIGatewayProxyResultV2> {
   const traceId = resolveTraceId(event.headers, event.requestContext.requestId);
+  const requested = event.queryStringParameters?.version;
+  if (requested !== undefined && !VERSION_PATTERN.test(requested)) {
+    return problemResponse(400, 'Bad Request', 'version is not a schema version.', traceId);
+  }
   try {
     const bucket = process.env.NERIS_SCHEMA_BUCKET_NAME;
-    const active = await createSchemaVersionRepository(
+    const repository = createSchemaVersionRepository(
       getDocumentClient(),
       getTableName(process.env),
-    ).getActiveSchemaVersion();
+    );
+    const [pinned, latest] = await Promise.all([
+      requested ? repository.getSchemaVersion(requested) : undefined,
+      repository.getActiveSchemaVersion(),
+    ]);
+    const active = pinned?.nerisApiS3Key ? pinned : latest;
     if (!bucket || !active?.nerisApiS3Key) {
       return problemResponse(
         503,

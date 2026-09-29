@@ -6,12 +6,16 @@ import type { NerisIncidentType } from './types';
 /** The server refreshes the NERIS schema daily; an hour is plenty fresh for a picker. */
 const NERIS_SCHEMA_STALE_MS = 60 * 60 * 1000;
 
-/** GET incidents/neris-schema, shared by the incident type picker and the module editors. */
-export function useNerisSchema() {
+/**
+ * GET incidents/neris-schema, shared by the incident type picker and the module editors.
+ * Pass the report's `nerisSchemaVersion`: the server validates that report against its pinned
+ * schema, so the editors must render the same one, not whatever is current.
+ */
+export function useNerisSchema(version?: string) {
   const auth = useAuth();
   return useQuery({
-    queryKey: ['neris-schema'],
-    queryFn: () => getNerisSchema(auth),
+    queryKey: ['neris-schema', version ?? 'current'],
+    queryFn: () => getNerisSchema(auth, version),
     staleTime: NERIS_SCHEMA_STALE_MS,
     retry: false,
   });

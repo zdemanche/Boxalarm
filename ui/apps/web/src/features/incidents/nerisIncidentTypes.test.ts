@@ -61,3 +61,18 @@ test('demo mode serves the NERIS schema and validates incident_type against it',
   const body = (await saved.json()) as { corePayload: Record<string, unknown> };
   expect(body.corePayload.incident_type).toBe('FIRE||STRUCTURE_FIRE||CHIMNEY_FIRE');
 });
+
+test("asks for the report's pinned schema version when given one", async () => {
+  vi.stubEnv('VITE_DEMO', 'false');
+  const fetchSpy = vi
+    .spyOn(globalThis, 'fetch')
+    .mockResolvedValue(new Response(JSON.stringify({ incidentTypes: [], modules: {} })));
+  try {
+    await getNerisSchema(tokens, '2026.2+neris-1.5.1');
+    expect(String(fetchSpy.mock.calls[0]?.[0])).toBe(
+      '/api/v1/incidents/neris-schema?version=2026.2%2Bneris-1.5.1',
+    );
+  } finally {
+    fetchSpy.mockRestore();
+  }
+});

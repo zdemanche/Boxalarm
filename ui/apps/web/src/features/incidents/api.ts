@@ -212,9 +212,21 @@ export async function putModule(
   return (await response.json()) as GetIncidentResponse;
 }
 
-/** Any role. 503 NERIS_SCHEMA_UNAVAILABLE until the daily refresh has downloaded the schema. */
-export async function getNerisSchema(tokens: AuthTokenSource): Promise<NerisSchemaResponse> {
-  const response = await apiRequest('incidents/neris-schema', tokens);
+/**
+ * Any role. 503 NERIS_SCHEMA_UNAVAILABLE until the daily refresh has downloaded the schema.
+ * `version`: a report's `nerisSchemaVersion` — the schema that report is validated against,
+ * so its editors never offer a value the server refuses for it. Without it, the current one.
+ */
+export async function getNerisSchema(
+  tokens: AuthTokenSource,
+  version?: string,
+): Promise<NerisSchemaResponse> {
+  const response = await apiRequest(
+    version
+      ? `incidents/neris-schema?${new URLSearchParams({ version }).toString()}`
+      : 'incidents/neris-schema',
+    tokens,
+  );
   return nerisSchemaFrom(await response.json());
 }
 

@@ -3,10 +3,14 @@ import { Decision } from '@aws-sdk/client-verifiedpermissions';
 import compiled from './neris/fixtures/neris-api-1.5.1.json' with { type: 'json' };
 import { MEMBER_AUTH, buildIncidentEvent } from './testEvents.js';
 
-const { vpSend, getActiveSchemaVersion } = vi.hoisted(() => ({
-  vpSend: vi.fn(),
-  getActiveSchemaVersion: vi.fn(),
-}));
+const { vpSend, getActiveSchemaVersion, getSchemaVersion, getNerisApiSchemaDocument } = vi.hoisted(
+  () => ({
+    vpSend: vi.fn(),
+    getActiveSchemaVersion: vi.fn(),
+    getSchemaVersion: vi.fn(),
+    getNerisApiSchemaDocument: vi.fn(),
+  }),
+);
 
 vi.mock('@aws-sdk/client-verifiedpermissions', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@aws-sdk/client-verifiedpermissions')>();
@@ -16,10 +20,10 @@ vi.mock('@aws-sdk/client-verifiedpermissions', async (importOriginal) => {
   };
 });
 vi.mock('./schemaVersion/repository.js', () => ({
-  createSchemaVersionRepository: () => ({ getActiveSchemaVersion }),
+  createSchemaVersionRepository: () => ({ getActiveSchemaVersion, getSchemaVersion }),
 }));
 vi.mock('./schemaVersion/s3Schema.js', () => ({
-  getNerisApiSchemaDocument: () => Promise.resolve(compiled),
+  getNerisApiSchemaDocument,
 }));
 vi.mock('./repository.js', () => ({
   getDocumentClient: () => ({}),
@@ -31,13 +35,16 @@ process.env.NERIS_SCHEMA_BUCKET_NAME = 'bucket';
 
 import { handler } from './getNerisSchema.js';
 
-async function call(): Promise<{ statusCode: number; json: Record<string, unknown> }> {
+async function call(
+  version?: string,
+): Promise<{ statusCode: number; json: Record<string, unknown> }> {
+  const event = buildIncidentEvent({
+    method: 'GET',
+    routeKey: 'GET /api/v1/incidents/neris-schema',
+    auth: MEMBER_AUTH,
+  });
   const result = (await handler(
-    buildIncidentEvent({
-      method: 'GET',
-      routeKey: 'GET /api/v1/incidents/neris-schema',
-      auth: MEMBER_AUTH,
-    }),
+    version === undefined ? event : { ...event, queryStringParameters: { version } },
   )) as { statusCode: number; body: string };
   return {
     statusCode: result.statusCode,
@@ -48,6 +55,7 @@ async function call(): Promise<{ statusCode: number; json: Record<string, unknow
 beforeEach(() => {
   vi.clearAllMocks();
   vpSend.mockResolvedValue({ decision: Decision.ALLOW });
+  getNerisApiSchemaDocument.mockResolvedValue(compiled);
 });
 
 describe('GET /incidents/neris-schema', () => {
@@ -80,5 +88,35 @@ describe('GET /incidents/neris-schema', () => {
     const { statusCode, json } = await call();
     expect(statusCode).toBe(503);
     expect(json.code).toBe('NERIS_SCHEMA_UNAVAILABLE');
+  });
+
+  it("serves the report's pinned NERIS schema when asked for its version (round 2, N8)", async () => {
+    getActiveSchemaVersion.mockResolvedValue({
+      version: '2026.3+neris-1.6.0',
+      nerisApiS3Key: 'neris-schema/2026.3+neris-1.6.0/neris-api.json',
+    });
+    getSchemaVersion.mockResolvedValue({
+      version: '2026.2+neris-1.5.1',
+      nerisApiS3Key: 'neris-schema/2026.2+neris-1.5.1/neris-api.json',
+    });
+    const { statusCode, json } = await call('2026.2+neris-1.5.1');
+    expect(statusCode).toBe(200);
+    expect(json.version).toBe('2026.2+neris-1.5.1');
+    expect(getSchemaVersion).toHaveBeenCalledWith('2026.2+neris-1.5.1');
+    expect(getNerisApiSchemaDocument).toHaveBeenCalledWith(
+      expect.anything(),
+      'bucket',
+      'neris-schema/2026.2+neris-1.5.1/neris-api.json',
+    );
+  });
+
+  it('falls back to ACTIVE when the pin has no NERIS schema, and refuses a malformed version', async () => {
+    getActiveSchemaVersion.mockResolvedValue({
+      version: '2026.3+neris-1.6.0',
+      nerisApiS3Key: 'neris-schema/2026.3+neris-1.6.0/neris-api.json',
+    });
+    getSchemaVersion.mockResolvedValue({ version: '2026.1' });
+    expect((await call('2026.1')).json.version).toBe('2026.3+neris-1.6.0');
+    expect((await call('../etc')).statusCode).toBe(400);
   });
 });

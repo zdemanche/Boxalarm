@@ -158,7 +158,7 @@ function IncidentReport({ incident }: { incident: IncidentDetail }) {
   const lockedBannerRef = useRef<HTMLDivElement>(null);
   const pendingFieldFocus = useRef<string | null>(null);
   const locked = typeof incident.lockedAt === 'number';
-  const nerisSchema = useNerisSchema();
+  const nerisSchema = useNerisSchema(incident.nerisSchemaVersion);
   const nerisTypes = nerisSchema.data?.incidentTypes.length
     ? nerisSchema.data.incidentTypes
     : undefined;
