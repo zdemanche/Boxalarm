@@ -64,7 +64,9 @@ export function matchNotice(prePlan: PrePlanEnrichment): { text: string; warning
       };
     case 'UNIT_MISMATCH':
       return {
-        text: `VERIFY ADDRESS: this pre-plan is for ${withUnit(address ?? 'another unit', prePlan.unit)}, a different unit than dispatched.`,
+        // The server also returns this for a dispatch that named no unit, so say only what is
+        // known: the plan covers one unit, not the whole address.
+        text: `VERIFY ADDRESS: this pre-plan is for ${withUnit(address ?? 'one unit', prePlan.unit)} only.`,
         warning: true,
       };
     case 'NEARBY':

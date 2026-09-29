@@ -84,7 +84,7 @@ test.each([
   [
     'UNIT_MISMATCH',
     { matchType: 'UNIT_MISMATCH', matchedAddress: '40 Oak Ave', unit: '2' },
-    'VERIFY ADDRESS: this pre-plan is for 40 Oak Ave (unit 2), a different unit than dispatched.',
+    'VERIFY ADDRESS: this pre-plan is for 40 Oak Ave (unit 2) only.',
   ],
 ] as const)('%s is a text warning ("VERIFY ADDRESS"), not colour alone', (_type, match, text) => {
   render(<PrePlanPanel prePlan={{ ...BASE, ...match }} />);
@@ -215,4 +215,20 @@ test('with match provenance, renders the occupancy summary, not the legacy summa
   );
   expect(screen.getByText('Retail')).toBeTruthy();
   expect(screen.queryByText(/30 m away\. Retail/)).toBeNull();
+});
+
+test('N8: UNIT_MISMATCH wording holds when the dispatch named no unit', () => {
+  render(
+    <PrePlanPanel
+      prePlan={{
+        ...BASE,
+        matchType: 'UNIT_MISMATCH',
+        matchedAddress: '40 Oak Ave Apt 2',
+        unit: '2',
+      }}
+    />,
+  );
+  expect(screen.getByRole('note').textContent).toBe(
+    'VERIFY ADDRESS: this pre-plan is for 40 Oak Ave Apt 2 only.',
+  );
 });

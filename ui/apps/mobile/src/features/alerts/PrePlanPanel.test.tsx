@@ -75,9 +75,7 @@ test('flags UNIT_MISMATCH as a VERIFY ADDRESS notice naming the other unit', asy
     />,
   );
   expect(
-    await mismatch.findByText(
-      'VERIFY ADDRESS: this pre-plan is for 40 Oak Ave (unit 2), a different unit than dispatched.',
-    ),
+    await mismatch.findByText('VERIFY ADDRESS: this pre-plan is for 40 Oak Ave (unit 2) only.'),
   ).toBeTruthy();
 });
 
