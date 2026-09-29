@@ -524,6 +524,9 @@ export const auditRoute = new AuditRoute("audit-route", {
 });
 
 export const chiefNotificationTopic = new ChiefNotificationTopic("chief-notifications", { env });
+export const nerisEntitySyncFailedAlarm = nerisEntity.alarmOnSyncFailure(
+  chiefNotificationTopic.topicArn,
+);
 
 // Apparatus test-due, apparatus defect, consumable reorder and PPE expiry reminders ->
 // the digest (and, for an out-of-service defect, the inbox and push at once).

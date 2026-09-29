@@ -6,7 +6,11 @@ import {
 } from '@aws-sdk/lib-dynamodb';
 import { buildDeptScopedPk, type VerifiedDeptId } from '@boxalarm/dept-scope';
 import { buildOutboxRecord } from '@boxalarm/outbox';
-import type { NerisApi, NerisFailure } from '../../incident-service/neris/api.js';
+import type {
+  NerisApi,
+  NerisEntityStation,
+  NerisFailure,
+} from '../../incident-service/neris/api.js';
 
 /**
  * NERIS entity sync: registers the department's stations and units with its NERIS entity
@@ -205,7 +209,10 @@ export interface EntitySyncRecord {
 
 /** The stored row: the last completed sync, plus a sync that is running now, if any. */
 export interface EntitySyncRow extends Partial<EntitySyncRecord> {
-  readonly syncStatus?: 'SYNCING' | 'SYNCED' | 'PARTIAL';
+  /** FAILED: the worker could not run or crashed (`syncError`); the last result is kept. */
+  readonly syncStatus?: 'SYNCING' | 'SYNCED' | 'PARTIAL' | 'FAILED';
+  readonly syncError?: string;
+  readonly syncFailedAt?: string;
   readonly pendingRequest?: { readonly stations: readonly StationInput[] };
   readonly syncStartedAt?: string;
   readonly requestedBy?: string;
@@ -255,6 +262,25 @@ export async function syncEntity(
   const units: SyncedUnit[] = [];
   const errors: { subject: string; message: string }[] = [];
 
+  // Idempotent create (round 2, N9): before registering a station or unit we have no id for,
+  // look for one NERIS already holds under our station id / CAD designation — a sync that
+  // crashed after a create but before saving its id must not register it twice. Read once,
+  // and only when something would otherwise be created.
+  let existing: readonly NerisEntityStation[] | undefined | 'unavailable';
+  const lookup = async (): Promise<readonly NerisEntityStation[] | 'unavailable'> => {
+    if (existing === undefined) {
+      const found = await api.getEntity(departmentNerisId);
+      existing = found.ok ? found.stations : 'unavailable';
+      if (!found.ok) {
+        errors.push({
+          subject: 'NERIS entity',
+          message: `Couldn't check what NERIS already holds, so nothing new was registered (${describe(found)}). Try the sync again.`,
+        });
+      }
+    }
+    return existing;
+  };
+
   for (const station of request.stations) {
     const body = {
       station_id: station.stationId,
@@ -274,13 +300,34 @@ export async function syncEntity(
       if (!patched.ok)
         errors.push({ subject: `station ${station.stationId}`, message: describe(patched) });
     } else {
-      const created = await api.createStation(departmentNerisId, body);
-      if (created.ok) {
-        stationNerisId = created.nerisId;
-        stations.push({ stationId: station.stationId, nerisId: stationNerisId, status: 'CREATED' });
-      } else {
+      const held = await lookup();
+      const match =
+        held === 'unavailable' ? undefined : held.find((s) => s.stationId === station.stationId);
+      if (held === 'unavailable') {
         stations.push({ stationId: station.stationId, status: 'FAILED' });
-        errors.push({ subject: `station ${station.stationId}`, message: describe(created) });
+      } else if (match) {
+        stationNerisId = match.nerisId;
+        const patched = await api.patchStation(departmentNerisId, stationNerisId, body);
+        stations.push({
+          stationId: station.stationId,
+          nerisId: stationNerisId,
+          status: patched.ok ? 'UPDATED' : 'FAILED',
+        });
+        if (!patched.ok)
+          errors.push({ subject: `station ${station.stationId}`, message: describe(patched) });
+      } else {
+        const created = await api.createStation(departmentNerisId, body);
+        if (created.ok) {
+          stationNerisId = created.nerisId;
+          stations.push({
+            stationId: station.stationId,
+            nerisId: stationNerisId,
+            status: 'CREATED',
+          });
+        } else {
+          stations.push({ stationId: station.stationId, status: 'FAILED' });
+          errors.push({ subject: `station ${station.stationId}`, message: describe(created) });
+        }
       }
     }
 
@@ -297,7 +344,17 @@ export async function syncEntity(
           ? { dedicated_staffing: unit.dedicatedStaffing }
           : {}),
       };
-      const unitNerisId = knownUnits.get(unit.unitId);
+      let unitNerisId = knownUnits.get(unit.unitId);
+      if (!unitNerisId) {
+        const held = await lookup();
+        if (held === 'unavailable') {
+          units.push({ unitId: unit.unitId, stationId: station.stationId, status: 'FAILED' });
+          continue;
+        }
+        unitNerisId = held
+          .find((s) => s.nerisId === stationNerisId)
+          ?.units.find((u) => u.cadDesignation === unit.unitId)?.nerisId;
+      }
       if (unitNerisId) {
         const patched = await api.patchUnit(
           departmentNerisId,
@@ -386,6 +443,40 @@ export async function markSyncing(
     if (error instanceof Error && error.name === 'ConditionalCheckFailedException') {
       return 'already_running';
     }
+    throw error;
+  }
+}
+
+/**
+ * The sync could not run (the worker invoke failed, or the worker crashed): the row leaves
+ * SYNCING at once, keeping the last completed result, with the reason GET reports. Only a
+ * row still SYNCING is touched — a sync that finished in between wins.
+ */
+export async function markSyncFailed(
+  client: DynamoDBDocumentClient,
+  tableName: string,
+  deptId: VerifiedDeptId,
+  message: string,
+  now: Date,
+): Promise<void> {
+  try {
+    await client.send(
+      new UpdateCommand({
+        TableName: tableName,
+        Key: { pk: buildDeptScopedPk(deptId), sk: ENTITY_SK },
+        ConditionExpression: 'syncStatus = :syncing',
+        UpdateExpression:
+          'SET syncStatus = :failed, syncError = :message, syncFailedAt = :now REMOVE pendingRequest',
+        ExpressionAttributeValues: {
+          ':syncing': 'SYNCING',
+          ':failed': 'FAILED',
+          ':message': message.slice(0, 500),
+          ':now': now.toISOString(),
+        },
+      }),
+    );
+  } catch (error) {
+    if (error instanceof Error && error.name === 'ConditionalCheckFailedException') return;
     throw error;
   }
 }

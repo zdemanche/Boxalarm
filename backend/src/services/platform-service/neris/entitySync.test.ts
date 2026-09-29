@@ -44,6 +44,7 @@ function fakeApi(overrides: Record<string, ReturnType<typeof vi.fn>> = {}) {
         issues: [{ path: 'type', code: 'enum', message: 'Input should be ...' }],
       }),
     patchUnit: vi.fn().mockResolvedValue({ ok: true, httpStatus: 200 }),
+    getEntity: vi.fn().mockResolvedValue({ ok: true, httpStatus: 200, stations: [] }),
     ...overrides,
   };
   return { api: fns as unknown as NerisApi, fns };
@@ -240,5 +241,73 @@ describe('saveEntityRecord', () => {
         units: [{ unitId: 'E1', stationId: 'STA1', nerisId: `${ENTITY}S001U001` }],
       },
     });
+  });
+});
+
+describe('syncEntity: idempotent create (round 2, N9)', () => {
+  it('adopts a station and unit NERIS already holds under our ids instead of creating them again', async () => {
+    const { api, fns } = fakeApi({
+      getEntity: vi.fn().mockResolvedValue({
+        ok: true,
+        httpStatus: 200,
+        stations: [
+          {
+            nerisId: `${ENTITY}S001`,
+            stationId: 'STA1',
+            units: [{ nerisId: `${ENTITY}S001U001`, cadDesignation: 'E1' }],
+          },
+        ],
+      }),
+      createUnit: vi
+        .fn()
+        .mockResolvedValue({ ok: true, httpStatus: 201, nerisId: `${ENTITY}S001U002` }),
+    });
+    const record = await syncEntity(api, ENTITY, REQUEST, undefined, 'chief-1', NOW);
+    expect(fns.getEntity).toHaveBeenCalledTimes(1);
+    expect(fns.createStation).not.toHaveBeenCalled();
+    expect(fns.patchStation).toHaveBeenCalledWith(ENTITY, `${ENTITY}S001`, expect.anything());
+    expect(fns.patchUnit).toHaveBeenCalledWith(
+      ENTITY,
+      `${ENTITY}S001`,
+      `${ENTITY}S001U001`,
+      expect.anything(),
+    );
+    expect(fns.createUnit).toHaveBeenCalledTimes(1);
+    expect(record.units.map((u) => [u.unitId, u.nerisId, u.status])).toEqual([
+      ['E1', `${ENTITY}S001U001`, 'UPDATED'],
+      ['T2', `${ENTITY}S001U002`, 'CREATED'],
+    ]);
+  });
+
+  it('registers nothing new when NERIS cannot be asked what it already holds', async () => {
+    const { api, fns } = fakeApi({
+      getEntity: vi
+        .fn()
+        .mockResolvedValue({ ok: false, kind: 'server_error', httpStatus: 503, issues: [] }),
+    });
+    const record = await syncEntity(api, ENTITY, REQUEST, undefined, 'chief-1', NOW);
+    expect(fns.createStation).not.toHaveBeenCalled();
+    expect(fns.createUnit).not.toHaveBeenCalled();
+    expect(record.errors[0]!.subject).toBe('NERIS entity');
+  });
+
+  it('does not ask NERIS when every station and unit already has its id', async () => {
+    const { api, fns } = fakeApi();
+    await syncEntity(
+      api,
+      ENTITY,
+      REQUEST,
+      {
+        departmentNerisId: ENTITY,
+        stations: [{ stationId: 'STA1', nerisId: `${ENTITY}S001`, status: 'CREATED' }],
+        units: [
+          { unitId: 'E1', stationId: 'STA1', nerisId: `${ENTITY}S001U001`, status: 'CREATED' },
+          { unitId: 'T2', stationId: 'STA1', nerisId: `${ENTITY}S001U002`, status: 'CREATED' },
+        ],
+      },
+      'chief-1',
+      NOW,
+    );
+    expect(fns.getEntity).not.toHaveBeenCalled();
   });
 });

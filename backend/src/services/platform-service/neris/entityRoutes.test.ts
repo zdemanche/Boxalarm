@@ -124,6 +124,27 @@ describe('PUT /platform/neris/entity', () => {
     expect(syncEntity).not.toHaveBeenCalled();
   });
 
+  it('releases the row as FAILED when the worker cannot be invoked', async () => {
+    ddbSend.mockImplementation((command: Command) =>
+      Promise.resolve(
+        command.constructor.name === 'GetCommand' &&
+          (command.input.Key as { sk: string }).sk === 'CONFIG#NERIS'
+          ? { Item: { value: { departmentNerisId: 'FD09190828' } } }
+          : {},
+      ),
+    );
+    lambdaSend.mockRejectedValue(new Error('throttled'));
+    const result = (await putHandler(event(VALID))) as { statusCode: number };
+    expect(result.statusCode).toBe(503);
+    const updates = ddbSend.mock.calls
+      .map(([c]) => c as Command)
+      .filter((c) => c.constructor.name === 'UpdateCommand');
+    expect(updates[1]!.input).toMatchObject({
+      ConditionExpression: 'syncStatus = :syncing',
+      ExpressionAttributeValues: expect.objectContaining({ ':failed': 'FAILED' }) as unknown,
+    });
+  });
+
   it('refuses a second sync while one is running', async () => {
     ddbSend.mockImplementation((command: Command) => {
       if (command.constructor.name === 'UpdateCommand') {
@@ -174,5 +195,16 @@ describe('GET /platform/neris/entity', () => {
     });
     const result = (await getHandler(event())) as { body: string };
     expect((JSON.parse(result.body) as { status: string }).status).toBe('PARTIAL');
+  });
+
+  it('reports FAILED with the reason when the sync could not run', async () => {
+    ddbSend.mockResolvedValue({
+      Item: { syncStatus: 'FAILED', syncError: 'secret missing', syncFailedAt: 't2' },
+    });
+    const result = (await getHandler(event())) as { body: string };
+    expect(JSON.parse(result.body)).toMatchObject({
+      status: 'FAILED',
+      syncError: 'secret missing',
+    });
   });
 });

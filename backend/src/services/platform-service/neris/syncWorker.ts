@@ -6,7 +6,7 @@ import { getDynamoDocClient } from '../export/awsClients.js';
 import { getDepartmentConfig } from '../config/repository.js';
 import { createNerisApi } from '../../incident-service/neris/api.js';
 import { getNerisClient, readNerisConfig } from '../../incident-service/neris/index.js';
-import { getEntityRecord, saveEntityRecord, syncEntity } from './entitySync.js';
+import { getEntityRecord, markSyncFailed, saveEntityRecord, syncEntity } from './entitySync.js';
 
 const logger = createLogger({ service: 'platform-service' });
 
@@ -34,21 +34,37 @@ export const handler: Handler<SyncJob, void> = async (job) => {
     });
     return;
   }
-  const config = await getDepartmentConfig(client, { tableName, deptId, configType: 'NERIS' });
-  const departmentNerisId = config?.value.departmentNerisId;
-  if (typeof departmentNerisId !== 'string') {
-    throw new Error('the department NERIS id is no longer configured');
+  let record;
+  try {
+    const config = await getDepartmentConfig(client, { tableName, deptId, configType: 'NERIS' });
+    const departmentNerisId = config?.value.departmentNerisId;
+    if (typeof departmentNerisId !== 'string') {
+      throw new Error('the department NERIS id is no longer configured');
+    }
+    const api = createNerisApi(getNerisClient(await readNerisConfig(process.env)));
+    record = await syncEntity(
+      api,
+      departmentNerisId,
+      row.pendingRequest,
+      row,
+      row.requestedBy ?? 'unknown',
+      new Date(),
+    );
+    await saveEntityRecord(client, tableName, deptId, record, job.correlationId);
+  } catch (error) {
+    // Recorded as FAILED so GET says why at once instead of SYNCING until it goes stale
+    // (round 2, N9); rethrown so the invoke's on-failure destination (and its alarm) see it.
+    const message = error instanceof Error ? error.message : 'unknown error';
+    logger.error({
+      event: 'platform.neris.entity.sync_crashed',
+      correlationId: job.correlationId,
+      deptId,
+      message,
+    });
+    emitOutcomeMetric('Boxalarm/platform-service', 'NerisEntitySyncFailed');
+    await markSyncFailed(client, tableName, deptId, message, new Date()).catch(() => undefined);
+    throw error;
   }
-  const api = createNerisApi(getNerisClient(await readNerisConfig(process.env)));
-  const record = await syncEntity(
-    api,
-    departmentNerisId,
-    row.pendingRequest,
-    row,
-    row.requestedBy ?? 'unknown',
-    new Date(),
-  );
-  await saveEntityRecord(client, tableName, deptId, record, job.correlationId);
   logger.info({
     event: 'platform.neris.entity.synced',
     correlationId: job.correlationId,

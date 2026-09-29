@@ -13,7 +13,10 @@ import { getEntityRecord } from './entitySync.js';
 
 const logger = createLogger({ service: 'platform-service' });
 
-/** GET /api/v1/platform/neris/entity — the last station/unit sync, or `{status: 'NOT_SYNCED'}`. */
+/**
+ * GET /api/v1/platform/neris/entity — the last station/unit sync (SYNCING, SYNCED, PARTIAL, or
+ * FAILED with `syncError` when the sync could not run), or `{status: 'NOT_SYNCED'}`.
+ */
 async function inner(
   event: GuardEvent,
   principal: CedarPrincipalContext,
@@ -34,17 +37,28 @@ async function inner(
             units: record.units ?? [],
             errors: record.errors ?? [],
           }
-        : record?.syncedAt
+        : record?.syncStatus === 'FAILED'
           ? {
-              status: (record.errors ?? []).length > 0 ? 'PARTIAL' : 'SYNCED',
-              departmentNerisId: record.departmentNerisId,
+              status: 'FAILED',
+              syncError: record.syncError ?? null,
+              syncFailedAt: record.syncFailedAt ?? null,
+              departmentNerisId: record.departmentNerisId ?? null,
               stations: record.stations ?? [],
               units: record.units ?? [],
               errors: record.errors ?? [],
-              syncedAt: record.syncedAt,
-              syncedBy: record.syncedBy,
+              ...(record.syncedAt ? { syncedAt: record.syncedAt, syncedBy: record.syncedBy } : {}),
             }
-          : { status: 'NOT_SYNCED', stations: [], units: [], errors: [] };
+          : record?.syncedAt
+            ? {
+                status: (record.errors ?? []).length > 0 ? 'PARTIAL' : 'SYNCED',
+                departmentNerisId: record.departmentNerisId,
+                stations: record.stations ?? [],
+                units: record.units ?? [],
+                errors: record.errors ?? [],
+                syncedAt: record.syncedAt,
+                syncedBy: record.syncedBy,
+              }
+            : { status: 'NOT_SYNCED', stations: [], units: [], errors: [] };
     return {
       statusCode: 200,
       headers: { 'content-type': 'application/json' },

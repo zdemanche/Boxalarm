@@ -1,4 +1,5 @@
 import * as pulumi from "@pulumi/pulumi";
+import * as aws from "@pulumi/aws";
 import { ServiceLambda } from "../observability/service-lambda";
 import { ServiceLogGroup } from "../observability/service-log-group";
 import { HttpApi } from "../api/http-api";
@@ -30,6 +31,9 @@ export class NerisEntity extends pulumi.ComponentResource {
   public readonly getLambda: ServiceLambda;
   public readonly putLambda: ServiceLambda;
   public readonly workerLambda: ServiceLambda;
+  /** Where a crashed or timed-out sync lands (async on-failure destination, round 2 N9). */
+  public readonly workerFailureQueue: aws.sqs.Queue;
+  public readonly workerInvokeConfig: aws.lambda.FunctionEventInvokeConfig;
 
   constructor(name: string, args: NerisEntityArgs, opts?: pulumi.ComponentResourceOptions) {
     requireEnv("NerisEntity", args.env);
@@ -66,6 +70,15 @@ export class NerisEntity extends pulumi.ComponentResource {
       { parent: this },
     );
 
+    this.workerFailureQueue = new aws.sqs.Queue(
+      `${name}-sync-worker-failures`,
+      {
+        name: `boxalarm-${env}-platform-neris-entity-sync-failures`,
+        messageRetentionSeconds: 14 * 86_400,
+      },
+      { parent: this },
+    );
+
     // The NERIS calls run here, asynchronously (one per station and unit can outlast API
     // Gateway's 30 s limit). Reads the pending request and CONFIG#NERIS, saves the result
     // with its outbox record (two PutItems in one transaction). Only it reads the secret.
@@ -90,14 +103,49 @@ export class NerisEntity extends pulumi.ComponentResource {
           .all([args.platformTableArn, args.nerisCredentialsSecretArn])
           .apply(([tableArn, secretArn]): IamPolicyStatement[] => [
             {
+              // UpdateItem: a crashed sync marks the row FAILED (entitySync.markSyncFailed).
               Sid: "NerisEntitySyncAccess",
               Effect: "Allow",
-              Action: ["dynamodb:GetItem", "dynamodb:PutItem"],
+              Action: ["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:UpdateItem"],
               Resource: tableArn,
             },
             auditMutationDenyStatement(tableArn),
             ...nerisClientPolicyStatements(secretArn, env),
           ]),
+      },
+      { parent: this },
+    );
+
+    // No automatic retry: a re-run repeats NERIS calls, and the sync records its own FAILED
+    // state. A crash or timeout goes to the failure queue, which alarms (round 2, N9).
+    new aws.iam.RolePolicy(
+      `${name}-sync-worker-on-failure`,
+      {
+        role: this.workerLambda.role.id,
+        policy: this.workerFailureQueue.arn.apply((queueArn) =>
+          JSON.stringify({
+            Version: "2012-10-17",
+            Statement: [
+              {
+                Sid: "NerisEntitySyncOnFailure",
+                Effect: "Allow",
+                Action: "sqs:SendMessage",
+                Resource: queueArn,
+              },
+            ],
+          }),
+        ),
+      },
+      { parent: this },
+    );
+    this.workerInvokeConfig = new aws.lambda.FunctionEventInvokeConfig(
+      `${name}-sync-worker-invoke-config`,
+      {
+        functionName: this.workerLambda.function.name,
+        maximumRetryAttempts: 0,
+        destinationConfig: {
+          onFailure: { destination: this.workerFailureQueue.arn },
+        },
       },
       { parent: this },
     );
@@ -153,6 +201,33 @@ export class NerisEntity extends pulumi.ComponentResource {
       getLambda: this.getLambda,
       putLambda: this.putLambda,
       workerLambda: this.workerLambda,
+      workerFailureQueue: this.workerFailureQueue,
     });
+  }
+
+  /**
+   * Pages the chief's LOB topic when a sync crashes or times out. A separate call because
+   * the chief topic is created after this component in index.ts.
+   */
+  alarmOnSyncFailure(topicArn: pulumi.Input<string>): aws.cloudwatch.MetricAlarm {
+    return new aws.cloudwatch.MetricAlarm(
+      "neris-entity-sync-failed-alarm",
+      {
+        name: pulumi.interpolate`${this.workerFailureQueue.name}-depth`,
+        alarmDescription:
+          "A NERIS station/unit sync crashed or timed out (see the failure queue and GET /platform/neris/entity).",
+        namespace: "AWS/SQS",
+        metricName: "ApproximateNumberOfMessagesVisible",
+        dimensions: { QueueName: this.workerFailureQueue.name },
+        statistic: "Maximum",
+        period: 300,
+        evaluationPeriods: 1,
+        threshold: 0,
+        comparisonOperator: "GreaterThanThreshold",
+        treatMissingData: "notBreaching",
+        alarmActions: [topicArn],
+      },
+      { parent: this },
+    );
   }
 }

@@ -129,6 +129,16 @@ export interface NerisListedIncident {
   readonly lastModified?: string;
 }
 
+/** A station NERIS holds for the entity, with the ids our sync matches on. */
+export interface NerisEntityStation {
+  readonly nerisId: string;
+  readonly stationId: string | undefined;
+  readonly units: readonly {
+    readonly nerisId: string;
+    readonly cadDesignation: string | undefined;
+  }[];
+}
+
 export interface NerisApi {
   createIncident(
     entity: string,
@@ -161,6 +171,8 @@ export interface NerisApi {
     entity: string,
     monthYear: string,
   ): Promise<NerisResult<{ reports: readonly { nerisUid: string | undefined }[] }>>;
+  /** GET /entity/{entity}: the stations and units NERIS already holds for the department. */
+  getEntity(entity: string): Promise<NerisResult<{ stations: readonly NerisEntityStation[] }>>;
   createStation(entity: string, payload: unknown): Promise<NerisResult<{ nerisId: string }>>;
   patchStation(entity: string, station: string, payload: unknown): Promise<NerisResult<object>>;
   createUnit(
@@ -341,6 +353,35 @@ export function createNerisApi(client: NerisClient): NerisApi {
       return { ok: true, httpStatus: response.status, reports };
     },
 
+    async getEntity(entity) {
+      const response = await client.fetch(NERIS_PATHS.entity(entity), { method: 'GET' });
+      if (!response.ok) return failure(response);
+      const raw = asRecord(await readJson(response))?.stations;
+      const stations = (Array.isArray(raw) ? raw : []).flatMap((entry) => {
+        const station = asRecord(entry);
+        if (typeof station?.neris_id !== 'string') return [];
+        const units = (Array.isArray(station.units) ? station.units : []).flatMap((u) => {
+          const unit = asRecord(u);
+          return typeof unit?.neris_id === 'string'
+            ? [
+                {
+                  nerisId: unit.neris_id,
+                  cadDesignation:
+                    typeof unit.cad_designation_1 === 'string' ? unit.cad_designation_1 : undefined,
+                },
+              ]
+            : [];
+        });
+        return [
+          {
+            nerisId: station.neris_id,
+            stationId: typeof station.station_id === 'string' ? station.station_id : undefined,
+            units,
+          },
+        ];
+      });
+      return { ok: true, httpStatus: response.status, stations };
+    },
     createStation: (entity, payload) => created(NERIS_PATHS.createStation(entity), payload),
     patchStation: (entity, station, payload) =>
       modified(NERIS_PATHS.station(entity, station), 'PATCH', payload),

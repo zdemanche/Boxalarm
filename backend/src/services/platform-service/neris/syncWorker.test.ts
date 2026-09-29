@@ -65,4 +65,28 @@ describe('NERIS entity sync worker', () => {
     await handler({ deptId: 'NICHOLS', correlationId: 'c' }, {} as never, () => undefined);
     expect(syncEntity).not.toHaveBeenCalled();
   });
+
+  it('records FAILED and rethrows (for the on-failure destination) when the sync crashes', async () => {
+    ddbSend.mockImplementation((command: Command) =>
+      Promise.resolve(
+        command.constructor.name === 'UpdateCommand'
+          ? {}
+          : (command.input.Key as { sk: string }).sk === 'CONFIG#NERIS'
+            ? { Item: { value: { departmentNerisId: 'FD09190828' } } }
+            : { Item: { syncStatus: 'SYNCING', pendingRequest: REQUEST } },
+      ),
+    );
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    syncEntity.mockRejectedValue(new Error('NERIS secret missing'));
+    await expect(
+      handler({ deptId: 'NICHOLS', correlationId: 'c' }, {} as never, () => undefined),
+    ).rejects.toThrow('NERIS secret missing');
+    const update = ddbSend.mock.calls
+      .map(([c]) => c as Command)
+      .find((c) => c.constructor.name === 'UpdateCommand')!;
+    expect(update.input.ExpressionAttributeValues).toMatchObject({
+      ':failed': 'FAILED',
+      ':message': 'NERIS secret missing',
+    });
+  });
 });

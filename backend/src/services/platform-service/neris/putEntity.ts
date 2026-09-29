@@ -12,7 +12,7 @@ import { createLogger } from '@boxalarm/logging';
 import { getDynamoDocClient } from '../export/awsClients.js';
 import { getDepartmentConfig } from '../config/repository.js';
 import { InvokeCommand, LambdaClient } from '@aws-sdk/client-lambda';
-import { markSyncing, parseSyncRequest } from './entitySync.js';
+import { markSyncFailed, markSyncing, parseSyncRequest } from './entitySync.js';
 
 let cachedLambda: LambdaClient | undefined;
 function getLambdaClient(): LambdaClient {
@@ -108,13 +108,25 @@ async function inner(
     }
     // One NERIS call per station and unit can outlast API Gateway's 30 s limit: the worker
     // runs it asynchronously and GET /platform/neris/entity reports progress.
-    await getLambdaClient().send(
-      new InvokeCommand({
-        FunctionName: readWorkerName(),
-        InvocationType: 'Event',
-        Payload: Buffer.from(JSON.stringify({ deptId, correlationId: traceId })),
-      }),
-    );
+    try {
+      await getLambdaClient().send(
+        new InvokeCommand({
+          FunctionName: readWorkerName(),
+          InvocationType: 'Event',
+          Payload: Buffer.from(JSON.stringify({ deptId, correlationId: traceId })),
+        }),
+      );
+    } catch (error) {
+      // Nothing will run: release the row now rather than leave it SYNCING (round 2, N9).
+      await markSyncFailed(
+        client,
+        tableName,
+        deptId,
+        "The sync couldn't be started. Try again.",
+        new Date(),
+      ).catch(() => undefined);
+      throw error;
+    }
     logger.info({ event: 'platform.neris.entity.sync_started', correlationId: traceId, deptId });
     return json(202, { status: 'SYNCING', startedAt: new Date().toISOString() });
   } catch (error) {
