@@ -106,9 +106,29 @@ describe('responses handler', () => {
     expect(result.statusCode).toBe(400);
   });
 
-  it('returns 400 when eta is missing for RESPONDING', async () => {
+  // Mobile review E: ETA is optional - an answer without one is recorded as unknown (null),
+  // never rejected, because a rejected RESPONDING is a responder the officers never see.
+  it.each([['RESPONDING'], ['DIRECT_TO_SCENE']])(
+    'records %s with no ETA as eta null',
+    async (ackStatus) => {
+      vi.mocked(recordResponse).mockResolvedValue(recorded({ ackStatus, eta: null }));
+      for (const body of [{ ackStatus }, { ackStatus, eta: null }]) {
+        const result = (await handler(buildEvent({ body: JSON.stringify(body) }))) as {
+          statusCode: number;
+        };
+        expect(result.statusCode).toBe(200);
+      }
+      expect(recordResponse).toHaveBeenCalledWith(
+        expect.anything(),
+        'alerting-table',
+        expect.objectContaining({ ackStatus, eta: null }),
+      );
+    },
+  );
+
+  it.each([[0], [-3], [2.5]])('returns 400 for a provided but invalid eta %j', async (eta) => {
     const result = (await handler(
-      buildEvent({ body: JSON.stringify({ ackStatus: 'RESPONDING' }) }),
+      buildEvent({ body: JSON.stringify({ ackStatus: 'RESPONDING', eta }) }),
     )) as { statusCode: number };
     expect(result.statusCode).toBe(400);
   });

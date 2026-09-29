@@ -103,13 +103,21 @@ function parseBody(
     );
   }
 
+  // ETA is optional (F1.6 asks for it; the data model's `eta` is nullable). A RESPONDING or
+  // DIRECT_TO_SCENE answer without one is recorded with eta null and shown as unknown - never
+  // rejected: a 400 here would drop the one signal that someone is coming, e.g. from a
+  // lock-screen action that has no ETA to give. A provided value must still be valid.
   const eta = body.eta;
   if (ackStatus === 'NOT_RESPONDING') {
     if (eta !== undefined && eta !== null) {
       throw new Error('eta must not be provided when ackStatus is NOT_RESPONDING');
     }
-  } else if (typeof eta !== 'number' || !Number.isInteger(eta) || eta <= 0) {
-    throw new Error('eta is required and must be a positive integer for this ackStatus');
+  } else if (
+    eta !== undefined &&
+    eta !== null &&
+    (typeof eta !== 'number' || !Number.isInteger(eta) || eta <= 0)
+  ) {
+    throw new Error('eta, if provided, must be a positive integer (minutes)');
   }
 
   const assignedApparatusId = body.assignedApparatusId;
@@ -126,7 +134,7 @@ function parseBody(
 
   return {
     ackStatus: ackStatus as ResponseAckStatus,
-    eta: ackStatus === 'NOT_RESPONDING' ? null : (eta as number),
+    eta: ackStatus === 'NOT_RESPONDING' ? null : (eta ?? null),
     assignedApparatusId: (assignedApparatusId as string | undefined) ?? null,
     ...(clientAnswerId !== undefined ? { clientAnswerId } : {}),
     ...(answeredAtMs !== undefined ? { answeredAtMs } : {}),
