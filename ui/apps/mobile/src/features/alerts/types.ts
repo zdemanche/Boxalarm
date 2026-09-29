@@ -101,6 +101,8 @@ export interface DispatchAlert {
    */
   nearestHydrants?: NearestHydrant[];
   nearestHydrantsUnavailable?: boolean;
+  /** The server's geo read hit its cap: a nearer hydrant may be missing. */
+  nearestHydrantsIncomplete?: boolean;
 }
 
 export interface SelfTestChannelResult {

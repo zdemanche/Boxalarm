@@ -106,6 +106,7 @@ async function handleGetAlertDetail(
         // whenever there is a reference point (matched building or dispatch coordinates).
         ...(context.nearestHydrants ? { nearestHydrants: context.nearestHydrants } : {}),
         ...(context.hydrantsUnavailable ? { nearestHydrantsUnavailable: true } : {}),
+        ...(context.hydrantsIncomplete ? { nearestHydrantsIncomplete: true } : {}),
       }),
     };
   } catch (error) {

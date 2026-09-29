@@ -295,7 +295,7 @@ describe('findNearestHydrants', () => {
       hydrantCopy('H-450', offset(450)),
     ]);
 
-    const hydrants = await findNearestHydrants(client, TABLE, DEPT_ID, ORIGIN);
+    const { hydrants } = await findNearestHydrants(client, TABLE, DEPT_ID, ORIGIN);
 
     // H-OOS (10 m) is flagged, not counted: five usable hydrants follow it.
     expect(hydrants.map((h) => h.hydrantId)).toEqual([
@@ -325,7 +325,7 @@ describe('findNearestHydrants', () => {
       hydrantCopy('H-FAR-1', offset(0, 1800)),
     ]);
 
-    const hydrants = await findNearestHydrants(client, TABLE, DEPT_ID, ORIGIN);
+    const { hydrants } = await findNearestHydrants(client, TABLE, DEPT_ID, ORIGIN);
 
     expect(send).toHaveBeenCalledTimes(18);
     expect(hydrants.map((h) => h.hydrantId)).toEqual(['H-NEAR', 'H-FAR-1', 'H-FAR-2']);
@@ -333,7 +333,10 @@ describe('findNearestHydrants', () => {
 
   it('returns an empty list when no hydrant copy is anywhere near', async () => {
     const { client } = fakeIndex([]);
-    expect(await findNearestHydrants(client, TABLE, DEPT_ID, ORIGIN)).toEqual([]);
+    expect(await findNearestHydrants(client, TABLE, DEPT_ID, ORIGIN)).toEqual({
+      hydrants: [],
+      incomplete: false,
+    });
   });
 
   it('reads only HYDRANT_COPY items from the geo partitions', async () => {
@@ -341,7 +344,42 @@ describe('findNearestHydrants', () => {
       { ...hydrantCopy('H-1', offset(30)), entityType: 'SOMETHING_ELSE' },
       hydrantCopy('H-2', offset(60)),
     ]);
-    const hydrants = await findNearestHydrants(client, TABLE, DEPT_ID, ORIGIN);
+    const { hydrants } = await findNearestHydrants(client, TABLE, DEPT_ID, ORIGIN);
     expect(hydrants.map((h) => h.hydrantId)).toEqual(['H-2']);
+  });
+});
+
+describe('capped reads are reported, never silent (minor 9)', () => {
+  /** Every Query returns one item and claims there is more, so every read hits its cap. */
+  function endlessIndex(item: Record<string, unknown>) {
+    const send = vi.fn(() => Promise.resolve({ Items: [item], LastEvaluatedKey: { pk: 'more' } }));
+    return { send, client: { send } as unknown as DynamoDBDocumentClient };
+  }
+
+  it('an address lookup that hits its cap shows no pre-plan (a partial set cannot be resolved) and says why', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    const { client, send } = endlessIndex(prePlanCopy('OCC-1', '123 Main St'));
+
+    expect(await findPrePlanByAddress(client, TABLE, DEPT_ID, '123 Main St')).toBeUndefined();
+
+    expect(send).toHaveBeenCalledTimes(5);
+    expect(errorSpy.mock.calls.join('\n')).toContain('preplan_copy.query_truncated');
+    expect(logSpy.mock.calls.join('\n')).toContain('CopyQueryTruncated');
+    errorSpy.mockRestore();
+    logSpy.mockRestore();
+  });
+
+  it('a hydrant search that hits its cap returns what it found, marked incomplete', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    const { client } = endlessIndex(hydrantCopy('H-1', offset(30)));
+
+    const result = await findNearestHydrants(client, TABLE, DEPT_ID, ORIGIN);
+
+    expect(result.incomplete).toBe(true);
+    expect(result.hydrants.map((h) => h.hydrantId)).toEqual(['H-1']);
+    expect(errorSpy.mock.calls.join('\n')).toContain('hydrant-geo');
+    errorSpy.mockRestore();
   });
 });

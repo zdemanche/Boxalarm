@@ -43,6 +43,7 @@ function buildApiAlertsRepository(tokens: AuthTokenSource, apiBaseUrl: string): 
         prePlanUnavailable?: boolean;
         nearestHydrants?: DispatchAlert['nearestHydrants'];
         nearestHydrantsUnavailable?: boolean;
+        nearestHydrantsIncomplete?: boolean;
       };
       return {
         dispatchId: body.dispatchId,
@@ -56,6 +57,7 @@ function buildApiAlertsRepository(tokens: AuthTokenSource, apiBaseUrl: string): 
         ...(body.prePlanUnavailable === true ? { prePlanUnavailable: true } : {}),
         ...(body.nearestHydrants ? { nearestHydrants: body.nearestHydrants } : {}),
         ...(body.nearestHydrantsUnavailable === true ? { nearestHydrantsUnavailable: true } : {}),
+        ...(body.nearestHydrantsIncomplete === true ? { nearestHydrantsIncomplete: true } : {}),
       };
     },
 

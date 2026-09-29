@@ -126,6 +126,7 @@ function ShutoffList({
 }
 
 const HYDRANTS_UNAVAILABLE_TEXT = 'Hydrant list unavailable right now.';
+const HYDRANTS_INCOMPLETE_TEXT = 'Hydrant list may be incomplete: a nearer hydrant may be missing.';
 
 function WarningNotice({ tokens, children }: { tokens: Tokens; children: string }) {
   return (
@@ -150,10 +151,12 @@ function HydrantSection({
   tokens,
   hydrants,
   unavailable,
+  incomplete,
 }: {
   tokens: Tokens;
   hydrants: readonly NearestHydrant[];
   unavailable: boolean;
+  incomplete: boolean;
 }) {
   if (unavailable)
     return <WarningNotice tokens={tokens}>{HYDRANTS_UNAVAILABLE_TEXT}</WarningNotice>;
@@ -161,6 +164,9 @@ function HydrantSection({
   return (
     <View style={{ marginTop: spacing.md }}>
       <Heading tokens={tokens}>Nearest hydrants</Heading>
+      {incomplete ? (
+        <WarningNotice tokens={tokens}>{HYDRANTS_INCOMPLETE_TEXT}</WarningNotice>
+      ) : null}
       {hydrants.map((hydrant) => (
         <Text
           key={hydrant.hydrantId}
@@ -251,12 +257,14 @@ export function PrePlanPanel({
   unavailable = false,
   nearestHydrants,
   hydrantsUnavailable = false,
+  hydrantsIncomplete = false,
 }: {
   prePlan: PrePlanEnrichment | null | undefined;
   /** The lookup failed: say so, never "no pre-plan" (a throttle is not an empty binder). */
   unavailable?: boolean;
   nearestHydrants?: readonly NearestHydrant[];
   hydrantsUnavailable?: boolean;
+  hydrantsIncomplete?: boolean;
 }) {
   const scheme = useColorScheme();
   const tokens = scheme === 'dark' ? palette.cab : palette.day;
@@ -283,7 +291,12 @@ export function PrePlanPanel({
       ) : prePlan ? (
         <MatchedPrePlan tokens={tokens} prePlan={prePlan} />
       ) : null}
-      <HydrantSection tokens={tokens} hydrants={hydrants} unavailable={hydrantsUnavailable} />
+      <HydrantSection
+        tokens={tokens}
+        hydrants={hydrants}
+        unavailable={hydrantsUnavailable}
+        incomplete={hydrantsIncomplete}
+      />
     </View>
   );
 }

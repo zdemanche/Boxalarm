@@ -116,13 +116,16 @@ function ShutoffList({ shutoffs }: { shutoffs: readonly UtilityShutoff[] }) {
 }
 
 const HYDRANTS_UNAVAILABLE_TEXT = 'Hydrant list unavailable right now.';
+const HYDRANTS_INCOMPLETE_TEXT = 'Hydrant list may be incomplete: a nearer hydrant may be missing.';
 
 function HydrantSection({
   hydrants,
   unavailable,
+  incomplete,
 }: {
   hydrants: readonly NearestHydrant[];
   unavailable: boolean;
+  incomplete: boolean;
 }) {
   if (unavailable) {
     return (
@@ -135,6 +138,11 @@ function HydrantSection({
   return (
     <div>
       <h3 style={{ fontSize: 15, fontWeight: 600 }}>Nearest hydrants</h3>
+      {incomplete ? (
+        <p role="note" style={noticeStyle(true)}>
+          {HYDRANTS_INCOMPLETE_TEXT}
+        </p>
+      ) : null}
       <ul aria-label="Nearest hydrants">
         {hydrants.map((hydrant) => (
           <li
@@ -194,12 +202,14 @@ export function PrePlanPanel({
   unavailable = false,
   nearestHydrants,
   hydrantsUnavailable = false,
+  hydrantsIncomplete = false,
 }: {
   prePlan: PrePlanEnrichment | null | undefined;
   /** The lookup failed: say so, never "no pre-plan" (a throttle is not an empty binder). */
   unavailable?: boolean;
   nearestHydrants?: readonly NearestHydrant[];
   hydrantsUnavailable?: boolean;
+  hydrantsIncomplete?: boolean;
 }) {
   const hydrants = nearestHydrants ?? prePlan?.nearestHydrants ?? [];
   if (!unavailable && prePlan === undefined && hydrants.length === 0 && !hydrantsUnavailable) {
@@ -217,7 +227,11 @@ export function PrePlanPanel({
       ) : prePlan ? (
         <MatchedPrePlan prePlan={prePlan} />
       ) : null}
-      <HydrantSection hydrants={hydrants} unavailable={hydrantsUnavailable} />
+      <HydrantSection
+        hydrants={hydrants}
+        unavailable={hydrantsUnavailable}
+        incomplete={hydrantsIncomplete}
+      />
     </Card>
   );
 }

@@ -178,3 +178,12 @@ test('says the hydrant list is unavailable when that read failed', () => {
   render(<PrePlanPanel prePlan={null} hydrantsUnavailable />);
   expect(screen.getByRole('note').textContent).toBe('Hydrant list unavailable right now.');
 });
+
+test('warns when the hydrant list may be incomplete (server read hit its cap)', () => {
+  render(
+    <PrePlanPanel prePlan={null} nearestHydrants={[{ hydrantId: 'H-1' }]} hydrantsIncomplete />,
+  );
+  expect(screen.getByRole('note').textContent).toBe(
+    'Hydrant list may be incomplete: a nearer hydrant may be missing.',
+  );
+});

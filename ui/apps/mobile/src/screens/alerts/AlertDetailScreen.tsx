@@ -263,6 +263,7 @@ export function AlertDetailScreen() {
           unavailable={dispatch.prePlanUnavailable === true}
           {...(dispatch.nearestHydrants ? { nearestHydrants: dispatch.nearestHydrants } : {})}
           hydrantsUnavailable={dispatch.nearestHydrantsUnavailable === true}
+          hydrantsIncomplete={dispatch.nearestHydrantsIncomplete === true}
         />
 
         <TouchableOpacity

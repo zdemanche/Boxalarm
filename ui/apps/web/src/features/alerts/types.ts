@@ -100,6 +100,8 @@ export interface DispatchAlert {
    */
   nearestHydrants?: NearestHydrant[];
   nearestHydrantsUnavailable?: boolean;
+  /** The server's geo read hit its cap: a nearer hydrant may be missing. */
+  nearestHydrantsIncomplete?: boolean;
   toneLadder?: ToneLadder;
   /** null = not requested; absent = the server could not read it (state unknown). */
   mutualAid?: MutualAid | null;

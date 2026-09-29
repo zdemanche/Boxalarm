@@ -1,5 +1,7 @@
 import { QueryCommand, type DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
 import type { VerifiedDeptId } from '@boxalarm/dept-scope';
+import { emitOutcomeMetric } from '@boxalarm/metrics';
+import { logError } from '../dispatches/logger.js';
 import { normalizeAddress, type NormalizedAddress } from './addressKey.js';
 import {
   ADDRESS_INDEX_NAME,
@@ -50,11 +52,18 @@ export const PREPLAN_MATCH_RADIUS_METERS = 50;
 /** Bounds a runaway partition read; a department's hydrants fill ~one page per geohash5 cell. */
 const MAX_PAGES_PER_QUERY = 5;
 const ADDRESS_CANDIDATE_LIMIT = 25;
+const METRIC_NAMESPACE = 'Boxalarm/alerting-pre-plan';
+
+interface QueryResult {
+  readonly items: Record<string, unknown>[];
+  /** The page cap stopped the read with items left: the result is a subset. */
+  readonly truncated: boolean;
+}
 
 async function queryAll(
   client: DynamoDBDocumentClient,
   input: ConstructorParameters<typeof QueryCommand>[0],
-): Promise<Record<string, unknown>[]> {
+): Promise<QueryResult> {
   const items: Record<string, unknown>[] = [];
   let exclusiveStartKey: Record<string, unknown> | undefined;
   let pages = 0;
@@ -69,7 +78,17 @@ async function queryAll(
     exclusiveStartKey = output?.LastEvaluatedKey as Record<string, unknown> | undefined;
     pages += 1;
   } while (exclusiveStartKey !== undefined && pages < MAX_PAGES_PER_QUERY);
-  return items;
+  return { items, truncated: exclusiveStartKey !== undefined };
+}
+
+/** A capped read is never silent: it is logged and counted (CopyQueryTruncated, by lookup). */
+function reportTruncation(lookup: string, deptId: VerifiedDeptId, key: string): void {
+  logError('preplan_copy.query_truncated', new Error('query stopped at its page cap'), {
+    lookup,
+    deptId,
+    key,
+  });
+  emitOutcomeMetric(METRIC_NAMESPACE, 'CopyQueryTruncated', lookup);
 }
 
 function isPrePlanCopy(
@@ -179,13 +198,18 @@ export async function findPrePlanByAddress(
   if (!normalized) {
     return undefined;
   }
-  const items = await queryAll(client, {
+  const { items, truncated } = await queryAll(client, {
     TableName: tableName,
     IndexName: ADDRESS_INDEX_NAME,
     KeyConditionExpression: 'gsi1pk = :gsi1pk',
     ExpressionAttributeValues: { ':gsi1pk': prePlanAddressPartition(deptId, normalized.key) },
     Limit: ADDRESS_CANDIDATE_LIMIT,
   });
+  if (truncated) {
+    // Unit resolution over a partial candidate set could pick the wrong plan: show none.
+    reportTruncation('address', deptId, normalized.key);
+    return undefined;
+  }
   const candidates = items
     .filter(isPrePlanCopy)
     .filter((candidate) => sameLocality(normalized, candidate))
@@ -218,9 +242,13 @@ export async function findPrePlanNear(
       }),
     ),
   );
+  if (pages.some((page) => page.truncated)) {
+    // Every NEARBY/CANDIDATES result is already flagged "verify address"; still, say so.
+    reportTruncation('preplan-geo', deptId, cells[0] ?? '');
+  }
   const within: Array<PrePlanCandidate & { readonly distanceMeters: number }> = [];
   const seen = new Set<string>();
-  for (const item of pages.flat().filter(isPrePlanCopy)) {
+  for (const item of pages.flatMap((page) => page.items).filter(isPrePlanCopy)) {
     const location = { latitude: item.latitude, longitude: item.longitude };
     if (!isGeoPoint(location) || seen.has(item.occupancyId)) continue;
     seen.add(item.occupancyId);
@@ -246,7 +274,7 @@ async function queryHydrantCells(
   tableName: string,
   deptId: VerifiedDeptId,
   cells: readonly string[],
-): Promise<HydrantCopy[]> {
+): Promise<{ readonly hydrants: HydrantCopy[]; readonly truncated: boolean }> {
   const pages = await Promise.all(
     cells.map((cell) =>
       queryAll(client, {
@@ -263,10 +291,19 @@ async function queryHydrantCells(
       }),
     ),
   );
-  return pages
-    .flat()
-    .filter((item) => item.entityType === 'HYDRANT_COPY' && typeof item.hydrantId === 'string')
-    .map((item) => item as unknown as HydrantCopy);
+  return {
+    hydrants: pages
+      .flatMap((page) => page.items)
+      .filter((item) => item.entityType === 'HYDRANT_COPY' && typeof item.hydrantId === 'string')
+      .map((item) => item as unknown as HydrantCopy),
+    truncated: pages.some((page) => page.truncated),
+  };
+}
+
+export interface NearestHydrantsResult {
+  readonly hydrants: readonly NearestHydrant[];
+  /** A geo partition read hit its cap: a nearer hydrant may be missing from the list. */
+  readonly incomplete: boolean;
 }
 
 /**
@@ -281,22 +318,24 @@ export async function findNearestHydrants(
   deptId: VerifiedDeptId,
   point: GeoPoint,
   max = MAX_NEAREST_HYDRANTS,
-): Promise<readonly NearestHydrant[]> {
+): Promise<NearestHydrantsResult> {
   let ranked: readonly NearestHydrant[] = [];
+  let incomplete = false;
   for (const precision of HYDRANT_GEO_SEARCH_PRECISIONS) {
     const ring = searchRing(point, precision);
-    ranked = rankNearestHydrants(
-      point,
-      await queryHydrantCells(client, tableName, deptId, ring.cells),
-      max,
-    );
+    const read = await queryHydrantCells(client, tableName, deptId, ring.cells);
+    if (read.truncated) {
+      incomplete = true;
+      reportTruncation('hydrant-geo', deptId, ring.cells[0] ?? '');
+    }
+    ranked = rankNearestHydrants(point, read.hydrants, max);
     const covered = ranked.filter(
       (hydrant) => hydrant.distanceMeters <= ring.guaranteedRadiusMeters,
     );
     // Only usable hydrants count toward `max`; flagged out-of-service ones ride along.
-    if (covered.filter((hydrant) => !isOutOfService(hydrant)).length >= max) {
-      return covered;
+    if (!read.truncated && covered.filter((hydrant) => !isOutOfService(hydrant)).length >= max) {
+      return { hydrants: covered, incomplete };
     }
   }
-  return ranked;
+  return { hydrants: ranked, incomplete };
 }

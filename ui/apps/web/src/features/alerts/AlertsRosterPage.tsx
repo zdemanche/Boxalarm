@@ -403,6 +403,7 @@ function DispatchHeader({ dispatchId }: { dispatchId: string }) {
         unavailable={query.data.prePlanUnavailable === true}
         {...(query.data.nearestHydrants ? { nearestHydrants: query.data.nearestHydrants } : {})}
         hydrantsUnavailable={query.data.nearestHydrantsUnavailable === true}
+        hydrantsIncomplete={query.data.nearestHydrantsIncomplete === true}
       />
     </Card>
   );

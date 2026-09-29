@@ -101,6 +101,8 @@ export interface DispatchContext {
    */
   readonly nearestHydrants?: readonly NearestHydrant[];
   readonly hydrantsUnavailable?: true;
+  /** A geo read hit its cap: the list may miss a nearer hydrant (logged and counted too). */
+  readonly hydrantsIncomplete?: true;
 }
 
 /**
@@ -155,9 +157,12 @@ export async function fetchDispatchContext(
 
   let nearestHydrants: readonly NearestHydrant[] | undefined;
   let hydrantsUnavailable = false;
+  let hydrantsIncomplete = false;
   if (hydrantReference) {
     try {
-      nearestHydrants = await findNearestHydrants(client, tableName, deptId, hydrantReference);
+      const found = await findNearestHydrants(client, tableName, deptId, hydrantReference);
+      nearestHydrants = found.hydrants;
+      hydrantsIncomplete = found.incomplete;
     } catch (error) {
       hydrantsUnavailable = true;
       logError('dispatches.detail.hydrant_read_failed', error, {
@@ -171,6 +176,7 @@ export async function fetchDispatchContext(
     prePlan: unavailable ? PRE_PLAN_UNAVAILABLE : match ? toView(match, nearestHydrants) : null,
     ...(nearestHydrants ? { nearestHydrants } : {}),
     ...(hydrantsUnavailable ? { hydrantsUnavailable: true as const } : {}),
+    ...(hydrantsIncomplete ? { hydrantsIncomplete: true as const } : {}),
   };
 }
 
