@@ -85,7 +85,10 @@ const incident = {
   dispatchNumber: '26-001841',
   epochSeconds: 1_700_000_000,
   nerisSchemaVersion: '2026.2',
-  corePayload: { incident_type: 'STRUCTURE_FIRE', address: '14 Elm St, Trumbull, CT' },
+  corePayload: {
+    incident_type: 'FIRE||STRUCTURE_FIRE||ROOM_AND_CONTENTS_FIRE',
+    address: '14 Elm St, Trumbull, CT',
+  },
   incidentType: 'Structure fire',
   address: '14 Elm St, Trumbull, CT',
   alarmAt: Math.floor(Date.now() / 1000) - 86_400,
@@ -109,11 +112,29 @@ const incident = {
   respondingMembers: [{ memberId: 'm-rivera', status: 'RESPONDING' }],
 };
 
+const nerisSchema = {
+  version: '2026.2+neris-1.5.1',
+  apiVersion: '1.5.1',
+  incidentTypes: [
+    {
+      value: 'FIRE||STRUCTURE_FIRE||ROOM_AND_CONTENTS_FIRE',
+      label: 'Fire › Structure fire › Room and contents fire',
+    },
+    { value: 'FIRE||STRUCTURE_FIRE||CHIMNEY_FIRE', label: 'Fire › Structure fire › Chimney fire' },
+    { value: 'NOEMERG||CANCELLED', label: 'Noemerg › Cancelled' },
+  ],
+  modules: {},
+};
+
 test('incident list and report pass axe on the default, error, and validated states', async ({
   page,
 }) => {
   await page.route('**/api/v1/incidents**', async (route) => {
     const url = route.request().url();
+    if (url.includes('/incidents/neris-schema')) {
+      await route.fulfill({ json: nerisSchema });
+      return;
+    }
     if (url.includes('/incidents/i-1')) {
       await route.fulfill({ json: incident });
       return;
@@ -132,9 +153,10 @@ test('incident list and report pass axe on the default, error, and validated sta
   await page.getByRole('link', { name: '26-001841' }).click();
   await expect(page.getByRole('heading', { level: 1 })).toContainText('14 Elm St');
   await page.getByRole('button', { name: 'Incident type and actions' }).click();
-  await page.getByLabel('NERIS incident type').fill('NOT_A_CODE');
+  await page.getByLabel('NERIS incident type').selectOption('FIRE||STRUCTURE_FIRE||CHIMNEY_FIRE');
+  await page.getByLabel('Action taken').fill('NOT_A_CODE');
   await page.getByRole('button', { name: 'Save and continue' }).click();
-  await expect(page.getByRole('alert')).toContainText('must be one of: STRUCTURE_FIRE');
+  await expect(page.getByRole('alert')).toContainText('must be one of: EXTINGUISH');
 
   const errorResults = await new AxeBuilder({ page }).include('main').analyze();
   expect(errorResults.violations).toEqual([]);

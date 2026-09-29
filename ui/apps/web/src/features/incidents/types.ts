@@ -251,3 +251,23 @@ export const MAX_NARRATIVE_LENGTH = 25_000;
 
 export const TIME_FIELDS = ['dispatchedAt', 'enRouteAt', 'arrivedAt', 'clearedAt'] as const;
 export type TimeField = (typeof TIME_FIELDS)[number];
+
+/** One NERIS TypeIncidentValue (`FIRE||STRUCTURE_FIRE||CHIMNEY_FIRE`) and its readable label. */
+export interface NerisIncidentType {
+  value: string;
+  label: string;
+}
+
+/** A NERIS module sub-schema in the incident service's compiled grammar: `node` plus its `defs`. */
+export interface NerisModuleSchema {
+  node: unknown;
+  defs: Record<string, unknown>;
+}
+
+/** 200 body of GET /incidents/neris-schema (503 NERIS_SCHEMA_UNAVAILABLE until downloaded). */
+export interface NerisSchemaResponse {
+  version: string;
+  apiVersion: string;
+  incidentTypes: NerisIncidentType[];
+  modules: Partial<Record<string, NerisModuleSchema>>;
+}

@@ -25,8 +25,28 @@ function cleanReport(mode = 'local'): ValidationReport {
   };
 }
 
+/** A few NERIS TypeIncidentValues, as GET /incidents/neris-schema serves them. */
+const NERIS_SCHEMA = {
+  version: '2026.2+neris-1.5.1',
+  apiVersion: '1.5.1',
+  incidentTypes: [
+    { value: 'FIRE||STRUCTURE_FIRE||CHIMNEY_FIRE', label: 'Fire › Structure fire › Chimney fire' },
+    {
+      value: 'FIRE||STRUCTURE_FIRE||ROOM_AND_CONTENTS_FIRE',
+      label: 'Fire › Structure fire › Room and contents fire',
+    },
+    {
+      value: 'MEDICAL||ILLNESS||BREATHING_PROBLEMS',
+      label: 'Medical › Illness › Breathing problems',
+    },
+    { value: 'NOEMERG||CANCELLED', label: 'Noemerg › Cancelled' },
+  ],
+  modules: {},
+};
+
 const server = setupServer(
   http.post('/api/v1/incidents/:incidentId/validate', () => HttpResponse.json(cleanReport())),
+  http.get('/api/v1/incidents/neris-schema', () => HttpResponse.json(NERIS_SCHEMA)),
 );
 beforeAll(() => server.listen());
 afterEach(() => {
@@ -92,7 +112,7 @@ function detail(overrides: Partial<IncidentDetail> = {}): IncidentDetail {
     epochSeconds: 1_700_000_000,
     nerisSchemaVersion: '2026.2',
     corePayload: {
-      incident_type: 'STRUCTURE_FIRE',
+      incident_type: 'FIRE||STRUCTURE_FIRE||ROOM_AND_CONTENTS_FIRE',
       address: '14 Elm St, Trumbull, CT',
     },
     incidentType: 'Structure fire',
@@ -185,7 +205,7 @@ test('detail loads the record, including core payload, from one request', async 
         incidents: [detail({ alarmAt: Math.floor(Date.now() / 1000) - 86400 })],
       }),
     ),
-    http.get('/api/v1/incidents/:incidentId', () => {
+    http.get('/api/v1/incidents/i-1', () => {
       detailGets += 1;
       return HttpResponse.json(detail());
     }),
@@ -202,7 +222,10 @@ test('detail loads the record, including core payload, from one request', async 
   await user.click(screen.getAllByRole('link', { name: '26-001841' })[0]!);
   await screen.findByRole('heading', { level: 1, name: /14 Elm St/ });
   await user.click(screen.getByRole('button', { name: 'Incident type and actions' }));
-  expect(screen.getByLabelText('NERIS incident type')).toHaveProperty('value', 'STRUCTURE_FIRE');
+  expect(await screen.findByLabelText('NERIS incident type')).toHaveProperty(
+    'value',
+    'FIRE||STRUCTURE_FIRE||ROOM_AND_CONTENTS_FIRE',
+  );
   expect(detailGets).toBe(1);
 });
 
@@ -308,19 +331,130 @@ test('an invalid NERIS code blocks the step, shows allowed values, and focuses t
   renderIncidents(['OFFICER'], '/incidents/i-1');
   await screen.findByRole('heading', { level: 1, name: /14 Elm St/ });
   await user.click(screen.getByRole('button', { name: 'Incident type and actions' }));
-  fireEvent.change(screen.getByLabelText('NERIS incident type'), {
-    target: { value: 'NOT_A_CODE' },
-  });
+  await screen.findByLabelText('NERIS incident type');
+  fireEvent.change(screen.getByLabelText('Action taken'), { target: { value: 'NOT_A_CODE' } });
   await user.click(screen.getByRole('button', { name: 'Save and continue' }));
 
   expect((await screen.findByRole('alert')).textContent).toMatch(
-    /must be one of: STRUCTURE_FIRE, VEHICLE_FIRE, EMS_ASSIST, FALSE_ALARM/,
+    /must be one of: EXTINGUISH, INVESTIGATE, ASSIST_EMS, NO_ACTION/,
   );
-  await waitFor(() =>
-    expect(document.activeElement).toBe(screen.getByLabelText('NERIS incident type')),
-  );
+  await waitFor(() => expect(document.activeElement).toBe(screen.getByLabelText('Action taken')));
   expect(screen.getByRole('heading', { level: 2, name: 'Incident type and actions' })).toBeTruthy();
   expect(puts).toBe(0);
+});
+
+test('the incident type picker lists NERIS labels by category and saves the NERIS value', async () => {
+  const puts: Array<{ fields: Record<string, string> }> = [];
+  server.use(
+    http.get('/api/v1/incidents/i-1', () => HttpResponse.json(detail())),
+    http.put('/api/v1/incidents/i-1', async ({ request }) => {
+      const body = (await request.json()) as { fields: Record<string, string> };
+      puts.push(body);
+      return HttpResponse.json(
+        detail({ corePayload: { ...detail().corePayload, ...body.fields } }),
+      );
+    }),
+  );
+
+  const user = userEvent.setup();
+  renderIncidents(['OFFICER'], '/incidents/i-1');
+  await screen.findByRole('heading', { level: 1, name: /14 Elm St/ });
+  await user.click(screen.getByRole('button', { name: 'Incident type and actions' }));
+
+  const picker = await screen.findByLabelText('NERIS incident type');
+  const category = screen.getByLabelText(/Incident category/);
+  expect(category).toHaveProperty('value', 'FIRE');
+  expect(
+    within(category)
+      .getAllByRole('option')
+      .map((option) => option.textContent),
+  ).toEqual(['All categories', 'Fire', 'Medical', 'No emergency']);
+  expect(picker.getAttribute('aria-describedby')).toBeTruthy();
+  expect(screen.getByText('Selected: Fire › Structure fire › Room and contents fire')).toBeTruthy();
+
+  // Narrowing to another category drops the Fire types and clears the Fire choice.
+  await user.selectOptions(category, 'MEDICAL');
+  expect(
+    within(picker).queryByRole('option', { name: 'Structure fire › Chimney fire' }),
+  ).toBeNull();
+  expect(within(picker).getByRole('option', { name: 'Illness › Breathing problems' })).toBeTruthy();
+  expect(picker).toHaveProperty('value', '');
+
+  await user.selectOptions(category, '');
+  await user.selectOptions(picker, 'FIRE||STRUCTURE_FIRE||CHIMNEY_FIRE');
+  expect(screen.getByText('Selected: Fire › Structure fire › Chimney fire')).toBeTruthy();
+  await user.click(screen.getByRole('button', { name: 'Save and continue' }));
+
+  await waitFor(() => expect(puts).toHaveLength(1));
+  expect(puts[0]?.fields.incident_type).toBe('FIRE||STRUCTURE_FIRE||CHIMNEY_FIRE');
+});
+
+test('without downloaded NERIS types the picker says so and the step still saves', async () => {
+  const puts: Array<{ fields: Record<string, string> }> = [];
+  server.use(
+    http.get('/api/v1/incidents/neris-schema', () =>
+      HttpResponse.json(
+        {
+          type: 'about:blank',
+          title: 'Service Unavailable',
+          status: 503,
+          detail: "The NERIS schema hasn't been downloaded yet.",
+          traceId: 'trace-503',
+          code: 'NERIS_SCHEMA_UNAVAILABLE',
+        },
+        { status: 503 },
+      ),
+    ),
+    http.get('/api/v1/incidents/i-1', () => HttpResponse.json(detail())),
+    http.put('/api/v1/incidents/i-1', async ({ request }) => {
+      const body = (await request.json()) as { fields: Record<string, string> };
+      puts.push(body);
+      return HttpResponse.json(detail());
+    }),
+  );
+
+  const user = userEvent.setup();
+  renderIncidents(['OFFICER'], '/incidents/i-1');
+  await screen.findByRole('heading', { level: 1, name: /14 Elm St/ });
+  await user.click(screen.getByRole('button', { name: 'Incident type and actions' }));
+
+  expect(await screen.findByText(/NERIS incident types are not downloaded yet/)).toBeTruthy();
+  expect(screen.queryByLabelText('NERIS incident type')).toBeNull();
+  fireEvent.change(screen.getByLabelText('Action taken'), { target: { value: 'EXTINGUISH' } });
+  await user.click(screen.getByRole('button', { name: 'Save and continue' }));
+
+  await waitFor(() => expect(puts).toHaveLength(1));
+  expect(puts[0]).toEqual({ fields: { action_taken: 'EXTINGUISH' } });
+});
+
+test('a stored non-NERIS incident type is flagged, not silently dropped or re-sent', async () => {
+  const legacy = detail({
+    corePayload: { incident_type: 'STRUCTURE_FIRE', address: '14 Elm St, Trumbull, CT' },
+  });
+  const puts: Array<{ fields: Record<string, string> }> = [];
+  server.use(
+    http.get('/api/v1/incidents/i-1', () => HttpResponse.json(legacy)),
+    http.put('/api/v1/incidents/i-1', async ({ request }) => {
+      const body = (await request.json()) as { fields: Record<string, string> };
+      puts.push(body);
+      return HttpResponse.json(legacy);
+    }),
+  );
+
+  const user = userEvent.setup();
+  renderIncidents(['OFFICER'], '/incidents/i-1');
+  await screen.findByRole('heading', { level: 1, name: /14 Elm St/ });
+  await user.click(screen.getByRole('button', { name: 'Incident type and actions' }));
+
+  const picker = await screen.findByLabelText('NERIS incident type');
+  expect(picker).toHaveProperty('value', '');
+  const hint = screen.getByText('Not a NERIS type: STRUCTURE_FIRE — pick one.');
+  expect(picker.getAttribute('aria-describedby')).toContain(hint.id);
+
+  fireEvent.change(screen.getByLabelText('Action taken'), { target: { value: 'EXTINGUISH' } });
+  await user.click(screen.getByRole('button', { name: 'Save and continue' }));
+  await waitFor(() => expect(puts).toHaveLength(1));
+  expect(puts[0]).toEqual({ fields: { action_taken: 'EXTINGUISH' } });
 });
 
 test('a server enumeration 400 is mapped onto the field and blocks progress', async () => {

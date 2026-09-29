@@ -21,11 +21,13 @@ import {
   updateIncident,
 } from './api';
 import { focusFieldById } from './focusField';
+import { IncidentTypePicker, type IncidentTypesState } from './IncidentTypePicker';
 import { NerisReviewPanel } from './NerisReviewPanel';
 import { focusTargetFor } from './reviewFix';
 import { SubmissionLedger } from './SubmissionLedger';
 import { coreStrings, dateTimeLocalToEpoch, epochToDateTimeLocal, formatTimestamp } from './format';
 import { CORE_SCHEMA, fieldLabel, SECONDARY_SCHEMA, SECONDARY_TYPES } from './nerisSchema';
+import { useNerisSchema } from './nerisIncidentTypes';
 import type {
   IncidentDetail,
   IncidentSecondary,
@@ -41,6 +43,7 @@ import {
   missingRequiredSecondaryFields,
   validateCoreFields,
   validateSecondaryFields,
+  withIncidentTypes,
   type FieldError,
 } from './validateEnum';
 import styles from './IncidentDetail.module.css';
@@ -145,6 +148,15 @@ function IncidentReport({ incident }: { incident: IncidentDetail }) {
   const lockedBannerRef = useRef<HTMLDivElement>(null);
   const pendingFieldFocus = useRef<string | null>(null);
   const locked = typeof incident.lockedAt === 'number';
+  const nerisSchema = useNerisSchema();
+  const nerisTypes = nerisSchema.data?.incidentTypes.length
+    ? nerisSchema.data.incidentTypes
+    : undefined;
+  const incidentTypes: IncidentTypesState = nerisSchema.isLoading
+    ? { status: 'loading' }
+    : nerisTypes
+      ? { status: 'ready', types: nerisTypes }
+      : { status: 'unavailable', retry: () => void nerisSchema.refetch() };
 
   const submitted = incident.status !== 'DRAFT' && incident.status !== 'VALIDATED';
   const submissionQuery = useQuery({
@@ -286,11 +298,22 @@ function IncidentReport({ incident }: { incident: IncidentDetail }) {
 
   async function saveCore(keys: string[], advance: boolean) {
     const payload: Record<string, string> = {};
+    const storedType = coreStrings(incident.corePayload).incident_type ?? '';
     for (const key of keys) {
       const value = fields[key]?.trim() ?? '';
+      // Without the NERIS list the type can't be picked; an untouched stored type (possibly a
+      // legacy or CAD value) is not re-sent, so the other fields on the step still save.
+      if (key === 'incident_type' && (!nerisTypes || value === storedType)) continue;
       if (value) payload[key] = value;
     }
-    const clientErrors = validateCoreFields(CORE_SCHEMA, payload);
+    const clientErrors = validateCoreFields(
+      nerisTypes ? withIncidentTypes(CORE_SCHEMA, nerisTypes) : CORE_SCHEMA,
+      payload,
+    ).map((item) =>
+      item.field === 'incident_type'
+        ? { ...item, message: 'must be picked from the NERIS list.' }
+        : item,
+    );
     if (clientErrors.length > 0) {
       showErrors(clientErrors);
       setAnnounce(
@@ -658,11 +681,11 @@ function IncidentReport({ incident }: { incident: IncidentDetail }) {
     if (stepId === 'type') {
       return (
         <div className={styles.fields}>
-          <EnumField
-            field="incident_type"
+          <IncidentTypePicker
             value={fields.incident_type ?? ''}
             onChange={(value) => setFields((current) => ({ ...current, incident_type: value }))}
             error={errorFor('incident_type')}
+            state={incidentTypes}
           />
           <EnumField
             field="action_taken"

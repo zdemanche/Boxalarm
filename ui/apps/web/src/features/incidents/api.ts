@@ -11,6 +11,9 @@ import type {
   GetIncidentResponse,
   Incident,
   LockResponse,
+  NerisIncidentType,
+  NerisModuleSchema,
+  NerisSchemaResponse,
   PutExposureInput,
   PutExposureResponse,
   ResponseUnit,
@@ -188,6 +191,45 @@ export async function resubmitIncident(
     method: 'POST',
   });
   return (await response.json()) as ResubmitResponse;
+}
+
+/** Any role. 503 NERIS_SCHEMA_UNAVAILABLE until the daily refresh has downloaded the schema. */
+export async function getNerisSchema(tokens: AuthTokenSource): Promise<NerisSchemaResponse> {
+  const response = await apiRequest('incidents/neris-schema', tokens);
+  return nerisSchemaFrom(await response.json());
+}
+
+function nerisSchemaFrom(value: unknown): NerisSchemaResponse {
+  const body = (typeof value === 'object' && value !== null ? value : {}) as Record<
+    string,
+    unknown
+  >;
+  const incidentTypes: NerisIncidentType[] = Array.isArray(body.incidentTypes)
+    ? body.incidentTypes.flatMap((item: unknown) => {
+        const record = (typeof item === 'object' && item !== null ? item : {}) as Record<
+          string,
+          unknown
+        >;
+        return typeof record.value === 'string' && typeof record.label === 'string'
+          ? [{ value: record.value, label: record.label }]
+          : [];
+      })
+    : [];
+  const modules: Record<string, NerisModuleSchema> = {};
+  if (typeof body.modules === 'object' && body.modules !== null) {
+    for (const [name, sub] of Object.entries(body.modules as Record<string, unknown>)) {
+      const record = sub as Partial<NerisModuleSchema> | null;
+      if (record && typeof record.defs === 'object' && record.defs !== null && 'node' in record) {
+        modules[name] = { node: record.node, defs: record.defs };
+      }
+    }
+  }
+  return {
+    version: typeof body.version === 'string' ? body.version : '',
+    apiVersion: typeof body.apiVersion === 'string' ? body.apiVersion : '',
+    incidentTypes,
+    modules,
+  };
 }
 
 /** The machine-readable `code` extension of an RFC 7807 problem, when there is one. */

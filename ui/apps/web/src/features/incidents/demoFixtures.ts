@@ -1,5 +1,6 @@
 import type { ProblemDetails } from '../../lib/apiClient';
 import { CORE_SCHEMA, SECONDARY_SCHEMA } from './nerisSchema';
+import { DEMO_NERIS_SCHEMA } from './nerisSchemaFixture';
 import type {
   CreateIncidentInput,
   Incident,
@@ -20,6 +21,7 @@ import {
   missingRequiredSecondaryFields,
   validateCoreFields,
   validateSecondaryFields,
+  withIncidentTypes,
 } from './validateEnum';
 
 function json(data: unknown, status = 200): Response {
@@ -56,7 +58,7 @@ let incidents: Incident[] = [
     epochSeconds: daysAgo(40),
     nerisSchemaVersion: '2026.2',
     corePayload: {
-      incident_type: 'STRUCTURE_FIRE',
+      incident_type: 'FIRE||STRUCTURE_FIRE||ROOM_AND_CONTENTS_FIRE',
       action_taken: 'EXTINGUISH',
       address: '14 Elm St, Trumbull, CT',
       narrative: 'Working fire, first floor kitchen, extinguished on arrival of Engine 301.',
@@ -79,6 +81,7 @@ let incidents: Incident[] = [
     epochSeconds: daysAgo(10),
     nerisSchemaVersion: '2026.2',
     corePayload: {
+      // A pre-NERIS value: the picker shows it as "Not a NERIS type" until one is picked.
       incident_type: 'VEHICLE_FIRE',
       address: 'Route 111 & Daniels Farm Rd, Trumbull, CT',
     },
@@ -315,6 +318,8 @@ export async function incidentsDemoRequest(
   const parts = path.split('/');
   if (parts[0] !== 'incidents') return undefined;
 
+  if (path === 'incidents/neris-schema' && method === 'GET') return json(DEMO_NERIS_SCHEMA);
+
   if (path === 'incidents' && method === 'GET') {
     const from = Number(query.get('fromAlarmAt'));
     const to = Number(query.get('toAlarmAt'));
@@ -505,7 +510,8 @@ export async function incidentsDemoRequest(
       }
       nextFields[key] = value;
     }
-    const errors = validateCoreFields(CORE_SCHEMA, nextFields);
+    const coreSchema = withIncidentTypes(CORE_SCHEMA, DEMO_NERIS_SCHEMA.incidentTypes);
+    const errors = validateCoreFields(coreSchema, nextFields);
     if (errors.length > 0) {
       return problem(
         400,
@@ -515,7 +521,7 @@ export async function incidentsDemoRequest(
       );
     }
     const merged = { ...stringFields(incident.corePayload), ...nextFields };
-    const missing = missingRequiredCoreFields(CORE_SCHEMA, merged);
+    const missing = missingRequiredCoreFields(coreSchema, merged);
     const updated: Incident = {
       ...incident,
       corePayload: { ...incident.corePayload, ...nextFields },
