@@ -317,6 +317,54 @@ describe('NERIS incident types (TypeIncidentValue from the downloaded NERIS sche
   });
 });
 
+describe('casualties and rescues', () => {
+  function withCasualties(casualty_rescues: unknown, nerisApi?: CompiledNerisSchema) {
+    return localValidation({
+      incident: incident({
+        corePayload: {
+          incident_type: 'FIRE||OUTSIDE_FIRE||DUMPSTER_OUTDOOR_CONTAINER_FIRE',
+          casualty_rescues,
+        },
+      }),
+      units: [E1],
+      settings: SETTINGS,
+      ...(nerisApi ? { nerisApi } : {}),
+      nowEpochSeconds: NOW,
+    });
+  }
+
+  it('blocks a casualty with no FF/NONFF type, with or without the NERIS schema', () => {
+    for (const api of [NERIS_API, undefined]) {
+      const result = withCasualties(
+        [{ type: 'FF' }, { casualty: { injury_or_noninjury: { type: 'UNINJURED' } } }],
+        api,
+      );
+      const issue = result.blocking.find((i) => i.code === 'CASUALTY_INCOMPLETE');
+      expect(issue?.message).toMatch(/has no type/);
+    }
+  });
+
+  it('blocks a bad outcome code but not a bad demographic that is never sent', () => {
+    const bad = withCasualties(
+      [{ type: 'NONFF', casualty: { injury_or_noninjury: { type: 'INJURED_SOMEWHAT' } } }],
+      NERIS_API,
+    );
+    expect(codes(bad.blocking)).toContain('CASUALTY_INCOMPLETE');
+
+    const ok = withCasualties(
+      [
+        {
+          type: 'NONFF',
+          gender: 'NOT_A_GENDER',
+          casualty: { injury_or_noninjury: { type: 'INJURED_FATAL', cause: 'COLLAPSE' } },
+        },
+      ],
+      NERIS_API,
+    );
+    expect(codes(ok.blocking)).not.toContain('CASUALTY_INCOMPLETE');
+  });
+});
+
 describe('runValidation', () => {
   const base = {
     incident: incident(),

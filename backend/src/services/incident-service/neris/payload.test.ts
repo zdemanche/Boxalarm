@@ -216,7 +216,7 @@ describe('fire-only guardrail: nothing beyond the NERIS schema, no casualty demo
     expect(JSON.stringify(payload)).not.toMatch(/Jane|Smith|called by/);
   });
 
-  it('sends only the required casualty fields: no birth month/year, gender, race or names', () => {
+  it('sends required casualty fields and outcome codes only: no demographics, rank or names', () => {
     const payload = buildNerisIncidentPayload({
       ...BASE_INPUT,
       incident: incident({
@@ -224,19 +224,74 @@ describe('fire-only guardrail: nothing beyond the NERIS schema, no casualty demo
           incident_type: 'FIRE||STRUCTURE_FIRE||ROOM_AND_CONTENTS_FIRE',
           casualty_rescues: [
             {
-              type: 'NONFF',
+              type: 'FF',
+              rank: 'Captain',
+              years_of_service: 22,
               birth_month_year: '04/1961',
               gender: 'FEMALE',
               race: 'WHITE',
               name: 'Jane Doe',
+              casualty: {
+                injury_or_noninjury: {
+                  type: 'INJURED_FATAL',
+                  cause: 'COLLAPSE',
+                  ff_injury_details: {
+                    unit_neris_id: 'FD09190001S001U001',
+                    reported_unit_id: 'E1 Jane',
+                    incident_command: true,
+                    job_classification: 'VOLUNTEER',
+                    duty_type: 'WORKING_AT_SCENE_OF_FIRE_INCIDENT',
+                    ppe_items: ['SCBA', 'HELMET'],
+                  },
+                },
+              },
+              rescue: { ffrescue_or_nonffrescue: { type: 'SELF_EVACUATION' } },
+            },
+            {
+              type: 'NONFF',
+              gender: 'MALE',
               casualty: { injury_or_noninjury: { type: 'INJURED_NONFATAL', cause: 'EXPOSURE' } },
             },
           ],
         },
       }),
     });
-    expect(payload.casualty_rescues).toEqual([{ type: 'NONFF' }]);
-    expect(JSON.stringify(payload)).not.toMatch(/1961|FEMALE|WHITE|Jane/);
+    expect(payload.casualty_rescues).toEqual([
+      {
+        type: 'FF',
+        casualty: {
+          injury_or_noninjury: {
+            type: 'INJURED_FATAL',
+            cause: 'COLLAPSE',
+            ff_injury_details: {
+              job_classification: 'VOLUNTEER',
+              duty_type: 'WORKING_AT_SCENE_OF_FIRE_INCIDENT',
+              ppe_items: ['SCBA', 'HELMET'],
+            },
+          },
+        },
+      },
+      {
+        type: 'NONFF',
+        casualty: { injury_or_noninjury: { type: 'INJURED_NONFATAL', cause: 'EXPOSURE' } },
+      },
+    ]);
+    expect(JSON.stringify(payload)).not.toMatch(/1961|MALE|WHITE|Jane|Captain/);
+  });
+
+  it('never sends an untyped casualty as {}', () => {
+    const payload = buildNerisIncidentPayload({
+      ...BASE_INPUT,
+      incident: incident({
+        corePayload: {
+          incident_type: 'FIRE||STRUCTURE_FIRE||ROOM_AND_CONTENTS_FIRE',
+          casualty_rescues: [
+            { gender: 'FEMALE', casualty: { injury_or_noninjury: { type: 'UNINJURED' } } },
+          ],
+        },
+      }),
+    });
+    expect(payload).not.toHaveProperty('casualty_rescues');
   });
 });
 

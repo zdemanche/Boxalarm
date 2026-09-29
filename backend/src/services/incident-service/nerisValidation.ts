@@ -11,6 +11,7 @@ import {
 import {
   buildNerisIncidentPayload,
   hasIncidentCategory,
+  casualtyIssues,
   type NerisPayload,
   type ResponseUnitRow,
 } from './neris/payload.js';
@@ -441,6 +442,36 @@ export function localValidation(input: LocalValidationInput): {
       }
     }
   }
+  // Casualties/rescues: each entry needs its FF/NONFF type, and what would be sent (the type
+  // and the casualty outcome codes, never demographics) must fit NERIS. An entry without a type
+  // is never sent as `{}` — it blocks here instead.
+  const casualties = core.casualty_rescues;
+  if (casualties !== undefined && casualties !== null) {
+    const entries = Array.isArray(casualties) ? casualties : [casualties];
+    const untyped = entries.filter((entry) => {
+      const type = (entry as { type?: unknown } | null)?.type;
+      return typeof type !== 'string' || type.length === 0;
+    }).length;
+    const problems = untyped === 0 && input.nerisApi ? casualtyIssues(input.nerisApi, entries) : [];
+    if (untyped > 0 || problems.length > 0) {
+      blocking.push({
+        path: 'fields.casualty_rescues',
+        code: 'CASUALTY_INCOMPLETE',
+        section: 'core',
+        message:
+          untyped > 0
+            ? `${untyped === 1 ? 'A casualty or rescue has' : `${untyped} casualties or rescues have`} no type. Mark each one firefighter or civilian.`
+            : `A casualty or rescue is incomplete: ${problems
+                .slice(0, 3)
+                .map(
+                  (p) =>
+                    `${fieldLabel(p.path || 'casualty_rescues')} ${p.code === 'required' ? 'is required' : "isn't an allowed choice"}`,
+                )
+                .join('; ')}.`,
+      });
+    }
+  }
+
   const structureFire = values.some((value) => value.includes('STRUCTURE_FIRE'));
   if (structureFire) {
     const required = ['smoke_alarm', 'fire_alarm', 'other_alarm', 'fire_suppression'];

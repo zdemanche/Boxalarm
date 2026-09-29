@@ -7,8 +7,9 @@ Context: the independent review of `feat/neris-loop` (`.analysis/neris-loop-revi
 Fire-only means no PHI in NERIS payloads. The rule is now enforced structurally rather than by convention:
 
 - NERIS receives only what its schema declares. Every module is deep-picked to its NERIS sub-schema, compiled from the NERIS OpenAPI document that the daily schema refresh downloads. Content comes only from what the department entered in a NERIS section.
-- `casualty_rescues` sends only the fields NERIS marks required, at every level.
-- Optional civilian demographics (birth month/year, gender, race) are never sent. Neither are names, date of birth, SSN, phone, email, or the PCR id, wherever they appear.
+- `casualty_rescues` sends the fields NERIS marks required, at every level. Round 2 (coordinator's decision) adds the casualty outcome codes under `casualty`: the injured/non-fatal, fatal or uninjured status, the cause, and the coded firefighter-injury details (job classification, duty, activity, incident stage, PPE). Only enum values are sent from that sub-tree, never free text, numbers or booleans. Unit ids and reported unit names inside it are also not sent.
+- A casualty entry with no FF/NONFF `type` blocks locking (`CASUALTY_INCOMPLETE`). It is never sent as `{}`. A bad outcome code blocks too. A bad value in a field that is never sent does not block.
+- Optional civilian demographics (birth month/year, gender, race), rank and years of service are never sent. Neither are names, date of birth, SSN, phone, email, or the PCR id, wherever they appear.
 - `medical_details` is sent only for MEDICAL incident types, and then only `patient_care_evaluation`, `patient_status` and `transport_disposition`.
 
 To reverse this, change the payload builder (`incident-service/neris/payload.ts`). That would need an explicit fire-only exception.

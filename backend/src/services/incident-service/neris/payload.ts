@@ -1,7 +1,14 @@
 import { createHash } from 'node:crypto';
 import type { Incident } from '../entity.js';
 import { NERIS_INCIDENT_NUMBER_PATTERN } from './paths.js';
-import { PAYLOAD_ROOT, deepPick, moduleNode, type CompiledNerisSchema } from './apiSchema.js';
+import {
+  PAYLOAD_ROOT,
+  deepPick,
+  moduleNode,
+  validateNode,
+  type CompiledNerisSchema,
+  type SchemaIssue,
+} from './apiSchema.js';
 
 /**
  * Builds the NERIS `IncidentPayload` (POST /incident/{entity}, /validate, and PUT by id)
@@ -24,9 +31,13 @@ import { PAYLOAD_ROOT, deepPick, moduleNode, type CompiledNerisSchema } from './
  *   - `medical_details` is sent only when a MEDICAL incident type is present, and then only
  *     `patient_care_evaluation`, `patient_status` and `transport_disposition` — never
  *     `patient_care_report_id`.
- *   - `casualty_rescues` sends only the fields NERIS marks required, at every depth. The
- *     optional civilian demographics (birth month/year, gender, race) are never sent, and a
- *     name-like key is dropped wherever it appears ("Think Numbers NOT Names").
+ *   - `casualty_rescues` sends the fields NERIS marks required, at every depth, plus the
+ *     casualty outcome codes under `casualty` (injured/fatal status, cause, and the coded
+ *     firefighter-injury details) — enum values only, never free text. Rank, years of service,
+ *     birth month/year, gender and race are never sent, and a name-like key is dropped
+ *     wherever it appears ("Think Numbers NOT Names"). An entry without its required `type`
+ *     is dropped here and blocks locking in local validation (CASUALTY_INCOMPLETE), so an
+ *     empty `{}` is never sent. Decision: docs/decisions/2026-09-29-neris-loop-review.md.
  */
 
 /** Never sent at any depth of any module, whatever a schema version declares. */
@@ -305,13 +316,11 @@ export function buildNerisIncidentPayload(input: BuildPayloadInput): NerisPayloa
   if (medical) {
     payload.medical_details = medical;
   }
-  const casualtyNode = moduleNode(input.schema, 'casualty_rescues');
-  if (payload.casualty_rescues !== undefined && casualtyNode) {
-    const casualties = deepPick(input.schema, casualtyNode, payload.casualty_rescues, {
-      requiredOnly: true,
-      denyKeys: NEVER_SENT_KEYS,
-    });
-    if (Array.isArray(casualties) && casualties.length > 0) {
+  if (payload.casualty_rescues !== undefined) {
+    const casualties = sendableCasualties(input.schema, payload.casualty_rescues).filter(
+      (entry) => typeof asRecord(entry)?.type === 'string',
+    );
+    if (casualties.length > 0) {
       payload.casualty_rescues = casualties;
     } else {
       delete payload.casualty_rescues;
@@ -320,6 +329,40 @@ export function buildNerisIncidentPayload(input: BuildPayloadInput): NerisPayloa
   return (deepPick(input.schema, { k: 'ref', n: PAYLOAD_ROOT }, payload, {
     denyKeys: NEVER_SENT_KEYS,
   }) ?? {}) as NerisPayload;
+}
+
+/** Only ever these casualty sub-trees keep their optional coded values. */
+const CASUALTY_CODED_SUBTREES: ReadonlySet<string> = new Set(['casualty']);
+
+/**
+ * The part of stored `casualty_rescues` that may leave Boxalarm: required fields plus the
+ * casualty outcome codes, never demographics or names. Local validation checks this exact
+ * projection, so what is validated is what is sent.
+ */
+export function sendableCasualties(schema: CompiledNerisSchema, value: unknown): unknown[] {
+  const node = moduleNode(schema, 'casualty_rescues');
+  if (!node) return [];
+  const picked = deepPick(schema, node, value, {
+    requiredOnly: true,
+    denyKeys: NEVER_SENT_KEYS,
+    codedValuesUnder: CASUALTY_CODED_SUBTREES,
+  });
+  return Array.isArray(picked) ? picked : [];
+}
+
+/**
+ * Schema problems in stored `casualty_rescues` that would reach NERIS: the entry `type` and
+ * the `casualty` outcome sub-tree. A bad value in a field that is never sent (a demographic)
+ * is not reported — it cannot cause a NERIS rejection and must not block lock.
+ */
+export function casualtyIssues(schema: CompiledNerisSchema, value: unknown): SchemaIssue[] {
+  const node = moduleNode(schema, 'casualty_rescues');
+  if (!node) return [];
+  return validateNode(schema, node, value).filter(
+    (issue) =>
+      /^\[\d+\]\.(type|casualty)(\.|\[|$)/.test(issue.path) &&
+      !issue.path.split(/[.[\]]/).some((segment) => NEVER_SENT_KEYS.has(segment)),
+  );
 }
 
 /** Key-order-independent JSON, so the same record always hashes the same. */

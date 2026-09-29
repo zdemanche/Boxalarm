@@ -162,6 +162,29 @@ export interface PickOptions {
   readonly requiredOnly?: boolean;
   /** Property names never kept at any depth, whatever the schema says. */
   readonly denyKeys?: ReadonlySet<string>;
+  /**
+   * With `requiredOnly`: below a property with one of these names, optional coded values
+   * (enum/const, or arrays of them) are kept too — never free text, numbers or booleans.
+   */
+  readonly codedValuesUnder?: ReadonlySet<string>;
+  /** Internal: set once the walk is below a `codedValuesUnder` property. */
+  readonly keepCodedValues?: boolean;
+}
+
+/** An enum/const, or an array of them: a coded value, never free text. */
+function isCodedNode(schema: CompiledNerisSchema, node: SchemaNode): boolean {
+  const resolved = resolveNode(schema, node);
+  if (resolved.k === 'enum' || resolved.k === 'const') return true;
+  if (resolved.k === 'arr') {
+    const item = resolveNode(schema, resolved.i);
+    return item.k === 'enum' || item.k === 'const';
+  }
+  return false;
+}
+
+function isStructuredNode(schema: CompiledNerisSchema, node: SchemaNode): boolean {
+  const resolved = resolveNode(schema, node);
+  return resolved.k === 'obj' || resolved.k === 'union';
 }
 
 /**
@@ -184,9 +207,23 @@ export function deepPick(
       const out: Json = {};
       for (const [key, child] of Object.entries(resolved.p)) {
         if (options.denyKeys?.has(key)) continue;
-        if (options.requiredOnly && !resolved.r.includes(key)) continue;
-        const picked = deepPick(schema, child, record[key], options);
-        if (picked !== undefined) out[key] = picked;
+        const childOptions =
+          options.codedValuesUnder?.has(key) && !options.keepCodedValues
+            ? { ...options, keepCodedValues: true }
+            : options;
+        const required = resolved.r.includes(key);
+        let optionalKept = false;
+        if (options.requiredOnly && !required) {
+          if (!childOptions.keepCodedValues) continue;
+          if (isCodedNode(schema, child)) optionalKept = true;
+          else if (!isStructuredNode(schema, child)) continue;
+        }
+        const picked = deepPick(schema, child, record[key], childOptions);
+        if (picked === undefined) continue;
+        // An optional object kept only for its codes is dropped when no code survived.
+        const empty = asRecord(picked) !== undefined && Object.keys(picked as object).length === 0;
+        if (options.requiredOnly && !required && !optionalKept && empty) continue;
+        out[key] = picked;
       }
       return out;
     }
