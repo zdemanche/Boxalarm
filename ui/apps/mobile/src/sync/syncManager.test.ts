@@ -681,6 +681,80 @@ describe('alert responses (RESPONSE)', () => {
     expect(row?.lastError).toBe(syncManager.SIGN_IN_REJECTED);
   });
 
+  describe('an answer with no ETA (runtime fallback for a server that still requires one)', () => {
+    const noEta = {
+      ackStatus: 'RESPONDING',
+      eta: null,
+      etaSource: 'NOT_GIVEN',
+      answeredAtMs: 1_000_000,
+    };
+
+    test('a server that accepts eta null gets exactly one POST with eta null', async () => {
+      mockApiRequest.mockResolvedValue({ json: async () => ({}) });
+
+      await syncManager.enqueueResponse('response-null-ok', 'D10', 'x', noEta);
+      await flush();
+
+      expect(mockApiRequest).toHaveBeenCalledTimes(1);
+      expect(JSON.parse(mockApiRequest.mock.calls[0]![2].body as string).eta).toBeNull();
+      expect(syncManager.hasSynced('response-null-ok')).toBe(true);
+    });
+
+    test('a 400 naming eta is re-sent once with the placeholder, flagged NOT_GIVEN, and delivered', async () => {
+      mockApiRequest
+        .mockRejectedValueOnce(
+          new ApiError({
+            type: 'about:blank',
+            title: 'Bad Request',
+            status: 400,
+            detail: 'eta is required and must be a positive integer for this ackStatus',
+            traceId: 't',
+          }),
+        )
+        .mockResolvedValueOnce({ json: async () => ({}) });
+
+      await syncManager.enqueueResponse('response-null-400', 'D11', 'x', noEta);
+      await flush();
+
+      expect(mockApiRequest).toHaveBeenCalledTimes(2);
+      const retried = JSON.parse(mockApiRequest.mock.calls[1]![2].body as string);
+      expect(retried).toMatchObject({
+        eta: 1_000 + syncManager.RESPONSE_PLACEHOLDER_ETA_MINUTES * 60,
+        etaSource: 'NOT_GIVEN',
+      });
+      expect(syncManager.hasSynced('response-null-400')).toBe(true);
+    });
+
+    test('a 400 about something else is refused without a retry', async () => {
+      mockApiRequest.mockRejectedValueOnce(problem(400, 'ackStatus is required'));
+
+      await syncManager.enqueueResponse('response-400-other', 'D12', 'x', noEta);
+      await flush();
+
+      expect(mockApiRequest).toHaveBeenCalledTimes(1);
+      expect((await store.find('response-400-other'))?.status).toBe('REJECTED');
+    });
+
+    test('the fallback is tried once: a second 400 is refused, and a later retry sends the placeholder', async () => {
+      const etaProblem = new ApiError({
+        type: 'about:blank',
+        title: 'Bad Request',
+        status: 400,
+        detail: 'eta is required',
+        traceId: 't',
+      });
+      mockApiRequest.mockRejectedValueOnce(etaProblem).mockRejectedValueOnce(etaProblem);
+
+      await syncManager.enqueueResponse('response-null-twice', 'D13', 'x', noEta);
+      await flush();
+
+      expect(mockApiRequest).toHaveBeenCalledTimes(2);
+      const row = await store.find('response-null-twice');
+      expect(row?.status).toBe('REJECTED');
+      expect(JSON.parse(row!.body).eta).toBe(1_000 + 600);
+    });
+  });
+
   test('answers to different calls do not supersede each other', async () => {
     mockApiRequest.mockRejectedValue(new Error('Network request failed'));
 

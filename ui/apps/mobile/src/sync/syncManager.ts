@@ -324,7 +324,48 @@ function readUploadTarget(row: OutboxRow, parsed: Record<string, unknown>): Uplo
 // response was lost), so the entry is delivered, not refused.
 const CONFLICT_MEANS_DELIVERED: ReadonlySet<OutboxKind> = new Set(['ATTENDANCE']);
 
+/**
+ * Minutes of the placeholder ETA sent only to a server that still requires one (see
+ * missingEtaFallback). The phone never shows it: the member's answer reads "ETA ?".
+ */
+export const RESPONSE_PLACEHOLDER_ETA_MINUTES = 10;
+
+function mentionsEta(error: ApiError): boolean {
+  const text = `${error.problem.detail ?? ''} ${error.problem.title ?? ''}`;
+  return /\beta\b/i.test(text);
+}
+
+/**
+ * An answer with no ETA is sent as `eta: null` (the post-page-chain server accepts it). A server
+ * that still requires an ETA answers 400 naming `eta`; the answer is then re-sent ONCE with a
+ * placeholder, flagged etaSource NOT_GIVEN, and the queued body is replaced so a later retry does
+ * not repeat the 400. Returns the fallback body, or null when this 400 is not that case.
+ */
+function missingEtaFallback(row: OutboxRow, error: unknown): string | null {
+  if (row.kind !== 'RESPONSE' || !(error instanceof ApiError)) return null;
+  if (error.problem.status !== 400 || !mentionsEta(error)) return null;
+  const body = JSON.parse(row.body) as Record<string, unknown>;
+  if (body.eta !== null || body.ackStatus === 'NOT_RESPONDING') return null;
+  const answeredAtMs = typeof body.answeredAtMs === 'number' ? body.answeredAtMs : Date.now();
+  return JSON.stringify({
+    ...body,
+    eta: Math.floor(answeredAtMs / 1000) + RESPONSE_PLACEHOLDER_ETA_MINUTES * 60,
+    etaSource: 'NOT_GIVEN',
+  });
+}
+
 async function post(row: OutboxRow): Promise<Response | null> {
+  try {
+    return await postOnce(row);
+  } catch (error) {
+    const fallbackBody = missingEtaFallback(row, error);
+    if (!fallbackBody) throw error;
+    await outbox.replaceBody(row.id, fallbackBody);
+    return postOnce({ ...row, body: fallbackBody });
+  }
+}
+
+async function postOnce(row: OutboxRow): Promise<Response | null> {
   if (!tokens || !apiBaseUrl) throw new Error('Sync is not configured yet');
   try {
     return await apiRequest(row.path, tokens, {

@@ -1,4 +1,3 @@
-import Config from 'react-native-config';
 import { kvDelete, kvGet, kvSet } from '../../sync/kvStore';
 import * as syncManager from '../../sync/syncManager';
 import { ackStatusLabel } from './ackStatus';
@@ -49,20 +48,6 @@ export function formatEta(eta: EtaGiven | null): string {
   return `ETA ${eta.minutes}${eta.qualifier === 'AT_LEAST' ? '+' : ''} min`;
 }
 
-/**
- * Whether the alerting service accepts `eta: null` for RESPONDING / DIRECT_TO_SCENE. Today's
- * handler rejects it with 400, so until the page-chain backend change ships (and this flag is set
- * in the build's .env) an answer with no chosen ETA still has to carry a placeholder - and it is
- * sent with `etaSource: 'NOT_GIVEN'` so the server can tell it apart. The phone never shows the
- * placeholder: it shows "ETA ?".
- */
-export function serverAcceptsMissingEta(): boolean {
-  return Config.RESPONSE_ETA_OPTIONAL === 'true';
-}
-
-/** Placeholder sent only while the server still requires an ETA (see serverAcceptsMissingEta). */
-export const LEGACY_PLACEHOLDER_ETA_MINUTES = 10;
-
 /** This device's latest answer to a call, kept on the phone so re-opening the call shows it. */
 export interface LocalAnswer {
   ackStatus: ResponseAnswer;
@@ -106,7 +91,7 @@ export function etaFor(
 /**
  * The POST body. eta is absolute epoch seconds from the moment the member answered (an answer
  * that waits in the queue still means "N minutes from when I tapped"), or null when none was
- * chosen and the server accepts that. etaSource / etaQualifier / clientAnswerId / answeredAtMs
+ * chosen. etaSource / etaQualifier / clientAnswerId / answeredAtMs
  * are ignored by today's handler; the page-chain backend work reads them.
  */
 export function responseBody(
@@ -114,14 +99,11 @@ export function responseBody(
   eta: EtaGiven | null,
   now: number,
   clientAnswerId: string,
-  acceptsMissingEta: boolean = serverAcceptsMissingEta(),
 ): Record<string, unknown> {
   const nowSeconds = Math.floor(now / 1000);
-  let etaSeconds: number | null = null;
-  if (ackStatus !== 'NOT_RESPONDING') {
-    if (eta) etaSeconds = nowSeconds + eta.minutes * 60;
-    else if (!acceptsMissingEta) etaSeconds = nowSeconds + LEGACY_PLACEHOLDER_ETA_MINUTES * 60;
-  }
+  // No chosen ETA is sent as null. A server that still requires one answers 400 naming eta, and
+  // the outbox re-sends once with a flagged placeholder (syncManager missingEtaFallback).
+  const etaSeconds = ackStatus !== 'NOT_RESPONDING' && eta ? nowSeconds + eta.minutes * 60 : null;
   return {
     ackStatus,
     eta: etaSeconds,

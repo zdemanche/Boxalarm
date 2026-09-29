@@ -28,8 +28,8 @@ test('an unchosen ETA reads "ETA ?"; 20+ and at-station read as such', () => {
   expect(formatEta({ minutes: 0, qualifier: 'AT_STATION' })).toBe('at station');
 });
 
-test('with a server that accepts it, a one-tap Responding sends eta null, marked NOT_GIVEN', () => {
-  expect(responseBody('RESPONDING', null, 1_000_000, 'r-1', true)).toEqual({
+test('a one-tap Responding sends eta null, marked NOT_GIVEN', () => {
+  expect(responseBody('RESPONDING', null, 1_000_000, 'r-1')).toEqual({
     ackStatus: 'RESPONDING',
     eta: null,
     assignedApparatusId: null,
@@ -40,21 +40,14 @@ test('with a server that accepts it, a one-tap Responding sends eta null, marked
   });
 });
 
-test('until the server accepts a missing ETA, a placeholder is sent - flagged NOT_GIVEN so it can be told apart', () => {
-  expect(responseBody('RESPONDING', null, 1_000_000, 'r-1', false)).toMatchObject({
-    eta: 1_000 + 600,
-    etaSource: 'NOT_GIVEN',
-  });
-});
-
 test('a chosen ETA is epoch seconds from the tap, with its qualifier', () => {
   expect(
-    responseBody('DIRECT_TO_SCENE', { minutes: 20, qualifier: 'AT_LEAST' }, 1_000_000, 'r', true),
+    responseBody('DIRECT_TO_SCENE', { minutes: 20, qualifier: 'AT_LEAST' }, 1_000_000, 'r'),
   ).toMatchObject({ eta: 1_000 + 1_200, etaSource: 'MEMBER', etaQualifier: 'AT_LEAST' });
   expect(
-    responseBody('RESPONDING', { minutes: 0, qualifier: 'AT_STATION' }, 1_000_000, 'r', true),
+    responseBody('RESPONDING', { minutes: 0, qualifier: 'AT_STATION' }, 1_000_000, 'r'),
   ).toMatchObject({ eta: 1_000, etaQualifier: 'AT_STATION' });
-  expect(responseBody('NOT_RESPONDING', null, 1_000_000, 'r', false)).toMatchObject({
+  expect(responseBody('NOT_RESPONDING', null, 1_000_000, 'r')).toMatchObject({
     eta: null,
     etaSource: null,
   });

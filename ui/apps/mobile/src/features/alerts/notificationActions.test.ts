@@ -70,7 +70,7 @@ test('Responding from the notification goes through the outbox and the notificat
   );
   const body = JSON.parse(mockApiRequest.mock.calls[0]![2].body as string);
   expect(body).toMatchObject({ ackStatus: 'RESPONDING', assignedApparatusId: null });
-  expect(typeof body.eta).toBe('number');
+  expect(body).toMatchObject({ eta: null, etaSource: 'NOT_GIVEN' });
   const last = displayNotification.mock.calls.at(-1)![0];
   expect(last.id).toBe('dispatch:D-ACT');
   expect(last.body).toMatch(/^Sent\./);

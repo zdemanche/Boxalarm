@@ -73,6 +73,11 @@ export async function isSuperseded(row: OutboxRow): Promise<boolean> {
   );
 }
 
+/** Replaces a queued row's body (the RESPONSE missing-ETA fallback, syncManager.post). */
+export async function replaceBody(id: string, body: string): Promise<void> {
+  await store.update(id, { body });
+}
+
 export async function find(id: string): Promise<OutboxRow | undefined> {
   return store.find(id);
 }

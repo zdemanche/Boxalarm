@@ -251,6 +251,38 @@ test('a 401 reads as a sign-in problem, not as no signal (review m9)', async () 
   expect(await screen.findByText('Not sent - sign-in problem')).toBeTruthy();
 });
 
+test('one tap sends eta null; the member sees "ETA ?" whether the server accepts null or needs the placeholder', async () => {
+  await renderScreen();
+  await tap(/^Responding — /);
+  expect(await screen.findByText('Sent')).toBeTruthy();
+  expect(posted.at(-1)).toMatchObject({ eta: null, etaSource: 'NOT_GIVEN' });
+  expect(screen.getByText(/your response: responding · eta \?/i)).toBeTruthy();
+});
+
+test('against a server that still requires an ETA, the answer is re-sent with the flagged placeholder and still reads "ETA ?"', async () => {
+  let first = true;
+  postOutcome = async (body) => {
+    if (first && body.eta === null) {
+      first = false;
+      throw new ApiError({
+        type: 'about:blank',
+        title: 'Bad Request',
+        status: 400,
+        detail: 'eta is required and must be a positive integer for this ackStatus',
+        traceId: 't',
+      });
+    }
+    return { json: async () => ({}) };
+  };
+  await renderScreen();
+  await tap(/^Responding — /);
+
+  expect(await screen.findByText('Sent')).toBeTruthy();
+  expect(posted.at(-1)).toMatchObject({ etaSource: 'NOT_GIVEN' });
+  expect(typeof posted.at(-1)!.eta).toBe('number');
+  expect(screen.getByText(/your response: responding · eta \?/i)).toBeTruthy();
+});
+
 test('each answer carries a clientAnswerId and answeredAtMs', async () => {
   await renderScreen();
   await tap(/^Not responding/);
