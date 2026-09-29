@@ -74,6 +74,7 @@ async function build() {
   };
   new Members("members", {
     ...common,
+    chiefNotificationTopicArn: "arn:aws:sns:us-east-1:123456789012:chief",
     userPoolId: "us-east-1_pool",
     userPoolArn: "arn:aws:cognito-idp:us-east-1:123456789012:userpool/us-east-1_pool",
   });

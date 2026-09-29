@@ -255,6 +255,7 @@ export const recoveryMonitor = new RecoveryMonitor("recovery-monitor", {
 
 export const personnelMembers = new Members("personnel-members", {
   env,
+  chiefNotificationTopicArn: chiefNotificationTopic.topicArn,
   platformTableName: platformTable.tableName,
   platformTableArn: platformTable.tableArn,
   policyStoreArn: policyStore.policyStoreArn,
