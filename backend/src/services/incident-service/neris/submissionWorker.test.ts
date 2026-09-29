@@ -376,6 +376,36 @@ describe('submissionWorker handler (SQS trigger)', () => {
     );
   });
 
+  it('adopts the old record instead of creating a duplicate when NERIS still holds it (round 2c, Q1)', async () => {
+    const oldId = `${DEPT_NERIS_ID}|4471|1700000000`;
+    const { fetchFn, appendSubmissionAttempt } = mockDeps({
+      httpStatus: 200,
+      responseBody: { last_modified: '2026-09-29T10:00:00Z' },
+      nerisIncidentId: oldId,
+      nerisMissingAt: 1_798_100_000,
+      existsInNeris: true,
+    });
+    const { createHandler } = await import('./submissionWorker.js');
+    await createHandler({ schedulerClient: { send: vi.fn() } as never })(
+      { Records: [sqsRecord(submittedEnvelope('NICHOLS', INCIDENT_ID))] },
+      FAKE_CONTEXT,
+      () => undefined,
+    );
+    const calls = fetchFn.mock.calls.map(([path, init]) => [
+      (init as RequestInit).method,
+      path as string,
+    ]);
+    expect(calls[0]).toEqual(['GET', `/incident/${DEPT_NERIS_ID}/${encodeURIComponent(oldId)}`]);
+    expect(calls.map(([method]) => method)).toEqual(['GET', 'PUT']);
+    expect(appendSubmissionAttempt).toHaveBeenCalledWith(
+      'NICHOLS',
+      INCIDENT_ID,
+      expect.objectContaining({ outcome: 'SUCCESS', operation: 'ADOPT', nerisIncidentId: oldId }),
+      true,
+      expect.any(Number),
+    );
+  });
+
   it('does not forget the NERIS id of a record that is not marked missing', async () => {
     const { forgetMissingNerisRecord } = mockDeps({
       httpStatus: 200,

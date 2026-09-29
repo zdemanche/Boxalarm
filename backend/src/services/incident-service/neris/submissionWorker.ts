@@ -337,6 +337,7 @@ async function attemptSubmission(
   // no longer has that id. Forget it and create the record again (round 2b, R3); the adopt
   // lookup below still finds it if NERIS lists it again after all.
   let knownNerisId = incident.nerisIncidentId;
+  const previousNerisId = knownNerisId;
   const recreate =
     knownNerisId !== undefined &&
     fresh?.nerisMissingAt !== undefined &&
@@ -371,9 +372,15 @@ async function attemptSubmission(
     // (`dept|incident number|call_create`), so a create that may already have landed — a
     // marker from an earlier attempt, or any retry — is first looked up and adopted.
     const adopt = async (): Promise<string | undefined> => {
-      const candidates = [...new Set([incident.pendingNerisId, expectedNerisId])].filter(
-        (id): id is string => typeof id === 'string',
-      );
+      // A record being re-created is first looked for under its old id too: if NERIS still
+      // (or again) holds it, it is adopted rather than duplicated (round 2c, Q1).
+      const candidates = [
+        ...new Set([
+          recreate ? previousNerisId : undefined,
+          incident.pendingNerisId,
+          expectedNerisId,
+        ]),
+      ].filter((id): id is string => typeof id === 'string');
       for (const candidate of candidates) {
         const found = await api.getIncidentStatus(entity, candidate);
         if (found.ok) return candidate;
