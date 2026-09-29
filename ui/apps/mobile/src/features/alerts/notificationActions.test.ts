@@ -90,6 +90,14 @@ test('with no signal the answer is kept on the phone and the notification says N
   expect(displayNotification.mock.calls.at(-1)![0].body).toMatch(/NOT SENT YET/);
 });
 
+test('when the server says the roster did not take it, the notification says so - not "sent"', async () => {
+  mockApiRequest.mockResolvedValue({ json: async () => ({ outcome: 'superseded' }) });
+
+  await handleNotificationEvent(actionPress('respond:NOT_RESPONDING'));
+
+  expect(displayNotification.mock.calls.at(-1)![0].body).toMatch(/NOT ON THE ROSTER/);
+});
+
 test('a plain press or an unknown action is ignored here (routing handles taps)', async () => {
   await handleNotificationEvent({
     type: EventType.PRESS,

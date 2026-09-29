@@ -149,9 +149,11 @@ export async function enqueueAttendance(
 // POST /api/v1/alerting/dispatches/{dispatchId}/responses (alerting-service responses/handler.ts).
 // Each answer is its own row (a changed answer is a new append-only answer, not an edit), and a
 // newer answer drops any older one for the same call that has not started sending, so a retried
-// "Responding" can never land after the member changed it to "Not responding". The handler has no
-// client idempotency key: a replay after a lost 200 appends a duplicate record with the same
-// answer, which the roster's latest-answer-wins write absorbs.
+// "Responding" can never land after the member changed it to "Not responding". The body carries
+// clientAnswerId + answeredAtMs; until the server uses them, a replay after a lost 200 appends a
+// duplicate record, and a change stamped in the same server-second as the previous answer can be
+// dropped from the roster while answering 200 - which is why the screen re-reads the roster after
+// delivery, and why a 409 / `superseded` outcome is surfaced as RESPONSE_NOT_RECORDED.
 export async function enqueueResponse(
   id: string,
   dispatchId: string,
@@ -189,6 +191,25 @@ export async function discard(id: string): Promise<void> {
 // would be rejected with a clear reason instead of retried forever.
 const RESIGNS_ON_REPLAY: ReadonlySet<OutboxKind> = new Set(['FIELD_CAPTURE', 'DEFECT']);
 
+/**
+ * lastError of a RESPONSE row the server accepted as a request but did not apply to the roster
+ * (409, or a 2xx whose outcome is `superseded`/`stale`, or `rosterUpdated: false`). Terminal: the
+ * member must send it again as a new answer (a new answeredAtMs), which the UI offers.
+ */
+export const RESPONSE_NOT_RECORDED = "Not recorded on the officer's roster";
+
+class ResponseNotRecordedError extends Error {
+  constructor() {
+    super(RESPONSE_NOT_RECORDED);
+  }
+}
+
+function responseWasNotRecorded(parsed: Record<string, unknown>): boolean {
+  return (
+    parsed.outcome === 'superseded' || parsed.outcome === 'stale' || parsed.rosterUpdated === false
+  );
+}
+
 class PhotoUploadUrlExpiredError extends Error {
   constructor(kind: OutboxKind) {
     super(
@@ -219,6 +240,7 @@ export function signedUrlExpiresAtMs(url: string): number | null {
 // is recoverable by signing in again, so it is treated as transient too.
 function isPermanentRejection(error: unknown): boolean {
   if (error instanceof PhotoUploadUrlExpiredError) return true;
+  if (error instanceof ResponseNotRecordedError) return true;
   if (!(error instanceof ApiError)) return false;
   const { status } = error.problem;
   return status >= 400 && status < 500 && status !== 401 && status !== 408 && status !== 429;
@@ -305,6 +327,9 @@ async function post(row: OutboxRow): Promise<Response | null> {
       body: row.body,
     });
   } catch (error) {
+    if (row.kind === 'RESPONSE' && error instanceof ApiError && error.problem.status === 409) {
+      throw new ResponseNotRecordedError();
+    }
     if (
       CONFLICT_MEANS_DELIVERED.has(row.kind) &&
       error instanceof ApiError &&
@@ -323,6 +348,9 @@ async function create(row: OutboxRow): Promise<OutboxRow | undefined> {
     return outbox.find(row.id);
   }
   const parsed = (await response.json().catch(() => ({}))) as Record<string, unknown>;
+  if (row.kind === 'RESPONSE' && responseWasNotRecorded(parsed)) {
+    throw new ResponseNotRecordedError();
+  }
   const target = readUploadTarget(row, parsed);
   await outbox.advanceStage(row.id, {
     stage: target.uploadUrl && row.photoLocalUri ? 'UPLOAD_PHOTO' : 'DONE',

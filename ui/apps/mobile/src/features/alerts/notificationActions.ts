@@ -8,7 +8,9 @@ import notifee, {
 import { Platform } from 'react-native';
 import Config from 'react-native-config';
 import { createStoredTokenSource } from '../../auth/AuthContext';
+import * as outbox from '../../sync/outbox';
 import * as syncManager from '../../sync/syncManager';
+import { RESPONSE_NOT_RECORDED } from '../../sync/syncManager';
 import { ackStatusLabel } from './ackStatus';
 import { alertPayloadFromNotificationData } from './alertPayload';
 import { etaFor, queueAlertResponse, type ResponseAnswer } from './alertResponses';
@@ -113,13 +115,18 @@ export async function answerFromNotification(
     await showAnswerNotification(notificationId, data, answer, 'Saved on this phone. Sending…');
     await syncManager.drainAndSettle();
     const sent = syncManager.hasSynced(outboxId);
+    const row = sent ? undefined : await outbox.find(outboxId);
     await showAnswerNotification(
       notificationId,
       data,
       answer,
       sent
-        ? 'Sent. The officer can see your answer. Tap to open the call.'
-        : 'NOT SENT YET - saved on this phone and it sends when you have signal. Tap to check.',
+        ? 'Sent. Tap to open the call.'
+        : row?.status === 'REJECTED'
+          ? row.lastError === RESPONSE_NOT_RECORDED
+            ? 'NOT ON THE ROSTER - the server did not record it. Tap to send again, or use the radio.'
+            : 'REFUSED by the server - not recorded. Tap to open the call, or use the radio.'
+          : 'NOT SENT YET - saved on this phone and it sends when you have signal. Tap to check.',
     );
   } catch (error) {
     console.error('[push] answering from the notification failed', error);

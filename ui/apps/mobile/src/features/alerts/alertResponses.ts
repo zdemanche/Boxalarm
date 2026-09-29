@@ -1,4 +1,4 @@
-import { kvGet, kvSet } from '../../sync/kvStore';
+import { kvDelete, kvGet, kvSet } from '../../sync/kvStore';
 import * as syncManager from '../../sync/syncManager';
 import { ackStatusLabel } from './ackStatus';
 import type { AckStatus } from './types';
@@ -31,6 +31,10 @@ export async function getLocalAnswer(dispatchId: string): Promise<LocalAnswer | 
   return (await kvGet<LocalAnswer>(answerKey(dispatchId)))?.value ?? null;
 }
 
+export async function clearLocalAnswer(dispatchId: string): Promise<void> {
+  await kvDelete(answerKey(dispatchId));
+}
+
 export async function saveLocalAnswer(dispatchId: string, answer: LocalAnswer): Promise<void> {
   await kvSet(answerKey(dispatchId), answer);
 }
@@ -46,11 +50,16 @@ export function responseBody(
   ackStatus: ResponseAnswer,
   etaMinutes: number | null,
   now: number,
+  clientAnswerId: string,
 ): Record<string, unknown> {
   return {
     ackStatus,
     eta: etaMinutes === null ? null : Math.floor(now / 1000) + etaMinutes * 60,
     assignedApparatusId: null,
+    // Review CR-3: lets the server order two answers given within the same second and dedupe a
+    // replay after a lost 200. Ignored by today's handler; the page-chain backend work uses it.
+    clientAnswerId,
+    answeredAtMs: now,
   };
 }
 
@@ -71,7 +80,7 @@ export async function queueAlertResponse(
     outboxId,
     dispatchId,
     `Your response — ${ackStatusLabel(ackStatus)}${eta}`,
-    responseBody(ackStatus, etaMinutes, now),
+    responseBody(ackStatus, etaMinutes, now, outboxId),
   );
   await saveLocalAnswer(dispatchId, { ackStatus, etaMinutes, outboxId, answeredAt: now });
   return outboxId;

@@ -649,6 +649,27 @@ describe('alert responses (RESPONSE)', () => {
     expect(syncManager.hasSynced('response-a')).toBe(false);
   });
 
+  test('a 409 on an answer means the roster did not take it: kept, terminal, and named as such', async () => {
+    mockApiRequest.mockRejectedValueOnce(problem(409, 'Conflict'));
+
+    await syncManager.enqueueResponse('response-409', 'D5', 'x', { ackStatus: 'RESPONDING' });
+    await flush();
+
+    const row = await store.find('response-409');
+    expect(row?.status).toBe('REJECTED');
+    expect(row?.lastError).toBe(syncManager.RESPONSE_NOT_RECORDED);
+  });
+
+  test('a 200 whose outcome is superseded is not treated as delivered', async () => {
+    mockApiRequest.mockResolvedValueOnce({ json: async () => ({ outcome: 'superseded' }) });
+
+    await syncManager.enqueueResponse('response-sup', 'D6', 'x', { ackStatus: 'NOT_RESPONDING' });
+    await flush();
+
+    expect(syncManager.hasSynced('response-sup')).toBe(false);
+    expect((await store.find('response-sup'))?.lastError).toBe(syncManager.RESPONSE_NOT_RECORDED);
+  });
+
   test('answers to different calls do not supersede each other', async () => {
     mockApiRequest.mockRejectedValue(new Error('Network request failed'));
 

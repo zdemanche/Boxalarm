@@ -1,8 +1,15 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { AccessibilityInfo, Platform } from 'react-native';
+import { RESPONSE_NOT_RECORDED } from '../../sync/syncManager';
 import { useOutboxItem, type OutboxItemState } from '../../sync/useOutboxItem';
 import { ackStatusLabel } from './ackStatus';
-import { etaFor, getLocalAnswer, saveLocalAnswer, type ResponseAnswer } from './alertResponses';
+import {
+  clearLocalAnswer,
+  etaFor,
+  getLocalAnswer,
+  saveLocalAnswer,
+  type ResponseAnswer,
+} from './alertResponses';
 import type { AlertsRepository } from './types';
 
 /**
@@ -14,9 +21,20 @@ import type { AlertsRepository } from './types';
  * - unconfirmed: saved in an earlier session and no longer queued, but the server roster does
  *   not show it - resend to be sure
  * - unsaved: the phone could not even store it (storage failure) - nothing is on its way
+ * - notRecorded: the server took the request but says the roster was not updated with it
+ *   (a 409 / `superseded` outcome) - resend to be sure
+ * - disputed: the officer's roster shows a different answer from this phone's last one; both
+ *   are shown, never silently swapped
  */
 export type ResponseDelivery =
-  'sending' | 'queued' | 'refused' | 'sent' | 'unconfirmed' | 'unsaved';
+  | 'sending'
+  | 'queued'
+  | 'refused'
+  | 'sent'
+  | 'unconfirmed'
+  | 'unsaved'
+  | 'notRecorded'
+  | 'disputed';
 
 export interface MyAnswer {
   ackStatus: ResponseAnswer;
@@ -28,8 +46,12 @@ export interface AlertResponseState {
   delivery: ResponseDelivery | null;
   outboxId: string | null;
   lastError: string | null;
+  /** What the officer's roster shows, when it disagrees with this phone's answer. */
+  rosterAnswer: MyAnswer | null;
   /** Records a new answer (a change is a new answer - the server keeps them append-only). */
   respond: (ackStatus: ResponseAnswer, etaMinutes?: number) => Promise<void>;
+  /** Accept the roster's answer as this phone's (drops the phone's disagreeing record). */
+  keepRosterAnswer: () => Promise<void>;
 }
 
 export function deliveryFor(
@@ -37,6 +59,7 @@ export function deliveryFor(
   state: OutboxItemState,
   isOnline: boolean,
   serverConfirms: boolean,
+  lastError: string | null = null,
 ): ResponseDelivery {
   if (outboxId === null) return 'sent';
   switch (state) {
@@ -46,7 +69,7 @@ export function deliveryFor(
     case 'FAILED':
       return 'queued';
     case 'REJECTED':
-      return 'refused';
+      return lastError === RESPONSE_NOT_RECORDED ? 'notRecorded' : 'refused';
     case 'SYNCED':
       return 'sent';
     case 'DISCARDED':
@@ -74,11 +97,15 @@ export function deliveryAnnouncement(answer: MyAnswer, delivery: ResponseDeliver
     case 'refused':
       return `The server refused your response, ${what}. Try again, or tell your officer by radio.`;
     case 'sent':
-      return `Your response has been sent: ${what}. The officer can see it.`;
+      return `Your response has been sent: ${what}.`;
     case 'unconfirmed':
       return `Your response, ${what}, is not confirmed by the server. Tap it again to resend.`;
     case 'unsaved':
       return `Your response, ${what}, could not be saved on this phone and was not sent. Tap it again, or tell your officer by radio.`;
+    case 'notRecorded':
+      return `Your change to ${what} did not reach the officer's roster. Send it again, or tell your officer by radio.`;
+    case 'disputed':
+      return `The officer's roster does not show your answer, ${what}. Send it again or keep what the roster shows.`;
   }
 }
 
@@ -87,6 +114,9 @@ export function deliveryAnnouncement(answer: MyAnswer, delivery: ResponseDeliver
  * the call shows it), seeded from the server roster when this device has none, and its honest
  * delivery state from the outbox.
  */
+/** Lets the roster's own write settle before it is read back to check an answer. */
+export const ROSTER_VERIFY_DELAY_MS = 1_500;
+
 export function useAlertResponse(
   repository: AlertsRepository,
   dispatchId: string,
@@ -103,8 +133,29 @@ export function useAlertResponse(
     /** The phone could not store it. */
     unsaved?: boolean;
   } | null>(null);
-  const [server, setServer] = useState<MyAnswer | null>(null);
+  const [server, setServer] = useState<{ answer: MyAnswer; checkedAfter: string | null } | null>(
+    null,
+  );
   const touchedRef = useRef(false);
+
+  const loadRoster = useCallback(
+    async (checkedAfter: string | null): Promise<void> => {
+      if (!memberId) return;
+      try {
+        const roster = await repository.getRoster(dispatchId);
+        const mine = roster.find((entry) => entry.memberId === memberId);
+        if (!mine || mine.ackStatus === 'UNANSWERED') return;
+        const etaMinutes =
+          mine.eta && mine.ackStatus !== 'NOT_RESPONDING'
+            ? Math.max(0, Math.round((mine.eta * 1000 - Date.now()) / 60_000))
+            : null;
+        setServer({ answer: { ackStatus: mine.ackStatus, etaMinutes }, checkedAfter });
+      } catch {
+        // The roster is a check only: without it the screen still shows this device's answer.
+      }
+    },
+    [dispatchId, memberId, repository],
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -120,33 +171,32 @@ export function useAlertResponse(
         fresh: false,
       });
     });
-    if (memberId) {
-      repository.getRoster(dispatchId).then(
-        (roster) => {
-          const mine = roster.find((entry) => entry.memberId === memberId);
-          if (cancelled || !mine || mine.ackStatus === 'UNANSWERED') return;
-          const etaMinutes =
-            mine.eta && mine.ackStatus !== 'NOT_RESPONDING'
-              ? Math.max(0, Math.round((mine.eta * 1000 - Date.now()) / 60_000))
-              : null;
-          setServer({ ackStatus: mine.ackStatus, etaMinutes });
-        },
-        () => {
-          // The roster is a seed only: without it the screen still shows this device's answer.
-        },
-      );
-    }
+    void loadRoster(null);
     return () => {
       cancelled = true;
     };
-  }, [dispatchId, memberId, repository]);
+  }, [dispatchId, loadRoster]);
 
   const outboxId = local && !local.saving ? local.outboxId : null;
   const item = useOutboxItem(outboxId);
-  const serverConfirms = Boolean(local && server && server.ackStatus === local.answer.ackStatus);
+  const serverConfirms = Boolean(
+    local && server && server.answer.ackStatus === local.answer.ackStatus,
+  );
+
+  // Review CR-3: a 200 does not prove the roster took the answer (the server can drop a change
+  // stamped in the same second as the previous one). Once an answer this visit is delivered,
+  // re-read the member's own roster row after a short settle and compare.
+  const verifiedRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (item.state !== 'SYNCED' || !outboxId || verifiedRef.current === outboxId) return;
+    verifiedRef.current = outboxId;
+    const timer = setTimeout(() => void loadRoster(outboxId), ROSTER_VERIFY_DELAY_MS);
+    return () => clearTimeout(timer);
+  }, [item.state, outboxId, loadRoster]);
 
   let answer: MyAnswer | null = null;
   let delivery: ResponseDelivery | null = null;
+  let rosterAnswer: MyAnswer | null = null;
   if (local?.unsaved) {
     answer = local.answer;
     delivery = 'unsaved';
@@ -154,24 +204,24 @@ export function useAlertResponse(
     answer = local.answer;
     delivery = isOnline ? 'sending' : 'queued';
   } else if (local) {
-    delivery = deliveryFor(local.outboxId, item.state, isOnline, serverConfirms);
-    // An answer saved in an earlier visit that is no longer in the queue has either been
-    // delivered or dropped; if the roster (fetched on open, so newer than it) says otherwise -
-    // answered again on another device, or this one never arrived - the roster is the truth,
-    // because it is what the officer sees.
+    answer = local.answer;
+    delivery = deliveryFor(local.outboxId, item.state, isOnline, serverConfirms, item.lastError);
     const stillQueued =
       item.state === 'QUEUED' ||
       item.state === 'SYNCING' ||
       item.state === 'FAILED' ||
       item.state === 'REJECTED';
-    if (!local.fresh && !stillQueued && server && !serverConfirms && local.outboxId !== null) {
-      answer = server;
-      delivery = 'sent';
-    } else {
-      answer = local.answer;
+    // The roster disagrees with an answer that has left the queue: either it was read after this
+    // visit's answer was delivered, or this is an answer from an earlier visit. Show both -
+    // never silently adopt one (the member may have answered on another device, or this answer
+    // never reached the roster).
+    const rosterIsCurrent = !local.fresh || server?.checkedAfter === local.outboxId;
+    if (!stillQueued && server && !serverConfirms && rosterIsCurrent && local.outboxId !== null) {
+      delivery = 'disputed';
+      rosterAnswer = server.answer;
     }
   } else if (server) {
-    answer = server;
+    answer = server.answer;
     delivery = 'sent';
   }
 
@@ -181,7 +231,14 @@ export function useAlertResponse(
     const message = deliveryAnnouncement(answer, delivery);
     if (message === lastAnnounced.current) return;
     lastAnnounced.current = message;
-    announce(message, delivery === 'queued' || delivery === 'refused' || delivery === 'unsaved');
+    announce(
+      message,
+      delivery === 'queued' ||
+        delivery === 'refused' ||
+        delivery === 'unsaved' ||
+        delivery === 'notRecorded' ||
+        delivery === 'disputed',
+    );
   }, [answer, delivery]);
 
   const respond = useCallback(
@@ -227,11 +284,18 @@ export function useAlertResponse(
     [dispatchId, repository],
   );
 
+  const keepRosterAnswer = useCallback(async () => {
+    await clearLocalAnswer(dispatchId);
+    setLocal(null);
+  }, [dispatchId]);
+
   return {
     answer,
     delivery,
     outboxId,
     lastError: item.lastError,
+    rosterAnswer,
     respond,
+    keepRosterAnswer,
   };
 }

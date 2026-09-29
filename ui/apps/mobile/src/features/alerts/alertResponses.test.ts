@@ -15,15 +15,18 @@ test('Responding and Direct to scene always carry an ETA - the server rejects th
 });
 
 test('the body carries the ETA as epoch seconds from the moment the member answered', () => {
-  expect(responseBody('RESPONDING', 10, 1_000_000)).toEqual({
+  expect(responseBody('RESPONDING', 10, 1_000_000, 'r-1')).toEqual({
     ackStatus: 'RESPONDING',
     eta: 1_000 + 600,
     assignedApparatusId: null,
+    clientAnswerId: 'r-1',
+    answeredAtMs: 1_000_000,
   });
-  expect(responseBody('NOT_RESPONDING', null, 1_000_000)).toEqual({
+  expect(responseBody('NOT_RESPONDING', null, 1_000_000, 'r-2')).toMatchObject({
     ackStatus: 'NOT_RESPONDING',
     eta: null,
-    assignedApparatusId: null,
+    clientAnswerId: 'r-2',
+    answeredAtMs: 1_000_000,
   });
 });
 

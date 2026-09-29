@@ -192,15 +192,60 @@ test('changing the answer sends the new one and drops the older one still waitin
   expect(await screen.findByText(/your response: responding/i)).toBeTruthy();
 });
 
-test('an answer given here earlier is replaced by the roster once the roster shows a different one (answered on another device)', async () => {
+test('when the roster disagrees with an answer given here earlier, both are shown - never silently swapped (review CR-3)', async () => {
   await renderScreen();
-  await answerResponding();
+  await tap(/^Not responding/);
   expect(await screen.findByText('Sent')).toBeTruthy();
 
-  roster = [{ memberId: 'MBR-1', ackStatus: 'NOT_RESPONDING', eta: null }];
+  roster = [{ memberId: 'MBR-1', ackStatus: 'RESPONDING', eta: null }];
   await reopen();
 
-  expect(await screen.findByText(/your response: not responding/i)).toBeTruthy();
+  expect(await screen.findByText('Roster shows something else')).toBeTruthy();
+  expect(
+    screen.getByText(
+      /roster shows: responding\. your last answer from this phone: not responding/i,
+    ),
+  ).toBeTruthy();
+  expect(screen.getByRole('button', { name: 'Send my answer again: Not responding' })).toBeTruthy();
+
+  await act(async () => {
+    fireEvent.press(screen.getByRole('button', { name: 'Keep what the roster shows: Responding' }));
+  });
+  await act(flush);
+  expect(await screen.findByText(/your response: responding/i)).toBeTruthy();
+  expect(screen.getByText('Sent')).toBeTruthy();
+});
+
+test('after an answer is delivered the roster is read back; a change the roster did not take is flagged (review CR-3)', async () => {
+  roster = [{ memberId: 'MBR-1', ackStatus: 'RESPONDING', eta: null }];
+  await renderScreen();
+  await tap(/^Not responding/); // server answers 200, roster still says Responding
+
+  expect(
+    await screen.findByText('Roster shows something else', {}, { timeout: 4_000 }),
+  ).toBeTruthy();
+});
+
+test('a 409 from the server reads "Not on the roster" with a resend', async () => {
+  postOutcome = async () => {
+    throw new ApiError({ type: 'about:blank', title: 'Conflict', status: 409, traceId: 't' });
+  };
+  await renderScreen();
+
+  await tap(/^Not responding/);
+
+  expect(await screen.findByText('Not on the roster')).toBeTruthy();
+  expect(
+    await screen.findByRole('button', { name: 'Send my answer again: Not responding' }),
+  ).toBeTruthy();
+});
+
+test('each answer carries a clientAnswerId and answeredAtMs', async () => {
+  await renderScreen();
+  await tap(/^Not responding/);
+
+  expect(posted[0]).toMatchObject({ clientAnswerId: expect.stringMatching(/^response-D-1-/) });
+  expect(typeof posted[0]!.answeredAtMs).toBe('number');
 });
 
 test('re-opening the call shows the answer already given, with its delivery state', async () => {

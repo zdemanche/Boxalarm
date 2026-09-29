@@ -433,7 +433,9 @@ export function AlertDetailScreen() {
             delivery={response.delivery}
             outboxId={response.outboxId}
             lastError={response.lastError}
+            rosterAnswer={response.rosterAnswer}
             onResend={() => respond(answer.ackStatus, answer.etaMinutes ?? undefined)}
+            onKeepRoster={() => void response.keepRosterAnswer()}
           />
         ) : null}
 

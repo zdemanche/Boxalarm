@@ -41,7 +41,7 @@ export function responseDeliveryCopy(delivery: ResponseDelivery): Copy {
       return {
         role: 'ok',
         chip: 'Sent',
-        detail: 'Received. The officer can see your answer.',
+        detail: 'Received by Boxalarm.',
         spoken: 'sent',
       };
     case 'unconfirmed':
@@ -58,6 +58,21 @@ export function responseDeliveryCopy(delivery: ResponseDelivery): Copy {
         detail: 'This phone could not save your answer, so nothing was sent. Tap it again.',
         spoken: 'not saved, not sent',
       };
+    case 'notRecorded':
+      return {
+        role: 'danger',
+        chip: 'Not on the roster',
+        detail:
+          "The server got this answer but did not put it on the officer's roster. Send it again, or tell your officer by radio.",
+        spoken: "not recorded on the officer's roster",
+      };
+    case 'disputed':
+      return {
+        role: 'danger',
+        chip: 'Roster shows something else',
+        detail: "The officer's roster does not show this answer.",
+        spoken: "the officer's roster shows a different answer",
+      };
   }
 }
 
@@ -66,7 +81,15 @@ interface ResponseStatusProps {
   delivery: ResponseDelivery;
   outboxId: string | null;
   lastError: string | null;
+  /** The roster's answer when it disagrees (delivery 'disputed'). */
+  rosterAnswer?: MyAnswer | null;
   onResend: () => void;
+  onKeepRoster?: () => void;
+}
+
+function describeAnswer(answer: MyAnswer): string {
+  const eta = answer.etaMinutes !== null ? `, ETA ${answer.etaMinutes} min` : '';
+  return `${ackStatusLabel(answer.ackStatus)}${eta}`;
 }
 
 /** "Your response" block: what was answered and exactly where it is - never "sent" while it is
@@ -76,12 +99,19 @@ export function ResponseStatus({
   delivery,
   outboxId,
   lastError,
+  rosterAnswer,
   onResend,
+  onKeepRoster,
 }: ResponseStatusProps) {
   const theme = useTheme();
   const copy = responseDeliveryCopy(delivery);
   const eta = answer.etaMinutes !== null ? ` · ETA ${answer.etaMinutes} min` : '';
-  const canResend = delivery === 'refused' || delivery === 'unconfirmed' || delivery === 'unsaved';
+  const canResend =
+    delivery === 'refused' ||
+    delivery === 'unconfirmed' ||
+    delivery === 'unsaved' ||
+    delivery === 'notRecorded' ||
+    delivery === 'disputed';
 
   return (
     <View accessibilityLiveRegion="polite" style={{ gap: spacing.sm }}>
@@ -91,6 +121,12 @@ export function ResponseStatus({
       </Text>
       <StatusChip status={copy.role} label={copy.chip} />
       <Text style={{ color: theme.fg, fontSize: typeScale.body.size }}>{copy.detail}</Text>
+      {delivery === 'disputed' && rosterAnswer ? (
+        <Text style={{ color: theme.fg, fontSize: typeScale.body.size, fontWeight: '700' }}>
+          Roster shows: {describeAnswer(rosterAnswer)}. Your last answer from this phone:{' '}
+          {describeAnswer(answer)}.
+        </Text>
+      ) : null}
       {delivery === 'queued' && lastError ? (
         <Text style={{ color: theme.fgMuted, fontSize: typeScale.body.size }}>
           Last attempt: {lastError}
@@ -116,6 +152,15 @@ export function ResponseStatus({
           size="alert"
           accessibilityLabel={`Send my answer again: ${ackStatusLabel(answer.ackStatus)}`}
           onPress={onResend}
+        />
+      ) : null}
+      {delivery === 'disputed' && rosterAnswer && onKeepRoster ? (
+        <Button
+          label={`Keep ${ackStatusLabel(rosterAnswer.ackStatus)}`}
+          variant="secondary"
+          size="alert"
+          accessibilityLabel={`Keep what the roster shows: ${ackStatusLabel(rosterAnswer.ackStatus)}`}
+          onPress={onKeepRoster}
         />
       ) : null}
     </View>
