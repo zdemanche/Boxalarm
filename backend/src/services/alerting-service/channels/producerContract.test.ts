@@ -168,6 +168,7 @@ const METADATA_ITEM: FakeItem = {
   crossStreets: 'Main & Elm',
   narrative: 'Smoke showing',
   isTest: false,
+  dispatchedAt: 1798000000,
   toneLadderStatus: 'ACTIVE',
   currentToneSequence: 1,
 };
@@ -198,8 +199,10 @@ function dispatchAlertInsertEvent(): DynamoDBStreamEvent {
             dispatchId: { S: DISPATCH_ID },
             deptId: { S: 'NICHOLS' },
             sourceSystem: { S: 'MANUAL' },
+            dispatchedAt: { N: '1798000000' },
             incidentType: { S: 'STRUCTURE_FIRE' },
             address: { S: '123 Main St' },
+            crossStreets: { S: 'Main & Elm' },
             isTest: { BOOL: false },
           },
         },
@@ -329,6 +332,8 @@ describe('alerting topic producer -> channel worker contract', () => {
         incidentType: 'STRUCTURE_FIRE',
         address: '123 Main St',
         isTest: false,
+        crossStreets: 'Main & Elm',
+        dispatchedAt: 1798000000,
       });
       const payload = (JSON.parse(publish.Message) as { payload: Record<string, unknown> }).payload;
       expect(payload).toMatchObject({ isTest: false, channelTier: 'primary' });
@@ -377,6 +382,8 @@ describe('alerting topic producer -> channel worker contract', () => {
         incidentType: 'STRUCTURE_FIRE',
         address: '123 Main St',
         isTest: false,
+        crossStreets: 'Main & Elm',
+        dispatchedAt: 1798000000,
       });
       const payload = (JSON.parse(publish.Message) as { payload: Record<string, unknown> }).payload;
       expect(payload).toMatchObject({ isTest: false, channelTier: 'escalation' });
@@ -410,6 +417,8 @@ describe('alerting topic producer -> channel worker contract', () => {
       incidentType: 'STRUCTURE_FIRE',
       address: '123 Main St',
       isTest: true,
+      crossStreets: 'Main & Elm',
+      dispatchedAt: 1798000000,
     });
     const payload = (JSON.parse(publish.Message) as { payload: Record<string, unknown> }).payload;
     expect(payload).toMatchObject({ isTest: true, channelTier: 'escalation' });
@@ -534,6 +543,8 @@ describe('alerting topic producer -> channel worker contract', () => {
       incidentType: 'STRUCTURE_FIRE',
       address: '123 Main St',
       isTest: false,
+      crossStreets: 'Main & Elm',
+      dispatchedAt: 1798000000,
     });
     expect(
       (JSON.parse(prompt.Message) as { payload: Record<string, unknown> }).payload,
@@ -558,6 +569,16 @@ describe('alerting topic producer -> channel worker contract', () => {
       toneSequence: 3,
       collapseKey: `${DISPATCH_ID}#3`,
     });
+    // The dispatch's own fields reach the push provider as their own keys (the app prefers
+    // them to parsing the body), for the page and the prompt alike.
+    for (const notification of pushed) {
+      expect(notification.alert).toEqual({
+        incidentType: 'STRUCTURE_FIRE',
+        address: '123 Main St',
+        crossStreets: 'Main & Elm',
+        dispatchedAt: 1798000000,
+      });
+    }
     // The officer's tone-3 push and the mutual-aid prompt are both delivered: neither guard
     // suppresses the other.
     expect(provider.calls().sort()).toEqual([

@@ -54,6 +54,7 @@ interface DispatchAlertRecord {
   readonly targetMemberId: string | undefined;
   readonly selfTestId: string | undefined;
   readonly channelsTested: readonly string[] | undefined;
+  readonly dispatchedAt: number | undefined;
 }
 
 interface FanOutTask {
@@ -146,6 +147,7 @@ function parseDispatchAlertRecord(record: DynamoDBRecord): DispatchAlertRecord |
     channelsTested: Array.isArray(item.channelsTested)
       ? (item.channelsTested as string[])
       : undefined,
+    dispatchedAt: typeof item.dispatchedAt === 'number' ? item.dispatchedAt : undefined,
   };
 }
 

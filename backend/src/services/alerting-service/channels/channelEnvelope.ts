@@ -17,6 +17,10 @@ export interface ChannelEnvelopePayload {
   readonly address: string;
   /** Self-test/canary dispatch — fan-out stamps it; anything but `true` is a real page. */
   readonly isTest: boolean;
+  /** Optional: the push worker sends them to the app as their own keys (pushPayload.ts). */
+  readonly crossStreets?: string | undefined;
+  /** DISPATCH_ALERT.dispatchedAt, epoch seconds. */
+  readonly dispatchedAt?: number | undefined;
 }
 
 export type ChannelTier = 'primary' | 'escalation';
@@ -33,6 +37,8 @@ export interface DispatchAlertText {
   readonly narrative?: string | undefined;
   readonly mapLink?: string | undefined;
   readonly sourceSystem?: string | undefined;
+  /** Epoch seconds the dispatch was received. */
+  readonly dispatchedAt?: number | undefined;
 }
 
 // Ingress rejects a dispatch without incidentType/address, so these only fire on a corrupt or
@@ -56,6 +62,7 @@ export function readDispatchAlertText(item: Record<string, unknown>): DispatchAl
     narrative: optional('narrative'),
     mapLink: optional('mapLink'),
     sourceSystem: optional('sourceSystem'),
+    dispatchedAt: typeof item.dispatchedAt === 'number' ? item.dispatchedAt : undefined,
   };
 }
 
@@ -72,6 +79,7 @@ export interface ChannelPagePayload extends ChannelEnvelopePayload {
   readonly narrative?: string | undefined;
   readonly mapLink?: string | undefined;
   readonly sourceSystem?: string | undefined;
+  readonly dispatchedAt?: number | undefined;
   readonly reason?: string | undefined;
 }
 
@@ -103,7 +111,20 @@ export function buildChannelPagePayload(input: ChannelPageInput): ChannelPagePay
     narrative: dispatch.narrative,
     mapLink: dispatch.mapLink,
     sourceSystem: dispatch.sourceSystem,
+    dispatchedAt: dispatch.dispatchedAt,
     ...(input.reason ? { reason: input.reason } : {}),
+  };
+}
+
+/** The optional alert fields a page may carry, kept only when well-typed. */
+function optionalAlertFields(
+  payload: Record<string, unknown> | undefined,
+): Pick<ChannelEnvelopePayload, 'crossStreets' | 'dispatchedAt'> {
+  const crossStreets = payload?.crossStreets;
+  const dispatchedAt = payload?.dispatchedAt;
+  return {
+    ...(typeof crossStreets === 'string' && crossStreets.trim().length > 0 ? { crossStreets } : {}),
+    ...(typeof dispatchedAt === 'number' && Number.isFinite(dispatchedAt) ? { dispatchedAt } : {}),
   };
 }
 
@@ -140,7 +161,17 @@ export function parseChannelEnvelope(
   assertNoDelimiter(dispatchId, 'dispatchId');
   assertNoDelimiter(memberId, 'memberId');
   const isTest = payload?.isTest === true;
-  return { deptId, dispatchId, memberId, channel, toneSequence, incidentType, address, isTest };
+  return {
+    deptId,
+    dispatchId,
+    memberId,
+    channel,
+    toneSequence,
+    incidentType,
+    address,
+    isTest,
+    ...optionalAlertFields(payload),
+  };
 }
 
 /**
@@ -158,6 +189,8 @@ export interface MutualAidPromptPayload {
   readonly address: string;
   /** Self-test/canary prompt — the push worker sends it with the sandbox credentials. */
   readonly isTest: boolean;
+  readonly crossStreets?: string | undefined;
+  readonly dispatchedAt?: number | undefined;
 }
 
 export type MutualAidPromptPagePayload = MutualAidPromptPayload;
@@ -181,6 +214,10 @@ export function buildMutualAidPromptPayload(
     incidentType: textOrFallback(input.dispatch.incidentType, INCIDENT_TYPE_FALLBACK),
     address: textOrFallback(input.dispatch.address, ADDRESS_FALLBACK),
     isTest: input.dispatch.isTest,
+    ...(input.dispatch.crossStreets ? { crossStreets: input.dispatch.crossStreets } : {}),
+    ...(input.dispatch.dispatchedAt !== undefined
+      ? { dispatchedAt: input.dispatch.dispatchedAt }
+      : {}),
   };
 }
 
@@ -224,6 +261,7 @@ export function parseMutualAidPromptEnvelope(
     incidentType,
     address,
     isTest: payload.isTest === true,
+    ...optionalAlertFields(payload),
   };
 }
 

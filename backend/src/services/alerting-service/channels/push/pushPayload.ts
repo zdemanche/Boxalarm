@@ -16,6 +16,48 @@ export interface PushNotification {
   readonly body: string;
   readonly idempotencyKey: string;
   readonly collapseKey: string;
+  /** The dispatch's own fields, sent as their own keys so the app need not parse `body`. */
+  readonly alert?: PushAlertFields | undefined;
+}
+
+export interface PushAlertFields {
+  readonly incidentType: string;
+  readonly address: string;
+  readonly crossStreets?: string | undefined;
+  /** Epoch seconds. */
+  readonly dispatchedAt?: number | undefined;
+}
+
+/**
+ * APNs refuses a payload over 4096 bytes (PayloadTooLarge) - a refusal that would retry into
+ * the DLQ and never page. Ingress does not cap the dispatch text, so every free-text value is
+ * bounded here in UTF-8 bytes; with these caps the largest possible payload stays well under
+ * 4 KB (pushPayload.test.ts checks the worst case).
+ */
+export const PUSH_TEXT_MAX_BYTES = {
+  title: 128,
+  body: 512,
+  incidentType: 128,
+  address: 256,
+  crossStreets: 256,
+} as const;
+
+/** Cuts `value` to at most `maxBytes` of UTF-8, never splitting a character. */
+export function truncateUtf8(value: string, maxBytes: number): string {
+  if (Buffer.byteLength(value) <= maxBytes) {
+    return value;
+  }
+  let bytes = 0;
+  let out = '';
+  for (const char of value) {
+    const size = Buffer.byteLength(char);
+    if (bytes + size > maxBytes - 3) {
+      return `${out}…`;
+    }
+    bytes += size;
+    out += char;
+  }
+  return out;
 }
 
 /**
@@ -74,6 +116,26 @@ export function apnsIdFor(idempotencyKey: string): string {
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 }
 
+/**
+ * `incidentType`, `address`, `crossStreets`, `dispatchedAt` as their own keys (APNs custom keys
+ * and FCM data): the app prefers them to parsing "{type} — {address}" out of `body`. Absent
+ * optional fields are omitted, never sent empty. FCM data values must be strings.
+ */
+function alertFields(notification: PushNotification): Record<string, string> {
+  const alert = notification.alert;
+  if (!alert) {
+    return {};
+  }
+  return {
+    incidentType: truncateUtf8(alert.incidentType, PUSH_TEXT_MAX_BYTES.incidentType),
+    address: truncateUtf8(alert.address, PUSH_TEXT_MAX_BYTES.address),
+    ...(alert.crossStreets
+      ? { crossStreets: truncateUtf8(alert.crossStreets, PUSH_TEXT_MAX_BYTES.crossStreets) }
+      : {}),
+    ...(alert.dispatchedAt !== undefined ? { dispatchedAt: String(alert.dispatchedAt) } : {}),
+  };
+}
+
 function routingFields(notification: PushNotification): Record<string, string> {
   return {
     category: PUSH_CATEGORY,
@@ -82,15 +144,29 @@ function routingFields(notification: PushNotification): Record<string, string> {
     ...(notification.toneSequence !== undefined
       ? { toneSequence: String(notification.toneSequence) }
       : {}),
+    ...alertFields(notification),
   };
+}
+
+function boundedTitle(notification: PushNotification): string {
+  return truncateUtf8(notification.title, PUSH_TEXT_MAX_BYTES.title);
+}
+
+function boundedBody(notification: PushNotification): string {
+  return truncateUtf8(notification.body, PUSH_TEXT_MAX_BYTES.body);
 }
 
 /**
  * Custom keys the app reads (pushRouting.ts / pushNotificationDisplay.ts): `category`,
- * `dispatchId`, `title`, `body`. FCM data values must be strings.
+ * `dispatchId`, `title`, `body`, and the dispatch's own fields (alertFields). FCM data values
+ * must be strings.
  */
 export function pushDataFields(notification: PushNotification): Record<string, string> {
-  return { ...routingFields(notification), title: notification.title, body: notification.body };
+  return {
+    ...routingFields(notification),
+    title: boundedTitle(notification),
+    body: boundedBody(notification),
+  };
 }
 
 /**
@@ -110,7 +186,7 @@ export function buildApnsPayload(
 ): Record<string, unknown> {
   return {
     aps: {
-      alert: { title: notification.title, body: notification.body },
+      alert: { title: boundedTitle(notification), body: boundedBody(notification) },
       sound:
         interruptionLevel === 'critical'
           ? { critical: 1, name: APNS_CRITICAL_SOUND_NAME, volume: 1 }

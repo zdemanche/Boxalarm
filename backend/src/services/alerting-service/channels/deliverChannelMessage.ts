@@ -21,6 +21,7 @@ import {
 } from './channelEnvelope.js';
 import { sendViaHttpProvider } from './httpProviderAdapter.js';
 import { resolvePushPlatform, sendPush, type PushSendResult } from './push/pushProviderAdapter.js';
+import type { PushAlertFields } from './push/pushPayload.js';
 import { resolvePushTargets, type PushDeviceTarget } from '../eligibility/resolvePushTarget.js';
 import { invalidatePushToken } from '../receipts/invalidatePushToken.js';
 import {
@@ -64,6 +65,8 @@ interface DeliverChannelMessageCommon {
   readonly message: string;
   /** Push notification title; the message is the body. SMS/voice send the message alone. */
   readonly title?: string;
+  /** Push only: the dispatch's own fields, sent to the app as their own keys. */
+  readonly alert?: PushAlertFields;
   readonly env: NodeJS.ProcessEnv;
   /** Self-test/canary message — sent with the sandbox provider credentials. */
   readonly isTest?: boolean;
@@ -402,6 +405,7 @@ function sendPushToDevice(
       idempotencyKey,
       // Per-tone notification identity (architecture §5.1 B4): tone 2 never collapses into 1.
       collapseKey: isPrompt ? `${dispatchId}#MUTUALAID` : `${dispatchId}#${params.toneSequence}`,
+      ...(params.alert ? { alert: params.alert } : {}),
     },
     platform,
     env,
@@ -620,6 +624,12 @@ export function createChannelWorkerHandler(
         contactChannels,
         env: process.env,
         isTest: envelope.isTest,
+        alert: {
+          incidentType: envelope.incidentType,
+          address: envelope.address,
+          ...(envelope.crossStreets ? { crossStreets: envelope.crossStreets } : {}),
+          ...(envelope.dispatchedAt !== undefined ? { dispatchedAt: envelope.dispatchedAt } : {}),
+        },
       };
       const incidentText = `${envelope.incidentType} — ${envelope.address}`;
       await deliverChannelMessage(
