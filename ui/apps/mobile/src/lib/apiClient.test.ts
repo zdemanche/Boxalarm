@@ -66,3 +66,22 @@ test('a 4xx still surfaces as ApiError with the problem status', async () => {
     ApiError,
   );
 });
+
+test('a token fetch that never answers fails with ApiTimeoutError instead of hanging the request', async () => {
+  jest.useFakeTimers();
+  const fetchSpy = jest.fn();
+  globalThis.fetch = fetchSpy as unknown as typeof fetch;
+  const hangingTokens = {
+    getAccessToken: () => new Promise<string | null>(() => {}),
+    renewSilently: async () => null,
+  };
+
+  const pending = apiRequest('x', hangingTokens, {
+    apiBaseUrl: 'https://api.test',
+    timeoutMs: 2_000,
+  });
+  const assertion = expect(pending).rejects.toBeInstanceOf(ApiTimeoutError);
+  await jest.advanceTimersByTimeAsync(2_000);
+  await assertion;
+  expect(fetchSpy).not.toHaveBeenCalled();
+});

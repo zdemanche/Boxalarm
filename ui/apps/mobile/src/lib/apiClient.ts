@@ -61,6 +61,23 @@ async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs: numbe
   }
 }
 
+/**
+ * Token acquisition can hang too (a keychain read, or a refresh against an unreachable identity
+ * provider) - bounded by the same limit as the request, so the alert screen or a headless answer
+ * never waits on it forever (review m8).
+ */
+async function withTimeout<T>(work: Promise<T>, timeoutMs: number): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  const timeout = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(() => reject(new ApiTimeoutError(timeoutMs)), timeoutMs);
+  });
+  try {
+    return await Promise.race([work, timeout]);
+  } finally {
+    if (timer !== null) clearTimeout(timer);
+  }
+}
+
 export async function apiRequest(
   path: string,
   tokens: AuthTokenSource,
@@ -80,10 +97,10 @@ export async function apiRequest(
       timeoutMs,
     );
 
-  let response = await send(await tokens.getAccessToken());
+  let response = await send(await withTimeout(tokens.getAccessToken(), timeoutMs));
 
   if (response.status === 401) {
-    const renewedToken = await tokens.renewSilently();
+    const renewedToken = await withTimeout(tokens.renewSilently(), timeoutMs);
     if (renewedToken) {
       response = await send(renewedToken);
     }
