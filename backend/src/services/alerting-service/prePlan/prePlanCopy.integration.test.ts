@@ -145,7 +145,11 @@ describe('pre-plan + hydrant copies -> dispatch detail (real DynamoDB with the a
     await handler(sqsEvent('inspections.hydrant.updated', payload, eventTime));
   }
 
-  async function putDispatch(dispatchId: string, address: string) {
+  async function putDispatch(
+    dispatchId: string,
+    address: string,
+    extra: Record<string, unknown> = {},
+  ) {
     await client.send(
       new PutCommand({
         TableName: TABLE_NAME,
@@ -158,6 +162,7 @@ describe('pre-plan + hydrant copies -> dispatch detail (real DynamoDB with the a
           address,
           crossStreets: 'Main & Elm',
           narrative: 'Smoke showing',
+          ...extra,
         },
       }),
     );
@@ -172,9 +177,14 @@ describe('pre-plan + hydrant copies -> dispatch detail (real DynamoDB with the a
     return JSON.parse((result as { body: string }).body) as {
       address: string;
       prePlan: {
+        matchType?: string;
+        matchedAddress?: string;
+        unit?: string | null;
+        distanceMeters?: number;
         summary?: string;
         hazards: string[];
         utilityShutoffs: unknown[];
+        candidates?: Array<{ occupancyId: string; unit: string | null }>;
       } | null;
       nearestHydrants?: Array<{
         hydrantId: string;
@@ -283,5 +293,123 @@ describe('pre-plan + hydrant copies -> dispatch detail (real DynamoDB with the a
   it('shows no pre-plan for an address with none on file', async () => {
     await putDispatch('NICHOLS-MANUAL-3', '999 Nowhere Ln');
     expect((await detail('NICHOLS-MANUAL-3')).prePlan).toBeNull();
+  });
+
+  describe('matching through the real keys (review minor 12)', () => {
+    const plan = (occupancyId: string, address: string, extra: Record<string, unknown> = {}) =>
+      consumePrePlan({
+        deptId: 'NICHOLS',
+        occupancyId,
+        summary: `Plan for ${address}`,
+        address,
+        hazards: [`HAZARD-${occupancyId}`],
+        utilityShutoffs: [],
+        ...extra,
+      });
+    let n = 0;
+    const lookup = async (address: string, extra: Record<string, unknown> = {}) => {
+      n += 1;
+      await putDispatch(`NICHOLS-MATCH-${n}`, address, extra);
+      return detail(`NICHOLS-MATCH-${n}`);
+    };
+
+    it('false positives stay apart: 12 vs 12A, designator-named streets, two towns', async () => {
+      await plan('OCC-12', '12 Oak Ln');
+      await plan('OCC-LOT', '100 Lot Rd');
+      await plan('OCC-TRUMBULL', '5 Main St, Trumbull, CT 06611');
+
+      expect((await lookup('12A Oak Ln')).prePlan).toBeNull();
+      expect((await lookup('12 Oak Lane')).prePlan).toMatchObject({
+        matchType: 'ADDRESS',
+        hazards: ['HAZARD-OCC-12'],
+      });
+      expect((await lookup('100 Space Ln')).prePlan).toBeNull();
+      expect((await lookup('100 Lot Road')).prePlan).toMatchObject({ matchType: 'ADDRESS' });
+      expect((await lookup('5 Main St, Bridgeport, CT')).prePlan).toBeNull();
+      expect((await lookup('5 MAIN ST TRUMBULL CT 06611')).prePlan).toMatchObject({
+        matchType: 'ADDRESS',
+        hazards: ['HAZARD-OCC-TRUMBULL'],
+      });
+    });
+
+    it('unit tie-break: exact unit, else every unit plan as CANDIDATES — never the newest', async () => {
+      await plan('OCC-A', '40 Oak Ave Unit A');
+      await plan('OCC-B', '40 Oak Ave Unit B');
+
+      expect((await lookup('40 Oak Avenue Unit B')).prePlan).toMatchObject({
+        matchType: 'ADDRESS',
+        unit: 'B',
+        hazards: ['HAZARD-OCC-B'],
+      });
+      for (const address of ['40 Oak Ave', '40 Oak Ave Unit C']) {
+        const { prePlan } = await lookup(address);
+        expect(prePlan?.matchType).toBe('CANDIDATES');
+        expect(prePlan?.hazards).toEqual([]);
+        expect(prePlan?.candidates?.map((c) => [c.occupancyId, c.unit])).toEqual([
+          ['OCC-A', 'A'],
+          ['OCC-B', 'B'],
+        ]);
+      }
+    });
+
+    it('coordinate fallback only without a usable street address, flagged NEARBY with distance', async () => {
+      const birch = { latitude: 41.31, longitude: -73.15 };
+      await plan('OCC-BIRCH', '9 Birch Rd', birch);
+      const thirtyMetresNorth = {
+        latitude: birch.latitude + 30 / 111_320,
+        longitude: birch.longitude,
+      };
+
+      expect((await lookup('I-95 NB near exit 27', thirtyMetresNorth)).prePlan).toMatchObject({
+        matchType: 'NEARBY',
+        matchedAddress: '9 Birch Rd',
+        distanceMeters: 30,
+      });
+      // A usable address that matches nothing never borrows the neighbour's plan.
+      expect((await lookup('11 Birch Rd', thirtyMetresNorth)).prePlan).toBeNull();
+    });
+
+    it("cross-department isolation: another department's pre-plan and hydrants never surface", async () => {
+      const elm = { latitude: 41.35, longitude: -73.25 };
+      await consumePrePlan({
+        deptId: 'OTHERFD',
+        occupancyId: 'OCC-OTHER',
+        summary: 'Other department',
+        address: '77 Elm St',
+        hazards: ['NOT-OURS'],
+        utilityShutoffs: [],
+        ...elm,
+      });
+      await consumeHydrant({
+        deptId: 'OTHERFD',
+        hydrantId: 'HYD-OTHER',
+        status: 'IN_SERVICE',
+        ...elm,
+      });
+
+      const body = await lookup('77 Elm St', elm);
+
+      expect(body.prePlan).toBeNull();
+      expect(body.nearestHydrants ?? []).toEqual([]);
+    });
+
+    it('ring widening: a rural call still finds a hydrant ~2 km away', async () => {
+      const rural = { latitude: 41.4, longitude: -73.4 };
+      await consumeHydrant({
+        deptId: 'NICHOLS',
+        hydrantId: 'HYD-RURAL',
+        status: 'IN_SERVICE',
+        latitude: rural.latitude + 2000 / 111_320,
+        longitude: rural.longitude,
+      });
+
+      const body = await lookup('Route 111 wooded area', rural);
+
+      expect(body.prePlan).toBeNull();
+      expect(body.nearestHydrants?.map((h) => h.hydrantId)).toEqual(['HYD-RURAL']);
+      // Beyond the geohash6 ring (~0.6 km): only the widened geohash5 ring reaches it.
+      expect(body.nearestHydrants?.[0]?.distanceMeters).toBeGreaterThan(1990);
+      expect(body.nearestHydrants?.[0]?.distanceMeters).toBeLessThan(2010);
+    });
   });
 });
