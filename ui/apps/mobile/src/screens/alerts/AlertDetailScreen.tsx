@@ -1,6 +1,6 @@
 import { palette, radius, spacing, touchTarget, typography } from '@boxalarm/design-tokens';
 import { useNavigation, useRoute, type NavigationProp } from '@react-navigation/native';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   Linking,
   ScrollView,
@@ -14,6 +14,8 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useOptionalAuth } from '../../auth/AuthContext';
 import { useAlertsRepository } from '../../features/alerts/apiAlertsRepository';
 import type { AlertPayload } from '../../features/alerts/alertPayload';
+import { setAlertShowsOverLockScreen } from '../../features/alerts/alertReadiness';
+import { silenceDispatchNotification } from '../../features/alerts/pushNotificationDisplay';
 import { PrePlanPanel } from '../../features/alerts/PrePlanPanel';
 import type { ResponseAnswer } from '../../features/alerts/alertResponses';
 import { ResponseStatus } from '../../features/alerts/ResponseStatus';
@@ -60,6 +62,19 @@ export function AlertDetailScreen() {
   const { isOnline } = useOptionalConnectivity();
   const response = useAlertResponse(repository, dispatchId, auth?.memberId ?? null, isOnline);
   const [respondState, setRespondState] = useState<RespondUiState>('choosing');
+
+  // The call is open: stop the looping alarm. Leaving the alert (another tab, back, a pushed
+  // screen) ends its show-over-lock-screen, so the rest of the app is not open on a locked phone.
+  useEffect(() => {
+    void silenceDispatchNotification(dispatchId);
+    const unsubscribeBlur = navigation.addListener?.('blur', () =>
+      setAlertShowsOverLockScreen(false),
+    );
+    return () => {
+      unsubscribeBlur?.();
+      setAlertShowsOverLockScreen(false);
+    };
+  }, [dispatchId, navigation]);
   const [pendingAckStatus, setPendingAckStatus] = useState<ResponseAnswer | null>(null);
   const [eta, setEta] = useState('');
 

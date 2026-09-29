@@ -6,6 +6,7 @@ import {
   displayPushNotification,
   handleBackgroundPushMessage,
   handleForegroundPushMessage,
+  silenceDispatchNotification,
 } from './pushNotificationDisplay';
 
 const displayNotification = notifee.displayNotification as jest.Mock;
@@ -33,6 +34,13 @@ test('a dispatch push displays on the critical channel with a full-screen action
   const call = displayNotification.mock.calls[0][0];
   expect(call.android.channelId).toBe(CRITICAL_CHANNEL_ID);
   expect(call.android.fullScreenAction).toBeDefined();
+  // Loud until acknowledged: alarm category, the channel sound looping, not auto-cancelled.
+  expect(call.android).toMatchObject({
+    category: 'alarm',
+    loopSound: true,
+    autoCancel: false,
+    visibility: 1,
+  });
   // One notification per call, carrying the page so a tap opens the address with no fetch.
   expect(call.id).toBe('dispatch:DISP-1');
   expect(call.data).toEqual({
@@ -146,4 +154,14 @@ test('foreground handler still displays the dispatch when channel creation fails
 
   expect(displayNotification).toHaveBeenCalledTimes(1);
   expect(consoleError).toHaveBeenCalled();
+});
+
+test('opening the call silences its looping notification', async () => {
+  Platform.OS = 'android';
+  const cancel = notifee.cancelDisplayedNotification as jest.Mock;
+  cancel.mockClear();
+
+  await silenceDispatchNotification('DISP-1');
+
+  expect(cancel).toHaveBeenCalledWith('dispatch:DISP-1');
 });

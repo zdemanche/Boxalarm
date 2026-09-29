@@ -1,4 +1,8 @@
-import notifee, { AndroidImportance } from '@notifee/react-native';
+import notifee, {
+  AndroidCategory,
+  AndroidImportance,
+  AndroidVisibility,
+} from '@notifee/react-native';
 import { Platform } from 'react-native';
 import {
   alertPayloadFromPushData,
@@ -7,8 +11,8 @@ import {
 } from './alertPayload';
 import {
   categoryFromPushData,
-  channelForCategory,
   CRITICAL_CHANNEL_ID,
+  DEFAULT_CHANNEL_ID,
   ensureNotificationChannels,
 } from './pushChannel';
 
@@ -26,6 +30,30 @@ export function dispatchNotificationId(dispatchId: string): string {
   return `dispatch:${dispatchId}`;
 }
 
+/**
+ * The critical channel to post a page on, created if needed. Posting to a channel that does not
+ * exist is silently dropped by Android, and the channel id changes when DND access is granted
+ * (pushChannel.ts), so this runs before every page rather than trusting app start. Never throws.
+ */
+async function criticalChannel(): Promise<string> {
+  try {
+    return await ensureNotificationChannels();
+  } catch (error) {
+    console.error('[push] ensuring the critical channel before a page failed', error);
+    return CRITICAL_CHANNEL_ID;
+  }
+}
+
+/** Stops a page ringing: the member has the call open (or answered it from the notification). */
+export async function silenceDispatchNotification(dispatchId: string): Promise<void> {
+  if (Platform.OS !== 'android') return;
+  try {
+    await notifee.cancelDisplayedNotification(dispatchNotificationId(dispatchId));
+  } catch (error) {
+    console.warn('[push] silencing the page notification failed', error);
+  }
+}
+
 export async function displayPushNotification(
   data: PushMessageData | undefined,
   receivedAt: number = Date.now(),
@@ -34,7 +62,7 @@ export async function displayPushNotification(
 
   const category = categoryFromPushData(data);
   const isCritical = category === 'dispatch';
-  const channelId = channelForCategory(category);
+  const channelId = isCritical ? await criticalChannel() : DEFAULT_CHANNEL_ID;
   // The page travels with the notification, so a tap opens the address with no fetch.
   const payload = isCritical ? alertPayloadFromPushData(data, receivedAt) : null;
 
@@ -51,7 +79,19 @@ export async function displayPushNotification(
       channelId,
       importance: isCritical ? AndroidImportance.HIGH : AndroidImportance.DEFAULT,
       pressAction: { id: 'default' },
-      ...(isCritical ? { fullScreenAction: { id: 'default' } } : {}),
+      ...(isCritical
+        ? {
+            fullScreenAction: { id: 'default' },
+            // Alarm category: most OEMs let alarms through Do Not Disturb by default.
+            category: AndroidCategory.ALARM,
+            // FLAG_INSISTENT: the channel's alarm sound repeats until the member opens,
+            // answers or dismisses the page - one chime does not wake a sleeping volunteer.
+            loopSound: true,
+            autoCancel: false,
+            lightUpScreen: true,
+            visibility: AndroidVisibility.PUBLIC,
+          }
+        : {}),
     },
   });
 }
@@ -91,7 +131,7 @@ export async function handleBackgroundPushMessage(
   if (categoryFromPushData(data) !== 'dispatch') return;
 
   try {
-    await ensureNotificationChannels();
+    const channelId = await ensureNotificationChannels();
     await notifee.displayNotification({
       title: 'Dispatch alert',
       body: 'Open Boxalarm for details.',
@@ -100,9 +140,11 @@ export async function handleBackgroundPushMessage(
         category: 'dispatch',
       },
       android: {
-        channelId: CRITICAL_CHANNEL_ID,
+        channelId,
         importance: AndroidImportance.HIGH,
         pressAction: { id: 'default' },
+        category: AndroidCategory.ALARM,
+        loopSound: true,
       },
     });
   } catch (error) {
