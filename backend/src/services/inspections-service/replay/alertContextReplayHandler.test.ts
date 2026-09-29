@@ -121,7 +121,7 @@ describe('alert-context replay (post-deploy backfill / normalizer replay)', () =
       deptId: 'NICHOLS',
       dryRun: false,
       prePlans: { emitted: 1, skippedConcurrentEdit: 0, skippedArchived: 0, skippedNoPrePlan: 1 },
-      hydrants: { emitted: 2, skippedConcurrentEdit: 0, skippedArchived: 0 },
+      hydrants: { emitted: 2, skippedConcurrentEdit: 0, skippedArchived: 0, skippedNoUpdatedAt: 0 },
     });
     const events = writes.map((write) => write.outbox as Record<string, unknown>);
     expect(events.map((event) => event.eventType)).toEqual([
@@ -175,7 +175,12 @@ describe('alert-context replay (post-deploy backfill / normalizer replay)', () =
 
     const result = await createAlertContextReplayHandler(client)({ deptId: 'NICHOLS' });
 
-    expect(result.hydrants).toEqual({ emitted: 1, skippedConcurrentEdit: 1, skippedArchived: 0 });
+    expect(result.hydrants).toEqual({
+      emitted: 1,
+      skippedConcurrentEdit: 1,
+      skippedArchived: 0,
+      skippedNoUpdatedAt: 0,
+    });
     expect(writes).toHaveLength(2);
   });
 
@@ -224,7 +229,12 @@ describe('alert-context replay (post-deploy backfill / normalizer replay)', () =
 
       const result = await createAlertContextReplayHandler(client)({ deptId: 'NICHOLS' });
 
-      expect(result.hydrants).toEqual({ emitted: 1, skippedConcurrentEdit: 0, skippedArchived: 1 });
+      expect(result.hydrants).toEqual({
+        emitted: 1,
+        skippedConcurrentEdit: 0,
+        skippedArchived: 1,
+        skippedNoUpdatedAt: 0,
+      });
       expect(writes[0]?.archiveCheck).toEqual(
         expect.objectContaining({
           Key: { pk: 'DEPT#NICHOLS#OCCUPANCY#OCC-1', sk: 'METADATA' },
@@ -261,5 +271,19 @@ describe('alert-context replay (post-deploy backfill / normalizer replay)', () =
     const result = await createAlertContextReplayHandler(client)({ deptId: 'NICHOLS' });
 
     expect(result.prePlans).toMatchObject({ emitted: 0, skippedArchived: 1 });
+  });
+
+  it('N5: counts (never silently drops) a hydrant with no updatedAt', async () => {
+    const { createAlertContextReplayHandler } = await import('./alertContextReplayHandler.js');
+    const original = HYDRANTS['HYD-2'];
+    HYDRANTS['HYD-2'] = { hydrantId: 'HYD-2', latitude: 41.25, longitude: -73.21 };
+    try {
+      const result = await createAlertContextReplayHandler(fakeTable().client)({
+        deptId: 'NICHOLS',
+      });
+      expect(result.hydrants).toMatchObject({ emitted: 1, skippedNoUpdatedAt: 1 });
+    } finally {
+      HYDRANTS['HYD-2'] = original!;
+    }
   });
 });

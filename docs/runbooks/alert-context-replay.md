@@ -19,12 +19,12 @@ With credentials for the stack's account:
 ```sh
 # 1. What would be emitted (writes nothing):
 aws lambda invoke --function-name boxalarm-<env>-inspections-alert-context-replay \
-  --cli-binary-format raw-in-base64-out \
+  --cli-binary-format raw-in-base64-out --cli-read-timeout 0 \
   --payload '{"deptId":"<deptId>","dryRun":true}' /dev/stdout
 
 # 2. Emit:
 aws lambda invoke --function-name boxalarm-<env>-inspections-alert-context-replay \
-  --cli-binary-format raw-in-base64-out \
+  --cli-binary-format raw-in-base64-out --cli-read-timeout 0 \
   --payload '{"deptId":"<deptId>"}' /dev/stdout
 ```
 
@@ -33,8 +33,10 @@ The result counts what it did:
 ```json
 { "deptId": "…", "dryRun": false,
   "prePlans": { "emitted": 41, "skippedConcurrentEdit": 0, "skippedArchived": 0, "skippedNoPrePlan": 12 },
-  "hydrants": { "emitted": 310, "skippedConcurrentEdit": 0, "skippedArchived": 0 } }
+  "hydrants": { "emitted": 310, "skippedConcurrentEdit": 0, "skippedArchived": 0, "skippedNoUpdatedAt": 0 } }
 ```
+
+`--cli-read-timeout 0` matters. A run can take up to 15 minutes, and the CLI's default 60-second read timeout would otherwise make it retry the invoke. That retry is throttled, because reserved concurrency is 1, and the throttle error is confusing while the first run continues.
 
 Run it once per department. The timeout is 15 minutes. If a very large department times out, rerun it: it is idempotent (see below).
 
@@ -43,7 +45,7 @@ Run it once per department. The timeout is 15 minutes. If a very large departmen
 - **Idempotent.** Each event carries the item's full current state, and the consumers upsert. A second run rewrites the same copies.
 - **Race-free.** Each outbox row is written in a transaction with a `ConditionCheck` that the source row's `updatedAt` is still the value the replay read. If an inspector edits the item in between, that item is skipped (`skippedConcurrentEdit`). The edit already emitted its own newer event.
 - **Archived items are not replayed.** Archiving an occupancy or hydrant (`POST /api/v1/inspections/occupancies/{id}/archive`, `…/hydrants/{hydrantId}/archive`, CHIEF/ADMIN) takes it off the department list partitions the replay walks. Its alerting copy keeps the tombstone written by the archive event, and the consumers never overwrite a tombstone. A record archived while a run is in progress is caught too: every replay write is conditioned on the record (and, for a pre-plan, its occupancy) not being archived, and is counted as `skippedArchived`.
-- **Scope.** LOB plane only. The function can read the platform table and put `OUTBOX_ENTRY` rows. It holds no Update/Delete permission and nothing on the alerting table. The events reach the alerting plane the normal way (outbox drain, platform bus, `PrePlanCopies` queues).
+- **Scope.** LOB plane only. The function can read the platform table. Its only write is `PutItem`, limited by `dynamodb:LeadingKeys` to the `DEPT#*#OUTBOX` partitions, and the audit-row deny is attached. It holds no Update/Delete permission and nothing on the alerting table. The events reach the alerting plane the normal way (outbox drain, platform bus, `PrePlanCopies` queues).
 
 ## Check it worked
 

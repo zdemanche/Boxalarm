@@ -55,14 +55,20 @@ describe("AlertContextReplay (post-deploy backfill of the alerting pre-plan/hydr
     await build();
     const statements = statementsForRole(FN);
     expect(isGranted(statements, "dynamodb:Query", `${TABLE}/index/GSI3`)).toBe(true);
-    for (const action of [
-      "dynamodb:Query",
-      "dynamodb:GetItem",
-      "dynamodb:ConditionCheckItem",
-      "dynamodb:PutItem",
-    ]) {
+    for (const action of ["dynamodb:Query", "dynamodb:GetItem", "dynamodb:ConditionCheckItem"]) {
       expect(isGranted(statements, action, TABLE)).toBe(true);
     }
+    // N5: PutItem only on the outbox partitions, and the audit-row deny attached.
+    const put = statements.filter(
+      (s) => s.Effect === "Allow" && [s.Action].flat().includes("dynamodb:PutItem"),
+    );
+    expect(put).toHaveLength(1);
+    expect(put[0]?.Condition).toEqual({
+      "ForAllValues:StringLike": { "dynamodb:LeadingKeys": ["DEPT#*#OUTBOX"] },
+    });
+    expect(statements.some((s) => s.Effect === "Deny" && s.Sid === "DenyAuditMutations")).toBe(
+      true,
+    );
     for (const action of ["dynamodb:UpdateItem", "dynamodb:DeleteItem", "dynamodb:Scan"]) {
       expect(isGranted(statements, action, () => true)).toBe(false);
     }

@@ -4,6 +4,7 @@ import { ServiceLogGroup } from "../observability/service-log-group";
 import { requireEnv } from "../shared/env";
 import { lambdaCode, LAMBDA_HANDLER } from "../shared/lambda-code";
 import { dynamoGrant } from "./shared";
+import { auditMutationDenyStatement } from "../data/platform-table";
 
 export const ALERT_CONTEXT_REPLAY_TIMEOUT_SECONDS = 900;
 
@@ -44,20 +45,26 @@ export class AlertContextReplay extends pulumi.ComponentResource {
         timeout: ALERT_CONTEXT_REPLAY_TIMEOUT_SECONDS,
         // One run at a time: two concurrent replays would only duplicate events.
         reservedConcurrentExecutions: 1,
-        additionalPolicyStatements: pulumi
-          .output(args.platformTableArn)
-          .apply((tableArn) => [
-            dynamoGrant(
-              "ReplayListQuery",
-              ["dynamodb:Query"],
-              [tableArn, `${tableArn}/index/GSI3`],
-            ),
-            dynamoGrant(
-              "ReplayReadAndEmit",
-              ["dynamodb:GetItem", "dynamodb:ConditionCheckItem", "dynamodb:PutItem"],
-              [tableArn],
-            ),
-          ]),
+        additionalPolicyStatements: pulumi.output(args.platformTableArn).apply((tableArn) => [
+          dynamoGrant("ReplayListQuery", ["dynamodb:Query"], [tableArn, `${tableArn}/index/GSI3`]),
+          dynamoGrant(
+            "ReplayReadAndCheck",
+            ["dynamodb:GetItem", "dynamodb:ConditionCheckItem"],
+            [tableArn],
+          ),
+          {
+            // The only write: OUTBOX_ENTRY rows. PutItem overwrites, so it is confined to the
+            // outbox partitions and can never replace a pre-plan, hydrant or audit row.
+            Sid: "ReplayOutboxPutOnly",
+            Effect: "Allow" as const,
+            Action: ["dynamodb:PutItem"],
+            Resource: tableArn,
+            Condition: {
+              "ForAllValues:StringLike": { "dynamodb:LeadingKeys": ["DEPT#*#OUTBOX"] },
+            },
+          },
+          auditMutationDenyStatement(tableArn),
+        ]),
       },
       { parent: this },
     );

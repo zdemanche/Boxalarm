@@ -45,6 +45,8 @@ export interface ReplayCounts {
   /** Archived (or archived during the run): never re-emitted, so a tombstone is never undone. */
   readonly skippedArchived: number;
   readonly skippedNoPrePlan?: number;
+  /** Hydrant rows with no numeric updatedAt: cannot be replayed race-free, so they are counted. */
+  readonly skippedNoUpdatedAt?: number;
 }
 
 export interface AlertContextReplayResult {
@@ -201,12 +203,15 @@ async function replayHydrants(
   let emitted = 0;
   let skippedConcurrentEdit = 0;
   let skippedArchived = 0;
+  let skippedNoUpdatedAt = 0;
   for (const hydrantId of await listIds(doc, tableName, deptId, 'HYDRANT', 'hydrantId')) {
     const pk = buildDeptScopedPk(deptId, 'HYDRANT', hydrantId);
     const { Item: hydrant } = await doc.send(
       new GetCommand({ TableName: tableName, Key: { pk, sk: HYDRANT_SK }, ConsistentRead: true }),
     );
-    if (!hydrant || typeof hydrant.updatedAt !== 'number') {
+    if (!hydrant) continue;
+    if (typeof hydrant.updatedAt !== 'number') {
+      skippedNoUpdatedAt += 1;
       continue;
     }
     if (hydrant.archivedAt !== undefined) {
@@ -232,7 +237,7 @@ async function replayHydrants(
     if (outcome === 'emitted') emitted += 1;
     else skippedConcurrentEdit += 1;
   }
-  return { emitted, skippedConcurrentEdit, skippedArchived };
+  return { emitted, skippedConcurrentEdit, skippedArchived, skippedNoUpdatedAt };
 }
 
 export function createAlertContextReplayHandler(docClient?: DynamoDBDocumentClient) {
