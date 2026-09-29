@@ -162,28 +162,40 @@ export const handler: Handler<
   // M1: refuse the access token the lost device already holds - it is verified offline and
   // would otherwise keep working for up to an hour. The member-wide marker costs the other
   // devices nothing extra: the global sign-out below already ends every refresh token.
-  try {
-    await writeRevocationMarker(getAccessStoreClient(), tableName, {
-      deptId: authorizerContext.deptId,
-      sub: memberId,
-      reason: 'DEVICE_LOSS',
-      actorId: authorizerContext.sub,
-    });
-  } catch (error) {
-    console.error(
-      JSON.stringify({
-        event: 'deviceLossRevocation.markerFailed',
-        message: error instanceof Error ? error.message : undefined,
-        memberId,
-        traceId,
-      }),
-    );
-    return problemDetails(
+  // Written before the sign-out AND again after it (review minor 4): a refresh that lands
+  // between the first write and the sign-out, a second later, mints a token with
+  // iat > revokedAt that would otherwise live for an hour; device loss has no disable or
+  // pre-token status check to catch it.
+  const writeMarker = async (): Promise<boolean> => {
+    try {
+      await writeRevocationMarker(getAccessStoreClient(), tableName, {
+        deptId: authorizerContext.deptId,
+        sub: memberId,
+        reason: 'DEVICE_LOSS',
+        actorId: authorizerContext.sub,
+      });
+      return true;
+    } catch (error) {
+      console.error(
+        JSON.stringify({
+          event: 'deviceLossRevocation.markerFailed',
+          message: error instanceof Error ? error.message : undefined,
+          memberId,
+          traceId,
+        }),
+      );
+      return false;
+    }
+  };
+  const unavailable = () =>
+    problemDetails(
       503,
       'Service Unavailable',
       'Session revocation is temporarily unavailable.',
       traceId,
     );
+  if (!(await writeMarker())) {
+    return unavailable();
   }
 
   // M2 - per-device revocation is not available, so this is a member-wide sign-out. The
@@ -215,6 +227,11 @@ export const handler: Handler<
       'Session revocation is temporarily unavailable.',
       traceId,
     );
+  }
+
+  // Sessions are already revoked; the whole call is idempotent, so a retry finishes it.
+  if (!(await writeMarker())) {
+    return unavailable();
   }
 
   // M2: the lost phone must stop showing dispatches on its lock screen.

@@ -107,7 +107,8 @@ describe('deviceLossHandler', () => {
     )) as APIGatewayProxyStructuredResultV2;
 
     expect(result.statusCode).toBe(202);
-    expect(order).toEqual(['marker', 'signOut']);
+    // Review minor 4: marked again after the sign-out, so a refresh racing it cannot survive.
+    expect(order).toEqual(['marker', 'signOut', 'marker']);
     expect(writeRevocationMarker).toHaveBeenCalledWith({}, 'platform-table', {
       deptId: 'dept-001',
       sub: 'mbr-102',

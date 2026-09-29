@@ -93,20 +93,28 @@ async function resetCredentials(
   }
 
   // M1: refuse the access tokens already issued - they are verified offline and would
-  // otherwise keep working for up to an hour after the reset.
-  try {
-    await writeRevocationMarker(getAccessStoreClient(), tableName, {
-      deptId: principal.deptId,
-      sub: memberId,
-      reason: 'CREDENTIAL_RESET',
-      actorId: principal.sub,
-    });
-  } catch (error) {
-    log('credentialReset.markerFailed', {
-      memberId,
-      traceId,
-      message: error instanceof Error ? error.message : undefined,
-    });
+  // otherwise keep working for up to an hour after the reset. Written before the reset AND
+  // again after the sign-out (review minor 4), so a refresh that squeezed in between cannot
+  // leave a token with iat > revokedAt alive.
+  const writeMarker = async (): Promise<boolean> => {
+    try {
+      await writeRevocationMarker(getAccessStoreClient(), tableName, {
+        deptId: principal.deptId,
+        sub: memberId,
+        reason: 'CREDENTIAL_RESET',
+        actorId: principal.sub,
+      });
+      return true;
+    } catch (error) {
+      log('credentialReset.markerFailed', {
+        memberId,
+        traceId,
+        message: error instanceof Error ? error.message : undefined,
+      });
+      return false;
+    }
+  };
+  if (!(await writeMarker())) {
     return serviceUnavailableProblem(traceId);
   }
 
@@ -126,6 +134,10 @@ async function resetCredentials(
     if (error instanceof UserNotFoundException) {
       return notFoundProblem(traceId, `No member found for memberId "${memberId}".`);
     }
+    return serviceUnavailableProblem(traceId);
+  }
+
+  if (!(await writeMarker())) {
     return serviceUnavailableProblem(traceId);
   }
 

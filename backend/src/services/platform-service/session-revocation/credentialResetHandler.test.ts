@@ -107,6 +107,10 @@ describe('credentialResetHandler', () => {
 
   it('resets the password BEFORE signing out, so the old password cannot mint a surviving session', async () => {
     const order: string[] = [];
+    writeRevocationMarker.mockImplementation(() => {
+      order.push('marker');
+      return Promise.resolve(1);
+    });
     const mocks = mockDeps({
       resetMemberPassword: vi.fn(() => {
         order.push('reset');
@@ -122,7 +126,8 @@ describe('credentialResetHandler', () => {
     const result = await handler(buildEvent({ memberId: 'sub-9' }), ADMIN);
 
     expect(result.statusCode).toBe(202);
-    expect(order).toEqual(['reset', 'signOut']);
+    // Marked before the reset and again after the sign-out (review minor 4).
+    expect(order).toEqual(['marker', 'reset', 'signOut', 'marker']);
     expect(mocks.resetMemberPassword).toHaveBeenCalledWith(
       {},
       expect.objectContaining({ userPoolId: 'pool-1', username: 'sub-9' }),
