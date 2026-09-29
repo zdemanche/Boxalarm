@@ -232,3 +232,19 @@ test('N8: UNIT_MISMATCH wording holds when the dispatch named no unit', () => {
     'VERIFY ADDRESS: this pre-plan is for 40 Oak Ave Apt 2 only.',
   );
 });
+
+test('R3-C: a building-level plan for a dispatched unit is always a VERIFY ADDRESS warning naming the unit', () => {
+  render(
+    <PrePlanPanel
+      prePlan={{
+        ...BASE,
+        matchType: 'ADDRESS_BUILDING',
+        matchedAddress: '12 Main St',
+        dispatchUnit: 'REAR',
+      }}
+    />,
+  );
+  expect(screen.getByRole('note').textContent).toBe(
+    'VERIFY ADDRESS: building-level pre-plan for 12 Main St; no plan for REAR.',
+  );
+});

@@ -154,3 +154,19 @@ test('announces ADDRESS_UNVERIFIED as a VERIFY ADDRESS alert', async () => {
     "VERIFY ADDRESS: pre-plan for 123 Main St, but its town could not be confirmed as this call's.",
   );
 });
+
+test('R3-C: announces a building-level plan for a dispatched unit as a VERIFY ADDRESS alert', async () => {
+  const { findByRole } = await render(
+    <PrePlanPanel
+      prePlan={{
+        ...BASE,
+        matchType: 'ADDRESS_BUILDING',
+        matchedAddress: '100 Industrial Dr',
+        dispatchUnit: 'BLDG 2',
+      }}
+    />,
+  );
+  expect((await findByRole('alert')).props.children).toBe(
+    'VERIFY ADDRESS: building-level pre-plan for 100 Industrial Dr; no plan for BLDG 2.',
+  );
+});

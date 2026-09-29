@@ -27,6 +27,8 @@ export interface NormalizedAddress {
   readonly key: string;
   /** The unit/apartment/suite designator(s), or null when the address carries none. */
   readonly unit: string | null;
+  /** The unit(s) with their designator for display ("BLDG 2", "APT 4", "REAR"), or null. */
+  readonly unitLabel: string | null;
   /** Town/city, or null when the address carries none. Compared, never part of the key. */
   readonly town: string | null;
   /** 5-digit ZIP, or null. */
@@ -214,18 +216,26 @@ function isUnitStart(tokens: readonly string[], i: number): boolean {
  * words (REAR, BSMT, ...). A designator only takes the next token if that token is not itself
  * a street type. Returns the units and whatever is left.
  */
-function extractUnits(tokens: readonly string[]): { units: string[]; rest: string[] } {
+function extractUnits(tokens: readonly string[]): {
+  units: string[];
+  labels: string[];
+  rest: string[];
+} {
   const units: string[] = [];
+  // The same units with their designator, for display ("BLDG 2", "APT 4", "REAR").
+  const labels: string[] = [];
   const rest: string[] = [];
   for (let i = 0; i < tokens.length; i += 1) {
     const token = tokens[i] as string;
     if (ORDINAL.test(token) && tokens[i + 1] === 'FLOOR') {
       units.push(token);
+      labels.push(`${token} FLOOR`);
       i += 1;
       continue;
     }
     if (STANDALONE_UNITS.has(token)) {
       units.push(token);
+      labels.push(token);
       continue;
     }
     if (UNIT_DESIGNATORS.has(token)) {
@@ -234,13 +244,14 @@ function extractUnits(tokens: readonly string[]): { units: string[]; rest: strin
       const unit = tokens[next];
       if (unit !== undefined && UNIT_TOKEN.test(unit) && !STREET_TYPES.has(unit)) {
         units.push(unit);
+        labels.push(token === '#' ? `#${unit}` : `${token} ${unit}`);
         i = next;
         continue;
       }
     }
     rest.push(token);
   }
-  return { units, rest };
+  return { units, labels, rest };
 }
 
 /** Longest run of words at the end of `words` (up to three) that is a known place. */
@@ -445,6 +456,7 @@ export function normalizeAddress(
   const fromRemainder = extractUnits(remainder);
   const fromTail = extractUnits(tokenize(tailParts.join(' ')));
   const units = [...fromRemainder.units, ...fromTail.units];
+  const unitLabels = [...fromRemainder.labels, ...fromTail.labels];
 
   const lineLocality = parseLocality(fromRemainder.rest, known);
   const tailLocality = parseLocality(fromTail.rest, known);
@@ -462,6 +474,7 @@ export function normalizeAddress(
   return {
     key: street.join(' '),
     unit: units.length > 0 ? units.join(' ') : null,
+    unitLabel: unitLabels.length > 0 ? unitLabels.join(' ') : null,
     town,
     zip,
     state,

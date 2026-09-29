@@ -75,6 +75,8 @@ export interface PrePlanEnrichment {
   unit?: string | null;
   /** NEARBY only: meters from the dispatch location. */
   distanceMeters?: number;
+  /** ADDRESS_BUILDING: the dispatched unit ("BLDG 2", "REAR") the building-level plan does not cover. */
+  dispatchUnit?: string;
   /**
    * Legacy line for clients without matchType support (the server prefixes it with the
    * provenance for anything but a plain ADDRESS match). Render occupancySummary instead

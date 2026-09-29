@@ -58,9 +58,11 @@ export function matchNotice(prePlan: PrePlanEnrichment): { text: string; warning
     case 'ADDRESS':
       return address ? { text: `Pre-plan for ${address}`, warning: false } : null;
     case 'ADDRESS_BUILDING':
+      // Always a warning (R3-C): the dispatched unit may be a separate structure - a rear
+      // cottage, Bldg 2, Lot 12 - that the main building's plan does not describe.
       return {
-        text: `Building-level pre-plan for ${address ?? 'this address'} (no plan for the dispatched unit)`,
-        warning: false,
+        text: `VERIFY ADDRESS: building-level pre-plan${address ? ` for ${address}` : ''}; no plan for ${prePlan.dispatchUnit ?? 'the dispatched unit'}.`,
+        warning: true,
       };
     case 'ADDRESS_UNVERIFIED':
       // Same street address, but the town (or the address itself) could not be confirmed as

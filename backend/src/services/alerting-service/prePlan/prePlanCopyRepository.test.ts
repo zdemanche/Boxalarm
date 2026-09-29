@@ -164,12 +164,28 @@ describe('findPrePlanByAddress', () => {
       });
     });
 
-    it('returns the building-level plan as ADDRESS_BUILDING for a unit with no plan of its own', async () => {
+    it('returns the building-level plan as ADDRESS_BUILDING for a unit with no plan of its own, naming that unit', async () => {
       expect(await lookup([apt('2'), building], '40 Oak Avenue Apt 3')).toMatchObject({
         matchType: 'ADDRESS_BUILDING',
         copy: { occupancyId: 'OCC-BLDG' },
+        dispatchUnit: 'APT 3',
       });
     });
+
+    it.each([
+      ['100 Industrial Dr Bldg 2', '100 Industrial Dr', 'BLDG 2'],
+      ['100 Industrial Dr Building B', '100 Industrial Dr', 'BUILDING B'],
+      ['12 Main St Rear', '12 Main St', 'REAR'],
+      ['55 Park Ln Lot 12', '55 Park Ln', 'LOT 12'],
+    ])(
+      'R3-C: %s against the main building plan names the structure (%s -> %s)',
+      async (dispatch, onFile, label) => {
+        expect(await lookup([prePlanCopy('OCC-MAIN', onFile)], dispatch)).toMatchObject({
+          matchType: 'ADDRESS_BUILDING',
+          dispatchUnit: label,
+        });
+      },
+    );
 
     it('flags a lone plan for a different unit as UNIT_MISMATCH', async () => {
       expect(await lookup([apt('2')], '40 Oak Avenue Apt 3')).toMatchObject({

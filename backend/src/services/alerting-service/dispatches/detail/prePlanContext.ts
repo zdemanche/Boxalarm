@@ -45,6 +45,8 @@ export interface PrePlanView {
   readonly matchedAddress: string;
   readonly unit: string | null;
   readonly distanceMeters?: number;
+  /** ADDRESS_BUILDING: the dispatched unit ("BLDG 2", "REAR") the building-level plan does not cover. */
+  readonly dispatchUnit?: string;
   /**
    * Legacy summary for clients that predate matchType: for anything but a plain ADDRESS match
    * it leads with the provenance ("VERIFY ADDRESS: …"), since those clients render it as-is.
@@ -210,7 +212,9 @@ function legacyNotice(match: PrePlanMatch): string | undefined {
     case 'ADDRESS':
       return undefined;
     case 'ADDRESS_BUILDING':
-      return `Building-level pre-plan for ${addressOf(match.copy)} (no plan for the dispatched unit).`;
+      return `VERIFY ADDRESS: building-level pre-plan for ${addressOf(match.copy)}; no plan for ${
+        match.dispatchUnit ?? 'the dispatched unit'
+      }.`;
     case 'ADDRESS_UNVERIFIED':
       return `VERIFY ADDRESS: pre-plan for ${addressOf(match.copy)}; its town could not be confirmed as this call's.`;
     case 'UNIT_MISMATCH':
@@ -259,6 +263,7 @@ function toView(
     matchedAddress: addressOf(copy),
     unit: copy.addressUnit ?? null,
     ...(match.distanceMeters !== undefined ? { distanceMeters: match.distanceMeters } : {}),
+    ...(match.dispatchUnit !== undefined ? { dispatchUnit: match.dispatchUnit } : {}),
     ...(legacySummary ? { summary: legacySummary } : {}),
     ...(copy.summary ? { occupancySummary: copy.summary } : {}),
     hazards: copy.hazards ?? [],

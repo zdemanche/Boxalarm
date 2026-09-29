@@ -63,6 +63,7 @@ describe('normalizeAddress', () => {
     expect(normalizeAddress('1 Ocean Dr, Miami, FL 33139')).toEqual({
       key: '1 OCEAN DR',
       unit: null,
+      unitLabel: null,
       // Not a known place: never guessed to be a town, and the parse is flagged ambiguous.
       town: null,
       zip: '33139',
@@ -72,6 +73,7 @@ describe('normalizeAddress', () => {
     expect(normalizeAddress('5 Elm St, Trumbull, CT 06611')).toEqual({
       key: '5 ELM ST',
       unit: null,
+      unitLabel: null,
       town: 'TRUMBULL',
       zip: '06611',
       state: 'CT',

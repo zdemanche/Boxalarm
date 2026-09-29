@@ -144,6 +144,19 @@ function withDispatchLocality(
   return sameArea ? normalized : { ...normalized, ambiguous: true };
 }
 
+function withBuildingUnit(
+  match: Exclude<PrePlanMatch, { matchType: 'CANDIDATES' }>,
+  unitLabel: string,
+  judged: ReadonlyArray<{ readonly copy: PrePlanCopyItem; readonly verdict: string }>,
+): PrePlanMatch {
+  const verdict = judged.find(
+    (entry) => entry.copy.occupancyId === match.copy.occupancyId,
+  )?.verdict;
+  return verdict === 'VERIFIED'
+    ? { ...match, dispatchUnit: unitLabel }
+    : { matchType: 'ADDRESS_UNVERIFIED', copy: match.copy };
+}
+
 /** Rejects a candidate far from the dispatch point — only when both sides carry coordinates. */
 function closeEnough(dispatchPoint: GeoPoint | undefined, candidate: PrePlanCopyItem): boolean {
   const location = { latitude: candidate.latitude, longitude: candidate.longitude };
@@ -172,6 +185,8 @@ export type PrePlanMatch =
       readonly matchType: Exclude<PrePlanMatchType, 'CANDIDATES'>;
       readonly copy: PrePlanCopyItem;
       readonly distanceMeters?: number;
+      /** ADDRESS_BUILDING: the dispatched unit the building-level plan does not cover. */
+      readonly dispatchUnit?: string;
     }
   | { readonly matchType: 'CANDIDATES'; readonly candidates: readonly PrePlanCandidate[] };
 
@@ -279,6 +294,11 @@ export async function findPrePlanByAddress(
     normalized.unit,
     judged.map((entry) => entry.copy),
   );
+  if (match?.matchType === 'ADDRESS_BUILDING' && normalized.unitLabel) {
+    // Always shown flagged: the dispatched "unit" may be a separate structure (rear cottage,
+    // Bldg 2, Lot 12) that the main building's plan does not describe (round-3 R3-C).
+    return withBuildingUnit(match, normalized.unitLabel, judged);
+  }
   if (match && (match.matchType === 'ADDRESS' || match.matchType === 'ADDRESS_BUILDING')) {
     const verdict = judged.find(
       (entry) => entry.copy.occupancyId === match.copy.occupancyId,
