@@ -1,5 +1,6 @@
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import type { Role } from '../auth/AuthContext';
+import type { AlertPayload } from '../features/alerts/alertPayload';
 import { AlertDetailScreen } from '../screens/alerts/AlertDetailScreen';
 import { AlertsHomeScreen } from '../screens/alerts/AlertsHomeScreen';
 import { ManualDispatchEntryScreen } from '../screens/alerts/ManualDispatchEntryScreen';
@@ -17,7 +18,8 @@ const OFFICER_CHIEF_ROLES: readonly Role[] = ['OFFICER', 'CHIEF'];
 export type AlertsStackParamList = {
   AlertsHome: undefined;
   ManualEntry: undefined;
-  AlertDetail: { dispatchId: string };
+  /** `payload` is what the page itself carried, so the screen paints before any fetch. */
+  AlertDetail: { dispatchId: string; payload?: AlertPayload };
   Roster: { dispatchId: string };
   RidingBoard: { dispatchId: string };
 };

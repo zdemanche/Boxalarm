@@ -66,7 +66,10 @@ test('a cold-start open on Android navigates from the notifee-delivered initial 
   await Promise.resolve();
   await Promise.resolve();
 
-  expect(navigateToAlertDetail).toHaveBeenCalledWith('DISP-2');
+  expect(navigateToAlertDetail).toHaveBeenCalledWith(
+    'DISP-2',
+    expect.objectContaining({ dispatchId: 'DISP-2' }),
+  );
 });
 
 test('a cold-start open on iOS navigates from the FCM-delivered initial notification', async () => {
@@ -79,7 +82,10 @@ test('a cold-start open on iOS navigates from the FCM-delivered initial notifica
   await Promise.resolve();
   await Promise.resolve();
 
-  expect(navigateToAlertDetail).toHaveBeenCalledWith('DISP-3');
+  expect(navigateToAlertDetail).toHaveBeenCalledWith(
+    'DISP-3',
+    expect.objectContaining({ dispatchId: 'DISP-3' }),
+  );
 });
 
 test('a background-to-foreground open navigates via onNotificationOpenedApp', () => {
@@ -92,7 +98,10 @@ test('a background-to-foreground open navigates via onNotificationOpenedApp', ()
   subscribePushNotificationRouting();
   openedCallback?.({ data: { dispatchId: 'DISP-4' } });
 
-  expect(navigateToAlertDetail).toHaveBeenCalledWith('DISP-4');
+  expect(navigateToAlertDetail).toHaveBeenCalledWith(
+    'DISP-4',
+    expect.objectContaining({ dispatchId: 'DISP-4' }),
+  );
 });
 
 test('a foreground press on the Android critical notification navigates immediately', () => {
@@ -108,7 +117,10 @@ test('a foreground press on the Android critical notification navigates immediat
     detail: { notification: { data: { dispatchId: 'DISP-5' } } },
   });
 
-  expect(navigateToAlertDetail).toHaveBeenCalledWith('DISP-5');
+  expect(navigateToAlertDetail).toHaveBeenCalledWith(
+    'DISP-5',
+    expect.objectContaining({ dispatchId: 'DISP-5' }),
+  );
 });
 
 test('a non-press foreground event (e.g. dismissed) does not navigate', () => {
@@ -148,7 +160,10 @@ describe('iOS taps on raw-APNs dispatch notifications (review round 2 N3)', () =
     mockNavigationReady = true;
     mockNavigationListener?.();
 
-    expect(navigateToAlertDetail).toHaveBeenCalledWith('DISP-COLD');
+    expect(navigateToAlertDetail).toHaveBeenCalledWith(
+      'DISP-COLD',
+      expect.objectContaining({ dispatchId: 'DISP-COLD' }),
+    );
     expect(Settings.get('boxalarm.pendingAlertTap')).toBeNull();
   });
 
@@ -162,7 +177,10 @@ describe('iOS taps on raw-APNs dispatch notifications (review round 2 N3)', () =
     settingsWatcher();
 
     expect(navigateToAlertDetail).toHaveBeenCalledTimes(1);
-    expect(navigateToAlertDetail).toHaveBeenCalledWith('DISP-WARM');
+    expect(navigateToAlertDetail).toHaveBeenCalledWith(
+      'DISP-WARM',
+      expect.objectContaining({ dispatchId: 'DISP-WARM' }),
+    );
     // Clearing the record does not echo (RCTSettingsManager ignores its own writes), and a later
     // unrelated settings change must not navigate again.
     settingsWatcher();
@@ -179,7 +197,10 @@ describe('iOS taps on raw-APNs dispatch notifications (review round 2 N3)', () =
     mockNavigationReady = true;
     appStateListener?.('active');
 
-    expect(navigateToAlertDetail).toHaveBeenCalledWith('DISP-RESUME');
+    expect(navigateToAlertDetail).toHaveBeenCalledWith(
+      'DISP-RESUME',
+      expect.objectContaining({ dispatchId: 'DISP-RESUME' }),
+    );
   });
 
   test('a stale tap (older than 10 minutes) is discarded without navigating', () => {
@@ -190,6 +211,30 @@ describe('iOS taps on raw-APNs dispatch notifications (review round 2 N3)', () =
 
     expect(navigateToAlertDetail).not.toHaveBeenCalled();
     expect(Settings.get('boxalarm.pendingAlertTap')).toBeNull();
+  });
+
+  test('the page text AppDelegate records rides along, so the alert screen paints the address', () => {
+    nativeWrite({
+      'boxalarm.pendingAlertTap': {
+        dispatchId: 'DISP-TEXT',
+        tappedAt: nowSeconds(),
+        title: 'Structure fire',
+        body: 'Structure fire — 21 Main St',
+        toneSequence: '2',
+      },
+    });
+    coldStart();
+
+    subscribePushNotificationRouting();
+
+    expect(navigateToAlertDetail).toHaveBeenCalledWith(
+      'DISP-TEXT',
+      expect.objectContaining({
+        incidentType: 'Structure fire',
+        address: '21 Main St',
+        toneSequence: 2,
+      }),
+    );
   });
 
   test('a malformed record is discarded without navigating', () => {

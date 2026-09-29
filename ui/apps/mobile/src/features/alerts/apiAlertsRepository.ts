@@ -13,7 +13,12 @@ import type {
   RosterEntry,
   SelfTestRun,
   HomeLocality,
+  ToneLadderStatus,
 } from './types';
+
+/** The alert screen already shows the page's own text; enrichment that has not arrived by now is
+ * replaced by a retryable "couldn't load" rather than an open-ended spinner (a11y-spec N1). */
+export const ALERT_DETAIL_TIMEOUT_MS = 8_000;
 
 function buildApiAlertsRepository(tokens: AuthTokenSource, apiBaseUrl: string): AlertsRepository {
   const req = (path: string, init?: Omit<ApiRequestOptions, 'apiBaseUrl'>) =>
@@ -32,7 +37,9 @@ function buildApiAlertsRepository(tokens: AuthTokenSource, apiBaseUrl: string): 
     },
 
     async getDispatch(dispatchId): Promise<DispatchAlert> {
-      const response = await req(`alerting/dispatches/${encodeURIComponent(dispatchId)}`);
+      const response = await req(`alerting/dispatches/${encodeURIComponent(dispatchId)}`, {
+        timeoutMs: ALERT_DETAIL_TIMEOUT_MS,
+      });
       const body = (await response.json()) as {
         dispatchId: string;
         incidentType: string;
@@ -40,6 +47,12 @@ function buildApiAlertsRepository(tokens: AuthTokenSource, apiBaseUrl: string): 
         crossStreets: string;
         mapLink: string | null;
         narrative: string;
+        fanOutStartedAt?: number | null;
+        toneLadder?: {
+          status: ToneLadderStatus;
+          currentToneSequence: number;
+          nextToneAt: string | number | null;
+        };
         prePlan: DispatchAlert['prePlan'];
         prePlanUnavailable?: boolean;
         nearestHydrants?: DispatchAlert['nearestHydrants'];
@@ -54,6 +67,21 @@ function buildApiAlertsRepository(tokens: AuthTokenSource, apiBaseUrl: string): 
         mapLink: body.mapLink,
         narrative: body.narrative,
         isSelfTest: false,
+        ...(typeof body.fanOutStartedAt === 'number' ? { dispatchedAt: body.fanOutStartedAt } : {}),
+        // Previously dropped: the tone number is part of the alert header ("TONE 2").
+        ...(body.toneLadder
+          ? {
+              toneLadder: {
+                status: body.toneLadder.status,
+                currentToneSequence: body.toneLadder.currentToneSequence,
+                nextToneAt:
+                  typeof body.toneLadder.nextToneAt === 'number'
+                    ? new Date(body.toneLadder.nextToneAt * 1000).toISOString()
+                    : body.toneLadder.nextToneAt,
+                predicateGaps: [],
+              },
+            }
+          : {}),
         prePlan: body.prePlan,
         ...(body.prePlanUnavailable === true ? { prePlanUnavailable: true } : {}),
         ...(body.nearestHydrants ? { nearestHydrants: body.nearestHydrants } : {}),

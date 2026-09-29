@@ -5,7 +5,7 @@ import { mockAlertsRepository } from '../../features/alerts/mockAlertsRepository
 import { AlertDetailScreen } from './AlertDetailScreen';
 
 const mockNavigate = jest.fn();
-const mockRouteParams: { dispatchId: string } = { dispatchId: '' };
+const mockRouteParams: { dispatchId: string; payload?: unknown } = { dispatchId: '' };
 
 jest.mock('@react-navigation/native', () => ({
   useNavigation: () => ({ navigate: mockNavigate }),
@@ -19,6 +19,72 @@ beforeEach(async () => {
   const result = await mockAlertsRepository.triggerSelfTest();
   dispatchId = result.dispatchId;
   mockRouteParams.dispatchId = dispatchId;
+  delete mockRouteParams.payload;
+});
+
+afterEach(() => {
+  jest.restoreAllMocks();
+});
+
+const PAGE = {
+  dispatchId: 'DISP-PAGE',
+  incidentType: 'Structure fire',
+  address: '21 Main St',
+  crossStreets: 'Elm / Oak',
+  receivedAt: Date.now(),
+};
+
+test('paints the address and live response buttons from the page payload while the fetch is still pending', async () => {
+  jest.spyOn(mockAlertsRepository, 'getDispatch').mockImplementation(() => new Promise(() => {}));
+  mockRouteParams.dispatchId = PAGE.dispatchId;
+  mockRouteParams.payload = PAGE;
+
+  const { findByText, findByRole } = await render(<AlertDetailScreen />);
+
+  expect(await findByText('21 Main St')).toBeTruthy();
+  expect(await findByText(/Structure fire/)).toBeTruthy();
+  expect(await findByRole('button', { name: 'Not responding' })).toBeTruthy();
+});
+
+test('a failed fetch is a named, retryable state that keeps the page address - never a blank screen', async () => {
+  const getDispatch = jest
+    .spyOn(mockAlertsRepository, 'getDispatch')
+    .mockRejectedValueOnce(new TypeError('Network request failed'));
+  jest.spyOn(console, 'warn').mockImplementation(() => {});
+  mockRouteParams.dispatchId = PAGE.dispatchId;
+  mockRouteParams.payload = PAGE;
+
+  const { findByText, findByRole } = await render(<AlertDetailScreen />);
+
+  expect(await findByText(/the address above came with the page and is correct/i)).toBeTruthy();
+  expect(await findByText('21 Main St')).toBeTruthy();
+
+  getDispatch.mockResolvedValueOnce({
+    dispatchId: PAGE.dispatchId,
+    incidentType: 'Structure fire',
+    address: '21 Main St',
+    crossStreets: 'Elm / Oak',
+    mapLink: null,
+    narrative: 'Smoke showing from the second floor',
+    isSelfTest: false,
+  });
+  await act(async () => {
+    fireEvent.press(await findByRole('button', { name: 'Retry loading the call details' }));
+  });
+
+  expect(await findByText('Smoke showing from the second floor')).toBeTruthy();
+});
+
+test('with no payload and a failed fetch the screen still names the call and keeps the buttons live', async () => {
+  jest.spyOn(mockAlertsRepository, 'getDispatch').mockRejectedValue(new Error('boom'));
+  jest.spyOn(console, 'warn').mockImplementation(() => {});
+  mockRouteParams.dispatchId = 'DISP-UNKNOWN';
+
+  const { findByText, findByRole } = await render(<AlertDetailScreen />);
+
+  expect(await findByText('Dispatch DISP-UNKNOWN')).toBeTruthy();
+  expect(await findByText(/your response buttons still work/i)).toBeTruthy();
+  expect(await findByRole('button', { name: 'Responding' })).toBeTruthy();
 });
 
 test('shows the dispatch details and the tone ladder panel', async () => {

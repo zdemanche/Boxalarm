@@ -32,11 +32,12 @@ jest.mock('react-native-image-picker', () => ({
 
 // @op-engineering/op-sqlite has no native binding under Jest (NativeModules.OPSQLite is
 // undefined), so importing it for real throws at module load. This fake implements exactly the
-// statements outboxStore.ts issues against an in-memory array, scoped per test file (module
+// statements outboxStore.ts and kvStore.ts issue against in-memory structures, scoped per test file (module
 // registry resets between files) so tests don't leak rows into each other.
 jest.mock('@op-engineering/op-sqlite', () => {
   function createFakeDb() {
     let rows = [];
+    const kv = new Map();
     return {
       executeSync: () => ({ rows: [] }),
       execute: async (sql, params = []) => {
@@ -93,6 +94,18 @@ jest.mock('@op-engineering/op-sqlite', () => {
         }
         if (statement.startsWith('DELETE FROM outbox WHERE id = ?')) {
           rows = rows.filter((row) => row.id !== params[0]);
+          return { rows: [] };
+        }
+        if (statement.startsWith('INSERT OR REPLACE INTO kv')) {
+          kv.set(params[0], { key: params[0], value: params[1], updatedAt: params[2] });
+          return { rows: [] };
+        }
+        if (statement.startsWith('SELECT key, value, updatedAt FROM kv WHERE key = ?')) {
+          const row = kv.get(params[0]);
+          return { rows: row ? [row] : [] };
+        }
+        if (statement.startsWith('DELETE FROM kv WHERE key = ?')) {
+          kv.delete(params[0]);
           return { rows: [] };
         }
         throw new Error(`op-sqlite fake does not support: ${sql}`);

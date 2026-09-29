@@ -1,6 +1,11 @@
 import notifee, { AndroidImportance } from '@notifee/react-native';
 import { Platform } from 'react-native';
 import {
+  alertPayloadFromPushData,
+  alertPayloadToNotificationData,
+  rememberAlertPayload,
+} from './alertPayload';
+import {
   categoryFromPushData,
   channelForCategory,
   CRITICAL_CHANNEL_ID,
@@ -12,19 +17,36 @@ export interface PushMessageData {
   dispatchId?: string;
   title?: string;
   body?: string;
+  toneSequence?: string;
+  [key: string]: unknown;
 }
 
-export async function displayPushNotification(data: PushMessageData | undefined): Promise<void> {
+/** One notification per call: tone 2 replaces tone 1 in the shade instead of stacking. */
+export function dispatchNotificationId(dispatchId: string): string {
+  return `dispatch:${dispatchId}`;
+}
+
+export async function displayPushNotification(
+  data: PushMessageData | undefined,
+  receivedAt: number = Date.now(),
+): Promise<void> {
   if (Platform.OS !== 'android') return;
 
   const category = categoryFromPushData(data);
   const isCritical = category === 'dispatch';
   const channelId = channelForCategory(category);
+  // The page travels with the notification, so a tap opens the address with no fetch.
+  const payload = isCritical ? alertPayloadFromPushData(data, receivedAt) : null;
 
   await notifee.displayNotification({
+    ...(payload ? { id: dispatchNotificationId(payload.dispatchId) } : {}),
     title: data?.title ?? (isCritical ? 'Dispatch alert' : 'Notification'),
     body: data?.body,
-    data: { dispatchId: data?.dispatchId ?? '', category },
+    data: {
+      ...(payload ? alertPayloadToNotificationData(payload) : {}),
+      dispatchId: data?.dispatchId ?? '',
+      category,
+    },
     android: {
       channelId,
       importance: isCritical ? AndroidImportance.HIGH : AndroidImportance.DEFAULT,
@@ -32,6 +54,15 @@ export async function displayPushNotification(data: PushMessageData | undefined)
       ...(isCritical ? { fullScreenAction: { id: 'default' } } : {}),
     },
   });
+}
+
+async function rememberPagePayload(
+  data: PushMessageData | undefined,
+  receivedAt: number,
+): Promise<void> {
+  if (categoryFromPushData(data) !== 'dispatch') return;
+  const payload = alertPayloadFromPushData(data, receivedAt);
+  if (payload) await rememberAlertPayload(payload);
 }
 
 /**
@@ -45,11 +76,16 @@ export async function displayPushNotification(data: PushMessageData | undefined)
 export async function handleBackgroundPushMessage(
   data: PushMessageData | undefined,
 ): Promise<void> {
+  const receivedAt = Date.now();
   try {
-    await displayPushNotification(data);
+    await displayPushNotification(data, receivedAt);
     return;
   } catch (error) {
     console.error('[push] displaying a background push failed', error);
+  } finally {
+    // After the display, never before it: a slow cache write must not delay the ring. The
+    // cached page is what the Alerts list and the alert screen fall back on offline.
+    await rememberPagePayload(data, receivedAt);
   }
 
   if (categoryFromPushData(data) !== 'dispatch') return;

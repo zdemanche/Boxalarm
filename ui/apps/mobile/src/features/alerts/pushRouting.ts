@@ -10,6 +10,11 @@ import {
   navigateToAlertDetail,
   onNavigationStateChange,
 } from '../../navigation/navigationRef';
+import {
+  alertPayloadFromNotificationData,
+  alertPayloadFromPushData,
+  type AlertPayload,
+} from './alertPayload';
 
 const messagingInstance = getMessaging();
 
@@ -20,23 +25,34 @@ export function dispatchIdFromNotificationData(
   return typeof id === 'string' && id.length > 0 ? id : null;
 }
 
+/** Opens the alert screen with the page's own payload, so it paints before any fetch. */
+function openAlert(payload: AlertPayload | null): void {
+  if (payload) navigateToAlertDetail(payload.dispatchId, payload);
+}
+
+/** An FCM RemoteMessage (sentTime in epoch ms), as delivered to the open/initial callbacks. */
+function payloadFromRemoteMessage(
+  message: { data?: Record<string, unknown>; sentTime?: number } | null | undefined,
+): AlertPayload | null {
+  return alertPayloadFromPushData(message?.data, message?.sentTime ?? Date.now());
+}
+
 async function routeToInitialNotification(): Promise<void> {
   if (Platform.OS === 'android') {
     const initial = await notifee.getInitialNotification();
-    const dispatchId = dispatchIdFromNotificationData(initial?.notification.data);
-    if (dispatchId) navigateToAlertDetail(dispatchId);
+    openAlert(alertPayloadFromNotificationData(initial?.notification.data));
     return;
   }
-  const initial = await getInitialNotification(messagingInstance);
-  const dispatchId = dispatchIdFromNotificationData(initial?.data);
-  if (dispatchId) navigateToAlertDetail(dispatchId);
+  openAlert(payloadFromRemoteMessage(await getInitialNotification(messagingInstance)));
 }
 
 /**
  * iOS dispatch pages come straight from APNs, with no FCM marker, so React Native Firebase's
  * getInitialNotification / onNotificationOpenedApp never report a tap on them. AppDelegate's
  * didReceive (ios/Boxalarm/AppDelegate.swift) records the tapped page's dispatchId in
- * NSUserDefaults under this key, as `{ dispatchId, tappedAt }` (epoch seconds). React
+ * NSUserDefaults under this key, as `{ dispatchId, tappedAt, title?, body?, toneSequence? }`
+ * (tappedAt in epoch seconds; the rest is the page's own text, so the alert screen paints the
+ * address without a fetch). React
  * Native's built-in Settings API reads that key on launch and reports changes while running.
  * That covers cold, background and foreground taps without a custom native module.
  */
@@ -45,9 +61,16 @@ export const IOS_PENDING_ALERT_TAP_KEY = 'boxalarm.pendingAlertTap';
 /** A recorded tap older than this is from an old call (e.g. the app was killed before it routed). */
 export const IOS_PENDING_ALERT_TAP_MAX_AGE_SECONDS = 600;
 
-function readPendingIosTap(nowMs: number): string | null {
-  const pending = Settings.get(IOS_PENDING_ALERT_TAP_KEY) as
-    { dispatchId?: unknown; tappedAt?: unknown } | null | undefined;
+interface PendingIosTap {
+  dispatchId?: unknown;
+  tappedAt?: unknown;
+  title?: unknown;
+  body?: unknown;
+  toneSequence?: unknown;
+}
+
+function readPendingIosTap(nowMs: number): AlertPayload | null {
+  const pending = Settings.get(IOS_PENDING_ALERT_TAP_KEY) as PendingIosTap | null | undefined;
   if (!pending || typeof pending !== 'object') return null;
   const { dispatchId, tappedAt } = pending;
   const fresh =
@@ -57,7 +80,7 @@ function readPendingIosTap(nowMs: number): string | null {
     Settings.set({ [IOS_PENDING_ALERT_TAP_KEY]: null });
     return null;
   }
-  return dispatchId;
+  return alertPayloadFromPushData(pending as Record<string, unknown>, (tappedAt as number) * 1000);
 }
 
 /**
@@ -65,10 +88,10 @@ function readPendingIosTap(nowMs: number): string | null {
  * mounted (cold start) stays pending and is routed on the first navigation state change.
  */
 export function routePendingIosAlertTap(nowMs: number = Date.now()): void {
-  const dispatchId = readPendingIosTap(nowMs);
-  if (!dispatchId || !isNavigationReady()) return;
+  const payload = readPendingIosTap(nowMs);
+  if (!payload || !isNavigationReady()) return;
   Settings.set({ [IOS_PENDING_ALERT_TAP_KEY]: null });
-  navigateToAlertDetail(dispatchId);
+  openAlert(payload);
 }
 
 function subscribeIosAlertTaps(): () => void {
@@ -89,14 +112,12 @@ export function subscribePushNotificationRouting(): () => void {
   void routeToInitialNotification();
 
   const unsubscribeOpened = onNotificationOpenedApp(messagingInstance, (remoteMessage) => {
-    const dispatchId = dispatchIdFromNotificationData(remoteMessage?.data);
-    if (dispatchId) navigateToAlertDetail(dispatchId);
+    openAlert(payloadFromRemoteMessage(remoteMessage));
   });
 
   const unsubscribeForeground = notifee.onForegroundEvent(({ type, detail }) => {
     if (type !== EventType.PRESS) return;
-    const dispatchId = dispatchIdFromNotificationData(detail.notification?.data);
-    if (dispatchId) navigateToAlertDetail(dispatchId);
+    openAlert(alertPayloadFromNotificationData(detail.notification?.data));
   });
 
   const unsubscribeIosTaps = Platform.OS === 'ios' ? subscribeIosAlertTaps() : () => {};

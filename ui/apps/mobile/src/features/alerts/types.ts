@@ -99,6 +99,9 @@ export interface DispatchAlert {
   mapLink: string | null;
   narrative: string;
   isSelfTest: boolean;
+  /** Epoch seconds the fan-out started (detail's fanOutStartedAt) - the best dispatch time the
+   * server returns today. Absent from older responses. */
+  dispatchedAt?: number;
   toneLadder?: ToneLadder;
   prePlan?: PrePlanEnrichment | null;
   /** The server could not look the pre-plan up (prePlan is then absent) - not "none on file". */

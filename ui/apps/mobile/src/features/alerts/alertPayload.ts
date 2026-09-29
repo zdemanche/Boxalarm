@@ -1,0 +1,103 @@
+import { kvGet, kvSet } from '../../sync/kvStore';
+import type { DispatchAlert } from './types';
+
+/**
+ * What a page carries on its own, before any network call (design.md §4.3: F-01 renders from the
+ * push payload alone). Plain strings and numbers only - it travels as navigation params and in
+ * the notification's data map.
+ */
+export interface AlertPayload {
+  dispatchId: string;
+  incidentType: string;
+  address: string;
+  crossStreets?: string;
+  toneSequence?: number;
+  /** Epoch ms: dispatch time when the payload carries it, else when this phone received it. */
+  receivedAt: number;
+}
+
+type PushData = Record<string, unknown> | undefined;
+
+function str(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim().length > 0 ? value.trim() : undefined;
+}
+
+/**
+ * Reads the page out of a push/notification data map. The alerting service sends `title` =
+ * incident type and `body` = "{incident type} — {address}" (deliverChannelMessage.ts), so until it
+ * sends `incidentType`/`address` as their own keys the address is the body minus its title prefix.
+ * Explicit keys win when present. Returns null without a dispatchId - there is nothing to open.
+ */
+export function alertPayloadFromPushData(data: PushData, receivedAt: number): AlertPayload | null {
+  const dispatchId = str(data?.dispatchId);
+  if (!dispatchId) return null;
+  const title = str(data?.title);
+  const body = str(data?.body);
+  const incidentType = str(data?.incidentType) ?? title ?? 'Dispatch';
+  let address = str(data?.address);
+  if (!address && body) {
+    const prefix = title ? `${title} — ` : null;
+    address = prefix && body.startsWith(prefix) ? body.slice(prefix.length).trim() : body;
+  }
+  const tone = Number(data?.toneSequence);
+  const dispatchedAt = Number(data?.dispatchedAt);
+  const crossStreets = str(data?.crossStreets);
+  return {
+    dispatchId,
+    incidentType,
+    address: address ?? '',
+    ...(crossStreets ? { crossStreets } : {}),
+    ...(Number.isInteger(tone) && tone > 0 ? { toneSequence: tone } : {}),
+    // dispatchedAt, when the server adds it, is epoch seconds like every other alerting time.
+    receivedAt:
+      Number.isFinite(dispatchedAt) && dispatchedAt > 0 ? dispatchedAt * 1000 : receivedAt,
+  };
+}
+
+/** The notification data map a payload round-trips through (Android notifee data: strings only). */
+export function alertPayloadToNotificationData(payload: AlertPayload): Record<string, string> {
+  return {
+    dispatchId: payload.dispatchId,
+    incidentType: payload.incidentType,
+    address: payload.address,
+    ...(payload.crossStreets ? { crossStreets: payload.crossStreets } : {}),
+    ...(payload.toneSequence ? { toneSequence: String(payload.toneSequence) } : {}),
+    receivedAt: String(payload.receivedAt),
+  };
+}
+
+/** Inverse of alertPayloadToNotificationData (explicit keys, so no body parsing needed). */
+export function alertPayloadFromNotificationData(data: PushData): AlertPayload | null {
+  const receivedAt = Number(data?.receivedAt);
+  return alertPayloadFromPushData(data, Number.isFinite(receivedAt) ? receivedAt : Date.now());
+}
+
+const payloadKey = (dispatchId: string) => `alert-payload:${dispatchId}`;
+const detailKey = (dispatchId: string) => `alert-detail:${dispatchId}`;
+
+/** Keeps the first receipt time: tone 2 of the same call must not reset "3 min ago". */
+export async function rememberAlertPayload(payload: AlertPayload): Promise<void> {
+  const existing = await kvGet<AlertPayload>(payloadKey(payload.dispatchId));
+  const receivedAt = Math.min(existing?.value.receivedAt ?? payload.receivedAt, payload.receivedAt);
+  await kvSet(payloadKey(payload.dispatchId), {
+    ...existing?.value,
+    ...payload,
+    receivedAt,
+    ...(payload.address ? {} : { address: existing?.value.address ?? '' }),
+  });
+}
+
+export async function cachedAlertPayload(dispatchId: string): Promise<AlertPayload | null> {
+  return (await kvGet<AlertPayload>(payloadKey(dispatchId)))?.value ?? null;
+}
+
+export async function rememberDispatchDetail(detail: DispatchAlert): Promise<void> {
+  await kvSet(detailKey(detail.dispatchId), detail);
+}
+
+export async function cachedDispatchDetail(
+  dispatchId: string,
+): Promise<{ detail: DispatchAlert; updatedAt: number } | null> {
+  const entry = await kvGet<DispatchAlert>(detailKey(dispatchId));
+  return entry ? { detail: entry.value, updatedAt: entry.updatedAt } : null;
+}

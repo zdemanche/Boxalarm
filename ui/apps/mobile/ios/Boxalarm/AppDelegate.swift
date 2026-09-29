@@ -101,10 +101,17 @@ extension AppDelegate {
       let dispatchId = userInfo["dispatchId"] as? String,
       !dispatchId.isEmpty
     {
-      UserDefaults.standard.set(
-        ["dispatchId": dispatchId, "tappedAt": Date().timeIntervalSince1970],
-        forKey: pendingAlertTapKey
-      )
+      // The page's own text rides along so the alert screen paints the address with no fetch
+      // (design.md §4.3). title = incident type, body = "{type} — {address}".
+      let content = response.notification.request.content
+      var record: [String: Any] = [
+        "dispatchId": dispatchId,
+        "tappedAt": Date().timeIntervalSince1970,
+        "title": content.title,
+        "body": content.body,
+      ]
+      if let tone = userInfo["toneSequence"] as? String { record["toneSequence"] = tone }
+      UserDefaults.standard.set(record, forKey: pendingAlertTapKey)
     }
     completionHandler()
   }

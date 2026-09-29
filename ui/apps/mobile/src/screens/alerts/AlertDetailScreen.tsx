@@ -1,6 +1,6 @@
 import { palette, radius, spacing, touchTarget, typography } from '@boxalarm/design-tokens';
 import { useNavigation, useRoute, type NavigationProp } from '@react-navigation/native';
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import {
   AccessibilityInfo,
   Linking,
@@ -14,39 +14,53 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useAlertsRepository } from '../../features/alerts/apiAlertsRepository';
 import { ackStatusLabel } from '../../features/alerts/ackStatus';
+import type { AlertPayload } from '../../features/alerts/alertPayload';
 import { PrePlanPanel } from '../../features/alerts/PrePlanPanel';
-import type { AckStatus, DispatchAlert } from '../../features/alerts/types';
+import type { AckStatus } from '../../features/alerts/types';
+import { useAlertDetail, type DetailFailure } from '../../features/alerts/useAlertDetail';
 import type { AlertsStackParamList } from '../../navigation/AlertsStack';
+
+// a11y-spec N1 Error: the reassurance is required - a visible failure next to an address makes a
+// member doubt the address.
+function failureText(failure: DetailFailure, hasAddress: boolean): string {
+  const reassurance = hasAddress
+    ? ' The address above came with the page and is correct.'
+    : ' Your response buttons still work.';
+  switch (failure) {
+    case 'refused':
+      return `The server refused to show this call's details.${reassurance}`;
+    case 'server':
+      return `The server couldn't load this call's details right now.${reassurance}`;
+    case 'timeout':
+    case 'unreachable':
+      return `We couldn't load the call details - no answer from the server.${reassurance}`;
+  }
+}
 
 type RespondUiState = 'unanswered' | 'entering_eta' | 'answered';
 
 export function AlertDetailScreen() {
   const navigation = useNavigation<NavigationProp<AlertsStackParamList>>();
   const route = useRoute();
-  const { dispatchId } = route.params as { dispatchId: string };
+  const { dispatchId, payload } = route.params as { dispatchId: string; payload?: AlertPayload };
   const scheme = useColorScheme();
   const tokens = scheme === 'dark' ? palette.cab : palette.day;
   const repository = useAlertsRepository();
-  const [dispatch, setDispatch] = useState<DispatchAlert | null>(null);
+  const {
+    header,
+    detail: dispatch,
+    detailCachedAt,
+    status,
+    failure,
+    retry,
+  } = useAlertDetail(repository, dispatchId, payload);
   const [respondState, setRespondState] = useState<RespondUiState>('unanswered');
   const [pendingAckStatus, setPendingAckStatus] = useState<AckStatus | null>(null);
   const [answeredAs, setAnsweredAs] = useState<AckStatus | null>(null);
   const [eta, setEta] = useState('');
 
-  useEffect(() => {
-    let cancelled = false;
-    repository.getDispatch(dispatchId).then((result) => {
-      if (!cancelled) setDispatch(result);
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [dispatchId, repository]);
-
-  if (!dispatch) {
-    return <SafeAreaView style={{ flex: 1, backgroundColor: tokens.background }} />;
-  }
-
+  // Never blank (design.md F-01): the page payload paints the header, the response buttons are
+  // live at first paint, and the detail fetch only enriches.
   // Alert-path guarantee: response buttons are live as soon as the dispatch renders; tapping one
   // confirms visually immediately (optimistic, N4.2) and never waits on the round trip.
   const submitResponse = (ackStatus: AckStatus, etaMinutesValue?: number) => {
@@ -72,12 +86,13 @@ export function AlertDetailScreen() {
           accessibilityRole="header"
           style={{ color: tokens.foreground, fontSize: typography.size.lg, fontWeight: '700' }}
         >
-          {dispatch.incidentType}
+          {header?.incidentType ?? `Dispatch ${dispatchId}`}
         </Text>
         <Text style={{ color: tokens.foreground, fontSize: typography.size.base, marginTop: 2 }}>
-          {dispatch.address}
+          {header?.address ||
+            (status === 'failed' ? 'Address not available' : 'Loading the address…')}
         </Text>
-        {dispatch.crossStreets ? (
+        {header?.crossStreets ? (
           <Text
             style={{
               color: tokens.foreground,
@@ -86,10 +101,10 @@ export function AlertDetailScreen() {
               marginTop: 2,
             }}
           >
-            Cross streets: {dispatch.crossStreets}
+            Cross streets: {header.crossStreets}
           </Text>
         ) : null}
-        {dispatch.mapLink ? (
+        {dispatch?.mapLink ? (
           <TouchableOpacity
             accessibilityRole="link"
             onPress={() => void Linking.openURL(dispatch.mapLink as string)}
@@ -98,18 +113,79 @@ export function AlertDetailScreen() {
             <Text style={{ color: tokens.accent, fontSize: typography.size.sm }}>Open in maps</Text>
           </TouchableOpacity>
         ) : null}
-        <Text
-          style={{
-            color: tokens.foreground,
-            opacity: 0.7,
-            fontSize: typography.size.sm,
-            marginTop: spacing.xs,
-          }}
-        >
-          {dispatch.narrative}
-        </Text>
+        {dispatch ? (
+          <Text
+            style={{
+              color: tokens.foreground,
+              opacity: 0.7,
+              fontSize: typography.size.sm,
+              marginTop: spacing.xs,
+            }}
+          >
+            {dispatch.narrative || 'No narrative was sent with this dispatch.'}
+          </Text>
+        ) : null}
+        {status === 'loading' && !dispatch ? (
+          <Text
+            accessibilityLiveRegion="polite"
+            style={{
+              color: tokens.foreground,
+              fontSize: typography.size.sm,
+              marginTop: spacing.xs,
+            }}
+          >
+            Loading the dispatch narrative…
+          </Text>
+        ) : null}
+        {status === 'failed' && failure ? (
+          <View
+            accessibilityLiveRegion="polite"
+            style={{
+              marginTop: spacing.md,
+              padding: spacing.md,
+              borderRadius: radius.default,
+              borderLeftWidth: 4,
+              borderLeftColor: tokens.warning,
+              backgroundColor: tokens.warning + '22',
+            }}
+          >
+            <Text style={{ color: tokens.foreground, fontSize: typography.size.base }}>
+              ▲ {failureText(failure, Boolean(header?.address))}
+            </Text>
+            {detailCachedAt ? (
+              <Text
+                style={{ color: tokens.foreground, fontSize: typography.size.sm, marginTop: 4 }}
+              >
+                Showing details saved on this phone at{' '}
+                {new Date(detailCachedAt).toLocaleTimeString([], {
+                  hour: '2-digit',
+                  minute: '2-digit',
+                })}
+                .
+              </Text>
+            ) : null}
+            <TouchableOpacity
+              accessibilityRole="button"
+              accessibilityLabel="Retry loading the call details"
+              onPress={retry}
+              style={{
+                marginTop: spacing.sm,
+                minHeight: 72,
+                alignItems: 'center',
+                justifyContent: 'center',
+                borderRadius: radius.default,
+                borderWidth: 1,
+                borderColor: tokens.foreground + '55',
+              }}
+            >
+              <Text style={{ color: tokens.foreground, fontSize: typography.size.base }}>
+                Retry
+              </Text>
+            </TouchableOpacity>
+          </View>
+        ) : null}
 
-        {dispatch.toneLadder ? (
+        {dispatch?.toneLadder ? (
           <View
             style={{
               marginTop: spacing.lg,
@@ -258,13 +334,15 @@ export function AlertDetailScreen() {
           )}
         </View>
 
-        <PrePlanPanel
-          prePlan={dispatch.prePlan}
-          unavailable={dispatch.prePlanUnavailable === true}
-          {...(dispatch.nearestHydrants ? { nearestHydrants: dispatch.nearestHydrants } : {})}
-          hydrantsUnavailable={dispatch.nearestHydrantsUnavailable === true}
-          hydrantsIncomplete={dispatch.nearestHydrantsIncomplete === true}
-        />
+        {dispatch ? (
+          <PrePlanPanel
+            prePlan={dispatch.prePlan}
+            unavailable={dispatch.prePlanUnavailable === true}
+            {...(dispatch.nearestHydrants ? { nearestHydrants: dispatch.nearestHydrants } : {})}
+            hydrantsUnavailable={dispatch.nearestHydrantsUnavailable === true}
+            hydrantsIncomplete={dispatch.nearestHydrantsIncomplete === true}
+          />
+        ) : null}
 
         <TouchableOpacity
           accessibilityRole="button"

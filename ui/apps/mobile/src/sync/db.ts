@@ -25,6 +25,16 @@ export function getDb(): DB {
         syncedAt TEXT
       )`,
     );
+    // Small device-local cache (kvStore.ts): the alert payload a page arrived with, the last
+    // good dispatch detail and active-call list, and this device's latest answer per call - so
+    // the alert path renders from the phone, never from a spinner.
+    db.executeSync(
+      `CREATE TABLE IF NOT EXISTS kv (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL,
+        updatedAt INTEGER NOT NULL
+      )`,
+    );
   }
   return db;
 }

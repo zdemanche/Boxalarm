@@ -1,5 +1,6 @@
 import { Platform } from 'react-native';
 import notifee from '@notifee/react-native';
+import { cachedAlertPayload } from './alertPayload';
 import { CRITICAL_CHANNEL_ID, DEFAULT_CHANNEL_ID } from './pushChannel';
 import {
   displayPushNotification,
@@ -24,12 +25,38 @@ afterEach(() => {
 test('a dispatch push displays on the critical channel with a full-screen action', async () => {
   Platform.OS = 'android';
 
-  await displayPushNotification({ dispatchId: 'DISP-1', title: 'Structure fire' });
+  await displayPushNotification(
+    { dispatchId: 'DISP-1', title: 'Structure fire', body: 'Structure fire — 21 Main St' },
+    1_000,
+  );
 
   const call = displayNotification.mock.calls[0][0];
   expect(call.android.channelId).toBe(CRITICAL_CHANNEL_ID);
   expect(call.android.fullScreenAction).toBeDefined();
-  expect(call.data).toEqual({ dispatchId: 'DISP-1', category: 'dispatch' });
+  // One notification per call, carrying the page so a tap opens the address with no fetch.
+  expect(call.id).toBe('dispatch:DISP-1');
+  expect(call.data).toEqual({
+    dispatchId: 'DISP-1',
+    category: 'dispatch',
+    incidentType: 'Structure fire',
+    address: '21 Main St',
+    receivedAt: '1000',
+  });
+});
+
+test('the background handler keeps the page on the phone for the Alerts list and offline opens', async () => {
+  Platform.OS = 'android';
+
+  await handleBackgroundPushMessage({
+    dispatchId: 'DISP-CACHE',
+    title: 'MVA',
+    body: 'MVA — 1 Main St',
+  });
+
+  await expect(cachedAlertPayload('DISP-CACHE')).resolves.toMatchObject({
+    incidentType: 'MVA',
+    address: '1 Main St',
+  });
 });
 
 test('a digest push displays on the default channel without a full-screen action', async () => {
