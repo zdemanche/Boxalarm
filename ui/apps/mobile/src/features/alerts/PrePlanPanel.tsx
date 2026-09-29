@@ -4,7 +4,15 @@ import type { NearestHydrant, PrePlanEnrichment, UtilityShutoff } from './types'
 
 type Tokens = (typeof palette)[keyof typeof palette];
 
-/** "H-014 · 90 m · 6-inch · 1000 gpm (class A)" - one glanceable line per hydrant. */
+/** Listed only when nearer than a usable one - so the crew knows not to lay in from it. */
+function isOutOfService(hydrant: NearestHydrant): boolean {
+  return hydrant.status === 'OUT_OF_SERVICE';
+}
+
+/**
+ * "H-014 · 90 m · 6-inch · 1000 gpm (class A)" / "H-015 · 15 m · OUT OF SERVICE" - one
+ * glanceable line per hydrant.
+ */
 function describeHydrant(hydrant: NearestHydrant): string {
   const flow =
     hydrant.flowRatingGpm !== undefined
@@ -15,6 +23,7 @@ function describeHydrant(hydrant: NearestHydrant): string {
   return [
     hydrant.hydrantId,
     hydrant.distanceMeters !== undefined ? `${hydrant.distanceMeters} m` : undefined,
+    isOutOfService(hydrant) ? 'OUT OF SERVICE' : undefined,
     hydrant.size,
     flow,
   ]
@@ -209,7 +218,12 @@ export function PrePlanPanel({ prePlan }: { prePlan: PrePlanEnrichment | null | 
           {prePlan.nearestHydrants.map((hydrant) => (
             <Text
               key={hydrant.hydrantId}
-              style={{ color: tokens.foreground, fontSize: typography.size.sm, marginTop: 2 }}
+              style={{
+                color: isOutOfService(hydrant) ? tokens.error : tokens.foreground,
+                fontWeight: isOutOfService(hydrant) ? '700' : '400',
+                fontSize: typography.size.sm,
+                marginTop: 2,
+              }}
             >
               {describeHydrant(hydrant)}
             </Text>

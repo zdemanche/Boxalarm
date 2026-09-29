@@ -297,8 +297,17 @@ describe('findNearestHydrants', () => {
 
     const hydrants = await findNearestHydrants(client, TABLE, DEPT_ID, ORIGIN);
 
-    expect(hydrants.map((h) => h.hydrantId)).toEqual(['H-50', 'H-100', 'H-200', 'H-300', 'H-400']);
-    expect(hydrants.map((h) => h.distanceMeters)).toEqual([50, 100, 200, 300, 400]);
+    // H-OOS (10 m) is flagged, not counted: five usable hydrants follow it.
+    expect(hydrants.map((h) => h.hydrantId)).toEqual([
+      'H-OOS',
+      'H-50',
+      'H-100',
+      'H-200',
+      'H-300',
+      'H-400',
+    ]);
+    expect(hydrants[0]?.status).toBe('OUT_OF_SERVICE');
+    expect(hydrants.map((h) => h.distanceMeters)).toEqual([10, 50, 100, 200, 300, 400]);
   });
 
   it('stops at the geohash6 ring when it already holds five hydrants inside its covered radius', async () => {

@@ -195,11 +195,16 @@ describe('alert-detail handler', () => {
         utilityShutoffs: [{ utility: 'GAS', location: 'rear of building' }],
       });
       expect(body.prePlan.nearestHydrants.map((h) => h.hydrantId)).toEqual([
+        'H-OOS',
         'H-80',
         'H-150',
         'H-300',
       ]);
       expect(body.prePlan.nearestHydrants[0]).toMatchObject({
+        hydrantId: 'H-OOS',
+        status: 'OUT_OF_SERVICE',
+      });
+      expect(body.prePlan.nearestHydrants[1]).toMatchObject({
         hydrantId: 'H-80',
         status: 'IN_SERVICE',
         size: '6-inch',

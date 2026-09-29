@@ -12,6 +12,7 @@ import {
 import { haversineMeters, isGeoPoint, searchRing, type GeoPoint } from './geo.js';
 import {
   MAX_NEAREST_HYDRANTS,
+  isOutOfService,
   rankNearestHydrants,
   type HydrantCopy,
   type NearestHydrant,
@@ -269,7 +270,7 @@ async function queryHydrantCells(
 }
 
 /**
- * The nearest usable hydrants to `point`, searched in widening geohash rings: a ring's result
+ * The nearest usable hydrants to `point` (plus nearer out-of-service ones, flagged), searched in widening geohash rings: a ring's result
  * is final once it holds `max` hydrants inside the distance that ring fully covers; otherwise
  * the next, wider ring is read. Past the widest ring the list is best-effort (it may include a
  * hydrant slightly farther than one just outside the ring) — acceptable at ~3 km.
@@ -292,7 +293,8 @@ export async function findNearestHydrants(
     const covered = ranked.filter(
       (hydrant) => hydrant.distanceMeters <= ring.guaranteedRadiusMeters,
     );
-    if (covered.length >= max) {
+    // Only usable hydrants count toward `max`; flagged out-of-service ones ride along.
+    if (covered.filter((hydrant) => !isOutOfService(hydrant)).length >= max) {
       return covered;
     }
   }

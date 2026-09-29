@@ -120,3 +120,20 @@ test('CANDIDATES lists every matching pre-plan with its unit and hazards under a
   expect(list.textContent).toContain('123 Main St (unit B)');
   expect(list.textContent).toContain('Chlorine');
 });
+
+test('labels an out-of-service hydrant in text ("OUT OF SERVICE"), not by colour alone', () => {
+  render(
+    <PrePlanPanel
+      prePlan={{
+        ...BASE,
+        nearestHydrants: [
+          { hydrantId: 'H-15', status: 'OUT_OF_SERVICE', distanceMeters: 15 },
+          { hydrantId: 'H-210', status: 'IN_SERVICE', distanceMeters: 210 },
+        ],
+      }}
+    />,
+  );
+  const oos = screen.getByText('H-15 · 15 m · OUT OF SERVICE');
+  expect(oos.style.fontWeight).toBe('700');
+  expect(screen.getByText('H-210 · 210 m').style.fontWeight).toBe('');
+});

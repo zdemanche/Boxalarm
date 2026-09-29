@@ -97,16 +97,68 @@ describe('rankNearestHydrants', () => {
     expect(result.map((h) => h.hydrantId)).toEqual(['HYD-8', 'HYD-7', 'HYD-6', 'HYD-5', 'HYD-4']);
   });
 
-  it('never offers an OUT_OF_SERVICE hydrant, and lets the next one take its place', () => {
-    const result = rankNearestHydrants(
-      ORIGIN,
-      [
-        at('HYD-OOS', 10, { status: 'OUT_OF_SERVICE' }),
-        at('HYD-OK', 200, { status: 'IN_SERVICE' }),
-      ],
-      1,
-    );
-    expect(result.map((h) => h.hydrantId)).toEqual(['HYD-OK']);
+  describe('out-of-service hydrants (MAJOR-7: flagged, never hidden, never counted)', () => {
+    it('lists a nearer out-of-service hydrant with its status, on top of the usable ones', () => {
+      const result = rankNearestHydrants(
+        ORIGIN,
+        [
+          at('HYD-OOS', 10, { status: 'OUT_OF_SERVICE' }),
+          at('HYD-OK', 200, { status: 'IN_SERVICE' }),
+        ],
+        1,
+      );
+      expect(result.map((h) => [h.hydrantId, h.status])).toEqual([
+        ['HYD-OOS', 'OUT_OF_SERVICE'],
+        ['HYD-OK', 'IN_SERVICE'],
+      ]);
+    });
+
+    it('does not count out-of-service hydrants toward the five usable ones', () => {
+      const candidates = [
+        at('OOS-1', 5, { status: 'OUT_OF_SERVICE' }),
+        at('OOS-2', 15, { status: 'OUT_OF_SERVICE' }),
+        ...[50, 100, 150, 200, 250, 300].map((m) => at(`OK-${m}`, m)),
+      ];
+      const result = rankNearestHydrants(ORIGIN, candidates);
+      expect(result.filter((h) => h.status !== 'OUT_OF_SERVICE')).toHaveLength(5);
+      expect(result.map((h) => h.hydrantId)).toEqual([
+        'OOS-1',
+        'OOS-2',
+        'OK-50',
+        'OK-100',
+        'OK-150',
+        'OK-200',
+        'OK-250',
+      ]);
+    });
+
+    it('leaves out an out-of-service hydrant farther than the last usable one listed', () => {
+      const result = rankNearestHydrants(
+        ORIGIN,
+        [at('OK', 50), at('OOS-FAR', 400, { status: 'OUT_OF_SERVICE' })],
+        1,
+      );
+      expect(result.map((h) => h.hydrantId)).toEqual(['OK']);
+    });
+
+    it('with no usable hydrant at all, still lists the nearest out-of-service ones (flagged)', () => {
+      const result = rankNearestHydrants(
+        ORIGIN,
+        [
+          at('OOS-2', 20, { status: 'OUT_OF_SERVICE' }),
+          at('OOS-1', 10, { status: 'OUT_OF_SERVICE' }),
+        ],
+        5,
+      );
+      expect(result.map((h) => [h.hydrantId, h.status])).toEqual([
+        ['OOS-1', 'OUT_OF_SERVICE'],
+        ['OOS-2', 'OUT_OF_SERVICE'],
+      ]);
+    });
+
+    it('never lists an archived hydrant', () => {
+      expect(rankNearestHydrants(ORIGIN, [at('GONE', 10, { archivedAt: 1 })])).toEqual([]);
+    });
   });
 
   it('skips copies with no usable location', () => {

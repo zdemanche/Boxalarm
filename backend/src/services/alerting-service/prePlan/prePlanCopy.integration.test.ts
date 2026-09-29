@@ -175,7 +175,12 @@ describe('pre-plan + hydrant copies -> dispatch detail (real DynamoDB with the a
         summary?: string;
         hazards: string[];
         utilityShutoffs: unknown[];
-        nearestHydrants: Array<{ hydrantId: string; distanceMeters: number; flowClass?: string }>;
+        nearestHydrants: Array<{
+          hydrantId: string;
+          status?: string;
+          distanceMeters: number;
+          flowClass?: string;
+        }>;
       } | null;
     };
   }
@@ -218,15 +223,17 @@ describe('pre-plan + hydrant copies -> dispatch detail (real DynamoDB with the a
       hazards: ['LPG_TANK_REAR'],
       utilityShutoffs: [{ utility: 'gas', location: 'rear yard' }],
     });
-    expect(body.prePlan?.nearestHydrants.map((h) => h.hydrantId)).toEqual([
-      'HYD-90',
-      'HYD-210',
-      'HYD-400',
+    // HYD-OOS (15 m) is listed first and flagged — not hidden, not counted.
+    expect(body.prePlan?.nearestHydrants.map((h) => [h.hydrantId, h.status])).toEqual([
+      ['HYD-OOS', 'OUT_OF_SERVICE'],
+      ['HYD-90', 'IN_SERVICE'],
+      ['HYD-210', 'IN_SERVICE'],
+      ['HYD-400', 'IN_SERVICE'],
     ]);
-    expect(body.prePlan?.nearestHydrants[0]).toMatchObject({ distanceMeters: 90, flowClass: 'AA' });
+    expect(body.prePlan?.nearestHydrants[1]).toMatchObject({ distanceMeters: 90, flowClass: 'AA' });
   });
 
-  it('a later out-of-service event drops that hydrant from the next dispatch view', async () => {
+  it('a later out-of-service event flags that hydrant on the next dispatch view', async () => {
     await consumeHydrant(
       { deptId: 'NICHOLS', hydrantId: 'HYD-90', status: 'OUT_OF_SERVICE' },
       '2026-09-07T00:00:00Z',
@@ -235,7 +242,12 @@ describe('pre-plan + hydrant copies -> dispatch detail (real DynamoDB with the a
 
     const body = await detail('NICHOLS-MANUAL-2');
 
-    expect(body.prePlan?.nearestHydrants.map((h) => h.hydrantId)).toEqual(['HYD-210', 'HYD-400']);
+    expect(body.prePlan?.nearestHydrants.map((h) => [h.hydrantId, h.status])).toEqual([
+      ['HYD-OOS', 'OUT_OF_SERVICE'],
+      ['HYD-90', 'OUT_OF_SERVICE'],
+      ['HYD-210', 'IN_SERVICE'],
+      ['HYD-400', 'IN_SERVICE'],
+    ]);
     const copy = await client.send(
       new GetCommand({
         TableName: TABLE_NAME,

@@ -76,9 +76,16 @@ export interface NearestHydrant {
   readonly distanceMeters: number;
 }
 
+export function isOutOfService(hydrant: { readonly status?: string }): boolean {
+  return hydrant.status === 'OUT_OF_SERVICE';
+}
+
 /**
- * The closest usable hydrants to `reference`, nearest first. OUT_OF_SERVICE hydrants are
- * never offered (a crew cannot use them), nor are copies with no location. Ties break on
+ * The closest `maxResults` usable hydrants to `reference`, nearest first — plus every
+ * OUT_OF_SERVICE hydrant nearer than the last usable one listed (or, with no usable hydrant
+ * at all, the nearest `maxResults` of them), marked by its status and not counted toward the
+ * usable ones. A crew must be told the hydrant in front of the building is bagged, not left
+ * to lay in from it by habit. Copies with no location or archived are skipped; ties break on
  * hydrantId so the list is stable between refreshes.
  */
 export function rankNearestHydrants(
@@ -88,7 +95,7 @@ export function rankNearestHydrants(
 ): readonly NearestHydrant[] {
   const byId = new Map<string, { readonly hydrant: NearestHydrant; readonly exact: number }>();
   for (const hydrant of candidates) {
-    if (hydrant.status === 'OUT_OF_SERVICE' || hydrant.archivedAt !== undefined) continue;
+    if (hydrant.archivedAt !== undefined) continue;
     const location = { latitude: hydrant.latitude, longitude: hydrant.longitude };
     if (!isGeoPoint(location) || byId.has(hydrant.hydrantId)) continue;
     const flowClass = flowClassFor(hydrant.flowRatingGpm);
@@ -107,8 +114,18 @@ export function rankNearestHydrants(
       },
     });
   }
-  return [...byId.values()]
+  const ordered = [...byId.values()].sort(
+    (a, b) => a.exact - b.exact || a.hydrant.hydrantId.localeCompare(b.hydrant.hydrantId),
+  );
+  const usable = ordered.filter((entry) => !isOutOfService(entry.hydrant)).slice(0, maxResults);
+  const outOfService = ordered.filter((entry) => isOutOfService(entry.hydrant));
+  const cutoff =
+    usable.length > 0 ? (usable[usable.length - 1] as (typeof usable)[number]).exact : undefined;
+  const flagged =
+    cutoff === undefined
+      ? outOfService.slice(0, maxResults)
+      : outOfService.filter((entry) => entry.exact < cutoff);
+  return [...usable, ...flagged]
     .sort((a, b) => a.exact - b.exact || a.hydrant.hydrantId.localeCompare(b.hydrant.hydrantId))
-    .slice(0, maxResults)
     .map((entry) => entry.hydrant);
 }

@@ -58,7 +58,7 @@ test('announces a NEARBY match as an alert that says to verify the address', asy
   );
 });
 
-test('flags UNIT_MISMATCH and lists CANDIDATES with their units', async () => {
+test('flags UNIT_MISMATCH as a VERIFY ADDRESS notice naming the other unit', async () => {
   const mismatch = await render(
     <PrePlanPanel
       prePlan={{ ...BASE, matchType: 'UNIT_MISMATCH', matchedAddress: '40 Oak Ave', unit: '2' }}
@@ -69,8 +69,9 @@ test('flags UNIT_MISMATCH and lists CANDIDATES with their units', async () => {
       'VERIFY ADDRESS: this pre-plan is for 40 Oak Ave (unit 2), a different unit than dispatched.',
     ),
   ).toBeTruthy();
-  mismatch.unmount();
+});
 
+test('lists CANDIDATES with their units and hazards under a VERIFY ADDRESS notice', async () => {
   const { findByText } = await render(
     <PrePlanPanel
       prePlan={{
@@ -100,4 +101,21 @@ test('flags UNIT_MISMATCH and lists CANDIDATES with their units', async () => {
   ).toBeTruthy();
   expect(await findByText('123 Main St (unit A)')).toBeTruthy();
   expect(await findByText('Chlorine')).toBeTruthy();
+});
+
+test('labels an out-of-service hydrant "OUT OF SERVICE" in text and in the error colour', async () => {
+  const { findByText } = await render(
+    <PrePlanPanel
+      prePlan={{
+        ...BASE,
+        nearestHydrants: [
+          { hydrantId: 'H-15', status: 'OUT_OF_SERVICE', distanceMeters: 15 },
+          { hydrantId: 'H-210', status: 'IN_SERVICE', distanceMeters: 210 },
+        ],
+      }}
+    />,
+  );
+  const oos = await findByText('H-15 · 15 m · OUT OF SERVICE');
+  expect(oos.props.style).toMatchObject({ fontWeight: '700' });
+  expect(await findByText('H-210 · 210 m')).toBeTruthy();
 });
