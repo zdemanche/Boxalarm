@@ -139,6 +139,24 @@ describe('POST /incidents/{id}/validate', () => {
     });
   });
 
+  it('runs only the local checks for a member (no NERIS call on department credentials)', async () => {
+    mockContext({
+      incident: incident(),
+      units: [COMPLETE_UNIT],
+      settings: settings(),
+      nerisApi: compiled,
+    });
+    const { statusCode, json } = await call(
+      './validateIncident.js',
+      route,
+      { mode: 'both' },
+      { sub: 'MBR-0099', deptId: 'NICHOLS', 'cognito:groups': 'MEMBER' },
+    );
+    expect(statusCode).toBe(200);
+    expect(json.mode).toBe('local');
+    expect(validateIncident).not.toHaveBeenCalled();
+  });
+
   it('returns 403 when Cedar denies', async () => {
     vpSend.mockResolvedValue({ decision: Decision.DENY });
     mockContext({ incident: incident(), units: [], settings: settings() });

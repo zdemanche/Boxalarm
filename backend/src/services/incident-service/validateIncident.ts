@@ -27,6 +27,12 @@ async function inner(
     return problemResponse(400, 'Bad Request', 'mode must be one of local, neris, both.', traceId);
   }
 
+  // The NERIS round trip uses the department's NERIS credentials and counts against its API
+  // limits: members get the local checks; officers and up also ask NERIS (review minor 12).
+  const groups = principal['cognito:groups'].split(' ');
+  const mayAskNeris = groups.some((group) => ['OFFICER', 'CHIEF', 'ADMIN'].includes(group));
+  const effectiveMode: ValidationMode = mayAskNeris ? (mode as ValidationMode) : 'local';
+
   try {
     const context = await loadReportContext(deptId, incidentId);
     if (!context) {
@@ -39,7 +45,7 @@ async function inner(
     }
     const report = await runValidation({
       ...context,
-      mode: mode as ValidationMode,
+      mode: effectiveMode,
       api: nerisApiFromEnv,
       nowEpochSeconds: Math.floor(Date.now() / 1000),
     });
@@ -49,7 +55,7 @@ async function inner(
     return {
       statusCode: 200,
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ incidentId, mode, ...report }),
+      body: JSON.stringify({ incidentId, mode: effectiveMode, ...report }),
     };
   } catch (error) {
     console.error(
