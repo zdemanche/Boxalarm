@@ -71,6 +71,6 @@ None of this could run in CI (no Xcode or Android SDK there): the Kotlin module,
 | 30 | iPhone | Settings > Notifications > Boxalarm set to **Deliver Quietly** (provisional) | The red readiness banner names notifications as delivered quietly. |
 | 31 | iPhone | **Silent switch on + Sleep Focus**, page | Time-sensitive: breaks through Sleep Focus if allowed, but **no sound on silent** - expected until Critical Alerts (#4). The self-test "Did your phone ring?" → No path tells the member to set the switch to ring. |
 | 32 | All | Me > Test my alert path | Checklist rows match the device state; after the test page, "Did your phone ring?" is asked; "No" lists the failing checks. |
-| 33 | All | Me > Sign out | A confirmation warns the phone will stop receiving pages; "Stay signed in" is the default. |
+| 33 | All | Me > Sign out | A confirmation warns that app pages stop on every device the member uses (one registration per member until the multi-device backend work lands) and only mentions text/voice as conditional; "Stay signed in" is the default. After multi-device push ships, update this copy to "this device". |
 
 Record the device model, OS version, build number and stack for each run in the release notes.

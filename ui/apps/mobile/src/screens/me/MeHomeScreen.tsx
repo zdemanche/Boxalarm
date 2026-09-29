@@ -37,13 +37,24 @@ function NavRow({
 }
 
 /**
- * Sign-out is not a routine tap on this app: it deletes this phone's push registration, so the
- * phone stops being paged (alert-ux C7). Say so, and make staying signed in the default.
+ * Sign-out is not a routine tap on this app. The server keeps one app registration per member
+ * (personnel-service pushTokens) and sign-out deletes it, so app pages stop on EVERY device the
+ * member uses, not just this one (alert-ux C7, review MJ-5) - say that, and do not promise text or
+ * voice pages the member may not have. Staying signed in is the default.
  */
-export function confirmSignOut(signOut: () => Promise<void>): void {
+export function signOutWarning(phone: string | null | undefined): string {
+  const appPages =
+    'Pages to the Boxalarm app stop on every phone or tablet you use until you sign in again.';
+  const other = phone
+    ? ` Text and voice pages to ${phone} continue only if they are set up for you - check with your officer if you are not sure.`
+    : ' No phone number is on file, so you would get no text or voice pages either.';
+  return appPages + other;
+}
+
+export function confirmSignOut(signOut: () => Promise<void>, phone?: string | null): void {
   Alert.alert(
-    'Sign out and stop getting pages on this phone?',
-    'This phone will stop receiving dispatch pages until you sign in again. Text and voice pages still go to your phone number.',
+    'Sign out and stop getting app pages?',
+    signOutWarning(phone),
     [
       { text: 'Stay signed in', style: 'cancel' },
       { text: 'Sign out', style: 'destructive', onPress: () => void signOut() },
@@ -173,8 +184,8 @@ export function MeHomeScreen() {
         <Button
           label="Sign out"
           variant="danger"
-          accessibilityLabel="Sign out. This phone will stop receiving pages."
-          onPress={() => confirmSignOut(signOut)}
+          accessibilityLabel="Sign out. Boxalarm app pages stop on all your devices."
+          onPress={() => confirmSignOut(signOut, profile?.phone)}
         />
       </View>
     </Screen>

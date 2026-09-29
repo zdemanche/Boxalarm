@@ -1,7 +1,7 @@
 import notifee from '@notifee/react-native';
 import { fireEvent, render } from '@testing-library/react-native';
 import { Alert } from 'react-native';
-import { MeHomeScreen } from './MeHomeScreen';
+import { MeHomeScreen, signOutWarning } from './MeHomeScreen';
 
 const mockSignOut = jest.fn(async () => {});
 
@@ -66,8 +66,9 @@ test('sign-out asks first and warns that the phone will stop receiving pages', a
 
   expect(mockSignOut).not.toHaveBeenCalled();
   const [title, message, buttons] = alertSpy.mock.calls[0]!;
-  expect(title).toMatch(/stop getting pages/i);
-  expect(message).toMatch(/will stop receiving dispatch pages/i);
+  expect(title).toMatch(/stop getting app pages/i);
+  expect(message).toMatch(/stop on every phone or tablet you use/i);
+  expect(message).toMatch(/continue only if they are set up for you/i);
   const cancel = buttons!.find((button) => button.style === 'cancel')!;
   const confirm = buttons!.find((button) => button.style === 'destructive')!;
   expect(cancel.text).toBe('Stay signed in');
@@ -92,4 +93,9 @@ test('a ready phone shows no readiness banner', async () => {
 
   expect(await findByText('Jamie Rios')).toBeTruthy();
   expect(queryByText(/This phone may not wake you for a page/)).toBeNull();
+});
+
+test('without a phone number on file, sign-out does not promise text or voice pages', () => {
+  expect(signOutWarning('')).toMatch(/no phone number is on file/i);
+  expect(signOutWarning('203-555-0100')).toMatch(/to 203-555-0100 continue only if/);
 });
