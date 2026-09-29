@@ -105,7 +105,8 @@ describe('validateConfigValue', () => {
       const errors = validateConfigValue('ALERT_RULES', {});
       expect(errors).toContainEqual({
         field: 'value',
-        message: 'must include at least one of escalationThresholdN, certExpiryLeadDays',
+        message:
+          'must include at least one of escalationThresholdN, certExpiryLeadDays, toneLadder, defaultRule',
       });
     });
 
@@ -126,6 +127,33 @@ describe('validateConfigValue', () => {
         field: 'arbitraryField',
         message: 'is not a recognized field',
       });
+    });
+  });
+
+  // Design review M1: the tone ladder and its predicate are department config the alerting
+  // plane projects into ALERT_RULES_COPY; before, they could not even be set.
+  describe('ALERT_RULES tone ladder and predicate', () => {
+    it('accepts the tone ladder timing and the stopping predicate', () => {
+      expect(
+        validateConfigValue('ALERT_RULES', {
+          toneLadder: { tone2AtSeconds: 120, tone3AtSeconds: 300 },
+          defaultRule: { minResponders: 3, requiredQuals: ['INTERIOR'] },
+        }),
+      ).toEqual([]);
+    });
+
+    it.each([
+      [{ toneLadder: { tone2AtSeconds: 0 } }, 'toneLadder.tone2AtSeconds'],
+      [{ toneLadder: { tone2AtSeconds: 300, tone3AtSeconds: 200 } }, 'toneLadder.tone3AtSeconds'],
+      [{ toneLadder: { tone4AtSeconds: 900 } }, 'toneLadder.tone4AtSeconds'],
+      [{ toneLadder: 'soon' }, 'toneLadder'],
+      [{ defaultRule: { minResponders: 1.5 } }, 'defaultRule.minResponders'],
+      [{ defaultRule: { requiredQuals: [''] } }, 'defaultRule.requiredQuals'],
+      [{ defaultRule: { requiredQuals: { INTERIOR: 2 } } }, 'defaultRule.requiredQuals'],
+    ])('rejects %j (%s)', (value, field) => {
+      expect(validateConfigValue('ALERT_RULES', value).map((error) => error.field)).toContain(
+        field,
+      );
     });
   });
 

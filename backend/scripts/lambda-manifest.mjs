@@ -649,6 +649,12 @@ export const LAMBDA_ENTRIES = [
     entry: 'src/services/alerting-service/eligibility/consumer.ts',
   },
   {
+    // platform.config.updated (ALERT_RULES) -> ALERT_RULES_COPY (design review M1).
+    service: 'alerting-service',
+    function: 'alert-rules-copy-consumer',
+    entry: 'src/services/alerting-service/alertRules/alertRulesCopyHandler.ts',
+  },
+  {
     service: 'personnel-service',
     function: 'shift-completion',
     entry: 'src/services/personnel-service/shifts/completionHandler.ts',
