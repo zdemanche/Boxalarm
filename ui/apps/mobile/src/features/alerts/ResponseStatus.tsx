@@ -67,6 +67,14 @@ export function responseDeliveryCopy(delivery: ResponseDelivery): Copy {
           "The server got this answer but did not put it on the officer's roster. Send it again, or tell your officer by radio.",
         spoken: "not recorded on the officer's roster",
       };
+    case 'notConnected':
+      return {
+        role: 'danger',
+        chip: 'Not sent - no server',
+        detail:
+          'This phone is not connected to a Boxalarm server (not signed in, or no server set up), so this answer reached no one. Tell your officer by radio.',
+        spoken: 'not sent, no server connected',
+      };
     case 'signInRejected':
       return {
         role: 'danger',

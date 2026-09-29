@@ -182,7 +182,8 @@ test('the answer can be changed, and the selected answer is exposed to screen re
 
   expect(await findByText(/your response: responding/i)).toBeTruthy();
   const chosen = await findByRole('button', { name: RESPONDING, selected: true });
-  expect(chosen.props.accessibilityLabel).toMatch(/your answer, sent/i);
+  // No server behind the fixture repository: the answer is never reported as sent (review m10).
+  expect(chosen.props.accessibilityLabel).toMatch(/your answer, not sent, no server connected/i);
   expect(await findByRole('button', { name: NOT_RESPONDING, selected: false })).toBeTruthy();
 });
 
@@ -429,4 +430,15 @@ describe('dispatch time (review MJ-2)', () => {
 
     expect(await findByText(/^DISPATCHED 01:05 · /)).toBeTruthy();
   });
+});
+
+test('without a server (fixture repository) an answer reads "Not sent - no server", never "Sent" (review m10)', async () => {
+  const { findByRole, findByText, queryByText } = await render(<AlertDetailScreen />);
+
+  await act(async () => {
+    fireEvent.press(await findByRole('button', { name: NOT_RESPONDING }));
+  });
+
+  expect(await findByText('Not sent - no server')).toBeTruthy();
+  expect(queryByText('Sent')).toBeNull();
 });

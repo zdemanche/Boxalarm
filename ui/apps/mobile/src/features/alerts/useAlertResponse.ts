@@ -36,7 +36,8 @@ export type ResponseDelivery =
   | 'unsaved'
   | 'notRecorded'
   | 'disputed'
-  | 'signInRejected';
+  | 'signInRejected'
+  | 'notConnected';
 
 export interface MyAnswer {
   ackStatus: ResponseAnswer;
@@ -64,7 +65,9 @@ export function deliveryFor(
   serverConfirms: boolean,
   lastError: string | null = null,
 ): ResponseDelivery {
-  if (outboxId === null) return 'sent';
+  // No outbox row means no API was configured (the local fixture repository): nothing was sent
+  // to anyone, whatever the fixture recorded (review m10).
+  if (outboxId === null) return 'notConnected';
   switch (state) {
     case 'QUEUED':
     case 'SYNCING':
@@ -109,6 +112,8 @@ export function deliveryAnnouncement(answer: MyAnswer, delivery: ResponseDeliver
       return `Your change to ${what} did not reach the officer's roster. Send it again, or tell your officer by radio.`;
     case 'disputed':
       return `The officer's roster does not show your answer, ${what}. Send it again or keep what the roster shows.`;
+    case 'notConnected':
+      return `Your response, ${what}, was not sent: this phone is not connected to a Boxalarm server. Tell your officer by radio.`;
     case 'signInRejected':
       return `Your response, ${what}, is not sent: the server did not accept this phone's sign-in. It keeps retrying. Tell your officer by radio.`;
   }
@@ -246,7 +251,8 @@ export function useAlertResponse(
         delivery === 'unsaved' ||
         delivery === 'notRecorded' ||
         delivery === 'disputed' ||
-        delivery === 'signInRejected',
+        delivery === 'signInRejected' ||
+        delivery === 'notConnected',
     );
   }, [answer, delivery]);
 
