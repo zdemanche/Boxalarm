@@ -66,6 +66,11 @@ export class IncidentTable extends pulumi.ComponentResource {
           enabled: true,
           kmsKeyArn: this.cmk.arn,
         },
+        // Review MINOR 5: riding-assignment dedup rows (incident-service/ridingAssignmentConsumer.ts) set an epoch-seconds `ttl`; without TTL enabled they
+        // were kept forever (a PII-retention and storage issue). Rows that must never expire
+        // (outbox entries, audit rows) deliberately carry no `ttl`. Enabling TTL is an
+        // in-place update, not a replacement.
+        ttl: { attributeName: "ttl", enabled: true },
         // A replace-forcing schema change here is a total outage of incident data.
         // PITR alone doesn't guard against it.
         deletionProtectionEnabled: true,

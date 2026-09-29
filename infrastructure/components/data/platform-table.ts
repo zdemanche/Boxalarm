@@ -103,6 +103,11 @@ export class PlatformTable extends pulumi.ComponentResource {
         streamViewType: "NEW_AND_OLD_IMAGES",
         // AWS-managed encryption for DynamoDB (enabled; no customer CMK).
         serverSideEncryption: { enabled: true },
+        // Review MINOR 5: notification inbox/digest/seen rows (notification-service/repository.ts), defect-claim rows and reporting projection dedup rows set an epoch-seconds `ttl`; without TTL enabled they
+        // were kept forever (a PII-retention and storage issue). Rows that must never expire
+        // (outbox entries, audit rows) deliberately carry no `ttl`. Enabling TTL is an
+        // in-place update, not a replacement.
+        ttl: { attributeName: "ttl", enabled: true },
         // PITR protects against in-window corruption, not against a replace-forcing
         // schema change (renamed GSI attribute, etc.) destroying the table outright.
         deletionProtectionEnabled: true,
