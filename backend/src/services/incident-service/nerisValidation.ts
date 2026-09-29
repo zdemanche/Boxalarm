@@ -2,6 +2,7 @@ import type { Incident } from './entity.js';
 import type { NerisSchemaDocument } from './schemaVersion/entity.js';
 import type { NerisDeptSettings } from './nerisSettings.js';
 import type { NerisApi, NerisIssue } from './neris/api.js';
+import { incidentTypeLabel, type CompiledNerisSchema } from './neris/apiSchema.js';
 import {
   buildNerisIncidentPayload,
   hasIncidentCategory,
@@ -59,7 +60,25 @@ export interface LocalValidationInput {
   readonly units: readonly ResponseUnitRow[];
   readonly settings: NerisDeptSettings;
   readonly schema?: NerisSchemaDocument;
+  /** Compiled NERIS payload schema: its TypeIncidentValue list is the only valid type list. */
+  readonly nerisApi?: CompiledNerisSchema;
   readonly nowEpochSeconds: number;
+}
+
+/**
+ * NERIS types a non-NERIS value (a legacy local code or a CAD string) plausibly means: those
+ * with a segment equal to it (`STRUCTURE_FIRE` -> the four `FIRE||STRUCTURE_FIRE||*`), else
+ * those whose last segment contains it.
+ */
+export function suggestNerisTypes(value: string, nerisTypes: readonly string[]): string[] {
+  const token = value
+    .trim()
+    .toUpperCase()
+    .replace(/[^A-Z0-9]+/g, '_');
+  if (!token) return [];
+  const bySegment = nerisTypes.filter((type) => type.split('||').includes(token));
+  if (bySegment.length > 0) return bySegment;
+  return nerisTypes.filter((type) => (type.split('||').pop() ?? '').includes(token));
 }
 
 /** Plain names for the fields officers see; anything else is humanized from its key. */
@@ -188,6 +207,44 @@ export function localValidation(input: LocalValidationInput): {
       message: 'NERIS takes at most three incident types. Keep the primary one and up to two more.',
     });
   }
+  // Every type must be a NERIS TypeIncidentValue (from the downloaded NERIS schema):
+  // legacy local codes and raw CAD strings are refused before they can reach NERIS.
+  if (input.nerisApi) {
+    const nerisTypes = input.nerisApi.incidentTypes;
+    for (const value of values) {
+      if (value === 'UNDETERMINED' || nerisTypes.includes(value)) continue;
+      const suggestions = suggestNerisTypes(value, nerisTypes);
+      const only = suggestions.length === 1 ? suggestions[0] : undefined;
+      blocking.push({
+        path: 'fields.incident_type',
+        code: 'INCIDENT_TYPE_NOT_NERIS',
+        section: 'core',
+        message:
+          only !== undefined
+            ? `"${value}" isn't a NERIS incident type. It matches ${incidentTypeLabel(only)}.`
+            : suggestions.length > 1
+              ? `"${value}" isn't a NERIS incident type. Pick one of the ${suggestions.length} NERIS types it could be (${incidentTypeLabel(suggestions[0]!.split('||').slice(0, 2).join('||'))} …).`
+              : `"${value}" isn't a NERIS incident type. Pick the NERIS type from the list.`,
+        ...(only !== undefined
+          ? {
+              fix: {
+                label: `Use ${incidentTypeLabel(only)}`,
+                path: 'fields.incident_type',
+                value: only,
+              },
+            }
+          : {}),
+      });
+    }
+  } else if (values.length > 0) {
+    warnings.push({
+      path: 'fields.incident_type',
+      code: 'NERIS_TYPES_UNAVAILABLE',
+      section: 'core',
+      message:
+        "The NERIS incident-type list hasn't been downloaded yet, so the type can't be checked here. NERIS will check it.",
+    });
+  }
 
   // Cached NERIS schema pin: required fields and value lists.
   if (schema) {
@@ -205,6 +262,8 @@ export function localValidation(input: LocalValidationInput): {
       }
     }
     for (const [field, allowed] of Object.entries(schema.enumerations)) {
+      // The incident type is judged against the NERIS list above, not an older pin's list.
+      if (field === 'incident_type' && input.nerisApi) continue;
       const value = core[field];
       if (typeof value === 'string' && value.length > 0 && !allowed.includes(value)) {
         blocking.push({

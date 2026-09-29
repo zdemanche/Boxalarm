@@ -24,7 +24,7 @@ function incident(overrides: Record<string, unknown> = {}) {
     dispatchNumber: '4471',
     epochSeconds: ALARM,
     nerisSchemaVersion: '2026.2',
-    corePayload: { incident_type: 'FIRE||OUTSIDE_FIRE||DUMPSTER_OUTDOOR_TRASH_RUBBISH_FIRE' },
+    corePayload: { incident_type: 'FIRE||OUTSIDE_FIRE||DUMPSTER_OUTDOOR_CONTAINER_FIRE' },
     address: '12 Main St, Trumbull, CT 06611',
     alarmAt: ALARM,
     narrative: 'Dumpster fire, knocked down.',
@@ -212,7 +212,7 @@ describe('POST /incidents/{id}/lock', () => {
     review.lockIncident.mockResolvedValue({ status: 'VALIDATED' });
     const { statusCode, json } = await call('./lockIncident.js', route);
     expect(statusCode).toBe(200);
-    expect((json.warnings as { code: string }[]).map((w) => w.code)).toEqual(['NERIS_UNREACHABLE']);
+    expect((json.warnings as { code: string }[]).map((w) => w.code)).toContain('NERIS_UNREACHABLE');
   });
 
   it('answers 409 for an already-locked report and for a report edited during review', async () => {

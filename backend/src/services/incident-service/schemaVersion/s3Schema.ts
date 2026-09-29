@@ -1,5 +1,6 @@
 import { GetObjectCommand, PutObjectCommand, type S3Client } from '@aws-sdk/client-s3';
 import type { NerisSchemaDocument, NerisSecondarySchemaDocument } from './entity.js';
+import type { CompiledNerisSchema } from '../neris/apiSchema.js';
 
 async function readBody(body: unknown): Promise<string> {
   const stream = body as { transformToString?: () => Promise<string> } | undefined;
@@ -13,7 +14,7 @@ export async function putSchemaDocument(
   s3: S3Client,
   bucket: string,
   key: string,
-  document: NerisSchemaDocument | NerisSecondarySchemaDocument,
+  document: NerisSchemaDocument | NerisSecondarySchemaDocument | CompiledNerisSchema,
 ): Promise<void> {
   await s3.send(
     new PutObjectCommand({
@@ -87,4 +88,12 @@ export function getSecondarySchemaDocument(
   key: string,
 ): Promise<NerisSecondarySchemaDocument> {
   return getCachedDocument<NerisSecondarySchemaDocument>(s3, bucket, key);
+}
+
+export function getNerisApiSchemaDocument(
+  s3: S3Client,
+  bucket: string,
+  key: string,
+): Promise<CompiledNerisSchema> {
+  return getCachedDocument<CompiledNerisSchema>(s3, bucket, key);
 }

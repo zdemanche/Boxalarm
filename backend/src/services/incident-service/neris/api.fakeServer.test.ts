@@ -4,6 +4,52 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { createNerisClient } from './client.js';
 import { createNerisApi, type NerisApi } from './api.js';
 import { createTokenCache } from './tokenCache.js';
+import {
+  PAYLOAD_ROOT,
+  findUndeclaredKeys,
+  validateNode,
+  type CompiledNerisSchema,
+} from './apiSchema.js';
+import { buildNerisIncidentPayload } from './payload.js';
+import type { Incident } from '../entity.js';
+import compiled from './fixtures/neris-api-1.5.1.json' with { type: 'json' };
+
+const SCHEMA = compiled as unknown as CompiledNerisSchema;
+
+/**
+ * The fake validates like NERIS does (pydantic, `additionalProperties: false`): the payload
+ * against the compiled NERIS 1.5.1 schema — required fields, every enum (incident types
+ * included) and undeclared keys at any depth — so a test cannot pass on a payload NERIS
+ * would 422.
+ */
+function nerisDetail(payload: unknown): { loc: (string | number)[]; msg: string; type: string }[] {
+  const loc = (path: string): (string | number)[] => [
+    'body',
+    ...path
+      .replace(/\[(\d+)\]/g, '.$1')
+      .split('.')
+      .filter(Boolean)
+      .map((part) => (/^\d+$/.test(part) ? Number(part) : part)),
+  ];
+  const root = { k: 'ref', n: PAYLOAD_ROOT } as const;
+  return [
+    ...findUndeclaredKeys(SCHEMA, root, payload).map((path) => ({
+      loc: loc(path),
+      msg: 'Extra inputs are not permitted',
+      type: 'extra_forbidden',
+    })),
+    ...validateNode(SCHEMA, root, payload).map((issue) => ({
+      loc: loc(issue.path),
+      msg:
+        issue.code === 'required'
+          ? 'Field required'
+          : issue.code === 'enum'
+            ? 'Input should be a valid enum member'
+            : 'Input should be a valid value',
+      type: issue.code === 'required' ? 'missing' : issue.code === 'enum' ? 'enum' : 'type_error',
+    })),
+  ];
+}
 
 /**
  * The NERIS client against a local fake NERIS server that implements the paths, auth and
@@ -72,11 +118,13 @@ function route(req: Recorded, res: ServerResponse): void {
 
   if (segments[0] === 'incident' && segments.length === 3 && segments[2] === 'validate') {
     if (req.method !== 'POST') return send(res, 405);
-    return payload.dispatch ? send(res, 204) : invalid(res, ['body', 'dispatch'], 'Field required');
+    const detail = nerisDetail(payload);
+    return detail.length === 0 ? send(res, 204) : send(res, 422, { detail });
   }
   if (segments[0] === 'incident' && segments.length === 2 && req.method === 'POST') {
     if (!/^(FD|VN|FM|FA)\d{8}$/.test(segments[1]!)) return send(res, 422, { detail: 'bad entity' });
-    if (!payload.dispatch) return invalid(res, ['body', 'dispatch'], 'Field required');
+    const detail = nerisDetail(payload);
+    if (detail.length > 0) return send(res, 422, { detail });
     return send(res, 201, {
       neris_id: NERIS_ID,
       incident_status: { status: 'SUBMITTED', last_modified: '2026-09-29T10:00:00Z' },
@@ -171,7 +219,19 @@ function api(userAgent = USER_AGENT, clientSecret = CLIENT_SECRET): NerisApi {
   );
 }
 
-const PAYLOAD = { base: { department_neris_id: ENTITY }, incident_types: [], dispatch: {} };
+const CALL = '2026-09-29T14:02:11.000Z';
+const PAYLOAD = {
+  base: { department_neris_id: ENTITY, incident_number: '4471', location: { street: 'Main St' } },
+  incident_types: [{ type: 'FIRE||STRUCTURE_FIRE||CHIMNEY_FIRE', primary: true }],
+  dispatch: {
+    incident_number: '4471',
+    call_arrival: CALL,
+    call_answered: CALL,
+    call_create: CALL,
+    location: { street: 'Main St' },
+    unit_responses: [],
+  },
+};
 
 describe('NERIS client against a fake NERIS server', () => {
   beforeEach(() => {
@@ -196,11 +256,66 @@ describe('NERIS client against a fake NERIS server', () => {
   it('maps a 422 create to a validation failure with flattened issue paths', async () => {
     const result = await api().createIncident(ENTITY, { base: {} });
 
-    expect(result).toEqual({
+    expect(result).toMatchObject({ ok: false, kind: 'validation', httpStatus: 422 });
+    expect((result as unknown as { issues: unknown[] }).issues).toEqual(
+      expect.arrayContaining([
+        { path: 'dispatch', code: 'missing', message: 'Field required' },
+        { path: 'base.incident_number', code: 'missing', message: 'Field required' },
+      ]),
+    );
+  });
+
+  it('rejects a local incident-type code that is not a NERIS TypeIncidentValue', async () => {
+    const result = await api().validateIncident(ENTITY, {
+      ...PAYLOAD,
+      incident_types: [{ type: 'STRUCTURE_FIRE', primary: true }],
+    });
+    expect(result).toMatchObject({
       ok: false,
       kind: 'validation',
-      httpStatus: 422,
-      issues: [{ path: 'dispatch', code: 'missing', message: 'Field required' }],
+      issues: [{ path: 'incident_types[0].type', code: 'enum' }],
+    });
+  });
+
+  it('rejects undeclared keys at any depth (additionalProperties: false)', async () => {
+    const result = await api().validateIncident(ENTITY, {
+      ...PAYLOAD,
+      base: { ...PAYLOAD.base, internal_note: 'x' },
+    });
+    expect(result).toMatchObject({
+      ok: false,
+      issues: [{ path: 'base.internal_note', code: 'extra_forbidden' }],
+    });
+  });
+
+  it('accepts a payload built from a NERIS-typed report by the payload builder', async () => {
+    const incident = {
+      incidentId: 'NICHOLS-4471-1798000000',
+      deptId: 'NICHOLS',
+      dispatchNumber: '4471',
+      epochSeconds: 1_798_000_000,
+      nerisSchemaVersion: '2026.2+neris-1.5.1',
+      corePayload: {
+        incident_type: 'FIRE||OUTSIDE_FIRE||DUMPSTER_OUTDOOR_CONTAINER_FIRE',
+      },
+      address: '12 Main St, Trumbull, CT 06611',
+      alarmAt: 1_798_000_000,
+      narrative: 'Dumpster fire.',
+      status: 'DRAFT',
+      sourceDispatchId: 'NICHOLS-4471-1798000000',
+      createdBy: 'MBR-0034',
+      createdAt: 1_798_000_000,
+      updatedAt: 1_798_000_000,
+    } as Incident;
+    const payload = buildNerisIncidentPayload({
+      incident,
+      units: [{ unitId: 'E1', unitType: 'APPARATUS', dispatchedAt: 1_798_000_060 }],
+      departmentNerisId: ENTITY,
+      unitNerisIds: {},
+    });
+    await expect(api().validateIncident(ENTITY, payload)).resolves.toEqual({
+      ok: true,
+      httpStatus: 204,
     });
   });
 

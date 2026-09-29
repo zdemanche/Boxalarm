@@ -4,7 +4,8 @@ import { getDocumentClient, getIncidentRepository, getTableName } from './reposi
 import { getNerisDeptSettings, type NerisDeptSettings } from './nerisSettings.js';
 import { queryIncidentResponseUnits } from './dispatchProjection.js';
 import { createSchemaVersionRepository } from './schemaVersion/repository.js';
-import { getCoreSchemaDocument } from './schemaVersion/s3Schema.js';
+import { getCoreSchemaDocument, getNerisApiSchemaDocument } from './schemaVersion/s3Schema.js';
+import type { CompiledNerisSchema } from './neris/apiSchema.js';
 import type { NerisSchemaDocument } from './schemaVersion/entity.js';
 import { getS3Client } from '../platform-service/export/awsClients.js';
 import type { ResponseUnitRow } from './neris/payload.js';
@@ -17,6 +18,8 @@ export interface ReportContext {
   readonly settings: NerisDeptSettings;
   readonly units: readonly ResponseUnitRow[];
   readonly schema?: NerisSchemaDocument;
+  /** The compiled NERIS payload schema (incident types, module sub-schemas). */
+  readonly nerisApi?: CompiledNerisSchema;
 }
 
 /**
@@ -24,16 +27,27 @@ export interface ReportContext {
  * back to ACTIVE; undefined when none is published or no bucket is configured, in which case
  * only the structural and department rules run.
  */
-async function loadSchema(incident: Incident): Promise<NerisSchemaDocument | undefined> {
+async function loadSchema(
+  incident: Incident,
+): Promise<{ schema?: NerisSchemaDocument; nerisApi?: CompiledNerisSchema }> {
   const bucket = process.env.NERIS_SCHEMA_BUCKET_NAME;
   if (!bucket) {
-    return undefined;
+    return {};
   }
   const repository = createSchemaVersionRepository(getDocumentClient(), getTableName(process.env));
-  const pinned =
-    (await repository.getSchemaVersion(incident.nerisSchemaVersion)) ??
-    (await repository.getActiveSchemaVersion());
-  return pinned ? getCoreSchemaDocument(getS3Client(), bucket, pinned.coreSchemaS3Key) : undefined;
+  const [pinned, active] = await Promise.all([
+    repository.getSchemaVersion(incident.nerisSchemaVersion),
+    repository.getActiveSchemaVersion(),
+  ]);
+  const version = pinned ?? active;
+  // The NERIS payload schema follows the pin when the pin has one, else the ACTIVE version:
+  // a report authored before the NERIS schema was downloaded still validates against it.
+  const nerisApiKey = pinned?.nerisApiS3Key ?? active?.nerisApiS3Key;
+  const [schema, nerisApi] = await Promise.all([
+    version ? getCoreSchemaDocument(getS3Client(), bucket, version.coreSchemaS3Key) : undefined,
+    nerisApiKey ? getNerisApiSchemaDocument(getS3Client(), bucket, nerisApiKey) : undefined,
+  ]);
+  return { ...(schema ? { schema } : {}), ...(nerisApi ? { nerisApi } : {}) };
 }
 
 export async function loadReportContext(
@@ -46,7 +60,7 @@ export async function loadReportContext(
   }
   const client = getDocumentClient();
   const tableName = getTableName(process.env);
-  const [settings, units, schema] = await Promise.all([
+  const [settings, units, schemas] = await Promise.all([
     getNerisDeptSettings(client, tableName, deptId),
     queryIncidentResponseUnits(client, tableName, deptId, incidentId),
     loadSchema(incident),
@@ -55,7 +69,7 @@ export async function loadReportContext(
     incident,
     settings,
     units: units as unknown as ResponseUnitRow[],
-    ...(schema ? { schema } : {}),
+    ...schemas,
   };
 }
 

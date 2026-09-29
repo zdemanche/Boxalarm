@@ -182,6 +182,7 @@ describe("Incident", () => {
         "POST /api/v1/incidents/{incidentId}/resubmit",
         "POST /api/v1/incidents/no-activity-reports",
         "GET /api/v1/incidents/{incidentId}/submissions",
+        "GET /api/v1/incidents/neris-schema",
       ]),
     );
   });

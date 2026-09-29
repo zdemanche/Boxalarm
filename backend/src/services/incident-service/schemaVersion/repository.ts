@@ -26,6 +26,7 @@ function toSchemaVersion(item: Record<string, unknown>): SchemaVersion {
     status: item.status as SchemaVersionStatus,
     coreSchemaS3Key: item.coreSchemaS3Key as string,
     secondarySchemaS3Key: item.secondarySchemaS3Key as string,
+    ...(typeof item.nerisApiS3Key === 'string' ? { nerisApiS3Key: item.nerisApiS3Key } : {}),
     publishedAt: item.publishedAt as number,
   };
 }
@@ -34,6 +35,7 @@ export interface PublishSchemaVersionInput {
   readonly version: string;
   readonly coreSchemaS3Key: string;
   readonly secondarySchemaS3Key: string;
+  readonly nerisApiS3Key?: string;
   readonly publishedAt: number;
 }
 
@@ -67,6 +69,7 @@ export function createSchemaVersionRepository(
         status: 'ACTIVE',
         coreSchemaS3Key: input.coreSchemaS3Key,
         secondarySchemaS3Key: input.secondarySchemaS3Key,
+        ...(input.nerisApiS3Key ? { nerisApiS3Key: input.nerisApiS3Key } : {}),
         publishedAt: input.publishedAt,
       };
       try {

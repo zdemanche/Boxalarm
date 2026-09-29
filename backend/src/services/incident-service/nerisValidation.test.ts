@@ -2,7 +2,10 @@ import { describe, expect, it, vi } from 'vitest';
 import type { Incident } from './entity.js';
 import { DEFAULT_NERIS_SETTINGS, type NerisDeptSettings } from './nerisSettings.js';
 import type { NerisApi } from './neris/api.js';
+import type { CompiledNerisSchema } from './neris/apiSchema.js';
+import compiled from './neris/fixtures/neris-api-1.5.1.json' with { type: 'json' };
 import {
+  suggestNerisTypes,
   describeNerisIssue,
   fieldLabel,
   localValidation,
@@ -20,7 +23,7 @@ function incident(overrides: Record<string, unknown> = {}): Incident {
     dispatchNumber: '4471',
     epochSeconds: ALARM,
     nerisSchemaVersion: '2026.2',
-    corePayload: { incident_type: 'FIRE||OUTSIDE_FIRE||DUMPSTER_OUTDOOR_TRASH_RUBBISH_FIRE' },
+    corePayload: { incident_type: 'FIRE||OUTSIDE_FIRE||DUMPSTER_OUTDOOR_CONTAINER_FIRE' },
     address: '12 Main St, Trumbull, CT 06611',
     alarmAt: ALARM,
     narrative: 'Dumpster fire behind the plaza, knocked down with the booster line.',
@@ -32,6 +35,8 @@ function incident(overrides: Record<string, unknown> = {}): Incident {
     ...overrides,
   };
 }
+
+const NERIS_API = compiled as unknown as CompiledNerisSchema;
 
 const SETTINGS: NerisDeptSettings = {
   ...DEFAULT_NERIS_SETTINGS,
@@ -58,6 +63,7 @@ describe('localValidation', () => {
       incident: incident(),
       units: [E1],
       settings: SETTINGS,
+      nerisApi: NERIS_API,
       nowEpochSeconds: NOW,
     });
     expect(result.blocking).toEqual([]);
@@ -69,6 +75,7 @@ describe('localValidation', () => {
       incident: incident({ corePayload: {}, address: undefined, narrative: undefined }),
       units: [E1],
       settings: SETTINGS,
+      nerisApi: NERIS_API,
       nowEpochSeconds: NOW,
     });
     expect(codes(result.blocking)).toEqual([
@@ -84,6 +91,7 @@ describe('localValidation', () => {
       incident: incident(),
       units: [{ ...E1, enRouteAt: ALARM + 30 }],
       settings: SETTINGS,
+      nerisApi: NERIS_API,
       nowEpochSeconds: NOW,
     });
     const issue = result.blocking.find((i) => i.code === 'UNIT_TIMES_OUT_OF_ORDER')!;
@@ -101,6 +109,7 @@ describe('localValidation', () => {
       incident: incident(),
       units: [{ ...E1, dispatchedAt: ALARM - 90 }],
       settings: SETTINGS,
+      nerisApi: NERIS_API,
       nowEpochSeconds: NOW,
     });
     const issue = result.blocking.find((i) => i.code === 'UNIT_DISPATCHED_BEFORE_CALL')!;
@@ -112,6 +121,7 @@ describe('localValidation', () => {
       incident: incident({ narrative: 'Out.' }),
       units: [{ unitId: 'E1', unitType: 'APPARATUS', dispatchedAt: ALARM + 60 }],
       settings: { ...SETTINGS, rules: { ...SETTINGS.rules, minNarrativeLength: 20 } },
+      nerisApi: NERIS_API,
       nowEpochSeconds: NOW,
     });
     expect(codes(result.blocking)).toEqual(['UNIT_TIMES_MISSING', 'NARRATIVE_TOO_SHORT']);
@@ -126,6 +136,7 @@ describe('localValidation', () => {
         ...SETTINGS,
         rules: { requireNarrative: false, minNarrativeLength: 0, requireUnitTimes: false },
       },
+      nerisApi: NERIS_API,
       nowEpochSeconds: NOW,
     });
     expect(result.blocking).toEqual([]);
@@ -142,6 +153,7 @@ describe('localValidation', () => {
       }),
       units: [E1],
       settings: SETTINGS,
+      nerisApi: NERIS_API,
       nowEpochSeconds: NOW,
     });
     expect(result.blocking.filter((i) => i.code === 'MODULE_REQUIRED').map((i) => i.path)).toEqual([
@@ -164,6 +176,7 @@ describe('localValidation', () => {
       }),
       units: [E1],
       settings: SETTINGS,
+      nerisApi: NERIS_API,
       nowEpochSeconds: NOW,
     });
     expect(result.blocking).toEqual([]);
@@ -174,12 +187,13 @@ describe('localValidation', () => {
     const result = localValidation({
       incident: incident({
         corePayload: {
-          incident_type: 'PUBSERV||ALARMS_NONMED||SMOKE_ALARM_MALFUNCTION',
+          incident_type: 'PUBSERV||ALARMS_NONMED||FIRE_ALARM',
           fire_detail: { location_detail: {} },
         },
       }),
       units: [E1],
       settings: SETTINGS,
+      nerisApi: NERIS_API,
       nowEpochSeconds: NOW,
     });
     expect(codes(result.blocking)).toEqual(['MODULE_NOT_ALLOWED']);
@@ -195,12 +209,14 @@ describe('localValidation', () => {
         requiredFields: ['incident_type', 'action_taken'],
         enumerations: { incident_type: ['STRUCTURE_FIRE', 'VEHICLE_FIRE'] },
       },
+      nerisApi: NERIS_API,
       nowEpochSeconds: NOW,
     });
     expect(result.blocking.map((i) => [i.code, i.path])).toEqual(
       expect.arrayContaining([
         ['REQUIRED_FIELD', 'fields.action_taken'],
-        ['INVALID_VALUE', 'fields.incident_type'],
+        // The incident type is judged against the NERIS list, not the pin's local list.
+        ['INCIDENT_TYPE_NOT_NERIS', 'fields.incident_type'],
       ]),
     );
   });
@@ -210,6 +226,7 @@ describe('localValidation', () => {
       incident: incident(),
       units: [E1],
       settings: DEFAULT_NERIS_SETTINGS,
+      nerisApi: NERIS_API,
       nowEpochSeconds: NOW,
     });
     expect(unregistered.blocking).toEqual([]);
@@ -219,6 +236,7 @@ describe('localValidation', () => {
       incident: incident(),
       units: [{ ...E1, unitId: 'T2' }],
       settings: SETTINGS,
+      nerisApi: NERIS_API,
       nowEpochSeconds: NOW,
     });
     expect(codes(newUnit.warnings)).toEqual(['UNIT_NOT_REGISTERED']);
@@ -229,6 +247,7 @@ describe('localValidation', () => {
       incident: incident(),
       units: [E1],
       settings: SETTINGS,
+      nerisApi: NERIS_API,
       nowEpochSeconds: ALARM + 40 * 86_400,
     });
     expect(codes(result.warnings)).toEqual(['LATE_REPORT']);
@@ -239,11 +258,71 @@ function fakeApi(validate: NerisApi['validateIncident']): () => Promise<NerisApi
   return () => Promise.resolve({ validateIncident: validate } as unknown as NerisApi);
 }
 
+describe('NERIS incident types (TypeIncidentValue from the downloaded NERIS schema)', () => {
+  const nerisApi = NERIS_API;
+
+  it('accepts a NERIS type and blocks a legacy local code with the NERIS types it could be', () => {
+    const ok = localValidation({
+      incident: incident(),
+      units: [E1],
+      settings: SETTINGS,
+      nerisApi,
+      nowEpochSeconds: NOW,
+    });
+    expect(ok.blocking).toEqual([]);
+
+    const legacy = localValidation({
+      incident: incident({ corePayload: { incident_type: 'STRUCTURE_FIRE' } }),
+      units: [E1],
+      settings: SETTINGS,
+      nerisApi,
+      nowEpochSeconds: NOW,
+    });
+    const issue = legacy.blocking.find((i) => i.code === 'INCIDENT_TYPE_NOT_NERIS')!;
+    expect(issue.message).toMatch(/Pick one of the 4 NERIS types/);
+    expect(issue.fix).toBeUndefined();
+  });
+
+  it('offers a one-tap fix when a CAD string maps to exactly one NERIS type', () => {
+    const result = localValidation({
+      incident: incident({ corePayload: { incident_type: 'Chimney fire' } }),
+      units: [E1],
+      settings: SETTINGS,
+      nerisApi,
+      nowEpochSeconds: NOW,
+    });
+    expect(result.blocking.find((i) => i.code === 'INCIDENT_TYPE_NOT_NERIS')?.fix).toEqual({
+      label: 'Use Fire › Structure fire › Chimney fire',
+      path: 'fields.incident_type',
+      value: 'FIRE||STRUCTURE_FIRE||CHIMNEY_FIRE',
+    });
+  });
+
+  it('warns rather than guessing when the NERIS schema has not been downloaded', () => {
+    const result = localValidation({
+      incident: incident({ corePayload: { incident_type: 'STRUCTURE_FIRE' } }),
+      units: [E1],
+      settings: SETTINGS,
+      nowEpochSeconds: NOW,
+    });
+    expect(result.warnings.map((w) => w.code)).toContain('NERIS_TYPES_UNAVAILABLE');
+  });
+
+  it('suggests by segment first, then by leaf', () => {
+    expect(suggestNerisTypes('FALSE_ALARM', nerisApi.incidentTypes)).toHaveLength(5);
+    expect(suggestNerisTypes('odor', nerisApi.incidentTypes)).toEqual([
+      'HAZSIT||INVESTIGATION||ODOR',
+    ]);
+    expect(suggestNerisTypes('', nerisApi.incidentTypes)).toEqual([]);
+  });
+});
+
 describe('runValidation', () => {
   const base = {
     incident: incident(),
     units: [E1],
     settings: SETTINGS,
+    nerisApi: NERIS_API,
     nowEpochSeconds: NOW,
     now: () => new Date('2026-09-29T12:00:00.000Z'),
   };
