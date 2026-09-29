@@ -2,7 +2,6 @@ import { palette, radius, spacing, touchTarget, typography } from '@boxalarm/des
 import { useNavigation, useRoute, type NavigationProp } from '@react-navigation/native';
 import { useState } from 'react';
 import {
-  AccessibilityInfo,
   Linking,
   ScrollView,
   Text,
@@ -12,12 +11,15 @@ import {
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { useOptionalAuth } from '../../auth/AuthContext';
 import { useAlertsRepository } from '../../features/alerts/apiAlertsRepository';
-import { ackStatusLabel } from '../../features/alerts/ackStatus';
 import type { AlertPayload } from '../../features/alerts/alertPayload';
 import { PrePlanPanel } from '../../features/alerts/PrePlanPanel';
-import type { AckStatus } from '../../features/alerts/types';
+import type { ResponseAnswer } from '../../features/alerts/alertResponses';
+import { ResponseStatus } from '../../features/alerts/ResponseStatus';
 import { useAlertDetail, type DetailFailure } from '../../features/alerts/useAlertDetail';
+import { useAlertResponse } from '../../features/alerts/useAlertResponse';
+import { useOptionalConnectivity } from '../../sync/ConnectivityContext';
 import type { AlertsStackParamList } from '../../navigation/AlertsStack';
 
 // a11y-spec N1 Error: the reassurance is required - a visible failure next to an address makes a
@@ -37,7 +39,7 @@ function failureText(failure: DetailFailure, hasAddress: boolean): string {
   }
 }
 
-type RespondUiState = 'unanswered' | 'entering_eta' | 'answered';
+type RespondUiState = 'choosing' | 'entering_eta';
 
 export function AlertDetailScreen() {
   const navigation = useNavigation<NavigationProp<AlertsStackParamList>>();
@@ -54,23 +56,22 @@ export function AlertDetailScreen() {
     failure,
     retry,
   } = useAlertDetail(repository, dispatchId, payload);
-  const [respondState, setRespondState] = useState<RespondUiState>('unanswered');
-  const [pendingAckStatus, setPendingAckStatus] = useState<AckStatus | null>(null);
-  const [answeredAs, setAnsweredAs] = useState<AckStatus | null>(null);
+  const auth = useOptionalAuth();
+  const { isOnline } = useOptionalConnectivity();
+  const response = useAlertResponse(repository, dispatchId, auth?.memberId ?? null, isOnline);
+  const [respondState, setRespondState] = useState<RespondUiState>('choosing');
+  const [pendingAckStatus, setPendingAckStatus] = useState<ResponseAnswer | null>(null);
   const [eta, setEta] = useState('');
 
   // Never blank (design.md F-01): the page payload paints the header, the response buttons are
-  // live at first paint, and the detail fetch only enriches.
-  // Alert-path guarantee: response buttons are live as soon as the dispatch renders; tapping one
-  // confirms visually immediately (optimistic, N4.2) and never waits on the round trip.
-  const submitResponse = (ackStatus: AckStatus, etaMinutesValue?: number) => {
-    setAnsweredAs(ackStatus);
-    setRespondState('answered');
-    AccessibilityInfo.announceForAccessibility(`You responded: ${ackStatusLabel(ackStatus)}`);
-    void repository.submitResponse(dispatchId, ackStatus, etaMinutesValue);
+  // live at first paint, and the detail fetch only enriches. A tap saves the answer on the phone
+  // (outbox) and the status below says exactly whether it has reached the server.
+  const submitResponse = (ackStatus: ResponseAnswer, etaMinutesValue?: number) => {
+    setRespondState('choosing');
+    void response.respond(ackStatus, etaMinutesValue);
   };
 
-  const beginResponse = (ackStatus: AckStatus) => {
+  const beginResponse = (ackStatus: ResponseAnswer) => {
     if (ackStatus === 'NOT_RESPONDING') {
       submitResponse(ackStatus);
       return;
@@ -210,10 +211,27 @@ export function AlertDetailScreen() {
         ) : null}
 
         <View style={{ marginTop: spacing.lg }}>
-          {respondState === 'unanswered' && (
+          {response.answer && response.delivery ? (
+            <View style={{ marginBottom: spacing.md }}>
+              <ResponseStatus
+                answer={response.answer}
+                delivery={response.delivery}
+                outboxId={response.outboxId}
+                lastError={response.lastError}
+                onResend={() =>
+                  submitResponse(
+                    response.answer!.ackStatus,
+                    response.answer!.etaMinutes ?? undefined,
+                  )
+                }
+              />
+            </View>
+          ) : null}
+          {respondState === 'choosing' && (
             <View style={{ flexDirection: 'row', gap: spacing.md, flexWrap: 'wrap' }}>
               <TouchableOpacity
                 accessibilityRole="button"
+                accessibilityState={{ selected: response.answer?.ackStatus === 'RESPONDING' }}
                 onPress={() => beginResponse('RESPONDING')}
                 style={{
                   flex: 1,
@@ -237,6 +255,7 @@ export function AlertDetailScreen() {
               </TouchableOpacity>
               <TouchableOpacity
                 accessibilityRole="button"
+                accessibilityState={{ selected: response.answer?.ackStatus === 'DIRECT_TO_SCENE' }}
                 onPress={() => beginResponse('DIRECT_TO_SCENE')}
                 style={{
                   flex: 1,
@@ -260,6 +279,7 @@ export function AlertDetailScreen() {
               </TouchableOpacity>
               <TouchableOpacity
                 accessibilityRole="button"
+                accessibilityState={{ selected: response.answer?.ackStatus === 'NOT_RESPONDING' }}
                 onPress={() => beginResponse('NOT_RESPONDING')}
                 style={{
                   flex: 1,
@@ -325,12 +345,6 @@ export function AlertDetailScreen() {
                 </Text>
               </TouchableOpacity>
             </View>
-          )}
-
-          {respondState === 'answered' && answeredAs && (
-            <Text style={{ color: tokens.foreground, fontSize: typography.size.base }}>
-              You responded: {ackStatusLabel(answeredAs)}
-            </Text>
           )}
         </View>
 

@@ -209,7 +209,15 @@ export interface AlertsRepository {
   getSelfTestRun(testId: string): Promise<SelfTestRun>;
   getDispatch(dispatchId: string): Promise<DispatchAlert>;
   getRoster(dispatchId: string): Promise<RosterEntry[]>;
-  submitResponse(dispatchId: string, ackStatus: AckStatus, etaMinutes?: number): Promise<void>;
+  /**
+   * Saves the answer on the phone and starts sending it; resolves with the outbox row carrying it
+   * (null when there is no API to send to - the local mock), never with the network result.
+   */
+  submitResponse(
+    dispatchId: string,
+    ackStatus: Exclude<AckStatus, 'UNANSWERED'>,
+    etaMinutes?: number,
+  ): Promise<{ outboxId: string | null }>;
   submitManualDispatch(input: ManualDispatchInput): Promise<{ dispatchId: string }>;
   /** The manual-entry locality choices; callers treat a failure as "no home list". */
   getHomeLocality(): Promise<HomeLocality>;

@@ -1,5 +1,4 @@
 import type {
-  AckStatus,
   AlertsRepository,
   DeliveryReceipt,
   DispatchAlert,
@@ -81,7 +80,7 @@ export const mockAlertsRepository: AlertsRepository = {
     return ROSTERS.get(dispatchId) ?? [];
   },
 
-  async submitResponse(dispatchId, ackStatus: AckStatus, etaMinutes) {
+  async submitResponse(dispatchId, ackStatus, etaMinutes) {
     const roster = ROSTERS.get(dispatchId);
     const entry = roster?.[0];
     if (entry) {
@@ -94,6 +93,7 @@ export const mockAlertsRepository: AlertsRepository = {
     if (dispatch?.toneLadder) {
       dispatch.toneLadder = { ...dispatch.toneLadder, status: 'COMPLETED', nextToneAt: null };
     }
+    return { outboxId: null };
   },
 
   async getHomeLocality() {

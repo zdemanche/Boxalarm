@@ -614,3 +614,95 @@ describe('attendance', () => {
     expect(row?.lastError).toMatch(/must supply activityType/);
   });
 });
+
+describe('alert responses (RESPONSE)', () => {
+  test('a response POSTs to the dispatch responses path and leaves the outbox on success', async () => {
+    mockApiRequest.mockResolvedValueOnce({ json: async () => ({}) });
+
+    await syncManager.enqueueResponse('response-1', 'D/1', 'Your response — Responding', {
+      ackStatus: 'RESPONDING',
+      eta: 123,
+      assignedApparatusId: null,
+    });
+    await flush();
+
+    expect(mockApiRequest).toHaveBeenCalledWith(
+      'alerting/dispatches/D%2F1/responses',
+      tokens,
+      expect.objectContaining({ method: 'POST' }),
+    );
+    expect(syncManager.hasSynced('response-1')).toBe(true);
+  });
+
+  test('a changed answer drops the older one still waiting, so it can never land after the new one', async () => {
+    mockApiRequest.mockRejectedValue(new Error('Network request failed'));
+
+    await syncManager.enqueueResponse('response-a', 'D1', 'a', { ackStatus: 'RESPONDING' });
+    await flush();
+    expect((await store.find('response-a'))?.status).toBe('FAILED');
+
+    await syncManager.enqueueResponse('response-b', 'D1', 'b', { ackStatus: 'NOT_RESPONDING' });
+    await flush();
+
+    await expect(store.find('response-a')).resolves.toBeUndefined();
+    expect((await store.find('response-b'))?.status).toBe('FAILED');
+    expect(syncManager.hasSynced('response-a')).toBe(false);
+  });
+
+  test('answers to different calls do not supersede each other', async () => {
+    mockApiRequest.mockRejectedValue(new Error('Network request failed'));
+
+    await syncManager.enqueueResponse('response-x', 'D1', 'x', { ackStatus: 'RESPONDING' });
+    await syncManager.enqueueResponse('response-y', 'D2', 'y', { ackStatus: 'RESPONDING' });
+    await flush();
+
+    expect(await store.find('response-x')).toBeDefined();
+    expect(await store.find('response-y')).toBeDefined();
+  });
+
+  test('an older answer that was mid-send when superseded is dropped at the next drain instead of retried', async () => {
+    await store.insert({
+      id: 'response-old',
+      kind: 'RESPONSE',
+      label: 'old',
+      method: 'POST',
+      path: 'alerting/dispatches/D3/responses',
+      body: '{}',
+      stage: 'CREATE',
+      photoLocalUri: null,
+      photoS3Key: null,
+      photoUploadUrl: null,
+      status: 'FAILED',
+      attempts: 1,
+      lastError: 'x',
+      queuedAt: '2026-01-01T00:00:00.000Z',
+      nextAttemptAt: 0,
+      syncedAt: null,
+    });
+    await store.insert({
+      id: 'response-new',
+      kind: 'RESPONSE',
+      label: 'new',
+      method: 'POST',
+      path: 'alerting/dispatches/D3/responses',
+      body: '{"ackStatus":"NOT_RESPONDING"}',
+      stage: 'CREATE',
+      photoLocalUri: null,
+      photoS3Key: null,
+      photoUploadUrl: null,
+      status: 'QUEUED',
+      attempts: 0,
+      lastError: null,
+      queuedAt: '2026-01-01T00:00:05.000Z',
+      nextAttemptAt: 0,
+      syncedAt: null,
+    });
+    mockApiRequest.mockResolvedValue({ json: async () => ({}) });
+
+    await syncManager.drain();
+
+    expect(mockApiRequest).toHaveBeenCalledTimes(1);
+    expect(mockApiRequest.mock.calls[0]![2].body).toBe('{"ackStatus":"NOT_RESPONDING"}');
+    await expect(store.find('response-old')).resolves.toBeUndefined();
+  });
+});

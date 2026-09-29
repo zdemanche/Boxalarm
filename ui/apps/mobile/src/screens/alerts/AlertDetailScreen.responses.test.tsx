@@ -1,0 +1,224 @@
+import NetInfo from '@react-native-community/netinfo';
+import { act, fireEvent, render, screen } from '@testing-library/react-native';
+import Config from 'react-native-config';
+import { useOptionalAuth } from '../../auth/AuthContext';
+import { ApiError, apiRequest } from '../../lib/apiClient';
+import { ConnectivityProvider } from '../../sync/ConnectivityContext';
+import { kvDelete } from '../../sync/kvStore';
+import * as store from '../../sync/outboxStore';
+import * as syncManager from '../../sync/syncManager';
+import { AlertDetailScreen } from './AlertDetailScreen';
+
+// The API path: answers go through the SQLite outbox and the screen reports where they are.
+jest.mock('../../lib/apiClient', () => ({
+  ...jest.requireActual('../../lib/apiClient'),
+  apiRequest: jest.fn(),
+}));
+jest.mock('../../auth/AuthContext', () => ({ useOptionalAuth: jest.fn() }));
+jest.mock('react-native-config', () => ({ __esModule: true, default: { API_BASE_URL: '' } }));
+jest.mock('@react-navigation/native', () => ({
+  useNavigation: () => ({ navigate: jest.fn() }),
+  useRoute: () => mockRoute,
+}));
+
+const mockRoute = {
+  params: {
+    dispatchId: 'D-1',
+    payload: {
+      dispatchId: 'D-1',
+      incidentType: 'Structure fire',
+      address: '21 Main St',
+      receivedAt: Date.now(),
+    },
+  },
+};
+
+const mockApiRequest = apiRequest as jest.Mock;
+const mockNetInfoFetch = NetInfo.fetch as jest.Mock;
+const auth = {
+  isAuthenticated: true,
+  memberId: 'MBR-1',
+  getAccessToken: jest.fn(),
+  renewSilently: jest.fn(),
+};
+
+let postOutcome: (body: Record<string, unknown>) => Promise<unknown>;
+let posted: Record<string, unknown>[];
+let roster: { memberId: string; ackStatus: string; eta: number | null }[];
+
+function flush(): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, 0));
+}
+
+beforeEach(async () => {
+  const rows = await store.all();
+  await Promise.all(rows.map((row) => store.remove(row.id)));
+  (Config as unknown as { API_BASE_URL: string }).API_BASE_URL = 'https://api.example.com';
+  (useOptionalAuth as jest.Mock).mockReturnValue(auth);
+  mockNetInfoFetch.mockResolvedValue({ isConnected: true });
+  posted = [];
+  roster = [];
+  postOutcome = async () => ({ json: async () => ({}) });
+  mockApiRequest.mockReset();
+  mockApiRequest.mockImplementation(
+    async (path: string, _tokens: unknown, init: { method?: string; body?: string }) => {
+      if (init.method === 'POST') {
+        const body = JSON.parse(init.body!) as Record<string, unknown>;
+        const response = await postOutcome(body);
+        posted.push(body);
+        return response;
+      }
+      if (path.endsWith('/roster')) return { json: async () => ({ members: roster }) };
+      return {
+        json: async () => ({
+          dispatchId: 'D-1',
+          incidentType: 'Structure fire',
+          address: '21 Main St',
+          crossStreets: '',
+          mapLink: null,
+          narrative: 'Smoke showing',
+          prePlan: null,
+        }),
+      };
+    },
+  );
+  syncManager.configure(auth, 'https://api.example.com');
+  await flush();
+});
+
+async function renderScreen(isOnline = true) {
+  const view = await render(
+    <ConnectivityProvider initialIsOnline={isOnline}>
+      <AlertDetailScreen />
+    </ConnectivityProvider>,
+  );
+  await act(flush);
+  return view;
+}
+
+/** Leaves the call and comes back to it: a fresh screen instance over the same phone storage. */
+async function reopen(isOnline = true) {
+  await act(async () => {
+    screen.rerender(
+      <ConnectivityProvider initialIsOnline={isOnline}>
+        <AlertDetailScreen key={String(Math.random())} />
+      </ConnectivityProvider>,
+    );
+  });
+  await act(flush);
+}
+
+async function tap(name: string) {
+  await act(async () => {
+    fireEvent.press(await screen.findByRole('button', { name }));
+  });
+  await act(flush);
+}
+
+async function answerResponding() {
+  await tap('Responding');
+  await act(async () => {
+    fireEvent.changeText(await screen.findByPlaceholderText('ETA in minutes'), '15');
+  });
+  await tap('Confirm');
+}
+
+test('an answer the server accepted reads "Sent" and posts the ETA the member chose', async () => {
+  await renderScreen();
+  await answerResponding();
+
+  expect(await screen.findByText('Sent')).toBeTruthy();
+  expect(posted).toHaveLength(1);
+  expect(posted[0]).toMatchObject({ ackStatus: 'RESPONDING', assignedApparatusId: null });
+  expect(typeof posted[0]!.eta).toBe('number');
+});
+
+test('offline, the answer is kept on the phone and never shown as sent', async () => {
+  mockNetInfoFetch.mockResolvedValue({ isConnected: false });
+  await renderScreen(false);
+
+  await tap('Not responding');
+
+  expect(await screen.findByText('Not sent yet')).toBeTruthy();
+  expect(screen.queryByText('Sent')).toBeNull();
+  expect(posted).toHaveLength(0);
+  const rows = await store.all();
+  expect(rows).toHaveLength(1);
+  expect(rows[0]).toMatchObject({ kind: 'RESPONSE', status: 'QUEUED' });
+});
+
+test('a failed POST is not swallowed: it stays queued, says so, and delivers on retry', async () => {
+  postOutcome = async () => {
+    throw new TypeError('Network request failed');
+  };
+  await renderScreen();
+
+  await tap('Not responding');
+
+  expect(await screen.findByText('Not sent yet')).toBeTruthy();
+  expect(screen.getByText(/last attempt: network request failed/i)).toBeTruthy();
+
+  postOutcome = async () => ({ json: async () => ({}) });
+  await tap('Try sending your response now');
+
+  expect(await screen.findByText('Sent')).toBeTruthy();
+});
+
+test('a refused answer is shown as refused with a way to send it again', async () => {
+  postOutcome = async () => {
+    throw new ApiError({ type: 'about:blank', title: 'Forbidden', status: 403, traceId: 't' });
+  };
+  await renderScreen();
+
+  await tap('Not responding');
+
+  expect(await screen.findByText('Refused by server')).toBeTruthy();
+  expect(
+    await screen.findByRole('button', { name: 'Send my answer again: Not responding' }),
+  ).toBeTruthy();
+});
+
+test('changing the answer sends the new one and drops the older one still waiting to send', async () => {
+  mockNetInfoFetch.mockResolvedValue({ isConnected: false });
+  await renderScreen(false);
+
+  await tap('Not responding');
+  await answerResponding();
+
+  const rows = await store.all();
+  expect(rows).toHaveLength(1);
+  expect(JSON.parse(rows[0]!.body)).toMatchObject({ ackStatus: 'RESPONDING' });
+  expect(await screen.findByText(/your response: responding/i)).toBeTruthy();
+});
+
+test('an answer given here earlier is replaced by the roster once the roster shows a different one (answered on another device)', async () => {
+  await renderScreen();
+  await answerResponding();
+  expect(await screen.findByText('Sent')).toBeTruthy();
+
+  roster = [{ memberId: 'MBR-1', ackStatus: 'NOT_RESPONDING', eta: null }];
+  await reopen();
+
+  expect(await screen.findByText(/your response: not responding/i)).toBeTruthy();
+});
+
+test('re-opening the call shows the answer already given, with its delivery state', async () => {
+  await renderScreen();
+  await answerResponding();
+  expect(await screen.findByText('Sent')).toBeTruthy();
+
+  await reopen();
+
+  expect(await screen.findByText(/your response: responding/i)).toBeTruthy();
+  expect(screen.getByText('Sent')).toBeTruthy();
+  expect(screen.getByRole('button', { name: 'Responding', selected: true })).toBeTruthy();
+});
+
+test('with no answer on this phone, the server roster seeds the member’s own answer', async () => {
+  await kvDelete('alert-answer:D-1');
+  roster = [{ memberId: 'MBR-1', ackStatus: 'DIRECT_TO_SCENE', eta: null }];
+  await renderScreen();
+
+  expect(await screen.findByText(/your response: direct to scene/i)).toBeTruthy();
+  expect(screen.getByText('Sent')).toBeTruthy();
+});

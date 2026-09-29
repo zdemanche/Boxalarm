@@ -107,7 +107,7 @@ test('confirming Responding with an ETA records the response and shows it back',
     fireEvent.press(await findByRole('button', { name: 'Confirm' }));
   });
 
-  expect(await findByText(/you responded: responding/i)).toBeTruthy();
+  expect(await findByText(/your response: responding/i)).toBeTruthy();
 });
 
 test('tapping Not responding submits immediately without an ETA step', async () => {
@@ -117,7 +117,7 @@ test('tapping Not responding submits immediately without an ETA step', async () 
     fireEvent.press(await findByRole('button', { name: 'Not responding' }));
   });
 
-  expect(await findByText(/you responded: not responding/i)).toBeTruthy();
+  expect(await findByText(/your response: not responding/i)).toBeTruthy();
 });
 
 test('announces the recorded response for screen reader users', async () => {
@@ -156,7 +156,7 @@ test('tapping Direct to scene is distinct in text from Responding', async () => 
     fireEvent.press(await findByRole('button', { name: 'Confirm' }));
   });
 
-  expect(await findByText(/you responded: direct to scene/i)).toBeTruthy();
+  expect(await findByText(/your response: direct to scene/i)).toBeTruthy();
 });
 
 test('viewing the roster navigates with the dispatch id', async () => {

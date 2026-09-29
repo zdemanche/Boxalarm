@@ -22,6 +22,11 @@ const listeners = new Set<Listener>();
 const recentlySynced = new Set<string>();
 const RECENTLY_SYNCED_LIMIT = 50;
 
+/** Whether a token source is set - false in a headless JS task until one is configured. */
+export function isConfigured(): boolean {
+  return tokens !== null && apiBaseUrl !== null;
+}
+
 export function hasSynced(id: string): boolean {
   return recentlySynced.has(id);
 }
@@ -139,6 +144,30 @@ export async function enqueueAttendance(
   body: Record<string, unknown>,
 ): Promise<void> {
   await enqueueAndDrain('ATTENDANCE', idempotencyKey, label, 'personnel/attendance', body);
+}
+
+// POST /api/v1/alerting/dispatches/{dispatchId}/responses (alerting-service responses/handler.ts).
+// Each answer is its own row (a changed answer is a new append-only answer, not an edit), and a
+// newer answer drops any older one for the same call that has not started sending, so a retried
+// "Responding" can never land after the member changed it to "Not responding". The handler has no
+// client idempotency key: a replay after a lost 200 appends a duplicate record with the same
+// answer, which the roster's latest-answer-wins write absorbs.
+export async function enqueueResponse(
+  id: string,
+  dispatchId: string,
+  label: string,
+  body: Record<string, unknown>,
+): Promise<void> {
+  const path = `alerting/dispatches/${encodeURIComponent(dispatchId)}/responses`;
+  const row = await outbox.enqueue({ id, kind: 'RESPONSE', label, path, body });
+  const older = await outbox.olderSiblings(row);
+  await Promise.all(
+    older
+      .filter((sibling) => sibling.status !== 'SYNCING')
+      .map((sibling) => outbox.discard(sibling.id)),
+  );
+  await notify();
+  void drain();
 }
 
 export async function retry(id: string): Promise<void> {
@@ -350,7 +379,17 @@ export async function drain(): Promise<void> {
     if (netState.isConnected !== true) return;
 
     const pending = await outbox.listDrainable(Date.now());
-    for (const row of pending) {
+    for (const listed of pending) {
+      // Re-read: a row listed above may have been discarded or superseded since (a changed
+      // answer), and a vanished row must not be reported as delivered.
+      const row = await outbox.find(listed.id);
+      if (!row) continue;
+      // An older answer that was mid-send when the member changed it, then failed: drop it.
+      if (row.kind === 'RESPONSE' && (await outbox.isSuperseded(row))) {
+        await outbox.discard(row.id);
+        await notify();
+        continue;
+      }
       await outbox.markSyncing(row.id);
       await notify();
       try {

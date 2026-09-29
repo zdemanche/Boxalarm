@@ -2,9 +2,9 @@ import { useMemo, useRef } from 'react';
 import Config from 'react-native-config';
 import { useOptionalAuth } from '../../auth/AuthContext';
 import { apiRequest, type ApiRequestOptions, type AuthTokenSource } from '../../lib/apiClient';
+import { etaFor, queueAlertResponse } from './alertResponses';
 import { mockAlertsRepository } from './mockAlertsRepository';
 import type {
-  AckStatus,
   AlertsRepository,
   DeliveryReceipt,
   DispatchAlert,
@@ -96,18 +96,15 @@ function buildApiAlertsRepository(tokens: AuthTokenSource, apiBaseUrl: string): 
       return body.members;
     },
 
-    async submitResponse(dispatchId, ackStatus: AckStatus, etaMinutes) {
-      const eta =
-        ackStatus === 'NOT_RESPONDING'
-          ? null
-          : (etaMinutes ?? 0) > 0
-            ? Math.floor(Date.now() / 1000) + (etaMinutes as number) * 60
-            : null;
-      await req(`alerting/dispatches/${encodeURIComponent(dispatchId)}/responses`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ackStatus, eta, assignedApparatusId: null }),
-      });
+    // Through the SQLite outbox, never a bare POST: the old `void submitResponse` dropped a failed
+    // answer on the floor while the screen said "You responded" (alert-ux C2).
+    async submitResponse(dispatchId, ackStatus, etaMinutes) {
+      const outboxId = await queueAlertResponse(
+        dispatchId,
+        ackStatus,
+        etaFor(ackStatus, etaMinutes),
+      );
+      return { outboxId };
     },
 
     async submitManualDispatch(input: ManualDispatchInput) {

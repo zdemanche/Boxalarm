@@ -73,12 +73,17 @@ export function useAlertDetail(
   const [failure, setFailure] = useState<DetailFailure | null>(null);
   const [attempt, setAttempt] = useState(0);
   const liveLoadedRef = useRef(false);
+  // Read through a ref: a caller that rebuilds the params object each render must not re-run
+  // the cache reads (and their state updates) every render.
+  const routePayloadRef = useRef(routePayload);
+  routePayloadRef.current = routePayload;
 
   useEffect(() => {
     let cancelled = false;
-    if (routePayload) {
-      setPayload(routePayload);
-      void rememberAlertPayload(routePayload);
+    const fromRoute = routePayloadRef.current;
+    if (fromRoute) {
+      setPayload(fromRoute);
+      void rememberAlertPayload(fromRoute);
     } else {
       void cachedAlertPayload(dispatchId).then((cached) => {
         if (!cancelled && cached) setPayload(cached);
@@ -92,7 +97,7 @@ export function useAlertDetail(
     return () => {
       cancelled = true;
     };
-  }, [dispatchId, routePayload]);
+  }, [dispatchId]);
 
   useEffect(() => {
     let cancelled = false;
