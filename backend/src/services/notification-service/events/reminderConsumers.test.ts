@@ -394,6 +394,23 @@ describe('NERIS report consumers', () => {
     });
   });
 
+  it('neris.incident.missing says NERIS no longer lists the report', async () => {
+    const send = vi.fn().mockResolvedValue({});
+    mockDdb(send);
+    const { handler } = await import('./nerisReportConsumer.js');
+    await handler(
+      sqsEvent('neris.incident.missing', 'incident-service', {
+        incidentId: 'I-1',
+        deptId: 'NICHOLS',
+        ownerId: 'MBR-0034',
+        statusAt: '2026-10-01T07:15:00.000Z',
+      }),
+    );
+    expect(putsOf(send)[0]!.Item).toMatchObject({
+      item: { detail: expect.stringContaining('no longer listed by NERIS') as unknown },
+    });
+  });
+
   it('neris.no_activity.due -> one reminder each for the CHIEF and ADMIN roles', async () => {
     const send = vi.fn().mockResolvedValue({});
     mockDdb(send);

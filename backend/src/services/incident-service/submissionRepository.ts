@@ -439,7 +439,12 @@ export function createSubmissionRepository(
                   ConditionExpression: success
                     ? 'attribute_exists(pk)'
                     : 'attribute_exists(pk) AND (attribute_not_exists(submissionStatus) OR submissionStatus <> :acceptedStatus)',
-                  UpdateExpression: `SET ${setClauses.join(', ')}${success ? ' REMOVE pendingNerisId' : ''}`,
+                  UpdateExpression: `SET ${setClauses.join(', ')}${
+                    // A landed send also ends any missing-from-NERIS count (round 2, N6).
+                    success
+                      ? ' REMOVE pendingNerisId, nerisMissingAt, nerisMissingChecks, nerisMissingSince'
+                      : ''
+                  }`,
                   ...(Object.keys(names).length > 0 ? { ExpressionAttributeNames: names } : {}),
                   ExpressionAttributeValues: values,
                 },

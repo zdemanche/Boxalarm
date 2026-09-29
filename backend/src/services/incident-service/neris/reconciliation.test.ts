@@ -4,6 +4,7 @@ import type { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
 import { toVerifiedDeptId } from '@boxalarm/dept-scope';
 import type { NerisApi } from './api.js';
 import {
+  MISSING_MAX_CHECKS,
   repairDrift,
   diffAgainstNeris,
   previousMonth,
@@ -271,5 +272,107 @@ describe('repairDrift (review M7)', () => {
     ).toBe(true);
     const requeued = sent.find((c) => c.constructor.name === 'PutCommand')!;
     expect(requeued.input.Item).toMatchObject({ pk: 'DEPT#NICHOLS#NERIS_OPEN', sk: 'L3' });
+  });
+
+  it('gives up on a record NERIS keeps not listing: terminal, off the work list, reported once', async () => {
+    const sent: Command[] = [];
+    const send = vi.fn((command: Command) => {
+      sent.push(command);
+      return Promise.resolve(
+        command.constructor.name === 'UpdateCommand'
+          ? {
+              Attributes: {
+                nerisMissingChecks: MISSING_MAX_CHECKS,
+                nerisMissingSince: 1_790_000_000,
+                createdBy: 'MBR-0034',
+                lockedBy: 'MBR-0002',
+                dispatchNumber: '4473',
+              },
+            }
+          : {},
+      );
+    });
+    const repaired = await repairDrift(
+      { send } as unknown as DynamoDBDocumentClient,
+      'table',
+      DEPT,
+      [{ kind: 'MISSING_IN_NERIS', incidentId: 'L3', nerisIncidentId: ID('4473') }],
+      [],
+      new Date('2026-10-01T07:15:00Z'),
+    );
+    expect(repaired).toBe(1);
+    expect(sent.some((c) => c.constructor.name === 'PutCommand')).toBe(false);
+    const transact = sent.find((c) => c.constructor.name === 'TransactWriteCommand')!;
+    const items = transact.input.TransactItems as Record<string, Record<string, unknown>>[];
+    expect(items[0]!.Update).toMatchObject({
+      Key: { sk: 'METADATA' },
+      UpdateExpression: 'SET nerisMissingAt = :now',
+    });
+    expect(items[1]!.Delete).toMatchObject({ Key: { pk: 'DEPT#NICHOLS#NERIS_OPEN', sk: 'L3' } });
+    expect(items[2]!.Put!.Item).toMatchObject({
+      eventType: 'neris.incident.missing',
+      payload: { incidentId: 'L3', ownerId: 'MBR-0034', lockedBy: 'MBR-0002', checks: 3 },
+    });
+  });
+
+  it('skips a record already given up on or resubmitted under another id', async () => {
+    const { ConditionalCheckFailedException } = await import('@aws-sdk/client-dynamodb');
+    const send = vi.fn((command: Command) =>
+      command.constructor.name === 'UpdateCommand'
+        ? Promise.reject(new ConditionalCheckFailedException({ message: 'no', $metadata: {} }))
+        : Promise.resolve({}),
+    );
+    const repaired = await repairDrift(
+      { send } as unknown as DynamoDBDocumentClient,
+      'table',
+      DEPT,
+      [{ kind: 'MISSING_IN_NERIS', incidentId: 'L3', nerisIncidentId: ID('4473') }],
+      [],
+      new Date('2026-10-01T07:15:00Z'),
+    );
+    expect(repaired).toBe(0);
+    expect(send).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('reconcileDepartment: missing records (round 2, N6)', () => {
+  it('does not re-count a record already given up on, and resets the count of one seen again', async () => {
+    const sent: Command[] = [];
+    const send = vi.fn((command: Command) => {
+      sent.push(command);
+      return Promise.resolve(
+        command.constructor.name === 'QueryCommand'
+          ? {
+              Items: [
+                { incidentId: 'L3', nerisIncidentId: ID('4473'), nerisMissingAt: 1_790_000_000 },
+                { incidentId: 'L4', nerisIncidentId: ID('4474'), nerisMissingChecks: 2 },
+              ],
+            }
+          : {},
+      );
+    });
+    const result = await reconcileDepartment(
+      { send } as unknown as DynamoDBDocumentClient,
+      'table',
+      {
+        listIncidents: () =>
+          Promise.resolve({
+            ok: true,
+            httpStatus: 200,
+            incidents: [{ nerisId: ID('4474') }],
+            truncated: false,
+          }),
+      } as unknown as NerisApi,
+      DEPT,
+      'FD09190828',
+      new Date('2026-09-29T03:00:00Z'),
+      'corr',
+    );
+    expect(result?.drift).toEqual([]);
+    const reset = sent.find((c) => c.constructor.name === 'UpdateCommand')!;
+    expect(reset.input).toMatchObject({
+      Key: { pk: 'DEPT#NICHOLS#INCIDENT#L4', sk: 'METADATA' },
+      UpdateExpression: 'REMOVE nerisMissingChecks, nerisMissingSince',
+    });
   });
 });

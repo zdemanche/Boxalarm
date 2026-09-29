@@ -4,13 +4,14 @@ import {
   PutCommand,
   QueryCommand,
   TransactWriteCommand,
+  UpdateCommand,
   type DynamoDBDocumentClient,
 } from '@aws-sdk/lib-dynamodb';
 import { buildDeptScopedPk, type VerifiedDeptId } from '@boxalarm/dept-scope';
 import { buildOutboxRecord } from '@boxalarm/outbox';
 import { createLogger } from '@boxalarm/logging';
 import { emitOutcomeMetric } from '@boxalarm/metrics';
-import { getDocumentClient, getTableName } from '../repository.js';
+import { getDocumentClient, getTableName, isConditionFailureAt } from '../repository.js';
 import { getNerisDeptSettings } from '../nerisSettings.js';
 import { nerisApiFromEnv } from '../reportContext.js';
 import type { NerisApi, NerisListedIncident } from './api.js';
@@ -25,6 +26,12 @@ const METRIC_NAMESPACE = 'Boxalarm/neris-reconciliation';
 /** How far back local records are compared (NERIS went live 2026-01-01). */
 export const RECONCILE_WINDOW_DAYS = 400;
 const MAX_DRIFT_IN_EVENT = 50;
+/**
+ * Nightly runs a record may be found missing from NERIS (and re-queued for the poller)
+ * before it is given up on: marked `nerisMissingAt`, taken off the work list, and reported
+ * once as `neris.incident.missing` (inbox for owner/locker/officers, and an alarm).
+ */
+export const MISSING_MAX_CHECKS = 3;
 
 /**
  * Nightly NERIS reconciliation (EventBridge Scheduler, once a day).
@@ -56,6 +63,8 @@ export interface LocalSubmitted {
   readonly nerisIncidentId: string;
   readonly nerisStatus?: string;
   readonly dispatchNumber: string;
+  /** Nights in a row this record was missing from NERIS (reset when it is seen again). */
+  readonly missingChecks?: number;
 }
 
 export function diffAgainstNeris(
@@ -227,13 +236,19 @@ export async function reconcileDepartment(
       toAlarmAt,
     )
   ).flatMap((item) =>
-    typeof item.incidentId === 'string' && typeof item.nerisIncidentId === 'string'
+    typeof item.incidentId === 'string' &&
+    typeof item.nerisIncidentId === 'string' &&
+    // Given up on and already reported: not re-counted as drift every night.
+    item.nerisMissingAt === undefined
       ? [
           {
             incidentId: item.incidentId,
             nerisIncidentId: item.nerisIncidentId,
             dispatchNumber: typeof item.dispatchNumber === 'string' ? item.dispatchNumber : '',
             ...(typeof item.nerisStatus === 'string' ? { nerisStatus: item.nerisStatus } : {}),
+            ...(typeof item.nerisMissingChecks === 'number'
+              ? { missingChecks: item.nerisMissingChecks }
+              : {}),
           },
         ]
       : [],
@@ -250,6 +265,7 @@ export async function reconcileDepartment(
   }
   const drift = diffAgainstNeris(local, listed.incidents, listed.truncated);
   const repaired = await repairDrift(client, tableName, deptId, drift, listed.incidents, now);
+  await clearFoundAgain(client, tableName, deptId, local, listed.incidents);
   const pk = buildDeptScopedPk(deptId, 'NERIS');
   const summary = {
     pk,
@@ -298,13 +314,160 @@ export async function reconcileDepartment(
   return { drift, truncated: listed.truncated };
 }
 
+/** A record counted missing that NERIS lists again starts its count over. */
+async function clearFoundAgain(
+  client: DynamoDBDocumentClient,
+  tableName: string,
+  deptId: VerifiedDeptId,
+  local: readonly LocalSubmitted[],
+  remote: readonly NerisListedIncident[],
+): Promise<void> {
+  const remoteIds = new Set(remote.map((record) => record.nerisId));
+  for (const record of local) {
+    if (!record.missingChecks || !remoteIds.has(record.nerisIncidentId)) continue;
+    await client
+      .send(
+        new UpdateCommand({
+          TableName: tableName,
+          Key: { pk: buildDeptScopedPk(deptId, 'INCIDENT', record.incidentId), sk: 'METADATA' },
+          ConditionExpression: 'attribute_exists(pk) AND nerisIncidentId = :nerisId',
+          UpdateExpression: 'REMOVE nerisMissingChecks, nerisMissingSince',
+          ExpressionAttributeValues: { ':nerisId': record.nerisIncidentId },
+        }),
+      )
+      .catch((error: unknown) => {
+        if (error instanceof Error && error.name === 'ConditionalCheckFailedException') return;
+        throw error;
+      });
+  }
+}
+
+/**
+ * MISSING_IN_NERIS, bounded (round 2, N6): counts the night on the report; before
+ * MISSING_MAX_CHECKS the record goes back on the poller's work list, at the limit it is
+ * given up on — `nerisMissingAt` set (terminal: no more re-queues or nightly drift), work
+ * row deleted, and `neris.incident.missing` published for the owner, locker and officers.
+ */
+async function repairMissing(
+  client: DynamoDBDocumentClient,
+  tableName: string,
+  deptId: VerifiedDeptId,
+  entry: Drift & { readonly incidentId: string },
+  nowSeconds: number,
+): Promise<'requeued' | 'expired' | 'skipped'> {
+  const metadataKey = {
+    pk: buildDeptScopedPk(deptId, 'INCIDENT', entry.incidentId),
+    sk: 'METADATA',
+  };
+  let metadata: Record<string, unknown>;
+  try {
+    metadata = ((
+      await client.send(
+        new UpdateCommand({
+          TableName: tableName,
+          Key: metadataKey,
+          ConditionExpression:
+            'attribute_exists(pk) AND nerisIncidentId = :nerisId AND attribute_not_exists(nerisMissingAt)',
+          UpdateExpression:
+            'SET nerisMissingChecks = if_not_exists(nerisMissingChecks, :zero) + :one, nerisMissingSince = if_not_exists(nerisMissingSince, :now)',
+          ExpressionAttributeValues: {
+            ':nerisId': entry.nerisIncidentId,
+            ':zero': 0,
+            ':one': 1,
+            ':now': nowSeconds,
+          },
+          ReturnValues: 'ALL_NEW',
+        }),
+      )
+    ).Attributes ?? {}) as Record<string, unknown>;
+  } catch (error) {
+    // Resubmitted under another id, or already given up on: nothing to do.
+    if (error instanceof Error && error.name === 'ConditionalCheckFailedException') {
+      return 'skipped';
+    }
+    throw error;
+  }
+  const checks = typeof metadata.nerisMissingChecks === 'number' ? metadata.nerisMissingChecks : 1;
+  if (checks < MISSING_MAX_CHECKS) {
+    await client.send(
+      new PutCommand({
+        TableName: tableName,
+        Item: {
+          ...nerisOpenKey(deptId, entry.incidentId),
+          entityType: 'NERIS_OPEN_SUBMISSION',
+          incidentId: entry.incidentId,
+          nerisIncidentId: entry.nerisIncidentId,
+          since: nowSeconds,
+          nextPollAt: nowSeconds,
+          failures: 0,
+        },
+      }),
+    );
+    return 'requeued';
+  }
+  try {
+    await client.send(
+      new TransactWriteCommand({
+        TransactItems: [
+          {
+            Update: {
+              TableName: tableName,
+              Key: metadataKey,
+              ConditionExpression:
+                'attribute_exists(pk) AND nerisIncidentId = :nerisId AND attribute_not_exists(nerisMissingAt)',
+              UpdateExpression: 'SET nerisMissingAt = :now',
+              ExpressionAttributeValues: { ':nerisId': entry.nerisIncidentId, ':now': nowSeconds },
+            },
+          },
+          { Delete: { TableName: tableName, Key: nerisOpenKey(deptId, entry.incidentId) } },
+          {
+            Put: {
+              TableName: tableName,
+              Item: buildOutboxRecord(
+                deptId,
+                'incident-service',
+                'neris.incident.missing',
+                entry.incidentId,
+                {
+                  incidentId: entry.incidentId,
+                  deptId,
+                  nerisIncidentId: entry.nerisIncidentId,
+                  incidentNumber:
+                    typeof metadata.dispatchNumber === 'string'
+                      ? metadata.dispatchNumber
+                      : entry.incidentId,
+                  ownerId: typeof metadata.createdBy === 'string' ? metadata.createdBy : null,
+                  lockedBy: typeof metadata.lockedBy === 'string' ? metadata.lockedBy : null,
+                  missingSince:
+                    typeof metadata.nerisMissingSince === 'number'
+                      ? metadata.nerisMissingSince
+                      : nowSeconds,
+                  checks,
+                  reason: `NERIS has not listed this record for ${checks} nightly checks`,
+                  statusAt: new Date(nowSeconds * 1000).toISOString(),
+                },
+              ),
+            },
+          },
+        ],
+      }),
+    );
+  } catch (error) {
+    if (isConditionFailureAt(error, 0)) return 'skipped';
+    throw error;
+  }
+  emitOutcomeMetric(METRIC_NAMESPACE, 'NerisRecordMissing');
+  return 'expired';
+}
+
 /**
  * Drift is repaired, not only reported (review M7):
  *   - STATUS_MISMATCH: NERIS's status is applied locally exactly as the poller would — local
  *     status, history, the approved/rejected event the owner is told from — and a still-open
  *     record goes back on the poller's work list;
- *   - MISSING_IN_NERIS: the record goes back on the work list, so the poller re-checks it
- *     and, if NERIS really no longer has it, ages it out with a poll_expired event.
+ *   - MISSING_IN_NERIS: the record goes back on the work list, so the poller re-checks it,
+ *     for at most MISSING_MAX_CHECKS nights; then it is given up on and reported
+ *     (repairMissing).
  * Returns how many records were repaired.
  */
 export async function repairDrift(
@@ -352,21 +515,14 @@ export async function repairDrift(
         );
         repaired += 1;
       } else if (entry.kind === 'MISSING_IN_NERIS') {
-        await client.send(
-          new PutCommand({
-            TableName: tableName,
-            Item: {
-              ...nerisOpenKey(deptId, entry.incidentId),
-              entityType: 'NERIS_OPEN_SUBMISSION',
-              incidentId: entry.incidentId,
-              nerisIncidentId: entry.nerisIncidentId,
-              since: nowSeconds,
-              nextPollAt: nowSeconds,
-              failures: 0,
-            },
-          }),
+        const result = await repairMissing(
+          client,
+          tableName,
+          deptId,
+          { ...entry, incidentId: entry.incidentId },
+          nowSeconds,
         );
-        repaired += 1;
+        if (result !== 'skipped') repaired += 1;
       }
     } catch (error) {
       logger.error({

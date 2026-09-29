@@ -46,6 +46,8 @@ export class NerisSync extends pulumi.ComponentResource {
   public readonly schedules: aws.scheduler.Schedule[] = [];
   public readonly schedulerRole: aws.iam.Role;
   public readonly pollFailedAlarm: aws.cloudwatch.MetricAlarm;
+  /** Poll expiry, reconciliation drift and give-up alarms (round 2, N6). */
+  public readonly driftAlarms: aws.cloudwatch.MetricAlarm[];
 
   constructor(name: string, args: NerisSyncArgs, opts?: pulumi.ComponentResourceOptions) {
     requireEnv("NerisSync", args.env);
@@ -212,6 +214,51 @@ export class NerisSync extends pulumi.ComponentResource {
         alarmActions: [args.chiefNotificationTopicArn],
       },
       { parent: this },
+    );
+
+    // A record the poller stopped watching, drift the nightly reconciliation found, and a
+    // record given up on as no longer in NERIS each reach the chief's LOB topic on the first
+    // occurrence: before, they were visible only on the RECONCILIATION#LAST row (round 2, N6).
+    this.driftAlarms = (
+      [
+        [
+          "poll-expired",
+          "Boxalarm/neris-status-poller",
+          "NerisStatusPollExpired",
+          "The NERIS status poller stopped watching a report (60 days old or 12 failed checks). Its NERIS status may be stale.",
+        ],
+        [
+          "drift-detected",
+          "Boxalarm/neris-reconciliation",
+          "ReconciliationDriftDetected",
+          "The nightly NERIS reconciliation found reports whose NERIS state differs from Boxalarm's (see the department's RECONCILIATION#LAST row).",
+        ],
+        [
+          "record-missing",
+          "Boxalarm/neris-reconciliation",
+          "NerisRecordMissing",
+          "NERIS no longer lists a report it had accepted, after repeated nightly checks. The owner and officers were notified.",
+        ],
+      ] as const
+    ).map(
+      ([key, namespace, metricName, description]) =>
+        new aws.cloudwatch.MetricAlarm(
+          `${name}-${key}-alarm`,
+          {
+            name: `boxalarm-${env}-incident-neris-${key}`,
+            alarmDescription: description,
+            namespace,
+            metricName,
+            statistic: "Sum",
+            period: 3600,
+            evaluationPeriods: 1,
+            threshold: 0,
+            comparisonOperator: "GreaterThanThreshold",
+            treatMissingData: "notBreaching",
+            alarmActions: [args.chiefNotificationTopicArn],
+          },
+          { parent: this },
+        ),
     );
 
     new aws.iam.RolePolicy(

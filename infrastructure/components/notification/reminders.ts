@@ -162,6 +162,8 @@ export class Reminders extends pulumi.ComponentResource {
           "neris.incident.rejected",
           "neris.incident.failed",
           "neris.submission.failed",
+          // Reconciliation gave up on a record NERIS stopped listing (round 2, N6).
+          "neris.incident.missing",
         ],
         // Digest rows + an immediate inbox item per recipient (PutItem), after reading the
         // roster for the officers (GSI3).

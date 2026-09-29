@@ -20,13 +20,16 @@ import {
 const REJECTED = 'neris.incident.rejected';
 const FAILED = 'neris.incident.failed';
 const SUBMISSION_FAILED = 'neris.submission.failed';
+const MISSING = 'neris.incident.missing';
 const LOG_PREFIX = 'notification.nerisReport';
 
 /**
  * A report that NERIS sent back or that could not be sent at all:
  *   - neris.incident.rejected | neris.incident.failed (the status poller: NERIS's verdict);
  *   - neris.submission.failed (the submission worker: a 422 at send time, revoked
- *     credentials, the department not configured, or retries exhausted — review M6).
+ *     credentials, the department not configured, or retries exhausted — review M6);
+ *   - neris.incident.missing (the nightly reconciliation: NERIS stopped listing a record it
+ *     had accepted, and it was given up on after bounded re-checks — round 2, N6).
  *
  * The report owner, the officer who locked it, and every active OFFICER get an inbox item
  * right away (not only the next daily digest: the NERIS target is 72 hours), each linking to
@@ -53,7 +56,9 @@ export function toNerisReportReminder({ eventType, payload }: EventEnvelope): Ne
       ? 'was rejected by NERIS: fix it and resubmit'
       : eventType === FAILED
         ? "couldn't be processed by NERIS: check the submission and resubmit"
-        : `didn't reach NERIS${reason ? ` (${reason.slice(0, 200)})` : ''}: fix it and retry`;
+        : eventType === MISSING
+          ? 'is no longer listed by NERIS: check with NERIS whether it was removed, then resubmit'
+          : `didn't reach NERIS${reason ? ` (${reason.slice(0, 200)})` : ''}: fix it and retry`;
   return {
     deptId: requireString(payload, 'deptId', eventType),
     ownerId,
@@ -110,7 +115,7 @@ export const handler = async (event: SQSEvent): Promise<void> => {
     try {
       envelope = parseEnvelope(
         record.body,
-        new Set([REJECTED, FAILED, SUBMISSION_FAILED]),
+        new Set([REJECTED, FAILED, SUBMISSION_FAILED, MISSING]),
         REJECTED,
       );
       reminder = toNerisReportReminder(envelope);

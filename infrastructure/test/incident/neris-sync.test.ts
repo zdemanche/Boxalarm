@@ -150,4 +150,25 @@ describe("NerisSync", () => {
       "arn:aws:sns:us-east-1:123456789012:boxalarm-dev-chief-notifications",
     ]);
   });
+
+  it("alarms to the chief's topic on poll expiry, reconciliation drift and a record NERIS lost", async () => {
+    const sync = await build();
+    const alarms = await resolve(
+      pulumi.all(
+        sync.driftAlarms.map((alarm) =>
+          pulumi.all([alarm.namespace, alarm.metricName, alarm.alarmActions]),
+        ),
+      ),
+    );
+    expect(alarms.map(([namespace, metric]) => `${namespace}/${metric}`)).toEqual([
+      "Boxalarm/neris-status-poller/NerisStatusPollExpired",
+      "Boxalarm/neris-reconciliation/ReconciliationDriftDetected",
+      "Boxalarm/neris-reconciliation/NerisRecordMissing",
+    ]);
+    for (const [, , actions] of alarms) {
+      expect(actions).toEqual([
+        "arn:aws:sns:us-east-1:123456789012:boxalarm-dev-chief-notifications",
+      ]);
+    }
+  });
 });
