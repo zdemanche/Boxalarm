@@ -1,20 +1,15 @@
-import { ConditionalCheckFailedException } from '@aws-sdk/client-dynamodb';
-import { GetCommand, QueryCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
-import type { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
+import { TransactWriteCommand } from '@aws-sdk/lib-dynamodb';
 import { buildDeptScopedPk, toVerifiedDeptId, type VerifiedDeptId } from '@boxalarm/dept-scope';
 import { emitOutcomeMetric } from '@boxalarm/metrics';
 import type { SQSEvent } from 'aws-lambda';
 import { createDynamoClient, readAlertingConfig } from '../eligibility/dynamoClient.js';
-import {
-  parseHydrantUpdatePayload,
-  resolveNearestHydrants,
-  type HydrantUpdatePayload,
-  type NearestHydrant,
-} from './nearestHydrants.js';
+import { hydrantCopyKey, hydrantGeoIndexKeys } from './copyKeys.js';
+import { isGeoPoint } from './geo.js';
+import { parseHydrantUpdatePayload, type HydrantUpdatePayload } from './nearestHydrants.js';
 
 const METRIC_NAMESPACE = 'Boxalarm/alerting-pre-plan';
-const MAX_NEAREST_HYDRANTS = 5;
-const MAX_UPDATE_ATTEMPTS = 3;
+const DEDUP_TTL_SECONDS = 48 * 60 * 60;
+const CONSUMER_NAME = 'hydrant-copy-consumer';
 
 interface HydrantUpdatedEnvelope {
   readonly eventId: string;
@@ -22,10 +17,19 @@ interface HydrantUpdatedEnvelope {
   readonly payload: HydrantUpdatePayload;
 }
 
+/**
+ * The queue is fed by an EventBridge rule target with no input transformer, so each SQS body
+ * is the whole EventBridge event and the outbox envelope sits under `detail`.
+ */
 function parseEnvelope(body: string): HydrantUpdatedEnvelope {
-  const raw = JSON.parse(body) as Record<string, unknown>;
-  const eventId = raw.eventId;
-  const eventTime = raw.eventTime;
+  const parsed = JSON.parse(body) as { detail?: unknown };
+  const raw = parsed.detail;
+  if (typeof raw !== 'object' || raw === null) {
+    throw new Error('inspections.hydrant.updated message is missing detail');
+  }
+  const envelope = raw as Record<string, unknown>;
+  const eventId = envelope.eventId;
+  const eventTime = envelope.eventTime;
   if (
     typeof eventId !== 'string' ||
     typeof eventTime !== 'string' ||
@@ -33,7 +37,7 @@ function parseEnvelope(body: string): HydrantUpdatedEnvelope {
   ) {
     throw new Error('inspections.hydrant.updated event failed shape validation');
   }
-  const payload = parseHydrantUpdatePayload(raw.payload);
+  const payload = parseHydrantUpdatePayload(envelope.payload);
   return { eventId, eventTime, payload };
 }
 
@@ -55,110 +59,63 @@ function logError(
   );
 }
 
-interface PrePlanCopyItem {
-  readonly pk: string;
-  readonly sk: string;
-  readonly nearestHydrants?: readonly NearestHydrant[];
-  readonly hydrantsUpdatedAt?: number;
+interface TransactCancellationError {
+  readonly name: string;
+  readonly CancellationReasons?: ReadonlyArray<{ readonly Code?: string }>;
 }
 
-async function queryPrePlanCopies(
-  ddb: DynamoDBDocumentClient,
-  tableName: string,
-  deptId: VerifiedDeptId,
-): Promise<readonly PrePlanCopyItem[]> {
-  const items: PrePlanCopyItem[] = [];
-  let exclusiveStartKey: Record<string, unknown> | undefined;
-  do {
-    const result = await ddb.send(
-      new QueryCommand({
-        TableName: tableName,
-        KeyConditionExpression: 'pk = :pk',
-        ExpressionAttributeValues: { ':pk': buildDeptScopedPk(deptId, 'PREPLAN') },
-        ExclusiveStartKey: exclusiveStartKey,
-      }),
-    );
-    for (const item of (result.Items ?? []) as PrePlanCopyItem[]) {
-      items.push(item);
-    }
-    exclusiveStartKey = result.LastEvaluatedKey as Record<string, unknown> | undefined;
-  } while (exclusiveStartKey !== undefined);
-  return items;
+function asTransactionCancellation(error: unknown): TransactCancellationError | undefined {
+  return error instanceof Error && error.name === 'TransactionCanceledException'
+    ? error
+    : undefined;
 }
 
-type CopyUpdateOutcome = 'updated' | 'staleDiscarded' | 'notFound';
-
-async function applyHydrantUpdate(
-  ddb: DynamoDBDocumentClient,
-  tableName: string,
+/**
+ * One HYDRANT_COPY per hydrant, geo-indexed so the dispatch-detail route can find the nearest
+ * hydrants to any point at read time. Only the fields the event carries are set, so a
+ * status-only event never blanks a known size or flow rating.
+ */
+function buildCopyUpdate(
   deptId: VerifiedDeptId,
-  copy: PrePlanCopyItem,
   payload: HydrantUpdatePayload,
-  snapshotUpdatedAt: number,
-): Promise<CopyUpdateOutcome> {
-  let current = copy;
-  for (let attempt = 1; attempt <= MAX_UPDATE_ATTEMPTS; attempt += 1) {
-    const prevNearestHydrants = current.nearestHydrants;
-    // ponytail: referenceLocation is always null on the real event path today — no occupancy
-    // lat/long is available to this isolation-boundary consumer — see nearestHydrants.ts.
-    const nextNearestHydrants = resolveNearestHydrants(
-      prevNearestHydrants ?? [],
-      payload,
-      null,
-      MAX_NEAREST_HYDRANTS,
-    );
-    const watermarkCondition =
-      typeof current.hydrantsUpdatedAt === 'number'
-        ? ':now > hydrantsUpdatedAt'
-        : 'attribute_not_exists(hydrantsUpdatedAt)';
-    const listCondition =
-      prevNearestHydrants === undefined
-        ? 'attribute_not_exists(nearestHydrants)'
-        : 'nearestHydrants = :prevNearestHydrants';
-
-    try {
-      await ddb.send(
-        new UpdateCommand({
-          TableName: tableName,
-          Key: { pk: buildDeptScopedPk(deptId, 'PREPLAN'), sk: current.sk },
-          UpdateExpression:
-            'SET nearestHydrants = :nearestHydrants, hydrantsUpdatedAt = :now, snapshotUpdatedAt = :now',
-          ConditionExpression: `${watermarkCondition} AND ${listCondition}`,
-          ExpressionAttributeValues: {
-            ':nearestHydrants': nextNearestHydrants,
-            ':now': snapshotUpdatedAt,
-            ...(prevNearestHydrants !== undefined
-              ? { ':prevNearestHydrants': prevNearestHydrants }
-              : {}),
-          },
-        }),
-      );
-      return 'updated';
-    } catch (error) {
-      if (!(error instanceof ConditionalCheckFailedException)) {
-        throw error;
-      }
-      const fresh = await ddb.send(
-        new GetCommand({
-          TableName: tableName,
-          Key: { pk: buildDeptScopedPk(deptId, 'PREPLAN'), sk: current.sk },
-          ConsistentRead: true,
-        }),
-      );
-      const freshCopy = fresh.Item as PrePlanCopyItem | undefined;
-      if (!freshCopy) {
-        return 'notFound';
-      }
-      if (
-        typeof freshCopy.hydrantsUpdatedAt === 'number' &&
-        freshCopy.hydrantsUpdatedAt >= snapshotUpdatedAt
-      ) {
-        return 'staleDiscarded';
-      }
-      current = freshCopy;
+  hydrantUpdatedAt: number,
+) {
+  const setClauses = [
+    'entityType = :entityType',
+    'hydrantId = :hydrantId',
+    'hydrantUpdatedAt = :hydrantUpdatedAt',
+  ];
+  const names: Record<string, string> = {};
+  const values: Record<string, unknown> = {
+    ':entityType': 'HYDRANT_COPY',
+    ':hydrantId': payload.hydrantId,
+    ':hydrantUpdatedAt': hydrantUpdatedAt,
+  };
+  const assign = (field: string, value: unknown) => {
+    if (value !== undefined) {
+      // `status` and `size` are DynamoDB reserved words.
+      names[`#${field}`] = field;
+      setClauses.push(`#${field} = :${field}`);
+      values[`:${field}`] = value;
     }
+  };
+  assign('status', payload.status);
+  assign('size', payload.size);
+  assign('flowRatingGpm', payload.flowRatingGpm);
+  const location = { latitude: payload.latitude, longitude: payload.longitude };
+  if (isGeoPoint(location)) {
+    const geoIndex = hydrantGeoIndexKeys(deptId, location, payload.hydrantId);
+    assign('latitude', location.latitude);
+    assign('longitude', location.longitude);
+    assign('geohash', geoIndex.geohash);
+    assign('gsi2pk', geoIndex.gsi2pk);
+    assign('gsi2sk', geoIndex.gsi2sk);
   }
-  return 'staleDiscarded';
+  return {
+    UpdateExpression: `SET ${setClauses.join(', ')}`,
+    ExpressionAttributeNames: names,
+    ExpressionAttributeValues: values,
+  };
 }
 
 export const handler = async (event: SQSEvent): Promise<void> => {
@@ -175,61 +132,68 @@ export const handler = async (event: SQSEvent): Promise<void> => {
     }
 
     const { eventId, payload } = envelope;
-    const snapshotUpdatedAt = Date.parse(envelope.eventTime);
+    const hydrantUpdatedAt = Date.parse(envelope.eventTime);
     const deptId = toVerifiedDeptId({ deptId: payload.deptId });
 
-    let copies: readonly PrePlanCopyItem[];
     try {
-      copies = await queryPrePlanCopies(ddb, tableName, deptId);
+      await ddb.send(
+        new TransactWriteCommand({
+          TransactItems: [
+            {
+              Put: {
+                TableName: tableName,
+                Item: {
+                  pk: buildDeptScopedPk(deptId, 'DEDUP', CONSUMER_NAME, payload.hydrantId),
+                  sk: `EVT#${eventId}`,
+                  entityType: 'EVENT_DEDUP',
+                  ttl: Math.floor(Date.now() / 1000) + DEDUP_TTL_SECONDS,
+                },
+                ConditionExpression: 'attribute_not_exists(sk)',
+              },
+            },
+            {
+              Update: {
+                TableName: tableName,
+                Key: hydrantCopyKey(deptId, payload.hydrantId),
+                ...buildCopyUpdate(deptId, payload, hydrantUpdatedAt),
+                ConditionExpression:
+                  'attribute_not_exists(hydrantUpdatedAt) OR :hydrantUpdatedAt > hydrantUpdatedAt',
+              },
+            },
+          ],
+        }),
+      );
     } catch (error) {
-      logError('hydrant_copy.query_failed', error, eventId, { hydrantId: payload.hydrantId });
+      const reasons = asTransactionCancellation(error)?.CancellationReasons ?? [];
+      if (reasons[0]?.Code === 'ConditionalCheckFailed') {
+        logError('hydrant_copy.duplicate_event_skipped', error, eventId, {
+          hydrantId: payload.hydrantId,
+        });
+        emitOutcomeMetric(METRIC_NAMESPACE, 'HydrantCopyDuplicateSkipped');
+        continue;
+      }
+      if (reasons[1]?.Code === 'ConditionalCheckFailed') {
+        logError('hydrant_copy.stale_event_discarded', error, eventId, {
+          hydrantId: payload.hydrantId,
+        });
+        emitOutcomeMetric(METRIC_NAMESPACE, 'HydrantCopyStaleDiscarded');
+        continue;
+      }
+      logError('hydrant_copy.write_failed', error, eventId, { hydrantId: payload.hydrantId });
       emitOutcomeMetric(METRIC_NAMESPACE, 'HydrantCopyFailed');
       throw error;
     }
 
-    const matched = copies.filter((copy) =>
-      (copy.nearestHydrants ?? []).some((hydrant) => hydrant.hydrantId === payload.hydrantId),
-    );
-
-    if (matched.length === 0) {
-      emitOutcomeMetric(METRIC_NAMESPACE, 'HydrantCopyNoMatch');
-      continue;
+    if (payload.latitude === undefined) {
+      // Stored, but off the geo index: no dispatch will ever list it as a nearest hydrant.
+      logError(
+        'hydrant_copy.written_without_location',
+        new Error('inspections.hydrant.updated payload carried no usable latitude/longitude'),
+        eventId,
+        { hydrantId: payload.hydrantId },
+      );
+      emitOutcomeMetric(METRIC_NAMESPACE, 'HydrantCopyMissingLocation');
     }
-
-    for (const copy of matched) {
-      try {
-        const outcome = await applyHydrantUpdate(
-          ddb,
-          tableName,
-          deptId,
-          copy,
-          payload,
-          snapshotUpdatedAt,
-        );
-        if (outcome === 'staleDiscarded') {
-          logError(
-            'hydrant_copy.stale_event_discarded',
-            new Error('stale or duplicate event'),
-            eventId,
-            {
-              hydrantId: payload.hydrantId,
-              occupancySk: copy.sk,
-            },
-          );
-          emitOutcomeMetric(METRIC_NAMESPACE, 'HydrantCopyStaleDiscarded');
-        } else if (outcome === 'notFound') {
-          emitOutcomeMetric(METRIC_NAMESPACE, 'HydrantCopyNoMatch');
-        } else {
-          emitOutcomeMetric(METRIC_NAMESPACE, 'HydrantCopyUpdated');
-        }
-      } catch (error) {
-        logError('hydrant_copy.update_failed', error, eventId, {
-          hydrantId: payload.hydrantId,
-          occupancySk: copy.sk,
-        });
-        emitOutcomeMetric(METRIC_NAMESPACE, 'HydrantCopyFailed');
-        throw error;
-      }
-    }
+    emitOutcomeMetric(METRIC_NAMESPACE, 'HydrantCopyUpdated');
   }
 };

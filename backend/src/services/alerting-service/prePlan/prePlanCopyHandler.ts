@@ -1,8 +1,11 @@
 import { TransactWriteCommand } from '@aws-sdk/lib-dynamodb';
-import { buildDeptScopedPk, toVerifiedDeptId } from '@boxalarm/dept-scope';
+import { buildDeptScopedPk, toVerifiedDeptId, type VerifiedDeptId } from '@boxalarm/dept-scope';
 import { emitOutcomeMetric } from '@boxalarm/metrics';
 import type { SQSEvent } from 'aws-lambda';
 import { createDynamoClient, readAlertingConfig } from '../eligibility/dynamoClient.js';
+import { normalizeAddress } from './addressKey.js';
+import { prePlanAddressIndexKeys, prePlanCopyKey, prePlanGeoIndexKeys } from './copyKeys.js';
+import { isGeoPoint, type GeoPoint } from './geo.js';
 
 const METRIC_NAMESPACE = 'Boxalarm/alerting-pre-plan';
 const DEDUP_TTL_SECONDS = 48 * 60 * 60;
@@ -16,7 +19,11 @@ interface UtilityShutoff {
 interface PrePlanUpdatedPayload {
   readonly deptId: string;
   readonly occupancyId: string;
+  readonly prePlanId?: string;
   readonly summary?: string;
+  readonly occupancyType?: string;
+  readonly address?: string;
+  readonly location?: GeoPoint;
   readonly hazards?: readonly string[];
   readonly utilityShutoffs?: readonly UtilityShutoff[];
 }
@@ -27,11 +34,25 @@ interface PrePlanUpdatedEnvelope {
   readonly payload: PrePlanUpdatedPayload;
 }
 
+function optionalString(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim().length > 0 ? value : undefined;
+}
+
+/**
+ * The queue is fed by an EventBridge rule target with no input transformer, so each SQS body
+ * is the whole EventBridge event and the outbox envelope sits under `detail` (the same
+ * contract memberUpdatedHandler parses).
+ */
 function parseEnvelope(body: string): PrePlanUpdatedEnvelope {
-  const raw = JSON.parse(body) as Record<string, unknown>;
-  const eventId = raw.eventId;
-  const eventTime = raw.eventTime;
-  const payload = raw.payload as Record<string, unknown> | undefined;
+  const parsed = JSON.parse(body) as { detail?: unknown };
+  const raw = parsed.detail;
+  if (typeof raw !== 'object' || raw === null) {
+    throw new Error('inspections.preplan.updated message is missing detail');
+  }
+  const envelope = raw as Record<string, unknown>;
+  const eventId = envelope.eventId;
+  const eventTime = envelope.eventTime;
+  const payload = envelope.payload as Record<string, unknown> | undefined;
   const deptId = payload?.deptId;
   const occupancyId = payload?.occupancyId;
   if (
@@ -39,7 +60,8 @@ function parseEnvelope(body: string): PrePlanUpdatedEnvelope {
     typeof eventTime !== 'string' ||
     !Number.isFinite(Date.parse(eventTime)) ||
     typeof deptId !== 'string' ||
-    typeof occupancyId !== 'string'
+    typeof occupancyId !== 'string' ||
+    occupancyId.length === 0
   ) {
     throw new Error('inspections.preplan.updated event failed shape validation');
   }
@@ -47,14 +69,21 @@ function parseEnvelope(body: string): PrePlanUpdatedEnvelope {
   const utilityShutoffs = Array.isArray(payload?.utilityShutoffs)
     ? (payload.utilityShutoffs as UtilityShutoff[])
     : undefined;
-  const summary = typeof payload?.summary === 'string' ? payload.summary : undefined;
+  const location = { latitude: payload?.latitude, longitude: payload?.longitude };
+  const optional = {
+    prePlanId: optionalString(payload?.prePlanId),
+    summary: optionalString(payload?.summary),
+    occupancyType: optionalString(payload?.occupancyType),
+    address: optionalString(payload?.address),
+  };
   return {
     eventId,
     eventTime,
     payload: {
       deptId,
       occupancyId,
-      ...(summary !== undefined ? { summary } : {}),
+      ...Object.fromEntries(Object.entries(optional).filter(([, value]) => value !== undefined)),
+      ...(isGeoPoint(location) ? { location } : {}),
       ...(hazards !== undefined ? { hazards } : {}),
       ...(utilityShutoffs !== undefined ? { utilityShutoffs } : {}),
     },
@@ -90,27 +119,53 @@ function asTransactionCancellation(error: unknown): TransactCancellationError | 
     : undefined;
 }
 
-function buildCopyUpdate(payload: PrePlanUpdatedPayload, snapshotUpdatedAt: number) {
+function buildCopyUpdate(
+  deptId: VerifiedDeptId,
+  payload: PrePlanUpdatedPayload,
+  snapshotUpdatedAt: number,
+) {
   const setClauses = [
     'entityType = :entityType',
+    'occupancyId = :occupancyId',
     'snapshotUpdatedAt = :snapshotUpdatedAt',
     'prePlanUpdatedAt = :snapshotUpdatedAt',
   ];
   const values: Record<string, unknown> = {
     ':entityType': 'PRE_PLAN_COPY',
+    ':occupancyId': payload.occupancyId,
     ':snapshotUpdatedAt': snapshotUpdatedAt,
   };
-  if (payload.summary !== undefined) {
-    setClauses.push('summary = :summary');
-    values[':summary'] = payload.summary;
+  const assign = (field: string, value: unknown) => {
+    if (value !== undefined) {
+      setClauses.push(`${field} = :${field}`);
+      values[`:${field}`] = value;
+    }
+  };
+  assign('prePlanId', payload.prePlanId);
+  assign('summary', payload.summary);
+  assign('occupancyType', payload.occupancyType);
+  assign('hazards', payload.hazards);
+  assign('utilityShutoffs', payload.utilityShutoffs);
+
+  // The address key is recomputed here with the alerting plane's own normalizer — never taken
+  // from the producer's normalizedAddress — so the dispatch side and the copy side of the
+  // match always run the same rules.
+  const normalized = payload.address !== undefined ? normalizeAddress(payload.address) : null;
+  assign('address', payload.address);
+  if (normalized) {
+    assign('addressKey', normalized.key);
+    assign('addressUnit', normalized.unit ?? undefined);
+    const addressIndex = prePlanAddressIndexKeys(deptId, normalized.key, payload.occupancyId);
+    assign('gsi1pk', addressIndex.gsi1pk);
+    assign('gsi1sk', addressIndex.gsi1sk);
   }
-  if (payload.hazards !== undefined) {
-    setClauses.push('hazards = :hazards');
-    values[':hazards'] = payload.hazards;
-  }
-  if (payload.utilityShutoffs !== undefined) {
-    setClauses.push('utilityShutoffs = :utilityShutoffs');
-    values[':utilityShutoffs'] = payload.utilityShutoffs;
+  if (payload.location) {
+    const geoIndex = prePlanGeoIndexKeys(deptId, payload.location, payload.occupancyId);
+    assign('latitude', payload.location.latitude);
+    assign('longitude', payload.location.longitude);
+    assign('geohash', geoIndex.geohash);
+    assign('gsi2pk', geoIndex.gsi2pk);
+    assign('gsi2sk', geoIndex.gsi2sk);
   }
   return { UpdateExpression: `SET ${setClauses.join(', ')}`, values };
 }
@@ -131,7 +186,7 @@ export const handler = async (event: SQSEvent): Promise<void> => {
     const { eventId, payload } = envelope;
     const snapshotUpdatedAt = Date.parse(envelope.eventTime);
     const deptId = toVerifiedDeptId({ deptId: payload.deptId });
-    const { UpdateExpression, values } = buildCopyUpdate(payload, snapshotUpdatedAt);
+    const { UpdateExpression, values } = buildCopyUpdate(deptId, payload, snapshotUpdatedAt);
 
     try {
       await ddb.send(
@@ -152,10 +207,7 @@ export const handler = async (event: SQSEvent): Promise<void> => {
             {
               Update: {
                 TableName: tableName,
-                Key: {
-                  pk: buildDeptScopedPk(deptId, 'PREPLAN'),
-                  sk: `OCCUPANCY#${payload.occupancyId}`,
-                },
+                Key: prePlanCopyKey(deptId, payload.occupancyId),
                 UpdateExpression,
                 ConditionExpression:
                   'attribute_not_exists(prePlanUpdatedAt) OR :snapshotUpdatedAt > prePlanUpdatedAt',
@@ -189,7 +241,9 @@ export const handler = async (event: SQSEvent): Promise<void> => {
       throw error;
     }
 
-    const missingAc1Fields = (['summary', 'hazards', 'utilityShutoffs'] as const).filter(
+    // The address is what makes the copy findable from a dispatch: without it the copy is
+    // stored but no alert will ever show it. (Coordinates are optional on an occupancy.)
+    const missingAc1Fields = (['summary', 'hazards', 'utilityShutoffs', 'address'] as const).filter(
       (field) => payload[field] === undefined,
     );
     if (missingAc1Fields.length > 0) {

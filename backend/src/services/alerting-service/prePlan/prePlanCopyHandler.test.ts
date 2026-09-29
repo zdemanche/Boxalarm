@@ -13,25 +13,62 @@ afterEach(() => {
   process.env = { ...originalEnv };
 });
 
+function envelope(payload: Record<string, unknown>, overrides: Record<string, unknown> = {}) {
+  return {
+    eventId: 'evt-1',
+    eventTime: '2026-09-06T00:00:00Z',
+    eventType: 'inspections.preplan.updated',
+    source: 'inspections-service',
+    correlationId: 'PP-0044',
+    schemaVersion: '1.0',
+    payload,
+    ...overrides,
+  };
+}
+
+/** What the EventBridge rule -> SQS target (no input transformer) actually delivers. */
 function sqsEvent(payload: Record<string, unknown>, overrides: Record<string, unknown> = {}) {
   return {
     Records: [
       {
         messageId: 'msg-1',
         body: JSON.stringify({
-          eventId: 'evt-1',
-          eventTime: '2026-09-06T00:00:00Z',
-          eventType: 'inspections.preplan.updated',
+          version: '0',
+          id: 'eb-1',
+          'detail-type': 'inspections.preplan.updated',
           source: 'inspections-service',
-          correlationId: 'PP-0044',
-          schemaVersion: '1.0',
-          payload,
-          ...overrides,
+          detail: envelope(payload, overrides),
         }),
       },
     ],
   } as unknown as SQSEvent;
 }
+
+const FULL_PAYLOAD = {
+  deptId: 'NICHOLS',
+  occupancyId: 'OCC-0231',
+  prePlanId: 'PP-0044',
+  summary: 'Multi family — 123 Main Street, Apt 4',
+  occupancyType: 'MULTI_FAMILY',
+  address: '123 Main Street, Apt 4',
+  normalizedAddress: '123 MAIN STREET, APT 4',
+  latitude: 41.2429,
+  longitude: -73.2007,
+  hazards: ['LPG_TANK_REAR'],
+  utilityShutoffs: [{ utility: 'gas', location: 'rear' }],
+};
+
+type TransactInput = {
+  input: {
+    TransactItems: Array<{
+      Update?: {
+        Key: Record<string, string>;
+        UpdateExpression: string;
+        ExpressionAttributeValues: Record<string, unknown>;
+      };
+    }>;
+  };
+};
 
 function mockDdb(send: ReturnType<typeof vi.fn>): void {
   vi.doMock('../eligibility/dynamoClient.js', async (importOriginal) => {
@@ -106,21 +143,13 @@ describe('prePlanCopyHandler (entrypoint-test obligation, AC1)', () => {
     errorSpy.mockRestore();
   });
 
-  it('does not flag missing fields when the payload carries summary/hazards/utilityShutoffs (P5)', async () => {
+  it('does not flag missing fields when the payload carries summary/hazards/utilityShutoffs/address (P5)', async () => {
     const send = vi.fn().mockResolvedValue({});
     mockDdb(send);
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const { handler } = await import('./prePlanCopyHandler.js');
 
-    await handler(
-      sqsEvent({
-        deptId: 'NICHOLS',
-        occupancyId: 'OCC-0231',
-        summary: 'Two-story residential',
-        hazards: ['LPG_TANK_REAR'],
-        utilityShutoffs: [{ utility: 'gas', location: 'rear' }],
-      }),
-    );
+    await handler(sqsEvent(FULL_PAYLOAD));
 
     const calls = errorSpy.mock.calls.map((call) => call[0] as string);
     expect(calls.some((body) => body.includes('preplan_copy.written_with_missing_fields'))).toBe(
@@ -201,6 +230,64 @@ describe('prePlanCopyHandler (entrypoint-test obligation, AC1)', () => {
     await expect(handler(sqsEvent({ deptId: 'NICHOLS' }))).rejects.toThrow(
       'inspections.preplan.updated event failed shape validation',
     );
+    expect(send).not.toHaveBeenCalled();
+    errorSpy.mockRestore();
+  });
+  it('indexes the copy by the alerting-normalized street address (GSI1) and by location (GSI2)', async () => {
+    const send = vi.fn().mockResolvedValue({});
+    mockDdb(send);
+    const { handler } = await import('./prePlanCopyHandler.js');
+
+    await handler(sqsEvent(FULL_PAYLOAD));
+
+    const update = (send.mock.calls[0]?.[0] as TransactInput).input.TransactItems.find(
+      (item) => item.Update,
+    )?.Update;
+    const values = update?.ExpressionAttributeValues ?? {};
+    // Recomputed with the alerting normalizer — not the producer's normalizedAddress.
+    expect(values[':addressKey']).toBe('123 MAIN ST');
+    expect(values[':addressUnit']).toBe('4');
+    expect(values[':gsi1pk']).toBe('DEPT#NICHOLS#PREPLAN_ADDR#123 MAIN ST');
+    expect(values[':gsi1sk']).toBe('OCCUPANCY#OCC-0231');
+    expect(values[':latitude']).toBe(41.2429);
+    expect(values[':longitude']).toBe(-73.2007);
+    expect(values[':gsi2pk']).toMatch(/^DEPT#NICHOLS#PREPLAN_GEO#[0-9b-hj-km-np-z]{6}$/);
+    expect(values[':gsi2sk']).toMatch(/^[0-9b-hj-km-np-z]{9}#OCC-0231$/);
+    expect((values[':gsi2sk'] as string).slice(0, 6)).toBe((values[':gsi2pk'] as string).slice(-6));
+    expect(values[':summary']).toBe('Multi family — 123 Main Street, Apt 4');
+    expect(values[':occupancyType']).toBe('MULTI_FAMILY');
+    expect(values[':prePlanId']).toBe('PP-0044');
+    expect(update?.UpdateExpression).not.toContain('nearestHydrants');
+  });
+
+  it('writes no geo index keys when the occupancy has no coordinates (address match only)', async () => {
+    const send = vi.fn().mockResolvedValue({});
+    mockDdb(send);
+    const { handler } = await import('./prePlanCopyHandler.js');
+    const { latitude, longitude, ...withoutLocation } = FULL_PAYLOAD;
+    expect([latitude, longitude]).toHaveLength(2);
+
+    await handler(sqsEvent(withoutLocation));
+
+    const values =
+      (send.mock.calls[0]?.[0] as TransactInput).input.TransactItems.find((item) => item.Update)
+        ?.Update?.ExpressionAttributeValues ?? {};
+    expect(values).not.toHaveProperty(':gsi2pk');
+    expect(values).not.toHaveProperty(':latitude');
+    expect(values[':gsi1pk']).toBe('DEPT#NICHOLS#PREPLAN_ADDR#123 MAIN ST');
+  });
+
+  it('rejects an envelope at the top level of the SQS body — the queue only ever carries the EventBridge event', async () => {
+    const send = vi.fn();
+    mockDdb(send);
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const { handler } = await import('./prePlanCopyHandler.js');
+
+    await expect(
+      handler({
+        Records: [{ messageId: 'msg-1', body: JSON.stringify(envelope(FULL_PAYLOAD)) }],
+      } as unknown as SQSEvent),
+    ).rejects.toThrow('missing detail');
     expect(send).not.toHaveBeenCalled();
     errorSpy.mockRestore();
   });

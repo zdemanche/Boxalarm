@@ -11,25 +11,62 @@ beforeEach(() => {
 
 afterEach(() => {
   process.env = { ...originalEnv };
+  vi.restoreAllMocks();
 });
 
+function envelope(payload: Record<string, unknown>) {
+  return {
+    eventId: 'evt-1',
+    eventTime: '2026-09-06T00:00:00Z',
+    eventType: 'inspections.hydrant.updated',
+    source: 'inspections-service',
+    correlationId: 'HYD-0231',
+    schemaVersion: '1.0',
+    payload,
+  };
+}
+
+/** What the EventBridge rule -> SQS target (no input transformer) actually delivers. */
 function sqsEvent(payload: Record<string, unknown>) {
   return {
     Records: [
       {
         messageId: 'msg-1',
         body: JSON.stringify({
-          eventId: 'evt-1',
-          eventTime: '2026-09-06T00:00:00Z',
-          eventType: 'inspections.hydrant.updated',
+          version: '0',
+          id: 'eb-1',
+          'detail-type': 'inspections.hydrant.updated',
           source: 'inspections-service',
-          correlationId: 'HYD-0231',
-          schemaVersion: '1.0',
-          payload,
+          detail: envelope(payload),
         }),
       },
     ],
   } as unknown as SQSEvent;
+}
+
+const FULL_PAYLOAD = {
+  hydrantId: 'HYD-0231',
+  deptId: 'NICHOLS',
+  latitude: 41.2417,
+  longitude: -73.2004,
+  status: 'IN_SERVICE',
+  size: '6-inch',
+  flowRatingGpm: 1000,
+};
+
+interface TransactInput {
+  input: {
+    TransactItems: Array<{
+      Put?: { Item: Record<string, unknown>; ConditionExpression: string };
+      Update?: {
+        Key: Record<string, string>;
+        UpdateExpression: string;
+        ConditionExpression: string;
+        ExpressionAttributeNames: Record<string, string>;
+        ExpressionAttributeValues: Record<string, unknown>;
+      };
+    }>;
+  };
 }
 
 function mockDdb(send: ReturnType<typeof vi.fn>): void {
@@ -39,175 +76,139 @@ function mockDdb(send: ReturnType<typeof vi.fn>): void {
   });
 }
 
-describe('hydrantCopyHandler (entrypoint-test obligation, AC2)', () => {
-  it('re-resolves and rewrites nearestHydrants for every matched PRE_PLAN_COPY item', async () => {
-    const send = vi
-      .fn()
-      .mockResolvedValueOnce({
-        Items: [
-          {
-            pk: 'DEPT#NICHOLS#PREPLAN',
-            sk: 'OCCUPANCY#OCC-0231',
-            nearestHydrants: [{ hydrantId: 'HYD-0231', status: 'IN_SERVICE' }],
-          },
-        ],
-      })
-      .mockResolvedValueOnce({});
+function sentTransaction(send: ReturnType<typeof vi.fn>) {
+  const items = (send.mock.calls[0]?.[0] as TransactInput).input.TransactItems;
+  return { dedup: items[0]?.Put, update: items[1]?.Update };
+}
+
+describe('hydrantCopyHandler (entrypoint)', () => {
+  it('upserts one geo-indexed HYDRANT_COPY per hydrant with status, size and flow rating', async () => {
+    const send = vi.fn().mockResolvedValue({});
     mockDdb(send);
     const { handler } = await import('./hydrantCopyHandler.js');
 
-    await handler(sqsEvent({ deptId: 'NICHOLS', hydrantId: 'HYD-0231', status: 'OUT_OF_SERVICE' }));
+    await handler(sqsEvent(FULL_PAYLOAD));
 
-    expect(send).toHaveBeenCalledTimes(2);
-    const updateCall = send.mock.calls[1]?.[0] as {
-      input: { Key: Record<string, string>; ExpressionAttributeValues: Record<string, unknown> };
-    };
-    expect(updateCall.input.Key).toEqual({ pk: 'DEPT#NICHOLS#PREPLAN', sk: 'OCCUPANCY#OCC-0231' });
-    expect(updateCall.input.ExpressionAttributeValues[':nearestHydrants']).toEqual([]);
-  });
-
-  it('no-ops when no PRE_PLAN_COPY item references this hydrantId', async () => {
-    const send = vi.fn().mockResolvedValueOnce({
-      Items: [
-        {
-          pk: 'DEPT#NICHOLS#PREPLAN',
-          sk: 'OCCUPANCY#OCC-9999',
-          nearestHydrants: [{ hydrantId: 'HYD-OTHER', status: 'IN_SERVICE' }],
-        },
-      ],
+    expect(send).toHaveBeenCalledOnce();
+    const { update } = sentTransaction(send);
+    expect(update?.Key).toEqual({ pk: 'DEPT#NICHOLS#HYDRANT', sk: 'HYDRANT#HYD-0231' });
+    const values = update?.ExpressionAttributeValues ?? {};
+    expect(values).toMatchObject({
+      ':entityType': 'HYDRANT_COPY',
+      ':hydrantId': 'HYD-0231',
+      ':status': 'IN_SERVICE',
+      ':size': '6-inch',
+      ':flowRatingGpm': 1000,
+      ':latitude': 41.2417,
+      ':longitude': -73.2004,
+      ':hydrantUpdatedAt': Date.parse('2026-09-06T00:00:00Z'),
     });
+    expect(values[':gsi2pk']).toMatch(/^DEPT#NICHOLS#HYDRANT_GEO#[0-9b-hj-km-np-z]{5}$/);
+    expect(values[':gsi2sk']).toMatch(/^[0-9b-hj-km-np-z]{9}#HYD-0231$/);
+    expect((values[':gsi2sk'] as string).slice(0, 5)).toBe((values[':gsi2pk'] as string).slice(-5));
+    // status and size are DynamoDB reserved words.
+    expect(update?.ExpressionAttributeNames).toMatchObject({
+      '#status': 'status',
+      '#size': 'size',
+    });
+  });
+
+  it('keeps the dedup and staleness guards: one EVT# marker per event, and an eventTime watermark', async () => {
+    const send = vi.fn().mockResolvedValue({});
     mockDdb(send);
     const { handler } = await import('./hydrantCopyHandler.js');
 
-    await handler(sqsEvent({ deptId: 'NICHOLS', hydrantId: 'HYD-0231', status: 'OUT_OF_SERVICE' }));
+    await handler(sqsEvent(FULL_PAYLOAD));
 
-    expect(send).toHaveBeenCalledTimes(1);
+    const { dedup, update } = sentTransaction(send);
+    expect(dedup?.Item).toMatchObject({
+      pk: 'DEPT#NICHOLS#DEDUP#hydrant-copy-consumer#HYD-0231',
+      sk: 'EVT#evt-1',
+      entityType: 'EVENT_DEDUP',
+    });
+    expect(dedup?.ConditionExpression).toBe('attribute_not_exists(sk)');
+    expect(update?.ConditionExpression).toBe(
+      'attribute_not_exists(hydrantUpdatedAt) OR :hydrantUpdatedAt > hydrantUpdatedAt',
+    );
   });
 
-  it('guards the write on its own hydrantsUpdatedAt watermark, never snapshotUpdatedAt (P4)', async () => {
-    const send = vi
-      .fn()
-      .mockResolvedValueOnce({
-        Items: [
-          {
-            pk: 'DEPT#NICHOLS#PREPLAN',
-            sk: 'OCCUPANCY#OCC-0231',
-            nearestHydrants: [{ hydrantId: 'HYD-0231', status: 'IN_SERVICE' }],
-          },
-        ],
-      })
-      .mockResolvedValueOnce({});
+  it('a status-only event sets status without blanking a known size or flow rating', async () => {
+    const send = vi.fn().mockResolvedValue({});
     mockDdb(send);
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const { handler } = await import('./hydrantCopyHandler.js');
 
-    await handler(sqsEvent({ deptId: 'NICHOLS', hydrantId: 'HYD-0231', status: 'OUT_OF_SERVICE' }));
+    await handler(sqsEvent({ hydrantId: 'HYD-0231', deptId: 'NICHOLS', status: 'OUT_OF_SERVICE' }));
 
-    const updateCall = send.mock.calls[1]?.[0] as {
-      input: { ConditionExpression: string };
-    };
-    expect(updateCall.input.ConditionExpression).toContain('hydrantsUpdatedAt');
-    expect(updateCall.input.ConditionExpression).not.toContain('snapshotUpdatedAt');
+    const { update } = sentTransaction(send);
+    expect(update?.UpdateExpression).toContain('#status = :status');
+    expect(update?.UpdateExpression).not.toContain('size');
+    expect(update?.UpdateExpression).not.toContain('flowRatingGpm');
+    expect(update?.UpdateExpression).not.toContain('gsi2pk');
   });
 
-  it('retries a concurrent-write race (stale array read) with a fresh read, then succeeds (P2)', async () => {
-    const { ConditionalCheckFailedException } = await import('@aws-sdk/client-dynamodb');
-    const send = vi
-      .fn()
-      .mockResolvedValueOnce({
-        Items: [
-          {
-            pk: 'DEPT#NICHOLS#PREPLAN',
-            sk: 'OCCUPANCY#OCC-0231',
-            nearestHydrants: [{ hydrantId: 'HYD-0231', status: 'IN_SERVICE' }],
-            hydrantsUpdatedAt: 1,
-          },
-        ],
-      })
-      .mockRejectedValueOnce(
-        new ConditionalCheckFailedException({ message: 'stale list', $metadata: {} }),
-      )
-      .mockResolvedValueOnce({
-        Item: {
-          pk: 'DEPT#NICHOLS#PREPLAN',
-          sk: 'OCCUPANCY#OCC-0231',
-          nearestHydrants: [
-            { hydrantId: 'HYD-0231', status: 'IN_SERVICE' },
-            { hydrantId: 'HYD-9999', status: 'IN_SERVICE' },
-          ],
-          hydrantsUpdatedAt: 500,
-        },
-      })
-      .mockResolvedValueOnce({});
-    mockDdb(send);
-    const { handler } = await import('./hydrantCopyHandler.js');
-
-    await handler(sqsEvent({ deptId: 'NICHOLS', hydrantId: 'HYD-0231', status: 'OUT_OF_SERVICE' }));
-
-    expect(send).toHaveBeenCalledTimes(4);
-    const retriedUpdate = send.mock.calls[3]?.[0] as {
-      input: { ExpressionAttributeValues: Record<string, unknown> };
-    };
-    expect(retriedUpdate.input.ExpressionAttributeValues[':nearestHydrants']).toEqual([
-      { hydrantId: 'HYD-9999', status: 'IN_SERVICE' },
-    ]);
-  });
-
-  it('discards as stale when a fresh read shows a newer hydrantsUpdatedAt already won the race (P2)', async () => {
-    const { ConditionalCheckFailedException } = await import('@aws-sdk/client-dynamodb');
-    const send = vi
-      .fn()
-      .mockResolvedValueOnce({
-        Items: [
-          {
-            pk: 'DEPT#NICHOLS#PREPLAN',
-            sk: 'OCCUPANCY#OCC-0231',
-            nearestHydrants: [{ hydrantId: 'HYD-0231', status: 'IN_SERVICE' }],
-            hydrantsUpdatedAt: 1,
-          },
-        ],
-      })
-      .mockRejectedValueOnce(
-        new ConditionalCheckFailedException({ message: 'stale', $metadata: {} }),
-      )
-      .mockResolvedValueOnce({
-        Item: {
-          pk: 'DEPT#NICHOLS#PREPLAN',
-          sk: 'OCCUPANCY#OCC-0231',
-          nearestHydrants: [],
-          hydrantsUpdatedAt: 9_999_999_999_999,
-        },
-      });
+  it('flags a hydrant stored without a location — it can never be listed as nearest', async () => {
+    const send = vi.fn().mockResolvedValue({});
     mockDdb(send);
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const { handler } = await import('./hydrantCopyHandler.js');
 
-    await handler(sqsEvent({ deptId: 'NICHOLS', hydrantId: 'HYD-0231', status: 'OUT_OF_SERVICE' }));
+    await handler(sqsEvent({ hydrantId: 'HYD-0231', deptId: 'NICHOLS', status: 'IN_SERVICE' }));
 
-    expect(send).toHaveBeenCalledTimes(3);
-    errorSpy.mockRestore();
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.stringContaining('hydrant_copy.written_without_location'),
+    );
   });
 
-  it('re-throws when the dept-partition Query fails — fail-closed, no writes attempted', async () => {
+  it.each([
+    ['duplicate eventId redelivery', [{ Code: 'ConditionalCheckFailed' }, { Code: 'None' }]],
+    ['stale (older) eventTime', [{ Code: 'None' }, { Code: 'ConditionalCheckFailed' }]],
+  ])('skips a %s without throwing', async (_label, reasons) => {
+    const conflict = Object.assign(new Error('cancelled'), {
+      name: 'TransactionCanceledException',
+      CancellationReasons: reasons,
+    });
+    const send = vi.fn().mockRejectedValueOnce(conflict);
+    mockDdb(send);
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const { handler } = await import('./hydrantCopyHandler.js');
+
+    await expect(handler(sqsEvent(FULL_PAYLOAD))).resolves.toBeUndefined();
+    expect(send).toHaveBeenCalledOnce();
+  });
+
+  it('re-throws a non-conditional DynamoDB failure so SQS redelivers it', async () => {
     const send = vi.fn().mockRejectedValue(new Error('ProvisionedThroughputExceededException'));
     mockDdb(send);
-    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const { handler } = await import('./hydrantCopyHandler.js');
+
+    await expect(handler(sqsEvent(FULL_PAYLOAD))).rejects.toThrow(
+      'ProvisionedThroughputExceededException',
+    );
+  });
+
+  it('rejects an envelope at the top level of the SQS body before any write', async () => {
+    const send = vi.fn();
+    mockDdb(send);
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const { handler } = await import('./hydrantCopyHandler.js');
 
     await expect(
-      handler(sqsEvent({ deptId: 'NICHOLS', hydrantId: 'HYD-0231', status: 'IN_SERVICE' })),
-    ).rejects.toThrow('ProvisionedThroughputExceededException');
-    expect(errorSpy).toHaveBeenCalled();
-    errorSpy.mockRestore();
+      handler({
+        Records: [{ messageId: 'msg-1', body: JSON.stringify(envelope(FULL_PAYLOAD)) }],
+      } as unknown as SQSEvent),
+    ).rejects.toThrow('missing detail');
+    expect(send).not.toHaveBeenCalled();
   });
 
-  it('re-throws on a malformed envelope before any query is attempted', async () => {
+  it('rejects a payload with no hydrantId before any write', async () => {
     const send = vi.fn();
     mockDdb(send);
-    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const { handler } = await import('./hydrantCopyHandler.js');
 
     await expect(handler(sqsEvent({ deptId: 'NICHOLS' }))).rejects.toThrow(/hydrantId/);
     expect(send).not.toHaveBeenCalled();
-    errorSpy.mockRestore();
   });
 });
