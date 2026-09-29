@@ -16,7 +16,8 @@ import { localityKey, type NormalizedAddress } from './addressKey.js';
  *  2. the ALERTING_HOME_LOCALITY env var (same JSON plus the `deptId` it is for; ignored for
  *     any other department), set by infrastructure from the stack config
  *     `boxalarm-infra:alertingHomeLocality` (default seeded per stack deptId);
- *  3. none — then no match can be verified, and every address match is shown flagged.
+ *  3. none — then nothing is verified against the home area (town-less copies and home-town
+ *     dispatches are flagged); only an explicit same town/ZIP on both sides still verifies.
  */
 export interface HomeLocality {
   /** Town/village names as configured, for display (the manual-entry locality choice). */
