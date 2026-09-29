@@ -199,3 +199,20 @@ test('ADDRESS_UNVERIFIED is a VERIFY ADDRESS warning, never a plain "Pre-plan fo
   );
   expect(screen.queryByText('Pre-plan for 123 Main St')).toBeNull();
 });
+
+test('with match provenance, renders the occupancy summary, not the legacy summary line', () => {
+  render(
+    <PrePlanPanel
+      prePlan={{
+        ...BASE,
+        matchType: 'NEARBY',
+        matchedAddress: '12 Main St',
+        distanceMeters: 30,
+        summary: 'VERIFY ADDRESS: nearby pre-plan for 12 Main St, 30 m away. Retail',
+        occupancySummary: 'Retail',
+      }}
+    />,
+  );
+  expect(screen.getByText('Retail')).toBeTruthy();
+  expect(screen.queryByText(/30 m away\. Retail/)).toBeNull();
+});

@@ -45,7 +45,13 @@ export interface PrePlanView {
   readonly matchedAddress: string;
   readonly unit: string | null;
   readonly distanceMeters?: number;
+  /**
+   * Legacy summary for clients that predate matchType: for anything but a plain ADDRESS match
+   * it leads with the provenance ("VERIFY ADDRESS: …"), since those clients render it as-is.
+   */
   readonly summary?: string;
+  /** The occupancy's own summary line; current clients render this, not `summary`. */
+  readonly occupancySummary?: string;
   readonly hazards: readonly string[];
   readonly utilityShutoffs: readonly UtilityShutoff[];
   /** Legacy: usable hydrants only. The top-level nearestHydrants is the full list. */
@@ -182,6 +188,35 @@ export async function fetchDispatchContext(
   };
 }
 
+/**
+ * The provenance line an older client (no matchType support) must see in the one field it
+ * shows — or undefined for a plain ADDRESS match, whose summary stands on its own.
+ */
+function legacyNotice(match: PrePlanMatch): string | undefined {
+  switch (match.matchType) {
+    case 'ADDRESS':
+      return undefined;
+    case 'ADDRESS_BUILDING':
+      return `Building-level pre-plan for ${addressOf(match.copy)} (no plan for the dispatched unit).`;
+    case 'ADDRESS_UNVERIFIED':
+      return `VERIFY ADDRESS: pre-plan for ${addressOf(match.copy)}; its town could not be confirmed as this call's.`;
+    case 'UNIT_MISMATCH':
+      return `VERIFY ADDRESS: this pre-plan is for ${addressOf(match.copy)}${
+        match.copy.addressUnit ? ` (unit ${match.copy.addressUnit})` : ''
+      } only.`;
+    case 'NEARBY':
+      return `VERIFY ADDRESS: nearby pre-plan for ${addressOf(match.copy)}${
+        match.distanceMeters !== undefined ? `, ${match.distanceMeters} m away` : ''
+      }.`;
+    case 'CANDIDATES': {
+      const units = match.candidates
+        .map((candidate) => candidate.copy.addressUnit ?? addressOf(candidate.copy))
+        .join(', ');
+      return `VERIFY ADDRESS: ${match.candidates.length} pre-plans match this address (${units}). Update the app to see them.`;
+    }
+  }
+}
+
 function toView(
   match: PrePlanMatch,
   nearestHydrants: readonly NearestHydrant[] | undefined,
@@ -189,12 +224,15 @@ function toView(
   // prePlan.nearestHydrants is the pre-provenance field older clients render with no status
   // label, so it keeps usable hydrants only; current clients read the top-level list.
   const legacyHydrants = (nearestHydrants ?? []).filter((hydrant) => !isOutOfService(hydrant));
+  const notice = legacyNotice(match);
   if (match.matchType === 'CANDIDATES') {
     const candidates = match.candidates.map(candidateView);
     return {
       matchType: 'CANDIDATES',
       matchedAddress: candidates[0]?.matchedAddress ?? '',
       unit: null,
+      ...(notice ? { summary: notice } : {}),
+      // Never populated for CANDIDATES: an older client would show one list as the call's.
       hazards: [],
       utilityShutoffs: [],
       nearestHydrants: legacyHydrants,
@@ -202,12 +240,14 @@ function toView(
     };
   }
   const { copy } = match;
+  const legacySummary = [notice, copy.summary].filter(Boolean).join(' ');
   return {
     matchType: match.matchType,
     matchedAddress: addressOf(copy),
     unit: copy.addressUnit ?? null,
     ...(match.distanceMeters !== undefined ? { distanceMeters: match.distanceMeters } : {}),
-    ...(copy.summary ? { summary: copy.summary } : {}),
+    ...(legacySummary ? { summary: legacySummary } : {}),
+    ...(copy.summary ? { occupancySummary: copy.summary } : {}),
     hazards: copy.hazards ?? [],
     utilityShutoffs: copy.utilityShutoffs ?? [],
     nearestHydrants: legacyHydrants,

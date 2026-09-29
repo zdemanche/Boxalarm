@@ -28,6 +28,11 @@ function describeHydrant(hydrant: NearestHydrant): string {
     .join(' · ');
 }
 
+/** The occupancy's own summary: occupancySummary when the server sends provenance. */
+function summaryOf(prePlan: PrePlanEnrichment): string | undefined {
+  return prePlan.matchType ? prePlan.occupancySummary : prePlan.summary;
+}
+
 function withUnit(address: string, unit: string | null | undefined): string {
   // Skip when the address already names the unit ("40 Oak Ave Apt 2").
   const words = address.toUpperCase().split(/[\s,#.]+/);
@@ -194,7 +199,7 @@ function MatchedPrePlan({ prePlan }: { prePlan: PrePlanEnrichment }) {
         </ul>
       ) : null}
 
-      {prePlan.summary ? <p>{prePlan.summary}</p> : null}
+      {summaryOf(prePlan) ? <p>{summaryOf(prePlan)}</p> : null}
       <HazardList hazards={prePlan.hazards} />
       <ShutoffList shutoffs={prePlan.utilityShutoffs} />
     </>

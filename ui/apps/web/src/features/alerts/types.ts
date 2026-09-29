@@ -57,7 +57,13 @@ export interface PrePlanEnrichment {
   unit?: string | null;
   /** NEARBY only: meters from the dispatch location. */
   distanceMeters?: number;
+  /**
+   * Legacy line for clients without matchType support (the server prefixes it with the
+   * provenance for anything but a plain ADDRESS match). Render occupancySummary instead
+   * whenever matchType is present.
+   */
   summary?: string;
+  occupancySummary?: string;
   hazards: string[];
   utilityShutoffs: UtilityShutoff[];
   nearestHydrants: NearestHydrant[];

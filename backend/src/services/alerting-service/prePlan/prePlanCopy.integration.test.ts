@@ -234,7 +234,9 @@ describe('pre-plan + hydrant copies -> dispatch detail (real DynamoDB with the a
 
     expect(body.address).toBe('123 main st, Apt 4');
     expect(body.prePlan).toMatchObject({
-      summary: 'Multi family — 123 Main Street',
+      // Building-level plan for a unit dispatch; the legacy summary says so.
+      matchType: 'ADDRESS_BUILDING',
+      occupancySummary: 'Multi family — 123 Main Street',
       hazards: ['LPG_TANK_REAR'],
       utilityShutoffs: [{ utility: 'gas', location: 'rear yard' }],
     });

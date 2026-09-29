@@ -265,7 +265,10 @@ describe('alert-detail handler', () => {
         matchType: 'NEARBY',
         matchedAddress: '123 Main Street',
         distanceMeters: 0,
-        summary: 'Multi family — 123 Main Street',
+        occupancySummary: 'Multi family — 123 Main Street',
+        // N2: an older client renders only `summary`, so it leads with the provenance.
+        summary:
+          'VERIFY ADDRESS: nearby pre-plan for 123 Main Street, 0 m away. Multi family — 123 Main Street',
       });
     });
 
@@ -357,6 +360,8 @@ describe('alert-detail handler', () => {
 
       expect(body.prePlan).toMatchObject({
         matchType: 'CANDIDATES',
+        summary:
+          'VERIFY ADDRESS: 2 pre-plans match this address (A, B). Update the app to see them.',
         hazards: [],
         utilityShutoffs: [],
         candidates: [
