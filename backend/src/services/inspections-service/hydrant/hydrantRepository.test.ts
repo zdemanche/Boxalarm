@@ -132,7 +132,9 @@ describe('updateHydrant (AC2)', () => {
     const call = ddbMock.commandCalls(TransactWriteCommand)[0];
     const items = call?.args[0].input.TransactItems ?? [];
     expect(items).toHaveLength(2);
-    expect(items[0]?.Update?.ConditionExpression).toBe('attribute_exists(pk)');
+    expect(items[0]?.Update?.ConditionExpression).toBe(
+      'attribute_exists(pk) AND attribute_not_exists(archivedAt)',
+    );
     expect(items[1]?.Put?.Item?.entityType).toBe('OUTBOX_ENTRY');
     expect(items[1]?.Put?.Item?.eventType).toBe('inspections.hydrant.updated');
     expect(items[1]?.Put?.Item?.correlationId).toBe('corr-1');

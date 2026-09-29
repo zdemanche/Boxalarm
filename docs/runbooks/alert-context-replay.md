@@ -42,6 +42,7 @@ Run it once per department. The timeout is 15 minutes. If a very large departmen
 
 - **Idempotent.** Each event carries the item's full current state, and the consumers upsert. A second run rewrites the same copies.
 - **Race-free.** Each outbox row is written in a transaction with a `ConditionCheck` that the source row's `updatedAt` is still the value the replay read. If an inspector edits the item in between, that item is skipped (`skippedConcurrentEdit`). The edit already emitted its own newer event.
+- **Archived items are not replayed.** Archiving an occupancy or hydrant (`POST /api/v1/inspections/occupancies/{id}/archive`, `…/hydrants/{hydrantId}/archive`, CHIEF/ADMIN) takes it off the department list partitions the replay walks. Its alerting copy keeps the tombstone written by the archive event, and the consumers never overwrite a tombstone.
 - **Scope.** LOB plane only. The function can read the platform table and put `OUTBOX_ENTRY` rows. It holds no Update/Delete permission and nothing on the alerting table. The events reach the alerting plane the normal way (outbox drain, platform bus, `PrePlanCopies` queues).
 
 ## Check it worked

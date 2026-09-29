@@ -18,6 +18,8 @@ export function flowClassFor(flowRatingGpm: number | undefined): FlowClass | und
 export interface HydrantUpdatePayload {
   readonly hydrantId: string;
   readonly deptId: string;
+  /** The hydrant was archived: tombstone its copy (inspections archive/archiveRepository.ts). */
+  readonly archived?: true;
   readonly status?: string;
   readonly latitude?: number;
   readonly longitude?: number;
@@ -42,6 +44,7 @@ export function parseHydrantUpdatePayload(payload: unknown): HydrantUpdatePayloa
   return {
     hydrantId,
     deptId,
+    ...(raw?.archived === true ? { archived: true as const } : {}),
     ...(status !== undefined ? { status } : {}),
     // Both or neither: a half-located hydrant cannot be placed on the geo index.
     ...(isGeoPoint(location) ? { latitude: location.latitude, longitude: location.longitude } : {}),
@@ -53,6 +56,7 @@ export function parseHydrantUpdatePayload(payload: unknown): HydrantUpdatePayloa
 /** A HYDRANT_COPY item as the geo index returns it. */
 export interface HydrantCopy {
   readonly hydrantId: string;
+  readonly archivedAt?: number;
   readonly latitude?: number;
   readonly longitude?: number;
   readonly status?: string;
@@ -84,7 +88,7 @@ export function rankNearestHydrants(
 ): readonly NearestHydrant[] {
   const byId = new Map<string, { readonly hydrant: NearestHydrant; readonly exact: number }>();
   for (const hydrant of candidates) {
-    if (hydrant.status === 'OUT_OF_SERVICE') continue;
+    if (hydrant.status === 'OUT_OF_SERVICE' || hydrant.archivedAt !== undefined) continue;
     const location = { latitude: hydrant.latitude, longitude: hydrant.longitude };
     if (!isGeoPoint(location) || byId.has(hydrant.hydrantId)) continue;
     const flowClass = flowClassFor(hydrant.flowRatingGpm);

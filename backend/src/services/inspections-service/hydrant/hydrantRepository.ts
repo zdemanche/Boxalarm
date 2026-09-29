@@ -283,7 +283,8 @@ export async function updateHydrant(
             Update: {
               TableName: tableName,
               Key: { pk, sk: HYDRANT_SK },
-              ConditionExpression: 'attribute_exists(pk)',
+              // An archived hydrant takes no further edits (archive/archiveRepository.ts).
+              ConditionExpression: 'attribute_exists(pk) AND attribute_not_exists(archivedAt)',
               UpdateExpression: `SET ${setClauses.join(', ')}`,
               ExpressionAttributeValues: values,
               ...(Object.keys(names).length > 0 ? { ExpressionAttributeNames: names } : {}),

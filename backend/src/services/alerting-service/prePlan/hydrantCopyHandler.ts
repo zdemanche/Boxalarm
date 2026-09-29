@@ -80,6 +80,19 @@ function buildCopyUpdate(
   payload: HydrantUpdatePayload,
   hydrantUpdatedAt: number,
 ) {
+  if (payload.archived) {
+    // Off the geo index for good; archivedAt blocks any later non-archive event.
+    return {
+      UpdateExpression:
+        'SET entityType = :entityType, hydrantId = :hydrantId, hydrantUpdatedAt = :hydrantUpdatedAt, ' +
+        'archivedAt = :hydrantUpdatedAt REMOVE gsi2pk, gsi2sk',
+      ExpressionAttributeValues: {
+        ':entityType': 'HYDRANT_COPY',
+        ':hydrantId': payload.hydrantId,
+        ':hydrantUpdatedAt': hydrantUpdatedAt,
+      } as Record<string, unknown>,
+    };
+  }
   const setClauses = [
     'entityType = :entityType',
     'hydrantId = :hydrantId',
@@ -113,7 +126,8 @@ function buildCopyUpdate(
   }
   return {
     UpdateExpression: `SET ${setClauses.join(', ')}`,
-    ExpressionAttributeNames: names,
+    // DynamoDB rejects an empty ExpressionAttributeNames map (an id-only event).
+    ...(Object.keys(names).length > 0 ? { ExpressionAttributeNames: names } : {}),
     ExpressionAttributeValues: values,
   };
 }
@@ -157,7 +171,7 @@ export const handler = async (event: SQSEvent): Promise<void> => {
                 Key: hydrantCopyKey(deptId, payload.hydrantId),
                 ...buildCopyUpdate(deptId, payload, hydrantUpdatedAt),
                 ConditionExpression:
-                  'attribute_not_exists(hydrantUpdatedAt) OR :hydrantUpdatedAt > hydrantUpdatedAt',
+                  '(attribute_not_exists(hydrantUpdatedAt) OR :hydrantUpdatedAt > hydrantUpdatedAt) AND attribute_not_exists(archivedAt)',
               },
             },
           ],
@@ -184,6 +198,10 @@ export const handler = async (event: SQSEvent): Promise<void> => {
       throw error;
     }
 
+    if (payload.archived) {
+      emitOutcomeMetric(METRIC_NAMESPACE, 'HydrantCopyArchived');
+      continue;
+    }
     if (payload.latitude === undefined) {
       // Stored, but off the geo index: no dispatch will ever list it as a nearest hydrant.
       logError(

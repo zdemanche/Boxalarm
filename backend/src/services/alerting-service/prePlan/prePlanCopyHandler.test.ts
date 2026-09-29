@@ -64,6 +64,7 @@ type TransactInput = {
       Update?: {
         Key: Record<string, string>;
         UpdateExpression: string;
+        ConditionExpression?: string;
         ExpressionAttributeValues: Record<string, unknown>;
       };
     }>;
@@ -293,6 +294,30 @@ describe('prePlanCopyHandler (entrypoint-test obligation, AC1)', () => {
     expect(values).not.toHaveProperty(':gsi2pk');
     expect(values).not.toHaveProperty(':latitude');
     expect(values[':gsi1pk']).toBe('DEPT#NICHOLS#PREPLAN_ADDR#123 MAIN ST');
+  });
+
+  it('tombstones the copy of an archived occupancy: index keys removed, later events blocked', async () => {
+    const send = vi.fn().mockResolvedValue({});
+    mockDdb(send);
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const { handler } = await import('./prePlanCopyHandler.js');
+
+    await handler(sqsEvent({ deptId: 'NICHOLS', occupancyId: 'OCC-0231', archived: true }));
+
+    const update = (
+      send.mock.calls[0]?.[0] as TransactInput & {
+        input: { TransactItems: Array<{ Update?: { ConditionExpression: string } }> };
+      }
+    ).input.TransactItems.find((item) => item.Update)?.Update;
+    expect(update?.Key).toEqual({ pk: 'DEPT#NICHOLS#PREPLAN', sk: 'OCCUPANCY#OCC-0231' });
+    expect(update?.UpdateExpression).toContain('archivedAt = :snapshotUpdatedAt');
+    expect(update?.UpdateExpression).toContain('REMOVE gsi1pk, gsi1sk, gsi2pk, gsi2sk');
+    expect(update?.ConditionExpression).toContain('attribute_not_exists(archivedAt)');
+    // An archive event is complete as it is — no "missing fields" alarm.
+    expect(errorSpy).not.toHaveBeenCalledWith(
+      expect.stringContaining('preplan_copy.written_with_missing_fields'),
+    );
+    errorSpy.mockRestore();
   });
 
   it('rejects an envelope at the top level of the SQS body — the queue only ever carries the EventBridge event', async () => {

@@ -74,7 +74,12 @@ async function queryAll(
 function isPrePlanCopy(
   item: Record<string, unknown>,
 ): item is Record<string, unknown> & PrePlanCopyItem {
-  return item.entityType === 'PRE_PLAN_COPY' && typeof item.occupancyId === 'string';
+  // Tombstoned copies lose their index keys; the archivedAt check is belt and braces.
+  return (
+    item.entityType === 'PRE_PLAN_COPY' &&
+    typeof item.occupancyId === 'string' &&
+    item.archivedAt === undefined
+  );
 }
 
 /** Rejects a candidate whose town or ZIP differs — only when both sides carry one. */
@@ -252,7 +257,7 @@ async function queryHydrantCells(
           ':cell': cell,
         },
         ProjectionExpression:
-          'entityType, hydrantId, latitude, longitude, #status, #size, flowRatingGpm',
+          'entityType, hydrantId, latitude, longitude, #status, #size, flowRatingGpm, archivedAt',
         ExpressionAttributeNames: { '#status': 'status', '#size': 'size' },
       }),
     ),

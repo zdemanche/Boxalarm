@@ -128,7 +128,7 @@ describe('hydrantCopyHandler (entrypoint)', () => {
     });
     expect(dedup?.ConditionExpression).toBe('attribute_not_exists(sk)');
     expect(update?.ConditionExpression).toBe(
-      'attribute_not_exists(hydrantUpdatedAt) OR :hydrantUpdatedAt > hydrantUpdatedAt',
+      '(attribute_not_exists(hydrantUpdatedAt) OR :hydrantUpdatedAt > hydrantUpdatedAt) AND attribute_not_exists(archivedAt)',
     );
   });
 
@@ -158,6 +158,21 @@ describe('hydrantCopyHandler (entrypoint)', () => {
     expect(errorSpy).toHaveBeenCalledWith(
       expect.stringContaining('hydrant_copy.written_without_location'),
     );
+  });
+
+  it('tombstones an archived hydrant: removes its geo keys and blocks later events', async () => {
+    const send = vi.fn().mockResolvedValue({});
+    mockDdb(send);
+    const { handler } = await import('./hydrantCopyHandler.js');
+
+    await handler(sqsEvent({ hydrantId: 'HYD-0231', deptId: 'NICHOLS', archived: true }));
+
+    const { update } = sentTransaction(send);
+    expect(update?.Key).toEqual({ pk: 'DEPT#NICHOLS#HYDRANT', sk: 'HYDRANT#HYD-0231' });
+    expect(update?.UpdateExpression).toContain('archivedAt = :hydrantUpdatedAt');
+    expect(update?.UpdateExpression).toContain('REMOVE gsi2pk, gsi2sk');
+    expect(update?.ConditionExpression).toContain('attribute_not_exists(archivedAt)');
+    expect(update).not.toHaveProperty('ExpressionAttributeNames');
   });
 
   it.each([

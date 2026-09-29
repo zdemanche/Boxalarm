@@ -215,7 +215,8 @@ export async function putPrePlan(
             ConditionCheck: {
               TableName: tableName,
               Key: { pk: buildDeptScopedPk(deptId, 'OCCUPANCY', occupancyId), sk: 'METADATA' },
-              ConditionExpression: 'attribute_exists(pk)',
+              // An archived occupancy takes no new pre-plan (archive/archiveRepository.ts).
+              ConditionExpression: 'attribute_exists(pk) AND attribute_not_exists(archivedAt)',
             },
           },
           {

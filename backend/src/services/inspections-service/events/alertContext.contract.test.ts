@@ -229,4 +229,32 @@ describe('inspections -> alerting dispatch-context contract', () => {
       ':latitude': 41.2417,
     });
   });
+
+  it('an occupancy archive tombstones the alerting PRE_PLAN_COPY (index keys removed)', async () => {
+    const producerSend = vi.fn((command: SentCommand) =>
+      Promise.resolve(
+        'Key' in command.input && !('TransactItems' in command.input)
+          ? { Item: { occupancyId: 'OCC-0231', normalizedAddress: '12 MAIN ST' } }
+          : {},
+      ),
+    );
+    const { archiveOccupancy } = await import('../archive/archiveRepository.js');
+    await archiveOccupancy(
+      { send: producerSend } as unknown as DynamoDBDocumentClient,
+      'platform-table',
+      DEPT_ID,
+      'OCC-0231',
+      'chief-1',
+    );
+    const body = await drainToSqsBody(outboxItemFrom(producerSend));
+
+    const alertingSend = mockAlertingTable();
+    vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    const { handler } = await import('../../alerting-service/prePlan/prePlanCopyHandler.js');
+    await handler({ Records: [{ messageId: 'm-1', body }] } as unknown as SQSEvent);
+
+    const update = copyUpdate(alertingSend);
+    expect(update?.Key).toEqual({ pk: 'DEPT#NICHOLS#PREPLAN', sk: 'OCCUPANCY#OCC-0231' });
+    expect(update?.UpdateExpression).toContain('REMOVE gsi1pk, gsi1sk, gsi2pk, gsi2sk');
+  });
 });

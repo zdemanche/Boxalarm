@@ -36,6 +36,11 @@ export const ADMIN_ONLY_ACTIONS = [
   // are CHIEF/ADMIN, not the officer tier that may read the reports themselves.
   "ExportReport",
   "RecordCutoverDecision",
+  // inspections-service archive (archive/archiveHandler.ts): destructive — it takes an
+  // occupancy's pre-plan or a hydrant off every dispatch — so CHIEF/ADMIN, not the officer
+  // tier that may edit them.
+  "ArchiveOccupancy",
+  "ArchiveHydrant",
 ] as const;
 export const ADMIN_ONLY_GROUPS = ["CHIEF", "ADMIN"] as const;
 
@@ -446,6 +451,8 @@ export const CEDAR_SCHEMA = JSON.stringify({
       WriteOccupancy: { appliesTo: { principalTypes: ["User"], resourceTypes: ["Occupancy"] } },
       CreateHydrant: { appliesTo: { principalTypes: ["User"], resourceTypes: ["Hydrant"] } },
       UpdateHydrant: { appliesTo: { principalTypes: ["User"], resourceTypes: ["Hydrant"] } },
+      ArchiveOccupancy: { appliesTo: { principalTypes: ["User"], resourceTypes: ["Occupancy"] } },
+      ArchiveHydrant: { appliesTo: { principalTypes: ["User"], resourceTypes: ["Hydrant"] } },
       ListInspections: {
         appliesTo: { principalTypes: ["User"], resourceTypes: ["InspectionList"] },
       },

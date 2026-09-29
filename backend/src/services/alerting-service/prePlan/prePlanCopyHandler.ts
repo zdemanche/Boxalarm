@@ -19,6 +19,8 @@ interface UtilityShutoff {
 interface PrePlanUpdatedPayload {
   readonly deptId: string;
   readonly occupancyId: string;
+  /** The occupancy was archived: tombstone the copy (inspections archive/archiveRepository.ts). */
+  readonly archived?: true;
   readonly prePlanId?: string;
   readonly summary?: string;
   readonly occupancyType?: string;
@@ -82,6 +84,7 @@ function parseEnvelope(body: string): PrePlanUpdatedEnvelope {
     payload: {
       deptId,
       occupancyId,
+      ...(payload?.archived === true ? { archived: true as const } : {}),
       ...Object.fromEntries(Object.entries(optional).filter(([, value]) => value !== undefined)),
       ...(isGeoPoint(location) ? { location } : {}),
       ...(hazards !== undefined ? { hazards } : {}),
@@ -119,11 +122,32 @@ function asTransactionCancellation(error: unknown): TransactCancellationError | 
     : undefined;
 }
 
+/**
+ * An archived occupancy's copy keeps its content for the record but loses every index key, so
+ * no dispatch can reach it again; archivedAt also blocks any later non-archive event.
+ */
+function buildTombstoneUpdate(payload: PrePlanUpdatedPayload, snapshotUpdatedAt: number) {
+  return {
+    UpdateExpression:
+      'SET entityType = :entityType, occupancyId = :occupancyId, archivedAt = :snapshotUpdatedAt, ' +
+      'snapshotUpdatedAt = :snapshotUpdatedAt, prePlanUpdatedAt = :snapshotUpdatedAt ' +
+      'REMOVE gsi1pk, gsi1sk, gsi2pk, gsi2sk',
+    values: {
+      ':entityType': 'PRE_PLAN_COPY',
+      ':occupancyId': payload.occupancyId,
+      ':snapshotUpdatedAt': snapshotUpdatedAt,
+    } as Record<string, unknown>,
+  };
+}
+
 function buildCopyUpdate(
   deptId: VerifiedDeptId,
   payload: PrePlanUpdatedPayload,
   snapshotUpdatedAt: number,
 ) {
+  if (payload.archived) {
+    return buildTombstoneUpdate(payload, snapshotUpdatedAt);
+  }
   const setClauses = [
     'entityType = :entityType',
     'occupancyId = :occupancyId',
@@ -211,8 +235,9 @@ export const handler = async (event: SQSEvent): Promise<void> => {
                 TableName: tableName,
                 Key: prePlanCopyKey(deptId, payload.occupancyId),
                 UpdateExpression,
+                // Newer than what is stored, and never over a tombstone: there is no un-archive.
                 ConditionExpression:
-                  'attribute_not_exists(prePlanUpdatedAt) OR :snapshotUpdatedAt > prePlanUpdatedAt',
+                  '(attribute_not_exists(prePlanUpdatedAt) OR :snapshotUpdatedAt > prePlanUpdatedAt) AND attribute_not_exists(archivedAt)',
                 ExpressionAttributeValues: values,
               },
             },
@@ -245,6 +270,10 @@ export const handler = async (event: SQSEvent): Promise<void> => {
 
     // The address is what makes the copy findable from a dispatch: without it the copy is
     // stored but no alert will ever show it. (Coordinates are optional on an occupancy.)
+    if (payload.archived) {
+      emitOutcomeMetric(METRIC_NAMESPACE, 'PrePlanCopyArchived');
+      continue;
+    }
     const missingAc1Fields = (['summary', 'hazards', 'utilityShutoffs', 'address'] as const).filter(
       (field) => payload[field] === undefined,
     );
