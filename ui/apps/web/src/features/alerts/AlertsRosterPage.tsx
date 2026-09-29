@@ -91,6 +91,7 @@ function LocalityField({
         <TextInput
           label="Other town name"
           required
+          maxLength={MAX_TOWN_LENGTH}
           value={otherTown}
           onChange={(e) => onOtherTown(e.target.value)}
         />
@@ -98,6 +99,9 @@ function LocalityField({
     </>
   );
 }
+
+// Matches the backend's MAX_LOCALITY_TOWN_LENGTH; a longer town is dropped server-side.
+const MAX_TOWN_LENGTH = 80;
 
 function ManualEntryForm({ onCreated }: { onCreated: (dispatchId: string) => void }) {
   const auth = useAuth();

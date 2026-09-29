@@ -126,10 +126,21 @@ describe('normalizeManualEntry locality (round-3 R3-A)', () => {
     ['an over-long town', { town: 'x'.repeat(81), choice: 'OTHER' }, 'locality.town'],
     ['a control character', { town: 'Trum\u0000bull', choice: 'HOME' }, 'locality.town'],
     ['an unknown choice', { town: 'Trumbull', choice: 'MAYBE' }, 'locality.choice'],
-  ])('rejects a malformed locality (%s) as a 400 field error', (_label, locality, field) => {
-    const result = normalizeManualEntry({ ...validPayload, locality });
+  ])(
+    'drops a malformed locality (%s) instead of rejecting the dispatch (round-4 m1)',
+    (_label, locality, field) => {
+      const result = normalizeManualEntry({ ...validPayload, locality });
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.value).not.toHaveProperty('locality');
+      expect(result.droppedLocality?.field).toBe(field);
+    },
+  );
+
+  it('still reports the other field errors when the locality is also malformed', () => {
+    const result = normalizeManualEntry({ ...validPayload, address: '', locality: 'x' });
     expect(result.ok).toBe(false);
-    expect(result.ok ? [] : result.errors.map((error) => error.field)).toContain(field);
+    expect(result.ok ? [] : result.errors.map((error) => error.field)).toEqual(['address']);
   });
 });
 

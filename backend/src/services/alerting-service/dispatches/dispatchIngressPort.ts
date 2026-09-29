@@ -32,7 +32,12 @@ export interface FieldError {
 }
 
 export type NormalizeResult =
-  | { readonly ok: true; readonly value: DispatchReceived }
+  | {
+      readonly ok: true;
+      readonly value: DispatchReceived;
+      /** A malformed `locality` that was dropped rather than rejected (round-4 m1). */
+      readonly droppedLocality?: FieldError;
+    }
   | { readonly ok: false; readonly errors: readonly FieldError[] };
 
 export interface DispatchIngressPort {
@@ -78,36 +83,40 @@ function optionalStringArray(
 }
 
 /**
- * The optional `locality` field. Absent is accepted (older callers); present but malformed is
- * a 400 like any other field, rejected before anything is written.
+ * The optional `locality` field. Absent is accepted (older callers). Present but malformed is
+ * DROPPED, never a 400: locality is enrichment, and enrichment must never gate or delay a page
+ * (round-4 m1). The dispatch is then treated as naming no locality, so any pre-plan shown for
+ * it is flagged VERIFY ADDRESS. The caller logs and counts the drop.
  */
-function optionalLocality(
-  body: Record<string, unknown>,
-  errors: FieldError[],
-): DispatchLocality | undefined {
+function optionalLocality(body: Record<string, unknown>): {
+  readonly locality?: DispatchLocality;
+  readonly dropped?: FieldError;
+} {
   const value = body.locality;
   if (value === undefined) {
-    return undefined;
+    return {};
   }
   if (!isRecord(value)) {
-    errors.push({ field: 'locality', message: 'locality must be an object { town, choice }' });
-    return undefined;
+    return {
+      dropped: { field: 'locality', message: 'locality was not an object { town, choice }' },
+    };
   }
   const town = typeof value.town === 'string' ? value.town.trim() : '';
-  const before = errors.length;
   const hasControlCharacter = [...town].some((character) => character.charCodeAt(0) < 0x20);
   if (town.length === 0 || town.length > MAX_LOCALITY_TOWN_LENGTH || hasControlCharacter) {
-    errors.push({
-      field: 'locality.town',
-      message: `locality.town is required: a town name of 1-${MAX_LOCALITY_TOWN_LENGTH} characters`,
-    });
+    return {
+      dropped: {
+        field: 'locality.town',
+        message: `locality.town was not a town name of 1-${MAX_LOCALITY_TOWN_LENGTH} characters`,
+      },
+    };
   }
   if (value.choice !== 'HOME' && value.choice !== 'OTHER') {
-    errors.push({ field: 'locality.choice', message: "locality.choice must be 'HOME' or 'OTHER'" });
+    return {
+      dropped: { field: 'locality.choice', message: "locality.choice was not 'HOME' or 'OTHER'" },
+    };
   }
-  return errors.length === before
-    ? { town, choice: value.choice as DispatchLocality['choice'] }
-    : undefined;
+  return { locality: { town, choice: value.choice } };
 }
 
 export function normalizeManualEntry(rawPayload: unknown): NormalizeResult {
@@ -125,7 +134,7 @@ export function normalizeManualEntry(rawPayload: unknown): NormalizeResult {
   const narrative = requiredString(rawPayload, 'narrative', errors);
   const externalDispatchId = requiredString(rawPayload, 'externalDispatchId', errors);
   const unitsRequested = optionalStringArray(rawPayload, 'unitsRequested', errors);
-  const locality = optionalLocality(rawPayload, errors);
+  const { locality, dropped } = optionalLocality(rawPayload);
 
   if (externalDispatchId.includes('#')) {
     errors.push({
@@ -150,6 +159,7 @@ export function normalizeManualEntry(rawPayload: unknown): NormalizeResult {
       externalDispatchId,
       ...(locality ? { locality } : {}),
     },
+    ...(dropped ? { droppedLocality: dropped } : {}),
   };
 }
 

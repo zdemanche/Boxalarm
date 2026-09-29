@@ -457,6 +457,7 @@ test('R3-A: the manual entry requires a locality; "Other town" sends the typed t
   expect(town.required).toBe(true);
   expect([...town.options].map((option) => option.textContent)).toEqual(['Choose…', 'Other town…']);
   await user.selectOptions(town, '__other__');
+  expect((screen.getByLabelText('Other town name') as HTMLInputElement).maxLength).toBe(80);
   await user.type(screen.getByLabelText('Other town name'), 'Bridgeport');
   await user.click(screen.getByRole('button', { name: 'Submit dispatch' }));
 

@@ -55,6 +55,7 @@ test('R3-A: the locality choice is required, and "Other town" sends the typed to
   expect(submit).not.toHaveBeenCalled();
 
   await fireEvent.press(await findByRole('radio', { name: 'Other town…' }));
+  expect((await findByLabelText('Other town name')).props.maxLength).toBe(80);
   await fireEvent.changeText(await findByLabelText('Other town name'), 'Bridgeport');
   await fireEvent.press(await findByRole('button', { name: 'Submit dispatch' }));
 
@@ -68,9 +69,7 @@ test('R3-A: the locality choice is required, and "Other town" sends the typed to
 });
 
 test('M1: a successful submit resets the form, so the next call starts with no town chosen', async () => {
-  const { getByLabelText, findByRole, findAllByRole } = await render(
-    <ManualDispatchEntryScreen />,
-  );
+  const { getByLabelText, findByRole, findAllByRole } = await render(<ManualDispatchEntryScreen />);
 
   await fireEvent.changeText(getByLabelText('Incident type'), 'Structure fire');
   await fireEvent.changeText(getByLabelText('Address'), '12 Elm St');

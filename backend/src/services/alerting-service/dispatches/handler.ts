@@ -12,6 +12,7 @@ import {
 import { deriveIngressIdempotencyKey, normalizeManualEntry } from './dispatchIngressPort.js';
 import { getDynamoClient, readDispatchesConfig } from './dynamoClient.js';
 import { problemResponse } from './errorResponse.js';
+import { emitOutcomeMetric } from '@boxalarm/metrics';
 import { logError } from './logger.js';
 import { createManualDispatch } from './repository.js';
 import { runFanOut } from '../fanout/fanOut.js';
@@ -121,6 +122,21 @@ export const handler: Handler<DispatchEvent, APIGatewayProxyStructuredResultV2> 
       traceId,
       errors: normalized.errors,
     });
+  }
+
+  if (normalized.droppedLocality) {
+    // Round-4 m1: a bad locality never blocks the page. It is dropped (the pre-plan is then
+    // flagged VERIFY ADDRESS), logged and counted. The raw town is not logged.
+    logError('dispatches.locality_dropped', new Error(normalized.droppedLocality.message), {
+      traceId,
+      deptId,
+      field: normalized.droppedLocality.field,
+    });
+    emitOutcomeMetric(
+      'Boxalarm/alerting',
+      'DispatchLocalityDropped',
+      normalized.droppedLocality.field,
+    );
   }
 
   let dynamoConfig: ReturnType<typeof readDispatchesConfig>;

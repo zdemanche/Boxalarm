@@ -9,6 +9,8 @@ import { ApiError } from '../../lib/apiClient';
 import type { AlertsStackParamList } from '../../navigation/AlertsStack';
 
 const OTHER_TOWN = '__other__';
+// Matches the backend's MAX_LOCALITY_TOWN_LENGTH (a longer town is dropped server-side).
+const MAX_TOWN_LENGTH = 80;
 
 const EMPTY_FORM: ManualDispatchInput = {
   incidentType: '',
@@ -192,6 +194,7 @@ export function ManualDispatchEntryScreen() {
           {localityChoice === OTHER_TOWN ? (
             <TextInput
               accessibilityLabel="Other town name"
+              maxLength={MAX_TOWN_LENGTH}
               value={otherTown}
               onChangeText={setOtherTown}
               style={{
