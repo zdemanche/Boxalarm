@@ -68,6 +68,7 @@ import { RoutesLadderControls } from "./components/alerting/routes-ladder-contro
 import { PushTokens } from "./components/alerting/push-tokens";
 import { RidingBoard } from "./components/alerting/riding-board";
 import { AlertingAlarms } from "./components/alerting/alarms";
+import { PrePlanCopies } from "./components/alerting/pre-plan-copies";
 import { EligibilityStaleness } from "./components/alerting/staleness";
 import { AlertingCanary } from "./components/alerting/canary";
 import { AlertingOutboxDrain } from "./components/alerting/outbox-drain";
@@ -710,6 +711,20 @@ export const routesLadderControls = new RoutesLadderControls("routes-ladder-cont
   logGroup: alertingLogGroup,
   policyStoreId: policyStore.policyStoreId,
   pageTopicArn: alertingAlarms.pageTopic.arn,
+  permissionsBoundaryArn: alertingBoundaryArn,
+});
+
+// E5-S4/E5-S8: inspections pre-plan/hydrant events -> alerting-owned PRE_PLAN_COPY /
+// HYDRANT_COPY projections the dispatch detail reads. Declared after alertingAlarms so a
+// dead-lettered copy event pages through the alerting-page topic.
+export const prePlanCopies = new PrePlanCopies("pre-plan-copies", {
+  env,
+  alertingTableArn: alertingTable.tableArn,
+  alertingCmkArn: alertingTable.cmkArn,
+  alertingTableName: alertingTable.tableName,
+  busName: platformBus.busName,
+  pageTopicArn: alertingAlarms.pageTopic.arn,
+  logGroup: alertingLogGroup,
   permissionsBoundaryArn: alertingBoundaryArn,
 });
 

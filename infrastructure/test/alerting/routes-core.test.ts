@@ -68,3 +68,30 @@ describe("RoutesCore active-dispatch list route", { timeout: 30_000 }, () => {
     expect(route?.inputs.authorizationType).toBe("CUSTOM");
   });
 });
+
+describe("RoutesCore dispatch-detail route (pre-plan context reads)", { timeout: 30_000 }, () => {
+  const DETAIL = "boxalarm-dev-alerting-dispatch-detail";
+
+  it("adds only Query on the copy indexes (GSI1 address, GSI2 geohash) to its base-table reads", async () => {
+    await buildSchedulingChain();
+    const statements = statementsForRole(DETAIL);
+    expect(isGranted(statements, "dynamodb:Query", `${TABLE_ARN}/index/GSI1`)).toBe(true);
+    expect(isGranted(statements, "dynamodb:Query", `${TABLE_ARN}/index/GSI2`)).toBe(true);
+    expect(isGranted(statements, "dynamodb:GetItem", TABLE_ARN)).toBe(true);
+    const dynamoActions = new Set(
+      statements
+        .filter((s) => s.Effect === "Allow")
+        .flatMap((s) => (Array.isArray(s.Action) ? s.Action : [s.Action]))
+        .filter((a) => a.startsWith("dynamodb:")),
+    );
+    // Read-only: enrichment never writes, and never Scans.
+    expect([...dynamoActions].sort()).toEqual(["dynamodb:GetItem", "dynamodb:Query"]);
+    const resources = statements.flatMap((s) =>
+      Array.isArray(s.Resource) ? s.Resource : [s.Resource],
+    );
+    expect(resources.filter((r) => r.includes(":table/"))).toEqual(
+      expect.arrayContaining([TABLE_ARN, `${TABLE_ARN}/index/GSI1`, `${TABLE_ARN}/index/GSI2`]),
+    );
+    expect(resources.some((r) => /:table\/(?!boxalarm-dev-alerting-table)/.test(r))).toBe(false);
+  });
+});

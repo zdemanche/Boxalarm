@@ -379,6 +379,18 @@ export const LAMBDA_ENTRIES = [
     entry: 'src/services/alerting-service/eligibility/memberUpdatedHandler.ts',
   },
   {
+    // inspections.preplan.updated -> PRE_PLAN_COPY (dispatch-detail pre-plan context).
+    service: 'alerting-service',
+    function: 'preplan-copy-consumer',
+    entry: 'src/services/alerting-service/prePlan/prePlanCopyHandler.ts',
+  },
+  {
+    // inspections.hydrant.updated -> HYDRANT_COPY (dispatch-detail nearest hydrants).
+    service: 'alerting-service',
+    function: 'hydrant-copy-consumer',
+    entry: 'src/services/alerting-service/prePlan/hydrantCopyHandler.ts',
+  },
+  {
     service: 'alerting-service',
     function: 'canary',
     entry: 'src/services/alerting-service/canary/handler.ts',

@@ -214,15 +214,25 @@ export class RoutesCore extends pulumi.ComponentResource {
           ALERTING_TABLE_NAME: args.alertingTableName,
           VERIFIED_PERMISSIONS_POLICY_STORE_ID: args.policyStoreId,
         },
-        additionalPolicyStatements: [
+        additionalPolicyStatements: pulumi.output(args.alertingTableArn).apply((tableArn) => [
           {
             Sid: "AlertingTableReadOnly",
-            Effect: "Allow",
+            Effect: "Allow" as const,
             Action: ["dynamodb:GetItem", "dynamodb:Query"],
-            Resource: args.alertingTableArn as string,
+            Resource: tableArn,
+          },
+          {
+            // Pre-plan context (prePlan/prePlanCopyRepository.ts): PRE_PLAN_COPY by normalized
+            // address on GSI1, and PRE_PLAN_COPY / HYDRANT_COPY by geohash on GSI2. Read-only,
+            // alerting table only — the copies are projected here by alerting-owned consumers
+            // (pre-plan-copies.ts) so this route never touches a LOB table.
+            Sid: "AlertingCopyIndexQuery",
+            Effect: "Allow" as const,
+            Action: ["dynamodb:Query"],
+            Resource: [`${tableArn}/index/GSI1`, `${tableArn}/index/GSI2`],
           },
           verifiedPermissionsStatement(),
-        ],
+        ]),
         reservedConcurrentExecutions: 5,
         permissionsBoundaryArn: args.permissionsBoundaryArn,
       },
