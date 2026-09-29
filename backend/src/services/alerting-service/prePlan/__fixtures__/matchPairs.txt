@@ -1,0 +1,224 @@
+// --- house numbers
+DIFF | trumbull | 12A Main St || 12 Main St
+DIFF | trumbull | 12 Main St || 12A Main St
+DIFF | trumbull | 12 A Main St || 12 Main St
+DIFF | trumbull | 12 1/2 Main St || 12 Main St
+DIFF | trumbull | 12 Main St || 12 1/2 Main St
+DIFF | trumbull | 12-14 Main St || 12 Main St
+DIFF | trumbull | 12 Main St || 12-14 Main St
+DIFF | trumbull | 12 Main St A || 12 Main St
+DIFF | trumbull | 12-A Main St || 12 Main St
+DIFF | trumbull | 12½ Main St || 12 Main St
+DIFF | trumbull | 1 2 Main St || 12 Main St
+// --- same street two towns, town/zip either side
+DIFF | trumbull | 123 Main St, Bridgeport, CT || 123 Main St
+DIFF | trumbull | 123 Main St Bridgeport CT || 123 Main St
+DIFF | trumbull | 123 Main St Bridgeport || 123 Main St
+DIFF | trumbull | 123 Main St, Bridgeport || 123 Main St, Trumbull, CT
+DIFF | trumbull | 123 Main St, Monroe, CT 06468 || 123 Main St
+DIFF | trumbull | 123 Main St 06468 || 123 Main St
+DIFF | trumbull | 123 Main St, CT 06606 || 123 Main St
+DIFF | trumbull | 123 Main St || 123 Main St, Monroe, CT
+DIFF | trumbull | 123 Main St, Trumbull || 123 Main St, Monroe
+DIFF | trumbull | 123 Main St, Rye, NY || 123 Main St
+DIFF | trumbull | 123 Main St, NY || 123 Main St
+DIFF | trumbull | 123 Main St Stamford || 123 Main St
+DIFF | trumbull | 123 Main St, Shelton CT 06484 || 123 Main St
+DIFF | trumbull | 123 Main St, Bridgeport, CT 06611 || 123 Main St
+DIFF | trumbull | 123 Main St, Stratford 06611 || 123 Main St
+DIFF | trumbull | 123 Main St, Easton || 123 Main St
+DIFF | trumbull | 123 Main St, Weston, CT || 123 Main St
+DIFF | trumbull | 123 Main St Fairfield Ct || 123 Main St
+DIFF | trumbull | 123 Main St - Bridgeport || 123 Main St
+DIFF | trumbull | 123 Main St (Bridgeport) || 123 Main St
+DIFF | trumbull | 123 Main St / Bridgeport || 123 Main St
+DIFF | trumbull | 123 Main St; Bridgeport CT || 123 Main St
+DIFF | trumbull | 123 Main St BPT || 123 Main St
+DIFF | trumbull | 123 Main St, Bpt || 123 Main St
+DIFF | trumbull | 123 Main St, Bridgeport Ct. || 123 Main St
+DIFF | trumbull | 123 Main St. Bridgeport, CT || 123 Main St
+DIFF | trumbull | 123 MAIN ST,BRIDGEPORT,CT || 123 Main St
+DIFF | trumbull | 123 Main Street Bridgeport Connecticut || 123 Main St
+DIFF | trumbull | 123 Main St, City of Bridgeport || 123 Main St
+DIFF | trumbull | 123 Main St, Town of Monroe || 123 Main St
+DIFF | trumbull | 123 Main St, Bridgeport CT, 06606 || 123 Main St
+DIFF | trumbull | 123 Main St, 06606 || 123 Main St
+// --- villages
+DIFF | trumbull | 123 Main St, Stepney, CT || 123 Main St
+DIFF | trumbull | 123 Main St Stepney || 123 Main St
+DIFF | trumbull | 123 Main St Upper Stepney || 123 Main St
+DIFF | trumbull | 123 Main St, Botsford || 123 Main St
+DIFF | trumbull | 123 Main St Long Hill || 123 Main St, Monroe
+SAME | trumbull | 123 Main St, Nichols, CT || 123 Main St
+SAME | trumbull | 123 Main St Long Hill CT 06611 || 123 Main St
+SAME | trumbull | 123 Main St, Trumbull, CT 06611 || 123 Main St
+SAME | trumbull | 123 Main St || 123 Main St
+// --- streets named for towns
+DIFF | trumbull | 123 Monroe Tpke, Monroe, CT || 123 Monroe Tpke
+DIFF | trumbull | 123 Monroe Tpke Monroe || 123 Monroe Tpke
+DIFF | trumbull | 123 Monroe Tpke Monroe CT || 123 Monroe Tpke
+DIFF | trumbull | 123 Monroe || 123 Monroe Tpke
+DIFF | trumbull | 123 Monroe Tpke || 123 Monroe Tpke, Monroe
+SAME | trumbull | 123 Monroe Tpke Trumbull || 123 Monroe Tpke
+DIFF | trumbull | 123 Stratford Rd || 123 Stratford Ave
+DIFF | trumbull | 123 Stratford Rd, Stratford || 123 Stratford Rd
+DIFF | trumbull | 123 Huntington Tpke, Bridgeport || 123 Huntington Tpke
+DIFF | trumbull | 123 Huntington Tpke Bridgeport CT || 123 Huntington Tpke
+DIFF | trumbull | 123 Huntington Rd || 123 Huntington Tpke
+DIFF | trumbull | 123 Main St Ext || 123 Main St
+DIFF | trumbull | 123 Main St Extension || 123 Main St
+DIFF | trumbull | 123 Main Street Extension, Bridgeport || 123 Main St Ext
+DIFF | trumbull | 123 Main Ext || 123 Main St
+DIFF | trumbull | 123 Main St Ext Bridgeport || 123 Main St Ext
+DIFF | trumbull | 123 White Plains Rd || 123 White Plains Rd, Bridgeport
+DIFF | trumbull | 123 Nichols Ave, Stratford || 123 Nichols Ave
+DIFF | trumbull | 123 Nichols Ave Stratford CT || 123 Nichols Ave
+DIFF | trumbull | 123 Trumbull Ave, Bridgeport || 123 Trumbull Ave
+DIFF | trumbull | 123 Easton Tpke Easton || 123 Easton Tpke
+DIFF | trumbull | 123 Long Hill Ave, Shelton || 123 Long Hill Ave
+DIFF | trumbull | 123 Long Hill Ave Shelton || 123 Long Hill Ave
+DIFF | trumbull | 123 Long Hill Rd || 123 Long Hill Ave
+DIFF | trumbull | 123 Old Town Rd, Bridgeport || 123 Old Town Rd
+// --- routes
+DIFF | trumbull | 123 Route 111, Monroe || 123 Route 111
+DIFF | trumbull | 123 Route 111 Monroe CT || 123 Route 111
+DIFF | trumbull | 123 Rt 111 Monroe || 123 Route 111
+DIFF | trumbull | 123 CT-111 Monroe || 123 Route 111
+DIFF | trumbull | 123 Route 111 || 123 Route 111, Monroe
+DIFF | trumbull | 123 Route 25 || 123 Route 111
+DIFF | trumbull | 123 Route 1 || 123 US Route 1
+DIFF | trumbull | 123 US Route 1, Stratford || 123 US Route 1
+DIFF | trumbull | 123 US Hwy 1 Stratford || 123 US Route 1
+DIFF | trumbull | 123 Route 111 Ext || 123 Route 111
+DIFF | trumbull | 123 Route 8 || 123 Route 8 Connector
+SAME | trumbull | 123 Rte 111 || 123 Route 111
+// --- suffix-less
+DIFF | trumbull | 123 Broadway || 123 Broadway, Bridgeport
+DIFF | trumbull | 123 Broadway Bridgeport || 123 Broadway
+DIFF | trumbull | 123 Broadway || 123 Broadway St
+DIFF | trumbull | 123 Main || 123 Main St
+DIFF | trumbull | 123 Main St || 123 Main
+DIFF | trumbull | 123 Plattsville || 123 Plattsville Rd
+DIFF | custom | 123 Broadway Plattsville || 123 Broadway
+DIFF | custom | 123 Broadway || 123 Broadway Plattsville
+SAME | trumbull | 123 Broadway || 123 Broadway
+// --- directionals
+DIFF | trumbull | 12 N Main St || 12 Main St
+DIFF | trumbull | 12 Main St N || 12 Main St
+DIFF | trumbull | 12 Main St || 12 Main St N
+DIFF | trumbull | 12 N Main St || 12 Main St N
+DIFF | trumbull | 12 North Main St || 12 Main St North
+DIFF | trumbull | 12 Main St North Haven || 12 Main St N
+DIFF | trumbull | 12 Main St N Trumbull CT || 12 Main St
+DIFF | trumbull | 12 Main St N, Trumbull || 12 Main St
+DIFF | trumbull | 12 Main St, N Trumbull || 12 Main St
+DIFF | trumbull | 12 Main St West Haven || 12 Main St
+DIFF | trumbull | 12 E Main St || 12 Main St E
+DIFF | trumbull | 12 North St || 12 N Main St
+DIFF | trumbull | 12 West St || 12 W St
+DIFF | trumbull | 12 Main St W || 12 Main St West Haven
+// --- Saint
+DIFF | trumbull | 12 St John St || 12 Saint Johns St
+DIFF | trumbull | 12 St Johns St || 12 St John St
+DIFF | trumbull | 12 St. John's Pl || 12 St Johns Pl
+DIFF | trumbull | 12 Mount St Joseph Rd || 12 Mount St
+DIFF | trumbull | 12 Mt St || 12 Mountain St
+DIFF | trumbull | 12 Saint Rd || 12 St Rd
+DIFF | trumbull | 12 Street Rd || 12 St Rd
+DIFF | trumbull | 12 Mount Rd || 12 Mt Rd
+// --- units
+DIFF | trumbull | 12 Main St Apt 4 || 12 Main St Apt 5
+DIFF | trumbull | 12 Main St #4 || 12 Main St Unit 5
+DIFF | trumbull | 12 Main St Unit 4 || 12 Main St Apt 5 ;; 12 Main St Apt 6
+DIFF | trumbull | 12 Main St Bldg 2 || 12 Main St Bldg 3
+DIFF | trumbull | 12 Main St Lot 5 || 12 Main St Lot 6
+DIFF | trumbull | 12 Main St Rear || 12 Main St Front
+DIFF | trumbull | 12 Main St Apt 4 || 12 Main St Apt 4, Bridgeport
+DIFF | trumbull | 12 Main St Apt 4 Bridgeport || 12 Main St Apt 4
+DIFF | trumbull | 12 Main St Apt 4, Bridgeport || 12 Main St
+DIFF | trumbull | 12 Main St Apt 4 Bridgeport CT || 12 Main St
+DIFF | trumbull | 12 Main St 4 || 12 Main St
+DIFF | trumbull | 12 Main St Suite 4B || 12 Main St Ste 4C
+DIFF | trumbull | 12 Main St Fl 2 || 12 Main St
+DIFF | trumbull | 12 Main St Floor 2 Bridgeport || 12 Main St
+DIFF | trumbull | 12 Main St 2nd Floor Bridgeport || 12 Main St
+DIFF | trumbull | 12 Main St Apt B-2 || 12 Main St Apt B-3
+DIFF | trumbull | 12 Main St Apt B 2 || 12 Main St Apt B 3
+DIFF | trumbull | 12 Main St, Apt 4 || 12 Main St, Apt 5
+DIFF | trumbull | 12 Main St Unit 4 Bldg 2 || 12 Main St Unit 4 Bldg 3
+DIFF | trumbull | 12 Main St Bldg 2 Unit 4 || 12 Main St Unit 4
+DIFF | trumbull | 12 Main St Unit 4 || 12 Main St Bldg 2 Unit 4 ;; 12 Main St Bldg 3 Unit 4
+DIFF | trumbull | 12 Main St Apt 4 || 12 Main St Apartment 4, Monroe
+DIFF | trumbull | 12 Main St Unit A || 12 Main St Apt A ;; 12A Main St
+DIFF | trumbull | 12 Main St Space 7 || 12 Main St Lot 7
+DIFF | trumbull | 12 Main St Apt 4 Rear || 12 Main St Apt 4
+DIFF | trumbull | 12 Main St Rear Apt 4 || 12 Main St Apt 4 Front
+// --- trailing CT / zip only
+DIFF | trumbull | 12 Main St CT || 12 Main St
+DIFF | trumbull | 12 Main St 06606 || 12 Main St
+DIFF | trumbull | 12 Main St CT 06606 || 12 Main St
+DIFF | trumbull | 12 Oak Ct CT 06606 || 12 Oak Ct
+DIFF | trumbull | 12 Oak Ct Ct 06606 || 12 Oak Ct
+DIFF | trumbull | 12 Oak Ct Bridgeport Ct || 12 Oak Ct
+DIFF | trumbull | 12 Oak Ct || 12 Oak Ct, Bridgeport
+DIFF | trumbull | 12 Court St Bridgeport CT || 12 Court St
+DIFF | trumbull | 12 Oak Ct Ct || 12 Oak
+SAME | trumbull | 12 Main St 06611 || 12 Main St
+// --- home set missing
+DIFF | none | 12 Main St || 12 Main St
+DIFF | none | 12 Main St, Trumbull, CT 06611 || 12 Main St
+DIFF | none | 12 Main St, Bridgeport, CT || 12 Main St
+// Relabelled SAME: both sides name the same town/ZIP explicitly - genuine agreement, verified
+// even with no home set (round-3 MINOR-5: the behaviour is right, the doc was wrong).
+SAME | none | 12 Main St, Trumbull || 12 Main St, Trumbull
+// Relabelled SAME: both sides name the same town/ZIP explicitly - genuine agreement, verified
+// even with no home set (round-3 MINOR-5: the behaviour is right, the doc was wrong).
+SAME | none | 12 Main St 06611 || 12 Main St 06611
+// --- zip in home, town outside
+DIFF | trumbull | 12 Main St, Bridgeport, CT 06611 || 12 Main St
+DIFF | trumbull | 12 Main St, Bridgeport 06611 || 12 Main St
+DIFF | trumbull | 12 Main St Bridgeport CT 06611 || 12 Main St
+DIFF | trumbull | 12 Main St, Stepney 06611 || 12 Main St
+DIFF | trumbull | 12 Main St, Unknownville, CT 06611 || 12 Main St
+DIFF | trumbull | 12 Main St Unknownville CT 06611 || 12 Main St
+DIFF | trumbull | 12 Main St, Bridgeport, CT 06611 || 12 Main St, 06611
+DIFF | trumbull | 12 Main St, Unknownville || 12 Main St
+DIFF | trumbull | 12 Main St, 06611 || 12 Main St, Monroe
+DIFF | trumbull | 12 Main St, Trumbull, CT 06468 || 12 Main St
+DIFF | trumbull | 12 Main St, Trumbull, NY || 12 Main St
+DIFF | trumbull | 12 Main St, Trumbull, NY 06611 || 12 Main St
+// --- monroe home: Stepney
+DIFF | monroe | 12 Main St, Trumbull || 12 Main St
+DIFF | monroe | 12 Main St Upper Stepney || 12 Main St, Stepney
+SAME | monroe | 12 Main St, Stepney || 12 Main St
+// --- Town-less dispatch vs town-less copy (policy: VERIFIED)
+DIFF | trumbull | 123 Main St || 123 Main St
+DIFF | trumbull | 100 Industrial Dr Bldg 2 || 100 Industrial Dr
+DIFF | trumbull | 100 Industrial Dr Building B || 100 Industrial Dr
+DIFF | trumbull | 12 Main St Rear || 12 Main St
+DIFF | trumbull | 55 Park Ln Lot 12 || 55 Park Ln
+DIFF | trumbull | 12 Main St Rear || 12 Main St ;; 12 Main St Apt 4
+DIFF | trumbull | 12 Main St, Bridgeport, CT 06611 || 12 Main St 06611
+DIFF | trumbull | 12 Main St, Stratford, CT 06611 || 12 Main St, CT 06611
+DIFF | trumbull | 12 Main St, Bridgeport, 06611 || 12 Main St, CT
+DIFF | trumbull | 12 Main St, Monroe, CT 06611 || 12 Main St, Trumbull
+DIFF | trumbull | 12 Main St, Trumbull, CT 06606 || 12 Main St, Nichols
+DIFF | trumbull | 12 Main St, Trumbull, CT 06606 || 12 Main St, 06611
+SAME | trumbull | 12 Main St, Trumbull, CT 06611 || 12 Main St, Trumbull, CT
+SAME | trumbull | 12 Main St Trumbull CT 06611 || 12 Main Street, Trumbull, Connecticut 06611
+SAME | trumbull | 12 Main St, Nichols, CT 06611 || 12 Main St, Trumbull, CT 06611
+SAME | trumbull | 12 Main St Apt 4, Trumbull || 12 Main St, Apt 4
+SAME | trumbull | 12 MAIN ST APT 4 TRUMBULL CT 06611 || 12 Main St Apt 4
+DIFF | trumbull | 12 Main St Apt 4 Upper Stepney || 12 Main St Apt 4
+DIFF | trumbull | 12 Main St Stevenson || 12 Main St
+DIFF | trumbull | 12 Main St Lordship || 12 Main St
+DIFF | trumbull | 12 Main St, Lordship, Stratford || 12 Main St
+DIFF | trumbull | 12 Main St Trumbull Center || 12 Main St, Monroe
+DIFF | trumbull | 12 Main St, Nichols, NY || 12 Main St
+DIFF | trumbull | 12 Main St, New Haven || 12 Main St, Haven
+DIFF | trumbull | 12 Main St, Trumbull, Monroe || 12 Main St
+DIFF | trumbull | 12 Main St, Monroe, Trumbull || 12 Main St
+DIFF | trumbull | 12 Main St Monroe, Trumbull || 12 Main St
+DIFF | trumbull | 12 Main St Trumbull, Monroe || 12 Main St
+DIFF | trumbull | 12 Main St Trumbull, Bridgeport, CT || 12 Main St
+DIFF | trumbull | 12 Main St, Trumbull, CT, Bridgeport || 12 Main St
