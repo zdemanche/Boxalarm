@@ -12,16 +12,25 @@ import {
   fieldErrorsFromUnknown,
   getIncident,
   getSubmission,
+  problemCode,
   putExposure,
+  putModule,
   putNarrative,
   putResponseTimes,
   retrySubmission,
   submitIncident,
   updateIncident,
 } from './api';
+import { FireProtectionStep } from './FireProtectionStep';
 import { focusFieldById } from './focusField';
+import { IncidentTypePicker, type IncidentTypesState } from './IncidentTypePicker';
+import { NerisReviewPanel } from './NerisReviewPanel';
+import { focusTargetFor } from './reviewFix';
+import { SubmissionLedger } from './SubmissionLedger';
 import { coreStrings, dateTimeLocalToEpoch, epochToDateTimeLocal, formatTimestamp } from './format';
 import { CORE_SCHEMA, fieldLabel, SECONDARY_SCHEMA, SECONDARY_TYPES } from './nerisSchema';
+import { useNerisSchema } from './nerisIncidentTypes';
+import { modulesForIncident, type JsonRecord } from './nerisModuleSchema';
 import type {
   IncidentDetail,
   IncidentSecondary,
@@ -29,6 +38,7 @@ import type {
   ResponseUnit,
   SubmissionStatus,
   TimeField,
+  ValidationIssue,
 } from './types';
 import { MAX_NARRATIVE_LENGTH, TIME_FIELDS } from './types';
 import {
@@ -36,6 +46,7 @@ import {
   missingRequiredSecondaryFields,
   validateCoreFields,
   validateSecondaryFields,
+  withIncidentTypes,
   type FieldError,
 } from './validateEnum';
 import styles from './IncidentDetail.module.css';
@@ -87,6 +98,7 @@ const STEPS = [
   { id: 'dispatch', title: 'Dispatch and times' },
   { id: 'location', title: 'Location' },
   { id: 'type', title: 'Incident type and actions' },
+  { id: 'modules', title: 'Fire protection systems' },
   { id: 'units', title: 'Apparatus and personnel' },
   { id: 'narrative', title: 'Narrative' },
   { id: 'exposure', title: 'Exposure and responder safety' },
@@ -115,8 +127,14 @@ function mergeDetail(current: IncidentDetail, patch: Partial<IncidentDetail>): I
 function IncidentReport({ incident }: { incident: IncidentDetail }) {
   const auth = useAuth();
   const queryClient = useQueryClient();
+  const nerisModules = modulesForIncident(
+    coreStrings(incident.corePayload).incident_type ?? '',
+    incident.corePayload,
+  );
   const steps = STEPS.filter(
-    (step) => step.id !== 'exposure' || incident.secondaryModules !== undefined,
+    (step) =>
+      (step.id !== 'exposure' || incident.secondaryModules !== undefined) &&
+      (step.id !== 'modules' || nerisModules.length > 0),
   );
   const [step, setStep] = useState(0);
   const [fields, setFields] = useState(() => coreStrings(incident.corePayload));
@@ -137,18 +155,39 @@ function IncidentReport({ incident }: { incident: IncidentDetail }) {
   const [focusErrors, setFocusErrors] = useState(0);
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
+  const lockedBannerRef = useRef<HTMLDivElement>(null);
+  const pendingFieldFocus = useRef<string | null>(null);
+  const locked = typeof incident.lockedAt === 'number';
+  const nerisSchema = useNerisSchema(incident.nerisSchemaVersion);
+  const nerisTypes = nerisSchema.data?.incidentTypes.length
+    ? nerisSchema.data.incidentTypes
+    : undefined;
+  const incidentTypes: IncidentTypesState = nerisSchema.isLoading
+    ? { status: 'loading' }
+    : nerisTypes
+      ? { status: 'ready', types: nerisTypes }
+      : { status: 'unavailable', retry: () => void nerisSchema.refetch() };
 
   const submitted = incident.status !== 'DRAFT' && incident.status !== 'VALIDATED';
+  // After unlock -> edit -> re-lock the status is DRAFT/VALIDATED again, but the report has
+  // still been sent: keep the ledger (and Resubmit) reachable whenever it ever was.
+  const everSent =
+    submitted ||
+    Boolean(incident.nerisIncidentId) ||
+    Boolean(incident.submissionStatus) ||
+    Boolean(incident.firstSubmittedAt);
   const submissionQuery = useQuery({
     queryKey: ['incident-submission', incident.incidentId],
     queryFn: () => getSubmission(auth, incident.incidentId),
-    enabled: submitted,
+    enabled: everSent,
     refetchInterval: (query) => {
       const status = query.state.data?.submissionStatus;
       return status === 'SUBMITTED' || status === 'RETRYING' ? SUBMISSION_POLL_MS : false;
     },
   });
   const submissionIncidentStatus = submissionQuery.data?.status;
+  /** NERIS holds this report: corrections go through Resubmit (submit answers 409 USE_RESUBMIT). */
+  const nerisIncidentId = incident.nerisIncidentId ?? submissionQuery.data?.nerisIncidentId;
 
   const active = steps[step] ?? steps[0];
   const missing = missingRequiredCoreFields(CORE_SCHEMA, fields);
@@ -182,6 +221,21 @@ function IncidentReport({ incident }: { incident: IncidentDetail }) {
     }
     headingRef.current?.focus();
   }, [step]);
+
+  // "Go to" from the review checklist: after the step renders, land on the field it names.
+  useEffect(() => {
+    const fieldId = pendingFieldFocus.current;
+    if (!fieldId) return;
+    pendingFieldFocus.current = null;
+    if (document.getElementById(fieldId)) focusFieldById(fieldId);
+  });
+
+  // Once locked, move focus to the banner that says edits are closed.
+  const wasLocked = useRef(locked);
+  useEffect(() => {
+    if (!wasLocked.current && locked) lockedBannerRef.current?.focus();
+    wasLocked.current = locked;
+  }, [locked]);
 
   useEffect(() => {
     if (focusErrors === 0) return;
@@ -224,15 +278,61 @@ function IncidentReport({ incident }: { incident: IncidentDetail }) {
     queryClient.setQueryData<IncidentDetail>(['incident', incident.incidentId], (current) =>
       current ? mergeDetail(current, patch) : current,
     );
+    void queryClient.invalidateQueries({
+      queryKey: ['incident-validation', incident.incidentId],
+    });
+  }
+
+  /** A fix applied from the review checklist: cache it and keep the step forms in step. */
+  function applyReviewPatch(patch: Partial<IncidentDetail>) {
+    writeIncident(patch);
+    if (patch.corePayload) {
+      const next = coreStrings(patch.corePayload);
+      setFields((current) => ({ ...current, ...next }));
+    }
+    if (typeof patch.narrative === 'string') setNarrative(patch.narrative);
+  }
+
+  function goToIssue(issue: ValidationIssue) {
+    const target = focusTargetFor(issue);
+    const index = steps.findIndex((item) => item.id === target.stepId);
+    pendingFieldFocus.current = target.fieldId ?? null;
+    if (index >= 0 && index !== step) {
+      selectStep(index);
+    } else if (target.fieldId && document.getElementById(target.fieldId)) {
+      pendingFieldFocus.current = null;
+      focusFieldById(target.fieldId);
+    } else {
+      pendingFieldFocus.current = null;
+      headingRef.current?.focus();
+    }
+  }
+
+  /** The server closes edits on a locked report (409 INCIDENT_LOCKED); re-read the lock. */
+  function noteLocked(error: unknown) {
+    if (problemCode(error) === 'INCIDENT_LOCKED') {
+      void queryClient.invalidateQueries({ queryKey: ['incident', incident.incidentId] });
+    }
   }
 
   async function saveCore(keys: string[], advance: boolean) {
     const payload: Record<string, string> = {};
+    const storedType = coreStrings(incident.corePayload).incident_type ?? '';
     for (const key of keys) {
       const value = fields[key]?.trim() ?? '';
+      // Without the NERIS list the type can't be picked; an untouched stored type (possibly a
+      // legacy or CAD value) is not re-sent, so the other fields on the step still save.
+      if (key === 'incident_type' && (!nerisTypes || value === storedType)) continue;
       if (value) payload[key] = value;
     }
-    const clientErrors = validateCoreFields(CORE_SCHEMA, payload);
+    const clientErrors = validateCoreFields(
+      nerisTypes ? withIncidentTypes(CORE_SCHEMA, nerisTypes) : CORE_SCHEMA,
+      payload,
+    ).map((item) =>
+      item.field === 'incident_type'
+        ? { ...item, message: 'must be picked from the NERIS list.' }
+        : item,
+    );
     if (clientErrors.length > 0) {
       showErrors(clientErrors);
       setAnnounce(
@@ -249,6 +349,7 @@ function IncidentReport({ incident }: { incident: IncidentDetail }) {
       setErrors([]);
       if (advance) selectStep(step + 1);
     } catch (error) {
+      noteLocked(error);
       const serverErrors = fieldErrorsFromUnknown(error);
       if (serverErrors.length > 0) {
         showErrors(serverErrors);
@@ -267,6 +368,18 @@ function IncidentReport({ incident }: { incident: IncidentDetail }) {
     }
   }
 
+  /** Module editor Save: PUT the value, cache the incident, hand back what the server stored. */
+  async function saveModule(module: string, value: JsonRecord): Promise<unknown> {
+    try {
+      const updated = await putModule(auth, incident.incidentId, module, value);
+      writeIncident(updated);
+      return updated.corePayload[module];
+    } catch (error) {
+      noteLocked(error);
+      throw error;
+    }
+  }
+
   async function saveNarrative() {
     setSaving(true);
     setNarrativeError(null);
@@ -276,6 +389,7 @@ function IncidentReport({ incident }: { incident: IncidentDetail }) {
       setNarrative(updated.narrative ?? narrative);
       setAnnounce('Narrative saved.');
     } catch (error) {
+      noteLocked(error);
       const detail =
         error instanceof ApiError
           ? (error.problem.detail ?? error.problem.title)
@@ -310,6 +424,7 @@ function IncidentReport({ incident }: { incident: IncidentDetail }) {
       writeIncident({ respondingUnits: units });
       setAnnounce(`${TIME_LABEL[field]} saved for ${unit.unitId}.`);
     } catch (error) {
+      noteLocked(error);
       setFormError(
         error instanceof ApiError
           ? (error.problem.detail ?? error.problem.title)
@@ -378,6 +493,7 @@ function IncidentReport({ incident }: { incident: IncidentDetail }) {
           : `${secondaryTitle(saved.secondaryType)} saved. Required fields are still missing.`,
       );
     } catch (error) {
+      noteLocked(error);
       const serverErrors = fieldErrorsFromUnknown(error);
       if (serverErrors.length > 0) {
         showErrors(serverErrors);
@@ -408,6 +524,13 @@ function IncidentReport({ incident }: { incident: IncidentDetail }) {
       });
       setAnnounce('Report sent to NERIS. Waiting for NERIS to accept it.');
     } catch (error) {
+      if (problemCode(error) === 'USE_RESUBMIT') {
+        // NERIS already has it; re-read so Resubmit replaces Submit.
+        void queryClient.invalidateQueries({ queryKey: ['incident', incident.incidentId] });
+        void queryClient.invalidateQueries({
+          queryKey: ['incident-submission', incident.incidentId],
+        });
+      }
       const detail = problemText(error, 'Unable to submit the report to NERIS.');
       setSubmitError(detail);
       setAnnounce(detail);
@@ -445,6 +568,12 @@ function IncidentReport({ incident }: { incident: IncidentDetail }) {
       <p className="visually-hidden" aria-live="polite">
         {announce}
       </p>
+      {locked ? (
+        <div ref={lockedBannerRef} tabIndex={-1} role="status" className={styles.lockedBanner}>
+          Locked by {incident.lockedBy ?? 'an officer'} at {formatTimestamp(incident.lockedAt ?? 0)}
+          ; edits are closed.
+        </div>
+      ) : null}
       <div className={styles.layout}>
         <nav aria-label="Report steps">
           <ol className={styles.steps} onKeyDown={onStepKeyDown}>
@@ -476,7 +605,9 @@ function IncidentReport({ incident }: { incident: IncidentDetail }) {
               {formError}
             </div>
           ) : null}
-          {active ? <StepBody stepId={active.id} /> : null}
+          {/* Called, not rendered as <StepBody />: a component declared inside render is a new
+              type every render, which remounted the step (and dropped focus) on each keystroke. */}
+          {active ? renderStep(active.id) : null}
         </section>
 
         <aside className={styles.issues} aria-label="Validation">
@@ -495,12 +626,13 @@ function IncidentReport({ incident }: { incident: IncidentDetail }) {
               ))}
             </ul>
           ) : null}
+          <NerisReviewPanel incident={incident} onPatched={applyReviewPatch} onGoTo={goToIssue} />
         </aside>
       </div>
     </main>
   );
 
-  function StepBody({ stepId }: { stepId: StepId }) {
+  function renderStep(stepId: StepId) {
     if (stepId === 'dispatch') {
       const units = (incident.respondingUnits ?? []).map((unit) => unit.unitId).join(', ');
       const members = (incident.respondingMembers ?? [])
@@ -574,6 +706,7 @@ function IncidentReport({ incident }: { incident: IncidentDetail }) {
             <Button
               type="button"
               loading={saving}
+              disabled={locked}
               onClick={() => void saveCore(['cross_streets'], true)}
             >
               Save and continue
@@ -586,11 +719,11 @@ function IncidentReport({ incident }: { incident: IncidentDetail }) {
     if (stepId === 'type') {
       return (
         <div className={styles.fields}>
-          <EnumField
-            field="incident_type"
+          <IncidentTypePicker
             value={fields.incident_type ?? ''}
             onChange={(value) => setFields((current) => ({ ...current, incident_type: value }))}
             error={errorFor('incident_type')}
+            state={incidentTypes}
           />
           <EnumField
             field="action_taken"
@@ -602,9 +735,35 @@ function IncidentReport({ incident }: { incident: IncidentDetail }) {
             <Button
               type="button"
               loading={saving}
+              disabled={locked}
               onClick={() => void saveCore(['incident_type', 'action_taken'], true)}
             >
               Save and continue
+            </Button>
+          </div>
+        </div>
+      );
+    }
+
+    if (stepId === 'modules') {
+      return (
+        <div className={styles.panel}>
+          <p>
+            NERIS asks structure fire reports for the alarms and suppression systems found on scene.
+            Save each one; they can be changed until the report is locked.
+          </p>
+          <FireProtectionStep
+            modules={nerisModules}
+            corePayload={incident.corePayload}
+            schema={nerisSchema.data}
+            loading={nerisSchema.isLoading}
+            locked={locked}
+            onRetry={() => void nerisSchema.refetch()}
+            onSave={saveModule}
+          />
+          <div className={styles.actions}>
+            <Button type="button" onClick={() => selectStep(step + 1)}>
+              Continue
             </Button>
           </div>
         </div>
@@ -635,6 +794,7 @@ function IncidentReport({ incident }: { incident: IncidentDetail }) {
                   {TIME_FIELDS.map((field) => (
                     <div key={field} className={styles.timeField}>
                       <TextInput
+                        key={`${field}-${unit[field] ?? ''}`}
                         id={`field-${unit.unitId.replaceAll(' ', '-')}-${field}`}
                         label={`${TIME_LABEL[field]} for ${unit.unitId}`}
                         type="datetime-local"
@@ -643,6 +803,7 @@ function IncidentReport({ incident }: { incident: IncidentDetail }) {
                       <Button
                         type="button"
                         variant="secondary"
+                        disabled={locked}
                         onClick={() => void saveTime(unit, field)}
                       >
                         Save {TIME_LABEL[field].toLowerCase()} time for {unit.unitId}
@@ -679,7 +840,12 @@ function IncidentReport({ incident }: { incident: IncidentDetail }) {
             characters
           </p>
           <div className={styles.actions}>
-            <Button type="button" loading={saving} onClick={() => void saveNarrative()}>
+            <Button
+              type="button"
+              loading={saving}
+              disabled={locked}
+              onClick={() => void saveNarrative()}
+            >
               Save narrative
             </Button>
             <Button type="button" variant="secondary" onClick={() => selectStep(step + 1)}>
@@ -759,7 +925,12 @@ function IncidentReport({ incident }: { incident: IncidentDetail }) {
             />
           </fieldset>
           <div className={styles.actions}>
-            <Button type="button" loading={saving} onClick={() => void markComplete()}>
+            <Button
+              type="button"
+              loading={saving}
+              disabled={locked}
+              onClick={() => void markComplete()}
+            >
               Mark complete
             </Button>
           </div>
@@ -776,18 +947,23 @@ function IncidentReport({ incident }: { incident: IncidentDetail }) {
           </StatusChip>
         </p>
         {submitError ? <p role="alert">{submitError}</p> : null}
-        {submitted ? (
-          <SubmissionPanel />
-        ) : (
+        {nerisIncidentId && !locked ? (
+          <p id="resubmit-status">
+            NERIS already has this report. Lock it again after review, then resubmit the changes.
+          </p>
+        ) : null}
+        {submitted || nerisIncidentId ? null : (
           <>
             <p id="submit-status">
-              {incident.status === 'VALIDATED'
-                ? 'Report status is Validated. Submit is available.'
-                : 'Submit stays unavailable until the report status is Validated.'}
+              {!locked
+                ? 'Submit stays unavailable until an officer reviews and locks the report.'
+                : incident.status === 'VALIDATED'
+                  ? 'The report is locked and validated. Submit is available.'
+                  : 'Submit stays unavailable until the report status is Validated.'}
             </p>
             <Button
               type="button"
-              disabled={incident.status !== 'VALIDATED'}
+              disabled={!locked || incident.status !== 'VALIDATED'}
               loading={submitting}
               aria-describedby="submit-status"
               onClick={() => void submitToNeris()}
@@ -796,11 +972,12 @@ function IncidentReport({ incident }: { incident: IncidentDetail }) {
             </Button>
           </>
         )}
+        {everSent ? renderSubmissionPanel() : null}
       </div>
     );
   }
 
-  function SubmissionPanel() {
+  function renderSubmissionPanel() {
     if (submissionQuery.isLoading) {
       return <p aria-busy="true">Checking the NERIS submission status.</p>;
     }
@@ -818,24 +995,38 @@ function IncidentReport({ incident }: { incident: IncidentDetail }) {
     const state = submissionQuery.data;
     const status = state?.submissionStatus ?? null;
     return (
-      <div aria-live="polite">
-        <p>
-          NERIS submission:{' '}
-          {status ? (
-            <StatusChip status={SUBMISSION_ROLE[status]}>{SUBMISSION_LABEL[status]}</StatusChip>
-          ) : (
-            'Not sent to NERIS.'
-          )}
-        </p>
-        {status === 'FAILED' ? (
-          <>
-            <p>Reason: {state?.submissionFailureReason ?? 'NERIS did not give a reason.'}</p>
-            <Button type="button" loading={submitting} onClick={() => void retryNeris()}>
-              Retry submission
-            </Button>
-          </>
-        ) : null}
-      </div>
+      <>
+        <div aria-live="polite">
+          <p>
+            NERIS submission:{' '}
+            {status ? (
+              <StatusChip status={SUBMISSION_ROLE[status]}>{SUBMISSION_LABEL[status]}</StatusChip>
+            ) : (
+              'Not sent to NERIS.'
+            )}
+          </p>
+          {status === 'FAILED' ? (
+            <>
+              <p>Reason: {state?.submissionFailureReason ?? 'NERIS did not give a reason.'}</p>
+              {!locked ? (
+                <p id="retry-status">
+                  The report was reopened. Lock it again after review, then submit.
+                </p>
+              ) : null}
+              <Button
+                type="button"
+                loading={submitting}
+                disabled={!locked}
+                aria-describedby={!locked ? 'retry-status' : undefined}
+                onClick={() => void retryNeris()}
+              >
+                Retry submission
+              </Button>
+            </>
+          ) : null}
+        </div>
+        {state ? <SubmissionLedger state={state} locked={locked} /> : null}
+      </>
     );
   }
 }

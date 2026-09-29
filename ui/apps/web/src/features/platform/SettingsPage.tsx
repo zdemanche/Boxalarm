@@ -3,9 +3,10 @@ import { Card, PageHeader } from '../../components/ui';
 import { ExportSection } from './ExportSection';
 import { JsonConfigEditor } from './JsonConfigEditor';
 import { RetentionSection } from './RetentionSection';
+import type { EditableConfigType } from './types';
 
 const CONFIG_SECTIONS: {
-  configType: 'STATIONS' | 'RANKS' | 'LOSAP_POINT_RULES' | 'ALERT_RULES' | 'CHECKLIST_DEFAULTS';
+  configType: EditableConfigType;
   label: string;
   helpText: string;
 }[] = [
@@ -35,6 +36,12 @@ const CONFIG_SECTIONS: {
     label: 'Checklist templates',
     helpText:
       'Checklist items, e.g. {"items":[{"code":"LIGHTS","label":"Lights","requiresPhoto":false}]}',
+  },
+  {
+    configType: 'NERIS',
+    label: 'NERIS reporting',
+    helpText:
+      'Department NERIS id and submission rules, e.g. {"departmentNerisId":"FD09190250","autoSubmitOnLock":false,"submissionsEnabled":true,"rules":{"requireNarrative":true,"minNarrativeLength":50,"requireUnitTimes":true}}',
   },
 ];
 

@@ -15,8 +15,16 @@ export interface NerisSubmissionWorkerArgs {
   busName: pulumi.Input<string>;
   busArn: pulumi.Input<string>;
   nerisCredentialsSecretArn: pulumi.Input<string>;
+  /** Schema pins: the worker deep-picks every payload to the compiled NERIS schema. */
+  nerisSchemaBucketArn: pulumi.Input<string>;
+  nerisSchemaBucketName: pulumi.Input<string>;
+  /** The chief's LOB notification topic (never the alerting page topic). */
+  chiefNotificationTopicArn: pulumi.Input<string>;
   logGroup: ServiceLogGroup;
 }
+
+/** Lambda timeout for the worker; the queue's visibility timeout is 6x this. */
+export const SUBMISSION_WORKER_TIMEOUT_SECONDS = 90;
 
 /** Name prefix submissionWorker.ts gives every retry schedule it creates. */
 export const SUBMISSION_RETRY_SCHEDULE_PREFIX = "neris-submission-retry-";
@@ -39,6 +47,7 @@ export class NerisSubmissionWorker extends pulumi.ComponentResource {
   public readonly schedulerRole: aws.iam.Role;
   public readonly consumer: QueueConsumer;
   public readonly scheduleResourcePattern: pulumi.Output<string>;
+  public readonly failureAlarms: aws.cloudwatch.MetricAlarm[];
 
   constructor(
     name: string,
@@ -80,16 +89,19 @@ export class NerisSubmissionWorker extends pulumi.ComponentResource {
         handler: LAMBDA_HANDLER,
         code: lambdaCode("incident-service", "submission-worker"),
         logGroup: args.logGroup,
-        // One outbound NERIS POST plus SSM/Secrets reads on a cold start; the 3s Lambda
-        // default would misclassify a slow NERIS response as a failure. Kept under the
-        // queue's default 30s visibility timeout, which AWS requires.
-        timeout: 25,
+        // One report per invocation (batchSize 1). Worst NERIS call chain, 4 s per call
+        // (client.ts NERIS_CALL_TIMEOUT_MS): token, 2 adopt GETs, POST, 2 adopt GETs, PUT
+        // = 28 s; a 401 on every call adds a token fetch and a repeat each = 76 s. Plus
+        // SSM/Secrets/DynamoDB reads on a cold start. The queue's visibility timeout is 6x
+        // this (AWS guidance for SQS event sources).
+        timeout: SUBMISSION_WORKER_TIMEOUT_SECONDS,
         environment: {
           INCIDENT_TABLE_NAME: args.incidentTableName,
           NERIS_BASE_URL_PARAM: `/boxalarm/${env}/neris/base-url`,
           NERIS_USER_AGENT_PARAM: `/boxalarm/${env}/neris/user-agent`,
           NERIS_CREDENTIALS_SECRET_ID: args.nerisCredentialsSecretArn,
           NERIS_SUBMISSION_SCHEDULER_ROLE_ARN: this.schedulerRole.arn,
+          NERIS_SCHEMA_BUCKET_NAME: args.nerisSchemaBucketName,
           // neris/config.ts decides prod vs non-prod from STAGE ?? BOXALARM_ENV;
           // ServiceLambda only sets ENVIRONMENT. Without this, prod would treat itself
           // as non-prod and fail closed against the NERIS production host (N6.4).
@@ -101,14 +113,29 @@ export class NerisSubmissionWorker extends pulumi.ComponentResource {
             args.incidentCmkArn,
             args.nerisCredentialsSecretArn,
             this.scheduleResourcePattern,
+            args.nerisSchemaBucketArn,
           ])
-          .apply(([tableArn, cmkArn, secretArn, schedulePattern]) => [
+          .apply(([tableArn, cmkArn, secretArn, schedulePattern, bucketArn]) => [
+            {
+              // The compiled NERIS payload schema pinned with the report's schema version.
+              Sid: "ReadNerisSchemaPins" as const,
+              Effect: "Allow" as const,
+              Action: ["s3:GetObject"],
+              Resource: [`${bucketArn}/neris-schema/*`],
+            },
             {
               // getIncident + appendSubmissionAttempt's TransactWrite (attempt Put,
-              // submission Update, optional neris.submission.failed outbox Put).
+              // submission Update, last-accepted-payload / open-status / outbox Puts).
+              // Query: the NERIS settings copy (DEPT#…#NERIS) and the incident's RESPONSE#
+              // unit rows the payload is built from.
               Sid: "IncidentSubmissionAccess" as const,
               Effect: "Allow" as const,
-              Action: ["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:UpdateItem"],
+              Action: [
+                "dynamodb:GetItem",
+                "dynamodb:PutItem",
+                "dynamodb:UpdateItem",
+                "dynamodb:Query",
+              ],
               Resource: [tableArn],
             },
             {
@@ -187,8 +214,43 @@ export class NerisSubmissionWorker extends pulumi.ComponentResource {
         lambdaRole: this.lambda.role,
         maxReceiveCount: 5,
         reportBatchItemFailures: true,
+        batchSize: 1,
+        visibilityTimeoutSeconds: SUBMISSION_WORKER_TIMEOUT_SECONDS * 6,
       },
       { parent: this },
+    );
+
+    // Terminal failures the report owner cannot fix alone (review M6): a 401/403/404 from
+    // NERIS (credentials revoked, wrong entity id) and a department not configured for
+    // NERIS. Both page the chief's LOB topic on the first occurrence.
+    this.failureAlarms = [
+      [
+        "ClientError",
+        "NERIS refused the department's credentials, entity id or a record id (HTTP 401/403/404).",
+      ],
+      [
+        "NotConfigured",
+        "A locked report could not be sent: the department NERIS id or the NERIS schema is missing.",
+      ],
+    ].map(
+      ([metricName, description]) =>
+        new aws.cloudwatch.MetricAlarm(
+          `${name}-${metricName!.toLowerCase()}-alarm`,
+          {
+            name: `boxalarm-${env}-incident-neris-${metricName!.toLowerCase()}`,
+            alarmDescription: description!,
+            namespace: "Boxalarm/incident-service",
+            metricName: metricName!,
+            statistic: "Sum",
+            period: 300,
+            evaluationPeriods: 1,
+            threshold: 0,
+            comparisonOperator: "GreaterThanThreshold",
+            treatMissingData: "notBreaching",
+            alarmActions: [args.chiefNotificationTopicArn],
+          },
+          { parent: this },
+        ),
     );
 
     this.registerOutputs({

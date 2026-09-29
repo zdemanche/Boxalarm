@@ -35,6 +35,21 @@ export const LAMBDA_ENTRIES = [
   },
   {
     service: 'platform-service',
+    function: 'neris-entity-get',
+    entry: 'src/services/platform-service/neris/getEntity.ts',
+  },
+  {
+    service: 'platform-service',
+    function: 'neris-entity-put',
+    entry: 'src/services/platform-service/neris/putEntity.ts',
+  },
+  {
+    service: 'platform-service',
+    function: 'neris-entity-sync-worker',
+    entry: 'src/services/platform-service/neris/syncWorker.ts',
+  },
+  {
+    service: 'platform-service',
     function: 'export',
     entry: 'src/services/platform-service/export/handler.ts',
   },
@@ -262,6 +277,57 @@ export const LAMBDA_ENTRIES = [
     service: 'incident-service',
     function: 'submission-retry',
     entry: 'src/services/incident-service/retrySubmission.ts',
+  },
+  // NERIS loop: validation, review lock, resubmission, status sync, reconciliation.
+  {
+    service: 'incident-service',
+    function: 'module',
+    entry: 'src/services/incident-service/putModule.ts',
+  },
+  {
+    service: 'incident-service',
+    function: 'neris-schema',
+    entry: 'src/services/incident-service/getNerisSchema.ts',
+  },
+  {
+    service: 'incident-service',
+    function: 'validate',
+    entry: 'src/services/incident-service/validateIncident.ts',
+  },
+  {
+    service: 'incident-service',
+    function: 'lock',
+    entry: 'src/services/incident-service/lockIncident.ts',
+  },
+  {
+    service: 'incident-service',
+    function: 'unlock',
+    entry: 'src/services/incident-service/unlockIncident.ts',
+  },
+  {
+    service: 'incident-service',
+    function: 'resubmit',
+    entry: 'src/services/incident-service/resubmitIncident.ts',
+  },
+  {
+    service: 'incident-service',
+    function: 'no-activity-report',
+    entry: 'src/services/incident-service/noActivityReport.ts',
+  },
+  {
+    service: 'incident-service',
+    function: 'neris-settings-consumer',
+    entry: 'src/services/incident-service/nerisSettingsConsumer.ts',
+  },
+  {
+    service: 'incident-service',
+    function: 'neris-status-poller',
+    entry: 'src/services/incident-service/neris/statusPoller.ts',
+  },
+  {
+    service: 'incident-service',
+    function: 'neris-reconciliation',
+    entry: 'src/services/incident-service/neris/reconciliation.ts',
   },
   {
     service: 'reporting-service',
@@ -614,6 +680,11 @@ export const LAMBDA_ENTRIES = [
   },
   {
     service: 'reporting-service',
+    function: 'neris-compliance',
+    entry: 'src/services/reporting-service/nerisCompliance/handler.ts',
+  },
+  {
+    service: 'reporting-service',
     function: 'iso',
     entry: 'src/services/reporting-service/iso/handler.ts',
   },
@@ -803,6 +874,16 @@ export const LAMBDA_ENTRIES = [
     service: 'notification-service',
     function: 'ppe-expiry-consumer',
     entry: 'src/services/notification-service/events/ppeExpiryConsumer.ts',
+  },
+  {
+    service: 'notification-service',
+    function: 'neris-rejected-consumer',
+    entry: 'src/services/notification-service/events/nerisReportConsumer.ts',
+  },
+  {
+    service: 'notification-service',
+    function: 'neris-no-activity-consumer',
+    entry: 'src/services/notification-service/events/nerisNoActivityConsumer.ts',
   },
   // One health Lambda per service serves GET health/liveness and health/readiness.
   {

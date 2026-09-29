@@ -111,7 +111,7 @@ export function createHandler(deps: Deps = {}): Handler {
       return problemResponse(
         400,
         'Bad Request',
-        'configType must be one of STATIONS, RANKS, LOSAP_POINT_RULES, ALERT_RULES, CHECKLIST_DEFAULTS, RETENTION, RIDING_POSITIONS',
+        'configType must be one of STATIONS, RANKS, LOSAP_POINT_RULES, ALERT_RULES, CHECKLIST_DEFAULTS, RETENTION, RIDING_POSITIONS, NERIS',
         traceId,
       );
     }

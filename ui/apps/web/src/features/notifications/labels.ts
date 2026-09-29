@@ -13,6 +13,8 @@ const CATEGORY_LABEL: Record<string, string> = {
   'inventory-reorder': 'Supplies to reorder',
   'ppe-expiry': 'Your PPE expiring',
   'ppe-expiry-officer': 'Department PPE expiring',
+  'neris-rejected': 'NERIS returned a report',
+  'neris-no-activity': 'No-activity report due',
 };
 
 export function categoryLabel(category: string): string {
@@ -84,6 +86,8 @@ export function itemPath(item: NotificationDigestItem): string | undefined {
       return link.id ? `/personnel/${encodeURIComponent(link.id)}` : undefined;
     case 'consumables':
       return '/inventory';
+    case 'incident':
+      return link.id ? `/incidents/${encodeURIComponent(link.id)}` : '/incidents';
     default:
       return undefined;
   }

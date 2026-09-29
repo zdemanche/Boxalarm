@@ -5,16 +5,20 @@ import type {
   SQSEvent,
   SQSRecord,
 } from 'aws-lambda';
-import { ConditionalCheckFailedException } from '@aws-sdk/client-dynamodb';
+import {
+  ConditionalCheckFailedException,
+  TransactionCanceledException,
+} from '@aws-sdk/client-dynamodb';
 import {
   GetCommand,
   PutCommand,
-  UpdateCommand,
+  TransactWriteCommand,
   type DynamoDBDocumentClient,
 } from '@aws-sdk/lib-dynamodb';
 import { buildDeptScopedPk, toVerifiedDeptId, type VerifiedDeptId } from '@boxalarm/dept-scope';
 import { emitOutcomeMetric } from '@boxalarm/metrics';
 import { getDocumentClient, getTableName } from './repository.js';
+import { BUMP_CONTENT_VERSION, CONTENT_VERSION_VALUES, NOT_LOCKED_CONDITION } from './lock.js';
 
 const METRIC_NAMESPACE = 'Boxalarm/IncidentRidingAssignment';
 const MAX_UPDATE_ATTEMPTS = 5;
@@ -110,7 +114,7 @@ function nextAssignedPositions(
   return withoutPrevious;
 }
 
-type UpdateOutcome = 'updated' | 'stale';
+type UpdateOutcome = 'updated' | 'stale' | 'locked';
 
 async function updateResponseUnit(
   client: DynamoDBDocumentClient,
@@ -121,6 +125,9 @@ async function updateResponseUnit(
   previousMemberId: string | null,
   eventUpdatedAt: number,
 ): Promise<UpdateOutcome> {
+  // Until the report exists (the dispatch is still running) there is no METADATA row to
+  // version or lock; the first failed METADATA condition tells which case this is.
+  let reportExists = true;
   for (let attempt = 0; attempt < MAX_UPDATE_ATTEMPTS; attempt += 1) {
     const existing = await client.send(new GetCommand({ TableName: tableName, Key: key }));
     const existingItem = existing.Item as
@@ -139,26 +146,65 @@ async function updateResponseUnit(
 
     try {
       await client.send(
-        new UpdateCommand({
-          TableName: tableName,
-          Key: key,
-          ConditionExpression:
-            'attribute_not_exists(pk) OR if_not_exists(assignedPositions, :emptyList) = :priorPositions',
-          UpdateExpression:
-            'SET entityType = :entityType, unitType = :unitType, unitId = :unitId, assignedPositions = :next, assignedPositionsUpdatedAt = :new',
-          ExpressionAttributeValues: {
-            ':entityType': 'INCIDENT_RESPONSE_UNIT',
-            ':unitType': 'APPARATUS',
-            ':unitId': apparatusId,
-            ':next': nextPositions,
-            ':priorPositions': priorPositions,
-            ':emptyList': [],
-            ':new': eventUpdatedAt,
-          },
+        new TransactWriteCommand({
+          TransactItems: [
+            {
+              Update: {
+                TableName: tableName,
+                Key: key,
+                ConditionExpression:
+                  'attribute_not_exists(pk) OR if_not_exists(assignedPositions, :emptyList) = :priorPositions',
+                UpdateExpression:
+                  'SET entityType = :entityType, unitType = :unitType, unitId = :unitId, assignedPositions = :next, assignedPositionsUpdatedAt = :new',
+                ExpressionAttributeValues: {
+                  ':entityType': 'INCIDENT_RESPONSE_UNIT',
+                  ':unitType': 'APPARATUS',
+                  ':unitId': apparatusId,
+                  ':next': nextPositions,
+                  ':priorPositions': priorPositions,
+                  ':emptyList': [],
+                  ':new': eventUpdatedAt,
+                },
+              },
+            },
+            // Staffing feeds NERIS unit responses, so it is a content write like any other:
+            // refused on a report locked for review (or already sent), and it bumps the
+            // report's contentVersion so a lock pinned before it fails (review M5, round 2
+            // N3). Before the report exists there is nothing to version or lock.
+            ...(reportExists
+              ? [
+                  {
+                    Update: {
+                      TableName: tableName,
+                      Key: { ...key, sk: 'METADATA' },
+                      ConditionExpression: `attribute_exists(pk) AND ${NOT_LOCKED_CONDITION}`,
+                      UpdateExpression: `SET ${BUMP_CONTENT_VERSION}`,
+                      ExpressionAttributeValues: { ...CONTENT_VERSION_VALUES },
+                    },
+                  },
+                ]
+              : []),
+          ],
         }),
       );
       return 'updated';
     } catch (error) {
+      if (error instanceof TransactionCanceledException) {
+        const reasons = error.CancellationReasons ?? [];
+        if (reasons[1]?.Code === 'ConditionalCheckFailed') {
+          const metadata = await client.send(
+            new GetCommand({
+              TableName: tableName,
+              Key: { ...key, sk: 'METADATA' },
+              ConsistentRead: true,
+            }),
+          );
+          if (metadata.Item) return 'locked';
+          reportExists = false;
+          continue;
+        }
+        if (reasons[0]?.Code === 'ConditionalCheckFailed') continue;
+      }
       if (error instanceof ConditionalCheckFailedException) {
         continue;
       }
@@ -223,6 +269,19 @@ async function processRecord(record: SQSRecord, deps: RidingAssignmentConsumerDe
     );
     if (outcome === 'stale') {
       emitOutcomeMetric(METRIC_NAMESPACE, 'RidingAssignmentSkipped', 'StaleEvent');
+      return;
+    }
+    if (outcome === 'locked') {
+      console.warn(
+        JSON.stringify({
+          event: 'incident.ridingAssignment.reportLocked',
+          service: 'incident-service',
+          correlationId: eventId,
+          deptId,
+          incidentId: dispatchId,
+        }),
+      );
+      emitOutcomeMetric(METRIC_NAMESPACE, 'RidingAssignmentSkipped', 'ReportLocked');
       return;
     }
   } catch (error) {

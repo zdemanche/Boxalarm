@@ -4,6 +4,7 @@ export const EDITABLE_CONFIG_TYPES = [
   'LOSAP_POINT_RULES',
   'ALERT_RULES',
   'CHECKLIST_DEFAULTS',
+  'NERIS',
 ] as const;
 
 export type EditableConfigType = (typeof EDITABLE_CONFIG_TYPES)[number];

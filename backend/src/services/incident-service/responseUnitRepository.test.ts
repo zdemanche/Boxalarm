@@ -16,7 +16,11 @@ function fakeClient(send: (command: unknown) => unknown): DynamoDBDocumentClient
 interface TransactInput {
   readonly TransactItems: ReadonlyArray<{
     readonly ConditionCheck?: { Key: { sk: string }; ConditionExpression: string };
-    readonly Update?: { Key: { pk: string; sk: string }; UpdateExpression: string };
+    readonly Update?: {
+      Key: { pk: string; sk: string };
+      UpdateExpression: string;
+      ConditionExpression?: string;
+    };
     readonly Put?: { Item: Record<string, unknown> };
   }>;
 }
@@ -121,10 +125,17 @@ describe('upsertResponseUnitTimes', () => {
     );
 
     const [transact] = transactOf(send);
-    expect(transact?.TransactItems[0]?.ConditionCheck).toMatchObject({
+    // The parent report must exist and not be locked, and the unit-time edit bumps its
+    // contentVersion so a lock pinned before it fails (review M5).
+    const metadata = transact?.TransactItems[0]?.Update as
+      { Key: { sk: string }; ConditionExpression: string; UpdateExpression: string } | undefined;
+    expect(metadata).toMatchObject({
       Key: { sk: 'METADATA' },
-      ConditionExpression: 'attribute_exists(pk)',
+      ConditionExpression: 'attribute_exists(pk) AND attribute_not_exists(lockedAt)',
     });
+    expect(metadata?.UpdateExpression).toContain(
+      'contentVersion = if_not_exists(contentVersion, :cvZero) + :cvOne',
+    );
     expect(transact?.TransactItems[2]?.Put?.Item).toMatchObject({
       entityType: 'OUTBOX_ENTRY',
       eventType: 'incident.response_unit.updated',
@@ -141,17 +152,20 @@ describe('upsertResponseUnitTimes', () => {
   });
 
   it('rejects with IncidentNotFoundError instead of creating an orphan RESPONSE# item for a bad incidentId', async () => {
-    const send = vi.fn().mockRejectedValue(
-      new TransactionCanceledException({
-        message: 'Transaction cancelled',
-        $metadata: {},
-        CancellationReasons: [
-          { Code: 'ConditionalCheckFailed' },
-          { Code: 'None' },
-          { Code: 'None' },
-        ],
-      }),
-    );
+    const send = vi
+      .fn()
+      .mockResolvedValue({})
+      .mockRejectedValueOnce(
+        new TransactionCanceledException({
+          message: 'Transaction cancelled',
+          $metadata: {},
+          CancellationReasons: [
+            { Code: 'ConditionalCheckFailed' },
+            { Code: 'None' },
+            { Code: 'None' },
+          ],
+        }),
+      );
 
     await expect(
       upsertResponseUnitTimes(
@@ -168,8 +182,12 @@ describe('upsertResponseUnitTimes', () => {
       ),
     ).rejects.toThrow(IncidentNotFoundError);
 
-    // The cancelled transaction wrote nothing and no read-back was attempted.
-    expect(send).toHaveBeenCalledTimes(1);
+    // The cancelled transaction wrote nothing; the only other call is the METADATA read that
+    // tells a missing report from a locked one, never a RESPONSE# read-back.
+    expect(send).toHaveBeenCalledTimes(2);
+    expect((send.mock.calls[1]![0] as { input: { Key: { sk: string } } }).input.Key.sk).toBe(
+      'METADATA',
+    );
   });
 
   it('rethrows a non-conditional transaction failure unchanged', async () => {

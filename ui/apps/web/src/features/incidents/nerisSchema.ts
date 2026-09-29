@@ -3,14 +3,14 @@ import type { NerisSchemaDocument, NerisSecondarySchemaDocument } from './valida
 /**
  * Mirrors the incident service's published Core / Secondary fixtures
  * (`backend/src/services/incident-service/schemaVersion/fixtures.ts`).
- * There is no schema-read route, so the feature keeps this copy and
- * `validateEnum.ts` applies the same rules the server does.
+ * The feature keeps this copy and `validateEnum.ts` applies the same rules the server does.
+ * `incident_type` is a NERIS TypeIncidentValue: its list comes from GET incidents/neris-schema
+ * (`useNerisSchema` / `withIncidentTypes`), never from here.
  */
 export const CORE_SCHEMA: NerisSchemaDocument = {
   version: '2026.2',
   requiredFields: ['incident_type', 'action_taken'],
   enumerations: {
-    incident_type: ['STRUCTURE_FIRE', 'VEHICLE_FIRE', 'EMS_ASSIST', 'FALSE_ALARM'],
     action_taken: ['EXTINGUISH', 'INVESTIGATE', 'ASSIST_EMS', 'NO_ACTION'],
   },
 };

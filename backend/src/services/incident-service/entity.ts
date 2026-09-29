@@ -47,6 +47,26 @@ export interface Incident {
   readonly createdBy: string;
   readonly createdAt: number;
   readonly updatedAt: number;
+  /** Officer review lock (epoch seconds); every edit route returns 409 while it is set. */
+  readonly lockedAt?: number;
+  readonly lockedBy?: string;
+  /** Submission pipeline state (submissionRepository.ts SUBMISSION_STATUSES). */
+  readonly submissionStatus?: string;
+  /** NERIS's id for the record (`FD…|number|epoch`), set by the first accepted create. */
+  readonly nerisIncidentId?: string;
+  /** NERIS's own lifecycle status (`TypeIncidentStatusValue`), synced by the status poller. */
+  readonly nerisStatus?: string;
+  readonly nerisStatusAt?: number;
+  /** Epoch seconds NERIS first accepted the record (drives the 72-hour compliance tile). */
+  readonly firstSubmittedAt?: number;
+  /** Bumped by every content write; the review lock pins it (review M5). */
+  readonly contentVersion?: number;
+  /** The contentVersion the officer reviewed and locked; the worker sends only that. */
+  readonly lockedContentVersion?: number;
+  /** The NERIS id a create in progress will produce (set before the POST; review M2). */
+  readonly pendingNerisId?: string;
+  /** sha256 of the last payload NERIS accepted; a differing hash means edits await resubmission. */
+  readonly lastPayloadHash?: string;
 }
 
 export interface CreateIncidentInput {

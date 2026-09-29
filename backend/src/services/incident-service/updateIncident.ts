@@ -14,6 +14,7 @@ import {
   getTableName,
 } from './repository.js';
 import { createSchemaVersionRepository } from './schemaVersion/repository.js';
+import { IncidentLockedError, lockedProblem } from './lock.js';
 import { getCoreSchemaDocument } from './schemaVersion/s3Schema.js';
 import { getS3Client } from '../platform-service/export/awsClients.js';
 import { missingRequiredCoreFields, validateCoreFields } from './schemaVersion/validateEnum.js';
@@ -56,6 +57,9 @@ export const handler: APIGatewayProxyHandlerV2WithLambdaAuthorizer<AuthorizerCon
         traceId,
       );
     }
+    if (incident.lockedAt !== undefined) {
+      return lockedProblem(traceId);
+    }
 
     const client = getDocumentClient();
     const tableName = getTableName(process.env);
@@ -77,11 +81,32 @@ export const handler: APIGatewayProxyHandlerV2WithLambdaAuthorizer<AuthorizerCon
         traceId,
       );
     }
-    const coreSchema = await getCoreSchemaDocument(
+    const pinnedCore = await getCoreSchemaDocument(
       getS3Client(),
       process.env.NERIS_SCHEMA_BUCKET_NAME ?? '',
       schema.coreSchemaS3Key,
     );
+    // The incident type must be a NERIS TypeIncidentValue. A pin that predates the NERIS
+    // schema download carries the old local list, so the ACTIVE pin's list governs that one
+    // field (it is refreshed from the NERIS OpenAPI document daily).
+    let coreSchema = pinnedCore;
+    if (!schema.nerisApiS3Key && fields.incident_type !== undefined) {
+      const active = await schemaVersionRepository.getActiveSchemaVersion();
+      if (active?.nerisApiS3Key && active.version !== schema.version) {
+        const activeCore = await getCoreSchemaDocument(
+          getS3Client(),
+          process.env.NERIS_SCHEMA_BUCKET_NAME ?? '',
+          active.coreSchemaS3Key,
+        );
+        const nerisTypes = activeCore.enumerations.incident_type;
+        if (nerisTypes) {
+          coreSchema = {
+            ...pinnedCore,
+            enumerations: { ...pinnedCore.enumerations, incident_type: nerisTypes },
+          };
+        }
+      }
+    }
 
     const errors = validateCoreFields(coreSchema, fields);
     if (errors.length > 0) {
@@ -116,6 +141,9 @@ export const handler: APIGatewayProxyHandlerV2WithLambdaAuthorizer<AuthorizerCon
   } catch (error) {
     if (error instanceof IncidentNotFoundError) {
       return problemResponse(404, 'Not Found', error.message, traceId);
+    }
+    if (error instanceof IncidentLockedError) {
+      return lockedProblem(traceId);
     }
     console.error(
       JSON.stringify({

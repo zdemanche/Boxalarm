@@ -40,7 +40,7 @@ afterAll(async () => {
   await container.stop();
 });
 
-async function putIncident(incidentId: string, status: string): Promise<void> {
+async function putIncident(incidentId: string, status: string, locked = true): Promise<void> {
   await client.send(
     new PutCommand({
       TableName: TABLE_NAME,
@@ -51,6 +51,7 @@ async function putIncident(incidentId: string, status: string): Promise<void> {
         incidentId,
         deptId: DEPT_ID,
         status,
+        ...(locked ? { lockedAt: 1_798_000_050, lockedBy: 'MBR-0034' } : {}),
       },
     }),
   );
@@ -65,6 +66,16 @@ describe('submissionRepository (real DynamoDB via LocalStack)', () => {
     await expect(
       repository.enqueueSubmission(DEPT_ID, incidentId, 1_798_000_100, 'trace-1'),
     ).rejects.toBeInstanceOf(SubmissionConflictError);
+  });
+
+  it('enqueueSubmission refuses a VALIDATED report that no officer has locked (review M1)', async () => {
+    const incidentId = 'NICHOLS-4471-1798000003';
+    await putIncident(incidentId, 'VALIDATED', false);
+    const repository = createSubmissionRepository(client, TABLE_NAME);
+
+    await expect(
+      repository.enqueueSubmission(DEPT_ID, incidentId, 1_798_000_100, 'trace-3'),
+    ).rejects.toMatchObject({ reason: 'NOT_LOCKED' });
   });
 
   it('enqueueSubmission rejects a missing incident with IncidentNotFoundError', async () => {
@@ -115,6 +126,14 @@ describe('submissionRepository (real DynamoDB via LocalStack)', () => {
       false,
       1_798_000_300,
     );
-    expect(second).toEqual({ submissionStatus: 'RETRYING' });
+    // A later failure in the same cycle cannot replace the success (round 2, N5).
+    expect(second).toEqual({ submissionStatus: 'ACCEPTED', superseded: true });
+    const afterSecond = await client.send(
+      new GetCommand({
+        TableName: TABLE_NAME,
+        Key: { pk: buildDeptScopedPk(DEPT_ID, 'INCIDENT', incidentId), sk: 'METADATA' },
+      }),
+    );
+    expect(afterSecond.Item?.submissionStatus).toBe('ACCEPTED');
   });
 });

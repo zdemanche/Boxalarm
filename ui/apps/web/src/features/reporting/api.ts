@@ -6,6 +6,7 @@ import type {
   IsoReport,
   LosapYearEndReport,
   MembershipTrends,
+  NerisCompliance,
   ReportExportAccepted,
   ReportExportJob,
   ReportName,
@@ -19,6 +20,12 @@ async function getJson<T>(tokens: AuthTokenSource, path: string): Promise<T> {
 
 export function getDashboard(tokens: AuthTokenSource): Promise<DashboardView> {
   return getJson(tokens, 'reporting/dashboard');
+}
+
+/** NERIS reporting health over the server's default 90-day window. */
+export async function getNerisCompliance(tokens: AuthTokenSource): Promise<NerisCompliance> {
+  const response = await apiRequest('reporting/neris-compliance', tokens);
+  return (await response.json()) as NerisCompliance;
 }
 
 /** `from`/`to` are epoch seconds (incident alarm time). */

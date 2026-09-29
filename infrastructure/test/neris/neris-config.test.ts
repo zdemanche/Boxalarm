@@ -69,6 +69,9 @@ describe("NerisConfig", () => {
     expect(NERIS_DEV_BASE_URL).not.toBe(NERIS_PROD_BASE_URL);
     expect(NERIS_PROD_BASE_URL).toContain("api.neris.fsri.org");
     expect(NERIS_DEV_BASE_URL).not.toContain("://api.neris.fsri.org");
+    // The OpenAPI server for both hosts is `https://<host>/v1`.
+    expect(NERIS_PROD_BASE_URL).toBe("https://api.neris.fsri.org/v1");
+    expect(NERIS_DEV_BASE_URL).toBe("https://api-test.neris.fsri.org/v1");
 
     for (const env of ["dev", "qa", "staging"] as const) {
       expect(nerisBaseUrlForEnv(env)).toBe(NERIS_DEV_BASE_URL);

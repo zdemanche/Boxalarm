@@ -111,6 +111,7 @@ describe("reporting Lambdas: env and IAM match their handlers", { timeout: 30_00
       "GET /api/v1/reporting/losap/year-end": "boxalarm-dev-reporting-losap-year-end",
       "GET /api/v1/reporting/grants": "boxalarm-dev-reporting-grants",
       "GET /api/v1/reporting/membership-trends": "boxalarm-dev-reporting-membership-trends",
+      "GET /api/v1/reporting/neris-compliance": "boxalarm-dev-reporting-neris-compliance",
       "GET /api/v1/reporting/dashboard": "boxalarm-dev-reporting-dashboard",
       "GET /api/v1/reporting/response-times": "boxalarm-dev-reporting-response-times",
       "GET /api/v1/reporting/iso": "boxalarm-dev-reporting-iso",

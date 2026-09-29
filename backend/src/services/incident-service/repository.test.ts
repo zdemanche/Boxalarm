@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { TransactionCanceledException } from '@aws-sdk/client-dynamodb';
 import type { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
 import { toVerifiedDeptId } from '@boxalarm/dept-scope';
+import { IncidentLockedError } from './lock.js';
 import {
   DuplicateIncidentError,
   IncidentNotFoundError,
@@ -332,7 +333,7 @@ describe('createIncidentRepository', () => {
     expect(result.narrative).toBe('updated narrative');
     expect(entityUpdate(send)).toMatchObject({
       Key: { pk: 'DEPT#NICHOLS#INCIDENT#NICHOLS-4471-1798000000', sk: 'METADATA' },
-      ConditionExpression: 'attribute_exists(pk)',
+      ConditionExpression: 'attribute_exists(pk) AND attribute_not_exists(lockedAt)',
     });
   });
 
@@ -353,7 +354,7 @@ describe('createIncidentRepository', () => {
   });
 
   it('rejects a narrative update for a nonexistent incident as IncidentNotFoundError', async () => {
-    const send = vi.fn().mockRejectedValue(conditionFailedOnEntity());
+    const send = vi.fn().mockRejectedValueOnce(conditionFailedOnEntity()).mockResolvedValueOnce({});
     const repository = createIncidentRepository(fakeClient(send), TABLE_NAME);
 
     await expect(
@@ -393,7 +394,7 @@ describe('createIncidentRepository', () => {
     expect(result.status).toBe('VALIDATED');
     expect(entityUpdate(send)).toMatchObject({
       Key: { pk: 'DEPT#NICHOLS#INCIDENT#NICHOLS-4471-1798000000', sk: 'METADATA' },
-      ConditionExpression: 'attribute_exists(pk)',
+      ConditionExpression: 'attribute_exists(pk) AND attribute_not_exists(lockedAt)',
     });
   });
 
@@ -483,8 +484,20 @@ describe('createIncidentRepository', () => {
     expect(update.UpdateExpression).not.toMatch(/address/);
   });
 
+  it('rejects a narrative update on a locked report as IncidentLockedError', async () => {
+    const send = vi
+      .fn()
+      .mockRejectedValueOnce(conditionFailedOnEntity())
+      .mockResolvedValueOnce({ Item: { pk: 'x', lockedAt: 1_798_000_500 } });
+    const repository = createIncidentRepository(fakeClient(send), TABLE_NAME);
+
+    await expect(
+      repository.updateNarrative(DEPT_ID, 'NICHOLS-4471', 'test', 2, TRACE_ID),
+    ).rejects.toThrow(IncidentLockedError);
+  });
+
   it('rejects updateCorePayload on a nonexistent incident as IncidentNotFoundError', async () => {
-    const send = vi.fn().mockRejectedValue(conditionFailedOnEntity());
+    const send = vi.fn().mockRejectedValueOnce(conditionFailedOnEntity()).mockResolvedValueOnce({});
     const repository = createIncidentRepository(fakeClient(send), TABLE_NAME);
 
     await expect(

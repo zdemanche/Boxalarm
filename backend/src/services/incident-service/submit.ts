@@ -8,7 +8,8 @@ import {
   readAuthorizerContext,
   resolveTraceId,
 } from './authContext.js';
-import { IncidentNotFoundError } from './repository.js';
+import { getNerisDeptSettings, sendingBlocked } from './nerisSettings.js';
+import { IncidentNotFoundError, getDocumentClient, getTableName } from './repository.js';
 import { SubmissionConflictError, getSubmissionRepository } from './submissionRepository.js';
 
 export const handler: APIGatewayProxyHandlerV2WithLambdaAuthorizer<AuthorizerContext> = async (
@@ -60,6 +61,14 @@ export const handler: APIGatewayProxyHandlerV2WithLambdaAuthorizer<AuthorizerCon
   }
 
   try {
+    // The department kill switch is a deliberate setting: refuse clearly here rather than
+    // queue a send the worker could only fail (inbox items to officers, NotConfigured alarm).
+    const blocked = sendingBlocked(
+      await getNerisDeptSettings(getDocumentClient(), getTableName(process.env), deptId),
+    );
+    if (blocked) {
+      return problemResponse(409, 'Conflict', blocked.message, traceId, { code: blocked.code });
+    }
     const repository = getSubmissionRepository(process.env);
     const result = await repository.enqueueSubmission(
       deptId,
@@ -78,7 +87,16 @@ export const handler: APIGatewayProxyHandlerV2WithLambdaAuthorizer<AuthorizerCon
       return problemResponse(404, 'Not Found', error.message, traceId);
     }
     if (error instanceof SubmissionConflictError) {
-      return problemResponse(409, 'Conflict', error.message, traceId);
+      return problemResponse(409, 'Conflict', error.message, traceId, {
+        code:
+          error.reason === 'NOT_LOCKED'
+            ? 'NOT_LOCKED'
+            : error.reason === 'IN_FLIGHT'
+              ? 'SUBMISSION_IN_FLIGHT'
+              : error.reason === 'IN_NERIS'
+                ? 'USE_RESUBMIT'
+                : 'NOT_VALIDATED',
+      });
     }
     console.error(
       JSON.stringify({

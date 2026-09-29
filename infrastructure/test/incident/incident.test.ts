@@ -77,6 +77,9 @@ describe("Incident", () => {
       nerisSchemaBucketName: pulumi.output("neris-schema"),
       policyStoreArn: pulumi.output("arn:aws:verifiedpermissions::123456789012:policy-store/ps-1"),
       policyStoreId: pulumi.output("ps-1"),
+      nerisCredentialsSecretArn: pulumi.output(
+        "arn:aws:secretsmanager:us-east-1:123456789012:secret:boxalarm-dev-neris-client-credentials",
+      ),
       logGroup,
       httpApi,
     });
@@ -147,8 +150,10 @@ describe("Incident", () => {
         "dynamodb:UpdateItem",
       ]);
     }
+    // GetItem: the METADATA row; Query: the ledger's attempts and NERIS status history.
     expect(await actionsFor(incident.submissionGetLambda, "IncidentSubmissionAccess")).toEqual([
       "dynamodb:GetItem",
+      "dynamodb:Query",
     ]);
   });
 
@@ -163,5 +168,72 @@ describe("Incident", () => {
       expect(env?.variables?.INCIDENT_TABLE_NAME).toBe("boxalarm-dev-incident-service");
       expect(await actionsFor(lambda, "IncidentCmkAccess")).toContain("kms:Decrypt");
     }
+  });
+
+  it("routes the NERIS loop: validate, lock, unlock, resubmit, no-activity month, and the plural ledger path", async () => {
+    const incident = await build();
+    await resolve(incident.nerisRouteLambdas["no-activity-report"]!.function.arn);
+    await new Promise((r) => setImmediate(r));
+    expect(routeKeys).toEqual(
+      expect.arrayContaining([
+        "POST /api/v1/incidents/{incidentId}/validate",
+        "POST /api/v1/incidents/{incidentId}/lock",
+        "POST /api/v1/incidents/{incidentId}/unlock",
+        "POST /api/v1/incidents/{incidentId}/resubmit",
+        "POST /api/v1/incidents/no-activity-reports",
+        "GET /api/v1/incidents/{incidentId}/submissions",
+        "GET /api/v1/incidents/neris-schema",
+        "PUT /api/v1/incidents/{incidentId}/modules/{module}",
+      ]),
+    );
+  });
+
+  it("gives NERIS credentials only to the routes that call NERIS, and Cedar to all of them", async () => {
+    const incident = await build();
+    const expectations: [string, boolean][] = [
+      ["validate", true],
+      ["lock", true],
+      ["no-activity-report", true],
+      ["unlock", false],
+      ["resubmit", false],
+    ];
+    for (const [key, callsNeris] of expectations) {
+      const lambda = incident.nerisRouteLambdas[key]!;
+      const policy = JSON.parse(await resolve(lambda.rolePolicy.policy)) as PolicyDoc;
+      const sids = policy.Statement.map((s) => s.Sid);
+      expect(
+        sids.some((sid) => sid.startsWith("NerisGet")),
+        key,
+      ).toBe(callsNeris);
+      expect(sids, key).toContain("AuthorizeWithVerifiedPermissions");
+      const env = await resolve(lambda.function.environment);
+      expect(env?.variables?.VERIFIED_PERMISSIONS_POLICY_STORE_ID, key).toBe("ps-1");
+      expect(Boolean(env?.variables?.NERIS_BASE_URL_PARAM), key).toBe(callsNeris);
+    }
+  });
+
+  it("keeps unlock to the METADATA update and its audit/outbox Puts", async () => {
+    const incident = await build();
+    expect(
+      await actionsFor(incident.nerisRouteLambdas.unlock!, "IncidentNerisRouteAccess"),
+    ).toEqual(["dynamodb:GetItem", "dynamodb:UpdateItem", "dynamodb:PutItem"]);
+  });
+
+  it("lets the exposures write check, in its transaction, that the report is not locked", async () => {
+    const incident = await build();
+    expect(await actionsFor(incident.exposuresLambda, "IncidentExposuresAccess")).toContain(
+      "dynamodb:ConditionCheckItem",
+    );
+  });
+
+  it("projects platform NERIS settings and unit ids from platform-service events", async () => {
+    const incident = await build();
+    const pattern = JSON.parse(
+      (await resolve(incident.nerisSettingsConsumer.rule.eventPattern)) ?? "{}",
+    ) as Record<string, string[]>;
+    expect(pattern).toEqual({
+      source: ["platform-service"],
+      "detail-type": ["platform.config.updated", "neris.entity.synced"],
+    });
   });
 });

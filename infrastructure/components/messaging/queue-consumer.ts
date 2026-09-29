@@ -29,6 +29,11 @@ export interface QueueConsumerArgs {
    * still signal failure by throwing — they'd otherwise have their failures deleted.
    */
   reportBatchItemFailures?: boolean;
+  /**
+   * The main queue's visibility timeout. Leave unset for the SQS default (30 s); a consumer
+   * whose Lambda timeout is longer must set at least 6x that timeout (AWS guidance).
+   */
+  visibilityTimeoutSeconds?: number;
 }
 
 /**
@@ -58,6 +63,9 @@ export class QueueConsumer extends pulumi.ComponentResource {
       `${name}-queue`,
       {
         name: args.queueName,
+        ...(args.visibilityTimeoutSeconds !== undefined
+          ? { visibilityTimeoutSeconds: args.visibilityTimeoutSeconds }
+          : {}),
         redrivePolicy: this.dlq.arn.apply((arn) =>
           JSON.stringify({ deadLetterTargetArn: arn, maxReceiveCount }),
         ),

@@ -213,6 +213,18 @@ describe('createIncident handler', () => {
     expect(result).toMatchObject({ statusCode: 400 });
   });
 
+  it('refuses a client-supplied status beyond DRAFT (VALIDATED comes only from review)', async () => {
+    const { handler } = await import('./createIncident.js');
+
+    const result = await handler(
+      buildEvent(ADMIN_AUTH, { ...VALID_BODY, status: 'VALIDATED' }),
+      {} as never,
+      () => undefined,
+    );
+
+    expect(result).toMatchObject({ statusCode: 400 });
+  });
+
   it('returns 400 when status is an unknown enum value (AC4)', async () => {
     const { handler } = await import('./createIncident.js');
 

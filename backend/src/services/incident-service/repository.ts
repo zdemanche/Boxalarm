@@ -10,6 +10,13 @@ import { assertNoDelimiter, buildDeptScopedPk } from '@boxalarm/dept-scope';
 import type { VerifiedDeptId } from '@boxalarm/dept-scope';
 import { buildOutboxRecord, type OutboxRecord } from '@boxalarm/outbox';
 import {
+  BUMP_CONTENT_VERSION,
+  CONTENT_VERSION_VALUES,
+  IncidentLockedError,
+  NOT_LOCKED_CONDITION,
+  explainMetadataConditionFailure,
+} from './lock.js';
+import {
   buildNerisIncidentId,
   isIncidentStatus,
   type CreateIncidentInput,
@@ -29,7 +36,11 @@ export interface IncidentRepository {
     nowEpochSeconds: number,
     traceId: string,
   ): Promise<Incident>;
-  getIncident(deptId: VerifiedDeptId, incidentId: string): Promise<Incident | undefined>;
+  getIncident(
+    deptId: VerifiedDeptId,
+    incidentId: string,
+    options?: { readonly consistent?: boolean },
+  ): Promise<Incident | undefined>;
   updateNarrative(
     deptId: VerifiedDeptId,
     incidentId: string,
@@ -42,6 +53,15 @@ export interface IncidentRepository {
     incidentId: string,
     corePayload: Readonly<Record<string, unknown>>,
     status: IncidentStatus,
+    nowEpochSeconds: number,
+    traceId: string,
+  ): Promise<Incident>;
+  /** Replaces one NERIS module (e.g. `smoke_alarm`) on corePayload; lock-guarded, versioned. */
+  updateModule(
+    deptId: VerifiedDeptId,
+    incidentId: string,
+    module: string,
+    value: Readonly<Record<string, unknown>>,
     nowEpochSeconds: number,
     traceId: string,
   ): Promise<Incident>;
@@ -120,6 +140,23 @@ function toIncident(item: Record<string, unknown>): Incident {
     createdBy: item.createdBy as string,
     createdAt: item.createdAt as number,
     updatedAt: item.updatedAt as number,
+    ...(typeof item.lockedAt === 'number' ? { lockedAt: item.lockedAt } : {}),
+    ...(typeof item.lockedBy === 'string' ? { lockedBy: item.lockedBy } : {}),
+    ...(typeof item.submissionStatus === 'string'
+      ? { submissionStatus: item.submissionStatus }
+      : {}),
+    ...(typeof item.nerisIncidentId === 'string' ? { nerisIncidentId: item.nerisIncidentId } : {}),
+    ...(typeof item.nerisStatus === 'string' ? { nerisStatus: item.nerisStatus } : {}),
+    ...(typeof item.nerisStatusAt === 'number' ? { nerisStatusAt: item.nerisStatusAt } : {}),
+    ...(typeof item.firstSubmittedAt === 'number'
+      ? { firstSubmittedAt: item.firstSubmittedAt }
+      : {}),
+    ...(typeof item.lastPayloadHash === 'string' ? { lastPayloadHash: item.lastPayloadHash } : {}),
+    ...(typeof item.pendingNerisId === 'string' ? { pendingNerisId: item.pendingNerisId } : {}),
+    ...(typeof item.contentVersion === 'number' ? { contentVersion: item.contentVersion } : {}),
+    ...(typeof item.lockedContentVersion === 'number'
+      ? { lockedContentVersion: item.lockedContentVersion }
+      : {}),
   };
 }
 
@@ -173,8 +210,14 @@ export function createIncidentRepository(
               Update: {
                 TableName: tableName,
                 Key,
-                ConditionExpression: 'attribute_exists(pk)',
+                // Locked reports reject every edit (lock.ts), atomically with the write.
+                ConditionExpression: `attribute_exists(pk) AND ${NOT_LOCKED_CONDITION}`,
                 ...update,
+                UpdateExpression: `${update.UpdateExpression}, ${BUMP_CONTENT_VERSION}`,
+                ExpressionAttributeValues: {
+                  ...update.ExpressionAttributeValues,
+                  ...CONTENT_VERSION_VALUES,
+                },
               },
             },
             { Put: { TableName: tableName, Item: outboxRecord } },
@@ -183,7 +226,10 @@ export function createIncidentRepository(
       );
     } catch (error) {
       if (isConditionFailureAt(error, 0)) {
-        throw new IncidentNotFoundError(incidentId);
+        const reason = await explainMetadataConditionFailure(client, tableName, deptId, incidentId);
+        throw reason === 'locked'
+          ? new IncidentLockedError(incidentId)
+          : new IncidentNotFoundError(incidentId);
       }
       throw error;
     }
@@ -301,9 +347,13 @@ export function createIncidentRepository(
       return toIncident(item);
     },
 
-    async getIncident(deptId, incidentId) {
+    async getIncident(deptId, incidentId, options = {}) {
       const result = await client.send(
-        new GetCommand({ TableName: tableName, Key: metadataKey(deptId, incidentId) }),
+        new GetCommand({
+          TableName: tableName,
+          Key: metadataKey(deptId, incidentId),
+          ...(options.consistent ? { ConsistentRead: true } : {}),
+        }),
       );
       return result.Item ? toIncident(result.Item as Record<string, unknown>) : undefined;
     },
@@ -329,6 +379,25 @@ export function createIncidentRepository(
           ExpressionAttributeValues: { ':narrative': narrative, ':updatedAt': nowEpochSeconds },
         },
         outboxRecord,
+      );
+    },
+
+    async updateModule(deptId, incidentId, module, value, nowEpochSeconds, traceId) {
+      assertNoDelimiter(module, 'module');
+      return updateWithOutbox(
+        deptId,
+        incidentId,
+        {
+          UpdateExpression: 'SET corePayload.#module = :value, updatedAt = :updatedAt',
+          ExpressionAttributeNames: { '#module': module },
+          ExpressionAttributeValues: { ':value': value, ':updatedAt': nowEpochSeconds },
+        },
+        buildOutboxRecord(deptId, 'incident-service', 'incident.module.updated', traceId, {
+          incidentId,
+          deptId,
+          module,
+          updatedAt: nowEpochSeconds,
+        }),
       );
     },
 

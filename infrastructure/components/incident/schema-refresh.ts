@@ -4,6 +4,7 @@ import { ServiceLambda } from "../observability/service-lambda";
 import { ServiceLogGroup } from "../observability/service-log-group";
 import { lambdaCode, LAMBDA_HANDLER } from "../shared/lambda-code";
 import { requireEnv } from "../shared/env";
+import { nerisBaseUrlForEnv, nerisUserAgentForEnv } from "../neris/neris-config";
 
 export interface SchemaRefreshArgs {
   env: string;
@@ -95,6 +96,10 @@ export class SchemaRefresh extends pulumi.ComponentResource {
           INCIDENT_TABLE_NAME: args.incidentTableName,
           NERIS_SCHEMA_BUCKET_NAME: this.bucket.bucket,
           NERIS_SCHEMA_SOURCE_URL: args.nerisSchemaSourceUrl,
+          // The environment's own NERIS host (never prod from non-prod, N6.4): its public
+          // OpenAPI document is the source of the incident-type list and module schemas.
+          NERIS_OPENAPI_URL: `${nerisBaseUrlForEnv(env)}/openapi.json`,
+          NERIS_USER_AGENT: nerisUserAgentForEnv(env),
         },
         additionalPolicyStatements: pulumi
           .all([args.incidentCmkArn, args.incidentTableArn, this.bucket.arn])

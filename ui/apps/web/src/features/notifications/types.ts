@@ -1,6 +1,7 @@
-/** Where an item links: the apparatus detail (keyed by unitId) or list, a member, consumables. */
+/** Where an item links: the apparatus detail (keyed by unitId) or list, a member, consumables,
+ * or an incident report (no id: the incidents list, e.g. a no-activity report due). */
 export interface NotificationItemLink {
-  kind: 'apparatus' | 'member' | 'consumables';
+  kind: 'apparatus' | 'member' | 'consumables' | 'incident';
   id?: string;
 }
 

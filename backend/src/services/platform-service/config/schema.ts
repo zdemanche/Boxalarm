@@ -248,6 +248,76 @@ function validateRetention(value: Record<string, unknown>): FieldError[] {
   return errors;
 }
 
+const NERIS_KNOWN_FIELDS = [
+  'departmentNerisId',
+  'autoSubmitOnLock',
+  'submissionsEnabled',
+  'rules',
+  'timeZone',
+] as const;
+const NERIS_RULE_FIELDS = ['requireNarrative', 'minNarrativeLength', 'requireUnitTimes'] as const;
+
+/**
+ * NERIS reporting settings, read by incident-service through its projected copy
+ * (incident-service/nerisSettings.ts): the department's NERIS entity id, whether an
+ * officer's lock submits straight away, a submission kill switch, and the department's own
+ * pre-lock rules on top of NERIS's.
+ */
+function validateNeris(value: Record<string, unknown>): FieldError[] {
+  const errors: FieldError[] = [...unknownFieldErrors(value, NERIS_KNOWN_FIELDS)];
+  if (typeof value.departmentNerisId !== 'string' || !/^FD\d{8}$/.test(value.departmentNerisId)) {
+    errors.push({
+      field: 'departmentNerisId',
+      message: 'is required and must be the NERIS department id: FD followed by 8 digits',
+    });
+  }
+  for (const field of ['autoSubmitOnLock', 'submissionsEnabled'] as const) {
+    if (value[field] !== undefined && typeof value[field] !== 'boolean') {
+      errors.push({ field, message: 'must be a boolean when provided' });
+    }
+  }
+  if (value.timeZone !== undefined) {
+    let valid = typeof value.timeZone === 'string' && value.timeZone.length > 0;
+    if (valid) {
+      try {
+        new Intl.DateTimeFormat('en-US', { timeZone: value.timeZone as string });
+      } catch {
+        valid = false;
+      }
+    }
+    if (!valid) {
+      errors.push({
+        field: 'timeZone',
+        message: 'must be an IANA time zone such as America/New_York when provided',
+      });
+    }
+  }
+  if (value.rules !== undefined) {
+    if (!isPlainObject(value.rules)) {
+      errors.push({ field: 'rules', message: 'must be an object when provided' });
+    } else {
+      const rules = value.rules;
+      errors.push(...unknownFieldErrors(rules, NERIS_RULE_FIELDS, 'rules.'));
+      for (const field of ['requireNarrative', 'requireUnitTimes'] as const) {
+        if (rules[field] !== undefined && typeof rules[field] !== 'boolean') {
+          errors.push({ field: `rules.${field}`, message: 'must be a boolean when provided' });
+        }
+      }
+      const min = rules.minNarrativeLength;
+      if (
+        min !== undefined &&
+        (typeof min !== 'number' || !Number.isInteger(min) || min < 0 || min > 100_000)
+      ) {
+        errors.push({
+          field: 'rules.minNarrativeLength',
+          message: 'must be an integer from 0 to 100000 when provided',
+        });
+      }
+    }
+  }
+  return errors;
+}
+
 /**
  * Validates `body.value` for a PUT against its configType's shape. Returns an
  * empty array when the value is valid, otherwise a list of field-level errors.
@@ -271,5 +341,7 @@ export function validateConfigValue(
       return validateRetention(value);
     case 'RIDING_POSITIONS':
       return validateRidingPositions(value);
+    case 'NERIS':
+      return validateNeris(value);
   }
 }

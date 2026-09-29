@@ -1,5 +1,10 @@
 import { TransactionCanceledException } from '@aws-sdk/client-dynamodb';
-import { DynamoDBDocumentClient, GetCommand, TransactWriteCommand } from '@aws-sdk/lib-dynamodb';
+import {
+  DynamoDBDocumentClient,
+  GetCommand,
+  TransactWriteCommand,
+  UpdateCommand,
+} from '@aws-sdk/lib-dynamodb';
 import { buildDeptScopedPk, type VerifiedDeptId } from '@boxalarm/dept-scope';
 import { buildOutboxRecord } from '@boxalarm/outbox';
 import { createLogger } from '@boxalarm/logging';
@@ -13,6 +18,10 @@ export const SUBMISSION_OUTCOMES = [
   'RATE_LIMITED',
   'VALIDATION_ERROR',
   'SERVER_ERROR',
+  /** A 4xx other than 422/429 (auth, WAF, unknown record): not a verdict on the report. */
+  'CLIENT_ERROR',
+  /** The department has no NERIS id yet, or NERIS submissions are switched off. */
+  'NOT_CONFIGURED',
 ] as const;
 
 export type SubmissionOutcome = (typeof SUBMISSION_OUTCOMES)[number];
@@ -21,10 +30,53 @@ export const SUBMISSION_STATUSES = ['SUBMITTED', 'ACCEPTED', 'FAILED', 'RETRYING
 
 export type SubmissionStatus = (typeof SUBMISSION_STATUSES)[number];
 
+/**
+ * Submission statuses meaning the worker may be sending the record right now. Nothing may
+ * lock, unlock, submit or resubmit a report while one of these holds (review M1).
+ */
+export const NOT_IN_FLIGHT_CONDITION =
+  '(attribute_not_exists(submissionStatus) OR (submissionStatus <> :queued AND submissionStatus <> :retrying) OR attribute_not_exists(submissionActivityAt) OR submissionActivityAt < :staleBefore)';
+
+/**
+ * A send with no activity for this long is not in flight any more, whatever its status
+ * says: the retry chain (30 s doubling to a 900 s cap, five retries) ends within about 16
+ * minutes, so an hour of silence means a lost trigger. Past it, unlock, lock, resubmit and
+ * retry are allowed again, so no report can stay locked forever (review M3).
+ */
+export const STALE_IN_FLIGHT_MS = 60 * 60 * 1000;
+
+export function inFlightValues(nowMs: number = Date.now()) {
+  return {
+    ':queued': 'SUBMITTED',
+    ':retrying': 'RETRYING',
+    ':staleBefore': new Date(nowMs - STALE_IN_FLIGHT_MS).toISOString(),
+  } as const;
+}
+
+/** The same test as NOT_IN_FLIGHT_CONDITION, on a row already read. */
+export function isInFlight(item: Record<string, unknown>, nowMs: number = Date.now()): boolean {
+  const status = item.submissionStatus;
+  if (status !== 'SUBMITTED' && status !== 'RETRYING') return false;
+  const activity = item.submissionActivityAt;
+  return typeof activity === 'string' && activity >= inFlightValues(nowMs)[':staleBefore'];
+}
+
+export type SubmissionConflictReason = 'NOT_VALIDATED' | 'NOT_LOCKED' | 'IN_FLIGHT' | 'IN_NERIS';
+
 export class SubmissionConflictError extends Error {
-  constructor(incidentId: string, currentStatus: string) {
+  constructor(
+    incidentId: string,
+    currentStatus: string,
+    readonly reason: SubmissionConflictReason = 'NOT_VALIDATED',
+  ) {
     super(
-      `incident "${incidentId}" is not VALIDATED and cannot be submitted (current status "${currentStatus}")`,
+      reason === 'NOT_LOCKED'
+        ? `incident "${incidentId}" must be locked by an officer before it is submitted to NERIS`
+        : reason === 'IN_FLIGHT'
+          ? `incident "${incidentId}" already has a NERIS submission in progress`
+          : reason === 'IN_NERIS'
+            ? `NERIS already holds incident "${incidentId}": send the correction with resubmit, which shows what changed`
+            : `incident "${incidentId}" is not VALIDATED and cannot be submitted (current status "${currentStatus}")`,
     );
     this.name = 'SubmissionConflictError';
   }
@@ -48,6 +100,13 @@ function toSubmissionRecord(incidentId: string, item: Record<string, unknown>): 
     ? item.submissionStatus
     : undefined;
   const failureReason = item.submissionFailureReason;
+  const ledgerFields = Object.fromEntries(
+    LEDGER_FIELDS.flatMap((field) =>
+      typeof item[field] === 'string' || typeof item[field] === 'number'
+        ? [[field, item[field]]]
+        : [],
+    ),
+  );
   return {
     incidentId,
     status: typeof item.status === 'string' ? item.status : '',
@@ -55,8 +114,22 @@ function toSubmissionRecord(incidentId: string, item: Record<string, unknown>): 
     ...(submissionStatus === 'FAILED' && typeof failureReason === 'string'
       ? { submissionFailureReason: failureReason }
       : {}),
+    ...ledgerFields,
   };
 }
+
+/** METADATA attributes the submission ledger reports when present. */
+const LEDGER_FIELDS = [
+  'nerisIncidentId',
+  'nerisStatus',
+  'nerisStatusAt',
+  'lockedAt',
+  'lockedBy',
+  'lastPayloadHash',
+  'firstSubmittedAt',
+  'lastSubmittedAt',
+  'updatedAt',
+] as const;
 
 export interface SubmissionAttemptInput {
   readonly outcome: SubmissionOutcome;
@@ -64,10 +137,47 @@ export interface SubmissionAttemptInput {
   readonly retryCount: number;
   readonly nerisEnvironment: 'DEV' | 'PROD';
   readonly failureReason?: string;
+  /**
+   * CREATE = POST /incident/{entity}; UPDATE = PUT /incident/{entity}/{nerisId}; ADOPT =
+   * NERIS already held the record from an earlier attempt, so it was adopted and replaced.
+   */
+  readonly operation?: 'CREATE' | 'UPDATE' | 'ADOPT';
+  /** NERIS's id for the record, once it has one. */
+  readonly nerisIncidentId?: string;
+  /** NERIS lifecycle status returned by the create (a PUT returns none). */
+  readonly nerisStatus?: string;
+  readonly payloadHash?: string;
+  /** The one-time EventBridge Scheduler schedule that will run the next retry. */
+  readonly retryScheduleName?: string;
+  /** The payload NERIS accepted, kept (one row) so a later resubmission can show its diff. */
+  readonly acceptedPayload?: Readonly<Record<string, unknown>>;
+  /** Who to tell when this attempt ends the send in failure (review M6). */
+  readonly notify?: {
+    readonly ownerId: string;
+    readonly lockedBy?: string;
+    readonly incidentNumber: string;
+  };
+  /** NERIS's own 422 issues, verbatim, for the submission ledger. */
+  readonly errors?: readonly {
+    readonly path: string;
+    readonly code: string;
+    readonly message: string;
+  }[];
 }
+
+/** Poller work-list row: one per incident whose NERIS status is not final yet. */
+export function nerisOpenKey(deptId: VerifiedDeptId, incidentId: string) {
+  return { pk: buildDeptScopedPk(deptId, 'NERIS_OPEN'), sk: incidentId };
+}
+
+export const LAST_PAYLOAD_SK = 'NERIS#LAST_PAYLOAD';
+
+const OPEN_STATUSES = new Set(['SUBMITTED', 'PENDING_INCIDENT_DATA', 'PENDING_APPROVAL']);
 
 export interface AppendSubmissionAttemptResult {
   readonly submissionStatus: SubmissionStatus;
+  /** A concurrent attempt already succeeded: this failure was not recorded (round 2, N5). */
+  readonly superseded?: true;
 }
 
 export interface EnqueueSubmissionResult {
@@ -79,6 +189,15 @@ export interface SubmissionRecord {
   readonly status: string;
   readonly submissionStatus?: SubmissionStatus;
   readonly submissionFailureReason?: string;
+  readonly nerisIncidentId?: string;
+  readonly nerisStatus?: string;
+  readonly nerisStatusAt?: number;
+  readonly lockedAt?: number;
+  readonly lockedBy?: string;
+  readonly lastPayloadHash?: string;
+  readonly firstSubmittedAt?: number;
+  readonly lastSubmittedAt?: number;
+  readonly updatedAt?: number;
 }
 
 export interface RetrySubmissionResult {
@@ -106,6 +225,16 @@ export interface SubmissionRepository {
     nowEpochSeconds: number,
     traceId: string,
   ): Promise<RetrySubmissionResult>;
+  /**
+   * Records, before the POST, the NERIS id the create will produce. If the response is lost
+   * or the local write after a 201 fails, the next attempt finds this and adopts the record
+   * NERIS already holds instead of creating it again (review M2).
+   */
+  markCreateInFlight(
+    deptId: VerifiedDeptId,
+    incidentId: string,
+    expectedNerisId: string,
+  ): Promise<void>;
 }
 
 export function createSubmissionRepository(
@@ -133,14 +262,19 @@ export function createSubmissionRepository(
                 Update: {
                   TableName: tableName,
                   Key: { pk: buildDeptScopedPk(deptId, 'INCIDENT', incidentId), sk: 'METADATA' },
-                  ConditionExpression: 'attribute_exists(pk) AND #status = :validated',
+                  // Only a report an officer has reviewed and locked, with no send in flight.
+                  // A report NERIS already holds goes through resubmit (diff + PUT by id), not
+                  // a second submit (review minor 4).
+                  ConditionExpression: `attribute_exists(pk) AND #status = :validated AND attribute_exists(lockedAt) AND attribute_not_exists(nerisIncidentId) AND ${NOT_IN_FLIGHT_CONDITION}`,
                   UpdateExpression:
-                    'SET #status = :submitted, submissionStatus = :submitted, updatedAt = :updatedAt',
+                    'SET #status = :submitted, submissionStatus = :submitted, submissionActivityAt = :activityAt, updatedAt = :updatedAt',
                   ExpressionAttributeNames: { '#status': 'status' },
                   ExpressionAttributeValues: {
                     ':validated': 'VALIDATED' satisfies IncidentStatus,
                     ':submitted': 'SUBMITTED' satisfies IncidentStatus,
                     ':updatedAt': nowEpochSeconds,
+                    ':activityAt': new Date().toISOString(),
+                    ...inFlightValues(),
                   },
                 },
               },
@@ -162,7 +296,18 @@ export function createSubmissionRepository(
           if (!existing.Item) {
             throw new IncidentNotFoundError(incidentId);
           }
-          throw new SubmissionConflictError(incidentId, String(existing.Item.status));
+          const item = existing.Item;
+          throw new SubmissionConflictError(
+            incidentId,
+            String(item.status),
+            typeof item.lockedAt !== 'number'
+              ? 'NOT_LOCKED'
+              : isInFlight(item)
+                ? 'IN_FLIGHT'
+                : typeof item.nerisIncidentId === 'string'
+                  ? 'IN_NERIS'
+                  : 'NOT_VALIDATED',
+          );
         }
         logger.error({
           event: 'neris.submission.enqueue_failed',
@@ -188,6 +333,7 @@ export function createSubmissionRepository(
           : attempt.outcome === 'VALIDATION_ERROR'
             ? 'REJECTED'
             : undefined;
+      const success = attempt.outcome === 'SUCCESS';
 
       const attemptItem = {
         pk: buildDeptScopedPk(deptId, 'INCIDENT', incidentId),
@@ -200,15 +346,24 @@ export function createSubmissionRepository(
         httpStatus: attempt.httpStatus,
         retryCount: attempt.retryCount,
         nerisEnvironment: attempt.nerisEnvironment,
+        ...(attempt.operation ? { operation: attempt.operation } : {}),
+        ...(attempt.nerisIncidentId ? { nerisIncidentId: attempt.nerisIncidentId } : {}),
+        ...(attempt.nerisStatus ? { nerisStatus: attempt.nerisStatus } : {}),
+        ...(attempt.payloadHash ? { payloadHash: attempt.payloadHash } : {}),
+        ...(attempt.retryScheduleName ? { retryScheduleName: attempt.retryScheduleName } : {}),
+        ...(attempt.failureReason ? { failureReason: attempt.failureReason } : {}),
+        ...(attempt.errors && attempt.errors.length > 0 ? { errors: attempt.errors } : {}),
       };
 
       const setClauses = [
         'submissionStatus = :submissionStatus',
         'lastSubmissionAttemptAt = :attemptedAt',
+        'submissionActivityAt = :attemptedAt',
         'updatedAt = :updatedAt',
       ];
       const names: Record<string, string> = {};
       const values: Record<string, unknown> = {
+        ...(attempt.outcome === 'SUCCESS' ? {} : { ':acceptedStatus': 'ACCEPTED' }),
         ':submissionStatus': submissionStatus,
         ':attemptedAt': attemptedAt,
         ':updatedAt': nowEpochSeconds,
@@ -222,6 +377,25 @@ export function createSubmissionRepository(
         names['#status'] = 'status';
         values[':incidentStatus'] = incidentStatus;
       }
+      if (success) {
+        setClauses.push(
+          'firstSubmittedAt = if_not_exists(firstSubmittedAt, :updatedAt)',
+          'lastSubmittedAt = :updatedAt',
+        );
+        if (attempt.nerisIncidentId) {
+          setClauses.push('nerisIncidentId = :nerisIncidentId');
+          values[':nerisIncidentId'] = attempt.nerisIncidentId;
+        }
+        if (attempt.payloadHash) {
+          setClauses.push('lastPayloadHash = :payloadHash');
+          values[':payloadHash'] = attempt.payloadHash;
+        }
+        // A create reports NERIS's status; a PUT does not, and the record re-enters NERIS's
+        // queue, so it reads as SUBMITTED until the poller fetches the real one.
+        setClauses.push('nerisStatus = :nerisStatus', 'nerisStatusAt = :updatedAt');
+        values[':nerisStatus'] = attempt.nerisStatus ?? 'SUBMITTED';
+      }
+      const watchStatus = success && OPEN_STATUSES.has(attempt.nerisStatus ?? 'SUBMITTED');
 
       const failedOutboxRecord =
         submissionStatus === 'FAILED'
@@ -229,6 +403,18 @@ export function createSubmissionRepository(
               incidentId,
               deptId,
               reason: attempt.failureReason ?? attempt.outcome,
+              // reporting-service's projection (projections/events.ts) reads these two names.
+              failureReason: attempt.failureReason ?? attempt.outcome,
+              httpStatus: attempt.httpStatus,
+              outcome: attempt.outcome,
+              // notification-service tells the owner, the locking officer and officers.
+              ...(attempt.notify
+                ? {
+                    ownerId: attempt.notify.ownerId,
+                    ...(attempt.notify.lockedBy ? { lockedBy: attempt.notify.lockedBy } : {}),
+                    incidentNumber: attempt.notify.incidentNumber,
+                  }
+                : {}),
             })
           : undefined;
 
@@ -247,14 +433,81 @@ export function createSubmissionRepository(
                 Update: {
                   TableName: tableName,
                   Key: { pk: buildDeptScopedPk(deptId, 'INCIDENT', incidentId), sk: 'METADATA' },
-                  ConditionExpression: 'attribute_exists(pk)',
-                  UpdateExpression: `SET ${setClauses.join(', ')}`,
+                  // A failure never replaces a success: when two workers race (an SQS
+                  // duplicate, or a retry released while the old trigger was still alive), a
+                  // late 422/401 must not turn an ACCEPTED report into FAILED/REJECTED.
+                  ConditionExpression: success
+                    ? 'attribute_exists(pk)'
+                    : 'attribute_exists(pk) AND (attribute_not_exists(submissionStatus) OR submissionStatus <> :acceptedStatus)',
+                  UpdateExpression: `SET ${setClauses.join(', ')}${
+                    // A landed send also ends any missing-from-NERIS count (round 2, N6).
+                    success
+                      ? ' REMOVE pendingNerisId, nerisMissingAt, nerisMissingChecks, nerisMissingSince'
+                      : ''
+                  }`,
                   ...(Object.keys(names).length > 0 ? { ExpressionAttributeNames: names } : {}),
                   ExpressionAttributeValues: values,
                 },
               },
               ...(failedOutboxRecord
                 ? [{ Put: { TableName: tableName, Item: failedOutboxRecord } }]
+                : []),
+              ...(success && attempt.acceptedPayload
+                ? [
+                    {
+                      Put: {
+                        TableName: tableName,
+                        Item: {
+                          pk: buildDeptScopedPk(deptId, 'INCIDENT', incidentId),
+                          sk: LAST_PAYLOAD_SK,
+                          entityType: 'NERIS_LAST_PAYLOAD',
+                          payload: attempt.acceptedPayload,
+                          payloadHash: attempt.payloadHash,
+                          acceptedAt: attemptedAt,
+                        },
+                      },
+                    },
+                  ]
+                : []),
+              ...(watchStatus && attempt.nerisIncidentId
+                ? [
+                    {
+                      Put: {
+                        TableName: tableName,
+                        Item: {
+                          ...nerisOpenKey(deptId, incidentId),
+                          entityType: 'NERIS_OPEN_SUBMISSION',
+                          incidentId,
+                          nerisIncidentId: attempt.nerisIncidentId,
+                          since: nowEpochSeconds,
+                        },
+                      },
+                    },
+                  ]
+                : []),
+              ...(success
+                ? [
+                    {
+                      Put: {
+                        TableName: tableName,
+                        Item: buildOutboxRecord(
+                          deptId,
+                          'incident-service',
+                          'neris.incident.transmitted',
+                          incidentId,
+                          {
+                            incidentId,
+                            deptId,
+                            operation: attempt.operation ?? 'CREATE',
+                            ...(attempt.nerisIncidentId
+                              ? { nerisIncidentId: attempt.nerisIncidentId }
+                              : {}),
+                            nerisStatus: attempt.nerisStatus ?? 'SUBMITTED',
+                          },
+                        ),
+                      },
+                    },
+                  ]
                 : []),
             ],
           }),
@@ -264,6 +517,25 @@ export function createSubmissionRepository(
           error instanceof TransactionCanceledException &&
           error.CancellationReasons?.[1]?.Code === 'ConditionalCheckFailed'
         ) {
+          if (!success) {
+            const current = await client.send(
+              new GetCommand({
+                TableName: tableName,
+                Key: { pk: buildDeptScopedPk(deptId, 'INCIDENT', incidentId), sk: 'METADATA' },
+                ConsistentRead: true,
+              }),
+            );
+            if (current.Item?.submissionStatus === 'ACCEPTED') {
+              logger.warn({
+                event: 'neris.submission.failure_superseded',
+                correlationId: incidentId,
+                deptId,
+                incidentId,
+                outcome: attempt.outcome,
+              });
+              return { submissionStatus: 'ACCEPTED', superseded: true };
+            }
+          }
           throw new IncidentNotFoundError(incidentId);
         }
         logger.error({
@@ -278,6 +550,21 @@ export function createSubmissionRepository(
       }
 
       return { submissionStatus };
+    },
+
+    async markCreateInFlight(deptId, incidentId, expectedNerisId) {
+      await client.send(
+        new UpdateCommand({
+          TableName: tableName,
+          Key: { pk: buildDeptScopedPk(deptId, 'INCIDENT', incidentId), sk: 'METADATA' },
+          ConditionExpression: 'attribute_exists(pk)',
+          UpdateExpression: 'SET pendingNerisId = :expected, pendingCreateAt = :at',
+          ExpressionAttributeValues: {
+            ':expected': expectedNerisId,
+            ':at': new Date().toISOString(),
+          },
+        }),
+      );
     },
 
     async getSubmission(deptId, incidentId) {
@@ -314,13 +601,17 @@ export function createSubmissionRepository(
                 Update: {
                   TableName: tableName,
                   Key: { pk: buildDeptScopedPk(deptId, 'INCIDENT', incidentId), sk: 'METADATA' },
-                  ConditionExpression: 'attribute_exists(pk) AND submissionStatus = :failed',
+                  // A retry resends what an officer locked; an unlocked report goes back
+                  // through review first.
+                  ConditionExpression:
+                    'attribute_exists(pk) AND attribute_exists(lockedAt) AND (submissionStatus = :failed OR ((submissionStatus = :queued OR submissionStatus = :retrying) AND (attribute_not_exists(submissionActivityAt) OR submissionActivityAt < :staleBefore)))',
                   UpdateExpression:
-                    'SET submissionStatus = :retrying, updatedAt = :updatedAt REMOVE submissionFailureReason',
+                    'SET submissionStatus = :retrying, submissionActivityAt = :activityAt, updatedAt = :updatedAt REMOVE submissionFailureReason',
                   ExpressionAttributeValues: {
                     ':failed': 'FAILED' satisfies SubmissionStatus,
-                    ':retrying': 'RETRYING' satisfies SubmissionStatus,
                     ':updatedAt': nowEpochSeconds,
+                    ':activityAt': new Date().toISOString(),
+                    ...inFlightValues(),
                   },
                 },
               },
