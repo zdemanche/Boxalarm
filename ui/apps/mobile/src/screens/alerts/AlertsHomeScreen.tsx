@@ -1,5 +1,6 @@
 import { radius, spacing, typeScale } from '@boxalarm/design-tokens';
 import { useNavigation, type NavigationProp } from '@react-navigation/native';
+import { useEffect, useState } from 'react';
 import { FlatList, RefreshControl, Text, TouchableOpacity, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useOptionalAuth } from '../../auth/AuthContext';
@@ -71,7 +72,16 @@ export function AlertsHomeScreen() {
   const theme = useTheme();
   const auth = useOptionalAuth();
   const repository = useAlertsRepository();
-  const active = useActiveDispatches(repository);
+  const [visible, setVisible] = useState(true);
+  useEffect(() => {
+    const unsubscribeFocus = navigation.addListener?.('focus', () => setVisible(true));
+    const unsubscribeBlur = navigation.addListener?.('blur', () => setVisible(false));
+    return () => {
+      unsubscribeFocus?.();
+      unsubscribeBlur?.();
+    };
+  }, [navigation]);
+  const active = useActiveDispatches(repository, visible);
   const readiness = useAlertReadiness();
   const canEnterManually = (auth?.roles ?? []).some(
     (role) => role === 'OFFICER' || role === 'CHIEF',

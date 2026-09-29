@@ -53,7 +53,11 @@ async function withRecentPages(calls: ActiveDispatchSummary[], now: number): Pro
  * stamped with its time, whenever the server cannot be reached - never a blank list during a
  * call (design.md F-02/F-05 offline). Offline, pages this phone received recently are added.
  */
-export function useActiveDispatches(repository: AlertsRepository): ActiveDispatchesState {
+export function useActiveDispatches(
+  repository: AlertsRepository,
+  /** The list is on screen (its tab/stack route is focused). Polling runs only while true. */
+  visible: boolean = true,
+): ActiveDispatchesState {
   const [calls, setCalls] = useState<ActiveCall[]>([]);
   const [source, setSource] = useState<ActiveDispatchesState['source']>('none');
   const [updatedAt, setUpdatedAt] = useState<number | null>(null);
@@ -64,11 +68,16 @@ export function useActiveDispatches(repository: AlertsRepository): ActiveDispatc
   const mountedRef = useRef(true);
   // Set once any load has settled: the first-paint cache read must never overwrite its result.
   const settledRef = useRef(false);
+  // Review m6: overlapping loads (poll + pull + foreground) can answer out of order. Only the
+  // newest request's answer is applied.
+  const requestSeqRef = useRef(0);
 
   const load = useCallback(async () => {
+    const seq = ++requestSeqRef.current;
+    const isStale = () => !mountedRef.current || seq !== requestSeqRef.current;
     try {
       const list = await repository.listActiveDispatches();
-      if (!mountedRef.current) return;
+      if (isStale()) return;
       settledRef.current = true;
       const now = Date.now();
       setCalls(list.dispatches.map((d) => ({ ...d, fromPageOnly: false })));
@@ -78,12 +87,12 @@ export function useActiveDispatches(repository: AlertsRepository): ActiveDispatc
       setFailure(null);
       await kvSet<ActiveDispatchList>(CACHE_KEY, list, now);
     } catch (error) {
-      if (!mountedRef.current) return;
+      if (isStale()) return;
       console.warn('[alerts] loading the active call list failed', error);
       setFailure(classifyDetailFailure(error));
       const cached = await kvGet<ActiveDispatchList>(CACHE_KEY);
       const merged = await withRecentPages(cached?.value.dispatches ?? [], Date.now());
-      if (!mountedRef.current) return;
+      if (isStale()) return;
       settledRef.current = true;
       setCalls(merged);
       setSource(cached ? 'cached' : 'none');
@@ -109,17 +118,38 @@ export function useActiveDispatches(repository: AlertsRepository): ActiveDispatc
       setSource('cached');
       setUpdatedAt(cached.updatedAt);
     });
-    void load();
-    const timer = setInterval(() => void load(), ACTIVE_LIST_REFRESH_MS);
-    const subscription = AppState.addEventListener('change', (status) => {
-      if (status === 'active') void load();
-    });
     return () => {
       mountedRef.current = false;
-      clearInterval(timer);
+    };
+  }, []);
+
+  // Review m6: tabs and stacks keep this screen mounted, so poll only while it is on screen and
+  // the app is in the foreground; refresh on becoming visible.
+  useEffect(() => {
+    if (!visible) return undefined;
+    void load();
+    let timer: ReturnType<typeof setInterval> | null = null;
+    const start = () => {
+      timer ??= setInterval(() => void load(), ACTIVE_LIST_REFRESH_MS);
+    };
+    const stop = () => {
+      if (timer !== null) clearInterval(timer);
+      timer = null;
+    };
+    if (AppState.currentState !== 'background') start();
+    const subscription = AppState.addEventListener('change', (status) => {
+      if (status === 'active') {
+        void load();
+        start();
+      } else {
+        stop();
+      }
+    });
+    return () => {
+      stop();
       subscription.remove();
     };
-  }, [load]);
+  }, [load, visible]);
 
   return { calls, source, updatedAt, truncated, loading, refreshing, failure, refresh };
 }
