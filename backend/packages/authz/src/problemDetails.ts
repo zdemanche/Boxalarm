@@ -101,6 +101,27 @@ export function tooManyRequestsProblem(traceId: string, detail: string): Problem
   );
 }
 
+/**
+ * 409. `code` is an RFC 7807 extension member naming which conflict it is, so a client can act
+ * on it without parsing `detail` (e.g. SUPERSEDED: recorded, but not the current answer).
+ */
+export function conflictProblem(traceId: string, detail: string, code?: string): ProblemResponse {
+  const response = problemResponse(
+    409,
+    'https://boxalarm.dev/problems/conflict',
+    'Conflict',
+    detail,
+    traceId,
+  );
+  if (code === undefined) {
+    return response;
+  }
+  return {
+    ...response,
+    body: JSON.stringify({ ...(JSON.parse(response.body) as ProblemDetailsBody), code }),
+  };
+}
+
 export function badRequestProblem(
   traceId: string,
   detailOrErrors: string | readonly FieldError[],

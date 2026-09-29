@@ -51,6 +51,25 @@ beforeEach(() => {
   vi.clearAllMocks();
 });
 
+function recorded(
+  answer: Partial<{ ackStatus: string; eta: number | null }> = {},
+  roster: 'APPLIED' | 'SUPERSEDED' = 'APPLIED',
+  replayed = false,
+) {
+  return {
+    outcome: 'recorded' as const,
+    roster,
+    replayed,
+    answer: {
+      ackStatus: 'RESPONDING' as const,
+      eta: 6,
+      assignedApparatusId: null,
+      answeredAt: 1798000000,
+      ...answer,
+    } as never,
+  };
+}
+
 describe('responses handler', () => {
   it('wires the RecordResponse action against the Dispatch resource', () => {
     expect(capturedOptions[capturedOptions.length - 1]).toMatchObject({
@@ -132,7 +151,7 @@ describe('responses handler', () => {
   it('passes a 10-digit epoch-seconds answeredAt to recordResponse (P5)', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-09-15T00:00:00.000Z'));
-    vi.mocked(recordResponse).mockResolvedValue({ outcome: 'recorded' });
+    vi.mocked(recordResponse).mockResolvedValue(recorded());
     await handler(buildEvent({ body: JSON.stringify({ ackStatus: 'RESPONDING', eta: 6 }) }));
     expect(recordResponse).toHaveBeenCalledWith(
       expect.anything(),
@@ -145,7 +164,7 @@ describe('responses handler', () => {
   });
 
   it('returns 200 with the recorded response, using the caller sub as memberId (AC1, no impersonation)', async () => {
-    vi.mocked(recordResponse).mockResolvedValue({ outcome: 'recorded' });
+    vi.mocked(recordResponse).mockResolvedValue(recorded({ ackStatus: 'DIRECT_TO_SCENE', eta: 3 }));
     const result = (await handler(
       buildEvent({ body: JSON.stringify({ ackStatus: 'DIRECT_TO_SCENE', eta: 3 }) }),
     )) as { statusCode: number; body: string };
@@ -174,7 +193,7 @@ describe('responses handler', () => {
 
   it('emits a business metric on success', async () => {
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
-    vi.mocked(recordResponse).mockResolvedValue({ outcome: 'recorded' });
+    vi.mocked(recordResponse).mockResolvedValue(recorded());
     await handler(buildEvent({ body: JSON.stringify({ ackStatus: 'RESPONDING', eta: 6 }) }));
     expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('ResponseConfirmed'));
   });
@@ -185,5 +204,123 @@ describe('responses handler', () => {
     vi.mocked(recordResponse).mockRejectedValue(new Error('table unavailable'));
     await handler(buildEvent({ body: JSON.stringify({ ackStatus: 'RESPONDING', eta: 6 }) }));
     expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('ResponseConfirmFailed'));
+  });
+
+  describe('client answer id and answer ordering (mobile review D)', () => {
+    it('passes clientAnswerId and answeredAtMs through, ordering by when the member answered', async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date('2026-09-15T00:00:10.000Z'));
+      vi.mocked(recordResponse).mockResolvedValue(recorded());
+      const answeredAtMs = Date.parse('2026-09-15T00:00:04.250Z');
+      await handler(
+        buildEvent({
+          body: JSON.stringify({
+            ackStatus: 'RESPONDING',
+            eta: 6,
+            clientAnswerId: 'ans-1',
+            answeredAtMs,
+          }),
+        }),
+      );
+      expect(recordResponse).toHaveBeenCalledWith(
+        expect.anything(),
+        'alerting-table',
+        expect.objectContaining({
+          clientAnswerId: 'ans-1',
+          answeredAtMs,
+          answeredAt: Math.floor(answeredAtMs / 1000),
+          receivedAtMs: Date.parse('2026-09-15T00:00:10.000Z'),
+        }),
+      );
+      vi.useRealTimers();
+    });
+
+    it('clamps an answeredAtMs from a device clock running ahead to the server receipt time', async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date('2026-09-15T00:00:10.000Z'));
+      vi.mocked(recordResponse).mockResolvedValue(recorded());
+      await handler(
+        buildEvent({
+          body: JSON.stringify({
+            ackStatus: 'RESPONDING',
+            eta: 6,
+            answeredAtMs: Date.parse('2026-09-15T01:00:00.000Z'),
+          }),
+        }),
+      );
+      expect(recordResponse).toHaveBeenCalledWith(
+        expect.anything(),
+        'alerting-table',
+        expect.objectContaining({ answeredAtMs: Date.parse('2026-09-15T00:00:10.000Z') }),
+      );
+      vi.useRealTimers();
+    });
+
+    it('accepts the answer id from the Idempotency-Key header', async () => {
+      vi.mocked(recordResponse).mockResolvedValue(recorded());
+      await handler(
+        buildEvent({
+          headers: { 'Idempotency-Key': 'hdr-1' },
+          body: JSON.stringify({ ackStatus: 'RESPONDING', eta: 6 }),
+        }),
+      );
+      expect(recordResponse).toHaveBeenCalledWith(
+        expect.anything(),
+        'alerting-table',
+        expect.objectContaining({ clientAnswerId: 'hdr-1' }),
+      );
+    });
+
+    it.each([
+      ['a header and body that disagree', { 'idempotency-key': 'a' }, { clientAnswerId: 'b' }],
+      ['an unusable id', {}, { clientAnswerId: 'has#hash' }],
+      ['an answeredAtMs over a day old', {}, { answeredAtMs: 1_000 }],
+    ])('answers 400 for %s', async (_label, headers, extra) => {
+      const result = (await handler(
+        buildEvent({
+          headers,
+          body: JSON.stringify({ ackStatus: 'RESPONDING', eta: 6, ...extra }),
+        }),
+      )) as { statusCode: number };
+      expect(result.statusCode).toBe(400);
+      expect(recordResponse).not.toHaveBeenCalled();
+    });
+
+    it('answers 409 SUPERSEDED - not 200 - when a later answer is already on the roster', async () => {
+      vi.mocked(recordResponse).mockResolvedValue(recorded({}, 'SUPERSEDED'));
+      const result = (await handler(
+        buildEvent({ body: JSON.stringify({ ackStatus: 'NOT_RESPONDING' }) }),
+      )) as { statusCode: number; body: string };
+      expect(result.statusCode).toBe(409);
+      expect(JSON.parse(result.body)).toMatchObject({ status: 409, code: 'SUPERSEDED' });
+    });
+
+    it('answers a replay with the original answer and marks it replayed', async () => {
+      vi.mocked(recordResponse).mockResolvedValue(
+        recorded({ ackStatus: 'RESPONDING', eta: 6 }, 'APPLIED', true),
+      );
+      const result = (await handler(
+        buildEvent({
+          body: JSON.stringify({ ackStatus: 'RESPONDING', eta: 6, clientAnswerId: 'ans-1' }),
+        }),
+      )) as { statusCode: number; headers: Record<string, string>; body: string };
+      expect(result.statusCode).toBe(200);
+      expect(result.headers['idempotent-replayed']).toBe('true');
+      expect(JSON.parse(result.body)).toMatchObject({
+        ackStatus: 'RESPONDING',
+        clientAnswerId: 'ans-1',
+      });
+    });
+
+    it('answers 409 ANSWER_ID_REUSED when an id is reused for a different answer', async () => {
+      vi.mocked(recordResponse).mockResolvedValue({ outcome: 'answer-id-conflict' });
+      const result = (await handler(
+        buildEvent({
+          body: JSON.stringify({ ackStatus: 'NOT_RESPONDING', clientAnswerId: 'ans-1' }),
+        }),
+      )) as { statusCode: number; body: string };
+      expect(result.statusCode).toBe(409);
+      expect(JSON.parse(result.body)).toMatchObject({ code: 'ANSWER_ID_REUSED' });
+    });
   });
 });
