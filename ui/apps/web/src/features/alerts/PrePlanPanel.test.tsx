@@ -187,3 +187,15 @@ test('warns when the hydrant list may be incomplete (server read hit its cap)', 
     'Hydrant list may be incomplete: a nearer hydrant may be missing.',
   );
 });
+
+test('ADDRESS_UNVERIFIED is a VERIFY ADDRESS warning, never a plain "Pre-plan for" line', () => {
+  render(
+    <PrePlanPanel
+      prePlan={{ ...BASE, matchType: 'ADDRESS_UNVERIFIED', matchedAddress: '123 Main St' }}
+    />,
+  );
+  expect(screen.getByRole('note').textContent).toBe(
+    "VERIFY ADDRESS: pre-plan for 123 Main St, but its town could not be confirmed as this call's.",
+  );
+  expect(screen.queryByText('Pre-plan for 123 Main St')).toBeNull();
+});

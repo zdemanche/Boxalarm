@@ -22,6 +22,23 @@ export interface NormalizedAddress {
   readonly town: string | null;
   /** 5-digit ZIP, or null. */
   readonly zip: string | null;
+  /** State (2-letter code or aliased name), or null. */
+  readonly state: string | null;
+  /**
+   * The parse involved a guess (e.g. a town read off a comma-less line): such an address may
+   * still match, but never as a verified (unflagged) match.
+   */
+  readonly ambiguous: boolean;
+}
+
+/** A town/village name in the form addresses are compared in ("North Haven" -> "N HAVEN"). */
+export function localityKey(name: string): string {
+  return tokenize(
+    name
+      .normalize('NFKD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .toUpperCase(),
+  ).join(' ');
 }
 
 /** Spelled-out forms mapped to the USPS abbreviation both sides are compared in. */
@@ -220,9 +237,14 @@ function extractUnits(tokens: readonly string[]): { units: string[]; rest: strin
  * peeled off; whatever words remain are the town. Runs only on text after the street, so a
  * state code that is also a suffix ("CT" = Court) is never taken from the street itself.
  */
-function parseLocality(tokens: readonly string[]): { town: string | null; zip: string | null } {
+function parseLocality(tokens: readonly string[]): {
+  town: string | null;
+  zip: string | null;
+  state: string | null;
+} {
   const words = [...tokens];
   let zip: string | null = null;
+  let state: string | null = null;
   const zipMatch = ZIP.exec(words[words.length - 1] ?? '');
   if (zipMatch) {
     zip = zipMatch[1] as string;
@@ -231,18 +253,32 @@ function parseLocality(tokens: readonly string[]): { town: string | null; zip: s
   // Names were aliased by tokenize ("NORTH CAROLINA" -> "N CAROLINA"); compare both forms.
   const lastTwo = words.slice(-2).join(' ');
   if (words.length >= 2 && (STATE_NAMES.has(lastTwo) || STATE_NAMES.has(unalias(lastTwo)))) {
+    state = unalias(lastTwo);
     words.splice(-2);
   } else if (
     words.length >= 1 &&
     (STATE_CODES.has(words[words.length - 1] as string) ||
       STATE_NAMES.has(words[words.length - 1] as string))
   ) {
-    words.pop();
+    state = words.pop() as string;
   }
-  return { town: words.length > 0 ? words.join(' ') : null, zip };
+  return { town: words.length > 0 ? words.join(' ') : null, zip, state: stateCode(state) };
 }
 
 const UNALIAS: Readonly<Record<string, string>> = { N: 'NORTH', S: 'SOUTH', W: 'WEST' };
+
+/** "CONNECTICUT" -> "CT" so a code and a name compare equal (only the names we list). */
+const STATE_NAME_CODES: Readonly<Record<string, string>> = {
+  CONNECTICUT: 'CT',
+  'NEW YORK': 'NY',
+  MASSACHUSETTS: 'MA',
+  'RHODE ISLAND': 'RI',
+  'NEW JERSEY': 'NJ',
+};
+
+function stateCode(state: string | null): string | null {
+  return state === null ? null : (STATE_NAME_CODES[state] ?? state);
+}
 
 function unalias(words: string): string {
   return words
@@ -308,7 +344,7 @@ export function normalizeAddress(raw: string): NormalizedAddress | null {
   // town longer, never shorter, so they can only cause a (safe) mismatch. Without a suffix the
   // street's end is unknown, so those words stay in the key instead.
   const localityTokens = [...(end >= 0 ? fromRemainder.rest : []), ...fromTail.rest];
-  const { town, zip } = parseLocality(localityTokens);
+  const { town, zip, state } = parseLocality(localityTokens);
   const key = end >= 0 ? street : [...street, ...fromRemainder.rest];
 
   return {
@@ -316,5 +352,8 @@ export function normalizeAddress(raw: string): NormalizedAddress | null {
     unit: units.length > 0 ? units.join(' ') : null,
     town,
     zip,
+    state,
+    // A town read off a comma-less line is a guess about where the street ended.
+    ambiguous: end >= 0 && fromRemainder.rest.length > 0 && town !== null,
   };
 }

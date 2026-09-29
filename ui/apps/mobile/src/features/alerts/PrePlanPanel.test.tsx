@@ -145,3 +145,14 @@ test('says the hydrant list is unavailable when that read failed', async () => {
   const { findByRole } = await render(<PrePlanPanel prePlan={null} hydrantsUnavailable />);
   expect((await findByRole('alert')).props.children).toBe('Hydrant list unavailable right now.');
 });
+
+test('announces ADDRESS_UNVERIFIED as a VERIFY ADDRESS alert', async () => {
+  const { findByRole } = await render(
+    <PrePlanPanel
+      prePlan={{ ...BASE, matchType: 'ADDRESS_UNVERIFIED', matchedAddress: '123 Main St' }}
+    />,
+  );
+  expect((await findByRole('alert')).props.children).toBe(
+    "VERIFY ADDRESS: pre-plan for 123 Main St, but its town could not be confirmed as this call's.",
+  );
+});

@@ -20,6 +20,12 @@ export interface RoutesCoreArgs {
   escalation: Escalation;
   policyStoreId: pulumi.Input<string>;
   permissionsBoundaryArn?: pulumi.Input<string>;
+  /**
+   * JSON { towns, zips, state } — the department's home locality, the default the dispatch
+   * detail verifies pre-plan addresses against (prePlan/locality.ts). Overridable per
+   * department by the alerting-table item DEPT#{deptId}#CONFIG / HOME_LOCALITY.
+   */
+  homeLocality?: pulumi.Input<string>;
 }
 
 /**
@@ -213,6 +219,7 @@ export class RoutesCore extends pulumi.ComponentResource {
         environment: {
           ALERTING_TABLE_NAME: args.alertingTableName,
           VERIFIED_PERMISSIONS_POLICY_STORE_ID: args.policyStoreId,
+          ...(args.homeLocality !== undefined ? { ALERTING_HOME_LOCALITY: args.homeLocality } : {}),
         },
         additionalPolicyStatements: pulumi.output(args.alertingTableArn).apply((tableArn) => [
           {

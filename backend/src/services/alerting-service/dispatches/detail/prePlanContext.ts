@@ -5,6 +5,7 @@ import { logError } from '../logger.js';
 import type { DispatchAlertItem } from './repository.js';
 import { normalizeAddress } from '../../prePlan/addressKey.js';
 import { isGeoPoint, type GeoPoint } from '../../prePlan/geo.js';
+import { loadHomeLocality } from '../../prePlan/locality.js';
 import { isOutOfService, type NearestHydrant } from '../../prePlan/nearestHydrants.js';
 import {
   findNearestHydrants,
@@ -86,7 +87,8 @@ async function matchPrePlan(
   dispatchPoint: GeoPoint | undefined,
 ): Promise<PrePlanMatch | undefined> {
   if (item.address && normalizeAddress(item.address)) {
-    return findPrePlanByAddress(client, tableName, deptId, item.address, dispatchPoint);
+    const home = await loadHomeLocality(client, tableName, deptId, process.env);
+    return findPrePlanByAddress(client, tableName, deptId, item.address, dispatchPoint, home);
   }
   return dispatchPoint ? findPrePlanNear(client, tableName, deptId, dispatchPoint) : undefined;
 }

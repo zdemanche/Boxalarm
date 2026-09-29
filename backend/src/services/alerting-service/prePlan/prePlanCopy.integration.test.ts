@@ -122,6 +122,11 @@ describe('pre-plan + hydrant copies -> dispatch detail (real DynamoDB with the a
     vi.resetModules();
     process.env.ALERTING_TABLE_NAME = TABLE_NAME;
     process.env.VERIFIED_PERMISSIONS_POLICY_STORE_ID = 'ps-1';
+    process.env.ALERTING_HOME_LOCALITY = JSON.stringify({
+      towns: ['Trumbull', 'Nichols', 'Long Hill', 'Trumbull Center'],
+      zips: ['06611'],
+      state: 'CT',
+    });
     vi.doMock('../eligibility/dynamoClient.js', async (importOriginal) => {
       const actual = await importOriginal<typeof import('../eligibility/dynamoClient.js')>();
       return { ...actual, createDynamoClient: () => client };
@@ -326,7 +331,9 @@ describe('pre-plan + hydrant copies -> dispatch detail (real DynamoDB with the a
       expect((await lookup('100 Space Ln')).prePlan).toBeNull();
       expect((await lookup('100 Lot Road')).prePlan).toMatchObject({ matchType: 'ADDRESS' });
       expect((await lookup('5 Main St, Bridgeport, CT')).prePlan).toBeNull();
-      expect((await lookup('5 MAIN ST TRUMBULL CT 06611')).prePlan).toMatchObject({
+      // Round-2 A: a town-less (home) pre-plan never matches a dispatch in another town.
+      expect((await lookup('12 Oak Ln, Bridgeport, CT')).prePlan).toBeNull();
+      expect((await lookup('5 Main Street, Trumbull, CT 06611')).prePlan).toMatchObject({
         matchType: 'ADDRESS',
         hazards: ['HAZARD-OCC-TRUMBULL'],
       });

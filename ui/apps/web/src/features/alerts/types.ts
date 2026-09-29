@@ -37,7 +37,7 @@ export interface NearestHydrant {
  * "verify address", never as the call's plan.
  */
 export type PrePlanMatchType =
-  'ADDRESS' | 'ADDRESS_BUILDING' | 'UNIT_MISMATCH' | 'NEARBY' | 'CANDIDATES';
+  'ADDRESS' | 'ADDRESS_BUILDING' | 'ADDRESS_UNVERIFIED' | 'UNIT_MISMATCH' | 'NEARBY' | 'CANDIDATES';
 
 /** One of several pre-plans the crew must choose between (matchType CANDIDATES). */
 export interface PrePlanCandidate {

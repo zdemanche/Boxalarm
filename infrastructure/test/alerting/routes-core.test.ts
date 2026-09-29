@@ -1,12 +1,14 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import {
   BOUNDARY_ARN,
+  STACK_CONFIG,
   TABLE_ARN,
   buildSchedulingChain,
   installMocks,
   isGranted,
   lambdaEnv,
   resourcesOfType,
+  settleStack,
   statementsForRole,
 } from "./mock-harness";
 
@@ -94,4 +96,35 @@ describe("RoutesCore dispatch-detail route (pre-plan context reads)", { timeout:
     );
     expect(resources.some((r) => /:table\/(?!boxalarm-dev-alerting-table)/.test(r))).toBe(false);
   });
+});
+
+describe("home locality for pre-plan address verification (round-2 A)", () => {
+  it("defaults tenant zero to Trumbull and its villages / 06611, and validates an override", async () => {
+    const { resolveHomeLocality } = await import("../../components/alerting/home-locality");
+    expect(JSON.parse(resolveHomeLocality("nichols-fd", undefined) ?? "null")).toEqual({
+      towns: ["Trumbull", "Nichols", "Long Hill", "Trumbull Center"],
+      zips: ["06611"],
+      state: "CT",
+    });
+    expect(resolveHomeLocality("other-fd", undefined)).toBeUndefined();
+    expect(
+      JSON.parse(resolveHomeLocality("other-fd", '{"towns":["Monroe"],"zips":["06468"]}') ?? ""),
+    ).toEqual({ towns: ["Monroe"], zips: ["06468"] });
+    expect(() => resolveHomeLocality("x", '{"town":"Monroe"}')).toThrow(/towns/);
+  });
+
+  it(
+    "the full stack gives the dispatch-detail Lambda ALERTING_HOME_LOCALITY",
+    { timeout: 120_000 },
+    async () => {
+      installMocks(STACK_CONFIG);
+      await import("../../index");
+      await settleStack();
+      const env = lambdaEnv("boxalarm-dev-alerting-dispatch-detail");
+      expect(JSON.parse(env.ALERTING_HOME_LOCALITY ?? "null")).toMatchObject({
+        towns: expect.arrayContaining(["Trumbull", "Nichols"]) as unknown,
+        zips: ["06611"],
+      });
+    },
+  );
 });

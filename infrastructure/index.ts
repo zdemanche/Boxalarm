@@ -70,6 +70,7 @@ import { PushTokens } from "./components/alerting/push-tokens";
 import { RidingBoard } from "./components/alerting/riding-board";
 import { AlertingAlarms } from "./components/alerting/alarms";
 import { PrePlanCopies } from "./components/alerting/pre-plan-copies";
+import { resolveHomeLocality } from "./components/alerting/home-locality";
 import { EligibilityStaleness } from "./components/alerting/staleness";
 import { AlertingCanary } from "./components/alerting/canary";
 import { AlertingOutboxDrain } from "./components/alerting/outbox-drain";
@@ -625,6 +626,13 @@ export const channelWorkers = new ChannelWorkers("channel-workers", {
 });
 
 // E1-S1/S5/S6-INFRA: manual dispatch ingress, response confirmation, roster, detail.
+const alertingHomeLocality = resolveHomeLocality(deptId, config.get("alertingHomeLocality"));
+if (alertingHomeLocality === undefined) {
+  pulumi.log.warn(
+    `No home locality for deptId ${deptId}: set boxalarm-infra:alertingHomeLocality, or every ` +
+      `pre-plan address match on the dispatch detail is shown "verify address".`,
+  );
+}
 export const routesCore = new RoutesCore("routes-core", {
   env,
   httpApi,
@@ -635,6 +643,7 @@ export const routesCore = new RoutesCore("routes-core", {
   escalation,
   policyStoreId: policyStore.policyStoreId,
   permissionsBoundaryArn: alertingBoundaryArn,
+  ...(alertingHomeLocality !== undefined ? { homeLocality: alertingHomeLocality } : {}),
 });
 
 // E1-S4/S8/S9-INFRA: self-test, audit, and provider delivery-receipt routes.

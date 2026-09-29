@@ -64,12 +64,16 @@ describe('normalizeAddress', () => {
       unit: null,
       town: 'MIAMI',
       zip: '33139',
+      state: 'FL',
+      ambiguous: false,
     });
     expect(normalizeAddress('5 Elm St, Trumbull, CT 06611')).toEqual({
       key: '5 ELM ST',
       unit: null,
       town: 'TRUMBULL',
       zip: '06611',
+      state: 'CT',
+      ambiguous: false,
     });
   });
 

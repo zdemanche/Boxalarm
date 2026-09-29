@@ -57,6 +57,13 @@ export function matchNotice(prePlan: PrePlanEnrichment): { text: string; warning
         text: `Building-level pre-plan for ${address ?? 'this address'} (no plan for the dispatched unit)`,
         warning: false,
       };
+    case 'ADDRESS_UNVERIFIED':
+      // Same street address, but the town (or the address itself) could not be confirmed as
+      // this call's - e.g. a dispatch that may be in another town.
+      return {
+        text: `VERIFY ADDRESS: pre-plan for ${address ?? 'this street address'}, but its town could not be confirmed as this call's.`,
+        warning: true,
+      };
     case 'UNIT_MISMATCH':
       return {
         text: `VERIFY ADDRESS: this pre-plan is for ${withUnit(address ?? 'another unit', prePlan.unit)}, a different unit than dispatched.`,

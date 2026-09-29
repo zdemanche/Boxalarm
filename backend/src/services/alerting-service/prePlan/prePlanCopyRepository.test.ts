@@ -3,6 +3,7 @@ import type { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
 import geohash from 'ngeohash';
 import { toVerifiedDeptId } from '@boxalarm/dept-scope';
 import { normalizeAddress } from './addressKey.js';
+import { NO_HOME_LOCALITY, parseHomeLocality } from './locality.js';
 import { hydrantGeoIndexKeys, prePlanAddressIndexKeys, prePlanGeoIndexKeys } from './copyKeys.js';
 import {
   findNearestHydrants,
@@ -13,6 +14,11 @@ import {
 } from './prePlanCopyRepository.js';
 
 const DEPT_ID = toVerifiedDeptId({ deptId: 'NICHOLS' });
+const HOME = parseHomeLocality({
+  towns: ['Trumbull', 'Nichols', 'Long Hill', 'Trumbull Center'],
+  zips: ['06611'],
+  state: 'CT',
+})!;
 const TABLE = 'alerting-table';
 const ORIGIN = { latitude: 41.2429, longitude: -73.2007 };
 const METERS_PER_DEG_LAT = 111_320;
@@ -100,7 +106,14 @@ describe('findPrePlanByAddress', () => {
   it('matches a differently spelled dispatch address to the pre-plan (Street/St, case, punctuation, city tail)', async () => {
     const { client, send } = fakeIndex([prePlanCopy('OCC-1', '123 Main Street')]);
 
-    const found = await findPrePlanByAddress(client, TABLE, DEPT_ID, '123 main st., Trumbull CT');
+    const found = await findPrePlanByAddress(
+      client,
+      TABLE,
+      DEPT_ID,
+      '123 main st., Trumbull CT',
+      undefined,
+      HOME,
+    );
 
     expect(found).toMatchObject({ matchType: 'ADDRESS', copy: { occupancyId: 'OCC-1' } });
     expect(send).toHaveBeenCalledOnce();
@@ -113,12 +126,16 @@ describe('findPrePlanByAddress', () => {
 
   it('returns undefined when no pre-plan is on file for the address', async () => {
     const { client } = fakeIndex([prePlanCopy('OCC-1', '123 Main Street')]);
-    expect(await findPrePlanByAddress(client, TABLE, DEPT_ID, '125 Main Street')).toBeUndefined();
+    expect(
+      await findPrePlanByAddress(client, TABLE, DEPT_ID, '125 Main Street', undefined, HOME),
+    ).toBeUndefined();
   });
 
   it('does not query at all for an address with no street text', async () => {
     const { client, send } = fakeIndex([]);
-    expect(await findPrePlanByAddress(client, TABLE, DEPT_ID, ' , ')).toBeUndefined();
+    expect(
+      await findPrePlanByAddress(client, TABLE, DEPT_ID, ' , ', undefined, HOME),
+    ).toBeUndefined();
     expect(send).not.toHaveBeenCalled();
   });
 
@@ -127,7 +144,7 @@ describe('findPrePlanByAddress', () => {
       prePlanCopy(`OCC-APT${unit}`, `40 Oak Ave Apt ${unit}`, { snapshotUpdatedAt: updated });
     const building = prePlanCopy('OCC-BLDG', '40 Oak Ave');
     const lookup = async (items: Record<string, unknown>[], address: string) =>
-      findPrePlanByAddress(fakeIndex(items).client, TABLE, DEPT_ID, address);
+      findPrePlanByAddress(fakeIndex(items).client, TABLE, DEPT_ID, address, undefined, HOME);
 
     it('returns the exact unit match as ADDRESS', async () => {
       expect(await lookup([apt('2'), building, apt('7')], '40 Oak Avenue #7')).toMatchObject({
@@ -186,31 +203,70 @@ describe('findPrePlanByAddress', () => {
     const client = {
       send: vi.fn().mockRejectedValue(new Error('ThrottlingException')),
     } as unknown as DynamoDBDocumentClient;
-    await expect(findPrePlanByAddress(client, TABLE, DEPT_ID, '1 Main St')).rejects.toThrow(
-      'ThrottlingException',
-    );
+    await expect(
+      findPrePlanByAddress(client, TABLE, DEPT_ID, '1 Main St', undefined, HOME),
+    ).rejects.toThrow('ThrottlingException');
   });
 });
 
-describe('findPrePlanByAddress — locality and distance (MAJOR-2)', () => {
-  it('rejects a same-key pre-plan in another town when both sides name a town', async () => {
-    const { client } = fakeIndex([prePlanCopy('OCC-T', '123 Main St, Trumbull, CT 06611')]);
-    expect(
-      await findPrePlanByAddress(client, TABLE, DEPT_ID, '123 Main St, Bridgeport, CT'),
-    ).toBeUndefined();
-    expect(
-      matchedId(await findPrePlanByAddress(client, TABLE, DEPT_ID, '123 MAIN ST TRUMBULL CT')),
-    ).toBe('OCC-T');
+describe('findPrePlanByAddress — locality against the home set (round-2 A)', () => {
+  const byAddress = (items: Record<string, unknown>[], address: string, home = HOME) =>
+    findPrePlanByAddress(fakeIndex(items).client, TABLE, DEPT_ID, address, undefined, home);
+
+  it('never matches a town-less home pre-plan to a dispatch in another town (mutual aid to Bridgeport)', async () => {
+    const trumbull = [prePlanCopy('OCC-T', '123 Main St')];
+    expect(await byAddress(trumbull, '123 Main St, Bridgeport, CT')).toBeUndefined();
+    expect(await byAddress(trumbull, '123 MAIN ST BRIDGEPORT CT')).toBeUndefined();
+    expect(await byAddress(trumbull, '123 Main St, Stratford, CT 06614')).toBeUndefined();
+    expect(await byAddress(trumbull, '123 Main St, CT 06604')).toBeUndefined();
+    expect(await byAddress(trumbull, '123 Main St, Springfield, MA')).toBeUndefined();
   });
 
-  it('rejects a differing ZIP, and matches when only one side names a locality', async () => {
-    const { client } = fakeIndex([prePlanCopy('OCC-T', '123 Main St, Trumbull, CT 06611')]);
-    expect(
-      await findPrePlanByAddress(client, TABLE, DEPT_ID, '123 Main St, CT 06604'),
-    ).toBeUndefined();
-    expect(matchedId(await findPrePlanByAddress(client, TABLE, DEPT_ID, '123 Main St'))).toBe(
-      'OCC-T',
-    );
+  it('verifies a town-less pre-plan for a dispatch naming a home town, village or ZIP — or naming none', async () => {
+    const trumbull = [prePlanCopy('OCC-T', '123 Main St')];
+    for (const address of [
+      '123 Main St',
+      '123 Main St, Trumbull, CT',
+      '123 Main St, Nichols, CT',
+      '123 Main St, Long Hill',
+      '123 Main St, CT 06611',
+    ]) {
+      expect(await byAddress(trumbull, address), address).toMatchObject({
+        matchType: 'ADDRESS',
+        copy: { occupancyId: 'OCC-T' },
+      });
+    }
+  });
+
+  it('N9: home villages agree with the home town (Nichols vs Trumbull, same ZIP)', async () => {
+    const copy = [prePlanCopy('OCC-T', '123 Main St, Trumbull, CT 06611')];
+    expect(await byAddress(copy, '123 Main St, Nichols, CT 06611')).toMatchObject({
+      matchType: 'ADDRESS',
+    });
+    expect(await byAddress(copy, '123 Main St, Long Hill, CT')).toMatchObject({
+      matchType: 'ADDRESS',
+    });
+  });
+
+  it('a copy outside the home area matches a town-less dispatch only flagged ADDRESS_UNVERIFIED', async () => {
+    const monroe = [prePlanCopy('OCC-M', '123 Main St, Monroe, CT')];
+    expect(await byAddress(monroe, '123 Main St')).toMatchObject({
+      matchType: 'ADDRESS_UNVERIFIED',
+      copy: { occupancyId: 'OCC-M' },
+    });
+    expect(await byAddress(monroe, '123 Main St, Monroe, CT')).toMatchObject({
+      matchType: 'ADDRESS',
+    });
+  });
+
+  it('with no home locality configured, nothing is verified: every address match is flagged', async () => {
+    const trumbull = [prePlanCopy('OCC-T', '123 Main St')];
+    expect(await byAddress(trumbull, '123 Main St', NO_HOME_LOCALITY)).toMatchObject({
+      matchType: 'ADDRESS_UNVERIFIED',
+    });
+    expect(await byAddress(trumbull, '123 Main St, Trumbull, CT', NO_HOME_LOCALITY)).toMatchObject({
+      matchType: 'ADDRESS_UNVERIFIED',
+    });
   });
 
   it('rejects an address match more than 150 m from the dispatch coordinates', async () => {
@@ -218,11 +274,18 @@ describe('findPrePlanByAddress — locality and distance (MAJOR-2)', () => {
       prePlanCopy('OCC-FAR', '123 Main St', { location: offset(400) }),
     ]);
     expect(
-      await findPrePlanByAddress(client, TABLE, DEPT_ID, '123 Main St', ORIGIN),
+      await findPrePlanByAddress(client, TABLE, DEPT_ID, '123 Main St', ORIGIN, HOME),
     ).toBeUndefined();
     expect(
-      matchedId(await findPrePlanByAddress(client, TABLE, DEPT_ID, '123 Main St', offset(350))),
+      matchedId(
+        await findPrePlanByAddress(client, TABLE, DEPT_ID, '123 Main St', offset(350), HOME),
+      ),
     ).toBe('OCC-FAR');
+  });
+
+  it('never trusts a stored unit written by older rules — the unit is re-read from the address', async () => {
+    const stale = { ...prePlanCopy('OCC-LOT', '100 Lot Rd'), addressUnit: 'RD' };
+    expect(await byAddress([stale], '100 Lot Rd')).toMatchObject({ matchType: 'ADDRESS' });
   });
 });
 
@@ -374,7 +437,9 @@ describe('capped reads are reported, never silent (minor 9)', () => {
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
     const { client, send } = endlessIndex(prePlanCopy('OCC-1', '123 Main St'));
 
-    expect(await findPrePlanByAddress(client, TABLE, DEPT_ID, '123 Main St')).toBeUndefined();
+    expect(
+      await findPrePlanByAddress(client, TABLE, DEPT_ID, '123 Main St', undefined, HOME),
+    ).toBeUndefined();
 
     expect(send).toHaveBeenCalledTimes(5);
     expect(errorSpy.mock.calls.join('\n')).toContain('preplan_copy.query_truncated');

@@ -2,7 +2,8 @@ import { QueryCommand, type DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb
 import type { VerifiedDeptId } from '@boxalarm/dept-scope';
 import { emitOutcomeMetric } from '@boxalarm/metrics';
 import { logError } from '../dispatches/logger.js';
-import { normalizeAddress, type NormalizedAddress } from './addressKey.js';
+import { normalizeAddress } from './addressKey.js';
+import { judgeLocality, type HomeLocality } from './locality.js';
 import {
   ADDRESS_INDEX_NAME,
   GEO_INDEX_NAME,
@@ -117,14 +118,6 @@ function isPrePlanCopy(
   );
 }
 
-/** Rejects a candidate whose town or ZIP differs — only when both sides carry one. */
-function sameLocality(dispatch: NormalizedAddress, candidate: PrePlanCopyItem): boolean {
-  if (dispatch.town && candidate.addressTown && dispatch.town !== candidate.addressTown) {
-    return false;
-  }
-  return !(dispatch.zip && candidate.addressZip && dispatch.zip !== candidate.addressZip);
-}
-
 /** Rejects a candidate far from the dispatch point — only when both sides carry coordinates. */
 function closeEnough(dispatchPoint: GeoPoint | undefined, candidate: PrePlanCopyItem): boolean {
   const location = { latitude: candidate.latitude, longitude: candidate.longitude };
@@ -135,8 +128,12 @@ function closeEnough(dispatchPoint: GeoPoint | undefined, candidate: PrePlanCopy
 }
 
 /** How a pre-plan was tied to the dispatch — shown to the crew, never hidden. */
+/**
+ * ADDRESS / ADDRESS_BUILDING are the only unflagged types: same key, both addresses parsed
+ * unambiguously, locality verified (locality.ts). Everything else is shown "verify address".
+ */
 export type PrePlanMatchType =
-  'ADDRESS' | 'ADDRESS_BUILDING' | 'UNIT_MISMATCH' | 'NEARBY' | 'CANDIDATES';
+  'ADDRESS' | 'ADDRESS_BUILDING' | 'ADDRESS_UNVERIFIED' | 'UNIT_MISMATCH' | 'NEARBY' | 'CANDIDATES';
 
 export interface PrePlanCandidate {
   readonly copy: PrePlanCopyItem;
@@ -199,15 +196,18 @@ function byUnit(a: PrePlanCopyItem, b: PrePlanCopyItem): number {
 }
 
 /**
- * The pre-plan(s) whose normalized street address equals the dispatch's, in the same town/ZIP
- * (when both say) and within 150 m (when both have coordinates), resolved by unit.
+ * The pre-plan(s) whose normalized street address equals the dispatch's, not in a different
+ * town/ZIP/state (locality.ts, against the department's home locality) and within 150 m (when
+ * both have coordinates), resolved by unit. A single match that could not be verified comes
+ * back as ADDRESS_UNVERIFIED, never as a plain ADDRESS.
  */
 export async function findPrePlanByAddress(
   client: DynamoDBDocumentClient,
   tableName: string,
   deptId: VerifiedDeptId,
   address: string,
-  dispatchPoint?: GeoPoint,
+  dispatchPoint: GeoPoint | undefined,
+  home: HomeLocality,
 ): Promise<PrePlanMatch | undefined> {
   const normalized = normalizeAddress(address);
   if (!normalized) {
@@ -225,11 +225,39 @@ export async function findPrePlanByAddress(
     reportTruncation('address', deptId, normalized.key);
     return undefined;
   }
-  const candidates = items
+  // Each candidate is re-read from its own address (never trusting stored unit/town fields,
+  // which an older normalizer may have written) and judged against the dispatch's locality.
+  const judged = items
     .filter(isPrePlanCopy)
-    .filter((candidate) => sameLocality(normalized, candidate))
-    .filter((candidate) => closeEnough(dispatchPoint, candidate));
-  return resolveUnit(normalized.unit, candidates);
+    .filter((candidate) => closeEnough(dispatchPoint, candidate))
+    .flatMap((candidate) => {
+      const parsed = candidate.address ? normalizeAddress(candidate.address) : null;
+      if (!parsed || parsed.key !== normalized.key) {
+        // Indexed under a key the current rules no longer give its address (written by an
+        // older normalizer; the replay re-keys it): under today's rules it is another street.
+        return [];
+      }
+      const verdict = judgeLocality(normalized, parsed, home);
+      if (verdict === 'REJECT') return [];
+      // The unit as the current rules read it, replacing whatever an older rule stored.
+      const copy: PrePlanCopyItem = { ...candidate };
+      delete (copy as { addressUnit?: string }).addressUnit;
+      if (parsed.unit) (copy as { addressUnit?: string }).addressUnit = parsed.unit;
+      return [{ copy, verdict }];
+    });
+  const match = resolveUnit(
+    normalized.unit,
+    judged.map((entry) => entry.copy),
+  );
+  if (match && (match.matchType === 'ADDRESS' || match.matchType === 'ADDRESS_BUILDING')) {
+    const verdict = judged.find(
+      (entry) => entry.copy.occupancyId === match.copy.occupancyId,
+    )?.verdict;
+    if (verdict !== 'VERIFIED') {
+      return { matchType: 'ADDRESS_UNVERIFIED', copy: match.copy };
+    }
+  }
+  return match;
 }
 
 /**

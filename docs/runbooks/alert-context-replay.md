@@ -50,3 +50,32 @@ Run it once per department. The timeout is 15 minutes. If a very large departmen
 - Metrics `Boxalarm/alerting-pre-plan`: `PrePlanCopyUpdated` and `HydrantCopyUpdated` should rise by about the emitted counts within a minute. `…MissingFields` / `HydrantCopyMissingLocation` flag records that are stored but cannot be found from a dispatch (no address, or no coordinates). Fix those records in inspections, not here.
 - The copy DLQs (`boxalarm-<env>-alerting-preplan-copy-dlq`, `…-hydrant-copy-dlq`) should stay empty. They page through `alerting-page` if they do not.
 - Open a dispatch at a pre-planned address. The Pre-plan panel should read "Pre-plan for <address>".
+
+## Home locality (how a pre-plan address match is verified)
+
+Occupancy addresses carry no town, so the dispatch detail needs each department's **home locality** to tell "123 Main St" in Trumbull from "123 Main St, Bridgeport" on a mutual-aid call. The home locality is the set of towns, villages and ZIPs the department's own addresses are written with.
+
+A pre-plan is shown as a plain match ("Pre-plan for …") only when both addresses parsed unambiguously **and** the locality is verified:
+
+- the dispatch names a home town, village or ZIP, or names none; and
+- the pre-plan's own town/ZIP is home (a town-less pre-plan inherits the home locality).
+
+A dispatch naming a town, ZIP or state outside it never matches. Anything in between is shown as **"VERIFY ADDRESS"** (`matchType: ADDRESS_UNVERIFIED`).
+
+Where it comes from, first match wins:
+
+1. **The alerting-table item** `pk = DEPT#<deptId>#CONFIG`, `sk = HOME_LOCALITY`. Set this per department; it takes effect on the next dispatch view, with no deploy:
+
+   ```sh
+   aws dynamodb put-item --table-name boxalarm-<env>-alerting-table --item '{
+     "pk": {"S": "DEPT#<deptId>#CONFIG"}, "sk": {"S": "HOME_LOCALITY"},
+     "towns": {"L": [{"S": "Trumbull"}, {"S": "Nichols"}, {"S": "Long Hill"}, {"S": "Trumbull Center"}]},
+     "zips":  {"L": [{"S": "06611"}]},
+     "state": {"S": "CT"} }'
+   ```
+
+2. **The stack default** `ALERTING_HOME_LOCALITY` on the dispatch-detail Lambda. It comes from the Pulumi config `boxalarm-infra:alertingHomeLocality` (JSON, same shape). Without that config it falls back to the built-in default for the stack's `deptId` (`infrastructure/components/alerting/home-locality.ts`; `nichols-fd` → Trumbull, Nichols, Long Hill, Trumbull Center, 06611, CT).
+
+3. **Neither.** No match can be verified, and every address match is shown "VERIFY ADDRESS". This is safe but noisy. `pulumi up` warns about it.
+
+If CAD writes a village the set does not list, add it. Until then such calls show "VERIFY ADDRESS" when the ZIP agrees, and no pre-plan otherwise.
