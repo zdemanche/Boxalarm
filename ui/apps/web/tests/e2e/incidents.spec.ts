@@ -162,7 +162,11 @@ test('incident list and report pass axe on the default, error, and validated sta
   expect(errorResults.violations).toEqual([]);
 
   await page.getByRole('button', { name: 'Review and submit' }).click();
-  await expect(page.getByRole('button', { name: 'Submit', exact: true })).toBeEnabled();
+  // Validated is not enough: Submit opens only once an officer has reviewed and locked it.
+  await expect(page.getByRole('button', { name: 'Submit', exact: true })).toBeDisabled();
+  await expect(
+    page.getByText('Submit stays unavailable until an officer reviews and locks the report.'),
+  ).toBeVisible();
   const reviewResults = await new AxeBuilder({ page }).include('main').analyze();
   expect(reviewResults.violations).toEqual([]);
 });

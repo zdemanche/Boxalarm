@@ -169,16 +169,25 @@ function IncidentReport({ incident }: { incident: IncidentDetail }) {
       : { status: 'unavailable', retry: () => void nerisSchema.refetch() };
 
   const submitted = incident.status !== 'DRAFT' && incident.status !== 'VALIDATED';
+  // After unlock -> edit -> re-lock the status is DRAFT/VALIDATED again, but the report has
+  // still been sent: keep the ledger (and Resubmit) reachable whenever it ever was.
+  const everSent =
+    submitted ||
+    Boolean(incident.nerisIncidentId) ||
+    Boolean(incident.submissionStatus) ||
+    Boolean(incident.firstSubmittedAt);
   const submissionQuery = useQuery({
     queryKey: ['incident-submission', incident.incidentId],
     queryFn: () => getSubmission(auth, incident.incidentId),
-    enabled: submitted,
+    enabled: everSent,
     refetchInterval: (query) => {
       const status = query.state.data?.submissionStatus;
       return status === 'SUBMITTED' || status === 'RETRYING' ? SUBMISSION_POLL_MS : false;
     },
   });
   const submissionIncidentStatus = submissionQuery.data?.status;
+  /** NERIS holds this report: corrections go through Resubmit (submit answers 409 USE_RESUBMIT). */
+  const nerisIncidentId = incident.nerisIncidentId ?? submissionQuery.data?.nerisIncidentId;
 
   const active = steps[step] ?? steps[0];
   const missing = missingRequiredCoreFields(CORE_SCHEMA, fields);
@@ -515,6 +524,13 @@ function IncidentReport({ incident }: { incident: IncidentDetail }) {
       });
       setAnnounce('Report sent to NERIS. Waiting for NERIS to accept it.');
     } catch (error) {
+      if (problemCode(error) === 'USE_RESUBMIT') {
+        // NERIS already has it; re-read so Resubmit replaces Submit.
+        void queryClient.invalidateQueries({ queryKey: ['incident', incident.incidentId] });
+        void queryClient.invalidateQueries({
+          queryKey: ['incident-submission', incident.incidentId],
+        });
+      }
       const detail = problemText(error, 'Unable to submit the report to NERIS.');
       setSubmitError(detail);
       setAnnounce(detail);
@@ -931,9 +947,12 @@ function IncidentReport({ incident }: { incident: IncidentDetail }) {
           </StatusChip>
         </p>
         {submitError ? <p role="alert">{submitError}</p> : null}
-        {submitted ? (
-          renderSubmissionPanel()
-        ) : (
+        {nerisIncidentId && !locked ? (
+          <p id="resubmit-status">
+            NERIS already has this report. Lock it again after review, then resubmit the changes.
+          </p>
+        ) : null}
+        {submitted || nerisIncidentId ? null : (
           <>
             <p id="submit-status">
               {!locked
@@ -953,6 +972,7 @@ function IncidentReport({ incident }: { incident: IncidentDetail }) {
             </Button>
           </>
         )}
+        {everSent ? renderSubmissionPanel() : null}
       </div>
     );
   }

@@ -558,6 +558,15 @@ export async function incidentsDemoRequest(
 
   // Demo NERIS submission: the worker is simulated as accepting on the next status read.
   if (parts[2] === 'submit' && method === 'POST') {
+    if (nerisIdByIncident.has(incidentId)) {
+      return json(
+        {
+          ...problemBody(409, 'NERIS already has this report; send the changes with Resubmit.'),
+          code: 'USE_RESUBMIT',
+        },
+        409,
+      );
+    }
     if (incident.status !== 'VALIDATED') {
       return problem(
         409,
