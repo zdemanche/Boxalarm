@@ -137,6 +137,9 @@ describe('locked reports reject edits on every PUT route', () => {
       const actual = await importOriginal<typeof import('./secondaryRepository.js')>();
       return {
         ...actual,
+        // No module yet: a member creating their own exposure passes the M3 write rule and
+        // reaches the write, where the late lock is what refuses it.
+        getIncidentSecondary: () => Promise.resolve(undefined),
         putIncidentSecondary: async () => {
           throw new (await lockModule()).IncidentLockedError(INCIDENT_ID);
         },
@@ -164,7 +167,7 @@ describe('locked reports reject edits on every PUT route', () => {
     const result = await invoke(
       './putExposures.js',
       'PUT /api/v1/incidents/{incidentId}/exposures',
-      { secondaryType: 'EXPOSURE', payload: {}, affectedMemberIds: [] },
+      { secondaryType: 'EXPOSURE', payload: {}, affectedMemberIds: [MEMBER_AUTH.sub] },
     );
     vi.unmock('./schemaVersion/repository.js');
     vi.unmock('./schemaVersion/s3Schema.js');
