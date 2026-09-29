@@ -60,24 +60,39 @@ interface QueryResult {
   readonly truncated: boolean;
 }
 
+/**
+ * Hydrant copies read per geohash cell, at most. The widened (geohash5, ~5 km) ring would
+ * otherwise read most of a rural department's hydrants on every detail view; 9 cells x 200
+ * bounds it to ~1,800 small projected items (~45 RCU), and a cell that holds more is reported
+ * as a truncated read (the hydrant list is then marked incomplete).
+ */
+export const MAX_HYDRANTS_PER_CELL = 200;
+
 async function queryAll(
   client: DynamoDBDocumentClient,
   input: ConstructorParameters<typeof QueryCommand>[0],
+  maxItems = Number.POSITIVE_INFINITY,
 ): Promise<QueryResult> {
   const items: Record<string, unknown>[] = [];
   let exclusiveStartKey: Record<string, unknown> | undefined;
   let pages = 0;
   do {
+    const remaining = maxItems - items.length;
     const output = await client.send(
       new QueryCommand({
         ...input,
+        ...(Number.isFinite(remaining) ? { Limit: remaining } : {}),
         ...(exclusiveStartKey ? { ExclusiveStartKey: exclusiveStartKey } : {}),
       }),
     );
     items.push(...((output?.Items ?? []) as Record<string, unknown>[]));
     exclusiveStartKey = output?.LastEvaluatedKey as Record<string, unknown> | undefined;
     pages += 1;
-  } while (exclusiveStartKey !== undefined && pages < MAX_PAGES_PER_QUERY);
+  } while (
+    exclusiveStartKey !== undefined &&
+    pages < MAX_PAGES_PER_QUERY &&
+    items.length < maxItems
+  );
   return { items, truncated: exclusiveStartKey !== undefined };
 }
 
@@ -277,18 +292,22 @@ async function queryHydrantCells(
 ): Promise<{ readonly hydrants: HydrantCopy[]; readonly truncated: boolean }> {
   const pages = await Promise.all(
     cells.map((cell) =>
-      queryAll(client, {
-        TableName: tableName,
-        IndexName: GEO_INDEX_NAME,
-        KeyConditionExpression: 'gsi2pk = :gsi2pk AND begins_with(gsi2sk, :cell)',
-        ExpressionAttributeValues: {
-          ':gsi2pk': geoPartitionForCell(deptId, 'HYDRANT_GEO', cell),
-          ':cell': cell,
+      queryAll(
+        client,
+        {
+          TableName: tableName,
+          IndexName: GEO_INDEX_NAME,
+          KeyConditionExpression: 'gsi2pk = :gsi2pk AND begins_with(gsi2sk, :cell)',
+          ExpressionAttributeValues: {
+            ':gsi2pk': geoPartitionForCell(deptId, 'HYDRANT_GEO', cell),
+            ':cell': cell,
+          },
+          ProjectionExpression:
+            'entityType, hydrantId, latitude, longitude, #status, #size, flowRatingGpm, archivedAt',
+          ExpressionAttributeNames: { '#status': 'status', '#size': 'size' },
         },
-        ProjectionExpression:
-          'entityType, hydrantId, latitude, longitude, #status, #size, flowRatingGpm, archivedAt',
-        ExpressionAttributeNames: { '#status': 'status', '#size': 'size' },
-      }),
+        MAX_HYDRANTS_PER_CELL,
+      ),
     ),
   );
   return {

@@ -8,6 +8,7 @@ import {
   findNearestHydrants,
   findPrePlanByAddress,
   findPrePlanNear,
+  MAX_HYDRANTS_PER_CELL,
   type PrePlanMatch,
 } from './prePlanCopyRepository.js';
 
@@ -329,6 +330,18 @@ describe('findNearestHydrants', () => {
 
     expect(send).toHaveBeenCalledTimes(18);
     expect(hydrants.map((h) => h.hydrantId)).toEqual(['H-NEAR', 'H-FAR-1', 'H-FAR-2']);
+  });
+
+  it('bounds every hydrant cell read (minor 10): Limit per query, so the widened rural ring cannot read the whole department', async () => {
+    const { client, send } = fakeIndex([hydrantCopy('H-FAR', offset(2500))]);
+
+    await findNearestHydrants(client, TABLE, DEPT_ID, ORIGIN);
+
+    // Both rings (geohash6 then geohash5): 18 queries, every one capped.
+    expect(send).toHaveBeenCalledTimes(18);
+    for (const call of send.mock.calls) {
+      expect((call[0].input as { Limit?: number }).Limit).toBe(MAX_HYDRANTS_PER_CELL);
+    }
   });
 
   it('returns an empty list when no hydrant copy is anywhere near', async () => {
