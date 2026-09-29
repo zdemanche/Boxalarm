@@ -51,12 +51,11 @@ Before relying on push, run the device checklist in `docs/runbooks/push-device-v
 
 ## Deploying
 
-`lambdaCode()` (`components/shared/lambda-code.ts`) wires each Lambda to `../backend/dist/<service>/<function>/index.mjs`
-when that bundle exists, and otherwise falls back to a fail-closed 501 placeholder — so `pulumi preview`/`pulumi up`
-never fail outright for a missing build. **Always run `cd backend && npm run bundle` before deploying** so every
-service/function key resolves to real code; a stale or missing bundle silently redeploys that Lambda back to the
-501 stub. `lambdaCode()` logs a Pulumi warning for every fallback it takes — check `pulumi preview`/`pulumi up`
-output for `lambdaCode: no bundle found for ...` before proceeding with any deploy.
+`lambdaCode()` (`components/shared/lambda-code.ts`) wires each Lambda to `../backend/dist/<service>/<function>/index.mjs`.
+**Run `cd backend && npm run bundle` before every deploy.** On qa, staging and prod a missing bundle fails
+`pulumi preview`/`pulumi up`. Only the dev stack (and unit tests) may fall back to a placeholder, with a
+`lambdaCode: no bundle found for ...` warning. The placeholder answers HTTP routes with 501 and throws on every
+stream, queue, schedule or async event, so those retry into their DLQs and page instead of being acknowledged.
 
 ## Getting started
 
