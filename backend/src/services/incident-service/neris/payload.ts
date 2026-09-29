@@ -378,7 +378,10 @@ function withoutCivilianFfDetails(entry: unknown): unknown {
 export function casualtyIssues(schema: CompiledNerisSchema, value: unknown): SchemaIssue[] {
   const node = moduleNode(schema, 'casualty_rescues');
   if (!node) return [];
-  return validateNode(schema, node, value).filter(
+  // Validate what is sent: a civilian's firefighter-injury details are stripped before
+  // sending, so their values can never block lock (round 2c, Q3).
+  const sent = Array.isArray(value) ? value.map(withoutCivilianFfDetails) : value;
+  return validateNode(schema, node, sent).filter(
     (issue) =>
       /^\[\d+\]\.(type|casualty)(\.|\[|$)/.test(issue.path) &&
       !issue.path.split(/[.[\]]/).some((segment) => NEVER_SENT_KEYS.has(segment)),

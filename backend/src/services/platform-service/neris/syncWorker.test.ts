@@ -89,4 +89,47 @@ describe('NERIS entity sync worker', () => {
       ':message': 'NERIS secret missing',
     });
   });
+
+  it('exits without working when the row belongs to another sync (round 2c, Q4)', async () => {
+    ddbSend.mockResolvedValue({
+      Item: { syncStatus: 'SYNCING', pendingRequest: REQUEST, syncStartedAt: 'newer' },
+    });
+    await handler(
+      { deptId: 'NICHOLS', correlationId: 'c', syncStartedAt: 'older' },
+      {} as never,
+      () => undefined,
+    );
+    expect(syncEntity).not.toHaveBeenCalled();
+    expect(saveEntityRecord).not.toHaveBeenCalled();
+  });
+
+  it('saves only over its own sync, and stops quietly when superseded mid-run', async () => {
+    ddbSend.mockImplementation((command: Command) =>
+      Promise.resolve(
+        (command.input.Key as { sk: string }).sk === 'CONFIG#NERIS'
+          ? { Item: { value: { departmentNerisId: 'FD09190828' } } }
+          : { Item: { syncStatus: 'SYNCING', pendingRequest: REQUEST, syncStartedAt: 't1' } },
+      ),
+    );
+    syncEntity.mockResolvedValue({
+      departmentNerisId: 'FD09190828',
+      stations: [],
+      units: [],
+      errors: [],
+    });
+    saveEntityRecord.mockResolvedValue('stale');
+    await handler(
+      { deptId: 'NICHOLS', correlationId: 'c', syncStartedAt: 't1' },
+      {} as never,
+      () => undefined,
+    );
+    expect(saveEntityRecord).toHaveBeenCalledWith(
+      expect.anything(),
+      'platform-table',
+      'NICHOLS',
+      expect.anything(),
+      'c',
+      't1',
+    );
+  });
 });

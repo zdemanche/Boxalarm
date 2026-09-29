@@ -96,7 +96,9 @@ async function inner(
         'NOT_CONFIGURED',
       );
     }
-    const started = await markSyncing(client, tableName, deptId, parsed, principal.sub, new Date());
+    const startedAt = new Date();
+    const syncStartedAt = startedAt.toISOString();
+    const started = await markSyncing(client, tableName, deptId, parsed, principal.sub, startedAt);
     if (started === 'already_running') {
       return problem(
         409,
@@ -113,7 +115,8 @@ async function inner(
         new InvokeCommand({
           FunctionName: readWorkerName(),
           InvocationType: 'Event',
-          Payload: Buffer.from(JSON.stringify({ deptId, correlationId: traceId })),
+          // syncStartedAt identifies this sync: a delayed or superseded job exits (Q4).
+          Payload: Buffer.from(JSON.stringify({ deptId, correlationId: traceId, syncStartedAt })),
         }),
       );
     } catch (error) {
@@ -124,11 +127,12 @@ async function inner(
         deptId,
         "The sync couldn't be started. Try again.",
         new Date(),
+        syncStartedAt,
       ).catch(() => undefined);
       throw error;
     }
     logger.info({ event: 'platform.neris.entity.sync_started', correlationId: traceId, deptId });
-    return json(202, { status: 'SYNCING', startedAt: new Date().toISOString() });
+    return json(202, { status: 'SYNCING', startedAt: syncStartedAt });
   } catch (error) {
     logger.error({
       event: 'platform.neris.entity.sync_failed',

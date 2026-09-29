@@ -470,13 +470,17 @@ export async function markSyncFailed(
   deptId: VerifiedDeptId,
   message: string,
   now: Date,
+  /** Only the sync that started at this time is failed (round 2c, Q4). */
+  syncStartedAt?: string,
 ): Promise<void> {
   try {
     await client.send(
       new UpdateCommand({
         TableName: tableName,
         Key: { pk: buildDeptScopedPk(deptId), sk: ENTITY_SK },
-        ConditionExpression: 'syncStatus = :syncing',
+        ConditionExpression: syncStartedAt
+          ? 'syncStatus = :syncing AND syncStartedAt = :started'
+          : 'syncStatus = :syncing',
         UpdateExpression:
           'SET syncStatus = :failed, syncError = :message, syncFailedAt = :now REMOVE pendingRequest',
         ExpressionAttributeValues: {
@@ -484,6 +488,7 @@ export async function markSyncFailed(
           ':failed': 'FAILED',
           ':message': message.slice(0, 500),
           ':now': now.toISOString(),
+          ...(syncStartedAt ? { ':started': syncStartedAt } : {}),
         },
       }),
     );
@@ -499,6 +504,35 @@ export async function saveEntityRecord(
   deptId: VerifiedDeptId,
   record: EntitySyncRecord,
   correlationId: string,
+  /**
+   * Saves only over the sync that started at this time and is still SYNCING: a stale job
+   * (delayed, or superseded by a newer sync) must not overwrite it (round 2c, Q4).
+   */
+  syncStartedAt?: string,
+): Promise<'saved' | 'stale'> {
+  try {
+    await saveTransaction(client, tableName, deptId, record, correlationId, syncStartedAt);
+    return 'saved';
+  } catch (error) {
+    const reasons = (error as { CancellationReasons?: { Code?: string }[] }).CancellationReasons;
+    if (
+      error instanceof Error &&
+      error.name === 'TransactionCanceledException' &&
+      reasons?.[0]?.Code === 'ConditionalCheckFailed'
+    ) {
+      return 'stale';
+    }
+    throw error;
+  }
+}
+
+async function saveTransaction(
+  client: DynamoDBDocumentClient,
+  tableName: string,
+  deptId: VerifiedDeptId,
+  record: EntitySyncRecord,
+  correlationId: string,
+  syncStartedAt: string | undefined,
 ): Promise<void> {
   await client.send(
     new TransactWriteCommand({
@@ -513,6 +547,12 @@ export async function saveEntityRecord(
               ...record,
               syncStatus: record.errors.length > 0 ? 'PARTIAL' : 'SYNCED',
             },
+            ...(syncStartedAt
+              ? {
+                  ConditionExpression: 'syncStatus = :syncing AND syncStartedAt = :started',
+                  ExpressionAttributeValues: { ':syncing': 'SYNCING', ':started': syncStartedAt },
+                }
+              : {}),
           },
         },
         {

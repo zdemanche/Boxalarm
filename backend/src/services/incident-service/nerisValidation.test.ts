@@ -380,7 +380,8 @@ describe('casualties and rescues', () => {
           casualty: {
             injury_or_noninjury: {
               type: 'INJURED_NONFATAL',
-              ff_injury_details: { job_classification: 'VOLUNTEER' },
+              // Invalid, but stripped before sending, so it must not block (round 2c, Q3).
+              ff_injury_details: { job_classification: 'NOT_A_JOB' },
             },
           },
         },

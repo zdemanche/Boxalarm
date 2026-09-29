@@ -143,6 +143,9 @@ export class NerisEntity extends pulumi.ComponentResource {
       {
         functionName: this.workerLambda.function.name,
         maximumRetryAttempts: 0,
+        // A sync start delayed in Lambda's async queue is dropped (to the failure queue)
+        // rather than run minutes later over a newer request (round 2c, Q4).
+        maximumEventAgeInSeconds: 60,
         destinationConfig: {
           onFailure: { destination: this.workerFailureQueue.arn },
         },

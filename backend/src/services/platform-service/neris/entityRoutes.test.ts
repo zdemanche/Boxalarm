@@ -121,6 +121,13 @@ describe('PUT /platform/neris/entity', () => {
       FunctionName: 'boxalarm-dev-platform-neris-entity-sync-worker',
       InvocationType: 'Event',
     });
+    // The job names its sync, the same time markSyncing stored (round 2c, Q4).
+    const job = JSON.parse(Buffer.from(invoke.Payload as Uint8Array).toString()) as {
+      syncStartedAt: string;
+    };
+    expect(job.syncStartedAt).toBe(
+      (update.input.ExpressionAttributeValues as Record<string, string>)[':now'],
+    );
     expect(syncEntity).not.toHaveBeenCalled();
   });
 
@@ -140,7 +147,7 @@ describe('PUT /platform/neris/entity', () => {
       .map(([c]) => c as Command)
       .filter((c) => c.constructor.name === 'UpdateCommand');
     expect(updates[1]!.input).toMatchObject({
-      ConditionExpression: 'syncStatus = :syncing',
+      ConditionExpression: 'syncStatus = :syncing AND syncStartedAt = :started',
       ExpressionAttributeValues: expect.objectContaining({ ':failed': 'FAILED' }) as unknown,
     });
   });
