@@ -23,6 +23,9 @@ export interface NerisSubmissionWorkerArgs {
   logGroup: ServiceLogGroup;
 }
 
+/** Lambda timeout for the worker; the queue's visibility timeout is 6x this. */
+export const SUBMISSION_WORKER_TIMEOUT_SECONDS = 90;
+
 /** Name prefix submissionWorker.ts gives every retry schedule it creates. */
 export const SUBMISSION_RETRY_SCHEDULE_PREFIX = "neris-submission-retry-";
 
@@ -86,10 +89,12 @@ export class NerisSubmissionWorker extends pulumi.ComponentResource {
         handler: LAMBDA_HANDLER,
         code: lambdaCode("incident-service", "submission-worker"),
         logGroup: args.logGroup,
-        // One outbound NERIS POST/PUT plus SSM/Secrets reads on a cold start; the 3s Lambda
-        // default would misclassify a slow NERIS response as a failure. Kept under the
-        // queue's default 30s visibility timeout, which AWS requires.
-        timeout: 25,
+        // One report per invocation (batchSize 1). Worst NERIS call chain, 4 s per call
+        // (client.ts NERIS_CALL_TIMEOUT_MS): token, 2 adopt GETs, POST, 2 adopt GETs, PUT
+        // = 28 s; a 401 on every call adds a token fetch and a repeat each = 76 s. Plus
+        // SSM/Secrets/DynamoDB reads on a cold start. The queue's visibility timeout is 6x
+        // this (AWS guidance for SQS event sources).
+        timeout: SUBMISSION_WORKER_TIMEOUT_SECONDS,
         environment: {
           INCIDENT_TABLE_NAME: args.incidentTableName,
           NERIS_BASE_URL_PARAM: `/boxalarm/${env}/neris/base-url`,
@@ -209,6 +214,8 @@ export class NerisSubmissionWorker extends pulumi.ComponentResource {
         lambdaRole: this.lambda.role,
         maxReceiveCount: 5,
         reportBatchItemFailures: true,
+        batchSize: 1,
+        visibilityTimeoutSeconds: SUBMISSION_WORKER_TIMEOUT_SECONDS * 6,
       },
       { parent: this },
     );

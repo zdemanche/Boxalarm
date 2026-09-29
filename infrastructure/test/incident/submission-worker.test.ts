@@ -148,8 +148,14 @@ describe("NerisSubmissionWorker", () => {
       resolve(worker.lambda.function.timeout),
       resolve(worker.consumer.queue.visibilityTimeoutSeconds),
     ]);
-    expect(timeout).toBeGreaterThan(3);
-    expect(timeout ?? 0).toBeLessThanOrEqual(visibility ?? 30);
+    // Fits the worst NERIS call chain (76 s, neris/client.ts); visibility >= 6x timeout.
+    expect(timeout ?? 0).toBeGreaterThanOrEqual(76);
+    expect(visibility ?? 30).toBeGreaterThanOrEqual((timeout ?? 0) * 6);
+  });
+
+  it("runs one report per invocation so the timeout budget covers a single send", async () => {
+    const worker = await build();
+    expect(await resolve(worker.consumer.eventSourceMapping.batchSize)).toBe(1);
   });
 
   it("pages the chief's LOB topic on terminal ClientError and NotConfigured failures (review M6)", async () => {
