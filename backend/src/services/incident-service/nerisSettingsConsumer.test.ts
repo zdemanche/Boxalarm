@@ -154,6 +154,7 @@ describe('getNerisDeptSettings', () => {
       autoSubmitOnLock: true,
       submissionsEnabled: false,
       rules: { requireNarrative: true, minNarrativeLength: 25, requireUnitTimes: true },
+      timeZone: 'America/New_York',
       unitNerisIds: { E1: 'FD09190828S001U001' },
       entitySyncedAt: '2026-09-29T10:00:00.000Z',
     });

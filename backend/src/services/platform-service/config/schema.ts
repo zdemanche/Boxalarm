@@ -253,6 +253,7 @@ const NERIS_KNOWN_FIELDS = [
   'autoSubmitOnLock',
   'submissionsEnabled',
   'rules',
+  'timeZone',
 ] as const;
 const NERIS_RULE_FIELDS = ['requireNarrative', 'minNarrativeLength', 'requireUnitTimes'] as const;
 
@@ -273,6 +274,22 @@ function validateNeris(value: Record<string, unknown>): FieldError[] {
   for (const field of ['autoSubmitOnLock', 'submissionsEnabled'] as const) {
     if (value[field] !== undefined && typeof value[field] !== 'boolean') {
       errors.push({ field, message: 'must be a boolean when provided' });
+    }
+  }
+  if (value.timeZone !== undefined) {
+    let valid = typeof value.timeZone === 'string' && value.timeZone.length > 0;
+    if (valid) {
+      try {
+        new Intl.DateTimeFormat('en-US', { timeZone: value.timeZone as string });
+      } catch {
+        valid = false;
+      }
+    }
+    if (!valid) {
+      errors.push({
+        field: 'timeZone',
+        message: 'must be an IANA time zone such as America/New_York when provided',
+      });
     }
   }
   if (value.rules !== undefined) {

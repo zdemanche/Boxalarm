@@ -9,6 +9,7 @@ import { getNerisDeptSettings } from './nerisSettings.js';
 import { nerisApiFromEnv } from './reportContext.js';
 import { describeNerisIssue } from './nerisValidation.js';
 import { readJsonObject } from './routeInput.js';
+import { zonedMonth, zonedMonthBounds } from './neris/zonedTime.js';
 
 const MONTH_PATTERN = /^(20[2-9]\d)-(0[1-9]|1[0-2])$/;
 
@@ -16,14 +17,6 @@ const MONTH_PATTERN = /^(20[2-9]\d)-(0[1-9]|1[0-2])$/;
 export function toNerisMonthYear(month: string): string {
   const [year, mm] = month.split('-');
   return `${mm}/${year}`;
-}
-
-function monthBounds(month: string): { from: number; to: number } {
-  const [year, mm] = month.split('-').map(Number) as [number, number];
-  return {
-    from: Date.UTC(year, mm - 1, 1) / 1000,
-    to: Date.UTC(year, mm, 1) / 1000 - 1,
-  };
 }
 
 /**
@@ -43,19 +36,19 @@ async function inner(
   if (typeof month !== 'string' || !MONTH_PATTERN.test(month)) {
     return problemResponse(400, 'Bad Request', 'month is required as YYYY-MM.', traceId);
   }
-  if (month >= new Date().toISOString().slice(0, 7)) {
-    return problemResponse(
-      400,
-      'Bad Request',
-      'A no-activity report can only be filed for a month that has ended.',
-      traceId,
-    );
-  }
-
   const client = getDocumentClient();
   const tableName = getTableName(process.env);
   try {
     const settings = await getNerisDeptSettings(client, tableName, deptId);
+    // Months are the department's own calendar months (review minor 6).
+    if (month >= zonedMonth(Date.now(), settings.timeZone)) {
+      return problemResponse(
+        400,
+        'Bad Request',
+        'A no-activity report can only be filed for a month that has ended.',
+        traceId,
+      );
+    }
     if (!settings.departmentNerisId || !settings.submissionsEnabled) {
       return problemResponse(
         409,
@@ -81,7 +74,7 @@ async function inner(
         },
       );
     }
-    const { from, to } = monthBounds(month);
+    const { from, to } = zonedMonthBounds(month, settings.timeZone);
     const incidents = await client.send(
       new QueryCommand({
         TableName: tableName,
@@ -106,10 +99,16 @@ async function inner(
     }
 
     const api = await nerisApiFromEnv();
-    const result = await api.createNoActivityReport(
+    // Idempotent (review minor 7): if an earlier attempt filed it with NERIS but the local
+    // record was not written, adopt NERIS's report instead of filing a second one.
+    const onFile = await api.listNoActivityReports(
       settings.departmentNerisId,
       toNerisMonthYear(month),
     );
+    const adopted = onFile.ok ? onFile.reports[0] : undefined;
+    const result = adopted
+      ? { ok: true as const, httpStatus: 200, nerisUid: adopted.nerisUid }
+      : await api.createNoActivityReport(settings.departmentNerisId, toNerisMonthYear(month));
     if (!result.ok) {
       emitIncidentMetric('NoActivityReportRejected');
       return result.kind === 'validation'

@@ -156,6 +156,11 @@ export interface NerisApi {
     entity: string,
     monthYear: string,
   ): Promise<NerisResult<{ nerisUid: string | undefined }>>;
+  /** GET /no_activity_report for one month (`MM/YYYY`): the reports NERIS holds. */
+  listNoActivityReports(
+    entity: string,
+    monthYear: string,
+  ): Promise<NerisResult<{ reports: readonly { nerisUid: string | undefined }[] }>>;
   createStation(entity: string, payload: unknown): Promise<NerisResult<{ nerisId: string }>>;
   patchStation(entity: string, station: string, payload: unknown): Promise<NerisResult<object>>;
   createUnit(
@@ -315,6 +320,25 @@ export function createNerisApi(client: NerisClient): NerisApi {
         httpStatus: response.status,
         nerisUid: typeof uid === 'string' ? uid : undefined,
       };
+    },
+
+    async listNoActivityReports(entity, monthYear) {
+      const query = new URLSearchParams({
+        neris_id_entity: entity,
+        start_month_year: monthYear,
+        end_month_year: monthYear,
+      });
+      const response = await client.fetch(
+        `${NERIS_PATHS.listNoActivityReports()}?${query.toString()}`,
+        { method: 'GET' },
+      );
+      if (!response.ok) return failure(response);
+      const raw = asRecord(await readJson(response))?.reports;
+      const reports = (Array.isArray(raw) ? raw : []).map((entry) => {
+        const uid = asRecord(entry)?.neris_uid;
+        return { nerisUid: typeof uid === 'string' ? uid : undefined };
+      });
+      return { ok: true, httpStatus: response.status, reports };
     },
 
     createStation: (entity, payload) => created(NERIS_PATHS.createStation(entity), payload),

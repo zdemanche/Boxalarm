@@ -1,5 +1,6 @@
 import { PutCommand, QueryCommand, type DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
 import { buildDeptScopedPk, type VerifiedDeptId } from '@boxalarm/dept-scope';
+import { DEFAULT_TIME_ZONE, isTimeZone } from './neris/zonedTime.js';
 
 /**
  * incident-service's copy of the department's NERIS settings. platform-service owns them
@@ -27,6 +28,8 @@ export interface NerisDeptSettings {
   /** Kill switch: when false nothing is sent to NERIS (default true). */
   readonly submissionsEnabled: boolean;
   readonly rules: NerisDepartmentRules;
+  /** IANA zone months are counted in (no-activity reports); default America/New_York. */
+  readonly timeZone: string;
   /** Boxalarm unitId -> NERIS unit id, from the last entity sync. */
   readonly unitNerisIds: Readonly<Record<string, string>>;
   readonly entitySyncedAt?: string;
@@ -42,6 +45,7 @@ export const DEFAULT_NERIS_SETTINGS: NerisDeptSettings = {
   autoSubmitOnLock: false,
   submissionsEnabled: true,
   rules: DEFAULT_RULES,
+  timeZone: DEFAULT_TIME_ZONE,
   unitNerisIds: {},
 };
 
@@ -104,6 +108,7 @@ export async function getNerisDeptSettings(
     autoSubmitOnLock: settings?.autoSubmitOnLock === true,
     submissionsEnabled: settings?.submissionsEnabled !== false,
     rules: parseRules(settings?.rules),
+    timeZone: isTimeZone(settings?.timeZone) ? settings.timeZone : DEFAULT_TIME_ZONE,
     unitNerisIds,
     ...(typeof entity?.syncedAt === 'string' ? { entitySyncedAt: entity.syncedAt } : {}),
   };
@@ -114,6 +119,7 @@ export interface NerisSettingsProjection {
   readonly autoSubmitOnLock: boolean;
   readonly submissionsEnabled: boolean;
   readonly rules: NerisDepartmentRules;
+  readonly timeZone?: string;
   readonly version: number;
 }
 

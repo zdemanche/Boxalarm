@@ -18,6 +18,7 @@ import { applyStatusChange, scannerDeptIds } from './statusPoller.js';
 import { nerisOpenKey } from '../submissionRepository.js';
 import { isNerisIncidentStatus } from './paths.js';
 import { toNerisIncidentNumber } from './payload.js';
+import { DEFAULT_TIME_ZONE, previousMonthOf, zonedMonth, zonedMonthBounds } from './zonedTime.js';
 
 const logger = createLogger({ service: 'incident-service' });
 const METRIC_NAMESPACE = 'Boxalarm/neris-reconciliation';
@@ -133,15 +134,13 @@ async function queryIncidentsBetween(
   return items;
 }
 
-/** `YYYY-MM` of the month before `now` (UTC), with its [start, end) epoch-second bounds. */
-export function previousMonth(now: Date): { month: string; from: number; to: number } {
-  const startOfThis = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1);
-  const startOfPrev = Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 1, 1);
-  return {
-    month: new Date(startOfPrev).toISOString().slice(0, 7),
-    from: startOfPrev / 1000,
-    to: startOfThis / 1000 - 1,
-  };
+/** The department-local month before `now`, with its inclusive epoch-second bounds. */
+export function previousMonth(
+  now: Date,
+  timeZone: string = DEFAULT_TIME_ZONE,
+): { month: string; from: number; to: number } {
+  const month = previousMonthOf(zonedMonth(now.getTime(), timeZone));
+  return { month, ...zonedMonthBounds(month, timeZone) };
 }
 
 export async function remindNoActivity(
@@ -150,8 +149,9 @@ export async function remindNoActivity(
   deptId: VerifiedDeptId,
   now: Date,
   correlationId: string,
+  timeZone: string = DEFAULT_TIME_ZONE,
 ): Promise<'reminded' | 'not_needed'> {
-  const { month, from, to } = previousMonth(now);
+  const { month, from, to } = previousMonth(now, timeZone);
   const incidents = await queryIncidentsBetween(client, tableName, deptId, from, to);
   if (incidents.length > 0) return 'not_needed';
   const pk = buildDeptScopedPk(deptId, 'NERIS');
@@ -391,8 +391,16 @@ export async function runReconciliation(
   const tableName = getTableName(process.env);
   const now = (deps.now ?? (() => new Date()))();
   for (const deptId of scannerDeptIds(process.env)) {
+    const settings = await getNerisDeptSettings(client, tableName, deptId);
     try {
-      const reminder = await remindNoActivity(client, tableName, deptId, now, correlationId);
+      const reminder = await remindNoActivity(
+        client,
+        tableName,
+        deptId,
+        now,
+        correlationId,
+        settings.timeZone,
+      );
       if (reminder === 'reminded') emitOutcomeMetric(METRIC_NAMESPACE, 'NoActivityReminderSent');
     } catch (error) {
       logger.error({
@@ -403,7 +411,6 @@ export async function runReconciliation(
       });
       emitOutcomeMetric(METRIC_NAMESPACE, 'NoActivityReminderFailed');
     }
-    const settings = await getNerisDeptSettings(client, tableName, deptId);
     if (!settings.departmentNerisId || !settings.submissionsEnabled) continue;
     try {
       const api = deps.api ?? (await nerisApiFromEnv());

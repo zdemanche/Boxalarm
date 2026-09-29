@@ -37,6 +37,8 @@ export const NERIS_PATHS = {
   listIncidents: (): string => '/incident',
   /** Body `{month_year: "MM/YYYY"}` -> 201 `NoActivityReportResponse`. */
   createNoActivityReport: (entity: string): string => `/no_activity_report/${seg(entity)}`,
+  /** `ListNoActivityReportResponse {reports}`; query `neris_id_entity`, `start_month_year`, `end_month_year`. */
+  listNoActivityReports: (): string => '/no_activity_report',
   /** Body `CreateStationPayload` -> 201 `StationCreatedModifiedResponse {neris_id, units}`. */
   createStation: (entity: string): string => `/entity/${seg(entity)}/station`,
   /** Body `PatchStationPayload` -> 200. */

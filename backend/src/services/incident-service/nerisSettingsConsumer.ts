@@ -130,6 +130,9 @@ async function processRecord(record: SQSRecord, deps: Deps): Promise<void> {
             autoSubmitOnLock: parsed.value.autoSubmitOnLock === true,
             submissionsEnabled: parsed.value.submissionsEnabled !== false,
             rules: parseRules(parsed.value.rules),
+            ...(typeof parsed.value.timeZone === 'string'
+              ? { timeZone: parsed.value.timeZone }
+              : {}),
             version: parsed.version,
           })
         : await putNerisEntityProjection(client, tableName, deptId, {

@@ -136,11 +136,14 @@ describe('reconcileDepartment', () => {
 
 describe('no-activity reminder', () => {
   it('computes the previous calendar month', () => {
+    // New York calendar months (EDT, UTC-4), not UTC ones (review minor 6).
     expect(previousMonth(new Date('2026-10-01T04:00:00Z'))).toEqual({
       month: '2026-09',
-      from: Date.UTC(2026, 8, 1) / 1000,
-      to: Date.UTC(2026, 9, 1) / 1000 - 1,
+      from: Date.UTC(2026, 8, 1, 4) / 1000,
+      to: Date.UTC(2026, 9, 1, 4) / 1000 - 1,
     });
+    // 23:30 on 30 September in New York is still September there: the previous month is August.
+    expect(previousMonth(new Date('2026-10-01T03:30:00Z')).month).toBe('2026-08');
     expect(previousMonth(new Date('2026-01-15T00:00:00Z')).month).toBe('2025-12');
   });
 

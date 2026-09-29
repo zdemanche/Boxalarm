@@ -19,6 +19,7 @@ interface Command {
 
 const ddbSend = vi.fn();
 const createNoActivityReport = vi.fn();
+const listNoActivityReports = vi.fn();
 let spies: { mockRestore: () => void }[] = [];
 
 function setup(options: { filed?: boolean; count?: number; departmentNerisId?: string | null }) {
@@ -49,7 +50,7 @@ function setup(options: { filed?: boolean; count?: number; departmentNerisId?: s
     };
   });
   vi.doMock('./reportContext.js', () => ({
-    nerisApiFromEnv: () => Promise.resolve({ createNoActivityReport }),
+    nerisApiFromEnv: () => Promise.resolve({ createNoActivityReport, listNoActivityReports }),
   }));
 }
 
@@ -77,6 +78,7 @@ beforeEach(() => {
   process.env.VERIFIED_PERMISSIONS_POLICY_STORE_ID = 'ps-1';
   process.env.INCIDENT_TABLE_NAME = 'incident-table';
   vpSend.mockResolvedValue({ decision: Decision.ALLOW });
+  listNoActivityReports.mockResolvedValue({ ok: true, httpStatus: 200, reports: [] });
   spies = [
     vi.spyOn(console, 'log').mockImplementation(() => undefined),
     vi.spyOn(console, 'error').mockImplementation(() => undefined),
@@ -130,6 +132,33 @@ describe('POST /incidents/no-activity-reports', () => {
     setup({ departmentNerisId: null });
     expect((await post({ month: '2026-08' })).json.code).toBe('NOT_CONFIGURED');
     expect(createNoActivityReport).not.toHaveBeenCalled();
+  });
+
+  it('adopts a report NERIS already holds for the month instead of filing a second one', async () => {
+    setup({});
+    listNoActivityReports.mockResolvedValue({
+      ok: true,
+      httpStatus: 200,
+      reports: [{ nerisUid: 'nar-earlier' }],
+    });
+    const { statusCode, json } = await post({ month: '2026-08' });
+    expect(statusCode).toBe(201);
+    expect(json.nerisUid).toBe('nar-earlier');
+    expect(listNoActivityReports).toHaveBeenCalledWith('FD09190828', '08/2026');
+    expect(createNoActivityReport).not.toHaveBeenCalled();
+  });
+
+  it('counts incidents in the department time zone (review minor 6)', async () => {
+    setup({});
+    createNoActivityReport.mockResolvedValue({ ok: true, httpStatus: 201, nerisUid: 'n' });
+    await post({ month: '2026-08' });
+    const query = ddbSend.mock.calls
+      .map(([c]) => c as Command)
+      .find((c) => c.constructor.name === 'QueryCommand')!;
+    expect(query.input.ExpressionAttributeValues).toMatchObject({
+      ':from': `INCIDENT#${Date.UTC(2026, 7, 1, 4) / 1000}`,
+      ':to': `INCIDENT#${Date.UTC(2026, 8, 1, 4) / 1000 - 1}`,
+    });
   });
 
   it('passes NERIS 422 issues back as a blocking list', async () => {
