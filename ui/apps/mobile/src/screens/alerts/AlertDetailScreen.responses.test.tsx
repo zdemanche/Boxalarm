@@ -287,7 +287,13 @@ test('each answer carries a clientAnswerId and answeredAtMs', async () => {
   await renderScreen();
   await tap(/^Not responding/);
 
-  expect(posted[0]).toMatchObject({ clientAnswerId: expect.stringMatching(/^response-D-1-/) });
+  // A UUID, never derived from the dispatchId, always inside the server's pattern (round 2 C-2).
+  expect(posted[0]).toMatchObject({
+    clientAnswerId: expect.stringMatching(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+    ),
+  });
+  expect(posted[0]!.clientAnswerId).toMatch(/^[A-Za-z0-9._:-]{1,128}$/);
   expect(typeof posted[0]!.answeredAtMs).toBe('number');
 });
 

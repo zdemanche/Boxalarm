@@ -1,3 +1,4 @@
+import { uuidV4 } from '../../lib/uuid';
 import { kvDelete, kvGet, kvSet } from '../../sync/kvStore';
 import * as syncManager from '../../sync/syncManager';
 import { ackStatusLabel } from './ackStatus';
@@ -128,14 +129,17 @@ export async function queueAlertResponse(
   eta: EtaGiven | null,
   now: number = Date.now(),
 ): Promise<string> {
-  const outboxId = `response-${dispatchId}-${now}`;
+  // Never derived from the dispatchId: a CAD id with '#', '/', spaces or >100 characters would
+  // fail the server's clientAnswerId pattern and refuse every answer (round 2 C-2).
+  const clientAnswerId = uuidV4();
+  const outboxId = `response-${clientAnswerId}`;
   const given = etaFor(ackStatus, eta);
   const etaText = ackStatus === 'NOT_RESPONDING' ? '' : `, ${formatEta(given)}`;
   await syncManager.enqueueResponse(
     outboxId,
     dispatchId,
     `Your response — ${ackStatusLabel(ackStatus)}${etaText}`,
-    responseBody(ackStatus, given, now, outboxId),
+    responseBody(ackStatus, given, now, clientAnswerId),
   );
   await saveLocalAnswer(dispatchId, { ackStatus, eta: given, outboxId, answeredAt: now });
   return outboxId;
