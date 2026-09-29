@@ -7,7 +7,11 @@ import {
 import { buildDeptScopedPk, type VerifiedDeptId } from '@boxalarm/dept-scope';
 import { buildOutboxRecord } from '@boxalarm/outbox';
 import { isConditionFailureAt } from './repository.js';
-import { LAST_PAYLOAD_SK } from './submissionRepository.js';
+import {
+  IN_FLIGHT_VALUES,
+  LAST_PAYLOAD_SK,
+  NOT_IN_FLIGHT_CONDITION,
+} from './submissionRepository.js';
 import type { IncidentStatus } from './entity.js';
 
 /**
@@ -18,8 +22,7 @@ import type { IncidentStatus } from './entity.js';
 
 /** Submission statuses that mean the worker may be reading the record right now. */
 const IN_FLIGHT = ['SUBMITTED', 'RETRYING'] as const;
-const NOT_IN_FLIGHT =
-  'attribute_not_exists(submissionStatus) OR (submissionStatus <> :queued AND submissionStatus <> :retrying)';
+const NOT_IN_FLIGHT = NOT_IN_FLIGHT_CONDITION;
 
 export type ReviewConflict =
   | 'NOT_FOUND'
@@ -132,8 +135,7 @@ export async function lockIncident(
             Update: {
               TableName: tableName,
               Key: metadataKey(input.deptId, input.incidentId),
-              ConditionExpression:
-                'attribute_exists(pk) AND attribute_not_exists(lockedAt) AND updatedAt = :reviewed',
+              ConditionExpression: `attribute_exists(pk) AND attribute_not_exists(lockedAt) AND updatedAt = :reviewed AND ${NOT_IN_FLIGHT}`,
               // updatedAt is left alone: it marks content edits, which the ledger's
               // editedSinceSubmission compares against lastSubmittedAt; lock/unlock are not edits.
               UpdateExpression: `SET lockedAt = :now, lockedBy = :actor, #status = :status${
@@ -145,7 +147,7 @@ export async function lockIncident(
                 ':actor': input.actorId,
                 ':reviewed': input.reviewedUpdatedAt,
                 ':status': status,
-                ...(input.submit ? { ':queued': 'SUBMITTED' } : {}),
+                ...IN_FLIGHT_VALUES,
               },
             },
           },
@@ -170,7 +172,9 @@ export async function lockIncident(
           ? 'NOT_FOUND'
           : typeof item.lockedAt === 'number'
             ? 'ALREADY_LOCKED'
-            : 'CHANGED_SINCE_REVIEW',
+            : inFlight(item)
+              ? 'SUBMISSION_IN_FLIGHT'
+              : 'CHANGED_SINCE_REVIEW',
       );
     }
     throw error;
@@ -206,8 +210,12 @@ export async function unlockIncident(
               Key: metadataKey(input.deptId, input.incidentId),
               ConditionExpression: `attribute_exists(pk) AND attribute_exists(lockedAt) AND (${NOT_IN_FLIGHT})`,
               UpdateExpression:
-                'REMOVE lockedAt, lockedBy SET unlockedAt = :now, unlockedBy = :actor, lastUnlockReason = :reason',
+                // Back to DRAFT: nothing is submittable again until an officer re-reviews and
+                // re-locks it (a VALIDATED leftover would let /submit go around the review).
+                'REMOVE lockedAt, lockedBy SET unlockedAt = :now, unlockedBy = :actor, lastUnlockReason = :reason, #status = :draft',
+              ExpressionAttributeNames: { '#status': 'status' },
               ExpressionAttributeValues: {
+                ':draft': 'DRAFT',
                 ':now': input.nowEpochSeconds,
                 ':actor': input.actorId,
                 ':reason': input.reason,
@@ -224,7 +232,10 @@ export async function unlockIncident(
                 input.incidentId,
                 input.actorId,
                 'UNLOCK',
-                { lockedAt: { old: before.lockedAt, new: null } },
+                {
+                  lockedAt: { old: before.lockedAt, new: null },
+                  status: { old: before.status ?? null, new: 'DRAFT' },
+                },
                 { reason: input.reason },
               ),
             },

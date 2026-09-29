@@ -78,7 +78,14 @@ export const handler: APIGatewayProxyHandlerV2WithLambdaAuthorizer<AuthorizerCon
       return problemResponse(404, 'Not Found', error.message, traceId);
     }
     if (error instanceof SubmissionConflictError) {
-      return problemResponse(409, 'Conflict', error.message, traceId);
+      return problemResponse(409, 'Conflict', error.message, traceId, {
+        code:
+          error.reason === 'NOT_LOCKED'
+            ? 'NOT_LOCKED'
+            : error.reason === 'IN_FLIGHT'
+              ? 'SUBMISSION_IN_FLIGHT'
+              : 'NOT_VALIDATED',
+      });
     }
     console.error(
       JSON.stringify({

@@ -377,11 +377,15 @@ test('valid core fields reach Validated and enable Submit', async () => {
   await user.click(await screen.findByRole('button', { name: 'Review and submit' }));
 
   expect(await screen.findByText('Validated')).toBeTruthy();
-  expect(screen.getByRole('button', { name: 'Submit' })).toHaveProperty('disabled', false);
+  // Validated is not enough: nothing goes to NERIS until an officer reviews and locks it.
+  expect(screen.getByRole('button', { name: 'Submit' })).toHaveProperty('disabled', true);
+  expect(
+    screen.getByText('Submit stays unavailable until an officer reviews and locks the report.'),
+  ).toBeTruthy();
 });
 
-test('Submit sends a validated report to NERIS and shows the submission status', async () => {
-  let current = detail({ status: 'VALIDATED' });
+test('Submit sends a locked, validated report to NERIS and shows the submission status', async () => {
+  let current = detail({ status: 'VALIDATED', lockedAt: 1_798_003_000, lockedBy: 'MBR-0034' });
   let submitCalls = 0;
   server.use(
     http.get('/api/v1/incidents/i-1', () => HttpResponse.json(current)),
@@ -413,7 +417,9 @@ test('a failed NERIS submission shows its reason and can be retried', async () =
   let submissionStatus = 'FAILED';
   let retryCalls = 0;
   server.use(
-    http.get('/api/v1/incidents/i-1', () => HttpResponse.json(detail({ status: 'SUBMITTED' }))),
+    http.get('/api/v1/incidents/i-1', () =>
+      HttpResponse.json(detail({ status: 'SUBMITTED', lockedAt: 1_798_003_000 })),
+    ),
     http.get('/api/v1/incidents/i-1/submissions', () =>
       HttpResponse.json({
         incidentId: 'i-1',
@@ -446,7 +452,9 @@ test('a failed NERIS submission shows its reason and can be retried', async () =
 
 test('a submit rejected by the API is shown, not swallowed', async () => {
   server.use(
-    http.get('/api/v1/incidents/i-1', () => HttpResponse.json(detail({ status: 'VALIDATED' }))),
+    http.get('/api/v1/incidents/i-1', () =>
+      HttpResponse.json(detail({ status: 'VALIDATED', lockedAt: 1_798_003_000 })),
+    ),
     http.post('/api/v1/incidents/i-1/submit', () =>
       HttpResponse.json(
         {

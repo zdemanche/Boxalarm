@@ -866,13 +866,15 @@ function IncidentReport({ incident }: { incident: IncidentDetail }) {
         ) : (
           <>
             <p id="submit-status">
-              {incident.status === 'VALIDATED'
-                ? 'Report status is Validated. Submit is available.'
-                : 'Submit stays unavailable until the report status is Validated.'}
+              {!locked
+                ? 'Submit stays unavailable until an officer reviews and locks the report.'
+                : incident.status === 'VALIDATED'
+                  ? 'The report is locked and validated. Submit is available.'
+                  : 'Submit stays unavailable until the report status is Validated.'}
             </p>
             <Button
               type="button"
-              disabled={incident.status !== 'VALIDATED'}
+              disabled={!locked || incident.status !== 'VALIDATED'}
               loading={submitting}
               aria-describedby="submit-status"
               onClick={() => void submitToNeris()}
@@ -916,7 +918,18 @@ function IncidentReport({ incident }: { incident: IncidentDetail }) {
           {status === 'FAILED' ? (
             <>
               <p>Reason: {state?.submissionFailureReason ?? 'NERIS did not give a reason.'}</p>
-              <Button type="button" loading={submitting} onClick={() => void retryNeris()}>
+              {!locked ? (
+                <p id="retry-status">
+                  The report was reopened. Lock it again after review, then submit.
+                </p>
+              ) : null}
+              <Button
+                type="button"
+                loading={submitting}
+                disabled={!locked}
+                aria-describedby={!locked ? 'retry-status' : undefined}
+                onClick={() => void retryNeris()}
+              >
                 Retry submission
               </Button>
             </>

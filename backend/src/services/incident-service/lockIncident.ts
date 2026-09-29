@@ -108,6 +108,14 @@ async function inner(
             `No incident found with incidentId "${incidentId}".`,
             traceId,
           );
+        case 'SUBMISSION_IN_FLIGHT':
+          return problemResponse(
+            409,
+            'Conflict',
+            'A NERIS submission for this report is in progress. Lock it once the submission finishes.',
+            traceId,
+            { code: 'SUBMISSION_IN_FLIGHT' },
+          );
         case 'ALREADY_LOCKED':
           return problemResponse(409, 'Conflict', 'This report is already locked.', traceId, {
             code: 'ALREADY_LOCKED',

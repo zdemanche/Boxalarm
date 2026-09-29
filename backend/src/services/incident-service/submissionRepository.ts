@@ -25,10 +25,28 @@ export const SUBMISSION_STATUSES = ['SUBMITTED', 'ACCEPTED', 'FAILED', 'RETRYING
 
 export type SubmissionStatus = (typeof SUBMISSION_STATUSES)[number];
 
+/**
+ * Submission statuses meaning the worker may be sending the record right now. Nothing may
+ * lock, unlock, submit or resubmit a report while one of these holds (review M1).
+ */
+export const NOT_IN_FLIGHT_CONDITION =
+  '(attribute_not_exists(submissionStatus) OR (submissionStatus <> :queued AND submissionStatus <> :retrying))';
+export const IN_FLIGHT_VALUES = { ':queued': 'SUBMITTED', ':retrying': 'RETRYING' } as const;
+
+export type SubmissionConflictReason = 'NOT_VALIDATED' | 'NOT_LOCKED' | 'IN_FLIGHT';
+
 export class SubmissionConflictError extends Error {
-  constructor(incidentId: string, currentStatus: string) {
+  constructor(
+    incidentId: string,
+    currentStatus: string,
+    readonly reason: SubmissionConflictReason = 'NOT_VALIDATED',
+  ) {
     super(
-      `incident "${incidentId}" is not VALIDATED and cannot be submitted (current status "${currentStatus}")`,
+      reason === 'NOT_LOCKED'
+        ? `incident "${incidentId}" must be locked by an officer before it is submitted to NERIS`
+        : reason === 'IN_FLIGHT'
+          ? `incident "${incidentId}" already has a NERIS submission in progress`
+          : `incident "${incidentId}" is not VALIDATED and cannot be submitted (current status "${currentStatus}")`,
     );
     this.name = 'SubmissionConflictError';
   }
@@ -191,7 +209,8 @@ export function createSubmissionRepository(
                 Update: {
                   TableName: tableName,
                   Key: { pk: buildDeptScopedPk(deptId, 'INCIDENT', incidentId), sk: 'METADATA' },
-                  ConditionExpression: 'attribute_exists(pk) AND #status = :validated',
+                  // Only a report an officer has reviewed and locked, with no send in flight.
+                  ConditionExpression: `attribute_exists(pk) AND #status = :validated AND attribute_exists(lockedAt) AND ${NOT_IN_FLIGHT_CONDITION}`,
                   UpdateExpression:
                     'SET #status = :submitted, submissionStatus = :submitted, updatedAt = :updatedAt',
                   ExpressionAttributeNames: { '#status': 'status' },
@@ -199,6 +218,7 @@ export function createSubmissionRepository(
                     ':validated': 'VALIDATED' satisfies IncidentStatus,
                     ':submitted': 'SUBMITTED' satisfies IncidentStatus,
                     ':updatedAt': nowEpochSeconds,
+                    ...IN_FLIGHT_VALUES,
                   },
                 },
               },
@@ -220,7 +240,16 @@ export function createSubmissionRepository(
           if (!existing.Item) {
             throw new IncidentNotFoundError(incidentId);
           }
-          throw new SubmissionConflictError(incidentId, String(existing.Item.status));
+          const item = existing.Item;
+          throw new SubmissionConflictError(
+            incidentId,
+            String(item.status),
+            typeof item.lockedAt !== 'number'
+              ? 'NOT_LOCKED'
+              : item.submissionStatus === 'SUBMITTED' || item.submissionStatus === 'RETRYING'
+                ? 'IN_FLIGHT'
+                : 'NOT_VALIDATED',
+          );
         }
         logger.error({
           event: 'neris.submission.enqueue_failed',
@@ -458,7 +487,10 @@ export function createSubmissionRepository(
                 Update: {
                   TableName: tableName,
                   Key: { pk: buildDeptScopedPk(deptId, 'INCIDENT', incidentId), sk: 'METADATA' },
-                  ConditionExpression: 'attribute_exists(pk) AND submissionStatus = :failed',
+                  // A retry resends what an officer locked; an unlocked report goes back
+                  // through review first.
+                  ConditionExpression:
+                    'attribute_exists(pk) AND submissionStatus = :failed AND attribute_exists(lockedAt)',
                   UpdateExpression:
                     'SET submissionStatus = :retrying, updatedAt = :updatedAt REMOVE submissionFailureReason',
                   ExpressionAttributeValues: {

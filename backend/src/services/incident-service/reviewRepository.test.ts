@@ -55,7 +55,7 @@ describe('lockIncident', () => {
     const [update, audit, locked, ...rest] = transactItems(send);
     expect(update!.Update).toMatchObject({
       ConditionExpression:
-        'attribute_exists(pk) AND attribute_not_exists(lockedAt) AND updatedAt = :reviewed',
+        'attribute_exists(pk) AND attribute_not_exists(lockedAt) AND updatedAt = :reviewed AND (attribute_not_exists(submissionStatus) OR (submissionStatus <> :queued AND submissionStatus <> :retrying))',
       ExpressionAttributeValues: { ':reviewed': 1_798_000_500, ':status': 'VALIDATED' },
     });
     expect(String(update!.Update!.UpdateExpression)).not.toContain('updatedAt =');
@@ -84,6 +84,7 @@ describe('lockIncident', () => {
       [undefined, 'NOT_FOUND'],
       [{ lockedAt: 1 }, 'ALREADY_LOCKED'],
       [{ updatedAt: 1_798_000_900 }, 'CHANGED_SINCE_REVIEW'],
+      [{ updatedAt: 1_798_000_500, submissionStatus: 'RETRYING' }, 'SUBMISSION_IN_FLIGHT'],
     ] as const) {
       const send = vi.fn().mockRejectedValueOnce(cancelled()).mockResolvedValueOnce({ Item: item });
       await expect(lockIncident(client(send), 'table', { ...LOCK, submit: false })).rejects.toEqual(
@@ -112,6 +113,8 @@ describe('unlockIncident', () => {
 
     const [update, audit, outbox] = transactItems(send);
     expect(String(update!.Update!.UpdateExpression)).toContain('REMOVE lockedAt, lockedBy');
+    // Back to DRAFT, so nothing can be submitted until it is reviewed and locked again.
+    expect(update!.Update!.ExpressionAttributeValues).toMatchObject({ ':draft': 'DRAFT' });
     expect(audit!.Put!.Item).toMatchObject({ action: 'UNLOCK', reason: 'E1 times were wrong' });
     expect(outbox!.Put!.Item).toMatchObject({
       eventType: 'incident.report.unlocked',

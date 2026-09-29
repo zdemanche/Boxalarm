@@ -56,7 +56,8 @@ describe('createSubmissionRepository.enqueueSubmission', () => {
     expect(update).toMatchObject({
       TableName: TABLE_NAME,
       Key: { pk: `DEPT#NICHOLS#INCIDENT#${INCIDENT_ID}`, sk: 'METADATA' },
-      ConditionExpression: 'attribute_exists(pk) AND #status = :validated',
+      ConditionExpression:
+        'attribute_exists(pk) AND #status = :validated AND attribute_exists(lockedAt) AND (attribute_not_exists(submissionStatus) OR (submissionStatus <> :queued AND submissionStatus <> :retrying))',
     });
     const outboxItem = command.input.TransactItems[1].Put.Item;
     expect(outboxItem).toMatchObject({
@@ -90,6 +91,32 @@ describe('createSubmissionRepository.enqueueSubmission', () => {
     await expect(
       repository.enqueueSubmission(DEPT_ID, INCIDENT_ID, 1_798_000_100, TRACE_ID),
     ).rejects.toBeInstanceOf(SubmissionConflictError);
+  });
+
+  it('refuses an unlocked report (review M1: /submit cannot go around the review lock)', async () => {
+    const send = vi
+      .fn()
+      .mockRejectedValueOnce(conditionalCheckFailed([{}]))
+      .mockResolvedValueOnce({ Item: { status: 'VALIDATED' } });
+    const repository = createSubmissionRepository(fakeClient(send), TABLE_NAME);
+
+    await expect(
+      repository.enqueueSubmission(DEPT_ID, INCIDENT_ID, 1_798_000_100, TRACE_ID),
+    ).rejects.toMatchObject({ reason: 'NOT_LOCKED' });
+  });
+
+  it('refuses while a submission is already in flight (no duplicate CREATE)', async () => {
+    const send = vi
+      .fn()
+      .mockRejectedValueOnce(conditionalCheckFailed([{}]))
+      .mockResolvedValueOnce({
+        Item: { status: 'SUBMITTED', lockedAt: 1, submissionStatus: 'RETRYING' },
+      });
+    const repository = createSubmissionRepository(fakeClient(send), TABLE_NAME);
+
+    await expect(
+      repository.enqueueSubmission(DEPT_ID, INCIDENT_ID, 1_798_000_100, TRACE_ID),
+    ).rejects.toMatchObject({ reason: 'IN_FLIGHT' });
   });
 });
 
@@ -423,7 +450,8 @@ describe('createSubmissionRepository.retrySubmission', () => {
     expect(update).toMatchObject({
       TableName: TABLE_NAME,
       Key: { pk: `DEPT#NICHOLS#INCIDENT#${INCIDENT_ID}`, sk: 'METADATA' },
-      ConditionExpression: 'attribute_exists(pk) AND submissionStatus = :failed',
+      ConditionExpression:
+        'attribute_exists(pk) AND submissionStatus = :failed AND attribute_exists(lockedAt)',
     });
     expect(update.ExpressionAttributeValues).toMatchObject({
       ':failed': 'FAILED',

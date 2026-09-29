@@ -117,6 +117,11 @@ function parseCreateIncidentInput(body: unknown, createdBy: string): CreateIncid
         'status must be one of DRAFT, VALIDATED, SUBMITTED, ACCEPTED, REJECTED',
       );
     }
+    // A new report is a DRAFT. VALIDATED and later come only from review and NERIS, never
+    // from the client (a client-set VALIDATED would reach /submit without a review).
+    if (record.status !== 'DRAFT') {
+      throw new ValidationError('a new incident report must start as DRAFT');
+    }
     status = record.status;
   }
 
