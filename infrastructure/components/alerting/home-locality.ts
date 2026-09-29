@@ -48,3 +48,13 @@ export function resolveHomeLocality(
   const fallback = DEFAULT_HOME_LOCALITY[deptId];
   return fallback ? JSON.stringify({ ...fallback, deptId }) : undefined;
 }
+
+/**
+ * Whether a resolved home locality lists towns but no ZIPs. It still works, but a pre-plan whose
+ * address carries only a ZIP is then never verified (round-4b n1): recommend configuring ZIPs.
+ */
+export function homeLocalityLacksZips(resolved: string | undefined): boolean {
+  if (resolved === undefined) return false;
+  const parsed = JSON.parse(resolved) as Partial<HomeLocalityConfig>;
+  return !Array.isArray(parsed.zips) || parsed.zips.length === 0;
+}

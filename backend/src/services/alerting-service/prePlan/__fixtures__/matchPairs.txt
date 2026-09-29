@@ -236,3 +236,8 @@ DIFF | trumbull | 12 Main St Monroe, Trumbull || 12 Main St
 DIFF | trumbull | 12 Main St Trumbull, Monroe || 12 Main St
 DIFF | trumbull | 12 Main St Trumbull, Bridgeport, CT || 12 Main St
 DIFF | trumbull | 12 Main St, Trumbull, CT, Bridgeport || 12 Main St
+// --- towns-only home set (no home ZIPs): a ZIP-only copy is never assumed home (round-4b n1)
+DIFF | townsonly | 12 Oak St || 12 Oak St 06468
+DIFF | townsonly | 12 Oak St || 12 Oak St, CT 06468
+DIFF | townsonly | 12 Oak St, Trumbull || 12 Oak St 06468
+DIFF | townsonly | 12 Main St, Bridgeport, CT 06611 || 12 Main St 06611

@@ -70,7 +70,7 @@ import { PushTokens } from "./components/alerting/push-tokens";
 import { RidingBoard } from "./components/alerting/riding-board";
 import { AlertingAlarms } from "./components/alerting/alarms";
 import { PrePlanCopies } from "./components/alerting/pre-plan-copies";
-import { resolveHomeLocality } from "./components/alerting/home-locality";
+import { homeLocalityLacksZips, resolveHomeLocality } from "./components/alerting/home-locality";
 import { EligibilityStaleness } from "./components/alerting/staleness";
 import { AlertingCanary } from "./components/alerting/canary";
 import { AlertingOutboxDrain } from "./components/alerting/outbox-drain";
@@ -631,6 +631,13 @@ if (alertingHomeLocality === undefined) {
   pulumi.log.warn(
     `No home locality for deptId ${deptId}: set boxalarm-infra:alertingHomeLocality, or every ` +
       `pre-plan address match on the dispatch detail is shown "verify address".`,
+  );
+}
+if (homeLocalityLacksZips(alertingHomeLocality)) {
+  pulumi.log.warn(
+    `The home locality for deptId ${deptId} lists no ZIPs: add the home ZIPs to ` +
+      `boxalarm-infra:alertingHomeLocality, or a pre-plan whose address carries only a ZIP is ` +
+      `always shown "verify address" (docs/runbooks/alert-context-replay.md).`,
   );
 }
 export const routesCore = new RoutesCore("routes-core", {

@@ -90,6 +90,6 @@ A present but unusable item or stack default is logged (`preplan_copy.home_local
 
 **Home ZIPs must be home-only.** List a ZIP only if it covers nothing outside the home area. A ZIP shared with a neighbouring town would let that town's addresses agree on ZIP alone.
 
-A home set may list towns only (no ZIPs). A pre-plan whose address carries a ZIP but no town is then still treated as a home address, and a ZIP never verifies on its own against a dispatch that names a town: `12 Main St, Bridgeport, CT 06611` against the pre-plan `12 Main St 06611` is not a match, and `12 Main St, Trumbull 06611` is.
+**Configure home ZIPs.** A pre-plan whose address carries a ZIP but no town is home only when that ZIP is a configured home ZIP. With a towns-only home set (no ZIPs) such a pre-plan is never assumed home, because its ZIP may be a neighbour's (`12 Oak St 06468` is Monroe), and a ZIP never verifies on its own against a dispatch that names a town. Every match against it is shown "VERIFY ADDRESS", even `12 Main St, Trumbull 06611` against `12 Main St 06611`. Listing the home ZIPs (06611 for Nichols FD) makes those verify. `pulumi up` warns when the stack home locality has towns but no ZIPs.
 
 If CAD writes a village the set does not list, add it. Until then such calls show "VERIFY ADDRESS" when the ZIP agrees, and no pre-plan otherwise.

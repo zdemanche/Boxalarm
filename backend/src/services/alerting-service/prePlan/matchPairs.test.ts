@@ -29,6 +29,8 @@ const HOMES: Record<string, HomeLocality> = {
     state: 'CT',
   })!,
   custom: parseHomeLocality({ towns: ['Trumbull', 'Plattsville'], zips: ['06611'], state: 'CT' })!,
+  // Towns but no ZIPs (round-4b n1).
+  townsonly: parseHomeLocality({ towns: ['Trumbull', 'Nichols'], state: 'CT' })!,
 };
 
 /** The dispatcher's HOME choice per home set ('none' has no home list: typed as Other). */
@@ -37,6 +39,7 @@ const HOME_CHOICE: Record<string, string> = {
   none: 'Trumbull',
   monroe: 'Monroe',
   custom: 'Trumbull',
+  townsonly: 'Trumbull',
 };
 
 function fakeIndex(copies: readonly string[]): DynamoDBDocumentClient {

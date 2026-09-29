@@ -97,11 +97,19 @@ describe('judgeLocality', () => {
       expect(judge(dispatch, copy, TOWNS_ONLY)).not.toBe('VERIFIED');
     });
 
-    it('still verifies a home-town dispatch against a ZIP-only (town-less, so home) copy', () => {
+    it('n1: a ZIP-only copy is never assumed home without home ZIPs (flagged, not verified)', () => {
+      // Its ZIP may be another town's: 06468 is Monroe.
+      expect(judge('12 Oak St, Trumbull', '12 Oak St 06468', TOWNS_ONLY)).toBe('UNVERIFIED');
+      expect(judge('12 Oak St, Trumbull', '12 Oak St, CT 06468', TOWNS_ONLY)).toBe('UNVERIFIED');
+      // A Monroe call still finds it, flagged.
+      expect(judge('12 Oak St, Monroe', '12 Oak St 06468', TOWNS_ONLY)).toBe('UNVERIFIED');
+      // Even a home-town dispatch with the same ZIP is only flagged: configure home ZIPs.
       expect(judge('12 Main St, Trumbull, CT 06611', '12 Main St 06611', TOWNS_ONLY)).toBe(
-        'VERIFIED',
+        'UNVERIFIED',
       );
-      expect(judge('12 Main St, Nichols', '12 Main St 06611', TOWNS_ONLY)).toBe('VERIFIED');
+      expect(judge('12 Main St, Nichols', '12 Main St 06611', TOWNS_ONLY)).toBe('UNVERIFIED');
+      // With home ZIPs configured the same copy is home and verifies.
+      expect(judge('12 Main St, Trumbull, CT 06611', '12 Main St 06611')).toBe('VERIFIED');
     });
 
     it('a ZIP-only copy outside configured home ZIPs cannot confirm a dispatch town', () => {

@@ -208,23 +208,15 @@ export function judgeLocality(
     inSet(copy.zip, home.zips) &&
     inSet(copy.state, homeStates);
 
-  // A town-less copy outside the home set (it carries a ZIP that is not a configured home
-  // ZIP) has no town to compare. When the department configured no home ZIPs at all, the
-  // copy's ZIP is simply unknown and its town is the home set by the town-less assumption;
-  // otherwise the copy's town is genuinely unknown, and a ZIP alone must not verify a dispatch
-  // that names a town (round-4 m3: "12 Main St, Bridgeport, CT 06611" against "12 Main St
-  // 06611" under a towns-only home set).
-  const townInferredHome =
-    !copyHome &&
-    copy.town === null &&
-    home.towns.size > 0 &&
-    home.zips.size === 0 &&
-    inSet(copy.state, homeStates);
-  const townUnknowable = !copyHome && !townInferredHome && copy.town === null;
-  const town =
-    copyHome || townInferredHome
-      ? compareHome(dispatch.town, home.towns)
-      : compareValue(dispatch.town, copy.town);
+  // A town-less copy outside the home set (it carries a ZIP that is not a configured home ZIP,
+  // or no home ZIPs are configured at all) has no town to compare, so a ZIP alone must not
+  // verify a dispatch that names a town (round-4 m3: "12 Main St, Bridgeport, CT 06611"
+  // against "12 Main St 06611"). Such a copy is never assumed home either: under a towns-only
+  // home set "12 Oak St 06468" may be Monroe's (round-4b n1). Configure home ZIPs.
+  const townUnknowable = !copyHome && copy.town === null;
+  const town = copyHome
+    ? compareHome(dispatch.town, home.towns)
+    : compareValue(dispatch.town, copy.town);
   const zip = copyHome
     ? compareHome(dispatch.zip, home.zips)
     : compareValue(dispatch.zip, copy.zip);
