@@ -186,6 +186,15 @@ describe("BoxalarmUserPool", () => {
     });
   });
 
+  it("disables self sign-up: only an admin creates members (review M6)", async () => {
+    const { BoxalarmUserPool } = await import("../../components/identity/user-pool");
+    const identity = new BoxalarmUserPool("test-identity-admin-only", { env: "dev", ...TABLE });
+    await settle(identity);
+
+    const config = await resolve(identity.userPool.adminCreateUserConfig);
+    expect(config?.allowAdminCreateUserOnly).toBe(true);
+  });
+
   it("sets MFA configuration to OFF explicitly", async () => {
     const { BoxalarmUserPool } = await import("../../components/identity/user-pool");
     const identity = new BoxalarmUserPool("test-identity-mfa", { env: "dev", ...TABLE });

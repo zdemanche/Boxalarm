@@ -230,6 +230,11 @@ export class BoxalarmUserPool extends pulumi.ComponentResource {
         deletionProtection: "ACTIVE",
         // Explicit OFF until MFA is productized — do not rely on Cognito's default.
         mfaConfiguration: "OFF",
+        // Review M6: members are created only by an admin (POST /members, memberLogin.ts).
+        // Cognito's default allows self sign-up on the public app clients, which let anyone
+        // reserve a future member's email - the admin's create then 409s forever - and mint
+        // department-less tokens that still cost Cognito/SES capacity.
+        adminCreateUserConfig: { allowAdminCreateUserOnly: true },
         // AC1: dev-vs-prod separation lives at the environment/stack level (one pool
         // per env, this component instantiated once per Pulumi.<env>.yaml stack).
         schemas: [
