@@ -66,6 +66,8 @@ const pendingWriteOnly = ({ tableArn }: GrantContext): IamPolicyStatement[] => [
  *   apparatus.defect.reported (apparatus-service outbox) -> apparatusDefectConsumer.ts
  *   inventory.reorder.due     (consumable scanner)       -> inventoryReorderDueConsumer.ts
  *   ppe.expiry.due            (PPE expiry scanner)       -> ppeExpiryConsumer.ts
+ *   neris.incident.rejected|failed (NERIS status poller) -> nerisReportConsumer.ts
+ *   neris.no_activity.due     (NERIS reconciliation)     -> nerisNoActivityConsumer.ts
  *
  * The defect consumer also delivers an out-of-service defect immediately: it reads the
  * roster (GSI3) and each officer's mutes (GetItem), writes their inbox record and per-channel
@@ -149,6 +151,22 @@ export class Reminders extends pulumi.ComponentResource {
         source: "inventory-service",
         // inventory.expiry.due is architecture.md N-5's rename, accepted in advance.
         detailTypes: ["ppe.expiry.due", "inventory.expiry.due"],
+        timeout: 15,
+        statements: pendingWriteOnly,
+      },
+      {
+        // incident-service's NERIS status poller: the report owner hears NERIS sent it back.
+        key: "neris-rejected",
+        source: "incident-service",
+        detailTypes: ["neris.incident.rejected", "neris.incident.failed"],
+        timeout: 15,
+        statements: pendingWriteOnly,
+      },
+      {
+        // incident-service's nightly reconciliation: a month closed with no calls to report.
+        key: "neris-no-activity",
+        source: "incident-service",
+        detailTypes: ["neris.no_activity.due"],
         timeout: 15,
         statements: pendingWriteOnly,
       },

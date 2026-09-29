@@ -59,6 +59,8 @@ import { Incident } from "./components/incident/incident";
 import { SchemaRefresh } from "./components/incident/schema-refresh";
 import { IncidentOutboxDrain } from "./components/incident/outbox-drain";
 import { NerisSubmissionWorker } from "./components/incident/submission-worker";
+import { NerisSync } from "./components/incident/neris-sync";
+import { NerisEntity } from "./components/platform/neris-entity";
 import { AlertingPlaneBoundary } from "./components/alerting/iam-boundary";
 import { MessagingAlerting } from "./components/alerting/messaging-alerting";
 import { Escalation } from "./components/alerting/escalation";
@@ -501,6 +503,18 @@ export const platformConfig = new PlatformConfig("platform-config", {
   httpApi,
 });
 
+// NERIS entity sync (stations/units -> NERIS ids for unit responses).
+export const nerisEntity = new NerisEntity("neris-entity", {
+  env,
+  platformTableName: platformTable.tableName,
+  platformTableArn: platformTable.tableArn,
+  policyStoreArn: policyStore.policyStoreArn,
+  policyStoreId: policyStore.policyStoreId,
+  nerisCredentialsSecretArn: nerisConfig.secret.arn,
+  logGroup: platformLogGroup,
+  httpApi,
+});
+
 export const auditRoute = new AuditRoute("audit-route", {
   env,
   platformTableName: platformTable.tableName,
@@ -573,6 +587,7 @@ export const incident = new Incident("incident", {
   nerisSchemaBucketName: incidentSchemaRefresh.bucket.bucket,
   policyStoreArn: policyStore.policyStoreArn,
   policyStoreId: policyStore.policyStoreId,
+  nerisCredentialsSecretArn: nerisConfig.secret.arn,
   logGroup: incidentServiceLogGroup,
   httpApi,
 });
@@ -600,6 +615,17 @@ export const nerisSubmissionWorker = new NerisSubmissionWorker("neris-submission
   incidentCmkArn: incidentTable.cmkArn,
   busName: platformBus.busName,
   busArn: platformBus.busArn,
+  nerisCredentialsSecretArn: nerisConfig.secret.arn,
+  logGroup: incidentServiceLogGroup,
+});
+
+// NERIS status poller (every 5 min) and nightly reconciliation + no-activity reminder.
+export const nerisSync = new NerisSync("neris-sync", {
+  env,
+  deptId,
+  incidentTableName: incidentTable.tableName,
+  incidentTableArn: incidentTable.tableArn,
+  incidentCmkArn: incidentTable.cmkArn,
   nerisCredentialsSecretArn: nerisConfig.secret.arn,
   logGroup: incidentServiceLogGroup,
 });

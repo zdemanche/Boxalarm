@@ -17,6 +17,9 @@ import {
   alertingOfficerActionsPolicy,
   inspectionsMemberActionsPolicy,
   inspectionsOfficerActionsPolicy,
+  nerisMemberActionsPolicy,
+  nerisOfficerActionsPolicy,
+  nerisAdminActionsPolicy,
 } from "./cedar-policies";
 
 export interface PolicyStoreArgs {
@@ -68,6 +71,9 @@ export class PolicyStore extends pulumi.ComponentResource {
   public readonly inventoryAdminActionsPolicy: aws.verifiedpermissions.Policy;
   public readonly inspectionsMemberActionsPolicy: aws.verifiedpermissions.Policy;
   public readonly inspectionsOfficerActionsPolicy: aws.verifiedpermissions.Policy;
+  public readonly nerisMemberActionsPolicy: aws.verifiedpermissions.Policy;
+  public readonly nerisOfficerActionsPolicy: aws.verifiedpermissions.Policy;
+  public readonly nerisAdminActionsPolicy: aws.verifiedpermissions.Policy;
 
   constructor(name: string, args: PolicyStoreArgs, opts?: pulumi.ComponentResourceOptions) {
     requireEnv("PolicyStore", args.env);
@@ -272,6 +278,31 @@ export class PolicyStore extends pulumi.ComponentResource {
       },
       { parent: this, dependsOn: [this.schema] },
     );
+
+    // incident-service NERIS loop: validate (every role), officer review, chief/admin unlock.
+    const nerisPolicies = [
+      ["neris-member-actions", nerisMemberActionsPolicy],
+      ["neris-officer-actions", nerisOfficerActionsPolicy],
+      ["neris-admin-actions", nerisAdminActionsPolicy],
+    ] as const;
+    [this.nerisMemberActionsPolicy, this.nerisOfficerActionsPolicy, this.nerisAdminActionsPolicy] =
+      nerisPolicies.map(
+        ([suffix, statement]) =>
+          new aws.verifiedpermissions.Policy(
+            `${name}-${suffix}`,
+            {
+              policyStoreId: this.policyStoreId,
+              definition: {
+                static: { statement: pulumi.output(args.userPoolId).apply(statement) },
+              },
+            },
+            { parent: this, dependsOn: [this.schema] },
+          ),
+      ) as [
+        aws.verifiedpermissions.Policy,
+        aws.verifiedpermissions.Policy,
+        aws.verifiedpermissions.Policy,
+      ];
 
     this.registerOutputs({
       policyStoreId: this.policyStoreId,

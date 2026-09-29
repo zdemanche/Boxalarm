@@ -329,6 +329,47 @@ export const REPORTING_DEPARTMENT_ACTIONS = [
   "ExportReport",
 ] as const;
 
+// incident-service NERIS loop + its platform/reporting companions. Validate is every role
+// (read-only: members write reports too). Locking, resubmitting a corrected report to NERIS,
+// filing a no-activity month, and the NERIS compliance/entity reads are the officer's review
+// job — OFFICER/CHIEF/ADMIN, the architecture's Cognito(admin) tier. Unlocking a reviewed
+// report (audited, with a reason) and registering stations/units with the NERIS entity are
+// CHIEF/ADMIN only.
+export const NERIS_MEMBER_ACTIONS = ["ValidateIncidentReport"] as const;
+export const NERIS_OFFICER_ACTIONS = [
+  "LockIncidentReport",
+  "ResubmitIncidentReport",
+  "FileNoActivityReport",
+  "ViewNerisCompliance",
+  "ViewNerisEntity",
+] as const;
+export const NERIS_OFFICER_GROUPS = ["OFFICER", "CHIEF", "ADMIN"] as const;
+export const NERIS_ADMIN_ACTIONS = ["UnlockIncidentReport", "SyncNerisEntity"] as const;
+
+// Resource type each NERIS action is sent with (the handlers' withAuthorization options).
+const NERIS_ACTION_RESOURCE: Record<
+  | (typeof NERIS_MEMBER_ACTIONS)[number]
+  | (typeof NERIS_OFFICER_ACTIONS)[number]
+  | (typeof NERIS_ADMIN_ACTIONS)[number],
+  "Incident" | "Department"
+> = {
+  ValidateIncidentReport: "Incident",
+  LockIncidentReport: "Incident",
+  ResubmitIncidentReport: "Incident",
+  UnlockIncidentReport: "Incident",
+  FileNoActivityReport: "Department",
+  ViewNerisCompliance: "Department",
+  ViewNerisEntity: "Department",
+  SyncNerisEntity: "Department",
+};
+
+const NERIS_SCHEMA_ACTIONS = Object.fromEntries(
+  Object.entries(NERIS_ACTION_RESOURCE).map(([action, resourceType]) => [
+    action,
+    { appliesTo: { principalTypes: ["User"], resourceTypes: [resourceType] } },
+  ]),
+);
+
 export const CEDAR_SCHEMA = JSON.stringify({
   Boxalarm: {
     entityTypes: {
@@ -350,6 +391,7 @@ export const CEDAR_SCHEMA = JSON.stringify({
       InspectionList: {},
       InspectionsMap: {},
       Notification: {},
+      Incident: {},
     },
     actions: {
       ViewConfig: { appliesTo: { principalTypes: ["User"], resourceTypes: ["Department"] } },
@@ -426,6 +468,7 @@ export const CEDAR_SCHEMA = JSON.stringify({
       },
       ...APPARATUS_SCHEMA_ACTIONS,
       ...ALERTING_SCHEMA_ACTIONS,
+      ...NERIS_SCHEMA_ACTIONS,
       ListEquipment: { appliesTo: { principalTypes: ["User"], resourceTypes: ["Department"] } },
       ViewEquipmentAsset: { appliesTo: { principalTypes: ["User"], resourceTypes: ["Asset"] } },
       ListConsumables: {
@@ -617,4 +660,19 @@ export function inspectionsOfficerActionsPolicy(userPoolId: string): string {
   ).join(" || ");
   const actions = INSPECTIONS_OFFICER_ACTIONS.map((a) => `Boxalarm::Action::"${a}"`).join(", ");
   return `permit (\n  principal,\n  action in [${actions}],\n  resource\n) when {\n  ${groupCheck}\n};`;
+}
+
+/** Validating an incident report against NERIS rules — every role (read-only). */
+export function nerisMemberActionsPolicy(userPoolId: string): string {
+  return roleGatedPolicy(userPoolId, ROLE_GROUPS, NERIS_MEMBER_ACTIONS);
+}
+
+/** Officer review: lock, resubmit, no-activity month, compliance and entity reads. */
+export function nerisOfficerActionsPolicy(userPoolId: string): string {
+  return roleGatedPolicy(userPoolId, NERIS_OFFICER_GROUPS, NERIS_OFFICER_ACTIONS);
+}
+
+/** Unlock a reviewed report (audited) and register stations/units with NERIS — chief/admin. */
+export function nerisAdminActionsPolicy(userPoolId: string): string {
+  return roleGatedPolicy(userPoolId, ADMIN_ONLY_GROUPS, NERIS_ADMIN_ACTIONS);
 }

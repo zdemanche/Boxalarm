@@ -4,6 +4,8 @@ import { ServiceLogGroup } from "../observability/service-log-group";
 import { HttpApi } from "../api/http-api";
 import { QueueConsumer } from "../messaging/queue-consumer";
 import { verifiedPermissionsPolicyStatement } from "../authz/policy-store";
+import { nerisClientPolicyStatements } from "../neris/neris-config";
+import { IamPolicyStatement } from "../observability/observability-policy";
 import { lambdaCode, LAMBDA_HANDLER } from "../shared/lambda-code";
 import { requireEnv } from "../shared/env";
 
@@ -18,6 +20,8 @@ export interface IncidentArgs {
   nerisSchemaBucketName: pulumi.Input<string>;
   policyStoreArn: pulumi.Input<string>;
   policyStoreId: pulumi.Input<string>;
+  /** NERIS OAuth client secret: only the routes that call NERIS (validate, lock, no-activity) read it. */
+  nerisCredentialsSecretArn: pulumi.Input<string>;
   logGroup: ServiceLogGroup;
   httpApi: HttpApi;
 }
@@ -74,6 +78,8 @@ export class Incident extends pulumi.ComponentResource {
   public readonly submissionRetryLambda: ServiceLambda;
   public readonly dispatchAlertConsumer: QueueConsumer;
   public readonly dispatchResponseConsumer: QueueConsumer;
+  public readonly nerisRouteLambdas: Record<string, ServiceLambda> = {};
+  public readonly nerisSettingsConsumer: QueueConsumer;
 
   constructor(name: string, args: IncidentArgs, opts?: pulumi.ComponentResourceOptions) {
     requireEnv("Incident", args.env);
@@ -259,6 +265,8 @@ export class Incident extends pulumi.ComponentResource {
           ])
           .apply(([cmk, vp, s3, tableArn]) => [
             {
+              // ConditionCheckItem: the parent report must exist and not be locked, checked
+              // inside the module's write transaction (secondaryRepository.ts, lock.ts).
               Sid: "IncidentExposuresAccess" as const,
               Effect: "Allow" as const,
               Action: [
@@ -266,6 +274,7 @@ export class Incident extends pulumi.ComponentResource {
                 "dynamodb:UpdateItem",
                 "dynamodb:Query",
                 "dynamodb:GetItem",
+                "dynamodb:ConditionCheckItem",
               ],
               Resource: [tableArn],
             },
@@ -362,7 +371,8 @@ export class Incident extends pulumi.ComponentResource {
         key: "submission-get",
         fn: "submission-get",
         routeKey: "GET /api/v1/incidents/{incidentId}/submission",
-        actions: ["dynamodb:GetItem"],
+        // Query: the ledger's SUBMISSION# attempts and NERIS#STATUS# history rows.
+        actions: ["dynamodb:GetItem", "dynamodb:Query"],
       },
       {
         key: "submission-retry",
@@ -405,6 +415,175 @@ export class Incident extends pulumi.ComponentResource {
     });
     [this.submitLambda, this.submissionGetLambda, this.submissionRetryLambda] =
       submissionLambdas as [ServiceLambda, ServiceLambda, ServiceLambda];
+
+    // The submission ledger (attempts + NERIS status history, reviewRepository.ts
+    // querySubmissionLedger) is served by the same Lambda under the plural path too.
+    args.httpApi.route(
+      `${name}-submissions-route`,
+      {
+        routeKey: "GET /api/v1/incidents/{incidentId}/submissions",
+        lambda: this.submissionGetLambda,
+      },
+      { parent: this },
+    );
+
+    // NERIS loop routes (validate, review lock/unlock, resubmit, no-activity month). Each is
+    // Cedar-gated in its handler (withAuthorization, Boxalarm::Incident / ::Department), so
+    // each gets the policy-store id and the IsAuthorized grant. Only the routes that call
+    // NERIS read the OAuth secret; only the ones that judge a report read the schema pins.
+    const nerisEnvironment = {
+      NERIS_BASE_URL_PARAM: `/boxalarm/${env}/neris/base-url`,
+      NERIS_USER_AGENT_PARAM: `/boxalarm/${env}/neris/user-agent`,
+      NERIS_CREDENTIALS_SECRET_ID: args.nerisCredentialsSecretArn,
+      // neris/config.ts decides prod vs non-prod from STAGE ?? BOXALARM_ENV (N6.4).
+      BOXALARM_ENV: env,
+    };
+    const nerisRoutes: {
+      key: string;
+      routeKey: string;
+      actions: string[];
+      gsi1?: boolean;
+      neris: boolean;
+      schema: boolean;
+    }[] = [
+      {
+        // Report + settings copy + RESPONSE# rows + schema pointer: reads only.
+        key: "validate",
+        routeKey: "POST /api/v1/incidents/{incidentId}/validate",
+        actions: ["dynamodb:GetItem", "dynamodb:Query"],
+        neris: true,
+        schema: true,
+      },
+      {
+        // Reads as validate, then one transaction: METADATA Update + audit and outbox Puts.
+        key: "lock",
+        routeKey: "POST /api/v1/incidents/{incidentId}/lock",
+        actions: ["dynamodb:GetItem", "dynamodb:Query", "dynamodb:UpdateItem", "dynamodb:PutItem"],
+        neris: true,
+        schema: true,
+      },
+      {
+        key: "unlock",
+        routeKey: "POST /api/v1/incidents/{incidentId}/unlock",
+        actions: ["dynamodb:GetItem", "dynamodb:UpdateItem", "dynamodb:PutItem"],
+        neris: false,
+        schema: false,
+      },
+      {
+        // Builds the payload locally for the diff; the worker makes the NERIS PUT.
+        key: "resubmit",
+        routeKey: "POST /api/v1/incidents/{incidentId}/resubmit",
+        actions: ["dynamodb:GetItem", "dynamodb:Query", "dynamodb:UpdateItem", "dynamodb:PutItem"],
+        neris: false,
+        schema: true,
+      },
+      {
+        // Month's incident count on GSI1, then the filed-month row + outbox Puts.
+        key: "no-activity-report",
+        routeKey: "POST /api/v1/incidents/no-activity-reports",
+        actions: ["dynamodb:GetItem", "dynamodb:Query", "dynamodb:PutItem"],
+        gsi1: true,
+        neris: true,
+        schema: false,
+      },
+    ];
+    for (const route of nerisRoutes) {
+      const lambda = new ServiceLambda(
+        `${name}-${route.key}`,
+        {
+          env,
+          serviceName: "incident-service",
+          functionName: `boxalarm-${env}-incident-${route.key}`,
+          handler: LAMBDA_HANDLER,
+          code: lambdaCode("incident-service", route.key),
+          logGroup: args.logGroup,
+          // A NERIS round trip (token + /validate or /no_activity_report) on a cold start.
+          ...(route.neris ? { timeout: 20 } : {}),
+          environment: {
+            ...baseEnvironment,
+            VERIFIED_PERMISSIONS_POLICY_STORE_ID: args.policyStoreId,
+            ...(route.schema ? { NERIS_SCHEMA_BUCKET_NAME: args.nerisSchemaBucketName } : {}),
+            ...(route.neris ? nerisEnvironment : {}),
+          },
+          additionalPolicyStatements: pulumi
+            .all([
+              cmkStatement,
+              vpStatement,
+              SCHEMA_S3_READ_STATEMENT(args.nerisSchemaBucketArn),
+              args.incidentTableArn,
+              args.nerisCredentialsSecretArn,
+            ])
+            .apply(([cmk, vp, s3, tableArn, secretArn]) => {
+              const statements: IamPolicyStatement[] = [
+                {
+                  Sid: "IncidentNerisRouteAccess",
+                  Effect: "Allow",
+                  Action: route.actions,
+                  Resource: route.gsi1 ? [tableArn, `${tableArn}/index/GSI1`] : [tableArn],
+                },
+                ...cmk,
+                ...vp,
+              ];
+              if (route.schema) statements.push(...s3);
+              if (route.neris) statements.push(...nerisClientPolicyStatements(secretArn, env));
+              return statements;
+            }),
+        },
+        { parent: this },
+      );
+      args.httpApi.route(
+        `${name}-${route.key}-route`,
+        { routeKey: route.routeKey, lambda },
+        { parent: this },
+      );
+      this.nerisRouteLambdas[route.key] = lambda;
+    }
+
+    // incident-service's copy of the department NERIS settings and unit ids (owned by
+    // platform-service; this service holds no platform-table grant): PutItem only.
+    const nerisSettingsLambda = new ServiceLambda(
+      `${name}-neris-settings-consumer`,
+      {
+        env,
+        serviceName: "incident-service",
+        functionName: `boxalarm-${env}-incident-neris-settings-consumer`,
+        handler: LAMBDA_HANDLER,
+        code: lambdaCode("incident-service", "neris-settings-consumer"),
+        logGroup: args.logGroup,
+        environment: baseEnvironment,
+        additionalPolicyStatements: pulumi
+          .all([cmkStatement, args.incidentTableArn])
+          .apply(([cmk, tableArn]) => [
+            {
+              Sid: "IncidentNerisSettingsCopyAccess" as const,
+              Effect: "Allow" as const,
+              Action: ["dynamodb:PutItem"],
+              Resource: [tableArn],
+            },
+            ...cmk,
+          ]),
+      },
+      { parent: this },
+    );
+    this.nerisSettingsConsumer = new QueueConsumer(
+      `${name}-neris-settings-consumer`,
+      {
+        env,
+        busName: args.busName,
+        busArn: args.busArn,
+        ruleName: `boxalarm-${env}-incident-neris-settings-copy`,
+        eventPattern: JSON.stringify({
+          source: ["platform-service"],
+          "detail-type": ["platform.config.updated", "neris.entity.synced"],
+        }),
+        queueName: `boxalarm-${env}-incident-neris-settings-copy-queue`,
+        lambda: nerisSettingsLambda.function,
+        lambdaRole: nerisSettingsLambda.role,
+        maxReceiveCount: 5,
+        reportBatchItemFailures: true,
+      },
+      { parent: this },
+    );
 
     // #237: dispatch/roster projection consumers off the alerting-plane bridge
     // (dispatch.alert.received, alerting.response.confirmed republished onto

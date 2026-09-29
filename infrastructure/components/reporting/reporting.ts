@@ -114,6 +114,7 @@ export class Reporting extends pulumi.ComponentResource {
   public readonly membershipTrendsLambda: ServiceLambda;
   public readonly dashboardLambda: ServiceLambda;
   public readonly responseTimesLambda: ServiceLambda;
+  public readonly nerisComplianceLambda: ServiceLambda;
   public readonly isoLambda: ServiceLambda;
   public readonly exportsBucket: aws.s3.Bucket;
   public readonly exportWorkerLambda: ServiceLambda;
@@ -298,6 +299,36 @@ export class Reporting extends pulumi.ComponentResource {
       { parent: this },
     );
     route("response-times", "GET /api/v1/reporting/response-times", this.responseTimesLambda);
+
+    // nerisCompliance/handler.ts: incident METADATA on GSI1 only (72-hour share, rejection
+    // rate, open drafts) — Query on the index, no base-table or write access.
+    this.nerisComplianceLambda = new ServiceLambda(
+      `${name}-neris-compliance`,
+      {
+        env,
+        serviceName: "reporting-service",
+        functionName: `boxalarm-${env}-reporting-neris-compliance`,
+        handler: LAMBDA_HANDLER,
+        code: lambdaCode("reporting-service", "neris-compliance"),
+        logGroup: args.logGroup,
+        timeout: REPORT_TIMEOUT_SECONDS,
+        environment: { ...baseEnvironment, INCIDENT_TABLE_NAME: args.incidentTableName },
+        additionalPolicyStatements: pulumi
+          .all([args.incidentTableArn, args.incidentCmkArn, vpStatement])
+          .apply(([incidentArn, cmkArn, vp]): IamPolicyStatement[] => [
+            queryStatement("IncidentNerisComplianceQuery", [`${incidentArn}/index/GSI1`]),
+            {
+              Sid: "DecryptIncidentTable",
+              Effect: "Allow",
+              Action: ["kms:Decrypt"],
+              Resource: cmkArn,
+            },
+            ...vp,
+          ]),
+      },
+      { parent: this },
+    );
+    route("neris-compliance", "GET /api/v1/reporting/neris-compliance", this.nerisComplianceLambda);
 
     // iso/repository.ts: training events (GSI3) + attendees (base), apparatus (GSI3) +
     // TEST# items (base), hydrant due buckets (GSI2), and the response-time section from
@@ -633,6 +664,7 @@ export class Reporting extends pulumi.ComponentResource {
       projectionsLambda: this.projectionsLambda,
       dashboardLambda: this.dashboardLambda,
       responseTimesLambda: this.responseTimesLambda,
+      nerisComplianceLambda: this.nerisComplianceLambda,
       isoLambda: this.isoLambda,
       exportsBucket: this.exportsBucket,
       exportWorkerLambda: this.exportWorkerLambda,
