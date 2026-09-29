@@ -8,7 +8,13 @@ import {
   problemResponse,
   readIncidentWriteRequest,
 } from './authContext.js';
-import { getDocumentClient, getIncidentRepository, getTableName } from './repository.js';
+import {
+  IncidentNotFoundError,
+  getDocumentClient,
+  getIncidentRepository,
+  getTableName,
+} from './repository.js';
+import { IncidentLockedError, lockedProblem } from './lock.js';
 import { putIncidentSecondary } from './secondaryRepository.js';
 import { createSchemaVersionRepository } from './schemaVersion/repository.js';
 import { getSecondarySchemaDocument } from './schemaVersion/s3Schema.js';
@@ -76,6 +82,9 @@ export const handler: APIGatewayProxyHandlerV2WithLambdaAuthorizer<AuthorizerCon
         `No incident found with incidentId "${incidentId}".`,
         traceId,
       );
+    }
+    if (incident.lockedAt !== undefined) {
+      return lockedProblem(traceId);
     }
 
     const client = getDocumentClient();
@@ -149,6 +158,12 @@ export const handler: APIGatewayProxyHandlerV2WithLambdaAuthorizer<AuthorizerCon
       }),
     };
   } catch (error) {
+    if (error instanceof IncidentLockedError) {
+      return lockedProblem(traceId);
+    }
+    if (error instanceof IncidentNotFoundError) {
+      return problemResponse(404, 'Not Found', error.message, traceId);
+    }
     console.error(
       JSON.stringify({
         event: 'incident.exposures.failed',

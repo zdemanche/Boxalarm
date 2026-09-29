@@ -6,6 +6,11 @@ import {
 import { buildDeptScopedPk, type VerifiedDeptId } from '@boxalarm/dept-scope';
 import { buildOutboxRecord } from '@boxalarm/outbox';
 import { IncidentNotFoundError, isConditionFailureAt } from './repository.js';
+import {
+  IncidentLockedError,
+  NOT_LOCKED_CONDITION,
+  explainMetadataConditionFailure,
+} from './lock.js';
 
 const TIME_FIELDS = ['dispatchedAt', 'enRouteAt', 'arrivedAt', 'clearedAt'] as const;
 type TimeField = (typeof TIME_FIELDS)[number];
@@ -106,7 +111,8 @@ export async function upsertResponseUnitTimes(
                 pk: buildDeptScopedPk(input.deptId, 'INCIDENT', input.incidentId),
                 sk: 'METADATA',
               },
-              ConditionExpression: 'attribute_exists(pk)',
+              // ...and that it is not locked for review (lock.ts).
+              ConditionExpression: `attribute_exists(pk) AND ${NOT_LOCKED_CONDITION}`,
             },
           },
           {
@@ -123,7 +129,15 @@ export async function upsertResponseUnitTimes(
     );
   } catch (error) {
     if (isConditionFailureAt(error, 0)) {
-      throw new IncidentNotFoundError(input.incidentId);
+      const reason = await explainMetadataConditionFailure(
+        client,
+        tableName,
+        input.deptId,
+        input.incidentId,
+      );
+      throw reason === 'locked'
+        ? new IncidentLockedError(input.incidentId)
+        : new IncidentNotFoundError(input.incidentId);
     }
     throw error;
   }

@@ -9,6 +9,7 @@ import {
 } from './authContext.js';
 import { IncidentNotFoundError, getDocumentClient, getTableName } from './repository.js';
 import { upsertResponseUnitTimes, type ResponseUnitTimesInput } from './responseUnitRepository.js';
+import { IncidentLockedError, lockedProblem } from './lock.js';
 
 const UNIT_TYPES = ['APPARATUS', 'MEMBER'] as const;
 const TIME_FIELDS = ['dispatchedAt', 'enRouteAt', 'arrivedAt', 'clearedAt'] as const;
@@ -76,6 +77,9 @@ export const handler: APIGatewayProxyHandlerV2WithLambdaAuthorizer<AuthorizerCon
   } catch (error) {
     if (error instanceof IncidentNotFoundError) {
       return problemResponse(404, 'Not Found', error.message, traceId);
+    }
+    if (error instanceof IncidentLockedError) {
+      return lockedProblem(traceId);
     }
     console.error(
       JSON.stringify({

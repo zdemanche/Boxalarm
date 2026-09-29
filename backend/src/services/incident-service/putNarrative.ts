@@ -12,6 +12,7 @@ import {
   NarrativeTooLongError,
   getIncidentRepository,
 } from './repository.js';
+import { IncidentLockedError, lockedProblem } from './lock.js';
 
 function parseNarrative(record: Record<string, unknown>): string {
   const narrative = record.narrative;
@@ -51,6 +52,9 @@ export const handler: APIGatewayProxyHandlerV2WithLambdaAuthorizer<AuthorizerCon
     }
     if (error instanceof IncidentNotFoundError) {
       return problemResponse(404, 'Not Found', error.message, traceId);
+    }
+    if (error instanceof IncidentLockedError) {
+      return lockedProblem(traceId);
     }
     console.error(
       JSON.stringify({

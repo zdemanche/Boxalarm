@@ -14,6 +14,7 @@ import {
   getTableName,
 } from './repository.js';
 import { createSchemaVersionRepository } from './schemaVersion/repository.js';
+import { IncidentLockedError, lockedProblem } from './lock.js';
 import { getCoreSchemaDocument } from './schemaVersion/s3Schema.js';
 import { getS3Client } from '../platform-service/export/awsClients.js';
 import { missingRequiredCoreFields, validateCoreFields } from './schemaVersion/validateEnum.js';
@@ -55,6 +56,9 @@ export const handler: APIGatewayProxyHandlerV2WithLambdaAuthorizer<AuthorizerCon
         `No incident found with incidentId "${incidentId}".`,
         traceId,
       );
+    }
+    if (incident.lockedAt !== undefined) {
+      return lockedProblem(traceId);
     }
 
     const client = getDocumentClient();
@@ -116,6 +120,9 @@ export const handler: APIGatewayProxyHandlerV2WithLambdaAuthorizer<AuthorizerCon
   } catch (error) {
     if (error instanceof IncidentNotFoundError) {
       return problemResponse(404, 'Not Found', error.message, traceId);
+    }
+    if (error instanceof IncidentLockedError) {
+      return lockedProblem(traceId);
     }
     console.error(
       JSON.stringify({

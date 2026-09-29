@@ -196,4 +196,42 @@ describe('validateConfigValue', () => {
       });
     });
   });
+
+  describe('NERIS', () => {
+    it('accepts a department id with optional switches and rules', () => {
+      expect(
+        validateConfigValue('NERIS', {
+          departmentNerisId: 'FD09190828',
+          autoSubmitOnLock: true,
+          submissionsEnabled: true,
+          rules: { requireNarrative: true, minNarrativeLength: 40, requireUnitTimes: false },
+        }),
+      ).toEqual([]);
+    });
+
+    it('requires a well-formed NERIS department id', () => {
+      expect(validateConfigValue('NERIS', { departmentNerisId: 'VN12345678' })).toContainEqual({
+        field: 'departmentNerisId',
+        message: 'is required and must be the NERIS department id: FD followed by 8 digits',
+      });
+    });
+
+    it('rejects wrong types and unknown rule fields', () => {
+      const errors = validateConfigValue('NERIS', {
+        departmentNerisId: 'FD09190828',
+        autoSubmitOnLock: 'yes',
+        rules: { minNarrativeLength: -1, skipValidation: true },
+      });
+      expect(errors).toEqual(
+        expect.arrayContaining([
+          { field: 'autoSubmitOnLock', message: 'must be a boolean when provided' },
+          {
+            field: 'rules.minNarrativeLength',
+            message: 'must be an integer from 0 to 100000 when provided',
+          },
+          { field: 'rules.skipValidation', message: 'is not a recognized field' },
+        ]),
+      );
+    });
+  });
 });

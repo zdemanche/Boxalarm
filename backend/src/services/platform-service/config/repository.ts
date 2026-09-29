@@ -19,6 +19,7 @@ export const DEPARTMENT_CONFIG_TYPES = [
   'CHECKLIST_DEFAULTS',
   'RETENTION',
   'RIDING_POSITIONS',
+  'NERIS',
 ] as const;
 
 export type DepartmentConfigType = (typeof DEPARTMENT_CONFIG_TYPES)[number];

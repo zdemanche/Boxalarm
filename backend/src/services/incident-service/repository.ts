@@ -10,6 +10,11 @@ import { assertNoDelimiter, buildDeptScopedPk } from '@boxalarm/dept-scope';
 import type { VerifiedDeptId } from '@boxalarm/dept-scope';
 import { buildOutboxRecord, type OutboxRecord } from '@boxalarm/outbox';
 import {
+  IncidentLockedError,
+  NOT_LOCKED_CONDITION,
+  explainMetadataConditionFailure,
+} from './lock.js';
+import {
   buildNerisIncidentId,
   isIncidentStatus,
   type CreateIncidentInput,
@@ -185,7 +190,8 @@ export function createIncidentRepository(
               Update: {
                 TableName: tableName,
                 Key,
-                ConditionExpression: 'attribute_exists(pk)',
+                // Locked reports reject every edit (lock.ts), atomically with the write.
+                ConditionExpression: `attribute_exists(pk) AND ${NOT_LOCKED_CONDITION}`,
                 ...update,
               },
             },
@@ -195,7 +201,10 @@ export function createIncidentRepository(
       );
     } catch (error) {
       if (isConditionFailureAt(error, 0)) {
-        throw new IncidentNotFoundError(incidentId);
+        const reason = await explainMetadataConditionFailure(client, tableName, deptId, incidentId);
+        throw reason === 'locked'
+          ? new IncidentLockedError(incidentId)
+          : new IncidentNotFoundError(incidentId);
       }
       throw error;
     }
