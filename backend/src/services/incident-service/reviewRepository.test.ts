@@ -62,6 +62,10 @@ describe('lockIncident', () => {
     // The worker sends only this reviewed version (round 2, N2).
     expect(String(update!.Update!.UpdateExpression)).toContain('lockedContentVersion = :reviewed');
     expect(audit!.Put!.Item).toMatchObject({ entityType: 'AUDIT_LOG_ENTRY', action: 'LOCK' });
+    // Audit rows are create-once: a Put can never replace an existing one (review MINOR 6).
+    expect(audit!.Put!.ConditionExpression).toBe(
+      'attribute_not_exists(pk) AND attribute_not_exists(sk)',
+    );
     expect(locked!.Put!.Item).toMatchObject({ eventType: 'incident.report.locked' });
     expect(rest).toEqual([]);
   });
@@ -138,6 +142,9 @@ describe('unlockIncident', () => {
     // Back to DRAFT, so nothing can be submitted until it is reviewed and locked again.
     expect(update!.Update!.ExpressionAttributeValues).toMatchObject({ ':draft': 'DRAFT' });
     expect(audit!.Put!.Item).toMatchObject({ action: 'UNLOCK', reason: 'E1 times were wrong' });
+    expect(audit!.Put!.ConditionExpression).toBe(
+      'attribute_not_exists(pk) AND attribute_not_exists(sk)',
+    );
     expect(outbox!.Put!.Item).toMatchObject({
       eventType: 'incident.report.unlocked',
       payload: { reason: 'E1 times were wrong', unlockedBy: 'MBR-0001' },
