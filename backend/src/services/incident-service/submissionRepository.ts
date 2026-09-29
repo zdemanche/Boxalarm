@@ -1,5 +1,10 @@
 import { TransactionCanceledException } from '@aws-sdk/client-dynamodb';
-import { DynamoDBDocumentClient, GetCommand, TransactWriteCommand } from '@aws-sdk/lib-dynamodb';
+import {
+  DynamoDBDocumentClient,
+  GetCommand,
+  TransactWriteCommand,
+  UpdateCommand,
+} from '@aws-sdk/lib-dynamodb';
 import { buildDeptScopedPk, type VerifiedDeptId } from '@boxalarm/dept-scope';
 import { buildOutboxRecord } from '@boxalarm/outbox';
 import { createLogger } from '@boxalarm/logging';
@@ -130,8 +135,11 @@ export interface SubmissionAttemptInput {
   readonly retryCount: number;
   readonly nerisEnvironment: 'DEV' | 'PROD';
   readonly failureReason?: string;
-  /** CREATE = POST /incident/{entity}; UPDATE = PUT /incident/{entity}/{nerisId}. */
-  readonly operation?: 'CREATE' | 'UPDATE';
+  /**
+   * CREATE = POST /incident/{entity}; UPDATE = PUT /incident/{entity}/{nerisId}; ADOPT =
+   * NERIS already held the record from an earlier attempt, so it was adopted and replaced.
+   */
+  readonly operation?: 'CREATE' | 'UPDATE' | 'ADOPT';
   /** NERIS's id for the record, once it has one. */
   readonly nerisIncidentId?: string;
   /** NERIS lifecycle status returned by the create (a PUT returns none). */
@@ -207,6 +215,16 @@ export interface SubmissionRepository {
     nowEpochSeconds: number,
     traceId: string,
   ): Promise<RetrySubmissionResult>;
+  /**
+   * Records, before the POST, the NERIS id the create will produce. If the response is lost
+   * or the local write after a 201 fails, the next attempt finds this and adopts the record
+   * NERIS already holds instead of creating it again (review M2).
+   */
+  markCreateInFlight(
+    deptId: VerifiedDeptId,
+    incidentId: string,
+    expectedNerisId: string,
+  ): Promise<void>;
 }
 
 export function createSubmissionRepository(
@@ -392,7 +410,7 @@ export function createSubmissionRepository(
                   TableName: tableName,
                   Key: { pk: buildDeptScopedPk(deptId, 'INCIDENT', incidentId), sk: 'METADATA' },
                   ConditionExpression: 'attribute_exists(pk)',
-                  UpdateExpression: `SET ${setClauses.join(', ')}`,
+                  UpdateExpression: `SET ${setClauses.join(', ')}${success ? ' REMOVE pendingNerisId' : ''}`,
                   ...(Object.keys(names).length > 0 ? { ExpressionAttributeNames: names } : {}),
                   ExpressionAttributeValues: values,
                 },
@@ -479,6 +497,21 @@ export function createSubmissionRepository(
       }
 
       return { submissionStatus };
+    },
+
+    async markCreateInFlight(deptId, incidentId, expectedNerisId) {
+      await client.send(
+        new UpdateCommand({
+          TableName: tableName,
+          Key: { pk: buildDeptScopedPk(deptId, 'INCIDENT', incidentId), sk: 'METADATA' },
+          ConditionExpression: 'attribute_exists(pk)',
+          UpdateExpression: 'SET pendingNerisId = :expected, pendingCreateAt = :at',
+          ExpressionAttributeValues: {
+            ':expected': expectedNerisId,
+            ':at': new Date().toISOString(),
+          },
+        }),
+      );
     },
 
     async getSubmission(deptId, incidentId) {

@@ -184,6 +184,10 @@ function route(req: Recorded, res: ServerResponse): void {
   }
   if (segments[0] === 'entity' && req.method === 'PATCH') return send(res, 200, {});
   if (rest === '/busy') return send(res, 429, {});
+  if (rest === '/slow') {
+    setTimeout(() => send(res, 200, {}), 300);
+    return;
+  }
   return send(res, 404, { detail: 'Not Found' });
 }
 
@@ -413,6 +417,14 @@ describe('NERIS client against a fake NERIS server', () => {
       /HTTP 401/,
     );
     expect(requests.map((r) => r.url)).toEqual(['/v1/token']);
+  });
+
+  it('abandons a hung NERIS call at the timeout instead of outliving the Lambda (review M2)', async () => {
+    const client = createNerisClient(
+      { baseUrl, userAgent: USER_AGENT, clientId: CLIENT_ID, clientSecret: CLIENT_SECRET },
+      { tokenCache: createTokenCache(), timeoutMs: 50 },
+    );
+    await expect(client.fetch('/slow')).rejects.toThrow(/abort|timeout/i);
   });
 
   it('classifies statuses: 403 client_error, 404 client_error, 429 rate_limited', async () => {

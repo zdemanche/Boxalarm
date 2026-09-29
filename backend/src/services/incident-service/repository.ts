@@ -137,6 +137,7 @@ function toIncident(item: Record<string, unknown>): Incident {
       ? { firstSubmittedAt: item.firstSubmittedAt }
       : {}),
     ...(typeof item.lastPayloadHash === 'string' ? { lastPayloadHash: item.lastPayloadHash } : {}),
+    ...(typeof item.pendingNerisId === 'string' ? { pendingNerisId: item.pendingNerisId } : {}),
   };
 }
 

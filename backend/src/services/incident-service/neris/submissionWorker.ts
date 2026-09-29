@@ -145,6 +145,27 @@ export function classifyOutcome(httpStatus: number): SubmissionOutcome {
   return 'SERVER_ERROR';
 }
 
+/**
+ * The id NERIS will give this record: `FD########|<incident number>|<call_create epoch s>`
+ * (IncidentCreatedResponse.neris_id pattern). Undefined when the payload lacks either part.
+ */
+export function expectedNerisIncidentId(
+  departmentNerisId: string,
+  nerisPayload: Record<string, unknown>,
+): string | undefined {
+  const dispatch = nerisPayload.dispatch as { call_create?: unknown } | undefined;
+  const base = nerisPayload.base as { incident_number?: unknown } | undefined;
+  const callCreate =
+    typeof dispatch?.call_create === 'string' ? Date.parse(dispatch.call_create) : NaN;
+  const number = base?.incident_number;
+  if (!Number.isFinite(callCreate) || typeof number !== 'string') return undefined;
+  return `${departmentNerisId}|${number}|${Math.floor(callCreate / 1000)}`;
+}
+
+function looksLikeDuplicate(issues: readonly NerisIssue[]): boolean {
+  return issues.some((issue) => /already exists|duplicate/i.test(issue.message));
+}
+
 const OUTCOME_METRIC: Record<SubmissionOutcome, string> = {
   SUCCESS: 'Submitted',
   RATE_LIMITED: 'RateLimited',
@@ -242,7 +263,8 @@ async function attemptSubmission(
     schema: nerisApi,
   });
   const hash = payloadHash(nerisPayload);
-  const operation = incident.nerisIncidentId ? 'UPDATE' : 'CREATE';
+  const expectedNerisId = expectedNerisIncidentId(settings.departmentNerisId, nerisPayload);
+  let operation: 'CREATE' | 'UPDATE' | 'ADOPT' = incident.nerisIncidentId ? 'UPDATE' : 'CREATE';
 
   let httpStatus: number;
   let outcome: SubmissionOutcome;
@@ -252,13 +274,51 @@ async function attemptSubmission(
   try {
     const config = await readNerisConfig(process.env);
     const api = createNerisApi(getNerisClient(config));
-    const result = incident.nerisIncidentId
-      ? await api.replaceIncident(
-          settings.departmentNerisId,
-          incident.nerisIncidentId,
-          nerisPayload,
-        )
-      : await api.createIncident(settings.departmentNerisId, nerisPayload);
+    const entity = settings.departmentNerisId;
+
+    // Idempotent create (review M2). NERIS ids are deterministic
+    // (`dept|incident number|call_create`), so a create that may already have landed — a
+    // marker from an earlier attempt, or any retry — is first looked up and adopted.
+    const adopt = async (): Promise<string | undefined> => {
+      const candidates = [...new Set([incident.pendingNerisId, expectedNerisId])].filter(
+        (id): id is string => typeof id === 'string',
+      );
+      for (const candidate of candidates) {
+        const found = await api.getIncidentStatus(entity, candidate);
+        if (found.ok) return candidate;
+      }
+      return undefined;
+    };
+
+    let result;
+    if (!nerisIncidentId) {
+      const mayExist = incident.pendingNerisId !== undefined || payload.retryCount > 0;
+      const existing = mayExist ? await adopt() : undefined;
+      if (existing) {
+        nerisIncidentId = existing;
+        operation = 'ADOPT';
+      } else if (expectedNerisId) {
+        await submissionRepository.markCreateInFlight(
+          payload.deptId,
+          payload.incidentId,
+          expectedNerisId,
+        );
+      }
+    }
+    if (nerisIncidentId) {
+      result = await api.replaceIncident(entity, nerisIncidentId, nerisPayload);
+    } else {
+      result = await api.createIncident(entity, nerisPayload);
+      // NERIS refusing a create as a duplicate means an earlier attempt landed: adopt it.
+      if (!result.ok && (result.httpStatus === 409 || looksLikeDuplicate(result.issues))) {
+        const existing = await adopt();
+        if (existing) {
+          nerisIncidentId = existing;
+          operation = 'ADOPT';
+          result = await api.replaceIncident(entity, existing, nerisPayload);
+        }
+      }
+    }
     httpStatus = result.httpStatus;
     if (result.ok) {
       outcome = 'SUCCESS';

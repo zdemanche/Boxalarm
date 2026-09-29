@@ -20,7 +20,17 @@ export interface CreateNerisClientDeps {
   readonly fetchFn?: FetchFn;
   readonly tokenCache?: TokenCache;
   readonly nowMs?: () => number;
+  /** Per-call timeout; defaults to {@link NERIS_CALL_TIMEOUT_MS}. */
+  readonly timeoutMs?: number;
 }
+
+/**
+ * Every NERIS call is abandoned after this long. The submission worker makes at most three
+ * calls (token, existence check, create/replace) inside its 25 s Lambda timeout, and the
+ * HTTP routes sit behind API Gateway's 30 s limit, so a hung NERIS can never outlast the
+ * Lambda and leave a send in an unknown state (review M2).
+ */
+export const NERIS_CALL_TIMEOUT_MS = 6_000;
 
 /**
  * Resolves a relative path against the configured base URL, or accepts an
@@ -71,15 +81,22 @@ export function createNerisClient(
   const fetchFn = deps.fetchFn ?? fetch;
   const tokenCache = deps.tokenCache ?? createTokenCache();
   const nowMs = deps.nowMs ?? Date.now;
+  const timeoutMs = deps.timeoutMs ?? NERIS_CALL_TIMEOUT_MS;
 
   return {
     async fetch(pathOrUrl: string, init?: RequestInit): Promise<Response> {
       const url = resolveUrl(config.baseUrl, pathOrUrl);
-      const accessToken = await getAccessToken(config, { fetchFn, cache: tokenCache, nowMs });
+      const accessToken = await getAccessToken(config, {
+        fetchFn,
+        cache: tokenCache,
+        nowMs,
+        timeoutMs,
+      });
       const headers = mergeHeaders(init, config.userAgent, accessToken);
       return fetchFn(url, {
         ...init,
         headers,
+        signal: init?.signal ?? AbortSignal.timeout(timeoutMs),
       });
     },
   };

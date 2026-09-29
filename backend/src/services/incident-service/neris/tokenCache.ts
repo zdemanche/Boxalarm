@@ -50,6 +50,8 @@ export interface GetAccessTokenDeps {
   readonly fetchFn?: FetchFn;
   readonly cache?: TokenCache;
   readonly nowMs?: () => number;
+  /** Abandon the token request after this long (none when omitted). */
+  readonly timeoutMs?: number;
 }
 
 interface TokenResponseBody {
@@ -73,8 +75,10 @@ function basicAuthHeader(clientId: string, clientSecret: string): string {
 async function requestAccessToken(
   config: NerisConfig,
   fetchFn: FetchFn,
+  timeoutMs: number | undefined,
 ): Promise<{ accessToken: string; expiresInSeconds: number }> {
   const response = await fetchFn(buildTokenUrl(config.baseUrl), {
+    ...(timeoutMs !== undefined ? { signal: AbortSignal.timeout(timeoutMs) } : {}),
     method: 'POST',
     headers: {
       Authorization: basicAuthHeader(config.clientId, config.clientSecret),
@@ -148,7 +152,7 @@ export async function getAccessToken(
   }
 
   const acquiredAt = nowMs();
-  const requestPromise = requestAccessToken(config, fetchFn)
+  const requestPromise = requestAccessToken(config, fetchFn, deps.timeoutMs)
     .then((refreshed) => {
       const entry: CachedAccessToken = {
         accessToken: refreshed.accessToken,

@@ -44,11 +44,15 @@ function mockDeps(options: {
   readonly incidentExists?: boolean;
   readonly production?: boolean;
   readonly nerisIncidentId?: string;
+  readonly pendingNerisId?: string;
+  /** NERIS already holds the record (GET by id answers 200). */
+  readonly existsInNeris?: boolean;
   readonly departmentNerisId?: string | null;
 }) {
   const incident = {
     ...fakeIncident(),
     ...(options.nerisIncidentId ? { nerisIncidentId: options.nerisIncidentId } : {}),
+    ...(options.pendingNerisId ? { pendingNerisId: options.pendingNerisId } : {}),
   };
   const getIncident = vi
     .fn()
@@ -92,9 +96,13 @@ function mockDeps(options: {
   });
 
   const appendSubmissionAttempt = vi.fn().mockResolvedValue({ submissionStatus: 'RETRYING' });
+  const markCreateInFlight = vi.fn().mockResolvedValue(undefined);
   vi.doMock('../submissionRepository.js', async (importOriginal) => {
     const actual = await importOriginal<typeof import('../submissionRepository.js')>();
-    return { ...actual, getSubmissionRepository: () => ({ appendSubmissionAttempt }) };
+    return {
+      ...actual,
+      getSubmissionRepository: () => ({ appendSubmissionAttempt, markCreateInFlight }),
+    };
   });
 
   const status = options.httpStatus ?? 201;
@@ -114,11 +122,17 @@ function mockDeps(options: {
         : {});
   const fetchFn = options.fetchError
     ? vi.fn().mockRejectedValue(options.fetchError)
-    : vi
-        .fn()
-        .mockImplementation(() =>
-          Promise.resolve(new Response(status === 204 ? null : JSON.stringify(body), { status })),
-        );
+    : vi.fn().mockImplementation((_path: string, init?: RequestInit) =>
+        Promise.resolve(
+          init?.method === 'GET'
+            ? options.existsInNeris
+              ? new Response(JSON.stringify({ incident_status: { status: 'SUBMITTED' } }), {
+                  status: 200,
+                })
+              : new Response(JSON.stringify({ detail: 'Not Found' }), { status: 404 })
+            : new Response(status === 204 ? null : JSON.stringify(body), { status }),
+        ),
+      );
   vi.doMock('./index.js', async (importOriginal) => {
     const actual = await importOriginal<typeof import('./index.js')>();
     return {
@@ -135,7 +149,7 @@ function mockDeps(options: {
     };
   });
 
-  return { getIncident, appendSubmissionAttempt, fetchFn };
+  return { getIncident, appendSubmissionAttempt, markCreateInFlight, fetchFn };
 }
 
 function unmockAll(): void {
@@ -364,6 +378,76 @@ describe('submissionWorker handler (SQS trigger)', () => {
       expect.any(Number),
     );
     expect(schedulerSend).not.toHaveBeenCalled();
+  });
+
+  it('records the expected NERIS id before a first create (review M2)', async () => {
+    const { markCreateInFlight, fetchFn } = mockDeps({ httpStatus: 201 });
+    const { createHandler } = await import('./submissionWorker.js');
+    await createHandler({ schedulerClient: { send: vi.fn() } as never })(
+      { Records: [sqsRecord(submittedEnvelope('NICHOLS', INCIDENT_ID))] },
+      FAKE_CONTEXT,
+      () => undefined,
+    );
+    expect(markCreateInFlight).toHaveBeenCalledWith(
+      'NICHOLS',
+      INCIDENT_ID,
+      `${DEPT_NERIS_ID}|4471|1798000000`,
+    );
+    // No existence check on a first attempt with no marker: straight to the create.
+    expect((fetchFn.mock.calls[0] as [string, RequestInit])[1].method).toBe('POST');
+  });
+
+  it('adopts a record an earlier attempt created (lost 201) and replaces it instead of POSTing again', async () => {
+    const pending = `${DEPT_NERIS_ID}|4471|1798000000`;
+    const { fetchFn, appendSubmissionAttempt } = mockDeps({
+      httpStatus: 200,
+      responseBody: { last_modified: '2026-09-29T10:00:00Z' },
+      pendingNerisId: pending,
+      existsInNeris: true,
+    });
+    const { createHandler } = await import('./submissionWorker.js');
+    await createHandler({ schedulerClient: { send: vi.fn() } as never })(
+      { Records: [sqsRecord(submittedEnvelope('NICHOLS', INCIDENT_ID))] },
+      FAKE_CONTEXT,
+      () => undefined,
+    );
+    const methods = fetchFn.mock.calls.map(([, init]) => (init as RequestInit).method);
+    expect(methods).toEqual(['GET', 'PUT']);
+    expect(appendSubmissionAttempt).toHaveBeenCalledWith(
+      'NICHOLS',
+      INCIDENT_ID,
+      expect.objectContaining({ outcome: 'SUCCESS', operation: 'ADOPT', nerisIncidentId: pending }),
+      true,
+      expect.any(Number),
+    );
+  });
+
+  it('treats a duplicate-create refusal as adopt, not a rejection', async () => {
+    const { fetchFn, appendSubmissionAttempt } = mockDeps({ httpStatus: 409 });
+    fetchFn.mockImplementation((_path: string, init?: RequestInit) =>
+      Promise.resolve(
+        init?.method === 'POST'
+          ? new Response(JSON.stringify({ detail: 'Incident already exists' }), { status: 409 })
+          : init?.method === 'GET'
+            ? new Response(JSON.stringify({ incident_status: { status: 'SUBMITTED' } }), {
+                status: 200,
+              })
+            : new Response(JSON.stringify({ last_modified: 'x' }), { status: 200 }),
+      ),
+    );
+    const { createHandler } = await import('./submissionWorker.js');
+    await createHandler({ schedulerClient: { send: vi.fn() } as never })(
+      { Records: [sqsRecord(submittedEnvelope('NICHOLS', INCIDENT_ID))] },
+      FAKE_CONTEXT,
+      () => undefined,
+    );
+    expect(appendSubmissionAttempt).toHaveBeenCalledWith(
+      'NICHOLS',
+      INCIDENT_ID,
+      expect.objectContaining({ outcome: 'SUCCESS', operation: 'ADOPT' }),
+      true,
+      expect.any(Number),
+    );
   });
 
   it('schedules each retry under a unique, self-deleting name recorded on the attempt (review M3)', async () => {
