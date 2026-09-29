@@ -1,6 +1,8 @@
 import { palette, spacing, typography } from '@boxalarm/design-tokens';
 import { Text, useColorScheme, View } from 'react-native';
-import type { NearestHydrant, PrePlanEnrichment } from './types';
+import type { NearestHydrant, PrePlanEnrichment, UtilityShutoff } from './types';
+
+type Tokens = (typeof palette)[keyof typeof palette];
 
 /** "H-014 · 90 m · 6-inch · 1000 gpm (class A)" - one glanceable line per hydrant. */
 function describeHydrant(hydrant: NearestHydrant): string {
@@ -18,6 +20,96 @@ function describeHydrant(hydrant: NearestHydrant): string {
   ]
     .filter((part): part is string => Boolean(part))
     .join(' · ');
+}
+
+function withUnit(address: string, unit: string | null | undefined): string {
+  // Skip when the address already names the unit ("40 Oak Ave Apt 2").
+  const words = address.toUpperCase().split(/[\s,#.]+/);
+  return unit && !words.slice(1).includes(unit.toUpperCase())
+    ? `${address} (unit ${unit})`
+    : address;
+}
+
+/**
+ * What the pre-plan was matched on, in words. `warning` notices are guesses the crew must
+ * check - they lead with "VERIFY ADDRESS" so the meaning never rests on colour alone.
+ */
+export function matchNotice(prePlan: PrePlanEnrichment): { text: string; warning: boolean } | null {
+  const address = prePlan.matchedAddress;
+  switch (prePlan.matchType) {
+    case 'ADDRESS':
+      return address ? { text: `Pre-plan for ${address}`, warning: false } : null;
+    case 'ADDRESS_BUILDING':
+      return {
+        text: `Building-level pre-plan for ${address ?? 'this address'} (no plan for the dispatched unit)`,
+        warning: false,
+      };
+    case 'UNIT_MISMATCH':
+      return {
+        text: `VERIFY ADDRESS: this pre-plan is for ${withUnit(address ?? 'another unit', prePlan.unit)}, a different unit than dispatched.`,
+        warning: true,
+      };
+    case 'NEARBY':
+      return {
+        text: `VERIFY ADDRESS: nearby pre-plan for ${address ?? 'another address'}${prePlan.distanceMeters !== undefined ? `, ${prePlan.distanceMeters} m from the dispatch location` : ''}.`,
+        warning: true,
+      };
+    case 'CANDIDATES':
+      return {
+        text: `VERIFY ADDRESS: ${prePlan.candidates?.length ?? 'Several'} pre-plans match this address. Confirm which one applies.`,
+        warning: true,
+      };
+    default:
+      return null;
+  }
+}
+
+function Heading({ tokens, children }: { tokens: Tokens; children: string }) {
+  return (
+    <Text style={{ color: tokens.foreground, fontSize: typography.size.sm, fontWeight: '600' }}>
+      {children}
+    </Text>
+  );
+}
+
+function HazardList({ tokens, hazards }: { tokens: Tokens; hazards: readonly string[] }) {
+  if (hazards.length === 0) return null;
+  return (
+    <View style={{ marginTop: spacing.md }}>
+      <Heading tokens={tokens}>Hazards</Heading>
+      {hazards.map((hazard) => (
+        <Text
+          key={hazard}
+          style={{ color: tokens.error, fontSize: typography.size.sm, marginTop: 2 }}
+        >
+          {hazard}
+        </Text>
+      ))}
+    </View>
+  );
+}
+
+function ShutoffList({
+  tokens,
+  shutoffs,
+}: {
+  tokens: Tokens;
+  shutoffs: readonly UtilityShutoff[];
+}) {
+  if (shutoffs.length === 0) return null;
+  return (
+    <View style={{ marginTop: spacing.md }}>
+      <Heading tokens={tokens}>Utility shutoffs</Heading>
+      {shutoffs.map((shutoff) => (
+        <Text
+          key={`${shutoff.utility}-${shutoff.location}`}
+          style={{ color: tokens.foreground, fontSize: typography.size.sm, marginTop: 2 }}
+        >
+          {shutoff.utility}: {shutoff.location}
+        </Text>
+      ))}
+    </View>
+  );
 }
 
 // E1-S17-UI / E5-S8-UI: pre-plan/hydrant enrichment, sourced only from the alerting-service
@@ -45,6 +137,8 @@ export function PrePlanPanel({ prePlan }: { prePlan: PrePlanEnrichment | null | 
     );
   }
 
+  const notice = matchNotice(prePlan);
+
   return (
     <View style={{ marginTop: spacing.lg }}>
       <Text
@@ -53,6 +147,47 @@ export function PrePlanPanel({ prePlan }: { prePlan: PrePlanEnrichment | null | 
       >
         Pre-plan
       </Text>
+      {notice ? (
+        <Text
+          accessibilityRole={notice.warning ? 'alert' : 'text'}
+          style={{
+            color: notice.warning ? tokens.warning : tokens.foreground,
+            fontSize: typography.size.base,
+            fontWeight: notice.warning ? '700' : '600',
+            marginTop: spacing.xs,
+            ...(notice.warning
+              ? { borderLeftWidth: 4, borderLeftColor: tokens.warning, paddingLeft: spacing.sm }
+              : {}),
+          }}
+        >
+          {notice.text}
+        </Text>
+      ) : null}
+
+      {prePlan.matchType === 'CANDIDATES'
+        ? (prePlan.candidates ?? []).map((candidate) => (
+            <View key={candidate.occupancyId} style={{ marginTop: spacing.md }}>
+              <Text
+                style={{
+                  color: tokens.foreground,
+                  fontSize: typography.size.base,
+                  fontWeight: '700',
+                }}
+              >
+                {withUnit(candidate.matchedAddress, candidate.unit)}
+                {candidate.distanceMeters !== undefined ? ` · ${candidate.distanceMeters} m` : ''}
+              </Text>
+              {candidate.summary ? (
+                <Text style={{ color: tokens.foreground, fontSize: typography.size.sm }}>
+                  {candidate.summary}
+                </Text>
+              ) : null}
+              <HazardList tokens={tokens} hazards={candidate.hazards} />
+              <ShutoffList tokens={tokens} shutoffs={candidate.utilityShutoffs} />
+            </View>
+          ))
+        : null}
+
       {prePlan.summary ? (
         <Text
           style={{
@@ -65,49 +200,12 @@ export function PrePlanPanel({ prePlan }: { prePlan: PrePlanEnrichment | null | 
         </Text>
       ) : null}
 
-      {prePlan.hazards.length > 0 ? (
-        <View style={{ marginTop: spacing.md }}>
-          <Text
-            style={{ color: tokens.foreground, fontSize: typography.size.sm, fontWeight: '600' }}
-          >
-            Hazards
-          </Text>
-          {prePlan.hazards.map((hazard) => (
-            <Text
-              key={hazard}
-              style={{ color: tokens.error, fontSize: typography.size.sm, marginTop: 2 }}
-            >
-              {hazard}
-            </Text>
-          ))}
-        </View>
-      ) : null}
-
-      {prePlan.utilityShutoffs.length > 0 ? (
-        <View style={{ marginTop: spacing.md }}>
-          <Text
-            style={{ color: tokens.foreground, fontSize: typography.size.sm, fontWeight: '600' }}
-          >
-            Utility shutoffs
-          </Text>
-          {prePlan.utilityShutoffs.map((shutoff) => (
-            <Text
-              key={`${shutoff.utility}-${shutoff.location}`}
-              style={{ color: tokens.foreground, fontSize: typography.size.sm, marginTop: 2 }}
-            >
-              {shutoff.utility}: {shutoff.location}
-            </Text>
-          ))}
-        </View>
-      ) : null}
+      <HazardList tokens={tokens} hazards={prePlan.hazards} />
+      <ShutoffList tokens={tokens} shutoffs={prePlan.utilityShutoffs} />
 
       {prePlan.nearestHydrants.length > 0 ? (
         <View style={{ marginTop: spacing.md }}>
-          <Text
-            style={{ color: tokens.foreground, fontSize: typography.size.sm, fontWeight: '600' }}
-          >
-            Nearest hydrants
-          </Text>
+          <Heading tokens={tokens}>Nearest hydrants</Heading>
           {prePlan.nearestHydrants.map((hydrant) => (
             <Text
               key={hydrant.hydrantId}

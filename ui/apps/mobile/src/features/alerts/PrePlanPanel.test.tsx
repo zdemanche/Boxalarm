@@ -33,3 +33,71 @@ test('says so when no pre-plan is on file for the address', async () => {
   const { findByText } = await render(<PrePlanPanel prePlan={null} />);
   expect(await findByText('No pre-plan on file for this address.')).toBeTruthy();
 });
+
+const BASE = { hazards: [], utilityShutoffs: [], nearestHydrants: [] };
+
+test('shows the matched address plainly for an exact address match', async () => {
+  const { findByText, queryByText } = await render(
+    <PrePlanPanel
+      prePlan={{ ...BASE, matchType: 'ADDRESS', matchedAddress: '123 Main Street', unit: null }}
+    />,
+  );
+  expect(await findByText('Pre-plan for 123 Main Street')).toBeTruthy();
+  expect(queryByText(/VERIFY ADDRESS/)).toBeNull();
+});
+
+test('announces a NEARBY match as an alert that says to verify the address', async () => {
+  const { findByRole } = await render(
+    <PrePlanPanel
+      prePlan={{ ...BASE, matchType: 'NEARBY', matchedAddress: '12 Main St', distanceMeters: 30 }}
+    />,
+  );
+  const alert = await findByRole('alert');
+  expect(alert.props.children).toBe(
+    'VERIFY ADDRESS: nearby pre-plan for 12 Main St, 30 m from the dispatch location.',
+  );
+});
+
+test('flags UNIT_MISMATCH and lists CANDIDATES with their units', async () => {
+  const mismatch = await render(
+    <PrePlanPanel
+      prePlan={{ ...BASE, matchType: 'UNIT_MISMATCH', matchedAddress: '40 Oak Ave', unit: '2' }}
+    />,
+  );
+  expect(
+    await mismatch.findByText(
+      'VERIFY ADDRESS: this pre-plan is for 40 Oak Ave (unit 2), a different unit than dispatched.',
+    ),
+  ).toBeTruthy();
+  mismatch.unmount();
+
+  const { findByText } = await render(
+    <PrePlanPanel
+      prePlan={{
+        ...BASE,
+        matchType: 'CANDIDATES',
+        candidates: [
+          {
+            occupancyId: 'A',
+            matchedAddress: '123 Main St',
+            unit: 'A',
+            hazards: [],
+            utilityShutoffs: [],
+          },
+          {
+            occupancyId: 'B',
+            matchedAddress: '123 Main St',
+            unit: 'B',
+            hazards: ['Chlorine'],
+            utilityShutoffs: [],
+          },
+        ],
+      }}
+    />,
+  );
+  expect(
+    await findByText('VERIFY ADDRESS: 2 pre-plans match this address. Confirm which one applies.'),
+  ).toBeTruthy();
+  expect(await findByText('123 Main St (unit A)')).toBeTruthy();
+  expect(await findByText('Chlorine')).toBeTruthy();
+});

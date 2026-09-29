@@ -187,13 +187,17 @@ export async function findPrePlanByAddress(
   return resolveUnit(normalized.unit, candidates);
 }
 
-/** The pre-plan whose occupancy is nearest `point`, if one lies within the match radius. */
+/**
+ * Pre-plans whose occupancy lies within 50 m of `point` — used only for a dispatch with no
+ * usable street address. One is NEARBY (flagged, with its distance); several are CANDIDATES,
+ * nearest first. Never "the nearest": 50 m spans two or three suburban parcels.
+ */
 export async function findPrePlanNear(
   client: DynamoDBDocumentClient,
   tableName: string,
   deptId: VerifiedDeptId,
   point: GeoPoint,
-): Promise<PrePlanCopyItem | undefined> {
+): Promise<PrePlanMatch | undefined> {
   const { cells } = searchRing(point, PREPLAN_GEO_SEARCH_PRECISION);
   const pages = await Promise.all(
     cells.map((cell) =>
@@ -208,17 +212,27 @@ export async function findPrePlanNear(
       }),
     ),
   );
-  let best: { readonly item: PrePlanCopyItem; readonly distance: number } | undefined;
+  const within: Array<PrePlanCandidate & { readonly distanceMeters: number }> = [];
+  const seen = new Set<string>();
   for (const item of pages.flat().filter(isPrePlanCopy)) {
     const location = { latitude: item.latitude, longitude: item.longitude };
-    if (!isGeoPoint(location)) continue;
+    if (!isGeoPoint(location) || seen.has(item.occupancyId)) continue;
+    seen.add(item.occupancyId);
     const distance = haversineMeters(point, location);
-    if (distance > PREPLAN_MATCH_RADIUS_METERS) continue;
-    if (!best || distance < best.distance) {
-      best = { item, distance };
+    if (distance <= PREPLAN_MATCH_RADIUS_METERS) {
+      within.push({ copy: item, distanceMeters: Math.round(distance) });
     }
   }
-  return best?.item;
+  within.sort(
+    (a, b) =>
+      a.distanceMeters - b.distanceMeters || a.copy.occupancyId.localeCompare(b.copy.occupancyId),
+  );
+  if (within.length === 0) return undefined;
+  if (within.length === 1) {
+    const [only] = within as [(typeof within)[number]];
+    return { matchType: 'NEARBY', copy: only.copy, distanceMeters: only.distanceMeters };
+  }
+  return { matchType: 'CANDIDATES', candidates: within };
 }
 
 async function queryHydrantCells(

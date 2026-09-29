@@ -187,6 +187,9 @@ describe('alert-detail handler', () => {
         prePlan: { nearestHydrants: Array<Record<string, unknown>> } & Record<string, unknown>;
       };
       expect(body.prePlan).toMatchObject({
+        matchType: 'ADDRESS',
+        matchedAddress: '123 Main Street',
+        unit: null,
         summary: 'Multi family — 123 Main Street',
         hazards: ['LPG_TANK_REAR'],
         utilityShutoffs: [{ utility: 'GAS', location: 'rear of building' }],
@@ -220,10 +223,10 @@ describe('alert-detail handler', () => {
       expect(queries).toHaveBeenCalledOnce();
     });
 
-    it('falls back to a pre-plan within 50 m of the dispatch coordinates when the address does not match (CAD)', async () => {
+    it('flags a pre-plan within 50 m as NEARBY with its distance when the dispatch has coordinates but no usable street address (CAD)', async () => {
       const { createHandler } = await import('./handler.js');
       const docClient = routedClient({
-        dispatch: { ...DISPATCH_ITEM, address: '0 Unknown Rd', ...OCCUPANCY_POINT },
+        dispatch: { ...DISPATCH_ITEM, address: 'I-95 NB near exit 27', ...OCCUPANCY_POINT },
         queries: (input) => {
           const pk = input.ExpressionAttributeValues[':gsi2pk'];
           if (typeof pk === 'string' && pk.includes('PREPLAN_GEO')) {
@@ -239,7 +242,104 @@ describe('alert-detail handler', () => {
       const body = JSON.parse((result as { body: string }).body) as {
         prePlan: Record<string, unknown> | null;
       };
-      expect(body.prePlan).toMatchObject({ summary: 'Multi family — 123 Main Street' });
+      expect(body.prePlan).toMatchObject({
+        matchType: 'NEARBY',
+        matchedAddress: '123 Main Street',
+        distanceMeters: 0,
+        summary: 'Multi family — 123 Main Street',
+      });
+    });
+
+    it('never falls back to a nearby pre-plan when the dispatch has a usable street address that matched nothing', async () => {
+      const { createHandler } = await import('./handler.js');
+      const queries = vi.fn((input: QueryInput) => {
+        const pk = input.ExpressionAttributeValues[':gsi2pk'];
+        return Promise.resolve({
+          Items: typeof pk === 'string' && pk.includes('PREPLAN_GEO') ? [PRE_PLAN_COPY] : [],
+        });
+      });
+      const docClient = routedClient({
+        dispatch: { ...DISPATCH_ITEM, address: '14 Main St', ...OCCUPANCY_POINT },
+        queries,
+      });
+      const handler = createHandler({ authzClient: fakeAuthzClient('ALLOW'), docClient });
+
+      const result = await handler(buildEvent('NICHOLS-4471-1798000000'));
+
+      const body = JSON.parse((result as { body: string }).body) as Record<string, unknown>;
+      expect(body.prePlan).toBeNull();
+      expect(queries.mock.calls.every((call) => call[0].IndexName === 'GSI1')).toBe(true);
+    });
+
+    it('returns a lone plan for another unit flagged UNIT_MISMATCH, with its unit', async () => {
+      const { createHandler } = await import('./handler.js');
+      const docClient = routedClient({
+        dispatch: { ...DISPATCH_ITEM, address: '123 Main St Apt 3' },
+        queries: (input) =>
+          Promise.resolve({
+            Items:
+              input.IndexName === 'GSI1'
+                ? [{ ...PRE_PLAN_COPY, address: '123 Main Street Apt 2', addressUnit: '2' }]
+                : [],
+          }),
+      });
+      const handler = createHandler({ authzClient: fakeAuthzClient('ALLOW'), docClient });
+
+      const body = JSON.parse(
+        ((await handler(buildEvent('NICHOLS-4471-1798000000'))) as { body: string }).body,
+      ) as Record<string, unknown>;
+
+      expect(body.prePlan).toMatchObject({
+        matchType: 'UNIT_MISMATCH',
+        matchedAddress: '123 Main Street Apt 2',
+        unit: '2',
+        hazards: ['LPG_TANK_REAR'],
+      });
+    });
+
+    it('lists every unit plan as CANDIDATES (with each hazard list) and no top-level hazards', async () => {
+      const { createHandler } = await import('./handler.js');
+      const docClient = routedClient({
+        queries: (input) =>
+          Promise.resolve({
+            Items:
+              input.IndexName === 'GSI1'
+                ? [
+                    {
+                      ...PRE_PLAN_COPY,
+                      occupancyId: 'OCC-B',
+                      address: '123 Main St Unit B',
+                      addressUnit: 'B',
+                      summary: 'Pool chemicals',
+                      hazards: ['CHLORINE'],
+                    },
+                    {
+                      ...PRE_PLAN_COPY,
+                      occupancyId: 'OCC-A',
+                      address: '123 Main St Unit A',
+                      addressUnit: 'A',
+                      summary: 'Bakery',
+                      hazards: [],
+                    },
+                  ]
+                : [],
+          }),
+      });
+      const handler = createHandler({ authzClient: fakeAuthzClient('ALLOW'), docClient });
+
+      const body = JSON.parse(
+        ((await handler(buildEvent('NICHOLS-4471-1798000000'))) as { body: string }).body,
+      ) as { prePlan: Record<string, unknown> };
+
+      expect(body.prePlan).toMatchObject({
+        matchType: 'CANDIDATES',
+        hazards: [],
+        utilityShutoffs: [],
+        candidates: [
+          { occupancyId: 'OCC-A', unit: 'A', summary: 'Bakery', hazards: [] },
+          { occupancyId: 'OCC-B', unit: 'B', summary: 'Pool chemicals', hazards: ['CHLORINE'] },
+        ],
+      });
     });
 
     it('keeps the matched pre-plan and degrades only the hydrant list when the hydrant read fails', async () => {

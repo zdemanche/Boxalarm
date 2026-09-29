@@ -226,18 +226,41 @@ describe('findPrePlanByAddress — locality and distance (MAJOR-2)', () => {
 });
 
 describe('findPrePlanNear', () => {
-  it('matches the occupancy within 50 m of the dispatch point, nearest first', async () => {
+  it('returns a lone occupancy within 50 m as NEARBY, with its distance', async () => {
     const { client, send } = fakeIndex([
+      prePlanCopy('OCC-45M', '1 A St', { location: offset(45) }),
+      prePlanCopy('OCC-90M', '9 C St', { location: offset(90) }),
+    ]);
+
+    const found = await findPrePlanNear(client, TABLE, DEPT_ID, ORIGIN);
+
+    expect(found).toMatchObject({
+      matchType: 'NEARBY',
+      copy: { occupancyId: 'OCC-45M' },
+      distanceMeters: 45,
+    });
+    // centre geohash7 cell + 8 neighbours
+    expect(send).toHaveBeenCalledTimes(9);
+    expect(send.mock.calls.every((call) => call[0].input.IndexName === 'GSI2')).toBe(true);
+  });
+
+  it('returns several occupancies within 50 m as CANDIDATES, nearest first — never just the nearest', async () => {
+    const { client } = fakeIndex([
       prePlanCopy('OCC-45M', '1 A St', { location: offset(45) }),
       prePlanCopy('OCC-20M', '2 B St', { location: offset(0, -20) }),
     ]);
 
     const found = await findPrePlanNear(client, TABLE, DEPT_ID, ORIGIN);
 
-    expect(found?.occupancyId).toBe('OCC-20M');
-    // centre geohash7 cell + 8 neighbours
-    expect(send).toHaveBeenCalledTimes(9);
-    expect(send.mock.calls.every((call) => call[0].input.IndexName === 'GSI2')).toBe(true);
+    expect(found?.matchType).toBe('CANDIDATES');
+    expect(
+      found?.matchType === 'CANDIDATES'
+        ? found.candidates.map((c) => [c.copy.occupancyId, c.distanceMeters])
+        : undefined,
+    ).toEqual([
+      ['OCC-20M', 20],
+      ['OCC-45M', 45],
+    ]);
   });
 
   it('does not match an occupancy farther than 50 m', async () => {
@@ -256,7 +279,7 @@ describe('findPrePlanNear', () => {
     );
     const { client } = fakeIndex([prePlanCopy('OCC-EDGE', '1 A St', { location: occupancy })]);
 
-    expect((await findPrePlanNear(client, TABLE, DEPT_ID, dispatch))?.occupancyId).toBe('OCC-EDGE');
+    expect(matchedId(await findPrePlanNear(client, TABLE, DEPT_ID, dispatch))).toBe('OCC-EDGE');
   });
 });
 

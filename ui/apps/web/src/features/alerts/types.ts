@@ -29,11 +29,37 @@ export interface NearestHydrant {
   distanceMeters?: number;
 }
 
+/**
+ * How the server tied the pre-plan to this dispatch (alerting dispatches/detail/prePlanContext.ts).
+ * Only ADDRESS / ADDRESS_BUILDING are this building's own plan; the rest must be shown as
+ * "verify address", never as the call's plan.
+ */
+export type PrePlanMatchType =
+  'ADDRESS' | 'ADDRESS_BUILDING' | 'UNIT_MISMATCH' | 'NEARBY' | 'CANDIDATES';
+
+/** One of several pre-plans the crew must choose between (matchType CANDIDATES). */
+export interface PrePlanCandidate {
+  occupancyId: string;
+  matchedAddress: string;
+  unit: string | null;
+  summary?: string;
+  hazards: string[];
+  utilityShutoffs: UtilityShutoff[];
+  distanceMeters?: number;
+}
+
 export interface PrePlanEnrichment {
+  /** Absent only from a server that predates match provenance. */
+  matchType?: PrePlanMatchType;
+  matchedAddress?: string;
+  unit?: string | null;
+  /** NEARBY only: meters from the dispatch location. */
+  distanceMeters?: number;
   summary?: string;
   hazards: string[];
   utilityShutoffs: UtilityShutoff[];
   nearestHydrants: NearestHydrant[];
+  candidates?: PrePlanCandidate[];
 }
 
 export type ToneLadderStatus = 'ACTIVE' | 'HALTED_MANUAL' | 'COMPLETED';
