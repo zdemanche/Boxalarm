@@ -169,7 +169,7 @@ async function updateResponseUnit(
               // (the dispatch is still running) passes: it cannot be locked yet.
               ConditionCheck: {
                 TableName: tableName,
-                Key: { pk: key.pk, sk: 'METADATA' },
+                Key: { ...key, sk: 'METADATA' },
                 ConditionExpression: 'attribute_not_exists(lockedAt)',
               },
             },
