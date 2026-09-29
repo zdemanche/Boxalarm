@@ -83,6 +83,15 @@ export function alertPayloadFromNotificationData(data: PushData): AlertPayload |
 const payloadKey = (dispatchId: string) => `alert-payload:${dispatchId}`;
 const detailKey = (dispatchId: string) => `alert-detail:${dispatchId}`;
 
+/** The self-test page (alerting selfTest/dispatchAdapter.ts incidentType SELF_TEST). */
+export function isSelfTestPayload(payload: Pick<AlertPayload, 'incidentType'>): boolean {
+  const type = payload.incidentType
+    .trim()
+    .toUpperCase()
+    .replace(/[\s-]+/g, '_');
+  return type === 'SELF_TEST';
+}
+
 /** Keeps the first receipt time: tone 2 of the same call must not reset "3 min ago". */
 export async function rememberAlertPayload(payload: AlertPayload): Promise<void> {
   const existing = await kvGet<AlertPayload>(payloadKey(payload.dispatchId));
@@ -93,6 +102,8 @@ export async function rememberAlertPayload(payload: AlertPayload): Promise<void>
     receivedAt,
     ...(payload.address ? {} : { address: existing?.value.address ?? '' }),
   });
+  // A test page is not a call: it must never show in the offline Alerts list (review m13).
+  if (isSelfTestPayload(payload)) return;
   const recent = (await kvGet<AlertPayload[]>(RECENT_PAGES_KEY))?.value ?? [];
   const merged = { ...payload, receivedAt };
   await kvSet(

@@ -3,6 +3,8 @@ import {
   alertPayloadFromPushData,
   alertPayloadToNotificationData,
   cachedAlertPayload,
+  isSelfTestPayload,
+  recentPages,
   rememberAlertPayload,
 } from './alertPayload';
 
@@ -85,4 +87,16 @@ test('a later tone of the same call keeps the first receipt time', async () => {
     receivedAt: 100,
     toneSequence: 2,
   });
+});
+
+test('a self-test page is never added to the recent pages the offline Alerts list shows', async () => {
+  await rememberAlertPayload({
+    dispatchId: 'SELFTEST-9',
+    incidentType: 'SELF_TEST',
+    address: 'Your device',
+    receivedAt: Date.now(),
+  });
+
+  expect((await recentPages()).map((page) => page.dispatchId)).not.toContain('SELFTEST-9');
+  expect(isSelfTestPayload({ incidentType: 'Self-test' })).toBe(true);
 });
