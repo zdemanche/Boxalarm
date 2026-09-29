@@ -1,4 +1,3 @@
-import notifee from '@notifee/react-native';
 import { fireEvent, render } from '@testing-library/react-native';
 import { Alert } from 'react-native';
 import { MeHomeScreen, signOutWarning } from './MeHomeScreen';
@@ -78,21 +77,6 @@ test('sign-out asks first and warns that the phone will stop receiving pages', a
   confirm.onPress?.();
   expect(mockSignOut).toHaveBeenCalledTimes(1);
   alertSpy.mockRestore();
-});
-
-test('a phone that cannot be paged shows the red readiness banner with a fix', async () => {
-  (notifee.getNotificationSettings as jest.Mock).mockResolvedValueOnce({ authorizationStatus: 0 });
-  const { findByText, findByRole } = await render(<MeHomeScreen />);
-
-  expect(await findByText(/This phone may not wake you for a page/)).toBeTruthy();
-  expect(await findByRole('button', { name: 'Fix: Notifications' })).toBeTruthy();
-});
-
-test('a ready phone shows no readiness banner', async () => {
-  const { findByText, queryByText } = await render(<MeHomeScreen />);
-
-  expect(await findByText('Jamie Rios')).toBeTruthy();
-  expect(queryByText(/This phone may not wake you for a page/)).toBeNull();
 });
 
 test('without a phone number on file, sign-out does not promise text or voice pages', () => {

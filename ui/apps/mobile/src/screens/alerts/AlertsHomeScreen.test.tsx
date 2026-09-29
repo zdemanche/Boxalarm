@@ -1,4 +1,3 @@
-import notifee from '@notifee/react-native';
 import { act, fireEvent, render } from '@testing-library/react-native';
 import { rememberAlertPayload } from '../../features/alerts/alertPayload';
 import { mockAlertsRepository } from '../../features/alerts/mockAlertsRepository';
@@ -164,13 +163,4 @@ describe('active call list (alert-ux C3)', () => {
 
     expect(spy.mock.calls.length).toBeGreaterThan(before);
   });
-});
-
-test('the Alerts tab carries the red readiness banner when this phone cannot be paged', async () => {
-  (notifee.getNotificationSettings as jest.Mock).mockResolvedValueOnce({ authorizationStatus: 2 });
-  const { findByText, findByRole } = await render(<AlertsHomeScreen />);
-
-  expect(await findByText(/This phone may not wake you for a page/)).toBeTruthy();
-  fireEvent.press(await findByRole('button', { name: 'See all alert readiness checks' }));
-  expect(mockNavigate).toHaveBeenCalledWith('Me', { screen: 'SelfTest' });
 });

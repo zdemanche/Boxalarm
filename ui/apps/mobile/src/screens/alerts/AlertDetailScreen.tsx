@@ -467,7 +467,7 @@ export function AlertDetailScreen() {
                 }
                 accessibilityState={{ expanded: narrativeExpanded }}
                 onPress={() => setNarrativeExpanded((value) => !value)}
-                style={{ minHeight: 48, justifyContent: 'center' }}
+                style={{ minHeight: ALERT_TARGET, justifyContent: 'center' }}
               >
                 <Text
                   style={{ color: theme.fg, fontWeight: '700', textDecorationLine: 'underline' }}

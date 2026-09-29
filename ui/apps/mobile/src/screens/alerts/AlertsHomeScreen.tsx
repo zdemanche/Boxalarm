@@ -5,12 +5,10 @@ import { FlatList, RefreshControl, Text, TouchableOpacity, View } from 'react-na
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useOptionalAuth } from '../../auth/AuthContext';
 import { Button, StatusChip, useTheme } from '../../components/ui';
-import { AlertReadinessBanner } from '../../features/alerts/AlertReadinessBanner';
 import { useAlertsRepository } from '../../features/alerts/apiAlertsRepository';
 import { formatClock, formatElapsed } from '../../features/alerts/elapsed';
 import { useActiveDispatches, type ActiveCall } from '../../features/alerts/useActiveDispatches';
 import type { DetailFailure } from '../../features/alerts/useAlertDetail';
-import { useAlertReadiness } from '../../features/alerts/useAlertReadiness';
 import type { AlertsStackParamList } from '../../navigation/AlertsStack';
 
 // Review m7: "can't reach" and "refused" need different words - a refusal will not fix itself
@@ -96,7 +94,6 @@ export function AlertsHomeScreen() {
     };
   }, [navigation]);
   const active = useActiveDispatches(repository, visible);
-  const readiness = useAlertReadiness();
   const canEnterManually = (auth?.roles ?? []).some(
     (role) => role === 'OFFICER' || role === 'CHIEF',
   );
@@ -112,15 +109,6 @@ export function AlertsHomeScreen() {
       >
         Alerts
       </Text>
-      <AlertReadinessBanner
-        blocking={readiness.blocking}
-        onSeeAll={() =>
-          // Up to the tab navigator: the self-test checklist lives in the Me stack.
-          (navigation.navigate as (name: string, params: object) => void)('Me', {
-            screen: 'SelfTest',
-          })
-        }
-      />
       {unreachable ? (
         <View
           accessibilityLiveRegion="polite"

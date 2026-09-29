@@ -51,7 +51,7 @@ export function AlertReadinessBanner({ blocking, onSeeAll }: AlertReadinessBanne
           accessibilityLabel={`Fix: ${first.label}`}
           onPress={first.fix}
           style={{
-            minHeight: 56,
+            minHeight: 72,
             alignItems: 'center',
             justifyContent: 'center',
             borderRadius: radius.default,
@@ -69,14 +69,20 @@ export function AlertReadinessBanner({ blocking, onSeeAll }: AlertReadinessBanne
           accessibilityRole="button"
           accessibilityLabel="See all alert readiness checks"
           onPress={onSeeAll}
-          style={{ minHeight: 48, alignItems: 'center', justifyContent: 'center' }}
+          style={{
+            minHeight: 72,
+            alignItems: 'center',
+            justifyContent: 'center',
+            borderRadius: radius.default,
+            borderWidth: 2,
+            borderColor: danger.onFill,
+          }}
         >
           <Text
             style={{
               color: danger.onFill,
               fontSize: typeScale.label.size,
               fontWeight: '700',
-              textDecorationLine: 'underline',
             }}
           >
             See all checks and test my phone
