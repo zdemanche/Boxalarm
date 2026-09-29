@@ -1,7 +1,16 @@
 import { palette, radius, spacing, touchTarget, typography } from '@boxalarm/design-tokens';
 import { useNavigation, type NavigationProp } from '@react-navigation/native';
 import { useEffect, useState } from 'react';
-import { ScrollView, Text, TextInput, TouchableOpacity, useColorScheme, View } from 'react-native';
+import {
+  AccessibilityInfo,
+  Platform,
+  ScrollView,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  useColorScheme,
+  View,
+} from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useAlertsRepository } from '../../features/alerts/apiAlertsRepository';
 import type { FieldError, ManualDispatchInput } from '../../features/alerts/types';
@@ -11,6 +20,10 @@ import type { AlertsStackParamList } from '../../navigation/AlertsStack';
 const OTHER_TOWN = '__other__';
 // Matches the backend's MAX_LOCALITY_TOWN_LENGTH (a longer town is dropped server-side).
 const MAX_TOWN_LENGTH = 80;
+const LOCALITY_LABEL = 'Town / village (required)';
+// Platform minimum touch target for the locality controls: 44pt iOS, 48dp Android (m8).
+const localityTarget = () =>
+  Platform.OS === 'android' ? touchTarget.baseline.android : touchTarget.baseline.ios;
 
 const EMPTY_FORM: ManualDispatchInput = {
   incidentType: '',
@@ -54,6 +67,16 @@ export function ManualDispatchEntryScreen() {
   }, [repository]);
 
   const errorFor = (field: string) => fieldErrors.find((e) => e.field === field)?.message;
+  const localityError =
+    errorFor('locality') ?? errorFor('locality.town') ?? errorFor('locality.choice');
+
+  // Android announces the error through its live region; iOS has no live regions, so announce
+  // it explicitly (m8).
+  useEffect(() => {
+    if (localityError && Platform.OS === 'ios') {
+      AccessibilityInfo.announceForAccessibility(localityError);
+    }
+  }, [localityError]);
 
   const submit = async () => {
     setFieldErrors([]);
@@ -157,64 +180,73 @@ export function ManualDispatchEntryScreen() {
         {field('Address', 'address')}
         {field('Cross streets', 'crossStreets')}
 
-        <View style={{ marginTop: spacing.md }} accessibilityRole="radiogroup">
+        <View
+          style={{ marginTop: spacing.md }}
+          testID="locality-group"
+          accessibilityRole="radiogroup"
+          accessibilityLabel={LOCALITY_LABEL}
+          accessibilityLabelledBy="locality-label"
+        >
           <Text
             nativeID="locality-label"
             style={{ color: tokens.foreground, fontSize: typography.size.sm, fontWeight: '600' }}
           >
-            Town / village (required)
+            {LOCALITY_LABEL}
           </Text>
-          {[...homeTowns, OTHER_TOWN].map((choice) => {
+          {/* "Other town…" comes first so the home towns loading in below it can never move it
+              under a finger mid-tap (m8). */}
+          {[OTHER_TOWN, ...homeTowns].map((choice) => {
             const selected = localityChoice === choice;
             const label = choice === OTHER_TOWN ? 'Other town…' : choice;
             return (
-              <TouchableOpacity
-                key={choice}
-                accessibilityRole="radio"
-                accessibilityLabel={label}
-                accessibilityState={{ checked: selected }}
-                onPress={() => setLocalityChoice(choice)}
-                style={{
-                  minHeight: touchTarget.baseline.ios,
-                  justifyContent: 'center',
-                  paddingHorizontal: spacing.md,
-                  marginTop: spacing.xs,
-                  borderWidth: selected ? 2 : 1,
-                  borderColor: selected ? tokens.accent : tokens.foreground + '33',
-                  borderRadius: radius.default,
-                }}
-              >
-                <Text style={{ color: tokens.foreground, fontSize: typography.size.base }}>
-                  {selected ? '● ' : '○ '}
-                  {label}
-                </Text>
-              </TouchableOpacity>
+              <View key={choice}>
+                <TouchableOpacity
+                  accessibilityRole="radio"
+                  accessibilityLabel={label}
+                  accessibilityState={{ checked: selected }}
+                  onPress={() => setLocalityChoice(choice)}
+                  style={{
+                    minHeight: localityTarget(),
+                    justifyContent: 'center',
+                    paddingHorizontal: spacing.md,
+                    marginTop: spacing.xs,
+                    borderWidth: selected ? 2 : 1,
+                    borderColor: selected ? tokens.accent : tokens.foreground + '33',
+                    borderRadius: radius.default,
+                  }}
+                >
+                  <Text style={{ color: tokens.foreground, fontSize: typography.size.base }}>
+                    {selected ? '● ' : '○ '}
+                    {label}
+                  </Text>
+                </TouchableOpacity>
+                {choice === OTHER_TOWN && selected ? (
+                  <TextInput
+                    accessibilityLabel="Other town name"
+                    maxLength={MAX_TOWN_LENGTH}
+                    value={otherTown}
+                    onChangeText={setOtherTown}
+                    style={{
+                      minHeight: localityTarget(),
+                      borderWidth: 1,
+                      borderColor: tokens.foreground + '33',
+                      borderRadius: radius.default,
+                      paddingHorizontal: spacing.md,
+                      color: tokens.foreground,
+                      fontSize: typography.size.base,
+                      marginTop: spacing.xs,
+                    }}
+                  />
+                ) : null}
+              </View>
             );
           })}
-          {localityChoice === OTHER_TOWN ? (
-            <TextInput
-              accessibilityLabel="Other town name"
-              maxLength={MAX_TOWN_LENGTH}
-              value={otherTown}
-              onChangeText={setOtherTown}
-              style={{
-                minHeight: touchTarget.baseline.ios,
-                borderWidth: 1,
-                borderColor: tokens.foreground + '33',
-                borderRadius: radius.default,
-                paddingHorizontal: spacing.md,
-                color: tokens.foreground,
-                fontSize: typography.size.base,
-                marginTop: spacing.xs,
-              }}
-            />
-          ) : null}
-          {(errorFor('locality') ?? errorFor('locality.town') ?? errorFor('locality.choice')) ? (
+          {localityError ? (
             <Text
               accessibilityLiveRegion="polite"
               style={{ color: tokens.error, fontSize: typography.size.sm, marginTop: 2 }}
             >
-              {errorFor('locality') ?? errorFor('locality.town') ?? errorFor('locality.choice')}
+              {localityError}
             </Text>
           ) : null}
         </View>

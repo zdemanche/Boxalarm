@@ -1,4 +1,5 @@
 import { fireEvent, render } from '@testing-library/react-native';
+import { AccessibilityInfo, Platform, StyleSheet } from 'react-native';
 import { mockAlertsRepository } from '../../features/alerts/mockAlertsRepository';
 import { ManualDispatchEntryScreen } from './ManualDispatchEntryScreen';
 
@@ -89,4 +90,51 @@ test('M1: a successful submit resets the form, so the next call starts with no t
   expect(getByLabelText('Address').props.value).toBe('');
   expect(getByLabelText(/^Units requested/).props.value).toBe('');
   expect(getByLabelText('Operator-entered reference').props.value).toBe('');
+});
+
+describe('m8: locality choice accessibility', () => {
+  test('the radio group has an accessible name, and "Other town…" comes first', async () => {
+    const { findByRole, findAllByRole, getByTestId } = await render(<ManualDispatchEntryScreen />);
+
+    // The group View is deliberately not `accessible` (that would hide its radios on iOS), so
+    // RNTL's role query cannot see it; assert the name it exposes instead.
+    const group = getByTestId('locality-group');
+    expect(group.props.accessibilityRole).toBe('radiogroup');
+    expect(group.props.accessibilityLabel).toBe('Town / village (required)');
+    expect(group.props.accessibilityLabelledBy).toBe('locality-label');
+    await findByRole('radio', { name: 'Trumbull' });
+    const names = (await findAllByRole('radio')).map((radio) => radio.props.accessibilityLabel);
+    expect(names[0]).toBe('Other town…');
+    expect(names).toContain('Trumbull');
+  });
+
+  test('the missing-town error is a live region and is announced on iOS', async () => {
+    const announce = jest
+      .spyOn(AccessibilityInfo, 'announceForAccessibility')
+      .mockImplementation(() => undefined);
+    const { findByRole, findByText } = await render(<ManualDispatchEntryScreen />);
+
+    await fireEvent.press(await findByRole('button', { name: 'Submit dispatch' }));
+
+    const error = await findByText('Choose the town or village.');
+    expect(error.props.accessibilityLiveRegion).toBe('polite');
+    expect(Platform.OS).toBe('ios');
+    expect(announce).toHaveBeenCalledWith('Choose the town or village.');
+    announce.mockRestore();
+  });
+
+  test('locality targets are at least 48dp on Android', async () => {
+    const original = Platform.OS;
+    Object.defineProperty(Platform, 'OS', { value: 'android', configurable: true });
+    try {
+      const { findByRole, findByLabelText } = await render(<ManualDispatchEntryScreen />);
+      const other = await findByRole('radio', { name: 'Other town…' });
+      expect(StyleSheet.flatten(other.props.style).minHeight).toBeGreaterThanOrEqual(48);
+      await fireEvent.press(other);
+      const input = await findByLabelText('Other town name');
+      expect(StyleSheet.flatten(input.props.style).minHeight).toBeGreaterThanOrEqual(48);
+    } finally {
+      Object.defineProperty(Platform, 'OS', { value: original, configurable: true });
+    }
+  });
 });
