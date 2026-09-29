@@ -36,7 +36,7 @@ Read boxalarm-docs#11 before touching the alert path. Infra side: boxalarm-infra
 
 ## #204 — E2-S2-INFRA: Qualifications and quals-based eligibility
 
-**Parent:** https://github.com/zdemanche/Boxalarm-monorepo/issues/43 · **Wave:** 4
+**Parent:** https://github.com/zdemanche/Boxalarm/issues/43 · **Wave:** 4
 
 This repo deploys the quals endpoints and the cert-expired → eligibility-changed → alerting snapshot chain.
 
@@ -72,7 +72,7 @@ Backend expects: `PERSONNEL_TABLE_NAME` + `PLATFORM_BUS_NAME` (`awsClients.ts`),
 
 ## #221 — E3-S8-INFRA: Expired certification revokes qual currency and propagates to alerting eligibility
 
-**Parent:** https://github.com/zdemanche/Boxalarm-monorepo/issues/60 · **Wave:** 5
+**Parent:** https://github.com/zdemanche/Boxalarm/issues/60 · **Wave:** 5
 
 This repo extends the expiry scanner and certification revoke path so an expired or revoked cert provably reaches the alerting snapshot.
 
@@ -101,7 +101,7 @@ This repo extends the expiry scanner and certification revoke path so an expired
 
 ## #207 — E2-S5-INFRA: Planned unavailability (marking off) that suppresses alerting
 
-**Parent:** https://github.com/zdemanche/Boxalarm-monorepo/issues/46 · **Wave:** 4
+**Parent:** https://github.com/zdemanche/Boxalarm/issues/46 · **Wave:** 4
 
 This repo deploys mark-off capture, its one-time expiry schedules, and the availability → alerting snapshot path with its staleness alarm.
 
@@ -136,7 +136,7 @@ Backend (PR zdemanche/boxalarm-backend#32) expects: `PLATFORM_TABLE_NAME`, `AVAI
 
 ## #208 — E2-S6-INFRA: Member self-service profile and contact update
 
-**Parent:** https://github.com/zdemanche/Boxalarm-monorepo/issues/47 · **Wave:** 4
+**Parent:** https://github.com/zdemanche/Boxalarm/issues/47 · **Wave:** 4
 
 This repo deploys the self-service profile endpoint and routes `personnel.member.updated` into the alerting snapshot.
 
@@ -168,7 +168,7 @@ Backend expects: `PLATFORM_TABLE_NAME` + `PLATFORM_BUS_NAME` (`personnel-service
 
 ## #213 — E2-S11-INFRA: Shift attendance feeds LOSAP and reporting automatically
 
-**Parent:** https://github.com/zdemanche/Boxalarm-monorepo/issues/52 · **Wave:** 6
+**Parent:** https://github.com/zdemanche/Boxalarm/issues/52 · **Wave:** 6
 
 This repo deploys the scheduled shift-completion job that turns worked shifts into attendance.
 

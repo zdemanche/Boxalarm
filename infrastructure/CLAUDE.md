@@ -7,7 +7,7 @@ Pulumi (TypeScript), deployed via GitHub OIDC → central org role. Architecture
 
 ## Where things stand (2026-09-03)
 
-**Nothing is scaffolded yet.** The repo holds a README and bootstrap issue [#178](https://github.com/zdemanche/Boxalarm-monorepo/issues/178). Architecture v1.0 and a 90-story backlog are done in `boxalarm-docs`; the user has asked for a **decision gate before the build phase begins**, so do not start provisioning until they say go.
+**Nothing is scaffolded yet.** The repo holds a README and bootstrap issue [#178](https://github.com/zdemanche/Boxalarm/issues/178). Architecture v1.0 and a 90-story backlog are done in `boxalarm-docs`; the user has asked for a **decision gate before the build phase begins**, so do not start provisioning until they say go.
 
 Work is tracked as `<KEY>-INFRA` monorepo issues labelled `area:infrastructure`, each a sub-issue of its backend story. Shared resources (HTTP API, tables, bus, outbox publisher, policy store) have one owner issue each — see the ownership map commented on #180.
 

@@ -26,7 +26,7 @@
 
 ## #170 — E6-S10-UI: Incident search and history
 
-**Parent:** https://github.com/zdemanche/Boxalarm-monorepo/issues/92 · **Wave:** 4
+**Parent:** https://github.com/zdemanche/Boxalarm/issues/92 · **Wave:** 4
 
 Incident list with date-range search, plus incident detail, on the web console.
 
@@ -52,7 +52,7 @@ Incident list with date-range search, plus incident detail, on the web console.
 
 ## #163 — E6-S2-UI: Create incident pre-populated from alert, CAD, and response roster
 
-**Parent:** https://github.com/zdemanche/Boxalarm-monorepo/issues/84 · **Wave:** 7
+**Parent:** https://github.com/zdemanche/Boxalarm/issues/84 · **Wave:** 7
 
 Web console action that creates an incident from a dispatch and opens the pre-filled report.
 
@@ -79,7 +79,7 @@ Web console action that creates an incident from a dispatch and opens the pre-fi
 
 ## #164 — E6-S3-UI: Guided incident completion with pre-submission NERIS enumeration validation
 
-**Parent:** https://github.com/zdemanche/Boxalarm-monorepo/issues/85 · **Wave:** 5
+**Parent:** https://github.com/zdemanche/Boxalarm/issues/85 · **Wave:** 5
 
 Multi-step guided NERIS completion form on the web incident detail.
 
@@ -106,7 +106,7 @@ Multi-step guided NERIS completion form on the web incident detail.
 
 ## #165 — E6-S4-UI: Incident narrative capture
 
-**Parent:** https://github.com/zdemanche/Boxalarm-monorepo/issues/86 · **Wave:** 4
+**Parent:** https://github.com/zdemanche/Boxalarm/issues/86 · **Wave:** 4
 
 Narrative editor on the web incident detail.
 
@@ -127,7 +127,7 @@ Narrative editor on the web incident detail.
 
 ## #166 — E6-S5-UI: Apparatus and personnel response times with unit assignment
 
-**Parent:** https://github.com/zdemanche/Boxalarm-monorepo/issues/87 · **Wave:** 8
+**Parent:** https://github.com/zdemanche/Boxalarm/issues/87 · **Wave:** 8
 
 Per-unit response-time editor on the web incident detail.
 
@@ -149,7 +149,7 @@ Per-unit response-time editor on the web incident detail.
 
 ## #167 — E6-S6-UI: Exposure and responder-safety capture (NERIS Secondary schema)
 
-**Parent:** https://github.com/zdemanche/Boxalarm-monorepo/issues/88 · **Wave:** 5
+**Parent:** https://github.com/zdemanche/Boxalarm/issues/88 · **Wave:** 5
 
 Exposure and responder-safety module capture on the web incident detail.
 

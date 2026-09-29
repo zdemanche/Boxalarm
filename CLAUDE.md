@@ -1,7 +1,7 @@
 # Boxalarm — session handoff
 
 Fire department operations platform replacing Chief360. Tenant zero: Nichols FD, Trumbull CT.
-**Monorepo** (`zdemanche/Boxalarm-monorepo`, consolidated 2026-09-23): PRD/architecture/backlog at the root and in `docs/`,
+**Monorepo** (`zdemanche/Boxalarm`, consolidated 2026-09-23): PRD/architecture/backlog at the root and in `docs/`,
 code in `backend/`, `ui/`, `infrastructure/` — each its own npm project with its own lockfile, CI in `.github/workflows/<dir>.yml`
 (path-filtered). The four `boxalarm-*` repos are retired; their full history, every issue, and every open PR came along.
 
@@ -27,7 +27,7 @@ E6-S7 waits on the NERIS vendor account.
 `/sdlc:execute-backlog` is **unusable here** — it STOPs when the plan names local keys (`E1-S2`) with
 no Jira keys. Run stories individually instead:
 
-1. Export the issue to a ticket file: `gh issue view <n> --repo zdemanche/Boxalarm-monorepo --json ...` (find the link in `docs/build-order.md`)
+1. Export the issue to a ticket file: `gh issue view <n> --repo zdemanche/Boxalarm --json ...` (find the link in `docs/build-order.md`)
    → `.analysis/wave-1/tickets/<KEY>.md`.
 2. `/sdlc:generate-code docs/architecture.md <KEY> --no-jira --ticket-file <path> --repo <monorepo root>`
 
@@ -39,12 +39,12 @@ monorepo layout — confirm on the first run that the change lands in the right 
 
 These gate real calendar time and are not code:
 
-- [#2](https://github.com/zdemanche/Boxalarm-monorepo/issues/2) CAD integration surface — how does Chief360 get dispatch today?
-- [#3](https://github.com/zdemanche/Boxalarm-monorepo/issues/3) Regional dispatch authority approval — longest pole
-- [#4](https://github.com/zdemanche/Boxalarm-monorepo/issues/4) Apple Critical Alerts entitlement — can be rejected
-- [#5](https://github.com/zdemanche/Boxalarm-monorepo/issues/5) Who carries the pager at 03:00
+- [#2](https://github.com/zdemanche/Boxalarm/issues/2) CAD integration surface — how does Chief360 get dispatch today?
+- [#3](https://github.com/zdemanche/Boxalarm/issues/3) Regional dispatch authority approval — longest pole
+- [#4](https://github.com/zdemanche/Boxalarm/issues/4) Apple Critical Alerts entitlement — can be rejected
+- [#5](https://github.com/zdemanche/Boxalarm/issues/5) Who carries the pager at 03:00
 - **OQ-24** Who revokes a compromised session, and how fast — now the *only* control that ends access
-- [#12](https://github.com/zdemanche/Boxalarm-monorepo/issues/12) ⚠️ **Read before touching the alert path** — tracks the last unverified alerting edits
+- [#12](https://github.com/zdemanche/Boxalarm/issues/12) ⚠️ **Read before touching the alert path** — tracks the last unverified alerting edits
 
 ## Do not relitigate
 

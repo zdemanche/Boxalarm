@@ -33,7 +33,7 @@ The architecture doc omits it, but a **member self-service diagnostics route alr
 
 ## #143 — E2-S5-UI: Planned unavailability (marking off) that suppresses alerting
 
-**Parent:** https://github.com/zdemanche/Boxalarm-monorepo/issues/46 · **Wave:** 4
+**Parent:** https://github.com/zdemanche/Boxalarm/issues/46 · **Wave:** 4
 
 The mobile app delivers the mark-off screen members use to suppress their own alerting.
 
@@ -61,7 +61,7 @@ Mobile screens at origin/main are design-system phase output wired to mock repos
 
 ## #144 — E2-S6-UI: Member self-service profile and contact update
 
-**Parent:** https://github.com/zdemanche/Boxalarm-monorepo/issues/47 · **Wave:** 4
+**Parent:** https://github.com/zdemanche/Boxalarm/issues/47 · **Wave:** 4
 
 The mobile app delivers the profile view and edit screen members use to update their own contact details.
 
@@ -88,7 +88,7 @@ Mobile screens at origin/main are design-system phase output wired to mock repos
 
 ## #122 — E4-S4-UI: Report a defect with photo, routed to the apparatus officer
 
-**Parent:** https://github.com/zdemanche/Boxalarm-monorepo/issues/64 · **Wave:** 7
+**Parent:** https://github.com/zdemanche/Boxalarm/issues/64 · **Wave:** 7
 
 Defect report with photo capture, offline queue, and OOS hand-off; officer's open-defects view on web.
 
@@ -118,7 +118,7 @@ Defect report with photo capture, offline queue, and OOS hand-off; officer's ope
 
 ## #153 — E3-S7-UI: Exportable per-member training transcript
 
-**Parent:** https://github.com/zdemanche/Boxalarm-monorepo/issues/59 · **Wave:** 6
+**Parent:** https://github.com/zdemanche/Boxalarm/issues/59 · **Wave:** 6
 
 The web SPA and mobile app deliver the transcript view and CSV/PDF export.
 
@@ -147,7 +147,7 @@ Surfaces: web + mobile.
 
 ## #160 — E1-S12-UI: 'Why didn't I get the page' self-diagnosis tool
 
-**Parent:** https://github.com/zdemanche/Boxalarm-monorepo/issues/37 · **Wave:** 8
+**Parent:** https://github.com/zdemanche/Boxalarm/issues/37 · **Wave:** 8
 
 The web diagnostics console and the member-facing native version.
 

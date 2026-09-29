@@ -33,7 +33,7 @@ Concrete gaps on main:
 
 ## #160 — E1-S12-UI: 'Why didn't I get the page' self-diagnosis tool
 
-**Parent:** https://github.com/zdemanche/Boxalarm-monorepo/issues/37 · **Wave:** 8
+**Parent:** https://github.com/zdemanche/Boxalarm/issues/37 · **Wave:** 8
 
 The web diagnostics console and the member-facing native version.
 
@@ -68,7 +68,7 @@ The web diagnostics console and the member-facing native version.
 
 ## #159 — E1-S10-UI: Continuous production canary with on-call escalation
 
-**Parent:** https://github.com/zdemanche/Boxalarm-monorepo/issues/35 · **Wave:** 8
+**Parent:** https://github.com/zdemanche/Boxalarm/issues/35 · **Wave:** 8
 
 The admin-visible canary health indicator that feeds N8.3.
 
@@ -93,7 +93,7 @@ The admin-visible canary health indicator that feeds N8.3.
 
 ## #153 — E3-S7-UI: Exportable per-member training transcript
 
-**Parent:** https://github.com/zdemanche/Boxalarm-monorepo/issues/59 · **Wave:** 6
+**Parent:** https://github.com/zdemanche/Boxalarm/issues/59 · **Wave:** 6
 
 The web SPA and mobile app deliver the transcript view and CSV/PDF export.
 
@@ -122,7 +122,7 @@ Surfaces: web + mobile.
 
 ## #124 — E4-S6-UI: Maintenance history and scheduled maintenance
 
-**Parent:** https://github.com/zdemanche/Boxalarm-monorepo/issues/66 · **Wave:** 4
+**Parent:** https://github.com/zdemanche/Boxalarm/issues/66 · **Wave:** 4
 
 Maintenance tab on web apparatus detail plus the due-soon listing.
 
@@ -149,7 +149,7 @@ Maintenance tab on web apparatus detail plus the due-soon listing.
 
 ## #152 — E3-S4-UI: Drill and training event scheduling with member sign-up
 
-**Parent:** https://github.com/zdemanche/Boxalarm-monorepo/issues/56 · **Wave:** 4
+**Parent:** https://github.com/zdemanche/Boxalarm/issues/56 · **Wave:** 4
 
 The web SPA delivers training-event scheduling and attendance entry; the mobile app delivers member browsing and sign-up.
 
@@ -177,7 +177,7 @@ Surfaces: web + mobile.
 
 ## #137 — E5-S6-UI: Map-based retrieval of occupancies and hydrants
 
-**Parent:** https://github.com/zdemanche/Boxalarm-monorepo/issues/80 · **Wave:** 4
+**Parent:** https://github.com/zdemanche/Boxalarm/issues/80 · **Wave:** 4
 
 Web map screen built on a MapProvider port with a stub renderer and a list alternative.
 
@@ -205,7 +205,7 @@ Web map screen built on a MapProvider port with a stub renderer and a list alter
 
 ## #122 — E4-S4-UI: Report a defect with photo, routed to the apparatus officer
 
-**Parent:** https://github.com/zdemanche/Boxalarm-monorepo/issues/64 · **Wave:** 7
+**Parent:** https://github.com/zdemanche/Boxalarm/issues/64 · **Wave:** 7
 
 Defect report with photo capture, offline queue, and OOS hand-off; officer's open-defects view on web.
 

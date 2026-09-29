@@ -34,7 +34,7 @@ Seven concrete defects/gaps found on main:
 
 ## #216 — E3-S3-INFRA: Digest-batched cert expiry notifications to member and training officer
 
-**Parent:** https://github.com/zdemanche/Boxalarm-monorepo/issues/55 · **Wave:** 6
+**Parent:** https://github.com/zdemanche/Boxalarm/issues/55 · **Wave:** 6
 
 This repo deploys notification-service on the LOB plane: cert-expiry intake, daily digest, inbox/preferences API, and non-critical push + email, fully separate from alerting.
 
@@ -68,7 +68,7 @@ This repo deploys notification-service on the LOB plane: cert-expiry intake, dai
 
 ## #232 — E1-S13-INFRA: Notification service isolation regression test and IAM enforcement
 
-**Parent:** https://github.com/zdemanche/Boxalarm-monorepo/issues/38 · **Wave:** 6
+**Parent:** https://github.com/zdemanche/Boxalarm/issues/38 · **Wave:** 6
 
 Makes alerting isolation an enforced IAM boundary with policy tests, and wires the eligibility-staleness alarm.
 
@@ -109,7 +109,7 @@ Makes alerting isolation an enforced IAM boundary with policy tests, and wires t
 
 ## #233 — E1-S14-INFRA: Register and rotate device push tokens
 
-**Parent:** https://github.com/zdemanche/Boxalarm-monorepo/issues/39 · **Wave:** 4
+**Parent:** https://github.com/zdemanche/Boxalarm/issues/39 · **Wave:** 4
 
 Deploys the merged push-token handlers: the personnel routes, the `personnel.member.updated` crossing into the alerting snapshot, and the push receipt webhook.
 
@@ -154,7 +154,7 @@ Deploys the merged push-token handlers: the personnel routes, the `personnel.mem
 
 ## #257 — E8-S5-INFRA: Tamper-evident audit log for every record mutation
 
-**Parent:** https://github.com/zdemanche/Boxalarm-monorepo/issues/105 · **Wave:** 1
+**Parent:** https://github.com/zdemanche/Boxalarm/issues/105 · **Wave:** 1
 
 The platform-service table with its GSIs, the audit query route, IAM separation of audit writes, and the tamper-evidence trail.
 
@@ -186,7 +186,7 @@ The platform-service table with its GSIs, the audit query route, IAM separation 
 
 ## #260 — E8-S9-INFRA: Records retention configuration and verified disposal
 
-**Parent:** https://github.com/zdemanche/Boxalarm-monorepo/issues/109 · **Wave:** 1
+**Parent:** https://github.com/zdemanche/Boxalarm/issues/109 · **Wave:** 1
 
 The disposal job's schedule and least-privilege role, crypto-shred keys, and per-invocation alarming.
 
@@ -219,7 +219,7 @@ The disposal job's schedule and least-privilege role, crypto-shred keys, and per
 
 ## #237 — E6-S2-INFRA: Create incident pre-populated from alert, CAD, and response roster
 
-**Parent:** https://github.com/zdemanche/Boxalarm-monorepo/issues/84 · **Wave:** 7
+**Parent:** https://github.com/zdemanche/Boxalarm/issues/84 · **Wave:** 7
 
 Create-incident route, plus a way to get dispatch/roster data to incident-service without breaking the alerting isolation boundary.
 
@@ -249,7 +249,7 @@ Create-incident route, plus a way to get dispatch/roster data to incident-servic
 
 ## #211 — E2-S9-INFRA: Shift coverage visibility
 
-**Parent:** https://github.com/zdemanche/Boxalarm-monorepo/issues/50 · **Wave:** 5
+**Parent:** https://github.com/zdemanche/Boxalarm/issues/50 · **Wave:** 5
 
 This repo deploys the shift-coverage read endpoint.
 
