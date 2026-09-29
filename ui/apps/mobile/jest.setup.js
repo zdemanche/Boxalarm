@@ -194,6 +194,13 @@ jest.mock('@notifee/react-native', () => {
     setNotificationCategories: jest.fn(async () => undefined),
     getNotificationSettings: jest.fn(async () => ({ authorizationStatus: 1 })),
     isChannelBlocked: jest.fn(async () => false),
+    getChannel: jest.fn(async (id) => ({
+      id,
+      importance: 4,
+      sound: 'alarm',
+      soundURI: 'content://settings/system/alarm_alert',
+      blocked: false,
+    })),
     isBatteryOptimizationEnabled: jest.fn(async () => false),
     openNotificationSettings: jest.fn(async () => undefined),
     openBatteryOptimizationSettings: jest.fn(async () => undefined),
