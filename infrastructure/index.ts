@@ -100,9 +100,16 @@ export const nerisSchemaSourceUrl = config.require("nerisSchemaSourceUrl");
 // production access) is out-of-band per env.
 export const notificationSesFromAddress = config.require("notificationSesFromAddress");
 
+export const platformTable = new PlatformTable("platform", { env });
+
 // #180 / #6: base identity + pre-token-generation trigger that puts
-// custom:deptId on the ACCESS token for the shared authorizer.
-export const identity = new BoxalarmUserPool("identity", { env });
+// custom:deptId on the ACCESS token for the shared authorizer, and refuses a token to an
+// LOA/RETIRED member (review C1) by reading the member row from the platform table.
+export const identity = new BoxalarmUserPool("identity", {
+  env,
+  platformTableName: platformTable.tableName,
+  platformTableArn: platformTable.tableArn,
+});
 export const userPoolId = identity.userPool.id;
 
 const SELF_SERVICE_WRITE_ATTRIBUTES = ["email", "name", "phone_number"] as const;
@@ -172,8 +179,8 @@ export const httpApi = new HttpApi("http-api", {
   platformLogGroup,
 });
 
-// Shared data plane tables (ownership: #84 platform, #62 incident, #48 alerting).
-export const platformTable = new PlatformTable("platform", { env });
+// Shared data plane tables (ownership: #84 platform, #62 incident, #48 alerting). The
+// platform table is created above, with identity, which reads member status from it.
 export const incidentTable = new IncidentTable("incident", { env });
 export const alertingTable = new AlertingTable("alerting", { env });
 // architecture.md §8 platform-assets bucket (pre-plan files, inspection photos, and later
@@ -222,8 +229,14 @@ export const outboxPublisher = new OutboxPublisher("outbox-publisher", {
   logGroup: platformLogGroup,
 });
 
+// Created ahead of sessionRevocation, whose credential-reset alarm notifies it.
+export const chiefNotificationTopic = new ChiefNotificationTopic("chief-notifications", { env });
+
 export const sessionRevocation = new SessionRevocation("session-revocation", {
   env,
+  platformTableName: platformTable.tableName,
+  platformTableArn: platformTable.tableArn,
+  chiefNotificationTopicArn: chiefNotificationTopic.topicArn,
   userPoolId: identity.userPool.id,
   userPoolArn: identity.userPool.arn,
   policyStoreArn: policyStore.policyStoreArn,
@@ -537,7 +550,6 @@ export const auditRoute = new AuditRoute("audit-route", {
   httpApi,
 });
 
-export const chiefNotificationTopic = new ChiefNotificationTopic("chief-notifications", { env });
 export const nerisEntitySyncFailedAlarm = nerisEntity.alarmOnSyncFailure(
   chiefNotificationTopic.topicArn,
 );

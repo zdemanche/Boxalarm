@@ -6,6 +6,12 @@ import { ACTIVE_TRACING_CONFIG } from "../observability/xray-sampling";
 
 export interface BoxalarmUserPoolArgs {
   env: string;
+  /**
+   * The pre-token trigger reads the member row's status from here and refuses to mint a
+   * token for an LOA/RETIRED member (review C1) - on sign-in and on every refresh.
+   */
+  platformTableName: pulumi.Input<string>;
+  platformTableArn: pulumi.Input<string>;
 }
 
 // #180: the shared Lambda authorizer in boxalarm-backend reads deptId
@@ -66,19 +72,31 @@ export class BoxalarmUserPool extends pulumi.ComponentResource {
       `${name}-fn-role-policy`,
       {
         role: this.functionRole.id,
-        policy: this.functionLogGroup.arn.apply((logGroupArn) =>
-          JSON.stringify({
-            Version: "2012-10-17",
-            Statement: [
-              {
-                Sid: "WriteOwnLogGroup",
-                Effect: "Allow",
-                Action: ["logs:CreateLogStream", "logs:PutLogEvents"],
-                Resource: `${logGroupArn}:*`,
-              },
-            ],
-          }),
-        ),
+        policy: pulumi
+          .all([this.functionLogGroup.arn, args.platformTableArn])
+          .apply(([logGroupArn, platformTableArn]) =>
+            JSON.stringify({
+              Version: "2012-10-17",
+              Statement: [
+                {
+                  Sid: "WriteOwnLogGroup",
+                  Effect: "Allow",
+                  Action: ["logs:CreateLogStream", "logs:PutLogEvents"],
+                  Resource: `${logGroupArn}:*`,
+                },
+                {
+                  // Member rows only: the status check reads DEPT#{deptId}#MEMBER#{sub}.
+                  Sid: "ReadMemberStatus",
+                  Effect: "Allow",
+                  Action: "dynamodb:GetItem",
+                  Resource: platformTableArn,
+                  Condition: {
+                    "ForAllValues:StringLike": { "dynamodb:LeadingKeys": ["DEPT#*#MEMBER#*"] },
+                  },
+                },
+              ],
+            }),
+          ),
       },
       { parent: this },
     );
@@ -109,6 +127,10 @@ export class BoxalarmUserPool extends pulumi.ComponentResource {
           logGroup: this.functionLogGroup.name,
         },
         tracingConfig: ACTIVE_TRACING_CONFIG,
+        environment: { variables: { PLATFORM_TABLE_NAME: args.platformTableName } },
+        // Cognito abandons the trigger at 5 s; the status read is bounded well inside that
+        // (one attempt, 800 ms) and fails open, so sign-in never waits on a slow table.
+        timeout: 5,
       },
       { parent: this, dependsOn: [this.functionLogGroup] },
     );

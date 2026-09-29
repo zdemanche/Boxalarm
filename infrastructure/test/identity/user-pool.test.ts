@@ -9,10 +9,16 @@ interface MockSchema {
   required: boolean;
 }
 
+const rolePolicies: Record<string, unknown>[] = [];
+
 beforeEach(() => {
+  rolePolicies.length = 0;
   pulumi.runtime.setMocks({
     newResource: (args: pulumi.runtime.MockResourceArgs) => {
       const state: Record<string, unknown> = { ...args.inputs };
+      if (args.type === "aws:iam/rolePolicy:RolePolicy") {
+        rolePolicies.push(args.inputs);
+      }
       if (args.type === "aws:lambda/function:Function") {
         state.arn = `arn:aws:lambda:us-east-1:123456789012:function:${args.name}`;
       }
@@ -39,6 +45,11 @@ beforeEach(() => {
     },
   });
 });
+
+const TABLE = {
+  platformTableName: "boxalarm-dev-platform-service",
+  platformTableArn: "arn:aws:dynamodb:us-east-1:123456789012:table/boxalarm-dev-platform-service",
+};
 
 async function resolve<T>(output: pulumi.Output<T>): Promise<T> {
   return new Promise((res) => output.apply(res));
@@ -74,7 +85,7 @@ async function settle(identity: {
 describe("BoxalarmUserPool", () => {
   it("declares deptId as a mutable, non-required custom attribute", async () => {
     const { BoxalarmUserPool } = await import("../../components/identity/user-pool");
-    const identity = new BoxalarmUserPool("test-identity-schema", { env: "dev" });
+    const identity = new BoxalarmUserPool("test-identity-schema", { env: "dev", ...TABLE });
     await settle(identity);
 
     const schemas = await resolve(identity.userPool.schemas as pulumi.Output<MockSchema[]>);
@@ -88,7 +99,7 @@ describe("BoxalarmUserPool", () => {
 
   it("wires the pre-token-generation trigger as V2 so custom attributes reach the access token, not only the ID token", async () => {
     const { BoxalarmUserPool } = await import("../../components/identity/user-pool");
-    const identity = new BoxalarmUserPool("test-identity-lambda-config", { env: "dev" });
+    const identity = new BoxalarmUserPool("test-identity-lambda-config", { env: "dev", ...TABLE });
     await settle(identity);
 
     const [lambdaConfig, fnArn] = await Promise.all([
@@ -102,7 +113,7 @@ describe("BoxalarmUserPool", () => {
 
   it("grants a region/account-scoped invoke permission, created independently of the pool so it exists before any sign-in can occur", async () => {
     const { BoxalarmUserPool } = await import("../../components/identity/user-pool");
-    const identity = new BoxalarmUserPool("test-identity-permission", { env: "dev" });
+    const identity = new BoxalarmUserPool("test-identity-permission", { env: "dev", ...TABLE });
     await settle(identity);
 
     const [principal, action, sourceArn] = await Promise.all([
@@ -120,7 +131,7 @@ describe("BoxalarmUserPool", () => {
 
   it("gives the trigger function its own retention-bounded log group rather than Lambda's default never-expire group", async () => {
     const { BoxalarmUserPool } = await import("../../components/identity/user-pool");
-    const identity = new BoxalarmUserPool("test-identity-log-group", { env: "staging" });
+    const identity = new BoxalarmUserPool("test-identity-log-group", { env: "staging", ...TABLE });
     await settle(identity);
 
     const [name, retention, loggingConfig] = await Promise.all([
@@ -137,7 +148,7 @@ describe("BoxalarmUserPool", () => {
   it("logs JSON and enables Active tracing on the pre-token trigger — the highest-availability-criticality function here (if it fails, every sign-in fails)", async () => {
     const { BoxalarmUserPool } = await import("../../components/identity/user-pool");
     const { ACTIVE_TRACING_CONFIG } = await import("../../components/observability/xray-sampling");
-    const identity = new BoxalarmUserPool("test-identity-observability", { env: "dev" });
+    const identity = new BoxalarmUserPool("test-identity-observability", { env: "dev", ...TABLE });
     await settle(identity);
 
     const [loggingConfig, tracingConfig] = await Promise.all([
@@ -149,9 +160,35 @@ describe("BoxalarmUserPool", () => {
     expect(tracingConfig).toEqual(ACTIVE_TRACING_CONFIG);
   });
 
+  // Review C1: the trigger refuses a token to an LOA/RETIRED member, so it must know where
+  // member rows live and be allowed to read exactly those rows.
+  it("gives the pre-token trigger the platform table and a member-row-only GetItem grant", async () => {
+    const { BoxalarmUserPool } = await import("../../components/identity/user-pool");
+    const identity = new BoxalarmUserPool("test-identity-status-read", { env: "dev", ...TABLE });
+    await settle(identity);
+
+    const [environment, timeout] = await Promise.all([
+      resolve(identity.preTokenGenerationFunction.environment),
+      resolve(identity.preTokenGenerationFunction.timeout),
+    ]);
+    expect(environment?.variables?.PLATFORM_TABLE_NAME).toBe(TABLE.platformTableName);
+    expect(timeout).toBeLessThanOrEqual(5);
+
+    const statements = rolePolicies.flatMap(
+      (p) => (JSON.parse(p.policy as string) as { Statement: unknown[] }).Statement,
+    );
+    expect(statements).toContainEqual({
+      Sid: "ReadMemberStatus",
+      Effect: "Allow",
+      Action: "dynamodb:GetItem",
+      Resource: TABLE.platformTableArn,
+      Condition: { "ForAllValues:StringLike": { "dynamodb:LeadingKeys": ["DEPT#*#MEMBER#*"] } },
+    });
+  });
+
   it("sets MFA configuration to OFF explicitly", async () => {
     const { BoxalarmUserPool } = await import("../../components/identity/user-pool");
-    const identity = new BoxalarmUserPool("test-identity-mfa", { env: "dev" });
+    const identity = new BoxalarmUserPool("test-identity-mfa", { env: "dev", ...TABLE });
     await settle(identity);
 
     const mfa = await resolve(identity.userPool.mfaConfiguration);
@@ -160,7 +197,10 @@ describe("BoxalarmUserPool", () => {
 
   it("enables deletion protection — unlike DynamoDB, Cognito has no PITR/restore path", async () => {
     const { BoxalarmUserPool } = await import("../../components/identity/user-pool");
-    const identity = new BoxalarmUserPool("test-identity-deletion-protection", { env: "dev" });
+    const identity = new BoxalarmUserPool("test-identity-deletion-protection", {
+      env: "dev",
+      ...TABLE,
+    });
     await settle(identity);
 
     const deletionProtection = await resolve(identity.userPool.deletionProtection);
@@ -169,7 +209,7 @@ describe("BoxalarmUserPool", () => {
 
   it("recovers via verified email first then verified phone, with no human step (E8-S2-INFRA AC1)", async () => {
     const { BoxalarmUserPool } = await import("../../components/identity/user-pool");
-    const identity = new BoxalarmUserPool("test-identity-recovery", { env: "dev" });
+    const identity = new BoxalarmUserPool("test-identity-recovery", { env: "dev", ...TABLE });
     await settle(identity);
 
     const setting = await resolve(identity.userPool.accountRecoverySetting);
@@ -183,7 +223,7 @@ describe("BoxalarmUserPool", () => {
 
   it("scopes the Cognito SMS role's trust to this pool's external ID AND this account/a Cognito pool ARN (confused-deputy hardening)", async () => {
     const { BoxalarmUserPool } = await import("../../components/identity/user-pool");
-    const identity = new BoxalarmUserPool("test-identity-sms", { env: "dev" });
+    const identity = new BoxalarmUserPool("test-identity-sms", { env: "dev", ...TABLE });
     await settle(identity);
 
     const [policy, smsConfig] = await Promise.all([
@@ -214,7 +254,7 @@ describe("BoxalarmUserPool", () => {
 
   it("provisions a Cognito-hosted domain with prefix boxalarm-{env}", async () => {
     const { BoxalarmUserPool } = await import("../../components/identity/user-pool");
-    const identity = new BoxalarmUserPool("test-identity-domain", { env: "qa" });
+    const identity = new BoxalarmUserPool("test-identity-domain", { env: "qa", ...TABLE });
     await settle(identity);
 
     const domain = await resolve(identity.userPoolDomain.domain);
@@ -224,15 +264,19 @@ describe("BoxalarmUserPool", () => {
 
   it("throws rather than provisioning a pool for an unknown env", async () => {
     const { BoxalarmUserPool } = await import("../../components/identity/user-pool");
-    expect(() => new BoxalarmUserPool("test-identity-bad-env", { env: "production" })).toThrow(
-      /unknown env/,
-    );
+    expect(
+      () => new BoxalarmUserPool("test-identity-bad-env", { env: "production", ...TABLE }),
+    ).toThrow(/unknown env/);
   });
 
   it("throws on absent env", async () => {
     const { BoxalarmUserPool } = await import("../../components/identity/user-pool");
     expect(
-      () => new BoxalarmUserPool("test-identity-no-env", { env: undefined as unknown as string }),
+      () =>
+        new BoxalarmUserPool("test-identity-no-env", {
+          env: undefined as unknown as string,
+          ...TABLE,
+        }),
     ).toThrow(/env is required/);
   });
 });

@@ -3,12 +3,21 @@ import type { CognitoIdentityProviderClient } from '@aws-sdk/client-cognito-iden
 import type { Handler, SQSEvent, SQSRecord } from 'aws-lambda';
 import {
   createRevocationClient,
+  disableMemberLogin,
+  enableMemberLogin,
   readRevocationConfig,
   revokeMemberSession,
 } from './cognitoRevocationClient.js';
 import type { RevocationConfig } from './cognitoRevocationClient.js';
+import {
+  getAccessStoreClient,
+  readMemberStatus,
+  readPlatformTableName,
+} from './memberAccessStore.js';
 
 const REVOKING_STATUSES = new Set(['LOA', 'RETIRED']);
+// Statuses that may use the app. PROBATIONARY is where every new member starts.
+const RESTORING_STATUSES = new Set(['ACTIVE', 'PROBATIONARY']);
 
 let cachedClient: CognitoIdentityProviderClient | undefined;
 
@@ -20,13 +29,19 @@ function getClient(): CognitoIdentityProviderClient {
 interface MemberStatusChangedPayload {
   readonly memberId: string;
   readonly status: string;
+  readonly deptId?: string | undefined;
   readonly correlationId?: string | undefined;
 }
 
 interface MemberStatusEnvelope {
   readonly eventType?: unknown;
   readonly correlationId?: unknown;
-  readonly payload?: { memberId?: unknown; status?: unknown; newStatus?: unknown };
+  readonly payload?: {
+    memberId?: unknown;
+    status?: unknown;
+    newStatus?: unknown;
+    deptId?: unknown;
+  };
 }
 
 // EventBridge -> SQS delivers its own envelope with the producer payload nested under
@@ -75,13 +90,61 @@ function parseMemberStatusEvent(record: SQSRecord): MemberStatusChangedPayload |
   }
   const correlationId =
     typeof envelope.correlationId === 'string' ? envelope.correlationId : undefined;
-  return { memberId, status, correlationId };
+  const deptId = envelope.payload?.deptId;
+  return {
+    memberId,
+    status,
+    deptId: typeof deptId === 'string' && deptId.trim().length > 0 ? deptId : undefined,
+    correlationId,
+  };
+}
+
+/**
+ * The status to act on: the member row's current status when the event names a department
+ * (see readMemberStatus for why), else the event's own status. A read failure throws so SQS
+ * retries - guessing would either lock out a returned member or leave a retired one in.
+ */
+async function resolveEffectiveStatus(
+  payload: MemberStatusChangedPayload,
+  tableName: string,
+): Promise<string> {
+  if (!payload.deptId) {
+    return payload.status;
+  }
+  const current = await readMemberStatus(
+    getAccessStoreClient(),
+    tableName,
+    payload.deptId,
+    payload.memberId,
+  );
+  return current ?? payload.status;
+}
+
+async function applyStatus(
+  client: CognitoIdentityProviderClient,
+  userPoolId: string,
+  payload: MemberStatusChangedPayload,
+  status: string,
+): Promise<void> {
+  const input = { userPoolId, username: payload.memberId, correlationId: payload.correlationId };
+  if (REVOKING_STATUSES.has(status)) {
+    // Disable first: once it lands no new sign-in or refresh can succeed, so the sign-out
+    // that follows cannot race a refresh that re-mints a session.
+    await disableMemberLogin(client, input);
+    await revokeMemberSession(client, input);
+    return;
+  }
+  if (RESTORING_STATUSES.has(status)) {
+    await enableMemberLogin(client, input);
+  }
 }
 
 export const handler: Handler<SQSEvent, void> = async (event) => {
   let config: RevocationConfig;
+  let tableName: string;
   try {
     config = readRevocationConfig(process.env);
+    tableName = readPlatformTableName(process.env);
   } catch (error) {
     console.error(
       JSON.stringify({
@@ -115,16 +178,13 @@ export const handler: Handler<SQSEvent, void> = async (event) => {
         throw error;
       }
 
-      if (!payload || !REVOKING_STATUSES.has(payload.status)) {
+      if (!payload) {
         return;
       }
 
       try {
-        await revokeMemberSession(client, {
-          userPoolId,
-          username: payload.memberId,
-          correlationId: payload.correlationId,
-        });
+        const status = await resolveEffectiveStatus(payload, tableName);
+        await applyStatus(client, userPoolId, payload, status);
       } catch (error) {
         // UserNotFoundException is not retryable -- no-op instead of DLQ-storming.
         if (error instanceof UserNotFoundException) {
