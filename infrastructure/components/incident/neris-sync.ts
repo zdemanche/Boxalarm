@@ -83,10 +83,17 @@ export class NerisSync extends pulumi.ComponentResource {
         statements: (tableArn) => [
           {
             // GSI1: the window's incidents (and a closed month's count). Table: settings
-            // copy, filed/reminded-month rows, run row, outbox Puts. No Update or Delete.
+            // copy, filed/reminded-month rows, run row, outbox Puts; repairing drift applies
+            // the NERIS status (METADATA Update, history Puts, work-list Put or Delete).
             Sid: "NerisReconciliationAccess",
             Effect: "Allow",
-            Action: ["dynamodb:Query", "dynamodb:GetItem", "dynamodb:PutItem"],
+            Action: [
+              "dynamodb:Query",
+              "dynamodb:GetItem",
+              "dynamodb:PutItem",
+              "dynamodb:UpdateItem",
+              "dynamodb:DeleteItem",
+            ],
             Resource: [tableArn, `${tableArn}/index/GSI1`],
           },
         ],

@@ -4,6 +4,7 @@ import type { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
 import { toVerifiedDeptId } from '@boxalarm/dept-scope';
 import type { NerisApi } from './api.js';
 import {
+  repairDrift,
   diffAgainstNeris,
   previousMonth,
   reconcileDepartment,
@@ -189,5 +190,58 @@ describe('no-activity reminder', () => {
     expect(await remindNoActivity(client(0, false, already).client, 'table', DEPT, now, 'c')).toBe(
       'not_needed',
     );
+  });
+});
+
+describe('repairDrift (review M7)', () => {
+  it('applies a NERIS status the poller missed and re-queues a still-open record', async () => {
+    const sent: Command[] = [];
+    const send = vi.fn((command: Command) => {
+      sent.push(command);
+      return Promise.resolve(
+        command.constructor.name === 'GetCommand'
+          ? {
+              Item: {
+                nerisStatus: 'PENDING_APPROVAL',
+                createdBy: 'MBR-0034',
+                dispatchNumber: '4472',
+              },
+            }
+          : {},
+      );
+    });
+    const repaired = await repairDrift(
+      { send } as unknown as DynamoDBDocumentClient,
+      'table',
+      DEPT,
+      [
+        {
+          kind: 'STATUS_MISMATCH',
+          incidentId: 'L2',
+          nerisIncidentId: ID('4472'),
+          localStatus: 'PENDING_APPROVAL',
+          nerisStatus: 'REJECTED',
+        },
+        { kind: 'MISSING_IN_NERIS', incidentId: 'L3', nerisIncidentId: ID('4473') },
+        { kind: 'UNKNOWN_IN_NERIS', nerisIncidentId: ID('9001') },
+      ],
+      [{ nerisId: ID('4472'), status: 'REJECTED', lastModified: '2026-09-30T09:00:00Z' }],
+      new Date('2026-10-01T07:15:00Z'),
+    );
+    expect(repaired).toBe(2);
+    const transact = sent.find((c) => c.constructor.name === 'TransactWriteCommand')!;
+    const items = transact.input.TransactItems as Record<string, Record<string, unknown>>[];
+    expect(items[0]!.Update).toMatchObject({
+      ExpressionAttributeValues: { ':status': 'REJECTED' },
+    });
+    expect(
+      items.some(
+        (i) =>
+          (i.Put?.Item as { eventType?: string } | undefined)?.eventType ===
+          'neris.incident.rejected',
+      ),
+    ).toBe(true);
+    const requeued = sent.find((c) => c.constructor.name === 'PutCommand')!;
+    expect(requeued.input.Item).toMatchObject({ pk: 'DEPT#NICHOLS#NERIS_OPEN', sk: 'L3' });
   });
 });

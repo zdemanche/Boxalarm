@@ -116,7 +116,13 @@ describe("NerisSync", () => {
     expect(
       reconciliation.Statement.find((s) => s.Sid === "NerisReconciliationAccess"),
     ).toMatchObject({
-      Action: ["dynamodb:Query", "dynamodb:GetItem", "dynamodb:PutItem"],
+      Action: [
+        "dynamodb:Query",
+        "dynamodb:GetItem",
+        "dynamodb:PutItem",
+        "dynamodb:UpdateItem",
+        "dynamodb:DeleteItem",
+      ],
       Resource: [TABLE_ARN, `${TABLE_ARN}/index/GSI1`],
     });
   });

@@ -14,7 +14,9 @@ import { getDocumentClient, getTableName } from '../repository.js';
 import { getNerisDeptSettings } from '../nerisSettings.js';
 import { nerisApiFromEnv } from '../reportContext.js';
 import type { NerisApi, NerisListedIncident } from './api.js';
-import { scannerDeptIds } from './statusPoller.js';
+import { applyStatusChange, scannerDeptIds } from './statusPoller.js';
+import { nerisOpenKey } from '../submissionRepository.js';
+import { isNerisIncidentStatus } from './paths.js';
 import { toNerisIncidentNumber } from './payload.js';
 
 const logger = createLogger({ service: 'incident-service' });
@@ -248,6 +250,7 @@ export async function reconcileDepartment(
     return undefined;
   }
   const drift = diffAgainstNeris(local, listed.incidents, listed.truncated);
+  const repaired = await repairDrift(client, tableName, deptId, drift, listed.incidents, now);
   const pk = buildDeptScopedPk(deptId, 'NERIS');
   const summary = {
     pk,
@@ -258,6 +261,7 @@ export async function reconcileDepartment(
     nerisCount: listed.incidents.length,
     truncated: listed.truncated,
     driftCount: drift.length,
+    repairedCount: repaired,
     drift: drift.slice(0, MAX_DRIFT_IN_EVENT),
   };
   if (drift.length === 0) {
@@ -293,6 +297,90 @@ export async function reconcileDepartment(
     );
   }
   return { drift, truncated: listed.truncated };
+}
+
+/**
+ * Drift is repaired, not only reported (review M7):
+ *   - STATUS_MISMATCH: NERIS's status is applied locally exactly as the poller would — local
+ *     status, history, the approved/rejected event the owner is told from — and a still-open
+ *     record goes back on the poller's work list;
+ *   - MISSING_IN_NERIS: the record goes back on the work list, so the poller re-checks it
+ *     and, if NERIS really no longer has it, ages it out with a poll_expired event.
+ * Returns how many records were repaired.
+ */
+export async function repairDrift(
+  client: DynamoDBDocumentClient,
+  tableName: string,
+  deptId: VerifiedDeptId,
+  drift: readonly Drift[],
+  remote: readonly NerisListedIncident[],
+  now: Date,
+): Promise<number> {
+  const nowSeconds = Math.floor(now.getTime() / 1000);
+  let repaired = 0;
+  for (const entry of drift) {
+    if (!entry.incidentId) continue;
+    const open = { incidentId: entry.incidentId, nerisIncidentId: entry.nerisIncidentId };
+    try {
+      if (entry.kind === 'STATUS_MISMATCH' && isNerisIncidentStatus(entry.nerisStatus)) {
+        const metadata = (
+          await client.send(
+            new GetCommand({
+              TableName: tableName,
+              Key: { pk: buildDeptScopedPk(deptId, 'INCIDENT', entry.incidentId), sk: 'METADATA' },
+            }),
+          )
+        ).Item as Record<string, unknown> | undefined;
+        if (!metadata) continue;
+        const listed = remote.find((r) => r.nerisId === entry.nerisIncidentId);
+        const current = {
+          status: entry.nerisStatus,
+          current: true,
+          lastModified: listed?.lastModified ?? now.toISOString(),
+        };
+        await applyStatusChange(
+          client,
+          tableName,
+          deptId,
+          open,
+          current,
+          [current],
+          metadata,
+          nowSeconds,
+          {
+            requeue: true,
+          },
+        );
+        repaired += 1;
+      } else if (entry.kind === 'MISSING_IN_NERIS') {
+        await client.send(
+          new PutCommand({
+            TableName: tableName,
+            Item: {
+              ...nerisOpenKey(deptId, entry.incidentId),
+              entityType: 'NERIS_OPEN_SUBMISSION',
+              incidentId: entry.incidentId,
+              nerisIncidentId: entry.nerisIncidentId,
+              since: nowSeconds,
+              nextPollAt: nowSeconds,
+              failures: 0,
+            },
+          }),
+        );
+        repaired += 1;
+      }
+    } catch (error) {
+      logger.error({
+        event: 'neris.reconciliation.repair_failed',
+        correlationId: entry.incidentId,
+        deptId,
+        incidentId: entry.incidentId,
+        kind: entry.kind,
+        message: error instanceof Error ? error.message : undefined,
+      });
+    }
+  }
+  return repaired;
 }
 
 export async function runReconciliation(

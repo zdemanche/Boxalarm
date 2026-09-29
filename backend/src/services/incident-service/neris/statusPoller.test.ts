@@ -2,7 +2,13 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
 import { toVerifiedDeptId } from '@boxalarm/dept-scope';
 import type { NerisApi, NerisHistoryEntry } from './api.js';
-import { pollRecord, runStatusPoll, scannerDeptIds } from './statusPoller.js';
+import {
+  MAX_RECORDS_PER_RUN,
+  pollInterval,
+  pollRecord,
+  runStatusPoll,
+  scannerDeptIds,
+} from './statusPoller.js';
 
 const DEPT = toVerifiedDeptId({ deptId: 'NICHOLS' });
 const OPEN = {
@@ -203,5 +209,127 @@ describe('runStatusPoll', () => {
       'STRATFORD',
     ]);
     expect(() => scannerDeptIds({})).toThrow(/NERIS_SCANNER_DEPT_ID/);
+  });
+});
+
+describe('work-list rotation, backoff and age-out (review M7)', () => {
+  const NOW = 1_800_000_000;
+
+  function world(rows: Record<string, unknown>[], cursor?: string) {
+    const sent: Command[] = [];
+    const send = vi.fn((command: Command) => {
+      sent.push(command);
+      const input = command.input;
+      const pk = (input.ExpressionAttributeValues as Record<string, string> | undefined)?.[':pk'];
+      if (command.constructor.name === 'QueryCommand' && pk === 'DEPT#NICHOLS#NERIS') {
+        return Promise.resolve({ Items: [{ sk: 'SETTINGS', departmentNerisId: 'FD09190828' }] });
+      }
+      if (command.constructor.name === 'QueryCommand') {
+        const start = (input.ExclusiveStartKey as { sk?: string } | undefined)?.sk;
+        const from = start ? rows.findIndex((r) => r.incidentId === start) + 1 : 0;
+        const limit = input.Limit as number;
+        const page = rows.slice(from, from + limit);
+        const more = from + limit < rows.length;
+        return Promise.resolve({
+          Items: page,
+          ...(more ? { LastEvaluatedKey: { pk: 'x', sk: page[page.length - 1]!.incidentId } } : {}),
+        });
+      }
+      if (command.constructor.name === 'GetCommand') {
+        const sk = (input.Key as { sk: string }).sk;
+        return Promise.resolve(
+          sk === 'POLLER#CURSOR'
+            ? cursor
+              ? { Item: { lastIncidentId: cursor } }
+              : {}
+            : { Item: METADATA },
+        );
+      }
+      return Promise.resolve({});
+    });
+    return { client: { send } as unknown as DynamoDBDocumentClient, sent };
+  }
+
+  const unchangedApi = () => {
+    const history = vi.fn().mockResolvedValue({
+      ok: true,
+      httpStatus: 200,
+      history: [{ status: 'PENDING_APPROVAL', current: true, lastModified: 't' }],
+    });
+    return { api: { getIncidentHistory: history } as unknown as NerisApi, history };
+  };
+
+  beforeEach(() => {
+    process.env.INCIDENT_TABLE_NAME = 'table';
+    process.env.NERIS_SCANNER_DEPT_ID = 'NICHOLS';
+  });
+
+  it('continues from the saved cursor, so records past the first page are reached', async () => {
+    const rows = Array.from({ length: MAX_RECORDS_PER_RUN + 50 }, (_, i) => ({
+      incidentId: `I-${String(i).padStart(4, '0')}`,
+      nerisIncidentId: `FD09190828|${i}|1798000000`,
+      since: NOW - 600,
+    }));
+    const { api, history } = unchangedApi();
+    const first = world(rows);
+    await runStatusPoll('c', { client: first.client, api, now: () => NOW });
+    expect(history).toHaveBeenCalledTimes(MAX_RECORDS_PER_RUN);
+    const saved = first.sent.find(
+      (c) =>
+        c.constructor.name === 'PutCommand' &&
+        (c.input.Item as { sk: string }).sk === 'POLLER#CURSOR',
+    );
+    const cursor = (saved!.input.Item as { lastIncidentId: string }).lastIncidentId;
+    expect(cursor).toBe(`I-${String(MAX_RECORDS_PER_RUN - 1).padStart(4, '0')}`);
+
+    const second = unchangedApi();
+    await runStatusPoll('c', {
+      client: world(rows, cursor).client,
+      api: second.api,
+      now: () => NOW,
+    });
+    expect(second.history).toHaveBeenCalledTimes(50);
+    expect(second.history.mock.calls[0]![1]).toBe(`FD09190828|${MAX_RECORDS_PER_RUN}|1798000000`);
+  });
+
+  it('skips records that are not due and backs off by age', async () => {
+    const { api, history } = unchangedApi();
+    const { client, sent } = world([
+      { incidentId: 'A', nerisIncidentId: 'FD09190828|A|1', since: NOW - 2 * 86_400 },
+      {
+        incidentId: 'B',
+        nerisIncidentId: 'FD09190828|B|1',
+        since: NOW - 60,
+        nextPollAt: NOW + 100,
+      },
+    ]);
+    await runStatusPoll('c', { client, api, now: () => NOW });
+    expect(history).toHaveBeenCalledTimes(1);
+    const update = sent.find((c) => c.constructor.name === 'UpdateCommand')!;
+    expect(update.input.ExpressionAttributeValues).toEqual({
+      ':next': NOW + 3_600,
+      ':failures': 0,
+    });
+    expect(pollInterval(60)).toBe(300);
+    expect(pollInterval(30 * 86_400)).toBe(21_600);
+  });
+
+  it('ages out a record NERIS keeps failing on, with an event, instead of polling it forever', async () => {
+    const api = {
+      getIncidentHistory: vi
+        .fn()
+        .mockResolvedValue({ ok: false, kind: 'client_error', httpStatus: 404, issues: [] }),
+    } as unknown as NerisApi;
+    const { client, sent } = world([
+      { incidentId: 'A', nerisIncidentId: 'FD09190828|A|1', since: NOW - 600, failures: 11 },
+    ]);
+    await runStatusPoll('c', { client, api, now: () => NOW });
+    const transact = sent.find((c) => c.constructor.name === 'TransactWriteCommand')!;
+    const items = transact.input.TransactItems as Record<string, Record<string, unknown>>[];
+    expect(items[0]!.Delete).toBeDefined();
+    expect(items[1]!.Put!.Item).toMatchObject({
+      eventType: 'neris.incident.poll_expired',
+      payload: { reason: 'POLL_FAILURES', failures: 12 },
+    });
   });
 });
