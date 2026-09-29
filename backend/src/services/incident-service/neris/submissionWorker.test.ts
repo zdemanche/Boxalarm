@@ -28,6 +28,10 @@ function fakeIncident(
     nerisSchemaVersion: '2026.2',
     corePayload,
     status: 'SUBMITTED',
+    submissionStatus: 'SUBMITTED',
+    lockedAt: 1_798_000_500,
+    contentVersion: 3,
+    lockedContentVersion: 3,
     sourceDispatchId: INCIDENT_ID,
     createdBy: 'MBR-0034',
     createdAt: 1_798_000_000,
@@ -494,6 +498,44 @@ describe('submissionWorker handler (SQS trigger)', () => {
       () => undefined,
     );
     expect(schedulerSend).not.toHaveBeenCalled();
+  });
+
+  it('abandons without sending when the report was unlocked, edited or is no longer in flight (round 2, N2)', async () => {
+    const { sendBlockedReason } = await import('./submissionWorker.js');
+    const locked = {
+      lockedAt: 1,
+      submissionStatus: 'SUBMITTED',
+      contentVersion: 3,
+      lockedContentVersion: 3,
+    };
+    expect(sendBlockedReason(locked, locked)).toBeUndefined();
+    expect(sendBlockedReason(locked, { ...locked, lockedAt: undefined })).toBe('NOT_LOCKED');
+    expect(sendBlockedReason(locked, { ...locked, submissionStatus: 'FAILED' })).toBe(
+      'NOT_IN_FLIGHT',
+    );
+    expect(sendBlockedReason(locked, { ...locked, contentVersion: 4 })).toBe('CONTENT_CHANGED');
+    expect(sendBlockedReason(locked, { ...locked, lockedContentVersion: 2 })).toBe(
+      'CONTENT_CHANGED',
+    );
+    expect(sendBlockedReason(locked, undefined)).toBe('MISSING');
+
+    vi.resetModules();
+    const { getIncident, fetchFn, appendSubmissionAttempt } = mockDeps({ httpStatus: 201 });
+    getIncident.mockResolvedValueOnce({ ...fakeIncident(), ...locked }).mockResolvedValueOnce({
+      ...fakeIncident(),
+      ...locked,
+      lockedAt: undefined,
+      status: 'DRAFT',
+    });
+    const { createHandler } = await import('./submissionWorker.js');
+    await createHandler({ schedulerClient: { send: vi.fn() } as never })(
+      { Records: [sqsRecord(submittedEnvelope('NICHOLS', INCIDENT_ID))] },
+      FAKE_CONTEXT,
+      () => undefined,
+    );
+    expect(fetchFn).not.toHaveBeenCalled();
+    expect(appendSubmissionAttempt).not.toHaveBeenCalled();
+    expect(getIncident).toHaveBeenCalledWith('NICHOLS', INCIDENT_ID, { consistent: true });
   });
 
   it('schedules each retry under a unique, self-deleting name recorded on the attempt (review M3)', async () => {

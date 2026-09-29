@@ -38,7 +38,7 @@ async function inner(
   }
 
   try {
-    const context = await loadReportContext(deptId, incidentId);
+    const context = await loadReportContext(deptId, incidentId, { consistent: true });
     if (!context) {
       return problemResponse(
         404,

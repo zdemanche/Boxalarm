@@ -125,6 +125,7 @@ export async function queryIncidentResponseUnits(
   tableName: string,
   deptId: VerifiedDeptId,
   incidentId: string,
+  options: { readonly consistent?: boolean } = {},
 ): Promise<readonly Record<string, unknown>[]> {
   const result = await client.send(
     new QueryCommand({
@@ -134,6 +135,7 @@ export async function queryIncidentResponseUnits(
         ':pk': buildDeptScopedPk(deptId, 'INCIDENT', incidentId),
         ':prefix': 'RESPONSE#',
       },
+      ...(options.consistent ? { ConsistentRead: true } : {}),
     }),
   );
   return (result.Items ?? []) as Record<string, unknown>[];

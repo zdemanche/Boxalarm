@@ -162,6 +162,31 @@ export function expectedNerisIncidentId(
   return `${departmentNerisId}|${number}|${Math.floor(callCreate / 1000)}`;
 }
 
+type SendableIncident = {
+  readonly lockedAt?: number | undefined;
+  readonly submissionStatus?: string | undefined;
+  readonly contentVersion?: number | undefined;
+  readonly lockedContentVersion?: number | undefined;
+};
+
+/** Why a send must not go out now, or undefined when it may. */
+export function sendBlockedReason(
+  built: SendableIncident,
+  fresh: SendableIncident | undefined,
+): string | undefined {
+  if (!fresh) return 'MISSING';
+  if (fresh.lockedAt === undefined) return 'NOT_LOCKED';
+  if (fresh.submissionStatus !== 'SUBMITTED' && fresh.submissionStatus !== 'RETRYING') {
+    return 'NOT_IN_FLIGHT';
+  }
+  const version = fresh.contentVersion ?? 0;
+  if (version !== (built.contentVersion ?? 0)) return 'CONTENT_CHANGED';
+  if (fresh.lockedContentVersion !== undefined && fresh.lockedContentVersion !== version) {
+    return 'CONTENT_CHANGED';
+  }
+  return undefined;
+}
+
 function notifyFor(incident: {
   readonly createdBy: string;
   readonly lockedBy?: string;
@@ -220,7 +245,9 @@ async function attemptSubmission(
   const incidentRepository = getIncidentRepository(process.env);
   const submissionRepository = getSubmissionRepository(process.env);
 
-  const incident = await incidentRepository.getIncident(payload.deptId, payload.incidentId);
+  const incident = await incidentRepository.getIncident(payload.deptId, payload.incidentId, {
+    consistent: true,
+  });
   if (!incident) {
     logger.error({
       event: 'neris.submission.incident_missing',
@@ -276,6 +303,27 @@ async function attemptSubmission(
     schema: nerisApi,
   });
   const hash = payloadHash(nerisPayload);
+  // Last check before anything leaves Boxalarm (round 2, N2): re-read the report strongly
+  // consistently. It must still be locked, the send must still be the one in flight, and
+  // the content must be exactly what was built above and what the officer locked. A
+  // redriven DLQ message or a delayed retry for a report since unlocked or edited is
+  // dropped without sending.
+  const fresh = await incidentRepository.getIncident(payload.deptId, payload.incidentId, {
+    consistent: true,
+  });
+  const reason = sendBlockedReason(incident, fresh);
+  if (reason) {
+    logger.warn({
+      event: 'neris.submission.abandoned',
+      correlationId: payload.incidentId,
+      deptId: payload.deptId,
+      incidentId: payload.incidentId,
+      reason,
+    });
+    emitOutcomeMetric(METRIC_NAMESPACE, 'SendAbandoned', reason);
+    return;
+  }
+
   const expectedNerisId = expectedNerisIncidentId(settings.departmentNerisId, nerisPayload);
   let operation: 'CREATE' | 'UPDATE' | 'ADOPT' = incident.nerisIncidentId ? 'UPDATE' : 'CREATE';
 

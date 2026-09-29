@@ -50,11 +50,20 @@ export async function loadSchema(
   return { ...(schema ? { schema } : {}), ...(nerisApi ? { nerisApi } : {}) };
 }
 
+/**
+ * `consistent`: strongly consistent reads of the report and its unit rows — the lock judges
+ * exactly the content whose contentVersion it pins (round 2, N11).
+ */
 export async function loadReportContext(
   deptId: VerifiedDeptId,
   incidentId: string,
+  options: { readonly consistent?: boolean } = {},
 ): Promise<ReportContext | undefined> {
-  const incident = await getIncidentRepository(process.env).getIncident(deptId, incidentId);
+  const incident = await getIncidentRepository(process.env).getIncident(
+    deptId,
+    incidentId,
+    options,
+  );
   if (!incident) {
     return undefined;
   }
@@ -62,7 +71,7 @@ export async function loadReportContext(
   const tableName = getTableName(process.env);
   const [settings, units, schemas] = await Promise.all([
     getNerisDeptSettings(client, tableName, deptId),
-    queryIncidentResponseUnits(client, tableName, deptId, incidentId),
+    queryIncidentResponseUnits(client, tableName, deptId, incidentId, options),
     loadSchema(incident),
   ]);
   return {

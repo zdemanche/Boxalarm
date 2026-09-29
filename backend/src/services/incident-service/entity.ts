@@ -61,6 +61,8 @@ export interface Incident {
   readonly firstSubmittedAt?: number;
   /** Bumped by every content write; the review lock pins it (review M5). */
   readonly contentVersion?: number;
+  /** The contentVersion the officer reviewed and locked; the worker sends only that. */
+  readonly lockedContentVersion?: number;
   /** The NERIS id a create in progress will produce (set before the POST; review M2). */
   readonly pendingNerisId?: string;
   /** sha256 of the last payload NERIS accepted; a differing hash means edits await resubmission. */

@@ -36,7 +36,11 @@ export interface IncidentRepository {
     nowEpochSeconds: number,
     traceId: string,
   ): Promise<Incident>;
-  getIncident(deptId: VerifiedDeptId, incidentId: string): Promise<Incident | undefined>;
+  getIncident(
+    deptId: VerifiedDeptId,
+    incidentId: string,
+    options?: { readonly consistent?: boolean },
+  ): Promise<Incident | undefined>;
   updateNarrative(
     deptId: VerifiedDeptId,
     incidentId: string,
@@ -150,6 +154,9 @@ function toIncident(item: Record<string, unknown>): Incident {
     ...(typeof item.lastPayloadHash === 'string' ? { lastPayloadHash: item.lastPayloadHash } : {}),
     ...(typeof item.pendingNerisId === 'string' ? { pendingNerisId: item.pendingNerisId } : {}),
     ...(typeof item.contentVersion === 'number' ? { contentVersion: item.contentVersion } : {}),
+    ...(typeof item.lockedContentVersion === 'number'
+      ? { lockedContentVersion: item.lockedContentVersion }
+      : {}),
   };
 }
 
@@ -340,9 +347,13 @@ export function createIncidentRepository(
       return toIncident(item);
     },
 
-    async getIncident(deptId, incidentId) {
+    async getIncident(deptId, incidentId, options = {}) {
       const result = await client.send(
-        new GetCommand({ TableName: tableName, Key: metadataKey(deptId, incidentId) }),
+        new GetCommand({
+          TableName: tableName,
+          Key: metadataKey(deptId, incidentId),
+          ...(options.consistent ? { ConsistentRead: true } : {}),
+        }),
       );
       return result.Item ? toIncident(result.Item as Record<string, unknown>) : undefined;
     },

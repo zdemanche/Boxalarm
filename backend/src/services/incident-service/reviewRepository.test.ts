@@ -59,6 +59,8 @@ describe('lockIncident', () => {
       ExpressionAttributeValues: { ':reviewed': 7, ':status': 'VALIDATED' },
     });
     expect(String(update!.Update!.UpdateExpression)).not.toContain('updatedAt =');
+    // The worker sends only this reviewed version (round 2, N2).
+    expect(String(update!.Update!.UpdateExpression)).toContain('lockedContentVersion = :reviewed');
     expect(audit!.Put!.Item).toMatchObject({ entityType: 'AUDIT_LOG_ENTRY', action: 'LOCK' });
     expect(locked!.Put!.Item).toMatchObject({ eventType: 'incident.report.locked' });
     expect(rest).toEqual([]);

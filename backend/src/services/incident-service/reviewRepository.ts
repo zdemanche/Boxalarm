@@ -162,7 +162,7 @@ export async function lockIncident(
               } AND ${NOT_IN_FLIGHT}`,
               // updatedAt is left alone: it marks content edits, which the ledger's
               // editedSinceSubmission compares against lastSubmittedAt; lock/unlock are not edits.
-              UpdateExpression: `SET lockedAt = :now, lockedBy = :actor, #status = :status${
+              UpdateExpression: `SET lockedAt = :now, lockedBy = :actor, lockedContentVersion = :reviewed, #status = :status${
                 input.submit
                   ? ', submissionStatus = :queued, submissionActivityAt = :activityAt REMOVE submissionFailureReason'
                   : ''
@@ -239,7 +239,7 @@ export async function unlockIncident(
               UpdateExpression:
                 // Back to DRAFT: nothing is submittable again until an officer re-reviews and
                 // re-locks it (a VALIDATED leftover would let /submit go around the review).
-                'REMOVE lockedAt, lockedBy SET unlockedAt = :now, unlockedBy = :actor, lastUnlockReason = :reason, #status = :draft',
+                'REMOVE lockedAt, lockedBy, lockedContentVersion SET unlockedAt = :now, unlockedBy = :actor, lastUnlockReason = :reason, #status = :draft',
               ExpressionAttributeNames: { '#status': 'status' },
               ExpressionAttributeValues: {
                 ':draft': 'DRAFT',
