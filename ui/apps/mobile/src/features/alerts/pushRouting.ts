@@ -157,7 +157,7 @@ export function subscribePushNotificationRouting(): () => void {
   });
 
   const unsubscribeForeground = notifee.onForegroundEvent((event) => {
-    if (event.type === EventType.ACTION_PRESS) {
+    if (event.type === EventType.ACTION_PRESS || event.type === EventType.DISMISSED) {
       void handleNotificationEvent(event);
       return;
     }

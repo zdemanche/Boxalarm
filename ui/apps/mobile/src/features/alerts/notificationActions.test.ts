@@ -138,6 +138,24 @@ test('a 409 SUPERSEDED: the notification says a newer answer is on the roster', 
   );
 });
 
+test('dismissing a page cancels its 60 s ring cap, so it is not re-posted (round 2 m2-4)', async () => {
+  const cancelTrigger = notifee.cancelTriggerNotification as jest.Mock;
+  cancelTrigger.mockClear();
+
+  await handleNotificationEvent({
+    type: EventType.DISMISSED,
+    detail: { notification: { id: 'dispatch:D-GONE', data: pageData } },
+  } as Event);
+  await handleNotificationEvent({
+    type: EventType.DISMISSED,
+    detail: { notification: { id: 'digest-1' } },
+  } as Event);
+
+  expect(cancelTrigger).toHaveBeenCalledTimes(1);
+  expect(cancelTrigger).toHaveBeenCalledWith('dispatch:D-GONE');
+  expect(await store.all()).toHaveLength(0);
+});
+
 test('a plain press or an unknown action is ignored here (routing handles taps)', async () => {
   await handleNotificationEvent({
     type: EventType.PRESS,

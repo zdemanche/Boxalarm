@@ -156,6 +156,17 @@ export async function answerFromNotification(
 
 /** notifee event handler for both onBackgroundEvent (index.js) and onForegroundEvent. */
 export async function handleNotificationEvent({ type, detail }: Event): Promise<void> {
+  // A page the member swiped away must not come back from the 60 s ring cap (round 2 m2-4): the
+  // call is still in the Alerts list, and dismissing is a deliberate act.
+  if (type === EventType.DISMISSED) {
+    const id = detail.notification?.id;
+    if (id?.startsWith('dispatch:')) {
+      await notifee
+        .cancelTriggerNotification(id)
+        .catch((error: unknown) => console.warn('[push] cancelling the ring cap failed', error));
+    }
+    return;
+  }
   if (type !== EventType.ACTION_PRESS) return;
   const answer = answerFromActionId(detail.pressAction?.id);
   const notification = detail.notification;
