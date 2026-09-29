@@ -57,7 +57,7 @@ describe('createSubmissionRepository.enqueueSubmission', () => {
       TableName: TABLE_NAME,
       Key: { pk: `DEPT#NICHOLS#INCIDENT#${INCIDENT_ID}`, sk: 'METADATA' },
       ConditionExpression:
-        'attribute_exists(pk) AND #status = :validated AND attribute_exists(lockedAt) AND (attribute_not_exists(submissionStatus) OR (submissionStatus <> :queued AND submissionStatus <> :retrying))',
+        'attribute_exists(pk) AND #status = :validated AND attribute_exists(lockedAt) AND (attribute_not_exists(submissionStatus) OR (submissionStatus <> :queued AND submissionStatus <> :retrying) OR attribute_not_exists(submissionActivityAt) OR submissionActivityAt < :staleBefore)',
     });
     const outboxItem = command.input.TransactItems[1].Put.Item;
     expect(outboxItem).toMatchObject({
@@ -110,7 +110,12 @@ describe('createSubmissionRepository.enqueueSubmission', () => {
       .fn()
       .mockRejectedValueOnce(conditionalCheckFailed([{}]))
       .mockResolvedValueOnce({
-        Item: { status: 'SUBMITTED', lockedAt: 1, submissionStatus: 'RETRYING' },
+        Item: {
+          status: 'SUBMITTED',
+          lockedAt: 1,
+          submissionStatus: 'RETRYING',
+          submissionActivityAt: new Date().toISOString(),
+        },
       });
     const repository = createSubmissionRepository(fakeClient(send), TABLE_NAME);
 
@@ -451,7 +456,7 @@ describe('createSubmissionRepository.retrySubmission', () => {
       TableName: TABLE_NAME,
       Key: { pk: `DEPT#NICHOLS#INCIDENT#${INCIDENT_ID}`, sk: 'METADATA' },
       ConditionExpression:
-        'attribute_exists(pk) AND submissionStatus = :failed AND attribute_exists(lockedAt)',
+        'attribute_exists(pk) AND attribute_exists(lockedAt) AND (submissionStatus = :failed OR ((submissionStatus = :queued OR submissionStatus = :retrying) AND (attribute_not_exists(submissionActivityAt) OR submissionActivityAt < :staleBefore)))',
     });
     expect(update.ExpressionAttributeValues).toMatchObject({
       ':failed': 'FAILED',

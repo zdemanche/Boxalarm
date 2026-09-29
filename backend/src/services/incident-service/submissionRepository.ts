@@ -30,8 +30,31 @@ export type SubmissionStatus = (typeof SUBMISSION_STATUSES)[number];
  * lock, unlock, submit or resubmit a report while one of these holds (review M1).
  */
 export const NOT_IN_FLIGHT_CONDITION =
-  '(attribute_not_exists(submissionStatus) OR (submissionStatus <> :queued AND submissionStatus <> :retrying))';
-export const IN_FLIGHT_VALUES = { ':queued': 'SUBMITTED', ':retrying': 'RETRYING' } as const;
+  '(attribute_not_exists(submissionStatus) OR (submissionStatus <> :queued AND submissionStatus <> :retrying) OR attribute_not_exists(submissionActivityAt) OR submissionActivityAt < :staleBefore)';
+
+/**
+ * A send with no activity for this long is not in flight any more, whatever its status
+ * says: the retry chain (30 s doubling to a 900 s cap, five retries) ends within about 16
+ * minutes, so an hour of silence means a lost trigger. Past it, unlock, lock, resubmit and
+ * retry are allowed again, so no report can stay locked forever (review M3).
+ */
+export const STALE_IN_FLIGHT_MS = 60 * 60 * 1000;
+
+export function inFlightValues(nowMs: number = Date.now()) {
+  return {
+    ':queued': 'SUBMITTED',
+    ':retrying': 'RETRYING',
+    ':staleBefore': new Date(nowMs - STALE_IN_FLIGHT_MS).toISOString(),
+  } as const;
+}
+
+/** The same test as NOT_IN_FLIGHT_CONDITION, on a row already read. */
+export function isInFlight(item: Record<string, unknown>, nowMs: number = Date.now()): boolean {
+  const status = item.submissionStatus;
+  if (status !== 'SUBMITTED' && status !== 'RETRYING') return false;
+  const activity = item.submissionActivityAt;
+  return typeof activity === 'string' && activity >= inFlightValues(nowMs)[':staleBefore'];
+}
 
 export type SubmissionConflictReason = 'NOT_VALIDATED' | 'NOT_LOCKED' | 'IN_FLIGHT';
 
@@ -114,6 +137,8 @@ export interface SubmissionAttemptInput {
   /** NERIS lifecycle status returned by the create (a PUT returns none). */
   readonly nerisStatus?: string;
   readonly payloadHash?: string;
+  /** The one-time EventBridge Scheduler schedule that will run the next retry. */
+  readonly retryScheduleName?: string;
   /** The payload NERIS accepted, kept (one row) so a later resubmission can show its diff. */
   readonly acceptedPayload?: Readonly<Record<string, unknown>>;
   /** NERIS's own 422 issues, verbatim, for the submission ledger. */
@@ -212,13 +237,14 @@ export function createSubmissionRepository(
                   // Only a report an officer has reviewed and locked, with no send in flight.
                   ConditionExpression: `attribute_exists(pk) AND #status = :validated AND attribute_exists(lockedAt) AND ${NOT_IN_FLIGHT_CONDITION}`,
                   UpdateExpression:
-                    'SET #status = :submitted, submissionStatus = :submitted, updatedAt = :updatedAt',
+                    'SET #status = :submitted, submissionStatus = :submitted, submissionActivityAt = :activityAt, updatedAt = :updatedAt',
                   ExpressionAttributeNames: { '#status': 'status' },
                   ExpressionAttributeValues: {
                     ':validated': 'VALIDATED' satisfies IncidentStatus,
                     ':submitted': 'SUBMITTED' satisfies IncidentStatus,
                     ':updatedAt': nowEpochSeconds,
-                    ...IN_FLIGHT_VALUES,
+                    ':activityAt': new Date().toISOString(),
+                    ...inFlightValues(),
                   },
                 },
               },
@@ -246,7 +272,7 @@ export function createSubmissionRepository(
             String(item.status),
             typeof item.lockedAt !== 'number'
               ? 'NOT_LOCKED'
-              : item.submissionStatus === 'SUBMITTED' || item.submissionStatus === 'RETRYING'
+              : isInFlight(item)
                 ? 'IN_FLIGHT'
                 : 'NOT_VALIDATED',
           );
@@ -292,6 +318,7 @@ export function createSubmissionRepository(
         ...(attempt.nerisIncidentId ? { nerisIncidentId: attempt.nerisIncidentId } : {}),
         ...(attempt.nerisStatus ? { nerisStatus: attempt.nerisStatus } : {}),
         ...(attempt.payloadHash ? { payloadHash: attempt.payloadHash } : {}),
+        ...(attempt.retryScheduleName ? { retryScheduleName: attempt.retryScheduleName } : {}),
         ...(attempt.failureReason ? { failureReason: attempt.failureReason } : {}),
         ...(attempt.errors && attempt.errors.length > 0 ? { errors: attempt.errors } : {}),
       };
@@ -299,6 +326,7 @@ export function createSubmissionRepository(
       const setClauses = [
         'submissionStatus = :submissionStatus',
         'lastSubmissionAttemptAt = :attemptedAt',
+        'submissionActivityAt = :attemptedAt',
         'updatedAt = :updatedAt',
       ];
       const names: Record<string, string> = {};
@@ -490,13 +518,14 @@ export function createSubmissionRepository(
                   // A retry resends what an officer locked; an unlocked report goes back
                   // through review first.
                   ConditionExpression:
-                    'attribute_exists(pk) AND submissionStatus = :failed AND attribute_exists(lockedAt)',
+                    'attribute_exists(pk) AND attribute_exists(lockedAt) AND (submissionStatus = :failed OR ((submissionStatus = :queued OR submissionStatus = :retrying) AND (attribute_not_exists(submissionActivityAt) OR submissionActivityAt < :staleBefore)))',
                   UpdateExpression:
-                    'SET submissionStatus = :retrying, updatedAt = :updatedAt REMOVE submissionFailureReason',
+                    'SET submissionStatus = :retrying, submissionActivityAt = :activityAt, updatedAt = :updatedAt REMOVE submissionFailureReason',
                   ExpressionAttributeValues: {
                     ':failed': 'FAILED' satisfies SubmissionStatus,
-                    ':retrying': 'RETRYING' satisfies SubmissionStatus,
                     ':updatedAt': nowEpochSeconds,
+                    ':activityAt': new Date().toISOString(),
+                    ...inFlightValues(),
                   },
                 },
               },

@@ -366,6 +366,37 @@ describe('submissionWorker handler (SQS trigger)', () => {
     expect(schedulerSend).not.toHaveBeenCalled();
   });
 
+  it('schedules each retry under a unique, self-deleting name recorded on the attempt (review M3)', async () => {
+    const { appendSubmissionAttempt } = mockDeps({ httpStatus: 503 });
+    const { createHandler, RETRY_SCHEDULE_PREFIX } = await import('./submissionWorker.js');
+    const schedulerSend = vi.fn().mockResolvedValue({});
+    const handler = createHandler({ schedulerClient: { send: schedulerSend } as never });
+    const event: SQSEvent = { Records: [sqsRecord(submittedEnvelope('NICHOLS', INCIDENT_ID))] };
+
+    await handler(event, FAKE_CONTEXT, () => undefined);
+    await handler(event, FAKE_CONTEXT, () => undefined);
+
+    const inputs = schedulerSend.mock.calls.map(
+      ([command]) => (command as { input: Record<string, unknown> }).input,
+    );
+    expect(inputs).toHaveLength(2);
+    const names = inputs.map((input) => String(input.Name));
+    // Same report, same attempt number: still two distinct schedules, none truncated.
+    expect(new Set(names).size).toBe(2);
+    for (const input of inputs) {
+      expect(String(input.Name).startsWith(RETRY_SCHEDULE_PREFIX)).toBe(true);
+      expect(String(input.Name).length).toBeLessThanOrEqual(64);
+      expect(input.ActionAfterCompletion).toBe('DELETE');
+    }
+    expect(appendSubmissionAttempt).toHaveBeenCalledWith(
+      'NICHOLS',
+      INCIDENT_ID,
+      expect.objectContaining({ retryScheduleName: names[0] }),
+      false,
+      expect.any(Number),
+    );
+  });
+
   it('never a silent drop: a malformed SQS record is logged, returned as batchItemFailures, and never appends an attempt (core-harm row)', async () => {
     const { appendSubmissionAttempt } = mockDeps({ httpStatus: 200 });
     const { createHandler } = await import('./submissionWorker.js');

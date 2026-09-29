@@ -1,5 +1,7 @@
 import type { Context, DynamoDBBatchResponse, Handler, SQSEvent } from 'aws-lambda';
+import { createHash, randomUUID } from 'node:crypto';
 import {
+  ActionAfterCompletion,
   CreateScheduleCommand,
   FlexibleTimeWindowMode,
   SchedulerClient,
@@ -78,25 +80,38 @@ function readSchedulerRoleArn(env: NodeJS.ProcessEnv): string {
   return roleArn;
 }
 
+export const RETRY_SCHEDULE_PREFIX = 'neris-submission-retry-';
+
+/**
+ * One schedule per retry attempt, never reused: the name hashes the report, the attempt
+ * number and a fresh UUID (63 characters, no truncation), and the schedule deletes itself
+ * after it fires. A reused name made a later cycle's CreateSchedule conflict, the conflict
+ * was swallowed, no retry ever fired and the report stayed RETRYING (review M3).
+ */
+export function retryScheduleName(payload: SubmissionWorkerPayload): string {
+  const digest = createHash('sha256')
+    .update(`${payload.deptId}|${payload.incidentId}|${payload.retryCount}|${randomUUID()}`)
+    .digest('hex')
+    .slice(0, 40);
+  return `${RETRY_SCHEDULE_PREFIX}${digest}`;
+}
+
 async function createRetrySchedule(
   scheduler: SchedulerClient,
   functionArn: string,
   payload: SubmissionWorkerPayload,
   delaySeconds: number,
+  scheduleName: string,
 ): Promise<void> {
   const roleArn = readSchedulerRoleArn(process.env);
   const fireAt = Math.floor(Date.now() / 1000) + delaySeconds;
-  const scheduleName =
-    `neris-submission-retry-${payload.deptId}-${payload.incidentId}-${payload.retryCount}`.slice(
-      0,
-      64,
-    );
   try {
     await scheduler.send(
       new CreateScheduleCommand({
         Name: scheduleName,
         ScheduleExpression: `at(${new Date(fireAt * 1000).toISOString().slice(0, 19)})`,
         FlexibleTimeWindow: { Mode: FlexibleTimeWindowMode.OFF },
+        ActionAfterCompletion: ActionAfterCompletion.DELETE,
         Target: {
           Arn: functionArn,
           RoleArn: roleArn,
@@ -283,11 +298,16 @@ async function attemptSubmission(
             ? undefined
             : `NERIS submission failed after ${payload.retryCount} retries (last outcome ${outcome}, HTTP ${httpStatus})`;
 
+  const scheduleName = canRetry
+    ? retryScheduleName({ ...payload, retryCount: payload.retryCount + 1 })
+    : undefined;
+
   await submissionRepository.appendSubmissionAttempt(
     payload.deptId,
     payload.incidentId,
     {
       outcome,
+      ...(scheduleName ? { retryScheduleName: scheduleName } : {}),
       httpStatus,
       retryCount: payload.retryCount,
       nerisEnvironment,
@@ -316,6 +336,7 @@ async function attemptSubmission(
       deps.functionArn,
       { ...payload, retryCount: payload.retryCount + 1 },
       delaySeconds,
+      scheduleName!,
     );
   }
 }

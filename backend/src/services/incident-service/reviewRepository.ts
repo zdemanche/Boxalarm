@@ -8,9 +8,10 @@ import { buildDeptScopedPk, type VerifiedDeptId } from '@boxalarm/dept-scope';
 import { buildOutboxRecord } from '@boxalarm/outbox';
 import { isConditionFailureAt } from './repository.js';
 import {
-  IN_FLIGHT_VALUES,
   LAST_PAYLOAD_SK,
   NOT_IN_FLIGHT_CONDITION,
+  inFlightValues,
+  isInFlight,
 } from './submissionRepository.js';
 import type { IncidentStatus } from './entity.js';
 
@@ -20,8 +21,6 @@ import type { IncidentStatus } from './entity.js';
  * outbox events together.
  */
 
-/** Submission statuses that mean the worker may be reading the record right now. */
-const IN_FLIGHT = ['SUBMITTED', 'RETRYING'] as const;
 const NOT_IN_FLIGHT = NOT_IN_FLIGHT_CONDITION;
 
 export type ReviewConflict =
@@ -84,8 +83,9 @@ async function readMetadata(
   return result.Item as Record<string, unknown> | undefined;
 }
 
+/** The worker may be reading the record now (a stale send, see STALE_IN_FLIGHT_MS, is not). */
 function inFlight(item: Record<string, unknown>): boolean {
-  return (IN_FLIGHT as readonly unknown[]).includes(item.submissionStatus);
+  return isInFlight(item);
 }
 
 export interface LockInput {
@@ -139,7 +139,9 @@ export async function lockIncident(
               // updatedAt is left alone: it marks content edits, which the ledger's
               // editedSinceSubmission compares against lastSubmittedAt; lock/unlock are not edits.
               UpdateExpression: `SET lockedAt = :now, lockedBy = :actor, #status = :status${
-                input.submit ? ', submissionStatus = :queued REMOVE submissionFailureReason' : ''
+                input.submit
+                  ? ', submissionStatus = :queued, submissionActivityAt = :activityAt REMOVE submissionFailureReason'
+                  : ''
               }`,
               ExpressionAttributeNames: { '#status': 'status' },
               ExpressionAttributeValues: {
@@ -147,7 +149,8 @@ export async function lockIncident(
                 ':actor': input.actorId,
                 ':reviewed': input.reviewedUpdatedAt,
                 ':status': status,
-                ...IN_FLIGHT_VALUES,
+                ...inFlightValues(),
+                ...(input.submit ? { ':activityAt': new Date().toISOString() } : {}),
               },
             },
           },
@@ -219,8 +222,7 @@ export async function unlockIncident(
                 ':now': input.nowEpochSeconds,
                 ':actor': input.actorId,
                 ':reason': input.reason,
-                ':queued': 'SUBMITTED',
-                ':retrying': 'RETRYING',
+                ...inFlightValues(),
               },
             },
           },
@@ -301,11 +303,11 @@ export async function enqueueResubmission(
               Key: metadataKey(input.deptId, input.incidentId),
               ConditionExpression: `attribute_exists(lockedAt) AND attribute_exists(nerisIncidentId) AND (${NOT_IN_FLIGHT})`,
               UpdateExpression:
-                'SET #status = :queued, submissionStatus = :queued, updatedAt = :now REMOVE submissionFailureReason',
+                'SET #status = :queued, submissionStatus = :queued, submissionActivityAt = :activityAt, updatedAt = :now REMOVE submissionFailureReason',
               ExpressionAttributeNames: { '#status': 'status' },
               ExpressionAttributeValues: {
-                ':queued': 'SUBMITTED',
-                ':retrying': 'RETRYING',
+                ...inFlightValues(),
+                ':activityAt': new Date().toISOString(),
                 ':now': input.nowEpochSeconds,
               },
             },

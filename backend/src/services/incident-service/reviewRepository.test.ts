@@ -55,7 +55,7 @@ describe('lockIncident', () => {
     const [update, audit, locked, ...rest] = transactItems(send);
     expect(update!.Update).toMatchObject({
       ConditionExpression:
-        'attribute_exists(pk) AND attribute_not_exists(lockedAt) AND updatedAt = :reviewed AND (attribute_not_exists(submissionStatus) OR (submissionStatus <> :queued AND submissionStatus <> :retrying))',
+        'attribute_exists(pk) AND attribute_not_exists(lockedAt) AND updatedAt = :reviewed AND (attribute_not_exists(submissionStatus) OR (submissionStatus <> :queued AND submissionStatus <> :retrying) OR attribute_not_exists(submissionActivityAt) OR submissionActivityAt < :staleBefore)',
       ExpressionAttributeValues: { ':reviewed': 1_798_000_500, ':status': 'VALIDATED' },
     });
     expect(String(update!.Update!.UpdateExpression)).not.toContain('updatedAt =');
@@ -84,7 +84,14 @@ describe('lockIncident', () => {
       [undefined, 'NOT_FOUND'],
       [{ lockedAt: 1 }, 'ALREADY_LOCKED'],
       [{ updatedAt: 1_798_000_900 }, 'CHANGED_SINCE_REVIEW'],
-      [{ updatedAt: 1_798_000_500, submissionStatus: 'RETRYING' }, 'SUBMISSION_IN_FLIGHT'],
+      [
+        {
+          updatedAt: 1_798_000_500,
+          submissionStatus: 'RETRYING',
+          submissionActivityAt: new Date().toISOString(),
+        },
+        'SUBMISSION_IN_FLIGHT',
+      ],
     ] as const) {
       const send = vi.fn().mockRejectedValueOnce(cancelled()).mockResolvedValueOnce({ Item: item });
       await expect(lockIncident(client(send), 'table', { ...LOCK, submit: false })).rejects.toEqual(
@@ -129,12 +136,45 @@ describe('unlockIncident', () => {
     for (const submissionStatus of ['SUBMITTED', 'RETRYING']) {
       await expect(
         unlockIncident(
-          client(vi.fn().mockResolvedValue({ Item: { lockedAt: 1, submissionStatus } })),
+          client(
+            vi.fn().mockResolvedValue({
+              Item: {
+                lockedAt: 1,
+                submissionStatus,
+                submissionActivityAt: new Date().toISOString(),
+              },
+            }),
+          ),
           'table',
           UNLOCK,
         ),
       ).rejects.toEqual(new ReviewConflictError('SUBMISSION_IN_FLIGHT'));
     }
+  });
+});
+
+describe('stuck submissions (review M3)', () => {
+  it('lets a report be unlocked once its send has been silent past STALE_IN_FLIGHT_MS', async () => {
+    const send = vi
+      .fn()
+      .mockResolvedValueOnce({
+        Item: {
+          lockedAt: 1,
+          submissionStatus: 'RETRYING',
+          submissionActivityAt: new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString(),
+        },
+      })
+      .mockResolvedValue({});
+    await unlockIncident(client(send), 'table', {
+      deptId: DEPT,
+      incidentId: ID,
+      actorId: 'MBR-0001',
+      reason: 'Stuck retrying since yesterday',
+      nowEpochSeconds: 1,
+      traceId: 't',
+    });
+    const [update] = transactItems(send);
+    expect(update!.Update!.ExpressionAttributeValues).toHaveProperty(':staleBefore');
   });
 });
 
