@@ -154,6 +154,8 @@ describe('sendViaApns over a local HTTP/2 server', () => {
         sound: { critical: 1, name: 'default', volume: 1 },
         'interruption-level': 'critical',
         'mutable-content': 1,
+        // The iOS category the app's action buttons are registered under.
+        category: 'DISPATCH',
       },
       category: 'dispatch',
       alertKind: 'dispatch',

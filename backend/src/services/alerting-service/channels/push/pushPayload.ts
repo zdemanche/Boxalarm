@@ -41,6 +41,14 @@ export function apnsExpiration(nowMs: number): string {
   return String(Math.floor(nowMs / 1000) + PUSH_TTL_SECONDS);
 }
 
+/**
+ * The iOS notification category (UNNotificationCategory identifier) a dispatch alert carries in
+ * `aps.category`. The app registers its RESPONDING / NOT RESPONDING action buttons under it; an
+ * alert without it shows no actions. The officer mutual-aid prompt is not a dispatch alert and
+ * does not carry it.
+ */
+export const APNS_DISPATCH_CATEGORY = 'DISPATCH';
+
 /** Bundled critical-alert sound; `default` is the system sound. */
 export const APNS_CRITICAL_SOUND_NAME = 'default';
 
@@ -110,6 +118,7 @@ export function buildApnsPayload(
       'interruption-level': interruptionLevel,
       // Lets the Notification Service Extension (architecture §5.1) enrich the alert.
       'mutable-content': 1,
+      ...(notification.alertKind === 'dispatch' ? { category: APNS_DISPATCH_CATEGORY } : {}),
     },
     ...routingFields(notification),
   };

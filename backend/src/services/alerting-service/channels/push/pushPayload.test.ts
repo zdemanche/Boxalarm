@@ -56,4 +56,23 @@ describe('push payloads', () => {
     expect(apnsIdFor('a#1#m#PUSH')).toBe(apnsIdFor('a#1#m#PUSH'));
     expect(apnsIdFor('a#1#m#PUSH')).not.toBe(apnsIdFor('a#2#m#PUSH'));
   });
+
+  // iOS shows the RESPONDING / NOT RESPONDING action buttons only for a notification whose
+  // aps.category names the category the app registered them under.
+  it('a dispatch page carries aps.category DISPATCH; the mutual-aid prompt does not', () => {
+    expect((buildApnsPayload(dispatch, 'critical').aps as Record<string, unknown>).category).toBe(
+      'DISPATCH',
+    );
+    expect(
+      (buildApnsPayload(dispatch, 'time-sensitive').aps as Record<string, unknown>).category,
+    ).toBe('DISPATCH');
+    expect(buildApnsPayload(prompt, 'critical').aps).not.toHaveProperty('category');
+  });
+
+  it('adding the category leaves the critical / time-sensitive handling as it was', () => {
+    const aps = buildApnsPayload(dispatch, 'time-sensitive').aps as Record<string, unknown>;
+    expect(aps['interruption-level']).toBe('time-sensitive');
+    expect(aps.sound).toBe('default');
+    expect(aps['mutable-content']).toBe(1);
+  });
 });
