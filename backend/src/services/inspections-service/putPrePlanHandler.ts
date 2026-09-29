@@ -7,7 +7,7 @@ import { toVerifiedDeptId } from '@boxalarm/dept-scope';
 import { createDynamoClient, readInspectionsTableConfig } from './platformTable.js';
 import {
   createSignedUploadUrl,
-  isSafeAssetFilename,
+  isAllowedUploadFilename,
   readAssetsConfig,
   type SignUrlFn,
 } from './assetsSigner.js';
@@ -74,7 +74,7 @@ function isStringArray(value: unknown): value is string[] {
 }
 
 function isSafeFilenameArray(value: unknown): value is string[] {
-  return isStringArray(value) && value.every((entry) => isSafeAssetFilename(entry));
+  return isStringArray(value) && value.every((entry) => isAllowedUploadFilename(entry));
 }
 
 function isUtilityShutoffArray(value: unknown): value is UtilityShutoff[] {
@@ -104,7 +104,7 @@ export function parsePrePlanInput(body: string | undefined | null): PrePlanInput
   if (
     parsed.siteDiagramFilename !== undefined &&
     (typeof parsed.siteDiagramFilename !== 'string' ||
-      !isSafeAssetFilename(parsed.siteDiagramFilename))
+      !isAllowedUploadFilename(parsed.siteDiagramFilename))
   ) {
     return undefined;
   }

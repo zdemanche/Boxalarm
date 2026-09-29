@@ -1,4 +1,4 @@
-import { isSafeAssetFilename } from '../assetsSigner.js';
+import { isAllowedUploadFilename, isSafeAssetFilename } from '../assetsSigner.js';
 import {
   isNonEmptyString,
   isPkSafeString,
@@ -31,7 +31,7 @@ function isSafeFilenameArray(value: unknown): value is string[] {
   return (
     Array.isArray(value) &&
     value.length <= MAX_PHOTOS &&
-    value.every((entry) => typeof entry === 'string' && isSafeAssetFilename(entry))
+    value.every((entry) => typeof entry === 'string' && isAllowedUploadFilename(entry))
   );
 }
 
