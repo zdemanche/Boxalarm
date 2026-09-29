@@ -302,7 +302,7 @@ describe("HttpApi", () => {
       expect(reservedAuth).toBe(alertingId);
       expect(otherAuth).toBe(mainId);
       expect(alertingId).not.toBe(mainId);
-      expect(reservedConcurrency).toBe(10);
+      expect(reservedConcurrency).toBe(20);
       expect(fnName).toBe("boxalarm-dev-platform-authorizer-alerting");
       // Same verification and revocation check as the main authorizer.
       expect(env?.variables?.PLATFORM_TABLE_NAME).toBe("platform-table");
@@ -337,6 +337,31 @@ describe("HttpApi", () => {
       await settle(api);
     });
 
+    // Review MAJOR 3: a reserved limit below the default made the flood cheaper, not dearer.
+    it("never throttles an alerting-plane route below the stage default", async () => {
+      const { ALERTING_PLANE_ROUTES } = await import("../../components/api/http-api");
+      for (const [routeKey, limit] of Object.entries(ALERTING_PLANE_ROUTES)) {
+        expect(limit.rateLimit, routeKey).toBeGreaterThanOrEqual(50);
+        expect(limit.burstLimit, routeKey).toBeGreaterThanOrEqual(100);
+      }
+    });
+
+    it("alarms on any throttle of the alerting authorizer", async () => {
+      const api = await buildApi("throttles-alarm");
+      api.sealRouteSettings();
+      const { alertingAuthorizerThrottles } = api.addAlarms("arn:aws:sns:us-east-1:1:chief");
+      const [metric, namespace, dimensions, fnName, threshold] = await Promise.all([
+        resolve(alertingAuthorizerThrottles.metricName),
+        resolve(alertingAuthorizerThrottles.namespace),
+        resolve(alertingAuthorizerThrottles.dimensions),
+        resolve(api.alertingAuthorizerLambda.function.name),
+        resolve(alertingAuthorizerThrottles.threshold),
+      ]);
+      expect([metric, namespace, threshold]).toEqual(["Throttles", "AWS/Lambda", 0]);
+      expect(dimensions).toEqual({ FunctionName: fnName });
+      await settle(api);
+    });
+
     it("alarms the given topic on every RevocationCheckFailOpen", async () => {
       const api = await buildApi("fail-open-alarm");
       api.sealRouteSettings();
@@ -368,13 +393,13 @@ describe("HttpApi", () => {
         expect.arrayContaining([
           expect.objectContaining({
             routeKey: "POST /api/v1/alerting/dispatches",
-            throttlingRateLimit: 5,
-            throttlingBurstLimit: 10,
+            throttlingRateLimit: 50,
+            throttlingBurstLimit: 100,
           }),
           expect.objectContaining({
             routeKey: "POST /api/v1/alerting/dispatches/{dispatchId}/responses",
-            throttlingRateLimit: 25,
-            throttlingBurstLimit: 50,
+            throttlingRateLimit: 100,
+            throttlingBurstLimit: 200,
           }),
         ]),
       );

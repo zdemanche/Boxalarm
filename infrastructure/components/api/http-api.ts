@@ -62,14 +62,20 @@ export interface RouteThrottle {
  * requireAll, so a renamed or removed route fails the deploy instead of silently moving back
  * to the LOB authorizer. The vendor receipt webhooks are not here: they use no authorizer.
  */
+// Review MAJOR 3: a per-route limit is a cap as well as a reservation, so none of these may
+// sit below the stage default (50 rps / 100 burst) - a lower one just lets a smaller flood
+// 429 every responder. Response and read routes carry the whole roster at once (every member
+// answering and then polling the roster within seconds of a tone), so they get double.
+// Manual dispatch is rare, but when it is used it is the N1.8 degraded path - never starved.
 const DEFAULT_ALERTING_THROTTLE: RouteThrottle = { rateLimit: 50, burstLimit: 100 };
+const CALL_TRAFFIC_THROTTLE: RouteThrottle = { rateLimit: 100, burstLimit: 200 };
 
 export const ALERTING_PLANE_ROUTES: Readonly<Record<string, RouteThrottle>> = {
-  "POST /api/v1/alerting/dispatches": { rateLimit: 5, burstLimit: 10 },
-  "GET /api/v1/alerting/dispatches": { rateLimit: 25, burstLimit: 50 },
-  "GET /api/v1/alerting/dispatches/{dispatchId}": { rateLimit: 25, burstLimit: 50 },
-  "GET /api/v1/alerting/dispatches/{dispatchId}/roster": { rateLimit: 25, burstLimit: 50 },
-  "POST /api/v1/alerting/dispatches/{dispatchId}/responses": { rateLimit: 25, burstLimit: 50 },
+  "POST /api/v1/alerting/dispatches": DEFAULT_ALERTING_THROTTLE,
+  "GET /api/v1/alerting/dispatches": CALL_TRAFFIC_THROTTLE,
+  "GET /api/v1/alerting/dispatches/{dispatchId}": CALL_TRAFFIC_THROTTLE,
+  "GET /api/v1/alerting/dispatches/{dispatchId}/roster": CALL_TRAFFIC_THROTTLE,
+  "POST /api/v1/alerting/dispatches/{dispatchId}/responses": CALL_TRAFFIC_THROTTLE,
   "POST /api/v1/alerting/dispatches/{dispatchId}/tone-ladder/advance": DEFAULT_ALERTING_THROTTLE,
   "POST /api/v1/alerting/dispatches/{dispatchId}/tone-ladder/halt": DEFAULT_ALERTING_THROTTLE,
   "POST /api/v1/alerting/dispatches/{dispatchId}/mutual-aid/trigger": DEFAULT_ALERTING_THROTTLE,
@@ -151,7 +157,9 @@ export class HttpApi extends pulumi.ComponentResource {
     const throttlingRateLimit = args.throttlingRateLimit ?? 50;
     const throttlingBurstLimit = args.throttlingBurstLimit ?? 100;
     const authorizerReservedConcurrency = args.authorizerReservedConcurrency ?? 20;
-    const alertingAuthorizerReservedConcurrency = args.alertingAuthorizerReservedConcurrency ?? 10;
+    // As large as the main authorizer's: these routes now carry call-time bursts of the whole
+    // roster, and a targeted flood consumes this pool too (see the Throttles alarm).
+    const alertingAuthorizerReservedConcurrency = args.alertingAuthorizerReservedConcurrency ?? 20;
 
     const authorizerEnvironment = {
       COGNITO_USER_POOL_ID: args.userPoolId,
@@ -426,7 +434,10 @@ export class HttpApi extends pulumi.ComponentResource {
    *    request was let through on the token alone. Every occurrence is worth a look: while it
    *    lasts, a revoked session still reaches the alerting plane.
    */
-  addAlarms(topicArn: pulumi.Input<string>): { failOpen: aws.cloudwatch.MetricAlarm } {
+  addAlarms(topicArn: pulumi.Input<string>): {
+    failOpen: aws.cloudwatch.MetricAlarm;
+    alertingAuthorizerThrottles: aws.cloudwatch.MetricAlarm;
+  } {
     const env = this.env;
     const failOpen = new aws.cloudwatch.MetricAlarm(
       `${this.name}-revocation-fail-open-alarm`,
@@ -447,7 +458,30 @@ export class HttpApi extends pulumi.ComponentResource {
       },
       { parent: this },
     );
-    return { failOpen };
+    // Review MAJOR 3: the alerting authorizer is throttled only when its reserved concurrency
+    // is exhausted - by a call-time burst or by a junk-token flood aimed at these routes
+    // (HTTP APIs cannot take AWS WAF, so there is no per-IP limit in front of it). Either way,
+    // requests on the alerting plane are being refused.
+    const alertingAuthorizerThrottles = new aws.cloudwatch.MetricAlarm(
+      `${this.name}-alerting-authorizer-throttles-alarm`,
+      {
+        name: `boxalarm-${env}-platform-authorizer-alerting-throttles`,
+        alarmDescription:
+          "The alerting authorizer is being throttled: alerting-plane requests are refused.",
+        namespace: "AWS/Lambda",
+        metricName: "Throttles",
+        dimensions: { FunctionName: this.alertingAuthorizerLambda.function.name },
+        statistic: "Sum",
+        period: 60,
+        evaluationPeriods: 1,
+        threshold: 0,
+        comparisonOperator: "GreaterThanThreshold",
+        treatMissingData: "notBreaching",
+        alarmActions: [topicArn],
+      },
+      { parent: this },
+    );
+    return { failOpen, alertingAuthorizerThrottles };
   }
 
   /**
