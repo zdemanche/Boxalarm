@@ -123,6 +123,7 @@ describe('pre-plan + hydrant copies -> dispatch detail (real DynamoDB with the a
     process.env.ALERTING_TABLE_NAME = TABLE_NAME;
     process.env.VERIFIED_PERMISSIONS_POLICY_STORE_ID = 'ps-1';
     process.env.ALERTING_HOME_LOCALITY = JSON.stringify({
+      deptId: 'NICHOLS',
       towns: ['Trumbull', 'Nichols', 'Long Hill', 'Trumbull Center'],
       zips: ['06611'],
       state: 'CT',

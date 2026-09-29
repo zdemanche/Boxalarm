@@ -105,11 +105,12 @@ describe("home locality for pre-plan address verification (round-2 A)", () => {
       towns: ["Trumbull", "Nichols", "Long Hill", "Trumbull Center"],
       zips: ["06611"],
       state: "CT",
+      deptId: "nichols-fd",
     });
     expect(resolveHomeLocality("other-fd", undefined)).toBeUndefined();
     expect(
       JSON.parse(resolveHomeLocality("other-fd", '{"towns":["Monroe"],"zips":["06468"]}') ?? ""),
-    ).toEqual({ towns: ["Monroe"], zips: ["06468"] });
+    ).toEqual({ towns: ["Monroe"], zips: ["06468"], deptId: "other-fd" });
     expect(() => resolveHomeLocality("x", '{"town":"Monroe"}')).toThrow(/towns/);
   });
 

@@ -107,7 +107,7 @@ describe('loadHomeLocality', () => {
   it('prefers the department config item in the alerting table', async () => {
     const send = vi.fn().mockResolvedValue({ Item: { towns: ['Monroe'], zips: ['06468'] } });
     const home = await loadHomeLocality(client(send), 'alerting', DEPT_ID, {
-      ALERTING_HOME_LOCALITY: JSON.stringify({ towns: ['Trumbull'] }),
+      ALERTING_HOME_LOCALITY: JSON.stringify({ deptId: 'NICHOLS', towns: ['Trumbull'] }),
     });
     expect([...home.towns]).toEqual(['MONROE']);
     expect((send.mock.calls[0]?.[0] as { input: { Key: unknown } }).input.Key).toEqual({
@@ -119,9 +119,25 @@ describe('loadHomeLocality', () => {
   it('falls back to the stack default in ALERTING_HOME_LOCALITY', async () => {
     const send = vi.fn().mockResolvedValue({});
     const home = await loadHomeLocality(client(send), 'alerting', DEPT_ID, {
-      ALERTING_HOME_LOCALITY: JSON.stringify({ towns: ['Trumbull'], zips: ['06611'] }),
+      ALERTING_HOME_LOCALITY: JSON.stringify({
+        deptId: 'NICHOLS',
+        towns: ['Trumbull'],
+        zips: ['06611'],
+      }),
     });
     expect([...home.towns]).toEqual(['TRUMBULL']);
+  });
+
+  it('minor 2: the stack default applies only to the department it names', async () => {
+    const send = vi.fn().mockResolvedValue({});
+    const env = {
+      ALERTING_HOME_LOCALITY: JSON.stringify({ deptId: 'OTHERFD', towns: ['Trumbull'] }),
+    };
+    expect(await loadHomeLocality(client(send), 'alerting', DEPT_ID, env)).toBe(NO_HOME_LOCALITY);
+    const unlabelled = { ALERTING_HOME_LOCALITY: JSON.stringify({ towns: ['Trumbull'] }) };
+    expect(await loadHomeLocality(client(send), 'alerting', DEPT_ID, unlabelled)).toBe(
+      NO_HOME_LOCALITY,
+    );
   });
 
   it('degrades to "unverifiable" (never throws) when the read fails and nothing is set', async () => {

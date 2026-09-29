@@ -69,6 +69,7 @@ describe('alert-detail handler', () => {
     process.env.ALERTING_TABLE_NAME = 'alerting-table';
     process.env.VERIFIED_PERMISSIONS_POLICY_STORE_ID = 'store-1';
     process.env.ALERTING_HOME_LOCALITY = JSON.stringify({
+      deptId: 'NICHOLS',
       towns: ['Trumbull', 'Nichols', 'Long Hill', 'Trumbull Center'],
       zips: ['06611'],
       state: 'CT',

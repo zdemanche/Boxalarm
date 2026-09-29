@@ -78,7 +78,7 @@ Where it comes from, first match wins:
      "state": {"S": "CT"} }'
    ```
 
-2. **The stack default** `ALERTING_HOME_LOCALITY` on the dispatch-detail Lambda. It comes from the Pulumi config `boxalarm-infra:alertingHomeLocality` (JSON, same shape). Without that config it falls back to the built-in default for the stack's `deptId` (`infrastructure/components/alerting/home-locality.ts`; `nichols-fd` → Trumbull, Nichols, Long Hill, Trumbull Center, 06611, CT).
+2. **The stack default** `ALERTING_HOME_LOCALITY` on the dispatch-detail and home-locality Lambdas. The JSON carries the stack's `deptId`, and the backend applies it to that department only, so a second department never inherits it. It comes from the Pulumi config `boxalarm-infra:alertingHomeLocality` (JSON, same shape). Without that config it falls back to the built-in default for the stack's `deptId` (`infrastructure/components/alerting/home-locality.ts`; `nichols-fd` → Trumbull, Nichols, Long Hill, Trumbull Center, 06611, CT).
 
 3. **Neither.** No match can be verified, and every address match is shown "VERIFY ADDRESS". This is safe but noisy. `pulumi up` warns about it.
 

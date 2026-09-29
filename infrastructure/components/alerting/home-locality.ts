@@ -30,6 +30,7 @@ export function resolveHomeLocality(
   deptId: string,
   configured: string | undefined,
 ): string | undefined {
+  // The JSON carries the deptId it is for: the backend applies it to that department only.
   if (configured !== undefined) {
     const parsed = JSON.parse(configured) as Partial<HomeLocalityConfig>;
     if (!Array.isArray(parsed.towns) && !Array.isArray(parsed.zips)) {
@@ -37,8 +38,8 @@ export function resolveHomeLocality(
         "boxalarm-infra:alertingHomeLocality must be JSON with a towns and/or zips array",
       );
     }
-    return JSON.stringify(parsed);
+    return JSON.stringify({ ...parsed, deptId });
   }
   const fallback = DEFAULT_HOME_LOCALITY[deptId];
-  return fallback ? JSON.stringify(fallback) : undefined;
+  return fallback ? JSON.stringify({ ...fallback, deptId }) : undefined;
 }

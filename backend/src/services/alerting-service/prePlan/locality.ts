@@ -12,8 +12,9 @@ import { localityKey, type NormalizedAddress } from './addressKey.js';
  * Source, in order (docs/runbooks/alert-context-replay.md, "Home locality"):
  *  1. the alerting-table item DEPT#{deptId}#CONFIG / HOME_LOCALITY (partition / sort key)
  *     ({ towns: string[], zips: string[], state?: string }) — editable per department;
- *  2. the ALERTING_HOME_LOCALITY env var (same JSON), set by infrastructure from the stack
- *     config `boxalarm-infra:alertingHomeLocality` (default seeded per stack deptId);
+ *  2. the ALERTING_HOME_LOCALITY env var (same JSON plus the `deptId` it is for; ignored for
+ *     any other department), set by infrastructure from the stack config
+ *     `boxalarm-infra:alertingHomeLocality` (default seeded per stack deptId);
  *  3. none — then no match can be verified, and every address match is shown flagged.
  */
 export interface HomeLocality {
@@ -57,14 +58,22 @@ export function parseHomeLocality(raw: unknown): HomeLocality | undefined {
   };
 }
 
-function fromEnv(env: NodeJS.ProcessEnv): HomeLocality | undefined {
+/**
+ * The stack default, which carries the deptId it was configured for and applies to that
+ * department only — a second department served by the same Lambda without its own item must
+ * not inherit the first one's towns (round-3 minor 2).
+ */
+function fromEnv(env: NodeJS.ProcessEnv, deptId: VerifiedDeptId): HomeLocality | undefined {
   const raw = env.ALERTING_HOME_LOCALITY;
   if (!raw) return undefined;
+  let parsed: unknown;
   try {
-    return parseHomeLocality(JSON.parse(raw));
+    parsed = JSON.parse(raw);
   } catch {
     return undefined;
   }
+  const forDept = (parsed as { deptId?: unknown } | null)?.deptId;
+  return forDept === deptId ? parseHomeLocality(parsed) : undefined;
 }
 
 /** Never throws: a failed read degrades to "unverifiable" (every match flagged), not to none. */
@@ -83,7 +92,7 @@ export async function loadHomeLocality(
   } catch (error) {
     logError('preplan_copy.home_locality_read_failed', error, { deptId });
   }
-  return fromEnv(env) ?? NO_HOME_LOCALITY;
+  return fromEnv(env, deptId) ?? NO_HOME_LOCALITY;
 }
 
 export type LocalityVerdict = 'VERIFIED' | 'UNVERIFIED' | 'REJECT';
