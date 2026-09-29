@@ -2,7 +2,12 @@ import type { Incident } from './entity.js';
 import type { NerisSchemaDocument } from './schemaVersion/entity.js';
 import type { NerisDeptSettings } from './nerisSettings.js';
 import type { NerisApi, NerisIssue } from './neris/api.js';
-import { incidentTypeLabel, type CompiledNerisSchema } from './neris/apiSchema.js';
+import {
+  incidentTypeLabel,
+  moduleNode,
+  validateNode,
+  type CompiledNerisSchema,
+} from './neris/apiSchema.js';
 import {
   buildNerisIncidentPayload,
   hasIncidentCategory,
@@ -407,6 +412,35 @@ export function localValidation(input: LocalValidationInput): {
         'Fire details only go with a fire incident type. Change the type or clear the fire section.',
     });
   }
+  // Entered modules must fit their NERIS sub-schema (required choices, allowed values).
+  if (input.nerisApi) {
+    for (const module of [
+      'smoke_alarm',
+      'fire_alarm',
+      'other_alarm',
+      'fire_suppression',
+      'cooking_fire_suppression',
+    ]) {
+      const value = core[module];
+      const node = moduleNode(input.nerisApi, module);
+      if (value === undefined || value === null || !node) continue;
+      const problems = validateNode(input.nerisApi, node, value);
+      if (problems.length > 0) {
+        blocking.push({
+          path: `modules.${module}`,
+          code: 'MODULE_INCOMPLETE',
+          section: 'fire',
+          message: `The ${fieldLabel(module).toLowerCase()} is incomplete: ${problems
+            .slice(0, 3)
+            .map(
+              (p) =>
+                `${fieldLabel(p.path || module)} ${p.code === 'required' ? 'is required' : "isn't an allowed choice"}`,
+            )
+            .join('; ')}.`,
+        });
+      }
+    }
+  }
   const structureFire = values.some((value) => value.includes('STRUCTURE_FIRE'));
   if (structureFire) {
     const required = ['smoke_alarm', 'fire_alarm', 'other_alarm', 'fire_suppression'];
@@ -417,7 +451,8 @@ export function localValidation(input: LocalValidationInput): {
     for (const module of required) {
       if (hasModule(incident, module)) continue;
       (assisting ? warnings : blocking).push({
-        path: `fields.${module}`,
+        // `modules.<name>`: the web opens that module's editor from the checklist.
+        path: `modules.${module}`,
         code: 'MODULE_REQUIRED',
         section: 'fire',
         message: `Structure fires need the ${fieldLabel(module).toLowerCase()}${assisting ? ' when you were the primary department' : ''}.`,

@@ -335,7 +335,13 @@ export const REPORTING_DEPARTMENT_ACTIONS = [
 // job — OFFICER/CHIEF/ADMIN, the architecture's Cognito(admin) tier. Unlocking a reviewed
 // report (audited, with a reason) and registering stations/units with the NERIS entity are
 // CHIEF/ADMIN only.
-export const NERIS_MEMBER_ACTIONS = ["ValidateIncidentReport", "ViewNerisSchema"] as const;
+// EditIncidentModule is every role like the other incident edit routes (members write
+// reports); the lock, not the role, is what stops edits after review.
+export const NERIS_MEMBER_ACTIONS = [
+  "ValidateIncidentReport",
+  "ViewNerisSchema",
+  "EditIncidentModule",
+] as const;
 export const NERIS_OFFICER_ACTIONS = [
   "LockIncidentReport",
   "ResubmitIncidentReport",
@@ -355,6 +361,7 @@ const NERIS_ACTION_RESOURCE: Record<
 > = {
   ValidateIncidentReport: "Incident",
   ViewNerisSchema: "Department",
+  EditIncidentModule: "Incident",
   LockIncidentReport: "Incident",
   ResubmitIncidentReport: "Incident",
   UnlockIncidentReport: "Incident",

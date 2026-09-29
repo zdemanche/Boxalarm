@@ -52,6 +52,15 @@ export interface IncidentRepository {
     nowEpochSeconds: number,
     traceId: string,
   ): Promise<Incident>;
+  /** Replaces one NERIS module (e.g. `smoke_alarm`) on corePayload; lock-guarded, versioned. */
+  updateModule(
+    deptId: VerifiedDeptId,
+    incidentId: string,
+    module: string,
+    value: Readonly<Record<string, unknown>>,
+    nowEpochSeconds: number,
+    traceId: string,
+  ): Promise<Incident>;
   searchIncidents(
     deptId: VerifiedDeptId,
     input: SearchIncidentsInput,
@@ -359,6 +368,25 @@ export function createIncidentRepository(
           ExpressionAttributeValues: { ':narrative': narrative, ':updatedAt': nowEpochSeconds },
         },
         outboxRecord,
+      );
+    },
+
+    async updateModule(deptId, incidentId, module, value, nowEpochSeconds, traceId) {
+      assertNoDelimiter(module, 'module');
+      return updateWithOutbox(
+        deptId,
+        incidentId,
+        {
+          UpdateExpression: 'SET corePayload.#module = :value, updatedAt = :updatedAt',
+          ExpressionAttributeNames: { '#module': module },
+          ExpressionAttributeValues: { ':value': value, ':updatedAt': nowEpochSeconds },
+        },
+        buildOutboxRecord(deptId, 'incident-service', 'incident.module.updated', traceId, {
+          incidentId,
+          deptId,
+          module,
+          updatedAt: nowEpochSeconds,
+        }),
       );
     },
 

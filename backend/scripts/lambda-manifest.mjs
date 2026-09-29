@@ -276,6 +276,11 @@ export const LAMBDA_ENTRIES = [
   // NERIS loop: validation, review lock, resubmission, status sync, reconciliation.
   {
     service: 'incident-service',
+    function: 'module',
+    entry: 'src/services/incident-service/putModule.ts',
+  },
+  {
+    service: 'incident-service',
     function: 'neris-schema',
     entry: 'src/services/incident-service/getNerisSchema.ts',
   },

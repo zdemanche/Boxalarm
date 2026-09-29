@@ -463,6 +463,15 @@ export class Incident extends pulumi.ComponentResource {
       schema: boolean;
     }[] = [
       {
+        // One NERIS module on the report: GetItem the report and schema pin, S3 the
+        // compiled sub-schema, then the lock-guarded, versioned METADATA Update + outbox Put.
+        key: "module",
+        routeKey: "PUT /api/v1/incidents/{incidentId}/modules/{module}",
+        actions: ["dynamodb:GetItem", "dynamodb:UpdateItem", "dynamodb:PutItem"],
+        neris: false,
+        schema: true,
+      },
+      {
         // Active SCHEMA_VERSION pointer + row (GetItem), then the compiled NERIS schema
         // from S3: the incident-type list and module sub-schemas the web renders from.
         key: "neris-schema",

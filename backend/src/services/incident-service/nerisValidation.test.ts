@@ -157,10 +157,10 @@ describe('localValidation', () => {
       nowEpochSeconds: NOW,
     });
     expect(result.blocking.filter((i) => i.code === 'MODULE_REQUIRED').map((i) => i.path)).toEqual([
-      'fields.fire_alarm',
-      'fields.other_alarm',
-      'fields.fire_suppression',
-      'fields.cooking_fire_suppression',
+      'modules.fire_alarm',
+      'modules.other_alarm',
+      'modules.fire_suppression',
+      'modules.cooking_fire_suppression',
     ]);
   });
 
