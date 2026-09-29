@@ -10,6 +10,8 @@ import {
   navigateToAlertDetail,
   onNavigationStateChange,
 } from '../../navigation/navigationRef';
+import { etaFor, queueAlertResponse } from './alertResponses';
+import { answerFromActionId, handleNotificationEvent } from './notificationActions';
 import {
   alertPayloadFromNotificationData,
   alertPayloadFromPushData,
@@ -64,6 +66,8 @@ export const IOS_PENDING_ALERT_TAP_MAX_AGE_SECONDS = 600;
 interface PendingIosTap {
   dispatchId?: unknown;
   tappedAt?: unknown;
+  /** A notification action ("respond:RESPONDING") pressed instead of a plain tap. */
+  action?: unknown;
   title?: unknown;
   body?: unknown;
   toneSequence?: unknown;
@@ -84,12 +88,33 @@ function readPendingIosTap(nowMs: number): AlertPayload | null {
 }
 
 /**
+ * A Responding / Not responding action pressed on an iOS page (AppDelegate records it with the
+ * tap). Queued at once, before navigation is ready, through the same outbox as the alert screen;
+ * the action is then stripped from the record so a later routing retry cannot answer twice.
+ */
+function answerPendingIosAction(dispatchId: string): void {
+  const pending = Settings.get(IOS_PENDING_ALERT_TAP_KEY) as PendingIosTap | null | undefined;
+  const answer = answerFromActionId(
+    typeof pending?.action === 'string' ? pending.action : undefined,
+  );
+  if (!pending || !answer) return;
+  const rest: PendingIosTap = { ...pending };
+  delete rest.action;
+  Settings.set({ [IOS_PENDING_ALERT_TAP_KEY]: rest });
+  queueAlertResponse(dispatchId, answer, etaFor(answer, undefined)).catch((error: unknown) => {
+    console.error('[push] queueing the answer from an iOS notification action failed', error);
+  });
+}
+
+/**
  * Routes a recorded iOS tap once navigation can take it. A tap recorded before the navigator
  * mounted (cold start) stays pending and is routed on the first navigation state change.
  */
 export function routePendingIosAlertTap(nowMs: number = Date.now()): void {
   const payload = readPendingIosTap(nowMs);
-  if (!payload || !isNavigationReady()) return;
+  if (!payload) return;
+  answerPendingIosAction(payload.dispatchId);
+  if (!isNavigationReady()) return;
   Settings.set({ [IOS_PENDING_ALERT_TAP_KEY]: null });
   openAlert(payload);
 }
@@ -115,9 +140,13 @@ export function subscribePushNotificationRouting(): () => void {
     openAlert(payloadFromRemoteMessage(remoteMessage));
   });
 
-  const unsubscribeForeground = notifee.onForegroundEvent(({ type, detail }) => {
-    if (type !== EventType.PRESS) return;
-    openAlert(alertPayloadFromNotificationData(detail.notification?.data));
+  const unsubscribeForeground = notifee.onForegroundEvent((event) => {
+    if (event.type === EventType.ACTION_PRESS) {
+      void handleNotificationEvent(event);
+      return;
+    }
+    if (event.type !== EventType.PRESS) return;
+    openAlert(alertPayloadFromNotificationData(event.detail.notification?.data));
   });
 
   const unsubscribeIosTaps = Platform.OS === 'ios' ? subscribeIosAlertTaps() : () => {};

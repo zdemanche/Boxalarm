@@ -95,7 +95,13 @@ extension AppDelegate {
     withCompletionHandler completionHandler: @escaping () -> Void
   ) {
     let userInfo = response.notification.request.content.userInfo
-    if response.actionIdentifier == UNNotificationDefaultActionIdentifier,
+    // A plain tap, or a Responding / Not responding action from the DISPATCH category
+    // (notificationActions.ts registers it; the page must carry aps.category = "DISPATCH").
+    // The action is recorded with the tap; JS queues the answer through the same outbox as the
+    // alert screen and opens the call, which shows whether it was sent.
+    let actionId = response.actionIdentifier
+    let isResponseAction = actionId.hasPrefix("respond:")
+    if actionId == UNNotificationDefaultActionIdentifier || isResponseAction,
       userInfo["gcm.message_id"] == nil,
       (userInfo["category"] as? String) != "digest",
       let dispatchId = userInfo["dispatchId"] as? String,
@@ -111,6 +117,7 @@ extension AppDelegate {
         "body": content.body,
       ]
       if let tone = userInfo["toneSequence"] as? String { record["toneSequence"] = tone }
+      if isResponseAction { record["action"] = actionId }
       UserDefaults.standard.set(record, forKey: pendingAlertTapKey)
     }
     completionHandler()

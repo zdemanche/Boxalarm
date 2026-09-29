@@ -9,6 +9,7 @@ import {
   alertPayloadToNotificationData,
   rememberAlertPayload,
 } from './alertPayload';
+import { ANDROID_RESPONSE_ACTIONS } from './notificationActions';
 import {
   categoryFromPushData,
   CRITICAL_CHANNEL_ID,
@@ -90,6 +91,8 @@ export async function displayPushNotification(
             autoCancel: false,
             lightUpScreen: true,
             visibility: AndroidVisibility.PUBLIC,
+            // Answer from the shade or lock screen without opening the app (same queue).
+            ...(payload ? { actions: ANDROID_RESPONSE_ACTIONS } : {}),
           }
         : {}),
     },

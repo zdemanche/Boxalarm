@@ -361,12 +361,34 @@ async function processEntry(id: string): Promise<void> {
   }
 }
 
-export async function drain(): Promise<void> {
-  if (!tokens || !apiBaseUrl) return;
+// The drain in progress (including any follow-up it loops into), for drainAndSettle().
+let inFlight: Promise<void> | null = null;
+
+export function drain(): Promise<void> {
+  if (!tokens || !apiBaseUrl) return Promise.resolve();
   if (draining) {
     drainRequested = true;
-    return;
+    return Promise.resolve();
   }
+  const run = runDrain();
+  inFlight = run;
+  void run.finally(() => {
+    if (inFlight === run) inFlight = null;
+  });
+  return run;
+}
+
+/**
+ * Drains and waits until no drain is running - including one another caller already started.
+ * For a caller that must report the outcome (a headless notification action saying "Sent"),
+ * where drain() alone could return at once because a drain was already in progress.
+ */
+export async function drainAndSettle(): Promise<void> {
+  await drain();
+  while (inFlight) await inFlight;
+}
+
+async function runDrain(): Promise<void> {
   draining = true;
   drainRequested = false;
   try {
@@ -409,5 +431,6 @@ export async function drain(): Promise<void> {
   } finally {
     draining = false;
   }
-  if (drainRequested) void drain();
+  // Awaited (not fire-and-forget) so drainAndSettle covers the follow-up pass too.
+  if (drainRequested) await drain();
 }

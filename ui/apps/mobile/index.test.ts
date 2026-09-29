@@ -1,3 +1,4 @@
+import notifee from '@notifee/react-native';
 import { onMessage, setBackgroundMessageHandler } from '@react-native-firebase/messaging';
 import { AppRegistry } from 'react-native';
 import { App } from './src/App';
@@ -5,12 +6,16 @@ import {
   handleBackgroundPushMessage,
   handleForegroundPushMessage,
 } from './src/features/alerts/pushNotificationDisplay';
+import { handleNotificationEvent } from './src/features/alerts/notificationActions';
 
 jest.mock('react-native', () => ({ AppRegistry: { registerComponent: jest.fn() } }));
 jest.mock('./src/App', () => ({
   App: function MockApp() {
     return null;
   },
+}));
+jest.mock('./src/features/alerts/notificationActions', () => ({
+  handleNotificationEvent: jest.fn(async () => undefined),
 }));
 jest.mock('./src/features/alerts/pushNotificationDisplay', () => ({
   handleBackgroundPushMessage: jest.fn(async () => undefined),
@@ -49,4 +54,8 @@ test('routes foreground FCM messages (app open) through the fail-safe display pa
     dispatchId: 'DISP-2',
     category: 'dispatch',
   });
+});
+
+test('answers from a page notification (app in background or not running) go to the action handler', () => {
+  expect(notifee.onBackgroundEvent).toHaveBeenCalledWith(handleNotificationEvent);
 });

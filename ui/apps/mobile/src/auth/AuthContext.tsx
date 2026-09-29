@@ -123,6 +123,46 @@ async function writeStoredTokens(deps: AuthDeps, tokens: StoredTokens): Promise<
   });
 }
 
+/**
+ * A token source that works with no React tree - for headless JS (an Android notification
+ * action answered from the lock screen while the app is not running). Reads the same keychain
+ * entry as AuthProvider and renews it the same way; never signs anyone out (an invalid refresh
+ * token just yields null, and the answer stays queued for the next session).
+ */
+export function createStoredTokenSource(deps: AuthDeps = defaultDeps) {
+  let renewing: Promise<string | null> | null = null;
+  const renewSilently = (): Promise<string | null> => {
+    renewing ??= (async () => {
+      try {
+        const stored = await readStoredTokens(deps);
+        if (!stored) return null;
+        const result = await deps.refresh(buildOidcConfig(), { refreshToken: stored.refreshToken });
+        const next: StoredTokens = {
+          accessToken: result.accessToken,
+          refreshToken: result.refreshToken ?? stored.refreshToken,
+          accessTokenExpirationDate: result.accessTokenExpirationDate,
+          idToken: result.idToken,
+        };
+        await writeStoredTokens(deps, next);
+        return next.accessToken;
+      } catch {
+        return null;
+      }
+    })().finally(() => {
+      renewing = null;
+    });
+    return renewing;
+  };
+  return {
+    getAccessToken: async (): Promise<string | null> => {
+      const stored = await readStoredTokens(deps).catch(() => null);
+      if (!stored) return null;
+      return isExpired(stored) ? renewSilently() : stored.accessToken;
+    },
+    renewSilently,
+  };
+}
+
 interface AuthState {
   roles: Role[];
   memberId: string | null;

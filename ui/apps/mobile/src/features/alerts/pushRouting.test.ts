@@ -237,6 +237,40 @@ describe('iOS taps on raw-APNs dispatch notifications (review round 2 N3)', () =
     );
   });
 
+  test('a Responding action pressed on the page is queued once, then the call opens', async () => {
+    const store = jest.requireActual(
+      '../../sync/outboxStore',
+    ) as typeof import('../../sync/outboxStore');
+    nativeWrite({
+      'boxalarm.pendingAlertTap': {
+        dispatchId: 'DISP-ACTION',
+        tappedAt: nowSeconds(),
+        title: 'MVA',
+        body: 'MVA — 1 Main St',
+        action: 'respond:RESPONDING',
+      },
+    });
+    coldStart();
+    mockNavigationReady = false;
+
+    subscribePushNotificationRouting();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    // Queued before navigation is ready - the answer does not wait on the UI.
+    const rows = (await store.all()).filter((row) => row.path.includes('DISP-ACTION'));
+    expect(rows).toHaveLength(1);
+    expect(JSON.parse(rows[0]!.body)).toMatchObject({ ackStatus: 'RESPONDING' });
+
+    mockNavigationReady = true;
+    mockNavigationListener?.();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(navigateToAlertDetail).toHaveBeenCalledWith(
+      'DISP-ACTION',
+      expect.objectContaining({ address: '1 Main St' }),
+    );
+    expect((await store.all()).filter((row) => row.path.includes('DISP-ACTION'))).toHaveLength(1);
+  });
+
   test('a malformed record is discarded without navigating', () => {
     nativeWrite({ 'boxalarm.pendingAlertTap': { dispatchId: 7, tappedAt: nowSeconds() } });
     coldStart();

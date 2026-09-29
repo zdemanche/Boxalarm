@@ -41,6 +41,9 @@ test('a dispatch push displays on the critical channel with a full-screen action
     autoCancel: false,
     visibility: 1,
   });
+  expect(
+    call.android.actions.map((a: { pressAction: { id: string } }) => a.pressAction.id),
+  ).toEqual(['respond:RESPONDING', 'respond:NOT_RESPONDING']);
   // One notification per call, carrying the page so a tap opens the address with no fetch.
   expect(call.id).toBe('dispatch:DISP-1');
   expect(call.data).toEqual({
