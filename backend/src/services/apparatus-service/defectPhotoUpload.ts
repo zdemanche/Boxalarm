@@ -1,6 +1,11 @@
 import { PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import type { VerifiedDeptId } from '@boxalarm/dept-scope';
+import {
+  SIGNED_UPLOAD_HEADERS,
+  requireUploadContentType,
+  uploadContentTypeFor,
+} from '../inspections-service/assetsSigner.js';
 
 // Files go to the platform-assets bucket through a short-lived regional S3 presigned PUT.
 // architecture.md §8 describes CloudFront signed URLs, but N6.1 (U.S. residency, no global
@@ -21,18 +26,26 @@ export function readDefectPhotoUploadConfig(
   return Promise.resolve({ bucketName });
 }
 
-/** Presigns one PUT; injectable so tests need no AWS credentials. */
-export type PresignPutFn = (bucketName: string, key: string, expiresIn: number) => Promise<string>;
+/** Presigns one PUT signed with `contentType`; injectable so tests need no AWS credentials. */
+export type PresignPutFn = (
+  bucketName: string,
+  key: string,
+  expiresIn: number,
+  contentType: string,
+) => Promise<string>;
 
 let cachedS3Client: S3Client | undefined;
 
 // Presigning is a local SigV4 computation with the Lambda role's credentials - no network
 // call - so the client is not wrapped in X-Ray.
-export const presignPut: PresignPutFn = (bucketName, key, expiresIn) => {
+export const presignPut: PresignPutFn = (bucketName, key, expiresIn, contentType) => {
   cachedS3Client ??= new S3Client({});
-  return getSignedUrl(cachedS3Client, new PutObjectCommand({ Bucket: bucketName, Key: key }), {
-    expiresIn,
-  });
+  return getSignedUrl(
+    cachedS3Client,
+    new PutObjectCommand({ Bucket: bucketName, Key: key, ContentType: contentType }),
+    // Signed over content-type, or S3 would accept any Content-Type on the PUT.
+    { expiresIn, signableHeaders: new Set(SIGNED_UPLOAD_HEADERS) },
+  );
 };
 
 const UPLOAD_URL_EXPIRY_SECONDS = 10 * 60;
@@ -46,13 +59,15 @@ export interface CreateDefectPhotoUploadUrlParams {
 export interface DefectPhotoUpload {
   readonly photoS3Key: string;
   readonly uploadUrl: string;
+  /** The PUT is signed with this type; the client must send it as Content-Type. */
+  readonly contentType: string;
 }
 
 const SAFE_FILENAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 
-// The presigned PUT does not constrain the Content-Type or size of what the client sends,
-// so this extension allowlist keeps a defect "photo" from being an .html/.svg/.js payload
-// that a later presigned GET would hand back to a browser (stored-content/XSS risk).
+// A defect photo is an image: the shared upload allowlist (inspections-service/assetsSigner.ts,
+// review minor 11) narrowed to image/* types, so it is never .html/.svg/.js or a document.
+// The PUT is signed with that content type, so S3 refuses any other Content-Type.
 const ALLOWED_PHOTO_EXTENSIONS: ReadonlySet<string> = new Set([
   'jpg',
   'jpeg',
@@ -70,7 +85,10 @@ function isSafeFilename(filename: string): boolean {
   if (lastDot <= 0 || lastDot === filename.length - 1) {
     return false;
   }
-  return ALLOWED_PHOTO_EXTENSIONS.has(filename.slice(lastDot + 1).toLowerCase());
+  return (
+    ALLOWED_PHOTO_EXTENSIONS.has(filename.slice(lastDot + 1).toLowerCase()) &&
+    (uploadContentTypeFor(filename) ?? '').startsWith('image/')
+  );
 }
 
 export async function createDefectPhotoUploadUrl(
@@ -85,8 +103,14 @@ export async function createDefectPhotoUploadUrl(
     );
   }
   const photoS3Key = `${params.deptId}/defect/${params.defectId}/${params.filename}`;
-  const uploadUrl = await presign(config.bucketName, photoS3Key, UPLOAD_URL_EXPIRY_SECONDS);
-  return { photoS3Key, uploadUrl };
+  const contentType = requireUploadContentType(params.filename);
+  const uploadUrl = await presign(
+    config.bucketName,
+    photoS3Key,
+    UPLOAD_URL_EXPIRY_SECONDS,
+    contentType,
+  );
+  return { photoS3Key, uploadUrl, contentType };
 }
 
 /**
@@ -100,9 +124,13 @@ export async function resignDefectPhotoUploadUrl(
   deptId: VerifiedDeptId,
   photoS3Key: string,
   presign: PresignPutFn = presignPut,
-): Promise<string> {
+): Promise<{ uploadUrl: string; contentType: string }> {
   if (!photoS3Key.startsWith(`${deptId}/defect/`) || photoS3Key.includes('..')) {
     throw new TypeError(`stored photo key is outside ${deptId}/defect/: ${photoS3Key}`);
   }
-  return presign(config.bucketName, photoS3Key, UPLOAD_URL_EXPIRY_SECONDS);
+  const contentType = requireUploadContentType(photoS3Key);
+  return {
+    uploadUrl: await presign(config.bucketName, photoS3Key, UPLOAD_URL_EXPIRY_SECONDS, contentType),
+    contentType,
+  };
 }

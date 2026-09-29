@@ -10,6 +10,8 @@ export interface Certification {
   attachmentS3Key: string | null;
   status: CertificationStatus;
   uploadUrl?: string;
+  /** The Content-Type the upload URL is signed with; send it on the PUT. */
+  uploadContentType?: string;
 }
 
 export interface CreateCertificationInput {

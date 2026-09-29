@@ -36,6 +36,8 @@ export interface UtilityShutoff {
 export interface PrePlanUploadUrl {
   filename: string;
   uploadUrl: string;
+  /** The Content-Type the upload URL is signed with; send it on the PUT. */
+  contentType?: string;
 }
 
 export interface PrePlanView {
@@ -51,6 +53,8 @@ export interface PrePlanView {
 export interface PutPrePlanResult {
   prePlanId: string;
   siteDiagramUploadUrl?: string;
+  /** The Content-Type the site-diagram upload URL is signed with; send it on the PUT. */
+  siteDiagramContentType?: string;
   attachmentUploadUrls: PrePlanUploadUrl[];
   utilityShutoffs: UtilityShutoff[];
   hazards: string[];

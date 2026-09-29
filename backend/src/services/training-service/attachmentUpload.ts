@@ -1,7 +1,12 @@
 import { PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import type { VerifiedDeptId } from '@boxalarm/dept-scope';
-import { UPLOAD_CONTENT_TYPES, uploadContentTypeFor } from '../inspections-service/assetsSigner.js';
+import {
+  UPLOAD_CONTENT_TYPES,
+  SIGNED_UPLOAD_HEADERS,
+  requireUploadContentType,
+  uploadContentTypeFor,
+} from '../inspections-service/assetsSigner.js';
 
 // Files go to the platform-assets bucket through a short-lived regional S3 presigned PUT.
 // architecture.md §8 describes CloudFront signed URLs, but N6.1 (U.S. residency, no global
@@ -22,18 +27,26 @@ export function readAttachmentUploadConfig(
   return Promise.resolve({ bucketName });
 }
 
-/** Presigns one PUT; injectable so tests need no AWS credentials. */
-export type PresignPutFn = (bucketName: string, key: string, expiresIn: number) => Promise<string>;
+/** Presigns one PUT signed with `contentType`; injectable so tests need no AWS credentials. */
+export type PresignPutFn = (
+  bucketName: string,
+  key: string,
+  expiresIn: number,
+  contentType: string,
+) => Promise<string>;
 
 let cachedS3Client: S3Client | undefined;
 
 // Presigning is a local SigV4 computation with the Lambda role's credentials - no network
 // call - so the client is not wrapped in X-Ray.
-export const presignPut: PresignPutFn = (bucketName, key, expiresIn) => {
+export const presignPut: PresignPutFn = (bucketName, key, expiresIn, contentType) => {
   cachedS3Client ??= new S3Client({});
-  return getSignedUrl(cachedS3Client, new PutObjectCommand({ Bucket: bucketName, Key: key }), {
-    expiresIn,
-  });
+  return getSignedUrl(
+    cachedS3Client,
+    new PutObjectCommand({ Bucket: bucketName, Key: key, ContentType: contentType }),
+    // Signed over content-type, or S3 would accept any Content-Type on the PUT.
+    { expiresIn, signableHeaders: new Set(SIGNED_UPLOAD_HEADERS) },
+  );
 };
 
 const UPLOAD_URL_EXPIRY_SECONDS = 10 * 60;
@@ -47,6 +60,8 @@ export interface CreateAttachmentUploadUrlParams {
 export interface AttachmentUpload {
   readonly attachmentS3Key: string;
   readonly uploadUrl: string;
+  /** The PUT is signed with this type; the client must send it as Content-Type. */
+  readonly contentType: string;
 }
 
 const SAFE_FILENAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
@@ -69,6 +84,12 @@ export async function createAttachmentUploadUrl(
     );
   }
   const attachmentS3Key = `${params.deptId}/CERTIFICATION/${params.certId}/${params.filename}`;
-  const uploadUrl = await presign(config.bucketName, attachmentS3Key, UPLOAD_URL_EXPIRY_SECONDS);
-  return { attachmentS3Key, uploadUrl };
+  const contentType = requireUploadContentType(params.filename);
+  const uploadUrl = await presign(
+    config.bucketName,
+    attachmentS3Key,
+    UPLOAD_URL_EXPIRY_SECONDS,
+    contentType,
+  );
+  return { attachmentS3Key, uploadUrl, contentType };
 }

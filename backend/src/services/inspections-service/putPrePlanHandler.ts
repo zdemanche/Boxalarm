@@ -8,6 +8,7 @@ import { createDynamoClient, readInspectionsTableConfig } from './platformTable.
 import {
   createSignedUploadUrl,
   isAllowedUploadFilename,
+  requireUploadContentType,
   readAssetsConfig,
   type SignUrlFn,
 } from './assetsSigner.js';
@@ -160,6 +161,8 @@ export function createPutPrePlanHandler(
         const attachmentUploadUrls = await Promise.all(
           input.attachmentFilenames.map(async (filename, index) => ({
             filename,
+            // The PUT is signed with this type; the client must send it as Content-Type.
+            contentType: requireUploadContentType(filename),
             uploadUrl: await createSignedUploadUrl(
               assetsConfig,
               prePlan.attachmentS3Keys[index] ?? '',
@@ -173,7 +176,12 @@ export function createPutPrePlanHandler(
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify({
             prePlanId: prePlan.prePlanId,
-            ...(siteDiagramUploadUrl ? { siteDiagramUploadUrl } : {}),
+            ...(siteDiagramUploadUrl && prePlan.siteDiagramS3Key
+              ? {
+                  siteDiagramUploadUrl,
+                  siteDiagramContentType: requireUploadContentType(prePlan.siteDiagramS3Key),
+                }
+              : {}),
             attachmentUploadUrls,
             utilityShutoffs: prePlan.utilityShutoffs,
             hazards: prePlan.hazards,

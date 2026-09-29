@@ -156,4 +156,32 @@ describe('upload allowlist and safe GET overrides', () => {
     expect(url.searchParams.get('response-content-type')).toBe('application/octet-stream');
     expect(url.searchParams.get('response-content-disposition')).toBe('attachment');
   });
+
+  it('signs the allowlisted Content-Type into a real presigned PUT (review minor 11)', async () => {
+    const originalEnv = { ...process.env };
+    process.env.AWS_REGION = 'us-east-1';
+    process.env.AWS_ACCESS_KEY_ID = 'AKIDEXAMPLE';
+    process.env.AWS_SECRET_ACCESS_KEY = 'secret';
+    const url = new URL(
+      await presignAssetUrl({
+        bucketName: 'boxalarm-dev-platform-assets',
+        key: 'NICHOLS/PRE_PLAN/PP-1/plan.pdf',
+        method: 'PUT',
+        expiresInSeconds: 600,
+      }),
+    );
+    process.env = originalEnv;
+    expect(url.searchParams.get('X-Amz-SignedHeaders')).toContain('content-type');
+  });
+
+  it('refuses to presign a PUT for a key outside the allowlist', async () => {
+    await expect(
+      presignAssetUrl({
+        bucketName: 'b',
+        key: 'NICHOLS/PRE_PLAN/PP-1/page.html',
+        method: 'PUT',
+        expiresInSeconds: 600,
+      }),
+    ).rejects.toThrow(TypeError);
+  });
 });

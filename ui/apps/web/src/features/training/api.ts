@@ -42,8 +42,18 @@ export async function createCertification(
   return (await response.json()) as Certification;
 }
 
-export async function uploadCertificationAttachment(uploadUrl: string, file: File): Promise<void> {
-  const response = await fetch(uploadUrl, { method: 'PUT', body: file });
+// The PUT is signed over Content-Type: send exactly the type the API signed it with
+// (uploadContentType), or S3 refuses it. Falls back to the file's own type for an older API.
+export async function uploadCertificationAttachment(
+  uploadUrl: string,
+  file: File,
+  contentType?: string,
+): Promise<void> {
+  const response = await fetch(uploadUrl, {
+    method: 'PUT',
+    body: file,
+    headers: { 'Content-Type': contentType ?? file.type },
+  });
   if (!response.ok) {
     throw new Error(`Attachment upload failed with status ${response.status}`);
   }

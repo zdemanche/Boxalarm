@@ -38,7 +38,9 @@ describe('createAttachmentUploadUrl', () => {
       'boxalarm-dev-platform-assets',
       'NICHOLS/CERTIFICATION/CERT-1/cpr-card.pdf',
       600,
+      'application/pdf',
     );
+    expect(result.contentType).toBe('application/pdf');
   });
 
   it.each([

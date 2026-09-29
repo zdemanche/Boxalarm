@@ -200,20 +200,44 @@ function describeError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-function guessPhotoContentType(uri: string): string {
-  const extension = uri.split('.').pop()?.toLowerCase();
-  switch (extension) {
-    case 'png':
-      return 'image/png';
-    case 'heic':
-      return 'image/heic';
-    case 'heif':
-      return 'image/heif';
-    case 'webp':
-      return 'image/webp';
-    default:
-      return 'image/jpeg';
+// The upload URL is signed over Content-Type (review minor 11): the server signs the type its
+// allowlist maps the object key's extension to, so the PUT must send exactly that or S3
+// answers 403 - which this outbox would read as an expired URL and re-sign forever. The key
+// is the URL's path, so the type is derived from it with the server's own mapping
+// (backend inspections-service/assetsSigner.ts UPLOAD_CONTENT_TYPES), not from the local
+// file URI, whose extension can differ.
+const UPLOAD_CONTENT_TYPES: Readonly<Record<string, string>> = {
+  jpg: 'image/jpeg',
+  jpeg: 'image/jpeg',
+  png: 'image/png',
+  gif: 'image/gif',
+  webp: 'image/webp',
+  heic: 'image/heic',
+  heif: 'image/heif',
+  tif: 'image/tiff',
+  tiff: 'image/tiff',
+};
+
+function extensionOf(path: string): string | undefined {
+  const name = path.slice(path.lastIndexOf('/') + 1);
+  const dot = name.lastIndexOf('.');
+  return dot > 0 ? name.slice(dot + 1).toLowerCase() : undefined;
+}
+
+export function signedPhotoContentType(uploadUrl: string, localUri: string): string {
+  let keyPath: string;
+  try {
+    keyPath = decodeURIComponent(new URL(uploadUrl).pathname);
+  } catch {
+    keyPath = '';
   }
+  const fromKey = extensionOf(keyPath);
+  const fromLocal = extensionOf(localUri);
+  return (
+    (fromKey && UPLOAD_CONTENT_TYPES[fromKey]) ??
+    (fromLocal && UPLOAD_CONTENT_TYPES[fromLocal]) ??
+    'image/jpeg'
+  );
 }
 
 async function uploadPhoto(row: OutboxRow): Promise<void> {
@@ -224,7 +248,7 @@ async function uploadPhoto(row: OutboxRow): Promise<void> {
   const uploadResponse = await fetch(row.photoUploadUrl, {
     method: 'PUT',
     body: blob,
-    headers: { 'Content-Type': guessPhotoContentType(row.photoLocalUri) },
+    headers: { 'Content-Type': signedPhotoContentType(row.photoUploadUrl, row.photoLocalUri) },
   });
   // S3 answers an expired or otherwise invalid signature with 403.
   if (uploadResponse.status === 403) throw new PhotoUploadUrlExpiredError(row.kind);

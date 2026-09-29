@@ -162,8 +162,14 @@ describe('putPrePlanHandler', () => {
     expect(result).toMatchObject({ statusCode: 200 });
     const body = JSON.parse((result as { body: string }).body) as Record<string, unknown>;
     expect(body.siteDiagramUploadUrl).toBe('https://signed.example.com/x');
+    // Review minor 11: the PUT is signed with this type, which the client must send.
+    expect(body.siteDiagramContentType).toBe('application/pdf');
     expect(body.attachmentUploadUrls).toEqual([
-      { filename: 'photo.jpg', uploadUrl: 'https://signed.example.com/x' },
+      {
+        filename: 'photo.jpg',
+        contentType: 'image/jpeg',
+        uploadUrl: 'https://signed.example.com/x',
+      },
     ]);
     const requests = signer.mock.calls.map(([request]) => request as Record<string, unknown>);
     expect(requests).toHaveLength(2);

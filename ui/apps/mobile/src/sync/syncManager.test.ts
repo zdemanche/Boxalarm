@@ -2,6 +2,7 @@ import NetInfo from '@react-native-community/netinfo';
 import { ApiError, apiRequest } from '../lib/apiClient';
 import * as store from './outboxStore';
 import * as syncManager from './syncManager';
+import { signedPhotoContentType } from './syncManager';
 
 jest.mock('../lib/apiClient', () => ({
   ...jest.requireActual('../lib/apiClient'),
@@ -612,5 +613,29 @@ describe('attendance', () => {
     const row = await store.find('attendance-1790000000');
     expect(row?.status).toBe('REJECTED');
     expect(row?.lastError).toMatch(/must supply activityType/);
+  });
+});
+
+// Review minor 11: the upload URL is signed over Content-Type, so the PUT must send the type
+// the server derived from the object key - a mismatch is a 403 the outbox reads as expiry.
+describe('signedPhotoContentType', () => {
+  test('uses the signed key extension, not the local file URI', () => {
+    expect(
+      signedPhotoContentType(
+        'https://bucket.s3.us-east-1.amazonaws.com/NICHOLS/defect/D-1/photo.heic?X-Amz-Expires=600',
+        'file:///tmp/converted.jpg',
+      ),
+    ).toBe('image/heic');
+  });
+
+  test('matches the server mapping case-insensitively', () => {
+    expect(
+      signedPhotoContentType('https://b.s3.amazonaws.com/N/INSPECTION_RECORD/I/IMG.JPG?x=1', ''),
+    ).toBe('image/jpeg');
+  });
+
+  test('falls back to the local URI, then image/jpeg', () => {
+    expect(signedPhotoContentType('not a url', 'file:///a/b.png')).toBe('image/png');
+    expect(signedPhotoContentType('not a url', 'file:///a/b')).toBe('image/jpeg');
   });
 });

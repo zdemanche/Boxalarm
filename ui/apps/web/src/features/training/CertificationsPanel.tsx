@@ -22,6 +22,7 @@ const emptyForm: CreateCertificationInput = {
 interface PendingUpload {
   certId: string;
   uploadUrl: string;
+  contentType?: string;
   file: File;
 }
 
@@ -45,7 +46,7 @@ export function CertificationsPanel({ memberId }: { memberId: string }) {
 
   const attemptUpload = async (upload: PendingUpload) => {
     try {
-      await uploadCertificationAttachment(upload.uploadUrl, upload.file);
+      await uploadCertificationAttachment(upload.uploadUrl, upload.file, upload.contentType);
       setPendingUpload(null);
       setUploadError(null);
     } catch {
@@ -61,7 +62,12 @@ export function CertificationsPanel({ memberId }: { memberId: string }) {
       setFormError(null);
       await queryClient.invalidateQueries({ queryKey });
       if (created.uploadUrl && file) {
-        await attemptUpload({ certId: created.certId, uploadUrl: created.uploadUrl, file });
+        await attemptUpload({
+          certId: created.certId,
+          uploadUrl: created.uploadUrl,
+          ...(created.uploadContentType ? { contentType: created.uploadContentType } : {}),
+          file,
+        });
       }
       setFile(null);
     },
