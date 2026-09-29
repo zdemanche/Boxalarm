@@ -1,50 +1,201 @@
 import { QueryCommand, type DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
-import { buildDeptScopedPk, type VerifiedDeptId } from '@boxalarm/dept-scope';
-import { logError } from '../dispatches/logger.js';
+import type { VerifiedDeptId } from '@boxalarm/dept-scope';
+import { normalizeAddress } from './addressKey.js';
+import {
+  ADDRESS_INDEX_NAME,
+  GEO_INDEX_NAME,
+  HYDRANT_GEO_SEARCH_PRECISIONS,
+  PREPLAN_GEO_SEARCH_PRECISION,
+  geoPartitionForCell,
+  prePlanAddressPartition,
+} from './copyKeys.js';
+import { haversineMeters, isGeoPoint, searchRing, type GeoPoint } from './geo.js';
+import {
+  MAX_NEAREST_HYDRANTS,
+  rankNearestHydrants,
+  type HydrantCopy,
+  type NearestHydrant,
+} from './nearestHydrants.js';
 
-export type UtilityShutoff = Record<string, unknown>;
-export type HydrantRef = Record<string, unknown>;
+export interface UtilityShutoff {
+  readonly utility: string;
+  readonly location: string;
+}
 
 export interface PrePlanCopyItem {
+  readonly occupancyId: string;
   readonly summary?: string;
-  readonly hazards: readonly string[];
-  readonly utilityShutoffs: readonly UtilityShutoff[];
-  readonly nearestHydrants: readonly HydrantRef[];
-  readonly snapshotUpdatedAt: number;
+  readonly address?: string;
+  readonly addressUnit?: string;
+  readonly hazards?: readonly string[];
+  readonly utilityShutoffs?: readonly UtilityShutoff[];
+  readonly latitude?: number;
+  readonly longitude?: number;
+  readonly snapshotUpdatedAt?: number;
 }
 
-export class PrePlanCopyDependencyError extends Error {
-  readonly reason: string;
+/** A dispatch coordinate within this distance of an occupancy is treated as that occupancy. */
+export const PREPLAN_MATCH_RADIUS_METERS = 50;
 
-  constructor(cause: unknown) {
-    super('DynamoDB is unavailable or returned an unexpected error');
-    this.name = 'PrePlanCopyDependencyError';
-    this.cause = cause;
-    this.reason = cause instanceof Error ? cause.constructor.name : 'UnknownError';
-  }
+/** Bounds a runaway partition read; a department's hydrants fill ~one page per geohash5 cell. */
+const MAX_PAGES_PER_QUERY = 5;
+const ADDRESS_CANDIDATE_LIMIT = 25;
+
+async function queryAll(
+  client: DynamoDBDocumentClient,
+  input: ConstructorParameters<typeof QueryCommand>[0],
+): Promise<Record<string, unknown>[]> {
+  const items: Record<string, unknown>[] = [];
+  let exclusiveStartKey: Record<string, unknown> | undefined;
+  let pages = 0;
+  do {
+    const output = await client.send(
+      new QueryCommand({
+        ...input,
+        ...(exclusiveStartKey ? { ExclusiveStartKey: exclusiveStartKey } : {}),
+      }),
+    );
+    items.push(...((output?.Items ?? []) as Record<string, unknown>[]));
+    exclusiveStartKey = output?.LastEvaluatedKey as Record<string, unknown> | undefined;
+    pages += 1;
+  } while (exclusiveStartKey !== undefined && pages < MAX_PAGES_PER_QUERY);
+  return items;
 }
 
-export async function getPrePlanCopy(
+function isPrePlanCopy(
+  item: Record<string, unknown>,
+): item is Record<string, unknown> & PrePlanCopyItem {
+  return item.entityType === 'PRE_PLAN_COPY' && typeof item.occupancyId === 'string';
+}
+
+function newestFirst(a: PrePlanCopyItem, b: PrePlanCopyItem): number {
+  return (
+    (b.snapshotUpdatedAt ?? 0) - (a.snapshotUpdatedAt ?? 0) ||
+    a.occupancyId.localeCompare(b.occupancyId)
+  );
+}
+
+/**
+ * The pre-plan whose normalized street address equals the dispatch's. Several occupancies can
+ * share a street address (units in one building); prefer the one whose unit matches the
+ * dispatch's, then a building-level (no-unit) pre-plan, then the most recently updated.
+ */
+export async function findPrePlanByAddress(
   client: DynamoDBDocumentClient,
   tableName: string,
   deptId: VerifiedDeptId,
-  occupancyId: string,
+  address: string,
 ): Promise<PrePlanCopyItem | undefined> {
-  try {
-    const output = await client.send(
-      new QueryCommand({
-        TableName: tableName,
-        KeyConditionExpression: 'pk = :pk AND sk = :sk',
-        ExpressionAttributeValues: {
-          ':pk': buildDeptScopedPk(deptId, 'PREPLAN'),
-          ':sk': `OCCUPANCY#${occupancyId}`,
-        },
-        Limit: 1,
-      }),
-    );
-    return output.Items?.[0] as PrePlanCopyItem | undefined;
-  } catch (error) {
-    logError('preplan_copy.query_failed', error, { deptId, occupancyId });
-    throw new PrePlanCopyDependencyError(error);
+  const normalized = normalizeAddress(address);
+  if (!normalized) {
+    return undefined;
   }
+  const items = await queryAll(client, {
+    TableName: tableName,
+    IndexName: ADDRESS_INDEX_NAME,
+    KeyConditionExpression: 'gsi1pk = :gsi1pk',
+    ExpressionAttributeValues: { ':gsi1pk': prePlanAddressPartition(deptId, normalized.key) },
+    Limit: ADDRESS_CANDIDATE_LIMIT,
+  });
+  const candidates = items.filter(isPrePlanCopy).sort(newestFirst);
+  const unitRank = (candidate: PrePlanCopyItem): number => {
+    const unit = candidate.addressUnit ?? null;
+    if (normalized.unit !== null && unit === normalized.unit) return 0;
+    if (unit === null) return 1;
+    return 2;
+  };
+  return [...candidates].sort((a, b) => unitRank(a) - unitRank(b))[0];
+}
+
+/** The pre-plan whose occupancy is nearest `point`, if one lies within the match radius. */
+export async function findPrePlanNear(
+  client: DynamoDBDocumentClient,
+  tableName: string,
+  deptId: VerifiedDeptId,
+  point: GeoPoint,
+): Promise<PrePlanCopyItem | undefined> {
+  const { cells } = searchRing(point, PREPLAN_GEO_SEARCH_PRECISION);
+  const pages = await Promise.all(
+    cells.map((cell) =>
+      queryAll(client, {
+        TableName: tableName,
+        IndexName: GEO_INDEX_NAME,
+        KeyConditionExpression: 'gsi2pk = :gsi2pk AND begins_with(gsi2sk, :cell)',
+        ExpressionAttributeValues: {
+          ':gsi2pk': geoPartitionForCell(deptId, 'PREPLAN_GEO', cell),
+          ':cell': cell,
+        },
+      }),
+    ),
+  );
+  let best: { readonly item: PrePlanCopyItem; readonly distance: number } | undefined;
+  for (const item of pages.flat().filter(isPrePlanCopy)) {
+    const location = { latitude: item.latitude, longitude: item.longitude };
+    if (!isGeoPoint(location)) continue;
+    const distance = haversineMeters(point, location);
+    if (distance > PREPLAN_MATCH_RADIUS_METERS) continue;
+    if (!best || distance < best.distance) {
+      best = { item, distance };
+    }
+  }
+  return best?.item;
+}
+
+async function queryHydrantCells(
+  client: DynamoDBDocumentClient,
+  tableName: string,
+  deptId: VerifiedDeptId,
+  cells: readonly string[],
+): Promise<HydrantCopy[]> {
+  const pages = await Promise.all(
+    cells.map((cell) =>
+      queryAll(client, {
+        TableName: tableName,
+        IndexName: GEO_INDEX_NAME,
+        KeyConditionExpression: 'gsi2pk = :gsi2pk AND begins_with(gsi2sk, :cell)',
+        ExpressionAttributeValues: {
+          ':gsi2pk': geoPartitionForCell(deptId, 'HYDRANT_GEO', cell),
+          ':cell': cell,
+        },
+        ProjectionExpression:
+          'entityType, hydrantId, latitude, longitude, #status, #size, flowRatingGpm',
+        ExpressionAttributeNames: { '#status': 'status', '#size': 'size' },
+      }),
+    ),
+  );
+  return pages
+    .flat()
+    .filter((item) => item.entityType === 'HYDRANT_COPY' && typeof item.hydrantId === 'string')
+    .map((item) => item as unknown as HydrantCopy);
+}
+
+/**
+ * The nearest usable hydrants to `point`, searched in widening geohash rings: a ring's result
+ * is final once it holds `max` hydrants inside the distance that ring fully covers; otherwise
+ * the next, wider ring is read. Past the widest ring the list is best-effort (it may include a
+ * hydrant slightly farther than one just outside the ring) — acceptable at ~3 km.
+ */
+export async function findNearestHydrants(
+  client: DynamoDBDocumentClient,
+  tableName: string,
+  deptId: VerifiedDeptId,
+  point: GeoPoint,
+  max = MAX_NEAREST_HYDRANTS,
+): Promise<readonly NearestHydrant[]> {
+  let ranked: readonly NearestHydrant[] = [];
+  for (const precision of HYDRANT_GEO_SEARCH_PRECISIONS) {
+    const ring = searchRing(point, precision);
+    ranked = rankNearestHydrants(
+      point,
+      await queryHydrantCells(client, tableName, deptId, ring.cells),
+      max,
+    );
+    const covered = ranked.filter(
+      (hydrant) => hydrant.distanceMeters <= ring.guaranteedRadiusMeters,
+    );
+    if (covered.length >= max) {
+      return covered;
+    }
+  }
+  return ranked;
 }

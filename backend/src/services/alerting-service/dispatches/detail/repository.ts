@@ -18,12 +18,6 @@ export interface DispatchAlertItem {
   readonly nextToneAt?: number | null;
 }
 
-export interface PrePlanCopyItem {
-  readonly summary: string;
-  readonly hazards: readonly string[];
-  readonly nearestHydrants: readonly unknown[];
-}
-
 export async function getDispatchDetail(
   client: DynamoDBDocumentClient,
   tableName: string,
@@ -53,21 +47,4 @@ export async function getMutualAidEvent(
     }),
   );
   return result.Item?.entityType === 'MUTUAL_AID_EVENT' ? result.Item : undefined;
-}
-
-// Keyed by occupancyId per architecture.md:734 (`sk = OCCUPANCY#{occupancyId}`). The caller
-// (handler.ts fetchPrePlan) currently has no occupancyId to give this — see the TODO there.
-export async function getPrePlanCopy(
-  client: DynamoDBDocumentClient,
-  tableName: string,
-  deptId: VerifiedDeptId,
-  occupancyId: string,
-): Promise<PrePlanCopyItem | undefined> {
-  const result = await client.send(
-    new GetCommand({
-      TableName: tableName,
-      Key: { pk: buildDeptScopedPk(deptId, 'PREPLAN'), sk: `OCCUPANCY#${occupancyId}` },
-    }),
-  );
-  return result.Item as PrePlanCopyItem | undefined;
 }

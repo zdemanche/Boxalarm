@@ -36,6 +36,29 @@ const DISPATCH_ITEM = {
   narrative: 'Smoke showing, 2nd floor',
 };
 
+interface QueryInput {
+  readonly IndexName?: string;
+  readonly ExpressionAttributeValues: Record<string, unknown>;
+}
+
+/** GetItems answered by sk (the dispatch METADATA, no mutual aid); Queries by `queries`. */
+function routedClient(options: {
+  dispatch?: Record<string, unknown>;
+  queries: (input: QueryInput) => Promise<unknown>;
+  onGet?: (key: { pk: string; sk: string }) => void;
+}): DynamoDBDocumentClient {
+  return {
+    send: vi.fn((command: { input: { Key?: { pk: string; sk: string } } & QueryInput }) => {
+      const key = command.input.Key;
+      if (!key) return options.queries(command.input);
+      options.onGet?.(key);
+      return Promise.resolve({
+        Item: key.sk === 'METADATA' ? (options.dispatch ?? DISPATCH_ITEM) : undefined,
+      });
+    }),
+  } as unknown as DynamoDBDocumentClient;
+}
+
 describe('alert-detail handler', () => {
   const originalEnv = { ...process.env };
 
@@ -93,11 +116,9 @@ describe('alert-detail handler', () => {
   it('AC2: renders full core content with prePlan null when the pre-plan copy read throws — isolation from the alert-path failure domain', async () => {
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const { createHandler } = await import('./handler.js');
-    const send = vi
-      .fn()
-      .mockResolvedValueOnce({ Item: { ...DISPATCH_ITEM, prePlanRefs: ['OCC-0231'] } })
-      .mockRejectedValueOnce(new Error('pre-plan table unavailable'));
-    const docClient = { send } as unknown as DynamoDBDocumentClient;
+    const docClient = routedClient({
+      queries: () => Promise.reject(new Error('pre-plan index unavailable')),
+    });
     const handler = createHandler({ authzClient: fakeAuthzClient('ALLOW'), docClient });
 
     const result = await handler(buildEvent('NICHOLS-4471-1798000000'));
@@ -106,16 +127,167 @@ describe('alert-detail handler', () => {
     const body = JSON.parse((result as { body: string }).body) as Record<string, unknown>;
     expect(body.prePlan).toBeNull();
     expect(body.address).toBe('123 Main St');
+    expect(body.narrative).toBe('Smoke showing, 2nd floor');
     const logged = errorSpy.mock.calls.map((call) => call[0] as string).join('\n');
     expect(logged).toContain('dispatches.detail.preplan_read_failed');
-    expect(logged).toContain('pre-plan table unavailable');
+    expect(logged).toContain('pre-plan index unavailable');
     errorSpy.mockRestore();
+  });
+
+  describe('pre-plan + hydrant context (dispatch address -> PRE_PLAN_COPY -> HYDRANT_COPY)', () => {
+    const OCCUPANCY_POINT = { latitude: 41.2429, longitude: -73.2007 };
+    const PRE_PLAN_COPY = {
+      entityType: 'PRE_PLAN_COPY',
+      occupancyId: 'OCC-0231',
+      summary: 'Multi family — 123 Main Street',
+      address: '123 Main Street',
+      hazards: ['LPG_TANK_REAR'],
+      utilityShutoffs: [{ utility: 'GAS', location: 'rear of building' }],
+      ...OCCUPANCY_POINT,
+      snapshotUpdatedAt: 1,
+    };
+    const hydrantAt = (hydrantId: string, northMeters: number, extra = {}) => ({
+      entityType: 'HYDRANT_COPY',
+      hydrantId,
+      status: 'IN_SERVICE',
+      latitude: OCCUPANCY_POINT.latitude + northMeters / 111_320,
+      longitude: OCCUPANCY_POINT.longitude,
+      ...extra,
+    });
+
+    it('matches the pre-plan by normalized address and lists the nearest hydrants to its occupancy', async () => {
+      const { createHandler } = await import('./handler.js');
+      const docClient = routedClient({
+        queries: (input) => {
+          if (input.IndexName === 'GSI1') {
+            // "123 Main St" on the dispatch vs "123 Main Street" on the occupancy.
+            expect(input.ExpressionAttributeValues[':gsi1pk']).toBe(
+              'DEPT#NICHOLS#PREPLAN_ADDR#123 MAIN ST',
+            );
+            return Promise.resolve({ Items: [PRE_PLAN_COPY] });
+          }
+          return Promise.resolve({
+            Items: `${input.ExpressionAttributeValues[':gsi2pk'] as string}`.includes('HYDRANT_GEO')
+              ? [
+                  hydrantAt('H-300', 300),
+                  hydrantAt('H-80', 80, { size: '6-inch', flowRatingGpm: 1100 }),
+                  hydrantAt('H-OOS', 20, { status: 'OUT_OF_SERVICE' }),
+                  hydrantAt('H-150', 150),
+                ]
+              : [],
+          });
+        },
+      });
+      const handler = createHandler({ authzClient: fakeAuthzClient('ALLOW'), docClient });
+
+      const result = await handler(buildEvent('NICHOLS-4471-1798000000'));
+
+      expect(result).toMatchObject({ statusCode: 200 });
+      const body = JSON.parse((result as { body: string }).body) as {
+        prePlan: { nearestHydrants: Array<Record<string, unknown>> } & Record<string, unknown>;
+      };
+      expect(body.prePlan).toMatchObject({
+        summary: 'Multi family — 123 Main Street',
+        hazards: ['LPG_TANK_REAR'],
+        utilityShutoffs: [{ utility: 'GAS', location: 'rear of building' }],
+      });
+      expect(body.prePlan.nearestHydrants.map((h) => h.hydrantId)).toEqual([
+        'H-80',
+        'H-150',
+        'H-300',
+      ]);
+      expect(body.prePlan.nearestHydrants[0]).toMatchObject({
+        hydrantId: 'H-80',
+        status: 'IN_SERVICE',
+        size: '6-inch',
+        flowRatingGpm: 1100,
+        flowClass: 'A',
+        distanceMeters: 80,
+      });
+    });
+
+    it('is null when no pre-plan is on file for the address and the dispatch has no coordinates', async () => {
+      const { createHandler } = await import('./handler.js');
+      const queries = vi.fn(() => Promise.resolve({ Items: [] }));
+      const docClient = routedClient({ queries });
+      const handler = createHandler({ authzClient: fakeAuthzClient('ALLOW'), docClient });
+
+      const result = await handler(buildEvent('NICHOLS-4471-1798000000'));
+
+      const body = JSON.parse((result as { body: string }).body) as Record<string, unknown>;
+      expect(body.prePlan).toBeNull();
+      // Only the address lookup ran: no coordinates, so no geo match or hydrant search.
+      expect(queries).toHaveBeenCalledOnce();
+    });
+
+    it('falls back to a pre-plan within 50 m of the dispatch coordinates when the address does not match (CAD)', async () => {
+      const { createHandler } = await import('./handler.js');
+      const docClient = routedClient({
+        dispatch: { ...DISPATCH_ITEM, address: '0 Unknown Rd', ...OCCUPANCY_POINT },
+        queries: (input) => {
+          const pk = input.ExpressionAttributeValues[':gsi2pk'];
+          if (typeof pk === 'string' && pk.includes('PREPLAN_GEO')) {
+            return Promise.resolve({ Items: [PRE_PLAN_COPY] });
+          }
+          return Promise.resolve({ Items: [] });
+        },
+      });
+      const handler = createHandler({ authzClient: fakeAuthzClient('ALLOW'), docClient });
+
+      const result = await handler(buildEvent('NICHOLS-4471-1798000000'));
+
+      const body = JSON.parse((result as { body: string }).body) as {
+        prePlan: Record<string, unknown> | null;
+      };
+      expect(body.prePlan).toMatchObject({ summary: 'Multi family — 123 Main Street' });
+    });
+
+    it('keeps the matched pre-plan and degrades only the hydrant list when the hydrant read fails', async () => {
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+      const { createHandler } = await import('./handler.js');
+      const docClient = routedClient({
+        queries: (input) =>
+          input.IndexName === 'GSI1'
+            ? Promise.resolve({ Items: [PRE_PLAN_COPY] })
+            : Promise.reject(new Error('hydrant index unavailable')),
+      });
+      const handler = createHandler({ authzClient: fakeAuthzClient('ALLOW'), docClient });
+
+      const result = await handler(buildEvent('NICHOLS-4471-1798000000'));
+
+      expect(result).toMatchObject({ statusCode: 200 });
+      const body = JSON.parse((result as { body: string }).body) as {
+        prePlan: { hazards: string[]; nearestHydrants: unknown[] };
+      };
+      expect(body.prePlan.hazards).toEqual(['LPG_TANK_REAR']);
+      expect(body.prePlan.nearestHydrants).toEqual([]);
+      const logged = errorSpy.mock.calls.map((call) => call[0] as string).join('\n');
+      expect(logged).toContain('dispatches.detail.hydrant_read_failed');
+      errorSpy.mockRestore();
+    });
+
+    it('never treats a prePlanRef (pre-plan id) as an occupancy id', async () => {
+      const { createHandler } = await import('./handler.js');
+      const gets: string[] = [];
+      const docClient = routedClient({
+        dispatch: { ...DISPATCH_ITEM, prePlanRefs: ['PP-0044'] },
+        onGet: (key) => gets.push(`${key.pk}|${key.sk}`),
+        queries: () => Promise.resolve({ Items: [] }),
+      });
+      const handler = createHandler({ authzClient: fakeAuthzClient('ALLOW'), docClient });
+
+      await handler(buildEvent('NICHOLS-4471-1798000000'));
+
+      expect(gets.some((key) => key.includes('PREPLAN') || key.includes('PP-0044'))).toBe(false);
+    });
   });
 
   describe('mutualAid (officer ladder controls, F1.13)', () => {
     function bySk(items: Record<string, unknown>) {
       return {
-        send: vi.fn((command: { input: { Key: { sk: string } } }) => {
+        send: vi.fn((command: { input: { Key?: { sk: string } } }) => {
+          // Pre-plan enrichment Queries (no Key) find nothing here.
+          if (!command.input.Key) return Promise.resolve({ Items: [] });
           const item = items[command.input.Key.sk];
           return item instanceof Error ? Promise.reject(item) : Promise.resolve({ Item: item });
         }),
@@ -187,19 +359,6 @@ describe('alert-detail handler', () => {
       expect('mutualAid' in body).toBe(false);
       errorSpy.mockRestore();
     });
-  });
-
-  it('AC2: renders full core content with prePlan null when the DISPATCH_ALERT item has no prePlanRefs yet', async () => {
-    const { createHandler } = await import('./handler.js');
-    const docClient = {
-      send: vi.fn().mockResolvedValue({ Item: DISPATCH_ITEM }),
-    } as unknown as DynamoDBDocumentClient;
-    const handler = createHandler({ authzClient: fakeAuthzClient('ALLOW'), docClient });
-
-    const result = await handler(buildEvent('NICHOLS-4471-1798000000'));
-
-    const body = JSON.parse((result as { body: string }).body) as Record<string, unknown>;
-    expect(body.prePlan).toBeNull();
   });
 
   it('returns 400 when dispatchId path parameter is absent', async () => {

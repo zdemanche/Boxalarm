@@ -14,42 +14,100 @@ import { emitOutcomeMetric } from '@boxalarm/metrics';
 import { createDynamoClient, readAlertingConfig } from '../../eligibility/dynamoClient.js';
 import { logError } from '../logger.js';
 import { toMutualAidView, type MutualAidView } from '../../ladderControls/shared.js';
-import {
-  getDispatchDetail,
-  getMutualAidEvent,
-  getPrePlanCopy,
-  type PrePlanCopyItem,
-} from './repository.js';
+import { getDispatchDetail, getMutualAidEvent, type DispatchAlertItem } from './repository.js';
 import { buildMapLink } from './mapLink.js';
 import { dataUnavailableProblem } from './problemDetails.js';
+import {
+  findNearestHydrants,
+  findPrePlanByAddress,
+  findPrePlanNear,
+  type PrePlanCopyItem,
+  type UtilityShutoff,
+} from '../../prePlan/prePlanCopyRepository.js';
+import { isGeoPoint, type GeoPoint } from '../../prePlan/geo.js';
+import type { NearestHydrant } from '../../prePlan/nearestHydrants.js';
 
 const METRICS_NAMESPACE = 'Boxalarm/Alerting';
 
-// TODO(E1-S1/architecture): DISPATCH_ALERT.prePlanRefs holds pre-plan IDs (e.g. "PP-0044",
-// architecture.md:637) but PRE_PLAN_COPY.sk is keyed by occupancyId (e.g. "OCCUPANCY#OCC-0231",
-// architecture.md:734) — two different identifier spaces. alerting-service's data model carries
-// no occupancyId anywhere, so there is currently no correct value to pass here; this lookup is a
-// documented no-op (always misses, AC2's error boundary renders prePlan: null) until either
-// DISPATCH_ALERT gains an occupancyId (an ingress/architecture change owned by another story) or
-// PRE_PLAN_COPY grows a prePlanId-keyed access path. Do not "fix" by treating prePlanRef as an
-// occupancyId — that reintroduces the silent-miss bug this comment documents.
+/** The `prePlan` block of the detail response (web + mobile PrePlanPanel). */
+interface PrePlanView {
+  readonly summary?: string;
+  readonly hazards: readonly string[];
+  readonly utilityShutoffs: readonly UtilityShutoff[];
+  readonly nearestHydrants: readonly NearestHydrant[];
+}
+
+async function matchPrePlan(
+  client: DynamoDBDocumentClient,
+  tableName: string,
+  deptId: VerifiedDeptId,
+  item: DispatchAlertItem,
+  dispatchPoint: GeoPoint | undefined,
+): Promise<PrePlanCopyItem | undefined> {
+  const byAddress = item.address
+    ? await findPrePlanByAddress(client, tableName, deptId, item.address)
+    : undefined;
+  if (byAddress || !dispatchPoint) {
+    return byAddress;
+  }
+  return findPrePlanNear(client, tableName, deptId, dispatchPoint);
+}
+
+/**
+ * Pre-plan + hydrant context for the dispatch: the PRE_PLAN_COPY whose occupancy matches the
+ * dispatch (normalized street address, else within 50 m of the dispatch's own coordinates
+ * when CAD supplies them), and the nearest usable hydrants to that occupancy (or to the
+ * dispatch point when the occupancy has no coordinates).
+ *
+ * Read-side enrichment only — it runs after the page went out and reads nothing but the
+ * alerting table's copies. Any failure degrades to prePlan: null (or, if only the hydrant read
+ * fails, an empty hydrant list); it never fails the dispatch detail.
+ */
 async function fetchPrePlan(
   client: DynamoDBDocumentClient,
   tableName: string,
   deptId: VerifiedDeptId,
-  prePlanRef: string | undefined,
+  item: DispatchAlertItem,
   traceId: string,
-): Promise<PrePlanCopyItem | null> {
-  if (!prePlanRef) {
-    return null;
-  }
+): Promise<PrePlanView | null> {
+  const dispatchLocation = { latitude: item.latitude, longitude: item.longitude };
+  const dispatchPoint = isGeoPoint(dispatchLocation) ? dispatchLocation : undefined;
+
+  let copy: PrePlanCopyItem | undefined;
   try {
-    const item = await getPrePlanCopy(client, tableName, deptId, prePlanRef);
-    return item ?? null;
+    copy = await matchPrePlan(client, tableName, deptId, item, dispatchPoint);
   } catch (error) {
-    logError('dispatches.detail.preplan_read_failed', error, { traceId, prePlanRef });
+    logError('dispatches.detail.preplan_read_failed', error, {
+      traceId,
+      dispatchId: item.dispatchId,
+    });
     return null;
   }
+  if (!copy) {
+    emitOutcomeMetric(METRICS_NAMESPACE, 'AlertDetailPrePlanNoMatch');
+    return null;
+  }
+
+  const occupancyLocation = { latitude: copy.latitude, longitude: copy.longitude };
+  const hydrantReference = isGeoPoint(occupancyLocation) ? occupancyLocation : dispatchPoint;
+  let nearestHydrants: readonly NearestHydrant[] = [];
+  if (hydrantReference) {
+    try {
+      nearestHydrants = await findNearestHydrants(client, tableName, deptId, hydrantReference);
+    } catch (error) {
+      logError('dispatches.detail.hydrant_read_failed', error, {
+        traceId,
+        dispatchId: item.dispatchId,
+      });
+    }
+  }
+  emitOutcomeMetric(METRICS_NAMESPACE, 'AlertDetailPrePlanMatched');
+  return {
+    ...(copy.summary ? { summary: copy.summary } : {}),
+    hazards: copy.hazards ?? [],
+    utilityShutoffs: copy.utilityShutoffs ?? [],
+    nearestHydrants,
+  };
 }
 
 const UNAVAILABLE = Symbol('unavailable');
@@ -101,14 +159,10 @@ async function handleGetAlertDetail(
       return notFoundProblem(traceId, `No dispatch alert found for dispatchId "${dispatchId}"`);
     }
 
-    const prePlan = await fetchPrePlan(
-      doc,
-      config.tableName,
-      deptId,
-      item.prePlanRefs?.[0],
-      traceId,
-    );
-    const mutualAid = await fetchMutualAid(doc, config.tableName, deptId, dispatchId, traceId);
+    const [prePlan, mutualAid] = await Promise.all([
+      fetchPrePlan(doc, config.tableName, deptId, item, traceId),
+      fetchMutualAid(doc, config.tableName, deptId, dispatchId, traceId),
+    ]);
 
     emitOutcomeMetric(METRICS_NAMESPACE, 'AlertDetailViewed');
     return {
