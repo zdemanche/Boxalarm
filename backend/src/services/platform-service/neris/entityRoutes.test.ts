@@ -207,4 +207,25 @@ describe('GET /platform/neris/entity', () => {
       syncError: 'secret missing',
     });
   });
+
+  it('reports a SYNCING row past the worker lifetime as FAILED (timed out; round 2b, R6)', async () => {
+    ddbSend.mockResolvedValue({
+      Item: {
+        syncStatus: 'SYNCING',
+        syncStartedAt: new Date(Date.now() - 7 * 60 * 1000).toISOString(),
+        pendingRequest: VALID,
+      },
+    });
+    const result = (await getHandler(event())) as { body: string };
+    expect(JSON.parse(result.body)).toMatchObject({
+      status: 'FAILED',
+      syncError: expect.stringContaining('timed out') as unknown,
+    });
+
+    ddbSend.mockResolvedValue({
+      Item: { syncStatus: 'SYNCING', syncStartedAt: new Date().toISOString() },
+    });
+    const running = (await getHandler(event())) as { body: string };
+    expect((JSON.parse(running.body) as { status: string }).status).toBe('SYNCING');
+  });
 });

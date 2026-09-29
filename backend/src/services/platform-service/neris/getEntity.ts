@@ -9,7 +9,7 @@ import {
 import { toVerifiedDeptId } from '@boxalarm/dept-scope';
 import { createLogger } from '@boxalarm/logging';
 import { getDynamoDocClient } from '../export/awsClients.js';
-import { getEntityRecord } from './entitySync.js';
+import { getEntityRecord, isAbandonedSync } from './entitySync.js';
 
 const logger = createLogger({ service: 'platform-service' });
 
@@ -26,7 +26,16 @@ async function inner(
   try {
     const tableName = process.env.PLATFORM_TABLE_NAME;
     if (!tableName) throw new Error('PLATFORM_TABLE_NAME is required and was not set');
-    const record = await getEntityRecord(getDynamoDocClient(), tableName, deptId);
+    const stored = await getEntityRecord(getDynamoDocClient(), tableName, deptId);
+    // A worker that timed out never records FAILED itself: past the worker's lifetime the
+    // SYNCING row is reported as the failure it is.
+    const record = isAbandonedSync(stored, new Date())
+      ? {
+          ...stored,
+          syncStatus: 'FAILED' as const,
+          syncError: "The sync didn't finish (it timed out). Try it again.",
+        }
+      : stored;
     const body =
       record?.syncStatus === 'SYNCING'
         ? {

@@ -218,8 +218,20 @@ export interface EntitySyncRow extends Partial<EntitySyncRecord> {
   readonly requestedBy?: string;
 }
 
-/** A SYNCING row older than this was abandoned (worker timeout is 5 minutes). */
-export const SYNC_STALE_MS = 15 * 60 * 1000;
+/**
+ * A SYNCING row older than this was abandoned: the worker's Lambda timeout is 300 s and its
+ * async invoke has no retries, so nothing can still be running after 6 minutes. GET then
+ * reports it FAILED and PUT may start a new sync (round 2b, R6: a timed-out worker never
+ * reaches its own catch).
+ */
+export const SYNC_STALE_MS = 6 * 60 * 1000;
+
+/** True for a SYNCING row whose worker can no longer be running (timed out or lost). */
+export function isAbandonedSync(row: EntitySyncRow | undefined, now: Date): boolean {
+  if (row?.syncStatus !== 'SYNCING' || !row.syncStartedAt) return false;
+  const started = Date.parse(row.syncStartedAt);
+  return Number.isFinite(started) && now.getTime() - started > SYNC_STALE_MS;
+}
 
 export async function getEntityRecord(
   client: DynamoDBDocumentClient,
