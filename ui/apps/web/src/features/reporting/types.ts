@@ -147,3 +147,25 @@ export interface ReportExportJob {
   /** Present only once the job is COMPLETED — a 15-minute signed S3 link. */
   downloadUrl?: string;
 }
+
+// GET reporting/neris-compliance (reporting-service nerisCompliance)
+export interface NerisOpenDraft {
+  id: string;
+  ageHours: number;
+  owner: string;
+  status: string;
+  locked: boolean;
+}
+
+export interface NerisCompliance {
+  windowDays: number;
+  /** 0-100, one decimal; null when no report fell due in the window. */
+  submittedWithin72hPct: number | null;
+  /** 0-100, one decimal; null when nothing was submitted in the window. */
+  rejectionRate: number | null;
+  submittedCount: number;
+  rejectedCount: number;
+  eligibleCount: number;
+  /** Oldest first, at most 20. */
+  openDrafts: NerisOpenDraft[];
+}

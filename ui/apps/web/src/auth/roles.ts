@@ -32,6 +32,16 @@ export function canManageTraining(roles: readonly Role[]): boolean {
   return roles.includes('TRAINING') || roles.includes('ADMIN');
 }
 
+/** Officer review sign-off on an incident report (Cedar LockIncidentReport): OFFICER, CHIEF, ADMIN. */
+export function canLockIncident(roles: readonly Role[]): boolean {
+  return roles.includes('OFFICER') || roles.includes('CHIEF') || roles.includes('ADMIN');
+}
+
+/** Reopening a locked incident report (Cedar UnlockIncidentReport): CHIEF or ADMIN only. */
+export function canUnlockIncident(roles: readonly Role[]): boolean {
+  return roles.includes('CHIEF') || roles.includes('ADMIN');
+}
+
 /** Highest-authority first. Cognito group order is arbitrary, so anything that shows a single
  * role (dashboard choice, the top-bar label) picks by this order, never roles[0]. */
 export const ROLE_PRIORITY: readonly Role[] = [

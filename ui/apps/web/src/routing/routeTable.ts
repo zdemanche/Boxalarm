@@ -40,14 +40,18 @@ export const APP_ROUTES: readonly AppRoute[] = [
     path: '/incidents',
     navPath: '/incidents',
     label: 'Incidents',
-    roles: ['OFFICER', 'CHIEF'],
+    // ADMIN: creates reports (createIncident) and is one of the two roles that may
+    // unlock a reviewed one, so it needs the pages.
+    roles: ['OFFICER', 'CHIEF', 'ADMIN'],
     showInNav: true,
   },
   {
     path: '/incidents/:id',
     navPath: '/incidents',
     label: 'Incident detail',
-    roles: ['OFFICER', 'CHIEF'],
+    // ADMIN: creates reports (createIncident) and is one of the two roles that may
+    // unlock a reviewed one, so it needs the pages.
+    roles: ['OFFICER', 'CHIEF', 'ADMIN'],
     showInNav: false,
   },
   {

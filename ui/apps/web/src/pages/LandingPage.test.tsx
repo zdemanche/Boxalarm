@@ -19,6 +19,17 @@ const server = setupServer(
   http.get('/api/v1/alerting/dispatches', () => HttpResponse.json(EMPTY_ACTIVE)),
   http.get('/api/v1/personnel/shifts', () => HttpResponse.json({ shifts: [] })),
   http.get('/api/v1/training/certifications/expiring', () => HttpResponse.json([])),
+  http.get('/api/v1/reporting/neris-compliance', () =>
+    HttpResponse.json({
+      windowDays: 90,
+      submittedWithin72hPct: null,
+      rejectionRate: null,
+      submittedCount: 0,
+      rejectedCount: 0,
+      eligibleCount: 0,
+      openDrafts: [],
+    }),
+  ),
 );
 
 function serverError(status = 500) {
@@ -328,4 +339,56 @@ test('CHIEF dashboard reads the real { apparatus } list payload into the tiles (
   await screen.findByRole('heading', { name: 'Chief dashboard' });
   expect(await screen.findByText('1 / 2')).toBeTruthy();
   expect(screen.queryByText('Something went wrong loading this page')).toBeNull();
+});
+
+test('NERIS compliance tile shows the on-time and rejection rates and the oldest open drafts', async () => {
+  server.use(
+    http.get('/api/v1/reporting/neris-compliance', () =>
+      HttpResponse.json({
+        windowDays: 90,
+        submittedWithin72hPct: 87.5,
+        rejectionRate: 12.5,
+        submittedCount: 8,
+        rejectedCount: 1,
+        eligibleCount: 8,
+        openDrafts: [
+          { id: 'i-old', ageHours: 130, owner: 'm-3', status: 'DRAFT', locked: false },
+          { id: 'i-new', ageHours: 20, owner: 'm-4', status: 'VALIDATED', locked: true },
+        ],
+      }),
+    ),
+  );
+
+  renderLanding({ sub: 'm1', 'cognito:groups': ['CHIEF'] });
+  const card = within(
+    (await screen.findByRole('heading', { name: 'NERIS compliance' })).parentElement!,
+  );
+  expect(await card.findByText('87.5%')).toBeTruthy();
+  expect(card.getByText('Submitted within 72 h')).toBeTruthy();
+  expect(card.getByText('12.5%')).toBeTruthy();
+  expect(card.getByText('1 of 8 submitted were returned.')).toBeTruthy();
+  expect(card.getByText('Open drafts')).toBeTruthy();
+  const old = card.getByRole('link', { name: 'Incident i-old' });
+  expect(old.getAttribute('href')).toBe('/incidents/i-old');
+  expect(card.getByText(/5 days old · m-3/)).toBeTruthy();
+  expect(card.getByText(/20 h old · m-4 · locked/)).toBeTruthy();
+});
+
+test('NERIS compliance tile explains null rates instead of showing zero', async () => {
+  renderLanding({ sub: 'm1', 'cognito:groups': ['CHIEF'] });
+  const card = within(
+    (await screen.findByRole('heading', { name: 'NERIS compliance' })).parentElement!,
+  );
+  expect(await card.findByText('No reports fell due in the last 90 days.')).toBeTruthy();
+  expect(card.getByText('Nothing was submitted to NERIS in the last 90 days.')).toBeTruthy();
+  expect(card.getAllByText('—')).toHaveLength(2);
+  expect(card.getByText('No open incident drafts.')).toBeTruthy();
+  expect(card.queryByText('0%')).toBeNull();
+});
+
+test('a failed NERIS compliance read says so, never a clean zero', async () => {
+  server.use(http.get('/api/v1/reporting/neris-compliance', () => serverError()));
+  renderLanding({ sub: 'm1', 'cognito:groups': ['CHIEF'] });
+  expect(await screen.findByText(/couldn.t load NERIS compliance/i)).toBeTruthy();
+  expect(screen.getByRole('button', { name: 'Retry NERIS compliance' })).toBeTruthy();
 });

@@ -20,6 +20,11 @@ describe('routeTable', () => {
     expect(labels).not.toContain('Live roster');
   });
 
+  test('ADMIN reaches the incident pages (report unlock is CHIEF/ADMIN)', () => {
+    expect(canAccessPath('/incidents', ['ADMIN'])).toBe(true);
+    expect(canAccessPath('/incidents/NICHOLS-4471-1798000000', ['ADMIN'])).toBe(true);
+  });
+
   test('MEMBER has no PrimaryNav domain routes', () => {
     expect(routesForRoles(['MEMBER'])).toEqual([]);
     expect(firstGrantedNavPath(['MEMBER'])).toBeNull();

@@ -7,6 +7,7 @@ import {
   type IsoReport,
   type LosapYearEndReport,
   type MembershipTrends,
+  type NerisCompliance,
   type ReportExportJob,
   type ReportName,
   type ResponseTimeAnalytics,
@@ -238,6 +239,19 @@ export function reportingDemoRequest(
   if (parts[0] !== 'reporting') return undefined;
 
   if (path === 'reporting/dashboard' && method === 'GET') return json(dashboard());
+
+  if (path === 'reporting/neris-compliance' && method === 'GET') {
+    const compliance: NerisCompliance = {
+      windowDays: Number(query.get('days') ?? 90) || 90,
+      submittedWithin72hPct: 83.3,
+      rejectionRate: 0,
+      submittedCount: 6,
+      rejectedCount: 0,
+      eligibleCount: 6,
+      openDrafts: [{ id: 'i-2', ageHours: 240, owner: 'm-2', status: 'DRAFT', locked: false }],
+    };
+    return json(compliance);
+  }
 
   if (path === 'reporting/response-times' && method === 'GET') {
     const range = epochRange(query);

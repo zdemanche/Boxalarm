@@ -8,8 +8,11 @@ import type {
   PutExposureInput,
   ResponseUnit,
   ResponseUnitType,
+  SubmissionAttempt,
   SubmissionStatus,
+  SubmissionStatusEntry,
   TimeField,
+  ValidationIssue,
 } from './types';
 import { MAX_NARRATIVE_LENGTH, TIME_FIELDS } from './types';
 import {
@@ -24,6 +27,10 @@ function json(data: unknown, status = 200): Response {
     status,
     headers: { 'Content-Type': 'application/json' },
   });
+}
+
+function problemBody(status: number, detail: string): ProblemDetails {
+  return { type: 'about:blank', title: 'Conflict', status, detail, traceId: 'demo' };
 }
 
 function problem(status: number, title: string, detail?: string, errors?: unknown): Response {
@@ -183,6 +190,100 @@ const seededDispatches: Record<
 };
 
 const submissionByIncident = new Map<string, SubmissionStatus>();
+const attemptsByIncident = new Map<string, SubmissionAttempt[]>();
+const historyByIncident = new Map<string, SubmissionStatusEntry[]>();
+const nerisIdByIncident = new Map<string, string>();
+
+function recordAttempt(incidentId: string, operation: 'CREATE' | 'UPDATE'): void {
+  const attempts = attemptsByIncident.get(incidentId) ?? [];
+  const nerisIncidentId = nerisIdByIncident.get(incidentId) ?? `FD09190250|${incidentId}`;
+  nerisIdByIncident.set(incidentId, nerisIncidentId);
+  const at = new Date().toISOString();
+  attemptsByIncident.set(incidentId, [
+    ...attempts,
+    {
+      attempt: attempts.length + 1,
+      attemptedAt: at,
+      outcome: 'SUCCESS',
+      httpStatus: operation === 'CREATE' ? 201 : 200,
+      retryCount: 0,
+      operation,
+      nerisIncidentId,
+      nerisStatus: 'SUBMITTED',
+      errors: [],
+    },
+  ]);
+  const history = (historyByIncident.get(incidentId) ?? []).map((entry) => ({
+    ...entry,
+    current: false,
+  }));
+  historyByIncident.set(incidentId, [...history, { status: 'SUBMITTED', at, current: true }]);
+}
+
+/** Demo review checklist: the local rules the backend runs, reduced to what the demo stores. */
+function demoValidation(incident: Incident, mode: string) {
+  const blocking: ValidationIssue[] = [];
+  const warnings: ValidationIssue[] = [];
+  const missing = missingRequiredCoreFields(CORE_SCHEMA, stringFields(incident.corePayload));
+  for (const field of missing) {
+    blocking.push({
+      path: `fields.${field}`,
+      code: 'REQUIRED',
+      message: `${field.replaceAll('_', ' ')} is required.`,
+      section: 'core',
+    });
+  }
+  const units = unitsByIncident.get(incident.incidentId) ?? [];
+  for (const unit of units) {
+    if (unit.arrivedAt === undefined && unit.dispatchedAt !== undefined) {
+      warnings.push({
+        path: `units.${unit.unitId}.arrivedAt`,
+        code: 'MISSING_TIME',
+        message: `${unit.unitId} has no arrived time.`,
+        section: 'units',
+        fix: {
+          label: `Use dispatch time + 5 min for ${unit.unitId}`,
+          path: `units.${unit.unitId}.arrivedAt`,
+          value: unit.dispatchedAt + 300,
+        },
+      });
+    }
+  }
+  if (!incident.narrative) {
+    blocking.push({
+      path: 'narrative',
+      code: 'REQUIRED',
+      message: 'A narrative is required.',
+      section: 'narrative',
+    });
+  }
+  return {
+    incidentId: incident.incidentId,
+    mode,
+    blocking,
+    warnings,
+    nerisValidatedAt: mode === 'local' ? null : new Date().toISOString(),
+    sectionsComplete: {
+      core: missing.length === 0,
+      dispatch: true,
+      units: warnings.length === 0,
+      narrative: Boolean(incident.narrative),
+      ...(mode === 'local' ? {} : { neris: blocking.length === 0 }),
+    },
+  };
+}
+
+function lockedProblem(incidentId: string): Response {
+  const body: ProblemDetails & { code: string } = {
+    type: 'about:blank',
+    title: 'Conflict',
+    status: 409,
+    detail: `Incident "${incidentId}" is locked; a chief or admin must unlock it before it can be edited.`,
+    traceId: 'demo',
+    code: 'INCIDENT_LOCKED',
+  };
+  return json(body, 409);
+}
 
 function findById(incidentId: string): Incident | undefined {
   return incidents.find((incident) => incident.incidentId === incidentId);
@@ -278,7 +379,114 @@ export async function incidentsDemoRequest(
   if (!incident)
     return problem(404, 'Not Found', `No incident found with incidentId "${incidentId}".`);
 
-  if (parts.length === 2 && method === 'GET') return json(toDetail(incident));
+  if (parts.length === 2 && method === 'GET') {
+    return json({
+      ...toDetail(incident),
+      ...(nerisIdByIncident.has(incidentId)
+        ? { nerisIncidentId: nerisIdByIncident.get(incidentId), nerisStatus: 'SUBMITTED' }
+        : {}),
+    });
+  }
+
+  const editRoutes = ['narrative', 'response-times', 'exposures'];
+  if (
+    incident.lockedAt &&
+    method === 'PUT' &&
+    (parts.length === 2 || editRoutes.includes(parts[2] ?? ''))
+  ) {
+    return lockedProblem(incidentId);
+  }
+
+  if (parts[2] === 'validate' && method === 'POST') {
+    return json(demoValidation(incident, typeof body.mode === 'string' ? body.mode : 'both'));
+  }
+
+  if (parts[2] === 'lock' && method === 'POST') {
+    if (incident.lockedAt) {
+      return json(
+        { ...problemBody(409, 'This report is already locked.'), code: 'ALREADY_LOCKED' },
+        409,
+      );
+    }
+    const report = demoValidation(incident, 'both');
+    if (report.blocking.length > 0) {
+      return json(
+        {
+          ...problemBody(
+            409,
+            `The report can't be locked yet: ${report.blocking.length} item(s) to fix.`,
+          ),
+          code: 'VALIDATION_BLOCKED',
+          ...report,
+        },
+        409,
+      );
+    }
+    const lockedAt = Math.floor(Date.now() / 1000);
+    const lockedIncident: Incident = {
+      ...incident,
+      lockedAt,
+      lockedBy: 'demo-user',
+      status: incident.status === 'DRAFT' ? 'VALIDATED' : incident.status,
+    };
+    incidents = incidents.map((item) => (item.incidentId === incidentId ? lockedIncident : item));
+    return json({
+      incidentId,
+      lockedAt,
+      lockedBy: 'demo-user',
+      status: lockedIncident.status,
+      submission: null,
+      nerisValidatedAt: report.nerisValidatedAt,
+      warnings: report.warnings,
+    });
+  }
+
+  if (parts[2] === 'unlock' && method === 'POST') {
+    const reason = typeof body.reason === 'string' ? body.reason.trim() : '';
+    if (reason.length < 5 || reason.length > 1000) {
+      return problem(400, 'Bad Request', 'reason is required (5-1000 characters).');
+    }
+    if (!incident.lockedAt) {
+      return json({ ...problemBody(409, 'This report is not locked.'), code: 'NOT_LOCKED' }, 409);
+    }
+    const { lockedAt: _lockedAt, lockedBy: _lockedBy, ...unlocked } = incident;
+    void _lockedAt;
+    void _lockedBy;
+    incidents = incidents.map((item) => (item.incidentId === incidentId ? unlocked : item));
+    return json({
+      incidentId,
+      unlockedAt: Math.floor(Date.now() / 1000),
+      unlockedBy: 'demo-user',
+      reason,
+    });
+  }
+
+  if (parts[2] === 'resubmit' && method === 'POST') {
+    if (!incident.lockedAt) {
+      return json({ ...problemBody(409, 'Lock the report first.'), code: 'NOT_LOCKED' }, 409);
+    }
+    const nerisIncidentId = nerisIdByIncident.get(incidentId);
+    if (!nerisIncidentId) {
+      return json(
+        { ...problemBody(409, 'NERIS does not have this report yet.'), code: 'NOT_IN_NERIS' },
+        409,
+      );
+    }
+    if (incident.updatedAt <= (incident.lockedAt ?? 0)) {
+      return json({ incidentId, diff: [], status: 'UNCHANGED' });
+    }
+    recordAttempt(incidentId, 'UPDATE');
+    return json(
+      {
+        incidentId,
+        nerisIncidentId,
+        diff: [{ path: 'narrative', after: incident.narrative ?? '' }],
+        status: 'QUEUED',
+        submissionStatus: 'SUBMITTED',
+      },
+      202,
+    );
+  }
 
   if (parts.length === 2 && method === 'PUT') {
     const fields = body.fields;
@@ -330,10 +538,15 @@ export async function incidentsDemoRequest(
     const submitted: Incident = { ...incident, status: 'SUBMITTED', updatedAt: nowSeconds };
     incidents = incidents.map((item) => (item.incidentId === incidentId ? submitted : item));
     submissionByIncident.set(incidentId, 'SUBMITTED');
+    recordAttempt(incidentId, 'CREATE');
     return json({ incidentId, submissionStatus: 'SUBMITTED' }, 202);
   }
 
-  if (parts[2] === 'submission' && parts.length === 3 && method === 'GET') {
+  if (
+    (parts[2] === 'submission' || parts[2] === 'submissions') &&
+    parts.length === 3 &&
+    method === 'GET'
+  ) {
     const submissionStatus = submissionByIncident.get(incidentId) ?? null;
     if (submissionStatus === 'SUBMITTED' || submissionStatus === 'RETRYING') {
       submissionByIncident.set(incidentId, 'ACCEPTED');
@@ -341,7 +554,22 @@ export async function incidentsDemoRequest(
         item.incidentId === incidentId ? { ...item, status: 'ACCEPTED' } : item,
       );
     }
-    return json({ incidentId, status: incident.status, submissionStatus });
+    const current = findById(incidentId) ?? incident;
+    return json({
+      incidentId,
+      status: current.status,
+      submissionStatus,
+      nerisIncidentId: nerisIdByIncident.get(incidentId) ?? null,
+      nerisStatus: nerisIdByIncident.has(incidentId) ? 'SUBMITTED' : null,
+      nerisStatusAt: null,
+      lockedAt: current.lockedAt ?? null,
+      lockedBy: current.lockedBy ?? null,
+      payloadHash: null,
+      firstSubmittedAt: null,
+      editedSinceSubmission: false,
+      attempts: attemptsByIncident.get(incidentId) ?? [],
+      statusHistory: historyByIncident.get(incidentId) ?? [],
+    });
   }
 
   if (parts[2] === 'submission' && parts[3] === 'retry' && method === 'POST') {

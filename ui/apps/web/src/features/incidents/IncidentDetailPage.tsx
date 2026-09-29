@@ -12,6 +12,7 @@ import {
   fieldErrorsFromUnknown,
   getIncident,
   getSubmission,
+  problemCode,
   putExposure,
   putNarrative,
   putResponseTimes,
@@ -20,6 +21,9 @@ import {
   updateIncident,
 } from './api';
 import { focusFieldById } from './focusField';
+import { NerisReviewPanel } from './NerisReviewPanel';
+import { focusTargetFor } from './reviewFix';
+import { SubmissionLedger } from './SubmissionLedger';
 import { coreStrings, dateTimeLocalToEpoch, epochToDateTimeLocal, formatTimestamp } from './format';
 import { CORE_SCHEMA, fieldLabel, SECONDARY_SCHEMA, SECONDARY_TYPES } from './nerisSchema';
 import type {
@@ -29,6 +33,7 @@ import type {
   ResponseUnit,
   SubmissionStatus,
   TimeField,
+  ValidationIssue,
 } from './types';
 import { MAX_NARRATIVE_LENGTH, TIME_FIELDS } from './types';
 import {
@@ -137,6 +142,9 @@ function IncidentReport({ incident }: { incident: IncidentDetail }) {
   const [focusErrors, setFocusErrors] = useState(0);
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
+  const lockedBannerRef = useRef<HTMLDivElement>(null);
+  const pendingFieldFocus = useRef<string | null>(null);
+  const locked = typeof incident.lockedAt === 'number';
 
   const submitted = incident.status !== 'DRAFT' && incident.status !== 'VALIDATED';
   const submissionQuery = useQuery({
@@ -183,6 +191,21 @@ function IncidentReport({ incident }: { incident: IncidentDetail }) {
     headingRef.current?.focus();
   }, [step]);
 
+  // "Go to" from the review checklist: after the step renders, land on the field it names.
+  useEffect(() => {
+    const fieldId = pendingFieldFocus.current;
+    if (!fieldId) return;
+    pendingFieldFocus.current = null;
+    if (document.getElementById(fieldId)) focusFieldById(fieldId);
+  });
+
+  // Once locked, move focus to the banner that says edits are closed.
+  const wasLocked = useRef(locked);
+  useEffect(() => {
+    if (!wasLocked.current && locked) lockedBannerRef.current?.focus();
+    wasLocked.current = locked;
+  }, [locked]);
+
   useEffect(() => {
     if (focusErrors === 0) return;
     const first = errors[0];
@@ -224,6 +247,41 @@ function IncidentReport({ incident }: { incident: IncidentDetail }) {
     queryClient.setQueryData<IncidentDetail>(['incident', incident.incidentId], (current) =>
       current ? mergeDetail(current, patch) : current,
     );
+    void queryClient.invalidateQueries({
+      queryKey: ['incident-validation', incident.incidentId],
+    });
+  }
+
+  /** A fix applied from the review checklist: cache it and keep the step forms in step. */
+  function applyReviewPatch(patch: Partial<IncidentDetail>) {
+    writeIncident(patch);
+    if (patch.corePayload) {
+      const next = coreStrings(patch.corePayload);
+      setFields((current) => ({ ...current, ...next }));
+    }
+    if (typeof patch.narrative === 'string') setNarrative(patch.narrative);
+  }
+
+  function goToIssue(issue: ValidationIssue) {
+    const target = focusTargetFor(issue);
+    const index = steps.findIndex((item) => item.id === target.stepId);
+    pendingFieldFocus.current = target.fieldId ?? null;
+    if (index >= 0 && index !== step) {
+      selectStep(index);
+    } else if (target.fieldId && document.getElementById(target.fieldId)) {
+      pendingFieldFocus.current = null;
+      focusFieldById(target.fieldId);
+    } else {
+      pendingFieldFocus.current = null;
+      headingRef.current?.focus();
+    }
+  }
+
+  /** The server closes edits on a locked report (409 INCIDENT_LOCKED); re-read the lock. */
+  function noteLocked(error: unknown) {
+    if (problemCode(error) === 'INCIDENT_LOCKED') {
+      void queryClient.invalidateQueries({ queryKey: ['incident', incident.incidentId] });
+    }
   }
 
   async function saveCore(keys: string[], advance: boolean) {
@@ -249,6 +307,7 @@ function IncidentReport({ incident }: { incident: IncidentDetail }) {
       setErrors([]);
       if (advance) selectStep(step + 1);
     } catch (error) {
+      noteLocked(error);
       const serverErrors = fieldErrorsFromUnknown(error);
       if (serverErrors.length > 0) {
         showErrors(serverErrors);
@@ -276,6 +335,7 @@ function IncidentReport({ incident }: { incident: IncidentDetail }) {
       setNarrative(updated.narrative ?? narrative);
       setAnnounce('Narrative saved.');
     } catch (error) {
+      noteLocked(error);
       const detail =
         error instanceof ApiError
           ? (error.problem.detail ?? error.problem.title)
@@ -310,6 +370,7 @@ function IncidentReport({ incident }: { incident: IncidentDetail }) {
       writeIncident({ respondingUnits: units });
       setAnnounce(`${TIME_LABEL[field]} saved for ${unit.unitId}.`);
     } catch (error) {
+      noteLocked(error);
       setFormError(
         error instanceof ApiError
           ? (error.problem.detail ?? error.problem.title)
@@ -378,6 +439,7 @@ function IncidentReport({ incident }: { incident: IncidentDetail }) {
           : `${secondaryTitle(saved.secondaryType)} saved. Required fields are still missing.`,
       );
     } catch (error) {
+      noteLocked(error);
       const serverErrors = fieldErrorsFromUnknown(error);
       if (serverErrors.length > 0) {
         showErrors(serverErrors);
@@ -445,6 +507,12 @@ function IncidentReport({ incident }: { incident: IncidentDetail }) {
       <p className="visually-hidden" aria-live="polite">
         {announce}
       </p>
+      {locked ? (
+        <div ref={lockedBannerRef} tabIndex={-1} role="status" className={styles.lockedBanner}>
+          Locked by {incident.lockedBy ?? 'an officer'} at {formatTimestamp(incident.lockedAt ?? 0)}
+          ; edits are closed.
+        </div>
+      ) : null}
       <div className={styles.layout}>
         <nav aria-label="Report steps">
           <ol className={styles.steps} onKeyDown={onStepKeyDown}>
@@ -476,7 +544,9 @@ function IncidentReport({ incident }: { incident: IncidentDetail }) {
               {formError}
             </div>
           ) : null}
-          {active ? <StepBody stepId={active.id} /> : null}
+          {/* Called, not rendered as <StepBody />: a component declared inside render is a new
+              type every render, which remounted the step (and dropped focus) on each keystroke. */}
+          {active ? renderStep(active.id) : null}
         </section>
 
         <aside className={styles.issues} aria-label="Validation">
@@ -495,12 +565,13 @@ function IncidentReport({ incident }: { incident: IncidentDetail }) {
               ))}
             </ul>
           ) : null}
+          <NerisReviewPanel incident={incident} onPatched={applyReviewPatch} onGoTo={goToIssue} />
         </aside>
       </div>
     </main>
   );
 
-  function StepBody({ stepId }: { stepId: StepId }) {
+  function renderStep(stepId: StepId) {
     if (stepId === 'dispatch') {
       const units = (incident.respondingUnits ?? []).map((unit) => unit.unitId).join(', ');
       const members = (incident.respondingMembers ?? [])
@@ -574,6 +645,7 @@ function IncidentReport({ incident }: { incident: IncidentDetail }) {
             <Button
               type="button"
               loading={saving}
+              disabled={locked}
               onClick={() => void saveCore(['cross_streets'], true)}
             >
               Save and continue
@@ -602,6 +674,7 @@ function IncidentReport({ incident }: { incident: IncidentDetail }) {
             <Button
               type="button"
               loading={saving}
+              disabled={locked}
               onClick={() => void saveCore(['incident_type', 'action_taken'], true)}
             >
               Save and continue
@@ -635,6 +708,7 @@ function IncidentReport({ incident }: { incident: IncidentDetail }) {
                   {TIME_FIELDS.map((field) => (
                     <div key={field} className={styles.timeField}>
                       <TextInput
+                        key={`${field}-${unit[field] ?? ''}`}
                         id={`field-${unit.unitId.replaceAll(' ', '-')}-${field}`}
                         label={`${TIME_LABEL[field]} for ${unit.unitId}`}
                         type="datetime-local"
@@ -643,6 +717,7 @@ function IncidentReport({ incident }: { incident: IncidentDetail }) {
                       <Button
                         type="button"
                         variant="secondary"
+                        disabled={locked}
                         onClick={() => void saveTime(unit, field)}
                       >
                         Save {TIME_LABEL[field].toLowerCase()} time for {unit.unitId}
@@ -679,7 +754,12 @@ function IncidentReport({ incident }: { incident: IncidentDetail }) {
             characters
           </p>
           <div className={styles.actions}>
-            <Button type="button" loading={saving} onClick={() => void saveNarrative()}>
+            <Button
+              type="button"
+              loading={saving}
+              disabled={locked}
+              onClick={() => void saveNarrative()}
+            >
               Save narrative
             </Button>
             <Button type="button" variant="secondary" onClick={() => selectStep(step + 1)}>
@@ -759,7 +839,12 @@ function IncidentReport({ incident }: { incident: IncidentDetail }) {
             />
           </fieldset>
           <div className={styles.actions}>
-            <Button type="button" loading={saving} onClick={() => void markComplete()}>
+            <Button
+              type="button"
+              loading={saving}
+              disabled={locked}
+              onClick={() => void markComplete()}
+            >
               Mark complete
             </Button>
           </div>
@@ -777,7 +862,7 @@ function IncidentReport({ incident }: { incident: IncidentDetail }) {
         </p>
         {submitError ? <p role="alert">{submitError}</p> : null}
         {submitted ? (
-          <SubmissionPanel />
+          renderSubmissionPanel()
         ) : (
           <>
             <p id="submit-status">
@@ -800,7 +885,7 @@ function IncidentReport({ incident }: { incident: IncidentDetail }) {
     );
   }
 
-  function SubmissionPanel() {
+  function renderSubmissionPanel() {
     if (submissionQuery.isLoading) {
       return <p aria-busy="true">Checking the NERIS submission status.</p>;
     }
@@ -818,24 +903,27 @@ function IncidentReport({ incident }: { incident: IncidentDetail }) {
     const state = submissionQuery.data;
     const status = state?.submissionStatus ?? null;
     return (
-      <div aria-live="polite">
-        <p>
-          NERIS submission:{' '}
-          {status ? (
-            <StatusChip status={SUBMISSION_ROLE[status]}>{SUBMISSION_LABEL[status]}</StatusChip>
-          ) : (
-            'Not sent to NERIS.'
-          )}
-        </p>
-        {status === 'FAILED' ? (
-          <>
-            <p>Reason: {state?.submissionFailureReason ?? 'NERIS did not give a reason.'}</p>
-            <Button type="button" loading={submitting} onClick={() => void retryNeris()}>
-              Retry submission
-            </Button>
-          </>
-        ) : null}
-      </div>
+      <>
+        <div aria-live="polite">
+          <p>
+            NERIS submission:{' '}
+            {status ? (
+              <StatusChip status={SUBMISSION_ROLE[status]}>{SUBMISSION_LABEL[status]}</StatusChip>
+            ) : (
+              'Not sent to NERIS.'
+            )}
+          </p>
+          {status === 'FAILED' ? (
+            <>
+              <p>Reason: {state?.submissionFailureReason ?? 'NERIS did not give a reason.'}</p>
+              <Button type="button" loading={submitting} onClick={() => void retryNeris()}>
+                Retry submission
+              </Button>
+            </>
+          ) : null}
+        </div>
+        {state ? <SubmissionLedger state={state} locked={locked} /> : null}
+      </>
     );
   }
 }

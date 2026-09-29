@@ -574,3 +574,56 @@ test('bell: nothing unread says so', async () => {
 
   expect(await screen.findByRole('link', { name: 'Notifications, none unread' })).toBeTruthy();
 });
+
+test('NERIS notifications are labelled and link to the incident report, or the list without an id', async () => {
+  server.use(
+    http.get('/api/v1/notifications', () =>
+      HttpResponse.json({
+        items: [
+          {
+            notificationId: 'n-rejected',
+            category: 'neris-rejected',
+            summary: '1 report returned',
+            items: [
+              {
+                subjectId: 'i-7',
+                title: 'Incident 26-001841',
+                detail: 'returned by NERIS',
+                link: { kind: 'incident', id: 'i-7' },
+              },
+            ],
+            createdAt: Date.parse('2026-09-29T12:00:00Z'),
+            readAt: null,
+          },
+          {
+            notificationId: 'n-no-activity',
+            category: 'neris-no-activity',
+            summary: 'No incidents this week',
+            items: [
+              {
+                subjectId: 'week-39',
+                title: 'Week 39',
+                detail: 'no-activity report due',
+                link: { kind: 'incident' },
+              },
+            ],
+            createdAt: Date.parse('2026-09-29T12:00:00Z'),
+            readAt: null,
+          },
+        ],
+        nextCursor: null,
+      }),
+    ),
+    NO_PREFS,
+  );
+  renderWithProviders(<NotificationsPage />, '/notifications', ['MEMBER', 'OFFICER']);
+
+  expect(await screen.findByText('NERIS returned a report')).toBeTruthy();
+  expect(screen.getByText('No-activity report due')).toBeTruthy();
+  expect(
+    screen.getByRole('link', { name: 'Incident 26-001841 returned by NERIS' }).getAttribute('href'),
+  ).toBe('/incidents/i-7');
+  expect(
+    screen.getByRole('link', { name: 'Week 39 no-activity report due' }).getAttribute('href'),
+  ).toBe('/incidents');
+});

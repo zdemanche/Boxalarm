@@ -11,6 +11,7 @@ import { listMembers } from '../features/personnel/api';
 import type { Member } from '../features/personnel/types';
 import { listShifts } from '../features/schedule/api';
 import type { DutyShift } from '../features/schedule/types';
+import { NerisComplianceTile } from '../features/reporting/NerisComplianceTile';
 import { listExpiringCertifications } from '../features/training/api';
 import type { ExpiringCertification } from '../features/training/types';
 import { ApiError } from '../lib/apiClient';
@@ -35,6 +36,9 @@ const DASHBOARD_ROLES: readonly Role[] = ['CHIEF', 'ADMIN', 'OFFICER', 'APPARATU
 // action (infrastructure/components/authz/cedar-policies.ts OFFICER_TIER_GROUPS). A role outside
 // it would only ever get a 403, so it never asks (same rule as MAJOR-3 below).
 const EXPIRING_CERT_ROLES: readonly Role[] = ['OFFICER', 'TRAINING', 'CHIEF', 'ADMIN'];
+
+// GET reporting/neris-compliance is officer/chief/admin (reporting-service nerisCompliance).
+const NERIS_COMPLIANCE_ROLES: readonly Role[] = ['OFFICER', 'CHIEF', 'ADMIN'];
 
 // The dashboard shows the next few expiring certs; the full list lives on /certifications.
 const EXPIRING_CERTS_SHOWN = 5;
@@ -385,6 +389,9 @@ function CommandConsole() {
             members={membersQuery.data}
             canOpenCertifications={canAccessPath('/certifications', auth.roles)}
           />
+        ) : null}
+        {auth.roles.some((r) => NERIS_COMPLIANCE_ROLES.includes(r)) ? (
+          <NerisComplianceTile />
         ) : null}
       </div>
     </>

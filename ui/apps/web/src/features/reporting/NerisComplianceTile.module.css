@@ -1,0 +1,39 @@
+.statGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: var(--bx-space-md);
+}
+
+.message {
+  margin: var(--bx-space-sm) 0;
+  color: var(--bx-fg-muted);
+  font-size: 14px;
+}
+
+.list {
+  list-style: none;
+  margin: var(--bx-space-sm) 0 0;
+  padding: 0;
+}
+
+.item {
+  padding: var(--bx-space-xs) 0;
+  overflow-wrap: anywhere;
+}
+
+.item a {
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--bx-target-office);
+}
+
+.meta {
+  color: var(--bx-fg-muted);
+}
+
+.error {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--bx-space-sm);
+}

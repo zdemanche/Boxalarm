@@ -147,3 +147,116 @@
 .narrative {
   min-height: 12rem;
 }
+
+.lockedBanner {
+  margin: 0 0 var(--bx-space-md);
+  padding: var(--bx-space-sm) var(--bx-space-md);
+  border: 1px solid var(--bx-border-strong);
+  border-left: 4px solid var(--bx-status-info);
+  border-radius: var(--bx-radius-md);
+  background: var(--bx-surface);
+  font-weight: 600;
+}
+
+.review,
+.ledger {
+  display: grid;
+  gap: var(--bx-space-sm);
+}
+
+.review h2 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.ledger h3 {
+  margin: 0;
+}
+
+.subheading {
+  margin: var(--bx-space-xs) 0 0;
+  font-size: 0.9375rem;
+}
+
+.issueList,
+.plainList,
+.chips {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: var(--bx-space-sm);
+}
+
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--bx-space-xs);
+}
+
+.issue {
+  display: grid;
+  gap: var(--bx-space-xs);
+  padding: var(--bx-space-sm);
+  border: 1px solid var(--bx-border-decorative);
+  border-radius: var(--bx-radius-md);
+  background: var(--bx-bg);
+}
+
+.issueMessage {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.refused {
+  margin: 0;
+  padding: var(--bx-space-xs) var(--bx-space-sm);
+  border-left: 3px solid var(--bx-status-danger);
+  font-weight: 600;
+}
+
+.lockBox {
+  display: grid;
+  gap: var(--bx-space-xs);
+  padding-top: var(--bx-space-sm);
+  border-top: 1px solid var(--bx-border-decorative);
+}
+
+.facts {
+  display: grid;
+  gap: var(--bx-space-xs);
+  margin: 0;
+}
+
+.facts > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--bx-space-xs);
+  align-items: center;
+}
+
+.facts dt {
+  font-weight: 600;
+}
+
+.facts dt::after {
+  content: ':';
+}
+
+.facts dd {
+  margin: 0;
+}
+
+.notice {
+  margin: 0;
+  padding: var(--bx-space-sm) var(--bx-space-md);
+  border-left: 3px solid var(--bx-status-warning);
+  background: var(--bx-surface);
+}
+
+.timeline {
+  margin: 0;
+  padding-left: var(--bx-space-lg);
+  display: grid;
+  gap: var(--bx-space-xs);
+}
