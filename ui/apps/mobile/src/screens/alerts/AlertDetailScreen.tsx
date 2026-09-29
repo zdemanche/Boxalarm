@@ -176,10 +176,21 @@ export function AlertDetailScreen() {
     void silenceDispatchNotification(dispatchId);
   }, [dispatchId]);
 
+  // Round 2 m2-2: an alert whose answer has reached the server no longer needs to be over the
+  // keyguard - left open on a locked phone, anyone could change the member's answer from the lock
+  // screen. Dropped once the answer is sent; a new page's full-screen launch (native) or a new
+  // call's alert screen sets it again.
+  const answerSent = response.answer !== null && response.delivery === 'sent';
+  const answerSentRef = useRef(answerSent);
+  answerSentRef.current = answerSent;
+  useEffect(() => {
+    if (answerSent) setAlertShowsOverLockScreen(false);
+  }, [answerSent]);
+
   useEffect(() => {
     let cancelled = false;
     const onFocus = () => {
-      setAlertShowsOverLockScreen(true);
+      if (!answerSentRef.current) setAlertShowsOverLockScreen(true);
       if (AppState.currentState !== 'active') return;
       void isDeviceLocked().then((locked) => {
         if (!cancelled && locked === false) silence();

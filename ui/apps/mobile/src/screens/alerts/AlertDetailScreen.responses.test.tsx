@@ -1,5 +1,6 @@
 import NetInfo from '@react-native-community/netinfo';
 import { act, fireEvent, render, screen } from '@testing-library/react-native';
+import { NativeModules, Platform } from 'react-native';
 import Config from 'react-native-config';
 import { useOptionalAuth } from '../../auth/AuthContext';
 import { ApiError, apiRequest } from '../../lib/apiClient';
@@ -349,4 +350,45 @@ test('with no answer on this phone, the server roster seeds the member’s own a
 
   expect(await screen.findByText(/your response: direct to scene/i)).toBeTruthy();
   expect(screen.getByText('Sent')).toBeTruthy();
+});
+
+describe('lock screen after answering (round 2 m2-2)', () => {
+  const nativeModules = NativeModules as { BoxalarmAlertReadiness?: unknown };
+  let setShowWhenLocked: jest.Mock;
+
+  beforeEach(async () => {
+    // A fresh call: no answer left on the phone by an earlier test.
+    await kvDelete('alert-answer:D-1');
+    Platform.OS = 'android';
+    setShowWhenLocked = jest.fn();
+    nativeModules.BoxalarmAlertReadiness = {
+      isKeyguardLocked: jest.fn(async () => true),
+      setShowWhenLocked,
+    };
+  });
+
+  afterEach(() => {
+    delete nativeModules.BoxalarmAlertReadiness;
+    Platform.OS = 'ios';
+  });
+
+  test('once the answer is sent, the alert stops showing over the keyguard', async () => {
+    await renderScreen();
+    expect(setShowWhenLocked).toHaveBeenLastCalledWith(true);
+
+    await tap(/^Not responding/);
+    expect(await screen.findByText('Sent')).toBeTruthy();
+
+    expect(setShowWhenLocked).toHaveBeenLastCalledWith(false);
+  });
+
+  test('an answer that is not sent yet keeps the alert over the keyguard (its warning must stay visible)', async () => {
+    mockNetInfoFetch.mockResolvedValue({ isConnected: false });
+    await renderScreen(false);
+
+    await tap(/^Not responding/);
+    expect(await screen.findByText('Not sent yet')).toBeTruthy();
+
+    expect(setShowWhenLocked).not.toHaveBeenCalledWith(false);
+  });
 });
