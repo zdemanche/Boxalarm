@@ -33,8 +33,9 @@ export interface NearestHydrant {
 
 /**
  * How the server tied the pre-plan to this dispatch (alerting dispatches/detail/prePlanContext.ts).
- * Only ADDRESS / ADDRESS_BUILDING are this building's own plan; the rest must be shown as
- * "verify address", never as the call's plan.
+ * Only ADDRESS is this building's own plan. Everything else, ADDRESS_BUILDING included (the
+ * building's plan for a unit that has none of its own), is shown flagged "VERIFY ADDRESS",
+ * never as the call's plan.
  */
 export type PrePlanMatchType =
   'ADDRESS' | 'ADDRESS_BUILDING' | 'ADDRESS_UNVERIFIED' | 'UNIT_MISMATCH' | 'NEARBY' | 'CANDIDATES';

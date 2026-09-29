@@ -6,6 +6,8 @@ export type SourceSystem = 'CAD' | 'MANUAL' | 'SELF_TEST';
  * Where the incident is, as the dispatcher chose it: one of the department's home towns or
  * villages (HOME), or another town typed in (OTHER). Enrichment only — the pre-plan lookup
  * uses it to confirm a street address is in this department's area; fan-out never reads it.
+ * Only `town` is matched on; `choice` is stored for the record (which list the dispatcher
+ * picked from) and is not read by the matcher.
  */
 export interface DispatchLocality {
   readonly town: string;

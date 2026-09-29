@@ -182,10 +182,11 @@ function closeEnough(dispatchPoint: GeoPoint | undefined, candidate: PrePlanCopy
   return haversineMeters(dispatchPoint, location) <= ADDRESS_MATCH_MAX_DISTANCE_METERS;
 }
 
-/** How a pre-plan was tied to the dispatch — shown to the crew, never hidden. */
 /**
- * ADDRESS / ADDRESS_BUILDING are the only unflagged types: same key, both addresses parsed
- * unambiguously, locality verified (locality.ts). Everything else is shown "verify address".
+ * How a pre-plan was tied to the dispatch — shown to the crew, never hidden.
+ * ADDRESS is the only unflagged type: same key, both addresses parsed unambiguously, locality
+ * verified (locality.ts). ADDRESS_BUILDING (the building's plan for a dispatched unit that has
+ * none of its own) is always shown flagged, like everything else ("verify address").
  */
 export type PrePlanMatchType =
   'ADDRESS' | 'ADDRESS_BUILDING' | 'ADDRESS_UNVERIFIED' | 'UNIT_MISMATCH' | 'NEARBY' | 'CANDIDATES';
