@@ -259,6 +259,100 @@ describe("HttpApi", () => {
     ]);
   });
 
+  // Review M4: one shared stage throttle and one authorizer concurrency pool let a flood of
+  // junk tokens on any route starve manual dispatch and responding to a call.
+  describe("reserved alerting capacity (M4)", () => {
+    async function buildApi(suffix: string) {
+      const { ServiceLogGroup } = await import("../../components/observability/service-log-group");
+      const { HttpApi } = await import("../../components/api/http-api");
+      const logGroup = new ServiceLogGroup(`platform-log-group-m4-${suffix}`, {
+        env: "dev",
+        serviceName: "platform-service",
+      });
+      const api = new HttpApi(`http-api-m4-${suffix}`, {
+        env: "dev",
+        userPoolId: "us-east-1_pool",
+        platformTableName: "platform-table",
+        platformTableArn: "arn:aws:dynamodb:us-east-1:123456789012:table/platform",
+        allowedClientIds: ["web-client-id"],
+        platformLogGroup: logGroup,
+      });
+      return api;
+    }
+
+    it("routes the reserved alerting routes through their own authorizer with its own concurrency", async () => {
+      const { ALERTING_RESERVED_ROUTES } = await import("../../components/api/http-api");
+      const api = await buildApi("authorizer");
+      const reserved = api.authorizedRoute("respond", {
+        routeKey: "POST /api/v1/alerting/dispatches/{dispatchId}/responses",
+      });
+      const other = api.authorizedRoute("roster", { routeKey: "GET /api/v1/personnel/members" });
+      api.sealRouteSettings();
+
+      const [reservedAuth, otherAuth, alertingId, mainId, reservedConcurrency, fnName, env] =
+        await Promise.all([
+          resolve(reserved.authorizerId as pulumi.Output<string>),
+          resolve(other.authorizerId as pulumi.Output<string>),
+          resolve(api.alertingAuthorizer.id),
+          resolve(api.authorizer.id),
+          resolve(api.alertingAuthorizerLambda.function.reservedConcurrentExecutions),
+          resolve(api.alertingAuthorizerLambda.function.name),
+          resolve(api.alertingAuthorizerLambda.function.environment),
+        ]);
+      expect(reservedAuth).toBe(alertingId);
+      expect(otherAuth).toBe(mainId);
+      expect(alertingId).not.toBe(mainId);
+      expect(reservedConcurrency).toBe(10);
+      expect(fnName).toBe("boxalarm-dev-platform-authorizer-alerting");
+      // Same verification and revocation check as the main authorizer.
+      expect(env?.variables?.PLATFORM_TABLE_NAME).toBe("platform-table");
+      expect(Object.keys(ALERTING_RESERVED_ROUTES)).toContain(
+        "POST /api/v1/alerting/dispatches/{dispatchId}/responses",
+      );
+      await settle(api);
+    });
+
+    it("gives each reserved route its own stage throttle and leaves other routes on the default", async () => {
+      const api = await buildApi("settings");
+      api.authorizedRoute("dispatch", { routeKey: "POST /api/v1/alerting/dispatches" });
+      api.authorizedRoute("respond", {
+        routeKey: "POST /api/v1/alerting/dispatches/{dispatchId}/responses",
+      });
+      api.authorizedRoute("roster", { routeKey: "GET /api/v1/personnel/members" });
+      api.sealRouteSettings();
+
+      const settings = await resolve(api.stage.routeSettings);
+      expect(settings).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            routeKey: "POST /api/v1/alerting/dispatches",
+            throttlingRateLimit: 5,
+            throttlingBurstLimit: 10,
+          }),
+          expect.objectContaining({
+            routeKey: "POST /api/v1/alerting/dispatches/{dispatchId}/responses",
+            throttlingRateLimit: 25,
+            throttlingBurstLimit: 50,
+          }),
+        ]),
+      );
+      expect(settings).toHaveLength(2);
+      expect(settings?.map((st) => st.routeKey)).not.toContain("GET /api/v1/personnel/members");
+      await settle(api);
+    });
+
+    it("refuses to seal with requireAll when a reserved route was never registered", async () => {
+      const api = await buildApi("require-all");
+      api.authorizedRoute("dispatch", { routeKey: "POST /api/v1/alerting/dispatches" });
+
+      expect(() => api.sealRouteSettings({ requireAll: true })).toThrow(
+        /reserved alerting routes never registered/,
+      );
+      api.sealRouteSettings();
+      await settle(api);
+    });
+  });
+
   it("authorizedRoute always attaches CUSTOM + this authorizer (no open routes)", async () => {
     const { ServiceLogGroup } = await import("../../components/observability/service-log-group");
     const { HttpApi } = await import("../../components/api/http-api");
