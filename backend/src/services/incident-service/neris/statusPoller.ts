@@ -163,6 +163,7 @@ export async function pollRecord(
                         ? metadata.dispatchNumber
                         : open.incidentId,
                     ownerId: typeof metadata.createdBy === 'string' ? metadata.createdBy : null,
+                    lockedBy: typeof metadata.lockedBy === 'string' ? metadata.lockedBy : null,
                     statusAt: current.lastModified,
                   }),
                 },

@@ -162,6 +162,18 @@ export function expectedNerisIncidentId(
   return `${departmentNerisId}|${number}|${Math.floor(callCreate / 1000)}`;
 }
 
+function notifyFor(incident: {
+  readonly createdBy: string;
+  readonly lockedBy?: string;
+  readonly dispatchNumber: string;
+}) {
+  return {
+    ownerId: incident.createdBy,
+    ...(incident.lockedBy ? { lockedBy: incident.lockedBy } : {}),
+    incidentNumber: incident.dispatchNumber,
+  };
+}
+
 function looksLikeDuplicate(issues: readonly NerisIssue[]): boolean {
   return issues.some((issue) => /already exists|duplicate/i.test(issue.message));
 }
@@ -241,6 +253,7 @@ async function attemptSubmission(
         retryCount: payload.retryCount,
         nerisEnvironment,
         failureReason,
+        notify: notifyFor(incident),
       },
       true,
       Math.floor(Date.now() / 1000),
@@ -371,6 +384,7 @@ async function attemptSubmission(
       httpStatus,
       retryCount: payload.retryCount,
       nerisEnvironment,
+      notify: notifyFor(incident),
       operation,
       payloadHash: hash,
       ...(nerisIncidentId !== undefined ? { nerisIncidentId } : {}),

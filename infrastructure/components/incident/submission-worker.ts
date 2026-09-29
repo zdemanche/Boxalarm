@@ -18,6 +18,8 @@ export interface NerisSubmissionWorkerArgs {
   /** Schema pins: the worker deep-picks every payload to the compiled NERIS schema. */
   nerisSchemaBucketArn: pulumi.Input<string>;
   nerisSchemaBucketName: pulumi.Input<string>;
+  /** The chief's LOB notification topic (never the alerting page topic). */
+  chiefNotificationTopicArn: pulumi.Input<string>;
   logGroup: ServiceLogGroup;
 }
 
@@ -42,6 +44,7 @@ export class NerisSubmissionWorker extends pulumi.ComponentResource {
   public readonly schedulerRole: aws.iam.Role;
   public readonly consumer: QueueConsumer;
   public readonly scheduleResourcePattern: pulumi.Output<string>;
+  public readonly failureAlarms: aws.cloudwatch.MetricAlarm[];
 
   constructor(
     name: string,
@@ -208,6 +211,39 @@ export class NerisSubmissionWorker extends pulumi.ComponentResource {
         reportBatchItemFailures: true,
       },
       { parent: this },
+    );
+
+    // Terminal failures the report owner cannot fix alone (review M6): a 401/403/404 from
+    // NERIS (credentials revoked, wrong entity id) and a department not configured for
+    // NERIS. Both page the chief's LOB topic on the first occurrence.
+    this.failureAlarms = [
+      [
+        "ClientError",
+        "NERIS refused the department's credentials, entity id or a record id (HTTP 401/403/404).",
+      ],
+      [
+        "NotConfigured",
+        "A locked report could not be sent: the department NERIS id or the NERIS schema is missing.",
+      ],
+    ].map(
+      ([metricName, description]) =>
+        new aws.cloudwatch.MetricAlarm(
+          `${name}-${metricName!.toLowerCase()}-alarm`,
+          {
+            name: `boxalarm-${env}-incident-neris-${metricName!.toLowerCase()}`,
+            alarmDescription: description!,
+            namespace: "Boxalarm/incident-service",
+            metricName: metricName!,
+            statistic: "Sum",
+            period: 300,
+            evaluationPeriods: 1,
+            threshold: 0,
+            comparisonOperator: "GreaterThanThreshold",
+            treatMissingData: "notBreaching",
+            alarmActions: [args.chiefNotificationTopicArn],
+          },
+          { parent: this },
+        ),
     );
 
     this.registerOutputs({

@@ -149,6 +149,12 @@ export interface SubmissionAttemptInput {
   readonly retryScheduleName?: string;
   /** The payload NERIS accepted, kept (one row) so a later resubmission can show its diff. */
   readonly acceptedPayload?: Readonly<Record<string, unknown>>;
+  /** Who to tell when this attempt ends the send in failure (review M6). */
+  readonly notify?: {
+    readonly ownerId: string;
+    readonly lockedBy?: string;
+    readonly incidentNumber: string;
+  };
   /** NERIS's own 422 issues, verbatim, for the submission ledger. */
   readonly errors?: readonly {
     readonly path: string;
@@ -391,6 +397,15 @@ export function createSubmissionRepository(
               // reporting-service's projection (projections/events.ts) reads these two names.
               failureReason: attempt.failureReason ?? attempt.outcome,
               httpStatus: attempt.httpStatus,
+              outcome: attempt.outcome,
+              // notification-service tells the owner, the locking officer and officers.
+              ...(attempt.notify
+                ? {
+                    ownerId: attempt.notify.ownerId,
+                    ...(attempt.notify.lockedBy ? { lockedBy: attempt.notify.lockedBy } : {}),
+                    incidentNumber: attempt.notify.incidentNumber,
+                  }
+                : {}),
             })
           : undefined;
 

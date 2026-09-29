@@ -158,9 +158,29 @@ export class Reminders extends pulumi.ComponentResource {
         // incident-service's NERIS status poller: the report owner hears NERIS sent it back.
         key: "neris-rejected",
         source: "incident-service",
-        detailTypes: ["neris.incident.rejected", "neris.incident.failed"],
-        timeout: 15,
-        statements: pendingWriteOnly,
+        detailTypes: [
+          "neris.incident.rejected",
+          "neris.incident.failed",
+          "neris.submission.failed",
+        ],
+        // Digest rows + an immediate inbox item per recipient (PutItem), after reading the
+        // roster for the officers (GSI3).
+        timeout: 25,
+        statements: ({ tableArn }) => [
+          {
+            Sid: "NotificationNerisReportWrite",
+            Effect: "Allow",
+            Action: ["dynamodb:PutItem"],
+            Resource: [tableArn],
+          },
+          {
+            Sid: "NotificationNerisReportRoster",
+            Effect: "Allow",
+            Action: ["dynamodb:Query"],
+            Resource: [`${tableArn}/index/GSI3`],
+          },
+          auditMutationDenyStatement(tableArn),
+        ],
       },
       {
         // incident-service's nightly reconciliation: a month closed with no calls to report.

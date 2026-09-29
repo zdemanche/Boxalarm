@@ -301,6 +301,53 @@ describe('ppeExpiryConsumer', () => {
 });
 
 describe('NERIS report consumers', () => {
+  it('neris.submission.failed -> an immediate inbox item for the owner, the locking officer and every officer', async () => {
+    const send = vi.fn(
+      (command: { constructor: { name: string }; input: Record<string, unknown> }) =>
+        Promise.resolve(
+          command.constructor.name === 'QueryCommand'
+            ? {
+                Items: [
+                  { memberId: 'MBR-0100', roles: ['OFFICER'], status: 'ACTIVE' },
+                  { memberId: 'MBR-0200', roles: ['MEMBER'], status: 'ACTIVE' },
+                ],
+              }
+            : {},
+        ),
+    );
+    mockDdb(send);
+    const { handler } = await import('./nerisReportConsumer.js');
+
+    await handler(
+      sqsEvent('neris.submission.failed', 'incident-service', {
+        incidentId: 'NICHOLS-4471-1798000000',
+        deptId: 'NICHOLS',
+        ownerId: 'MBR-0034',
+        lockedBy: 'MBR-0012',
+        incidentNumber: '4471',
+        outcome: 'CLIENT_ERROR',
+        failureReason: 'NERIS refused the request with HTTP 401',
+      }),
+    );
+
+    const inbox = send.mock.calls
+      .map(([command]) => command)
+      .filter((command) => command.constructor.name === 'PutCommand')
+      .map((command) => command.input.Item as Record<string, unknown>);
+    expect(inbox.map((item) => item.memberId).sort()).toEqual(['MBR-0012', 'MBR-0034', 'MBR-0100']);
+    expect(inbox[0]).toMatchObject({
+      entityType: 'NOTIFICATION',
+      category: 'neris-rejected',
+      items: [
+        {
+          title: 'Report 4471',
+          detail: expect.stringContaining('HTTP 401') as unknown,
+          link: { kind: 'incident', id: 'NICHOLS-4471-1798000000' },
+        },
+      ],
+    });
+  });
+
   it('neris.incident.rejected -> a neris-rejected reminder for the report owner, linking to the report', async () => {
     const send = vi.fn().mockResolvedValue({});
     mockDdb(send);
@@ -318,7 +365,8 @@ describe('NERIS report consumers', () => {
     );
 
     const puts = putsOf(send);
-    expect(puts).toHaveLength(2);
+    // Owner's digest row, the OFFICER role's digest row, the event marker.
+    expect(puts).toHaveLength(3);
     expect(puts[0]!.Item).toMatchObject({
       pk: 'DEPT#NICHOLS#MEMBER#MBR-0034',
       category: 'neris-rejected',

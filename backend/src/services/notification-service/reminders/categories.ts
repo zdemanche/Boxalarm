@@ -19,7 +19,7 @@ export const INVENTORY_REORDER_CATEGORY = 'inventory-reorder';
 export const PPE_EXPIRY_CATEGORY = 'ppe-expiry';
 /** The APPARATUS role's department-wide PPE copy: its own mute, apart from the holder's. */
 export const PPE_EXPIRY_OFFICER_CATEGORY = 'ppe-expiry-officer';
-/** NERIS sent a report back (REJECTED) or could not process it (FAILED): the report owner. */
+/** NERIS sent a report back, could not process it, or it could not be sent: owner and officers. */
 export const NERIS_REJECTED_CATEGORY = 'neris-rejected';
 /** A month closed with no calls and no NERIS no-activity report on file: the chief and admin. */
 export const NERIS_NO_ACTIVITY_CATEGORY = 'neris-no-activity';
@@ -184,10 +184,11 @@ const CONFIGS: readonly ReminderCategoryConfig[] = [
     summary: (n) => `${plural(n, 'PPE item', 'PPE items')} expiring`,
   },
   {
-    // Only the report owner: the officer who wrote it is the one who fixes and resubmits.
+    // The report owner fixes and resubmits; officers answer for the 72-hour target, so they
+    // get a copy too (the inbox copy is immediate, see nerisReportConsumer.ts).
     category: NERIS_REJECTED_CATEGORY,
     muteKey: NERIS_REJECTED_CATEGORY,
-    roles: [],
+    roles: ['OFFICER'],
     pushChannelId: 'neris-rejected',
     subject: (n) => `NERIS returned ${plural(n, 'report', 'reports')}`,
     summary: (n) => `${plural(n, 'report', 'reports')} to fix and resubmit`,

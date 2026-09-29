@@ -59,6 +59,9 @@ describe("NerisSync", () => {
       incidentTableArn: pulumi.output(TABLE_ARN),
       incidentCmkArn: pulumi.output(CMK_ARN),
       nerisCredentialsSecretArn: pulumi.output(CREDENTIALS_ARN),
+      chiefNotificationTopicArn: pulumi.output(
+        "arn:aws:sns:us-east-1:123456789012:boxalarm-dev-chief-notifications",
+      ),
       logGroup,
     });
   }
@@ -124,5 +127,21 @@ describe("NerisSync", () => {
       Statement: Array<{ Principal: { Service: string } }>;
     };
     expect(trust.Statement[0]!.Principal.Service).toBe("scheduler.amazonaws.com");
+  });
+
+  it("alarms to the chief's topic when status polling fails for three periods running", async () => {
+    const sync = await build();
+    const [metric, periods, actions] = await resolve(
+      pulumi.all([
+        sync.pollFailedAlarm.metricName,
+        sync.pollFailedAlarm.evaluationPeriods,
+        sync.pollFailedAlarm.alarmActions,
+      ]),
+    );
+    expect(metric).toBe("NerisStatusPollFailed");
+    expect(periods).toBe(3);
+    expect(actions).toEqual([
+      "arn:aws:sns:us-east-1:123456789012:boxalarm-dev-chief-notifications",
+    ]);
   });
 });

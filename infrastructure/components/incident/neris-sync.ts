@@ -15,6 +15,8 @@ export interface NerisSyncArgs {
   incidentTableArn: pulumi.Input<string>;
   incidentCmkArn: pulumi.Input<string>;
   nerisCredentialsSecretArn: pulumi.Input<string>;
+  /** The chief's LOB notification topic (never the alerting page topic). */
+  chiefNotificationTopicArn: pulumi.Input<string>;
   logGroup: ServiceLogGroup;
 }
 
@@ -43,6 +45,7 @@ export class NerisSync extends pulumi.ComponentResource {
   public readonly lambdas: Record<JobSpec["key"], ServiceLambda>;
   public readonly schedules: aws.scheduler.Schedule[] = [];
   public readonly schedulerRole: aws.iam.Role;
+  public readonly pollFailedAlarm: aws.cloudwatch.MetricAlarm;
 
   constructor(name: string, args: NerisSyncArgs, opts?: pulumi.ComponentResourceOptions) {
     requireEnv("NerisSync", args.env);
@@ -174,11 +177,35 @@ export class NerisSync extends pulumi.ComponentResource {
           threshold: 0,
           comparisonOperator: "GreaterThanThreshold",
           treatMissingData: "notBreaching",
+          alarmActions: [args.chiefNotificationTopicArn],
         },
         { parent: this },
       );
     }
     this.lambdas = lambdas;
+
+    // The poller catches per-record failures (so Lambda Errors stays 0) and emits
+    // NerisStatusPollFailed instead. Three failing 15-minute periods in a row (a credentials
+    // or NERIS outage, not one flaky record) page the chief (review M6).
+    this.pollFailedAlarm = new aws.cloudwatch.MetricAlarm(
+      `${name}-poll-failed-alarm`,
+      {
+        name: `boxalarm-${env}-incident-neris-status-poll-failed`,
+        alarmDescription:
+          "The NERIS status poller has been failing for 45 minutes: rejections are not reaching report owners.",
+        namespace: "Boxalarm/neris-status-poller",
+        metricName: "NerisStatusPollFailed",
+        statistic: "Sum",
+        period: 900,
+        evaluationPeriods: 3,
+        datapointsToAlarm: 3,
+        threshold: 0,
+        comparisonOperator: "GreaterThanThreshold",
+        treatMissingData: "notBreaching",
+        alarmActions: [args.chiefNotificationTopicArn],
+      },
+      { parent: this },
+    );
 
     new aws.iam.RolePolicy(
       `${name}-scheduler-invoke-policy`,

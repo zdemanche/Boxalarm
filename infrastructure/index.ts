@@ -618,6 +618,7 @@ export const nerisSubmissionWorker = new NerisSubmissionWorker("neris-submission
   nerisCredentialsSecretArn: nerisConfig.secret.arn,
   nerisSchemaBucketArn: incidentSchemaRefresh.bucket.arn,
   nerisSchemaBucketName: incidentSchemaRefresh.bucket.bucket,
+  chiefNotificationTopicArn: chiefNotificationTopic.topicArn,
   logGroup: incidentServiceLogGroup,
 });
 
@@ -629,6 +630,7 @@ export const nerisSync = new NerisSync("neris-sync", {
   incidentTableArn: incidentTable.tableArn,
   incidentCmkArn: incidentTable.cmkArn,
   nerisCredentialsSecretArn: nerisConfig.secret.arn,
+  chiefNotificationTopicArn: chiefNotificationTopic.topicArn,
   logGroup: incidentServiceLogGroup,
 });
 
