@@ -307,6 +307,15 @@ test('against a server that still requires an ETA, the answer is re-sent with th
   expect(screen.getByText(/your response: responding · eta \?/i)).toBeTruthy();
 });
 
+test('a roster answer of At station reads back as "At station", not "ETA 0 min" (round 2 m2-5)', async () => {
+  await kvDelete('alert-answer:D-1');
+  roster = [{ memberId: 'MBR-1', ackStatus: 'RESPONDING', eta: Math.floor(Date.now() / 1000) }];
+  await renderScreen();
+
+  expect(await screen.findByText(/your response: responding · at station/i)).toBeTruthy();
+  expect(screen.queryByText(/eta 0 min/i)).toBeNull();
+});
+
 test('each answer carries a clientAnswerId and answeredAtMs', async () => {
   await renderScreen();
   await tap(/^Not responding/);

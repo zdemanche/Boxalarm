@@ -135,6 +135,18 @@ export function deliveryAnnouncement(answer: MyAnswer, delivery: ResponseDeliver
  * the call shows it), seeded from the server roster when this device has none, and its honest
  * delivery state from the outbox.
  */
+/**
+ * A roster ETA (absolute epoch seconds) read back as what the member sees. "At station" is sent
+ * as eta = the moment of answering, so one that is due within a minute (or past) reads "At
+ * station", never "ETA 0 min" (round 2 m2-5). The roster carries no qualifier, so 20+ reads as
+ * its minutes.
+ */
+export function rosterEta(etaSeconds: number, nowMs: number): EtaGiven {
+  const minutes = Math.round((etaSeconds * 1000 - nowMs) / 60_000);
+  if (minutes <= 1) return { minutes: 0, qualifier: 'AT_STATION' };
+  return { minutes, qualifier: null };
+}
+
 /** Lets the roster's own write settle before it is read back to check an answer. */
 export const ROSTER_VERIFY_DELAY_MS = 1_500;
 
@@ -167,12 +179,7 @@ export function useAlertResponse(
         const mine = roster.find((entry) => entry.memberId === memberId);
         if (!mine || mine.ackStatus === 'UNANSWERED') return;
         const eta: EtaGiven | null =
-          mine.eta && mine.ackStatus !== 'NOT_RESPONDING'
-            ? {
-                minutes: Math.max(0, Math.round((mine.eta * 1000 - Date.now()) / 60_000)),
-                qualifier: null,
-              }
-            : null;
+          mine.eta && mine.ackStatus !== 'NOT_RESPONDING' ? rosterEta(mine.eta, Date.now()) : null;
         setServer({ answer: { ackStatus: mine.ackStatus, eta }, checkedAfter });
       } catch {
         // The roster is a check only: without it the screen still shows this device's answer.

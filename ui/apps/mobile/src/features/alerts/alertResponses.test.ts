@@ -25,7 +25,7 @@ test('the chips are 5 / 10 / 15 / 20+ / At station', () => {
 test('an unchosen ETA reads "ETA ?"; 20+ and at-station read as such', () => {
   expect(formatEta(null)).toBe('ETA ?');
   expect(formatEta({ minutes: 20, qualifier: 'AT_LEAST' })).toBe('ETA 20+ min');
-  expect(formatEta({ minutes: 0, qualifier: 'AT_STATION' })).toBe('at station');
+  expect(formatEta({ minutes: 0, qualifier: 'AT_STATION' })).toBe('At station');
 });
 
 test('a one-tap Responding sends eta null, marked NOT_GIVEN', () => {

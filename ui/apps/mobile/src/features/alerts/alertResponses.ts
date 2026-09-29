@@ -45,7 +45,7 @@ export function sameEta(a: EtaGiven | null, b: EtaGiven | null): boolean {
 /** "ETA ?", "ETA 10 min", "ETA 20+ min", "at station" - never a number the member did not pick. */
 export function formatEta(eta: EtaGiven | null): string {
   if (!eta) return 'ETA ?';
-  if (eta.qualifier === 'AT_STATION') return 'at station';
+  if (eta.qualifier === 'AT_STATION') return 'At station';
   return `ETA ${eta.minutes}${eta.qualifier === 'AT_LEAST' ? '+' : ''} min`;
 }
 
