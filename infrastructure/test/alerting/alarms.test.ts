@@ -206,6 +206,22 @@ describe("AlertingAlarms — every alert-path failure mode pages", { timeout: 30
     }
   });
 
+  // Cross-seam: backend fanout/handler.ts emits emitOutcomeMetric("Boxalarm/alerting-fan-out",
+  // "DuplicateSkippedFirstPass", channel); the dimensionless series is what pages.
+  it("pages on a tone-1 duplicate skip on a dispatch's first fan-out pass (design review C1)", async () => {
+    await build();
+    const alarm = alarmByName("boxalarm-dev-alerting-fan-out-tone1-duplicate-first-pass").inputs;
+    expect(alarm).toMatchObject({
+      namespace: "Boxalarm/alerting-fan-out",
+      metricName: "DuplicateSkippedFirstPass",
+      statistic: "Sum",
+      comparisonOperator: "GreaterThanThreshold",
+      threshold: 0,
+      alarmActions: [PAGE_TOPIC_ARN],
+    });
+    expect(alarm.dimensions).toBeUndefined();
+  });
+
   it("gives every alarm it owns a page action", async () => {
     await build();
     const alarms = resourcesOfType("aws:cloudwatch/metricAlarm:MetricAlarm");

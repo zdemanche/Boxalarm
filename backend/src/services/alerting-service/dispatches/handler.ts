@@ -15,8 +15,6 @@ import { problemResponse } from './errorResponse.js';
 import { emitOutcomeMetric } from '@boxalarm/metrics';
 import { logError } from './logger.js';
 import { createManualDispatch } from './repository.js';
-import { runFanOut } from '../fanout/fanOut.js';
-import { getSchedulerClient } from '../escalation/scheduleEscalation.js';
 
 interface DispatchAuthorizerContext {
   readonly sub: string;
@@ -167,22 +165,12 @@ export const handler: Handler<DispatchEvent, APIGatewayProxyStructuredResultV2> 
       return problemResponse({ status: 409, title: 'Duplicate dispatch submission', traceId });
     }
 
-    try {
-      await runFanOut(
-        getDynamoClient(),
-        getSchedulerClient(),
-        dynamoConfig.tableName,
-        deptId,
-        result.dispatchId,
-        Math.floor(Date.now() / 1000),
-      );
-    } catch (error) {
-      logError('dispatches.fanout.failed', error, {
-        traceId,
-        deptId,
-        dispatchId: result.dispatchId,
-      });
-    }
+    // Fan-out is NOT run here. The DISPATCH_ALERT insert above reaches the stream fan-out
+    // (fanout/handler.ts), the single producer of tone-1 pages: it writes the per-channel
+    // receipts, publishes, and schedules escalation and the tone ladder. A second, synchronous
+    // fan-out here once pre-wrote tone-1 receipts with sentAt under the same exactly-once key
+    // and never published, so the stream fan-out skipped every member as a duplicate and the
+    // first page went out at tone 2 (design review C1).
 
     emitIngressMetric('Accepted');
     return {

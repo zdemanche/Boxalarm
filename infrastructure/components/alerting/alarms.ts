@@ -5,6 +5,9 @@ import { ALERTING_CHANNELS, AlertingChannel, ChannelQueue } from "./messaging-al
 
 const NON_PROD_ENVS = new Set(["dev", "qa", "staging"]);
 
+/** Backend namespace of the tone-1 fan-out's metrics (fanout/handler.ts METRIC_NAMESPACE). */
+export const FAN_OUT_METRIC_NAMESPACE = "Boxalarm/alerting-fan-out";
+
 export interface AlertingAlarmsArgs {
   env: string;
   channelQueues: Record<AlertingChannel, ChannelQueue>;
@@ -148,6 +151,25 @@ export class AlertingAlarms extends pulumi.ComponentResource {
       metricName: "ApproximateNumberOfMessagesVisible",
       dimensions: { QueueName: args.fanOutOnFailureQueue.name },
       statistic: "Maximum",
+      comparisonOperator: "GreaterThanThreshold",
+      threshold: 0,
+      period: 60,
+      evaluationPeriods: 1,
+    });
+
+    // Design review C1: a tone-1 receipt that already carries sentAt on a dispatch's FIRST
+    // fan-out attempt was written by something other than the fan-out, and that member is not
+    // paged until tone 2. A retry legitimately skips what it already sent, so only the
+    // first-pass count (fanout/handler.ts sendOne) is alarmed.
+    pageAlarm("fan-out-duplicate-first-pass-alarm", {
+      name: `boxalarm-${env}-alerting-fan-out-tone1-duplicate-first-pass`,
+      alarmDescription:
+        "The fan-out found a tone-1 receipt already marked sent on the dispatch's first attempt and skipped that member: " +
+        "a second producer wrote the exactly-once key and did not publish, so the member gets no page until tone 2. " +
+        "Check the fan-out logs (fanout.receipt.duplicate_on_first_pass) for the dispatch and members, and find the other writer of RECEIPT# items.",
+      namespace: FAN_OUT_METRIC_NAMESPACE,
+      metricName: "DuplicateSkippedFirstPass",
+      statistic: "Sum",
       comparisonOperator: "GreaterThanThreshold",
       threshold: 0,
       period: 60,

@@ -175,6 +175,7 @@ async function sendOne(
   topicArn: string,
   dispatch: DispatchAlertRecord,
   task: FanOutTask,
+  firstPass = false,
 ): Promise<void> {
   const keyInput: FanOutKeyInput = {
     dispatchId: dispatch.dispatchId,
@@ -236,8 +237,22 @@ async function sendOne(
       logInfo('fanout.receipt.duplicate_skipped', dispatch.dispatchId, {
         memberId: task.memberId,
         channel: task.channel,
+        firstPass,
       });
       emitOutcomeMetric(METRIC_NAMESPACE, 'DuplicateSkipped');
+      if (firstPass) {
+        // On a retry a skip is expected (the earlier attempt sent this one). On the dispatch's
+        // FIRST fan-out attempt nothing of ours can have written this receipt yet, so another
+        // writer pre-empted the tone-1 page under its exactly-once key - the C1 defect shape,
+        // where the member is not paged until tone 2. Alarmed (DuplicateSkippedFirstPass).
+        logError(
+          'fanout.receipt.duplicate_on_first_pass',
+          new Error('tone-1 receipt already sent before the first fan-out attempt'),
+          dispatch.dispatchId,
+          { memberId: task.memberId, channel: task.channel },
+        );
+        emitOutcomeMetric(METRIC_NAMESPACE, 'DuplicateSkippedFirstPass', task.channel);
+      }
       return;
     }
   }
@@ -308,20 +323,27 @@ async function fanOutOneDispatch(
   try {
     const eligibleMembers = await queryEligibleMembers(ddb, tableName, dispatch.deptId);
 
-    await ddb.send(
+    // fanOutAttempts tells the first attempt from a stream retry, so a duplicate on the first
+    // pass (another writer pre-empted tone 1) can be alarmed without paging on every retry.
+    const started = await ddb.send(
       new UpdateCommand({
         TableName: tableName,
         Key: {
           pk: buildDeptScopedPk(dispatch.deptId, 'DISPATCH', dispatch.dispatchId),
           sk: 'METADATA',
         },
-        UpdateExpression: 'SET fanOutStartedAt = :startedAt, eligibleMemberCount = :count',
+        UpdateExpression:
+          'SET fanOutStartedAt = :startedAt, eligibleMemberCount = :count, fanOutAttempts = if_not_exists(fanOutAttempts, :zero) + :one',
         ExpressionAttributeValues: {
           ':startedAt': Math.floor(fanOutStartedMs / 1000),
           ':count': eligibleMembers.length,
+          ':zero': 0,
+          ':one': 1,
         },
+        ReturnValues: 'UPDATED_NEW',
       }),
     );
+    const firstPass = started?.Attributes?.fanOutAttempts === 1;
 
     const tasks: FanOutTask[] = [];
     for (const member of eligibleMembers) {
@@ -347,7 +369,7 @@ async function fanOutOneDispatch(
     }
 
     const results = await runWithConcurrencyLimit(tasks, MAX_CONCURRENT_FANOUT_TASKS, (task) =>
-      sendOne(ddb, sns, tableName, topicArn, dispatch, task),
+      sendOne(ddb, sns, tableName, topicArn, dispatch, task, firstPass),
     );
 
     const failures = results.filter(

@@ -29,7 +29,7 @@ describe(
   () => {
     it.each([
       ["boxalarm-dev-alerting-fan-out", 30],
-      ["boxalarm-dev-alerting-dispatches-create", 29],
+      ["boxalarm-dev-alerting-dispatches-create", 10],
       ["boxalarm-dev-alerting-escalation", 15],
       ["boxalarm-dev-alerting-tone-evaluator", 30],
     ])("%s → %ss", async (functionName, seconds) => {

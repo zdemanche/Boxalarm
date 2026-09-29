@@ -709,7 +709,6 @@ export const routesCore = new RoutesCore("routes-core", {
   alertingCmkArn: alertingTable.cmkArn,
   alertingTableName: alertingTable.tableName,
   logGroup: alertingLogGroup,
-  escalation,
   policyStoreId: policyStore.policyStoreId,
   permissionsBoundaryArn: alertingBoundaryArn,
   ...(alertingHomeLocality !== undefined ? { homeLocality: alertingHomeLocality } : {}),

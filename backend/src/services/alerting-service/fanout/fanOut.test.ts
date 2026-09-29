@@ -3,48 +3,39 @@ import type { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
 import type { SchedulerClient } from '@aws-sdk/client-scheduler';
 import { toVerifiedDeptId } from '@boxalarm/dept-scope';
 
-vi.mock('../eligibility/selector.js', () => ({
-  queryEligibleMembers: vi.fn(),
-}));
-
 vi.mock('../escalation/scheduleEscalation.js', () => ({
   createEscalationSchedule: vi.fn().mockResolvedValue('esc-schedule'),
 }));
 
+vi.mock('../escalation/toneLadder.js', () => ({
+  scheduleDepartmentToneLadder: vi.fn().mockResolvedValue(undefined),
+}));
+
 const DEPT_ID = toVerifiedDeptId({ deptId: 'NICHOLS' });
 
-interface FakeTransactItem {
-  Put?: { Item: Record<string, unknown> };
-}
-
-function createFakeDdb(): {
+function createFakeDdb(existingRosterMembers: readonly string[] = []): {
   send: DynamoDBDocumentClient['send'];
   puts: Record<string, unknown>[];
-  failNextIdempotencyKeys: Set<string>;
 } {
   const puts: Record<string, unknown>[] = [];
-  const failNextIdempotencyKeys = new Set<string>();
   const send = vi.fn((command: unknown) => {
-    const input = (command as { input: { TransactItems: FakeTransactItem[] } }).input;
-    for (const item of input.TransactItems) {
-      const key = item.Put?.Item.idempotencyKey as string | undefined;
-      if (key && failNextIdempotencyKeys.has(key)) {
-        const error = new Error('conditional check failed');
-        error.name = 'TransactionCanceledException';
-        throw error;
-      }
+    const name = (command as { constructor: { name: string } }).constructor.name;
+    const input = (command as { input: { Item: Record<string, unknown> } }).input;
+    if (name !== 'PutCommand') {
+      throw new Error(`fanOut.test fake ddb: unexpected ${name}`);
     }
-    for (const item of input.TransactItems) {
-      if (item.Put) {
-        puts.push(item.Put.Item);
-      }
+    if (existingRosterMembers.includes(input.Item.memberId as string)) {
+      const error = new Error('conditional check failed');
+      error.name = 'ConditionalCheckFailedException';
+      throw error;
     }
+    puts.push(input.Item);
     return Promise.resolve({});
   });
-  return { send: send, puts, failNextIdempotencyKeys };
+  return { send, puts };
 }
 
-describe('runFanOut', () => {
+describe('scheduleRealtimeFanOutEscalation', () => {
   const originalEnv = { ...process.env };
 
   beforeEach(() => {
@@ -58,118 +49,92 @@ describe('runFanOut', () => {
     process.env = { ...originalEnv };
   });
 
-  it('writes one push and one sms receipt plus a roster entry per eligible member, in a single transact call each', async () => {
-    const { queryEligibleMembers } = await import('../eligibility/selector.js');
-    vi.mocked(queryEligibleMembers).mockResolvedValue([
-      { memberId: 'mbr-1', quals: ['INTERIOR'] } as never,
-      { memberId: 'mbr-2', quals: [] } as never,
-    ]);
-    const { runFanOut } = await import('./fanOut.js');
+  it('writes a roster entry per member and never a delivery receipt (receipts are the stream fan-out producer`s alone)', async () => {
+    const { scheduleRealtimeFanOutEscalation } = await import('./fanOut.js');
     const fakeDdb = createFakeDdb();
 
-    await runFanOut(
+    await scheduleRealtimeFanOutEscalation(
       { send: fakeDdb.send } as unknown as DynamoDBDocumentClient,
       { send: vi.fn() } as unknown as SchedulerClient,
       'alerting-table',
       DEPT_ID,
       'dispatch-1',
-      1798000000,
+      [
+        { memberId: 'mbr-1', quals: ['INTERIOR'] },
+        { memberId: 'mbr-2', quals: [] },
+      ],
     );
 
-    expect(fakeDdb.send).toHaveBeenCalledTimes(2);
-    const mbr1Items = fakeDdb.puts.filter((item) => item.memberId === 'mbr-1');
-    expect(mbr1Items.map((item) => item.sk)).toEqual(
-      expect.arrayContaining(['RECEIPT#mbr-1#push#1', 'RECEIPT#mbr-1#sms#1', 'ROSTER#mbr-1']),
-    );
-    const roster = mbr1Items.find((item) => item.entityType === 'DISPATCH_ROSTER_ENTRY');
-    expect(roster).toMatchObject({ ackStatus: 'NONE', currentChannelTier: 'primary' });
+    expect(fakeDdb.puts.map((item) => item.sk)).toEqual(['ROSTER#mbr-1', 'ROSTER#mbr-2']);
+    expect(fakeDdb.puts.some((item) => item.entityType === 'DELIVERY_RECEIPT')).toBe(false);
+    expect(fakeDdb.puts[0]).toMatchObject({
+      entityType: 'DISPATCH_ROSTER_ENTRY',
+      quals: ['INTERIOR'],
+      ackStatus: 'NONE',
+      currentChannelTier: 'primary',
+    });
   });
 
-  it('creates an escalation schedule per eligible member', async () => {
-    const { queryEligibleMembers } = await import('../eligibility/selector.js');
-    vi.mocked(queryEligibleMembers).mockResolvedValue([{ memberId: 'mbr-1', quals: [] } as never]);
+  it('creates a tone-1 escalation schedule per member and the department tone ladder once', async () => {
     const { createEscalationSchedule } = await import('../escalation/scheduleEscalation.js');
-    const { runFanOut } = await import('./fanOut.js');
+    const { scheduleDepartmentToneLadder } = await import('../escalation/toneLadder.js');
+    const { scheduleRealtimeFanOutEscalation } = await import('./fanOut.js');
     const fakeDdb = createFakeDdb();
 
-    await runFanOut(
+    await scheduleRealtimeFanOutEscalation(
       { send: fakeDdb.send } as unknown as DynamoDBDocumentClient,
       { send: vi.fn() } as unknown as SchedulerClient,
       'alerting-table',
       DEPT_ID,
       'dispatch-1',
-      1798000000,
+      [
+        { memberId: 'mbr-1', quals: [] },
+        { memberId: 'mbr-2', quals: [] },
+      ],
     );
 
+    expect(createEscalationSchedule).toHaveBeenCalledTimes(2);
     expect(createEscalationSchedule).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({ dispatchId: 'dispatch-1', memberId: 'mbr-1', toneSequence: 1 }),
       expect.anything(),
       'alerting-table',
     );
+    expect(scheduleDepartmentToneLadder).toHaveBeenCalledTimes(1);
   });
 
-  it('treats a duplicate tone-1 replay (conditional put collision) as a no-op, not a throw', async () => {
-    const { queryEligibleMembers } = await import('../eligibility/selector.js');
-    vi.mocked(queryEligibleMembers).mockResolvedValue([{ memberId: 'mbr-1', quals: [] } as never]);
-    const { runFanOut } = await import('./fanOut.js');
-    const fakeDdb = createFakeDdb();
-    fakeDdb.failNextIdempotencyKeys.add('dispatch-1#1#mbr-1#push');
-
-    await expect(
-      runFanOut(
-        { send: fakeDdb.send } as unknown as DynamoDBDocumentClient,
-        { send: vi.fn() } as unknown as SchedulerClient,
-        'alerting-table',
-        DEPT_ID,
-        'dispatch-1',
-        1798000000,
-      ),
-    ).resolves.toBeUndefined();
-  });
-
-  it('logs and continues, without throwing, when the scheduler create fails for one member', async () => {
-    const { queryEligibleMembers } = await import('../eligibility/selector.js');
-    vi.mocked(queryEligibleMembers).mockResolvedValue([
-      { memberId: 'mbr-1', quals: [] } as never,
-      { memberId: 'mbr-2', quals: [] } as never,
-    ]);
+  it('keeps an existing roster entry (a retried fan-out must not reset an ack) and still schedules', async () => {
     const { createEscalationSchedule } = await import('../escalation/scheduleEscalation.js');
-    vi.mocked(createEscalationSchedule).mockRejectedValueOnce(new Error('scheduler down'));
-    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
-    const { runFanOut } = await import('./fanOut.js');
-    const fakeDdb = createFakeDdb();
+    const { scheduleRealtimeFanOutEscalation } = await import('./fanOut.js');
+    const fakeDdb = createFakeDdb(['mbr-1']);
 
-    await expect(
-      runFanOut(
-        { send: fakeDdb.send } as unknown as DynamoDBDocumentClient,
-        { send: vi.fn() } as unknown as SchedulerClient,
-        'alerting-table',
-        DEPT_ID,
-        'dispatch-1',
-        1798000000,
-      ),
-    ).resolves.toBeUndefined();
-    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('scheduler down'));
-    expect(createEscalationSchedule).toHaveBeenCalledTimes(2);
+    await scheduleRealtimeFanOutEscalation(
+      { send: fakeDdb.send } as unknown as DynamoDBDocumentClient,
+      { send: vi.fn() } as unknown as SchedulerClient,
+      'alerting-table',
+      DEPT_ID,
+      'dispatch-1',
+      [{ memberId: 'mbr-1', quals: [] }],
+    );
+
+    expect(fakeDdb.puts).toEqual([]);
+    expect(createEscalationSchedule).toHaveBeenCalledTimes(1);
   });
 
-  it('rethrows when the eligibility query is unavailable', async () => {
-    const { queryEligibleMembers } = await import('../eligibility/selector.js');
-    vi.mocked(queryEligibleMembers).mockRejectedValue(new Error('table unreachable'));
-    vi.spyOn(console, 'error').mockImplementation(() => undefined);
-    const { runFanOut } = await import('./fanOut.js');
+  it('schedules no tone ladder for an empty audience', async () => {
+    const { scheduleDepartmentToneLadder } = await import('../escalation/toneLadder.js');
+    const { scheduleRealtimeFanOutEscalation } = await import('./fanOut.js');
     const fakeDdb = createFakeDdb();
 
-    await expect(
-      runFanOut(
-        { send: fakeDdb.send } as unknown as DynamoDBDocumentClient,
-        { send: vi.fn() } as unknown as SchedulerClient,
-        'alerting-table',
-        DEPT_ID,
-        'dispatch-1',
-        1798000000,
-      ),
-    ).rejects.toThrow('table unreachable');
+    await scheduleRealtimeFanOutEscalation(
+      { send: fakeDdb.send } as unknown as DynamoDBDocumentClient,
+      { send: vi.fn() } as unknown as SchedulerClient,
+      'alerting-table',
+      DEPT_ID,
+      'dispatch-1',
+      [],
+    );
+
+    expect(scheduleDepartmentToneLadder).not.toHaveBeenCalled();
   });
 });
