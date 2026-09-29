@@ -218,6 +218,9 @@ export type PrePlanMatch =
 export function resolveUnit(
   dispatchUnit: string | null,
   candidates: readonly PrePlanCopyItem[],
+  // How a candidate's unit is compared with `dispatchUnit` (the designator-classed unitKey on
+  // the lookup path, so "Bldg 2" never equals "Apt 2").
+  unitOf: (copy: PrePlanCopyItem) => string | undefined = (copy) => copy.addressUnit,
 ): PrePlanMatch | undefined {
   if (candidates.length === 0) {
     return undefined;
@@ -227,7 +230,7 @@ export function resolveUnit(
     candidates: [...candidates].sort(byUnit).map((copy) => ({ copy })),
   });
   if (dispatchUnit !== null) {
-    const sameUnit = candidates.filter((c) => c.addressUnit === dispatchUnit);
+    const sameUnit = candidates.filter((c) => unitOf(c) === dispatchUnit);
     if (sameUnit.length === 1)
       return { matchType: 'ADDRESS', copy: sameUnit[0] as PrePlanCopyItem };
     if (sameUnit.length > 1) return asCandidates();
@@ -288,6 +291,7 @@ export async function findPrePlanByAddress(
   }
   // Each candidate is re-read from its own address (never trusting stored unit/town fields,
   // which an older normalizer may have written) and judged against the dispatch's locality.
+  const unitKeys = new Map<string, string>();
   const judged = items
     .filter(isPrePlanCopy)
     .filter((candidate) => closeEnough(dispatchPoint, candidate))
@@ -300,6 +304,7 @@ export async function findPrePlanByAddress(
       }
       const verdict = judgeLocality(normalized, parsed, home);
       if (verdict === 'REJECT') return [];
+      if (parsed.unitKey) unitKeys.set(candidate.occupancyId, parsed.unitKey);
       // The unit as the current rules read it, replacing whatever an older rule stored.
       const copy: PrePlanCopyItem = { ...candidate };
       delete (copy as { addressUnit?: string }).addressUnit;
@@ -307,8 +312,9 @@ export async function findPrePlanByAddress(
       return [{ copy, verdict }];
     });
   const match = resolveUnit(
-    normalized.unit,
+    normalized.unitKey,
     judged.map((entry) => entry.copy),
+    (copy) => unitKeys.get(copy.occupancyId),
   );
   if (match?.matchType === 'ADDRESS_BUILDING' && normalized.unitLabel) {
     // Always shown flagged: the dispatched "unit" may be a separate structure (rear cottage,

@@ -63,6 +63,7 @@ describe('normalizeAddress', () => {
     expect(normalizeAddress('1 Ocean Dr, Miami, FL 33139')).toEqual({
       key: '1 OCEAN DR',
       unit: null,
+      unitKey: null,
       unitLabel: null,
       // Not a known place: never guessed to be a town, and the parse is flagged ambiguous.
       town: null,
@@ -73,6 +74,7 @@ describe('normalizeAddress', () => {
     expect(normalizeAddress('5 Elm St, Trumbull, CT 06611')).toEqual({
       key: '5 ELM ST',
       unit: null,
+      unitKey: null,
       unitLabel: null,
       town: 'TRUMBULL',
       zip: '06611',
@@ -207,12 +209,12 @@ describe('normalizeAddress', () => {
 
   describe('round-2 B: the street runs to its last suffix; only known places become towns', () => {
     it.each([
-      ['123 Mount St Joseph Rd', '123 MT ST JOSEPH RD'],
+      ['123 Mount St Joseph Rd', '123 MT SAINT JOSEPH RD'],
       ['123 Fox Run Rd', '123 FOX RUN RD'],
       ['123 Mill Run Rd', '123 MILL RUN RD'],
       ['123 Village Sq Dr', '123 VILLAGE SQ DR'],
       ['2 Lakeview Ter Way', '2 LAKEVIEW TER WAY'],
-      ['123 Saint Johns Pl', '123 ST JOHNS PL'],
+      ['123 Saint Johns Pl', '123 SAINT JOHNS PL'],
       ['123 Old Town Rd Ext N', '123 OLD TOWN RD EXT N'],
     ])('%s -> %s, no "town" made of a suffix', (raw, key) => {
       expect(normalizeAddress(raw)).toMatchObject({ key, town: null, ambiguous: false });
@@ -384,5 +386,45 @@ describe('parseTownChoice (round-4 m4)', () => {
       zip: null,
       state: 'CT',
     });
+  });
+});
+
+describe('street-name words keep Saint/Street and prefix/name directionals apart (round-4 m5)', () => {
+  it.each([
+    ['12 St John St', '12 Saint John St'],
+    ['12 St. Johns Pl', '12 Saint Johns Pl'],
+    ['12 West Main St', '12 W Main St'],
+    ['12 North Ave', '12 North Avenue'],
+    ['12 Main St W', '12 Main Street West'],
+    ['12 West Broadway', '12 W Broadway'],
+  ])('%s and %s share a key', (a, b) => {
+    expect(normalizeAddress(a)?.key).toBe(normalizeAddress(b)?.key);
+  });
+
+  it.each([
+    ['12 Street Rd', '12 St Rd'],
+    ['12 Street Rd', '12 Saint Rd'],
+    ['12 West St', '12 W St'],
+    ['12 North Ave', '12 N Ave'],
+  ])('%s and %s do not', (a, b) => {
+    expect(normalizeAddress(a)?.key).not.toBe(normalizeAddress(b)?.key);
+  });
+});
+
+describe('unitKey: units are compared within their designator class (round-4 m5)', () => {
+  it.each([
+    ['12 Main St Apt 4', 'APT:4'],
+    ['12 Main St Unit 4', 'APT:4'],
+    ['12 Main St #4', 'APT:4'],
+    ['12 Main St Suite 4', 'APT:4'],
+    ['12 Main St Bldg 2', 'BLDG:2'],
+    ['12 Main St Building 2', 'BLDG:2'],
+    ['12 Main St Lot 7', 'LOT:7'],
+    ['12 Main St Space 7', 'LOT:7'],
+    ['12 Main St 2nd Floor', 'FL:2ND'],
+    ['12 Main St Rear', 'REAR'],
+    ['12 Main St Bldg 2 Apt 4', 'BLDG:2 APT:4'],
+  ])('%s -> %s', (raw, unitKey) => {
+    expect(normalizeAddress(raw)?.unitKey).toBe(unitKey);
   });
 });
