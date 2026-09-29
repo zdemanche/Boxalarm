@@ -1,5 +1,6 @@
 import notifee from '@notifee/react-native';
 import { fireEvent, render } from '@testing-library/react-native';
+import { Alert } from 'react-native';
 import { MeHomeScreen } from './MeHomeScreen';
 
 const mockSignOut = jest.fn(async () => {});
@@ -57,11 +58,25 @@ test('navigating to the diagnostics entry point', async () => {
   expect(mockNavigate).toHaveBeenCalledWith('Diagnostics');
 });
 
-test('signing out calls the real signOut from AuthContext', async () => {
+test('sign-out asks first and warns that the phone will stop receiving pages', async () => {
+  const alertSpy = jest.spyOn(Alert, 'alert').mockImplementation(() => {});
   const { findByText } = await render(<MeHomeScreen />);
 
   fireEvent.press(await findByText('Sign out'));
+
+  expect(mockSignOut).not.toHaveBeenCalled();
+  const [title, message, buttons] = alertSpy.mock.calls[0]!;
+  expect(title).toMatch(/stop getting pages/i);
+  expect(message).toMatch(/will stop receiving dispatch pages/i);
+  const cancel = buttons!.find((button) => button.style === 'cancel')!;
+  const confirm = buttons!.find((button) => button.style === 'destructive')!;
+  expect(cancel.text).toBe('Stay signed in');
+
+  cancel.onPress?.();
+  expect(mockSignOut).not.toHaveBeenCalled();
+  confirm.onPress?.();
   expect(mockSignOut).toHaveBeenCalledTimes(1);
+  alertSpy.mockRestore();
 });
 
 test('a phone that cannot be paged shows the red readiness banner with a fix', async () => {

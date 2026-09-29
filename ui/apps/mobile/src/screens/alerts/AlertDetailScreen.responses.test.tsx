@@ -108,7 +108,7 @@ async function reopen(isOnline = true) {
   await act(flush);
 }
 
-async function tap(name: string) {
+async function tap(name: string | RegExp) {
   await act(async () => {
     fireEvent.press(await screen.findByRole('button', { name }));
   });
@@ -116,11 +116,11 @@ async function tap(name: string) {
 }
 
 async function answerResponding() {
-  await tap('Responding');
+  await tap(/^Responding — /);
   await act(async () => {
-    fireEvent.changeText(await screen.findByPlaceholderText('ETA in minutes'), '15');
+    fireEvent.press(await screen.findByRole('radio', { name: 'ETA 15 minutes' }));
   });
-  await tap('Confirm');
+  await act(flush);
 }
 
 test('an answer the server accepted reads "Sent" and posts the ETA the member chose', async () => {
@@ -128,16 +128,17 @@ test('an answer the server accepted reads "Sent" and posts the ETA the member ch
   await answerResponding();
 
   expect(await screen.findByText('Sent')).toBeTruthy();
-  expect(posted).toHaveLength(1);
-  expect(posted[0]).toMatchObject({ ackStatus: 'RESPONDING', assignedApparatusId: null });
-  expect(typeof posted[0]!.eta).toBe('number');
+  // One tap sent Responding (default ETA); the chip sent the chosen ETA as a newer answer.
+  expect(posted.at(-1)).toMatchObject({ ackStatus: 'RESPONDING', assignedApparatusId: null });
+  const eta = posted.at(-1)!.eta as number;
+  expect(eta - Math.floor(Date.now() / 1000)).toBeGreaterThan(14 * 60);
 });
 
 test('offline, the answer is kept on the phone and never shown as sent', async () => {
   mockNetInfoFetch.mockResolvedValue({ isConnected: false });
   await renderScreen(false);
 
-  await tap('Not responding');
+  await tap(/^Not responding/);
 
   expect(await screen.findByText('Not sent yet')).toBeTruthy();
   expect(screen.queryByText('Sent')).toBeNull();
@@ -153,7 +154,7 @@ test('a failed POST is not swallowed: it stays queued, says so, and delivers on 
   };
   await renderScreen();
 
-  await tap('Not responding');
+  await tap(/^Not responding/);
 
   expect(await screen.findByText('Not sent yet')).toBeTruthy();
   expect(screen.getByText(/last attempt: network request failed/i)).toBeTruthy();
@@ -170,7 +171,7 @@ test('a refused answer is shown as refused with a way to send it again', async (
   };
   await renderScreen();
 
-  await tap('Not responding');
+  await tap(/^Not responding/);
 
   expect(await screen.findByText('Refused by server')).toBeTruthy();
   expect(
@@ -182,7 +183,7 @@ test('changing the answer sends the new one and drops the older one still waitin
   mockNetInfoFetch.mockResolvedValue({ isConnected: false });
   await renderScreen(false);
 
-  await tap('Not responding');
+  await tap(/^Not responding/);
   await answerResponding();
 
   const rows = await store.all();
@@ -211,7 +212,7 @@ test('re-opening the call shows the answer already given, with its delivery stat
 
   expect(await screen.findByText(/your response: responding/i)).toBeTruthy();
   expect(screen.getByText('Sent')).toBeTruthy();
-  expect(screen.getByRole('button', { name: 'Responding', selected: true })).toBeTruthy();
+  expect(screen.getByRole('button', { name: /^Responding — /, selected: true })).toBeTruthy();
 });
 
 test('with no answer on this phone, the server roster seeds the member’s own answer', async () => {

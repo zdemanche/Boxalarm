@@ -1,7 +1,7 @@
 import { spacing, targetSize, typeScale } from '@boxalarm/design-tokens';
 import { useNavigation } from '@react-navigation/native';
 import { useEffect, useState } from 'react';
-import { Text, TouchableOpacity, View } from 'react-native';
+import { Alert, Text, TouchableOpacity, View } from 'react-native';
 import { Button, Screen, useTheme, type SurfaceTheme } from '../../components/ui';
 import { useAuth } from '../../auth/AuthContext';
 import { AlertReadinessBanner } from '../../features/alerts/AlertReadinessBanner';
@@ -33,6 +33,22 @@ function NavRow({
     >
       <Text style={{ color: theme.fg, fontSize: typeScale.body.size }}>{label}</Text>
     </TouchableOpacity>
+  );
+}
+
+/**
+ * Sign-out is not a routine tap on this app: it deletes this phone's push registration, so the
+ * phone stops being paged (alert-ux C7). Say so, and make staying signed in the default.
+ */
+export function confirmSignOut(signOut: () => Promise<void>): void {
+  Alert.alert(
+    'Sign out and stop getting pages on this phone?',
+    'This phone will stop receiving dispatch pages until you sign in again. Text and voice pages still go to your phone number.',
+    [
+      { text: 'Stay signed in', style: 'cancel' },
+      { text: 'Sign out', style: 'destructive', onPress: () => void signOut() },
+    ],
+    { cancelable: true },
   );
 }
 
@@ -154,7 +170,12 @@ export function MeHomeScreen() {
         onPress={() => navigation.navigate('Diagnostics' as never)}
       />
       <View style={{ paddingTop: spacing.lg }}>
-        <Button label="Sign out" variant="danger" onPress={() => void signOut()} />
+        <Button
+          label="Sign out"
+          variant="danger"
+          accessibilityLabel="Sign out. This phone will stop receiving pages."
+          onPress={() => confirmSignOut(signOut)}
+        />
       </View>
     </Screen>
   );

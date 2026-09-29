@@ -1,4 +1,3 @@
-import { touchTarget } from '@boxalarm/design-tokens';
 import { act, fireEvent, render } from '@testing-library/react-native';
 import { AccessibilityInfo } from 'react-native';
 import { mockAlertsRepository } from '../../features/alerts/mockAlertsRepository';
@@ -42,8 +41,8 @@ test('paints the address and live response buttons from the page payload while t
   const { findByText, findByRole } = await render(<AlertDetailScreen />);
 
   expect(await findByText('21 Main St')).toBeTruthy();
-  expect(await findByText(/Structure fire/)).toBeTruthy();
-  expect(await findByRole('button', { name: 'Not responding' })).toBeTruthy();
+  expect(await findByText('STRUCTURE FIRE')).toBeTruthy();
+  expect(await findByRole('button', { name: /^Not responding/ })).toBeTruthy();
 });
 
 test('a failed fetch is a named, retryable state that keeps the page address - never a blank screen', async () => {
@@ -82,42 +81,89 @@ test('with no payload and a failed fetch the screen still names the call and kee
 
   const { findByText, findByRole } = await render(<AlertDetailScreen />);
 
-  expect(await findByText('Dispatch DISP-UNKNOWN')).toBeTruthy();
+  expect(await findByText('DISPATCH DISP-UNKNOWN')).toBeTruthy();
   expect(await findByText(/your response buttons still work/i)).toBeTruthy();
-  expect(await findByRole('button', { name: 'Responding' })).toBeTruthy();
+  expect(await findByRole('button', { name: /^Responding — / })).toBeTruthy();
 });
 
 test('shows the dispatch details and the tone ladder panel', async () => {
   const { findByText } = await render(<AlertDetailScreen />);
 
-  expect(await findByText('Self-test')).toBeTruthy();
+  expect(await findByText('SELF-TEST')).toBeTruthy();
   expect(await findByText(/awaiting your response/i)).toBeTruthy();
 });
 
-test('confirming Responding with an ETA records the response and shows it back', async () => {
-  const { findByRole, findByText, findByPlaceholderText } = await render(<AlertDetailScreen />);
+const RESPONDING = /^Responding — you're going to the station/;
+const DIRECT = /^Responding direct to scene/;
+const NOT_RESPONDING = /^Not responding/;
 
-  await act(async () => {
-    fireEvent.press(await findByRole('button', { name: 'Responding' }));
-  });
-  await act(async () => {
-    fireEvent.changeText(await findByPlaceholderText('ETA in minutes'), '15');
-  });
-  await act(async () => {
-    fireEvent.press(await findByRole('button', { name: 'Confirm' }));
-  });
-
-  expect(await findByText(/your response: responding/i)).toBeTruthy();
-});
-
-test('tapping Not responding submits immediately without an ETA step', async () => {
+test('one tap on Responding records it at once with a default ETA - no keyboard, no second screen', async () => {
   const { findByRole, findByText } = await render(<AlertDetailScreen />);
 
   await act(async () => {
-    fireEvent.press(await findByRole('button', { name: 'Not responding' }));
+    fireEvent.press(await findByRole('button', { name: RESPONDING }));
+  });
+
+  expect(await findByText(/your response: responding · eta 10 min/i)).toBeTruthy();
+  expect(await findByRole('radio', { name: 'ETA 10 minutes', selected: true })).toBeTruthy();
+});
+
+test('an ETA chip changes the ETA in one tap', async () => {
+  const { findByRole, findByText } = await render(<AlertDetailScreen />);
+
+  await act(async () => {
+    fireEvent.press(await findByRole('button', { name: DIRECT }));
+  });
+  await act(async () => {
+    fireEvent.press(await findByRole('radio', { name: 'ETA 5 minutes' }));
+  });
+
+  expect(await findByText(/your response: direct to scene · eta 5 min/i)).toBeTruthy();
+  expect(await findByRole('radio', { name: 'ETA 5 minutes', selected: true })).toBeTruthy();
+});
+
+test('the ETA chips are 5 / 10 / 15 / 20 and alert-path sized', async () => {
+  const { findByRole, findAllByRole } = await render(<AlertDetailScreen />);
+
+  await act(async () => {
+    fireEvent.press(await findByRole('button', { name: RESPONDING }));
+  });
+  const chips = await findAllByRole('radio');
+
+  expect(chips.map((chip) => chip.props.accessibilityLabel)).toEqual([
+    'ETA 5 minutes',
+    'ETA 10 minutes',
+    'ETA 15 minutes',
+    'ETA 20 minutes',
+  ]);
+  chips.forEach((chip) => expect(chip.props.style.minHeight).toBeGreaterThanOrEqual(72));
+});
+
+test('tapping Not responding records it immediately, with no ETA', async () => {
+  const { findByRole, findByText, queryAllByRole } = await render(<AlertDetailScreen />);
+
+  await act(async () => {
+    fireEvent.press(await findByRole('button', { name: NOT_RESPONDING }));
   });
 
   expect(await findByText(/your response: not responding/i)).toBeTruthy();
+  expect(queryAllByRole('radio')).toHaveLength(0);
+});
+
+test('the answer can be changed, and the selected answer is exposed to screen readers', async () => {
+  const { findByRole, findByText } = await render(<AlertDetailScreen />);
+
+  await act(async () => {
+    fireEvent.press(await findByRole('button', { name: NOT_RESPONDING }));
+  });
+  await act(async () => {
+    fireEvent.press(await findByRole('button', { name: RESPONDING }));
+  });
+
+  expect(await findByText(/your response: responding/i)).toBeTruthy();
+  const chosen = await findByRole('button', { name: RESPONDING, selected: true });
+  expect(chosen.props.accessibilityLabel).toMatch(/your answer, sent/i);
+  expect(await findByRole('button', { name: NOT_RESPONDING, selected: false })).toBeTruthy();
 });
 
 test('announces the recorded response for screen reader users', async () => {
@@ -125,38 +171,81 @@ test('announces the recorded response for screen reader users', async () => {
   const { findByRole } = await render(<AlertDetailScreen />);
 
   await act(async () => {
-    fireEvent.press(await findByRole('button', { name: 'Not responding' }));
+    fireEvent.press(await findByRole('button', { name: NOT_RESPONDING }));
   });
 
   expect(announceSpy).toHaveBeenCalledWith(expect.stringMatching(/not responding/i));
   announceSpy.mockRestore();
 });
 
-test('Confirm shares the oversized touch target with Responding/Not responding (glove/moving-vehicle context)', async () => {
-  const { findByRole } = await render(<AlertDetailScreen />);
+test('layout per a11y-spec N1: stacked answers - Responding 88 tall, the others 72 - above the narrative', async () => {
+  const { findByRole, findByText } = await render(<AlertDetailScreen />);
 
-  await act(async () => {
-    fireEvent.press(await findByRole('button', { name: 'Responding' }));
-  });
-  const confirmButton = await findByRole('button', { name: 'Confirm' });
+  const responding = await findByRole('button', { name: RESPONDING });
+  const direct = await findByRole('button', { name: DIRECT });
+  const notResponding = await findByRole('button', { name: NOT_RESPONDING });
+  expect(responding.props.style.minHeight).toBe(88);
+  expect(direct.props.style.minHeight).toBe(72);
+  expect(notResponding.props.style.minHeight).toBe(72);
+  expect(responding.props.style.width).toBe('100%');
 
-  expect(confirmButton.props.style.minHeight).toBe(touchTarget.oversized.ios);
+  // Tree order is reading order: the answers come before the narrative.
+  const narrative = await findByText(/self-test alert/i);
+  const order = (node: { parent: unknown }) => {
+    const path: number[] = [];
+    let current = node as { parent: { children: unknown[] } | null };
+    while (current.parent) {
+      path.unshift(current.parent.children.indexOf(current));
+      current = current.parent as unknown as { parent: { children: unknown[] } | null };
+    }
+    return path;
+  };
+  const before = (a: number[], b: number[]) => {
+    for (let i = 0; i < Math.min(a.length, b.length); i += 1) {
+      if (a[i] !== b[i]) return a[i]! < b[i]!;
+    }
+    return a.length < b.length;
+  };
+  expect(before(order(notResponding as never), order(narrative as never))).toBe(true);
 });
 
-test('tapping Direct to scene is distinct in text from Responding', async () => {
-  const { findByRole, findByText, findByPlaceholderText } = await render(<AlertDetailScreen />);
+test('the address is 32 pt, and a VERIFY ADDRESS pre-plan match is raised directly under it', async () => {
+  jest.spyOn(mockAlertsRepository, 'getDispatch').mockResolvedValue({
+    dispatchId: PAGE.dispatchId,
+    incidentType: 'Structure fire',
+    address: '21 Main St',
+    crossStreets: '',
+    mapLink: null,
+    narrative: '',
+    isSelfTest: false,
+    prePlan: {
+      matchType: 'NEARBY',
+      matchedAddress: '23 Main St',
+      distanceMeters: 40,
+      hazards: [],
+      utilityShutoffs: [],
+      nearestHydrants: [],
+    },
+  });
+  mockRouteParams.dispatchId = PAGE.dispatchId;
+  mockRouteParams.payload = PAGE;
 
+  const { findByText, findAllByText } = await render(<AlertDetailScreen />);
+
+  expect((await findByText('21 Main St')).props.style.fontSize).toBe(32);
+  const notices = await findAllByText(/VERIFY ADDRESS: nearby pre-plan for 23 Main St/);
+  expect(notices.length).toBeGreaterThanOrEqual(1);
+});
+
+test('the voice-over rotor answers without finding the button (accessibilityActions)', async () => {
+  const { findByLabelText, findByText } = await render(<AlertDetailScreen />);
+
+  const root = await findByLabelText('Incoming call');
   await act(async () => {
-    fireEvent.press(await findByRole('button', { name: 'Direct to scene' }));
-  });
-  await act(async () => {
-    fireEvent.changeText(await findByPlaceholderText('ETA in minutes'), '5');
-  });
-  await act(async () => {
-    fireEvent.press(await findByRole('button', { name: 'Confirm' }));
+    root.props.onAccessibilityAction({ nativeEvent: { actionName: 'notResponding' } });
   });
 
-  expect(await findByText(/your response: direct to scene/i)).toBeTruthy();
+  expect(await findByText(/your response: not responding/i)).toBeTruthy();
 });
 
 test('viewing the roster navigates with the dispatch id', async () => {
