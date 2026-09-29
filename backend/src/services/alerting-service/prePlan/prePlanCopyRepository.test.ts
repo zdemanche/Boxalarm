@@ -493,6 +493,41 @@ describe('findNearestHydrants', () => {
     }
   });
 
+  it('round-2 C: a truncated wide read never loses the close hydrants the narrow ring found', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    const close = [hydrantCopy('H-CLOSE-1', offset(300)), hydrantCopy('H-CLOSE-2', offset(0, 400))];
+    const far = hydrantCopy('H-FAR', offset(2500));
+    // Narrow (geohash6) cells answer normally; every wide (geohash5) cell is "dense": it returns
+    // only the far hydrant and claims more, as a capped read would.
+    const send = vi.fn(
+      (command: { input: { ExpressionAttributeValues: Record<string, string> } }) => {
+        const cell = command.input.ExpressionAttributeValues[':cell'] ?? '';
+        if (cell.length === 5) {
+          return Promise.resolve({ Items: [far], LastEvaluatedKey: { pk: 'more' } });
+        }
+        return Promise.resolve({
+          Items: close.filter(
+            (h) =>
+              h.gsi2pk === command.input.ExpressionAttributeValues[':gsi2pk'] &&
+              h.gsi2sk.startsWith(cell),
+          ),
+        });
+      },
+    );
+
+    const result = await findNearestHydrants(
+      { send } as unknown as DynamoDBDocumentClient,
+      TABLE,
+      DEPT_ID,
+      ORIGIN,
+    );
+
+    expect(result.incomplete).toBe(true);
+    expect(result.hydrants.map((h) => h.hydrantId)).toEqual(['H-CLOSE-1', 'H-CLOSE-2', 'H-FAR']);
+    vi.restoreAllMocks();
+  });
+
   it('returns an empty list when no hydrant copy is anywhere near', async () => {
     const { client } = fakeIndex([]);
     expect(await findNearestHydrants(client, TABLE, DEPT_ID, ORIGIN)).toEqual({

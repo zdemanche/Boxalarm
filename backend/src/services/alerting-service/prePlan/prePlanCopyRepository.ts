@@ -369,6 +369,9 @@ export async function findNearestHydrants(
 ): Promise<NearestHydrantsResult> {
   let ranked: readonly NearestHydrant[] = [];
   let incomplete = false;
+  // Every ring's hydrants are kept: a capped wide read (first N copies of a dense ~5 km cell,
+  // in geohash order) must never lose the close hydrants the narrow ring already found.
+  const seen = new Map<string, HydrantCopy>();
   for (const precision of HYDRANT_GEO_SEARCH_PRECISIONS) {
     const ring = searchRing(point, precision);
     const read = await queryHydrantCells(client, tableName, deptId, ring.cells);
@@ -376,7 +379,10 @@ export async function findNearestHydrants(
       incomplete = true;
       reportTruncation('hydrant-geo', deptId, ring.cells[0] ?? '');
     }
-    ranked = rankNearestHydrants(point, read.hydrants, max);
+    for (const hydrant of read.hydrants) {
+      if (!seen.has(hydrant.hydrantId)) seen.set(hydrant.hydrantId, hydrant);
+    }
+    ranked = rankNearestHydrants(point, [...seen.values()], max);
     const covered = ranked.filter(
       (hydrant) => hydrant.distanceMeters <= ring.guaranteedRadiusMeters,
     );
