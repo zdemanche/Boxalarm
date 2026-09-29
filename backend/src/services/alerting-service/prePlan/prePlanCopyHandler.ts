@@ -171,29 +171,46 @@ function buildCopyUpdate(
   assign('hazards', payload.hazards);
   assign('utilityShutoffs', payload.utilityShutoffs);
 
+  // The event carries the occupancy's full address/location state, so every derived field is
+  // either set or REMOVEd: a replay after a normalizer change must clear a unit, town or index
+  // key the new rules no longer produce, not leave the old one behind.
+  const removeClauses: string[] = [];
+  const setOrRemove = (field: string, value: unknown) => {
+    if (value === undefined || value === null) removeClauses.push(field);
+    else assign(field, value);
+  };
+
   // The address key is recomputed here with the alerting plane's own normalizer — never taken
   // from the producer's normalizedAddress — so the dispatch side and the copy side of the
   // match always run the same rules.
   const normalized = payload.address !== undefined ? normalizeAddress(payload.address) : null;
-  assign('address', payload.address);
-  if (normalized) {
-    assign('addressKey', normalized.key);
-    assign('addressUnit', normalized.unit ?? undefined);
-    assign('addressTown', normalized.town ?? undefined);
-    assign('addressZip', normalized.zip ?? undefined);
-    const addressIndex = prePlanAddressIndexKeys(deptId, normalized.key, payload.occupancyId);
-    assign('gsi1pk', addressIndex.gsi1pk);
-    assign('gsi1sk', addressIndex.gsi1sk);
-  }
-  if (payload.location) {
-    const geoIndex = prePlanGeoIndexKeys(deptId, payload.location, payload.occupancyId);
-    assign('latitude', payload.location.latitude);
-    assign('longitude', payload.location.longitude);
-    assign('geohash', geoIndex.geohash);
-    assign('gsi2pk', geoIndex.gsi2pk);
-    assign('gsi2sk', geoIndex.gsi2sk);
-  }
-  return { UpdateExpression: `SET ${setClauses.join(', ')}`, values };
+  setOrRemove('address', payload.address);
+  const addressIndex = normalized
+    ? prePlanAddressIndexKeys(deptId, normalized.key, payload.occupancyId)
+    : undefined;
+  setOrRemove('addressKey', normalized?.key);
+  setOrRemove('addressUnit', normalized?.unit);
+  setOrRemove('addressTown', normalized?.town);
+  setOrRemove('addressZip', normalized?.zip);
+  setOrRemove('addressState', normalized?.state);
+  setOrRemove('gsi1pk', addressIndex?.gsi1pk);
+  setOrRemove('gsi1sk', addressIndex?.gsi1sk);
+
+  const geoIndex = payload.location
+    ? prePlanGeoIndexKeys(deptId, payload.location, payload.occupancyId)
+    : undefined;
+  setOrRemove('latitude', payload.location?.latitude);
+  setOrRemove('longitude', payload.location?.longitude);
+  setOrRemove('geohash', geoIndex?.geohash);
+  setOrRemove('gsi2pk', geoIndex?.gsi2pk);
+  setOrRemove('gsi2sk', geoIndex?.gsi2sk);
+
+  return {
+    UpdateExpression:
+      `SET ${setClauses.join(', ')}` +
+      (removeClauses.length > 0 ? ` REMOVE ${removeClauses.join(', ')}` : ''),
+    values,
+  };
 }
 
 /**

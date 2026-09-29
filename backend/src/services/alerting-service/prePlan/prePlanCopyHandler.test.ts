@@ -279,6 +279,50 @@ describe('prePlanCopyHandler (entrypoint-test obligation, AC1)', () => {
     });
   });
 
+  it('N4: REMOVEs every derived field the current event does not produce (stale unit/town/keys)', async () => {
+    const send = vi.fn().mockResolvedValue({});
+    mockDdb(send);
+    const { handler } = await import('./prePlanCopyHandler.js');
+    const { latitude, longitude, ...withoutLocation } = FULL_PAYLOAD;
+    expect([latitude, longitude]).toHaveLength(2);
+
+    await handler(sqsEvent({ ...withoutLocation, address: '100 Lot Rd' }));
+
+    const update = (send.mock.calls[0]?.[0] as TransactInput).input.TransactItems.find(
+      (item) => item.Update,
+    )?.Update;
+    const remove = update?.UpdateExpression.split(' REMOVE ')[1]?.split(', ') ?? [];
+    // Older rules stored "100 Lot Rd" with unit RD: the replay must clear it.
+    expect(remove).toEqual(
+      expect.arrayContaining([
+        'addressUnit',
+        'addressTown',
+        'addressZip',
+        'addressState',
+        'latitude',
+        'longitude',
+        'geohash',
+        'gsi2pk',
+        'gsi2sk',
+      ]),
+    );
+    expect(update?.ExpressionAttributeValues[':addressKey']).toBe('100 LOT RD');
+  });
+
+  it('N4: an address that no longer normalizes loses its address index keys', async () => {
+    const send = vi.fn().mockResolvedValue({});
+    mockDdb(send);
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const { handler } = await import('./prePlanCopyHandler.js');
+
+    await handler(sqsEvent({ ...FULL_PAYLOAD, address: 'Main St & Elm St' }));
+
+    const update = (send.mock.calls[0]?.[0] as TransactInput).input.TransactItems.find(
+      (item) => item.Update,
+    )?.Update;
+    expect(update?.UpdateExpression).toMatch(/REMOVE .*addressKey.*gsi1pk, gsi1sk/);
+  });
+
   it('writes no geo index keys when the occupancy has no coordinates (address match only)', async () => {
     const send = vi.fn().mockResolvedValue({});
     mockDdb(send);
