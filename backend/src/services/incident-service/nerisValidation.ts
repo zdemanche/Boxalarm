@@ -205,6 +205,15 @@ export function localValidation(input: LocalValidationInput): {
       section: 'core',
       message: 'Pick the incident type — what the crew found on arrival, not what was dispatched.',
     });
+  } else if (values.includes('UNDETERMINED')) {
+    // NERIS: UNDETERMINED stands alone — it means no type could be determined.
+    blocking.push({
+      path: 'fields.incident_types',
+      code: 'UNDETERMINED_WITH_TYPES',
+      section: 'core',
+      message:
+        'Undetermined can only be used on its own. Remove it, or remove the other incident types.',
+    });
   } else if (values.length > 3) {
     blocking.push({
       path: 'fields.incident_types',

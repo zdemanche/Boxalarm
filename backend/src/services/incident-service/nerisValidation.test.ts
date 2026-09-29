@@ -317,6 +317,26 @@ describe('NERIS incident types (TypeIncidentValue from the downloaded NERIS sche
   });
 });
 
+describe('UNDETERMINED', () => {
+  it('blocks UNDETERMINED alongside real incident types', () => {
+    const result = localValidation({
+      incident: incident({
+        corePayload: {
+          incident_types: [
+            { type: 'FIRE||OUTSIDE_FIRE||DUMPSTER_OUTDOOR_CONTAINER_FIRE' },
+            { type: 'UNDETERMINED' },
+          ],
+        },
+      }),
+      units: [E1],
+      settings: SETTINGS,
+      nerisApi: NERIS_API,
+      nowEpochSeconds: NOW,
+    });
+    expect(codes(result.blocking)).toContain('UNDETERMINED_WITH_TYPES');
+  });
+});
+
 describe('casualties and rescues', () => {
   function withCasualties(casualty_rescues: unknown, nerisApi?: CompiledNerisSchema) {
     return localValidation({
