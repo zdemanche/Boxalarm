@@ -37,6 +37,7 @@ describe('computeNerisCompliance', () => {
       ],
       NOW,
       90,
+      { 'MBR-0034': 'Pat Ryan' },
     );
     expect(result).toEqual({
       windowDays: 90,
@@ -44,11 +45,49 @@ describe('computeNerisCompliance', () => {
       rejectionRate: 50,
       submittedCount: 2,
       rejectedCount: 1,
+      validationRejectedCount: 0,
       eligibleCount: 3,
       openDrafts: [
-        { id: 'C', ageHours: 96, owner: 'MBR-0034', status: 'VALIDATED', locked: true },
-        { id: 'D', ageHours: 5, owner: 'MBR-0099', status: 'DRAFT', locked: false },
+        {
+          id: 'C',
+          ageHours: 96,
+          owner: 'MBR-0034',
+          ownerName: 'Pat Ryan',
+          status: 'VALIDATED',
+          locked: true,
+        },
+        {
+          id: 'D',
+          ageHours: 5,
+          owner: 'MBR-0099',
+          ownerName: null,
+          status: 'DRAFT',
+          locked: false,
+        },
       ],
+    });
+  });
+
+  it('counts reports refused at send time (422) in the rejection rate (review minor 9)', () => {
+    const result = computeNerisCompliance(
+      [
+        {
+          incidentId: 'A',
+          alarmAt: NOW - 200 * H,
+          firstSubmittedAt: NOW - 190 * H,
+          nerisIncidentId: 'n-a',
+          nerisStatus: 'APPROVED',
+        },
+        { incidentId: 'B', alarmAt: NOW - 150 * H, status: 'REJECTED', submissionStatus: 'FAILED' },
+      ],
+      NOW,
+      90,
+    );
+    expect(result).toMatchObject({
+      submittedCount: 2,
+      rejectedCount: 1,
+      validationRejectedCount: 1,
+      rejectionRate: 50,
     });
   });
 

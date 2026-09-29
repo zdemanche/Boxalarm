@@ -312,11 +312,27 @@ export class Reporting extends pulumi.ComponentResource {
         code: lambdaCode("reporting-service", "neris-compliance"),
         logGroup: args.logGroup,
         timeout: REPORT_TIMEOUT_SECONDS,
-        environment: { ...baseEnvironment, INCIDENT_TABLE_NAME: args.incidentTableName },
+        environment: {
+          ...baseEnvironment,
+          INCIDENT_TABLE_NAME: args.incidentTableName,
+          // Owner names for the open drafts (member METADATA rows).
+          PLATFORM_SERVICE_TABLE_NAME: args.platformTableName,
+        },
         additionalPolicyStatements: pulumi
-          .all([args.incidentTableArn, args.incidentCmkArn, vpStatement])
-          .apply(([incidentArn, cmkArn, vp]): IamPolicyStatement[] => [
+          .all([
+            args.incidentTableArn,
+            args.incidentCmkArn,
+            vpStatement,
+            pulumi.output(args.platformTableArn),
+          ])
+          .apply(([incidentArn, cmkArn, vp, platformArn]): IamPolicyStatement[] => [
             queryStatement("IncidentNerisComplianceQuery", [`${incidentArn}/index/GSI1`]),
+            {
+              Sid: "ReadDraftOwnerNames",
+              Effect: "Allow",
+              Action: ["dynamodb:GetItem"],
+              Resource: [platformArn],
+            },
             {
               Sid: "DecryptIncidentTable",
               Effect: "Allow",

@@ -12,6 +12,7 @@ vi.mock('../awsClients.js', () => ({ createDynamoDocClient: vi.fn(() => ({ send:
 
 process.env.VERIFIED_PERMISSIONS_POLICY_STORE_ID = 'ps-1';
 process.env.INCIDENT_TABLE_NAME = 'incident-table';
+process.env.PLATFORM_SERVICE_TABLE_NAME = 'platform-table';
 
 import { Decision } from '@aws-sdk/client-verifiedpermissions';
 import { handler } from './handler.js';
@@ -33,7 +34,13 @@ beforeEach(() => {
 describe('GET /reporting/neris-compliance', () => {
   it('authorizes ViewNerisCompliance on the department and returns the tile', async () => {
     send.mockResolvedValue({ decision: Decision.ALLOW });
-    ddbSend.mockResolvedValue({ Items: [{ incidentId: 'A', alarmAt: 1, createdBy: 'M' }] });
+    ddbSend.mockImplementation((command: { constructor: { name: string } }) =>
+      Promise.resolve(
+        command.constructor.name === 'GetCommand'
+          ? { Item: { firstName: 'Pat', lastName: 'Ryan' } }
+          : { Items: [{ incidentId: 'A', alarmAt: 1, createdBy: 'M' }] },
+      ),
+    );
     const result = (await handler(buildEvent({ days: '30' }))) as {
       statusCode: number;
       body: string;
@@ -41,7 +48,7 @@ describe('GET /reporting/neris-compliance', () => {
     expect(result.statusCode).toBe(200);
     expect(JSON.parse(result.body)).toMatchObject({
       windowDays: 30,
-      openDrafts: [{ id: 'A', owner: 'M', locked: false }],
+      openDrafts: [{ id: 'A', owner: 'M', ownerName: 'Pat Ryan', locked: false }],
     });
     const vpInput = (send.mock.calls[0]![0] as { input: Record<string, unknown> }).input;
     expect(vpInput).toMatchObject({

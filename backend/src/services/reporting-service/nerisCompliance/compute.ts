@@ -16,12 +16,16 @@ export interface ComplianceIncident {
   readonly firstSubmittedAt?: number;
   readonly nerisIncidentId?: string;
   readonly nerisStatus?: string;
+  readonly submissionStatus?: string;
 }
 
 export interface OpenDraft {
   readonly id: string;
   readonly ageHours: number;
+  /** The owner's member id (Cognito sub). */
   readonly owner: string | null;
+  /** The owner's name from the roster; never shown as the raw id. */
+  readonly ownerName: string | null;
   readonly status: string | null;
   readonly locked: boolean;
 }
@@ -30,10 +34,15 @@ export interface NerisCompliance {
   readonly windowDays: number;
   /** Of the calls at least 72 h old, the share NERIS accepted within 72 h of the alarm. */
   readonly submittedWithin72hPct: number | null;
-  /** Of the reports NERIS holds, the share it rejected. */
+  /**
+   * Of the reports sent to NERIS, the share it refused: rejected at send time (422) or
+   * rejected later by an approver (review minor 9).
+   */
   readonly rejectionRate: number | null;
   readonly submittedCount: number;
   readonly rejectedCount: number;
+  /** Of those, refused at send time (422) rather than by an approver. */
+  readonly validationRejectedCount: number;
   readonly eligibleCount: number;
   /** Reports not yet accepted by NERIS, oldest first. */
   readonly openDrafts: readonly OpenDraft[];
@@ -47,6 +56,7 @@ export function computeNerisCompliance(
   incidents: readonly ComplianceIncident[],
   nowEpochSeconds: number,
   windowDays: number,
+  ownerNames: Readonly<Record<string, string>> = {},
 ): NerisCompliance {
   const eligible = incidents.filter(
     (i) => nowEpochSeconds - i.alarmAt >= SUBMISSION_TARGET_SECONDS,
@@ -56,8 +66,12 @@ export function computeNerisCompliance(
       i.firstSubmittedAt !== undefined &&
       i.firstSubmittedAt - i.alarmAt <= SUBMISSION_TARGET_SECONDS,
   );
-  const submitted = incidents.filter((i) => i.nerisIncidentId !== undefined);
-  const rejected = submitted.filter((i) => i.nerisStatus === 'REJECTED');
+  // Sent = NERIS holds it, or it was refused at send time (local REJECTED, no NERIS id).
+  const submitted = incidents.filter(
+    (i) => i.nerisIncidentId !== undefined || i.status === 'REJECTED',
+  );
+  const rejected = submitted.filter((i) => i.nerisStatus === 'REJECTED' || i.status === 'REJECTED');
+  const validationRejected = rejected.filter((i) => i.nerisStatus !== 'REJECTED');
   const openDrafts = incidents
     .filter((i) => i.firstSubmittedAt === undefined)
     .sort((a, b) => a.alarmAt - b.alarmAt)
@@ -66,6 +80,7 @@ export function computeNerisCompliance(
       id: i.incidentId,
       ageHours: Math.max(0, Math.floor((nowEpochSeconds - i.alarmAt) / 3_600)),
       owner: i.createdBy ?? null,
+      ownerName: (i.createdBy && ownerNames[i.createdBy]) || null,
       status: i.status ?? null,
       locked: i.lockedAt !== undefined,
     }));
@@ -75,6 +90,7 @@ export function computeNerisCompliance(
     rejectionRate: pct(rejected.length, submitted.length),
     submittedCount: submitted.length,
     rejectedCount: rejected.length,
+    validationRejectedCount: validationRejected.length,
     eligibleCount: eligible.length,
     openDrafts,
   };
@@ -101,6 +117,7 @@ export function toComplianceIncident(
     firstSubmittedAt: num(item.firstSubmittedAt),
     nerisIncidentId: str(item.nerisIncidentId),
     nerisStatus: str(item.nerisStatus),
+    submissionStatus: str(item.submissionStatus),
   };
   return {
     incidentId,
