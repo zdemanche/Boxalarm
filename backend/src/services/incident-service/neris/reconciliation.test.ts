@@ -5,6 +5,7 @@ import { toVerifiedDeptId } from '@boxalarm/dept-scope';
 import type { NerisApi } from './api.js';
 import {
   MISSING_MAX_CHECKS,
+  driftKey,
   repairDrift,
   diffAgainstNeris,
   previousMonth,
@@ -436,5 +437,17 @@ describe('reconcileDepartment: only new drift is published (round 2b, R4)', () =
       newDriftCount: 0,
       driftKeys: [`UNKNOWN_IN_NERIS#${ID('9001')}`],
     });
+  });
+});
+
+describe('driftKey (round 2c, Q2)', () => {
+  it('keys a status mismatch on both statuses, so a changed mismatch is new drift', () => {
+    const base = { kind: 'STATUS_MISMATCH' as const, nerisIncidentId: ID('4472') };
+    const before = driftKey({ ...base, localStatus: 'PENDING_APPROVAL', nerisStatus: 'REJECTED' });
+    const after = driftKey({ ...base, localStatus: 'PENDING_APPROVAL', nerisStatus: 'APPROVED' });
+    expect(before).not.toBe(after);
+    expect(driftKey({ kind: 'MISSING_IN_NERIS', nerisIncidentId: ID('4473') })).toBe(
+      `MISSING_IN_NERIS#${ID('4473')}`,
+    );
   });
 });

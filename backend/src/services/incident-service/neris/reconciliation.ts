@@ -74,7 +74,10 @@ export interface LocalSubmitted {
 
 /** One drift finding's identity across nights: new drift is what the alarm pages on. */
 export function driftKey(entry: Drift): string {
-  return `${entry.kind}#${entry.nerisIncidentId}`;
+  // A status mismatch that changes (NERIS moved again, or we did) is new drift (round 2c, Q2).
+  return entry.kind === 'STATUS_MISMATCH'
+    ? `${entry.kind}#${entry.nerisIncidentId}#${entry.localStatus ?? ''}>${entry.nerisStatus ?? ''}`
+    : `${entry.kind}#${entry.nerisIncidentId}`;
 }
 
 /** Drift keys kept on the last-run row to tell new drift from drift already reported. */
