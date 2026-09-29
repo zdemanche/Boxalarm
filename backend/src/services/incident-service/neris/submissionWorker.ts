@@ -295,11 +295,13 @@ async function attemptSubmission(
     return;
   }
 
+  // Strongly consistent like the report reads around it (round 2b, R5).
   const units = await queryIncidentResponseUnits(
     client,
     tableName,
     payload.deptId,
     payload.incidentId,
+    { consistent: true },
   );
   const nerisPayload = buildNerisIncidentPayload({
     incident,

@@ -94,12 +94,14 @@ function mockDeps(options: {
         .default,
     }),
   }));
+  const queryUnits = vi
+    .fn()
+    .mockResolvedValue([{ unitId: 'E1', unitType: 'APPARATUS', dispatchedAt: 1_798_000_060 }]);
   vi.doMock('../dispatchProjection.js', async (importOriginal) => {
     const actual = await importOriginal<typeof import('../dispatchProjection.js')>();
     return {
       ...actual,
-      queryIncidentResponseUnits: () =>
-        Promise.resolve([{ unitId: 'E1', unitType: 'APPARATUS', dispatchedAt: 1_798_000_060 }]),
+      queryIncidentResponseUnits: queryUnits,
     };
   });
 
@@ -168,6 +170,7 @@ function mockDeps(options: {
     markCreateInFlight,
     forgetMissingNerisRecord,
     fetchFn,
+    queryUnits,
   };
 }
 
@@ -353,6 +356,23 @@ describe('submissionWorker handler (SQS trigger)', () => {
       expect.objectContaining({ outcome: 'SUCCESS', operation: 'CREATE' }),
       true,
       expect.any(Number),
+    );
+  });
+
+  it('reads the unit rows strongly consistently, like the report (round 2b, R5)', async () => {
+    const { queryUnits } = mockDeps({});
+    const { createHandler } = await import('./submissionWorker.js');
+    await createHandler({ schedulerClient: { send: vi.fn() } as never })(
+      { Records: [sqsRecord(submittedEnvelope('NICHOLS', INCIDENT_ID))] },
+      FAKE_CONTEXT,
+      () => undefined,
+    );
+    expect(queryUnits).toHaveBeenCalledWith(
+      expect.anything(),
+      'incident-table',
+      'NICHOLS',
+      INCIDENT_ID,
+      { consistent: true },
     );
   });
 
