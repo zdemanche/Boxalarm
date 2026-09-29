@@ -93,6 +93,21 @@ Left from R6:
 
 Left from the round-2b fidelity note: the fake server answers `GET` by id for records it never created. The "genuine 422, no record" branch is covered by the mocked worker tests only.
 
+## Round 2c dispositions (final)
+
+| Finding | Outcome |
+|---|---|
+| Q1 duplicate on re-create | Before re-creating, the worker also looks the record up under its old id, and adopts it if NERIS still holds it. |
+| Q2 changed mismatch silent | STATUS_MISMATCH drift keys include both statuses. |
+| Q3 validation vs payload | Casualty validation checks the projection that is sent. Stripped civilian firefighter-injury values never block. |
+| Q4 stale entity-sync jobs | The async invoke has `maximumEventAgeInSeconds` 60. A job carries its `syncStartedAt`, exits if the row belongs to another sync, and saves or fails only with a condition on it. |
+
+Known items. These are not another review round:
+
+- The R6 matching gaps listed above.
+- The fake server answers `GET` for records it never created.
+- A re-created record whose old id NERIS returns to listing after the POST is left as a duplicate in NERIS. The nightly reconciliation reports it as `UNKNOWN_IN_NERIS` new drift.
+
 ## Still open
 
 - **Unverified against a live NERIS account.** No authenticated call has been made:
