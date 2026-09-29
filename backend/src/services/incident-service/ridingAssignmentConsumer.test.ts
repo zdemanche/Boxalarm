@@ -236,6 +236,12 @@ describe('ridingAssignmentConsumer handler (entrypoint, AC6)', () => {
           CancellationReasons: [{ Code: 'None' }, { Code: 'ConditionalCheckFailed' }],
         });
       }
+      if (
+        command.constructor.name === 'GetCommand' &&
+        (command.input.Key as { sk: string }).sk === 'METADATA'
+      ) {
+        return { Item: { lockedAt: 1 } };
+      }
       return {};
     });
     vi.spyOn(console, 'warn').mockImplementation(() => undefined);
@@ -256,10 +262,41 @@ describe('ridingAssignmentConsumer handler (entrypoint, AC6)', () => {
     const items = (transact![0] as { input: { TransactItems: Record<string, unknown>[] } }).input
       .TransactItems;
     expect(items[1]).toMatchObject({
-      ConditionCheck: {
+      Update: {
         Key: { sk: 'METADATA' },
-        ConditionExpression: 'attribute_not_exists(lockedAt)',
+        ConditionExpression: 'attribute_exists(pk) AND attribute_not_exists(lockedAt)',
+        UpdateExpression: 'SET contentVersion = if_not_exists(contentVersion, :cvZero) + :cvOne',
       },
     });
+  });
+
+  it('writes staffing before the report exists without creating a METADATA row', async () => {
+    const { TransactionCanceledException } = await import('@aws-sdk/client-dynamodb');
+    let transactCalls = 0;
+    const send = stubSend((command) => {
+      if (command.constructor.name === 'TransactWriteCommand') {
+        transactCalls += 1;
+        const items = command.input.TransactItems as unknown[];
+        if (items.length === 2) {
+          throw new TransactionCanceledException({
+            message: 'cancelled',
+            $metadata: {},
+            CancellationReasons: [{ Code: 'None' }, { Code: 'ConditionalCheckFailed' }],
+          });
+        }
+      }
+      return {};
+    });
+    const { createHandler } = await import('./ridingAssignmentConsumer.js');
+    const handler = createHandler({ client: { send } as unknown as DynamoDBDocumentClient });
+
+    const result = await handler(
+      { Records: [{ messageId: 'm1', body: detailBody() }] } as unknown as SQSEvent,
+      {} as never,
+      () => undefined,
+    );
+
+    expect(result).toEqual({ batchItemFailures: [] });
+    expect(transactCalls).toBe(2);
   });
 });

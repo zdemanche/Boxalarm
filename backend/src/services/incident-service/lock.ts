@@ -14,8 +14,9 @@ import { problemResponse, type ProblemResponse } from './authContext.js';
 export const NOT_LOCKED_CONDITION = 'attribute_not_exists(lockedAt)';
 
 /**
- * Every content write (fields, narrative, unit times, exposures, NERIS modules) bumps the
- * report's METADATA contentVersion in the same transaction. Lock pins the version the
+ * Every content write — fields, narrative, unit times, exposures, NERIS modules, and the
+ * riding-assignment consumer's staffing — bumps the report's METADATA contentVersion in the
+ * same transaction (the riding consumer only once the report exists). Lock pins the version the
  * officer validated, so any edit in between — unit times included — fails the lock with
  * CHANGED_SINCE_REVIEW (review M5). Use with {@link CONTENT_VERSION_VALUES}.
  */

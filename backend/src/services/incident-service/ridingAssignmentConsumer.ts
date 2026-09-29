@@ -18,6 +18,7 @@ import {
 import { buildDeptScopedPk, toVerifiedDeptId, type VerifiedDeptId } from '@boxalarm/dept-scope';
 import { emitOutcomeMetric } from '@boxalarm/metrics';
 import { getDocumentClient, getTableName } from './repository.js';
+import { BUMP_CONTENT_VERSION, CONTENT_VERSION_VALUES, NOT_LOCKED_CONDITION } from './lock.js';
 
 const METRIC_NAMESPACE = 'Boxalarm/IncidentRidingAssignment';
 const MAX_UPDATE_ATTEMPTS = 5;
@@ -124,6 +125,9 @@ async function updateResponseUnit(
   previousMemberId: string | null,
   eventUpdatedAt: number,
 ): Promise<UpdateOutcome> {
+  // Until the report exists (the dispatch is still running) there is no METADATA row to
+  // version or lock; the first failed METADATA condition tells which case this is.
+  let reportExists = true;
   for (let attempt = 0; attempt < MAX_UPDATE_ATTEMPTS; attempt += 1) {
     const existing = await client.send(new GetCommand({ TableName: tableName, Key: key }));
     const existingItem = existing.Item as
@@ -163,16 +167,23 @@ async function updateResponseUnit(
                 },
               },
             },
-            {
-              // Staffing feeds NERIS unit responses: a report locked for review (or already
-              // sent) is not changed behind the officer's back (review M5). A missing report
-              // (the dispatch is still running) passes: it cannot be locked yet.
-              ConditionCheck: {
-                TableName: tableName,
-                Key: { ...key, sk: 'METADATA' },
-                ConditionExpression: 'attribute_not_exists(lockedAt)',
-              },
-            },
+            // Staffing feeds NERIS unit responses, so it is a content write like any other:
+            // refused on a report locked for review (or already sent), and it bumps the
+            // report's contentVersion so a lock pinned before it fails (review M5, round 2
+            // N3). Before the report exists there is nothing to version or lock.
+            ...(reportExists
+              ? [
+                  {
+                    Update: {
+                      TableName: tableName,
+                      Key: { ...key, sk: 'METADATA' },
+                      ConditionExpression: `attribute_exists(pk) AND ${NOT_LOCKED_CONDITION}`,
+                      UpdateExpression: `SET ${BUMP_CONTENT_VERSION}`,
+                      ExpressionAttributeValues: { ...CONTENT_VERSION_VALUES },
+                    },
+                  },
+                ]
+              : []),
           ],
         }),
       );
@@ -180,7 +191,18 @@ async function updateResponseUnit(
     } catch (error) {
       if (error instanceof TransactionCanceledException) {
         const reasons = error.CancellationReasons ?? [];
-        if (reasons[1]?.Code === 'ConditionalCheckFailed') return 'locked';
+        if (reasons[1]?.Code === 'ConditionalCheckFailed') {
+          const metadata = await client.send(
+            new GetCommand({
+              TableName: tableName,
+              Key: { ...key, sk: 'METADATA' },
+              ConsistentRead: true,
+            }),
+          );
+          if (metadata.Item) return 'locked';
+          reportExists = false;
+          continue;
+        }
         if (reasons[0]?.Code === 'ConditionalCheckFailed') continue;
       }
       if (error instanceof ConditionalCheckFailedException) {
