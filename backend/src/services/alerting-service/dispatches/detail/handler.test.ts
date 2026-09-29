@@ -272,6 +272,40 @@ describe('alert-detail handler', () => {
       });
     });
 
+    it('N13: hydrants for geo CANDIDATES are measured from the dispatch point, not a candidate', async () => {
+      const { createHandler } = await import('./handler.js');
+      const north = (m: number) => ({
+        latitude: OCCUPANCY_POINT.latitude + m / 111_320,
+        longitude: OCCUPANCY_POINT.longitude,
+      });
+      const docClient = routedClient({
+        dispatch: { ...DISPATCH_ITEM, address: 'I-95 NB near exit 27', ...OCCUPANCY_POINT },
+        queries: (input) => {
+          const pk = `${input.ExpressionAttributeValues[':gsi2pk'] as string}`;
+          if (pk.includes('PREPLAN_GEO')) {
+            return Promise.resolve({
+              Items: [
+                { ...PRE_PLAN_COPY, occupancyId: 'OCC-20', ...north(20) },
+                { ...PRE_PLAN_COPY, occupancyId: 'OCC-45', ...north(45) },
+              ],
+            });
+          }
+          if (pk.includes('HYDRANT_GEO')) {
+            return Promise.resolve({ Items: [hydrantAt('H-AT-DISPATCH', 0)] });
+          }
+          return Promise.resolve({ Items: [] });
+        },
+      });
+      const handler = createHandler({ authzClient: fakeAuthzClient('ALLOW'), docClient });
+
+      const body = JSON.parse(
+        ((await handler(buildEvent('NICHOLS-4471-1798000000'))) as { body: string }).body,
+      ) as { prePlan: { matchType: string }; nearestHydrants: Array<{ distanceMeters: number }> };
+
+      expect(body.prePlan.matchType).toBe('CANDIDATES');
+      expect(body.nearestHydrants[0]?.distanceMeters).toBe(0);
+    });
+
     it('never falls back to a nearby pre-plan when the dispatch has a usable street address that matched nothing', async () => {
       const { createHandler } = await import('./handler.js');
       const queries = vi.fn((input: QueryInput) => {

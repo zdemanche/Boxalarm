@@ -92,11 +92,15 @@ async function matchPrePlan(
   item: DispatchAlertItem,
   dispatchPoint: GeoPoint | undefined,
 ): Promise<PrePlanMatch | undefined> {
-  if (item.address && normalizeAddress(item.address)) {
+  if (usableStreetAddress(item)) {
     const home = await loadHomeLocality(client, tableName, deptId, process.env);
     return findPrePlanByAddress(client, tableName, deptId, item.address, dispatchPoint, home);
   }
   return dispatchPoint ? findPrePlanNear(client, tableName, deptId, dispatchPoint) : undefined;
+}
+
+function usableStreetAddress(item: DispatchAlertItem): boolean {
+  return Boolean(item.address && normalizeAddress(item.address));
 }
 
 /** Pre-plan and hydrant context for one dispatch (the detail response's enrichment). */
@@ -157,11 +161,12 @@ export async function fetchDispatchContext(
       : match.matchType === 'CANDIDATES'
         ? match.candidates[0]?.copy
         : match.copy;
-  // NEARBY: the dispatch point is the truth; otherwise the matched building's own location.
-  const hydrantReference =
-    match?.matchType === 'NEARBY'
-      ? dispatchPoint
-      : ((primary ? pointOf(primary) : undefined) ?? dispatchPoint);
+  // A geo match (NEARBY, or CANDIDATES around the dispatch point) is anchored on the dispatch
+  // point, which is the truth; an address match on the matched building's own location.
+  const geoMatch = match !== undefined && !usableStreetAddress(item);
+  const hydrantReference = geoMatch
+    ? dispatchPoint
+    : ((primary ? pointOf(primary) : undefined) ?? dispatchPoint);
 
   let nearestHydrants: readonly NearestHydrant[] | undefined;
   let hydrantsUnavailable = false;
