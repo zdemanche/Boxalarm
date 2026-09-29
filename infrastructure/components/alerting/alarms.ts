@@ -275,8 +275,43 @@ export class AlertingAlarms extends pulumi.ComponentResource {
       evaluationPeriods: 1,
     });
 
+    // Design review C2: an eligible member with no phone is never published on SMS (the
+    // fan-out checks the target first) - counted, and paged here, instead of silently skipped.
+    pageAlarm("fan-out-sms-skipped-alarm", {
+      name: `boxalarm-${env}-alerting-fan-out-sms-skipped`,
+      alarmDescription:
+        "The tone-1 fan-out found an eligible member with no SMS contact entry and could not text them. " +
+        "The snapshot's SMS/VOICE entries are projected from the member's phone by the member-updated consumer; " +
+        "check the member has a phone in personnel, then the consumer's DLQ and logs (fanout.sms.skipped names the member).",
+      namespace: FAN_OUT_METRIC_NAMESPACE,
+      metricName: "SmsSkipped",
+      statistic: "Sum",
+      comparisonOperator: "GreaterThanThreshold",
+      threshold: 0,
+      period: 60,
+      evaluationPeriods: 1,
+    });
+
     for (const channel of ALERTING_CHANNELS) {
       const dlq = args.channelQueues[channel].dlq;
+
+      // A real page the worker had no target for is acknowledged with no DLQ entry and no
+      // SendFailed - before this alarm, the silent shape of the SMS-never-sends defect (C2).
+      // deliverChannelMessage emits emitOutcomeMetric(ns, "NoTargetRegistered", channel).
+      pageAlarm(`${channel}-no-target-alarm`, {
+        name: `boxalarm-${env}-alerting-${channel}-no-target`,
+        alarmDescription:
+          `A ${channel} page reached the worker for a member with no ${channel} target in the eligibility snapshot, and was dropped. ` +
+          "Check alerting.channel.no_target in the worker logs for the member, then their contact entries (SMS/VOICE come from the member's phone, PUSH from a registered device).",
+        namespace: "Boxalarm/AlertingChannel",
+        metricName: "NoTargetRegistered",
+        dimensions: { Reason: channel },
+        statistic: "Sum",
+        comparisonOperator: "GreaterThanThreshold",
+        threshold: 0,
+        period: 60,
+        evaluationPeriods: 1,
+      });
 
       // A worker that is consuming but stuck (hung vendor call) before anything reaches
       // the DLQ. A healthy queue never holds a message this long.

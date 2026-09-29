@@ -4,6 +4,7 @@ import { buildDeptScopedPk, toVerifiedDeptId } from '@boxalarm/dept-scope';
 import { emitEmf } from '@boxalarm/metrics';
 import type { SQSBatchResponse, SQSEvent } from 'aws-lambda';
 import { createDynamoClient, readAlertingConfig } from './dynamoClient.js';
+import { applyContactUpdate, pushEntriesFrom, type ContactUpdate } from './contactProjection.js';
 
 const LATENCY_METRIC_NAMESPACE = 'Boxalarm/AlertingEligibility';
 
@@ -14,6 +15,8 @@ interface MemberUpdatedPayload {
   readonly quals?: readonly string[];
   readonly roles?: readonly string[];
   readonly contactChannels?: readonly unknown[];
+  /** The member's phone (createMember, updateMember); projected into SMS and VOICE entries. */
+  readonly phone?: unknown;
   readonly availabilityState?: string;
 }
 
@@ -106,8 +109,9 @@ function seedDefaults(
 }
 
 /**
- * Every field except roles, guarded on the snapshot-wide snapshotUpdatedAt. Undefined when
- * the event carries nothing but roles.
+ * The eligibility fields (active, quals, availabilityState), guarded on the snapshot-wide
+ * snapshotUpdatedAt. Roles and contact channels have their own guarded writes. Undefined when
+ * the event carries none of these fields.
  */
 function buildMergeExpression(payload: MemberUpdatedPayload, snapshotUpdatedAt: number) {
   const setClauses = [
@@ -130,7 +134,6 @@ function buildMergeExpression(payload: MemberUpdatedPayload, snapshotUpdatedAt: 
   };
   assign('active', payload.active);
   assign('quals', payload.quals);
-  assign('contactChannels', payload.contactChannels);
   assign('availabilityState', payload.availabilityState);
   if (set.size === 0) {
     return undefined;
@@ -175,6 +178,66 @@ function buildRolesExpression(roles: readonly string[], memberId: string, eventT
   };
 }
 
+/** The contact groups this event carries, or undefined when it carries neither. */
+function contactUpdateFrom(payload: MemberUpdatedPayload): ContactUpdate | undefined {
+  const phone =
+    typeof payload.phone === 'string' && payload.phone.trim().length > 0
+      ? payload.phone.trim()
+      : undefined;
+  const pushEntries = Array.isArray(payload.contactChannels)
+    ? pushEntriesFrom(payload.contactChannels)
+    : undefined;
+  if (phone === undefined && pushEntries === undefined) {
+    return undefined;
+  }
+  return {
+    ...(pushEntries !== undefined ? { pushEntries } : {}),
+    ...(phone !== undefined ? { phone } : {}),
+  };
+}
+
+function logStale(memberId: string): void {
+  console.log(
+    JSON.stringify({
+      event: 'alerting.eligibility.snapshot.stale_discarded',
+      service: 'alerting-service',
+      correlationId: memberId,
+      memberId,
+    }),
+  );
+  emitSnapshotMetric('Stale');
+}
+
+function logUpdateFailed(memberId: string, error: unknown): void {
+  console.error(
+    JSON.stringify({
+      event: 'alerting.eligibility.snapshot.update.failed',
+      service: 'alerting-service',
+      correlationId: memberId,
+      memberId,
+      reason: error instanceof Error ? error.constructor.name : 'UnknownError',
+      message: error instanceof Error ? error.message : String(error),
+    }),
+  );
+  emitSnapshotMetric('Failed');
+}
+
+function emitPropagationLatency(memberId: string, eventTimeMs: number): void {
+  const latencyMs = Date.now() - eventTimeMs;
+  if (latencyMs < 0) {
+    console.warn(
+      JSON.stringify({
+        event: 'alerting.eligibility.snapshot_propagation.future_event_time',
+        service: 'alerting-service',
+        correlationId: memberId,
+        memberId,
+        latencyMs,
+      }),
+    );
+  }
+  emitEmf(LATENCY_METRIC_NAMESPACE, 'SnapshotPropagationLatencyMs', Math.max(latencyMs, 0), [[]]);
+}
+
 export const handler = async (event: SQSEvent): Promise<SQSBatchResponse> => {
   const client = createDynamoClient(process.env);
   const tableName = readAlertingConfig(process.env).tableName;
@@ -202,46 +265,36 @@ export const handler = async (event: SQSEvent): Promise<SQSBatchResponse> => {
           }),
         );
         emitSnapshotMetric('Updated');
-
-        const latencyMs = Date.now() - snapshotUpdatedAt;
-        if (latencyMs < 0) {
-          console.warn(
-            JSON.stringify({
-              event: 'alerting.eligibility.snapshot_propagation.future_event_time',
-              service: 'alerting-service',
-              correlationId: payload.memberId,
-              memberId: payload.memberId,
-              latencyMs,
-            }),
-          );
-        }
-        emitEmf(LATENCY_METRIC_NAMESPACE, 'SnapshotPropagationLatencyMs', Math.max(latencyMs, 0), [
-          [],
-        ]);
+        emitPropagationLatency(payload.memberId, snapshotUpdatedAt);
       } catch (error) {
         if (error instanceof ConditionalCheckFailedException) {
-          console.log(
-            JSON.stringify({
-              event: 'alerting.eligibility.snapshot.stale_discarded',
-              service: 'alerting-service',
-              correlationId: payload.memberId,
-              memberId: payload.memberId,
-            }),
-          );
-          emitSnapshotMetric('Stale');
+          logStale(payload.memberId);
           continue;
         }
-        console.error(
-          JSON.stringify({
-            event: 'alerting.eligibility.snapshot.update.failed',
-            service: 'alerting-service',
-            correlationId: payload.memberId,
-            memberId: payload.memberId,
-            reason: error instanceof Error ? error.constructor.name : 'UnknownError',
-            message: error instanceof Error ? error.message : String(error),
-          }),
+        logUpdateFailed(payload.memberId, error);
+        throw error;
+      }
+    }
+
+    const contactUpdate = contactUpdateFrom(payload);
+    if (contactUpdate) {
+      try {
+        const outcome = await applyContactUpdate(
+          client,
+          tableName,
+          { pk, sk: `MEMBER#${payload.memberId}` },
+          payload.memberId,
+          contactUpdate,
+          snapshotUpdatedAt,
         );
-        emitSnapshotMetric('Failed');
+        if (outcome === 'stale') {
+          logStale(payload.memberId);
+        } else {
+          emitSnapshotMetric('Updated');
+          emitPropagationLatency(payload.memberId, snapshotUpdatedAt);
+        }
+      } catch (error) {
+        logUpdateFailed(payload.memberId, error);
         throw error;
       }
     }

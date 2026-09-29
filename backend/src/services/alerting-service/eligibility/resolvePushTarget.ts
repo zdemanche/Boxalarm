@@ -29,7 +29,11 @@ export function findContactEntry<
   );
 }
 
-/** A phone entry's number: `phoneNumber`, or `token` as maintainMemberSnapshot writes it. */
+/**
+ * A phone entry's number: `phoneNumber`, as the snapshot's phone projection writes it
+ * (eligibility/contactProjection.ts), or `token` for the legacy `{ channel: 'sms', token }`
+ * shape an earlier, never-deployed writer used.
+ */
 export function contactPhone(
   entry: { readonly phoneNumber?: string; readonly token?: string } | undefined,
 ): string | undefined {

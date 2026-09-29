@@ -78,7 +78,16 @@ function toMember(item: Record<string, unknown>): Member {
   };
 }
 
-/** memberId is the member's Cognito `sub` (see memberLogin.ts), never a generated id. */
+/**
+ * memberId is the member's Cognito `sub` (see memberLogin.ts), never a generated id.
+ *
+ * The member row, its audit row and a `personnel.member.updated` outbox entry are one
+ * transaction. The event carries `phone` and `roles`, which the alerting plane projects into
+ * the member's eligibility snapshot (alerting-service eligibility/memberUpdatedHandler.ts):
+ * `phone` becomes the SMS and VOICE contact entries every SMS page and voice escalation
+ * resolves its target from. Without it a new member had no snapshot until they registered a
+ * push token, and then only a push entry - no SMS, no voice (design review C2).
+ */
 export async function createMember(
   tableName: string,
   principal: VerifiedPrincipal,
@@ -88,6 +97,7 @@ export async function createMember(
 ): Promise<Member> {
   const deptId = toVerifiedDeptId(principal);
   const now = Date.now();
+  const eventId = randomUUID();
   const changedAt = new Date(now).toISOString();
   const auditDate = changedAt.slice(0, 10);
   const member: Member = {
@@ -144,6 +154,26 @@ export async function createMember(
               gsi3sk: changedAt,
             },
             ConditionExpression: 'attribute_not_exists(pk) AND attribute_not_exists(sk)',
+          },
+        },
+        {
+          Put: {
+            TableName: tableName,
+            Item: {
+              pk: buildDeptScopedPk(deptId, 'OUTBOX', memberId),
+              sk: `EVT#${eventId}`,
+              entityType: 'OUTBOX_ENTRY',
+              eventId,
+              eventTime: changedAt,
+              eventType: 'personnel.member.updated',
+              source: 'personnel-service',
+              correlationId: memberId,
+              schemaVersion: '1.0',
+              // `active` is deliberately absent: the snapshot seeds a new member as active,
+              // as it always has; status changes own that field.
+              payload: { deptId, memberId, phone: member.phone, roles: member.roles },
+              sentAt: null,
+            },
           },
         },
       ],

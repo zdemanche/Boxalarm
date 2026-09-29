@@ -650,6 +650,36 @@ describe('fanout/handler', () => {
     expect(sns.calls[0]!.MessageAttributes.channel?.StringValue).toBe('sms');
   });
 
+  // Design review C2: an SMS published for a member with no SMS entry was dropped by the worker
+  // as NoTargetRegistered, acknowledged with no DLQ and no alarm. The producer now applies the
+  // worker's own lookup first, and counts the skip (SmsSkipped is alarmed).
+  it('skips only the SMS send when the member has no SMS entry, and counts it — push is unaffected (C2)', async () => {
+    const ddb = createFakeDdb([
+      memberSnapshot({
+        contactChannels: [{ channel: 'PUSH', token: 'tok-1', platform: 'APNS', valid: true }],
+      }),
+    ]);
+    const sns = createFakeSns();
+    vi.doMock('../eligibility/dynamoClient.js', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('../eligibility/dynamoClient.js')>();
+      return { ...actual, createDynamoClient: () => ddb as unknown as DynamoDBDocumentClient };
+    });
+    vi.doMock('./snsClient.js', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('./snsClient.js')>();
+      return { ...actual, createSnsClient: () => sns as unknown as SNSClient };
+    });
+    const logSpy = vi.spyOn(console, 'log');
+
+    const { handler } = await import('./handler.js');
+    await handler(dispatchAlertInsertEvent());
+
+    expect(sns.calls.map((call) => call.MessageAttributes.channel?.StringValue)).toEqual(['push']);
+    expect(logSpy.mock.calls.some(([line]) => String(line).includes('"Name":"SmsSkipped"'))).toBe(
+      true,
+    );
+    logSpy.mockRestore();
+  });
+
   it('reports the failing record as a batch item failure when one channel publish fails, without aborting the whole invocation — Streams redrives only that record (R3, no shard-blocking)', async () => {
     const ddb = createFakeDdb([memberSnapshot()]);
     const sns = createFakeSns((call) => call.MessageAttributes.channel?.StringValue === 'push');

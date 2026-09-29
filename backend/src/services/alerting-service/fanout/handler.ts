@@ -359,6 +359,20 @@ async function fanOutOneDispatch(
             continue;
           }
         }
+        if (channel === 'sms') {
+          // The same lookup the worker and the tone evaluator use: publishing an SMS the
+          // worker cannot resolve would be dropped there as NoTargetRegistered. Skipped here,
+          // it is counted and alarmed instead (SmsSkipped) - an eligible member with no phone.
+          const smsTarget = resolveSmsTarget(member.contactChannels);
+          if (smsTarget.skipped) {
+            logInfo('fanout.sms.skipped', dispatch.dispatchId, {
+              memberId: member.memberId,
+              reason: smsTarget.reason,
+            });
+            emitOutcomeMetric(METRIC_NAMESPACE, 'SmsSkipped');
+            continue;
+          }
+        }
         tasks.push({ memberId: member.memberId, channel });
       }
     }

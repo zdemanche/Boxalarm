@@ -103,13 +103,41 @@ describe('memberRepository', () => {
       sendMock.mockResolvedValueOnce({});
       const member = await createMember('table', PRINCIPAL, input, 'actor-1', 'sub-jamie');
       const items = lastCall().input.TransactItems ?? [];
-      expect(items).toHaveLength(2);
+      expect(items).toHaveLength(3);
       const auditPut = items[1]?.Put;
       expect(auditPut?.Item.entityType).toBe('AUDIT_LOG_ENTRY');
       expect(auditPut?.Item.action).toBe('CREATE');
       expect(auditPut?.Item.mutatedEntityId).toBe(member.memberId);
       expect(auditPut?.Item.actorId).toBe('actor-1');
       expect(auditPut?.Item.pk).toMatch(/^DEPT#NICHOLS#AUDIT#\d{4}-\d{2}-\d{2}$/);
+    });
+
+    // Design review C2: the alerting plane projects `phone` into the member's SMS and VOICE
+    // contact entries. Without this event a new member had no snapshot (and never an SMS/voice
+    // target) until they registered a push token.
+    it('emits personnel.member.updated carrying phone and roles in the same transaction (C2)', async () => {
+      sendMock.mockResolvedValueOnce({});
+      await createMember('table', PRINCIPAL, input, 'actor-1', 'sub-jamie');
+      const outbox = (lastCall().input.TransactItems ?? [])[2]?.Put?.Item;
+      expect(outbox).toMatchObject({
+        pk: 'DEPT#NICHOLS#OUTBOX#sub-jamie',
+        entityType: 'OUTBOX_ENTRY',
+        eventType: 'personnel.member.updated',
+        source: 'personnel-service',
+        correlationId: 'sub-jamie',
+        schemaVersion: '1.0',
+        payload: {
+          deptId: 'NICHOLS',
+          memberId: 'sub-jamie',
+          phone: '203-555-0100',
+          roles: ['MEMBER'],
+        },
+        sentAt: null,
+      });
+      expect(outbox?.sk).toMatch(/^EVT#/);
+      expect(typeof outbox?.eventTime).toBe('string');
+      // Eligibility (`active`) is owned by status changes, never asserted at creation.
+      expect(outbox?.payload).not.toHaveProperty('active');
     });
   });
 

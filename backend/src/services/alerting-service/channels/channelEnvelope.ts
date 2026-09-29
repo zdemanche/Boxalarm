@@ -247,10 +247,9 @@ export type ResolveChannelTargetResult =
  * so both sides accept the same shapes - a mismatch means the producer publishes and the worker silently finds no
  * target (the recurring SMS-never-sends defect, #12). Accepted, case-insensitively:
  *  - push: a PUSH entry's token (registerToken.ts);
- *  - sms: an SMS entry's phone, as phoneNumber or token (maintainMemberSnapshot.ts writes
- *    { channel: 'sms', token: phone });
- *  - voice: a VOICE entry's phone, else the member's SMS phone - voice escalation dials the
- *    same number, and nothing writes a separate VOICE entry.
+ *  - sms: an SMS entry's phone, as phoneNumber (eligibility/contactProjection.ts projects the
+ *    member's phone into { channel: 'SMS', phoneNumber }) or the legacy `token`;
+ *  - voice: a VOICE entry's phone (projected from the same phone), else the SMS phone.
  */
 export function resolveChannelTarget(
   channel: ChannelName,

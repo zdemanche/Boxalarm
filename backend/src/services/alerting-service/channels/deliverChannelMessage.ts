@@ -127,8 +127,16 @@ export async function deliverChannelMessage(
       memberId,
       channel,
       reason: resolved.reason,
+      isTest,
     });
-    emitOutcomeMetric(METRIC_NAMESPACE, 'NoTargetRegistered', channel);
+    // A real page with no target is a member who was not reached, acknowledged with no DLQ
+    // entry - NoTargetRegistered is alarmed per channel (design review C2). A self-test/canary
+    // miss is reported through its own result, so it is counted apart.
+    emitOutcomeMetric(
+      METRIC_NAMESPACE,
+      isTest ? 'TestNoTargetRegistered' : 'NoTargetRegistered',
+      channel,
+    );
     return;
   }
 

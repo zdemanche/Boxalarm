@@ -147,6 +147,9 @@ describe("AlertingAlarms — every alert-path failure mode pages", { timeout: 30
       { Reason: "push" },
     ],
     ["boxalarm-dev-alerting-sms-delivery-failure-rate", "SendFailed", { Reason: "sms" }],
+    ["boxalarm-dev-alerting-push-no-target", "NoTargetRegistered", { Reason: "push" }],
+    ["boxalarm-dev-alerting-sms-no-target", "NoTargetRegistered", { Reason: "sms" }],
+    ["boxalarm-dev-alerting-voice-no-target", "NoTargetRegistered", { Reason: "voice" }],
     ["boxalarm-dev-alerting-voice-delivery-failure-rate", "SendFailed", { Reason: "voice" }],
     [
       "boxalarm-dev-alerting-sms-oldest-message-age",
@@ -220,6 +223,16 @@ describe("AlertingAlarms — every alert-path failure mode pages", { timeout: 30
       alarmActions: [PAGE_TOPIC_ARN],
     });
     expect(alarm.dimensions).toBeUndefined();
+  });
+
+  it("pages when the fan-out skips an eligible member's SMS for want of a phone (design review C2)", async () => {
+    await build();
+    expect(alarmByName("boxalarm-dev-alerting-fan-out-sms-skipped").inputs).toMatchObject({
+      namespace: "Boxalarm/alerting-fan-out",
+      metricName: "SmsSkipped",
+      threshold: 0,
+      alarmActions: [PAGE_TOPIC_ARN],
+    });
   });
 
   it("gives every alarm it owns a page action", async () => {

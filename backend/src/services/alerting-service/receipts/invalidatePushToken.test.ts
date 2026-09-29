@@ -54,3 +54,25 @@ describe('invalidatePushToken — the APNs 410 race (review minor 1)', () => {
     ).resolves.toBe('invalidated');
   });
 });
+
+describe('invalidatePushToken — concurrency with the contact projection', () => {
+  it('guards on contactVersion and advances it, so a concurrent registration or phone change is never overwritten', async () => {
+    const send = vi.fn((command: { constructor: { name: string } }) =>
+      Promise.resolve(
+        command.constructor.name === 'GetCommand'
+          ? { Item: { contactVersion: 3, contactChannels: [{ channel: 'PUSH', token: 'tok' }] } }
+          : {},
+      ),
+    );
+    await invalidatePushToken(
+      { send } as unknown as DynamoDBDocumentClient,
+      't',
+      deptId,
+      'mbr-1',
+      'tok',
+    );
+    const input = (updates(send)[0]?.[0] as { input: Record<string, unknown> }).input;
+    expect(input.ConditionExpression).toBe('attribute_exists(pk) AND contactVersion = :version');
+    expect(input.ExpressionAttributeValues).toMatchObject({ ':version': 3, ':nextVersion': 4 });
+  });
+});

@@ -47,7 +47,11 @@ const GET_STATEMENT = (tableArn: pulumi.Input<string>) =>
     },
   ]);
 
-/** create.ts: PutItem for the new MEMBER row plus its AUDIT_LOG_ENTRY (one TransactWriteCommand of two Puts). */
+/**
+ * create.ts: PutItem for the new MEMBER row, its AUDIT_LOG_ENTRY and the
+ * personnel.member.updated OUTBOX_ENTRY that seeds the alerting snapshot's phone contacts
+ * (one TransactWriteCommand of three Puts).
+ */
 const CREATE_STATEMENT = (tableArn: pulumi.Input<string>) =>
   pulumi.output(tableArn).apply((arn) => [
     {
