@@ -13,7 +13,7 @@ import * as syncManager from '../../sync/syncManager';
 import { RESPONSE_NOT_RECORDED } from '../../sync/syncManager';
 import { ackStatusLabel } from './ackStatus';
 import { alertPayloadFromNotificationData } from './alertPayload';
-import { etaFor, queueAlertResponse, type ResponseAnswer } from './alertResponses';
+import { queueAlertResponse, type ResponseAnswer } from './alertResponses';
 import { DEFAULT_CHANNEL_ID } from './pushChannel';
 
 /** The action ids a page's notification carries; the same ids on Android and iOS. */
@@ -107,11 +107,7 @@ export async function answerFromNotification(
   ) as Record<string, string>;
   try {
     ensureSyncConfigured();
-    const outboxId = await queueAlertResponse(
-      payload.dispatchId,
-      answer,
-      etaFor(answer, undefined),
-    );
+    const outboxId = await queueAlertResponse(payload.dispatchId, answer, null);
     await showAnswerNotification(notificationId, data, answer, 'Saved on this phone. Sending…');
     await syncManager.drainAndSettle();
     const sent = syncManager.hasSynced(outboxId);

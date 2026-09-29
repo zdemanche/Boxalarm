@@ -99,12 +99,12 @@ export const mockAlertsRepository: AlertsRepository = {
     return ROSTERS.get(dispatchId) ?? [];
   },
 
-  async submitResponse(dispatchId, ackStatus, etaMinutes) {
+  async submitResponse(dispatchId, ackStatus, eta) {
     const roster = ROSTERS.get(dispatchId);
     const entry = roster?.[0];
     if (entry) {
       entry.ackStatus = ackStatus;
-      entry.eta = etaMinutes ? Math.floor(Date.now() / 1000) + etaMinutes * 60 : null;
+      entry.eta = eta ? Math.floor(Date.now() / 1000) + eta.minutes * 60 : null;
       entry.lastAnsweredTone = 1;
     }
 

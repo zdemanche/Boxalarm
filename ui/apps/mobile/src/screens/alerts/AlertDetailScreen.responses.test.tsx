@@ -203,7 +203,7 @@ test('when the roster disagrees with an answer given here earlier, both are show
   expect(await screen.findByText('Roster shows something else')).toBeTruthy();
   expect(
     screen.getByText(
-      /roster shows: responding\. your last answer from this phone: not responding/i,
+      /roster shows: responding, eta \?\. your last answer from this phone: not responding/i,
     ),
   ).toBeTruthy();
   expect(screen.getByRole('button', { name: 'Send my answer again: Not responding' })).toBeTruthy();

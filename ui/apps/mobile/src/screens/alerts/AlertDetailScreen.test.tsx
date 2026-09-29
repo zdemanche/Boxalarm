@@ -98,15 +98,16 @@ const RESPONDING = /^Responding — you're going to the station/;
 const DIRECT = /^Responding direct to scene/;
 const NOT_RESPONDING = /^Not responding/;
 
-test('one tap on Responding records it at once with a default ETA - no keyboard, no second screen', async () => {
-  const { findByRole, findByText } = await render(<AlertDetailScreen />);
+test('one tap on Responding records it at once with no invented ETA - "ETA ?" - no keyboard, no second screen', async () => {
+  const { findByRole, findByText, findAllByRole } = await render(<AlertDetailScreen />);
 
   await act(async () => {
     fireEvent.press(await findByRole('button', { name: RESPONDING }));
   });
 
-  expect(await findByText(/your response: responding · eta 10 min/i)).toBeTruthy();
-  expect(await findByRole('radio', { name: 'ETA 10 minutes', selected: true })).toBeTruthy();
+  expect(await findByText(/your response: responding · eta \?/i)).toBeTruthy();
+  const chips = await findAllByRole('radio');
+  chips.forEach((chip) => expect(chip.props.accessibilityState.selected).toBe(false));
 });
 
 test('an ETA chip changes the ETA in one tap', async () => {
@@ -123,7 +124,7 @@ test('an ETA chip changes the ETA in one tap', async () => {
   expect(await findByRole('radio', { name: 'ETA 5 minutes', selected: true })).toBeTruthy();
 });
 
-test('the ETA chips are 5 / 10 / 15 / 20 and alert-path sized', async () => {
+test('the ETA chips are 5 / 10 / 15 / 20+ / At station and alert-path sized', async () => {
   const { findByRole, findAllByRole } = await render(<AlertDetailScreen />);
 
   await act(async () => {
@@ -135,7 +136,8 @@ test('the ETA chips are 5 / 10 / 15 / 20 and alert-path sized', async () => {
     'ETA 5 minutes',
     'ETA 10 minutes',
     'ETA 15 minutes',
-    'ETA 20 minutes',
+    'ETA 20 minutes or more',
+    'Already at the station',
   ]);
   chips.forEach((chip) => expect(chip.props.style.minHeight).toBeGreaterThanOrEqual(72));
 });
@@ -149,6 +151,23 @@ test('tapping Not responding records it immediately, with no ETA', async () => {
 
   expect(await findByText(/your response: not responding/i)).toBeTruthy();
   expect(queryAllByRole('radio')).toHaveLength(0);
+});
+
+test('20+ and At station are expressible', async () => {
+  const { findByRole, findByText } = await render(<AlertDetailScreen />);
+
+  await act(async () => {
+    fireEvent.press(await findByRole('button', { name: RESPONDING }));
+  });
+  await act(async () => {
+    fireEvent.press(await findByRole('radio', { name: 'ETA 20 minutes or more' }));
+  });
+  expect(await findByText(/eta 20\+ min/i)).toBeTruthy();
+
+  await act(async () => {
+    fireEvent.press(await findByRole('radio', { name: 'Already at the station' }));
+  });
+  expect(await findByText(/your response: responding · at station/i)).toBeTruthy();
 });
 
 test('the answer can be changed, and the selected answer is exposed to screen readers', async () => {

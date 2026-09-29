@@ -237,7 +237,8 @@ export interface AlertsRepository {
   submitResponse(
     dispatchId: string,
     ackStatus: Exclude<AckStatus, 'UNANSWERED'>,
-    etaMinutes?: number,
+    /** Only an ETA the member chose; null/undefined = not given. */
+    eta?: import('./alertResponses').EtaGiven | null,
   ): Promise<{ outboxId: string | null }>;
   submitManualDispatch(input: ManualDispatchInput): Promise<{ dispatchId: string }>;
   /** The manual-entry locality choices; callers treat a failure as "no home list". */

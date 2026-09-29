@@ -8,6 +8,7 @@ import {
   etaFor,
   getLocalAnswer,
   saveLocalAnswer,
+  type EtaGiven,
   type ResponseAnswer,
 } from './alertResponses';
 import type { AlertsRepository } from './types';
@@ -38,7 +39,8 @@ export type ResponseDelivery =
 
 export interface MyAnswer {
   ackStatus: ResponseAnswer;
-  etaMinutes: number | null;
+  /** Only an ETA the member chose (or the roster's); null shows as "ETA ?". */
+  eta: EtaGiven | null;
 }
 
 export interface AlertResponseState {
@@ -49,7 +51,7 @@ export interface AlertResponseState {
   /** What the officer's roster shows, when it disagrees with this phone's answer. */
   rosterAnswer: MyAnswer | null;
   /** Records a new answer (a change is a new answer - the server keeps them append-only). */
-  respond: (ackStatus: ResponseAnswer, etaMinutes?: number) => Promise<void>;
+  respond: (ackStatus: ResponseAnswer, eta?: EtaGiven | null) => Promise<void>;
   /** Accept the roster's answer as this phone's (drops the phone's disagreeing record). */
   keepRosterAnswer: () => Promise<void>;
 }
@@ -145,11 +147,14 @@ export function useAlertResponse(
         const roster = await repository.getRoster(dispatchId);
         const mine = roster.find((entry) => entry.memberId === memberId);
         if (!mine || mine.ackStatus === 'UNANSWERED') return;
-        const etaMinutes =
+        const eta: EtaGiven | null =
           mine.eta && mine.ackStatus !== 'NOT_RESPONDING'
-            ? Math.max(0, Math.round((mine.eta * 1000 - Date.now()) / 60_000))
+            ? {
+                minutes: Math.max(0, Math.round((mine.eta * 1000 - Date.now()) / 60_000)),
+                qualifier: null,
+              }
             : null;
-        setServer({ answer: { ackStatus: mine.ackStatus, etaMinutes }, checkedAfter });
+        setServer({ answer: { ackStatus: mine.ackStatus, eta }, checkedAfter });
       } catch {
         // The roster is a check only: without it the screen still shows this device's answer.
       }
@@ -165,7 +170,7 @@ export function useAlertResponse(
     void getLocalAnswer(dispatchId).then((saved) => {
       if (cancelled || !saved || touchedRef.current) return;
       setLocal({
-        answer: { ackStatus: saved.ackStatus, etaMinutes: saved.etaMinutes },
+        answer: { ackStatus: saved.ackStatus, eta: saved.eta },
         outboxId: saved.outboxId,
         saving: false,
         fresh: false,
@@ -242,23 +247,23 @@ export function useAlertResponse(
   }, [answer, delivery]);
 
   const respond = useCallback(
-    async (ackStatus: ResponseAnswer, etaMinutes?: number) => {
+    async (ackStatus: ResponseAnswer, chosenEta?: EtaGiven | null) => {
       touchedRef.current = true;
-      const eta = etaFor(ackStatus, etaMinutes);
+      const eta = etaFor(ackStatus, chosenEta);
       // Instant selected state (a11y-spec §3.1 #4) before anything touches storage or network.
       setLocal({
-        answer: { ackStatus, etaMinutes: eta },
+        answer: { ackStatus, eta },
         outboxId: null,
         saving: true,
         fresh: true,
       });
       let result: { outboxId: string | null };
       try {
-        result = await repository.submitResponse(dispatchId, ackStatus, eta ?? undefined);
+        result = await repository.submitResponse(dispatchId, ackStatus, eta);
       } catch (error) {
         console.error('[alert] saving a response failed; nothing was sent', error);
         setLocal({
-          answer: { ackStatus, etaMinutes: eta },
+          answer: { ackStatus, eta },
           outboxId: null,
           saving: false,
           fresh: true,
@@ -269,13 +274,13 @@ export function useAlertResponse(
       if (result.outboxId === null) {
         await saveLocalAnswer(dispatchId, {
           ackStatus,
-          etaMinutes: eta,
+          eta,
           outboxId: null,
           answeredAt: Date.now(),
         });
       }
       setLocal({
-        answer: { ackStatus, etaMinutes: eta },
+        answer: { ackStatus, eta },
         outboxId: result.outboxId,
         saving: false,
         fresh: true,

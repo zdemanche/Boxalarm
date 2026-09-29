@@ -55,7 +55,7 @@ None of this could run in CI (no Xcode or Android SDK there): the Kotlin module,
 
 | # | Device | Check | Pass when |
 |---|---|---|---|
-| 22 | Pixel, Samsung | Locked phone, app killed, page, tap **Responding** on the notification (no unlock) | The alarm stops; the notification is replaced by "Responding — ... Sent." within a few seconds; the officer's roster shows Responding with an ETA 10 minutes out. |
+| 22 | Pixel, Samsung | Locked phone, app killed, page, tap **Responding** on the notification (no unlock) | The alarm stops; the notification is replaced by "Responding — ... Sent." within a few seconds; the officer's roster shows Responding with **no ETA** ("ETA ?") once the backend accepts `eta: null` and the build sets `RESPONSE_ETA_OPTIONAL=true`. Before that, the server receives a 10-minute placeholder flagged `etaSource: NOT_GIVEN` - check the roster does not present it as the member's ETA. |
 | 23 | Pixel, Samsung | Same with airplane mode on | Notification says "NOT SENT YET - saved on this phone"; turn airplane mode off and open the app: the answer drains and the alert screen shows "Sent". |
 | 24 | Pixel | Responding from the notification, then open the call and change to Not responding | Roster ends on Not responding (the newer answer is never overtaken by the older one). |
 | 25 | iPhone | Requires the alerting service to send `aps.category = "DISPATCH"` (**not implemented server-side yet**). Long-press a page, tap Responding | Face ID / passcode, the app opens on the call with Responding selected and "Sent". Until the backend sends the category, no buttons appear - record that as expected. |

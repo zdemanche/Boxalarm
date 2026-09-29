@@ -3,6 +3,7 @@ import { Text, View } from 'react-native';
 import { Button, StatusChip, useTheme } from '../../components/ui';
 import * as syncManager from '../../sync/syncManager';
 import { ackStatusLabel } from './ackStatus';
+import { formatEta } from './alertResponses';
 import type { MyAnswer, ResponseDelivery } from './useAlertResponse';
 
 interface Copy {
@@ -88,7 +89,7 @@ interface ResponseStatusProps {
 }
 
 function describeAnswer(answer: MyAnswer): string {
-  const eta = answer.etaMinutes !== null ? `, ETA ${answer.etaMinutes} min` : '';
+  const eta = answer.ackStatus === 'NOT_RESPONDING' ? '' : `, ${formatEta(answer.eta)}`;
   return `${ackStatusLabel(answer.ackStatus)}${eta}`;
 }
 
@@ -105,7 +106,7 @@ export function ResponseStatus({
 }: ResponseStatusProps) {
   const theme = useTheme();
   const copy = responseDeliveryCopy(delivery);
-  const eta = answer.etaMinutes !== null ? ` · ETA ${answer.etaMinutes} min` : '';
+  const eta = answer.ackStatus === 'NOT_RESPONDING' ? '' : ` · ${formatEta(answer.eta)}`;
   const canResend =
     delivery === 'refused' ||
     delivery === 'unconfirmed' ||

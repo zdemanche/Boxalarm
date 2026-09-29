@@ -129,12 +129,8 @@ function buildApiAlertsRepository(tokens: AuthTokenSource, apiBaseUrl: string): 
 
     // Through the SQLite outbox, never a bare POST: the old `void submitResponse` dropped a failed
     // answer on the floor while the screen said "You responded" (alert-ux C2).
-    async submitResponse(dispatchId, ackStatus, etaMinutes) {
-      const outboxId = await queueAlertResponse(
-        dispatchId,
-        ackStatus,
-        etaFor(ackStatus, etaMinutes),
-      );
+    async submitResponse(dispatchId, ackStatus, eta) {
+      const outboxId = await queueAlertResponse(dispatchId, ackStatus, etaFor(ackStatus, eta));
       return { outboxId };
     },
 

@@ -20,7 +20,12 @@ import { useTheme } from '../../components/ui';
 import { useAlertsRepository } from '../../features/alerts/apiAlertsRepository';
 import type { AlertPayload } from '../../features/alerts/alertPayload';
 import { isDeviceLocked, setAlertShowsOverLockScreen } from '../../features/alerts/alertReadiness';
-import { ETA_CHOICES_MINUTES, type ResponseAnswer } from '../../features/alerts/alertResponses';
+import {
+  ETA_CHOICES,
+  sameEta,
+  type EtaGiven,
+  type ResponseAnswer,
+} from '../../features/alerts/alertResponses';
 import { formatClock, formatElapsed } from '../../features/alerts/elapsed';
 import { matchNotice, PrePlanPanel } from '../../features/alerts/PrePlanPanel';
 import { silenceDispatchNotification } from '../../features/alerts/pushNotificationDisplay';
@@ -212,9 +217,9 @@ export function AlertDetailScreen() {
   // live at first paint, and the detail fetch only enriches. One tap saves the answer on the
   // phone (outbox, with a 10 min ETA the chips below change in one more tap) and the status
   // block says exactly whether it has reached the server.
-  const respond = (answer: ResponseAnswer, etaMinutes?: number) => {
+  const respond = (answer: ResponseAnswer, eta?: EtaGiven | null) => {
     silence();
-    void response.respond(answer, etaMinutes);
+    void response.respond(answer, eta);
   };
 
   const onAccessibilityAction = (event: AccessibilityActionEvent) => {
@@ -392,20 +397,27 @@ export function AlertDetailScreen() {
         {answer && answer.ackStatus !== 'NOT_RESPONDING' ? (
           <View accessibilityRole="radiogroup" accessibilityLabel="Your ETA" style={{ gap: 8 }}>
             <Text style={{ color: theme.fg, fontSize: typeScale.heading.size, fontWeight: '700' }}>
-              ETA (minutes) - tap to change
+              {answer.eta ? 'Your ETA - tap to change' : 'ETA ? - tap one if you can (optional)'}
             </Text>
-            <View style={{ flexDirection: 'row', gap: spacing.sm }}>
-              {ETA_CHOICES_MINUTES.map((minutes) => {
-                const isSelected = answer.etaMinutes === minutes;
+            <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm }}>
+              {ETA_CHOICES.map((choice) => {
+                const isSelected = sameEta(answer.eta, choice);
+                const wide = choice.qualifier === 'AT_STATION';
                 return (
                   <TouchableOpacity
-                    key={minutes}
+                    key={choice.id}
                     accessibilityRole="radio"
-                    accessibilityLabel={`ETA ${minutes} minutes`}
+                    accessibilityLabel={choice.spoken}
                     accessibilityState={{ selected: isSelected, checked: isSelected }}
-                    onPress={() => respond(answer.ackStatus, minutes)}
+                    onPress={() =>
+                      respond(answer.ackStatus, {
+                        minutes: choice.minutes,
+                        qualifier: choice.qualifier,
+                      })
+                    }
                     style={{
-                      flex: 1,
+                      flexGrow: 1,
+                      flexBasis: wide ? '100%' : '20%',
                       minHeight: ALERT_TARGET,
                       alignItems: 'center',
                       justifyContent: 'center',
@@ -418,7 +430,7 @@ export function AlertDetailScreen() {
                     <Text
                       style={{ color: theme.fg, fontSize: typeScale.title.size, fontWeight: '800' }}
                     >
-                      {minutes}
+                      {choice.label}
                     </Text>
                   </TouchableOpacity>
                 );
@@ -434,7 +446,7 @@ export function AlertDetailScreen() {
             outboxId={response.outboxId}
             lastError={response.lastError}
             rosterAnswer={response.rosterAnswer}
-            onResend={() => respond(answer.ackStatus, answer.etaMinutes ?? undefined)}
+            onResend={() => respond(answer.ackStatus, answer.eta)}
             onKeepRoster={() => void response.keepRosterAnswer()}
           />
         ) : null}

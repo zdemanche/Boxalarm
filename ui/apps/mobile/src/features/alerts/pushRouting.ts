@@ -10,7 +10,7 @@ import {
   navigateToAlertDetail,
   onNavigationStateChange,
 } from '../../navigation/navigationRef';
-import { etaFor, queueAlertResponse } from './alertResponses';
+import { queueAlertResponse } from './alertResponses';
 import { markInitialAlertRoutingSettled } from './lockScreenPresentation';
 import { answerFromActionId, handleNotificationEvent } from './notificationActions';
 import {
@@ -102,7 +102,7 @@ function answerPendingIosAction(dispatchId: string): void {
   const rest: PendingIosTap = { ...pending };
   delete rest.action;
   Settings.set({ [IOS_PENDING_ALERT_TAP_KEY]: rest });
-  queueAlertResponse(dispatchId, answer, etaFor(answer, undefined)).catch((error: unknown) => {
+  queueAlertResponse(dispatchId, answer, null).catch((error: unknown) => {
     console.error('[push] queueing the answer from an iOS notification action failed', error);
   });
 }
