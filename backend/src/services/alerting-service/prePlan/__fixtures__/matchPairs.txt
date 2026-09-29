@@ -1,3 +1,11 @@
+// Labels (matchPairs.test.ts runs every row with no locality choice AND with the home set's
+// town as a HOME choice, the production path since R3-A):
+//   DIFF             different buildings: never an unflagged ADDRESS, with or without a choice
+//   SAME             the same building: the first copy (occ0) is the plan found, either way
+//   UNPLACED         the same building, told apart only by the missing locality: not ADDRESS
+//                    without a choice, ADDRESS for occ0 with the HOME choice
+//   KNOWN_COLLISION  accepted alias collision (reason after "##"): with the HOME choice it IS
+//                    an unflagged ADDRESS; relabel it DIFF if the matcher ever splits it
 // --- house numbers
 DIFF | trumbull | 12A Main St || 12 Main St
 DIFF | trumbull | 12 Main St || 12A Main St
@@ -116,6 +124,7 @@ DIFF | trumbull | 12 Main St West Haven || 12 Main St
 DIFF | trumbull | 12 E Main St || 12 Main St E
 DIFF | trumbull | 12 North St || 12 N Main St
 DIFF | trumbull | 12 West St || 12 W St
+DIFF | trumbull | 12 North Ave || 12 N Ave
 DIFF | trumbull | 12 Main St W || 12 Main St West Haven
 // --- Saint
 DIFF | trumbull | 12 St John St || 12 Saint Johns St
@@ -123,9 +132,9 @@ DIFF | trumbull | 12 St Johns St || 12 St John St
 DIFF | trumbull | 12 St. John's Pl || 12 St Johns Pl
 DIFF | trumbull | 12 Mount St Joseph Rd || 12 Mount St
 DIFF | trumbull | 12 Mt St || 12 Mountain St
-DIFF | trumbull | 12 Saint Rd || 12 St Rd
+KNOWN_COLLISION | trumbull | 12 Saint Rd || 12 St Rd ## a leading "St" is Saint by universal convention (St John St); "St Rd" and "Saint Rd" are the same written street
 DIFF | trumbull | 12 Street Rd || 12 St Rd
-DIFF | trumbull | 12 Mount Rd || 12 Mt Rd
+KNOWN_COLLISION | trumbull | 12 Mount Rd || 12 Mt Rd ## Mt is the standard abbreviation of Mount in street names; splitting them would miss the same street
 // --- units
 DIFF | trumbull | 12 Main St Apt 4 || 12 Main St Apt 5
 DIFF | trumbull | 12 Main St #4 || 12 Main St Unit 5
@@ -149,12 +158,15 @@ DIFF | trumbull | 12 Main St Unit 4 Bldg 2 || 12 Main St Unit 4 Bldg 3
 DIFF | trumbull | 12 Main St Bldg 2 Unit 4 || 12 Main St Unit 4
 DIFF | trumbull | 12 Main St Unit 4 || 12 Main St Bldg 2 Unit 4 ;; 12 Main St Bldg 3 Unit 4
 DIFF | trumbull | 12 Main St Apt 4 || 12 Main St Apartment 4, Monroe
-DIFF | trumbull | 12 Main St Unit A || 12 Main St Apt A ;; 12A Main St
-DIFF | trumbull | 12 Main St Space 7 || 12 Main St Lot 7
+KNOWN_COLLISION | trumbull | 12 Main St Unit A || 12 Main St Apt A ;; 12A Main St ## Unit/Apt/Suite/# are used interchangeably for one dwelling unit by CAD and pre-plan authors; they share a designator class
+KNOWN_COLLISION | trumbull | 12 Main St Space 7 || 12 Main St Lot 7 ## Space and Lot both number a mobile-home pad; they share a designator class
+DIFF | trumbull | 12 Main St Bldg 2 || 12 Main St Apt 2
+DIFF | trumbull | 12 Main St Apt 2 || 12 Main St Bldg 2
+DIFF | trumbull | 12 Main St Lot 2 || 12 Main St Apt 2
 DIFF | trumbull | 12 Main St Apt 4 Rear || 12 Main St Apt 4
 DIFF | trumbull | 12 Main St Rear Apt 4 || 12 Main St Apt 4 Front
 // --- trailing CT / zip only
-DIFF | trumbull | 12 Main St CT || 12 Main St
+UNPLACED | trumbull | 12 Main St CT || 12 Main St
 DIFF | trumbull | 12 Main St 06606 || 12 Main St
 DIFF | trumbull | 12 Main St CT 06606 || 12 Main St
 DIFF | trumbull | 12 Oak Ct CT 06606 || 12 Oak Ct
@@ -193,8 +205,8 @@ DIFF | monroe | 12 Main St, Trumbull || 12 Main St
 // for a Monroe home set Upper Stepney and Stepney are both home, so the same street address is the same building.
 SAME | monroe | 12 Main St Upper Stepney || 12 Main St, Stepney
 SAME | monroe | 12 Main St, Stepney || 12 Main St
-// --- Town-less dispatch vs town-less copy (policy: VERIFIED)
-DIFF | trumbull | 123 Main St || 123 Main St
+// --- Town-less dispatch vs town-less copy (R3-A: never verified without a locality choice)
+UNPLACED | trumbull | 123 Main St || 123 Main St
 DIFF | trumbull | 100 Industrial Dr Bldg 2 || 100 Industrial Dr
 DIFF | trumbull | 100 Industrial Dr Building B || 100 Industrial Dr
 DIFF | trumbull | 12 Main St Rear || 12 Main St
