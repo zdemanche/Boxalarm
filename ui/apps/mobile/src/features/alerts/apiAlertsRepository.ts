@@ -12,6 +12,7 @@ import type {
   RidingBoard,
   RosterEntry,
   SelfTestRun,
+  HomeLocality,
 } from './types';
 
 function buildApiAlertsRepository(tokens: AuthTokenSource, apiBaseUrl: string): AlertsRepository {
@@ -89,6 +90,11 @@ function buildApiAlertsRepository(tokens: AuthTokenSource, apiBaseUrl: string): 
       });
       const body = (await response.json()) as { dispatchId: string };
       return { dispatchId: body.dispatchId };
+    },
+
+    async getHomeLocality(): Promise<HomeLocality> {
+      const response = await req('alerting/home-locality');
+      return (await response.json()) as HomeLocality;
     },
 
     async getReceipts(dispatchId): Promise<DeliveryReceipt[]> {

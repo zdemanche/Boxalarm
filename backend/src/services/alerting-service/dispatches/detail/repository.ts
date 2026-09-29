@@ -13,6 +13,8 @@ export interface DispatchAlertItem {
   readonly eligibleMemberCount?: number;
   readonly fanOutStartedAt?: number;
   readonly prePlanRefs?: readonly string[];
+  /** Dispatcher's locality choice (dispatchIngressPort.ts), when ingress captured one. */
+  readonly locality?: { readonly town: string; readonly choice: 'HOME' | 'OTHER' };
   readonly toneLadderStatus?: string;
   readonly currentToneSequence?: number;
   readonly nextToneAt?: number | null;

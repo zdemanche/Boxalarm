@@ -59,10 +59,12 @@ Occupancy addresses carry no town, so the dispatch detail needs each department'
 
 A pre-plan is shown as a plain match ("Pre-plan for …") only when both addresses parsed unambiguously **and** the locality is verified:
 
-- the dispatch names a home town, village or ZIP, or names none; and
+- the dispatch names a home town, village or ZIP, either in its address or through the dispatcher's **locality choice**; and
 - the pre-plan's own town/ZIP is home (a town-less pre-plan inherits the home locality).
 
-A dispatch naming a town, ZIP or state outside it never matches. Anything in between is shown as **"VERIFY ADDRESS"** (`matchType: ADDRESS_UNVERIFIED`).
+A dispatch naming a town, ZIP or state outside it never matches. A dispatch that names **no** locality is never verified, because "123 Main St" typed for a mutual-aid call looks exactly like a home call.
+
+**The locality choice.** Manual dispatch entry (web and mobile) requires a "Town / village" choice: one of the department's home towns or villages, or "Other town" with the town typed in. It is served by `GET /api/v1/alerting/home-locality` and stored on the dispatch as a separate `locality` field (`{ town, choice: HOME | OTHER }`); the address is never rewritten. It only decides whether a pre-plan can be shown unflagged. Fan-out never reads it, and it never delays a page. The API still accepts older callers that omit it; their dispatches simply never get a verified pre-plan. A malformed `locality` is a 400, like any other invalid field. Anything in between is shown as **"VERIFY ADDRESS"** (`matchType: ADDRESS_UNVERIFIED`).
 
 Where it comes from, first match wins:
 

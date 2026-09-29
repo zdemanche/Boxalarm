@@ -40,6 +40,7 @@ export class RoutesCore extends pulumi.ComponentResource {
   public readonly roster: AlertingRoute;
   public readonly detail: AlertingRoute;
   public readonly listActive: AlertingRoute;
+  public readonly homeLocality: AlertingRoute;
 
   constructor(name: string, args: RoutesCoreArgs, opts?: pulumi.ComponentResourceOptions) {
     requireEnv("RoutesCore", args.env);
@@ -279,9 +280,47 @@ export class RoutesCore extends pulumi.ComponentResource {
       { parent: this },
     );
 
+    // src/services/alerting-service/prePlan/homeLocalityHandler.handler — the department's home
+    // towns for the manual-entry form's required locality choice (round-3 R3-A). One GetItem on
+    // the department's CONFIG partition, nothing else.
+    this.homeLocality = new AlertingRoute(
+      `${name}-home-locality`,
+      {
+        env,
+        httpApi: args.httpApi,
+        logGroup: args.logGroup,
+        serviceName: "alerting-service",
+        functionName: `boxalarm-${env}-alerting-home-locality`,
+        handler: LAMBDA_HANDLER,
+        code: lambdaCode("alerting-service", "home-locality"),
+        routeKey: "GET /api/v1/alerting/home-locality",
+        environment: {
+          ALERTING_TABLE_NAME: args.alertingTableName,
+          VERIFIED_PERMISSIONS_POLICY_STORE_ID: args.policyStoreId,
+          ...(args.homeLocality !== undefined ? { ALERTING_HOME_LOCALITY: args.homeLocality } : {}),
+        },
+        additionalPolicyStatements: pulumi.output(args.alertingTableArn).apply((tableArn) => [
+          {
+            Sid: "HomeLocalityConfigRead",
+            Effect: "Allow" as const,
+            Action: ["dynamodb:GetItem"],
+            Resource: tableArn,
+            Condition: {
+              "ForAllValues:StringLike": { "dynamodb:LeadingKeys": ["DEPT#*#CONFIG"] },
+            },
+          },
+          verifiedPermissionsStatement(),
+        ]),
+        reservedConcurrentExecutions: 2,
+        permissionsBoundaryArn: args.permissionsBoundaryArn,
+      },
+      { parent: this },
+    );
+
     grantAlertingCmk(
       name,
       {
+        homeLocality: this.homeLocality.lambda.role,
         dispatchIngress: this.dispatchIngress.lambda.role,
         responses: this.responses.lambda.role,
         roster: this.roster.lambda.role,
@@ -298,6 +337,7 @@ export class RoutesCore extends pulumi.ComponentResource {
       roster: this.roster,
       detail: this.detail,
       listActive: this.listActive,
+      homeLocality: this.homeLocality,
     });
   }
 }

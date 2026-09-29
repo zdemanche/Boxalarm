@@ -379,6 +379,12 @@ export const LAMBDA_ENTRIES = [
     entry: 'src/services/alerting-service/eligibility/memberUpdatedHandler.ts',
   },
   {
+    // GET /api/v1/alerting/home-locality: manual-entry locality choices.
+    service: 'alerting-service',
+    function: 'home-locality',
+    entry: 'src/services/alerting-service/prePlan/homeLocalityHandler.ts',
+  },
+  {
     // inspections.preplan.updated -> PRE_PLAN_COPY (dispatch-detail pre-plan context).
     service: 'alerting-service',
     function: 'preplan-copy-consumer',

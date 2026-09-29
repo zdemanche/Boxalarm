@@ -1,12 +1,14 @@
 import { palette, radius, spacing, touchTarget, typography } from '@boxalarm/design-tokens';
 import { useNavigation, type NavigationProp } from '@react-navigation/native';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { ScrollView, Text, TextInput, TouchableOpacity, useColorScheme, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useAlertsRepository } from '../../features/alerts/apiAlertsRepository';
 import type { FieldError, ManualDispatchInput } from '../../features/alerts/types';
 import { ApiError } from '../../lib/apiClient';
 import type { AlertsStackParamList } from '../../navigation/AlertsStack';
+
+const OTHER_TOWN = '__other__';
 
 const EMPTY_FORM: ManualDispatchInput = {
   incidentType: '',
@@ -29,16 +31,44 @@ export function ManualDispatchEntryScreen() {
   const [fieldErrors, setFieldErrors] = useState<FieldError[]>([]);
   const [formError, setFormError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  // R3-A: the required "where is this?" choice - a home town/village, or "Other town" typed
+  // in. It only decides whether a pre-plan can be shown as this building's; if the home list
+  // cannot be loaded the choice is just "Other town", never a blocked form.
+  const [homeTowns, setHomeTowns] = useState<string[]>([]);
+  const [localityChoice, setLocalityChoice] = useState<string | null>(null);
+  const [otherTown, setOtherTown] = useState('');
+
+  useEffect(() => {
+    let active = true;
+    repository
+      .getHomeLocality()
+      .then((home) => {
+        if (active) setHomeTowns(home.towns);
+      })
+      .catch(() => undefined);
+    return () => {
+      active = false;
+    };
+  }, [repository]);
 
   const errorFor = (field: string) => fieldErrors.find((e) => e.field === field)?.message;
 
   const submit = async () => {
-    setSubmitting(true);
     setFieldErrors([]);
     setFormError(null);
+    const locality =
+      localityChoice === OTHER_TOWN
+        ? { town: otherTown.trim(), choice: 'OTHER' as const }
+        : { town: localityChoice ?? '', choice: 'HOME' as const };
+    if (locality.town.length === 0) {
+      setFieldErrors([{ field: 'locality', message: 'Choose the town or village.' }]);
+      return;
+    }
+    setSubmitting(true);
     try {
       const input: ManualDispatchInput = {
         ...form,
+        locality,
         unitsRequested: unitsText
           .split(',')
           .map((u) => u.trim())
@@ -65,7 +95,7 @@ export function ManualDispatchEntryScreen() {
 
   const field = (
     label: string,
-    key: keyof Omit<ManualDispatchInput, 'unitsRequested'>,
+    key: keyof Omit<ManualDispatchInput, 'unitsRequested' | 'locality'>,
     options: { multiline?: boolean } = {},
   ) => (
     <View style={{ marginTop: spacing.md }}>
@@ -117,6 +147,67 @@ export function ManualDispatchEntryScreen() {
         {field('Incident type', 'incidentType')}
         {field('Address', 'address')}
         {field('Cross streets', 'crossStreets')}
+
+        <View style={{ marginTop: spacing.md }} accessibilityRole="radiogroup">
+          <Text
+            nativeID="locality-label"
+            style={{ color: tokens.foreground, fontSize: typography.size.sm, fontWeight: '600' }}
+          >
+            Town / village (required)
+          </Text>
+          {[...homeTowns, OTHER_TOWN].map((choice) => {
+            const selected = localityChoice === choice;
+            const label = choice === OTHER_TOWN ? 'Other town…' : choice;
+            return (
+              <TouchableOpacity
+                key={choice}
+                accessibilityRole="radio"
+                accessibilityLabel={label}
+                accessibilityState={{ checked: selected }}
+                onPress={() => setLocalityChoice(choice)}
+                style={{
+                  minHeight: touchTarget.baseline.ios,
+                  justifyContent: 'center',
+                  paddingHorizontal: spacing.md,
+                  marginTop: spacing.xs,
+                  borderWidth: selected ? 2 : 1,
+                  borderColor: selected ? tokens.accent : tokens.foreground + '33',
+                  borderRadius: radius.default,
+                }}
+              >
+                <Text style={{ color: tokens.foreground, fontSize: typography.size.base }}>
+                  {selected ? '● ' : '○ '}
+                  {label}
+                </Text>
+              </TouchableOpacity>
+            );
+          })}
+          {localityChoice === OTHER_TOWN ? (
+            <TextInput
+              accessibilityLabel="Other town name"
+              value={otherTown}
+              onChangeText={setOtherTown}
+              style={{
+                minHeight: touchTarget.baseline.ios,
+                borderWidth: 1,
+                borderColor: tokens.foreground + '33',
+                borderRadius: radius.default,
+                paddingHorizontal: spacing.md,
+                color: tokens.foreground,
+                fontSize: typography.size.base,
+                marginTop: spacing.xs,
+              }}
+            />
+          ) : null}
+          {(errorFor('locality') ?? errorFor('locality.town') ?? errorFor('locality.choice')) ? (
+            <Text
+              accessibilityLiveRegion="polite"
+              style={{ color: tokens.error, fontSize: typography.size.sm, marginTop: 2 }}
+            >
+              {errorFor('locality') ?? errorFor('locality.town') ?? errorFor('locality.choice')}
+            </Text>
+          ) : null}
+        </View>
 
         <View style={{ marginTop: spacing.md }}>
           <Text

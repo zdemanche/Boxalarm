@@ -169,6 +169,49 @@ describe('handler (POST /api/v1/alerting/dispatches)', () => {
     expect(result.statusCode).toBe(400);
   });
 
+  it('R3-A: returns 400 for a malformed locality before anything is written or paged', async () => {
+    const { authorizeManualDispatchSubmission } = await import('./authorization.js');
+    vi.mocked(authorizeManualDispatchSubmission).mockResolvedValue('ALLOWED');
+    const { createManualDispatch } = await import('./repository.js');
+    vi.mocked(createManualDispatch).mockClear();
+
+    const { handler } = await import('./handler.js');
+    const event = buildEvent({
+      headers: AUTH_HEADERS,
+      authorizerContext: AUTH_CONTEXT,
+      body: JSON.stringify({ ...VALID_BODY, locality: { town: '', choice: 'HOME' } }),
+    });
+    const result = (await handler(event, {} as never, () => undefined)) as {
+      statusCode: number;
+      body: string;
+    };
+    expect(result.statusCode).toBe(400);
+    expect((JSON.parse(result.body) as { errors: { field: string }[] }).errors).toContainEqual(
+      expect.objectContaining({ field: 'locality.town' }),
+    );
+    expect(createManualDispatch).not.toHaveBeenCalled();
+  });
+
+  it('R3-A: passes a valid locality to the DISPATCH_ALERT write (an older body without it is still accepted)', async () => {
+    const { authorizeManualDispatchSubmission } = await import('./authorization.js');
+    vi.mocked(authorizeManualDispatchSubmission).mockResolvedValue('ALLOWED');
+    const { createManualDispatch } = await import('./repository.js');
+    vi.mocked(createManualDispatch).mockResolvedValue({ outcome: 'created', dispatchId: 'D-1' });
+
+    const { handler } = await import('./handler.js');
+    const withLocality = buildEvent({
+      headers: AUTH_HEADERS,
+      authorizerContext: AUTH_CONTEXT,
+      body: JSON.stringify({ ...VALID_BODY, locality: { town: 'Nichols', choice: 'HOME' } }),
+    });
+    const created = (await handler(withLocality, {} as never, () => undefined)) as {
+      statusCode: number;
+    };
+    expect(created.statusCode).toBe(201);
+    const input = vi.mocked(createManualDispatch).mock.calls.at(-1)?.[2];
+    expect(input?.dispatch.locality).toEqual({ town: 'Nichols', choice: 'HOME' });
+  });
+
   it('returns 409 for a duplicate manual submission (AC4)', async () => {
     const { authorizeManualDispatchSubmission } = await import('./authorization.js');
     vi.mocked(authorizeManualDispatchSubmission).mockResolvedValue('ALLOWED');

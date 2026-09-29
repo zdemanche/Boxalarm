@@ -178,6 +178,12 @@ export interface DeliveryReceipt {
   failureReason: string | null;
 }
 
+/** Where the incident is: a home town/village, or another town typed in (R3-A). */
+export interface DispatchLocality {
+  town: string;
+  choice: 'HOME' | 'OTHER';
+}
+
 export interface ManualDispatchInput {
   incidentType: string;
   address: string;
@@ -185,6 +191,14 @@ export interface ManualDispatchInput {
   unitsRequested: string[];
   narrative: string;
   externalDispatchId: string;
+  locality?: DispatchLocality;
+}
+
+/** GET alerting/home-locality: the department's home towns/villages. */
+export interface HomeLocality {
+  towns: string[];
+  zips: string[];
+  state: string | null;
 }
 
 export interface FieldError {

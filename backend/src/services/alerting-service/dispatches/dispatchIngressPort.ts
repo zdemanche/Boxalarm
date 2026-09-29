@@ -2,6 +2,18 @@ import type { VerifiedDeptId } from '@boxalarm/dept-scope';
 
 export type SourceSystem = 'CAD' | 'MANUAL' | 'SELF_TEST';
 
+/**
+ * Where the incident is, as the dispatcher chose it: one of the department's home towns or
+ * villages (HOME), or another town typed in (OTHER). Enrichment only — the pre-plan lookup
+ * uses it to confirm a street address is in this department's area; fan-out never reads it.
+ */
+export interface DispatchLocality {
+  readonly town: string;
+  readonly choice: 'HOME' | 'OTHER';
+}
+
+export const MAX_LOCALITY_TOWN_LENGTH = 80;
+
 export interface DispatchReceived {
   readonly sourceSystem: SourceSystem;
   readonly incidentType: string;
@@ -10,6 +22,8 @@ export interface DispatchReceived {
   readonly unitsRequested: readonly string[];
   readonly narrative: string;
   readonly externalDispatchId: string;
+  /** Absent from callers that predate it (accepted; the pre-plan is then never verified). */
+  readonly locality?: DispatchLocality;
 }
 
 export interface FieldError {
@@ -63,6 +77,39 @@ function optionalStringArray(
   return value;
 }
 
+/**
+ * The optional `locality` field. Absent is accepted (older callers); present but malformed is
+ * a 400 like any other field, rejected before anything is written.
+ */
+function optionalLocality(
+  body: Record<string, unknown>,
+  errors: FieldError[],
+): DispatchLocality | undefined {
+  const value = body.locality;
+  if (value === undefined) {
+    return undefined;
+  }
+  if (!isRecord(value)) {
+    errors.push({ field: 'locality', message: 'locality must be an object { town, choice }' });
+    return undefined;
+  }
+  const town = typeof value.town === 'string' ? value.town.trim() : '';
+  const before = errors.length;
+  const hasControlCharacter = [...town].some((character) => character.charCodeAt(0) < 0x20);
+  if (town.length === 0 || town.length > MAX_LOCALITY_TOWN_LENGTH || hasControlCharacter) {
+    errors.push({
+      field: 'locality.town',
+      message: `locality.town is required: a town name of 1-${MAX_LOCALITY_TOWN_LENGTH} characters`,
+    });
+  }
+  if (value.choice !== 'HOME' && value.choice !== 'OTHER') {
+    errors.push({ field: 'locality.choice', message: "locality.choice must be 'HOME' or 'OTHER'" });
+  }
+  return errors.length === before
+    ? { town, choice: value.choice as DispatchLocality['choice'] }
+    : undefined;
+}
+
 export function normalizeManualEntry(rawPayload: unknown): NormalizeResult {
   if (!isRecord(rawPayload)) {
     return {
@@ -78,6 +125,7 @@ export function normalizeManualEntry(rawPayload: unknown): NormalizeResult {
   const narrative = requiredString(rawPayload, 'narrative', errors);
   const externalDispatchId = requiredString(rawPayload, 'externalDispatchId', errors);
   const unitsRequested = optionalStringArray(rawPayload, 'unitsRequested', errors);
+  const locality = optionalLocality(rawPayload, errors);
 
   if (externalDispatchId.includes('#')) {
     errors.push({
@@ -100,6 +148,7 @@ export function normalizeManualEntry(rawPayload: unknown): NormalizeResult {
       unitsRequested,
       narrative,
       externalDispatchId,
+      ...(locality ? { locality } : {}),
     },
   };
 }

@@ -128,3 +128,28 @@ describe("home locality for pre-plan address verification (round-2 A)", () => {
     },
   );
 });
+
+describe("RoutesCore home-locality route (round-3 R3-A)", { timeout: 30_000 }, () => {
+  const FN = "boxalarm-dev-alerting-home-locality";
+
+  it("serves GET /api/v1/alerting/home-locality with a GetItem limited to the CONFIG partition", async () => {
+    await buildSchedulingChain();
+    const route = resourcesOfType("aws:apigatewayv2/route:Route").find(
+      (r) => r.inputs.routeKey === "GET /api/v1/alerting/home-locality",
+    );
+    expect(route).toBeDefined();
+    const statements = statementsForRole(FN);
+    const dynamo = statements.filter(
+      (s) => s.Effect === "Allow" && [s.Action].flat().some((a) => a.startsWith("dynamodb:")),
+    );
+    expect(dynamo).toEqual([
+      expect.objectContaining({
+        Action: ["dynamodb:GetItem"],
+        Resource: TABLE_ARN,
+        Condition: { "ForAllValues:StringLike": { "dynamodb:LeadingKeys": ["DEPT#*#CONFIG"] } },
+      }),
+    ]);
+    const role = resourcesOfType("aws:iam/role:Role").find((r) => r.inputs.name === FN);
+    expect(role?.inputs.permissionsBoundary).toBe(BOUNDARY_ARN);
+  });
+});

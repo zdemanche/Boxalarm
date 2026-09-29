@@ -144,8 +144,11 @@ describe('findPrePlanByAddress', () => {
     const apt = (unit: string, updated = 1) =>
       prePlanCopy(`OCC-APT${unit}`, `40 Oak Ave Apt ${unit}`, { snapshotUpdatedAt: updated });
     const building = prePlanCopy('OCC-BLDG', '40 Oak Ave');
+    // The dispatcher chose Trumbull (a home town), so locality is verified.
     const lookup = async (items: Record<string, unknown>[], address: string) =>
-      findPrePlanByAddress(fakeIndex(items).client, TABLE, DEPT_ID, address, undefined, HOME);
+      findPrePlanByAddress(fakeIndex(items).client, TABLE, DEPT_ID, address, undefined, HOME, {
+        town: 'Trumbull',
+      });
 
     it('returns the exact unit match as ADDRESS', async () => {
       expect(await lookup([apt('2'), building, apt('7')], '40 Oak Avenue #7')).toMatchObject({
@@ -211,8 +214,21 @@ describe('findPrePlanByAddress', () => {
 });
 
 describe('findPrePlanByAddress — locality against the home set (round-2 A)', () => {
-  const byAddress = (items: Record<string, unknown>[], address: string, home = HOME) =>
-    findPrePlanByAddress(fakeIndex(items).client, TABLE, DEPT_ID, address, undefined, home);
+  const byAddress = (
+    items: Record<string, unknown>[],
+    address: string,
+    home = HOME,
+    locality?: { town: string },
+  ) =>
+    findPrePlanByAddress(
+      fakeIndex(items).client,
+      TABLE,
+      DEPT_ID,
+      address,
+      undefined,
+      home,
+      locality,
+    );
 
   it('never matches a town-less home pre-plan to a dispatch in another town (mutual aid to Bridgeport)', async () => {
     const trumbull = [prePlanCopy('OCC-T', '123 Main St')];
@@ -223,10 +239,9 @@ describe('findPrePlanByAddress — locality against the home set (round-2 A)', (
     expect(await byAddress(trumbull, '123 Main St, Springfield, MA')).toBeUndefined();
   });
 
-  it('verifies a town-less pre-plan for a dispatch naming a home town, village or ZIP — or naming none', async () => {
+  it('verifies a town-less pre-plan for a dispatch naming a home town, village or ZIP', async () => {
     const trumbull = [prePlanCopy('OCC-T', '123 Main St')];
     for (const address of [
-      '123 Main St',
       '123 Main St, Trumbull, CT',
       '123 MAIN ST TRUMBULL CT 06611',
       '123 Main St Nichols',
@@ -239,6 +254,43 @@ describe('findPrePlanByAddress — locality against the home set (round-2 A)', (
         copy: { occupancyId: 'OCC-T' },
       });
     }
+  });
+
+  describe('R3-A: a dispatch naming no locality is never verified', () => {
+    it('"123 Main St" alone is ADDRESS_UNVERIFIED — it could be a mutual-aid call anywhere', async () => {
+      expect(await byAddress([prePlanCopy('OCC-T', '123 Main St')], '123 Main St')).toMatchObject({
+        matchType: 'ADDRESS_UNVERIFIED',
+      });
+    });
+
+    it("the dispatcher's home locality choice verifies it", async () => {
+      const trumbull = [prePlanCopy('OCC-T', '123 Main St')];
+      for (const town of ['Trumbull', 'Nichols', 'Long Hill', 'Trumbull Center']) {
+        expect(await byAddress(trumbull, '123 Main St', HOME, { town }), town).toMatchObject({
+          matchType: 'ADDRESS',
+        });
+      }
+    });
+
+    it('an "Other town" choice never matches a home pre-plan', async () => {
+      const trumbull = [prePlanCopy('OCC-T', '123 Main St')];
+      expect(
+        await byAddress(trumbull, '123 Main St', HOME, { town: 'Bridgeport' }),
+      ).toBeUndefined();
+      // An unrecognized typed town is still a town outside the home set.
+      expect(await byAddress(trumbull, '123 Main St', HOME, { town: 'Bpt' })).toBeUndefined();
+    });
+
+    it('an address naming one town and a locality choice naming another is flagged, not resolved', async () => {
+      expect(
+        await byAddress(
+          [prePlanCopy('OCC-M', '123 Main St, Monroe, CT')],
+          '123 Main St, Monroe, CT',
+          HOME,
+          { town: 'Trumbull' },
+        ),
+      ).toMatchObject({ matchType: 'ADDRESS_UNVERIFIED' });
+    });
   });
 
   it('N9: home villages agree with the home town (Nichols vs Trumbull, same ZIP)', async () => {
@@ -288,7 +340,9 @@ describe('findPrePlanByAddress — locality against the home set (round-2 A)', (
 
   it('never trusts a stored unit written by older rules — the unit is re-read from the address', async () => {
     const stale = { ...prePlanCopy('OCC-LOT', '100 Lot Rd'), addressUnit: 'RD' };
-    expect(await byAddress([stale], '100 Lot Rd')).toMatchObject({ matchType: 'ADDRESS' });
+    expect(await byAddress([stale], '100 Lot Rd', HOME, { town: 'Trumbull' })).toMatchObject({
+      matchType: 'ADDRESS',
+    });
   });
 });
 
@@ -370,6 +424,7 @@ describe("no unflagged false match (round-2 B: the reviewer's examples)", () => 
         dispatch,
         undefined,
         HOME,
+        { town: 'Trumbull' },
       );
       expect(match?.matchType, `${onFile} vs ${dispatch}`).toMatch(/^ADDRESS(_BUILDING)?$/);
     }

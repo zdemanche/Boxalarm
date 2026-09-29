@@ -15,6 +15,7 @@ import {
 import {
   assignRidingSeat,
   getDispatch,
+  getHomeLocality,
   getReceipts,
   getRidingBoard,
   getRoster,
@@ -43,8 +44,71 @@ function ackLabel(status: RosterEntry['ackStatus']): string {
   return 'Awaiting response';
 }
 
+const OTHER_TOWN = '__other__';
+
+/**
+ * The required "where is this?" choice (round-3 R3-A): one of the department's home towns or
+ * villages, or "Other town" with the town typed in. It only decides whether a pre-plan can be
+ * shown as this building's; it never delays or blocks the page. If the home list cannot be
+ * loaded the choice is just "Other town".
+ */
+function LocalityField({
+  homeTowns,
+  choice,
+  otherTown,
+  onChoice,
+  onOtherTown,
+  error,
+}: {
+  homeTowns: string[];
+  choice: string;
+  otherTown: string;
+  onChoice: (value: string) => void;
+  onOtherTown: (value: string) => void;
+  error: string | undefined;
+}) {
+  return (
+    <>
+      <Select
+        label="Town / village"
+        required
+        value={choice}
+        onChange={(e) => onChoice(e.target.value)}
+        help="Pick a home town, or Other town for a mutual-aid call."
+        error={error}
+      >
+        <option value="" disabled>
+          Choose…
+        </option>
+        {homeTowns.map((town) => (
+          <option key={town} value={town}>
+            {town}
+          </option>
+        ))}
+        <option value={OTHER_TOWN}>Other town…</option>
+      </Select>
+      {choice === OTHER_TOWN ? (
+        <TextInput
+          label="Other town name"
+          required
+          value={otherTown}
+          onChange={(e) => onOtherTown(e.target.value)}
+        />
+      ) : null}
+    </>
+  );
+}
+
 function ManualEntryForm({ onCreated }: { onCreated: (dispatchId: string) => void }) {
   const auth = useAuth();
+  const homeQuery = useQuery({
+    queryKey: ['alerts', 'home-locality'],
+    queryFn: () => getHomeLocality(auth),
+    staleTime: 5 * 60_000,
+  });
+  const homeTowns = homeQuery.data?.towns ?? [];
+  const [localityChoice, setLocalityChoice] = useState('');
+  const [otherTown, setOtherTown] = useState('');
   const [form, setForm] = useState<ManualDispatchInput>(EMPTY_FORM);
   const [unitsText, setUnitsText] = useState('');
   const [fieldErrors, setFieldErrors] = useState<FieldError[]>([]);
@@ -54,6 +118,8 @@ function ManualEntryForm({ onCreated }: { onCreated: (dispatchId: string) => voi
     mutationFn: (input: ManualDispatchInput) => submitManualDispatch(auth, input),
     onSuccess: ({ dispatchId }) => {
       setForm(EMPTY_FORM);
+      setLocalityChoice('');
+      setOtherTown('');
       setUnitsText('');
       setFieldErrors([]);
       setFormError(null);
@@ -84,8 +150,17 @@ function ManualEntryForm({ onCreated }: { onCreated: (dispatchId: string) => voi
         aria-label="Enter dispatch manually"
         onSubmit={(event: FormEvent) => {
           event.preventDefault();
+          const locality =
+            localityChoice === OTHER_TOWN
+              ? { town: otherTown.trim(), choice: 'OTHER' as const }
+              : { town: localityChoice, choice: 'HOME' as const };
+          if (locality.town.length === 0) {
+            setFieldErrors([{ field: 'locality', message: 'Choose the town or village.' }]);
+            return;
+          }
           mutation.mutate({
             ...form,
+            locality,
             unitsRequested: unitsText
               .split(',')
               .map((u) => u.trim())
@@ -110,6 +185,14 @@ function ManualEntryForm({ onCreated }: { onCreated: (dispatchId: string) => voi
             error={errorFor(key)}
           />
         ))}
+        <LocalityField
+          homeTowns={homeTowns}
+          choice={localityChoice}
+          otherTown={otherTown}
+          onChoice={setLocalityChoice}
+          onOtherTown={setOtherTown}
+          error={errorFor('locality') ?? errorFor('locality.town') ?? errorFor('locality.choice')}
+        />
         <TextInput
           label="Units requested (comma separated)"
           optional

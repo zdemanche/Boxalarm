@@ -94,7 +94,15 @@ async function matchPrePlan(
 ): Promise<PrePlanMatch | undefined> {
   if (usableStreetAddress(item)) {
     const home = await loadHomeLocality(client, tableName, deptId, process.env);
-    return findPrePlanByAddress(client, tableName, deptId, item.address, dispatchPoint, home);
+    return findPrePlanByAddress(
+      client,
+      tableName,
+      deptId,
+      item.address,
+      dispatchPoint,
+      home,
+      item.locality,
+    );
   }
   return dispatchPoint ? findPrePlanNear(client, tableName, deptId, dispatchPoint) : undefined;
 }

@@ -96,6 +96,14 @@ export const mockAlertsRepository: AlertsRepository = {
     }
   },
 
+  async getHomeLocality() {
+    return {
+      towns: ['Trumbull', 'Nichols', 'Long Hill', 'Trumbull Center'],
+      zips: ['06611'],
+      state: 'CT',
+    };
+  },
+
   async submitManualDispatch(input: ManualDispatchInput) {
     manualCounter += 1;
     const dispatchId = `MANUAL-${manualCounter}`;

@@ -339,6 +339,13 @@ export function demoAlertsRequest(
 ): Response | null {
   const parts = path.split('/');
 
+  if (path === 'alerting/home-locality' && method === 'GET') {
+    return json({
+      towns: ['Trumbull', 'Nichols', 'Long Hill', 'Trumbull Center'],
+      zips: ['06611'],
+      state: 'CT',
+    });
+  }
   if (path === 'alerting/dispatches' && method === 'POST') {
     dispatchCounter += 1;
     const dispatchId = `MANUAL-${dispatchCounter}`;

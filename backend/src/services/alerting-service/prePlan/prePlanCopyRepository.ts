@@ -2,7 +2,7 @@ import { QueryCommand, type DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb
 import type { VerifiedDeptId } from '@boxalarm/dept-scope';
 import { emitOutcomeMetric } from '@boxalarm/metrics';
 import { logError } from '../dispatches/logger.js';
-import { normalizeAddress } from './addressKey.js';
+import { localityKey, normalizeAddress, type NormalizedAddress } from './addressKey.js';
 import { judgeLocality, type HomeLocality } from './locality.js';
 import {
   ADDRESS_INDEX_NAME,
@@ -126,6 +126,24 @@ function isPrePlanCopy(
   );
 }
 
+/**
+ * The dispatcher's locality choice supplies the town the address itself did not name. When
+ * the address does name one and the two disagree (outside the home set, where two names can
+ * mean the same area) the parse is ambiguous — flagged, never silently resolved either way.
+ */
+function withDispatchLocality(
+  normalized: NormalizedAddress,
+  dispatchLocality: { readonly town: string } | undefined,
+  home: HomeLocality,
+): NormalizedAddress {
+  const chosen = dispatchLocality ? localityKey(dispatchLocality.town) : '';
+  if (chosen.length === 0) return normalized;
+  if (normalized.town === null) return { ...normalized, town: chosen };
+  const sameArea =
+    normalized.town === chosen || (home.towns.has(normalized.town) && home.towns.has(chosen));
+  return sameArea ? normalized : { ...normalized, ambiguous: true };
+}
+
 /** Rejects a candidate far from the dispatch point — only when both sides carry coordinates. */
 function closeEnough(dispatchPoint: GeoPoint | undefined, candidate: PrePlanCopyItem): boolean {
   const location = { latitude: candidate.latitude, longitude: candidate.longitude };
@@ -216,9 +234,11 @@ export async function findPrePlanByAddress(
   address: string,
   dispatchPoint: GeoPoint | undefined,
   home: HomeLocality,
+  dispatchLocality?: { readonly town: string },
 ): Promise<PrePlanMatch | undefined> {
   // Home village names count as places when reading trailing words (never for the key).
-  const normalized = normalizeAddress(address, home.towns);
+  const parsed = normalizeAddress(address, home.towns);
+  const normalized = parsed ? withDispatchLocality(parsed, dispatchLocality, home) : null;
   if (!normalized) {
     return undefined;
   }

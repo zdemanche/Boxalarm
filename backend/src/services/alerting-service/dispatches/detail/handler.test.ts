@@ -34,6 +34,8 @@ const DISPATCH_ITEM = {
   address: '123 Main St',
   crossStreets: 'Main & Elm',
   narrative: 'Smoke showing, 2nd floor',
+  // The dispatcher's locality choice (R3-A): without it no pre-plan is ever verified.
+  locality: { town: 'Trumbull', choice: 'HOME' },
 };
 
 interface QueryInput {

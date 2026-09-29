@@ -35,7 +35,8 @@ describe('parseHomeLocality', () => {
 
 describe('judgeLocality', () => {
   it.each([
-    ['123 Main St', '123 Main St', 'VERIFIED'],
+    // R3-A: a dispatch naming no locality is never verified.
+    ['123 Main St', '123 Main St', 'UNVERIFIED'],
     ['123 Main St, Trumbull, CT', '123 Main St', 'VERIFIED'],
     ['123 Main St, Nichols, CT', '123 Main St, Trumbull, CT', 'VERIFIED'],
     ['123 Main St, CT 06611', '123 Main St', 'VERIFIED'],

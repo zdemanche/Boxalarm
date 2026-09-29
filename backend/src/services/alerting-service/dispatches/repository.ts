@@ -81,6 +81,8 @@ export async function createManualDispatch(
             crossStreets: dispatch.crossStreets,
             unitsRequested: dispatch.unitsRequested,
             narrative: dispatch.narrative,
+            // Additive, for the pre-plan lookup only (fan-out never reads it).
+            ...(dispatch.locality ? { locality: dispatch.locality } : {}),
             idempotencyKey,
             dispatchedAt,
             createdAt: dispatchedAt,

@@ -209,6 +209,29 @@ describe('createManualDispatch (real DynamoDB, AC2/AC4)', () => {
     });
   });
 
+  it('stores the dispatcher locality choice on the DISPATCH_ALERT as its own field (R3-A)', async () => {
+    const deptId = toVerifiedDeptId({ deptId: 'NICHOLS' });
+    const externalId = `locality-${randomUUID()}`;
+    const result = await createManualDispatch(client, TABLE_NAME, {
+      deptId,
+      dispatch: { ...dispatchPayload(externalId), locality: { town: 'Nichols', choice: 'HOME' } },
+      idempotencyKey: deriveIngressIdempotencyKey(deptId, 'MANUAL', externalId),
+      dispatchedAt: 1798000001,
+    });
+    const dispatchId = result.outcome === 'created' ? result.dispatchId : '';
+    const item = await client.send(
+      new GetCommand({
+        TableName: TABLE_NAME,
+        Key: { pk: `DEPT#${deptId}#DISPATCH#${dispatchId}`, sk: 'METADATA' },
+      }),
+    );
+    // The address string is never rewritten; the locality rides alongside it.
+    expect(item.Item).toMatchObject({
+      address: '123 Main St',
+      locality: { town: 'Nichols', choice: 'HOME' },
+    });
+  });
+
   it('rejects a duplicate manual submission of the same operator-entered reference — exactly one DISPATCH_ALERT, not two (AC4, core-harm)', async () => {
     const deptId = toVerifiedDeptId({ deptId: 'NICHOLS' });
     const externalId = `dup-${randomUUID()}`;

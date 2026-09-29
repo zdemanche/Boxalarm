@@ -138,6 +138,12 @@ export interface DeliveryReceipt {
   failureReason: string | null;
 }
 
+/** Where the incident is: a home town/village, or another town typed in (R3-A). */
+export interface DispatchLocality {
+  town: string;
+  choice: 'HOME' | 'OTHER';
+}
+
 export interface ManualDispatchInput {
   incidentType: string;
   address: string;
@@ -145,6 +151,14 @@ export interface ManualDispatchInput {
   unitsRequested: string[];
   narrative: string;
   externalDispatchId: string;
+  locality?: DispatchLocality;
+}
+
+/** GET alerting/home-locality: the department's home towns/villages. */
+export interface HomeLocality {
+  towns: string[];
+  zips: string[];
+  state: string | null;
 }
 
 export interface FieldError {
@@ -191,6 +205,8 @@ export interface AlertsRepository {
   getRoster(dispatchId: string): Promise<RosterEntry[]>;
   submitResponse(dispatchId: string, ackStatus: AckStatus, etaMinutes?: number): Promise<void>;
   submitManualDispatch(input: ManualDispatchInput): Promise<{ dispatchId: string }>;
+  /** The manual-entry locality choices; callers treat a failure as "no home list". */
+  getHomeLocality(): Promise<HomeLocality>;
   getReceipts(dispatchId: string): Promise<DeliveryReceipt[]>;
   getRidingBoard(dispatchId: string): Promise<RidingBoard>;
   assignRidingSeat(

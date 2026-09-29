@@ -17,12 +17,20 @@ import { localityKey, type NormalizedAddress } from './addressKey.js';
  *  3. none — then no match can be verified, and every address match is shown flagged.
  */
 export interface HomeLocality {
+  /** Town/village names as configured, for display (the manual-entry locality choice). */
+  readonly names: readonly string[];
+  /** The same names in compared form (localityKey). */
   readonly towns: ReadonlySet<string>;
   readonly zips: ReadonlySet<string>;
   readonly state: string | null;
 }
 
-export const NO_HOME_LOCALITY: HomeLocality = { towns: new Set(), zips: new Set(), state: null };
+export const NO_HOME_LOCALITY: HomeLocality = {
+  names: [],
+  towns: new Set(),
+  zips: new Set(),
+  state: null,
+};
 
 export const HOME_LOCALITY_SK = 'HOME_LOCALITY';
 
@@ -35,12 +43,14 @@ export function parseHomeLocality(raw: unknown): HomeLocality | undefined {
   const value = raw as Record<string, unknown>;
   const strings = (list: unknown): string[] =>
     Array.isArray(list) ? list.filter((item): item is string => typeof item === 'string') : [];
-  const towns = strings(value.towns)
-    .map(localityKey)
-    .filter((town) => town.length > 0);
+  const names = strings(value.towns)
+    .map((name) => name.trim())
+    .filter((name) => localityKey(name).length > 0);
+  const towns = names.map(localityKey);
   const zips = strings(value.zips).filter((zip) => /^\d{5}$/.test(zip));
   if (towns.length === 0 && zips.length === 0) return undefined;
   return {
+    names,
     towns: new Set(towns),
     zips: new Set(zips),
     state: typeof value.state === 'string' ? value.state.trim().toUpperCase() || null : null,
@@ -97,8 +107,9 @@ function compareHome(dispatchValue: string | null, homeSet: ReadonlySet<string>)
 /**
  * Whether a same-key candidate is this dispatch's place:
  *  - REJECT: the two name different places (town, ZIP or state) with nothing agreeing.
- *  - VERIFIED: some part of the locality positively agrees and nothing conflicts, and neither
- *    address parsed ambiguously.
+ *  - VERIFIED: the dispatch names a locality (in its address, or the dispatcher's locality
+ *    choice), some part of it positively agrees and nothing conflicts, and neither address
+ *    parsed ambiguously. A dispatch naming no locality is never verified.
  *  - UNVERIFIED: anything else. Still shown, but flagged "verify address".
  *
  * A copy is in the home area when every locality part it carries (town, ZIP, state) is in the
@@ -134,7 +145,9 @@ export function judgeLocality(
 
   let verdict: LocalityVerdict;
   if (dispatch.town === null && dispatch.zip === null && dispatch.state === null) {
-    verdict = copyHome ? 'VERIFIED' : 'UNVERIFIED';
+    // A dispatch that names no locality is never verified: "123 Main St" typed for a
+    // mutual-aid call in another town looks exactly like a home call (round-3 R3-A).
+    verdict = 'UNVERIFIED';
   } else if (state === 'conflict') {
     verdict = zip === 'agree' ? 'UNVERIFIED' : 'REJECT';
   } else if (zip === 'conflict') {

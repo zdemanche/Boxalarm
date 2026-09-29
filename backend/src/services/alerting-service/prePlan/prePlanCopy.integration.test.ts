@@ -150,6 +150,7 @@ describe('pre-plan + hydrant copies -> dispatch detail (real DynamoDB with the a
     await handler(sqsEvent('inspections.hydrant.updated', payload, eventTime));
   }
 
+  // Dispatches the dispatcher placed in a home town (R3-A: no locality, no verified match).
   async function putDispatch(
     dispatchId: string,
     address: string,
@@ -228,7 +229,9 @@ describe('pre-plan + hydrant copies -> dispatch detail (real DynamoDB with the a
         ...extra,
       });
     }
-    await putDispatch('NICHOLS-MANUAL-1', '123 main st, Apt 4');
+    await putDispatch('NICHOLS-MANUAL-1', '123 main st, Apt 4', {
+      locality: { town: 'Trumbull', choice: 'HOME' },
+    });
 
     const body = await detail('NICHOLS-MANUAL-1');
 
@@ -255,7 +258,9 @@ describe('pre-plan + hydrant copies -> dispatch detail (real DynamoDB with the a
       { deptId: 'NICHOLS', hydrantId: 'HYD-90', status: 'OUT_OF_SERVICE' },
       '2026-09-07T00:00:00Z',
     );
-    await putDispatch('NICHOLS-MANUAL-2', '123 Main St');
+    await putDispatch('NICHOLS-MANUAL-2', '123 Main St', {
+      locality: { town: 'Trumbull', choice: 'HOME' },
+    });
 
     const body = await detail('NICHOLS-MANUAL-2');
 
@@ -326,12 +331,16 @@ describe('pre-plan + hydrant copies -> dispatch detail (real DynamoDB with the a
       await plan('OCC-TRUMBULL', '5 Main St, Trumbull, CT 06611');
 
       expect((await lookup('12A Oak Ln')).prePlan).toBeNull();
-      expect((await lookup('12 Oak Lane')).prePlan).toMatchObject({
+      expect(
+        (await lookup('12 Oak Lane', { locality: { town: 'Trumbull', choice: 'HOME' } })).prePlan,
+      ).toMatchObject({
         matchType: 'ADDRESS',
         hazards: ['HAZARD-OCC-12'],
       });
       expect((await lookup('100 Space Ln')).prePlan).toBeNull();
-      expect((await lookup('100 Lot Road')).prePlan).toMatchObject({ matchType: 'ADDRESS' });
+      expect(
+        (await lookup('100 Lot Road', { locality: { town: 'Trumbull', choice: 'HOME' } })).prePlan,
+      ).toMatchObject({ matchType: 'ADDRESS' });
       expect((await lookup('5 Main St, Bridgeport, CT')).prePlan).toBeNull();
       // Round-2 A: a town-less (home) pre-plan never matches a dispatch in another town.
       expect((await lookup('12 Oak Ln, Bridgeport, CT')).prePlan).toBeNull();
@@ -352,7 +361,10 @@ describe('pre-plan + hydrant copies -> dispatch detail (real DynamoDB with the a
       await plan('OCC-A', '40 Oak Ave Unit A');
       await plan('OCC-B', '40 Oak Ave Unit B');
 
-      expect((await lookup('40 Oak Avenue Unit B')).prePlan).toMatchObject({
+      expect(
+        (await lookup('40 Oak Avenue Unit B', { locality: { town: 'Trumbull', choice: 'HOME' } }))
+          .prePlan,
+      ).toMatchObject({
         matchType: 'ADDRESS',
         unit: 'B',
         hazards: ['HAZARD-OCC-B'],
@@ -451,7 +463,9 @@ describe('pre-plan + hydrant copies -> dispatch detail (real DynamoDB with the a
         },
         '2026-09-10T00:00:00Z',
       );
-      expect((await view('55 Cedar Ln')).prePlan).toMatchObject({ matchType: 'ADDRESS' });
+      expect(
+        (await view('55 Cedar Ln', { locality: { town: 'Trumbull', choice: 'HOME' } })).prePlan,
+      ).toMatchObject({ matchType: 'ADDRESS' });
 
       // N1: the archive's eventTime is OLDER than the stored save — it must still apply.
       await consumePrePlan(
