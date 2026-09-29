@@ -82,4 +82,8 @@ Where it comes from, first match wins:
 
 3. **Neither.** No match can be verified, and every address match is shown "VERIFY ADDRESS". This is safe but noisy. `pulumi up` warns about it.
 
+**Out-of-area occupancies.** A pre-plan whose address carries no town is treated as in the home area. So an occupancy outside it must be entered with its town, for example an automatic-aid target pre-planned by this department: "12 Oak St, Monroe", not "12 Oak St". Otherwise a home dispatch to "12 Oak St" would verify against it. The web occupancy form says so. There is no server-side check, because inspections (LOB plane) cannot read the alerting-side home set across the IAM boundary, and a second copy of it would drift. To audit, list occupancy addresses with no town and confirm each is in the home area.
+
+**Home ZIPs must be home-only.** List a ZIP only if it covers nothing outside the home area. A ZIP shared with a neighbouring town would let that town's addresses agree on ZIP alone.
+
 If CAD writes a village the set does not list, add it. Until then such calls show "VERIFY ADDRESS" when the ZIP agrees, and no pre-plan otherwise.

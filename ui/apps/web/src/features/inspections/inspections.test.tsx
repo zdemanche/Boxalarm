@@ -231,3 +231,11 @@ test('N10: a rejected "Mark out of service" is shown, never silent (409 conflict
     'Marking out of service for HYD-2 was not saved',
   );
 });
+
+test('round-3 minor 4: the occupancy address field tells inspectors to include an out-of-area town', async () => {
+  server.use(http.get('/api/v1/inspections/occupancies', () => HttpResponse.json({ items: [] })));
+  renderApp(['CHIEF'], '/inspections/occupancies');
+  const address = await screen.findByLabelText(/^Address/);
+  const help = document.getElementById(address.getAttribute('aria-describedby') ?? '');
+  expect(help?.textContent).toContain('Include the town');
+});
