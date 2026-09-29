@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { TransactionCanceledException } from '@aws-sdk/client-dynamodb';
 import type { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
 import {
   invalidateMemberPush,
@@ -109,5 +110,80 @@ describe('invalidateMemberPush (M2)', () => {
       'no-member',
     );
     expect(commands).toHaveLength(1);
+  });
+
+  it('treats the channel name case-insensitively (review minor 5)', async () => {
+    const { client, commands } = docWith({
+      updatedAt: 5,
+      contactChannels: [{ channel: 'push', token: 't' }, { channel: 'Sms' }],
+    });
+
+    await expect(invalidateMemberPush(client, 'tbl', 'NICHOLS', 'sub-1', 't')).resolves.toBe(
+      'invalidated',
+    );
+    const transact = commands.find((c) => c.name === 'TransactWriteCommand');
+    const items = transact?.input.TransactItems as Array<Record<string, Record<string, unknown>>>;
+    expect(items[0]?.Update).toMatchObject({
+      ConditionExpression: 'attribute_exists(pk) AND updatedAt = :readUpdatedAt',
+      ExpressionAttributeValues: { ':cc': [{ channel: 'Sms' }], ':readUpdatedAt': 5 },
+    });
+  });
+
+  it('re-reads and re-applies the filter when a concurrent write changed the row', async () => {
+    const reads = [
+      { updatedAt: 1, contactChannels: [{ channel: 'PUSH', token: 'old' }] },
+      {
+        updatedAt: 2,
+        contactChannels: [{ channel: 'PUSH', token: 'new' }, { channel: 'SMS' }],
+      },
+    ];
+    let transacts = 0;
+    const inputs: Array<Record<string, unknown>> = [];
+    const client = {
+      send: (command: { constructor: { name: string }; input: Record<string, unknown> }) => {
+        if (command.constructor.name === 'GetCommand') {
+          return Promise.resolve({ Item: reads.shift() });
+        }
+        transacts += 1;
+        inputs.push(command.input);
+        if (transacts === 1) {
+          return Promise.reject(
+            new TransactionCanceledException({
+              message: 'cancelled',
+              $metadata: {},
+              CancellationReasons: [{ Code: 'ConditionalCheckFailed' }, { Code: 'None' }],
+            }),
+          );
+        }
+        return Promise.resolve({});
+      },
+    } as unknown as DynamoDBDocumentClient;
+
+    await expect(invalidateMemberPush(client, 'tbl', 'NICHOLS', 'sub-1', 't')).resolves.toBe(
+      'invalidated',
+    );
+    const second = (inputs[1]?.TransactItems as Array<Record<string, Record<string, unknown>>>)[0];
+    expect(second?.Update).toMatchObject({
+      ExpressionAttributeValues: { ':cc': [{ channel: 'SMS' }], ':readUpdatedAt': 2 },
+    });
+  });
+
+  it('gives up after three conflicting attempts', async () => {
+    const client = {
+      send: (command: { constructor: { name: string } }) =>
+        command.constructor.name === 'GetCommand'
+          ? Promise.resolve({ Item: { updatedAt: 1, contactChannels: [{ channel: 'PUSH' }] } })
+          : Promise.reject(
+              new TransactionCanceledException({
+                message: 'cancelled',
+                $metadata: {},
+                CancellationReasons: [{ Code: 'ConditionalCheckFailed' }],
+              }),
+            ),
+    } as unknown as DynamoDBDocumentClient;
+
+    await expect(
+      invalidateMemberPush(client, 'tbl', 'NICHOLS', 'sub-1', 't'),
+    ).rejects.toBeInstanceOf(TransactionCanceledException);
   });
 });
