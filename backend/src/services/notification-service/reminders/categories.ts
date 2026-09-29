@@ -19,6 +19,10 @@ export const INVENTORY_REORDER_CATEGORY = 'inventory-reorder';
 export const PPE_EXPIRY_CATEGORY = 'ppe-expiry';
 /** The APPARATUS role's department-wide PPE copy: its own mute, apart from the holder's. */
 export const PPE_EXPIRY_OFFICER_CATEGORY = 'ppe-expiry-officer';
+/** NERIS sent a report back (REJECTED) or could not process it (FAILED): the report owner. */
+export const NERIS_REJECTED_CATEGORY = 'neris-rejected';
+/** A month closed with no calls and no NERIS no-activity report on file: the chief and admin. */
+export const NERIS_NO_ACTIVITY_CATEGORY = 'neris-no-activity';
 
 /**
  * Department roles (personnel-service memberRepository.ts MEMBER_ROLES) a reminder routes to.
@@ -40,7 +44,8 @@ export type ReminderRole = 'OFFICER' | 'TRAINING' | 'APPARATUS' | 'ADMIN' | 'CHI
  * their own route; `id` is the route's key (the apparatus page is keyed by display unitId).
  */
 export interface ReminderLink {
-  readonly kind: 'apparatus' | 'member' | 'consumables';
+  /** `incident` with an id opens that report; without one, the incident list. */
+  readonly kind: 'apparatus' | 'member' | 'consumables' | 'incident';
   readonly id?: string;
 }
 
@@ -177,6 +182,23 @@ const CONFIGS: readonly ReminderCategoryConfig[] = [
     pushChannelId: 'ppe-expiry-digest',
     subject: (n) => `${plural(n, 'department PPE item', 'department PPE items')} expiring`,
     summary: (n) => `${plural(n, 'PPE item', 'PPE items')} expiring`,
+  },
+  {
+    // Only the report owner: the officer who wrote it is the one who fixes and resubmits.
+    category: NERIS_REJECTED_CATEGORY,
+    muteKey: NERIS_REJECTED_CATEGORY,
+    roles: [],
+    pushChannelId: 'neris-rejected',
+    subject: (n) => `NERIS returned ${plural(n, 'report', 'reports')}`,
+    summary: (n) => `${plural(n, 'report', 'reports')} to fix and resubmit`,
+  },
+  {
+    category: NERIS_NO_ACTIVITY_CATEGORY,
+    muteKey: NERIS_NO_ACTIVITY_CATEGORY,
+    roles: ['CHIEF', 'ADMIN'],
+    pushChannelId: 'neris-no-activity',
+    subject: () => 'NERIS no-activity report due',
+    summary: (n) => `${plural(n, 'month', 'months')} with no calls to report`,
   },
 ];
 

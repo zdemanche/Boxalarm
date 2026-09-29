@@ -299,3 +299,85 @@ describe('ppeExpiryConsumer', () => {
     expect(send).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('NERIS report consumers', () => {
+  it('neris.incident.rejected -> a neris-rejected reminder for the report owner, linking to the report', async () => {
+    const send = vi.fn().mockResolvedValue({});
+    mockDdb(send);
+    const { handler } = await import('./nerisReportConsumer.js');
+
+    await handler(
+      sqsEvent('neris.incident.rejected', 'incident-service', {
+        incidentId: 'NICHOLS-4471-1798000000',
+        deptId: 'NICHOLS',
+        ownerId: 'MBR-0034',
+        incidentNumber: '4471',
+        nerisStatus: 'REJECTED',
+        statusAt: '2026-09-30T09:00:00Z',
+      }),
+    );
+
+    const puts = putsOf(send);
+    expect(puts).toHaveLength(2);
+    expect(puts[0]!.Item).toMatchObject({
+      pk: 'DEPT#NICHOLS#MEMBER#MBR-0034',
+      category: 'neris-rejected',
+      item: {
+        subjectId: 'NICHOLS-4471-1798000000:neris.incident.rejected:2026-09-30T09:00:00Z',
+        title: 'Report 4471',
+        link: { kind: 'incident', id: 'NICHOLS-4471-1798000000' },
+      },
+    });
+  });
+
+  it('neris.incident.failed says NERIS could not process it', async () => {
+    const send = vi.fn().mockResolvedValue({});
+    mockDdb(send);
+    const { handler } = await import('./nerisReportConsumer.js');
+    await handler(
+      sqsEvent('neris.incident.failed', 'incident-service', {
+        incidentId: 'I-1',
+        deptId: 'NICHOLS',
+        ownerId: 'MBR-0034',
+      }),
+    );
+    expect(putsOf(send)[0]!.Item).toMatchObject({
+      item: { detail: expect.stringContaining("couldn't be processed") as unknown },
+    });
+  });
+
+  it('neris.no_activity.due -> one reminder each for the CHIEF and ADMIN roles', async () => {
+    const send = vi.fn().mockResolvedValue({});
+    mockDdb(send);
+    const { handler } = await import('./nerisNoActivityConsumer.js');
+    await handler(
+      sqsEvent('neris.no_activity.due', 'incident-service', {
+        deptId: 'NICHOLS',
+        month: '2026-09',
+      }),
+    );
+    const puts = putsOf(send);
+    expect(puts.map((p) => p.Item.pk)).toEqual([
+      'DEPT#NICHOLS#ROLE#CHIEF',
+      'DEPT#NICHOLS#ROLE#ADMIN',
+      expect.stringContaining('DEPT#NICHOLS') as unknown,
+    ]);
+    expect(puts[0]!.Item).toMatchObject({
+      category: 'neris-no-activity',
+      item: { subjectId: 'no-activity:2026-09', link: { kind: 'incident' } },
+    });
+  });
+
+  it('fails closed on a rejection with no owner', async () => {
+    mockDdb(vi.fn());
+    const { handler } = await import('./nerisReportConsumer.js');
+    await expect(
+      handler(
+        sqsEvent('neris.incident.rejected', 'incident-service', {
+          incidentId: 'I',
+          deptId: 'NICHOLS',
+        }),
+      ),
+    ).rejects.toThrow();
+  });
+});

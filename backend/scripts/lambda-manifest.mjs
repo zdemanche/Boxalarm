@@ -35,6 +35,16 @@ export const LAMBDA_ENTRIES = [
   },
   {
     service: 'platform-service',
+    function: 'neris-entity-get',
+    entry: 'src/services/platform-service/neris/getEntity.ts',
+  },
+  {
+    service: 'platform-service',
+    function: 'neris-entity-put',
+    entry: 'src/services/platform-service/neris/putEntity.ts',
+  },
+  {
+    service: 'platform-service',
     function: 'export',
     entry: 'src/services/platform-service/export/handler.ts',
   },
@@ -637,6 +647,11 @@ export const LAMBDA_ENTRIES = [
   },
   {
     service: 'reporting-service',
+    function: 'neris-compliance',
+    entry: 'src/services/reporting-service/nerisCompliance/handler.ts',
+  },
+  {
+    service: 'reporting-service',
     function: 'iso',
     entry: 'src/services/reporting-service/iso/handler.ts',
   },
@@ -809,6 +824,16 @@ export const LAMBDA_ENTRIES = [
     service: 'notification-service',
     function: 'ppe-expiry-consumer',
     entry: 'src/services/notification-service/events/ppeExpiryConsumer.ts',
+  },
+  {
+    service: 'notification-service',
+    function: 'neris-rejected-consumer',
+    entry: 'src/services/notification-service/events/nerisReportConsumer.ts',
+  },
+  {
+    service: 'notification-service',
+    function: 'neris-no-activity-consumer',
+    entry: 'src/services/notification-service/events/nerisNoActivityConsumer.ts',
   },
   // One health Lambda per service serves GET health/liveness and health/readiness.
   {
