@@ -78,6 +78,19 @@ const SNAPSHOT_DEFAULTS: ReadonlyArray<readonly [string, string, unknown]> = [
   ['roles', ':emptyRoles', []],
 ];
 
+/**
+ * `roles` is a DynamoDB reserved word: used bare in an expression, the whole UpdateItem fails
+ * with a ValidationException - so every member.updated event (each one seeds roles) was
+ * retried into the DLQ and no push token, phone or role change ever reached the snapshot.
+ * Every expression here names it through `#roles`.
+ */
+const ROLES_NAME = '#roles';
+const ATTRIBUTE_NAMES = { [ROLES_NAME]: 'roles' } as const;
+
+function expressionName(field: string): string {
+  return field === 'roles' ? ROLES_NAME : field;
+}
+
 function seedDefaults(
   setClauses: string[],
   values: Record<string, unknown>,
@@ -85,7 +98,8 @@ function seedDefaults(
 ): void {
   for (const [field, placeholder, value] of SNAPSHOT_DEFAULTS) {
     if (!alreadySet.has(field)) {
-      setClauses.push(`${field} = if_not_exists(${field}, ${placeholder})`);
+      const name = expressionName(field);
+      setClauses.push(`${name} = if_not_exists(${name}, ${placeholder})`);
       values[placeholder] = value;
     }
   }
@@ -126,6 +140,7 @@ function buildMergeExpression(payload: MemberUpdatedPayload, snapshotUpdatedAt: 
     UpdateExpression: `SET ${setClauses.join(', ')}`,
     ConditionExpression:
       'attribute_not_exists(snapshotUpdatedAt) OR snapshotUpdatedAt < :snapshotUpdatedAt',
+    ExpressionAttributeNames: ATTRIBUTE_NAMES,
     ExpressionAttributeValues: values,
   };
 }
@@ -141,7 +156,7 @@ function buildRolesExpression(roles: readonly string[], memberId: string, eventT
   const setClauses = [
     'entityType = :entityType',
     'memberId = :memberId',
-    'roles = :roles',
+    `${ROLES_NAME} = :roles`,
     'rolesUpdatedAt = :rolesUpdatedAt',
     'snapshotUpdatedAt = if_not_exists(snapshotUpdatedAt, :rolesUpdatedAt)',
   ];
@@ -155,6 +170,7 @@ function buildRolesExpression(roles: readonly string[], memberId: string, eventT
   return {
     UpdateExpression: `SET ${setClauses.join(', ')}`,
     ConditionExpression: 'attribute_not_exists(rolesUpdatedAt) OR rolesUpdatedAt < :rolesUpdatedAt',
+    ExpressionAttributeNames: ATTRIBUTE_NAMES,
     ExpressionAttributeValues: values,
   };
 }

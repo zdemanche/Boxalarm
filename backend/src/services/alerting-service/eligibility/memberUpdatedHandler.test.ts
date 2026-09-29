@@ -144,8 +144,10 @@ describe('memberUpdatedHandler', () => {
     };
     // Absent fields are only seeded where the snapshot has none (if_not_exists), never
     // overwritten - so a stored quals/roles/active survives a register-only event.
-    for (const field of ['quals', 'roles', 'active', 'availabilityState']) {
-      expect(updateCall.input.UpdateExpression).not.toMatch(new RegExp(`${field} = :${field}\\b`));
+    for (const field of ['quals', '#roles', 'active', 'availabilityState']) {
+      expect(updateCall.input.UpdateExpression).not.toContain(
+        `${field} = :${field.replace('#', '')},`,
+      );
       expect(updateCall.input.UpdateExpression).toContain(`${field} = if_not_exists(${field},`);
     }
     expect(updateCall.input.ExpressionAttributeValues[':quals']).toBeUndefined();
@@ -184,6 +186,36 @@ describe('memberUpdatedHandler', () => {
     );
     // A first-ever event (a brand-new chief) still yields a snapshot the selector accepts.
     expect(input.UpdateExpression).toContain('active = if_not_exists(active, :defaultActive)');
+  });
+
+  // `roles` is a DynamoDB reserved word. Bare in an expression it fails the whole UpdateItem
+  // (ValidationException), and every member.updated event seeds or sets roles - so the
+  // consumer DLQ'd every push-token, status and role change. Found against LocalStack; the
+  // in-memory fakes accepted it.
+  it('names roles only through #roles in every expression it sends', async () => {
+    const send = vi.fn().mockResolvedValue({});
+    vi.doMock('./dynamoClient.js', () => ({
+      createDynamoClient: () => ({ send }),
+      readAlertingConfig: () => ({ tableName: 'alerting-table' }),
+    }));
+    const { handler } = await import('./memberUpdatedHandler.js');
+    await handler(
+      buildSqsEvent({
+        ...VALID_ENVELOPE,
+        payload: { deptId: 'NICHOLS', memberId: 'mbr-102', active: true, roles: ['OFFICER'] },
+      }),
+    );
+
+    expect(send).toHaveBeenCalledTimes(2);
+    for (const [command] of send.mock.calls) {
+      const input = (
+        command as {
+          input: { UpdateExpression: string; ExpressionAttributeNames?: Record<string, string> };
+        }
+      ).input;
+      expect(input.UpdateExpression).not.toMatch(/(^|[\s,(])roles\b/);
+      expect(input.ExpressionAttributeNames).toEqual({ '#roles': 'roles' });
+    }
   });
 
   it('applies roles and other fields as two independently guarded updates', async () => {

@@ -69,10 +69,15 @@ function createStatefulSend(
       const key = (input.Key as { sk: string }).sk;
       const values = input.ExpressionAttributeValues as Record<string, unknown>;
       const current = store.get(key);
-      if (
-        current &&
-        JSON.stringify(current.quals ?? []) !== JSON.stringify(values[':priorQuals'])
-      ) {
+      const condition = input.ConditionExpression as string;
+      const holds =
+        condition === 'attribute_not_exists(pk)'
+          ? current === undefined
+          : condition === 'attribute_not_exists(quals)'
+            ? current !== undefined && current.quals === undefined
+            : current !== undefined &&
+              JSON.stringify(current.quals) === JSON.stringify(values[':priorQuals']);
+      if (!holds) {
         throw new ConditionalCheckFailedException({ message: 'stale read', $metadata: {} });
       }
       store.set(key, {

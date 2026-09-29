@@ -118,21 +118,31 @@ async function updateEligibilitySnapshot(
     }
     const priorQuals = Array.isArray(existingItem?.quals) ? existingItem.quals : [];
     const quals = nextQuals(priorQuals, qualCode, currentlyEligible);
+    // Optimistic check on exactly what was read. `if_not_exists` is an update function, not a
+    // condition function: the old `if_not_exists(quals, :emptyList) = :priorQuals` condition
+    // made DynamoDB reject every qual change with a ValidationException.
+    const readCondition =
+      existingItem === undefined
+        ? { ConditionExpression: 'attribute_not_exists(pk)', values: {} }
+        : existingItem.quals === undefined
+          ? { ConditionExpression: 'attribute_not_exists(quals)', values: {} }
+          : { ConditionExpression: 'quals = :priorQuals', values: { ':priorQuals': priorQuals } };
 
     try {
       await client.send(
         new UpdateCommand({
           TableName: tableName,
           Key: snapshotKey,
-          ConditionExpression:
-            'attribute_not_exists(pk) OR if_not_exists(quals, :emptyList) = :priorQuals',
+          ConditionExpression: readCondition.ConditionExpression,
           UpdateExpression:
-            'SET entityType = :entityType, memberId = :memberId, quals = :quals, qualsUpdatedAt = :new, snapshotUpdatedAt = if_not_exists(snapshotUpdatedAt, :new), active = if_not_exists(active, :defaultActive), availabilityState = if_not_exists(availabilityState, :defaultAvailability), roles = if_not_exists(roles, :emptyList)',
+            'SET entityType = :entityType, memberId = :memberId, quals = :quals, qualsUpdatedAt = :new, snapshotUpdatedAt = if_not_exists(snapshotUpdatedAt, :new), active = if_not_exists(active, :defaultActive), availabilityState = if_not_exists(availabilityState, :defaultAvailability), #roles = if_not_exists(#roles, :emptyList)',
+          // `roles` is a DynamoDB reserved word; bare, the whole update is a ValidationException.
+          ExpressionAttributeNames: { '#roles': 'roles' },
           ExpressionAttributeValues: {
             ':entityType': 'MEMBER_ELIGIBILITY_SNAPSHOT',
             ':memberId': memberId,
             ':quals': quals,
-            ':priorQuals': priorQuals,
+            ...readCondition.values,
             ':new': eventSnapshotUpdatedAt,
             ':defaultActive': true,
             ':defaultAvailability': 'AVAILABLE',
