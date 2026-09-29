@@ -226,6 +226,30 @@ test('after an answer is delivered the roster is read back; a change the roster 
   ).toBeTruthy();
 });
 
+test('a 409 SUPERSEDED reads "Newer answer on the roster", shows the roster answer, and offers send-again or keep', async () => {
+  roster = [];
+  postOutcome = async () => {
+    roster = [{ memberId: 'MBR-1', ackStatus: 'RESPONDING', eta: null }];
+    throw new ApiError({
+      type: 'about:blank',
+      title: 'Conflict',
+      status: 409,
+      traceId: 't',
+      code: 'SUPERSEDED',
+    } as never);
+  };
+  await renderScreen();
+
+  await tap(/^Not responding/);
+
+  expect(await screen.findByText('Newer answer on the roster')).toBeTruthy();
+  expect(await screen.findByText(/roster shows: responding/i)).toBeTruthy();
+  expect(screen.getByRole('button', { name: 'Send my answer again: Not responding' })).toBeTruthy();
+  expect(
+    screen.getByRole('button', { name: 'Keep what the roster shows: Responding' }),
+  ).toBeTruthy();
+});
+
 test('a 409 from the server reads "Not on the roster" with a resend', async () => {
   postOutcome = async () => {
     throw new ApiError({ type: 'about:blank', title: 'Conflict', status: 409, traceId: 't' });

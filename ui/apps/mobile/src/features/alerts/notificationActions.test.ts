@@ -1,7 +1,7 @@
 import notifee, { EventType, type Event } from '@notifee/react-native';
 import NetInfo from '@react-native-community/netinfo';
 import { Platform } from 'react-native';
-import { apiRequest } from '../../lib/apiClient';
+import { ApiError, apiRequest } from '../../lib/apiClient';
 import * as store from '../../sync/outboxStore';
 import * as syncManager from '../../sync/syncManager';
 import { getLocalAnswer } from './alertResponses';
@@ -104,12 +104,38 @@ test('with no signal the answer is kept on the phone and the notification says N
   expect(displayNotification.mock.calls.at(-1)![0].body).toMatch(/NOT SENT YET/);
 });
 
-test('when the server says the roster did not take it, the notification says so - not "sent"', async () => {
-  mockApiRequest.mockResolvedValue({ json: async () => ({ outcome: 'superseded' }) });
+test('a 409 that is not SUPERSEDED: the notification says NOT ON THE ROSTER - not "sent"', async () => {
+  mockApiRequest.mockRejectedValue(
+    new ApiError({
+      type: 'about:blank',
+      title: 'Conflict',
+      status: 409,
+      traceId: 't',
+      code: 'ANSWER_ID_REUSED',
+    } as never),
+  );
 
   await handleNotificationEvent(actionPress('respond:NOT_RESPONDING'));
 
   expect(displayNotification.mock.calls.at(-1)![0].body).toMatch(/NOT ON THE ROSTER/);
+});
+
+test('a 409 SUPERSEDED: the notification says a newer answer is on the roster', async () => {
+  mockApiRequest.mockRejectedValue(
+    new ApiError({
+      type: 'about:blank',
+      title: 'Conflict',
+      status: 409,
+      traceId: 't',
+      code: 'SUPERSEDED',
+    } as never),
+  );
+
+  await handleNotificationEvent(actionPress('respond:RESPONDING'));
+
+  expect(displayNotification.mock.calls.at(-1)![0].body).toMatch(
+    /A NEWER ANSWER is already on the roster/,
+  );
 });
 
 test('a plain press or an unknown action is ignored here (routing handles taps)', async () => {

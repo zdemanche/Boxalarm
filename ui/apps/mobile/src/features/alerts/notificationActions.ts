@@ -10,7 +10,7 @@ import Config from 'react-native-config';
 import { createStoredTokenSource } from '../../auth/AuthContext';
 import * as outbox from '../../sync/outbox';
 import * as syncManager from '../../sync/syncManager';
-import { RESPONSE_NOT_RECORDED } from '../../sync/syncManager';
+import { RESPONSE_NOT_RECORDED, RESPONSE_SUPERSEDED } from '../../sync/syncManager';
 import { ackStatusLabel } from './ackStatus';
 import { alertPayloadFromNotificationData } from './alertPayload';
 import { queueAlertResponse, type ResponseAnswer } from './alertResponses';
@@ -132,9 +132,11 @@ export async function answerFromNotification(
       sent
         ? 'Sent. Tap to open the call.'
         : row?.status === 'REJECTED'
-          ? row.lastError === RESPONSE_NOT_RECORDED
-            ? 'NOT ON THE ROSTER - the server did not record it. Tap to send again, or use the radio.'
-            : 'REFUSED by the server - not recorded. Tap to open the call, or use the radio.'
+          ? row.lastError === RESPONSE_SUPERSEDED
+            ? 'A NEWER ANSWER is already on the roster. Tap to see it and send yours again if needed.'
+            : row.lastError === RESPONSE_NOT_RECORDED
+              ? 'NOT ON THE ROSTER - the server did not record it. Tap to send again, or use the radio.'
+              : 'REFUSED by the server - not recorded. Tap to open the call, or use the radio.'
           : 'NOT SENT YET - saved on this phone and it sends when you have signal. Tap to check.',
     );
   } catch (error) {

@@ -1,6 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { AccessibilityInfo, Platform } from 'react-native';
-import { RESPONSE_NOT_RECORDED, SIGN_IN_REJECTED } from '../../sync/syncManager';
+import {
+  RESPONSE_NOT_RECORDED,
+  RESPONSE_SUPERSEDED,
+  SIGN_IN_REJECTED,
+} from '../../sync/syncManager';
 import { useOutboxItem, type OutboxItemState } from '../../sync/useOutboxItem';
 import { ackStatusLabel } from './ackStatus';
 import {
@@ -37,7 +41,8 @@ export type ResponseDelivery =
   | 'notRecorded'
   | 'disputed'
   | 'signInRejected'
-  | 'notConnected';
+  | 'notConnected'
+  | 'superseded';
 
 export interface MyAnswer {
   ackStatus: ResponseAnswer;
@@ -75,7 +80,11 @@ export function deliveryFor(
     case 'FAILED':
       return lastError === SIGN_IN_REJECTED ? 'signInRejected' : 'queued';
     case 'REJECTED':
-      return lastError === RESPONSE_NOT_RECORDED ? 'notRecorded' : 'refused';
+      return lastError === RESPONSE_SUPERSEDED
+        ? 'superseded'
+        : lastError === RESPONSE_NOT_RECORDED
+          ? 'notRecorded'
+          : 'refused';
     case 'SYNCED':
       return 'sent';
     case 'DISCARDED':
@@ -112,6 +121,8 @@ export function deliveryAnnouncement(answer: MyAnswer, delivery: ResponseDeliver
       return `Your change to ${what} did not reach the officer's roster. Send it again, or tell your officer by radio.`;
     case 'disputed':
       return `The officer's roster does not show your answer, ${what}. Send it again or keep what the roster shows.`;
+    case 'superseded':
+      return `A newer answer is already on the officer's roster, not your ${what}. Send yours again, or keep the roster's.`;
     case 'notConnected':
       return `Your response, ${what}, was not sent: this phone is not connected to a Boxalarm server. Tell your officer by radio.`;
     case 'signInRejected':
@@ -207,6 +218,15 @@ export function useAlertResponse(
     return () => clearTimeout(timer);
   }, [item.state, outboxId, loadRoster]);
 
+  // A 409 SUPERSEDED names a newer answer on the roster: fetch it so the member sees what it is.
+  const supersededFetchRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (item.state !== 'REJECTED' || item.lastError !== RESPONSE_SUPERSEDED || !outboxId) return;
+    if (supersededFetchRef.current === outboxId) return;
+    supersededFetchRef.current = outboxId;
+    void loadRoster(outboxId);
+  }, [item.state, item.lastError, outboxId, loadRoster]);
+
   let answer: MyAnswer | null = null;
   let delivery: ResponseDelivery | null = null;
   let rosterAnswer: MyAnswer | null = null;
@@ -229,7 +249,15 @@ export function useAlertResponse(
     // never silently adopt one (the member may have answered on another device, or this answer
     // never reached the roster).
     const rosterIsCurrent = !local.fresh || server?.checkedAfter === local.outboxId;
-    if (!stillQueued && server && !serverConfirms && rosterIsCurrent && local.outboxId !== null) {
+    if (delivery === 'superseded') {
+      rosterAnswer = server?.answer ?? null;
+    } else if (
+      !stillQueued &&
+      server &&
+      !serverConfirms &&
+      rosterIsCurrent &&
+      local.outboxId !== null
+    ) {
       delivery = 'disputed';
       rosterAnswer = server.answer;
     }
@@ -252,7 +280,8 @@ export function useAlertResponse(
         delivery === 'notRecorded' ||
         delivery === 'disputed' ||
         delivery === 'signInRejected' ||
-        delivery === 'notConnected',
+        delivery === 'notConnected' ||
+        delivery === 'superseded',
     );
   }, [answer, delivery]);
 

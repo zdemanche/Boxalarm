@@ -67,6 +67,14 @@ export function responseDeliveryCopy(delivery: ResponseDelivery): Copy {
           "The server got this answer but did not put it on the officer's roster. Send it again, or tell your officer by radio.",
         spoken: "not recorded on the officer's roster",
       };
+    case 'superseded':
+      return {
+        role: 'caution',
+        chip: 'Newer answer on the roster',
+        detail:
+          "A newer answer is already on the officer's roster (perhaps from another of your devices). Yours was recorded but is not the one the officer sees.",
+        spoken: "not current, a newer answer is on the officer's roster",
+      };
     case 'notConnected':
       return {
         role: 'danger',
@@ -128,7 +136,8 @@ export function ResponseStatus({
     delivery === 'unconfirmed' ||
     delivery === 'unsaved' ||
     delivery === 'notRecorded' ||
-    delivery === 'disputed';
+    delivery === 'disputed' ||
+    delivery === 'superseded';
 
   return (
     <View accessibilityLiveRegion="polite" style={{ gap: spacing.sm }}>
@@ -138,7 +147,7 @@ export function ResponseStatus({
       </Text>
       <StatusChip status={copy.role} label={copy.chip} />
       <Text style={{ color: theme.fg, fontSize: typeScale.body.size }}>{copy.detail}</Text>
-      {delivery === 'disputed' && rosterAnswer ? (
+      {(delivery === 'disputed' || delivery === 'superseded') && rosterAnswer ? (
         <Text style={{ color: theme.fg, fontSize: typeScale.body.size, fontWeight: '700' }}>
           Roster shows: {describeAnswer(rosterAnswer)}. Your last answer from this phone:{' '}
           {describeAnswer(answer)}.
@@ -171,7 +180,7 @@ export function ResponseStatus({
           onPress={onResend}
         />
       ) : null}
-      {delivery === 'disputed' && rosterAnswer && onKeepRoster ? (
+      {(delivery === 'disputed' || delivery === 'superseded') && rosterAnswer && onKeepRoster ? (
         <Button
           label={`Keep ${ackStatusLabel(rosterAnswer.ackStatus)}`}
           variant="secondary"

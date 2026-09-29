@@ -150,10 +150,12 @@ export async function enqueueAttendance(
 // Each answer is its own row (a changed answer is a new append-only answer, not an edit), and a
 // newer answer drops any older one for the same call that has not started sending, so a retried
 // "Responding" can never land after the member changed it to "Not responding". The body carries
-// clientAnswerId + answeredAtMs; until the server uses them, a replay after a lost 200 appends a
-// duplicate record, and a change stamped in the same server-second as the previous answer can be
-// dropped from the roster while answering 200 - which is why the screen re-reads the roster after
-// delivery, and why a 409 / `superseded` outcome is surfaced as RESPONSE_NOT_RECORDED.
+// clientAnswerId + answeredAtMs: the server orders answers by answeredAtMs, answers a replay of
+// the same clientAnswerId with the original result (a lost 200 retried is still "Sent"), and
+// answers 409 when the answer was recorded but is not the one on the roster - code SUPERSEDED (a
+// newer answer, perhaps from another device, is current) or another code (not recorded).
+// A server without that change can still drop a same-second change while answering 200, which is
+// why the screen re-reads the roster after delivery (useAlertResponse).
 export async function enqueueResponse(
   id: string,
   dispatchId: string,
@@ -192,22 +194,23 @@ export async function discard(id: string): Promise<void> {
 const RESIGNS_ON_REPLAY: ReadonlySet<OutboxKind> = new Set(['FIELD_CAPTURE', 'DEFECT']);
 
 /**
- * lastError of a RESPONSE row the server accepted as a request but did not apply to the roster
- * (409, or a 2xx whose outcome is `superseded`/`stale`, or `rosterUpdated: false`). Terminal: the
- * member must send it again as a new answer (a new answeredAtMs), which the UI offers.
+ * lastError of a RESPONSE row answered 409 with any code but SUPERSEDED (e.g. ANSWER_ID_REUSED):
+ * the answer is not on the roster. Terminal: the member sends it again as a new answer (new
+ * clientAnswerId and answeredAtMs), which the UI offers.
  */
 export const RESPONSE_NOT_RECORDED = "Not recorded on the officer's roster";
 
-class ResponseNotRecordedError extends Error {
-  constructor() {
-    super(RESPONSE_NOT_RECORDED);
-  }
-}
+/**
+ * lastError of a RESPONSE row answered 409 code SUPERSEDED: recorded, but a newer answer (maybe
+ * from another of the member's devices) is the one on the roster. Terminal; the UI shows the
+ * roster's answer and offers "send mine again" or "keep".
+ */
+export const RESPONSE_SUPERSEDED = 'A newer answer is already on the roster';
 
-function responseWasNotRecorded(parsed: Record<string, unknown>): boolean {
-  return (
-    parsed.outcome === 'superseded' || parsed.outcome === 'stale' || parsed.rosterUpdated === false
-  );
+class ResponseNotCurrentError extends Error {
+  constructor(message: string) {
+    super(message);
+  }
 }
 
 class PhotoUploadUrlExpiredError extends Error {
@@ -240,7 +243,7 @@ export function signedUrlExpiresAtMs(url: string): number | null {
 // is recoverable by signing in again, so it is treated as transient too.
 function isPermanentRejection(error: unknown): boolean {
   if (error instanceof PhotoUploadUrlExpiredError) return true;
-  if (error instanceof ResponseNotRecordedError) return true;
+  if (error instanceof ResponseNotCurrentError) return true;
   if (!(error instanceof ApiError)) return false;
   const { status } = error.problem;
   return status >= 400 && status < 500 && status !== 401 && status !== 408 && status !== 429;
@@ -376,7 +379,10 @@ async function postOnce(row: OutboxRow): Promise<Response | null> {
     });
   } catch (error) {
     if (row.kind === 'RESPONSE' && error instanceof ApiError && error.problem.status === 409) {
-      throw new ResponseNotRecordedError();
+      const { code } = error.problem as { code?: unknown };
+      throw new ResponseNotCurrentError(
+        code === 'SUPERSEDED' ? RESPONSE_SUPERSEDED : RESPONSE_NOT_RECORDED,
+      );
     }
     if (
       CONFLICT_MEANS_DELIVERED.has(row.kind) &&
@@ -396,9 +402,6 @@ async function create(row: OutboxRow): Promise<OutboxRow | undefined> {
     return outbox.find(row.id);
   }
   const parsed = (await response.json().catch(() => ({}))) as Record<string, unknown>;
-  if (row.kind === 'RESPONSE' && responseWasNotRecorded(parsed)) {
-    throw new ResponseNotRecordedError();
-  }
   const target = readUploadTarget(row, parsed);
   await outbox.advanceStage(row.id, {
     stage: target.uploadUrl && row.photoLocalUri ? 'UPLOAD_PHOTO' : 'DONE',

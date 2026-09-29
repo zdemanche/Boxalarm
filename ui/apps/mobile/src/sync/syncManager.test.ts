@@ -660,14 +660,43 @@ describe('alert responses (RESPONSE)', () => {
     expect(row?.lastError).toBe(syncManager.RESPONSE_NOT_RECORDED);
   });
 
-  test('a 200 whose outcome is superseded is not treated as delivered', async () => {
-    mockApiRequest.mockResolvedValueOnce({ json: async () => ({ outcome: 'superseded' }) });
+  test('409 code SUPERSEDED is recorded as "a newer answer is on the roster", not as not-recorded', async () => {
+    mockApiRequest.mockRejectedValueOnce(
+      new ApiError({
+        type: 'about:blank',
+        title: 'Conflict',
+        status: 409,
+        traceId: 't',
+        code: 'SUPERSEDED',
+      } as never),
+    );
 
     await syncManager.enqueueResponse('response-sup', 'D6', 'x', { ackStatus: 'NOT_RESPONDING' });
     await flush();
 
     expect(syncManager.hasSynced('response-sup')).toBe(false);
-    expect((await store.find('response-sup'))?.lastError).toBe(syncManager.RESPONSE_NOT_RECORDED);
+    const row = await store.find('response-sup');
+    expect(row?.status).toBe('REJECTED');
+    expect(row?.lastError).toBe(syncManager.RESPONSE_SUPERSEDED);
+  });
+
+  test('409 with any other code (ANSWER_ID_REUSED) is "not recorded"', async () => {
+    mockApiRequest.mockRejectedValueOnce(
+      new ApiError({
+        type: 'about:blank',
+        title: 'Conflict',
+        status: 409,
+        traceId: 't',
+        code: 'ANSWER_ID_REUSED',
+      } as never),
+    );
+
+    await syncManager.enqueueResponse('response-reused', 'D7', 'x', { ackStatus: 'RESPONDING' });
+    await flush();
+
+    expect((await store.find('response-reused'))?.lastError).toBe(
+      syncManager.RESPONSE_NOT_RECORDED,
+    );
   });
 
   test('a 401 that survives renewal is retried but recorded as a sign-in problem, not a network one', async () => {
