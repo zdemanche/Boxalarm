@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { TransactionCanceledException } from '@aws-sdk/client-dynamodb';
 import {
   GetCommand,
+  QueryCommand,
   TransactWriteCommand,
   type DynamoDBDocumentClient,
 } from '@aws-sdk/lib-dynamodb';
@@ -99,6 +100,89 @@ export function withoutDevice(
   deviceId: string | undefined,
 ): ContactChannelEntry[] {
   return current.filter((existing) => !isPush(existing) || !sameDevice(existing, deviceId));
+}
+
+/**
+ * The same physical installation as a registration: the same deviceId, or the same push token
+ * (a token is one app install's). Legacy entries without a deviceId match on the token alone.
+ */
+function isInstallation(
+  entry: ContactChannelEntry,
+  deviceId: string | undefined,
+  token: string,
+): boolean {
+  return (
+    isPush(entry) &&
+    ((deviceId !== undefined && entry.deviceId === deviceId) || entry.token === token)
+  );
+}
+
+/** Removes a registering installation's entries from another member's devices. */
+export function withoutInstallation(
+  current: readonly ContactChannelEntry[],
+  deviceId: string | undefined,
+  token: string,
+): ContactChannelEntry[] {
+  return current.filter((existing) => !isInstallation(existing, deviceId, token));
+}
+
+/**
+ * An installation belongs to the member signed in on it (M3). When member B registers a phone,
+ * any other member of the department still holding that deviceId or token - A signed out with no
+ * signal, so A's revoke never landed - is removed from it, each through writePushDevices so their
+ * personnel.member.updated reaches the alerting snapshot. Otherwise A's pages keep ringing, full
+ * screen and through Do Not Disturb, on a phone A is no longer signed in to.
+ *
+ * Department-scoped (GSI3, every member of the department): a Cognito user is in one department,
+ * and an installation cannot be shared across them without a sign-out in between. Returns the
+ * members it was removed from.
+ */
+export async function releaseInstallationFromOtherMembers(
+  client: DynamoDBDocumentClient,
+  tableName: string,
+  deptId: VerifiedDeptId,
+  memberId: string,
+  installation: { readonly deviceId?: string; readonly token: string },
+  options: WritePushDevicesOptions = {},
+): Promise<string[]> {
+  const holders: string[] = [];
+  let exclusiveStartKey: Record<string, unknown> | undefined;
+  do {
+    const page = await client.send(
+      new QueryCommand({
+        TableName: tableName,
+        IndexName: 'GSI3',
+        KeyConditionExpression: 'gsi3pk = :gsi3pk',
+        ExpressionAttributeValues: { ':gsi3pk': buildDeptScopedPk(deptId, 'MEMBER') },
+        ProjectionExpression: 'memberId, contactChannels',
+        ExclusiveStartKey: exclusiveStartKey,
+      }),
+    );
+    for (const item of page.Items ?? []) {
+      const other = item.memberId as string | undefined;
+      const channels = (item.contactChannels as ContactChannelEntry[] | undefined) ?? [];
+      if (
+        other &&
+        other !== memberId &&
+        channels.some((entry) => isInstallation(entry, installation.deviceId, installation.token))
+      ) {
+        holders.push(other);
+      }
+    }
+    exclusiveStartKey = page.LastEvaluatedKey as Record<string, unknown> | undefined;
+  } while (exclusiveStartKey);
+
+  for (const other of holders) {
+    await writePushDevices(
+      client,
+      tableName,
+      deptId,
+      other,
+      (current) => withoutInstallation(current, installation.deviceId, installation.token),
+      options,
+    );
+  }
+  return holders;
 }
 
 /** Removes every push device (device loss with no device identified). */

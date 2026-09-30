@@ -8,6 +8,7 @@ import {
   useState,
   type ReactNode,
 } from 'react';
+import NetInfo from '@react-native-community/netinfo';
 import { AppState, type AppStateStatus } from 'react-native';
 import {
   authorize as defaultAuthorize,
@@ -18,8 +19,16 @@ import {
 } from 'react-native-app-auth';
 import Config from 'react-native-config';
 import * as Keychain from 'react-native-keychain';
+import { getDeviceInstallationId } from '../features/alerts/deviceInstallationId';
 import { revokePushToken } from '../features/alerts/pushTokens';
 import { buildOidcConfig } from './config';
+import {
+  cancelPendingUnregisterFor,
+  isInvalidGrant,
+  retryPendingUnregister as retryPendingUnregisterWith,
+  savePendingUnregister,
+  type PendingUnregisterOutcome,
+} from './pendingUnregister';
 import { kvDelete, kvSet } from '../sync/kvStore';
 import * as syncManager from '../sync/syncManager';
 import { clearMemberCache, LAST_SESSION_SUB_KEY } from '../sync/memberCache';
@@ -94,15 +103,6 @@ function isNearExpiry(tokens: StoredTokens): boolean {
   return msUntilExpiry(tokens) <= FOREGROUND_RENEWAL_WINDOW_MS;
 }
 
-function isInvalidGrant(error: unknown): boolean {
-  return (
-    typeof error === 'object' &&
-    error !== null &&
-    'code' in error &&
-    (error as { code?: unknown }).code === 'invalid_grant'
-  );
-}
-
 export interface AuthDeps {
   authorize: (config: AuthConfiguration) => Promise<AuthorizeResult>;
   refresh: (config: AuthConfiguration, params: { refreshToken: string }) => Promise<RefreshResult>;
@@ -118,6 +118,17 @@ const defaultDeps: AuthDeps = {
   getInternetCredentials: Keychain.getInternetCredentials,
   resetInternetCredentials: Keychain.resetInternetCredentials,
 };
+
+/**
+ * Retries a sign-out's push revoke that did not land (M3, pendingUnregister). The provider runs it
+ * on launch, on every return to the foreground and whenever the network comes back; the sign-out
+ * dialog's Retry runs it at once.
+ */
+export function retryPendingUnregister(
+  deps: AuthDeps = defaultDeps,
+): Promise<PendingUnregisterOutcome> {
+  return retryPendingUnregisterWith(deps, buildOidcConfig());
+}
 
 async function readStoredTokens(deps: AuthDeps): Promise<StoredTokens | null> {
   const creds = await deps.getInternetCredentials(KEYCHAIN_SERVER);
@@ -289,9 +300,17 @@ interface AuthState {
   isLoading: boolean;
 }
 
+export interface SignOutResult {
+  /**
+   * False when this phone's push entry could not be removed (no signal, or refused): the phone
+   * may still ring for the member until the revoke, kept pending, reaches the server (M3).
+   */
+  pushRevoked: boolean;
+}
+
 export interface AuthContextValue extends AuthState {
   signIn: () => Promise<void>;
-  signOut: () => Promise<void>;
+  signOut: () => Promise<SignOutResult>;
   getAccessToken: () => Promise<string | null>;
   renewSilently: () => Promise<string | null>;
 }
@@ -378,8 +397,15 @@ export function AuthProvider({
         if (!cancelled) applyTokens(null);
       });
 
+    const retryPending = () => void retryPendingUnregister(depsRef.current);
+    retryPending();
+    const unsubscribeNetInfo = NetInfo.addEventListener((net) => {
+      if (net.isConnected === true) retryPending();
+    });
+
     const subscription = AppState.addEventListener('change', (next: AppStateStatus) => {
       if (next !== 'active') return;
+      retryPending();
       readStoredTokens(depsRef.current)
         .then((stored) => {
           if (cancelled || !stored || !isNearExpiry(stored)) return;
@@ -394,8 +420,15 @@ export function AuthProvider({
     return () => {
       cancelled = true;
       subscription.remove();
+      unsubscribeNetInfo?.();
     };
   }, [applyTokens, renewSilently]);
+
+  const getAccessToken = useCallback(async () => {
+    const stored = await readStoredTokens(depsRef.current);
+    if (!stored) return null;
+    return isExpired(stored) ? renewSilently() : stored.accessToken;
+  }, [renewSilently]);
 
   const value = useMemo<AuthContextValue>(
     () => ({
@@ -411,25 +444,57 @@ export function AuthProvider({
         // A refresh still running for the previous session must not overwrite these (M4).
         beginSessionChange();
         await settleRenewals();
+        // Signing back in on a phone whose sign-out revoke never landed: this sign-in registers
+        // the phone again, so that revoke must not land after it (M3).
+        const signingIn = decodeMemberId(tokens.idToken);
+        if (signingIn) {
+          await cancelPendingUnregisterFor(signingIn, depsRef.current).catch(() => undefined);
+        }
         await writeStoredTokens(depsRef.current, tokens);
         applyTokens(tokens);
       },
-      signOut: async () => {
+      signOut: async (): Promise<SignOutResult> => {
         // E1-S14-UI AC5: the DELETE must be sent before local credentials are cleared, so a
-        // signed-out device stops receiving pages. Best-effort: sign-out must never be blocked
-        // by a network failure.
+        // signed-out device stops receiving pages. Sign-out is never blocked by a network
+        // failure - but a revoke that did not land is never silent either (M3).
         // While the session is still valid, one bounded try (about 3 s) to send this member's
         // queued work - an alert answer left behind waits until they sign in here again.
         await syncManager.drainBriefly(SIGN_OUT_DRAIN_MS).catch(() => undefined);
         const stored = await readStoredTokens(depsRef.current).catch(() => null);
         const apiBaseUrl = Config.API_BASE_URL;
         const memberId = stored ? decodeMemberId(stored.idToken) : null;
+        let pushRevoked = true;
         if (stored && memberId && apiBaseUrl) {
-          await revokePushToken(
+          // The live session, renewal allowed: an access token past its hour is renewed rather
+          // than sent stale and refused (M3).
+          pushRevoked = await revokePushToken(
             memberId,
-            { getAccessToken: async () => stored.accessToken, renewSilently: async () => null },
+            { getAccessToken, renewSilently },
             apiBaseUrl,
-          ).catch(() => undefined);
+          ).then(
+            () => true,
+            (error: unknown) => {
+              console.warn('[push] sign-out could not remove this phone from paging', error);
+              return false;
+            },
+          );
+          if (!pushRevoked) {
+            // Held for that one purpose: retried whenever signal returns (a renewal above may
+            // have rotated the refresh token, so it is read again).
+            const latest = await readStoredTokens(depsRef.current).catch(() => null);
+            const deviceId = await getDeviceInstallationId().catch(() => null);
+            if (deviceId) {
+              await savePendingUnregister(depsRef.current, {
+                memberId,
+                deviceId,
+                refreshToken: (latest ?? stored).refreshToken,
+                apiBaseUrl,
+                savedAt: Date.now(),
+              }).catch((error: unknown) =>
+                console.error('[push] keeping the pending sign-out revoke failed', error),
+              );
+            }
+          }
         }
         // The member's cached apparatus, shifts, check drafts and last mark-off stay on the phone
         // otherwise (review m8). Queued writes in the outbox are kept: they are the member's
@@ -444,15 +509,12 @@ export function AuthProvider({
         await kvDelete(LAST_SESSION_SUB_KEY);
         await depsRef.current.resetInternetCredentials({ server: KEYCHAIN_SERVER });
         applyTokens(null);
+        return { pushRevoked };
       },
-      getAccessToken: async () => {
-        const stored = await readStoredTokens(depsRef.current);
-        if (!stored) return null;
-        return isExpired(stored) ? renewSilently() : stored.accessToken;
-      },
+      getAccessToken,
       renewSilently,
     }),
-    [state, config, applyTokens, renewSilently],
+    [state, config, applyTokens, renewSilently, getAccessToken],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

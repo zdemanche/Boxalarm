@@ -62,13 +62,17 @@ export async function registerPushToken(
   });
 }
 
-/** Sign-out: removes only this installation's entry; the member's other devices keep paging. */
+/**
+ * Sign-out: removes only this installation's entry; the member's other devices keep paging.
+ * `deviceId` defaults to this installation's (a pending revoke retried later names it).
+ */
 export async function revokePushToken(
   memberId: string,
   tokens: AuthTokenSource,
   apiBaseUrl: string,
+  deviceId?: string,
 ): Promise<void> {
-  const deviceId = await getDeviceInstallationId();
+  deviceId ??= await getDeviceInstallationId();
   await apiRequest(
     `personnel/members/${encodeURIComponent(memberId)}/push-tokens?deviceId=${encodeURIComponent(deviceId)}`,
     tokens,

@@ -3,7 +3,7 @@ import { useNavigation } from '@react-navigation/native';
 import { useEffect, useState } from 'react';
 import { Alert, Text, TouchableOpacity, View } from 'react-native';
 import { Button, Screen, useTheme, type SurfaceTheme } from '../../components/ui';
-import { useAuth } from '../../auth/AuthContext';
+import { retryPendingUnregister, useAuth, type SignOutResult } from '../../auth/AuthContext';
 import { useMeRepository } from '../../features/me/apiMeRepository';
 import type { LosapTotal, MemberProfile, Qualification } from '../../features/me/types';
 import * as syncManager from '../../sync/syncManager';
@@ -51,8 +51,32 @@ export function signOutWarning(phone: string | null | undefined): string {
   return appPages + other;
 }
 
+export const PUSH_NOT_REVOKED_TITLE = 'This phone may still get pages for you';
+export const PUSH_NOT_REVOKED_MESSAGE =
+  "You're signed out, but Boxalarm couldn't reach the server to stop paging this phone. It keeps trying whenever there's signal. Try again with signal.";
+
+/**
+ * A sign-out whose push revoke did not land is never silent (M3): the phone may keep ringing for
+ * the member who just left it. Retry runs the pending revoke at once; if it still cannot land,
+ * the member is told again.
+ */
+export function reportSignOut(result: SignOutResult | void): void {
+  if (!result || result.pushRevoked) return;
+  Alert.alert(PUSH_NOT_REVOKED_TITLE, PUSH_NOT_REVOKED_MESSAGE, [
+    { text: 'OK', style: 'cancel' },
+    {
+      text: 'Retry',
+      onPress: () => {
+        void retryPendingUnregister().then((outcome) => {
+          if (outcome === 'failed') reportSignOut({ pushRevoked: false });
+        });
+      },
+    },
+  ]);
+}
+
 export async function confirmSignOut(
-  signOut: () => Promise<void>,
+  signOut: () => Promise<SignOutResult | void>,
   phone?: string | null,
   memberId?: string | null,
 ): Promise<void> {
@@ -76,12 +100,19 @@ export async function confirmSignOut(
               text: `Discard ${unsent} unsent and sign out`,
               style: 'destructive' as const,
               onPress: () => {
-                void syncManager.discardAllFor(memberId).then(() => signOut());
+                void syncManager
+                  .discardAllFor(memberId)
+                  .then(() => signOut())
+                  .then(reportSignOut);
               },
             },
           ]
         : []),
-      { text: 'Sign out', style: 'destructive', onPress: () => void signOut() },
+      {
+        text: 'Sign out',
+        style: 'destructive',
+        onPress: () => void signOut().then(reportSignOut),
+      },
     ],
     { cancelable: true },
   );

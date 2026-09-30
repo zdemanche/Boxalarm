@@ -106,6 +106,28 @@ describe("PushTokens — member-updated consumer IAM isolation (#208 AC3)", () =
     }
   });
 
+  it("lets register (only) query the department's members on GSI3 to release a re-registered installation", async () => {
+    const pushTokens = await build();
+    const statementsOf = async (route: typeof pushTokens.registerRoute) =>
+      (
+        JSON.parse(await resolve(route.lambda.rolePolicy.policy)) as {
+          Statement: { Sid?: string; Action: string[]; Resource: string }[];
+        }
+      ).Statement;
+    const query = (await statementsOf(pushTokens.registerRoute)).find(
+      (s) => s.Sid === "PlatformTableMemberIndexQuery",
+    );
+    expect(query?.Action).toEqual(["dynamodb:Query"]);
+    expect(query?.Resource).toBe(
+      "arn:aws:dynamodb:us-east-1:123456789012:table/platform/index/GSI3",
+    );
+    expect(
+      (await statementsOf(pushTokens.revokeRoute)).some(
+        (s) => s.Sid === "PlatformTableMemberIndexQuery",
+      ),
+    ).toBe(false);
+  });
+
   it("routes personnel.member.updated only from personnel-service onto the consumer queue", async () => {
     const pushTokens = await build();
     const patternJson = await resolve(pushTokens.memberUpdatedRule.eventPattern);

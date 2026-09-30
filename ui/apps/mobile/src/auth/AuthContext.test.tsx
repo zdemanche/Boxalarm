@@ -1,7 +1,13 @@
 import { fireEvent, render, waitFor } from '@testing-library/react-native';
 import { AppState, Pressable, Text, type AppStateStatus } from 'react-native';
 import type { AuthConfiguration, AuthorizeResult, RefreshResult } from 'react-native-app-auth';
-import { AuthProvider, createStoredTokenSource, useAuth, type AuthDeps } from './AuthContext';
+import {
+  AuthProvider,
+  createStoredTokenSource,
+  retryPendingUnregister,
+  useAuth,
+  type AuthDeps,
+} from './AuthContext';
 import { kvGet } from '../sync/kvStore';
 import * as syncManager from '../sync/syncManager';
 import { LAST_SESSION_SUB_KEY } from '../sync/memberCache';
@@ -46,7 +52,8 @@ function issuedTokens(
 }
 
 function makeDeps(overrides: Partial<AuthDeps> = {}): AuthDeps {
-  let stored: { username: string; password: string } | false = false;
+  // Keyed by keychain server: the session and a pending sign-out revoke are separate entries.
+  const entries = new Map<string, { username: string; password: string }>();
 
   const deps = {
     authorize: jest.fn(async () => issuedTokens() as unknown as AuthorizeResult),
@@ -60,15 +67,16 @@ function makeDeps(overrides: Partial<AuthDeps> = {}): AuthDeps {
           tokenType: 'Bearer',
         }) as RefreshResult,
     ),
-    setInternetCredentials: jest.fn(async (_server: string, username: string, password: string) => {
-      stored = { username, password };
-      return { service: 'boxalarm-auth', storage: 'keychain' };
+    setInternetCredentials: jest.fn(async (server: string, username: string, password: string) => {
+      entries.set(server, { username, password });
+      return { service: server, storage: 'keychain' };
     }),
-    getInternetCredentials: jest.fn(async () =>
-      stored ? { ...stored, service: 'boxalarm-auth', storage: 'keychain' } : false,
-    ),
-    resetInternetCredentials: jest.fn(async () => {
-      stored = false;
+    getInternetCredentials: jest.fn(async (server: string) => {
+      const entry = entries.get(server);
+      return entry ? { ...entry, service: server, storage: 'keychain' } : false;
+    }),
+    resetInternetCredentials: jest.fn(async ({ server }: { server: string }) => {
+      entries.delete(server);
       return true;
     }),
   };
@@ -597,5 +605,144 @@ describe('a refresh that resolves after the session changed (M4)', () => {
 
     await expect(renewal).resolves.toBeNull();
     expect(deps.setInternetCredentials).not.toHaveBeenCalled();
+  });
+});
+
+describe('a sign-out whose push revoke does not land (M3)', () => {
+  const PENDING = 'boxalarm-pending-unregister';
+
+  async function renderSignedIn(deps: AuthDeps) {
+    let contextValue: ReturnType<typeof useAuth> | undefined;
+    function Capture() {
+      contextValue = useAuth();
+      return null;
+    }
+    await render(
+      <AuthProvider deps={deps}>
+        <Capture />
+      </AuthProvider>,
+    );
+    await waitFor(() => expect(contextValue?.isAuthenticated).toBe(true));
+    return () => contextValue!;
+  }
+
+  test('an expired access token is renewed for the revoke instead of being sent stale', async () => {
+    const deps = makeDeps();
+    const expired = issuedTokens();
+    expired.accessTokenExpirationDate = new Date(Date.now() + 1000).toISOString();
+    await deps.setInternetCredentials('boxalarm-auth', 'boxalarm-auth', JSON.stringify(expired));
+    const auths: (string | null)[] = [];
+    globalThis.fetch = jest.fn(async (_url: string, init?: RequestInit) => {
+      const auth = (init?.headers as Record<string, string> | undefined)?.Authorization ?? null;
+      auths.push(auth);
+      return new Response('{}', { status: auth === 'Bearer access-1' ? 401 : 200 });
+    }) as unknown as typeof fetch;
+    const context = await renderSignedIn(deps);
+
+    const result = await context().signOut();
+
+    expect(auths).toEqual(['Bearer access-1', 'Bearer access-2']);
+    expect(result).toEqual({ pushRevoked: true });
+    await expect(deps.getInternetCredentials(PENDING)).resolves.toBe(false);
+  });
+
+  test('offline: the result says so, and the revoke is kept and sent when signal returns', async () => {
+    const deps = makeDeps();
+    await deps.setInternetCredentials(
+      'boxalarm-auth',
+      'boxalarm-auth',
+      JSON.stringify(issuedTokens({ refreshToken: 'refresh-A' })),
+    );
+    globalThis.fetch = jest.fn(async () => {
+      throw new Error('offline');
+    }) as unknown as typeof fetch;
+    const context = await renderSignedIn(deps);
+
+    const result = await context().signOut();
+
+    expect(result).toEqual({ pushRevoked: false });
+    const pending = await deps.getInternetCredentials(PENDING);
+    expect(pending && JSON.parse(pending.password)).toMatchObject({
+      memberId: 'MBR-1',
+      refreshToken: 'refresh-A',
+      apiBaseUrl: 'https://api.example.test',
+    });
+    // The session itself is gone.
+    await expect(deps.getInternetCredentials('boxalarm-auth')).resolves.toBe(false);
+
+    // Signal returns.
+    const urls: string[] = [];
+    globalThis.fetch = jest.fn(async (url: string, init?: RequestInit) => {
+      urls.push(`${init?.method} ${url}`);
+      return new Response('{}', { status: 200 });
+    }) as unknown as typeof fetch;
+    await expect(retryPendingUnregister(deps)).resolves.toBe('done');
+
+    expect(deps.refresh).toHaveBeenLastCalledWith(expect.anything(), {
+      refreshToken: 'refresh-A',
+    });
+    expect(urls).toEqual([
+      expect.stringMatching(
+        /^DELETE https:\/\/api\.example\.test\/api\/v1\/personnel\/members\/MBR-1\/push-tokens\?deviceId=.+/,
+      ),
+    ]);
+    await expect(deps.getInternetCredentials(PENDING)).resolves.toBe(false);
+  });
+
+  test('a refused refresh token ends the pending revoke; a network failure keeps it', async () => {
+    const deps = makeDeps();
+    const pending = {
+      memberId: 'MBR-1',
+      deviceId: 'dev-1',
+      refreshToken: 'refresh-A',
+      apiBaseUrl: 'https://api.example.test',
+      savedAt: Date.now(),
+    };
+    await deps.setInternetCredentials(PENDING, PENDING, JSON.stringify(pending));
+    deps.refresh = jest
+      .fn()
+      .mockRejectedValueOnce(new Error('network'))
+      .mockRejectedValueOnce(
+        Object.assign(new Error('invalid_grant'), { code: 'invalid_grant' }),
+      ) as unknown as AuthDeps['refresh'];
+    jest.spyOn(console, 'warn').mockImplementation(() => {});
+
+    await expect(retryPendingUnregister(deps)).resolves.toBe('failed');
+    expect(await deps.getInternetCredentials(PENDING)).not.toBe(false);
+    await expect(retryPendingUnregister(deps)).resolves.toBe('dropped');
+    await expect(deps.getInternetCredentials(PENDING)).resolves.toBe(false);
+  });
+
+  test('the same member signing back in cancels their pending revoke; it would remove this phone again', async () => {
+    const deps = makeDeps();
+    await deps.setInternetCredentials(
+      PENDING,
+      PENDING,
+      JSON.stringify({
+        memberId: 'MBR-1',
+        deviceId: 'dev-1',
+        refreshToken: 'refresh-A',
+        apiBaseUrl: 'https://api.example.test',
+        savedAt: Date.now(),
+      }),
+    );
+    globalThis.fetch = jest.fn(async () => {
+      throw new Error('offline');
+    }) as unknown as typeof fetch;
+    let contextValue: ReturnType<typeof useAuth> | undefined;
+    function Capture() {
+      contextValue = useAuth();
+      return null;
+    }
+    await render(
+      <AuthProvider deps={deps}>
+        <Capture />
+      </AuthProvider>,
+    );
+    await waitFor(() => expect(contextValue?.isLoading).toBe(false));
+
+    await contextValue!.signIn();
+
+    await expect(deps.getInternetCredentials(PENDING)).resolves.toBe(false);
   });
 });

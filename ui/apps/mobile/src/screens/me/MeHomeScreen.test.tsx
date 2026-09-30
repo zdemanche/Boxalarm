@@ -3,9 +3,11 @@ import * as syncManager from '../../sync/syncManager';
 import { Alert } from 'react-native';
 import { MeHomeScreen, signOutWarning } from './MeHomeScreen';
 
-const mockSignOut = jest.fn(async () => {});
+const mockSignOut = jest.fn(async (): Promise<{ pushRevoked: boolean } | void> => {});
+const mockRetryPendingUnregister = jest.fn();
 
 jest.mock('../../auth/AuthContext', () => ({
+  retryPendingUnregister: () => mockRetryPendingUnregister(),
   useAuth: () => ({ signOut: mockSignOut, memberId: 'm-a' }),
   useOptionalAuth: () => ({ isAuthenticated: false, memberId: null }),
 }));
@@ -126,5 +128,30 @@ test("sign-out with unsent items says they'll send next sign-in, and offers to d
   expect(discardSpy).toHaveBeenCalledWith('m-a');
   countSpy.mockRestore();
   discardSpy.mockRestore();
+  alertSpy.mockRestore();
+});
+
+// M3: a revoke that did not land leaves the phone ringing for the member - say so, offer Retry.
+test('a sign-out whose push revoke failed tells the member and retries on request', async () => {
+  mockSignOut.mockResolvedValueOnce({ pushRevoked: false });
+  mockRetryPendingUnregister.mockResolvedValueOnce('failed').mockResolvedValueOnce('done');
+  const alertSpy = jest.spyOn(Alert, 'alert').mockImplementation(() => {});
+  const { findByText } = await render(<MeHomeScreen />);
+
+  fireEvent.press(await findByText('Sign out'));
+  await waitFor(() => expect(alertSpy).toHaveBeenCalled());
+  alertSpy.mock.calls[0]![2]!.find((b) => b.text === 'Sign out')!.onPress?.();
+
+  await waitFor(() => expect(alertSpy).toHaveBeenCalledTimes(2));
+  const [title, message, buttons] = alertSpy.mock.calls[1]!;
+  expect(title).toBe('This phone may still get pages for you');
+  expect(message).toMatch(/try again with signal/i);
+
+  buttons!.find((b) => b.text === 'Retry')!.onPress?.();
+  // Still no signal: told again.
+  await waitFor(() => expect(alertSpy).toHaveBeenCalledTimes(3));
+  alertSpy.mock.calls[2]![2]!.find((b) => b.text === 'Retry')!.onPress?.();
+  await waitFor(() => expect(mockRetryPendingUnregister).toHaveBeenCalledTimes(2));
+  expect(alertSpy).toHaveBeenCalledTimes(3);
   alertSpy.mockRestore();
 });
