@@ -12,7 +12,11 @@ import * as outbox from '../../sync/outbox';
 import * as syncManager from '../../sync/syncManager';
 import { RESPONSE_NOT_RECORDED, RESPONSE_SUPERSEDED } from '../../sync/syncManager';
 import { ackStatusLabel } from './ackStatus';
-import { alertPayloadFromNotificationData } from './alertPayload';
+import {
+  alertPayloadFromNotificationData,
+  alertPayloadToNotificationData,
+  cachedAlertPayload,
+} from './alertPayload';
 import { queueAlertResponse, type ResponseAnswer } from './alertResponses';
 import { DEFAULT_CHANNEL_ID } from './pushChannel';
 import { dispatchNotificationId } from './notificationIds';
@@ -74,6 +78,31 @@ export async function registerNotificationCategories(): Promise<void> {
 // Work queued anywhere without an AuthProvider-configured owner (this headless task, a cold
 // start) resolves its owner from the stored session instead of being stamped blank (R3-C1).
 syncManager.setOwnerResolver(() => readStoredSessionOwner());
+
+// An ownerless answer too old for its call is dropped by the outbox; the page's own time (the
+// server's dispatch time, else when it arrived) is the second clock, and the notification that
+// last said "NOT SENT YET" must now say it never will be.
+syncManager.setStaleAnswerHooks({
+  async pageTime(dispatchId) {
+    const payload = await cachedAlertPayload(dispatchId);
+    return payload ? (payload.dispatchedAt ?? payload.receivedAt) : null;
+  },
+  async onDropped(dispatchId) {
+    const payload = await cachedAlertPayload(dispatchId);
+    await notifee.displayNotification({
+      id: dispatchNotificationId(dispatchId),
+      title: `Answer not sent — ${payload?.incidentType ?? 'Dispatch'}`,
+      body: 'Not sent: this call is over. Tell your officer if you responded.',
+      data: payload ? alertPayloadToNotificationData(payload) : { dispatchId },
+      android: {
+        channelId: DEFAULT_CHANNEL_ID,
+        importance: AndroidImportance.DEFAULT,
+        pressAction: { id: 'default' },
+        onlyAlertOnce: true,
+      },
+    });
+  },
+});
 
 /**
  * A headless task has no AuthProvider: point the outbox at the stored session if nothing has,

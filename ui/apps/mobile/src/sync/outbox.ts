@@ -123,23 +123,38 @@ export function isRecentOwnerlessResponse(
  * to decide whose stale answer it was. Not applied without owner columns, where every row reads
  * ownerless. Returns how many were dropped.
  */
-export async function discardStaleOwnerlessResponses(now: number): Promise<number> {
-  if (!db.outboxHasOwnerColumns()) return 0;
+export async function discardStaleOwnerlessResponses(
+  now: number,
+  /** When the page itself says the call happened (server dispatch time, else receipt time), if
+   * the phone still has it: a second clock, so a device-clock jump alone can't age an answer out. */
+  pageTime: (row: OutboxRow) => Promise<number | null> = async () => null,
+): Promise<OutboxRow[]> {
+  if (!db.outboxHasOwnerColumns()) return [];
   const rows = await store.all();
-  const stale = rows.filter(
+  const candidates = rows.filter(
     (row) =>
       row.ownerMemberId === null &&
       row.kind === 'RESPONSE' &&
       row.status !== 'SYNCING' &&
       now - Date.parse(row.queuedAt) >= OWNERLESS_RESPONSE_WINDOW_MS,
   );
-  for (const row of stale) {
+  const dropped: OutboxRow[] = [];
+  for (const row of candidates) {
+    const pagedAt = await pageTime(row).catch(() => null);
+    if (pagedAt !== null && now - pagedAt < OWNERLESS_RESPONSE_WINDOW_MS) continue;
     console.warn(
       `[outbox] dropping ownerless answer ${row.id}: its call is past the active window`,
     );
     await store.remove(row.id);
+    dropped.push(row);
   }
-  return stale.length;
+  return dropped;
+}
+
+/** The dispatch an alert-answer row is for, from its path (alerting/dispatches/{id}/responses). */
+export function responseDispatchId(row: Pick<OutboxRow, 'path'>): string | null {
+  const match = /^alerting\/dispatches\/([^/]+)\/responses$/.exec(row.path);
+  return match ? decodeURIComponent(match[1]!) : null;
 }
 
 /** Rows the signed-in member may send now: their own (R2-M3) and recent ownerless answers

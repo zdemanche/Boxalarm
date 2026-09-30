@@ -4,6 +4,7 @@ import notifee, { EventType, type Event } from '@notifee/react-native';
 import NetInfo from '@react-native-community/netinfo';
 import { getInternetCredentials } from 'react-native-keychain';
 import { apiRequest } from '../lib/apiClient';
+import { rememberAlertPayload } from '../features/alerts/alertPayload';
 import { handleNotificationEvent } from '../features/alerts/notificationActions';
 import { migrateOutboxOwnerColumns } from './db';
 import { kvDelete, kvSet } from './kvStore';
@@ -197,6 +198,46 @@ test('an ownerless answer older than the 2 h window is past its call: it is drop
 
   expect(mockApiRequest).not.toHaveBeenCalled();
   await expect(store.find('resp-old')).resolves.toBeUndefined();
+  // The notification that last said "not sent yet" now says it never will be.
+  const last = displayNotification.mock.calls.at(-1)![0];
+  expect(last.id).toBe('dispatch:D-OLD');
+  expect(last.body).toBe('Not sent: this call is over. Tell your officer if you responded.');
+});
+
+test("an answer old by the phone's queue clock but recent by the page's own time is kept", async () => {
+  // The page says the call was dispatched 10 minutes ago: a device clock jump, not an old call.
+  await rememberAlertPayload({
+    dispatchId: 'D-JUMP',
+    incidentType: 'Structure fire',
+    address: '1 Elm St',
+    dispatchedAt: Date.now() - 10 * 60_000,
+    receivedAt: Date.now() - 10 * 60_000,
+  });
+  await store.insert({
+    id: 'resp-jump',
+    kind: 'RESPONSE',
+    label: 'Responding — D-JUMP',
+    method: 'POST',
+    path: 'alerting/dispatches/D-JUMP/responses',
+    body: '{}',
+    stage: 'CREATE',
+    photoLocalUri: null,
+    photoS3Key: null,
+    photoUploadUrl: null,
+    status: 'FAILED',
+    attempts: 1,
+    lastError: 'offline',
+    queuedAt: new Date(Date.now() - outbox.OWNERLESS_RESPONSE_WINDOW_MS - 60_000).toISOString(),
+    nextAttemptAt: Date.now() + 60_000,
+    syncedAt: null,
+    ownerMemberId: null,
+    ownerDeptId: null,
+  });
+  syncManager.configure(memberK, 'https://api.example.com');
+  await flush();
+
+  expect(await store.find('resp-jump')).toBeDefined();
+  await store.remove('resp-jump');
 });
 
 test('an owned answer is never dropped by the stale-answer rule, however old', async () => {
@@ -221,7 +262,7 @@ test('an owned answer is never dropped by the stale-answer rule, however old', a
     ownerDeptId: null,
   });
 
-  expect(await outbox.discardStaleOwnerlessResponses(Date.now())).toBe(0);
+  expect(await outbox.discardStaleOwnerlessResponses(Date.now())).toEqual([]);
   expect(await store.find('resp-owned-old')).toBeDefined();
 });
 

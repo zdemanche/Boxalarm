@@ -65,6 +65,34 @@ export function setOwnerResolver(resolver: typeof ownerResolver): void {
   ownerResolver = resolver;
 }
 
+/**
+ * How the alert layer takes part in dropping stale ownerless answers: when the page says the call
+ * happened, and what to tell the member once their unsent answer is dropped. Registered by
+ * notificationActions so this module needs no knowledge of notifications or payloads.
+ */
+export interface StaleAnswerHooks {
+  pageTime(dispatchId: string): Promise<number | null>;
+  onDropped(dispatchId: string): Promise<void>;
+}
+
+let staleAnswerHooks: StaleAnswerHooks | null = null;
+
+export function setStaleAnswerHooks(hooks: StaleAnswerHooks | null): void {
+  staleAnswerHooks = hooks;
+}
+
+async function dropStaleOwnerlessAnswers(): Promise<void> {
+  const hooks = staleAnswerHooks;
+  const dropped = await outbox.discardStaleOwnerlessResponses(Date.now(), async (row) => {
+    const dispatchId = outbox.responseDispatchId(row);
+    return dispatchId && hooks ? hooks.pageTime(dispatchId) : null;
+  });
+  for (const row of dropped) {
+    const dispatchId = outbox.responseDispatchId(row);
+    if (dispatchId && hooks) await hooks.onDropped(dispatchId).catch(() => undefined);
+  }
+}
+
 function ownerOf(source: AuthTokenSource): Owner {
   const session = source as AuthTokenSource & { memberId?: unknown; deptId?: unknown };
   return {
@@ -116,7 +144,7 @@ export function subscribe(listener: Listener): () => void {
 }
 
 async function notify(): Promise<void> {
-  await outbox.discardStaleOwnerlessResponses(Date.now());
+  await dropStaleOwnerlessAnswers();
   // The current (or last signed-in) member's view; nothing is sent without a signed-in session.
   const status = await outbox.getStatus(lastSyncAt, owner.memberId, Date.now());
   listeners.forEach((listener) => listener(status));
