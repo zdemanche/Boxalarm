@@ -440,7 +440,12 @@ async function fanOutOneDispatch(
         eligibleMemberCount: audience.length,
       });
       emitOutcomeMetric(METRIC_NAMESPACE, 'EmptyRoster');
-      return;
+      if (audience.length === 0) {
+        return;
+      }
+      // Eligible members exist but none was reachable now. The roster and the tone ladder are
+      // still scheduled: tones 2/3 re-resolve targets, so a member whose device registers or
+      // whose phone lands in the next minutes is paged then (review MINOR-6).
     }
 
     const results = await runWithConcurrencyLimit(tasks, MAX_CONCURRENT_FANOUT_TASKS, (task) =>

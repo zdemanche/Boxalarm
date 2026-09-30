@@ -646,6 +646,45 @@ describe('fanout/handler', () => {
     errorSpy.mockRestore();
   });
 
+  // Review MINOR-6: eligible members, none reachable right now. Still alarmed, but the roster
+  // and the tone ladder are scheduled, so tones 2/3 re-resolve and page a member whose device or
+  // phone arrives in the meantime.
+  it('with eligible members but no reachable channel, still seeds the roster and schedules the tone ladder', async () => {
+    const ddb = createFakeDdb([memberSnapshot({ contactChannels: [] })]);
+    const sns = createFakeSns();
+    const scheduler = createFakeScheduler();
+    vi.doMock('../eligibility/dynamoClient.js', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('../eligibility/dynamoClient.js')>();
+      return { ...actual, createDynamoClient: () => ddb as unknown as DynamoDBDocumentClient };
+    });
+    vi.doMock('./snsClient.js', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('./snsClient.js')>();
+      return { ...actual, createSnsClient: () => sns as unknown as SNSClient };
+    });
+    vi.doMock('../escalation/scheduleEscalation.js', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('../escalation/scheduleEscalation.js')>();
+      return {
+        ...actual,
+        getSchedulerClient: () => ({ send: scheduler.send }) as unknown as SchedulerClient,
+      };
+    });
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    const { handler } = await import('./handler.js');
+    await expect(handler(dispatchAlertInsertEvent())).resolves.toEqual({ batchItemFailures: [] });
+
+    expect(sns.calls).toHaveLength(0);
+    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('fanout.empty_roster'));
+    expect(ddb.items.get('DEPT#NICHOLS#DISPATCH#NICHOLS-1-1798000000#ROSTER#mbr-1')).toBeDefined();
+    expect(scheduler.createdNames).toEqual(
+      expect.arrayContaining([
+        toneScheduleName('NICHOLS', 'NICHOLS-1-1798000000', 2),
+        toneScheduleName('NICHOLS', 'NICHOLS-1-1798000000', 3),
+      ]),
+    );
+    errorSpy.mockRestore();
+  });
+
   it('skips only the push send when the member has no registered push token — SMS is unaffected (E1-S14 dependency)', async () => {
     const ddb = createFakeDdb([
       memberSnapshot({ contactChannels: [{ channel: 'sms', token: '+15551234567' }] }),
