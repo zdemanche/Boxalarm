@@ -18,10 +18,13 @@ import {
   type ChannelName,
   type ContactChannelSnapshot,
   type MutualAidPromptPayload,
+  type TestDelivery,
 } from './channelEnvelope.js';
 import { sendViaHttpProvider } from './httpProviderAdapter.js';
 import { resolvePushPlatform, sendPush, type PushSendResult } from './push/pushProviderAdapter.js';
-import { findContactEntry } from '../eligibility/resolvePushTarget.js';
+import type { PushAlertFields } from './push/pushPayload.js';
+import { PushCredentialsUnavailableError } from './push/pushCredentials.js';
+import { resolvePushTargets, type PushDeviceTarget } from '../eligibility/resolvePushTarget.js';
 import { invalidatePushToken } from '../receipts/invalidatePushToken.js';
 import {
   admitTokenInvalidation,
@@ -64,8 +67,15 @@ interface DeliverChannelMessageCommon {
   readonly message: string;
   /** Push notification title; the message is the body. SMS/voice send the message alone. */
   readonly title?: string;
+  /** Push only: the dispatch's own fields, sent to the app as their own keys. */
+  readonly alert?: PushAlertFields;
+  /** Test pages: whether FCM really delivers (channelEnvelope.ts TestDelivery). */
+  readonly testDelivery?: TestDelivery;
   readonly env: NodeJS.ProcessEnv;
-  /** Self-test/canary message — sent with the sandbox provider credentials. */
+  /**
+   * Self-test/canary message: labelled TEST; APNs on the device's own environment, FCM
+   * validate_only with its sandbox credentials, SMS/voice with the sandbox vendor credentials.
+   */
   readonly isTest?: boolean;
 }
 
@@ -127,14 +137,23 @@ export async function deliverChannelMessage(
       memberId,
       channel,
       reason: resolved.reason,
+      isTest,
     });
-    emitOutcomeMetric(METRIC_NAMESPACE, 'NoTargetRegistered', channel);
+    // A real page with no target is a member who was not reached, acknowledged with no DLQ
+    // entry - NoTargetRegistered is alarmed per channel (design review C2). A self-test/canary
+    // miss is reported through its own result, so it is counted apart.
+    emitOutcomeMetric(
+      METRIC_NAMESPACE,
+      isTest ? 'TestNoTargetRegistered' : 'NoTargetRegistered',
+      channel,
+    );
     return;
   }
 
   const pk = buildDeptScopedPk(deptId, 'DISPATCH', dispatchId);
   const sentAt = Math.floor(Date.now() / 1000);
   const { sk, idempotencyKey, attributes } = buildSendGuard(params, sentAt);
+  let priorDeviceSends: DeviceSends = {};
 
   try {
     await ddb.send(
@@ -160,12 +179,13 @@ export async function deliverChannelMessage(
     );
   } catch (error) {
     if (error instanceof ConditionalCheckFailedException) {
-      const retried = await reattemptClaimedFailure(ddb, tableName, pk, sk, sentAt);
-      if (!retried) {
+      const retaken = await reattemptClaimedFailure(ddb, tableName, pk, sk, sentAt);
+      if (!retaken) {
         logInfo('alerting.channel.duplicate_skipped', { correlationId, memberId, channel });
         emitOutcomeMetric(METRIC_NAMESPACE, 'DuplicateSkipped', channel);
         return;
       }
+      priorDeviceSends = retaken.deviceSends;
     } else {
       logError('alerting.channel.receipt_write_failed', error, {
         correlationId,
@@ -177,102 +197,237 @@ export async function deliverChannelMessage(
     }
   }
 
-  let result: PushSendResult;
-  try {
-    result = await sendToProvider(params, resolved.target, idempotencyKey, isTest);
-  } catch (error) {
-    logError('alerting.channel.send_failed', error, { correlationId, memberId, channel });
-    emitOutcomeMetric(METRIC_NAMESPACE, 'SendFailed', channel);
-    await recordClaimedFailure(ddb, tableName, pk, sk, error);
-    throw error;
-  }
-
-  if (result.outcome === 'test_refused') {
-    // Self-test/canary refused for a configuration reason: record the failure for the test
-    // result, but neither retry (it cannot succeed) nor touch the member's token.
-    logInfo('alerting.channel.test_refused', {
-      correlationId,
-      memberId,
-      channel,
-      reason: result.reason,
-    });
-    emitOutcomeMetric(METRIC_NAMESPACE, 'TestRefused', channel);
-    await recordClaimedFailure(
-      ddb,
-      tableName,
-      pk,
-      sk,
-      new Error(`PUSH_TEST_REFUSED ${result.reason}`),
-    );
+  const guard: GuardRef = { pk, sk, idempotencyKey };
+  if (channel === 'push') {
+    await deliverPushToDevices(ddb, tableName, params, guard, priorDeviceSends);
     return;
   }
 
-  if (result.outcome === 'invalid_token') {
-    // Terminal: the gateway says this device token is dead, so retrying it can never page the
-    // member. Recorded FAILED (not thrown - no redelivery), and the contact entry is marked
-    // invalid so producers stop publishing to it until the device re-registers. The parallel
-    // SMS page and the voice escalation are unaffected.
+  try {
+    await sendViaHttpProvider(channel, resolved.target, params.message, params.env, { isTest });
+  } catch (error) {
+    await recordSendError(ddb, tableName, params, guard, error, {});
+    return;
+  }
+  emitOutcomeMetric(METRIC_NAMESPACE, 'Sent', channel);
+  await recordSent(ddb, tableName, pk, sk);
+}
+
+interface GuardRef {
+  readonly pk: string;
+  readonly sk: string;
+  readonly idempotencyKey: string;
+}
+
+/**
+ * Per-device progress of one push page, on its per-channel send guard: SENT (the gateway
+ * accepted it), INVALID (the token is dead), REFUSED (a self-test the provider refused for a
+ * configuration reason). A redelivery after a transient failure skips the SENT and INVALID
+ * devices, so a member's phone is not buzzed twice because their tablet's gateway call failed.
+ */
+type DeviceSendState = 'SENT' | 'VALIDATED' | 'INVALID' | 'REFUSED';
+
+/**
+ * An FCM test send that only validates (the canary without a dedicated device): FCM checked
+ * the credentials and the token but delivered nothing. Recorded VALIDATED, never SENT, so the
+ * self-test result can say "credentials verified, not delivered" (review round 2 item b).
+ */
+function isFcmValidateOnly(params: DeliverChannelMessageParams, device: PushDeviceTarget): boolean {
+  return (
+    params.isTest === true &&
+    params.testDelivery !== 'deliver' &&
+    resolvePushPlatform(device.platform, device.token) === 'FCM'
+  );
+}
+type DeviceSends = Record<string, DeviceSendState>;
+
+/**
+ * A failed provider send. A real page is recorded FAILED and rethrown so SQS redelivers it
+ * (and dead-letters it, which pages on-call). A self-test/canary send the provider (sandbox)
+ * refused is that run's FAIL - its result is read from this guard (evaluateSelfTestRun.ts);
+ * redelivering it would only dead-letter a synthetic page and page on-call.
+ */
+async function recordSendError(
+  ddb: DynamoDBDocumentClient,
+  tableName: string,
+  params: DeliverChannelMessageParams,
+  guard: GuardRef,
+  error: unknown,
+  deviceSends: DeviceSends,
+): Promise<void> {
+  const { channel, memberId, dispatchId } = params;
+  const isTest = params.isTest === true;
+  logError('alerting.channel.send_failed', error, {
+    correlationId: dispatchId,
+    memberId,
+    channel,
+    isTest,
+  });
+  emitOutcomeMetric(METRIC_NAMESPACE, isTest ? 'TestSendFailed' : 'SendFailed', channel);
+  await recordClaimedFailure(ddb, tableName, guard.pk, guard.sk, error, deviceSends);
+  if (!isTest) {
+    throw error;
+  }
+}
+
+/**
+ * Multi-device push. The exactly-once key stays `{dispatchId}#{toneSequence}#{memberId}#push`:
+ * one publish and one send guard per member per tone, as for every channel (routing and dedup
+ * key on channel, never on a device). Within that guard the worker sends to EVERY valid device
+ * the member has registered (resolvePushTargets) and records each device's outcome, so:
+ *  - any device accepted -> SENT (the member was paged); dead devices are invalidated;
+ *  - a transient failure on any device -> FAILED and rethrown; the redelivery re-sends only to
+ *    the devices without an outcome;
+ *  - every device dead -> FAILED, terminal (no redelivery), as for a single dead token.
+ */
+async function deliverPushToDevices(
+  ddb: DynamoDBDocumentClient,
+  tableName: string,
+  params: DeliverChannelMessageParams,
+  guard: GuardRef,
+  priorDeviceSends: DeviceSends,
+): Promise<void> {
+  const { deptId, dispatchId, memberId, channel } = params;
+  const isTest = params.isTest === true;
+  const correlationId = dispatchId;
+  const deviceSends: DeviceSends = { ...priorDeviceSends };
+  const pending = resolvePushTargets(params.contactChannels).filter(
+    (device) =>
+      deviceSends[device.deviceKey] !== 'SENT' &&
+      deviceSends[device.deviceKey] !== 'VALIDATED' &&
+      deviceSends[device.deviceKey] !== 'INVALID',
+  );
+
+  const outcomes = await Promise.allSettled(
+    pending.map((device) => sendPushToDevice(params, device, guard.idempotencyKey)),
+  );
+
+  let transientError: unknown;
+  let massInvalidationError: Error | undefined;
+  const refusals: string[] = [];
+  const invalidReasons: string[] = [];
+  for (const [index, outcome] of outcomes.entries()) {
+    const device = pending[index]!;
+    if (outcome.status === 'rejected') {
+      transientError ??= outcome.reason;
+      if (outcome.reason instanceof PushCredentialsUnavailableError) {
+        // Alarmed: a missing gateway secret, named, not just a DLQ depth (review R2-m1).
+        emitOutcomeMetric(
+          METRIC_NAMESPACE,
+          isTest ? 'TestPushCredentialsUnavailable' : 'PushCredentialsUnavailable',
+          'push',
+        );
+      }
+      logError('alerting.channel.device_send_failed', outcome.reason, {
+        correlationId,
+        memberId,
+        channel,
+        deviceKey: device.deviceKey,
+        isTest,
+      });
+      continue;
+    }
+    const result = outcome.value;
+    if (result.outcome === 'sent') {
+      deviceSends[device.deviceKey] = isFcmValidateOnly(params, device) ? 'VALIDATED' : 'SENT';
+      continue;
+    }
+    if (result.outcome === 'test_refused') {
+      // Self-test/canary refused for a configuration reason: recorded for the test result,
+      // neither retried (it cannot succeed) nor allowed to touch the member's token.
+      logInfo('alerting.channel.test_refused', {
+        correlationId,
+        memberId,
+        channel,
+        reason: result.reason,
+      });
+      emitOutcomeMetric(METRIC_NAMESPACE, 'TestRefused', channel);
+      deviceSends[device.deviceKey] = 'REFUSED';
+      refusals.push(result.reason);
+      continue;
+    }
+    // invalid_token - terminal for this device: retrying the token can never page it.
     logInfo('alerting.channel.token_invalid', {
       correlationId,
       memberId,
       channel,
+      deviceKey: device.deviceKey,
       reason: result.reason,
       isTest,
     });
-    // A self-test goes to the APNs sandbox host, which rejects every production (TestFlight /
-    // App Store) token, so its rejections say nothing about the gateway configuration. It gets
-    // its own metric: TokenInvalid feeds the paging misconfiguration alarm.
+    // A self-test's rejection fails that test (the member sees it) but never disables a token or
+    // feeds the paging misconfiguration alarm (TokenInvalid): a test must not change what real
+    // pages do. A really dead token is invalidated by the next real page.
     emitOutcomeMetric(METRIC_NAMESPACE, isTest ? 'TestTokenInvalid' : 'TokenInvalid', channel);
-    await recordClaimedFailure(
-      ddb,
-      tableName,
-      pk,
-      sk,
-      new Error(`PUSH_TOKEN_INVALID ${result.reason}`),
-    );
-    // A self-test goes to the APNs sandbox host, which rejects every production token: that
-    // says nothing about the token's validity for a real page, so it must never disable one.
-    if (!isTest) {
+    invalidReasons.push(result.reason);
+    if (isTest) {
+      deviceSends[device.deviceKey] = 'INVALID';
+      continue;
+    }
+    try {
       await invalidateDeadToken(
         ddb,
         tableName,
         deptId,
         memberId,
-        resolved.target,
+        device.token,
         correlationId,
         result.invalidSinceMs,
       );
+      deviceSends[device.deviceKey] = 'INVALID';
+    } catch (error) {
+      // The mass-invalidation latch held this token valid: the device stays without an
+      // outcome, so the page throws, redelivers and dead-letters (pages on-call).
+      massInvalidationError ??= error instanceof Error ? error : new Error(String(error));
+    }
+  }
+
+  if (transientError !== undefined) {
+    await recordSendError(ddb, tableName, params, guard, transientError, deviceSends);
+    if (massInvalidationError !== undefined) {
+      throw massInvalidationError;
     }
     return;
   }
-
-  emitOutcomeMetric(METRIC_NAMESPACE, 'Sent', channel);
-  await recordSent(ddb, tableName, pk, sk);
+  const anySent = Object.values(deviceSends).some(
+    (state) => state === 'SENT' || state === 'VALIDATED',
+  );
+  if (massInvalidationError !== undefined) {
+    await recordClaimedFailure(
+      ddb,
+      tableName,
+      guard.pk,
+      guard.sk,
+      massInvalidationError,
+      deviceSends,
+    );
+    throw massInvalidationError;
+  }
+  if (anySent) {
+    emitOutcomeMetric(METRIC_NAMESPACE, 'Sent', channel);
+    await recordSent(ddb, tableName, guard.pk, guard.sk, deviceSends);
+    return;
+  }
+  // Nothing accepted it, and nothing is worth retrying: every device refused or dead.
+  const terminal =
+    refusals.length > 0
+      ? new Error(`PUSH_TEST_REFUSED ${refusals[0]}`)
+      : new Error(`PUSH_TOKEN_INVALID ${invalidReasons[0] ?? 'no device accepted the page'}`);
+  await recordClaimedFailure(ddb, tableName, guard.pk, guard.sk, terminal, deviceSends);
 }
 
-/**
- * Push goes to APNs/FCM directly (architecture §Alerting); SMS and voice stay on the generic
- * vendor adapter until OQ-3 picks their vendors.
- */
-async function sendToProvider(
+/** One device's send: APNs/FCM directly (architecture §Alerting). */
+function sendPushToDevice(
   params: DeliverChannelMessageParams,
-  target: string,
+  device: PushDeviceTarget,
   idempotencyKey: string,
-  isTest: boolean,
 ): Promise<PushSendResult> {
-  const { channel, message, env, dispatchId } = params;
-  if (channel !== 'push') {
-    await sendViaHttpProvider(channel, target, message, env, { isTest });
-    return { outcome: 'sent' };
-  }
-  const platform = resolvePushPlatform(
-    findContactEntry(params.contactChannels, 'PUSH')?.platform,
-    target,
-  );
+  const { message, env, dispatchId } = params;
+  const platform = resolvePushPlatform(device.platform, device.token);
   const isPrompt = params.alertKind === 'mutual_aid_prompt';
   return sendPush(
     {
-      token: target,
+      token: device.token,
       alertKind: isPrompt ? 'mutual_aid_prompt' : 'dispatch',
       dispatchId,
       toneSequence: isPrompt ? undefined : params.toneSequence,
@@ -281,10 +436,16 @@ async function sendToProvider(
       idempotencyKey,
       // Per-tone notification identity (architecture §5.1 B4): tone 2 never collapses into 1.
       collapseKey: isPrompt ? `${dispatchId}#MUTUALAID` : `${dispatchId}#${params.toneSequence}`,
+      ...(params.alert ? { alert: params.alert } : {}),
+      ...(params.isTest === true ? { isTest: true } : {}),
     },
     platform,
     env,
-    { isTest },
+    {
+      isTest: params.isTest === true,
+      ...(device.apnsEnvironment ? { apnsEnvironment: device.apnsEnvironment } : {}),
+      ...(params.testDelivery === 'deliver' ? { fcmDeliver: true } : {}),
+    },
   );
 }
 
@@ -326,14 +487,14 @@ async function reattemptClaimedFailure(
   pk: string,
   sk: string,
   sentAt: number,
-): Promise<boolean> {
+): Promise<{ readonly deviceSends: DeviceSends } | undefined> {
   // Strongly consistent: a failure recorded moments ago must not read as a clean claim.
   const existing = await ddb.send(
     new GetCommand({ TableName: tableName, Key: { pk, sk }, ConsistentRead: true }),
   );
   const item = existing.Item;
   if (!item || item.deliveredAt != null) {
-    return false;
+    return undefined;
   }
   const claimedButFailed = item.failureReason != null;
   // Review MINOR-R5: a worker killed mid-send, or whose failureReason write was throttled,
@@ -344,7 +505,7 @@ async function reattemptClaimedFailure(
     typeof item.sentAt === 'number' &&
     item.sentAt < sentAt - STALE_CLAIM_SECONDS;
   if (!claimedButFailed && !claimAbandoned) {
-    return false;
+    return undefined;
   }
   // Re-claims atomically: the condition requires the state that was just read - the failure
   // still recorded, or the same abandoned claim - so when two redeliveries both saw it only
@@ -371,11 +532,15 @@ async function reattemptClaimedFailure(
     }
   } catch (error) {
     if (error instanceof ConditionalCheckFailedException) {
-      return false;
+      return undefined;
     }
     throw error;
   }
-  return true;
+  const deviceSends =
+    typeof item.deviceSends === 'object' && item.deviceSends !== null
+      ? (item.deviceSends as DeviceSends)
+      : {};
+  return { deviceSends };
 }
 
 async function recordClaimedFailure(
@@ -384,17 +549,22 @@ async function recordClaimedFailure(
   pk: string,
   sk: string,
   error: unknown,
+  deviceSends?: DeviceSends,
 ): Promise<void> {
   try {
     await ddb.send(
       new UpdateCommand({
         TableName: tableName,
         Key: { pk, sk },
-        UpdateExpression: 'SET failureReason = :reason, sendState = :failed',
+        UpdateExpression: `SET failureReason = :reason, sendState = :failed, completedAtMs = :completedAtMs${
+          deviceSends ? ', deviceSends = :deviceSends' : ''
+        }`,
         ConditionExpression: 'attribute_exists(idempotencyKey)',
         ExpressionAttributeValues: {
           ':reason': error instanceof Error ? error.message : String(error),
           ':failed': SEND_STATE_FAILED,
+          ':completedAtMs': Date.now(),
+          ...(deviceSends ? { ':deviceSends': deviceSends } : {}),
         },
       }),
     );
@@ -404,7 +574,8 @@ async function recordClaimedFailure(
 }
 
 /**
- * Marks the guard SENT so it is never taken over as abandoned. A failed write is only logged:
+ * Marks the guard SENT so it is never taken over as abandoned, and is what a self-test/canary
+ * run passes on. A failed write is only logged:
  * the page went out, and the worst case is one duplicate send after the stale window - for a
  * page, a duplicate is the safe side of a miss.
  */
@@ -413,15 +584,24 @@ async function recordSent(
   tableName: string,
   pk: string,
   sk: string,
+  deviceSends?: DeviceSends,
 ): Promise<void> {
   try {
     await ddb.send(
       new UpdateCommand({
         TableName: tableName,
         Key: { pk, sk },
-        UpdateExpression: 'SET sendState = :sent',
+        // completedAtMs: when the provider accepted it - the end of a self-test/canary run's
+        // ingress-to-delivery latency (selfTest/evaluateSelfTestRun.ts).
+        UpdateExpression: `SET sendState = :sent, completedAtMs = :completedAtMs${
+          deviceSends ? ', deviceSends = :deviceSends' : ''
+        }`,
         ConditionExpression: 'attribute_exists(idempotencyKey)',
-        ExpressionAttributeValues: { ':sent': SEND_STATE_SENT },
+        ExpressionAttributeValues: {
+          ':sent': SEND_STATE_SENT,
+          ':completedAtMs': Date.now(),
+          ...(deviceSends ? { ':deviceSends': deviceSends } : {}),
+        },
       }),
     );
   } catch (error) {
@@ -480,6 +660,13 @@ export function createChannelWorkerHandler(
         contactChannels,
         env: process.env,
         isTest: envelope.isTest,
+        ...(envelope.testDelivery ? { testDelivery: envelope.testDelivery } : {}),
+        alert: {
+          incidentType: envelope.incidentType,
+          address: envelope.address,
+          ...(envelope.crossStreets ? { crossStreets: envelope.crossStreets } : {}),
+          ...(envelope.dispatchedAt !== undefined ? { dispatchedAt: envelope.dispatchedAt } : {}),
+        },
       };
       const incidentText = `${envelope.incidentType} — ${envelope.address}`;
       await deliverChannelMessage(

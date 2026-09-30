@@ -10,12 +10,18 @@ import { STACK_CONFIG, installMocks, settleStack } from "./mock-harness";
  * full stack, and every such lambdaCode() call must name a manifest entry.
  */
 
+// Every service (design review M5 extended this from 5 of 10).
 const GUARDED_SERVICES = new Set([
   "alerting-service",
   "apparatus-service",
+  "incident-service",
   "inventory-service",
   "inspections-service",
   "notification-service",
+  "personnel-service",
+  "platform-service",
+  "reporting-service",
+  "training-service",
 ]);
 
 const { lambdaCodeCalls } = vi.hoisted(() => ({ lambdaCodeCalls: new Set<string>() }));

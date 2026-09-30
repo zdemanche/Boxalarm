@@ -280,7 +280,6 @@ export async function buildSchedulingChain() {
     alertingCmkArn: CMK_ARN,
     alertingTableName: "boxalarm-dev-alerting-table",
     logGroup: alertingLogGroup,
-    escalation,
     policyStoreId: "policy-store-id",
     permissionsBoundaryArn: BOUNDARY_ARN,
   });
@@ -290,6 +289,5 @@ export async function buildSchedulingChain() {
 
 export const SCHEDULING_LAMBDAS = [
   "boxalarm-dev-alerting-fan-out",
-  "boxalarm-dev-alerting-dispatches-create",
   "boxalarm-dev-alerting-tone-evaluator",
 ] as const;

@@ -105,12 +105,10 @@ async function updateEligibilitySnapshot(
   for (let attempt = 0; attempt < MAX_SNAPSHOT_UPDATE_ATTEMPTS; attempt += 1) {
     const existing = await client.send(new GetCommand({ TableName: tableName, Key: snapshotKey }));
     const existingItem = existing.Item as { quals?: unknown; qualsUpdatedAt?: unknown } | undefined;
-    // Deliberately gate staleness on our own qualsUpdatedAt field, not the shared
-    // snapshotUpdatedAt also written by eligibility-consumer (personnel.availability.changed).
-    // Two independent, uncorrelated event streams write this same snapshot item; comparing
-    // against a shared timestamp means a later-arriving-but-unrelated availability update
-    // could make an otherwise-valid, still-current qual update look "stale" and get silently
-    // dropped (or vice versa). See consumer.ts's own snapshotUpdatedAt gate.
+    // Staleness is gated on quals' own clock, qualsUpdatedAt - every snapshot field has one
+    // (activeUpdatedAt, availabilityUpdatedAt, rolesUpdatedAt, pushContactsUpdatedAt,
+    // phoneUpdatedAt), and snapshotUpdatedAt guards nothing: a newer event for another field
+    // can never make a still-current qual change look stale (review CRITICAL-1).
     const priorQualsUpdatedAt =
       typeof existingItem?.qualsUpdatedAt === 'number' ? existingItem.qualsUpdatedAt : undefined;
     if (priorQualsUpdatedAt !== undefined && priorQualsUpdatedAt > eventSnapshotUpdatedAt) {
@@ -118,21 +116,31 @@ async function updateEligibilitySnapshot(
     }
     const priorQuals = Array.isArray(existingItem?.quals) ? existingItem.quals : [];
     const quals = nextQuals(priorQuals, qualCode, currentlyEligible);
+    // Optimistic check on exactly what was read. `if_not_exists` is an update function, not a
+    // condition function: the old `if_not_exists(quals, :emptyList) = :priorQuals` condition
+    // made DynamoDB reject every qual change with a ValidationException.
+    const readCondition =
+      existingItem === undefined
+        ? { ConditionExpression: 'attribute_not_exists(pk)', values: {} }
+        : existingItem.quals === undefined
+          ? { ConditionExpression: 'attribute_not_exists(quals)', values: {} }
+          : { ConditionExpression: 'quals = :priorQuals', values: { ':priorQuals': priorQuals } };
 
     try {
       await client.send(
         new UpdateCommand({
           TableName: tableName,
           Key: snapshotKey,
-          ConditionExpression:
-            'attribute_not_exists(pk) OR if_not_exists(quals, :emptyList) = :priorQuals',
+          ConditionExpression: readCondition.ConditionExpression,
           UpdateExpression:
-            'SET entityType = :entityType, memberId = :memberId, quals = :quals, qualsUpdatedAt = :new, snapshotUpdatedAt = if_not_exists(snapshotUpdatedAt, :new), active = if_not_exists(active, :defaultActive), availabilityState = if_not_exists(availabilityState, :defaultAvailability), roles = if_not_exists(roles, :emptyList)',
+            'SET entityType = :entityType, memberId = :memberId, quals = :quals, qualsUpdatedAt = :new, snapshotUpdatedAt = if_not_exists(snapshotUpdatedAt, :new), active = if_not_exists(active, :defaultActive), availabilityState = if_not_exists(availabilityState, :defaultAvailability), #roles = if_not_exists(#roles, :emptyList)',
+          // `roles` is a DynamoDB reserved word; bare, the whole update is a ValidationException.
+          ExpressionAttributeNames: { '#roles': 'roles' },
           ExpressionAttributeValues: {
             ':entityType': 'MEMBER_ELIGIBILITY_SNAPSHOT',
             ':memberId': memberId,
             ':quals': quals,
-            ':priorQuals': priorQuals,
+            ...readCondition.values,
             ':new': eventSnapshotUpdatedAt,
             ':defaultActive': true,
             ':defaultAvailability': 'AVAILABLE',

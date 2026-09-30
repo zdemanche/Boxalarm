@@ -4,13 +4,13 @@ import { fetchRetryingConnectionLoss } from './pushResult.js';
 
 /**
  * Credentials for the direct APNs / FCM push adapters (architecture §Alerting: "Push uses
- * APNs/FCM directly"). Each lives in its own Secrets Manager secret, with a separate sandbox
- * secret for self-test and canary messages. Secret JSON shapes are documented in
+ * APNs/FCM directly"). Each lives in its own Secrets Manager secret, with a sandbox twin: for
+ * APNs the one for development-signed devices, for FCM the one for self-test and canary
+ * messages (readPushSecretId). Secret JSON shapes are documented in
  * infrastructure/components/alerting/channel-workers.ts.
  *
  * Every cache here is keyed by secret ID, never by platform alone: the prod and sandbox
- * credentials must never share a slot, or a self-test could reuse a cached prod token (or a
- * real page a sandbox one).
+ * credentials must never share a slot, or a send could reuse the other environment's token.
  */
 
 export type PushPlatform = 'APNS' | 'FCM';
@@ -39,25 +39,58 @@ export interface FcmCredentials {
   readonly apnsInterruptionLevel: ApnsInterruptionLevel;
 }
 
+/**
+ * A push gateway secret this send needs is not configured: its env var is unset, or the
+ * secret has no value (or cannot be read). Thrown so the page retries and dead-letters as
+ * before, but the worker also counts it (PushCredentialsUnavailable, alarmed) so on-call sees
+ * WHICH secret - e.g. APNS_SANDBOX_SECRET_ID for a device registered as `development` (review
+ * R2-m1) - rather than only a DLQ depth.
+ */
+export class PushCredentialsUnavailableError extends Error {
+  constructor(
+    message: string,
+    readonly secretKey: string,
+    options?: { cause?: unknown },
+  ) {
+    super(message, options);
+    this.name = 'PushCredentialsUnavailableError';
+  }
+}
+
 const ENV_KEYS: Record<PushPlatform, { readonly prod: string; readonly sandbox: string }> = {
   APNS: { prod: 'APNS_SECRET_ID', sandbox: 'APNS_SANDBOX_SECRET_ID' },
   FCM: { prod: 'FCM_SECRET_ID', sandbox: 'FCM_SANDBOX_SECRET_ID' },
 };
 
 /**
- * `isTest` selects the sandbox secret and fails closed: a test message with no sandbox secret
- * configured throws rather than falling back to the prod credentials (architecture §1.3, the
- * same rule readChannelProviderConfig enforces for SMS/voice).
+ * Which APNs environment an iOS device token belongs to - the `aps-environment` its app build
+ * is signed with. The app registers it with the token (personnel pushDevices.ts); a token
+ * registered without one is `production` (TestFlight / App Store).
+ */
+export type ApnsEnvironment = 'production' | 'development';
+
+/**
+ * APNs: the device's environment picks the secret - `development` the sandbox secret (always
+ * the sandbox host), `production` the main one - for real pages and self-test/canary pushes
+ * alike. A token only works on its own environment's host (the other answers BadDeviceToken),
+ * so sending every test to the sandbox host made every production device's self-test FAIL
+ * (review MAJOR-2). A test push is isolated by being labelled, one-member and never escalated,
+ * not by the host: a self-test must ring the member's real device.
+ *
+ * FCM: `isTest` selects the sandbox secret (sends are validate_only) and fails closed when it
+ * is unset, as readChannelProviderConfig does for SMS/voice.
  */
 export function readPushSecretId(
   platform: PushPlatform,
   env: NodeJS.ProcessEnv,
-  options: { readonly isTest?: boolean } = {},
+  options: { readonly isTest?: boolean; readonly apnsEnvironment?: ApnsEnvironment } = {},
 ): string {
-  const key = options.isTest ? ENV_KEYS[platform].sandbox : ENV_KEYS[platform].prod;
+  const sandbox =
+    platform === 'APNS' ? options.apnsEnvironment === 'development' : options.isTest === true;
+  const key = sandbox ? ENV_KEYS[platform].sandbox : ENV_KEYS[platform].prod;
   const secretId = env[key];
   if (!secretId) {
-    throw new Error(`${key} is required and was not set`);
+    throw new PushCredentialsUnavailableError(`${key} is required and was not set`, key);
   }
   return secretId;
 }
@@ -96,7 +129,15 @@ async function readSecretJson(
   if (cached && cached.expiresAt > Date.now()) {
     return cached.value;
   }
-  return coalesce(secretReads, secretId, () => fetchSecretJson(secretId, client));
+  return coalesce(secretReads, secretId, () => fetchSecretJson(secretId, client)).catch(
+    (error: unknown) => {
+      throw new PushCredentialsUnavailableError(
+        `push secret ${secretId} could not be read: ${error instanceof Error ? error.message : String(error)}`,
+        secretId,
+        { cause: error },
+      );
+    },
+  );
 }
 
 async function fetchSecretJson(
@@ -131,21 +172,21 @@ function requireString(secret: Record<string, unknown>, field: string, secretId:
 }
 
 /**
- * A sandbox secret always targets the APNs sandbox host; one that declares
- * `environment: "production"` is a misconfiguration and is refused, so a self-test can never
- * reach the production gateway.
+ * The sandbox secret (development-signed devices) always targets the APNs sandbox host; one
+ * that declares `environment: "production"` is a misconfiguration and is refused. The main
+ * secret targets its declared environment, production by default.
  */
 export async function loadApnsCredentials(
   secretId: string,
   client: SecretsManagerClient,
-  options: { readonly isTest?: boolean } = {},
+  options: { readonly sandbox?: boolean } = {},
 ): Promise<ApnsCredentials> {
   const secret = await readSecretJson(secretId, client);
   const declared = secret.environment;
   if (declared !== undefined && declared !== 'production' && declared !== 'sandbox') {
     throw new Error(`Secret ${secretId} environment must be "production" or "sandbox"`);
   }
-  if (options.isTest && declared === 'production') {
+  if (options.sandbox && declared === 'production') {
     throw new Error(`Sandbox secret ${secretId} declares environment "production"; refusing`);
   }
   const level = secret.interruptionLevel;
@@ -157,7 +198,7 @@ export async function loadApnsCredentials(
     keyId: requireString(secret, 'keyId', secretId),
     privateKey: requireString(secret, 'privateKey', secretId),
     bundleId: requireString(secret, 'bundleId', secretId),
-    environment: options.isTest ? 'sandbox' : (declared ?? 'production'),
+    environment: options.sandbox ? 'sandbox' : (declared ?? 'production'),
     interruptionLevel: level ?? 'critical',
   };
 }

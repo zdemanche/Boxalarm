@@ -12,7 +12,8 @@ export interface MemberProfile {
   lastName: string;
   rank: string;
   email: string;
-  phone: string;
+  /** E.164; null once cleared - no SMS or voice pages. */
+  phone: string | null;
 }
 
 export interface Qualification {

@@ -90,47 +90,90 @@ describe('sendPush sandbox isolation (architecture §1.3)', () => {
     expect(origins).toEqual(['https://api.push.apple.com']);
   });
 
-  it('a self-test/canary reads only the sandbox APNs secret and goes to the sandbox gateway', async () => {
+  // Review MAJOR-2: a token only works on its own build's APNs host. A self-test of a
+  // TestFlight/App Store device goes to the production gateway with the production key and a
+  // labelled payload - it must ring the real device; the sandbox host answered every production
+  // token BadDeviceToken, so every iOS self-test and canary FAILed.
+  it('a self-test of a production (TestFlight/App Store) device uses the production secret and gateway, labelled TEST', async () => {
     const { sendPush } = await import('./pushProviderAdapter.js');
     const secrets = secretsBySecretId();
-    const { transport, origins } = okTransport();
+    const bodies: string[] = [];
+    const origins: string[] = [];
+    const transport: Http2Transport = (origin, _headers, body) => {
+      origins.push(origin);
+      bodies.push(body);
+      return Promise.resolve({ status: 200, headers: {}, body: '' });
+    };
 
-    await sendPush(notification, 'APNS', env, {
+    await sendPush({ ...notification, isTest: true }, 'APNS', env, {
       isTest: true,
       secretsClient: secrets.client,
       apnsTransport: transport,
     });
 
-    expect(secrets.ids).toEqual(['apns-sandbox']);
-    expect(origins).toEqual(['https://api.sandbox.push.apple.com']);
+    expect(secrets.ids).toEqual(['apns-prod']);
+    expect(origins).toEqual(['https://api.push.apple.com']);
+    const payload = JSON.parse(bodies[0]!) as { aps: { alert: { title: string } }; test?: string };
+    expect(payload.aps.alert.title.startsWith('TEST — ')).toBe(true);
+    expect(payload.test).toBe('true');
   });
 
-  it.each([
-    ['APNS', 'APNS_SANDBOX_SECRET_ID'],
-    ['FCM', 'FCM_SANDBOX_SECRET_ID'],
-  ] as const)(
-    'fails closed when a %s test message has no sandbox secret (no prod fallback, no network)',
-    async (platform, missing) => {
+  it.each([[false], [true]])(
+    'a development-signed device (isTest=%s) uses the sandbox secret and gateway',
+    async (isTest) => {
       const { sendPush } = await import('./pushProviderAdapter.js');
       const secrets = secretsBySecretId();
       const { transport, origins } = okTransport();
-      const fetchSpy = vi.spyOn(globalThis, 'fetch');
 
-      await expect(
-        sendPush(
-          notification,
-          platform,
-          { ...env, [missing]: undefined },
-          { isTest: true, secretsClient: secrets.client, apnsTransport: transport },
-        ),
-      ).rejects.toThrow(`${missing} is required and was not set`);
-      expect(secrets.ids).toEqual([]);
-      expect(origins).toEqual([]);
-      expect(fetchSpy).not.toHaveBeenCalled();
+      await sendPush(notification, 'APNS', env, {
+        isTest,
+        apnsEnvironment: 'development',
+        secretsClient: secrets.client,
+        apnsTransport: transport,
+      });
+
+      expect(secrets.ids).toEqual(['apns-sandbox']);
+      expect(origins).toEqual(['https://api.sandbox.push.apple.com']);
     },
   );
 
-  it('keeps prod and sandbox provider tokens in separate cache slots', async () => {
+  it('fails closed when a development device has no sandbox APNs secret (no prod fallback, no network)', async () => {
+    const { sendPush } = await import('./pushProviderAdapter.js');
+    const secrets = secretsBySecretId();
+    const { transport, origins } = okTransport();
+    await expect(
+      sendPush(
+        notification,
+        'APNS',
+        { ...env, APNS_SANDBOX_SECRET_ID: undefined },
+        {
+          apnsEnvironment: 'development',
+          secretsClient: secrets.client,
+          apnsTransport: transport,
+        },
+      ),
+    ).rejects.toThrow('APNS_SANDBOX_SECRET_ID is required and was not set');
+    expect(secrets.ids).toEqual([]);
+    expect(origins).toEqual([]);
+  });
+
+  it('an FCM test message still needs its sandbox secret (validate_only; no prod fallback, no network)', async () => {
+    const { sendPush } = await import('./pushProviderAdapter.js');
+    const secrets = secretsBySecretId();
+    const fetchSpy = vi.spyOn(globalThis, 'fetch');
+    await expect(
+      sendPush(
+        notification,
+        'FCM',
+        { ...env, FCM_SANDBOX_SECRET_ID: undefined },
+        { isTest: true, secretsClient: secrets.client },
+      ),
+    ).rejects.toThrow('FCM_SANDBOX_SECRET_ID is required and was not set');
+    expect(secrets.ids).toEqual([]);
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it('keeps production and sandbox provider tokens in separate cache slots', async () => {
     const { sendPush } = await import('./pushProviderAdapter.js');
     const secrets = secretsBySecretId();
     const authorizations: unknown[] = [];
@@ -144,7 +187,7 @@ describe('sendPush sandbox isolation (architecture §1.3)', () => {
       apnsTransport: transport,
     });
     await sendPush(notification, 'APNS', env, {
-      isTest: true,
+      apnsEnvironment: 'development',
       secretsClient: secrets.client,
       apnsTransport: transport,
     });
@@ -386,5 +429,76 @@ describe('the Android path caches the APNs-level lookup, failures included (revi
     vi.setSystemTime(Date.now() + APNS_LEVEL_LOOKUP_TTL_MS + 1_000);
     await expect(page()).resolves.toMatchObject({ outcome: 'sent' });
     expect(apnsReads()).toBe(2);
+  });
+});
+
+// Review round 2 item (b): a member's Android self-test really rings the phone.
+describe('FCM test delivery', () => {
+  const rsa = generateKeyPairSync('rsa', { modulusLength: 2048 })
+    .privateKey.export({ type: 'pkcs8', format: 'pem' })
+    .toString();
+
+  async function sendFcmTest(options: { fcmDeliver?: boolean }) {
+    const secretIds: string[] = [];
+    const client = {
+      send: vi.fn((command: { input: { SecretId: string } }) => {
+        secretIds.push(command.input.SecretId);
+        return Promise.resolve({
+          SecretString: JSON.stringify({
+            project_id: 'p',
+            client_email: 'sa@p.iam.gserviceaccount.com',
+            private_key: rsa,
+          }),
+        });
+      }),
+    } as unknown as SecretsManagerClient;
+    let body: Record<string, unknown> | undefined;
+    const fetchSpy = vi
+      .spyOn(globalThis, 'fetch')
+      .mockImplementation((url: string | URL | Request, init?: RequestInit) => {
+        if ((url as string).endsWith('/token')) {
+          return Promise.resolve(
+            new Response(JSON.stringify({ access_token: 'a', expires_in: 3599 }), { status: 200 }),
+          );
+        }
+        body = JSON.parse(init?.body as string) as Record<string, unknown>;
+        return Promise.resolve(new Response(JSON.stringify({ name: 'm' }), { status: 200 }));
+      });
+    const { sendPush } = await import('./pushProviderAdapter.js');
+    await sendPush(
+      { ...notification, token: 'fcm', isTest: true },
+      'FCM',
+      {
+        FCM_SECRET_ID: 'fcm-prod',
+        FCM_SANDBOX_SECRET_ID: 'fcm-sandbox',
+        APNS_SECRET_ID: 'apns-prod',
+      },
+      {
+        isTest: true,
+        ...options,
+        secretsClient: client,
+        fcmOrigin: 'https://fcm.test',
+        oauthTokenUrl: 'https://oauth.test/token',
+      },
+    );
+    fetchSpy.mockRestore();
+    return { secretIds, body };
+  }
+
+  it('a self-test (fcmDeliver) uses production FCM, really delivers, and is labelled TEST', async () => {
+    const { secretIds, body } = await sendFcmTest({ fcmDeliver: true });
+    expect(secretIds).toContain('fcm-prod');
+    expect(secretIds).not.toContain('fcm-sandbox');
+    expect(body).not.toHaveProperty('validate_only');
+    const data = (body?.message as { data: Record<string, string> }).data;
+    expect(data.test).toBe('true');
+    expect(data.title?.startsWith('TEST — ')).toBe(true);
+  });
+
+  it('otherwise (the canary) an FCM test only validates, with the sandbox secret', async () => {
+    const { secretIds, body } = await sendFcmTest({});
+    expect(secretIds).toContain('fcm-sandbox');
+    expect(secretIds).not.toContain('fcm-prod');
+    expect(body).toMatchObject({ validate_only: true });
   });
 });

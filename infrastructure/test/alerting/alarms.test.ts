@@ -147,6 +147,14 @@ describe("AlertingAlarms — every alert-path failure mode pages", { timeout: 30
       { Reason: "push" },
     ],
     ["boxalarm-dev-alerting-sms-delivery-failure-rate", "SendFailed", { Reason: "sms" }],
+    ["boxalarm-dev-alerting-push-no-target", "NoTargetRegistered", { Reason: "push" }],
+    [
+      "boxalarm-dev-alerting-push-credentials-unavailable",
+      "PushCredentialsUnavailable",
+      { Reason: "push" },
+    ],
+    ["boxalarm-dev-alerting-sms-no-target", "NoTargetRegistered", { Reason: "sms" }],
+    ["boxalarm-dev-alerting-voice-no-target", "NoTargetRegistered", { Reason: "voice" }],
     ["boxalarm-dev-alerting-voice-delivery-failure-rate", "SendFailed", { Reason: "voice" }],
     [
       "boxalarm-dev-alerting-sms-oldest-message-age",
@@ -204,6 +212,53 @@ describe("AlertingAlarms — every alert-path failure mode pages", { timeout: 30
     ]) {
       expect(String(alarmByName(alarmName).inputs.alarmDescription)).toContain("uninstalled");
     }
+  });
+
+  // Cross-seam: backend fanout/handler.ts emits emitOutcomeMetric("Boxalarm/alerting-fan-out",
+  // "DuplicateSkippedFirstPass", channel); the dimensionless series is what pages.
+  it("pages on a tone-1 duplicate skip on a dispatch's first fan-out pass (design review C1)", async () => {
+    await build();
+    const alarm = alarmByName("boxalarm-dev-alerting-fan-out-tone1-duplicate-first-pass").inputs;
+    expect(alarm).toMatchObject({
+      namespace: "Boxalarm/alerting-fan-out",
+      metricName: "DuplicateSkippedFirstPass",
+      statistic: "Sum",
+      comparisonOperator: "GreaterThanThreshold",
+      threshold: 0,
+      alarmActions: [PAGE_TOPIC_ARN],
+    });
+    expect(alarm.dimensions).toBeUndefined();
+  });
+
+  it("pages when the fan-out skips an eligible member's SMS for want of a phone (design review C2)", async () => {
+    await build();
+    expect(alarmByName("boxalarm-dev-alerting-fan-out-sms-skipped").inputs).toMatchObject({
+      namespace: "Boxalarm/alerting-fan-out",
+      metricName: "SmsSkipped",
+      threshold: 0,
+      alarmActions: [PAGE_TOPIC_ARN],
+    });
+  });
+
+  // Cross-seam: fanout/handler.ts emits EmptyRoster (count) and EligibleMemberCount (value)
+  // in Boxalarm/alerting-fan-out for every real dispatch.
+  it("pages on an empty roster and on a roster below the configured minimum (design review M6)", async () => {
+    await build();
+    expect(alarmByName("boxalarm-dev-alerting-fan-out-empty-roster").inputs).toMatchObject({
+      namespace: "Boxalarm/alerting-fan-out",
+      metricName: "EmptyRoster",
+      comparisonOperator: "GreaterThanThreshold",
+      threshold: 0,
+      alarmActions: [PAGE_TOPIC_ARN],
+    });
+    expect(alarmByName("boxalarm-dev-alerting-fan-out-small-roster").inputs).toMatchObject({
+      namespace: "Boxalarm/alerting-fan-out",
+      metricName: "EligibleMemberCount",
+      statistic: "Minimum",
+      comparisonOperator: "LessThanThreshold",
+      threshold: 3,
+      alarmActions: [PAGE_TOPIC_ARN],
+    });
   });
 
   it("gives every alarm it owns a page action", async () => {

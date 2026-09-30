@@ -11,6 +11,7 @@ import {
   getSelfTestRun,
   upsertSelfTestRun,
 } from '../selfTest/selfTestRunRepository.js';
+import { evaluateSelfTestRun } from '../selfTest/evaluateSelfTestRun.js';
 import {
   clearCanaryPointer,
   getCanaryPointer,
@@ -53,21 +54,24 @@ async function completePendingRun(
     return;
   }
   const run = await getSelfTestRun(ddb, tableName, deptId, memberId, pointer.pendingTestId);
-  const overallResult = run?.overallResult;
-  const completedAtMs = typeof run?.completedAtMs === 'number' ? run.completedAtMs : undefined;
   const startedAtMs = pointer.pendingRunAtMs ?? pointer.pendingRunAt * 1000;
-  // Latency is the self-test run's own start-to-completion time (fan-out stamps completedAtMs
-  // when it writes the final result) — never this tick's clock, which trails the run by the
-  // whole schedule interval and would make every run FAIL. A run that has not completed has no
-  // completion time; its elapsed time so far is a lower bound and the run is a FAIL.
-  const latencyMs = Math.max((completedAtMs ?? nowMs) - startedAtMs, 0);
-
-  let result: CanaryResult;
-  if (overallResult === 'PASS' && completedAtMs !== undefined && latencyMs <= LATENCY_BUDGET_MS) {
-    result = 'PASS';
-  } else {
-    result = 'FAIL';
-  }
+  // The run rode the real fan-out (one-member audience) and is decided from the channel
+  // workers' receipts - SENT within the N1 budget, per channel (design review C3) - never from
+  // the SNS publish. Latency is trigger-to-SENT for the slowest channel, never this tick's
+  // clock, which trails the run by the whole schedule interval.
+  const evaluated = run
+    ? await evaluateSelfTestRun(
+        ddb,
+        tableName,
+        { deptId, memberId, testId: pointer.pendingTestId },
+        { runAtMs: startedAtMs, ...run },
+        nowMs,
+        { latencyBudgetMs: LATENCY_BUDGET_MS },
+      )
+    : undefined;
+  const latencyMs = evaluated?.latencyMs ?? Math.max(nowMs - startedAtMs, 0);
+  const result: CanaryResult =
+    evaluated?.overallResult === 'PASS' && latencyMs <= LATENCY_BUDGET_MS ? 'PASS' : 'FAIL';
 
   await putCanaryRun(ddb, tableName, {
     deptId,
@@ -75,7 +79,7 @@ async function completePendingRun(
     ranAt: now,
     result,
     latencyMs,
-    channelResults: (run?.channelResults as Record<string, unknown> | undefined) ?? {},
+    channelResults: evaluated?.channelResults ?? {},
   });
 
   // Clear the pointer now that this pendingTestId has been recorded, regardless of whether
@@ -127,6 +131,9 @@ async function startNextRun(
     targetMemberId: memberId,
     selfTestId: testId,
     channelsTested: SELF_TEST_CHANNELS,
+    // The canary rings a phone every tick, so on Android it only validates (credentials, not
+    // delivery) unless the stack says the canary member is a dedicated device.
+    testDelivery: process.env.CANARY_DEDICATED_DEVICE === 'true' ? 'deliver' : 'validate',
   });
   if (result.outcome === 'duplicate') {
     logError('alerting.canary.unexpectedDuplicate', new Error('canary idempotency collision'), {
@@ -147,6 +154,7 @@ async function startNextRun(
       channelsTested: SELF_TEST_CHANNELS,
       channelResults: {},
       overallResult: 'RUNNING',
+      runAtMs: nowMs,
     },
     { onlyIfAbsent: true },
   );

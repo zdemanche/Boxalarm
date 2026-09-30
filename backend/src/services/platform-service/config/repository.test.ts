@@ -50,7 +50,7 @@ describe('department config repository', () => {
       sk: 'CONFIG#ALERT_RULES',
       entityType: 'DEPARTMENT_CONFIG',
       configType: 'ALERT_RULES',
-      value: { escalationThresholdN: 3 },
+      value: { escalationThresholdN: 90 },
       version: 4,
       updatedAt: '2026-09-15T00:00:00.000Z',
       updatedBy: 'member-1',

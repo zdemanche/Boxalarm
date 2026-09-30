@@ -18,6 +18,8 @@ export interface CreateManualDispatchInput {
   readonly targetMemberId?: string;
   readonly selfTestId?: string;
   readonly channelsTested?: readonly string[];
+  /** Test dispatches: whether FCM really delivers (channels/channelEnvelope.ts TestDelivery). */
+  readonly testDelivery?: 'deliver' | 'validate';
 }
 
 export type CreateManualDispatchResult =
@@ -93,6 +95,7 @@ export async function createManualDispatch(
             ...(input.targetMemberId ? { targetMemberId: input.targetMemberId } : {}),
             ...(input.selfTestId ? { selfTestId: input.selfTestId } : {}),
             ...(input.channelsTested ? { channelsTested: input.channelsTested } : {}),
+            ...(isTest && input.testDelivery ? { testDelivery: input.testDelivery } : {}),
             ...(isTest
               ? { ttl: dispatchedAt + TEST_AUDIT_TTL_SECONDS }
               : { gsi2pk: buildDeptScopedPk(deptId), gsi2sk: `DISPATCH#${dispatchedAt}` }),

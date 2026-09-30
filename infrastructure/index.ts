@@ -78,6 +78,7 @@ import { homeLocalityLacksZips, resolveHomeLocality } from "./components/alertin
 import { EligibilityStaleness } from "./components/alerting/staleness";
 import { AlertingCanary } from "./components/alerting/canary";
 import { AlertingOutboxDrain } from "./components/alerting/outbox-drain";
+import { AlertRulesCopy } from "./components/alerting/alert-rules-copy";
 
 export const stack = getStack();
 const config = new Config("boxalarm-infra");
@@ -724,7 +725,6 @@ export const routesCore = new RoutesCore("routes-core", {
   alertingCmkArn: alertingTable.cmkArn,
   alertingTableName: alertingTable.tableName,
   logGroup: alertingLogGroup,
-  escalation,
   policyStoreId: policyStore.policyStoreId,
   permissionsBoundaryArn: alertingBoundaryArn,
   ...(alertingHomeLocality !== undefined ? { homeLocality: alertingHomeLocality } : {}),
@@ -823,6 +823,18 @@ export const routesLadderControls = new RoutesLadderControls("routes-ladder-cont
 // HYDRANT_COPY projections the dispatch detail reads. Declared after alertingAlarms so a
 // dead-lettered copy event pages through the alerting-page topic.
 export const prePlanCopies = new PrePlanCopies("pre-plan-copies", {
+  env,
+  alertingTableArn: alertingTable.tableArn,
+  alertingCmkArn: alertingTable.cmkArn,
+  alertingTableName: alertingTable.tableName,
+  busName: platformBus.busName,
+  pageTopicArn: alertingAlarms.pageTopic.arn,
+  logGroup: alertingLogGroup,
+  permissionsBoundaryArn: alertingBoundaryArn,
+});
+
+// Design review M1: department ALERT_RULES -> the alerting-owned ALERT_RULES_COPY.
+export const alertRulesCopy = new AlertRulesCopy("alert-rules-copy", {
   env,
   alertingTableArn: alertingTable.tableArn,
   alertingCmkArn: alertingTable.cmkArn,

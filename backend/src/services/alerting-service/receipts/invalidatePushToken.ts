@@ -8,6 +8,7 @@ interface ContactChannelSnapshot {
   readonly token?: string;
   readonly valid?: boolean;
   readonly registeredAt?: number;
+  readonly deviceId?: string;
 }
 
 /**
@@ -31,12 +32,14 @@ export type InvalidatePushTokenResult = 'invalidated' | 'no_match' | 'reregister
 const MAX_ATTEMPTS = 3;
 
 /**
- * Marks the member's PUSH contact entry `valid: false` in the alerting eligibility snapshot,
- * but only while that entry still carries `token` — a device that re-registered a fresh token
- * in the meantime must not be disabled by a rejection of its old one, and neither must a device
- * that re-registered the same token after APNs last saw it invalid (the 410 race). Every other channel is
- * preserved. Guarded on snapshotUpdatedAt so a concurrent snapshot write is never overwritten;
- * a lost race re-reads and retries.
+ * Marks the member's PUSH contact entry for `token` `valid: false` in the alerting eligibility
+ * snapshot - one entry per device, and the member's other devices are untouched - but only
+ * while that entry still exists: a device that re-registered a fresh token in the meantime must
+ * not be disabled by a rejection of its old one, and neither must a device that re-registered
+ * the same token after APNs last saw it invalid (the 410 race). Every other channel is
+ * preserved. Guarded on the snapshot's contactVersion - the counter every contactChannels
+ * writer advances (eligibility/contactProjection.ts) - so a concurrent token registration or
+ * phone change is never overwritten; a lost race re-reads and retries.
  */
 export async function invalidatePushToken(
   client: DynamoDBDocumentClient,
@@ -65,11 +68,19 @@ export async function invalidatePushToken(
 
   let admitted = false;
   for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt += 1) {
-    const existing = await client.send(new GetCommand({ TableName: tableName, Key: { pk, sk } }));
+    const existing = await client.send(
+      new GetCommand({ TableName: tableName, Key: { pk, sk }, ConsistentRead: true }),
+    );
     const currentChannels =
       (existing.Item?.contactChannels as ContactChannelSnapshot[] | undefined) ?? [];
-    const pushEntry = currentChannels.find((entry) => entry.channel === 'PUSH');
-    if (!existing.Item || !pushEntry || pushEntry.token !== token) {
+    // A member has one PUSH entry per device: the dead token is found among them, and only
+    // its entry is invalidated - the member's other devices keep being paged.
+    const isDeadEntry = (entry: ContactChannelSnapshot): boolean =>
+      typeof entry?.channel === 'string' &&
+      entry.channel.toUpperCase() === 'PUSH' &&
+      entry.token === token;
+    const pushEntry = currentChannels.find(isDeadEntry);
+    if (!existing.Item || !pushEntry) {
       return 'no_match';
     }
     if (
@@ -85,9 +96,10 @@ export async function invalidatePushToken(
       admitted = true;
     }
 
-    const snapshotUpdatedAt = existing.Item.snapshotUpdatedAt as number | undefined;
+    const version =
+      typeof existing.Item.contactVersion === 'number' ? existing.Item.contactVersion : undefined;
     const contactChannels = currentChannels.map((entry) =>
-      entry.channel === 'PUSH' ? { ...entry, valid: false } : entry,
+      isDeadEntry(entry) ? { ...entry, valid: false } : entry,
     );
 
     try {
@@ -95,15 +107,16 @@ export async function invalidatePushToken(
         new UpdateCommand({
           TableName: tableName,
           Key: { pk, sk },
-          UpdateExpression: 'SET contactChannels = :contactChannels',
+          UpdateExpression: 'SET contactChannels = :contactChannels, contactVersion = :nextVersion',
           ConditionExpression:
-            snapshotUpdatedAt === undefined
-              ? 'attribute_exists(pk) AND attribute_not_exists(snapshotUpdatedAt)'
-              : 'attribute_exists(pk) AND snapshotUpdatedAt = :snapshotUpdatedAt',
-          ExpressionAttributeValues:
-            snapshotUpdatedAt === undefined
-              ? { ':contactChannels': contactChannels }
-              : { ':contactChannels': contactChannels, ':snapshotUpdatedAt': snapshotUpdatedAt },
+            version === undefined
+              ? 'attribute_exists(pk) AND attribute_not_exists(contactVersion)'
+              : 'attribute_exists(pk) AND contactVersion = :version',
+          ExpressionAttributeValues: {
+            ':contactChannels': contactChannels,
+            ':nextVersion': (version ?? 0) + 1,
+            ...(version === undefined ? {} : { ':version': version }),
+          },
         }),
       );
     } catch (error) {

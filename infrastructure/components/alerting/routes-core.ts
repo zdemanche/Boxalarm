@@ -1,12 +1,10 @@
 import * as pulumi from "@pulumi/pulumi";
-import * as aws from "@pulumi/aws";
 import { HttpApi } from "../api/http-api";
 import { ServiceLogGroup } from "../observability/service-log-group";
 import { IamPolicyStatement } from "../observability/observability-policy";
 import { requireEnv } from "../shared/env";
 import { lambdaCode, LAMBDA_HANDLER } from "../shared/lambda-code";
 import { AlertingRoute, verifiedPermissionsStatement } from "./route-lambda";
-import { Escalation } from "./escalation";
 import { grantAlertingCmk } from "./alerting-cmk";
 
 export interface RoutesCoreArgs {
@@ -17,7 +15,6 @@ export interface RoutesCoreArgs {
   alertingCmkArn: pulumi.Input<string>;
   alertingTableName: pulumi.Input<string>;
   logGroup: ServiceLogGroup;
-  escalation: Escalation;
   policyStoreId: pulumi.Input<string>;
   permissionsBoundaryArn?: pulumi.Input<string>;
   /**
@@ -47,45 +44,24 @@ export class RoutesCore extends pulumi.ComponentResource {
     super("boxalarm:alerting:RoutesCore", name, {}, opts);
     const { env } = args;
 
-    const alertingTableStatements: pulumi.Input<IamPolicyStatement[]> =
-      args.escalation.scheduleResourcePattern.apply((schedulePattern) => [
-        {
-          Sid: "AlertingTableConditionalWrite",
-          Effect: "Allow" as const,
-          Action: [
-            "dynamodb:PutItem",
-            // scheduleDepartmentToneLadder records the ladder's nextToneAt/tone3At on the
-            // dispatch METADATA (escalation/toneLadder.ts recordToneTimes).
-            "dynamodb:UpdateItem",
-            "dynamodb:ConditionCheckItem",
-            "dynamodb:TransactWriteItems",
-          ],
-          Resource: args.alertingTableArn as string,
-        },
-        {
-          // runFanOut reads before it writes: queryEligibleMembers is a Query on the
-          // ELIGIBILITY partition (eligibility/selector.ts), and the escalation-threshold /
-          // tone-ladder config reads are GetItems (scheduleEscalation.ts, toneLadder.ts).
-          // Without these the synchronous fan-out fails, is logged, and ingress still
-          // returns 201 with nobody paged.
-          Sid: "AlertingTableRead",
-          Effect: "Allow" as const,
-          Action: ["dynamodb:Query", "dynamodb:GetItem"],
-          Resource: args.alertingTableArn as string,
-        },
-        {
-          Sid: "CreateEscalationSchedulesOnly",
-          Effect: "Allow" as const,
-          Action: ["scheduler:CreateSchedule"],
-          Resource: schedulePattern,
-        },
-        verifiedPermissionsStatement(),
-      ]);
-
     // src/services/alerting-service/dispatches/handler.handler — the manual/degraded-mode
-    // ingress route; it calls runFanOut synchronously (fanout/fanOut.ts), which schedules
-    // the tone-1 voice escalation and the tone-2/3 evaluator timers on the same scheduler
-    // role/group as the stream-driven fan-out path.
+    // ingress route. It writes the DISPATCH_ALERT transaction (idempotency lock, alert, bridge
+    // outbox row) and nothing else: the table stream's fan-out is the single tone-1 producer
+    // (design review C1). It holds no Query/GetItem/UpdateItem and no scheduler rights, so a
+    // reintroduced synchronous fan-out here fails loudly in AccessDenied instead of quietly
+    // pre-empting tone 1 again.
+    const ingressStatements: IamPolicyStatement[] = [
+      {
+        Sid: "AlertingTableDispatchWrite",
+        Effect: "Allow",
+        // createManualDispatch is one TransactWriteItems of conditional Puts; DynamoDB
+        // authorizes each transaction item as its own action.
+        Action: ["dynamodb:PutItem", "dynamodb:ConditionCheckItem", "dynamodb:TransactWriteItems"],
+        Resource: args.alertingTableArn as string,
+      },
+      verifiedPermissionsStatement(),
+    ];
+
     this.dispatchIngress = new AlertingRoute(
       `${name}-dispatch-ingress`,
       {
@@ -101,39 +77,13 @@ export class RoutesCore extends pulumi.ComponentResource {
           ALERTING_DISPATCHES_TABLE_NAME: args.alertingTableName,
           ALERTING_TABLE_NAME: args.alertingTableName,
           VERIFIED_PERMISSIONS_POLICY_STORE_ID: args.policyStoreId,
-          ESCALATION_HANDLER_ARN: args.escalation.lambda.function.arn,
-          ESCALATION_SCHEDULER_ROLE_ARN: args.escalation.schedulerRole.arn,
-          TONE_EVALUATOR_HANDLER_ARN: args.escalation.toneEvaluatorLambda.function.arn,
-          ESCALATION_SCHEDULE_GROUP_NAME: args.escalation.scheduleGroupName,
         },
-        additionalPolicyStatements: alertingTableStatements,
+        additionalPolicyStatements: ingressStatements,
         reservedConcurrentExecutions: 5,
-        // Serial per-member TransactWrite + GetItem + CreateSchedule for the whole
-        // roster; 3s ends a 30-40 member dispatch mid-roster. 29s stays under the
-        // HTTP API's 30s integration ceiling.
-        timeout: 29,
+        // One Verified Permissions call and one transaction; well under the HTTP API's 30s
+        // integration ceiling.
+        timeout: 10,
         permissionsBoundaryArn: args.permissionsBoundaryArn,
-      },
-      { parent: this },
-    );
-
-    new aws.iam.RolePolicy(
-      `${name}-dispatch-ingress-pass-scheduler-role`,
-      {
-        role: this.dispatchIngress.lambda.role.id,
-        policy: args.escalation.schedulerRole.arn.apply((roleArn) =>
-          JSON.stringify({
-            Version: "2012-10-17",
-            Statement: [
-              {
-                Sid: "PassSchedulerRoleOnly",
-                Effect: "Allow",
-                Action: "iam:PassRole",
-                Resource: roleArn,
-              },
-            ],
-          }),
-        ),
       },
       { parent: this },
     );

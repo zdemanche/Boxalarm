@@ -175,8 +175,10 @@ async function snapshotActive(body: string): Promise<unknown> {
     ExpressionAttributeValues: Record<string, unknown>;
   };
   expect(update.Key).toEqual({ pk: 'DEPT#NICHOLS#ELIGIBILITY', sk: 'MEMBER#mbr-7' });
-  expect(update.UpdateExpression).toContain('active = :active');
-  return update.ExpressionAttributeValues[':active'];
+  // `active` has its own clock (activeUpdatedAt), never the shared snapshotUpdatedAt.
+  expect(update.UpdateExpression).toContain('active = :value');
+  expect(update.UpdateExpression).toContain('activeUpdatedAt = :eventTime');
+  return update.ExpressionAttributeValues[':value'];
 }
 
 describe('personnel.member.updated (status) producer -> revocation and alerting contract', () => {

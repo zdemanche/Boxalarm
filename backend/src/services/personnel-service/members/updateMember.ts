@@ -14,10 +14,14 @@ import {
 } from '@boxalarm/authz';
 import { buildDeptScopedPk, toVerifiedDeptId } from '@boxalarm/dept-scope';
 import { readMemberServiceConfig } from '../config.js';
+import { INVALID_PHONE_MESSAGE, normalizePhoneE164 } from '../lib/phone.js';
 
 const UPDATABLE_FIELDS = ['phone', 'email', 'firstName', 'lastName'] as const;
 type UpdatableField = (typeof UPDATABLE_FIELDS)[number];
-type UpdateMemberBody = Partial<Record<UpdatableField, string>>;
+/** `phone: null` clears the member's phone (and so their SMS and voice targets). */
+type UpdateMemberBody = Partial<Record<Exclude<UpdatableField, 'phone'>, string>> & {
+  phone?: string | null;
+};
 
 function parseBody(raw: string | undefined | null): UpdateMemberBody | undefined {
   if (!raw) {
@@ -33,10 +37,14 @@ function parseBody(raw: string | undefined | null): UpdateMemberBody | undefined
     return undefined;
   }
   const record = parsed as Record<string, unknown>;
-  const updates: Record<string, string> = {};
+  const updates: Record<string, string | null> = {};
   for (const field of UPDATABLE_FIELDS) {
     const value = record[field];
     if (value === undefined) {
+      continue;
+    }
+    if (field === 'phone' && value === null) {
+      updates.phone = null;
       continue;
     }
     if (typeof value !== 'string' || value.trim().length === 0) {
@@ -91,12 +99,21 @@ async function updateMemberProfile(
     return badRequestProblem(traceId, 'memberId path parameter is required.');
   }
 
-  const updates = parseBody(event.body);
-  if (!updates) {
+  const parsed = parseBody(event.body);
+  if (!parsed) {
     return badRequestProblem(
       traceId,
-      'Request body must be JSON with at least one of phone, email, firstName, lastName as a non-empty string.',
+      'Request body must be JSON with at least one of phone, email, firstName, lastName as a non-empty string (phone may be null to clear it).',
     );
+  }
+  // Stored in E.164: the alerting plane texts and dials exactly this string (lib/phone.ts).
+  let updates: UpdateMemberBody = parsed;
+  if (parsed.phone !== undefined && parsed.phone !== null) {
+    const phone = normalizePhoneE164(parsed.phone);
+    if (!phone) {
+      return badRequestProblem(traceId, INVALID_PHONE_MESSAGE);
+    }
+    updates = { ...parsed, phone };
   }
 
   const deptId = toVerifiedDeptId(principal);
@@ -105,14 +122,18 @@ async function updateMemberProfile(
   const config = readMemberServiceConfig(process.env);
   const docClient = getDocClient(client);
 
+  // A cleared phone is REMOVEd from the row; the event still carries `phone: null`, which the
+  // alerting plane reads as "remove this member's SMS and voice targets".
+  const setFields = Object.entries(updates).filter(([, value]) => value !== null);
+  const clearsPhone = updates.phone === null;
   const nameExpressions = Object.fromEntries(
     Object.keys(updates).map((field) => [`#${field}`, field]),
   );
   const valueExpressions: Record<string, unknown> = Object.fromEntries(
-    Object.entries(updates).map(([field, value]) => [`:${field}`, value]),
+    setFields.map(([field, value]) => [`:${field}`, value]),
   );
-  const setClauses = Object.keys(updates)
-    .map((field) => `#${field} = :${field}`)
+  const setClauses = setFields
+    .map(([field]) => `#${field} = :${field}`)
     .concat('#updatedAt = :updatedAt');
 
   try {
@@ -124,7 +145,7 @@ async function updateMemberProfile(
               TableName: config.tableName,
               Key: { pk: buildDeptScopedPk(deptId, 'MEMBER', memberId), sk: 'METADATA' },
               ConditionExpression: 'attribute_exists(pk)',
-              UpdateExpression: `SET ${setClauses.join(', ')}`,
+              UpdateExpression: `SET ${setClauses.join(', ')}${clearsPhone ? ' REMOVE #phone' : ''}`,
               ExpressionAttributeNames: { ...nameExpressions, '#updatedAt': 'updatedAt' },
               ExpressionAttributeValues: { ...valueExpressions, ':updatedAt': now },
             },

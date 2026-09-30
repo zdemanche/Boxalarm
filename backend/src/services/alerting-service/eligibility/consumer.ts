@@ -114,9 +114,14 @@ export const handler = async (event: SQSEvent): Promise<void> => {
               Update: {
                 TableName: tableName,
                 Key: { pk: buildDeptScopedPk(deptId, 'ELIGIBILITY'), sk: `MEMBER#${memberId}` },
-                UpdateExpression: 'SET availabilityState = :state, snapshotUpdatedAt = :now',
+                // Availability has its own clock (availabilityUpdatedAt), shared only with the
+                // member-updated consumer's availabilityState writes; snapshotUpdatedAt is just
+                // "last applied write" and guards nothing, so this can never make a retirement
+                // or LOA look stale (review CRITICAL-1).
+                UpdateExpression:
+                  'SET availabilityState = :state, availabilityUpdatedAt = :now, snapshotUpdatedAt = :now',
                 ConditionExpression:
-                  'attribute_exists(pk) AND (attribute_not_exists(snapshotUpdatedAt) OR :now > snapshotUpdatedAt)',
+                  'attribute_exists(pk) AND (attribute_not_exists(availabilityUpdatedAt) OR :now > availabilityUpdatedAt)',
                 ExpressionAttributeValues: { ':state': availabilityState, ':now': eventTime },
               },
             },

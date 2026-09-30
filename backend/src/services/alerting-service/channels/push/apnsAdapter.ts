@@ -238,6 +238,9 @@ export const http2Transport: Http2Transport = async (origin, headers, body, time
 
 export interface SendViaApnsOptions {
   readonly secretId: string;
+  /** The secret is the sandbox (development-environment) one: always the sandbox host. */
+  readonly sandboxSecret?: boolean;
+  /** A self-test/canary push: configuration refusals are a failed test, not a retried page. */
   readonly isTest: boolean;
   readonly secretsClient: SecretsManagerClient;
   readonly timeoutMs: number;
@@ -306,7 +309,7 @@ async function sendViaApnsOnce(
   deadlineMs: number,
 ): Promise<PushSendResult> {
   const credentials = await loadApnsCredentials(options.secretId, options.secretsClient, {
-    isTest: options.isTest,
+    sandbox: options.sandboxSecret === true,
   });
   const origin =
     options.origin ??

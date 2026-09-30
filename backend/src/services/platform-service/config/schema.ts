@@ -125,19 +125,114 @@ function validateLosapPointRules(value: Record<string, unknown>): FieldError[] {
   return errors;
 }
 
-const ALERT_RULES_KNOWN_FIELDS = ['escalationThresholdN', 'certExpiryLeadDays'] as const;
+/**
+ * ALERT_RULES. `escalationThresholdN` (seconds before a member's voice escalation) and the
+ * tone-ladder fields are projected into the alerting plane's ALERT_RULES_COPY by its own
+ * consumer (alerting-service alertRules/alertRulesCopyHandler.ts), which the escalation
+ * scheduler and the tone evaluator read; `certExpiryLeadDays` is read by training-service.
+ *  - toneLadder: { tone2AtSeconds, tone3AtSeconds } - when tones 2 and 3 are evaluated;
+ *  - defaultRule: { minResponders, requiredQuals } - the predicate that stops the ladder:
+ *    at least minResponders answered RESPONDING / DIRECT_TO_SCENE holding one of requiredQuals
+ *    (any qual when empty).
+ */
+const ALERT_RULES_KNOWN_FIELDS = [
+  'escalationThresholdN',
+  'certExpiryLeadDays',
+  'toneLadder',
+  'defaultRule',
+] as const;
+
+function isPositiveInteger(value: unknown): value is number {
+  return typeof value === 'number' && Number.isInteger(value) && value >= 1;
+}
+
+/**
+ * Sane bounds for the paging timers (review MINOR-7): `escalationThresholdN: 1` would voice-call
+ * every member one second after the page; a tone at 5 hours is not a re-tone. Defaults the
+ * alerting plane applies when a field is absent (escalation/toneLadder.ts,
+ * scheduleEscalation.ts) are used to check the ladder's order.
+ */
+const BOUNDS = {
+  escalationThresholdN: [30, 900],
+  tone2AtSeconds: [60, 3600],
+  tone3AtSeconds: [120, 7200],
+  minResponders: [1, 100],
+} as const;
+const DEFAULT_TONE_2_AT_SECONDS = 180;
+const DEFAULT_TONE_3_AT_SECONDS = 360;
+
+function withinBounds(value: unknown, [min, max]: readonly [number, number]): boolean {
+  return isPositiveInteger(value) && value >= min && value <= max;
+}
+
+function boundsMessage([min, max]: readonly [number, number], unit: string): string {
+  return `must be a whole number of ${unit} from ${min} to ${max}`;
+}
+
+function validateToneLadder(value: unknown): FieldError[] {
+  if (!isPlainObject(value)) {
+    return [{ field: 'toneLadder', message: 'must be an object when provided' }];
+  }
+  const errors = unknownFieldErrors(value, ['tone2AtSeconds', 'tone3AtSeconds'], 'toneLadder.');
+  for (const field of ['tone2AtSeconds', 'tone3AtSeconds'] as const) {
+    if (value[field] !== undefined && !withinBounds(value[field], BOUNDS[field])) {
+      errors.push({
+        field: `toneLadder.${field}`,
+        message: boundsMessage(BOUNDS[field], 'seconds'),
+      });
+    }
+  }
+  // Checked against the default for whichever one is omitted: {tone2AtSeconds: 400} alone would
+  // otherwise run tone 3 at the default 360 s - before tone 2.
+  const tone2 = isPositiveInteger(value.tone2AtSeconds)
+    ? value.tone2AtSeconds
+    : DEFAULT_TONE_2_AT_SECONDS;
+  const tone3 = isPositiveInteger(value.tone3AtSeconds)
+    ? value.tone3AtSeconds
+    : DEFAULT_TONE_3_AT_SECONDS;
+  if (tone3 <= tone2) {
+    errors.push({
+      field: 'toneLadder.tone3AtSeconds',
+      message: `must be after tone 2 (tone 2 at ${tone2} s, tone 3 at ${tone3} s; the defaults are ${DEFAULT_TONE_2_AT_SECONDS} and ${DEFAULT_TONE_3_AT_SECONDS})`,
+    });
+  }
+  return errors;
+}
+
+function validateDefaultRule(value: unknown): FieldError[] {
+  if (!isPlainObject(value)) {
+    return [{ field: 'defaultRule', message: 'must be an object when provided' }];
+  }
+  const errors = unknownFieldErrors(value, ['minResponders', 'requiredQuals'], 'defaultRule.');
+  if (
+    value.minResponders !== undefined &&
+    !withinBounds(value.minResponders, BOUNDS.minResponders)
+  ) {
+    errors.push({
+      field: 'defaultRule.minResponders',
+      message: boundsMessage(BOUNDS.minResponders, 'responders'),
+    });
+  }
+  if (
+    value.requiredQuals !== undefined &&
+    (!Array.isArray(value.requiredQuals) || !value.requiredQuals.every(isNonEmptyString))
+  ) {
+    errors.push({
+      field: 'defaultRule.requiredQuals',
+      message: 'must be an array of qualification codes',
+    });
+  }
+  return errors;
+}
 
 function validateAlertRules(value: Record<string, unknown>): FieldError[] {
   const errors: FieldError[] = [...unknownFieldErrors(value, ALERT_RULES_KNOWN_FIELDS)];
   if (value.escalationThresholdN !== undefined) {
-    if (
-      typeof value.escalationThresholdN !== 'number' ||
-      !Number.isInteger(value.escalationThresholdN) ||
-      value.escalationThresholdN < 1
-    ) {
+    // Seconds from the page to a member's voice escalation.
+    if (!withinBounds(value.escalationThresholdN, BOUNDS.escalationThresholdN)) {
       errors.push({
         field: 'escalationThresholdN',
-        message: 'must be a positive integer when provided',
+        message: boundsMessage(BOUNDS.escalationThresholdN, 'seconds'),
       });
     }
   }
@@ -149,7 +244,13 @@ function validateAlertRules(value: Record<string, unknown>): FieldError[] {
       });
     }
   }
-  if (value.escalationThresholdN === undefined && value.certExpiryLeadDays === undefined) {
+  if (value.toneLadder !== undefined) {
+    errors.push(...validateToneLadder(value.toneLadder));
+  }
+  if (value.defaultRule !== undefined) {
+    errors.push(...validateDefaultRule(value.defaultRule));
+  }
+  if (ALERT_RULES_KNOWN_FIELDS.every((field) => value[field] === undefined)) {
     errors.push({
       field: 'value',
       message: `must include at least one of ${ALERT_RULES_KNOWN_FIELDS.join(', ')}`,

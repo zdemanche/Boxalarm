@@ -19,7 +19,8 @@
     "format:write": "prettier --write .",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
-    "bundle": "node scripts/bundle.mjs"
+    "bundle": "node scripts/bundle.mjs",
+    "reemit-alert-rules": "esbuild src/services/platform-service/config/reemitAlertRules.ts --bundle --platform=node --target=node22 --format=esm --log-level=warning --outfile=dist/scripts/reemit-alert-rules.mjs --banner:js=\"import { createRequire } from 'module'; const require = createRequire(import.meta.url);\" && node dist/scripts/reemit-alert-rules.mjs"
   },
   "dependencies": {
     "@aws-sdk/client-cognito-identity-provider": "3.1136.0",

@@ -58,6 +58,10 @@ export class AlertingCanary extends pulumi.ComponentResource {
     // off, its breaching-on-missing alarms must not page, so their actions are disabled too.
     const canaryEnabled = config.getBoolean("canaryEnabled") ?? false;
     const canaryMemberId = config.requireSecret("canaryMemberId");
+    // Only when the canary member is a dedicated device (it is woken every tick) does the
+    // canary really deliver on Android; otherwise FCM validate_only - credentials verified, not
+    // delivered. iOS always delivers on the device's own APNs environment.
+    const canaryDedicatedDevice = config.getBoolean("canaryDedicatedDevice") ?? false;
     this.enabled = canaryEnabled;
     this.maxRunAgeSeconds = Math.max(rateMinutes * 60 * 3, 600);
 
@@ -74,6 +78,7 @@ export class AlertingCanary extends pulumi.ComponentResource {
           ALERTING_TABLE_NAME: args.alertingTableName,
           CANARY_DEPT_ID: deptId,
           CANARY_MEMBER_ID: canaryMemberId,
+          CANARY_DEDICATED_DEVICE: String(canaryDedicatedDevice),
         },
         additionalPolicyStatements: [
           {

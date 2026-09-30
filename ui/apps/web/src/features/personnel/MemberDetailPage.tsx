@@ -305,7 +305,9 @@ export function MemberDetailPage() {
             <dt style={{ color: 'var(--bx-fg-muted)' }}>Email</dt>
             <dd style={{ margin: 0 }}>{member.email}</dd>
             <dt style={{ color: 'var(--bx-fg-muted)' }}>Phone</dt>
-            <dd style={{ margin: 0, fontFamily: 'var(--bx-font-mono)' }}>{member.phone}</dd>
+            <dd style={{ margin: 0, fontFamily: 'var(--bx-font-mono)' }}>
+              {member.phone ?? 'No phone (no SMS or voice pages)'}
+            </dd>
             <dt style={{ color: 'var(--bx-fg-muted)' }}>Rank</dt>
             <dd style={{ margin: 0 }}>{member.rank}</dd>
             <dt style={{ color: 'var(--bx-fg-muted)' }}>Agency ID</dt>

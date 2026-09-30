@@ -36,27 +36,34 @@ Push goes to APNs and FCM directly — no push vendor. `ChannelWorkers` creates 
 | Secret | Value |
 |---|---|
 | `boxalarm-{env}-alerting-push-apns-credentials` | `{"teamId","keyId","privateKey"(.p8 PEM),"bundleId","environment"?:"production"\|"sandbox","interruptionLevel"?:"critical"\|"time-sensitive"}` |
-| `boxalarm-{env}-alerting-push-apns-sandbox-credentials` | Same shape; always sent to the APNs sandbox host (self-test/canary) |
+| `boxalarm-{env}-alerting-push-apns-sandbox-credentials` | Same shape; always sent to the APNs sandbox host. Used for devices that registered `apnsEnvironment: development` (Xcode-installed builds). **Required for real pages on any stack where such builds register.** Without it their pages fail and dead-letter, and `alerting-push-credentials-unavailable` pages on-call |
 | `boxalarm-{env}-alerting-push-fcm-credentials` | Firebase service-account key JSON, as downloaded. FCM's `apns` block (for iOS devices still on a legacy FCM token) takes its interruption level from the **APNs** secret's `interruptionLevel`, the single source of truth. An optional `"apnsInterruptionLevel"` here is used only when the APNs secret cannot be read |
 | `boxalarm-{env}-alerting-push-fcm-sandbox-credentials` | Service-account JSON for a service account **in the app's own Firebase project**. Do not create a separate "sandbox" project: its sends fail with `SENDER_ID_MISMATCH`. Isolation comes from `validate_only`, which validates and delivers nothing |
 
 > **⚠ One APNs environment per stack — get this right or every iOS member loses push.**
-> The APNs secret's `environment` must match how *every* iOS device on that stack got the app: `production` (the default) for TestFlight and App Store builds, `sandbox` only for builds installed from Xcode (development-signed). APNs answers a token from the other environment with `BadDeviceToken`, which is also what it says about a dead token. A stack cannot serve both kinds of build at once: keep Xcode-installed devices on `dev` only, and TestFlight/App Store devices on `qa`, `staging` and `prod`.
+> Each iOS device registers the APNs environment its build is signed for (`apnsEnvironment`: `development` for Xcode-installed builds, `production` for TestFlight and App Store; a device registered without one is `production`). The worker sends every push to that device on its own environment's host. The main APNs secret serves production devices, and the sandbox secret serves development devices. A token sent to the other host gets `BadDeviceToken`, the same answer as for a dead token, so one stack can now serve both kinds of build. The main secret's optional `environment: sandbox` remains only for older dev stacks whose devices registered before `apnsEnvironment` existed.
 > Safety net: per department, the push worker invalidates at most 3 distinct tokens within the current and previous 5-minute windows. The 4th trips a latch, stored as items `TRIPPED` (1 hour) and `RECENT_TRIP` (24 hours) under pk `DEPT#{deptId}#PUSH_TOKEN_INVALIDATION` in the alerting table. For 24 hours after a trip no token is invalidated, even once the 1-hour latch lapses; nothing extends that period. An operator who has fixed the secret can delete both items to re-open it early. Meanwhile those pages fail loudly instead (`…-push-mass-invalidation-blocked` pages, then the push DLQ). The first 3 tokens of a burst are still invalidated. A burst of invalidations also pages (`…-push-token-invalid-rate`). Invalidated members get push back when they next open the app.
 > The app does not report its APNs environment at registration. That needs a small native module to read the provisioning profile's `aps-environment`, and it is not built.
 
-Set `interruptionLevel` to `time-sensitive` until Apple grants the Critical Alerts entitlement (#4). `critical` without that entitlement does not get critical treatment. `time-sensitive` needs the Time Sensitive Notifications capability, which is now in `ui/apps/mobile/ios/Boxalarm/Boxalarm.entitlements` and must also be enabled on the App ID in the developer portal. Neither level has been verified on a device in Sleep Focus yet. The worker only ever reads the sandbox secrets for `isTest` messages and fails closed if one is unset. A self-test refused for a configuration reason is recorded as a failed test and not retried. Examples: sender or topic mismatch, credentials refused. A real page refused the same way throws, dead-letters and pages on-call.
+Set `interruptionLevel` to `time-sensitive` until Apple grants the Critical Alerts entitlement (#4). `critical` without that entitlement does not get critical treatment. `time-sensitive` needs the Time Sensitive Notifications capability, which is now in `ui/apps/mobile/ios/Boxalarm/Boxalarm.entitlements` and must also be enabled on the App ID in the developer portal. Neither level has been verified on a device in Sleep Focus yet. A self-test or canary push rings the member's real device. APNs goes through the device's own environment, as above, with the title prefixed `TEST — ` and `test: "true"` in the data. FCM depends on who sends. A member's self-test really delivers through the production FCM secret, with the same TEST label. The canary only validates, using the FCM sandbox secret with `validate_only`, unless `boxalarm-infra:canaryDedicatedDevice` is `true`, because the canary member is then a device kept for the canary and is woken every tick. A validate-only send appears in the self-test or canary result as "credentials verified, not delivered". A test is kept apart from real paging by its one-member audience, its TEST label and the absence of escalation, not by a separate host. Sending iOS tests to the sandbox host made every TestFlight/App Store device's self-test fail with `BadDeviceToken`. A self-test refused for a configuration reason is recorded as a failed test and not retried. Examples: sender or topic mismatch, credentials refused. A real page refused the same way throws, dead-letters and pages on-call.
 
 Before relying on push, run the device checklist in `docs/runbooks/push-device-verification.md`. It covers critical and time-sensitive delivery, foreground presentation, and cold, background and foreground tap routing on iOS and Android.
 
 ## Deploying
 
-`lambdaCode()` (`components/shared/lambda-code.ts`) wires each Lambda to `../backend/dist/<service>/<function>/index.mjs`
-when that bundle exists, and otherwise falls back to a fail-closed 501 placeholder — so `pulumi preview`/`pulumi up`
-never fail outright for a missing build. **Always run `cd backend && npm run bundle` before deploying** so every
-service/function key resolves to real code; a stale or missing bundle silently redeploys that Lambda back to the
-501 stub. `lambdaCode()` logs a Pulumi warning for every fallback it takes — check `pulumi preview`/`pulumi up`
-output for `lambdaCode: no bundle found for ...` before proceeding with any deploy.
+`lambdaCode()` (`components/shared/lambda-code.ts`) wires each Lambda to `../backend/dist/<service>/<function>/index.mjs`.
+**Run `cd backend && npm run bundle` before every deploy.** On qa, staging and prod a missing bundle fails
+`pulumi preview`/`pulumi up`. Only the dev stack (and unit tests) may fall back to a placeholder, with a
+`lambdaCode: no bundle found for ...` warning. The placeholder answers HTTP routes with 501 and throws on every
+stream, queue, schedule or async event, so those retry into their DLQs and page instead of being acknowledged.
+
+### After the first deploy of the ALERT_RULES copy consumer
+
+A department whose ALERT_RULES were saved before `alert-rules-copy-consumer` existed has no `ALERT_RULES_COPY`, so its tone ladder runs on the defaults. The fan-out logs `alerting.toneLadder.rules_default` when that happens. Re-emit the saved rules once. The script bundles itself with the repo's esbuild, so it runs on any supported Node (22+). Values saved before the timer bounds existed are clamped by the consumer and logged as `alerting.alertRulesCopy.adjusted`:
+
+```
+cd backend && npm run reemit-alert-rules -- --table boxalarm-<env>-platform --dept <deptId>
+```
 
 ## Getting started
 

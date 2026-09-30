@@ -54,6 +54,24 @@ function createFakeDdb(seed: readonly FakeItem[] = []): {
       items.set(key, put.Item);
       return Promise.resolve({});
     }
+    if (name === 'UpdateCommand') {
+      // completeSelfTestRun: SET a = :a, ... (the RUNNING condition is not modelled).
+      const update = input as {
+        Key: { pk: string; sk: string };
+        UpdateExpression: string;
+        ExpressionAttributeValues: Record<string, unknown>;
+      };
+      const key = `${update.Key.pk}#${update.Key.sk}`;
+      const existing: FakeItem = items.get(key) ?? { ...update.Key };
+      for (const assignment of update.UpdateExpression.replace(/^SET /, '').split(',')) {
+        const [field, placeholder] = assignment.split('=').map((part) => part.trim());
+        if (field && placeholder) {
+          existing[field] = update.ExpressionAttributeValues[placeholder];
+        }
+      }
+      items.set(key, existing);
+      return Promise.resolve({});
+    }
     if (name === 'DeleteCommand') {
       const del = input as { Key: { pk: string; sk: string } };
       items.delete(`${del.Key.pk}#${del.Key.sk}`);
@@ -117,6 +135,22 @@ describe('canary handler', () => {
     expect(typeof pointer?.pendingTestId).toBe('string');
     const run = [...items.values()].find((item) => item.entityType === 'SELF_TEST_RUN');
     expect(run).toMatchObject({ memberId: 'canary-device', overallResult: 'RUNNING' });
+    // Without a dedicated canary device, Android is validated only (round 2 item b).
+    const alert = [...items.values()].find((item) => item.entityType === 'DISPATCH_ALERT');
+    expect(alert?.testDelivery).toBe('validate');
+  });
+
+  it('really delivers when the canary member is a dedicated device', async () => {
+    process.env.CANARY_DEDICATED_DEVICE = 'true';
+    const { send, items } = createFakeDdb();
+    const { createDynamoClient } = await import('../eligibility/dynamoClient.js');
+    vi.mocked(createDynamoClient).mockReturnValue({ send } as unknown as DynamoDBDocumentClient);
+
+    const { handler } = await import('./handler.js');
+    await handler();
+
+    const alert = [...items.values()].find((item) => item.entityType === 'DISPATCH_ALERT');
+    expect(alert?.testDelivery).toBe('deliver');
   });
 
   it('completes a pending run as PASS when the self-test finished within the latency budget, and records a CANARY_RUN (AC1)', async () => {

@@ -107,3 +107,31 @@ describe("AlertingCanary pages on its own Lambda Errors", { timeout: 30_000 }, (
     expect(alarm.alarmActions).toEqual([PAGE_TOPIC_ARN]);
   });
 });
+
+/** The canary's env holds a secret (CANARY_MEMBER_ID), so the mock wraps it as one. */
+function canaryEnv(): Record<string, string> {
+  const fn = resourcesOfType("aws:lambda/function:Function").find(
+    (r) => r.inputs.name === "boxalarm-dev-alerting-canary",
+  );
+  const environment = fn?.inputs.environment as
+    | { variables?: Record<string, string>; value?: { variables?: Record<string, string> } }
+    | undefined;
+  return environment?.variables ?? environment?.value?.variables ?? {};
+}
+
+// Review round 2 item b: the canary really delivers on Android only on a dedicated device.
+describe("AlertingCanary Android delivery", { timeout: 30_000 }, () => {
+  it("defaults to validate-only (CANARY_DEDICATED_DEVICE=false)", async () => {
+    await build();
+    expect(canaryEnv().CANARY_DEDICATED_DEVICE).toBe("false");
+  });
+
+  it("delivers when the stack declares a dedicated canary device", async () => {
+    installMocks({
+      "boxalarm-infra:canaryMemberId": "test-canary-member",
+      "boxalarm-infra:canaryDedicatedDevice": "true",
+    });
+    await build();
+    expect(canaryEnv().CANARY_DEDICATED_DEVICE).toBe("true");
+  });
+});

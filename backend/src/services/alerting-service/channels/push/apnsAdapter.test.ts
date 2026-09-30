@@ -154,6 +154,8 @@ describe('sendViaApns over a local HTTP/2 server', () => {
         sound: { critical: 1, name: 'default', volume: 1 },
         'interruption-level': 'critical',
         'mutable-content': 1,
+        // The iOS category the app's action buttons are registered under.
+        category: 'DISPATCH',
       },
       category: 'dispatch',
       alertKind: 'dispatch',
@@ -336,11 +338,12 @@ describe('sendViaApns host selection and sandbox isolation', () => {
     expect(origins).toEqual(['https://api.sandbox.push.apple.com']);
   });
 
-  it('always sends a self-test/canary message to the sandbox gateway', async () => {
+  it('always sends through the sandbox (development-environment) secret to the sandbox gateway', async () => {
     const { transport, origins } = recordingTransport();
     await sendViaApns(dispatch, {
       secretId: 'apns-sandbox',
-      isTest: true,
+      sandboxSecret: true,
+      isTest: false,
       secretsClient: secretsClient(apnsSecret()).client,
       timeoutMs: 4_000,
       transport,
@@ -353,6 +356,7 @@ describe('sendViaApns host selection and sandbox isolation', () => {
     await expect(
       sendViaApns(dispatch, {
         secretId: 'apns-sandbox',
+        sandboxSecret: true,
         isTest: true,
         secretsClient: secretsClient(apnsSecret({ environment: 'production' })).client,
         timeoutMs: 4_000,

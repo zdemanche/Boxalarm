@@ -5,6 +5,9 @@ import { ALERTING_CHANNELS, AlertingChannel, ChannelQueue } from "./messaging-al
 
 const NON_PROD_ENVS = new Set(["dev", "qa", "staging"]);
 
+/** Backend namespace of the tone-1 fan-out's metrics (fanout/handler.ts METRIC_NAMESPACE). */
+export const FAN_OUT_METRIC_NAMESPACE = "Boxalarm/alerting-fan-out";
+
 export interface AlertingAlarmsArgs {
   env: string;
   channelQueues: Record<AlertingChannel, ChannelQueue>;
@@ -18,6 +21,13 @@ export interface AlertingAlarmsArgs {
   memberUpdatedDlq: aws.sqs.Queue;
   memberUpdatedFunctionName: pulumi.Input<string>;
 }
+
+/**
+ * Stack config key: the fewest eligible members a real dispatch may reach before it pages
+ * on-call (default DEFAULT_MIN_ELIGIBLE_MEMBERS). Set it near the department's usual turnout.
+ */
+export const MIN_ELIGIBLE_MEMBERS_CONFIG_KEY = "alertingMinEligibleMembers";
+export const DEFAULT_MIN_ELIGIBLE_MEMBERS = 3;
 
 /** Stack config key for the alerting-page email subscription. */
 export const ALERTING_PAGE_EMAIL_CONFIG_KEY = "alertingPageEmail";
@@ -154,6 +164,25 @@ export class AlertingAlarms extends pulumi.ComponentResource {
       evaluationPeriods: 1,
     });
 
+    // Design review C1: a tone-1 receipt that already carries sentAt on a dispatch's FIRST
+    // fan-out attempt was written by something other than the fan-out, and that member is not
+    // paged until tone 2. A retry legitimately skips what it already sent, so only the
+    // first-pass count (fanout/handler.ts sendOne) is alarmed.
+    pageAlarm("fan-out-duplicate-first-pass-alarm", {
+      name: `boxalarm-${env}-alerting-fan-out-tone1-duplicate-first-pass`,
+      alarmDescription:
+        "The fan-out found a tone-1 receipt already marked sent on the dispatch's first attempt and skipped that member: " +
+        "a second producer wrote the exactly-once key and did not publish, so the member gets no page until tone 2. " +
+        "Check the fan-out logs (fanout.receipt.duplicate_on_first_pass) for the dispatch and members, and find the other writer of RECEIPT# items.",
+      namespace: FAN_OUT_METRIC_NAMESPACE,
+      metricName: "DuplicateSkippedFirstPass",
+      statistic: "Sum",
+      comparisonOperator: "GreaterThanThreshold",
+      threshold: 0,
+      period: 60,
+      evaluationPeriods: 1,
+    });
+
     // Escalation and tone-evaluator are invoked async by EventBridge Scheduler. After Lambda's
     // retries a failed event lands in the on-failure queue (escalation.ts); any message there
     // is a tone, voice escalation or mutual-aid request that did not complete.
@@ -253,8 +282,94 @@ export class AlertingAlarms extends pulumi.ComponentResource {
       evaluationPeriods: 1,
     });
 
+    // Design review M6: a real dispatch that could page nobody, or too few. A deptId mismatch,
+    // a dead eligibility consumer or a mass mark-off otherwise looks exactly like a quiet night.
+    pageAlarm("fan-out-empty-roster-alarm", {
+      name: `boxalarm-${env}-alerting-fan-out-empty-roster`,
+      alarmDescription:
+        "A real dispatch fanned out to nobody: no eligible member had any reachable channel. Check the eligibility snapshot " +
+        "(DEPT#{deptId}#ELIGIBILITY in the alerting table) for the dispatch's deptId, the member-updated / availability consumers' DLQs, " +
+        "and that the stack deptId matches the members' custom:deptId. Radio tone-out (N1.9) is the page of record until fixed.",
+      namespace: FAN_OUT_METRIC_NAMESPACE,
+      metricName: "EmptyRoster",
+      statistic: "Sum",
+      comparisonOperator: "GreaterThanThreshold",
+      threshold: 0,
+      period: 60,
+      evaluationPeriods: 1,
+    });
+    const minEligible =
+      new pulumi.Config("boxalarm-infra").getNumber(MIN_ELIGIBLE_MEMBERS_CONFIG_KEY) ??
+      DEFAULT_MIN_ELIGIBLE_MEMBERS;
+    pageAlarm("fan-out-small-roster-alarm", {
+      name: `boxalarm-${env}-alerting-fan-out-small-roster`,
+      alarmDescription:
+        `A real dispatch reached fewer than ${minEligible} eligible members (stack config ${MIN_ELIGIBLE_MEMBERS_CONFIG_KEY}). ` +
+        "Usually members missing from the eligibility snapshot or marked off; check the snapshot and the eligibility consumers.",
+      namespace: FAN_OUT_METRIC_NAMESPACE,
+      metricName: "EligibleMemberCount",
+      statistic: "Minimum",
+      comparisonOperator: "LessThanThreshold",
+      threshold: minEligible,
+      period: 60,
+      evaluationPeriods: 1,
+    });
+
+    // Design review C2: an eligible member with no phone is never published on SMS (the
+    // fan-out checks the target first) - counted, and paged here, instead of silently skipped.
+    pageAlarm("fan-out-sms-skipped-alarm", {
+      name: `boxalarm-${env}-alerting-fan-out-sms-skipped`,
+      alarmDescription:
+        "The tone-1 fan-out found an eligible member with no SMS contact entry and could not text them. " +
+        "The snapshot's SMS/VOICE entries are projected from the member's phone by the member-updated consumer; " +
+        "check the member has a phone in personnel, then the consumer's DLQ and logs (fanout.sms.skipped names the member).",
+      namespace: FAN_OUT_METRIC_NAMESPACE,
+      metricName: "SmsSkipped",
+      statistic: "Sum",
+      comparisonOperator: "GreaterThanThreshold",
+      threshold: 0,
+      period: 60,
+      evaluationPeriods: 1,
+    });
+
+    // Review R2-m1: a real page whose push gateway secret is unset or unreadable - e.g. a device
+    // registered as `development` (an Xcode-installed build) with no APNs sandbox secret value.
+    pageAlarm("push-credentials-unavailable-alarm", {
+      name: `boxalarm-${env}-alerting-push-credentials-unavailable`,
+      alarmDescription:
+        "A real push page could not be sent because a push gateway secret is unset or has no value. The push worker logs " +
+        "(alerting.channel.device_send_failed) name the secret. APNS_SANDBOX_SECRET_ID is needed on any stack where Xcode-installed " +
+        "(development-signed) builds register; APNS_SECRET_ID / FCM_SECRET_ID on every stack. Set the value, then redrive the push DLQ.",
+      namespace: "Boxalarm/AlertingChannel",
+      metricName: "PushCredentialsUnavailable",
+      dimensions: { Reason: "push" },
+      statistic: "Sum",
+      comparisonOperator: "GreaterThanThreshold",
+      threshold: 0,
+      period: 60,
+      evaluationPeriods: 1,
+    });
+
     for (const channel of ALERTING_CHANNELS) {
       const dlq = args.channelQueues[channel].dlq;
+
+      // A real page the worker had no target for is acknowledged with no DLQ entry and no
+      // SendFailed - before this alarm, the silent shape of the SMS-never-sends defect (C2).
+      // deliverChannelMessage emits emitOutcomeMetric(ns, "NoTargetRegistered", channel).
+      pageAlarm(`${channel}-no-target-alarm`, {
+        name: `boxalarm-${env}-alerting-${channel}-no-target`,
+        alarmDescription:
+          `A ${channel} page reached the worker for a member with no ${channel} target in the eligibility snapshot, and was dropped. ` +
+          "Check alerting.channel.no_target in the worker logs for the member, then their contact entries (SMS/VOICE come from the member's phone, PUSH from a registered device).",
+        namespace: "Boxalarm/AlertingChannel",
+        metricName: "NoTargetRegistered",
+        dimensions: { Reason: channel },
+        statistic: "Sum",
+        comparisonOperator: "GreaterThanThreshold",
+        threshold: 0,
+        period: 60,
+        evaluationPeriods: 1,
+      });
 
       // A worker that is consuming but stuck (hung vendor call) before anything reaches
       // the DLQ. A healthy queue never holds a message this long.

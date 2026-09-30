@@ -8,11 +8,10 @@ import {
   type CedarPrincipalContext,
   type GuardEvent,
 } from '@boxalarm/authz';
-import { buildDeptScopedPk, toVerifiedDeptId } from '@boxalarm/dept-scope';
+import { toVerifiedDeptId } from '@boxalarm/dept-scope';
 import { TransactionCanceledException } from '@aws-sdk/client-dynamodb';
-import { GetCommand, TransactWriteCommand } from '@aws-sdk/lib-dynamodb';
 import { createDynamoClient, readPersonnelConfig } from '../dynamoClient.js';
-import type { ContactChannelEntry } from './registerToken.js';
+import { parseDeviceId, withoutDevice, writePushDevices } from './pushDevices.js';
 
 function extractTraceId(event: GuardEvent): string {
   const traceparent = event.headers?.traceparent ?? event.headers?.Traceparent;
@@ -56,57 +55,24 @@ async function revokeToken(
     return forbiddenProblem(traceId);
   }
 
+  // Sign-out removes only this device's entry (`?deviceId=`); the member's other devices keep
+  // being paged. Without a deviceId (an app build that predates multi-device support) only the
+  // legacy entry is removed.
+  let deviceId: string | undefined;
+  try {
+    deviceId = parseDeviceId(event.queryStringParameters?.deviceId);
+  } catch (error) {
+    return badRequestProblem(traceId, error instanceof Error ? error.message : 'invalid deviceId');
+  }
+
   const deptId = toVerifiedDeptId(principal);
-  const pk = buildDeptScopedPk(deptId, 'MEMBER', memberId);
   const client = createDynamoClient(process.env);
   const config = readPersonnelConfig(process.env);
 
-  const existing = await client.send(
-    new GetCommand({ TableName: config.tableName, Key: { pk, sk: 'METADATA' } }),
-  );
-  if (!existing.Item) {
-    return notFoundProblem(traceId, `member ${memberId} was not found`);
-  }
-
-  const currentChannels =
-    (existing.Item.contactChannels as ContactChannelEntry[] | undefined) ?? [];
-  const contactChannels = currentChannels.filter((entry) => entry.channel !== 'PUSH');
-  const now = Date.now();
-  const eventId = randomUUID();
-
+  let outcome;
   try {
-    await client.send(
-      new TransactWriteCommand({
-        TransactItems: [
-          {
-            Update: {
-              TableName: config.tableName,
-              Key: { pk, sk: 'METADATA' },
-              ConditionExpression: 'attribute_exists(pk)',
-              UpdateExpression: 'SET contactChannels = :cc, updatedAt = :ts',
-              ExpressionAttributeValues: { ':cc': contactChannels, ':ts': now },
-            },
-          },
-          {
-            Put: {
-              TableName: config.tableName,
-              Item: {
-                pk: buildDeptScopedPk(deptId, 'OUTBOX', memberId),
-                sk: `EVT#${eventId}`,
-                entityType: 'OUTBOX_ENTRY',
-                eventId,
-                eventTime: new Date(now).toISOString(),
-                eventType: 'personnel.member.updated',
-                source: 'personnel-service',
-                correlationId: memberId,
-                schemaVersion: '1.0',
-                payload: { memberId, deptId, contactChannels },
-                sentAt: null,
-              },
-            },
-          },
-        ],
-      }),
+    outcome = await writePushDevices(client, config.tableName, deptId, memberId, (current) =>
+      withoutDevice(current, deviceId),
     );
   } catch (error) {
     const cancellationReasons =
@@ -124,15 +90,12 @@ async function revokeToken(
         cancellationReasons,
       }),
     );
-    if (
-      error instanceof TransactionCanceledException &&
-      cancellationReasons?.includes('ConditionalCheckFailed')
-    ) {
-      emitRevokeMetric('Failed', 'ConditionalCheckFailed');
-      return notFoundProblem(traceId, `member ${memberId} was not found`);
-    }
     emitRevokeMetric('Failed', 'UnknownError');
     throw error;
+  }
+  if (outcome === 'not_found') {
+    emitRevokeMetric('Failed', 'MemberNotFound');
+    return notFoundProblem(traceId, `member ${memberId} was not found`);
   }
 
   console.log(
@@ -141,6 +104,7 @@ async function revokeToken(
       service: 'personnel-service',
       correlationId: traceId,
       memberId,
+      deviceId: deviceId ?? null,
     }),
   );
   emitRevokeMetric('Revoked');
@@ -148,7 +112,12 @@ async function revokeToken(
   return {
     statusCode: 200,
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ memberId, channel: 'PUSH', revoked: true }),
+    body: JSON.stringify({
+      memberId,
+      channel: 'PUSH',
+      revoked: true,
+      ...(deviceId ? { deviceId } : {}),
+    }),
   };
 }
 

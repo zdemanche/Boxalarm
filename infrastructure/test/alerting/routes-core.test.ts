@@ -19,19 +19,34 @@ beforeEach(() => {
 });
 
 describe(
-  "RoutesCore dispatch-ingress IAM matches runFanOut's DynamoDB calls",
+  "RoutesCore dispatch-ingress IAM: the DISPATCH_ALERT transaction only (design review C1)",
   { timeout: 30_000 },
   () => {
-    it.each([
-      "dynamodb:Query",
-      "dynamodb:GetItem",
-      "dynamodb:TransactWriteItems",
-      "dynamodb:PutItem",
-      // The tone-ladder times (nextToneAt) written after the tone-2/3 schedules.
-      "dynamodb:UpdateItem",
-    ])("grants %s on the alerting table", async (action) => {
+    it.each(["dynamodb:TransactWriteItems", "dynamodb:PutItem"])(
+      "grants %s on the alerting table",
+      async (action) => {
+        await buildSchedulingChain();
+        expect(isGranted(statementsForRole(INGRESS), action, TABLE_ARN)).toBe(true);
+      },
+    );
+
+    // The stream fan-out is the single tone-1 producer. Ingress must not be able to run a
+    // second one: no roster read, no receipt/METADATA update, no schedules.
+    it.each(["dynamodb:Query", "dynamodb:GetItem", "dynamodb:UpdateItem"])(
+      "does not grant %s on the alerting table",
+      async (action) => {
+        await buildSchedulingChain();
+        expect(isGranted(statementsForRole(INGRESS), action, TABLE_ARN)).toBe(false);
+      },
+    );
+
+    it("holds no scheduler or PassRole rights and no escalation wiring", async () => {
       await buildSchedulingChain();
-      expect(isGranted(statementsForRole(INGRESS), action, TABLE_ARN)).toBe(true);
+      const statements = statementsForRole(INGRESS);
+      expect(isGranted(statements, "scheduler:CreateSchedule", () => true)).toBe(false);
+      expect(isGranted(statements, "iam:PassRole", () => true)).toBe(false);
+      expect(lambdaEnv(INGRESS)).not.toHaveProperty("ESCALATION_HANDLER_ARN");
+      expect(lambdaEnv(INGRESS)).not.toHaveProperty("TONE_EVALUATOR_HANDLER_ARN");
     });
   },
 );

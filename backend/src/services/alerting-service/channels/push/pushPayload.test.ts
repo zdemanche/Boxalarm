@@ -4,8 +4,10 @@ import {
   apnsIdFor,
   buildApnsPayload,
   pushDataFields,
+  truncateUtf8,
   type PushNotification,
 } from './pushPayload.js';
+import { buildFcmRequest } from './fcmAdapter.js';
 
 const dispatch: PushNotification = {
   token: 'tok',
@@ -55,5 +57,101 @@ describe('push payloads', () => {
   it('apns-id is a stable UUID per exactly-once key', () => {
     expect(apnsIdFor('a#1#m#PUSH')).toBe(apnsIdFor('a#1#m#PUSH'));
     expect(apnsIdFor('a#1#m#PUSH')).not.toBe(apnsIdFor('a#2#m#PUSH'));
+  });
+
+  // iOS shows the RESPONDING / NOT RESPONDING action buttons only for a notification whose
+  // aps.category names the category the app registered them under.
+  it('a dispatch page carries aps.category DISPATCH; the mutual-aid prompt does not', () => {
+    expect((buildApnsPayload(dispatch, 'critical').aps as Record<string, unknown>).category).toBe(
+      'DISPATCH',
+    );
+    expect(
+      (buildApnsPayload(dispatch, 'time-sensitive').aps as Record<string, unknown>).category,
+    ).toBe('DISPATCH');
+    expect(buildApnsPayload(prompt, 'critical').aps).not.toHaveProperty('category');
+  });
+
+  it('adding the category leaves the critical / time-sensitive handling as it was', () => {
+    const aps = buildApnsPayload(dispatch, 'time-sensitive').aps as Record<string, unknown>;
+    expect(aps['interruption-level']).toBe('time-sensitive');
+    expect(aps.sound).toBe('default');
+    expect(aps['mutable-content']).toBe(1);
+  });
+
+  describe('explicit alert keys (the app stops parsing "{type} — {address}" from the body)', () => {
+    const withAlert: PushNotification = {
+      ...dispatch,
+      alert: {
+        incidentType: 'STRUCTURE_FIRE',
+        address: '12 Main St',
+        crossStreets: 'Main & Elm',
+        dispatchedAt: 1798000000,
+      },
+    };
+
+    it('sends incidentType, address, crossStreets and dispatchedAt as their own keys, alongside the existing ones', () => {
+      const expected = {
+        category: 'dispatch',
+        dispatchId: 'dispatch-1',
+        toneSequence: '1',
+        incidentType: 'STRUCTURE_FIRE',
+        address: '12 Main St',
+        crossStreets: 'Main & Elm',
+        dispatchedAt: '1798000000',
+      };
+      expect(pushDataFields(withAlert)).toMatchObject({ ...expected, body: dispatch.body });
+      expect(buildApnsPayload(withAlert, 'critical')).toMatchObject(expected);
+    });
+
+    it('omits absent optional keys rather than sending them empty', () => {
+      const fields = pushDataFields({
+        ...dispatch,
+        alert: { incidentType: 'ALARM', address: '1 Elm St' },
+      });
+      expect(fields).not.toHaveProperty('crossStreets');
+      expect(fields).not.toHaveProperty('dispatchedAt');
+    });
+
+    it('keeps the largest possible APNs payload, direct and via FCM, under the 4 KB limit', () => {
+      const huge = '🔥'.repeat(5_000);
+      const worst: PushNotification = {
+        ...dispatch,
+        dispatchId: 'NICHOLS-MANUAL-1798000000-abcd1234',
+        title: huge,
+        body: huge,
+        alert: { incidentType: huge, address: huge, crossStreets: huge, dispatchedAt: 1798000000 },
+      };
+      for (const level of ['critical', 'time-sensitive'] as const) {
+        expect(Buffer.byteLength(JSON.stringify(buildApnsPayload(worst, level)))).toBeLessThan(
+          4096,
+        );
+        const request = buildFcmRequest(worst, false, Date.now(), level) as {
+          message: { apns: { payload: unknown }; data: unknown };
+        };
+        expect(Buffer.byteLength(JSON.stringify(request.message.apns.payload))).toBeLessThan(4096);
+        // FCM's own data-message limit is 4 KB too.
+        expect(Buffer.byteLength(JSON.stringify(request.message.data))).toBeLessThan(4096);
+      }
+    });
+
+    it('truncates on a character boundary', () => {
+      expect(truncateUtf8('short', 10)).toBe('short');
+      const cut = truncateUtf8('ab🔥🔥🔥', 9);
+      expect(Buffer.byteLength(cut)).toBeLessThanOrEqual(9);
+      expect(cut.endsWith('…')).toBe(true);
+      expect(cut).not.toContain('\uFFFD');
+    });
+  });
+
+  // Review R2-m4: a test push offers no response actions but still sounds like a real page.
+  it('a test push has no DISPATCH category but keeps the critical interruption and sound', () => {
+    const aps = buildApnsPayload({ ...dispatch, isTest: true }, 'critical').aps as Record<
+      string,
+      unknown
+    >;
+    expect(aps).not.toHaveProperty('category');
+    expect(aps['interruption-level']).toBe('critical');
+    expect(aps.sound).toEqual({ critical: 1, name: 'default', volume: 1 });
+    expect((aps.alert as { title: string }).title.startsWith('TEST — ')).toBe(true);
   });
 });

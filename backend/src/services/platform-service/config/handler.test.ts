@@ -86,7 +86,7 @@ describe('department config handler', () => {
         sk: 'CONFIG#ALERT_RULES',
         entityType: 'DEPARTMENT_CONFIG',
         configType: 'ALERT_RULES',
-        value: { escalationThresholdN: 3 },
+        value: { escalationThresholdN: 90 },
         version: 2,
         updatedAt: '2026-09-15T00:00:00.000Z',
         updatedBy: 'admin-1',
@@ -106,7 +106,7 @@ describe('department config handler', () => {
     expect(result.statusCode).toBe(200);
     expect(JSON.parse(result.body)).toMatchObject({
       configType: 'ALERT_RULES',
-      value: { escalationThresholdN: 3 },
+      value: { escalationThresholdN: 90 },
       version: 2,
     });
   });
@@ -134,7 +134,7 @@ describe('department config handler', () => {
     });
     const result = (await handler(
       buildEvent('PUT', 'ALERT_RULES', memberContext(), {
-        value: { escalationThresholdN: 4 },
+        value: { escalationThresholdN: 120 },
         expectedVersion: 1,
       }),
       {} as never,
@@ -237,7 +237,7 @@ describe('department config handler', () => {
         'ALERT_RULES',
         { ...adminContext(), 'cognito:groups': 'CHIEF' },
         {
-          value: { escalationThresholdN: 9 },
+          value: { escalationThresholdN: 95 },
           expectedVersion: 2,
         },
       ),
