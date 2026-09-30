@@ -77,6 +77,14 @@ export interface StaleAnswerHooks {
 
 let staleAnswerHooks: StaleAnswerHooks | null = null;
 
+/** Told of every row this process delivers - so a notification that said "not sent yet" can be
+ * corrected when a later run sends it (m2). Registered by notificationActions. */
+let deliveredHook: ((row: OutboxRow) => void) | null = null;
+
+export function setDeliveredHook(hook: ((row: OutboxRow) => void) | null): void {
+  deliveredHook = hook;
+}
+
 export function setStaleAnswerHooks(hooks: StaleAnswerHooks | null): void {
   staleAnswerHooks = hooks;
 }
@@ -761,6 +769,11 @@ async function runDrain(): Promise<void> {
         await processEntry(row.id, session);
         await outbox.markSynced(row.id);
         rememberSynced(row.id);
+        try {
+          deliveredHook?.(row);
+        } catch (hookError) {
+          console.warn('[sync] delivered hook failed', hookError);
+        }
         lastSyncAt = new Date().toISOString();
       } catch (error) {
         if (isPermanentRejection(error)) {

@@ -16,14 +16,18 @@ export function useSyncEngine(): void {
   // Reconfigure when the member changes, so queued work is always stamped with and sent for the
   // member who is actually signed in (R2-M3).
   const memberId = auth?.memberId ?? null;
+  // While the stored session is still being read there is no answer yet to "who is signed in":
+  // configuring null then would stop a headless answer's run mid-send (m2).
+  const isLoading = auth?.isLoading ?? false;
   // The token source is read through a ref so a token refresh never re-runs configure().
   const authRef = useRef(auth);
   authRef.current = auth;
 
   useEffect(() => {
+    if (isLoading) return;
     // The session is passed even without an API base URL (dev builds) so the outbox knows whose
     // work it holds; nothing drains without both (syncManager.drain).
     const tokens = isAuthenticated ? (authRef.current ?? null) : null;
     syncManager.configure(tokens, apiBaseUrl || null);
-  }, [apiBaseUrl, isAuthenticated, memberId]);
+  }, [apiBaseUrl, isAuthenticated, isLoading, memberId]);
 }

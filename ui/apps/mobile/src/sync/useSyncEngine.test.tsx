@@ -42,3 +42,16 @@ test('a re-render with the same session does not reconfigure', async () => {
 
   expect(mockConfigure).toHaveBeenCalledTimes(1);
 });
+
+// m2: configuring null while the stored session is still loading stopped a headless answer's
+// run mid-send, and its notification then said NOT SENT YET.
+test('nothing is configured while the stored session is still loading', async () => {
+  mockUseOptionalAuth.mockReturnValue({ isAuthenticated: false, isLoading: true });
+  const { rerender } = await renderHook(() => useSyncEngine());
+  expect(mockConfigure).not.toHaveBeenCalled();
+
+  const auth = { isAuthenticated: true, isLoading: false, memberId: 'm-1' };
+  mockUseOptionalAuth.mockReturnValue(auth);
+  await rerender({});
+  expect(mockConfigure).toHaveBeenCalledWith(auth, 'https://api.example.com');
+});

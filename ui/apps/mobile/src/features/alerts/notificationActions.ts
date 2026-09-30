@@ -105,6 +105,30 @@ syncManager.setStaleAnswerHooks({
 });
 
 /**
+ * Answers whose notification last said they were not sent yet, by outbox id. A later run - the
+ * app's own session, once it has loaded - may send them; the notification must then say so
+ * rather than keep telling the member it was not sent (m2).
+ */
+const notSentNotices = new Map<
+  string,
+  { notificationId: string; data: Record<string, string>; answer: ResponseAnswer }
+>();
+
+syncManager.setDeliveredHook((row) => {
+  const notice = notSentNotices.get(row.id);
+  if (!notice) return;
+  notSentNotices.delete(row.id);
+  void showAnswerNotification(
+    notice.notificationId,
+    notice.data,
+    notice.answer,
+    'Sent. Tap to open the call.',
+  ).catch((error: unknown) =>
+    console.warn('[push] updating the answer notification failed', error),
+  );
+});
+
+/**
  * A headless task has no AuthProvider: point the outbox at the stored session if nothing has,
  * with the member and department it belongs to, so the answer is stamped as theirs (R3-C1).
  */
@@ -188,11 +212,17 @@ export async function answerFromNotification(
     await syncManager.drainAndSettle();
     const sent = syncManager.hasSynced(outboxId);
     const row = sent ? undefined : await outbox.find(outboxId);
+    if (row && row.status !== 'REJECTED') {
+      notSentNotices.set(outboxId, { notificationId, data, answer });
+    }
+    // Sent by another run in the meantime (the delivered hook had nothing to correct yet).
+    const sentNow = sent || syncManager.hasSynced(outboxId);
+    if (sentNow) notSentNotices.delete(outboxId);
     await showAnswerNotification(
       notificationId,
       data,
       answer,
-      sent
+      sentNow
         ? 'Sent. Tap to open the call.'
         : row?.status === 'REJECTED'
           ? row.lastError === RESPONSE_SUPERSEDED
