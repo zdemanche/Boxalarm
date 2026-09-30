@@ -8,7 +8,7 @@ import { createDynamoClient, readAlertingConfig } from '../eligibility/dynamoCli
 import { logError, logInfo } from '../dispatches/logger.js';
 import { ingestCadDispatch } from './ingest.js';
 import { emitCadMetric } from './metrics.js';
-import { claimReplayToken, releaseReplayToken } from './replayGuard.js';
+import { isReplayMarked } from './replayGuard.js';
 import { loadCadSource, parseSourceKeyId } from './sourceCopy.js';
 import { REPLAY_TTL_SECONDS, isFreshTimestamp, verifySignature } from './webhookAuth.js';
 import { getWebhookKeys } from './webhookKeys.js';
@@ -23,7 +23,8 @@ import { getWebhookKeys } from './webhookKeys.js';
  *   1. source lookup from X-Boxalarm-Source (`{deptId}.{sourceId}`) in CAD_INGRESS_COPY
  *   2. timestamp within +-300 s
  *   3. signature over `${timestamp}.${rawBody}`, constant time, current or previous key
- *   4. replay put on the signature (409 on a replay)
+ *   4. replay check on the signature (409 on a replay; the marker is written atomically with
+ *      the dispatch in step 5, so the check is re-made there)
  *   5. only then parse the body and write the dispatch (ingest.ts)
  * Every failure of 1-3 is the same generic 401 and a CadIngressAuthFailed{Reason} count: the
  * response never says which check failed. FAIL CLOSED - an unauthenticated request never
@@ -177,15 +178,11 @@ export const handler: Handler<APIGatewayProxyEventV2, APIGatewayProxyStructuredR
   );
   if (!signature) return reject('BadSignature', { keyId: keyIdHeader });
 
-  // 4. Replay.
-  const replay = { deptId: key.deptId, sourceId: source.sourceId, token: signature };
+  // 4. Replay: an early read-only answer. The marker itself is written inside the dispatch
+  // transaction (step 5), so a failed or killed write never strands it (chain review M3).
+  const replayRef = { deptId: key.deptId, sourceId: source.sourceId, token: signature };
   try {
-    const claim = await claimReplayToken(client, tableName, {
-      ...replay,
-      nowSeconds,
-      ttlSeconds: REPLAY_TTL_SECONDS,
-    });
-    if (claim === 'replay') {
+    if (await isReplayMarked(client, tableName, replayRef, nowSeconds)) {
       emitCadMetric('CadIngressReplayRejected', { Channel: CHANNEL });
       logInfo('cadIngress.webhook.replay', { traceId, keyId: keyIdHeader });
       return problem(409, 'Conflict', traceId);
@@ -194,7 +191,7 @@ export const handler: Handler<APIGatewayProxyEventV2, APIGatewayProxyStructuredR
     return unavailable('ReplayCacheUnavailable', error);
   }
 
-  // 5. Authenticated: parse (fail open) and write the dispatch.
+  // 5. Authenticated: parse (fail open) and write the dispatch with its replay marker.
   const body = readWebhookBody(rawBody.toString('utf8'));
   try {
     const result = await ingestCadDispatch(client, tableName, {
@@ -204,14 +201,13 @@ export const handler: Handler<APIGatewayProxyEventV2, APIGatewayProxyStructuredR
       text: body.text,
       ...(body.structured ? { structured: body.structured } : {}),
       receivedAt: nowSeconds,
+      replay: { token: signature, ttlSeconds: REPLAY_TTL_SECONDS },
     });
+    if (result.outcome === 'replay') return problem(409, 'Conflict', traceId);
     return result.outcome === 'created'
       ? json(202, { status: 'accepted', dispatchId: result.dispatchId, parse: result.parseStatus })
       : json(200, { status: 'duplicate' });
   } catch (error) {
-    await releaseReplayToken(client, tableName, replay).catch((releaseError: unknown) =>
-      logError('cadIngress.webhook.replayReleaseFailed', releaseError, { traceId }),
-    );
     return unavailable('DispatchWriteUnavailable', error);
   }
 };

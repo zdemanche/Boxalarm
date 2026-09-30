@@ -39,19 +39,34 @@ export function fakeDynamo(table: FakeTable): DynamoDBDocumentClient {
     }
     if (name === 'TransactWriteCommand') {
       if (table.failTransact) return Promise.reject(new Error('dynamo down'));
-      const puts = (input.TransactItems as { Put: { Item: Record<string, unknown> } }[]).map(
-        (entry) => entry.Put.Item,
-      );
-      if (table.items.has(keyOf(puts[0]!))) {
+      const entries = input.TransactItems as {
+        Put: { Item: Record<string, unknown>; ConditionExpression?: string };
+      }[];
+      // Every conditional Put here is attribute_not_exists on its key (an expired lock or
+      // marker, per its own expiry field, counts as absent - as the real conditions say).
+      const reasons = entries.map((entry) => {
+        const existing = table.items.get(keyOf(entry.Put.Item));
+        const expired =
+          existing !== undefined &&
+          ((typeof existing.ttl === 'number' &&
+            entry.Put.Item.entityType === 'CAD_REPLAY_MARKER' &&
+            existing.ttl <= Number(entry.Put.Item.createdAt)) ||
+            (typeof existing.expiresAt === 'number' &&
+              existing.expiresAt <= Number(entry.Put.Item.createdAt)));
+        return entry.Put.ConditionExpression && existing && !expired
+          ? { Code: 'ConditionalCheckFailed' }
+          : { Code: 'None' };
+      });
+      if (reasons.some((r) => r.Code !== 'None')) {
         return Promise.reject(
           new TransactionCanceledException({
             message: 'x',
             $metadata: {},
-            CancellationReasons: [{ Code: 'ConditionalCheckFailed' }],
+            CancellationReasons: reasons,
           }),
         );
       }
-      for (const item of puts) table.items.set(keyOf(item), item);
+      for (const entry of entries) table.items.set(keyOf(entry.Put.Item), entry.Put.Item);
       return Promise.resolve({});
     }
     return Promise.reject(new Error(`unexpected ${name}`));

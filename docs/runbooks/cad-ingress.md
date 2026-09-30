@@ -33,7 +33,7 @@ A saved change reaches ingress in seconds. If `…-alerting-cad-source-copy-dlq-
 |---|---|---|
 | `…-alerting-cad-auth-failed` (3 in 5 min; also chief) | Messages failed authentication and did not page. A forgery attempt, or a genuine source that is misconfigured | Logs: `cadIngress.webhook.authFailed` / `cadIngress.email.quarantined` with `reason`. If it is the real CAD, dispatches are NOT reaching the app: make sure the crew is paged by radio, then fix (below) |
 | `…-alerting-cad-quarantined` (also chief) | An email failed authentication and was kept | Read the log line's `quarantine` S3 location. Download with `aws s3 cp` (you need `kms:Decrypt` on `alias/boxalarm-<env>-cad-mail`). Never forward it to the app |
-| `…-alerting-cad-replay-rejected` | A webhook signature or email was seen twice | A CAD retry that re-sent identical bytes, or a replay attack. One-off after a CAD network blip is expected |
+| `…-alerting-cad-replay-rejected` | A webhook signature or email identical to one already written was refused | The replay marker commits in the same transaction as the dispatch, so the original paged. A CAD retry of identical bytes after a timeout, or a replay attack |
 | `…-alerting-cad-rejected` | A dependency failed (503 to the CAD, or an email Lambda retry), or a webhook body was too large | The CAD retries a webhook; Lambda retries an email twice. Check the ingress Lambda logs |
 | `…-alerting-cad-raw-fallback` (also chief) | A dispatch paged as raw text | The page went. Fix the template: paste the dispatch into Settings → CAD sources → Test parse |
 | `…-alerting-cad-webhook-errors` / `-throttles` | The webhook Lambda is failing or at its reserved concurrency (5) | A flood or a retry storm; the API stage throttle is 10 rps. Check `/aws/apigateway/boxalarm-<env>-cad-ingress-api-access` for source IPs |
@@ -113,5 +113,4 @@ Negative check (safe on prod): send the same text from a personal address that i
 - **No test flag.** See above: a CAD test message is a real page.
 - **One active SES receipt rule set per account and region.** Activating `boxalarm-<env>-cad-ingress` replaces any other active set in the account.
 - **Mail with oversized attachments** (over 10 MiB) is refused (`TooLarge`) rather than paged; CAD dispatch mail is text.
-- **A replay marker is claimed before the dispatch write.** If that write fails the marker is released so the CAD's identical retry is accepted; if releasing also fails, an identical retry within 15 minutes is refused as a replay (a re-signed retry, which most CADs send, is not).
 - **Parser patterns** are regular expressions validated on save (no nested quantifiers, at most 200 characters, input capped at 16 KiB); there is no execution timeout.

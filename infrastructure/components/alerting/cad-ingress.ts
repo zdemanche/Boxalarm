@@ -698,7 +698,7 @@ export class CadIngress extends pulumi.ComponentResource {
       cadAlarm(
         "replay-rejected",
         "CadIngressReplayRejected",
-        "A CAD message was replayed (same webhook signature, or same email Message-ID and DKIM signature). It did not page again.",
+        "A CAD message identical to one already WRITTEN was refused (same webhook signature, or same email Message-ID and DKIM signature). The marker commits in the same transaction as the dispatch, so the original did page; this is a sender retry of identical bytes or a replay attempt. Several in a row from an unknown sender: treat as an attack.",
         [args.pageTopicArn],
       ),
       cadAlarm(

@@ -261,12 +261,47 @@ describe('CAD webhook handler', () => {
     expect(metric('CadIngressAuthFailed', 'NoActiveKey')).toBe(true);
   });
 
-  it('releases the replay marker when the dispatch write fails, so the retry is not a replay', async () => {
+  it('a failed dispatch write leaves no replay marker (atomic), so the identical retry pages exactly once', async () => {
     table.failTransact = true;
     expect((await call(webhookEvent(DISPATCH))).statusCode).toBe(503);
     expect([...table.items.values()].some((i) => i.entityType === 'CAD_REPLAY_MARKER')).toBe(false);
     table.failTransact = false;
     expect((await call(webhookEvent(DISPATCH))).statusCode).toBe(202);
+    expect((await call(webhookEvent(DISPATCH))).statusCode).toBe(409);
+    expect(alerts()).toHaveLength(1);
+  });
+
+  it('writes the replay marker in the SAME transaction as the dispatch', async () => {
+    expect((await call(webhookEvent(DISPATCH))).statusCode).toBe(202);
+    const marker = [...table.items.values()].find((i) => i.entityType === 'CAD_REPLAY_MARKER');
+    const alert = alerts()[0];
+    expect(marker?.createdAt).toBe(alert?.createdAt);
+  });
+
+  it('a replay racing past the early check is still refused by the transaction condition', async () => {
+    const replayGuard = await import('./replayGuard.js');
+    expect((await call(webhookEvent(DISPATCH))).statusCode).toBe(202);
+    vi.spyOn(replayGuard, 'isReplayMarked').mockResolvedValue(false);
+    // The module under test imported the original binding; drop it by deleting the marker's
+    // early-check visibility: simulate by removing then re-adding is not possible, so assert
+    // via ingest directly.
+    const { ingestCadDispatch } = await import('./ingest.js');
+    const { toVerifiedDeptId } = await import('@boxalarm/dept-scope');
+    const { toCadSource } = await import('./sourceCopy.js');
+    const source = toCadSource(COPY.sources[0])!;
+    const marker = [...table.items.values()].find((i) => i.entityType === 'CAD_REPLAY_MARKER')!;
+    const token = String(marker.pk).split('#').pop()!;
+    const { fakeDynamo: fake } = await import('./__fixtures__/fakeTable.js');
+    const result = await ingestCadDispatch(fake(table), 'alerting', {
+      deptId: toVerifiedDeptId({ deptId: 'nichols-fd' }),
+      source,
+      channel: 'cad-webhook',
+      text: 'INC: 2026-99\nADDR: 9 OTHER ST',
+      receivedAt: NOW,
+      replay: { token, ttlSeconds: 900 },
+    });
+    expect(result.outcome).toBe('replay');
+    expect(alerts()).toHaveLength(1);
   });
 });
 

@@ -22,6 +22,12 @@ export interface CreateManualDispatchInput {
   readonly testDelivery?: 'deliver' | 'validate';
   /** CAD ingress only (cadIngress/ingest.ts): which authenticated source and how it parsed. */
   readonly cad?: CadDispatchTags;
+  /**
+   * CAD ingress only: the replay marker (cadIngress/replayGuard.ts), written as a conditional
+   * item of THIS transaction so marker and dispatch commit together or not at all - a failed
+   * write can never leave a marker behind that refuses the sender's retry (chain review M3).
+   */
+  readonly replayMarker?: Record<string, unknown> & { readonly pk: string; readonly sk: string };
 }
 
 /**
@@ -40,7 +46,10 @@ export interface CadDispatchTags {
 }
 
 export type CreateManualDispatchResult =
-  { readonly outcome: 'created'; readonly dispatchId: string } | { readonly outcome: 'duplicate' };
+  | { readonly outcome: 'created'; readonly dispatchId: string }
+  | { readonly outcome: 'duplicate' }
+  /** The replay marker already existed: this exact message was already written. */
+  | { readonly outcome: 'replay' };
 
 const LOCK_ITEM_INDEX = 0;
 const TEST_AUDIT_TTL_SECONDS = 60 * 60 * 24 * 365;
@@ -162,14 +171,35 @@ export async function createManualDispatch(
               },
             },
           ]),
+      ...(input.replayMarker
+        ? [
+            {
+              Put: {
+                TableName: tableName,
+                Item: input.replayMarker,
+                // An expired marker the TTL sweeper has not deleted yet is no marker.
+                ConditionExpression: 'attribute_not_exists(pk) OR #ttl <= :replayNow',
+                ExpressionAttributeNames: { '#ttl': 'ttl' },
+                ExpressionAttributeValues: { ':replayNow': input.replayMarker.createdAt },
+              },
+            },
+          ]
+        : []),
     ],
   });
+  const replayIndex = (command.input.TransactItems?.length ?? 0) - 1;
 
   try {
     await client.send(command);
     return { outcome: 'created', dispatchId };
   } catch (error) {
     if (error instanceof TransactionCanceledException) {
+      if (
+        input.replayMarker &&
+        error.CancellationReasons?.[replayIndex]?.Code === 'ConditionalCheckFailed'
+      ) {
+        return { outcome: 'replay' };
+      }
       const lockReason = error.CancellationReasons?.[LOCK_ITEM_INDEX];
       if (lockReason?.Code === 'ConditionalCheckFailed') {
         logInfo('dispatches.create.duplicate', {

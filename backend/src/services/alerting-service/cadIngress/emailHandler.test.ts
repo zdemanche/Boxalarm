@@ -263,13 +263,15 @@ describe('CAD email handler', () => {
     expect(table.items.size).toBe(1);
   });
 
-  it('releases the replay marker and throws when the dispatch write fails', async () => {
+  it('a failed dispatch write throws and leaves no marker; the async retry pages exactly once', async () => {
     table.failTransact = true;
     await expect(run()).rejects.toThrow();
     expect([...table.items.values()].some((i) => i.entityType === 'CAD_REPLAY_MARKER')).toBe(false);
     table.failTransact = false;
-    await run();
+    await run(); // Lambda's retry of the identical event
+    await run(); // and a genuine second delivery of it
     expect(alerts()).toHaveLength(1);
+    expect(metric('CadIngressReplayRejected')).toBe(true);
   });
 });
 

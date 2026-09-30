@@ -160,7 +160,8 @@ export const handler: Handler<DispatchEvent, APIGatewayProxyStructuredResultV2> 
       dispatchedAt: Math.floor(Date.now() / 1000),
     });
 
-    if (result.outcome === 'duplicate') {
+    // 'replay' cannot occur here (no replay marker is passed); it is handled as a duplicate.
+    if (result.outcome !== 'created') {
       emitIngressMetric('Rejected', 'DuplicateSubmission');
       return problemResponse({ status: 409, title: 'Duplicate dispatch submission', traceId });
     }

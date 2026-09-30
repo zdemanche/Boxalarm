@@ -220,8 +220,9 @@ describe('CAD webhook -> DISPATCH_ALERT -> stream fan-out pages every member at 
       text: 'INC: 2026-4471\nTIME: 09/30/2026 03:12\nTYPE: STRUCTURE FIRE\nADDR: 123 MAIN ST, NICHOLS',
     });
     const { handler: webhook } = await import('./webhookHandler.js');
+    const first = signedEvent(body);
     const accepted = (await webhook(
-      signedEvent(body),
+      first,
       {} as never,
       () => undefined,
     )) as APIGatewayProxyStructuredResultV2;
@@ -282,9 +283,10 @@ describe('CAD webhook -> DISPATCH_ALERT -> stream fan-out pages every member at 
     expect(resend.statusCode).toBe(200);
     expect(await dispatchAlerts()).toHaveLength(1);
 
-    // And the identical request replayed is refused outright.
+    // And the identical first request replayed is refused outright: its marker committed with
+    // the dispatch.
     const replay = (await webhook(
-      signedEvent(body, Math.floor(Date.now() / 1000) + 1),
+      first,
       {} as never,
       () => undefined,
     )) as APIGatewayProxyStructuredResultV2;

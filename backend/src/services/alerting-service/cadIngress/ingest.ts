@@ -16,6 +16,7 @@ import {
 import { createManualDispatch } from '../dispatches/repository.js';
 import { logInfo } from '../dispatches/logger.js';
 import { emitCadMetric, type CadChannel } from './metrics.js';
+import { replayMarkerItem } from './replayGuard.js';
 import type { CadSourceCopy } from './sourceCopy.js';
 
 /**
@@ -45,6 +46,8 @@ export interface CadIngestInput {
   readonly structured?: CadParsedFields;
   /** Epoch seconds. */
   readonly receivedAt: number;
+  /** The authenticated message's replay marker, written in the same transaction. */
+  readonly replay?: { readonly token: string; readonly ttlSeconds: number };
 }
 
 export type CadIngestResult =
@@ -53,7 +56,8 @@ export type CadIngestResult =
       readonly dispatchId: string;
       readonly parseStatus: 'PARSED' | 'RAW';
     }
-  | { readonly outcome: 'duplicate'; readonly parseStatus: 'PARSED' | 'RAW' };
+  | { readonly outcome: 'duplicate'; readonly parseStatus: 'PARSED' | 'RAW' }
+  | { readonly outcome: 'replay'; readonly parseStatus: 'PARSED' | 'RAW' };
 
 function sha256(text: string): string {
   return createHash('sha256').update(text, 'utf8').digest('hex');
@@ -169,7 +173,22 @@ export async function ingestCadDispatch(
       ...(built.fields.incidentNumber ? { incidentNumber: built.fields.incidentNumber } : {}),
       ...(built.fields.dispatchTime ? { dispatchTimeText: built.fields.dispatchTime } : {}),
     },
+    ...(input.replay
+      ? {
+          replayMarker: replayMarkerItem(
+            { deptId, sourceId: source.sourceId, token: input.replay.token },
+            input.receivedAt,
+            input.replay.ttlSeconds,
+          ),
+        }
+      : {}),
   });
+
+  if (result.outcome === 'replay') {
+    emitCadMetric('CadIngressReplayRejected', { Channel: channel });
+    logInfo('cadIngress.replay', { deptId, sourceId: source.sourceId, channel });
+    return { outcome: 'replay', parseStatus: built.parseStatus };
+  }
 
   if (result.outcome === 'duplicate') {
     emitCadMetric('CadIngressDuplicate', { Channel: channel });

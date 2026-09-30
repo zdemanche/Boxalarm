@@ -15,7 +15,7 @@ import {
 import { ingestCadDispatch } from './ingest.js';
 import { emitCadMetric } from './metrics.js';
 import { parseEmail } from './mime.js';
-import { claimReplayToken, releaseReplayToken } from './replayGuard.js';
+import { isReplayMarked } from './replayGuard.js';
 import { loadCadSource, parseRecipientLocalPart, type CadSourceCopy } from './sourceCopy.js';
 
 /**
@@ -29,7 +29,8 @@ import { loadCadSource, parseRecipientLocalPart, type CadSourceCopy } from './so
  * message's body is read or logged.
  *
  * Order: recipient -> source (the department comes from here) -> SES verdicts -> raw message
- * -> From + DKIM d= allowlist -> freshness -> replay put -> only then parse and write.
+ * -> From + DKIM d= allowlist -> freshness -> replay check -> parse and write (the replay
+ * marker commits in the same transaction as the dispatch).
  * A dependency failure throws, so Lambda's async retries (then the alarmed on-failure queue)
  * take over; an authentication failure returns normally - retrying it cannot succeed.
  */
@@ -137,39 +138,30 @@ async function processRecord(record: SESEventRecord, config: MailConfig): Promis
     dmarc: receipt.dmarcVerdict?.status ?? 'NONE',
   });
 
-  // 6. Replay.
-  const replay = {
+  // 6. Replay: early read-only answer; the marker is written inside the dispatch transaction
+  // (step 7), so a failed write can never leave it behind to swallow the retry (chain M3).
+  const replayRef = {
     deptId: target.deptId,
     sourceId: source.sourceId,
     token: emailReplayToken(email),
   };
-  const claim = await claimReplayToken(client, tableName, {
-    ...replay,
-    nowSeconds,
-    ttlSeconds: EMAIL_REPLAY_TTL_SECONDS,
-  });
-  if (claim === 'replay') {
+  if (await isReplayMarked(client, tableName, replayRef, nowSeconds)) {
     emitCadMetric('CadIngressReplayRejected', { Channel: CHANNEL });
     logInfo('cadIngress.email.replay', { sesMessageId, sourceId: source.sourceId });
     return;
   }
 
-  // 7. Authenticated: parse (fail open) and write the dispatch.
-  try {
-    const result = await ingestCadDispatch(client, tableName, {
-      deptId: target.deptId,
-      source,
-      channel: CHANNEL,
-      text: email.text,
-      receivedAt: nowSeconds,
-    });
-    logInfo('cadIngress.email.processed', { sesMessageId, outcome: result.outcome });
-  } catch (error) {
-    await releaseReplayToken(client, tableName, replay).catch((releaseError: unknown) =>
-      logError('cadIngress.email.replayReleaseFailed', releaseError, { sesMessageId }),
-    );
-    throw error;
-  }
+  // 7. Authenticated: parse (fail open) and write the dispatch with its replay marker. A write
+  // failure throws for Lambda's async retry; nothing was committed, so the retry is processed.
+  const result = await ingestCadDispatch(client, tableName, {
+    deptId: target.deptId,
+    source,
+    channel: CHANNEL,
+    text: email.text,
+    receivedAt: nowSeconds,
+    replay: { token: replayRef.token, ttlSeconds: EMAIL_REPLAY_TTL_SECONDS },
+  });
+  logInfo('cadIngress.email.processed', { sesMessageId, outcome: result.outcome });
 }
 
 export const handler = async (event: SESEvent): Promise<void> => {

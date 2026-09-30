@@ -1,62 +1,51 @@
-import { ConditionalCheckFailedException } from '@aws-sdk/client-dynamodb';
-import { DeleteCommand, PutCommand, type DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
+import { GetCommand, type DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
 import { buildDeptScopedPk, type VerifiedDeptId } from '@boxalarm/dept-scope';
 
 /**
- * Replay cache on the alerting table: `DEPT#{deptId}#CAD_REPLAY#{sourceId}#{token}` with
- * `attribute_not_exists(pk)` and a TTL (cad-ingress-auth: the webhook's signature hex, TTL
- * 900 s; the email's Message-ID + DKIM b= hash, TTL 24 h). A failed conditional put is a
- * replay and never pages.
+ * Replay cache on the alerting table: `DEPT#{deptId}#CAD_REPLAY#{sourceId}#{token}` with a TTL
+ * (cad-ingress-auth: webhook 900 s, email 24 h).
  *
- * The marker is released when the dispatch write after it fails, so the sender's retry of a
- * genuine dispatch is not refused as a replay; idempotency still stops a double page.
+ * The marker is written as a conditional item INSIDE the dispatch transaction
+ * (createManualDispatch / recordCadUpdate), so marker and dispatch commit together or not at
+ * all (chain review M3): a failed or killed write leaves no marker, and the sender's identical
+ * retry is processed, never refused as a replay of a dispatch that was never written.
+ * `isReplayMarked` is only an early, read-only answer before parsing; the transaction's
+ * condition is what decides.
  */
 
-function replayKey(deptId: VerifiedDeptId, sourceId: string, token: string) {
-  return { pk: buildDeptScopedPk(deptId, 'CAD_REPLAY', sourceId, token), sk: 'REPLAY' };
+export interface ReplayRef {
+  readonly deptId: VerifiedDeptId;
+  readonly sourceId: string;
+  readonly token: string;
 }
 
-export async function claimReplayToken(
-  client: DynamoDBDocumentClient,
-  tableName: string,
-  input: {
-    readonly deptId: VerifiedDeptId;
-    readonly sourceId: string;
-    readonly token: string;
-    readonly nowSeconds: number;
-    readonly ttlSeconds: number;
-  },
-): Promise<'claimed' | 'replay'> {
-  try {
-    await client.send(
-      new PutCommand({
-        TableName: tableName,
-        Item: {
-          ...replayKey(input.deptId, input.sourceId, input.token),
-          entityType: 'CAD_REPLAY_MARKER',
-          deptId: input.deptId,
-          createdAt: input.nowSeconds,
-          ttl: input.nowSeconds + input.ttlSeconds,
-        },
-        ConditionExpression: 'attribute_not_exists(pk)',
-      }),
-    );
-    return 'claimed';
-  } catch (error) {
-    if (error instanceof ConditionalCheckFailedException) return 'replay';
-    throw error;
-  }
+function replayKey(ref: ReplayRef) {
+  return { pk: buildDeptScopedPk(ref.deptId, 'CAD_REPLAY', ref.sourceId, ref.token), sk: 'REPLAY' };
 }
 
-export async function releaseReplayToken(
+export function replayMarkerItem(
+  ref: ReplayRef,
+  nowSeconds: number,
+  ttlSeconds: number,
+): Record<string, unknown> & { readonly pk: string; readonly sk: string } {
+  return {
+    ...replayKey(ref),
+    entityType: 'CAD_REPLAY_MARKER',
+    deptId: ref.deptId,
+    createdAt: nowSeconds,
+    ttl: nowSeconds + ttlSeconds,
+  };
+}
+
+export async function isReplayMarked(
   client: DynamoDBDocumentClient,
   tableName: string,
-  input: { readonly deptId: VerifiedDeptId; readonly sourceId: string; readonly token: string },
-): Promise<void> {
-  await client.send(
-    new DeleteCommand({
-      TableName: tableName,
-      Key: replayKey(input.deptId, input.sourceId, input.token),
-    }),
+  ref: ReplayRef,
+  nowSeconds: number,
+): Promise<boolean> {
+  const { Item } = await client.send(
+    new GetCommand({ TableName: tableName, Key: replayKey(ref), ConsistentRead: true }),
   );
+  // DynamoDB TTL deletion lags; an expired marker is no marker.
+  return Item !== undefined && typeof Item.ttl === 'number' && Item.ttl > nowSeconds;
 }
