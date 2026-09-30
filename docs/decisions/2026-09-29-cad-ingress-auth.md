@@ -1,6 +1,6 @@
 # 2026-09-29: CAD ingress authentication — sender auth first, fail closed
 
-**Status:** decided; binding on the CAD ingress build. Nothing described here is built yet.
+**Status:** decided; binding on the CAD ingress build. Built on `feat/cad-ingress` (operations and the test-message procedure: `docs/runbooks/cad-ingress.md`). One tightening over the text below: the email path requires **every** DKIM signing domain on the message to be allowlisted, not just one, because SES reports a single DKIM verdict for the whole message.
 **Context:** `2026-09-29-roadmap-defaults.md` #3 picked two deterministic CAD ingress paths: SES inbound email and a signed JSON webhook. It says the parser "fails open to raw text". Security review M7 (`.analysis/design-review/security-data.md`) points out two attacks:
 - A spoofed email to the ingress address pages the whole volunteer force to a fake address.
 - A replayed webhook re-pages an old call. Dispatch dedup only helps when the same external ID is reused.
