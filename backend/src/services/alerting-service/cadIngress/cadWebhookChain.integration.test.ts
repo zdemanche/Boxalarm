@@ -24,7 +24,11 @@ import type {
 } from 'aws-lambda';
 import { toVerifiedDeptId } from '@boxalarm/dept-scope';
 import { mergeSources, withWebhookKey } from '../../platform-service/cadSources/model.js';
-import { parseChannelEnvelope, type ChannelName } from '../channels/channelEnvelope.js';
+import {
+  parseCadUpdateEnvelope,
+  parseChannelEnvelope,
+  type ChannelName,
+} from '../channels/channelEnvelope.js';
 
 /**
  * The CAD ingress chains end to end against a real DynamoDB (LocalStack) - chain review m6 -
@@ -332,8 +336,12 @@ describe('CAD ingress chains: config -> ingress -> DISPATCH_ALERT -> fan-out -> 
   }
 
   /** The stream fan-out on the DISPATCH_ALERT INSERT; returns what each channel worker parses. */
-  async function fanOut(published: PublishCommandInput[], dispatchId: string) {
-    const alert = await alertById(dispatchId);
+  async function fanOut(
+    published: PublishCommandInput[],
+    dispatchId: string,
+    insertImage?: Record<string, unknown>,
+  ) {
+    const alert = insertImage ?? (await alertById(dispatchId));
     const before = published.length;
     const { handler } = await import('../fanout/handler.js');
     const stream = {
@@ -412,6 +420,46 @@ describe('CAD ingress chains: config -> ingress -> DISPATCH_ALERT -> fan-out -> 
       () => undefined,
     )) as APIGatewayProxyStructuredResultV2;
     expect(replay.statusCode).toBe(409);
+  }, 120_000);
+
+  it('R2-M2: an update committed BEFORE the fan-out batch - tone 1 carries the corrected address, and the UPDATE push waits for fan-out then reaches every paged member', async () => {
+    const wiring = await wire();
+    await saveSourceThroughTheBus();
+    const original = JSON.stringify({ text: 'INC: 2026-5555\nTYPE: ALARM\nADDR: 12 ELM ST' });
+    const created = await postWebhook(original);
+    const { dispatchId } = JSON.parse(created.response.body ?? '{}') as { dispatchId: string };
+    // The stream INSERT image the fan-out batch will carry: the ORIGINAL text.
+    const insertImage = await alertById(dispatchId);
+
+    // The CAD corrects the address seconds later, before the fan-out batch runs.
+    const correction = JSON.stringify({ text: 'INC: 2026-5555\nTYPE: ALARM\nADDR: 21 ELM ST' });
+    expect(
+      JSON.parse(
+        (await postWebhook(correction, Math.floor(Date.now() / 1000) + 1)).response.body ?? '{}',
+      ),
+    ).toMatchObject({ status: 'updated' });
+
+    // The notifier runs before fan-out has completed: it must not finish (async retry).
+    const notice = wiring.notifierInvokes.at(-1) as Record<string, unknown>;
+    const { handler: notifier } = await import('./updateNotifierHandler.js');
+    await expect(notifier(notice as never)).rejects.toThrow('has not completed');
+
+    // Tone 1 from the stale INSERT image still pages the CORRECTED address.
+    const pages = await fanOut(wiring.published, dispatchId, insertImage);
+    expect(pages.length).toBe(MEMBERS.length * 2);
+    for (const page of pages) expect(page.address).toBe('21 ELM ST');
+    expect((await alertById(dispatchId)).fanOutCompletedAt?.N).toBeDefined();
+
+    // The retried notifier now pushes the UPDATE, once, to every member tone 1 paged.
+    const before = wiring.published.length;
+    await notifier(notice as never);
+    await notifier(notice as never);
+    // Parsed by the push worker's own CAD-update parser.
+    const updates = wiring.published
+      .slice(before)
+      .map((input) => parseCadUpdateEnvelope(input.Message ?? '', 'push')!);
+    expect(updates.map((u) => u.memberId).sort()).toEqual([...MEMBERS].sort());
+    expect(updates.every((u) => u.address === '21 ELM ST')).toBe(true);
   }, 120_000);
 
   it('webhook RAW: an unparseable authenticated message pages with its text on sms and push', async () => {

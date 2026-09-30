@@ -21,7 +21,8 @@ import { emitCadMetric } from './metrics.js';
  * (notifyUpdate below) - not from the table stream, which already has its two readers (fan-out,
  * outbox drain); a third would throttle the tone-1 fan-out. Lambda's async retries and the
  * alarmed on-failure queue cover a failed run.
- *  - audience: members already on that dispatch's roster (ROSTER#{memberId}), nobody new;
+ *  - audience: the members tone 1 paged (tone-1 RECEIPT#), once tone-1 fan-out has completed
+ *    (fanOutCompletedAt) - until then it throws and the async retry comes back later;
  *  - push only, non-escalating: no SMS, no voice, no tone ladder, no receipt under RECEIPT#;
  *  - exactly once per update per member: a CADUPDATE#{updateId}#{memberId}#PUSH claim before
  *    publish (sentAt after), the hashed MessageDeduplicationId inside SNS FIFO's window, and
@@ -75,22 +76,27 @@ async function readUpdate(
   };
 }
 
-async function rosterMemberIds(
+/**
+ * Members the tone-1 fan-out actually paged: the distinct members holding a tone-1 RECEIPT#
+ * (`RECEIPT#{memberId}#{channel}#1`). ROSTER# rows are seeded only after the pages go out, so
+ * they were an incomplete audience while fan-out ran (chain review R2-M2).
+ */
+async function toneOneMemberIds(
   ddb: DynamoDBDocumentClient,
   tableName: string,
   deptId: VerifiedDeptId,
   dispatchId: string,
 ): Promise<string[]> {
-  const members: string[] = [];
+  const members = new Set<string>();
   let startKey: Record<string, unknown> | undefined;
   do {
     const page = await ddb.send(
       new QueryCommand({
         TableName: tableName,
-        KeyConditionExpression: 'pk = :pk AND begins_with(sk, :roster)',
+        KeyConditionExpression: 'pk = :pk AND begins_with(sk, :receipt)',
         ExpressionAttributeValues: {
           ':pk': buildDeptScopedPk(deptId, 'DISPATCH', dispatchId),
-          ':roster': 'ROSTER#',
+          ':receipt': 'RECEIPT#',
         },
         ProjectionExpression: 'sk',
         ConsistentRead: true,
@@ -98,12 +104,20 @@ async function rosterMemberIds(
       }),
     );
     for (const item of page.Items ?? []) {
-      const sk = String(item.sk);
-      members.push(sk.slice('ROSTER#'.length));
+      const [, memberId, , tone] = String(item.sk).split('#');
+      if (memberId && tone === '1') members.add(memberId);
     }
     startKey = page.LastEvaluatedKey;
   } while (startKey);
-  return members;
+  return [...members];
+}
+
+/** Thrown while tone-1 fan-out is still running: the async invoke retries later (bounded). */
+export class FanOutNotCompleteError extends Error {
+  constructor(dispatchId: string) {
+    super(`tone-1 fan-out of ${dispatchId} has not completed; retrying the update push later`);
+    this.name = 'FanOutNotCompleteError';
+  }
 }
 
 async function notifyMember(
@@ -187,8 +201,14 @@ async function processUpdate(
     new GetCommand({ TableName: tableName, Key: { pk, sk: 'METADATA' }, ConsistentRead: true }),
   );
   if (!Item || Item.isTest === true) return;
+  // Wait for tone 1 to finish: until then the audience is incomplete, and members paged after
+  // the update already got its content in their tone-1 page (fan-out reads the current record).
+  if (typeof Item.fanOutCompletedAt !== 'number') {
+    emitCadMetric('CadUpdateWaitingForFanOut', {});
+    throw new FanOutNotCompleteError(update.dispatchId);
+  }
   const dispatch = readDispatchAlertText(Item);
-  const members = await rosterMemberIds(ddb, tableName, update.deptId, update.dispatchId);
+  const members = await toneOneMemberIds(ddb, tableName, update.deptId, update.dispatchId);
   const results = await Promise.allSettled(
     members.map((memberId) =>
       notifyMember(ddb, sns, tableName, topicArn, update, dispatch, memberId),

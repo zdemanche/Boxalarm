@@ -27,6 +27,8 @@ export type CadMetric =
   | 'CadIngressUpdated'
   /** The non-escalating UPDATE push was published to a dispatch's roster. */
   | 'CadUpdatePushPublished'
+  /** The notifier found tone-1 fan-out still running and will retry (normal right after a page). */
+  | 'CadUpdateWaitingForFanOut'
   /** Publishing an UPDATE push failed for at least one member (the record retries). */
   | 'CadUpdatePushFailed'
   /** A parser template ran past its deadline (or its worker failed): paged as RAW. */

@@ -39,11 +39,16 @@ describe('CAD update notifier', () => {
           incidentType: 'STRUCTURE FIRE',
           address: '123 MAIN ST',
           isTest: false,
+          fanOutCompletedAt: 1,
         },
       ],
       [`${PK}|UPDATE#${UPDATE_ID}`, UPDATE_ITEM],
-      [`${PK}|ROSTER#mbr-1`, { pk: PK, sk: 'ROSTER#mbr-1' }],
-      [`${PK}|ROSTER#mbr-2`, { pk: PK, sk: 'ROSTER#mbr-2' }],
+      // Tone-1 receipts are the audience (push + sms for mbr-1, push for mbr-2); a tone-2
+      // receipt for mbr-3 does not make mbr-3 a tone-1 member.
+      [`${PK}|RECEIPT#mbr-1#push#1`, { pk: PK, sk: 'RECEIPT#mbr-1#push#1' }],
+      [`${PK}|RECEIPT#mbr-1#sms#1`, { pk: PK, sk: 'RECEIPT#mbr-1#sms#1' }],
+      [`${PK}|RECEIPT#mbr-2#push#1`, { pk: PK, sk: 'RECEIPT#mbr-2#push#1' }],
+      [`${PK}|RECEIPT#mbr-3#push#2`, { pk: PK, sk: 'RECEIPT#mbr-3#push#2' }],
     ]);
     const key = (k: Record<string, unknown>) => `${String(k.pk)}|${String(k.sk)}`;
     const ddb = {
@@ -54,7 +59,7 @@ describe('CAD update notifier', () => {
             return Promise.resolve({ Item: items.get(key(input.Key as Record<string, unknown>)) });
           case 'QueryCommand':
             return Promise.resolve({
-              Items: [...items.values()].filter((i) => String(i.sk).startsWith('ROSTER#')),
+              Items: [...items.values()].filter((i) => String(i.sk).startsWith('RECEIPT#')),
             });
           case 'PutCommand': {
             const item = input.Item as Record<string, unknown>;
@@ -104,7 +109,13 @@ describe('CAD update notifier', () => {
     return handler(notice as never);
   }
 
-  it('pushes one non-escalating UPDATE to each rostered member, push channel only', async () => {
+  it('waits for tone-1 fan-out: without fanOutCompletedAt it throws (async retry) and sends nothing', async () => {
+    items.set(`${PK}|METADATA`, { ...items.get(`${PK}|METADATA`), fanOutCompletedAt: undefined });
+    await expect(run()).rejects.toThrow('has not completed');
+    expect(published).toEqual([]);
+  });
+
+  it('pushes one non-escalating UPDATE to each member tone 1 paged, push channel only', async () => {
     await run();
     expect(published).toHaveLength(2);
     for (const input of published) {
