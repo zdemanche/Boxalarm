@@ -12,6 +12,7 @@ import {
   StatusChip,
   TextInput,
 } from '../../components/ui';
+import { useRidingPositions } from '../../lib/useRidingPositions';
 import { useStations } from '../../lib/useStations';
 import { listMembers } from '../personnel/api';
 import {
@@ -48,6 +49,7 @@ const emptyPosition: CreateShiftPosition = { positionCode: '', requiredQual: '' 
 function CreateShiftForm({ onCreated }: { onCreated: () => void }) {
   const auth = useAuth();
   const { stations, isLoading: stationsLoading } = useStations();
+  const { positions: ridingPositions } = useRidingPositions();
   const [startAt, setStartAt] = useState('');
   const [endAt, setEndAt] = useState('');
   const [stationId, setStationId] = useState('');
@@ -136,15 +138,46 @@ function CreateShiftForm({ onCreated }: { onCreated: () => void }) {
             style={{ display: 'flex', gap: 'var(--bx-space-sm)', border: 'none', padding: 0 }}
           >
             <legend>Position {index + 1}</legend>
-            <TextInput
-              label="Position code"
-              value={position.positionCode}
-              onChange={(e) =>
-                setPositions((prev) =>
-                  prev.map((p, i) => (i === index ? { ...p, positionCode: e.target.value } : p)),
-                )
-              }
-            />
+            {ridingPositions.length > 0 ? (
+              // Pick from the department's riding positions; the position's own required qual
+              // fills in (and can still be changed).
+              <Select
+                label="Position"
+                value={position.positionCode}
+                onChange={(e) => {
+                  const chosen = ridingPositions.find((p) => p.code === e.target.value);
+                  setPositions((prev) =>
+                    prev.map((p, i) =>
+                      i === index
+                        ? {
+                            ...p,
+                            positionCode: e.target.value,
+                            requiredQual: chosen?.requiredQual ?? p.requiredQual ?? '',
+                          }
+                        : p,
+                    ),
+                  );
+                }}
+              >
+                <option value="">No position</option>
+                {ridingPositions.map((option) => (
+                  <option key={option.code} value={option.code}>
+                    {option.label}
+                  </option>
+                ))}
+              </Select>
+            ) : (
+              <TextInput
+                label="Position code"
+                help="Riding positions aren't set up in Settings yet, so enter the position's code."
+                value={position.positionCode}
+                onChange={(e) =>
+                  setPositions((prev) =>
+                    prev.map((p, i) => (i === index ? { ...p, positionCode: e.target.value } : p)),
+                  )
+                }
+              />
+            )}
             <TextInput
               label="Required qual"
               optional

@@ -18,6 +18,12 @@ const server = setupServer(
       { status: 404 },
     ),
   ),
+  http.get('/api/v1/platform/config/RIDING_POSITIONS', () =>
+    HttpResponse.json(
+      { type: 'about:blank', title: 'Not Found', status: 404, traceId: 't' },
+      { status: 404 },
+    ),
+  ),
 );
 beforeAll(() => server.listen());
 afterEach(() => {
@@ -171,4 +177,52 @@ test('a pending swap is approved from its row, by name, with no ids typed', asyn
   await screen.findByText('Swap approved.');
   expect(approvedPath).toBe('/api/v1/personnel/shifts/s-7/swap/1758300000000/approve');
   expect(screen.queryByLabelText('Swap ID')).toBeNull();
+});
+
+test('positions are picked from the riding positions, filling in the required qual', async () => {
+  let posted: Record<string, unknown> | undefined;
+  server.use(
+    http.get('/api/v1/personnel/shifts', () => HttpResponse.json({ shifts: [] })),
+    http.get('/api/v1/platform/config/RIDING_POSITIONS', () =>
+      HttpResponse.json({
+        configType: 'RIDING_POSITIONS',
+        value: {
+          ENGINE: [
+            { code: 'OFFICER', label: 'Officer', requiredQual: 'OFF' },
+            { code: 'DRIVER', label: 'Driver/operator', requiredQual: 'DO' },
+          ],
+          LADDER: [
+            { code: 'DRIVER', label: 'Duplicate driver' },
+            { code: 'TILLER', label: 'Tiller' },
+          ],
+        },
+        version: 1,
+        updatedAt: '2026-01-01T00:00:00.000Z',
+        updatedBy: 'admin',
+      }),
+    ),
+    http.post('/api/v1/personnel/shifts', async ({ request }) => {
+      posted = (await request.json()) as Record<string, unknown>;
+      return HttpResponse.json({ shiftId: 's-9' }, { status: 201 });
+    }),
+  );
+  renderSchedule();
+
+  const user = userEvent.setup();
+  await user.type(await screen.findByLabelText('Start'), '2026-10-01T18:00');
+  await user.type(screen.getByLabelText('End'), '2026-10-02T06:00');
+  await user.type(screen.getByLabelText('Station'), 'STATION-1');
+  const [first] = await screen.findAllByLabelText('Position');
+  expect(screen.queryByLabelText('Position code')).toBeNull();
+  expect(
+    within(first!)
+      .getAllByRole('option')
+      .map((o) => o.textContent),
+  ).toEqual(['No position', 'Officer', 'Driver/operator', 'Tiller']);
+  await user.selectOptions(first!, 'DRIVER');
+  expect((screen.getAllByLabelText(/Required qual/)[0] as HTMLInputElement).value).toBe('DO');
+  await user.click(screen.getByRole('button', { name: 'Create shift' }));
+
+  await waitFor(() => expect(posted).toBeDefined());
+  expect(posted?.positions).toEqual([{ positionCode: 'DRIVER', requiredQual: 'DO' }]);
 });

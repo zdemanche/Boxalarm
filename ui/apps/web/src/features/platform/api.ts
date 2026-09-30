@@ -11,7 +11,8 @@ import type {
 
 export async function getConfig(
   tokens: AuthTokenSource,
-  configType: EditableConfigType,
+  // RIDING_POSITIONS is read here (schedule position picker) but edited elsewhere.
+  configType: EditableConfigType | 'RIDING_POSITIONS',
 ): Promise<ConfigResponse> {
   const response = await apiRequest(`platform/config/${configType}`, tokens);
   return (await response.json()) as ConfigResponse;

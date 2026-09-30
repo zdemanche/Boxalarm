@@ -474,3 +474,65 @@ test('an officer or chief dashboard keeps their own record: mark off, certs, poi
   expect(screen.getByRole('link', { name: 'Mark unavailable' })).toBeTruthy();
   expect(await screen.findByText('17')).toBeTruthy();
 });
+
+test('the apparatus dashboard lists checks due today, open defects and units out of service', async () => {
+  server.use(
+    http.get('/api/v1/apparatus', () =>
+      HttpResponse.json({
+        apparatus: [
+          { apparatusId: 'a-1', unitId: 'E1', type: 'ENGINE', status: 'IN_SERVICE' },
+          {
+            apparatusId: 'a-2',
+            unitId: 'L1',
+            type: 'LADDER',
+            status: 'OUT_OF_SERVICE',
+            outOfService: { reason: 'Brakes', startAt: 1, elapsedSeconds: 60 },
+          },
+        ],
+      }),
+    ),
+    http.get('/api/v1/apparatus/compliance', () =>
+      HttpResponse.json({
+        report: [
+          { unitId: 'E1', expectedChecks: 1, actualChecks: 1, compliant: true },
+          { unitId: 'L1', expectedChecks: 1, actualChecks: 0, compliant: false },
+        ],
+      }),
+    ),
+    http.get('/api/v1/apparatus/E1', () =>
+      HttpResponse.json({
+        apparatusId: 'a-1',
+        unitId: 'E1',
+        type: 'ENGINE',
+        status: 'IN_SERVICE',
+        failedTests: [],
+        openDefects: [
+          {
+            defectId: 'd1',
+            description: 'Cracked mirror',
+            severity: 'MINOR',
+            reportedAt: 1,
+            photoS3Key: null,
+          },
+        ],
+      }),
+    ),
+    http.get('/api/v1/apparatus/L1', () => serverError()),
+  );
+  renderLanding({ sub: 'm1', 'cognito:groups': ['APPARATUS'] });
+
+  const due = await screen.findByRole('list', { name: 'Units not checked today' });
+  expect(due.textContent).toBe('L1 — not checked yet today');
+  const defects = await screen.findByRole('list', { name: 'Open defects' });
+  expect(defects.textContent).toContain('E1 — Note: Cracked mirror');
+  // One unit's defects failed: said so, not shown as "no defects".
+  expect(await screen.findByText('Defects for 1 unit couldn’t load.')).toBeTruthy();
+  const oos = screen.getByRole('list', { name: 'Units out of service' });
+  expect(oos.textContent).toBe('L1 — Brakes');
+});
+
+test('the apparatus to-do is not shown to roles without the compliance read', async () => {
+  renderLanding({ sub: 'm1', 'cognito:groups': ['TRAINING'] });
+  await screen.findByRole('heading', { level: 1 });
+  expect(screen.queryByText('Apparatus to-do')).toBeNull();
+});
