@@ -95,6 +95,18 @@ describe('losap/updateRules handler (entrypoint test)', () => {
     expect(putLosapPointRulesMock).not.toHaveBeenCalled();
   });
 
+  // Security-web MINOR 11: LOSAP point rules are department configuration (CHIEF/ADMIN).
+  it('rejects an OFFICER with 403: LOSAP point rules are chief/admin configuration', async () => {
+    const result = await handler(
+      buildEvent('MEMBER OFFICER', JSON.stringify({ pointsByActivityType: { CALL: 2 } })),
+      {} as never,
+      () => undefined,
+    );
+
+    expect(result).toMatchObject({ statusCode: 403 });
+    expect(putLosapPointRulesMock).not.toHaveBeenCalled();
+  });
+
   it('returns 400 on an invalid body (bad activityType key)', async () => {
     const result = await handler(
       buildEvent('ADMIN', JSON.stringify({ pointsByActivityType: { BBQ: 2 } })),
