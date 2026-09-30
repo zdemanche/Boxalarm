@@ -454,6 +454,22 @@ describe('deviceLossHandler', () => {
     expect(revokeMemberSession).toHaveBeenCalledTimes(status === 202 ? 1 : 0);
   });
 
+  it('a CHIEF may report their own device lost (self is never an escalation)', async () => {
+    const revokeMemberSession = vi.fn().mockResolvedValue(undefined);
+    mockRevocationClient({
+      revokeMemberSession,
+      isProtectedTarget: vi.fn().mockResolvedValue(true),
+    });
+    const { handler } = await import('./deviceLossHandler.js');
+
+    const result = (await handler(
+      buildEvent('CHIEF', JSON.stringify({ memberId: 'admin-1' })),
+    )) as APIGatewayProxyStructuredResultV2;
+
+    expect(result.statusCode).toBe(202);
+    expect(revokeMemberSession).toHaveBeenCalledTimes(1);
+  });
+
   it('fails closed (503) when the target’s groups cannot be read', async () => {
     const revokeMemberSession = vi.fn();
     mockRevocationClient({

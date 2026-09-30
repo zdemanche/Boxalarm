@@ -239,6 +239,20 @@ describe('credentialResetHandler', () => {
     expect(mocks.revokeMemberSession).toHaveBeenCalledTimes(status === 202 ? 1 : 0);
   });
 
+  it('a CHIEF may reset their own password (self is never an escalation)', async () => {
+    const mocks = mockDeps({ isProtectedTarget: vi.fn().mockResolvedValue(true) });
+    const handler = await load();
+
+    const result = await handler(buildEvent({ memberId: 'chief-2' }), {
+      ...ADMIN,
+      sub: 'chief-2',
+      'cognito:groups': 'CHIEF',
+    });
+
+    expect(result.statusCode).toBe(202);
+    expect(mocks.resetMemberPassword).toHaveBeenCalledTimes(1);
+  });
+
   it('fails closed (503) when the target’s groups cannot be read', async () => {
     const mocks = mockDeps({
       isProtectedTarget: vi.fn().mockRejectedValue(new Error('throttled')),

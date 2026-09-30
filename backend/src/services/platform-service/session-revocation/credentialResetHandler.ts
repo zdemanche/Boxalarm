@@ -129,7 +129,10 @@ async function resetCredentials(
     });
     return serviceUnavailableProblem(traceId);
   }
-  if (protectedTarget && !mayActOnProtectedTarget(principal['cognito:groups'])) {
+  // Ending your own sessions is never an escalation (a non-admin chief whose own phone is
+  // lost must not wait for an admin).
+  const selfTarget = memberId === principal.sub;
+  if (protectedTarget && !selfTarget && !mayActOnProtectedTarget(principal['cognito:groups'])) {
     log('credentialReset.denied', { reason: 'ProtectedTarget', memberId, traceId });
     return {
       statusCode: 403,

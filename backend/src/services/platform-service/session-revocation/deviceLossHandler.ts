@@ -184,7 +184,14 @@ async function revokeLostDevice(
       traceId,
     );
   }
-  if (protectedTarget && !mayActOnProtectedTarget(authorizerContext['cognito:groups'])) {
+  // Ending your own sessions is never an escalation (a non-admin chief whose own phone is
+  // lost must not wait for an admin).
+  const selfTarget = memberId === authorizerContext.sub;
+  if (
+    protectedTarget &&
+    !selfTarget &&
+    !mayActOnProtectedTarget(authorizerContext['cognito:groups'])
+  ) {
     console.error(
       JSON.stringify({
         event: 'deviceLossRevocation.denied',
