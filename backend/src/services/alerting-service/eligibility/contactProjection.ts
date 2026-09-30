@@ -1,5 +1,6 @@
 import { ConditionalCheckFailedException } from '@aws-sdk/client-dynamodb';
 import { GetCommand, UpdateCommand, type DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
+import { normalizePhoneE164 } from './phone.js';
 import type { ContactChannelSnapshot } from './resolvePushTarget.js';
 
 /**
@@ -47,6 +48,13 @@ function isPushEntry(entry: unknown): boolean {
  * `phoneNumber`. Voice dials the same number (channelEnvelope.resolveChannelTarget).
  */
 export function phoneContactEntries(phone: string): ContactChannelSnapshot[] {
+  // Callers pass E.164 (memberUpdatedHandler normalises); anything else is not a sendable
+  // target and yields no entries rather than a page the vendor refuses.
+  const e164 = normalizePhoneE164(phone);
+  if (!e164) {
+    return [];
+  }
+  phone = e164;
   return [
     { channel: SMS_CHANNEL, phoneNumber: phone, valid: true },
     { channel: VOICE_CHANNEL, phoneNumber: phone, valid: true },

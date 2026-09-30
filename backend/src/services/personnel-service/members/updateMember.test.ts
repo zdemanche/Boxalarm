@@ -65,7 +65,7 @@ describe('updateMember handler', () => {
     const result = await wrapped(
       buildEvent(
         'mbr-1',
-        JSON.stringify({ phone: '555-0100' }),
+        JSON.stringify({ phone: '(270) 555-0142' }),
         { authorization: 'Bearer token' },
         SELF,
       ),
@@ -78,7 +78,8 @@ describe('updateMember handler', () => {
       phone: string;
     };
     expect(body.memberId).toBe('mbr-1');
-    expect(body.phone).toBe('555-0100');
+    // Stored and emitted in E.164 (review MAJOR-3).
+    expect(body.phone).toBe('+12705550142');
     expect(typeof body.updatedAt).toBe('number');
 
     const call = docSend.mock.calls[0]?.[0] as {
@@ -109,7 +110,7 @@ describe('updateMember handler', () => {
     const result = await wrapped(
       buildEvent(
         'mbr-2',
-        JSON.stringify({ phone: '555-0100' }),
+        JSON.stringify({ phone: '(270) 555-0142' }),
         { authorization: 'Bearer token' },
         SELF,
       ),
@@ -141,7 +142,7 @@ describe('updateMember handler', () => {
       const result = await wrapped(
         buildEvent(
           'mbr-1',
-          JSON.stringify({ phone: '555-0100' }),
+          JSON.stringify({ phone: '(270) 555-0142' }),
           { authorization: 'Bearer token' },
           SELF,
         ),
@@ -161,7 +162,7 @@ describe('updateMember handler', () => {
       const result = await wrapped(
         buildEvent(
           'mbr-2',
-          JSON.stringify({ phone: '555-0100' }),
+          JSON.stringify({ phone: '(270) 555-0142' }),
           { authorization: 'Bearer token' },
           SELF,
         ),
@@ -181,7 +182,7 @@ describe('updateMember handler', () => {
       const result = await wrapped(
         buildEvent(
           'mbr-2',
-          JSON.stringify({ phone: '555-0100' }),
+          JSON.stringify({ phone: '(270) 555-0142' }),
           { authorization: 'Bearer token' },
           { ...SELF, 'cognito:groups': 'CHIEF' },
         ),
@@ -206,7 +207,7 @@ describe('updateMember handler', () => {
     const result = await wrapped(
       buildEvent(
         'mbr-1',
-        JSON.stringify({ phone: '555-0100' }),
+        JSON.stringify({ phone: '(270) 555-0142' }),
         { authorization: 'Bearer token' },
         SELF,
       ),
@@ -266,7 +267,7 @@ describe('updateMember handler', () => {
     const result = await wrapped(
       buildEvent(
         'mbr-404',
-        JSON.stringify({ phone: '555-0100' }),
+        JSON.stringify({ phone: '(270) 555-0142' }),
         { authorization: 'Bearer token' },
         { ...SELF, sub: 'mbr-404' },
       ),
@@ -289,7 +290,7 @@ describe('updateMember handler', () => {
       wrapped(
         buildEvent(
           'mbr-1',
-          JSON.stringify({ phone: '555-0100' }),
+          JSON.stringify({ phone: '(270) 555-0142' }),
           { authorization: 'Bearer token' },
           SELF,
         ),
@@ -319,7 +320,7 @@ describe('updateMember handler', () => {
     await wrapped(
       buildEvent(
         'mbr-1',
-        JSON.stringify({ phone: '555-0100' }),
+        JSON.stringify({ phone: '(270) 555-0142' }),
         { authorization: 'Bearer token' },
         SELF,
       ),
@@ -350,12 +351,61 @@ describe('updateMember handler', () => {
       wrapped(
         buildEvent(
           'mbr-1',
-          JSON.stringify({ phone: '555-0100' }),
+          JSON.stringify({ phone: '(270) 555-0142' }),
           { authorization: 'Bearer token' },
           SELF,
         ),
       ),
     ).rejects.toThrow('PLATFORM_TABLE_NAME is required and was not set');
     expect(docSend).not.toHaveBeenCalled();
+  });
+
+  it('rejects a phone it cannot read as a US or international number, with a clear 400 and no write', async () => {
+    const { createHandler } = await import('./updateMember.js');
+    const docSend = vi.fn().mockResolvedValue({});
+    const wrapped = createHandler({
+      client: fakeDocClient(docSend),
+      vpClient: fakeVpClient('ALLOW'),
+    });
+
+    const result = await wrapped(
+      buildEvent(
+        'mbr-1',
+        JSON.stringify({ phone: '555-0100' }),
+        { authorization: 'Bearer token' },
+        SELF,
+      ),
+    );
+
+    expect(result).toMatchObject({ statusCode: 400 });
+    expect((JSON.parse((result as { body: string }).body) as { detail: string }).detail).toContain(
+      '(270) 555-0142',
+    );
+    expect(docSend).not.toHaveBeenCalled();
+  });
+
+  it('emits the normalised E.164 phone on personnel.member.updated', async () => {
+    const { createHandler } = await import('./updateMember.js');
+    const docSend = vi.fn().mockResolvedValue({});
+    const wrapped = createHandler({
+      client: fakeDocClient(docSend),
+      vpClient: fakeVpClient('ALLOW'),
+    });
+
+    await wrapped(
+      buildEvent(
+        'mbr-1',
+        JSON.stringify({ phone: '270.555.0142' }),
+        { authorization: 'Bearer token' },
+        SELF,
+      ),
+    );
+
+    const items = (
+      docSend.mock.calls[0]?.[0] as {
+        input: { TransactItems: Array<{ Put?: { Item: { payload?: { phone?: string } } } }> };
+      }
+    ).input.TransactItems;
+    expect(items.find((item) => item.Put)?.Put?.Item.payload?.phone).toBe('+12705550142');
   });
 });

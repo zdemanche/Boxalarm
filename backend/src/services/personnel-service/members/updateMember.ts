@@ -14,6 +14,7 @@ import {
 } from '@boxalarm/authz';
 import { buildDeptScopedPk, toVerifiedDeptId } from '@boxalarm/dept-scope';
 import { readMemberServiceConfig } from '../config.js';
+import { INVALID_PHONE_MESSAGE, normalizePhoneE164 } from '../lib/phone.js';
 
 const UPDATABLE_FIELDS = ['phone', 'email', 'firstName', 'lastName'] as const;
 type UpdatableField = (typeof UPDATABLE_FIELDS)[number];
@@ -91,12 +92,21 @@ async function updateMemberProfile(
     return badRequestProblem(traceId, 'memberId path parameter is required.');
   }
 
-  const updates = parseBody(event.body);
-  if (!updates) {
+  const parsed = parseBody(event.body);
+  if (!parsed) {
     return badRequestProblem(
       traceId,
       'Request body must be JSON with at least one of phone, email, firstName, lastName as a non-empty string.',
     );
+  }
+  // Stored in E.164: the alerting plane texts and dials exactly this string (lib/phone.ts).
+  let updates: UpdateMemberBody = parsed;
+  if (parsed.phone !== undefined) {
+    const phone = normalizePhoneE164(parsed.phone);
+    if (!phone) {
+      return badRequestProblem(traceId, INVALID_PHONE_MESSAGE);
+    }
+    updates = { ...parsed, phone };
   }
 
   const deptId = toVerifiedDeptId(principal);

@@ -171,4 +171,24 @@ describe('members/create handler (entrypoint test)', () => {
     await handler(buildEvent(VALID_BODY, 'MEMBER'), {} as never, () => undefined);
     expect(createLoginMock).not.toHaveBeenCalled();
   });
+
+  // Review MAJOR-3: SMS and voice go to exactly this string, so it is stored in E.164.
+  it('normalises a national phone to E.164 before creating the member', async () => {
+    createMemberMock.mockResolvedValueOnce({ memberId: 'm1', deptId: 'NICHOLS' });
+    const body = JSON.stringify({ ...JSON.parse(VALID_BODY), phone: '(270) 555-0142' });
+    const result = await handler(buildEvent(body, 'ADMIN'), {} as never, () => undefined);
+    expect(result).toMatchObject({ statusCode: 201 });
+    expect(createMemberMock.mock.calls[0]?.[2]).toMatchObject({ phone: '+12705550142' });
+  });
+
+  it('rejects an unreadable phone with a 400 that says what is accepted, creating no login', async () => {
+    const body = JSON.stringify({ ...JSON.parse(VALID_BODY), phone: '555-0142' });
+    const result = await handler(buildEvent(body, 'ADMIN'), {} as never, () => undefined);
+    expect(result).toMatchObject({ statusCode: 400 });
+    expect((JSON.parse((result as { body: string }).body) as { detail: string }).detail).toContain(
+      '(270) 555-0142',
+    );
+    expect(createLoginMock).not.toHaveBeenCalled();
+    expect(createMemberMock).not.toHaveBeenCalled();
+  });
 });

@@ -1,10 +1,11 @@
 import { ConditionalCheckFailedException } from '@aws-sdk/client-dynamodb';
 import { UpdateCommand } from '@aws-sdk/lib-dynamodb';
 import { buildDeptScopedPk, toVerifiedDeptId } from '@boxalarm/dept-scope';
-import { emitEmf } from '@boxalarm/metrics';
+import { emitEmf, emitOutcomeMetric } from '@boxalarm/metrics';
 import type { SQSBatchResponse, SQSEvent } from 'aws-lambda';
 import { createDynamoClient, readAlertingConfig } from './dynamoClient.js';
 import { applyContactUpdate, pushEntriesFrom, type ContactUpdate } from './contactProjection.js';
+import { normalizePhoneE164 } from './phone.js';
 
 const LATENCY_METRIC_NAMESPACE = 'Boxalarm/AlertingEligibility';
 
@@ -180,12 +181,33 @@ function buildRolesExpression(roles: readonly string[], memberId: string, eventT
   };
 }
 
+/**
+ * The member's phone in E.164, or undefined. Personnel stores E.164; a number stored before it
+ * did is normalised here, and one that cannot be parsed is not projected - an SMS vendor
+ * refuses it on every page - but counted (InvalidPhoneSkipped) and logged, never silent.
+ */
+function projectablePhone(payload: MemberUpdatedPayload): string | undefined {
+  if (typeof payload.phone !== 'string' || payload.phone.trim().length === 0) {
+    return undefined;
+  }
+  const phone = normalizePhoneE164(payload.phone);
+  if (!phone) {
+    console.error(
+      JSON.stringify({
+        event: 'alerting.eligibility.phone_invalid',
+        service: 'alerting-service',
+        correlationId: payload.memberId,
+        memberId: payload.memberId,
+      }),
+    );
+    emitOutcomeMetric(LATENCY_METRIC_NAMESPACE, 'InvalidPhoneSkipped');
+  }
+  return phone;
+}
+
 /** The contact groups this event carries, or undefined when it carries neither. */
 function contactUpdateFrom(payload: MemberUpdatedPayload): ContactUpdate | undefined {
-  const phone =
-    typeof payload.phone === 'string' && payload.phone.trim().length > 0
-      ? payload.phone.trim()
-      : undefined;
+  const phone = projectablePhone(payload);
   const pushEntries = Array.isArray(payload.contactChannels)
     ? pushEntriesFrom(payload.contactChannels)
     : undefined;

@@ -14,6 +14,7 @@ import {
   readMemberLoginConfig,
 } from '../lib/memberLogin.js';
 import { toVerifiedDeptId } from '@boxalarm/dept-scope';
+import { INVALID_PHONE_MESSAGE, normalizePhoneE164 } from '../lib/phone.js';
 
 const REQUIRED_FIELDS = [
   'firstName',
@@ -44,6 +45,12 @@ function parseCreateInput(body: string | undefined): NewMemberInput {
     }
     input[field] = value;
   }
+  // Stored in E.164: the alerting plane texts and dials exactly this string (lib/phone.ts).
+  const phone = normalizePhoneE164(input.phone!);
+  if (!phone) {
+    throw new Error(INVALID_PHONE_MESSAGE);
+  }
+  input.phone = phone;
   return input as NewMemberInput;
 }
 

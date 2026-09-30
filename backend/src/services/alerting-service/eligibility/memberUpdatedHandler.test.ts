@@ -419,6 +419,51 @@ describe('memberUpdatedHandler', () => {
       expect(writes[1]!.ExpressionAttributeValues[':version']).toBe(2);
     });
 
+    // Review MAJOR-3: a number stored before personnel normalised is normalised here; one that
+    // cannot be read is never projected (the vendor refuses it on every page) but is counted.
+    it('projects a national-format phone as E.164', async () => {
+      const send = storedSnapshot({ contactChannels: [], contactVersion: 1 });
+      vi.doMock('./dynamoClient.js', () => ({
+        createDynamoClient: () => ({ send }),
+        readAlertingConfig: () => ({ tableName: 'alerting-table' }),
+      }));
+      const { handler } = await import('./memberUpdatedHandler.js');
+      await handler(
+        buildSqsEvent({
+          ...PHONE_EVENT,
+          payload: { ...PHONE_EVENT.payload, phone: '(270) 555-0142' },
+        }),
+      );
+      expect(contactWrite(send)?.ExpressionAttributeValues[':contactChannels']).toEqual([
+        { channel: 'SMS', phoneNumber: '+12705550142', valid: true },
+        { channel: 'VOICE', phoneNumber: '+12705550142', valid: true },
+      ]);
+    });
+
+    it('does not project an unreadable phone, and counts it', async () => {
+      const send = storedSnapshot({ contactChannels: [], contactVersion: 1 });
+      vi.doMock('./dynamoClient.js', () => ({
+        createDynamoClient: () => ({ send }),
+        readAlertingConfig: () => ({ tableName: 'alerting-table' }),
+      }));
+      const logSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+      const { handler } = await import('./memberUpdatedHandler.js');
+      await handler(
+        buildSqsEvent({
+          ...PHONE_EVENT,
+          payload: { ...PHONE_EVENT.payload, phone: 'ask dispatch' },
+        }),
+      );
+      expect(contactWrite(send)).toBeUndefined();
+      expect(logSpy.mock.calls.some(([line]) => String(line).includes('InvalidPhoneSkipped'))).toBe(
+        true,
+      );
+      expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('phone_invalid'));
+      logSpy.mockRestore();
+      errorSpy.mockRestore();
+    });
+
     it('ignores an empty phone rather than projecting a blank target', async () => {
       const send = vi.fn().mockResolvedValue({});
       vi.doMock('./dynamoClient.js', () => ({
