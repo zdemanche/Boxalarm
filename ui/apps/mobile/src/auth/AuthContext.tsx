@@ -114,6 +114,8 @@ export interface AuthDeps {
   setInternetCredentials: typeof Keychain.setInternetCredentials;
   getInternetCredentials: typeof Keychain.getInternetCredentials;
   resetInternetCredentials: typeof Keychain.resetInternetCredentials;
+  /** Revokes a refresh token at Cognito (pendingUnregister); defaults to /oauth2/revoke. */
+  revokeRefreshToken?: (refreshToken: string) => Promise<void>;
 }
 
 const defaultDeps: AuthDeps = {

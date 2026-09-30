@@ -662,11 +662,13 @@ describe('a sign-out whose push revoke does not land (M3)', () => {
 
     expect(result).toEqual({ pushRevoked: false });
     const pending = await deps.getInternetCredentials(PENDING);
-    expect(pending && JSON.parse(pending.password)).toMatchObject({
-      memberId: 'MBR-1',
-      refreshToken: 'refresh-A',
-      apiBaseUrl: 'https://api.example.test',
-    });
+    expect(pending && JSON.parse(pending.password)).toEqual([
+      expect.objectContaining({
+        memberId: 'MBR-1',
+        refreshToken: 'refresh-A',
+        apiBaseUrl: 'https://api.example.test',
+      }),
+    ]);
     // The session itself is gone.
     await expect(deps.getInternetCredentials('boxalarm-auth')).resolves.toBe(false);
 
@@ -798,4 +800,97 @@ test('m12: a keychain reset that throws still leaves the app signed out', async 
   await expect(contextValue!.signOut()).rejects.toThrow('keychain locked');
 
   await waitFor(() => expect(contextValue?.isAuthenticated).toBe(false));
+});
+
+describe('pending sign-out revokes, hardened (N-m1, N-m3)', () => {
+  const PENDING = 'boxalarm-pending-unregister';
+  const record = (memberId: string, refreshToken: string) => ({
+    memberId,
+    deviceId: 'dev-1',
+    refreshToken,
+    apiBaseUrl: 'https://api.example.test',
+    savedAt: Date.now(),
+  });
+
+  test("one member's pending revoke never overwrites another's; each lands and its token is revoked at Cognito", async () => {
+    const deps = makeDeps();
+    const revoked: string[] = [];
+    deps.revokeRefreshToken = jest.fn(async (token: string) => {
+      revoked.push(token);
+    });
+    const { savePendingUnregister } = jest.requireActual('./pendingUnregister');
+    await savePendingUnregister(deps, record('A', 'refresh-A'));
+    await savePendingUnregister(deps, record('B', 'refresh-B'));
+    const stored = (deps.setInternetCredentials as jest.Mock).mock.calls.at(-1)!;
+    expect(JSON.parse(stored[2] as string)).toHaveLength(2);
+    expect(stored[3]).toEqual({ accessible: 'AccessibleAfterFirstUnlockThisDeviceOnly' });
+
+    deps.refresh = jest.fn(async (_c: unknown, { refreshToken }: { refreshToken: string }) => ({
+      accessToken: `access-for-${refreshToken}`,
+      refreshToken,
+      accessTokenExpirationDate: new Date(Date.now() + 3600_000).toISOString(),
+      idToken: 'x',
+      tokenType: 'Bearer',
+    })) as unknown as AuthDeps['refresh'];
+    const urls: string[] = [];
+    globalThis.fetch = jest.fn(async (url: string) => {
+      urls.push(url);
+      return new Response('{}', { status: 200 });
+    }) as unknown as typeof fetch;
+
+    await expect(retryPendingUnregister(deps)).resolves.toBe('done');
+
+    expect(urls.map((u) => u.match(/members\/(\w+)\//)?.[1]).sort()).toEqual(['A', 'B']);
+    expect(revoked.sort()).toEqual(['refresh-A', 'refresh-B']);
+    await expect(deps.getInternetCredentials(PENDING)).resolves.toBe(false);
+  });
+
+  test('signing back in waits at most 5 s for a stalled pending revoke, and it never sends its DELETE', async () => {
+    jest.useFakeTimers();
+    try {
+      const deps = makeDeps();
+      deps.revokeRefreshToken = jest.fn(async () => undefined);
+      const { savePendingUnregister, cancelPendingUnregisterFor } =
+        jest.requireActual('./pendingUnregister');
+      await savePendingUnregister(deps, record('MBR-1', 'refresh-A'));
+      let finishRefresh: () => void = () => undefined;
+      deps.refresh = jest.fn(
+        () =>
+          new Promise((resolve) => {
+            finishRefresh = () =>
+              resolve({
+                accessToken: 'a',
+                refreshToken: 'refresh-A',
+                accessTokenExpirationDate: new Date(Date.now() + 3600_000).toISOString(),
+                idToken: 'x',
+                tokenType: 'Bearer',
+              });
+          }),
+      ) as unknown as AuthDeps['refresh'];
+      globalThis.fetch = jest.fn(async () => new Response('{}')) as unknown as typeof fetch;
+
+      const retrying = retryPendingUnregister(deps);
+      await jest.advanceTimersByTimeAsync(0);
+      expect(deps.refresh).toHaveBeenCalled();
+
+      let signedIn = false;
+      const cancelling = cancelPendingUnregisterFor('MBR-1', deps).then(() => {
+        signedIn = true;
+      });
+      await jest.advanceTimersByTimeAsync(4_999);
+      expect(signedIn).toBe(false);
+      await jest.advanceTimersByTimeAsync(1);
+      await cancelling;
+      expect(signedIn).toBe(true);
+
+      // The stalled refresh finally answers: the DELETE is not sent.
+      finishRefresh();
+      await jest.advanceTimersByTimeAsync(0);
+      await retrying;
+      expect(globalThis.fetch).not.toHaveBeenCalled();
+      await expect(deps.getInternetCredentials(PENDING)).resolves.toBe(false);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
 });
