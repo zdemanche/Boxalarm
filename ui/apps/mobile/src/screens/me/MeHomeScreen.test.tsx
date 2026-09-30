@@ -1,4 +1,4 @@
-import { fireEvent, render, waitFor } from '@testing-library/react-native';
+import { act, fireEvent, render, waitFor } from '@testing-library/react-native';
 import * as syncManager from '../../sync/syncManager';
 import { Alert } from 'react-native';
 import { MeHomeScreen, signOutWarning } from './MeHomeScreen';
@@ -153,5 +153,30 @@ test('a sign-out whose push revoke failed tells the member and retries on reques
   alertSpy.mock.calls[2]![2]!.find((b) => b.text === 'Retry')!.onPress?.();
   await waitFor(() => expect(mockRetryPendingUnregister).toHaveBeenCalledTimes(2));
   expect(alertSpy).toHaveBeenCalledTimes(3);
+  alertSpy.mockRestore();
+});
+
+// N-m5: sign-out can take a while; it says so and cannot be tapped again meanwhile.
+test('while signing out, the button says so and is disabled', async () => {
+  let finish: () => void = () => undefined;
+  mockSignOut.mockImplementationOnce(
+    () =>
+      new Promise<void>((resolve) => {
+        finish = resolve;
+      }),
+  );
+  const alertSpy = jest.spyOn(Alert, 'alert').mockImplementation(() => {});
+  const { findByText, findByRole } = await render(<MeHomeScreen />);
+
+  await fireEvent.press(await findByText('Sign out'));
+  await waitFor(() => expect(alertSpy).toHaveBeenCalled());
+  await act(async () => {
+    alertSpy.mock.calls[0]![2]!.find((b) => b.text === 'Sign out')!.onPress?.();
+  });
+
+  const button = await findByRole('button', { name: 'Signing out.' });
+  expect(button.props.accessibilityState).toMatchObject({ disabled: true });
+  await act(async () => finish());
+  expect(await findByText('Sign out')).toBeTruthy();
   alertSpy.mockRestore();
 });

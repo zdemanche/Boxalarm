@@ -1,7 +1,7 @@
 import { spacing, targetSize, typeScale } from '@boxalarm/design-tokens';
 import { useNavigation } from '@react-navigation/native';
-import { useEffect, useState } from 'react';
-import { Alert, Text, TouchableOpacity, View } from 'react-native';
+import { useEffect, useRef, useState } from 'react';
+import { AccessibilityInfo, Alert, Text, TouchableOpacity, View } from 'react-native';
 import { Button, Screen, useTheme, type SurfaceTheme } from '../../components/ui';
 import { retryPendingUnregister, useAuth, type SignOutResult } from '../../auth/AuthContext';
 import { useMeRepository } from '../../features/me/apiMeRepository';
@@ -130,6 +130,25 @@ export function MeHomeScreen() {
   const [profile, setProfile] = useState<MemberProfile | null>(null);
   const [quals, setQuals] = useState<Qualification[]>([]);
   const [losap, setLosap] = useState<LosapTotal | null>(null);
+  // Sign-out can take a while on a weak link (a last send, the push revoke with a renewal): say
+  // so and take the button away, so nobody taps it again wondering whether it worked (N-m5).
+  const [signingOut, setSigningOut] = useState(false);
+  const mountedRef = useRef(true);
+  useEffect(
+    () => () => {
+      mountedRef.current = false;
+    },
+    [],
+  );
+  const signOutWithProgress = async () => {
+    setSigningOut(true);
+    AccessibilityInfo.announceForAccessibility('Signing out.');
+    try {
+      return await signOut();
+    } finally {
+      if (mountedRef.current) setSigningOut(false);
+    }
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -247,10 +266,13 @@ export function MeHomeScreen() {
       />
       <View style={{ paddingTop: spacing.lg }}>
         <Button
-          label="Sign out"
+          label={signingOut ? 'Signing out…' : 'Sign out'}
           variant="danger"
-          accessibilityLabel="Sign out. Boxalarm pages stop on this phone."
-          onPress={() => void confirmSignOut(signOut, profile?.phone, memberId)}
+          accessibilityLabel={
+            signingOut ? 'Signing out.' : 'Sign out. Boxalarm pages stop on this phone.'
+          }
+          disabled={signingOut}
+          onPress={() => void confirmSignOut(signOutWithProgress, profile?.phone, memberId)}
         />
       </View>
     </Screen>
