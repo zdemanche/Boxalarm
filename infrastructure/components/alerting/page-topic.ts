@@ -7,6 +7,30 @@ export const ALERTING_PAGE_EMAIL_CONFIG_KEY = "alertingPageEmail";
 
 export interface AlertingPageTopicArgs {
   env: string;
+  /**
+   * Name of the AlertingAlarms component that owned this topic and its subscription before
+   * they moved here (index.ts: "alerting-alarms"). Aliases the old URNs so an existing stack
+   * adopts the live topic instead of creating it anew (CreateTopic is idempotent on the name,
+   * so the "new" one IS the live one) and then deleting the old URN, which would DeleteTopic
+   * that same ARN and silently take every alert-path alarm's destination and its confirmed
+   * subscriptions with it (post-merge infra review F1).
+   */
+  legacyAlarmsComponentName?: string;
+}
+
+/** Pre-move URNs of the topic and subscription, as children of AlertingAlarms. */
+export function legacyPageTopicAliases(legacyAlarmsComponentName: string | undefined): {
+  topic: pulumi.Alias[];
+  subscription: pulumi.Alias[];
+} {
+  if (legacyAlarmsComponentName === undefined) {
+    return { topic: [], subscription: [] };
+  }
+  const parent = pulumi.createUrn(legacyAlarmsComponentName, "boxalarm:alerting:AlertingAlarms");
+  return {
+    topic: [{ name: `${legacyAlarmsComponentName}-page-topic`, parent }],
+    subscription: [{ name: `${legacyAlarmsComponentName}-page-email-subscription`, parent }],
+  };
 }
 
 /**
@@ -31,11 +55,12 @@ export class AlertingPageTopic extends pulumi.ComponentResource {
     requireEnv("AlertingPageTopic", args.env);
     super("boxalarm:alerting:AlertingPageTopic", name, {}, opts);
     const { env } = args;
+    const aliases = legacyPageTopicAliases(args.legacyAlarmsComponentName);
 
     this.topic = new aws.sns.Topic(
       `${name}-topic`,
       { name: `boxalarm-${env}-alerting-page` },
-      { parent: this },
+      { parent: this, aliases: aliases.topic },
     );
     this.topicArn = this.topic.arn;
 
@@ -44,7 +69,7 @@ export class AlertingPageTopic extends pulumi.ComponentResource {
       this.subscription = new aws.sns.TopicSubscription(
         `${name}-email-subscription`,
         { topic: this.topic.arn, protocol: "email", endpoint: pageEmail },
-        { parent: this },
+        { parent: this, aliases: aliases.subscription },
       );
     } else if (env === "prod") {
       throw new Error(

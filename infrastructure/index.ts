@@ -229,7 +229,11 @@ export const platformBus = new PlatformBus("platform-bus", { env });
 // E1-S11-INFRA: the alerting-page topic. Created ahead of every component whose alarms feed
 // paging — the outbox publisher, eligibility/availability snapshot consumers, session
 // revocation — not only the alerting components further down (deploy-readiness M1).
-export const alertingPageTopic = new AlertingPageTopic("alerting-page", { env });
+export const alertingPageTopic = new AlertingPageTopic("alerting-page", {
+  env,
+  // The topic used to be a child of AlertingAlarms("alerting-alarms"): keep its URN (F1).
+  legacyAlarmsComponentName: "alerting-alarms",
+});
 
 // E2-S1-INFRA #203: the ONE platform-table outbox → platform-bus publisher.
 export const outboxPublisher = new OutboxPublisher("outbox-publisher", {
