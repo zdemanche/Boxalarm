@@ -448,6 +448,29 @@ describe('returning to the app while a page is ringing (m2-1 / K3-5)', () => {
     );
   });
 
+  test('N-m9: a ringing mutual-aid prompt is opened on its own screen', async () => {
+    (navigateToMutualAidPrompt as jest.Mock).mockClear();
+    (notifee.getDisplayedNotifications as jest.Mock).mockResolvedValue([
+      {
+        id: 'mutual-aid:MA-1',
+        date: 5_000,
+        notification: {
+          id: 'mutual-aid:MA-1',
+          data: { dispatchId: 'MA-1', alertKind: 'mutual_aid_prompt', receivedAt: '1' },
+          android: { channelId: 'dispatch-critical-v2' },
+        },
+      },
+    ]);
+
+    await routeToRingingPage();
+
+    expect(navigateToMutualAidPrompt).toHaveBeenCalledWith(
+      'MA-1',
+      expect.objectContaining({ mutualAidPrompt: true }),
+    );
+    expect(navigateToAlertDetail).not.toHaveBeenCalled();
+  });
+
   test('an answered page (replaced on the default channel) does not pull the member back', async () => {
     (notifee.getDisplayedNotifications as jest.Mock).mockResolvedValue([
       page('ANSWERED', 3_000, 'notifications-default'),

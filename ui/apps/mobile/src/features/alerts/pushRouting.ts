@@ -18,6 +18,7 @@ import {
 import { queueAlertResponse } from './alertResponses';
 import { markInitialAlertRoutingSettled } from './lockScreenPresentation';
 import { answerFromActionId, handleNotificationEvent } from './notificationActions';
+import { isRingingAlertId } from './notificationIds';
 import {
   alertPayloadFromNotificationData,
   alertPayloadFromPushData,
@@ -240,7 +241,7 @@ export async function routeToRingingPage(): Promise<void> {
     .filter((entry) => {
       const id = entry.id ?? entry.notification?.id ?? '';
       const channel = entry.notification?.android?.channelId ?? '';
-      return id.startsWith('dispatch:') && channel.startsWith('dispatch-critical');
+      return isRingingAlertId(id) && channel.startsWith('dispatch-critical');
     })
     .sort((a, b) => Number(b.date ?? 0) - Number(a.date ?? 0));
   const newest = ringing[0];
@@ -251,7 +252,7 @@ export async function routeToRingingPage(): Promise<void> {
   routedRingingPages.add(id);
   const current = navigationRef.isReady() ? navigationRef.getCurrentRoute() : undefined;
   const onIt =
-    current?.name === 'AlertDetail' &&
+    current?.name === (payload.mutualAidPrompt ? 'MutualAidPrompt' : 'AlertDetail') &&
     (current.params as { dispatchId?: string } | undefined)?.dispatchId === payload.dispatchId;
   if (!onIt) openAlert(payload);
 }

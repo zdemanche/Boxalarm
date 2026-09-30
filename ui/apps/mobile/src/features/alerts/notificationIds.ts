@@ -11,3 +11,8 @@ export function dispatchNotificationId(dispatchId: string): string {
 export function mutualAidNotificationId(dispatchId: string): string {
   return `mutual-aid:${dispatchId}`;
 }
+
+/** A page or an officer's mutual-aid prompt - the notifications that ring on the critical channel. */
+export function isRingingAlertId(id: string): boolean {
+  return id.startsWith('dispatch:') || id.startsWith('mutual-aid:');
+}

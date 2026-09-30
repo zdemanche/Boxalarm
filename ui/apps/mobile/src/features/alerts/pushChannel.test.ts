@@ -152,6 +152,18 @@ test('stale channels are not deleted while a dispatch page is showing (deleting 
   expect(native.deleteChannel).not.toHaveBeenCalled();
 });
 
+test('N-m9: nor while an officer mutual-aid prompt is showing', async () => {
+  Platform.OS = 'android';
+  const native = installNative(true);
+  (notifee.getDisplayedNotifications as jest.Mock).mockResolvedValueOnce([
+    { id: 'mutual-aid:D-RINGING', notification: { id: 'mutual-aid:D-RINGING' } },
+  ]);
+
+  await ensureNotificationChannels({ deleteStale: true });
+
+  expect(native.deleteChannel).not.toHaveBeenCalled();
+});
+
 test('if the shown notifications cannot be read, deletion waits', async () => {
   Platform.OS = 'android';
   const native = installNative(true);

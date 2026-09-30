@@ -2,6 +2,7 @@ import notifee, { AndroidImportance, AndroidVisibility } from '@notifee/react-na
 import { Platform } from 'react-native';
 import { kvGet, kvSet } from '../../sync/kvStore';
 import { alertReadinessNative } from './alertReadiness';
+import { isRingingAlertId } from './notificationIds';
 
 /**
  * Android channels are immutable once created, and `bypassDnd` only takes effect if the app held
@@ -64,9 +65,8 @@ export async function currentCriticalChannelId(): Promise<string> {
 async function aDispatchPageIsShowing(): Promise<boolean> {
   try {
     const shown = await notifee.getDisplayedNotifications();
-    return shown.some((entry) =>
-      (entry.id ?? entry.notification?.id ?? '').startsWith('dispatch:'),
-    );
+    // A mutual-aid prompt rings on the critical channel too (N-m9).
+    return shown.some((entry) => isRingingAlertId(entry.id ?? entry.notification?.id ?? ''));
   } catch {
     return true;
   }
