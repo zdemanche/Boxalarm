@@ -32,6 +32,9 @@ export const ADMIN_ONLY_ACTIONS = [
   // The compromised-password kill switch (review C1, OQ-24): puts the login into
   // RESET_REQUIRED and signs every session out (session-revocation/credentialResetHandler.ts).
   "ResetMemberCredentials",
+  // Lists a member's registered push devices so device loss can remove just the lost one
+  // (session-revocation/listDevicesHandler.ts) - the roles that may report a device lost.
+  "ViewMemberDevices",
   // reporting-service (P1 #8): CSV/PDF export of a named report (export/handler.ts) and
   // the N1.9 cutover accept/defer write (cutoverDecision/post.ts). Export sits with
   // ExportData — CLAUDE.md: "Export and destructive actions are gated by Cedar role check
@@ -428,6 +431,7 @@ export const CEDAR_SCHEMA = JSON.stringify({
       ResetMemberCredentials: {
         appliesTo: { principalTypes: ["User"], resourceTypes: ["Member"] },
       },
+      ViewMemberDevices: { appliesTo: { principalTypes: ["User"], resourceTypes: ["Member"] } },
       RecordAttendance: { appliesTo: { principalTypes: ["User"], resourceTypes: ["Member"] } },
       RecordAttendanceOnBehalf: {
         appliesTo: { principalTypes: ["User"], resourceTypes: ["Member"] },

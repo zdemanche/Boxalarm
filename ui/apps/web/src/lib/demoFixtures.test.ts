@@ -109,6 +109,13 @@ test('revokes a member session through the fixture store', async () => {
   expect(body.status).toBe('revoked');
 });
 
+test("lists a member's push devices for the device-loss dialog", async () => {
+  const response = await apiRequest('platform/sessions/m-1/devices', tokens);
+  const body = (await response.json()) as { memberId: string; devices: { deviceId: string }[] };
+  expect(body.memberId).toBe('m-1');
+  expect(body.devices.length).toBeGreaterThan(0);
+});
+
 test('serves the notification inbox, marks one read, and round-trips a preference', async () => {
   const list = await apiRequest('notifications', tokens);
   const inbox = (await list.json()) as {

@@ -110,6 +110,7 @@ export async function invalidateMemberPush(
  * The member's registered push devices, for the "report device lost" dialog: platform, when
  * it last registered, and its installation id (legacy entries have none).
  */
+/** A push device as an admin sees it: never the token itself. */
 export interface RegisteredDevice {
   readonly deviceId: string | null;
   readonly platform: string | null;
@@ -117,6 +118,11 @@ export interface RegisteredDevice {
   readonly valid: boolean;
 }
 
+/**
+ * The member's push devices, newest registration first; undefined when there is no member row
+ * in `deptId`. A legacy entry (registered before the app sent an installation id) has
+ * deviceId null and can only be removed with the rest ("All devices").
+ */
 export async function listMemberDevices(
   docClient: DynamoDBDocumentClient,
   tableName: string,

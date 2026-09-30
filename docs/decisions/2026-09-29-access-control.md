@@ -50,7 +50,8 @@ These are not yet in `docs/architecture.md`. Editing that document makes `docs/a
 
    | Route | Cedar action | Alarm |
    |---|---|---|
-   | `POST /api/v1/platform/sessions/revoke` | `RevokeSession` (CHIEF/ADMIN) | Chief notified on every use |
+   | `POST /api/v1/platform/sessions/revoke` | `RevokeSession` (CHIEF/ADMIN) | Chief notified on every use. Body `{ memberId, deviceId? }`: signs out every device; removes push from `deviceId` only, or from all devices when absent |
+   | `GET /api/v1/platform/sessions/{memberId}/devices` | `ViewMemberDevices` (CHIEF/ADMIN) | The member's push devices (installation id, platform, last registration) for the device-loss dialog; never the token |
    | `POST /api/v1/platform/sessions/reset-credentials` | `ResetMemberCredentials` (CHIEF/ADMIN) | Chief notified on every use |
 
    - Reset-credentials calls `AdminResetUserPassword`, then signs out. The revocation marker is written before the reset and again after the sign-out.

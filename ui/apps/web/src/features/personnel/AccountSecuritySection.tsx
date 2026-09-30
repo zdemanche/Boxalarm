@@ -1,8 +1,10 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import { ApiError } from '../../lib/apiClient';
 import { useAuth } from '../../auth/AuthContext';
 import { ConfirmDialog } from '../../components/ui/Dialog';
-import { resetMemberCredentials, revokeMemberSessions } from '../platform/api';
+import { listMemberDevices, resetMemberCredentials, revokeMemberSessions } from '../platform/api';
+import type { MemberDevice } from '../platform/types';
 import type { Member } from './types';
 
 /** Mirrors the Cedar policy for both actions (ADMIN_ONLY_ACTIONS: CHIEF/ADMIN). */
@@ -11,6 +13,30 @@ export function canUseAccountKillSwitches(roles: readonly string[]): boolean {
 }
 
 type Action = 'deviceLost' | 'resetCredentials';
+
+/** The radio value for removing push from every device (the default). */
+const ALL_DEVICES = '';
+
+function platformName(platform: string | null): string {
+  if (platform === 'APNS') return 'iPhone';
+  if (platform === 'FCM') return 'Android';
+  return platform ?? 'Unknown device';
+}
+
+/** "iPhone · registered 9/29/2026, 3:04 PM · id …7f3a9c" - enough to tell two phones apart. */
+export function describeDevice(device: MemberDevice): string {
+  const parts = [platformName(device.platform)];
+  if (device.registeredAt !== null) {
+    parts.push(`registered ${new Date(device.registeredAt).toLocaleString()}`);
+  }
+  if (device.deviceId !== null) {
+    parts.push(`id …${device.deviceId.slice(-6)}`);
+  }
+  if (!device.valid) {
+    parts.push('no longer reachable');
+  }
+  return parts.join(' · ');
+}
 
 function problemText(error: unknown, fallback: string): string {
   if (error instanceof ApiError) {
@@ -24,9 +50,11 @@ function problemText(error: unknown, fallback: string): string {
 
 /**
  * OQ-24: the two controls that end a member's access, for a chief at 03:00 without curl.
- *  - Report device lost: signs the member out everywhere, stops their existing tokens within
- *    about 30 seconds and removes their push registration, so the lost phone stops showing
- *    dispatches. Their other devices need one sign-in.
+ *  - Report device lost: signs the member out everywhere and stops their existing tokens within
+ *    about 30 seconds (per-device sign-out is not possible yet), and removes the push
+ *    registration of the device the admin picks - or of every device, the default - so the
+ *    lost phone stops showing dispatches. Every device needs one sign-in; only the removed
+ *    ones stop receiving pages.
  *  - Reset password and sign out: for a phished or leaked password. The old password stops
  *    working; the member sets a new one with "forgot password".
  * The server enforces both with Cedar; the buttons are only shown to the roles it admits.
@@ -36,20 +64,48 @@ export function AccountSecuritySection({ member }: { member: Member }) {
   const auth = useAuth();
   const [open, setOpen] = useState<Action | null>(null);
   const [message, setMessage] = useState('');
+  const [lostDeviceId, setLostDeviceId] = useState(ALL_DEVICES);
   const name = `${member.firstName} ${member.lastName}`;
+  const allowed = canUseAccountKillSwitches(auth.roles);
 
-  if (!canUseAccountKillSwitches(auth.roles)) {
+  const devicesQuery = useQuery({
+    queryKey: ['platform', 'sessions', member.memberId, 'devices'],
+    queryFn: () => listMemberDevices(auth, member.memberId),
+    enabled: allowed && open === 'deviceLost',
+    staleTime: 0,
+  });
+
+  // Each report starts from "All devices": a choice left over from an earlier report must
+  // never silently narrow this one.
+  useEffect(() => {
+    if (open === 'deviceLost') {
+      setLostDeviceId(ALL_DEVICES);
+    }
+  }, [open]);
+
+  if (!allowed) {
     return null;
   }
+
+  const devices = devicesQuery.data?.devices ?? [];
+  const selectable = devices.filter(
+    (device): device is MemberDevice & { deviceId: string } => device.deviceId !== null,
+  );
+  const unidentified = devices.length - selectable.length;
+  const chosen = selectable.find((device) => device.deviceId === lostDeviceId);
 
   async function run(action: Action): Promise<void> {
     setMessage('');
     try {
       if (action === 'deviceLost') {
-        await revokeMemberSessions(auth, member.memberId);
+        await revokeMemberSessions(auth, member.memberId, chosen?.deviceId);
         setMessage(
-          `${name} is signed out everywhere and their push registration is removed. ` +
-            'They will need to sign in again on the devices they still have.',
+          chosen
+            ? `${name} is signed out everywhere and ${describeDevice(chosen)} no longer ` +
+                'receives dispatch notifications. They will need to sign in again on the ' +
+                'devices they still have; those keep receiving pages.'
+            : `${name} is signed out everywhere and none of their devices receives dispatch ` +
+                'notifications until they sign in again.',
         );
       } else {
         await resetMemberCredentials(auth, member.memberId);
@@ -107,14 +163,62 @@ export function AccountSecuritySection({ member }: { member: Member }) {
         onOpenChange={(next) => setOpen(next ? 'deviceLost' : null)}
         title={`Report a lost device for ${name}?`}
         consequence={
-          `${name} will be signed out on every device within about 30 seconds and their phone ` +
-          'will stop receiving dispatch notifications until they sign in again. SMS and voice ' +
-          'paging continue.'
+          `${name} will be signed out on every device within about 30 seconds and must sign ` +
+          'in again on each one. ' +
+          (chosen
+            ? 'Only the lost device stops receiving dispatch notifications; their other ' +
+              'devices keep receiving pages. '
+            : 'None of their devices receives dispatch notifications until they sign in ' +
+              'again. ') +
+          'SMS and voice paging continue.'
         }
         confirmLabel="Sign out everywhere"
         onConfirm={() => run('deviceLost')}
         danger
-      />
+      >
+        <fieldset style={{ border: 'none', padding: 0, margin: 'var(--boxalarm-spacing-sm) 0' }}>
+          <legend style={{ fontWeight: 600 }}>Which device was lost?</legend>
+          <label style={{ display: 'flex', gap: 8, alignItems: 'center', minHeight: 44 }}>
+            <input
+              type="radio"
+              name="lost-device"
+              value={ALL_DEVICES}
+              checked={chosen === undefined}
+              onChange={() => setLostDeviceId(ALL_DEVICES)}
+            />
+            All devices
+          </label>
+          {selectable.map((device) => (
+            <label
+              key={device.deviceId}
+              style={{ display: 'flex', gap: 8, alignItems: 'center', minHeight: 44 }}
+            >
+              <input
+                type="radio"
+                name="lost-device"
+                value={device.deviceId}
+                checked={chosen?.deviceId === device.deviceId}
+                onChange={() => setLostDeviceId(device.deviceId)}
+              />
+              {describeDevice(device)}
+            </label>
+          ))}
+          {devicesQuery.isPending ? <p>Loading registered devices…</p> : null}
+          {devicesQuery.isError ? (
+            <p>Could not load this member’s devices. “All devices” still works.</p>
+          ) : null}
+          {devicesQuery.isSuccess && devices.length === 0 ? (
+            <p>No devices are registered for push notifications.</p>
+          ) : null}
+          {unidentified > 0 ? (
+            <p>
+              {unidentified === 1
+                ? 'One older registration has no device id; only “All devices” removes it.'
+                : `${unidentified} older registrations have no device id; only “All devices” removes them.`}
+            </p>
+          ) : null}
+        </fieldset>
+      </ConfirmDialog>
       <ConfirmDialog
         open={open === 'resetCredentials'}
         onOpenChange={(next) => setOpen(next ? 'resetCredentials' : null)}

@@ -223,4 +223,27 @@ describe("SessionRevocation (review C1)", () => {
     ]);
     expect([metric, namespace, threshold]).toEqual(["RevokeSessionInvoked", "Boxalarm/authz", 0]);
   });
+
+  // Integration item 2: the device-loss dialog lists the member's devices.
+  it("wires the device list route with a read of member rows only", async () => {
+    const sr = await build();
+    await resolve(sr.listDevicesLambda.function.arn);
+    for (let i = 0; i < 20 && !routeKeys.includes(LIST_ROUTE); i += 1) {
+      await new Promise((r) => setImmediate(r));
+    }
+    expect(routeKeys).toContain(LIST_ROUTE);
+
+    const statements = (await statementsOf(sr.listDevicesLambda)) as Array<
+      Statement & { Condition?: unknown }
+    >;
+    expect(actionsOn(statements, TABLE_ARN)).toEqual(["dynamodb:GetItem"]);
+    expect(statements.find((s) => s.Sid === "ReadMemberDevices")?.Condition).toEqual({
+      "ForAllValues:StringLike": { "dynamodb:LeadingKeys": ["DEPT#*#MEMBER#*"] },
+    });
+    const env = await resolve(sr.listDevicesLambda.function.environment);
+    expect(env?.variables?.VERIFIED_PERMISSIONS_POLICY_STORE_ID).toBe("ps-1");
+    expect(env?.variables?.PLATFORM_TABLE_NAME).toBe("platform-table");
+  });
 });
+
+const LIST_ROUTE = "GET /api/v1/platform/sessions/{memberId}/devices";
