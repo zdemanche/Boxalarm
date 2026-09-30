@@ -221,6 +221,10 @@ test('positions are picked from the riding positions, filling in the required qu
   ).toEqual(['No position', 'Officer', 'Driver/operator', 'Tiller']);
   await user.selectOptions(first!, 'DRIVER');
   expect((screen.getAllByLabelText(/Required qual/)[0] as HTMLInputElement).value).toBe('DO');
+  // A position with no qual clears the one left from the previous choice.
+  await user.selectOptions(first!, 'TILLER');
+  expect((screen.getAllByLabelText(/Required qual/)[0] as HTMLInputElement).value).toBe('');
+  await user.selectOptions(first!, 'DRIVER');
   await user.click(screen.getByRole('button', { name: 'Create shift' }));
 
   await waitFor(() => expect(posted).toBeDefined());

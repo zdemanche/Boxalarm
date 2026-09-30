@@ -140,7 +140,7 @@ function CreateShiftForm({ onCreated }: { onCreated: () => void }) {
             <legend>Position {index + 1}</legend>
             {ridingPositions.length > 0 ? (
               // Pick from the department's riding positions; the position's own required qual
-              // fills in (and can still be changed).
+              // fills in, or clears when it has none (and can still be changed).
               <Select
                 label="Position"
                 value={position.positionCode}
@@ -152,7 +152,9 @@ function CreateShiftForm({ onCreated }: { onCreated: () => void }) {
                         ? {
                             ...p,
                             positionCode: e.target.value,
-                            requiredQual: chosen?.requiredQual ?? p.requiredQual ?? '',
+                            // The position's own qual, or none: a qual kept from the previous
+                            // choice would silently narrow who can claim this one.
+                            requiredQual: chosen?.requiredQual ?? '',
                           }
                         : p,
                     ),
