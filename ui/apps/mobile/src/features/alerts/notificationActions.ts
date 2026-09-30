@@ -45,11 +45,12 @@ export const ANDROID_RESPONSE_ACTIONS: AndroidAction[] = [
 ];
 
 /**
- * iOS: the category a dispatch page must name in `aps.category` for its actions to show. The
- * alerting service does not send it yet (pushPayload.ts buildApnsPayload) - until it does, iOS
- * pages show no buttons. `foreground: true` opens Boxalarm (after unlock) so the answer goes
- * through the same queue with the alert screen showing whether it was sent; answering without
- * unlocking would need a native, JS-free sender in AppDelegate.
+ * iOS: the category a dispatch page names in `aps.category` for its actions to show - the
+ * alerting service sends it on every dispatch page (pushPayload.ts buildApnsPayload), so these
+ * buttons are live. `foreground: true` opens Boxalarm (after unlock) so the answer goes through
+ * the same queue with the alert screen showing whether it was sent (pushRouting
+ * answerPendingIosAction, which refuses on a signed-out phone); answering without unlocking would
+ * need a native, JS-free sender in AppDelegate.
  */
 export const IOS_DISPATCH_CATEGORY_ID = 'DISPATCH';
 export const IOS_DISPATCH_CATEGORY: IOSNotificationCategory = {
