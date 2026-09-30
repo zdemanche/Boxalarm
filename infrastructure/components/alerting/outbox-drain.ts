@@ -40,6 +40,7 @@ export class AlertingOutboxDrain extends pulumi.ComponentResource {
   public readonly eventSourceMapping: aws.lambda.EventSourceMapping;
   public readonly onFailureAlarm: aws.cloudwatch.MetricAlarm;
   public readonly publishFailedAlarm: aws.cloudwatch.MetricAlarm;
+  public readonly malformedRowAlarm: aws.cloudwatch.MetricAlarm;
   public readonly eventTypeRejectedAlarm: aws.cloudwatch.MetricAlarm;
 
   constructor(name: string, args: AlertingOutboxDrainArgs, opts?: pulumi.ComponentResourceOptions) {
@@ -208,6 +209,29 @@ export class AlertingOutboxDrain extends pulumi.ComponentResource {
         name: `boxalarm-${env}-alerting-bridge-event-type-rejected`,
         namespace: ALERTING_BRIDGE_METRIC_NAMESPACE,
         metricName: "EventTypeRejected",
+        statistic: "Sum",
+        period: 300,
+        evaluationPeriods: 1,
+        threshold: 0,
+        comparisonOperator: "GreaterThanThreshold",
+        treatMissingData: "notBreaching",
+        alarmActions: [args.pageTopicArn],
+      },
+      { parent: this },
+    );
+
+    // A malformed alerting OUTBOX_ENTRY is skipped, never published: a dispatch or response
+    // copy incident-service never receives. On the alerting plane, so it pages.
+    this.malformedRowAlarm = new aws.cloudwatch.MetricAlarm(
+      `${name}-malformed-row-alarm`,
+      {
+        name: `boxalarm-${env}-alerting-bridge-malformed-row`,
+        alarmDescription:
+          "An alerting-table OUTBOX_ENTRY is missing an envelope field, so the alerting bridge " +
+          "skipped it: that event never reached the platform bus and will not be retried. Search " +
+          "the alerting-outbox-drain logs for the row, fix the writer, then re-emit the event.",
+        namespace: ALERTING_BRIDGE_METRIC_NAMESPACE,
+        metricName: "MalformedOutboxRow",
         statistic: "Sum",
         period: 300,
         evaluationPeriods: 1,

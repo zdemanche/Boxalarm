@@ -42,6 +42,7 @@ describe("OutboxPublisher", () => {
     });
     return new OutboxPublisher("test-outbox", {
       alarmTopicArn: "arn:aws:sns:us-east-1:123456789012:boxalarm-dev-alerting-page",
+      opsAlarmTopicArn: "arn:aws:sns:us-east-1:123456789012:boxalarm-dev-chief-notifications",
       env: "dev",
       platformTableName: pulumi.output("boxalarm-dev-platform-service"),
       platformTableArn: pulumi.output(
@@ -57,6 +58,27 @@ describe("OutboxPublisher", () => {
       logGroup,
     });
   }
+
+  it("alarms the ops topic on any MalformedOutboxRow from the platform or incident drain", async () => {
+    const publisher = await build();
+    const [namespace, metric, dimensions, threshold, actions] = await Promise.all([
+      resolve(publisher.malformedRowAlarm.namespace),
+      resolve(publisher.malformedRowAlarm.metricName),
+      resolve(publisher.malformedRowAlarm.dimensions),
+      resolve(publisher.malformedRowAlarm.threshold),
+      resolve(publisher.malformedRowAlarm.alarmActions),
+    ]);
+    // The shared drain's default namespace, used by both drains with no service dimension.
+    expect([namespace, metric, threshold]).toEqual([
+      "Boxalarm/outbox-publisher",
+      "MalformedOutboxRow",
+      0,
+    ]);
+    expect(dimensions).toBeUndefined();
+    expect(actions).toEqual([
+      "arn:aws:sns:us-east-1:123456789012:boxalarm-dev-chief-notifications",
+    ]);
+  });
 
   it("grants dynamodb:UpdateItem on the platform table so the publisher can mark entries sent", async () => {
     const publisher = await build();

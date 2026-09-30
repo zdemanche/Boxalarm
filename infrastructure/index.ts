@@ -235,6 +235,10 @@ export const alertingPageTopic = new AlertingPageTopic("alerting-page", {
   legacyAlarmsComponentName: "alerting-alarms",
 });
 
+// The ops alarm topic. Created ahead of the outbox publisher (MalformedOutboxRow) and
+// sessionRevocation (credential-reset alarm), which notify it.
+export const chiefNotificationTopic = new ChiefNotificationTopic("chief-notifications", { env });
+
 // E2-S1-INFRA #203: the ONE platform-table outbox → platform-bus publisher.
 export const outboxPublisher = new OutboxPublisher("outbox-publisher", {
   env,
@@ -245,10 +249,8 @@ export const outboxPublisher = new OutboxPublisher("outbox-publisher", {
   busArn: platformBus.busArn,
   logGroup: platformLogGroup,
   alarmTopicArn: alertingPageTopic.topicArn,
+  opsAlarmTopicArn: chiefNotificationTopic.topicArn,
 });
-
-// Created ahead of sessionRevocation, whose credential-reset alarm notifies it.
-export const chiefNotificationTopic = new ChiefNotificationTopic("chief-notifications", { env });
 
 export const sessionRevocation = new SessionRevocation("session-revocation", {
   env,

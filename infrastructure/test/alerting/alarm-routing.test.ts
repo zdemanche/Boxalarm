@@ -37,6 +37,7 @@ describe("full stack: no alarm notifies nobody (deploy-readiness M1)", { timeout
       "boxalarm-dev-member-status-revocation-failed-invocations",
       "boxalarm-dev-cert-expired-reactor-onfailure-depth",
       "boxalarm-dev-training-eligibility-flip-failed",
+      "boxalarm-dev-alerting-bridge-malformed-row",
     ]) {
       expect(actionsOf(name), name).toEqual([PAGE_TOPIC]);
     }
@@ -47,6 +48,7 @@ describe("full stack: no alarm notifies nobody (deploy-readiness M1)", { timeout
       "boxalarm-dev-incident-outbox-drain-onfailure-depth",
       "boxalarm-dev-notification-digest-errors",
       "boxalarm-dev-inventory-ppe-expiry-scanner-dlq-depth",
+      "boxalarm-dev-outbox-malformed-row",
     ]) {
       expect(actionsOf(name), name).toEqual([OPS_TOPIC]);
     }

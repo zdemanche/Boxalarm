@@ -79,9 +79,26 @@ describe("AlertingOutboxDrain", () => {
       drain.onFailureAlarm,
       drain.publishFailedAlarm,
       drain.eventTypeRejectedAlarm,
+      drain.malformedRowAlarm,
     ]) {
       expect(await resolve(alarm.alarmActions)).toEqual([PAGE_TOPIC_ARN]);
     }
+  });
+
+  it("pages on any MalformedOutboxRow in the alerting-bridge namespace", async () => {
+    const drain = await build();
+    const [namespace, metric, threshold, comparison] = await Promise.all([
+      resolve(drain.malformedRowAlarm.namespace),
+      resolve(drain.malformedRowAlarm.metricName),
+      resolve(drain.malformedRowAlarm.threshold),
+      resolve(drain.malformedRowAlarm.comparisonOperator),
+    ]);
+    expect([namespace, metric, threshold, comparison]).toEqual([
+      "Boxalarm/alerting-bridge",
+      "MalformedOutboxRow",
+      0,
+      "GreaterThanThreshold",
+    ]);
   });
 
   async function statements(drain: Awaited<ReturnType<typeof build>>): Promise<Statement[]> {
