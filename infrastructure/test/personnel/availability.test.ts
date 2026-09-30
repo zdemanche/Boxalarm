@@ -130,6 +130,42 @@ describe("Availability — availability-changed consumer (#207)", () => {
     );
   });
 
+  // Paging review MAJOR-A: list and end mark-offs early, key-scoped, Cedar-gated.
+  it("gives list and end their own Lambdas, key-scoped grants and the policy store", async () => {
+    const availability = await build();
+    type Statement = { Sid?: string; Action: string[]; Condition?: unknown; Effect: string };
+    const statementsOf = async (lambda: typeof availability.listLambda) =>
+      (JSON.parse(await resolve(lambda.rolePolicy.policy)) as { Statement: Statement[] }).Statement;
+
+    const list = await statementsOf(availability.listLambda);
+    expect(list.find((s) => s.Sid === "AvailabilityListMarkoffs")).toMatchObject({
+      Action: ["dynamodb:Query"],
+      Condition: { "ForAllValues:StringLike": { "dynamodb:LeadingKeys": ["DEPT#*#MEMBER#*"] } },
+    });
+
+    const end = await statementsOf(availability.endLambda);
+    const dynamoActions = end
+      .filter((s) => s.Effect === "Allow")
+      .flatMap((s) => s.Action)
+      .filter((a) => a.startsWith("dynamodb:"));
+    expect(dynamoActions.sort()).toEqual([
+      "dynamodb:GetItem",
+      "dynamodb:PutItem",
+      "dynamodb:UpdateItem",
+    ]);
+    // (No DeleteItem allowed: the mark-off row is never deleted, so a replayed create 409s.)
+    expect(end.find((s) => s.Sid === "AvailabilityDeleteSchedules")?.Action).toEqual([
+      "scheduler:DeleteSchedule",
+    ]);
+    for (const lambda of [availability.listLambda, availability.endLambda]) {
+      const env = await resolve(lambda.function.environment);
+      expect(env?.variables?.VERIFIED_PERMISSIONS_POLICY_STORE_ID).toBe("ps-1");
+      expect(await resolve(lambda.rolePolicy.policy)).toContain(
+        "verifiedpermissions:IsAuthorizedWithToken",
+      );
+    }
+  });
+
   it("does not VPC-attach the availability-changed consumer", async () => {
     const availability = await build();
     const vpcConfig = await resolve(availability.availabilityChangedConsumer.function.vpcConfig);

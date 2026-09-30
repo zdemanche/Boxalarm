@@ -71,6 +71,14 @@ export function canChangeMemberStatus(roles: readonly Role[]): boolean {
   return roles.includes('CHIEF') || roles.includes('ADMIN');
 }
 
+/**
+ * Seeing and ending another member's mark-offs (Cedar ViewMemberAvailability /
+ * EndMemberMarkoff, AVAILABILITY_OFFICER_GROUPS): OFFICER, CHIEF, ADMIN.
+ */
+export function canManageMemberAvailability(roles: readonly Role[]): boolean {
+  return (['OFFICER', 'CHIEF', 'ADMIN'] as const).some((r) => roles.includes(r));
+}
+
 /** Equipment and PPE writes (Cedar INVENTORY_ADMIN_GROUPS). */
 export function canManageInventory(roles: readonly Role[]): boolean {
   return (['OFFICER', 'CHIEF', 'ADMIN'] as const).some((r) => roles.includes(r));

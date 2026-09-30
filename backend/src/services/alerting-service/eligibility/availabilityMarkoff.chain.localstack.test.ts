@@ -204,4 +204,143 @@ describe('availability mark-off → outbox drain → alerting snapshot (LocalSta
     );
     expect(typeof sentRow?.sentAt).toBe('number');
   }, 60_000);
+
+  // Paging review MAJOR-A + mobile review R3-M2: ending early re-pages the member, removes the
+  // schedules, and keeps the row so a replayed create is 409 and cannot unpage them again.
+  it('mark-off → end early → AVAILABLE in the snapshot, schedules deleted, a replayed create is 409', async () => {
+    const member = 'mbr-2';
+    const snapshotKey = { pk: `DEPT#${DEPT}#ELIGIBILITY`, sk: `MEMBER#${member}` };
+    await docClient.send(
+      new PutCommand({
+        TableName: ALERTING_TABLE,
+        Item: {
+          ...snapshotKey,
+          entityType: 'MEMBER_ELIGIBILITY_SNAPSHOT',
+          memberId: member,
+          active: true,
+          quals: [],
+          roles: [],
+          availabilityState: 'AVAILABLE',
+          snapshotUpdatedAt: Date.now() - 60_000,
+        },
+      }),
+    );
+    const schedulerSend = vi.fn().mockResolvedValue({});
+    const scheduler = { send: schedulerSend } as unknown as SchedulerClient;
+    const published: { Source: string; DetailType: string; Detail: string }[] = [];
+    const { createOutboxDrainHandler } = await import('@boxalarm/outbox');
+    const drain = createOutboxDrainHandler('platform-service', {
+      eventBridgeClient: {
+        send: vi.fn((command: { input: { Entries: typeof published } }) => {
+          published.push(...command.input.Entries);
+          return Promise.resolve({ Entries: command.input.Entries.map(() => ({})) });
+        }),
+      } as unknown as EventBridgeClient,
+      ddbClient: docClient,
+    });
+    const { handler: consume } = await import('./consumer.js');
+    let sequence = 0;
+    /** Drains every not-yet-sent outbox row for the member and delivers it to alerting. */
+    async function relay(): Promise<void> {
+      const { Items = [] } = await docClient.send(
+        new QueryCommand({
+          TableName: PLATFORM_TABLE,
+          KeyConditionExpression: 'pk = :pk',
+          ExpressionAttributeValues: { ':pk': `DEPT#${DEPT}#OUTBOX#MEMBER#${member}` },
+          ConsistentRead: true,
+        }),
+      );
+      const pending = Items.filter((item) => item.sentAt === undefined || item.sentAt === null);
+      const before = published.length;
+      for (const row of pending) {
+        sequence += 1;
+        await drain(
+          {
+            Records: [
+              {
+                eventID: `s-${sequence}`,
+                eventName: 'INSERT',
+                dynamodb: { SequenceNumber: `s-${sequence}`, NewImage: marshall(row) },
+              },
+            ],
+          } as unknown as DynamoDBStreamEvent,
+          {} as never,
+          () => undefined,
+        );
+      }
+      for (const entry of published.slice(before)) {
+        await consume({
+          Records: [
+            {
+              messageId: `m-${sequence}-${entry.Detail.length}`,
+              body: JSON.stringify({
+                'detail-type': entry.DetailType,
+                source: entry.Source,
+                detail: JSON.parse(entry.Detail) as unknown,
+              }),
+            },
+          ],
+        } as unknown as SQSEvent);
+      }
+    }
+    const snapshotState = async (): Promise<unknown> =>
+      (
+        await docClient.send(
+          new GetCommand({ TableName: ALERTING_TABLE, Key: snapshotKey, ConsistentRead: true }),
+        )
+      ).Item?.availabilityState;
+
+    const { createAvailability } = await import('../../personnel-service/availability/handler.js');
+    const { endMarkoff } = await import('../../personnel-service/availability/markoffs.js');
+    const now = Math.floor(Date.now() / 1000);
+    const createEvent = {
+      pathParameters: { memberId: member },
+      headers: {},
+      body: JSON.stringify({ startAt: now - 60, endAt: now + 3600 }),
+    } as unknown as GuardEvent;
+    const principal = { sub: member, deptId: DEPT, 'cognito:groups': 'MEMBER' };
+
+    expect(
+      await createAvailability(createEvent, principal, { schedulerClient: scheduler }),
+    ).toMatchObject({ statusCode: 201 });
+    await relay();
+    expect(await snapshotState()).toBe('MARKED_OFF');
+
+    // Timestamps: the end's eventTime must sort after the create's for the snapshot clock.
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    const ended = await endMarkoff(
+      {
+        pathParameters: { memberId: member, markoffId: String(now - 60) },
+        headers: {},
+      } as unknown as GuardEvent,
+      principal,
+      { schedulerClient: scheduler },
+    );
+    expect(ended).toMatchObject({ statusCode: 200 });
+    await relay();
+    expect(await snapshotState()).toBe('AVAILABLE');
+    const deleted = schedulerSend.mock.calls
+      .map(([command]) => command as { constructor: { name: string }; input: { Name: string } })
+      .filter((command) => command.constructor.name === 'DeleteScheduleCommand')
+      .map((command) => command.input.Name);
+    expect(deleted).toHaveLength(2);
+    expect(deleted.every((name) => name.startsWith('avail-'))).toBe(true);
+
+    const { Item: row } = await docClient.send(
+      new GetCommand({
+        TableName: PLATFORM_TABLE,
+        Key: { pk: `DEPT#${DEPT}#MEMBER#${member}`, sk: `MARKOFF#${now - 60}` },
+        ConsistentRead: true,
+      }),
+    );
+    expect(row).toMatchObject({ endedBy: member, cancelled: false });
+    expect(row?.endAt).toBeLessThanOrEqual(Math.floor(Date.now() / 1000));
+
+    // A replayed original create (offline outbox, double tap) cannot re-create the window.
+    expect(
+      await createAvailability(createEvent, principal, { schedulerClient: scheduler }),
+    ).toMatchObject({ statusCode: 409 });
+    await relay();
+    expect(await snapshotState()).toBe('AVAILABLE');
+  }, 60_000);
 });

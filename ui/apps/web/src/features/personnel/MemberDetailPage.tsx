@@ -2,7 +2,12 @@ import { FormEvent, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useParams } from 'react-router-dom';
 import { useAuth } from '../../auth/AuthContext';
-import { canManageInventory, canManageTraining } from '../../auth/roles';
+import {
+  canManageInventory,
+  canManageMemberAvailability,
+  canManageTraining,
+} from '../../auth/roles';
+import { MarkOffList } from '../availability/MarkOffList';
 import { ApiForbiddenGate } from '../../components/ApiForbiddenGate';
 import { Badge } from '../../components/ui/Chip';
 import { PageHeader } from '../../components/ui/PageHeader';
@@ -308,6 +313,13 @@ export function MemberDetailPage() {
           </dl>
 
           <MemberStatusSection member={member} />
+
+          {canManageMemberAvailability(auth.roles) ? (
+            <MarkOffList
+              memberId={member.memberId}
+              ownRecord={member.memberId === auth.user?.profile.sub}
+            />
+          ) : null}
 
           <RolesSection member={member} canEdit={canManageRoles} />
 

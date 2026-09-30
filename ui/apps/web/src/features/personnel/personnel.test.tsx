@@ -270,3 +270,32 @@ test('forced 403 on detail renders an accessible forbidden state', async () => {
   expect(screen.getByText('You do not have access to this page.')).toBeTruthy();
   expect(screen.queryByText('trace-xyz')).toBeNull();
 });
+
+// Paging review MAJOR-A: an officer sees a member's mark-offs and can end one early.
+test('an officer sees the member’s mark-offs and can end one now', async () => {
+  const nowSeconds = Math.floor(Date.now() / 1000);
+  statusFixture('ACTIVE');
+  const ended: string[] = [];
+  server.use(
+    http.get('/api/v1/personnel/members/m1/availability', () =>
+      HttpResponse.json({
+        markOffs: [
+          {
+            markoffId: String(nowSeconds - 60),
+            startAt: nowSeconds - 60,
+            endAt: nowSeconds + 3600,
+          },
+        ],
+      }),
+    ),
+    http.post('/api/v1/personnel/members/m1/availability/:markoffId/end', ({ params }) => {
+      ended.push(String(params.markoffId));
+      return HttpResponse.json({ markoffId: params.markoffId, endedAt: nowSeconds });
+    }),
+  );
+  const user = userEvent.setup();
+  renderPersonnel(['OFFICER'], '/personnel/m1');
+  await user.click(await screen.findByRole('button', { name: /^End the mark-off/ }));
+  await waitFor(() => expect(ended).toEqual([String(nowSeconds - 60)]));
+  expect(await screen.findByText(/member is available again/)).toBeTruthy();
+});

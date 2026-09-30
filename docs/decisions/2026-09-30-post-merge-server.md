@@ -38,3 +38,29 @@
 - There is no step-up or confirmation code: this is the settled no-step-up decision. The notice and the alarm are the detective controls.
 
 **Residual, accepted:** a compromised ADMIN account can still redirect any member's recovery address. The previous address and the chief both hear of it at once.
+
+## Mark-offs really unpage now, so they can be listed, ended early and are capped (paging review MAJOR-A)
+
+**Why:** before e45e3d9 the platform drain dropped every mark-off, so a mark-off never reached alerting. Now one really stops a member's call alerts, until its `endAt`. There was no way back, and `endAt` could run to the year 2100.
+
+**Decision: API contract.** Web uses it now; the mobile "I'm available again" button is being built against it on the mobile branch.
+- **List:** `GET /api/v1/personnel/members/{memberId}/availability` returns `{ markOffs: [{ markoffId, startAt, endAt, reason? }] }`.
+  - Times are in epoch seconds.
+  - It returns current and upcoming mark-offs only; ended, cancelled and past ones are left out.
+  - `markoffId` is the stored `startAt` as a string, because rows are `MARKOFF#{startAt}`.
+- **End:** `POST /api/v1/personnel/members/{memberId}/availability/{markoffId}/end` returns `{ markoffId, endedAt, cancelled }`.
+  - A current mark-off ends now. An upcoming one is cancelled.
+  - A repeat call answers `200` with `alreadyEnded: true`.
+- **Who may call them:**
+  - the member, on their own record (`ViewOwnAvailability`, `EndOwnMarkoff`, every role);
+  - an OFFICER, CHIEF or ADMIN, on anyone's record (`ViewMemberAvailability`, `EndMemberMarkoff`).
+- **What ending does:**
+  - It keeps the `MARKOFF#` row. It sets `endAt` to now (for an upcoming mark-off, `endAt = startAt` and `cancelled: true`), plus `revertedAt`, `endedAt` and `endedBy`. Because the row stays, a replayed create for the same `startAt` still gets `409` and cannot unpage the member again (mobile review R3-M2).
+  - It emits `personnel.availability.changed AVAILABLE` through the outbox, even for an upcoming mark-off: an `ACTIVATE` racing the end is ordered by the snapshot clock.
+  - It writes an audit entry.
+  - It deletes both schedules, ignoring not-found errors. A schedule that fires anyway finds `revertedAt` and does nothing.
+- **Cap:** a mark-off may last at most 90 days (`400` otherwise). A longer absence is LOA, a status change.
+
+**Before deploy (ops):** mark-offs created before this change never reached alerting. Their pending `ACTIVATE` schedules will now unpage those members. List `MARKOFF#` rows with a future `endAt` and confirm them with the members, or end them with the route above.
+
+**Residual:** overlapping windows. The first window's `REVERT`, or ending it early, emits `AVAILABLE` while a second window is still active. That over-pages the member, which is the safe direction.

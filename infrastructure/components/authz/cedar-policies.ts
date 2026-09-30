@@ -72,6 +72,10 @@ export const SELF_SERVICE_ACTIONS = [
   "RecordAttendance",
   "ViewOwnAttendance",
   "MarkAvailability",
+  // A member's own mark-offs: list them and end one early (availability/markoffs.ts routes a
+  // request here only when the path memberId is the caller's sub, and re-checks it).
+  "ViewOwnAvailability",
+  "EndOwnMarkoff",
   "ViewOwnLosapTotal",
   "GetQuals",
   "ViewTranscript",
@@ -373,6 +377,12 @@ export const NERIS_OFFICER_ACTIONS = [
   "ViewNerisEntity",
 ] as const;
 export const NERIS_OFFICER_GROUPS = ["OFFICER", "CHIEF", "ADMIN"] as const;
+
+// Another member's mark-offs (paging review MAJOR-A): a mark-off stops that member's pages, so
+// an officer can see who is marked off and end a window entered by mistake. OFFICER/CHIEF/ADMIN
+// (not TRAINING/APPARATUS): the same officers who run the call.
+export const AVAILABILITY_OFFICER_ACTIONS = ["ViewMemberAvailability", "EndMemberMarkoff"] as const;
+export const AVAILABILITY_OFFICER_GROUPS = ["OFFICER", "CHIEF", "ADMIN"] as const;
 export const NERIS_ADMIN_ACTIONS = ["UnlockIncidentReport", "SyncNerisEntity"] as const;
 
 // Resource type each NERIS action is sent with (the handlers' withAuthorization options).
@@ -459,6 +469,14 @@ export const CEDAR_SCHEMA = JSON.stringify({
         appliesTo: { principalTypes: ["User"], resourceTypes: ["Member"] },
       },
       MarkAvailability: { appliesTo: { principalTypes: ["User"], resourceTypes: ["Member"] } },
+      ViewOwnAvailability: {
+        appliesTo: { principalTypes: ["User"], resourceTypes: ["Member"] },
+      },
+      EndOwnMarkoff: { appliesTo: { principalTypes: ["User"], resourceTypes: ["Member"] } },
+      ViewMemberAvailability: {
+        appliesTo: { principalTypes: ["User"], resourceTypes: ["Member"] },
+      },
+      EndMemberMarkoff: { appliesTo: { principalTypes: ["User"], resourceTypes: ["Member"] } },
       ViewOwnLosapTotal: { appliesTo: { principalTypes: ["User"], resourceTypes: ["Member"] } },
       GetQuals: { appliesTo: { principalTypes: ["User"], resourceTypes: ["Member"] } },
       UpdateQuals: { appliesTo: { principalTypes: ["User"], resourceTypes: ["Member"] } },
@@ -703,6 +721,11 @@ export function inspectionsOfficerActionsPolicy(userPoolId: string): string {
   ).join(" || ");
   const actions = INSPECTIONS_OFFICER_ACTIONS.map((a) => `Boxalarm::Action::"${a}"`).join(", ");
   return `permit (\n  principal,\n  action in [${actions}],\n  resource\n) when {\n  ${groupCheck}\n};`;
+}
+
+/** Another member's mark-offs: list and end early — OFFICER/CHIEF/ADMIN. */
+export function availabilityOfficerActionsPolicy(userPoolId: string): string {
+  return roleGatedPolicy(userPoolId, AVAILABILITY_OFFICER_GROUPS, AVAILABILITY_OFFICER_ACTIONS);
 }
 
 /** Validating an incident report against NERIS rules — every role (read-only). */

@@ -209,6 +209,20 @@ describe('personnel availability handler', () => {
     expect(body.detail).toContain('strictly after startAt');
   });
 
+  // Paging review MAJOR-A: a mark-off really stops pages now; a mistyped year must not.
+  it('400s a mark-off longer than 90 days', async () => {
+    const { createAvailability } = await import('./handler.js');
+    const result = await createAvailability(
+      buildEvent({
+        body: JSON.stringify({ startAt: FUTURE_START, endAt: FUTURE_START + 91 * 86_400 }),
+      }),
+      PRINCIPAL,
+    );
+    expect(result).toMatchObject({ statusCode: 400 });
+    const body = JSON.parse((result as { body: string }).body) as { detail: string };
+    expect(body.detail).toContain('at most 90 days');
+  });
+
   it('400s with a validation detail when endAt is in the past', async () => {
     const { createAvailability } = await import('./handler.js');
     const result = await createAvailability(
