@@ -208,6 +208,15 @@ describe("SessionRevocation (review C1)", () => {
     expect(actions).toEqual(["arn:aws:sns:us-east-1:123456789012:chief"]);
   });
 
+  it("revokes only on personnel-service's personnel.member.updated (no other producer can drive it)", async () => {
+    const sr = await build();
+    const pattern = await resolve(sr.memberStatusConsumer.rule.eventPattern);
+    expect(JSON.parse(pattern as string)).toEqual({
+      source: ["personnel-service"],
+      "detail-type": ["personnel.member.updated"],
+    });
+  });
+
   it("reports partial batch failures on the status consumer (review minor 15)", async () => {
     const sr = await build();
     const types = await resolve(sr.memberStatusConsumer.eventSourceMapping.functionResponseTypes);

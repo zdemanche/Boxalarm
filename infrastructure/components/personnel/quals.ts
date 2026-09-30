@@ -151,7 +151,12 @@ export class Quals extends pulumi.ComponentResource {
       {
         env,
         ruleName: `boxalarm-${env}-eligibility-changed`,
-        eventPattern: JSON.stringify({ "detail-type": ["personnel.eligibility.changed"] }),
+        // Producer matched as well as the detail-type: only personnel-service
+        // (quals/repository.ts EVENT_SOURCE) may change who the alerting snapshot pages.
+        eventPattern: JSON.stringify({
+          source: ["personnel-service"],
+          "detail-type": ["personnel.eligibility.changed"],
+        }),
         queueName: `boxalarm-${env}-eligibility-changed-snapshot-queue`,
         lambda: this.eligibilityChangedConsumer.function,
         lambdaRole: this.eligibilityChangedConsumer.role,

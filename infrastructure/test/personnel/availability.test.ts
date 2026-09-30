@@ -102,10 +102,11 @@ describe("Availability — availability-changed consumer (#207)", () => {
     expect(comparison).toBe("GreaterThanThreshold");
   });
 
-  it("routes only personnel.availability.changed onto the queue", async () => {
+  it("routes only personnel-service's personnel.availability.changed onto the queue", async () => {
     const availability = await build();
     const pattern = await resolve(availability.availabilityChangedQueueConsumer.rule.eventPattern);
     expect(JSON.parse(pattern as string)).toEqual({
+      source: ["personnel-service"],
       "detail-type": ["personnel.availability.changed"],
     });
   });

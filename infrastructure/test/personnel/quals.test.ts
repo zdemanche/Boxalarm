@@ -102,10 +102,11 @@ describe("Quals — eligibility-changed consumer (#114/#204)", () => {
     expect(comparison).toBe("GreaterThanThreshold");
   });
 
-  it("routes only personnel.eligibility.changed onto the queue (#114)", async () => {
+  it("routes only personnel-service's personnel.eligibility.changed onto the queue (#114)", async () => {
     const quals = await build();
     const pattern = await resolve(quals.eligibilityChangedQueueConsumer.rule.eventPattern);
     expect(JSON.parse(pattern as string)).toEqual({
+      source: ["personnel-service"],
       "detail-type": ["personnel.eligibility.changed"],
     });
   });

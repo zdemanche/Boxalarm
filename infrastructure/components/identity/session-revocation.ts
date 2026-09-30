@@ -169,7 +169,13 @@ export class SessionRevocation extends pulumi.ComponentResource {
       {
         env,
         ruleName: `boxalarm-${env}-member-status-revocation`,
-        eventPattern: JSON.stringify({ "detail-type": ["personnel.member.updated"] }),
+        // Producer matched as well as the detail-type: only personnel-service writes
+        // personnel.member.updated (member status, roles, push devices), so no other producer
+        // on the bus can drive a revocation.
+        eventPattern: JSON.stringify({
+          source: ["personnel-service"],
+          "detail-type": ["personnel.member.updated"],
+        }),
         queueName: `boxalarm-${env}-member-status-revocation-queue`,
         lambda: this.memberStatusLambda.function,
         lambdaRole: this.memberStatusLambda.role,
