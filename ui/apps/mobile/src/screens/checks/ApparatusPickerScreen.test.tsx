@@ -1,4 +1,4 @@
-import { fireEvent, render } from '@testing-library/react-native';
+import { act, fireEvent, render } from '@testing-library/react-native';
 import { mockChecksRepository } from '../../features/checks/mockChecksRepository';
 import type { ChecksRepositoryWithFallbackFlag } from '../../features/checks/apiChecksRepository';
 import { NoCachedDataError } from '../../sync/readThrough';
@@ -7,8 +7,19 @@ import { ApparatusPickerScreen } from './ApparatusPickerScreen';
 const mockNavigate = jest.fn();
 let mockRepository: ChecksRepositoryWithFallbackFlag = mockChecksRepository;
 
+const mockFocusListeners: (() => void)[] = [];
+const mockNavigation = {
+  navigate: (...args: unknown[]) => mockNavigate(...args),
+  addListener: (_event: string, listener: () => void) => {
+    mockFocusListeners.push(listener);
+    return () => {
+      const index = mockFocusListeners.indexOf(listener);
+      if (index >= 0) mockFocusListeners.splice(index, 1);
+    };
+  },
+};
 jest.mock('@react-navigation/native', () => ({
-  useNavigation: () => ({ navigate: mockNavigate }),
+  useNavigation: () => mockNavigation,
 }));
 
 let mockRoles: string[] = ['MEMBER'];
@@ -22,6 +33,7 @@ jest.mock('../../features/checks/apiChecksRepository', () => ({
 
 beforeEach(() => {
   mockNavigate.mockClear();
+  mockFocusListeners.length = 0;
   mockRepository = mockChecksRepository;
   mockRoles = ['MEMBER'];
 });
@@ -97,4 +109,21 @@ test('offline with nothing cached says so honestly and offers a retry, with no u
   expect(await findByText(/hasn't loaded the apparatus list yet/)).toBeTruthy();
   expect(queryByText('ENGINE-2')).toBeNull();
   expect(getByText('Try again')).toBeTruthy();
+});
+
+test('loads once on first focus, and again when the screen is focused on return', async () => {
+  const getApparatus = jest.fn(mockChecksRepository.getApparatus);
+  mockRepository = { ...mockChecksRepository, getApparatus };
+  const { findByText } = await render(<ApparatusPickerScreen />);
+  await findByText('ENGINE-2');
+
+  await act(async () => {
+    mockFocusListeners.forEach((listener) => listener()); // the initial focus
+  });
+  expect(getApparatus).toHaveBeenCalledTimes(1);
+
+  await act(async () => {
+    mockFocusListeners.forEach((listener) => listener()); // back from service status
+  });
+  expect(getApparatus).toHaveBeenCalledTimes(2);
 });

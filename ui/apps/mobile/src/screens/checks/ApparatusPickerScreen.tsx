@@ -1,6 +1,6 @@
 import { spacing, targetSize, typeScale } from '@boxalarm/design-tokens';
 import { useNavigation, type NavigationProp } from '@react-navigation/native';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, FlatList, Platform, Text, TouchableOpacity, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Button, StatusChip, useTheme } from '../../components/ui';
@@ -64,8 +64,20 @@ export function ApparatusPickerScreen() {
 
   const retry = useCallback(() => setAttempt((n) => n + 1), []);
 
-  // Coming back from the service-status screen: reload, so the row shows the new status.
-  useEffect(() => navigation.addListener?.('focus', () => setAttempt((n) => n + 1)), [navigation]);
+  // Coming back from the service-status screen: reload, so the row shows the new status. The
+  // first focus is the initial mount, which the load effect above already covers (review minor 7).
+  const seenFirstFocus = useRef(false);
+  useEffect(
+    () =>
+      navigation.addListener?.('focus', () => {
+        if (!seenFirstFocus.current) {
+          seenFirstFocus.current = true;
+          return;
+        }
+        setAttempt((n) => n + 1);
+      }),
+    [navigation],
+  );
 
   const header = (
     <View style={{ gap: spacing.md, paddingBottom: spacing.md }}>
