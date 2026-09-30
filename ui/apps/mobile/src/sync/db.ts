@@ -40,10 +40,18 @@ export function outboxHasOwnerColumns(): boolean {
   return ownerColumns;
 }
 
+/**
+ * Opens and initialises the database once per process. The handle is cached only after both
+ * tables exist and the migration has run (m7): a failure part-way - a transient I/O error in a
+ * headless page task - throws to this caller and the next call starts again, instead of caching
+ * a handle with no outbox table that fails every later insert (alert answers included) for the
+ * life of the process.
+ */
 export function getDb(): DB {
-  if (!db) {
-    db = open({ name: 'boxalarm-outbox.db' });
-    db.executeSync(
+  if (db) return db;
+  const opened = open({ name: 'boxalarm-outbox.db' });
+  try {
+    opened.executeSync(
       `CREATE TABLE IF NOT EXISTS outbox (
         id TEXT PRIMARY KEY,
         kind TEXT NOT NULL,
@@ -63,17 +71,26 @@ export function getDb(): DB {
         syncedAt TEXT
       )`,
     );
-    ownerColumns = migrateOutboxOwnerColumns(db);
+    const hasOwnerColumns = migrateOutboxOwnerColumns(opened);
     // Small device-local cache (kvStore.ts): the alert payload a page arrived with, the last
     // good dispatch detail and active-call list, and this device's latest answer per call - so
     // the alert path renders from the phone, never from a spinner.
-    db.executeSync(
+    opened.executeSync(
       `CREATE TABLE IF NOT EXISTS kv (
         key TEXT PRIMARY KEY,
         value TEXT NOT NULL,
         updatedAt INTEGER NOT NULL
       )`,
     );
+    ownerColumns = hasOwnerColumns;
+    db = opened;
+    return db;
+  } catch (error) {
+    try {
+      opened.close();
+    } catch {
+      // Already unusable; the next call opens a fresh handle.
+    }
+    throw error;
   }
-  return db;
 }
