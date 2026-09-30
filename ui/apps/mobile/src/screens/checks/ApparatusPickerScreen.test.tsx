@@ -11,6 +11,11 @@ jest.mock('@react-navigation/native', () => ({
   useNavigation: () => ({ navigate: mockNavigate }),
 }));
 
+let mockRoles: string[] = ['MEMBER'];
+jest.mock('../../auth/AuthContext', () => ({
+  useOptionalAuth: () => ({ roles: mockRoles }),
+}));
+
 jest.mock('../../features/checks/apiChecksRepository', () => ({
   useChecksRepository: () => mockRepository,
 }));
@@ -18,6 +23,23 @@ jest.mock('../../features/checks/apiChecksRepository', () => ({
 beforeEach(() => {
   mockNavigate.mockClear();
   mockRepository = mockChecksRepository;
+  mockRoles = ['MEMBER'];
+});
+
+test('an out-of-service unit can be checked, without promising the check returns it', async () => {
+  const { findByText, queryByText } = await render(<ApparatusPickerScreen />);
+
+  fireEvent.press(await findByText('TANKER-1'));
+  expect(mockNavigate).toHaveBeenCalledWith('CheckRunner', { apparatusId: 'TANKER-1' });
+  expect(await findByText('Out of service — you can still check it')).toBeTruthy();
+  expect(queryByText(/return it to service/)).toBeNull();
+});
+
+test('roles allowed to change service status are told where to return a unit', async () => {
+  mockRoles = ['OFFICER'];
+  const { findByText } = await render(<ApparatusPickerScreen />);
+
+  expect(await findByText(/To return it to service, use Apparatus › TANKER-1/)).toBeTruthy();
 });
 
 test('lists each apparatus with its unit id and status', async () => {

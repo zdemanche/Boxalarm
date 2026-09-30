@@ -4,11 +4,15 @@ import { useCallback, useEffect, useState } from 'react';
 import { ActivityIndicator, FlatList, Platform, Text, TouchableOpacity, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Button, StatusChip, useTheme } from '../../components/ui';
+import { useOptionalAuth } from '../../auth/AuthContext';
 import { useChecksRepository } from '../../features/checks/apiChecksRepository';
 import type { Apparatus } from '../../features/checks/types';
 import { ApiError } from '../../lib/apiClient';
 import type { ChecksStackParamList } from '../../navigation/ChecksStack';
 import { formatAsOf, NoCachedDataError } from '../../sync/readThrough';
+
+// Cedar UpdateServiceStatus: APPARATUS_OFFICER_GROUPS.
+const SERVICE_STATUS_ROLES = ['APPARATUS', 'OFFICER', 'CHIEF', 'ADMIN'] as const;
 
 type LoadState =
   | { kind: 'loading' }
@@ -32,6 +36,8 @@ export function ApparatusPickerScreen() {
   const navigation = useNavigation<NavigationProp<ChecksStackParamList>>();
   const theme = useTheme();
   const repository = useChecksRepository();
+  const roles = useOptionalAuth()?.roles ?? [];
+  const canReturnToService = SERVICE_STATUS_ROLES.some((role) => roles.includes(role));
   const [state, setState] = useState<LoadState>({ kind: 'loading' });
   const [attempt, setAttempt] = useState(0);
 
@@ -119,9 +125,8 @@ export function ApparatusPickerScreen() {
           }
           renderItem={({ item }) => {
             const inService = item.status === 'IN_SERVICE';
-            // Out-of-service units stay checkable: a passing check is how a unit gets back into
-            // service, and the checks API accepts runs on any unit (postChecks has no status
-            // gate). The row says so instead of greying the unit out.
+            // Out-of-service units stay checkable (postChecks has no status gate): crews check a
+            // unit before an officer returns it. The check itself doesn't change its status.
             return (
               <TouchableOpacity
                 accessibilityRole="button"
@@ -154,8 +159,16 @@ export function ApparatusPickerScreen() {
                 </Text>
                 <StatusChip
                   status={inService ? 'ok' : 'danger'}
-                  label={inService ? 'In service' : 'Out of service — check to return'}
+                  label={inService ? 'In service' : 'Out of service — you can still check it'}
                 />
+                {!inService && canReturnToService ? (
+                  // A check doesn't change service status. The app has no service-status control
+                  // yet, so point the roles Cedar allows (UpdateServiceStatus) at the web one.
+                  <Text style={{ color: theme.fgMuted, fontSize: typeScale.body.size }}>
+                    To return it to service, use Apparatus › {item.unitId} › Service status on the
+                    Boxalarm website.
+                  </Text>
+                ) : null}
                 <Text style={{ color: theme.fg, fontSize: typeScale.body.size, fontWeight: '600' }}>
                   Start check ›
                 </Text>
