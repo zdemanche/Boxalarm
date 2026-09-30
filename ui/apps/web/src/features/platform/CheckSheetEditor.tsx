@@ -28,14 +28,21 @@ function toItems(value: Record<string, unknown> | undefined): CheckSheetItem[] {
   }));
 }
 
+/**
+ * The code shape the server requires (platform-service config schema CHECKLIST_ITEM_CODE): the
+ * truck check sends it with each defect and photo, and the photo route puts it in a storage key.
+ */
+export const ITEM_CODE = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/;
+
 /** A stable code from the label ("Brake air pressure" -> "BRAKE_AIR_PRESSURE"). */
-function codeFromLabel(label: string): string {
-  return label
+export function codeFromLabel(label: string, index: number): string {
+  const code = label
     .trim()
     .toUpperCase()
     .replace(/[^A-Z0-9]+/g, '_')
     .replace(/^_+|_+$/g, '')
     .slice(0, 40);
+  return code.length > 0 ? code : `ITEM_${index + 1}`;
 }
 
 /**
@@ -62,6 +69,7 @@ export function CheckSheetEditor() {
   const [formError, setFormError] = useState<string | null>(null);
   const [fieldErrors, setFieldErrors] = useState<readonly ProblemFieldError[]>([]);
   const [saved, setSaved] = useState(false);
+  const [codeErrors, setCodeErrors] = useState<Record<number, string>>({});
   const [forbiddenError, setForbiddenError] = useState<unknown>(null);
 
   useEffect(() => {
@@ -106,15 +114,31 @@ export function CheckSheetEditor() {
     setFormError(null);
     setFieldErrors([]);
     setForbiddenError(null);
+    setCodeErrors({});
     const next = items
-      .map((item) => ({
+      .map((item, index) => ({
         ...item,
         label: item.label.trim(),
-        code: item.code.trim() || codeFromLabel(item.label),
+        code: item.code.trim() || codeFromLabel(item.label, index),
       }))
       .filter((item) => item.label.length > 0);
     if (next.length === 0) {
       setFormError('Add at least one item with a name.');
+      return;
+    }
+    const badCodes: Record<number, string> = {};
+    next.forEach((item, index) => {
+      if (!ITEM_CODE.test(item.code)) {
+        badCodes[index] =
+          'Use letters, digits, "_", "." or "-" only, starting with a letter or digit (up to 64), e.g. BRAKE_PRESSURE. Leave it blank to make one from the name.';
+      }
+    });
+    if (Object.keys(badCodes).length > 0) {
+      setItems(next);
+      setCodeErrors(badCodes);
+      setFormError(
+        `${Object.keys(badCodes).length === 1 ? 'One item has a code' : 'Some items have codes'} the truck check can't send. Fix the codes marked below.`,
+      );
       return;
     }
     const codes = next.map((item) => item.code);
@@ -174,6 +198,7 @@ export function CheckSheetEditor() {
                     optional
                     help="Leave blank to make one from the name. Changing it later starts a new history for the item."
                     value={item.code}
+                    error={codeErrors[index]}
                     onChange={(e) => update(index, { code: e.target.value })}
                   />
                   <Checkbox

@@ -688,3 +688,37 @@ test('the check sheet editor refuses two items with the same code', async () => 
     'Two items have the code LIGHTS',
   );
 });
+
+test('the check sheet editor refuses a hand-typed code the truck check could not send', async () => {
+  stubResizeObserver();
+  let puts = 0;
+  server.use(
+    http.get('/api/v1/platform/config/CHECKLIST_DEFAULTS', () =>
+      HttpResponse.json({
+        configType: 'CHECKLIST_DEFAULTS',
+        value: { items: [{ code: 'BRAKES', label: 'Brakes', requiresPhoto: false }] },
+        version: 1,
+        updatedAt: '2026-01-01T00:00:00.000Z',
+        updatedBy: 'admin-1',
+      }),
+    ),
+    http.put('/api/v1/platform/config/CHECKLIST_DEFAULTS', () => {
+      puts += 1;
+      return HttpResponse.json({});
+    }),
+    ...settingsDefaultHandlers(),
+  );
+
+  const user = userEvent.setup();
+  renderRoute(['ADMIN'], '/settings');
+  const sheet = await screen.findByRole('form', { name: 'Check sheet' });
+  const code = await within(sheet).findByLabelText(/^Code/);
+  await user.clear(code);
+  await user.type(code, 'Brake pressure');
+  await user.click(within(sheet).getByRole('button', { name: 'Save check sheet' }));
+
+  const alerts = await within(sheet).findAllByRole('alert');
+  expect(alerts.map((a) => a.textContent).join(' ')).toContain("the truck check can't send");
+  expect(code.getAttribute('aria-invalid')).toBe('true');
+  expect(puts).toBe(0);
+});

@@ -53,6 +53,8 @@ interface ValidatedDefectBody {
   readonly photoS3Key?: string;
   readonly photoFilename?: string;
   readonly itemCode?: string;
+  /** A malformed itemCode arrived and was dropped (logged + DefectItemCodeIgnored). */
+  readonly ignoredItemCode?: boolean;
   readonly clientMutationId?: string;
 }
 
@@ -143,15 +145,16 @@ function validateBody(
     }
   }
 
+  // The defect is the life-safety payload; itemCode is only a duplicate-detection hint. A
+  // malformed one (a sheet authored before codes were checked) is dropped, never a reason to
+  // refuse the defect - an OUT_OF_SERVICE report must still take the unit out of service.
   let itemCode: string | undefined;
+  let ignoredItemCode = false;
   if (body.itemCode !== undefined && body.itemCode !== null) {
-    if (typeof body.itemCode !== 'string' || !ITEM_CODE.test(body.itemCode)) {
-      errors.push({
-        field: 'itemCode',
-        message: `must match ${ITEM_CODE} when provided`,
-      });
-    } else {
+    if (typeof body.itemCode === 'string' && ITEM_CODE.test(body.itemCode)) {
       itemCode = body.itemCode;
+    } else {
+      ignoredItemCode = true;
     }
   }
 
@@ -180,6 +183,7 @@ function validateBody(
       ...(photoS3Key !== undefined ? { photoS3Key } : {}),
       ...(photoFilename !== undefined ? { photoFilename } : {}),
       ...(itemCode !== undefined ? { itemCode } : {}),
+      ...(ignoredItemCode ? { ignoredItemCode } : {}),
       ...(clientMutationId !== undefined ? { clientMutationId } : {}),
     },
   };
@@ -266,6 +270,17 @@ async function reportDefect(
     return validationProblem(traceId, validation.errors);
   }
   const { value } = validation;
+  if (value.ignoredItemCode) {
+    console.warn(
+      JSON.stringify({
+        event: 'apparatus.defect.itemCodeIgnored',
+        correlationId: traceId,
+        deptId,
+        unitId,
+      }),
+    );
+    emitDefectMetric('DefectItemCodeIgnored');
+  }
 
   if (value.clientMutationId) {
     try {

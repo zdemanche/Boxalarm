@@ -49,6 +49,11 @@ import {
 // A client idempotency key or check-sheet item code: becomes a sort-key and S3-key segment.
 const SAFE_SEGMENT = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/;
 
+/** No ".." anywhere: signed() refuses a stored key containing one. */
+function isSafeSegment(value: string): boolean {
+  return SAFE_SEGMENT.test(value) && !value.includes('..');
+}
+
 interface AttachCheckPhotoDeps {
   readonly client: DynamoDBDocumentClient;
   readonly tableName: string;
@@ -57,8 +62,25 @@ interface AttachCheckPhotoDeps {
 }
 
 interface ValidatedBody {
+  /** The item code as sent, stored on the row. */
   readonly itemCode: string;
+  /** The code as a key segment: itemCode itself when it is safe, else a sanitized form. */
+  readonly itemSegment: string;
+  readonly itemCodeIgnored: boolean;
   readonly filename: string;
+}
+
+/**
+ * A safe key segment for a malformed item code (a sheet authored before codes were checked):
+ * the photo is evidence and is kept, under a sanitized segment, rather than refused.
+ */
+function toSafeSegment(code: string): string {
+  const cleaned = code
+    .replace(/[^A-Za-z0-9_.-]+/g, '_')
+    .replace(/^[^A-Za-z0-9]+/, '')
+    .replace(/\.{2,}/g, '_')
+    .slice(0, 64);
+  return cleaned.length > 0 ? cleaned : 'ITEM';
 }
 
 function validateBody(
@@ -68,8 +90,11 @@ function validateBody(
   | { readonly ok: false; readonly errors: readonly ValidationFieldError[] } {
   const errors: ValidationFieldError[] = [];
   const itemCode = body.itemCode;
-  if (typeof itemCode !== 'string' || !SAFE_SEGMENT.test(itemCode)) {
-    errors.push({ field: 'itemCode', message: `is required and must match ${SAFE_SEGMENT}` });
+  if (typeof itemCode !== 'string' || itemCode.trim().length === 0 || itemCode.length > 256) {
+    errors.push({
+      field: 'itemCode',
+      message: 'is required and must be a string of 1-256 characters',
+    });
   }
   const photo = body.photo as { filename?: unknown } | undefined;
   const filename = typeof photo === 'object' && photo !== null ? photo.filename : undefined;
@@ -83,7 +108,17 @@ function validateBody(
   }
   return errors.length > 0
     ? { ok: false, errors }
-    : { ok: true, value: { itemCode: itemCode as string, filename: filename as string } };
+    : {
+        ok: true,
+        value: {
+          itemCode: itemCode as string,
+          itemSegment: isSafeSegment(itemCode as string)
+            ? (itemCode as string)
+            : toSafeSegment(itemCode as string),
+          itemCodeIgnored: !isSafeSegment(itemCode as string),
+          filename: filename as string,
+        },
+      };
 }
 
 function photoSk(checkKey: string, itemCode: string): string {
@@ -128,7 +163,7 @@ async function attachCheckPhoto(
   if (!unitId || unitId.trim().length === 0) {
     return badRequestProblem(traceId, 'unitId path parameter is required');
   }
-  if (!checkKey || !SAFE_SEGMENT.test(checkKey)) {
+  if (!checkKey || !isSafeSegment(checkKey)) {
     return badRequestProblem(traceId, `checkKey path parameter must match ${SAFE_SEGMENT}`);
   }
   const deptId = toVerifiedDeptId(principal);
@@ -143,7 +178,18 @@ async function attachCheckPhoto(
   if (!validation.ok) {
     return validationProblem(traceId, validation.errors);
   }
-  const { itemCode, filename } = validation.value;
+  const { itemCode, itemSegment, itemCodeIgnored, filename } = validation.value;
+  if (itemCodeIgnored) {
+    logError({
+      event: 'apparatus.checkPhoto.itemCodeSanitized',
+      service: 'apparatus-service',
+      correlationId: traceId,
+      deptId,
+      unitId,
+      itemSegment,
+    });
+    emitOutcomeMetric('Boxalarm/apparatus-service', 'CheckPhotoItemCodeSanitized');
+  }
 
   let operation = 'resolveApparatus';
   try {
@@ -159,13 +205,13 @@ async function attachCheckPhoto(
     }
 
     const pk = buildDeptScopedPk(deptId, 'APPARATUS', apparatusId);
-    const sk = photoSk(checkKey, itemCode);
-    const photoS3Key = `${deptId}/check/${apparatusId}/${checkKey}/${itemCode}/${filename}`;
+    const sk = photoSk(checkKey, itemSegment);
+    const photoS3Key = `${deptId}/check/${apparatusId}/${checkKey}/${itemSegment}/${filename}`;
     // Fails before anything is written if the content type can't be signed.
     requireUploadContentType(filename);
     const ts = deps.now();
     const date = new Date(ts * 1000).toISOString().slice(0, 10);
-    const mutatedEntityId = `${apparatusId}-${checkKey}-${itemCode}`;
+    const mutatedEntityId = `${apparatusId}-${checkKey}-${itemSegment}`;
 
     operation = 'putCheckPhoto';
     try {

@@ -198,6 +198,31 @@ describe('validateConfigValue', () => {
       expect(errors).toEqual([]);
     });
 
+    it('rejects a hand-typed code the defect and photo routes could not carry', () => {
+      for (const code of ['Brake pressure', 'SCBA/PSI', '_LEAD', 'X'.repeat(65)]) {
+        const errors = validateConfigValue('CHECKLIST_DEFAULTS', {
+          items: [{ code, label: 'Brakes', requiresPhoto: false }],
+        });
+        expect(
+          errors.map((e) => e.field),
+          code,
+        ).toContain('items[0].code');
+      }
+    });
+
+    it('rejects two items with the same code', () => {
+      const errors = validateConfigValue('CHECKLIST_DEFAULTS', {
+        items: [
+          { code: 'LIGHTS', label: 'Lights', requiresPhoto: false },
+          { code: 'LIGHTS', label: 'Lights again', requiresPhoto: false },
+        ],
+      });
+      expect(errors).toContainEqual({
+        field: 'items[1].code',
+        message: 'duplicates another item\'s code "LIGHTS"',
+      });
+    });
+
     it('rejects a non-boolean critical', () => {
       const errors = validateConfigValue('CHECKLIST_DEFAULTS', {
         items: [{ code: 'BRAKES', label: 'Brakes', requiresPhoto: false, critical: 'yes' }],

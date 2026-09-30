@@ -150,7 +150,6 @@ describe('attachCheckPhoto', () => {
   it.each([
     [{ itemCode: 'TIRES', photo: { filename: 'page.html' } }, 'photo.filename'],
     [{ itemCode: 'TIRES', photo: { filename: '../x.jpg' } }, 'photo.filename'],
-    [{ itemCode: 'TI#RES', photo: { filename: 'x.jpg' } }, 'itemCode'],
     [{ photo: { filename: 'x.jpg' } }, 'itemCode'],
   ])('rejects %j with a 400 naming %s', async (body, field) => {
     const { client, send } = fakeClient();
@@ -179,5 +178,22 @@ describe('attachCheckPhoto', () => {
       await handlerWith(client)
     )(buildEvent({ itemCode: 'TIRES', photo: { filename: 'x.jpg' } }));
     expect(result).toMatchObject({ statusCode: 404 });
+  });
+
+  it('keeps a photo whose item code is malformed, under a sanitized key segment', async () => {
+    const { client, send } = fakeClient();
+    const result = await (
+      await handlerWith(client)
+    )(buildEvent({ itemCode: 'Brake pressure/PSI', photo: { filename: 'b.jpg' } }));
+    expect(result).toMatchObject({ statusCode: 201 });
+    const body = JSON.parse((result as { body: string }).body) as Record<string, unknown>;
+    expect(body.photoS3Key).toBe('NICHOLS/check/APP-E1/check-1-abc/Brake_pressure_PSI/b.jpg');
+    const transact = send.mock.calls.find(
+      (call) => call[0] instanceof TransactWriteCommand,
+    )?.[0] as TransactWriteCommand;
+    expect(transact.input.TransactItems?.[0]?.Put?.Item).toMatchObject({
+      sk: 'CHECK_PHOTO#check-1-abc#Brake_pressure_PSI',
+      itemCode: 'Brake pressure/PSI',
+    });
   });
 });
