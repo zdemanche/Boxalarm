@@ -7,7 +7,8 @@ export interface Member {
   firstName: string;
   lastName: string;
   email: string;
-  phone: string;
+  /** E.164; null once cleared - the member then gets no SMS or voice pages. */
+  phone: string | null;
   status: MemberStatus;
   joinDate: string;
   rank: string;

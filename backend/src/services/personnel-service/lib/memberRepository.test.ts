@@ -141,6 +141,29 @@ describe('memberRepository', () => {
     });
   });
 
+  describe('getMember with a cleared phone (review R2-m5)', () => {
+    it('maps an absent phone to null rather than undefined-as-string', async () => {
+      sendMock.mockResolvedValueOnce({
+        Item: {
+          memberId: 'm1',
+          deptId: 'NICHOLS',
+          firstName: 'Jamie',
+          lastName: 'Rios',
+          email: 'y',
+          status: 'ACTIVE',
+          joinDate: '2026-01-01',
+          rank: 'FF',
+          agencyId: 'A1',
+          roles: ['MEMBER'],
+          createdAt: 1,
+          updatedAt: 2,
+        },
+      });
+      const member = await getMember('table', PRINCIPAL, 'm1');
+      expect(member?.phone).toBeNull();
+    });
+  });
+
   describe('getMember', () => {
     it('reads by dept-scoped pk and METADATA sk, mapping the item back to a Member', async () => {
       sendMock.mockResolvedValueOnce({

@@ -75,7 +75,7 @@ export function ProfileEditScreen() {
       setFirstName(profile.firstName);
       setLastName(profile.lastName);
       setEmail(profile.email);
-      setPhone(profile.phone);
+      setPhone(profile.phone ?? '');
       setStatus('idle');
     });
     return () => {

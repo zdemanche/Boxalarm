@@ -88,7 +88,7 @@ export function PersonnelListPage() {
         <span>
           {m.email}
           <br />
-          {m.phone}
+          {m.phone ?? 'No phone'}
         </span>
       ),
     },

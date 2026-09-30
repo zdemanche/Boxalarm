@@ -27,7 +27,8 @@ export interface Member {
   readonly deptId: string;
   readonly firstName: string;
   readonly lastName: string;
-  readonly phone: string;
+  /** E.164, or null once cleared (PUT phone: null removes it - the member gets no SMS/voice). */
+  readonly phone: string | null;
   readonly email: string;
   readonly status: MemberStatus;
   readonly joinDate: string;
@@ -66,7 +67,7 @@ function toMember(item: Record<string, unknown>): Member {
     deptId: item.deptId as string,
     firstName: item.firstName as string,
     lastName: item.lastName as string,
-    phone: item.phone as string,
+    phone: typeof item.phone === 'string' ? item.phone : null,
     email: item.email as string,
     status: item.status as MemberStatus,
     joinDate: item.joinDate as string,
