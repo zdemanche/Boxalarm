@@ -346,9 +346,16 @@ export async function enqueueResponse(
   return { answeredBy: stamp.ownerMemberId ?? stamp.answeredAsHint ?? null };
 }
 
-/** Unsent rows the member queued: what signing out would leave waiting on this phone. */
+/**
+ * Unsent rows the member queued: what signing out would leave waiting on this phone. An answer
+ * the server answered 409 SUPERSEDED is recorded (just not the current one), so it is not
+ * "unsent" and is not offered for discard (m9).
+ */
 export async function countUnsentFor(memberId: string): Promise<number> {
-  return outbox.countUnsentFor(memberId);
+  return outbox.countUnsentFor(
+    memberId,
+    (row) => row.status === 'REJECTED' && row.lastError === RESPONSE_SUPERSEDED,
+  );
 }
 
 /** The member chose to discard their unsent work at sign-out. */

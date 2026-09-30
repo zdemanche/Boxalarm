@@ -179,9 +179,12 @@ export async function listDrainable(
 }
 
 /** Rows the member queued and hasn't sent yet - what signing out would leave behind. */
-export async function countUnsentFor(ownerMemberId: string): Promise<number> {
+export async function countUnsentFor(
+  ownerMemberId: string,
+  alreadyRecorded: (row: OutboxRow) => boolean = () => false,
+): Promise<number> {
   const rows = await store.all();
-  return rows.filter((row) => row.ownerMemberId === ownerMemberId).length;
+  return rows.filter((row) => row.ownerMemberId === ownerMemberId && !alreadyRecorded(row)).length;
 }
 
 export async function discardAllFor(ownerMemberId: string): Promise<void> {

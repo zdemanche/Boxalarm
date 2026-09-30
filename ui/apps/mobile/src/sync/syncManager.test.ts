@@ -838,6 +838,8 @@ describe('alert responses (RESPONSE)', () => {
     const row = await store.find('response-sup');
     expect(row?.status).toBe('REJECTED');
     expect(row?.lastError).toBe(syncManager.RESPONSE_SUPERSEDED);
+    // Recorded by the server, so sign-out does not call it unsent (m9).
+    expect(await syncManager.countUnsentFor('m-test')).toBe(0);
   });
 
   test('409 with any other code (ANSWER_ID_REUSED) is "not recorded"', async () => {
