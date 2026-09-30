@@ -211,6 +211,41 @@ describe('CAD email handler', () => {
     });
   }
 
+  describe('header section parsed exactly as DKIM verifiers do (security review M6, m11)', () => {
+    it('a bare-LF blank line hiding a DKIM-Signature does not page', async () => {
+      // A lenient parser would end the headers at the bare "\n\n" and never see d=evil.
+      serve(
+        rawEmail({
+          headers:
+            'X-Pad: y\n\nDKIM-Signature: v=1; d=evil.example; h=from:to; b=zzz\r\nContent-Type: text/plain',
+        }),
+      );
+      await run();
+      expectDropped('MalformedHeaders');
+    });
+
+    it('a DKIM-Signature that does not parse is a failure, not "absent"', async () => {
+      serve(
+        rawEmail({
+          headers: 'DKIM-Signature: v=1; s=sel; b=abc\r\nContent-Type: text/plain',
+        }),
+      );
+      await run();
+      expectDropped('MalformedHeaders');
+    });
+
+    it('a signature with a body-length l= tag does not page (appended text would be unsigned)', async () => {
+      serve(
+        rawEmail({
+          headers:
+            'DKIM-Signature: v=1; d=cad.county.gov; l=10; h=from:to; b=abc\r\nContent-Type: text/plain',
+        }),
+      );
+      await run();
+      expectDropped('MalformedHeaders');
+    });
+  });
+
   describe('recipient binding (security review M2)', () => {
     it('a genuine county email to department A, redirected unchanged to B, does not page B', async () => {
       // Signed To is A's address; SES delivered it to B's (the configured RECIPIENT).

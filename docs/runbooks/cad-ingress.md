@@ -50,6 +50,7 @@ Metrics are in `Boxalarm/alerting-cad-ingress`: `CadIngressAccepted`, `CadIngres
 | `BadSignature` | Wrong key, or the signature was computed over re-serialized JSON rather than the exact bytes sent | Sign the raw body bytes exactly as sent |
 | `NoActiveKey` | The secret has no key (created by hand, or emptied) | Rotate the key from the web app |
 | `SpfFailed` / `DkimFailed` / `DmarcFailed` | The CAD's mail is not signed or not sent from an authorized server for its domain; a relay rewrites it | The CAD's mail admin fixes SPF/DKIM, or use the webhook |
+| `MalformedHeaders` | A bare CR or LF in the header section, a DKIM-Signature that does not parse, or one with a body-length `l=` tag | Never from a well-behaved mail system; treat as a forgery attempt |
 | `FromUnparseable` | Two `From` headers, several mailboxes, a group, or an address hidden in a display name | A genuine CAD never does this; treat it as a forgery attempt |
 | `SenderNotAllowed` | The From mailbox is not on the allowlist | Add the exact sending address (preferred) or, only if every mailbox of that domain may page the department, the domain |
 | `DkimNotAligned` | No DMARC pass and a DKIM `d=` that is not the From domain (a relay adds its own signature) | Have the CAD's domain publish DMARC, or sign with its own domain; never allowlist a relay's domain |

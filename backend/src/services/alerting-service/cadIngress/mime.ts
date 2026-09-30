@@ -15,6 +15,8 @@ export interface DkimSignature {
   readonly timestamp?: number;
   /** Signed header names (h=), lower case. */
   readonly signedHeaders: readonly string[];
+  /** l= body length: present means only part of the body is signed (refused). */
+  readonly bodyLength?: number;
 }
 
 export interface ParsedEmail {
@@ -22,6 +24,13 @@ export interface ParsedEmail {
   readonly fromDomain: string | undefined;
   /** Why the From header(s) could not be read as exactly one mailbox (address.ts). */
   readonly fromError?: string;
+  /**
+   * Why the message's header section or its DKIM signatures cannot be trusted to match what
+   * SES verified (security review M6): a bare CR or LF in the header section, no CRLF CRLF
+   * separator, a DKIM-Signature header that does not parse, or one with a body-length l= tag.
+   */
+  readonly headerError?:
+    'BareLineBreak' | 'NoHeaderTerminator' | 'UnparseableDkimSignature' | 'DkimBodyLength';
   readonly date: number | undefined;
   readonly messageId: string | undefined;
   /** Every address in the To and Cc headers (address.ts parseAddressList). */
@@ -75,6 +84,7 @@ export function parseDkimSignature(value: string): DkimSignature | undefined {
   const signature = tags.get('b')?.replace(/\s+/g, '');
   if (!domain || !signature) return undefined;
   const t = tags.get('t');
+  const l = tags.get('l');
   const signedHeaders = (tags.get('h') ?? '')
     .split(':')
     .map((name) => name.trim().toLowerCase())
@@ -83,6 +93,7 @@ export function parseDkimSignature(value: string): DkimSignature | undefined {
     domain,
     signature,
     signedHeaders,
+    ...(l !== undefined ? { bodyLength: Number(l) } : {}),
     ...(t && /^\d{1,12}$/.test(t) ? { timestamp: Number(t) } : {}),
   };
 }
@@ -173,9 +184,35 @@ export function decodeEncodedWords(value: string): string {
     );
 }
 
+/**
+ * The top-level header section ends ONLY at CRLF CRLF (RFC 5322), as DKIM verifiers read it; a
+ * bare CR or LF inside it is refused rather than guessed at, so this parser can never see a
+ * different set of DKIM-Signature headers than SES verified (security review M6).
+ */
+function strictHeaderSection(
+  raw: string,
+): { headerBlock: string; body: string } | { error: 'BareLineBreak' | 'NoHeaderTerminator' } {
+  const end = raw.indexOf('\r\n\r\n');
+  if (end < 0) return { error: 'NoHeaderTerminator' };
+  const headerBlock = raw.slice(0, end);
+  if (/\r(?!\n)|(?<!\r)\n/.test(headerBlock)) return { error: 'BareLineBreak' };
+  return { headerBlock, body: raw.slice(end + 4) };
+}
+
 export function parseEmail(raw: string): ParsedEmail {
-  const { headerBlock, body } = splitMessage(raw);
+  const section = strictHeaderSection(raw);
+  const { headerBlock, body } = 'error' in section ? splitMessage(raw) : section;
   const headers = parseHeaders(headerBlock);
+  const rawSignatures = all(headers, 'dkim-signature');
+  const dkimSignatures = rawSignatures.map(parseDkimSignature);
+  const headerError =
+    'error' in section
+      ? section.error
+      : dkimSignatures.some((signature) => signature === undefined)
+        ? ('UnparseableDkimSignature' as const)
+        : dkimSignatures.some((signature) => signature?.bodyLength !== undefined)
+          ? ('DkimBodyLength' as const)
+          : undefined;
   const from = parseFromHeaders(all(headers, 'from'));
   const dateHeader = first(headers, 'date');
   const date = dateHeader ? Date.parse(dateHeader) : Number.NaN;
@@ -191,9 +228,8 @@ export function parseEmail(raw: string): ParsedEmail {
     subject: ((subject) => (subject ? decodeEncodedWords(subject).trim() || undefined : undefined))(
       first(headers, 'subject'),
     ),
-    dkimSignatures: all(headers, 'dkim-signature')
-      .map(parseDkimSignature)
-      .filter((sig): sig is DkimSignature => sig !== undefined),
+    dkimSignatures: dkimSignatures.filter((sig): sig is DkimSignature => sig !== undefined),
+    ...(headerError ? { headerError } : {}),
     text: (found.plain ?? found.html ?? '').trim(),
   };
 }

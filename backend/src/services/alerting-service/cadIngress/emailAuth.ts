@@ -24,6 +24,7 @@ export type EmailAuthFailure =
   | 'DmarcFailed'
   | 'Spam'
   | 'Virus'
+  | 'MalformedHeaders'
   | 'FromUnparseable'
   | 'SenderNotAllowed'
   | 'DkimNotAligned'
@@ -59,6 +60,9 @@ export function checkEmailSender(
   /** The ingress address this message was received on (the SES recipient that matched). */
   recipient?: string,
 ): EmailAuthFailure | undefined {
+  // Headers we might read differently from SES, or a DKIM signature we cannot read or that
+  // signs only part of the body, fail - never treated as absent (security review M6/m11).
+  if (email.headerError) return 'MalformedHeaders';
   if (email.fromError || !email.fromAddress || !email.fromDomain) return 'FromUnparseable';
   const fromAllowed = allowedSenders.some((entry) =>
     entry.includes('@') ? entry === email.fromAddress : entry === email.fromDomain,
