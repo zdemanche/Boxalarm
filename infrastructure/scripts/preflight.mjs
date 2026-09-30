@@ -8,8 +8,11 @@
 //      reservation fails `pulumi up` ("decreases account's UnreservedConcurrentExecution below
 //      its minimum"). With --first-deploy it also checks this stack's reservations fit while
 //      leaving AWS's 100 unreserved.
-//   2. CloudTrail trails in the region: each stack creates TRAILS_PER_STACK, and the region
-//      limit is 5 (multi-region trails from elsewhere count too).
+//   2. CloudTrail trails in the region: each stack creates TRAILS_PER_STACK, and the limit is
+//      5 per account per region. Counted: trails OWNED BY THIS ACCOUNT that are homed in the
+//      region or multi-region (a multi-region trail counts in every region). Organization
+//      trails owned by the management account are listed but do not count against a member
+//      account's quota, so they are excluded (post-merge infra review F8).
 //   3. Account strategy: one AWS account per stack, prod in its own. A Boxalarm trail from
 //      another stack in this account fails the run for prod, and warns otherwise.
 //
@@ -18,6 +21,7 @@
 import { pathToFileURL } from "node:url";
 import { LambdaClient, GetAccountSettingsCommand } from "@aws-sdk/client-lambda";
 import { CloudTrailClient, DescribeTrailsCommand } from "@aws-sdk/client-cloudtrail";
+import { STSClient, GetCallerIdentityCommand } from "@aws-sdk/client-sts";
 
 export const MIN_ACCOUNT_CONCURRENCY = 1000;
 /** AWS keeps at least this much concurrency unreserved in every account. */
@@ -33,11 +37,11 @@ const STACK_TRAIL =
   /^boxalarm-(dev|qa|staging|prod)-(cognito-management-events|alerting-data-events)$/;
 
 /**
- * @param {{ lambda: { send: Function }, cloudtrail: { send: Function } }} clients
- * @param {{ env: string, firstDeploy?: boolean }} options
+ * @param {{ lambda: { send: Function }, cloudtrail: { send: Function }, sts: { send: Function } }} clients
+ * @param {{ env: string, region: string, firstDeploy?: boolean }} options
  * @returns {Promise<{ failures: string[], warnings: string[], info: string[] }>}
  */
-export async function runPreflight(clients, { env, firstDeploy = false }) {
+export async function runPreflight(clients, { env, region, firstDeploy = false }) {
   const failures = [];
   const warnings = [];
   const info = [];
@@ -66,11 +70,19 @@ export async function runPreflight(clients, { env, firstDeploy = false }) {
   const { trailList = [] } = await clients.cloudtrail.send(
     new DescribeTrailsCommand({ includeShadowTrails: true }),
   );
-  const names = trailList.map((t) => t.Name ?? "");
+  const { Account: accountId } = await clients.sts.send(new GetCallerIdentityCommand({}));
+  const accountOf = (trailArn) => (trailArn ?? "").split(":")[4];
+  const countsHere = (t) =>
+    accountOf(t.TrailARN) === accountId &&
+    (t.HomeRegion === region || t.IsMultiRegionTrail === true);
+  const names = trailList.filter(countsHere).map((t) => t.Name ?? "");
+  const excluded = trailList.length - names.length;
   const ownTrails = names.filter((n) => STACK_TRAIL.exec(n)?.[1] === env);
   const counted = names.length - ownTrails.length;
   info.push(
-    `CloudTrail: ${names.length} trail(s) in the region, ${ownTrails.length} this stack's.`,
+    `CloudTrail: ${names.length} trail(s) count against account ${accountId} in ${region}, ` +
+      `${ownTrails.length} this stack's` +
+      (excluded > 0 ? `; ${excluded} other-account (organization) trail(s) not counted.` : "."),
   );
   if (counted + TRAILS_PER_STACK > TRAIL_LIMIT_PER_REGION) {
     failures.push(
@@ -132,6 +144,7 @@ async function main() {
   const clients = {
     lambda: new LambdaClient({ region: args.region }),
     cloudtrail: new CloudTrailClient({ region: args.region }),
+    sts: new STSClient({ region: args.region }),
   };
   const { failures, warnings, info } = await runPreflight(clients, args);
   for (const line of info) console.log(line);
