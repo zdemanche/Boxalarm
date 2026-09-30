@@ -44,6 +44,18 @@ export const LAMBDA_ENTRIES = [
     entry: 'src/services/platform-service/config/handler.ts',
   },
   {
+    // GET/PUT /platform/cad-sources and POST .../test-parse (Cedar View/ManageCadIngress).
+    service: 'platform-service',
+    function: 'cad-sources',
+    entry: 'src/services/platform-service/cadSources/handler.ts',
+  },
+  {
+    // POST /platform/cad-sources/{sourceId}/webhook-key - the only CAD secret writer.
+    service: 'platform-service',
+    function: 'cad-sources-rotate-key',
+    entry: 'src/services/platform-service/cadSources/rotateKey.ts',
+  },
+  {
     service: 'platform-service',
     function: 'neris-entity-get',
     entry: 'src/services/platform-service/neris/getEntity.ts',
