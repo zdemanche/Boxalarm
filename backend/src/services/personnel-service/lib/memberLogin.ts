@@ -4,6 +4,7 @@ import {
   AdminDeleteUserCommand,
   AdminListGroupsForUserCommand,
   AdminRemoveUserFromGroupCommand,
+  AdminUpdateUserAttributesCommand,
   CognitoIdentityProviderClient,
   UsernameExistsException,
 } from '@aws-sdk/client-cognito-identity-provider';
@@ -179,4 +180,29 @@ export async function syncRoleGroups(
     );
   }
   return { added, removed };
+}
+
+/**
+ * Points the member's login at `email` - where Cognito sends a password-reset code (the
+ * pool's recovery is verified email first). Marked verified exactly as createMemberLogin
+ * provisions it: the address is attested by the chief or admin making the change, not by a
+ * code round trip, so recovery works at once. The username (the email the login was created
+ * with) cannot change; the member keeps signing in with it. Username is the memberId (`sub`).
+ */
+export async function syncMemberLoginEmail(
+  client: CognitoIdentityProviderClient,
+  config: MemberLoginConfig,
+  memberId: string,
+  email: string,
+): Promise<void> {
+  await client.send(
+    new AdminUpdateUserAttributesCommand({
+      UserPoolId: config.userPoolId,
+      Username: memberId,
+      UserAttributes: [
+        { Name: 'email', Value: email },
+        { Name: 'email_verified', Value: 'true' },
+      ],
+    }),
+  );
 }

@@ -203,9 +203,11 @@ describe('credentialResetHandler', () => {
     const result = await handler(buildEvent({ memberId: 'sub-9' }), ADMIN);
 
     expect(result.statusCode).toBe(409);
-    expect((JSON.parse(result.body) as { detail: string }).detail).toContain(
-      'InvalidParameterException',
-    );
+    const detail = (JSON.parse(result.body) as { detail: string }).detail;
+    expect(detail).toContain('InvalidParameterException');
+    // Security-web MAJOR 2: the advice names correction paths that exist in the console.
+    expect(detail).toContain('Change email');
+    expect(detail).toContain('Change status');
     expect(mocks.revokeMemberSession).toHaveBeenCalled();
   });
 

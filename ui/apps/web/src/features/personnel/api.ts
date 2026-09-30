@@ -51,6 +51,22 @@ export async function updateMemberStatus(
   return (await response.json()) as Member;
 }
 
+/**
+ * Changes a member's email (CHIEF/ADMIN, UpdateMember). The server also moves their login's
+ * password-recovery address to it; their sign-in username does not change.
+ */
+export async function updateMemberEmail(
+  tokens: AuthTokenSource,
+  memberId: string,
+  email: string,
+): Promise<void> {
+  await apiRequest(`personnel/members/${encodeURIComponent(memberId)}`, tokens, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email }),
+  });
+}
+
 /** Sets the member's full role set (CHIEF/ADMIN only, never your own). */
 export async function updateMemberRoles(
   tokens: AuthTokenSource,

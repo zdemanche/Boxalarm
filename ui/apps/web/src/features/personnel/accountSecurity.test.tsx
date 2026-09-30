@@ -336,3 +336,25 @@ test('is a labelled region with keyboard-reachable buttons and a live status reg
   await user.keyboard('{Enter}');
   expect(await screen.findByRole('dialog')).toBeTruthy();
 });
+
+// Security-web MAJOR 2: the reset-credentials 409 names this path; it must exist.
+test('change email: confirm states where reset codes go, then saves the new address once', async () => {
+  const puts: unknown[] = [];
+  server.use(
+    http.put('/api/v1/personnel/members/m1', async ({ request }) => {
+      puts.push(await request.json());
+      return HttpResponse.json({ memberId: 'm1', email: 'sam.lee@example.com' });
+    }),
+  );
+  const user = userEvent.setup();
+  renderSection(['CHIEF']);
+  await user.click(await screen.findByRole('button', { name: 'Change email' }));
+  const dialog = await screen.findByRole('dialog');
+  expect(dialog.textContent).toContain('Password-reset codes go to the new address');
+  const input = within(dialog).getByLabelText('New email');
+  await user.clear(input);
+  await user.type(input, 'sam.lee@example.com');
+  await user.click(within(dialog).getByRole('button', { name: 'Change email' }));
+  await waitFor(() => expect(puts).toEqual([{ email: 'sam.lee@example.com' }]));
+  await screen.findByText(/Password-reset codes go there from now on/);
+});

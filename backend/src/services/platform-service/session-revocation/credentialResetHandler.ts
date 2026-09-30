@@ -175,7 +175,9 @@ async function resetCredentials(
         status: 409,
         detail:
           `Every session was signed out, but the password could not be reset (${reason}). ` +
-          'Set the member to LOA to block sign-in until their email is corrected.',
+          "Correct the member's email on their page (Account security > Change email - it " +
+          'updates where reset codes go), then reset again. Until then, set them to Leave of ' +
+          'absence (Status > Change status) to block sign-in.',
         traceId,
       }),
     };

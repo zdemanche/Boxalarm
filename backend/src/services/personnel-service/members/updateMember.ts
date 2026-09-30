@@ -1,7 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import type { APIGatewayProxyResultV2 } from 'aws-lambda';
 import { DynamoDBClient, TransactionCanceledException } from '@aws-sdk/client-dynamodb';
-import { DynamoDBDocumentClient, TransactWriteCommand } from '@aws-sdk/lib-dynamodb';
+import { DynamoDBDocumentClient, GetCommand, TransactWriteCommand } from '@aws-sdk/lib-dynamodb';
+import type { CognitoIdentityProviderClient } from '@aws-sdk/client-cognito-identity-provider';
 import type { VerifiedPermissionsClient } from '@aws-sdk/client-verifiedpermissions';
 import {
   badRequestProblem,
@@ -15,6 +16,11 @@ import {
 import { buildDeptScopedPk, toVerifiedDeptId } from '@boxalarm/dept-scope';
 import { readMemberServiceConfig } from '../config.js';
 import { INVALID_PHONE_MESSAGE, normalizePhoneE164 } from '../lib/phone.js';
+import {
+  getCognitoClient,
+  readMemberLoginConfig,
+  syncMemberLoginEmail,
+} from '../lib/memberLogin.js';
 
 const UPDATABLE_FIELDS = ['phone', 'email', 'firstName', 'lastName'] as const;
 type UpdatableField = (typeof UPDATABLE_FIELDS)[number];
@@ -60,7 +66,12 @@ function isMemberConditionFailure(error: TransactionCanceledException): boolean 
 }
 
 function emitPersonnelMetric(
-  outcome: 'MemberProfileUpdated' | 'MemberProfileUpdateFailed',
+  outcome:
+    | 'MemberProfileUpdated'
+    | 'MemberProfileUpdateFailed'
+    | 'MemberEmailChanged'
+    | 'MemberEmailSyncFailed'
+    | 'MemberEmailCompensationFailed',
   reason?: string,
 ): void {
   console.log(
@@ -88,10 +99,54 @@ function getDocClient(client?: DynamoDBDocumentClient): DynamoDBDocumentClient {
   return cachedClient;
 }
 
+function problem(status: number, title: string, detail: string, traceId: string) {
+  return {
+    statusCode: status,
+    headers: { 'content-type': 'application/problem+json' },
+    body: JSON.stringify({ type: 'about:blank', title, status, detail, traceId }),
+  };
+}
+
+function logEvent(event: string, fields: Record<string, unknown>, error?: unknown): void {
+  const log = error === undefined ? console.log : console.error;
+  log(
+    JSON.stringify({
+      event,
+      service: 'personnel-service',
+      ...fields,
+      ...(error !== undefined
+        ? {
+            reason: error instanceof Error ? error.constructor.name : 'UnknownError',
+            message: error instanceof Error ? error.message : undefined,
+          }
+        : {}),
+    }),
+  );
+}
+
+type EditMode = 'self' | 'admin';
+
+interface ProfileDeps {
+  readonly client?: DynamoDBDocumentClient;
+  readonly cognito?: CognitoIdentityProviderClient;
+}
+
+/**
+ * Security-web MAJOR 2: the member's email is also their login's recovery address - where
+ * "Reset password" sends its code. An edit that reached only this row left Cognito on the old
+ * address, so recovery diverged. A changed email is therefore written to Cognito first and the
+ * row second, with the Cognito change undone if the row write fails.
+ *
+ * Only a chief or admin (UpdateMember) may change it. A member's own edit (SelfUpdateMember)
+ * that changes it is refused: a stolen session could otherwise move the recovery address and
+ * defeat "Reset password and sign out", the one control that ends that session. An own edit
+ * that re-sends the unchanged address (the app's profile form always does) is a no-op.
+ */
 async function updateMemberProfile(
   event: GuardEvent,
   principal: CedarPrincipalContext,
-  client?: DynamoDBDocumentClient,
+  mode: EditMode,
+  deps: ProfileDeps,
 ): Promise<APIGatewayProxyResultV2> {
   const traceId = extractTraceId(event);
   const memberId = event.pathParameters?.memberId;
@@ -120,7 +175,70 @@ async function updateMemberProfile(
   const now = Date.now();
   const eventId = randomUUID();
   const config = readMemberServiceConfig(process.env);
-  const docClient = getDocClient(client);
+  const docClient = getDocClient(deps.client);
+  const rowKey = { pk: buildDeptScopedPk(deptId, 'MEMBER', memberId), sk: 'METADATA' };
+
+  // The previous address, when this edit really changes it (read in the caller's own
+  // department: a member of another department is a 404 before Cognito is touched).
+  let previousEmail: string | undefined;
+  if (updates.email !== undefined) {
+    const current = await docClient.send(
+      new GetCommand({ TableName: config.tableName, Key: rowKey, ConsistentRead: true }),
+    );
+    if (!current.Item) {
+      emitPersonnelMetric('MemberProfileUpdateFailed', 'NotFound');
+      return notFoundProblem(traceId, `Member ${memberId} was not found.`);
+    }
+    const stored = typeof current.Item.email === 'string' ? current.Item.email : undefined;
+    if (stored === updates.email) {
+      updates = Object.fromEntries(Object.entries(updates).filter(([field]) => field !== 'email'));
+    } else if (mode === 'self') {
+      logEvent('personnel.member.update.selfEmailRefused', { correlationId: traceId, memberId });
+      return problem(
+        403,
+        'Forbidden',
+        'Your email is also where password-reset codes go, so only a chief or admin can change it. Ask them to update it.',
+        traceId,
+      );
+    } else {
+      previousEmail = stored;
+    }
+  }
+
+  const cognito =
+    previousEmail !== undefined || updates.email !== undefined ? deps.cognito : undefined;
+  const loginConfig = updates.email !== undefined ? readMemberLoginConfig(process.env) : undefined;
+  if (updates.email !== undefined && loginConfig) {
+    try {
+      await syncMemberLoginEmail(
+        cognito ?? getCognitoClient(),
+        loginConfig,
+        memberId,
+        updates.email,
+      );
+    } catch (error) {
+      const reason = error instanceof Error ? error.name : 'UnknownError';
+      logEvent('personnel.member.email.syncFailed', { correlationId: traceId, memberId }, error);
+      emitPersonnelMetric('MemberEmailSyncFailed', reason);
+      if (reason === 'InvalidParameterException') {
+        return badRequestProblem(traceId, 'email is not a valid email address.');
+      }
+      if (reason === 'UserNotFoundException') {
+        return problem(
+          409,
+          'Conflict',
+          'This member has no sign-in account to update, so the email was not changed.',
+          traceId,
+        );
+      }
+      return problem(
+        503,
+        'Service Unavailable',
+        'The sign-in service could not be updated, so the email was not changed. Try again.',
+        traceId,
+      );
+    }
+  }
 
   // A cleared phone is REMOVEd from the row; the event still carries `phone: null`, which the
   // alerting plane reads as "remove this member's SMS and voice targets".
@@ -143,7 +261,7 @@ async function updateMemberProfile(
           {
             Update: {
               TableName: config.tableName,
-              Key: { pk: buildDeptScopedPk(deptId, 'MEMBER', memberId), sk: 'METADATA' },
+              Key: rowKey,
               ConditionExpression: 'attribute_exists(pk)',
               UpdateExpression: `SET ${setClauses.join(', ')}${clearsPhone ? ' REMOVE #phone' : ''}`,
               ExpressionAttributeNames: { ...nameExpressions, '#updatedAt': 'updatedAt' },
@@ -174,6 +292,15 @@ async function updateMemberProfile(
       }),
     );
   } catch (error) {
+    if (updates.email !== undefined && loginConfig && previousEmail !== undefined) {
+      await restoreLoginEmail(
+        cognito ?? getCognitoClient(),
+        loginConfig,
+        memberId,
+        previousEmail,
+        traceId,
+      );
+    }
     if (error instanceof TransactionCanceledException && isMemberConditionFailure(error)) {
       console.error(
         JSON.stringify({
@@ -204,11 +331,42 @@ async function updateMemberProfile(
   }
 
   emitPersonnelMetric('MemberProfileUpdated');
+  if (updates.email !== undefined) {
+    // Alarmed to the chief (infra personnel/members.ts): the recovery address moved.
+    emitPersonnelMetric('MemberEmailChanged');
+    logEvent('personnel.member.email.changed', {
+      correlationId: traceId,
+      memberId,
+      actorId: principal.sub,
+    });
+  }
   return {
     statusCode: 200,
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ memberId, updatedAt: now, ...updates }),
   };
+}
+
+/** Compensation: the row write failed after Cognito took the new address. */
+async function restoreLoginEmail(
+  cognito: CognitoIdentityProviderClient,
+  loginConfig: ReturnType<typeof readMemberLoginConfig>,
+  memberId: string,
+  previousEmail: string,
+  traceId: string,
+): Promise<void> {
+  try {
+    await syncMemberLoginEmail(cognito, loginConfig, memberId, previousEmail);
+  } catch (error) {
+    // Cognito now holds an address the row does not: recovery goes somewhere the admin
+    // console does not show. Counted (alarmed with the email change) and named in the log.
+    logEvent(
+      'personnel.member.email.compensationFailed',
+      { correlationId: traceId, memberId },
+      error,
+    );
+    emitPersonnelMetric('MemberEmailCompensationFailed');
+  }
 }
 
 /**
@@ -221,7 +379,11 @@ async function updateMemberProfile(
  * SelfUpdateMember ALLOW can never reach another member's row.
  */
 export function createHandler(
-  deps: { client?: DynamoDBDocumentClient; vpClient?: VerifiedPermissionsClient } = {},
+  deps: {
+    client?: DynamoDBDocumentClient;
+    vpClient?: VerifiedPermissionsClient;
+    cognito?: CognitoIdentityProviderClient;
+  } = {},
 ) {
   const common = {
     actionType: 'Boxalarm::Action',
@@ -235,13 +397,13 @@ export function createHandler(
       if (event.pathParameters?.memberId !== principal.sub) {
         return forbiddenProblem(extractTraceId(event));
       }
-      return updateMemberProfile(event, principal, deps.client);
+      return updateMemberProfile(event, principal, 'self', deps);
     },
     { ...common, actionId: 'SelfUpdateMember' },
   );
 
   const adminUpdate = withAuthorization(
-    (event, principal) => updateMemberProfile(event, principal, deps.client),
+    (event, principal) => updateMemberProfile(event, principal, 'admin', deps),
     { ...common, actionId: 'UpdateMember' },
   );
 

@@ -147,6 +147,11 @@ export class Members extends pulumi.ComponentResource {
   public readonly updateRolesLambda: ServiceLambda;
   /** Keyed by the status that alarms: LOA, RETIRED. */
   public readonly deactivationAlarms: Record<"LOA" | "RETIRED", aws.cloudwatch.MetricAlarm>;
+  /** Security-web MAJOR 2: a member's recovery address moved, or Cognito and the row diverged. */
+  public readonly emailAlarms: Record<
+    "MemberEmailChanged" | "MemberEmailCompensationFailed",
+    aws.cloudwatch.MetricAlarm
+  >;
 
   constructor(name: string, args: MembersArgs, opts?: pulumi.ComponentResourceOptions) {
     requireEnv("Members", args.env);
@@ -295,6 +300,45 @@ export class Members extends pulumi.ComponentResource {
       RETIRED: deactivationAlarm("RETIRED"),
     };
 
+    // Security-web MAJOR 2: a chief/admin email edit moves where "Reset password" sends its
+    // code (updateMember.ts syncs it to Cognito). The chief hears of every one, as for LOA -
+    // and of a row write whose Cognito change could not be undone (the two now differ).
+    const emailAlarm = (
+      metricName: "MemberEmailChanged" | "MemberEmailCompensationFailed",
+      slug: string,
+      alarmDescription: string,
+    ) =>
+      new aws.cloudwatch.MetricAlarm(
+        `${name}-${slug}-alarm`,
+        {
+          name: `boxalarm-${env}-personnel-${slug}`,
+          alarmDescription,
+          namespace: "Boxalarm/personnel",
+          metricName,
+          statistic: "Sum",
+          period: 60,
+          evaluationPeriods: 1,
+          threshold: 0,
+          comparisonOperator: "GreaterThanThreshold",
+          treatMissingData: "notBreaching",
+          alarmActions: [args.chiefNotificationTopicArn],
+        },
+        { parent: this },
+      );
+    this.emailAlarms = {
+      MemberEmailChanged: emailAlarm(
+        "MemberEmailChanged",
+        "member-email-changed",
+        "A member's email - their password-recovery address - was changed by a chief or admin (personnel.member.email.changed names who).",
+      ),
+      MemberEmailCompensationFailed: emailAlarm(
+        "MemberEmailCompensationFailed",
+        "member-email-diverged",
+        "A member's email change reached Cognito but not the member row, and could not be undone: their recovery code goes to an address the console does not show. " +
+          "Re-save the email from the member's page (personnel.member.email.compensationFailed names the member).",
+      ),
+    };
+
     // E2-S6-INFRA #208: member self-service profile/contact update (F2.6, AP 12). One route,
     // two Cedar actions: updateMember.ts authorizes SelfUpdateMember (every role, via the
     // self-service policy) when the path memberId is the caller's own sub — and re-checks
@@ -310,21 +354,40 @@ export class Members extends pulumi.ComponentResource {
         code: lambdaCode("personnel-service", "members-update-profile"),
         logGroup: args.logGroup,
         // updateMember.ts reads PLATFORM_TABLE_NAME (config.ts readMemberServiceConfig),
-        // not PERSONNEL_TABLE_NAME like the other members routes.
+        // not PERSONNEL_TABLE_NAME like the other members routes. COGNITO_USER_POOL_ID: an
+        // email change is written to the member's login too (lib/memberLogin.ts).
         environment: {
           PLATFORM_TABLE_NAME: args.platformTableName,
           VERIFIED_PERMISSIONS_POLICY_STORE_ID: args.policyStoreId,
+          COGNITO_USER_POOL_ID: args.userPoolId,
         },
         // UpdateItem (member row) + PutItem (outbox row), one transaction; plus the
         // audit-key mutation deny every table-wide UpdateItem holder carries (F9.4).
+        // GetItem on member rows only: an email edit reads the stored address first.
+        // AdminUpdateUserAttributes in this pool only: the email sync and its undo.
         additionalPolicyStatements: pulumi
-          .all([args.platformTableArn, vpStatement])
-          .apply(([tableArn, vp]) => [
+          .all([args.platformTableArn, vpStatement, args.userPoolArn])
+          .apply(([tableArn, vp, userPoolArn]) => [
             {
               Sid: "MembersUpdateProfileAccess" as const,
               Effect: "Allow" as const,
               Action: ["dynamodb:UpdateItem", "dynamodb:PutItem"],
               Resource: [tableArn],
+            },
+            {
+              Sid: "MembersUpdateProfileReadMember" as const,
+              Effect: "Allow" as const,
+              Action: ["dynamodb:GetItem"],
+              Resource: [tableArn],
+              Condition: {
+                "ForAllValues:StringLike": { "dynamodb:LeadingKeys": ["DEPT#*#MEMBER#*"] },
+              },
+            },
+            {
+              Sid: "MembersUpdateProfileLoginEmail" as const,
+              Effect: "Allow" as const,
+              Action: ["cognito-idp:AdminUpdateUserAttributes"],
+              Resource: [userPoolArn],
             },
             ...vp,
             auditMutationDenyStatement(tableArn),

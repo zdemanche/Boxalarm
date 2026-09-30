@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { ApiError } from '../../lib/apiClient';
 import { useAuth } from '../../auth/AuthContext';
 import { ConfirmDialog } from '../../components/ui/Dialog';
 import { listMemberDevices, resetMemberCredentials, revokeMemberSessions } from '../platform/api';
 import type { MemberDevice } from '../platform/types';
+import { updateMemberEmail } from './api';
 import type { Member } from './types';
 
 /** Mirrors the Cedar policy for both actions (ADMIN_ONLY_ACTIONS: CHIEF/ADMIN). */
@@ -12,7 +13,7 @@ export function canUseAccountKillSwitches(roles: readonly string[]): boolean {
   return roles.includes('CHIEF') || roles.includes('ADMIN');
 }
 
-type Action = 'deviceLost' | 'resetCredentials';
+type Action = 'deviceLost' | 'resetCredentials' | 'changeEmail';
 
 /** The radio value for removing push from every device (the default). */
 const ALL_DEVICES = '';
@@ -82,6 +83,8 @@ function problemText(error: unknown, fallback: string): string {
  *    ones stop receiving pages.
  *  - Reset password and sign out: for a phished or leaked password. The old password stops
  *    working; the member sets a new one with "forgot password".
+ *  - Change email: where that reset code goes (security-web MAJOR 2). The server moves the
+ *    login's recovery address with the member row; a member cannot change it themselves.
  * The server enforces both with Cedar; the buttons are only shown to the roles it admits.
  * No password or second-factor prompt is added here - the product's auth model is settled.
  */
@@ -90,6 +93,8 @@ export function AccountSecuritySection({ member }: { member: Member }) {
   const [open, setOpen] = useState<Action | null>(null);
   const [message, setMessage] = useState('');
   const [lostDeviceId, setLostDeviceId] = useState(ALL_DEVICES);
+  const [newEmail, setNewEmail] = useState('');
+  const queryClient = useQueryClient();
   const name = `${member.firstName} ${member.lastName}`;
   const allowed = canUseAccountKillSwitches(auth.roles);
 
@@ -106,7 +111,10 @@ export function AccountSecuritySection({ member }: { member: Member }) {
     if (open === 'deviceLost') {
       setLostDeviceId(ALL_DEVICES);
     }
-  }, [open]);
+    if (open === 'changeEmail') {
+      setNewEmail(member.email);
+    }
+  }, [open, member.email]);
 
   if (!allowed) {
     return null;
@@ -125,6 +133,16 @@ export function AccountSecuritySection({ member }: { member: Member }) {
       if (action === 'deviceLost') {
         const result = await revokeMemberSessions(auth, member.memberId, chosen?.deviceId);
         setMessage(deviceLostMessage(name, chosen, result.push));
+      } else if (action === 'changeEmail') {
+        const email = newEmail.trim();
+        if (email.length === 0 || email === member.email) {
+          throw new Error('Enter the new email address.');
+        }
+        await updateMemberEmail(auth, member.memberId, email);
+        await queryClient.invalidateQueries({
+          queryKey: ['personnel', 'members', member.memberId],
+        });
+        setMessage(`${name}'s email is now ${email}. Password-reset codes go there from now on.`);
       } else {
         await resetMemberCredentials(auth, member.memberId);
         setMessage(
@@ -139,7 +157,9 @@ export function AccountSecuritySection({ member }: { member: Member }) {
           error,
           action === 'deviceLost'
             ? 'Could not sign this member out. Try again.'
-            : 'Could not reset this member’s password. Try again.',
+            : action === 'changeEmail'
+              ? 'Could not change this member’s email. Try again.'
+              : 'Could not reset this member’s password. Try again.',
         ),
         { cause: error },
       );
@@ -170,6 +190,9 @@ export function AccountSecuritySection({ member }: { member: Member }) {
         </button>
         <button type="button" onClick={() => setOpen('resetCredentials')} style={{ minHeight: 44 }}>
           Reset password and sign out
+        </button>
+        <button type="button" onClick={() => setOpen('changeEmail')} style={{ minHeight: 44 }}>
+          Change email
         </button>
       </div>
       {/* Always mounted: a live region that appears already filled is skipped by some readers. */}
@@ -249,6 +272,28 @@ export function AccountSecuritySection({ member }: { member: Member }) {
         onConfirm={() => run('resetCredentials')}
         danger
       />
+      <ConfirmDialog
+        open={open === 'changeEmail'}
+        onOpenChange={(next) => setOpen(next ? 'changeEmail' : null)}
+        title={`Change ${name}'s email?`}
+        consequence={
+          'Password-reset codes go to the new address from now on, so enter one they can read. ' +
+          'They keep signing in with the email their account was created with.'
+        }
+        confirmLabel="Change email"
+        onConfirm={() => run('changeEmail')}
+      >
+        <label style={{ display: 'grid', gap: 4, margin: 'var(--boxalarm-spacing-sm) 0' }}>
+          New email
+          <input
+            type="email"
+            value={newEmail}
+            onChange={(e) => setNewEmail(e.target.value)}
+            autoComplete="off"
+            style={{ minHeight: 44, padding: '0 12px' }}
+          />
+        </label>
+      </ConfirmDialog>
     </section>
   );
 }

@@ -112,6 +112,51 @@ describe("Members", () => {
     expect(listPolicy).not.toContain("cognito-idp");
   });
 
+  // Security-web MAJOR 2: an email edit syncs the member's login.
+  it("lets the profile Lambda update login attributes in this pool and read member rows only", async () => {
+    const members = await build();
+    const [policyJson, env] = await Promise.all([
+      resolve(members.updateProfileLambda.rolePolicy.policy),
+      resolve(members.updateProfileLambda.function.environment),
+    ]);
+    const statements = (
+      JSON.parse(policyJson) as {
+        Statement: Array<{
+          Sid: string;
+          Action: string[];
+          Resource: string[];
+          Condition?: unknown;
+        }>;
+      }
+    ).Statement;
+    const login = statements.find((s) => s.Sid === "MembersUpdateProfileLoginEmail");
+    expect(login?.Action).toEqual(["cognito-idp:AdminUpdateUserAttributes"]);
+    expect(login?.Resource).toEqual([
+      "arn:aws:cognito-idp:us-east-1:123456789012:userpool/us-east-1_pool",
+    ]);
+    const read = statements.find((s) => s.Sid === "MembersUpdateProfileReadMember");
+    expect(read?.Action).toEqual(["dynamodb:GetItem"]);
+    expect(read?.Condition).toEqual({
+      "ForAllValues:StringLike": { "dynamodb:LeadingKeys": ["DEPT#*#MEMBER#*"] },
+    });
+    expect(env?.variables?.COGNITO_USER_POOL_ID).toBe("us-east-1_pool");
+    expect(policyJson).not.toContain("AdminCreateUser");
+  });
+
+  it("alarms the chief on every email change and on a Cognito/row divergence", async () => {
+    const members = await build();
+    for (const [metric, alarm] of Object.entries(members.emailAlarms)) {
+      const [metricName, threshold, actions] = await Promise.all([
+        resolve(alarm.metricName),
+        resolve(alarm.threshold),
+        resolve(alarm.alarmActions),
+      ]);
+      expect(metricName).toBe(metric);
+      expect(threshold).toBe(0);
+      expect(actions).toEqual(["arn:aws:sns:us-east-1:123456789012:chief"]);
+    }
+  });
+
   it("grants no personnel role any permission on the alerting or incident tables (AC4)", async () => {
     const members = await build();
     const policies = await Promise.all([
