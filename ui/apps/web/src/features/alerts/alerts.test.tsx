@@ -145,6 +145,52 @@ test('an officer sees the manual entry form and, given a dispatch id, the roster
   expect(await screen.findByText('Sent, not confirmed delivered')).toBeTruthy();
 });
 
+// Server-fix security MINOR 2: receipts are on the fail-closed authorizer; an authorizer
+// refusal or a 5xx during an outage reads as "temporarily unavailable", not "no access".
+test.each([
+  [
+    'an authorizer refusal (no problem+json)',
+    403,
+    { message: 'Forbidden' },
+    'temporarily unavailable',
+  ],
+  [
+    'a 5xx',
+    503,
+    { title: 'Service Unavailable', status: 503, traceId: 't' },
+    'temporarily unavailable',
+  ],
+  [
+    'a Cedar denial (problem+json 403)',
+    403,
+    { title: 'Forbidden', status: 403, traceId: 't' },
+    'do not have access',
+  ],
+])('receipts after %s say %s', async (_label, status, body, text) => {
+  server.use(
+    http.get('/api/v1/alerting/dispatches/D-7', () =>
+      HttpResponse.json({
+        dispatchId: 'D-7',
+        incidentType: 'MVA',
+        address: '1 Main St',
+        crossStreets: '',
+        mapLink: null,
+        narrative: '',
+        prePlan: null,
+      }),
+    ),
+    http.get('/api/v1/alerting/dispatches/D-7/roster', () => HttpResponse.json({ members: [] })),
+    http.get('/api/v1/alerting/dispatches/D-7/receipts', () => HttpResponse.json(body, { status })),
+    http.get('/api/v1/apparatus/riding-board/D-7', () =>
+      HttpResponse.json({ dispatchId: 'D-7', apparatus: [] }),
+    ),
+  );
+
+  renderPage(['OFFICER'], '/alerts/roster?dispatchId=D-7');
+
+  expect(await screen.findByText(new RegExp(text))).toBeTruthy();
+});
+
 test('submitting the manual entry form navigates the page to the new dispatch id', async () => {
   let posted: Record<string, unknown> | undefined;
   server.use(
