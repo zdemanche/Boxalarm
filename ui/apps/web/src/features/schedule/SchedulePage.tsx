@@ -3,9 +3,25 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { StatusRole } from '@boxalarm/design-tokens';
 import { useAuth } from '../../auth/AuthContext';
 import { ApiForbiddenGate } from '../../components/ApiForbiddenGate';
-import { Button, Card, PageHeader, Skeleton, StatusChip, TextInput } from '../../components/ui';
-import { approveShiftSwap, createShift, getShiftCoverage, listShifts } from './api';
-import type { CoverageStatus, CreateShiftPosition } from './types';
+import {
+  Button,
+  Card,
+  PageHeader,
+  Select,
+  Skeleton,
+  StatusChip,
+  TextInput,
+} from '../../components/ui';
+import { useStations } from '../../lib/useStations';
+import { listMembers } from '../personnel/api';
+import {
+  approveShiftSwap,
+  createShift,
+  getShiftCoverage,
+  listPendingShiftSwaps,
+  listShifts,
+} from './api';
+import { SHIFT_STATUS_LABEL, type CoverageStatus, type CreateShiftPosition } from './types';
 
 const COVERAGE_STATUS: Record<CoverageStatus, StatusRole> = {
   covered: 'ok',
@@ -26,10 +42,24 @@ function toEpochMillis(localDateTime: string): number {
   return new Date(localDateTime).getTime();
 }
 
+/** "Wed, Oct 1, 18:00 – 06:00": the window a volunteer plans around, without seconds. */
+export function formatShiftWindow(startAt: number, endAt: number): string {
+  const start = new Date(startAt).toLocaleString(undefined, {
+    weekday: 'short',
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+  const end = new Date(endAt).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+  return `${start} – ${end}`;
+}
+
 const emptyPosition: CreateShiftPosition = { positionCode: '', requiredQual: '' };
 
 function CreateShiftForm({ onCreated }: { onCreated: () => void }) {
   const auth = useAuth();
+  const { stations, isLoading: stationsLoading } = useStations();
   const [startAt, setStartAt] = useState('');
   const [endAt, setEndAt] = useState('');
   const [stationId, setStationId] = useState('');
@@ -85,12 +115,33 @@ function CreateShiftForm({ onCreated }: { onCreated: () => void }) {
           onChange={(e) => setEndAt(e.target.value)}
           required
         />
-        <TextInput
-          label="Station ID"
-          value={stationId}
-          onChange={(e) => setStationId(e.target.value)}
-          required
-        />
+        {stations.length > 0 ? (
+          <Select
+            label="Station"
+            value={stationId}
+            onChange={(e) => setStationId(e.target.value)}
+            required
+          >
+            <option value="">Choose a station</option>
+            {stations.map((station) => (
+              <option key={station.stationId} value={station.stationId}>
+                {station.name}
+              </option>
+            ))}
+          </Select>
+        ) : (
+          <TextInput
+            label="Station"
+            help={
+              stationsLoading
+                ? undefined
+                : "Stations aren't set up in Settings yet, so enter the station's name."
+            }
+            value={stationId}
+            onChange={(e) => setStationId(e.target.value)}
+            required
+          />
+        )}
         {positions.map((position, index) => (
           <fieldset
             key={index}
@@ -133,6 +184,7 @@ function CreateShiftForm({ onCreated }: { onCreated: () => void }) {
 
 function CoverageSection() {
   const auth = useAuth();
+  const { nameFor } = useStations();
   const coverageQuery = useQuery({
     queryKey: ['schedule', 'coverage'],
     queryFn: () => getShiftCoverage(auth),
@@ -154,7 +206,8 @@ function CoverageSection() {
         <ul style={{ listStyle: 'none', padding: 0 }}>
           {(coverageQuery.data ?? []).map((shift) => (
             <li key={shift.shiftId} style={{ padding: 'var(--bx-space-sm) 0' }}>
-              <strong>{shift.stationId}</strong>{' '}
+              <strong>{nameFor(shift.stationId)}</strong>{' '}
+              {formatShiftWindow(shift.startAt, shift.endAt)}{' '}
               <StatusChip status={COVERAGE_STATUS[shift.status]}>
                 {COVERAGE_WORD[shift.status]}
               </StatusChip>
@@ -181,47 +234,102 @@ function CoverageSection() {
   );
 }
 
-function SwapApprovalForm() {
+/** Swaps waiting for an officer, each with its own Approve - no Shift ID or Swap ID to type. */
+function PendingSwaps() {
   const auth = useAuth();
-  const [shiftId, setShiftId] = useState('');
-  const [swapId, setSwapId] = useState('');
+  const queryClient = useQueryClient();
+  const { nameFor } = useStations();
+  const swapsQuery = useQuery({
+    queryKey: ['schedule', 'swaps', 'pending'],
+    queryFn: () => listPendingShiftSwaps(auth),
+  });
+  const membersQuery = useQuery({
+    queryKey: ['personnel', 'members'],
+    queryFn: () => listMembers(auth),
+  });
+  const shiftsQuery = useQuery({
+    queryKey: ['schedule', 'shifts'],
+    queryFn: () => listShifts(auth),
+  });
   const approveMutation = useMutation({
-    mutationFn: () => approveShiftSwap(auth, shiftId, swapId),
+    mutationFn: (swap: { shiftId: string; requestedAt: number }) =>
+      approveShiftSwap(auth, swap.shiftId, String(swap.requestedAt)),
     onSuccess: () => {
-      setShiftId('');
-      setSwapId('');
+      void queryClient.invalidateQueries({ queryKey: ['schedule'] });
     },
   });
 
+  const memberName = (memberId: string) => {
+    const member = membersQuery.data?.find((m) => m.memberId === memberId);
+    return member ? `${member.firstName} ${member.lastName}` : 'A member';
+  };
+
+  let body: React.ReactNode;
+  if (swapsQuery.isLoading) {
+    body = <Skeleton lines={2} />;
+  } else if (swapsQuery.error || !swapsQuery.data) {
+    body = (
+      <ApiForbiddenGate error={swapsQuery.error} embedded>
+        <p>Pending swaps couldn&rsquo;t load.</p>
+      </ApiForbiddenGate>
+    );
+  } else if (swapsQuery.data.length === 0) {
+    body = <p>No swaps are waiting for approval.</p>;
+  } else {
+    body = (
+      <ul style={{ listStyle: 'none', padding: 0, margin: 0 }}>
+        {swapsQuery.data.map((swap) => {
+          const shift = shiftsQuery.data?.find((s) => s.shiftId === swap.shiftId);
+          const what = `${memberName(swap.fromMemberId)} to ${memberName(swap.toMemberId)}, ${swap.positionCode}`;
+          const approving =
+            approveMutation.isPending &&
+            approveMutation.variables?.shiftId === swap.shiftId &&
+            approveMutation.variables.requestedAt === swap.requestedAt;
+          return (
+            <li
+              key={`${swap.shiftId}-${swap.requestedAt}`}
+              style={{
+                display: 'flex',
+                flexWrap: 'wrap',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                gap: 'var(--bx-space-sm)',
+                padding: 'var(--bx-space-sm) 0',
+                borderBottom: '1px solid var(--bx-border-decorative)',
+              }}
+            >
+              <span>
+                <strong>
+                  {memberName(swap.fromMemberId)} → {memberName(swap.toMemberId)}
+                </strong>{' '}
+                · {swap.positionCode}
+                {shift
+                  ? ` · ${nameFor(shift.stationId)}, ${formatShiftWindow(shift.startAt, shift.endAt)}`
+                  : ''}
+              </span>
+              <Button
+                variant="secondary"
+                loading={approving}
+                aria-label={`Approve swap: ${what}`}
+                onClick={() =>
+                  approveMutation.mutate({ shiftId: swap.shiftId, requestedAt: swap.requestedAt })
+                }
+              >
+                Approve
+              </Button>
+            </li>
+          );
+        })}
+      </ul>
+    );
+  }
+
   return (
-    <Card title="Approve shift swap" style={{ marginTop: 'var(--bx-space-xl)' }}>
-      <form
-        aria-label="Approve shift swap"
-        onSubmit={(event: FormEvent) => {
-          event.preventDefault();
-          approveMutation.mutate();
-        }}
-        style={{ display: 'flex', gap: 'var(--bx-space-sm)', alignItems: 'end' }}
-      >
-        <TextInput
-          label="Shift ID"
-          value={shiftId}
-          onChange={(e) => setShiftId(e.target.value)}
-          required
-        />
-        <TextInput
-          label="Swap ID"
-          value={swapId}
-          onChange={(e) => setSwapId(e.target.value)}
-          required
-        />
-        <Button type="submit" loading={approveMutation.isPending}>
-          Approve
-        </Button>
-      </form>
+    <Card title="Swaps waiting for approval" style={{ marginTop: 'var(--bx-space-xl)' }}>
+      {body}
       {approveMutation.error ? (
         <p role="alert" aria-live="assertive">
-          {approveMutation.error.message}
+          The swap wasn&rsquo;t approved: {approveMutation.error.message}
         </p>
       ) : null}
       {approveMutation.isSuccess ? <p role="status">Swap approved.</p> : null}
@@ -231,6 +339,7 @@ function SwapApprovalForm() {
 
 export function SchedulePage() {
   const auth = useAuth();
+  const { nameFor } = useStations();
   const queryClient = useQueryClient();
 
   const shiftsQuery = useQuery({
@@ -256,8 +365,8 @@ export function SchedulePage() {
         <ul style={{ listStyle: 'none', padding: 0 }}>
           {(shiftsQuery.data ?? []).map((shift) => (
             <li key={shift.shiftId} style={{ padding: 'var(--bx-space-sm) 0' }}>
-              <strong>{shift.stationId}</strong> — {new Date(shift.startAt).toLocaleString()} —{' '}
-              {shift.status}
+              <strong>{nameFor(shift.stationId)}</strong> —{' '}
+              {formatShiftWindow(shift.startAt, shift.endAt)} — {SHIFT_STATUS_LABEL[shift.status]}
             </li>
           ))}
         </ul>
@@ -267,7 +376,7 @@ export function SchedulePage() {
         onCreated={() => void queryClient.invalidateQueries({ queryKey: ['schedule', 'shifts'] })}
       />
       <CoverageSection />
-      <SwapApprovalForm />
+      <PendingSwaps />
     </main>
   );
 }

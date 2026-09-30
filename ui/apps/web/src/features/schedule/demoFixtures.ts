@@ -63,6 +63,21 @@ export function tryHandleScheduleExtras(
     return json({ ...created, positions: body.positions }, 201);
   }
   if (parts[2] === 'coverage' && method === 'GET') return json({ shifts: coverage });
+  if (parts[2] === 'swaps' && parts[3] === 'pending' && method === 'GET') {
+    return json({
+      swaps: [
+        {
+          shiftId: 's-tonight',
+          positionCode: 'DRIVER',
+          fromMemberId: 'm-3',
+          toMemberId: 'm-2',
+          status: 'PENDING',
+          requiresOfficerApproval: true,
+          requestedAt: 1758300000000,
+        },
+      ],
+    });
+  }
   if (parts[3] === 'swap' && parts[5] === 'approve' && method === 'POST') {
     return json({
       shiftId: parts[2],

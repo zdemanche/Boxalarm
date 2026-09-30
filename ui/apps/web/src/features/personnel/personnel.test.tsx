@@ -69,7 +69,7 @@ function renderPersonnel(groups: string[], path = '/personnel') {
   );
 }
 
-test('admin create form posts a member that appears as PROBATIONARY', async () => {
+test('admin create form posts a member that appears as Probationary', async () => {
   const members: Member[] = [];
   server.use(
     http.get('/api/v1/personnel/members', () => HttpResponse.json({ items: members })),
@@ -100,7 +100,7 @@ test('admin create form posts a member that appears as PROBATIONARY', async () =
 
   await waitFor(() => {
     expect(screen.getByText(/Rivera, Alex/)).toBeTruthy();
-    expect(screen.getByText('PROBATIONARY')).toBeTruthy();
+    expect(screen.getByText('Probationary')).toBeTruthy();
   });
 });
 

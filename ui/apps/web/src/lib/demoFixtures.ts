@@ -105,6 +105,16 @@ let members: Member[] = [
 
 const configStore = new Map<EditableConfigType, ConfigResponse>([
   [
+    'STATIONS',
+    {
+      configType: 'STATIONS',
+      value: { stations: [{ stationId: 'STATION-1', name: 'Station 1 — Nichols' }] },
+      version: 1,
+      updatedAt: '2026-08-01T00:00:00.000Z',
+      updatedBy: 'demo-admin',
+    },
+  ],
+  [
     'ALERT_RULES',
     {
       configType: 'ALERT_RULES',

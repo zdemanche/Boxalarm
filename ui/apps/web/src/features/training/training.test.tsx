@@ -257,7 +257,7 @@ test('training officer adds a certification and can revoke it; a non-training ro
   await user.click(within(dialog).getByRole('button', { name: 'Revoke certification' }));
 
   await waitFor(() => {
-    expect(screen.getByText(/REVOKED/)).toBeTruthy();
+    expect(screen.getByText(/Revoked/)).toBeTruthy();
   });
 
   cleanup();

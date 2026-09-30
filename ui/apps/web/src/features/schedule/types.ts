@@ -45,3 +45,22 @@ export interface ShiftSwapApproval {
   status: 'APPROVED';
   claimedByMemberId: string;
 }
+
+/** GET personnel/shifts/swaps/pending (shifts/shiftSwap.ts ShiftSwapListEntry). The swap's id in
+ * the approve route is its requestedAt. */
+export interface PendingShiftSwap {
+  shiftId: string;
+  positionCode: string;
+  fromMemberId: string;
+  toMemberId: string;
+  status: 'PENDING';
+  requiresOfficerApproval: boolean;
+  requestedAt: number;
+}
+
+export const SHIFT_STATUS_LABEL: Record<ShiftStatus, string> = {
+  OPEN: 'Open',
+  PARTIALLY_FILLED: 'Partially filled',
+  FULL: 'Full',
+  CANCELLED: 'Cancelled',
+};

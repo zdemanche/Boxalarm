@@ -5,6 +5,7 @@ import { ApiForbiddenGate } from '../../components/ApiForbiddenGate';
 import { Button, Card, Skeleton } from '../../components/ui';
 import { downloadTranscript, getTranscript } from './api';
 import type { TranscriptExportFormat } from './types';
+import { humanize } from '../../lib/labels';
 
 function triggerDownload(blob: Blob, filename: string): void {
   const url = URL.createObjectURL(blob);
@@ -74,7 +75,7 @@ export function TranscriptPanel({ memberId }: { memberId: string }) {
           <ul>
             {transcript.certifications.map((cert) => (
               <li key={cert.certId}>
-                {cert.certType} — {cert.status} · expires {cert.expiryDate}
+                {cert.certType} — {humanize(cert.status)} · expires {cert.expiryDate}
               </li>
             ))}
           </ul>

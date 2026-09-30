@@ -22,6 +22,7 @@ import {
 import type { AttendanceActivityType, MemberStatus } from './types';
 import { RolesSection } from './RolesSection';
 import { AccountSecuritySection, canUseAccountKillSwitches } from './AccountSecuritySection';
+import { humanize } from '../../lib/labels';
 
 const STATUSES: MemberStatus[] = ['PROBATIONARY', 'ACTIVE', 'LOA', 'RETIRED'];
 const ACTIVITY_TYPES: AttendanceActivityType[] = [
@@ -63,7 +64,7 @@ function QualsSection({ memberId, canEdit }: { memberId: string; canEdit: boolea
         <ul style={{ listStyle: 'none', padding: 0 }}>
           {(qualsQuery.data ?? []).map((qual) => (
             <li key={qual.qualCode} style={{ padding: 'var(--boxalarm-spacing-xs) 0' }}>
-              <strong>{qual.qualCode}</strong> —{' '}
+              <strong>{humanize(qual.qualCode)}</strong> —{' '}
               {qual.currentlyEligible ? 'Eligible' : 'Not currently eligible'}
               {qual.grantedByCertId ? (
                 <>
@@ -287,7 +288,7 @@ export function MemberDetailPage() {
           { label: 'Members', to: '/personnel' },
           { label: member ? `${member.firstName} ${member.lastName}` : '…' },
         ]}
-        actions={member ? <Badge>{member.status}</Badge> : undefined}
+        actions={member ? <Badge>{humanize(member.status)}</Badge> : undefined}
       />
       {memberQuery.isLoading || !member ? (
         <p>Loading member…</p>
@@ -380,13 +381,13 @@ export function MemberDetailPage() {
             <ul>
               {(ppeQuery.data ?? []).map((item) => (
                 <li key={item.ppeItemId}>
-                  {item.itemType} · size {item.size} · expires {item.nfpaExpiryDate} ·{' '}
+                  {humanize(item.itemType)} · size {item.size} · expires {item.nfpaExpiryDate} ·{' '}
                   <strong
                     style={
                       item.status === 'EXPIRED' ? { color: 'var(--boxalarm-error)' } : undefined
                     }
                   >
-                    {item.status === 'EXPIRED' ? 'EXPIRED' : item.status}
+                    {humanize(item.status)}
                   </strong>
                 </li>
               ))}

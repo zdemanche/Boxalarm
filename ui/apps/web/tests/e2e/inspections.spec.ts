@@ -166,11 +166,26 @@ test('schedule then conduct an inspection with a violation, axe clean (E5-S5 tes
     return route.fulfill({ status: 201, json: scheduled });
   });
 
+  await page.route('**/api/v1/inspections/occupancies', (route) =>
+    route.fulfill({
+      json: {
+        items: [
+          {
+            occupancyId: 'occ-1',
+            address: '12 Main St',
+            occupancyType: 'Mercantile',
+            contacts: [],
+            hazards: [],
+          },
+        ],
+      },
+    }),
+  );
   await page.goto('/inspections');
-  await page.getByLabel('Occupancy ID').fill('occ-1');
+  await page.getByLabel('Occupancy').selectOption('occ-1');
   await page.getByLabel('Scheduled date').fill('2026-10-05');
   await page.getByRole('button', { name: 'Schedule' }).click();
-  await expect(page.getByText('occ-1')).toBeVisible();
+  await expect(page.getByRole('rowheader', { name: '12 Main St (Mercantile)' })).toBeVisible();
 
   await page.getByRole('button', { name: 'Conduct' }).click();
   await page.getByRole('button', { name: 'Add violation' }).click();

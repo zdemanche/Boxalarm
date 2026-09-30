@@ -21,6 +21,7 @@ import {
   transitionEquipmentLifecycle,
 } from './api';
 import type { AssignedToType, LifecycleStatus } from './types';
+import { humanize } from '../../lib/labels';
 
 const NEXT_LIFECYCLE: Record<LifecycleStatus, readonly LifecycleStatus[]> = {
   ACQUIRED: ['IN_SERVICE', 'RETIRED'],
@@ -109,7 +110,9 @@ export function EquipmentDetailPage() {
         <>
           <Card>
             <p role="status">
-              <StatusChip status={retired ? 'neutral' : 'ok'}>{asset.lifecycleStatus}</StatusChip>
+              <StatusChip status={retired ? 'neutral' : 'ok'}>
+                {humanize(asset.lifecycleStatus)}
+              </StatusChip>
             </p>
             <dl style={{ margin: 0 }}>
               <dt>Location</dt>
