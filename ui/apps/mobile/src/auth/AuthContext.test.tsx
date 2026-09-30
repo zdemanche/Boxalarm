@@ -1,7 +1,7 @@
 import { fireEvent, render, waitFor } from '@testing-library/react-native';
 import { AppState, Pressable, Text, type AppStateStatus } from 'react-native';
 import type { AuthConfiguration, AuthorizeResult, RefreshResult } from 'react-native-app-auth';
-import { AuthProvider, useAuth, type AuthDeps } from './AuthContext';
+import { AuthProvider, createStoredTokenSource, useAuth, type AuthDeps } from './AuthContext';
 import { kvGet } from '../sync/kvStore';
 import * as syncManager from '../sync/syncManager';
 import { LAST_SESSION_SUB_KEY } from '../sync/memberCache';
@@ -522,4 +522,80 @@ test('signOut first gives queued work one bounded try to send while the session 
     (deps.resetInternetCredentials as jest.Mock).mock.invocationCallOrder[0]!,
   );
   drainSpy.mockRestore();
+});
+
+describe('a refresh that resolves after the session changed (M4)', () => {
+  function deferredRefresh() {
+    let resolve: (value: RefreshResult) => void = () => undefined;
+    const promise = new Promise<RefreshResult>((r) => {
+      resolve = r;
+    });
+    return { promise, resolve };
+  }
+  const refreshed = () =>
+    ({
+      accessToken: 'access-late',
+      refreshToken: 'refresh-late',
+      accessTokenExpirationDate: new Date(Date.now() + 3600_000).toISOString(),
+      idToken: issuedTokens().idToken,
+      tokenType: 'Bearer',
+    }) as RefreshResult;
+
+  test('does not sign the member back in or rewrite the keychain after sign-out', async () => {
+    const deps = makeDeps();
+    await deps.setInternetCredentials(
+      'boxalarm-auth',
+      'boxalarm-auth',
+      JSON.stringify(issuedTokens()),
+    );
+    (deps.setInternetCredentials as jest.Mock).mockClear();
+    const late = deferredRefresh();
+    deps.refresh = jest.fn(() => late.promise) as unknown as AuthDeps['refresh'];
+    globalThis.fetch = jest.fn(
+      async () => new Response('{}', { status: 200 }),
+    ) as unknown as typeof fetch;
+    let contextValue: ReturnType<typeof useAuth> | undefined;
+    function Capture() {
+      contextValue = useAuth();
+      return null;
+    }
+    await render(
+      <AuthProvider deps={deps}>
+        <Capture />
+      </AuthProvider>,
+    );
+    await waitFor(() => expect(contextValue?.isAuthenticated).toBe(true));
+
+    const renewal = contextValue!.renewSilently();
+    const signingOut = contextValue!.signOut();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    late.resolve(refreshed());
+    await signingOut;
+
+    await expect(renewal).resolves.toBeNull();
+    expect(deps.setInternetCredentials).not.toHaveBeenCalled();
+    await waitFor(() => expect(contextValue?.isAuthenticated).toBe(false));
+    await expect(deps.getInternetCredentials('boxalarm-auth')).resolves.toBe(false);
+  });
+
+  test("the headless source never overwrites the next member's keychain", async () => {
+    const deps = makeDeps();
+    const expired = issuedTokens({ refreshToken: 'refresh-A' });
+    expired.accessTokenExpirationDate = new Date(Date.now() - 1000).toISOString();
+    await deps.setInternetCredentials('boxalarm-auth', 'boxalarm-auth', JSON.stringify(expired));
+    const late = deferredRefresh();
+    deps.refresh = jest.fn(() => late.promise) as unknown as AuthDeps['refresh'];
+    const source = createStoredTokenSource(deps);
+
+    const renewal = source.getAccessToken();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    // B signs in on this phone meanwhile.
+    const b = issuedTokens({ accessToken: 'access-B', refreshToken: 'refresh-B' });
+    await deps.setInternetCredentials('boxalarm-auth', 'boxalarm-auth', JSON.stringify(b));
+    (deps.setInternetCredentials as jest.Mock).mockClear();
+    late.resolve(refreshed());
+
+    await expect(renewal).resolves.toBeNull();
+    expect(deps.setInternetCredentials).not.toHaveBeenCalled();
+  });
 });

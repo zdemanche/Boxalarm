@@ -136,6 +136,96 @@ async function writeStoredTokens(deps: AuthDeps, tokens: StoredTokens): Promise<
 }
 
 /**
+ * Which sign-in the phone is on (M4). signIn and signOut move it on; a token refresh started under
+ * one value must not write the keychain or re-apply tokens once it has changed - a refresh that
+ * resolves after sign-out would otherwise sign the member back in (and they would not be paged,
+ * their push entry having been revoked), or overwrite the next member's keychain with theirs.
+ * Module-level so the provider and the headless token source share it within one JS process.
+ */
+let sessionEpoch = 0;
+const inFlightRenewals = new Set<Promise<unknown>>();
+
+function beginSessionChange(): void {
+  sessionEpoch += 1;
+}
+
+/** How long signIn/signOut wait for a refresh already in flight (a weak link can stall one). */
+const SETTLE_RENEWALS_MS = 5000;
+
+/**
+ * Waits (bounded) for every refresh already in flight, so none writes the keychain after this.
+ * One still running past the bound finds the epoch moved at its compare-and-swap and writes
+ * nothing.
+ */
+async function settleRenewals(): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  await Promise.race([
+    Promise.all([...inFlightRenewals].map((renewal) => renewal.catch(() => undefined))),
+    new Promise((resolve) => {
+      timer = setTimeout(resolve, SETTLE_RENEWALS_MS);
+    }),
+  ]);
+  clearTimeout(timer);
+}
+
+function trackRenewal<T>(renewal: Promise<T>): Promise<T> {
+  inFlightRenewals.add(renewal);
+  void renewal
+    .catch(() => undefined)
+    .finally(() => {
+      inFlightRenewals.delete(renewal);
+    });
+  return renewal;
+}
+
+type RenewOutcome =
+  | { kind: 'renewed'; tokens: StoredTokens }
+  | { kind: 'noSession' }
+  /** Signed out, signed in again, or renewed elsewhere while this refresh was in flight. */
+  | { kind: 'superseded' }
+  /** The refresh token was refused (invalid_grant), and it is still the session on the phone. */
+  | { kind: 'invalidGrant' };
+
+/**
+ * One refresh of the stored session, written back only if that session is still the one on the
+ * phone: the epoch has not moved and the keychain still holds the refresh token this refresh
+ * used (compare-and-swap, M4). Throws a refresh error other than invalid_grant.
+ */
+async function renewStoredSession(
+  deps: AuthDeps,
+  config: AuthConfiguration,
+): Promise<RenewOutcome> {
+  const epoch = sessionEpoch;
+  const stored = await readStoredTokens(deps);
+  if (!stored) return { kind: 'noSession' };
+  const stillCurrent = async () => {
+    if (epoch !== sessionEpoch) return false;
+    const now = await readStoredTokens(deps).catch(() => null);
+    return epoch === sessionEpoch && now?.refreshToken === stored.refreshToken;
+  };
+  let result: RefreshResult;
+  try {
+    result = await deps.refresh(config, { refreshToken: stored.refreshToken });
+  } catch (error) {
+    if (isInvalidGrant(error)) {
+      return (await stillCurrent()) ? { kind: 'invalidGrant' } : { kind: 'superseded' };
+    }
+    throw error;
+  }
+  if (!(await stillCurrent())) return { kind: 'superseded' };
+  const next: StoredTokens = {
+    accessToken: result.accessToken,
+    refreshToken: result.refreshToken ?? stored.refreshToken,
+    accessTokenExpirationDate: result.accessTokenExpirationDate,
+    idToken: result.idToken,
+  };
+  await writeStoredTokens(deps, next);
+  // signIn/signOut wait for this refresh before touching the keychain, so the write above cannot
+  // land after theirs; but if the session changed meanwhile, the new tokens must not be applied.
+  return epoch === sessionEpoch ? { kind: 'renewed', tokens: next } : { kind: 'superseded' };
+}
+
+/**
  * A token source that works with no React tree - for headless JS (an Android notification
  * action answered from the lock screen while the app is not running). Reads the same keychain
  * entry as AuthProvider and renews it the same way; never signs anyone out (an invalid refresh
@@ -166,23 +256,16 @@ export async function readStoredSessionOwner(
 export function createStoredTokenSource(deps: AuthDeps = defaultDeps) {
   let renewing: Promise<string | null> | null = null;
   const renewSilently = (): Promise<string | null> => {
-    renewing ??= (async () => {
-      try {
-        const stored = await readStoredTokens(deps);
-        if (!stored) return null;
-        const result = await deps.refresh(buildOidcConfig(), { refreshToken: stored.refreshToken });
-        const next: StoredTokens = {
-          accessToken: result.accessToken,
-          refreshToken: result.refreshToken ?? stored.refreshToken,
-          accessTokenExpirationDate: result.accessTokenExpirationDate,
-          idToken: result.idToken,
-        };
-        await writeStoredTokens(deps, next);
-        return next.accessToken;
-      } catch {
-        return null;
-      }
-    })().finally(() => {
+    renewing ??= trackRenewal(
+      (async () => {
+        try {
+          const outcome = await renewStoredSession(deps, buildOidcConfig());
+          return outcome.kind === 'renewed' ? outcome.tokens.accessToken : null;
+        } catch {
+          return null;
+        }
+      })(),
+    ).finally(() => {
       renewing = null;
     });
     return renewing;
@@ -254,33 +337,26 @@ export function AuthProvider({
   const renewSilently = useCallback((): Promise<string | null> => {
     if (renewInFlightRef.current) return renewInFlightRef.current;
 
-    const attempt = (async () => {
-      try {
-        const stored = await readStoredTokens(depsRef.current);
-        if (!stored) {
-          applyTokens(null);
+    const attempt = trackRenewal(
+      (async () => {
+        const epoch = sessionEpoch;
+        try {
+          const outcome = await renewStoredSession(depsRef.current, config);
+          if (outcome.kind === 'renewed') {
+            applyTokens(outcome.tokens);
+            return outcome.tokens.accessToken;
+          }
+          if (outcome.kind === 'noSession' && epoch === sessionEpoch) applyTokens(null);
+          if (outcome.kind === 'invalidGrant') {
+            await depsRef.current.resetInternetCredentials({ server: KEYCHAIN_SERVER });
+            applyTokens(null);
+          }
+          return null;
+        } catch {
           return null;
         }
-        const result = await depsRef.current.refresh(config, {
-          refreshToken: stored.refreshToken,
-        });
-        const next: StoredTokens = {
-          accessToken: result.accessToken,
-          refreshToken: result.refreshToken ?? stored.refreshToken,
-          accessTokenExpirationDate: result.accessTokenExpirationDate,
-          idToken: result.idToken,
-        };
-        await writeStoredTokens(depsRef.current, next);
-        applyTokens(next);
-        return next.accessToken;
-      } catch (error) {
-        if (isInvalidGrant(error)) {
-          await depsRef.current.resetInternetCredentials({ server: KEYCHAIN_SERVER });
-          applyTokens(null);
-        }
-        return null;
-      }
-    })();
+      })(),
+    );
 
     renewInFlightRef.current = attempt.finally(() => {
       renewInFlightRef.current = null;
@@ -332,6 +408,9 @@ export function AuthProvider({
           accessTokenExpirationDate: result.accessTokenExpirationDate,
           idToken: result.idToken,
         };
+        // A refresh still running for the previous session must not overwrite these (M4).
+        beginSessionChange();
+        await settleRenewals();
         await writeStoredTokens(depsRef.current, tokens);
         applyTokens(tokens);
       },
@@ -355,6 +434,11 @@ export function AuthProvider({
         // The member's cached apparatus, shifts, check drafts and last mark-off stay on the phone
         // otherwise (review m8). Queued writes in the outbox are kept: they are the member's
         // work and sync once someone signs in.
+        // From here on this session is over: a refresh still in flight is dropped rather than
+        // writing the keychain back or signing the member in again, and is waited for so it
+        // cannot land after the reset below (M4).
+        beginSessionChange();
+        await settleRenewals();
         if (memberId) await clearMemberCache(memberId).catch(() => undefined);
         // Before the keychain reset, so no window exists where the hint outlives the session.
         await kvDelete(LAST_SESSION_SUB_KEY);
