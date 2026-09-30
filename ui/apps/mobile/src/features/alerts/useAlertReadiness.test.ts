@@ -1,6 +1,10 @@
 import notifee from '@notifee/react-native';
 import { NativeModules, Platform } from 'react-native';
-import { blockingReadinessItems, evaluateAlertReadiness } from './useAlertReadiness';
+import {
+  blockingReadinessItems,
+  evaluateAlertReadiness,
+  registrationReadinessItem,
+} from './useAlertReadiness';
 
 const nativeModules = NativeModules as { BoxalarmAlertReadiness?: unknown };
 const getNotificationSettings = notifee.getNotificationSettings as jest.Mock;
@@ -142,4 +146,62 @@ test('a blocked dispatch channel counts as notifications off', async () => {
 
   expect(blocking[0]).toMatchObject({ id: 'notifications', status: 'fail' });
   expect(blocking[0]!.detail).toMatch(/turned off for Boxalarm/);
+});
+
+describe('registration with the server (C1)', () => {
+  test('a phone not registered for the signed-in member blocks, and offers a retry', () => {
+    const item = registrationReadinessItem('B', { memberId: 'B', status: 'failed' });
+    expect(item).toMatchObject({ id: 'registration', status: 'fail', fixLabel: 'Try again' });
+    expect(item.detail).toMatch(/not registered for pages on this phone/i);
+    expect(blockingReadinessItems([item])).toHaveLength(1);
+  });
+
+  test("the previous member's registration does not count for the next one", () => {
+    const item = registrationReadinessItem('B', { memberId: 'A', status: 'registered' });
+    expect(item.status).not.toBe('ok');
+  });
+
+  test("a re-confirm that couldn't reach the server is amber with a check-now, not the red banner", () => {
+    const item = registrationReadinessItem('A', { memberId: 'A', status: 'unverified' });
+    expect(item).toMatchObject({ status: 'warn', fixLabel: 'Check now' });
+    expect(item.detail).toMatch(/couldn't check/i);
+    expect(blockingReadinessItems([item])).toHaveLength(0);
+  });
+
+  test('registering is a warning (no red flash at sign-in); registered is ok', () => {
+    expect(registrationReadinessItem('A', null).status).toBe('warn');
+    expect(registrationReadinessItem('A', { memberId: 'A', status: 'registered' }).status).toBe(
+      'ok',
+    );
+  });
+});
+
+// m8: returning from Settings runs channel setup and readiness on the same foreground event.
+test('readiness reads the dispatch channel only after the channel setup in progress', async () => {
+  Platform.OS = 'android';
+  installNative({ dndAccessGranted: true, fullScreenIntentAllowed: true, sdkInt: 35 });
+  const native = nativeModules.BoxalarmAlertReadiness as Record<string, unknown>;
+  let created = false;
+  let finishCreate: () => void = () => undefined;
+  native.createCriticalChannel = jest.fn(
+    () =>
+      new Promise<boolean>((resolve) => {
+        finishCreate = () => {
+          created = true;
+          resolve(true);
+        };
+      }),
+  );
+  native.deleteChannel = jest.fn(async () => undefined);
+  getChannel.mockImplementation(async () => (created ? { importance: 4, sound: 'alarm' } : null));
+  const { ensureNotificationChannels } = jest.requireActual('./pushChannel');
+
+  const setup = ensureNotificationChannels();
+  const evaluating = evaluateAlertReadiness();
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  finishCreate();
+  await setup;
+
+  const channel = (await evaluating).find((item) => item.id === 'channel');
+  expect(channel?.status).toBe('ok');
 });

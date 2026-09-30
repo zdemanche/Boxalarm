@@ -11,7 +11,7 @@ import {
   rememberAlertPayload,
 } from './alertPayload';
 import { ANDROID_RESPONSE_ACTIONS } from './notificationActions';
-import { dispatchNotificationId } from './notificationIds';
+import { dispatchNotificationId, mutualAidNotificationId } from './notificationIds';
 import {
   categoryFromPushData,
   CRITICAL_CHANNEL_ID,
@@ -71,6 +71,18 @@ export async function silenceDispatchNotification(dispatchId: string): Promise<v
   }
 }
 
+/** Stops the officer's mutual-aid prompt ringing: they opened it. */
+export async function silenceMutualAidNotification(dispatchId: string): Promise<void> {
+  if (Platform.OS !== 'android') return;
+  const id = mutualAidNotificationId(dispatchId);
+  try {
+    await notifee.cancelTriggerNotification(id);
+    await notifee.cancelDisplayedNotification(id);
+  } catch (error) {
+    console.warn('[push] silencing the mutual-aid prompt failed', error);
+  }
+}
+
 export async function displayPushNotification(
   data: PushMessageData | undefined,
   receivedAt: number = Date.now(),
@@ -82,9 +94,17 @@ export async function displayPushNotification(
   const channelId = isCritical ? await criticalChannel() : DEFAULT_CHANNEL_ID;
   // The page travels with the notification, so a tap opens the address with no fetch.
   const payload = isCritical ? alertPayloadFromPushData(data, receivedAt) : null;
+  // The officer's mutual-aid prompt: its own notification (never replacing the call's page) with
+  // no answer buttons - a tap opens the prompt, where the call is confirmed.
+  const prompt = payload?.mutualAidPrompt === true;
+  const notificationId = payload
+    ? prompt
+      ? mutualAidNotificationId(payload.dispatchId)
+      : dispatchNotificationId(payload.dispatchId)
+    : null;
 
   await notifee.displayNotification({
-    ...(payload ? { id: dispatchNotificationId(payload.dispatchId) } : {}),
+    ...(notificationId ? { id: notificationId } : {}),
     title: data?.title ?? (isCritical ? 'Dispatch alert' : 'Notification'),
     body: data?.body,
     data: {
@@ -108,13 +128,13 @@ export async function displayPushNotification(
             lightUpScreen: true,
             visibility: AndroidVisibility.PUBLIC,
             // Answer from the shade or lock screen without opening the app (same queue).
-            ...(payload ? { actions: ANDROID_RESPONSE_ACTIONS } : {}),
+            ...(payload && !prompt ? { actions: ANDROID_RESPONSE_ACTIONS } : {}),
           }
         : {}),
     },
   });
 
-  if (payload) await scheduleRingCap(payload, channelId, data);
+  if (payload && notificationId) await scheduleRingCap(payload, notificationId, channelId, data);
 }
 
 /**
@@ -125,13 +145,14 @@ export async function displayPushNotification(
  */
 async function scheduleRingCap(
   payload: NonNullable<ReturnType<typeof alertPayloadFromPushData>>,
+  notificationId: string,
   channelId: string,
   data: PushMessageData | undefined,
 ): Promise<void> {
   try {
     await notifee.createTriggerNotification(
       {
-        id: dispatchNotificationId(payload.dispatchId),
+        id: notificationId,
         title: data?.title ?? 'Dispatch alert',
         body: `${data?.body ?? ''}\nStill unanswered - alarm stopped after 60 s.`.trim(),
         data: { ...alertPayloadToNotificationData(payload), category: 'dispatch' },
@@ -144,7 +165,7 @@ async function scheduleRingCap(
           loopSound: false,
           autoCancel: false,
           visibility: AndroidVisibility.PUBLIC,
-          actions: ANDROID_RESPONSE_ACTIONS,
+          ...(payload.mutualAidPrompt ? {} : { actions: ANDROID_RESPONSE_ACTIONS }),
         },
       },
       { type: TriggerType.TIMESTAMP, timestamp: Date.now() + RING_CAP_MS },

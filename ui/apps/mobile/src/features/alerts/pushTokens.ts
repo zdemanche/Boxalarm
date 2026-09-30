@@ -40,17 +40,57 @@ export function apnsEnvironment(): 'development' | 'production' {
 }
 
 /**
+ * Which sign-in registrations belong to (m3). Sign-out moves it on before its revoke, so a
+ * registration started for the session being signed out - a backoff retry, a token rotation -
+ * is refused instead of re-creating the entry the revoke is about to delete.
+ */
+let registrationEpoch = 0;
+const inFlightRegistrations = new Set<Promise<unknown>>();
+
+export function currentRegistrationEpoch(): number {
+  return registrationEpoch;
+}
+
+/** A registration refused because its sign-in is being (or has been) signed out. */
+export class RegistrationCancelledError extends Error {
+  constructor() {
+    super('push registration cancelled: signing out');
+    this.name = 'RegistrationCancelledError';
+  }
+}
+
+/**
+ * Sign-out, before the revoke: refuses every registration of the ending session from now on and
+ * waits (bounded) for one already sent, so it cannot land after the DELETE.
+ */
+export async function stopRegistrations(timeoutMs: number): Promise<void> {
+  registrationEpoch += 1;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  await Promise.race([
+    Promise.all([...inFlightRegistrations].map((sent) => sent.catch(() => undefined))),
+    new Promise((resolve) => {
+      timer = setTimeout(resolve, timeoutMs);
+    }),
+  ]);
+  clearTimeout(timer);
+}
+
+/**
  * Registers this installation's token. `deviceId` makes it one of the member's devices rather
  * than a replacement for their only one: signing in here never stops another device's pages.
+ * `epoch` (currentRegistrationEpoch when the sign-in's registration started) refuses it once that
+ * sign-in is being signed out.
  */
 export async function registerPushToken(
   memberId: string,
   tokens: AuthTokenSource,
   apiBaseUrl: string,
   device: DeviceToken,
+  epoch?: number,
 ): Promise<void> {
   const deviceId = await getDeviceInstallationId();
-  await apiRequest(`personnel/members/${encodeURIComponent(memberId)}/push-tokens`, tokens, {
+  if (epoch !== undefined && epoch !== registrationEpoch) throw new RegistrationCancelledError();
+  const sent = apiRequest(`personnel/members/${encodeURIComponent(memberId)}/push-tokens`, tokens, {
     apiBaseUrl,
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -60,15 +100,25 @@ export async function registerPushToken(
       ...(device.platform === 'APNS' ? { apnsEnvironment: apnsEnvironment() } : {}),
     }),
   });
+  inFlightRegistrations.add(sent);
+  try {
+    await sent;
+  } finally {
+    inFlightRegistrations.delete(sent);
+  }
 }
 
-/** Sign-out: removes only this installation's entry; the member's other devices keep paging. */
+/**
+ * Sign-out: removes only this installation's entry; the member's other devices keep paging.
+ * `deviceId` defaults to this installation's (a pending revoke retried later names it).
+ */
 export async function revokePushToken(
   memberId: string,
   tokens: AuthTokenSource,
   apiBaseUrl: string,
+  deviceId?: string,
 ): Promise<void> {
-  const deviceId = await getDeviceInstallationId();
+  deviceId ??= await getDeviceInstallationId();
   await apiRequest(
     `personnel/members/${encodeURIComponent(memberId)}/push-tokens?deviceId=${encodeURIComponent(deviceId)}`,
     tokens,

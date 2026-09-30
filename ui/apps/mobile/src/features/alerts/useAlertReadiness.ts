@@ -1,19 +1,33 @@
 import notifee, { AndroidImportance, AuthorizationStatus } from '@notifee/react-native';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 import { AppState, Linking, Platform } from 'react-native';
 import Config from 'react-native-config';
+import { useOptionalAuth } from '../../auth/AuthContext';
 import {
   alertReadinessNative,
   guideToDndAccess,
   guideToFullScreenIntent,
   readAndroidDeviceReadiness,
 } from './alertReadiness';
-import { currentCriticalChannelId } from './pushChannel';
+import { currentCriticalChannelId, notificationChannelsSettled } from './pushChannel';
+import {
+  getPushRegistration,
+  retryPushRegistration,
+  subscribePushRegistration,
+  type PushRegistrationState,
+} from './pushRegistrationState';
 
 export type ReadinessStatus = 'ok' | 'fail' | 'warn' | 'unknown';
 
 export interface ReadinessItem {
-  id: 'notifications' | 'channel' | 'dnd' | 'fullScreen' | 'battery' | 'criticalAlerts';
+  id:
+    | 'registration'
+    | 'notifications'
+    | 'channel'
+    | 'dnd'
+    | 'fullScreen'
+    | 'battery'
+    | 'criticalAlerts';
   label: string;
   status: ReadinessStatus;
   /** What it means for a page at 03:00, in words. */
@@ -38,6 +52,7 @@ function openAppNotificationSettings(): void {
  */
 export async function evaluateAlertReadiness(): Promise<ReadinessItem[]> {
   const items: ReadinessItem[] = [];
+  if (Platform.OS === 'android') await notificationChannelsSettled();
 
   let authorization: number | null = null;
   let iosCriticalAlert: number | undefined;
@@ -225,6 +240,49 @@ export async function evaluateAlertReadiness(): Promise<ReadinessItem[]> {
 }
 
 /**
+ * Whether the server will send this member's pages to this phone at all (C1). Every device check
+ * can pass while the server has no entry for this phone - after a sign-out deleted it, say - so
+ * anything short of a confirmed registration for the member signed in now is not "ready". While
+ * the first attempt is still running it is a warning, not the red banner, so signing in does not
+ * flash red.
+ */
+export function registrationReadinessItem(
+  memberId: string,
+  state: PushRegistrationState | null,
+): ReadinessItem {
+  const status = state?.memberId === memberId ? state.status : 'registering';
+  const base = { id: 'registration', label: 'Pages on this phone', wakes: true } as const;
+  if (status === 'registered')
+    return { ...base, status: 'ok', detail: 'Registered for your pages.' };
+  if (status === 'unverified') {
+    return {
+      ...base,
+      status: 'warn',
+      detail:
+        "Couldn't check with Boxalarm that this phone is still registered for your pages - no signal. It checks again when you have signal.",
+      fixLabel: 'Check now',
+      fix: retryPushRegistration,
+    };
+  }
+  if (status === 'registering') {
+    return {
+      ...base,
+      status: 'warn',
+      detail: 'Registering this phone for your pages. Until it finishes, use the radio.',
+    };
+  }
+  return {
+    ...base,
+    status: 'fail',
+    detail:
+      status === 'permissionDenied'
+        ? 'Not registered for pages on this phone: notifications are off for Boxalarm.'
+        : 'Not registered for pages on this phone yet: pages for you will not ring here. Retrying; it needs signal.',
+    ...(status === 'failed' ? { fixLabel: 'Try again', fix: retryPushRegistration } : {}),
+  };
+}
+
+/**
  * The checks that would stop a page waking the member - what the red banner names. A wake-critical
  * check that could not be read counts: "couldn't confirm this phone will ring" is not "ready".
  */
@@ -242,7 +300,9 @@ export interface AlertReadinessState {
 
 /** Re-evaluated on mount and every return to the foreground (the member comes back from Settings). */
 export function useAlertReadiness(): AlertReadinessState {
-  const [items, setItems] = useState<ReadinessItem[] | null>(null);
+  const [deviceItems, setItems] = useState<ReadinessItem[] | null>(null);
+  const memberId = useOptionalAuth()?.memberId ?? null;
+  const registration = useSyncExternalStore(subscribePushRegistration, getPushRegistration);
 
   const refresh = useCallback(async () => {
     try {
@@ -267,6 +327,14 @@ export function useAlertReadiness(): AlertReadinessState {
       subscription.remove();
     };
   }, [refresh]);
+
+  const items = useMemo(
+    () =>
+      deviceItems && memberId
+        ? [registrationReadinessItem(memberId, registration), ...deviceItems]
+        : deviceItems,
+    [deviceItems, memberId, registration],
+  );
 
   return { items, blocking: items ? blockingReadinessItems(items) : [], refresh };
 }

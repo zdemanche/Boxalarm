@@ -1,19 +1,24 @@
 import notifee, { EventType } from '@notifee/react-native';
-import { AppState, Platform, Settings } from 'react-native';
+import { Alert, AppState, Platform, Settings } from 'react-native';
 import {
   getInitialNotification,
   getMessaging,
   onNotificationOpenedApp,
 } from '@react-native-firebase/messaging';
+import { readStoredSessionOwner } from '../../auth/AuthContext';
+import * as syncManager from '../../sync/syncManager';
 import {
+  isAlertRouteAvailable,
   isNavigationReady,
   navigateToAlertDetail,
+  navigateToMutualAidPrompt,
   navigationRef,
   onNavigationStateChange,
 } from '../../navigation/navigationRef';
 import { queueAlertResponse } from './alertResponses';
 import { markInitialAlertRoutingSettled } from './lockScreenPresentation';
 import { answerFromActionId, handleNotificationEvent } from './notificationActions';
+import { isRingingAlertId } from './notificationIds';
 import {
   alertPayloadFromNotificationData,
   alertPayloadFromPushData,
@@ -29,9 +34,14 @@ export function dispatchIdFromNotificationData(
   return typeof id === 'string' && id.length > 0 ? id : null;
 }
 
-/** Opens the alert screen with the page's own payload, so it paints before any fetch. */
+/**
+ * Opens the alert screen with the page's own payload, so it paints before any fetch - or, for an
+ * officer's mutual-aid prompt, the prompt screen with its confirm action.
+ */
 function openAlert(payload: AlertPayload | null): void {
-  if (payload) navigateToAlertDetail(payload.dispatchId, payload);
+  if (!payload) return;
+  if (payload.mutualAidPrompt) navigateToMutualAidPrompt(payload.dispatchId, payload);
+  else navigateToAlertDetail(payload.dispatchId, payload);
 }
 
 /** An FCM RemoteMessage (sentTime in epoch ms), as delivered to the open/initial callbacks. */
@@ -93,10 +103,22 @@ function readPendingIosTap(nowMs: number): AlertPayload | null {
   return alertPayloadFromPushData(pending as Record<string, unknown>, receivedSeconds * 1000);
 }
 
+/** What a signed-out member is told when they answer a page from its notification (M2). */
+export const SIGNED_OUT_ANSWER_TITLE = "You're signed out on this phone";
+export const SIGNED_OUT_ANSWER_MESSAGE =
+  'Your answer was not sent. Sign in to answer, or use the radio.';
+
 /**
  * A Responding / Not responding action pressed on an iOS page (AppDelegate records it with the
- * tap). Queued at once, before navigation is ready, through the same outbox as the alert screen;
- * the action is then stripped from the record so a later routing retry cannot answer twice.
+ * tap). The action is stripped from the record first, so a later routing retry cannot answer
+ * twice. While signed in (or with the keychain unreadable) the answer is then queued at once,
+ * before navigation is ready, through the same outbox as the alert screen.
+ *
+ * On a signed-out phone the answer is not queued (M2, the same gate as Android's
+ * answerFromNotification): there is no one to send it as, and an ownerless answer would be
+ * offered to whoever signs in next. The member is told, and the tap itself stays recorded so the
+ * call opens once they sign in. A keychain read error is not "signed out": that answer is queued
+ * with the last session's hint, as on Android.
  */
 function answerPendingIosAction(dispatchId: string): void {
   const pending = Settings.get(IOS_PENDING_ALERT_TAP_KEY) as PendingIosTap | null | undefined;
@@ -107,20 +129,33 @@ function answerPendingIosAction(dispatchId: string): void {
   const rest: PendingIosTap = { ...pending };
   delete rest.action;
   Settings.set({ [IOS_PENDING_ALERT_TAP_KEY]: rest });
-  queueAlertResponse(dispatchId, answer, null).catch((error: unknown) => {
+  void (async () => {
+    if (!syncManager.isConfigured()) {
+      const signedOut = await readStoredSessionOwner().then(
+        (stored) => stored === null,
+        () => false,
+      );
+      if (signedOut) {
+        Alert.alert(SIGNED_OUT_ANSWER_TITLE, SIGNED_OUT_ANSWER_MESSAGE);
+        return;
+      }
+    }
+    await queueAlertResponse(dispatchId, answer, null);
+  })().catch((error: unknown) => {
     console.error('[push] queueing the answer from an iOS notification action failed', error);
   });
 }
 
 /**
  * Routes a recorded iOS tap once navigation can take it. A tap recorded before the navigator
- * mounted (cold start) stays pending and is routed on the first navigation state change.
+ * mounted (cold start), or while the sign-in screens are showing (no alert screen to open), stays
+ * pending and is routed on the first navigation state change that can take it.
  */
 export function routePendingIosAlertTap(nowMs: number = Date.now()): void {
   const payload = readPendingIosTap(nowMs);
   if (!payload) return;
   answerPendingIosAction(payload.dispatchId);
-  if (!isNavigationReady()) return;
+  if (!isNavigationReady() || !isAlertRouteAvailable()) return;
   Settings.set({ [IOS_PENDING_ALERT_TAP_KEY]: null });
   openAlert(payload);
 }
@@ -207,7 +242,7 @@ export async function routeToRingingPage(): Promise<void> {
     .filter((entry) => {
       const id = entry.id ?? entry.notification?.id ?? '';
       const channel = entry.notification?.android?.channelId ?? '';
-      return id.startsWith('dispatch:') && channel.startsWith('dispatch-critical');
+      return isRingingAlertId(id) && channel.startsWith('dispatch-critical');
     })
     .sort((a, b) => Number(b.date ?? 0) - Number(a.date ?? 0));
   const newest = ringing[0];
@@ -218,7 +253,7 @@ export async function routeToRingingPage(): Promise<void> {
   routedRingingPages.add(id);
   const current = navigationRef.isReady() ? navigationRef.getCurrentRoute() : undefined;
   const onIt =
-    current?.name === 'AlertDetail' &&
+    current?.name === (payload.mutualAidPrompt ? 'MutualAidPrompt' : 'AlertDetail') &&
     (current.params as { dispatchId?: string } | undefined)?.dispatchId === payload.dispatchId;
   if (!onIt) openAlert(payload);
 }

@@ -1,5 +1,7 @@
 import * as store from '../../sync/outboxStore';
 import { kvSet } from '../../sync/kvStore';
+import { clearMemberCache } from '../../sync/memberCache';
+import * as syncManager from '../../sync/syncManager';
 import {
   ETA_CHOICES,
   etaFor,
@@ -58,7 +60,7 @@ test('queueing an answer puts it in the outbox and remembers it as this phone’
   const id = await queueAlertResponse('D7', 'DIRECT_TO_SCENE', eta, 2_000_000);
 
   expect(await store.find(id)).toMatchObject({ kind: 'RESPONSE', status: 'QUEUED' });
-  await expect(getLocalAnswer('D7')).resolves.toEqual({
+  await expect(getLocalAnswer(null, 'D7')).resolves.toEqual({
     ackStatus: 'DIRECT_TO_SCENE',
     eta,
     outboxId: id,
@@ -67,13 +69,28 @@ test('queueing an answer puts it in the outbox and remembers it as this phone’
 });
 
 test('an answer saved by the previous build ({ etaMinutes }) still reads back', async () => {
-  await kvSet('alert-answer:OLD', {
+  await kvSet('alert-answer:MBR-1:OLD', {
     ackStatus: 'RESPONDING',
     etaMinutes: 10,
     outboxId: 'x',
     answeredAt: 1,
   });
-  await expect(getLocalAnswer('OLD')).resolves.toMatchObject({
+  await expect(getLocalAnswer('MBR-1', 'OLD')).resolves.toMatchObject({
     eta: { minutes: 10, qualifier: null },
   });
+});
+
+test("M1: another member on this phone never sees the previous member's answer as theirs", async () => {
+  syncManager.configure(
+    { getAccessToken: async () => null, renewSilently: async () => null, memberId: 'A' },
+    null,
+  );
+  await queueAlertResponse('D8', 'RESPONDING', null, 3_000_000);
+  syncManager.configure(null, null);
+
+  await expect(getLocalAnswer('A', 'D8')).resolves.toMatchObject({ ackStatus: 'RESPONDING' });
+  await expect(getLocalAnswer('B', 'D8')).resolves.toBeNull();
+
+  await clearMemberCache('A');
+  await expect(getLocalAnswer('A', 'D8')).resolves.toBeNull();
 });

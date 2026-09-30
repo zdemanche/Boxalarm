@@ -14,6 +14,7 @@ import type {
   RosterEntry,
   SelfTestRun,
   HomeLocality,
+  MutualAid,
   ToneLadderStatus,
 } from './types';
 
@@ -59,6 +60,7 @@ function buildApiAlertsRepository(tokens: AuthTokenSource, apiBaseUrl: string): 
         nearestHydrants?: DispatchAlert['nearestHydrants'];
         nearestHydrantsUnavailable?: boolean;
         nearestHydrantsIncomplete?: boolean;
+        mutualAid?: MutualAid | null;
       };
       return {
         dispatchId: body.dispatchId,
@@ -88,7 +90,21 @@ function buildApiAlertsRepository(tokens: AuthTokenSource, apiBaseUrl: string): 
         ...(body.nearestHydrants ? { nearestHydrants: body.nearestHydrants } : {}),
         ...(body.nearestHydrantsUnavailable === true ? { nearestHydrantsUnavailable: true } : {}),
         ...(body.nearestHydrantsIncomplete === true ? { nearestHydrantsIncomplete: true } : {}),
+        ...(body.mutualAid !== undefined ? { mutualAid: body.mutualAid } : {}),
       };
+    },
+
+    async acknowledgeMutualAid(dispatchId, notes) {
+      const response = await req(
+        `alerting/dispatches/${encodeURIComponent(dispatchId)}/mutual-aid/acknowledge`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(notes.trim() ? { notes: notes.trim() } : {}),
+        },
+      );
+      const body = (await response.json()) as { changed: boolean; mutualAid: MutualAid };
+      return { changed: body.changed, mutualAid: body.mutualAid };
     },
 
     async listActiveDispatches(): Promise<ActiveDispatchList> {

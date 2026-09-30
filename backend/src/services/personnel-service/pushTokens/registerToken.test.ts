@@ -1,6 +1,25 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
 import type { CedarPrincipalContext, GuardEvent } from '@boxalarm/authz';
+import type { ContactChannelEntry } from './pushDevices.js';
+
+interface SentCommand {
+  constructor: { name: string };
+  input: {
+    Key?: { pk: string };
+    IndexName?: string;
+    ExpressionAttributeValues?: Record<string, unknown>;
+    TransactItems?: [
+      {
+        Update: {
+          Key: { pk: string };
+          ExpressionAttributeValues: { ':cc': ContactChannelEntry[] };
+        };
+      },
+      { Put: { Item: { payload: Record<string, unknown> } } },
+    ];
+  };
+}
 
 const PRINCIPAL: CedarPrincipalContext = {
   sub: 'mbr-102',
@@ -146,7 +165,12 @@ describe('registerToken handler', () => {
     )(event, PRINCIPAL);
 
     expect(result.statusCode).toBe(200);
-    expect(send).toHaveBeenCalledTimes(2);
+    // Get + transaction for the member's own entry, then the department query that takes the
+    // installation off anyone else still holding it (M3).
+    expect(send).toHaveBeenCalledTimes(3);
+    expect((send.mock.calls[2]?.[0] as { constructor: { name: string } }).constructor.name).toBe(
+      'QueryCommand',
+    );
     const transactCall = send.mock.calls[1]?.[0] as {
       input: { TransactItems: [{ Update: unknown }, { Put: { Item: Record<string, unknown> } }] };
     };
@@ -401,6 +425,97 @@ describe('registerToken handler', () => {
     const devices = transact.input.TransactItems[0].Update.ExpressionAttributeValues[':cc'];
     expect(devices.map((entry) => entry.deviceId)).toEqual(['tablet', 'phone']);
     expect(transact.input.TransactItems[1].Put.Item.payload.contactChannels).toEqual(devices);
+    vi.doUnmock('../dynamoClient.js');
+    vi.doUnmock('@boxalarm/authz');
+  });
+
+  it('M3: registering a phone takes it off the member who signed out of it without signal', async () => {
+    const phone = { channel: 'PUSH', platform: 'FCM', token: 'tok-station', deviceId: 'station' };
+    const members: Record<string, Record<string, unknown>> = {
+      'mbr-102': { memberId: 'mbr-102', contactChannels: [], updatedAt: 1 },
+      'mbr-101': { memberId: 'mbr-101', contactChannels: [phone], updatedAt: 1 },
+    };
+    const writes: { pk: string; cc: unknown[]; memberId: unknown }[] = [];
+    const send = vi.fn().mockImplementation((command: SentCommand) => {
+      const name = command.constructor.name;
+      if (name === 'GetCommand') {
+        const id = String(command.input.Key!.pk).split('#').at(-1)!;
+        return Promise.resolve({
+          Item: { pk: command.input.Key!.pk, sk: 'METADATA', ...members[id] },
+        });
+      }
+      if (name === 'QueryCommand') return Promise.resolve({ Items: Object.values(members) });
+      const [update, put] = command.input.TransactItems!;
+      writes.push({
+        pk: update.Update.Key.pk,
+        cc: update.Update.ExpressionAttributeValues[':cc'],
+        memberId: put.Put.Item.payload.memberId,
+      });
+      return Promise.resolve({});
+    });
+    vi.doMock('../dynamoClient.js', () => ({
+      createDynamoClient: () => ({ send }) as unknown as DynamoDBDocumentClient,
+      readPersonnelConfig: () => ({ tableName: 'personnel-table' }),
+    }));
+    vi.doMock('@boxalarm/authz', async () => {
+      const actual = await vi.importActual<typeof import('@boxalarm/authz')>('@boxalarm/authz');
+      return { ...actual, withAuthorization: (inner: unknown) => inner };
+    });
+
+    const { handler } = await import('./registerToken.js');
+    const result = await (
+      handler as unknown as (
+        e: GuardEvent,
+        p: CedarPrincipalContext,
+      ) => Promise<{ statusCode: number }>
+    )(
+      buildEvent('mbr-102', { platform: 'FCM', token: 'tok-station', deviceId: 'station' }),
+      PRINCIPAL,
+    );
+
+    expect(result.statusCode).toBe(200);
+    expect(writes.map((w) => w.pk)).toEqual([
+      'DEPT#NICHOLS#MEMBER#mbr-102',
+      'DEPT#NICHOLS#MEMBER#mbr-101',
+    ]);
+    expect(writes[1]).toMatchObject({ cc: [], memberId: 'mbr-101' });
+    vi.doUnmock('../dynamoClient.js');
+    vi.doUnmock('@boxalarm/authz');
+  });
+
+  it('M3: a failure releasing the installation elsewhere is logged, and the member stays registered', async () => {
+    const send = vi.fn().mockImplementation((command: { constructor: { name: string } }) => {
+      if (command.constructor.name === 'GetCommand') {
+        return Promise.resolve({ Item: { pk: 'x', sk: 'METADATA', updatedAt: 1 } });
+      }
+      if (command.constructor.name === 'QueryCommand') {
+        return Promise.reject(new Error('AccessDeniedException'));
+      }
+      return Promise.resolve({});
+    });
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    vi.doMock('../dynamoClient.js', () => ({
+      createDynamoClient: () => ({ send }) as unknown as DynamoDBDocumentClient,
+      readPersonnelConfig: () => ({ tableName: 'personnel-table' }),
+    }));
+    vi.doMock('@boxalarm/authz', async () => {
+      const actual = await vi.importActual<typeof import('@boxalarm/authz')>('@boxalarm/authz');
+      return { ...actual, withAuthorization: (inner: unknown) => inner };
+    });
+
+    const { handler } = await import('./registerToken.js');
+    const result = await (
+      handler as unknown as (
+        e: GuardEvent,
+        p: CedarPrincipalContext,
+      ) => Promise<{ statusCode: number }>
+    )(buildEvent('mbr-102', { platform: 'FCM', token: 'tok-1', deviceId: 'd-1' }), PRINCIPAL);
+
+    expect(result.statusCode).toBe(200);
+    expect(error.mock.calls.map((c) => String(c[0])).join()).toContain(
+      'personnel.pushToken.release.failed',
+    );
+    error.mockRestore();
     vi.doUnmock('../dynamoClient.js');
     vi.doUnmock('@boxalarm/authz');
   });

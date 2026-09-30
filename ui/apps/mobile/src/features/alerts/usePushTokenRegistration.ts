@@ -1,11 +1,31 @@
 import { useEffect, useRef } from 'react';
 import { AppState } from 'react-native';
 import Config from 'react-native-config';
+import { ApiError } from '../../lib/apiClient';
 import { useOptionalAuth } from '../../auth/AuthContext';
-import { getNativePushBridge, registerPushToken, type DeviceToken } from './pushTokens';
+import {
+  setPushRegistration,
+  setPushRegistrationRetry,
+  type PushRegistrationStatus,
+} from './pushRegistrationState';
+import {
+  currentRegistrationEpoch,
+  getNativePushBridge,
+  registerPushToken,
+  RegistrationCancelledError,
+  type DeviceToken,
+} from './pushTokens';
 
 const RETRY_BASE_MS = 5_000;
 const RETRY_MAX_MS = 5 * 60_000;
+/**
+ * A registered phone re-confirms with the server on a return to the foreground at most this often
+ * (N-m2): "Registered" must mean the server still has this phone's entry, not that a POST once
+ * worked - the entry can be removed later (a token disabled after a delivery error, an admin
+ * removing a lost device, another member's registration of the same token). Registration is
+ * idempotent, so the re-confirm is a plain re-POST.
+ */
+export const RECONFIRM_MIN_INTERVAL_MS = 60_000;
 
 /** Backoff before the Nth consecutive retry (1-based): 5s, 10s, 20s ... capped at 5 minutes. */
 export function retryDelayMs(failures: number): number {
@@ -28,17 +48,22 @@ export function usePushTokenRegistration(): void {
   const apiBaseUrl = Config.API_BASE_URL;
   const authRef = useRef(auth);
   authRef.current = auth;
-  const lastRegisteredRef = useRef<string | null>(null);
 
   useEffect(() => {
     if (!isAuthenticated || !memberId || !apiBaseUrl) return;
 
     const bridge = getNativePushBridge();
+    // Registrations of this sign-in are refused once sign-out starts (m3).
+    const epoch = currentRegistrationEpoch();
+    // Per sign-in, never per hook (C1): sign-out deletes this phone's entry on the server, so the
+    // next sign-in - another member, or the same one - must POST again even for the same token.
+    let lastRegistered: string | null = null;
     let cancelled = false;
     let inFlight = false;
     let needsRetry = false;
     let failures = 0;
     let retryTimer: ReturnType<typeof setTimeout> | null = null;
+    let confirmedAt = 0;
 
     const clearRetryTimer = () => {
       if (retryTimer !== null) {
@@ -47,23 +72,33 @@ export function usePushTokenRegistration(): void {
       }
     };
 
+    const report = (status: PushRegistrationStatus) => {
+      if (!cancelled) setPushRegistration({ memberId, status });
+    };
+
     const markRegistered = () => {
       needsRetry = false;
       failures = 0;
+      confirmedAt = Date.now();
       clearRetryTimer();
+      report('registered');
     };
 
     const register = async (device: DeviceToken) => {
       const key = `${device.platform}:${device.token}`;
-      if (lastRegisteredRef.current === key) return;
+      if (lastRegistered === key) return;
       const tokens = authRef.current;
       if (!tokens) throw new Error('auth context unavailable');
-      await registerPushToken(memberId, tokens, apiBaseUrl, device);
-      if (!cancelled) lastRegisteredRef.current = key;
+      await registerPushToken(memberId, tokens, apiBaseUrl, device, epoch);
+      if (!cancelled) lastRegistered = key;
     };
 
     const onFailure = (error: unknown) => {
-      if (cancelled) return;
+      if (cancelled || error instanceof RegistrationCancelledError) return;
+      // A re-confirm of a phone registered earlier this sign-in that got no answer (no signal,
+      // a timeout) says "couldn't check", amber; only a server refusal, or never having been
+      // registered, is red.
+      report(confirmedAt > 0 && !(error instanceof ApiError) ? 'unverified' : 'failed');
       needsRetry = true;
       failures += 1;
       const delay = retryDelayMs(failures);
@@ -84,6 +119,7 @@ export function usePushTokenRegistration(): void {
         if (cancelled) return;
         if (!granted) {
           needsRetry = true;
+          report('permissionDenied');
           console.warn(
             '[push] notification permission not granted; device is not registered for dispatch alerts',
           );
@@ -101,6 +137,11 @@ export function usePushTokenRegistration(): void {
       }
     };
 
+    report('registering');
+    setPushRegistrationRetry(() => {
+      failures = 0;
+      void attempt();
+    });
     void attempt();
 
     const unsubscribeRefresh = bridge.onTokenRefresh((device) => {
@@ -112,13 +153,23 @@ export function usePushTokenRegistration(): void {
     });
 
     const appStateSubscription = AppState.addEventListener('change', (status) => {
-      if (status !== 'active' || !needsRetry) return;
-      failures = 0;
+      if (status !== 'active') return;
+      if (needsRetry) {
+        failures = 0;
+        void attempt();
+        return;
+      }
+      // Registered: confirm the server still has it (N-m2). The status stays "registered" while
+      // this runs - no banner flash - and turns red only if the server refuses or is unreachable.
+      if (Date.now() - confirmedAt < RECONFIRM_MIN_INTERVAL_MS) return;
+      lastRegistered = null;
       void attempt();
     });
 
     return () => {
       cancelled = true;
+      setPushRegistration(null);
+      setPushRegistrationRetry(null);
       clearRetryTimer();
       unsubscribeRefresh();
       appStateSubscription.remove();

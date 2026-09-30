@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { TransactionCanceledException } from '@aws-sdk/client-dynamodb';
 import {
   GetCommand,
+  QueryCommand,
   TransactWriteCommand,
   type DynamoDBDocumentClient,
 } from '@aws-sdk/lib-dynamodb';
@@ -99,6 +100,85 @@ export function withoutDevice(
   deviceId: string | undefined,
 ): ContactChannelEntry[] {
   return current.filter((existing) => !isPush(existing) || !sameDevice(existing, deviceId));
+}
+
+/**
+ * Another member's entry for the registering installation: the same push token. Never the
+ * deviceId alone (review N-M1): the app's installation id could be copied to a second phone by an
+ * iOS backup restore or Quick Start (older builds stored it migratable), and two members of one
+ * department sharing it would take each other's pages away on every launch. A token is one app
+ * install's, so it cannot collide; and an old entry whose token has since rotated is already dead
+ * at APNs/FCM and cannot ring the phone. The deviceId still matches the member's OWN entries
+ * (withRegisteredDevice).
+ */
+function holdsToken(entry: ContactChannelEntry, token: string): boolean {
+  return isPush(entry) && entry.token === token;
+}
+
+/** Removes a registering installation's token from another member's devices. */
+export function withoutToken(
+  current: readonly ContactChannelEntry[],
+  token: string,
+): ContactChannelEntry[] {
+  return current.filter((existing) => !holdsToken(existing, token));
+}
+
+/**
+ * An installation belongs to the member signed in on it (M3). When member B registers a phone,
+ * any other member of the department still holding its push token - A signed out with no signal,
+ * so A's revoke never landed - has that entry removed, each through writePushDevices so their
+ * personnel.member.updated reaches the alerting snapshot. Otherwise A's pages keep ringing, full
+ * screen and through Do Not Disturb, on a phone A is no longer signed in to.
+ *
+ * Department-scoped (GSI3, every member of the department): a Cognito user is in one department.
+ * Returns the members it was removed from.
+ */
+export async function releaseInstallationFromOtherMembers(
+  client: DynamoDBDocumentClient,
+  tableName: string,
+  deptId: VerifiedDeptId,
+  memberId: string,
+  installation: { readonly token: string },
+  options: WritePushDevicesOptions = {},
+): Promise<string[]> {
+  const holders: string[] = [];
+  let exclusiveStartKey: Record<string, unknown> | undefined;
+  do {
+    const page = await client.send(
+      new QueryCommand({
+        TableName: tableName,
+        IndexName: 'GSI3',
+        KeyConditionExpression: 'gsi3pk = :gsi3pk',
+        ExpressionAttributeValues: { ':gsi3pk': buildDeptScopedPk(deptId, 'MEMBER') },
+        ProjectionExpression: 'memberId, contactChannels',
+        ExclusiveStartKey: exclusiveStartKey,
+      }),
+    );
+    for (const item of page.Items ?? []) {
+      const other = item.memberId as string | undefined;
+      const channels = (item.contactChannels as ContactChannelEntry[] | undefined) ?? [];
+      if (
+        other &&
+        other !== memberId &&
+        channels.some((entry) => holdsToken(entry, installation.token))
+      ) {
+        holders.push(other);
+      }
+    }
+    exclusiveStartKey = page.LastEvaluatedKey as Record<string, unknown> | undefined;
+  } while (exclusiveStartKey);
+
+  for (const other of holders) {
+    await writePushDevices(
+      client,
+      tableName,
+      deptId,
+      other,
+      (current) => withoutToken(current, installation.token),
+      options,
+    );
+  }
+  return holders;
 }
 
 /** Removes every push device (device loss with no device identified). */

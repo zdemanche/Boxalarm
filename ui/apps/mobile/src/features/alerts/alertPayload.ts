@@ -17,7 +17,14 @@ export interface AlertPayload {
   /** Epoch ms this phone received the page (iOS: the notification's delivery date). Shown as
    * "received", never as the dispatch time. */
   receivedAt: number;
+  /**
+   * The officer's mutual-aid prompt for this call (push `alertKind: mutual_aid_prompt`), not a
+   * page of the call itself: it has no answer buttons and opens the mutual-aid prompt screen.
+   */
+  mutualAidPrompt?: true;
 }
+
+export const MUTUAL_AID_PROMPT_KIND = 'mutual_aid_prompt';
 
 type PushData = Record<string, unknown> | undefined;
 
@@ -56,6 +63,7 @@ export function alertPayloadFromPushData(data: PushData, receivedAt: number): Al
       ? { dispatchedAt: dispatchedAt * 1000 }
       : {}),
     receivedAt,
+    ...(data?.alertKind === MUTUAL_AID_PROMPT_KIND ? { mutualAidPrompt: true as const } : {}),
   };
 }
 
@@ -71,6 +79,7 @@ export function alertPayloadToNotificationData(payload: AlertPayload): Record<st
       ? { dispatchedAt: String(Math.floor(payload.dispatchedAt / 1000)) }
       : {}),
     receivedAt: String(payload.receivedAt),
+    ...(payload.mutualAidPrompt ? { alertKind: MUTUAL_AID_PROMPT_KIND } : {}),
   };
 }
 
@@ -94,6 +103,8 @@ export function isSelfTestPayload(payload: Pick<AlertPayload, 'incidentType'>): 
 
 /** Keeps the first receipt time: tone 2 of the same call must not reset "3 min ago". */
 export async function rememberAlertPayload(payload: AlertPayload): Promise<void> {
+  // The prompt is about the call, not the call itself: the call's own page is what is kept.
+  if (payload.mutualAidPrompt) return;
   const existing = await kvGet<AlertPayload>(payloadKey(payload.dispatchId));
   const merged = mergePayload(existing?.value ?? null, payload);
   await kvSet(payloadKey(payload.dispatchId), merged);

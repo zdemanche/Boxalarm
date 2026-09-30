@@ -5,11 +5,31 @@ import { toVerifiedDeptId } from '@boxalarm/dept-scope';
 import {
   MAX_PUSH_DEVICES,
   parseDeviceId,
+  releaseInstallationFromOtherMembers,
   withRegisteredDevice,
+  withoutToken,
   withoutDevice,
   writePushDevices,
   type ContactChannelEntry,
 } from './pushDevices.js';
+
+interface SentCommand {
+  constructor: { name: string };
+  input: {
+    Key?: { pk: string };
+    IndexName?: string;
+    ExpressionAttributeValues?: Record<string, unknown>;
+    TransactItems?: [
+      {
+        Update: {
+          Key: { pk: string };
+          ExpressionAttributeValues: { ':cc': ContactChannelEntry[] };
+        };
+      },
+      { Put: { Item: { payload: Record<string, unknown> } } },
+    ];
+  };
+}
 
 const phone = {
   channel: 'PUSH',
@@ -180,5 +200,70 @@ describe('writePushDevices: concurrent registrations never drop each other', () 
         (current) => [...current],
       ),
     ).resolves.toBe('not_found');
+  });
+});
+
+describe('an installation belongs to the member signed in on it (M3)', () => {
+  const deptId = toVerifiedDeptId({ deptId: 'NICHOLS' });
+
+  it('withoutToken drops only the entry holding that push token', () => {
+    const sms: ContactChannelEntry = { channel: 'SMS', token: '+1' };
+    expect(withoutToken([phone, tablet, legacy, sms], 'tok-phone')).toEqual([tablet, legacy, sms]);
+    expect(withoutToken([phone, legacy], 'tok-legacy')).toEqual([phone]);
+  });
+
+  it('releases the installation from every other member holding it, each with its own member event', async () => {
+    const items: Record<string, { memberId: string; contactChannels: ContactChannelEntry[] }> = {
+      'mbr-a': { memberId: 'mbr-a', contactChannels: [phone, tablet] },
+      'mbr-c': { memberId: 'mbr-c', contactChannels: [{ ...legacy, token: 'tok-phone' }] },
+      'mbr-d': { memberId: 'mbr-d', contactChannels: [tablet] },
+      'mbr-b': { memberId: 'mbr-b', contactChannels: [phone] },
+      // N-M1: a phone restored from A's backup - same installation id, its own token.
+      'mbr-e': {
+        memberId: 'mbr-e',
+        contactChannels: [{ ...phone, token: 'tok-restored-copy' }],
+      },
+    };
+    const transacts: { memberPk: string; cc: ContactChannelEntry[]; payload: unknown }[] = [];
+    const send = vi.fn((command: SentCommand) => {
+      const name = command.constructor.name;
+      if (name === 'QueryCommand') {
+        expect(command.input.IndexName).toBe('GSI3');
+        expect(command.input.ExpressionAttributeValues?.[':gsi3pk']).toBe('DEPT#NICHOLS#MEMBER');
+        return Promise.resolve({ Items: Object.values(items) });
+      }
+      if (name === 'GetCommand') {
+        const id = String(command.input.Key!.pk).split('#').at(-1)!;
+        return Promise.resolve({ Item: { ...items[id], updatedAt: 10 } });
+      }
+      const [update, put] = command.input.TransactItems!;
+      transacts.push({
+        memberPk: update.Update.Key.pk,
+        cc: update.Update.ExpressionAttributeValues[':cc'],
+        payload: put.Put.Item.payload,
+      });
+      return Promise.resolve({});
+    });
+
+    const released = await releaseInstallationFromOtherMembers(
+      { send } as unknown as DynamoDBDocumentClient,
+      'table',
+      deptId,
+      'mbr-b',
+      { token: 'tok-phone' },
+      { changedBy: { reason: 'INSTALLATION_REREGISTERED', actorId: 'mbr-b' } },
+    );
+
+    expect(released).toEqual(['mbr-a', 'mbr-c']);
+    expect(transacts.map((t) => t.memberPk)).toEqual([
+      'DEPT#NICHOLS#MEMBER#mbr-a',
+      'DEPT#NICHOLS#MEMBER#mbr-c',
+    ]);
+    expect(transacts[0]!.cc).toEqual([tablet]);
+    expect(transacts[1]!.cc).toEqual([]);
+    expect(transacts[0]!.payload).toMatchObject({
+      memberId: 'mbr-a',
+      changedBy: { reason: 'INSTALLATION_REREGISTERED' },
+    });
   });
 });

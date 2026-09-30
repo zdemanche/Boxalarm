@@ -55,6 +55,31 @@ test('a dispatch push displays on the critical channel with a full-screen action
   });
 });
 
+test("a mutual-aid prompt gets its own notification - never replacing the call's page - and no answer buttons", async () => {
+  Platform.OS = 'android';
+
+  await displayPushNotification(
+    {
+      dispatchId: 'DISP-MA',
+      alertKind: 'mutual_aid_prompt',
+      title: 'MUTUAL AID REQUESTED',
+      body: 'MUTUAL AID REQUESTED — Structure fire — 21 Main St',
+      incidentType: 'Structure fire',
+      address: '21 Main St',
+    },
+    1_000,
+  );
+
+  const call = displayNotification.mock.calls[0][0];
+  expect(call.id).toBe('mutual-aid:DISP-MA');
+  expect(call.android.channelId).toBe(CRITICAL_CHANNEL_ID);
+  expect(call.android.actions).toBeUndefined();
+  expect(call.data).toMatchObject({ dispatchId: 'DISP-MA', alertKind: 'mutual_aid_prompt' });
+  const cap = (notifee.createTriggerNotification as jest.Mock).mock.calls.at(-1)![0];
+  expect(cap.id).toBe('mutual-aid:DISP-MA');
+  expect(cap.android.actions).toBeUndefined();
+});
+
 test('the background handler keeps the page on the phone for the Alerts list and offline opens', async () => {
   Platform.OS = 'android';
 

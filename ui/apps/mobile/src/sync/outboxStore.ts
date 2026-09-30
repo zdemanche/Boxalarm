@@ -160,6 +160,14 @@ export async function removeIfUnattempted(id: string): Promise<boolean> {
   return (result.rowsAffected ?? 0) > 0;
 }
 
+/** Deletes a row unless a drain is sending it right now. Returns whether it did. */
+export async function removeUnlessSyncing(id: string): Promise<boolean> {
+  const result = await getDb().execute("DELETE FROM outbox WHERE id = ? AND status != 'SYNCING'", [
+    id,
+  ]);
+  return (result.rowsAffected ?? 0) > 0;
+}
+
 export async function remove(id: string): Promise<void> {
   await getDb().execute('DELETE FROM outbox WHERE id = ?', [id]);
 }

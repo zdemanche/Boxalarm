@@ -59,11 +59,23 @@ export interface LocalAnswer {
   answeredAt: number;
 }
 
-const answerKey = (dispatchId: string) => `alert-answer:${dispatchId}`;
+/**
+ * Per member, never per phone (M1): on a station phone the next member to open the call must not
+ * see the previous member's answer as their own. `memberId` null is the no-session case (the
+ * local mock repository, or an answer queued with no session at all). Signing out clears the
+ * member's answers (memberCache).
+ */
+export const localAnswerPrefix = (memberId: string | null) => `alert-answer:${memberId ?? '-'}:`;
+const answerKey = (memberId: string | null, dispatchId: string) =>
+  `${localAnswerPrefix(memberId)}${dispatchId}`;
 
-export async function getLocalAnswer(dispatchId: string): Promise<LocalAnswer | null> {
-  const stored = (await kvGet<LocalAnswer & { etaMinutes?: number | null }>(answerKey(dispatchId)))
-    ?.value;
+export async function getLocalAnswer(
+  memberId: string | null,
+  dispatchId: string,
+): Promise<LocalAnswer | null> {
+  const stored = (
+    await kvGet<LocalAnswer & { etaMinutes?: number | null }>(answerKey(memberId, dispatchId))
+  )?.value;
   if (!stored) return null;
   // Written by an earlier build as { etaMinutes }.
   if (stored.eta === undefined) {
@@ -73,12 +85,16 @@ export async function getLocalAnswer(dispatchId: string): Promise<LocalAnswer | 
   return stored;
 }
 
-export async function clearLocalAnswer(dispatchId: string): Promise<void> {
-  await kvDelete(answerKey(dispatchId));
+export async function clearLocalAnswer(memberId: string | null, dispatchId: string): Promise<void> {
+  await kvDelete(answerKey(memberId, dispatchId));
 }
 
-export async function saveLocalAnswer(dispatchId: string, answer: LocalAnswer): Promise<void> {
-  await kvSet(answerKey(dispatchId), answer);
+export async function saveLocalAnswer(
+  memberId: string | null,
+  dispatchId: string,
+  answer: LocalAnswer,
+): Promise<void> {
+  await kvSet(answerKey(memberId, dispatchId), answer);
 }
 
 /** A Not responding answer never carries an ETA. */
@@ -135,12 +151,17 @@ export async function queueAlertResponse(
   const outboxId = `response-${clientAnswerId}`;
   const given = etaFor(ackStatus, eta);
   const etaText = ackStatus === 'NOT_RESPONDING' ? '' : `, ${formatEta(given)}`;
-  await syncManager.enqueueResponse(
+  const { answeredBy } = await syncManager.enqueueResponse(
     outboxId,
     dispatchId,
     `Your response — ${ackStatusLabel(ackStatus)}${etaText}`,
     responseBody(ackStatus, given, now, clientAnswerId),
   );
-  await saveLocalAnswer(dispatchId, { ackStatus, eta: given, outboxId, answeredAt: now });
+  await saveLocalAnswer(answeredBy, dispatchId, {
+    ackStatus,
+    eta: given,
+    outboxId,
+    answeredAt: now,
+  });
   return outboxId;
 }

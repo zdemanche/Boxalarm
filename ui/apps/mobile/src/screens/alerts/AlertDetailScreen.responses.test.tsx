@@ -309,7 +309,7 @@ test('against a server that still requires an ETA, the answer is re-sent with th
 });
 
 test('a roster answer of At station reads back as "At station", not "ETA 0 min" (round 2 m2-5)', async () => {
-  await kvDelete('alert-answer:D-1');
+  await kvDelete('alert-answer:MBR-1:D-1');
   roster = [{ memberId: 'MBR-1', ackStatus: 'RESPONDING', eta: Math.floor(Date.now() / 1000) }];
   await renderScreen();
 
@@ -344,7 +344,7 @@ test('re-opening the call shows the answer already given, with its delivery stat
 });
 
 test('with no answer on this phone, the server roster seeds the member’s own answer', async () => {
-  await kvDelete('alert-answer:D-1');
+  await kvDelete('alert-answer:MBR-1:D-1');
   roster = [{ memberId: 'MBR-1', ackStatus: 'DIRECT_TO_SCENE', eta: null }];
   await renderScreen();
 
@@ -358,7 +358,7 @@ describe('lock screen after answering (round 2 m2-2)', () => {
 
   beforeEach(async () => {
     // A fresh call: no answer left on the phone by an earlier test.
-    await kvDelete('alert-answer:D-1');
+    await kvDelete('alert-answer:MBR-1:D-1');
     Platform.OS = 'android';
     setShowWhenLocked = jest.fn();
     nativeModules.BoxalarmAlertReadiness = {

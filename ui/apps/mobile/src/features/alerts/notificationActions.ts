@@ -45,11 +45,12 @@ export const ANDROID_RESPONSE_ACTIONS: AndroidAction[] = [
 ];
 
 /**
- * iOS: the category a dispatch page must name in `aps.category` for its actions to show. The
- * alerting service does not send it yet (pushPayload.ts buildApnsPayload) - until it does, iOS
- * pages show no buttons. `foreground: true` opens Boxalarm (after unlock) so the answer goes
- * through the same queue with the alert screen showing whether it was sent; answering without
- * unlocking would need a native, JS-free sender in AppDelegate.
+ * iOS: the category a dispatch page names in `aps.category` for its actions to show - the
+ * alerting service sends it on every dispatch page (pushPayload.ts buildApnsPayload), so these
+ * buttons are live. `foreground: true` opens Boxalarm (after unlock) so the answer goes through
+ * the same queue with the alert screen showing whether it was sent (pushRouting
+ * answerPendingIosAction, which refuses on a signed-out phone); answering without unlocking would
+ * need a native, JS-free sender in AppDelegate.
  */
 export const IOS_DISPATCH_CATEGORY_ID = 'DISPATCH';
 export const IOS_DISPATCH_CATEGORY: IOSNotificationCategory = {
@@ -102,6 +103,30 @@ syncManager.setStaleAnswerHooks({
       },
     });
   },
+});
+
+/**
+ * Answers whose notification last said they were not sent yet, by outbox id. A later run - the
+ * app's own session, once it has loaded - may send them; the notification must then say so
+ * rather than keep telling the member it was not sent (m2).
+ */
+const notSentNotices = new Map<
+  string,
+  { notificationId: string; data: Record<string, string>; answer: ResponseAnswer }
+>();
+
+syncManager.setDeliveredHook((row) => {
+  const notice = notSentNotices.get(row.id);
+  if (!notice) return;
+  notSentNotices.delete(row.id);
+  void showAnswerNotification(
+    notice.notificationId,
+    notice.data,
+    notice.answer,
+    'Sent. Tap to open the call.',
+  ).catch((error: unknown) =>
+    console.warn('[push] updating the answer notification failed', error),
+  );
 });
 
 /**
@@ -188,11 +213,17 @@ export async function answerFromNotification(
     await syncManager.drainAndSettle();
     const sent = syncManager.hasSynced(outboxId);
     const row = sent ? undefined : await outbox.find(outboxId);
+    if (row && row.status !== 'REJECTED') {
+      notSentNotices.set(outboxId, { notificationId, data, answer });
+    }
+    // Sent by another run in the meantime (the delivered hook had nothing to correct yet).
+    const sentNow = sent || syncManager.hasSynced(outboxId);
+    if (sentNow) notSentNotices.delete(outboxId);
     await showAnswerNotification(
       notificationId,
       data,
       answer,
-      sent
+      sentNow
         ? 'Sent. Tap to open the call.'
         : row?.status === 'REJECTED'
           ? row.lastError === RESPONSE_SUPERSEDED
@@ -200,7 +231,11 @@ export async function answerFromNotification(
             : row.lastError === RESPONSE_NOT_RECORDED
               ? 'NOT ON THE ROSTER - the server did not record it. Tap to send again, or use the radio.'
               : 'REFUSED by the server - not recorded. Tap to open the call, or use the radio.'
-          : 'NOT SENT YET - saved on this phone and it sends when you have signal. Tap to check.',
+          : row?.ownerMemberId === null
+            ? // Queued without an owner (the keychain could not be read): it sends only once the
+              // member's own session is open on this phone, not merely when signal returns (m4).
+              'NOT SENT YET - saved on this phone. Open Boxalarm to send it, or use the radio.'
+            : 'NOT SENT YET - saved on this phone and it sends when you have signal. Tap to check.',
     );
   } catch (error) {
     console.error('[push] answering from the notification failed', error);
@@ -223,7 +258,7 @@ export async function handleNotificationEvent({ type, detail }: Event): Promise<
   // call is still in the Alerts list, and dismissing is a deliberate act.
   if (type === EventType.DISMISSED) {
     const id = detail.notification?.id;
-    if (id?.startsWith('dispatch:')) {
+    if (id?.startsWith('dispatch:') || id?.startsWith('mutual-aid:')) {
       await notifee
         .cancelTriggerNotification(id)
         .catch((error: unknown) => console.warn('[push] cancelling the ring cap failed', error));

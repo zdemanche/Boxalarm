@@ -88,7 +88,18 @@ export class PushTokens extends pulumi.ComponentResource {
         code: lambdaCode("personnel-service", "push-tokens-register"),
         routeKey: "POST /api/v1/personnel/members/{memberId}/push-tokens",
         environment: personnelEnv,
-        additionalPolicyStatements: personnelTableStatements,
+        additionalPolicyStatements: [
+          ...personnelTableStatements,
+          {
+            // Registering an installation takes it off any other member of the department who
+            // still holds it (pushDevices releaseInstallationFromOtherMembers): one query of the
+            // department's members on GSI3, then that member's own writePushDevices.
+            Sid: "PlatformTableMemberIndexQuery",
+            Effect: "Allow",
+            Action: ["dynamodb:Query"],
+            Resource: pulumi.interpolate`${args.platformTableArn}/index/GSI3` as unknown as string,
+          },
+        ],
         reservedConcurrentExecutions: 5,
       },
       { parent: this },

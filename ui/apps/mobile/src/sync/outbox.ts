@@ -55,6 +55,19 @@ export async function enqueue(input: EnqueueInput): Promise<OutboxRow> {
 }
 
 /**
+ * The same member's rows: equal owners, or an ownerless row answered as that member (its
+ * answeredAsHint) - an answer queued during a keychain error and the member's later answer to the
+ * same call are one member's answers, so the newer supersedes the older (m10).
+ */
+function sameOwner(a: OutboxRow, b: OutboxRow): boolean {
+  if (a.ownerMemberId === b.ownerMemberId) return true;
+  return (
+    (a.ownerMemberId === null && !!a.answeredAsHint && a.answeredAsHint === b.ownerMemberId) ||
+    (b.ownerMemberId === null && !!b.answeredAsHint && b.answeredAsHint === a.ownerMemberId)
+  );
+}
+
+/**
  * Rows of `kind` for the same `path` queued before `row` - an older answer to the same call.
  * Answers are append-only on the server and the latest write wins there, so an older answer
  * that is still retrying must never be delivered after a newer one.
@@ -66,7 +79,7 @@ export async function olderSiblings(row: OutboxRow): Promise<OutboxRow[]> {
       candidate.id !== row.id &&
       candidate.kind === row.kind &&
       candidate.path === row.path &&
-      candidate.ownerMemberId === row.ownerMemberId &&
+      sameOwner(candidate, row) &&
       candidate.queuedAt <= row.queuedAt,
   );
 }
@@ -79,7 +92,7 @@ export async function isSuperseded(row: OutboxRow): Promise<boolean> {
       candidate.id !== row.id &&
       candidate.kind === row.kind &&
       candidate.path === row.path &&
-      candidate.ownerMemberId === row.ownerMemberId &&
+      sameOwner(candidate, row) &&
       candidate.queuedAt > row.queuedAt,
   );
 }
@@ -87,6 +100,10 @@ export async function isSuperseded(row: OutboxRow): Promise<boolean> {
 /** Replaces a queued row's body (the RESPONSE missing-ETA fallback, syncManager.post). */
 export async function replaceBody(id: string, body: string): Promise<void> {
   await store.update(id, { body });
+}
+
+export async function all(): Promise<OutboxRow[]> {
+  return store.all();
 }
 
 export async function find(id: string): Promise<OutboxRow | undefined> {
@@ -179,9 +196,12 @@ export async function listDrainable(
 }
 
 /** Rows the member queued and hasn't sent yet - what signing out would leave behind. */
-export async function countUnsentFor(ownerMemberId: string): Promise<number> {
+export async function countUnsentFor(
+  ownerMemberId: string,
+  alreadyRecorded: (row: OutboxRow) => boolean = () => false,
+): Promise<number> {
   const rows = await store.all();
-  return rows.filter((row) => row.ownerMemberId === ownerMemberId).length;
+  return rows.filter((row) => row.ownerMemberId === ownerMemberId && !alreadyRecorded(row)).length;
 }
 
 export async function discardAllFor(ownerMemberId: string): Promise<void> {
@@ -210,6 +230,11 @@ export async function markSyncing(id: string): Promise<void> {
 /** markSyncing that loses to a concurrent removeIfUnattempted instead of racing it. */
 export async function claimForSync(id: string): Promise<boolean> {
   return store.claimForSync(id);
+}
+
+/** Drops a row unless a drain is sending it right now; false when it is. */
+export async function discardUnlessSyncing(id: string): Promise<boolean> {
+  return store.removeUnlessSyncing(id);
 }
 
 /** Drops a row only if nothing has ever been sent for it: its POST cannot have landed. */

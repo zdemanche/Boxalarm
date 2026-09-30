@@ -8,7 +8,7 @@ import type { OutboxKind, OutboxRow } from './outbox';
 
 type Listener = (status: SyncQueueStatus) => void;
 
-let tokens: AuthTokenSource | null = null;
+let tokens: SessionTokenSource | null = null;
 let apiBaseUrl: string | null = null;
 let draining = false;
 // Set when drain() is called while one is already running, so the running drain loops once more
@@ -77,6 +77,14 @@ export interface StaleAnswerHooks {
 
 let staleAnswerHooks: StaleAnswerHooks | null = null;
 
+/** Told of every row this process delivers - so a notification that said "not sent yet" can be
+ * corrected when a later run sends it (m2). Registered by notificationActions. */
+let deliveredHook: ((row: OutboxRow) => void) | null = null;
+
+export function setDeliveredHook(hook: ((row: OutboxRow) => void) | null): void {
+  deliveredHook = hook;
+}
+
 export function setStaleAnswerHooks(hooks: StaleAnswerHooks | null): void {
   staleAnswerHooks = hooks;
 }
@@ -112,6 +120,8 @@ function signedInMember(): string | null {
 export type SessionTokenSource = AuthTokenSource & {
   readonly memberId?: string | null;
   readonly deptId?: string | null;
+  /** A source that yields tokens only while the session is still that member's (m1). */
+  readonly forMember?: (memberId: string) => AuthTokenSource;
 };
 
 export function configure(
@@ -278,6 +288,33 @@ export async function enqueueAvailability(
   return { replaced, mayStand };
 }
 
+/**
+ * Before a mark-off is ended early (R3-M2): the member's AVAILABILITY rows still in the outbox for
+ * the same start - queued, failed or refused - are dropped, or a later drain would re-create the
+ * mark-off the member just ended. 'sending' when one is being sent right now and could not be
+ * dropped: the caller must not end it yet.
+ */
+export async function neutraliseQueuedMarkOff(
+  memberId: string,
+  startAtSeconds: number,
+): Promise<'clear' | 'sending'> {
+  const path = `personnel/members/${encodeURIComponent(memberId)}/availability`;
+  const rows = (await outbox.all()).filter((row) => {
+    if (row.kind !== 'AVAILABILITY' || row.path !== path) return false;
+    try {
+      return (JSON.parse(row.body) as { startAt?: unknown }).startAt === startAtSeconds;
+    } catch {
+      return false;
+    }
+  });
+  let outcome: 'clear' | 'sending' = 'clear';
+  for (const row of rows) {
+    if (!(await outbox.discardUnlessSyncing(row.id))) outcome = 'sending';
+  }
+  if (rows.length > 0) await notify();
+  return outcome;
+}
+
 /** lastError of an AVAILABILITY row the server answered 409 on its first attempt. */
 export const AVAILABILITY_CONFLICT =
   'Not recorded: the server already has a mark-off starting at this exact time.';
@@ -313,15 +350,16 @@ export async function enqueueResponse(
   dispatchId: string,
   label: string,
   body: Record<string, unknown>,
-): Promise<void> {
+): Promise<{ answeredBy: string | null }> {
   const path = `alerting/dispatches/${encodeURIComponent(dispatchId)}/responses`;
+  const stamp = await ownerStamp();
   const row = await outbox.enqueue({
     id,
     kind: 'RESPONSE',
     label,
     path,
     body,
-    ...(await ownerStamp()),
+    ...stamp,
   });
   const older = await outbox.olderSiblings(row);
   await Promise.all(
@@ -331,11 +369,20 @@ export async function enqueueResponse(
   );
   await notify();
   void drain();
+  // Who the answer is for: its owner, or for an ownerless one the member it was answered as.
+  return { answeredBy: stamp.ownerMemberId ?? stamp.answeredAsHint ?? null };
 }
 
-/** Unsent rows the member queued: what signing out would leave waiting on this phone. */
+/**
+ * Unsent rows the member queued: what signing out would leave waiting on this phone. An answer
+ * the server answered 409 SUPERSEDED is recorded (just not the current one), so it is not
+ * "unsent" and is not offered for discard (m9).
+ */
 export async function countUnsentFor(memberId: string): Promise<number> {
-  return outbox.countUnsentFor(memberId);
+  return outbox.countUnsentFor(
+    memberId,
+    (row) => row.status === 'REJECTED' && row.lastError === RESPONSE_SUPERSEDED,
+  );
 }
 
 /** The member chose to discard their unsent work at sign-out. */
@@ -727,7 +774,14 @@ async function runDrain(): Promise<void> {
     const runApiBaseUrl = apiBaseUrl;
     const runOwner = owner.memberId;
     if (!runTokens || !runApiBaseUrl) return;
-    const session: RunSession = { tokens: runTokens, apiBaseUrl: runApiBaseUrl };
+    // Pinned to the run's member, not just to the source (m1): every call of the run - the 401
+    // retry, the missing-ETA re-post, a photo re-create - gets no token once the session on the
+    // phone is someone else's.
+    const pinned =
+      runOwner && typeof runTokens.forMember === 'function'
+        ? runTokens.forMember(runOwner)
+        : runTokens;
+    const session: RunSession = { tokens: pinned, apiBaseUrl: runApiBaseUrl };
     // Only the signed-in member's own rows (R2-M3).
     const pending = await outbox.listDrainable(Date.now(), runOwner);
     for (const listed of pending) {
@@ -749,6 +803,11 @@ async function runDrain(): Promise<void> {
         await processEntry(row.id, session);
         await outbox.markSynced(row.id);
         rememberSynced(row.id);
+        try {
+          deliveredHook?.(row);
+        } catch (hookError) {
+          console.warn('[sync] delivered hook failed', hookError);
+        }
         lastSyncAt = new Date().toISOString();
       } catch (error) {
         if (isPermanentRejection(error)) {

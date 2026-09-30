@@ -1,6 +1,8 @@
 import { spacing, typeScale, type StatusRole } from '@boxalarm/design-tokens';
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { useOptionalAuth } from '../../auth/AuthContext';
 import { kvGet, kvSet } from '../../sync/kvStore';
+import { memberCacheKey } from '../../sync/memberCache';
 import { AccessibilityInfo, Platform, Text, View } from 'react-native';
 import { Button, Screen, StatusChip, useTheme } from '../../components/ui';
 import { useAlertsRepository } from '../../features/alerts/apiAlertsRepository';
@@ -15,8 +17,6 @@ const POLL_INTERVAL_MS = 1_500;
 const MAX_POLLS = 20;
 
 const CHANNEL_LABEL: Record<string, string> = { PUSH: 'Push', SMS: 'SMS', VOICE: 'Voice' };
-
-const LAST_SELF_TEST_KEY = 'self-test-last';
 
 interface LastSelfTest {
   testId: string | null;
@@ -78,6 +78,9 @@ export function SelfTestScreen() {
   const theme = useTheme();
   const repository = useAlertsRepository();
   const readiness = useAlertReadiness();
+  // Per member (m6): "this phone last rang" for the previous member says nothing about whether
+  // this phone is registered for the member signed in now.
+  const lastSelfTestKey = memberCacheKey.lastSelfTest(useOptionalAuth()?.memberId ?? null);
   const [run, setRun] = useState<SelfTestRun | null>(null);
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -91,13 +94,13 @@ export function SelfTestScreen() {
 
   useEffect(() => {
     cancelledRef.current = false;
-    void kvGet<LastSelfTest>(LAST_SELF_TEST_KEY).then((entry) => {
+    void kvGet<LastSelfTest>(lastSelfTestKey).then((entry) => {
       if (!cancelledRef.current && entry) setLast(entry.value);
     });
     return () => {
       cancelledRef.current = true;
     };
-  }, []);
+  }, [lastSelfTestKey]);
 
   const poll = useCallback(
     async (testId: string, attempt: number) => {
@@ -156,7 +159,7 @@ export function SelfTestScreen() {
     // last proved it rings. Not reported to the server - there is no endpoint for it yet.
     const record: LastSelfTest = { testId: testIdRef.current, rang: answer, at: Date.now() };
     setLast(record);
-    void kvSet(LAST_SELF_TEST_KEY, record);
+    void kvSet(lastSelfTestKey, record);
     AccessibilityInfo.announceForAccessibility(
       answer === 'yes'
         ? 'Good. This phone rang for a test page.'

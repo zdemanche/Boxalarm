@@ -9,9 +9,12 @@ import * as syncManager from '../../sync/syncManager';
 import { mockScheduleRepository } from './mockScheduleRepository';
 import {
   ClaimNeedsConnectionError,
+  MarkOffBeingSentError,
+  MarkOffNeedsConnectionError,
   NotSignedInError,
   type ClaimResult,
   type DutyShift,
+  type MarkOff,
   type MarkUnavailableResult,
   type ScheduleRepository,
 } from './types';
@@ -158,6 +161,55 @@ export function useScheduleRepository(): ScheduleRepository {
           },
         );
         return { outboxId, replacedUnsent: replaced, earlierMayStand: mayStand };
+      },
+
+      // Contract for the end-early API being added on the server branch (fix/post-merge-server,
+      // not landed when this was written): GET .../availability lists current and upcoming
+      // mark-offs as { markOffs: [{ markoffId?, startAt, endAt, reason? }] } in epoch seconds,
+      // and POST .../availability/{markoffId}/end ends one now. The server keys a mark-off by its
+      // start (MARKOFF#{startAt}), so a row without markoffId is addressed by its startAt.
+      async listMarkOffs(): Promise<MarkOff[]> {
+        const tokens = authRef.current;
+        if (!tokens) return mockScheduleRepository.listMarkOffs!();
+        const memberId = auth?.memberId;
+        if (!memberId) throw new NotSignedInError();
+        if (!isOnline) throw new MarkOffNeedsConnectionError();
+        const response = await apiRequest(
+          `personnel/members/${encodeURIComponent(memberId)}/availability`,
+          tokens,
+          { apiBaseUrl },
+        );
+        const body = (await response.json()) as {
+          markOffs?: { markoffId?: string; startAt: number; endAt: number; reason?: string }[];
+        };
+        const now = Date.now() / 1000;
+        return (body.markOffs ?? [])
+          .filter((m) => m.endAt > now)
+          .map((m) => ({
+            markoffId: m.markoffId ?? String(m.startAt),
+            startAt: m.startAt,
+            endAt: m.endAt,
+            ...(m.reason ? { reason: m.reason } : {}),
+          }))
+          .sort((a, b) => a.startAt - b.startAt);
+      },
+
+      async endMarkOff(markOff): Promise<void> {
+        const tokens = authRef.current;
+        if (!tokens) return mockScheduleRepository.endMarkOff!(markOff);
+        const memberId = auth?.memberId;
+        if (!memberId) throw new NotSignedInError();
+        if (!isOnline) throw new MarkOffNeedsConnectionError();
+        // A copy of this mark-off still waiting in the outbox would re-create it after it ends
+        // (R3-M2): drop it first, or refuse while one is being sent.
+        if ((await syncManager.neutraliseQueuedMarkOff(memberId, markOff.startAt)) === 'sending') {
+          throw new MarkOffBeingSentError();
+        }
+        await apiRequest(
+          `personnel/members/${encodeURIComponent(memberId)}/availability/${encodeURIComponent(markOff.markoffId)}/end`,
+          tokens,
+          { apiBaseUrl, method: 'POST' },
+        );
       },
     };
   }, [apiBaseUrl, isAuthenticated, isOnline, auth?.memberId]);

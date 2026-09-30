@@ -1,4 +1,11 @@
-import { getNativePushBridge, registerPushToken, revokePushToken } from './pushTokens';
+import {
+  currentRegistrationEpoch,
+  getNativePushBridge,
+  registerPushToken,
+  RegistrationCancelledError,
+  revokePushToken,
+  stopRegistrations,
+} from './pushTokens';
 
 jest.mock('./deviceInstallationId', () => ({
   getDeviceInstallationId: jest.fn(async () => '0b6f1c2e-5d0a-4d9e-9b51-1c2f3a4b5c6d'),
@@ -65,4 +72,37 @@ test('getNativePushBridge returns the real Firebase/notifee-backed bridge', () =
   expect(typeof bridge.requestPermission).toBe('function');
   expect(typeof bridge.getToken).toBe('function');
   expect(typeof bridge.onTokenRefresh).toBe('function');
+});
+
+// m3: a registration of the session being signed out must not land after its revoke.
+test('sign-out waits for a registration already sent, then refuses the session’s later ones', async () => {
+  const order: string[] = [];
+  let answer: () => void = () => undefined;
+  globalThis.fetch = jest.fn(
+    (_url: string, init: RequestInit) =>
+      new Promise<Response>((resolve) => {
+        answer = () => {
+          order.push(`${init.method} answered`);
+          resolve(new Response('{}', { status: 200 }));
+        };
+      }),
+  ) as unknown as typeof fetch;
+  const epoch = currentRegistrationEpoch();
+  const device = { platform: 'FCM' as const, token: 't' };
+
+  const sent = registerPushToken('MBR-1', tokens, 'https://api.example.test', device, epoch);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  const stopping = stopRegistrations(5_000).then(() => order.push('stopped'));
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  expect(order).toEqual([]);
+  answer();
+  await sent;
+  await stopping;
+  expect(order).toEqual(['POST answered', 'stopped']);
+
+  (globalThis.fetch as jest.Mock).mockClear();
+  await expect(
+    registerPushToken('MBR-1', tokens, 'https://api.example.test', device, epoch),
+  ).rejects.toBeInstanceOf(RegistrationCancelledError);
+  expect(globalThis.fetch).not.toHaveBeenCalled();
 });

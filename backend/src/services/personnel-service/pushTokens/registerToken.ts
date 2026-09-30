@@ -13,6 +13,7 @@ import { TransactionCanceledException } from '@aws-sdk/client-dynamodb';
 import { createDynamoClient, readPersonnelConfig } from '../dynamoClient.js';
 import {
   parseDeviceId,
+  releaseInstallationFromOtherMembers,
   withRegisteredDevice,
   writePushDevices,
   type ContactChannelEntry,
@@ -159,6 +160,53 @@ async function registerToken(
   if (outcome === 'not_found') {
     emitPushTokenMetric('Failed', 'MemberNotFound');
     return notFoundProblem(traceId, `member ${memberId} was not found`);
+  }
+
+  // This installation is now this member's: take its token off anyone else in the department
+  // who still holds it (a sign-out whose revoke never landed) - by token only (N-M1). Best-effort after the member's own
+  // entry is written - their pages come first - and never silent: the next registration retries.
+  try {
+    const released = await releaseInstallationFromOtherMembers(
+      client,
+      config.tableName,
+      deptId,
+      memberId,
+      { token: body.token },
+      {
+        correlationId: traceId,
+        changedBy: {
+          service: 'personnel-service',
+          reason: 'INSTALLATION_REREGISTERED',
+          actorId: memberId,
+          ...(body.deviceId ? { deviceId: body.deviceId } : {}),
+        },
+      },
+    );
+    if (released.length > 0) {
+      console.log(
+        JSON.stringify({
+          event: 'personnel.pushToken.releasedFromOtherMembers',
+          service: 'personnel-service',
+          correlationId: traceId,
+          memberId,
+          deviceId: body.deviceId ?? null,
+          releasedFrom: released,
+        }),
+      );
+    }
+  } catch (error) {
+    console.error(
+      JSON.stringify({
+        event: 'personnel.pushToken.release.failed',
+        service: 'personnel-service',
+        correlationId: traceId,
+        memberId,
+        deviceId: body.deviceId ?? null,
+        reason: error instanceof Error ? error.constructor.name : 'UnknownError',
+        message: error instanceof Error ? error.message : String(error),
+      }),
+    );
+    emitPushTokenMetric('Failed', 'ReleaseFromOtherMembers');
   }
 
   console.log(

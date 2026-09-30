@@ -21,6 +21,8 @@ export function RootNavigator() {
   if (isLoading) return <View style={{ flex: 1 }} />;
 
   const onStateChange = () => {
+    // A page opened while the sign-in screens showed opens once the tabs mount (M2).
+    flushPendingAlertNavigation();
     setFocusedRouteName(navigationRef.getCurrentRoute()?.name);
     syncLockScreenPresentation();
   };

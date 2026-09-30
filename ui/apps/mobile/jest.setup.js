@@ -84,6 +84,11 @@ jest.mock('@op-engineering/op-sqlite', () => {
           row.status = 'SYNCING';
           return { rows: [], rowsAffected: 1 };
         }
+        if (statement.startsWith("DELETE FROM outbox WHERE id = ? AND status != 'SYNCING'")) {
+          const before = rows.length;
+          rows = rows.filter((row) => !(row.id === params[0] && row.status !== 'SYNCING'));
+          return { rows: [], rowsAffected: before - rows.length };
+        }
         if (statement.startsWith("DELETE FROM outbox WHERE id = ? AND status = 'QUEUED'")) {
           const before = rows.length;
           rows = rows.filter(

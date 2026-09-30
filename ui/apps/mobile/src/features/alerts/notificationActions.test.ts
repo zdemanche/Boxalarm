@@ -76,7 +76,9 @@ test('Responding from the notification goes through the outbox and the notificat
   expect(last.body).toMatch(/^Sent\./);
   // The replacement is quiet - it must not re-ring the page it answers.
   expect(last.android.channelId).toBe('notifications-default');
-  await expect(getLocalAnswer('D-ACT')).resolves.toMatchObject({ ackStatus: 'RESPONDING' });
+  await expect(getLocalAnswer('m-test', 'D-ACT')).resolves.toMatchObject({
+    ackStatus: 'RESPONDING',
+  });
 });
 
 test('answering from the notification cancels the 60 s cap so it cannot overwrite the answer', async () => {
@@ -102,6 +104,21 @@ test('with no signal the answer is kept on the phone and the notification says N
     expect.objectContaining({ kind: 'RESPONSE', status: 'QUEUED' }),
   ]);
   expect(displayNotification.mock.calls.at(-1)![0].body).toMatch(/NOT SENT YET/);
+});
+
+test('m2: an answer said NOT SENT YET is corrected to Sent when a later run sends it', async () => {
+  (NetInfo.fetch as jest.Mock).mockResolvedValue({ isConnected: false });
+  await handleNotificationEvent(actionPress('respond:RESPONDING'));
+  expect(displayNotification.mock.calls.at(-1)![0].body).toMatch(/NOT SENT YET/);
+
+  // The app's own session loads (or signal returns) and sends it.
+  (NetInfo.fetch as jest.Mock).mockResolvedValue({ isConnected: true });
+  mockApiRequest.mockResolvedValue({ json: async () => ({}) });
+  await syncManager.drainAndSettle();
+
+  const last = displayNotification.mock.calls.at(-1)![0];
+  expect(last.id).toBe('dispatch:D-ACT');
+  expect(last.body).toMatch(/^Sent\./);
 });
 
 test('a 409 that is not SUPERSEDED: the notification says NOT ON THE ROSTER - not "sent"', async () => {
