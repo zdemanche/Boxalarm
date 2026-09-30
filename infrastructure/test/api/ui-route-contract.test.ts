@@ -24,7 +24,12 @@ const API_PREFIX = "/api/v1/";
  * normalized to `{}`. Deploying a route must remove its entry: the test fails on a stale
  * entry as well as on an unlisted gap, so this list is always the exact current gap.
  */
-const KNOWN_UNDEPLOYED = new Set<string>([]);
+const KNOWN_UNDEPLOYED = new Set<string>([
+  // End-early mark-offs: the mobile app treats a 404/405 as "not supported"; the routes are
+  // added by fix/post-merge-server, whose merge must remove these two entries.
+  "GET /api/v1/personnel/members/{}/availability",
+  "POST /api/v1/personnel/members/{}/availability/{}/end",
+]);
 
 interface UiCall {
   readonly method: string;
