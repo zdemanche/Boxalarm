@@ -26,6 +26,8 @@ const RESPONSE_ACK_STATUSES: ReadonlySet<string> = new Set([
 interface RecordResponseBody {
   readonly ackStatus: ResponseAckStatus;
   readonly eta: number | null;
+  /** The client sent an ETA outside the plausible window; recorded as null, counted. */
+  readonly etaOutOfRange: boolean;
   readonly assignedApparatusId: string | null;
   readonly clientAnswerId?: string;
   readonly answeredAtMs?: number;
@@ -34,6 +36,12 @@ interface RecordResponseBody {
 /** An ETA is an arrival time: not long past (clock skew), not more than a day ahead. */
 const MAX_ETA_PAST_SECONDS = 60 * 60;
 const MAX_ETA_AHEAD_SECONDS = 24 * 60 * 60;
+
+/** Measured from when the member answered (answeredAtMs) when known, else from receipt. */
+function etaInRange(eta: number, answeredAtMs: number): boolean {
+  const answeredAt = Math.floor(answeredAtMs / 1000);
+  return eta >= answeredAt - MAX_ETA_PAST_SECONDS && eta <= answeredAt + MAX_ETA_AHEAD_SECONDS;
+}
 
 const CLIENT_ANSWER_ID_PATTERN = /^[A-Za-z0-9._:-]{1,128}$/;
 /** An answer queued offline is still ordered by when it was given - within reason. */
@@ -112,8 +120,9 @@ function parseBody(
   // rejected: a 400 here would drop the one signal that someone is coming, e.g. from a
   // lock-screen action that has no ETA to give. A provided value must still be valid.
   // The unit is the expected ARRIVAL TIME in epoch seconds - what the app sends
-  // (now + minutes * 60) and renders (review MINOR-5). A small number is a duration in
-  // minutes from a client that has the unit wrong; it is refused rather than shown as 1970.
+  // (now + minutes * 60) and renders (review MINOR-5). Only a non-integer is refused (a
+  // malformed client); an out-of-range value never refuses the answer (review MAJOR-R2-1) - see
+  // etaInRange below.
   const eta = body.eta;
   if (ackStatus === 'NOT_RESPONDING') {
     if (eta !== undefined && eta !== null) {
@@ -122,14 +131,9 @@ function parseBody(
   } else if (
     eta !== undefined &&
     eta !== null &&
-    (typeof eta !== 'number' ||
-      !Number.isInteger(eta) ||
-      eta < Math.floor(receivedAtMs / 1000) - MAX_ETA_PAST_SECONDS ||
-      eta > Math.floor(receivedAtMs / 1000) + MAX_ETA_AHEAD_SECONDS)
+    (typeof eta !== 'number' || !Number.isInteger(eta))
   ) {
-    throw new Error(
-      'eta, if provided, must be the expected arrival time in epoch seconds, within the next 24 hours',
-    );
+    throw new Error('eta, if provided, must be the expected arrival time in whole epoch seconds');
   }
 
   const assignedApparatusId = body.assignedApparatusId;
@@ -143,10 +147,16 @@ function parseBody(
 
   const clientAnswerId = parseClientAnswerId(body.clientAnswerId, headers);
   const answeredAtMs = parseAnsweredAtMs(body.answeredAtMs, receivedAtMs);
+  const providedEta = ackStatus === 'NOT_RESPONDING' ? null : ((eta as number | null) ?? null);
+  const etaOutOfRange =
+    providedEta !== null && !etaInRange(providedEta, answeredAtMs ?? receivedAtMs);
 
   return {
     ackStatus: ackStatus as ResponseAckStatus,
-    eta: ackStatus === 'NOT_RESPONDING' ? null : (eta ?? null),
+    // An ETA a slow or fast device clock (or a late offline delivery) puts out of range is
+    // recorded as unknown - the answer itself always lands.
+    eta: etaOutOfRange ? null : providedEta,
+    etaOutOfRange,
     assignedApparatusId: (assignedApparatusId as string | undefined) ?? null,
     ...(clientAnswerId !== undefined ? { clientAnswerId } : {}),
     ...(answeredAtMs !== undefined ? { answeredAtMs } : {}),
@@ -177,6 +187,9 @@ async function innerHandler(
   try {
     const config = readAlertingConfig(process.env);
     const client = createDynamoClient(process.env);
+    if (body.etaOutOfRange) {
+      emitOutcomeMetric(METRIC_NAMESPACE, 'EtaOutOfRange');
+    }
     const answeredAtMs = body.answeredAtMs ?? receivedAtMs;
     const result = await recordResponse(client, config.tableName, {
       deptId,

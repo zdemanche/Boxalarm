@@ -12,7 +12,7 @@ Refusing costs more than it protects. A 400 on a RESPONDING answer drops the one
 
 - If an ETA is absent or null, it is recorded as `null` and shown as unknown.
 - **The unit is the expected arrival time, in epoch seconds.** The only client, the mobile app, sends `now + minutes × 60` (defaulting to 10 minutes) and renders it as a time. The web app does not send or render an ETA.
-- A value that is provided must be a whole number no more than an hour in the past and no more than 24 hours ahead. A small number, such as a duration in minutes from a client with the unit wrong, is refused. It is not shown as a time in 1970.
+- A value that is provided must be a whole number, or the request is refused as malformed. An ETA more than an hour before, or more than 24 hours after, the time the member answered never refuses the answer. The answer is recorded with `eta: null` and counted as `EtaOutOfRange`. The reference time is `answeredAtMs` if present, otherwise when the server received it. Causes include a device clock that is off, a duration sent in minutes by a client with the unit wrong, or a late offline delivery.
 - An ETA is still refused on NOT_RESPONDING.
 - `docs/architecture.md` still describes the roster's and response record's `eta` as "minutes". That is left as is because the file is hash-guarded (editing it makes `docs/architecture.compiled/` stale). Fold the correction into the next architecture revision.
 

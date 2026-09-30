@@ -131,17 +131,48 @@ describe('responses handler', () => {
     },
   );
 
-  // Review MINOR-5: the unit is the arrival time in epoch seconds (what the app sends); a
-  // duration in minutes (10) is refused rather than shown as a time in 1970.
-  it.each([[0], [-3], [2.5], [10], [4_000_000_000]])(
-    'returns 400 for a provided but invalid eta %j',
-    async (eta) => {
-      const result = (await handler(
-        buildEvent({ body: JSON.stringify({ ackStatus: 'RESPONDING', eta }) }),
-      )) as { statusCode: number };
-      expect(result.statusCode).toBe(400);
-    },
-  );
+  it('returns 400 for a non-integer eta', async () => {
+    const result = (await handler(
+      buildEvent({ body: JSON.stringify({ ackStatus: 'RESPONDING', eta: 2.5 }) }),
+    )) as { statusCode: number };
+    expect(result.statusCode).toBe(400);
+  });
+
+  // Review MAJOR-R2-1: an out-of-range ETA (a slow/fast device clock, a minutes value, a late
+  // offline delivery) never refuses the answer - it is recorded with eta null and counted.
+  it.each([
+    ['two hours in the past', () => etaIn(-120)],
+    ['a duration in minutes', () => 10],
+    ['years ahead', () => 4_000_000_000],
+  ])('records RESPONDING with an ETA %s as eta null, and counts it', async (_label, eta) => {
+    vi.mocked(recordResponse).mockResolvedValue(recorded({ eta: null }));
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    const result = (await handler(
+      buildEvent({ body: JSON.stringify({ ackStatus: 'RESPONDING', eta: eta() }) }),
+    )) as { statusCode: number };
+    expect(result.statusCode).toBe(200);
+    expect(recordResponse).toHaveBeenCalledWith(
+      expect.anything(),
+      'alerting-table',
+      expect.objectContaining({ ackStatus: 'RESPONDING', eta: null }),
+    );
+    expect(logSpy.mock.calls.some(([line]) => String(line).includes('EtaOutOfRange'))).toBe(true);
+    logSpy.mockRestore();
+  });
+
+  it('measures the ETA window from answeredAtMs (an answer queued offline and sent late)', async () => {
+    vi.mocked(recordResponse).mockResolvedValue(recorded());
+    const answeredAtMs = Date.now() - 3 * 60 * 60 * 1000;
+    const eta = Math.floor(answeredAtMs / 1000) + 600;
+    await handler(
+      buildEvent({ body: JSON.stringify({ ackStatus: 'RESPONDING', eta, answeredAtMs }) }),
+    );
+    expect(recordResponse).toHaveBeenCalledWith(
+      expect.anything(),
+      'alerting-table',
+      expect.objectContaining({ eta }),
+    );
+  });
 
   it('returns 400 when eta is wrong-typed', async () => {
     const result = (await handler(
