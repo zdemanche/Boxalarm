@@ -194,7 +194,7 @@ export async function createManualDispatch(
                   dispatchedAt,
                   // Additive and optional, so schemaVersion stays 1.0: present only for a RAW
                   // (fail-open) CAD dispatch, whose address is the "SEE DISPATCH TEXT"
-                  // placeholder. incident-service's dispatch copy shows VERIFY on it.
+                  // placeholder. The LOB incident plane's dispatch copy shows VERIFY on it.
                   ...(input.cad?.verifyRequired === true ? { verifyRequired: true } : {}),
                 }),
               },

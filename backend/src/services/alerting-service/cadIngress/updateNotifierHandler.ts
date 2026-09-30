@@ -78,7 +78,8 @@ async function readUpdate(
 async function rosterMemberIds(
   ddb: DynamoDBDocumentClient,
   tableName: string,
-  pk: string,
+  deptId: VerifiedDeptId,
+  dispatchId: string,
 ): Promise<string[]> {
   const members: string[] = [];
   let startKey: Record<string, unknown> | undefined;
@@ -87,7 +88,10 @@ async function rosterMemberIds(
       new QueryCommand({
         TableName: tableName,
         KeyConditionExpression: 'pk = :pk AND begins_with(sk, :roster)',
-        ExpressionAttributeValues: { ':pk': pk, ':roster': 'ROSTER#' },
+        ExpressionAttributeValues: {
+          ':pk': buildDeptScopedPk(deptId, 'DISPATCH', dispatchId),
+          ':roster': 'ROSTER#',
+        },
         ProjectionExpression: 'sk',
         ConsistentRead: true,
         ...(startKey ? { ExclusiveStartKey: startKey } : {}),
@@ -184,7 +188,7 @@ async function processUpdate(
   );
   if (!Item || Item.isTest === true) return;
   const dispatch = readDispatchAlertText(Item);
-  const members = await rosterMemberIds(ddb, tableName, pk);
+  const members = await rosterMemberIds(ddb, tableName, update.deptId, update.dispatchId);
   const results = await Promise.allSettled(
     members.map((memberId) =>
       notifyMember(ddb, sns, tableName, topicArn, update, dispatch, memberId),

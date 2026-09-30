@@ -211,15 +211,23 @@ export async function recordCadUpdate(
   }
 }
 
-/** The dispatch an incident's idempotency lock points at, if the lock is still live. */
+/** The dispatch a CAD identity's idempotency lock points at, if the lock is still live. */
 export async function lockedDispatchId(
   client: DynamoDBDocumentClient,
   tableName: string,
-  lockPk: string,
+  deptId: VerifiedDeptId,
+  externalDispatchId: string,
   nowSeconds: number,
 ): Promise<string | undefined> {
   const { Item } = await client.send(
-    new GetCommand({ TableName: tableName, Key: { pk: lockPk, sk: 'LOCK' }, ConsistentRead: true }),
+    new GetCommand({
+      TableName: tableName,
+      Key: {
+        pk: buildDeptScopedPk(deptId, 'DISPATCH_IDEMPOTENCY', 'CAD', externalDispatchId),
+        sk: 'LOCK',
+      },
+      ConsistentRead: true,
+    }),
   );
   if (!Item || typeof Item.dispatchId !== 'string') return undefined;
   if (typeof Item.expiresAt === 'number' && Item.expiresAt <= nowSeconds) return undefined;

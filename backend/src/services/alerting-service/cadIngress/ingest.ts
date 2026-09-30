@@ -15,7 +15,6 @@ import {
   deriveIngressIdempotencyKey,
   type DispatchReceived,
 } from '../dispatches/dispatchIngressPort.js';
-import { buildDeptScopedPk } from '@boxalarm/dept-scope';
 import { createManualDispatch } from '../dispatches/repository.js';
 import { logInfo } from '../dispatches/logger.js';
 import { emitCadMetric, type CadChannel } from './metrics.js';
@@ -248,13 +247,13 @@ export async function ingestCadDispatch(
   // A later message for an incident already paged: an update, never silent and never a
   // second page (decision 2026-09-30-cad-dispatch-updates.md).
   if (result.outcome === 'duplicate' && built.identity.kind === 'incident') {
-    const lockPk = buildDeptScopedPk(
+    const dispatchId = await lockedDispatchId(
+      client,
+      tableName,
       deptId,
-      'DISPATCH_IDEMPOTENCY',
-      'CAD',
       built.dispatch.externalDispatchId,
+      input.receivedAt,
     );
-    const dispatchId = await lockedDispatchId(client, tableName, lockPk, input.receivedAt);
     const update = dispatchId
       ? await recordCadUpdate(client, tableName, {
           deptId,
