@@ -457,3 +457,17 @@ test('a failed NERIS compliance read says so, never a clean zero', async () => {
   expect(await screen.findByText(/couldn.t load NERIS compliance/i)).toBeTruthy();
   expect(screen.getByRole('button', { name: 'Retry NERIS compliance' })).toBeTruthy();
 });
+
+test('an officer or chief dashboard keeps their own record: mark off, certs, points', async () => {
+  server.use(
+    http.get('/api/v1/training/members/m1/certifications', () => HttpResponse.json([])),
+    http.get('/api/v1/personnel/members/m1/losap', () =>
+      HttpResponse.json({ memberId: 'm1', year: 2026, totalPoints: 17 }),
+    ),
+  );
+  renderLanding({ sub: 'm1', 'cognito:groups': ['CHIEF'] });
+
+  expect(await screen.findByRole('heading', { level: 2, name: 'You' })).toBeTruthy();
+  expect(screen.getByRole('link', { name: 'Mark unavailable' })).toBeTruthy();
+  expect(await screen.findByText('17')).toBeTruthy();
+});

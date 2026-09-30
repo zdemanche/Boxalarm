@@ -50,20 +50,14 @@ function CertLine({ cert, now }: { cert: Certification; now: number }) {
 }
 
 /**
- * docs/design.md O-02 no-permission row: a member signed into the web gets their own summary -
- * how to mark off, the next shifts, their certifications and points, and what's out of service -
- * not a blank page with a heading. Every section reads an endpoint open to every role.
+ * The signed-in member's own record: mark off, their certifications, their LOSAP points. Shown on
+ * every home, including the officer and chief dashboards (review m9) - a chief is a member too.
+ * Every read is own-record (ViewCertifications, ViewOwnLosapTotal).
  */
-export function MemberHome() {
+export function OwnRecordCards() {
   const auth = useAuth();
   const memberId = auth.memberId;
-  const { nameFor } = useStations();
   const now = Date.now();
-
-  const shiftsQuery = useQuery({
-    queryKey: ['schedule', 'shifts'],
-    queryFn: () => listShifts(auth),
-  });
   const certsQuery = useQuery({
     queryKey: ['training', 'certifications', memberId],
     queryFn: () => listCertifications(auth, memberId ?? ''),
@@ -73,6 +67,70 @@ export function MemberHome() {
     queryKey: ['personnel', 'losap', memberId],
     queryFn: () => getMemberLosap(auth, memberId ?? ''),
     enabled: memberId !== null,
+  });
+  const certs = [...(certsQuery.data ?? [])].sort((a, b) =>
+    a.expiryDate.localeCompare(b.expiryDate),
+  );
+
+  return (
+    <>
+      <Card title="Your availability">
+        <p className={styles.tileMessage}>
+          Can&rsquo;t respond for a while? Mark yourself unavailable so you aren&rsquo;t alerted for
+          calls and the officer knows not to expect you.
+        </p>
+        <Link to="/availability" className={styles.actionLink}>
+          Mark unavailable
+        </Link>
+      </Card>
+
+      <Card title="Your certifications">
+        {memberId === null || certsQuery.isLoading ? (
+          <Skeleton lines={2} />
+        ) : certsQuery.error ? (
+          <Unavailable what="your certifications" onRetry={() => void certsQuery.refetch()} />
+        ) : certs.length === 0 ? (
+          <p className={styles.tileMessage}>
+            No certifications on file. The training officer files certifications for you.
+          </p>
+        ) : (
+          <ul className={styles.list}>
+            {certs.map((cert) => (
+              <CertLine key={cert.certId} cert={cert} now={now} />
+            ))}
+          </ul>
+        )}
+      </Card>
+
+      <Card title="LOSAP points">
+        {memberId === null || losapQuery.isLoading ? (
+          <Skeleton lines={1} />
+        ) : losapQuery.error || !losapQuery.data ? (
+          <Unavailable what="your points" onRetry={() => void losapQuery.refetch()} />
+        ) : (
+          <p className={styles.bigNumber}>
+            {losapQuery.data.totalPoints}{' '}
+            <span className={styles.meta}>points in {losapQuery.data.year}</span>
+          </p>
+        )}
+      </Card>
+    </>
+  );
+}
+
+/**
+ * docs/design.md O-02 no-permission row: a member signed into the web gets their own summary -
+ * how to mark off, the next shifts, their certifications and points, and what's out of service -
+ * not a blank page with a heading. Every section reads an endpoint open to every role.
+ */
+export function MemberHome() {
+  const auth = useAuth();
+  const { nameFor } = useStations();
+  const now = Date.now();
+
+  const shiftsQuery = useQuery({
+    queryKey: ['schedule', 'shifts'],
+    queryFn: () => listShifts(auth),
   });
   const apparatusQuery = useQuery({ queryKey: ['apparatus'], queryFn: () => listApparatus(auth) });
 
@@ -84,9 +142,6 @@ export function MemberHome() {
         shift.startAt < now + SHIFT_HORIZON_DAYS * DAY_MS,
     )
     .sort((a, b) => a.startAt - b.startAt);
-  const certs = [...(certsQuery.data ?? [])].sort((a, b) =>
-    a.expiryDate.localeCompare(b.expiryDate),
-  );
   const outOfService = (apparatusQuery.data ?? []).filter((a) => a.status === 'OUT_OF_SERVICE');
 
   return (
@@ -96,16 +151,7 @@ export function MemberHome() {
         training officer.
       </p>
       <div className={styles.sectionGrid}>
-        <Card title="Your availability">
-          <p className={styles.tileMessage}>
-            Can&rsquo;t respond for a while? Mark yourself unavailable so you aren&rsquo;t alerted
-            for calls and the officer knows not to expect you.
-          </p>
-          <Link to="/availability" className={styles.actionLink}>
-            Mark unavailable
-          </Link>
-        </Card>
-
+        <OwnRecordCards />
         <Card title={`Shifts in the next ${SHIFT_HORIZON_DAYS} days`}>
           {shiftsQuery.isLoading ? (
             <Skeleton lines={2} />
@@ -127,37 +173,6 @@ export function MemberHome() {
             </ul>
           )}
           <p className={styles.tileMessage}>Claim shifts in the Boxalarm app.</p>
-        </Card>
-
-        <Card title="Your certifications">
-          {memberId === null || certsQuery.isLoading ? (
-            <Skeleton lines={2} />
-          ) : certsQuery.error ? (
-            <Unavailable what="your certifications" onRetry={() => void certsQuery.refetch()} />
-          ) : certs.length === 0 ? (
-            <p className={styles.tileMessage}>
-              No certifications on file. The training officer files certifications for you.
-            </p>
-          ) : (
-            <ul className={styles.list}>
-              {certs.map((cert) => (
-                <CertLine key={cert.certId} cert={cert} now={now} />
-              ))}
-            </ul>
-          )}
-        </Card>
-
-        <Card title="LOSAP points">
-          {memberId === null || losapQuery.isLoading ? (
-            <Skeleton lines={1} />
-          ) : losapQuery.error || !losapQuery.data ? (
-            <Unavailable what="your points" onRetry={() => void losapQuery.refetch()} />
-          ) : (
-            <p className={styles.bigNumber}>
-              {losapQuery.data.totalPoints}{' '}
-              <span className={styles.meta}>points in {losapQuery.data.year}</span>
-            </p>
-          )}
         </Card>
 
         <Card title="Out of service">

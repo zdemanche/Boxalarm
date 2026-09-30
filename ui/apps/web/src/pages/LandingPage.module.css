@@ -81,3 +81,8 @@
 .mono {
   font-family: var(--bx-font-mono);
 }
+
+.sectionHeading {
+  margin: var(--bx-space-xl) 0 0;
+  font-size: 17px;
+}

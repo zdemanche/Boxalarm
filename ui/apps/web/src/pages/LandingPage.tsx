@@ -18,7 +18,7 @@ import { ApiError } from '../lib/apiClient';
 import { useStations } from '../lib/useStations';
 import { ApiForbiddenGate } from '../components/ApiForbiddenGate';
 import { Button, Card, Skeleton, Stat } from '../components/ui';
-import { MemberHome } from './MemberHome';
+import { MemberHome, OwnRecordCards } from './MemberHome';
 import styles from './LandingPage.module.css';
 
 const ROLE_LABEL: Record<Role, string> = {
@@ -398,6 +398,12 @@ function CommandConsole() {
         {auth.roles.some((r) => NERIS_COMPLIANCE_ROLES.includes(r)) ? (
           <NerisComplianceTile />
         ) : null}
+      </div>
+
+      {/* The signed-in person's own record, on every dashboard (review m9). */}
+      <h2 className={styles.sectionHeading}>You</h2>
+      <div className={styles.sectionGrid}>
+        <OwnRecordCards />
       </div>
     </>
   );
