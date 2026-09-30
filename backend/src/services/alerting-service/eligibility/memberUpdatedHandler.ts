@@ -186,7 +186,11 @@ function buildRolesExpression(roles: readonly string[], memberId: string, eventT
  * did is normalised here, and one that cannot be parsed is not projected - an SMS vendor
  * refuses it on every page - but counted (InvalidPhoneSkipped) and logged, never silent.
  */
-function projectablePhone(payload: MemberUpdatedPayload): string | undefined {
+function projectablePhone(payload: MemberUpdatedPayload): string | null | undefined {
+  if (payload.phone === null) {
+    // The member's phone was cleared: their SMS and voice entries are removed.
+    return null;
+  }
   if (typeof payload.phone !== 'string' || payload.phone.trim().length === 0) {
     return undefined;
   }

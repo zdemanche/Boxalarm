@@ -31,8 +31,8 @@ const MAX_ATTEMPTS = 3;
 export interface ContactUpdate {
   /** Device entries from the event's contactChannels; non-PUSH entries in it are ignored. */
   readonly pushEntries?: readonly ContactChannelSnapshot[];
-  /** The member's phone; projected into one SMS and one VOICE entry. */
-  readonly phone?: string;
+  /** The member's phone, projected into one SMS and one VOICE entry; null removes both. */
+  readonly phone?: string | null;
 }
 
 export type ContactUpdateOutcome = 'applied' | 'stale';
@@ -110,7 +110,7 @@ export async function applyContactUpdate(
     const contactChannels = mergeContactChannels(existing, {
       ...(applyPush ? { pushEntries: update.pushEntries } : {}),
       ...(applyPhone && update.phone !== undefined
-        ? { phoneEntries: phoneContactEntries(update.phone) }
+        ? { phoneEntries: update.phone === null ? [] : phoneContactEntries(update.phone) }
         : {}),
     });
     const version = typeof Item?.contactVersion === 'number' ? Item.contactVersion : undefined;

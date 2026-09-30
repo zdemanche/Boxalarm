@@ -464,6 +464,27 @@ describe('memberUpdatedHandler', () => {
       errorSpy.mockRestore();
     });
 
+    it('phone: null removes the SMS and VOICE entries and keeps the devices', async () => {
+      const push = { channel: 'PUSH', token: 'tok-1', valid: true };
+      const send = storedSnapshot({
+        contactChannels: [
+          push,
+          { channel: 'SMS', phoneNumber: '+12035550100', valid: true },
+          { channel: 'VOICE', phoneNumber: '+12035550100', valid: true },
+        ],
+        contactVersion: 3,
+      });
+      vi.doMock('./dynamoClient.js', () => ({
+        createDynamoClient: () => ({ send }),
+        readAlertingConfig: () => ({ tableName: 'alerting-table' }),
+      }));
+      const { handler } = await import('./memberUpdatedHandler.js');
+      await handler(
+        buildSqsEvent({ ...PHONE_EVENT, payload: { ...PHONE_EVENT.payload, phone: null } }),
+      );
+      expect(contactWrite(send)?.ExpressionAttributeValues[':contactChannels']).toEqual([push]);
+    });
+
     it('ignores an empty phone rather than projecting a blank target', async () => {
       const send = vi.fn().mockResolvedValue({});
       vi.doMock('./dynamoClient.js', () => ({

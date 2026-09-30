@@ -408,4 +408,38 @@ describe('updateMember handler', () => {
     ).input.TransactItems;
     expect(items.find((item) => item.Put)?.Put?.Item.payload?.phone).toBe('+12705550142');
   });
+
+  // Review MINOR-1: clearing a phone removes it from the row and tells the alerting plane, which
+  // removes the member's SMS and voice targets - never keeps paging the old number.
+  it('phone: null removes the phone and emits phone: null', async () => {
+    const { createHandler } = await import('./updateMember.js');
+    const docSend = vi.fn().mockResolvedValue({});
+    const wrapped = createHandler({
+      client: fakeDocClient(docSend),
+      vpClient: fakeVpClient('ALLOW'),
+    });
+
+    const result = await wrapped(
+      buildEvent('mbr-1', JSON.stringify({ phone: null }), { authorization: 'Bearer token' }, SELF),
+    );
+
+    expect(result).toMatchObject({ statusCode: 200 });
+    const items = (
+      docSend.mock.calls[0]?.[0] as {
+        input: {
+          TransactItems: Array<{
+            Update?: {
+              UpdateExpression: string;
+              ExpressionAttributeValues: Record<string, unknown>;
+            };
+            Put?: { Item: { payload?: Record<string, unknown> } };
+          }>;
+        };
+      }
+    ).input.TransactItems;
+    const update = items.find((item) => item.Update)!.Update!;
+    expect(update.UpdateExpression).toMatch(/ REMOVE #phone$/);
+    expect(update.ExpressionAttributeValues).not.toHaveProperty(':phone');
+    expect(items.find((item) => item.Put)?.Put?.Item.payload).toMatchObject({ phone: null });
+  });
 });
