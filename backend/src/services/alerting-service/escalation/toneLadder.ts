@@ -7,7 +7,7 @@ import { GetCommand, UpdateCommand, type DynamoDBDocumentClient } from '@aws-sdk
 import { buildDeptScopedPk, type VerifiedDeptId } from '@boxalarm/dept-scope';
 import { createHash } from 'node:crypto';
 import { logError } from '../dispatches/logger.js';
-import { readScheduleGroupName } from './scheduleEscalation.js';
+import { alertingScheduleLifecycle, readScheduleGroupName } from './scheduleEscalation.js';
 
 export const TONE_SEQUENCE_TWO = 2;
 export const TONE_SEQUENCE_THREE = 3;
@@ -115,6 +115,8 @@ async function createToneSchedule(
 ): Promise<number> {
   const fireAt = Math.floor(Date.now() / 1000) + delaySeconds;
   const scheduleName = toneScheduleName(deptId, dispatchId, toneSequence);
+  // DELETE after firing + DLQ: see alertingScheduleLifecycle (scheduleEscalation.ts).
+  const lifecycle = alertingScheduleLifecycle(process.env);
   try {
     await scheduler.send(
       new CreateScheduleCommand({
@@ -122,10 +124,12 @@ async function createToneSchedule(
         GroupName: config.scheduleGroupName,
         ScheduleExpression: `at(${new Date(fireAt * 1000).toISOString().slice(0, 19)})`,
         FlexibleTimeWindow: { Mode: FlexibleTimeWindowMode.OFF },
+        ActionAfterCompletion: lifecycle.ActionAfterCompletion,
         Target: {
           Arn: config.toneEvaluatorHandlerArn,
           RoleArn: config.schedulerRoleArn,
           Input: JSON.stringify({ deptId, dispatchId, toneSequence }),
+          ...(lifecycle.deadLetterConfig ? { DeadLetterConfig: lifecycle.deadLetterConfig } : {}),
         },
       }),
     );
