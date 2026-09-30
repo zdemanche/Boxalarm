@@ -42,7 +42,7 @@ describe("validateStackConfig (deploy-readiness C2)", () => {
     ]) {
       expect(message).toContain(`boxalarm-infra:${key}`);
     }
-    expect(message).toMatch(/missing 7 required configuration value/);
+    expect(message).toMatch(/has 7 configuration problem/);
   });
 
   it("gives the set command for each key, with --secret for secrets only", () => {

@@ -102,6 +102,48 @@ export const REQUIRED_CONFIG: readonly RequiredConfigKey[] = [
   },
 ];
 
+/**
+ * Hosts that can never be a real deployed web origin: the reserved documentation/test TLDs
+ * (RFC 2606/6761) and loopback. qa/staging/prod shipped with `https://*.boxalarm.example`,
+ * which previews fine and then no one can sign in to the web app (deploy-readiness M4).
+ */
+export function isPlaceholderHost(hostname: string): boolean {
+  const host = hostname.toLowerCase().replace(/\.$/, "");
+  return (
+    /(^|\.)(example|invalid|test|localhost|local)$/.test(host) ||
+    /(^|\.)example\.(com|net|org)$/.test(host) ||
+    host === "127.0.0.1" ||
+    host === "[::1]" ||
+    host === "0.0.0.0"
+  );
+}
+
+/** Problems with webOrigin's value (not its presence). dev may point at localhost. */
+function webOriginProblems(env: string | undefined, webOrigin: string | undefined, stack: string) {
+  if (webOrigin === undefined || webOrigin.trim() === "") {
+    return [];
+  }
+  const fix = `pulumi config set webOrigin https://<real web host> --stack ${stack}`;
+  let url: URL;
+  try {
+    url = new URL(webOrigin);
+  } catch {
+    return [`  - ${CONFIG_NAMESPACE}:webOrigin "${webOrigin}" is not a URL: ${fix}`];
+  }
+  if (url.protocol !== "https:") {
+    return [
+      `  - ${CONFIG_NAMESPACE}:webOrigin "${webOrigin}" must be https (Cognito callbacks): ${fix}`,
+    ];
+  }
+  if (env !== "dev" && isPlaceholderHost(url.hostname)) {
+    return [
+      `  - ${CONFIG_NAMESPACE}:webOrigin "${webOrigin}" is a placeholder host; outside dev it must ` +
+        `be the real web origin, or Cognito sign-in and assets CORS cannot work: ${fix}`,
+    ];
+  }
+  return [];
+}
+
 function setCommand(k: RequiredConfigKey, stack: string): string {
   return `pulumi config set ${k.secret ? "--secret " : ""}${k.key} ${k.example} --stack ${stack}`;
 }
@@ -112,12 +154,13 @@ export function stackConfigProblems(read: ConfigReader, stack: string): string[]
     env: read("env"),
     canaryEnabled: read("canaryEnabled") === "true",
   };
-  return REQUIRED_CONFIG.filter((k) => (k.when ? k.when(ctx) : true))
+  const missing = REQUIRED_CONFIG.filter((k) => (k.when ? k.when(ctx) : true))
     .filter((k) => {
       const value = read(k.key);
       return value === undefined || value.trim() === "";
     })
     .map((k) => `  - ${CONFIG_NAMESPACE}:${k.key} (${k.why}): ${setCommand(k, stack)}`);
+  return [...missing, ...webOriginProblems(ctx.env, read("webOrigin"), stack)];
 }
 
 /** Throws one error naming every problem, or returns quietly. */
@@ -125,8 +168,8 @@ export function validateStackConfig(read: ConfigReader, stack: string): void {
   const problems = stackConfigProblems(read, stack);
   if (problems.length > 0) {
     throw new Error(
-      `Stack "${stack}" is missing ${problems.length} required configuration value(s). ` +
-        `Set all of them, then preview again (docs/runbooks/first-deploy.md):\n` +
+      `Stack "${stack}" has ${problems.length} configuration problem(s): missing or invalid ` +
+        `values. Fix all of them, then preview again (docs/runbooks/first-deploy.md):\n` +
         problems.join("\n"),
     );
   }

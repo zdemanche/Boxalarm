@@ -9,6 +9,9 @@
 #   pulumi config set chiefNotificationEmail chief@<dept-domain> --stack qa   # prod-required; warned elsewhere
 # Only once canaryEnabled is true:
 #   pulumi config set --secret canaryMemberId <canary member id> --stack qa
+# webOrigin below is a placeholder: preview fails on a .example/.invalid/.test/localhost host
+# outside dev until it is the real web origin:
+#   pulumi config set webOrigin https://<real web host> --stack qa
 config:
   aws:region: us-east-1
   boxalarm-infra:env: qa
