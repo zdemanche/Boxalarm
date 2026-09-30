@@ -23,6 +23,7 @@
     "reemit-alert-rules": "esbuild src/services/platform-service/config/reemitAlertRules.ts --bundle --platform=node --target=node22 --format=esm --log-level=warning --outfile=dist/scripts/reemit-alert-rules.mjs --banner:js=\"import { createRequire } from 'module'; const require = createRequire(import.meta.url);\" && node dist/scripts/reemit-alert-rules.mjs"
   },
   "dependencies": {
+    "@aws-sdk/client-api-gateway": "3.1136.0",
     "@aws-sdk/client-cognito-identity-provider": "3.1136.0",
     "@aws-sdk/client-dynamodb": "3.1136.0",
     "@aws-sdk/client-eventbridge": "3.1136.0",

@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import {
-  CAD_WEBHOOK_ROUTE_KEY,
-  CAD_WEBHOOK_THROTTLE,
+  CAD_WEBHOOK_KEY_THROTTLE,
+  CAD_WEBHOOK_PATH,
   CadIngress,
 } from "../../components/alerting/cad-ingress";
 import { ServiceLogGroup } from "../../components/observability/service-log-group";
@@ -35,7 +35,7 @@ beforeEach(() => {
   installMocks();
 });
 
-async function build(emailDomain?: string): Promise<void> {
+async function build(emailDomain?: string, webhookAllowedCidrs?: string[]): Promise<void> {
   new CadIngress("cad-ingress", {
     env: "dev",
     alertingTableArn: TABLE_ARN,
@@ -48,6 +48,7 @@ async function build(emailDomain?: string): Promise<void> {
     logGroup: new ServiceLogGroup("alerting-lg", { env: "dev", serviceName: "alerting-service" }),
     permissionsBoundaryArn: BOUNDARY_ARN,
     ...(emailDomain !== undefined ? { emailDomain } : {}),
+    ...(webhookAllowedCidrs ? { webhookAllowedCidrs } : {}),
   });
   await settle();
   await settle();
@@ -173,39 +174,57 @@ describe("CadIngress update notifier (CAD updates to a paged call)", { timeout: 
 });
 
 describe(
-  "CadIngress webhook: own API, no Cognito authorizer, throttled",
+  "CadIngress webhook: own REST API, per-source API keys, no Cognito (security review M4)",
   { timeout: 30_000 },
   () => {
-    it("is a separate HTTP API whose one route has no authorizer", async () => {
+    it("is its own REST API whose one method needs an API key and has no authorizer", async () => {
       await build();
-      const apis = resourcesOfType("aws:apigatewayv2/api:Api");
-      expect(apis.map((a) => a.inputs.name)).toEqual(["boxalarm-dev-cad-ingress-api"]);
-      expect(resourcesOfType("aws:apigatewayv2/authorizer:Authorizer")).toEqual([]);
-      const routes = resourcesOfType("aws:apigatewayv2/route:Route");
-      expect(routes).toHaveLength(1);
-      expect(routes[0]?.inputs).toMatchObject({
-        routeKey: CAD_WEBHOOK_ROUTE_KEY,
-        authorizationType: "NONE",
+      expect(resourcesOfType("aws:apigateway/restApi:RestApi").map((a) => a.inputs.name)).toEqual([
+        "boxalarm-dev-cad-ingress-api",
+      ]);
+      expect(resourcesOfType("aws:apigatewayv2/api:Api")).toEqual([]);
+      expect(resourcesOfType("aws:apigateway/authorizer:Authorizer")).toEqual([]);
+      const methods = resourcesOfType("aws:apigateway/method:Method");
+      expect(methods).toHaveLength(1);
+      expect(methods[0]?.inputs).toMatchObject({
+        httpMethod: "POST",
+        authorization: "NONE",
+        apiKeyRequired: true,
       });
-      expect(routes[0]?.inputs.authorizerId).toBeUndefined();
+      expect(
+        resourcesOfType("aws:apigateway/resource:Resource").map((r) => r.inputs.pathPart),
+      ).toEqual(CAD_WEBHOOK_PATH.split("/"));
     });
 
-    it("throttles the stage default AND the route, and reserves Lambda concurrency", async () => {
+    it("partitions capacity per key in a usage plan, with NO shared stage-wide throttle", async () => {
       await build();
-      const stage = resourcesOfType("aws:apigatewayv2/stage:Stage")[0];
-      expect(stage?.inputs.defaultRouteSettings).toMatchObject({
-        throttlingRateLimit: CAD_WEBHOOK_THROTTLE.rateLimit,
-        throttlingBurstLimit: CAD_WEBHOOK_THROTTLE.burstLimit,
+      const plan = resourcesOfType("aws:apigateway/usagePlan:UsagePlan")[0];
+      expect(plan?.inputs.throttleSettings).toMatchObject({
+        rateLimit: CAD_WEBHOOK_KEY_THROTTLE.rateLimit,
+        burstLimit: CAD_WEBHOOK_KEY_THROTTLE.burstLimit,
       });
-      expect(stage?.inputs.routeSettings).toEqual([
-        expect.objectContaining({
-          routeKey: CAD_WEBHOOK_ROUTE_KEY,
-          throttlingRateLimit: CAD_WEBHOOK_THROTTLE.rateLimit,
-          throttlingBurstLimit: CAD_WEBHOOK_THROTTLE.burstLimit,
-        }),
-      ]);
+      const settings = resourcesOfType("aws:apigateway/methodSettings:MethodSettings")[0];
+      expect(settings?.inputs.settings).toEqual({ metricsEnabled: true });
       expect(lambdaByName(WEBHOOK_FN).inputs.reservedConcurrentExecutions).toBe(5);
       expect(lambdaByName(WEBHOOK_FN).inputs.timeout).toBe(10);
+    });
+
+    it("enforces an optional source-IP allowlist in the resource policy", async () => {
+      await build(undefined, ["203.0.113.0/28"]);
+      const policy = JSON.parse(
+        resourcesOfType("aws:apigateway/restApi:RestApi")[0]?.inputs.policy as string,
+      ) as { Statement: { Effect: string; Condition?: unknown }[] };
+      expect(policy.Statement.find((st) => st.Effect === "Deny")?.Condition).toEqual({
+        NotIpAddress: { "aws:SourceIp": ["203.0.113.0/28"] },
+      });
+    });
+
+    it("has no Deny statement without an allowlist", async () => {
+      await build();
+      const policy = JSON.parse(
+        resourcesOfType("aws:apigateway/restApi:RestApi")[0]?.inputs.policy as string,
+      ) as { Statement: { Effect: string }[] };
+      expect(policy.Statement.every((st) => st.Effect === "Allow")).toBe(true);
     });
 
     it("creates no email resources without a mail domain", async () => {
@@ -292,6 +311,7 @@ describe(
       ["boxalarm-dev-alerting-cad-update-push-failed", [PAGE]],
       ["boxalarm-dev-alerting-cad-update-notifier-failures-not-empty", [PAGE]],
       ["boxalarm-dev-alerting-cad-raw-fallback", [PAGE, OPS]],
+      ["boxalarm-dev-alerting-cad-webhook-4xx", [PAGE, OPS]],
       ["boxalarm-dev-alerting-cad-webhook-errors", [PAGE]],
       ["boxalarm-dev-alerting-cad-webhook-throttles", [PAGE]],
       ["boxalarm-dev-alerting-cad-source-copy-dlq-not-empty", [PAGE]],

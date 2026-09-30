@@ -39,6 +39,10 @@ export interface WebhookKeyRef {
   readonly keyId: string;
   readonly secretName: string;
   readonly rotatedAt: string;
+  /** The source's current API Gateway API key id (its throttle bucket; not a secret). */
+  readonly apiKeyId?: string;
+  /** The API key the last rotation replaced, deleted by the next rotation or a revoke. */
+  readonly previousApiKeyId?: string;
 }
 
 export interface StoredCadSource {

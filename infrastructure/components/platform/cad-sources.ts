@@ -20,6 +20,8 @@ export interface CadSourcesArgs {
   httpApi: HttpApi;
   /** Shown to the chief as the webhook address. */
   webhookUrl: pulumi.Input<string>;
+  /** The webhook's usage plan: each source's API key is attached to it on rotation. */
+  webhookUsagePlanId: pulumi.Input<string>;
   /** The inbound mail domain, when the email path exists. */
   emailDomain?: string;
 }
@@ -57,6 +59,17 @@ function outboxStatement(tableArn: string): IamPolicyStatement {
   };
 }
 
+/** Delete CAD webhook API keys only (tagged boxalarm:purpose=cad-webhook at creation). */
+function cadApiKeyDeleteStatement(regionName: string): IamPolicyStatement {
+  return {
+    Sid: "CadWebhookApiKeysDelete",
+    Effect: "Allow",
+    Action: ["apigateway:DELETE"],
+    Resource: `arn:aws:apigateway:${regionName}::/apikeys/*`,
+    Condition: { StringEquals: { "aws:ResourceTag/boxalarm:purpose": ["cad-webhook"] } },
+  };
+}
+
 export class CadSources extends pulumi.ComponentResource {
   public readonly settingsLambda: ServiceLambda;
   public readonly rotateKeyLambda: ServiceLambda;
@@ -89,8 +102,9 @@ export class CadSources extends pulumi.ComponentResource {
         logGroup: args.logGroup,
         environment: { ...environment, CAD_WEBHOOK_SECRET_PREFIX: cadWebhookSecretPrefix(env) },
         additionalPolicyStatements: pulumi
-          .all([args.platformTableArn, args.policyStoreArn, secretArnPattern])
-          .apply(([tableArn, policyStoreArn, secretArn]): IamPolicyStatement[] => [
+          .all([args.platformTableArn, args.policyStoreArn, secretArnPattern, region.name])
+          .apply(([tableArn, policyStoreArn, secretArn, regionName]): IamPolicyStatement[] => [
+            cadApiKeyDeleteStatement(regionName),
             {
               // A removed source's webhook secret is deleted with it (security review M5).
               // Delete only - this Lambda can never read a key.
@@ -122,31 +136,56 @@ export class CadSources extends pulumi.ComponentResource {
         handler: LAMBDA_HANDLER,
         code: lambdaCode("platform-service", "cad-sources-rotate-key"),
         logGroup: args.logGroup,
-        environment: { ...environment, CAD_WEBHOOK_SECRET_PREFIX: cadWebhookSecretPrefix(env) },
+        environment: {
+          ...environment,
+          CAD_WEBHOOK_SECRET_PREFIX: cadWebhookSecretPrefix(env),
+          CAD_WEBHOOK_USAGE_PLAN_ID: args.webhookUsagePlanId,
+        },
         additionalPolicyStatements: pulumi
-          .all([args.platformTableArn, args.policyStoreArn, secretArnPattern])
-          .apply(([tableArn, policyStoreArn, secretArn]): IamPolicyStatement[] => [
-            deptPartitionStatement(
-              "CadSourcesConfig",
-              ["dynamodb:GetItem", "dynamodb:PutItem"],
-              tableArn,
-            ),
-            outboxStatement(tableArn),
-            auditMutationDenyStatement(tableArn),
-            verifiedPermissionsPolicyStatement(policyStoreArn),
-            {
-              // Reads the old key (it becomes `previous`), writes the new one; creates the
-              // secret on first rotation. The CAD webhook secrets only.
-              Sid: "CadWebhookKeysRotate",
-              Effect: "Allow",
-              Action: [
-                "secretsmanager:CreateSecret",
-                "secretsmanager:PutSecretValue",
-                "secretsmanager:GetSecretValue",
-              ],
-              Resource: secretArn,
-            },
-          ]),
+          .all([
+            args.platformTableArn,
+            args.policyStoreArn,
+            secretArnPattern,
+            region.name,
+            args.webhookUsagePlanId,
+          ])
+          .apply(
+            ([tableArn, policyStoreArn, secretArn, regionName, planId]): IamPolicyStatement[] => [
+              {
+                // Each source's API key (its own throttle bucket, security review M4): created
+                // tagged, attached to the webhook usage plan, and the replaced one deleted.
+                Sid: "CadWebhookApiKeysCreate",
+                Effect: "Allow",
+                Action: ["apigateway:POST"],
+                Resource: [
+                  `arn:aws:apigateway:${regionName}::/apikeys`,
+                  `arn:aws:apigateway:${regionName}::/usageplans/${planId}/keys`,
+                  `arn:aws:apigateway:${regionName}::/tags/*`,
+                ],
+              },
+              cadApiKeyDeleteStatement(regionName),
+              deptPartitionStatement(
+                "CadSourcesConfig",
+                ["dynamodb:GetItem", "dynamodb:PutItem"],
+                tableArn,
+              ),
+              outboxStatement(tableArn),
+              auditMutationDenyStatement(tableArn),
+              verifiedPermissionsPolicyStatement(policyStoreArn),
+              {
+                // Reads the old key (it becomes `previous`), writes the new one; creates the
+                // secret on first rotation. The CAD webhook secrets only.
+                Sid: "CadWebhookKeysRotate",
+                Effect: "Allow",
+                Action: [
+                  "secretsmanager:CreateSecret",
+                  "secretsmanager:PutSecretValue",
+                  "secretsmanager:GetSecretValue",
+                ],
+                Resource: secretArn,
+              },
+            ],
+          ),
         timeout: 10,
       },
       { parent: this },

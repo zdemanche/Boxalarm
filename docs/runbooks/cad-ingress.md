@@ -2,7 +2,7 @@
 
 CAD dispatches reach Boxalarm two ways, both decided in `docs/decisions/2026-09-29-roadmap-defaults.md` (row 3) and `docs/decisions/2026-09-29-cad-ingress-auth.md`:
 
-- **Signed webhook** — `POST <CAD_WEBHOOK_URL>` (stack output), on its own API with its own throttle (10 rps, burst 20), no Cognito.
+- **Signed webhook** — `POST <CAD_WEBHOOK_URL>` (stack output), on its own REST API: every source has its own API key (`x-api-key`) with its own throttle (5 rps, burst 20), so a flood without a valid key is refused by API Gateway before it touches any source's capacity; optional dispatch-centre IP allowlist (`cadWebhookAllowedCidrs`); no Cognito.
 - **SES inbound email** — to `dispatch+<deptId>.<sourceId>.<token>@<cadIngressEmailDomain>` (set-up: `docs/runbooks/first-deploy.md` step 9).
 
 Both run **sender authentication first and fail closed**: a message that fails any check never pages anyone, not even as raw text. Radio tone-out (N1.9) is the compensating control for a genuine dispatch dropped that way. Once authenticated, a message always pages: if the source's parser template cannot find the address it pages as raw text, address `SEE DISPATCH TEXT`, flagged VERIFY.
@@ -36,7 +36,8 @@ A saved change reaches ingress in seconds. If `…-alerting-cad-source-copy-dlq-
 | `…-alerting-cad-replay-rejected` | A webhook signature or email identical to one already written was refused | The replay marker commits in the same transaction as the dispatch, so the original paged. A CAD retry of identical bytes after a timeout, or a replay attack |
 | `…-alerting-cad-rejected` | A dependency failed (503 to the CAD, or an email Lambda retry), or a webhook body was too large | The CAD retries a webhook; Lambda retries an email twice. Check the ingress Lambda logs |
 | `…-alerting-cad-raw-fallback` (also chief) | A dispatch paged as raw text | The page went. Fix the template: paste the dispatch into Settings → CAD sources → Test parse |
-| `…-alerting-cad-webhook-errors` / `-throttles` | The webhook Lambda is failing or at its reserved concurrency (5) | A flood or a retry storm; the API stage throttle is 10 rps. Check `/aws/apigateway/boxalarm-<env>-cad-ingress-api-access` for source IPs |
+| `…-alerting-cad-webhook-4xx` (also chief) | More than 20 refusals in 5 min: 403 (no/invalid `x-api-key`, IP not allowlisted), 429 (a source over its throttle), 401 (authentication) | A flood, or a CAD sending the old API key after a rotation. If genuine dispatches are refused, radio is the page of record until fixed; consider `cadWebhookAllowedCidrs`, and see the decision record for the paid CloudFront + WAF option |
+| `…-alerting-cad-webhook-errors` / `-throttles` | The webhook Lambda is failing or at its reserved concurrency (5) | A flood with valid source keys, or a CAD retry storm |
 | `…-alerting-cad-email-failures-not-empty` | An email could not be processed after retries and did not page | The message is in the failure queue and the mail bucket. Fix the dependency. A dispatch older than 10 minutes will now fail freshness; tone it out by radio |
 
 Metrics are in `Boxalarm/alerting-cad-ingress`: `CadIngressAccepted`, `CadIngressAuthFailed` (`Reason`), `CadIngressReplayRejected`, `CadIngressQuarantined`, `CadIngressRejected` (`Reason`), `CadIngressParsed` (`Outcome` = PARSED/RAW), `CadIngressRawFallback`, `CadIngressDuplicate`, each also by `Channel`.
@@ -81,10 +82,11 @@ A successful test message **pages every eligible member** and starts the tone la
 URL=$(pulumi -C infrastructure stack output CAD_WEBHOOK_URL)
 SOURCE=nichols-fd.county                      # X-Boxalarm-Source shown when the key was created
 read -rs KEY                                  # paste the key; keeps it out of shell history
+read -rs APIKEY                               # paste the x-api-key shown with it
 BODY='{"text":"INC: TEST-0001\nTIME: 00:00\nTYPE: TEST - DISREGARD\nADDR: 1 TEST ST"}'
 TS=$(date +%s)
 SIG=$(printf '%s.%s' "$TS" "$BODY" | openssl dgst -sha256 -hmac "$KEY" -hex | sed 's/^.* //')
-curl -sS -X POST "$URL" -H 'content-type: application/json' \
+curl -sS -X POST "$URL" -H 'content-type: application/json' -H "x-api-key: $APIKEY" \
   -H "X-Boxalarm-Source: $SOURCE" -H "X-Boxalarm-Timestamp: $TS" -H "X-Boxalarm-Signature: v1=$SIG" \
   --data-binary "$BODY"
 ```
@@ -99,6 +101,7 @@ Expected, in order:
    - wrong key (`KEY=$(openssl rand -hex 32)`): `401`, `CadIngressAuthFailed{Reason=BadSignature}`;
    - `TS=$(( $(date +%s) - 301 ))`: `401`, `StaleTimestamp`;
    - `SOURCE=nichols-fd.nope`: `401`, `UnknownSource`.
+   - no `x-api-key`: `403` from API Gateway (the Lambda never runs; counts toward `…-cad-webhook-4xx`).
    Three of these within 5 minutes fire `…-cad-auth-failed`: expected, and it proves the alarm reaches on-call.
 
 ### Email
@@ -116,6 +119,14 @@ ADDR: 1 TEST ST
 Expected: test members are paged within a minute; the log has `cadIngress.email.authenticated` then `cadIngress.accepted`; the raw message is at `inbound/<SES message id>` in the mail bucket.
 
 Negative check (safe on prod): send the same text from a personal address that is not on the allowlist. Expected: no page, `cadIngress.email.quarantined` with `reason: SenderNotAllowed`, and `…-cad-quarantined` fires.
+
+## Retry contract for the CAD
+
+The CAD must retry a `429` (its source is over its throttle) and any `5xx` with back-off, **signed again with a fresh timestamp** (a request older than 5 minutes is refused). `401`, `403` and `409` are not retried: fix the configuration. A `200 {"status":"duplicate"}` or `202` means the dispatch is safely recorded.
+
+## Configure both paths
+
+Where the CAD can do both, configure **email and webhook** for the department: a flood or outage on one path then does not stop dispatches arriving on the other.
 
 ## Known limits
 

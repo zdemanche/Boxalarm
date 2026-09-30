@@ -41,6 +41,7 @@ async function build(): Promise<void> {
     logGroup: new ServiceLogGroup("platform-lg", { env: "dev", serviceName: "platform-service" }),
     httpApi,
     webhookUrl: "https://cad.example.org/api/v1/alerting/ingress/cad-webhook",
+    webhookUsagePlanId: "plan-1",
     emailDomain: "Ingress.Nichols.example.org",
   });
   await settle();
@@ -82,6 +83,22 @@ describe("CadSources (platform settings routes)", { timeout: 30_000 }, () => {
       expect(isGranted(rotate, action, "*")).toBe(false);
     }
     expect(lambdaEnv(ROTATE_FN).CAD_WEBHOOK_SECRET_PREFIX).toBe("boxalarm-dev-cad-webhook/");
+    expect(lambdaEnv(ROTATE_FN).CAD_WEBHOOK_USAGE_PLAN_ID).toBe("plan-1");
+  });
+
+  it("the rotation Lambda manages only CAD API keys: create + attach to the plan, delete tagged", async () => {
+    await build();
+    const rotate = statementsForRole(ROTATE_FN);
+    expect(isGranted(rotate, "apigateway:POST", (r) => r.endsWith("/usageplans/plan-1/keys"))).toBe(
+      true,
+    );
+    const del = rotate.find((st) => st.Sid === "CadWebhookApiKeysDelete");
+    expect(del?.Condition).toEqual({
+      StringEquals: { "aws:ResourceTag/boxalarm:purpose": ["cad-webhook"] },
+    });
+    const settings = statementsForRole(SETTINGS_FN);
+    expect(isGranted(settings, "apigateway:POST", () => true)).toBe(false);
+    expect(settings.find((st) => st.Sid === "CadWebhookApiKeysDelete")).toBeDefined();
   });
 
   it("scopes the table to the department partition and its outbox", async () => {

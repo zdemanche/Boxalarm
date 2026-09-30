@@ -895,6 +895,12 @@ export const alertRulesCopy = new AlertRulesCopy("alert-rules-copy", {
 // own API and stage, and - once the department's inbound mail domain exists - SES email. Both
 // write the same DISPATCH_ALERT as the manual route; the stream fan-out pages.
 const cadIngressEmailDomain = config.get("cadIngressEmailDomain");
+// Optional: the CAD dispatch centres' egress CIDRs, comma-separated. When set, the webhook API's
+// resource policy refuses every other source address before anything runs (security M4).
+const cadWebhookAllowedCidrs = (config.get("cadWebhookAllowedCidrs") ?? "")
+  .split(",")
+  .map((cidr) => cidr.trim())
+  .filter((cidr) => cidr.length > 0);
 if (cadIngressEmailDomain === undefined) {
   pulumi.log.warn(
     "No boxalarm-infra:cadIngressEmailDomain: the CAD email path is not created (webhook only). " +
@@ -913,6 +919,7 @@ export const cadIngress = new CadIngress("cad-ingress", {
   logGroup: alertingLogGroup,
   permissionsBoundaryArn: alertingBoundaryArn,
   ...(cadIngressEmailDomain !== undefined ? { emailDomain: cadIngressEmailDomain } : {}),
+  ...(cadWebhookAllowedCidrs.length > 0 ? { webhookAllowedCidrs: cadWebhookAllowedCidrs } : {}),
 });
 
 // The chief's CAD sources settings (Cedar View/ManageCadIngress) and webhook key rotation.
@@ -925,6 +932,7 @@ export const cadSources = new CadSources("cad-sources", {
   logGroup: platformLogGroup,
   httpApi,
   webhookUrl: cadIngress.webhookUrl,
+  webhookUsagePlanId: cadIngress.webhookUsagePlan.id,
   ...(cadIngressEmailDomain !== undefined ? { emailDomain: cadIngressEmailDomain } : {}),
 });
 

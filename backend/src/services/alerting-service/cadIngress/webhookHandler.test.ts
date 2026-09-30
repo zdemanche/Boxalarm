@@ -151,6 +151,25 @@ describe('CAD webhook handler', () => {
     });
   });
 
+  it('accepts the REST API proxy event (v1): sender header casing, same checks', async () => {
+    const v2 = webhookEvent(DISPATCH);
+    const v1 = {
+      resource: '/api/v1/alerting/ingress/cad-webhook',
+      httpMethod: 'POST',
+      headers: {
+        'X-Boxalarm-Source': v2.headers['x-boxalarm-source'],
+        'X-Boxalarm-Timestamp': v2.headers['x-boxalarm-timestamp'],
+        'X-Boxalarm-Signature': v2.headers['x-boxalarm-signature'],
+        'x-api-key': 'k',
+      },
+      isBase64Encoded: false,
+      body: DISPATCH,
+      requestContext: { requestId: 'req-v1' },
+    };
+    expect((await call(v1 as never)).statusCode).toBe(202);
+    expect(alerts()).toHaveLength(1);
+  });
+
   it('a webhook signed with the wrong key does not page (401, generic body)', async () => {
     const response = await call(webhookEvent(DISPATCH, { key: 'w'.repeat(64) }));
     expect(response.statusCode).toBe(401);

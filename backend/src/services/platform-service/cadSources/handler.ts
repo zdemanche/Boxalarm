@@ -18,6 +18,7 @@ import { createLogger } from '@boxalarm/logging';
 import { getDynamoDocClient } from '../export/awsClients.js';
 import { ConflictError, putDepartmentConfig } from '../config/repository.js';
 import { CAD_INGRESS, loadCadIngress, readTableName } from './repository.js';
+import { deleteSourceApiKey } from './rotateKey.js';
 import {
   mergeSources,
   readStoredSources,
@@ -170,6 +171,10 @@ async function putSources(
       removed.map((s) => s.webhookKey!.secretName),
       traceId,
     );
+    for (const source of removed) {
+      await deleteSourceApiKey(source.webhookKey?.apiKeyId, traceId);
+      await deleteSourceApiKey(source.webhookKey?.previousApiKeyId, traceId);
+    }
     logger.info({
       event: 'platform.cadSources.updated',
       correlationId: traceId,

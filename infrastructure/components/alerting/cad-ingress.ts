@@ -1,7 +1,7 @@
 import * as pulumi from "@pulumi/pulumi";
 import * as aws from "@pulumi/aws";
 import { ServiceLambda } from "../observability/service-lambda";
-import { ServiceLogGroup, RETENTION_DAYS_BY_ENV } from "../observability/service-log-group";
+import { ServiceLogGroup } from "../observability/service-log-group";
 import { IamPolicyStatement } from "../observability/observability-policy";
 import { RuleDeliveryGuard } from "../messaging/rule-delivery";
 import { requireEnv } from "../shared/env";
@@ -16,10 +16,14 @@ import { grantAlertingCmk } from "./alerting-cmk";
  *
  *  - Source config: platform.config.updated (configType CAD_INGRESS) -> SQS + DLQ ->
  *    cadIngress/sourceCopyHandler.ts -> CAD_INGRESS_COPY. Same shape as AlertRulesCopy.
- *  - Signed webhook: its OWN HTTP API and stage (no Cognito authorizer exists on it at all, so
- *    it shares neither authorizer nor throttle bucket with the main API: a flood against it
- *    cannot consume the reserved dispatch/respond capacity, and a flood there cannot starve
- *    it), a stage + route throttle, and a reserved-concurrency Lambda.
+ *  - Signed webhook: its OWN REST API (security review M4). No Cognito authorizer exists on
+ *    it, so it shares neither authorizer nor capacity with the main HTTP API. Every source has
+ *    its own API key in a usage plan with a per-key throttle: API Gateway answers 403 to a
+ *    request without a valid key BEFORE any per-source bucket or the Lambda, so an
+ *    unauthenticated flood cannot starve a genuine CAD (only the account-level limit is
+ *    shared), and a flood with one source's key throttles only that source. An optional
+ *    stack-wide source-IP allowlist is enforced in the API's resource policy. HMAC is still
+ *    the authentication; the API key is a capacity partition, not a credential.
  *  - SES inbound email (only when `cadIngressEmailDomain` is set): receipt rule set -> the
  *    encrypted mail bucket (S3 action) -> the email Lambda (async). SES receiving exists in
  *    us-east-1, where every stack is pinned.
@@ -31,9 +35,13 @@ import { grantAlertingCmk } from "./alerting-cmk";
  * operator").
  */
 
-export const CAD_WEBHOOK_ROUTE_KEY = "POST /api/v1/alerting/ingress/cad-webhook";
-/** A CAD sends a handful of dispatches an hour; this is a flood cap, not a capacity plan. */
-export const CAD_WEBHOOK_THROTTLE = { rateLimit: 10, burstLimit: 20 } as const;
+export const CAD_WEBHOOK_PATH = "api/v1/alerting/ingress/cad-webhook";
+export const CAD_WEBHOOK_STAGE = "cad";
+/**
+ * Per source (per API key). A CAD sends a handful of dispatches an hour, and a mass-casualty
+ * burst is tens; this is a flood cap on one source's key, never shared with another source.
+ */
+export const CAD_WEBHOOK_KEY_THROTTLE = { rateLimit: 5, burstLimit: 20 } as const;
 export const CAD_METRIC_NAMESPACE = "Boxalarm/alerting-cad-ingress";
 /** Where SES writes each raw message, keyed by its SES message id (emailHandler.ts). */
 export const CAD_MAIL_PREFIX = "inbound/";
@@ -60,6 +68,11 @@ export interface CadIngressArgs {
   permissionsBoundaryArn: pulumi.Input<string>;
   /** The inbound mail domain (MX -> SES). Unset: no email path is created. */
   emailDomain?: string;
+  /**
+   * Optional source-IP allowlist (CIDRs) for the webhook, enforced by the REST API's resource
+   * policy before anything else runs. Dispatch centres usually have static egress.
+   */
+  webhookAllowedCidrs?: readonly string[];
 }
 
 /**
@@ -131,9 +144,11 @@ export class CadIngress extends pulumi.ComponentResource {
   public readonly copyQueue: aws.sqs.Queue;
   public readonly copyDlq: aws.sqs.Queue;
   public readonly copyRule: aws.cloudwatch.EventRule;
-  public readonly webhookApi: aws.apigatewayv2.Api;
-  public readonly webhookStage: aws.apigatewayv2.Stage;
-  public readonly webhookRoute: aws.apigatewayv2.Route;
+  public readonly webhookApi: aws.apigateway.RestApi;
+  public readonly webhookStage: aws.apigateway.Stage;
+  public readonly webhookMethod: aws.apigateway.Method;
+  /** Every source's API key is attached to this plan by the rotation route. */
+  public readonly webhookUsagePlan: aws.apigateway.UsagePlan;
   public readonly webhookLambda: ServiceLambda;
   /** Full URL a CAD POSTs to. */
   public readonly webhookUrl: pulumi.Output<string>;
@@ -428,34 +443,72 @@ export class CadIngress extends pulumi.ComponentResource {
       { parent: this },
     );
 
-    this.webhookApi = new aws.apigatewayv2.Api(
+    const cidrs = [...(args.webhookAllowedCidrs ?? [])];
+    this.webhookApi = new aws.apigateway.RestApi(
       `${name}-webhook-api`,
       {
         name: `boxalarm-${env}-cad-ingress-api`,
-        protocolType: "HTTP",
         description:
-          "CAD dispatch webhook only. No Cognito authorizer: requests authenticate by HMAC in the Lambda.",
+          "CAD dispatch webhook only. Per-source API keys partition capacity; requests authenticate by HMAC in the Lambda.",
+        endpointConfiguration: { types: "REGIONAL" },
+        apiKeySource: "HEADER",
+        policy: JSON.stringify({
+          Version: "2012-10-17",
+          Statement: [
+            {
+              Effect: "Allow",
+              Principal: "*",
+              Action: "execute-api:Invoke",
+              Resource: "execute-api:/*",
+            },
+            ...(cidrs.length > 0
+              ? [
+                  {
+                    Effect: "Deny",
+                    Principal: "*",
+                    Action: "execute-api:Invoke",
+                    Resource: "execute-api:/*",
+                    Condition: { NotIpAddress: { "aws:SourceIp": cidrs } },
+                  },
+                ]
+              : []),
+          ],
+        }),
       },
       { parent: this },
     );
-    const integration = new aws.apigatewayv2.Integration(
+    let parentId: pulumi.Input<string> = this.webhookApi.rootResourceId;
+    let resource: aws.apigateway.Resource | undefined;
+    for (const part of CAD_WEBHOOK_PATH.split("/")) {
+      resource = new aws.apigateway.Resource(
+        `${name}-webhook-resource-${part}`,
+        { restApi: this.webhookApi.id, parentId, pathPart: part },
+        { parent: this },
+      );
+      parentId = resource.id;
+    }
+    const leaf = resource!;
+    this.webhookMethod = new aws.apigateway.Method(
+      `${name}-webhook-method`,
+      {
+        restApi: this.webhookApi.id,
+        resourceId: leaf.id,
+        httpMethod: "POST",
+        authorization: "NONE",
+        apiKeyRequired: true,
+      },
+      { parent: this },
+    );
+    const integration = new aws.apigateway.Integration(
       `${name}-webhook-integration`,
       {
-        apiId: this.webhookApi.id,
-        integrationType: "AWS_PROXY",
-        integrationUri: this.webhookLambda.function.invokeArn,
-        payloadFormatVersion: "2.0",
+        restApi: this.webhookApi.id,
+        resourceId: leaf.id,
+        httpMethod: this.webhookMethod.httpMethod,
+        type: "AWS_PROXY",
+        integrationHttpMethod: "POST",
+        uri: this.webhookLambda.function.invokeArn,
         timeoutMilliseconds: 10_000,
-      },
-      { parent: this },
-    );
-    this.webhookRoute = new aws.apigatewayv2.Route(
-      `${name}-webhook-route`,
-      {
-        apiId: this.webhookApi.id,
-        routeKey: CAD_WEBHOOK_ROUTE_KEY,
-        target: pulumi.interpolate`integrations/${integration.id}`,
-        authorizationType: "NONE",
       },
       { parent: this },
     );
@@ -465,49 +518,57 @@ export class CadIngress extends pulumi.ComponentResource {
         action: "lambda:InvokeFunction",
         function: this.webhookLambda.function.name,
         principal: "apigateway.amazonaws.com",
-        sourceArn: pulumi.interpolate`${this.webhookApi.executionArn}/*/*`,
+        sourceArn: pulumi.interpolate`${this.webhookApi.executionArn}/*/POST/${CAD_WEBHOOK_PATH}`,
       },
       { parent: this },
     );
-    const accessLogs = new aws.cloudwatch.LogGroup(
-      `${name}-webhook-access-logs`,
+    const deployment = new aws.apigateway.Deployment(
+      `${name}-webhook-deployment`,
       {
-        name: `/aws/apigateway/boxalarm-${env}-cad-ingress-api-access`,
-        retentionInDays: RETENTION_DAYS_BY_ENV[env],
+        restApi: this.webhookApi.id,
+        triggers: {
+          redeployment: pulumi
+            .all([this.webhookMethod.id, integration.id, this.webhookApi.policy])
+            .apply((parts) => JSON.stringify(parts)),
+        },
       },
-      { parent: this },
+      { parent: this, dependsOn: [this.webhookMethod, integration] },
     );
-    this.webhookStage = new aws.apigatewayv2.Stage(
+    this.webhookStage = new aws.apigateway.Stage(
       `${name}-webhook-stage`,
       {
-        apiId: this.webhookApi.id,
-        name: "$default",
-        autoDeploy: true,
-        defaultRouteSettings: {
-          throttlingRateLimit: CAD_WEBHOOK_THROTTLE.rateLimit,
-          throttlingBurstLimit: CAD_WEBHOOK_THROTTLE.burstLimit,
-        },
-        routeSettings: [
-          {
-            routeKey: this.webhookRoute.routeKey,
-            throttlingRateLimit: CAD_WEBHOOK_THROTTLE.rateLimit,
-            throttlingBurstLimit: CAD_WEBHOOK_THROTTLE.burstLimit,
-          },
-        ],
-        accessLogSettings: {
-          destinationArn: accessLogs.arn,
-          format: JSON.stringify({
-            requestId: "$context.requestId",
-            status: "$context.status",
-            routeKey: "$context.routeKey",
-            sourceIp: "$context.identity.sourceIp",
-            integrationErrorMessage: "$context.integrationErrorMessage",
-          }),
+        restApi: this.webhookApi.id,
+        deployment: deployment.id,
+        stageName: CAD_WEBHOOK_STAGE,
+      },
+      { parent: this },
+    );
+    // No stage-wide method throttle: that would be ONE bucket every caller shares (the flaw
+    // the review found). Capacity is per key, in the usage plan.
+    new aws.apigateway.MethodSettings(
+      `${name}-webhook-method-settings`,
+      {
+        restApi: this.webhookApi.id,
+        stageName: this.webhookStage.stageName,
+        methodPath: "*/*",
+        settings: { metricsEnabled: true },
+      },
+      { parent: this },
+    );
+    this.webhookUsagePlan = new aws.apigateway.UsagePlan(
+      `${name}-webhook-usage-plan`,
+      {
+        name: `boxalarm-${env}-cad-webhook`,
+        description: "One API key per CAD source; each key gets its own throttle bucket.",
+        apiStages: [{ apiId: this.webhookApi.id, stage: this.webhookStage.stageName }],
+        throttleSettings: {
+          rateLimit: CAD_WEBHOOK_KEY_THROTTLE.rateLimit,
+          burstLimit: CAD_WEBHOOK_KEY_THROTTLE.burstLimit,
         },
       },
-      { parent: this, dependsOn: [accessLogs, this.webhookRoute] },
+      { parent: this },
     );
-    this.webhookUrl = pulumi.interpolate`${this.webhookApi.apiEndpoint}/api/v1/alerting/ingress/cad-webhook`;
+    this.webhookUrl = pulumi.interpolate`${this.webhookStage.invokeUrl}/${CAD_WEBHOOK_PATH}`;
 
     const lambdaRoles: Record<string, aws.iam.Role> = {
       copy: this.copyLambda.role,
@@ -869,6 +930,18 @@ export class CadIngress extends pulumi.ComponentResource {
         statistic: "Maximum",
         actions: [args.pageTopicArn],
       }),
+      this.alarm("webhook-4xx", {
+        name: `boxalarm-${env}-alerting-cad-webhook-4xx`,
+        description:
+          "Many CAD webhook requests were refused by API Gateway or the Lambda (403 no/invalid API key or IP not allowed, 429 a source over its throttle, 401 authentication). A flood against the webhook, or a CAD misconfigured after a key rotation. A genuine CAD being refused means dispatches are not reaching the app: radio tone-out is the page of record until fixed.",
+        namespace: "AWS/ApiGateway",
+        metricName: "4XXError",
+        dimensions: { ApiName: this.webhookApi.name, Stage: this.webhookStage.stageName },
+        statistic: "Sum",
+        threshold: 20,
+        period: 300,
+        actions: [args.pageTopicArn, args.opsTopicArn],
+      }),
       this.alarm("webhook-errors", {
         name: `boxalarm-${env}-alerting-cad-webhook-errors`,
         description:
@@ -882,7 +955,7 @@ export class CadIngress extends pulumi.ComponentResource {
       this.alarm("webhook-throttles", {
         name: `boxalarm-${env}-alerting-cad-webhook-throttles`,
         description:
-          "The CAD webhook Lambda hit its reserved concurrency: dispatches are being refused (429/5xx). A flood, or a CAD retry storm.",
+          "The CAD webhook Lambda hit its reserved concurrency: dispatches are being refused (5xx). A flood with valid source keys, or a CAD retry storm.",
         namespace: "AWS/Lambda",
         metricName: "Throttles",
         dimensions: { FunctionName: this.webhookLambda.function.name },
@@ -903,6 +976,7 @@ export class CadIngress extends pulumi.ComponentResource {
 
     this.registerOutputs({
       webhookUrl: this.webhookUrl,
+      webhookUsagePlan: this.webhookUsagePlan,
       webhookLambda: this.webhookLambda,
       emailLambda: this.emailLambda,
     });

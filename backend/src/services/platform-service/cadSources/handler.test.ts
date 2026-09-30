@@ -20,6 +20,7 @@ process.env.PLATFORM_TABLE_NAME = 'platform-table';
 process.env.CAD_INGRESS_EMAIL_DOMAIN = 'ingress.example.org';
 process.env.CAD_WEBHOOK_URL = 'https://cad.example.org/api/v1/alerting/ingress/cad-webhook';
 process.env.CAD_WEBHOOK_SECRET_PREFIX = 'boxalarm-dev-cad-webhook/';
+process.env.CAD_WEBHOOK_USAGE_PLAN_ID = 'plan-1';
 
 import { Decision } from '@aws-sdk/client-verifiedpermissions';
 import {
@@ -27,7 +28,8 @@ import {
   type SecretsManagerClient,
 } from '@aws-sdk/client-secrets-manager';
 import { handler, setSettingsSecretsClient } from './handler.js';
-import { handler as rotateHandler, setSecretsClient } from './rotateKey.js';
+import { handler as rotateHandler, setApiGatewayClient, setSecretsClient } from './rotateKey.js';
+import type { APIGatewayClient } from '@aws-sdk/client-api-gateway';
 
 interface Command {
   readonly constructor: { name: string };
@@ -229,8 +231,17 @@ describe('POST /platform/cad-sources/test-parse', () => {
 describe('POST /platform/cad-sources/{sourceId}/webhook-key', () => {
   // A stateful fake secret store: Get returns what Create/Put last wrote.
   let secretStore: Map<string, string>;
+  let gw: ReturnType<typeof vi.fn>;
+  let apiKeys: number;
   beforeEach(() => {
     secretStore = new Map();
+    apiKeys = 0;
+    gw = vi.fn((command: Command) =>
+      Promise.resolve(
+        command.constructor.name === 'CreateApiKeyCommand' ? { id: `ak-${++apiKeys}` } : {},
+      ),
+    );
+    setApiGatewayClient({ send: gw } as unknown as APIGatewayClient);
     setSecretsClient({ send: smSend } as unknown as SecretsManagerClient);
     smSend.mockReset();
     smSend.mockImplementation((command: Command) => {
@@ -317,6 +328,33 @@ describe('POST /platform/cad-sources/{sourceId}/webhook-key', () => {
     expect(Number(value.previousExpiresAt) - before).toBeGreaterThanOrEqual(24 * 3600 - 1);
     expect(Number(value.previousExpiresAt) - before).toBeLessThanOrEqual(24 * 3600 + 5);
     expect(Date.parse(second.previousKeyExpiresAt) / 1000).toBe(value.previousExpiresAt);
+  });
+
+  it("each rotation mints the source's own API key on the usage plan, shown once; the one before the previous is deleted", async () => {
+    await saveSource();
+    const first = JSON.parse((await rotate()).body) as { apiKey: string };
+    expect(first.apiKey).toMatch(/^[A-Za-z0-9_-]{32}$/);
+    const create = gw.mock.calls.find(
+      ([c]) => (c as Command).constructor.name === 'CreateApiKeyCommand',
+    )?.[0] as Command;
+    expect(create.input).toMatchObject({
+      enabled: true,
+      value: first.apiKey,
+      tags: { 'boxalarm:purpose': 'cad-webhook', 'boxalarm:deptId': 'nichols-fd' },
+    });
+    const attach = gw.mock.calls.find(
+      ([c]) => (c as Command).constructor.name === 'CreateUsagePlanKeyCommand',
+    )?.[0] as Command;
+    expect(attach.input).toEqual({ usagePlanId: 'plan-1', keyId: 'ak-1', keyType: 'API_KEY' });
+    const [config] = transactItems();
+    expect(JSON.stringify(config)).toContain('"apiKeyId":"ak-1"');
+
+    await rotate(); // ak-2 current, ak-1 previous
+    await rotate(); // ak-3 current, ak-2 previous, ak-1 deleted
+    const deleted = gw.mock.calls
+      .filter(([c]) => (c as Command).constructor.name === 'DeleteApiKeyCommand')
+      .map(([c]) => (c as Command).input.apiKey);
+    expect(deleted).toEqual(['ak-1']);
   });
 
   it('revoke-previous removes the previous key now and keeps the current one', async () => {

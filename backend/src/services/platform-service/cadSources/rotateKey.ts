@@ -1,3 +1,10 @@
+import {
+  APIGatewayClient,
+  CreateApiKeyCommand,
+  CreateUsagePlanKeyCommand,
+  DeleteApiKeyCommand,
+  NotFoundException,
+} from '@aws-sdk/client-api-gateway';
 import { randomBytes } from 'node:crypto';
 import {
   CreateSecretCommand,
@@ -37,6 +44,65 @@ import { readStoredSources, withWebhookKey } from './model.js';
 
 const logger = createLogger({ service: 'platform-service' });
 const SOURCE_ID = /^[a-z0-9][a-z0-9-]{0,31}$/;
+
+let apiGateway: APIGatewayClient | undefined;
+
+/** Test seam. */
+export function setApiGatewayClient(override: APIGatewayClient | undefined): void {
+  apiGateway = override;
+}
+
+function gateway(): APIGatewayClient {
+  apiGateway ??= new APIGatewayClient({});
+  return apiGateway;
+}
+
+/**
+ * A new API key for the source, attached to the webhook's usage plan: its own throttle bucket
+ * (security review M4). The value is random; it partitions capacity and is not a credential -
+ * the HMAC is. Tagged so the delete grant can be limited to CAD keys.
+ */
+async function createSourceApiKey(
+  deptId: string,
+  sourceId: string,
+  rotatedAtSeconds: number,
+): Promise<{ readonly id: string; readonly value: string }> {
+  const usagePlanId = process.env.CAD_WEBHOOK_USAGE_PLAN_ID;
+  if (!usagePlanId) throw new Error('CAD_WEBHOOK_USAGE_PLAN_ID is required and was not set');
+  const value = randomBytes(24).toString('base64url');
+  const created = await gateway().send(
+    new CreateApiKeyCommand({
+      name: `${process.env.CAD_WEBHOOK_SECRET_PREFIX ?? 'cad-webhook/'}${deptId}/${sourceId}/${rotatedAtSeconds}`,
+      enabled: true,
+      value,
+      tags: {
+        'boxalarm:deptId': deptId,
+        'boxalarm:sourceId': sourceId,
+        'boxalarm:purpose': 'cad-webhook',
+      },
+    }),
+  );
+  if (!created.id) throw new Error('API Gateway returned no API key id');
+  await gateway().send(
+    new CreateUsagePlanKeyCommand({ usagePlanId, keyId: created.id, keyType: 'API_KEY' }),
+  );
+  return { id: created.id, value };
+}
+
+/** Deletes a replaced API key; a key already gone is fine. Never throws (logged). */
+export async function deleteSourceApiKey(apiKeyId: string | undefined, correlationId: string) {
+  if (!apiKeyId) return;
+  try {
+    await gateway().send(new DeleteApiKeyCommand({ apiKey: apiKeyId }));
+  } catch (error) {
+    if (error instanceof NotFoundException) return;
+    logger.error({
+      event: 'platform.cadSources.apiKeyDeleteFailed',
+      correlationId,
+      message: error instanceof Error ? error.message : 'unknown error',
+    });
+  }
+}
 
 let client: SecretsManagerClient | undefined;
 function secrets(): SecretsManagerClient {
@@ -180,8 +246,13 @@ async function rotate(
     );
   }
 
-  const rotatedAt = new Date().toISOString();
+  const rotatedAt = new Date(nowSeconds * 1000).toISOString();
   const keyId = `${deptId}.${sourceId}`;
+  const previousRef = stored.find((source) => source.sourceId === sourceId)?.webhookKey;
+  // The CAD sends the new API key with the new HMAC key; the one it replaces stays until the
+  // next rotation or a revoke, and the one before that is deleted now.
+  const apiKey = await createSourceApiKey(deptId, sourceId, nowSeconds);
+  await deleteSourceApiKey(previousRef?.previousApiKeyId, traceId);
   let config = current;
   for (let attempt = 0; ; attempt++) {
     try {
@@ -194,6 +265,8 @@ async function rotate(
             keyId,
             secretName: name,
             rotatedAt,
+            apiKeyId: apiKey.id,
+            ...(previousRef?.apiKeyId ? { previousApiKeyId: previousRef.apiKeyId } : {}),
           }),
         },
         actorId: principal.sub,
@@ -222,6 +295,7 @@ async function rotate(
     body: JSON.stringify({
       keyId,
       secret: key,
+      apiKey: apiKey.value,
       rotatedAt,
       previousKeyStillValid: existing?.current !== undefined,
       previousKeyExpiresAt:
@@ -259,6 +333,9 @@ async function revokePrevious(
   }
   if (!existing) return notFoundProblem(traceId, 'This source has no webhook key.');
   await writeSecret(name, { ...owner, current: existing.current }, true);
+  const config = await loadCadIngress(deptId);
+  const ref = readStoredSources(config?.value).find((s) => s.sourceId === sourceId)?.webhookKey;
+  await deleteSourceApiKey(ref?.previousApiKeyId, traceId);
   logger.info({
     event: 'platform.cadSources.previousKeyRevoked',
     correlationId: traceId,

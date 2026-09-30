@@ -137,6 +137,8 @@ export type CadTestParseResult =
 export interface RotatedWebhookKey {
   keyId: string;
   secret: string;
+  /** The source's own API Gateway key (its throttle bucket), sent as x-api-key. Shown once. */
+  apiKey: string;
   rotatedAt: string;
   previousKeyStillValid: boolean;
   /** When the key this rotation replaced stops working (ISO), if there was one. */

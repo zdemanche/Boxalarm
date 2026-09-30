@@ -1,4 +1,5 @@
 import type {
+  APIGatewayProxyEvent,
   APIGatewayProxyEventV2,
   APIGatewayProxyStructuredResultV2,
   Handler,
@@ -38,9 +39,16 @@ const CHANNEL = 'cad-webhook';
 
 type AuthFailure = 'UnknownSource' | 'StaleTimestamp' | 'NoActiveKey' | 'BadSignature';
 
-function header(event: APIGatewayProxyEventV2, name: string): string | undefined {
-  // HTTP API payload v2 lower-cases header names; a multi-valued header arrives comma-joined.
-  return event.headers?.[name];
+/** The REST API proxy event (v1) the webhook now receives, or an HTTP API one (v2). */
+type WebhookEvent = APIGatewayProxyEvent | APIGatewayProxyEventV2;
+
+function header(event: WebhookEvent, name: string): string | undefined {
+  // REST API proxy events keep the sender's header casing; HTTP API ones are lower-cased.
+  const headers = event.headers ?? {};
+  const direct = headers[name];
+  if (direct !== undefined) return direct;
+  const key = Object.keys(headers).find((candidate) => candidate.toLowerCase() === name);
+  return key === undefined ? undefined : (headers[key] ?? undefined);
 }
 
 function json(statusCode: number, body: unknown): APIGatewayProxyStructuredResultV2 {
@@ -106,9 +114,7 @@ export function readWebhookBody(rawText: string): {
   return { text: text ?? rendered, structured };
 }
 
-export const handler: Handler<APIGatewayProxyEventV2, APIGatewayProxyStructuredResultV2> = async (
-  event,
-) => {
+export const handler: Handler<WebhookEvent, APIGatewayProxyStructuredResultV2> = async (event) => {
   const traceId = event.requestContext.requestId;
   const nowSeconds = Math.floor(Date.now() / 1000);
 

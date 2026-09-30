@@ -217,6 +217,7 @@ test('rotating the webhook key shows the new key once, then never again', async 
       HttpResponse.json({
         keyId: 'nichols-fd.county',
         secret: 'f'.repeat(64),
+        apiKey: 'A'.repeat(32),
         rotatedAt: '2026-09-30T13:00:00.000Z',
         previousKeyStillValid: true,
         previousKeyExpiresAt: '2026-10-01T13:00:00.000Z',
@@ -231,6 +232,7 @@ test('rotating the webhook key shows the new key once, then never again', async 
   await user.click(within(confirm).getByRole('button', { name: 'Rotate key' }));
   const shown = await screen.findByRole('dialog', { name: 'Copy the webhook key now' });
   expect(within(shown).getByText('f'.repeat(64))).toBeTruthy();
+  expect(within(shown).getByText('A'.repeat(32))).toBeTruthy();
   await user.click(within(shown).getByRole('button', { name: 'I have stored the key' }));
   await waitFor(() => expect(screen.queryByText('f'.repeat(64))).toBeNull());
 });

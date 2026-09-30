@@ -134,7 +134,7 @@ CAD dispatches reach the app two ways (`docs/decisions/2026-09-29-cad-ingress-au
 pulumi -C infrastructure stack output CAD_WEBHOOK_URL
 ```
 
-Nothing is accepted until a chief saves a source with the webhook on and creates its key (web: Settings → CAD sources).
+Nothing is accepted until a chief saves a source with the webhook on and creates its key (web: Settings → CAD sources). Creating the key also mints the source's own API Gateway key (`x-api-key`), shown once with it. Optional: `pulumi -C infrastructure config set cadWebhookAllowedCidrs <cidr>,<cidr>` restricts the webhook to the dispatch centres' egress addresses.
 
 **Email.** Created only when `cadIngressEmailDomain` is set. SES can receive mail only in regions that support receiving; `us-east-1`, where every stack is pinned, does. Use a subdomain the department controls and uses for nothing else (e.g. `cad.<dept-domain>`): its MX record hands ALL of that subdomain's mail to SES.
 

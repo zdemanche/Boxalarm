@@ -475,6 +475,12 @@ function WebhookKey({ draft }: { draft: SourceDraft }) {
             <dd>
               <code style={{ wordBreak: 'break-all' }}>{rotated.secret}</code>
             </dd>
+            <dt>x-api-key</dt>
+            <dd>
+              <code style={{ wordBreak: 'break-all' }}>{rotated.apiKey}</code> - send it as the{' '}
+              <code>x-api-key</code> header on every request. It is this source&apos;s own capacity;
+              without it API Gateway refuses the request.
+            </dd>
             {rotated.previousKeyExpiresAt ? (
               <>
                 <dt>Previous key</dt>

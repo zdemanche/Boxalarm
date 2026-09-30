@@ -39,9 +39,6 @@ const VENDOR_WEBHOOK_ROUTES = [
   "POST /api/v1/alerting/receipts/sms",
   "POST /api/v1/alerting/receipts/voice",
   "POST /api/v1/alerting/receipts/push",
-  // HMAC-authenticated in its Lambda, on its own HTTP API with no authorizer at all
-  // (components/alerting/cad-ingress.ts; test/alerting/cad-ingress.test.ts).
-  "POST /api/v1/alerting/ingress/cad-webhook",
 ];
 
 /** Everything a health role may do beyond the shared observability statements. */
