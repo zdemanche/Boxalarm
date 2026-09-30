@@ -88,6 +88,55 @@ describe('platform-bus bridge contract (alerting-service producer -> incident-se
     });
   });
 
+  it('carries verifyRequired on dispatch.alert.received for a RAW CAD dispatch, and only then', async () => {
+    const { createManualDispatch } = await import('./dispatches/repository.js');
+    const outboxOf = async (verifyRequired: boolean) => {
+      const send = vi.fn().mockResolvedValue({});
+      await createManualDispatch({ send } as unknown as DynamoDBDocumentClient, 'alerting-table', {
+        deptId: DEPT_ID,
+        dispatch: {
+          sourceSystem: 'CAD',
+          incidentType: verifyRequired ? 'CAD DISPATCH - VERIFY' : 'ALARM',
+          address: verifyRequired ? 'SEE DISPATCH TEXT' : '1 Main St',
+          crossStreets: '',
+          unitsRequested: [],
+          narrative: 'raw text',
+          externalDispatchId: `county.${verifyRequired ? 'a' : 'b'}`,
+        },
+        idempotencyKey: 'k',
+        dispatchedAt: 1_798_000_000,
+        cad: {
+          ingressChannel: 'cad-email',
+          sourceId: 'county',
+          parseStatus: verifyRequired ? 'RAW' : 'PARSED',
+          parserVersion: null,
+          verifyRequired,
+        },
+      });
+      const items = (
+        send.mock.calls[0]?.[0] as {
+          input: { TransactItems: { Put: { Item: Record<string, unknown> } }[] };
+        }
+      ).input.TransactItems.map((t) => t.Put.Item);
+      return items.find((i) => i.eventType === 'dispatch.alert.received')!;
+    };
+
+    const raw = await outboxOf(true);
+    expect(raw.schemaVersion).toBe('1.0');
+    expect((raw.payload as Record<string, unknown>).verifyRequired).toBe(true);
+    const detail = await drainOneEntry(raw);
+    expect((detail.payload as Record<string, unknown>).verifyRequired).toBe(true);
+    // The consumer that predates the field still accepts the event.
+    const consumerSend = vi.fn().mockResolvedValue({});
+    const consumer = createDispatchAlertConsumer({ client: { send: consumerSend } as never });
+    await expect(
+      consumer(sqsEventFromDetail(detail), {} as never, () => undefined),
+    ).resolves.toEqual({ batchItemFailures: [] });
+
+    const parsed = await outboxOf(false);
+    expect(parsed.payload as Record<string, unknown>).not.toHaveProperty('verifyRequired');
+  });
+
   it('bridges alerting.response.confirmed end to end: outbox -> EventBridge detail -> dispatchResponseConsumer', async () => {
     const outboxItem = buildOutboxRecord(
       DEPT_ID,
