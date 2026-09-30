@@ -3,6 +3,7 @@ import { useNavigation, useRoute, type NavigationProp } from '@react-navigation/
 import { useCallback, useEffect, useRef, useState, type ComponentRef } from 'react';
 import {
   AccessibilityInfo,
+  Alert,
   AppState,
   findNodeHandle,
   Linking,
@@ -39,6 +40,9 @@ import { useOptionalConnectivity } from '../../sync/ConnectivityContext';
 // 16 between; every other control on this screen is at least 72.
 const PRIMARY_TARGET = 88;
 const ALERT_TARGET = 72;
+
+/** R3-1: an answered alert stays over the keyguard until this long passes with no touch. */
+export const ALERT_LOCK_IDLE_MS = 10 * 60_000;
 
 // a11y-spec N1: full-sentence accessible names.
 const ANSWER_NAME: Record<ResponseAnswer, string> = {
@@ -176,21 +180,45 @@ export function AlertDetailScreen() {
     void silenceDispatchNotification(dispatchId);
   }, [dispatchId]);
 
-  // Round 2 m2-2: an alert whose answer has reached the server no longer needs to be over the
-  // keyguard - left open on a locked phone, anyone could change the member's answer from the lock
-  // screen. Dropped once the answer is sent; a new page's full-screen launch (native) or a new
-  // call's alert screen sets it again.
+  // Round 2 m2-2 / round 3 R3-1: an answered alert left open on a locked phone must not stay
+  // over the keyguard forever (anyone could change the answer), but the member who just answered
+  // still needs the address, VERIFY ADDRESS, narrative, map and ETA chips. So once the answer is
+  // sent, show-over-lock is released on inactivity - the screen turns off or the app goes to the
+  // background, or ALERT_LOCK_IDLE_MS passes with no touch - whichever comes first. A touch
+  // restarts the idle clock. A new page's full-screen launch (native) or a new call's alert
+  // screen sets it again.
   const answerSent = response.answer !== null && response.delivery === 'sent';
   const answerSentRef = useRef(answerSent);
   answerSentRef.current = answerSent;
+  const releasedRef = useRef(false);
+  const touchedRef = useRef<(() => void) | null>(null);
   useEffect(() => {
-    if (answerSent) setAlertShowsOverLockScreen(false);
+    if (!answerSent) return undefined;
+    const release = () => {
+      releasedRef.current = true;
+      setAlertShowsOverLockScreen(false);
+    };
+    let timer = setTimeout(release, ALERT_LOCK_IDLE_MS);
+    touchedRef.current = () => {
+      if (releasedRef.current) return;
+      clearTimeout(timer);
+      timer = setTimeout(release, ALERT_LOCK_IDLE_MS);
+    };
+    // Screen off (Android pauses/stops the activity) or app left: the member is done with it.
+    const subscription = AppState.addEventListener('change', (status) => {
+      if (status === 'background') release();
+    });
+    return () => {
+      clearTimeout(timer);
+      subscription.remove();
+      touchedRef.current = null;
+    };
   }, [answerSent]);
 
   useEffect(() => {
     let cancelled = false;
     const onFocus = () => {
-      if (!answerSentRef.current) setAlertShowsOverLockScreen(true);
+      if (!releasedRef.current) setAlertShowsOverLockScreen(true);
       if (AppState.currentState !== 'active') return;
       void isDeviceLocked().then((locked) => {
         if (!cancelled && locked === false) silence();
@@ -233,6 +261,31 @@ export function AlertDetailScreen() {
     void response.respond(answer, eta);
   };
 
+  // R3-1: a sent answer changed to a different one while the phone is locked (someone other
+  // than the member could be holding it) needs a confirm. ETA changes do not.
+  const changeAnswer = (answer: ResponseAnswer) => {
+    const current = response.answer;
+    if (!answerSentRef.current || !current || current.ackStatus === answer) {
+      respond(answer);
+      return;
+    }
+    void isDeviceLocked().then((locked) => {
+      if (locked !== true) {
+        respond(answer);
+        return;
+      }
+      Alert.alert(
+        `Change your answer to ${ANSWER_NAME[answer]}?`,
+        `The officer already has: ${ANSWER_NAME[current.ackStatus]}.`,
+        [
+          { text: 'Keep my answer', style: 'cancel' },
+          { text: 'Change it', style: 'destructive', onPress: () => respond(answer) },
+        ],
+        { cancelable: true },
+      );
+    });
+  };
+
   const onAccessibilityAction = (event: AccessibilityActionEvent) => {
     const byName: Record<string, ResponseAnswer> = {
       respond: 'RESPONDING',
@@ -240,7 +293,7 @@ export function AlertDetailScreen() {
       notResponding: 'NOT_RESPONDING',
     };
     const answer = byName[event.nativeEvent.actionName];
-    if (answer) respond(answer);
+    if (answer) changeAnswer(answer);
   };
 
   const answer = response.answer;
@@ -259,6 +312,7 @@ export function AlertDetailScreen() {
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: theme.bg }}>
       <ScrollView
+        onTouchStart={() => touchedRef.current?.()}
         contentContainerStyle={{ padding: spacing.lg, gap: spacing.md }}
         accessibilityLabel="Incoming call"
         accessibilityActions={[
@@ -354,7 +408,7 @@ export function AlertDetailScreen() {
             outline={theme.status.ok}
             selected={selected('RESPONDING')}
             delivery={response.delivery}
-            onPress={() => respond('RESPONDING')}
+            onPress={() => changeAnswer('RESPONDING')}
           />
           <AnswerButton
             answer="DIRECT_TO_SCENE"
@@ -365,7 +419,7 @@ export function AlertDetailScreen() {
             outline={theme.status.warning}
             selected={selected('DIRECT_TO_SCENE')}
             delivery={response.delivery}
-            onPress={() => respond('DIRECT_TO_SCENE')}
+            onPress={() => changeAnswer('DIRECT_TO_SCENE')}
           />
           <AnswerButton
             answer="NOT_RESPONDING"
@@ -376,7 +430,7 @@ export function AlertDetailScreen() {
             outline={theme.status.danger}
             selected={selected('NOT_RESPONDING')}
             delivery={response.delivery}
-            onPress={() => respond('NOT_RESPONDING')}
+            onPress={() => changeAnswer('NOT_RESPONDING')}
           />
         </View>
 

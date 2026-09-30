@@ -1,6 +1,6 @@
 import NetInfo from '@react-native-community/netinfo';
 import { act, fireEvent, render, screen } from '@testing-library/react-native';
-import { NativeModules, Platform } from 'react-native';
+import { Alert, AppState, NativeModules, Platform } from 'react-native';
 import Config from 'react-native-config';
 import { useOptionalAuth } from '../../auth/AuthContext';
 import { ApiError, apiRequest } from '../../lib/apiClient';
@@ -372,14 +372,64 @@ describe('lock screen after answering (round 2 m2-2)', () => {
     Platform.OS = 'ios';
   });
 
-  test('once the answer is sent, the alert stops showing over the keyguard', async () => {
+  test('after the answer is sent the alert stays over the keyguard while the member keeps using it - an ETA tap included (R3-1)', async () => {
     await renderScreen();
-    expect(setShowWhenLocked).toHaveBeenLastCalledWith(true);
+    await tap(/^Responding — /);
+    expect(await screen.findByText('Sent')).toBeTruthy();
+    await act(async () => {
+      fireEvent.press(await screen.findByRole('radio', { name: 'ETA 15 minutes' }));
+    });
+    await act(flush);
 
+    expect(await screen.findByText(/your response: responding · eta 15 min/i)).toBeTruthy();
+    expect(setShowWhenLocked).not.toHaveBeenCalledWith(false);
+  });
+
+  test('screen off / app backgrounded after the answer is sent releases it (R3-1)', async () => {
+    const listeners: ((status: string) => void)[] = [];
+    // The RN preset's addEventListener is already a jest.fn: capture 'change' listeners with a
+    // one-test implementation and hand it back afterwards.
+    const addEventListener = AppState.addEventListener as unknown as jest.Mock;
+    const previous = addEventListener.getMockImplementation();
+    addEventListener.mockImplementation((type: string, listener: (status: string) => void) => {
+      if (type === 'change') listeners.push(listener);
+      return { remove: () => {} };
+    });
+    await renderScreen();
     await tap(/^Not responding/);
     expect(await screen.findByText('Sent')).toBeTruthy();
+    expect(setShowWhenLocked).not.toHaveBeenCalledWith(false);
+
+    await act(async () => {
+      listeners.forEach((listener) => listener('background'));
+    });
 
     expect(setShowWhenLocked).toHaveBeenLastCalledWith(false);
+    addEventListener.mockImplementation(previous ?? (() => ({ remove: () => {} })));
+  });
+
+  test('changing a sent answer to a different one while the phone is locked asks first (R3-1)', async () => {
+    const alertSpy = jest.spyOn(Alert, 'alert').mockImplementation(() => {});
+    await renderScreen();
+    await tap(/^Not responding/);
+    expect(await screen.findByText('Sent')).toBeTruthy();
+    const before = posted.length;
+
+    await tap(/^Responding — /);
+
+    expect(alertSpy).toHaveBeenCalledWith(
+      expect.stringMatching(/^Change your answer to Responding/),
+      expect.stringMatching(/already has: Not responding/),
+      expect.any(Array),
+      expect.anything(),
+    );
+    expect(posted.length).toBe(before);
+    const change = alertSpy.mock.calls[0]![2]!.find((b) => b.style === 'destructive')!;
+    await act(async () => {
+      change.onPress?.();
+    });
+    await act(flush);
+    expect(posted.at(-1)).toMatchObject({ ackStatus: 'RESPONDING' });
   });
 
   test('an answer that is not sent yet keeps the alert over the keyguard (its warning must stay visible)', async () => {
