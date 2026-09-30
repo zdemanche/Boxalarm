@@ -13,6 +13,13 @@ export interface SchemaRefreshArgs {
   incidentTableArn: pulumi.Input<string>;
   incidentCmkArn: pulumi.Input<string>;
   nerisSchemaSourceUrl: pulumi.Input<string>;
+  /**
+   * False while nerisSchemaSourceUrl is a known placeholder (dev's `.invalid` URL until the
+   * schema pipeline exists): the schedule is created DISABLED, so no run fails daily and the
+   * errors alarm does not email the ops topic about a known gap every day (review F6).
+   * Default true.
+   */
+  enabled?: boolean;
   logGroup: ServiceLogGroup;
   /** Ops alarm topic (chief-notifications): every alarm here notifies it, none is silent. */
   opsAlarmTopicArn: pulumi.Input<string>;
@@ -185,6 +192,7 @@ export class SchemaRefresh extends pulumi.ComponentResource {
       {
         name: `boxalarm-${env}-incident-neris-schema-refresh`,
         scheduleExpression: "rate(1 day)",
+        state: args.enabled === false ? "DISABLED" : "ENABLED",
         flexibleTimeWindow: { mode: "OFF" },
         target: {
           arn: this.refreshLambda.function.arn,

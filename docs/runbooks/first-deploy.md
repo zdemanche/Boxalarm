@@ -47,7 +47,7 @@ pulumi -C infrastructure config set alertingPageEmail oncall@<domain>
 pulumi -C infrastructure config set chiefNotificationEmail <ops or chief address>
 ```
 
-- `Pulumi.dev.yaml` already carries the two safe non-secret values: `nerisSchemaSourceUrl` (an `.invalid` placeholder until the NERIS schema pipeline exists; the daily refresh fails and notifies chief-notifications) and `alertingMinEligibleMembers: "1"` (a dev department has one or two test members).
+- `Pulumi.dev.yaml` already carries the two safe non-secret values: `nerisSchemaSourceUrl` (an `.invalid` placeholder until the NERIS schema pipeline exists; while it is a placeholder the daily refresh schedule is created DISABLED, so nothing fails or emails daily. Other stacks refuse a placeholder) and `alertingMinEligibleMembers: "1"` (a dev department has one or two test members).
 - Secrets are only ever set with `--secret`; none is committed.
 - `canaryMemberId` is not needed while `canaryEnabled` is unset (false). Keep the canary off for a first deploy.
 - `alertingPageEmail` and `chiefNotificationEmail` are required on prod and warned about elsewhere. Set them on dev too: without them every alarm notifies nobody.

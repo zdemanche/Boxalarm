@@ -189,6 +189,34 @@ function providerEndpointProblems(read: ConfigReader, stack: string): string[] {
   });
 }
 
+/** True when a URL's host is a placeholder (or it is not a URL at all). */
+export function isPlaceholderUrl(value: string): boolean {
+  try {
+    return isPlaceholderHost(new URL(value).hostname);
+  } catch {
+    return true;
+  }
+}
+
+/**
+ * dev may run on a placeholder NERIS schema source (its refresh schedule is then disabled,
+ * index.ts); every other stack must point at the real pipeline.
+ */
+function nerisSchemaSourceProblems(
+  env: string | undefined,
+  value: string | undefined,
+  stack: string,
+) {
+  if (env === "dev" || value === undefined || value.trim() === "" || !isPlaceholderUrl(value)) {
+    return [];
+  }
+  return [
+    `  - ${CONFIG_NAMESPACE}:nerisSchemaSourceUrl "${value}" is a placeholder; outside dev it must ` +
+      `be the schema pipeline's URL: pulumi config set nerisSchemaSourceUrl ` +
+      `https://<schema-pipeline-host>/neris/schema.json --stack ${stack}`,
+  ];
+}
+
 function setCommand(k: RequiredConfigKey, stack: string): string {
   return `pulumi config set ${k.secret ? "--secret " : ""}${k.key} ${k.example} --stack ${stack}`;
 }
@@ -208,6 +236,7 @@ export function stackConfigProblems(read: ConfigReader, stack: string): string[]
   return [
     ...missing,
     ...webOriginProblems(ctx.env, read("webOrigin"), stack),
+    ...nerisSchemaSourceProblems(ctx.env, read("nerisSchemaSourceUrl"), stack),
     ...providerEndpointProblems(read, stack),
   ];
 }

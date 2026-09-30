@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import * as pulumi from "@pulumi/pulumi";
 import {
   REQUIRED_CONFIG,
+  isPlaceholderUrl,
   stackConfigProblems,
   validateStackConfig,
 } from "../../components/shared/stack-config";
@@ -16,7 +17,7 @@ const COMPLETE_DEV: Record<string, string> = {
   env: "dev",
   webOrigin: "https://localhost:5173",
   deptId: "nichols-fd",
-  nerisSchemaSourceUrl: "https://schema.example.test/neris",
+  nerisSchemaSourceUrl: "https://schemas.nicholsfd.org/neris/schema.json",
   notificationSesFromAddress: "notifications@boxalarm.example",
   smsWebhookSecret: "s",
   voiceWebhookSecret: "v",
@@ -150,6 +151,32 @@ describe("SMS/voice provider endpoints (deploy-readiness M5)", () => {
         "dev",
       ),
     ).toEqual([]);
+  });
+});
+
+describe("nerisSchemaSourceUrl placeholder (review F6)", () => {
+  const placeholder = "https://neris-schema-source.invalid/neris/schema.json";
+
+  it("is allowed on dev only", () => {
+    expect(
+      stackConfigProblems(reader({ ...COMPLETE_DEV, nerisSchemaSourceUrl: placeholder }), "dev"),
+    ).toEqual([]);
+    const qa = stackConfigProblems(
+      reader({
+        ...COMPLETE_DEV,
+        env: "qa",
+        webOrigin: "https://qa.nicholsfd.org",
+        nerisSchemaSourceUrl: placeholder,
+      }),
+      "qa",
+    );
+    expect(qa.join("\n")).toMatch(/nerisSchemaSourceUrl .* is a placeholder/);
+  });
+
+  it("isPlaceholderUrl spots placeholder hosts and non-URLs", () => {
+    expect(isPlaceholderUrl(placeholder)).toBe(true);
+    expect(isPlaceholderUrl("not a url")).toBe(true);
+    expect(isPlaceholderUrl("https://schemas.nicholsfd.org/neris.json")).toBe(false);
   });
 });
 

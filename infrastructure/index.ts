@@ -80,7 +80,7 @@ import { EligibilityStaleness } from "./components/alerting/staleness";
 import { AlertingCanary } from "./components/alerting/canary";
 import { AlertingOutboxDrain } from "./components/alerting/outbox-drain";
 import { AlertRulesCopy } from "./components/alerting/alert-rules-copy";
-import { validateStackConfig } from "./components/shared/stack-config";
+import { isPlaceholderUrl, validateStackConfig } from "./components/shared/stack-config";
 
 export const stack = getStack();
 const config = new Config("boxalarm-infra");
@@ -636,6 +636,9 @@ export const incidentSchemaRefresh = new SchemaRefresh("incident-schema-refresh"
   incidentTableArn: incidentTable.tableArn,
   incidentCmkArn: incidentTable.cmkArn,
   nerisSchemaSourceUrl,
+  // dev's committed .invalid placeholder: keep the daily refresh off rather than fail and
+  // email the ops topic every day (review F6). The validator refuses a placeholder elsewhere.
+  enabled: !isPlaceholderUrl(nerisSchemaSourceUrl),
   logGroup: incidentServiceLogGroup,
   opsAlarmTopicArn: chiefNotificationTopic.topicArn,
 });
