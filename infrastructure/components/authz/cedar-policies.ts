@@ -15,12 +15,11 @@ export type RoleGroup = (typeof ROLE_GROUPS)[number];
 //
 // RunRecordsDisposal / ViewRetentionConfig / UpdateRetentionConfig / UpdateMember are
 // live today (retention/disposalHandler.ts, retention/configHandler.ts,
-// members/updateMember.ts). ViewConfig / UpdateConfig / ExportData are not yet called —
-// config/handler.ts and export/authz.ts still gate on assertChiefOrAdmin, with a TODO to
-// swap to Cedar once this policy store ships — defined ahead of that swap so it isn't a
-// companion infra change later. RevokeSession is the same: deviceLossHandler.ts still
-// gates on a manual ADMIN_GROUPS check (TODO: E8-S3), defined ahead of time per the
-// audit finding that this schema doesn't yet cover session-revocation actions.
+// members/updateMember.ts), and so is RevokeSession: deviceLossHandler.ts gates on it through
+// withAuthorization (alarmed on every invocation), with no manual group check left.
+// ViewConfig / UpdateConfig / ExportData are not yet called — config/handler.ts and
+// export/authz.ts still gate on assertChiefOrAdmin, with a TODO to swap to Cedar — defined
+// ahead of that swap so it isn't a companion infra change later.
 export const ADMIN_ONLY_ACTIONS = [
   "UpdateConfig",
   "ExportData",
