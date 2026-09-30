@@ -48,6 +48,9 @@ const SEVERITY_LABEL = Object.fromEntries(
 const DEFAULT_SEVERITY: DefectSeverity = 'MAJOR';
 
 /** A check in progress older than this is not offered back (design.md §11.2: retained 24 h). */
+/** How long Submit waits to re-read open defects before using the list loaded at the start. */
+const OPEN_DEFECTS_REFRESH_MS = 2500;
+
 const DRAFT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 
 interface CheckDraft {
@@ -65,7 +68,7 @@ interface CompletedSummary {
   /** Photos taken on items that passed: the check-run API has no field for them. */
   readonly photosNotSent: number;
   readonly passed: number;
-  readonly defects: { label: string; severity: DefectSeverity; alreadyReported: boolean }[];
+  readonly defects: { label: string; severity: DefectSeverity; plan: DefectPlan }[];
   readonly durationSeconds: number;
 }
 
@@ -88,7 +91,33 @@ export function findKnownDefect(
   item: ChecklistItem,
 ): OpenDefect | undefined {
   const prefix = defectPrefix(unitId, item);
-  return openDefects.find((defect) => defect.description.startsWith(prefix));
+  // The most severe matching one: an escalation keeps the same prefix, so later checks compare
+  // against the escalated severity.
+  return openDefects
+    .filter((defect) => defect.description.startsWith(prefix))
+    .sort((a, b) => SEVERITY_RANK[b.severity] - SEVERITY_RANK[a.severity])[0];
+}
+
+const SEVERITY_RANK: Record<DefectSeverity, number> = { MINOR: 0, MAJOR: 1, OUT_OF_SERVICE: 2 };
+
+export type DefectPlan = 'file' | 'escalate' | 'skip';
+
+/**
+ * What submitting does with a failed item (R2-M2). A known open defect is skipped only when this
+ * check adds nothing: same or lower severity, no note, no photo. A higher severity, a note or a
+ * photo is filed as an update - and "Out of service now" must reach the defect API, which is what
+ * takes the unit out of service.
+ */
+export function defectPlan(
+  known: OpenDefect | undefined,
+  severity: DefectSeverity,
+  note: string,
+  hasPhoto: boolean,
+): DefectPlan {
+  if (!known) return 'file';
+  const addsNothing =
+    SEVERITY_RANK[severity] <= SEVERITY_RANK[known.severity] && !note.trim() && !hasPhoto;
+  return addsNothing ? 'skip' : 'escalate';
 }
 
 // N4.2: no step waits on a network round trip. Every answer is a local state update, journaled to
@@ -251,11 +280,15 @@ export function CheckRunnerScreen() {
     AccessibilityInfo.announceForAccessibility(`${answeredCount} of ${total} checked`);
   }, [answeredCount, total, template]);
 
-  const answer = useCallback((code: string, pass: boolean) => {
+  const answer = useCallback((code: string, pass: boolean, knownSeverity?: DefectSeverity) => {
     setSubmitError(null);
     setResults((prev) => ({ ...prev, [code]: pass }));
     if (!pass) {
-      setSeverities((prev) => (prev[code] ? prev : { ...prev, [code]: DEFAULT_SEVERITY }));
+      // A known defect starts at its reported severity, so failing it again adds nothing unless
+      // the member raises it or adds a note or photo.
+      setSeverities((prev) =>
+        prev[code] ? prev : { ...prev, [code]: knownSeverity ?? DEFAULT_SEVERITY },
+      );
     }
   }, []);
 
@@ -372,6 +405,31 @@ export function CheckRunnerScreen() {
     const durationSeconds = Math.round((Date.now() - startedAt) / 1000);
     setSubmitting(true);
     setSubmitError(null);
+    // Re-read open defects so one closed during the check isn't treated as open. Bounded, and a
+    // failure falls back to the list loaded at the start: submit never waits long on the network.
+    let latestDefects = openDefects;
+    if (repository.getOpenDefects && isOnline) {
+      const fresh = await Promise.race([
+        repository.getOpenDefects(apparatusId).catch(() => null),
+        new Promise<null>((resolve) => setTimeout(() => resolve(null), OPEN_DEFECTS_REFRESH_MS)),
+      ]);
+      if (fresh) {
+        latestDefects = fresh;
+        setOpenDefects(fresh);
+      }
+    }
+    const planFor = (item: ChecklistItem) => {
+      const known = latestDefects ? findKnownDefect(latestDefects, apparatusId, item) : undefined;
+      return {
+        known,
+        plan: defectPlan(
+          known,
+          severities[item.code] ?? DEFAULT_SEVERITY,
+          notes[item.code] ?? '',
+          photosCaptured[item.code] !== undefined,
+        ),
+      };
+    };
     try {
       // Signed in, each of these is a local outbox enqueue (no network round trip). The run and
       // every defect reuse keys derived from this check's idempotencyKey, so a retry after a
@@ -387,14 +445,20 @@ export function CheckRunnerScreen() {
       // A failed item has to reach the apparatus officer: each becomes a defect report through
       // the existing defect API, pre-filled with the unit and item, so nothing is typed twice.
       for (const item of failedItems) {
-        // Already reported by an earlier check and still open: don't file it again (review m3).
-        if (openDefects && findKnownDefect(openDefects, apparatusId, item)) continue;
+        // Already reported and still open, and this check adds nothing: don't file it again
+        // (review m3). A higher severity, a note or a photo is filed as an update (R2-M2).
+        const { known, plan } = planFor(item);
+        if (plan === 'skip') continue;
         // The photo taken for this item goes with its defect through the defect API's own
         // signed-upload step (review m2).
         const photo = photosCaptured[item.code];
         await repository.submitDefect({
           apparatusId,
-          description: defectDescription(apparatusId, item, notes[item.code] ?? ''),
+          description:
+            defectDescription(apparatusId, item, notes[item.code] ?? '') +
+            (plan === 'escalate' && known
+              ? ` Update to the open defect reported as ${SEVERITY_LABEL[known.severity]}.`
+              : ''),
           severity: severities[item.code] ?? DEFAULT_SEVERITY,
           idempotencyKey: `${idempotencyKey}-defect-${item.code}`,
           ...(photo ? { photoLocalUri: photo.uri, photoFileName: photo.fileName } : {}),
@@ -418,8 +482,7 @@ export function CheckRunnerScreen() {
       defects: failedItems.map((item) => ({
         label: item.label,
         severity: severities[item.code] ?? DEFAULT_SEVERITY,
-        alreadyReported:
-          openDefects !== null && findKnownDefect(openDefects, apparatusId, item) !== undefined,
+        plan: planFor(item).plan,
       })),
       durationSeconds,
     });
@@ -526,13 +589,17 @@ export function CheckRunnerScreen() {
             answer={results[item.code]}
             gated={isGated(item)}
             photoCaptured={photosCaptured[item.code] !== undefined}
-            knownDefect={
-              openDefects ? findKnownDefect(openDefects, apparatusId, item) !== undefined : false
-            }
+            knownDefect={openDefects ? findKnownDefect(openDefects, apparatusId, item) : undefined}
             severity={severities[item.code] ?? DEFAULT_SEVERITY}
             note={notes[item.code] ?? ''}
             unitId={apparatusId}
-            onAnswer={(pass) => answer(item.code, pass)}
+            onAnswer={(pass) =>
+              answer(
+                item.code,
+                pass,
+                openDefects ? findKnownDefect(openDefects, apparatusId, item)?.severity : undefined,
+              )
+            }
             onAddPhoto={() => void handleAddPhoto(item.code)}
             onSeverity={(value) => setSeverities((prev) => ({ ...prev, [item.code]: value }))}
             onNote={(value) => setNotes((prev) => ({ ...prev, [item.code]: value }))}
@@ -578,7 +645,7 @@ interface ItemRowProps {
   answer: boolean | undefined;
   gated: boolean;
   photoCaptured: boolean;
-  knownDefect: boolean;
+  knownDefect: OpenDefect | undefined;
   severity: DefectSeverity;
   note: string;
   unitId: string;
@@ -588,7 +655,12 @@ interface ItemRowProps {
   onNote: (value: string) => void;
 }
 
-function ItemRow({
+function ItemRow(props: ItemRowProps) {
+  const plan = defectPlan(props.knownDefect, props.severity, props.note, props.photoCaptured);
+  return <ItemRowView {...props} plan={plan} />;
+}
+
+function ItemRowView({
   item,
   theme,
   answer,
@@ -602,7 +674,8 @@ function ItemRow({
   onAddPhoto,
   onSeverity,
   onNote,
-}: ItemRowProps) {
+  plan,
+}: ItemRowProps & { plan: DefectPlan }) {
   const choice = (pass: boolean) => {
     const selected = answer === pass;
     const fill = pass ? theme.status.ok : theme.status.danger;
@@ -660,7 +733,12 @@ function ItemRow({
       <Text style={{ color: theme.fg, fontSize: typeScale.heading.size, fontWeight: '600' }}>
         {item.label}
       </Text>
-      {knownDefect ? <StatusChip status="caution" label="Known defect — already reported" /> : null}
+      {knownDefect ? (
+        <StatusChip
+          status="caution"
+          label={`Known defect — already reported as ${SEVERITY_LABEL[knownDefect.severity]}`}
+        />
+      ) : null}
       {item.requiresPhoto || answer === false ? (
         <TouchableOpacity
           accessibilityRole="button"
@@ -694,58 +772,65 @@ function ItemRow({
       {answer === false ? (
         <View style={{ gap: spacing.sm }}>
           <Text style={{ color: theme.fg, fontSize: typeScale.body.size }}>
-            {knownDefect
-              ? 'This item already has an open defect, so it is not reported again.'
-              : 'This is reported to the apparatus officer as a defect when you submit.'}
+            {!knownDefect
+              ? 'This is reported to the apparatus officer as a defect when you submit.'
+              : plan === 'skip'
+                ? `Already reported as ${SEVERITY_LABEL[knownDefect.severity]} and still open, so it won't be reported again. Choose a higher severity, or add a note or photo, to send an update.`
+                : `Already reported as ${SEVERITY_LABEL[knownDefect.severity]}. This is sent to the apparatus officer as an update when you submit.`}
           </Text>
-          <Text style={{ color: theme.fg, fontSize: typeScale.label.size, fontWeight: '600' }}>
-            Severity
-          </Text>
-          <View
-            accessibilityRole="radiogroup"
-            accessibilityLabel={`Severity for ${item.label}`}
-            style={{ gap: spacing.sm }}
-          >
-            {SEVERITY_OPTIONS.map((option) => {
-              const selected = severity === option.value;
-              return (
-                <TouchableOpacity
-                  key={option.value}
-                  accessibilityRole="radio"
-                  accessibilityState={{ checked: selected }}
-                  onPress={() => onSeverity(option.value)}
-                  style={{
-                    minHeight: targetSize.field,
-                    justifyContent: 'center',
-                    paddingHorizontal: spacing.md,
-                    borderRadius: radius.default,
-                    borderWidth: selected ? 2 : 1,
-                    borderColor: selected ? theme.fg : theme.borderStrong,
-                    backgroundColor: selected ? theme.surfaceRaised : 'transparent',
-                  }}
-                >
-                  <View style={{ flexDirection: 'row', gap: spacing.sm, alignItems: 'center' }}>
-                    <Text
-                      accessible={false}
-                      style={{ color: theme.fg, fontSize: typeScale.body.size }}
-                    >
-                      {selected ? '●' : '○'}
-                    </Text>
-                    <Text
+          {/* Nothing higher to choose when the open defect is already "Out of service now". */}
+          {knownDefect?.severity === 'OUT_OF_SERVICE' ? null : (
+            <>
+              <Text style={{ color: theme.fg, fontSize: typeScale.label.size, fontWeight: '600' }}>
+                Severity
+              </Text>
+              <View
+                accessibilityRole="radiogroup"
+                accessibilityLabel={`Severity for ${item.label}`}
+                style={{ gap: spacing.sm }}
+              >
+                {SEVERITY_OPTIONS.map((option) => {
+                  const selected = severity === option.value;
+                  return (
+                    <TouchableOpacity
+                      key={option.value}
+                      accessibilityRole="radio"
+                      accessibilityState={{ checked: selected }}
+                      onPress={() => onSeverity(option.value)}
                       style={{
-                        color: theme.fg,
-                        fontSize: typeScale.body.size,
-                        fontWeight: selected ? '700' : '400',
+                        minHeight: targetSize.field,
+                        justifyContent: 'center',
+                        paddingHorizontal: spacing.md,
+                        borderRadius: radius.default,
+                        borderWidth: selected ? 2 : 1,
+                        borderColor: selected ? theme.fg : theme.borderStrong,
+                        backgroundColor: selected ? theme.surfaceRaised : 'transparent',
                       }}
                     >
-                      {option.label}
-                    </Text>
-                  </View>
-                </TouchableOpacity>
-              );
-            })}
-          </View>
-          {severity === 'OUT_OF_SERVICE' ? (
+                      <View style={{ flexDirection: 'row', gap: spacing.sm, alignItems: 'center' }}>
+                        <Text
+                          accessible={false}
+                          style={{ color: theme.fg, fontSize: typeScale.body.size }}
+                        >
+                          {selected ? '●' : '○'}
+                        </Text>
+                        <Text
+                          style={{
+                            color: theme.fg,
+                            fontSize: typeScale.body.size,
+                            fontWeight: selected ? '700' : '400',
+                          }}
+                        >
+                          {option.label}
+                        </Text>
+                      </View>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+            </>
+          )}
+          {severity === 'OUT_OF_SERVICE' && plan !== 'skip' ? (
             <Text
               accessibilityLiveRegion="polite"
               style={{ color: theme.status.danger, fontSize: typeScale.body.size }}
@@ -825,9 +910,11 @@ function CompletionView({
             {summary.defects.map((defect) => (
               <Text key={defect.label} style={{ color: theme.fg, fontSize: typeScale.body.size }}>
                 ✕ {defect.label} —{' '}
-                {defect.alreadyReported
+                {defect.plan === 'skip'
                   ? 'already reported and still open, not filed again'
-                  : SEVERITY_LABEL[defect.severity]}
+                  : defect.plan === 'escalate'
+                    ? `${SEVERITY_LABEL[defect.severity]}, sent as an update to the open defect`
+                    : SEVERITY_LABEL[defect.severity]}
               </Text>
             ))}
           </View>
