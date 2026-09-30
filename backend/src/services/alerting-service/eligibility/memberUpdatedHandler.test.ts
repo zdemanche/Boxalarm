@@ -485,6 +485,68 @@ describe('memberUpdatedHandler', () => {
       expect(contactWrite(send)?.ExpressionAttributeValues[':contactChannels']).toEqual([push]);
     });
 
+    // Review MINOR-2: the personnel list still lists a token the worker found dead; another
+    // device's registration re-sends it. It must stay dead unless that device re-registered.
+    it('a token the worker invalidated stays invalid when the device list is re-sent', async () => {
+      const dead = {
+        channel: 'PUSH',
+        token: 'tok-dead',
+        deviceId: 'old',
+        valid: false,
+        registeredAt: 100,
+      };
+      const send = storedSnapshot({ contactChannels: [dead], contactVersion: 2 });
+      vi.doMock('./dynamoClient.js', () => ({
+        createDynamoClient: () => ({ send }),
+        readAlertingConfig: () => ({ tableName: 'alerting-table' }),
+      }));
+      const { handler } = await import('./memberUpdatedHandler.js');
+      const resent = { ...dead, valid: true };
+      const tablet = {
+        channel: 'PUSH',
+        token: 'tok-tab',
+        deviceId: 'tab',
+        valid: true,
+        registeredAt: 200,
+      };
+      await handler(
+        buildSqsEvent({
+          ...VALID_ENVELOPE,
+          payload: { deptId: 'NICHOLS', memberId: 'mbr-102', contactChannels: [tablet, resent] },
+        }),
+      );
+      expect(contactWrite(send)?.ExpressionAttributeValues[':contactChannels']).toEqual([
+        tablet,
+        { ...resent, valid: false },
+      ]);
+    });
+
+    it('a device that re-registers the same token (newer registeredAt) is valid again', async () => {
+      const dead = {
+        channel: 'PUSH',
+        token: 'tok-1',
+        deviceId: 'ph',
+        valid: false,
+        registeredAt: 100,
+      };
+      const send = storedSnapshot({ contactChannels: [dead], contactVersion: 2 });
+      vi.doMock('./dynamoClient.js', () => ({
+        createDynamoClient: () => ({ send }),
+        readAlertingConfig: () => ({ tableName: 'alerting-table' }),
+      }));
+      const { handler } = await import('./memberUpdatedHandler.js');
+      const reregistered = { ...dead, valid: true, registeredAt: 500 };
+      await handler(
+        buildSqsEvent({
+          ...VALID_ENVELOPE,
+          payload: { deptId: 'NICHOLS', memberId: 'mbr-102', contactChannels: [reregistered] },
+        }),
+      );
+      expect(contactWrite(send)?.ExpressionAttributeValues[':contactChannels']).toEqual([
+        reregistered,
+      ]);
+    });
+
     it('ignores an empty phone rather than projecting a blank target', async () => {
       const send = vi.fn().mockResolvedValue({});
       vi.doMock('./dynamoClient.js', () => ({

@@ -66,6 +66,36 @@ export function pushEntriesFrom(contactChannels: readonly unknown[]): ContactCha
   return contactChannels.filter(isPushEntry) as ContactChannelSnapshot[];
 }
 
+/**
+ * Keeps a token the push worker found dead (receipts/invalidatePushToken.ts marked it
+ * `valid: false`) dead when the personnel device list is re-sent. The worker cannot write the
+ * personnel row (IAM boundary), so that row still lists the token as valid, and any later
+ * registration or sign-out by another of the member's devices re-sends it - which revived the
+ * dead token on every such event (review MINOR-2). A device that really re-registers the token
+ * carries a newer `registeredAt`, and is valid again.
+ */
+function keepInvalidated(existing: readonly unknown[], incoming: readonly unknown[]): unknown[] {
+  const dead = new Map<string, number>();
+  for (const entry of existing) {
+    const candidate = entry as { token?: unknown; valid?: unknown; registeredAt?: unknown };
+    if (isPushEntry(entry) && candidate.valid === false && typeof candidate.token === 'string') {
+      dead.set(
+        candidate.token,
+        typeof candidate.registeredAt === 'number' ? candidate.registeredAt : Infinity,
+      );
+    }
+  }
+  return incoming.map((entry) => {
+    const candidate = entry as { token?: unknown; registeredAt?: unknown };
+    const deadRegisteredAt =
+      typeof candidate.token === 'string' ? dead.get(candidate.token) : undefined;
+    const registeredAt = typeof candidate.registeredAt === 'number' ? candidate.registeredAt : 0;
+    return deadRegisteredAt !== undefined && registeredAt <= deadRegisteredAt
+      ? { ...(entry as object), valid: false }
+      : entry;
+  });
+}
+
 export function mergeContactChannels(
   existing: readonly unknown[],
   update: { readonly pushEntries?: readonly unknown[]; readonly phoneEntries?: readonly unknown[] },
@@ -108,7 +138,9 @@ export async function applyContactUpdate(
       ? (Item.contactChannels as unknown[])
       : [];
     const contactChannels = mergeContactChannels(existing, {
-      ...(applyPush ? { pushEntries: update.pushEntries } : {}),
+      ...(applyPush && update.pushEntries !== undefined
+        ? { pushEntries: keepInvalidated(existing, update.pushEntries) }
+        : {}),
       ...(applyPhone && update.phone !== undefined
         ? { phoneEntries: update.phone === null ? [] : phoneContactEntries(update.phone) }
         : {}),

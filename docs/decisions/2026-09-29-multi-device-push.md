@@ -21,3 +21,12 @@ Rejected: adding a device segment to the key (`…#push#{deviceId}`, or `channel
   - If every device is dead, the page fails terminally, as a single dead token did.
   - If the mass-invalidation latch holds a token valid, the page still throws, redelivers and dead-letters.
 - **Invalidation** (`receipts/invalidatePushToken.ts`) marks only the dead token's entry invalid. The member's other devices stay valid.
+
+## Dead tokens (review MINOR-2)
+
+The push worker invalidates a dead token in the alerting snapshot only. The IAM boundary prevents it from writing the personnel member row, so that row still lists the token as valid. Any later registration or sign-out from another of the member's devices re-sends the whole list. The projection (`eligibility/contactProjection.ts` `keepInvalidated`) therefore keeps an invalidated token invalid unless the incoming entry has a newer `registeredAt`, meaning the device really re-registered it. As a result:
+
+- a dead token is not sent again on every page;
+- a revived dead token is not counted again toward the mass-invalidation latch.
+
+Trade-off: a dead token still holds one of the 10 device slots on the personnel side until that device registers a new token or signs out, or the member's 10 newer registrations push it out.
