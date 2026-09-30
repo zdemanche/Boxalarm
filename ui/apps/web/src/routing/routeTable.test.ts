@@ -62,6 +62,14 @@ describe('routeTable', () => {
     }
   });
 
+  test('CAD sources are CHIEF/ADMIN only, with their own nav entry (CHIEF has no /settings)', () => {
+    expect(routesForRoles(['CHIEF']).map((r) => r.label)).toContain('CAD sources');
+    expect(routesForRoles(['ADMIN']).map((r) => r.label)).toContain('CAD sources');
+    for (const role of ['MEMBER', 'OFFICER', 'TRAINING', 'APPARATUS'] as const) {
+      expect(canAccessPath('/settings/cad-sources', [role])).toBe(false);
+    }
+  });
+
   test('canAccessPath enforces role grants including param routes', () => {
     expect(canAccessPath('/settings', ['ADMIN'])).toBe(true);
     expect(canAccessPath('/settings', ['CHIEF'])).toBe(false);

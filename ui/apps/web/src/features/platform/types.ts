@@ -77,3 +77,65 @@ export const LIFE_SAFETY_RECORD_CLASSES = [
   'AUDIT_LOG_ENTRY',
   'NERIS_SUBMISSION_ATTEMPT',
 ] as const;
+
+/** CAD ingress parser fields (backend @boxalarm/cad-parser CAD_FIELDS). */
+export const CAD_FIELDS = [
+  'incidentNumber',
+  'dispatchTime',
+  'incidentType',
+  'address',
+  'crossStreets',
+  'town',
+  'units',
+  'narrative',
+] as const;
+export type CadField = (typeof CAD_FIELDS)[number];
+
+/** One field's rule: a line label or a regex whose first capture group is the value. */
+export type CadFieldRule = { label: string } | { pattern: string };
+export type CadParserFields = Partial<Record<CadField, CadFieldRule>>;
+
+/** GET /platform/cad-sources: one source, as the chief sees it (no secret, no secret name). */
+export interface CadSourceView {
+  sourceId: string;
+  label: string;
+  enabled: boolean;
+  emailEnabled: boolean;
+  allowedSenders: string[];
+  emailAddress: string | null;
+  webhookEnabled: boolean;
+  webhookKeyId: string | null;
+  webhookRotatedAt: string | null;
+  parser: { version: number; fields: CadParserFields } | null;
+}
+
+export interface CadSourcesResponse {
+  version: number | null;
+  emailDomain: string | null;
+  webhookUrl: string | null;
+  sources: CadSourceView[];
+}
+
+/** PUT /platform/cad-sources: one source as the chief edits it. */
+export interface CadSourceInput {
+  sourceId: string;
+  label: string;
+  enabled: boolean;
+  emailEnabled: boolean;
+  allowedSenders: string[];
+  webhookEnabled: boolean;
+  parser?: { fields: CadParserFields };
+}
+
+export type CadTestParseResult =
+  | { status: 'PARSED'; fields: Partial<Record<CadField, string>> }
+  | { status: 'RAW'; reason: string; fields: Partial<Record<CadField, string>> };
+
+/** POST .../webhook-key: the new key, shown once. */
+export interface RotatedWebhookKey {
+  keyId: string;
+  secret: string;
+  rotatedAt: string;
+  previousKeyStillValid: boolean;
+  webhookUrl: string | null;
+}
