@@ -21,6 +21,9 @@ export interface ChecklistTemplate {
   templateId: string;
   name: string;
   items: ChecklistItem[];
+  /** Client-only: epoch ms of the cached copy when the sheet was served from this phone because
+   * the server couldn't be reached. Absent on a live response. */
+  cachedAt?: number;
 }
 
 export interface ItemResult {

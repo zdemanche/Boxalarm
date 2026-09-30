@@ -27,8 +27,21 @@ export interface DutyShift {
 // as a lost shift.
 export type ClaimResult = 'CLAIMED' | 'ALREADY_MINE' | 'ALREADY_TAKEN';
 
+/** Claiming has to be atomic on the server (F2.9), so it is never queued or guessed offline. */
+export class ClaimNeedsConnectionError extends Error {
+  constructor() {
+    super(
+      "You need a connection to claim a shift - claiming has to be instant so two people can't take the same one.",
+    );
+    this.name = 'ClaimNeedsConnectionError';
+  }
+}
+
 export interface ScheduleRepository {
   getShifts(): Promise<DutyShift[]>;
+  /** Epoch ms of the cached shift list the last getShifts() returned; null when it was live.
+   * Optional: the mock repository never serves from cache. */
+  shiftsCachedAt?(): number | null;
   // idempotencyKey is optional so existing single-attempt callers/tests are unaffected, but a
   // caller that may retry the same claim intent (e.g. ShiftDetailScreen's offline-queue reconnect
   // resubmit) must generate it once, up front, and pass the same value on every retry - a value

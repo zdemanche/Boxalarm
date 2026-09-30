@@ -3,14 +3,21 @@ import Config from 'react-native-config';
 import { useOptionalAuth } from '../../auth/AuthContext';
 import { useOptionalConnectivity } from '../../sync/ConnectivityContext';
 import { apiRequest, ApiError } from '../../lib/apiClient';
+import { readThrough } from '../../sync/readThrough';
 import { mockScheduleRepository } from './mockScheduleRepository';
-import type { ClaimResult, DutyShift, ScheduleRepository } from './types';
+import {
+  ClaimNeedsConnectionError,
+  type ClaimResult,
+  type DutyShift,
+  type ScheduleRepository,
+} from './types';
 
 /**
  * Prefers the real personnel-service endpoints (architecture.md personnel-service §Interfaces)
- * when online + authenticated + API base configured; falls back to the local mock otherwise, so
- * Schedule stays usable offline / pre-infra / outside AuthProvider (navigation unit tests) -
- * same pattern as useChecksRepository.
+ * when authenticated + API base configured. The local mock is used only with no API configured
+ * or nobody signed in (pre-infra dev builds, navigation unit tests). Offline, getShifts serves
+ * the last real list this phone fetched (flagged via shiftsCachedAt) - never mock shifts - and
+ * claimPosition refuses rather than inventing a result.
  *
  * getShifts() reads GET /shifts (list metadata only - no positions per the personnel-service
  * fact sheet). Position-level claim state has no member-facing read endpoint yet; positions is
@@ -30,27 +37,37 @@ export function useScheduleRepository(): ScheduleRepository {
       return mockScheduleRepository;
     }
 
+    let lastShiftsCachedAt: number | null = null;
+
     return {
       async getShifts(): Promise<DutyShift[]> {
         const tokens = authRef.current;
         if (!tokens) return mockScheduleRepository.getShifts();
-        try {
-          const response = await apiRequest('personnel/shifts', tokens, { apiBaseUrl });
-          const body = (await response.json()) as {
-            shifts: Array<Omit<DutyShift, 'positions'>>;
-          };
-          return body.shifts.map((shift) => ({ ...shift, positions: [] }));
-        } catch (error) {
-          if (error instanceof ApiError) throw error;
-          return mockScheduleRepository.getShifts();
-        }
+        const result = await readThrough(
+          `cache:${tokens.memberId ?? 'anon'}:shifts`,
+          'the shift list',
+          async () => {
+            const response = await apiRequest('personnel/shifts', tokens, { apiBaseUrl });
+            const body = (await response.json()) as {
+              shifts: Array<Omit<DutyShift, 'positions'>>;
+            };
+            return body.shifts.map((shift) => ({ ...shift, positions: [] }));
+          },
+        );
+        lastShiftsCachedAt = result.cachedAt;
+        return result.value;
+      },
+
+      shiftsCachedAt(): number | null {
+        return lastShiftsCachedAt;
       },
 
       async claimPosition(shiftId, positionCode, idempotencyKey): Promise<ClaimResult> {
         const tokens = authRef.current;
-        if (!tokens || !isOnline) {
-          return mockScheduleRepository.claimPosition(shiftId, positionCode);
-        }
+        if (!tokens) return mockScheduleRepository.claimPosition(shiftId, positionCode);
+        // A made-up claim result offline told a volunteer they held a shift the server never
+        // saw. Claims are atomic server-side (F2.9): refuse, and let the screen say so.
+        if (!isOnline) throw new ClaimNeedsConnectionError();
         try {
           const response = await apiRequest(
             `personnel/shifts/${encodeURIComponent(shiftId)}/claim`,

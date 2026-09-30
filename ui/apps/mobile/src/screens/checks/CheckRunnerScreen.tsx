@@ -16,6 +16,7 @@ import type { ChecklistTemplate, ItemResult } from '../../features/checks/types'
 import type { ChecksStackParamList } from '../../navigation/ChecksStack';
 import { useOptionalConnectivity } from '../../sync/ConnectivityContext';
 import { capturePhoto } from '../../sync/photoCapture';
+import { NoCachedDataError } from '../../sync/readThrough';
 
 function newIdempotencyKey(): string {
   return `check-${Date.now()}-${Math.random().toString(36).slice(2)}`;
@@ -60,9 +61,9 @@ export function CheckRunnerScreen() {
   useEffect(() => {
     let cancelled = false;
     setTemplateError(null);
-    // The repository already falls back to the local template on a network error and rethrows
-    // only real API errors (403/404/5xx) - those must be shown, not left as a blank screen
-    // (PR #321 review M10).
+    // Offline, the repository serves the last real sheet this phone fetched (template.cachedAt);
+    // with none cached it throws NoCachedDataError. Real API errors (403/404/5xx) are rethrown -
+    // all of these must be shown, not left as a blank screen (PR #321 review M10).
     repository
       .getChecklistTemplate(apparatusId)
       .then((result) => {
@@ -71,9 +72,11 @@ export function CheckRunnerScreen() {
       .catch((error: unknown) => {
         if (cancelled) return;
         const message =
-          error instanceof ApiError && error.problem.status === 403
-            ? 'You do not have access to this apparatus checklist.'
-            : 'The checklist could not be loaded.';
+          error instanceof NoCachedDataError
+            ? `This phone hasn't loaded the ${apparatusId} check sheet yet. Connect once to download it; after that, the check works without signal.`
+            : error instanceof ApiError && error.problem.status === 403
+              ? 'You do not have access to this apparatus checklist.'
+              : 'The checklist could not be loaded.';
         setTemplateError(message);
         AccessibilityInfo.announceForAccessibility(message);
       });
