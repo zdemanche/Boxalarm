@@ -47,6 +47,23 @@ export interface RetentionConfig {
   source: 'stored' | 'default';
 }
 
+/** One push registration as an admin sees it - never the token. */
+export interface MemberDevice {
+  /** The app's installation id; null for a registration from before the app sent one. */
+  deviceId: string | null;
+  /** APNS (iPhone) or FCM (Android). */
+  platform: string | null;
+  /** Epoch milliseconds of the last registration from this device. */
+  registeredAt: number | null;
+  /** False once the push provider rejected the token. */
+  valid: boolean;
+}
+
+export interface MemberDevices {
+  memberId: string;
+  devices: MemberDevice[];
+}
+
 export interface DisposalResult {
   retentionYearsUsed: number;
   hardDeleted: number;

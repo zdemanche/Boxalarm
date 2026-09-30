@@ -64,8 +64,9 @@ function revocationMarkerStatement(tableArn: string): IamPolicyStatement {
  * validity (1h/1h/3650d + rotation) is set on the app clients in index.ts.
  */
 /**
- * M2: device loss removes the member's PUSH contact channel - the same transaction
- * personnel-service's push-token DELETE writes (member METADATA update + OUTBOX put).
+ * M2: device loss removes the lost device's PUSH entry (or every one) through
+ * personnel-service's writePushDevices - the same transaction registration and sign-out
+ * write (member METADATA update + OUTBOX put).
  * DynamoDB authorizes each transaction item as its own action, so each is key-scoped.
  */
 function pushInvalidationStatements(tableArn: string): IamPolicyStatement[] {
@@ -111,6 +112,7 @@ export class SessionRevocation extends pulumi.ComponentResource {
   public readonly memberStatusLambda: ServiceLambda;
   public readonly memberStatusConsumer: ReturnType<PlatformBus["addQueueConsumer"]>;
   public readonly deviceLossLambda: ServiceLambda;
+  public readonly listDevicesLambda: ServiceLambda;
   public readonly credentialResetLambda: ServiceLambda;
   public readonly credentialResetInvokedAlarm: aws.cloudwatch.MetricAlarm;
   public readonly loginEnableFailedAlarm: aws.cloudwatch.MetricAlarm;
@@ -213,6 +215,48 @@ export class SessionRevocation extends pulumi.ComponentResource {
     args.httpApi.route(
       `${name}-device-loss-route`,
       { routeKey: "POST /api/v1/platform/sessions/revoke", lambda: this.deviceLossLambda },
+      { parent: this },
+    );
+
+    // The device-loss dialog lists the member's push devices so the admin can remove just the
+    // lost one. Cedar ViewMemberDevices (CHIEF/ADMIN); a read of member rows and nothing else.
+    this.listDevicesLambda = new ServiceLambda(
+      `${name}-list-devices`,
+      {
+        env,
+        serviceName: "platform-service",
+        functionName: `boxalarm-${env}-platform-list-member-devices`,
+        handler: LAMBDA_HANDLER,
+        code: lambdaCode("platform-service", "session-revocation-list-devices"),
+        logGroup: args.platformLogGroup,
+        environment: {
+          VERIFIED_PERMISSIONS_POLICY_STORE_ID: args.policyStoreId,
+          PLATFORM_TABLE_NAME: args.platformTableName,
+        },
+        additionalPolicyStatements: pulumi
+          .all([pulumi.output(args.policyStoreArn), pulumi.output(args.platformTableArn)])
+          .apply(([policyStoreArn, tableArn]) => [
+            verifiedPermissionsPolicyStatement(policyStoreArn),
+            {
+              Sid: "ReadMemberDevices",
+              Effect: "Allow" as const,
+              Action: ["dynamodb:GetItem"],
+              Resource: tableArn,
+              Condition: {
+                "ForAllValues:StringLike": { "dynamodb:LeadingKeys": ["DEPT#*#MEMBER#*"] },
+              },
+            },
+          ]),
+      },
+      { parent: this },
+    );
+
+    args.httpApi.route(
+      `${name}-list-devices-route`,
+      {
+        routeKey: "GET /api/v1/platform/sessions/{memberId}/devices",
+        lambda: this.listDevicesLambda,
+      },
       { parent: this },
     );
 
@@ -321,6 +365,7 @@ export class SessionRevocation extends pulumi.ComponentResource {
     this.registerOutputs({
       memberStatusLambda: this.memberStatusLambda,
       deviceLossLambda: this.deviceLossLambda,
+      listDevicesLambda: this.listDevicesLambda,
       credentialResetLambda: this.credentialResetLambda,
     });
   }

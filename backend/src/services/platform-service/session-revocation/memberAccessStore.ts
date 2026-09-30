@@ -1,8 +1,13 @@
-import { DynamoDBClient, TransactionCanceledException } from '@aws-sdk/client-dynamodb';
-import { randomUUID } from 'node:crypto';
-import { DynamoDBDocumentClient, GetCommand, TransactWriteCommand } from '@aws-sdk/lib-dynamodb';
+import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
+import { DynamoDBDocumentClient, GetCommand } from '@aws-sdk/lib-dynamodb';
 import { captureAWSv3Client } from 'aws-xray-sdk-core';
 import { buildDeptScopedPk, toVerifiedDeptId } from '@boxalarm/dept-scope';
+import {
+  withoutAllDevices,
+  withoutDevice,
+  writePushDevices,
+  type ContactChannelEntry,
+} from '../../personnel-service/pushTokens/pushDevices.js';
 
 export function readPlatformTableName(env: NodeJS.ProcessEnv): string {
   const tableName = env.PLATFORM_TABLE_NAME;
@@ -51,43 +56,21 @@ export async function readMemberStatus(
   return typeof status === 'string' ? status : undefined;
 }
 
-interface ContactChannelEntry {
-  readonly channel: string;
-  readonly [field: string]: unknown;
-}
-
 export type PushInvalidationResult = 'invalidated' | 'no-push-entry' | 'no-member';
-
-/** Case-insensitive, matching how the push-token writers and readers classify entries. */
-function isPushEntry(entry: ContactChannelEntry): boolean {
-  return typeof entry.channel === 'string' && entry.channel.toUpperCase() === 'PUSH';
-}
-
-const MAX_PUSH_WRITE_ATTEMPTS = 3;
 
 /**
  * Device loss (review M2): stop the lost phone receiving dispatch pushes - incident type and
- * address on the lock screen - by removing the member's push entries. This is the write
- * personnel-service's DELETE .../push-tokens makes (pushTokens/revokeToken.ts), reproduced
- * rather than called because that route only lets a member revoke their own token: the
- * member row loses its push entries and a personnel.member.updated outbox row carries the
- * new contactChannels to the alerting eligibility snapshot. `source` is personnel-service
- * because that is the only producer the alerting-plane rule accepts for this event; the
- * payload's `changedBy` records who actually made the change (platform-service device loss,
- * and the admin), so the event is not mistaken for the member's own push-token revoke.
+ * address on the lock screen - by removing its push device entry from the member row. The
+ * write is personnel's own writePushDevices (the only writer of a member's push devices), so
+ * it shares the device model, the updatedAt guard with re-read and retry, the event time
+ * stamped max(now, previous updatedAt + 1) - strictly after a registration in the same
+ * millisecond, so the alerting projection never drops it as stale - and the
+ * personnel.member.updated event shape. `changedBy` on the payload records that platform-service
+ * device loss (and which admin) made the change, not the member's own sign-out.
  *
- * Every push entry is dropped, not only the lost phone's: nothing identifies which entry is
- * that device, and the global sign-out already makes every device sign in again, which is
- * when a remaining phone re-registers. SMS/voice keep paging the member meanwhile.
- *
- * The write is conditional on the row's updatedAt as read (review minor 5), so a push-token
- * registration racing it is not silently overwritten or silently resurrected: on a conflict
- * the row is re-read and the filter re-applied, up to three times.
- *
- * On merging fix/page-chain, which moves push entries to per-device records written through
- * writePushDevices (with its own isPush and updatedAt guard), this must call
- * writePushDevices(client, table, deptId, memberId, (cur) => cur.filter((e) => !isPush(e)))
- * and this duplicate transaction must be deleted.
+ * Decision (2026-09-29, coordinator): when the admin identifies the lost device (`deviceId`)
+ * only that device is removed and the member's other devices keep being paged; otherwise
+ * every push device is removed. The global sign-out still ends every session either way.
  */
 export async function invalidateMemberPush(
   docClient: DynamoDBDocumentClient,
@@ -96,84 +79,78 @@ export async function invalidateMemberPush(
   memberId: string,
   correlationId: string,
   actorId: string,
+  deviceId?: string,
 ): Promise<PushInvalidationResult> {
-  const verifiedDeptId = toVerifiedDeptId({ deptId });
-  const pk = buildDeptScopedPk(verifiedDeptId, 'MEMBER', memberId);
-  for (let attempt = 1; ; attempt += 1) {
-    const existing = await docClient.send(
-      new GetCommand({ TableName: tableName, Key: { pk, sk: 'METADATA' }, ConsistentRead: true }),
-    );
-    if (!existing.Item) {
-      return 'no-member';
-    }
-    const current = (existing.Item.contactChannels as ContactChannelEntry[] | undefined) ?? [];
-    const contactChannels = current.filter((entry) => !isPushEntry(entry));
-    if (contactChannels.length === current.length) {
-      return 'no-push-entry';
-    }
-    const readUpdatedAt: unknown = existing.Item.updatedAt;
+  const outcome = await writePushDevices(
+    docClient,
+    tableName,
+    toVerifiedDeptId({ deptId }),
+    memberId,
+    (current) =>
+      deviceId === undefined ? withoutAllDevices(current) : withoutDevice(current, deviceId),
+    {
+      correlationId,
+      changedBy: {
+        service: 'platform-service',
+        reason: 'DEVICE_LOSS',
+        actorId,
+        ...(deviceId !== undefined ? { deviceId } : {}),
+      },
+      skipIfUnchanged: true,
+    },
+  );
+  return outcome === 'written'
+    ? 'invalidated'
+    : outcome === 'not_found'
+      ? 'no-member'
+      : 'no-push-entry';
+}
 
-    const now = Date.now();
-    const eventId = randomUUID();
-    try {
-      await docClient.send(
-        new TransactWriteCommand({
-          TransactItems: [
-            {
-              Update: {
-                TableName: tableName,
-                Key: { pk, sk: 'METADATA' },
-                ...(readUpdatedAt === undefined
-                  ? {
-                      ConditionExpression:
-                        'attribute_exists(pk) AND attribute_not_exists(updatedAt)',
-                      ExpressionAttributeValues: { ':cc': contactChannels, ':ts': now },
-                    }
-                  : {
-                      ConditionExpression: 'attribute_exists(pk) AND updatedAt = :readUpdatedAt',
-                      ExpressionAttributeValues: {
-                        ':cc': contactChannels,
-                        ':ts': now,
-                        ':readUpdatedAt': readUpdatedAt,
-                      },
-                    }),
-                UpdateExpression: 'SET contactChannels = :cc, updatedAt = :ts',
-              },
-            },
-            {
-              Put: {
-                TableName: tableName,
-                Item: {
-                  pk: buildDeptScopedPk(verifiedDeptId, 'OUTBOX', memberId),
-                  sk: `EVT#${eventId}`,
-                  entityType: 'OUTBOX_ENTRY',
-                  eventId,
-                  eventTime: new Date(now).toISOString(),
-                  eventType: 'personnel.member.updated',
-                  source: 'personnel-service',
-                  correlationId,
-                  schemaVersion: '1.0',
-                  payload: {
-                    memberId,
-                    deptId,
-                    contactChannels,
-                    changedBy: { service: 'platform-service', reason: 'DEVICE_LOSS', actorId },
-                  },
-                  sentAt: null,
-                },
-              },
-            },
-          ],
-        }),
-      );
-      return 'invalidated';
-    } catch (error) {
-      const conflicted =
-        error instanceof TransactionCanceledException &&
-        error.CancellationReasons?.[0]?.Code === 'ConditionalCheckFailed';
-      if (!conflicted || attempt >= MAX_PUSH_WRITE_ATTEMPTS) {
-        throw error;
-      }
-    }
+/**
+ * The member's registered push devices, for the "report device lost" dialog: platform, when
+ * it last registered, and its installation id (legacy entries have none).
+ */
+/** A push device as an admin sees it: never the token itself. */
+export interface RegisteredDevice {
+  readonly deviceId: string | null;
+  readonly platform: string | null;
+  readonly registeredAt: number | null;
+  readonly valid: boolean;
+}
+
+/**
+ * The member's push devices, newest registration first; undefined when there is no member row
+ * in `deptId`. A legacy entry (registered before the app sent an installation id) has
+ * deviceId null and can only be removed with the rest ("All devices").
+ */
+export async function listMemberDevices(
+  docClient: DynamoDBDocumentClient,
+  tableName: string,
+  deptId: string,
+  memberId: string,
+): Promise<readonly RegisteredDevice[] | undefined> {
+  const result = await docClient.send(
+    new GetCommand({
+      TableName: tableName,
+      Key: {
+        pk: buildDeptScopedPk(toVerifiedDeptId({ deptId }), 'MEMBER', memberId),
+        sk: 'METADATA',
+      },
+      ProjectionExpression: 'contactChannels',
+      ConsistentRead: true,
+    }),
+  );
+  if (!result.Item) {
+    return undefined;
   }
+  const entries = (result.Item.contactChannels as ContactChannelEntry[] | undefined) ?? [];
+  return entries
+    .filter((entry) => typeof entry?.channel === 'string' && entry.channel.toUpperCase() === 'PUSH')
+    .map((entry) => ({
+      deviceId: typeof entry.deviceId === 'string' ? entry.deviceId : null,
+      platform: typeof entry.platform === 'string' ? entry.platform : null,
+      registeredAt: typeof entry.registeredAt === 'number' ? entry.registeredAt : null,
+      valid: entry.valid !== false,
+    }))
+    .sort((a, b) => (b.registeredAt ?? 0) - (a.registeredAt ?? 0));
 }

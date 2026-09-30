@@ -5,6 +5,7 @@ import type {
   DisposalResult,
   EditableConfigType,
   ExportStatus,
+  MemberDevices,
   RetentionConfig,
 } from './types';
 
@@ -83,20 +84,41 @@ export async function runDisposal(tokens: AuthTokenSource): Promise<DisposalResu
 }
 
 /**
+ * A member's registered push devices (CHIEF/ADMIN, Cedar ViewMemberDevices), newest
+ * registration first, so a device-loss report can remove just the lost one.
+ */
+export async function listMemberDevices(
+  tokens: AuthTokenSource,
+  memberId: string,
+): Promise<MemberDevices> {
+  const response = await apiRequest(
+    `platform/sessions/${encodeURIComponent(memberId)}/devices`,
+    tokens,
+  );
+  return (await response.json()) as MemberDevices;
+}
+
+/**
  * Report a member's device lost (CHIEF/ADMIN, Cedar RevokeSession): every session is signed
- * out, already-issued tokens stop within about 30 s, and the member's push registration is
- * removed so the lost phone stops showing dispatches.
+ * out and already-issued tokens stop within about 30 s. Push is removed from `deviceId` only,
+ * or from every device when it is omitted, so the lost phone stops showing dispatches.
  */
 export async function revokeMemberSessions(
   tokens: AuthTokenSource,
   memberId: string,
-): Promise<{ memberId: string; status: string; push?: string }> {
+  deviceId?: string,
+): Promise<{ memberId: string; status: string; push?: string; deviceId?: string }> {
   const response = await apiRequest('platform/sessions/revoke', tokens, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ memberId }),
+    body: JSON.stringify(deviceId === undefined ? { memberId } : { memberId, deviceId }),
   });
-  return (await response.json()) as { memberId: string; status: string; push?: string };
+  return (await response.json()) as {
+    memberId: string;
+    status: string;
+    push?: string;
+    deviceId?: string;
+  };
 }
 
 /**

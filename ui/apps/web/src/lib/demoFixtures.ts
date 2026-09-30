@@ -412,9 +412,34 @@ export async function demoRequest(
     return json(result);
   }
 
+  if (parts[0] === 'platform' && parts[1] === 'sessions' && parts[3] === 'devices') {
+    const memberId = decodeURIComponent(parts[2] ?? '');
+    const now = Date.now();
+    return json({
+      memberId,
+      devices: [
+        {
+          deviceId: 'demo-install-7f3a9c',
+          platform: 'APNS',
+          registeredAt: now - 3_600_000,
+          valid: true,
+        },
+        {
+          deviceId: 'demo-install-41be02',
+          platform: 'FCM',
+          registeredAt: now - 86_400_000 * 9,
+          valid: true,
+        },
+      ],
+    });
+  }
+
   if (path === 'platform/sessions/revoke' && method === 'POST') {
-    const memberId = (body as { memberId: string }).memberId;
-    return json({ memberId, status: 'revoked', push: 'invalidated' }, 202);
+    const { memberId, deviceId } = body as { memberId: string; deviceId?: string };
+    return json(
+      { memberId, status: 'revoked', push: 'invalidated', ...(deviceId ? { deviceId } : {}) },
+      202,
+    );
   }
 
   if (path === 'platform/sessions/reset-credentials' && method === 'POST') {

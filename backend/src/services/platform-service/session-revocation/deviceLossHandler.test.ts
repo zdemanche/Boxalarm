@@ -179,7 +179,52 @@ describe('deviceLossHandler', () => {
       'mbr-102',
       expect.any(String),
       'admin-1',
+      undefined,
     );
+  });
+
+  // Integration item 2: the admin picked the lost device from GET .../devices.
+  it('passes the identified deviceId through and still signs out everywhere', async () => {
+    const revokeMemberSession = vi.fn().mockResolvedValue(undefined);
+    mockRevocationClient({ revokeMemberSession });
+    const { handler } = await import('./deviceLossHandler.js');
+
+    const result = (await handler(
+      buildEvent('CHIEF', JSON.stringify({ memberId: 'mbr-102', deviceId: 'install-phone' })),
+    )) as APIGatewayProxyStructuredResultV2;
+
+    expect(result.statusCode).toBe(202);
+    expect(JSON.parse(result.body as string)).toEqual({
+      memberId: 'mbr-102',
+      status: 'revoked',
+      push: 'invalidated',
+      deviceId: 'install-phone',
+    });
+    expect(revokeMemberSession).toHaveBeenCalled();
+    expect(invalidateMemberPush).toHaveBeenCalledWith(
+      {},
+      'platform-table',
+      'dept-001',
+      'mbr-102',
+      expect.any(String),
+      'admin-1',
+      'install-phone',
+    );
+  });
+
+  it('returns 400 before signing anyone out when deviceId is malformed', async () => {
+    const revokeMemberSession = vi.fn();
+    mockRevocationClient({ revokeMemberSession });
+    const { handler } = await import('./deviceLossHandler.js');
+
+    for (const deviceId of ['', 'has space', 42]) {
+      const result = (await handler(
+        buildEvent('CHIEF', JSON.stringify({ memberId: 'mbr-102', deviceId })),
+      )) as APIGatewayProxyStructuredResultV2;
+      expect(result.statusCode).toBe(400);
+    }
+    expect(revokeMemberSession).not.toHaveBeenCalled();
+    expect(writeRevocationMarker).not.toHaveBeenCalled();
   });
 
   it('answers 503 (retryable) when the push registration cannot be removed', async () => {

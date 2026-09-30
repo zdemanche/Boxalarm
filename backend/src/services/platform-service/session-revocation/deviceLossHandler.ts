@@ -16,6 +16,7 @@ import {
   readPlatformTableName,
 } from './memberAccessStore.js';
 import { writeRevocationMarker } from '../authorizer/revocationStore.js';
+import { parseDeviceId } from '../../personnel-service/pushTokens/pushDevices.js';
 
 let cachedClient: CognitoIdentityProviderClient | undefined;
 
@@ -43,18 +44,29 @@ function problemDetails(
   };
 }
 
-function readMemberId(body: string | undefined | null): string | undefined {
+function parseBody(body: string | undefined | null): unknown {
   if (!body) {
     return undefined;
   }
-  let parsed: unknown;
   try {
-    parsed = JSON.parse(body);
+    return JSON.parse(body);
   } catch {
     return undefined;
   }
-  const memberId = (parsed as { memberId?: unknown } | null)?.memberId;
+}
+
+function readMemberId(body: string | undefined | null): string | undefined {
+  const memberId = (parseBody(body) as { memberId?: unknown } | null | undefined)?.memberId;
   return typeof memberId === 'string' && memberId.trim().length > 0 ? memberId : undefined;
+}
+
+/**
+ * The lost device, when the admin identified it (GET .../devices lists them): only that
+ * installation's push registration is removed. Absent means every push device - the admin
+ * does not know which one, so none of them may keep showing dispatches.
+ */
+function readDeviceId(body: string | undefined | null): string | undefined {
+  return parseDeviceId((parseBody(body) as { deviceId?: unknown } | null | undefined)?.deviceId);
 }
 
 async function revokeLostDevice(
@@ -69,6 +81,17 @@ async function revokeLostDevice(
       400,
       'Bad Request',
       'memberId is required and must be a non-empty string.',
+      traceId,
+    );
+  }
+  let deviceId: string | undefined;
+  try {
+    deviceId = readDeviceId(event.body);
+  } catch (error) {
+    return problemDetails(
+      400,
+      'Bad Request',
+      error instanceof Error ? error.message : 'deviceId is invalid.',
       traceId,
     );
   }
@@ -213,7 +236,8 @@ async function revokeLostDevice(
     return unavailable();
   }
 
-  // M2: the lost phone must stop showing dispatches on its lock screen.
+  // M2: the lost phone must stop showing dispatches on its lock screen - only that device
+  // when the admin identified it, otherwise every push device the member has.
   let push: Awaited<ReturnType<typeof invalidateMemberPush>>;
   try {
     push = await invalidateMemberPush(
@@ -223,6 +247,7 @@ async function revokeLostDevice(
       memberId,
       traceId,
       authorizerContext.sub,
+      deviceId,
     );
   } catch (error) {
     console.error(
@@ -242,11 +267,21 @@ async function revokeLostDevice(
     );
   }
 
-  return { statusCode: 202, body: JSON.stringify({ memberId, status: 'revoked', push }) };
+  return {
+    statusCode: 202,
+    body: JSON.stringify({
+      memberId,
+      status: 'revoked',
+      push,
+      ...(deviceId !== undefined ? { deviceId } : {}),
+    }),
+  };
 }
 
 /**
- * POST /api/v1/platform/sessions/revoke - report a device lost. Gated by the Cedar
+ * POST /api/v1/platform/sessions/revoke - report a device lost. Body `{ memberId, deviceId? }`:
+ * every session is signed out either way (see M2 above); push is removed from `deviceId` only,
+ * or from every device when it is absent. Gated by the Cedar
  * RevokeSession action (CHIEF/ADMIN, ADMIN_ONLY_ACTIONS) instead of the hand-written group
  * check it used to carry (original review minor 10), and alarmed on every invocation like
  * the other kill switch (ResetMemberCredentials).

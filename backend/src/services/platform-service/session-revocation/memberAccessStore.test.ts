@@ -3,6 +3,7 @@ import { TransactionCanceledException } from '@aws-sdk/client-dynamodb';
 import type { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
 import {
   invalidateMemberPush,
+  listMemberDevices,
   readMemberStatus,
   readPlatformTableName,
 } from './memberAccessStore.js';
@@ -130,8 +131,8 @@ describe('invalidateMemberPush (M2)', () => {
     const transact = commands.find((c) => c.name === 'TransactWriteCommand');
     const items = transact?.input.TransactItems as Array<Record<string, Record<string, unknown>>>;
     expect(items[0]?.Update).toMatchObject({
-      ConditionExpression: 'attribute_exists(pk) AND updatedAt = :readUpdatedAt',
-      ExpressionAttributeValues: { ':cc': [{ channel: 'Sms' }], ':readUpdatedAt': 5 },
+      ConditionExpression: 'attribute_exists(pk) AND updatedAt = :previousUpdatedAt',
+      ExpressionAttributeValues: { ':cc': [{ channel: 'Sms' }], ':previousUpdatedAt': 5 },
     });
   });
 
@@ -170,7 +171,7 @@ describe('invalidateMemberPush (M2)', () => {
     ).resolves.toBe('invalidated');
     const second = (inputs[1]?.TransactItems as Array<Record<string, Record<string, unknown>>>)[0];
     expect(second?.Update).toMatchObject({
-      ExpressionAttributeValues: { ':cc': [{ channel: 'SMS' }], ':readUpdatedAt': 2 },
+      ExpressionAttributeValues: { ':cc': [{ channel: 'SMS' }], ':previousUpdatedAt': 2 },
     });
   });
 
@@ -190,6 +191,118 @@ describe('invalidateMemberPush (M2)', () => {
 
     await expect(
       invalidateMemberPush(client, 'tbl', 'NICHOLS', 'sub-1', 't', 'admin-1'),
-    ).rejects.toBeInstanceOf(TransactionCanceledException);
+    ).rejects.toThrow('lost a repeated write race');
+  });
+
+  // Integration item 1: device loss is personnel's writePushDevices - the same event time rule
+  // as a registration, so an invalidation stamped in the same millisecond is never stale.
+  it("stamps the event after the row's last write (max(now, updatedAt + 1)) and keeps the caller's correlationId", async () => {
+    const future = Date.now() + 60_000;
+    const { client, commands } = docWith({
+      updatedAt: future,
+      contactChannels: [{ channel: 'PUSH', token: 't', deviceId: 'phone' }],
+    });
+
+    await invalidateMemberPush(client, 'tbl', 'NICHOLS', 'sub-1', 'trace-9', 'admin-1');
+
+    const transact = commands.find((c) => c.name === 'TransactWriteCommand');
+    const items = transact?.input.TransactItems as Array<Record<string, Record<string, unknown>>>;
+    expect(items[0]?.Update?.ExpressionAttributeValues).toMatchObject({ ':ts': future + 1 });
+    expect(items[1]?.Put?.Item).toMatchObject({
+      eventTime: new Date(future + 1).toISOString(),
+      correlationId: 'trace-9',
+    });
+  });
+
+  // Integration item 2: the admin identified the lost device - only it stops receiving pages.
+  it('removes only the identified device when a deviceId is given', async () => {
+    const { client, commands } = docWith({
+      updatedAt: 3,
+      contactChannels: [
+        { channel: 'PUSH', token: 'tok-phone', deviceId: 'phone' },
+        { channel: 'PUSH', token: 'tok-tablet', deviceId: 'tablet' },
+        { channel: 'SMS', token: '+15551234567' },
+      ],
+    });
+
+    await expect(
+      invalidateMemberPush(client, 'tbl', 'NICHOLS', 'sub-1', 't', 'admin-1', 'phone'),
+    ).resolves.toBe('invalidated');
+
+    const transact = commands.find((c) => c.name === 'TransactWriteCommand');
+    const items = transact?.input.TransactItems as Array<Record<string, Record<string, unknown>>>;
+    const remaining = [
+      { channel: 'PUSH', token: 'tok-tablet', deviceId: 'tablet' },
+      { channel: 'SMS', token: '+15551234567' },
+    ];
+    expect(items[0]?.Update?.ExpressionAttributeValues).toMatchObject({ ':cc': remaining });
+    expect(items[1]?.Put?.Item).toMatchObject({
+      payload: {
+        contactChannels: remaining,
+        changedBy: {
+          service: 'platform-service',
+          reason: 'DEVICE_LOSS',
+          actorId: 'admin-1',
+          deviceId: 'phone',
+        },
+      },
+    });
+  });
+
+  it('writes nothing when the identified device is already gone', async () => {
+    const { client, commands } = docWith({
+      updatedAt: 3,
+      contactChannels: [{ channel: 'PUSH', token: 'tok-tablet', deviceId: 'tablet' }],
+    });
+
+    await expect(
+      invalidateMemberPush(client, 'tbl', 'NICHOLS', 'sub-1', 't', 'admin-1', 'phone'),
+    ).resolves.toBe('no-push-entry');
+    expect(commands.map((c) => c.name)).toEqual(['GetCommand']);
+  });
+});
+
+describe('listMemberDevices', () => {
+  it('lists push devices newest first, without their tokens', async () => {
+    const { client, inputs } = fakeDoc({
+      contactChannels: [
+        {
+          channel: 'PUSH',
+          platform: 'APNS',
+          token: 'secret-1',
+          deviceId: 'phone',
+          registeredAt: 1,
+        },
+        { channel: 'SMS', token: '+15551234567' },
+        {
+          channel: 'push',
+          platform: 'FCM',
+          token: 'secret-2',
+          deviceId: 'tablet',
+          registeredAt: 2,
+          valid: false,
+        },
+        { channel: 'PUSH', platform: 'APNS', token: 'secret-3' },
+      ],
+    });
+
+    const devices = await listMemberDevices(client, 'tbl', 'NICHOLS', 'sub-1');
+
+    expect(devices).toEqual([
+      { deviceId: 'tablet', platform: 'FCM', registeredAt: 2, valid: false },
+      { deviceId: 'phone', platform: 'APNS', registeredAt: 1, valid: true },
+      { deviceId: null, platform: 'APNS', registeredAt: null, valid: true },
+    ]);
+    expect(JSON.stringify(devices)).not.toContain('secret');
+    expect(inputs[0]).toMatchObject({
+      Key: { pk: 'DEPT#NICHOLS#MEMBER#sub-1', sk: 'METADATA' },
+      ConsistentRead: true,
+    });
+  });
+
+  it('returns undefined when the member has no row in the department', async () => {
+    const { client } = fakeDoc(undefined);
+
+    await expect(listMemberDevices(client, 'tbl', 'NICHOLS', 'sub-1')).resolves.toBeUndefined();
   });
 });

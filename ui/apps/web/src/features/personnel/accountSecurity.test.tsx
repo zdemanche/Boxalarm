@@ -149,9 +149,27 @@ test('a partial reset (409) keeps the dialog open with the server explanation', 
   });
 });
 
-test('report device lost posts to the revoke route and announces the result', async () => {
-  const posts: unknown[] = [];
+const DEVICES = [
+  {
+    deviceId: 'install-tablet-41be02',
+    platform: 'FCM',
+    registeredAt: 1_790_000_000_000,
+    valid: true,
+  },
+  {
+    deviceId: 'install-phone-7f3a9c',
+    platform: 'APNS',
+    registeredAt: 1_789_000_000_000,
+    valid: true,
+  },
+  { deviceId: null, platform: 'APNS', registeredAt: null, valid: true },
+];
+
+function serveDevicesAndRevoke(posts: unknown[]) {
   server.use(
+    http.get('/api/v1/platform/sessions/m1/devices', () =>
+      HttpResponse.json({ memberId: 'm1', devices: DEVICES }),
+    ),
     http.post('/api/v1/platform/sessions/revoke', async ({ request }) => {
       posts.push(await request.json());
       return HttpResponse.json(
@@ -160,6 +178,11 @@ test('report device lost posts to the revoke route and announces the result', as
       );
     }),
   );
+}
+
+test('report device lost defaults to all devices and says every device must sign in again', async () => {
+  const posts: unknown[] = [];
+  serveDevicesAndRevoke(posts);
   const user = userEvent.setup();
   renderSection(['ADMIN']);
 
@@ -167,13 +190,68 @@ test('report device lost posts to the revoke route and announces the result', as
   const dialog = await screen.findByRole('dialog', {
     name: 'Report a lost device for Sam Lee?',
   });
+  const group = within(dialog).getByRole('group', { name: 'Which device was lost?' });
+  expect(within(group).getByRole('radio', { name: 'All devices' })).toHaveProperty('checked', true);
+  // Platform, last registration and the installation-id suffix; never the whole id or a token.
+  const phone = await within(group).findByRole('radio', { name: /iPhone .* id …7f3a9c/ });
+  expect(phone).toHaveProperty('checked', false);
+  expect(within(group).getByRole('radio', { name: /Android .* id …41be02/ })).toBeTruthy();
+  expect(within(group).getByText(/older registration has no device id/)).toBeTruthy();
+  expect(within(dialog).getByText(/must sign in again on each one/)).toBeTruthy();
   expect(within(dialog).getByText(/SMS and voice paging continue/)).toBeTruthy();
+
   await user.click(within(dialog).getByRole('button', { name: 'Sign out everywhere' }));
 
   await waitFor(() => {
     expect(screen.getByRole('status').textContent).toContain('signed out everywhere');
   });
   expect(posts).toEqual([{ memberId: 'm1' }]);
+});
+
+test('report device lost removes only the device the admin picks', async () => {
+  const posts: unknown[] = [];
+  serveDevicesAndRevoke(posts);
+  const user = userEvent.setup();
+  renderSection(['CHIEF']);
+
+  await user.click(await screen.findByRole('button', { name: 'Report device lost' }));
+  const dialog = await screen.findByRole('dialog');
+  await user.click(await within(dialog).findByRole('radio', { name: /iPhone .* id …7f3a9c/ }));
+  expect(
+    within(dialog).getByText(/Only the lost device stops receiving dispatch notifications/),
+  ).toBeTruthy();
+  expect(within(dialog).getByText(/must sign in again on each one/)).toBeTruthy();
+
+  await user.click(within(dialog).getByRole('button', { name: 'Sign out everywhere' }));
+
+  await waitFor(() => {
+    expect(screen.getByRole('status').textContent).toContain('no longer receives dispatch');
+  });
+  expect(posts).toEqual([{ memberId: 'm1', deviceId: 'install-phone-7f3a9c' }]);
+});
+
+test('report device lost still offers all devices when the list cannot load', async () => {
+  const posts: unknown[] = [];
+  serveDevicesAndRevoke(posts);
+  server.use(
+    http.get('/api/v1/platform/sessions/m1/devices', () =>
+      HttpResponse.json(
+        { type: 'about:blank', title: 'Service Unavailable', status: 503, traceId: 't' },
+        { status: 503 },
+      ),
+    ),
+  );
+  const user = userEvent.setup();
+  renderSection(['CHIEF']);
+
+  await user.click(await screen.findByRole('button', { name: 'Report device lost' }));
+  const dialog = await screen.findByRole('dialog');
+  expect(await within(dialog).findByText(/Could not load this member’s devices/)).toBeTruthy();
+  await user.click(within(dialog).getByRole('button', { name: 'Sign out everywhere' }));
+
+  await waitFor(() => {
+    expect(posts).toEqual([{ memberId: 'm1' }]);
+  });
 });
 
 test('a 403 shows a plain refusal, never the policy detail', async () => {
