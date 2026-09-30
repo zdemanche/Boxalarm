@@ -78,9 +78,11 @@ function statefulDynamoClient(
   sheet?: Record<string, unknown>,
 ): DynamoDBDocumentClient {
   const store = new Map<string, Record<string, unknown>>();
+  if (sheet) store.set(keyOf(sheet.pk as string, sheet.sk as string), sheet);
   const send = vi.fn((command: unknown) => {
     if (command instanceof ScanCommand) {
-      return Promise.resolve({ Items: sheet ? [sheet] : [] });
+      // Review R2-M1: the submit path reads its sheet by key, never a table Scan.
+      return Promise.reject(new Error('ScanCommand on the submit path'));
     }
     if (command instanceof QueryCommand) {
       return Promise.resolve(apparatusExists ? { Items: [{ pk: APPARATUS_PK }] } : { Items: [] });
@@ -128,7 +130,7 @@ function fakeDynamoClient(options: {
 }): DynamoDBDocumentClient {
   const send = vi.fn((command: unknown) => {
     if (command instanceof ScanCommand) {
-      return Promise.resolve({ Items: [] });
+      return Promise.reject(new Error('ScanCommand on the submit path'));
     }
     if (command instanceof QueryCommand) {
       return Promise.resolve(
@@ -506,6 +508,72 @@ describe('postChecks handler', () => {
         { code: 'BRAKES', pass: false, note: null, answeredBy: 'ITEM', critical: true },
         { code: 'LIGHTS', pass: true, note: null, answeredBy: 'BULK' },
       ]);
+    });
+
+    it('reads the sheet by key and never Scans the table', async () => {
+      const { result, client } = await submit([
+        { code: 'BRAKES', pass: true, answeredBy: 'BULK' },
+        { code: 'LIGHTS', pass: true, answeredBy: 'ITEM' },
+      ]);
+      expect(result).toMatchObject({ statusCode: 400 });
+      const calls = (client.send as ReturnType<typeof vi.fn>).mock.calls.map(
+        (c: unknown[]) => c[0],
+      );
+      expect(calls.some((c) => c instanceof ScanCommand)).toBe(false);
+      expect(
+        calls.some(
+          (c) =>
+            c instanceof GetCommand &&
+            (c.input.Key as { pk: string }).pk === 'DEPT#dept-001#CHECKLIST_TEMPLATE#template-1',
+        ),
+      ).toBe(true);
+    });
+
+    it('does not judge against a template that no longer applies to the unit', async () => {
+      const client = statefulDynamoClient(true, { ...SHEET, applicableApparatusIds: ['other'] });
+      const handler = (await importHandler())({
+        client,
+        authzClient: fakeAuthzClient('ALLOW'),
+        now: NOW,
+      });
+      const result = await handler(
+        buildEvent(
+          validBody({ itemResults: [{ code: 'BRAKES', pass: true, answeredBy: 'BULK' }] }),
+          'ENGINE-2',
+        ),
+      );
+      expect(result).toMatchObject({ statusCode: 201 });
+    });
+
+    it('judges a department-default run only while the default is still that version', async () => {
+      const config = {
+        pk: 'DEPT#dept-001',
+        sk: 'CONFIG#CHECKLIST_DEFAULTS',
+        version: 3,
+        value: {
+          items: [{ code: 'BRAKES', label: 'Brakes', requiresPhoto: false, critical: true }],
+        },
+      };
+      const bulk = [{ code: 'BRAKES', pass: true, answeredBy: 'BULK' }];
+      const run = async (templateId: string) => {
+        const handler = (await importHandler())({
+          client: statefulDynamoClient(true, config),
+          authzClient: fakeAuthzClient('ALLOW'),
+          now: NOW,
+        });
+        return handler(buildEvent(validBody({ templateId, itemResults: bulk }), 'ENGINE-2'));
+      };
+      expect(await run('department-default-v3')).toMatchObject({ statusCode: 400 });
+      expect(await run('department-default-v2')).toMatchObject({ statusCode: 201 });
+    });
+
+    it('refuses a templateId containing the key delimiter before any read', async () => {
+      const { result, client } = await submit(
+        [{ code: 'LIGHTS', pass: true, answeredBy: 'ITEM' }],
+        'a#b',
+      );
+      expect(result).toMatchObject({ statusCode: 400 });
+      expect((client.send as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(0);
     });
 
     it('keeps a run answered on a sheet that has since changed, as sent', async () => {

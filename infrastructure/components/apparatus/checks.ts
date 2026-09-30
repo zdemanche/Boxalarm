@@ -53,16 +53,16 @@ export class Checks extends pulumi.ComponentResource {
       ],
     });
 
-    // postChecks.ts: GSI3 lookup; the unit's current sheet for the critical-item rule (the
-    // same template Scan + default-sheet GetItem as checklist-get); a transaction of three Puts
-    // (run, idempotency lock, audit row); on a replay, consistent GetItems of the lock and run.
+    // postChecks.ts: GSI3 lookup; the sheet the run names, read by key for the critical-item
+    // rule (GetItem of its CHECKLIST_TEMPLATE or the CONFIG#CHECKLIST_DEFAULTS row - never a
+    // Scan); a transaction of three Puts (run, idempotency lock, audit row); on a replay,
+    // consistent GetItems of the lock and the existing run.
     this.submitCheckLambda = apparatusRoute(this, name, args, {
       functionKey: "checks-submit",
       routeKey: "POST /api/v1/apparatus/{unitId}/checks",
       cedar: true,
       grants: [
         { sid: "SubmitCheckApparatusLookup", actions: ["dynamodb:Query"], on: ["GSI3"] },
-        { sid: "SubmitCheckSheetScan", actions: ["dynamodb:Scan"], on: ["table"] },
         {
           sid: "SubmitCheckWrite",
           actions: ["dynamodb:PutItem", "dynamodb:GetItem"],

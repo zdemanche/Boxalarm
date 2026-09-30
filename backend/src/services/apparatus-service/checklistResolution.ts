@@ -1,6 +1,6 @@
 import { GetCommand, QueryCommand, ScanCommand } from '@aws-sdk/lib-dynamodb';
 import type { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
-import { buildDeptScopedPk } from '@boxalarm/dept-scope';
+import { assertNoDelimiter, buildDeptScopedPk } from '@boxalarm/dept-scope';
 import type { VerifiedDeptId } from '@boxalarm/dept-scope';
 import { GSI3_INDEX_NAME } from './dynamoClient.js';
 
@@ -148,4 +148,24 @@ export async function resolveDepartmentDefaultTemplate(
     applicableApparatusIds: [],
     items: value.items.map(toChecklistItem),
   };
+}
+
+/**
+ * One CHECKLIST_TEMPLATE by id - a keyed GetItem, for a caller that already knows which sheet it
+ * means (a submitted run names its templateId). The id must not contain the key delimiter.
+ */
+export async function getChecklistTemplateById(
+  client: DynamoDBDocumentClient,
+  tableName: string,
+  deptId: VerifiedDeptId,
+  templateId: string,
+): Promise<ChecklistTemplate | undefined> {
+  assertNoDelimiter(templateId, 'templateId');
+  const result = await client.send(
+    new GetCommand({
+      TableName: tableName,
+      Key: { pk: buildDeptScopedPk(deptId, 'CHECKLIST_TEMPLATE', templateId), sk: 'METADATA' },
+    }),
+  );
+  return result.Item ? toChecklistTemplate(result.Item) : undefined;
 }
