@@ -474,6 +474,44 @@ describe('alerting topic producer -> channel worker contract', () => {
     ]);
   });
 
+  // Post-merge MINOR-1: a member set to LOA/RETIRED after the page was published (the snapshot's
+  // `active` went false) gets none of the queued sends, and no voice escalation is published.
+  it('chain: a member set inactive after tone 1 gets no queued send and no voice escalation', async () => {
+    const ddb = createFakeDdb([
+      METADATA_ITEM,
+      memberSnapshot('mbr-1'),
+      unackedRosterEntry('mbr-1'),
+    ]);
+    const sns = createFakeSns();
+    mockAwsClients(ddb.client, sns.client);
+    const { handler } = await import('../fanout/handler.js');
+    await handler(dispatchAlertInsertEvent());
+    expect(sns.published.length).toBeGreaterThan(0);
+
+    ddb.items.set('DEPT#NICHOLS#ELIGIBILITY#MEMBER#mbr-1', {
+      ...memberSnapshot('mbr-1'),
+      active: false,
+    });
+    const provider = providerSpy();
+    for (const publish of sns.published) {
+      expect(await deliverThroughWorker(publish, provider)).toEqual({ batchItemFailures: [] });
+    }
+    expect(provider.count()).toBe(0);
+
+    const published = sns.published.length;
+    const escalation = await import('../escalation/escalationHandler.js');
+    expect(
+      await escalation.handler({
+        deptId: 'NICHOLS',
+        dispatchId: DISPATCH_ID,
+        memberId: 'mbr-1',
+        toneSequence: 1,
+        channel: 'voice',
+      }),
+    ).toEqual({ outcome: 'SKIPPED_INACTIVE' });
+    expect(sns.published.length).toBe(published);
+  });
+
   it('chain: a voice escalation reaches the provider through the real voice worker (receipt keys do not collide)', async () => {
     const ddb = createFakeDdb([
       METADATA_ITEM,

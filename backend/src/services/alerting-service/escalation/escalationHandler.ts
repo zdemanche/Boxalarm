@@ -20,7 +20,11 @@ export interface EscalationSchedulePayload {
 }
 
 export type EscalationOutcome =
-  'ESCALATED' | 'SKIPPED_ACKED' | 'SKIPPED_ALREADY_ESCALATED' | 'SKIPPED_NOT_FOUND';
+  | 'ESCALATED'
+  | 'SKIPPED_ACKED'
+  | 'SKIPPED_ALREADY_ESCALATED'
+  | 'SKIPPED_NOT_FOUND'
+  | 'SKIPPED_INACTIVE';
 
 function isEscalationSchedulePayload(value: unknown): value is EscalationSchedulePayload {
   if (typeof value !== 'object' || value === null) {
@@ -48,6 +52,28 @@ function asTransactionCancellation(error: unknown): TransactCancellationError | 
   return error instanceof Error && error.name === 'TransactionCanceledException'
     ? error
     : undefined;
+}
+
+/** Whether the member's eligibility snapshot says they are no longer paged (`active: false`). */
+async function isInactive(
+  ddb: ReturnType<typeof createDynamoClient>,
+  tableName: string,
+  deptId: ReturnType<typeof toVerifiedDeptId>,
+  memberId: string,
+  correlationId: string,
+): Promise<boolean> {
+  try {
+    const snapshot = await ddb.send(
+      new GetCommand({
+        TableName: tableName,
+        Key: { pk: buildDeptScopedPk(deptId, 'ELIGIBILITY'), sk: `MEMBER#${memberId}` },
+      }),
+    );
+    return snapshot.Item?.active === false;
+  } catch (error) {
+    logError('alerting.escalation.eligibility_read_failed', error, { correlationId });
+    return false;
+  }
 }
 
 export const handler = async (payload: unknown): Promise<{ outcome: EscalationOutcome }> => {
@@ -85,6 +111,15 @@ export const handler = async (payload: unknown): Promise<{ outcome: EscalationOu
     logInfo('alerting.escalation.skipped_acked', { correlationId, ackStatus: roster.ackStatus });
     emitOutcomeMetric(METRIC_NAMESPACE, 'EscalationSkipped', 'Acked');
     return { outcome: 'SKIPPED_ACKED' };
+  }
+
+  // Post-merge MINOR-1: a member set to LOA or RETIRED after tone 1 is no longer paged - the
+  // snapshot's `active` went false - so the no-ack call for this tone is not placed either. Read
+  // failures page anyway: the voice worker re-checks, and a silent skip is the worse failure.
+  if (await isInactive(ddb, tableName, deptId, memberId, correlationId)) {
+    logInfo('alerting.escalation.skipped_inactive', { correlationId });
+    emitOutcomeMetric(METRIC_NAMESPACE, 'EscalationSkipped', 'Inactive');
+    return { outcome: 'SKIPPED_INACTIVE' };
   }
 
   // The voice worker speaks incidentType/address, so source them from the dispatch's METADATA

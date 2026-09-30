@@ -743,6 +743,7 @@ export function createChannelWorkerHandler(
 
       const deptId = toVerifiedDeptId({ deptId: envelope.deptId });
       let contactChannels: ContactChannelSnapshot[] | undefined;
+      let inactive: boolean;
       try {
         const snapshot = await ddb.send(
           new GetCommand({
@@ -754,6 +755,7 @@ export function createChannelWorkerHandler(
           }),
         );
         contactChannels = snapshot.Item?.contactChannels as ContactChannelSnapshot[] | undefined;
+        inactive = snapshot.Item?.active === false;
       } catch (error) {
         logError('alerting.channel.eligibility_read_failed', error, {
           correlationId: envelope.dispatchId,
@@ -761,6 +763,19 @@ export function createChannelWorkerHandler(
           channel,
         });
         throw error;
+      }
+
+      // Post-merge MINOR-1: a member set to LOA or RETIRED after the page was published is no
+      // longer paged - queued sends and a tone's voice call for them are dropped here, counted.
+      // A self-test/canary is the member's own check and is not affected.
+      if (inactive && envelope.isTest !== true) {
+        logInfo('alerting.channel.inactive_skipped', {
+          correlationId: envelope.dispatchId,
+          memberId: envelope.memberId,
+          channel,
+        });
+        emitOutcomeMetric(METRIC_NAMESPACE, 'InactiveSkipped', channel);
+        return;
       }
 
       const common = {
