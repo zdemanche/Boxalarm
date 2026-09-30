@@ -6,6 +6,7 @@ import {
   GetCommand,
   PutCommand,
   QueryCommand,
+  UpdateCommand,
 } from '@aws-sdk/lib-dynamodb';
 import type { EventBridgeClient, PutEventsRequestEntry } from '@aws-sdk/client-eventbridge';
 import { marshall } from '@aws-sdk/util-dynamodb';
@@ -109,8 +110,11 @@ describe('device loss: register phone + tablet -> report lost -> eligibility sna
     await container?.stop();
   });
 
+  let drain: ((outbox: Record<string, unknown>) => Promise<PutEventsRequestEntry>) | undefined;
+
   beforeEach(() => {
     vi.resetModules();
+    drain = undefined;
     process.env.ALERTING_TABLE_NAME = ALERTING_TABLE;
     process.env.PLATFORM_TABLE_NAME = PLATFORM_TABLE;
     process.env.PLATFORM_EVENT_BUS_NAME = 'boxalarm-dev-platform-bus';
@@ -171,8 +175,9 @@ describe('device loss: register phone + tablet -> report lost -> eligibility sna
   }
 
   /**
-   * The deployed drain: stream INSERT of the outbox row -> PutEvents entry. One handler per
-   * test - the drain caches its EventBridge client for the module's life.
+   * The deployed drain: stream INSERT of the outbox row -> PutEvents entry. One per test
+   * (`drain`, reset with the module registry) - the drain caches its EventBridge client for
+   * the module's life, so a second fake would never be called.
    */
   async function createDrain(): Promise<
     (outbox: Record<string, unknown>) => Promise<PutEventsRequestEntry>
@@ -213,13 +218,16 @@ describe('device loss: register phone + tablet -> report lost -> eligibility sna
   }
 
   /** Drains and consumes every outbox row in write order; returns the member's snapshot. */
-  async function project(memberId: string): Promise<Record<string, unknown> | undefined> {
-    const rows = await outboxRows(memberId);
+  async function project(
+    memberId: string,
+    alreadyProjected = 0,
+  ): Promise<Record<string, unknown> | undefined> {
+    const rows = (await outboxRows(memberId)).slice(alreadyProjected);
     // Every write's event is strictly later than the one before it.
     const times = rows.map((row) => Date.parse(String(row.eventTime)));
     expect(new Set(times).size).toBe(times.length);
     const { handler: consume } = await import('./memberUpdatedHandler.js');
-    const drain = await createDrain();
+    drain ??= await createDrain();
     for (const row of rows) {
       const entry = await drain(row);
       expect(entry).toMatchObject({
@@ -285,5 +293,60 @@ describe('device loss: register phone + tablet -> report lost -> eligibility sna
     expect(
       resolvePushTargets(snapshot?.contactChannels as Parameters<typeof resolvePushTargets>[0]),
     ).toEqual([]);
+  }, 60_000);
+
+  // Review minor 1: the snapshot drifted from the member row - the row no longer has the
+  // phone (its event never reached alerting) but the snapshot still pages it. Reporting the
+  // phone lost finds nothing to remove, yet must still publish the row's list so the lost
+  // phone stops being paged.
+  it('repairs a drifted snapshot: device loss with nothing to remove still drops the phone', async () => {
+    const memberId = 'sub-drifted';
+    await seedMember(memberId);
+    await register(memberId, PHONE);
+    await register(memberId, TABLET);
+    const before = await project(memberId);
+    expect(pushEntries(before)).toHaveLength(2);
+    const projected = (await outboxRows(memberId)).length;
+
+    // The phone leaves the member row without an event (the drift).
+    const { Item: row } = await docClient.send(
+      new GetCommand({
+        TableName: PLATFORM_TABLE,
+        Key: { pk: `DEPT#${DEPT}#MEMBER#${memberId}`, sk: 'METADATA' },
+        ConsistentRead: true,
+      }),
+    );
+    await docClient.send(
+      new UpdateCommand({
+        TableName: PLATFORM_TABLE,
+        Key: { pk: `DEPT#${DEPT}#MEMBER#${memberId}`, sk: 'METADATA' },
+        UpdateExpression: 'SET contactChannels = :cc, updatedAt = :ts',
+        ExpressionAttributeValues: {
+          ':cc': (row?.contactChannels as Array<{ deviceId?: string }>).filter(
+            (entry) => entry.deviceId !== PHONE.deviceId,
+          ),
+          ':ts': (row?.updatedAt as number) + 1,
+        },
+      }),
+    );
+    expect(pushEntries(await project(memberId, projected))).toHaveLength(2);
+
+    await expect(
+      invalidateMemberPush(
+        docClient,
+        PLATFORM_TABLE,
+        DEPT,
+        memberId,
+        'trace-drift',
+        'admin-1',
+        PHONE.deviceId,
+      ),
+    ).resolves.toBe('no-push-entry');
+
+    const snapshot = await project(memberId, projected);
+    expect(pushEntries(snapshot)).toEqual([expect.objectContaining(TABLET)]);
+    expect(
+      resolvePushTargets(snapshot?.contactChannels as Parameters<typeof resolvePushTargets>[0]),
+    ).toEqual([{ token: TABLET.token, platform: TABLET.platform, deviceKey: TABLET.deviceId }]);
   }, 60_000);
 });

@@ -101,13 +101,20 @@ describe('invalidateMemberPush (M2)', () => {
     });
   });
 
-  it('writes nothing when the member has no PUSH entry', async () => {
+  // Review minor 1: nothing to remove still re-publishes the row's list, so a snapshot that
+  // drifted (still holding a push device the row no longer has) is repaired.
+  it('still emits the current device list when the member has no PUSH entry', async () => {
     const { client, commands } = docWith({ contactChannels: [{ channel: 'SMS' }] });
 
     await expect(
       invalidateMemberPush(client, 'tbl', 'NICHOLS', 'sub-1', 't', 'admin-1'),
     ).resolves.toBe('no-push-entry');
-    expect(commands.map((c) => c.name)).toEqual(['GetCommand']);
+    const transact = commands.find((c) => c.name === 'TransactWriteCommand');
+    const items = transact?.input.TransactItems as Array<Record<string, Record<string, unknown>>>;
+    expect(items[1]?.Put?.Item).toMatchObject({
+      eventType: 'personnel.member.updated',
+      payload: { contactChannels: [{ channel: 'SMS' }] },
+    });
   });
 
   it('writes nothing when the member row does not exist', async () => {
@@ -249,16 +256,17 @@ describe('invalidateMemberPush (M2)', () => {
     });
   });
 
-  it('writes nothing when the identified device is already gone', async () => {
-    const { client, commands } = docWith({
-      updatedAt: 3,
-      contactChannels: [{ channel: 'PUSH', token: 'tok-tablet', deviceId: 'tablet' }],
-    });
+  it('reports no-push-entry but still emits the list when the identified device is gone', async () => {
+    const tablet = { channel: 'PUSH', token: 'tok-tablet', deviceId: 'tablet' };
+    const { client, commands } = docWith({ updatedAt: 3, contactChannels: [tablet] });
 
     await expect(
       invalidateMemberPush(client, 'tbl', 'NICHOLS', 'sub-1', 't', 'admin-1', 'phone'),
     ).resolves.toBe('no-push-entry');
-    expect(commands.map((c) => c.name)).toEqual(['GetCommand']);
+    const transact = commands.find((c) => c.name === 'TransactWriteCommand');
+    const items = transact?.input.TransactItems as Array<Record<string, Record<string, unknown>>>;
+    expect(items[0]?.Update?.ExpressionAttributeValues).toMatchObject({ ':cc': [tablet] });
+    expect(items[1]?.Put?.Item).toMatchObject({ payload: { contactChannels: [tablet] } });
   });
 });
 

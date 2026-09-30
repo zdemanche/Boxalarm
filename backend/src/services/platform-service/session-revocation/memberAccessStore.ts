@@ -71,6 +71,12 @@ export type PushInvalidationResult = 'invalidated' | 'no-push-entry' | 'no-membe
  * Decision (2026-09-29, coordinator): when the admin identifies the lost device (`deviceId`)
  * only that device is removed and the member's other devices keep being paged; otherwise
  * every push device is removed. The global sign-out still ends every session either way.
+ *
+ * Review minor 1: the event is ALWAYS written, with the member's current device list, even
+ * when nothing was removed ('no-push-entry'). The alerting snapshot is a projection that can
+ * drift from the member row (a lost or out-of-order event); device loss is the moment an
+ * admin says "this phone must stop", so it re-asserts the row's list and repairs the
+ * snapshot instead of trusting it.
  */
 export async function invalidateMemberPush(
   docClient: DynamoDBDocumentClient,
@@ -81,13 +87,19 @@ export async function invalidateMemberPush(
   actorId: string,
   deviceId?: string,
 ): Promise<PushInvalidationResult> {
+  // Re-set on every attempt: writePushDevices re-reads and re-applies after a lost race.
+  let removed = false;
   const outcome = await writePushDevices(
     docClient,
     tableName,
     toVerifiedDeptId({ deptId }),
     memberId,
-    (current) =>
-      deviceId === undefined ? withoutAllDevices(current) : withoutDevice(current, deviceId),
+    (current) => {
+      const next =
+        deviceId === undefined ? withoutAllDevices(current) : withoutDevice(current, deviceId);
+      removed = next.length !== current.length;
+      return next;
+    },
     {
       correlationId,
       changedBy: {
@@ -96,14 +108,12 @@ export async function invalidateMemberPush(
         actorId,
         ...(deviceId !== undefined ? { deviceId } : {}),
       },
-      skipIfUnchanged: true,
     },
   );
-  return outcome === 'written'
-    ? 'invalidated'
-    : outcome === 'not_found'
-      ? 'no-member'
-      : 'no-push-entry';
+  if (outcome === 'not_found') {
+    return 'no-member';
+  }
+  return removed ? 'invalidated' : 'no-push-entry';
 }
 
 /**
