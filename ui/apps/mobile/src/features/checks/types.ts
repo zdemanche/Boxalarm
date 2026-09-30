@@ -15,6 +15,9 @@ export interface ChecklistItem {
   code: string;
   label: string;
   requiresPhoto: boolean;
+  /** Must be answered one by one (brakes, SCBA pressure): never included in "Mark the other N
+   * OK". The checklist API doesn't send this flag yet, so today it is always absent. */
+  critical?: boolean;
 }
 
 export interface ChecklistTemplate {

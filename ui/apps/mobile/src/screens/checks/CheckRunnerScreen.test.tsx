@@ -1,5 +1,5 @@
 import { targetSize } from '@boxalarm/design-tokens';
-import { act, fireEvent, render } from '@testing-library/react-native';
+import { act, fireEvent, render, screen } from '@testing-library/react-native';
 import { AccessibilityInfo } from 'react-native';
 import { launchCamera } from 'react-native-image-picker';
 import { kvDelete } from '../../sync/kvStore';
@@ -14,6 +14,19 @@ jest.mock('@react-navigation/native', () => ({
   useRoute: () => mockRoute,
   useNavigation: () => ({ goBack: jest.fn(), navigate: mockNavigate }),
 }));
+
+/** Answer the first item by hand, then bulk-pass the rest (bulk OK needs one real answer). */
+async function passEveryItem() {
+  const pass = (await screen.findAllByRole('radio')).find(
+    (r) => r.props.accessibilityLabel === 'Pass',
+  )!;
+  await act(async () => {
+    fireEvent.press(pass);
+  });
+  await act(async () => {
+    fireEvent.press(await screen.findByText(/^Mark the other \d+ OK$/));
+  });
+}
 
 beforeEach(async () => {
   mockNavigate.mockClear();
@@ -58,15 +71,46 @@ test('submitting with items unanswered names them instead of submitting', async 
   submitSpy.mockRestore();
 });
 
-test('"Mark the other N OK" passes every unanswered item in one tap', async () => {
-  const { findByText } = await render(<CheckRunnerScreen />);
+test('"Mark the other N OK" appears only after an item is answered, then passes the rest', async () => {
+  const { findByText, queryByText, findAllByRole } = await render(<CheckRunnerScreen />);
 
+  await findByText('Tires and wheels');
+  expect(queryByText(/Mark the other/)).toBeNull();
+  const pass = (await findAllByRole('radio')).find((r) => r.props.accessibilityLabel === 'Pass')!;
   await act(async () => {
-    fireEvent.press(await findByText('Mark the other 5 OK'));
+    fireEvent.press(pass);
+  });
+  await act(async () => {
+    fireEvent.press(await findByText('Mark the other 4 OK'));
   });
 
   expect(await findByText('5 of 5 checked')).toBeTruthy();
   expect(await findByText('Submit check')).toBeTruthy();
+});
+
+test('critical items are never included in bulk OK', async () => {
+  const spy = jest.spyOn(mockChecksRepository, 'getChecklistTemplate').mockResolvedValueOnce({
+    templateId: 'CT-CRIT',
+    name: 'Critical sheet',
+    items: [
+      { code: 'A', label: 'Lights', requiresPhoto: false },
+      { code: 'B', label: 'Brakes', requiresPhoto: false, critical: true },
+      { code: 'C', label: 'Mirrors', requiresPhoto: false },
+    ],
+  });
+  const { findByText, findAllByRole } = await render(<CheckRunnerScreen />);
+
+  await findByText('Lights');
+  const pass = (await findAllByRole('radio')).find((r) => r.props.accessibilityLabel === 'Pass')!;
+  await act(async () => {
+    fireEvent.press(pass);
+  });
+  await act(async () => {
+    fireEvent.press(await findByText('Mark the other 1 OK'));
+  });
+
+  expect(await findByText('Submit check — 1 unanswered')).toBeTruthy();
+  spy.mockRestore();
 });
 
 test('Pass and Fail are radios that expose which one is selected', async () => {
@@ -175,9 +219,7 @@ test('completing the check submits optimistically and confirms immediately, no s
   const { findByText } = await render(<CheckRunnerScreen />);
 
   await findByText('Tires and wheels');
-  await act(async () => {
-    fireEvent.press(await findByText('Mark the other 5 OK'));
-  });
+  await passEveryItem();
   await act(async () => {
     fireEvent.press(await findByText('Submit check'));
   });
@@ -205,9 +247,7 @@ test('announces check completion for screen reader users, since the screen swaps
   const { findByText } = await render(<CheckRunnerScreen />);
 
   await findByText('Tires and wheels');
-  await act(async () => {
-    fireEvent.press(await findByText('Mark the other 5 OK'));
-  });
+  await passEveryItem();
   await act(async () => {
     fireEvent.press(await findByText('Submit check'));
   });
@@ -306,9 +346,7 @@ test('a failed local save does not confirm the check, and a retry reuses the ide
   const { findByText, findByRole, queryByText } = await render(<CheckRunnerScreen />);
 
   await findByText('Tires and wheels');
-  await act(async () => {
-    fireEvent.press(await findByText('Mark the other 5 OK'));
-  });
+  await passEveryItem();
   await act(async () => {
     fireEvent.press(await findByText('Submit check'));
   });

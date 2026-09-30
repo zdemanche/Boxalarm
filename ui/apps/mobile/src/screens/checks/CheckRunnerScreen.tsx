@@ -282,7 +282,13 @@ export function CheckRunnerScreen() {
 
   const isGated = (item: ChecklistItem) => item.requiresPhoto && !photosCaptured[item.code];
   const unanswered = template.items.filter((item) => !(item.code in results));
-  const markableAsOk = unanswered.filter((item) => !isGated(item));
+  // Bulk OK is for "the rest are fine" after looking at the truck, not a one-tap sign-off: it
+  // appears only once at least one item has been answered, and never covers photo-gated or
+  // critical items (review m1).
+  const markableAsOk =
+    answeredCount === 0
+      ? []
+      : unanswered.filter((item) => !isGated(item) && item.critical !== true);
 
   const markRestOk = () => {
     setSubmitError(null);
