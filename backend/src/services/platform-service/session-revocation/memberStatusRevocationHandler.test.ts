@@ -222,6 +222,33 @@ describe('memberStatusRevocationHandler', () => {
     );
   });
 
+  // Security-web MINOR 9: a redriven pre-deptId LOA event must not lock out a member who is
+  // ACTIVE today - the department comes from Cognito and the row decides.
+  it('re-reads the row for a legacy event without deptId, so a redriven LOA leaves an ACTIVE member enabled', async () => {
+    const disableMemberLogin = vi.fn().mockResolvedValue(undefined);
+    const enableMemberLogin = vi.fn().mockResolvedValue(undefined);
+    const readMemberStatus = vi.fn().mockResolvedValue('ACTIVE');
+    mockStore(readMemberStatus);
+    mockCognito({
+      resolveMemberDeptId: vi.fn().mockResolvedValue('NICHOLS'),
+      disableMemberLogin,
+      enableMemberLogin,
+    });
+
+    const { handler } = await import('./memberStatusRevocationHandler.js');
+    const result = await handler(
+      { Records: [sqsRecord(memberUpdatedEvent('mbr-102', 'LOA'))] },
+      {} as never,
+      () => undefined,
+    );
+
+    expect(result).toEqual({ batchItemFailures: [] });
+    expect(readMemberStatus).toHaveBeenCalledWith({}, 'platform-table', 'NICHOLS', 'mbr-102');
+    expect(disableMemberLogin).not.toHaveBeenCalled();
+    expect(enableMemberLogin).toHaveBeenCalled();
+    expect(writeRevocationMarker).not.toHaveBeenCalled();
+  });
+
   it('writes no marker when the member returns to ACTIVE', async () => {
     mockCognito({});
 
@@ -713,12 +740,10 @@ describe('memberStatusRevocationHandler', () => {
     });
 
     it("processes one member's records in arrival order within a batch", async () => {
-      let row = 'ACTIVE';
-      mockStore(() => Promise.resolve(row));
+      // No member row to re-read (a login without a department): order alone decides.
+      mockStore(() => Promise.resolve(undefined));
       const cognito = fakeCognito();
       const { handler } = await import('./memberStatusRevocationHandler.js');
-      // Without a deptId there is no re-read: order alone decides the final state.
-      row = 'ACTIVE';
       await handler(
         {
           Records: [

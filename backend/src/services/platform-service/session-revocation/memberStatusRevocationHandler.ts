@@ -132,6 +132,35 @@ async function resolveEffectiveStatus(
   return current ?? fallback;
 }
 
+/**
+ * Security-web MINOR 9: an event emitted before updateMemberStatus carried `deptId` (only a DLQ
+ * redrive can deliver one now) used to skip the row re-read and act on its own status - so a
+ * redriven LOA or RETIRED event disabled a member who is ACTIVE today. Its department is
+ * resolved from the login's custom:deptId (as applyStatus already did for the marker), so it
+ * converges on the row like every other event. A login with no department keeps the event's
+ * status: there is no row to read.
+ */
+async function withResolvedDept(
+  client: CognitoIdentityProviderClient,
+  userPoolId: string,
+  payload: MemberStatusChangedPayload,
+): Promise<MemberStatusChangedPayload> {
+  if (payload.deptId) {
+    return payload;
+  }
+  const deptId = await resolveMemberDeptId(client, { userPoolId, username: payload.memberId });
+  console.log(
+    JSON.stringify({
+      event: 'memberStatusRevocation.legacyEventDeptResolved',
+      memberId: payload.memberId,
+      resolved: deptId !== undefined,
+      correlationId: payload.correlationId,
+      service: 'platform-service',
+    }),
+  );
+  return deptId ? { ...payload, deptId } : payload;
+}
+
 type LoginState = 'disabled' | 'enabled' | 'untouched';
 
 function loginStateFor(status: string): LoginState {
@@ -162,13 +191,14 @@ async function convergeLoginState(
   client: CognitoIdentityProviderClient,
   userPoolId: string,
   tableName: string,
-  payload: MemberStatusChangedPayload,
+  event: MemberStatusChangedPayload,
 ): Promise<void> {
+  const payload = await withResolvedDept(client, userPoolId, event);
   let status = await resolveEffectiveStatus(payload, tableName, payload.status);
   for (let round = 1; round <= MAX_RECONCILE_ROUNDS; round += 1) {
     await applyStatus(client, userPoolId, tableName, payload, status);
     if (!payload.deptId) {
-      return; // A legacy event names no department: there is no row to re-read.
+      return; // A login with no department has no member row to re-read.
     }
     const after = await resolveEffectiveStatus(payload, tableName, status);
     if (loginStateFor(after) === loginStateFor(status)) {
