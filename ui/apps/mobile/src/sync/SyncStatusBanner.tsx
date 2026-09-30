@@ -38,14 +38,21 @@ export function SyncStatusBanner() {
     void syncManager.discard(item.id);
   };
 
+  const handleSendAsMe = (item: SyncItem) => {
+    AccessibilityInfo.announceForAccessibility(`Sending ${item.label} as you`);
+    void syncManager.sendAsMe(item.id);
+  };
+
   if (!status || dismissed) return null;
 
-  const failed = status.items.filter((item) => item.status === 'FAILED');
-  const rejected = status.items.filter((item) => item.status === 'REJECTED');
-  const pending = status.items.filter(
-    (item) => item.status === 'QUEUED' || item.status === 'SYNCING',
-  );
-  const hasFailed = failed.length > 0 || rejected.length > 0;
+  // Saved before this phone recorded who queued what: never sent until someone claims it (R2-M3).
+  const unowned = status.items.filter((item) => item.needsOwner);
+  const own = status.items.filter((item) => !item.needsOwner);
+  const failed = own.filter((item) => item.status === 'FAILED');
+  const rejected = own.filter((item) => item.status === 'REJECTED');
+  const pending = own.filter((item) => item.status === 'QUEUED' || item.status === 'SYNCING');
+  const heldForOthers = status.heldForOtherMembers ?? 0;
+  const hasFailed = failed.length > 0 || rejected.length > 0 || unowned.length > 0;
 
   const actionStyle = {
     minHeight: touchTarget.baseline.ios,
@@ -77,6 +84,40 @@ export function SyncStatusBanner() {
         borderBottomColor: tokens.foreground + '22',
       }}
     >
+      {unowned.map((item) => (
+        <View key={item.id} style={rowStyle}>
+          <View style={{ flexShrink: 1 }}>
+            <Text style={{ color: tokens.error, fontSize: typography.size.sm }}>
+              {item.label} was saved on this phone before it recorded who saved it. It won&apos;t be
+              sent unless you say it&apos;s yours.
+            </Text>
+          </View>
+          <View style={{ flexDirection: 'row' }}>
+            <TouchableOpacity
+              accessibilityRole="button"
+              accessibilityLabel={`Send ${item.label} as mine`}
+              onPress={() => handleSendAsMe(item)}
+              style={actionStyle}
+            >
+              <Text style={actionTextStyle}>It&apos;s mine, send it</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              accessibilityRole="button"
+              accessibilityLabel={`Discard ${item.label}`}
+              onPress={() => handleDiscard(item)}
+              style={actionStyle}
+            >
+              <Text style={actionTextStyle}>Discard</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      ))}
+      {heldForOthers > 0 && (
+        <Text style={{ color: tokens.foreground, fontSize: typography.size.sm }}>
+          {heldForOthers} item{heldForOthers === 1 ? '' : 's'} another member saved on this phone{' '}
+          {heldForOthers === 1 ? 'is' : 'are'} waiting for them to sign in again.
+        </Text>
+      )}
       {pending.length > 0 && (
         <Text style={{ color: tokens.foreground, fontSize: typography.size.sm }}>
           {pending.length} item{pending.length === 1 ? '' : 's'} waiting to sync
@@ -129,7 +170,7 @@ export function SyncStatusBanner() {
           </View>
         </View>
       ))}
-      {!hasFailed && pending.length === 0 && (
+      {!hasFailed && pending.length === 0 && heldForOthers === 0 && (
         <View
           style={{
             flexDirection: 'row',

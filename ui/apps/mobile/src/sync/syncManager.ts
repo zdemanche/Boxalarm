@@ -1,6 +1,8 @@
 import NetInfo from '@react-native-community/netinfo';
 import { ApiError, apiRequest, type AuthTokenSource } from '../lib/apiClient';
 import type { SyncQueueStatus } from '../features/sync/types';
+import { kvGet } from './kvStore';
+import { LAST_SESSION_SUB_KEY } from './memberCache';
 import * as outbox from './outbox';
 import type { OutboxKind, OutboxRow } from './outbox';
 
@@ -42,9 +44,86 @@ function rememberSynced(id: string): void {
 // Called on every auth/config change (useSyncEngine, mounted once at the app root). While signed in, a NetInfo
 // listener drains on reconnect; on sign-out it is removed so repeated login/logout cycles never
 // stack listeners. Entries queued while signed out are drained as soon as tokens arrive.
-export function configure(nextTokens: AuthTokenSource | null, nextApiBaseUrl: string | null): void {
+/**
+ * Whose work this phone is queueing and sending (R2-M3). Read from the signed-in session the
+ * token source belongs to (AuthContext's value carries memberId/deptId). Every row is stamped with
+ * it at enqueue, and only rows stamped with the signed-in member are sent: member B signing in on
+ * a station phone never sends member A's attendance, checks or mark-offs under B's token.
+ */
+interface Owner {
+  readonly memberId: string | null;
+  readonly deptId: string | null;
+}
+
+let owner: Owner = { memberId: null, deptId: null };
+
+/** Looks up the stored session's member when no configured session carries one (R3-C1). */
+let ownerResolver: (() => Promise<{ memberId: string; deptId: string | null } | null>) | null =
+  null;
+
+export function setOwnerResolver(resolver: typeof ownerResolver): void {
+  ownerResolver = resolver;
+}
+
+/**
+ * How the alert layer takes part in dropping stale ownerless answers: when the page says the call
+ * happened, and what to tell the member once their unsent answer is dropped. Registered by
+ * notificationActions so this module needs no knowledge of notifications or payloads.
+ */
+export interface StaleAnswerHooks {
+  pageTime(dispatchId: string): Promise<number | null>;
+  onDropped(dispatchId: string): Promise<void>;
+}
+
+let staleAnswerHooks: StaleAnswerHooks | null = null;
+
+export function setStaleAnswerHooks(hooks: StaleAnswerHooks | null): void {
+  staleAnswerHooks = hooks;
+}
+
+async function dropStaleOwnerlessAnswers(): Promise<void> {
+  const hooks = staleAnswerHooks;
+  const dropped = await outbox.discardStaleOwnerlessResponses(Date.now(), async (row) => {
+    const dispatchId = outbox.responseDispatchId(row);
+    return dispatchId && hooks ? hooks.pageTime(dispatchId) : null;
+  });
+  for (const row of dropped) {
+    const dispatchId = outbox.responseDispatchId(row);
+    if (dispatchId && hooks) await hooks.onDropped(dispatchId).catch(() => undefined);
+  }
+}
+
+function ownerOf(source: AuthTokenSource): Owner {
+  const session = source as AuthTokenSource & { memberId?: unknown; deptId?: unknown };
+  return {
+    memberId:
+      typeof session.memberId === 'string' && session.memberId.length > 0 ? session.memberId : null,
+    deptId: typeof session.deptId === 'string' ? session.deptId : null,
+  };
+}
+
+/** The member whose rows may be sent and shown right now; null while signed out. */
+function signedInMember(): string | null {
+  return tokens ? owner.memberId : null;
+}
+
+/** A token source that may also say whose session it is (AuthContext's value, the headless
+ * stored-session source). */
+export type SessionTokenSource = AuthTokenSource & {
+  readonly memberId?: string | null;
+  readonly deptId?: string | null;
+};
+
+export function configure(
+  nextTokens: SessionTokenSource | null,
+  nextApiBaseUrl: string | null,
+): void {
   tokens = nextTokens;
   apiBaseUrl = nextApiBaseUrl;
+  // Signed out: no configured owner. Anything queued without a session (the headless answer
+  // task) resolves its owner from the stored session instead (R3-C1).
+  owner = nextTokens ? ownerOf(nextTokens) : { memberId: null, deptId: null };
+  void notify();
   if (tokens && apiBaseUrl) {
     unsubscribeNetInfo ??= NetInfo.addEventListener((state) => {
       if (state.isConnected === true) void drain();
@@ -65,12 +144,34 @@ export function subscribe(listener: Listener): () => void {
 }
 
 async function notify(): Promise<void> {
-  const status = await outbox.getStatus(lastSyncAt);
+  await dropStaleOwnerlessAnswers();
+  // The current (or last signed-in) member's view; nothing is sent without a signed-in session.
+  const status = await outbox.getStatus(lastSyncAt, owner.memberId, Date.now());
   listeners.forEach((listener) => listener(status));
 }
 
 function unitPath(unitId: string, suffix: string): string {
   return `apparatus/${encodeURIComponent(unitId)}/${suffix}`;
+}
+
+/**
+ * The owner stamped on a new row. Never blank (R3-C1): the configured session's member, else the
+ * stored session's (headless task, cold start), else NULL - which is adoptable, and for an alert
+ * answer sent automatically by the next signed-in member within the answer window.
+ */
+async function ownerStamp(): Promise<{
+  ownerMemberId: string | null;
+  ownerDeptId: string | null;
+  answeredAsHint?: string | null;
+}> {
+  if (owner.memberId) return { ownerMemberId: owner.memberId, ownerDeptId: owner.deptId };
+  const resolved = ownerResolver ? await ownerResolver().catch(() => null) : null;
+  if (resolved) return { ownerMemberId: resolved.memberId, ownerDeptId: resolved.deptId };
+  // Ownerless (a keychain read failure): record which member's session the phone last had, so
+  // only that member's sign-in can auto-send it (R4-M1). Cleared on sign-out, so a signed-out
+  // phone records nothing.
+  const hint = await kvGet<string>(LAST_SESSION_SUB_KEY);
+  return { ownerMemberId: null, ownerDeptId: null, answeredAsHint: hint?.value ?? null };
 }
 
 async function enqueueAndDrain(
@@ -81,7 +182,7 @@ async function enqueueAndDrain(
   body: Record<string, unknown>,
   photoLocalUri?: string,
 ): Promise<void> {
-  await outbox.enqueue({ id, kind, label, path, body, photoLocalUri });
+  await outbox.enqueue({ id, kind, label, path, body, photoLocalUri, ...(await ownerStamp()) });
   await notify();
   void drain();
 }
@@ -138,6 +239,57 @@ export async function enqueueFieldCapture(
 // POST /api/v1/personnel/attendance (personnel-service attendance/handler.ts). The record's key
 // is the member plus occurredAt, and the handler answers a repeat of that key with 409, so the
 // natural key doubles as the outbox id and a 409 on replay means "already recorded".
+// POST /api/v1/personnel/members/{memberId}/availability (personnel-service availability/handler.ts).
+// Unlike attendance, a 409 here is NOT "delivered": the handler keys a mark-off on member +
+// startAt only, so a 409 can mean a different window already holds that start, and counting it
+// as success told a member paging resumed at 06:00 while the server kept a week (review M1). The
+// id covers the whole window, and a newer mark-off drops any older one still waiting to send, so
+// a correction made before sync is the one that goes out. Returns how many older unsent
+// mark-offs it replaced.
+export async function enqueueAvailability(
+  idempotencyKey: string,
+  memberId: string,
+  label: string,
+  body: Record<string, unknown>,
+): Promise<{ replaced: number; mayStand: number }> {
+  if (!memberId) throw new Error('A mark-off needs the signed-in member');
+  const path = `personnel/members/${encodeURIComponent(memberId)}/availability`;
+  // The mark-off names its member in the path, so that member owns it.
+  const stamp = await ownerStamp();
+  const row = await outbox.enqueue({
+    id: idempotencyKey,
+    kind: 'AVAILABILITY',
+    label,
+    path,
+    body,
+    ownerMemberId: memberId,
+    ownerDeptId: stamp.ownerMemberId === memberId ? stamp.ownerDeptId : null,
+  });
+  // Only a row that was never sent can be dropped: one that was attempted may have reached the
+  // server with its response lost, so it stays, and the member is told both may stand (R2-M1).
+  let replaced = 0;
+  let mayStand = 0;
+  for (const sibling of await outbox.olderSiblings(row)) {
+    if (await outbox.discardIfUnattempted(sibling.id)) replaced += 1;
+    else mayStand += 1;
+  }
+  await notify();
+  void drain();
+  return { replaced, mayStand };
+}
+
+/** lastError of an AVAILABILITY row the server answered 409 on its first attempt. */
+export const AVAILABILITY_CONFLICT =
+  'Not recorded: the server already has a mark-off starting at this exact time.';
+
+/**
+ * lastError of an AVAILABILITY row answered 409 on a retry. The start carries this phone's own
+ * seconds, so that is almost always this row's earlier send landing with its response lost: the
+ * member is probably marked off, and must not be told they will still be alerted (R2-M1).
+ */
+export const AVAILABILITY_MAY_BE_IN_EFFECT =
+  'This may already be in effect: an earlier send may have reached Boxalarm before the connection dropped. Ask an officer to check.';
+
 export async function enqueueAttendance(
   idempotencyKey: string,
   label: string,
@@ -163,13 +315,43 @@ export async function enqueueResponse(
   body: Record<string, unknown>,
 ): Promise<void> {
   const path = `alerting/dispatches/${encodeURIComponent(dispatchId)}/responses`;
-  const row = await outbox.enqueue({ id, kind: 'RESPONSE', label, path, body });
+  const row = await outbox.enqueue({
+    id,
+    kind: 'RESPONSE',
+    label,
+    path,
+    body,
+    ...(await ownerStamp()),
+  });
   const older = await outbox.olderSiblings(row);
   await Promise.all(
     older
       .filter((sibling) => sibling.status !== 'SYNCING')
       .map((sibling) => outbox.discard(sibling.id)),
   );
+  await notify();
+  void drain();
+}
+
+/** Unsent rows the member queued: what signing out would leave waiting on this phone. */
+export async function countUnsentFor(memberId: string): Promise<number> {
+  return outbox.countUnsentFor(memberId);
+}
+
+/** The member chose to discard their unsent work at sign-out. */
+export async function discardAllFor(memberId: string): Promise<void> {
+  await outbox.discardAllFor(memberId);
+  await notify();
+}
+
+/**
+ * A row queued before this phone recorded owners: the signed-in member explicitly says it is
+ * theirs, and only then is it sent under their session.
+ */
+export async function sendAsMe(id: string): Promise<void> {
+  const memberId = signedInMember();
+  if (!memberId) return;
+  await outbox.adopt(id, memberId, owner.deptId);
   await notify();
   void drain();
 }
@@ -206,6 +388,12 @@ export const RESPONSE_NOT_RECORDED = "Not recorded on the officer's roster";
  * roster's answer and offers "send mine again" or "keep".
  */
 export const RESPONSE_SUPERSEDED = 'A newer answer is already on the roster';
+
+class AvailabilityConflictError extends Error {
+  constructor(retry: boolean) {
+    super(retry ? AVAILABILITY_MAY_BE_IN_EFFECT : AVAILABILITY_CONFLICT);
+  }
+}
 
 class ResponseNotCurrentError extends Error {
   constructor(message: string) {
@@ -244,6 +432,7 @@ export function signedUrlExpiresAtMs(url: string): number | null {
 function isPermanentRejection(error: unknown): boolean {
   if (error instanceof PhotoUploadUrlExpiredError) return true;
   if (error instanceof ResponseNotCurrentError) return true;
+  if (error instanceof AvailabilityConflictError) return true;
   if (!(error instanceof ApiError)) return false;
   const { status } = error.problem;
   return status >= 400 && status < 500 && status !== 401 && status !== 408 && status !== 429;
@@ -381,22 +570,29 @@ function missingEtaFallback(row: OutboxRow, error: unknown): string | null {
   });
 }
 
-async function post(row: OutboxRow): Promise<Response | null> {
+/** The session one drain run sends with, fixed when the run starts (R5-M1). */
+interface RunSession {
+  readonly tokens: AuthTokenSource;
+  readonly apiBaseUrl: string;
+}
+
+async function post(row: OutboxRow, session: RunSession): Promise<Response | null> {
   try {
-    return await postOnce(row);
+    return await postOnce(row, session);
   } catch (error) {
     const fallbackBody = missingEtaFallback(row, error);
     if (!fallbackBody) throw error;
     await outbox.replaceBody(row.id, fallbackBody);
-    return postOnce({ ...row, body: fallbackBody });
+    return postOnce({ ...row, body: fallbackBody }, session);
   }
 }
 
-async function postOnce(row: OutboxRow): Promise<Response | null> {
-  if (!tokens || !apiBaseUrl) throw new Error('Sync is not configured yet');
+async function postOnce(row: OutboxRow, session: RunSession): Promise<Response | null> {
+  // Never the module-level session: it can change to another member mid-drain (R5-M1).
+  const { tokens: runTokens, apiBaseUrl: runApiBaseUrl } = session;
   try {
-    return await apiRequest(row.path, tokens, {
-      apiBaseUrl,
+    return await apiRequest(row.path, runTokens, {
+      apiBaseUrl: runApiBaseUrl,
       method: row.method,
       headers: { 'Content-Type': 'application/json' },
       body: row.body,
@@ -407,6 +603,9 @@ async function postOnce(row: OutboxRow): Promise<Response | null> {
       throw new ResponseNotCurrentError(
         code === 'SUPERSEDED' ? RESPONSE_SUPERSEDED : RESPONSE_NOT_RECORDED,
       );
+    }
+    if (row.kind === 'AVAILABILITY' && error instanceof ApiError && error.problem.status === 409) {
+      throw new AvailabilityConflictError(row.attempts > 0);
     }
     if (
       CONFLICT_MEANS_DELIVERED.has(row.kind) &&
@@ -419,8 +618,8 @@ async function postOnce(row: OutboxRow): Promise<Response | null> {
   }
 }
 
-async function create(row: OutboxRow): Promise<OutboxRow | undefined> {
-  const response = await post(row);
+async function create(row: OutboxRow, session: RunSession): Promise<OutboxRow | undefined> {
+  const response = await post(row, session);
   if (!response) {
     await outbox.advanceStage(row.id, { stage: 'DONE' });
     return outbox.find(row.id);
@@ -435,12 +634,12 @@ async function create(row: OutboxRow): Promise<OutboxRow | undefined> {
   return outbox.find(row.id);
 }
 
-async function processEntry(id: string): Promise<void> {
+async function processEntry(id: string, session: RunSession): Promise<void> {
   let row = await outbox.find(id);
   if (!row) return;
 
   if (row.stage === 'CREATE') {
-    row = await create(row);
+    row = await create(row, session);
     if (!row) return;
   }
 
@@ -448,7 +647,7 @@ async function processEntry(id: string): Promise<void> {
     // A kind whose replay re-signs gets a fresh link instead of a doomed PUT. The replay is safe:
     // the body's idempotencyKey makes the server answer "duplicate" without writing twice.
     if (row.photoUploadUrl && isExpired(row.photoUploadUrl) && RESIGNS_ON_REPLAY.has(row.kind)) {
-      row = await create(row);
+      row = await create(row, session);
       if (!row || row.stage !== 'UPLOAD_PHOTO') return;
     }
     try {
@@ -486,6 +685,23 @@ export function drain(): Promise<void> {
  * For a caller that must report the outcome (a headless notification action saying "Sent"),
  * where drain() alone could return at once because a drain was already in progress.
  */
+/**
+ * One bounded attempt to send the signed-in member's queued work (alert answers first among it)
+ * while their session is still valid - at sign-out, where anything left waits for that member to
+ * sign in again, which for a live call is too late. Never blocks longer than timeoutMs.
+ */
+export async function drainBriefly(timeoutMs: number): Promise<void> {
+  if (!isConfigured()) return;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  await Promise.race([
+    drainAndSettle().catch(() => undefined),
+    new Promise<void>((resolve) => {
+      timer = setTimeout(resolve, timeoutMs);
+    }),
+  ]);
+  if (timer) clearTimeout(timer);
+}
+
 export async function drainAndSettle(): Promise<void> {
   await drain();
   while (inFlight) await inFlight;
@@ -503,8 +719,19 @@ async function runDrain(): Promise<void> {
     const netState = await NetInfo.fetch();
     if (netState.isConnected !== true) return;
 
-    const pending = await outbox.listDrainable(Date.now());
+    // One session for the whole run (R5-M1). If the member signs out and another signs in while
+    // this run is still going (the bounded sign-out drain gives up waiting, not the drain), the
+    // run stops at the next row: nothing listed for the old member is posted with the new
+    // member's tokens. The new session's own drain, queued behind this one, picks up its rows.
+    const runTokens = tokens;
+    const runApiBaseUrl = apiBaseUrl;
+    const runOwner = owner.memberId;
+    if (!runTokens || !runApiBaseUrl) return;
+    const session: RunSession = { tokens: runTokens, apiBaseUrl: runApiBaseUrl };
+    // Only the signed-in member's own rows (R2-M3).
+    const pending = await outbox.listDrainable(Date.now(), runOwner);
     for (const listed of pending) {
+      if (tokens !== runTokens || owner.memberId !== runOwner) break;
       // Re-read: a row listed above may have been discarded or superseded since (a changed
       // answer), and a vanished row must not be reported as delivered.
       const row = await outbox.find(listed.id);
@@ -515,10 +742,11 @@ async function runDrain(): Promise<void> {
         await notify();
         continue;
       }
-      await outbox.markSyncing(row.id);
+      // Conditional: a mark-off that replaced this row may have deleted it since it was read.
+      if (!(await outbox.claimForSync(row.id))) continue;
       await notify();
       try {
-        await processEntry(row.id);
+        await processEntry(row.id, session);
         await outbox.markSynced(row.id);
         rememberSynced(row.id);
         lastSyncAt = new Date().toISOString();

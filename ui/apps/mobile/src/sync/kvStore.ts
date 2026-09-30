@@ -37,6 +37,16 @@ export async function kvSet<T>(key: string, value: T, now: number = Date.now()):
   }
 }
 
+/** Deletes every key starting with `prefix` (a key range, so no LIKE-escaping of ids). */
+export async function kvDeletePrefix(prefix: string): Promise<void> {
+  if (!prefix) return;
+  try {
+    await getDb().execute('DELETE FROM kv WHERE key >= ? AND key < ?', [prefix, `${prefix}\uffff`]);
+  } catch (error) {
+    console.warn(`[cache] clearing ${prefix}* failed`, error);
+  }
+}
+
 export async function kvDelete(key: string): Promise<void> {
   try {
     await getDb().execute('DELETE FROM kv WHERE key = ?', [key]);

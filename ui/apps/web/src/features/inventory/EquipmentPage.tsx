@@ -2,6 +2,7 @@ import { FormEvent, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import { useAuth } from '../../auth/AuthContext';
+import { canManageInventory } from '../../auth/roles';
 import { ApiForbiddenGate } from '../../components/ApiForbiddenGate';
 import {
   Button,
@@ -24,7 +25,7 @@ type Tab = 'equipment' | 'consumables';
 export function EquipmentPage() {
   const auth = useAuth();
   const queryClient = useQueryClient();
-  const canWrite = auth.roles.includes('ADMIN') || auth.roles.includes('CHIEF');
+  const canWrite = canManageInventory(auth.roles);
   const [tab, setTab] = useState<Tab>('equipment');
   const [showRetired, setShowRetired] = useState(false);
   const [form, setForm] = useState<CreateEquipmentAssetInput>(emptyForm);

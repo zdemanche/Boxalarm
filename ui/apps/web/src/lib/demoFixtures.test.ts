@@ -89,7 +89,7 @@ test('gets and puts department config through the fixture store', async () => {
 });
 
 test('an unset config type is a 404 fixture', async () => {
-  await expect(apiRequest('platform/config/STATIONS', tokens)).rejects.toBeInstanceOf(ApiError);
+  await expect(apiRequest('platform/config/RANKS', tokens)).rejects.toBeInstanceOf(ApiError);
 });
 
 test('starts and polls a demo export job to COMPLETE', async () => {

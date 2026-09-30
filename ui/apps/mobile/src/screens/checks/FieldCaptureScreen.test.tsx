@@ -20,7 +20,7 @@ jest.mock('../../lib/apiClient', () => ({
 const mockApiRequest = apiRequest as jest.Mock;
 const mockNetInfoFetch = NetInfo.fetch as jest.Mock;
 const mockLaunchCamera = launchCamera as jest.Mock;
-const tokens = { getAccessToken: jest.fn(), renewSilently: jest.fn() };
+const tokens = { getAccessToken: jest.fn(), renewSilently: jest.fn(), memberId: 'm-test' };
 
 function flush(): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, 0));

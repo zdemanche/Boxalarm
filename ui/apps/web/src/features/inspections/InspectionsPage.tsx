@@ -3,8 +3,9 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useAuth } from '../../auth/AuthContext';
 import { ApiForbiddenGate } from '../../components/ApiForbiddenGate';
 import { Button, Card, PageHeader, Select, Skeleton, TextInput } from '../../components/ui';
-import { conductInspection, listDueInspections, scheduleInspection } from './api';
+import { conductInspection, listDueInspections, listOccupancies, scheduleInspection } from './api';
 import type { Violation, ViolationStatus } from './types';
+import { humanize } from '../../lib/labels';
 
 const emptyViolation: Violation = { code: '', description: '', status: 'open' };
 
@@ -23,6 +24,16 @@ export function InspectionsPage() {
     queryKey: ['inspections', 'due'],
     queryFn: () => listDueInspections(auth),
   });
+  // Occupancies are picked by address, never typed as an internal id (docs/design.md §4.8). The
+  // same list names each inspection row.
+  const occupanciesQuery = useQuery({
+    queryKey: ['inspections', 'occupancies'],
+    queryFn: () => listOccupancies(auth),
+  });
+  const occupancyLabel = (id: string) => {
+    const occupancy = occupanciesQuery.data?.find((o) => o.occupancyId === id);
+    return occupancy ? `${occupancy.address} (${occupancy.occupancyType})` : id;
+  };
 
   const scheduleMutation = useMutation({
     mutationFn: () => scheduleInspection(auth, occupancyId, scheduledDate),
@@ -91,7 +102,7 @@ export function InspectionsPage() {
                 <Fragment key={inspection.inspectionId}>
                   <tr>
                     <th scope="row" style={{ textAlign: 'left', fontWeight: 500 }}>
-                      {inspection.occupancyId}
+                      {occupancyLabel(inspection.occupancyId)}
                     </th>
                     <td>{inspection.nextDueDate}</td>
                     <td>
@@ -102,7 +113,9 @@ export function InspectionsPage() {
                     <td>
                       {inspection.violations.length === 0
                         ? '—'
-                        : inspection.violations.map((v) => `${v.code} (${v.status})`).join(', ')}
+                        : inspection.violations
+                            .map((v) => `${v.code} (${humanize(v.status)})`)
+                            .join(', ')}
                     </td>
                     {canWrite ? (
                       <td>
@@ -127,7 +140,7 @@ export function InspectionsPage() {
                       <td colSpan={5}>
                         <Card style={{ maxWidth: 640 }}>
                           <form
-                            aria-label={`Conduct inspection ${inspection.inspectionId}`}
+                            aria-label={`Conduct inspection at ${occupancyLabel(inspection.occupancyId)}`}
                             onSubmit={(event: FormEvent) => {
                               event.preventDefault();
                               conductMutation.mutate({
@@ -239,12 +252,31 @@ export function InspectionsPage() {
             }}
             style={{ display: 'grid', gap: 'var(--bx-space-md)' }}
           >
-            <TextInput
-              label="Occupancy ID"
+            <Select
+              label="Occupancy"
               value={occupancyId}
               required
+              disabled={occupanciesQuery.isLoading}
+              help={
+                occupanciesQuery.error
+                  ? "Occupancies couldn't load. Try again later."
+                  : occupanciesQuery.data?.length === 0
+                    ? 'No occupancies yet. Add one on the Occupancies page first.'
+                    : undefined
+              }
               onChange={(e) => setOccupancyId(e.target.value)}
-            />
+            >
+              <option value="">
+                {occupanciesQuery.isLoading ? 'Loading occupancies…' : 'Choose an occupancy'}
+              </option>
+              {[...(occupanciesQuery.data ?? [])]
+                .sort((a, b) => a.address.localeCompare(b.address))
+                .map((occupancy) => (
+                  <option key={occupancy.occupancyId} value={occupancy.occupancyId}>
+                    {occupancy.address} ({occupancy.occupancyType})
+                  </option>
+                ))}
+            </Select>
             <TextInput
               label="Scheduled date"
               type="date"

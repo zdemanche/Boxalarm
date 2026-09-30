@@ -84,7 +84,14 @@ async function signInAs(page: Page, groups: string[]): Promise<void> {
   await stubCognitoWithGroups(page, privateKey, jwk, groups);
   await page.goto('/login');
   await page.getByRole('button', { name: 'Sign in' }).click();
-  await expect(page.getByRole('navigation', { name: 'Primary' })).toBeVisible();
+  // Signed in: the top bar renders on every viewport (the Primary nav is a closed drawer below 768px).
+  await expect(page.getByRole('banner')).toBeVisible();
+}
+
+/** Below 768px the Primary nav is a drawer behind the top bar's menu button. */
+async function openNavIfCollapsed(page: Page): Promise<void> {
+  const menuButton = page.getByRole('button', { name: 'Open navigation' });
+  if (await menuButton.isVisible()) await menuButton.click();
 }
 
 test('apparatus registry passes axe for CHIEF', async ({ page }) => {
@@ -98,6 +105,7 @@ test('apparatus registry passes axe for CHIEF', async ({ page }) => {
     }),
   );
   await signInAs(page, ['CHIEF']);
+  await openNavIfCollapsed(page);
   await page
     .getByRole('navigation', { name: 'Primary' })
     .getByRole('link', { name: 'Apparatus', exact: true })
@@ -117,6 +125,7 @@ test('apparatus compliance report passes axe for CHIEF', async ({ page }) => {
     }),
   );
   await signInAs(page, ['CHIEF']);
+  await openNavIfCollapsed(page);
   await page
     .getByRole('navigation', { name: 'Primary' })
     .getByRole('link', { name: 'Apparatus compliance' })

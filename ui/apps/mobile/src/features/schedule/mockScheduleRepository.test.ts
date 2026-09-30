@@ -22,5 +22,5 @@ test('markUnavailable resolves without throwing', async () => {
       '2026-10-08T00:00:00Z',
       'Vacation',
     ),
-  ).resolves.toBeUndefined();
+  ).resolves.toEqual({ outboxId: null });
 });

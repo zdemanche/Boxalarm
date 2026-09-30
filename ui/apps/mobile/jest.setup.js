@@ -60,6 +60,9 @@ jest.mock('@op-engineering/op-sqlite', () => {
             'queuedAt',
             'nextAttemptAt',
             'syncedAt',
+            'ownerMemberId',
+            'ownerDeptId',
+            'answeredAsHint',
           ];
           const row = {};
           columns.forEach((column, index) => {
@@ -74,6 +77,20 @@ jest.mock('@op-engineering/op-sqlite', () => {
         }
         if (statement.startsWith('SELECT * FROM outbox WHERE id = ?')) {
           return { rows: rows.filter((row) => row.id === params[0]) };
+        }
+        if (statement.startsWith("UPDATE outbox SET status = 'SYNCING' WHERE id = ? AND status")) {
+          const row = rows.find((candidate) => candidate.id === params[0]);
+          if (!row || row.status === 'SYNCING') return { rows: [], rowsAffected: 0 };
+          row.status = 'SYNCING';
+          return { rows: [], rowsAffected: 1 };
+        }
+        if (statement.startsWith("DELETE FROM outbox WHERE id = ? AND status = 'QUEUED'")) {
+          const before = rows.length;
+          rows = rows.filter(
+            (row) =>
+              !(row.id === params[0] && row.status === 'QUEUED' && Number(row.attempts) === 0),
+          );
+          return { rows: [], rowsAffected: before - rows.length };
         }
         if (statement.startsWith('UPDATE outbox SET')) {
           const id = params[params.length - 1];
@@ -103,6 +120,12 @@ jest.mock('@op-engineering/op-sqlite', () => {
         if (statement.startsWith('SELECT key, value, updatedAt FROM kv WHERE key = ?')) {
           const row = kv.get(params[0]);
           return { rows: row ? [row] : [] };
+        }
+        if (statement.startsWith('DELETE FROM kv WHERE key >= ? AND key < ?')) {
+          for (const key of [...kv.keys()]) {
+            if (key >= params[0] && key < params[1]) kv.delete(key);
+          }
+          return { rows: [] };
         }
         if (statement.startsWith('DELETE FROM kv WHERE key = ?')) {
           kv.delete(params[0]);

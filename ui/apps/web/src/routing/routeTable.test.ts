@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { canAccessPath, firstGrantedNavPath, routesForRoles } from './routeTable';
+import { canAccessPath, navSectionsForRoles, routesForRoles } from './routeTable';
 
 describe('routeTable', () => {
   test('CHIEF nav includes dashboard, roster, audit-log; excludes settings', () => {
@@ -8,15 +8,35 @@ describe('routeTable', () => {
     expect(labels).toContain('Live roster');
     expect(labels).toContain('Audit log');
     expect(labels).not.toContain('Settings');
-    expect(labels).not.toContain('Certifications');
+    // The chief reads schedule and training (officer-tier Cedar actions include CHIEF).
+    expect(labels).toContain('Schedule');
+    expect(labels).toContain('Certifications');
+    expect(labels).toContain('Training events');
   });
 
-  test('ADMIN nav includes settings and audit-log; excludes dashboard', () => {
+  test('OFFICER and ADMIN see Apparatus; nobody sees "Personnel"', () => {
+    expect(routesForRoles(['OFFICER']).map((r) => r.label)).toContain('Apparatus');
+    expect(routesForRoles(['ADMIN']).map((r) => r.label)).toContain('Apparatus');
+    expect(canAccessPath('/apparatus/E1', ['OFFICER'])).toBe(true);
+    for (const role of ['OFFICER', 'TRAINING', 'APPARATUS', 'ADMIN', 'CHIEF'] as const) {
+      expect(routesForRoles([role]).map((r) => r.label)).not.toContain('Personnel');
+    }
+  });
+
+  test('nav sections follow the design.md group order and drop empty groups', () => {
+    const chief = navSectionsForRoles(['CHIEF']).map((s) => s.group);
+    expect(chief).toEqual(['Overview', 'Response', 'People', 'Apparatus', 'Prevention', 'Admin']);
+    const apparatusOfficer = navSectionsForRoles(['APPARATUS']);
+    expect(apparatusOfficer.map((s) => s.group)).toEqual(['Overview', 'People', 'Apparatus']);
+    expect(apparatusOfficer[2]?.routes.map((r) => r.label)).toEqual(['Apparatus', 'Inventory']);
+  });
+
+  test('ADMIN nav includes settings, audit-log and a dashboard to land on', () => {
     const labels = routesForRoles(['ADMIN']).map((r) => r.label);
     expect(labels).toContain('Settings');
     expect(labels).toContain('Audit log');
-    expect(labels).toContain('Personnel');
-    expect(labels).not.toContain('Dashboard');
+    expect(labels).toContain('Members');
+    expect(labels).toContain('Dashboard');
     expect(labels).not.toContain('Live roster');
   });
 
@@ -25,9 +45,14 @@ describe('routeTable', () => {
     expect(canAccessPath('/incidents/NICHOLS-4471-1798000000', ['ADMIN'])).toBe(true);
   });
 
-  test('MEMBER has no PrimaryNav domain routes', () => {
-    expect(routesForRoles(['MEMBER'])).toEqual([]);
-    expect(firstGrantedNavPath(['MEMBER'])).toBeNull();
+  test('MEMBER nav is their own self-service: availability, nothing department-wide', () => {
+    expect(routesForRoles(['MEMBER']).map((r) => r.navPath)).toEqual(['/', '/availability']);
+  });
+
+  test('every role can mark themselves unavailable', () => {
+    for (const role of ['MEMBER', 'OFFICER', 'TRAINING', 'APPARATUS', 'ADMIN', 'CHIEF'] as const) {
+      expect(canAccessPath('/availability', [role])).toBe(true);
+    }
   });
 
   test('every role can reach its own notification inbox, which stays out of PrimaryNav', () => {

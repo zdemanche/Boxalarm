@@ -22,7 +22,7 @@ export function ChecksStack() {
       <Stack.Screen
         name="ApparatusPicker"
         component={ApparatusPickerScreen}
-        options={{ title: 'Checks' }}
+        options={{ title: 'Apparatus' }}
       />
       <Stack.Screen name="CheckRunner" component={CheckRunnerScreen} options={{ title: 'Check' }} />
       <Stack.Screen

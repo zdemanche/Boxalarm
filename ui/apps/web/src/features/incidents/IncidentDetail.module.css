@@ -1,5 +1,9 @@
 .layout {
   display: grid;
+  /* One shrinkable column below lg: an implicit `auto` track sizes to its widest child (the
+     "Fix: Use dispatch time + 5 min …" buttons), which pushed the step list, form and issues
+     rail past a 375px viewport. */
+  grid-template-columns: minmax(0, 1fr);
   gap: var(--bx-space-lg);
   align-items: start;
 }
@@ -142,6 +146,14 @@
   display: flex;
   flex-wrap: wrap;
   gap: var(--bx-space-sm);
+}
+
+/* Fix suggestions name a unit and a time, so they are long: let them wrap instead of clipping
+   against the issues rail (Button defaults to white-space: nowrap). */
+.issue button {
+  white-space: normal;
+  text-align: left;
+  max-width: 100%;
 }
 
 .narrative {

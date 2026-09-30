@@ -10,8 +10,10 @@ import { DataTable, type DataTableColumn } from '../../components/ui/DataTable';
 import { StatusChip } from '../../components/ui/Chip';
 import { Checkbox, DatePicker, TextInput } from '../../components/ui/Field';
 import { PageHeader } from '../../components/ui/PageHeader';
+import { listActiveDispatches } from '../alerts/api';
 import { createIncidentFromDispatch, searchIncidents } from './api';
 import { dateInputToEpoch, epochToDateInput, formatDate } from './format';
+import type { ActiveDispatchList } from '../alerts/types';
 import type { Incident, IncidentStatus } from './types';
 import styles from './IncidentsList.module.css';
 
@@ -34,6 +36,60 @@ const STATUS_LABEL: Record<IncidentStatus, string> = {
 const STATUS_ORDER: IncidentStatus[] = ['DRAFT', 'VALIDATED', 'SUBMITTED', 'ACCEPTED', 'REJECTED'];
 
 const DEFAULT_RANGE_DAYS = 90;
+
+function RecentCallsToReport({
+  query,
+  reportedDispatchIds,
+  pendingDispatchId,
+  onStart,
+}: {
+  query: { isLoading: boolean; error: unknown; data: ActiveDispatchList | undefined };
+  reportedDispatchIds: Set<string>;
+  pendingDispatchId: string | undefined;
+  onStart: (dispatchId: string) => void;
+}) {
+  if (query.isLoading) return <p>Loading recent calls…</p>;
+  if (query.error || !query.data) {
+    return <p>Recent calls couldn&rsquo;t load. You can still start from a dispatch ID below.</p>;
+  }
+  const hours = Math.round(query.data.activeWindowSeconds / 3600);
+  const calls = query.data.dispatches.filter((d) => !reportedDispatchIds.has(d.dispatchId));
+  if (calls.length === 0) {
+    return (
+      <p>
+        No calls in the last {hours === 1 ? 'hour' : `${hours} hours`} are waiting for a report.
+      </p>
+    );
+  }
+  return (
+    <ul className={styles.recentCalls} aria-label="Recent calls without a report">
+      {calls.map((call) => (
+        <li key={call.dispatchId} className={styles.recentCall}>
+          <span>
+            <strong>{call.incidentType ?? 'Unknown call type'}</strong> —{' '}
+            {call.address ?? 'no address on the dispatch'}
+            <span className={styles.recentMeta}>
+              {' '}
+              · dispatched{' '}
+              {new Date(call.dispatchedAt * 1000).toLocaleTimeString(undefined, {
+                hour: '2-digit',
+                minute: '2-digit',
+              })}
+            </span>
+          </span>
+          <Button
+            variant="secondary"
+            loading={pendingDispatchId === call.dispatchId}
+            aria-label={`Start report for ${call.incidentType ?? 'call'} at ${call.address ?? 'unknown address'}`}
+            onClick={() => onStart(call.dispatchId)}
+          >
+            Start report
+          </Button>
+        </li>
+      ))}
+    </ul>
+  );
+}
 
 function StatusCell({ status }: { status: IncidentStatus }) {
   return <StatusChip status={STATUS_ROLE[status]}>{STATUS_LABEL[status]}</StatusChip>;
@@ -61,8 +117,17 @@ export function IncidentsListPage() {
       }),
   });
 
+  // Recent dispatches (the alerting plane's active window) are the report starting points, so an
+  // officer picks the call instead of typing its internal Dispatch ID (review M9/M10).
+  const recentQuery = useQuery({
+    queryKey: ['alerting', 'dispatches', 'active'],
+    queryFn: () => listActiveDispatches(auth),
+    enabled: canCreate,
+  });
+
   const createMutation = useMutation({
-    mutationFn: () => createIncidentFromDispatch(auth, { dispatchId }),
+    mutationFn: (targetDispatchId: string) =>
+      createIncidentFromDispatch(auth, { dispatchId: targetDispatchId }),
     onSuccess: (created) => {
       queryClient.setQueryData(['incident', created.incidentId], created);
       setDispatchId('');
@@ -290,34 +355,49 @@ export function IncidentsListPage() {
       )}
 
       {canCreate ? (
-        <Card
-          title="Create report from dispatch"
-          style={{ marginTop: 'var(--bx-space-lg)', maxWidth: 480 }}
-        >
-          <form
-            aria-label="Create report from dispatch"
-            onSubmit={(event: FormEvent) => {
-              event.preventDefault();
-              createMutation.mutate();
-            }}
-            style={{ display: 'grid', gap: 'var(--bx-space-md)' }}
-          >
-            <TextInput
-              label="Dispatch ID"
-              value={dispatchId}
-              required
-              onChange={(event) => setDispatchId(event.target.value)}
-            />
-            {createError ? (
-              <div ref={errorRef} tabIndex={-1} role="alert">
-                <p style={{ fontWeight: 600, margin: 0 }}>{createError.title}</p>
-                {createError.detail ? <p style={{ margin: 0 }}>{createError.detail}</p> : null}
-              </div>
-            ) : null}
-            <Button type="submit" loading={createMutation.isPending} disabled={!dispatchId}>
-              Create report
-            </Button>
-          </form>
+        <Card title="Start a report" style={{ marginTop: 'var(--bx-space-lg)', maxWidth: 640 }}>
+          <RecentCallsToReport
+            query={recentQuery}
+            reportedDispatchIds={
+              new Set((listQuery.data ?? []).map((incident) => incident.sourceDispatchId))
+            }
+            pendingDispatchId={createMutation.isPending ? createMutation.variables : undefined}
+            onStart={(id) => createMutation.mutate(id)}
+          />
+          {createError ? (
+            <div ref={errorRef} tabIndex={-1} role="alert">
+              <p style={{ fontWeight: 600, margin: 0 }}>{createError.title}</p>
+              {createError.detail ? <p style={{ margin: 0 }}>{createError.detail}</p> : null}
+            </div>
+          ) : null}
+          <details style={{ marginTop: 'var(--bx-space-md)' }}>
+            <summary style={{ minHeight: 'var(--bx-target-office)', cursor: 'pointer' }}>
+              Start from an older dispatch
+            </summary>
+            <form
+              aria-label="Create report from dispatch"
+              onSubmit={(event: FormEvent) => {
+                event.preventDefault();
+                createMutation.mutate(dispatchId);
+              }}
+              style={{
+                display: 'grid',
+                gap: 'var(--bx-space-md)',
+                marginTop: 'var(--bx-space-sm)',
+              }}
+            >
+              <TextInput
+                label="Dispatch ID"
+                help="The CAD dispatch number, for calls older than the list above."
+                value={dispatchId}
+                required
+                onChange={(event) => setDispatchId(event.target.value)}
+              />
+              <Button type="submit" loading={createMutation.isPending} disabled={!dispatchId}>
+                Create report
+              </Button>
+            </form>
+          </details>
         </Card>
       ) : null}
     </main>

@@ -20,7 +20,9 @@
 
 .sectionGrid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(280px, 100%), 1fr));
+  /* Cards size to their content instead of stretching to the tallest in the row. */
+  align-items: start;
   gap: var(--bx-space-lg);
   margin-top: var(--bx-space-lg);
 }
@@ -55,4 +57,32 @@
 
 .meta {
   color: var(--bx-fg-muted);
+}
+
+.actionLink {
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--bx-target-office);
+  padding: 0 var(--bx-space-md);
+  border-radius: var(--bx-radius-md);
+  background: var(--bx-fg);
+  color: var(--bx-bg);
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.bigNumber {
+  margin: 0;
+  font-size: 28px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.mono {
+  font-family: var(--bx-font-mono);
+}
+
+.sectionHeading {
+  margin: var(--bx-space-xl) 0 0;
+  font-size: 17px;
 }

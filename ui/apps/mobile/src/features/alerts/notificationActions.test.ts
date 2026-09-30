@@ -19,7 +19,7 @@ jest.mock('../../lib/apiClient', () => ({
 
 const mockApiRequest = apiRequest as jest.Mock;
 const displayNotification = notifee.displayNotification as jest.Mock;
-const tokens = { getAccessToken: jest.fn(), renewSilently: jest.fn() };
+const tokens = { getAccessToken: jest.fn(), renewSilently: jest.fn(), memberId: 'm-test' };
 
 const pageData = {
   dispatchId: 'D-ACT',

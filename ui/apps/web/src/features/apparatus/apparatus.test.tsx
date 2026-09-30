@@ -69,7 +69,7 @@ function renderApp(groups: string[], path = '/apparatus') {
   );
 }
 
-test('APPARATUS create form adds a unit as IN_SERVICE', async () => {
+test('CHIEF create form adds a unit as IN_SERVICE (createApparatus is CHIEF/ADMIN)', async () => {
   const items: Apparatus[] = [];
   server.use(
     http.get('/api/v1/apparatus', () => HttpResponse.json({ apparatus: items })),
@@ -87,7 +87,7 @@ test('APPARATUS create form adds a unit as IN_SERVICE', async () => {
   );
 
   const user = userEvent.setup();
-  renderApp(['APPARATUS']);
+  renderApp(['CHIEF']);
   await screen.findByRole('heading', { name: 'Apparatus' });
   await user.type(screen.getByLabelText('Unit ID'), 'E1');
   await user.type(screen.getByLabelText('Type'), 'Engine');
@@ -98,18 +98,40 @@ test('APPARATUS create form adds a unit as IN_SERVICE', async () => {
   });
 });
 
-test('CHIEF can open registry but does not see create control', async () => {
+test('the apparatus officer opens the registry without a create form the backend would refuse', async () => {
   server.use(http.get('/api/v1/apparatus', () => HttpResponse.json({ apparatus: [] })));
 
-  renderApp(['CHIEF']);
+  renderApp(['APPARATUS']);
   await screen.findByRole('heading', { name: 'Apparatus' });
-  expect(screen.queryByRole('form', { name: 'Create apparatus' })).toBeNull();
+  expect(screen.queryByRole('button', { name: 'Create apparatus' })).toBeNull();
 });
 
-test('ADMIN cannot open /apparatus under §7.1 RequireRole', async () => {
+test('OFFICER and ADMIN can open the registry', async () => {
+  server.use(http.get('/api/v1/apparatus', () => HttpResponse.json({ apparatus: [] })));
+
+  renderApp(['OFFICER']);
+  await screen.findByRole('heading', { name: 'Apparatus' });
+  cleanup();
   renderApp(['ADMIN']);
-  await screen.findByRole('heading', { name: 'Forbidden' });
-  expect(screen.queryByRole('form', { name: 'Create apparatus' })).toBeNull();
+  await screen.findByRole('heading', { name: 'Apparatus' });
+});
+
+test('an officer can take a unit out of service (Cedar UpdateServiceStatus includes OFFICER)', async () => {
+  server.use(
+    http.get('/api/v1/apparatus/E1', () =>
+      HttpResponse.json({
+        apparatusId: 'a1',
+        unitId: 'E1',
+        type: 'Engine',
+        status: 'IN_SERVICE',
+        openDefects: [],
+        failedTests: [],
+      }),
+    ),
+  );
+
+  renderApp(['OFFICER'], '/apparatus/E1');
+  expect(await screen.findByRole('form', { name: 'Place out of service' })).toBeTruthy();
 });
 
 test('detail shows status badge shell', async () => {

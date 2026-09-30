@@ -1149,3 +1149,50 @@ test('an edit refused with 409 INCIDENT_LOCKED shows the server message', async 
       .length,
   ).toBeGreaterThan(0);
 });
+
+test('an officer starts a report from a recent call, with no Dispatch ID typed', async () => {
+  let posted: unknown;
+  server.use(
+    http.get('/api/v1/incidents', () =>
+      HttpResponse.json({
+        incidents: [],
+      }),
+    ),
+    http.get('/api/v1/alerting/dispatches', () =>
+      HttpResponse.json({
+        asOf: 1_700_000_500,
+        activeWindowSeconds: 7200,
+        truncated: false,
+        dispatches: [
+          {
+            dispatchId: 'd-recent',
+            incidentType: 'Structure fire',
+            address: '18 Nichols Ave',
+            crossStreets: null,
+            dispatchedAt: 1_700_000_000,
+            toneLadder: { status: 'ACTIVE', currentToneSequence: 1 },
+          },
+        ],
+      }),
+    ),
+    http.post('/api/v1/incidents', async ({ request }) => {
+      posted = await request.json();
+      return HttpResponse.json(
+        { type: 'about:blank', title: 'Not Found', status: 404, traceId: 't' },
+        { status: 404 },
+      );
+    }),
+  );
+
+  const user = userEvent.setup();
+  renderIncidents(['OFFICER']);
+  await screen.findByRole('heading', { name: 'Incidents' });
+  const recent = await screen.findByRole('list', { name: 'Recent calls without a report' });
+  expect(recent.textContent).toContain('18 Nichols Ave');
+  await user.click(
+    screen.getByRole('button', { name: 'Start report for Structure fire at 18 Nichols Ave' }),
+  );
+
+  await screen.findByRole('alert');
+  expect(posted).toEqual({ dispatchId: 'd-recent' });
+});

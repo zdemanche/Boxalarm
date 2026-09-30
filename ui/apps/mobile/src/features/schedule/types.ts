@@ -27,8 +27,37 @@ export interface DutyShift {
 // as a lost shift.
 export type ClaimResult = 'CLAIMED' | 'ALREADY_MINE' | 'ALREADY_TAKEN';
 
+/** Claiming has to be atomic on the server (F2.9), so it is never queued or guessed offline. */
+export class ClaimNeedsConnectionError extends Error {
+  constructor() {
+    super(
+      "You need a connection to claim a shift - claiming has to be instant so two people can't take the same one.",
+    );
+    this.name = 'ClaimNeedsConnectionError';
+  }
+}
+
+export interface MarkUnavailableResult {
+  readonly outboxId: string | null;
+  /** Older mark-offs from this phone that had not been sent yet and were dropped for this one. */
+  readonly replacedUnsent?: number;
+  /** Older mark-offs from this phone that were already sent (maybe landed), so they were kept. */
+  readonly earlierMayStand?: number;
+}
+
+/** No member id on the session: nothing is queued or cached under a shared/blank key. */
+export class NotSignedInError extends Error {
+  constructor() {
+    super('Sign in again to do this - this phone has no signed-in member.');
+    this.name = 'NotSignedInError';
+  }
+}
+
 export interface ScheduleRepository {
   getShifts(): Promise<DutyShift[]>;
+  /** Epoch ms of the cached shift list the last getShifts() returned; null when it was live.
+   * Optional: the mock repository never serves from cache. */
+  shiftsCachedAt?(): number | null;
   // idempotencyKey is optional so existing single-attempt callers/tests are unaffected, but a
   // caller that may retry the same claim intent (e.g. ShiftDetailScreen's offline-queue reconnect
   // resubmit) must generate it once, up front, and pass the same value on every retry - a value
@@ -38,7 +67,10 @@ export interface ScheduleRepository {
     positionCode: string,
     idempotencyKey?: string,
   ): Promise<ClaimResult>;
-  markUnavailable(startAt: string, endAt: string, reason?: string): Promise<void>;
+  /** Queues the mark-off in the sync outbox (it is a member-owned write that works offline,
+   * design.md §4.2) and resolves once it is saved on this phone - not once the server has it.
+   * The returned outboxId lets the screen show honest delivery state; null from the mock. */
+  markUnavailable(startAt: string, endAt: string, reason?: string): Promise<MarkUnavailableResult>;
   // F2.11: give-back and swap. Optional so the original two-method mock (still exercised by
   // ShiftBoardScreen/AvailabilityScreen tests) needs no change to keep satisfying this interface.
   releasePosition?(shiftId: string, positionCode: string): Promise<void>;

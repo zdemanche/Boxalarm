@@ -9,6 +9,8 @@ import { MeStack } from './MeStack';
 import { ScheduleStack } from './ScheduleStack';
 
 // Bottom tab bar per architecture.md §7.2 — Alerts · Checks · Schedule · Me, in that order.
+// The Checks stack is labelled "Apparatus" (docs/design.md §3.3 tab name; §3.2 reserves nothing
+// for "checks" as a place). The route name stays Checks so deep links and navigate() calls hold.
 // All four are real stacks as of phase 7; Alerts is scoped to the self-test round trip until
 // boxalarm-backend access lands for the general dispatch-received path.
 export type AppTabsParamList = {
@@ -56,7 +58,7 @@ export function AppTabs() {
       })}
     >
       <Tab.Screen name="Alerts" component={AlertsStack} />
-      <Tab.Screen name="Checks" component={ChecksStack} />
+      <Tab.Screen name="Checks" component={ChecksStack} options={{ title: 'Apparatus' }} />
       <Tab.Screen name="Schedule" component={ScheduleStack} />
       <Tab.Screen name="Me" component={MeStack} />
     </Tab.Navigator>

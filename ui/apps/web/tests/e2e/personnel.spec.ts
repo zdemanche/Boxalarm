@@ -104,7 +104,7 @@ test('roster table headers are associated with cells and the page passes axe (AC
 
   await signInAs(page, ['OFFICER']);
   await page.goto('/personnel');
-  await expect(page.getByRole('heading', { name: 'Personnel' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Members' })).toBeVisible();
 
   const table = page.getByRole('table');
   await expect(table).toBeVisible();
@@ -182,7 +182,7 @@ test('member transcript tab renders certs/attendance/hours and passes axe (#153 
   const transcript = page.getByRole('heading', { name: 'Transcript' }).locator('..');
   await expect(transcript).toBeVisible();
   await expect(
-    transcript.getByText('FF1 — CURRENT · expires 2028-01-01', { exact: true }),
+    transcript.getByText('FF1 — Current · expires 2028-01-01', { exact: true }),
   ).toBeVisible();
   await expect(page.getByText(/Drill — 2h on/)).toBeVisible();
   await expect(page.getByText('Drill: 2h')).toBeVisible();

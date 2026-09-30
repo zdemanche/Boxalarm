@@ -1,5 +1,6 @@
 import NetInfo from '@react-native-community/netinfo';
 import { ApiError, apiRequest } from '../lib/apiClient';
+import * as outbox from './outbox';
 import * as store from './outboxStore';
 import * as syncManager from './syncManager';
 import { signedPhotoContentType } from './syncManager';
@@ -14,7 +15,7 @@ function problem(status: number, title: string): ApiError {
   return new ApiError({ type: 'about:blank', title, status, traceId: 't' });
 }
 
-const tokens = { getAccessToken: jest.fn(), renewSilently: jest.fn() };
+const tokens = { getAccessToken: jest.fn(), renewSilently: jest.fn(), memberId: 'm-test' };
 
 async function clearOutbox(): Promise<void> {
   const rows = await store.all();
@@ -161,6 +162,8 @@ test('the first drain after app start recovers a row left SYNCING by a killed pr
     freshApi.apiRequest.mockResolvedValue({ json: async () => ({}) });
 
     await freshOutbox.enqueue({
+      ownerMemberId: 'm-test',
+      ownerDeptId: null,
       id: 'orphan-1',
       kind: 'CHECKLIST_RUN',
       label: 'Truck check — ENGINE-2',
@@ -230,6 +233,8 @@ const mockAddEventListener = NetInfo.addEventListener as jest.Mock;
 
 test('configuring tokens drains items that were queued while signed out', async () => {
   syncManager.configure(null, null);
+  // No configured session: the owner comes from the stored session (R3-C1).
+  syncManager.setOwnerResolver(async () => ({ memberId: 'm-test', deptId: null }));
   mockApiRequest.mockResolvedValue({ json: async () => ({}) });
 
   await syncManager.enqueueChecklistRun('ENGINE-2', 'check-signed-out', {});
@@ -241,6 +246,7 @@ test('configuring tokens drains items that were queued while signed out', async 
 
   expect(mockApiRequest).toHaveBeenCalledTimes(1);
   await expect(store.find('check-signed-out')).resolves.toBeUndefined();
+  syncManager.setOwnerResolver(null);
 });
 
 test('the reconnect listener is registered once while configured and removed on sign-out', async () => {
@@ -587,6 +593,135 @@ describe('attendance', () => {
     expect(syncManager.hasSynced('attendance-1790000000')).toBe(true);
   });
 
+  test('a mark-off is POSTed to the member availability path', async () => {
+    const markOff = { startAt: 1790000000, endAt: 1790086400, reason: 'Travel' };
+    mockApiRequest.mockResolvedValueOnce({ json: async () => ({}) });
+
+    await syncManager.enqueueAvailability('availability-a', 'm-test', 'Mark unavailable', markOff);
+    await flush();
+
+    expect(mockApiRequest).toHaveBeenCalledWith(
+      'personnel/members/m-test/availability',
+      tokens,
+      expect.objectContaining({ method: 'POST', body: JSON.stringify(markOff) }),
+    );
+    expect(syncManager.hasSynced('availability-a')).toBe(true);
+  });
+
+  // Review M1: a 409 means another window already holds this start - never "delivered".
+  test('a 409 on a mark-off is REJECTED with a plain reason, not counted as delivered', async () => {
+    mockApiRequest.mockRejectedValueOnce(problem(409, 'Conflict'));
+
+    await syncManager.enqueueAvailability('availability-b', 'm-test', 'Mark unavailable', {
+      startAt: 1790000000,
+      endAt: 1790020000,
+    });
+    await flush();
+
+    const row = await store.find('availability-b');
+    expect(row?.status).toBe('REJECTED');
+    expect(row?.lastError).toBe(syncManager.AVAILABILITY_CONFLICT);
+    expect(syncManager.hasSynced('availability-b')).toBe(false);
+  });
+
+  // R2-M1 (a): the first POST landed but its response was lost; the resend gets 409.
+  test('a 409 on a resend after a lost response says it may already be in effect', async () => {
+    mockApiRequest
+      .mockRejectedValueOnce(new TypeError('Network request failed'))
+      .mockRejectedValueOnce(problem(409, 'Conflict'));
+
+    await syncManager.enqueueAvailability('availability-lost', 'm-test', 'Mark unavailable', {
+      startAt: 1790000000,
+      endAt: 1790020000,
+    });
+    await flush();
+    expect((await store.find('availability-lost'))?.status).toBe('FAILED');
+
+    await syncManager.retry('availability-lost');
+    await flush();
+
+    const row = await store.find('availability-lost');
+    expect(row?.status).toBe('REJECTED');
+    expect(row?.lastError).toBe(syncManager.AVAILABILITY_MAY_BE_IN_EFFECT);
+  });
+
+  // R2-M1 (b): an older mark-off that was already sent may have landed; it is kept, not dropped.
+  test('a correction keeps an older mark-off that was already attempted, and says both may stand', async () => {
+    mockApiRequest.mockRejectedValueOnce(new TypeError('Network request failed'));
+    await syncManager.enqueueAvailability('availability-sent', 'm-test', 'Mark unavailable', {
+      startAt: 1790000000,
+      endAt: 1790604800,
+    });
+    await flush();
+    expect((await store.find('availability-sent'))?.attempts).toBe(1);
+
+    syncManager.configure(null, null);
+    const result = await syncManager.enqueueAvailability(
+      'availability-fixed',
+      'm-test',
+      'Mark unavailable',
+      { startAt: 1790000020, endAt: 1790030000 },
+    );
+    syncManager.configure(tokens, 'https://api.example.com');
+
+    expect(result).toEqual({ replaced: 0, mayStand: 1 });
+    expect(await store.find('availability-sent')).toBeDefined();
+  });
+
+  // R2-M1 send race: replace and claim-for-send are conditional, so exactly one of them wins.
+  test('a row the drain has claimed for sending cannot be discarded, and vice versa', async () => {
+    syncManager.configure(null, null);
+    await outbox.enqueue({
+      ownerMemberId: 'm-test',
+      ownerDeptId: null,
+      id: 'race-1',
+      kind: 'AVAILABILITY',
+      label: 'x',
+      path: 'personnel/members/m-test/availability',
+      body: {},
+    });
+    await outbox.enqueue({
+      ownerMemberId: 'm-test',
+      ownerDeptId: null,
+      id: 'race-2',
+      kind: 'AVAILABILITY',
+      label: 'x',
+      path: 'personnel/members/m-test/availability',
+      body: {},
+    });
+
+    expect(await outbox.claimForSync('race-1')).toBe(true);
+    expect(await outbox.discardIfUnattempted('race-1')).toBe(false);
+    expect(await outbox.discardIfUnattempted('race-2')).toBe(true);
+    expect(await outbox.claimForSync('race-2')).toBe(false);
+    syncManager.configure(tokens, 'https://api.example.com');
+  });
+
+  test('a corrected mark-off replaces an older one that has not been sent yet', async () => {
+    syncManager.configure(null, null);
+    const week = { startAt: 1790000000, endAt: 1790604800 };
+    const tonight = { startAt: 1790000010, endAt: 1790030000 };
+
+    await syncManager.enqueueAvailability('availability-week', 'm-test', 'Mark unavailable', week);
+    const { replaced } = await syncManager.enqueueAvailability(
+      'availability-tonight',
+      'm-test',
+      'Mark unavailable',
+      tonight,
+    );
+
+    expect(replaced).toBe(1);
+    await expect(store.find('availability-week')).resolves.toBeUndefined();
+    expect((await store.find('availability-tonight'))?.body).toBe(JSON.stringify(tonight));
+    syncManager.configure(tokens, 'https://api.example.com');
+  });
+
+  test('a mark-off without a member id is refused, never sent to a blank path', async () => {
+    await expect(
+      syncManager.enqueueAvailability('availability-x', '', 'Mark unavailable', {}),
+    ).rejects.toThrow();
+  });
+
   test('a 409 is still a rejection for kinds that carry their own idempotency key', async () => {
     mockApiRequest.mockRejectedValueOnce(problem(409, 'Conflict'));
 
@@ -838,6 +973,8 @@ describe('alert responses (RESPONSE)', () => {
       queuedAt: '2026-01-01T00:00:00.000Z',
       nextAttemptAt: 0,
       syncedAt: null,
+      ownerMemberId: 'm-test',
+      ownerDeptId: null,
     });
     await store.insert({
       id: 'response-new',
@@ -856,6 +993,8 @@ describe('alert responses (RESPONSE)', () => {
       queuedAt: '2026-01-01T00:00:05.000Z',
       nextAttemptAt: 0,
       syncedAt: null,
+      ownerMemberId: 'm-test',
+      ownerDeptId: null,
     });
     mockApiRequest.mockResolvedValue({ json: async () => ({}) });
 
@@ -865,4 +1004,172 @@ describe('alert responses (RESPONSE)', () => {
     expect(mockApiRequest.mock.calls[0]![2].body).toBe('{"ackStatus":"NOT_RESPONDING"}');
     await expect(store.find('response-old')).resolves.toBeUndefined();
   });
+});
+
+// R2-M3: a station phone shared by members A and B.
+describe('queued work belongs to the member who queued it', () => {
+  const memberA = { ...tokens, memberId: 'member-a', deptId: 'nichols' };
+  const memberB = { ...tokens, memberId: 'member-b', deptId: 'nichols' };
+  const entry = { activityType: 'DRILL', refId: null, occurredAt: 1790000000, hours: 2 };
+
+  afterEach(() => {
+    syncManager.configure(tokens, 'https://api.example.com');
+  });
+
+  test("A's queued attendance is never sent under B, and sends when A signs in again", async () => {
+    (NetInfo.fetch as jest.Mock).mockResolvedValue({ isConnected: false });
+    syncManager.configure(memberA, 'https://api.example.com');
+    await syncManager.enqueueAttendance('attendance-a', 'Attendance — Drill', entry);
+    await flush();
+    expect((await store.find('attendance-a'))?.ownerMemberId).toBe('member-a');
+    expect((await store.find('attendance-a'))?.ownerDeptId).toBe('nichols');
+
+    // A signs out; B signs in with signal.
+    syncManager.configure(null, null);
+    (NetInfo.fetch as jest.Mock).mockResolvedValue({ isConnected: true });
+    mockApiRequest.mockResolvedValue({ json: async () => entry });
+    syncManager.configure(memberB, 'https://api.example.com');
+    await syncManager.drainAndSettle();
+    await flush();
+
+    expect(mockApiRequest).not.toHaveBeenCalled();
+    expect(await store.find('attendance-a')).toBeDefined();
+    const seenByB = await outbox.getStatus(null, 'member-b');
+    expect(seenByB.items).toHaveLength(0);
+    expect(seenByB.heldForOtherMembers).toBe(1);
+
+    syncManager.configure(memberA, 'https://api.example.com');
+    await flush();
+    await flush();
+    expect(mockApiRequest).toHaveBeenCalledWith(
+      'personnel/attendance',
+      memberA,
+      expect.objectContaining({ method: 'POST' }),
+    );
+  });
+
+  test('a row with no recorded owner is held until the signed-in member sends it as theirs', async () => {
+    await store.insert({
+      id: 'legacy-1',
+      kind: 'ATTENDANCE',
+      label: 'Attendance — Drill',
+      method: 'POST',
+      path: 'personnel/attendance',
+      body: JSON.stringify(entry),
+      stage: 'CREATE',
+      photoLocalUri: null,
+      photoS3Key: null,
+      photoUploadUrl: null,
+      status: 'QUEUED',
+      attempts: 0,
+      lastError: null,
+      queuedAt: new Date().toISOString(),
+      nextAttemptAt: Date.now(),
+      syncedAt: null,
+      ownerMemberId: null,
+      ownerDeptId: null,
+    });
+    (NetInfo.fetch as jest.Mock).mockResolvedValue({ isConnected: true });
+    mockApiRequest.mockResolvedValue({ json: async () => entry });
+    syncManager.configure(memberB, 'https://api.example.com');
+    await flush();
+    await flush();
+
+    expect(mockApiRequest).not.toHaveBeenCalled();
+    const status = await outbox.getStatus(null, 'member-b');
+    expect(status.items).toEqual([expect.objectContaining({ id: 'legacy-1', needsOwner: true })]);
+
+    await syncManager.sendAsMe('legacy-1');
+    await flush();
+    await flush();
+    expect(mockApiRequest).toHaveBeenCalledWith('personnel/attendance', memberB, expect.anything());
+  });
+
+  test('a member can count and discard their own unsent items at sign-out', async () => {
+    syncManager.configure(null, null);
+    syncManager.configure(memberA, null);
+    await syncManager.enqueueAttendance('attendance-a2', 'Attendance — Drill', entry);
+    expect(await syncManager.countUnsentFor('member-a')).toBe(1);
+    expect(await syncManager.countUnsentFor('member-b')).toBe(0);
+    await syncManager.discardAllFor('member-a');
+    expect(await store.find('attendance-a2')).toBeUndefined();
+  });
+});
+
+test('drainBriefly sends queued work but never holds sign-out past its time limit', async () => {
+  mockApiRequest.mockResolvedValueOnce({ json: async () => ({}) });
+  syncManager.configure(null, null);
+  syncManager.setOwnerResolver(async () => ({ memberId: 'm-test', deptId: null }));
+  await syncManager.enqueueChecklistRun('ENGINE-2', 'check-brief', {});
+  syncManager.setOwnerResolver(null);
+  syncManager.configure(tokens, 'https://api.example.com');
+  await syncManager.drainBriefly(3000);
+  await expect(store.find('check-brief')).resolves.toBeUndefined();
+
+  // A server that doesn't answer in time: drainBriefly returns at the limit anyway.
+  let answer: () => void = () => undefined;
+  mockApiRequest.mockImplementationOnce(
+    () =>
+      new Promise((resolve) => {
+        answer = () => resolve({ json: async () => ({}) });
+      }),
+  );
+  await syncManager.enqueueChecklistRun('ENGINE-2', 'check-hang', {});
+  const started = Date.now();
+  await syncManager.drainBriefly(50);
+  expect(Date.now() - started).toBeLessThan(2000);
+  // Let the abandoned drain finish so it doesn't hold the drain lock for later tests.
+  answer();
+  await syncManager.drainAndSettle();
+});
+
+// R5-M1: A signs out with a request in flight on a bad link; B signs in before it returns.
+test("a drain still running when the member changes never posts A's next row with B's tokens", async () => {
+  const memberA = { ...tokens, memberId: 'member-a' };
+  const memberB = { ...tokens, memberId: 'member-b' };
+  const entry = { activityType: 'DRILL', refId: null, occurredAt: 1790000000, hours: 2 };
+  (NetInfo.fetch as jest.Mock).mockResolvedValue({ isConnected: false });
+  syncManager.configure(memberA, 'https://api.example.com');
+  await syncManager.enqueueAttendance('a-first', 'Attendance — Drill', entry);
+  await syncManager.enqueueAttendance('a-second', 'Attendance — Drill', {
+    ...entry,
+    occurredAt: 1790000100,
+  });
+  await flush();
+
+  let releaseFirst: () => void = () => undefined;
+  mockApiRequest.mockImplementationOnce(
+    () =>
+      new Promise((resolve) => {
+        releaseFirst = () => resolve({ json: async () => entry });
+      }),
+  );
+  mockApiRequest.mockResolvedValue({ json: async () => entry });
+  (NetInfo.fetch as jest.Mock).mockResolvedValue({ isConnected: true });
+  const running = syncManager.drainAndSettle();
+  for (let i = 0; i < 20 && mockApiRequest.mock.calls.length === 0; i += 1) await flush();
+  expect(mockApiRequest).toHaveBeenCalledTimes(1);
+
+  // A signs out, B signs in, then A's in-flight request returns.
+  syncManager.configure(null, null);
+  syncManager.configure(memberB, 'https://api.example.com');
+  releaseFirst();
+  await running;
+  await flush();
+
+  expect(mockApiRequest.mock.calls.every(([, source]) => source !== memberB)).toBe(true);
+  expect(mockApiRequest).toHaveBeenCalledTimes(1);
+  expect((await store.find('a-second'))?.ownerMemberId).toBe('member-a');
+
+  // A signs in again: the held row goes, under A.
+  syncManager.configure(null, null);
+  syncManager.configure(memberA, 'https://api.example.com');
+  await flush();
+  await flush();
+  expect(mockApiRequest).toHaveBeenLastCalledWith(
+    'personnel/attendance',
+    memberA,
+    expect.objectContaining({ body: expect.stringContaining('1790000100') }),
+  );
+  await expect(store.find('a-second')).resolves.toBeUndefined();
 });

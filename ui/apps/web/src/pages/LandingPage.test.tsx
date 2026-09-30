@@ -1,6 +1,6 @@
 import { typography } from '@boxalarm/design-tokens';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { cleanup, render, screen, within } from '@testing-library/react';
+import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { HttpResponse, http } from 'msw';
 import { setupServer } from 'msw/node';
@@ -83,14 +83,59 @@ test('renders the highest-priority role dashboard when CHIEF is present', async 
   await screen.findByRole('heading', { name: 'Chief dashboard' });
 });
 
-test('falls back to member home when no groups are present', async () => {
+test('falls back to the member summary when no groups are present', async () => {
   renderLanding({ sub: 'm1' });
-  await screen.findByRole('heading', { name: 'Member home' });
+  await screen.findByRole('heading', { name: 'My summary' });
+});
+
+test('a member home is a real summary: availability, shifts, certs, points, out of service', async () => {
+  server.use(
+    http.get('/api/v1/training/members/m1/certifications', () =>
+      HttpResponse.json([
+        {
+          certId: 'c-1',
+          memberId: 'm1',
+          certType: 'FF1',
+          issueDate: '2020-01-01',
+          expiryDate: '2099-01-01',
+          issuingAuthority: 'CT',
+          attachmentS3Key: null,
+          status: 'CURRENT',
+        },
+      ]),
+    ),
+    http.get('/api/v1/personnel/members/m1/losap', () =>
+      HttpResponse.json({ memberId: 'm1', year: 2026, totalPoints: 42 }),
+    ),
+    http.get('/api/v1/apparatus', () =>
+      HttpResponse.json({
+        apparatus: [
+          {
+            apparatusId: 'a-2',
+            unitId: 'E2',
+            type: 'Engine',
+            status: 'OUT_OF_SERVICE',
+            outOfService: { reason: 'Pump seal', startAt: 1, elapsedSeconds: 1 },
+          },
+        ],
+      }),
+    ),
+  );
+  renderLanding({ sub: 'm1', 'cognito:groups': ['MEMBER'] });
+
+  await screen.findByRole('heading', { name: 'My summary' });
+  expect(screen.getByRole('link', { name: 'Mark unavailable' }).getAttribute('href')).toBe(
+    '/availability',
+  );
+  expect(await screen.findByText('FF1')).toBeTruthy();
+  expect(await screen.findByText('42')).toBeTruthy();
+  expect(await screen.findByText(/Pump seal/)).toBeTruthy();
+  expect(screen.getByText(/No shifts scheduled this week/)).toBeTruthy();
 });
 
 test('the heading uses the design-token type scale, matching the sign-in page', async () => {
   renderLanding({ sub: 'm1' });
-  const heading = await screen.findByRole('heading', { name: 'Member home' });
+  const heading = await screen.findByRole('heading', { name: 'My summary' });
   expect(heading.style.fontSize).toBe(`${typography.size.xl}px`);
 });
 
@@ -161,7 +206,7 @@ test('a 403 on the active-call read says so instead of showing an empty list', a
 });
 
 test('the active-call tile shows a loading state before the first response', async () => {
-  let release: () => void = () => undefined;
+  let release: (() => void) | undefined;
   server.use(
     http.get(
       '/api/v1/alerting/dispatches',
@@ -175,7 +220,10 @@ test('the active-call tile shows a loading state before the first response', asy
   const card = (await screen.findByRole('heading', { name: 'Active calls' })).parentElement!;
   expect(within(card).getByRole('status').textContent).toMatch(/loading/i);
   expect(within(card).queryByText(/no calls/i)).toBeNull();
-  release();
+  // Under a loaded test run the request can reach the handler after this point; releasing
+  // before it has would be a no-op and the tile would never resolve.
+  await waitFor(() => expect(release).toBeDefined());
+  release!();
   expect(await within(card).findByText(/no calls dispatched/i)).toBeTruthy();
 });
 
@@ -282,7 +330,7 @@ test('a failed apparatus query does not hide the active-call tile', async () => 
 // is a DASHBOARD_ROLES member and this dashboard used to fetch apparatus for every dashboard
 // role regardless — an OFFICER's dashboard triggered a request Cedar denies with 403 on every
 // visit, and the failure rendered as a clean "0 / 0 apparatus in service" tile.
-test('OFFICER dashboard never requests apparatus (routeTable denies it) and shows no apparatus tiles', async () => {
+test('OFFICER dashboard shows apparatus tiles: the officer decides whether a rig rolls', async () => {
   let apparatusRequested = false;
   server.use(
     http.get('/api/v1/apparatus', () => {
@@ -293,12 +341,10 @@ test('OFFICER dashboard never requests apparatus (routeTable denies it) and show
 
   renderLanding({ sub: 'm1', 'cognito:groups': ['OFFICER'] });
   await screen.findByRole('heading', { name: 'Officer dashboard' });
-  // Members is granted to OFFICER, so that tile should still render.
   await screen.findByText('Active members');
 
-  expect(apparatusRequested).toBe(false);
-  expect(screen.queryByText('Apparatus in service')).toBeNull();
-  expect(screen.queryByText('Out of service')).toBeNull();
+  expect(await screen.findByText('Apparatus in service')).toBeTruthy();
+  expect(apparatusRequested).toBe(true);
 });
 
 // Regression for MAJOR-3: a failed query (offline, 500, or a 403 that slips through role gating)
@@ -413,4 +459,18 @@ test('a failed NERIS compliance read says so, never a clean zero', async () => {
   renderLanding({ sub: 'm1', 'cognito:groups': ['CHIEF'] });
   expect(await screen.findByText(/couldn.t load NERIS compliance/i)).toBeTruthy();
   expect(screen.getByRole('button', { name: 'Retry NERIS compliance' })).toBeTruthy();
+});
+
+test('an officer or chief dashboard keeps their own record: mark off, certs, points', async () => {
+  server.use(
+    http.get('/api/v1/training/members/m1/certifications', () => HttpResponse.json([])),
+    http.get('/api/v1/personnel/members/m1/losap', () =>
+      HttpResponse.json({ memberId: 'm1', year: 2026, totalPoints: 17 }),
+    ),
+  );
+  renderLanding({ sub: 'm1', 'cognito:groups': ['CHIEF'] });
+
+  expect(await screen.findByRole('heading', { level: 2, name: 'You' })).toBeTruthy();
+  expect(screen.getByRole('link', { name: 'Mark unavailable' })).toBeTruthy();
+  expect(await screen.findByText('17')).toBeTruthy();
 });

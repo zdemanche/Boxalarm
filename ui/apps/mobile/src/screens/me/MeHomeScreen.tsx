@@ -6,6 +6,7 @@ import { Button, Screen, useTheme, type SurfaceTheme } from '../../components/ui
 import { useAuth } from '../../auth/AuthContext';
 import { useMeRepository } from '../../features/me/apiMeRepository';
 import type { LosapTotal, MemberProfile, Qualification } from '../../features/me/types';
+import * as syncManager from '../../sync/syncManager';
 
 function NavRow({
   label,
@@ -50,12 +51,36 @@ export function signOutWarning(phone: string | null | undefined): string {
   return appPages + other;
 }
 
-export function confirmSignOut(signOut: () => Promise<void>, phone?: string | null): void {
+export async function confirmSignOut(
+  signOut: () => Promise<void>,
+  phone?: string | null,
+  memberId?: string | null,
+): Promise<void> {
+  // Work this member queued stays theirs: it is held on the phone and sent only when they sign
+  // in again, never under the next member (R2-M3). Say so, and let them discard it instead.
+  const unsent = memberId ? await syncManager.countUnsentFor(memberId).catch(() => 0) : 0;
+  const unsentNote =
+    unsent > 0
+      ? `\n\n${unsent} ${unsent === 1 ? "item hasn't" : "items haven't"} been sent yet. ${
+          unsent === 1 ? 'It' : 'They'
+        }'ll send next time you sign in on this phone.`
+      : '';
   Alert.alert(
     'Sign out and stop getting pages on this phone?',
-    signOutWarning(phone),
+    signOutWarning(phone) + unsentNote,
     [
       { text: 'Stay signed in', style: 'cancel' },
+      ...(unsent > 0 && memberId
+        ? [
+            {
+              text: `Discard ${unsent} unsent and sign out`,
+              style: 'destructive' as const,
+              onPress: () => {
+                void syncManager.discardAllFor(memberId).then(() => signOut());
+              },
+            },
+          ]
+        : []),
       { text: 'Sign out', style: 'destructive', onPress: () => void signOut() },
     ],
     { cancelable: true },
@@ -63,7 +88,7 @@ export function confirmSignOut(signOut: () => Promise<void>, phone?: string | nu
 }
 
 export function MeHomeScreen() {
-  const { signOut } = useAuth();
+  const { signOut, memberId } = useAuth();
   const navigation = useNavigation();
   const theme = useTheme();
   const repository = useMeRepository();
@@ -107,6 +132,17 @@ export function MeHomeScreen() {
             {profile.rank}
           </Text>
         )}
+      </View>
+      {/* F2.5 / design.md F-06: marking off is the member's core self-service task, so it is the
+          first action on Me - it was unreachable from anywhere in the app. */}
+      <View style={{ marginBottom: spacing.md }}>
+        <Button
+          label="Mark unavailable"
+          size="alert"
+          fullWidth
+          accessibilityLabel="Mark unavailable. Choose how long you won't be alerted."
+          onPress={() => navigation.navigate('Availability' as never)}
+        />
       </View>
       <NavRow
         label="Edit profile"
@@ -179,7 +215,7 @@ export function MeHomeScreen() {
           label="Sign out"
           variant="danger"
           accessibilityLabel="Sign out. Boxalarm pages stop on this phone."
-          onPress={() => confirmSignOut(signOut, profile?.phone)}
+          onPress={() => void confirmSignOut(signOut, profile?.phone, memberId)}
         />
       </View>
     </Screen>

@@ -44,37 +44,38 @@ describe('TopBar connectivity status', () => {
     expect(screen.queryByText('Connected')).toBeNull();
   });
 
-  test('reflects navigator.onLine === true as "online"', async () => {
+  test('shows nothing while online: being online is the normal case, not news', async () => {
     Object.defineProperty(navigator, 'onLine', { value: true, configurable: true });
     renderTopBar();
     const status = await screen.findByRole('status');
-    expect(status.textContent).toContain('online');
+    expect(status.textContent).toBe('');
+    expect(screen.queryByText(/Browser network/)).toBeNull();
   });
 
-  test('reflects navigator.onLine === false as "offline"', async () => {
+  test('offline shows what it means for the user, in the live region', async () => {
     Object.defineProperty(navigator, 'onLine', { value: false, configurable: true });
     renderTopBar();
     const status = await screen.findByRole('status');
-    expect(status.textContent).toContain('offline');
+    expect(status.textContent).toContain('Offline — changes won’t save');
   });
 
   test('updates live when the browser goes offline then back online', async () => {
     Object.defineProperty(navigator, 'onLine', { value: true, configurable: true });
     renderTopBar();
     const status = await screen.findByRole('status');
-    expect(status.textContent).toContain('online');
+    expect(status.textContent).toBe('');
 
     act(() => {
       Object.defineProperty(navigator, 'onLine', { value: false, configurable: true });
       window.dispatchEvent(new Event('offline'));
     });
-    expect(status.textContent).toContain('offline');
+    expect(status.textContent).toContain('Offline');
 
     act(() => {
       Object.defineProperty(navigator, 'onLine', { value: true, configurable: true });
       window.dispatchEvent(new Event('online'));
     });
-    expect(status.textContent).toContain('online');
+    expect(status.textContent).toBe('');
   });
 });
 

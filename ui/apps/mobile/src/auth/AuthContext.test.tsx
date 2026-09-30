@@ -2,6 +2,9 @@ import { fireEvent, render, waitFor } from '@testing-library/react-native';
 import { AppState, Pressable, Text, type AppStateStatus } from 'react-native';
 import type { AuthConfiguration, AuthorizeResult, RefreshResult } from 'react-native-app-auth';
 import { AuthProvider, useAuth, type AuthDeps } from './AuthContext';
+import { kvGet } from '../sync/kvStore';
+import * as syncManager from '../sync/syncManager';
+import { LAST_SESSION_SUB_KEY } from '../sync/memberCache';
 import { apiRequest, ApiError, type AuthTokenSource } from '../lib/apiClient';
 
 function captureAppStateHandler(): (status: AppStateStatus) => void {
@@ -460,4 +463,63 @@ test('a Keychain read that rejects on foreground keeps the session authenticated
   await new Promise((resolve) => setTimeout(resolve, 50));
   expect(queryByText('unauthenticated')).toBeNull();
   expect(await findByText('authenticated:OFFICER')).toBeTruthy();
+});
+
+// R4-M1: the last-session hint must never outlive the session, or the next member's token could
+// send a previous member's ownerless answer.
+test('signing in records the session member as the last-session hint; signing out deletes it', async () => {
+  const stored = issuedTokens();
+  const deps = makeDeps();
+  withStored(deps, stored);
+  globalThis.fetch = jest.fn(
+    async () => new Response('{}', { status: 200 }),
+  ) as unknown as typeof fetch;
+  let contextValue: ReturnType<typeof useAuth> | undefined;
+  function Capture() {
+    contextValue = useAuth();
+    return null;
+  }
+  await render(
+    <AuthProvider deps={deps}>
+      <Capture />
+    </AuthProvider>,
+  );
+  await waitFor(() => expect(contextValue?.isLoading).toBe(false));
+  const memberId = contextValue!.memberId;
+  expect(memberId).toBeTruthy();
+  await waitFor(async () =>
+    expect((await kvGet<string>(LAST_SESSION_SUB_KEY))?.value).toBe(memberId),
+  );
+
+  await contextValue!.signOut();
+
+  expect(await kvGet(LAST_SESSION_SUB_KEY)).toBeNull();
+});
+
+test('signOut first gives queued work one bounded try to send while the session is valid', async () => {
+  const drainSpy = jest.spyOn(syncManager, 'drainBriefly').mockResolvedValue();
+  const deps = makeDeps();
+  withStored(deps, issuedTokens());
+  globalThis.fetch = jest.fn(
+    async () => new Response('{}', { status: 200 }),
+  ) as unknown as typeof fetch;
+  let contextValue: ReturnType<typeof useAuth> | undefined;
+  function Capture() {
+    contextValue = useAuth();
+    return null;
+  }
+  await render(
+    <AuthProvider deps={deps}>
+      <Capture />
+    </AuthProvider>,
+  );
+  await waitFor(() => expect(contextValue?.isLoading).toBe(false));
+
+  await contextValue!.signOut();
+
+  expect(drainSpy).toHaveBeenCalledWith(3000);
+  expect(drainSpy.mock.invocationCallOrder[0]).toBeLessThan(
+    (deps.resetInternetCredentials as jest.Mock).mock.invocationCallOrder[0]!,
+  );
+  drainSpy.mockRestore();
 });

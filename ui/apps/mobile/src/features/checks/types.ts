@@ -15,12 +15,18 @@ export interface ChecklistItem {
   code: string;
   label: string;
   requiresPhoto: boolean;
+  /** Must be answered one by one (brakes, SCBA pressure): never included in "Mark the other N
+   * OK". The checklist API doesn't send this flag yet, so today it is always absent. */
+  critical?: boolean;
 }
 
 export interface ChecklistTemplate {
   templateId: string;
   name: string;
   items: ChecklistItem[];
+  /** Client-only: epoch ms of the cached copy when the sheet was served from this phone because
+   * the server couldn't be reached. Absent on a live response. */
+  cachedAt?: number;
 }
 
 export interface ItemResult {
@@ -49,8 +55,19 @@ export interface DefectSubmission {
   photoFileName?: string;
 }
 
+/** GET apparatus/{unitId} openDefects entry (apparatus-service apparatusRepository.ts). */
+export interface OpenDefect {
+  defectId: string;
+  description: string;
+  severity: DefectSeverity;
+  reportedAt: number;
+}
+
 export interface ChecksRepository {
   getApparatus(): Promise<Apparatus[]>;
+  /** Open defects on a unit, so a check doesn't re-file one that is already reported. Optional:
+   * the mock has none. Needs a connection (no offline cache). */
+  getOpenDefects?(unitId: string): Promise<OpenDefect[]>;
   getChecklistTemplate(apparatusId: string): Promise<ChecklistTemplate>;
   // Optimistic local-first (N4.2): resolves immediately from the local store: no step in the
   // checklist waits on a network round trip. A real implementation queues to the outbox here;

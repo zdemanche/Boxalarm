@@ -20,6 +20,12 @@ import Config from 'react-native-config';
 import * as Keychain from 'react-native-keychain';
 import { revokePushToken } from '../features/alerts/pushTokens';
 import { buildOidcConfig } from './config';
+import { kvDelete, kvSet } from '../sync/kvStore';
+import * as syncManager from '../sync/syncManager';
+import { clearMemberCache, LAST_SESSION_SUB_KEY } from '../sync/memberCache';
+
+/** How long sign-out waits for one last try at sending queued work (alert answers first). */
+const SIGN_OUT_DRAIN_MS = 3000;
 
 const KEYCHAIN_SERVER = 'boxalarm-auth';
 const FOREGROUND_RENEWAL_WINDOW_MS = 5 * 60_000;
@@ -67,6 +73,12 @@ function decodeRoles(idToken: string): Role[] {
 function decodeMemberId(idToken: string): string | null {
   const sub = decodeIdTokenClaims(idToken).sub;
   return typeof sub === 'string' && sub.length > 0 ? sub : null;
+}
+
+/** The member's department (custom:deptId, the claim the backend authorizer scopes by). */
+function decodeDeptId(idToken: string): string | null {
+  const deptId = decodeIdTokenClaims(idToken)['custom:deptId'];
+  return typeof deptId === 'string' && deptId.length > 0 ? deptId : null;
 }
 
 function msUntilExpiry(tokens: StoredTokens): number {
@@ -129,6 +141,28 @@ async function writeStoredTokens(deps: AuthDeps, tokens: StoredTokens): Promise<
  * entry as AuthProvider and renews it the same way; never signs anyone out (an invalid refresh
  * token just yields null, and the answer stays queued for the next session).
  */
+export interface StoredSessionOwner {
+  readonly memberId: string;
+  readonly deptId: string | null;
+}
+
+/**
+ * Who the stored session belongs to (id token sub and custom:deptId), read straight from the
+ * keychain - for code with no AuthProvider (the headless notification task, a cold start before
+ * the provider has loaded) that queues work and must stamp its owner (R3-C1). Null when there is
+ * no stored session or the token has no sub.
+ */
+export async function readStoredSessionOwner(
+  deps: AuthDeps = defaultDeps,
+): Promise<StoredSessionOwner | null> {
+  // A keychain read error is thrown, not reported as "no session": the caller must tell "signed
+  // out" (refuse to queue an answer) from "couldn't read" (queue it with a hint) apart (R4-M1).
+  const stored = await readStoredTokens(deps);
+  if (!stored) return null;
+  const memberId = decodeMemberId(stored.idToken);
+  return memberId ? { memberId, deptId: decodeDeptId(stored.idToken) } : null;
+}
+
 export function createStoredTokenSource(deps: AuthDeps = defaultDeps) {
   let renewing: Promise<string | null> | null = null;
   const renewSilently = (): Promise<string | null> => {
@@ -166,6 +200,8 @@ export function createStoredTokenSource(deps: AuthDeps = defaultDeps) {
 interface AuthState {
   roles: Role[];
   memberId: string | null;
+  /** Optional so test doubles needn't set it; the provider always does. */
+  deptId?: string | null;
   isAuthenticated: boolean;
   isLoading: boolean;
 }
@@ -203,9 +239,13 @@ export function AuthProvider({
   depsRef.current = deps;
 
   const applyTokens = useCallback((tokens: StoredTokens | null) => {
+    const sub = tokens ? decodeMemberId(tokens.idToken) : null;
+    if (sub) void kvSet(LAST_SESSION_SUB_KEY, sub);
+    else void kvDelete(LAST_SESSION_SUB_KEY);
     setState({
       roles: tokens ? decodeRoles(tokens.idToken) : [],
       memberId: tokens ? decodeMemberId(tokens.idToken) : null,
+      deptId: tokens ? decodeDeptId(tokens.idToken) : null,
       isAuthenticated: tokens !== null,
       isLoading: false,
     });
@@ -299,6 +339,9 @@ export function AuthProvider({
         // E1-S14-UI AC5: the DELETE must be sent before local credentials are cleared, so a
         // signed-out device stops receiving pages. Best-effort: sign-out must never be blocked
         // by a network failure.
+        // While the session is still valid, one bounded try (about 3 s) to send this member's
+        // queued work - an alert answer left behind waits until they sign in here again.
+        await syncManager.drainBriefly(SIGN_OUT_DRAIN_MS).catch(() => undefined);
         const stored = await readStoredTokens(depsRef.current).catch(() => null);
         const apiBaseUrl = Config.API_BASE_URL;
         const memberId = stored ? decodeMemberId(stored.idToken) : null;
@@ -309,6 +352,12 @@ export function AuthProvider({
             apiBaseUrl,
           ).catch(() => undefined);
         }
+        // The member's cached apparatus, shifts, check drafts and last mark-off stay on the phone
+        // otherwise (review m8). Queued writes in the outbox are kept: they are the member's
+        // work and sync once someone signs in.
+        if (memberId) await clearMemberCache(memberId).catch(() => undefined);
+        // Before the keychain reset, so no window exists where the hint outlives the session.
+        await kvDelete(LAST_SESSION_SUB_KEY);
         await depsRef.current.resetInternetCredentials({ server: KEYCHAIN_SERVER });
         applyTokens(null);
       },

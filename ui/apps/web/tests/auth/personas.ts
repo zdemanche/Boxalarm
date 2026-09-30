@@ -6,7 +6,7 @@ import type { Role } from '../../src/auth/roles';
  * `routesForRoles()`, or a wrong route table would make the E2E pass vacuously.
  */
 export const PERSONAS: Record<Role, { groups: Role[]; expectedNavLabels: readonly string[] }> = {
-  MEMBER: { groups: ['MEMBER'], expectedNavLabels: [] },
+  MEMBER: { groups: ['MEMBER'], expectedNavLabels: ['Dashboard'] },
   OFFICER: {
     groups: ['OFFICER'],
     expectedNavLabels: [
@@ -14,29 +14,33 @@ export const PERSONAS: Record<Role, { groups: Role[]; expectedNavLabels: readonl
       'Live roster',
       'Alert diagnostics',
       'Incidents',
-      'Personnel',
+      'Members',
       'Schedule',
+      'Apparatus',
     ],
   },
   TRAINING: {
     groups: ['TRAINING'],
-    expectedNavLabels: ['Personnel', 'Certifications', 'Training events', 'Reporting'],
+    expectedNavLabels: ['Dashboard', 'Members', 'Certifications', 'Training events', 'Reporting'],
   },
   APPARATUS: {
     groups: ['APPARATUS'],
-    expectedNavLabels: ['Apparatus'],
+    expectedNavLabels: ['Dashboard', 'Apparatus'],
   },
   ADMIN: {
     groups: ['ADMIN'],
     expectedNavLabels: [
+      'Dashboard',
       'Alert diagnostics',
-      'Personnel',
+      'Incidents',
+      'Members',
       'Certifications',
       'Training events',
       'Schedule',
       'Reporting',
       'Settings',
       'Audit log',
+      'Apparatus',
       'Apparatus compliance',
     ],
   },
@@ -47,7 +51,10 @@ export const PERSONAS: Record<Role, { groups: Role[]; expectedNavLabels: readonl
       'Live roster',
       'Alert diagnostics',
       'Incidents',
-      'Personnel',
+      'Members',
+      'Schedule',
+      'Certifications',
+      'Training events',
       'Apparatus',
       'Reporting',
       'Audit log',
@@ -62,6 +69,6 @@ export const FORBIDDEN_PATH_BY_ROLE: Record<Role, string> = {
   OFFICER: '/settings',
   TRAINING: '/settings',
   APPARATUS: '/settings',
-  ADMIN: '/incidents',
+  ADMIN: '/alerts/roster',
   CHIEF: '/settings',
 };

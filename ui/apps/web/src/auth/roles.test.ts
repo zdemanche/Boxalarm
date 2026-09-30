@@ -1,5 +1,12 @@
 import { describe, expect, test } from 'vitest';
-import { canManageTraining, rolesFromProfile, type Role } from './roles';
+import {
+  canCreateApparatus,
+  canManageInventory,
+  canManageTraining,
+  canUpdateServiceStatus,
+  rolesFromProfile,
+  type Role,
+} from './roles';
 
 describe('rolesFromProfile', () => {
   test('reads cognito:groups and maps known groups to Role', () => {
@@ -47,4 +54,14 @@ describe('canManageTraining', () => {
   ])('%j -> %s', (roles, expected) => {
     expect(canManageTraining(roles)).toBe(expected);
   });
+});
+
+test('write-control helpers mirror the Cedar groups (review m6)', () => {
+  expect(canUpdateServiceStatus(['OFFICER'])).toBe(true);
+  expect(canUpdateServiceStatus(['ADMIN'])).toBe(true);
+  expect(canUpdateServiceStatus(['TRAINING'])).toBe(false);
+  expect(canManageInventory(['OFFICER'])).toBe(true);
+  expect(canManageInventory(['APPARATUS'])).toBe(false);
+  expect(canCreateApparatus(['APPARATUS'])).toBe(false);
+  expect(canCreateApparatus(['ADMIN'])).toBe(true);
 });

@@ -13,12 +13,17 @@ export function useSyncEngine(): void {
   const auth = useOptionalAuth();
   const apiBaseUrl = Config.API_BASE_URL;
   const isAuthenticated = auth?.isAuthenticated ?? false;
+  // Reconfigure when the member changes, so queued work is always stamped with and sent for the
+  // member who is actually signed in (R2-M3).
+  const memberId = auth?.memberId ?? null;
   // The token source is read through a ref so a token refresh never re-runs configure().
   const authRef = useRef(auth);
   authRef.current = auth;
 
   useEffect(() => {
-    const tokens = apiBaseUrl && isAuthenticated ? (authRef.current ?? null) : null;
+    // The session is passed even without an API base URL (dev builds) so the outbox knows whose
+    // work it holds; nothing drains without both (syncManager.drain).
+    const tokens = isAuthenticated ? (authRef.current ?? null) : null;
     syncManager.configure(tokens, apiBaseUrl || null);
-  }, [apiBaseUrl, isAuthenticated]);
+  }, [apiBaseUrl, isAuthenticated, memberId]);
 }

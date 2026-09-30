@@ -1,6 +1,44 @@
 import { open, type DB } from '@op-engineering/op-sqlite';
 
 let db: DB | null = null;
+let ownerColumns = true;
+
+// answeredAsHint (R4-M1): the signed-in member when an ownerless answer was queued.
+const OWNER_COLUMNS = ['ownerMemberId', 'ownerDeptId', 'answeredAsHint'] as const;
+
+/**
+ * Adds the owner columns (R2-M3) to an outbox created before they existed. Checks
+ * PRAGMA table_info rather than catching every error: if an ALTER genuinely fails (locked or
+ * read-only file, full disk) it logs and returns false instead of every insert throwing - an
+ * alert answer must always be saveable. In that mode rows are stored without owners and the
+ * outbox runs unscoped, as before R2-M3: listDrainable and getStatus (outbox.ts) treat every row
+ * as the signed-in member's, so checks, defects, attendance and mark-offs keep sending. What is
+ * lost is only the protection against sending one member's rows under another's session.
+ */
+export function migrateOutboxOwnerColumns(
+  database: Pick<DB, 'executeSync'>,
+  log: (message: string, error: unknown) => void = (message, error) =>
+    console.error(message, error),
+): boolean {
+  try {
+    const info = database.executeSync('PRAGMA table_info(outbox)');
+    const existing = new Set((info.rows ?? []).map((row) => String(row.name)));
+    for (const column of OWNER_COLUMNS) {
+      if (!existing.has(column))
+        database.executeSync(`ALTER TABLE outbox ADD COLUMN ${column} TEXT`);
+    }
+    return true;
+  } catch (error) {
+    log('[outbox] adding owner columns failed; queued work is not owner-scoped', error);
+    return false;
+  }
+}
+
+/** False when the owner columns couldn't be added: rows are stored and read without owners. */
+export function outboxHasOwnerColumns(): boolean {
+  getDb();
+  return ownerColumns;
+}
 
 export function getDb(): DB {
   if (!db) {
@@ -25,6 +63,7 @@ export function getDb(): DB {
         syncedAt TEXT
       )`,
     );
+    ownerColumns = migrateOutboxOwnerColumns(db);
     // Small device-local cache (kvStore.ts): the alert payload a page arrived with, the last
     // good dispatch detail and active-call list, and this device's latest answer per call - so
     // the alert path renders from the phone, never from a spinner.

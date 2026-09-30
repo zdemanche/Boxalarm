@@ -31,6 +31,8 @@ function DemoAuthProvider({ children }: { children: ReactNode }) {
     () => ({
       user: null,
       roles: [role],
+      // Demo data's first member (lib/demoFixtures.ts), so own-record pages have someone to show.
+      memberId: 'm-1',
       isAuthenticated: true,
       isLoading: false,
       signIn: () => Promise.resolve(),
@@ -79,6 +81,9 @@ interface AuthState {
 }
 
 export interface AuthContextValue extends AuthState {
+  /** The signed-in member's id (the Cognito `sub`, which personnel-service keys members on);
+   * null while signed out. Own-record routes (`personnel/members/{memberId}/...`) use it. */
+  memberId: string | null;
   signIn: () => Promise<void>;
   signOut: () => Promise<void>;
   completeSignIn: () => Promise<User | undefined>;
@@ -190,6 +195,7 @@ function RealAuthProvider({
   const value = useMemo<AuthContextValue>(
     () => ({
       ...state,
+      memberId: typeof state.user?.profile.sub === 'string' ? state.user.profile.sub : null,
       signIn: () => manager.signinRedirect(),
       signOut: () => manager.signoutRedirect(),
       completeSignIn,
