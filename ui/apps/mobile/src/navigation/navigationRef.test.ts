@@ -15,7 +15,12 @@ afterEach(() => {
 test('an alert opened before the navigator is ready is held and opened on ready, not dropped', () => {
   const ready = jest.spyOn(navigationRef, 'isReady').mockReturnValue(false);
   const navigate = jest.spyOn(navigationRef, 'navigate').mockImplementation(() => {});
-  const payload = { dispatchId: 'D1', incidentType: 'MVA', address: '1 Main St', receivedAt: 1 };
+  const payload = {
+    dispatchId: 'D1',
+    incidentType: 'MVA',
+    address: '1 Main St',
+    receivedAt: Date.now(),
+  };
 
   navigateToAlertDetail('D1', payload);
   expect(navigate).not.toHaveBeenCalled();
@@ -60,4 +65,22 @@ test('an alert opened while the sign-in screens show is held until the tabs moun
     screen: 'AlertDetail',
     params: { dispatchId: 'D3' },
   });
+});
+
+test('a page held while signed out is dropped once its call is past the 2 h window (N-m6)', () => {
+  jest.spyOn(navigationRef, 'isReady').mockReturnValue(true);
+  const root = jest.spyOn(navigationRef, 'getRootState').mockReturnValue(signIn);
+  const navigate = jest.spyOn(navigationRef, 'navigate').mockImplementation(() => {});
+  const old = {
+    dispatchId: 'D-OLD',
+    incidentType: 'MVA',
+    address: '1 Main St',
+    receivedAt: Date.now() - 2 * 60 * 60_000 - 1,
+  };
+
+  navigateToAlertDetail('D-OLD', old);
+  root.mockReturnValue(tabs);
+  flushPendingAlertNavigation();
+
+  expect(navigate).not.toHaveBeenCalled();
 });

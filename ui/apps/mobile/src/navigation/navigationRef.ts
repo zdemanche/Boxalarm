@@ -9,7 +9,25 @@ export const navigationRef = createNavigationContainerRef<AppTabsParamList>();
 // It is now held until the container reports ready - the newest one wins.
 type AlertScreen = 'AlertDetail' | 'MutualAidPrompt';
 
-let pendingAlert: { screen: AlertScreen; dispatchId: string; payload?: AlertPayload } | null = null;
+/**
+ * A page held for after sign-in is dropped once its call is this old (N-m6) - the same 2 h window
+ * the phone keeps pages and ownerless answers for - so the next sign-in, maybe hours later and
+ * maybe another member, does not open on a call long over. Timed from the dispatch, else from when
+ * the phone received the page, else from when it was held.
+ */
+export const HELD_ALERT_MAX_AGE_MS = 2 * 60 * 60_000;
+
+let pendingAlert: {
+  screen: AlertScreen;
+  dispatchId: string;
+  payload?: AlertPayload;
+  heldAt: number;
+} | null = null;
+
+function isStale(held: NonNullable<typeof pendingAlert>, now: number): boolean {
+  const since = held.payload?.dispatchedAt ?? held.payload?.receivedAt ?? held.heldAt;
+  return now - since > HELD_ALERT_MAX_AGE_MS;
+}
 
 function navigateNow(screen: AlertScreen, dispatchId: string, payload?: AlertPayload): void {
   navigationRef.navigate('Alerts', {
@@ -21,7 +39,10 @@ function navigateNow(screen: AlertScreen, dispatchId: string, payload?: AlertPay
 function navigateOrHold(screen: AlertScreen, dispatchId: string, payload?: AlertPayload): void {
   // Also held while signed out (the sign-in screens have no alert route): it opens after sign-in.
   if (!isAlertRouteAvailable()) {
-    pendingAlert = payload ? { screen, dispatchId, payload } : { screen, dispatchId };
+    const heldAt = Date.now();
+    pendingAlert = payload
+      ? { screen, dispatchId, payload, heldAt }
+      : { screen, dispatchId, heldAt };
     return;
   }
   pendingAlert = null;
@@ -44,9 +65,10 @@ export function hasPendingAlertNavigation(): boolean {
 /** Wired to NavigationContainer onReady and onStateChange (RootNavigator). */
 export function flushPendingAlertNavigation(): void {
   if (!pendingAlert || !isAlertRouteAvailable()) return;
-  const { screen, dispatchId, payload } = pendingAlert;
+  const held = pendingAlert;
   pendingAlert = null;
-  navigateNow(screen, dispatchId, payload);
+  if (isStale(held, Date.now())) return;
+  navigateNow(held.screen, held.dispatchId, held.payload);
 }
 
 export function isNavigationReady(): boolean {
