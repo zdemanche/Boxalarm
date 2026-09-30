@@ -80,6 +80,8 @@ import { EligibilityStaleness } from "./components/alerting/staleness";
 import { AlertingCanary } from "./components/alerting/canary";
 import { AlertingOutboxDrain } from "./components/alerting/outbox-drain";
 import { AlertRulesCopy } from "./components/alerting/alert-rules-copy";
+import { CadIngress } from "./components/alerting/cad-ingress";
+import { CadSources } from "./components/platform/cad-sources";
 import { isPlaceholderUrl, validateStackConfig } from "./components/shared/stack-config";
 
 export const stack = getStack();
@@ -889,6 +891,42 @@ export const alertRulesCopy = new AlertRulesCopy("alert-rules-copy", {
   permissionsBoundaryArn: alertingBoundaryArn,
 });
 
+// CAD dispatch ingress (roadmap-defaults row 3, cad-ingress-auth): the signed webhook on its
+// own API and stage, and - once the department's inbound mail domain exists - SES email. Both
+// write the same DISPATCH_ALERT as the manual route; the stream fan-out pages.
+const cadIngressEmailDomain = config.get("cadIngressEmailDomain");
+if (cadIngressEmailDomain === undefined) {
+  pulumi.log.warn(
+    "No boxalarm-infra:cadIngressEmailDomain: the CAD email path is not created (webhook only). " +
+      "See docs/runbooks/first-deploy.md, 'CAD ingress'.",
+  );
+}
+export const cadIngress = new CadIngress("cad-ingress", {
+  env,
+  alertingTableArn: alertingTable.tableArn,
+  alertingCmkArn: alertingTable.cmkArn,
+  alertingTableName: alertingTable.tableName,
+  busName: platformBus.busName,
+  pageTopicArn: alertingAlarms.pageTopic.arn,
+  opsTopicArn: chiefNotificationTopic.topicArn,
+  logGroup: alertingLogGroup,
+  permissionsBoundaryArn: alertingBoundaryArn,
+  ...(cadIngressEmailDomain !== undefined ? { emailDomain: cadIngressEmailDomain } : {}),
+});
+
+// The chief's CAD sources settings (Cedar View/ManageCadIngress) and webhook key rotation.
+export const cadSources = new CadSources("cad-sources", {
+  env,
+  platformTableName: platformTable.tableName,
+  platformTableArn: platformTable.tableArn,
+  policyStoreArn: policyStore.policyStoreArn,
+  policyStoreId: policyStore.policyStoreId,
+  logGroup: platformLogGroup,
+  httpApi,
+  webhookUrl: cadIngress.webhookUrl,
+  ...(cadIngressEmailDomain !== undefined ? { emailDomain: cadIngressEmailDomain } : {}),
+});
+
 // E1-S13-INFRA #38: eligibility-snapshot staleness schedule + alarm.
 export const eligibilityStaleness = new EligibilityStaleness("eligibility-staleness", {
   env,
@@ -993,6 +1031,9 @@ export const INCIDENT_TABLE_NAME = incidentTable.tableName;
 export const ALERTING_TABLE_NAME = alertingTable.tableName;
 export const VERIFIED_PERMISSIONS_POLICY_STORE_ID = policyStore.policyStoreId;
 export const PLATFORM_BUS_NAME = platformBus.busName;
+// Where a CAD POSTs, and where its dispatch email goes (MX -> inbound-smtp.us-east-1.amazonaws.com).
+export const CAD_WEBHOOK_URL = cadIngress.webhookUrl;
+export const CAD_INGRESS_EMAIL_DOMAIN = cadIngressEmailDomain ?? null;
 // false = that channel has no provider endpoint (OQ-3) and cannot page; see channel-workers.ts.
 export const ALERTING_VENDOR_ENDPOINTS_CONFIGURED = channelWorkers.vendorEndpointConfigured;
 

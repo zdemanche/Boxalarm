@@ -9,6 +9,8 @@
 #   pulumi config set chiefNotificationEmail chief@<dept-domain> --stack prod   # required in prod
 #   pulumi config set smsProviderEndpointUrl https://<sms vendor API host>/<path> --stack prod   # required in prod
 #   pulumi config set voiceProviderEndpointUrl https://<voice vendor API host>/<path> --stack prod   # required in prod
+# Once the department's CAD inbound mail domain has its MX record (docs/runbooks/first-deploy.md, CAD ingress):
+#   pulumi config set cadIngressEmailDomain cad.<dept-domain> --stack prod
 # Only once canaryEnabled is true:
 #   pulumi config set --secret canaryMemberId <canary member id> --stack prod
 # webOrigin below is a placeholder: preview fails on a .example/.invalid/.test/localhost host

@@ -124,6 +124,9 @@ export const STACK_CONFIG: Record<string, string> = {
   "boxalarm-infra:pushWebhookSecret": "test-push-secret",
   "boxalarm-infra:canaryMemberId": "test-canary-member",
   "boxalarm-infra:notificationSesFromAddress": "notifications@boxalarm.example",
+  // Builds the CAD email path too (components/alerting/cad-ingress.ts), so the full-stack
+  // tests cover every Lambda the manifest lists.
+  "boxalarm-infra:cadIngressEmailDomain": "cad.boxalarm.example",
 };
 
 /**
