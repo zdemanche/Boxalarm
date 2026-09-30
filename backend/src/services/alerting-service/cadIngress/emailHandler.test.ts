@@ -42,19 +42,23 @@ function rawEmail(
     subject?: string;
     /** The whole From header value (overrides `from`). */
     fromHeader?: string;
+    /** DKIM h= (default from:to:subject:date:message-id). */
+    signedHeaders?: string;
+    /** The To header value (default: this department's ingress address). */
+    to?: string;
   } = {},
 ): string {
   const date = new Date((options.date ?? NOW) * 1000).toUTCString();
   const dkim = (options.dkimDomains ?? ['cad.county.gov'])
     .map(
       (domain, i) =>
-        `DKIM-Signature: v=1; a=rsa-sha256; d=${domain}; s=sel; t=${options.date ?? NOW};\r\n\tb=SIG${i}${domain.replace(/\W/g, '')}abc/def+==`,
+        `DKIM-Signature: v=1; a=rsa-sha256; d=${domain}; s=sel; t=${options.date ?? NOW}; h=${options.signedHeaders ?? 'from:to:subject:date:message-id'};\r\n\tb=SIG${i}${domain.replace(/\W/g, '')}abc/def+==`,
     )
     .join('\r\n');
   return [
     dkim,
     `From: ${options.fromHeader ?? `"County Dispatch" <${options.from ?? 'dispatch@cad.county.gov'}>`}`,
-    `To: ${RECIPIENT}`,
+    `To: ${options.to ?? RECIPIENT}`,
     `Date: ${date}`,
     `Message-ID: <${options.messageId ?? 'm-1@cad.county.gov'}>`,
     ...(options.subject !== undefined ? [`Subject: ${options.subject}`] : []),
@@ -206,6 +210,33 @@ describe('CAD email handler', () => {
       ],
     });
   }
+
+  describe('recipient binding (security review M2)', () => {
+    it('a genuine county email to department A, redirected unchanged to B, does not page B', async () => {
+      // Signed To is A's address; SES delivered it to B's (the configured RECIPIENT).
+      serve(rawEmail({ to: `dispatch+other-fd.county.zzzzzzzzzzzz@${DOMAIN}` }));
+      await run();
+      expectDropped('RecipientNotSigned');
+    });
+
+    it('a signature that does not cover To does not page', async () => {
+      serve(rawEmail({ signedHeaders: 'from:subject:date' }));
+      await run();
+      expectDropped('RecipientNotSigned');
+    });
+
+    it('the ingress address in a signed Cc pages', async () => {
+      serve(
+        rawEmail({
+          to: 'someone@cad.county.gov',
+          headers: `Cc: "Nichols FD" <${RECIPIENT}>\r\nContent-Type: text/plain`,
+          signedHeaders: 'from:to:cc:date',
+        }),
+      );
+      await run();
+      expect(alerts()).toHaveLength(1);
+    });
+  });
 
   describe('From spoofing (security review C1): an ADDRESS allowlist entry is that address only', () => {
     it.each([
@@ -394,7 +425,12 @@ describe('parseEmail', () => {
   it('reads folded DKIM-Signature headers', () => {
     const email = parseEmail(rawEmail());
     expect(email.dkimSignatures).toEqual([
-      { domain: 'cad.county.gov', signature: 'SIG0cadcountygovabc/def+==', timestamp: NOW },
+      {
+        domain: 'cad.county.gov',
+        signature: 'SIG0cadcountygovabc/def+==',
+        timestamp: NOW,
+        signedHeaders: ['from', 'to', 'subject', 'date', 'message-id'],
+      },
     ]);
   });
 });

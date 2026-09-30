@@ -163,7 +163,7 @@ Nothing is accepted until a chief saves a source with the webhook on and creates
 4. Check: `dig +short MX cad.<dept-domain>` shows the SES endpoint, `aws sesv2 get-email-identity` shows `VerifiedForSendingStatus: true` and DKIM `SUCCESS`, and `aws ses describe-active-receipt-rule-set --region us-east-1` names `boxalarm-<env>-cad-ingress`.
 5. In the web app, save the source with the CAD's sender domain (or address) on its allowlist and copy the recipient address it shows (`dispatch+<deptId>.<sourceId>.<token>@cad.<dept-domain>`) into the CAD's paging configuration.
 
-The CAD's mail must pass SPF and DKIM **as the allowlisted domain**. A CAD, or county relay, that does not sign its mail, or rewrites it, cannot use this path: put a signing relay in front of it or use the webhook. There is no allowlist-only mode.
+The CAD's mail must pass SPF and DKIM **as the allowlisted domain**. It must address the ingress address in `To` or `Cc` (not `Bcc`), and its DKIM signature must cover that header - that binds the message to this department. A CAD, or county relay, that does not sign its mail, or rewrites it, cannot use this path: put a signing relay in front of it or use the webhook. There is no allowlist-only mode.
 
 Then run the test-message procedure in `docs/runbooks/cad-ingress.md` before telling the department the feed is live.
 

@@ -1,4 +1,4 @@
-import { parseFromHeaders } from './address.js';
+import { parseAddressList, parseFromHeaders } from './address.js';
 /**
  * Just enough RFC 5322 / MIME to read a CAD dispatch email: the headers the sender checks
  * need (From, Date, Message-ID, DKIM-Signature) and the first text part of the body. SES has
@@ -13,6 +13,8 @@ export interface DkimSignature {
   readonly signature: string;
   /** Signing time (t=), epoch seconds, when present. */
   readonly timestamp?: number;
+  /** Signed header names (h=), lower case. */
+  readonly signedHeaders: readonly string[];
 }
 
 export interface ParsedEmail {
@@ -22,6 +24,9 @@ export interface ParsedEmail {
   readonly fromError?: string;
   readonly date: number | undefined;
   readonly messageId: string | undefined;
+  /** Every address in the To and Cc headers (address.ts parseAddressList). */
+  readonly toAddresses: readonly string[];
+  readonly ccAddresses: readonly string[];
   /** Decoded Subject: many CADs put the call type and address there (chain review C1). */
   readonly subject: string | undefined;
   readonly dkimSignatures: readonly DkimSignature[];
@@ -70,9 +75,14 @@ export function parseDkimSignature(value: string): DkimSignature | undefined {
   const signature = tags.get('b')?.replace(/\s+/g, '');
   if (!domain || !signature) return undefined;
   const t = tags.get('t');
+  const signedHeaders = (tags.get('h') ?? '')
+    .split(':')
+    .map((name) => name.trim().toLowerCase())
+    .filter((name) => name.length > 0);
   return {
     domain,
     signature,
+    signedHeaders,
     ...(t && /^\d{1,12}$/.test(t) ? { timestamp: Number(t) } : {}),
   };
 }
@@ -176,6 +186,8 @@ export function parseEmail(raw: string): ParsedEmail {
     ...(from.ok ? {} : { fromError: from.reason }),
     date: Number.isFinite(date) ? Math.floor(date / 1000) : undefined,
     messageId: first(headers, 'message-id'),
+    toAddresses: all(headers, 'to').flatMap(parseAddressList),
+    ccAddresses: all(headers, 'cc').flatMap(parseAddressList),
     subject: ((subject) => (subject ? decodeEncodedWords(subject).trim() || undefined : undefined))(
       first(headers, 'subject'),
     ),

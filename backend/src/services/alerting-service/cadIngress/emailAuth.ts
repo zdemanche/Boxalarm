@@ -10,6 +10,7 @@ import type { ParsedEmail } from './mime.js';
  *  - exactly one From header with exactly one mailbox, parsed by the RFC 5322 grammar;
  *  - that mailbox is on the source's allowlist (address entries: exact address only);
  *  - DMARC PASS, or every DKIM d= aligned with the From domain (checkEmailSender);
+ *  - the ingress address it arrived on is in the DKIM-signed To or Cc;
  *  - Date and every DKIM t= fresh.
  * There is no allowlist-only mode: a From header alone is trivially forged.
  */
@@ -26,6 +27,7 @@ export type EmailAuthFailure =
   | 'FromUnparseable'
   | 'SenderNotAllowed'
   | 'DkimNotAligned'
+  | 'RecipientNotSigned'
   | 'Stale';
 
 export function checkSesVerdicts(receipt: SESReceipt): EmailAuthFailure | undefined {
@@ -54,6 +56,8 @@ export function checkEmailSender(
   allowedSenders: readonly string[],
   nowSeconds: number,
   dmarcStatus?: string,
+  /** The ingress address this message was received on (the SES recipient that matched). */
+  recipient?: string,
 ): EmailAuthFailure | undefined {
   if (email.fromError || !email.fromAddress || !email.fromDomain) return 'FromUnparseable';
   const fromAllowed = allowedSenders.some((entry) =>
@@ -67,6 +71,23 @@ export function checkEmailSender(
       email.dkimSignatures.some((signature) => !isAligned(signature.domain, fromDomain)))
   ) {
     return 'DkimNotAligned';
+  }
+  // Bound to THIS department (security review M2): the address the message arrived on must be in
+  // its To or Cc, and every signature must cover that header. A genuine county email redirected
+  // unchanged to another department's address keeps its original To and fails here.
+  if (recipient !== undefined) {
+    const wanted = recipient.toLowerCase();
+    const header = email.toAddresses.includes(wanted)
+      ? 'to'
+      : email.ccAddresses.includes(wanted)
+        ? 'cc'
+        : undefined;
+    if (
+      !header ||
+      email.dkimSignatures.some((signature) => !signature.signedHeaders.includes(header))
+    ) {
+      return 'RecipientNotSigned';
+    }
   }
   const times = [email.date, ...email.dkimSignatures.map((signature) => signature.timestamp)];
   if (email.date === undefined) return 'Stale';

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { isAligned, parseFromHeader, parseFromHeaders } from './address.js';
+import { isAligned, parseAddressList, parseFromHeader, parseFromHeaders } from './address.js';
 
 describe('parseFromHeader (RFC 5322 mailbox; security review C1)', () => {
   it.each([
@@ -55,5 +55,19 @@ describe('isAligned (relaxed, no public-suffix list)', () => {
     ['evilcounty.gov', 'county.gov', false],
   ])('d=%s From %s -> %s', (d, from, aligned) => {
     expect(isAligned(d, from)).toBe(aligned);
+  });
+});
+
+describe('parseAddressList (To/Cc)', () => {
+  it('reads every mailbox, including quoted names with commas, and skips junk', () => {
+    expect(
+      parseAddressList(
+        '"Nichols, FD" <dispatch+a.b.cccccccccccc@x.org>, other@y.org, junk, (c, d) z@w.org',
+      ),
+    ).toEqual(['dispatch+a.b.cccccccccccc@x.org', 'other@y.org', 'z@w.org']);
+  });
+
+  it('reads a group list', () => {
+    expect(parseAddressList('Crew: a@x.org, b@x.org;')).toEqual(['a@x.org', 'b@x.org']);
   });
 });

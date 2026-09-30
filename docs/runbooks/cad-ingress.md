@@ -53,6 +53,7 @@ Metrics are in `Boxalarm/alerting-cad-ingress`: `CadIngressAccepted`, `CadIngres
 | `FromUnparseable` | Two `From` headers, several mailboxes, a group, or an address hidden in a display name | A genuine CAD never does this; treat it as a forgery attempt |
 | `SenderNotAllowed` | The From mailbox is not on the allowlist | Add the exact sending address (preferred) or, only if every mailbox of that domain may page the department, the domain |
 | `DkimNotAligned` | No DMARC pass and a DKIM `d=` that is not the From domain (a relay adds its own signature) | Have the CAD's domain publish DMARC, or sign with its own domain; never allowlist a relay's domain |
+| `RecipientNotSigned` | The department's ingress address is not in the message's DKIM-signed `To` or `Cc` - it was Bcc'd, or a message for another department was redirected here | The CAD must address the department's ingress address in `To` or `Cc`, never `Bcc`. A redirect is an attack or a mistake: it did not page |
 | `Stale` | Mail queued more than 10 minutes, or no `Date` header | Fix the CAD's mail queue |
 
 ## Rotating a webhook key

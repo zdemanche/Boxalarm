@@ -99,11 +99,15 @@ async function processRecord(record: SESEventRecord, config: MailConfig): Promis
 
   // 1-2. Recipient -> source. The department is the source's, never the message's.
   let target: ReturnType<typeof parseRecipientLocalPart>;
+  let matchedRecipient: string | undefined;
   for (const recipient of receipt.recipients) {
     const at = recipient.lastIndexOf('@');
     if (at > 0 && recipient.slice(at + 1).toLowerCase() === config.domain) {
       target = parseRecipientLocalPart(recipient.slice(0, at));
-      if (target) break;
+      if (target) {
+        matchedRecipient = recipient;
+        break;
+      }
     }
   }
   if (!target) return quarantine('UnknownRecipient');
@@ -133,6 +137,7 @@ async function processRecord(record: SESEventRecord, config: MailConfig): Promis
     source.email.allowedSenders,
     nowSeconds,
     receipt.dmarcVerdict?.status,
+    matchedRecipient,
   );
   if (senderFailure) return quarantine(senderFailure);
   logInfo('cadIngress.email.authenticated', {

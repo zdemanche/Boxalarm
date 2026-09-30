@@ -139,3 +139,46 @@ export function isAligned(signingDomain: string, fromDomain: string): boolean {
   const [shorter, longer] = d.length < f.length ? [d, f] : [f, d];
   return shorter.split('.').length >= 2 && longer.endsWith(`.${shorter}`);
 }
+
+/**
+ * The addresses in an address-list header (To, Cc), for recipient binding (security review
+ * M2). Top-level commas separate entries; each is parsed as a mailbox by the same grammar;
+ * an entry that does not parse is skipped (it simply cannot be the ingress address).
+ */
+export function parseAddressList(value: string): string[] {
+  const entries: string[] = [];
+  let current = '';
+  let depth = 0;
+  let inQuote = false;
+  let inAngle = false;
+  for (let i = 0; i < value.length; i++) {
+    const ch = value[i]!;
+    current += ch;
+    if (inQuote) {
+      if (ch === '\\') {
+        current += value[++i] ?? '';
+      } else if (ch === '"') {
+        inQuote = false;
+      }
+      continue;
+    }
+    if (depth > 0) {
+      if (ch === '(') depth++;
+      else if (ch === ')') depth--;
+      continue;
+    }
+    if (ch === '"') inQuote = true;
+    else if (ch === '(') depth = 1;
+    else if (ch === '<') inAngle = true;
+    else if (ch === '>') inAngle = false;
+    else if (ch === ',' && !inAngle) {
+      entries.push(current.slice(0, -1));
+      current = '';
+    }
+  }
+  entries.push(current);
+  return entries
+    .map((entry) => parseFromHeader(entry.replace(/^[^:<"]*:/, '').replace(/;\s*$/, '')))
+    .filter((parsed): parsed is Extract<FromParse, { ok: true }> => parsed.ok)
+    .map((parsed) => parsed.address);
+}
