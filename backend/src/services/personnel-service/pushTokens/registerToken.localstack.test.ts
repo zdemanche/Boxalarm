@@ -189,4 +189,44 @@ describe('push registration releases the installation from other members (real D
     ).toEqual(['a-personal']);
     expect(await outboxPayloads('mbr-other')).toEqual([]);
   });
+
+  // N-M1: A's new iPhone restored from a backup carries the old phone's installation id; the old
+  // phone went to B. Same deviceId, different tokens: both must keep being paged.
+  it('two members whose phones share an installation id but not a token both keep paging', async () => {
+    await putMember('mbr-spouse-a');
+    await putMember('mbr-spouse-b');
+    const shared = 'restored-installation';
+
+    expect(
+      await register('mbr-spouse-a', {
+        platform: 'APNS',
+        token: 'tok-new-phone',
+        deviceId: shared,
+      }),
+    ).toBe(200);
+    expect(
+      await register('mbr-spouse-b', {
+        platform: 'APNS',
+        token: 'tok-old-phone',
+        deviceId: shared,
+      }),
+    ).toBe(200);
+    // A's next launch registers again.
+    expect(
+      await register('mbr-spouse-a', {
+        platform: 'APNS',
+        token: 'tok-new-phone',
+        deviceId: shared,
+      }),
+    ).toBe(200);
+
+    expect((await pushDevicesOf('mbr-spouse-a')).map((entry) => entry.token)).toEqual([
+      'tok-new-phone',
+    ]);
+    expect((await pushDevicesOf('mbr-spouse-b')).map((entry) => entry.token)).toEqual([
+      'tok-old-phone',
+    ]);
+    expect(await outboxPayloads('mbr-spouse-a')).toHaveLength(2);
+    expect(await outboxPayloads('mbr-spouse-b')).toHaveLength(1);
+  });
 });

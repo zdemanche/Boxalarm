@@ -7,7 +7,7 @@ import {
   parseDeviceId,
   releaseInstallationFromOtherMembers,
   withRegisteredDevice,
-  withoutInstallation,
+  withoutToken,
   withoutDevice,
   writePushDevices,
   type ContactChannelEntry,
@@ -206,14 +206,10 @@ describe('writePushDevices: concurrent registrations never drop each other', () 
 describe('an installation belongs to the member signed in on it (M3)', () => {
   const deptId = toVerifiedDeptId({ deptId: 'NICHOLS' });
 
-  it('withoutInstallation drops the same deviceId or the same token, and keeps the rest', () => {
+  it('withoutToken drops only the entry holding that push token', () => {
     const sms: ContactChannelEntry = { channel: 'SMS', token: '+1' };
-    expect(withoutInstallation([phone, tablet, legacy, sms], 'phone', 'tok-other')).toEqual([
-      tablet,
-      legacy,
-      sms,
-    ]);
-    expect(withoutInstallation([phone, legacy], undefined, 'tok-legacy')).toEqual([phone]);
+    expect(withoutToken([phone, tablet, legacy, sms], 'tok-phone')).toEqual([tablet, legacy, sms]);
+    expect(withoutToken([phone, legacy], 'tok-legacy')).toEqual([phone]);
   });
 
   it('releases the installation from every other member holding it, each with its own member event', async () => {
@@ -222,6 +218,11 @@ describe('an installation belongs to the member signed in on it (M3)', () => {
       'mbr-c': { memberId: 'mbr-c', contactChannels: [{ ...legacy, token: 'tok-phone' }] },
       'mbr-d': { memberId: 'mbr-d', contactChannels: [tablet] },
       'mbr-b': { memberId: 'mbr-b', contactChannels: [phone] },
+      // N-M1: a phone restored from A's backup - same installation id, its own token.
+      'mbr-e': {
+        memberId: 'mbr-e',
+        contactChannels: [{ ...phone, token: 'tok-restored-copy' }],
+      },
     };
     const transacts: { memberPk: string; cc: ContactChannelEntry[]; payload: unknown }[] = [];
     const send = vi.fn((command: SentCommand) => {
@@ -249,7 +250,7 @@ describe('an installation belongs to the member signed in on it (M3)', () => {
       'table',
       deptId,
       'mbr-b',
-      { deviceId: 'phone', token: 'tok-phone' },
+      { token: 'tok-phone' },
       { changedBy: { reason: 'INSTALLATION_REREGISTERED', actorId: 'mbr-b' } },
     );
 

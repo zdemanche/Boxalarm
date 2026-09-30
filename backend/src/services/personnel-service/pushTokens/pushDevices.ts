@@ -103,46 +103,42 @@ export function withoutDevice(
 }
 
 /**
- * The same physical installation as a registration: the same deviceId, or the same push token
- * (a token is one app install's). Legacy entries without a deviceId match on the token alone.
+ * Another member's entry for the registering installation: the same push token. Never the
+ * deviceId alone (review N-M1): the app's installation id could be copied to a second phone by an
+ * iOS backup restore or Quick Start (older builds stored it migratable), and two members of one
+ * department sharing it would take each other's pages away on every launch. A token is one app
+ * install's, so it cannot collide; and an old entry whose token has since rotated is already dead
+ * at APNs/FCM and cannot ring the phone. The deviceId still matches the member's OWN entries
+ * (withRegisteredDevice).
  */
-function isInstallation(
-  entry: ContactChannelEntry,
-  deviceId: string | undefined,
-  token: string,
-): boolean {
-  return (
-    isPush(entry) &&
-    ((deviceId !== undefined && entry.deviceId === deviceId) || entry.token === token)
-  );
+function holdsToken(entry: ContactChannelEntry, token: string): boolean {
+  return isPush(entry) && entry.token === token;
 }
 
-/** Removes a registering installation's entries from another member's devices. */
-export function withoutInstallation(
+/** Removes a registering installation's token from another member's devices. */
+export function withoutToken(
   current: readonly ContactChannelEntry[],
-  deviceId: string | undefined,
   token: string,
 ): ContactChannelEntry[] {
-  return current.filter((existing) => !isInstallation(existing, deviceId, token));
+  return current.filter((existing) => !holdsToken(existing, token));
 }
 
 /**
  * An installation belongs to the member signed in on it (M3). When member B registers a phone,
- * any other member of the department still holding that deviceId or token - A signed out with no
- * signal, so A's revoke never landed - is removed from it, each through writePushDevices so their
+ * any other member of the department still holding its push token - A signed out with no signal,
+ * so A's revoke never landed - has that entry removed, each through writePushDevices so their
  * personnel.member.updated reaches the alerting snapshot. Otherwise A's pages keep ringing, full
  * screen and through Do Not Disturb, on a phone A is no longer signed in to.
  *
- * Department-scoped (GSI3, every member of the department): a Cognito user is in one department,
- * and an installation cannot be shared across them without a sign-out in between. Returns the
- * members it was removed from.
+ * Department-scoped (GSI3, every member of the department): a Cognito user is in one department.
+ * Returns the members it was removed from.
  */
 export async function releaseInstallationFromOtherMembers(
   client: DynamoDBDocumentClient,
   tableName: string,
   deptId: VerifiedDeptId,
   memberId: string,
-  installation: { readonly deviceId?: string; readonly token: string },
+  installation: { readonly token: string },
   options: WritePushDevicesOptions = {},
 ): Promise<string[]> {
   const holders: string[] = [];
@@ -164,7 +160,7 @@ export async function releaseInstallationFromOtherMembers(
       if (
         other &&
         other !== memberId &&
-        channels.some((entry) => isInstallation(entry, installation.deviceId, installation.token))
+        channels.some((entry) => holdsToken(entry, installation.token))
       ) {
         holders.push(other);
       }
@@ -178,7 +174,7 @@ export async function releaseInstallationFromOtherMembers(
       tableName,
       deptId,
       other,
-      (current) => withoutInstallation(current, installation.deviceId, installation.token),
+      (current) => withoutToken(current, installation.token),
       options,
     );
   }

@@ -162,8 +162,8 @@ async function registerToken(
     return notFoundProblem(traceId, `member ${memberId} was not found`);
   }
 
-  // This installation is now this member's: take it off anyone else in the department who
-  // still holds it (a sign-out whose revoke never landed). Best-effort after the member's own
+  // This installation is now this member's: take its token off anyone else in the department
+  // who still holds it (a sign-out whose revoke never landed) - by token only (N-M1). Best-effort after the member's own
   // entry is written - their pages come first - and never silent: the next registration retries.
   try {
     const released = await releaseInstallationFromOtherMembers(
@@ -171,7 +171,7 @@ async function registerToken(
       config.tableName,
       deptId,
       memberId,
-      { token: body.token, ...(body.deviceId ? { deviceId: body.deviceId } : {}) },
+      { token: body.token },
       {
         correlationId: traceId,
         changedBy: {

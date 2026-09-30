@@ -10,8 +10,16 @@ import * as Keychain from 'react-native-keychain';
  * second one. If the keychain is unavailable the id lives for this process only: registration
  * still works, and the worst case is one extra entry until the backend's device cap evicts it.
  */
-const SERVICE = 'boxalarm-device-installation';
+/**
+ * Stored THIS_DEVICE_ONLY (review N-M1): an iOS backup restore or Quick Start transfer must not
+ * copy the id to a new phone, or two phones - often two members of one department - would share
+ * an installation id. Its own service, so an id stored before this (default accessibility, which
+ * does migrate) is moved into it once, keeping this device's id.
+ */
+const SERVICE = 'boxalarm-device-installation-v2';
+const LEGACY_SERVICE = 'boxalarm-device-installation';
 const ACCOUNT = 'installation-id';
+const DEVICE_ONLY = { accessible: Keychain.ACCESSIBLE.AFTER_FIRST_UNLOCK_THIS_DEVICE_ONLY };
 
 let cached: string | null = null;
 
@@ -24,6 +32,16 @@ function newInstallationId(): string {
   return `${s.slice(0, 8)}-${s.slice(8, 12)}-${s.slice(12, 16)}-${s.slice(16, 20)}-${s.slice(20)}`;
 }
 
+async function store(id: string): Promise<boolean> {
+  try {
+    await Keychain.setGenericPassword(ACCOUNT, id, { service: SERVICE, ...DEVICE_ONLY });
+    return true;
+  } catch {
+    // Keychain unavailable: keep the in-memory id.
+    return false;
+  }
+}
+
 export async function getDeviceInstallationId(): Promise<string> {
   if (cached) return cached;
   try {
@@ -32,16 +50,21 @@ export async function getDeviceInstallationId(): Promise<string> {
       cached = stored.password;
       return cached;
     }
+    // One-time move of an id kept before it was device-only.
+    const legacy = await Keychain.getGenericPassword({ service: LEGACY_SERVICE });
+    if (legacy && legacy.password) {
+      cached = legacy.password;
+      if (await store(legacy.password)) {
+        await Keychain.resetGenericPassword({ service: LEGACY_SERVICE }).catch(() => false);
+      }
+      return cached;
+    }
   } catch {
     // Fall through: generate one for this process.
   }
   const id = newInstallationId();
   cached = id;
-  try {
-    await Keychain.setGenericPassword(ACCOUNT, id, { service: SERVICE });
-  } catch {
-    // Keychain unavailable: keep the in-memory id.
-  }
+  await store(id);
   return id;
 }
 
