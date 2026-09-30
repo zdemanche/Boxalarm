@@ -41,6 +41,11 @@ function cognitoRevocationStatements(
 }
 
 const SIGN_OUT_ACTIONS = ["cognito-idp:AdminUserGlobalSignOut", "cognito-idp:AdminGetUser"];
+/**
+ * Security-web MINOR 6: the kill switches read the target's groups - a CHIEF or ADMIN target
+ * needs an ADMIN caller (cognitoRevocationClient.ts isProtectedTarget).
+ */
+const PROTECTED_TARGET_ACTIONS = ["cognito-idp:AdminListGroupsForUser"];
 
 /**
  * M1: every revocation path writes DEPT#{deptId}#SESSION_REVOCATION#{sub}, which the
@@ -195,7 +200,10 @@ export class SessionRevocation extends pulumi.ComponentResource {
         },
         additionalPolicyStatements: pulumi
           .all([
-            cognitoRevocationStatements(args.userPoolArn, SIGN_OUT_ACTIONS),
+            cognitoRevocationStatements(args.userPoolArn, [
+              ...SIGN_OUT_ACTIONS,
+              ...PROTECTED_TARGET_ACTIONS,
+            ]),
             pulumi.output(args.policyStoreArn),
             pulumi.output(args.platformTableArn),
           ])
@@ -276,6 +284,7 @@ export class SessionRevocation extends pulumi.ComponentResource {
           .all([
             cognitoRevocationStatements(args.userPoolArn, [
               ...SIGN_OUT_ACTIONS,
+              ...PROTECTED_TARGET_ACTIONS,
               "cognito-idp:AdminResetUserPassword",
             ]),
             pulumi.output(args.policyStoreArn),

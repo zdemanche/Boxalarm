@@ -28,6 +28,7 @@ function buildEvent(body: unknown): GuardEvent {
 
 interface Mocks {
   resolveMemberDeptId: ReturnType<typeof vi.fn>;
+  isProtectedTarget: ReturnType<typeof vi.fn>;
   resetMemberPassword: ReturnType<typeof vi.fn>;
   revokeMemberSession: ReturnType<typeof vi.fn>;
 }
@@ -35,6 +36,7 @@ interface Mocks {
 function mockDeps(overrides: Partial<Mocks> = {}): Mocks {
   const mocks: Mocks = {
     resolveMemberDeptId: vi.fn().mockResolvedValue('NICHOLS'),
+    isProtectedTarget: vi.fn().mockResolvedValue(false),
     resetMemberPassword: vi.fn().mockResolvedValue(undefined),
     revokeMemberSession: vi.fn().mockResolvedValue(undefined),
     ...overrides,
@@ -42,6 +44,7 @@ function mockDeps(overrides: Partial<Mocks> = {}): Mocks {
   vi.doMock('./cognitoRevocationClient.js', () => ({
     readRevocationConfig: () => ({ userPoolId: 'pool-1' }),
     createRevocationClient: () => ({}),
+    mayActOnProtectedTarget: (groups: string) => groups.split(' ').includes('ADMIN'),
     ...mocks,
   }));
   vi.doMock('@boxalarm/authz', async () => {
@@ -216,6 +219,36 @@ describe('credentialResetHandler', () => {
     const handler = await load();
 
     expect((await handler(buildEvent({ memberId: 'sub-9' }), ADMIN)).statusCode).toBe(503);
+  });
+
+  // Security-web MINOR 6: a chief's or admin's password is reset only by an admin.
+  it.each([
+    ['CHIEF', 403],
+    ['ADMIN', 202],
+  ] as const)('a %s resetting a chief’s password gets %i', async (group, status) => {
+    const mocks = mockDeps({ isProtectedTarget: vi.fn().mockResolvedValue(true) });
+    const handler = await load();
+
+    const result = await handler(buildEvent({ memberId: 'chief-2' }), {
+      ...ADMIN,
+      'cognito:groups': group,
+    });
+
+    expect(result.statusCode).toBe(status);
+    expect(mocks.resetMemberPassword).toHaveBeenCalledTimes(status === 202 ? 1 : 0);
+    expect(mocks.revokeMemberSession).toHaveBeenCalledTimes(status === 202 ? 1 : 0);
+  });
+
+  it('fails closed (503) when the target’s groups cannot be read', async () => {
+    const mocks = mockDeps({
+      isProtectedTarget: vi.fn().mockRejectedValue(new Error('throttled')),
+    });
+    const handler = await load();
+
+    const result = await handler(buildEvent({ memberId: 'sub-9' }), ADMIN);
+
+    expect(result.statusCode).toBe(503);
+    expect(mocks.resetMemberPassword).not.toHaveBeenCalled();
   });
 });
 

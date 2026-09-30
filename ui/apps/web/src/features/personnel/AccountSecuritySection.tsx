@@ -67,7 +67,7 @@ export function describeDevice(device: MemberDevice): string {
 function problemText(error: unknown, fallback: string): string {
   if (error instanceof ApiError) {
     if (error.problem.status === 403) {
-      return 'You are not allowed to do this. Only a chief or admin can.';
+      return 'You are not allowed to do this. Only a chief or admin can, and only an admin can for another chief or admin.';
     }
     return error.problem.detail ?? error.problem.title ?? fallback;
   }

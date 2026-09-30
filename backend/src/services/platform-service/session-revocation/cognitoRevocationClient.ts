@@ -2,6 +2,7 @@ import {
   AdminDisableUserCommand,
   AdminEnableUserCommand,
   AdminGetUserCommand,
+  AdminListGroupsForUserCommand,
   AdminResetUserPasswordCommand,
   AdminUserGlobalSignOutCommand,
   CognitoIdentityProviderClient,
@@ -109,6 +110,41 @@ export async function resolveMemberDeptId(
     new AdminGetUserCommand({ UserPoolId: input.userPoolId, Username: input.username }),
   );
   return result.UserAttributes?.find((attribute) => attribute.Name === 'custom:deptId')?.Value;
+}
+
+/**
+ * Security-web MINOR 6: the kill switches (reset credentials, report device lost) ended any
+ * member's access, including another chief's or admin's - so one compromised chief password
+ * could sign out and lock out every other chief and admin. A CHIEF or ADMIN target now needs an
+ * ADMIN caller, the same shape as personnel's protected-target rule for status changes.
+ */
+const PROTECTED_TARGET_GROUPS: ReadonlySet<string> = new Set(['CHIEF', 'ADMIN']);
+
+/** Whether the member's login is in a CHIEF or ADMIN group (Cognito groups are what Cedar reads). */
+export async function isProtectedTarget(
+  client: CognitoIdentityProviderClient,
+  input: ResolveMemberDeptIdInput,
+): Promise<boolean> {
+  let nextToken: string | undefined;
+  do {
+    const page = await client.send(
+      new AdminListGroupsForUserCommand({
+        UserPoolId: input.userPoolId,
+        Username: input.username,
+        NextToken: nextToken,
+      }),
+    );
+    if ((page.Groups ?? []).some((group) => PROTECTED_TARGET_GROUPS.has(group.GroupName ?? ''))) {
+      return true;
+    }
+    nextToken = page.NextToken;
+  } while (nextToken);
+  return false;
+}
+
+/** Whether the caller may act on a protected (CHIEF/ADMIN) target: an ADMIN only. */
+export function mayActOnProtectedTarget(callerGroups: string): boolean {
+  return callerGroups.split(' ').includes('ADMIN');
 }
 
 export type LoginStateOperation = 'Disable' | 'Enable' | 'ResetPassword';

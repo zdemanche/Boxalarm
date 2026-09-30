@@ -315,7 +315,9 @@ test('a 403 shows a plain refusal, never the policy detail', async () => {
 
   await waitFor(() => {
     expect(
-      within(dialog).getByText('You are not allowed to do this. Only a chief or admin can.'),
+      within(dialog).getByText(
+        'You are not allowed to do this. Only a chief or admin can, and only an admin can for another chief or admin.',
+      ),
     ).toBeTruthy();
   });
   expect(document.body.textContent).not.toContain(secret);

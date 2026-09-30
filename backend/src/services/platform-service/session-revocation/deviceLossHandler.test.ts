@@ -46,12 +46,16 @@ function buildEvent(
 function mockRevocationClient(overrides: {
   revokeMemberSession?: ReturnType<typeof vi.fn>;
   resolveMemberDeptId?: ReturnType<typeof vi.fn>;
+  isProtectedTarget?: ReturnType<typeof vi.fn>;
 }): void {
-  vi.doMock('./cognitoRevocationClient.js', () => ({
+  vi.doMock('./cognitoRevocationClient.js', async (importOriginal) => ({
     readRevocationConfig: () => ({ userPoolId: 'pool-1' }),
     createRevocationClient: () => ({}),
     revokeMemberSession: overrides.revokeMemberSession ?? vi.fn(),
     resolveMemberDeptId: overrides.resolveMemberDeptId ?? vi.fn().mockResolvedValue('dept-001'),
+    isProtectedTarget: overrides.isProtectedTarget ?? vi.fn().mockResolvedValue(false),
+    mayActOnProtectedTarget: (await importOriginal<typeof import('./cognitoRevocationClient.js')>())
+      .mayActOnProtectedTarget,
   }));
 }
 
@@ -428,5 +432,41 @@ describe('deviceLossHandler', () => {
     const parsed = JSON.parse(result.body ?? '{}') as { traceId?: string; type?: string };
     expect(parsed.traceId).toBeTruthy();
     expect(parsed.type).toBe('about:blank');
+  });
+
+  // Security-web MINOR 6: another chief's or admin's sessions are ended only by an admin.
+  it.each([
+    ['CHIEF', 403],
+    ['ADMIN', 202],
+  ] as const)('a %s reporting a chief’s device lost gets %i', async (group, status) => {
+    const revokeMemberSession = vi.fn().mockResolvedValue(undefined);
+    mockRevocationClient({
+      revokeMemberSession,
+      isProtectedTarget: vi.fn().mockResolvedValue(true),
+    });
+    const { handler } = await import('./deviceLossHandler.js');
+
+    const result = (await handler(
+      buildEvent(group, JSON.stringify({ memberId: 'chief-2' })),
+    )) as APIGatewayProxyStructuredResultV2;
+
+    expect(result.statusCode).toBe(status);
+    expect(revokeMemberSession).toHaveBeenCalledTimes(status === 202 ? 1 : 0);
+  });
+
+  it('fails closed (503) when the target’s groups cannot be read', async () => {
+    const revokeMemberSession = vi.fn();
+    mockRevocationClient({
+      revokeMemberSession,
+      isProtectedTarget: vi.fn().mockRejectedValue(new Error('TooManyRequests')),
+    });
+    const { handler } = await import('./deviceLossHandler.js');
+
+    const result = (await handler(
+      buildEvent('ADMIN', JSON.stringify({ memberId: 'chief-2' })),
+    )) as APIGatewayProxyStructuredResultV2;
+
+    expect(result.statusCode).toBe(503);
+    expect(revokeMemberSession).not.toHaveBeenCalled();
   });
 });

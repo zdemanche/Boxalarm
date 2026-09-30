@@ -156,6 +156,16 @@ describe("SessionRevocation (review C1)", () => {
     expect(actions).not.toContain("cognito-idp:AdminDisableUser");
   });
 
+  // Security-web MINOR 6: both kill switches read the target's groups (protected targets).
+  it("lets both kill switches list the target's groups in this pool, and nothing broader", async () => {
+    const sr = await build();
+    for (const lambda of [sr.deviceLossLambda, sr.credentialResetLambda]) {
+      const actions = actionsOn(await statementsOf(lambda), POOL_ARN);
+      expect(actions).toContain("cognito-idp:AdminListGroupsForUser");
+      expect(actions).not.toContain("cognito-idp:AdminAddUserToGroup");
+    }
+  });
+
   it("alarms the chief on every credential reset (no threshold)", async () => {
     const sr = await build();
     const alarm = sr.credentialResetInvokedAlarm;

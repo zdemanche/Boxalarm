@@ -13,6 +13,8 @@ import {
 } from '@boxalarm/authz';
 import {
   createRevocationClient,
+  isProtectedTarget,
+  mayActOnProtectedTarget,
   readRevocationConfig,
   resetMemberPassword,
   resolveMemberDeptId,
@@ -112,6 +114,34 @@ async function resetCredentials(
   if (targetDeptId !== principal.deptId) {
     log('credentialReset.denied', { reason: 'CrossDepartmentTarget', memberId, traceId });
     return forbiddenProblem(traceId);
+  }
+
+  // Security-web MINOR 6: a chief's or admin's password is reset only by an admin. Fails
+  // closed when the target's groups cannot be read.
+  let protectedTarget: boolean;
+  try {
+    protectedTarget = await isProtectedTarget(client, { userPoolId, username: memberId });
+  } catch (error) {
+    log('credentialReset.groupLookupFailed', {
+      memberId,
+      traceId,
+      message: error instanceof Error ? error.message : undefined,
+    });
+    return serviceUnavailableProblem(traceId);
+  }
+  if (protectedTarget && !mayActOnProtectedTarget(principal['cognito:groups'])) {
+    log('credentialReset.denied', { reason: 'ProtectedTarget', memberId, traceId });
+    return {
+      statusCode: 403,
+      headers: { 'content-type': 'application/problem+json' },
+      body: JSON.stringify({
+        type: 'about:blank',
+        title: 'Forbidden',
+        status: 403,
+        detail: 'Only an admin can reset the password of a chief or an admin.',
+        traceId,
+      }),
+    };
   }
 
   // M1: refuse the access tokens already issued - they are verified offline and would
