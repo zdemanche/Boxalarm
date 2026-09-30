@@ -37,6 +37,7 @@ describe("QueueConsumer", () => {
     const role = new awsMod.iam.Role("consumer-role", { assumeRolePolicy: "{}" });
     const fn = { name: pulumi.output("consumer-fn") } as unknown as aws.lambda.Function;
     return new QueueConsumer("test-consumer", {
+      alarmTopicArn: "arn:aws:sns:us-east-1:123456789012:boxalarm-dev-alerting-page",
       env: "dev",
       busName: pulumi.output("boxalarm-dev-platform-bus"),
       ruleName: "boxalarm-dev-test-rule",

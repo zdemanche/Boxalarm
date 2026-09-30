@@ -65,6 +65,7 @@ async function build() {
   });
   const platformBus = new PlatformBus("test-sr-bus", { env: "dev" });
   return new SessionRevocation("test-sr", {
+    pageTopicArn: "arn:aws:sns:us-east-1:123456789012:boxalarm-dev-alerting-page",
     env: "dev",
     userPoolId: pulumi.output("pool-1"),
     userPoolArn: pulumi.output(POOL_ARN),

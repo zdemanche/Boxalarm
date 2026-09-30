@@ -251,6 +251,7 @@ export class Reporting extends pulumi.ComponentResource {
         queueName: `boxalarm-${env}-reporting-projection-queue`,
         lambda: this.projectionsLambda.function,
         lambdaRole: this.projectionsLambda.role,
+        alarmTopicArn: args.chiefNotificationTopicArn,
         maxReceiveCount: 5,
         reportBatchItemFailures: true,
       },

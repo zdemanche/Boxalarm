@@ -15,6 +15,8 @@ export interface TestDueScannersArgs {
   platformBusName: pulumi.Input<string>;
   platformBusArn: pulumi.Input<string>;
   logGroup: ServiceLogGroup;
+  /** Ops alarm topic (chief-notifications): every alarm here notifies it, none is silent. */
+  opsAlarmTopicArn: pulumi.Input<string>;
 }
 
 /**
@@ -125,6 +127,7 @@ export class TestDueScanners extends pulumi.ComponentResource {
       "apparatus-test-due-scanner",
       this.testDueScannerLambda,
       TEST_DUE_SCANNER_SCHEDULE_EXPRESSION,
+      args.opsAlarmTopicArn,
     ).schedule;
 
     this.scbaTestDueScannerSchedule = dailyScanner(
@@ -134,6 +137,7 @@ export class TestDueScanners extends pulumi.ComponentResource {
       "apparatus-scba-test-due-scanner",
       this.scbaTestDueScannerLambda,
       TEST_DUE_SCANNER_SCHEDULE_EXPRESSION,
+      args.opsAlarmTopicArn,
     ).schedule;
 
     this.registerOutputs({

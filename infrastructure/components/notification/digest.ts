@@ -17,6 +17,8 @@ export interface DigestArgs {
   /** Verified SES sender for notification email. Set per stack; never an alerting identity. */
   sesFromAddress: pulumi.Input<string>;
   logGroup: ServiceLogGroup;
+  /** Ops alarm topic (chief-notifications): every alarm here notifies it, none is silent. */
+  opsAlarmTopicArn: pulumi.Input<string>;
 }
 
 /** UTC. The training cert-expiry scanner is pinned to 10:00 UTC (certifications.ts). */
@@ -115,6 +117,7 @@ export class Digest extends pulumi.ComponentResource {
         queueName: `boxalarm-${env}-notification-cert-expiry-queue`,
         lambda: this.certExpiryConsumerLambda.function,
         lambdaRole: this.certExpiryConsumerLambda.role,
+        alarmTopicArn: args.opsAlarmTopicArn,
         maxReceiveCount: 5,
       },
       { parent: this },
@@ -203,6 +206,7 @@ export class Digest extends pulumi.ComponentResource {
         evaluationPeriods: 1,
         threshold: 0,
         comparisonOperator: "GreaterThanThreshold",
+        alarmActions: [args.opsAlarmTopicArn],
       },
       { parent: this },
     );
@@ -219,6 +223,7 @@ export class Digest extends pulumi.ComponentResource {
         evaluationPeriods: 1,
         threshold: 0,
         comparisonOperator: "GreaterThanThreshold",
+        alarmActions: [args.opsAlarmTopicArn],
         treatMissingData: "notBreaching",
       },
       { parent: this },
@@ -238,6 +243,7 @@ export class Digest extends pulumi.ComponentResource {
         evaluationPeriods: 1,
         threshold: 0,
         comparisonOperator: "GreaterThanThreshold",
+        alarmActions: [args.opsAlarmTopicArn],
         treatMissingData: "notBreaching",
       },
       { parent: this },

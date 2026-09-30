@@ -13,6 +13,8 @@ export interface SchemaRefreshArgs {
   incidentCmkArn: pulumi.Input<string>;
   nerisSchemaSourceUrl: pulumi.Input<string>;
   logGroup: ServiceLogGroup;
+  /** Ops alarm topic (chief-notifications): every alarm here notifies it, none is silent. */
+  opsAlarmTopicArn: pulumi.Input<string>;
 }
 
 /**
@@ -193,6 +195,7 @@ export class SchemaRefresh extends pulumi.ComponentResource {
         evaluationPeriods: 1,
         threshold: 0,
         comparisonOperator: "GreaterThanThreshold",
+        alarmActions: [args.opsAlarmTopicArn],
         treatMissingData: "notBreaching",
       },
       { parent: this },

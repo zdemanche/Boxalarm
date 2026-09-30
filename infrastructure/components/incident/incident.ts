@@ -24,6 +24,8 @@ export interface IncidentArgs {
   nerisCredentialsSecretArn: pulumi.Input<string>;
   logGroup: ServiceLogGroup;
   httpApi: HttpApi;
+  /** Ops alarm topic (chief-notifications): every alarm here notifies it, none is silent. */
+  opsAlarmTopicArn: pulumi.Input<string>;
 }
 
 const CMK_STATEMENT = (cmkArn: pulumi.Input<string>) =>
@@ -612,6 +614,7 @@ export class Incident extends pulumi.ComponentResource {
         queueName: `boxalarm-${env}-incident-neris-settings-copy-queue`,
         lambda: nerisSettingsLambda.function,
         lambdaRole: nerisSettingsLambda.role,
+        alarmTopicArn: args.opsAlarmTopicArn,
         maxReceiveCount: 5,
         reportBatchItemFailures: true,
       },
@@ -657,6 +660,7 @@ export class Incident extends pulumi.ComponentResource {
         queueName: `boxalarm-${env}-incident-dispatch-alert-copy-queue`,
         lambda: dispatchAlertLambda.function,
         lambdaRole: dispatchAlertLambda.role,
+        alarmTopicArn: args.opsAlarmTopicArn,
         maxReceiveCount: 5,
         reportBatchItemFailures: true,
       },
@@ -697,6 +701,7 @@ export class Incident extends pulumi.ComponentResource {
         queueName: `boxalarm-${env}-incident-dispatch-response-copy-queue`,
         lambda: dispatchResponseLambda.function,
         lambdaRole: dispatchResponseLambda.role,
+        alarmTopicArn: args.opsAlarmTopicArn,
         maxReceiveCount: 5,
         reportBatchItemFailures: true,
       },

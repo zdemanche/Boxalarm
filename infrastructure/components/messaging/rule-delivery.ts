@@ -43,7 +43,7 @@ export interface RuleDeliveryGuardArgs {
    * after 24 h of retries. Pass a queue that has no other QueuePolicy (one policy per queue).
    */
   deadLetterQueue: aws.sqs.Queue;
-  alarmActions?: pulumi.Input<string>[];
+  alarmActions: pulumi.Input<string>[];
   alarmDescription?: string;
 }
 
@@ -90,7 +90,7 @@ export class RuleDeliveryGuard extends pulumi.ComponentResource {
         threshold: 0,
         comparisonOperator: "GreaterThanThreshold",
         treatMissingData: "notBreaching",
-        ...(args.alarmActions !== undefined ? { alarmActions: args.alarmActions } : {}),
+        alarmActions: args.alarmActions,
       },
       { parent: this },
     );

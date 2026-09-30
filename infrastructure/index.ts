@@ -236,6 +236,7 @@ export const outboxPublisher = new OutboxPublisher("outbox-publisher", {
   busName: platformBus.busName,
   busArn: platformBus.busArn,
   logGroup: platformLogGroup,
+  alarmTopicArn: alertingPageTopic.topicArn,
 });
 
 // Created ahead of sessionRevocation, whose credential-reset alarm notifies it.
@@ -253,11 +254,13 @@ export const sessionRevocation = new SessionRevocation("session-revocation", {
   platformLogGroup,
   httpApi,
   platformBus,
+  pageTopicArn: alertingPageTopic.topicArn,
 });
 
 export const recoveryMonitor = new RecoveryMonitor("recovery-monitor", {
   env,
   logGroup: platformLogGroup,
+  opsAlarmTopicArn: chiefNotificationTopic.topicArn,
 });
 
 export const personnelMembers = new Members("personnel-members", {
@@ -290,6 +293,7 @@ export const personnelQuals = new Quals("personnel-quals", {
   alertingTableName: alertingTable.tableName,
   alertingLogGroup,
   alertingPermissionsBoundaryArn: alertingBoundaryArn,
+  pageTopicArn: alertingPageTopic.topicArn,
 });
 
 export const personnelAttendance = new Attendance("personnel-attendance", {
@@ -316,6 +320,7 @@ export const personnelAvailability = new Availability("personnel-availability", 
   alertingTableName: alertingTable.tableName,
   alertingLogGroup,
   alertingPermissionsBoundaryArn: alertingBoundaryArn,
+  pageTopicArn: alertingPageTopic.topicArn,
 });
 
 export const personnelLosap = new Losap("personnel-losap", {
@@ -337,6 +342,7 @@ export const personnelShifts = new Shifts("personnel-shifts", {
   policyStoreId: policyStore.policyStoreId,
   logGroup: personnelLogGroup,
   httpApi,
+  opsAlarmTopicArn: chiefNotificationTopic.topicArn,
 });
 
 // E3-S1 through E3-S8-INFRA (#214-#221): training domain — certifications (with
@@ -358,6 +364,8 @@ export const trainingCertifications = new Certifications("training-certification
   assetsBucketArn: platformAssets.bucketArn,
   logGroup: trainingLogGroup,
   httpApi,
+  opsAlarmTopicArn: chiefNotificationTopic.topicArn,
+  pageTopicArn: alertingPageTopic.topicArn,
 });
 
 export const trainingEvents = new TrainingEvents("training-events", {
@@ -415,7 +423,10 @@ const apparatusArgs = {
   httpApi,
 };
 export const apparatusRegistry = new ApparatusRegistry("apparatus-registry", apparatusArgs);
-export const apparatusChecks = new ApparatusChecks("apparatus-checks", apparatusArgs);
+export const apparatusChecks = new ApparatusChecks("apparatus-checks", {
+  ...apparatusArgs,
+  opsAlarmTopicArn: chiefNotificationTopic.topicArn,
+});
 export const apparatusRecords = new ApparatusRecords("apparatus-records", apparatusArgs);
 export const apparatusInventory = new ApparatusInventory("apparatus-inventory", apparatusArgs);
 // Daily apparatus/SCBA test-due scanners -> apparatus.test.due on the platform bus.
@@ -429,6 +440,7 @@ export const apparatusTestDueScanners = new ApparatusTestDueScanners(
     platformBusName: platformBus.busName,
     platformBusArn: platformBus.busArn,
     logGroup: apparatusLogGroup,
+    opsAlarmTopicArn: chiefNotificationTopic.topicArn,
   },
 );
 
@@ -453,6 +465,7 @@ export const inventoryConsumables = new InventoryConsumables("inventory-consumab
   deptId,
   platformBusName: platformBus.busName,
   platformBusArn: platformBus.busArn,
+  opsAlarmTopicArn: chiefNotificationTopic.topicArn,
 });
 
 export const inventoryPpe = new InventoryPpe("inventory-ppe", {
@@ -460,6 +473,7 @@ export const inventoryPpe = new InventoryPpe("inventory-ppe", {
   deptId,
   platformBusName: platformBus.busName,
   platformBusArn: platformBus.busArn,
+  opsAlarmTopicArn: chiefNotificationTopic.topicArn,
 });
 
 // F6 inspections-service: occupancies + pre-plans, hydrants, inspection records + field
@@ -499,6 +513,7 @@ export const inspectionsRecords = new InspectionRecords("inspections-records", {
   ...inspectionsBase,
   assetsBucketName: platformAssets.bucketName,
   assetsBucketArn: platformAssets.bucketArn,
+  opsAlarmTopicArn: chiefNotificationTopic.topicArn,
 });
 
 export const inspectionsMap = new InspectionsMap("inspections-map", inspectionsBase);
@@ -528,6 +543,7 @@ export const notificationDigest = new NotificationDigest("notification-digest", 
   platformBusArn: platformBus.busArn,
   sesFromAddress: notificationSesFromAddress,
   logGroup: notificationLogGroup,
+  opsAlarmTopicArn: chiefNotificationTopic.topicArn,
 });
 
 export const platformConfig = new PlatformConfig("platform-config", {
@@ -613,6 +629,7 @@ export const incidentSchemaRefresh = new SchemaRefresh("incident-schema-refresh"
   incidentCmkArn: incidentTable.cmkArn,
   nerisSchemaSourceUrl,
   logGroup: incidentServiceLogGroup,
+  opsAlarmTopicArn: chiefNotificationTopic.topicArn,
 });
 
 export const incident = new Incident("incident", {
@@ -629,6 +646,7 @@ export const incident = new Incident("incident", {
   nerisCredentialsSecretArn: nerisConfig.secret.arn,
   logGroup: incidentServiceLogGroup,
   httpApi,
+  opsAlarmTopicArn: chiefNotificationTopic.topicArn,
 });
 
 // Incident-table outbox → platform-bus. The platform OutboxPublisher only reads the
@@ -643,6 +661,7 @@ export const incidentOutboxDrain = new IncidentOutboxDrain("incident-outbox-drai
   busName: platformBus.busName,
   busArn: platformBus.busArn,
   logGroup: incidentServiceLogGroup,
+  opsAlarmTopicArn: chiefNotificationTopic.topicArn,
 });
 
 // NERIS submission worker: consumes neris.incident.submitted off the platform bus and

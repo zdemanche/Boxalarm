@@ -59,7 +59,11 @@ describe("RecoveryMonitor", () => {
       env: "dev",
       serviceName: "platform-service",
     });
-    return new RecoveryMonitor("test-recovery", { env: "dev", logGroup });
+    return new RecoveryMonitor("test-recovery", {
+      env: "dev",
+      logGroup,
+      opsAlarmTopicArn: "arn:aws:sns:us-east-1:123456789012:boxalarm-dev-chief-notifications",
+    });
   }
 
   it("watches Boxalarm/credential-recovery — the namespace the backend actually emits Recovery* metrics to", async () => {
@@ -90,8 +94,13 @@ describe("RecoveryMonitor", () => {
       env: "dev",
       serviceName: "platform-service",
     });
-    expect(() => new RecoveryMonitor("test-recovery-bad", { env: "", logGroup })).toThrow(
-      /env is required/,
-    );
+    expect(
+      () =>
+        new RecoveryMonitor("test-recovery-bad", {
+          env: "",
+          logGroup,
+          opsAlarmTopicArn: "arn:aws:sns:us-east-1:123456789012:boxalarm-dev-chief-notifications",
+        }),
+    ).toThrow(/env is required/);
   });
 });

@@ -23,6 +23,10 @@ export interface CertificationsArgs {
   assetsBucketArn: pulumi.Input<string>;
   logGroup: ServiceLogGroup;
   httpApi: HttpApi;
+  /** Ops alarm topic (chief-notifications): every alarm here notifies it, none is silent. */
+  opsAlarmTopicArn: pulumi.Input<string>;
+  /** alerting-page topic (alerting/page-topic.ts): a failed eligibility flip leaves an expired member paged. */
+  pageTopicArn: pulumi.Input<string>;
 }
 
 /**
@@ -303,6 +307,7 @@ export class Certifications extends pulumi.ComponentResource {
         evaluationPeriods: 1,
         threshold: 0,
         comparisonOperator: "GreaterThanThreshold",
+        alarmActions: [args.opsAlarmTopicArn],
       },
       { parent: this },
     );
@@ -319,6 +324,7 @@ export class Certifications extends pulumi.ComponentResource {
         evaluationPeriods: 1,
         threshold: 0,
         comparisonOperator: "GreaterThanThreshold",
+        alarmActions: [args.opsAlarmTopicArn],
         treatMissingData: "notBreaching",
       },
       { parent: this },
@@ -510,6 +516,7 @@ export class Certifications extends pulumi.ComponentResource {
         evaluationPeriods: 1,
         threshold: 0,
         comparisonOperator: "GreaterThanThreshold",
+        alarmActions: [args.pageTopicArn],
       },
       { parent: this },
     );
@@ -525,6 +532,7 @@ export class Certifications extends pulumi.ComponentResource {
         evaluationPeriods: 1,
         threshold: 0,
         comparisonOperator: "GreaterThanThreshold",
+        alarmActions: [args.pageTopicArn],
         treatMissingData: "notBreaching",
       },
       { parent: this },

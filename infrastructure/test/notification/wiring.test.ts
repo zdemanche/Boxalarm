@@ -69,6 +69,7 @@ async function build() {
     httpApi,
   });
   new Digest("digest", {
+    opsAlarmTopicArn: "arn:aws:sns:us-east-1:123456789012:boxalarm-dev-chief-notifications",
     env: "dev",
     deptId: "nichols-fd",
     ...table,

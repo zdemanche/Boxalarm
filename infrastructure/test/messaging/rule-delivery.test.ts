@@ -44,6 +44,7 @@ describe("QueueConsumer — EventBridge delivery (deploy-readiness C1)", { timeo
       handler: "index.handler",
     });
     new QueueConsumer("test-consumer", {
+      alarmTopicArn: "arn:aws:sns:us-east-1:123456789012:boxalarm-dev-alerting-page",
       env: "dev",
       busName: "boxalarm-dev-platform-bus",
       ruleName: "boxalarm-dev-test-rule",

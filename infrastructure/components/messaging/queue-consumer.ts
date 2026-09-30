@@ -34,6 +34,12 @@ export interface QueueConsumerArgs {
    * whose Lambda timeout is longer must set at least 6x that timeout (AWS guidance).
    */
   visibilityTimeoutSeconds?: number;
+  /**
+   * Where the DLQ-depth and FailedInvocations alarms notify. alerting-page for a consumer
+   * that feeds paging (eligibility, availability, session revocation); the ops alarm topic
+   * (chief-notifications) for the rest. Required: no consumer alarm may page nobody.
+   */
+  alarmTopicArn: pulumi.Input<string>;
 }
 
 /**
@@ -103,6 +109,7 @@ export class QueueConsumer extends pulumi.ComponentResource {
         rule: this.rule,
         busName: args.busName,
         deadLetterQueue: this.dlq,
+        alarmActions: [args.alarmTopicArn],
       },
       { parent: this },
     );
@@ -165,6 +172,7 @@ export class QueueConsumer extends pulumi.ComponentResource {
         evaluationPeriods: 1,
         threshold: 0,
         comparisonOperator: "GreaterThanThreshold",
+        alarmActions: [args.alarmTopicArn],
       },
       { parent: this },
     );

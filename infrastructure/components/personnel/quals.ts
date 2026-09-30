@@ -25,6 +25,8 @@ export interface QualsArgs {
   alertingTableName: pulumi.Input<string>;
   alertingLogGroup: ServiceLogGroup;
   alertingPermissionsBoundaryArn?: pulumi.Input<string>;
+  /** alerting-page topic (alerting/page-topic.ts): the snapshot / revocation consumer's alarms page. */
+  pageTopicArn: pulumi.Input<string>;
 }
 
 // GET: readQuals is a base-table Query (pk + begins_with(sk,'QUAL#')) — read-only.
@@ -160,6 +162,7 @@ export class Quals extends pulumi.ComponentResource {
         queueName: `boxalarm-${env}-eligibility-changed-snapshot-queue`,
         lambda: this.eligibilityChangedConsumer.function,
         lambdaRole: this.eligibilityChangedConsumer.role,
+        alarmTopicArn: args.pageTopicArn,
         maxReceiveCount: 5,
       },
       { parent: this },

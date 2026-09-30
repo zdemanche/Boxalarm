@@ -29,7 +29,7 @@ export interface DailyScannerResources {
  * A Scheduler Lambda target receives only `input`, so the execution id is passed as `id`
  * via Scheduler's context-attribute substitution rather than leaving it undefined.
  *
- * `scheduleExpression` defaults to rate(1 day), whose run time is whenever the schedule was
+ * `scheduleExpression` is e.g. rate(1 day), whose run time is whenever the schedule was
  * created. A scanner whose events feed notification-service's 12:00 UTC digest passes a
  * cron pinned before it (UTC), so the day's reminders make that day's digest.
  */
@@ -39,7 +39,9 @@ export function dailyScanner(
   env: string,
   baseName: string,
   lambda: ServiceLambda,
-  scheduleExpression = "rate(1 day)",
+  scheduleExpression: string,
+  /** Where both alarms notify (the ops alarm topic): a failing scanner is never silent. */
+  alarmTopicArn: pulumi.Input<string>,
 ): DailyScannerResources {
   const opts = { parent };
 
@@ -57,6 +59,7 @@ export function dailyScanner(
       evaluationPeriods: 1,
       threshold: 0,
       comparisonOperator: "GreaterThanThreshold",
+      alarmActions: [alarmTopicArn],
     },
     opts,
   );
@@ -73,6 +76,7 @@ export function dailyScanner(
       evaluationPeriods: 1,
       threshold: 0,
       comparisonOperator: "GreaterThanThreshold",
+      alarmActions: [alarmTopicArn],
       treatMissingData: "notBreaching",
     },
     opts,

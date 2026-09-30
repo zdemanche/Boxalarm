@@ -63,8 +63,14 @@ async function build() {
     platformBusArn: BUS,
   };
   new Equipment("inventory-equipment", common);
-  new Consumables("inventory-consumables", scanners);
-  new Ppe("inventory-ppe", scanners);
+  new Consumables("inventory-consumables", {
+    ...scanners,
+    opsAlarmTopicArn: "arn:aws:sns:us-east-1:123456789012:boxalarm-dev-chief-notifications",
+  });
+  new Ppe("inventory-ppe", {
+    ...scanners,
+    opsAlarmTopicArn: "arn:aws:sns:us-east-1:123456789012:boxalarm-dev-chief-notifications",
+  });
   await settle();
 }
 

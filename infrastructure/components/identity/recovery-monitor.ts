@@ -9,6 +9,8 @@ import { RuleDeliveryGuard } from "../messaging/rule-delivery";
 export interface RecoveryMonitorArgs {
   env: string;
   logGroup: ServiceLogGroup;
+  /** Ops alarm topic (chief-notifications): every alarm here notifies it, none is silent. */
+  opsAlarmTopicArn: pulumi.Input<string>;
 }
 
 const RECOVERY_EVENT_NAMES = ["ForgotPassword", "ConfirmForgotPassword"];
@@ -25,6 +27,7 @@ export class RecoveryMonitor extends pulumi.ComponentResource {
   public readonly rule: aws.cloudwatch.EventRule;
   public readonly dlq: aws.sqs.Queue;
   public readonly deliveryGuard: RuleDeliveryGuard;
+  public readonly dlqDepthAlarm: aws.cloudwatch.MetricAlarm;
   public readonly recoveryFailedAlarm: aws.cloudwatch.MetricAlarm;
   public readonly classificationFailedAlarm: aws.cloudwatch.MetricAlarm;
 
@@ -169,6 +172,7 @@ export class RecoveryMonitor extends pulumi.ComponentResource {
         alarmName: `boxalarm-${env}-credential-recovery-monitor-failed-invocations`,
         rule: this.rule,
         deadLetterQueue: this.dlq,
+        alarmActions: [args.opsAlarmTopicArn],
       },
       { parent: this },
     );
@@ -183,6 +187,24 @@ export class RecoveryMonitor extends pulumi.ComponentResource {
       { parent: this, dependsOn: [this.deliveryGuard] },
     );
 
+    // A recovery event the monitor could not process: an account-takeover signal nobody read.
+    this.dlqDepthAlarm = new aws.cloudwatch.MetricAlarm(
+      `${name}-dlq-depth-alarm`,
+      {
+        name: `boxalarm-${env}-credential-recovery-monitor-dlq-depth`,
+        namespace: "AWS/SQS",
+        metricName: "ApproximateNumberOfMessagesVisible",
+        dimensions: { QueueName: this.dlq.name },
+        statistic: "Maximum",
+        period: 300,
+        evaluationPeriods: 1,
+        threshold: 0,
+        comparisonOperator: "GreaterThanThreshold",
+        alarmActions: [args.opsAlarmTopicArn],
+      },
+      { parent: this },
+    );
+
     this.recoveryFailedAlarm = new aws.cloudwatch.MetricAlarm(
       `${name}-recovery-failed-alarm`,
       {
@@ -194,6 +216,7 @@ export class RecoveryMonitor extends pulumi.ComponentResource {
         evaluationPeriods: 1,
         threshold: 5,
         comparisonOperator: "GreaterThanThreshold",
+        alarmActions: [args.opsAlarmTopicArn],
         treatMissingData: "notBreaching",
       },
       { parent: this },
@@ -210,6 +233,7 @@ export class RecoveryMonitor extends pulumi.ComponentResource {
         evaluationPeriods: 1,
         threshold: 0,
         comparisonOperator: "GreaterThanThreshold",
+        alarmActions: [args.opsAlarmTopicArn],
         treatMissingData: "notBreaching",
       },
       { parent: this },

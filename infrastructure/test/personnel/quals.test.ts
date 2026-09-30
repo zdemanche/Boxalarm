@@ -63,6 +63,7 @@ describe("Quals — eligibility-changed consumer (#114/#204)", () => {
     });
     const platformBus = new PlatformBus("test-quals-platform-bus", { env: "dev" });
     return new Quals("test-quals", {
+      pageTopicArn: "arn:aws:sns:us-east-1:123456789012:boxalarm-dev-alerting-page",
       env: "dev",
       platformTableName: pulumi.output("platform-table"),
       platformTableArn: pulumi.output("arn:aws:dynamodb:us-east-1:123456789012:table/platform"),

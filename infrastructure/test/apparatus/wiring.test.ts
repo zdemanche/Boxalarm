@@ -107,7 +107,10 @@ async function build() {
     httpApi,
   };
   new Registry("apparatus-registry", args);
-  new Checks("apparatus-checks", args);
+  new Checks("apparatus-checks", {
+    ...args,
+    opsAlarmTopicArn: "arn:aws:sns:us-east-1:123456789012:boxalarm-dev-chief-notifications",
+  });
   new Records("apparatus-records", args);
   new Inventory("apparatus-inventory", args);
   await settle();

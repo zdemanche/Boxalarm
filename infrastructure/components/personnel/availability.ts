@@ -26,6 +26,8 @@ export interface AvailabilityArgs {
   alertingTableName: pulumi.Input<string>;
   alertingLogGroup: ServiceLogGroup;
   alertingPermissionsBoundaryArn?: pulumi.Input<string>;
+  /** alerting-page topic (alerting/page-topic.ts): the snapshot / revocation consumer's alarms page. */
+  pageTopicArn: pulumi.Input<string>;
 }
 
 /**
@@ -210,6 +212,7 @@ export class Availability extends pulumi.ComponentResource {
         queueName: `boxalarm-${env}-availability-snapshot-queue`,
         lambda: this.availabilityChangedConsumer.function,
         lambdaRole: this.availabilityChangedConsumer.role,
+        alarmTopicArn: args.pageTopicArn,
         maxReceiveCount: 5,
       },
       { parent: this },

@@ -80,9 +80,21 @@ async function build() {
   });
   new Losap("losap", common);
   new Attendance("attendance", common);
-  new Quals("quals", { ...common, ...alerting });
-  new Availability("availability", { ...common, ...alerting });
-  new Shifts("shifts", { ...common, deptId: "nichols-fd" });
+  new Quals("quals", {
+    ...common,
+    ...alerting,
+    pageTopicArn: "arn:aws:sns:us-east-1:123456789012:boxalarm-dev-alerting-page",
+  });
+  new Availability("availability", {
+    ...common,
+    ...alerting,
+    pageTopicArn: "arn:aws:sns:us-east-1:123456789012:boxalarm-dev-alerting-page",
+  });
+  new Shifts("shifts", {
+    ...common,
+    deptId: "nichols-fd",
+    opsAlarmTopicArn: "arn:aws:sns:us-east-1:123456789012:boxalarm-dev-chief-notifications",
+  });
   await settle();
 }
 
