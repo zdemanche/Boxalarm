@@ -151,6 +151,26 @@ async function writePending(deps: PendingUnregisterDeps, pending: PendingUnregis
   }));
 }
 
+/**
+ * Stores a rotated refresh token on the member's record - decided inside the serialised
+ * read-modify-write, so a sign-in that cancels (and removes) the record in between can never be
+ * undone by a rotation writing it back.
+ */
+function rotatePending(
+  deps: PendingUnregisterDeps,
+  memberId: string,
+  refreshToken: string,
+): Promise<void> {
+  return update(deps, (list) => {
+    const current = list.find((p) => p.memberId === memberId);
+    if (!current || cancelled.has(memberId)) return { next: null, result: undefined };
+    return {
+      next: list.map((p) => (p.memberId === memberId ? { ...p, refreshToken } : p)),
+      result: undefined,
+    };
+  });
+}
+
 /** Removes the member's record; true if there was one. */
 function removePending(deps: PendingUnregisterDeps, memberId: string): Promise<boolean> {
   return update(deps, (list) => {
@@ -198,10 +218,7 @@ async function retryOne(
     accessToken = result.accessToken;
     if (result.refreshToken && result.refreshToken !== refreshToken) {
       refreshToken = result.refreshToken;
-      // Never re-creates a record the member's sign-in has cancelled.
-      if (!cancelled.has(pending.memberId)) {
-        await writePending(deps, { ...pending, refreshToken });
-      }
+      await rotatePending(deps, pending.memberId, refreshToken);
     }
   } catch (error) {
     if (isInvalidGrant(error)) return drop('the refresh token was refused', null);

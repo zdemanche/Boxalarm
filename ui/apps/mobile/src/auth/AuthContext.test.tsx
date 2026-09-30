@@ -962,3 +962,35 @@ test('a retry still reading the pending list when the member signs back in never
   expect(deps.refresh).not.toHaveBeenCalled();
   expect(globalThis.fetch).not.toHaveBeenCalled();
 });
+
+test('a token rotation landing after the member signed back in never writes the cancelled record back', async () => {
+  const deps = makeDeps();
+  deps.revokeRefreshToken = jest.fn(async () => undefined);
+  const { savePendingUnregister, cancelPendingUnregisterFor } =
+    jest.requireActual('./pendingUnregister');
+  await savePendingUnregister(deps, {
+    memberId: 'MBR-ROT',
+    deviceId: 'dev-1',
+    refreshToken: 'refresh-A',
+    apiBaseUrl: 'https://api.example.test',
+    savedAt: Date.now(),
+  });
+  let cancelling: Promise<void> = Promise.resolve();
+  deps.refresh = jest.fn(async () => {
+    cancelling = cancelPendingUnregisterFor('MBR-ROT', deps);
+    return {
+      accessToken: 'a',
+      refreshToken: 'refresh-ROTATED',
+      accessTokenExpirationDate: new Date(Date.now() + 3600_000).toISOString(),
+      idToken: 'x',
+      tokenType: 'Bearer',
+    };
+  }) as unknown as AuthDeps['refresh'];
+  globalThis.fetch = jest.fn(async () => new Response('{}')) as unknown as typeof fetch;
+
+  await retryPendingUnregister(deps);
+  await cancelling;
+
+  await expect(deps.getInternetCredentials('boxalarm-pending-unregister')).resolves.toBe(false);
+  expect(globalThis.fetch).not.toHaveBeenCalled();
+});
