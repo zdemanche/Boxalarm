@@ -100,6 +100,18 @@ test('CHIEF sees the saved source, its email address and parser version', async 
   );
 });
 
+test('warns when a source reads no incident number, and not once it does', async () => {
+  server.use(http.get('/api/v1/platform/cad-sources', () => HttpResponse.json(STORED)));
+  renderPage();
+  await screen.findByRole('heading', { name: 'County CAD' });
+  expect(screen.getByRole('note').textContent).toContain('no incident number rule');
+  fireEvent.change(screen.getByLabelText('Incident number: read by'), {
+    target: { value: 'label' },
+  });
+  fireEvent.change(screen.getByLabelText('Incident number: label'), { target: { value: 'INC' } });
+  expect(screen.queryByRole('note')).toBeNull();
+});
+
 test('a member without CHIEF/ADMIN cannot open the page', async () => {
   server.use(http.get('/api/v1/platform/cad-sources', () => HttpResponse.json(STORED)));
   renderPage(['OFFICER']);

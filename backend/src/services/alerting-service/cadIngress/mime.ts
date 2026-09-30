@@ -19,6 +19,8 @@ export interface ParsedEmail {
   readonly fromDomain: string | undefined;
   readonly date: number | undefined;
   readonly messageId: string | undefined;
+  /** Decoded Subject: many CADs put the call type and address there (chain review C1). */
+  readonly subject: string | undefined;
   readonly dkimSignatures: readonly DkimSignature[];
   readonly text: string;
 }
@@ -148,6 +150,24 @@ function extractText(headers: Headers, body: string, depth = 0): { plain?: strin
   return {};
 }
 
+/** RFC 2047 encoded-words (=?charset?B|Q?text?=) in a header value, decoded; others kept. */
+export function decodeEncodedWords(value: string): string {
+  return value
+    .replace(/\?=\s+=\?/g, '?==?')
+    .replace(
+      /=\?([^?\s]+)\?([BbQq])\?([^?\s]*)\?=/g,
+      (whole, charset: string, enc: string, text: string) => {
+        const latin = /^(iso-8859-1|latin1|windows-1252)$/i.test(charset);
+        if (!latin && !/^(utf-8|us-ascii)$/i.test(charset)) return whole;
+        const bytes =
+          enc.toUpperCase() === 'B'
+            ? Buffer.from(text, 'base64')
+            : decodeQuotedPrintable(text.replace(/_/g, ' '));
+        return bytes.toString(latin ? 'latin1' : 'utf8');
+      },
+    );
+}
+
 export function parseEmail(raw: string): ParsedEmail {
   const { headerBlock, body } = splitMessage(raw);
   const headers = parseHeaders(headerBlock);
@@ -160,6 +180,9 @@ export function parseEmail(raw: string): ParsedEmail {
     fromDomain: fromAddress?.split('@')[1],
     date: Number.isFinite(date) ? Math.floor(date / 1000) : undefined,
     messageId: first(headers, 'message-id'),
+    subject: ((subject) => (subject ? decodeEncodedWords(subject).trim() || undefined : undefined))(
+      first(headers, 'subject'),
+    ),
     dkimSignatures: all(headers, 'dkim-signature')
       .map(parseDkimSignature)
       .filter((sig): sig is DkimSignature => sig !== undefined),

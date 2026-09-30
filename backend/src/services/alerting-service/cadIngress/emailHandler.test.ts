@@ -39,6 +39,7 @@ function rawEmail(
     messageId?: string;
     body?: string;
     headers?: string;
+    subject?: string;
   } = {},
 ): string {
   const date = new Date((options.date ?? NOW) * 1000).toUTCString();
@@ -54,7 +55,7 @@ function rawEmail(
     `To: ${RECIPIENT}`,
     `Date: ${date}`,
     `Message-ID: <${options.messageId ?? 'm-1@cad.county.gov'}>`,
-    'Subject: DISPATCH',
+    ...(options.subject !== undefined ? [`Subject: ${options.subject}`] : []),
     options.headers ?? 'Content-Type: text/plain; charset=utf-8',
     '',
     options.body ?? 'INC: 2026-7\r\nADDR: 123 MAIN ST, NICHOLS\r\n',
@@ -250,6 +251,24 @@ describe('CAD email handler', () => {
     });
   });
 
+  it('a dispatch carried in the Subject with an empty body pages with the Subject text, and a different Subject pages again', async () => {
+    serve(rawEmail({ body: '', subject: 'ADDR: 5 OAK AVE' }));
+    await run();
+    serve(
+      rawEmail({
+        body: '',
+        messageId: 'm-9@cad.county.gov',
+        subject: 'ADDR: 77 PINE RD',
+      }),
+    );
+    await run();
+    expect(
+      alerts()
+        .map((a) => a.address)
+        .sort(),
+    ).toEqual(['5 OAK AVE', '77 PINE RD']);
+  });
+
   it('a body naming another department still pages only the source department', async () => {
     serve(rawEmail({ body: 'DEPT: other-fd\r\nADDR: 9 OAK AVE\r\n' }));
     await run();
@@ -272,6 +291,15 @@ describe('CAD email handler', () => {
     await run(); // and a genuine second delivery of it
     expect(alerts()).toHaveLength(1);
     expect(metric('CadIngressReplayRejected')).toBe(true);
+  });
+});
+
+describe('CAD email Subject (chain review C1)', () => {
+  it('reads an RFC 2047 encoded Subject', () => {
+    const email = parseEmail(
+      rawEmail({ subject: '=?utf-8?Q?STRUCTURE_FIRE_=E2=80=93_1_MAIN_ST?=' }),
+    );
+    expect(email.subject).toBe('STRUCTURE FIRE – 1 MAIN ST');
   });
 });
 

@@ -708,6 +708,12 @@ export class CadIngress extends pulumi.ComponentResource {
         [args.pageTopicArn, args.opsTopicArn],
       ),
       cadAlarm(
+        "duplicate",
+        "CadIngressDuplicate",
+        "A CAD message was treated as a duplicate of one already paged and did NOT page (same incident number, or identical text within 10 minutes for a source with no incident number rule). Usually a CAD resend. If a crew reports a missed call, check the source's template reads the incident number (Settings > CAD sources).",
+        [args.pageTopicArn],
+      ),
+      cadAlarm(
         "rejected",
         "CadIngressRejected",
         "CAD ingress could not process a message (a dependency was unavailable, or a webhook body was too large). It did NOT page; the sender retries a webhook, Lambda retries an email.",

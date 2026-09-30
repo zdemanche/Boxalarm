@@ -306,3 +306,20 @@ export function toSourceView(
     parser: source.parser ?? null,
   };
 }
+
+/**
+ * Non-blocking warnings about a saved source, returned by GET and PUT (chain review C1). A
+ * source whose template reads no incident number is identified by its text alone: an identical
+ * resend within 10 minutes is dropped, and CAD updates to a call cannot be recognised as
+ * updates. It still pages - this is a warning, not a block.
+ */
+export function sourceWarnings(source: StoredCadSource, index: number): FieldError[] {
+  if (source.parser?.fields.incidentNumber) return [];
+  return [
+    {
+      field: `sources[${index}].parser.fields.incidentNumber`,
+      message:
+        'no incident number rule: dispatches are told apart by their text only, so an identical resend within 10 minutes is dropped and CAD updates page as new calls. Add an incident number rule if the CAD sends one.',
+    },
+  ];
+}

@@ -254,6 +254,7 @@ describe(
       ["boxalarm-dev-alerting-cad-replay-rejected", [PAGE]],
       ["boxalarm-dev-alerting-cad-quarantined", [PAGE, OPS]],
       ["boxalarm-dev-alerting-cad-rejected", [PAGE]],
+      ["boxalarm-dev-alerting-cad-duplicate", [PAGE]],
       ["boxalarm-dev-alerting-cad-raw-fallback", [PAGE, OPS]],
       ["boxalarm-dev-alerting-cad-webhook-errors", [PAGE]],
       ["boxalarm-dev-alerting-cad-webhook-throttles", [PAGE]],

@@ -114,6 +114,8 @@ export interface CadSourcesResponse {
   emailDomain: string | null;
   webhookUrl: string | null;
   sources: CadSourceView[];
+  /** Non-blocking warnings about the saved sources (e.g. no incident number rule). */
+  warnings?: { field: string; message: string }[];
 }
 
 /** PUT /platform/cad-sources: one source as the chief edits it. */

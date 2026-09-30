@@ -64,22 +64,47 @@ function sha256(text: string): string {
 }
 
 /**
- * The source's own dispatch identity: incident number + dispatch time, so a CAD resend does
- * not double-page while an update to the same incident (a new dispatch time) does. When the
- * CAD gives no dispatch time the text fingerprint stands in for it, and with no incident
- * number the fingerprint alone identifies the dispatch. Hashed so the key never carries '#'.
+ * How long a TEXT-ONLY identity (no incident number) holds: a resend of identical text inside
+ * this window is a duplicate, the same text after it is a new call (chain review C1 - a repeat
+ * medical call at the same address, days later, must page). Incident-number identities carry
+ * their own window (INCIDENT_IDENTITY_SECONDS).
  */
-export function cadExternalDispatchId(
-  sourceId: string,
-  fields: CadParsedFields,
-  text: string,
-): string {
+export const TEXT_IDENTITY_SECONDS = 10 * 60;
+export const INCIDENT_IDENTITY_SECONDS = 24 * 60 * 60;
+
+export interface CadIdentity {
+  /** Hashed so the key never carries '#'. */
+  readonly externalDispatchId: string;
+  readonly kind: 'incident' | 'text';
+  /** Seconds the identity holds from the message's receipt. */
+  readonly windowSeconds: number;
+}
+
+/**
+ * The source's own dispatch identity: incident number + dispatch time when the CAD sends an
+ * incident number (the fingerprint stands in for a missing time); otherwise the text
+ * fingerprint, which holds only for TEXT_IDENTITY_SECONDS.
+ */
+export function cadIdentity(sourceId: string, fields: CadParsedFields, text: string): CadIdentity {
   const incident = fields.incidentNumber?.toUpperCase();
   const time = fields.dispatchTime?.replace(/\s+/g, ' ').toUpperCase();
   const identity = incident
     ? `INC|${incident}|${time ?? `TEXT|${dispatchTextFingerprint(text)}`}`
     : `TEXT|${dispatchTextFingerprint(text)}`;
-  return `${sourceId}.${sha256(identity).slice(0, 40)}`;
+  return {
+    externalDispatchId: `${sourceId}.${sha256(identity).slice(0, 40)}`,
+    kind: incident ? 'incident' : 'text',
+    windowSeconds: incident ? INCIDENT_IDENTITY_SECONDS : TEXT_IDENTITY_SECONDS,
+  };
+}
+
+/** The identity key alone (see cadIdentity). */
+export function cadExternalDispatchId(
+  sourceId: string,
+  fields: CadParsedFields,
+  text: string,
+): string {
+  return cadIdentity(sourceId, fields, text).externalDispatchId;
 }
 
 /** "123 MAIN ST, NICHOLS" -> "NICHOLS": the town when the template has no town field. */
@@ -101,6 +126,7 @@ export function buildCadDispatch(
   readonly parseStatus: 'PARSED' | 'RAW';
   readonly parserVersion: number | null;
   readonly fields: CadParsedFields;
+  readonly identity: CadIdentity;
 } {
   const rawText = normalizeDispatchText(text).trim();
   const structuredResult = structured?.address ? structured : undefined;
@@ -108,12 +134,14 @@ export function buildCadDispatch(
   const fields: CadParsedFields = structuredResult ?? { ...structured, ...parsed?.fields };
   const isParsed = structuredResult !== undefined || parsed?.status === 'PARSED';
   const narrativeFallback = rawText.slice(0, MAX_NARRATIVE_CHARS);
-  const externalDispatchId = cadExternalDispatchId(source.sourceId, fields, rawText);
+  const identity = cadIdentity(source.sourceId, fields, rawText);
+  const { externalDispatchId } = identity;
 
   if (isParsed && fields.address) {
     const locality = cadLocality(fields.town ?? townFromAddress(fields.address));
     return {
       parseStatus: 'PARSED',
+      identity,
       parserVersion: structuredResult ? null : (parsed?.version ?? null),
       fields,
       dispatch: {
@@ -132,6 +160,7 @@ export function buildCadDispatch(
   // the address; the crew reads the dispatch text.
   return {
     parseStatus: 'RAW',
+    identity,
     parserVersion: parsed?.version ?? null,
     fields,
     dispatch: {
@@ -164,6 +193,7 @@ export async function ingestCadDispatch(
     dispatch: built.dispatch,
     idempotencyKey,
     dispatchedAt: input.receivedAt,
+    lockExpiresAt: input.receivedAt + built.identity.windowSeconds,
     cad: {
       ingressChannel: channel,
       sourceId: source.sourceId,
@@ -191,8 +221,13 @@ export async function ingestCadDispatch(
   }
 
   if (result.outcome === 'duplicate') {
-    emitCadMetric('CadIngressDuplicate', { Channel: channel });
-    logInfo('cadIngress.duplicate', { deptId, sourceId: source.sourceId, channel });
+    emitCadMetric('CadIngressDuplicate', { Channel: channel, Identity: built.identity.kind });
+    logInfo('cadIngress.duplicate', {
+      deptId,
+      sourceId: source.sourceId,
+      channel,
+      identity: built.identity.kind,
+    });
     return { outcome: 'duplicate', parseStatus: built.parseStatus };
   }
   emitCadMetric('CadIngressAccepted', { Channel: channel });

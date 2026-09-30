@@ -16,6 +16,7 @@ import { CAD_INGRESS, loadCadIngress, readTableName } from './repository.js';
 import {
   mergeSources,
   readStoredSources,
+  sourceWarnings,
   toSourceView,
   validateParserFields,
   validateSourcesInput,
@@ -65,6 +66,7 @@ function view(deptId: string, item: Awaited<ReturnType<typeof loadCadIngress>>) 
     sources: readStoredSources(item?.value).map((source) =>
       toSourceView(source, deptId, emailDomain),
     ),
+    warnings: readStoredSources(item?.value).flatMap(sourceWarnings),
   };
 }
 

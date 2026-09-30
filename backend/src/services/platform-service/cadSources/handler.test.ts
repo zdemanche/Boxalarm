@@ -131,6 +131,17 @@ describe('PUT /platform/cad-sources', () => {
     );
   });
 
+  it('warns (does not block) when a source has no incident number rule', async () => {
+    const bare = { ...SOURCE, parser: { fields: { address: { label: 'ADDR' } } } };
+    const response = (await handler(
+      event('PUT /api/v1/platform/cad-sources', { sources: [bare] }),
+    )) as { statusCode: number; body: string };
+    expect(response.statusCode).toBe(200);
+    expect((JSON.parse(response.body) as { warnings: unknown }).warnings).toEqual([
+      expect.objectContaining({ field: 'sources[0].parser.fields.incidentNumber' }),
+    ]);
+  });
+
   it('refuses a blind overwrite of a saved config (409 without the loaded version)', async () => {
     stored = { value: { sources: [] }, version: 3 };
     const response = (await handler(

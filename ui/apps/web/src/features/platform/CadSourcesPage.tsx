@@ -359,6 +359,13 @@ function SourceEditor({
           {draft.saved ? <WebhookKey draft={draft} /> : <p>Save the source to create its key.</p>}
         </fieldset>
 
+        {draft.rules.incidentNumber.mode === 'none' || !draft.rules.incidentNumber.value.trim() ? (
+          <p role="note">
+            <strong>Warning:</strong> no incident number rule. Dispatches from this source are told
+            apart by their text only, so an identical resend within 10 minutes is dropped and CAD
+            updates to a call page as new calls. Add an incident number rule if the CAD sends one.
+          </p>
+        ) : null}
         <ParserEditor draft={draft} index={index} errors={errors} onChange={onChange} />
 
         <Button type="button" variant="danger" onClick={onRemove} style={{ width: 'fit-content' }}>

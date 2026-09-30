@@ -157,7 +157,9 @@ async function processRecord(record: SESEventRecord, config: MailConfig): Promis
     deptId: target.deptId,
     source,
     channel: CHANNEL,
-    text: email.text,
+    // The Subject leads: many CADs carry the call type and address there, and an empty body
+    // must not make every such email the same "text" (chain review C1).
+    text: email.subject ? `${email.subject}\n${email.text}` : email.text,
     receivedAt: nowSeconds,
     replay: { token: replayRef.token, ttlSeconds: EMAIL_REPLAY_TTL_SECONDS },
   });

@@ -28,7 +28,17 @@ export interface CreateManualDispatchInput {
    * write can never leave a marker behind that refuses the sender's retry (chain review M3).
    */
   readonly replayMarker?: Record<string, unknown> & { readonly pk: string; readonly sk: string };
+  /**
+   * CAD ingress only: when the idempotency lock stops counting (epoch seconds). A later message
+   * with the same identity after this time is a NEW dispatch (chain review C1: a text-only
+   * identity must never swallow a genuine repeat call forever). Absent = the lock never expires
+   * (manual and self-test submissions, unchanged).
+   */
+  readonly lockExpiresAt?: number;
 }
+
+/** How long an expired lock item is kept for the record before the TTL sweeper removes it. */
+const EXPIRED_LOCK_RETENTION_SECONDS = 7 * 24 * 60 * 60;
 
 /**
  * Stored on a CAD-originated DISPATCH_ALERT for the record and the dispatch detail. Fan-out
@@ -91,8 +101,20 @@ export async function createManualDispatch(
             dispatchId,
             deptId,
             createdAt: dispatchedAt,
+            ...(input.lockExpiresAt !== undefined
+              ? {
+                  expiresAt: input.lockExpiresAt,
+                  ttl: input.lockExpiresAt + EXPIRED_LOCK_RETENTION_SECONDS,
+                }
+              : {}),
           },
-          ConditionExpression: 'attribute_not_exists(idempotencyKey)',
+          ...(input.lockExpiresAt !== undefined
+            ? {
+                // An expired lock is no lock: the same identity is now a new dispatch.
+                ConditionExpression: 'attribute_not_exists(idempotencyKey) OR expiresAt <= :now',
+                ExpressionAttributeValues: { ':now': dispatchedAt },
+              }
+            : { ConditionExpression: 'attribute_not_exists(idempotencyKey)' }),
         },
       },
       {

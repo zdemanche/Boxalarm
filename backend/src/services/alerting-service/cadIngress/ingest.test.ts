@@ -7,8 +7,10 @@ import {
   RAW_INCIDENT_TYPE,
   buildCadDispatch,
   cadExternalDispatchId,
+  TEXT_IDENTITY_SECONDS,
   ingestCadDispatch,
 } from './ingest.js';
+import { fakeDynamo as fakeDynamoTable, type FakeTable } from './__fixtures__/fakeTable.js';
 import type { CadSourceCopy } from './sourceCopy.js';
 
 const DEPT = toVerifiedDeptId({ deptId: 'nichols-fd' });
@@ -210,5 +212,75 @@ describe('ingestCadDispatch', () => {
       true,
     );
     expect(logged.some((l) => l.includes('"CadIngressRawFallback":1'))).toBe(true);
+  });
+});
+
+describe('text-only identities expire (chain review C1)', () => {
+  beforeEach(() => {
+    vi.spyOn(console, 'log').mockImplementation(() => undefined);
+  });
+  afterEach(() => vi.restoreAllMocks());
+
+  // No incidentNumber rule: identity is the text fingerprint alone.
+  const NO_INCIDENT: CadSourceCopy = {
+    sourceId: 'county',
+    label: 'County CAD',
+    enabled: true,
+    parser: { version: 1, fields: { incidentType: { label: 'TYPE' }, address: { label: 'ADDR' } } },
+  };
+  const REPEAT = 'TYPE: MEDICAL\nADDR: 100 ELM ST';
+
+  async function send(table: FakeTable, receivedAt: number, source = NO_INCIDENT) {
+    return ingestCadDispatch(fakeDynamoTable(table), 'alerting', {
+      deptId: DEPT,
+      source,
+      channel: 'cad-webhook',
+      text: REPEAT,
+      receivedAt,
+    });
+  }
+
+  const alertCount = (table: FakeTable) =>
+    [...table.items.values()].filter((i) => i.entityType === 'DISPATCH_ALERT').length;
+
+  it('two identical-text calls an hour apart BOTH page', async () => {
+    const table: FakeTable = { items: new Map() };
+    expect((await send(table, 1_800_000_000)).outcome).toBe('created');
+    expect((await send(table, 1_800_003_600)).outcome).toBe('created');
+    expect(alertCount(table)).toBe(2);
+  });
+
+  it('a resend of identical text inside 10 minutes does not page again', async () => {
+    const table: FakeTable = { items: new Map() };
+    expect((await send(table, 1_800_000_000)).outcome).toBe('created');
+    expect((await send(table, 1_800_000_000 + TEXT_IDENTITY_SECONDS - 1)).outcome).toBe(
+      'duplicate',
+    );
+    expect(alertCount(table)).toBe(1);
+    const logged = vi.mocked(console.log).mock.calls.map(([l]) => String(l));
+    expect(logged.some((l) => l.includes('"CadIngressDuplicate":1') && l.includes('"text"'))).toBe(
+      true,
+    );
+  });
+
+  it('a source with no template never swallows a repeat call past the window', async () => {
+    const table: FakeTable = { items: new Map() };
+    const bare: CadSourceCopy = { sourceId: 'county', label: 'County CAD', enabled: true };
+    expect((await send(table, 1_800_000_000, bare)).outcome).toBe('created');
+    expect((await send(table, 1_800_000_000 + TEXT_IDENTITY_SECONDS, bare)).outcome).toBe(
+      'created',
+    );
+  });
+
+  it('the lock records its expiry and a TTL for cleanup', async () => {
+    const table: FakeTable = { items: new Map() };
+    await send(table, 1_800_000_000);
+    const lock = [...table.items.values()].find(
+      (i) => i.entityType === 'DISPATCH_IDEMPOTENCY_LOCK',
+    );
+    expect(lock).toMatchObject({
+      expiresAt: 1_800_000_000 + TEXT_IDENTITY_SECONDS,
+      ttl: 1_800_000_000 + TEXT_IDENTITY_SECONDS + 7 * 24 * 60 * 60,
+    });
   });
 });
