@@ -9,7 +9,7 @@ import {
   guideToFullScreenIntent,
   readAndroidDeviceReadiness,
 } from './alertReadiness';
-import { currentCriticalChannelId } from './pushChannel';
+import { currentCriticalChannelId, notificationChannelsSettled } from './pushChannel';
 import {
   getPushRegistration,
   retryPushRegistration,
@@ -52,6 +52,7 @@ function openAppNotificationSettings(): void {
  */
 export async function evaluateAlertReadiness(): Promise<ReadinessItem[]> {
   const items: ReadinessItem[] = [];
+  if (Platform.OS === 'android') await notificationChannelsSettled();
 
   let authorization: number | null = null;
   let iosCriticalAlert: number | undefined;

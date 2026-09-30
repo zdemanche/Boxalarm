@@ -168,3 +168,33 @@ describe('registration with the server (C1)', () => {
     );
   });
 });
+
+// m8: returning from Settings runs channel setup and readiness on the same foreground event.
+test('readiness reads the dispatch channel only after the channel setup in progress', async () => {
+  Platform.OS = 'android';
+  installNative({ dndAccessGranted: true, fullScreenIntentAllowed: true, sdkInt: 35 });
+  const native = nativeModules.BoxalarmAlertReadiness as Record<string, unknown>;
+  let created = false;
+  let finishCreate: () => void = () => undefined;
+  native.createCriticalChannel = jest.fn(
+    () =>
+      new Promise<boolean>((resolve) => {
+        finishCreate = () => {
+          created = true;
+          resolve(true);
+        };
+      }),
+  );
+  native.deleteChannel = jest.fn(async () => undefined);
+  getChannel.mockImplementation(async () => (created ? { importance: 4, sound: 'alarm' } : null));
+  const { ensureNotificationChannels } = jest.requireActual('./pushChannel');
+
+  const setup = ensureNotificationChannels();
+  const evaluating = evaluateAlertReadiness();
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  finishCreate();
+  await setup;
+
+  const channel = (await evaluating).find((item) => item.id === 'channel');
+  expect(channel?.status).toBe('ok');
+});

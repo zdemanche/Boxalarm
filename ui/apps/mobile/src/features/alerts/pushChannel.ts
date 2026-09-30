@@ -97,9 +97,26 @@ export interface EnsureChannelsOptions {
  * every page guarantees the channel exists without resetting anything the member chose.
  * Resolves with the critical channel id to post on.
  */
-export async function ensureNotificationChannels(
-  options: EnsureChannelsOptions = {},
-): Promise<string> {
+export function ensureNotificationChannels(options: EnsureChannelsOptions = {}): Promise<string> {
+  const creating = createNotificationChannels(options);
+  lastChannelSetup = creating;
+  return creating;
+}
+
+let lastChannelSetup: Promise<string> | null = null;
+
+/**
+ * Resolves once the channel setup already started has finished (m8): readiness reads the
+ * critical channel only after it, so returning from Settings with Do Not Disturb access just
+ * granted does not flag the -dnd channel as "not set up yet" while it is being created. Waits a
+ * turn first, so a setup started by another listener of the same foreground event is included.
+ */
+export async function notificationChannelsSettled(): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  await lastChannelSetup?.catch(() => undefined);
+}
+
+async function createNotificationChannels(options: EnsureChannelsOptions): Promise<string> {
   if (Platform.OS !== 'android') return CRITICAL_CHANNEL_ID;
   const native = alertReadinessNative();
   let criticalId = CRITICAL_CHANNEL_ID;
