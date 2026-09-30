@@ -75,6 +75,7 @@ export class Incident extends pulumi.ComponentResource {
   public readonly exposuresLambda: ServiceLambda;
   public readonly getLambda: ServiceLambda;
   public readonly searchLambda: ServiceLambda;
+  public readonly recentDispatchesLambda: ServiceLambda;
   public readonly submitLambda: ServiceLambda;
   public readonly submissionGetLambda: ServiceLambda;
   public readonly submissionRetryLambda: ServiceLambda;
@@ -358,6 +359,50 @@ export class Incident extends pulumi.ComponentResource {
     args.httpApi.route(
       `${name}-search-route`,
       { routeKey: "GET /api/v1/incidents", lambda: this.searchLambda },
+      { parent: this },
+    );
+
+    // "Start a report": the department's dispatches, newest first (listRecentDispatches.ts).
+    // incident-service's own dispatch copies on GSI1 (DISPATCH#{dispatchedAt}), then one
+    // BatchGetItem of the INCIDENT METADATA rows keyed by those dispatchIds for the report
+    // already started. Cedar ListRecentDispatches (NERIS officer tier). No base-table Query.
+    this.recentDispatchesLambda = new ServiceLambda(
+      `${name}-recent-dispatches`,
+      {
+        env,
+        serviceName: "incident-service",
+        functionName: `boxalarm-${env}-incident-recent-dispatches`,
+        handler: LAMBDA_HANDLER,
+        code: lambdaCode("incident-service", "recent-dispatches"),
+        logGroup: args.logGroup,
+        environment: {
+          ...baseEnvironment,
+          VERIFIED_PERMISSIONS_POLICY_STORE_ID: args.policyStoreId,
+        },
+        additionalPolicyStatements: pulumi
+          .all([cmkStatement, vpStatement, args.incidentTableArn])
+          .apply(([cmk, vp, tableArn]) => [
+            {
+              Sid: "RecentDispatchesQuery" as const,
+              Effect: "Allow" as const,
+              Action: ["dynamodb:Query"],
+              Resource: [`${tableArn}/index/GSI1`],
+            },
+            {
+              Sid: "RecentDispatchesReportRead" as const,
+              Effect: "Allow" as const,
+              Action: ["dynamodb:BatchGetItem"],
+              Resource: [tableArn],
+            },
+            ...cmk,
+            ...vp,
+          ]),
+      },
+      { parent: this },
+    );
+    args.httpApi.route(
+      `${name}-recent-dispatches-route`,
+      { routeKey: "GET /api/v1/incidents/dispatches", lambda: this.recentDispatchesLambda },
       { parent: this },
     );
 

@@ -208,6 +208,28 @@ describe("Incident", () => {
     );
   });
 
+  it("routes recent dispatches with GSI1 Query + BatchGetItem only, Cedar-gated", async () => {
+    const incident = await build();
+    await resolve(incident.recentDispatchesLambda.function.arn);
+    await new Promise((r) => setImmediate(r));
+    expect(routeKeys).toContain("GET /api/v1/incidents/dispatches");
+    const policy = JSON.parse(
+      await resolve(incident.recentDispatchesLambda.rolePolicy.policy),
+    ) as PolicyDoc;
+    const query = policy.Statement.find((s) => s.Sid === "RecentDispatchesQuery");
+    const batch = policy.Statement.find((s) => s.Sid === "RecentDispatchesReportRead");
+    expect(query?.Action).toEqual(["dynamodb:Query"]);
+    expect(query?.Resource).toEqual([`${TABLE_ARN}/index/GSI1`]);
+    expect(batch?.Action).toEqual(["dynamodb:BatchGetItem"]);
+    expect(batch?.Resource).toEqual([TABLE_ARN]);
+    const dynamo = policy.Statement.flatMap((s) => s.Action).filter((a) =>
+      a.startsWith("dynamodb:"),
+    );
+    expect(dynamo.sort()).toEqual(["dynamodb:BatchGetItem", "dynamodb:Query"]);
+    expect(JSON.stringify(policy)).toContain("verifiedpermissions:IsAuthorizedWithToken");
+    expect(JSON.stringify(policy)).not.toMatch(/alerting/);
+  });
+
   it("gives NERIS credentials only to the routes that call NERIS, and Cedar to all of them", async () => {
     const incident = await build();
     const expectations: [string, boolean][] = [

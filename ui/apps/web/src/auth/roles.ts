@@ -98,3 +98,9 @@ export const ROLE_PRIORITY: readonly Role[] = [
 export function primaryRole(roles: readonly Role[]): Role {
   return ROLE_PRIORITY.find((role) => roles.includes(role)) ?? 'MEMBER';
 }
+
+/** The department's recent dispatches to report on (Cedar ListRecentDispatches, the NERIS
+ * officer tier): OFFICER, CHIEF, ADMIN. */
+export function canListRecentDispatches(roles: readonly Role[]): boolean {
+  return (['OFFICER', 'CHIEF', 'ADMIN'] as const).some((r) => roles.includes(r));
+}

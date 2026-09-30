@@ -379,6 +379,9 @@ export const NERIS_OFFICER_ACTIONS = [
   "FileNoActivityReport",
   "ViewNerisCompliance",
   "ViewNerisEntity",
+  // "Start a report": the department's recent dispatches with the report started from each
+  // (incident-service listRecentDispatches.ts) - the officer's report-writing queue.
+  "ListRecentDispatches",
 ] as const;
 export const NERIS_OFFICER_GROUPS = ["OFFICER", "CHIEF", "ADMIN"] as const;
 
@@ -410,6 +413,7 @@ const NERIS_ACTION_RESOURCE: Record<
   FileNoActivityReport: "Department",
   ViewNerisCompliance: "Department",
   ViewNerisEntity: "Department",
+  ListRecentDispatches: "Department",
   SyncNerisEntity: "Department",
 };
 

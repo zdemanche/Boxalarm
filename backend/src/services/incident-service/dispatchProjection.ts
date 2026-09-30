@@ -1,5 +1,6 @@
 import { ConditionalCheckFailedException } from '@aws-sdk/client-dynamodb';
 import {
+  BatchGetCommand,
   GetCommand,
   PutCommand,
   QueryCommand,
@@ -45,9 +46,118 @@ export async function putDispatchAlertCopy(
         crossStreets: copy.crossStreets,
         narrative: copy.narrative,
         dispatchedAt: copy.dispatchedAt,
+        // Lists the department's dispatches newest first for "Start a report" (GSI1, beside
+        // the INCIDENT#{alarmAt} rows in the same department partition).
+        gsi1pk: buildDeptScopedPk(copy.deptId),
+        gsi1sk: `${DISPATCH_GSI1_PREFIX}${copy.dispatchedAt}`,
       },
     }),
   );
+}
+
+const DISPATCH_GSI1_PREFIX = 'DISPATCH#';
+
+export interface RecentDispatch {
+  readonly dispatchId: string;
+  readonly incidentType: string;
+  readonly address: string;
+  readonly dispatchedAt: number;
+}
+
+export interface RecentDispatchPage {
+  readonly dispatches: readonly RecentDispatch[];
+  /** DynamoDB's LastEvaluatedKey when more rows remain in the queried range. */
+  readonly lastEvaluatedKey?: Record<string, unknown>;
+}
+
+/**
+ * This department's dispatch copies with fromSeconds <= dispatchedAt <= toSeconds, newest first.
+ * Reads incident-service's own copies (dispatch.alert.received), never the alerting table.
+ */
+export async function queryRecentDispatchCopies(
+  client: DynamoDBDocumentClient,
+  tableName: string,
+  deptId: VerifiedDeptId,
+  range: {
+    readonly fromSeconds: number;
+    readonly toSeconds: number;
+    readonly limit: number;
+    readonly exclusiveStartKey?: Record<string, unknown>;
+  },
+): Promise<RecentDispatchPage> {
+  const result = await client.send(
+    new QueryCommand({
+      TableName: tableName,
+      IndexName: 'GSI1',
+      KeyConditionExpression: 'gsi1pk = :pk AND gsi1sk BETWEEN :from AND :to',
+      ExpressionAttributeValues: {
+        ':pk': buildDeptScopedPk(deptId),
+        ':from': `${DISPATCH_GSI1_PREFIX}${range.fromSeconds}`,
+        ':to': `${DISPATCH_GSI1_PREFIX}${range.toSeconds}`,
+      },
+      ScanIndexForward: false,
+      Limit: range.limit,
+      ...(range.exclusiveStartKey ? { ExclusiveStartKey: range.exclusiveStartKey } : {}),
+    }),
+  );
+  return {
+    dispatches: (result.Items ?? []).map((item) => ({
+      dispatchId: String(item.dispatchId),
+      incidentType: typeof item.incidentType === 'string' ? item.incidentType : '',
+      address: typeof item.address === 'string' ? item.address : '',
+      dispatchedAt: Number(item.dispatchedAt),
+    })),
+    ...(result.LastEvaluatedKey ? { lastEvaluatedKey: result.LastEvaluatedKey } : {}),
+  };
+}
+
+export interface DispatchReport {
+  readonly incidentId: string;
+  readonly status: string;
+}
+
+/**
+ * The report already started from each dispatch, if any. A report created from a dispatch is
+ * keyed by the dispatchId (createIncident.ts: incidentId = dispatchId), so this is one
+ * BatchGetItem of those METADATA rows. Unprocessed keys are retried a bounded number of times;
+ * any still unread are left out, which reads as "no report yet" - the create call then answers
+ * 409 rather than making a duplicate.
+ */
+export async function getReportsForDispatches(
+  client: DynamoDBDocumentClient,
+  tableName: string,
+  deptId: VerifiedDeptId,
+  dispatchIds: readonly string[],
+): Promise<ReadonlyMap<string, DispatchReport>> {
+  const found = new Map<string, DispatchReport>();
+  for (let start = 0; start < dispatchIds.length; start += 100) {
+    let keys: Record<string, unknown>[] | undefined = dispatchIds
+      .slice(start, start + 100)
+      .map((dispatchId) => ({
+        pk: buildDeptScopedPk(deptId, 'INCIDENT', dispatchId),
+        sk: 'METADATA',
+      }));
+    for (let attempt = 0; keys && keys.length > 0 && attempt < 3; attempt += 1) {
+      const result = await client.send(
+        new BatchGetCommand({
+          RequestItems: {
+            [tableName]: {
+              Keys: keys,
+              ProjectionExpression: 'incidentId, #status',
+              ExpressionAttributeNames: { '#status': 'status' },
+            },
+          },
+        }),
+      );
+      for (const item of result.Responses?.[tableName] ?? []) {
+        if (typeof item.incidentId === 'string') {
+          found.set(item.incidentId, { incidentId: item.incidentId, status: String(item.status) });
+        }
+      }
+      keys = result.UnprocessedKeys?.[tableName]?.Keys as Record<string, unknown>[] | undefined;
+    }
+  }
+  return found;
 }
 
 export async function getDispatchAlertCopy(
