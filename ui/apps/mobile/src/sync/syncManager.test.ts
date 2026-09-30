@@ -587,6 +587,27 @@ describe('attendance', () => {
     expect(syncManager.hasSynced('attendance-1790000000')).toBe(true);
   });
 
+  test('a mark-off is POSTed to the member availability path, and a 409 replay is delivered', async () => {
+    const markOff = { startAt: 1790000000, endAt: 1790086400, reason: 'Travel' };
+    mockApiRequest.mockRejectedValueOnce(problem(409, 'Conflict'));
+
+    await syncManager.enqueueAvailability(
+      'availability-m-1-1790000000',
+      'm-1',
+      'Mark unavailable',
+      markOff,
+    );
+    await flush();
+
+    expect(mockApiRequest).toHaveBeenCalledWith(
+      'personnel/members/m-1/availability',
+      tokens,
+      expect.objectContaining({ method: 'POST', body: JSON.stringify(markOff) }),
+    );
+    await expect(store.find('availability-m-1-1790000000')).resolves.toBeUndefined();
+    expect(syncManager.hasSynced('availability-m-1-1790000000')).toBe(true);
+  });
+
   test('a 409 is still a rejection for kinds that carry their own idempotency key', async () => {
     mockApiRequest.mockRejectedValueOnce(problem(409, 'Conflict'));
 

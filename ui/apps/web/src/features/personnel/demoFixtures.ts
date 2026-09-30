@@ -32,6 +32,20 @@ export function tryHandlePersonnelExtras(
     }
   }
 
+  if (parts[1] === 'members' && parts[3] === 'availability' && method === 'POST') {
+    // Mirrors availability/handler.ts: echoes the mark-off with affectsAlerting.
+    return json(
+      {
+        memberId: decodeURIComponent(parts[2] ?? ''),
+        startAt: body.startAt,
+        endAt: body.endAt,
+        affectsAlerting: true,
+        ...(typeof body.reason === 'string' ? { reason: body.reason } : {}),
+      },
+      201,
+    );
+  }
+
   if (parts[1] === 'members' && parts[3] === 'quals') {
     const memberId = decodeURIComponent(parts[2] ?? '');
     if (method === 'GET') return json(quals[memberId] ?? []);

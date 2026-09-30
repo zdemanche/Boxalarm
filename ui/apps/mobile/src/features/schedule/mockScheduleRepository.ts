@@ -45,7 +45,7 @@ export const mockScheduleRepository: ScheduleRepository = {
   },
 
   async markUnavailable() {
-    return undefined;
+    return { outboxId: null };
   },
 
   async releasePosition(shiftId, positionCode) {

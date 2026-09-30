@@ -218,6 +218,15 @@ export const APP_ROUTES: readonly AppRoute[] = [
     showInNav: true,
   },
   {
+    // F2.5: every member marks themselves off (MarkAvailability is own-record, every role).
+    path: '/availability',
+    navPath: '/availability',
+    label: 'My availability',
+    roles: ['MEMBER', 'OFFICER', 'TRAINING', 'APPARATUS', 'ADMIN', 'CHIEF'],
+    group: 'People',
+    showInNav: true,
+  },
+  {
     path: '/reporting',
     navPath: '/reporting',
     label: 'Reporting',

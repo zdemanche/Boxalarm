@@ -37,6 +37,10 @@ export class ClaimNeedsConnectionError extends Error {
   }
 }
 
+export interface MarkUnavailableResult {
+  readonly outboxId: string | null;
+}
+
 export interface ScheduleRepository {
   getShifts(): Promise<DutyShift[]>;
   /** Epoch ms of the cached shift list the last getShifts() returned; null when it was live.
@@ -51,7 +55,10 @@ export interface ScheduleRepository {
     positionCode: string,
     idempotencyKey?: string,
   ): Promise<ClaimResult>;
-  markUnavailable(startAt: string, endAt: string, reason?: string): Promise<void>;
+  /** Queues the mark-off in the sync outbox (it is a member-owned write that works offline,
+   * design.md §4.2) and resolves once it is saved on this phone - not once the server has it.
+   * The returned outboxId lets the screen show honest delivery state; null from the mock. */
+  markUnavailable(startAt: string, endAt: string, reason?: string): Promise<MarkUnavailableResult>;
   // F2.11: give-back and swap. Optional so the original two-method mock (still exercised by
   // ShiftBoardScreen/AvailabilityScreen tests) needs no change to keep satisfying this interface.
   releasePosition?(shiftId: string, positionCode: string): Promise<void>;

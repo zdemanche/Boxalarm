@@ -117,6 +117,12 @@ const IncidentDetailPage = lazy(() =>
   })),
 );
 
+const AvailabilityPage = lazy(() =>
+  import('./features/availability/AvailabilityPage').then((mod) => ({
+    default: mod.AvailabilityPage,
+  })),
+);
+
 const NotificationsPage = lazy(() =>
   import('./features/notifications/NotificationsPage').then((mod) => ({
     default: mod.NotificationsPage,
@@ -212,6 +218,7 @@ export function App() {
                   <Route path="settings/losap" element={roleGuarded(<LosapSettingsPage />)} />
                   <Route path="audit-log" element={roleGuarded(<AuditLogPage />)} />
                   <Route path="notifications" element={roleGuarded(<NotificationsPage />)} />
+                  <Route path="availability" element={roleGuarded(<AvailabilityPage />)} />
                 </Route>
                 <Route path="*" element={<Navigate to="/" replace />} />
               </Routes>

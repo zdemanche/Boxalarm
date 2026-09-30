@@ -108,6 +108,17 @@ export function MeHomeScreen() {
           </Text>
         )}
       </View>
+      {/* F2.5 / design.md F-06: marking off is the member's core self-service task, so it is the
+          first action on Me - it was unreachable from anywhere in the app. */}
+      <View style={{ marginBottom: spacing.md }}>
+        <Button
+          label="Mark unavailable"
+          size="alert"
+          fullWidth
+          accessibilityLabel="Mark unavailable. Choose how long you won't be alerted."
+          onPress={() => navigation.navigate('Availability' as never)}
+        />
+      </View>
       <NavRow
         label="Edit profile"
         theme={theme}

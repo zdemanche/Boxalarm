@@ -77,6 +77,7 @@ export function ShiftBoardScreen() {
 
   const header = (
     <View style={{ gap: spacing.md, paddingBottom: spacing.md }}>
+      <Button label="Mark unavailable" onPress={() => navigation.navigate('Availability')} />
       <Button
         label="Training events"
         variant="secondary"

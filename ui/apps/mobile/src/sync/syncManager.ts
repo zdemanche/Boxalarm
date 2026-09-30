@@ -138,6 +138,25 @@ export async function enqueueFieldCapture(
 // POST /api/v1/personnel/attendance (personnel-service attendance/handler.ts). The record's key
 // is the member plus occurredAt, and the handler answers a repeat of that key with 409, so the
 // natural key doubles as the outbox id and a 409 on replay means "already recorded".
+// POST /api/v1/personnel/members/{memberId}/availability (personnel-service availability/handler.ts).
+// The mark-off's key is the member plus startAt and the handler answers a repeat of that key with
+// 409 ("A markoff already exists ... starting at this time"), so, as for attendance, the natural
+// key is the outbox id and a 409 on replay means the first attempt landed.
+export async function enqueueAvailability(
+  idempotencyKey: string,
+  memberId: string,
+  label: string,
+  body: Record<string, unknown>,
+): Promise<void> {
+  await enqueueAndDrain(
+    'AVAILABILITY',
+    idempotencyKey,
+    label,
+    `personnel/members/${encodeURIComponent(memberId)}/availability`,
+    body,
+  );
+}
+
 export async function enqueueAttendance(
   idempotencyKey: string,
   label: string,
@@ -349,7 +368,7 @@ function readUploadTarget(row: OutboxRow, parsed: Record<string, unknown>): Uplo
 // Kinds whose create endpoint has no idempotency key and instead answers a replay of an
 // already-stored natural key with 409 - for them a 409 means the first attempt landed (its
 // response was lost), so the entry is delivered, not refused.
-const CONFLICT_MEANS_DELIVERED: ReadonlySet<OutboxKind> = new Set(['ATTENDANCE']);
+const CONFLICT_MEANS_DELIVERED: ReadonlySet<OutboxKind> = new Set(['ATTENDANCE', 'AVAILABILITY']);
 
 /**
  * Minutes of the placeholder ETA sent only to a server that still requires one (see

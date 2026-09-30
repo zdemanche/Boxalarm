@@ -93,3 +93,14 @@ test('the Sign out button names the consequence for this phone', async () => {
     await findByRole('button', { name: 'Sign out. Boxalarm pages stop on this phone.' }),
   ).toBeTruthy();
 });
+
+test('Mark unavailable is the first action on Me and opens the availability screen', async () => {
+  const { findByRole } = await render(<MeHomeScreen />);
+
+  fireEvent.press(
+    await findByRole('button', {
+      name: "Mark unavailable. Choose how long you won't be alerted.",
+    }),
+  );
+  expect(mockNavigate).toHaveBeenCalledWith('Availability');
+});
