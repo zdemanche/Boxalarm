@@ -119,14 +119,15 @@ export function ApparatusPickerScreen() {
           }
           renderItem={({ item }) => {
             const inService = item.status === 'IN_SERVICE';
+            // Out-of-service units stay checkable: a passing check is how a unit gets back into
+            // service, and the checks API accepts runs on any unit (postChecks has no status
+            // gate). The row says so instead of greying the unit out.
             return (
               <TouchableOpacity
                 accessibilityRole="button"
                 accessibilityLabel={`${item.unitId}, ${item.type}, ${
                   inService ? 'in service' : 'out of service'
                 }. Start check.`}
-                disabled={!inService}
-                accessibilityState={{ disabled: !inService }}
                 onPress={() => navigation.navigate('CheckRunner', { apparatusId: item.unitId })}
                 style={{
                   minHeight: targetSize.field,
@@ -134,7 +135,6 @@ export function ApparatusPickerScreen() {
                   gap: spacing.xs,
                   paddingVertical: spacing.md,
                   paddingHorizontal: spacing.md,
-                  opacity: inService ? 1 : 0.5,
                   borderBottomWidth: 1,
                   borderBottomColor: theme.borderDecorative,
                 }}
@@ -154,8 +154,11 @@ export function ApparatusPickerScreen() {
                 </Text>
                 <StatusChip
                   status={inService ? 'ok' : 'danger'}
-                  label={inService ? 'In service' : 'Out of service'}
+                  label={inService ? 'In service' : 'Out of service — check to return'}
                 />
+                <Text style={{ color: theme.fg, fontSize: typeScale.body.size, fontWeight: '600' }}>
+                  Start check ›
+                </Text>
               </TouchableOpacity>
             );
           }}

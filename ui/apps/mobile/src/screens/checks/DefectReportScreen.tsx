@@ -16,10 +16,11 @@ import { useChecksRepository } from '../../features/checks/apiChecksRepository';
 import type { DefectSeverity } from '../../features/checks/types';
 import { capturePhoto, type CapturedPhoto } from '../../sync/photoCapture';
 
+// docs/design.md §8.4 severity words - the same ones the check runner uses for a failed item.
 const SEVERITIES: { value: DefectSeverity; label: string }[] = [
-  { value: 'MINOR', label: 'Minor' },
-  { value: 'MAJOR', label: 'Major' },
-  { value: 'OUT_OF_SERVICE', label: 'Out of service' },
+  { value: 'MINOR', label: 'Note' },
+  { value: 'MAJOR', label: 'Affects service' },
+  { value: 'OUT_OF_SERVICE', label: 'Out of service now' },
 ];
 
 function newIdempotencyKey(): string {
@@ -70,14 +71,13 @@ export function DefectReportScreen() {
       // The confirmation replaces the whole screen, so a screen-reader user needs an explicit
       // announcement - there's no visible element left to shift focus onto naturally.
       AccessibilityInfo.announceForAccessibility('Defect reported');
-    } catch (error) {
+    } catch {
       // A failed submission must never show the "reported" confirmation - for an
       // OUT_OF_SERVICE report especially, that would tell the crew the unit is flagged and the
       // officer alerted when neither actually happened.
+      // Never the raw error text: say what happened and where the report is.
       setSubmitError(
-        error instanceof Error
-          ? error.message
-          : 'Could not submit the defect report. Check your connection and try again.',
+        'The defect report could not be saved on this phone. Everything you wrote is still here. Try again.',
       );
       AccessibilityInfo.announceForAccessibility('Defect report failed to submit');
     } finally {
@@ -126,14 +126,25 @@ export function DefectReportScreen() {
         >
           Report a defect
         </Text>
+        <Text
+          style={{
+            color: tokens.foreground,
+            fontSize: typography.size.sm,
+            fontWeight: '600',
+            marginTop: spacing.lg,
+          }}
+        >
+          What&apos;s wrong
+        </Text>
         <TextInput
+          accessibilityLabel="What's wrong"
           value={description}
           onChangeText={setDescription}
           placeholder="Describe the defect"
           placeholderTextColor={tokens.foreground + '88'}
           multiline
           style={{
-            marginTop: spacing.lg,
+            marginTop: spacing.sm,
             minHeight: 100,
             borderWidth: 1,
             borderColor: tokens.foreground + '33',
@@ -154,15 +165,20 @@ export function DefectReportScreen() {
         >
           Severity
         </Text>
-        <View style={{ flexDirection: 'row', gap: spacing.sm }}>
+        <View
+          accessibilityRole="radiogroup"
+          accessibilityLabel="Severity"
+          style={{ flexDirection: 'row', gap: spacing.sm }}
+        >
           {SEVERITIES.map((option) => (
             <TouchableOpacity
               key={option.value}
-              accessibilityRole="button"
+              accessibilityRole="radio"
+              accessibilityState={{ checked: severity === option.value }}
               onPress={() => setSeverity(option.value)}
               style={{
                 flex: 1,
-                minHeight: touchTarget.baseline.ios,
+                minHeight: touchTarget.oversized.ios,
                 alignItems: 'center',
                 justifyContent: 'center',
                 borderRadius: radius.default,
