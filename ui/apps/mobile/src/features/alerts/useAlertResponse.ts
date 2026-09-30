@@ -195,7 +195,7 @@ export function useAlertResponse(
     touchedRef.current = false;
     setLocal(null);
     setServer(null);
-    void getLocalAnswer(dispatchId).then((saved) => {
+    void getLocalAnswer(memberId, dispatchId).then((saved) => {
       if (cancelled || !saved || touchedRef.current) return;
       setLocal({
         answer: { ackStatus: saved.ackStatus, eta: saved.eta },
@@ -208,7 +208,7 @@ export function useAlertResponse(
     return () => {
       cancelled = true;
     };
-  }, [dispatchId, loadRoster]);
+  }, [dispatchId, memberId, loadRoster]);
 
   const outboxId = local && !local.saving ? local.outboxId : null;
   const item = useOutboxItem(outboxId);
@@ -321,7 +321,7 @@ export function useAlertResponse(
         return;
       }
       if (result.outboxId === null) {
-        await saveLocalAnswer(dispatchId, {
+        await saveLocalAnswer(memberId, dispatchId, {
           ackStatus,
           eta,
           outboxId: null,
@@ -335,13 +335,13 @@ export function useAlertResponse(
         fresh: true,
       });
     },
-    [dispatchId, repository],
+    [dispatchId, memberId, repository],
   );
 
   const keepRosterAnswer = useCallback(async () => {
-    await clearLocalAnswer(dispatchId);
+    await clearLocalAnswer(memberId, dispatchId);
     setLocal(null);
-  }, [dispatchId]);
+  }, [dispatchId, memberId]);
 
   return {
     answer,

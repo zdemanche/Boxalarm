@@ -19,12 +19,16 @@ export const memberCacheKey = {
  */
 export const LAST_SESSION_SUB_KEY = 'session:last-sub';
 
-/** Signing out removes the member's cached reads, checks in progress and last mark-off. */
+/**
+ * Signing out removes the member's cached reads, checks in progress, last mark-off and their
+ * answers to calls (the alert screen's "my answer", M1 - alertResponses.localAnswerPrefix).
+ */
 export async function clearMemberCache(memberId: string): Promise<void> {
   if (!memberId) return;
   await Promise.all([
     kvDeletePrefix(`cache:${memberId}:`),
     kvDeletePrefix(`check-draft:${memberId}:`),
     kvDeletePrefix(`availability:last:${memberId}`),
+    kvDeletePrefix(`alert-answer:${memberId}:`),
   ]);
 }

@@ -313,15 +313,16 @@ export async function enqueueResponse(
   dispatchId: string,
   label: string,
   body: Record<string, unknown>,
-): Promise<void> {
+): Promise<{ answeredBy: string | null }> {
   const path = `alerting/dispatches/${encodeURIComponent(dispatchId)}/responses`;
+  const stamp = await ownerStamp();
   const row = await outbox.enqueue({
     id,
     kind: 'RESPONSE',
     label,
     path,
     body,
-    ...(await ownerStamp()),
+    ...stamp,
   });
   const older = await outbox.olderSiblings(row);
   await Promise.all(
@@ -331,6 +332,8 @@ export async function enqueueResponse(
   );
   await notify();
   void drain();
+  // Who the answer is for: its owner, or for an ownerless one the member it was answered as.
+  return { answeredBy: stamp.ownerMemberId ?? stamp.answeredAsHint ?? null };
 }
 
 /** Unsent rows the member queued: what signing out would leave waiting on this phone. */

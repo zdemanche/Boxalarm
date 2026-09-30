@@ -76,7 +76,9 @@ test('Responding from the notification goes through the outbox and the notificat
   expect(last.body).toMatch(/^Sent\./);
   // The replacement is quiet - it must not re-ring the page it answers.
   expect(last.android.channelId).toBe('notifications-default');
-  await expect(getLocalAnswer('D-ACT')).resolves.toMatchObject({ ackStatus: 'RESPONDING' });
+  await expect(getLocalAnswer('m-test', 'D-ACT')).resolves.toMatchObject({
+    ackStatus: 'RESPONDING',
+  });
 });
 
 test('answering from the notification cancels the 60 s cap so it cannot overwrite the answer', async () => {
