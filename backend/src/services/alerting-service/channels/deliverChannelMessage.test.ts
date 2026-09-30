@@ -854,6 +854,36 @@ describe('deliverChannelMessage — multi-device push', () => {
     });
   });
 
+  // Review R2-m1: a development-registered device needs the sandbox APNs secret; a missing one
+  // still fails the page (redelivered, dead-lettered) but is named and counted - alarmed.
+  it('a missing push secret fails the page and is counted as PushCredentialsUnavailable', async () => {
+    const { PushCredentialsUnavailableError } = await import('./push/pushCredentials.js');
+    const sendPush = vi
+      .fn()
+      .mockRejectedValue(
+        new PushCredentialsUnavailableError(
+          'APNS_SANDBOX_SECRET_ID is required and was not set',
+          'APNS_SANDBOX_SECRET_ID',
+        ),
+      );
+    mockPush(sendPush);
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const { deliverChannelMessage } = await import('./deliverChannelMessage.js');
+
+    await expect(
+      deliverChannelMessage(fakeDdb(vi.fn().mockResolvedValue({})), 'alerting-table', {
+        ...params,
+        contactChannels: [{ ...PHONE, apnsEnvironment: 'development' }],
+      }),
+    ).rejects.toThrow('APNS_SANDBOX_SECRET_ID');
+    expect(
+      logSpy.mock.calls.some(([line]) => String(line).includes('"PushCredentialsUnavailable"')),
+    ).toBe(true);
+    logSpy.mockRestore();
+    errorSpy.mockRestore();
+  });
+
   it('one device accepted, one transiently failed: FAILED and rethrown, and the redelivery sends only to the failed device', async () => {
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const sendPush = vi

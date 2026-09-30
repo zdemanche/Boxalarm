@@ -39,6 +39,24 @@ export interface FcmCredentials {
   readonly apnsInterruptionLevel: ApnsInterruptionLevel;
 }
 
+/**
+ * A push gateway secret this send needs is not configured: its env var is unset, or the
+ * secret has no value (or cannot be read). Thrown so the page retries and dead-letters as
+ * before, but the worker also counts it (PushCredentialsUnavailable, alarmed) so on-call sees
+ * WHICH secret - e.g. APNS_SANDBOX_SECRET_ID for a device registered as `development` (review
+ * R2-m1) - rather than only a DLQ depth.
+ */
+export class PushCredentialsUnavailableError extends Error {
+  constructor(
+    message: string,
+    readonly secretKey: string,
+    options?: { cause?: unknown },
+  ) {
+    super(message, options);
+    this.name = 'PushCredentialsUnavailableError';
+  }
+}
+
 const ENV_KEYS: Record<PushPlatform, { readonly prod: string; readonly sandbox: string }> = {
   APNS: { prod: 'APNS_SECRET_ID', sandbox: 'APNS_SANDBOX_SECRET_ID' },
   FCM: { prod: 'FCM_SECRET_ID', sandbox: 'FCM_SANDBOX_SECRET_ID' },
@@ -72,7 +90,7 @@ export function readPushSecretId(
   const key = sandbox ? ENV_KEYS[platform].sandbox : ENV_KEYS[platform].prod;
   const secretId = env[key];
   if (!secretId) {
-    throw new Error(`${key} is required and was not set`);
+    throw new PushCredentialsUnavailableError(`${key} is required and was not set`, key);
   }
   return secretId;
 }
@@ -111,7 +129,15 @@ async function readSecretJson(
   if (cached && cached.expiresAt > Date.now()) {
     return cached.value;
   }
-  return coalesce(secretReads, secretId, () => fetchSecretJson(secretId, client));
+  return coalesce(secretReads, secretId, () => fetchSecretJson(secretId, client)).catch(
+    (error: unknown) => {
+      throw new PushCredentialsUnavailableError(
+        `push secret ${secretId} could not be read: ${error instanceof Error ? error.message : String(error)}`,
+        secretId,
+        { cause: error },
+      );
+    },
+  );
 }
 
 async function fetchSecretJson(

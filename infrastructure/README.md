@@ -36,7 +36,7 @@ Push goes to APNs and FCM directly — no push vendor. `ChannelWorkers` creates 
 | Secret | Value |
 |---|---|
 | `boxalarm-{env}-alerting-push-apns-credentials` | `{"teamId","keyId","privateKey"(.p8 PEM),"bundleId","environment"?:"production"\|"sandbox","interruptionLevel"?:"critical"\|"time-sensitive"}` |
-| `boxalarm-{env}-alerting-push-apns-sandbox-credentials` | Same shape; always sent to the APNs sandbox host. Used for devices that registered `apnsEnvironment: development` (Xcode-installed builds) |
+| `boxalarm-{env}-alerting-push-apns-sandbox-credentials` | Same shape; always sent to the APNs sandbox host. Used for devices that registered `apnsEnvironment: development` (Xcode-installed builds). **Required for real pages on any stack where such builds register.** Without it their pages fail and dead-letter, and `alerting-push-credentials-unavailable` pages on-call |
 | `boxalarm-{env}-alerting-push-fcm-credentials` | Firebase service-account key JSON, as downloaded. FCM's `apns` block (for iOS devices still on a legacy FCM token) takes its interruption level from the **APNs** secret's `interruptionLevel`, the single source of truth. An optional `"apnsInterruptionLevel"` here is used only when the APNs secret cannot be read |
 | `boxalarm-{env}-alerting-push-fcm-sandbox-credentials` | Service-account JSON for a service account **in the app's own Firebase project**. Do not create a separate "sandbox" project: its sends fail with `SENDER_ID_MISMATCH`. Isolation comes from `validate_only`, which validates and delivers nothing |
 

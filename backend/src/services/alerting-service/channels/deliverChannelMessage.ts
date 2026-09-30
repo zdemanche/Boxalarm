@@ -23,6 +23,7 @@ import {
 import { sendViaHttpProvider } from './httpProviderAdapter.js';
 import { resolvePushPlatform, sendPush, type PushSendResult } from './push/pushProviderAdapter.js';
 import type { PushAlertFields } from './push/pushPayload.js';
+import { PushCredentialsUnavailableError } from './push/pushCredentials.js';
 import { resolvePushTargets, type PushDeviceTarget } from '../eligibility/resolvePushTarget.js';
 import { invalidatePushToken } from '../receipts/invalidatePushToken.js';
 import {
@@ -309,6 +310,14 @@ async function deliverPushToDevices(
     const device = pending[index]!;
     if (outcome.status === 'rejected') {
       transientError ??= outcome.reason;
+      if (outcome.reason instanceof PushCredentialsUnavailableError) {
+        // Alarmed: a missing gateway secret, named, not just a DLQ depth (review R2-m1).
+        emitOutcomeMetric(
+          METRIC_NAMESPACE,
+          isTest ? 'TestPushCredentialsUnavailable' : 'PushCredentialsUnavailable',
+          'push',
+        );
+      }
       logError('alerting.channel.device_send_failed', outcome.reason, {
         correlationId,
         memberId,

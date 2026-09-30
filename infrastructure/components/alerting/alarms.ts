@@ -332,6 +332,24 @@ export class AlertingAlarms extends pulumi.ComponentResource {
       evaluationPeriods: 1,
     });
 
+    // Review R2-m1: a real page whose push gateway secret is unset or unreadable - e.g. a device
+    // registered as `development` (an Xcode-installed build) with no APNs sandbox secret value.
+    pageAlarm("push-credentials-unavailable-alarm", {
+      name: `boxalarm-${env}-alerting-push-credentials-unavailable`,
+      alarmDescription:
+        "A real push page could not be sent because a push gateway secret is unset or has no value. The push worker logs " +
+        "(alerting.channel.device_send_failed) name the secret. APNS_SANDBOX_SECRET_ID is needed on any stack where Xcode-installed " +
+        "(development-signed) builds register; APNS_SECRET_ID / FCM_SECRET_ID on every stack. Set the value, then redrive the push DLQ.",
+      namespace: "Boxalarm/AlertingChannel",
+      metricName: "PushCredentialsUnavailable",
+      dimensions: { Reason: "push" },
+      statistic: "Sum",
+      comparisonOperator: "GreaterThanThreshold",
+      threshold: 0,
+      period: 60,
+      evaluationPeriods: 1,
+    });
+
     for (const channel of ALERTING_CHANNELS) {
       const dlq = args.channelQueues[channel].dlq;
 

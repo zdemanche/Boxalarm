@@ -148,6 +148,11 @@ describe("AlertingAlarms — every alert-path failure mode pages", { timeout: 30
     ],
     ["boxalarm-dev-alerting-sms-delivery-failure-rate", "SendFailed", { Reason: "sms" }],
     ["boxalarm-dev-alerting-push-no-target", "NoTargetRegistered", { Reason: "push" }],
+    [
+      "boxalarm-dev-alerting-push-credentials-unavailable",
+      "PushCredentialsUnavailable",
+      { Reason: "push" },
+    ],
     ["boxalarm-dev-alerting-sms-no-target", "NoTargetRegistered", { Reason: "sms" }],
     ["boxalarm-dev-alerting-voice-no-target", "NoTargetRegistered", { Reason: "voice" }],
     ["boxalarm-dev-alerting-voice-delivery-failure-rate", "SendFailed", { Reason: "voice" }],
