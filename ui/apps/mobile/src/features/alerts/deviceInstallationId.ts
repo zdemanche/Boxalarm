@@ -19,7 +19,6 @@ import * as Keychain from 'react-native-keychain';
 const SERVICE = 'boxalarm-device-installation-v2';
 const LEGACY_SERVICE = 'boxalarm-device-installation';
 const ACCOUNT = 'installation-id';
-const DEVICE_ONLY = { accessible: Keychain.ACCESSIBLE.AFTER_FIRST_UNLOCK_THIS_DEVICE_ONLY };
 
 let cached: string | null = null;
 
@@ -34,7 +33,10 @@ function newInstallationId(): string {
 
 async function store(id: string): Promise<boolean> {
   try {
-    await Keychain.setGenericPassword(ACCOUNT, id, { service: SERVICE, ...DEVICE_ONLY });
+    await Keychain.setGenericPassword(ACCOUNT, id, {
+      service: SERVICE,
+      accessible: Keychain.ACCESSIBLE.AFTER_FIRST_UNLOCK_THIS_DEVICE_ONLY,
+    });
     return true;
   } catch {
     // Keychain unavailable: keep the in-memory id.
