@@ -71,6 +71,16 @@ export class MarkOffNeedsConnectionError extends Error {
   }
 }
 
+/** A mark-off for the same start is being sent from this phone right now (R3-M2). */
+export class MarkOffBeingSentError extends Error {
+  constructor() {
+    super(
+      "This mark-off is being sent from this phone right now. Wait a moment and try again - you're still marked unavailable.",
+    );
+    this.name = 'MarkOffBeingSentError';
+  }
+}
+
 /** No member id on the session: nothing is queued or cached under a shared/blank key. */
 export class NotSignedInError extends Error {
   constructor() {
@@ -100,7 +110,7 @@ export interface ScheduleRepository {
   /** The member's current and upcoming mark-offs, soonest first. Online only. */
   listMarkOffs?(): Promise<MarkOff[]>;
   /** Ends a mark-off now ("I'm available again"). Online only; throws when offline. */
-  endMarkOff?(markoffId: string): Promise<void>;
+  endMarkOff?(markOff: MarkOff): Promise<void>;
   // F2.11: give-back and swap. Optional so the original two-method mock (still exercised by
   // ShiftBoardScreen/AvailabilityScreen tests) needs no change to keep satisfying this interface.
   releasePosition?(shiftId: string, positionCode: string): Promise<void>;

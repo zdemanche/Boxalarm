@@ -6,7 +6,7 @@ import { Button, useTheme } from '../../components/ui';
 import { useOptionalConnectivity } from '../../sync/ConnectivityContext';
 import { useScheduleRepository } from './apiScheduleRepository';
 import { ApiError } from '../../lib/apiClient';
-import { MarkOffNeedsConnectionError, type MarkOff } from './types';
+import { MarkOffBeingSentError, MarkOffNeedsConnectionError, type MarkOff } from './types';
 
 function formatWhen(epochSeconds: number): string {
   const date = new Date(epochSeconds * 1000);
@@ -113,14 +113,14 @@ export function MarkOffList({
     }
     setEnding(markOff.markoffId);
     try {
-      await repository.endMarkOff(markOff.markoffId);
+      await repository.endMarkOff(markOff);
       const text = "You're available again. You'll be alerted for calls.";
       setMessage({ text, danger: false });
       AccessibilityInfo.announceForAccessibility(text);
       await refresh();
     } catch (error) {
       const text =
-        error instanceof MarkOffNeedsConnectionError
+        error instanceof MarkOffNeedsConnectionError || error instanceof MarkOffBeingSentError
           ? error.message
           : `Couldn't end it - you're still marked unavailable until ${formatWhen(markOff.endAt)}. Try again, or tell an officer.`;
       setMessage({ text, danger: true });

@@ -43,7 +43,9 @@ test('shows current and upcoming mark-offs; "I\'m available again" ends the curr
     fireEvent.press(screen.getByRole('button', { name: /^I'm available again/ }));
   });
 
-  expect(repository.endMarkOff).toHaveBeenCalledWith('active-1');
+  expect(repository.endMarkOff).toHaveBeenCalledWith(
+    expect.objectContaining({ markoffId: 'active-1' }),
+  );
   expect(
     await screen.findByText("You're available again. You'll be alerted for calls."),
   ).toBeTruthy();

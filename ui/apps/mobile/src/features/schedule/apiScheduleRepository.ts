@@ -9,6 +9,7 @@ import * as syncManager from '../../sync/syncManager';
 import { mockScheduleRepository } from './mockScheduleRepository';
 import {
   ClaimNeedsConnectionError,
+  MarkOffBeingSentError,
   MarkOffNeedsConnectionError,
   NotSignedInError,
   type ClaimResult,
@@ -193,14 +194,19 @@ export function useScheduleRepository(): ScheduleRepository {
           .sort((a, b) => a.startAt - b.startAt);
       },
 
-      async endMarkOff(markoffId): Promise<void> {
+      async endMarkOff(markOff): Promise<void> {
         const tokens = authRef.current;
-        if (!tokens) return mockScheduleRepository.endMarkOff!(markoffId);
+        if (!tokens) return mockScheduleRepository.endMarkOff!(markOff);
         const memberId = auth?.memberId;
         if (!memberId) throw new NotSignedInError();
         if (!isOnline) throw new MarkOffNeedsConnectionError();
+        // A copy of this mark-off still waiting in the outbox would re-create it after it ends
+        // (R3-M2): drop it first, or refuse while one is being sent.
+        if ((await syncManager.neutraliseQueuedMarkOff(memberId, markOff.startAt)) === 'sending') {
+          throw new MarkOffBeingSentError();
+        }
         await apiRequest(
-          `personnel/members/${encodeURIComponent(memberId)}/availability/${encodeURIComponent(markoffId)}/end`,
+          `personnel/members/${encodeURIComponent(memberId)}/availability/${encodeURIComponent(markOff.markoffId)}/end`,
           tokens,
           { apiBaseUrl, method: 'POST' },
         );

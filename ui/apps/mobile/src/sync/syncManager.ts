@@ -288,6 +288,33 @@ export async function enqueueAvailability(
   return { replaced, mayStand };
 }
 
+/**
+ * Before a mark-off is ended early (R3-M2): the member's AVAILABILITY rows still in the outbox for
+ * the same start - queued, failed or refused - are dropped, or a later drain would re-create the
+ * mark-off the member just ended. 'sending' when one is being sent right now and could not be
+ * dropped: the caller must not end it yet.
+ */
+export async function neutraliseQueuedMarkOff(
+  memberId: string,
+  startAtSeconds: number,
+): Promise<'clear' | 'sending'> {
+  const path = `personnel/members/${encodeURIComponent(memberId)}/availability`;
+  const rows = (await outbox.all()).filter((row) => {
+    if (row.kind !== 'AVAILABILITY' || row.path !== path) return false;
+    try {
+      return (JSON.parse(row.body) as { startAt?: unknown }).startAt === startAtSeconds;
+    } catch {
+      return false;
+    }
+  });
+  let outcome: 'clear' | 'sending' = 'clear';
+  for (const row of rows) {
+    if (!(await outbox.discardUnlessSyncing(row.id))) outcome = 'sending';
+  }
+  if (rows.length > 0) await notify();
+  return outcome;
+}
+
 /** lastError of an AVAILABILITY row the server answered 409 on its first attempt. */
 export const AVAILABILITY_CONFLICT =
   'Not recorded: the server already has a mark-off starting at this exact time.';

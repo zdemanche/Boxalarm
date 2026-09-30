@@ -102,6 +102,10 @@ export async function replaceBody(id: string, body: string): Promise<void> {
   await store.update(id, { body });
 }
 
+export async function all(): Promise<OutboxRow[]> {
+  return store.all();
+}
+
 export async function find(id: string): Promise<OutboxRow | undefined> {
   return store.find(id);
 }
@@ -226,6 +230,11 @@ export async function markSyncing(id: string): Promise<void> {
 /** markSyncing that loses to a concurrent removeIfUnattempted instead of racing it. */
 export async function claimForSync(id: string): Promise<boolean> {
   return store.claimForSync(id);
+}
+
+/** Drops a row unless a drain is sending it right now; false when it is. */
+export async function discardUnlessSyncing(id: string): Promise<boolean> {
+  return store.removeUnlessSyncing(id);
 }
 
 /** Drops a row only if nothing has ever been sent for it: its POST cannot have landed. */

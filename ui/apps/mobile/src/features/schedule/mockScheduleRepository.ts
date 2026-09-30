@@ -71,8 +71,8 @@ export const mockScheduleRepository: ScheduleRepository = {
     return MARK_OFFS.filter((m) => m.endAt > now);
   },
 
-  async endMarkOff(markoffId) {
-    MARK_OFFS = MARK_OFFS.filter((m) => m.markoffId !== markoffId);
+  async endMarkOff(markOff) {
+    MARK_OFFS = MARK_OFFS.filter((m) => m.markoffId !== markOff.markoffId);
   },
 
   async releasePosition(shiftId, positionCode) {
