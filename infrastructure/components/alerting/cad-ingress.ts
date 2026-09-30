@@ -1,7 +1,7 @@
 import * as pulumi from "@pulumi/pulumi";
 import * as aws from "@pulumi/aws";
 import { ServiceLambda } from "../observability/service-lambda";
-import { ServiceLogGroup } from "../observability/service-log-group";
+import { ServiceLogGroup, RETENTION_DAYS_BY_ENV } from "../observability/service-log-group";
 import { IamPolicyStatement } from "../observability/observability-policy";
 import { RuleDeliveryGuard } from "../messaging/rule-delivery";
 import { requireEnv } from "../shared/env";
@@ -151,6 +151,8 @@ export class CadIngress extends pulumi.ComponentResource {
   public readonly webhookApi: aws.apigateway.RestApi;
   public readonly webhookStage: aws.apigateway.Stage;
   public readonly webhookMethod: aws.apigateway.Method;
+  /** REST access logs: the only record of a request refused before the Lambda. */
+  public readonly webhookAccessLogs: aws.cloudwatch.LogGroup;
   /** Every source's API key is attached to this plan by the rotation route. */
   public readonly webhookUsagePlan: aws.apigateway.UsagePlan;
   public readonly webhookLambda: ServiceLambda;
@@ -605,7 +607,15 @@ export class CadIngress extends pulumi.ComponentResource {
       );
       parentId = resource.id;
     }
-    const leaf = resource!;
+    // The source's key id is the last path segment: `.../cad-webhook/{deptId}.{sourceId}`. REST
+    // access logs cannot carry request headers, so the path is how a gateway-level refusal (403,
+    // before the Lambda) is attributed to a real source and alarmed (chain review R2-M3). The
+    // Lambda requires it to equal the signed X-Boxalarm-Source header.
+    const leaf = new aws.apigateway.Resource(
+      `${name}-webhook-resource-source`,
+      { restApi: this.webhookApi.id, parentId: resource!.id, pathPart: "{sourceKeyId}" },
+      { parent: this },
+    );
     this.webhookMethod = new aws.apigateway.Method(
       `${name}-webhook-method`,
       {
@@ -636,7 +646,7 @@ export class CadIngress extends pulumi.ComponentResource {
         action: "lambda:InvokeFunction",
         function: this.webhookLambda.function.name,
         principal: "apigateway.amazonaws.com",
-        sourceArn: pulumi.interpolate`${this.webhookApi.executionArn}/*/POST/${CAD_WEBHOOK_PATH}`,
+        sourceArn: pulumi.interpolate`${this.webhookApi.executionArn}/*/POST/${CAD_WEBHOOK_PATH}/*`,
       },
       { parent: this },
     );
@@ -652,12 +662,78 @@ export class CadIngress extends pulumi.ComponentResource {
       },
       { parent: this, dependsOn: [this.webhookMethod, integration] },
     );
+    // REST API access logs need the account-level API Gateway CloudWatch role - a per-account,
+    // per-region setting. Set here under the one-account-per-stack model (first-deploy.md,
+    // "Account strategy"); it would be shared by any other REST API in the account.
+    const apiGatewayLogsRole = new aws.iam.Role(
+      `${name}-apigateway-cloudwatch-role`,
+      {
+        name: `boxalarm-${env}-apigateway-cloudwatch`,
+        assumeRolePolicy: JSON.stringify({
+          Version: "2012-10-17",
+          Statement: [
+            {
+              Effect: "Allow",
+              Principal: { Service: "apigateway.amazonaws.com" },
+              Action: "sts:AssumeRole",
+            },
+          ],
+        }),
+        managedPolicyArns: [
+          "arn:aws:iam::aws:policy/service-role/AmazonAPIGatewayPushToCloudWatchLogs",
+        ],
+      },
+      { parent: this },
+    );
+    const apiGatewayAccount = new aws.apigateway.Account(
+      `${name}-apigateway-account`,
+      { cloudwatchRoleArn: apiGatewayLogsRole.arn },
+      { parent: this },
+    );
+    this.webhookAccessLogs = new aws.cloudwatch.LogGroup(
+      `${name}-webhook-access-logs`,
+      {
+        name: `/aws/apigateway/boxalarm-${env}-cad-ingress-api-access`,
+        retentionInDays: RETENTION_DAYS_BY_ENV[env],
+      },
+      { parent: this },
+    );
     this.webhookStage = new aws.apigateway.Stage(
       `${name}-webhook-stage`,
       {
         restApi: this.webhookApi.id,
         deployment: deployment.id,
         stageName: CAD_WEBHOOK_STAGE,
+        accessLogSettings: {
+          destinationArn: this.webhookAccessLogs.arn,
+          // No request body, no signature, no key VALUE (apiKeyId is the id, not the key).
+          format: JSON.stringify({
+            requestId: "$context.requestId",
+            status: "$context.status",
+            path: "$context.path",
+            sourceIp: "$context.identity.sourceIp",
+            apiKeyId: "$context.identity.apiKeyId",
+            responseType: "$context.error.responseType",
+          }),
+        },
+      },
+      { parent: this, dependsOn: [apiGatewayAccount] },
+    );
+    // A refusal at the gateway (403: missing/invalid x-api-key, or an IP outside the allowlist)
+    // on THIS department's source path - a genuine CAD misconfigured, never anonymous scanner
+    // noise on other paths. The Lambda never runs, so only the access log can see it.
+    new aws.cloudwatch.LogMetricFilter(
+      `${name}-webhook-refused-known-source`,
+      {
+        name: `boxalarm-${env}-cad-webhook-refused-known-source`,
+        logGroupName: this.webhookAccessLogs.name,
+        pattern: `{ ($.status = "403") && ($.path = "/${CAD_WEBHOOK_STAGE}/${CAD_WEBHOOK_PATH}/${args.deptId}.*") }`,
+        metricTransformation: {
+          name: "CadWebhookGatewayRefused",
+          namespace: CAD_METRIC_NAMESPACE,
+          value: "1",
+          defaultValue: "0",
+        },
       },
       { parent: this },
     );
@@ -1038,6 +1114,14 @@ export class CadIngress extends pulumi.ComponentResource {
         "CadIngressRawFallback",
         "A CAD dispatch paged as raw text (SEE DISPATCH TEXT, flagged VERIFY): the source's parser template did not find the address. The page went; fix the template (Settings > CAD sources > test parse).",
         [args.pageTopicArn, args.opsTopicArn],
+      ),
+      cadAlarm(
+        "gateway-refused",
+        "CadWebhookGatewayRefused",
+        "API Gateway refused a request to this department's CAD webhook source path before the Lambda ran (403: missing or wrong x-api-key, or an address outside cadWebhookAllowedCidrs). A genuine CAD misconfigured - typically after a key rotation - drops every dispatch this way: radio tone-out is the page of record until fixed. See the access log /aws/apigateway/boxalarm-<env>-cad-ingress-api-access for the path and source IP.",
+        [args.pageTopicArn, args.opsTopicArn],
+        0,
+        300,
       ),
       cadAlarm(
         "update-unnotified",

@@ -113,7 +113,7 @@ function view(deptId: string, item: Awaited<ReturnType<typeof loadCadIngress>>) 
     emailDomain: emailDomain ?? null,
     webhookUrl: process.env.CAD_WEBHOOK_URL || null,
     sources: readStoredSources(item?.value).map((source) =>
-      toSourceView(source, deptId, emailDomain),
+      toSourceView(source, deptId, emailDomain, process.env.CAD_WEBHOOK_URL || undefined),
     ),
     warnings: readStoredSources(item?.value).flatMap(sourceWarnings),
   };

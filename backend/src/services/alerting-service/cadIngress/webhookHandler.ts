@@ -165,6 +165,12 @@ export const handler: Handler<WebhookEvent, APIGatewayProxyStructuredResultV2> =
   const keyIdHeader = header(event, 'x-boxalarm-source');
   const key = parseSourceKeyId(keyIdHeader);
   if (!key) return reject('UnknownSource');
+  // The REST route carries the source in its path (so gateway refusals can be attributed and
+  // alarmed, R2-M3); it must be the same source the signed header names.
+  const pathSource = event.pathParameters?.sourceKeyId;
+  if (pathSource !== undefined && pathSource !== keyIdHeader) {
+    return reject('UnknownSource', { keyId: keyIdHeader, pathMismatch: true });
+  }
   let source: Awaited<ReturnType<typeof loadCadSource>>;
   try {
     source = await loadCadSource(client, tableName, key.deptId, key.sourceId);

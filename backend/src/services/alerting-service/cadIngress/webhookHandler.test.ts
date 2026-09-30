@@ -170,6 +170,16 @@ describe('CAD webhook handler', () => {
     expect(alerts()).toHaveLength(1);
   });
 
+  it('R2-M3: a path source id that differs from the signed header is refused', async () => {
+    const event = {
+      ...webhookEvent(DISPATCH),
+      pathParameters: { sourceKeyId: 'nichols-fd.other' },
+    };
+    expect((await call(event as never)).statusCode).toBe(401);
+    const same = { ...webhookEvent(DISPATCH), pathParameters: { sourceKeyId: KEY_ID } };
+    expect((await call(same as never)).statusCode).toBe(202);
+  });
+
   it('a webhook signed with the wrong key does not page (401, generic body)', async () => {
     const response = await call(webhookEvent(DISPATCH, { key: 'w'.repeat(64) }));
     expect(response.statusCode).toBe(401);

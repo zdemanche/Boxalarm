@@ -300,7 +300,7 @@ async function rotate(
       previousKeyStillValid: existing?.current !== undefined,
       previousKeyExpiresAt:
         existing?.current !== undefined ? new Date(previousExpiresAt * 1000).toISOString() : null,
-      webhookUrl: process.env.CAD_WEBHOOK_URL || null,
+      webhookUrl: process.env.CAD_WEBHOOK_URL ? `${process.env.CAD_WEBHOOK_URL}/${keyId}` : null,
     }),
   };
 }

@@ -105,6 +105,8 @@ export interface CadSourceView {
   emailAddress: string | null;
   webhookEnabled: boolean;
   webhookKeyId: string | null;
+  /** This source's own webhook address: {webhookUrl}/{keyId}. */
+  webhookEndpoint?: string | null;
   webhookRotatedAt: string | null;
   parser: { version: number; fields: CadParserFields } | null;
 }

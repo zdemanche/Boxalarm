@@ -438,7 +438,8 @@ function WebhookKey({ draft }: { draft: SourceDraft }) {
     <div>
       {hasKey ? (
         <p>
-          Key id <code>{draft.view?.webhookKeyId}</code>, last rotated{' '}
+          POST to <code>{draft.view?.webhookEndpoint ?? '(save to see the address)'}</code>. Key id{' '}
+          <code>{draft.view?.webhookKeyId}</code>, last rotated{' '}
           {draft.view?.webhookRotatedAt
             ? new Date(draft.view.webhookRotatedAt).toLocaleString()
             : 'unknown'}
@@ -496,6 +497,14 @@ function WebhookKey({ draft }: { draft: SourceDraft }) {
       >
         {rotated ? (
           <dl>
+            {rotated.webhookUrl ? (
+              <>
+                <dt>Address (POST)</dt>
+                <dd>
+                  <code style={{ wordBreak: 'break-all' }}>{rotated.webhookUrl}</code>
+                </dd>
+              </>
+            ) : null}
             <dt>X-Boxalarm-Source</dt>
             <dd>
               <code>{rotated.keyId}</code>

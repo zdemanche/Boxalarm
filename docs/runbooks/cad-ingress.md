@@ -38,6 +38,7 @@ A saved change reaches ingress in seconds. If `…-alerting-cad-source-copy-dlq-
 | `…-alerting-cad-source-dropped` (also chief) | A saved source failed re-validation in the alerting plane and is not accepted | Re-save it from Settings → CAD sources; check `alerting.cadSourceCopy.sourceDropped` |
 | `…-alerting-cad-update-unnotified` | A CAD update is more than 10 minutes old and its UPDATE push has still not gone out (hand-off lost, or tone-1 fan-out never completed). The 5-minute sweep keeps re-driving it | The update is on the call; relay it by radio if it matters. Check the `cad-update-notifier` and fan-out logs |
 | `…-alerting-cad-raw-fallback` (also chief) | A dispatch paged as raw text | The page went. Fix the template: paste the dispatch into Settings → CAD sources → Test parse |
+| `…-alerting-cad-gateway-refused` (also chief) | API Gateway refused a request on this department's source path before the Lambda ran (403: missing or wrong `x-api-key`, or an IP outside `cadWebhookAllowedCidrs`). Alarms at the first one | A genuine CAD sending the old or no API key drops every dispatch this way. Check the access log `/aws/apigateway/boxalarm-<env>-cad-ingress-api-access` (path, source IP, apiKeyId); give the CAD the current `x-api-key`; radio is the page of record until fixed |
 | `…-alerting-cad-webhook-4xx` (also chief) | More than 20 refusals in 5 min: 403 (no/invalid `x-api-key`, IP not allowlisted), 429 (a source over its throttle), 401 (authentication) | A flood, or a CAD sending the old API key after a rotation. If genuine dispatches are refused, radio is the page of record until fixed; consider `cadWebhookAllowedCidrs`, and see the decision record for the paid CloudFront + WAF option |
 | `…-alerting-cad-webhook-errors` / `-throttles` | The webhook Lambda is failing or at its reserved concurrency (5) | A flood with valid source keys, or a CAD retry storm |
 | `…-alerting-cad-email-failures-not-empty` | An email could not be processed after retries and did not page | The message is in the failure queue and the mail bucket. Fix the dependency. A dispatch older than 10 minutes will now fail freshness; tone it out by radio |
@@ -66,7 +67,7 @@ Settings → CAD sources → *Rotate webhook key*. The new key is shown **once**
 
 1. Rotate, and copy the key.
 2. The CAD operator installs the new key.
-3. Send one test request signed with the new key (test-message procedure below, a negative-safe body on prod is fine: a `200 duplicate` or `202` both prove the signature).
+3. Send one test request signed with the new key **and sent with the new `x-api-key`** to the source's own address (test-message procedure below; on prod a negative-safe body is fine - a `200 duplicate` or `202` proves both). A `403` means the API key is wrong: the gateway refused it before the Lambda, and `…-alerting-cad-gateway-refused` fires.
 4. Then *Revoke previous key now* (otherwise it stops working 24 hours after the rotation on its own). Rotating twice in a row also retires the key the CAD is still using.
 
 If a key leaks: rotate, then *Revoke previous key now* - the leaked key stops working within a minute (the webhook caches keys for 60 s). Give the CAD the new key; until it is installed its requests fail (`BadSignature`) — tone out by radio meanwhile. Removing a source deletes its webhook secret at once, so a source re-created with the same id starts with no key.
@@ -83,6 +84,7 @@ A successful test message **pages every eligible member** and starts the tone la
 ```
 URL=$(pulumi -C infrastructure stack output CAD_WEBHOOK_URL)
 SOURCE=nichols-fd.county                      # X-Boxalarm-Source shown when the key was created
+URL="$URL/$SOURCE"                            # each source POSTs to its own path
 read -rs KEY                                  # paste the key; keeps it out of shell history
 read -rs APIKEY                               # paste the x-api-key shown with it
 BODY='{"text":"INC: TEST-0001\nTIME: 00:00\nTYPE: TEST - DISREGARD\nADDR: 1 TEST ST"}'

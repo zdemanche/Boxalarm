@@ -216,7 +216,7 @@ describe(
       });
       expect(
         resourcesOfType("aws:apigateway/resource:Resource").map((r) => r.inputs.pathPart),
-      ).toEqual(CAD_WEBHOOK_PATH.split("/"));
+      ).toEqual([...CAD_WEBHOOK_PATH.split("/"), "{sourceKeyId}"]);
     });
 
     it("partitions capacity per key in a usage plan, with NO shared stage-wide throttle", async () => {
@@ -239,6 +239,29 @@ describe(
       ) as { Statement: { Effect: string; Condition?: unknown }[] };
       expect(policy.Statement.find((st) => st.Effect === "Deny")?.Condition).toEqual({
         NotIpAddress: { "aws:SourceIp": ["203.0.113.0/28"] },
+      });
+    });
+
+    it("R2-M3: access-logs the stage (account CloudWatch role) and alarms a 403 on this department's source path at the first one", async () => {
+      await build();
+      const account = resourcesOfType("aws:apigateway/account:Account")[0];
+      expect(account?.inputs.cloudwatchRoleArn).toBeDefined();
+      const stage = resourcesOfType("aws:apigateway/stage:Stage")[0];
+      const format = JSON.parse(
+        (stage?.inputs.accessLogSettings as { format: string }).format,
+      ) as Record<string, string>;
+      expect(format).toMatchObject({ status: "$context.status", path: "$context.path" });
+      expect(JSON.stringify(format)).not.toContain("apiKey}");
+      const filter = resourcesOfType("aws:cloudwatch/logMetricFilter:LogMetricFilter").find(
+        (f) => f.inputs.name === "boxalarm-dev-cad-webhook-refused-known-source",
+      );
+      expect(filter?.inputs.pattern).toBe(
+        `{ ($.status = "403") && ($.path = "/cad/${CAD_WEBHOOK_PATH}/nichols-fd.*") }`,
+      );
+      expect(alarmByName("boxalarm-dev-alerting-cad-gateway-refused").inputs).toMatchObject({
+        metricName: "CadWebhookGatewayRefused",
+        threshold: 0,
+        period: 300,
       });
     });
 
@@ -334,6 +357,7 @@ describe(
       ["boxalarm-dev-alerting-cad-source-dropped", [PAGE, OPS]],
       ["boxalarm-dev-alerting-cad-update-push-failed", [PAGE]],
       ["boxalarm-dev-alerting-cad-update-unnotified", [PAGE]],
+      ["boxalarm-dev-alerting-cad-gateway-refused", [PAGE, OPS]],
       ["boxalarm-dev-alerting-cad-update-sweep-errors", [PAGE]],
       ["boxalarm-dev-alerting-cad-update-notifier-failures-not-empty", [PAGE]],
       ["boxalarm-dev-alerting-cad-raw-fallback", [PAGE, OPS]],

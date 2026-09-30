@@ -134,7 +134,7 @@ CAD dispatches reach the app two ways (`docs/decisions/2026-09-29-cad-ingress-au
 pulumi -C infrastructure stack output CAD_WEBHOOK_URL
 ```
 
-Nothing is accepted until a chief saves a source with the webhook on and creates its key (web: Settings → CAD sources). Creating the key also mints the source's own API Gateway key (`x-api-key`), shown once with it. Optional: `pulumi -C infrastructure config set cadWebhookAllowedCidrs <cidr>,<cidr>` restricts the webhook to the dispatch centres' egress addresses.
+Nothing is accepted until a chief saves a source with the webhook on and creates its key (web: Settings → CAD sources). Creating the key also mints the source's own API Gateway key (`x-api-key`), shown once with it. Each source POSTs to its own address, `<CAD_WEBHOOK_URL>/<deptId>.<sourceId>` (shown in the settings page). The stack sets the account's API Gateway CloudWatch logging role (`aws.apigateway.Account`) so the webhook's access log - the only record of a request refused before the Lambda - is written; that setting is per account and region, one more reason for one account per stack. Optional: `pulumi -C infrastructure config set cadWebhookAllowedCidrs <cidr>,<cidr>` restricts the webhook to the dispatch centres' egress addresses.
 
 **Email.** Created only when `cadIngressEmailDomain` is set. SES can receive mail only in regions that support receiving; `us-east-1`, where every stack is pinned, does. Use a subdomain the department controls and uses for nothing else (e.g. `cad.<dept-domain>`): its MX record hands ALL of that subdomain's mail to SES.
 

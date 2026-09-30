@@ -294,6 +294,7 @@ export function toSourceView(
   source: StoredCadSource,
   deptId: string,
   emailDomain: string | undefined,
+  webhookUrl?: string,
 ) {
   const token = source.email?.recipientToken ?? source.emailToken;
   return {
@@ -306,6 +307,9 @@ export function toSourceView(
       emailDomain && token ? `dispatch+${deptId}.${source.sourceId}.${token}@${emailDomain}` : null,
     webhookEnabled: source.webhookEnabled === true,
     webhookKeyId: source.webhookKey?.keyId ?? null,
+    // The CAD POSTs to its own path: {webhookUrl}/{keyId} (chain review R2-M3).
+    webhookEndpoint:
+      webhookUrl && source.webhookKey?.keyId ? `${webhookUrl}/${source.webhookKey.keyId}` : null,
     webhookRotatedAt: source.webhookKey?.rotatedAt ?? null,
     parser: source.parser ?? null,
   };
