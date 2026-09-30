@@ -142,6 +142,38 @@ describe('statusChange handler', () => {
     );
   });
 
+  // Decision (round 2 item a): probationary members are paged and keep their devices.
+  it('a transition to PROBATIONARY keeps the devices and emits active: true', async () => {
+    const send = vi.fn().mockResolvedValue({});
+    vi.doMock('../dynamoClient.js', () => ({
+      createDynamoClient: () => ({ send }) as unknown as DynamoDBDocumentClient,
+      readPersonnelConfig: () => ({ tableName: 'personnel-table' }),
+    }));
+    mockAuthzPassthrough();
+
+    const { handler } = await import('./statusChange.js');
+    await (handler as unknown as (e: GuardEvent, p: CedarPrincipalContext) => Promise<unknown>)(
+      buildEvent('mbr-1', { status: 'PROBATIONARY' }),
+      PRINCIPAL,
+    );
+
+    const transactCall = send.mock.calls[0]?.[0] as {
+      input: {
+        TransactItems: [
+          { Update: { UpdateExpression: string } },
+          { Put: { Item: { payload: Record<string, unknown> } } },
+        ];
+      };
+    };
+    expect(transactCall.input.TransactItems[0].Update.UpdateExpression).not.toContain(
+      'contactChannels',
+    );
+    expect(transactCall.input.TransactItems[1].Put.Item.payload).toMatchObject({
+      status: 'PROBATIONARY',
+      active: true,
+    });
+  });
+
   it('returns 404 problem+json when the member does not exist', async () => {
     const { TransactionCanceledException } = await import('@aws-sdk/client-dynamodb');
     const send = vi.fn().mockRejectedValue(

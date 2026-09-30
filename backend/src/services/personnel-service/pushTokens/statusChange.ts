@@ -11,6 +11,7 @@ import { buildDeptScopedPk, toVerifiedDeptId } from '@boxalarm/dept-scope';
 import { TransactionCanceledException } from '@aws-sdk/client-dynamodb';
 import { TransactWriteCommand } from '@aws-sdk/lib-dynamodb';
 import { createDynamoClient, readPersonnelConfig } from '../dynamoClient.js';
+import { isPagedStatus } from '../lib/statusTransitions.js';
 
 const MEMBER_STATUSES = ['ACTIVE', 'PROBATIONARY', 'LOA', 'RETIRED'] as const;
 type MemberStatus = (typeof MEMBER_STATUSES)[number];
@@ -80,7 +81,10 @@ async function statusChange(
   const client = createDynamoClient(process.env);
   const config = readPersonnelConfig(process.env);
 
-  const revokesTokens = body.status !== 'ACTIVE';
+  // Same mapping as updateMemberStatus (lib/statusTransitions.ts): only LOA / RETIRED stop
+  // paging and clear devices; a PROBATIONARY member keeps being paged. (This route is not
+  // deployed and is removed on fix/access-control.)
+  const revokesTokens = !isPagedStatus(body.status);
   const now = Date.now();
   const eventId = randomUUID();
 
@@ -119,7 +123,7 @@ async function statusChange(
                   memberId,
                   deptId,
                   status: body.status,
-                  active: body.status === 'ACTIVE',
+                  active: isPagedStatus(body.status),
                   ...(revokesTokens ? { contactChannels: [] } : {}),
                 },
                 sentAt: null,

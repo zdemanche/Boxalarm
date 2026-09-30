@@ -9,7 +9,7 @@ import {
 import { captureAWSv3Client } from 'aws-xray-sdk-core';
 import { buildDeptScopedPk, toVerifiedDeptId } from '@boxalarm/dept-scope';
 import type { VerifiedPrincipal } from '@boxalarm/dept-scope';
-import type { MemberStatus, SettableStatus } from './statusTransitions.js';
+import { isPagedStatus, type MemberStatus, type SettableStatus } from './statusTransitions.js';
 
 /** Every role is also a Cognito group of the same name (authz/policy-store.ts ROLE_GROUPS). */
 export const MEMBER_ROLES = [
@@ -296,7 +296,7 @@ export async function updateMemberStatus(
                 // snapshot on `active`. With only newStatus, a member set to LOA or RETIRED
                 // kept their sessions and kept being paged.
                 status: newStatus,
-                active: newStatus === 'ACTIVE',
+                active: isPagedStatus(newStatus),
                 actorId,
                 changedAt,
               },
