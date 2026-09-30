@@ -56,3 +56,14 @@ describe.each(environments)("Pulumi.%s.yaml", (env) => {
     expect(webOrigin).toMatch(/^https:\/\//);
   });
 });
+
+describe("dev small-roster threshold (deploy-readiness m5)", () => {
+  it("pages on fewer than 1 eligible member on dev, the default elsewhere", () => {
+    expect(load("Pulumi.dev.yaml").config["boxalarm-infra:alertingMinEligibleMembers"]).toBe("1");
+    for (const env of ["qa", "staging", "prod"]) {
+      expect(
+        load(`Pulumi.${env}.yaml`).config["boxalarm-infra:alertingMinEligibleMembers"],
+      ).toBeUndefined();
+    }
+  });
+});

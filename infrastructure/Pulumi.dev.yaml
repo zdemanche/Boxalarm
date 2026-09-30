@@ -16,3 +16,6 @@ config:
   # Placeholder until the NERIS schema pipeline publishes a URL (E6-S11-INFRA #246). Safe:
   # the daily refresh fails and notifies chief-notifications; nothing else reads it.
   boxalarm-infra:nerisSchemaSourceUrl: https://neris-schema-source.invalid/neris/schema.json
+  # A dev department has 1-2 test members; the default (3) would fire fan-out-small-roster on
+  # every manual dispatch (deploy-readiness m5).
+  boxalarm-infra:alertingMinEligibleMembers: "1"
