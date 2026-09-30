@@ -49,6 +49,28 @@ import {
 // A client idempotency key or check-sheet item code: becomes a sort-key and S3-key segment.
 const SAFE_SEGMENT = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/;
 
+/**
+ * A replay re-signs the stored photo's upload link only for the member who took it, or the
+ * apparatus-officer tier (Cedar APPARATUS_OFFICER_GROUPS), and only this long after it was
+ * recorded - long enough for a phone to sit offline for days, short enough that a check's
+ * evidence photo can't be overwritten later by anyone who learns its key.
+ */
+export const RESIGN_WINDOW_SECONDS = 7 * 24 * 3600;
+const RESIGN_OFFICER_GROUPS = new Set(['APPARATUS', 'OFFICER', 'CHIEF', 'ADMIN']);
+
+function mayResign(
+  principal: CedarPrincipalContext,
+  row: Record<string, unknown>,
+  now: number,
+): boolean {
+  const createdAt = typeof row.createdAt === 'number' ? row.createdAt : 0;
+  if (now - createdAt > RESIGN_WINDOW_SECONDS) return false;
+  if (row.uploadedBy === principal.sub) return true;
+  return principal['cognito:groups']
+    .split(/[\s,]+/)
+    .some((group) => RESIGN_OFFICER_GROUPS.has(group.toUpperCase()));
+}
+
 /** No ".." anywhere: signed() refuses a stored key containing one. */
 function isSafeSegment(value: string): boolean {
   return SAFE_SEGMENT.test(value) && !value.includes('..');
@@ -138,6 +160,20 @@ async function signed(
   return {
     uploadUrl: await deps.presign(bucketName, photoS3Key, UPLOAD_URL_EXPIRY_SECONDS, contentType),
     uploadContentType: contentType,
+  };
+}
+
+function problemJson(status: number, detail: string, traceId: string): APIGatewayProxyResultV2 {
+  return {
+    statusCode: status,
+    headers: { 'content-type': 'application/problem+json' },
+    body: JSON.stringify({
+      type: 'https://boxalarm.dev/problems/check-photo-exists',
+      title: 'Conflict',
+      status,
+      detail,
+      traceId,
+    }),
   };
 }
 
@@ -268,6 +304,14 @@ async function attachCheckPhoto(
         throw new Error('Check photo conditional write failed but the row could not be read', {
           cause: error,
         });
+      }
+      if (!mayResign(principal, existing.Item as Record<string, unknown>, deps.now())) {
+        emitOutcomeMetric('Boxalarm/apparatus-service', 'AttachCheckPhotoResignRefused');
+        return problemJson(
+          409,
+          'This item already has a photo on that check, and its upload link can no longer be renewed from here.',
+          traceId,
+        );
       }
       emitOutcomeMetric('Boxalarm/apparatus-service', 'AttachCheckPhotoReplayed');
       return jsonResponse(200, {

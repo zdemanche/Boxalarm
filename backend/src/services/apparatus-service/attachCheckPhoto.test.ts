@@ -50,7 +50,14 @@ function authz(decision: 'ALLOW' | 'DENY' = 'ALLOW'): VerifiedPermissionsClient 
   } as unknown as VerifiedPermissionsClient;
 }
 
-function fakeClient(options: { apparatus?: boolean; storedKey?: string } = {}) {
+function fakeClient(
+  options: {
+    apparatus?: boolean;
+    storedKey?: string;
+    uploadedBy?: string;
+    createdAt?: number;
+  } = {},
+) {
   const send = vi.fn((command: unknown) => {
     if (command instanceof QueryCommand) {
       return Promise.resolve(
@@ -69,7 +76,13 @@ function fakeClient(options: { apparatus?: boolean; storedKey?: string } = {}) {
       );
     }
     if (command instanceof GetCommand) {
-      return Promise.resolve({ Item: { photoS3Key: options.storedKey } });
+      return Promise.resolve({
+        Item: {
+          photoS3Key: options.storedKey,
+          uploadedBy: options.uploadedBy ?? 'MBR-7',
+          createdAt: options.createdAt ?? 1798050000 - 3600,
+        },
+      });
     }
     return Promise.resolve({});
   });
@@ -195,5 +208,30 @@ describe('attachCheckPhoto', () => {
       sk: 'CHECK_PHOTO#check-1-abc#Brake_pressure_PSI',
       itemCode: 'Brake pressure/PSI',
     });
+  });
+
+  it("refuses to re-sign another member's photo, or one past the window, with a 409", async () => {
+    const stored = 'NICHOLS/check/APP-E1/check-1-abc/TIRES/first.jpg';
+    const body = { itemCode: 'TIRES', photo: { filename: 'tires.jpg' } };
+
+    const other = fakeClient({ storedKey: stored, uploadedBy: 'MBR-OTHER' });
+    expect(await (await handlerWith(other.client))(buildEvent(body))).toMatchObject({
+      statusCode: 409,
+    });
+
+    const old = fakeClient({ storedKey: stored, createdAt: 1798050000 - 8 * 86400 });
+    expect(await (await handlerWith(old.client))(buildEvent(body))).toMatchObject({
+      statusCode: 409,
+    });
+  });
+
+  it("lets the apparatus-officer tier re-sign a member's recent photo", async () => {
+    const stored = 'NICHOLS/check/APP-E1/check-1-abc/TIRES/first.jpg';
+    const { client } = fakeClient({ storedKey: stored, uploadedBy: 'MBR-OTHER' });
+    const event = buildEvent({ itemCode: 'TIRES', photo: { filename: 'tires.jpg' } });
+    (
+      event.requestContext as unknown as { authorizer: { lambda: Record<string, string> } }
+    ).authorizer.lambda = { ...PRINCIPAL, 'cognito:groups': 'APPARATUS' };
+    expect(await (await handlerWith(client))(event)).toMatchObject({ statusCode: 200 });
   });
 });
