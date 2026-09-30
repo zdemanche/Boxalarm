@@ -21,7 +21,7 @@ import Config from 'react-native-config';
 import * as Keychain from 'react-native-keychain';
 import type { AuthTokenSource } from '../lib/apiClient';
 import { getDeviceInstallationId } from '../features/alerts/deviceInstallationId';
-import { revokePushToken } from '../features/alerts/pushTokens';
+import { revokePushToken, stopRegistrations } from '../features/alerts/pushTokens';
 import { buildOidcConfig } from './config';
 import {
   cancelPendingUnregisterFor,
@@ -502,6 +502,8 @@ export function AuthProvider({
         const apiBaseUrl = Config.API_BASE_URL;
         const memberId = stored ? decodeMemberId(stored.idToken) : null;
         let pushRevoked = true;
+        // No registration of this session may land after the revoke and re-create its entry (m3).
+        await stopRegistrations(SETTLE_RENEWALS_MS).catch(() => undefined);
         if (stored && memberId && apiBaseUrl) {
           // The live session, renewal allowed: an access token past its hour is renewed rather
           // than sent stale and refused (M3).

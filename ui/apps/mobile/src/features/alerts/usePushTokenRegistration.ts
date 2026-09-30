@@ -3,7 +3,13 @@ import { AppState } from 'react-native';
 import Config from 'react-native-config';
 import { useOptionalAuth } from '../../auth/AuthContext';
 import { setPushRegistration, setPushRegistrationRetry } from './pushRegistrationState';
-import { getNativePushBridge, registerPushToken, type DeviceToken } from './pushTokens';
+import {
+  currentRegistrationEpoch,
+  getNativePushBridge,
+  registerPushToken,
+  RegistrationCancelledError,
+  type DeviceToken,
+} from './pushTokens';
 
 const RETRY_BASE_MS = 5_000;
 const RETRY_MAX_MS = 5 * 60_000;
@@ -34,6 +40,8 @@ export function usePushTokenRegistration(): void {
     if (!isAuthenticated || !memberId || !apiBaseUrl) return;
 
     const bridge = getNativePushBridge();
+    // Registrations of this sign-in are refused once sign-out starts (m3).
+    const epoch = currentRegistrationEpoch();
     // Per sign-in, never per hook (C1): sign-out deletes this phone's entry on the server, so the
     // next sign-in - another member, or the same one - must POST again even for the same token.
     let lastRegistered: string | null = null;
@@ -66,12 +74,12 @@ export function usePushTokenRegistration(): void {
       if (lastRegistered === key) return;
       const tokens = authRef.current;
       if (!tokens) throw new Error('auth context unavailable');
-      await registerPushToken(memberId, tokens, apiBaseUrl, device);
+      await registerPushToken(memberId, tokens, apiBaseUrl, device, epoch);
       if (!cancelled) lastRegistered = key;
     };
 
     const onFailure = (error: unknown) => {
-      if (cancelled) return;
+      if (cancelled || error instanceof RegistrationCancelledError) return;
       report('failed');
       needsRetry = true;
       failures += 1;

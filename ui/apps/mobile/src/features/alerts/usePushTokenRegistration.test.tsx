@@ -6,7 +6,11 @@ import { getNativePushBridge, registerPushToken, type DeviceToken } from './push
 import { retryDelayMs, usePushTokenRegistration } from './usePushTokenRegistration';
 
 jest.mock('../../auth/AuthContext', () => ({ useOptionalAuth: jest.fn() }));
-jest.mock('./pushTokens', () => ({ getNativePushBridge: jest.fn(), registerPushToken: jest.fn() }));
+jest.mock('./pushTokens', () => ({
+  ...jest.requireActual('./pushTokens'),
+  getNativePushBridge: jest.fn(),
+  registerPushToken: jest.fn(),
+}));
 // jest.setup.js pins API_BASE_URL to '' globally, which short-circuits the hook.
 jest.mock('react-native-config', () => ({
   __esModule: true,
@@ -90,6 +94,7 @@ test('registers the device token once permission is granted', async () => {
     expect.anything(),
     'https://api.example.test',
     DEVICE,
+    expect.any(Number),
   );
 });
 
@@ -139,6 +144,7 @@ test('a platform that has not issued a token yet is retried instead of silently 
     expect.anything(),
     'https://api.example.test',
     DEVICE,
+    expect.any(Number),
   );
 });
 
@@ -217,6 +223,7 @@ test('a rotated token from the bridge is registered, and a failure there is retr
     expect.anything(),
     'https://api.example.test',
     rotated,
+    expect.any(Number),
   );
 });
 
