@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import {
+  WEBHOOK_RESERVED_CONCURRENCY,
   CAD_WEBHOOK_KEY_THROTTLE,
   CAD_WEBHOOK_PATH,
   CadIngress,
@@ -228,8 +229,14 @@ describe(
       });
       const settings = resourcesOfType("aws:apigateway/methodSettings:MethodSettings")[0];
       expect(settings?.inputs.settings).toEqual({ metricsEnabled: true });
-      expect(lambdaByName(WEBHOOK_FN).inputs.reservedConcurrentExecutions).toBe(5);
+      expect(lambdaByName(WEBHOOK_FN).inputs.reservedConcurrentExecutions).toBe(10);
       expect(lambdaByName(WEBHOOK_FN).inputs.timeout).toBe(10);
+    });
+
+    it("one key's burst can take at most half the webhook's reserved concurrency", () => {
+      expect(CAD_WEBHOOK_KEY_THROTTLE.burstLimit * 2).toBeLessThanOrEqual(
+        WEBHOOK_RESERVED_CONCURRENCY,
+      );
     });
 
     it("enforces an optional source-IP allowlist in the resource policy", async () => {

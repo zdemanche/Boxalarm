@@ -39,16 +39,19 @@ import { ScheduleDeadLetter } from "../shared/schedule-dead-letter";
 export const CAD_WEBHOOK_PATH = "api/v1/alerting/ingress/cad-webhook";
 export const CAD_WEBHOOK_STAGE = "cad";
 /**
- * Per source (per API key). A CAD sends a handful of dispatches an hour, and a mass-casualty
- * burst is tens; this is a flood cap on one source's key, never shared with another source.
+ * Per source (per API key). A CAD sends a handful of dispatches an hour; this is a flood cap on
+ * one source's key, never shared with another source. The burst must stay at or below HALF the
+ * webhook Lambda's reserved concurrency (security review round 2): one key holder's burst then
+ * leaves at least as much concurrency again for every other department's CAD, instead of
+ * briefly throttling them. Raise WEBHOOK_RESERVED_CONCURRENCY as departments are added.
  */
-export const CAD_WEBHOOK_KEY_THROTTLE = { rateLimit: 5, burstLimit: 20 } as const;
+export const CAD_WEBHOOK_KEY_THROTTLE = { rateLimit: 5, burstLimit: 5 } as const;
 export const CAD_METRIC_NAMESPACE = "Boxalarm/alerting-cad-ingress";
 /** Where SES writes each raw message, keyed by its SES message id (emailHandler.ts). */
 export const CAD_MAIL_PREFIX = "inbound/";
 /** Failed (quarantined) and processed mail alike is kept this long, then expires. */
 export const CAD_MAIL_RETENTION_DAYS = 30;
-const WEBHOOK_RESERVED_CONCURRENCY = 5;
+export const WEBHOOK_RESERVED_CONCURRENCY = 10;
 const EMAIL_RESERVED_CONCURRENCY = 5;
 const COPY_RESERVED_CONCURRENCY = 2;
 const COPY_TIMEOUT_SECONDS = 15;

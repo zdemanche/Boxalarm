@@ -70,7 +70,7 @@ A failure at any of steps 1–4 returns `401` or `409` with a generic body. It e
 
 **As built (security review M4, 2026-09-30).** A single route or stage throttle is ONE bucket that every caller shares. One host sending junk at more than 10 rps would 429 every department's genuine CAD, and HTTP APIs cannot take AWS WAF. The webhook therefore runs on its **own REST API**:
 
-- **Per-source API keys in a usage plan.** Every source has its own API key, minted with each HMAC key rotation and sent as `x-api-key`. The key is attached to a usage plan with a per-key throttle of 5 rps and a burst of 20.
+- **Per-source API keys in a usage plan.** Every source has its own API key, minted with each HMAC key rotation and sent as `x-api-key`. The key is attached to a usage plan with a per-key throttle of 5 rps and a burst of 5. The burst is kept at or below half the webhook Lambda's reserved concurrency (10), so one key holder's burst cannot briefly throttle another department's CAD; the concurrency must grow with the number of departments.
 - **Requests without a valid API key are refused by API Gateway (403) before any per-source bucket is used and before the Lambda runs.** An unauthenticated flood therefore cannot starve a genuine CAD. A flood that uses one source's (leaked) API key throttles only that source.
 - **No stage-wide method throttle.** It would reintroduce the shared bucket.
 - **The API key is a capacity partition, not a credential.** The HMAC is still the authentication.
