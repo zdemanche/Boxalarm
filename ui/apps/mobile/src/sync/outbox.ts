@@ -45,6 +45,39 @@ export async function enqueue(input: EnqueueInput): Promise<OutboxRow> {
   return row;
 }
 
+/**
+ * Rows of `kind` for the same `path` queued before `row` - an older answer to the same call.
+ * Answers are append-only on the server and the latest write wins there, so an older answer
+ * that is still retrying must never be delivered after a newer one.
+ */
+export async function olderSiblings(row: OutboxRow): Promise<OutboxRow[]> {
+  const rows = await store.all();
+  return rows.filter(
+    (candidate) =>
+      candidate.id !== row.id &&
+      candidate.kind === row.kind &&
+      candidate.path === row.path &&
+      candidate.queuedAt <= row.queuedAt,
+  );
+}
+
+/** True when a newer row of the same kind and path exists (see olderSiblings). */
+export async function isSuperseded(row: OutboxRow): Promise<boolean> {
+  const rows = await store.all();
+  return rows.some(
+    (candidate) =>
+      candidate.id !== row.id &&
+      candidate.kind === row.kind &&
+      candidate.path === row.path &&
+      candidate.queuedAt > row.queuedAt,
+  );
+}
+
+/** Replaces a queued row's body (the RESPONSE missing-ETA fallback, syncManager.post). */
+export async function replaceBody(id: string, body: string): Promise<void> {
+  await store.update(id, { body });
+}
+
 export async function find(id: string): Promise<OutboxRow | undefined> {
   return store.find(id);
 }

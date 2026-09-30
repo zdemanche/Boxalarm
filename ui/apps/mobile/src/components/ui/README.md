@@ -12,8 +12,8 @@ Field posture is glove-sized by default — `Button`'s `field` size is the 56dp 
 
 ```tsx
 const theme = useTheme(); // { bg, surface, surfaceRaised, fg, fgMuted, fgFaint, border,
-                           //   borderStrong, borderDecorative, focus, focusGap, scrim,
-                           //   skeleton, status: { ok, warning, caution, danger, info, neutral } }
+//   borderStrong, borderDecorative, focus, focusGap, scrim,
+//   skeleton, status: { ok, warning, caution, danger, info, neutral } }
 ```
 
 ## Screen

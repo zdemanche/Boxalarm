@@ -31,7 +31,10 @@ test('getRoster resolves a roster containing only the calling member', async () 
 test('submitResponse updates the roster entry, converts ETA minutes to epoch seconds, and completes the tone ladder', async () => {
   const { dispatchId } = await mockAlertsRepository.triggerSelfTest();
   const before = Math.floor(Date.now() / 1000);
-  await mockAlertsRepository.submitResponse(dispatchId, 'RESPONDING', 15);
+  await mockAlertsRepository.submitResponse(dispatchId, 'RESPONDING', {
+    minutes: 15,
+    qualifier: null,
+  });
 
   const roster = await mockAlertsRepository.getRoster(dispatchId);
   expect(roster[0]?.ackStatus).toBe('RESPONDING');

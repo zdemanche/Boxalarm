@@ -99,6 +99,9 @@ export interface DispatchAlert {
   mapLink: string | null;
   narrative: string;
   isSelfTest: boolean;
+  /** Epoch seconds the fan-out started (detail's fanOutStartedAt) - the best dispatch time the
+   * server returns today. Absent from older responses. */
+  dispatchedAt?: number;
   toneLadder?: ToneLadder;
   prePlan?: PrePlanEnrichment | null;
   /** The server could not look the pre-plan up (prePlan is then absent) - not "none on file". */
@@ -112,6 +115,25 @@ export interface DispatchAlert {
   nearestHydrantsUnavailable?: boolean;
   /** The server's geo read hit its cap: a nearer hydrant may be missing. */
   nearestHydrantsIncomplete?: boolean;
+}
+
+/** One row of GET alerting/dispatches?status=active (dispatches/list/handler.ts). */
+export interface ActiveDispatchSummary {
+  dispatchId: string;
+  incidentType: string | null;
+  address: string | null;
+  crossStreets: string | null;
+  /** Epoch seconds. */
+  dispatchedAt: number;
+  toneSequence: number;
+}
+
+export interface ActiveDispatchList {
+  dispatches: ActiveDispatchSummary[];
+  /** Epoch seconds the server answered for. */
+  asOf: number;
+  /** The server capped the list - there may be more active calls than shown. */
+  truncated: boolean;
 }
 
 export interface SelfTestChannelResult {
@@ -205,8 +227,19 @@ export interface AlertsRepository {
   triggerSelfTest(): Promise<{ testId: string; dispatchId: string }>;
   getSelfTestRun(testId: string): Promise<SelfTestRun>;
   getDispatch(dispatchId: string): Promise<DispatchAlert>;
+  /** The department's active calls - the in-app path to a call whose notification is gone. */
+  listActiveDispatches(): Promise<ActiveDispatchList>;
   getRoster(dispatchId: string): Promise<RosterEntry[]>;
-  submitResponse(dispatchId: string, ackStatus: AckStatus, etaMinutes?: number): Promise<void>;
+  /**
+   * Saves the answer on the phone and starts sending it; resolves with the outbox row carrying it
+   * (null when there is no API to send to - the local mock), never with the network result.
+   */
+  submitResponse(
+    dispatchId: string,
+    ackStatus: Exclude<AckStatus, 'UNANSWERED'>,
+    /** Only an ETA the member chose; null/undefined = not given. */
+    eta?: import('./alertResponses').EtaGiven | null,
+  ): Promise<{ outboxId: string | null }>;
   submitManualDispatch(input: ManualDispatchInput): Promise<{ dispatchId: string }>;
   /** The manual-entry locality choices; callers treat a failure as "no home list". */
   getHomeLocality(): Promise<HomeLocality>;

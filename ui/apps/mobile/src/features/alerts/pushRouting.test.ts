@@ -2,7 +2,12 @@ import { AppState, Platform, Settings } from 'react-native';
 import notifee, { EventType } from '@notifee/react-native';
 import * as messaging from '@react-native-firebase/messaging';
 import { navigateToAlertDetail } from '../../navigation/navigationRef';
-import { dispatchIdFromNotificationData, subscribePushNotificationRouting } from './pushRouting';
+import {
+  dispatchIdFromNotificationData,
+  resetRoutedRingingPagesForTest,
+  routeToRingingPage,
+  subscribePushNotificationRouting,
+} from './pushRouting';
 
 const getInitialNotification = messaging.getInitialNotification as jest.Mock;
 const onNotificationOpenedApp = messaging.onNotificationOpenedApp as jest.Mock;
@@ -12,6 +17,8 @@ let mockNavigationListener: (() => void) | undefined;
 jest.mock('../../navigation/navigationRef', () => ({
   navigateToAlertDetail: jest.fn(),
   isNavigationReady: jest.fn(() => mockNavigationReady),
+  hasPendingAlertNavigation: jest.fn(() => false),
+  navigationRef: { isReady: () => false, getCurrentRoute: () => undefined },
   onNavigationStateChange: jest.fn((listener: () => void) => {
     mockNavigationListener = listener;
     return () => {};
@@ -66,7 +73,10 @@ test('a cold-start open on Android navigates from the notifee-delivered initial 
   await Promise.resolve();
   await Promise.resolve();
 
-  expect(navigateToAlertDetail).toHaveBeenCalledWith('DISP-2');
+  expect(navigateToAlertDetail).toHaveBeenCalledWith(
+    'DISP-2',
+    expect.objectContaining({ dispatchId: 'DISP-2' }),
+  );
 });
 
 test('a cold-start open on iOS navigates from the FCM-delivered initial notification', async () => {
@@ -79,7 +89,10 @@ test('a cold-start open on iOS navigates from the FCM-delivered initial notifica
   await Promise.resolve();
   await Promise.resolve();
 
-  expect(navigateToAlertDetail).toHaveBeenCalledWith('DISP-3');
+  expect(navigateToAlertDetail).toHaveBeenCalledWith(
+    'DISP-3',
+    expect.objectContaining({ dispatchId: 'DISP-3' }),
+  );
 });
 
 test('a background-to-foreground open navigates via onNotificationOpenedApp', () => {
@@ -92,7 +105,10 @@ test('a background-to-foreground open navigates via onNotificationOpenedApp', ()
   subscribePushNotificationRouting();
   openedCallback?.({ data: { dispatchId: 'DISP-4' } });
 
-  expect(navigateToAlertDetail).toHaveBeenCalledWith('DISP-4');
+  expect(navigateToAlertDetail).toHaveBeenCalledWith(
+    'DISP-4',
+    expect.objectContaining({ dispatchId: 'DISP-4' }),
+  );
 });
 
 test('a foreground press on the Android critical notification navigates immediately', () => {
@@ -108,7 +124,10 @@ test('a foreground press on the Android critical notification navigates immediat
     detail: { notification: { data: { dispatchId: 'DISP-5' } } },
   });
 
-  expect(navigateToAlertDetail).toHaveBeenCalledWith('DISP-5');
+  expect(navigateToAlertDetail).toHaveBeenCalledWith(
+    'DISP-5',
+    expect.objectContaining({ dispatchId: 'DISP-5' }),
+  );
 });
 
 test('a non-press foreground event (e.g. dismissed) does not navigate', () => {
@@ -148,7 +167,10 @@ describe('iOS taps on raw-APNs dispatch notifications (review round 2 N3)', () =
     mockNavigationReady = true;
     mockNavigationListener?.();
 
-    expect(navigateToAlertDetail).toHaveBeenCalledWith('DISP-COLD');
+    expect(navigateToAlertDetail).toHaveBeenCalledWith(
+      'DISP-COLD',
+      expect.objectContaining({ dispatchId: 'DISP-COLD' }),
+    );
     expect(Settings.get('boxalarm.pendingAlertTap')).toBeNull();
   });
 
@@ -162,7 +184,10 @@ describe('iOS taps on raw-APNs dispatch notifications (review round 2 N3)', () =
     settingsWatcher();
 
     expect(navigateToAlertDetail).toHaveBeenCalledTimes(1);
-    expect(navigateToAlertDetail).toHaveBeenCalledWith('DISP-WARM');
+    expect(navigateToAlertDetail).toHaveBeenCalledWith(
+      'DISP-WARM',
+      expect.objectContaining({ dispatchId: 'DISP-WARM' }),
+    );
     // Clearing the record does not echo (RCTSettingsManager ignores its own writes), and a later
     // unrelated settings change must not navigate again.
     settingsWatcher();
@@ -179,7 +204,10 @@ describe('iOS taps on raw-APNs dispatch notifications (review round 2 N3)', () =
     mockNavigationReady = true;
     appStateListener?.('active');
 
-    expect(navigateToAlertDetail).toHaveBeenCalledWith('DISP-RESUME');
+    expect(navigateToAlertDetail).toHaveBeenCalledWith(
+      'DISP-RESUME',
+      expect.objectContaining({ dispatchId: 'DISP-RESUME' }),
+    );
   });
 
   test('a stale tap (older than 10 minutes) is discarded without navigating', () => {
@@ -190,6 +218,114 @@ describe('iOS taps on raw-APNs dispatch notifications (review round 2 N3)', () =
 
     expect(navigateToAlertDetail).not.toHaveBeenCalled();
     expect(Settings.get('boxalarm.pendingAlertTap')).toBeNull();
+  });
+
+  test('the page text AppDelegate records rides along, so the alert screen paints the address', () => {
+    nativeWrite({
+      'boxalarm.pendingAlertTap': {
+        dispatchId: 'DISP-TEXT',
+        tappedAt: nowSeconds(),
+        title: 'Structure fire',
+        body: 'Structure fire — 21 Main St',
+        toneSequence: '2',
+      },
+    });
+    coldStart();
+
+    subscribePushNotificationRouting();
+
+    expect(navigateToAlertDetail).toHaveBeenCalledWith(
+      'DISP-TEXT',
+      expect.objectContaining({
+        incidentType: 'Structure fire',
+        address: '21 Main St',
+        toneSequence: 2,
+      }),
+    );
+  });
+
+  test('a Responding action pressed on the page is queued once, then the call opens', async () => {
+    const store = jest.requireActual(
+      '../../sync/outboxStore',
+    ) as typeof import('../../sync/outboxStore');
+    nativeWrite({
+      'boxalarm.pendingAlertTap': {
+        dispatchId: 'DISP-ACTION',
+        tappedAt: nowSeconds(),
+        title: 'MVA',
+        body: 'MVA — 1 Main St',
+        action: 'respond:RESPONDING',
+      },
+    });
+    coldStart();
+    mockNavigationReady = false;
+
+    subscribePushNotificationRouting();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    // Queued before navigation is ready - the answer does not wait on the UI.
+    const rows = (await store.all()).filter((row) => row.path.includes('DISP-ACTION'));
+    expect(rows).toHaveLength(1);
+    expect(JSON.parse(rows[0]!.body)).toMatchObject({ ackStatus: 'RESPONDING' });
+
+    mockNavigationReady = true;
+    mockNavigationListener?.();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(navigateToAlertDetail).toHaveBeenCalledWith(
+      'DISP-ACTION',
+      expect.objectContaining({ address: '1 Main St' }),
+    );
+    expect((await store.all()).filter((row) => row.path.includes('DISP-ACTION'))).toHaveLength(1);
+  });
+
+  test('the page time is when iOS delivered it, not when it was tapped (review MJ-2)', () => {
+    const deliveredAt = nowSeconds() - 300;
+    nativeWrite({
+      'boxalarm.pendingAlertTap': {
+        dispatchId: 'DISP-LATE',
+        tappedAt: nowSeconds(),
+        deliveredAt,
+        title: 'MVA',
+        body: 'MVA — 1 Main St',
+      },
+    });
+    coldStart();
+
+    subscribePushNotificationRouting();
+
+    expect(navigateToAlertDetail).toHaveBeenCalledWith(
+      'DISP-LATE',
+      expect.objectContaining({ receivedAt: deliveredAt * 1000 }),
+    );
+  });
+
+  test('explicit keys AppDelegate copies from the page win over the body, and dispatchedAt is the dispatch time (round 2 C-4)', () => {
+    nativeWrite({
+      'boxalarm.pendingAlertTap': {
+        dispatchId: 'DISP-KEYS',
+        tappedAt: nowSeconds(),
+        deliveredAt: nowSeconds() - 60,
+        title: 'STRUCTURE FIRE · TONE 2',
+        body: 'something else entirely',
+        incidentType: 'Structure fire',
+        address: '21 Main St',
+        crossStreets: 'Elm / Oak',
+        dispatchedAt: '1700000000',
+      },
+    });
+    coldStart();
+
+    subscribePushNotificationRouting();
+
+    expect(navigateToAlertDetail).toHaveBeenCalledWith(
+      'DISP-KEYS',
+      expect.objectContaining({
+        incidentType: 'Structure fire',
+        address: '21 Main St',
+        crossStreets: 'Elm / Oak',
+        dispatchedAt: 1_700_000_000_000,
+      }),
+    );
   });
 
   test('a malformed record is discarded without navigating', () => {
@@ -210,5 +346,58 @@ describe('iOS taps on raw-APNs dispatch notifications (review round 2 N3)', () =
 
     expect(Settings.get).not.toHaveBeenCalled();
     expect(navigateToAlertDetail).not.toHaveBeenCalled();
+  });
+});
+
+describe('returning to the app while a page is ringing (m2-1 / K3-5)', () => {
+  const page = (dispatchId: string, date: number, channelId = 'dispatch-critical-v2-dnd') => ({
+    id: `dispatch:${dispatchId}`,
+    date: String(date),
+    notification: {
+      id: `dispatch:${dispatchId}`,
+      data: { dispatchId, incidentType: 'MVA', address: `${dispatchId} Main St`, receivedAt: '1' },
+      android: { channelId },
+    },
+  });
+
+  beforeEach(() => {
+    Platform.OS = 'android';
+    resetRoutedRingingPagesForTest();
+  });
+
+  test('opens the newest ringing call, once', async () => {
+    (notifee.getDisplayedNotifications as jest.Mock).mockResolvedValue([
+      page('OLDER', 1_000),
+      page('NEWEST', 2_000),
+    ]);
+
+    await routeToRingingPage();
+    await routeToRingingPage();
+
+    expect(navigateToAlertDetail).toHaveBeenCalledTimes(1);
+    expect(navigateToAlertDetail).toHaveBeenCalledWith(
+      'NEWEST',
+      expect.objectContaining({ address: 'NEWEST Main St' }),
+    );
+  });
+
+  test('an answered page (replaced on the default channel) does not pull the member back', async () => {
+    (notifee.getDisplayedNotifications as jest.Mock).mockResolvedValue([
+      page('ANSWERED', 3_000, 'notifications-default'),
+    ]);
+
+    await routeToRingingPage();
+
+    expect(navigateToAlertDetail).not.toHaveBeenCalled();
+  });
+
+  test('wired to the app becoming active on Android', async () => {
+    (notifee.getDisplayedNotifications as jest.Mock).mockResolvedValue([page('ACTIVE', 1)]);
+
+    subscribePushNotificationRouting();
+    appStateListener?.('active');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(navigateToAlertDetail).toHaveBeenCalledWith('ACTIVE', expect.anything());
   });
 });

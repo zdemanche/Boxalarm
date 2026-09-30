@@ -45,14 +45,20 @@ test('lists each roster entry with name, response status, and quals', async () =
 });
 
 test('reflects a recorded response after submitResponse resolves', async () => {
-  await mockAlertsRepository.submitResponse(mockRouteParams.dispatchId, 'RESPONDING', 15);
+  await mockAlertsRepository.submitResponse(mockRouteParams.dispatchId, 'RESPONDING', {
+    minutes: 15,
+    qualifier: null,
+  });
   const { findByText } = await render(<RosterScreen />);
 
   expect(await findByText(/responding/i)).toBeTruthy();
 });
 
 test('a direct-to-scene response is labelled distinctly from a station response', async () => {
-  await mockAlertsRepository.submitResponse(mockRouteParams.dispatchId, 'DIRECT_TO_SCENE', 5);
+  await mockAlertsRepository.submitResponse(mockRouteParams.dispatchId, 'DIRECT_TO_SCENE', {
+    minutes: 5,
+    qualifier: null,
+  });
   const { findByText } = await render(<RosterScreen />);
 
   expect(await findByText(/direct to scene/i)).toBeTruthy();

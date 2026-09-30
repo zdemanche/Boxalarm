@@ -32,11 +32,12 @@ jest.mock('react-native-image-picker', () => ({
 
 // @op-engineering/op-sqlite has no native binding under Jest (NativeModules.OPSQLite is
 // undefined), so importing it for real throws at module load. This fake implements exactly the
-// statements outboxStore.ts issues against an in-memory array, scoped per test file (module
+// statements outboxStore.ts and kvStore.ts issue against in-memory structures, scoped per test file (module
 // registry resets between files) so tests don't leak rows into each other.
 jest.mock('@op-engineering/op-sqlite', () => {
   function createFakeDb() {
     let rows = [];
+    const kv = new Map();
     return {
       executeSync: () => ({ rows: [] }),
       execute: async (sql, params = []) => {
@@ -93,6 +94,18 @@ jest.mock('@op-engineering/op-sqlite', () => {
         }
         if (statement.startsWith('DELETE FROM outbox WHERE id = ?')) {
           rows = rows.filter((row) => row.id !== params[0]);
+          return { rows: [] };
+        }
+        if (statement.startsWith('INSERT OR REPLACE INTO kv')) {
+          kv.set(params[0], { key: params[0], value: params[1], updatedAt: params[2] });
+          return { rows: [] };
+        }
+        if (statement.startsWith('SELECT key, value, updatedAt FROM kv WHERE key = ?')) {
+          const row = kv.get(params[0]);
+          return { rows: row ? [row] : [] };
+        }
+        if (statement.startsWith('DELETE FROM kv WHERE key = ?')) {
+          kv.delete(params[0]);
           return { rows: [] };
         }
         throw new Error(`op-sqlite fake does not support: ${sql}`);
@@ -177,11 +190,31 @@ jest.mock('@notifee/react-native', () => {
     getInitialNotification: jest.fn(async () => null),
     onForegroundEvent: jest.fn(() => () => {}),
     onBackgroundEvent: jest.fn(),
+    cancelDisplayedNotification: jest.fn(async () => undefined),
+    cancelTriggerNotification: jest.fn(async () => undefined),
+    getDisplayedNotifications: jest.fn(async () => []),
+    createTriggerNotification: jest.fn(async () => 'trigger'),
+    setNotificationCategories: jest.fn(async () => undefined),
+    getNotificationSettings: jest.fn(async () => ({ authorizationStatus: 1 })),
+    isChannelBlocked: jest.fn(async () => false),
+    getChannel: jest.fn(async (id) => ({
+      id,
+      importance: 4,
+      sound: 'alarm',
+      soundURI: 'content://settings/system/alarm_alert',
+      blocked: false,
+    })),
+    isBatteryOptimizationEnabled: jest.fn(async () => false),
+    openNotificationSettings: jest.fn(async () => undefined),
+    openBatteryOptimizationSettings: jest.fn(async () => undefined),
   };
   return {
     __esModule: true,
     default: instance,
     AndroidImportance: { NONE: 0, MIN: 1, LOW: 2, DEFAULT: 3, HIGH: 4 },
+    AndroidCategory: { ALARM: 'alarm', CALL: 'call', STATUS: 'status' },
+    AndroidVisibility: { PRIVATE: 0, PUBLIC: 1, SECRET: -1 },
+    TriggerType: { TIMESTAMP: 0, INTERVAL: 1 },
     AuthorizationStatus: { NOT_DETERMINED: -1, DENIED: 0, AUTHORIZED: 1, PROVISIONAL: 2 },
     EventType: { DISMISSED: 0, PRESS: 1, ACTION_PRESS: 2, DELIVERED: 3, APP_BLOCKED: 4 },
   };

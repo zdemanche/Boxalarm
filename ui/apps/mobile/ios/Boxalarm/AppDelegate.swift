@@ -95,16 +95,43 @@ extension AppDelegate {
     withCompletionHandler completionHandler: @escaping () -> Void
   ) {
     let userInfo = response.notification.request.content.userInfo
-    if response.actionIdentifier == UNNotificationDefaultActionIdentifier,
+    // A plain tap, or a Responding / Not responding action from the DISPATCH category
+    // (notificationActions.ts registers it; the page must carry aps.category = "DISPATCH").
+    // The action is recorded with the tap; JS queues the answer through the same outbox as the
+    // alert screen and opens the call, which shows whether it was sent.
+    let actionId = response.actionIdentifier
+    let isResponseAction = actionId.hasPrefix("respond:")
+    if actionId == UNNotificationDefaultActionIdentifier || isResponseAction,
       userInfo["gcm.message_id"] == nil,
       (userInfo["category"] as? String) != "digest",
       let dispatchId = userInfo["dispatchId"] as? String,
       !dispatchId.isEmpty
     {
-      UserDefaults.standard.set(
-        ["dispatchId": dispatchId, "tappedAt": Date().timeIntervalSince1970],
-        forKey: pendingAlertTapKey
-      )
+      // The page's own text rides along so the alert screen paints the address with no fetch
+      // (design.md §4.3). title = incident type, body = "{type} — {address}".
+      let content = response.notification.request.content
+      var record: [String: Any] = [
+        "dispatchId": dispatchId,
+        "tappedAt": Date().timeIntervalSince1970,
+        // When the page arrived, not when it was tapped: a page tapped 45 min late must not read
+        // "just now".
+        "deliveredAt": response.notification.date.timeIntervalSince1970,
+        "title": content.title,
+        "body": content.body,
+      ]
+      // The server's explicit keys (fix/page-chain pushPayload: incidentType, address,
+      // crossStreets, dispatchedAt as epoch seconds) win over parsing the body in JS, and give
+      // the alert screen the dispatch time instead of "RECEIVED" (round 2 C-4). Strings or
+      // numbers are copied as sent; JS reads both.
+      for key in ["toneSequence", "incidentType", "address", "crossStreets", "dispatchedAt"] {
+        if let value = userInfo[key] as? String, !value.isEmpty {
+          record[key] = value
+        } else if let value = userInfo[key] as? NSNumber {
+          record[key] = value
+        }
+      }
+      if isResponseAction { record["action"] = actionId }
+      UserDefaults.standard.set(record, forKey: pendingAlertTapKey)
     }
     completionHandler()
   }

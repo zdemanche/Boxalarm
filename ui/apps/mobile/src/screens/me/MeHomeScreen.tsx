@@ -1,7 +1,7 @@
 import { spacing, targetSize, typeScale } from '@boxalarm/design-tokens';
 import { useNavigation } from '@react-navigation/native';
 import { useEffect, useState } from 'react';
-import { Text, TouchableOpacity, View } from 'react-native';
+import { Alert, Text, TouchableOpacity, View } from 'react-native';
 import { Button, Screen, useTheme, type SurfaceTheme } from '../../components/ui';
 import { useAuth } from '../../auth/AuthContext';
 import { useMeRepository } from '../../features/me/apiMeRepository';
@@ -31,6 +31,34 @@ function NavRow({
     >
       <Text style={{ color: theme.fg, fontSize: typeScale.body.size }}>{label}</Text>
     </TouchableOpacity>
+  );
+}
+
+/**
+ * Sign-out is not a routine tap on this app: it removes THIS installation's push registration
+ * (personnel-service pushTokens, one registration per device since fix/page-chain), so this phone
+ * stops being paged while the member's other signed-in devices keep getting pages (alert-ux C7,
+ * review MJ-5 / round 2 C-9). Text or voice pages are mentioned only as conditional. Staying signed
+ * in is the default.
+ */
+export function signOutWarning(phone: string | null | undefined): string {
+  const appPages =
+    'Boxalarm pages stop on this phone until you sign in again; your other signed-in devices keep getting pages.';
+  const other = phone
+    ? ` Text and voice pages to ${phone} continue only if they are set up for you - check with your officer if you are not sure.`
+    : ' No phone number is on file, so you would get no text or voice pages either.';
+  return appPages + other;
+}
+
+export function confirmSignOut(signOut: () => Promise<void>, phone?: string | null): void {
+  Alert.alert(
+    'Sign out and stop getting pages on this phone?',
+    signOutWarning(phone),
+    [
+      { text: 'Stay signed in', style: 'cancel' },
+      { text: 'Sign out', style: 'destructive', onPress: () => void signOut() },
+    ],
+    { cancelable: true },
   );
 }
 
@@ -147,7 +175,12 @@ export function MeHomeScreen() {
         onPress={() => navigation.navigate('Diagnostics' as never)}
       />
       <View style={{ paddingTop: spacing.lg }}>
-        <Button label="Sign out" variant="danger" onPress={() => void signOut()} />
+        <Button
+          label="Sign out"
+          variant="danger"
+          accessibilityLabel="Sign out. Boxalarm pages stop on this phone."
+          onPress={() => confirmSignOut(signOut, profile?.phone)}
+        />
       </View>
     </Screen>
   );

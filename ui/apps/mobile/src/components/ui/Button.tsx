@@ -23,6 +23,8 @@ interface ButtonProps {
   disabled?: boolean;
   loading?: boolean;
   fullWidth?: boolean;
+  /** For a button that is one choice of several (a yes/no answer): exposed to screen readers. */
+  selected?: boolean;
 }
 
 const SIZE_HEIGHT: Record<ButtonSize, number> = { field: targetSize.field, alert: 72 };
@@ -36,6 +38,7 @@ export function Button({
   disabled = false,
   loading = false,
   fullWidth = false,
+  selected,
 }: ButtonProps) {
   const theme = useTheme();
   const isDisabled = disabled || loading;
@@ -49,7 +52,11 @@ export function Button({
     <TouchableOpacity
       accessibilityRole="button"
       accessibilityLabel={accessibilityLabel}
-      accessibilityState={{ disabled: isDisabled, busy: loading }}
+      accessibilityState={{
+        disabled: isDisabled,
+        busy: loading,
+        ...(selected === undefined ? {} : { selected }),
+      }}
       onPress={onPress}
       disabled={isDisabled}
       style={{

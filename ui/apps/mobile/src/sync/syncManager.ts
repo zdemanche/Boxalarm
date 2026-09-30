@@ -22,6 +22,11 @@ const listeners = new Set<Listener>();
 const recentlySynced = new Set<string>();
 const RECENTLY_SYNCED_LIMIT = 50;
 
+/** Whether a token source is set - false in a headless JS task until one is configured. */
+export function isConfigured(): boolean {
+  return tokens !== null && apiBaseUrl !== null;
+}
+
 export function hasSynced(id: string): boolean {
   return recentlySynced.has(id);
 }
@@ -141,6 +146,34 @@ export async function enqueueAttendance(
   await enqueueAndDrain('ATTENDANCE', idempotencyKey, label, 'personnel/attendance', body);
 }
 
+// POST /api/v1/alerting/dispatches/{dispatchId}/responses (alerting-service responses/handler.ts).
+// Each answer is its own row (a changed answer is a new append-only answer, not an edit), and a
+// newer answer drops any older one for the same call that has not started sending, so a retried
+// "Responding" can never land after the member changed it to "Not responding". The body carries
+// clientAnswerId + answeredAtMs: the server orders answers by answeredAtMs, answers a replay of
+// the same clientAnswerId with the original result (a lost 200 retried is still "Sent"), and
+// answers 409 when the answer was recorded but is not the one on the roster - code SUPERSEDED (a
+// newer answer, perhaps from another device, is current) or another code (not recorded).
+// A server without that change can still drop a same-second change while answering 200, which is
+// why the screen re-reads the roster after delivery (useAlertResponse).
+export async function enqueueResponse(
+  id: string,
+  dispatchId: string,
+  label: string,
+  body: Record<string, unknown>,
+): Promise<void> {
+  const path = `alerting/dispatches/${encodeURIComponent(dispatchId)}/responses`;
+  const row = await outbox.enqueue({ id, kind: 'RESPONSE', label, path, body });
+  const older = await outbox.olderSiblings(row);
+  await Promise.all(
+    older
+      .filter((sibling) => sibling.status !== 'SYNCING')
+      .map((sibling) => outbox.discard(sibling.id)),
+  );
+  await notify();
+  void drain();
+}
+
 export async function retry(id: string): Promise<void> {
   await outbox.retry(id);
   await notify();
@@ -159,6 +192,26 @@ export async function discard(id: string): Promise<void> {
 // POST rather than losing the photo. A kind added here later without that server support
 // would be rejected with a clear reason instead of retried forever.
 const RESIGNS_ON_REPLAY: ReadonlySet<OutboxKind> = new Set(['FIELD_CAPTURE', 'DEFECT']);
+
+/**
+ * lastError of a RESPONSE row answered 409 with any code but SUPERSEDED (e.g. ANSWER_ID_REUSED):
+ * the answer is not on the roster. Terminal: the member sends it again as a new answer (new
+ * clientAnswerId and answeredAtMs), which the UI offers.
+ */
+export const RESPONSE_NOT_RECORDED = "Not recorded on the officer's roster";
+
+/**
+ * lastError of a RESPONSE row answered 409 code SUPERSEDED: recorded, but a newer answer (maybe
+ * from another of the member's devices) is the one on the roster. Terminal; the UI shows the
+ * roster's answer and offers "send mine again" or "keep".
+ */
+export const RESPONSE_SUPERSEDED = 'A newer answer is already on the roster';
+
+class ResponseNotCurrentError extends Error {
+  constructor(message: string) {
+    super(message);
+  }
+}
 
 class PhotoUploadUrlExpiredError extends Error {
   constructor(kind: OutboxKind) {
@@ -190,12 +243,20 @@ export function signedUrlExpiresAtMs(url: string): number | null {
 // is recoverable by signing in again, so it is treated as transient too.
 function isPermanentRejection(error: unknown): boolean {
   if (error instanceof PhotoUploadUrlExpiredError) return true;
+  if (error instanceof ResponseNotCurrentError) return true;
   if (!(error instanceof ApiError)) return false;
   const { status } = error.problem;
   return status >= 400 && status < 500 && status !== 401 && status !== 408 && status !== 429;
 }
 
+/**
+ * lastError of a row the server answered 401 even after a silent renewal. Still retried (a
+ * session can recover), but it is not "no signal" and must not be worded as such (review m9).
+ */
+export const SIGN_IN_REJECTED = "The server did not accept this phone's sign-in";
+
 function describeError(error: unknown): string {
+  if (error instanceof ApiError && error.problem.status === 401) return SIGN_IN_REJECTED;
   if (error instanceof ApiError) return error.problem.detail ?? error.problem.title;
   return error instanceof Error ? error.message : String(error);
 }
@@ -290,7 +351,48 @@ function readUploadTarget(row: OutboxRow, parsed: Record<string, unknown>): Uplo
 // response was lost), so the entry is delivered, not refused.
 const CONFLICT_MEANS_DELIVERED: ReadonlySet<OutboxKind> = new Set(['ATTENDANCE']);
 
+/**
+ * Minutes of the placeholder ETA sent only to a server that still requires one (see
+ * missingEtaFallback). The phone never shows it: the member's answer reads "ETA ?".
+ */
+export const RESPONSE_PLACEHOLDER_ETA_MINUTES = 10;
+
+function mentionsEta(error: ApiError): boolean {
+  const text = `${error.problem.detail ?? ''} ${error.problem.title ?? ''}`;
+  return /\beta\b/i.test(text);
+}
+
+/**
+ * An answer with no ETA is sent as `eta: null` (the post-page-chain server accepts it). A server
+ * that still requires an ETA answers 400 naming `eta`; the answer is then re-sent ONCE with a
+ * placeholder, flagged etaSource NOT_GIVEN, and the queued body is replaced so a later retry does
+ * not repeat the 400. Returns the fallback body, or null when this 400 is not that case.
+ */
+function missingEtaFallback(row: OutboxRow, error: unknown): string | null {
+  if (row.kind !== 'RESPONSE' || !(error instanceof ApiError)) return null;
+  if (error.problem.status !== 400 || !mentionsEta(error)) return null;
+  const body = JSON.parse(row.body) as Record<string, unknown>;
+  if (body.eta !== null || body.ackStatus === 'NOT_RESPONDING') return null;
+  const answeredAtMs = typeof body.answeredAtMs === 'number' ? body.answeredAtMs : Date.now();
+  return JSON.stringify({
+    ...body,
+    eta: Math.floor(answeredAtMs / 1000) + RESPONSE_PLACEHOLDER_ETA_MINUTES * 60,
+    etaSource: 'NOT_GIVEN',
+  });
+}
+
 async function post(row: OutboxRow): Promise<Response | null> {
+  try {
+    return await postOnce(row);
+  } catch (error) {
+    const fallbackBody = missingEtaFallback(row, error);
+    if (!fallbackBody) throw error;
+    await outbox.replaceBody(row.id, fallbackBody);
+    return postOnce({ ...row, body: fallbackBody });
+  }
+}
+
+async function postOnce(row: OutboxRow): Promise<Response | null> {
   if (!tokens || !apiBaseUrl) throw new Error('Sync is not configured yet');
   try {
     return await apiRequest(row.path, tokens, {
@@ -300,6 +402,12 @@ async function post(row: OutboxRow): Promise<Response | null> {
       body: row.body,
     });
   } catch (error) {
+    if (row.kind === 'RESPONSE' && error instanceof ApiError && error.problem.status === 409) {
+      const { code } = error.problem as { code?: unknown };
+      throw new ResponseNotCurrentError(
+        code === 'SUPERSEDED' ? RESPONSE_SUPERSEDED : RESPONSE_NOT_RECORDED,
+      );
+    }
     if (
       CONFLICT_MEANS_DELIVERED.has(row.kind) &&
       error instanceof ApiError &&
@@ -356,12 +464,34 @@ async function processEntry(id: string): Promise<void> {
   }
 }
 
-export async function drain(): Promise<void> {
-  if (!tokens || !apiBaseUrl) return;
+// The drain in progress (including any follow-up it loops into), for drainAndSettle().
+let inFlight: Promise<void> | null = null;
+
+export function drain(): Promise<void> {
+  if (!tokens || !apiBaseUrl) return Promise.resolve();
   if (draining) {
     drainRequested = true;
-    return;
+    return Promise.resolve();
   }
+  const run = runDrain();
+  inFlight = run;
+  void run.finally(() => {
+    if (inFlight === run) inFlight = null;
+  });
+  return run;
+}
+
+/**
+ * Drains and waits until no drain is running - including one another caller already started.
+ * For a caller that must report the outcome (a headless notification action saying "Sent"),
+ * where drain() alone could return at once because a drain was already in progress.
+ */
+export async function drainAndSettle(): Promise<void> {
+  await drain();
+  while (inFlight) await inFlight;
+}
+
+async function runDrain(): Promise<void> {
   draining = true;
   drainRequested = false;
   try {
@@ -374,7 +504,17 @@ export async function drain(): Promise<void> {
     if (netState.isConnected !== true) return;
 
     const pending = await outbox.listDrainable(Date.now());
-    for (const row of pending) {
+    for (const listed of pending) {
+      // Re-read: a row listed above may have been discarded or superseded since (a changed
+      // answer), and a vanished row must not be reported as delivered.
+      const row = await outbox.find(listed.id);
+      if (!row) continue;
+      // An older answer that was mid-send when the member changed it, then failed: drop it.
+      if (row.kind === 'RESPONSE' && (await outbox.isSuperseded(row))) {
+        await outbox.discard(row.id);
+        await notify();
+        continue;
+      }
       await outbox.markSyncing(row.id);
       await notify();
       try {
@@ -394,5 +534,6 @@ export async function drain(): Promise<void> {
   } finally {
     draining = false;
   }
-  if (drainRequested) void drain();
+  // Awaited (not fire-and-forget) so drainAndSettle covers the follow-up pass too.
+  if (drainRequested) await drain();
 }

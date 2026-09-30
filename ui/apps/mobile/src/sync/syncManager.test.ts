@@ -639,3 +639,230 @@ describe('signedPhotoContentType', () => {
     expect(signedPhotoContentType('not a url', 'file:///a/b')).toBe('image/jpeg');
   });
 });
+
+describe('alert responses (RESPONSE)', () => {
+  test('a response POSTs to the dispatch responses path and leaves the outbox on success', async () => {
+    mockApiRequest.mockResolvedValueOnce({ json: async () => ({}) });
+
+    await syncManager.enqueueResponse('response-1', 'D/1', 'Your response — Responding', {
+      ackStatus: 'RESPONDING',
+      eta: 123,
+      assignedApparatusId: null,
+    });
+    await flush();
+
+    expect(mockApiRequest).toHaveBeenCalledWith(
+      'alerting/dispatches/D%2F1/responses',
+      tokens,
+      expect.objectContaining({ method: 'POST' }),
+    );
+    expect(syncManager.hasSynced('response-1')).toBe(true);
+  });
+
+  test('a changed answer drops the older one still waiting, so it can never land after the new one', async () => {
+    mockApiRequest.mockRejectedValue(new Error('Network request failed'));
+
+    await syncManager.enqueueResponse('response-a', 'D1', 'a', { ackStatus: 'RESPONDING' });
+    await flush();
+    expect((await store.find('response-a'))?.status).toBe('FAILED');
+
+    await syncManager.enqueueResponse('response-b', 'D1', 'b', { ackStatus: 'NOT_RESPONDING' });
+    await flush();
+
+    await expect(store.find('response-a')).resolves.toBeUndefined();
+    expect((await store.find('response-b'))?.status).toBe('FAILED');
+    expect(syncManager.hasSynced('response-a')).toBe(false);
+  });
+
+  test('a 409 on an answer means the roster did not take it: kept, terminal, and named as such', async () => {
+    mockApiRequest.mockRejectedValueOnce(problem(409, 'Conflict'));
+
+    await syncManager.enqueueResponse('response-409', 'D5', 'x', { ackStatus: 'RESPONDING' });
+    await flush();
+
+    const row = await store.find('response-409');
+    expect(row?.status).toBe('REJECTED');
+    expect(row?.lastError).toBe(syncManager.RESPONSE_NOT_RECORDED);
+  });
+
+  test('409 code SUPERSEDED is recorded as "a newer answer is on the roster", not as not-recorded', async () => {
+    mockApiRequest.mockRejectedValueOnce(
+      new ApiError({
+        type: 'about:blank',
+        title: 'Conflict',
+        status: 409,
+        traceId: 't',
+        code: 'SUPERSEDED',
+      } as never),
+    );
+
+    await syncManager.enqueueResponse('response-sup', 'D6', 'x', { ackStatus: 'NOT_RESPONDING' });
+    await flush();
+
+    expect(syncManager.hasSynced('response-sup')).toBe(false);
+    const row = await store.find('response-sup');
+    expect(row?.status).toBe('REJECTED');
+    expect(row?.lastError).toBe(syncManager.RESPONSE_SUPERSEDED);
+  });
+
+  test('409 with any other code (ANSWER_ID_REUSED) is "not recorded"', async () => {
+    mockApiRequest.mockRejectedValueOnce(
+      new ApiError({
+        type: 'about:blank',
+        title: 'Conflict',
+        status: 409,
+        traceId: 't',
+        code: 'ANSWER_ID_REUSED',
+      } as never),
+    );
+
+    await syncManager.enqueueResponse('response-reused', 'D7', 'x', { ackStatus: 'RESPONDING' });
+    await flush();
+
+    expect((await store.find('response-reused'))?.lastError).toBe(
+      syncManager.RESPONSE_NOT_RECORDED,
+    );
+  });
+
+  test('a 401 that survives renewal is retried but recorded as a sign-in problem, not a network one', async () => {
+    mockApiRequest.mockRejectedValueOnce(problem(401, 'Unauthorized'));
+
+    await syncManager.enqueueResponse('response-401', 'D8', 'x', { ackStatus: 'RESPONDING' });
+    await flush();
+
+    const row = await store.find('response-401');
+    expect(row?.status).toBe('FAILED');
+    expect(row?.lastError).toBe(syncManager.SIGN_IN_REJECTED);
+  });
+
+  describe('an answer with no ETA (runtime fallback for a server that still requires one)', () => {
+    const noEta = {
+      ackStatus: 'RESPONDING',
+      eta: null,
+      etaSource: 'NOT_GIVEN',
+      answeredAtMs: 1_000_000,
+    };
+
+    test('a server that accepts eta null gets exactly one POST with eta null', async () => {
+      mockApiRequest.mockResolvedValue({ json: async () => ({}) });
+
+      await syncManager.enqueueResponse('response-null-ok', 'D10', 'x', noEta);
+      await flush();
+
+      expect(mockApiRequest).toHaveBeenCalledTimes(1);
+      expect(JSON.parse(mockApiRequest.mock.calls[0]![2].body as string).eta).toBeNull();
+      expect(syncManager.hasSynced('response-null-ok')).toBe(true);
+    });
+
+    test('a 400 naming eta is re-sent once with the placeholder, flagged NOT_GIVEN, and delivered', async () => {
+      mockApiRequest
+        .mockRejectedValueOnce(
+          new ApiError({
+            type: 'about:blank',
+            title: 'Bad Request',
+            status: 400,
+            detail: 'eta is required and must be a positive integer for this ackStatus',
+            traceId: 't',
+          }),
+        )
+        .mockResolvedValueOnce({ json: async () => ({}) });
+
+      await syncManager.enqueueResponse('response-null-400', 'D11', 'x', noEta);
+      await flush();
+
+      expect(mockApiRequest).toHaveBeenCalledTimes(2);
+      const retried = JSON.parse(mockApiRequest.mock.calls[1]![2].body as string);
+      expect(retried).toMatchObject({
+        eta: 1_000 + syncManager.RESPONSE_PLACEHOLDER_ETA_MINUTES * 60,
+        etaSource: 'NOT_GIVEN',
+      });
+      expect(syncManager.hasSynced('response-null-400')).toBe(true);
+    });
+
+    test('a 400 about something else is refused without a retry', async () => {
+      mockApiRequest.mockRejectedValueOnce(problem(400, 'ackStatus is required'));
+
+      await syncManager.enqueueResponse('response-400-other', 'D12', 'x', noEta);
+      await flush();
+
+      expect(mockApiRequest).toHaveBeenCalledTimes(1);
+      expect((await store.find('response-400-other'))?.status).toBe('REJECTED');
+    });
+
+    test('the fallback is tried once: a second 400 is refused, and a later retry sends the placeholder', async () => {
+      const etaProblem = new ApiError({
+        type: 'about:blank',
+        title: 'Bad Request',
+        status: 400,
+        detail: 'eta is required',
+        traceId: 't',
+      });
+      mockApiRequest.mockRejectedValueOnce(etaProblem).mockRejectedValueOnce(etaProblem);
+
+      await syncManager.enqueueResponse('response-null-twice', 'D13', 'x', noEta);
+      await flush();
+
+      expect(mockApiRequest).toHaveBeenCalledTimes(2);
+      const row = await store.find('response-null-twice');
+      expect(row?.status).toBe('REJECTED');
+      expect(JSON.parse(row!.body).eta).toBe(1_000 + 600);
+    });
+  });
+
+  test('answers to different calls do not supersede each other', async () => {
+    mockApiRequest.mockRejectedValue(new Error('Network request failed'));
+
+    await syncManager.enqueueResponse('response-x', 'D1', 'x', { ackStatus: 'RESPONDING' });
+    await syncManager.enqueueResponse('response-y', 'D2', 'y', { ackStatus: 'RESPONDING' });
+    await flush();
+
+    expect(await store.find('response-x')).toBeDefined();
+    expect(await store.find('response-y')).toBeDefined();
+  });
+
+  test('an older answer that was mid-send when superseded is dropped at the next drain instead of retried', async () => {
+    await store.insert({
+      id: 'response-old',
+      kind: 'RESPONSE',
+      label: 'old',
+      method: 'POST',
+      path: 'alerting/dispatches/D3/responses',
+      body: '{}',
+      stage: 'CREATE',
+      photoLocalUri: null,
+      photoS3Key: null,
+      photoUploadUrl: null,
+      status: 'FAILED',
+      attempts: 1,
+      lastError: 'x',
+      queuedAt: '2026-01-01T00:00:00.000Z',
+      nextAttemptAt: 0,
+      syncedAt: null,
+    });
+    await store.insert({
+      id: 'response-new',
+      kind: 'RESPONSE',
+      label: 'new',
+      method: 'POST',
+      path: 'alerting/dispatches/D3/responses',
+      body: '{"ackStatus":"NOT_RESPONDING"}',
+      stage: 'CREATE',
+      photoLocalUri: null,
+      photoS3Key: null,
+      photoUploadUrl: null,
+      status: 'QUEUED',
+      attempts: 0,
+      lastError: null,
+      queuedAt: '2026-01-01T00:00:05.000Z',
+      nextAttemptAt: 0,
+      syncedAt: null,
+    });
+    mockApiRequest.mockResolvedValue({ json: async () => ({}) });
+
+    await syncManager.drain();
+
+    expect(mockApiRequest).toHaveBeenCalledTimes(1);
+    expect(mockApiRequest.mock.calls[0]![2].body).toBe('{"ackStatus":"NOT_RESPONDING"}');
+    await expect(store.find('response-old')).resolves.toBeUndefined();
+  });
+});

@@ -6,6 +6,7 @@ import {
 } from '@react-native-firebase/messaging';
 import { AppRegistry } from 'react-native';
 import { App } from './src/App';
+import { handleNotificationEvent } from './src/features/alerts/notificationActions';
 import {
   handleBackgroundPushMessage,
   handleForegroundPushMessage,
@@ -25,6 +26,8 @@ onMessage(getMessaging(), async (remoteMessage) => {
   await handleForegroundPushMessage(remoteMessage?.data);
 });
 
-notifee.onBackgroundEvent(async () => {});
+// Responding / Not responding pressed on a page's notification while the app is in the
+// background or not running: answered headlessly through the same offline queue as the app.
+notifee.onBackgroundEvent(handleNotificationEvent);
 
 AppRegistry.registerComponent(appName, () => App);
