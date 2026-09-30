@@ -25,7 +25,7 @@ import type { ChecksStackParamList } from '../../navigation/ChecksStack';
 import { useOptionalConnectivity } from '../../sync/ConnectivityContext';
 import { DeliveryStatus } from '../../sync/DeliveryStatus';
 import { kvDelete, kvGet, kvSet } from '../../sync/kvStore';
-import { capturePhoto } from '../../sync/photoCapture';
+import { capturePhoto, type CapturedPhoto } from '../../sync/photoCapture';
 import { formatAsOf, NoCachedDataError } from '../../sync/readThrough';
 import { useOutboxItem } from '../../sync/useOutboxItem';
 
@@ -55,10 +55,13 @@ interface CheckDraft {
   readonly results: Record<string, boolean>;
   readonly severities: Record<string, DefectSeverity>;
   readonly notes: Record<string, string>;
-  readonly photos: Record<string, boolean>;
+  /** The captured photo per item (its local file), so it can ride on the defect it backs. */
+  readonly photos: Record<string, CapturedPhoto>;
 }
 
 interface CompletedSummary {
+  /** Photos taken on items that passed: the check-run API has no field for them. */
+  readonly photosNotSent: number;
   readonly passed: number;
   readonly defects: { label: string; severity: DefectSeverity }[];
   readonly durationSeconds: number;
@@ -90,7 +93,7 @@ export function CheckRunnerScreen() {
   const [results, setResults] = useState<Record<string, boolean>>({});
   const [severities, setSeverities] = useState<Record<string, DefectSeverity>>({});
   const [notes, setNotes] = useState<Record<string, string>>({});
-  const [photosCaptured, setPhotosCaptured] = useState<Record<string, boolean>>({});
+  const [photosCaptured, setPhotosCaptured] = useState<Record<string, CapturedPhoto>>({});
   const [photoError, setPhotoError] = useState<string | null>(null);
   const [startedAt, setStartedAt] = useState(() => Date.now());
   const [idempotencyKey, setIdempotencyKey] = useState(newIdempotencyKey);
@@ -104,7 +107,7 @@ export function CheckRunnerScreen() {
     setPhotoError(null);
     const result = await capturePhoto();
     if (result.status === 'captured') {
-      setPhotosCaptured((prev) => ({ ...prev, [code]: true }));
+      setPhotosCaptured((prev) => ({ ...prev, [code]: result.photo }));
     } else if (result.status === 'error') {
       // A capture failure must never be silently treated as "no photo needed" - the item stays
       // gated and the crew is told why, instead of guessing at a blank camera result.
@@ -135,7 +138,14 @@ export function CheckRunnerScreen() {
           setResults(draft.value.results);
           setSeverities(draft.value.severities);
           setNotes(draft.value.notes);
-          setPhotosCaptured(draft.value.photos);
+          // Drafts from before photos were kept stored `true`; those have no file to send.
+          setPhotosCaptured(
+            Object.fromEntries(
+              Object.entries(draft.value.photos ?? {}).filter(
+                ([, photo]) => typeof photo === 'object' && photo !== null,
+              ),
+            ) as Record<string, CapturedPhoto>,
+          );
           setStartedAt(draft.value.startedAt);
           setIdempotencyKey(draft.value.idempotencyKey);
           setRestoredFrom(draft.updatedAt);
@@ -339,11 +349,15 @@ export function CheckRunnerScreen() {
       // A failed item has to reach the apparatus officer: each becomes a defect report through
       // the existing defect API, pre-filled with the unit and item, so nothing is typed twice.
       for (const item of failedItems) {
+        // The photo taken for this item goes with its defect through the defect API's own
+        // signed-upload step (review m2).
+        const photo = photosCaptured[item.code];
         await repository.submitDefect({
           apparatusId,
           description: defectDescription(apparatusId, item, notes[item.code] ?? ''),
           severity: severities[item.code] ?? DEFAULT_SEVERITY,
           idempotencyKey: `${idempotencyKey}-defect-${item.code}`,
+          ...(photo ? { photoLocalUri: photo.uri, photoFileName: photo.fileName } : {}),
         });
       }
     } catch {
@@ -357,6 +371,9 @@ export function CheckRunnerScreen() {
     await kvDelete(draftKey);
     setSubmitting(false);
     setCompleted({
+      photosNotSent: template.items.filter(
+        (item) => results[item.code] === true && photosCaptured[item.code] !== undefined,
+      ).length,
       passed: template.items.length - failedItems.length,
       defects: failedItems.map((item) => ({
         label: item.label,
@@ -454,7 +471,7 @@ export function CheckRunnerScreen() {
             theme={theme}
             answer={results[item.code]}
             gated={isGated(item)}
-            photoCaptured={photosCaptured[item.code] ?? false}
+            photoCaptured={photosCaptured[item.code] !== undefined}
             severity={severities[item.code] ?? DEFAULT_SEVERITY}
             note={notes[item.code] ?? ''}
             unitId={apparatusId}
@@ -584,7 +601,7 @@ function ItemRow({
       <Text style={{ color: theme.fg, fontSize: typeScale.heading.size, fontWeight: '600' }}>
         {item.label}
       </Text>
-      {item.requiresPhoto ? (
+      {item.requiresPhoto || answer === false ? (
         <TouchableOpacity
           accessibilityRole="button"
           accessibilityLabel={photoCaptured ? 'Photo captured' : 'Add photo'}
@@ -598,7 +615,11 @@ function ItemRow({
               fontWeight: '600',
             }}
           >
-            {photoCaptured ? '✓ Photo captured' : 'Add photo (required)'}
+            {photoCaptured
+              ? '✓ Photo captured'
+              : item.requiresPhoto
+                ? 'Add photo (required)'
+                : 'Add photo of the defect (optional)'}
           </Text>
         </TouchableOpacity>
       ) : null}
@@ -745,6 +766,13 @@ function CompletionView({
               </Text>
             ))}
           </View>
+        ) : null}
+        {summary.photosNotSent > 0 ? (
+          <Text style={{ color: theme.status.warning, fontSize: typeScale.body.size }}>
+            {summary.photosNotSent === 1 ? '1 photo' : `${summary.photosNotSent} photos`} taken on
+            items that passed {summary.photosNotSent === 1 ? 'was' : 'were'} not sent: Boxalarm can
+            only attach photos to defects so far. Photos on failed items went with their defect.
+          </Text>
         ) : null}
         {delivery.state !== 'NOT_QUEUED' ? (
           <DeliveryStatus

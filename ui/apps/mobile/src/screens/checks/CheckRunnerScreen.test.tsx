@@ -364,3 +364,53 @@ test('a failed local save does not confirm the check, and a retry reuses the ide
   expect(second?.[0].idempotencyKey).toBe(first?.[0].idempotencyKey);
   submitSpy.mockRestore();
 });
+
+test('a photo on a failed item goes with its defect; one on a passing item is reported as not sent', async () => {
+  const templateSpy = jest
+    .spyOn(mockChecksRepository, 'getChecklistTemplate')
+    .mockResolvedValueOnce({
+      templateId: 'CT-PHOTO2',
+      name: 'Photo check',
+      items: [
+        { code: 'SCBA', label: 'SCBA units present and charged', requiresPhoto: true },
+        { code: 'HOSE', label: 'Hose bed', requiresPhoto: false },
+      ],
+    });
+  const defectSpy = jest.spyOn(mockChecksRepository, 'submitDefect');
+  mockLaunchCamera
+    .mockResolvedValueOnce({
+      didCancel: false,
+      assets: [{ uri: 'file:///tmp/scba.jpg', fileName: 'scba.jpg', type: 'image/jpeg' }],
+    })
+    .mockResolvedValueOnce({
+      didCancel: false,
+      assets: [{ uri: 'file:///tmp/hose.jpg', fileName: 'hose.jpg', type: 'image/jpeg' }],
+    });
+  const { findByText, findByRole, findAllByRole } = await render(<CheckRunnerScreen />);
+
+  await act(async () => {
+    fireEvent.press(await findByRole('button', { name: 'Add photo' }));
+  });
+  const radios = await findAllByRole('radio');
+  await act(async () => {
+    fireEvent.press(radios.filter((r) => r.props.accessibilityLabel === 'Pass')[0]!);
+  });
+  await act(async () => {
+    fireEvent.press(
+      (await findAllByRole('radio')).filter((r) => r.props.accessibilityLabel === 'Fail')[1]!,
+    );
+  });
+  await act(async () => {
+    fireEvent.press(await findByText('Add photo of the defect (optional)'));
+  });
+  await act(async () => {
+    fireEvent.press(await findByText('Submit check'));
+  });
+
+  expect(defectSpy).toHaveBeenCalledWith(
+    expect.objectContaining({ photoLocalUri: 'file:///tmp/hose.jpg', photoFileName: 'hose.jpg' }),
+  );
+  expect(await findByText(/1 photo taken on items that passed was not sent/)).toBeTruthy();
+  templateSpy.mockRestore();
+  defectSpy.mockRestore();
+});
