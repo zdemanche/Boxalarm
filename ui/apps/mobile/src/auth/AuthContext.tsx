@@ -505,10 +505,16 @@ export function AuthProvider({
         // While the session is still valid, one bounded try (about 3 s) to send this member's
         // queued work - an alert answer left behind waits until they sign in here again.
         await syncManager.drainBriefly(SIGN_OUT_DRAIN_MS).catch(() => undefined);
-        const stored = await readStoredTokens(depsRef.current).catch(() => null);
+        let keychainUnreadable = false;
+        const stored = await readStoredTokens(depsRef.current).catch(() => {
+          keychainUnreadable = true;
+          return null;
+        });
         const apiBaseUrl = Config.API_BASE_URL;
         const memberId = stored ? decodeMemberId(stored.idToken) : null;
-        let pushRevoked = true;
+        // Nothing could be revoked when the session could not be read (or names no member): that
+        // is never reported as "pages stopped" (N-m4).
+        let pushRevoked = !keychainUnreadable && (stored === null || memberId !== null);
         // No registration of this session may land after the revoke and re-create its entry (m3).
         await stopRegistrations(SETTLE_RENEWALS_MS).catch(() => undefined);
         if (stored && memberId && apiBaseUrl) {

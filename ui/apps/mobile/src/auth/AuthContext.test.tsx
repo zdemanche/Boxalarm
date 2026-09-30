@@ -894,3 +894,26 @@ describe('pending sign-out revokes, hardened (N-m1, N-m3)', () => {
     }
   });
 });
+
+test('N-m4: a keychain read error at sign-out is not reported as pages stopped', async () => {
+  const deps = makeDeps();
+  withStored(deps, issuedTokens());
+  globalThis.fetch = jest.fn(async () => new Response('{}')) as unknown as typeof fetch;
+  let contextValue: ReturnType<typeof useAuth> | undefined;
+  function Capture() {
+    contextValue = useAuth();
+    return null;
+  }
+  await render(
+    <AuthProvider deps={deps}>
+      <Capture />
+    </AuthProvider>,
+  );
+  await waitFor(() => expect(contextValue?.isAuthenticated).toBe(true));
+  deps.getInternetCredentials = jest.fn(async () => {
+    throw new Error('keychain locked');
+  }) as unknown as AuthDeps['getInternetCredentials'];
+
+  await expect(contextValue!.signOut()).resolves.toEqual({ pushRevoked: false });
+  expect(globalThis.fetch).not.toHaveBeenCalled();
+});

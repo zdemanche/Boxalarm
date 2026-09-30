@@ -53,7 +53,7 @@ export function signOutWarning(phone: string | null | undefined): string {
 
 export const PUSH_NOT_REVOKED_TITLE = 'This phone may still get pages for you';
 export const PUSH_NOT_REVOKED_MESSAGE =
-  "You're signed out, but Boxalarm couldn't reach the server to stop paging this phone. It keeps trying whenever there's signal. Try again with signal.";
+  "You're signed out, but Boxalarm couldn't confirm this phone was taken off paging for you. It keeps trying whenever there's signal. Try again with signal, or ask an officer to remove this phone.";
 
 /**
  * A sign-out whose push revoke did not land is never silent (M3): the phone may keep ringing for
