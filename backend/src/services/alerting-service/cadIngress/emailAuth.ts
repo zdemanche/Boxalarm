@@ -15,7 +15,14 @@ import type { ParsedEmail } from './mime.js';
  * There is no allowlist-only mode: a From header alone is trivially forged.
  */
 
+/** DKIM t= (the signer's own clock at signing): 10 minutes, per the decision record. */
 export const EMAIL_FRESHNESS_SECONDS = 600;
+/**
+ * The Date header: 60 minutes (chain review m3). SMTP queueing plus Lambda's async retries can
+ * delay a genuine dispatch past 10 minutes; replay is covered by the 24 h Message-ID marker and
+ * a signed t= where the signer sets one.
+ */
+export const EMAIL_DATE_FRESHNESS_SECONDS = 60 * 60;
 export const EMAIL_REPLAY_TTL_SECONDS = 24 * 60 * 60;
 
 export type EmailAuthFailure =
@@ -93,11 +100,13 @@ export function checkEmailSender(
       return 'RecipientNotSigned';
     }
   }
-  const times = [email.date, ...email.dkimSignatures.map((signature) => signature.timestamp)];
   if (email.date === undefined) return 'Stale';
+  if (Math.abs(nowSeconds - email.date) > EMAIL_DATE_FRESHNESS_SECONDS) return 'Stale';
   if (
-    times.some(
-      (time) => time !== undefined && Math.abs(nowSeconds - time) > EMAIL_FRESHNESS_SECONDS,
+    email.dkimSignatures.some(
+      (signature) =>
+        signature.timestamp !== undefined &&
+        Math.abs(nowSeconds - signature.timestamp) > EMAIL_FRESHNESS_SECONDS,
     )
   ) {
     return 'Stale';

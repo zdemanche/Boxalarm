@@ -336,10 +336,34 @@ describe('CAD email handler', () => {
     expect(alerts()).toHaveLength(1);
   });
 
-  it('a message more than 10 minutes old does not page', async () => {
-    serve(rawEmail({ date: NOW - 601 }));
+  it('a Date 30 minutes old (slow relay) still pages when the signature is fresh', async () => {
+    const raw = rawEmail().replace(
+      `Date: ${new Date(NOW * 1000).toUTCString()}`,
+      `Date: ${new Date((NOW - 1800) * 1000).toUTCString()}`,
+    );
+    serve(raw);
     await run();
-    expectDropped('Stale');
+    expect(alerts()).toHaveLength(1);
+  });
+
+  it('a message older than its window does not page, counted as Stale - not an auth failure', async () => {
+    serve(rawEmail({ date: NOW - 3601 }));
+    await run();
+    expect(alerts()).toHaveLength(0);
+    expect(metric('CadIngressStale', 'Stale')).toBe(true);
+    expect(metric('CadIngressAuthFailed')).toBe(false);
+    expect(metric('CadIngressQuarantined')).toBe(true);
+  });
+
+  it('a DKIM t= more than 10 minutes old does not page', async () => {
+    const raw = rawEmail({ date: NOW - 601 }).replace(
+      `Date: ${new Date((NOW - 601) * 1000).toUTCString()}`,
+      `Date: ${new Date(NOW * 1000).toUTCString()}`,
+    );
+    serve(raw);
+    await run();
+    expect(alerts()).toHaveLength(0);
+    expect(metric('CadIngressStale', 'Stale')).toBe(true);
   });
 
   it.each([

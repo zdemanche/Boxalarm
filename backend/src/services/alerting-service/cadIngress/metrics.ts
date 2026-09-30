@@ -9,6 +9,8 @@ export type CadMetric =
   | 'CadIngressAccepted'
   /** Authentication failed: dropped, never paged (Reason says which check). */
   | 'CadIngressAuthFailed'
+  /** An authenticated-looking email too old to trust (Date > 60 min, DKIM t= > 10 min). */
+  | 'CadIngressStale'
   /** A replayed webhook signature or email Message-ID/DKIM pair: dropped. */
   | 'CadIngressReplayRejected'
   /** A failed email kept in the mail bucket for review. */

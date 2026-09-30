@@ -117,6 +117,16 @@ describe('buildCadDispatch', () => {
   });
 });
 
+describe('structured fields win over the template (chain review m2)', () => {
+  it('a structured field the CAD sent is kept even when the template reads a different value', () => {
+    const built = buildCadDispatch(SOURCE, 'TYPE: FROM TEXT\nADDR: 9 ELM ST', {
+      incidentType: 'FROM STRUCTURED',
+    });
+    expect(built.dispatch.incidentType).toBe('FROM STRUCTURED');
+    expect(built.dispatch.address).toBe('9 ELM ST');
+  });
+});
+
 describe('cadExternalDispatchId', () => {
   it('is the incident number alone: a new dispatch time is the same incident (an update)', () => {
     const a = cadExternalDispatchId('county', { incidentNumber: '1', dispatchTime: 'T1' }, 'x');

@@ -308,6 +308,7 @@ describe(
       ["boxalarm-dev-alerting-cad-quarantined", [PAGE, OPS]],
       ["boxalarm-dev-alerting-cad-rejected", [PAGE]],
       ["boxalarm-dev-alerting-cad-duplicate", [PAGE]],
+      ["boxalarm-dev-alerting-cad-source-dropped", [PAGE, OPS]],
       ["boxalarm-dev-alerting-cad-update-push-failed", [PAGE]],
       ["boxalarm-dev-alerting-cad-update-notifier-failures-not-empty", [PAGE]],
       ["boxalarm-dev-alerting-cad-raw-fallback", [PAGE, OPS]],

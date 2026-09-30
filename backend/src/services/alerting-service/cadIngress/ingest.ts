@@ -143,7 +143,8 @@ export function buildCadDispatch(
   const rawText = normalizeDispatchText(text).trim();
   const structuredResult = structured?.address ? structured : undefined;
   const parsed = structuredResult ? undefined : (preParsed ?? parseCadText(source.parser, rawText));
-  const fields: CadParsedFields = structuredResult ?? { ...structured, ...parsed?.fields };
+  // Fields the CAD sent structured win over what the template read from its text (chain m2).
+  const fields: CadParsedFields = structuredResult ?? { ...parsed?.fields, ...structured };
   const isParsed = structuredResult !== undefined || parsed?.status === 'PARSED';
   const narrativeFallback = rawText.slice(0, MAX_NARRATIVE_CHARS);
   const identity = cadIdentity(source.sourceId, fields, rawText);

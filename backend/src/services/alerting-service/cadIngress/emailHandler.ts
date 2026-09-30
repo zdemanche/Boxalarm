@@ -88,7 +88,12 @@ async function processRecord(record: SESEventRecord, config: MailConfig): Promis
   const nowSeconds = Math.floor(Date.now() / 1000);
 
   const quarantine = (reason: EmailAuthFailure | 'UnknownRecipient' | 'TooLarge') => {
-    emitCadMetric('CadIngressAuthFailed', { Channel: CHANNEL, Reason: reason });
+    // A stale genuine message (a slow relay) is not an authentication failure: counted apart
+    // so on-call can tell a delayed relay from a forgery (chain review m3).
+    emitCadMetric(reason === 'Stale' ? 'CadIngressStale' : 'CadIngressAuthFailed', {
+      Channel: CHANNEL,
+      Reason: reason,
+    });
     emitCadMetric('CadIngressQuarantined', { Channel: CHANNEL });
     logInfo('cadIngress.email.quarantined', {
       reason,

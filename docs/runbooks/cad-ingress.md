@@ -25,7 +25,7 @@ A saved change reaches ingress in seconds. If `…-alerting-cad-source-copy-dlq-
 
 **Webhook** (`cadIngress/webhookHandler.ts`): body ≤ 64 KiB (413) → `X-Boxalarm-Source: <deptId>.<sourceId>` is an enabled source with the webhook on and a key → `X-Boxalarm-Timestamp` (Unix seconds) within ±300 s → `X-Boxalarm-Signature: v1=<hex HMAC-SHA256(key, timestamp + "." + raw body)>` matches the current or previous key → the signature has not been seen in the last 15 minutes (409) → parse and write (202, or 200 `duplicate`). Every authentication failure is the same `401` with no detail.
 
-**Email** (`cadIngress/emailHandler.ts`): recipient address names an enabled source with email on and the right token → SES verdicts SPF `PASS`, DKIM `PASS`, spam and virus not `FAIL`, DMARC not `FAIL` → exactly one `From` header holding exactly one mailbox (display names and comments are never read as addresses) → that mailbox is on the allowlist (an address entry matches that address only; a domain entry matches the domain) → DMARC `PASS`, or, when the domain has no usable DMARC result, **every** DKIM `d=` aligned with the From domain → `Date` and each DKIM `t=` within 10 minutes → Message-ID + DKIM signature not seen in 24 h → parse and write.
+**Email** (`cadIngress/emailHandler.ts`): recipient address names an enabled source with email on and the right token → SES verdicts SPF `PASS`, DKIM `PASS`, spam and virus not `FAIL`, DMARC not `FAIL` → exactly one `From` header holding exactly one mailbox (display names and comments are never read as addresses) → that mailbox is on the allowlist (an address entry matches that address only; a domain entry matches the domain) → DMARC `PASS`, or, when the domain has no usable DMARC result, **every** DKIM `d=` aligned with the From domain → `Date` within 60 minutes and each DKIM `t=` within 10 minutes → Message-ID + DKIM signature not seen in 24 h → parse and write.
 
 ## Alarms (all to alerting-page; some also to chief-notifications)
 
@@ -35,12 +35,13 @@ A saved change reaches ingress in seconds. If `…-alerting-cad-source-copy-dlq-
 | `…-alerting-cad-quarantined` (also chief) | An email failed authentication and was kept | Read the log line's `quarantine` S3 location. Download with `aws s3 cp` (you need `kms:Decrypt` on `alias/boxalarm-<env>-cad-mail`). Never forward it to the app |
 | `…-alerting-cad-replay-rejected` | A webhook signature or email identical to one already written was refused | The replay marker commits in the same transaction as the dispatch, so the original paged. A CAD retry of identical bytes after a timeout, or a replay attack |
 | `…-alerting-cad-rejected` | A dependency failed (503 to the CAD, or an email Lambda retry), or a webhook body was too large | The CAD retries a webhook; Lambda retries an email twice. Check the ingress Lambda logs |
+| `…-alerting-cad-source-dropped` (also chief) | A saved source failed re-validation in the alerting plane and is not accepted | Re-save it from Settings → CAD sources; check `alerting.cadSourceCopy.sourceDropped` |
 | `…-alerting-cad-raw-fallback` (also chief) | A dispatch paged as raw text | The page went. Fix the template: paste the dispatch into Settings → CAD sources → Test parse |
 | `…-alerting-cad-webhook-4xx` (also chief) | More than 20 refusals in 5 min: 403 (no/invalid `x-api-key`, IP not allowlisted), 429 (a source over its throttle), 401 (authentication) | A flood, or a CAD sending the old API key after a rotation. If genuine dispatches are refused, radio is the page of record until fixed; consider `cadWebhookAllowedCidrs`, and see the decision record for the paid CloudFront + WAF option |
 | `…-alerting-cad-webhook-errors` / `-throttles` | The webhook Lambda is failing or at its reserved concurrency (5) | A flood with valid source keys, or a CAD retry storm |
 | `…-alerting-cad-email-failures-not-empty` | An email could not be processed after retries and did not page | The message is in the failure queue and the mail bucket. Fix the dependency. A dispatch older than 10 minutes will now fail freshness; tone it out by radio |
 
-Metrics are in `Boxalarm/alerting-cad-ingress`: `CadIngressAccepted`, `CadIngressAuthFailed` (`Reason`), `CadIngressReplayRejected`, `CadIngressQuarantined`, `CadIngressRejected` (`Reason`), `CadIngressParsed` (`Outcome` = PARSED/RAW), `CadIngressRawFallback`, `CadIngressDuplicate`, each also by `Channel`.
+Metrics are in `Boxalarm/alerting-cad-ingress`: `CadIngressAccepted`, `CadIngressAuthFailed` (`Reason`), `CadIngressStale` (a genuine-looking email past its freshness window - Date 60 min, DKIM `t=` 10 min - counted apart from forgeries), `CadIngressReplayRejected`, `CadIngressQuarantined`, `CadIngressRejected` (`Reason`), `CadIngressParsed` (`Outcome` = PARSED/RAW), `CadIngressRawFallback`, `CadParseTimeout`, `CadIngressDuplicate` (`Identity`), `CadIngressUpdated`, `CadUpdatePushPublished` / `CadUpdatePushFailed`, `CadSourceCopyDropped`, each also by `Channel` where it applies.
 
 ### Common authentication failures
 
@@ -56,7 +57,7 @@ Metrics are in `Boxalarm/alerting-cad-ingress`: `CadIngressAccepted`, `CadIngres
 | `SenderNotAllowed` | The From mailbox is not on the allowlist | Add the exact sending address (preferred) or, only if every mailbox of that domain may page the department, the domain |
 | `DkimNotAligned` | No DMARC pass and a DKIM `d=` that is not the From domain (a relay adds its own signature) | Have the CAD's domain publish DMARC, or sign with its own domain; never allowlist a relay's domain |
 | `RecipientNotSigned` | The department's ingress address is not in the message's DKIM-signed `To` or `Cc` - it was Bcc'd, or a message for another department was redirected here | The CAD must address the department's ingress address in `To` or `Cc`, never `Bcc`. A redirect is an attack or a mistake: it did not page |
-| `Stale` | Mail queued more than 10 minutes, or no `Date` header | Fix the CAD's mail queue |
+| `Stale` (counted as `CadIngressStale`, not an auth failure) | `Date` more than 60 minutes or a DKIM `t=` more than 10 minutes from now, or no `Date` header | Fix the CAD's mail queue |
 
 ## Rotating a webhook key
 

@@ -897,6 +897,12 @@ export class CadIngress extends pulumi.ComponentResource {
         [args.pageTopicArn, args.opsTopicArn],
       ),
       cadAlarm(
+        "source-dropped",
+        "CadSourceCopyDropped",
+        "A saved CAD source failed re-validation in the alerting plane and was DROPPED from what ingress accepts (chain review m7). The chief's save succeeded, but that source's dispatches will now be refused. Check the cad-source-copy consumer logs (alerting.cadSourceCopy.sourceDropped) and re-save the source.",
+        [args.pageTopicArn, args.opsTopicArn],
+      ),
+      cadAlarm(
         "duplicate",
         "CadIngressDuplicate",
         "A CAD message was treated as a duplicate of one already paged and did NOT page (same incident number, or identical text within 10 minutes for a source with no incident number rule). Usually a CAD resend. If a crew reports a missed call, check the source's template reads the incident number (Settings > CAD sources).",
