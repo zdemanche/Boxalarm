@@ -4,6 +4,7 @@ import {
   compileCadParser,
   dispatchTextFingerprint,
   parseCadText,
+  parseCadTextBounded,
   validateCadParserTemplate,
   type CadParserTemplate,
 } from './index.js';
@@ -51,6 +52,22 @@ describe('compileCadParser', () => {
         narrative: 'CALLER REPORTS SMOKE FROM 2ND FLOOR\nOCCUPANTS BELIEVED OUT',
       },
     });
+  });
+
+  it('keeps lower-case s/t and backslashes, collapses whitespace (the extractor source string)', () => {
+    const parser = compileCadParser({
+      version: 1,
+      fields: { address: { label: 'ADDR' }, narrative: { label: 'NOTE' } },
+    });
+    expect(parser.parse('ADDR:  12  test\tst \\ rear\nNOTE: stairs\t\tlast').fields).toEqual({
+      address: '12 test st \\ rear',
+      narrative: 'stairs last',
+    });
+  });
+
+  it('escapes regex metacharacters in a label', () => {
+    const parser = compileCadParser({ version: 1, fields: { address: { label: 'LOC(1)' } } });
+    expect(parser.parse('LOC(1): 5 ELM').fields.address).toBe('5 ELM');
   });
 
   it('matches labels case-insensitively and with a dash separator', () => {
@@ -131,5 +148,34 @@ describe('dispatchTextFingerprint', () => {
 
   it('differs for different text', () => {
     expect(dispatchTextFingerprint('A')).not.toBe(dispatchTextFingerprint('B'));
+  });
+});
+
+describe('parseCadTextBounded (security review M3: a hard deadline, failing open to RAW)', () => {
+  it('parses exactly like parseCadText when the template is well behaved', async () => {
+    expect(await parseCadTextBounded(TEMPLATE, SAMPLE)).toEqual(parseCadText(TEMPLATE, SAMPLE));
+  });
+
+  it.each([
+    ['((a)+)+$', 'a'.repeat(40) + '!'],
+    ['(a|a)*$', 'a'.repeat(40) + '!'],
+  ])('a catastrophic pattern %s times out to RAW instead of hanging', async (pattern, text) => {
+    // These pass the save-time lint - the deadline is the control.
+    expect(validateCadParserTemplate({ version: 1, fields: { address: { pattern } } }).ok).toBe(
+      true,
+    );
+    const started = Date.now();
+    const result = await parseCadTextBounded(
+      { version: 7, fields: { address: { pattern } } },
+      text,
+      300,
+    );
+    expect(result).toEqual({ status: 'RAW', version: 7, reason: 'TIMEOUT', fields: {} });
+    expect(Date.now() - started).toBeLessThan(2_000);
+  });
+
+  it('no template or empty text answers without a worker', async () => {
+    expect(await parseCadTextBounded(undefined, 'x')).toMatchObject({ reason: 'NO_TEMPLATE' });
+    expect(await parseCadTextBounded(TEMPLATE, '  ')).toMatchObject({ reason: 'EMPTY' });
   });
 });

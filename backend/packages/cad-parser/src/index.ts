@@ -49,7 +49,8 @@ export type CadParseResult =
   | {
       readonly status: 'RAW';
       readonly version: number | null;
-      readonly reason: 'NO_TEMPLATE' | 'NO_ADDRESS' | 'EMPTY';
+      /** TIMEOUT / ERROR: the template ran past its deadline or failed (parseCadTextBounded). */
+      readonly reason: 'NO_TEMPLATE' | 'NO_ADDRESS' | 'EMPTY' | 'TIMEOUT' | 'ERROR';
       readonly fields: CadParsedFields;
     };
 
@@ -177,38 +178,49 @@ export function validateCadParserTemplate(
   return { ok: true, template: { version: version as number, fields } };
 }
 
-function escapeRegExp(text: string): string {
-  return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
-
-type Extractor = (text: string) => string | undefined;
-
-function compileRule(field: CadField, rule: CadFieldRule): Extractor {
-  if (rule.label !== undefined) {
-    // The narrative runs from its label to the end of the text; every other field is the rest
-    // of its line.
-    const tail = field === 'narrative' ? '([\\s\\S]*)' : '([^\\n]*)';
-    const expression = new RegExp(
-      `^[ \\t]*${escapeRegExp(rule.label)}[ \\t]*[:\\-][ \\t]*${tail}`,
-      'im',
-    );
-    return (text) => expression.exec(text)?.[1];
+/**
+ * The whole extraction, as PLAIN JAVASCRIPT SOURCE (the body of a function of `rules`, `text`,
+ * `limits`). Both paths evaluate this one string - in-thread through `new Function`, and in the
+ * deadline worker (parseCadTextBounded) - so they cannot drift, and a bundler cannot rewrite it:
+ * `Function.prototype.toString` of compiled code breaks under esbuild's keepNames, which
+ * injects a module-level `__name` helper the worker does not have.
+ */
+const EXTRACT_SOURCE = String.raw`
+  const escape = (value) => value.replace(/[.*+?^${'$'}{}()|[\]\\]/g, '\\$&');
+  const out = {};
+  for (const [field, rule] of rules) {
+    let raw;
+    if (rule.label !== undefined) {
+      const tail = field === 'narrative' ? '([\\s\\S]*)' : '([^\\n]*)';
+      const m = new RegExp('^[ \\t]*' + escape(rule.label) + '[ \\t]*[:\\-][ \\t]*' + tail, 'im').exec(text);
+      raw = m ? m[1] : undefined;
+    } else if (rule.pattern !== undefined) {
+      const m = new RegExp(rule.pattern, 'im').exec(text);
+      raw = m ? (m[1] !== undefined ? m[1] : m[0]) : undefined;
+    }
+    if (raw === undefined) continue;
+    const isNarrative = field === 'narrative';
+    const cleaned = (isNarrative ? raw.replace(/[ \t]+/g, ' ') : raw.replace(/\s+/g, ' ')).trim();
+    if (cleaned.length > 0) out[field] = cleaned.slice(0, isNarrative ? limits.narrative : limits.field);
   }
-  const expression = new RegExp(rule.pattern as string, 'im');
-  return (text) => {
-    const match = expression.exec(text);
-    return match ? (match[1] ?? match[0]) : undefined;
-  };
-}
+  return out;
+`;
 
-function clean(field: CadField, value: string | undefined): string | undefined {
-  if (value === undefined) return undefined;
-  const max = field === 'narrative' ? MAX_NARRATIVE_CHARS : MAX_FIELD_CHARS;
-  const text =
-    field === 'narrative'
-      ? value.replace(/[ \t]+/g, ' ').trim()
-      : value.replace(/\s+/g, ' ').trim();
-  return text.length === 0 ? undefined : text.slice(0, max);
+type Extract = (
+  rules: readonly (readonly [string, CadFieldRule])[],
+  text: string,
+  limits: { readonly field: number; readonly narrative: number },
+) => Record<string, string>;
+
+// eslint-disable-next-line @typescript-eslint/no-implied-eval -- a fixed, reviewed source string
+export const extractCadFields = new Function('rules', 'text', 'limits', EXTRACT_SOURCE) as Extract;
+
+const FIELD_LIMITS = { field: MAX_FIELD_CHARS, narrative: MAX_NARRATIVE_CHARS } as const;
+
+function toResult(version: number, fields: CadParsedFields): CadParseResult {
+  return fields.address
+    ? { status: 'PARSED', version, fields }
+    : { status: 'RAW', version, reason: 'NO_ADDRESS', fields };
 }
 
 /** CRLF to LF, NUL and other control characters (except tab/newline) removed, capped. */
@@ -228,9 +240,9 @@ export interface CompiledCadParser {
 }
 
 export function compileCadParser(template: CadParserTemplate): CompiledCadParser {
-  const extractors = (Object.entries(template.fields) as [CadField, CadFieldRule][]).map(
-    ([field, rule]) => [field, compileRule(field, rule)] as const,
-  );
+  const rules = Object.entries(template.fields) as [CadField, CadFieldRule][];
+  // Compile once up front so an invalid pattern throws here, not per message.
+  for (const [, rule] of rules) if (rule.pattern !== undefined) new RegExp(rule.pattern, 'im');
   return {
     version: template.version,
     parse(text: string): CadParseResult {
@@ -238,14 +250,10 @@ export function compileCadParser(template: CadParserTemplate): CompiledCadParser
       if (normalized.trim().length === 0) {
         return { status: 'RAW', version: template.version, reason: 'EMPTY', fields: {} };
       }
-      const fields: CadParsedFields = {};
-      for (const [field, extract] of extractors) {
-        const value = clean(field, extract(normalized));
-        if (value !== undefined) fields[field] = value;
-      }
-      return fields.address
-        ? { status: 'PARSED', version: template.version, fields }
-        : { status: 'RAW', version: template.version, reason: 'NO_ADDRESS', fields };
+      return toResult(
+        template.version,
+        extractCadFields(rules, normalized, FIELD_LIMITS),
+      );
     },
   };
 }
@@ -273,4 +281,59 @@ export function parseCadText(
 export function dispatchTextFingerprint(text: string): string {
   const collapsed = normalizeDispatchText(text).replace(/\s+/g, ' ').trim().toUpperCase();
   return createHash('sha256').update(collapsed, 'utf8').digest('hex');
+}
+
+/** A template's total time budget per message, worker start-up included (security review M3). */
+export const PARSE_DEADLINE_MS = 500;
+
+/**
+ * parseCadText with a HARD deadline: the template's regular expressions run in a worker thread
+ * that is terminated when the deadline passes, and the result is RAW (reason TIMEOUT) - the
+ * dispatch still pages as raw text. JavaScript regexes cannot be interrupted in-thread, and the
+ * save-time lint (NESTED_QUANTIFIER) is bypassable (`((a)+)+$`, `(a|a)*$`), so this is the
+ * control; the lint only catches mistakes early. Never rejects.
+ */
+export async function parseCadTextBounded(
+  template: CadParserTemplate | undefined,
+  text: string,
+  deadlineMs = PARSE_DEADLINE_MS,
+): Promise<CadParseResult> {
+  const normalized = normalizeDispatchText(text);
+  if (!template || normalized.trim().length === 0) return parseCadText(template, text);
+  const { Worker } = await import('node:worker_threads');
+  const source = [
+    "const { parentPort, workerData } = require('node:worker_threads');",
+    `const extractCadFields = new Function('rules', 'text', 'limits', ${JSON.stringify(EXTRACT_SOURCE)});`,
+    'parentPort.postMessage(extractCadFields(workerData.rules, workerData.text, workerData.limits));',
+  ].join('\n');
+  return new Promise<CadParseResult>((resolve) => {
+    let settled = false;
+    const finish = (result: CadParseResult) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      void worker.terminate();
+      resolve(result);
+    };
+    const worker = new Worker(source, {
+      eval: true,
+      workerData: {
+        rules: Object.entries(template.fields),
+        text: normalized,
+        limits: FIELD_LIMITS,
+      },
+      resourceLimits: { maxOldGenerationSizeMb: 32 },
+    });
+    const timer = setTimeout(
+      () => finish({ status: 'RAW', version: template.version, reason: 'TIMEOUT', fields: {} }),
+      deadlineMs,
+    );
+    worker.once('message', (fields: CadParsedFields) => finish(toResult(template.version, fields)));
+    worker.once('error', () =>
+      finish({ status: 'RAW', version: template.version, reason: 'ERROR', fields: {} }),
+    );
+    worker.once('exit', () =>
+      finish({ status: 'RAW', version: template.version, reason: 'ERROR', fields: {} }),
+    );
+  });
 }

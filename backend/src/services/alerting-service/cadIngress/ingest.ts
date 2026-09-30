@@ -6,6 +6,8 @@ import {
   dispatchTextFingerprint,
   normalizeDispatchText,
   parseCadText,
+  parseCadTextBounded,
+  type CadParseResult,
   type CadParsedFields,
 } from '@boxalarm/cad-parser';
 import {
@@ -129,6 +131,8 @@ export function buildCadDispatch(
   source: CadSourceCopy,
   text: string,
   structured: CadParsedFields | undefined,
+  /** The template's result, when already run under its deadline (parseCadTextBounded). */
+  preParsed?: CadParseResult,
 ): {
   readonly dispatch: DispatchReceived;
   readonly parseStatus: 'PARSED' | 'RAW';
@@ -138,7 +142,7 @@ export function buildCadDispatch(
 } {
   const rawText = normalizeDispatchText(text).trim();
   const structuredResult = structured?.address ? structured : undefined;
-  const parsed = structuredResult ? undefined : parseCadText(source.parser, rawText);
+  const parsed = structuredResult ? undefined : (preParsed ?? parseCadText(source.parser, rawText));
   const fields: CadParsedFields = structuredResult ?? { ...structured, ...parsed?.fields };
   const isParsed = structuredResult !== undefined || parsed?.status === 'PARSED';
   const narrativeFallback = rawText.slice(0, MAX_NARRATIVE_CHARS);
@@ -189,7 +193,23 @@ export async function ingestCadDispatch(
   input: CadIngestInput,
 ): Promise<CadIngestResult> {
   const { deptId, source, channel } = input;
-  const built = buildCadDispatch(source, input.text, input.structured);
+  // The template runs in a worker under a hard deadline (security review M3); a template that
+  // overruns it fails open to RAW - the dispatch still pages - and is counted.
+  const preParsed = input.structured?.address
+    ? undefined
+    : await parseCadTextBounded(source.parser, normalizeDispatchText(input.text).trim());
+  if (
+    preParsed?.status === 'RAW' &&
+    (preParsed.reason === 'TIMEOUT' || preParsed.reason === 'ERROR')
+  ) {
+    emitCadMetric('CadParseTimeout', { Channel: channel, Reason: preParsed.reason });
+    logInfo('cadIngress.parse.deadline', {
+      deptId,
+      sourceId: source.sourceId,
+      reason: preParsed.reason,
+    });
+  }
+  const built = buildCadDispatch(source, input.text, input.structured, preParsed);
   const idempotencyKey = deriveIngressIdempotencyKey(
     deptId,
     'CAD',

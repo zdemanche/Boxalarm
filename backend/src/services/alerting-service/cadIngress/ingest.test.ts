@@ -362,3 +362,29 @@ describe('CAD updates to an incident already paged (decision 2026-09-30)', () =>
     });
   });
 });
+
+describe('template deadline (security review M3)', () => {
+  beforeEach(() => {
+    vi.spyOn(console, 'log').mockImplementation(() => undefined);
+  });
+  afterEach(() => vi.restoreAllMocks());
+
+  it('a catastrophic template pages RAW (not a stalled Lambda) and is counted', async () => {
+    const table: FakeTable = { items: new Map() };
+    const result = await ingestCadDispatch(fakeDynamoTable(table), 'alerting', {
+      deptId: DEPT,
+      source: {
+        sourceId: 'county',
+        label: 'County',
+        enabled: true,
+        parser: { version: 3, fields: { address: { pattern: '(a|a)*$' } } },
+      },
+      channel: 'cad-webhook',
+      text: `${'a'.repeat(40)}!`,
+      receivedAt: 1_800_000_000,
+    });
+    expect(result).toMatchObject({ outcome: 'created', parseStatus: 'RAW' });
+    const logged = vi.mocked(console.log).mock.calls.map(([l]) => String(l));
+    expect(logged.some((l) => l.includes('"CadParseTimeout":1'))).toBe(true);
+  }, 10_000);
+});

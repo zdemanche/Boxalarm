@@ -174,6 +174,16 @@ describe('POST /platform/cad-sources/test-parse', () => {
     });
   });
 
+  it('a catastrophic pattern previews as RAW (TIMEOUT) instead of hanging the route', async () => {
+    const response = (await handler(
+      event('POST /api/v1/platform/cad-sources/test-parse', {
+        fields: { address: { pattern: '((a)+)+$' } },
+        sample: `${'a'.repeat(40)}!`,
+      }),
+    )) as { body: string };
+    expect(JSON.parse(response.body)).toMatchObject({ status: 'RAW', reason: 'TIMEOUT' });
+  }, 10_000);
+
   it('previews the fail-open RAW result', async () => {
     const response = (await handler(
       event('POST /api/v1/platform/cad-sources/test-parse', {

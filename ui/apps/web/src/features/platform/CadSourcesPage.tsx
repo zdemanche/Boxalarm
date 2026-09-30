@@ -43,6 +43,9 @@ const RAW_REASONS: Record<string, string> = {
   NO_ADDRESS: 'the template did not find the address',
   NO_TEMPLATE: 'this source has no template',
   EMPTY: 'the text is empty',
+  TIMEOUT:
+    'the template took too long - a regular expression is too complex; simplify it (live dispatches would page as raw text too)',
+  ERROR: 'the template failed to run',
 };
 
 type RuleMode = 'none' | 'label' | 'pattern';

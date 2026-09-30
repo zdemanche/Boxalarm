@@ -25,6 +25,8 @@ export type CadMetric =
   | 'CadUpdatePushPublished'
   /** Publishing an UPDATE push failed for at least one member (the record retries). */
   | 'CadUpdatePushFailed'
+  /** A parser template ran past its deadline (or its worker failed): paged as RAW. */
+  | 'CadParseTimeout'
   /** A CAD resend of a dispatch already written: not paged again. */
   | 'CadIngressDuplicate';
 

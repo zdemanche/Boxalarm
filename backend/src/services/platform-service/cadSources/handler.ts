@@ -7,7 +7,7 @@ import {
   type CedarPrincipalContext,
   type GuardEvent,
 } from '@boxalarm/authz';
-import { parseCadText } from '@boxalarm/cad-parser';
+import { parseCadTextBounded } from '@boxalarm/cad-parser';
 import { toVerifiedDeptId } from '@boxalarm/dept-scope';
 import { createLogger } from '@boxalarm/logging';
 import { getDynamoDocClient } from '../export/awsClients.js';
@@ -130,7 +130,7 @@ async function putSources(
 }
 
 /** Runs a draft template over a pasted sample: the same parser the ingress Lambdas run. */
-function testParse(event: GuardEvent): APIGatewayProxyResultV2 {
+async function testParse(event: GuardEvent): Promise<APIGatewayProxyResultV2> {
   const traceId = extractTraceId(event);
   let body: unknown;
   try {
@@ -146,7 +146,8 @@ function testParse(event: GuardEvent): APIGatewayProxyResultV2 {
   }
   const template = validateParserFields(fields, 'fields');
   if (!template.ok) return badRequestProblem(traceId, toProblemErrors(template.errors));
-  const result = parseCadText({ version: 1, fields: template.fields }, sample);
+  // Same deadline as ingress: a pathological pattern answers RAW (TIMEOUT), never hangs.
+  const result = await parseCadTextBounded({ version: 1, fields: template.fields }, sample);
   return json(200, {
     status: result.status,
     fields: result.fields,
@@ -170,7 +171,7 @@ const putHandler = withAuthorization(putSources, {
   resourceId: DEPARTMENT,
 });
 
-const testParseHandler = withAuthorization((event) => Promise.resolve(testParse(event)), {
+const testParseHandler = withAuthorization((event) => testParse(event), {
   actionType: 'Boxalarm::Action',
   actionId: 'ManageCadIngress',
   resourceType: 'Boxalarm::Department',
