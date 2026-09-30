@@ -4,6 +4,7 @@ import { ServiceLambda } from "../observability/service-lambda";
 import { ServiceLogGroup } from "../observability/service-log-group";
 import { lambdaCode, LAMBDA_HANDLER } from "../shared/lambda-code";
 import { requireEnv } from "../shared/env";
+import { RuleDeliveryGuard } from "../messaging/rule-delivery";
 
 export interface RecoveryMonitorArgs {
   env: string;
@@ -23,6 +24,7 @@ export class RecoveryMonitor extends pulumi.ComponentResource {
   public readonly lambda: ServiceLambda;
   public readonly rule: aws.cloudwatch.EventRule;
   public readonly dlq: aws.sqs.Queue;
+  public readonly deliveryGuard: RuleDeliveryGuard;
   public readonly recoveryFailedAlarm: aws.cloudwatch.MetricAlarm;
   public readonly classificationFailedAlarm: aws.cloudwatch.MetricAlarm;
 
@@ -159,6 +161,18 @@ export class RecoveryMonitor extends pulumi.ComponentResource {
       { parent: this },
     );
 
+    // The target already named this DLQ, but the queue had no policy letting the rule write
+    // to it, so a failed invoke was dropped rather than dead-lettered.
+    this.deliveryGuard = new RuleDeliveryGuard(
+      `${name}-delivery`,
+      {
+        alarmName: `boxalarm-${env}-credential-recovery-monitor-failed-invocations`,
+        rule: this.rule,
+        deadLetterQueue: this.dlq,
+      },
+      { parent: this },
+    );
+
     new aws.cloudwatch.EventTarget(
       `${name}-target`,
       {
@@ -166,7 +180,7 @@ export class RecoveryMonitor extends pulumi.ComponentResource {
         arn: this.lambda.function.arn,
         deadLetterConfig: { arn: this.dlq.arn },
       },
-      { parent: this },
+      { parent: this, dependsOn: [this.deliveryGuard] },
     );
 
     this.recoveryFailedAlarm = new aws.cloudwatch.MetricAlarm(

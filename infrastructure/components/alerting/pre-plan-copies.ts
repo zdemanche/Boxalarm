@@ -2,6 +2,7 @@ import * as pulumi from "@pulumi/pulumi";
 import * as aws from "@pulumi/aws";
 import { ServiceLambda } from "../observability/service-lambda";
 import { ServiceLogGroup } from "../observability/service-log-group";
+import { RuleDeliveryGuard } from "../messaging/rule-delivery";
 import { requireEnv } from "../shared/env";
 import { lambdaCode, LAMBDA_HANDLER } from "../shared/lambda-code";
 import { grantAlertingCmk } from "./alerting-cmk";
@@ -198,10 +199,26 @@ export class PrePlanCopies extends pulumi.ComponentResource {
 
     // No input transformer: the consumer parses the whole EventBridge event, envelope under
     // `detail` (prePlanCopyHandler/hydrantCopyHandler parseEnvelope).
+    const deliveryGuard = new RuleDeliveryGuard(
+      `${prefix}-delivery`,
+      {
+        alarmName: `boxalarm-${env}-alerting-${spec.key}-failed-invocations`,
+        rule,
+        busName: args.busName,
+        deadLetterQueue: dlq,
+        alarmActions: [args.pageTopicArn],
+      },
+      { parent: this },
+    );
     new aws.cloudwatch.EventTarget(
       `${prefix}-target`,
-      { rule: rule.name, eventBusName: args.busName, arn: queue.arn },
-      { parent: this },
+      {
+        rule: rule.name,
+        eventBusName: args.busName,
+        arn: queue.arn,
+        deadLetterConfig: { arn: dlq.arn },
+      },
+      { parent: this, dependsOn: [deliveryGuard] },
     );
 
     const lambda = new ServiceLambda(

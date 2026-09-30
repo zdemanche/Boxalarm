@@ -4,6 +4,7 @@ import { HttpApi } from "../api/http-api";
 import { ServiceLambda } from "../observability/service-lambda";
 import { ServiceLogGroup } from "../observability/service-log-group";
 import { IamPolicyStatement } from "../observability/observability-policy";
+import { RuleDeliveryGuard } from "../messaging/rule-delivery";
 import { requireEnv } from "../shared/env";
 import { lambdaCode, LAMBDA_HANDLER } from "../shared/lambda-code";
 import { AlertingRoute, verifiedPermissionsStatement } from "./route-lambda";
@@ -25,6 +26,8 @@ export interface PushTokensArgs {
   policyStoreId: pulumi.Input<string>;
   busName: pulumi.Input<string>;
   alertingPermissionsBoundaryArn?: pulumi.Input<string>;
+  /** alerting-page topic (page-topic.ts): an undeliverable member update pages. */
+  pageTopicArn: pulumi.Input<string>;
 }
 
 /**
@@ -41,6 +44,7 @@ export class PushTokens extends pulumi.ComponentResource {
   public readonly memberUpdatedDlq: aws.sqs.Queue;
   public readonly memberUpdatedRule: aws.cloudwatch.EventRule;
   public readonly memberUpdatedEventSource: aws.lambda.EventSourceMapping;
+  public readonly memberUpdatedDelivery: RuleDeliveryGuard;
 
   constructor(name: string, args: PushTokensArgs, opts?: pulumi.ComponentResourceOptions) {
     requireEnv("PushTokens", args.env);
@@ -167,10 +171,28 @@ export class PushTokens extends pulumi.ComponentResource {
       { parent: this },
     );
 
+    // An undeliverable member update dead-letters into the (paged) member-updated DLQ.
+    this.memberUpdatedDelivery = new RuleDeliveryGuard(
+      `${name}-member-updated-delivery`,
+      {
+        alarmName: `boxalarm-${env}-alerting-member-updated-failed-invocations`,
+        rule,
+        busName: args.busName,
+        deadLetterQueue: this.memberUpdatedDlq,
+        alarmActions: [args.pageTopicArn],
+      },
+      { parent: this },
+    );
+
     new aws.cloudwatch.EventTarget(
       `${name}-member-updated-target`,
-      { rule: rule.name, eventBusName: args.busName, arn: this.memberUpdatedQueue.arn },
-      { parent: this },
+      {
+        rule: rule.name,
+        eventBusName: args.busName,
+        arn: this.memberUpdatedQueue.arn,
+        deadLetterConfig: { arn: this.memberUpdatedDlq.arn },
+      },
+      { parent: this, dependsOn: [this.memberUpdatedDelivery] },
     );
 
     // src/services/alerting-service/eligibility/memberUpdatedHandler.handler

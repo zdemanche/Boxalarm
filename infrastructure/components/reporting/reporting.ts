@@ -246,7 +246,6 @@ export class Reporting extends pulumi.ComponentResource {
       {
         env,
         busName: args.platformBusName,
-        busArn: args.platformBusArn,
         ruleName: `boxalarm-${env}-reporting-projections`,
         eventPattern: JSON.stringify({ "detail-type": [...PROJECTION_EVENT_TYPES] }),
         queueName: `boxalarm-${env}-reporting-projection-queue`,

@@ -604,7 +604,6 @@ export class Incident extends pulumi.ComponentResource {
       {
         env,
         busName: args.busName,
-        busArn: args.busArn,
         ruleName: `boxalarm-${env}-incident-neris-settings-copy`,
         eventPattern: JSON.stringify({
           source: ["platform-service"],
@@ -653,7 +652,6 @@ export class Incident extends pulumi.ComponentResource {
       {
         env,
         busName: args.busName,
-        busArn: args.busArn,
         ruleName: `boxalarm-${env}-incident-dispatch-alert-copy`,
         eventPattern: JSON.stringify({ "detail-type": ["dispatch.alert.received"] }),
         queueName: `boxalarm-${env}-incident-dispatch-alert-copy-queue`,
@@ -694,7 +692,6 @@ export class Incident extends pulumi.ComponentResource {
       {
         env,
         busName: args.busName,
-        busArn: args.busArn,
         ruleName: `boxalarm-${env}-incident-dispatch-response-copy`,
         eventPattern: JSON.stringify({ "detail-type": ["alerting.response.confirmed"] }),
         queueName: `boxalarm-${env}-incident-dispatch-response-copy-queue`,

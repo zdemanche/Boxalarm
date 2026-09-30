@@ -784,6 +784,7 @@ export const pushTokens = new PushTokens("push-tokens", {
   policyStoreId: policyStore.policyStoreId,
   busName: platformBus.busName,
   alertingPermissionsBoundaryArn: alertingBoundaryArn,
+  pageTopicArn: alertingPageTopic.topicArn,
 });
 
 // E1-S18-INFRA #111 (partial — see riding-board.ts for the deviation from the ticket).

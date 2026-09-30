@@ -203,7 +203,6 @@ export class NerisSubmissionWorker extends pulumi.ComponentResource {
       {
         env,
         busName: args.busName,
-        busArn: args.busArn,
         ruleName: `boxalarm-${env}-incident-neris-submission`,
         eventPattern: JSON.stringify({
           source: ["incident-service"],

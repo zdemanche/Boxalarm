@@ -107,7 +107,6 @@ export class Digest extends pulumi.ComponentResource {
       {
         env,
         busName: args.platformBusName,
-        busArn: args.platformBusArn,
         ruleName: `boxalarm-${env}-notification-cert-expiry-due`,
         eventPattern: JSON.stringify({
           source: ["training-service"],
