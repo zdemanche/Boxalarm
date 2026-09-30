@@ -1,12 +1,8 @@
 import { createHmac } from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import {
-  ConditionalCheckFailedException,
-  TransactionCanceledException,
-} from '@aws-sdk/client-dynamodb';
 import type { SecretsManagerClient } from '@aws-sdk/client-secrets-manager';
-import type { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
 import type { APIGatewayProxyEventV2, APIGatewayProxyStructuredResultV2 } from 'aws-lambda';
+import { fakeDynamo, type FakeTable as Table } from './__fixtures__/fakeTable.js';
 
 /**
  * The required webhook tests of docs/decisions/2026-09-29-cad-ingress-auth.md, against the
@@ -40,54 +36,6 @@ const COPY = {
     },
   ],
 };
-
-interface Table {
-  items: Map<string, Record<string, unknown>>;
-  failTransact?: boolean;
-}
-
-function fakeDynamo(table: Table): DynamoDBDocumentClient {
-  const keyOf = (item: Record<string, unknown>) => `${String(item.pk)}|${String(item.sk)}`;
-  const send = vi.fn((command: { constructor: { name: string }; input: Record<string, never> }) => {
-    const name = command.constructor.name;
-    const input = command.input as Record<string, unknown>;
-    if (name === 'GetCommand') {
-      const key = input.Key as Record<string, unknown>;
-      return Promise.resolve({ Item: table.items.get(keyOf(key)) });
-    }
-    if (name === 'PutCommand') {
-      const item = input.Item as Record<string, unknown>;
-      if (table.items.has(keyOf(item))) {
-        return Promise.reject(new ConditionalCheckFailedException({ message: 'x', $metadata: {} }));
-      }
-      table.items.set(keyOf(item), item);
-      return Promise.resolve({});
-    }
-    if (name === 'DeleteCommand') {
-      table.items.delete(keyOf(input.Key as Record<string, unknown>));
-      return Promise.resolve({});
-    }
-    if (name === 'TransactWriteCommand') {
-      if (table.failTransact) return Promise.reject(new Error('dynamo down'));
-      const puts = (input.TransactItems as { Put: { Item: Record<string, unknown> } }[]).map(
-        (entry) => entry.Put.Item,
-      );
-      if (table.items.has(keyOf(puts[0]!))) {
-        return Promise.reject(
-          new TransactionCanceledException({
-            message: 'x',
-            $metadata: {},
-            CancellationReasons: [{ Code: 'ConditionalCheckFailed' }],
-          }),
-        );
-      }
-      for (const item of puts) table.items.set(keyOf(item), item);
-      return Promise.resolve({});
-    }
-    return Promise.reject(new Error(`unexpected ${name}`));
-  });
-  return { send } as unknown as DynamoDBDocumentClient;
-}
 
 function sign(key: string, timestamp: string, body: string | Buffer): string {
   return createHmac('sha256', key).update(`${timestamp}.`).update(body).digest('hex');
