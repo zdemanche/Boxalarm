@@ -29,6 +29,17 @@ export interface AlertingAlarmsArgs {
 export const MIN_ELIGIBLE_MEMBERS_CONFIG_KEY = "alertingMinEligibleMembers";
 export const DEFAULT_MIN_ELIGIBLE_MEMBERS = 3;
 
+/**
+ * Stack config key: the fraction of eligible members the tone-1 fan-out may skip on push (no
+ * registered device) over PUSH_SKIPPED_PERIOD_SECONDS before it pages on-call (default
+ * DEFAULT_PUSH_SKIPPED_FRACTION). Set it just above the department's usual share of members
+ * who page by SMS only.
+ */
+export const PUSH_SKIPPED_FRACTION_CONFIG_KEY = "alertingPushSkippedFraction";
+export const DEFAULT_PUSH_SKIPPED_FRACTION = 0.25;
+/** Six hours: long enough to average across dispatches, short enough to catch it same day. */
+export const PUSH_SKIPPED_PERIOD_SECONDS = 6 * 60 * 60;
+
 /** Stack config key for the alerting-page email subscription. */
 export const ALERTING_PAGE_EMAIL_CONFIG_KEY = "alertingPageEmail";
 
@@ -331,6 +342,54 @@ export class AlertingAlarms extends pulumi.ComponentResource {
       threshold: 0,
       period: 60,
       evaluationPeriods: 1,
+    });
+
+    // Post-merge CRITICAL-1: an eligible member with no registered push device is paged by SMS
+    // only (no critical alert, no full-screen intent) and nothing else says so. A phone that
+    // silently lost its registration (sign-out/sign-in, device loss) looks like this, so a
+    // rising share of push skips pages on-call. A ratio, not a count: a department where a few
+    // members never installed the app would otherwise page on every dispatch.
+    const pushSkippedFraction =
+      new pulumi.Config("boxalarm-infra").getNumber(PUSH_SKIPPED_FRACTION_CONFIG_KEY) ??
+      DEFAULT_PUSH_SKIPPED_FRACTION;
+    pageAlarm("fan-out-push-skipped-alarm", {
+      name: `boxalarm-${env}-alerting-fan-out-push-skipped`,
+      alarmDescription:
+        `Over the last ${PUSH_SKIPPED_PERIOD_SECONDS / 3600} h, the tone-1 fan-out found more than ${pushSkippedFraction * 100}% of eligible members ` +
+        `with no registered push device (stack config ${PUSH_SKIPPED_FRACTION_CONFIG_KEY}); they were paged by SMS only - no critical alert. ` +
+        "fanout.push.skipped in the fan-out logs names each member. One member: ask them to open the app signed in (it re-registers). " +
+        "Many: check push-token registration (POST members/{memberId}/push-tokens errors), the member-updated consumer's DLQ, and device-loss reports.",
+      comparisonOperator: "GreaterThanThreshold",
+      threshold: pushSkippedFraction,
+      evaluationPeriods: 1,
+      metricQueries: [
+        {
+          id: "skipped",
+          returnData: false,
+          metric: {
+            namespace: FAN_OUT_METRIC_NAMESPACE,
+            metricName: "PushSkipped",
+            stat: "Sum",
+            period: PUSH_SKIPPED_PERIOD_SECONDS,
+          },
+        },
+        {
+          id: "eligible",
+          returnData: false,
+          metric: {
+            namespace: FAN_OUT_METRIC_NAMESPACE,
+            metricName: "EligibleMemberCount",
+            stat: "Sum",
+            period: PUSH_SKIPPED_PERIOD_SECONDS,
+          },
+        },
+        {
+          id: "skippedFraction",
+          label: "Share of eligible members skipped on push",
+          expression: "IF(eligible > 0, FILL(skipped, 0) / eligible, 0)",
+          returnData: true,
+        },
+      ],
     });
 
     // Review R2-m1: a real page whose push gateway secret is unset or unreadable - e.g. a device

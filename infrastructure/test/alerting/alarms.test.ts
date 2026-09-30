@@ -261,6 +261,42 @@ describe("AlertingAlarms — every alert-path failure mode pages", { timeout: 30
     });
   });
 
+  // Post-merge CRITICAL-1: fanout/handler.ts emits PushSkipped (count) and EligibleMemberCount
+  // (value) in Boxalarm/alerting-fan-out; a rising share of push skips pages on-call.
+  it("pages on the share of eligible members skipped on push, on the ops page topic", async () => {
+    await build();
+    const alarm = alarmByName("boxalarm-dev-alerting-fan-out-push-skipped").inputs;
+    expect(alarm).toMatchObject({
+      comparisonOperator: "GreaterThanThreshold",
+      threshold: 0.25,
+      treatMissingData: "notBreaching",
+      alarmActions: [PAGE_TOPIC_ARN],
+    });
+    const queries = alarm.metricQueries as {
+      id: string;
+      expression?: string;
+      returnData?: boolean;
+      metric?: { namespace: string; metricName: string; stat: string };
+    }[];
+    expect(queries.map((q) => [q.metric?.namespace, q.metric?.metricName, q.metric?.stat])).toEqual(
+      [
+        ["Boxalarm/alerting-fan-out", "PushSkipped", "Sum"],
+        ["Boxalarm/alerting-fan-out", "EligibleMemberCount", "Sum"],
+        [undefined, undefined, undefined],
+      ],
+    );
+    expect(queries.filter((q) => q.returnData)).toHaveLength(1);
+    expect(queries[2]!.expression).toContain("skipped");
+    expect(queries[2]!.expression).toContain("eligible");
+    expect(String(alarm.alarmDescription)).toContain("fanout.push.skipped");
+  });
+
+  it("takes the push-skipped threshold from stack config", async () => {
+    installMocks({ "boxalarm-infra:alertingPushSkippedFraction": "0.5" });
+    await build();
+    expect(alarmByName("boxalarm-dev-alerting-fan-out-push-skipped").inputs.threshold).toBe(0.5);
+  });
+
   it("gives every alarm it owns a page action", async () => {
     await build();
     const alarms = resourcesOfType("aws:cloudwatch/metricAlarm:MetricAlarm");
