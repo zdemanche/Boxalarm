@@ -11,7 +11,7 @@ import { emitCadMetric } from './metrics.js';
 import { isReplayMarked } from './replayGuard.js';
 import { loadCadSource, parseSourceKeyId } from './sourceCopy.js';
 import { REPLAY_TTL_SECONDS, isFreshTimestamp, verifySignature } from './webhookAuth.js';
-import { getWebhookKeys } from './webhookKeys.js';
+import { getWebhookKeys, refreshWebhookKeysIfStale } from './webhookKeys.js';
 
 /**
  * POST /api/v1/alerting/ingress/cad-webhook - the signed JSON CAD webhook. Outside Cognito:
@@ -169,13 +169,28 @@ export const handler: Handler<APIGatewayProxyEventV2, APIGatewayProxyStructuredR
   } catch (error) {
     return unavailable('SecretUnavailable', error);
   }
+  let signature =
+    keys.length > 0
+      ? verifySignature(keys, timestamp, rawBody, header(event, 'x-boxalarm-signature'))
+      : undefined;
+  if (!signature) {
+    // The key may have been rotated since this instance cached it (chain review M4).
+    try {
+      const fresh = await refreshWebhookKeysIfStale(source.webhook.secretName);
+      if (fresh) {
+        keys = fresh;
+        signature = verifySignature(
+          keys,
+          timestamp,
+          rawBody,
+          header(event, 'x-boxalarm-signature'),
+        );
+      }
+    } catch (error) {
+      return unavailable('SecretUnavailable', error);
+    }
+  }
   if (keys.length === 0) return reject('NoActiveKey', { keyId: keyIdHeader });
-  const signature = verifySignature(
-    keys,
-    timestamp,
-    rawBody,
-    header(event, 'x-boxalarm-signature'),
-  );
   if (!signature) return reject('BadSignature', { keyId: keyIdHeader });
 
   // 4. Replay: an early read-only answer. The marker itself is written inside the dispatch

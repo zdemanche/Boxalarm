@@ -181,6 +181,28 @@ describe('CAD webhook handler', () => {
     expect((await call(webhookEvent(DISPATCH, { key: PREVIOUS }))).statusCode).toBe(202);
   });
 
+  it('a key rotated after this instance cached the old ones is picked up at once (one re-read)', async () => {
+    const NEW = 'n'.repeat(64);
+    expect((await call(webhookEvent(DISPATCH))).statusCode).toBe(202); // caches {CURRENT, PREVIOUS}
+    secretSend.mockResolvedValue({
+      SecretString: JSON.stringify({ current: NEW, previous: CURRENT }),
+    });
+    vi.setSystemTime((NOW + 10) * 1000);
+    const other = JSON.stringify({ text: 'INC: 2026-2\nADDR: 9 OAK AVE' });
+    expect((await call(webhookEvent(other, { key: NEW, timestamp: NOW + 10 }))).statusCode).toBe(
+      202,
+    );
+    expect(secretSend).toHaveBeenCalledTimes(2);
+  });
+
+  it('a bad signature re-reads the secret at most once per 5 s, so a flood cannot hammer it', async () => {
+    const bad = { key: 'w'.repeat(64) };
+    expect((await call(webhookEvent(DISPATCH, bad))).statusCode).toBe(401);
+    expect((await call(webhookEvent(DISPATCH, bad))).statusCode).toBe(401);
+    expect((await call(webhookEvent(DISPATCH, bad))).statusCode).toBe(401);
+    expect(secretSend).toHaveBeenCalledTimes(1);
+  });
+
   it('accepts when any listed v1 signature matches', async () => {
     const good = sign(CURRENT, String(NOW), DISPATCH);
     const signature = `v1=${'0'.repeat(64)}, v1=${good}`;

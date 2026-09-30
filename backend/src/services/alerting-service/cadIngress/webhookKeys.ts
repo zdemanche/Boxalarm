@@ -10,6 +10,7 @@ import { ALERTING_SDK_CLIENT_CONFIG } from '../awsClientConfig.js';
  */
 
 export const KEY_CACHE_TTL_MS = 5 * 60 * 1000;
+export const KEY_REFRESH_MIN_AGE_MS = 5 * 1000;
 const MIN_KEY_LENGTH = 32;
 
 let client: SecretsManagerClient | undefined;
@@ -51,4 +52,22 @@ export async function getWebhookKeys(secretName: string, now = Date.now()): Prom
   const keys = parseWebhookSecret(output.SecretString);
   cache.set(secretName, { keys, loadedAt: now });
   return keys;
+}
+
+/**
+ * A request failed the signature against the cached keys: if that cache entry is older than
+ * `minAgeMs`, re-read the secret once and return the fresh keys (chain review M4 - a CAD that
+ * switches to a just-rotated key must not get 401 for up to 5 minutes). Undefined when the
+ * cache is fresh enough that a re-read cannot help; the minimum age bounds how often a flood of
+ * bad signatures can make this Lambda call Secrets Manager.
+ */
+export async function refreshWebhookKeysIfStale(
+  secretName: string,
+  minAgeMs = KEY_REFRESH_MIN_AGE_MS,
+  now = Date.now(),
+): Promise<string[] | undefined> {
+  const cached = cache.get(secretName);
+  if (cached && now - cached.loadedAt < minAgeMs) return undefined;
+  cache.delete(secretName);
+  return getWebhookKeys(secretName, now);
 }
