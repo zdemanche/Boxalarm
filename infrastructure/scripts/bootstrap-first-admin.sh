@@ -9,6 +9,9 @@
 # audit log shows where the member came from. Cognito emails the member a temporary password.
 #
 # Refuses to run once the department has any ADMIN or CHIEF: after that, use the web app.
+# Refuses a --dept-id that is not the stack's configured deptId (read from the deployed
+# canary Lambda's CANARY_DEPT_ID): the scanners, canary, staleness check and home locality all
+# run for the stack deptId, so an admin anywhere else leads a department nothing serves.
 # Asks you to re-type the department id (or pass --yes), because a typo would create an
 # admin in a department that does not exist. If a run created the login but failed before
 # assigning the role, running it again with the same arguments plus --resume finishes the
@@ -16,7 +19,7 @@
 # Don't run it twice at once for the same department.
 #
 # Usage:
-#   bootstrap-first-admin.sh <env> --dept-id NICHOLS --email chief@example.org \
+#   bootstrap-first-admin.sh <env> --dept-id nichols-fd --email chief@example.org \
 #     --first-name Pat --last-name Doe --phone +12035550100 --rank Chief \
 #     --agency-id NICHOLS-FD [--role CHIEF|ADMIN] [--join-date YYYY-MM-DD] [--yes] [--resume]
 # Needs the AWS CLI v2 and jq, with credentials for the stack's account. AWS_REGION defaults
@@ -24,7 +27,7 @@
 set -euo pipefail
 
 usage() {
-  sed -n '19,23p' "$0" | sed 's/^# \{0,1\}//' >&2
+  sed -n '21,26p' "$0" | sed 's/^# \{0,1\}//' >&2
   exit 2
 }
 
@@ -75,6 +78,19 @@ done
   exit 2
 }
 export AWS_REGION="${AWS_REGION:-us-east-1}"
+
+# The stack's own department (boxalarm-infra:deptId), as deployed.
+stack_dept="$(aws lambda get-function-configuration --function-name "boxalarm-${env}-alerting-canary" \
+  --query 'Environment.Variables.CANARY_DEPT_ID' --output text)"
+[[ -n "$stack_dept" && "$stack_dept" != "None" ]] || {
+  echo "could not read the stack deptId (CANARY_DEPT_ID on boxalarm-${env}-alerting-canary)" >&2
+  exit 1
+}
+if [[ "$dept_id" != "$stack_dept" ]]; then
+  echo "refusing: --dept-id ${dept_id} is not this stack's department (${stack_dept}); the" >&2
+  echo "scanners, canary and staleness check would serve a department with no admin." >&2
+  exit 1
+fi
 
 create_fn="boxalarm-${env}-personnel-members-create"
 roles_fn="boxalarm-${env}-personnel-members-update-roles"
