@@ -1,6 +1,7 @@
 import { act, renderHook } from '@testing-library/react-native';
 import { AppState, type AppStateStatus } from 'react-native';
 import { useOptionalAuth } from '../../auth/AuthContext';
+import { getPushRegistration, retryPushRegistration } from './pushRegistrationState';
 import { getNativePushBridge, registerPushToken, type DeviceToken } from './pushTokens';
 import { retryDelayMs, usePushTokenRegistration } from './usePushTokenRegistration';
 
@@ -239,4 +240,60 @@ test('unmounting cancels pending retries and removes the foreground listener', a
   await advance(600_000);
   expect(mockRegisterPushToken).toHaveBeenCalledTimes(1);
   expect(removeAppStateListener).toHaveBeenCalled();
+});
+
+function signedInAs(memberId: string | null) {
+  mockUseOptionalAuth.mockReturnValue({
+    isAuthenticated: memberId !== null,
+    memberId,
+    getAccessToken: jest.fn(),
+    renewSilently: jest.fn(),
+  });
+}
+
+test('C1: after sign-out, the next member on this phone is registered too', async () => {
+  signedInAs('A');
+  const { rerender } = await renderHook(() => usePushTokenRegistration());
+  await flush();
+
+  signedInAs(null);
+  await rerender({});
+  await flush();
+
+  signedInAs('B');
+  await rerender({});
+  await flush();
+
+  expect(mockRegisterPushToken.mock.calls.map((call) => call[0])).toEqual(['A', 'B']);
+  expect(getPushRegistration()).toEqual({ memberId: 'B', status: 'registered' });
+});
+
+test('C1: the same member signing out and back in is registered again', async () => {
+  signedInAs('A');
+  const { rerender } = await renderHook(() => usePushTokenRegistration());
+  await flush();
+
+  signedInAs(null);
+  await rerender({});
+  await flush();
+  expect(getPushRegistration()).toBeNull();
+
+  signedInAs('A');
+  await rerender({});
+  await flush();
+
+  expect(mockRegisterPushToken.mock.calls.map((call) => call[0])).toEqual(['A', 'A']);
+});
+
+test('a failed registration is reported for the readiness banner, and its retry registers', async () => {
+  mockRegisterPushToken.mockRejectedValueOnce(new Error('network down'));
+  await renderHook(() => usePushTokenRegistration());
+  await flush();
+  expect(getPushRegistration()).toEqual({ memberId: 'MBR-1', status: 'failed' });
+
+  await act(async () => retryPushRegistration());
+  await flush();
+
+  expect(mockRegisterPushToken).toHaveBeenCalledTimes(2);
+  expect(getPushRegistration()).toEqual({ memberId: 'MBR-1', status: 'registered' });
 });

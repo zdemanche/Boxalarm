@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react';
 import { AppState } from 'react-native';
 import Config from 'react-native-config';
 import { useOptionalAuth } from '../../auth/AuthContext';
+import { setPushRegistration, setPushRegistrationRetry } from './pushRegistrationState';
 import { getNativePushBridge, registerPushToken, type DeviceToken } from './pushTokens';
 
 const RETRY_BASE_MS = 5_000;
@@ -28,12 +29,14 @@ export function usePushTokenRegistration(): void {
   const apiBaseUrl = Config.API_BASE_URL;
   const authRef = useRef(auth);
   authRef.current = auth;
-  const lastRegisteredRef = useRef<string | null>(null);
 
   useEffect(() => {
     if (!isAuthenticated || !memberId || !apiBaseUrl) return;
 
     const bridge = getNativePushBridge();
+    // Per sign-in, never per hook (C1): sign-out deletes this phone's entry on the server, so the
+    // next sign-in - another member, or the same one - must POST again even for the same token.
+    let lastRegistered: string | null = null;
     let cancelled = false;
     let inFlight = false;
     let needsRetry = false;
@@ -47,23 +50,29 @@ export function usePushTokenRegistration(): void {
       }
     };
 
+    const report = (status: 'registering' | 'registered' | 'failed' | 'permissionDenied') => {
+      if (!cancelled) setPushRegistration({ memberId, status });
+    };
+
     const markRegistered = () => {
       needsRetry = false;
       failures = 0;
       clearRetryTimer();
+      report('registered');
     };
 
     const register = async (device: DeviceToken) => {
       const key = `${device.platform}:${device.token}`;
-      if (lastRegisteredRef.current === key) return;
+      if (lastRegistered === key) return;
       const tokens = authRef.current;
       if (!tokens) throw new Error('auth context unavailable');
       await registerPushToken(memberId, tokens, apiBaseUrl, device);
-      if (!cancelled) lastRegisteredRef.current = key;
+      if (!cancelled) lastRegistered = key;
     };
 
     const onFailure = (error: unknown) => {
       if (cancelled) return;
+      report('failed');
       needsRetry = true;
       failures += 1;
       const delay = retryDelayMs(failures);
@@ -84,6 +93,7 @@ export function usePushTokenRegistration(): void {
         if (cancelled) return;
         if (!granted) {
           needsRetry = true;
+          report('permissionDenied');
           console.warn(
             '[push] notification permission not granted; device is not registered for dispatch alerts',
           );
@@ -101,6 +111,11 @@ export function usePushTokenRegistration(): void {
       }
     };
 
+    report('registering');
+    setPushRegistrationRetry(() => {
+      failures = 0;
+      void attempt();
+    });
     void attempt();
 
     const unsubscribeRefresh = bridge.onTokenRefresh((device) => {
@@ -119,6 +134,8 @@ export function usePushTokenRegistration(): void {
 
     return () => {
       cancelled = true;
+      setPushRegistration(null);
+      setPushRegistrationRetry(null);
       clearRetryTimer();
       unsubscribeRefresh();
       appStateSubscription.remove();

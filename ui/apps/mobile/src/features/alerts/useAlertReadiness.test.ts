@@ -1,6 +1,10 @@
 import notifee from '@notifee/react-native';
 import { NativeModules, Platform } from 'react-native';
-import { blockingReadinessItems, evaluateAlertReadiness } from './useAlertReadiness';
+import {
+  blockingReadinessItems,
+  evaluateAlertReadiness,
+  registrationReadinessItem,
+} from './useAlertReadiness';
 
 const nativeModules = NativeModules as { BoxalarmAlertReadiness?: unknown };
 const getNotificationSettings = notifee.getNotificationSettings as jest.Mock;
@@ -142,4 +146,25 @@ test('a blocked dispatch channel counts as notifications off', async () => {
 
   expect(blocking[0]).toMatchObject({ id: 'notifications', status: 'fail' });
   expect(blocking[0]!.detail).toMatch(/turned off for Boxalarm/);
+});
+
+describe('registration with the server (C1)', () => {
+  test('a phone not registered for the signed-in member blocks, and offers a retry', () => {
+    const item = registrationReadinessItem('B', { memberId: 'B', status: 'failed' });
+    expect(item).toMatchObject({ id: 'registration', status: 'fail', fixLabel: 'Try again' });
+    expect(item.detail).toMatch(/not registered for pages on this phone/i);
+    expect(blockingReadinessItems([item])).toHaveLength(1);
+  });
+
+  test("the previous member's registration does not count for the next one", () => {
+    const item = registrationReadinessItem('B', { memberId: 'A', status: 'registered' });
+    expect(item.status).not.toBe('ok');
+  });
+
+  test('registering is a warning (no red flash at sign-in); registered is ok', () => {
+    expect(registrationReadinessItem('A', null).status).toBe('warn');
+    expect(registrationReadinessItem('A', { memberId: 'A', status: 'registered' }).status).toBe(
+      'ok',
+    );
+  });
 });
