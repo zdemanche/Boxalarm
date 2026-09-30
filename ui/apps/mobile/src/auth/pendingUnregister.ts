@@ -125,11 +125,26 @@ export async function readPendingUnregisters(
   return readAll(deps);
 }
 
+/**
+ * Members whose pending revoke was cancelled by their own sign-in (N-m3). Kept for the rest of
+ * that sign-in (R2-M1): a retry that had already started reading the pending list - not yet
+ * tracked per member - must still find the cancellation before its DELETE. Cleared only when a
+ * new pending revoke is saved for the member (their next sign-out that could not reach the
+ * server).
+ */
+const cancelled = new Set<string>();
+
 /** Keeps (or replaces) the member's pending revoke. */
 export async function savePendingUnregister(
   deps: PendingUnregisterDeps,
   pending: PendingUnregister,
 ): Promise<void> {
+  // A new sign-out of this member: whatever cancelled their earlier revoke is over (R2-M1).
+  cancelled.delete(pending.memberId);
+  await writePending(deps, pending);
+}
+
+async function writePending(deps: PendingUnregisterDeps, pending: PendingUnregister) {
   await update(deps, (list) => ({
     next: [...list.filter((p) => p.memberId !== pending.memberId), pending],
     result: undefined,
@@ -153,8 +168,6 @@ function removePending(deps: PendingUnregisterDeps, memberId: string): Promise<b
  */
 export type PendingUnregisterOutcome = 'none' | 'done' | 'failed' | 'dropped';
 
-/** Members whose pending revoke was cancelled by their own sign-in (N-m3). */
-const cancelled = new Set<string>();
 const inFlightFor = new Map<string, Promise<PendingUnregisterOutcome>>();
 let inFlight: Promise<PendingUnregisterOutcome> | null = null;
 
@@ -185,7 +198,10 @@ async function retryOne(
     accessToken = result.accessToken;
     if (result.refreshToken && result.refreshToken !== refreshToken) {
       refreshToken = result.refreshToken;
-      await savePendingUnregister(deps, { ...pending, refreshToken });
+      // Never re-creates a record the member's sign-in has cancelled.
+      if (!cancelled.has(pending.memberId)) {
+        await writePending(deps, { ...pending, refreshToken });
+      }
     }
   } catch (error) {
     if (isInvalidGrant(error)) return drop('the refresh token was refused', null);
@@ -255,10 +271,6 @@ export async function cancelPendingUnregisterFor(
 ): Promise<void> {
   cancelled.add(memberId);
   const sending = inFlightFor.get(memberId);
-  // Kept until a retry already running has finished, so it cannot send its DELETE after the
-  // bounded wait below gives up on it.
-  if (sending) void sending.finally(() => cancelled.delete(memberId));
-  else cancelled.delete(memberId);
   const list = await readPendingUnregisters(deps).catch(() => []);
   const mine = list.find((p) => p.memberId === memberId);
   await removePending(deps, memberId).catch(() => false);

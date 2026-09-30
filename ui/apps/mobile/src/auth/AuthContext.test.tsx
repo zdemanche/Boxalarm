@@ -917,3 +917,48 @@ test('N-m4: a keychain read error at sign-out is not reported as pages stopped',
   await expect(contextValue!.signOut()).resolves.toEqual({ pushRevoked: false });
   expect(globalThis.fetch).not.toHaveBeenCalled();
 });
+
+// R2-M1: returning from the hosted sign-in page makes the app 'active', which starts a retry
+// that is still reading the pending list when the sign-in cancels the member's revoke.
+test('a retry still reading the pending list when the member signs back in never DELETEs their new registration', async () => {
+  const deps = makeDeps();
+  deps.revokeRefreshToken = jest.fn(async () => undefined);
+  const { savePendingUnregister, cancelPendingUnregisterFor } =
+    jest.requireActual('./pendingUnregister');
+  await savePendingUnregister(deps, {
+    memberId: 'MBR-R2',
+    deviceId: 'dev-1',
+    refreshToken: 'refresh-A',
+    apiBaseUrl: 'https://api.example.test',
+    savedAt: Date.now(),
+  });
+  const realGet = deps.getInternetCredentials;
+  let releaseRead: () => void = () => undefined;
+  deps.getInternetCredentials = jest.fn(async (server: string) => {
+    const value = await realGet(server);
+    await new Promise<void>((resolve) => {
+      releaseRead = resolve;
+    });
+    return value;
+  }) as unknown as AuthDeps['getInternetCredentials'];
+  deps.refresh = jest.fn(async () => ({
+    accessToken: 'a',
+    refreshToken: 'refresh-A',
+    accessTokenExpirationDate: new Date(Date.now() + 3600_000).toISOString(),
+    idToken: 'x',
+    tokenType: 'Bearer',
+  })) as unknown as AuthDeps['refresh'];
+  globalThis.fetch = jest.fn(async () => new Response('{}')) as unknown as typeof fetch;
+
+  const retrying = retryPendingUnregister(deps);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  // The retry's keychain read has not resolved; the member signs back in.
+  deps.getInternetCredentials = realGet;
+  const staleRead = releaseRead;
+  await cancelPendingUnregisterFor('MBR-R2', deps);
+  staleRead();
+  await retrying;
+
+  expect(deps.refresh).not.toHaveBeenCalled();
+  expect(globalThis.fetch).not.toHaveBeenCalled();
+});
