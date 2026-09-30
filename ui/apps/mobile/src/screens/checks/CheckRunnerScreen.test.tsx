@@ -116,6 +116,30 @@ test('critical items are never included in bulk OK', async () => {
   });
 
   expect(await findByText('Submit check — 1 unanswered')).toBeTruthy();
+  expect(await findByText('◆ Critical — answer this one yourself')).toBeTruthy();
+  // The critical item still needs its own answer: submit names it instead of sending.
+  await act(async () => {
+    fireEvent.press(await findByText('Submit check — 1 unanswered'));
+  });
+  expect((await screen.findByRole('alert')).props.children).toMatch(/Answer 1 more item.*Brakes/);
+
+  // Answered on its own, the critical item goes as ITEM; the bulk-passed one as BULK.
+  const submitSpy = jest.spyOn(mockChecksRepository, 'submitChecklistRun');
+  const brakesPass = (await screen.findAllByRole('radio')).filter(
+    (r) => r.props.accessibilityLabel === 'Pass',
+  )[1]!;
+  await act(async () => {
+    fireEvent.press(brakesPass);
+  });
+  await act(async () => {
+    fireEvent.press(await findByText('Submit check'));
+  });
+  expect(submitSpy.mock.calls[0]?.[0].itemResults).toEqual([
+    { code: 'A', pass: true, answeredBy: 'ITEM' },
+    { code: 'B', pass: true, answeredBy: 'ITEM' },
+    { code: 'C', pass: true, answeredBy: 'BULK' },
+  ]);
+  submitSpy.mockRestore();
   spy.mockRestore();
 });
 
@@ -177,6 +201,7 @@ test('a failed item becomes a pre-filled defect report on submit, so it reaches 
     code: 'TIRES',
     pass: false,
     note: 'Sidewall cut, left front',
+    answeredBy: 'ITEM',
   });
   expect(await findByText('Reported to the apparatus officer:')).toBeTruthy();
   expect(await findByText('✕ Tires and wheels — Out of service now')).toBeTruthy();
@@ -371,7 +396,7 @@ test('a failed local save does not confirm the check, and a retry reuses the ide
   submitSpy.mockRestore();
 });
 
-test('a photo on a failed item goes with its defect; one on a passing item is reported as not sent', async () => {
+test('a photo on a failed item goes with its defect; one on a passing item goes with the check', async () => {
   const templateSpy = jest
     .spyOn(mockChecksRepository, 'getChecklistTemplate')
     .mockResolvedValueOnce({
@@ -383,6 +408,8 @@ test('a photo on a failed item goes with its defect; one on a passing item is re
       ],
     });
   const defectSpy = jest.spyOn(mockChecksRepository, 'submitDefect');
+  const photoSpy = jest.fn().mockResolvedValue(undefined);
+  (mockChecksRepository as { submitCheckPhoto?: unknown }).submitCheckPhoto = photoSpy;
   mockLaunchCamera
     .mockResolvedValueOnce({
       didCancel: false,
@@ -416,7 +443,20 @@ test('a photo on a failed item goes with its defect; one on a passing item is re
   expect(defectSpy).toHaveBeenCalledWith(
     expect.objectContaining({ photoLocalUri: 'file:///tmp/hose.jpg', photoFileName: 'hose.jpg' }),
   );
-  expect(await findByText(/1 photo taken on items that passed was not sent/)).toBeTruthy();
+  // The passed item's photo is attached to the run (keyed by the run's idempotency key).
+  expect(photoSpy).toHaveBeenCalledTimes(1);
+  expect(photoSpy).toHaveBeenCalledWith(
+    expect.objectContaining({
+      apparatusId: 'APP-ENGINE-2',
+      checkKey: expect.stringMatching(/^check-/),
+      itemCode: 'SCBA',
+      photoLocalUri: 'file:///tmp/scba.jpg',
+      photoFileName: 'scba.jpg',
+    }),
+  );
+  expect(await findByText(/1 photo on items that passed goes with the check/)).toBeTruthy();
+  expect(screen.queryByText(/not sent/)).toBeNull();
+  delete (mockChecksRepository as { submitCheckPhoto?: unknown }).submitCheckPhoto;
   templateSpy.mockRestore();
   defectSpy.mockRestore();
 });
@@ -551,4 +591,48 @@ test('a defect closed during the check is re-read at submit, so the failure is f
   expect(defectSpy).toHaveBeenCalledTimes(1);
   defectSpy.mockRestore();
   restore();
+});
+
+test('a known defect is matched on its item code, not its description', async () => {
+  const restore = withOpenDefects([
+    // Filed against TIRES under an older label: still the same item.
+    {
+      defectId: 'd-20',
+      description: 'Rear tire flat',
+      severity: 'MAJOR',
+      reportedAt: 1,
+      itemCode: 'TIRES',
+    },
+    // Reads like a FLUIDS failure, but it was filed against another item: not FLUIDS.
+    {
+      defectId: 'd-21',
+      description: 'Failed on the APP-ENGINE-2 truck check: Fluid levels.',
+      severity: 'MAJOR',
+      reportedAt: 1,
+      itemCode: 'HOSE',
+    },
+  ]);
+  const defectSpy = jest.spyOn(mockChecksRepository, 'submitDefect');
+  const { findByText, findAllByRole } = await render(<CheckRunnerScreen />);
+
+  await findByText('Tires and wheels');
+  const fails = (await findAllByRole('radio')).filter((r) => r.props.accessibilityLabel === 'Fail');
+  await act(async () => {
+    fireEvent.press(fails[0]!);
+  });
+  await act(async () => {
+    fireEvent.press(fails[1]!);
+  });
+  await act(async () => {
+    fireEvent.press(await findByText('Mark the other 3 OK'));
+  });
+  await act(async () => {
+    fireEvent.press(await findByText('Submit check'));
+  });
+
+  // TIRES is already open (skipped); FLUIDS is new and filed with its item code.
+  expect(defectSpy).toHaveBeenCalledTimes(1);
+  expect(defectSpy.mock.calls[0]?.[0]).toMatchObject({ itemCode: 'FLUIDS' });
+  restore();
+  defectSpy.mockRestore();
 });

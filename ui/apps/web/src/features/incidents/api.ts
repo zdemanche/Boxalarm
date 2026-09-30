@@ -16,6 +16,7 @@ import type {
   NerisSchemaResponse,
   PutExposureInput,
   PutExposureResponse,
+  RecentDispatchPage,
   ResponseUnit,
   ResubmitResponse,
   SearchIncidentsParams,
@@ -45,6 +46,19 @@ export async function searchIncidents(
   const response = await apiRequest(`incidents?${qs.toString()}`, tokens);
   const body = (await response.json()) as { incidents: Incident[] };
   return body.incidents;
+}
+
+/**
+ * The department's dispatches to start a report from, newest first: without a cursor, every
+ * dispatch of the last 72 hours; with the returned cursor, older ones a page at a time.
+ */
+export async function listRecentDispatches(
+  tokens: AuthTokenSource,
+  cursor?: string,
+): Promise<RecentDispatchPage> {
+  const qs = cursor ? `?${new URLSearchParams({ cursor }).toString()}` : '';
+  const response = await apiRequest(`incidents/dispatches${qs}`, tokens);
+  return (await response.json()) as RecentDispatchPage;
 }
 
 export async function getIncident(

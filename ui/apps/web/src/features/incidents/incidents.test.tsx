@@ -255,6 +255,10 @@ test('chief creates a report from a dispatch and sees the prefilled fields', asy
   });
   server.use(
     http.get('/api/v1/incidents', () => HttpResponse.json({ incidents: [] })),
+    // The typed Dispatch ID is only the fallback when the dispatch list can't load.
+    http.get('/api/v1/incidents/dispatches', () =>
+      HttpResponse.json({ title: 'Service Unavailable', status: 503 }, { status: 503 }),
+    ),
     http.post('/api/v1/incidents', async ({ request }) => {
       const body = (await request.json()) as { dispatchId: string };
       expect(body).toEqual({ dispatchId: 'd-1' });
@@ -266,7 +270,7 @@ test('chief creates a report from a dispatch and sees the prefilled fields', asy
   const user = userEvent.setup();
   renderIncidents(['CHIEF']);
   await screen.findByRole('heading', { name: 'Incidents' });
-  await user.type(screen.getByLabelText('Dispatch ID'), 'd-1');
+  await user.type(await screen.findByLabelText('Dispatch ID'), 'd-1');
   await user.click(screen.getByRole('button', { name: 'Create report' }));
 
   await screen.findByRole('heading', { level: 1, name: /212 Church Hill Rd/ });
@@ -291,6 +295,9 @@ test('chief creates a report from a dispatch and sees the prefilled fields', asy
 test('unknown dispatch shows the problem title and detail and moves focus to it', async () => {
   server.use(
     http.get('/api/v1/incidents', () => HttpResponse.json({ incidents: [] })),
+    http.get('/api/v1/incidents/dispatches', () =>
+      HttpResponse.json({ title: 'Service Unavailable', status: 503 }, { status: 503 }),
+    ),
     http.post('/api/v1/incidents', () =>
       HttpResponse.json(
         {
@@ -308,7 +315,7 @@ test('unknown dispatch shows the problem title and detail and moves focus to it'
   const user = userEvent.setup();
   renderIncidents(['OFFICER']);
   await screen.findByRole('heading', { name: 'Incidents' });
-  await user.type(screen.getByLabelText('Dispatch ID'), 'missing');
+  await user.type(await screen.findByLabelText('Dispatch ID'), 'missing');
   await user.click(screen.getByRole('button', { name: 'Create report' }));
 
   const alert = await screen.findByRole('alert');
@@ -1180,27 +1187,30 @@ test('an edit refused with 409 INCIDENT_LOCKED shows the server message', async 
   ).toBeGreaterThan(0);
 });
 
-test('an officer starts a report from a recent call, with no Dispatch ID typed', async () => {
+test('an officer starts a report from a recent dispatch, with no Dispatch ID typed', async () => {
   let posted: unknown;
+  const now = Math.floor(Date.now() / 1000);
   server.use(
-    http.get('/api/v1/incidents', () =>
+    http.get('/api/v1/incidents', () => HttpResponse.json({ incidents: [] })),
+    http.get('/api/v1/incidents/dispatches', () =>
       HttpResponse.json({
-        incidents: [],
-      }),
-    ),
-    http.get('/api/v1/alerting/dispatches', () =>
-      HttpResponse.json({
-        asOf: 1_700_000_500,
-        activeWindowSeconds: 7200,
-        truncated: false,
+        recentWindowHours: 72,
+        nextCursor: null,
         dispatches: [
           {
             dispatchId: 'd-recent',
             incidentType: 'Structure fire',
             address: '18 Nichols Ave',
-            crossStreets: null,
-            dispatchedAt: 1_700_000_000,
-            toneLadder: { status: 'ACTIVE', currentToneSequence: 1 },
+            // Two days ago: past the alerting plane's active window, inside the 72 hours.
+            dispatchedAt: now - 48 * 3600,
+            report: null,
+          },
+          {
+            dispatchId: 'd-done',
+            incidentType: 'MVA',
+            address: '5 Main St',
+            dispatchedAt: now - 3 * 3600,
+            report: { incidentId: 'd-done', status: 'DRAFT' },
           },
         ],
       }),
@@ -1217,12 +1227,88 @@ test('an officer starts a report from a recent call, with no Dispatch ID typed',
   const user = userEvent.setup();
   renderIncidents(['OFFICER']);
   await screen.findByRole('heading', { name: 'Incidents' });
-  const recent = await screen.findByRole('list', { name: 'Recent calls without a report' });
+  const recent = await screen.findByRole('list', { name: 'Dispatches in the last 72 hours' });
   expect(recent.textContent).toContain('18 Nichols Ave');
+  // A dispatch with a report links to it instead of offering a second one.
+  expect(within(recent).getByRole('link', { name: 'Open report (Draft)' })).toBeTruthy();
+  expect(screen.queryByLabelText('Dispatch ID')).toBeNull();
   await user.click(
     screen.getByRole('button', { name: 'Start report for Structure fire at 18 Nichols Ave' }),
   );
 
   await screen.findByRole('alert');
   expect(posted).toEqual({ dispatchId: 'd-recent' });
+});
+
+test('older dispatches load a page at a time with the cursor', async () => {
+  const now = Math.floor(Date.now() / 1000);
+  const cursors: (string | null)[] = [];
+  server.use(
+    http.get('/api/v1/incidents', () => HttpResponse.json({ incidents: [] })),
+    http.get('/api/v1/incidents/dispatches', ({ request }) => {
+      const cursor = new URL(request.url).searchParams.get('cursor');
+      cursors.push(cursor);
+      return HttpResponse.json(
+        cursor
+          ? {
+              recentWindowHours: 72,
+              nextCursor: null,
+              dispatches: [
+                {
+                  dispatchId: 'd-old',
+                  incidentType: 'Brush fire',
+                  address: '9 Old Rd',
+                  dispatchedAt: now - 10 * 86400,
+                  report: null,
+                },
+              ],
+            }
+          : { recentWindowHours: 72, nextCursor: 'c-older', dispatches: [] },
+      );
+    }),
+  );
+
+  const user = userEvent.setup();
+  renderIncidents(['CHIEF']);
+  expect(await screen.findByText('No dispatches in the last 72 hours.')).toBeTruthy();
+  await user.click(screen.getByRole('button', { name: 'Load older dispatches' }));
+  const older = await screen.findByRole('list', { name: 'Older dispatches' });
+  expect(older.textContent).toContain('9 Old Rd');
+  expect(cursors).toEqual([null, 'c-older']);
+  expect(screen.queryByRole('button', { name: 'Load older dispatches' })).toBeNull();
+});
+
+test('an unparsed CAD dispatch shows a VERIFY marker and its text, not the placeholder address', async () => {
+  const now = Math.floor(Date.now() / 1000);
+  server.use(
+    http.get('/api/v1/incidents', () => HttpResponse.json({ incidents: [] })),
+    http.get('/api/v1/incidents/dispatches', () =>
+      HttpResponse.json({
+        recentWindowHours: 72,
+        nextCursor: null,
+        dispatches: [
+          {
+            dispatchId: 'd-raw',
+            incidentType: 'STRUCTURE FIRE',
+            address: 'SEE DISPATCH TEXT',
+            dispatchedAt: now - 600,
+            report: null,
+            verifyRequired: true,
+            textExcerpt: 'STRUC FIRE 12 ELM ST X OAK',
+          },
+        ],
+      }),
+    ),
+  );
+
+  renderIncidents(['OFFICER']);
+  const recent = await screen.findByRole('list', { name: 'Dispatches in the last 72 hours' });
+  expect(recent.textContent).toContain('VERIFY');
+  expect(recent.textContent).toContain('STRUC FIRE 12 ELM ST X OAK');
+  expect(recent.textContent).not.toContain('SEE DISPATCH TEXT');
+  expect(
+    within(recent).getByRole('button', {
+      name: 'Start report for STRUCTURE FIRE at unverified location: "STRUC FIRE 12 ELM ST X OAK"',
+    }),
+  ).toBeTruthy();
 });

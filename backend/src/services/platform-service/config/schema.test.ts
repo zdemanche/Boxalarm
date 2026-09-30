@@ -187,6 +187,51 @@ describe('validateConfigValue', () => {
         message: 'is required and must be a boolean',
       });
     });
+
+    it('accepts critical: true and false on an item', () => {
+      const errors = validateConfigValue('CHECKLIST_DEFAULTS', {
+        items: [
+          { code: 'BRAKES', label: 'Brakes', requiresPhoto: false, critical: true },
+          { code: 'OIL', label: 'Check oil', requiresPhoto: true, critical: false },
+        ],
+      });
+      expect(errors).toEqual([]);
+    });
+
+    it('rejects a hand-typed code the defect and photo routes could not carry', () => {
+      for (const code of ['Brake pressure', 'SCBA/PSI', '_LEAD', 'X'.repeat(65)]) {
+        const errors = validateConfigValue('CHECKLIST_DEFAULTS', {
+          items: [{ code, label: 'Brakes', requiresPhoto: false }],
+        });
+        expect(
+          errors.map((e) => e.field),
+          code,
+        ).toContain('items[0].code');
+      }
+    });
+
+    it('rejects two items with the same code', () => {
+      const errors = validateConfigValue('CHECKLIST_DEFAULTS', {
+        items: [
+          { code: 'LIGHTS', label: 'Lights', requiresPhoto: false },
+          { code: 'LIGHTS', label: 'Lights again', requiresPhoto: false },
+        ],
+      });
+      expect(errors).toContainEqual({
+        field: 'items[1].code',
+        message: 'duplicates another item\'s code "LIGHTS"',
+      });
+    });
+
+    it('rejects a non-boolean critical', () => {
+      const errors = validateConfigValue('CHECKLIST_DEFAULTS', {
+        items: [{ code: 'BRAKES', label: 'Brakes', requiresPhoto: false, critical: 'yes' }],
+      });
+      expect(errors).toContainEqual({
+        field: 'items[0].critical',
+        message: 'must be a boolean when provided',
+      });
+    });
   });
 
   describe('RETENTION', () => {

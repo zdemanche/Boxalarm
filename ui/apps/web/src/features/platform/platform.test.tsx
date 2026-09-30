@@ -596,3 +596,129 @@ test('malformed RFC 7807 errors entries are dropped, not rendered (m1)', async (
   expect(alert?.querySelectorAll('li').length).toBe(1);
   expect(screen.getByText(/is kept/)).toBeTruthy();
 });
+
+// Radix Checkbox measures itself with ResizeObserver, which jsdom lacks.
+function stubResizeObserver() {
+  vi.stubGlobal(
+    'ResizeObserver',
+    class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    },
+  );
+}
+
+test('the check sheet editor marks an item critical and saves it', async () => {
+  stubResizeObserver();
+  let putBody: unknown;
+  server.use(
+    http.get('/api/v1/platform/config/CHECKLIST_DEFAULTS', () =>
+      HttpResponse.json({
+        configType: 'CHECKLIST_DEFAULTS',
+        value: { items: [{ code: 'BRAKES', label: 'Brakes', requiresPhoto: false }] },
+        version: 4,
+        updatedAt: '2026-01-01T00:00:00.000Z',
+        updatedBy: 'admin-1',
+      }),
+    ),
+    http.put('/api/v1/platform/config/CHECKLIST_DEFAULTS', async ({ request }) => {
+      putBody = await request.json();
+      return HttpResponse.json({
+        configType: 'CHECKLIST_DEFAULTS',
+        value: (putBody as { value: unknown }).value,
+        version: 5,
+        updatedAt: '2026-01-02T00:00:00.000Z',
+        updatedBy: 'admin-1',
+      });
+    }),
+    ...settingsDefaultHandlers(),
+  );
+
+  const user = userEvent.setup();
+  renderRoute(['ADMIN'], '/settings');
+  const sheet = await screen.findByRole('form', { name: 'Check sheet' });
+  expect((within(sheet).getByLabelText('What to check') as HTMLInputElement).value).toBe('Brakes');
+  await user.click(within(sheet).getByLabelText('Critical — must be answered on its own'));
+  await user.click(within(sheet).getByRole('button', { name: 'Add item' }));
+  const labels = within(sheet).getAllByLabelText('What to check');
+  await user.type(labels[1]!, 'SCBA pressure');
+  await user.click(within(sheet).getByRole('button', { name: 'Save check sheet' }));
+
+  await waitFor(() =>
+    expect(within(sheet).getByRole('status').textContent).toBe('Check sheet saved.'),
+  );
+  expect(putBody).toEqual({
+    value: {
+      items: [
+        { code: 'BRAKES', label: 'Brakes', requiresPhoto: false, critical: true },
+        { code: 'SCBA_PRESSURE', label: 'SCBA pressure', requiresPhoto: false, critical: false },
+      ],
+    },
+    expectedVersion: 4,
+  });
+});
+
+test('the check sheet editor refuses two items with the same code', async () => {
+  stubResizeObserver();
+  server.use(
+    http.get('/api/v1/platform/config/CHECKLIST_DEFAULTS', () =>
+      HttpResponse.json({
+        configType: 'CHECKLIST_DEFAULTS',
+        value: {
+          items: [
+            { code: 'LIGHTS', label: 'Lights', requiresPhoto: false },
+            { code: 'LIGHTS', label: 'Lights again', requiresPhoto: false },
+          ],
+        },
+        version: 1,
+        updatedAt: '2026-01-01T00:00:00.000Z',
+        updatedBy: 'admin-1',
+      }),
+    ),
+    ...settingsDefaultHandlers(),
+  );
+
+  const user = userEvent.setup();
+  renderRoute(['ADMIN'], '/settings');
+  const sheet = await screen.findByRole('form', { name: 'Check sheet' });
+  await within(sheet).findAllByLabelText('What to check');
+  await user.click(within(sheet).getByRole('button', { name: 'Save check sheet' }));
+  expect((await within(sheet).findByRole('alert')).textContent).toContain(
+    'Two items have the code LIGHTS',
+  );
+});
+
+test('the check sheet editor refuses a hand-typed code the truck check could not send', async () => {
+  stubResizeObserver();
+  let puts = 0;
+  server.use(
+    http.get('/api/v1/platform/config/CHECKLIST_DEFAULTS', () =>
+      HttpResponse.json({
+        configType: 'CHECKLIST_DEFAULTS',
+        value: { items: [{ code: 'BRAKES', label: 'Brakes', requiresPhoto: false }] },
+        version: 1,
+        updatedAt: '2026-01-01T00:00:00.000Z',
+        updatedBy: 'admin-1',
+      }),
+    ),
+    http.put('/api/v1/platform/config/CHECKLIST_DEFAULTS', () => {
+      puts += 1;
+      return HttpResponse.json({});
+    }),
+    ...settingsDefaultHandlers(),
+  );
+
+  const user = userEvent.setup();
+  renderRoute(['ADMIN'], '/settings');
+  const sheet = await screen.findByRole('form', { name: 'Check sheet' });
+  const code = await within(sheet).findByLabelText(/^Code/);
+  await user.clear(code);
+  await user.type(code, 'Brake pressure');
+  await user.click(within(sheet).getByRole('button', { name: 'Save check sheet' }));
+
+  const alerts = await within(sheet).findAllByRole('alert');
+  expect(alerts.map((a) => a.textContent).join(' ')).toContain("the truck check can't send");
+  expect(code.getAttribute('aria-invalid')).toBe('true');
+  expect(puts).toBe(0);
+});

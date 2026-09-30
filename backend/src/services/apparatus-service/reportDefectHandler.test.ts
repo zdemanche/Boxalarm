@@ -248,6 +248,69 @@ describe('reportDefect handler', () => {
     });
   });
 
+  it('stores the check-sheet itemCode on the defect, its event and its response', async () => {
+    const client = fakeDynamoClient({});
+    const { createReportDefectHandler } = await import('./reportDefectHandler.js');
+    const handler = createReportDefectHandler({
+      client,
+      authzClient: fakeAuthzClient('ALLOW'),
+      now: () => 1798050000,
+      newDefectId: () => 'DEF-0034',
+    });
+
+    const result = await handler(
+      buildEvent(
+        JSON.stringify({
+          description: 'Failed on the E1 truck check: Brakes.',
+          severity: 'MAJOR',
+          itemCode: 'BRAKES',
+        }),
+      ),
+    );
+
+    expect(result).toMatchObject({ statusCode: 201 });
+    expect(JSON.parse((result as { body: string }).body)).toMatchObject({ itemCode: 'BRAKES' });
+    const transact = (client.send as ReturnType<typeof vi.fn>).mock.calls.find(
+      (call) => call[0] instanceof TransactWriteCommand,
+    )?.[0] as TransactWriteCommand;
+    expect(transact.input.TransactItems?.[0]?.Put?.Item).toMatchObject({ itemCode: 'BRAKES' });
+    expect(
+      (transact.input.TransactItems?.[1]?.Put?.Item as { payload: Record<string, unknown> })
+        .payload,
+    ).toMatchObject({ itemCode: 'BRAKES' });
+  });
+
+  it('a hand-typed defect has no itemCode, and a malformed one is dropped, not refused', async () => {
+    const client = fakeDynamoClient({});
+    const { createReportDefectHandler } = await import('./reportDefectHandler.js');
+    const handler = createReportDefectHandler({
+      client,
+      authzClient: fakeAuthzClient('ALLOW'),
+      now: () => 1798050000,
+      newDefectId: () => 'DEF-0035',
+    });
+
+    const typed = await handler(
+      buildEvent(JSON.stringify({ description: 'Cracked mirror', severity: 'MINOR' })),
+    );
+    expect(JSON.parse((typed as { body: string }).body)).toMatchObject({ itemCode: null });
+    const transact = (client.send as ReturnType<typeof vi.fn>).mock.calls.find(
+      (call) => call[0] instanceof TransactWriteCommand,
+    )?.[0] as TransactWriteCommand;
+    expect(transact.input.TransactItems?.[0]?.Put?.Item).not.toHaveProperty('itemCode');
+
+    // A malformed code never costs the defect: it is filed without the code.
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const bad = await handler(
+      buildEvent(
+        JSON.stringify({ description: 'x', severity: 'MINOR', itemCode: 'Brake pressure' }),
+      ),
+    );
+    expect(bad).toMatchObject({ statusCode: 201 });
+    expect(JSON.parse((bad as { body: string }).body)).toMatchObject({ itemCode: null });
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('apparatus.defect.itemCodeIgnored'));
+  });
+
   it('signs a photo upload URL when photo.filename is provided (training attachment pattern)', async () => {
     const { createReportDefectHandler } = await import('./reportDefectHandler.js');
     const handler = createReportDefectHandler({
@@ -274,6 +337,36 @@ describe('reportDefect handler', () => {
     };
     expect(body.photoS3Key).toBe('NICHOLS/defect/DEF-0033/photo.jpg');
     expect(body.uploadUrl).toContain(body.photoS3Key);
+  });
+
+  it('an OUT_OF_SERVICE defect with a malformed itemCode still takes the unit out of service (review M1)', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const setServiceStatus = vi.fn().mockResolvedValue(undefined);
+    const { createReportDefectHandler } = await import('./reportDefectHandler.js');
+    const handler = createReportDefectHandler({
+      client: fakeDynamoClient({}),
+      authzClient: fakeAuthzClient('ALLOW'),
+      now: () => 1798050000,
+      newDefectId: () => 'DEF-0100',
+      setServiceStatus,
+    });
+
+    const result = await handler(
+      buildEvent(
+        JSON.stringify({
+          description: 'Failed on the E1 truck check: Brakes.',
+          severity: 'OUT_OF_SERVICE',
+          itemCode: 'Brake pressure',
+        }),
+      ),
+    );
+
+    expect(result).toMatchObject({ statusCode: 201 });
+    expect(setServiceStatus).toHaveBeenCalledWith(
+      expect.anything(),
+      'platform-table',
+      expect.objectContaining({ unitId: 'E1', status: 'OUT_OF_SERVICE' }),
+    );
   });
 
   it('triggers OUT_OF_SERVICE transition when severity is OUT_OF_SERVICE without re-entering apparatus details', async () => {

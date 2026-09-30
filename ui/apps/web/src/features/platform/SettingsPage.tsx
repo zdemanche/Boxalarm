@@ -1,5 +1,6 @@
 import { Link } from 'react-router-dom';
 import { Card, PageHeader } from '../../components/ui';
+import { CheckSheetEditor } from './CheckSheetEditor';
 import { ExportSection } from './ExportSection';
 import { JsonConfigEditor } from './JsonConfigEditor';
 import { RetentionSection } from './RetentionSection';
@@ -32,12 +33,6 @@ const CONFIG_SECTIONS: {
       'Paging timers and the ladder stop rule, e.g. {"escalationThresholdN":90,"toneLadder":{"tone2AtSeconds":180,"tone3AtSeconds":360},"defaultRule":{"minResponders":3,"requiredQuals":["INTERIOR"]}}. escalationThresholdN (30-900 s) is how long Boxalarm waits before calling a member who has not answered by voice; push and SMS go out together at the page. Tones 2 and 3 re-page everyone until minResponders have answered RESPONDING.',
   },
   {
-    configType: 'CHECKLIST_DEFAULTS',
-    label: 'Checklist templates',
-    helpText:
-      'Checklist items, e.g. {"items":[{"code":"LIGHTS","label":"Lights","requiresPhoto":false}]}',
-  },
-  {
     configType: 'NERIS',
     label: 'NERIS reporting',
     helpText:
@@ -61,6 +56,7 @@ export function SettingsPage() {
           helpText={section.helpText}
         />
       ))}
+      <CheckSheetEditor />
       <RetentionSection />
       <ExportSection />
     </main>

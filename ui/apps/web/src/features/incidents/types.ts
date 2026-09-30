@@ -271,3 +271,26 @@ export interface NerisSchemaResponse {
   incidentTypes: NerisIncidentType[];
   modules: Partial<Record<string, NerisModuleSchema>>;
 }
+
+/** GET /incidents/dispatches: a dispatch to start a report from (incident-service's copy). */
+export interface RecentDispatch {
+  dispatchId: string;
+  incidentType: string;
+  address: string;
+  /** Epoch seconds. */
+  dispatchedAt: number;
+  /** The report already started from this dispatch, if any. */
+  report: { incidentId: string; status: IncidentStatus } | null;
+  /** A CAD dispatch that couldn't be parsed: its address is a placeholder. */
+  verifyRequired?: true;
+  /** The start of its dispatch text, sent with verifyRequired. */
+  textExcerpt?: string;
+}
+
+export interface RecentDispatchPage {
+  /** The first page is every dispatch of this many hours. */
+  recentWindowHours: number;
+  dispatches: RecentDispatch[];
+  /** Pass back to read older dispatches; null when there are none. */
+  nextCursor: string | null;
+}

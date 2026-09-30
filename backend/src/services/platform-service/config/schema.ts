@@ -259,12 +259,19 @@ function validateAlertRules(value: Record<string, unknown>): FieldError[] {
   return errors;
 }
 
+/**
+ * A check-sheet item code: the defect and check-photo routes carry it (and the photo route puts it
+ * in a storage key), so it is held to their safe shape here, where it is authored.
+ */
+export const CHECKLIST_ITEM_CODE = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/;
+
 function validateChecklistDefaults(value: Record<string, unknown>): FieldError[] {
   const errors: FieldError[] = [...unknownFieldErrors(value, ['items'])];
   if (!Array.isArray(value.items) || value.items.length === 0) {
     errors.push({ field: 'items', message: 'is required and must be a non-empty array' });
     return errors;
   }
+  const seenCodes = new Set<string>();
   value.items.forEach((item, index) => {
     const prefix = `items[${index}]`;
     if (!isPlainObject(item)) {
@@ -276,6 +283,20 @@ function validateChecklistDefaults(value: Record<string, unknown>): FieldError[]
         field: `${prefix}.code`,
         message: 'is required and must be a non-empty string',
       });
+    } else if (!CHECKLIST_ITEM_CODE.test(item.code)) {
+      errors.push({
+        field: `${prefix}.code`,
+        message:
+          'must be 1-64 letters, digits, "_", "." or "-", starting with a letter or digit (e.g. BRAKE_PRESSURE)',
+      });
+    } else if (seenCodes.has(item.code)) {
+      // The truck check keys each answer by code: two items with one code collapse into one.
+      errors.push({
+        field: `${prefix}.code`,
+        message: `duplicates another item's code "${item.code}"`,
+      });
+    } else {
+      seenCodes.add(item.code);
     }
     if (!isNonEmptyString(item.label)) {
       errors.push({
@@ -289,7 +310,13 @@ function validateChecklistDefaults(value: Record<string, unknown>): FieldError[]
         message: 'is required and must be a boolean',
       });
     }
-    errors.push(...unknownFieldErrors(item, ['code', 'label', 'requiresPhoto'], `${prefix}.`));
+    // Optional: absent reads as not critical, so sheets saved before the flag stay valid.
+    if (item.critical !== undefined && typeof item.critical !== 'boolean') {
+      errors.push({ field: `${prefix}.critical`, message: 'must be a boolean when provided' });
+    }
+    errors.push(
+      ...unknownFieldErrors(item, ['code', 'label', 'requiresPhoto', 'critical'], `${prefix}.`),
+    );
   });
   return errors;
 }

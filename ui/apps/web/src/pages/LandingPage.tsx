@@ -2,9 +2,10 @@ import { useQuery } from '@tanstack/react-query';
 import { Link, Navigate } from 'react-router-dom';
 import { spacing, typography } from '@boxalarm/design-tokens';
 import { useAuth, type Role } from '../auth/AuthContext';
-import { primaryRole } from '../auth/roles';
+import { canUpdateServiceStatus, primaryRole } from '../auth/roles';
 import { canAccessPath, firstGrantedNavPath } from '../routing/routeTable';
 import { listApparatus } from '../features/apparatus/api';
+import { ApparatusToDo } from '../features/apparatus/ApparatusToDo';
 import { listActiveDispatches } from '../features/alerts/api';
 import type { ActiveDispatchList } from '../features/alerts/types';
 import { listMembers } from '../features/personnel/api';
@@ -387,6 +388,9 @@ function CommandConsole() {
       )}
 
       <div className={styles.sectionGrid}>
+        {/* Checks due and open defects: the compliance read is the apparatus-officer tier
+            (Cedar GetComplianceReport, the same groups as UpdateServiceStatus). */}
+        {canViewApparatus && canUpdateServiceStatus(auth.roles) ? <ApparatusToDo /> : null}
         <TodaysShifts />
         {canViewExpiring ? (
           <ExpiringCertifications

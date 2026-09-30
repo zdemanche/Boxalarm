@@ -62,11 +62,13 @@ interface CheckDraft {
   readonly notes: Record<string, string>;
   /** The captured photo per item (its local file), so it can ride on the defect it backs. */
   readonly photos: Record<string, CapturedPhoto>;
+  /** Items passed by "Mark the other N OK" (absent in drafts from before it was kept). */
+  readonly bulk?: Record<string, true>;
 }
 
 interface CompletedSummary {
-  /** Photos taken on items that passed: the check-run API has no field for them. */
-  readonly photosNotSent: number;
+  /** Photos taken on items that passed, queued to go up with the check. */
+  readonly passedItemPhotos: number;
   readonly passed: number;
   readonly defects: { label: string; severity: DefectSeverity; plan: DefectPlan }[];
   readonly durationSeconds: number;
@@ -82,19 +84,22 @@ export function defectDescription(unitId: string, item: ChecklistItem, note: str
   return note.trim() ? `${base} ${note.trim()}` : base;
 }
 
-/** An open defect a previous check already filed for this unit and item. The defect API has no
- * item field, so this matches the description the runner writes; defects typed by hand on the
- * Report a defect screen can't be matched. */
+/** An open defect a previous check already filed for this unit and item. The list is this
+ * unit's open defects, so matching the item's code is a unit + item match. A defect with no item
+ * code (hand-typed, or filed before defects carried one) falls back to the description the
+ * runner writes; one typed by hand on the Report a defect screen can't be matched that way. */
 export function findKnownDefect(
   openDefects: readonly OpenDefect[],
   unitId: string,
   item: ChecklistItem,
 ): OpenDefect | undefined {
   const prefix = defectPrefix(unitId, item);
-  // The most severe matching one: an escalation keeps the same prefix, so later checks compare
-  // against the escalated severity.
+  // The most severe matching one: an escalation carries the same item code, so later checks
+  // compare against the escalated severity.
   return openDefects
-    .filter((defect) => defect.description.startsWith(prefix))
+    .filter((defect) =>
+      defect.itemCode ? defect.itemCode === item.code : defect.description.startsWith(prefix),
+    )
     .sort((a, b) => SEVERITY_RANK[b.severity] - SEVERITY_RANK[a.severity])[0];
 }
 
@@ -139,6 +144,8 @@ export function CheckRunnerScreen() {
   const [templateAttempt, setTemplateAttempt] = useState(0);
   const [hydrated, setHydrated] = useState(false);
   const [results, setResults] = useState<Record<string, boolean>>({});
+  // Items answered by "Mark the other N OK" rather than on their own (sent as answeredBy).
+  const [bulk, setBulk] = useState<Record<string, true>>({});
   const [severities, setSeverities] = useState<Record<string, DefectSeverity>>({});
   const [notes, setNotes] = useState<Record<string, string>>({});
   const [photosCaptured, setPhotosCaptured] = useState<Record<string, CapturedPhoto>>({});
@@ -203,6 +210,7 @@ export function CheckRunnerScreen() {
           Object.keys(draft.value.results).length > 0
         ) {
           setResults(draft.value.results);
+          setBulk(draft.value.bulk ?? {});
           setSeverities(draft.value.severities);
           setNotes(draft.value.notes);
           // Drafts from before photos were kept stored `true`; those have no file to send.
@@ -252,6 +260,7 @@ export function CheckRunnerScreen() {
       severities,
       notes,
       photos: photosCaptured,
+      bulk,
     };
     if (draftKey) void kvSet(draftKey, draft);
   }, [
@@ -262,6 +271,7 @@ export function CheckRunnerScreen() {
     severities,
     notes,
     photosCaptured,
+    bulk,
     startedAt,
     idempotencyKey,
     draftKey,
@@ -283,6 +293,12 @@ export function CheckRunnerScreen() {
   const answer = useCallback((code: string, pass: boolean, knownSeverity?: DefectSeverity) => {
     setSubmitError(null);
     setResults((prev) => ({ ...prev, [code]: pass }));
+    setBulk((prev) => {
+      if (!prev[code]) return prev;
+      const next = { ...prev };
+      delete next[code];
+      return next;
+    });
     if (!pass) {
       // A known defect starts at its reported severity, so failing it again adds nothing unless
       // the member raises it or adds a note or photo.
@@ -378,6 +394,11 @@ export function CheckRunnerScreen() {
       for (const item of markableAsOk) next[item.code] = true;
       return next;
     });
+    setBulk((prev) => {
+      const next = { ...prev };
+      for (const item of markableAsOk) next[item.code] = true;
+      return next;
+    });
     AccessibilityInfo.announceForAccessibility(
       `${markableAsOk.length} items marked Pass. ${total - unanswered.length + markableAsOk.length} of ${total} checked.`,
     );
@@ -399,6 +420,7 @@ export function CheckRunnerScreen() {
         code: item.code,
         pass: results[item.code] ?? false,
         ...(note ? { note } : {}),
+        answeredBy: bulk[item.code] ? 'BULK' : 'ITEM',
       };
     });
     const failedItems = template.items.filter((item) => results[item.code] === false);
@@ -442,6 +464,19 @@ export function CheckRunnerScreen() {
         idempotencyKey,
         capturedOffline: !isOnline,
       });
+      // A photo on an item that passed is attached to the run itself (its own signed upload),
+      // so it is kept as evidence the item was looked at.
+      for (const item of template.items) {
+        const photo = photosCaptured[item.code];
+        if (results[item.code] !== true || !photo || !repository.submitCheckPhoto) continue;
+        await repository.submitCheckPhoto({
+          apparatusId,
+          checkKey: idempotencyKey,
+          itemCode: item.code,
+          photoLocalUri: photo.uri,
+          photoFileName: photo.fileName,
+        });
+      }
       // A failed item has to reach the apparatus officer: each becomes a defect report through
       // the existing defect API, pre-filled with the unit and item, so nothing is typed twice.
       for (const item of failedItems) {
@@ -461,6 +496,7 @@ export function CheckRunnerScreen() {
               : ''),
           severity: severities[item.code] ?? DEFAULT_SEVERITY,
           idempotencyKey: `${idempotencyKey}-defect-${item.code}`,
+          itemCode: item.code,
           ...(photo ? { photoLocalUri: photo.uri, photoFileName: photo.fileName } : {}),
         });
       }
@@ -475,7 +511,7 @@ export function CheckRunnerScreen() {
     if (draftKey) await kvDelete(draftKey);
     setSubmitting(false);
     setCompleted({
-      photosNotSent: template.items.filter(
+      passedItemPhotos: template.items.filter(
         (item) => results[item.code] === true && photosCaptured[item.code] !== undefined,
       ).length,
       passed: template.items.length - failedItems.length,
@@ -733,6 +769,12 @@ function ItemRowView({
       <Text style={{ color: theme.fg, fontSize: typeScale.heading.size, fontWeight: '600' }}>
         {item.label}
       </Text>
+      {item.critical ? (
+        // Glyph + word: "Mark the other N OK" skips this item, so the member has to answer it.
+        <Text style={{ color: theme.status.warning, fontSize: typeScale.body.size }}>
+          ◆ Critical — answer this one yourself
+        </Text>
+      ) : null}
       {knownDefect ? (
         <StatusChip
           status="caution"
@@ -919,11 +961,11 @@ function CompletionView({
             ))}
           </View>
         ) : null}
-        {summary.photosNotSent > 0 ? (
-          <Text style={{ color: theme.status.warning, fontSize: typeScale.body.size }}>
-            {summary.photosNotSent === 1 ? '1 photo' : `${summary.photosNotSent} photos`} taken on
-            items that passed {summary.photosNotSent === 1 ? 'was' : 'were'} not sent: Boxalarm can
-            only attach photos to defects so far. Photos on failed items went with their defect.
+        {summary.passedItemPhotos > 0 ? (
+          <Text style={{ color: theme.fg, fontSize: typeScale.body.size }}>
+            {summary.passedItemPhotos === 1 ? '1 photo' : `${summary.passedItemPhotos} photos`} on
+            items that passed {summary.passedItemPhotos === 1 ? 'goes' : 'go'} with the check.
+            Photos on failed items go with their defect.
           </Text>
         ) : null}
         {delivery.state !== 'NOT_QUEUED' ? (

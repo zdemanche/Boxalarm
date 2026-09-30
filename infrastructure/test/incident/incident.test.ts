@@ -163,6 +163,7 @@ describe("Incident", () => {
   it("gives the submission Lambdas the incident table name and CMK access", async () => {
     const incident = await build();
     for (const lambda of [
+      incident.createLambda,
       incident.submitLambda,
       incident.submissionGetLambda,
       incident.submissionRetryLambda,
@@ -174,9 +175,10 @@ describe("Incident", () => {
   });
 
   // Security-web MINOR 2: submit, retry, the submission reads and exposures are Cedar-gated.
-  it("gives the Cedar-gated submission and exposure Lambdas the policy store and IsAuthorized", async () => {
+  it("gives the Cedar-gated create, submission and exposure Lambdas the policy store and IsAuthorized", async () => {
     const incident = await build();
     for (const lambda of [
+      incident.createLambda,
       incident.submitLambda,
       incident.submissionGetLambda,
       incident.submissionRetryLambda,
@@ -206,6 +208,28 @@ describe("Incident", () => {
         "PUT /api/v1/incidents/{incidentId}/modules/{module}",
       ]),
     );
+  });
+
+  it("routes recent dispatches with GSI1 Query + BatchGetItem only, Cedar-gated", async () => {
+    const incident = await build();
+    await resolve(incident.recentDispatchesLambda.function.arn);
+    await new Promise((r) => setImmediate(r));
+    expect(routeKeys).toContain("GET /api/v1/incidents/dispatches");
+    const policy = JSON.parse(
+      await resolve(incident.recentDispatchesLambda.rolePolicy.policy),
+    ) as PolicyDoc;
+    const query = policy.Statement.find((s) => s.Sid === "RecentDispatchesQuery");
+    const batch = policy.Statement.find((s) => s.Sid === "RecentDispatchesReportRead");
+    expect(query?.Action).toEqual(["dynamodb:Query"]);
+    expect(query?.Resource).toEqual([`${TABLE_ARN}/index/GSI1`]);
+    expect(batch?.Action).toEqual(["dynamodb:BatchGetItem"]);
+    expect(batch?.Resource).toEqual([TABLE_ARN]);
+    const dynamo = policy.Statement.flatMap((s) => s.Action).filter((a) =>
+      a.startsWith("dynamodb:"),
+    );
+    expect(dynamo.sort()).toEqual(["dynamodb:BatchGetItem", "dynamodb:Query"]);
+    expect(JSON.stringify(policy)).toContain("verifiedpermissions:IsAuthorizedWithToken");
+    expect(JSON.stringify(policy)).not.toMatch(/alerting/);
   });
 
   it("gives NERIS credentials only to the routes that call NERIS, and Cedar to all of them", async () => {

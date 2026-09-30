@@ -13,7 +13,8 @@ import { ApparatusArgs, apparatusRoute } from "./apparatus-lambda";
  * are alarmed too.
  *
  * A defect that names a photo gets a presigned S3 PUT (defectPhotoUpload.ts) into the
- * platform-assets bucket under {deptId}/defect/, the only prefix its role may write.
+ * platform-assets bucket under {deptId}/defect/, the only prefix its role may write; a photo on
+ * any check item (passed or failed) gets one under {deptId}/check/ the same way.
  */
 export interface ChecksArgs extends ApparatusArgs {
   /** Ops alarm topic (chief-notifications): every alarm here notifies it, none is silent. */
@@ -23,6 +24,7 @@ export interface ChecksArgs extends ApparatusArgs {
 export class Checks extends pulumi.ComponentResource {
   public readonly checklistLambda: ServiceLambda;
   public readonly submitCheckLambda: ServiceLambda;
+  public readonly checkPhotoLambda: ServiceLambda;
   public readonly reportDefectLambda: ServiceLambda;
   public readonly complianceLambda: ServiceLambda;
   public readonly submitCheckErrorsAlarm: aws.cloudwatch.MetricAlarm;
@@ -37,7 +39,9 @@ export class Checks extends pulumi.ComponentResource {
 
     // getChecklistHandler.ts: resolveApparatusIdByUnitId queries GSI3;
     // resolveChecklistTemplateForUnit is a filtered base-table Scan (checklistResolution.ts)
-    // — there is no template index, so Scan is what the handler needs.
+    // — there is no template index, so Scan is what the handler needs. A unit no template
+    // names falls back to the department's default sheet: one GetItem of the
+    // CONFIG#CHECKLIST_DEFAULTS row settings saves (resolveDepartmentDefaultTemplate).
     this.checklistLambda = apparatusRoute(this, name, args, {
       functionKey: "checklist-get",
       routeKey: "GET /api/v1/apparatus/{unitId}/checklist",
@@ -45,11 +49,14 @@ export class Checks extends pulumi.ComponentResource {
       grants: [
         { sid: "ChecklistApparatusLookup", actions: ["dynamodb:Query"], on: ["GSI3"] },
         { sid: "ChecklistTemplateScan", actions: ["dynamodb:Scan"], on: ["table"] },
+        { sid: "ChecklistDefaultSheetGet", actions: ["dynamodb:GetItem"], on: ["table"] },
       ],
     });
 
-    // postChecks.ts: GSI3 lookup; a transaction of three Puts (run, idempotency lock,
-    // audit row); on a replay, consistent GetItems of the lock and the existing run.
+    // postChecks.ts: GSI3 lookup; the sheet the run names, read by key for the critical-item
+    // rule (GetItem of its CHECKLIST_TEMPLATE or the CONFIG#CHECKLIST_DEFAULTS row - never a
+    // Scan); a transaction of three Puts (run, idempotency lock, audit row); on a replay,
+    // consistent GetItems of the lock and the existing run.
     this.submitCheckLambda = apparatusRoute(this, name, args, {
       functionKey: "checks-submit",
       routeKey: "POST /api/v1/apparatus/{unitId}/checks",
@@ -58,6 +65,24 @@ export class Checks extends pulumi.ComponentResource {
         { sid: "SubmitCheckApparatusLookup", actions: ["dynamodb:Query"], on: ["GSI3"] },
         {
           sid: "SubmitCheckWrite",
+          actions: ["dynamodb:PutItem", "dynamodb:GetItem"],
+          on: ["table"],
+        },
+      ],
+    });
+
+    // attachCheckPhoto.ts: GSI3 lookup; a transaction of two Puts (CHECK_PHOTO row, audit
+    // row); on a replay, one consistent GetItem of the stored row to re-sign its key. The
+    // presigned PUT goes under {deptId}/check/, the only prefix this role may write.
+    this.checkPhotoLambda = apparatusRoute(this, name, args, {
+      functionKey: "check-photo-attach",
+      routeKey: "POST /api/v1/apparatus/{unitId}/checks/{checkKey}/photos",
+      cedar: true,
+      assetsPutPrefix: "check",
+      grants: [
+        { sid: "CheckPhotoApparatusLookup", actions: ["dynamodb:Query"], on: ["GSI3"] },
+        {
+          sid: "CheckPhotoWrite",
           actions: ["dynamodb:PutItem", "dynamodb:GetItem"],
           on: ["table"],
         },
@@ -141,6 +166,7 @@ export class Checks extends pulumi.ComponentResource {
     this.registerOutputs({
       checklistLambda: this.checklistLambda,
       submitCheckLambda: this.submitCheckLambda,
+      checkPhotoLambda: this.checkPhotoLambda,
       reportDefectLambda: this.reportDefectLambda,
       complianceLambda: this.complianceLambda,
     });

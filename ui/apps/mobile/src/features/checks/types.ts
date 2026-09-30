@@ -16,7 +16,7 @@ export interface ChecklistItem {
   label: string;
   requiresPhoto: boolean;
   /** Must be answered one by one (brakes, SCBA pressure): never included in "Mark the other N
-   * OK". The checklist API doesn't send this flag yet, so today it is always absent. */
+   * OK". Set per item on the web check sheet; a cached sheet from before the flag lacks it. */
   critical?: boolean;
 }
 
@@ -33,6 +33,9 @@ export interface ItemResult {
   code: string;
   pass: boolean;
   note?: string;
+  /** How it was answered: on its own, or by "Mark the other N OK". The server refuses BULK (or
+   * no answer) on an item the sheet marks critical. */
+  answeredBy: 'ITEM' | 'BULK';
 }
 
 export interface ChecklistRunSubmission {
@@ -51,6 +54,8 @@ export interface DefectSubmission {
   description: string;
   severity: DefectSeverity;
   idempotencyKey: string;
+  /** The check-sheet item a truck-check failure is filed against; absent when hand-typed. */
+  itemCode?: string;
   photoLocalUri?: string;
   photoFileName?: string;
 }
@@ -61,6 +66,8 @@ export interface OpenDefect {
   description: string;
   severity: DefectSeverity;
   reportedAt: number;
+  /** Check-sheet item it was filed against; null/absent for hand-typed (or older) defects. */
+  itemCode?: string | null;
 }
 
 export interface ChecksRepository {
@@ -74,4 +81,16 @@ export interface ChecksRepository {
   // the mock just "writes" synchronously, which is the same UX contract.
   submitChecklistRun(run: ChecklistRunSubmission): Promise<void>;
   submitDefect(defect: DefectSubmission): Promise<void>;
+  /** Queues a photo taken on a check item that passed, attached to the run by its idempotency
+   * key (a failed item's photo goes with its defect instead). Optional: the mock drops it. */
+  submitCheckPhoto?(photo: CheckPhotoSubmission): Promise<void>;
+}
+
+export interface CheckPhotoSubmission {
+  apparatusId: string;
+  /** The run's idempotencyKey. */
+  checkKey: string;
+  itemCode: string;
+  photoLocalUri: string;
+  photoFileName: string;
 }

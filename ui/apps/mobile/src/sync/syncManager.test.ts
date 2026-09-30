@@ -1196,3 +1196,71 @@ test("a drain run sends with a source pinned to the run's member", async () => {
     expect.anything(),
   );
 });
+
+test('a check photo POSTs to the run photos path, then PUTs the file to its signed link', async () => {
+  const signedUrl = `https://assets.s3.us-east-1.amazonaws.com/dept/check/APP-E2/check-9/TIRES/tires.jpg?X-Amz-Date=${amzDate(new Date())}&X-Amz-Expires=600&X-Amz-Signature=s`;
+  mockApiRequest.mockResolvedValueOnce({
+    json: async () => ({
+      uploadUrl: signedUrl,
+      photoS3Key: 'dept/check/APP-E2/check-9/TIRES/tires.jpg',
+    }),
+  });
+  const fetchSpy = jest
+    .spyOn(globalThis, 'fetch')
+    .mockImplementation(async (input: RequestInfo | URL) =>
+      input === 'file:///tmp/tires.jpg'
+        ? ({ blob: async () => new Blob(['x']) } as Response)
+        : ({ ok: true, status: 200 } as Response),
+    );
+
+  await syncManager.enqueueCheckPhoto('ENGINE-2', 'check-9', 'TIRES', {
+    localUri: 'file:///tmp/tires.jpg',
+    fileName: 'tires.jpg',
+  });
+  await flush();
+
+  expect(mockApiRequest).toHaveBeenCalledWith(
+    'apparatus/ENGINE-2/checks/check-9/photos',
+    tokens,
+    expect.objectContaining({ method: 'POST' }),
+  );
+  expect(JSON.parse(mockApiRequest.mock.calls[0][2].body as string)).toEqual({
+    itemCode: 'TIRES',
+    photo: { filename: 'tires.jpg' },
+  });
+  expect(fetchSpy).toHaveBeenCalledWith(
+    signedUrl,
+    expect.objectContaining({ method: 'PUT', headers: { 'Content-Type': 'image/jpeg' } }),
+  );
+  await expect(store.find('check-9-photo-TIRES')).resolves.toBeUndefined();
+  fetchSpy.mockRestore();
+});
+
+test('an expired check-photo link is re-signed by replaying the POST, not lost', async () => {
+  const expiredUrl =
+    'https://assets.s3.us-east-1.amazonaws.com/dept/check/A/k/TIRES/t.jpg?X-Amz-Date=20231114T221320Z&X-Amz-Expires=600&X-Amz-Signature=s';
+  const freshUrl = `https://assets.s3.us-east-1.amazonaws.com/dept/check/A/k/TIRES/t.jpg?X-Amz-Date=${amzDate(new Date())}&X-Amz-Expires=600&X-Amz-Signature=s`;
+  mockApiRequest.mockResolvedValueOnce({ json: async () => ({ uploadUrl: expiredUrl }) });
+  mockApiRequest.mockResolvedValueOnce({
+    json: async () => ({ uploadUrl: freshUrl, photoS3Key: 'dept/check/A/k/TIRES/t.jpg' }),
+  });
+  const fetchSpy = jest
+    .spyOn(globalThis, 'fetch')
+    .mockImplementation(async (input: RequestInfo | URL) =>
+      input === 'file:///tmp/t.jpg'
+        ? ({ blob: async () => new Blob(['x']) } as Response)
+        : ({ ok: true, status: 200 } as Response),
+    );
+
+  await syncManager.enqueueCheckPhoto('ENGINE-2', 'k', 'TIRES', {
+    localUri: 'file:///tmp/t.jpg',
+    fileName: 't.jpg',
+  });
+  await flush();
+
+  expect(mockApiRequest).toHaveBeenCalledTimes(2);
+  expect(fetchSpy).not.toHaveBeenCalledWith(expiredUrl, expect.anything());
+  expect(fetchSpy).toHaveBeenCalledWith(freshUrl, expect.objectContaining({ method: 'PUT' }));
+  await expect(store.find('k-photo-TIRES')).resolves.toBeUndefined();
+  fetchSpy.mockRestore();
+});

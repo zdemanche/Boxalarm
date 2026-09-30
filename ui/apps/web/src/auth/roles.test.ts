@@ -74,3 +74,14 @@ test('canSubmitIncident admits OFFICER, CHIEF and ADMIN only', async () => {
   expect(canSubmitIncident(['ADMIN'])).toBe(true);
   expect(canSubmitIncident(['MEMBER', 'TRAINING'])).toBe(false);
 });
+
+test('starting a report and listing dispatches admit OFFICER, CHIEF and ADMIN only', async () => {
+  const { canStartIncidentReport, canListRecentDispatches } = await import('./roles');
+  for (const helper of [canStartIncidentReport, canListRecentDispatches]) {
+    expect(helper(['OFFICER'])).toBe(true);
+    expect(helper(['CHIEF'])).toBe(true);
+    expect(helper(['ADMIN'])).toBe(true);
+    expect(helper(['MEMBER'])).toBe(false);
+    expect(helper(['TRAINING', 'APPARATUS'])).toBe(false);
+  }
+});

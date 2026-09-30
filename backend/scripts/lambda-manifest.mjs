@@ -306,6 +306,11 @@ export const LAMBDA_ENTRIES = [
   },
   {
     service: 'incident-service',
+    function: 'recent-dispatches',
+    entry: 'src/services/incident-service/listRecentDispatches.ts',
+  },
+  {
+    service: 'incident-service',
     function: 'neris-schema',
     entry: 'src/services/incident-service/getNerisSchema.ts',
   },
@@ -581,6 +586,11 @@ export const LAMBDA_ENTRIES = [
     service: 'apparatus-service',
     function: 'checks-submit',
     entry: 'src/services/apparatus-service/postChecks.ts',
+  },
+  {
+    service: 'apparatus-service',
+    function: 'check-photo-attach',
+    entry: 'src/services/apparatus-service/attachCheckPhoto.ts',
   },
   {
     service: 'apparatus-service',

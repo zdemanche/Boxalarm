@@ -1,10 +1,17 @@
 import { buildDeptScopedPk, type VerifiedDeptId } from '@boxalarm/dept-scope';
 import type { ValidationFieldError } from './problemDetails.js';
 
+/** How an item was answered: on its own, or by "Mark the other N OK". */
+export type AnsweredBy = 'ITEM' | 'BULK';
+
 export interface ItemResult {
   readonly code: string;
   readonly pass: boolean;
   readonly note: string | null;
+  /** Absent from clients that predate it. */
+  readonly answeredBy?: AnsweredBy;
+  /** Set by the server from the sheet: this item had to be answered on its own. */
+  readonly critical?: true;
 }
 
 export interface SubmitCheckInput {
@@ -59,6 +66,16 @@ function validateItemResult(raw: unknown, index: number): ValidationFieldError |
   if (record.note !== undefined && record.note !== null && typeof record.note !== 'string') {
     return { field: `itemResults[${index}].note`, message: 'must be a string when provided' };
   }
+  if (
+    record.answeredBy !== undefined &&
+    record.answeredBy !== 'ITEM' &&
+    record.answeredBy !== 'BULK'
+  ) {
+    return {
+      field: `itemResults[${index}].answeredBy`,
+      message: 'must be ITEM or BULK when provided',
+    };
+  }
   return undefined;
 }
 
@@ -68,7 +85,39 @@ function toItemResult(raw: unknown): ItemResult {
     code: record.code as string,
     pass: record.pass as boolean,
     note: typeof record.note === 'string' ? record.note : null,
+    ...(record.answeredBy === 'ITEM' || record.answeredBy === 'BULK'
+      ? { answeredBy: record.answeredBy }
+      : {}),
   };
+}
+
+/**
+ * The server half of the truck check's critical-item rule (review minor 5): every item the
+ * sheet marks critical must have a result answered on its own - never by "Mark the other N OK",
+ * and not from a client that doesn't say how it was answered. Returns the field errors, and the
+ * results with `critical: true` recorded on those items.
+ */
+export function enforceCriticalItems(
+  itemResults: readonly ItemResult[],
+  criticalCodes: ReadonlySet<string>,
+): { readonly errors: readonly ValidationFieldError[]; readonly itemResults: ItemResult[] } {
+  const errors: ValidationFieldError[] = [];
+  for (const code of criticalCodes) {
+    if (!itemResults.some((result) => result.code === code)) {
+      errors.push({ field: 'itemResults', message: `critical item ${code} must be answered` });
+    }
+  }
+  const marked = itemResults.map((result, index) => {
+    if (!criticalCodes.has(result.code)) return result;
+    if (result.answeredBy !== 'ITEM') {
+      errors.push({
+        field: `itemResults[${index}].answeredBy`,
+        message: `critical item ${result.code} must be answered on its own, not in bulk`,
+      });
+    }
+    return { ...result, critical: true as const };
+  });
+  return { errors, itemResults: marked };
 }
 
 export function validateSubmitCheckBody(

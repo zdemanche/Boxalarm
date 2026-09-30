@@ -8,6 +8,7 @@ import * as syncManager from '../../sync/syncManager';
 import { mockChecksRepository } from './mockChecksRepository';
 import type {
   Apparatus,
+  CheckPhotoSubmission,
   ChecklistRunSubmission,
   ChecklistTemplate,
   ChecksRepository,
@@ -124,6 +125,14 @@ export function useChecksRepository(): ChecksRepositoryWithFallbackFlag {
         });
       },
 
+      async submitCheckPhoto(photo: CheckPhotoSubmission): Promise<void> {
+        if (!authRef.current) return;
+        await syncManager.enqueueCheckPhoto(photo.apparatusId, photo.checkKey, photo.itemCode, {
+          localUri: photo.photoLocalUri,
+          fileName: photo.photoFileName,
+        });
+      },
+
       async submitDefect(defect: DefectSubmission): Promise<void> {
         const tokens = authRef.current;
         if (!tokens) return mockChecksRepository.submitDefect(defect);
@@ -134,6 +143,7 @@ export function useChecksRepository(): ChecksRepositoryWithFallbackFlag {
             description: defect.description,
             severity: defect.severity,
             idempotencyKey: defect.idempotencyKey,
+            ...(defect.itemCode ? { itemCode: defect.itemCode } : {}),
             ...(defect.photoFileName ? { photo: { filename: defect.photoFileName } } : {}),
           },
           defect.photoLocalUri,

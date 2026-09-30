@@ -4,6 +4,7 @@ import type { AlertPayload } from '../features/alerts/alertPayload';
 import { AlertDetailScreen } from '../screens/alerts/AlertDetailScreen';
 import { AlertsHomeScreen } from '../screens/alerts/AlertsHomeScreen';
 import { ManualDispatchEntryScreen } from '../screens/alerts/ManualDispatchEntryScreen';
+import { ReportDispatchesScreen } from '../screens/alerts/ReportDispatchesScreen';
 import { MutualAidPromptScreen } from '../screens/alerts/MutualAidPromptScreen';
 import { RidingBoardScreen } from '../screens/alerts/RidingBoardScreen';
 import { RosterScreen } from '../screens/alerts/RosterScreen';
@@ -13,6 +14,8 @@ import { RequireRole } from './RequireRole';
 // AlertsHomeScreen's own canEnterManually check - manual dispatch entry and riding-board seat
 // assignment are officer/chief actions.
 const OFFICER_CHIEF_ROLES: readonly Role[] = ['OFFICER', 'CHIEF'];
+// Cedar ListRecentDispatches (NERIS officer tier): the dispatches to write reports from.
+const REPORT_ROLES: readonly Role[] = ['OFFICER', 'CHIEF', 'ADMIN'];
 
 // Alerts home, manual entry, alert detail + response, live roster, riding board -
 // architecture.md §7.2 AlertsStack.
@@ -25,6 +28,8 @@ export type AlertsStackParamList = {
   MutualAidPrompt: { dispatchId: string; payload?: AlertPayload };
   Roster: { dispatchId: string };
   RidingBoard: { dispatchId: string };
+  /** "Start a report": the department's recent dispatches (incident-service). */
+  ReportDispatches: undefined;
 };
 
 const Stack = createNativeStackNavigator<AlertsStackParamList>();
@@ -59,6 +64,13 @@ export function AlertsStack() {
         {() => (
           <RequireRole roles={OFFICER_CHIEF_ROLES}>
             <RidingBoardScreen />
+          </RequireRole>
+        )}
+      </Stack.Screen>
+      <Stack.Screen name="ReportDispatches" options={{ title: 'Reports' }}>
+        {() => (
+          <RequireRole roles={REPORT_ROLES}>
+            <ReportDispatchesScreen />
           </RequireRole>
         )}
       </Stack.Screen>

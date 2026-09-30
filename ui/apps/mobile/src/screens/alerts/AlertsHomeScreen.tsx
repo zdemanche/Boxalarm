@@ -97,6 +97,10 @@ export function AlertsHomeScreen() {
   const canEnterManually = (auth?.roles ?? []).some(
     (role) => role === 'OFFICER' || role === 'CHIEF',
   );
+  // Cedar ListRecentDispatches (NERIS officer tier).
+  const canReport = (auth?.roles ?? []).some(
+    (role) => role === 'OFFICER' || role === 'CHIEF' || role === 'ADMIN',
+  );
 
   const asOf = active.updatedAt ? formatClock(active.updatedAt) : null;
   const unreachable = active.failure !== null;
@@ -199,6 +203,13 @@ export function AlertsHomeScreen() {
               <Button
                 label="Enter dispatch manually"
                 onPress={() => navigation.navigate('ManualEntry')}
+              />
+            ) : null}
+            {canReport ? (
+              <Button
+                label="Start a report"
+                variant="secondary"
+                onPress={() => navigation.navigate('ReportDispatches')}
               />
             ) : null}
           </View>

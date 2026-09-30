@@ -140,6 +140,9 @@ export const OFFICER_TIER_GROUPS = ["OFFICER", "TRAINING", "CHIEF", "ADMIN"] as 
 export const APPARATUS_MEMBER_ACTIONS = [
   "GetChecklist",
   "SubmitApparatusCheck",
+  // A photo on a truck-check item (attachCheckPhoto.ts): part of performing the check, so the
+  // same every-role tier as SubmitApparatusCheck.
+  "AttachCheckPhoto",
   "ReportDefect",
   "ViewMaintenanceHistory",
   "LogScbaRecord",
@@ -166,6 +169,7 @@ const APPARATUS_ACTION_RESOURCE: Record<
 > = {
   GetChecklist: "Apparatus",
   SubmitApparatusCheck: "Apparatus",
+  AttachCheckPhoto: "Apparatus",
   ReportDefect: "Apparatus",
   ViewMaintenanceHistory: "Apparatus",
   LogScbaRecord: "Apparatus",
@@ -366,6 +370,9 @@ export const NERIS_MEMBER_ACTIONS = [
   "EditIncidentExposures",
 ] as const;
 export const NERIS_OFFICER_ACTIONS = [
+  // Starting a report, from a dispatch or by hand (createIncident.ts): the officer who
+  // completes, locks and submits it also starts it (docs/decisions/2026-09-30-officers-start-reports.md).
+  "CreateIncidentReport",
   "LockIncidentReport",
   "SubmitIncidentReport",
   "ResubmitIncidentReport",
@@ -375,6 +382,9 @@ export const NERIS_OFFICER_ACTIONS = [
   "FileNoActivityReport",
   "ViewNerisCompliance",
   "ViewNerisEntity",
+  // "Start a report": the department's recent dispatches with the report started from each
+  // (incident-service listRecentDispatches.ts) - the officer's report-writing queue.
+  "ListRecentDispatches",
 ] as const;
 export const NERIS_OFFICER_GROUPS = ["OFFICER", "CHIEF", "ADMIN"] as const;
 
@@ -394,6 +404,7 @@ const NERIS_ACTION_RESOURCE: Record<
 > = {
   ValidateIncidentReport: "Incident",
   ViewNerisSchema: "Department",
+  CreateIncidentReport: "Department",
   EditIncidentModule: "Incident",
   EditIncidentExposures: "Incident",
   LockIncidentReport: "Incident",
@@ -406,6 +417,7 @@ const NERIS_ACTION_RESOURCE: Record<
   FileNoActivityReport: "Department",
   ViewNerisCompliance: "Department",
   ViewNerisEntity: "Department",
+  ListRecentDispatches: "Department",
   SyncNerisEntity: "Department",
 };
 

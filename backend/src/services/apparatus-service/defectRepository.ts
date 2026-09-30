@@ -24,6 +24,8 @@ export interface DefectRecord {
   readonly reportedAt: number;
   readonly photoS3Key: string | null;
   readonly outOfService: boolean;
+  /** The check-sheet item this defect is against (truck check fail); null when hand-typed. */
+  readonly itemCode: string | null;
 }
 
 export interface CreateDefectInput {
@@ -34,6 +36,7 @@ export interface CreateDefectInput {
   readonly reportedByMemberId: string;
   readonly correlationId: string;
   readonly photoS3Key?: string | null;
+  readonly itemCode?: string | null;
   readonly clientMutationId?: string;
   readonly defectId?: string;
   readonly now?: () => number;
@@ -86,6 +89,7 @@ function toDefectRecord(item: Record<string, unknown>, unitId: string): DefectRe
     reportedAt: item.reportedAt as number,
     photoS3Key: (item.photoS3Key as string | null | undefined) ?? null,
     outOfService: severity === 'OUT_OF_SERVICE',
+    itemCode: typeof item.itemCode === 'string' ? item.itemCode : null,
   };
 }
 
@@ -177,6 +181,7 @@ export async function createDefect(
   const defectId = input.defectId ?? `DEF-${randomUUID()}`;
   const reportedAt = epochSeconds(input.now);
   const photoS3Key = input.photoS3Key ?? null;
+  const itemCode = input.itemCode ?? null;
   const outOfService = input.severity === 'OUT_OF_SERVICE';
 
   const defectItem = {
@@ -192,6 +197,7 @@ export async function createDefect(
     reportedBy: input.reportedByMemberId,
     reportedAt,
     photoS3Key,
+    ...(itemCode !== null ? { itemCode } : {}),
     gsi3pk: buildDeptScopedPk(input.deptId, 'DEFECT'),
     gsi3sk: `OPEN#${reportedAt}`,
   };
@@ -208,6 +214,7 @@ export async function createDefect(
       reportedByMemberId: input.reportedByMemberId,
       severity: input.severity,
       ...(photoS3Key !== null ? { photoS3Key } : {}),
+      ...(itemCode !== null ? { itemCode } : {}),
       outOfService,
       deptId: input.deptId,
     },
@@ -266,5 +273,6 @@ export async function createDefect(
     reportedAt,
     photoS3Key,
     outOfService,
+    itemCode,
   };
 }

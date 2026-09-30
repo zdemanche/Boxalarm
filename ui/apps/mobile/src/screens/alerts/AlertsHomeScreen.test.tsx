@@ -34,6 +34,20 @@ test('an officer is offered manual entry and it navigates to the entry form', as
   expect(mockNavigate).toHaveBeenCalledWith('ManualEntry');
 });
 
+test('a member is not offered "Start a report"', async () => {
+  mockAuth = { roles: ['MEMBER'] };
+  const { queryByRole, findByRole } = await render(<AlertsHomeScreen />);
+  await findByRole('button', { name: 'Refresh active calls' });
+  expect(queryByRole('button', { name: 'Start a report' })).toBeNull();
+});
+
+test('an admin opens "Start a report"', async () => {
+  mockAuth = { roles: ['ADMIN'] };
+  const { findByRole } = await render(<AlertsHomeScreen />);
+  fireEvent.press(await findByRole('button', { name: 'Start a report' }));
+  expect(mockNavigate).toHaveBeenCalledWith('ReportDispatches');
+});
+
 test('a chief is also offered manual entry', async () => {
   mockAuth = { roles: ['CHIEF'] };
   const { findByRole } = await render(<AlertsHomeScreen />);

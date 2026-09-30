@@ -344,6 +344,23 @@ export async function incidentsDemoRequest(
 
   if (path === 'incidents/neris-schema' && method === 'GET') return json(DEMO_NERIS_SCHEMA);
 
+  if (path === 'incidents/dispatches' && method === 'GET') {
+    // One page: the seeded dispatches, each with the report started from it (if any).
+    const dispatches = Object.entries(seededDispatches)
+      .map(([dispatchId, seed]) => {
+        const report = incidents.find((incident) => incident.sourceDispatchId === dispatchId);
+        return {
+          dispatchId,
+          incidentType: seed.incidentType ?? '',
+          address: seed.address ?? '',
+          dispatchedAt: seed.dispatchAt ?? seed.alarmAt ?? nowSeconds,
+          report: report ? { incidentId: report.incidentId, status: report.status } : null,
+        };
+      })
+      .sort((a, b) => b.dispatchedAt - a.dispatchedAt);
+    return json({ recentWindowHours: 72, dispatches, nextCursor: null });
+  }
+
   if (path === 'incidents' && method === 'GET') {
     const from = Number(query.get('fromAlarmAt'));
     const to = Number(query.get('toAlarmAt'));

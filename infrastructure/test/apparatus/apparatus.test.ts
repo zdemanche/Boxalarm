@@ -67,7 +67,7 @@ function apparatusRoutes() {
  * Every apparatus call the two apps make (method + path after the client's /api/v1/
  * prefix, path params normalized). Web: ui/apps/web/src/features/apparatus/api.ts. Mobile:
  * ui/apps/mobile/src/features/checks/apiChecksRepository.ts (list, checklist) and
- * ui/apps/mobile/src/sync/syncManager.ts (the offline outbox's checks/defects drain).
+ * ui/apps/mobile/src/sync/syncManager.ts (the offline outbox's checks/check-photos/defects drain).
  */
 const UI_CALLS = [
   "GET apparatus",
@@ -76,6 +76,7 @@ const UI_CALLS = [
   "PUT apparatus/{unitId}/service-status",
   "GET apparatus/{unitId}/checklist",
   "POST apparatus/{unitId}/checks",
+  "POST apparatus/{unitId}/checks/{checkKey}/photos",
   "POST apparatus/{unitId}/defects",
   "GET apparatus/{unitId}/maintenance",
   "POST apparatus/{unitId}/maintenance",
@@ -119,6 +120,9 @@ describe("apparatus-service routes", { timeout: 30_000 }, () => {
     const outbox = fs.readFileSync(path.join(UI_ROOT, "mobile/src/sync/syncManager.ts"), "utf8");
     expect(outbox).toContain("unitPath(unitId, 'checks')");
     expect(outbox).toContain("unitPath(unitId, 'defects')");
+    expect(outbox).toContain(
+      "`apparatus/${encodeURIComponent(unitId)}/checks/${encodeURIComponent(checkKey)}/photos`",
+    );
     expect(outbox).toContain("return `apparatus/${encodeURIComponent(unitId)}/${suffix}`;");
     const checks = fs.readFileSync(
       path.join(UI_ROOT, "mobile/src/features/checks/apiChecksRepository.ts"),

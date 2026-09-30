@@ -976,3 +976,59 @@ describe("inspections archive actions (MAJOR-6)", () => {
     expect(actions.ArchiveHydrant?.appliesTo.resourceTypes).toEqual(["Hydrant"]);
   });
 });
+
+describe("starting reports is the NERIS officer tier (docs/decisions/2026-09-30-officers-start-reports.md)", () => {
+  const dept = { type: "Boxalarm::Department", id: "dept-1" };
+  const ACTIONS = ["CreateIncidentReport", "ListRecentDispatches"];
+
+  async function decide(group: string, action: string): Promise<string> {
+    const {
+      CEDAR_SCHEMA,
+      nerisMemberActionsPolicy,
+      nerisOfficerActionsPolicy,
+      nerisAdminActionsPolicy,
+      selfServiceActionsPolicy,
+    } = await import("../../components/authz/cedar-policies");
+    const { isAuthorized } =
+      (await import("@cedar-policy/cedar-wasm/nodejs")) as typeof import("@cedar-policy/cedar-wasm/nodejs");
+    const groupId = `pool-1|${group}`;
+    const result = isAuthorized({
+      principal: { type: "Boxalarm::User", id: "pool-1|user-1" },
+      action: { type: "Boxalarm::Action", id: action },
+      resource: dept,
+      context: {},
+      schema: JSON.parse(CEDAR_SCHEMA) as string,
+      policies: {
+        staticPolicies: [
+          nerisMemberActionsPolicy("pool-1"),
+          nerisOfficerActionsPolicy("pool-1"),
+          nerisAdminActionsPolicy("pool-1"),
+          selfServiceActionsPolicy("pool-1"),
+        ].join("\n"),
+      },
+      entities: [
+        {
+          uid: { type: "Boxalarm::User", id: "pool-1|user-1" },
+          attrs: {},
+          parents: [{ type: "Boxalarm::UserGroup", id: groupId }],
+        },
+        { uid: { type: "Boxalarm::UserGroup", id: groupId }, attrs: {}, parents: [] },
+        { uid: dept, attrs: {}, parents: [] },
+      ],
+      validateRequest: true,
+    });
+    expect(result.type).toBe("success");
+    return result.type === "success" ? result.response.decision : "error";
+  }
+
+  it.each(["OFFICER", "CHIEF", "ADMIN"])(
+    "ALLOWs %s to list dispatches and start a report",
+    async (group) => {
+      for (const action of ACTIONS) expect(await decide(group, action), action).toBe("allow");
+    },
+  );
+
+  it.each(["MEMBER", "TRAINING", "APPARATUS"])("DENYs %s", async (group) => {
+    for (const action of ACTIONS) expect(await decide(group, action), action).toBe("deny");
+  });
+});
