@@ -1,6 +1,6 @@
 import { typography } from '@boxalarm/design-tokens';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { cleanup, render, screen, within } from '@testing-library/react';
+import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { HttpResponse, http } from 'msw';
 import { setupServer } from 'msw/node';
@@ -206,7 +206,7 @@ test('a 403 on the active-call read says so instead of showing an empty list', a
 });
 
 test('the active-call tile shows a loading state before the first response', async () => {
-  let release: () => void = () => undefined;
+  let release: (() => void) | undefined;
   server.use(
     http.get(
       '/api/v1/alerting/dispatches',
@@ -220,7 +220,10 @@ test('the active-call tile shows a loading state before the first response', asy
   const card = (await screen.findByRole('heading', { name: 'Active calls' })).parentElement!;
   expect(within(card).getByRole('status').textContent).toMatch(/loading/i);
   expect(within(card).queryByText(/no calls/i)).toBeNull();
-  release();
+  // Under a loaded test run the request can reach the handler after this point; releasing
+  // before it has would be a no-op and the tile would never resolve.
+  await waitFor(() => expect(release).toBeDefined());
+  release!();
   expect(await within(card).findByText(/no calls dispatched/i)).toBeTruthy();
 });
 
