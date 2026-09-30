@@ -14,10 +14,13 @@ import { setAlertShowsOverLockScreen } from './alertReadiness';
 let initialRoutingSettled = false;
 
 export const ALERT_ROUTE_NAME = 'AlertDetail';
+/** The officer's mutual-aid prompt stays over the lock screen like a page (N-m8). */
+export const MUTUAL_AID_ROUTE_NAME = 'MutualAidPrompt';
+const SHOWS_OVER_LOCK: readonly string[] = [ALERT_ROUTE_NAME, MUTUAL_AID_ROUTE_NAME];
 
 export function syncLockScreenPresentation(): void {
   if (!initialRoutingSettled || hasPendingAlertNavigation() || !navigationRef.isReady()) return;
-  if (navigationRef.getCurrentRoute()?.name !== ALERT_ROUTE_NAME) {
+  if (!SHOWS_OVER_LOCK.includes(navigationRef.getCurrentRoute()?.name ?? '')) {
     setAlertShowsOverLockScreen(false);
   }
 }

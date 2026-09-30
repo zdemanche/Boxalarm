@@ -1,4 +1,5 @@
 import { fireEvent, render, screen } from '@testing-library/react-native';
+import { AppState } from 'react-native';
 import { useOptionalAuth } from '../../auth/AuthContext';
 import { useAlertsRepository } from '../../features/alerts/apiAlertsRepository';
 import type { MutualAid } from '../../features/alerts/types';
@@ -6,6 +7,16 @@ import { ApiError } from '../../lib/apiClient';
 import { MutualAidPromptScreen } from './MutualAidPromptScreen';
 
 jest.mock('../../auth/AuthContext', () => ({ useOptionalAuth: jest.fn() }));
+const mockLocked = { value: false as boolean | null };
+const mockShowOverLock = jest.fn();
+jest.mock('../../features/alerts/alertReadiness', () => ({
+  isDeviceLocked: jest.fn(async () => mockLocked.value),
+  setAlertShowsOverLockScreen: (show: boolean) => mockShowOverLock(show),
+}));
+const mockSilence = jest.fn<Promise<void>, [string]>(async () => undefined);
+jest.mock('../../features/alerts/pushNotificationDisplay', () => ({
+  silenceMutualAidNotification: (id: string) => mockSilence(id),
+}));
 jest.mock('../../features/alerts/apiAlertsRepository', () => ({ useAlertsRepository: jest.fn() }));
 const mockNavigate = jest.fn();
 jest.mock('@react-navigation/native', () => ({
@@ -37,6 +48,10 @@ let repository: { getDispatch: jest.Mock; acknowledgeMutualAid: jest.Mock };
 
 beforeEach(() => {
   mockNavigate.mockClear();
+  mockLocked.value = false;
+  (AppState as { currentState: string }).currentState = 'active';
+  mockShowOverLock.mockClear();
+  mockSilence.mockClear();
   repository = {
     getDispatch: jest.fn(async () => ({
       dispatchId: 'D-MA',
@@ -118,4 +133,32 @@ test('an admin can confirm the call too, as the server allows (N-m7)', async () 
   await screen.findByText(/has not been confirmed yet/);
 
   expect(screen.getByRole('button', { name: 'I made the mutual-aid call' })).toBeTruthy();
+});
+
+// N-m8: like a page, it stays over the lock screen and keeps ringing until acted on.
+test('on a locked phone the prompt shows over the lock screen and keeps ringing; confirming needs an unlock', async () => {
+  mockLocked.value = true;
+  await render(<MutualAidPromptScreen />);
+  await screen.findByText(/has not been confirmed yet/);
+
+  expect(mockShowOverLock).toHaveBeenCalledWith(true);
+  expect(mockShowOverLock).not.toHaveBeenCalledWith(false);
+  expect(mockSilence).not.toHaveBeenCalled();
+
+  await fireEvent.press(screen.getByRole('button', { name: 'I made the mutual-aid call' }));
+
+  expect(mockSilence).toHaveBeenCalledWith('D-MA');
+  expect(await screen.findByText('Unlock your phone to confirm the call.')).toBeTruthy();
+  expect(repository.acknowledgeMutualAid).not.toHaveBeenCalled();
+});
+
+test('opened unlocked, it stops ringing at once; confirmed, it stops showing over the lock screen', async () => {
+  await render(<MutualAidPromptScreen />);
+  await screen.findByText(/has not been confirmed yet/);
+  expect(mockSilence).toHaveBeenCalledWith('D-MA');
+
+  await fireEvent.press(screen.getByRole('button', { name: 'I made the mutual-aid call' }));
+  await screen.findByText(/Call confirmed at/);
+
+  expect(mockShowOverLock).toHaveBeenLastCalledWith(false);
 });
