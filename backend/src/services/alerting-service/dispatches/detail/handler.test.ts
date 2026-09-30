@@ -143,6 +143,24 @@ describe('alert-detail handler', () => {
     errorSpy.mockRestore();
   });
 
+  it('a RAW (VERIFY) CAD dispatch: verifyRequired is returned and there is no map link', async () => {
+    const { createHandler } = await import('./handler.js');
+    const docClient = routedClient({
+      dispatch: {
+        ...DISPATCH_ITEM,
+        address: 'SEE DISPATCH TEXT',
+        verifyRequired: true,
+        narrative: 'SMOKE AT THE OLD MILL',
+      },
+      queries: () => Promise.resolve({ Items: [] }),
+    });
+    const handler = createHandler({ authzClient: fakeAuthzClient('ALLOW'), docClient });
+    const body = JSON.parse(
+      ((await handler(buildEvent('NICHOLS-4471-1798000000'))) as { body: string }).body,
+    ) as Record<string, unknown>;
+    expect(body).toMatchObject({ verifyRequired: true, mapLink: null });
+  });
+
   it('returns the CAD update history oldest first', async () => {
     const { createHandler } = await import('./handler.js');
     const update = (updateId: string, receivedAt: number) => ({

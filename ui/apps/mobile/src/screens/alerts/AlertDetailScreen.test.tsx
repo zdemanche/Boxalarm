@@ -462,3 +462,23 @@ test('lists the CAD updates to the call under their own header', async () => {
   expect(await findByRole('header', { name: 'CAD updates' })).toBeTruthy();
   expect(await findByText(/Units: E1, L2, R1/)).toBeTruthy();
 });
+
+test('a RAW (VERIFY) CAD dispatch shows the VERIFY banner and expands on the dispatch text', async () => {
+  jest.spyOn(mockAlertsRepository, 'getDispatch').mockResolvedValue({
+    dispatchId: PAGE.dispatchId,
+    incidentType: 'CAD DISPATCH - VERIFY',
+    address: 'SEE DISPATCH TEXT',
+    crossStreets: '',
+    mapLink: null,
+    narrative: 'SMOKE AT THE OLD MILL',
+    isSelfTest: false,
+    verifyRequired: true,
+  });
+  mockRouteParams.dispatchId = PAGE.dispatchId;
+  mockRouteParams.payload = PAGE;
+
+  const { findByText } = await render(<AlertDetailScreen />);
+
+  expect(await findByText(/the CAD message could not be read automatically/)).toBeTruthy();
+  expect(await findByText('SMOKE AT THE OLD MILL')).toBeTruthy();
+});

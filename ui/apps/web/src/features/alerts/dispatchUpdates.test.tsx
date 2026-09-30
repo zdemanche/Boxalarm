@@ -1,6 +1,6 @@
 import { cleanup, render, screen } from '@testing-library/react';
 import { afterEach, expect, test } from 'vitest';
-import { DispatchUpdates } from './AlertsRosterPage';
+import { DispatchUpdates, VerifyBanner } from './AlertsRosterPage';
 
 afterEach(cleanup);
 
@@ -32,4 +32,9 @@ test('says so when the history could not be loaded, and shows nothing when there
   rerender(<DispatchUpdates unavailable={false} updates={[]} />);
   expect(screen.queryByRole('status')).toBeNull();
   expect(screen.queryByRole('heading')).toBeNull();
+});
+
+test('the VERIFY banner is an alert naming what to do', () => {
+  render(<VerifyBanner />);
+  expect(screen.getByRole('alert').textContent).toContain('confirm it by radio');
 });

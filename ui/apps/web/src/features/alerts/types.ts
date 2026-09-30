@@ -116,6 +116,11 @@ export interface DispatchAlert {
   mutualAid?: MutualAid | null;
   /** CAD updates to this call, oldest first (absent from older servers). */
   updates?: DispatchUpdate[];
+  /**
+   * A CAD dispatch its source's template could not read: the address is a placeholder and the
+   * dispatch text (narrative) is the only source of the location. There is no map link.
+   */
+  verifyRequired?: boolean;
   /** The server could not read the update history (updates is then absent). */
   updatesUnavailable?: boolean;
 }

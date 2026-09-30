@@ -500,6 +500,7 @@ function DispatchHeader({ dispatchId }: { dispatchId: string }) {
 
   return (
     <Card>
+      {query.data.verifyRequired ? <VerifyBanner /> : null}
       <h2 style={{ fontSize: 20, fontWeight: 700, margin: 0 }}>{query.data.incidentType}</h2>
       <p>{query.data.address}</p>
       {query.data.crossStreets ? <p>Cross streets: {query.data.crossStreets}</p> : null}
@@ -521,6 +522,24 @@ function DispatchHeader({ dispatchId }: { dispatchId: string }) {
         unavailable={query.data.updatesUnavailable === true}
       />
     </Card>
+  );
+}
+
+/** A RAW (fail-open) CAD dispatch: the location is only in the dispatch text below. */
+export function VerifyBanner() {
+  return (
+    <div
+      role="alert"
+      style={{
+        border: '2px solid var(--bx-color-danger, #b00020)',
+        borderRadius: 8,
+        padding: 'var(--bx-space-sm)',
+        fontWeight: 700,
+      }}
+    >
+      VERIFY: the CAD message could not be read automatically. The location is in the dispatch text
+      below - confirm it by radio before responding.
+    </div>
   );
 }
 

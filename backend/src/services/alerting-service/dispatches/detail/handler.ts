@@ -89,7 +89,10 @@ async function handleGetAlertDetail(
         incidentType: item.incidentType,
         address: item.address,
         crossStreets: item.crossStreets,
-        mapLink: item.mapLink ?? buildMapLink(item),
+        // A RAW (VERIFY) CAD dispatch has no real address: a map search for the placeholder
+        // "SEE DISPATCH TEXT" would send a crew nowhere (chain review M1).
+        mapLink: item.verifyRequired === true ? null : (item.mapLink ?? buildMapLink(item)),
+        ...(item.verifyRequired === true ? { verifyRequired: true } : {}),
         narrative: item.narrative,
         eligibleMemberCount: item.eligibleMemberCount ?? null,
         fanOutStartedAt: item.fanOutStartedAt ?? null,

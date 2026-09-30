@@ -56,6 +56,8 @@ interface DispatchAlertRecord {
   readonly channelsTested: readonly string[] | undefined;
   readonly dispatchedAt: number | undefined;
   readonly testDelivery: TestDelivery | undefined;
+  /** RAW (fail-open) CAD dispatch: pages carry the dispatch text (channelEnvelope.ts). */
+  readonly verifyRequired: boolean;
 }
 
 interface FanOutTask {
@@ -153,6 +155,7 @@ function parseDispatchAlertRecord(record: DynamoDBRecord): DispatchAlertRecord |
       item.testDelivery === 'deliver' || item.testDelivery === 'validate'
         ? item.testDelivery
         : undefined,
+    verifyRequired: item.verifyRequired === true,
   };
 }
 

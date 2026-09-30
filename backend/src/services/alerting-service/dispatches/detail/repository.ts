@@ -18,6 +18,8 @@ export interface DispatchAlertItem {
   readonly toneLadderStatus?: string;
   readonly currentToneSequence?: number;
   readonly nextToneAt?: number | null;
+  /** RAW (fail-open) CAD dispatch: the address is a placeholder; the text is the source. */
+  readonly verifyRequired?: boolean;
 }
 
 export async function getDispatchDetail(

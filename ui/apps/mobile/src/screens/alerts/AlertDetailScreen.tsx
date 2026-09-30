@@ -396,6 +396,24 @@ export function AlertDetailScreen() {
           </View>
         ) : null}
 
+        {dispatch?.verifyRequired ? (
+          <View
+            accessibilityRole="alert"
+            accessibilityLiveRegion="assertive"
+            style={{
+              padding: spacing.md,
+              borderRadius: radius.default,
+              borderWidth: 2,
+              borderColor: theme.status.warning,
+            }}
+          >
+            <Text style={{ color: theme.fg, fontSize: typeScale.body.size, fontWeight: '700' }}>
+              VERIFY: the CAD message could not be read automatically. The location is in the
+              dispatch text - confirm it by radio.
+            </Text>
+          </View>
+        ) : null}
+
         {/* Answer stack: before the narrative, so a driving member reaches it first (N1 #3). */}
         <View style={{ gap: spacing.md }}>
           <AnswerButton
