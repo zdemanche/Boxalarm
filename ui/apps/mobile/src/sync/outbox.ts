@@ -93,6 +93,16 @@ export async function markSyncing(id: string): Promise<void> {
   await store.update(id, { status: 'SYNCING' });
 }
 
+/** markSyncing that loses to a concurrent removeIfUnattempted instead of racing it. */
+export async function claimForSync(id: string): Promise<boolean> {
+  return store.claimForSync(id);
+}
+
+/** Drops a row only if nothing has ever been sent for it: its POST cannot have landed. */
+export async function discardIfUnattempted(id: string): Promise<boolean> {
+  return store.removeIfUnattempted(id);
+}
+
 // A row is only SYNCING while this process's drain() is working on it, so any SYNCING row found
 // before the first drain of a process was stranded by a kill/crash mid-sync. Without this reset
 // listDrainable would exclude it forever. Safe to re-POST: the row id is the idempotency key.

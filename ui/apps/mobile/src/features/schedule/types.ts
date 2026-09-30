@@ -41,6 +41,8 @@ export interface MarkUnavailableResult {
   readonly outboxId: string | null;
   /** Older mark-offs from this phone that had not been sent yet and were dropped for this one. */
   readonly replacedUnsent?: number;
+  /** Older mark-offs from this phone that were already sent (maybe landed), so they were kept. */
+  readonly earlierMayStand?: number;
 }
 
 /** No member id on the session: nothing is queued or cached under a shared/blank key. */

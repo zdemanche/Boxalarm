@@ -1,5 +1,6 @@
 import NetInfo from '@react-native-community/netinfo';
 import { ApiError, apiRequest } from '../lib/apiClient';
+import * as outbox from './outbox';
 import * as store from './outboxStore';
 import * as syncManager from './syncManager';
 import { signedPhotoContentType } from './syncManager';
@@ -616,6 +617,75 @@ describe('attendance', () => {
     expect(row?.status).toBe('REJECTED');
     expect(row?.lastError).toBe(syncManager.AVAILABILITY_CONFLICT);
     expect(syncManager.hasSynced('availability-b')).toBe(false);
+  });
+
+  // R2-M1 (a): the first POST landed but its response was lost; the resend gets 409.
+  test('a 409 on a resend after a lost response says it may already be in effect', async () => {
+    mockApiRequest
+      .mockRejectedValueOnce(new TypeError('Network request failed'))
+      .mockRejectedValueOnce(problem(409, 'Conflict'));
+
+    await syncManager.enqueueAvailability('availability-lost', 'm-1', 'Mark unavailable', {
+      startAt: 1790000000,
+      endAt: 1790020000,
+    });
+    await flush();
+    expect((await store.find('availability-lost'))?.status).toBe('FAILED');
+
+    await syncManager.retry('availability-lost');
+    await flush();
+
+    const row = await store.find('availability-lost');
+    expect(row?.status).toBe('REJECTED');
+    expect(row?.lastError).toBe(syncManager.AVAILABILITY_MAY_BE_IN_EFFECT);
+  });
+
+  // R2-M1 (b): an older mark-off that was already sent may have landed; it is kept, not dropped.
+  test('a correction keeps an older mark-off that was already attempted, and says both may stand', async () => {
+    mockApiRequest.mockRejectedValueOnce(new TypeError('Network request failed'));
+    await syncManager.enqueueAvailability('availability-sent', 'm-1', 'Mark unavailable', {
+      startAt: 1790000000,
+      endAt: 1790604800,
+    });
+    await flush();
+    expect((await store.find('availability-sent'))?.attempts).toBe(1);
+
+    syncManager.configure(null, null);
+    const result = await syncManager.enqueueAvailability(
+      'availability-fixed',
+      'm-1',
+      'Mark unavailable',
+      { startAt: 1790000020, endAt: 1790030000 },
+    );
+    syncManager.configure(tokens, 'https://api.example.com');
+
+    expect(result).toEqual({ replaced: 0, mayStand: 1 });
+    expect(await store.find('availability-sent')).toBeDefined();
+  });
+
+  // R2-M1 send race: replace and claim-for-send are conditional, so exactly one of them wins.
+  test('a row the drain has claimed for sending cannot be discarded, and vice versa', async () => {
+    syncManager.configure(null, null);
+    await outbox.enqueue({
+      id: 'race-1',
+      kind: 'AVAILABILITY',
+      label: 'x',
+      path: 'personnel/members/m-1/availability',
+      body: {},
+    });
+    await outbox.enqueue({
+      id: 'race-2',
+      kind: 'AVAILABILITY',
+      label: 'x',
+      path: 'personnel/members/m-1/availability',
+      body: {},
+    });
+
+    expect(await outbox.claimForSync('race-1')).toBe(true);
+    expect(await outbox.discardIfUnattempted('race-1')).toBe(false);
+    expect(await outbox.discardIfUnattempted('race-2')).toBe(true);
+    expect(await outbox.claimForSync('race-2')).toBe(false);
+    syncManager.configure(tokens, 'https://api.example.com');
   });
 
   test('a corrected mark-off replaces an older one that has not been sent yet', async () => {

@@ -150,20 +150,34 @@ export async function enqueueAvailability(
   memberId: string,
   label: string,
   body: Record<string, unknown>,
-): Promise<{ replaced: number }> {
+): Promise<{ replaced: number; mayStand: number }> {
   if (!memberId) throw new Error('A mark-off needs the signed-in member');
   const path = `personnel/members/${encodeURIComponent(memberId)}/availability`;
   const row = await outbox.enqueue({ id: idempotencyKey, kind: 'AVAILABILITY', label, path, body });
-  const older = (await outbox.olderSiblings(row)).filter((sibling) => sibling.status !== 'SYNCING');
-  await Promise.all(older.map((sibling) => outbox.discard(sibling.id)));
+  // Only a row that was never sent can be dropped: one that was attempted may have reached the
+  // server with its response lost, so it stays, and the member is told both may stand (R2-M1).
+  let replaced = 0;
+  let mayStand = 0;
+  for (const sibling of await outbox.olderSiblings(row)) {
+    if (await outbox.discardIfUnattempted(sibling.id)) replaced += 1;
+    else mayStand += 1;
+  }
   await notify();
   void drain();
-  return { replaced: older.length };
+  return { replaced, mayStand };
 }
 
-/** lastError of an AVAILABILITY row the server answered 409. */
+/** lastError of an AVAILABILITY row the server answered 409 on its first attempt. */
 export const AVAILABILITY_CONFLICT =
-  'Not recorded: the server already has a mark-off starting at this exact time. If this was a resend, the first one may already be in effect. Ask an officer to check.';
+  'Not recorded: the server already has a mark-off starting at this exact time.';
+
+/**
+ * lastError of an AVAILABILITY row answered 409 on a retry. The start carries this phone's own
+ * seconds, so that is almost always this row's earlier send landing with its response lost: the
+ * member is probably marked off, and must not be told they will still be alerted (R2-M1).
+ */
+export const AVAILABILITY_MAY_BE_IN_EFFECT =
+  'This may already be in effect: an earlier send may have reached Boxalarm before the connection dropped. Ask an officer to check.';
 
 export async function enqueueAttendance(
   idempotencyKey: string,
@@ -235,8 +249,8 @@ export const RESPONSE_NOT_RECORDED = "Not recorded on the officer's roster";
 export const RESPONSE_SUPERSEDED = 'A newer answer is already on the roster';
 
 class AvailabilityConflictError extends Error {
-  constructor() {
-    super(AVAILABILITY_CONFLICT);
+  constructor(retry: boolean) {
+    super(retry ? AVAILABILITY_MAY_BE_IN_EFFECT : AVAILABILITY_CONFLICT);
   }
 }
 
@@ -443,7 +457,7 @@ async function postOnce(row: OutboxRow): Promise<Response | null> {
       );
     }
     if (row.kind === 'AVAILABILITY' && error instanceof ApiError && error.problem.status === 409) {
-      throw new AvailabilityConflictError();
+      throw new AvailabilityConflictError(row.attempts > 0);
     }
     if (
       CONFLICT_MEANS_DELIVERED.has(row.kind) &&
@@ -552,7 +566,8 @@ async function runDrain(): Promise<void> {
         await notify();
         continue;
       }
-      await outbox.markSyncing(row.id);
+      // Conditional: a mark-off that replaced this row may have deleted it since it was read.
+      if (!(await outbox.claimForSync(row.id))) continue;
       await notify();
       try {
         await processEntry(row.id);

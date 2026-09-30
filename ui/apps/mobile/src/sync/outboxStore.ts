@@ -93,6 +93,27 @@ export async function update(id: string, patch: Partial<OutboxRow>): Promise<voi
   await getDb().execute(`UPDATE outbox SET ${assignments} WHERE id = ?`, [...values, id]);
 }
 
+/**
+ * Moves a row to SYNCING unless it is already there or gone. Atomic in SQLite, so it can't
+ * interleave with removeIfUnattempted: whichever runs first wins. Returns whether it claimed it.
+ */
+export async function claimForSync(id: string): Promise<boolean> {
+  const result = await getDb().execute(
+    "UPDATE outbox SET status = 'SYNCING' WHERE id = ? AND status != 'SYNCING'",
+    [id],
+  );
+  return (result.rowsAffected ?? 0) > 0;
+}
+
+/** Deletes a row only if it has never been sent (QUEUED, zero attempts). Returns whether it did. */
+export async function removeIfUnattempted(id: string): Promise<boolean> {
+  const result = await getDb().execute(
+    "DELETE FROM outbox WHERE id = ? AND status = 'QUEUED' AND attempts = 0",
+    [id],
+  );
+  return (result.rowsAffected ?? 0) > 0;
+}
+
 export async function remove(id: string): Promise<void> {
   await getDb().execute('DELETE FROM outbox WHERE id = ?', [id]);
 }

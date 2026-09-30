@@ -177,3 +177,41 @@ test('a mark-off the server refused reads "Not marked unavailable", never "in ef
   submitSpy.mockRestore();
   subscribeSpy.mockRestore();
 });
+
+test('a resend refused as a duplicate reads "May already be in effect", not "still alerted"', async () => {
+  const syncManager =
+    jest.requireActual<typeof import('../../sync/syncManager')>('../../sync/syncManager');
+  const submitSpy = jest
+    .spyOn(mockScheduleRepository, 'markUnavailable')
+    .mockResolvedValueOnce({ outboxId: 'availability-maybe', earlierMayStand: 1 });
+  const subscribeSpy = jest.spyOn(syncManager, 'subscribe').mockImplementation((listener) => {
+    listener({
+      items: [
+        {
+          id: 'availability-maybe',
+          kind: 'AVAILABILITY',
+          label: 'Mark unavailable',
+          status: 'REJECTED',
+          queuedAt: new Date().toISOString(),
+          lastError: syncManager.AVAILABILITY_MAY_BE_IN_EFFECT,
+        },
+      ],
+      lastSyncAt: null,
+    });
+    return () => undefined;
+  });
+  const { findByText, findByRole, queryByText } = await render(<AvailabilityScreen />);
+
+  await act(async () => {
+    fireEvent.press(await findByText('24 hours'));
+  });
+  await act(async () => {
+    fireEvent.press(await findByRole('button', { name: 'Mark unavailable' }));
+  });
+
+  expect(await findByText('May already be in effect')).toBeTruthy();
+  expect(queryByText(/you will still be alerted/)).toBeNull();
+  expect(await findByText(/both may stand/)).toBeTruthy();
+  submitSpy.mockRestore();
+  subscribeSpy.mockRestore();
+});

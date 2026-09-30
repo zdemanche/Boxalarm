@@ -147,7 +147,7 @@ export function useScheduleRepository(): ScheduleRepository {
         // The id covers the whole window, so a corrected mark-off is never collapsed into an
         // earlier one with the same start (review M1). An identical resubmit is the same id.
         const outboxId = `availability-${memberId}-${startSeconds}-${endSeconds}`;
-        const { replaced } = await syncManager.enqueueAvailability(
+        const { replaced, mayStand } = await syncManager.enqueueAvailability(
           outboxId,
           memberId,
           'Mark unavailable',
@@ -157,7 +157,7 @@ export function useScheduleRepository(): ScheduleRepository {
             ...(reason ? { reason } : {}),
           },
         );
-        return { outboxId, replacedUnsent: replaced };
+        return { outboxId, replacedUnsent: replaced, earlierMayStand: mayStand };
       },
     };
   }, [apiBaseUrl, isAuthenticated, isOnline, auth?.memberId]);

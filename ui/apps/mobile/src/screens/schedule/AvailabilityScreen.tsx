@@ -7,6 +7,7 @@ import { Button, Screen, useTheme, type SurfaceTheme } from '../../components/ui
 import { useScheduleRepository } from '../../features/schedule/apiScheduleRepository';
 import { useOptionalConnectivity } from '../../sync/ConnectivityContext';
 import { DeliveryStatus } from '../../sync/DeliveryStatus';
+import { AVAILABILITY_MAY_BE_IN_EFFECT } from '../../sync/syncManager';
 import { kvGet, kvSet } from '../../sync/kvStore';
 import { memberCacheKey } from '../../sync/memberCache';
 import { useOutboxItem } from '../../sync/useOutboxItem';
@@ -209,6 +210,7 @@ export function AvailabilityScreen() {
     end: Date;
     outboxId: string | null;
     replacedUnsent: number;
+    earlierMayStand: number;
   } | null>(null);
   const [lastMarkOff, setLastMarkOff] = useState<LastMarkOff | null>(null);
   const delivery = useOutboxItem(submitted?.outboxId ?? null);
@@ -276,6 +278,7 @@ export function AvailabilityScreen() {
         end: markOff.end,
         outboxId: result.outboxId,
         replacedUnsent: result.replacedUnsent ?? 0,
+        earlierMayStand: result.earlierMayStand ?? 0,
       });
       AccessibilityInfo.announceForAccessibility(
         result.outboxId === null
@@ -311,7 +314,11 @@ export function AvailabilityScreen() {
 
   if (submitted) {
     const inEffect = submitted.outboxId === null || delivery.state === 'SYNCED';
-    const failed = delivery.state === 'REJECTED' || delivery.state === 'DISCARDED';
+    // A 409 on a resend: the first send probably landed. Never "you will still be alerted" (R2-M1).
+    const maybeInEffect =
+      delivery.state === 'REJECTED' && delivery.lastError === AVAILABILITY_MAY_BE_IN_EFFECT;
+    const failed =
+      (delivery.state === 'REJECTED' && !maybeInEffect) || delivery.state === 'DISCARDED';
     // A mark-off this phone delivered earlier, still running, that this one does not cancel.
     const earlier =
       lastMarkOff &&
@@ -326,13 +333,26 @@ export function AvailabilityScreen() {
             accessibilityRole="header"
             style={{ color: theme.fg, fontSize: typeScale.title.size, fontWeight: '700' }}
           >
-            {failed
-              ? 'Not marked unavailable'
-              : inEffect
-                ? `Marked unavailable until ${formatWhen(submitted.end)}`
-                : 'Saved on this phone — not in effect yet'}
+            {maybeInEffect
+              ? 'May already be in effect'
+              : failed
+                ? 'Not marked unavailable'
+                : inEffect
+                  ? `Marked unavailable until ${formatWhen(submitted.end)}`
+                  : 'Saved on this phone — not in effect yet'}
           </Text>
-          {failed ? (
+          {maybeInEffect ? (
+            <Text
+              style={{
+                color: theme.status.warning,
+                fontSize: typeScale.body.size,
+                fontWeight: '600',
+              }}
+            >
+              An earlier send may have reached Boxalarm before the connection dropped, so you may
+              already be marked off until {formatWhen(submitted.end)}. Ask an officer to check.
+            </Text>
+          ) : failed ? (
             <Text
               style={{
                 color: theme.status.danger,
@@ -359,6 +379,19 @@ export function AvailabilityScreen() {
               does.
             </Text>
           )}
+          {submitted.earlierMayStand > 0 ? (
+            <Text
+              style={{
+                color: theme.status.warning,
+                fontSize: typeScale.body.size,
+                fontWeight: '600',
+              }}
+            >
+              An earlier mark-off from this phone may already be in effect: it was sent before, so
+              it can&apos;t be taken back. This one does not cancel it, and both may stand. Ask an
+              officer to check.
+            </Text>
+          ) : null}
           {submitted.replacedUnsent > 0 ? (
             <Text style={{ color: theme.fg, fontSize: typeScale.body.size }}>
               This replaces the mark-off you saved earlier that hadn&apos;t been sent yet.
