@@ -384,6 +384,14 @@ describe('CAD email handler', () => {
     expect(marker).toMatchObject({ ttl: NOW + 86_400 });
   });
 
+  it('replaying the email with an extra DKIM signature added is still the same replay', async () => {
+    await run();
+    serve(rawEmail({ dkimDomains: ['cad.county.gov', 'mail.cad.county.gov'] }));
+    await run();
+    expect(alerts()).toHaveLength(1);
+    expect(metric('CadIngressReplayRejected')).toBe(true);
+  });
+
   it('a CAD resend of the same incident with a new Message-ID is a duplicate, not a second page', async () => {
     await run();
     serve(rawEmail({ messageId: 'm-2@cad.county.gov' }));

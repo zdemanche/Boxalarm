@@ -1,3 +1,4 @@
+import { createHash, randomBytes } from 'node:crypto';
 import type {
   APIGatewayProxyEvent,
   APIGatewayProxyEventV2,
@@ -35,6 +36,7 @@ import { getWebhookKeys, refreshWebhookKeysIfStale } from './webhookKeys.js';
  */
 
 export const MAX_WEBHOOK_BODY_BYTES = 64 * 1024;
+const DUMMY_KEY = randomBytes(32).toString('hex');
 const CHANNEL = 'cad-webhook';
 
 type AuthFailure = 'UnknownSource' | 'StaleTimestamp' | 'NoActiveKey' | 'BadSignature';
@@ -127,6 +129,17 @@ export const handler: Handler<WebhookEvent, APIGatewayProxyStructuredResultV2> =
   }
 
   const reject = (reason: AuthFailure, extra: Record<string, unknown> = {}) => {
+    if (reason === 'UnknownSource') {
+      // Same HMAC work as a known source, so response time does not say whether a
+      // {deptId}.{sourceId} exists (security review minor). A known source's key read is
+      // cached per instance; the residual difference is one DynamoDB read.
+      verifySignature(
+        [DUMMY_KEY],
+        header(event, 'x-boxalarm-timestamp') ?? '0',
+        rawBody,
+        header(event, 'x-boxalarm-signature'),
+      );
+    }
     emitCadMetric('CadIngressAuthFailed', { Channel: CHANNEL, Reason: reason });
     // Never the body; the source header only as sent (it names no secret).
     logInfo('cadIngress.webhook.authFailed', { traceId, reason, ...extra });
@@ -207,7 +220,10 @@ export const handler: Handler<WebhookEvent, APIGatewayProxyStructuredResultV2> =
 
   // 4. Replay: an early read-only answer. The marker itself is written inside the dispatch
   // transaction (step 5), so a failed or killed write never strands it (chain review M3).
-  const replayRef = { deptId: key.deptId, sourceId: source.sourceId, token: signature };
+  // Keyed on the signed CONTENT (timestamp + raw body), not on whichever signature matched:
+  // a request carrying several v1= signatures must not yield several replay tokens (minor m2).
+  const replayToken = createHash('sha256').update(`${timestamp}.`).update(rawBody).digest('hex');
+  const replayRef = { deptId: key.deptId, sourceId: source.sourceId, token: replayToken };
   try {
     if (await isReplayMarked(client, tableName, replayRef, nowSeconds)) {
       emitCadMetric('CadIngressReplayRejected', { Channel: CHANNEL });
@@ -228,7 +244,7 @@ export const handler: Handler<WebhookEvent, APIGatewayProxyStructuredResultV2> =
       text: body.text,
       ...(body.structured ? { structured: body.structured } : {}),
       receivedAt: nowSeconds,
-      replay: { token: signature, ttlSeconds: REPLAY_TTL_SECONDS },
+      replay: { token: replayToken, ttlSeconds: REPLAY_TTL_SECONDS },
     });
     if (result.outcome === 'replay') return problem(409, 'Conflict', traceId);
     if (result.outcome === 'created') {

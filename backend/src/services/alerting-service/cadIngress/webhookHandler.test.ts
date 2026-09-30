@@ -203,6 +203,13 @@ describe('CAD webhook handler', () => {
     expect(String(marker?.pk)).toMatch(/^DEPT#nichols-fd#CAD_REPLAY#county#[0-9a-f]{64}$/);
   });
 
+  it('a replay carrying an extra signature is still the same replay (content-keyed)', async () => {
+    expect((await call(webhookEvent(DISPATCH))).statusCode).toBe(202);
+    const good = sign(CURRENT, String(NOW), DISPATCH);
+    const doubled = `v1=${good}, v1=${sign(PREVIOUS, String(NOW), DISPATCH)}`;
+    expect((await call(webhookEvent(DISPATCH, { signature: doubled }))).statusCode).toBe(409);
+  });
+
   it('rotation: a request signed with the previous key still passes', async () => {
     expect((await call(webhookEvent(DISPATCH, { key: PREVIOUS }))).statusCode).toBe(202);
   });

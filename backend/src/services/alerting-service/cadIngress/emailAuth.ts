@@ -115,12 +115,15 @@ export function checkEmailSender(
 }
 
 /**
- * Replay key: RFC 5322 Message-ID + the DKIM b= signatures. SES's own messageId is not used -
- * a re-sent copy of the same message gets a new one.
+ * Replay key: RFC 5322 Message-ID + a hash of the message's text (Subject and body). SES's own
+ * messageId is not used - a re-sent copy gets a new one - and neither are the DKIM b= values,
+ * which a replayer can multiply by adding a bogus DKIM-Signature (security review minor m2).
  */
 export function emailReplayToken(email: ParsedEmail): string {
-  const signatures = email.dkimSignatures.map((signature) => signature.signature).sort();
+  const content = createHash('sha256')
+    .update(`${email.subject ?? ''}\n${email.text}`, 'utf8')
+    .digest('hex');
   return createHash('sha256')
-    .update(`${email.messageId ?? ''}|${signatures.join('|')}`, 'utf8')
+    .update(`${email.messageId ?? ''}|${content}`, 'utf8')
     .digest('hex');
 }
