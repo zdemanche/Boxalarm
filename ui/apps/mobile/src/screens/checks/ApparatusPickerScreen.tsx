@@ -8,11 +8,9 @@ import { useOptionalAuth } from '../../auth/AuthContext';
 import { useChecksRepository } from '../../features/checks/apiChecksRepository';
 import type { Apparatus } from '../../features/checks/types';
 import { ApiError } from '../../lib/apiClient';
+import { SERVICE_STATUS_ROLES } from '../../features/checks/serviceStatusApi';
 import type { ChecksStackParamList } from '../../navigation/ChecksStack';
 import { formatAsOf, NoCachedDataError } from '../../sync/readThrough';
-
-// Cedar UpdateServiceStatus: APPARATUS_OFFICER_GROUPS.
-const SERVICE_STATUS_ROLES = ['APPARATUS', 'OFFICER', 'CHIEF', 'ADMIN'] as const;
 
 type LoadState =
   | { kind: 'loading' }
@@ -37,7 +35,7 @@ export function ApparatusPickerScreen() {
   const theme = useTheme();
   const repository = useChecksRepository();
   const roles = useOptionalAuth()?.roles ?? [];
-  const canReturnToService = SERVICE_STATUS_ROLES.some((role) => roles.includes(role));
+  const canChangeServiceStatus = SERVICE_STATUS_ROLES.some((role) => roles.includes(role));
   const [state, setState] = useState<LoadState>({ kind: 'loading' });
   const [attempt, setAttempt] = useState(0);
 
@@ -65,6 +63,9 @@ export function ApparatusPickerScreen() {
   }, [repository, attempt]);
 
   const retry = useCallback(() => setAttempt((n) => n + 1), []);
+
+  // Coming back from the service-status screen: reload, so the row shows the new status.
+  useEffect(() => navigation.addListener?.('focus', () => setAttempt((n) => n + 1)), [navigation]);
 
   const header = (
     <View style={{ gap: spacing.md, paddingBottom: spacing.md }}>
@@ -128,51 +129,65 @@ export function ApparatusPickerScreen() {
             // Out-of-service units stay checkable (postChecks has no status gate): crews check a
             // unit before an officer returns it. The check itself doesn't change its status.
             return (
-              <TouchableOpacity
-                accessibilityRole="button"
-                accessibilityLabel={`${item.unitId}, ${item.type}, ${
-                  inService ? 'in service' : 'out of service'
-                }. Start check.`}
-                onPress={() => navigation.navigate('CheckRunner', { apparatusId: item.unitId })}
+              <View
                 style={{
-                  minHeight: targetSize.field,
-                  justifyContent: 'center',
-                  gap: spacing.xs,
+                  gap: spacing.sm,
                   paddingVertical: spacing.md,
                   paddingHorizontal: spacing.md,
                   borderBottomWidth: 1,
                   borderBottomColor: theme.borderDecorative,
                 }}
               >
-                <Text
-                  style={{
-                    color: theme.fg,
-                    fontSize: typeScale.heading.size,
-                    fontWeight: '700',
-                    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
-                  }}
+                <TouchableOpacity
+                  accessibilityRole="button"
+                  accessibilityLabel={`${item.unitId}, ${item.type}, ${
+                    inService ? 'in service' : 'out of service'
+                  }. Start check.`}
+                  onPress={() => navigation.navigate('CheckRunner', { apparatusId: item.unitId })}
+                  style={{ minHeight: targetSize.field, justifyContent: 'center', gap: spacing.xs }}
                 >
-                  {item.unitId}
-                </Text>
-                <Text style={{ color: theme.fgMuted, fontSize: typeScale.body.size }}>
-                  {item.type}
-                </Text>
-                <StatusChip
-                  status={inService ? 'ok' : 'danger'}
-                  label={inService ? 'In service' : 'Out of service — you can still check it'}
-                />
-                {!inService && canReturnToService ? (
-                  // A check doesn't change service status. The app has no service-status control
-                  // yet, so point the roles Cedar allows (UpdateServiceStatus) at the web one.
-                  <Text style={{ color: theme.fgMuted, fontSize: typeScale.body.size }}>
-                    To return it to service, use Apparatus › {item.unitId} › Service status on the
-                    Boxalarm website.
+                  <Text
+                    style={{
+                      color: theme.fg,
+                      fontSize: typeScale.heading.size,
+                      fontWeight: '700',
+                      fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
+                    }}
+                  >
+                    {item.unitId}
                   </Text>
+                  <Text style={{ color: theme.fgMuted, fontSize: typeScale.body.size }}>
+                    {item.type}
+                  </Text>
+                  <StatusChip
+                    status={inService ? 'ok' : 'danger'}
+                    label={inService ? 'In service' : 'Out of service — you can still check it'}
+                  />
+                  <Text
+                    style={{ color: theme.fg, fontSize: typeScale.body.size, fontWeight: '600' }}
+                  >
+                    Start check ›
+                  </Text>
+                </TouchableOpacity>
+                {canChangeServiceStatus ? (
+                  // A check doesn't change service status; this does (Cedar UpdateServiceStatus).
+                  <Button
+                    label={inService ? 'Take out of service' : 'Return to service'}
+                    variant="secondary"
+                    accessibilityLabel={
+                      inService
+                        ? `Take ${item.unitId} out of service`
+                        : `Return ${item.unitId} to service`
+                    }
+                    onPress={() =>
+                      navigation.navigate('ServiceStatus', {
+                        unitId: item.unitId,
+                        status: item.status,
+                      })
+                    }
+                  />
                 ) : null}
-                <Text style={{ color: theme.fg, fontSize: typeScale.body.size, fontWeight: '600' }}>
-                  Start check ›
-                </Text>
-              </TouchableOpacity>
+              </View>
             );
           }}
         />

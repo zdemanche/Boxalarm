@@ -35,11 +35,27 @@ test('an out-of-service unit can be checked, without promising the check returns
   expect(queryByText(/return it to service/)).toBeNull();
 });
 
-test('roles allowed to change service status are told where to return a unit', async () => {
+test('roles Cedar allows get a service-status control per unit; members do not', async () => {
   mockRoles = ['OFFICER'];
-  const { findByText } = await render(<ApparatusPickerScreen />);
+  const { findByRole } = await render(<ApparatusPickerScreen />);
 
-  expect(await findByText(/To return it to service, use Apparatus › TANKER-1/)).toBeTruthy();
+  fireEvent.press(await findByRole('button', { name: 'Return TANKER-1 to service' }));
+  expect(mockNavigate).toHaveBeenCalledWith('ServiceStatus', {
+    unitId: 'TANKER-1',
+    status: 'OUT_OF_SERVICE',
+  });
+  fireEvent.press(await findByRole('button', { name: 'Take ENGINE-2 out of service' }));
+  expect(mockNavigate).toHaveBeenCalledWith('ServiceStatus', {
+    unitId: 'ENGINE-2',
+    status: 'IN_SERVICE',
+  });
+});
+
+test('a member sees no service-status control', async () => {
+  const { findByText, queryByRole } = await render(<ApparatusPickerScreen />);
+
+  await findByText('ENGINE-2');
+  expect(queryByRole('button', { name: /out of service$|to service$/ })).toBeNull();
 });
 
 test('lists each apparatus with its unit id and status', async () => {
