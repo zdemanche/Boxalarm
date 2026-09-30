@@ -5,7 +5,7 @@ import { AccessibilityInfo, Text, View } from 'react-native';
 import { Button, useTheme } from '../../components/ui';
 import { useOptionalConnectivity } from '../../sync/ConnectivityContext';
 import { useScheduleRepository } from './apiScheduleRepository';
-import { ApiError } from '../../lib/apiClient';
+import { ApiError, ApiTimeoutError } from '../../lib/apiClient';
 import { MarkOffBeingSentError, MarkOffNeedsConnectionError, type MarkOff } from './types';
 
 function formatWhen(epochSeconds: number): string {
@@ -122,7 +122,10 @@ export function MarkOffList({
       const text =
         error instanceof MarkOffNeedsConnectionError || error instanceof MarkOffBeingSentError
           ? error.message
-          : `Couldn't end it - you're still marked unavailable until ${formatWhen(markOff.endAt)}. Try again, or tell an officer.`;
+          : error instanceof ApiTimeoutError
+            ? // The request may have reached the server before the answer was lost (minor).
+              'No answer from Boxalarm - it may or may not have ended. Check again with signal before you rely on it.'
+            : `Couldn't end it - you're still marked unavailable until ${formatWhen(markOff.endAt)}. Try again, or tell an officer.`;
       setMessage({ text, danger: true });
       AccessibilityInfo.announceForAccessibility(text);
     } finally {

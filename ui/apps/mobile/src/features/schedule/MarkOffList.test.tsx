@@ -124,3 +124,17 @@ test('offline before the server was ever seen to support it: nothing is promised
 
   expect(screen.toJSON()).toBeNull();
 });
+
+test('a timeout on ending says it may or may not have ended, not "still marked unavailable"', async () => {
+  const { ApiTimeoutError } = jest.requireActual('../../lib/apiClient');
+  repository.endMarkOff.mockRejectedValueOnce(new ApiTimeoutError(15_000));
+  await render(<MarkOffList />);
+  await screen.findByText(/^Marked unavailable until/);
+
+  await act(async () => {
+    fireEvent.press(screen.getByRole('button', { name: /^I'm available again/ }));
+  });
+
+  expect(await screen.findByText(/it may or may not have ended\. Check again/)).toBeTruthy();
+  expect(screen.queryByText(/still marked unavailable/)).toBeNull();
+});
