@@ -550,6 +550,8 @@ export const auditRoute = new AuditRoute("audit-route", {
   env,
   platformTableName: platformTable.tableName,
   platformTableArn: platformTable.tableArn,
+  policyStoreArn: policyStore.policyStoreArn,
+  policyStoreId: policyStore.policyStoreId,
   logGroup: platformLogGroup,
   httpApi,
 });

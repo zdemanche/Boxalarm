@@ -1,17 +1,11 @@
 import { randomUUID } from 'node:crypto';
-import type {
-  APIGatewayProxyEventV2WithLambdaAuthorizer,
-  APIGatewayProxyResultV2,
-  Handler,
-} from 'aws-lambda';
+import type { APIGatewayProxyResultV2 } from 'aws-lambda';
+import { withAuthorization, type CedarPrincipalContext, type GuardEvent } from '@boxalarm/authz';
 import { toVerifiedDeptId } from '@boxalarm/dept-scope';
-import type { AuthorizerContext } from '../authorizer/handler.js';
 import { AuditConfigError, getDocumentClient, logger, readAuditConfig } from './dynamoClient.js';
 import { InvalidCursorError, queryAuditTrailForEntity } from './queryAuditTrail.js';
 
-const ADMIN_GROUPS: readonly string[] = ['CHIEF', 'ADMIN', 'OFFICER'];
-
-type AuditEvent = APIGatewayProxyEventV2WithLambdaAuthorizer<AuthorizerContext>;
+type AuditEvent = GuardEvent;
 
 interface ProblemDetails {
   readonly type: string;
@@ -22,7 +16,7 @@ interface ProblemDetails {
 }
 
 function extractTraceId(event: AuditEvent): string {
-  const header = event.headers.traceparent ?? event.headers.Traceparent;
+  const header = event.headers?.traceparent ?? event.headers?.Traceparent;
   const traceId = header?.split('-')[1];
   return traceId && traceId.length > 0 ? traceId : randomUUID();
 }
@@ -72,28 +66,15 @@ function emitAuditQueryMetric(
   );
 }
 
-function isAdmin(authorizerContext: AuthorizerContext): boolean {
-  const groups = authorizerContext['cognito:groups'].split(' ').filter((group) => group.length > 0);
-  return groups.some((group) => ADMIN_GROUPS.includes(group));
-}
-
 function isValidKeySegment(value: string): boolean {
   return value.length > 0 && !value.includes(',') && !value.includes('#');
 }
 
-export const handler: Handler<AuditEvent, APIGatewayProxyResultV2> = async (event) => {
+async function queryAuditTrail(
+  event: AuditEvent,
+  principal: CedarPrincipalContext,
+): Promise<APIGatewayProxyResultV2> {
   const traceId = extractTraceId(event);
-  const authorizerContext = event.requestContext.authorizer.lambda;
-
-  if (!isAdmin(authorizerContext)) {
-    emitAuditQueryMetric('AuditQueryFailed', 'Forbidden');
-    return problemResponse(
-      403,
-      'Forbidden',
-      'This endpoint requires the chief, admin, or officer role.',
-      traceId,
-    );
-  }
 
   const params = event.queryStringParameters ?? {};
   const entityType = params.entityType;
@@ -111,7 +92,7 @@ export const handler: Handler<AuditEvent, APIGatewayProxyResultV2> = async (even
   }
 
   try {
-    const deptId = toVerifiedDeptId(authorizerContext);
+    const deptId = toVerifiedDeptId(principal);
     const { tableName } = readAuditConfig(process.env);
     const client = getDocumentClient();
     const page = await queryAuditTrailForEntity(
@@ -175,4 +156,16 @@ export const handler: Handler<AuditEvent, APIGatewayProxyResultV2> = async (even
       traceId,
     );
   }
-};
+}
+
+/**
+ * Security-web MINOR 12: the department's audit trail is Cedar ViewAuditTrail (CHIEF/ADMIN,
+ * ADMIN_ONLY_ACTIONS) - the roles the web shows /audit-log to - instead of a hand-rolled groups
+ * check that also admitted OFFICER.
+ */
+export const handler = withAuthorization(queryAuditTrail, {
+  actionType: 'Boxalarm::Action',
+  actionId: 'ViewAuditTrail',
+  resourceType: 'Boxalarm::Department',
+  resourceId: (event) => event.requestContext.authorizer?.lambda?.deptId ?? '',
+});
