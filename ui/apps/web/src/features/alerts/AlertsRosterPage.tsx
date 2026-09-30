@@ -24,7 +24,13 @@ import {
 } from './api';
 import { PrePlanPanel } from './PrePlanPanel';
 import { ToneLadderPanel } from './ToneLadderPanel';
-import type { DeliveryReceipt, FieldError, ManualDispatchInput, RosterEntry } from './types';
+import type {
+  DeliveryReceipt,
+  DispatchUpdate,
+  FieldError,
+  ManualDispatchInput,
+  RosterEntry,
+} from './types';
 
 const REFETCH_INTERVAL_MS = 10_000;
 const RECEIPT_CHANNELS = ['push', 'sms', 'voice'];
@@ -510,7 +516,61 @@ function DispatchHeader({ dispatchId }: { dispatchId: string }) {
         hydrantsUnavailable={query.data.nearestHydrantsUnavailable === true}
         hydrantsIncomplete={query.data.nearestHydrantsIncomplete === true}
       />
+      <DispatchUpdates
+        updates={query.data.updates}
+        unavailable={query.data.updatesUnavailable === true}
+      />
     </Card>
+  );
+}
+
+const UPDATE_FIELD_LABELS: Record<string, string> = {
+  incidentType: 'Type',
+  address: 'Address',
+  crossStreets: 'Cross streets',
+  unitsRequested: 'Units',
+  narrative: 'Narrative',
+};
+
+/** The CAD's later messages for this call: what changed, when. */
+export function DispatchUpdates({
+  updates,
+  unavailable,
+}: {
+  updates: DispatchUpdate[] | undefined;
+  unavailable: boolean;
+}) {
+  if (unavailable) {
+    return <p role="status">CAD updates for this call could not be loaded.</p>;
+  }
+  if (!updates || updates.length === 0) return null;
+  return (
+    <section aria-labelledby="dispatch-updates-heading">
+      <h3 id="dispatch-updates-heading" style={{ fontSize: 17, fontWeight: 600 }}>
+        CAD updates ({updates.length})
+      </h3>
+      <ol>
+        {updates.map((update) => (
+          <li key={update.updateId}>
+            <time dateTime={new Date(update.receivedAt * 1000).toISOString()}>
+              {new Date(update.receivedAt * 1000).toLocaleTimeString()}
+            </time>
+            : {update.summary}
+            {update.changes.filter((c) => c.field !== 'narrative').length > 0 ? (
+              <ul>
+                {update.changes
+                  .filter((c) => c.field !== 'narrative')
+                  .map((c) => (
+                    <li key={c.field}>
+                      {UPDATE_FIELD_LABELS[c.field] ?? c.field}: {c.from || '(none)'} → {c.to}
+                    </li>
+                  ))}
+              </ul>
+            ) : null}
+          </li>
+        ))}
+      </ol>
+    </section>
   );
 }
 

@@ -49,6 +49,8 @@ export interface CadIngressArgs {
   alertingTableArn: pulumi.Input<string>;
   alertingCmkArn: pulumi.Input<string>;
   alertingTableName: pulumi.Input<string>;
+  /** The alerting SNS FIFO topic: the update notifier publishes UPDATE pushes (push only). */
+  alertingTopicArn: pulumi.Input<string>;
   busName: pulumi.Input<string>;
   /** alerting-page: every alarm here. */
   pageTopicArn: pulumi.Input<string>;
@@ -89,10 +91,24 @@ export function cadIngressTableStatements(tableArn: string): IamPolicyStatement[
       },
     },
     {
-      // One TransactWriteItems of conditional Puts; DynamoDB authorizes each item as PutItem.
+      // An incident's lock -> its dispatch, then the dispatch as stored, to record a CAD update
+      // (cadIngress/updateRepository.ts).
+      Sid: "CadUpdateRead",
+      Effect: "Allow",
+      Action: ["dynamodb:GetItem"],
+      Resource: tableArn,
+      Condition: {
+        "ForAllValues:StringLike": {
+          "dynamodb:LeadingKeys": ["DEPT#*#DISPATCH_IDEMPOTENCY#*", "DEPT#*#DISPATCH#*"],
+        },
+      },
+    },
+    {
+      // One TransactWriteItems of conditional Puts (and, for an update, one conditional
+      // Update of the DISPATCH_ALERT); DynamoDB authorizes each item as its own action.
       Sid: "CadDispatchWrite",
       Effect: "Allow",
-      Action: ["dynamodb:PutItem", "dynamodb:ConditionCheckItem"],
+      Action: ["dynamodb:PutItem", "dynamodb:UpdateItem", "dynamodb:ConditionCheckItem"],
       Resource: tableArn,
       Condition: {
         "ForAllValues:StringLike": {
@@ -119,6 +135,9 @@ export class CadIngress extends pulumi.ComponentResource {
   /** Full URL a CAD POSTs to. */
   public readonly webhookUrl: pulumi.Output<string>;
   public readonly emailLambda?: ServiceLambda;
+  /** The non-escalating UPDATE push for a CAD update, async-invoked by the ingress Lambdas. */
+  public readonly updateNotifierLambda: ServiceLambda;
+  public readonly updateNotifierFailureQueue: aws.sqs.Queue;
   public readonly mailBucket?: aws.s3.BucketV2;
   public readonly mailKey?: aws.kms.Key;
   public readonly emailFailureQueue?: aws.sqs.Queue;
@@ -272,6 +291,103 @@ export class CadIngress extends pulumi.ComponentResource {
       { parent: this },
     );
 
+    // ---- CAD update notifier (docs/decisions/2026-09-30-cad-dispatch-updates.md). Invoked
+    // asynchronously by the ingress Lambdas after an update is durably recorded - NOT from the
+    // table stream, which already has its two readers (fan-out, outbox drain): a third reader
+    // per shard is throttled and would slow the tone-1 fan-out.
+    this.updateNotifierFailureQueue = new aws.sqs.Queue(
+      `${name}-update-notifier-failures`,
+      {
+        name: `boxalarm-${env}-alerting-cad-update-notifier-failures`,
+        messageRetentionSeconds: 1_209_600,
+      },
+      { parent: this },
+    );
+    this.updateNotifierLambda = new ServiceLambda(
+      `${name}-update-notifier-fn`,
+      {
+        env,
+        serviceName: "alerting-service",
+        functionName: `boxalarm-${env}-alerting-cad-update-notifier`,
+        handler: LAMBDA_HANDLER,
+        code: lambdaCode("alerting-service", "cad-update-notifier"),
+        logGroup: args.logGroup,
+        environment: {
+          ALERTING_TABLE_NAME: args.alertingTableName,
+          ALERTING_TOPIC_ARN: args.alertingTopicArn,
+        },
+        additionalPolicyStatements: pulumi
+          .all([tableArn, args.alertingTopicArn])
+          .apply(([arn, topicArn]): IamPolicyStatement[] => [
+            {
+              // The update, the dispatch, its roster, and the per-member CADUPDATE# claims -
+              // all on the dispatch's own partition.
+              Sid: "CadUpdateNotifierDispatchPartition",
+              Effect: "Allow",
+              Action: [
+                "dynamodb:GetItem",
+                "dynamodb:Query",
+                "dynamodb:PutItem",
+                "dynamodb:UpdateItem",
+              ],
+              Resource: arn,
+              Condition: {
+                "ForAllValues:StringLike": { "dynamodb:LeadingKeys": ["DEPT#*#DISPATCH#*"] },
+              },
+            },
+            {
+              Sid: "AlertingTopicPublish",
+              Effect: "Allow",
+              Action: ["sns:Publish"],
+              Resource: topicArn,
+            },
+          ]),
+        reservedConcurrentExecutions: 2,
+        timeout: 30,
+        permissionsBoundaryArn: args.permissionsBoundaryArn,
+      },
+      { parent: this },
+    );
+    new aws.iam.RolePolicy(
+      `${name}-update-notifier-on-failure`,
+      {
+        role: this.updateNotifierLambda.role.id,
+        policy: this.updateNotifierFailureQueue.arn.apply((queueArn) =>
+          JSON.stringify({
+            Version: "2012-10-17",
+            Statement: [
+              {
+                Sid: "CadUpdateNotifierOnFailure",
+                Effect: "Allow",
+                Action: "sqs:SendMessage",
+                Resource: queueArn,
+              },
+            ],
+          }),
+        ),
+      },
+      { parent: this },
+    );
+    new aws.lambda.FunctionEventInvokeConfig(
+      `${name}-update-notifier-invoke-config`,
+      {
+        functionName: this.updateNotifierLambda.function.name,
+        maximumRetryAttempts: 2,
+        // An update push later than this is stale news; the update still shows on the call.
+        maximumEventAgeInSeconds: 900,
+        destinationConfig: { onFailure: { destination: this.updateNotifierFailureQueue.arn } },
+      },
+      { parent: this },
+    );
+    const invokeNotifier = this.updateNotifierLambda.function.arn.apply(
+      (fnArn): IamPolicyStatement => ({
+        Sid: "InvokeCadUpdateNotifier",
+        Effect: "Allow",
+        Action: ["lambda:InvokeFunction"],
+        Resource: fnArn,
+      }),
+    );
+
     // ---- Signed webhook: its own API, stage, throttle and reserved concurrency.
     this.webhookLambda = new ServiceLambda(
       `${name}-webhook-fn`,
@@ -282,11 +398,15 @@ export class CadIngress extends pulumi.ComponentResource {
         handler: LAMBDA_HANDLER,
         code: lambdaCode("alerting-service", "cad-webhook"),
         logGroup: args.logGroup,
-        environment: { ALERTING_TABLE_NAME: args.alertingTableName },
+        environment: {
+          ALERTING_TABLE_NAME: args.alertingTableName,
+          CAD_UPDATE_NOTIFIER_FUNCTION: this.updateNotifierLambda.function.name,
+        },
         additionalPolicyStatements: pulumi
-          .all([tableArn, secretArnPattern])
-          .apply(([arn, secretArn]): IamPolicyStatement[] => [
+          .all([tableArn, secretArnPattern, invokeNotifier])
+          .apply(([arn, secretArn, invoke]): IamPolicyStatement[] => [
             ...cadIngressTableStatements(arn),
+            invoke,
             {
               // Read only, and only the CAD webhook secrets; the rotation route writes them.
               Sid: "CadWebhookKeysRead",
@@ -386,6 +506,7 @@ export class CadIngress extends pulumi.ComponentResource {
 
     const lambdaRoles: Record<string, aws.iam.Role> = {
       copy: this.copyLambda.role,
+      updateNotifier: this.updateNotifierLambda.role,
       webhook: this.webhookLambda.role,
     };
 
@@ -545,11 +666,13 @@ export class CadIngress extends pulumi.ComponentResource {
             CAD_MAIL_BUCKET: this.mailBucket.bucket,
             CAD_MAIL_PREFIX,
             CAD_INGRESS_EMAIL_DOMAIN: domain,
+            CAD_UPDATE_NOTIFIER_FUNCTION: this.updateNotifierLambda.function.name,
           },
           additionalPolicyStatements: pulumi
-            .all([tableArn, this.mailBucket.arn, this.mailKey.arn])
-            .apply(([arn, bucketArn, keyArn]): IamPolicyStatement[] => [
+            .all([tableArn, this.mailBucket.arn, this.mailKey.arn, invokeNotifier])
+            .apply(([arn, bucketArn, keyArn, invoke]): IamPolicyStatement[] => [
               ...cadIngressTableStatements(arn),
+              invoke,
               {
                 Sid: "ReadInboundMail",
                 Effect: "Allow",
@@ -725,6 +848,22 @@ export class CadIngress extends pulumi.ComponentResource {
         "A CAD dispatch paged as raw text (SEE DISPATCH TEXT, flagged VERIFY): the source's parser template did not find the address. The page went; fix the template (Settings > CAD sources > test parse).",
         [args.pageTopicArn, args.opsTopicArn],
       ),
+      cadAlarm(
+        "update-push-failed",
+        "CadUpdatePushFailed",
+        "A CAD update to a call was recorded (it shows on the call) but its UPDATE push to the crew failed or could not be handed off. Crews already paged did not get the change on their phones: relay it by radio if it matters.",
+        [args.pageTopicArn],
+      ),
+      this.alarm("update-notifier-failures", {
+        name: `boxalarm-${env}-alerting-cad-update-notifier-failures-not-empty`,
+        description:
+          "The CAD update notifier failed after retries: an UPDATE push did not reach the crew. The update is recorded on the call; relay it by radio if it matters, then check the notifier logs.",
+        namespace: "AWS/SQS",
+        metricName: "ApproximateNumberOfMessagesVisible",
+        dimensions: { QueueName: this.updateNotifierFailureQueue.name },
+        statistic: "Maximum",
+        actions: [args.pageTopicArn],
+      }),
       this.alarm("webhook-errors", {
         name: `boxalarm-${env}-alerting-cad-webhook-errors`,
         description:

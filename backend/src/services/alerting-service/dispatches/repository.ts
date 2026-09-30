@@ -53,6 +53,8 @@ export interface CadDispatchTags {
   readonly verifyRequired: boolean;
   readonly incidentNumber?: string;
   readonly dispatchTimeText?: string;
+  /** Whitespace-insensitive hash of the message text: a resend of it is not an update. */
+  readonly contentHash?: string;
 }
 
 export type CreateManualDispatchResult =
@@ -158,6 +160,7 @@ export async function createManualDispatch(
                   ...(input.cad.dispatchTimeText
                     ? { cadDispatchTime: input.cad.dispatchTimeText }
                     : {}),
+                  ...(input.cad.contentHash ? { cadContentHash: input.cad.contentHash } : {}),
                 }
               : {}),
             ...(isTest

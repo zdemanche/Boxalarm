@@ -134,6 +134,15 @@ export interface DispatchAlert {
    * predates it; never shown as "not requested".
    */
   mutualAid?: MutualAid | null;
+  /** CAD updates to this call, oldest first (decision 2026-09-30-cad-dispatch-updates.md). */
+  updates?: DispatchUpdateSummary[];
+}
+
+export interface DispatchUpdateSummary {
+  updateId: string;
+  /** Epoch seconds. */
+  receivedAt: number;
+  summary: string;
 }
 
 /** One row of GET alerting/dispatches?status=active (dispatches/list/handler.ts). */

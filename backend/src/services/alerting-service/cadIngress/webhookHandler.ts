@@ -204,9 +204,22 @@ export const handler: Handler<APIGatewayProxyEventV2, APIGatewayProxyStructuredR
       replay: { token: signature, ttlSeconds: REPLAY_TTL_SECONDS },
     });
     if (result.outcome === 'replay') return problem(409, 'Conflict', traceId);
-    return result.outcome === 'created'
-      ? json(202, { status: 'accepted', dispatchId: result.dispatchId, parse: result.parseStatus })
-      : json(200, { status: 'duplicate' });
+    if (result.outcome === 'created') {
+      return json(202, {
+        status: 'accepted',
+        dispatchId: result.dispatchId,
+        parse: result.parseStatus,
+      });
+    }
+    if (result.outcome === 'updated') {
+      return json(202, {
+        status: 'updated',
+        dispatchId: result.dispatchId,
+        updateId: result.updateId,
+        parse: result.parseStatus,
+      });
+    }
+    return json(200, { status: 'duplicate' });
   } catch (error) {
     return unavailable('DispatchWriteUnavailable', error);
   }

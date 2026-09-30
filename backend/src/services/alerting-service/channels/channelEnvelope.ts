@@ -285,6 +285,107 @@ export function parseMutualAidPromptEnvelope(
   };
 }
 
+/**
+ * A CAD update to a call already paged (docs/decisions/2026-09-30-cad-dispatch-updates.md):
+ * a non-escalating push to members already on the dispatch's roster. No toneSequence, no tone
+ * ladder; guarded per update in its own CADUPDATE# namespace so it never collides with a
+ * tone's RECEIPT#.
+ */
+export interface CadUpdatePayload {
+  readonly alertKind: 'dispatch_update';
+  readonly deptId: string;
+  readonly dispatchId: string;
+  readonly memberId: string;
+  readonly channel: 'push';
+  /** Deterministic per update content (cadIngress/updateRepository.ts). */
+  readonly updateId: string;
+  readonly incidentType: string;
+  readonly address: string;
+  /** Short "what changed" line, e.g. "Units: E1, L2 -> E1, L2, R1". */
+  readonly summary: string;
+  readonly isTest: false;
+  readonly crossStreets?: string | undefined;
+  readonly dispatchedAt?: number | undefined;
+  readonly testDelivery?: undefined;
+}
+
+export function buildCadUpdatePayload(input: {
+  readonly deptId: VerifiedDeptId;
+  readonly dispatchId: string;
+  readonly memberId: string;
+  readonly updateId: string;
+  readonly summary: string;
+  readonly dispatch: DispatchAlertText;
+}): CadUpdatePayload {
+  return {
+    alertKind: 'dispatch_update',
+    deptId: input.deptId,
+    dispatchId: input.dispatchId,
+    memberId: input.memberId,
+    channel: 'push',
+    updateId: input.updateId,
+    incidentType: textOrFallback(input.dispatch.incidentType, INCIDENT_TYPE_FALLBACK),
+    address: textOrFallback(input.dispatch.address, ADDRESS_FALLBACK),
+    summary: input.summary,
+    isTest: false,
+    ...(input.dispatch.crossStreets ? { crossStreets: input.dispatch.crossStreets } : {}),
+    ...(input.dispatch.dispatchedAt !== undefined
+      ? { dispatchedAt: input.dispatch.dispatchedAt }
+      : {}),
+  };
+}
+
+const UPDATE_ID = /^[0-9a-f]{16,64}$/;
+
+/** Undefined when the body is not a CAD update; throws when it claims to be one but is bad. */
+export function parseCadUpdateEnvelope(
+  body: string,
+  expectedChannel: ChannelName,
+): CadUpdatePayload | undefined {
+  const raw = JSON.parse(body) as Record<string, unknown>;
+  const payload = raw.payload as Record<string, unknown> | undefined;
+  if (payload?.alertKind !== 'dispatch_update') {
+    return undefined;
+  }
+  const { deptId, dispatchId, memberId, channel, updateId, incidentType, address, summary } =
+    payload;
+  if (
+    typeof deptId !== 'string' ||
+    typeof dispatchId !== 'string' ||
+    typeof memberId !== 'string' ||
+    channel !== 'push' ||
+    typeof updateId !== 'string' ||
+    !UPDATE_ID.test(updateId) ||
+    typeof incidentType !== 'string' ||
+    typeof address !== 'string' ||
+    typeof summary !== 'string'
+  ) {
+    throw new Error('CAD update envelope failed shape validation');
+  }
+  if (channel !== expectedChannel) {
+    throw new Error(
+      `CAD update routed to the ${expectedChannel} worker carries channel=${channel}`,
+    );
+  }
+  assertNoDelimiter(dispatchId, 'dispatchId');
+  assertNoDelimiter(memberId, 'memberId');
+  const optional = optionalAlertFields(payload);
+  return {
+    alertKind: 'dispatch_update',
+    deptId,
+    dispatchId,
+    memberId,
+    channel,
+    updateId,
+    incidentType,
+    address,
+    summary,
+    isTest: false,
+    ...(optional.crossStreets ? { crossStreets: optional.crossStreets } : {}),
+    ...(optional.dispatchedAt !== undefined ? { dispatchedAt: optional.dispatchedAt } : {}),
+  };
+}
+
 export function noTargetReason(channel: ChannelName): string {
   return `${channel}: no target registered`;
 }

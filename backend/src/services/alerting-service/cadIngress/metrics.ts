@@ -19,6 +19,12 @@ export type CadMetric =
   | 'CadIngressParsed'
   /** An accepted dispatch the source's template could not structure: paged as raw text. */
   | 'CadIngressRawFallback'
+  /** A later message for an incident already paged, recorded as an update (no new page). */
+  | 'CadIngressUpdated'
+  /** The non-escalating UPDATE push was published to a dispatch's roster. */
+  | 'CadUpdatePushPublished'
+  /** Publishing an UPDATE push failed for at least one member (the record retries). */
+  | 'CadUpdatePushFailed'
   /** A CAD resend of a dispatch already written: not paged again. */
   | 'CadIngressDuplicate';
 

@@ -10,6 +10,7 @@ import {
   BOUNDARY_ARN,
   CMK_ARN,
   TABLE_ARN,
+  TOPIC_ARN,
   alarmByName,
   installMocks,
   isGranted,
@@ -27,6 +28,7 @@ const CREW_FIFO = "arn:aws:sns:us-east-1:123456789012:boxalarm-dev-alerting-topi
 const WEBHOOK_FN = "boxalarm-dev-alerting-cad-webhook";
 const EMAIL_FN = "boxalarm-dev-alerting-cad-email";
 const COPY_FN = "boxalarm-dev-alerting-cad-source-copy-consumer";
+const NOTIFIER_FN = "boxalarm-dev-alerting-cad-update-notifier";
 const PLATFORM_TABLE = "arn:aws:dynamodb:us-east-1:123456789012:table/boxalarm-dev-platform-table";
 
 beforeEach(() => {
@@ -39,6 +41,7 @@ async function build(emailDomain?: string): Promise<void> {
     alertingTableArn: TABLE_ARN,
     alertingCmkArn: CMK_ARN,
     alertingTableName: "boxalarm-dev-alerting-table",
+    alertingTopicArn: TOPIC_ARN,
     busName: "boxalarm-dev-platform-bus",
     pageTopicArn: PAGE,
     opsTopicArn: OPS,
@@ -64,7 +67,7 @@ function touchesTable(statements: PolicyStatement[], tableArn: string): boolean 
 }
 
 describe("CadIngress IAM: alerting boundary, never a LOB table", { timeout: 30_000 }, () => {
-  it.each([WEBHOOK_FN, EMAIL_FN, COPY_FN])(
+  it.each([WEBHOOK_FN, EMAIL_FN, COPY_FN, NOTIFIER_FN])(
     "%s runs under the alerting permissions boundary with no platform/incident grant",
     async (fn) => {
       await build("ingress.nichols.example.org");
@@ -107,14 +110,10 @@ describe("CadIngress IAM: alerting boundary, never a LOB table", { timeout: 30_0
       "DEPT#*#DISPATCH#*",
       "DEPT#*#OUTBOX",
     ]);
-    // No Query/Scan/Update: the webhook cannot run a fan-out or read receipts.
+    // No Query/Scan/Publish: the webhook cannot run a fan-out or read receipts. (UpdateItem is
+    // granted on DISPATCH#* for recording a CAD update on the DISPATCH_ALERT.)
     const actions = statementsForRole(WEBHOOK_FN).flatMap((s) => asArray(s.Action));
-    for (const forbidden of [
-      "dynamodb:Query",
-      "dynamodb:Scan",
-      "dynamodb:UpdateItem",
-      "sns:Publish",
-    ]) {
+    for (const forbidden of ["dynamodb:Query", "dynamodb:Scan", "sns:Publish"]) {
       expect(actions).not.toContain(forbidden);
     }
   });
@@ -135,6 +134,38 @@ describe("CadIngress IAM: alerting boundary, never a LOB table", { timeout: 30_0
       "detail-type": ["platform.config.updated"],
       detail: { payload: { configType: ["CAD_INGRESS"] } },
     });
+  });
+});
+
+describe("CadIngress update notifier (CAD updates to a paged call)", { timeout: 30_000 }, () => {
+  it("is async-invoked by the ingress Lambdas, never a third table-stream reader", async () => {
+    await build("ingress.nichols.example.org");
+    for (const fn of [WEBHOOK_FN, EMAIL_FN]) {
+      expect(
+        isGranted(statementsForRole(fn), "lambda:InvokeFunction", (r) => r.endsWith(NOTIFIER_FN)),
+      ).toBe(true);
+      expect(lambdaEnv(fn).CAD_UPDATE_NOTIFIER_FUNCTION).toBe(NOTIFIER_FN);
+    }
+    expect(
+      resourcesOfType("aws:lambda/eventSourceMapping:EventSourceMapping").some(
+        (m) => m.inputs.functionName === NOTIFIER_FN,
+      ),
+    ).toBe(false);
+    const invoke = resourcesOfType(
+      "aws:lambda/functionEventInvokeConfig:FunctionEventInvokeConfig",
+    ).find((r) => r.inputs.functionName === NOTIFIER_FN);
+    expect(invoke?.inputs).toMatchObject({ maximumRetryAttempts: 2 });
+  });
+
+  it("publishes only to the alerting topic and touches only dispatch partitions", async () => {
+    await build();
+    const statements = statementsForRole(NOTIFIER_FN);
+    expect(isGranted(statements, "sns:Publish", TOPIC_ARN)).toBe(true);
+    const table = statements.find((s) => s.Sid === "CadUpdateNotifierDispatchPartition");
+    expect(table?.Condition).toEqual({
+      "ForAllValues:StringLike": { "dynamodb:LeadingKeys": ["DEPT#*#DISPATCH#*"] },
+    });
+    expect(isGranted(statements, "dynamodb:DeleteItem", () => true)).toBe(false);
   });
 });
 
@@ -234,7 +265,7 @@ describe("CadIngress email: SES -> encrypted bucket -> Lambda", { timeout: 30_00
     await build("ingress.nichols.example.org");
     const invoke = resourcesOfType(
       "aws:lambda/functionEventInvokeConfig:FunctionEventInvokeConfig",
-    )[0];
+    ).find((r) => r.inputs.functionName === "boxalarm-dev-alerting-cad-email");
     expect(invoke?.inputs).toMatchObject({
       maximumRetryAttempts: 2,
       maximumEventAgeInSeconds: 600,
@@ -255,6 +286,8 @@ describe(
       ["boxalarm-dev-alerting-cad-quarantined", [PAGE, OPS]],
       ["boxalarm-dev-alerting-cad-rejected", [PAGE]],
       ["boxalarm-dev-alerting-cad-duplicate", [PAGE]],
+      ["boxalarm-dev-alerting-cad-update-push-failed", [PAGE]],
+      ["boxalarm-dev-alerting-cad-update-notifier-failures-not-empty", [PAGE]],
       ["boxalarm-dev-alerting-cad-raw-fallback", [PAGE, OPS]],
       ["boxalarm-dev-alerting-cad-webhook-errors", [PAGE]],
       ["boxalarm-dev-alerting-cad-webhook-throttles", [PAGE]],

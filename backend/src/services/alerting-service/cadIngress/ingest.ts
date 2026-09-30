@@ -13,10 +13,13 @@ import {
   deriveIngressIdempotencyKey,
   type DispatchReceived,
 } from '../dispatches/dispatchIngressPort.js';
+import { buildDeptScopedPk } from '@boxalarm/dept-scope';
 import { createManualDispatch } from '../dispatches/repository.js';
 import { logInfo } from '../dispatches/logger.js';
 import { emitCadMetric, type CadChannel } from './metrics.js';
 import { replayMarkerItem } from './replayGuard.js';
+import { notifyUpdate } from './notifyUpdate.js';
+import { lockedDispatchId, recordCadUpdate } from './updateRepository.js';
 import type { CadSourceCopy } from './sourceCopy.js';
 
 /**
@@ -57,7 +60,13 @@ export type CadIngestResult =
       readonly parseStatus: 'PARSED' | 'RAW';
     }
   | { readonly outcome: 'duplicate'; readonly parseStatus: 'PARSED' | 'RAW' }
-  | { readonly outcome: 'replay'; readonly parseStatus: 'PARSED' | 'RAW' };
+  | { readonly outcome: 'replay'; readonly parseStatus: 'PARSED' | 'RAW' }
+  | {
+      readonly outcome: 'updated';
+      readonly dispatchId: string;
+      readonly updateId: string;
+      readonly parseStatus: 'PARSED' | 'RAW';
+    };
 
 function sha256(text: string): string {
   return createHash('sha256').update(text, 'utf8').digest('hex');
@@ -81,16 +90,15 @@ export interface CadIdentity {
 }
 
 /**
- * The source's own dispatch identity: incident number + dispatch time when the CAD sends an
- * incident number (the fingerprint stands in for a missing time); otherwise the text
+ * The source's own dispatch identity: the incident number when the CAD sends one (held
+ * INCIDENT_IDENTITY_SECONDS; later messages for it are updates); otherwise the text
  * fingerprint, which holds only for TEXT_IDENTITY_SECONDS.
  */
 export function cadIdentity(sourceId: string, fields: CadParsedFields, text: string): CadIdentity {
-  const incident = fields.incidentNumber?.toUpperCase();
-  const time = fields.dispatchTime?.replace(/\s+/g, ' ').toUpperCase();
-  const identity = incident
-    ? `INC|${incident}|${time ?? `TEXT|${dispatchTextFingerprint(text)}`}`
-    : `TEXT|${dispatchTextFingerprint(text)}`;
+  const incident = fields.incidentNumber?.replace(/\s+/g, ' ').toUpperCase();
+  // With an incident number the incident IS the dispatch: a later message for it is an update
+  // (updateRepository.ts), whatever its dispatch time says (decision 2026-09-30).
+  const identity = incident ? `INC|${incident}` : `TEXT|${dispatchTextFingerprint(text)}`;
   return {
     externalDispatchId: `${sourceId}.${sha256(identity).slice(0, 40)}`,
     kind: incident ? 'incident' : 'text',
@@ -188,6 +196,15 @@ export async function ingestCadDispatch(
     built.dispatch.externalDispatchId,
   );
 
+  const contentHash = dispatchTextFingerprint(normalizeDispatchText(input.text));
+  const replayMarker = input.replay
+    ? replayMarkerItem(
+        { deptId, sourceId: source.sourceId, token: input.replay.token },
+        input.receivedAt,
+        input.replay.ttlSeconds,
+      )
+    : undefined;
+
   const result = await createManualDispatch(client, tableName, {
     deptId,
     dispatch: built.dispatch,
@@ -200,19 +217,63 @@ export async function ingestCadDispatch(
       parseStatus: built.parseStatus,
       parserVersion: built.parserVersion,
       verifyRequired: built.parseStatus === 'RAW',
+      contentHash,
       ...(built.fields.incidentNumber ? { incidentNumber: built.fields.incidentNumber } : {}),
       ...(built.fields.dispatchTime ? { dispatchTimeText: built.fields.dispatchTime } : {}),
     },
-    ...(input.replay
-      ? {
-          replayMarker: replayMarkerItem(
-            { deptId, sourceId: source.sourceId, token: input.replay.token },
-            input.receivedAt,
-            input.replay.ttlSeconds,
-          ),
-        }
-      : {}),
+    ...(replayMarker ? { replayMarker } : {}),
   });
+
+  // A later message for an incident already paged: an update, never silent and never a
+  // second page (decision 2026-09-30-cad-dispatch-updates.md).
+  if (result.outcome === 'duplicate' && built.identity.kind === 'incident') {
+    const lockPk = buildDeptScopedPk(
+      deptId,
+      'DISPATCH_IDEMPOTENCY',
+      'CAD',
+      built.dispatch.externalDispatchId,
+    );
+    const dispatchId = await lockedDispatchId(client, tableName, lockPk, input.receivedAt);
+    const update = dispatchId
+      ? await recordCadUpdate(client, tableName, {
+          deptId,
+          dispatchId,
+          dispatch: built.dispatch,
+          parseStatus: built.parseStatus,
+          contentHash,
+          channel,
+          receivedAt: input.receivedAt,
+          ...(replayMarker ? { replayMarker } : {}),
+        })
+      : ({ outcome: 'missing' } as const);
+    if (update.outcome === 'recorded' && dispatchId) {
+      await notifyUpdate({ deptId, dispatchId, updateId: update.updateId });
+      emitCadMetric('CadIngressUpdated', { Channel: channel });
+      logInfo('cadIngress.updated', {
+        deptId,
+        sourceId: source.sourceId,
+        channel,
+        dispatchId,
+        updateId: update.updateId,
+        changedFields: update.changes.map((c) => c.field),
+      });
+      return {
+        outcome: 'updated',
+        dispatchId,
+        updateId: update.updateId,
+        parseStatus: built.parseStatus,
+      };
+    }
+    if (update.outcome === 'replay') {
+      emitCadMetric('CadIngressReplayRejected', { Channel: channel });
+      return { outcome: 'replay', parseStatus: built.parseStatus };
+    }
+    if (update.outcome === 'missing') {
+      // The lock expired between the write and the read, or points at nothing: never drop a
+      // message as a duplicate of a dispatch that does not exist. Loud, and the caller retries.
+      throw new Error('CAD incident lock points at no live dispatch; retry');
+    }
+  }
 
   if (result.outcome === 'replay') {
     emitCadMetric('CadIngressReplayRejected', { Channel: channel });

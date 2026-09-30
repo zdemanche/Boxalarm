@@ -105,6 +105,26 @@ test('a digest push displays on the default channel without a full-screen action
   expect(call.android.fullScreenAction).toBeUndefined();
 });
 
+test('a CAD update displays on the default channel: no alarm, no full-screen, no ring cap', async () => {
+  Platform.OS = 'android';
+
+  await displayPushNotification({
+    category: 'dispatch_update',
+    alertKind: 'dispatch_update',
+    dispatchId: 'DISP-1',
+    title: 'UPDATE — STRUCTURE FIRE',
+    body: 'UPDATE: Units: E1, R1 — 12 Main St',
+  });
+
+  const call = displayNotification.mock.calls[0][0];
+  expect(call.android.channelId).toBe(DEFAULT_CHANNEL_ID);
+  expect(call.android.fullScreenAction).toBeUndefined();
+  expect(call.android.loopSound).toBeUndefined();
+  // Never under the page's own notification id: the update must not replace the page.
+  expect(call.id).toBeUndefined();
+  expect(call.data.dispatchId).toBe('DISP-1');
+});
+
 test('does nothing on iOS, where the OS displays the push natively', async () => {
   Platform.OS = 'ios';
 

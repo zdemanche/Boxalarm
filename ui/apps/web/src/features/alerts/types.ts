@@ -114,6 +114,19 @@ export interface DispatchAlert {
   toneLadder?: ToneLadder;
   /** null = not requested; absent = the server could not read it (state unknown). */
   mutualAid?: MutualAid | null;
+  /** CAD updates to this call, oldest first (absent from older servers). */
+  updates?: DispatchUpdate[];
+  /** The server could not read the update history (updates is then absent). */
+  updatesUnavailable?: boolean;
+}
+
+/** One CAD update to a call already paged (decision 2026-09-30-cad-dispatch-updates.md). */
+export interface DispatchUpdate {
+  updateId: string;
+  /** Epoch seconds. */
+  receivedAt: number;
+  summary: string;
+  changes: { field: string; from: string; to: string }[];
 }
 
 export interface AdvanceToneResult {

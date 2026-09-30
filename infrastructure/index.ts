@@ -906,6 +906,7 @@ export const cadIngress = new CadIngress("cad-ingress", {
   alertingTableArn: alertingTable.tableArn,
   alertingCmkArn: alertingTable.cmkArn,
   alertingTableName: alertingTable.tableName,
+  alertingTopicArn: messagingAlerting.topic.arn,
   busName: platformBus.busName,
   pageTopicArn: alertingAlarms.pageTopic.arn,
   opsTopicArn: chiefNotificationTopic.topicArn,

@@ -15,6 +15,30 @@ export interface FakeTable {
   failTransact?: boolean;
 }
 
+interface TransactEntry {
+  Put?: { Item: Record<string, unknown>; ConditionExpression?: string };
+  Update?: {
+    Key: Record<string, unknown>;
+    UpdateExpression: string;
+    ConditionExpression?: string;
+    ExpressionAttributeValues?: Record<string, unknown>;
+  };
+}
+
+/** `SET a = :x, n = if_not_exists(n, :zero) + :one` - the forms the CAD code writes. */
+function applyUpdate(table: FakeTable, key: string, update: NonNullable<TransactEntry['Update']>) {
+  const item = { ...table.items.get(key) };
+  const values = update.ExpressionAttributeValues ?? {};
+  const body = update.UpdateExpression.replace(/^SET /, '');
+  for (const match of body.matchAll(/(\w+) = (?:if_not_exists\(\w+, (:\w+)\) \+ (:\w+)|(:\w+))/g)) {
+    const [, field, zero, one, plain] = match;
+    item[field!] = plain
+      ? values[plain]
+      : Number(item[field!] ?? values[zero!]) + Number(values[one!]);
+  }
+  table.items.set(key, item);
+}
+
 export function fakeDynamo(table: FakeTable): DynamoDBDocumentClient {
   const keyOf = (item: Record<string, unknown>) => `${String(item.pk)}|${String(item.sk)}`;
   const send = (command: { constructor: { name: string }; input: Record<string, unknown> }) => {
@@ -39,21 +63,29 @@ export function fakeDynamo(table: FakeTable): DynamoDBDocumentClient {
     }
     if (name === 'TransactWriteCommand') {
       if (table.failTransact) return Promise.reject(new Error('dynamo down'));
-      const entries = input.TransactItems as {
-        Put: { Item: Record<string, unknown>; ConditionExpression?: string };
-      }[];
+      const entries = input.TransactItems as TransactEntry[];
       // Every conditional Put here is attribute_not_exists on its key (an expired lock or
       // marker, per its own expiry field, counts as absent - as the real conditions say).
       const reasons = entries.map((entry) => {
-        const existing = table.items.get(keyOf(entry.Put.Item));
+        if (entry.Update) {
+          const existing = table.items.get(keyOf(entry.Update.Key));
+          const values = entry.Update.ExpressionAttributeValues ?? {};
+          const ok =
+            existing !== undefined &&
+            (!entry.Update.ConditionExpression?.includes('cadContentHash <>') ||
+              existing.cadContentHash !== values[':hash']);
+          return ok ? { Code: 'None' } : { Code: 'ConditionalCheckFailed' };
+        }
+        const put = entry.Put!;
+        const existing = table.items.get(keyOf(put.Item));
         const expired =
           existing !== undefined &&
           ((typeof existing.ttl === 'number' &&
-            entry.Put.Item.entityType === 'CAD_REPLAY_MARKER' &&
-            existing.ttl <= Number(entry.Put.Item.createdAt)) ||
+            put.Item.entityType === 'CAD_REPLAY_MARKER' &&
+            existing.ttl <= Number(put.Item.createdAt)) ||
             (typeof existing.expiresAt === 'number' &&
-              existing.expiresAt <= Number(entry.Put.Item.createdAt)));
-        return entry.Put.ConditionExpression && existing && !expired
+              existing.expiresAt <= Number(put.Item.createdAt)));
+        return put.ConditionExpression && existing && !expired
           ? { Code: 'ConditionalCheckFailed' }
           : { Code: 'None' };
       });
@@ -66,7 +98,10 @@ export function fakeDynamo(table: FakeTable): DynamoDBDocumentClient {
           }),
         );
       }
-      for (const entry of entries) table.items.set(keyOf(entry.Put.Item), entry.Put.Item);
+      for (const entry of entries) {
+        if (entry.Put) table.items.set(keyOf(entry.Put.Item), entry.Put.Item);
+        if (entry.Update) applyUpdate(table, keyOf(entry.Update.Key), entry.Update);
+      }
       return Promise.resolve({});
     }
     return Promise.reject(new Error(`unexpected ${name}`));

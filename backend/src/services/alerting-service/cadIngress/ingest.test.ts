@@ -118,10 +118,10 @@ describe('buildCadDispatch', () => {
 });
 
 describe('cadExternalDispatchId', () => {
-  it('is the same for a resend and differs for a new dispatch time', () => {
+  it('is the incident number alone: a new dispatch time is the same incident (an update)', () => {
     const a = cadExternalDispatchId('county', { incidentNumber: '1', dispatchTime: 'T1' }, 'x');
-    const b = cadExternalDispatchId('county', { incidentNumber: '1', dispatchTime: 'T1' }, 'y');
-    const c = cadExternalDispatchId('county', { incidentNumber: '1', dispatchTime: 'T2' }, 'x');
+    const b = cadExternalDispatchId('county', { incidentNumber: '1', dispatchTime: 'T2' }, 'y');
+    const c = cadExternalDispatchId('county', { incidentNumber: '2', dispatchTime: 'T1' }, 'x');
     expect(a).toBe(b);
     expect(a).not.toBe(c);
     expect(a).toMatch(/^county\.[0-9a-f]{40}$/);
@@ -168,8 +168,8 @@ describe('ingestCadDispatch', () => {
     expect(String(alertOf(items).dispatchId)).toMatch(/^nichols-fd-CAD-1800000000-/);
   });
 
-  it('a CAD resend of the same incident + dispatch time does not page twice', async () => {
-    const { client, items } = fakeDynamo();
+  it('an identical CAD resend of the same incident does not page twice', async () => {
+    const table: FakeTable = { items: new Map() };
     const input = {
       deptId: DEPT,
       source: SOURCE,
@@ -177,14 +177,22 @@ describe('ingestCadDispatch', () => {
       text: TEXT,
       receivedAt: 1_800_000_000,
     };
-    expect((await ingestCadDispatch(client, 'alerting', input)).outcome).toBe('created');
-    // Re-wrapped, re-sent a minute later: same incident number and dispatch time.
-    const resend = { ...input, text: `${TEXT}\n\n-- resent`, receivedAt: 1_800_000_060 };
-    expect(await ingestCadDispatch(client, 'alerting', resend)).toEqual({
+    expect((await ingestCadDispatch(fakeDynamoTable(table), 'alerting', input)).outcome).toBe(
+      'created',
+    );
+    // Re-wrapped, re-sent a minute later: same content.
+    const resend = {
+      ...input,
+      text: `${TEXT.replace(/\n/g, '\r\n')}\n`,
+      receivedAt: 1_800_000_060,
+    };
+    expect(await ingestCadDispatch(fakeDynamoTable(table), 'alerting', resend)).toEqual({
       outcome: 'duplicate',
       parseStatus: 'PARSED',
     });
-    expect(items.filter((item) => item.entityType === 'DISPATCH_ALERT')).toHaveLength(1);
+    expect([...table.items.values()].filter((i) => i.entityType === 'DISPATCH_ALERT')).toHaveLength(
+      1,
+    );
     expect(
       vi
         .mocked(console.log)
@@ -281,6 +289,76 @@ describe('text-only identities expire (chain review C1)', () => {
     expect(lock).toMatchObject({
       expiresAt: 1_800_000_000 + TEXT_IDENTITY_SECONDS,
       ttl: 1_800_000_000 + TEXT_IDENTITY_SECONDS + 7 * 24 * 60 * 60,
+    });
+  });
+});
+
+describe('CAD updates to an incident already paged (decision 2026-09-30)', () => {
+  beforeEach(() => {
+    vi.spyOn(console, 'log').mockImplementation(() => undefined);
+  });
+  afterEach(() => vi.restoreAllMocks());
+
+  const at = (table: FakeTable, text: string, receivedAt: number) =>
+    ingestCadDispatch(fakeDynamoTable(table), 'alerting', {
+      deptId: DEPT,
+      source: SOURCE,
+      channel: 'cad-webhook',
+      text,
+      receivedAt,
+    });
+  const items = (table: FakeTable, type: string) =>
+    [...table.items.values()].filter((i) => i.entityType === type);
+
+  it('a later message for the same incident is an UPDATE: history recorded, dispatch refreshed, no new page', async () => {
+    const table: FakeTable = { items: new Map() };
+    const created = await at(table, TEXT, 1_800_000_000);
+    expect(created.outcome).toBe('created');
+    const outboxBefore = [...table.items.values()].filter((i) => i.eventType).length;
+
+    const update = TEXT.replace('TIME: 09/30/2026 03:12', 'TIME: 09/30/2026 03:15').replace(
+      'UNITS: E1, L2',
+      'UNITS: E1, L2, R1',
+    );
+    const result = await at(table, update, 1_800_000_180);
+    expect(result).toMatchObject({ outcome: 'updated', parseStatus: 'PARSED' });
+    expect(items(table, 'DISPATCH_ALERT')).toHaveLength(1);
+    expect(items(table, 'DISPATCH_ALERT')[0]).toMatchObject({
+      unitsRequested: ['E1', 'L2', 'R1'],
+      updateCount: 1,
+      lastUpdatedAt: 1_800_000_180,
+    });
+    const history = items(table, 'DISPATCH_UPDATE');
+    expect(history).toHaveLength(1);
+    expect(history[0]).toMatchObject({
+      summary: 'Units: E1, L2, R1',
+      changes: expect.arrayContaining([
+        { field: 'unitsRequested', from: 'E1, L2', to: 'E1, L2, R1' },
+      ]) as unknown,
+    });
+    // No second bridge event / incident draft.
+    expect([...table.items.values()].filter((i) => i.eventType).length).toBe(outboxBefore);
+  });
+
+  it('an identical resend of an update records it once', async () => {
+    const table: FakeTable = { items: new Map() };
+    await at(table, TEXT, 1_800_000_000);
+    const update = TEXT.replace('XST: ELM / OAK', 'XST: ELM / PINE');
+    expect((await at(table, update, 1_800_000_100)).outcome).toBe('updated');
+    expect((await at(table, update, 1_800_000_160)).outcome).toBe('duplicate');
+    expect(items(table, 'DISPATCH_UPDATE')).toHaveLength(1);
+  });
+
+  it('a RAW update never replaces a structured address with the placeholder', async () => {
+    const table: FakeTable = { items: new Map() };
+    await at(table, TEXT, 1_800_000_000);
+    // Same incident number read, but no address line this time.
+    expect(
+      (await at(table, 'INC: 2026-4471\nCALLER NOW REPORTS FLAMES', 1_800_000_100)).outcome,
+    ).toBe('updated');
+    expect(items(table, 'DISPATCH_ALERT')[0]).toMatchObject({
+      address: '123 MAIN ST, NICHOLS',
+      narrative: 'INC: 2026-4471\nCALLER NOW REPORTS FLAMES',
     });
   });
 });

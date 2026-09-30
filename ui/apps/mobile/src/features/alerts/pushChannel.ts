@@ -18,15 +18,20 @@ const RETIRED_CRITICAL_CHANNEL_IDS = ['dispatch-critical'];
 export const DEFAULT_CHANNEL_ID = 'notifications-default';
 const CRITICAL_CHANNEL_NAME = 'Dispatch pages';
 
-export type PushCategory = 'dispatch' | 'digest';
+export type PushCategory = 'dispatch' | 'digest' | 'dispatch_update';
 
 /**
- * Deliberate fail-loud default: anything other than an explicit `'digest'` (missing, misspelled,
- * or a future category) is treated as a dispatch and routed to the critical DND-bypass channel.
- * A non-urgent notice that is too loud is recoverable; a dispatch that arrives silently is not.
+ * Deliberate fail-loud default: anything other than an explicit `'digest'` or
+ * `'dispatch_update'` (missing, misspelled, or a future category) is treated as a dispatch and
+ * routed to the critical DND-bypass channel. A non-urgent notice that is too loud is
+ * recoverable; a dispatch that arrives silently is not. `dispatch_update` is a CAD update to a
+ * call the member was already paged for (server pushPayload.ts PUSH_UPDATE_CATEGORY): news, not a
+ * page - it never rings through Do Not Disturb.
  */
 export function categoryFromPushData(data: { category?: unknown } | undefined): PushCategory {
-  return data?.category === 'digest' ? 'digest' : 'dispatch';
+  if (data?.category === 'digest') return 'digest';
+  if (data?.category === 'dispatch_update') return 'dispatch_update';
+  return 'dispatch';
 }
 
 // The id last resolved from a successful DND-access read. A transient read error keeps it rather

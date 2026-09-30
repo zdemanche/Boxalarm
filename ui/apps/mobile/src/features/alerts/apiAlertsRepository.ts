@@ -61,6 +61,7 @@ function buildApiAlertsRepository(tokens: AuthTokenSource, apiBaseUrl: string): 
         nearestHydrantsUnavailable?: boolean;
         nearestHydrantsIncomplete?: boolean;
         mutualAid?: MutualAid | null;
+        updates?: { updateId: string; receivedAt: number; summary: string }[];
       };
       return {
         dispatchId: body.dispatchId,
@@ -91,6 +92,15 @@ function buildApiAlertsRepository(tokens: AuthTokenSource, apiBaseUrl: string): 
         ...(body.nearestHydrantsUnavailable === true ? { nearestHydrantsUnavailable: true } : {}),
         ...(body.nearestHydrantsIncomplete === true ? { nearestHydrantsIncomplete: true } : {}),
         ...(body.mutualAid !== undefined ? { mutualAid: body.mutualAid } : {}),
+        ...(Array.isArray(body.updates) && body.updates.length > 0
+          ? {
+              updates: body.updates.map((u) => ({
+                updateId: u.updateId,
+                receivedAt: u.receivedAt,
+                summary: u.summary,
+              })),
+            }
+          : {}),
       };
     },
 

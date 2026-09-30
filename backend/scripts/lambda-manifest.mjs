@@ -705,6 +705,12 @@ export const LAMBDA_ENTRIES = [
     entry: 'src/services/alerting-service/cadIngress/emailHandler.ts',
   },
   {
+    // Async-invoked by the CAD ingress Lambdas: the non-escalating UPDATE push to a roster.
+    service: 'alerting-service',
+    function: 'cad-update-notifier',
+    entry: 'src/services/alerting-service/cadIngress/updateNotifierHandler.ts',
+  },
+  {
     service: 'personnel-service',
     function: 'shift-completion',
     entry: 'src/services/personnel-service/shifts/completionHandler.ts',

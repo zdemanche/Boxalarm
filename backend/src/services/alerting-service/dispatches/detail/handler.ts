@@ -14,7 +14,7 @@ import { emitOutcomeMetric } from '@boxalarm/metrics';
 import { createDynamoClient, readAlertingConfig } from '../../eligibility/dynamoClient.js';
 import { logError } from '../logger.js';
 import { toMutualAidView, type MutualAidView } from '../../ladderControls/shared.js';
-import { getDispatchDetail, getMutualAidEvent } from './repository.js';
+import { getDispatchDetail, getDispatchUpdates, getMutualAidEvent } from './repository.js';
 import { buildMapLink } from './mapLink.js';
 import { dataUnavailableProblem } from './problemDetails.js';
 import { PRE_PLAN_UNAVAILABLE, fetchDispatchContext } from './prePlanContext.js';
@@ -70,9 +70,14 @@ async function handleGetAlertDetail(
       return notFoundProblem(traceId, `No dispatch alert found for dispatchId "${dispatchId}"`);
     }
 
-    const [context, mutualAid] = await Promise.all([
+    const [context, mutualAid, updates] = await Promise.all([
       fetchDispatchContext(doc, config.tableName, deptId, item, traceId),
       fetchMutualAid(doc, config.tableName, deptId, dispatchId, traceId),
+      // Enrichment: a failed read omits the history and says so, never fails the detail.
+      getDispatchUpdates(doc, config.tableName, deptId, dispatchId).catch((error: unknown) => {
+        logError('dispatches.detail.updates_read_failed', error, { traceId, dispatchId });
+        return UNAVAILABLE;
+      }),
     ]);
 
     emitOutcomeMetric(METRICS_NAMESPACE, 'AlertDetailViewed');
@@ -107,6 +112,8 @@ async function handleGetAlertDetail(
         ...(context.nearestHydrants ? { nearestHydrants: context.nearestHydrants } : {}),
         ...(context.hydrantsUnavailable ? { nearestHydrantsUnavailable: true } : {}),
         ...(context.hydrantsIncomplete ? { nearestHydrantsIncomplete: true } : {}),
+        // CAD updates to this call (decision 2026-09-30-cad-dispatch-updates.md), oldest first.
+        ...(updates === UNAVAILABLE ? { updatesUnavailable: true } : { updates }),
       }),
     };
   } catch (error) {
