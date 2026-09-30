@@ -20,7 +20,7 @@ import { logInfo } from '../dispatches/logger.js';
 import { emitCadMetric, type CadChannel } from './metrics.js';
 import { replayMarkerItem } from './replayGuard.js';
 import { notifyUpdate } from './notifyUpdate.js';
-import { lockedDispatchId, recordCadUpdate } from './updateRepository.js';
+import { lockedDispatchId, parseCadMessageTime, recordCadUpdate } from './updateRepository.js';
 import type { CadSourceCopy } from './sourceCopy.js';
 
 /**
@@ -217,6 +217,7 @@ export async function ingestCadDispatch(
   );
 
   const contentHash = dispatchTextFingerprint(normalizeDispatchText(input.text));
+  const messageTime = parseCadMessageTime(built.fields.dispatchTime);
   const replayMarker = input.replay
     ? replayMarkerItem(
         { deptId, sourceId: source.sourceId, token: input.replay.token },
@@ -238,6 +239,7 @@ export async function ingestCadDispatch(
       parserVersion: built.parserVersion,
       verifyRequired: built.parseStatus === 'RAW',
       contentHash,
+      ...(messageTime !== undefined ? { messageTime } : {}),
       ...(built.fields.incidentNumber ? { incidentNumber: built.fields.incidentNumber } : {}),
       ...(built.fields.dispatchTime ? { dispatchTimeText: built.fields.dispatchTime } : {}),
     },
@@ -263,6 +265,7 @@ export async function ingestCadDispatch(
           contentHash,
           channel,
           receivedAt: input.receivedAt,
+          ...(messageTime !== undefined ? { messageTime } : {}),
           ...(replayMarker ? { replayMarker } : {}),
         })
       : ({ outcome: 'missing' } as const);
@@ -283,6 +286,17 @@ export async function ingestCadDispatch(
         updateId: update.updateId,
         parseStatus: built.parseStatus,
       };
+    }
+    if (update.outcome === 'history' && dispatchId) {
+      emitCadMetric('CadIngressOlderMessage', { Channel: channel });
+      logInfo('cadIngress.olderMessage', {
+        deptId,
+        sourceId: source.sourceId,
+        channel,
+        dispatchId,
+        updateId: update.updateId,
+      });
+      return { outcome: 'duplicate', parseStatus: built.parseStatus };
     }
     if (update.outcome === 'replay') {
       emitCadMetric('CadIngressReplayRejected', { Channel: channel });

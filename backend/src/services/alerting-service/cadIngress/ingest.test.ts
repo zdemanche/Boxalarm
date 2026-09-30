@@ -160,8 +160,14 @@ describe('ingestCadDispatch', () => {
       receivedAt: 1_800_000_000,
     });
     expect(result).toMatchObject({ outcome: 'created', parseStatus: 'PARSED' });
-    // Lock, alert, bridge outbox row: exactly createManualDispatch's three items.
-    expect(items.map((item) => item.entityType ?? item.eventType)).toHaveLength(3);
+    // Lock, alert, bridge outbox row (createManualDispatch's three items) + the CAD content's
+    // SEEN# marker (chain review R2-M1).
+    expect(items.map((item) => item.entityType)).toEqual([
+      'DISPATCH_IDEMPOTENCY_LOCK',
+      'DISPATCH_ALERT',
+      'OUTBOX_ENTRY',
+      'CAD_SEEN_CONTENT',
+    ]);
     expect(String(items[0]?.pk)).toMatch(/^DEPT#nichols-fd#DISPATCH_IDEMPOTENCY#CAD#county\./);
     expect(alertOf(items)).toMatchObject({
       sourceSystem: 'CAD',
@@ -348,6 +354,73 @@ describe('CAD updates to an incident already paged (decision 2026-09-30)', () =>
     });
     // No second bridge event / incident draft.
     expect([...table.items.values()].filter((i) => i.eventType).length).toBe(outboxBefore);
+  });
+
+  it('R2-M1: the original re-sent after a correction is a duplicate - no revert, no push', async () => {
+    const table: FakeTable = { items: new Map() };
+    const original = 'INC: 2026-7\nADDR: 12 ELM ST, NICHOLS\nUNITS: E1';
+    const correction = 'INC: 2026-7\nADDR: 21 ELM ST, NICHOLS\nUNITS: E1, L1';
+    expect((await at(table, original, 1_800_000_000)).outcome).toBe('created');
+    expect((await at(table, correction, 1_800_000_060)).outcome).toBe('updated');
+    // The delayed email / re-signed retry of the ORIGINAL arrives now.
+    expect((await at(table, original, 1_800_000_120)).outcome).toBe('duplicate');
+    expect(items(table, 'DISPATCH_ALERT')[0]).toMatchObject({
+      address: '21 ELM ST, NICHOLS',
+      unitsRequested: ['E1', 'L1'],
+    });
+    // Exactly one update was handed to the notifier (the correction); the re-sent original none.
+    const updatedCount = vi
+      .mocked(console.log)
+      .mock.calls.filter(([l]) => String(l).includes('"CadIngressUpdated":1')).length;
+    expect(updatedCount).toBe(1);
+    expect(items(table, 'DISPATCH_UPDATE')).toHaveLength(1);
+  });
+
+  it('R2-M1: a message the CAD stamped earlier than the applied one is history only, never applied', async () => {
+    const table: FakeTable = { items: new Map() };
+    await at(
+      table,
+      TEXT.replace('TIME: 09/30/2026 03:12', 'TIME: 09/30/2026 03:20'),
+      1_800_000_000,
+    );
+    const older = TEXT.replace('TIME: 09/30/2026 03:12', 'TIME: 09/30/2026 03:15').replace(
+      'ADDR: 123 MAIN ST, NICHOLS',
+      'ADDR: 999 WRONG RD',
+    );
+    expect((await at(table, older, 1_800_000_100)).outcome).toBe('duplicate');
+    expect(items(table, 'DISPATCH_ALERT')[0]?.address).toBe('123 MAIN ST, NICHOLS');
+    expect(items(table, 'DISPATCH_UPDATE')[0]).toMatchObject({ applied: false, changes: [] });
+    const logged = vi.mocked(console.log).mock.calls.map(([l]) => String(l));
+    expect(logged.some((l) => l.includes('"CadIngressOlderMessage":1'))).toBe(true);
+  });
+
+  it('a RAW update refreshes the VERIFY excerpt every later page carries', async () => {
+    const { pageLocationText, readDispatchAlertText } =
+      await import('../channels/channelEnvelope.js');
+    const table: FakeTable = { items: new Map() };
+    const bare: CadSourceCopy = {
+      sourceId: 'county',
+      label: 'County',
+      enabled: true,
+      parser: {
+        version: 1,
+        fields: { incidentNumber: { label: 'INC' }, address: { label: 'ADDR' } },
+      },
+    };
+    const send = (text: string, t: number) =>
+      ingestCadDispatch(fakeDynamoTable(table), 'alerting', {
+        deptId: DEPT,
+        source: bare,
+        channel: 'cad-email',
+        text,
+        receivedAt: t,
+      });
+    await send('INC: 8\nSMOKE NEAR THE MILL', 1_800_000_000);
+    expect((await send('INC: 8\nNOW FLAMES AT THE DAM', 1_800_000_060)).outcome).toBe('updated');
+    const alert = items(table, 'DISPATCH_ALERT')[0]!;
+    expect(pageLocationText(readDispatchAlertText(alert))).toBe(
+      'VERIFY: INC: 8 NOW FLAMES AT THE DAM',
+    );
   });
 
   it('an identical resend of an update records it once', async () => {

@@ -70,10 +70,14 @@ export function fakeDynamo(table: FakeTable): DynamoDBDocumentClient {
         if (entry.Update) {
           const existing = table.items.get(keyOf(entry.Update.Key));
           const values = entry.Update.ExpressionAttributeValues ?? {};
+          const condition = entry.Update.ConditionExpression ?? '';
           const ok =
             existing !== undefined &&
-            (!entry.Update.ConditionExpression?.includes('cadContentHash <>') ||
-              existing.cadContentHash !== values[':hash']);
+            (!condition.includes('cadContentHash <>') ||
+              existing.cadContentHash !== values[':hash']) &&
+            (!condition.includes('cadMessageTime <= :mt') ||
+              typeof existing.cadMessageTime !== 'number' ||
+              existing.cadMessageTime <= Number(values[':mt']));
           return ok ? { Code: 'None' } : { Code: 'ConditionalCheckFailed' };
         }
         const put = entry.Put!;

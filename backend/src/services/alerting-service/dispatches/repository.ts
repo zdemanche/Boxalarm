@@ -55,6 +55,8 @@ export interface CadDispatchTags {
   readonly dispatchTimeText?: string;
   /** Whitespace-insensitive hash of the message text: a resend of it is not an update. */
   readonly contentHash?: string;
+  /** The CAD's own message time (epoch seconds), when parsed: later updates never go older. */
+  readonly messageTime?: number;
 }
 
 export type CreateManualDispatchResult =
@@ -161,6 +163,9 @@ export async function createManualDispatch(
                     ? { cadDispatchTime: input.cad.dispatchTimeText }
                     : {}),
                   ...(input.cad.contentHash ? { cadContentHash: input.cad.contentHash } : {}),
+                  ...(input.cad.messageTime !== undefined
+                    ? { cadMessageTime: input.cad.messageTime }
+                    : {}),
                 }
               : {}),
             ...(isTest
@@ -200,6 +205,25 @@ export async function createManualDispatch(
               },
             },
           ]),
+      // CAD: the original message's content is recorded as seen, so its later re-arrival is a
+      // duplicate - never an update that reverts a correction (chain review R2-M1).
+      ...(input.cad?.contentHash
+        ? [
+            {
+              Put: {
+                TableName: tableName,
+                Item: {
+                  pk: buildDeptScopedPk(deptId, 'DISPATCH', dispatchId),
+                  sk: `SEEN#${input.cad.contentHash}`,
+                  entityType: 'CAD_SEEN_CONTENT',
+                  deptId,
+                  dispatchId,
+                  createdAt: dispatchedAt,
+                },
+              },
+            },
+          ]
+        : []),
       ...(input.replayMarker
         ? [
             {

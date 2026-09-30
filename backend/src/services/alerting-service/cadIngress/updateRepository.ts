@@ -34,6 +34,8 @@ export interface CadFieldChange {
 
 export type RecordUpdateResult =
   | { readonly outcome: 'recorded'; readonly updateId: string; readonly changes: CadFieldChange[] }
+  /** An older CAD message: kept in the history, nothing applied, nobody notified (R2-M1). */
+  | { readonly outcome: 'history'; readonly updateId: string }
   | { readonly outcome: 'duplicate' }
   | { readonly outcome: 'replay' }
   /** The lock pointed at a dispatch that is gone: the caller treats the message as new. */
@@ -47,6 +49,8 @@ export interface RecordUpdateInput {
   readonly contentHash: string;
   readonly channel: CadChannel;
   readonly receivedAt: number;
+  /** The CAD's own message time (parsed dispatchTime), when the template reads one. */
+  readonly messageTime?: number;
   readonly replayMarker?: Record<string, unknown> & { readonly pk: string; readonly sk: string };
 }
 
@@ -104,6 +108,24 @@ export function summarizeChanges(changes: readonly CadFieldChange[]): string {
     : narrative || 'New dispatch text';
 }
 
+/**
+ * The per-incident record that a message's content was accepted (created the dispatch or was
+ * recorded as an update). Chain review R2-M1: only the alert's CURRENT hash used to be kept, so
+ * the original message arriving again after a correction was applied as an update and reverted
+ * it. Every accepted content leaves one of these, written in the same transaction, so any
+ * message seen before is a duplicate.
+ */
+export function seenContentKey(pk: string, contentHash: string): { pk: string; sk: string } {
+  return { pk, sk: `SEEN#${contentHash}` };
+}
+
+/** A CAD message time the template read (free text), as epoch seconds - or undefined. */
+export function parseCadMessageTime(text: string | undefined): number | undefined {
+  if (!text) return undefined;
+  const ms = Date.parse(text);
+  return Number.isFinite(ms) ? Math.floor(ms / 1000) : undefined;
+}
+
 export async function recordCadUpdate(
   client: DynamoDBDocumentClient,
   tableName: string,
@@ -116,7 +138,33 @@ export async function recordCadUpdate(
   if (!current) return { outcome: 'missing' };
   if (current.cadContentHash === input.contentHash) return { outcome: 'duplicate' };
 
-  const changes = diffDispatch(current, input.dispatch, input.parseStatus);
+  // A message the CAD stamped EARLIER than the one last applied (a delayed email, a re-signed
+  // retry of the original) is history only: it never reverts newer fields and never pushes.
+  const appliedTime =
+    typeof current.cadMessageTime === 'number' ? current.cadMessageTime : undefined;
+  const olderThanApplied =
+    input.messageTime !== undefined && appliedTime !== undefined && input.messageTime < appliedTime;
+  const result = await writeUpdate(client, tableName, pk, current, input, olderThanApplied);
+  if (result === 'raced' && !olderThanApplied) {
+    // A newer message was applied between the read and the write: record this one as history.
+    const reread = await client.send(
+      new GetCommand({ TableName: tableName, Key: { pk, sk: 'METADATA' }, ConsistentRead: true }),
+    );
+    const again = await writeUpdate(client, tableName, pk, reread.Item ?? current, input, true);
+    return again === 'raced' ? { outcome: 'duplicate' } : again;
+  }
+  return result === 'raced' ? { outcome: 'duplicate' } : result;
+}
+
+async function writeUpdate(
+  client: DynamoDBDocumentClient,
+  tableName: string,
+  pk: string,
+  current: Record<string, unknown>,
+  input: RecordUpdateInput,
+  historyOnly: boolean,
+): Promise<RecordUpdateResult | 'raced'> {
+  const changes = historyOnly ? [] : diffDispatch(current, input.dispatch, input.parseStatus);
   const updateId = updateIdFor(input.contentHash);
   const next = input.dispatch;
   const set: string[] = [
@@ -147,9 +195,16 @@ export async function recordCadUpdate(
       values[':locality'] = next.locality;
     }
   }
+  let condition = 'attribute_exists(pk)';
+  if (input.messageTime !== undefined) {
+    set.push('cadMessageTime = :mt');
+    values[':mt'] = input.messageTime;
+    // Never apply over a newer message that landed after our read.
+    condition += ' AND (attribute_not_exists(cadMessageTime) OR cadMessageTime <= :mt)';
+  }
 
-  const command = new TransactWriteCommand({
-    TransactItems: [
+  const items: NonNullable<ConstructorParameters<typeof TransactWriteCommand>[0]['TransactItems']> =
+    [
       {
         Put: {
           TableName: tableName,
@@ -164,21 +219,39 @@ export async function recordCadUpdate(
             ingressChannel: input.channel,
             parseStatus: input.parseStatus,
             changes,
-            summary: summarizeChanges(changes),
+            summary: historyOnly ? 'Older CAD message - not applied' : summarizeChanges(changes),
+            applied: !historyOnly,
+            ...(input.messageTime !== undefined ? { messageTime: input.messageTime } : {}),
           },
           ConditionExpression: 'attribute_not_exists(pk)',
         },
       },
       {
-        Update: {
+        Put: {
           TableName: tableName,
-          Key: { pk, sk: 'METADATA' },
-          UpdateExpression: `SET ${set.join(', ')}`,
-          ConditionExpression:
-            'attribute_exists(pk) AND (attribute_not_exists(cadContentHash) OR cadContentHash <> :hash)',
-          ExpressionAttributeValues: values,
+          Item: {
+            ...seenContentKey(pk, input.contentHash),
+            entityType: 'CAD_SEEN_CONTENT',
+            deptId: input.deptId,
+            dispatchId: input.dispatchId,
+            createdAt: input.receivedAt,
+          },
+          ConditionExpression: 'attribute_not_exists(pk)',
         },
       },
+      ...(historyOnly
+        ? []
+        : [
+            {
+              Update: {
+                TableName: tableName,
+                Key: { pk, sk: 'METADATA' },
+                UpdateExpression: `SET ${set.join(', ')}`,
+                ConditionExpression: condition,
+                ExpressionAttributeValues: values,
+              },
+            },
+          ]),
       ...(input.replayMarker
         ? [
             {
@@ -192,20 +265,22 @@ export async function recordCadUpdate(
             },
           ]
         : []),
-    ],
-  });
+    ];
   try {
-    await client.send(command);
-    return { outcome: 'recorded', updateId, changes };
+    await client.send(new TransactWriteCommand({ TransactItems: items }));
+    return historyOnly
+      ? { outcome: 'history', updateId }
+      : { outcome: 'recorded', updateId, changes };
   } catch (error) {
     if (error instanceof TransactionCanceledException) {
       const reasons = error.CancellationReasons ?? [];
-      if (input.replayMarker && reasons[2]?.Code === 'ConditionalCheckFailed') {
-        return { outcome: 'replay' };
-      }
-      if (reasons.some((reason) => reason.Code === 'ConditionalCheckFailed')) {
-        return { outcome: 'duplicate' };
-      }
+      const failed = (index: number) => reasons[index]?.Code === 'ConditionalCheckFailed';
+      const markerIndex = items.length - 1;
+      if (input.replayMarker && failed(markerIndex)) return { outcome: 'replay' };
+      // UPDATE# or SEEN# exists: this content was accepted before.
+      if (failed(0) || failed(1)) return { outcome: 'duplicate' };
+      // Only the METADATA condition failed: a newer message was applied meanwhile.
+      if (!historyOnly && failed(2)) return 'raced';
     }
     throw error;
   }

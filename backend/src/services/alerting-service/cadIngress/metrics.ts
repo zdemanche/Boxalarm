@@ -31,6 +31,8 @@ export type CadMetric =
   | 'CadUpdatePushFailed'
   /** A parser template ran past its deadline (or its worker failed): paged as RAW. */
   | 'CadParseTimeout'
+  /** A CAD message older than the one already applied: history only, nothing pushed. */
+  | 'CadIngressOlderMessage'
   /** A CAD resend of a dispatch already written: not paged again. */
   | 'CadIngressDuplicate';
 
