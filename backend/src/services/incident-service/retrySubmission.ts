@@ -1,49 +1,22 @@
-import type { APIGatewayProxyHandlerV2WithLambdaAuthorizer } from 'aws-lambda';
-import { assertNoDelimiter } from '@boxalarm/dept-scope';
-import type { AuthorizerContext } from '../platform-service/authorizer/handler.js';
+import type { APIGatewayProxyResultV2 } from 'aws-lambda';
+import { withAuthorization, type CedarPrincipalContext, type GuardEvent } from '@boxalarm/authz';
+import { assertNoDelimiter, toVerifiedDeptId } from '@boxalarm/dept-scope';
 import {
   emitIncidentMetric,
   nowEpochSeconds,
   problemResponse,
-  readAuthorizerContext,
   resolveTraceId,
 } from './authContext.js';
 import { getNerisDeptSettings, sendingBlocked } from './nerisSettings.js';
 import { IncidentNotFoundError, getDocumentClient, getTableName } from './repository.js';
 import { SubmissionRetryConflictError, getSubmissionRepository } from './submissionRepository.js';
 
-export const handler: APIGatewayProxyHandlerV2WithLambdaAuthorizer<AuthorizerContext> = async (
-  event,
-) => {
+async function inner(
+  event: GuardEvent,
+  principal: CedarPrincipalContext,
+): Promise<APIGatewayProxyResultV2> {
   const traceId = resolveTraceId(event.headers, event.requestContext.requestId);
-
-  let deptId, canManageSubmission;
-  try {
-    ({ deptId, canManageSubmission } = readAuthorizerContext(event));
-  } catch (error) {
-    console.error(
-      JSON.stringify({
-        event: 'incident.submission.retry.denied',
-        correlationId: traceId,
-        message: error instanceof Error ? error.message : undefined,
-      }),
-    );
-    return problemResponse(
-      401,
-      'Unauthorized',
-      'A valid department-scoped authorization context is required.',
-      traceId,
-    );
-  }
-
-  if (!canManageSubmission) {
-    return problemResponse(
-      403,
-      'Forbidden',
-      'Retrying a NERIS submission requires an officer, admin, or chief role.',
-      traceId,
-    );
-  }
+  const deptId = toVerifiedDeptId(principal);
 
   const incidentId = event.pathParameters?.incidentId;
   if (!incidentId) {
@@ -102,4 +75,12 @@ export const handler: APIGatewayProxyHandlerV2WithLambdaAuthorizer<AuthorizerCon
       traceId,
     );
   }
-};
+}
+
+/** Security-web MINOR 2: a declared Cedar action (NERIS officer tier), not a groups check. */
+export const handler = withAuthorization(inner, {
+  actionType: 'Boxalarm::Action',
+  actionId: 'RetryIncidentSubmission',
+  resourceType: 'Boxalarm::Incident',
+  resourceId: (event) => event.pathParameters?.incidentId ?? '',
+});

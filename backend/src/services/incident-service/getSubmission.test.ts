@@ -1,5 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { IncidentEvent } from './authContext.js';
+import { bearerFor, fakeCedarDecision } from './testEvents.js';
+
+const vpSend = vi.hoisted(() => vi.fn());
+vi.mock('@aws-sdk/client-verifiedpermissions', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@aws-sdk/client-verifiedpermissions')>();
+  return {
+    ...actual,
+    VerifiedPermissionsClient: vi.fn(() => ({ send: vpSend })),
+  };
+});
 
 function buildEvent(
   lambdaContext: Record<string, unknown> | undefined,
@@ -11,7 +21,7 @@ function buildEvent(
     routeKey: 'GET /api/v1/incidents/{incidentId}/submission',
     rawPath: `/api/v1/incidents/${incidentId ?? ''}/submission`,
     rawQueryString: '',
-    headers,
+    headers: { ...bearerFor(lambdaContext), ...headers },
     isBase64Encoded: false,
     body: undefined,
     pathParameters: incidentId !== undefined ? { incidentId } : undefined,
@@ -45,6 +55,8 @@ const INCIDENT_ID = 'NICHOLS-4471-1798000000';
 describe('getSubmission handler', () => {
   beforeEach(() => {
     vi.resetModules();
+    process.env.VERIFIED_PERMISSIONS_POLICY_STORE_ID = 'ps-1';
+    vpSend.mockImplementation(fakeCedarDecision);
     process.env.INCIDENT_TABLE_NAME = 'incident-table';
   });
 
@@ -58,7 +70,7 @@ describe('getSubmission handler', () => {
   it('returns 401 when the authorizer context is missing', async () => {
     const { handler } = await import('./getSubmission.js');
 
-    const result = await handler(buildEvent(undefined, INCIDENT_ID), {} as never, () => undefined);
+    const result = await handler(buildEvent(undefined, INCIDENT_ID));
 
     expect(result).toMatchObject({ statusCode: 401 });
   });
@@ -66,11 +78,7 @@ describe('getSubmission handler', () => {
   it('returns 403 for a member who is not an officer or admin', async () => {
     const { handler } = await import('./getSubmission.js');
 
-    const result = await handler(
-      buildEvent(MEMBER_AUTH, INCIDENT_ID),
-      {} as never,
-      () => undefined,
-    );
+    const result = await handler(buildEvent(MEMBER_AUTH, INCIDENT_ID));
 
     expect(result).toMatchObject({ statusCode: 403 });
   });
@@ -78,7 +86,7 @@ describe('getSubmission handler', () => {
   it('returns 400 when incidentId path parameter is absent', async () => {
     const { handler } = await import('./getSubmission.js');
 
-    const result = await handler(buildEvent(ADMIN_AUTH, undefined), {} as never, () => undefined);
+    const result = await handler(buildEvent(ADMIN_AUTH, undefined));
 
     expect(result).toMatchObject({ statusCode: 400 });
   });
@@ -86,7 +94,7 @@ describe('getSubmission handler', () => {
   it('returns 400 when incidentId contains the pk delimiter', async () => {
     const { handler } = await import('./getSubmission.js');
 
-    const result = await handler(buildEvent(ADMIN_AUTH, 'bad#id'), {} as never, () => undefined);
+    const result = await handler(buildEvent(ADMIN_AUTH, 'bad#id'));
 
     expect(result).toMatchObject({ statusCode: 400 });
   });
@@ -190,11 +198,7 @@ describe('getSubmission handler', () => {
     });
     const { handler } = await import('./getSubmission.js');
 
-    const result = await handler(
-      buildEvent(OFFICER_AUTH, INCIDENT_ID),
-      {} as never,
-      () => undefined,
-    );
+    const result = await handler(buildEvent(OFFICER_AUTH, INCIDENT_ID));
 
     const body = JSON.parse((result as { body: string }).body) as Record<string, unknown>;
     expect(body).toMatchObject({
@@ -221,7 +225,7 @@ describe('getSubmission handler', () => {
     });
     const { handler } = await import('./getSubmission.js');
 
-    const result = await handler(buildEvent(ADMIN_AUTH, INCIDENT_ID), {} as never, () => undefined);
+    const result = await handler(buildEvent(ADMIN_AUTH, INCIDENT_ID));
 
     expect(result).toMatchObject({ statusCode: 200 });
     const body = JSON.parse((result as { body: string }).body) as Record<string, unknown>;
@@ -248,11 +252,7 @@ describe('getSubmission handler', () => {
     });
     const { handler } = await import('./getSubmission.js');
 
-    const result = await handler(
-      buildEvent(OFFICER_AUTH, INCIDENT_ID),
-      {} as never,
-      () => undefined,
-    );
+    const result = await handler(buildEvent(OFFICER_AUTH, INCIDENT_ID));
 
     expect(result).toMatchObject({ statusCode: 200 });
     const body = JSON.parse((result as { body: string }).body) as Record<string, unknown>;
@@ -276,7 +276,7 @@ describe('getSubmission handler', () => {
     });
     const { handler } = await import('./getSubmission.js');
 
-    const result = await handler(buildEvent(ADMIN_AUTH, INCIDENT_ID), {} as never, () => undefined);
+    const result = await handler(buildEvent(ADMIN_AUTH, INCIDENT_ID));
 
     expect(result).toMatchObject({ statusCode: 404 });
   });
@@ -293,7 +293,7 @@ describe('getSubmission handler', () => {
     });
     const { handler } = await import('./getSubmission.js');
 
-    const result = await handler(buildEvent(ADMIN_AUTH, INCIDENT_ID), {} as never, () => undefined);
+    const result = await handler(buildEvent(ADMIN_AUTH, INCIDENT_ID));
 
     expect(result).toMatchObject({ statusCode: 503 });
     const body = JSON.parse((result as { body: string }).body) as Record<string, unknown>;

@@ -1,5 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { IncidentEvent } from './authContext.js';
+import { bearerFor, fakeCedarDecision } from './testEvents.js';
+
+const vpSend = vi.hoisted(() => vi.fn());
+vi.mock('@aws-sdk/client-verifiedpermissions', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@aws-sdk/client-verifiedpermissions')>();
+  return {
+    ...actual,
+    VerifiedPermissionsClient: vi.fn(() => ({ send: vpSend })),
+  };
+});
 import { SECONDARY_SCHEMA_V_N, SECONDARY_SCHEMA_V_N_MINUS_1 } from './schemaVersion/fixtures.js';
 
 function buildEvent(
@@ -12,7 +22,7 @@ function buildEvent(
     routeKey: 'PUT /api/v1/incidents/{incidentId}/exposures',
     rawPath: '/api/v1/incidents/NICHOLS-4471-1798000000/exposures',
     rawQueryString: '',
-    headers: {},
+    headers: bearerFor(lambdaContext),
     pathParameters,
     isBase64Encoded: false,
     body: body === undefined ? undefined : JSON.stringify(body),
@@ -100,6 +110,8 @@ function mockDeps(
 describe('putExposures handler', () => {
   beforeEach(() => {
     vi.resetModules();
+    process.env.VERIFIED_PERMISSIONS_POLICY_STORE_ID = 'ps-1';
+    vpSend.mockImplementation(fakeCedarDecision);
   });
 
   afterEach(() => {
@@ -122,8 +134,6 @@ describe('putExposures handler', () => {
         payload: { exposure_type: 'SMOKE' },
         affectedMemberIds: ['MBR-0034'],
       }),
-      {} as never,
-      () => undefined,
     );
 
     expect(result).toMatchObject({ statusCode: 200 });
@@ -147,8 +157,6 @@ describe('putExposures handler', () => {
         payload: { exposure_type: 'RADIATION' },
         affectedMemberIds: ['MBR-0034'],
       }),
-      {} as never,
-      () => undefined,
     );
 
     expect(result).toMatchObject({ statusCode: 400 });
@@ -201,8 +209,6 @@ describe('putExposures handler', () => {
           payload: { exposure_type: 'BLOODBORNE' },
           affectedMemberIds: ['MBR-0034'],
         }),
-        {} as never,
-        () => undefined,
       );
 
       expect(getSchemaVersion).toHaveBeenCalledWith('2026.1');
@@ -225,8 +231,6 @@ describe('putExposures handler', () => {
         payload: { exposure_type: 'SMOKE' },
         affectedMemberIds: ['MBR-0034'],
       }),
-      {} as never,
-      () => undefined,
     );
 
     expect(result).toMatchObject({ statusCode: 404 });
@@ -238,8 +242,6 @@ describe('putExposures handler', () => {
 
     const result = await handler(
       buildEvent(MEMBER_AUTH, { secondaryType: 'EXPOSURE', payload: {} }),
-      {} as never,
-      () => undefined,
     );
 
     expect(result).toMatchObject({ statusCode: 400 });
@@ -251,8 +253,6 @@ describe('putExposures handler', () => {
 
     const result = await handler(
       buildEvent(undefined, { secondaryType: 'EXPOSURE', payload: {}, affectedMemberIds: [] }),
-      {} as never,
-      () => undefined,
     );
 
     expect(result).toMatchObject({ statusCode: 401 });
@@ -277,8 +277,6 @@ describe('putExposures handler', () => {
           payload: { exposure_type: 'SMOKE' },
           ...body,
         }),
-        {} as never,
-        () => undefined,
       )) as { statusCode: number; body: string };
     }
 

@@ -348,14 +348,24 @@ export const REPORTING_DEPARTMENT_ACTIONS = [
 // CHIEF/ADMIN only.
 // EditIncidentModule is every role like the other incident edit routes (members write
 // reports); the lock, not the role, is what stops edits after review.
+// EditIncidentExposures (putExposures.ts) is every role too: a member records their own
+// exposure. Naming or correcting other members on it is RecordExposureForOthers, officer tier.
+// Security-web MINOR 2: submit, retry and the submission reads were hand-rolled groups checks
+// (submit CHIEF/ADMIN while resubmit was officer tier); the officer who reviews a report now
+// submits it as well as resubmits it.
 export const NERIS_MEMBER_ACTIONS = [
   "ValidateIncidentReport",
   "ViewNerisSchema",
   "EditIncidentModule",
+  "EditIncidentExposures",
 ] as const;
 export const NERIS_OFFICER_ACTIONS = [
   "LockIncidentReport",
+  "SubmitIncidentReport",
   "ResubmitIncidentReport",
+  "RetryIncidentSubmission",
+  "ViewIncidentSubmission",
+  "RecordExposureForOthers",
   "FileNoActivityReport",
   "ViewNerisCompliance",
   "ViewNerisEntity",
@@ -373,8 +383,13 @@ const NERIS_ACTION_RESOURCE: Record<
   ValidateIncidentReport: "Incident",
   ViewNerisSchema: "Department",
   EditIncidentModule: "Incident",
+  EditIncidentExposures: "Incident",
   LockIncidentReport: "Incident",
+  SubmitIncidentReport: "Incident",
   ResubmitIncidentReport: "Incident",
+  RetryIncidentSubmission: "Incident",
+  ViewIncidentSubmission: "Incident",
+  RecordExposureForOthers: "Incident",
   UnlockIncidentReport: "Incident",
   FileNoActivityReport: "Department",
   ViewNerisCompliance: "Department",

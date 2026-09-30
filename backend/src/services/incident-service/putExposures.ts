@@ -1,13 +1,21 @@
-import type { APIGatewayProxyHandlerV2WithLambdaAuthorizer } from 'aws-lambda';
+import type { APIGatewayProxyResultV2 } from 'aws-lambda';
+import {
+  AuthzUnavailableError,
+  createAuthzClient,
+  isAuthorized,
+  readAuthzConfig,
+  withAuthorization,
+  type CedarPrincipalContext,
+  type GuardEvent,
+} from '@boxalarm/authz';
 import { assertNoDelimiter } from '@boxalarm/dept-scope';
-import type { AuthorizerContext } from '../platform-service/authorizer/handler.js';
 import {
   RequestValidationError,
   emitIncidentMetric,
   nowEpochSeconds,
   problemResponse,
-  readAuthorizerContext,
   readIncidentWriteRequest,
+  type IncidentEvent,
 } from './authContext.js';
 import {
   IncidentNotFoundError,
@@ -124,16 +132,52 @@ export function exposureWriteDenial(
   return undefined;
 }
 
-export const handler: APIGatewayProxyHandlerV2WithLambdaAuthorizer<AuthorizerContext> = async (
-  event,
-) => {
+/**
+ * The officer override (security-web MINOR 2): recording or correcting a module that names
+ * other members is Cedar RecordExposureForOthers (NERIS officer tier), decided on the caller's
+ * own token - no longer a cognito:groups check.
+ */
+async function mayRecordForOthers(event: GuardEvent, incidentId: string): Promise<boolean> {
+  const header = event.headers?.authorization ?? event.headers?.Authorization ?? '';
+  const [scheme, token] = header.split(' ');
+  if (scheme?.toLowerCase() !== 'bearer' || !token) {
+    return false;
+  }
+  return isAuthorized(createAuthzClient(process.env), readAuthzConfig(process.env), token, {
+    actionType: 'Boxalarm::Action',
+    actionId: 'RecordExposureForOthers',
+    resourceType: 'Boxalarm::Incident',
+    resourceId: incidentId,
+  });
+}
+
+async function inner(
+  guardEvent: GuardEvent,
+  principal: CedarPrincipalContext,
+): Promise<APIGatewayProxyResultV2> {
+  const event = guardEvent as unknown as IncidentEvent;
   const request = readIncidentWriteRequest(event, 'incident.exposures.denied', parseInput);
   if (!request.ok) {
     return request.response;
   }
   const { traceId, deptId, incidentId, input: input } = request;
-  // readIncidentWriteRequest already proved the context is readable.
-  const caller = readAuthorizerContext(event);
+  let caller: { readonly sub: string; readonly isOfficerTier: boolean };
+  try {
+    caller = {
+      sub: principal.sub,
+      isOfficerTier: await mayRecordForOthers(guardEvent, incidentId),
+    };
+  } catch (error) {
+    if (error instanceof AuthzUnavailableError) {
+      return problemResponse(
+        503,
+        'Service Unavailable',
+        'The authorization service is temporarily unavailable.',
+        traceId,
+      );
+    }
+    throw error;
+  }
 
   try {
     const repository = getIncidentRepository(process.env);
@@ -288,4 +332,15 @@ export const handler: APIGatewayProxyHandlerV2WithLambdaAuthorizer<AuthorizerCon
       traceId,
     );
   }
-};
+}
+
+/**
+ * Every role may write an exposure module (EditIncidentExposures): a member records their own.
+ * Who it may name is then exposureWriteDenial's rule, with the officer override from Cedar.
+ */
+export const handler = withAuthorization(inner, {
+  actionType: 'Boxalarm::Action',
+  actionId: 'EditIncidentExposures',
+  resourceType: 'Boxalarm::Incident',
+  resourceId: (event) => event.pathParameters?.incidentId ?? '',
+});

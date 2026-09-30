@@ -12,18 +12,14 @@ export interface IncidentAuthContext {
   readonly deptId: VerifiedDeptId;
   readonly sub: string;
   readonly isAdmin: boolean;
-  /** ADMIN, CHIEF, or OFFICER — submission status read and manual retry. */
-  readonly canManageSubmission: boolean;
-  /** ADMIN, CHIEF, or OFFICER — may record or correct any responder-exposure module. */
-  readonly isOfficerTier: boolean;
 }
 
 const ADMIN_GROUPS = new Set(['ADMIN', 'CHIEF']);
-const SUBMISSION_GROUPS = new Set(['ADMIN', 'CHIEF', 'OFFICER']);
 
-// TODO(E8-S3): replace with a Verified Permissions IsAuthorizedWithToken Cedar check once the
-// admin/officer role policy exists; this parses the authorizer's already-verified
-// cognito:groups claim as an interim, fail-secure stand-in, not a permanent substitute.
+// TODO(E8-S3): incident create and the chief/admin read of every exposure module still use this
+// groups check; the NERIS submit/retry/submission-read and exposure routes moved to Cedar
+// (security-web MINOR 2). It parses the authorizer's already-verified cognito:groups claim as an
+// interim, fail-secure stand-in, not a permanent substitute.
 function hasGroup(groups: string, allowed: ReadonlySet<string>): boolean {
   return groups.split(' ').some((group) => allowed.has(group));
 }
@@ -45,8 +41,6 @@ export function readAuthorizerContext(event: IncidentEvent): IncidentAuthContext
     deptId: toVerifiedDeptId({ deptId: rawDeptId }),
     sub: rawSub,
     isAdmin: hasGroup(groups, ADMIN_GROUPS),
-    canManageSubmission: hasGroup(groups, SUBMISSION_GROUPS),
-    isOfficerTier: hasGroup(groups, SUBMISSION_GROUPS),
   };
 }
 

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useParams } from 'react-router-dom';
 import { useAuth } from '../../auth/AuthContext';
+import { canSubmitIncident } from '../../auth/roles';
 import { ApiError } from '../../lib/apiClient';
 import { ApiForbiddenGate } from '../../components/ApiForbiddenGate';
 import { Button } from '../../components/ui/Button';
@@ -952,7 +953,9 @@ function IncidentReport({ incident }: { incident: IncidentDetail }) {
             NERIS already has this report. Lock it again after review, then resubmit the changes.
           </p>
         ) : null}
-        {submitted || nerisIncidentId ? null : (
+        {submitted || nerisIncidentId ? null : !canSubmitIncident(auth.roles) ? (
+          <p id="submit-status">An officer, chief or admin sends the report to NERIS.</p>
+        ) : (
           <>
             <p id="submit-status">
               {!locked

@@ -255,7 +255,12 @@ export class Incident extends pulumi.ComponentResource {
         handler: LAMBDA_HANDLER,
         code: lambdaCode("incident-service", "exposures"),
         logGroup: args.logGroup,
-        environment: { ...baseEnvironment, NERIS_SCHEMA_BUCKET_NAME: args.nerisSchemaBucketName },
+        // putExposures.ts is Cedar-gated (EditIncidentExposures, RecordExposureForOthers).
+        environment: {
+          ...baseEnvironment,
+          NERIS_SCHEMA_BUCKET_NAME: args.nerisSchemaBucketName,
+          VERIFIED_PERMISSIONS_POLICY_STORE_ID: args.policyStoreId,
+        },
         additionalPolicyStatements: pulumi
           .all([
             cmkStatement,
@@ -357,9 +362,9 @@ export class Incident extends pulumi.ComponentResource {
     // F7.6/F7.7 NERIS submission routes (architecture.md route table). submit.ts and
     // retrySubmission.ts each run one transaction - Update the incident METADATA plus Put
     // the neris.incident.submitted OUTBOX_ENTRY - then GetItem to explain a failed
-    // condition; getSubmission.ts is a single consistent GetItem. Role gating is the
-    // handlers' authorizer-group check (submit: ADMIN/CHIEF; status and retry: OFFICER and
-    // up), not Cedar, so no Verified Permissions grant.
+    // condition; getSubmission.ts is a single consistent GetItem. Each is Cedar-gated
+    // (SubmitIncidentReport, ViewIncidentSubmission, RetryIncidentSubmission - NERIS officer
+    // tier, security-web MINOR 2), so each gets the policy-store id and the IsAuthorized grant.
     const submissionRoutes: {
       key: string;
       fn: string;
@@ -400,16 +405,19 @@ export class Incident extends pulumi.ComponentResource {
           handler: LAMBDA_HANDLER,
           code: lambdaCode("incident-service", route.fn),
           logGroup: args.logGroup,
-          environment: route.schema
-            ? { ...baseEnvironment, NERIS_SCHEMA_BUCKET_NAME: args.nerisSchemaBucketName }
-            : baseEnvironment,
+          environment: {
+            ...baseEnvironment,
+            VERIFIED_PERMISSIONS_POLICY_STORE_ID: args.policyStoreId,
+            ...(route.schema ? { NERIS_SCHEMA_BUCKET_NAME: args.nerisSchemaBucketName } : {}),
+          },
           additionalPolicyStatements: pulumi
             .all([
               cmkStatement,
               args.incidentTableArn,
               SCHEMA_S3_READ_STATEMENT(args.nerisSchemaBucketArn),
+              vpStatement,
             ])
-            .apply(([cmk, tableArn, s3]) => [
+            .apply(([cmk, tableArn, s3, vp]) => [
               {
                 Sid: "IncidentSubmissionAccess" as const,
                 Effect: "Allow" as const,
@@ -417,6 +425,7 @@ export class Incident extends pulumi.ComponentResource {
                 Resource: [tableArn],
               },
               ...cmk,
+              ...vp,
               ...(route.schema ? s3 : []),
             ]),
         },

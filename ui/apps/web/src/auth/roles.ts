@@ -37,6 +37,14 @@ export function canLockIncident(roles: readonly Role[]): boolean {
   return roles.includes('OFFICER') || roles.includes('CHIEF') || roles.includes('ADMIN');
 }
 
+/**
+ * Sending a reviewed report to NERIS (Cedar SubmitIncidentReport, the NERIS officer tier):
+ * OFFICER, CHIEF, ADMIN - the same officers who lock and resubmit it.
+ */
+export function canSubmitIncident(roles: readonly Role[]): boolean {
+  return canLockIncident(roles);
+}
+
 /** Reopening a locked incident report (Cedar UnlockIncidentReport): CHIEF or ADMIN only. */
 export function canUnlockIncident(roles: readonly Role[]): boolean {
   return roles.includes('CHIEF') || roles.includes('ADMIN');
