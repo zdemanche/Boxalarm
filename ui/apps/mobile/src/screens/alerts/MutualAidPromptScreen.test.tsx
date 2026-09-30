@@ -1,5 +1,5 @@
 import { fireEvent, render, screen } from '@testing-library/react-native';
-import { AppState } from 'react-native';
+import { AppState, Platform } from 'react-native';
 import { useOptionalAuth } from '../../auth/AuthContext';
 import { useAlertsRepository } from '../../features/alerts/apiAlertsRepository';
 import type { MutualAid } from '../../features/alerts/types';
@@ -160,5 +160,36 @@ test('opened unlocked, it stops ringing at once; confirmed, it stops showing ove
   await fireEvent.press(screen.getByRole('button', { name: 'I made the mutual-aid call' }));
   await screen.findByText(/Call confirmed at/);
 
+  expect(mockShowOverLock).toHaveBeenLastCalledWith(false);
+});
+
+test('Android: a lock state that cannot be read counts as locked for confirming', async () => {
+  Platform.OS = 'android';
+  mockLocked.value = null;
+  try {
+    await render(<MutualAidPromptScreen />);
+    await screen.findByText(/has not been confirmed yet/);
+
+    await fireEvent.press(screen.getByRole('button', { name: 'I made the mutual-aid call' }));
+
+    expect(await screen.findByText('Unlock your phone to confirm the call.')).toBeTruthy();
+    expect(repository.acknowledgeMutualAid).not.toHaveBeenCalled();
+  } finally {
+    Platform.OS = 'ios';
+  }
+});
+
+test('already confirmed by another officer: it stops ringing and leaves the lock screen', async () => {
+  mockLocked.value = true;
+  repository.getDispatch.mockResolvedValueOnce({
+    dispatchId: 'D-MA',
+    incidentType: 'Structure fire',
+    address: '21 Main St',
+    mutualAid: { ...requested, acknowledgedBy: 'MBR-OTHER', acknowledgedAt: 1_790_000_100 },
+  });
+  await render(<MutualAidPromptScreen />);
+  await screen.findByText(/Call confirmed at .* by MBR-OTHER/);
+
+  expect(mockSilence).toHaveBeenCalledWith('D-MA');
   expect(mockShowOverLock).toHaveBeenLastCalledWith(false);
 });

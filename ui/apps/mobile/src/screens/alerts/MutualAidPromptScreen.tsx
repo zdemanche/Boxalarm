@@ -1,7 +1,7 @@
 import { radius, spacing, typeScale } from '@boxalarm/design-tokens';
 import { useNavigation, useRoute, type NavigationProp } from '@react-navigation/native';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { AccessibilityInfo, AppState, Text, TextInput, View } from 'react-native';
+import { AccessibilityInfo, AppState, Platform, Text, TextInput, View } from 'react-native';
 import { useOptionalAuth, type Role } from '../../auth/AuthContext';
 import { Button, Screen, useTheme } from '../../components/ui';
 import { useAlertsRepository } from '../../features/alerts/apiAlertsRepository';
@@ -102,10 +102,17 @@ export function MutualAidPromptScreen() {
       const dispatch = await repository.getDispatch(dispatchId);
       setCall({ incidentType: dispatch.incidentType, address: dispatch.address });
       setMutualAid(dispatch.mutualAid);
+      // Another officer already confirmed the call: nothing is left to act on, so it stops
+      // ringing and no longer shows over the lock screen.
+      if (dispatch.mutualAid?.acknowledgedAt != null && !releasedRef.current) {
+        releasedRef.current = true;
+        silence();
+        setAlertShowsOverLockScreen(false);
+      }
     } catch (loadError) {
       console.warn('[mutual-aid] reading the dispatch failed', loadError);
     }
-  }, [dispatchId, repository]);
+  }, [dispatchId, repository, silence]);
 
   useEffect(() => {
     void load();
@@ -115,7 +122,10 @@ export function MutualAidPromptScreen() {
     silence();
     // Anyone holding a locked phone could otherwise record "call made" and stop the officers
     // from making it: confirming is an officer's write, so it needs the phone unlocked.
-    if ((await isDeviceLocked()) === true) {
+    // Android: a lock state that cannot be read counts as locked. (iOS reports none - its prompt
+    // only opens the app after an unlock.)
+    const locked = await isDeviceLocked();
+    if (locked === true || (locked === null && Platform.OS === 'android')) {
       const message = 'Unlock your phone to confirm the call.';
       setError(message);
       AccessibilityInfo.announceForAccessibility(message);
