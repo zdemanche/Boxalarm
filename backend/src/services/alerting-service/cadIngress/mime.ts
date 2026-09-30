@@ -1,3 +1,4 @@
+import { parseFromHeaders } from './address.js';
 /**
  * Just enough RFC 5322 / MIME to read a CAD dispatch email: the headers the sender checks
  * need (From, Date, Message-ID, DKIM-Signature) and the first text part of the body. SES has
@@ -17,6 +18,8 @@ export interface DkimSignature {
 export interface ParsedEmail {
   readonly fromAddress: string | undefined;
   readonly fromDomain: string | undefined;
+  /** Why the From header(s) could not be read as exactly one mailbox (address.ts). */
+  readonly fromError?: string;
   readonly date: number | undefined;
   readonly messageId: string | undefined;
   /** Decoded Subject: many CADs put the call type and address there (chain review C1). */
@@ -55,14 +58,6 @@ function all(headers: Headers, name: string): string[] {
 
 function first(headers: Headers, name: string): string | undefined {
   return all(headers, name)[0];
-}
-
-/** `"Dispatch" <cad@county.gov>` or `cad@county.gov` -> the address, lower case. */
-export function parseAddress(value: string | undefined): string | undefined {
-  if (!value) return undefined;
-  const angle = /<([^<>\s]+@[^<>\s]+)>/.exec(value);
-  const bare = angle?.[1] ?? /([^\s<>",;]+@[^\s<>",;]+)/.exec(value)?.[1];
-  return bare?.toLowerCase();
 }
 
 export function parseDkimSignature(value: string): DkimSignature | undefined {
@@ -171,13 +166,14 @@ export function decodeEncodedWords(value: string): string {
 export function parseEmail(raw: string): ParsedEmail {
   const { headerBlock, body } = splitMessage(raw);
   const headers = parseHeaders(headerBlock);
-  const fromAddress = parseAddress(first(headers, 'from'));
+  const from = parseFromHeaders(all(headers, 'from'));
   const dateHeader = first(headers, 'date');
   const date = dateHeader ? Date.parse(dateHeader) : Number.NaN;
   const found = extractText(headers, body);
   return {
-    fromAddress,
-    fromDomain: fromAddress?.split('@')[1],
+    fromAddress: from.ok ? from.address : undefined,
+    fromDomain: from.ok ? from.domain : undefined,
+    ...(from.ok ? {} : { fromError: from.reason }),
     date: Number.isFinite(date) ? Math.floor(date / 1000) : undefined,
     messageId: first(headers, 'message-id'),
     subject: ((subject) => (subject ? decodeEncodedWords(subject).trim() || undefined : undefined))(

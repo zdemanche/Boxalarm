@@ -128,7 +128,12 @@ async function processRecord(record: SESEventRecord, config: MailConfig): Promis
   const message = await readRawMessage(config, objectKey);
   if ('tooLarge' in message) return quarantine('TooLarge');
   const email = parseEmail(message.raw);
-  const senderFailure = checkEmailSender(email, source.email.allowedSenders, nowSeconds);
+  const senderFailure = checkEmailSender(
+    email,
+    source.email.allowedSenders,
+    nowSeconds,
+    receipt.dmarcVerdict?.status,
+  );
   if (senderFailure) return quarantine(senderFailure);
   logInfo('cadIngress.email.authenticated', {
     deptId: target.deptId,

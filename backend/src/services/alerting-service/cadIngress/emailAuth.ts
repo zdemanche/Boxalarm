@@ -1,17 +1,16 @@
 import { createHash } from 'node:crypto';
 import type { SESReceipt } from 'aws-lambda';
+import { isAligned } from './address.js';
 import type { ParsedEmail } from './mime.js';
 
 /**
- * Email sender authentication (docs/decisions/2026-09-29-cad-ingress-auth.md, "Email path").
- * Accept only when ALL hold:
- *  - SES verdicts: SPF PASS, DKIM PASS, spam not FAIL, virus not FAIL, DMARC not FAIL
- *    (DMARC GRAY - the sender publishes no policy - is accepted and recorded);
- *  - the RFC 5322 From is on the source's sender allowlist;
- *  - every DKIM signing domain (d=) is an allowlisted domain. Requiring EVERY signature, not
- *    one, closes the gap where SES's single DKIM verdict is PASS for an attacker's own valid
- *    signature while a forged one claims the allowlisted domain;
- *  - Date and every DKIM t= within 10 minutes of now.
+ * Email sender authentication (docs/decisions/2026-09-29-cad-ingress-auth.md, "Email path",
+ * tightened by the security review). Accept only when ALL hold:
+ *  - SES verdicts: SPF PASS, DKIM PASS, spam not FAIL, virus not FAIL, DMARC not FAIL;
+ *  - exactly one From header with exactly one mailbox, parsed by the RFC 5322 grammar;
+ *  - that mailbox is on the source's allowlist (address entries: exact address only);
+ *  - DMARC PASS, or every DKIM d= aligned with the From domain (checkEmailSender);
+ *  - Date and every DKIM t= fresh.
  * There is no allowlist-only mode: a From header alone is trivially forged.
  */
 
@@ -24,8 +23,9 @@ export type EmailAuthFailure =
   | 'DmarcFailed'
   | 'Spam'
   | 'Virus'
+  | 'FromUnparseable'
   | 'SenderNotAllowed'
-  | 'DkimDomainNotAllowed'
+  | 'DkimNotAligned'
   | 'Stale';
 
 export function checkSesVerdicts(receipt: SESReceipt): EmailAuthFailure | undefined {
@@ -37,29 +37,36 @@ export function checkSesVerdicts(receipt: SESReceipt): EmailAuthFailure | undefi
   return undefined;
 }
 
-function allowedDomains(allowedSenders: readonly string[]): Set<string> {
-  return new Set(
-    allowedSenders.map((entry) => (entry.includes('@') ? entry.split('@')[1]! : entry)),
-  );
-}
-
+/**
+ * The sender checks after the SES verdicts (security review C1):
+ *  - exactly one From header holding exactly one mailbox (address.ts - display names and
+ *    comments are never searched for addresses);
+ *  - that mailbox is on the allowlist: an ADDRESS entry matches that exact address only; only a
+ *    DOMAIN entry the chief typed as a domain matches every mailbox of that domain;
+ *  - alignment: DMARC PASS (SES's aligned verdict), or - when the domain publishes no usable
+ *    DMARC result (GRAY, PROCESSING_FAILED, absent) - EVERY DKIM signature's d= aligned with the
+ *    From domain, so the signature SES verified is necessarily an aligned one. A message with no
+ *    DKIM signature, or with any foreign one, fails;
+ *  - Date and every DKIM t= fresh.
+ */
 export function checkEmailSender(
   email: ParsedEmail,
   allowedSenders: readonly string[],
   nowSeconds: number,
+  dmarcStatus?: string,
 ): EmailAuthFailure | undefined {
-  const domains = allowedDomains(allowedSenders);
-  const fromAllowed =
-    email.fromAddress !== undefined &&
-    allowedSenders.some((entry) =>
-      entry.includes('@') ? entry === email.fromAddress : entry === email.fromDomain,
-    );
+  if (email.fromError || !email.fromAddress || !email.fromDomain) return 'FromUnparseable';
+  const fromAllowed = allowedSenders.some((entry) =>
+    entry.includes('@') ? entry === email.fromAddress : entry === email.fromDomain,
+  );
   if (!fromAllowed) return 'SenderNotAllowed';
+  const fromDomain = email.fromDomain;
   if (
     email.dkimSignatures.length === 0 ||
-    email.dkimSignatures.some((signature) => !domains.has(signature.domain))
+    (dmarcStatus !== 'PASS' &&
+      email.dkimSignatures.some((signature) => !isAligned(signature.domain, fromDomain)))
   ) {
-    return 'DkimDomainNotAllowed';
+    return 'DkimNotAligned';
   }
   const times = [email.date, ...email.dkimSignatures.map((signature) => signature.timestamp)];
   if (email.date === undefined) return 'Stale';

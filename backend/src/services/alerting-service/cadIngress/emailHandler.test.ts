@@ -40,6 +40,8 @@ function rawEmail(
     body?: string;
     headers?: string;
     subject?: string;
+    /** The whole From header value (overrides `from`). */
+    fromHeader?: string;
   } = {},
 ): string {
   const date = new Date((options.date ?? NOW) * 1000).toUTCString();
@@ -51,7 +53,7 @@ function rawEmail(
     .join('\r\n');
   return [
     dkim,
-    `From: "County Dispatch" <${options.from ?? 'dispatch@cad.county.gov'}>`,
+    `From: ${options.fromHeader ?? `"County Dispatch" <${options.from ?? 'dispatch@cad.county.gov'}>`}`,
     `To: ${RECIPIENT}`,
     `Date: ${date}`,
     `Message-ID: <${options.messageId ?? 'm-1@cad.county.gov'}>`,
@@ -171,16 +173,76 @@ describe('CAD email handler', () => {
     });
   });
 
-  it('a forged From with DKIM PASS for another domain does not page', async () => {
+  it('a forged From with DKIM PASS for another domain does not page (sender publishes no DMARC)', async () => {
     serve(rawEmail({ dkimDomains: ['attacker.example'] }));
-    await run();
-    expectDropped('DkimDomainNotAllowed');
+    await run(sesEvent({ dmarc: 'GRAY' }));
+    expectDropped('DkimNotAligned');
   });
 
-  it('an allowlisted signature alongside a foreign one does not page', async () => {
+  it('an aligned signature alongside a foreign one does not page without DMARC PASS', async () => {
     serve(rawEmail({ dkimDomains: ['cad.county.gov', 'attacker.example'] }));
-    await run();
-    expectDropped('DkimDomainNotAllowed');
+    await run(sesEvent({ dmarc: 'GRAY' }));
+    expectDropped('DkimNotAligned');
+  });
+
+  it.each(['GRAY', 'PROCESSING_FAILED'] as const)(
+    'DMARC %s with every d= aligned to the From domain pages',
+    async (dmarc) => {
+      await run(sesEvent({ dmarc }));
+      expect(alerts()).toHaveLength(1);
+    },
+  );
+
+  function allowOnly(senders: string[]) {
+    const copy = table.items.get(`${COPY.pk}|${COPY.sk}`)!;
+    const sources = copy.sources as Record<string, unknown>[];
+    table.items.set(`${COPY.pk}|${COPY.sk}`, {
+      ...copy,
+      sources: [
+        {
+          ...sources[0],
+          email: { allowedSenders: senders, recipientToken: 'k3j9x2m4p7q8' },
+        },
+      ],
+    });
+  }
+
+  describe('From spoofing (security review C1): an ADDRESS allowlist entry is that address only', () => {
+    it.each([
+      [
+        'a display name hiding the address',
+        '"<dispatch@cad.county.gov>" <clerk@cad.county.gov>',
+        'SenderNotAllowed',
+      ],
+      [
+        'a comment hiding the address',
+        'clerk@cad.county.gov (<dispatch@cad.county.gov>)',
+        'SenderNotAllowed',
+      ],
+      ['two mailboxes', 'dispatch@cad.county.gov, clerk@cad.county.gov', 'FromUnparseable'],
+      ['two angle-addrs', '<dispatch@cad.county.gov> <clerk@cad.county.gov>', 'FromUnparseable'],
+      ['a group', 'Dispatch: dispatch@cad.county.gov;', 'FromUnparseable'],
+      ['another mailbox on the same domain', 'clerk@cad.county.gov', 'SenderNotAllowed'],
+    ])('%s does not page, even with DMARC PASS', async (_name, fromHeader, reason) => {
+      allowOnly(['dispatch@cad.county.gov']);
+      serve(rawEmail({ fromHeader }));
+      await run(sesEvent({ dmarc: 'PASS' }));
+      expectDropped(reason);
+    });
+
+    it('two From headers do not page', async () => {
+      allowOnly(['dispatch@cad.county.gov']);
+      serve(rawEmail({ headers: 'From: clerk@cad.county.gov\r\nContent-Type: text/plain' }));
+      await run(sesEvent({ dmarc: 'PASS' }));
+      expectDropped('FromUnparseable');
+    });
+
+    it('the exact allowlisted address with a display name pages', async () => {
+      allowOnly(['dispatch@cad.county.gov']);
+      serve(rawEmail({ fromHeader: '"County Dispatch (CAD)" <Dispatch@CAD.County.gov>' }));
+      await run(sesEvent({ dmarc: 'PASS' }));
+      expect(alerts()).toHaveLength(1);
+    });
   });
 
   it('a From outside the allowlist does not page', async () => {
