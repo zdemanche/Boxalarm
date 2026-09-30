@@ -62,7 +62,7 @@ stream, queue, schedule or async event, so those retry into their DLQs and page 
 A department whose ALERT_RULES were saved before `alert-rules-copy-consumer` existed has no `ALERT_RULES_COPY`, so its tone ladder runs on the defaults. The fan-out logs `alerting.toneLadder.rules_default` when that happens. Re-emit the saved rules once. The script bundles itself with the repo's esbuild, so it runs on any supported Node (22+). Values saved before the timer bounds existed are clamped by the consumer and logged as `alerting.alertRulesCopy.adjusted`:
 
 ```
-cd backend && npm run reemit-alert-rules -- --table boxalarm-<env>-platform --dept <deptId>
+cd backend && npm run reemit-alert-rules -- --table boxalarm-<env>-platform-service --dept <deptId>
 ```
 
 ## Getting started
