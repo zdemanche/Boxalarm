@@ -248,6 +248,66 @@ describe('reportDefect handler', () => {
     });
   });
 
+  it('stores the check-sheet itemCode on the defect, its event and its response', async () => {
+    const client = fakeDynamoClient({});
+    const { createReportDefectHandler } = await import('./reportDefectHandler.js');
+    const handler = createReportDefectHandler({
+      client,
+      authzClient: fakeAuthzClient('ALLOW'),
+      now: () => 1798050000,
+      newDefectId: () => 'DEF-0034',
+    });
+
+    const result = await handler(
+      buildEvent(
+        JSON.stringify({
+          description: 'Failed on the E1 truck check: Brakes.',
+          severity: 'MAJOR',
+          itemCode: 'BRAKES',
+        }),
+      ),
+    );
+
+    expect(result).toMatchObject({ statusCode: 201 });
+    expect(JSON.parse((result as { body: string }).body)).toMatchObject({ itemCode: 'BRAKES' });
+    const transact = (client.send as ReturnType<typeof vi.fn>).mock.calls.find(
+      (call) => call[0] instanceof TransactWriteCommand,
+    )?.[0] as TransactWriteCommand;
+    expect(transact.input.TransactItems?.[0]?.Put?.Item).toMatchObject({ itemCode: 'BRAKES' });
+    expect(
+      (transact.input.TransactItems?.[1]?.Put?.Item as { payload: Record<string, unknown> })
+        .payload,
+    ).toMatchObject({ itemCode: 'BRAKES' });
+  });
+
+  it('a hand-typed defect has no itemCode, and a malformed one is a 400', async () => {
+    const client = fakeDynamoClient({});
+    const { createReportDefectHandler } = await import('./reportDefectHandler.js');
+    const handler = createReportDefectHandler({
+      client,
+      authzClient: fakeAuthzClient('ALLOW'),
+      now: () => 1798050000,
+      newDefectId: () => 'DEF-0035',
+    });
+
+    const typed = await handler(
+      buildEvent(JSON.stringify({ description: 'Cracked mirror', severity: 'MINOR' })),
+    );
+    expect(JSON.parse((typed as { body: string }).body)).toMatchObject({ itemCode: null });
+    const transact = (client.send as ReturnType<typeof vi.fn>).mock.calls.find(
+      (call) => call[0] instanceof TransactWriteCommand,
+    )?.[0] as TransactWriteCommand;
+    expect(transact.input.TransactItems?.[0]?.Put?.Item).not.toHaveProperty('itemCode');
+
+    const bad = await handler(
+      buildEvent(
+        JSON.stringify({ description: 'x', severity: 'MINOR', itemCode: 'BRAKES#../../x' }),
+      ),
+    );
+    expect(bad).toMatchObject({ statusCode: 400 });
+    expect((bad as { body: string }).body).toContain('itemCode');
+  });
+
   it('signs a photo upload URL when photo.filename is provided (training attachment pattern)', async () => {
     const { createReportDefectHandler } = await import('./reportDefectHandler.js');
     const handler = createReportDefectHandler({

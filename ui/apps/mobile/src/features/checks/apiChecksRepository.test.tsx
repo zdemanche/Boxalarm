@@ -135,3 +135,27 @@ test('with no member id on the session nothing is cached, so nothing can be serv
   mockApiRequest.mockRejectedValueOnce(new TypeError('Failed to fetch'));
   await expect(result.current.getApparatus()).rejects.toBeInstanceOf(NoCachedDataError);
 });
+
+test('a truck-check defect is queued with the check-sheet item code', async () => {
+  const syncManager = jest.requireActual(
+    '../../sync/syncManager',
+  ) as typeof import('../../sync/syncManager');
+  const enqueueSpy = jest.spyOn(syncManager, 'enqueueDefect').mockResolvedValue(undefined);
+  const { result } = await renderHook(() => useChecksRepository());
+
+  await result.current.submitDefect({
+    apparatusId: 'E1',
+    description: 'Failed on the E1 truck check: Brakes.',
+    severity: 'MAJOR',
+    idempotencyKey: 'check-1-defect-BRAKES',
+    itemCode: 'BRAKES',
+  });
+
+  expect(enqueueSpy).toHaveBeenCalledWith(
+    'E1',
+    'check-1-defect-BRAKES',
+    expect.objectContaining({ itemCode: 'BRAKES' }),
+    undefined,
+  );
+  enqueueSpy.mockRestore();
+});

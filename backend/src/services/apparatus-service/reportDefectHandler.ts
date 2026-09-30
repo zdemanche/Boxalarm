@@ -52,8 +52,13 @@ interface ValidatedDefectBody {
   readonly severity: DefectSeverity;
   readonly photoS3Key?: string;
   readonly photoFilename?: string;
+  readonly itemCode?: string;
   readonly clientMutationId?: string;
 }
+
+// A check-sheet item code (CHECKLIST_DEFAULTS / CHECKLIST_TEMPLATE `code`): stored and compared,
+// never a key segment, but kept to the same safe shape the web editor generates.
+const ITEM_CODE = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/;
 
 function emitDefectMetric(name: string): void {
   console.log(
@@ -138,6 +143,18 @@ function validateBody(
     }
   }
 
+  let itemCode: string | undefined;
+  if (body.itemCode !== undefined && body.itemCode !== null) {
+    if (typeof body.itemCode !== 'string' || !ITEM_CODE.test(body.itemCode)) {
+      errors.push({
+        field: 'itemCode',
+        message: `must match ${ITEM_CODE} when provided`,
+      });
+    } else {
+      itemCode = body.itemCode;
+    }
+  }
+
   const rawMutationId = body.clientMutationId ?? body.idempotencyKey;
   let clientMutationId: string | undefined;
   if (rawMutationId !== undefined) {
@@ -162,6 +179,7 @@ function validateBody(
       severity: body.severity as DefectSeverity,
       ...(photoS3Key !== undefined ? { photoS3Key } : {}),
       ...(photoFilename !== undefined ? { photoFilename } : {}),
+      ...(itemCode !== undefined ? { itemCode } : {}),
       ...(clientMutationId !== undefined ? { clientMutationId } : {}),
     },
   };
@@ -182,6 +200,7 @@ function toResponseBody(
     reportedAt: defect.reportedAt,
     photoS3Key: defect.photoS3Key,
     outOfService: defect.outOfService,
+    itemCode: defect.itemCode,
     ...(upload !== undefined
       ? { uploadUrl: upload.uploadUrl, uploadContentType: upload.contentType }
       : {}),
@@ -324,6 +343,7 @@ async function reportDefect(
       reportedByMemberId: principal.sub,
       correlationId: traceId,
       photoS3Key,
+      ...(value.itemCode ? { itemCode: value.itemCode } : {}),
       ...(value.clientMutationId ? { clientMutationId: value.clientMutationId } : {}),
       defectId,
       now: deps.now,

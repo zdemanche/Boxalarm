@@ -82,19 +82,22 @@ export function defectDescription(unitId: string, item: ChecklistItem, note: str
   return note.trim() ? `${base} ${note.trim()}` : base;
 }
 
-/** An open defect a previous check already filed for this unit and item. The defect API has no
- * item field, so this matches the description the runner writes; defects typed by hand on the
- * Report a defect screen can't be matched. */
+/** An open defect a previous check already filed for this unit and item. The list is this
+ * unit's open defects, so matching the item's code is a unit + item match. A defect with no item
+ * code (hand-typed, or filed before defects carried one) falls back to the description the
+ * runner writes; one typed by hand on the Report a defect screen can't be matched that way. */
 export function findKnownDefect(
   openDefects: readonly OpenDefect[],
   unitId: string,
   item: ChecklistItem,
 ): OpenDefect | undefined {
   const prefix = defectPrefix(unitId, item);
-  // The most severe matching one: an escalation keeps the same prefix, so later checks compare
-  // against the escalated severity.
+  // The most severe matching one: an escalation carries the same item code, so later checks
+  // compare against the escalated severity.
   return openDefects
-    .filter((defect) => defect.description.startsWith(prefix))
+    .filter((defect) =>
+      defect.itemCode ? defect.itemCode === item.code : defect.description.startsWith(prefix),
+    )
     .sort((a, b) => SEVERITY_RANK[b.severity] - SEVERITY_RANK[a.severity])[0];
 }
 
@@ -461,6 +464,7 @@ export function CheckRunnerScreen() {
               : ''),
           severity: severities[item.code] ?? DEFAULT_SEVERITY,
           idempotencyKey: `${idempotencyKey}-defect-${item.code}`,
+          itemCode: item.code,
           ...(photo ? { photoLocalUri: photo.uri, photoFileName: photo.fileName } : {}),
         });
       }

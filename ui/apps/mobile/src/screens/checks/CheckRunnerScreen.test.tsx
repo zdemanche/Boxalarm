@@ -558,3 +558,47 @@ test('a defect closed during the check is re-read at submit, so the failure is f
   defectSpy.mockRestore();
   restore();
 });
+
+test('a known defect is matched on its item code, not its description', async () => {
+  const restore = withOpenDefects([
+    // Filed against TIRES under an older label: still the same item.
+    {
+      defectId: 'd-20',
+      description: 'Rear tire flat',
+      severity: 'MAJOR',
+      reportedAt: 1,
+      itemCode: 'TIRES',
+    },
+    // Reads like a FLUIDS failure, but it was filed against another item: not FLUIDS.
+    {
+      defectId: 'd-21',
+      description: 'Failed on the APP-ENGINE-2 truck check: Fluid levels.',
+      severity: 'MAJOR',
+      reportedAt: 1,
+      itemCode: 'HOSE',
+    },
+  ]);
+  const defectSpy = jest.spyOn(mockChecksRepository, 'submitDefect');
+  const { findByText, findAllByRole } = await render(<CheckRunnerScreen />);
+
+  await findByText('Tires and wheels');
+  const fails = (await findAllByRole('radio')).filter((r) => r.props.accessibilityLabel === 'Fail');
+  await act(async () => {
+    fireEvent.press(fails[0]!);
+  });
+  await act(async () => {
+    fireEvent.press(fails[1]!);
+  });
+  await act(async () => {
+    fireEvent.press(await findByText('Mark the other 3 OK'));
+  });
+  await act(async () => {
+    fireEvent.press(await findByText('Submit check'));
+  });
+
+  // TIRES is already open (skipped); FLUIDS is new and filed with its item code.
+  expect(defectSpy).toHaveBeenCalledTimes(1);
+  expect(defectSpy.mock.calls[0]?.[0]).toMatchObject({ itemCode: 'FLUIDS' });
+  restore();
+  defectSpy.mockRestore();
+});

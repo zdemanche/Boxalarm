@@ -51,6 +51,8 @@ export interface DefectSubmission {
   description: string;
   severity: DefectSeverity;
   idempotencyKey: string;
+  /** The check-sheet item a truck-check failure is filed against; absent when hand-typed. */
+  itemCode?: string;
   photoLocalUri?: string;
   photoFileName?: string;
 }
@@ -61,6 +63,8 @@ export interface OpenDefect {
   description: string;
   severity: DefectSeverity;
   reportedAt: number;
+  /** Check-sheet item it was filed against; null/absent for hand-typed (or older) defects. */
+  itemCode?: string | null;
 }
 
 export interface ChecksRepository {

@@ -134,6 +134,7 @@ export function useChecksRepository(): ChecksRepositoryWithFallbackFlag {
             description: defect.description,
             severity: defect.severity,
             idempotencyKey: defect.idempotencyKey,
+            ...(defect.itemCode ? { itemCode: defect.itemCode } : {}),
             ...(defect.photoFileName ? { photo: { filename: defect.photoFileName } } : {}),
           },
           defect.photoLocalUri,
