@@ -250,10 +250,7 @@ export function compileCadParser(template: CadParserTemplate): CompiledCadParser
       if (normalized.trim().length === 0) {
         return { status: 'RAW', version: template.version, reason: 'EMPTY', fields: {} };
       }
-      return toResult(
-        template.version,
-        extractCadFields(rules, normalized, FIELD_LIMITS),
-      );
+      return toResult(template.version, extractCadFields(rules, normalized, FIELD_LIMITS));
     },
   };
 }
