@@ -12,13 +12,14 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useOptionalAuth } from '../../auth/AuthContext';
-import { Button, useTheme, type SurfaceTheme } from '../../components/ui';
+import { Button, StatusChip, useTheme, type SurfaceTheme } from '../../components/ui';
 import { useChecksRepository } from '../../features/checks/apiChecksRepository';
 import type {
   ChecklistItem,
   ChecklistTemplate,
   DefectSeverity,
   ItemResult,
+  OpenDefect,
 } from '../../features/checks/types';
 import { ApiError } from '../../lib/apiClient';
 import type { ChecksStackParamList } from '../../navigation/ChecksStack';
@@ -63,14 +64,30 @@ interface CompletedSummary {
   /** Photos taken on items that passed: the check-run API has no field for them. */
   readonly photosNotSent: number;
   readonly passed: number;
-  readonly defects: { label: string; severity: DefectSeverity }[];
+  readonly defects: { label: string; severity: DefectSeverity; alreadyReported: boolean }[];
   readonly durationSeconds: number;
+}
+
+function defectPrefix(unitId: string, item: ChecklistItem): string {
+  return `Failed on the ${unitId} truck check: ${item.label}.`;
 }
 
 /** The description the apparatus officer reads: which unit, which item, and the member's note. */
 export function defectDescription(unitId: string, item: ChecklistItem, note: string): string {
-  const base = `Failed on the ${unitId} truck check: ${item.label}.`;
+  const base = defectPrefix(unitId, item);
   return note.trim() ? `${base} ${note.trim()}` : base;
+}
+
+/** An open defect a previous check already filed for this unit and item. The defect API has no
+ * item field, so this matches the description the runner writes; defects typed by hand on the
+ * Report a defect screen can't be matched. */
+export function findKnownDefect(
+  openDefects: readonly OpenDefect[],
+  unitId: string,
+  item: ChecklistItem,
+): OpenDefect | undefined {
+  const prefix = defectPrefix(unitId, item);
+  return openDefects.find((defect) => defect.description.startsWith(prefix));
 }
 
 // N4.2: no step waits on a network round trip. Every answer is a local state update, journaled to
@@ -102,6 +119,25 @@ export function CheckRunnerScreen() {
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const lastProgressAnnouncement = useRef(0);
+  // null = couldn't be loaded (offline or refused): a check then can't tell what is already
+  // reported, and says so.
+  const [openDefects, setOpenDefects] = useState<OpenDefect[] | null>([]);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!repository.getOpenDefects) return undefined;
+    repository
+      .getOpenDefects(apparatusId)
+      .then((defects) => {
+        if (!cancelled) setOpenDefects(defects);
+      })
+      .catch(() => {
+        if (!cancelled) setOpenDefects(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [apparatusId, repository]);
 
   const handleAddPhoto = async (code: string) => {
     setPhotoError(null);
@@ -349,6 +385,8 @@ export function CheckRunnerScreen() {
       // A failed item has to reach the apparatus officer: each becomes a defect report through
       // the existing defect API, pre-filled with the unit and item, so nothing is typed twice.
       for (const item of failedItems) {
+        // Already reported by an earlier check and still open: don't file it again (review m3).
+        if (openDefects && findKnownDefect(openDefects, apparatusId, item)) continue;
         // The photo taken for this item goes with its defect through the defect API's own
         // signed-upload step (review m2).
         const photo = photosCaptured[item.code];
@@ -378,6 +416,8 @@ export function CheckRunnerScreen() {
       defects: failedItems.map((item) => ({
         label: item.label,
         severity: severities[item.code] ?? DEFAULT_SEVERITY,
+        alreadyReported:
+          openDefects !== null && findKnownDefect(openDefects, apparatusId, item) !== undefined,
       })),
       durationSeconds,
     });
@@ -447,15 +487,27 @@ export function CheckRunnerScreen() {
             . The check saves here and sends when you&apos;re back.
           </Text>
         ) : null}
+        {/* One way to report a failed item - Fail on the item - so it is never filed twice
+            (review m3). The separate form is for problems the sheet doesn't list. */}
+        <Text style={{ color: theme.fg, fontSize: typeScale.body.size }}>
+          Something wrong with an item on this sheet? Tap Fail on it; it is reported when you
+          submit.
+        </Text>
         <TouchableOpacity
           accessibilityRole="button"
           onPress={() => navigation.navigate('DefectReport', { apparatusId })}
           style={{ alignSelf: 'flex-start', minHeight: targetSize.field, justifyContent: 'center' }}
         >
           <Text style={{ color: theme.fg, fontSize: typeScale.body.size, fontWeight: '600' }}>
-            Report a defect
+            Report something not on this sheet
           </Text>
         </TouchableOpacity>
+        {openDefects === null ? (
+          <Text style={{ color: theme.status.warning, fontSize: typeScale.body.size }}>
+            Existing defects for this unit couldn&apos;t be loaded, so a failed item may be reported
+            again.
+          </Text>
+        ) : null}
         {photoError ? (
           <Text
             accessibilityRole="alert"
@@ -472,6 +524,9 @@ export function CheckRunnerScreen() {
             answer={results[item.code]}
             gated={isGated(item)}
             photoCaptured={photosCaptured[item.code] !== undefined}
+            knownDefect={
+              openDefects ? findKnownDefect(openDefects, apparatusId, item) !== undefined : false
+            }
             severity={severities[item.code] ?? DEFAULT_SEVERITY}
             note={notes[item.code] ?? ''}
             unitId={apparatusId}
@@ -521,6 +576,7 @@ interface ItemRowProps {
   answer: boolean | undefined;
   gated: boolean;
   photoCaptured: boolean;
+  knownDefect: boolean;
   severity: DefectSeverity;
   note: string;
   unitId: string;
@@ -536,6 +592,7 @@ function ItemRow({
   answer,
   gated,
   photoCaptured,
+  knownDefect,
   severity,
   note,
   unitId,
@@ -601,6 +658,7 @@ function ItemRow({
       <Text style={{ color: theme.fg, fontSize: typeScale.heading.size, fontWeight: '600' }}>
         {item.label}
       </Text>
+      {knownDefect ? <StatusChip status="caution" label="Known defect — already reported" /> : null}
       {item.requiresPhoto || answer === false ? (
         <TouchableOpacity
           accessibilityRole="button"
@@ -634,7 +692,9 @@ function ItemRow({
       {answer === false ? (
         <View style={{ gap: spacing.sm }}>
           <Text style={{ color: theme.fg, fontSize: typeScale.body.size }}>
-            This is reported to the apparatus officer as a defect when you submit.
+            {knownDefect
+              ? 'This item already has an open defect, so it is not reported again.'
+              : 'This is reported to the apparatus officer as a defect when you submit.'}
           </Text>
           <Text style={{ color: theme.fg, fontSize: typeScale.label.size, fontWeight: '600' }}>
             Severity
@@ -762,7 +822,10 @@ function CompletionView({
             </Text>
             {summary.defects.map((defect) => (
               <Text key={defect.label} style={{ color: theme.fg, fontSize: typeScale.body.size }}>
-                ✕ {defect.label} — {SEVERITY_LABEL[defect.severity]}
+                ✕ {defect.label} —{' '}
+                {defect.alreadyReported
+                  ? 'already reported and still open, not filed again'
+                  : SEVERITY_LABEL[defect.severity]}
               </Text>
             ))}
           </View>

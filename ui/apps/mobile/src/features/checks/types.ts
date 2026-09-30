@@ -55,8 +55,19 @@ export interface DefectSubmission {
   photoFileName?: string;
 }
 
+/** GET apparatus/{unitId} openDefects entry (apparatus-service apparatusRepository.ts). */
+export interface OpenDefect {
+  defectId: string;
+  description: string;
+  severity: DefectSeverity;
+  reportedAt: number;
+}
+
 export interface ChecksRepository {
   getApparatus(): Promise<Apparatus[]>;
+  /** Open defects on a unit, so a check doesn't re-file one that is already reported. Optional:
+   * the mock has none. Needs a connection (no offline cache). */
+  getOpenDefects?(unitId: string): Promise<OpenDefect[]>;
   getChecklistTemplate(apparatusId: string): Promise<ChecklistTemplate>;
   // Optimistic local-first (N4.2): resolves immediately from the local store: no step in the
   // checklist waits on a network round trip. A real implementation queues to the outbox here;

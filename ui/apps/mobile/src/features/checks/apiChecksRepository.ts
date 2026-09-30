@@ -11,6 +11,7 @@ import type {
   ChecklistTemplate,
   ChecksRepository,
   DefectSubmission,
+  OpenDefect,
 } from './types';
 
 /** ChecksRepository plus a way for callers to know the last getApparatus() call was served from
@@ -93,6 +94,16 @@ export function useChecksRepository(): ChecksRepositoryWithFallbackFlag {
         return result.cachedAt === null
           ? result.value
           : { ...result.value, cachedAt: result.cachedAt };
+      },
+
+      async getOpenDefects(unitId: string): Promise<OpenDefect[]> {
+        const tokens = authRef.current;
+        if (!tokens) return [];
+        const response = await apiRequest(`apparatus/${encodeURIComponent(unitId)}`, tokens, {
+          apiBaseUrl,
+        });
+        const body = (await response.json()) as { openDefects?: OpenDefect[] };
+        return body.openDefects ?? [];
       },
 
       async submitChecklistRun(run: ChecklistRunSubmission): Promise<void> {

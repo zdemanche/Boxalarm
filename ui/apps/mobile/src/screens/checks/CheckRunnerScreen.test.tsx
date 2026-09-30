@@ -238,7 +238,7 @@ test('linking to defect report carries the apparatus id along', async () => {
   const { findByText } = await render(<CheckRunnerScreen />);
 
   await findByText('Tires and wheels');
-  fireEvent.press(await findByText('Report a defect'));
+  fireEvent.press(await findByText('Report something not on this sheet'));
   expect(mockNavigate).toHaveBeenCalledWith('DefectReport', { apparatusId: 'APP-ENGINE-2' });
 });
 
@@ -259,7 +259,7 @@ test('announces check completion for screen reader users, since the screen swaps
 test('report a defect meets the glove-sized field target, not just its text height', async () => {
   const { findByRole } = await render(<CheckRunnerScreen />);
 
-  const link = await findByRole('button', { name: 'Report a defect' });
+  const link = await findByRole('button', { name: 'Report something not on this sheet' });
   expect(link.props.style.minHeight).toBe(targetSize.field);
 });
 
@@ -412,5 +412,40 @@ test('a photo on a failed item goes with its defect; one on a passing item is re
   );
   expect(await findByText(/1 photo taken on items that passed was not sent/)).toBeTruthy();
   templateSpy.mockRestore();
+  defectSpy.mockRestore();
+});
+
+test('a failed item that already has an open defect from an earlier check is not filed again', async () => {
+  const openSpy = jest.fn().mockResolvedValue([
+    {
+      defectId: 'd-1',
+      description: 'Failed on the APP-ENGINE-2 truck check: Tires and wheels. Cut sidewall',
+      severity: 'MAJOR',
+      reportedAt: 1,
+    },
+  ]);
+  (mockChecksRepository as { getOpenDefects?: unknown }).getOpenDefects = openSpy;
+  const defectSpy = jest.spyOn(mockChecksRepository, 'submitDefect');
+  const { findByText, findAllByRole } = await render(<CheckRunnerScreen />);
+
+  expect(await findByText('Known defect — already reported')).toBeTruthy();
+  const fails = (await findAllByRole('radio')).filter((r) => r.props.accessibilityLabel === 'Fail');
+  await act(async () => {
+    fireEvent.press(fails[0]!);
+  });
+  await act(async () => {
+    fireEvent.press(fails[1]!);
+  });
+  await act(async () => {
+    fireEvent.press(await findByText('Mark the other 3 OK'));
+  });
+  await act(async () => {
+    fireEvent.press(await findByText('Submit check'));
+  });
+
+  expect(defectSpy).toHaveBeenCalledTimes(1);
+  expect(defectSpy.mock.calls[0]?.[0].description).toContain('Fluid levels');
+  expect(await findByText(/already reported and still open, not filed again/)).toBeTruthy();
+  delete (mockChecksRepository as { getOpenDefects?: unknown }).getOpenDefects;
   defectSpy.mockRestore();
 });
