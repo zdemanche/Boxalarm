@@ -86,7 +86,12 @@ describe('CAD webhook handler', () => {
     vi.spyOn(console, 'error').mockImplementation(() => undefined);
     table = { items: new Map([[`${COPY.pk}|${COPY.sk}`, COPY]]) };
     secretSend = vi.fn().mockResolvedValue({
-      SecretString: JSON.stringify({ ...OWNER, current: CURRENT, previous: PREVIOUS }),
+      SecretString: JSON.stringify({
+        ...OWNER,
+        current: CURRENT,
+        previous: PREVIOUS,
+        previousExpiresAt: NOW + 3600,
+      }),
     });
     const dynamo = fakeDynamo(table);
     vi.doMock('../eligibility/dynamoClient.js', async (importOriginal) => ({
@@ -187,7 +192,12 @@ describe('CAD webhook handler', () => {
     const NEW = 'n'.repeat(64);
     expect((await call(webhookEvent(DISPATCH))).statusCode).toBe(202); // caches {CURRENT, PREVIOUS}
     secretSend.mockResolvedValue({
-      SecretString: JSON.stringify({ ...OWNER, current: NEW, previous: CURRENT }),
+      SecretString: JSON.stringify({
+        ...OWNER,
+        current: NEW,
+        previous: CURRENT,
+        previousExpiresAt: NOW + 3600,
+      }),
     });
     vi.setSystemTime((NOW + 10) * 1000);
     const other = JSON.stringify({ text: 'INC: 2026-2\nADDR: 9 OAK AVE' });
@@ -203,6 +213,26 @@ describe('CAD webhook handler', () => {
     expect((await call(webhookEvent(DISPATCH, bad))).statusCode).toBe(401);
     expect((await call(webhookEvent(DISPATCH, bad))).statusCode).toBe(401);
     expect(secretSend).toHaveBeenCalledTimes(1);
+  });
+
+  it('the previous key stops working at its expiry (security review M5)', async () => {
+    secretSend.mockResolvedValue({
+      SecretString: JSON.stringify({
+        ...OWNER,
+        current: CURRENT,
+        previous: PREVIOUS,
+        previousExpiresAt: NOW - 1,
+      }),
+    });
+    expect((await call(webhookEvent(DISPATCH, { key: PREVIOUS }))).statusCode).toBe(401);
+    expect((await call(webhookEvent(DISPATCH))).statusCode).toBe(202);
+  });
+
+  it('a previous key with no recorded expiry is not accepted', async () => {
+    secretSend.mockResolvedValue({
+      SecretString: JSON.stringify({ ...OWNER, current: CURRENT, previous: PREVIOUS }),
+    });
+    expect((await call(webhookEvent(DISPATCH, { key: PREVIOUS }))).statusCode).toBe(401);
   });
 
   it('accepts when any listed v1 signature matches', async () => {

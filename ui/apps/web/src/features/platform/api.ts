@@ -192,3 +192,15 @@ export async function rotateCadWebhookKey(
   );
   return (await response.json()) as RotatedWebhookKey;
 }
+
+/** The key the last rotation replaced stops working now, not after its 24 h grace. */
+export async function revokePreviousCadWebhookKey(
+  tokens: AuthTokenSource,
+  sourceId: string,
+): Promise<void> {
+  await apiRequest(
+    `platform/cad-sources/${encodeURIComponent(sourceId)}/webhook-key/revoke-previous`,
+    tokens,
+    { method: 'POST' },
+  );
+}

@@ -31,8 +31,8 @@ export interface CadSourcesArgs {
  *
  * Least privilege, the NERIS-entity pattern: both Lambdas touch only the department's own
  * partition (`DEPT#{deptId}`, the CONFIG#CAD_INGRESS row) and its outbox. Only the rotation
- * Lambda can write the CAD webhook secrets, and only those (name prefix); the settings Lambda
- * holds no Secrets Manager grant at all.
+ * Lambda can read or write the CAD webhook secrets, and only those (name prefix); the settings
+ * Lambda may only DELETE them (a removed source's secret goes with it).
  */
 function deptPartitionStatement(sid: string, actions: string[], tableArn: string) {
   return {
@@ -87,10 +87,18 @@ export class CadSources extends pulumi.ComponentResource {
         handler: LAMBDA_HANDLER,
         code: lambdaCode("platform-service", "cad-sources"),
         logGroup: args.logGroup,
-        environment,
+        environment: { ...environment, CAD_WEBHOOK_SECRET_PREFIX: cadWebhookSecretPrefix(env) },
         additionalPolicyStatements: pulumi
-          .all([args.platformTableArn, args.policyStoreArn])
-          .apply(([tableArn, policyStoreArn]): IamPolicyStatement[] => [
+          .all([args.platformTableArn, args.policyStoreArn, secretArnPattern])
+          .apply(([tableArn, policyStoreArn, secretArn]): IamPolicyStatement[] => [
+            {
+              // A removed source's webhook secret is deleted with it (security review M5).
+              // Delete only - this Lambda can never read a key.
+              Sid: "CadWebhookSecretsDelete",
+              Effect: "Allow",
+              Action: ["secretsmanager:DeleteSecret"],
+              Resource: secretArn,
+            },
             // GetItem the CONFIG#CAD_INGRESS row; its save is two Puts in one transaction.
             deptPartitionStatement(
               "CadSourcesConfig",
@@ -151,6 +159,11 @@ export class CadSources extends pulumi.ComponentResource {
       [
         "rotate-key",
         "POST /api/v1/platform/cad-sources/{sourceId}/webhook-key",
+        this.rotateKeyLambda,
+      ],
+      [
+        "revoke-previous-key",
+        "POST /api/v1/platform/cad-sources/{sourceId}/webhook-key/revoke-previous",
         this.rotateKeyLambda,
       ],
     ] as const) {

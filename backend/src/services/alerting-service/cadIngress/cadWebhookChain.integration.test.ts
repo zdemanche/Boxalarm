@@ -133,11 +133,9 @@ describe('CAD webhook -> DISPATCH_ALERT -> stream fan-out pages every member at 
     }));
     const keys = await import('./webhookKeys.js');
     keys.resetWebhookKeyCache({
-      send: vi
-        .fn()
-        .mockResolvedValue({
-          SecretString: JSON.stringify({ deptId: DEPT, sourceId: 'county', current: KEY }),
-        }),
+      send: vi.fn().mockResolvedValue({
+        SecretString: JSON.stringify({ deptId: DEPT, sourceId: 'county', current: KEY }),
+      }),
     } as unknown as SecretsManagerClient);
   }
 

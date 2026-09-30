@@ -15,7 +15,13 @@ import {
   TextInput,
   Textarea,
 } from '../../components/ui';
-import { getCadSources, putCadSources, rotateCadWebhookKey, testParseCad } from './api';
+import {
+  getCadSources,
+  putCadSources,
+  revokePreviousCadWebhookKey,
+  rotateCadWebhookKey,
+  testParseCad,
+} from './api';
 import {
   CAD_FIELDS,
   type CadField,
@@ -384,7 +390,14 @@ function WebhookKey({ draft }: { draft: SourceDraft }) {
   const queryClient = useQueryClient();
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [rotated, setRotated] = useState<RotatedWebhookKey | null>(null);
+  const [revokeOpen, setRevokeOpen] = useState(false);
+  const [revoked, setRevoked] = useState(false);
   const hasKey = Boolean(draft.view?.webhookKeyId);
+
+  async function revoke() {
+    await revokePreviousCadWebhookKey(auth, draft.sourceId);
+    setRevoked(true);
+  }
 
   async function rotate() {
     const key = await rotateCadWebhookKey(auth, draft.sourceId);
@@ -408,6 +421,21 @@ function WebhookKey({ draft }: { draft: SourceDraft }) {
       <Button type="button" variant="secondary" onClick={() => setConfirmOpen(true)}>
         {hasKey ? 'Rotate webhook key' : 'Create webhook key'}
       </Button>
+      {hasKey ? (
+        <Button type="button" variant="danger" onClick={() => setRevokeOpen(true)}>
+          Revoke previous key now
+        </Button>
+      ) : null}
+      {revoked ? <p role="status">The previous key no longer works.</p> : null}
+      <ConfirmDialog
+        open={revokeOpen}
+        onOpenChange={setRevokeOpen}
+        title={`Revoke the previous webhook key for ${draft.label}?`}
+        consequence="The key replaced by the last rotation stops working within a minute, instead of 24 hours after the rotation. Do this after a leak, or once the CAD is confirmed on the current key. A CAD still signing with the old key will be refused."
+        confirmLabel="Revoke previous key"
+        onConfirm={revoke}
+        danger
+      />
       <ConfirmDialog
         open={confirmOpen}
         onOpenChange={setConfirmOpen}
@@ -418,7 +446,7 @@ function WebhookKey({ draft }: { draft: SourceDraft }) {
         }
         consequence={
           hasKey
-            ? 'A new key is created and shown once. The current key keeps working until the next rotation, so the CAD can be switched over without a gap.'
+            ? 'A new key is created and shown once. The current key keeps working for 24 hours, so the CAD can be switched over without a gap; revoke it sooner if it leaked.'
             : 'A new key is created and shown once. Give it to the CAD operator to sign requests.'
         }
         confirmLabel={hasKey ? 'Rotate key' : 'Create key'}
@@ -447,6 +475,15 @@ function WebhookKey({ draft }: { draft: SourceDraft }) {
             <dd>
               <code style={{ wordBreak: 'break-all' }}>{rotated.secret}</code>
             </dd>
+            {rotated.previousKeyExpiresAt ? (
+              <>
+                <dt>Previous key</dt>
+                <dd>
+                  Keeps working until {new Date(rotated.previousKeyExpiresAt).toLocaleString()}, or
+                  until you revoke it.
+                </dd>
+              </>
+            ) : null}
             <dt>Signature</dt>
             <dd>
               <code>

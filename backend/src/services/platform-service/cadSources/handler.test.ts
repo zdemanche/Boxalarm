@@ -26,7 +26,7 @@ import {
   ResourceNotFoundException,
   type SecretsManagerClient,
 } from '@aws-sdk/client-secrets-manager';
-import { handler } from './handler.js';
+import { handler, setSettingsSecretsClient } from './handler.js';
 import { handler as rotateHandler, setSecretsClient } from './rotateKey.js';
 
 interface Command {
@@ -150,6 +150,37 @@ describe('PUT /platform/cad-sources', () => {
     expect(response.statusCode).toBe(409);
   });
 
+  it('removing a keyed source deletes its webhook secret at once (security review M5)', async () => {
+    const del = vi.fn().mockResolvedValue({});
+    setSettingsSecretsClient({ send: del } as unknown as SecretsManagerClient);
+    stored = {
+      version: 2,
+      value: {
+        sources: [
+          {
+            sourceId: 'county',
+            label: 'County',
+            enabled: true,
+            webhookEnabled: true,
+            webhookKey: {
+              keyId: 'nichols-fd.county',
+              secretName: 'boxalarm-dev-cad-webhook/nichols-fd/county',
+              rotatedAt: 'x',
+            },
+          },
+        ],
+      },
+    };
+    const response = (await handler(
+      event('PUT /api/v1/platform/cad-sources', { sources: [], expectedVersion: 2 }),
+    )) as { statusCode: number };
+    expect(response.statusCode).toBe(200);
+    expect((del.mock.calls[0]?.[0] as Command).input).toEqual({
+      SecretId: 'boxalarm-dev-cad-webhook/nichols-fd/county',
+      ForceDeleteWithoutRecovery: true,
+    });
+  });
+
   it('is 400 with field errors for an invalid template', async () => {
     const bad = { ...SOURCE, parser: { fields: { address: { pattern: '(a+)+' } } } };
     const response = (await handler(
@@ -196,10 +227,35 @@ describe('POST /platform/cad-sources/test-parse', () => {
 });
 
 describe('POST /platform/cad-sources/{sourceId}/webhook-key', () => {
+  // A stateful fake secret store: Get returns what Create/Put last wrote.
+  let secretStore: Map<string, string>;
   beforeEach(() => {
+    secretStore = new Map();
     setSecretsClient({ send: smSend } as unknown as SecretsManagerClient);
     smSend.mockReset();
+    smSend.mockImplementation((command: Command) => {
+      const input = command.input;
+      switch (command.constructor.name) {
+        case 'GetSecretValueCommand': {
+          const value = secretStore.get(String(input.SecretId));
+          return value === undefined
+            ? Promise.reject(new ResourceNotFoundException({ message: 'no', $metadata: {} }))
+            : Promise.resolve({ SecretString: value });
+        }
+        case 'CreateSecretCommand':
+          secretStore.set(String(input.Name), String(input.SecretString));
+          return Promise.resolve({});
+        case 'PutSecretValueCommand':
+          secretStore.set(String(input.SecretId), String(input.SecretString));
+          return Promise.resolve({});
+        default:
+          return Promise.reject(new Error(command.constructor.name));
+      }
+    });
   });
+
+  const NAME = 'boxalarm-dev-cad-webhook/nichols-fd/county';
+  const secretValue = () => JSON.parse(secretStore.get(NAME) ?? '{}') as Record<string, unknown>;
 
   async function saveSource() {
     await handler(event('PUT /api/v1/platform/cad-sources', { sources: [SOURCE] }));
@@ -207,18 +263,17 @@ describe('POST /platform/cad-sources/{sourceId}/webhook-key', () => {
     vpSend.mockClear();
   }
 
-  it('creates the secret on first rotation and returns the key once, no-store', async () => {
-    await saveSource();
-    smSend.mockImplementation((command: Command) =>
-      command.constructor.name === 'CreateSecretCommand'
-        ? Promise.resolve({})
-        : Promise.reject(new ResourceNotFoundException({ message: 'no', $metadata: {} })),
-    );
-    const response = (await rotateHandler(
+  async function rotate() {
+    return (await rotateHandler(
       event('POST /api/v1/platform/cad-sources/{sourceId}/webhook-key', undefined, {
         sourceId: 'county',
       }),
     )) as { statusCode: number; body: string; headers: Record<string, string> };
+  }
+
+  it('creates the secret on first rotation (tagged, owner recorded) and returns the key once, no-store', async () => {
+    await saveSource();
+    const response = await rotate();
     expect(response.statusCode).toBe(200);
     expect(response.headers['cache-control']).toBe('no-store');
     const body = JSON.parse(response.body) as { keyId: string; secret: string };
@@ -228,22 +283,20 @@ describe('POST /platform/cad-sources/{sourceId}/webhook-key', () => {
     const create = smSend.mock.calls.find(
       ([c]) => (c as Command).constructor.name === 'CreateSecretCommand',
     )?.[0] as Command;
-    expect(create.input.Name).toBe('boxalarm-dev-cad-webhook/nichols-fd/county');
+    expect(create.input.Name).toBe(NAME);
     expect(create.input.Tags).toEqual(
       expect.arrayContaining([
         { Key: 'boxalarm:deptId', Value: 'nichols-fd' },
         { Key: 'boxalarm:sourceId', Value: 'county' },
       ]),
     );
-    expect(JSON.parse(String(create.input.SecretString))).toEqual({
+    expect(secretValue()).toEqual({
       deptId: 'nichols-fd',
       sourceId: 'county',
       current: body.secret,
     });
-    // The config now points the alerting plane at the secret.
     const [config] = transactItems();
     expect(JSON.stringify(config)).toContain('"webhook":{"keyId":"nichols-fd.county"');
-    // Never logged.
     const logged = vi
       .mocked(console.log)
       .mock.calls.map(([l]) => String(l))
@@ -251,34 +304,56 @@ describe('POST /platform/cad-sources/{sourceId}/webhook-key', () => {
     expect(logged).not.toContain(body.secret);
   });
 
-  it('keeps the old key as previous so the CAD keeps working during rotation', async () => {
+  it('keeps the old key as previous for 24 h only (security review M5)', async () => {
     await saveSource();
-    const old = 'o'.repeat(64);
-    smSend.mockImplementation((command: Command) =>
-      Promise.resolve(
-        command.constructor.name === 'GetSecretValueCommand'
-          ? {
-              SecretString: JSON.stringify({
-                deptId: 'nichols-fd',
-                sourceId: 'county',
-                current: old,
-              }),
-            }
-          : {},
-      ),
-    );
-    const response = (await rotateHandler(event('POST /x', undefined, { sourceId: 'county' }))) as {
-      body: string;
+    const first = JSON.parse((await rotate()).body) as { secret: string };
+    const before = Math.floor(Date.now() / 1000);
+    const second = JSON.parse((await rotate()).body) as {
+      secret: string;
+      previousKeyExpiresAt: string;
     };
-    const put = smSend.mock.calls.find(
-      ([c]) => (c as Command).constructor.name === 'PutSecretValueCommand',
-    )?.[0] as Command;
-    expect(JSON.parse(String(put.input.SecretString))).toEqual({
+    const value = secretValue();
+    expect(value).toMatchObject({ current: second.secret, previous: first.secret });
+    expect(Number(value.previousExpiresAt) - before).toBeGreaterThanOrEqual(24 * 3600 - 1);
+    expect(Number(value.previousExpiresAt) - before).toBeLessThanOrEqual(24 * 3600 + 5);
+    expect(Date.parse(second.previousKeyExpiresAt) / 1000).toBe(value.previousExpiresAt);
+  });
+
+  it('revoke-previous removes the previous key now and keeps the current one', async () => {
+    await saveSource();
+    await rotate();
+    const current = JSON.parse((await rotate()).body) as { secret: string };
+    const response = (await rotateHandler(
+      event('POST /api/v1/platform/cad-sources/{sourceId}/webhook-key/revoke-previous', undefined, {
+        sourceId: 'county',
+      }),
+    )) as { statusCode: number };
+    expect(response.statusCode).toBe(200);
+    expect(secretValue()).toEqual({
       deptId: 'nichols-fd',
       sourceId: 'county',
-      current: (JSON.parse(response.body) as { secret: string }).secret,
-      previous: old,
+      current: current.secret,
     });
+  });
+
+  it('a concurrent rotation that did not win is refused (409), never handing out a dead key', async () => {
+    await saveSource();
+    const original = smSend.getMockImplementation() as (command: Command) => Promise<unknown>;
+    let puts = 0;
+    smSend.mockImplementation((command: Command) => {
+      // Another rotation's write lands right after ours.
+      if (command.constructor.name === 'CreateSecretCommand' && puts++ === 0) {
+        return original(command).then(() => {
+          secretStore.set(
+            NAME,
+            JSON.stringify({ deptId: 'nichols-fd', sourceId: 'county', current: 'z'.repeat(64) }),
+          );
+          return {};
+        });
+      }
+      return original(command);
+    });
+    expect((await rotate()).statusCode).toBe(409);
   });
 
   it('secret names cannot collide across departments (security review M1)', async () => {
@@ -291,23 +366,11 @@ describe('POST /platform/cad-sources/{sourceId}/webhook-key', () => {
 
   it('refuses to rotate a secret whose value names another owner (409), writing nothing', async () => {
     await saveSource();
-    smSend.mockImplementation((command: Command) =>
-      Promise.resolve(
-        command.constructor.name === 'GetSecretValueCommand'
-          ? {
-              SecretString: JSON.stringify({
-                deptId: 'nichols',
-                sourceId: 'fd-county',
-                current: 'x',
-              }),
-            }
-          : {},
-      ),
+    secretStore.set(
+      NAME,
+      JSON.stringify({ deptId: 'nichols', sourceId: 'fd-county', current: 'x'.repeat(64) }),
     );
-    const response = (await rotateHandler(event('POST /x', undefined, { sourceId: 'county' }))) as {
-      statusCode: number;
-    };
-    expect(response.statusCode).toBe(409);
+    expect((await rotate()).statusCode).toBe(409);
     expect(
       smSend.mock.calls.some(([c]) => (c as Command).constructor.name === 'PutSecretValueCommand'),
     ).toBe(false);

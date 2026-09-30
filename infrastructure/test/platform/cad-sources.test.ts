@@ -50,23 +50,28 @@ async function build(): Promise<void> {
 describe("CadSources (platform settings routes)", { timeout: 30_000 }, () => {
   it("registers the four Cognito-authorized routes on the right Lambdas", async () => {
     await build();
-    expect(routes).toHaveLength(4);
+    expect(routes).toHaveLength(5);
     expect(routes).toEqual(
       expect.arrayContaining([
         { routeKey: "GET /api/v1/platform/cad-sources", lambda: SETTINGS_FN },
         { routeKey: "POST /api/v1/platform/cad-sources/test-parse", lambda: SETTINGS_FN },
         { routeKey: "POST /api/v1/platform/cad-sources/{sourceId}/webhook-key", lambda: ROTATE_FN },
         { routeKey: "PUT /api/v1/platform/cad-sources", lambda: SETTINGS_FN },
+        {
+          routeKey: "POST /api/v1/platform/cad-sources/{sourceId}/webhook-key/revoke-previous",
+          lambda: ROTATE_FN,
+        },
       ]),
     );
   });
 
-  it("only the rotation Lambda can touch the CAD webhook secrets, and only those", async () => {
+  it("only the rotation Lambda can read or write the CAD webhook secrets; settings may only delete", async () => {
     await build();
     const settings = statementsForRole(SETTINGS_FN);
     expect(
-      settings.some((s) => [s.Action].flat().some((a) => a.startsWith("secretsmanager:"))),
-    ).toBe(false);
+      settings.flatMap((s) => [s.Action].flat()).filter((a) => a.startsWith("secretsmanager:")),
+    ).toEqual(["secretsmanager:DeleteSecret"]);
+    expect(isGranted(settings, "secretsmanager:DeleteSecret", SECRETS)).toBe(true);
     const rotate = statementsForRole(ROTATE_FN);
     for (const action of [
       "secretsmanager:CreateSecret",

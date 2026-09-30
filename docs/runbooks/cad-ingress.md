@@ -59,14 +59,14 @@ Metrics are in `Boxalarm/alerting-cad-ingress`: `CadIngressAccepted`, `CadIngres
 
 ## Rotating a webhook key
 
-Settings → CAD sources → *Rotate webhook key*. The new key is shown **once**. It works **immediately**: a request signed with a key the webhook has not cached yet makes it re-read the secret (at most once every 5 seconds), so there is no 5-minute cache wait. The previous key keeps working too, so the switch-over has no gap:
+Settings → CAD sources → *Rotate webhook key*. The new key is shown **once**. It works **immediately**: a request signed with a key the webhook has not cached yet makes it re-read the secret (at most once every 5 seconds), so there is no 5-minute cache wait. The previous key keeps working for **24 hours** (or until *Revoke previous key now*), so the switch-over has no gap:
 
 1. Rotate, and copy the key.
 2. The CAD operator installs the new key.
 3. Send one test request signed with the new key (test-message procedure below, a negative-safe body on prod is fine: a `200 duplicate` or `202` both prove the signature).
-4. Only then consider the old key retired. Rotating twice in a row retires the key the CAD is still using.
+4. Then *Revoke previous key now* (otherwise it stops working 24 hours after the rotation on its own). Rotating twice in a row also retires the key the CAD is still using.
 
-If a key leaks: rotate **twice** (the leaked key is then neither current nor previous), then give the CAD the newest key. Until the CAD is updated its requests fail (`BadSignature`) — tone out by radio meanwhile.
+If a key leaks: rotate, then *Revoke previous key now* - the leaked key stops working within a minute (the webhook caches keys for 60 s). Give the CAD the new key; until it is installed its requests fail (`BadSignature`) — tone out by radio meanwhile. Removing a source deletes its webhook secret at once, so a source re-created with the same id starts with no key.
 
 ## Test-message procedure
 

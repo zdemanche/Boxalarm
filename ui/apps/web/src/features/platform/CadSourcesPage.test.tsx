@@ -219,6 +219,7 @@ test('rotating the webhook key shows the new key once, then never again', async 
         secret: 'f'.repeat(64),
         rotatedAt: '2026-09-30T13:00:00.000Z',
         previousKeyStillValid: true,
+        previousKeyExpiresAt: '2026-10-01T13:00:00.000Z',
         webhookUrl: STORED.webhookUrl,
       }),
     ),
@@ -249,4 +250,25 @@ test('a new source is added with every field labelled', async () => {
   // Every parser field has a labelled mode and value control.
   expect(screen.getAllByRole('combobox')).toHaveLength(8);
   expect(screen.getByLabelText('Address (required): read by')).toBeTruthy();
+});
+
+test('revoking the previous key is confirmed first and then reported', async () => {
+  let revoked = false;
+  server.use(
+    http.get('/api/v1/platform/cad-sources', () => HttpResponse.json(STORED)),
+    http.post('/api/v1/platform/cad-sources/county/webhook-key/revoke-previous', () => {
+      revoked = true;
+      return HttpResponse.json({ sourceId: 'county', previousKeyRevoked: true });
+    }),
+  );
+  const user = userEvent.setup();
+  renderPage();
+  await user.click(await screen.findByRole('button', { name: 'Revoke previous key now' }));
+  expect(revoked).toBe(false);
+  const confirm = await screen.findByRole('dialog');
+  await user.click(within(confirm).getByRole('button', { name: 'Revoke previous key' }));
+  expect((await screen.findByText('The previous key no longer works.')).getAttribute('role')).toBe(
+    'status',
+  );
+  expect(revoked).toBe(true);
 });

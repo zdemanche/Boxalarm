@@ -139,5 +139,7 @@ export interface RotatedWebhookKey {
   secret: string;
   rotatedAt: string;
   previousKeyStillValid: boolean;
+  /** When the key this rotation replaced stops working (ISO), if there was one. */
+  previousKeyExpiresAt: string | null;
   webhookUrl: string | null;
 }

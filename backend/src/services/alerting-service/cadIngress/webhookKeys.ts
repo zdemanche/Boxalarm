@@ -9,12 +9,19 @@ import { ALERTING_SDK_CLIENT_CONFIG } from '../awsClientConfig.js';
  * reaches every instance within that time while `previous` keeps the old key valid.
  */
 
-export const KEY_CACHE_TTL_MS = 5 * 60 * 1000;
+/**
+ * At most 5 minutes (cad-ingress-auth); 60 s so a "revoke previous key" or a leaked-key
+ * rotation reaches every warm instance within a minute (security review M5).
+ */
+export const KEY_CACHE_TTL_MS = 60 * 1000;
 export const KEY_REFRESH_MIN_AGE_MS = 5 * 1000;
 const MIN_KEY_LENGTH = 32;
 
 let client: SecretsManagerClient | undefined;
-const cache = new Map<string, { readonly keys: readonly string[]; readonly loadedAt: number }>();
+const cache = new Map<
+  string,
+  { readonly secretString: string | undefined; readonly loadedAt: number }
+>();
 
 function getClient(): SecretsManagerClient {
   client ??= captureAWSv3Client(new SecretsManagerClient(ALERTING_SDK_CLIENT_CONFIG));
@@ -35,6 +42,7 @@ export function resetWebhookKeyCache(override?: SecretsManagerClient): void {
 export function parseWebhookSecret(
   secretString: string | undefined,
   owner: { readonly deptId: string; readonly sourceId: string },
+  nowSeconds = Math.floor(Date.now() / 1000),
 ): string[] {
   if (!secretString) return [];
   let parsed: unknown;
@@ -44,9 +52,14 @@ export function parseWebhookSecret(
     return [];
   }
   if (typeof parsed !== 'object' || parsed === null) return [];
-  const { deptId, sourceId, current, previous } = parsed as Record<string, unknown>;
+  const { deptId, sourceId, current, previous, previousExpiresAt } = parsed as Record<
+    string,
+    unknown
+  >;
   if (deptId !== owner.deptId || sourceId !== owner.sourceId) return [];
-  return [current, previous].filter(
+  // The replaced key only until its expiry (security review M5); no expiry recorded = expired.
+  const previousLive = typeof previousExpiresAt === 'number' && previousExpiresAt > nowSeconds;
+  return [current, previousLive ? previous : undefined].filter(
     (key): key is string => typeof key === 'string' && key.length >= MIN_KEY_LENGTH,
   );
 }
@@ -57,14 +70,15 @@ export async function getWebhookKeys(
   owner: { readonly deptId: string; readonly sourceId: string },
   now = Date.now(),
 ): Promise<string[]> {
+  // The raw value is cached and parsed per request, so the previous key's expiry is enforced
+  // at use time, never frozen into the cache.
   const cached = cache.get(secretName);
   if (cached && now - cached.loadedAt < KEY_CACHE_TTL_MS) {
-    return [...cached.keys];
+    return parseWebhookSecret(cached.secretString, owner, Math.floor(now / 1000));
   }
   const output = await getClient().send(new GetSecretValueCommand({ SecretId: secretName }));
-  const keys = parseWebhookSecret(output.SecretString, owner);
-  cache.set(secretName, { keys, loadedAt: now });
-  return keys;
+  cache.set(secretName, { secretString: output.SecretString, loadedAt: now });
+  return parseWebhookSecret(output.SecretString, owner, Math.floor(now / 1000));
 }
 
 /**

@@ -1,3 +1,8 @@
+import {
+  DeleteSecretCommand,
+  ResourceNotFoundException,
+  SecretsManagerClient,
+} from '@aws-sdk/client-secrets-manager';
 import type { APIGatewayProxyResultV2 } from 'aws-lambda';
 import {
   badRequestProblem,
@@ -36,6 +41,47 @@ import {
 
 const logger = createLogger({ service: 'platform-service' });
 const MAX_SAMPLE_CHARS = 16_384;
+
+let secretsClient: SecretsManagerClient | undefined;
+
+/** Test seam. */
+export function setSettingsSecretsClient(override: SecretsManagerClient | undefined): void {
+  secretsClient = override;
+}
+
+/**
+ * Deletes removed sources' webhook secrets - only names under this stack's CAD webhook prefix
+ * (IAM allows nothing else). Never throws: the config is already saved and ingress already
+ * refuses the removed source; a failure is logged, returned, and alarmed by the log metric.
+ */
+async function deleteWebhookSecrets(
+  names: readonly string[],
+  correlationId: string,
+): Promise<number> {
+  const prefix = process.env.CAD_WEBHOOK_SECRET_PREFIX;
+  let failed = 0;
+  for (const name of names) {
+    if (!prefix || !name.startsWith(prefix)) {
+      failed++;
+      continue;
+    }
+    try {
+      secretsClient ??= new SecretsManagerClient({});
+      await secretsClient.send(
+        new DeleteSecretCommand({ SecretId: name, ForceDeleteWithoutRecovery: true }),
+      );
+    } catch (error) {
+      if (error instanceof ResourceNotFoundException) continue;
+      failed++;
+      logger.error({
+        event: 'platform.cadSources.secretDeleteFailed',
+        correlationId,
+        message: error instanceof Error ? error.message : 'unknown error',
+      });
+    }
+  }
+  return failed;
+}
 
 function toProblemErrors(errors: readonly FieldError[]) {
   return errors.map((error) => ({ field: error.field, detail: error.message }));
@@ -113,6 +159,17 @@ async function putSources(
       correlationId: traceId,
       ...(current ? { expectedVersion: current.version } : {}),
     });
+    // A removed source's webhook secret is deleted at once (security review M5): a source
+    // re-created with the same id must not inherit - as its "previous" - a key that was live
+    // before, and a removed source's keys should not outlive it.
+    const kept = new Set(value.sources.map((source) => source.sourceId));
+    const removed = readStoredSources(current?.value).filter(
+      (source) => source.webhookKey && !kept.has(source.sourceId),
+    );
+    const secretErrors = await deleteWebhookSecrets(
+      removed.map((s) => s.webhookKey!.secretName),
+      traceId,
+    );
     logger.info({
       event: 'platform.cadSources.updated',
       correlationId: traceId,
@@ -120,7 +177,14 @@ async function putSources(
       version: saved.version,
       sources: value.sources.length,
     });
-    return json(200, view(deptId, saved));
+    return json(200, {
+      ...view(deptId, saved),
+      ...(secretErrors > 0
+        ? {
+            secretCleanupFailed: secretErrors,
+          }
+        : {}),
+    });
   } catch (error) {
     if (error instanceof ConflictError) {
       return conflictProblem(traceId, 'CAD sources were changed by someone else; reload and retry');
