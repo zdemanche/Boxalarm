@@ -21,7 +21,11 @@ import * as Keychain from 'react-native-keychain';
 import { revokePushToken } from '../features/alerts/pushTokens';
 import { buildOidcConfig } from './config';
 import { kvDelete, kvSet } from '../sync/kvStore';
+import * as syncManager from '../sync/syncManager';
 import { clearMemberCache, LAST_SESSION_SUB_KEY } from '../sync/memberCache';
+
+/** How long sign-out waits for one last try at sending queued work (alert answers first). */
+const SIGN_OUT_DRAIN_MS = 3000;
 
 const KEYCHAIN_SERVER = 'boxalarm-auth';
 const FOREGROUND_RENEWAL_WINDOW_MS = 5 * 60_000;
@@ -335,6 +339,9 @@ export function AuthProvider({
         // E1-S14-UI AC5: the DELETE must be sent before local credentials are cleared, so a
         // signed-out device stops receiving pages. Best-effort: sign-out must never be blocked
         // by a network failure.
+        // While the session is still valid, one bounded try (about 3 s) to send this member's
+        // queued work - an alert answer left behind waits until they sign in here again.
+        await syncManager.drainBriefly(SIGN_OUT_DRAIN_MS).catch(() => undefined);
         const stored = await readStoredTokens(depsRef.current).catch(() => null);
         const apiBaseUrl = Config.API_BASE_URL;
         const memberId = stored ? decodeMemberId(stored.idToken) : null;

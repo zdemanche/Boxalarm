@@ -649,6 +649,23 @@ export function drain(): Promise<void> {
  * For a caller that must report the outcome (a headless notification action saying "Sent"),
  * where drain() alone could return at once because a drain was already in progress.
  */
+/**
+ * One bounded attempt to send the signed-in member's queued work (alert answers first among it)
+ * while their session is still valid - at sign-out, where anything left waits for that member to
+ * sign in again, which for a live call is too late. Never blocks longer than timeoutMs.
+ */
+export async function drainBriefly(timeoutMs: number): Promise<void> {
+  if (!isConfigured()) return;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  await Promise.race([
+    drainAndSettle().catch(() => undefined),
+    new Promise<void>((resolve) => {
+      timer = setTimeout(resolve, timeoutMs);
+    }),
+  ]);
+  if (timer) clearTimeout(timer);
+}
+
 export async function drainAndSettle(): Promise<void> {
   await drain();
   while (inFlight) await inFlight;

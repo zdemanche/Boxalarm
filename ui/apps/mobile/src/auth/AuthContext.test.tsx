@@ -3,6 +3,7 @@ import { AppState, Pressable, Text, type AppStateStatus } from 'react-native';
 import type { AuthConfiguration, AuthorizeResult, RefreshResult } from 'react-native-app-auth';
 import { AuthProvider, useAuth, type AuthDeps } from './AuthContext';
 import { kvGet } from '../sync/kvStore';
+import * as syncManager from '../sync/syncManager';
 import { LAST_SESSION_SUB_KEY } from '../sync/memberCache';
 import { apiRequest, ApiError, type AuthTokenSource } from '../lib/apiClient';
 
@@ -493,4 +494,32 @@ test('signing in records the session member as the last-session hint; signing ou
   await contextValue!.signOut();
 
   expect(await kvGet(LAST_SESSION_SUB_KEY)).toBeNull();
+});
+
+test('signOut first gives queued work one bounded try to send while the session is valid', async () => {
+  const drainSpy = jest.spyOn(syncManager, 'drainBriefly').mockResolvedValue();
+  const deps = makeDeps();
+  withStored(deps, issuedTokens());
+  globalThis.fetch = jest.fn(
+    async () => new Response('{}', { status: 200 }),
+  ) as unknown as typeof fetch;
+  let contextValue: ReturnType<typeof useAuth> | undefined;
+  function Capture() {
+    contextValue = useAuth();
+    return null;
+  }
+  await render(
+    <AuthProvider deps={deps}>
+      <Capture />
+    </AuthProvider>,
+  );
+  await waitFor(() => expect(contextValue?.isLoading).toBe(false));
+
+  await contextValue!.signOut();
+
+  expect(drainSpy).toHaveBeenCalledWith(3000);
+  expect(drainSpy.mock.invocationCallOrder[0]).toBeLessThan(
+    (deps.resetInternetCredentials as jest.Mock).mock.invocationCallOrder[0]!,
+  );
+  drainSpy.mockRestore();
 });

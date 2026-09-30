@@ -1095,3 +1095,21 @@ describe('queued work belongs to the member who queued it', () => {
     expect(await store.find('attendance-a2')).toBeUndefined();
   });
 });
+
+test('drainBriefly sends queued work but never holds sign-out past its time limit', async () => {
+  mockApiRequest.mockResolvedValueOnce({ json: async () => ({}) });
+  syncManager.configure(null, null);
+  syncManager.setOwnerResolver(async () => ({ memberId: 'm-test', deptId: null }));
+  await syncManager.enqueueChecklistRun('ENGINE-2', 'check-brief', {});
+  syncManager.setOwnerResolver(null);
+  syncManager.configure(tokens, 'https://api.example.com');
+  await syncManager.drainBriefly(3000);
+  await expect(store.find('check-brief')).resolves.toBeUndefined();
+
+  // A server that never answers: drainBriefly returns at the limit anyway.
+  mockApiRequest.mockImplementationOnce(() => new Promise(() => undefined));
+  await syncManager.enqueueChecklistRun('ENGINE-2', 'check-hang', {});
+  const started = Date.now();
+  await syncManager.drainBriefly(50);
+  expect(Date.now() - started).toBeLessThan(2000);
+});
