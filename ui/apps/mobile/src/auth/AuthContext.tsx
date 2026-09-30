@@ -70,6 +70,12 @@ function decodeMemberId(idToken: string): string | null {
   return typeof sub === 'string' && sub.length > 0 ? sub : null;
 }
 
+/** The member's department (custom:deptId, the claim the backend authorizer scopes by). */
+function decodeDeptId(idToken: string): string | null {
+  const deptId = decodeIdTokenClaims(idToken)['custom:deptId'];
+  return typeof deptId === 'string' && deptId.length > 0 ? deptId : null;
+}
+
 function msUntilExpiry(tokens: StoredTokens): number {
   const expiry = new Date(tokens.accessTokenExpirationDate).getTime();
   return Number.isNaN(expiry) ? -Infinity : expiry - Date.now();
@@ -167,6 +173,8 @@ export function createStoredTokenSource(deps: AuthDeps = defaultDeps) {
 interface AuthState {
   roles: Role[];
   memberId: string | null;
+  /** Optional so test doubles needn't set it; the provider always does. */
+  deptId?: string | null;
   isAuthenticated: boolean;
   isLoading: boolean;
 }
@@ -207,6 +215,7 @@ export function AuthProvider({
     setState({
       roles: tokens ? decodeRoles(tokens.idToken) : [],
       memberId: tokens ? decodeMemberId(tokens.idToken) : null,
+      deptId: tokens ? decodeDeptId(tokens.idToken) : null,
       isAuthenticated: tokens !== null,
       isLoading: false,
     });

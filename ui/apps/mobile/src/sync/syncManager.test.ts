@@ -162,6 +162,8 @@ test('the first drain after app start recovers a row left SYNCING by a killed pr
     freshApi.apiRequest.mockResolvedValue({ json: async () => ({}) });
 
     await freshOutbox.enqueue({
+      ownerMemberId: '',
+      ownerDeptId: null,
       id: 'orphan-1',
       kind: 'CHECKLIST_RUN',
       label: 'Truck check — ENGINE-2',
@@ -667,6 +669,8 @@ describe('attendance', () => {
   test('a row the drain has claimed for sending cannot be discarded, and vice versa', async () => {
     syncManager.configure(null, null);
     await outbox.enqueue({
+      ownerMemberId: '',
+      ownerDeptId: null,
       id: 'race-1',
       kind: 'AVAILABILITY',
       label: 'x',
@@ -674,6 +678,8 @@ describe('attendance', () => {
       body: {},
     });
     await outbox.enqueue({
+      ownerMemberId: '',
+      ownerDeptId: null,
       id: 'race-2',
       kind: 'AVAILABILITY',
       label: 'x',
@@ -964,6 +970,8 @@ describe('alert responses (RESPONSE)', () => {
       queuedAt: '2026-01-01T00:00:00.000Z',
       nextAttemptAt: 0,
       syncedAt: null,
+      ownerMemberId: '',
+      ownerDeptId: null,
     });
     await store.insert({
       id: 'response-new',
@@ -982,6 +990,8 @@ describe('alert responses (RESPONSE)', () => {
       queuedAt: '2026-01-01T00:00:05.000Z',
       nextAttemptAt: 0,
       syncedAt: null,
+      ownerMemberId: '',
+      ownerDeptId: null,
     });
     mockApiRequest.mockResolvedValue({ json: async () => ({}) });
 
@@ -990,5 +1000,95 @@ describe('alert responses (RESPONSE)', () => {
     expect(mockApiRequest).toHaveBeenCalledTimes(1);
     expect(mockApiRequest.mock.calls[0]![2].body).toBe('{"ackStatus":"NOT_RESPONDING"}');
     await expect(store.find('response-old')).resolves.toBeUndefined();
+  });
+});
+
+// R2-M3: a station phone shared by members A and B.
+describe('queued work belongs to the member who queued it', () => {
+  const memberA = { ...tokens, memberId: 'member-a', deptId: 'nichols' };
+  const memberB = { ...tokens, memberId: 'member-b', deptId: 'nichols' };
+  const entry = { activityType: 'DRILL', refId: null, occurredAt: 1790000000, hours: 2 };
+
+  afterEach(() => {
+    syncManager.configure(tokens, 'https://api.example.com');
+  });
+
+  test("A's queued attendance is never sent under B, and sends when A signs in again", async () => {
+    (NetInfo.fetch as jest.Mock).mockResolvedValue({ isConnected: false });
+    syncManager.configure(memberA, 'https://api.example.com');
+    await syncManager.enqueueAttendance('attendance-a', 'Attendance — Drill', entry);
+    await flush();
+    expect((await store.find('attendance-a'))?.ownerMemberId).toBe('member-a');
+    expect((await store.find('attendance-a'))?.ownerDeptId).toBe('nichols');
+
+    // A signs out; B signs in with signal.
+    syncManager.configure(null, null);
+    (NetInfo.fetch as jest.Mock).mockResolvedValue({ isConnected: true });
+    mockApiRequest.mockResolvedValue({ json: async () => entry });
+    syncManager.configure(memberB, 'https://api.example.com');
+    await syncManager.drainAndSettle();
+    await flush();
+
+    expect(mockApiRequest).not.toHaveBeenCalled();
+    expect(await store.find('attendance-a')).toBeDefined();
+    const seenByB = await outbox.getStatus(null, 'member-b');
+    expect(seenByB.items).toHaveLength(0);
+    expect(seenByB.heldForOtherMembers).toBe(1);
+
+    syncManager.configure(memberA, 'https://api.example.com');
+    await flush();
+    await flush();
+    expect(mockApiRequest).toHaveBeenCalledWith(
+      'personnel/attendance',
+      memberA,
+      expect.objectContaining({ method: 'POST' }),
+    );
+  });
+
+  test('a row with no recorded owner is held until the signed-in member sends it as theirs', async () => {
+    await store.insert({
+      id: 'legacy-1',
+      kind: 'ATTENDANCE',
+      label: 'Attendance — Drill',
+      method: 'POST',
+      path: 'personnel/attendance',
+      body: JSON.stringify(entry),
+      stage: 'CREATE',
+      photoLocalUri: null,
+      photoS3Key: null,
+      photoUploadUrl: null,
+      status: 'QUEUED',
+      attempts: 0,
+      lastError: null,
+      queuedAt: new Date().toISOString(),
+      nextAttemptAt: Date.now(),
+      syncedAt: null,
+      ownerMemberId: null,
+      ownerDeptId: null,
+    });
+    (NetInfo.fetch as jest.Mock).mockResolvedValue({ isConnected: true });
+    mockApiRequest.mockResolvedValue({ json: async () => entry });
+    syncManager.configure(memberB, 'https://api.example.com');
+    await flush();
+    await flush();
+
+    expect(mockApiRequest).not.toHaveBeenCalled();
+    const status = await outbox.getStatus(null, 'member-b');
+    expect(status.items).toEqual([expect.objectContaining({ id: 'legacy-1', needsOwner: true })]);
+
+    await syncManager.sendAsMe('legacy-1');
+    await flush();
+    await flush();
+    expect(mockApiRequest).toHaveBeenCalledWith('personnel/attendance', memberB, expect.anything());
+  });
+
+  test('a member can count and discard their own unsent items at sign-out', async () => {
+    syncManager.configure(null, null);
+    syncManager.configure(memberA, null);
+    await syncManager.enqueueAttendance('attendance-a2', 'Attendance — Drill', entry);
+    expect(await syncManager.countUnsentFor('member-a')).toBe(1);
+    expect(await syncManager.countUnsentFor('member-b')).toBe(0);
+    await syncManager.discardAllFor('member-a');
+    expect(await store.find('attendance-a2')).toBeUndefined();
   });
 });

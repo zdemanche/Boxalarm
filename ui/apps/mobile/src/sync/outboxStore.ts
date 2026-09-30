@@ -24,6 +24,10 @@ export interface OutboxRow {
   readonly queuedAt: string;
   readonly nextAttemptAt: number;
   readonly syncedAt: string | null;
+  /** Member whose session queued this row; sent only under that member (R2-M3). NULL = queued
+   * before owners were recorded; '' = a session with no member id (dev/test builds only). */
+  readonly ownerMemberId: string | null;
+  readonly ownerDeptId: string | null;
 }
 
 function toRow(record: Record<string, unknown>): OutboxRow {
@@ -44,6 +48,8 @@ function toRow(record: Record<string, unknown>): OutboxRow {
     queuedAt: String(record.queuedAt),
     nextAttemptAt: Number(record.nextAttemptAt),
     syncedAt: (record.syncedAt as string | null) ?? null,
+    ownerMemberId: (record.ownerMemberId as string | null) ?? null,
+    ownerDeptId: (record.ownerDeptId as string | null) ?? null,
   };
 }
 
@@ -51,8 +57,8 @@ export async function insert(row: OutboxRow): Promise<void> {
   await getDb().execute(
     `INSERT INTO outbox
       (id, kind, label, method, path, body, stage, photoLocalUri, photoS3Key, photoUploadUrl,
-       status, attempts, lastError, queuedAt, nextAttemptAt, syncedAt)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       status, attempts, lastError, queuedAt, nextAttemptAt, syncedAt, ownerMemberId, ownerDeptId)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       row.id,
       row.kind,
@@ -70,6 +76,8 @@ export async function insert(row: OutboxRow): Promise<void> {
       row.queuedAt,
       row.nextAttemptAt,
       row.syncedAt,
+      row.ownerMemberId,
+      row.ownerDeptId,
     ],
   );
 }

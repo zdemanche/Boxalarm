@@ -14,9 +14,14 @@ export interface SyncItem {
   status: SyncItemStatus;
   queuedAt: string; // ISO
   lastError: string | null;
+  /** Queued before this phone recorded who queued what: never sent until the signed-in member
+   * explicitly sends it as theirs, or discards it (R2-M3). */
+  needsOwner?: boolean;
 }
 
 export interface SyncQueueStatus {
   items: SyncItem[];
   lastSyncAt: string | null; // ISO, null if nothing has ever synced this session
+  /** Rows another member queued on this phone; they send when that member signs in again. */
+  heldForOtherMembers?: number;
 }

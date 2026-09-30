@@ -8,6 +8,7 @@ jest.mock('./syncManager', () => ({
   subscribe: jest.fn(),
   retry: jest.fn().mockResolvedValue(undefined),
   discard: jest.fn().mockResolvedValue(undefined),
+  sendAsMe: jest.fn().mockResolvedValue(undefined),
 }));
 
 const mockSubscribe = syncManager.subscribe as jest.Mock;
@@ -143,4 +144,30 @@ test('discarding a rejected item calls the sync manager and announces it', async
   expect(mockDiscard).toHaveBeenCalledWith('SYNC-3');
   expect(announceSpy).toHaveBeenCalledWith(expect.stringMatching(/discarded/i));
   announceSpy.mockRestore();
+});
+
+// R2-M3: an item saved before owners were recorded is never sent without the member claiming it.
+test('an item with no recorded owner asks the signed-in member to claim or discard it', async () => {
+  mockStatus({
+    items: [
+      {
+        id: 'LEGACY-1',
+        kind: 'ATTENDANCE',
+        label: 'Attendance — Drill',
+        status: 'QUEUED',
+        queuedAt: new Date().toISOString(),
+        lastError: null,
+        needsOwner: true,
+      },
+    ],
+    lastSyncAt: null,
+    heldForOtherMembers: 2,
+  });
+  const { findByRole, findByText, queryByText } = await render(<SyncStatusBanner />);
+
+  expect(await findByText(/2 items another member saved on this phone are waiting/)).toBeTruthy();
+  expect(queryByText(/waiting to sync/)).toBeNull();
+  fireEvent.press(await findByRole('button', { name: 'Send Attendance — Drill as mine' }));
+  expect(syncManager.sendAsMe as jest.Mock).toHaveBeenCalledWith('LEGACY-1');
+  expect(await findByRole('button', { name: 'Discard Attendance — Drill' })).toBeTruthy();
 });

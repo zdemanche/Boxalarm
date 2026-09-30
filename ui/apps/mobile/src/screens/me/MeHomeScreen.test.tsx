@@ -1,11 +1,12 @@
-import { fireEvent, render } from '@testing-library/react-native';
+import { fireEvent, render, waitFor } from '@testing-library/react-native';
+import * as syncManager from '../../sync/syncManager';
 import { Alert } from 'react-native';
 import { MeHomeScreen, signOutWarning } from './MeHomeScreen';
 
 const mockSignOut = jest.fn(async () => {});
 
 jest.mock('../../auth/AuthContext', () => ({
-  useAuth: () => ({ signOut: mockSignOut }),
+  useAuth: () => ({ signOut: mockSignOut, memberId: 'm-a' }),
   useOptionalAuth: () => ({ isAuthenticated: false, memberId: null }),
 }));
 
@@ -62,6 +63,7 @@ test('sign-out asks first and warns that the phone will stop receiving pages', a
   const { findByText } = await render(<MeHomeScreen />);
 
   fireEvent.press(await findByText('Sign out'));
+  await waitFor(() => expect(alertSpy).toHaveBeenCalled());
 
   expect(mockSignOut).not.toHaveBeenCalled();
   const [title, message, buttons] = alertSpy.mock.calls[0]!;
@@ -103,4 +105,26 @@ test('Mark unavailable is the first action on Me and opens the availability scre
     }),
   );
   expect(mockNavigate).toHaveBeenCalledWith('Availability');
+});
+
+// R2-M3: queued work stays the member's; signing out says so and offers to discard it.
+test("sign-out with unsent items says they'll send next sign-in, and offers to discard them", async () => {
+  const countSpy = jest.spyOn(syncManager, 'countUnsentFor').mockResolvedValue(2);
+  const discardSpy = jest.spyOn(syncManager, 'discardAllFor').mockResolvedValue();
+  const alertSpy = jest.spyOn(Alert, 'alert').mockImplementation(() => {});
+  const { findByText } = await render(<MeHomeScreen />);
+
+  fireEvent.press(await findByText('Sign out'));
+  await waitFor(() => expect(alertSpy).toHaveBeenCalled());
+
+  const [, message, buttons] = alertSpy.mock.calls[0]!;
+  expect(countSpy).toHaveBeenCalledWith('m-a');
+  expect(message).toMatch(/2 items haven't been sent yet\. They'll send next time you sign in/);
+  const discard = buttons!.find((button) => button.text === 'Discard 2 unsent and sign out')!;
+  discard.onPress?.();
+  await waitFor(() => expect(mockSignOut).toHaveBeenCalled());
+  expect(discardSpy).toHaveBeenCalledWith('m-a');
+  countSpy.mockRestore();
+  discardSpy.mockRestore();
+  alertSpy.mockRestore();
 });

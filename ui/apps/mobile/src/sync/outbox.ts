@@ -14,6 +14,9 @@ export interface EnqueueInput {
   readonly path: string;
   readonly body: Record<string, unknown>;
   readonly photoLocalUri?: string;
+  /** The signed-in member (and department) whose work this is. Required: never guessed later. */
+  readonly ownerMemberId: string;
+  readonly ownerDeptId: string | null;
 }
 
 // Create-only by design: the id is the client idempotency key, so re-enqueueing an id already in
@@ -40,6 +43,8 @@ export async function enqueue(input: EnqueueInput): Promise<OutboxRow> {
     queuedAt: new Date().toISOString(),
     nextAttemptAt: Date.now(),
     syncedAt: null,
+    ownerMemberId: input.ownerMemberId,
+    ownerDeptId: input.ownerDeptId,
   };
   await store.insert(row);
   return row;
@@ -57,6 +62,7 @@ export async function olderSiblings(row: OutboxRow): Promise<OutboxRow[]> {
       candidate.id !== row.id &&
       candidate.kind === row.kind &&
       candidate.path === row.path &&
+      candidate.ownerMemberId === row.ownerMemberId &&
       candidate.queuedAt <= row.queuedAt,
   );
 }
@@ -69,6 +75,7 @@ export async function isSuperseded(row: OutboxRow): Promise<boolean> {
       candidate.id !== row.id &&
       candidate.kind === row.kind &&
       candidate.path === row.path &&
+      candidate.ownerMemberId === row.ownerMemberId &&
       candidate.queuedAt > row.queuedAt,
   );
 }
@@ -82,11 +89,42 @@ export async function find(id: string): Promise<OutboxRow | undefined> {
   return store.find(id);
 }
 
-export async function listDrainable(now: number): Promise<OutboxRow[]> {
+/** Rows the signed-in member may send now: only their own (R2-M3). Another member's rows, and
+ * rows with no recorded owner, are held. */
+export async function listDrainable(now: number, ownerMemberId: string): Promise<OutboxRow[]> {
   const rows = await store.all();
   return rows.filter(
-    (row) => row.status !== 'SYNCING' && row.status !== 'REJECTED' && row.nextAttemptAt <= now,
+    (row) =>
+      row.ownerMemberId === ownerMemberId &&
+      row.status !== 'SYNCING' &&
+      row.status !== 'REJECTED' &&
+      row.nextAttemptAt <= now,
   );
+}
+
+/** Rows the member queued and hasn't sent yet - what signing out would leave behind. */
+export async function countUnsentFor(ownerMemberId: string): Promise<number> {
+  const rows = await store.all();
+  return rows.filter((row) => row.ownerMemberId === ownerMemberId).length;
+}
+
+export async function discardAllFor(ownerMemberId: string): Promise<void> {
+  const rows = await store.all();
+  await Promise.all(
+    rows.filter((row) => row.ownerMemberId === ownerMemberId).map((row) => store.remove(row.id)),
+  );
+}
+
+/** A row with no recorded owner, which the signed-in member explicitly chose to send as theirs. */
+export async function adopt(id: string, ownerMemberId: string, ownerDeptId: string | null) {
+  const row = await store.find(id);
+  if (!row || row.ownerMemberId !== null) return;
+  await store.update(id, {
+    ownerMemberId,
+    ownerDeptId,
+    status: 'QUEUED',
+    nextAttemptAt: Date.now(),
+  });
 }
 
 export async function markSyncing(id: string): Promise<void> {
@@ -158,15 +196,28 @@ export async function advanceStage(
   await store.update(id, patch);
 }
 
-export async function getStatus(lastSyncAt: string | null): Promise<SyncQueueStatus> {
+/** The signed-in member's view of the queue: their own rows, rows with no recorded owner
+ * (flagged for an explicit send-or-discard), and only a count of other members' rows. */
+export async function getStatus(
+  lastSyncAt: string | null,
+  ownerMemberId: string | null,
+): Promise<SyncQueueStatus> {
   const rows = await store.all();
-  const items: SyncItem[] = rows.map((row) => ({
+  const visible = rows.filter(
+    (row) => row.ownerMemberId === null || row.ownerMemberId === ownerMemberId,
+  );
+  const items: SyncItem[] = visible.map((row) => ({
     id: row.id,
     kind: row.kind,
     label: row.label,
     status: row.status,
     queuedAt: row.queuedAt,
     lastError: row.lastError,
+    ...(row.ownerMemberId === null ? { needsOwner: true } : {}),
   }));
-  return { items, lastSyncAt };
+  return {
+    items,
+    lastSyncAt,
+    heldForOtherMembers: rows.length - visible.length,
+  };
 }

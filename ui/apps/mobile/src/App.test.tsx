@@ -108,6 +108,9 @@ test('the authenticated shell shows the persistent sync-status banner above the 
     queuedAt: new Date().toISOString(),
     nextAttemptAt: Date.now() + 60_000,
     syncedAt: null,
+    // The signed-in session's member (this token has no sub, so the empty owner).
+    ownerMemberId: '',
+    ownerDeptId: null,
   });
 
   const { findByText } = await render(<App />);

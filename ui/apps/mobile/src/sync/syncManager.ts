@@ -42,9 +42,34 @@ function rememberSynced(id: string): void {
 // Called on every auth/config change (useSyncEngine, mounted once at the app root). While signed in, a NetInfo
 // listener drains on reconnect; on sign-out it is removed so repeated login/logout cycles never
 // stack listeners. Entries queued while signed out are drained as soon as tokens arrive.
+/**
+ * Whose work this phone is queueing and sending (R2-M3). Read from the signed-in session the
+ * token source belongs to (AuthContext's value carries memberId/deptId). Every row is stamped with
+ * it at enqueue, and only rows stamped with the signed-in member are sent: member B signing in on
+ * a station phone never sends member A's attendance, checks or mark-offs under B's token. Kept
+ * after sign-out so it is always the last member who signed in; '' only where a session has no
+ * member id (dev/test builds).
+ */
+let owner: { memberId: string; deptId: string | null } = { memberId: '', deptId: null };
+
+function ownerOf(source: AuthTokenSource): { memberId: string; deptId: string | null } {
+  const session = source as AuthTokenSource & { memberId?: unknown; deptId?: unknown };
+  return {
+    memberId: typeof session.memberId === 'string' ? session.memberId : '',
+    deptId: typeof session.deptId === 'string' ? session.deptId : null,
+  };
+}
+
+/** The member whose rows may be sent and shown right now; null while signed out. */
+function signedInMember(): string | null {
+  return tokens ? owner.memberId : null;
+}
+
 export function configure(nextTokens: AuthTokenSource | null, nextApiBaseUrl: string | null): void {
   tokens = nextTokens;
   apiBaseUrl = nextApiBaseUrl;
+  if (nextTokens) owner = ownerOf(nextTokens);
+  void notify();
   if (tokens && apiBaseUrl) {
     unsubscribeNetInfo ??= NetInfo.addEventListener((state) => {
       if (state.isConnected === true) void drain();
@@ -65,12 +90,17 @@ export function subscribe(listener: Listener): () => void {
 }
 
 async function notify(): Promise<void> {
-  const status = await outbox.getStatus(lastSyncAt);
+  // The current (or last signed-in) member's view; nothing is sent without a signed-in session.
+  const status = await outbox.getStatus(lastSyncAt, owner.memberId);
   listeners.forEach((listener) => listener(status));
 }
 
 function unitPath(unitId: string, suffix: string): string {
   return `apparatus/${encodeURIComponent(unitId)}/${suffix}`;
+}
+
+function ownerStamp(): { ownerMemberId: string; ownerDeptId: string | null } {
+  return { ownerMemberId: owner.memberId, ownerDeptId: owner.deptId };
 }
 
 async function enqueueAndDrain(
@@ -81,7 +111,7 @@ async function enqueueAndDrain(
   body: Record<string, unknown>,
   photoLocalUri?: string,
 ): Promise<void> {
-  await outbox.enqueue({ id, kind, label, path, body, photoLocalUri });
+  await outbox.enqueue({ id, kind, label, path, body, photoLocalUri, ...ownerStamp() });
   await notify();
   void drain();
 }
@@ -153,7 +183,14 @@ export async function enqueueAvailability(
 ): Promise<{ replaced: number; mayStand: number }> {
   if (!memberId) throw new Error('A mark-off needs the signed-in member');
   const path = `personnel/members/${encodeURIComponent(memberId)}/availability`;
-  const row = await outbox.enqueue({ id: idempotencyKey, kind: 'AVAILABILITY', label, path, body });
+  const row = await outbox.enqueue({
+    id: idempotencyKey,
+    kind: 'AVAILABILITY',
+    label,
+    path,
+    body,
+    ...ownerStamp(),
+  });
   // Only a row that was never sent can be dropped: one that was attempted may have reached the
   // server with its response lost, so it stays, and the member is told both may stand (R2-M1).
   let replaced = 0;
@@ -204,13 +241,36 @@ export async function enqueueResponse(
   body: Record<string, unknown>,
 ): Promise<void> {
   const path = `alerting/dispatches/${encodeURIComponent(dispatchId)}/responses`;
-  const row = await outbox.enqueue({ id, kind: 'RESPONSE', label, path, body });
+  const row = await outbox.enqueue({ id, kind: 'RESPONSE', label, path, body, ...ownerStamp() });
   const older = await outbox.olderSiblings(row);
   await Promise.all(
     older
       .filter((sibling) => sibling.status !== 'SYNCING')
       .map((sibling) => outbox.discard(sibling.id)),
   );
+  await notify();
+  void drain();
+}
+
+/** Unsent rows the member queued: what signing out would leave waiting on this phone. */
+export async function countUnsentFor(memberId: string): Promise<number> {
+  return outbox.countUnsentFor(memberId);
+}
+
+/** The member chose to discard their unsent work at sign-out. */
+export async function discardAllFor(memberId: string): Promise<void> {
+  await outbox.discardAllFor(memberId);
+  await notify();
+}
+
+/**
+ * A row queued before this phone recorded owners: the signed-in member explicitly says it is
+ * theirs, and only then is it sent under their session.
+ */
+export async function sendAsMe(id: string): Promise<void> {
+  const memberId = signedInMember();
+  if (!memberId) return;
+  await outbox.adopt(id, memberId, owner.deptId);
   await notify();
   void drain();
 }
@@ -554,7 +614,8 @@ async function runDrain(): Promise<void> {
     const netState = await NetInfo.fetch();
     if (netState.isConnected !== true) return;
 
-    const pending = await outbox.listDrainable(Date.now());
+    // Only the signed-in member's own rows (R2-M3).
+    const pending = await outbox.listDrainable(Date.now(), owner.memberId);
     for (const listed of pending) {
       // Re-read: a row listed above may have been discarded or superseded since (a changed
       // answer), and a vanished row must not be reported as delivered.

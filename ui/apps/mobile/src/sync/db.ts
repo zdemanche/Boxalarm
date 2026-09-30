@@ -25,6 +25,16 @@ export function getDb(): DB {
         syncedAt TEXT
       )`,
     );
+    // Owner of each queued write (R2-M3), added after the table first shipped: ALTER for existing
+    // installs, where it throws "duplicate column" once the column is there. Rows from before
+    // have NULL owners and are held for the next signed-in member to send or discard.
+    for (const column of ['ownerMemberId', 'ownerDeptId']) {
+      try {
+        db.executeSync(`ALTER TABLE outbox ADD COLUMN ${column} TEXT`);
+      } catch {
+        // Column already exists.
+      }
+    }
     // Small device-local cache (kvStore.ts): the alert payload a page arrived with, the last
     // good dispatch detail and active-call list, and this device's latest answer per call - so
     // the alert path renders from the phone, never from a spinner.
