@@ -110,8 +110,9 @@ export const SIGNED_OUT_ANSWER_MESSAGE =
 
 /**
  * A Responding / Not responding action pressed on an iOS page (AppDelegate records it with the
- * tap). Queued at once, before navigation is ready, through the same outbox as the alert screen;
- * the action is then stripped from the record so a later routing retry cannot answer twice.
+ * tap). The action is stripped from the record first, so a later routing retry cannot answer
+ * twice. While signed in (or with the keychain unreadable) the answer is then queued at once,
+ * before navigation is ready, through the same outbox as the alert screen.
  *
  * On a signed-out phone the answer is not queued (M2, the same gate as Android's
  * answerFromNotification): there is no one to send it as, and an ownerless answer would be
