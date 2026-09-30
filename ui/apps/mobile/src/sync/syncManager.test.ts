@@ -1173,3 +1173,24 @@ test("a drain still running when the member changes never posts A's next row wit
   );
   await expect(store.find('a-second')).resolves.toBeUndefined();
 });
+
+// m1: every call of a run - including the 401 retry inside apiRequest - uses a source pinned to
+// the run's member, not the session source that reads whatever the keychain holds at call time.
+test("a drain run sends with a source pinned to the run's member", async () => {
+  const pinned = { getAccessToken: jest.fn(), renewSilently: jest.fn() };
+  const forMember = jest.fn(() => pinned);
+  const session = { ...tokens, memberId: 'member-p', forMember };
+  syncManager.configure(session, 'https://api.example.com');
+  await flush();
+  mockApiRequest.mockResolvedValue({ json: async () => ({}) });
+
+  await syncManager.enqueueChecklistRun('ENGINE-9', 'check-pinned', { templateId: 'CT-01' });
+  await syncManager.drainAndSettle();
+
+  expect(forMember).toHaveBeenCalledWith('member-p');
+  expect(mockApiRequest).toHaveBeenCalledWith(
+    'apparatus/ENGINE-9/checks',
+    pinned,
+    expect.anything(),
+  );
+});

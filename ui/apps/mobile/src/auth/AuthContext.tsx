@@ -19,6 +19,7 @@ import {
 } from 'react-native-app-auth';
 import Config from 'react-native-config';
 import * as Keychain from 'react-native-keychain';
+import type { AuthTokenSource } from '../lib/apiClient';
 import { getDeviceInstallationId } from '../features/alerts/deviceInstallationId';
 import { revokePushToken } from '../features/alerts/pushTokens';
 import { buildOidcConfig } from './config';
@@ -264,6 +265,37 @@ export async function readStoredSessionOwner(
   return memberId ? { memberId, deptId: decodeDeptId(stored.idToken) } : null;
 }
 
+/**
+ * A token source that yields tokens only while the stored session is still `memberId`'s (m1):
+ * the owner check is made on the same keychain read that supplies the token, and a renewal counts
+ * only if the keychain then holds that member's session with that very token. A drain run sending
+ * member A's row can then never go out with member B's token - not on the 401 retry, the
+ * missing-ETA re-post or a photo re-create - even if B signs in mid-run: it gets no token, the
+ * server answers 401, and the row stays A's.
+ */
+function tokensPinnedTo(
+  memberId: string,
+  deps: AuthDeps,
+  renew: () => Promise<string | null>,
+): AuthTokenSource {
+  const renewPinned = async (): Promise<string | null> => {
+    const token = await renew();
+    if (!token) return null;
+    const stored = await readStoredTokens(deps).catch(() => null);
+    return stored && decodeMemberId(stored.idToken) === memberId && stored.accessToken === token
+      ? token
+      : null;
+  };
+  return {
+    getAccessToken: async () => {
+      const stored = await readStoredTokens(deps).catch(() => null);
+      if (!stored || decodeMemberId(stored.idToken) !== memberId) return null;
+      return isExpired(stored) ? renewPinned() : stored.accessToken;
+    },
+    renewSilently: renewPinned,
+  };
+}
+
 export function createStoredTokenSource(deps: AuthDeps = defaultDeps) {
   let renewing: Promise<string | null> | null = null;
   const renewSilently = (): Promise<string | null> => {
@@ -288,6 +320,7 @@ export function createStoredTokenSource(deps: AuthDeps = defaultDeps) {
       return isExpired(stored) ? renewSilently() : stored.accessToken;
     },
     renewSilently,
+    forMember: (memberId: string) => tokensPinnedTo(memberId, deps, renewSilently),
   };
 }
 
@@ -313,6 +346,11 @@ export interface AuthContextValue extends AuthState {
   signOut: () => Promise<SignOutResult>;
   getAccessToken: () => Promise<string | null>;
   renewSilently: () => Promise<string | null>;
+  /**
+   * A token source pinned to one member's session (m1): no token once it is not theirs. Optional
+   * so test doubles needn't set it; the provider always does.
+   */
+  forMember?: (memberId: string) => AuthTokenSource;
 }
 
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
@@ -469,7 +507,7 @@ export function AuthProvider({
           // than sent stale and refused (M3).
           pushRevoked = await revokePushToken(
             memberId,
-            { getAccessToken, renewSilently },
+            tokensPinnedTo(memberId, depsRef.current, renewSilently),
             apiBaseUrl,
           ).then(
             () => true,
@@ -513,6 +551,7 @@ export function AuthProvider({
       },
       getAccessToken,
       renewSilently,
+      forMember: (memberId: string) => tokensPinnedTo(memberId, depsRef.current, renewSilently),
     }),
     [state, config, applyTokens, renewSilently, getAccessToken],
   );

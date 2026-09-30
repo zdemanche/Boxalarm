@@ -746,3 +746,30 @@ describe('a sign-out whose push revoke does not land (M3)', () => {
     await expect(deps.getInternetCredentials(PENDING)).resolves.toBe(false);
   });
 });
+
+describe('a token source pinned to one member (m1)', () => {
+  const idTokenFor = (sub: string) => `h.${base64url(JSON.stringify({ sub }))}.s`;
+
+  test("yields A's token only while the stored session is A's", async () => {
+    const deps = makeDeps();
+    const a = issuedTokens({ idToken: idTokenFor('A'), accessToken: 'access-A' });
+    await deps.setInternetCredentials('boxalarm-auth', 'boxalarm-auth', JSON.stringify(a));
+    const pinned = createStoredTokenSource(deps).forMember('A');
+
+    await expect(pinned.getAccessToken()).resolves.toBe('access-A');
+
+    const b = issuedTokens({ idToken: idTokenFor('B'), accessToken: 'access-B' });
+    await deps.setInternetCredentials('boxalarm-auth', 'boxalarm-auth', JSON.stringify(b));
+
+    await expect(pinned.getAccessToken()).resolves.toBeNull();
+    // The 401 retry's renewal is pinned too: renewing B's session never hands B's token to A's row.
+    deps.refresh = jest.fn(async () => ({
+      accessToken: 'access-B2',
+      refreshToken: 'refresh-B2',
+      accessTokenExpirationDate: new Date(Date.now() + 3600_000).toISOString(),
+      idToken: idTokenFor('B'),
+      tokenType: 'Bearer',
+    })) as unknown as AuthDeps['refresh'];
+    await expect(pinned.renewSilently()).resolves.toBeNull();
+  });
+});

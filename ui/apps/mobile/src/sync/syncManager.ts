@@ -8,7 +8,7 @@ import type { OutboxKind, OutboxRow } from './outbox';
 
 type Listener = (status: SyncQueueStatus) => void;
 
-let tokens: AuthTokenSource | null = null;
+let tokens: SessionTokenSource | null = null;
 let apiBaseUrl: string | null = null;
 let draining = false;
 // Set when drain() is called while one is already running, so the running drain loops once more
@@ -112,6 +112,8 @@ function signedInMember(): string | null {
 export type SessionTokenSource = AuthTokenSource & {
   readonly memberId?: string | null;
   readonly deptId?: string | null;
+  /** A source that yields tokens only while the session is still that member's (m1). */
+  readonly forMember?: (memberId: string) => AuthTokenSource;
 };
 
 export function configure(
@@ -730,7 +732,14 @@ async function runDrain(): Promise<void> {
     const runApiBaseUrl = apiBaseUrl;
     const runOwner = owner.memberId;
     if (!runTokens || !runApiBaseUrl) return;
-    const session: RunSession = { tokens: runTokens, apiBaseUrl: runApiBaseUrl };
+    // Pinned to the run's member, not just to the source (m1): every call of the run - the 401
+    // retry, the missing-ETA re-post, a photo re-create - gets no token once the session on the
+    // phone is someone else's.
+    const pinned =
+      runOwner && typeof runTokens.forMember === 'function'
+        ? runTokens.forMember(runOwner)
+        : runTokens;
+    const session: RunSession = { tokens: pinned, apiBaseUrl: runApiBaseUrl };
     // Only the signed-in member's own rows (R2-M3).
     const pending = await outbox.listDrainable(Date.now(), runOwner);
     for (const listed of pending) {
