@@ -711,6 +711,12 @@ export const LAMBDA_ENTRIES = [
     entry: 'src/services/alerting-service/cadIngress/updateNotifierHandler.ts',
   },
   {
+    // Every 5 minutes: CAD updates still owing their UPDATE push are re-driven and alarmed.
+    service: 'alerting-service',
+    function: 'cad-update-sweep',
+    entry: 'src/services/alerting-service/cadIngress/updateSweepHandler.ts',
+  },
+  {
     service: 'personnel-service',
     function: 'shift-completion',
     entry: 'src/services/personnel-service/shifts/completionHandler.ts',

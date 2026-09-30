@@ -20,7 +20,13 @@ import { logInfo } from '../dispatches/logger.js';
 import { emitCadMetric, type CadChannel } from './metrics.js';
 import { replayMarkerItem } from './replayGuard.js';
 import { notifyUpdate } from './notifyUpdate.js';
-import { lockedDispatchId, parseCadMessageTime, recordCadUpdate } from './updateRepository.js';
+import {
+  lockedDispatchId,
+  parseCadMessageTime,
+  recordCadUpdate,
+  updateIdFor,
+  updateNeedsNotice,
+} from './updateRepository.js';
 import type { CadSourceCopy } from './sourceCopy.js';
 
 /**
@@ -297,6 +303,15 @@ export async function ingestCadDispatch(
         updateId: update.updateId,
       });
       return { outcome: 'duplicate', parseStatus: built.parseStatus };
+    }
+    if ((update.outcome === 'duplicate' || update.outcome === 'replay') && dispatchId) {
+      // The sender's retry of an update whose push hand-off was lost (the Lambda died after
+      // commit): the update is recorded but never notified - hand it off again.
+      const updateId = updateIdFor(contentHash);
+      if (await updateNeedsNotice(client, tableName, deptId, dispatchId, updateId)) {
+        emitCadMetric('CadUpdateNoticeRedriven', { Channel: channel });
+        await notifyUpdate({ deptId, dispatchId, updateId });
+      }
     }
     if (update.outcome === 'replay') {
       emitCadMetric('CadIngressReplayRejected', { Channel: channel });

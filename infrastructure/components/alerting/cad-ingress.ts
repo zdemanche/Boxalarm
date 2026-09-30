@@ -7,6 +7,7 @@ import { RuleDeliveryGuard } from "../messaging/rule-delivery";
 import { requireEnv } from "../shared/env";
 import { lambdaCode, LAMBDA_HANDLER } from "../shared/lambda-code";
 import { grantAlertingCmk } from "./alerting-cmk";
+import { ScheduleDeadLetter } from "../shared/schedule-dead-letter";
 
 /**
  * CAD dispatch ingress (docs/decisions/2026-09-29-roadmap-defaults.md row 3,
@@ -54,6 +55,8 @@ const COPY_TIMEOUT_SECONDS = 15;
 
 export interface CadIngressArgs {
   env: string;
+  /** The stack's department: the pending-update sweep runs for it (single tenant today). */
+  deptId: string;
   alertingTableArn: pulumi.Input<string>;
   alertingCmkArn: pulumi.Input<string>;
   alertingTableName: pulumi.Input<string>;
@@ -132,6 +135,7 @@ export function cadIngressTableStatements(tableArn: string): IamPolicyStatement[
             "DEPT#*#DISPATCH_IDEMPOTENCY#*",
             "DEPT#*#DISPATCH#*",
             "DEPT#*#OUTBOX",
+            "DEPT#*#CAD_UPDATE_PENDING",
           ],
         },
       },
@@ -156,6 +160,8 @@ export class CadIngress extends pulumi.ComponentResource {
   /** The non-escalating UPDATE push for a CAD update, async-invoked by the ingress Lambdas. */
   public readonly updateNotifierLambda: ServiceLambda;
   public readonly updateNotifierFailureQueue: aws.sqs.Queue;
+  /** Every 5 minutes: updates still owing their push are re-driven, old ones alarmed. */
+  public readonly updateSweepLambda: ServiceLambda;
   public readonly mailBucket?: aws.s3.BucketV2;
   public readonly mailKey?: aws.kms.Key;
   public readonly emailFailureQueue?: aws.sqs.Queue;
@@ -354,6 +360,18 @@ export class CadIngress extends pulumi.ComponentResource {
               },
             },
             {
+              // The update's pending marker is cleared once its crew is notified.
+              Sid: "CadUpdatePendingClear",
+              Effect: "Allow",
+              Action: ["dynamodb:DeleteItem"],
+              Resource: arn,
+              Condition: {
+                "ForAllValues:StringLike": {
+                  "dynamodb:LeadingKeys": ["DEPT#*#CAD_UPDATE_PENDING"],
+                },
+              },
+            },
+            {
               Sid: "AlertingTopicPublish",
               Effect: "Allow",
               Action: ["sns:Publish"],
@@ -404,6 +422,106 @@ export class CadIngress extends pulumi.ComponentResource {
         Action: ["lambda:InvokeFunction"],
         Resource: fnArn,
       }),
+    );
+
+    // ---- The pending-update sweep: the only thing that notices an update whose hand-off to
+    // the notifier never happened (the ingress Lambda died between commit and invoke).
+    this.updateSweepLambda = new ServiceLambda(
+      `${name}-update-sweep-fn`,
+      {
+        env,
+        serviceName: "alerting-service",
+        functionName: `boxalarm-${env}-alerting-cad-update-sweep`,
+        handler: LAMBDA_HANDLER,
+        code: lambdaCode("alerting-service", "cad-update-sweep"),
+        logGroup: args.logGroup,
+        environment: {
+          ALERTING_TABLE_NAME: args.alertingTableName,
+          CAD_SWEEP_DEPT_ID: args.deptId,
+          CAD_UPDATE_NOTIFIER_FUNCTION: this.updateNotifierLambda.function.name,
+        },
+        additionalPolicyStatements: pulumi
+          .all([tableArn, invokeNotifier])
+          .apply(([arn, invoke]): IamPolicyStatement[] => [
+            {
+              Sid: "CadUpdatePendingRead",
+              Effect: "Allow",
+              Action: ["dynamodb:Query"],
+              Resource: arn,
+              Condition: {
+                "ForAllValues:StringLike": {
+                  "dynamodb:LeadingKeys": ["DEPT#*#CAD_UPDATE_PENDING"],
+                },
+              },
+            },
+            invoke,
+          ]),
+        reservedConcurrentExecutions: 1,
+        timeout: 60,
+        permissionsBoundaryArn: args.permissionsBoundaryArn,
+      },
+      { parent: this },
+    );
+    const sweepSchedulerRole = new aws.iam.Role(
+      `${name}-update-sweep-scheduler-role`,
+      {
+        name: `boxalarm-${env}-alerting-cad-update-sweep-scheduler`,
+        assumeRolePolicy: JSON.stringify({
+          Version: "2012-10-17",
+          Statement: [
+            {
+              Effect: "Allow",
+              Principal: { Service: "scheduler.amazonaws.com" },
+              Action: "sts:AssumeRole",
+            },
+          ],
+        }),
+        permissionsBoundary: args.permissionsBoundaryArn,
+      },
+      { parent: this },
+    );
+    new aws.iam.RolePolicy(
+      `${name}-update-sweep-scheduler-policy`,
+      {
+        role: sweepSchedulerRole.id,
+        policy: this.updateSweepLambda.function.arn.apply((fnArn) =>
+          JSON.stringify({
+            Version: "2012-10-17",
+            Statement: [
+              {
+                Sid: "InvokeCadUpdateSweepOnly",
+                Effect: "Allow",
+                Action: "lambda:InvokeFunction",
+                Resource: fnArn,
+              },
+            ],
+          }),
+        ),
+      },
+      { parent: this },
+    );
+    const sweepDeadLetter = new ScheduleDeadLetter(
+      `${name}-update-sweep-dead-letter`,
+      {
+        queueName: `boxalarm-${env}-alerting-cad-update-sweep-scheduler-dlq`,
+        schedulerRole: sweepSchedulerRole,
+        alarmActions: [args.pageTopicArn],
+      },
+      { parent: this },
+    );
+    new aws.scheduler.Schedule(
+      `${name}-update-sweep-schedule`,
+      {
+        name: `boxalarm-${env}-alerting-${args.deptId}-cad-update-sweep`,
+        scheduleExpression: "rate(5 minutes)",
+        flexibleTimeWindow: { mode: "OFF" },
+        target: {
+          arn: this.updateSweepLambda.function.arn,
+          roleArn: sweepSchedulerRole.arn,
+          ...sweepDeadLetter.targetConfig,
+        },
+      },
+      { parent: this },
     );
 
     // ---- Signed webhook: its own API, stage, throttle and reserved concurrency.
@@ -573,6 +691,7 @@ export class CadIngress extends pulumi.ComponentResource {
     const lambdaRoles: Record<string, aws.iam.Role> = {
       copy: this.copyLambda.role,
       updateNotifier: this.updateNotifierLambda.role,
+      updateSweep: this.updateSweepLambda.role,
       webhook: this.webhookLambda.role,
     };
 
@@ -920,6 +1039,22 @@ export class CadIngress extends pulumi.ComponentResource {
         "A CAD dispatch paged as raw text (SEE DISPATCH TEXT, flagged VERIFY): the source's parser template did not find the address. The page went; fix the template (Settings > CAD sources > test parse).",
         [args.pageTopicArn, args.opsTopicArn],
       ),
+      cadAlarm(
+        "update-unnotified",
+        "CadUpdateUnnotified",
+        "A CAD update to a call is more than 10 minutes old and its crew has still not been sent the UPDATE push (the hand-off was lost, or fan-out never completed). The sweep keeps re-driving it; the update shows on the call. Relay it by radio if it matters, and check the cad-update-notifier and fan-out logs.",
+        [args.pageTopicArn],
+      ),
+      this.alarm("update-sweep-errors", {
+        name: `boxalarm-${env}-alerting-cad-update-sweep-errors`,
+        description:
+          "The CAD pending-update sweep is failing: lost update pushes are no longer re-driven or alarmed.",
+        namespace: "AWS/Lambda",
+        metricName: "Errors",
+        dimensions: { FunctionName: this.updateSweepLambda.function.name },
+        statistic: "Sum",
+        actions: [args.pageTopicArn],
+      }),
       cadAlarm(
         "update-push-failed",
         "CadUpdatePushFailed",

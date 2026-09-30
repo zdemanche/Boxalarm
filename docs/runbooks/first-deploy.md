@@ -10,7 +10,7 @@ Written from the post-merge deploy-readiness review (`.analysis/post-merge/deplo
 
 ## 0. Account prerequisites (before anything else)
 
-1. **Request a Lambda concurrent-executions quota of at least 1,000** in `us-east-1`: Service Quotas → AWS Lambda → *Concurrent executions* (quota code `L-B99A9384`). A new account starts at 10. Each stack reserves 230 across 56 functions, and AWS keeps 100 unreserved, so at 10 the first reserved function fails `pulumi up`. Approval can take a day or more; wait for it.
+1. **Request a Lambda concurrent-executions quota of at least 1,000** in `us-east-1`: Service Quotas → AWS Lambda → *Concurrent executions* (quota code `L-B99A9384`). A new account starts at 10. Each stack reserves 231 across 57 functions, and AWS keeps 100 unreserved, so at 10 the first reserved function fails `pulumi up`. Approval can take a day or more; wait for it.
 2. Log in to Pulumi Cloud and get credentials for the stack's account (default AWS credential chain).
 3. Run the preflight. It only reads the account:
 
@@ -24,7 +24,7 @@ Written from the post-merge deploy-readiness review (`.analysis/post-merge/deplo
 
 ```
 (cd backend && npm ci && npm run bundle)
-ls -d backend/dist/*/*/ | wc -l     # expect 196 function directories (dist/<service>/<function>/)
+ls -d backend/dist/*/*/ | wc -l     # expect 197 function directories (dist/<service>/<function>/)
 ```
 
 Only dev (and unit tests) fall back to placeholder code when a bundle is missing, with a `lambdaCode: no bundle found for ...` warning. The placeholder answers HTTP with 501 and throws on every queue, stream and schedule, so do not skip this step on dev either.

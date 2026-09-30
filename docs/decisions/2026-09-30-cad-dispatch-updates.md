@@ -30,7 +30,7 @@ The ingress Lambda asynchronously invokes `boxalarm-<env>-alerting-cad-update-no
 
 It does not read the alerting table stream. That stream already has its two readers (fan-out and the outbox drain), and DynamoDB throttles a third reader per shard. That would slow tone-1 fan-out for every call, which is not an acceptable price for update notices.
 
-**Residual:** if the ingress Lambda dies between the commit and the invoke, the update is recorded and shown on the call, but no push goes out. A failed hand-off is counted (`CadUpdatePushFailed`) and alarmed.
+**Recovering a lost hand-off.** Each update is written with a pending marker (`DEPT#{deptId}#CAD_UPDATE_PENDING`), and the notifier stamps `notifiedAt` on the update and clears the marker once every member is notified. If the ingress Lambda dies between the commit and the invoke, the update is recorded but not notified. Two things then re-drive it: the sender's retry of the same update (a duplicate of an unnotified update is handed off again), and a 5-minute sweep that re-drives every marker older than 2 minutes. An update still unnotified after 10 minutes raises `…-alerting-cad-update-unnotified` to alerting-page. Re-driving is safe because the per-member claims make a second run send nothing twice.
 
 ## Why not
 

@@ -909,6 +909,7 @@ if (cadIngressEmailDomain === undefined) {
 }
 export const cadIngress = new CadIngress("cad-ingress", {
   env,
+  deptId,
   alertingTableArn: alertingTable.tableArn,
   alertingCmkArn: alertingTable.cmkArn,
   alertingTableName: alertingTable.tableName,

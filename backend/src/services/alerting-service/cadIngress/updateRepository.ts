@@ -119,6 +119,26 @@ export function seenContentKey(pk: string, contentHash: string): { pk: string; s
   return { pk, sk: `SEEN#${contentHash}` };
 }
 
+/**
+ * An update that still owes its crew an UPDATE push: written with the update, deleted by the
+ * notifier once every member is notified. The sweep (updateSweepHandler.ts) re-drives any that
+ * linger and alarms on old ones - the only record of an update whose hand-off never happened
+ * (the ingress Lambda died between commit and invoke).
+ */
+export function pendingNoticeKey(
+  deptId: VerifiedDeptId,
+  receivedAt: number,
+  dispatchId: string,
+  updateId: string,
+): { pk: string; sk: string } {
+  return {
+    pk: buildDeptScopedPk(deptId, 'CAD_UPDATE_PENDING'),
+    sk: `${String(receivedAt).padStart(12, '0')}#${dispatchId}#${updateId}`,
+  };
+}
+
+export const PENDING_NOTICE_RETENTION_SECONDS = 7 * 24 * 60 * 60;
+
 /** A CAD message time the template read (free text), as epoch seconds - or undefined. */
 export function parseCadMessageTime(text: string | undefined): number | undefined {
   if (!text) return undefined;
@@ -243,6 +263,20 @@ async function writeUpdate(
         ? []
         : [
             {
+              Put: {
+                TableName: tableName,
+                Item: {
+                  ...pendingNoticeKey(input.deptId, input.receivedAt, input.dispatchId, updateId),
+                  entityType: 'CAD_UPDATE_PENDING',
+                  deptId: input.deptId,
+                  dispatchId: input.dispatchId,
+                  updateId,
+                  receivedAt: input.receivedAt,
+                  ttl: input.receivedAt + PENDING_NOTICE_RETENTION_SECONDS,
+                },
+              },
+            },
+            {
               Update: {
                 TableName: tableName,
                 Key: { pk, sk: 'METADATA' },
@@ -280,7 +314,7 @@ async function writeUpdate(
       // UPDATE# or SEEN# exists: this content was accepted before.
       if (failed(0) || failed(1)) return { outcome: 'duplicate' };
       // Only the METADATA condition failed: a newer message was applied meanwhile.
-      if (!historyOnly && failed(2)) return 'raced';
+      if (!historyOnly && failed(3)) return 'raced';
     }
     throw error;
   }
@@ -307,4 +341,26 @@ export async function lockedDispatchId(
   if (!Item || typeof Item.dispatchId !== 'string') return undefined;
   if (typeof Item.expiresAt === 'number' && Item.expiresAt <= nowSeconds) return undefined;
   return Item.dispatchId;
+}
+
+/**
+ * Whether a recorded update still owes its UPDATE push (no notifiedAt). A duplicate or replay
+ * of an update checks this and re-invokes the notifier, so a hand-off lost when the ingress
+ * Lambda died after commit is recovered by the sender's retry.
+ */
+export async function updateNeedsNotice(
+  client: DynamoDBDocumentClient,
+  tableName: string,
+  deptId: VerifiedDeptId,
+  dispatchId: string,
+  updateId: string,
+): Promise<boolean> {
+  const { Item } = await client.send(
+    new GetCommand({
+      TableName: tableName,
+      Key: { pk: buildDeptScopedPk(deptId, 'DISPATCH', dispatchId), sk: `UPDATE#${updateId}` },
+      ConsistentRead: true,
+    }),
+  );
+  return Item?.entityType === 'DISPATCH_UPDATE' && Item.applied !== false && !Item.notifiedAt;
 }

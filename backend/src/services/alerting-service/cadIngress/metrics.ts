@@ -35,6 +35,12 @@ export type CadMetric =
   | 'CadParseTimeout'
   /** A CAD message older than the one already applied: history only, nothing pushed. */
   | 'CadIngressOlderMessage'
+  /** A retried update with no notifiedAt: its UPDATE push was handed off again. */
+  | 'CadUpdateNoticeRedriven'
+  /** Sweep: updates still owing their push (all ages; each re-driven). */
+  | 'CadUpdatePending'
+  /** Sweep: updates still owing their push after 10 minutes (alarmed). */
+  | 'CadUpdateUnnotified'
   /** A CAD resend of a dispatch already written: not paged again. */
   | 'CadIngressDuplicate';
 

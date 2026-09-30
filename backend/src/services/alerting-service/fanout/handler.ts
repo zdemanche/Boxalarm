@@ -160,6 +160,34 @@ function parseDispatchAlertRecord(record: DynamoDBRecord): DispatchAlertRecord |
 }
 
 /**
+ * Every tone-1 page (and its RECEIPT#) exists: the CAD update notifier waits for this before
+ * choosing its audience (chain review R2-M2). A failed stamp only delays update pushes (the
+ * sweep then alarms), so it is logged and counted, never thrown.
+ */
+async function stampFanOutCompleted(
+  ddb: DynamoDBDocumentClient,
+  tableName: string,
+  dispatch: DispatchAlertRecord,
+): Promise<void> {
+  await ddb
+    .send(
+      new UpdateCommand({
+        TableName: tableName,
+        Key: {
+          pk: buildDeptScopedPk(dispatch.deptId, 'DISPATCH', dispatch.dispatchId),
+          sk: 'METADATA',
+        },
+        UpdateExpression: 'SET fanOutCompletedAt = if_not_exists(fanOutCompletedAt, :now)',
+        ExpressionAttributeValues: { ':now': Math.floor(Date.now() / 1000) },
+      }),
+    )
+    .catch((error: unknown) => {
+      logError('fanout.completed_stamp_failed', error, dispatch.dispatchId);
+      emitOutcomeMetric(METRIC_NAMESPACE, 'FanOutCompletedStampFailed');
+    });
+}
+
+/**
  * The page text from the dispatch record as it is now (the fan-out-started UpdateItem's ALL_NEW
  * image), falling back field by field to the stream image - a partial or missing read never
  * blanks a page (chain review R2-M2).
@@ -479,6 +507,9 @@ async function fanOutOneDispatch(
       });
       emitOutcomeMetric(METRIC_NAMESPACE, 'EmptyRoster');
       if (audience.length === 0) {
+        // Nobody to page: tone 1 is as complete as it will get (a CAD update then has no
+        // audience either, and must not wait for a fan-out that will never finish).
+        await stampFanOutCompleted(ddb, tableName, dispatch);
         return;
       }
       // Eligible members exist but none was reachable now. The roster and the tone ladder are
@@ -499,24 +530,7 @@ async function fanOutOneDispatch(
       (result): result is PromiseRejectedResult => result.status === 'rejected',
     );
     if (failures.length === 0) {
-      // Every tone-1 page (and its RECEIPT#) exists: the CAD update notifier waits for this before
-      // choosing its audience (chain review R2-M2). A failed stamp only delays update pushes.
-      await ddb
-        .send(
-          new UpdateCommand({
-            TableName: tableName,
-            Key: {
-              pk: buildDeptScopedPk(dispatch.deptId, 'DISPATCH', dispatch.dispatchId),
-              sk: 'METADATA',
-            },
-            UpdateExpression: 'SET fanOutCompletedAt = if_not_exists(fanOutCompletedAt, :now)',
-            ExpressionAttributeValues: { ':now': Math.floor(Date.now() / 1000) },
-          }),
-        )
-        .catch((error: unknown) => {
-          logError('fanout.completed_stamp_failed', error, dispatch.dispatchId);
-          emitOutcomeMetric(METRIC_NAMESPACE, 'FanOutCompletedStampFailed');
-        });
+      await stampFanOutCompleted(ddb, tableName, dispatch);
     }
 
     let schedulingError: Error | undefined;

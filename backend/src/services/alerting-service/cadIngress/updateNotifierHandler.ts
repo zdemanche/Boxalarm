@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { PublishCommand, type SNSClient } from '@aws-sdk/client-sns';
 import {
+  DeleteCommand,
   GetCommand,
   PutCommand,
   QueryCommand,
@@ -14,6 +15,7 @@ import { buildAlertingEnvelope } from '../escalation/alertingEnvelope.js';
 import { createSnsClient, readFanOutTopicConfig } from '../fanout/snsClient.js';
 import { logError, logInfo } from '../dispatches/logger.js';
 import { emitCadMetric } from './metrics.js';
+import { pendingNoticeKey } from './updateRepository.js';
 
 /**
  * The UPDATE push for a CAD update (docs/decisions/2026-09-30-cad-dispatch-updates.md).
@@ -35,12 +37,42 @@ interface UpdateRecord {
   readonly dispatchId: string;
   readonly updateId: string;
   readonly summary: string;
+  readonly receivedAt?: number;
+  readonly notifiedAt?: number;
 }
 
 export interface CadUpdateNotice {
   readonly deptId: string;
   readonly dispatchId: string;
   readonly updateId: string;
+}
+
+/** The update's own record that its crew was notified, and its pending marker cleared. */
+async function markNotified(
+  ddb: DynamoDBDocumentClient,
+  tableName: string,
+  update: UpdateRecord,
+  receivedAt: number | undefined,
+): Promise<void> {
+  await ddb.send(
+    new UpdateCommand({
+      TableName: tableName,
+      Key: {
+        pk: buildDeptScopedPk(update.deptId, 'DISPATCH', update.dispatchId),
+        sk: `UPDATE#${update.updateId}`,
+      },
+      UpdateExpression: 'SET notifiedAt = if_not_exists(notifiedAt, :now)',
+      ExpressionAttributeValues: { ':now': Math.floor(Date.now() / 1000) },
+    }),
+  );
+  if (receivedAt !== undefined) {
+    await ddb.send(
+      new DeleteCommand({
+        TableName: tableName,
+        Key: pendingNoticeKey(update.deptId, receivedAt, update.dispatchId, update.updateId),
+      }),
+    );
+  }
 }
 
 async function readUpdate(
@@ -73,6 +105,8 @@ async function readUpdate(
     dispatchId: notice.dispatchId,
     updateId: notice.updateId,
     summary: typeof Item.summary === 'string' ? Item.summary : 'Dispatch updated',
+    ...(typeof Item.receivedAt === 'number' ? { receivedAt: Item.receivedAt } : {}),
+    ...(typeof Item.notifiedAt === 'number' ? { notifiedAt: Item.notifiedAt } : {}),
   };
 }
 
@@ -250,5 +284,8 @@ export const handler = async (notice: CadUpdateNotice): Promise<void> => {
     return;
   }
   // Throws on a failure: Lambda retries the async event, then the alarmed on-failure queue.
-  await processUpdate(ddb, sns, tableName, topicArn, update);
+  if (update.notifiedAt === undefined) {
+    await processUpdate(ddb, sns, tableName, topicArn, update);
+  }
+  await markNotified(ddb, tableName, update, update.receivedAt);
 };

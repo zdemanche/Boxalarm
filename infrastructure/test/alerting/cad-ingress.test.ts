@@ -29,6 +29,7 @@ const WEBHOOK_FN = "boxalarm-dev-alerting-cad-webhook";
 const EMAIL_FN = "boxalarm-dev-alerting-cad-email";
 const COPY_FN = "boxalarm-dev-alerting-cad-source-copy-consumer";
 const NOTIFIER_FN = "boxalarm-dev-alerting-cad-update-notifier";
+const SWEEP_FN = "boxalarm-dev-alerting-cad-update-sweep";
 const PLATFORM_TABLE = "arn:aws:dynamodb:us-east-1:123456789012:table/boxalarm-dev-platform-table";
 
 beforeEach(() => {
@@ -38,6 +39,7 @@ beforeEach(() => {
 async function build(emailDomain?: string, webhookAllowedCidrs?: string[]): Promise<void> {
   new CadIngress("cad-ingress", {
     env: "dev",
+    deptId: "nichols-fd",
     alertingTableArn: TABLE_ARN,
     alertingCmkArn: CMK_ARN,
     alertingTableName: "boxalarm-dev-alerting-table",
@@ -68,7 +70,7 @@ function touchesTable(statements: PolicyStatement[], tableArn: string): boolean 
 }
 
 describe("CadIngress IAM: alerting boundary, never a LOB table", { timeout: 30_000 }, () => {
-  it.each([WEBHOOK_FN, EMAIL_FN, COPY_FN, NOTIFIER_FN])(
+  it.each([WEBHOOK_FN, EMAIL_FN, COPY_FN, NOTIFIER_FN, SWEEP_FN])(
     "%s runs under the alerting permissions boundary with no platform/incident grant",
     async (fn) => {
       await build("ingress.nichols.example.org");
@@ -110,6 +112,7 @@ describe("CadIngress IAM: alerting boundary, never a LOB table", { timeout: 30_0
       "DEPT#*#DISPATCH_IDEMPOTENCY#*",
       "DEPT#*#DISPATCH#*",
       "DEPT#*#OUTBOX",
+      "DEPT#*#CAD_UPDATE_PENDING",
     ]);
     // No Query/Scan/Publish: the webhook cannot run a fan-out or read receipts. (UpdateItem is
     // granted on DISPATCH#* for recording a CAD update on the DISPATCH_ALERT.)
@@ -161,6 +164,22 @@ describe("CadIngress update notifier (CAD updates to a paged call)", { timeout: 
     expect(invoke?.inputs).toMatchObject({ maximumRetryAttempts: 2 });
   });
 
+  it("a 5-minute sweep re-drives pending updates: reads only the pending partition, invokes only the notifier", async () => {
+    await build();
+    const schedule = resourcesOfType("aws:scheduler/schedule:Schedule").find(
+      (r) => r.inputs.name === "boxalarm-dev-alerting-nichols-fd-cad-update-sweep",
+    );
+    expect(schedule?.inputs.scheduleExpression).toBe("rate(5 minutes)");
+    const statements = statementsForRole(SWEEP_FN);
+    expect(statements.find((st) => st.Sid === "CadUpdatePendingRead")?.Condition).toEqual({
+      "ForAllValues:StringLike": { "dynamodb:LeadingKeys": ["DEPT#*#CAD_UPDATE_PENDING"] },
+    });
+    expect(isGranted(statements, "lambda:InvokeFunction", (r) => r.endsWith(NOTIFIER_FN))).toBe(
+      true,
+    );
+    expect(lambdaEnv(SWEEP_FN).CAD_SWEEP_DEPT_ID).toBe("nichols-fd");
+  });
+
   it("publishes only to the alerting topic and touches only dispatch partitions", async () => {
     await build();
     const statements = statementsForRole(NOTIFIER_FN);
@@ -169,7 +188,11 @@ describe("CadIngress update notifier (CAD updates to a paged call)", { timeout: 
     expect(table?.Condition).toEqual({
       "ForAllValues:StringLike": { "dynamodb:LeadingKeys": ["DEPT#*#DISPATCH#*"] },
     });
-    expect(isGranted(statements, "dynamodb:DeleteItem", () => true)).toBe(false);
+    // It may delete only pending-update markers.
+    const del = statements.filter((st) => [st.Action].flat().includes("dynamodb:DeleteItem"));
+    expect(del.map((st) => st.Condition)).toEqual([
+      { "ForAllValues:StringLike": { "dynamodb:LeadingKeys": ["DEPT#*#CAD_UPDATE_PENDING"] } },
+    ]);
   });
 });
 
@@ -310,6 +333,8 @@ describe(
       ["boxalarm-dev-alerting-cad-duplicate", [PAGE]],
       ["boxalarm-dev-alerting-cad-source-dropped", [PAGE, OPS]],
       ["boxalarm-dev-alerting-cad-update-push-failed", [PAGE]],
+      ["boxalarm-dev-alerting-cad-update-unnotified", [PAGE]],
+      ["boxalarm-dev-alerting-cad-update-sweep-errors", [PAGE]],
       ["boxalarm-dev-alerting-cad-update-notifier-failures-not-empty", [PAGE]],
       ["boxalarm-dev-alerting-cad-raw-fallback", [PAGE, OPS]],
       ["boxalarm-dev-alerting-cad-webhook-4xx", [PAGE, OPS]],

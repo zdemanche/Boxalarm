@@ -15,7 +15,9 @@ const UPDATE_ITEM = {
   dispatchId: 'd-1',
   updateId: UPDATE_ID,
   summary: 'Units: E1, L2, R1',
+  receivedAt: 1_800_000_000,
 };
+const PENDING_KEY = `DEPT#nichols-fd#CAD_UPDATE_PENDING|001800000000#d-1#${UPDATE_ID}`;
 
 describe('CAD update notifier', () => {
   const originalEnv = { ...process.env };
@@ -43,6 +45,7 @@ describe('CAD update notifier', () => {
         },
       ],
       [`${PK}|UPDATE#${UPDATE_ID}`, UPDATE_ITEM],
+      [PENDING_KEY, { entityType: 'CAD_UPDATE_PENDING' }],
       // Tone-1 receipts are the audience (push + sms for mbr-1, push for mbr-2); a tone-2
       // receipt for mbr-3 does not make mbr-3 a tone-1 member.
       [`${PK}|RECEIPT#mbr-1#push#1`, { pk: PK, sk: 'RECEIPT#mbr-1#push#1' }],
@@ -73,9 +76,15 @@ describe('CAD update notifier', () => {
           }
           case 'UpdateCommand': {
             const k = key(input.Key as Record<string, unknown>);
-            items.set(k, { ...items.get(k), sentAt: 1 });
+            const field = String(input.UpdateExpression).includes('notifiedAt')
+              ? 'notifiedAt'
+              : 'sentAt';
+            items.set(k, { ...items.get(k), [field]: 1 });
             return Promise.resolve({});
           }
+          case 'DeleteCommand':
+            items.delete(key(input.Key as Record<string, unknown>));
+            return Promise.resolve({});
           default:
             return Promise.reject(new Error(command.constructor.name));
         }
@@ -134,6 +143,12 @@ describe('CAD update notifier', () => {
           .toneSequence,
       ).toBeUndefined();
     }
+  });
+
+  it('stamps notifiedAt on the update and clears its pending marker', async () => {
+    await run();
+    expect(items.get(`${PK}|UPDATE#${UPDATE_ID}`)?.notifiedAt).toBe(1);
+    expect(items.has(PENDING_KEY)).toBe(false);
   });
 
   it('a retried invoke sends nothing twice (exactly once per update per member)', async () => {

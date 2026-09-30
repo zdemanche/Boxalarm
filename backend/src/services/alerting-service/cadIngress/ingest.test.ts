@@ -356,6 +356,23 @@ describe('CAD updates to an incident already paged (decision 2026-09-30)', () =>
     expect([...table.items.values()].filter((i) => i.eventType).length).toBe(outboxBefore);
   });
 
+  it('notifier gap: an update leaves a pending marker; a retry of an unnotified update hands it off again', async () => {
+    const table: FakeTable = { items: new Map() };
+    await at(table, TEXT, 1_800_000_000);
+    const update = TEXT.replace('XST: ELM / OAK', 'XST: ELM / PINE');
+    expect((await at(table, update, 1_800_000_100)).outcome).toBe('updated');
+    expect(items(table, 'CAD_UPDATE_PENDING')).toHaveLength(1);
+    // The ingress Lambda died after commit: no notifiedAt. The CAD retries the same update.
+    expect((await at(table, update, 1_800_000_160)).outcome).toBe('duplicate');
+    const logged = () => vi.mocked(console.log).mock.calls.map(([l]) => String(l));
+    expect(logged().filter((l) => l.includes('"CadUpdateNoticeRedriven":1'))).toHaveLength(1);
+    // Once notified, a retry hands nothing off.
+    const record = items(table, 'DISPATCH_UPDATE')[0]!;
+    record.notifiedAt = 1_800_000_200;
+    await at(table, update, 1_800_000_220);
+    expect(logged().filter((l) => l.includes('"CadUpdateNoticeRedriven":1'))).toHaveLength(1);
+  });
+
   it('R2-M1: the original re-sent after a correction is a duplicate - no revert, no push', async () => {
     const table: FakeTable = { items: new Map() };
     const original = 'INC: 2026-7\nADDR: 12 ELM ST, NICHOLS\nUNITS: E1';
