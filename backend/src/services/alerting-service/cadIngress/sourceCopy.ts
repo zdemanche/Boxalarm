@@ -1,6 +1,10 @@
 import { GetCommand, type DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
 import { buildDeptScopedPk, toVerifiedDeptId, type VerifiedDeptId } from '@boxalarm/dept-scope';
-import { validateCadParserTemplate, type CadParserTemplate } from '@boxalarm/cad-parser';
+import {
+  isTimeZone,
+  validateCadParserTemplate,
+  type CadParserTemplate,
+} from '@boxalarm/cad-parser';
 
 /**
  * CAD_INGRESS_COPY: the department's CAD sources as the ingress Lambdas read them
@@ -34,6 +38,8 @@ export interface CadSourceCopy {
   readonly email?: CadEmailSource;
   readonly webhook?: CadWebhookSource;
   readonly parser?: CadParserTemplate;
+  /** IANA zone the CAD's times are written in (default America/New_York). */
+  readonly timeZone?: string;
 }
 
 export const CAD_SOURCE_ID = /^[a-z0-9][a-z0-9-]{0,31}$/;
@@ -91,7 +97,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
  */
 export function toCadSource(raw: unknown): CadSourceCopy | undefined {
   if (!isRecord(raw)) return undefined;
-  const { sourceId, label, enabled, email, webhook, parser } = raw;
+  const { sourceId, label, enabled, email, webhook, parser, timeZone } = raw;
   if (typeof sourceId !== 'string' || !CAD_SOURCE_ID.test(sourceId)) return undefined;
   let emailSource: CadEmailSource | undefined;
   if (isRecord(email)) {
@@ -121,6 +127,7 @@ export function toCadSource(raw: unknown): CadSourceCopy | undefined {
     enabled: enabled === true,
     ...(emailSource ? { email: emailSource } : {}),
     ...(webhookSource ? { webhook: webhookSource } : {}),
+    ...(isTimeZone(timeZone) ? { timeZone } : {}),
     // An invalid stored template is dropped: the source still pages, as RAW (fail open).
     ...(template?.ok ? { parser: template.template } : {}),
   };

@@ -7,7 +7,7 @@ CAD dispatches reach Boxalarm two ways, both decided in `docs/decisions/2026-09-
 
 Both run **sender authentication first and fail closed**: a message that fails any check never pages anyone, not even as raw text. Radio tone-out (N1.9) is the compensating control for a genuine dispatch dropped that way. Once authenticated, a message always pages: if the source's parser template cannot find the address it pages as raw text, address `SEE DISPATCH TEXT`, flagged VERIFY.
 
-Both write the same `DISPATCH_ALERT` the manual route writes (`sourceSystem: CAD`, `ingressChannel: cad-email | cad-webhook`, `cadSourceId`, `cadParseStatus`, `verifyRequired`), and the table stream's fan-out pages from there. A CAD resend of the same incident number and dispatch time is a duplicate and does not page again.
+Both write the same `DISPATCH_ALERT` the manual route writes (`sourceSystem: CAD`, `ingressChannel: cad-email | cad-webhook`, `cadSourceId`, `cadParseStatus`, `verifyRequired`), and the table stream's fan-out pages from there. When the template reads an incident number, that number alone identifies the call (for 24 hours): a later message for it is an **update** of the paged call (recorded, the call refreshed, a non-escalating UPDATE push to the crew already paged - never a second page), and any message seen before is a duplicate. Without an incident number, identical text within 10 minutes is a duplicate and the same text later is a new call (`docs/decisions/2026-09-30-cad-dispatch-updates.md`).
 
 ## Where the configuration lives
 
@@ -36,6 +36,7 @@ A saved change reaches ingress in seconds. If `…-alerting-cad-source-copy-dlq-
 | `…-alerting-cad-replay-rejected` | A webhook signature or email identical to one already written was refused | The replay marker commits in the same transaction as the dispatch, so the original paged. A CAD retry of identical bytes after a timeout, or a replay attack |
 | `…-alerting-cad-rejected` | A dependency failed (503 to the CAD, or an email Lambda retry), or a webhook body was too large | The CAD retries a webhook; Lambda retries an email twice. Check the ingress Lambda logs |
 | `…-alerting-cad-source-dropped` (also chief) | A saved source failed re-validation in the alerting plane and is not accepted | Re-save it from Settings → CAD sources; check `alerting.cadSourceCopy.sourceDropped` |
+| `…-alerting-cad-older-message` | A message for a paged incident was stamped earlier than the one already applied and was kept as history only (not applied, not pushed) | Occasional: a delayed email. Frequent: the source's dispatch-time rule or time zone is wrong and real corrections are being discarded - Test parse shows how the time resolves; fix the rule or the source's time zone |
 | `…-alerting-cad-update-unnotified` | A CAD update is more than 10 minutes old and its UPDATE push has still not gone out (hand-off lost, or tone-1 fan-out never completed). The 5-minute sweep keeps re-driving it | The update is on the call; relay it by radio if it matters. Check the `cad-update-notifier` and fan-out logs |
 | `…-alerting-cad-raw-fallback` (also chief) | A dispatch paged as raw text | The page went. Fix the template: paste the dispatch into Settings → CAD sources → Test parse |
 | `…-alerting-cad-gateway-refused` (also chief) | API Gateway refused a request on this department's source path before the Lambda ran (403: missing or wrong `x-api-key`, or an IP outside `cadWebhookAllowedCidrs`). Alarms at the first one | A genuine CAD sending the old or no API key drops every dispatch this way. Check the access log `/aws/apigateway/boxalarm-<env>-cad-ingress-api-access` (path, source IP, apiKeyId); give the CAD the current `x-api-key`; radio is the page of record until fixed |
@@ -127,6 +128,10 @@ Negative check (safe on prod): send the same text from a personal address that i
 ## A new email address
 
 If a source's address has leaked into spam lists (the token is noise reduction, not authentication), Settings → CAD sources → *New email address*. Update the CAD to the new address **first**: the old one stops paging within a minute.
+
+## Dispatch times
+
+CAD updates to a call are ordered by the dispatch time the template reads, but only when it is one of two shapes: a full date and time (`MM/DD/YYYY HH:MM[:SS]` or `YYYY-MM-DD HH:MM[:SS]`, within 24 hours of receipt), or a bare time of day (`HHMM`, `HH:MM`, `HHMMSS`, `HH:MM:SS`), placed on the original dispatch's day - `0003` after `2355` is the next day. Times are read in the source's time zone (default `America/New_York`). Any other shape leaves updates in the order they arrive, and re-arrivals of earlier messages are still caught as duplicates. Test parse shows how a sample's time resolves.
 
 ## Request body
 

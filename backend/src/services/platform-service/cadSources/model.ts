@@ -1,6 +1,8 @@
 import { randomInt } from 'node:crypto';
 import {
   CAD_FIELDS,
+  DEFAULT_CAD_TIME_ZONE,
+  isTimeZone,
   validateCadParserTemplate,
   type CadField,
   type CadFieldRule,
@@ -58,6 +60,8 @@ export interface StoredCadSource {
   readonly emailToken?: string;
   readonly savedSenders?: readonly string[];
   readonly parser?: CadParserTemplate;
+  /** IANA zone the CAD writes its times in (default America/New_York). */
+  readonly timeZone?: string;
 }
 
 export interface CadIngressValue {
@@ -73,6 +77,7 @@ export interface CadSourceInput {
   readonly allowedSenders: readonly string[];
   readonly webhookEnabled: boolean;
   readonly parserFields?: Partial<Record<CadField, CadFieldRule>>;
+  readonly timeZone?: string;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -106,6 +111,7 @@ const INPUT_KEYS = [
   'allowedSenders',
   'webhookEnabled',
   'parser',
+  'timeZone',
 ];
 
 /** Validates `PUT /platform/cad-sources` `{ sources: [...] }`. */
@@ -135,7 +141,22 @@ export function validateSourcesInput(
         errors.push({ field: `${at}.${key}`, message: 'is not a recognized field' });
       }
     }
-    const { sourceId, label, enabled, emailEnabled, webhookEnabled, allowedSenders, parser } = raw;
+    const {
+      sourceId,
+      label,
+      enabled,
+      emailEnabled,
+      webhookEnabled,
+      allowedSenders,
+      parser,
+      timeZone,
+    } = raw;
+    if (timeZone !== undefined && !isTimeZone(timeZone)) {
+      errors.push({
+        field: `${at}.timeZone`,
+        message: 'must be an IANA time zone such as America/New_York',
+      });
+    }
     if (typeof sourceId !== 'string' || !SOURCE_ID.test(sourceId)) {
       errors.push({
         field: `${at}.sourceId`,
@@ -201,6 +222,7 @@ export function validateSourcesInput(
       allowedSenders: [...new Set(senders)],
       webhookEnabled: webhookEnabled === true,
       ...(parserFields ? { parserFields } : {}),
+      ...(isTimeZone(timeZone) ? { timeZone } : {}),
     });
   });
   return errors.length > 0 ? { ok: false, errors } : { ok: true, sources };
@@ -264,6 +286,7 @@ export function mergeSources(
         ...(source.parserFields
           ? { parser: { version: parserVersion, fields: source.parserFields } }
           : {}),
+        ...(source.timeZone ? { timeZone: source.timeZone } : {}),
       };
     }),
   };
@@ -312,6 +335,7 @@ export function toSourceView(
       webhookUrl && source.webhookKey?.keyId ? `${webhookUrl}/${source.webhookKey.keyId}` : null,
     webhookRotatedAt: source.webhookKey?.rotatedAt ?? null,
     parser: source.parser ?? null,
+    timeZone: source.timeZone ?? DEFAULT_CAD_TIME_ZONE,
   };
 }
 

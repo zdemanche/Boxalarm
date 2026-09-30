@@ -253,6 +253,28 @@ describe('POST /platform/cad-sources/test-parse', () => {
     expect(JSON.parse(response.body)).toMatchObject({ status: 'RAW', reason: 'TIMEOUT' });
   }, 10_000);
 
+  it('R3-M1: shows how the dispatch time resolves, or that it cannot be ordered by', async () => {
+    const preview = async (sample: string) =>
+      JSON.parse(
+        (
+          (await handler(
+            event('POST /api/v1/platform/cad-sources/test-parse', {
+              fields: { address: { label: 'ADDR' }, dispatchTime: { label: 'TIME' } },
+              sample,
+            }),
+          )) as { body: string }
+        ).body,
+      ) as Record<string, unknown>;
+    expect(await preview('ADDR: 1 MAIN ST\nTIME: 14:05')).toMatchObject({
+      dispatchTimeResolved: expect.stringMatching(
+        /^\d{4}-\d{2}-\d{2}T\d{2}:05:00\.000Z$/,
+      ) as unknown,
+    });
+    expect(await preview('ADDR: 1 MAIN ST\nTIME: TUESDAY')).toMatchObject({
+      dispatchTimeUnordered: true,
+    });
+  });
+
   it('previews the fail-open RAW result', async () => {
     const response = (await handler(
       event('POST /api/v1/platform/cad-sources/test-parse', {

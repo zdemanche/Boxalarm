@@ -334,3 +334,110 @@ export async function parseCadTextBounded(
     );
   });
 }
+
+/**
+ * A CAD message time, resolved for ORDERING updates of one incident (chain review R3-M1:
+ * `Date.parse("2355")` is the year 2355 and `"0003"` the year 3, so every correction after
+ * midnight looked older than the original). Only two shapes are trusted:
+ *  - a full date and time (MM/DD/YYYY or YYYY-MM-DD, then HH:MM[:SS]), read in the
+ *    department's time zone, accepted only within 24 h of the message's receipt;
+ *  - a bare time of day (HHMM, HH:MM, HHMMSS, HH:MM:SS), placed on the day of `anchor` (the
+ *    original dispatch's time, or the receipt for the original itself) - and when that lands
+ *    more than 12 h before or after the anchor, on the next or previous day (midnight wrap).
+ * Anything else is undefined: unordered, applied in arrival order.
+ */
+export function resolveCadMessageTime(
+  text: string | undefined,
+  options: {
+    readonly receivedAt: number;
+    readonly anchor?: number | undefined;
+    readonly timeZone: string;
+  },
+): number | undefined {
+  if (!text) return undefined;
+  const value = text.trim();
+  const within = (epoch: number) =>
+    Math.abs(epoch - options.receivedAt) <= 24 * 3600 ? epoch : undefined;
+
+  const bare = /^(\d{1,2}):?(\d{2})(?::?(\d{2}))?$/.exec(value);
+  if (bare) {
+    const [hour, minute, second] = [Number(bare[1]), Number(bare[2]), Number(bare[3] ?? 0)];
+    if (hour > 23 || minute > 59 || second > 59) return undefined;
+    const anchor = options.anchor ?? options.receivedAt;
+    const day = zonedParts(anchor, options.timeZone);
+    let epoch = zonedToEpoch(day.year, day.month, day.day, hour, minute, second, options.timeZone);
+    if (epoch < anchor - 12 * 3600) epoch += 24 * 3600;
+    else if (epoch > anchor + 12 * 3600) epoch -= 24 * 3600;
+    return within(epoch);
+  }
+
+  const full =
+    /^(?:(\d{1,2})\/(\d{1,2})\/(\d{2}|\d{4})|(\d{4})-(\d{2})-(\d{2}))[ T]+(\d{1,2}):(\d{2})(?::(\d{2}))?$/.exec(
+      value,
+    );
+  if (!full) return undefined;
+  const year = full[4] ? Number(full[4]) : Number(full[3]!.length === 2 ? `20${full[3]}` : full[3]);
+  const month = Number(full[4] ? full[5] : full[1]);
+  const day = Number(full[4] ? full[6] : full[2]);
+  const [hour, minute, second] = [Number(full[7]), Number(full[8]), Number(full[9] ?? 0)];
+  if (month < 1 || month > 12 || day < 1 || day > 31 || hour > 23 || minute > 59 || second > 59) {
+    return undefined;
+  }
+  return within(zonedToEpoch(year, month, day, hour, minute, second, options.timeZone));
+}
+
+function zonedParts(epoch: number, timeZone: string) {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone,
+    year: 'numeric',
+    month: 'numeric',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: 'numeric',
+    second: 'numeric',
+    hourCycle: 'h23',
+  }).formatToParts(new Date(epoch * 1000));
+  const get = (type: string) => Number(parts.find((p) => p.type === type)?.value);
+  return {
+    year: get('year'),
+    month: get('month'),
+    day: get('day'),
+    hour: get('hour'),
+    minute: get('minute'),
+    second: get('second'),
+  };
+}
+
+/** Wall-clock time in `timeZone` -> epoch seconds (two passes settle a DST offset). */
+function zonedToEpoch(
+  year: number,
+  month: number,
+  day: number,
+  hour: number,
+  minute: number,
+  second: number,
+  timeZone: string,
+): number {
+  const wall = Date.UTC(year, month - 1, day, hour, minute, second) / 1000;
+  let epoch = wall;
+  for (let i = 0; i < 2; i++) {
+    const seen = zonedParts(epoch, timeZone);
+    const seenWall =
+      Date.UTC(seen.year, seen.month - 1, seen.day, seen.hour, seen.minute, seen.second) / 1000;
+    epoch += wall - seenWall;
+  }
+  return epoch;
+}
+
+/** A valid IANA time zone name? */
+export function isTimeZone(value: unknown): value is string {
+  if (typeof value !== 'string' || value.length === 0) return false;
+  try {
+    new Intl.DateTimeFormat('en-US', { timeZone: value });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export const DEFAULT_CAD_TIME_ZONE = 'America/New_York';

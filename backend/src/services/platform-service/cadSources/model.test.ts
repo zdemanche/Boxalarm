@@ -61,6 +61,7 @@ describe('validateSourcesInput', () => {
     ['email with no allowed sender (no accept-anyone mode)', { ...valid, allowedSenders: [] }],
     ['an invalid parser regex', { ...valid, parser: { fields: { address: { pattern: '(' } } } }],
     ['a client-supplied server field', { ...valid, recipientToken: 'x' }],
+    ['an invalid time zone', { ...valid, timeZone: 'Mars/Olympus' }],
   ])('rejects %s', (_name, source) => {
     const sources = source === null ? [valid, valid] : [source];
     expect(validateSourcesInput({ sources }).ok).toBe(false);

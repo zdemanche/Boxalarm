@@ -7,6 +7,8 @@ import {
   normalizeDispatchText,
   parseCadText,
   parseCadTextBounded,
+  resolveCadMessageTime,
+  DEFAULT_CAD_TIME_ZONE,
   type CadParseResult,
   type CadParsedFields,
 } from '@boxalarm/cad-parser';
@@ -22,7 +24,6 @@ import { replayMarkerItem } from './replayGuard.js';
 import { notifyUpdate } from './notifyUpdate.js';
 import {
   lockedDispatchId,
-  parseCadMessageTime,
   recordCadUpdate,
   updateIdFor,
   updateNeedsNotice,
@@ -223,7 +224,12 @@ export async function ingestCadDispatch(
   );
 
   const contentHash = dispatchTextFingerprint(normalizeDispatchText(input.text));
-  const messageTime = parseCadMessageTime(built.fields.dispatchTime);
+  const timeZone = source.timeZone ?? DEFAULT_CAD_TIME_ZONE;
+  // The original's time, placed on the day it was received (chain review R3-M1).
+  const messageTime = resolveCadMessageTime(built.fields.dispatchTime, {
+    receivedAt: input.receivedAt,
+    timeZone,
+  });
   const replayMarker = input.replay
     ? replayMarkerItem(
         { deptId, sourceId: source.sourceId, token: input.replay.token },
@@ -271,7 +277,8 @@ export async function ingestCadDispatch(
           contentHash,
           channel,
           receivedAt: input.receivedAt,
-          ...(messageTime !== undefined ? { messageTime } : {}),
+          timeZone,
+          ...(built.fields.dispatchTime ? { messageTimeText: built.fields.dispatchTime } : {}),
           ...(replayMarker ? { replayMarker } : {}),
         })
       : ({ outcome: 'missing' } as const);

@@ -300,3 +300,23 @@ test('a new email address is confirmed first and then shown', async () => {
     await screen.findByText('dispatch+nichols-fd.county.zzzzzzzzzzzzzzzz@cad.nichols.example.org'),
   ).toBeTruthy();
 });
+
+test('test parse says when the dispatch time cannot be ordered by', async () => {
+  server.use(
+    http.get('/api/v1/platform/cad-sources', () => HttpResponse.json(STORED)),
+    http.post('/api/v1/platform/cad-sources/test-parse', () =>
+      HttpResponse.json({
+        status: 'PARSED',
+        fields: { address: '1 MAIN ST', dispatchTime: 'TUESDAY' },
+        dispatchTimeUnordered: true,
+      }),
+    ),
+  );
+  const user = userEvent.setup();
+  renderPage();
+  fireEvent.change(await screen.findByLabelText('Sample dispatch text'), {
+    target: { value: 'ADDR: 1 MAIN ST' },
+  });
+  await user.click(screen.getByRole('button', { name: 'Test parse' }));
+  expect(await screen.findByText(/applied in the order they\s+arrive/)).toBeTruthy();
+});

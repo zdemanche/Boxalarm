@@ -5,6 +5,7 @@ import {
   dispatchTextFingerprint,
   parseCadText,
   parseCadTextBounded,
+  resolveCadMessageTime,
   validateCadParserTemplate,
   type CadParserTemplate,
 } from './index.js';
@@ -178,4 +179,53 @@ describe('parseCadTextBounded (security review M3: a hard deadline, failing open
     expect(await parseCadTextBounded(undefined, 'x')).toMatchObject({ reason: 'NO_TEMPLATE' });
     expect(await parseCadTextBounded(TEMPLATE, '  ')).toMatchObject({ reason: 'EMPTY' });
   });
+});
+
+describe('resolveCadMessageTime (chain review R3-M1)', () => {
+  const tz = 'America/New_York';
+  // 2026-09-30 23:58 EDT = 2026-10-01 03:58Z
+  const nearMidnight = Date.UTC(2026, 9, 1, 3, 58) / 1000;
+
+  it('a bare 2355 then 0003 resolves across midnight: the correction is LATER', () => {
+    const original = resolveCadMessageTime('2355', { receivedAt: nearMidnight, timeZone: tz })!;
+    const correction = resolveCadMessageTime('0003', {
+      receivedAt: nearMidnight + 480,
+      anchor: original,
+      timeZone: tz,
+    })!;
+    expect(new Date(original * 1000).toISOString()).toBe('2026-10-01T03:55:00.000Z');
+    expect(correction - original).toBe(8 * 60);
+  });
+
+  it('reads HH:MM and HH:MM:SS, in the department time zone', () => {
+    const at = Date.UTC(2026, 8, 30, 16, 0) / 1000; // 12:00 EDT
+    expect(resolveCadMessageTime('11:42', { receivedAt: at, timeZone: tz })).toBe(
+      Date.UTC(2026, 8, 30, 15, 42) / 1000,
+    );
+    expect(resolveCadMessageTime('11:42:07', { receivedAt: at, timeZone: tz })).toBe(
+      Date.UTC(2026, 8, 30, 15, 42, 7) / 1000,
+    );
+  });
+
+  it('reads a full date-time within 24 h of receipt, and refuses one outside it', () => {
+    const at = Date.UTC(2026, 8, 30, 7, 20) / 1000;
+    expect(resolveCadMessageTime('09/30/2026 03:12', { receivedAt: at, timeZone: tz })).toBe(
+      Date.UTC(2026, 8, 30, 7, 12) / 1000,
+    );
+    expect(resolveCadMessageTime('2026-09-30 03:12:30', { receivedAt: at, timeZone: tz })).toBe(
+      Date.UTC(2026, 8, 30, 7, 12, 30) / 1000,
+    );
+    expect(resolveCadMessageTime('09/20/2026 03:12', { receivedAt: at, timeZone: tz })).toBe(
+      undefined,
+    );
+  });
+
+  it.each(['2355Z', 'yesterday', '25:00', '12:61', '', 'TUE 14:02'])(
+    '%s is unordered (undefined)',
+    (value) => {
+      expect(resolveCadMessageTime(value, { receivedAt: nearMidnight, timeZone: tz })).toBe(
+        undefined,
+      );
+    },
+  );
 });

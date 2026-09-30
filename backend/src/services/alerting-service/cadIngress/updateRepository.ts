@@ -6,6 +6,7 @@ import {
   type DynamoDBDocumentClient,
 } from '@aws-sdk/lib-dynamodb';
 import { buildDeptScopedPk, type VerifiedDeptId } from '@boxalarm/dept-scope';
+import { resolveCadMessageTime } from '@boxalarm/cad-parser';
 import type { DispatchReceived } from '../dispatches/dispatchIngressPort.js';
 import type { CadChannel } from './metrics.js';
 
@@ -32,6 +33,8 @@ export interface CadFieldChange {
   readonly to: string;
 }
 
+type ResolvedUpdateInput = RecordUpdateInput & { readonly messageTime?: number | undefined };
+
 export type RecordUpdateResult =
   | { readonly outcome: 'recorded'; readonly updateId: string; readonly changes: CadFieldChange[] }
   /** An older CAD message: kept in the history, nothing applied, nobody notified (R2-M1). */
@@ -49,8 +52,10 @@ export interface RecordUpdateInput {
   readonly contentHash: string;
   readonly channel: CadChannel;
   readonly receivedAt: number;
-  /** The CAD's own message time (parsed dispatchTime), when the template reads one. */
-  readonly messageTime?: number;
+  /** The CAD's own dispatch/message time as the template read it (free text). */
+  readonly messageTimeText?: string;
+  /** The department's time zone, for resolving that text (resolveCadMessageTime). */
+  readonly timeZone: string;
   readonly replayMarker?: Record<string, unknown> & { readonly pk: string; readonly sk: string };
 }
 
@@ -139,18 +144,12 @@ export function pendingNoticeKey(
 
 export const PENDING_NOTICE_RETENTION_SECONDS = 7 * 24 * 60 * 60;
 
-/** A CAD message time the template read (free text), as epoch seconds - or undefined. */
-export function parseCadMessageTime(text: string | undefined): number | undefined {
-  if (!text) return undefined;
-  const ms = Date.parse(text);
-  return Number.isFinite(ms) ? Math.floor(ms / 1000) : undefined;
-}
-
 export async function recordCadUpdate(
   client: DynamoDBDocumentClient,
   tableName: string,
-  input: RecordUpdateInput,
+  request: RecordUpdateInput,
 ): Promise<RecordUpdateResult> {
+  let input: ResolvedUpdateInput = request;
   const pk = buildDeptScopedPk(input.deptId, 'DISPATCH', input.dispatchId);
   const { Item: current } = await client.send(
     new GetCommand({ TableName: tableName, Key: { pk, sk: 'METADATA' }, ConsistentRead: true }),
@@ -160,8 +159,17 @@ export async function recordCadUpdate(
 
   // A message the CAD stamped EARLIER than the one last applied (a delayed email, a re-signed
   // retry of the original) is history only: it never reverts newer fields and never pushes.
+  // The time is resolved against the stored one (a bare 0003 after 2355 is the next day,
+  // chain review R3-M1); a time that does not resolve leaves the message unordered.
   const appliedTime =
     typeof current.cadMessageTime === 'number' ? current.cadMessageTime : undefined;
+  const messageTime = resolveCadMessageTime(input.messageTimeText, {
+    receivedAt: input.receivedAt,
+    anchor:
+      appliedTime ?? (typeof current.dispatchedAt === 'number' ? current.dispatchedAt : undefined),
+    timeZone: input.timeZone,
+  });
+  input = { ...input, messageTime };
   const olderThanApplied =
     input.messageTime !== undefined && appliedTime !== undefined && input.messageTime < appliedTime;
   const result = await writeUpdate(client, tableName, pk, current, input, olderThanApplied);
@@ -181,7 +189,7 @@ async function writeUpdate(
   tableName: string,
   pk: string,
   current: Record<string, unknown>,
-  input: RecordUpdateInput,
+  input: ResolvedUpdateInput,
   historyOnly: boolean,
 ): Promise<RecordUpdateResult | 'raced'> {
   const changes = historyOnly ? [] : diffDispatch(current, input.dispatch, input.parseStatus);

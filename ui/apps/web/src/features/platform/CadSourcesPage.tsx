@@ -72,6 +72,7 @@ interface SourceDraft {
   sendersText: string;
   webhookEnabled: boolean;
   rules: Record<CadField, RuleDraft>;
+  timeZone: string;
   view: CadSourceView | null;
 }
 
@@ -98,6 +99,7 @@ function toDraft(view: CadSourceView): SourceDraft {
     sendersText: view.allowedSenders.join('\n'),
     webhookEnabled: view.webhookEnabled,
     rules,
+    timeZone: view.timeZone ?? '',
     view,
   };
 }
@@ -112,6 +114,7 @@ function newDraft(): SourceDraft {
     sendersText: '',
     webhookEnabled: false,
     rules: emptyRules(),
+    timeZone: '',
     view: null,
   };
 }
@@ -139,6 +142,7 @@ function toInput(draft: SourceDraft): CadSourceInput {
       .filter(Boolean),
     webhookEnabled: draft.webhookEnabled,
     ...(Object.keys(fields).length > 0 ? { parser: { fields } } : {}),
+    ...(draft.timeZone.trim() ? { timeZone: draft.timeZone.trim() } : {}),
   };
 }
 
@@ -379,6 +383,14 @@ function SourceEditor({
             updates to a call page as new calls. Add an incident number rule if the CAD sends one.
           </p>
         ) : null}
+        <TextInput
+          label="CAD time zone"
+          help="The IANA zone the CAD writes its times in, e.g. America/New_York (the default). Used to order CAD updates by their dispatch time."
+          value={draft.timeZone}
+          placeholder="America/New_York"
+          onChange={(e) => onChange({ timeZone: e.target.value })}
+          error={errorFor('timeZone')}
+        />
         <ParserEditor draft={draft} index={index} errors={errors} onChange={onChange} />
 
         <Button type="button" variant="danger" onClick={onRemove} style={{ width: 'fit-content' }}>
@@ -649,7 +661,20 @@ function ParserEditor({
               ))}
             </dl>
           </div>
-        ) : result?.status === 'RAW' ? (
+        ) : null}
+        {result?.dispatchTimeResolved ? (
+          <p>
+            Dispatch time read as {new Date(result.dispatchTimeResolved).toLocaleString()} - CAD
+            updates to a call are ordered by it.
+          </p>
+        ) : result?.dispatchTimeUnordered ? (
+          <p>
+            <strong>Warning:</strong> the dispatch time is not a date and time or a time of day
+            (HHMM, HH:MM) Boxalarm can order by, so CAD updates will be applied in the order they
+            arrive.
+          </p>
+        ) : null}
+        {result?.status === 'RAW' ? (
           <p>
             <strong>Raw text (VERIFY).</strong> This dispatch would still page, with the address
             &quot;SEE DISPATCH TEXT&quot; and the whole text as the narrative, because{' '}

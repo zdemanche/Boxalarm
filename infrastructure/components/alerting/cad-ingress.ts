@@ -1127,6 +1127,12 @@ export class CadIngress extends pulumi.ComponentResource {
         300,
       ),
       cadAlarm(
+        "older-message",
+        "CadIngressOlderMessage",
+        "A CAD message for a paged incident carried a dispatch time EARLIER than the one already applied, so it was kept as history only - not applied, not pushed. Expected occasionally (a delayed email). Frequent ones mean the source's dispatch-time rule or time zone is wrong and real corrections are being discarded: check Settings > CAD sources > Test parse (it shows how the time resolves) and the source's time zone.",
+        [args.pageTopicArn],
+      ),
+      cadAlarm(
         "update-unnotified",
         "CadUpdateUnnotified",
         "A CAD update to a call is more than 10 minutes old and its crew has still not been sent the UPDATE push (the hand-off was lost, or fan-out never completed). The sweep keeps re-driving it; the update shows on the call. Relay it by radio if it matters, and check the cad-update-notifier and fan-out logs.",

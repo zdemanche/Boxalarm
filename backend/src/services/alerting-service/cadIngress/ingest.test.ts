@@ -393,22 +393,48 @@ describe('CAD updates to an incident already paged (decision 2026-09-30)', () =>
     expect(items(table, 'DISPATCH_UPDATE')).toHaveLength(1);
   });
 
-  it('R2-M1: a message the CAD stamped earlier than the applied one is history only, never applied', async () => {
+  it('R3-M1: a genuinely older FULL timestamp is history only, never applied', async () => {
     const table: FakeTable = { items: new Map() };
-    await at(
-      table,
-      TEXT.replace('TIME: 09/30/2026 03:12', 'TIME: 09/30/2026 03:20'),
-      1_800_000_000,
-    );
+    const at325 = Date.UTC(2026, 8, 30, 7, 25) / 1000; // 03:25 EDT
+    await at(table, TEXT.replace('TIME: 09/30/2026 03:12', 'TIME: 09/30/2026 03:20'), at325);
     const older = TEXT.replace('TIME: 09/30/2026 03:12', 'TIME: 09/30/2026 03:15').replace(
       'ADDR: 123 MAIN ST, NICHOLS',
       'ADDR: 999 WRONG RD',
     );
-    expect((await at(table, older, 1_800_000_100)).outcome).toBe('duplicate');
+    expect((await at(table, older, at325 + 100)).outcome).toBe('duplicate');
     expect(items(table, 'DISPATCH_ALERT')[0]?.address).toBe('123 MAIN ST, NICHOLS');
     expect(items(table, 'DISPATCH_UPDATE')[0]).toMatchObject({ applied: false, changes: [] });
     const logged = vi.mocked(console.log).mock.calls.map(([l]) => String(l));
     expect(logged.some((l) => l.includes('"CadIngressOlderMessage":1'))).toBe(true);
+  });
+
+  it('R3-M1: a bare 2355 then a 0003 correction after midnight is applied and pushed', async () => {
+    const table: FakeTable = { items: new Map() };
+    const at2356 = Date.UTC(2026, 9, 1, 3, 56) / 1000; // 23:56 EDT on 30 Sep
+    const original = 'INC: 2026-9\nTIME: 2355\nADDR: 12 ELM ST, NICHOLS\nUNITS: E1';
+    const correction = 'INC: 2026-9\nTIME: 0003\nADDR: 21 ELM ST, NICHOLS\nUNITS: E1';
+    expect((await at(table, original, at2356)).outcome).toBe('created');
+    expect(items(table, 'DISPATCH_ALERT')[0]?.cadMessageTime).toBe(
+      Date.UTC(2026, 9, 1, 3, 55) / 1000,
+    );
+    expect((await at(table, correction, at2356 + 480)).outcome).toBe('updated');
+    expect(items(table, 'DISPATCH_ALERT')[0]).toMatchObject({
+      address: '21 ELM ST, NICHOLS',
+      cadMessageTime: Date.UTC(2026, 9, 1, 4, 3) / 1000,
+    });
+    const logged = vi.mocked(console.log).mock.calls.map(([l]) => String(l));
+    expect(logged.some((l) => l.includes('"CadIngressUpdated":1'))).toBe(true);
+    expect(logged.some((l) => l.includes('"CadIngressOlderMessage":1'))).toBe(false);
+  });
+
+  it('R3-M1: a time the CAD writes in a shape it cannot order by leaves updates in arrival order', async () => {
+    const table: FakeTable = { items: new Map() };
+    await at(table, 'INC: 2026-10\nTIME: TUE 2355\nADDR: 1 A ST', 1_800_000_000);
+    expect(items(table, 'DISPATCH_ALERT')[0]?.cadMessageTime).toBeUndefined();
+    expect(
+      (await at(table, 'INC: 2026-10\nTIME: MON 0001\nADDR: 2 B ST', 1_800_000_060)).outcome,
+    ).toBe('updated');
+    expect(items(table, 'DISPATCH_ALERT')[0]?.address).toBe('2 B ST');
   });
 
   it('a RAW update refreshes the VERIFY excerpt every later page carries', async () => {

@@ -364,6 +364,7 @@ describe(
       ["boxalarm-dev-alerting-cad-source-dropped", [PAGE, OPS]],
       ["boxalarm-dev-alerting-cad-update-push-failed", [PAGE]],
       ["boxalarm-dev-alerting-cad-update-unnotified", [PAGE]],
+      ["boxalarm-dev-alerting-cad-older-message", [PAGE]],
       ["boxalarm-dev-alerting-cad-gateway-refused", [PAGE, OPS]],
       ["boxalarm-dev-alerting-cad-update-sweep-errors", [PAGE]],
       ["boxalarm-dev-alerting-cad-update-notifier-failures-not-empty", [PAGE]],

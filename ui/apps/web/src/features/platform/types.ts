@@ -109,6 +109,8 @@ export interface CadSourceView {
   webhookEndpoint?: string | null;
   webhookRotatedAt: string | null;
   parser: { version: number; fields: CadParserFields } | null;
+  /** IANA zone the CAD writes its times in (default America/New_York). */
+  timeZone?: string;
 }
 
 export interface CadSourcesResponse {
@@ -129,11 +131,22 @@ export interface CadSourceInput {
   allowedSenders: string[];
   webhookEnabled: boolean;
   parser?: { fields: CadParserFields };
+  timeZone?: string;
+}
+
+/** How ingress would order updates by the dispatch time (chain review R3-M1). */
+interface CadTimeResolution {
+  dispatchTimeResolved?: string;
+  dispatchTimeUnordered?: boolean;
 }
 
 export type CadTestParseResult =
-  | { status: 'PARSED'; fields: Partial<Record<CadField, string>> }
-  | { status: 'RAW'; reason: string; fields: Partial<Record<CadField, string>> };
+  | ({ status: 'PARSED'; fields: Partial<Record<CadField, string>> } & CadTimeResolution)
+  | ({
+      status: 'RAW';
+      reason: string;
+      fields: Partial<Record<CadField, string>>;
+    } & CadTimeResolution);
 
 /** POST .../webhook-key: the new key, shown once. */
 export interface RotatedWebhookKey {

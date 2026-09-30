@@ -12,7 +12,12 @@ import {
   type CedarPrincipalContext,
   type GuardEvent,
 } from '@boxalarm/authz';
-import { parseCadTextBounded } from '@boxalarm/cad-parser';
+import {
+  DEFAULT_CAD_TIME_ZONE,
+  isTimeZone,
+  parseCadTextBounded,
+  resolveCadMessageTime,
+} from '@boxalarm/cad-parser';
 import { toVerifiedDeptId } from '@boxalarm/dept-scope';
 import { createLogger } from '@boxalarm/logging';
 import { getDynamoDocClient } from '../export/awsClients.js';
@@ -219,10 +224,25 @@ async function testParse(event: GuardEvent): Promise<APIGatewayProxyResultV2> {
   if (!template.ok) return badRequestProblem(traceId, toProblemErrors(template.errors));
   // Same deadline as ingress: a pathological pattern answers RAW (TIMEOUT), never hangs.
   const result = await parseCadTextBounded({ version: 1, fields: template.fields }, sample);
+  // How ingress would order this dispatch's updates (chain review R3-M1): the resolved time, or
+  // a note that the dispatch time is not one it can order by.
+  const timeZone = isTimeZone((body as { timeZone?: unknown }).timeZone)
+    ? (body as { timeZone: string }).timeZone
+    : DEFAULT_CAD_TIME_ZONE;
+  const now = Math.floor(Date.now() / 1000);
+  const resolved = resolveCadMessageTime(result.fields.dispatchTime, {
+    receivedAt: now,
+    timeZone,
+  });
   return json(200, {
     status: result.status,
     fields: result.fields,
     ...(result.status === 'RAW' ? { reason: result.reason } : {}),
+    ...(result.fields.dispatchTime
+      ? resolved !== undefined
+        ? { dispatchTimeResolved: new Date(resolved * 1000).toISOString() }
+        : { dispatchTimeUnordered: true }
+      : {}),
   });
 }
 
