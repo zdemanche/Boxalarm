@@ -557,6 +557,7 @@ describe('deliverChannelMessage — direct APNs/FCM push path', () => {
       ':failed': 'FAILED',
       ':completedAtMs': expect.any(Number) as number,
       ':deviceSends': {},
+      ':deviceAttempts': { 'token-65dcf16ea3dfa490': 1 },
     });
     errorSpy.mockRestore();
   });
@@ -579,6 +580,7 @@ describe('deliverChannelMessage — direct APNs/FCM push path', () => {
       ':failed': 'FAILED',
       ':completedAtMs': expect.any(Number) as number,
       ':deviceSends': {},
+      ':deviceAttempts': { 'token-65dcf16ea3dfa490': 1 },
     });
     const metrics = logSpy.mock.calls.map(([line]) => String(line));
     expect(metrics.some((line) => line.includes('"TestSendFailed"'))).toBe(true);
@@ -854,9 +856,11 @@ describe('deliverChannelMessage — multi-device push', () => {
     });
   });
 
-  // Review R2-m1: a development-registered device needs the sandbox APNs secret; a missing one
-  // still fails the page (redelivered, dead-lettered) but is named and counted - alarmed.
-  it('a missing push secret fails the page and is counted as PushCredentialsUnavailable', async () => {
+  // Review R2-m1 / post-merge MAJOR-1: a development-registered device needs the sandbox APNs
+  // secret. When it is not configured the device is terminal - counted (alarmed) but never
+  // retried, because the retry would hold every later member's push in the dispatch's FIFO
+  // group - and the member's other devices are still paged.
+  it('a device whose environment has no push secret is UNAVAILABLE: counted, not retried, and the page completes', async () => {
     const { PushCredentialsUnavailableError } = await import('./push/pushCredentials.js');
     const sendPush = vi
       .fn()
@@ -869,14 +873,54 @@ describe('deliverChannelMessage — multi-device push', () => {
     mockPush(sendPush);
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const send = vi.fn().mockResolvedValue({});
     const { deliverChannelMessage } = await import('./deliverChannelMessage.js');
 
     await expect(
-      deliverChannelMessage(fakeDdb(vi.fn().mockResolvedValue({})), 'alerting-table', {
+      deliverChannelMessage(fakeDdb(send), 'alerting-table', {
         ...params,
         contactChannels: [{ ...PHONE, apnsEnvironment: 'development' }],
       }),
-    ).rejects.toThrow('APNS_SANDBOX_SECRET_ID');
+    ).resolves.toBeUndefined();
+    const lines = logSpy.mock.calls.map(([line]) => String(line));
+    expect(lines.some((line) => line.includes('"PushCredentialsUnavailable"'))).toBe(true);
+    expect(lines.some((line) => line.includes('"SendFailed"'))).toBe(true);
+    expect(updates(send).at(-1)?.ExpressionAttributeValues).toMatchObject({
+      ':failed': 'FAILED',
+      ':reason': expect.stringContaining('PUSH_DEVICE_FAILED') as string,
+      ':deviceSends': { phone: 'UNAVAILABLE' },
+    });
+    logSpy.mockRestore();
+    errorSpy.mockRestore();
+  });
+
+  it('a development phone without sandbox credentials does not stop the member’s production tablet', async () => {
+    const { PushCredentialsUnavailableError } = await import('./push/pushCredentials.js');
+    const sendPush = vi
+      .fn()
+      .mockImplementation((n: { token: string }) =>
+        n.token === PHONE.token
+          ? Promise.reject(
+              new PushCredentialsUnavailableError('sandbox secret has no value', 'apns-sandbox'),
+            )
+          : Promise.resolve({ outcome: 'sent' }),
+      );
+    mockPush(sendPush);
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const send = vi.fn().mockResolvedValue({});
+    const { deliverChannelMessage } = await import('./deliverChannelMessage.js');
+
+    await expect(
+      deliverChannelMessage(fakeDdb(send), 'alerting-table', {
+        ...params,
+        contactChannels: [{ ...PHONE, apnsEnvironment: 'development' }, TABLET],
+      }),
+    ).resolves.toBeUndefined();
+    expect(updates(send).at(-1)?.ExpressionAttributeValues).toMatchObject({
+      ':sent': 'SENT',
+      ':deviceSends': { phone: 'UNAVAILABLE', tablet: 'SENT' },
+    });
     expect(
       logSpy.mock.calls.some(([line]) => String(line).includes('"PushCredentialsUnavailable"')),
     ).toBe(true);
@@ -884,7 +928,35 @@ describe('deliverChannelMessage — multi-device push', () => {
     errorSpy.mockRestore();
   });
 
-  it('one device accepted, one transiently failed: FAILED and rethrown, and the redelivery sends only to the failed device', async () => {
+  it('a transient secret read failure (throttled) with no device sent is retried', async () => {
+    const { PushCredentialsUnavailableError } = await import('./push/pushCredentials.js');
+    const sendPush = vi.fn().mockRejectedValue(
+      new PushCredentialsUnavailableError('push secret could not be read: Rate exceeded', 'apns', {
+        transient: true,
+      }),
+    );
+    mockPush(sendPush);
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const send = vi.fn().mockResolvedValue({});
+    const { deliverChannelMessage } = await import('./deliverChannelMessage.js');
+
+    await expect(
+      deliverChannelMessage(fakeDdb(send), 'alerting-table', {
+        ...params,
+        contactChannels: [PHONE],
+      }),
+    ).rejects.toThrow('Rate exceeded');
+    expect(updates(send).at(-1)?.ExpressionAttributeValues).toMatchObject({
+      ':failed': 'FAILED',
+      ':deviceSends': {},
+      ':deviceAttempts': { phone: 1 },
+    });
+    logSpy.mockRestore();
+    errorSpy.mockRestore();
+  });
+
+  it('one device accepted, one transiently failed: the member was paged, so SENT with the failed device recorded and no redelivery', async () => {
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const sendPush = vi
       .fn()
@@ -897,20 +969,19 @@ describe('deliverChannelMessage — multi-device push', () => {
     const send = vi.fn().mockResolvedValue({});
     const { deliverChannelMessage } = await import('./deliverChannelMessage.js');
 
-    await expect(deliverChannelMessage(fakeDdb(send), 'alerting-table', params)).rejects.toThrow(
-      'FCM 503',
-    );
-    expect(updates(send)[0]?.ExpressionAttributeValues).toMatchObject({
-      ':failed': 'FAILED',
-      ':deviceSends': { phone: 'SENT' },
+    await expect(
+      deliverChannelMessage(fakeDdb(send), 'alerting-table', params),
+    ).resolves.toBeUndefined();
+    expect(updates(send).at(-1)?.ExpressionAttributeValues).toMatchObject({
+      ':sent': 'SENT',
+      ':deviceSends': { phone: 'SENT', tablet: 'FAILED' },
+      ':deviceAttempts': { tablet: 1 },
     });
+    errorSpy.mockRestore();
+  });
 
-    // Redelivery: the claim collides, the recorded failure is re-claimed, and the phone that
-    // already rang is skipped.
-    vi.resetModules();
-    const redeliverySendPush = vi.fn().mockResolvedValue({ outcome: 'sent' });
-    mockPush(redeliverySendPush);
-    const redelivery = vi.fn((command: { constructor: { name: string } }) => {
+  function redeliveryTable(prior: Record<string, unknown>) {
+    return vi.fn((command: { constructor: { name: string } }) => {
       if (command.constructor.name === 'PutCommand') {
         return Promise.reject(
           new ConditionalCheckFailedException({ message: 'exists', $metadata: {} }),
@@ -923,11 +994,41 @@ describe('deliverChannelMessage — multi-device push', () => {
             failureReason: 'FCM 503',
             sendState: 'FAILED',
             sentAt: 1,
-            deviceSends: { phone: 'SENT' },
+            ...prior,
           },
         });
       }
       return Promise.resolve({});
+    });
+  }
+
+  it('no device accepted and one failed transiently: FAILED and rethrown, and the redelivery re-sends only to the devices without an outcome', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const sendPush = vi
+      .fn()
+      .mockImplementation((n: { token: string }) =>
+        n.token === 'tok-tablet'
+          ? Promise.reject(new Error('FCM 503'))
+          : Promise.resolve({ outcome: 'invalid_token', reason: 'APNS_BadDeviceToken' }),
+      );
+    mockPush(sendPush);
+    const send = vi.fn().mockResolvedValue({});
+    const { deliverChannelMessage } = await import('./deliverChannelMessage.js');
+
+    await expect(deliverChannelMessage(fakeDdb(send), 'alerting-table', params)).rejects.toThrow(
+      'FCM 503',
+    );
+    expect(updates(send).at(-1)?.ExpressionAttributeValues).toMatchObject({
+      ':failed': 'FAILED',
+      ':deviceAttempts': { tablet: 1 },
+    });
+
+    vi.resetModules();
+    const redeliverySendPush = vi.fn().mockResolvedValue({ outcome: 'sent' });
+    mockPush(redeliverySendPush);
+    const redelivery = redeliveryTable({
+      deviceSends: { phone: 'INVALID' },
+      deviceAttempts: { tablet: 1 },
     });
     const again = await import('./deliverChannelMessage.js');
     await again.deliverChannelMessage(fakeDdb(redelivery), 'alerting-table', params);
@@ -936,9 +1037,49 @@ describe('deliverChannelMessage — multi-device push', () => {
     expect((redeliverySendPush.mock.calls[0]![0] as { token: string }).token).toBe('tok-tablet');
     expect(updates(redelivery).at(-1)?.ExpressionAttributeValues).toMatchObject({
       ':sent': 'SENT',
-      ':deviceSends': { phone: 'SENT', tablet: 'SENT' },
+      ':deviceSends': { phone: 'INVALID', tablet: 'SENT' },
     });
     errorSpy.mockRestore();
+  });
+
+  // Design review m2: one member's failing gateway must not hold the dispatch's FIFO group
+  // indefinitely - after MAX_DEVICE_SEND_ATTEMPTS the device is given up on, not rethrown.
+  it('a device that keeps failing transiently is given up on after the bounded attempts: FAILED, counted, not rethrown', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    const sendPush = vi.fn().mockRejectedValue(new Error('FCM 503'));
+    mockPush(sendPush);
+    const redelivery = redeliveryTable({ deviceSends: {}, deviceAttempts: { tablet: 1 } });
+    const { deliverChannelMessage, MAX_DEVICE_SEND_ATTEMPTS } =
+      await import('./deliverChannelMessage.js');
+    expect(MAX_DEVICE_SEND_ATTEMPTS).toBe(2);
+
+    await expect(
+      deliverChannelMessage(fakeDdb(redelivery), 'alerting-table', {
+        ...params,
+        contactChannels: [TABLET],
+      }),
+    ).resolves.toBeUndefined();
+    expect(updates(redelivery).at(-1)?.ExpressionAttributeValues).toMatchObject({
+      ':failed': 'FAILED',
+      ':reason': 'PUSH_DEVICE_FAILED FCM 503',
+      ':deviceSends': { tablet: 'FAILED' },
+      ':deviceAttempts': { tablet: 2 },
+    });
+    expect(logSpy.mock.calls.some(([line]) => String(line).includes('"SendFailed"'))).toBe(true);
+    errorSpy.mockRestore();
+    logSpy.mockRestore();
+  });
+
+  it('a redelivery never re-sends a device already UNAVAILABLE or FAILED', async () => {
+    const sendPush = vi.fn().mockResolvedValue({ outcome: 'sent' });
+    mockPush(sendPush);
+    const redelivery = redeliveryTable({ deviceSends: { phone: 'UNAVAILABLE', tablet: 'FAILED' } });
+    const { deliverChannelMessage } = await import('./deliverChannelMessage.js');
+
+    await deliverChannelMessage(fakeDdb(redelivery), 'alerting-table', params);
+
+    expect(sendPush).not.toHaveBeenCalled();
   });
 
   it('a dead tablet token does not fail the page the phone received, and only the dead token is invalidated', async () => {

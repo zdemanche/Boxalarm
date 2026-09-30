@@ -502,3 +502,56 @@ describe('FCM test delivery', () => {
     expect(body).toMatchObject({ validate_only: true });
   });
 });
+
+// Post-merge MAJOR-1: the worker retries a credentials failure only when a retry can succeed.
+describe('PushCredentialsUnavailableError classification', () => {
+  function named(name: string): Error {
+    const error = new Error(name);
+    error.name = name;
+    return error;
+  }
+
+  async function failureFor(
+    reply: () => Promise<unknown>,
+    envOverride: NodeJS.ProcessEnv = env,
+  ): Promise<{ transient: boolean; secretKey: string }> {
+    const { sendPush } = await import('./pushProviderAdapter.js');
+    const { PushCredentialsUnavailableError } = await import('./pushCredentials.js');
+    const client = { send: vi.fn(reply) } as unknown as SecretsManagerClient;
+    const error: unknown = await sendPush(notification, 'APNS', envOverride, {
+      apnsEnvironment: 'development',
+      secretsClient: client,
+      apnsTransport: okTransport().transport,
+    }).catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(PushCredentialsUnavailableError);
+    return error as InstanceType<typeof PushCredentialsUnavailableError>;
+  }
+
+  it('an unset secret env var is not transient', async () => {
+    const withoutSandbox: NodeJS.ProcessEnv = { ...env };
+    delete withoutSandbox.APNS_SANDBOX_SECRET_ID;
+    const error = await failureFor(() => Promise.resolve({}), withoutSandbox);
+    expect(error).toMatchObject({ transient: false, secretKey: 'APNS_SANDBOX_SECRET_ID' });
+  });
+
+  it.each(['ResourceNotFoundException', 'DecryptionFailure', 'AccessDeniedException'])(
+    'a %s secret read is not transient',
+    async (name) => {
+      const error = await failureFor(() => Promise.reject(named(name)));
+      expect(error.transient).toBe(false);
+    },
+  );
+
+  it('a secret with no value is not transient', async () => {
+    const error = await failureFor(() => Promise.resolve({}));
+    expect(error.transient).toBe(false);
+  });
+
+  it.each(['ThrottlingException', 'InternalServiceError', 'TimeoutError'])(
+    'a %s secret read is transient',
+    async (name) => {
+      const error = await failureFor(() => Promise.reject(named(name)));
+      expect(error.transient).toBe(true);
+    },
+  );
+});

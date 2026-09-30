@@ -153,7 +153,7 @@ export async function deliverChannelMessage(
   const pk = buildDeptScopedPk(deptId, 'DISPATCH', dispatchId);
   const sentAt = Math.floor(Date.now() / 1000);
   const { sk, idempotencyKey, attributes } = buildSendGuard(params, sentAt);
-  let priorDeviceSends: DeviceSends = {};
+  let prior: DeviceProgress = { deviceSends: {}, deviceAttempts: {} };
 
   try {
     await ddb.send(
@@ -185,7 +185,7 @@ export async function deliverChannelMessage(
         emitOutcomeMetric(METRIC_NAMESPACE, 'DuplicateSkipped', channel);
         return;
       }
-      priorDeviceSends = retaken.deviceSends;
+      prior = retaken;
     } else {
       logError('alerting.channel.receipt_write_failed', error, {
         correlationId,
@@ -199,7 +199,7 @@ export async function deliverChannelMessage(
 
   const guard: GuardRef = { pk, sk, idempotencyKey };
   if (channel === 'push') {
-    await deliverPushToDevices(ddb, tableName, params, guard, priorDeviceSends);
+    await deliverPushToDevices(ddb, tableName, params, guard, prior);
     return;
   }
 
@@ -222,10 +222,32 @@ interface GuardRef {
 /**
  * Per-device progress of one push page, on its per-channel send guard: SENT (the gateway
  * accepted it), INVALID (the token is dead), REFUSED (a self-test the provider refused for a
- * configuration reason). A redelivery after a transient failure skips the SENT and INVALID
- * devices, so a member's phone is not buzzed twice because their tablet's gateway call failed.
+ * configuration reason), UNAVAILABLE (no gateway credentials are configured for the device's
+ * environment - e.g. a development build on a stack without the sandbox APNs secret), FAILED
+ * (the gateway failed transiently MAX_DEVICE_SEND_ATTEMPTS times, or another device already
+ * paged the member). A redelivery skips every device with a final outcome, so a member's
+ * phone is not buzzed twice because their tablet's gateway call failed.
  */
-type DeviceSendState = 'SENT' | 'VALIDATED' | 'INVALID' | 'REFUSED';
+type DeviceSendState = 'SENT' | 'VALIDATED' | 'INVALID' | 'REFUSED' | 'UNAVAILABLE' | 'FAILED';
+
+/** Device outcomes a redelivery never re-sends. REFUSED is a self-test's and is re-tried. */
+const FINAL_DEVICE_STATES: ReadonlySet<DeviceSendState> = new Set([
+  'SENT',
+  'VALIDATED',
+  'INVALID',
+  'UNAVAILABLE',
+  'FAILED',
+]);
+
+/**
+ * How many transient gateway failures one device gets on one page before it is given up on
+ * (design review m2, post-merge MAJOR-1). The dispatch is the SQS FIFO message group
+ * (MessageGroupId = dispatchId, load-bearing for exactly-once), so every redelivery of one
+ * member's push holds every later member's push for that dispatch for a visibility timeout.
+ * Two attempts bound that hold to one redelivery per member per tone, well inside the queue's
+ * maxReceiveCount, and the give-up is counted as SendFailed (alarmed).
+ */
+export const MAX_DEVICE_SEND_ATTEMPTS = 2;
 
 /**
  * An FCM test send that only validates (the canary without a dedicated device): FCM checked
@@ -240,6 +262,13 @@ function isFcmValidateOnly(params: DeliverChannelMessageParams, device: PushDevi
   );
 }
 type DeviceSends = Record<string, DeviceSendState>;
+/** Transient failures so far per device on this guard (see MAX_DEVICE_SEND_ATTEMPTS). */
+type DeviceAttempts = Record<string, number>;
+
+interface DeviceProgress {
+  readonly deviceSends: DeviceSends;
+  readonly deviceAttempts: DeviceAttempts;
+}
 
 /**
  * A failed provider send. A real page is recorded FAILED and rethrown so SQS redelivers it
@@ -254,6 +283,7 @@ async function recordSendError(
   guard: GuardRef,
   error: unknown,
   deviceSends: DeviceSends,
+  deviceAttempts?: DeviceAttempts,
 ): Promise<void> {
   const { channel, memberId, dispatchId } = params;
   const isTest = params.isTest === true;
@@ -264,7 +294,15 @@ async function recordSendError(
     isTest,
   });
   emitOutcomeMetric(METRIC_NAMESPACE, isTest ? 'TestSendFailed' : 'SendFailed', channel);
-  await recordClaimedFailure(ddb, tableName, guard.pk, guard.sk, error, deviceSends);
+  await recordClaimedFailure(
+    ddb,
+    tableName,
+    guard.pk,
+    guard.sk,
+    error,
+    deviceSends,
+    deviceAttempts,
+  );
   if (!isTest) {
     throw error;
   }
@@ -275,28 +313,32 @@ async function recordSendError(
  * one publish and one send guard per member per tone, as for every channel (routing and dedup
  * key on channel, never on a device). Within that guard the worker sends to EVERY valid device
  * the member has registered (resolvePushTargets) and records each device's outcome, so:
- *  - any device accepted -> SENT (the member was paged); dead devices are invalidated;
- *  - a transient failure on any device -> FAILED and rethrown; the redelivery re-sends only to
- *    the devices without an outcome;
- *  - every device dead -> FAILED, terminal (no redelivery), as for a single dead token.
+ *  - any device accepted -> SENT (the member was paged); dead devices are invalidated, and a
+ *    device that failed is recorded FAILED rather than retried: a retry would hold the rest of
+ *    the dispatch's FIFO group for a member who has already been paged;
+ *  - no device accepted and one failed transiently (under MAX_DEVICE_SEND_ATTEMPTS) -> FAILED
+ *    and rethrown; the redelivery re-sends only to the devices without a final outcome;
+ *  - a device whose environment has no gateway credentials configured -> UNAVAILABLE at once
+ *    (counted as PushCredentialsUnavailable, alarmed): no retry can succeed (MAJOR-1);
+ *  - nothing accepted and nothing worth retrying -> FAILED, terminal (no redelivery), as for
+ *    a single dead token; SendFailed is counted when a device failed rather than being dead.
  */
 async function deliverPushToDevices(
   ddb: DynamoDBDocumentClient,
   tableName: string,
   params: DeliverChannelMessageParams,
   guard: GuardRef,
-  priorDeviceSends: DeviceSends,
+  prior: DeviceProgress,
 ): Promise<void> {
   const { deptId, dispatchId, memberId, channel } = params;
   const isTest = params.isTest === true;
   const correlationId = dispatchId;
-  const deviceSends: DeviceSends = { ...priorDeviceSends };
-  const pending = resolvePushTargets(params.contactChannels).filter(
-    (device) =>
-      deviceSends[device.deviceKey] !== 'SENT' &&
-      deviceSends[device.deviceKey] !== 'VALIDATED' &&
-      deviceSends[device.deviceKey] !== 'INVALID',
-  );
+  const deviceSends: DeviceSends = { ...prior.deviceSends };
+  const deviceAttempts: DeviceAttempts = { ...prior.deviceAttempts };
+  const pending = resolvePushTargets(params.contactChannels).filter((device) => {
+    const state = deviceSends[device.deviceKey];
+    return state === undefined || !FINAL_DEVICE_STATES.has(state);
+  });
 
   const outcomes = await Promise.allSettled(
     pending.map((device) => sendPushToDevice(params, device, guard.idempotencyKey)),
@@ -304,13 +346,16 @@ async function deliverPushToDevices(
 
   let transientError: unknown;
   let massInvalidationError: Error | undefined;
+  const retryable: string[] = [];
   const refusals: string[] = [];
   const invalidReasons: string[] = [];
+  const failures: string[] = [];
   for (const [index, outcome] of outcomes.entries()) {
     const device = pending[index]!;
     if (outcome.status === 'rejected') {
-      transientError ??= outcome.reason;
-      if (outcome.reason instanceof PushCredentialsUnavailableError) {
+      const reason: unknown = outcome.reason;
+      const credentialsUnavailable = reason instanceof PushCredentialsUnavailableError;
+      if (credentialsUnavailable) {
         // Alarmed: a missing gateway secret, named, not just a DLQ depth (review R2-m1).
         emitOutcomeMetric(
           METRIC_NAMESPACE,
@@ -318,13 +363,36 @@ async function deliverPushToDevices(
           'push',
         );
       }
-      logError('alerting.channel.device_send_failed', outcome.reason, {
+      logError('alerting.channel.device_send_failed', reason, {
         correlationId,
         memberId,
         channel,
         deviceKey: device.deviceKey,
         isTest,
       });
+      if (credentialsUnavailable && !reason.transient) {
+        // Not configured for this device's environment: terminal for this device only, so the
+        // member's other devices are still paged and no later member waits behind a retry.
+        deviceSends[device.deviceKey] = 'UNAVAILABLE';
+        failures.push(reason instanceof Error ? reason.message : String(reason));
+        continue;
+      }
+      const attempts = (deviceAttempts[device.deviceKey] ?? 0) + 1;
+      deviceAttempts[device.deviceKey] = attempts;
+      if (attempts >= MAX_DEVICE_SEND_ATTEMPTS) {
+        logInfo('alerting.channel.device_given_up', {
+          correlationId,
+          memberId,
+          channel,
+          deviceKey: device.deviceKey,
+          attempts,
+        });
+        deviceSends[device.deviceKey] = 'FAILED';
+        failures.push(reason instanceof Error ? reason.message : String(reason));
+        continue;
+      }
+      transientError ??= reason;
+      retryable.push(device.deviceKey);
       continue;
     }
     const result = outcome.value;
@@ -382,16 +450,24 @@ async function deliverPushToDevices(
     }
   }
 
-  if (transientError !== undefined) {
-    await recordSendError(ddb, tableName, params, guard, transientError, deviceSends);
+  const anySent = Object.values(deviceSends).some(
+    (state) => state === 'SENT' || state === 'VALIDATED',
+  );
+  if (transientError !== undefined && !anySent) {
+    await recordSendError(
+      ddb,
+      tableName,
+      params,
+      guard,
+      transientError,
+      deviceSends,
+      deviceAttempts,
+    );
     if (massInvalidationError !== undefined) {
       throw massInvalidationError;
     }
     return;
   }
-  const anySent = Object.values(deviceSends).some(
-    (state) => state === 'SENT' || state === 'VALIDATED',
-  );
   if (massInvalidationError !== undefined) {
     await recordClaimedFailure(
       ddb,
@@ -400,20 +476,40 @@ async function deliverPushToDevices(
       guard.sk,
       massInvalidationError,
       deviceSends,
+      deviceAttempts,
     );
     throw massInvalidationError;
   }
   if (anySent) {
+    // The member was paged. A device that failed this time is not retried: its redelivery
+    // would hold every later member's push for this dispatch behind one who already rang.
+    for (const deviceKey of retryable) {
+      deviceSends[deviceKey] = 'FAILED';
+    }
     emitOutcomeMetric(METRIC_NAMESPACE, 'Sent', channel);
-    await recordSent(ddb, tableName, guard.pk, guard.sk, deviceSends);
+    await recordSent(ddb, tableName, guard.pk, guard.sk, deviceSends, deviceAttempts);
     return;
   }
-  // Nothing accepted it, and nothing is worth retrying: every device refused or dead.
+  // Nothing accepted it, and nothing is worth retrying: every device refused, dead, without
+  // credentials for its environment, or out of attempts.
+  if (failures.length > 0) {
+    emitOutcomeMetric(METRIC_NAMESPACE, isTest ? 'TestSendFailed' : 'SendFailed', channel);
+  }
   const terminal =
     refusals.length > 0
       ? new Error(`PUSH_TEST_REFUSED ${refusals[0]}`)
-      : new Error(`PUSH_TOKEN_INVALID ${invalidReasons[0] ?? 'no device accepted the page'}`);
-  await recordClaimedFailure(ddb, tableName, guard.pk, guard.sk, terminal, deviceSends);
+      : failures.length > 0
+        ? new Error(`PUSH_DEVICE_FAILED ${failures[0]}`)
+        : new Error(`PUSH_TOKEN_INVALID ${invalidReasons[0] ?? 'no device accepted the page'}`);
+  await recordClaimedFailure(
+    ddb,
+    tableName,
+    guard.pk,
+    guard.sk,
+    terminal,
+    deviceSends,
+    deviceAttempts,
+  );
 }
 
 /** One device's send: APNs/FCM directly (architecture §Alerting). */
@@ -487,7 +583,7 @@ async function reattemptClaimedFailure(
   pk: string,
   sk: string,
   sentAt: number,
-): Promise<{ readonly deviceSends: DeviceSends } | undefined> {
+): Promise<DeviceProgress | undefined> {
   // Strongly consistent: a failure recorded moments ago must not read as a clean claim.
   const existing = await ddb.send(
     new GetCommand({ TableName: tableName, Key: { pk, sk }, ConsistentRead: true }),
@@ -540,7 +636,16 @@ async function reattemptClaimedFailure(
     typeof item.deviceSends === 'object' && item.deviceSends !== null
       ? (item.deviceSends as DeviceSends)
       : {};
-  return { deviceSends };
+  const deviceAttempts =
+    typeof item.deviceAttempts === 'object' && item.deviceAttempts !== null
+      ? (item.deviceAttempts as DeviceAttempts)
+      : {};
+  return { deviceSends, deviceAttempts };
+}
+
+/** Only written once a device has failed, so a clean page's guard carries no empty map. */
+function nonEmpty(attempts: DeviceAttempts | undefined): DeviceAttempts | undefined {
+  return attempts && Object.keys(attempts).length > 0 ? attempts : undefined;
 }
 
 async function recordClaimedFailure(
@@ -550,7 +655,9 @@ async function recordClaimedFailure(
   sk: string,
   error: unknown,
   deviceSends?: DeviceSends,
+  deviceAttempts?: DeviceAttempts,
 ): Promise<void> {
+  const attempts = nonEmpty(deviceAttempts);
   try {
     await ddb.send(
       new UpdateCommand({
@@ -558,13 +665,14 @@ async function recordClaimedFailure(
         Key: { pk, sk },
         UpdateExpression: `SET failureReason = :reason, sendState = :failed, completedAtMs = :completedAtMs${
           deviceSends ? ', deviceSends = :deviceSends' : ''
-        }`,
+        }${attempts ? ', deviceAttempts = :deviceAttempts' : ''}`,
         ConditionExpression: 'attribute_exists(idempotencyKey)',
         ExpressionAttributeValues: {
           ':reason': error instanceof Error ? error.message : String(error),
           ':failed': SEND_STATE_FAILED,
           ':completedAtMs': Date.now(),
           ...(deviceSends ? { ':deviceSends': deviceSends } : {}),
+          ...(attempts ? { ':deviceAttempts': attempts } : {}),
         },
       }),
     );
@@ -585,7 +693,9 @@ async function recordSent(
   pk: string,
   sk: string,
   deviceSends?: DeviceSends,
+  deviceAttempts?: DeviceAttempts,
 ): Promise<void> {
+  const attempts = nonEmpty(deviceAttempts);
   try {
     await ddb.send(
       new UpdateCommand({
@@ -595,12 +705,13 @@ async function recordSent(
         // ingress-to-delivery latency (selfTest/evaluateSelfTestRun.ts).
         UpdateExpression: `SET sendState = :sent, completedAtMs = :completedAtMs${
           deviceSends ? ', deviceSends = :deviceSends' : ''
-        }`,
+        }${attempts ? ', deviceAttempts = :deviceAttempts' : ''}`,
         ConditionExpression: 'attribute_exists(idempotencyKey)',
         ExpressionAttributeValues: {
           ':sent': SEND_STATE_SENT,
           ':completedAtMs': Date.now(),
           ...(deviceSends ? { ':deviceSends': deviceSends } : {}),
+          ...(attempts ? { ':deviceAttempts': attempts } : {}),
         },
       }),
     );

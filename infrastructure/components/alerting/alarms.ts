@@ -58,7 +58,8 @@ const DLQ_ALARM_DESCRIPTION: Record<AlertingChannel, string> = {
     "MANY members: a stack misconfiguration that dead-letters on purpose - bundleId in the APNs secret does not match the app, " +
     "the FCM service account is from a different Firebase project, credentials still refused after the in-process retry " +
     "(rotated/revoked .p8 key or service account), a blocked mass token invalidation (APNs secret environment does not match the app builds), " +
-    "or an unset push secret. Fix the secret, then redrive the DLQ. " +
+    "or a push secret that could not be read after retries (throttling or an outage; an unset or empty secret does not dead-letter - see the " +
+    "push-credentials-unavailable alarm). Fix the secret, then redrive the DLQ. " +
     "A blocked mass invalidation can also be benign: several members uninstalled at once (their pages could never be delivered).",
   sms: "An SMS page failed every attempt and was dead-lettered; the member got no SMS for that tone. Check the sms worker logs (alerting.channel.send_failed), fix the provider, then redrive the DLQ.",
   voice:
@@ -334,12 +335,16 @@ export class AlertingAlarms extends pulumi.ComponentResource {
 
     // Review R2-m1: a real page whose push gateway secret is unset or unreadable - e.g. a device
     // registered as `development` (an Xcode-installed build) with no APNs sandbox secret value.
+    // Post-merge MAJOR-1: that device is skipped (terminal, UNAVAILABLE on the send guard) so it
+    // never holds the dispatch's FIFO group; this alarm is how on-call learns of it.
     pageAlarm("push-credentials-unavailable-alarm", {
       name: `boxalarm-${env}-alerting-push-credentials-unavailable`,
       alarmDescription:
-        "A real push page could not be sent because a push gateway secret is unset or has no value. The push worker logs " +
-        "(alerting.channel.device_send_failed) name the secret. APNS_SANDBOX_SECRET_ID is needed on any stack where Xcode-installed " +
-        "(development-signed) builds register; APNS_SECRET_ID / FCM_SECRET_ID on every stack. Set the value, then redrive the push DLQ.",
+        "A real push page could not be sent to a device because a push gateway secret is unset, has no value or could not be read. " +
+        "The worker skips that device (recorded UNAVAILABLE on the send guard) and still pages the member's other devices; SMS runs in parallel. " +
+        "The push worker logs (alerting.channel.device_send_failed) name the secret. APNS_SANDBOX_SECRET_ID is needed on any stack where " +
+        "Xcode-installed (development-signed) builds register; APNS_SECRET_ID / FCM_SECRET_ID on every stack. Set the value: the next page uses it. " +
+        "A skipped device is not re-sent for the tone that missed it.",
       namespace: "Boxalarm/AlertingChannel",
       metricName: "PushCredentialsUnavailable",
       dimensions: { Reason: "push" },
