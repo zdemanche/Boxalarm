@@ -675,6 +675,12 @@ export const LAMBDA_ENTRIES = [
     entry: 'src/services/alerting-service/alertRules/alertRulesCopyHandler.ts',
   },
   {
+    // platform.config.updated (CAD_INGRESS) -> CAD_INGRESS_COPY, read by both CAD ingress paths.
+    service: 'alerting-service',
+    function: 'cad-source-copy-consumer',
+    entry: 'src/services/alerting-service/cadIngress/sourceCopyHandler.ts',
+  },
+  {
     service: 'personnel-service',
     function: 'shift-completion',
     entry: 'src/services/personnel-service/shifts/completionHandler.ts',
