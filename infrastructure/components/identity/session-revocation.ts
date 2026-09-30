@@ -171,9 +171,12 @@ export class SessionRevocation extends pulumi.ComponentResource {
       {
         env,
         ruleName: `boxalarm-${env}-member-status-revocation`,
-        // Producer matched as well as the detail-type: only personnel-service writes
-        // personnel.member.updated (member status, roles, push devices), so no other producer
-        // on the bus can drive a revocation.
+        // Matches the declared producer (personnel-service, the only writer of
+        // personnel.member.updated) as well as the detail-type. This is a routing filter, not a
+        // trust boundary: `source` is whatever the publisher declares - the platform outbox
+        // publisher copies each row's own `source`, and no events:PutEvents grant on the bus
+        // carries an events:source condition - so it keeps a same-named event from another producer
+        // out by accident, not by force (review F3).
         eventPattern: JSON.stringify({
           source: ["personnel-service"],
           "detail-type": ["personnel.member.updated"],

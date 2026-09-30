@@ -130,10 +130,11 @@ export class PushTokens extends pulumi.ComponentResource {
       { parent: this },
     );
 
-    // Match the producer too, not just the detail-type: the platform outbox publisher puts
-    // each row under its own `source` (packages/outbox drainHandler, no override), and every
-    // personnel.member.updated writer stamps `personnel-service`. Without it any producer on
-    // the platform bus could inject eligibility/contact changes into the alerting snapshot.
+    // Matches the declared producer too, not just the detail-type: every personnel.member.updated
+    // writer stamps `personnel-service`. This is a routing filter, not a trust boundary: `source`
+    // is whatever the publisher declares - the platform outbox publisher copies each row's own
+    // `source`, and no events:PutEvents grant on the bus carries an events:source condition - so it
+    // keeps a same-named event from another producer out by accident, not by force (review F3).
     const rule = new aws.cloudwatch.EventRule(
       `${name}-member-updated-rule`,
       {

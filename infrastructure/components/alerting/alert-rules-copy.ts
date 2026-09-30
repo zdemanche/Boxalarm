@@ -58,7 +58,11 @@ export class AlertRulesCopy extends pulumi.ComponentResource {
       { parent: this },
     );
 
-    // Producer and config type both matched: only platform-service may change paging rules.
+    // Matches the declared producer (platform-service) and the config type. This is a routing
+    // filter, not a trust boundary: `source` is whatever the publisher declares - the platform
+    // outbox publisher copies each row's own `source`, and no events:PutEvents grant on the bus
+    // carries an events:source condition - so it keeps a same-named event from another producer out
+    // by accident, not by force (review F3).
     this.rule = new aws.cloudwatch.EventRule(
       `${name}-rule`,
       {

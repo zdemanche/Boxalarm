@@ -203,8 +203,11 @@ export class Availability extends pulumi.ComponentResource {
       {
         env,
         ruleName: `boxalarm-${env}-availability-changed`,
-        // Producer matched as well as the detail-type: only personnel-service may mark a
-        // member on or off in the alerting snapshot.
+        // Matches the declared producer (personnel-service) as well as the detail-type. This is a
+        // routing filter, not a trust boundary: `source` is whatever the publisher declares - the
+        // platform outbox publisher copies each row's own `source`, and no events:PutEvents grant
+        // on the bus carries an events:source condition - so it keeps a same-named event from
+        // another producer out by accident, not by force (review F3).
         eventPattern: JSON.stringify({
           source: ["personnel-service"],
           "detail-type": ["personnel.availability.changed"],

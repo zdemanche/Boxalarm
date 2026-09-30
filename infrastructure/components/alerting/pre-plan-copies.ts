@@ -158,9 +158,11 @@ export class PrePlanCopies extends pulumi.ComponentResource {
       { parent: this },
     );
 
-    // Match the producer as well as the detail-type: every writer of these events stamps
-    // `inspections-service`, and without it any producer on the platform bus could inject
-    // pre-plan or hydrant content into what a responding crew reads.
+    // Matches the declared producer as well as the detail-type: every writer of these events stamps
+    // `inspections-service`. This is a routing filter, not a trust boundary: `source` is whatever
+    // the publisher declares - the platform outbox publisher copies each row's own `source`, and no
+    // events:PutEvents grant on the bus carries an events:source condition - so it keeps a
+    // same-named event from another producer out by accident, not by force (review F3).
     const rule = new aws.cloudwatch.EventRule(
       `${prefix}-rule`,
       {
