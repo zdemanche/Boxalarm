@@ -24,8 +24,14 @@ export function getNativePushBridge(): NativePushBridge {
  * The APNs environment this build's `aps-environment` entitlement is signed for: `development`
  * for a debug build installed from Xcode, `production` for TestFlight and App Store builds. The
  * backend sends every push - self-test included - on this environment's host, because a token
- * only works on its own. `APNS_ENVIRONMENT` in the build's .env overrides it (e.g. a release
- * build signed for development).
+ * only works on its own.
+ *
+ * The signed entitlement itself is not readable from JavaScript (it lives in the provisioning
+ * profile; App Store and TestFlight builds carry none), and the app has no native module, so the
+ * build configuration stands in for it: `__DEV__` (Debug -> development, Release -> production).
+ * The one case that gets wrong - a Release build installed from Xcode with development signing -
+ * must set `APNS_ENVIRONMENT=development` in its .env (see .env.example); otherwise its real
+ * pages get BadDeviceToken and the token is disabled until it re-registers.
  */
 export function apnsEnvironment(): 'development' | 'production' {
   const configured = (Config as Record<string, string | undefined>).APNS_ENVIRONMENT;
