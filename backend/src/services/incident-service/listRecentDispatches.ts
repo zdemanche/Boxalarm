@@ -38,6 +38,14 @@ interface Cursor {
 
 class BadRequest extends Error {}
 
+/** A resume key must sit inside the cursor's own range, or DynamoDB refuses the query. */
+function withinRange(gsi1sk: string, from: number, to: number): boolean {
+  const match = /^DISPATCH#(\d+)$/.exec(gsi1sk);
+  if (!match) return false;
+  const at = Number(match[1]);
+  return at >= from && at <= to;
+}
+
 function encodeCursor(cursor: Cursor): string {
   return Buffer.from(JSON.stringify(cursor), 'utf8').toString('base64url');
 }
@@ -63,7 +71,8 @@ function decodeCursor(raw: string, deptId: VerifiedDeptId): Cursor {
       lek !== null &&
       Object.keys(lek).every((k) => keys.includes(k)) &&
       keys.every((k) => typeof lek[k] === 'string') &&
-      lek.gsi1pk === buildDeptScopedPk(deptId);
+      lek.gsi1pk === buildDeptScopedPk(deptId) &&
+      withinRange(lek.gsi1sk as string, value.from, value.to);
     if (!wellFormed) throw new BadRequest('cursor is not a cursor this endpoint issued');
   }
   return value as Cursor;

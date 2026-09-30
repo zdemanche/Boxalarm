@@ -167,6 +167,23 @@ describe('GET /incidents/dispatches', () => {
     const handler = await handlerFor(client);
     expect(await handler(event({ cursor: foreign }))).toMatchObject({ statusCode: 400 });
     expect(await handler(event({ cursor: 'not-json' }))).toMatchObject({ statusCode: 400 });
+    // Own department, but a resume key outside the cursor's range (DynamoDB would throw).
+    const outOfRange = Buffer.from(
+      JSON.stringify({
+        from: 0,
+        to: 10,
+        lek: { pk: 'x', sk: 'y', gsi1pk: 'DEPT#NICHOLS', gsi1sk: 'DISPATCH#99' },
+      }),
+    ).toString('base64url');
+    expect(await handler(event({ cursor: outOfRange }))).toMatchObject({ statusCode: 400 });
+    const wrongPrefix = Buffer.from(
+      JSON.stringify({
+        from: 0,
+        to: 10,
+        lek: { pk: 'x', sk: 'y', gsi1pk: 'DEPT#NICHOLS', gsi1sk: 'INCIDENT#5' },
+      }),
+    ).toString('base64url');
+    expect(await handler(event({ cursor: wrongPrefix }))).toMatchObject({ statusCode: 400 });
     expect(await handler(event({ limit: '1000' }))).toMatchObject({ statusCode: 400 });
     expect(send).not.toHaveBeenCalled();
   });
