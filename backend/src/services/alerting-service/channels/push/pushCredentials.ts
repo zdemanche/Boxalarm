@@ -68,13 +68,17 @@ export class PushCredentialsUnavailableError extends Error {
  * Secrets Manager answers that mean the secret is absent or unusable as configured - a retry
  * seconds later gets the same answer. Anything else (throttling, 5xx, a network error) may
  * clear on its own.
+ *
+ * AccessDeniedException and DecryptionFailure are deliberately NOT here (paging review m2): an
+ * IAM or KMS change still propagating during a deploy answers exactly that for a few seconds.
+ * As transient they get the worker's bounded retry (MAX_DEVICE_SEND_ATTEMPTS), so a propagation
+ * blip does not drop push for a whole tone; a lasting misconfiguration still gives up after it,
+ * counted and alarmed (PushCredentialsUnavailable, SendFailed).
  */
 const SECRET_CONFIGURATION_ERRORS = new Set([
   'ResourceNotFoundException',
   'InvalidRequestException',
   'InvalidParameterException',
-  'DecryptionFailure',
-  'AccessDeniedException',
 ]);
 
 /** A secret that was read but holds no usable JSON object: a configuration fault. */

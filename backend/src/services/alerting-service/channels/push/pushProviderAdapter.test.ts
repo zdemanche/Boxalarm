@@ -534,7 +534,7 @@ describe('PushCredentialsUnavailableError classification', () => {
     expect(error).toMatchObject({ transient: false, secretKey: 'APNS_SANDBOX_SECRET_ID' });
   });
 
-  it.each(['ResourceNotFoundException', 'DecryptionFailure', 'AccessDeniedException'])(
+  it.each(['ResourceNotFoundException', 'InvalidRequestException'])(
     'a %s secret read is not transient',
     async (name) => {
       const error = await failureFor(() => Promise.reject(named(name)));
@@ -547,11 +547,15 @@ describe('PushCredentialsUnavailableError classification', () => {
     expect(error.transient).toBe(false);
   });
 
-  it.each(['ThrottlingException', 'InternalServiceError', 'TimeoutError'])(
-    'a %s secret read is transient',
-    async (name) => {
-      const error = await failureFor(() => Promise.reject(named(name)));
-      expect(error.transient).toBe(true);
-    },
-  );
+  // Paging review m2: IAM/KMS propagation blips get the bounded retry, not a lost tone.
+  it.each([
+    'ThrottlingException',
+    'InternalServiceError',
+    'TimeoutError',
+    'AccessDeniedException',
+    'DecryptionFailure',
+  ])('a %s secret read is transient', async (name) => {
+    const error = await failureFor(() => Promise.reject(named(name)));
+    expect(error.transient).toBe(true);
+  });
 });
