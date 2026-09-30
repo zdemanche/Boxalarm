@@ -17,7 +17,8 @@ function navigateNow(dispatchId: string, payload?: AlertPayload): void {
 }
 
 export function navigateToAlertDetail(dispatchId: string, payload?: AlertPayload): void {
-  if (!navigationRef.isReady()) {
+  // Also held while signed out (the sign-in screens have no alert route): it opens after sign-in.
+  if (!isAlertRouteAvailable()) {
     pendingAlert = payload ? { dispatchId, payload } : { dispatchId };
     return;
   }
@@ -29,9 +30,9 @@ export function hasPendingAlertNavigation(): boolean {
   return pendingAlert !== null;
 }
 
-/** Wired to NavigationContainer onReady (RootNavigator). */
+/** Wired to NavigationContainer onReady and onStateChange (RootNavigator). */
 export function flushPendingAlertNavigation(): void {
-  if (!pendingAlert || !navigationRef.isReady()) return;
+  if (!pendingAlert || !isAlertRouteAvailable()) return;
   const { dispatchId, payload } = pendingAlert;
   pendingAlert = null;
   navigateNow(dispatchId, payload);
@@ -39,6 +40,15 @@ export function flushPendingAlertNavigation(): void {
 
 export function isNavigationReady(): boolean {
   return navigationRef.isReady();
+}
+
+/**
+ * Whether the navigator holds the app tabs (a signed-in session), so an alert screen can open.
+ * While the sign-in screens are showing the container is ready but has no Alerts route.
+ */
+export function isAlertRouteAvailable(): boolean {
+  if (!navigationRef.isReady()) return false;
+  return navigationRef.getRootState()?.routeNames?.includes('Alerts') ?? false;
 }
 
 /** Calls `listener` whenever the navigation state changes (including when it first mounts). */

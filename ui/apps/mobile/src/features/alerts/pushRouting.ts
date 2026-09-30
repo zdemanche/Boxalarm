@@ -1,11 +1,14 @@
 import notifee, { EventType } from '@notifee/react-native';
-import { AppState, Platform, Settings } from 'react-native';
+import { Alert, AppState, Platform, Settings } from 'react-native';
 import {
   getInitialNotification,
   getMessaging,
   onNotificationOpenedApp,
 } from '@react-native-firebase/messaging';
+import { readStoredSessionOwner } from '../../auth/AuthContext';
+import * as syncManager from '../../sync/syncManager';
 import {
+  isAlertRouteAvailable,
   isNavigationReady,
   navigateToAlertDetail,
   navigationRef,
@@ -93,10 +96,21 @@ function readPendingIosTap(nowMs: number): AlertPayload | null {
   return alertPayloadFromPushData(pending as Record<string, unknown>, receivedSeconds * 1000);
 }
 
+/** What a signed-out member is told when they answer a page from its notification (M2). */
+export const SIGNED_OUT_ANSWER_TITLE = "You're signed out on this phone";
+export const SIGNED_OUT_ANSWER_MESSAGE =
+  'Your answer was not sent. Sign in to answer, or use the radio.';
+
 /**
  * A Responding / Not responding action pressed on an iOS page (AppDelegate records it with the
  * tap). Queued at once, before navigation is ready, through the same outbox as the alert screen;
  * the action is then stripped from the record so a later routing retry cannot answer twice.
+ *
+ * On a signed-out phone the answer is not queued (M2, the same gate as Android's
+ * answerFromNotification): there is no one to send it as, and an ownerless answer would be
+ * offered to whoever signs in next. The member is told, and the tap itself stays recorded so the
+ * call opens once they sign in. A keychain read error is not "signed out": that answer is queued
+ * with the last session's hint, as on Android.
  */
 function answerPendingIosAction(dispatchId: string): void {
   const pending = Settings.get(IOS_PENDING_ALERT_TAP_KEY) as PendingIosTap | null | undefined;
@@ -107,20 +121,33 @@ function answerPendingIosAction(dispatchId: string): void {
   const rest: PendingIosTap = { ...pending };
   delete rest.action;
   Settings.set({ [IOS_PENDING_ALERT_TAP_KEY]: rest });
-  queueAlertResponse(dispatchId, answer, null).catch((error: unknown) => {
+  void (async () => {
+    if (!syncManager.isConfigured()) {
+      const signedOut = await readStoredSessionOwner().then(
+        (stored) => stored === null,
+        () => false,
+      );
+      if (signedOut) {
+        Alert.alert(SIGNED_OUT_ANSWER_TITLE, SIGNED_OUT_ANSWER_MESSAGE);
+        return;
+      }
+    }
+    await queueAlertResponse(dispatchId, answer, null);
+  })().catch((error: unknown) => {
     console.error('[push] queueing the answer from an iOS notification action failed', error);
   });
 }
 
 /**
  * Routes a recorded iOS tap once navigation can take it. A tap recorded before the navigator
- * mounted (cold start) stays pending and is routed on the first navigation state change.
+ * mounted (cold start), or while the sign-in screens are showing (no alert screen to open), stays
+ * pending and is routed on the first navigation state change that can take it.
  */
 export function routePendingIosAlertTap(nowMs: number = Date.now()): void {
   const payload = readPendingIosTap(nowMs);
   if (!payload) return;
   answerPendingIosAction(payload.dispatchId);
-  if (!isNavigationReady()) return;
+  if (!isNavigationReady() || !isAlertRouteAvailable()) return;
   Settings.set({ [IOS_PENDING_ALERT_TAP_KEY]: null });
   openAlert(payload);
 }

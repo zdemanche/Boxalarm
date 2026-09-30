@@ -23,6 +23,9 @@ beforeEach(() => {
     .spyOn(navigationRef, 'getCurrentRoute')
     .mockImplementation(() => ({ key: focused, name: focused }) as never);
   jest.spyOn(navigationRef, 'navigate').mockImplementation(() => {});
+  jest
+    .spyOn(navigationRef, 'getRootState')
+    .mockImplementation(() => ({ routeNames: ['Alerts'] }) as never);
 });
 
 afterEach(() => {

@@ -1,5 +1,13 @@
 import { flushPendingAlertNavigation, navigateToAlertDetail, navigationRef } from './navigationRef';
 
+type RootState = ReturnType<typeof navigationRef.getRootState>;
+const tabs = { routeNames: ['Alerts', 'Me'] } as unknown as RootState;
+const signIn = { routeNames: ['SignIn'] } as unknown as RootState;
+
+beforeEach(() => {
+  jest.spyOn(navigationRef, 'getRootState').mockReturnValue(tabs);
+});
+
 afterEach(() => {
   jest.restoreAllMocks();
 });
@@ -34,5 +42,22 @@ test('a ready navigator opens the alert immediately', () => {
   expect(navigate).toHaveBeenCalledWith('Alerts', {
     screen: 'AlertDetail',
     params: { dispatchId: 'D2' },
+  });
+});
+
+test('an alert opened while the sign-in screens show is held until the tabs mount (M2)', () => {
+  jest.spyOn(navigationRef, 'isReady').mockReturnValue(true);
+  const root = jest.spyOn(navigationRef, 'getRootState').mockReturnValue(signIn);
+  const navigate = jest.spyOn(navigationRef, 'navigate').mockImplementation(() => {});
+
+  navigateToAlertDetail('D3');
+  flushPendingAlertNavigation();
+  expect(navigate).not.toHaveBeenCalled();
+
+  root.mockReturnValue(tabs);
+  flushPendingAlertNavigation();
+  expect(navigate).toHaveBeenCalledWith('Alerts', {
+    screen: 'AlertDetail',
+    params: { dispatchId: 'D3' },
   });
 });

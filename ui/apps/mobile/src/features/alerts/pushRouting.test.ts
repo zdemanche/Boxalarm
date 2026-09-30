@@ -1,4 +1,5 @@
-import { AppState, Platform, Settings } from 'react-native';
+import { Alert, AppState, Platform, Settings } from 'react-native';
+import * as auth from '../../auth/AuthContext';
 import notifee, { EventType } from '@notifee/react-native';
 import * as messaging from '@react-native-firebase/messaging';
 import { navigateToAlertDetail } from '../../navigation/navigationRef';
@@ -13,10 +14,12 @@ const getInitialNotification = messaging.getInitialNotification as jest.Mock;
 const onNotificationOpenedApp = messaging.onNotificationOpenedApp as jest.Mock;
 
 let mockNavigationReady = true;
+let mockAppTabs = true;
 let mockNavigationListener: (() => void) | undefined;
 jest.mock('../../navigation/navigationRef', () => ({
   navigateToAlertDetail: jest.fn(),
   isNavigationReady: jest.fn(() => mockNavigationReady),
+  isAlertRouteAvailable: jest.fn(() => mockNavigationReady && mockAppTabs),
   hasPendingAlertNavigation: jest.fn(() => false),
   navigationRef: { isReady: () => false, getCurrentRoute: () => undefined },
   onNavigationStateChange: jest.fn((listener: () => void) => {
@@ -44,6 +47,7 @@ beforeEach(() => {
   settingsStub.__reset();
   (Settings.get as jest.Mock).mockClear();
   mockNavigationReady = true;
+  mockAppTabs = true;
   mockNavigationListener = undefined;
   jest.spyOn(AppState, 'addEventListener').mockImplementation((_type, listener) => {
     appStateListener = listener as (status: string) => void;
@@ -276,6 +280,45 @@ describe('iOS taps on raw-APNs dispatch notifications (review round 2 N3)', () =
       expect.objectContaining({ address: '1 Main St' }),
     );
     expect((await store.all()).filter((row) => row.path.includes('DISP-ACTION'))).toHaveLength(1);
+  });
+
+  test('M2: an action pressed on a signed-out phone is not queued; the member is told and the call opens after sign-in', async () => {
+    const store = jest.requireActual(
+      '../../sync/outboxStore',
+    ) as typeof import('../../sync/outboxStore');
+    jest.spyOn(auth, 'readStoredSessionOwner').mockResolvedValue(null);
+    const alert = jest.spyOn(Alert, 'alert').mockImplementation(() => {});
+    nativeWrite({
+      'boxalarm.pendingAlertTap': {
+        dispatchId: 'DISP-OUT',
+        tappedAt: nowSeconds(),
+        title: 'MVA',
+        body: 'MVA — 2 Main St',
+        action: 'respond:RESPONDING',
+      },
+    });
+    coldStart();
+    mockAppTabs = false; // the sign-in screens are showing
+
+    subscribePushNotificationRouting();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect((await store.all()).filter((row) => row.path.includes('DISP-OUT'))).toHaveLength(0);
+    expect(alert).toHaveBeenCalledWith(
+      "You're signed out on this phone",
+      expect.stringMatching(/sign in to answer, or use the radio/i),
+    );
+    expect(navigateToAlertDetail).not.toHaveBeenCalled();
+    expect(Settings.get('boxalarm.pendingAlertTap')).toMatchObject({ dispatchId: 'DISP-OUT' });
+    expect(Settings.get('boxalarm.pendingAlertTap')).not.toHaveProperty('action');
+
+    mockAppTabs = true; // signed in
+    mockNavigationListener?.();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(navigateToAlertDetail).toHaveBeenCalledWith('DISP-OUT', expect.anything());
+    expect((await store.all()).filter((row) => row.path.includes('DISP-OUT'))).toHaveLength(0);
+    expect(alert).toHaveBeenCalledTimes(1);
   });
 
   test('the page time is when iOS delivered it, not when it was tapped (review MJ-2)', () => {
