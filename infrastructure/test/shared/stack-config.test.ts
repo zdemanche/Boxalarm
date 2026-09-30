@@ -120,8 +120,16 @@ describe("webOrigin placeholder hosts (deploy-readiness M4)", () => {
 });
 
 describe("SMS/voice provider endpoints (deploy-readiness M5)", () => {
-  it("are optional on dev", () => {
+  it("are optional outside prod", () => {
     expect(stackConfigProblems(reader(COMPLETE_DEV), "dev")).toEqual([]);
+    const staging = stackConfigProblems(reader({ ...COMPLETE_DEV, env: "staging" }), "staging");
+    expect(staging.join("\n")).not.toContain("ProviderEndpointUrl");
+  });
+
+  it("are required in prod (review F4)", () => {
+    const prod = stackConfigProblems(reader({ ...COMPLETE_DEV, env: "prod" }), "prod").join("\n");
+    expect(prod).toContain("boxalarm-infra:smsProviderEndpointUrl");
+    expect(prod).toContain("boxalarm-infra:voiceProviderEndpointUrl");
   });
 
   it.each(["http://api.vendor.com/sms", "https://sms-provider.not-yet-selected.invalid", "vendor"])(

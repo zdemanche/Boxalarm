@@ -54,7 +54,7 @@ pulumi config set chiefNotificationEmail chief@<domain>
 - `canaryMemberId` is not needed while `canaryEnabled` is unset (false). Keep the canary off for a first deploy.
 - `alertingPageEmail` and `chiefNotificationEmail` are required on prod and warned about elsewhere. Set them on dev too: without them every alarm notifies nobody.
 - **qa, staging and prod:** `webOrigin` in their yaml is a `*.boxalarm.example` placeholder, and preview refuses a placeholder host (`.example`, `.invalid`, `.test`, localhost) outside dev. Set the real origin: `pulumi config set webOrigin https://<real web host> --stack <stack>`. They also need `nerisSchemaSourceUrl`.
-- **SMS / voice vendor (OQ-3, open):** `smsProviderEndpointUrl` / `voiceProviderEndpointUrl` are optional. Until they are set, see step 3.
+- **SMS / voice vendor (OQ-3, open):** `smsProviderEndpointUrl` / `voiceProviderEndpointUrl` are **required on prod** (prod may not ship push-only) and optional elsewhere. Until they are set on a non-prod stack, see step 3.
 
 ## 3. Deploy
 

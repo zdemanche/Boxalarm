@@ -23,7 +23,8 @@ export type VendorChannel = Exclude<AlertingChannel, "push">;
 // so nothing is ever sent to a domain the project does not control - and every SMS/voice page
 // fails, dead-letters and fires `…-sms-dlq-not-empty` / `…-voice-dlq-not-empty`. The workers
 // stay deployed and subscribed on purpose: unsubscribing them would make SNS drop those pages
-// with no DLQ and no alarm. Preview warns while either is unset (deploy-readiness M5).
+// with no DLQ and no alarm. Preview warns while either is unset (deploy-readiness M5); on
+// prod both are required (stack-config.ts, review F4), so prod never ships push-only.
 //
 // Two-vendor rule (architecture §1.3, N1.2): push and SMS fire in parallel at T+0 as two
 // independent failure domains - push straight to APNs/FCM, SMS through a third-party vendor -

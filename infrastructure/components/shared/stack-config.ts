@@ -100,6 +100,23 @@ export const REQUIRED_CONFIG: readonly RequiredConfigKey[] = [
     why: "who chief-notifications (ops alarms, export/disposal notices) emails",
     when: (ctx) => ctx.env === "prod",
   },
+  // Review F4: prod must not ship push-only. Without a vendor every SMS/voice page dead-letters,
+  // the DLQ alarms latch in ALARM (so a later real failure never re-pages), and the two-vendor
+  // rule (N1.2) is unmet. Other stacks only warn (ChannelWorkers).
+  {
+    key: "smsProviderEndpointUrl",
+    secret: false,
+    example: "https://<sms vendor API host>/<path>",
+    why: "the SMS vendor endpoint; without it no SMS page is ever delivered",
+    when: (ctx) => ctx.env === "prod",
+  },
+  {
+    key: "voiceProviderEndpointUrl",
+    secret: false,
+    example: "https://<voice vendor API host>/<path>",
+    why: "the voice vendor endpoint; without it no voice escalation is ever delivered",
+    when: (ctx) => ctx.env === "prod",
+  },
 ];
 
 /**
