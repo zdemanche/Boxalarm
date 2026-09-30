@@ -213,6 +213,7 @@ export async function createAvailability(
   const { tableName } = readPersonnelDdbConfig(process.env);
   const eventId = randomUUID();
   const nowSeconds = Math.floor(Date.now() / 1000);
+  const eventTime = new Date().toISOString();
   const activatesImmediately = parsed.startAt <= nowSeconds;
 
   const markoffItem = {
@@ -235,6 +236,11 @@ export async function createAvailability(
     eventId,
     eventType: 'personnel.availability.changed',
     correlationId: memberId,
+    // The platform drain publishes only rows carrying the full envelope
+    // (eventTime, source, schemaVersion); without them it drops the row silently.
+    eventTime,
+    source: 'personnel-service',
+    schemaVersion: '1.0',
     createdAt: nowSeconds,
     payload: {
       deptId,
