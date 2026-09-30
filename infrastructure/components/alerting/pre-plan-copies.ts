@@ -176,7 +176,7 @@ export class PrePlanCopies extends pulumi.ComponentResource {
       { parent: this },
     );
 
-    new aws.sqs.QueuePolicy(
+    const queuePolicy = new aws.sqs.QueuePolicy(
       `${prefix}-queue-policy`,
       {
         queueUrl: queue.url,
@@ -220,7 +220,8 @@ export class PrePlanCopies extends pulumi.ComponentResource {
         arn: queue.arn,
         deadLetterConfig: { arn: dlq.arn },
       },
-      { parent: this, dependsOn: [deliveryGuard] },
+      // The main queue policy must exist before the target, or a first-deploy delivery is denied.
+      { parent: this, dependsOn: [queuePolicy, deliveryGuard] },
     );
 
     const lambda = new ServiceLambda(

@@ -149,7 +149,7 @@ export class PushTokens extends pulumi.ComponentResource {
     );
     this.memberUpdatedRule = rule;
 
-    new aws.sqs.QueuePolicy(
+    const queuePolicy = new aws.sqs.QueuePolicy(
       `${name}-member-updated-queue-policy`,
       {
         queueUrl: this.memberUpdatedQueue.url,
@@ -193,7 +193,8 @@ export class PushTokens extends pulumi.ComponentResource {
         arn: this.memberUpdatedQueue.arn,
         deadLetterConfig: { arn: this.memberUpdatedDlq.arn },
       },
-      { parent: this, dependsOn: [this.memberUpdatedDelivery] },
+      // The main queue policy must exist before the target, or a first-deploy delivery is denied.
+      { parent: this, dependsOn: [queuePolicy, this.memberUpdatedDelivery] },
     );
 
     // src/services/alerting-service/eligibility/memberUpdatedHandler.handler

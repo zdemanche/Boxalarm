@@ -77,7 +77,7 @@ export class AlertRulesCopy extends pulumi.ComponentResource {
       { parent: this },
     );
 
-    new aws.sqs.QueuePolicy(
+    const queuePolicy = new aws.sqs.QueuePolicy(
       `${name}-queue-policy`,
       {
         queueUrl: this.queue.url,
@@ -121,7 +121,8 @@ export class AlertRulesCopy extends pulumi.ComponentResource {
         arn: this.queue.arn,
         deadLetterConfig: { arn: this.dlq.arn },
       },
-      { parent: this, dependsOn: [deliveryGuard] },
+      // The main queue policy must exist before the target, or a first-deploy delivery is denied.
+      { parent: this, dependsOn: [queuePolicy, deliveryGuard] },
     );
 
     this.lambda = new ServiceLambda(
