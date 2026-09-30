@@ -142,4 +142,16 @@ describe('push payloads', () => {
       expect(cut).not.toContain('\uFFFD');
     });
   });
+
+  // Review R2-m4: a test push offers no response actions but still sounds like a real page.
+  it('a test push has no DISPATCH category but keeps the critical interruption and sound', () => {
+    const aps = buildApnsPayload({ ...dispatch, isTest: true }, 'critical').aps as Record<
+      string,
+      unknown
+    >;
+    expect(aps).not.toHaveProperty('category');
+    expect(aps['interruption-level']).toBe('critical');
+    expect(aps.sound).toEqual({ critical: 1, name: 'default', volume: 1 });
+    expect((aps.alert as { title: string }).title.startsWith('TEST — ')).toBe(true);
+  });
 });

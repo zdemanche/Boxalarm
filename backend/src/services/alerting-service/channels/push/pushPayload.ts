@@ -205,7 +205,11 @@ export function buildApnsPayload(
       'interruption-level': interruptionLevel,
       // Lets the Notification Service Extension (architecture §5.1) enrich the alert.
       'mutable-content': 1,
-      ...(notification.alertKind === 'dispatch' ? { category: APNS_DISPATCH_CATEGORY } : {}),
+      // A test push has no Responding / Not responding actions to offer (review R2-m4), but
+      // keeps the interruption level and sound above: it proves the alarm actually sounds.
+      ...(notification.alertKind === 'dispatch' && !notification.isTest
+        ? { category: APNS_DISPATCH_CATEGORY }
+        : {}),
     },
     ...routingFields(notification),
   };
