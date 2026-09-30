@@ -128,6 +128,10 @@ Negative check (safe on prod): send the same text from a personal address that i
 
 If a source's address has leaked into spam lists (the token is noise reduction, not authentication), Settings → CAD sources → *New email address*. Update the CAD to the new address **first**: the old one stops paging within a minute.
 
+## Request body
+
+Webhook bodies must be **UTF-8 JSON** (`content-type: application/json`), signed over exactly the bytes sent. The API does not accept binary media types: bytes that are not valid UTF-8 are altered in transit, so the signature no longer matches and the request is refused (`401`).
+
 ## Retry contract for the CAD
 
 The CAD must retry a `429` (its source is over its throttle) and any `5xx` with back-off, **signed again with a fresh timestamp** (a request older than 5 minutes is refused). `401`, `403` and `409` are not retried: fix the configuration. A `200 {"status":"duplicate"}` or `202` means the dispatch is safely recorded.

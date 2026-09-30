@@ -93,6 +93,20 @@ A failure at any of steps 1–4 returns `401` or `409` with a generic body. It e
 
 The total is **about $7–8 per month per stack** before flood traffic, and a flood adds $0.60 per million requests it absorbs. It would contain a many-host flood at the edge instead of at the account limit.
 
+**Alternative paid option, also unbuilt: AWS WAFv2 attached directly to the webhook's regional REST API stage.** No CloudFront is needed. The web ACL would carry:
+- The dispatch-centre addresses as an IP-set allow rule.
+- A rate-based rule per source IP.
+
+WAF evaluates before API Gateway counts the request, so a blocked flood never reaches the account's API Gateway quota. That quota is the one the member app's respond path shares. Approximate cost:
+
+| Item | Cost |
+|---|---|
+| Web ACL | $5/month |
+| Two rules | $1/month each |
+| Requests | $0.60 per million |
+
+That is **about $7 per month per stack** at CAD volumes. It is the simpler of the two paid options and is recommended for prod. Both options wait on the user's approval, because they are fixed monthly costs.
+
 **Operational recommendation.** Where the CAD supports both, configure **both** email and webhook for the department. A flood or outage on one path then does not stop dispatches arriving on the other. Radio tone-out (N1.9) remains the page of record regardless.
 
 ## Observability and tests
