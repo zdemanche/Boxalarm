@@ -67,7 +67,10 @@ function revocationMarkerStatement(tableArn: string): IamPolicyStatement {
  * M2: device loss removes the lost device's PUSH entry (or every one) through
  * personnel-service's writePushDevices - the same transaction registration and sign-out
  * write (member METADATA update + OUTBOX put).
- * DynamoDB authorizes each transaction item as its own action, so each is key-scoped.
+ * DynamoDB authorizes each transaction item as its own action, so each is key-scoped. The
+ * transaction is exactly an Update of the member row and a Put of the outbox row (no
+ * ConditionCheck); `dynamodb:TransactWriteItems` is not an IAM action and is not granted
+ * (security-web MINOR 4).
  */
 function pushInvalidationStatements(tableArn: string): IamPolicyStatement[] {
   return [
@@ -98,12 +101,6 @@ function pushInvalidationStatements(tableArn: string): IamPolicyStatement[] {
       Action: ["dynamodb:PutItem"],
       Resource: tableArn,
       Condition: { "ForAllValues:StringLike": { "dynamodb:LeadingKeys": ["DEPT#*#OUTBOX#*"] } },
-    },
-    {
-      Sid: "TransactPushInvalidation",
-      Effect: "Allow",
-      Action: ["dynamodb:TransactWriteItems"],
-      Resource: tableArn,
     },
   ];
 }
