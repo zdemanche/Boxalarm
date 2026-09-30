@@ -101,7 +101,7 @@ test.describe('E8 issue #175 AC3: export control is admin-only end to end', () =
     await page.getByRole('button', { name: 'Sign in' }).click();
     // Wait for auth to settle before deep-linking (full reload keeps localStorage session) —
     // same pattern as primary-nav.spec.ts's "forbidden URL" test.
-    await expect(page.getByRole('navigation', { name: 'Primary' })).toBeVisible();
+    await expect(page.getByRole('banner')).toBeVisible();
 
     await page.goto('/settings');
     await expect(page.getByRole('heading', { name: 'Settings' })).toBeVisible();
@@ -141,11 +141,7 @@ test.describe('E8 issue #175 AC3: export control is admin-only end to end', () =
       await page.goto('/login');
       await page.getByRole('button', { name: 'Sign in' }).click();
       // Wait for auth to settle before deep-linking (full reload keeps localStorage session).
-      if (role === 'MEMBER') {
-        await expect(page.getByRole('heading', { name: 'Member home' })).toBeVisible();
-      } else {
-        await expect(page.getByRole('navigation', { name: 'Primary' })).toBeVisible();
-      }
+      await expect(page.getByRole('banner')).toBeVisible();
 
       await page.goto('/settings');
       await expect(page).toHaveURL(/\/settings$/);

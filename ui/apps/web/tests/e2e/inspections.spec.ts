@@ -76,7 +76,8 @@ async function signInAsChief(page: Page): Promise<void> {
 
   await page.goto('/login');
   await page.getByRole('button', { name: 'Sign in' }).click();
-  await expect(page.getByRole('navigation', { name: 'Primary' })).toBeVisible();
+  // Signed in: the top bar renders on every viewport (the Primary nav is a closed drawer below 768px).
+  await expect(page.getByRole('banner')).toBeVisible();
 }
 
 test('occupancy create form passes axe (E5-S1 AC + test notes)', async ({ page }) => {

@@ -32,6 +32,7 @@ export const PERSONAS: Record<Role, { groups: Role[]; expectedNavLabels: readonl
     expectedNavLabels: [
       'Dashboard',
       'Alert diagnostics',
+      'Incidents',
       'Members',
       'Certifications',
       'Training events',
@@ -68,6 +69,6 @@ export const FORBIDDEN_PATH_BY_ROLE: Record<Role, string> = {
   OFFICER: '/settings',
   TRAINING: '/settings',
   APPARATUS: '/settings',
-  ADMIN: '/incidents',
+  ADMIN: '/alerts/roster',
   CHIEF: '/settings',
 };

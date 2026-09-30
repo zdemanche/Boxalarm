@@ -87,6 +87,9 @@ async function stubCognitoWithGroups(
 // sidebar is display:none and NavDrawer is closed until TopBar's hamburger button is used — open
 // it first so the assertions below see the same "Primary" nav landmark on every project.
 async function openNavIfCollapsed(page: Page): Promise<void> {
+  // isVisible() doesn't wait, so settle on the signed-in shell first; otherwise the check runs
+  // before the top bar renders and the drawer never opens.
+  await expect(page.getByRole('banner')).toBeVisible();
   const menuButton = page.getByRole('button', { name: 'Open navigation' });
   if (await menuButton.isVisible()) {
     await menuButton.click();
