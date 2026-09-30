@@ -458,7 +458,10 @@ export class HttpApi extends pulumi.ComponentResource {
         threshold: 0,
         comparisonOperator: "GreaterThanThreshold",
         treatMissingData: "notBreaching",
-        alarmActions: [opsTopicArn],
+        // While this fires a revoked session still reaches the alerting plane, so it pages
+        // alerting-page; the ops topic (the chief, who revokes sessions - OQ-24) is told too
+        // (post-merge infra review F9).
+        alarmActions: [alertingPageTopicArn, opsTopicArn],
       },
       { parent: this },
     );

@@ -371,7 +371,7 @@ describe("HttpApi", () => {
       await settle(api);
     });
 
-    it("alarms the given topic on every RevocationCheckFailOpen", async () => {
+    it("pages alerting-page (and the ops topic) on every RevocationCheckFailOpen", async () => {
       const api = await buildApi("fail-open-alarm");
       api.sealRouteSettings();
       const { failOpen } = api.addAlarms(
@@ -387,7 +387,12 @@ describe("HttpApi", () => {
       expect(metric).toBe("RevocationCheckFailOpen");
       expect(namespace).toBe("Boxalarm/authorizer");
       expect(threshold).toBe(0);
-      expect(actions).toEqual(["arn:aws:sns:us-east-1:123456789012:chief"]);
+      // A revoked session is reaching the alerting plane: pages alerting-page, and tells the
+      // chief (F9).
+      expect(actions).toEqual([
+        "arn:aws:sns:us-east-1:123456789012:alerting-page",
+        "arn:aws:sns:us-east-1:123456789012:chief",
+      ]);
       await settle(api);
     });
 
