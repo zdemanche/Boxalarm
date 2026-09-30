@@ -274,3 +274,29 @@ test('revoking the previous key is confirmed first and then reported', async () 
   );
   expect(revoked).toBe(true);
 });
+
+test('a new email address is confirmed first and then shown', async () => {
+  server.use(
+    http.get('/api/v1/platform/cad-sources', () => HttpResponse.json(STORED)),
+    http.post('/api/v1/platform/cad-sources/county/email-address', () =>
+      HttpResponse.json({
+        ...STORED,
+        version: 4,
+        sources: [
+          {
+            ...STORED.sources[0]!,
+            emailAddress: 'dispatch+nichols-fd.county.zzzzzzzzzzzzzzzz@cad.nichols.example.org',
+          },
+        ],
+      }),
+    ),
+  );
+  const user = userEvent.setup();
+  renderPage();
+  await user.click(await screen.findByRole('button', { name: 'New email address' }));
+  const confirm = await screen.findByRole('dialog');
+  await user.click(within(confirm).getByRole('button', { name: 'New address' }));
+  expect(
+    await screen.findByText('dispatch+nichols-fd.county.zzzzzzzzzzzzzzzz@cad.nichols.example.org'),
+  ).toBeTruthy();
+});

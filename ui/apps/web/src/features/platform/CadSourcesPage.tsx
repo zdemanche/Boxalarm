@@ -17,6 +17,7 @@ import {
 } from '../../components/ui';
 import {
   getCadSources,
+  newCadEmailAddress,
   putCadSources,
   revokePreviousCadWebhookKey,
   rotateCadWebhookKey,
@@ -346,9 +347,12 @@ function SourceEditor({
             }
           />
           {draft.view?.emailAddress && draft.emailEnabled ? (
-            <p>
-              Send dispatches to: <code>{draft.view.emailAddress}</code>
-            </p>
+            <>
+              <p>
+                Send dispatches to: <code>{draft.view.emailAddress}</code>
+              </p>
+              <NewEmailAddress sourceId={draft.sourceId} label={draft.label} />
+            </>
           ) : draft.emailEnabled ? (
             <p>
               {emailDomainConfigured
@@ -382,6 +386,31 @@ function SourceEditor({
         </Button>
       </div>
     </Card>
+  );
+}
+
+function NewEmailAddress({ sourceId, label }: { sourceId: string; label: string }) {
+  const auth = useAuth();
+  const queryClient = useQueryClient();
+  const [open, setOpen] = useState(false);
+  return (
+    <>
+      <Button type="button" variant="secondary" onClick={() => setOpen(true)}>
+        New email address
+      </Button>
+      <ConfirmDialog
+        open={open}
+        onOpenChange={setOpen}
+        title={`Give ${label} a new email address?`}
+        consequence="The current address stops paging within a minute. Update the CAD to send to the new address first, or dispatches sent to the old one will be refused."
+        confirmLabel="New address"
+        onConfirm={async () => {
+          const saved = await newCadEmailAddress(auth, sourceId);
+          queryClient.setQueryData(QUERY_KEY, saved);
+        }}
+        danger
+      />
+    </>
   );
 }
 

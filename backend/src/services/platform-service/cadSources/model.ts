@@ -327,3 +327,20 @@ export function sourceWarnings(source: StoredCadSource, index: number): FieldErr
     },
   ];
 }
+
+/**
+ * A new recipient address for one source (security review minor): the old token stops
+ * matching as soon as the alerting copy is updated. The token is noise reduction, not
+ * authentication, but an address that leaked into spam lists can be retired.
+ */
+export function withNewRecipientToken(
+  stored: readonly StoredCadSource[],
+  sourceId: string,
+  token: string,
+): StoredCadSource[] {
+  return stored.map((source) => {
+    if (source.sourceId !== sourceId) return source;
+    if (source.email) return { ...source, email: { ...source.email, recipientToken: token } };
+    return { ...source, emailToken: token };
+  });
+}

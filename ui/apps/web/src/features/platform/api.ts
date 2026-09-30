@@ -204,3 +204,16 @@ export async function revokePreviousCadWebhookKey(
     { method: 'POST' },
   );
 }
+
+/** A new recipient address for one source; the old address stops paging within a minute. */
+export async function newCadEmailAddress(
+  tokens: AuthTokenSource,
+  sourceId: string,
+): Promise<CadSourcesResponse> {
+  const response = await apiRequest(
+    `platform/cad-sources/${encodeURIComponent(sourceId)}/email-address`,
+    tokens,
+    { method: 'POST' },
+  );
+  return (await response.json()) as CadSourcesResponse;
+}

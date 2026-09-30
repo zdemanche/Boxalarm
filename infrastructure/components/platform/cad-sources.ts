@@ -196,6 +196,11 @@ export class CadSources extends pulumi.ComponentResource {
       ["put", "PUT /api/v1/platform/cad-sources", this.settingsLambda],
       ["test-parse", "POST /api/v1/platform/cad-sources/test-parse", this.settingsLambda],
       [
+        "new-email-address",
+        "POST /api/v1/platform/cad-sources/{sourceId}/email-address",
+        this.settingsLambda,
+      ],
+      [
         "rotate-key",
         "POST /api/v1/platform/cad-sources/{sourceId}/webhook-key",
         this.rotateKeyLambda,

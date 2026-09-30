@@ -193,6 +193,42 @@ describe('PUT /platform/cad-sources', () => {
   });
 });
 
+describe('POST /platform/cad-sources/{sourceId}/email-address', () => {
+  it('gives one source a new recipient address (Cedar ManageCadIngress), keeping the rest', async () => {
+    const first = (await handler(
+      event('PUT /api/v1/platform/cad-sources', { sources: [SOURCE] }),
+    )) as {
+      body: string;
+    };
+    const before = (JSON.parse(first.body) as { sources: { emailAddress: string }[] }).sources[0]!
+      .emailAddress;
+    vpSend.mockClear();
+    const response = (await handler(
+      event('POST /api/v1/platform/cad-sources/{sourceId}/email-address', undefined, {
+        sourceId: 'county',
+      }),
+    )) as { statusCode: number; body: string };
+    expect(response.statusCode).toBe(200);
+    expect(cedarAction()).toBe('ManageCadIngress');
+    const after = (
+      JSON.parse(response.body) as { sources: { emailAddress: string; allowedSenders: string[] }[] }
+    ).sources[0]!;
+    expect(after.emailAddress).not.toBe(before);
+    expect(after.emailAddress).toMatch(/^dispatch\+nichols-fd\.county\.[a-z0-9]{16}@/);
+    expect(after.allowedSenders).toEqual(['cad.county.gov']);
+  });
+
+  it('is 404 for an unknown source', async () => {
+    await handler(event('PUT /api/v1/platform/cad-sources', { sources: [SOURCE] }));
+    const response = (await handler(
+      event('POST /api/v1/platform/cad-sources/{sourceId}/email-address', undefined, {
+        sourceId: 'nope',
+      }),
+    )) as { statusCode: number };
+    expect(response.statusCode).toBe(404);
+  });
+});
+
 describe('POST /platform/cad-sources/test-parse', () => {
   it('previews a PARSED result', async () => {
     const response = (await handler(

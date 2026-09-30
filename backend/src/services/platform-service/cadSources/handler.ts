@@ -21,11 +21,13 @@ import { CAD_INGRESS, loadCadIngress, readTableName } from './repository.js';
 import { deleteSourceApiKey } from './rotateKey.js';
 import {
   mergeSources,
+  newRecipientToken,
   readStoredSources,
   sourceWarnings,
   toSourceView,
   validateParserFields,
   validateSourcesInput,
+  withNewRecipientToken,
   type FieldError,
 } from './model.js';
 
@@ -240,6 +242,51 @@ const putHandler = withAuthorization(putSources, {
   resourceId: DEPARTMENT,
 });
 
+/** POST .../{sourceId}/email-address: a new recipient token for one source. */
+async function newEmailAddress(
+  event: GuardEvent,
+  principal: CedarPrincipalContext,
+): Promise<APIGatewayProxyResultV2> {
+  const traceId = extractTraceId(event);
+  const deptId = toVerifiedDeptId(principal);
+  const sourceId = event.pathParameters?.sourceId ?? '';
+  const current = await loadCadIngress(deptId);
+  const stored = readStoredSources(current?.value);
+  if (!current || !stored.some((source) => source.sourceId === sourceId)) {
+    return json(404, { title: 'Not Found', status: 404, traceId });
+  }
+  try {
+    const saved = await putDepartmentConfig(getDynamoDocClient(), {
+      tableName: readTableName(),
+      deptId,
+      configType: CAD_INGRESS,
+      value: { sources: withNewRecipientToken(stored, sourceId, newRecipientToken()) },
+      actorId: principal.sub,
+      correlationId: traceId,
+      expectedVersion: current.version,
+    });
+    logger.info({
+      event: 'platform.cadSources.recipientTokenRotated',
+      correlationId: traceId,
+      actorId: principal.sub,
+      sourceId,
+    });
+    return json(200, view(deptId, saved));
+  } catch (error) {
+    if (error instanceof ConflictError) {
+      return conflictProblem(traceId, 'CAD sources were changed by someone else; reload and retry');
+    }
+    throw error;
+  }
+}
+
+const newEmailAddressHandler = withAuthorization(newEmailAddress, {
+  actionType: 'Boxalarm::Action',
+  actionId: 'ManageCadIngress',
+  resourceType: 'Boxalarm::Department',
+  resourceId: DEPARTMENT,
+});
+
 const testParseHandler = withAuthorization((event) => testParse(event), {
   actionType: 'Boxalarm::Action',
   actionId: 'ManageCadIngress',
@@ -255,6 +302,8 @@ export const handler = async (event: GuardEvent): Promise<APIGatewayProxyResultV
       return putHandler(event);
     case 'POST /api/v1/platform/cad-sources/test-parse':
       return testParseHandler(event);
+    case 'POST /api/v1/platform/cad-sources/{sourceId}/email-address':
+      return newEmailAddressHandler(event);
     default:
       return json(404, { title: 'Not Found', status: 404 });
   }

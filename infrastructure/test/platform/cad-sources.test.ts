@@ -51,13 +51,17 @@ async function build(): Promise<void> {
 describe("CadSources (platform settings routes)", { timeout: 30_000 }, () => {
   it("registers the four Cognito-authorized routes on the right Lambdas", async () => {
     await build();
-    expect(routes).toHaveLength(5);
+    expect(routes).toHaveLength(6);
     expect(routes).toEqual(
       expect.arrayContaining([
         { routeKey: "GET /api/v1/platform/cad-sources", lambda: SETTINGS_FN },
         { routeKey: "POST /api/v1/platform/cad-sources/test-parse", lambda: SETTINGS_FN },
         { routeKey: "POST /api/v1/platform/cad-sources/{sourceId}/webhook-key", lambda: ROTATE_FN },
         { routeKey: "PUT /api/v1/platform/cad-sources", lambda: SETTINGS_FN },
+        {
+          routeKey: "POST /api/v1/platform/cad-sources/{sourceId}/email-address",
+          lambda: SETTINGS_FN,
+        },
         {
           routeKey: "POST /api/v1/platform/cad-sources/{sourceId}/webhook-key/revoke-previous",
           lambda: ROTATE_FN,

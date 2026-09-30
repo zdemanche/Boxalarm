@@ -121,6 +121,10 @@ Expected: test members are paged within a minute; the log has `cadIngress.email.
 
 Negative check (safe on prod): send the same text from a personal address that is not on the allowlist. Expected: no page, `cadIngress.email.quarantined` with `reason: SenderNotAllowed`, and `…-cad-quarantined` fires.
 
+## A new email address
+
+If a source's address has leaked into spam lists (the token is noise reduction, not authentication), Settings → CAD sources → *New email address*. Update the CAD to the new address **first**: the old one stops paging within a minute.
+
 ## Retry contract for the CAD
 
 The CAD must retry a `429` (its source is over its throttle) and any `5xx` with back-off, **signed again with a fresh timestamp** (a request older than 5 minutes is refused). `401`, `403` and `409` are not retried: fix the configuration. A `200 {"status":"duplicate"}` or `202` means the dispatch is safely recorded.
