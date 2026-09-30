@@ -1106,10 +1106,70 @@ test('drainBriefly sends queued work but never holds sign-out past its time limi
   await syncManager.drainBriefly(3000);
   await expect(store.find('check-brief')).resolves.toBeUndefined();
 
-  // A server that never answers: drainBriefly returns at the limit anyway.
-  mockApiRequest.mockImplementationOnce(() => new Promise(() => undefined));
+  // A server that doesn't answer in time: drainBriefly returns at the limit anyway.
+  let answer: () => void = () => undefined;
+  mockApiRequest.mockImplementationOnce(
+    () =>
+      new Promise((resolve) => {
+        answer = () => resolve({ json: async () => ({}) });
+      }),
+  );
   await syncManager.enqueueChecklistRun('ENGINE-2', 'check-hang', {});
   const started = Date.now();
   await syncManager.drainBriefly(50);
   expect(Date.now() - started).toBeLessThan(2000);
+  // Let the abandoned drain finish so it doesn't hold the drain lock for later tests.
+  answer();
+  await syncManager.drainAndSettle();
+});
+
+// R5-M1: A signs out with a request in flight on a bad link; B signs in before it returns.
+test("a drain still running when the member changes never posts A's next row with B's tokens", async () => {
+  const memberA = { ...tokens, memberId: 'member-a' };
+  const memberB = { ...tokens, memberId: 'member-b' };
+  const entry = { activityType: 'DRILL', refId: null, occurredAt: 1790000000, hours: 2 };
+  (NetInfo.fetch as jest.Mock).mockResolvedValue({ isConnected: false });
+  syncManager.configure(memberA, 'https://api.example.com');
+  await syncManager.enqueueAttendance('a-first', 'Attendance — Drill', entry);
+  await syncManager.enqueueAttendance('a-second', 'Attendance — Drill', {
+    ...entry,
+    occurredAt: 1790000100,
+  });
+  await flush();
+
+  let releaseFirst: () => void = () => undefined;
+  mockApiRequest.mockImplementationOnce(
+    () =>
+      new Promise((resolve) => {
+        releaseFirst = () => resolve({ json: async () => entry });
+      }),
+  );
+  mockApiRequest.mockResolvedValue({ json: async () => entry });
+  (NetInfo.fetch as jest.Mock).mockResolvedValue({ isConnected: true });
+  const running = syncManager.drainAndSettle();
+  for (let i = 0; i < 20 && mockApiRequest.mock.calls.length === 0; i += 1) await flush();
+  expect(mockApiRequest).toHaveBeenCalledTimes(1);
+
+  // A signs out, B signs in, then A's in-flight request returns.
+  syncManager.configure(null, null);
+  syncManager.configure(memberB, 'https://api.example.com');
+  releaseFirst();
+  await running;
+  await flush();
+
+  expect(mockApiRequest.mock.calls.every(([, source]) => source !== memberB)).toBe(true);
+  expect(mockApiRequest).toHaveBeenCalledTimes(1);
+  expect((await store.find('a-second'))?.ownerMemberId).toBe('member-a');
+
+  // A signs in again: the held row goes, under A.
+  syncManager.configure(null, null);
+  syncManager.configure(memberA, 'https://api.example.com');
+  await flush();
+  await flush();
+  expect(mockApiRequest).toHaveBeenLastCalledWith(
+    'personnel/attendance',
+    memberA,
+    expect.objectContaining({ body: expect.stringContaining('1790000100') }),
+  );
+  await expect(store.find('a-second')).resolves.toBeUndefined();
 });

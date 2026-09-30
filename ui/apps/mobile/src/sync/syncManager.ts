@@ -542,22 +542,29 @@ function missingEtaFallback(row: OutboxRow, error: unknown): string | null {
   });
 }
 
-async function post(row: OutboxRow): Promise<Response | null> {
+/** The session one drain run sends with, fixed when the run starts (R5-M1). */
+interface RunSession {
+  readonly tokens: AuthTokenSource;
+  readonly apiBaseUrl: string;
+}
+
+async function post(row: OutboxRow, session: RunSession): Promise<Response | null> {
   try {
-    return await postOnce(row);
+    return await postOnce(row, session);
   } catch (error) {
     const fallbackBody = missingEtaFallback(row, error);
     if (!fallbackBody) throw error;
     await outbox.replaceBody(row.id, fallbackBody);
-    return postOnce({ ...row, body: fallbackBody });
+    return postOnce({ ...row, body: fallbackBody }, session);
   }
 }
 
-async function postOnce(row: OutboxRow): Promise<Response | null> {
-  if (!tokens || !apiBaseUrl) throw new Error('Sync is not configured yet');
+async function postOnce(row: OutboxRow, session: RunSession): Promise<Response | null> {
+  // Never the module-level session: it can change to another member mid-drain (R5-M1).
+  const { tokens: runTokens, apiBaseUrl: runApiBaseUrl } = session;
   try {
-    return await apiRequest(row.path, tokens, {
-      apiBaseUrl,
+    return await apiRequest(row.path, runTokens, {
+      apiBaseUrl: runApiBaseUrl,
       method: row.method,
       headers: { 'Content-Type': 'application/json' },
       body: row.body,
@@ -583,8 +590,8 @@ async function postOnce(row: OutboxRow): Promise<Response | null> {
   }
 }
 
-async function create(row: OutboxRow): Promise<OutboxRow | undefined> {
-  const response = await post(row);
+async function create(row: OutboxRow, session: RunSession): Promise<OutboxRow | undefined> {
+  const response = await post(row, session);
   if (!response) {
     await outbox.advanceStage(row.id, { stage: 'DONE' });
     return outbox.find(row.id);
@@ -599,12 +606,12 @@ async function create(row: OutboxRow): Promise<OutboxRow | undefined> {
   return outbox.find(row.id);
 }
 
-async function processEntry(id: string): Promise<void> {
+async function processEntry(id: string, session: RunSession): Promise<void> {
   let row = await outbox.find(id);
   if (!row) return;
 
   if (row.stage === 'CREATE') {
-    row = await create(row);
+    row = await create(row, session);
     if (!row) return;
   }
 
@@ -612,7 +619,7 @@ async function processEntry(id: string): Promise<void> {
     // A kind whose replay re-signs gets a fresh link instead of a doomed PUT. The replay is safe:
     // the body's idempotencyKey makes the server answer "duplicate" without writing twice.
     if (row.photoUploadUrl && isExpired(row.photoUploadUrl) && RESIGNS_ON_REPLAY.has(row.kind)) {
-      row = await create(row);
+      row = await create(row, session);
       if (!row || row.stage !== 'UPLOAD_PHOTO') return;
     }
     try {
@@ -684,9 +691,19 @@ async function runDrain(): Promise<void> {
     const netState = await NetInfo.fetch();
     if (netState.isConnected !== true) return;
 
+    // One session for the whole run (R5-M1). If the member signs out and another signs in while
+    // this run is still going (the bounded sign-out drain gives up waiting, not the drain), the
+    // run stops at the next row: nothing listed for the old member is posted with the new
+    // member's tokens. The new session's own drain, queued behind this one, picks up its rows.
+    const runTokens = tokens;
+    const runApiBaseUrl = apiBaseUrl;
+    const runOwner = owner.memberId;
+    if (!runTokens || !runApiBaseUrl) return;
+    const session: RunSession = { tokens: runTokens, apiBaseUrl: runApiBaseUrl };
     // Only the signed-in member's own rows (R2-M3).
-    const pending = await outbox.listDrainable(Date.now(), owner.memberId);
+    const pending = await outbox.listDrainable(Date.now(), runOwner);
     for (const listed of pending) {
+      if (tokens !== runTokens || owner.memberId !== runOwner) break;
       // Re-read: a row listed above may have been discarded or superseded since (a changed
       // answer), and a vanished row must not be reported as delivered.
       const row = await outbox.find(listed.id);
@@ -701,7 +718,7 @@ async function runDrain(): Promise<void> {
       if (!(await outbox.claimForSync(row.id))) continue;
       await notify();
       try {
-        await processEntry(row.id);
+        await processEntry(row.id, session);
         await outbox.markSynced(row.id);
         rememberSynced(row.id);
         lastSyncAt = new Date().toISOString();
