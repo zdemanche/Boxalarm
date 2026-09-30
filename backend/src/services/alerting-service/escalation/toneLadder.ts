@@ -36,6 +36,17 @@ export async function readDepartmentToneConfig(
       Key: { pk: buildDeptScopedPk(deptId, 'ALERT_RULES'), sk: 'METADATA' },
     }),
   );
+  if (!result.Item) {
+    // No ALERT_RULES_COPY: the department never saved rules, or they predate the copy consumer
+    // (backfill: platform-service config/reemitAlertRules.ts). Logged so defaults are visible.
+    logError(
+      'alerting.toneLadder.rules_default',
+      new Error('no ALERT_RULES_COPY; using defaults'),
+      {
+        deptId,
+      },
+    );
+  }
   const toneLadder = result.Item?.toneLadder as Record<string, unknown> | undefined;
   const defaultRule = result.Item?.defaultRule as Record<string, unknown> | undefined;
   return {

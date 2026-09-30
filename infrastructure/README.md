@@ -57,6 +57,14 @@ Before relying on push, run the device checklist in `docs/runbooks/push-device-v
 `lambdaCode: no bundle found for ...` warning. The placeholder answers HTTP routes with 501 and throws on every
 stream, queue, schedule or async event, so those retry into their DLQs and page instead of being acknowledged.
 
+### After the first deploy of the ALERT_RULES copy consumer
+
+A department whose ALERT_RULES were saved before `alert-rules-copy-consumer` existed has no `ALERT_RULES_COPY`, so its tone ladder runs on the defaults. The fan-out logs `alerting.toneLadder.rules_default` when that happens. Re-emit the saved rules once:
+
+```
+cd backend && node src/services/platform-service/config/reemitAlertRules.ts --table boxalarm-<env>-platform --dept <deptId>
+```
+
 ## Getting started
 
 Wave 1 foundations are in progress — see [PR #90](https://github.com/zdemanche/boxalarm-infrastructure/pull/90) and the open `-INFRA` issues. Stacks: `dev`, `qa`, `staging`, `prod` (`Pulumi.<env>.yaml`).

@@ -29,7 +29,7 @@ const CONFIG_SECTIONS: {
     configType: 'ALERT_RULES',
     label: 'Alert rule timing',
     helpText:
-      'Escalation threshold N in seconds, e.g. {"escalationThresholdN":90}. This changes how long Boxalarm waits before escalating to SMS for every member.',
+      'Paging timers and the ladder stop rule, e.g. {"escalationThresholdN":90,"toneLadder":{"tone2AtSeconds":180,"tone3AtSeconds":360},"defaultRule":{"minResponders":3,"requiredQuals":["INTERIOR"]}}. escalationThresholdN (30-900 s) is how long Boxalarm waits before calling a member who has not answered by voice; push and SMS go out together at the page. Tones 2 and 3 re-page everyone until minResponders have answered RESPONDING.',
   },
   {
     configType: 'CHECKLIST_DEFAULTS',

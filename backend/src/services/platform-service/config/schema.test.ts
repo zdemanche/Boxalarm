@@ -94,7 +94,7 @@ describe('validateConfigValue', () => {
 
   describe('ALERT_RULES', () => {
     it('accepts a valid escalationThresholdN', () => {
-      expect(validateConfigValue('ALERT_RULES', { escalationThresholdN: 3 })).toEqual([]);
+      expect(validateConfigValue('ALERT_RULES', { escalationThresholdN: 90 })).toEqual([]);
     });
 
     it('accepts a valid certExpiryLeadDays', () => {
@@ -114,13 +114,13 @@ describe('validateConfigValue', () => {
       const errors = validateConfigValue('ALERT_RULES', { escalationThresholdN: 0 });
       expect(errors).toContainEqual({
         field: 'escalationThresholdN',
-        message: 'must be a positive integer when provided',
+        message: 'must be a whole number of seconds from 30 to 900',
       });
     });
 
     it('rejects arbitrary unrecognized fields (regression: PR #145 accepted arbitrary JSON)', () => {
       const errors = validateConfigValue('ALERT_RULES', {
-        escalationThresholdN: 3,
+        escalationThresholdN: 90,
         arbitraryField: { nested: 'payload' },
       });
       expect(errors).toContainEqual({
@@ -143,6 +143,11 @@ describe('validateConfigValue', () => {
     });
 
     it.each([
+      [{ escalationThresholdN: 1 }, 'escalationThresholdN'],
+      [{ toneLadder: { tone2AtSeconds: 400 } }, 'toneLadder.tone3AtSeconds'],
+      [{ toneLadder: { tone3AtSeconds: 120 } }, 'toneLadder.tone3AtSeconds'],
+      [{ toneLadder: { tone2AtSeconds: 18_000 } }, 'toneLadder.tone2AtSeconds'],
+      [{ defaultRule: { minResponders: 500 } }, 'defaultRule.minResponders'],
       [{ toneLadder: { tone2AtSeconds: 0 } }, 'toneLadder.tone2AtSeconds'],
       [{ toneLadder: { tone2AtSeconds: 300, tone3AtSeconds: 200 } }, 'toneLadder.tone3AtSeconds'],
       [{ toneLadder: { tone4AtSeconds: 900 } }, 'toneLadder.tone4AtSeconds'],
