@@ -157,6 +157,16 @@ describe("SessionRevocation (review C1)", () => {
     expect(actions).not.toContain("cognito-idp:AdminDisableUser");
   });
 
+  // Security-web MINOR 6: both kill switches read the target's groups (protected targets).
+  it("lets both kill switches list the target's groups in this pool, and nothing broader", async () => {
+    const sr = await build();
+    for (const lambda of [sr.deviceLossLambda, sr.credentialResetLambda]) {
+      const actions = actionsOn(await statementsOf(lambda), POOL_ARN);
+      expect(actions).toContain("cognito-idp:AdminListGroupsForUser");
+      expect(actions).not.toContain("cognito-idp:AdminAddUserToGroup");
+    }
+  });
+
   it("alarms the chief on every credential reset (no threshold)", async () => {
     const sr = await build();
     const alarm = sr.credentialResetInvokedAlarm;
@@ -191,7 +201,20 @@ describe("SessionRevocation (review C1)", () => {
     expect(bySid.EmitMemberUpdatedOutbox?.Condition).toEqual({
       "ForAllValues:StringLike": { "dynamodb:LeadingKeys": ["DEPT#*#OUTBOX#*"] },
     });
-    expect(bySid.TransactPushInvalidation?.Action).toEqual(["dynamodb:TransactWriteItems"]);
+    expect(bySid.EmitMemberUpdatedOutbox?.Action).toEqual(["dynamodb:PutItem"]);
+    // Security-web MINOR 4: dynamodb:TransactWriteItems is not an IAM action - a transaction
+    // is authorized per item (writePushDevices: Update the member row + Put the outbox row,
+    // no ConditionCheck), so the grant was dead and is gone.
+    expect(JSON.stringify(statements)).not.toContain("TransactWriteItems");
+    expect(
+      statements
+        .filter((s) => [s.Action].flat().some((a) => a.startsWith("dynamodb:")))
+        .flatMap((s) => [s.Action].flat())
+        .sort(),
+    ).toEqual(
+      // + the revocation marker's own grant (revocationMarkerStatement).
+      expect.arrayContaining(["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:UpdateItem"]),
+    );
   });
 
   it("alarms the chief on the first failed login re-enable (review MAJOR 2)", async () => {

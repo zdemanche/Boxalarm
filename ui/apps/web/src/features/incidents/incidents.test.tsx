@@ -547,6 +547,36 @@ test('Submit sends a locked, validated report to NERIS and shows the submission 
   expect(screen.queryByRole('button', { name: 'Submit' })).toBeNull();
 });
 
+// Security-web MINOR 2: Submit is Cedar SubmitIncidentReport, the NERIS officer tier. An
+// officer used to see an enabled Submit the server refused (403); now it sends.
+test('an officer submits a locked, validated report to NERIS', async () => {
+  let current = detail({ status: 'VALIDATED', lockedAt: 1_798_003_000, lockedBy: 'MBR-0034' });
+  let submitCalls = 0;
+  server.use(
+    http.get('/api/v1/incidents/i-1', () => HttpResponse.json(current)),
+    http.post('/api/v1/incidents/i-1/submit', () => {
+      submitCalls += 1;
+      current = { ...current, status: 'SUBMITTED' };
+      return HttpResponse.json(
+        { incidentId: 'i-1', submissionStatus: 'SUBMITTED' },
+        { status: 202 },
+      );
+    }),
+    http.get('/api/v1/incidents/i-1/submissions', () =>
+      HttpResponse.json({ incidentId: 'i-1', status: 'SUBMITTED', submissionStatus: 'SUBMITTED' }),
+    ),
+  );
+
+  const user = userEvent.setup();
+  renderIncidents(['OFFICER'], '/incidents/i-1');
+  await screen.findByRole('heading', { level: 1, name: /14 Elm St/ });
+  await user.click(screen.getByRole('button', { name: 'Review and submit' }));
+  await user.click(screen.getByRole('button', { name: 'Submit' }));
+
+  expect(await screen.findByText('Sent to NERIS, waiting for a response')).toBeTruthy();
+  expect(submitCalls).toBe(1);
+});
+
 test('a failed NERIS submission shows its reason and can be retried', async () => {
   let submissionStatus = 'FAILED';
   let retryCalls = 0;

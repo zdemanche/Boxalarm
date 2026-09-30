@@ -22,6 +22,7 @@ import { createDdbClient, readPersonnelDdbConfig } from './dynamoClient.js';
 
 const METRIC_NAMESPACE = 'Boxalarm/personnel-availability';
 const MAX_EPOCH_SECONDS = 4_102_444_800;
+export const MAX_MARKOFF_WINDOW_SECONDS = 90 * 24 * 60 * 60;
 
 function conflictProblem(detail: string, traceId: string): APIGatewayProxyResultV2 {
   return {
@@ -73,7 +74,7 @@ function readSchedulerConfig(env: NodeJS.ProcessEnv): SchedulerConfig {
 
 let cachedSchedulerClient: SchedulerClient | undefined;
 
-function getSchedulerClient(client?: SchedulerClient): SchedulerClient {
+export function getSchedulerClient(client?: SchedulerClient): SchedulerClient {
   cachedSchedulerClient ??= client ?? AWSXRay.captureAWSv3Client(new SchedulerClient({}));
   return cachedSchedulerClient;
 }
@@ -107,6 +108,14 @@ function parseBody(body: string | undefined): ParsedBody | { error: string } {
   }
   if (endAt <= startAt) {
     return { error: 'endAt must be strictly after startAt.' };
+  }
+  // Paging review MAJOR-A: a mark-off really stops pages now, so a mistyped year cannot take a
+  // member off paging until 2100. Longer absences are LOA (a status change), not a mark-off.
+  if (endAt - startAt > MAX_MARKOFF_WINDOW_SECONDS) {
+    return {
+      error:
+        'A mark-off can last at most 90 days. For a longer absence, ask an officer to set leave of absence.',
+    };
   }
   if (endAt <= Math.floor(Date.now() / 1000)) {
     return { error: 'endAt must be in the future.' };
@@ -213,6 +222,7 @@ export async function createAvailability(
   const { tableName } = readPersonnelDdbConfig(process.env);
   const eventId = randomUUID();
   const nowSeconds = Math.floor(Date.now() / 1000);
+  const eventTime = new Date().toISOString();
   const activatesImmediately = parsed.startAt <= nowSeconds;
 
   const markoffItem = {
@@ -235,6 +245,11 @@ export async function createAvailability(
     eventId,
     eventType: 'personnel.availability.changed',
     correlationId: memberId,
+    // The platform drain publishes only rows carrying the full envelope
+    // (eventTime, source, schemaVersion); without them it drops the row silently.
+    eventTime,
+    source: 'personnel-service',
+    schemaVersion: '1.0',
     createdAt: nowSeconds,
     payload: {
       deptId,

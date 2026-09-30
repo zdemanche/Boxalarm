@@ -126,7 +126,7 @@ describe("NerisConfig", () => {
     );
   });
 
-  it("exports IAM statements scoped to the secret and /boxalarm/{env}/neris/* SSM path", async () => {
+  it("exports IAM statements scoped to the secret and exactly the two /boxalarm/{env}/neris SSM parameters", async () => {
     const { nerisClientPolicyStatements } = await import("../../components/neris/neris-config");
     const statements = nerisClientPolicyStatements(
       "arn:aws:secretsmanager:us-east-1:123456789012:secret:boxalarm-dev-neris-client-credentials-AbCdEf",
@@ -140,7 +140,18 @@ describe("NerisConfig", () => {
 
     const ssmStmt = statements.find((s) => s.Sid === "NerisGetParameters");
     expect(ssmStmt?.Action).toEqual(["ssm:GetParameter", "ssm:GetParameters"]);
-    expect(ssmStmt?.Resource).toContain("/boxalarm/dev/neris/*");
+    // Security-web MINOR 3: the two parameters, in the secret's region and account - no wildcard.
+    expect(ssmStmt?.Resource).toEqual([
+      "arn:aws:ssm:us-east-1:123456789012:parameter/boxalarm/dev/neris/base-url",
+      "arn:aws:ssm:us-east-1:123456789012:parameter/boxalarm/dev/neris/user-agent",
+    ]);
+  });
+
+  it("refuses a secret reference it cannot pin the parameters' region and account from", async () => {
+    const { nerisClientPolicyStatements } = await import("../../components/neris/neris-config");
+    expect(() =>
+      nerisClientPolicyStatements("boxalarm-dev-neris-client-credentials", "dev"),
+    ).toThrow("full Secrets Manager ARN");
   });
 });
 

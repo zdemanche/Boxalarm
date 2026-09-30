@@ -5,6 +5,7 @@ import { Button, Card, PageHeader, Select, TextInput } from '../../components/ui
 import { ApiError } from '../../lib/apiClient';
 import { useOnlineStatus } from '../../lib/useOnlineStatus';
 import { markUnavailable } from './api';
+import { MarkOffList } from './MarkOffList';
 import styles from './AvailabilityPage.module.css';
 
 // F2.5 / docs/design.md F-06 on the office surface. A mark-off suppresses alerting, so there is
@@ -52,6 +53,8 @@ function toLocalInputValue(ms: number): string {
 }
 
 const REASONS = ['Work', 'Travel', 'Sick', 'Family', 'Other'];
+/** The server's cap (personnel availability/handler.ts MAX_MARKOFF_WINDOW_SECONDS). */
+const MAX_WINDOW_MS = 90 * DAY_MS;
 
 export function AvailabilityPage() {
   const auth = useAuth();
@@ -113,6 +116,12 @@ export function AvailabilityPage() {
       setFormError('The end has to be in the future.');
       return;
     }
+    if (end.getTime() - start.getTime() > MAX_WINDOW_MS) {
+      setFormError(
+        'A mark-off can last at most 90 days. For a longer absence, ask an officer to set leave of absence.',
+      );
+      return;
+    }
     setFormError(null);
     if (!auth.memberId) return;
     mutation.mutate({ memberId: auth.memberId, start, end, reason });
@@ -146,10 +155,13 @@ export function AvailabilityPage() {
             You won&rsquo;t be alerted for calls until then. You&rsquo;ll still get drill and shift
             reminders.
           </p>
-          <p>To end it early, ask an officer to clear it. Boxalarm can&rsquo;t cancel one yet.</p>
+          <p>To be alerted again sooner, use End now below.</p>
           <Button variant="secondary" onClick={() => mutation.reset()}>
             Mark another period
           </Button>
+        </Card>
+        <Card>
+          <MarkOffList memberId={auth.memberId} ownRecord />
         </Card>
       </main>
     );
@@ -157,7 +169,7 @@ export function AvailabilityPage() {
 
   const submitError =
     mutation.error instanceof ApiError && mutation.error.problem.status === 409
-      ? 'Not recorded: you already have a mark-off starting at that exact time. To change it, ask an officer to clear it.'
+      ? 'Not recorded: a mark-off starting at that exact time already exists (an ended one still counts). Pick a different start.'
       : mutation.error
         ? 'This could not be saved, so you are not marked unavailable. Try again.'
         : null;
@@ -231,6 +243,9 @@ export function AvailabilityPage() {
             </Button>
           </div>
         </form>
+      </Card>
+      <Card>
+        <MarkOffList memberId={auth.memberId} ownRecord />
       </Card>
     </main>
   );

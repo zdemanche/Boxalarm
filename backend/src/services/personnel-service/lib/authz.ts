@@ -26,6 +26,27 @@ export function requireAdminRole(ctx: VerifiedAccessToken): void {
  */
 const ROLE_MANAGER_GROUPS = new Set(['ADMIN', 'CHIEF']);
 
+/**
+ * LOSAP point rules are department configuration (architecture: LOSAP_POINT_RULES is a
+ * DEPARTMENT_CONFIG type written through PUT /platform/config, UpdateConfig = CHIEF/ADMIN; the
+ * PRD gives membership and LOSAP points to the administrator). They drive a member benefit, so
+ * OFFICER - admitted by requireAdminRole - may not rewrite them (security-web MINOR 11).
+ */
+export function requireLosapRulesManager(ctx: VerifiedAccessToken): void {
+  const groups = ctx['cognito:groups'].split(' ').filter((group) => group.length > 0);
+  if (!groups.some((group) => ROLE_MANAGER_GROUPS.has(group))) {
+    throw new ForbiddenError('only ADMIN or CHIEF may change LOSAP point rules');
+  }
+}
+
+/** Reinstating a RETIRED member is CHIEF/ADMIN only, like the protected-target rule below. */
+export function requireReinstatementAuthority(ctx: VerifiedAccessToken): void {
+  const groups = ctx['cognito:groups'].split(' ').filter((group) => group.length > 0);
+  if (!groups.some((group) => ROLE_MANAGER_GROUPS.has(group))) {
+    throw new ForbiddenError('only ADMIN or CHIEF may reinstate a RETIRED member');
+  }
+}
+
 export function requireRoleManager(ctx: VerifiedAccessToken): void {
   const groups = ctx['cognito:groups'].split(' ').filter((group) => group.length > 0);
   if (!groups.some((group) => ROLE_MANAGER_GROUPS.has(group))) {

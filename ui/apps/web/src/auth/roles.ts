@@ -37,6 +37,14 @@ export function canLockIncident(roles: readonly Role[]): boolean {
   return roles.includes('OFFICER') || roles.includes('CHIEF') || roles.includes('ADMIN');
 }
 
+/**
+ * Sending a reviewed report to NERIS (Cedar SubmitIncidentReport, the NERIS officer tier):
+ * OFFICER, CHIEF, ADMIN - the same officers who lock and resubmit it.
+ */
+export function canSubmitIncident(roles: readonly Role[]): boolean {
+  return canLockIncident(roles);
+}
+
 /** Reopening a locked incident report (Cedar UnlockIncidentReport): CHIEF or ADMIN only. */
 export function canUnlockIncident(roles: readonly Role[]): boolean {
   return roles.includes('CHIEF') || roles.includes('ADMIN');
@@ -51,6 +59,24 @@ export function canUpdateServiceStatus(roles: readonly Role[]): boolean {
  * (authContext.ts ADMIN_GROUPS), not Cedar. */
 export function canCreateApparatus(roles: readonly Role[]): boolean {
   return roles.includes('CHIEF') || roles.includes('ADMIN');
+}
+
+/**
+ * Member status changes (LOA/RETIRED end every session and stop all paging): CHIEF or ADMIN on
+ * the web. The API also admits OFFICER for ordinary members; the web leaves the most
+ * destructive control to the chief (OQ-24) - and only CHIEF/ADMIN may reinstate a RETIRED
+ * member or change a CHIEF/ADMIN's status.
+ */
+export function canChangeMemberStatus(roles: readonly Role[]): boolean {
+  return roles.includes('CHIEF') || roles.includes('ADMIN');
+}
+
+/**
+ * Seeing and ending another member's mark-offs (Cedar ViewMemberAvailability /
+ * EndMemberMarkoff, AVAILABILITY_OFFICER_GROUPS): OFFICER, CHIEF, ADMIN.
+ */
+export function canManageMemberAvailability(roles: readonly Role[]): boolean {
+  return (['OFFICER', 'CHIEF', 'ADMIN'] as const).some((r) => roles.includes(r));
 }
 
 /** Equipment and PPE writes (Cedar INVENTORY_ADMIN_GROUPS). */

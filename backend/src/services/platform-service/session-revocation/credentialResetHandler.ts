@@ -13,6 +13,8 @@ import {
 } from '@boxalarm/authz';
 import {
   createRevocationClient,
+  isProtectedTarget,
+  mayActOnProtectedTarget,
   readRevocationConfig,
   resetMemberPassword,
   resolveMemberDeptId,
@@ -114,6 +116,37 @@ async function resetCredentials(
     return forbiddenProblem(traceId);
   }
 
+  // Security-web MINOR 6: a chief's or admin's password is reset only by an admin. Fails
+  // closed when the target's groups cannot be read.
+  let protectedTarget: boolean;
+  try {
+    protectedTarget = await isProtectedTarget(client, { userPoolId, username: memberId });
+  } catch (error) {
+    log('credentialReset.groupLookupFailed', {
+      memberId,
+      traceId,
+      message: error instanceof Error ? error.message : undefined,
+    });
+    return serviceUnavailableProblem(traceId);
+  }
+  // Ending your own sessions is never an escalation (a non-admin chief whose own phone is
+  // lost must not wait for an admin).
+  const selfTarget = memberId === principal.sub;
+  if (protectedTarget && !selfTarget && !mayActOnProtectedTarget(principal['cognito:groups'])) {
+    log('credentialReset.denied', { reason: 'ProtectedTarget', memberId, traceId });
+    return {
+      statusCode: 403,
+      headers: { 'content-type': 'application/problem+json' },
+      body: JSON.stringify({
+        type: 'about:blank',
+        title: 'Forbidden',
+        status: 403,
+        detail: 'Only an admin can reset the password of a chief or an admin.',
+        traceId,
+      }),
+    };
+  }
+
   // M1: refuse the access tokens already issued - they are verified offline and would
   // otherwise keep working for up to an hour after the reset. Written before the reset AND
   // again after the sign-out (review minor 4), so a refresh that squeezed in between cannot
@@ -175,7 +208,9 @@ async function resetCredentials(
         status: 409,
         detail:
           `Every session was signed out, but the password could not be reset (${reason}). ` +
-          'Set the member to LOA to block sign-in until their email is corrected.',
+          "Correct the member's email on their page (Account security > Change email - it " +
+          'updates where reset codes go), then reset again. Until then, set them to Leave of ' +
+          'absence (Status > Change status) to block sign-in.',
         traceId,
       }),
     };

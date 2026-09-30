@@ -173,6 +173,23 @@ describe("Incident", () => {
     }
   });
 
+  // Security-web MINOR 2: submit, retry, the submission reads and exposures are Cedar-gated.
+  it("gives the Cedar-gated submission and exposure Lambdas the policy store and IsAuthorized", async () => {
+    const incident = await build();
+    for (const lambda of [
+      incident.submitLambda,
+      incident.submissionGetLambda,
+      incident.submissionRetryLambda,
+      incident.exposuresLambda,
+    ]) {
+      const env = await resolve(lambda.function.environment);
+      expect(env?.variables?.VERIFIED_PERMISSIONS_POLICY_STORE_ID).toBeTruthy();
+      expect(await resolve(lambda.rolePolicy.policy)).toContain(
+        "verifiedpermissions:IsAuthorizedWithToken",
+      );
+    }
+  });
+
   it("routes the NERIS loop: validate, lock, unlock, resubmit, no-activity month, and the plural ledger path", async () => {
     const incident = await build();
     await resolve(incident.nerisRouteLambdas["no-activity-report"]!.function.arn);

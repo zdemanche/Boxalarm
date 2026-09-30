@@ -70,6 +70,22 @@ export interface RouteThrottle {
 const DEFAULT_ALERTING_THROTTLE: RouteThrottle = { rateLimit: 50, burstLimit: 100 };
 const CALL_TRAFFIC_THROTTLE: RouteThrottle = { rateLimit: 100, burstLimit: 200 };
 
+/**
+ * Security-web MINOR 8: officer reads no responder needs during a call - delivery receipts,
+ * per-member diagnostics, the alerting audit log, canary status and the delivery baseline - are
+ * NOT here. They sit on the main, fail-closed authorizer, so during a platform-table outage a
+ * revoked officer token cannot keep reading delivery evidence for up to an hour. Fail-open is
+ * kept for exactly what pages and answers a call.
+ */
+export const OFFICER_ALERTING_READ_ROUTES: readonly string[] = [
+  "GET /api/v1/alerting/dispatches/{dispatchId}/receipts",
+  "GET /api/v1/alerting/dispatches/{dispatchId}/diagnostics",
+  "GET /api/v1/alerting/dispatches/{dispatchId}/diagnostics/{memberId}",
+  "GET /api/v1/alerting/audit",
+  "GET /api/v1/alerting/canary/status",
+  "GET /api/v1/alerting/delivery-baseline",
+];
+
 export const ALERTING_PLANE_ROUTES: Readonly<Record<string, RouteThrottle>> = {
   "POST /api/v1/alerting/dispatches": DEFAULT_ALERTING_THROTTLE,
   "GET /api/v1/alerting/dispatches": CALL_TRAFFIC_THROTTLE,
@@ -84,13 +100,7 @@ export const ALERTING_PLANE_ROUTES: Readonly<Record<string, RouteThrottle>> = {
   "POST /api/v1/apparatus/riding-board/{dispatchId}/assignments": DEFAULT_ALERTING_THROTTLE,
   "POST /api/v1/personnel/members/{memberId}/push-tokens": DEFAULT_ALERTING_THROTTLE,
   "DELETE /api/v1/personnel/members/{memberId}/push-tokens": DEFAULT_ALERTING_THROTTLE,
-  "GET /api/v1/alerting/dispatches/{dispatchId}/receipts": DEFAULT_ALERTING_THROTTLE,
-  "GET /api/v1/alerting/dispatches/{dispatchId}/diagnostics": DEFAULT_ALERTING_THROTTLE,
-  "GET /api/v1/alerting/dispatches/{dispatchId}/diagnostics/{memberId}": DEFAULT_ALERTING_THROTTLE,
   "GET /api/v1/alerting/home-locality": DEFAULT_ALERTING_THROTTLE,
-  "GET /api/v1/alerting/audit": DEFAULT_ALERTING_THROTTLE,
-  "GET /api/v1/alerting/canary/status": DEFAULT_ALERTING_THROTTLE,
-  "GET /api/v1/alerting/delivery-baseline": DEFAULT_ALERTING_THROTTLE,
   "POST /api/v1/alerting/devices/state": DEFAULT_ALERTING_THROTTLE,
   "POST /api/v1/alerting/self-test": DEFAULT_ALERTING_THROTTLE,
   "GET /api/v1/alerting/self-test/{testId}": DEFAULT_ALERTING_THROTTLE,

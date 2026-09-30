@@ -1,5 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { IncidentEvent } from './authContext.js';
+import { bearerFor, fakeCedarDecision } from './testEvents.js';
+
+const vpSend = vi.hoisted(() => vi.fn());
+vi.mock('@aws-sdk/client-verifiedpermissions', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@aws-sdk/client-verifiedpermissions')>();
+  return {
+    ...actual,
+    VerifiedPermissionsClient: vi.fn(() => ({ send: vpSend })),
+  };
+});
 
 function buildEvent(
   lambdaContext: Record<string, unknown> | undefined,
@@ -11,7 +21,7 @@ function buildEvent(
     routeKey: 'POST /api/v1/incidents/{incidentId}/submission/retry',
     rawPath: `/api/v1/incidents/${incidentId ?? ''}/submission/retry`,
     rawQueryString: '',
-    headers,
+    headers: { ...bearerFor(lambdaContext), ...headers },
     isBase64Encoded: false,
     body: undefined,
     pathParameters: incidentId !== undefined ? { incidentId } : undefined,
@@ -61,6 +71,8 @@ function mockSettings(overrides: Record<string, unknown>): void {
 describe('retrySubmission handler', () => {
   beforeEach(() => {
     vi.resetModules();
+    process.env.VERIFIED_PERMISSIONS_POLICY_STORE_ID = 'ps-1';
+    vpSend.mockImplementation(fakeCedarDecision);
     vi.stubEnv('INCIDENT_TABLE_NAME', 'incident-table');
     mockSettings({});
   });
@@ -75,7 +87,7 @@ describe('retrySubmission handler', () => {
   it('returns 401 when the authorizer context is missing', async () => {
     const { handler } = await import('./retrySubmission.js');
 
-    const result = await handler(buildEvent(undefined, INCIDENT_ID), {} as never, () => undefined);
+    const result = await handler(buildEvent(undefined, INCIDENT_ID));
 
     expect(result).toMatchObject({ statusCode: 401 });
   });
@@ -83,11 +95,7 @@ describe('retrySubmission handler', () => {
   it('returns 403 for a member who is not an officer or admin', async () => {
     const { handler } = await import('./retrySubmission.js');
 
-    const result = await handler(
-      buildEvent(MEMBER_AUTH, INCIDENT_ID),
-      {} as never,
-      () => undefined,
-    );
+    const result = await handler(buildEvent(MEMBER_AUTH, INCIDENT_ID));
 
     expect(result).toMatchObject({ statusCode: 403 });
   });
@@ -95,7 +103,7 @@ describe('retrySubmission handler', () => {
   it('returns 400 when incidentId path parameter is absent', async () => {
     const { handler } = await import('./retrySubmission.js');
 
-    const result = await handler(buildEvent(ADMIN_AUTH, undefined), {} as never, () => undefined);
+    const result = await handler(buildEvent(ADMIN_AUTH, undefined));
 
     expect(result).toMatchObject({ statusCode: 400 });
   });
@@ -103,7 +111,7 @@ describe('retrySubmission handler', () => {
   it('returns 400 when incidentId contains the pk delimiter', async () => {
     const { handler } = await import('./retrySubmission.js');
 
-    const result = await handler(buildEvent(ADMIN_AUTH, 'bad#id'), {} as never, () => undefined);
+    const result = await handler(buildEvent(ADMIN_AUTH, 'bad#id'));
 
     expect(result).toMatchObject({ statusCode: 400 });
   });
@@ -116,11 +124,7 @@ describe('retrySubmission handler', () => {
     });
     const { handler } = await import('./retrySubmission.js');
 
-    const result = await handler(
-      buildEvent(OFFICER_AUTH, INCIDENT_ID),
-      {} as never,
-      () => undefined,
-    );
+    const result = await handler(buildEvent(OFFICER_AUTH, INCIDENT_ID));
 
     expect(result).toMatchObject({ statusCode: 202 });
     const body = JSON.parse((result as { body: string }).body) as Record<string, unknown>;
@@ -141,7 +145,7 @@ describe('retrySubmission handler', () => {
     });
     const { handler } = await import('./retrySubmission.js');
 
-    const result = await handler(buildEvent(CHIEF_AUTH, INCIDENT_ID), {} as never, () => undefined);
+    const result = await handler(buildEvent(CHIEF_AUTH, INCIDENT_ID));
 
     expect(result).toMatchObject({ statusCode: 202 });
   });
@@ -159,7 +163,7 @@ describe('retrySubmission handler', () => {
     });
     const { handler } = await import('./retrySubmission.js');
 
-    const result = await handler(buildEvent(ADMIN_AUTH, INCIDENT_ID), {} as never, () => undefined);
+    const result = await handler(buildEvent(ADMIN_AUTH, INCIDENT_ID));
 
     expect(result).toMatchObject({ statusCode: 404 });
   });
@@ -177,7 +181,7 @@ describe('retrySubmission handler', () => {
     });
     const { handler } = await import('./retrySubmission.js');
 
-    const result = await handler(buildEvent(ADMIN_AUTH, INCIDENT_ID), {} as never, () => undefined);
+    const result = await handler(buildEvent(ADMIN_AUTH, INCIDENT_ID));
 
     expect(result).toMatchObject({ statusCode: 409 });
   });
@@ -194,7 +198,7 @@ describe('retrySubmission handler', () => {
     });
     const { handler } = await import('./retrySubmission.js');
 
-    const result = await handler(buildEvent(ADMIN_AUTH, INCIDENT_ID), {} as never, () => undefined);
+    const result = await handler(buildEvent(ADMIN_AUTH, INCIDENT_ID));
 
     expect(result).toMatchObject({ statusCode: 503 });
     const body = JSON.parse((result as { body: string }).body) as Record<string, unknown>;
@@ -210,7 +214,7 @@ describe('retrySubmission handler', () => {
     });
     const { handler } = await import('./retrySubmission.js');
 
-    const result = await handler(buildEvent(ADMIN_AUTH, INCIDENT_ID), {} as never, () => undefined);
+    const result = await handler(buildEvent(ADMIN_AUTH, INCIDENT_ID));
 
     expect(result).toMatchObject({ statusCode: 409 });
     const body = JSON.parse((result as { body: string }).body) as Record<string, unknown>;
@@ -222,7 +226,7 @@ describe('retrySubmission handler', () => {
     mockSettings({ departmentNerisId: undefined });
     const { handler } = await import('./retrySubmission.js');
 
-    const result = await handler(buildEvent(ADMIN_AUTH, INCIDENT_ID), {} as never, () => undefined);
+    const result = await handler(buildEvent(ADMIN_AUTH, INCIDENT_ID));
 
     expect(result).toMatchObject({ statusCode: 409 });
     expect(JSON.parse((result as { body: string }).body)).toMatchObject({ code: 'NOT_CONFIGURED' });

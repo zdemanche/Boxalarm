@@ -40,6 +40,10 @@ export interface AvailabilityArgs {
 export class Availability extends pulumi.ComponentResource {
   public readonly expiryLambda: ServiceLambda;
   public readonly createLambda: ServiceLambda;
+  /** GET .../availability: the member's current and upcoming mark-offs (markoffs.ts). */
+  public readonly listLambda: ServiceLambda;
+  /** POST .../availability/{markoffId}/end: end a mark-off early (markoffs.ts). */
+  public readonly endLambda: ServiceLambda;
   public readonly schedulerRole: aws.iam.Role;
   public readonly availabilityChangedConsumer: ServiceLambda;
   public readonly availabilityChangedQueueConsumer: QueueConsumer;
@@ -166,6 +170,110 @@ export class Availability extends pulumi.ComponentResource {
       {
         routeKey: "POST /api/v1/personnel/members/{memberId}/availability",
         lambda: this.createLambda,
+      },
+      { parent: this },
+    );
+
+    // Paging review MAJOR-A: a mark-off really stops pages, so it can be listed and ended early
+    // - by the member, or by an officer (Cedar two-guard in availability/markoffs.ts).
+    const vp = pulumi
+      .output(args.policyStoreArn)
+      .apply((policyStoreArn) => verifiedPermissionsPolicyStatement(policyStoreArn));
+    this.listLambda = new ServiceLambda(
+      `${name}-list`,
+      {
+        env,
+        serviceName: "personnel-service",
+        functionName: `boxalarm-${env}-personnel-availability-list`,
+        handler: LAMBDA_HANDLER,
+        code: lambdaCode("personnel-service", "availability-list"),
+        logGroup: args.logGroup,
+        environment: {
+          PLATFORM_TABLE_NAME: args.platformTableName,
+          VERIFIED_PERMISSIONS_POLICY_STORE_ID: args.policyStoreId,
+        },
+        additionalPolicyStatements: pulumi
+          .all([pulumi.output(args.platformTableArn), vp])
+          .apply(([tableArn, vpStatement]) => [
+            {
+              // MARKOFF# rows live under the member partition only.
+              Sid: "AvailabilityListMarkoffs" as const,
+              Effect: "Allow" as const,
+              Action: ["dynamodb:Query"],
+              Resource: [tableArn],
+              Condition: {
+                "ForAllValues:StringLike": { "dynamodb:LeadingKeys": ["DEPT#*#MEMBER#*"] },
+              },
+            },
+            vpStatement,
+          ]),
+      },
+      { parent: this },
+    );
+    args.httpApi.route(
+      `${name}-list-route`,
+      {
+        routeKey: "GET /api/v1/personnel/members/{memberId}/availability",
+        lambda: this.listLambda,
+      },
+      { parent: this },
+    );
+
+    this.endLambda = new ServiceLambda(
+      `${name}-end`,
+      {
+        env,
+        serviceName: "personnel-service",
+        functionName: `boxalarm-${env}-personnel-availability-end`,
+        handler: LAMBDA_HANDLER,
+        code: lambdaCode("personnel-service", "availability-end"),
+        logGroup: args.logGroup,
+        environment: {
+          PLATFORM_TABLE_NAME: args.platformTableName,
+          VERIFIED_PERMISSIONS_POLICY_STORE_ID: args.policyStoreId,
+        },
+        additionalPolicyStatements: pulumi
+          .all([pulumi.output(args.platformTableArn), vp, scheduleResourcePattern])
+          .apply(([tableArn, vpStatement, schedulePattern]) => [
+            {
+              // Read + end the MARKOFF# row (never deleted: a replayed create must 409).
+              Sid: "AvailabilityEndMarkoff" as const,
+              Effect: "Allow" as const,
+              Action: ["dynamodb:GetItem", "dynamodb:UpdateItem"],
+              Resource: [tableArn],
+              Condition: {
+                "ForAllValues:StringLike": { "dynamodb:LeadingKeys": ["DEPT#*#MEMBER#*"] },
+              },
+            },
+            {
+              // The AVAILABLE outbox row and the audit row, in the same transaction.
+              Sid: "AvailabilityEndOutboxAndAudit" as const,
+              Effect: "Allow" as const,
+              Action: ["dynamodb:PutItem"],
+              Resource: [tableArn],
+              Condition: {
+                "ForAllValues:StringLike": {
+                  "dynamodb:LeadingKeys": ["DEPT#*#OUTBOX#MEMBER#*", "DEPT#*#AUDIT#*"],
+                },
+              },
+            },
+            auditMutationDenyStatement(tableArn),
+            vpStatement,
+            {
+              Sid: "AvailabilityDeleteSchedules" as const,
+              Effect: "Allow" as const,
+              Action: ["scheduler:DeleteSchedule"],
+              Resource: schedulePattern,
+            },
+          ]),
+      },
+      { parent: this },
+    );
+    args.httpApi.route(
+      `${name}-end-route`,
+      {
+        routeKey: "POST /api/v1/personnel/members/{memberId}/availability/{markoffId}/end",
+        lambda: this.endLambda,
       },
       { parent: this },
     );

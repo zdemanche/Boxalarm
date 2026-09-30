@@ -284,6 +284,7 @@ export const personnelMembers = new Members("personnel-members", {
   userPoolArn: identity.userPool.arn,
   logGroup: personnelLogGroup,
   httpApi,
+  sesFromAddress: notificationSesFromAddress,
 });
 
 // E2-S2 through E2-S11-INFRA (#204-#213): personnel domain routes beyond the roster CRUD
@@ -582,6 +583,8 @@ export const auditRoute = new AuditRoute("audit-route", {
   env,
   platformTableName: platformTable.tableName,
   platformTableArn: platformTable.tableArn,
+  policyStoreArn: policyStore.policyStoreArn,
+  policyStoreId: policyStore.policyStoreId,
   logGroup: platformLogGroup,
   httpApi,
 });

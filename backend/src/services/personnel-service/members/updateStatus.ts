@@ -2,9 +2,18 @@ import type { APIGatewayProxyHandlerV2WithLambdaAuthorizer } from 'aws-lambda';
 import type { VerifiedAccessToken } from '../../platform-service/authorizer/tokenVerifier.js';
 import { readPersonnelConfig } from '../lib/config.js';
 import { problemResponse, resolveTraceId } from '../lib/problemDetails.js';
-import { ForbiddenError, requireAdminRole, requireStatusAuthorityOver } from '../lib/authz.js';
+import {
+  ForbiddenError,
+  requireAdminRole,
+  requireReinstatementAuthority,
+  requireStatusAuthorityOver,
+} from '../lib/authz.js';
 import { getMember, updateMemberStatus } from '../lib/memberRepository.js';
-import { SETTABLE_STATUSES, isValidStatusTransition } from '../lib/statusTransitions.js';
+import {
+  SETTABLE_STATUSES,
+  isReinstatement,
+  isValidStatusTransition,
+} from '../lib/statusTransitions.js';
 import type { SettableStatus } from '../lib/statusTransitions.js';
 import { logError, logInfo } from '../lib/logger.js';
 
@@ -100,12 +109,15 @@ export const handler: APIGatewayProxyHandlerV2WithLambdaAuthorizer<VerifiedAcces
     }
     try {
       requireStatusAuthorityOver(ctx, member.roles);
+      if (isReinstatement(member.status, newStatus)) {
+        requireReinstatementAuthority(ctx);
+      }
     } catch (error) {
       if (error instanceof ForbiddenError) {
         logError('member.status.update.forbidden', traceId, error, {
           actorId: ctx.sub,
           memberId,
-          reason: 'ProtectedTarget',
+          reason: isReinstatement(member.status, newStatus) ? 'Reinstatement' : 'ProtectedTarget',
           route: 'PUT /members/{memberId}/status',
         });
         return problemResponse(403, 'Forbidden', error.message, traceId);

@@ -90,47 +90,84 @@ interface OutboxStreamRecord {
   readonly sequenceNumber: string;
 }
 
+/**
+ * The string fields every OUTBOX_ENTRY row must carry to be published (besides an object
+ * `payload`). Exported so the writers' contract test (src/services/outboxEnvelope.contract.test.ts)
+ * checks exactly what the drain requires.
+ */
+export const OUTBOX_ENVELOPE_FIELDS = [
+  'pk',
+  'sk',
+  'eventId',
+  'eventTime',
+  'eventType',
+  'source',
+  'correlationId',
+  'schemaVersion',
+] as const;
+
+/** The envelope fields an OUTBOX_ENTRY row lacks (empty when the drain can publish it). */
+export function missingOutboxEnvelopeFields(value: Record<string, unknown>): string[] {
+  const missing: string[] = OUTBOX_ENVELOPE_FIELDS.filter(
+    (field) => typeof value[field] !== 'string',
+  );
+  if (typeof value.payload !== 'object' || value.payload === null) {
+    missing.push('payload');
+  }
+  return missing;
+}
+
 function toOutboxStreamRecord(
   value: Record<string, unknown>,
   sequenceNumber: string,
 ): OutboxStreamRecord | undefined {
-  if (
-    value.entityType !== 'OUTBOX_ENTRY' ||
-    typeof value.pk !== 'string' ||
-    typeof value.sk !== 'string' ||
-    typeof value.eventId !== 'string' ||
-    typeof value.eventTime !== 'string' ||
-    typeof value.eventType !== 'string' ||
-    typeof value.source !== 'string' ||
-    typeof value.correlationId !== 'string' ||
-    typeof value.schemaVersion !== 'string' ||
-    typeof value.payload !== 'object' ||
-    value.payload === null
-  ) {
+  if (value.entityType !== 'OUTBOX_ENTRY' || missingOutboxEnvelopeFields(value).length > 0) {
     return undefined;
   }
+  const row = value as Record<(typeof OUTBOX_ENVELOPE_FIELDS)[number], string>;
   return {
-    pk: value.pk,
-    sk: value.sk,
-    eventId: value.eventId,
-    eventTime: value.eventTime,
-    eventType: value.eventType,
-    source: value.source,
-    correlationId: value.correlationId,
-    schemaVersion: value.schemaVersion,
+    pk: row.pk,
+    sk: row.sk,
+    eventId: row.eventId,
+    eventTime: row.eventTime,
+    eventType: row.eventType,
+    source: row.source,
+    correlationId: row.correlationId,
+    schemaVersion: row.schemaVersion,
     payload: value.payload as Record<string, unknown>,
     sequenceNumber,
   };
 }
 
-function parseOutboxRecord(record: DynamoDBRecord): OutboxStreamRecord | undefined {
+/**
+ * An OUTBOX_ENTRY INSERT the drain cannot publish is never retried (it can never succeed) - but
+ * it is a lost domain event: availability mark-offs were dropped exactly like this, silently
+ * (post-merge). Logged with the missing fields and counted as MalformedOutboxRow so it pages.
+ */
+function parseOutboxRecord(
+  record: DynamoDBRecord,
+  logger: Logger,
+  metricNamespace: string,
+): OutboxStreamRecord | undefined {
   const newImage = record.dynamodb?.NewImage;
   const sequenceNumber = record.dynamodb?.SequenceNumber;
   if (record.eventName !== 'INSERT' || !newImage || !sequenceNumber) {
     return undefined;
   }
   const item = unmarshall(newImage as unknown as Record<string, AttributeValue>);
-  return toOutboxStreamRecord(item, sequenceNumber);
+  const parsed = toOutboxStreamRecord(item, sequenceNumber);
+  if (!parsed && item.entityType === 'OUTBOX_ENTRY') {
+    logger.error({
+      event: 'outbox.malformed_row',
+      correlationId: typeof item.correlationId === 'string' ? item.correlationId : 'unknown',
+      reason: 'MissingEnvelopeFields',
+      missing: missingOutboxEnvelopeFields(item),
+      eventType: typeof item.eventType === 'string' ? item.eventType : undefined,
+      eventId: typeof item.eventId === 'string' ? item.eventId : undefined,
+    });
+    emitOutcomeMetric(metricNamespace, 'MalformedOutboxRow', 'MissingEnvelopeFields');
+  }
+  return parsed;
 }
 
 function chunk<T>(items: readonly T[], size: number): T[][] {
@@ -274,7 +311,9 @@ export function createOutboxDrainHandler(
       metricNamespace,
       source: options.source,
     };
-    const outboxRecords = event.Records.map(parseOutboxRecord).filter(
+    const outboxRecords = event.Records.map((record) =>
+      parseOutboxRecord(record, logger, metricNamespace),
+    ).filter(
       (record): record is OutboxStreamRecord =>
         record !== undefined && isAllowed(record, options, logger, metricNamespace),
     );

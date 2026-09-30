@@ -5,6 +5,8 @@ import type { APIGatewayProxyEventHeaders, APIGatewayProxyStructuredResultV2 } f
 import { withAuthorization, type CedarPrincipalContext, type GuardEvent } from '@boxalarm/authz';
 import {
   createRevocationClient,
+  isProtectedTarget,
+  mayActOnProtectedTarget,
   readRevocationConfig,
   resolveMemberDeptId,
   revokeMemberSession,
@@ -159,6 +161,51 @@ async function revokeLostDevice(
       }),
     );
     return problemDetails(403, 'Forbidden', 'memberId is not in the caller’s department.', traceId);
+  }
+
+  // Security-web MINOR 6: a chief's or admin's sessions are ended only by an admin. Fails
+  // closed when the target's groups cannot be read.
+  let protectedTarget: boolean;
+  try {
+    protectedTarget = await isProtectedTarget(client, { userPoolId, username: memberId });
+  } catch (error) {
+    console.error(
+      JSON.stringify({
+        event: 'deviceLossRevocation.groupLookupFailed',
+        message: error instanceof Error ? error.message : undefined,
+        memberId,
+        traceId,
+      }),
+    );
+    return problemDetails(
+      503,
+      'Service Unavailable',
+      'Session revocation is temporarily unavailable.',
+      traceId,
+    );
+  }
+  // Ending your own sessions is never an escalation (a non-admin chief whose own phone is
+  // lost must not wait for an admin).
+  const selfTarget = memberId === authorizerContext.sub;
+  if (
+    protectedTarget &&
+    !selfTarget &&
+    !mayActOnProtectedTarget(authorizerContext['cognito:groups'])
+  ) {
+    console.error(
+      JSON.stringify({
+        event: 'deviceLossRevocation.denied',
+        reason: 'ProtectedTarget',
+        memberId,
+        traceId,
+      }),
+    );
+    return problemDetails(
+      403,
+      'Forbidden',
+      'Only an admin can report a lost device for a chief or an admin.',
+      traceId,
+    );
   }
 
   // M1: refuse the access token the lost device already holds - it is verified offline and

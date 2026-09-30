@@ -2,7 +2,12 @@ import { FormEvent, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useParams } from 'react-router-dom';
 import { useAuth } from '../../auth/AuthContext';
-import { canManageInventory, canManageTraining } from '../../auth/roles';
+import {
+  canManageInventory,
+  canManageMemberAvailability,
+  canManageTraining,
+} from '../../auth/roles';
+import { MarkOffList } from '../availability/MarkOffList';
 import { ApiForbiddenGate } from '../../components/ApiForbiddenGate';
 import { Badge } from '../../components/ui/Chip';
 import { PageHeader } from '../../components/ui/PageHeader';
@@ -17,14 +22,13 @@ import {
   listOwnAttendance,
   putQual,
   recordAttendance,
-  updateMemberStatus,
 } from './api';
-import type { AttendanceActivityType, MemberStatus } from './types';
+import type { AttendanceActivityType } from './types';
 import { RolesSection } from './RolesSection';
 import { AccountSecuritySection, canUseAccountKillSwitches } from './AccountSecuritySection';
+import { MemberStatusSection } from './MemberStatusSection';
 import { humanize } from '../../lib/labels';
 
-const STATUSES: MemberStatus[] = ['PROBATIONARY', 'ACTIVE', 'LOA', 'RETIRED'];
 const ACTIVITY_TYPES: AttendanceActivityType[] = [
   'CALL',
   'DRILL',
@@ -261,14 +265,6 @@ export function MemberDetailPage() {
     onError: (error: Error) => setPpeFormError(error.message),
   });
 
-  const statusMutation = useMutation({
-    mutationFn: (status: MemberStatus) => updateMemberStatus(auth, id, status),
-    onSuccess: (member) => {
-      queryClient.setQueryData(['personnel', 'members', id], member);
-      void queryClient.invalidateQueries({ queryKey: ['personnel', 'members'] });
-    },
-  });
-
   if (memberQuery.error) {
     return (
       <ApiForbiddenGate error={memberQuery.error}>
@@ -316,47 +312,13 @@ export function MemberDetailPage() {
             <dd style={{ margin: 0 }}>{member.joinDate}</dd>
           </dl>
 
-          {isAdmin ? (
-            <label
-              style={{
-                display: 'grid',
-                gap: 4,
-                maxWidth: 320,
-                marginTop: 'var(--bx-space-lg)',
-                fontSize: 13,
-                fontWeight: 600,
-              }}
-            >
-              Change status
-              <select
-                aria-label="Member status"
-                value={member.status}
-                disabled={statusMutation.isPending}
-                onChange={(e) => statusMutation.mutate(e.target.value as MemberStatus)}
-                style={{
-                  minHeight: 'var(--bx-target-office)',
-                  padding: '0 var(--bx-space-sm)',
-                  fontSize: 14,
-                  fontWeight: 400,
-                  background: 'var(--bx-surface-raised)',
-                  color: 'var(--bx-fg)',
-                  border: '1px solid var(--bx-border)',
-                  borderRadius: 'var(--bx-radius-md)',
-                }}
-              >
-                {STATUSES.map((status) => (
-                  <option key={status} value={status}>
-                    {status}
-                  </option>
-                ))}
-              </select>
-            </label>
-          ) : null}
+          <MemberStatusSection member={member} />
 
-          {statusMutation.error ? (
-            <ApiForbiddenGate error={statusMutation.error} embedded>
-              <p role="alert">{statusMutation.error.message}</p>
-            </ApiForbiddenGate>
+          {canManageMemberAvailability(auth.roles) ? (
+            <MarkOffList
+              memberId={member.memberId}
+              ownRecord={member.memberId === auth.user?.profile.sub}
+            />
           ) : null}
 
           <RolesSection member={member} canEdit={canManageRoles} />

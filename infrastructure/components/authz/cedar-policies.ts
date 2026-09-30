@@ -15,12 +15,11 @@ export type RoleGroup = (typeof ROLE_GROUPS)[number];
 //
 // RunRecordsDisposal / ViewRetentionConfig / UpdateRetentionConfig / UpdateMember are
 // live today (retention/disposalHandler.ts, retention/configHandler.ts,
-// members/updateMember.ts). ViewConfig / UpdateConfig / ExportData are not yet called —
-// config/handler.ts and export/authz.ts still gate on assertChiefOrAdmin, with a TODO to
-// swap to Cedar once this policy store ships — defined ahead of that swap so it isn't a
-// companion infra change later. RevokeSession is the same: deviceLossHandler.ts still
-// gates on a manual ADMIN_GROUPS check (TODO: E8-S3), defined ahead of time per the
-// audit finding that this schema doesn't yet cover session-revocation actions.
+// members/updateMember.ts), and so is RevokeSession: deviceLossHandler.ts gates on it through
+// withAuthorization (alarmed on every invocation), with no manual group check left.
+// ViewConfig / UpdateConfig / ExportData are not yet called — config/handler.ts and
+// export/authz.ts still gate on assertChiefOrAdmin, with a TODO to swap to Cedar — defined
+// ahead of that swap so it isn't a companion infra change later.
 export const ADMIN_ONLY_ACTIONS = [
   "UpdateConfig",
   "ExportData",
@@ -35,6 +34,9 @@ export const ADMIN_ONLY_ACTIONS = [
   // Lists a member's registered push devices so device loss can remove just the lost one
   // (session-revocation/listDevicesHandler.ts) - the roles that may report a device lost.
   "ViewMemberDevices",
+  // The department's audit trail (platform-service/audit/handler.ts), which the web shows to
+  // CHIEF/ADMIN only (security-web MINOR 12; it was a groups check that also admitted OFFICER).
+  "ViewAuditTrail",
   // reporting-service (P1 #8): CSV/PDF export of a named report (export/handler.ts) and
   // the N1.9 cutover accept/defer write (cutoverDecision/post.ts). Export sits with
   // ExportData — CLAUDE.md: "Export and destructive actions are gated by Cedar role check
@@ -70,6 +72,10 @@ export const SELF_SERVICE_ACTIONS = [
   "RecordAttendance",
   "ViewOwnAttendance",
   "MarkAvailability",
+  // A member's own mark-offs: list them and end one early (availability/markoffs.ts routes a
+  // request here only when the path memberId is the caller's sub, and re-checks it).
+  "ViewOwnAvailability",
+  "EndOwnMarkoff",
   "ViewOwnLosapTotal",
   "GetQuals",
   "ViewTranscript",
@@ -348,19 +354,35 @@ export const REPORTING_DEPARTMENT_ACTIONS = [
 // CHIEF/ADMIN only.
 // EditIncidentModule is every role like the other incident edit routes (members write
 // reports); the lock, not the role, is what stops edits after review.
+// EditIncidentExposures (putExposures.ts) is every role too: a member records their own
+// exposure. Naming or correcting other members on it is RecordExposureForOthers, officer tier.
+// Security-web MINOR 2: submit, retry and the submission reads were hand-rolled groups checks
+// (submit CHIEF/ADMIN while resubmit was officer tier); the officer who reviews a report now
+// submits it as well as resubmits it.
 export const NERIS_MEMBER_ACTIONS = [
   "ValidateIncidentReport",
   "ViewNerisSchema",
   "EditIncidentModule",
+  "EditIncidentExposures",
 ] as const;
 export const NERIS_OFFICER_ACTIONS = [
   "LockIncidentReport",
+  "SubmitIncidentReport",
   "ResubmitIncidentReport",
+  "RetryIncidentSubmission",
+  "ViewIncidentSubmission",
+  "RecordExposureForOthers",
   "FileNoActivityReport",
   "ViewNerisCompliance",
   "ViewNerisEntity",
 ] as const;
 export const NERIS_OFFICER_GROUPS = ["OFFICER", "CHIEF", "ADMIN"] as const;
+
+// Another member's mark-offs (paging review MAJOR-A): a mark-off stops that member's pages, so
+// an officer can see who is marked off and end a window entered by mistake. OFFICER/CHIEF/ADMIN
+// (not TRAINING/APPARATUS): the same officers who run the call.
+export const AVAILABILITY_OFFICER_ACTIONS = ["ViewMemberAvailability", "EndMemberMarkoff"] as const;
+export const AVAILABILITY_OFFICER_GROUPS = ["OFFICER", "CHIEF", "ADMIN"] as const;
 export const NERIS_ADMIN_ACTIONS = ["UnlockIncidentReport", "SyncNerisEntity"] as const;
 
 // Resource type each NERIS action is sent with (the handlers' withAuthorization options).
@@ -373,8 +395,13 @@ const NERIS_ACTION_RESOURCE: Record<
   ValidateIncidentReport: "Incident",
   ViewNerisSchema: "Department",
   EditIncidentModule: "Incident",
+  EditIncidentExposures: "Incident",
   LockIncidentReport: "Incident",
+  SubmitIncidentReport: "Incident",
   ResubmitIncidentReport: "Incident",
+  RetryIncidentSubmission: "Incident",
+  ViewIncidentSubmission: "Incident",
+  RecordExposureForOthers: "Incident",
   UnlockIncidentReport: "Incident",
   FileNoActivityReport: "Department",
   ViewNerisCompliance: "Department",
@@ -432,6 +459,7 @@ export const CEDAR_SCHEMA = JSON.stringify({
         appliesTo: { principalTypes: ["User"], resourceTypes: ["Member"] },
       },
       ViewMemberDevices: { appliesTo: { principalTypes: ["User"], resourceTypes: ["Member"] } },
+      ViewAuditTrail: { appliesTo: { principalTypes: ["User"], resourceTypes: ["Department"] } },
       RecordAttendance: { appliesTo: { principalTypes: ["User"], resourceTypes: ["Member"] } },
       RecordAttendanceOnBehalf: {
         appliesTo: { principalTypes: ["User"], resourceTypes: ["Member"] },
@@ -441,6 +469,14 @@ export const CEDAR_SCHEMA = JSON.stringify({
         appliesTo: { principalTypes: ["User"], resourceTypes: ["Member"] },
       },
       MarkAvailability: { appliesTo: { principalTypes: ["User"], resourceTypes: ["Member"] } },
+      ViewOwnAvailability: {
+        appliesTo: { principalTypes: ["User"], resourceTypes: ["Member"] },
+      },
+      EndOwnMarkoff: { appliesTo: { principalTypes: ["User"], resourceTypes: ["Member"] } },
+      ViewMemberAvailability: {
+        appliesTo: { principalTypes: ["User"], resourceTypes: ["Member"] },
+      },
+      EndMemberMarkoff: { appliesTo: { principalTypes: ["User"], resourceTypes: ["Member"] } },
       ViewOwnLosapTotal: { appliesTo: { principalTypes: ["User"], resourceTypes: ["Member"] } },
       GetQuals: { appliesTo: { principalTypes: ["User"], resourceTypes: ["Member"] } },
       UpdateQuals: { appliesTo: { principalTypes: ["User"], resourceTypes: ["Member"] } },
@@ -685,6 +721,11 @@ export function inspectionsOfficerActionsPolicy(userPoolId: string): string {
   ).join(" || ");
   const actions = INSPECTIONS_OFFICER_ACTIONS.map((a) => `Boxalarm::Action::"${a}"`).join(", ");
   return `permit (\n  principal,\n  action in [${actions}],\n  resource\n) when {\n  ${groupCheck}\n};`;
+}
+
+/** Another member's mark-offs: list and end early — OFFICER/CHIEF/ADMIN. */
+export function availabilityOfficerActionsPolicy(userPoolId: string): string {
+  return roleGatedPolicy(userPoolId, AVAILABILITY_OFFICER_GROUPS, AVAILABILITY_OFFICER_ACTIONS);
 }
 
 /** Validating an incident report against NERIS rules — every role (read-only). */

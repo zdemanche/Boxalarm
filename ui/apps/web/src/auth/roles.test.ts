@@ -65,3 +65,12 @@ test('write-control helpers mirror the Cedar groups (review m6)', () => {
   expect(canCreateApparatus(['APPARATUS'])).toBe(false);
   expect(canCreateApparatus(['ADMIN'])).toBe(true);
 });
+
+// Security-web MINOR 2: Submit is the NERIS officer tier (Cedar SubmitIncidentReport).
+test('canSubmitIncident admits OFFICER, CHIEF and ADMIN only', async () => {
+  const { canSubmitIncident } = await import('./roles');
+  expect(canSubmitIncident(['OFFICER'])).toBe(true);
+  expect(canSubmitIncident(['CHIEF'])).toBe(true);
+  expect(canSubmitIncident(['ADMIN'])).toBe(true);
+  expect(canSubmitIncident(['MEMBER', 'TRAINING'])).toBe(false);
+});

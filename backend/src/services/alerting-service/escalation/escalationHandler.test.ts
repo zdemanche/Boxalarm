@@ -211,6 +211,62 @@ describe('escalationHandler', () => {
     expect(publishEscalationTriggered).not.toHaveBeenCalled();
   });
 
+  // Post-merge MINOR-1: LOA/RETIRED after tone 1 flips the snapshot's `active`; the no-ack call
+  // for that tone must not ring.
+  it('a member set inactive since the page is skipped: no voice call, counted', async () => {
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    const fakeDdb = createFakeDdb([
+      {
+        pk: ROSTER_PK,
+        sk: 'ROSTER#mbr-1',
+        entityType: 'DISPATCH_ROSTER_ENTRY',
+        memberId: 'mbr-1',
+        ackStatus: 'NONE',
+        currentChannelTier: 'primary',
+      },
+      { pk: 'DEPT#NICHOLS#ELIGIBILITY', sk: 'MEMBER#mbr-1', active: false },
+    ]);
+    const { createDynamoClient } = await import('../eligibility/dynamoClient.js');
+    vi.mocked(createDynamoClient).mockReturnValue({
+      send: fakeDdb.send,
+    } as unknown as DynamoDBDocumentClient);
+
+    const { handler } = await import('./escalationHandler.js');
+    const result = await handler(BASE_PAYLOAD);
+
+    expect(result).toEqual({ outcome: 'SKIPPED_INACTIVE' });
+    const { publishEscalationTriggered } = await import('./snsClient.js');
+    expect(publishEscalationTriggered).not.toHaveBeenCalled();
+    expect(fakeDdb.items.has(`${ROSTER_PK}#RECEIPT#mbr-1#voice#1`)).toBe(false);
+    expect(
+      logSpy.mock.calls.some(
+        ([line]) => String(line).includes('EscalationSkipped') && String(line).includes('Inactive'),
+      ),
+    ).toBe(true);
+    logSpy.mockRestore();
+  });
+
+  it('an active member in the snapshot is still escalated', async () => {
+    const fakeDdb = createFakeDdb([
+      {
+        pk: ROSTER_PK,
+        sk: 'ROSTER#mbr-1',
+        entityType: 'DISPATCH_ROSTER_ENTRY',
+        memberId: 'mbr-1',
+        ackStatus: 'NONE',
+        currentChannelTier: 'primary',
+      },
+      { pk: 'DEPT#NICHOLS#ELIGIBILITY', sk: 'MEMBER#mbr-1', active: true },
+    ]);
+    const { createDynamoClient } = await import('../eligibility/dynamoClient.js');
+    vi.mocked(createDynamoClient).mockReturnValue({
+      send: fakeDdb.send,
+    } as unknown as DynamoDBDocumentClient);
+
+    const { handler } = await import('./escalationHandler.js');
+    expect(await handler(BASE_PAYLOAD)).toEqual({ outcome: 'ESCALATED' });
+  });
+
   it('a roster row absent (fan-out gap) is skipped without throwing', async () => {
     const fakeDdb = createFakeDdb([]);
     const { createDynamoClient } = await import('../eligibility/dynamoClient.js');

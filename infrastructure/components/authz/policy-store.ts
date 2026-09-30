@@ -19,6 +19,7 @@ import {
   inspectionsOfficerActionsPolicy,
   nerisMemberActionsPolicy,
   nerisOfficerActionsPolicy,
+  availabilityOfficerActionsPolicy,
   nerisAdminActionsPolicy,
 } from "./cedar-policies";
 
@@ -74,6 +75,7 @@ export class PolicyStore extends pulumi.ComponentResource {
   public readonly nerisMemberActionsPolicy: aws.verifiedpermissions.Policy;
   public readonly nerisOfficerActionsPolicy: aws.verifiedpermissions.Policy;
   public readonly nerisAdminActionsPolicy: aws.verifiedpermissions.Policy;
+  public readonly availabilityOfficerActionsPolicy: aws.verifiedpermissions.Policy;
 
   constructor(name: string, args: PolicyStoreArgs, opts?: pulumi.ComponentResourceOptions) {
     requireEnv("PolicyStore", args.env);
@@ -273,6 +275,20 @@ export class PolicyStore extends pulumi.ComponentResource {
         definition: {
           static: {
             statement: pulumi.output(args.userPoolId).apply(inspectionsOfficerActionsPolicy),
+          },
+        },
+      },
+      { parent: this, dependsOn: [this.schema] },
+    );
+
+    // personnel availability: an officer lists or ends another member's mark-offs.
+    this.availabilityOfficerActionsPolicy = new aws.verifiedpermissions.Policy(
+      `${name}-availability-officer-actions`,
+      {
+        policyStoreId: this.policyStoreId,
+        definition: {
+          static: {
+            statement: pulumi.output(args.userPoolId).apply(availabilityOfficerActionsPolicy),
           },
         },
       },

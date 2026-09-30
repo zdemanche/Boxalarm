@@ -1,5 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { MEMBER_AUTH, buildIncidentEvent } from './testEvents.js';
+import { MEMBER_AUTH, buildIncidentEvent, fakeCedarDecision } from './testEvents.js';
+
+// putExposures is Cedar-gated (EditIncidentExposures): decide as the deployed NERIS tiers do.
+const vpSend = vi.hoisted(() => vi.fn());
+vi.mock('@aws-sdk/client-verifiedpermissions', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@aws-sdk/client-verifiedpermissions')>();
+  return { ...actual, VerifiedPermissionsClient: vi.fn(() => ({ send: vpSend })) };
+});
 
 /**
  * A report locked for officer review rejects edits with 409 on every PUT route:
@@ -63,6 +70,8 @@ beforeEach(() => {
   vi.spyOn(console, 'log').mockImplementation(() => undefined);
   vi.spyOn(console, 'error').mockImplementation(() => undefined);
   process.env.INCIDENT_TABLE_NAME = 'incident-table';
+  process.env.VERIFIED_PERMISSIONS_POLICY_STORE_ID = 'ps-1';
+  vpSend.mockImplementation(fakeCedarDecision);
 });
 
 afterEach(() => {

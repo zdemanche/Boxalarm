@@ -140,6 +140,16 @@ export const LAMBDA_ENTRIES = [
   },
   {
     service: 'personnel-service',
+    function: 'availability-list',
+    entry: 'src/services/personnel-service/availability/listMarkoffsHandler.ts',
+  },
+  {
+    service: 'personnel-service',
+    function: 'availability-end',
+    entry: 'src/services/personnel-service/availability/endMarkoffHandler.ts',
+  },
+  {
+    service: 'personnel-service',
     function: 'losap-get-member-total',
     entry: 'src/services/personnel-service/losap/getMemberLosap.ts',
   },

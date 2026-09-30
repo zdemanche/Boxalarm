@@ -9,7 +9,12 @@ import { afterAll, afterEach, beforeAll, expect, test, vi } from 'vitest';
 import { AuthProvider } from '../../auth/AuthContext';
 import { AvailabilityPage, nextSixAm } from './AvailabilityPage';
 
-const server = setupServer();
+// The page also lists the member's mark-offs; by default there are none.
+const server = setupServer(
+  http.get('/api/v1/personnel/members/:memberId/availability', () =>
+    HttpResponse.json({ markOffs: [] }),
+  ),
+);
 beforeAll(() => server.listen());
 afterEach(() => {
   server.resetHandlers();
@@ -137,5 +142,64 @@ test('with no member id on the session it asks to sign in again and sends nothin
 
   expect((await screen.findByRole('alert')).textContent).toMatch(/Sign out and sign back in/);
   expect(screen.queryByRole('button', { name: 'Mark unavailable' })).toBeNull();
+  expect(posted).not.toHaveBeenCalled();
+});
+
+// Paging review MAJOR-A: a mark-off really stops call alerts, so it can be ended early.
+test('lists the member’s mark-offs and End now ends the current one', async () => {
+  const nowSeconds = Math.floor(Date.now() / 1000);
+  let markOffs = [
+    { markoffId: String(nowSeconds - 60), startAt: nowSeconds - 60, endAt: nowSeconds + 3600 },
+    {
+      markoffId: String(nowSeconds + 86_400),
+      startAt: nowSeconds + 86_400,
+      endAt: nowSeconds + 90_000,
+    },
+  ];
+  const ended: string[] = [];
+  server.use(
+    http.get('/api/v1/personnel/members/member-7/availability', () =>
+      HttpResponse.json({ markOffs }),
+    ),
+    http.post('/api/v1/personnel/members/member-7/availability/:markoffId/end', ({ params }) => {
+      ended.push(String(params.markoffId));
+      markOffs = markOffs.filter((m) => m.markoffId !== params.markoffId);
+      return HttpResponse.json({ markoffId: params.markoffId, endedAt: nowSeconds });
+    }),
+  );
+  const user = userEvent.setup();
+  renderPage();
+
+  await user.click(await screen.findByRole('button', { name: /^End the mark-off/ }));
+
+  expect(ended).toEqual([String(nowSeconds - 60)]);
+  expect(await screen.findByText(/available again/)).toBeTruthy();
+  expect(screen.getByRole('button', { name: /^Cancel the mark-off/ })).toBeTruthy();
+  await vi.waitFor(() =>
+    expect(screen.queryByRole('button', { name: /^End the mark-off/ })).toBeNull(),
+  );
+});
+
+test('refuses a custom mark-off longer than 90 days before sending it', async () => {
+  const posted = vi.fn();
+  server.use(
+    http.post('/api/v1/personnel/members/:memberId/availability', () => {
+      posted();
+      return HttpResponse.json({}, { status: 201 });
+    }),
+  );
+  const user = userEvent.setup();
+  renderPage();
+  await user.click(await screen.findByLabelText('Custom dates'));
+  const pad = (n: number) => String(n).padStart(2, '0');
+  const local = (d: Date) =>
+    `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  const start = new Date(Date.now() + 3_600_000);
+  const until = screen.getByLabelText(/Until/);
+  await user.clear(until);
+  await user.type(until, local(new Date(start.getTime() + 100 * 86_400_000)));
+  await user.click(screen.getByRole('button', { name: 'Mark unavailable' }));
+
+  expect(await screen.findByText(/at most 90 days/)).toBeTruthy();
   expect(posted).not.toHaveBeenCalled();
 });

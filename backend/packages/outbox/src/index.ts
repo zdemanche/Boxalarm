@@ -4,6 +4,8 @@ import { buildDeptScopedPk, type VerifiedDeptId } from '@boxalarm/dept-scope';
 export {
   createOutboxDrainHandler,
   createOutboxDrainClients,
+  missingOutboxEnvelopeFields,
+  OUTBOX_ENVELOPE_FIELDS,
   readOutboxDrainConfig,
   type OutboxDrainClients,
   type OutboxDrainConfig,

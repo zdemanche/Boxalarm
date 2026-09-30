@@ -1,7 +1,9 @@
 import {
+  ActionAfterCompletion,
   SchedulerClient,
   CreateScheduleCommand,
   FlexibleTimeWindowMode,
+  type DeadLetterConfig,
 } from '@aws-sdk/client-scheduler';
 import { GetCommand, type DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
 import { buildDeptScopedPk, type VerifiedDeptId } from '@boxalarm/dept-scope';
@@ -29,6 +31,41 @@ export function readScheduleGroupName(env: NodeJS.ProcessEnv): string {
     throw new Error('ESCALATION_SCHEDULE_GROUP_NAME is required and was not set');
   }
   return scheduleGroupName;
+}
+
+/**
+ * Post-merge: every alerting timer (voice escalation, tone 2/3 evaluation) is a one-time
+ * schedule. Without ActionAfterCompletion they stayed in the group forever after firing (one per
+ * member per tone per dispatch, against the account's schedule quota), and without a
+ * DeadLetterConfig a target invocation Scheduler finally gave up on vanished with no record - a
+ * voice call or tone that never happened. DELETE after completion keeps exactly-once intact: a
+ * later re-create of the same name (a retried fan-out) fires into handlers that are idempotent
+ * on their own keys (the voice receipt's conditional put, the tone evaluator's TONE_EVENT).
+ *
+ * The DLQ ARN comes from ESCALATION_SCHEDULE_DLQ_ARN. Until infrastructure sets it the
+ * schedule is still created (a missing DLQ must never stop a page) and the gap is logged.
+ */
+const SQS_ARN = /^arn:aws[\w-]*:sqs:[a-z0-9-]+:\d{12}:[\w-]{1,80}(\.fifo)?$/;
+
+export function alertingScheduleLifecycle(env: NodeJS.ProcessEnv): {
+  readonly ActionAfterCompletion: ActionAfterCompletion;
+  readonly deadLetterConfig?: DeadLetterConfig;
+} {
+  const configured = env.ESCALATION_SCHEDULE_DLQ_ARN;
+  // Paging review m7: a malformed ARN would make CreateSchedule fail validation and block the
+  // timer - so anything that is not an SQS ARN is ignored, logged, as if unset.
+  const dlqArn = configured && SQS_ARN.test(configured) ? configured : undefined;
+  if (!dlqArn) {
+    logInfo('alerting.schedule.dlq_unconfigured', {
+      reason: configured
+        ? 'ESCALATION_SCHEDULE_DLQ_ARN is not an SQS queue ARN; ignored, schedule created without a DeadLetterConfig'
+        : 'ESCALATION_SCHEDULE_DLQ_ARN is not set; schedule created without a DeadLetterConfig',
+    });
+  }
+  return {
+    ActionAfterCompletion: ActionAfterCompletion.DELETE,
+    ...(dlqArn ? { deadLetterConfig: { Arn: dlqArn } } : {}),
+  };
 }
 
 export function readEscalationSchedulerConfig(env: NodeJS.ProcessEnv): EscalationSchedulerConfig {
@@ -118,6 +155,7 @@ export async function createEscalationSchedule(
   const fireAt = Math.floor(Date.now() / 1000) + delaySeconds;
   const scheduleName = escalationScheduleName(deptId, dispatchId, memberId, toneSequence);
 
+  const lifecycle = alertingScheduleLifecycle(process.env);
   try {
     await scheduler.send(
       new CreateScheduleCommand({
@@ -125,10 +163,12 @@ export async function createEscalationSchedule(
         GroupName: config.scheduleGroupName,
         ScheduleExpression: `at(${new Date(fireAt * 1000).toISOString().slice(0, 19)})`,
         FlexibleTimeWindow: { Mode: FlexibleTimeWindowMode.OFF },
+        ActionAfterCompletion: lifecycle.ActionAfterCompletion,
         Target: {
           Arn: config.escalationHandlerArn,
           RoleArn: config.schedulerRoleArn,
           Input: JSON.stringify({ deptId, dispatchId, memberId, toneSequence, channel: 'voice' }),
+          ...(lifecycle.deadLetterConfig ? { DeadLetterConfig: lifecycle.deadLetterConfig } : {}),
         },
       }),
     );

@@ -2,6 +2,7 @@ import { FormEvent, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useSearchParams } from 'react-router-dom';
 import { useAuth } from '../../auth/AuthContext';
+import { ApiError } from '../../lib/apiClient';
 import { ApiForbiddenGate } from '../../components/ApiForbiddenGate';
 import {
   Button,
@@ -230,6 +231,27 @@ function ManualEntryForm({ onCreated }: { onCreated: (dispatchId: string) => voi
   );
 }
 
+/**
+ * Receipts sit behind the fail-closed authorizer (server-fix security MINOR 2): during a
+ * platform-table outage they are refused while the roster and responses keep working. Only a
+ * handler's own problem+json 403 (a Cedar denial) means "no access"; an authorizer refusal
+ * (API Gateway's plain {"message":"Forbidden"}, no problem status), a 5xx or a network failure
+ * is the service being down, and says so - an officer deciding whether to advance the tone
+ * ladder must not be told they lack access.
+ */
+function ReceiptsUnavailable({ error }: { error: unknown }) {
+  const refused = error instanceof ApiError && error.problem.status === 403;
+  return (
+    <Card title="Delivery receipts" style={{ marginTop: 'var(--bx-space-lg)' }}>
+      <p role="status">
+        {refused
+          ? 'You do not have access to delivery receipts.'
+          : 'Delivery receipts are temporarily unavailable. The roster and responses above are unaffected; receipts retry on their own.'}
+      </p>
+    </Card>
+  );
+}
+
 function ReceiptsTable({ dispatchId }: { dispatchId: string }) {
   const auth = useAuth();
   const query = useQuery({
@@ -239,11 +261,7 @@ function ReceiptsTable({ dispatchId }: { dispatchId: string }) {
   });
 
   if (query.error) {
-    return (
-      <ApiForbiddenGate error={query.error} embedded>
-        <p>Receipts are unavailable.</p>
-      </ApiForbiddenGate>
-    );
+    return <ReceiptsUnavailable error={query.error} />;
   }
 
   const byMember = new Map<string, Map<string, DeliveryReceipt>>();

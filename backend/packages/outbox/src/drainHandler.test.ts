@@ -168,6 +168,49 @@ describe('createOutboxDrainHandler', () => {
     expect(result).toEqual({ batchItemFailures: [] });
   });
 
+  // Post-merge: availability rows without eventTime/source/schemaVersion were dropped silently.
+  it('counts and logs an OUTBOX_ENTRY it cannot publish (MalformedOutboxRow), publishing the rest', async () => {
+    const { createOutboxDrainHandler } = await import('./drainHandler.js');
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const send = vi.fn().mockResolvedValue({ Entries: [{}] });
+    const handler = createOutboxDrainHandler('platform-service', {
+      eventBridgeClient: fakeEventBridgeClient(send),
+      ddbClient: fakeDdbClient(vi.fn().mockResolvedValue({})),
+    });
+    const malformed: Record<string, unknown> = { ...OUTBOX_ITEM };
+    delete malformed.eventTime;
+    delete malformed.source;
+    delete malformed.schemaVersion;
+
+    const result = await (handler as StreamHandler)(
+      streamEvent([outboxRecord(malformed, 'seq-1'), outboxRecord(OUTBOX_ITEM, 'seq-2')]),
+    );
+
+    expect(result).toEqual({ batchItemFailures: [] });
+    expect(send).toHaveBeenCalledTimes(1);
+    const lines = [...logSpy.mock.calls, ...errorSpy.mock.calls].map(([line]) => String(line));
+    expect(lines.some((line) => line.includes('"MalformedOutboxRow"'))).toBe(true);
+    const logged = lines.find((line) => line.includes('outbox.malformed_row'));
+    expect(logged).toContain('eventTime');
+    expect(logged).toContain('schemaVersion');
+  });
+
+  it('does not count a non-outbox row as malformed', async () => {
+    const { createOutboxDrainHandler } = await import('./drainHandler.js');
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    const handler = createOutboxDrainHandler('platform-service', {
+      eventBridgeClient: fakeEventBridgeClient(vi.fn()),
+      ddbClient: fakeDdbClient(vi.fn()),
+    });
+    await (handler as StreamHandler)(
+      streamEvent([outboxRecord({ entityType: 'PRE_PLAN' }, 'seq-1')]),
+    );
+    expect(logSpy.mock.calls.some(([line]) => String(line).includes('MalformedOutboxRow'))).toBe(
+      false,
+    );
+  });
+
   it('skips a MODIFY/REMOVE record even when it carries an OUTBOX_ENTRY image', async () => {
     const { createOutboxDrainHandler } = await import('./drainHandler.js');
     const send = vi.fn().mockResolvedValue({});

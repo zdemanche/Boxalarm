@@ -118,6 +118,50 @@ describe("NerisEntity", () => {
     );
   });
 
+  // Security-web MINOR 3: no whole-table grant on the platform table (member rows, revocation
+  // markers, every outbox), and the SSM grant names its two parameters.
+  it("limits every NERIS entity DynamoDB grant to the department partition or its outbox", async () => {
+    const entity = await build();
+    type Statement = PolicyDoc["Statement"][number] & {
+      Effect: string;
+      Condition?: Record<string, unknown>;
+    };
+    const deptOnly = {
+      "ForAllValues:StringLike": { "dynamodb:LeadingKeys": ["DEPT#*"] },
+      "ForAllValues:StringNotLike": { "dynamodb:LeadingKeys": ["DEPT#*#*"] },
+    };
+    for (const lambda of [entity.getLambda, entity.putLambda, entity.workerLambda]) {
+      const policy = JSON.parse(await resolve(lambda.rolePolicy.policy)) as {
+        Statement: Statement[];
+      };
+      const grants = policy.Statement.filter(
+        (s) =>
+          s.Effect === "Allow" &&
+          [s.Action].flat().some((a) => a.startsWith("dynamodb:")) &&
+          [s.Resource].flat().includes(TABLE_ARN),
+      );
+      expect(grants.length).toBeGreaterThan(0);
+      for (const grant of grants) {
+        expect(grant.Condition, grant.Sid).toBeDefined();
+        if (grant.Sid !== "NerisEntitySyncOutbox") {
+          expect(grant.Condition).toEqual(deptOnly);
+        }
+      }
+    }
+    const worker = JSON.parse(await resolve(entity.workerLambda.rolePolicy.policy)) as {
+      Statement: Statement[];
+    };
+    const outbox = worker.Statement.find((s) => s.Sid === "NerisEntitySyncOutbox");
+    expect(outbox?.Action).toEqual(["dynamodb:PutItem"]);
+    expect(outbox?.Condition).toEqual({
+      "ForAllValues:StringLike": { "dynamodb:LeadingKeys": ["DEPT#*#OUTBOX"] },
+    });
+    expect(worker.Statement.find((s) => s.Sid === "NerisGetParameters")?.Resource).toEqual([
+      "arn:aws:ssm:us-east-1:123456789012:parameter/boxalarm/dev/neris/base-url",
+      "arn:aws:ssm:us-east-1:123456789012:parameter/boxalarm/dev/neris/user-agent",
+    ]);
+  });
+
   it("sends a crashed sync to a failure queue with no automatic retry, and can alarm on it", async () => {
     const entity = await build();
     const [retries, destination, queueArn, maxAge] = await resolve(

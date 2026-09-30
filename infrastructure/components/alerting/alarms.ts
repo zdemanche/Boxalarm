@@ -33,6 +33,17 @@ export const MIN_ELIGIBLE_MEMBERS_CONFIG_KEY = "alertingMinEligibleMembers";
 export const DEFAULT_MIN_ELIGIBLE_MEMBERS = 3;
 
 /**
+ * Stack config key: the fraction of eligible members the tone-1 fan-out may skip on push (no
+ * registered device) over PUSH_SKIPPED_PERIOD_SECONDS before it pages on-call (default
+ * DEFAULT_PUSH_SKIPPED_FRACTION). Set it just above the department's usual share of members
+ * who page by SMS only.
+ */
+export const PUSH_SKIPPED_FRACTION_CONFIG_KEY = "alertingPushSkippedFraction";
+export const DEFAULT_PUSH_SKIPPED_FRACTION = 0.25;
+/** Six hours: long enough to average across dispatches, short enough to catch it same day. */
+export const PUSH_SKIPPED_PERIOD_SECONDS = 6 * 60 * 60;
+
+/**
  * Alerting-plane paging (E1-S11-INFRA): an alarm on every alert-path failure mode, each
  * paging through the alerting-page topic (page-topic.ts), and a per-channel fault-injection
  * SSM switch present in dev/qa/staging only (never prod).
@@ -52,7 +63,8 @@ const DLQ_ALARM_DESCRIPTION: Record<AlertingChannel, string> = {
     "MANY members: a stack misconfiguration that dead-letters on purpose - bundleId in the APNs secret does not match the app, " +
     "the FCM service account is from a different Firebase project, credentials still refused after the in-process retry " +
     "(rotated/revoked .p8 key or service account), a blocked mass token invalidation (APNs secret environment does not match the app builds), " +
-    "or an unset push secret. Fix the secret, then redrive the DLQ. " +
+    "or a push secret that could not be read after retries (throttling or an outage; an unset or empty secret does not dead-letter - see the " +
+    "push-credentials-unavailable alarm). Fix the secret, then redrive the DLQ. " +
     "A blocked mass invalidation can also be benign: several members uninstalled at once (their pages could never be delivered).",
   sms: "An SMS page failed every attempt and was dead-lettered; the member got no SMS for that tone. Check the sms worker logs (alerting.channel.send_failed), fix the provider, then redrive the DLQ.",
   voice:
@@ -298,14 +310,66 @@ export class AlertingAlarms extends pulumi.ComponentResource {
       evaluationPeriods: 1,
     });
 
+    // Post-merge CRITICAL-1: an eligible member with no registered push device is paged by SMS
+    // only (no critical alert, no full-screen intent) and nothing else says so. A phone that
+    // silently lost its registration (sign-out/sign-in, device loss) looks like this, so a
+    // rising share of push skips pages on-call. A ratio, not a count: a department where a few
+    // members never installed the app would otherwise page on every dispatch.
+    const pushSkippedFraction =
+      new pulumi.Config("boxalarm-infra").getNumber(PUSH_SKIPPED_FRACTION_CONFIG_KEY) ??
+      DEFAULT_PUSH_SKIPPED_FRACTION;
+    pageAlarm("fan-out-push-skipped-alarm", {
+      name: `boxalarm-${env}-alerting-fan-out-push-skipped`,
+      alarmDescription:
+        `Over the last ${PUSH_SKIPPED_PERIOD_SECONDS / 3600} h, the tone-1 fan-out found more than ${pushSkippedFraction * 100}% of eligible members ` +
+        `with no registered push device (stack config ${PUSH_SKIPPED_FRACTION_CONFIG_KEY}); they were paged by SMS only - no critical alert. ` +
+        "fanout.push.skipped in the fan-out logs names each member. One member: ask them to open the app signed in (it re-registers). " +
+        "Many: check push-token registration (POST members/{memberId}/push-tokens errors), the member-updated consumer's DLQ, and device-loss reports.",
+      comparisonOperator: "GreaterThanThreshold",
+      threshold: pushSkippedFraction,
+      evaluationPeriods: 1,
+      metricQueries: [
+        {
+          id: "skipped",
+          returnData: false,
+          metric: {
+            namespace: FAN_OUT_METRIC_NAMESPACE,
+            metricName: "PushSkipped",
+            stat: "Sum",
+            period: PUSH_SKIPPED_PERIOD_SECONDS,
+          },
+        },
+        {
+          id: "eligible",
+          returnData: false,
+          metric: {
+            namespace: FAN_OUT_METRIC_NAMESPACE,
+            metricName: "EligibleMemberCount",
+            stat: "Sum",
+            period: PUSH_SKIPPED_PERIOD_SECONDS,
+          },
+        },
+        {
+          id: "skippedFraction",
+          label: "Share of eligible members skipped on push",
+          expression: "IF(eligible > 0, FILL(skipped, 0) / eligible, 0)",
+          returnData: true,
+        },
+      ],
+    });
+
     // Review R2-m1: a real page whose push gateway secret is unset or unreadable - e.g. a device
     // registered as `development` (an Xcode-installed build) with no APNs sandbox secret value.
+    // Post-merge MAJOR-1: that device is skipped (terminal, UNAVAILABLE on the send guard) so it
+    // never holds the dispatch's FIFO group; this alarm is how on-call learns of it.
     pageAlarm("push-credentials-unavailable-alarm", {
       name: `boxalarm-${env}-alerting-push-credentials-unavailable`,
       alarmDescription:
-        "A real push page could not be sent because a push gateway secret is unset or has no value. The push worker logs " +
-        "(alerting.channel.device_send_failed) name the secret. APNS_SANDBOX_SECRET_ID is needed on any stack where Xcode-installed " +
-        "(development-signed) builds register; APNS_SECRET_ID / FCM_SECRET_ID on every stack. Set the value, then redrive the push DLQ.",
+        "A real push page could not be sent to a device because a push gateway secret is unset, has no value or could not be read. " +
+        "The worker skips that device (recorded UNAVAILABLE on the send guard) and still pages the member's other devices; SMS runs in parallel. " +
+        "The push worker logs (alerting.channel.device_send_failed) name the secret. APNS_SANDBOX_SECRET_ID is needed on any stack where " +
+        "Xcode-installed (development-signed) builds register; APNS_SECRET_ID / FCM_SECRET_ID on every stack. Set the value: the next page uses it. " +
+        "A skipped device is not re-sent for the tone that missed it.",
       namespace: "Boxalarm/AlertingChannel",
       metricName: "PushCredentialsUnavailable",
       dimensions: { Reason: "push" },

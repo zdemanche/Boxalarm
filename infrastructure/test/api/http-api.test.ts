@@ -337,6 +337,27 @@ describe("HttpApi", () => {
       await settle(api);
     });
 
+    // Security-web MINOR 8: officer delivery-evidence reads fail closed on the main authorizer.
+    it("keeps the officer alerting read routes off the fail-open authorizer", async () => {
+      const { ALERTING_PLANE_ROUTES, OFFICER_ALERTING_READ_ROUTES } =
+        await import("../../components/api/http-api");
+      expect(OFFICER_ALERTING_READ_ROUTES.length).toBe(6);
+      for (const routeKey of OFFICER_ALERTING_READ_ROUTES) {
+        expect(Object.keys(ALERTING_PLANE_ROUTES)).not.toContain(routeKey);
+      }
+      const api = await buildApi("officer-reads");
+      const receipts = api.authorizedRoute("receipts", {
+        routeKey: "GET /api/v1/alerting/dispatches/{dispatchId}/receipts",
+      });
+      const [authorizerId, mainId] = await Promise.all([
+        resolve(receipts.authorizerId as pulumi.Output<string>),
+        resolve(api.authorizer.id),
+      ]);
+      expect(authorizerId).toBe(mainId);
+      api.sealRouteSettings();
+      await settle(api);
+    });
+
     // Review MAJOR 3: a reserved limit below the default made the flood cheaper, not dearer.
     it("never throttles an alerting-plane route below the stage default", async () => {
       const { ALERTING_PLANE_ROUTES } = await import("../../components/api/http-api");

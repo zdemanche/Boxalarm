@@ -2,6 +2,7 @@ import * as pulumi from "@pulumi/pulumi";
 import { ServiceLambda } from "../observability/service-lambda";
 import { ServiceLogGroup } from "../observability/service-log-group";
 import { HttpApi } from "../api/http-api";
+import { verifiedPermissionsPolicyStatement } from "../authz/policy-store";
 import { lambdaCode, LAMBDA_HANDLER } from "../shared/lambda-code";
 import { requireEnv } from "../shared/env";
 
@@ -9,6 +10,8 @@ export interface AuditRouteArgs {
   env: string;
   platformTableName: pulumi.Input<string>;
   platformTableArn: pulumi.Input<string>;
+  policyStoreArn: pulumi.Input<string>;
+  policyStoreId: pulumi.Input<string>;
   logGroup: ServiceLogGroup;
   httpApi: HttpApi;
 }
@@ -35,15 +38,22 @@ export class AuditRoute extends pulumi.ComponentResource {
         handler: LAMBDA_HANDLER,
         code: lambdaCode("platform-service", "audit"),
         logGroup: args.logGroup,
-        environment: { AUDIT_TABLE_NAME: args.platformTableName },
-        additionalPolicyStatements: pulumi.output(args.platformTableArn).apply((tableArn) => [
-          {
-            Sid: "AuditQueryGsi3Only" as const,
-            Effect: "Allow" as const,
-            Action: ["dynamodb:Query"],
-            Resource: `${tableArn}/index/GSI3`,
-          },
-        ]),
+        // audit/handler.ts is Cedar-gated (ViewAuditTrail, CHIEF/ADMIN; security-web MINOR 12).
+        environment: {
+          AUDIT_TABLE_NAME: args.platformTableName,
+          VERIFIED_PERMISSIONS_POLICY_STORE_ID: args.policyStoreId,
+        },
+        additionalPolicyStatements: pulumi
+          .all([args.platformTableArn, args.policyStoreArn])
+          .apply(([tableArn, policyStoreArn]) => [
+            {
+              Sid: "AuditQueryGsi3Only" as const,
+              Effect: "Allow" as const,
+              Action: ["dynamodb:Query"],
+              Resource: `${tableArn}/index/GSI3`,
+            },
+            verifiedPermissionsPolicyStatement(policyStoreArn),
+          ]),
       },
       { parent: this },
     );

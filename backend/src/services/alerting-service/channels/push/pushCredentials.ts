@@ -41,20 +41,53 @@ export interface FcmCredentials {
 
 /**
  * A push gateway secret this send needs is not configured: its env var is unset, or the
- * secret has no value (or cannot be read). Thrown so the page retries and dead-letters as
- * before, but the worker also counts it (PushCredentialsUnavailable, alarmed) so on-call sees
- * WHICH secret - e.g. APNS_SANDBOX_SECRET_ID for a device registered as `development` (review
- * R2-m1) - rather than only a DLQ depth.
+ * secret has no value (or cannot be read). The worker counts it (PushCredentialsUnavailable,
+ * alarmed) so on-call sees WHICH secret - e.g. APNS_SANDBOX_SECRET_ID for a device registered
+ * as `development` (review R2-m1) - rather than only a DLQ depth.
+ *
+ * `transient` separates a read that may succeed on retry (throttling, a Secrets Manager or
+ * network blip) from a secret that is simply not configured for this device's environment.
+ * The worker treats the latter as terminal for that device (post-merge MAJOR-1): retrying it
+ * cannot succeed and would hold every later member's push in the dispatch's FIFO group.
  */
 export class PushCredentialsUnavailableError extends Error {
+  readonly transient: boolean;
+
   constructor(
     message: string,
     readonly secretKey: string,
-    options?: { cause?: unknown },
+    options?: { cause?: unknown; transient?: boolean },
   ) {
     super(message, options);
     this.name = 'PushCredentialsUnavailableError';
+    this.transient = options?.transient === true;
   }
+}
+
+/**
+ * Secrets Manager answers that mean the secret is absent or unusable as configured - a retry
+ * seconds later gets the same answer. Anything else (throttling, 5xx, a network error) may
+ * clear on its own.
+ *
+ * AccessDeniedException and DecryptionFailure are deliberately NOT here (paging review m2): an
+ * IAM or KMS change still propagating during a deploy answers exactly that for a few seconds.
+ * As transient they get the worker's bounded retry (MAX_DEVICE_SEND_ATTEMPTS), so a propagation
+ * blip does not drop push for a whole tone; a lasting misconfiguration still gives up after it,
+ * counted and alarmed (PushCredentialsUnavailable, SendFailed).
+ */
+const SECRET_CONFIGURATION_ERRORS = new Set([
+  'ResourceNotFoundException',
+  'InvalidRequestException',
+  'InvalidParameterException',
+]);
+
+/** A secret that was read but holds no usable JSON object: a configuration fault. */
+class SecretValueError extends Error {}
+
+function isTransientSecretReadError(error: unknown): boolean {
+  if (error instanceof SecretValueError) return false;
+  const name = error instanceof Error ? error.name : undefined;
+  return !(name !== undefined && SECRET_CONFIGURATION_ERRORS.has(name));
 }
 
 const ENV_KEYS: Record<PushPlatform, { readonly prod: string; readonly sandbox: string }> = {
@@ -134,7 +167,7 @@ async function readSecretJson(
       throw new PushCredentialsUnavailableError(
         `push secret ${secretId} could not be read: ${error instanceof Error ? error.message : String(error)}`,
         secretId,
-        { cause: error },
+        { cause: error, transient: isTransientSecretReadError(error) },
       );
     },
   );
@@ -146,17 +179,17 @@ async function fetchSecretJson(
 ): Promise<Record<string, unknown>> {
   const output = await client.send(new GetSecretValueCommand({ SecretId: secretId }));
   if (!output.SecretString) {
-    throw new Error(`Secret ${secretId} has no SecretString value`);
+    throw new SecretValueError(`Secret ${secretId} has no SecretString value`);
   }
   let value: unknown;
   try {
     value = JSON.parse(output.SecretString);
   } catch {
     // Never echo the secret body into the error.
-    throw new Error(`Secret ${secretId} is not valid JSON`);
+    throw new SecretValueError(`Secret ${secretId} is not valid JSON`);
   }
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
-    throw new Error(`Secret ${secretId} is not a JSON object`);
+    throw new SecretValueError(`Secret ${secretId} is not a JSON object`);
   }
   const record = value as Record<string, unknown>;
   secretCache.set(secretId, { value: record, expiresAt: Date.now() + SECRET_CACHE_TTL_MS });

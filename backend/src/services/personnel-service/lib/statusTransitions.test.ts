@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   isPagedStatus,
+  isReinstatement,
   isValidStatusTransition,
   MEMBER_STATUSES as ALL_STATUSES,
 } from './statusTransitions.js';
@@ -20,9 +21,12 @@ describe('isValidStatusTransition', () => {
     expect(isValidStatusTransition('ACTIVE', 'ACTIVE')).toBe(false);
   });
 
-  it('rejects any transition out of the terminal RETIRED status', () => {
-    expect(isValidStatusTransition('RETIRED', 'ACTIVE')).toBe(false);
+  it('leaves RETIRED only by reinstatement to ACTIVE (post-merge MAJOR-2)', () => {
+    expect(isValidStatusTransition('RETIRED', 'ACTIVE')).toBe(true);
+    expect(isReinstatement('RETIRED', 'ACTIVE')).toBe(true);
     expect(isValidStatusTransition('RETIRED', 'LOA')).toBe(false);
+    expect(isValidStatusTransition('RETIRED', 'RETIRED')).toBe(false);
+    expect(isReinstatement('LOA', 'ACTIVE')).toBe(false);
   });
 });
 

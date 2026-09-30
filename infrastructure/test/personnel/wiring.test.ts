@@ -77,6 +77,7 @@ async function build() {
     chiefNotificationTopicArn: "arn:aws:sns:us-east-1:123456789012:chief",
     userPoolId: "us-east-1_pool",
     userPoolArn: "arn:aws:cognito-idp:us-east-1:123456789012:userpool/us-east-1_pool",
+    sesFromAddress: "notifications@nicholsfd.example",
   });
   new Losap("losap", common);
   new Attendance("attendance", common);

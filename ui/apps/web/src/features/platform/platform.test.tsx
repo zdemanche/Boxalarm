@@ -368,7 +368,9 @@ test('a 403 revoking sessions shows a generic message, not the raw server detail
 
   await waitFor(() => {
     expect(
-      within(revokeDialog).getByText('You are not allowed to do this. Only a chief or admin can.'),
+      within(revokeDialog).getByText(
+        'You are not allowed to do this. Only a chief or admin can, and only an admin can for another chief or admin.',
+      ),
     ).toBeTruthy();
   });
   expect(screen.queryByText(SECRET_CEDAR_DETAIL)).toBeNull();
