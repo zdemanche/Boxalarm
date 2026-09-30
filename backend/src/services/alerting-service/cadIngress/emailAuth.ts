@@ -100,16 +100,21 @@ export function checkEmailSender(
       return 'RecipientNotSigned';
     }
   }
-  // Date counts only when signed (mime.ts). Unsigned or absent, freshness rests on the DKIM t=
-  // tags; with neither, the message's age is unknown and it is refused (R2-C1).
-  const signingTimes = email.dkimSignatures.map((signature) => signature.timestamp);
-  if (email.date === undefined && signingTimes.every((time) => time === undefined)) return 'Stale';
-  if (
-    email.date !== undefined &&
-    Math.abs(nowSeconds - email.date) > EMAIL_DATE_FRESHNESS_SECONDS
-  ) {
-    return 'Stale';
+  // Date counts only when every signature covers it (mime.ts). Otherwise freshness rests on
+  // the DKIM t= tags - and then EVERY signature must carry a fresh t=: taking any one would let
+  // an appended, aligned bogus signature with a fresh t= make an old genuine message fresh
+  // again (security review R3-M1). With a signed Date, any t= present must still be fresh.
+  if (email.date === undefined) {
+    const everyFresh =
+      email.dkimSignatures.length > 0 &&
+      email.dkimSignatures.every(
+        (signature) =>
+          signature.timestamp !== undefined &&
+          Math.abs(nowSeconds - signature.timestamp) <= EMAIL_FRESHNESS_SECONDS,
+      );
+    return everyFresh ? undefined : 'Stale';
   }
+  if (Math.abs(nowSeconds - email.date) > EMAIL_DATE_FRESHNESS_SECONDS) return 'Stale';
   if (
     email.dkimSignatures.some(
       (signature) =>
@@ -123,21 +128,36 @@ export function checkEmailSender(
 }
 
 /**
- * Replay key. With a SIGNED Message-ID: that id + a hash of the signed Subject and the body.
- * Without one (unsigned or absent, R2-C1): the signed body hashes (bh=) and signatures (b=) -
- * the parts an attacker cannot change on a genuine message. SES's own messageId is never used
- * (a re-sent copy gets a new one).
+ * How long a body-only replay key is held: a little longer than the freshness a message
+ * without a signed Date must meet (every t= within 10 minutes), so every replay that could
+ * still pass freshness is refused, while two genuine messages with identical bodies an hour
+ * apart are not mistaken for a replay.
  */
-export function emailReplayToken(email: ParsedEmail): string {
+export const EMAIL_BODY_REPLAY_TTL_SECONDS = 15 * 60;
+
+/**
+ * Replay key. With a SIGNED Message-ID: that id + a hash of the signed Subject and the body
+ * (held 24 h). Without one: a hash of the decoded body alone - the part DKIM protects that a
+ * replayer cannot change. Never the b= or bh= values: a replayer can append signatures of
+ * their own, and each would change the key (security review R3-M1). SES's own messageId is
+ * never used either (a re-sent copy gets a new one).
+ */
+export function emailReplayToken(email: ParsedEmail): {
+  readonly token: string;
+  readonly ttlSeconds: number;
+} {
   if (email.messageId) {
     const content = createHash('sha256')
       .update(`${email.subject ?? ''}\n${email.text}`, 'utf8')
       .digest('hex');
-    return createHash('sha256').update(`${email.messageId}|${content}`, 'utf8').digest('hex');
+    return {
+      token: createHash('sha256').update(`${email.messageId}|${content}`, 'utf8').digest('hex'),
+      ttlSeconds: EMAIL_REPLAY_TTL_SECONDS,
+    };
   }
-  const signed = email.dkimSignatures
-    .map((signature) => `${signature.bodyHash ?? ''}:${signature.signature}`)
-    .sort()
-    .join('|');
-  return createHash('sha256').update(`NOMSGID|${signed}`, 'utf8').digest('hex');
+  const body = createHash('sha256').update(email.text, 'utf8').digest('hex');
+  return {
+    token: createHash('sha256').update(`NOMSGID|${body}`, 'utf8').digest('hex'),
+    ttlSeconds: EMAIL_BODY_REPLAY_TTL_SECONDS,
+  };
 }

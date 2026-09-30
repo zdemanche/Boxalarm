@@ -6,7 +6,6 @@ import { ALERTING_SDK_CLIENT_CONFIG } from '../awsClientConfig.js';
 import { createDynamoClient, readAlertingConfig } from '../eligibility/dynamoClient.js';
 import { logError, logInfo } from '../dispatches/logger.js';
 import {
-  EMAIL_REPLAY_TTL_SECONDS,
   checkEmailSender,
   checkSesVerdicts,
   emailReplayToken,
@@ -163,10 +162,11 @@ async function processRecord(record: SESEventRecord, config: MailConfig): Promis
 
   // 6. Replay: early read-only answer; the marker is written inside the dispatch transaction
   // (step 7), so a failed write can never leave it behind to swallow the retry (chain M3).
+  const replayKey = emailReplayToken(email);
   const replayRef = {
     deptId: target.deptId,
     sourceId: source.sourceId,
-    token: emailReplayToken(email),
+    token: replayKey.token,
   };
   if (await isReplayMarked(client, tableName, replayRef, nowSeconds)) {
     emitCadMetric('CadIngressReplayRejected', { Channel: CHANNEL });
@@ -184,7 +184,7 @@ async function processRecord(record: SESEventRecord, config: MailConfig): Promis
     // must not make every such email the same "text" (chain review C1).
     text: email.subject ? `${email.subject}\n${email.text}` : email.text,
     receivedAt: nowSeconds,
-    replay: { token: replayRef.token, ttlSeconds: EMAIL_REPLAY_TTL_SECONDS },
+    replay: { token: replayRef.token, ttlSeconds: replayKey.ttlSeconds },
   });
   logInfo('cadIngress.email.processed', { sesMessageId, outcome: result.outcome });
 }

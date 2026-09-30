@@ -313,6 +313,47 @@ describe('CAD email handler', () => {
     });
   });
 
+  describe('appended signatures cannot refresh or re-key a message (security review R3-M1)', () => {
+    const bogus = (t: number, id: string) =>
+      `DKIM-Signature: v=1; a=rsa-sha256; d=cad.county.gov; s=x; t=${t}; h=from:to; bh=${id}; b=${id}`;
+
+    it("the reviewer's probe: an old genuine email (Date unsigned) stays Stale after an aligned bogus signature with a fresh t= is appended", async () => {
+      const old = { date: NOW - 3600, signedHeaders: 'from:to:message-id' };
+      serve(rawEmail(old));
+      await run();
+      expect(alerts()).toHaveLength(0);
+      expect(metric('CadIngressStale', 'Stale')).toBe(true);
+      serve(rawEmail({ ...old, headers: `${bogus(NOW, 'junk1')}\r\nContent-Type: text/plain` }));
+      await run();
+      expect(alerts()).toHaveLength(0);
+      expect(metric('CadIngressStale', 'Stale')).toBe(true);
+    });
+
+    it('with Date unsigned, a signature without any t= is Stale even beside a fresh one', async () => {
+      const raw = rawEmail({
+        signedHeaders: 'from:to:message-id',
+        headers: `${bogus(NOW, 'junk2').replace(` t=${NOW};`, '')}\r\nContent-Type: text/plain`,
+      });
+      serve(raw);
+      await run();
+      expect(alerts()).toHaveLength(0);
+      expect(metric('CadIngressStale', 'Stale')).toBe(true);
+    });
+
+    it('a replayed body (no signed Message-ID) with a different signature added is still refused as a replay', async () => {
+      const genuine = { signedHeaders: 'from:to:date' };
+      serve(rawEmail(genuine));
+      await run();
+      expect(alerts()).toHaveLength(1);
+      serve(
+        rawEmail({ ...genuine, headers: `${bogus(NOW, 'junk3')}\r\nContent-Type: text/plain` }),
+      );
+      await run();
+      expect(alerts()).toHaveLength(1);
+      expect(metric('CadIngressReplayRejected')).toBe(true);
+    });
+  });
+
   describe('recipient binding (security review M2)', () => {
     it('a genuine county email to department A, redirected unchanged to B, does not page B', async () => {
       // Signed To is A's address; SES delivered it to B's (the configured RECIPIENT).
