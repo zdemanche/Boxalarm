@@ -81,6 +81,70 @@ describe("validateStackConfig (deploy-readiness C2)", () => {
   });
 });
 
+describe("webOrigin placeholder hosts (deploy-readiness M4)", () => {
+  it.each(["qa", "staging", "prod"])("rejects the committed .example origin on %s", (env) => {
+    const problems = stackConfigProblems(
+      reader({ ...COMPLETE_DEV, env, webOrigin: `https://${env}.boxalarm.example` }),
+      env,
+    ).join("\n");
+    expect(problems).toMatch(/webOrigin .* is a placeholder host/);
+  });
+
+  it.each([
+    "https://app.boxalarm.invalid",
+    "https://boxalarm.test",
+    "https://localhost:5173",
+    "https://www.example.com",
+  ])("rejects %s outside dev", (webOrigin) => {
+    const problems = stackConfigProblems(reader({ ...COMPLETE_DEV, env: "qa", webOrigin }), "qa");
+    expect(problems).toHaveLength(1);
+  });
+
+  it("accepts a real origin anywhere, and localhost on dev", () => {
+    expect(
+      stackConfigProblems(
+        reader({ ...COMPLETE_DEV, env: "staging", webOrigin: "https://staging.nicholsfd.org" }),
+        "staging",
+      ),
+    ).toEqual([]);
+    expect(stackConfigProblems(reader(COMPLETE_DEV), "dev")).toEqual([]);
+  });
+
+  it("rejects a non-https origin on every stack", () => {
+    const problems = stackConfigProblems(
+      reader({ ...COMPLETE_DEV, webOrigin: "http://localhost:5173" }),
+      "dev",
+    );
+    expect(problems.join("\n")).toMatch(/must be https/);
+  });
+});
+
+describe("SMS/voice provider endpoints (deploy-readiness M5)", () => {
+  it("are optional on dev", () => {
+    expect(stackConfigProblems(reader(COMPLETE_DEV), "dev")).toEqual([]);
+  });
+
+  it.each(["http://api.vendor.com/sms", "https://sms-provider.not-yet-selected.invalid", "vendor"])(
+    "rejects %s when set",
+    (url) => {
+      const problems = stackConfigProblems(
+        reader({ ...COMPLETE_DEV, smsProviderEndpointUrl: url }),
+        "dev",
+      );
+      expect(problems.join("\n")).toContain("smsProviderEndpointUrl");
+    },
+  );
+
+  it("accepts a vendor https endpoint", () => {
+    expect(
+      stackConfigProblems(
+        reader({ ...COMPLETE_DEV, voiceProviderEndpointUrl: "https://api.vendor.com/v1/calls" }),
+        "dev",
+      ),
+    ).toEqual([]);
+  });
+});
+
 describe(
   "index.ts validates the whole config before building anything",
   { timeout: 120_000 },
