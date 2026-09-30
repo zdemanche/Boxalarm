@@ -55,6 +55,19 @@ export async function enqueue(input: EnqueueInput): Promise<OutboxRow> {
 }
 
 /**
+ * The same member's rows: equal owners, or an ownerless row answered as that member (its
+ * answeredAsHint) - an answer queued during a keychain error and the member's later answer to the
+ * same call are one member's answers, so the newer supersedes the older (m10).
+ */
+function sameOwner(a: OutboxRow, b: OutboxRow): boolean {
+  if (a.ownerMemberId === b.ownerMemberId) return true;
+  return (
+    (a.ownerMemberId === null && !!a.answeredAsHint && a.answeredAsHint === b.ownerMemberId) ||
+    (b.ownerMemberId === null && !!b.answeredAsHint && b.answeredAsHint === a.ownerMemberId)
+  );
+}
+
+/**
  * Rows of `kind` for the same `path` queued before `row` - an older answer to the same call.
  * Answers are append-only on the server and the latest write wins there, so an older answer
  * that is still retrying must never be delivered after a newer one.
@@ -66,7 +79,7 @@ export async function olderSiblings(row: OutboxRow): Promise<OutboxRow[]> {
       candidate.id !== row.id &&
       candidate.kind === row.kind &&
       candidate.path === row.path &&
-      candidate.ownerMemberId === row.ownerMemberId &&
+      sameOwner(candidate, row) &&
       candidate.queuedAt <= row.queuedAt,
   );
 }
@@ -79,7 +92,7 @@ export async function isSuperseded(row: OutboxRow): Promise<boolean> {
       candidate.id !== row.id &&
       candidate.kind === row.kind &&
       candidate.path === row.path &&
-      candidate.ownerMemberId === row.ownerMemberId &&
+      sameOwner(candidate, row) &&
       candidate.queuedAt > row.queuedAt,
   );
 }

@@ -257,3 +257,42 @@ test("with no owner columns (failed migration) every row is the signed-in member
   spy.mockRestore();
   await outbox.discard('UNSCOPED-1');
 });
+
+// m10: an answer queued ownerless (keychain error) with the member's hint, and that member's
+// later answer to the same call, are the same member's answers.
+test("an ownerless answer answered as a member is superseded by that member's newer answer", async () => {
+  const path = 'alerting/dispatches/D-10/responses';
+  const hinted = await outbox.enqueue({
+    ownerMemberId: null,
+    ownerDeptId: null,
+    answeredAsHint: 'm-k',
+    id: 'response-hinted',
+    kind: 'RESPONSE',
+    label: 'a',
+    path,
+    body: { ackStatus: 'RESPONDING' },
+  });
+  await new Promise((resolve) => setTimeout(resolve, 2));
+  const owned = await outbox.enqueue({
+    ownerMemberId: 'm-k',
+    ownerDeptId: null,
+    id: 'response-owned',
+    kind: 'RESPONSE',
+    label: 'b',
+    path,
+    body: { ackStatus: 'NOT_RESPONDING' },
+  });
+  const other = await outbox.enqueue({
+    ownerMemberId: 'm-other',
+    ownerDeptId: null,
+    id: 'response-other',
+    kind: 'RESPONSE',
+    label: 'c',
+    path,
+    body: { ackStatus: 'RESPONDING' },
+  });
+
+  expect((await outbox.olderSiblings(owned)).map((row) => row.id)).toEqual(['response-hinted']);
+  await expect(outbox.isSuperseded(hinted)).resolves.toBe(true);
+  await expect(outbox.isSuperseded(other)).resolves.toBe(false);
+});
