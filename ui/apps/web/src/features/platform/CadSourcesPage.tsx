@@ -442,7 +442,8 @@ function WebhookKey({ draft }: { draft: SourceDraft }) {
               <code>
                 X-Boxalarm-Signature: v1=hex(HMAC-SHA256(key, timestamp + &quot;.&quot; + body))
               </code>{' '}
-              with <code>X-Boxalarm-Timestamp</code> in Unix seconds (within 5 minutes).
+              over the exact request bytes, keyed with the key text exactly as shown, with{' '}
+              <code>X-Boxalarm-Timestamp</code> in Unix seconds (within 5 minutes).
             </dd>
           </dl>
         ) : null}
