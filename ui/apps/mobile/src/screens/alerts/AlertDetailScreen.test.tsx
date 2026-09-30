@@ -442,3 +442,43 @@ test('without a server (fixture repository) an answer reads "Not sent - no serve
   expect(await findByText('Not sent - no server')).toBeTruthy();
   expect(queryByText('Sent')).toBeNull();
 });
+
+test('lists the CAD updates to the call under their own header', async () => {
+  jest.spyOn(mockAlertsRepository, 'getDispatch').mockResolvedValue({
+    dispatchId: PAGE.dispatchId,
+    incidentType: 'Structure fire',
+    address: '21 Main St',
+    crossStreets: 'Elm / Oak',
+    mapLink: null,
+    narrative: 'Smoke showing',
+    isSelfTest: false,
+    updates: [{ updateId: 'u1', receivedAt: 1_800_000_180, summary: 'Units: E1, L2, R1' }],
+  });
+  mockRouteParams.dispatchId = PAGE.dispatchId;
+  mockRouteParams.payload = PAGE;
+
+  const { findByRole, findByText } = await render(<AlertDetailScreen />);
+
+  expect(await findByRole('header', { name: 'CAD updates' })).toBeTruthy();
+  expect(await findByText(/Units: E1, L2, R1/)).toBeTruthy();
+});
+
+test('a RAW (VERIFY) CAD dispatch shows the VERIFY banner and expands on the dispatch text', async () => {
+  jest.spyOn(mockAlertsRepository, 'getDispatch').mockResolvedValue({
+    dispatchId: PAGE.dispatchId,
+    incidentType: 'CAD DISPATCH - VERIFY',
+    address: 'SEE DISPATCH TEXT',
+    crossStreets: '',
+    mapLink: null,
+    narrative: 'SMOKE AT THE OLD MILL',
+    isSelfTest: false,
+    verifyRequired: true,
+  });
+  mockRouteParams.dispatchId = PAGE.dispatchId;
+  mockRouteParams.payload = PAGE;
+
+  const { findByText } = await render(<AlertDetailScreen />);
+
+  expect(await findByText(/the CAD message could not be read automatically/)).toBeTruthy();
+  expect(await findByText('SMOKE AT THE OLD MILL')).toBeTruthy();
+});

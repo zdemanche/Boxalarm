@@ -44,6 +44,18 @@ export const LAMBDA_ENTRIES = [
     entry: 'src/services/platform-service/config/handler.ts',
   },
   {
+    // GET/PUT /platform/cad-sources and POST .../test-parse (Cedar View/ManageCadIngress).
+    service: 'platform-service',
+    function: 'cad-sources',
+    entry: 'src/services/platform-service/cadSources/handler.ts',
+  },
+  {
+    // POST /platform/cad-sources/{sourceId}/webhook-key - the only CAD secret writer.
+    service: 'platform-service',
+    function: 'cad-sources-rotate-key',
+    entry: 'src/services/platform-service/cadSources/rotateKey.ts',
+  },
+  {
     service: 'platform-service',
     function: 'neris-entity-get',
     entry: 'src/services/platform-service/neris/getEntity.ts',
@@ -683,6 +695,36 @@ export const LAMBDA_ENTRIES = [
     service: 'alerting-service',
     function: 'alert-rules-copy-consumer',
     entry: 'src/services/alerting-service/alertRules/alertRulesCopyHandler.ts',
+  },
+  {
+    // platform.config.updated (CAD_INGRESS) -> CAD_INGRESS_COPY, read by both CAD ingress paths.
+    service: 'alerting-service',
+    function: 'cad-source-copy-consumer',
+    entry: 'src/services/alerting-service/cadIngress/sourceCopyHandler.ts',
+  },
+  {
+    // POST /api/v1/alerting/ingress/cad-webhook - signed JSON CAD webhook (own API, no Cognito).
+    service: 'alerting-service',
+    function: 'cad-webhook',
+    entry: 'src/services/alerting-service/cadIngress/webhookHandler.ts',
+  },
+  {
+    // SES receipt rule (S3 then async Lambda action) - inbound CAD dispatch email.
+    service: 'alerting-service',
+    function: 'cad-email',
+    entry: 'src/services/alerting-service/cadIngress/emailHandler.ts',
+  },
+  {
+    // Async-invoked by the CAD ingress Lambdas: the non-escalating UPDATE push to a roster.
+    service: 'alerting-service',
+    function: 'cad-update-notifier',
+    entry: 'src/services/alerting-service/cadIngress/updateNotifierHandler.ts',
+  },
+  {
+    // Every 5 minutes: CAD updates still owing their UPDATE push are re-driven and alarmed.
+    service: 'alerting-service',
+    function: 'cad-update-sweep',
+    entry: 'src/services/alerting-service/cadIngress/updateSweepHandler.ts',
   },
   {
     service: 'personnel-service',

@@ -84,6 +84,21 @@ function optionalStringArray(
   return value;
 }
 
+function isLocalityTown(town: string): boolean {
+  const hasControlCharacter = [...town].some((character) => character.charCodeAt(0) < 0x20);
+  return town.length > 0 && town.length <= MAX_LOCALITY_TOWN_LENGTH && !hasControlCharacter;
+}
+
+/**
+ * Locality from a CAD message's parsed town (cadIngress/ingest.ts). CAD text is typed, not a
+ * pick from the home list, so the choice is OTHER; the pre-plan matcher reads only `town`.
+ * An unusable town is no locality (the pre-plan is then flagged VERIFY ADDRESS), never an error.
+ */
+export function cadLocality(rawTown: string | undefined): DispatchLocality | undefined {
+  const town = rawTown?.trim() ?? '';
+  return isLocalityTown(town) ? { town, choice: 'OTHER' } : undefined;
+}
+
 /**
  * The optional `locality` field. Absent is accepted (older callers). Present but malformed is
  * DROPPED, never a 400: locality is enrichment, and enrichment must never gate or delay a page
@@ -104,8 +119,7 @@ function optionalLocality(body: Record<string, unknown>): {
     };
   }
   const town = typeof value.town === 'string' ? value.town.trim() : '';
-  const hasControlCharacter = [...town].some((character) => character.charCodeAt(0) < 0x20);
-  if (town.length === 0 || town.length > MAX_LOCALITY_TOWN_LENGTH || hasControlCharacter) {
+  if (!isLocalityTown(town)) {
     return {
       dropped: {
         field: 'locality.town',

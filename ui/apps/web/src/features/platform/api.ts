@@ -1,6 +1,11 @@
 import { apiRequest, type AuthTokenSource } from '../../lib/apiClient';
 import type {
   AuditPage,
+  CadParserFields,
+  CadSourceInput,
+  CadSourcesResponse,
+  CadTestParseResult,
+  RotatedWebhookKey,
   ConfigResponse,
   DisposalResult,
   EditableConfigType,
@@ -137,4 +142,79 @@ export async function resetMemberCredentials(
     body: JSON.stringify({ memberId }),
   });
   return (await response.json()) as { memberId: string; status: string };
+}
+
+/** The department's CAD ingress sources (CHIEF/ADMIN, Cedar ViewCadIngress). */
+export async function getCadSources(tokens: AuthTokenSource): Promise<CadSourcesResponse> {
+  const response = await apiRequest('platform/cad-sources', tokens);
+  return (await response.json()) as CadSourcesResponse;
+}
+
+/** Save every source (Cedar ManageCadIngress). `expectedVersion` is the version last loaded. */
+export async function putCadSources(
+  tokens: AuthTokenSource,
+  sources: CadSourceInput[],
+  expectedVersion: number | null,
+): Promise<CadSourcesResponse> {
+  const response = await apiRequest('platform/cad-sources', tokens, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      sources,
+      ...(expectedVersion !== null ? { expectedVersion } : {}),
+    }),
+  });
+  return (await response.json()) as CadSourcesResponse;
+}
+
+/** Run a draft parser template over a pasted sample - the same parser real dispatches use. */
+export async function testParseCad(
+  tokens: AuthTokenSource,
+  fields: CadParserFields,
+  sample: string,
+): Promise<CadTestParseResult> {
+  const response = await apiRequest('platform/cad-sources/test-parse', tokens, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ fields, sample }),
+  });
+  return (await response.json()) as CadTestParseResult;
+}
+
+/** Mint a new webhook key for a saved source. The key is in this response only. */
+export async function rotateCadWebhookKey(
+  tokens: AuthTokenSource,
+  sourceId: string,
+): Promise<RotatedWebhookKey> {
+  const response = await apiRequest(
+    `platform/cad-sources/${encodeURIComponent(sourceId)}/webhook-key`,
+    tokens,
+    { method: 'POST' },
+  );
+  return (await response.json()) as RotatedWebhookKey;
+}
+
+/** The key the last rotation replaced stops working now, not after its 24 h grace. */
+export async function revokePreviousCadWebhookKey(
+  tokens: AuthTokenSource,
+  sourceId: string,
+): Promise<void> {
+  await apiRequest(
+    `platform/cad-sources/${encodeURIComponent(sourceId)}/webhook-key/revoke-previous`,
+    tokens,
+    { method: 'POST' },
+  );
+}
+
+/** A new recipient address for one source; the old address stops paging within a minute. */
+export async function newCadEmailAddress(
+  tokens: AuthTokenSource,
+  sourceId: string,
+): Promise<CadSourcesResponse> {
+  const response = await apiRequest(
+    `platform/cad-sources/${encodeURIComponent(sourceId)}/email-address`,
+    tokens,
+    { method: 'POST' },
+  );
+  return (await response.json()) as CadSourcesResponse;
 }

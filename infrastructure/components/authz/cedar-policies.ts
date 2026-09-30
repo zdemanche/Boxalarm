@@ -49,6 +49,11 @@ export const ADMIN_ONLY_ACTIONS = [
   // tier that may edit them.
   "ArchiveOccupancy",
   "ArchiveHydrant",
+  // CAD ingress sources (platform-service cadSources/): who may page the whole department
+  // from a CAD feed - sender allowlists, webhook keys, parser templates - is the chief's call.
+  // View is admin-only too: the view carries the recipient address and key ids.
+  "ViewCadIngress",
+  "ManageCadIngress",
 ] as const;
 export const ADMIN_ONLY_GROUPS = ["CHIEF", "ADMIN"] as const;
 
@@ -472,6 +477,8 @@ export const CEDAR_SCHEMA = JSON.stringify({
       },
       ViewMemberDevices: { appliesTo: { principalTypes: ["User"], resourceTypes: ["Member"] } },
       ViewAuditTrail: { appliesTo: { principalTypes: ["User"], resourceTypes: ["Department"] } },
+      ViewCadIngress: { appliesTo: { principalTypes: ["User"], resourceTypes: ["Department"] } },
+      ManageCadIngress: { appliesTo: { principalTypes: ["User"], resourceTypes: ["Department"] } },
       RecordAttendance: { appliesTo: { principalTypes: ["User"], resourceTypes: ["Member"] } },
       RecordAttendanceOnBehalf: {
         appliesTo: { principalTypes: ["User"], resourceTypes: ["Member"] },

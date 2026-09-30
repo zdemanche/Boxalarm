@@ -44,6 +44,11 @@ test('a dispatch push (no category, or category dispatch) selects the critical c
   );
 });
 
+test('a CAD dispatch update selects the non-critical channel (it is not a page)', async () => {
+  expect(categoryFromPushData({ category: 'dispatch_update' })).toBe('dispatch_update');
+  await expect(channelForCategory('dispatch_update')).resolves.toBe(DEFAULT_CHANNEL_ID);
+});
+
 test('a digest push selects the non-critical channel', async () => {
   expect(categoryFromPushData({ category: 'digest' })).toBe('digest');
   await expect(channelForCategory('digest')).resolves.toBe(DEFAULT_CHANNEL_ID);

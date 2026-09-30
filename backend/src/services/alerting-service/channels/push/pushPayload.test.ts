@@ -43,6 +43,25 @@ describe('push payloads', () => {
     expect(pushDataFields(n).category).toBe('dispatch');
   });
 
+  it('a CAD update is NOT a page: ordinary category, active interruption, default sound, no answer buttons', () => {
+    const update: PushNotification = {
+      ...dispatch,
+      alertKind: 'dispatch_update',
+      toneSequence: undefined,
+      title: 'UPDATE — STRUCTURE_FIRE',
+      body: 'UPDATE: Units: E1, L2, R1 — 12 Main St',
+      idempotencyKey: 'dispatch-1#CADUPDATE#u1#mbr-1#PUSH#SEND',
+      collapseKey: 'dispatch-1#UPDATE#u1',
+    };
+    const apns = buildApnsPayload(update, 'critical');
+    const aps = apns.aps as Record<string, unknown>;
+    expect(aps['interruption-level']).toBe('active');
+    expect(aps.sound).toBe('default');
+    expect(aps.category).toBeUndefined();
+    expect(pushDataFields(update).category).toBe('dispatch_update');
+    expect(pushDataFields(update)).not.toHaveProperty('toneSequence');
+  });
+
   it('the prompt carries no toneSequence; a dispatch page carries it as a string', () => {
     expect(pushDataFields(prompt)).not.toHaveProperty('toneSequence');
     expect(pushDataFields(dispatch).toneSequence).toBe('1');

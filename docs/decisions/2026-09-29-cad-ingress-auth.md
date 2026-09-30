@@ -1,6 +1,6 @@
 # 2026-09-29: CAD ingress authentication — sender auth first, fail closed
 
-**Status:** decided; binding on the CAD ingress build. Nothing described here is built yet.
+**Status:** decided; binding on the CAD ingress build. Built on `feat/cad-ingress` (operations and the test-message procedure: `docs/runbooks/cad-ingress.md`). Tightened over the text below by the security review: the From header is parsed by the RFC 5322 grammar (exactly one header, exactly one mailbox; display names and comments are never read as addresses); an address allowlist entry matches that address only, never its domain; and alignment is required - DMARC `PASS`, or, when the domain has no usable DMARC result, every DKIM `d=` aligned with the From domain (SES reports one DKIM verdict for the whole message, so a foreign signature must not be present at all).
 **Context:** `2026-09-29-roadmap-defaults.md` #3 picked two deterministic CAD ingress paths: SES inbound email and a signed JSON webhook. It says the parser "fails open to raw text". Security review M7 (`.analysis/design-review/security-data.md`) points out two attacks:
 - A spoofed email to the ingress address pages the whole volunteer force to a fake address.
 - A replayed webhook re-pages an old call. Dispatch dedup only helps when the same external ID is reused.
@@ -67,6 +67,47 @@ A failure at any of steps 1–4 returns `401` or `409` with a generic body. It e
 - A flood elsewhere cannot starve it.
 
 `HttpApi.authorizedRoute` forbids open routes on purpose. Wire the webhook the way the receipt webhooks are wired (`AlertingRoute` with `authorized: false`), with a route-level throttle added.
+
+**As built (security review M4, 2026-09-30).** A single route or stage throttle is ONE bucket that every caller shares. One host sending junk at more than 10 rps would 429 every department's genuine CAD, and HTTP APIs cannot take AWS WAF. The webhook therefore runs on its **own REST API**:
+
+- **Per-source API keys in a usage plan.** Every source has its own API key, minted with each HMAC key rotation and sent as `x-api-key`. The key is attached to a usage plan with a per-key throttle of 5 rps and a burst of 5. The burst is kept at or below half the webhook Lambda's reserved concurrency (10), so one key holder's burst cannot briefly throttle another department's CAD; the concurrency must grow with the number of departments.
+- **Requests without a valid API key are refused by API Gateway (403) before any per-source bucket is used and before the Lambda runs.** An unauthenticated flood therefore cannot starve a genuine CAD. A flood that uses one source's (leaked) API key throttles only that source.
+- **No stage-wide method throttle.** It would reintroduce the shared bucket.
+- **The API key is a capacity partition, not a credential.** The HMAC is still the authentication.
+- **Optional source-IP allowlist.** `boxalarm-infra:cadWebhookAllowedCidrs` holds the dispatch centres' egress CIDRs. The API's resource policy refuses every other address before anything else runs. It applies to the whole stack: a per-source allowlist would need a resource policy that changes at runtime.
+- **Alarm.** `…-alerting-cad-webhook-4xx` fires on more than 20 refusals (403/429/401) in 5 minutes, to alerting-page and the chief.
+
+**Residual risk:**
+- Refused requests still count against the account's regional API Gateway limit (10,000 rps across every API in the account, the main HTTP API included). A flood of that size from many hosts, a DDoS, is not mitigated for free.
+- API Gateway gives no per-IP rate limit.
+- AWS Shield Standard, which is automatic and free, covers network-layer floods only.
+
+**Paid option, not enabled: needs the user's approval because it is a fixed monthly cost.** Put the webhook behind CloudFront with an AWS WAF web ACL. The ACL would carry a rate-based rule per source IP (for example 100 requests per 5 minutes) and the dispatch-centre IP set as an allow rule. Approximate cost at CAD volumes:
+
+| Item | Cost |
+|---|---|
+| WAF web ACL | $5/month |
+| Each rule (2) | $1/month each |
+| Requests | $0.60 per million |
+| CloudFront | Negligible at a few thousand requests a month |
+
+The total is **about $7–8 per month per stack** before flood traffic, and a flood adds $0.60 per million requests it absorbs. It would contain a many-host flood at the edge instead of at the account limit.
+
+**Alternative paid option, also unbuilt: AWS WAFv2 attached directly to the webhook's regional REST API stage.** No CloudFront is needed. The web ACL would carry:
+- The dispatch-centre addresses as an IP-set allow rule.
+- A rate-based rule per source IP.
+
+WAF evaluates before API Gateway counts the request, so a blocked flood never reaches the account's API Gateway quota. That quota is the one the member app's respond path shares. Approximate cost:
+
+| Item | Cost |
+|---|---|
+| Web ACL | $5/month |
+| Two rules | $1/month each |
+| Requests | $0.60 per million |
+
+That is **about $7 per month per stack** at CAD volumes. It is the simpler of the two paid options and is recommended for prod. Both options wait on the user's approval, because they are fixed monthly costs.
+
+**Operational recommendation.** Where the CAD supports both, configure **both** email and webhook for the department. A flood or outage on one path then does not stop dispatches arriving on the other. Radio tone-out (N1.9) remains the page of record regardless.
 
 ## Observability and tests
 

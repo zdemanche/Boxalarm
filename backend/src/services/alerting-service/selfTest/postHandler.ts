@@ -90,7 +90,8 @@ async function postSelfTest(
       testDelivery: 'deliver',
     });
 
-    if (result.outcome === 'duplicate') {
+    // 'replay' cannot occur here (no replay marker is passed); it is handled as a duplicate.
+    if (result.outcome !== 'created') {
       logError('selfTest.post.unexpectedDuplicate', new Error('self-test idempotency collision'), {
         traceId,
         deptId,

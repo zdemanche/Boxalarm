@@ -9,7 +9,7 @@ import type { ApnsInterruptionLevel } from './pushCredentials.js';
  */
 export interface PushNotification {
   readonly token: string;
-  readonly alertKind: 'dispatch' | 'mutual_aid_prompt';
+  readonly alertKind: 'dispatch' | 'mutual_aid_prompt' | 'dispatch_update';
   readonly dispatchId: string;
   readonly toneSequence?: number | undefined;
   readonly title: string;
@@ -74,6 +74,13 @@ export function truncateUtf8(value: string, maxBytes: number): string {
  * the non-critical channel for the LOB-plane notification service, never for this worker.
  */
 export const PUSH_CATEGORY = 'dispatch';
+
+/**
+ * A CAD update to a call already paged is information, not a page: the app posts it on its
+ * ordinary channel (pushChannel.ts), and iOS delivers it `active` with the default sound - it
+ * never rings through Do Not Disturb (docs/decisions/2026-09-30-cad-dispatch-updates.md).
+ */
+export const PUSH_UPDATE_CATEGORY = 'dispatch_update';
 
 /**
  * How long APNs and FCM keep trying to reach an offline phone. The default is up to four weeks,
@@ -145,7 +152,7 @@ function alertFields(notification: PushNotification): Record<string, string> {
 
 function routingFields(notification: PushNotification): Record<string, string> {
   return {
-    category: PUSH_CATEGORY,
+    category: notification.alertKind === 'dispatch_update' ? PUSH_UPDATE_CATEGORY : PUSH_CATEGORY,
     alertKind: notification.alertKind,
     dispatchId: notification.dispatchId,
     ...(notification.toneSequence !== undefined
@@ -195,6 +202,16 @@ export function buildApnsPayload(
   notification: PushNotification,
   interruptionLevel: ApnsInterruptionLevel,
 ): Record<string, unknown> {
+  if (notification.alertKind === 'dispatch_update') {
+    return {
+      aps: {
+        alert: { title: boundedTitle(notification), body: boundedBody(notification) },
+        sound: 'default',
+        'interruption-level': 'active',
+      },
+      ...routingFields(notification),
+    };
+  }
   return {
     aps: {
       alert: { title: boundedTitle(notification), body: boundedBody(notification) },

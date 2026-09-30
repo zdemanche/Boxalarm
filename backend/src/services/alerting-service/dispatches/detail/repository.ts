@@ -1,4 +1,4 @@
-import { GetCommand, type DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
+import { GetCommand, QueryCommand, type DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
 import { buildDeptScopedPk, type VerifiedDeptId } from '@boxalarm/dept-scope';
 
 export interface DispatchAlertItem {
@@ -18,6 +18,8 @@ export interface DispatchAlertItem {
   readonly toneLadderStatus?: string;
   readonly currentToneSequence?: number;
   readonly nextToneAt?: number | null;
+  /** RAW (fail-open) CAD dispatch: the address is a placeholder; the text is the source. */
+  readonly verifyRequired?: boolean;
 }
 
 export async function getDispatchDetail(
@@ -49,4 +51,45 @@ export async function getMutualAidEvent(
     }),
   );
   return result.Item?.entityType === 'MUTUAL_AID_EVENT' ? result.Item : undefined;
+}
+
+export interface DispatchUpdateView {
+  readonly updateId: string;
+  readonly receivedAt: number;
+  readonly summary: string;
+  readonly changes: readonly { field: string; from: string; to: string }[];
+}
+
+/**
+ * The CAD updates recorded for this dispatch (cadIngress/updateRepository.ts), oldest first.
+ * Bounded: a dispatch with more than 100 updates shows the first 100.
+ */
+export async function getDispatchUpdates(
+  client: DynamoDBDocumentClient,
+  tableName: string,
+  deptId: VerifiedDeptId,
+  dispatchId: string,
+): Promise<DispatchUpdateView[]> {
+  const result = await client.send(
+    new QueryCommand({
+      TableName: tableName,
+      KeyConditionExpression: 'pk = :pk AND begins_with(sk, :update)',
+      ExpressionAttributeValues: {
+        ':pk': buildDeptScopedPk(deptId, 'DISPATCH', dispatchId),
+        ':update': 'UPDATE#',
+      },
+      Limit: 100,
+    }),
+  );
+  return (result.Items ?? [])
+    .filter((item) => item.entityType === 'DISPATCH_UPDATE')
+    .map((item) => ({
+      updateId: String(item.updateId),
+      receivedAt: Number(item.receivedAt),
+      summary: typeof item.summary === 'string' ? item.summary : '',
+      changes: Array.isArray(item.changes)
+        ? (item.changes as { field: string; from: string; to: string }[])
+        : [],
+    }))
+    .sort((a, b) => a.receivedAt - b.receivedAt);
 }

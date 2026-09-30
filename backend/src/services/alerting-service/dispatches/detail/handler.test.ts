@@ -143,6 +143,66 @@ describe('alert-detail handler', () => {
     errorSpy.mockRestore();
   });
 
+  it('a RAW (VERIFY) CAD dispatch: verifyRequired is returned and there is no map link', async () => {
+    const { createHandler } = await import('./handler.js');
+    const docClient = routedClient({
+      dispatch: {
+        ...DISPATCH_ITEM,
+        address: 'SEE DISPATCH TEXT',
+        verifyRequired: true,
+        narrative: 'SMOKE AT THE OLD MILL',
+      },
+      queries: () => Promise.resolve({ Items: [] }),
+    });
+    const handler = createHandler({ authzClient: fakeAuthzClient('ALLOW'), docClient });
+    const body = JSON.parse(
+      ((await handler(buildEvent('NICHOLS-4471-1798000000'))) as { body: string }).body,
+    ) as Record<string, unknown>;
+    expect(body).toMatchObject({ verifyRequired: true, mapLink: null });
+  });
+
+  it('returns the CAD update history oldest first', async () => {
+    const { createHandler } = await import('./handler.js');
+    const update = (updateId: string, receivedAt: number) => ({
+      entityType: 'DISPATCH_UPDATE',
+      updateId,
+      receivedAt,
+      summary: `Units: ${updateId}`,
+      changes: [{ field: 'unitsRequested', from: 'E1', to: updateId }],
+    });
+    const docClient = routedClient({
+      queries: (input) =>
+        Promise.resolve({
+          Items:
+            input.ExpressionAttributeValues[':update'] === 'UPDATE#'
+              ? [update('u2', 200), update('u1', 100)]
+              : [],
+        }),
+    });
+    const handler = createHandler({ authzClient: fakeAuthzClient('ALLOW'), docClient });
+    const body = JSON.parse(
+      ((await handler(buildEvent('NICHOLS-4471-1798000000'))) as { body: string }).body,
+    ) as { updates: { updateId: string }[] };
+    expect(body.updates.map((u) => u.updateId)).toEqual(['u1', 'u2']);
+  });
+
+  it('flags the CAD update history unavailable when its read fails, and still answers', async () => {
+    const { createHandler } = await import('./handler.js');
+    const failing = routedClient({
+      queries: (input) =>
+        input.ExpressionAttributeValues[':update'] === 'UPDATE#'
+          ? Promise.reject(new Error('throttled'))
+          : Promise.resolve({ Items: [] }),
+    });
+    const handler2 = createHandler({ authzClient: fakeAuthzClient('ALLOW'), docClient: failing });
+    const result = (await handler2(buildEvent('NICHOLS-4471-1798000000'))) as {
+      statusCode: number;
+      body: string;
+    };
+    expect(result.statusCode).toBe(200);
+    expect(JSON.parse(result.body)).toMatchObject({ updatesUnavailable: true });
+  });
+
   describe('pre-plan + hydrant context (dispatch address -> PRE_PLAN_COPY -> HYDRANT_COPY)', () => {
     const OCCUPANCY_POINT = { latitude: 41.2429, longitude: -73.2007 };
     const PRE_PLAN_COPY = {
@@ -241,8 +301,12 @@ describe('alert-detail handler', () => {
 
       const body = JSON.parse((result as { body: string }).body) as Record<string, unknown>;
       expect(body.prePlan).toBeNull();
-      // Only the address lookup ran: no coordinates, so no geo match or hydrant search.
-      expect(queries).toHaveBeenCalledOnce();
+      // Only the address lookup ran (plus the CAD update history on the dispatch's own
+      // partition): no coordinates, so no geo match or hydrant search.
+      const indexQueries = queries.mock.calls.filter(
+        (call) => (call as unknown as [{ IndexName?: string }])[0].IndexName !== undefined,
+      );
+      expect(indexQueries).toHaveLength(1);
     });
 
     it('flags a pre-plan within 50 m as NEARBY with its distance when the dispatch has coordinates but no usable street address (CAD)', async () => {

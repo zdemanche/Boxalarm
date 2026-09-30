@@ -77,3 +77,86 @@ export const LIFE_SAFETY_RECORD_CLASSES = [
   'AUDIT_LOG_ENTRY',
   'NERIS_SUBMISSION_ATTEMPT',
 ] as const;
+
+/** CAD ingress parser fields (backend @boxalarm/cad-parser CAD_FIELDS). */
+export const CAD_FIELDS = [
+  'incidentNumber',
+  'dispatchTime',
+  'incidentType',
+  'address',
+  'crossStreets',
+  'town',
+  'units',
+  'narrative',
+] as const;
+export type CadField = (typeof CAD_FIELDS)[number];
+
+/** One field's rule: a line label or a regex whose first capture group is the value. */
+export type CadFieldRule = { label: string } | { pattern: string };
+export type CadParserFields = Partial<Record<CadField, CadFieldRule>>;
+
+/** GET /platform/cad-sources: one source, as the chief sees it (no secret, no secret name). */
+export interface CadSourceView {
+  sourceId: string;
+  label: string;
+  enabled: boolean;
+  emailEnabled: boolean;
+  allowedSenders: string[];
+  emailAddress: string | null;
+  webhookEnabled: boolean;
+  webhookKeyId: string | null;
+  /** This source's own webhook address: {webhookUrl}/{keyId}. */
+  webhookEndpoint?: string | null;
+  webhookRotatedAt: string | null;
+  parser: { version: number; fields: CadParserFields } | null;
+  /** IANA zone the CAD writes its times in (default America/New_York). */
+  timeZone?: string;
+}
+
+export interface CadSourcesResponse {
+  version: number | null;
+  emailDomain: string | null;
+  webhookUrl: string | null;
+  sources: CadSourceView[];
+  /** Non-blocking warnings about the saved sources (e.g. no incident number rule). */
+  warnings?: { field: string; message: string }[];
+}
+
+/** PUT /platform/cad-sources: one source as the chief edits it. */
+export interface CadSourceInput {
+  sourceId: string;
+  label: string;
+  enabled: boolean;
+  emailEnabled: boolean;
+  allowedSenders: string[];
+  webhookEnabled: boolean;
+  parser?: { fields: CadParserFields };
+  timeZone?: string;
+}
+
+/** How ingress would order updates by the dispatch time (chain review R3-M1). */
+interface CadTimeResolution {
+  dispatchTimeResolved?: string;
+  dispatchTimeUnordered?: boolean;
+}
+
+export type CadTestParseResult =
+  | ({ status: 'PARSED'; fields: Partial<Record<CadField, string>> } & CadTimeResolution)
+  | ({
+      status: 'RAW';
+      reason: string;
+      fields: Partial<Record<CadField, string>>;
+    } & CadTimeResolution);
+
+/** POST .../webhook-key: the new key, shown once. */
+export interface RotatedWebhookKey {
+  keyId: string;
+  secret: string;
+  /** The source's own API Gateway key (its throttle bucket), sent as x-api-key. Shown once. */
+  apiKey: string;
+  rotatedAt: string;
+  previousKeyStillValid: boolean;
+  /** When the key this rotation replaced stops working (ISO), if there was one. */
+  previousKeyExpiresAt: string | null;
+  webhookUrl: string | null;
+}

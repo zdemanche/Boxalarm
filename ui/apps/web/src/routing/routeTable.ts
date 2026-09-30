@@ -245,6 +245,16 @@ export const APP_ROUTES: readonly AppRoute[] = [
     showInNav: true,
   },
   {
+    // Who may page the whole department from a CAD feed: CHIEF/ADMIN (Cedar ViewCadIngress /
+    // ManageCadIngress). Its own nav entry because CHIEF does not reach /settings.
+    path: '/settings/cad-sources',
+    navPath: '/settings/cad-sources',
+    label: 'CAD sources',
+    roles: ['CHIEF', 'ADMIN'],
+    group: 'Admin',
+    showInNav: true,
+  },
+  {
     path: '/settings/losap',
     navPath: '/settings',
     label: 'LOSAP settings',

@@ -12,11 +12,13 @@ import { createDynamoClient, readAlertingConfig } from '../eligibility/dynamoCli
 import { logError, logInfo } from '../dispatches/logger.js';
 import {
   parseChannelEnvelope,
+  parseCadUpdateEnvelope,
   parseMutualAidPromptEnvelope,
   resolveChannelTarget,
   type ChannelEnvelopePayload,
   type ChannelName,
   type ContactChannelSnapshot,
+  type CadUpdatePayload,
   type MutualAidPromptPayload,
   type TestDelivery,
 } from './channelEnvelope.js';
@@ -88,6 +90,11 @@ export type DeliverChannelMessageParams = DeliverChannelMessageCommon &
   (
     | { readonly alertKind?: 'dispatch'; readonly toneSequence: number }
     | { readonly alertKind: 'mutual_aid_prompt'; readonly toneSequence?: undefined }
+    | {
+        readonly alertKind: 'dispatch_update';
+        readonly updateId: string;
+        readonly toneSequence?: undefined;
+      }
   );
 
 interface SendGuard {
@@ -106,6 +113,15 @@ function buildSendGuard(params: DeliverChannelMessageParams, sentAt: number): Se
       sk: `MAPROMPT#${memberId}#${channelUpper}#SEND`,
       idempotencyKey: `${dispatchId}#MUTUALAID#${memberId}#${channelUpper}#SEND`,
       attributes: { entityType: 'MUTUAL_AID_PROMPT_SEND' },
+    };
+  }
+  if (params.alertKind === 'dispatch_update') {
+    // Per update, disjoint from the producer's CADUPDATE#...#{member}#PUSH claim (same reason as
+    // the mutual-aid prompt above) and from every tone's RECEIPT#.
+    return {
+      sk: `CADUPDATE#${params.updateId}#${memberId}#${channelUpper}#SEND`,
+      idempotencyKey: `${dispatchId}#CADUPDATE#${params.updateId}#${memberId}#${channelUpper}#SEND`,
+      attributes: { entityType: 'CAD_UPDATE_SEND' },
     };
   }
   const { toneSequence } = params;
@@ -521,17 +537,23 @@ function sendPushToDevice(
   const { message, env, dispatchId } = params;
   const platform = resolvePushPlatform(device.platform, device.token);
   const isPrompt = params.alertKind === 'mutual_aid_prompt';
+  const isUpdate = params.alertKind === 'dispatch_update';
   return sendPush(
     {
       token: device.token,
-      alertKind: isPrompt ? 'mutual_aid_prompt' : 'dispatch',
+      alertKind: isPrompt ? 'mutual_aid_prompt' : isUpdate ? 'dispatch_update' : 'dispatch',
       dispatchId,
-      toneSequence: isPrompt ? undefined : params.toneSequence,
-      title: params.title ?? (isPrompt ? 'MUTUAL AID REQUESTED' : 'DISPATCH'),
+      toneSequence: isPrompt || isUpdate ? undefined : params.toneSequence,
+      title: params.title ?? (isPrompt ? 'MUTUAL AID REQUESTED' : isUpdate ? 'UPDATE' : 'DISPATCH'),
       body: message,
       idempotencyKey,
       // Per-tone notification identity (architecture §5.1 B4): tone 2 never collapses into 1.
-      collapseKey: isPrompt ? `${dispatchId}#MUTUALAID` : `${dispatchId}#${params.toneSequence}`,
+      // An update has its own identity, so it never replaces the page itself on the device.
+      collapseKey: isPrompt
+        ? `${dispatchId}#MUTUALAID`
+        : isUpdate
+          ? `${dispatchId}#UPDATE#${params.updateId}`
+          : `${dispatchId}#${params.toneSequence}`,
       ...(params.alert ? { alert: params.alert } : {}),
       ...(params.isTest === true ? { isTest: true } : {}),
     },
@@ -728,10 +750,11 @@ export function createChannelWorkerHandler(
     const ddb = createDynamoClient(process.env);
 
     async function processRecord(record: SQSEvent['Records'][number]): Promise<void> {
-      let envelope: ChannelEnvelopePayload | MutualAidPromptPayload;
+      let envelope: ChannelEnvelopePayload | MutualAidPromptPayload | CadUpdatePayload;
       try {
         envelope =
           parseMutualAidPromptEnvelope(record.body, channel) ??
+          parseCadUpdateEnvelope(record.body, channel) ??
           parseChannelEnvelope(record.body, channel);
       } catch (error) {
         logError('alerting.channel.malformed_event', error, {
@@ -798,19 +821,27 @@ export function createChannelWorkerHandler(
       await deliverChannelMessage(
         ddb,
         tableName,
-        'alertKind' in envelope
+        'alertKind' in envelope && envelope.alertKind === 'dispatch_update'
           ? {
               ...common,
-              alertKind: 'mutual_aid_prompt',
-              title: 'MUTUAL AID REQUESTED',
-              message: `MUTUAL AID REQUESTED — ${incidentText}`,
+              alertKind: 'dispatch_update',
+              updateId: envelope.updateId,
+              title: `UPDATE — ${envelope.incidentType}`,
+              message: `UPDATE: ${envelope.summary} — ${envelope.address}`,
             }
-          : {
-              ...common,
-              toneSequence: envelope.toneSequence,
-              title: envelope.incidentType,
-              message: incidentText,
-            },
+          : 'alertKind' in envelope
+            ? {
+                ...common,
+                alertKind: 'mutual_aid_prompt',
+                title: 'MUTUAL AID REQUESTED',
+                message: `MUTUAL AID REQUESTED — ${incidentText}`,
+              }
+            : {
+                ...common,
+                toneSequence: envelope.toneSequence,
+                title: envelope.incidentType,
+                message: incidentText,
+              },
       );
     }
 

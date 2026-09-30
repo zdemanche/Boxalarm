@@ -48,6 +48,13 @@ export function SettingsPage() {
         <p>Points awarded per attendance activity type for the length-of-service award program.</p>
         <Link to="/settings/losap">LOSAP point rules</Link>
       </Card>
+      <Card title="CAD dispatch ingress">
+        <p>
+          Which CAD systems may page the department by email or signed webhook, and how their
+          dispatch text is read.
+        </p>
+        <Link to="/settings/cad-sources">CAD sources</Link>
+      </Card>
       {CONFIG_SECTIONS.map((section) => (
         <JsonConfigEditor
           key={section.configType}

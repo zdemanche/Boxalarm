@@ -101,6 +101,9 @@ const MapPage = lazy(() =>
 const SchedulePage = lazy(() =>
   import('./features/schedule/SchedulePage').then((mod) => ({ default: mod.SchedulePage })),
 );
+const CadSourcesPage = lazy(() =>
+  import('./features/platform/CadSourcesPage').then((mod) => ({ default: mod.CadSourcesPage })),
+);
 const LosapSettingsPage = lazy(() =>
   import('./features/losap/LosapSettingsPage').then((mod) => ({
     default: mod.LosapSettingsPage,
@@ -216,6 +219,7 @@ export function App() {
                   <Route path="reporting" element={roleGuarded(<ReportingPage />)} />
                   <Route path="settings" element={roleGuarded(<SettingsPage />)} />
                   <Route path="settings/losap" element={roleGuarded(<LosapSettingsPage />)} />
+                  <Route path="settings/cad-sources" element={roleGuarded(<CadSourcesPage />)} />
                   <Route path="audit-log" element={roleGuarded(<AuditLogPage />)} />
                   <Route path="notifications" element={roleGuarded(<NotificationsPage />)} />
                   <Route path="availability" element={roleGuarded(<AvailabilityPage />)} />

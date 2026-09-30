@@ -214,12 +214,15 @@ describe("index.ts production wiring", { timeout: 120_000 }, () => {
         .apply(() => resolve()),
     );
 
-    // 10 services + identity pre-token-generation trigger + HTTP API access logs.
-    expect(counts["aws:cloudwatch/logGroup:LogGroup"]).toBe(12);
+    // 10 services + identity pre-token-generation trigger + HTTP API and CAD webhook REST API
+    // access logs.
+    expect(counts["aws:cloudwatch/logGroup:LogGroup"]).toBe(13);
     expect(counts["aws:cloudwatch/dashboard:Dashboard"]).toBe(10);
     expect(counts["aws:xray/samplingRule:SamplingRule"]).toBe(2);
     expect(counts["aws:dynamodb/table:Table"]).toBe(3);
     expect(counts["aws:apigatewayv2/api:Api"]).toBe(1);
+    // The CAD webhook's own REST API (cad-ingress.ts: per-source API keys, no Cognito).
+    expect(counts["aws:apigateway/restApi:RestApi"]).toBe(1);
     expect(indexModule.stack).toBe("dev");
     expect(indexModule.env).toBe("dev");
     expect(indexModule.webOrigin).toBe("https://localhost:5173");
@@ -234,6 +237,7 @@ describe("index.ts production wiring", { timeout: 120_000 }, () => {
       ...SERVICES.map((serviceName) => `/aws/lambda/boxalarm-dev-${serviceName}`),
       "/aws/lambda/boxalarm-dev-identity-pre-token-generation",
       "/aws/apigateway/boxalarm-dev-http-api-access",
+      "/aws/apigateway/boxalarm-dev-cad-ingress-api-access",
     ]);
     const expectedDashboardNames = new Set(
       SERVICES.map((serviceName) => `boxalarm-dev-${serviceName}`),

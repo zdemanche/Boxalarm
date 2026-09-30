@@ -134,6 +134,17 @@ export interface DispatchAlert {
    * predates it; never shown as "not requested".
    */
   mutualAid?: MutualAid | null;
+  /** CAD updates to this call, oldest first (decision 2026-09-30-cad-dispatch-updates.md). */
+  updates?: DispatchUpdateSummary[];
+  /** A CAD dispatch its template could not read: the location is only in the narrative. */
+  verifyRequired?: boolean;
+}
+
+export interface DispatchUpdateSummary {
+  updateId: string;
+  /** Epoch seconds. */
+  receivedAt: number;
+  summary: string;
 }
 
 /** One row of GET alerting/dispatches?status=active (dispatches/list/handler.ts). */

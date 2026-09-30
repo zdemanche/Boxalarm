@@ -54,6 +54,44 @@ export interface DispatchAlertText {
   /** Epoch seconds the dispatch was received. */
   readonly dispatchedAt?: number | undefined;
   readonly testDelivery?: TestDelivery | undefined;
+  /**
+   * A CAD dispatch its source's template could not structure (fail-open RAW): the address is a
+   * placeholder, so the page carries an excerpt of the dispatch text instead (chain review M1).
+   */
+  readonly verifyRequired?: boolean | undefined;
+}
+
+/**
+ * How much of a RAW dispatch's text a page carries in place of the address, in UTF-8 bytes:
+ * within the push worker's address cap (256 bytes, pushPayload.ts) and two SMS segments with
+ * the "{type} — " prefix. The full text is on the alert screen.
+ */
+export const RAW_PAGE_EXCERPT_MAX_BYTES = 240;
+
+function utf8Excerpt(text: string, maxBytes: number): string {
+  const collapsed = text.replace(/\s+/g, ' ').trim();
+  if (Buffer.byteLength(collapsed) <= maxBytes) return collapsed;
+  let bytes = 0;
+  let out = '';
+  for (const char of collapsed) {
+    const size = Buffer.byteLength(char);
+    if (bytes + size > maxBytes - 3) return `${out}…`;
+    bytes += size;
+    out += char;
+  }
+  return out;
+}
+
+/**
+ * The location line a page carries: the address, or - for a RAW (VERIFY) CAD dispatch whose
+ * address is only the "SEE DISPATCH TEXT" placeholder - "VERIFY: " and an excerpt of the
+ * dispatch text, so push, SMS and voice all carry what the CAD actually said.
+ */
+export function pageLocationText(dispatch: DispatchAlertText): string {
+  if (dispatch.verifyRequired === true && dispatch.narrative && dispatch.narrative.trim()) {
+    return `VERIFY: ${utf8Excerpt(dispatch.narrative, RAW_PAGE_EXCERPT_MAX_BYTES)}`;
+  }
+  return textOrFallback(dispatch.address, ADDRESS_FALLBACK);
 }
 
 // Ingress rejects a dispatch without incidentType/address, so these only fire on a corrupt or
@@ -79,6 +117,7 @@ export function readDispatchAlertText(item: Record<string, unknown>): DispatchAl
     sourceSystem: optional('sourceSystem'),
     dispatchedAt: typeof item.dispatchedAt === 'number' ? item.dispatchedAt : undefined,
     testDelivery: asTestDelivery(item.testDelivery),
+    verifyRequired: item.verifyRequired === true,
   };
 }
 
@@ -121,7 +160,7 @@ export function buildChannelPagePayload(input: ChannelPageInput): ChannelPagePay
     channelTier: input.channelTier,
     toneSequence: input.toneSequence,
     incidentType: textOrFallback(dispatch.incidentType, INCIDENT_TYPE_FALLBACK),
-    address: textOrFallback(dispatch.address, ADDRESS_FALLBACK),
+    address: pageLocationText(dispatch),
     isTest: dispatch.isTest,
     crossStreets: dispatch.crossStreets,
     narrative: dispatch.narrative,
@@ -232,7 +271,7 @@ export function buildMutualAidPromptPayload(
     memberId: input.memberId,
     channel: 'push',
     incidentType: textOrFallback(input.dispatch.incidentType, INCIDENT_TYPE_FALLBACK),
-    address: textOrFallback(input.dispatch.address, ADDRESS_FALLBACK),
+    address: pageLocationText(input.dispatch),
     isTest: input.dispatch.isTest,
     ...(input.dispatch.crossStreets ? { crossStreets: input.dispatch.crossStreets } : {}),
     ...(input.dispatch.dispatchedAt !== undefined
@@ -282,6 +321,107 @@ export function parseMutualAidPromptEnvelope(
     address,
     isTest: payload.isTest === true,
     ...optionalAlertFields(payload),
+  };
+}
+
+/**
+ * A CAD update to a call already paged (docs/decisions/2026-09-30-cad-dispatch-updates.md):
+ * a non-escalating push to members already on the dispatch's roster. No toneSequence, no tone
+ * ladder; guarded per update in its own CADUPDATE# namespace so it never collides with a
+ * tone's RECEIPT#.
+ */
+export interface CadUpdatePayload {
+  readonly alertKind: 'dispatch_update';
+  readonly deptId: string;
+  readonly dispatchId: string;
+  readonly memberId: string;
+  readonly channel: 'push';
+  /** Deterministic per update content (cadIngress/updateRepository.ts). */
+  readonly updateId: string;
+  readonly incidentType: string;
+  readonly address: string;
+  /** Short "what changed" line, e.g. "Units: E1, L2 -> E1, L2, R1". */
+  readonly summary: string;
+  readonly isTest: false;
+  readonly crossStreets?: string | undefined;
+  readonly dispatchedAt?: number | undefined;
+  readonly testDelivery?: undefined;
+}
+
+export function buildCadUpdatePayload(input: {
+  readonly deptId: VerifiedDeptId;
+  readonly dispatchId: string;
+  readonly memberId: string;
+  readonly updateId: string;
+  readonly summary: string;
+  readonly dispatch: DispatchAlertText;
+}): CadUpdatePayload {
+  return {
+    alertKind: 'dispatch_update',
+    deptId: input.deptId,
+    dispatchId: input.dispatchId,
+    memberId: input.memberId,
+    channel: 'push',
+    updateId: input.updateId,
+    incidentType: textOrFallback(input.dispatch.incidentType, INCIDENT_TYPE_FALLBACK),
+    address: pageLocationText(input.dispatch),
+    summary: input.summary,
+    isTest: false,
+    ...(input.dispatch.crossStreets ? { crossStreets: input.dispatch.crossStreets } : {}),
+    ...(input.dispatch.dispatchedAt !== undefined
+      ? { dispatchedAt: input.dispatch.dispatchedAt }
+      : {}),
+  };
+}
+
+const UPDATE_ID = /^[0-9a-f]{16,64}$/;
+
+/** Undefined when the body is not a CAD update; throws when it claims to be one but is bad. */
+export function parseCadUpdateEnvelope(
+  body: string,
+  expectedChannel: ChannelName,
+): CadUpdatePayload | undefined {
+  const raw = JSON.parse(body) as Record<string, unknown>;
+  const payload = raw.payload as Record<string, unknown> | undefined;
+  if (payload?.alertKind !== 'dispatch_update') {
+    return undefined;
+  }
+  const { deptId, dispatchId, memberId, channel, updateId, incidentType, address, summary } =
+    payload;
+  if (
+    typeof deptId !== 'string' ||
+    typeof dispatchId !== 'string' ||
+    typeof memberId !== 'string' ||
+    channel !== 'push' ||
+    typeof updateId !== 'string' ||
+    !UPDATE_ID.test(updateId) ||
+    typeof incidentType !== 'string' ||
+    typeof address !== 'string' ||
+    typeof summary !== 'string'
+  ) {
+    throw new Error('CAD update envelope failed shape validation');
+  }
+  if (channel !== expectedChannel) {
+    throw new Error(
+      `CAD update routed to the ${expectedChannel} worker carries channel=${channel}`,
+    );
+  }
+  assertNoDelimiter(dispatchId, 'dispatchId');
+  assertNoDelimiter(memberId, 'memberId');
+  const optional = optionalAlertFields(payload);
+  return {
+    alertKind: 'dispatch_update',
+    deptId,
+    dispatchId,
+    memberId,
+    channel,
+    updateId,
+    incidentType,
+    address,
+    summary,
+    isTest: false,
+    ...(optional.crossStreets ? { crossStreets: optional.crossStreets } : {}),
+    ...(optional.dispatchedAt !== undefined ? { dispatchedAt: optional.dispatchedAt } : {}),
   };
 }
 

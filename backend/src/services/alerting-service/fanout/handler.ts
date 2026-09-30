@@ -56,6 +56,8 @@ interface DispatchAlertRecord {
   readonly channelsTested: readonly string[] | undefined;
   readonly dispatchedAt: number | undefined;
   readonly testDelivery: TestDelivery | undefined;
+  /** RAW (fail-open) CAD dispatch: pages carry the dispatch text (channelEnvelope.ts). */
+  readonly verifyRequired: boolean;
 }
 
 interface FanOutTask {
@@ -153,6 +155,61 @@ function parseDispatchAlertRecord(record: DynamoDBRecord): DispatchAlertRecord |
       item.testDelivery === 'deliver' || item.testDelivery === 'validate'
         ? item.testDelivery
         : undefined,
+    verifyRequired: item.verifyRequired === true,
+  };
+}
+
+/**
+ * Every tone-1 page (and its RECEIPT#) exists: the CAD update notifier waits for this before
+ * choosing its audience (chain review R2-M2). A failed stamp only delays update pushes (the
+ * sweep then alarms), so it is logged and counted, never thrown.
+ */
+async function stampFanOutCompleted(
+  ddb: DynamoDBDocumentClient,
+  tableName: string,
+  dispatch: DispatchAlertRecord,
+): Promise<void> {
+  await ddb
+    .send(
+      new UpdateCommand({
+        TableName: tableName,
+        Key: {
+          pk: buildDeptScopedPk(dispatch.deptId, 'DISPATCH', dispatch.dispatchId),
+          sk: 'METADATA',
+        },
+        UpdateExpression: 'SET fanOutCompletedAt = if_not_exists(fanOutCompletedAt, :now)',
+        ExpressionAttributeValues: { ':now': Math.floor(Date.now() / 1000) },
+      }),
+    )
+    .catch((error: unknown) => {
+      logError('fanout.completed_stamp_failed', error, dispatch.dispatchId);
+      emitOutcomeMetric(METRIC_NAMESPACE, 'FanOutCompletedStampFailed');
+    });
+}
+
+/**
+ * The page text from the dispatch record as it is now (the fan-out-started UpdateItem's ALL_NEW
+ * image), falling back field by field to the stream image - a partial or missing read never
+ * blanks a page (chain review R2-M2).
+ */
+export function withCurrentText(
+  dispatch: DispatchAlertRecord,
+  current: Record<string, unknown> | undefined,
+): DispatchAlertRecord {
+  if (!current) return dispatch;
+  const text = (key: string, fallback: string | undefined) =>
+    typeof current[key] === 'string' ? current[key] : fallback;
+  return {
+    ...dispatch,
+    incidentType: text('incidentType', dispatch.incidentType),
+    address: text('address', dispatch.address),
+    crossStreets: text('crossStreets', dispatch.crossStreets),
+    narrative: text('narrative', dispatch.narrative),
+    mapLink: text('mapLink', dispatch.mapLink),
+    verifyRequired:
+      typeof current.verifyRequired === 'boolean'
+        ? current.verifyRequired
+        : dispatch.verifyRequired,
   };
 }
 
@@ -402,8 +459,9 @@ async function fanOutOneDispatch(
   scheduler: SchedulerClient,
   tableName: string,
   topicArn: string,
-  dispatch: DispatchAlertRecord,
+  insertedDispatch: DispatchAlertRecord,
 ): Promise<void> {
+  let dispatch = insertedDispatch;
   const fanOutStartedMs = Date.now();
   const isSelfTest = dispatch.targetMemberId !== undefined;
 
@@ -427,10 +485,13 @@ async function fanOutOneDispatch(
           ':zero': 0,
           ':one': 1,
         },
-        ReturnValues: 'UPDATED_NEW',
+        // ALL_NEW: the dispatch as it is NOW, not as the stream INSERT image saw it. A CAD update
+        // committed before this batch ran (chain review R2-M2) is then already in the tone-1 page.
+        ReturnValues: 'ALL_NEW',
       }),
     );
     const firstPass = started?.Attributes?.fanOutAttempts === 1;
+    dispatch = withCurrentText(dispatch, started?.Attributes);
 
     const { tasks, skipped } = planFanOut(dispatch, audience);
 
@@ -446,6 +507,9 @@ async function fanOutOneDispatch(
       });
       emitOutcomeMetric(METRIC_NAMESPACE, 'EmptyRoster');
       if (audience.length === 0) {
+        // Nobody to page: tone 1 is as complete as it will get (a CAD update then has no
+        // audience either, and must not wait for a fan-out that will never finish).
+        await stampFanOutCompleted(ddb, tableName, dispatch);
         return;
       }
       // Eligible members exist but none was reachable now. The roster and the tone ladder are
@@ -465,6 +529,9 @@ async function fanOutOneDispatch(
     const failures = results.filter(
       (result): result is PromiseRejectedResult => result.status === 'rejected',
     );
+    if (failures.length === 0) {
+      await stampFanOutCompleted(ddb, tableName, dispatch);
+    }
 
     let schedulingError: Error | undefined;
     try {

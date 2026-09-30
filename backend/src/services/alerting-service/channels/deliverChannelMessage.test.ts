@@ -418,6 +418,36 @@ describe('deliverChannelMessage — direct APNs/FCM push path', () => {
     });
   });
 
+  it('sends a CAD update under its own per-update guard, never a tone receipt', async () => {
+    const sendPush = vi.fn().mockResolvedValue({ outcome: 'sent' });
+    mockPush(sendPush);
+    const { deliverChannelMessage } = await import('./deliverChannelMessage.js');
+    const send = vi.fn().mockResolvedValue({});
+
+    await deliverChannelMessage(fakeDdb(send), 'alerting-table', {
+      deptId,
+      dispatchId: 'dispatch-1',
+      memberId: 'mbr-1',
+      channel: 'push',
+      alertKind: 'dispatch_update',
+      updateId: 'u1',
+      title: 'UPDATE — structure-fire',
+      contactChannels: [{ channel: 'PUSH', token: 'tok-1', valid: true }],
+      message: 'UPDATE: Units: E1 — 12 Main St',
+      env: {},
+    });
+
+    expect(sendPush.mock.calls[0]?.[0]).toMatchObject({
+      alertKind: 'dispatch_update',
+      toneSequence: undefined,
+      idempotencyKey: 'dispatch-1#CADUPDATE#u1#mbr-1#PUSH#SEND',
+      collapseKey: 'dispatch-1#UPDATE#u1',
+    });
+    const written = JSON.stringify(send.mock.calls.map(([c]) => (c as { input: unknown }).input));
+    expect(written).toContain('CADUPDATE#u1#mbr-1#PUSH#SEND');
+    expect(written).not.toContain('RECEIPT#');
+  });
+
   it('SMS stays on the generic vendor adapter and never touches APNs/FCM', async () => {
     const sendPush = vi.fn();
     const sendViaHttpProvider = vi.fn().mockResolvedValue(undefined);

@@ -396,6 +396,24 @@ export function AlertDetailScreen() {
           </View>
         ) : null}
 
+        {dispatch?.verifyRequired ? (
+          <View
+            accessibilityRole="alert"
+            accessibilityLiveRegion="assertive"
+            style={{
+              padding: spacing.md,
+              borderRadius: radius.default,
+              borderWidth: 2,
+              borderColor: theme.status.warning,
+            }}
+          >
+            <Text style={{ color: theme.fg, fontSize: typeScale.body.size, fontWeight: '700' }}>
+              VERIFY: the CAD message could not be read automatically. The location is in the
+              dispatch text - confirm it by radio.
+            </Text>
+          </View>
+        ) : null}
+
         {/* Answer stack: before the narrative, so a driving member reaches it first (N1 #3). */}
         <View style={{ gap: spacing.md }}>
           <AnswerButton
@@ -549,6 +567,29 @@ export function AlertDetailScreen() {
           >
             Loading the dispatch narrative…
           </Text>
+        ) : null}
+
+        {dispatch?.updates && dispatch.updates.length > 0 ? (
+          <View accessibilityLabel={`CAD updates, ${dispatch.updates.length}`}>
+            <Text
+              accessibilityRole="header"
+              style={{ color: theme.fg, fontSize: typeScale.body.size, fontWeight: '700' }}
+            >
+              CAD updates
+            </Text>
+            {dispatch.updates.map((update) => (
+              <Text
+                key={update.updateId}
+                style={{ color: theme.fg, fontSize: typeScale.body.size, lineHeight: 22 }}
+              >
+                {new Date(update.receivedAt * 1000).toLocaleTimeString([], {
+                  hour: '2-digit',
+                  minute: '2-digit',
+                })}{' '}
+                — {update.summary}
+              </Text>
+            ))}
+          </View>
         ) : null}
 
         {status === 'failed' && failure ? (
