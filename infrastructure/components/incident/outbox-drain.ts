@@ -14,6 +14,8 @@ export interface IncidentOutboxDrainArgs {
   busName: pulumi.Input<string>;
   busArn: pulumi.Input<string>;
   logGroup: ServiceLogGroup;
+  /** Ops alarm topic (chief-notifications): every alarm here notifies it, none is silent. */
+  opsAlarmTopicArn: pulumi.Input<string>;
 }
 
 /**
@@ -182,6 +184,7 @@ export class IncidentOutboxDrain extends pulumi.ComponentResource {
         evaluationPeriods: 1,
         threshold: 0,
         comparisonOperator: "GreaterThanThreshold",
+        alarmActions: [args.opsAlarmTopicArn],
       },
       { parent: this },
     );

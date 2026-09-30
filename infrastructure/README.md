@@ -51,6 +51,14 @@ Before relying on push, run the device checklist in `docs/runbooks/push-device-v
 
 ## Deploying
 
+**First deploy of any stack: follow [`docs/runbooks/first-deploy.md`](../docs/runbooks/first-deploy.md).** In short:
+
+- **One AWS account per stack, prod in its own.** Stacks sharing an account share its Lambda concurrency, IAM role and CloudTrail trail quotas (each stack reserves 216 concurrency and creates 2 of the region's 5 trails).
+- **Step 0, before anything else:** request a Lambda concurrent-executions quota of at least 1,000 (a new account has 10), then run `node scripts/preflight.mjs <env> --first-deploy`. It reads the account's quota and trail count through the AWS SDK and fails with the fix.
+- **Config:** `pulumi preview` lists every missing or invalid `boxalarm-infra:*` key in one error, each with its `pulumi config set` command (`--secret` for secrets). Each `Pulumi.<stack>.yaml` documents the keys it does not set. Outside dev, a placeholder `webOrigin` host (`.example`, `.invalid`, `.test`, localhost) fails preview.
+- **Alarm routing:** every alarm notifies someone. Alert-path alarms, and the consumers that feed paging (outbox publisher, eligibility/availability snapshots, session revocation, alerting authorizer), page `boxalarm-{env}-alerting-page` (`alertingPageEmail`). Everything else notifies the ops topic, `boxalarm-{env}-chief-notifications` (`chiefNotificationEmail`). Both emails are required on prod. After every deploy that changes them, confirm the emails and run `node scripts/check-alarm-subscriptions.mjs <env>`: it fails while any subscription is still `PendingConfirmation`.
+- **SMS / voice:** the provider endpoints are `boxalarm-infra:smsProviderEndpointUrl` / `voiceProviderEndpointUrl`. The vendor (OQ-3) is not chosen, so they are unset everywhere. The workers stay deployed against an `.invalid` placeholder, preview warns, and the stack output `ALERTING_VENDOR_ENDPOINTS_CONFIGURED` shows `false`. Every SMS and voice page dead-letters and fires its DLQ alarm, so push is the only paging channel and radio tone-out (N1.9) is the page of record. The architecture's two-vendor rule stands: push (APNs/FCM direct) and SMS (a third-party vendor, never a push relay) are independent failure domains firing in parallel at T+0, with voice as the only escalation tier.
+
 `lambdaCode()` (`components/shared/lambda-code.ts`) wires each Lambda to `../backend/dist/<service>/<function>/index.mjs`.
 **Run `cd backend && npm run bundle` before every deploy.** On qa, staging and prod a missing bundle fails
 `pulumi preview`/`pulumi up`. Only the dev stack (and unit tests) may fall back to a placeholder, with a
@@ -62,7 +70,7 @@ stream, queue, schedule or async event, so those retry into their DLQs and page 
 A department whose ALERT_RULES were saved before `alert-rules-copy-consumer` existed has no `ALERT_RULES_COPY`, so its tone ladder runs on the defaults. The fan-out logs `alerting.toneLadder.rules_default` when that happens. Re-emit the saved rules once. The script bundles itself with the repo's esbuild, so it runs on any supported Node (22+). Values saved before the timer bounds existed are clamped by the consumer and logged as `alerting.alertRulesCopy.adjusted`:
 
 ```
-cd backend && npm run reemit-alert-rules -- --table boxalarm-<env>-platform --dept <deptId>
+cd backend && npm run reemit-alert-rules -- --table boxalarm-<env>-platform-service --dept <deptId>
 ```
 
 ## Getting started

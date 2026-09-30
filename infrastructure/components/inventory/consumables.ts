@@ -20,6 +20,8 @@ export interface ConsumablesArgs {
   platformBusArn: pulumi.Input<string>;
   logGroup: ServiceLogGroup;
   httpApi: HttpApi;
+  /** Ops alarm topic (chief-notifications): every alarm here notifies it, none is silent. */
+  opsAlarmTopicArn: pulumi.Input<string>;
 }
 
 /**
@@ -126,6 +128,7 @@ export class Consumables extends pulumi.ComponentResource {
       this.reorderScannerLambda,
       // Its reminders feed the 12:00 UTC digest.
       PRE_DIGEST_SCANNER_SCHEDULE_EXPRESSION,
+      args.opsAlarmTopicArn,
     ).schedule;
 
     this.registerOutputs({

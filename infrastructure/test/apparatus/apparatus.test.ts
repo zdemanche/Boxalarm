@@ -48,7 +48,10 @@ async function build() {
     httpApi,
   };
   new Registry("apparatus-registry", args);
-  new Checks("apparatus-checks", args);
+  new Checks("apparatus-checks", {
+    ...args,
+    opsAlarmTopicArn: "arn:aws:sns:us-east-1:123456789012:boxalarm-dev-chief-notifications",
+  });
   new Records("apparatus-records", args);
   new Inventory("apparatus-inventory", args);
   await settle();
@@ -196,7 +199,14 @@ describe("apparatus-service routes", { timeout: 30_000 }, () => {
       httpApi,
     };
     expect(() => new Registry("r-bad", { ...base, env: "" })).toThrow(/env is required/);
-    expect(() => new Checks("c-bad", { ...base, env: "production" })).toThrow(/unknown env/);
+    expect(
+      () =>
+        new Checks("c-bad", {
+          ...base,
+          env: "production",
+          opsAlarmTopicArn: "arn:aws:sns:us-east-1:123456789012:boxalarm-dev-chief-notifications",
+        }),
+    ).toThrow(/unknown env/);
     expect(() => new Records("m-bad", { ...base, env: "" })).toThrow(/env is required/);
     expect(() => new Inventory("i-bad", { ...base, env: "" })).toThrow(/env is required/);
   });

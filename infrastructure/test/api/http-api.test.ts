@@ -346,26 +346,38 @@ describe("HttpApi", () => {
       }
     });
 
-    it("alarms on any throttle of the alerting authorizer", async () => {
+    it("pages alerting-page on any throttle or error of the alerting authorizer", async () => {
       const api = await buildApi("throttles-alarm");
       api.sealRouteSettings();
-      const { alertingAuthorizerThrottles } = api.addAlarms("arn:aws:sns:us-east-1:1:chief");
-      const [metric, namespace, dimensions, fnName, threshold] = await Promise.all([
-        resolve(alertingAuthorizerThrottles.metricName),
-        resolve(alertingAuthorizerThrottles.namespace),
-        resolve(alertingAuthorizerThrottles.dimensions),
-        resolve(api.alertingAuthorizerLambda.function.name),
-        resolve(alertingAuthorizerThrottles.threshold),
-      ]);
+      const { alertingAuthorizerThrottles, alertingAuthorizerErrors } = api.addAlarms(
+        "arn:aws:sns:us-east-1:1:chief",
+        "arn:aws:sns:us-east-1:1:alerting-page",
+      );
+      const [metric, namespace, dimensions, fnName, threshold, actions, errorsActions] =
+        await Promise.all([
+          resolve(alertingAuthorizerThrottles.metricName),
+          resolve(alertingAuthorizerThrottles.namespace),
+          resolve(alertingAuthorizerThrottles.dimensions),
+          resolve(api.alertingAuthorizerLambda.function.name),
+          resolve(alertingAuthorizerThrottles.threshold),
+          resolve(alertingAuthorizerThrottles.alarmActions),
+          resolve(alertingAuthorizerErrors.alarmActions),
+        ]);
       expect([metric, namespace, threshold]).toEqual(["Throttles", "AWS/Lambda", 0]);
       expect(dimensions).toEqual({ FunctionName: fnName });
+      // Alerting-plane requests are refused: pages alerting-page, not the ops topic (M2).
+      expect(actions).toEqual(["arn:aws:sns:us-east-1:1:alerting-page"]);
+      expect(errorsActions).toEqual(["arn:aws:sns:us-east-1:1:alerting-page"]);
       await settle(api);
     });
 
     it("alarms the given topic on every RevocationCheckFailOpen", async () => {
       const api = await buildApi("fail-open-alarm");
       api.sealRouteSettings();
-      const { failOpen } = api.addAlarms("arn:aws:sns:us-east-1:123456789012:chief");
+      const { failOpen } = api.addAlarms(
+        "arn:aws:sns:us-east-1:123456789012:chief",
+        "arn:aws:sns:us-east-1:123456789012:alerting-page",
+      );
       const [metric, namespace, threshold, actions] = await Promise.all([
         resolve(failOpen.metricName),
         resolve(failOpen.namespace),

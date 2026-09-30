@@ -41,6 +41,7 @@ describe("OutboxPublisher", () => {
       serviceName: "platform-service",
     });
     return new OutboxPublisher("test-outbox", {
+      alarmTopicArn: "arn:aws:sns:us-east-1:123456789012:boxalarm-dev-alerting-page",
       env: "dev",
       platformTableName: pulumi.output("boxalarm-dev-platform-service"),
       platformTableArn: pulumi.output(

@@ -13,6 +13,12 @@ export interface OutboxPublisherArgs {
   busName: pulumi.Input<string>;
   busArn: pulumi.Input<string>;
   logGroup: ServiceLogGroup;
+  /**
+   * alerting-page: this is the only platform outbox -> bus path, so a record in its
+   * on-failure queue is a lost personnel.member.updated (push contacts, phone, status) or
+   * platform.config.updated (ALERT_RULES_COPY) - the paging snapshot silently goes stale.
+   */
+  alarmTopicArn: pulumi.Input<string>;
 }
 
 /**
@@ -175,6 +181,7 @@ export class OutboxPublisher extends pulumi.ComponentResource {
         evaluationPeriods: 1,
         threshold: 0,
         comparisonOperator: "GreaterThanThreshold",
+        alarmActions: [args.alarmTopicArn],
       },
       { parent: this },
     );

@@ -1,6 +1,7 @@
 import * as pulumi from "@pulumi/pulumi";
 import * as aws from "@pulumi/aws";
 import { requireEnv } from "../shared/env";
+import { AlertingPageTopic } from "./page-topic";
 import { ALERTING_CHANNELS, AlertingChannel, ChannelQueue } from "./messaging-alerting";
 
 const NON_PROD_ENVS = new Set(["dev", "qa", "staging"]);
@@ -20,6 +21,8 @@ export interface AlertingAlarmsArgs {
   escalationOnFailureQueue: aws.sqs.Queue;
   memberUpdatedDlq: aws.sqs.Queue;
   memberUpdatedFunctionName: pulumi.Input<string>;
+  /** The alerting-page topic every alarm here pages through (page-topic.ts). */
+  pageTopic: AlertingPageTopic;
 }
 
 /**
@@ -29,19 +32,10 @@ export interface AlertingAlarmsArgs {
 export const MIN_ELIGIBLE_MEMBERS_CONFIG_KEY = "alertingMinEligibleMembers";
 export const DEFAULT_MIN_ELIGIBLE_MEMBERS = 3;
 
-/** Stack config key for the alerting-page email subscription. */
-export const ALERTING_PAGE_EMAIL_CONFIG_KEY = "alertingPageEmail";
-
 /**
- * Alerting-plane paging (E1-S11-INFRA): a dedicated standard SNS topic
- * (`alerting-page`, distinct from the FIFO delivery topic) that every alerting alarm
- * pages through, an alarm on every alert-path failure mode, and a per-channel
- * fault-injection SSM switch present in dev/qa/staging only (never prod).
- *
- * The page subscription is config-driven (`boxalarm-infra:alertingPageEmail`). Who carries
- * the pager is still open (#5), so this is a mechanism, not the final on-call route. It is
- * REQUIRED in prod — a prod stack whose alerting alarms page nobody fails preview — and
- * warned about at preview/up time in every other stack.
+ * Alerting-plane paging (E1-S11-INFRA): an alarm on every alert-path failure mode, each
+ * paging through the alerting-page topic (page-topic.ts), and a per-channel fault-injection
+ * SSM switch present in dev/qa/staging only (never prod).
  */
 /**
  * What a message in each channel DLQ means. Every page in a DLQ failed all its attempts. The
@@ -67,7 +61,6 @@ const DLQ_ALARM_DESCRIPTION: Record<AlertingChannel, string> = {
 
 export class AlertingAlarms extends pulumi.ComponentResource {
   public readonly pageTopic: aws.sns.Topic;
-  public readonly pageSubscription?: aws.sns.TopicSubscription;
   public readonly faultInjectionParameters: Partial<Record<AlertingChannel, aws.ssm.Parameter>>;
 
   constructor(name: string, args: AlertingAlarmsArgs, opts?: pulumi.ComponentResourceOptions) {
@@ -75,34 +68,7 @@ export class AlertingAlarms extends pulumi.ComponentResource {
     super("boxalarm:alerting:AlertingAlarms", name, {}, opts);
     const { env } = args;
 
-    this.pageTopic = new aws.sns.Topic(
-      `${name}-page-topic`,
-      { name: `boxalarm-${env}-alerting-page` },
-      { parent: this },
-    );
-
-    const pageEmail = new pulumi.Config("boxalarm-infra").get(ALERTING_PAGE_EMAIL_CONFIG_KEY);
-    if (pageEmail) {
-      this.pageSubscription = new aws.sns.TopicSubscription(
-        `${name}-page-email-subscription`,
-        { topic: this.pageTopic.arn, protocol: "email", endpoint: pageEmail },
-        { parent: this },
-      );
-    } else if (env === "prod") {
-      throw new Error(
-        `AlertingAlarms: boxalarm-infra:${ALERTING_PAGE_EMAIL_CONFIG_KEY} is required in prod — ` +
-          `without it boxalarm-prod-alerting-page has no subscription and every alerting ` +
-          `alarm pages nobody. Set it with \`pulumi config set ${ALERTING_PAGE_EMAIL_CONFIG_KEY} ` +
-          `<address> --stack prod\`.`,
-      );
-    } else {
-      pulumi.log.warn(
-        `AlertingAlarms: boxalarm-infra:${ALERTING_PAGE_EMAIL_CONFIG_KEY} is not set — ` +
-          `boxalarm-${env}-alerting-page has no subscription, so every alerting alarm fires ` +
-          `into the void. Set it, or confirm on-call routing is subscribed out-of-band.`,
-        this,
-      );
-    }
+    this.pageTopic = args.pageTopic.topic;
 
     const pageAlarm = (
       key: string,

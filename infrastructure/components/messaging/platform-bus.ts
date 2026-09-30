@@ -36,13 +36,9 @@ export class PlatformBus extends pulumi.ComponentResource {
   /** Rule on this bus → SQS queue (+DLQ) → the given Lambda. See queue-consumer.ts. */
   addQueueConsumer(
     name: string,
-    args: Omit<QueueConsumerArgs, "busName" | "busArn">,
+    args: Omit<QueueConsumerArgs, "busName">,
     opts?: pulumi.ComponentResourceOptions,
   ): QueueConsumer {
-    return new QueueConsumer(
-      name,
-      { ...args, busName: this.busName, busArn: this.busArn },
-      { parent: this, ...opts },
-    );
+    return new QueueConsumer(name, { ...args, busName: this.busName }, { parent: this, ...opts });
   }
 }

@@ -23,6 +23,8 @@ export interface SessionRevocationArgs {
   platformTableArn: pulumi.Input<string>;
   /** Every credential reset notifies the chief, like every export. */
   chiefNotificationTopicArn: pulumi.Input<string>;
+  /** alerting-page topic (alerting/page-topic.ts): the snapshot / revocation consumer's alarms page. */
+  pageTopicArn: pulumi.Input<string>;
 }
 
 /** IAM for a Lambda calling cognitoRevocationClient.ts's admin APIs, scoped to one pool. */
@@ -169,10 +171,17 @@ export class SessionRevocation extends pulumi.ComponentResource {
       {
         env,
         ruleName: `boxalarm-${env}-member-status-revocation`,
-        eventPattern: JSON.stringify({ "detail-type": ["personnel.member.updated"] }),
+        // Producer matched as well as the detail-type: only personnel-service writes
+        // personnel.member.updated (member status, roles, push devices), so no other producer
+        // on the bus can drive a revocation.
+        eventPattern: JSON.stringify({
+          source: ["personnel-service"],
+          "detail-type": ["personnel.member.updated"],
+        }),
         queueName: `boxalarm-${env}-member-status-revocation-queue`,
         lambda: this.memberStatusLambda.function,
         lambdaRole: this.memberStatusLambda.role,
+        alarmTopicArn: args.pageTopicArn,
         maxReceiveCount: 5,
         // The handler returns partial batch failures (review minor 15): only failed records retry.
         reportBatchItemFailures: true,

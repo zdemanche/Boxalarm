@@ -2,6 +2,7 @@ import * as pulumi from "@pulumi/pulumi";
 import * as aws from "@pulumi/aws";
 import { ServiceLambda } from "../observability/service-lambda";
 import { ServiceLogGroup } from "../observability/service-log-group";
+import { ScheduleDeadLetter } from "../shared/schedule-dead-letter";
 import { requireEnv } from "../shared/env";
 import { lambdaCode, LAMBDA_HANDLER } from "../shared/lambda-code";
 import { grantAlertingCmk } from "./alerting-cmk";
@@ -57,7 +58,11 @@ export class AlertingCanary extends pulumi.ComponentResource {
     // to the canary member on every channel, so a stack runs it only on purpose. While it is
     // off, its breaching-on-missing alarms must not page, so their actions are disabled too.
     const canaryEnabled = config.getBoolean("canaryEnabled") ?? false;
-    const canaryMemberId = config.requireSecret("canaryMemberId");
+    // Required only once the canary is on (deploy-readiness m4): a disabled canary is never
+    // scheduled, so a stack no longer needs a dummy member id to preview.
+    const canaryMemberId = canaryEnabled
+      ? config.requireSecret("canaryMemberId")
+      : (config.getSecret("canaryMemberId") ?? pulumi.secret(""));
     // Only when the canary member is a dedicated device (it is woken every tick) does the
     // canary really deliver on Android; otherwise FCM validate_only - credentials verified, not
     // delivered. iOS always delivers on the device's own APNs environment.
@@ -144,6 +149,17 @@ export class AlertingCanary extends pulumi.ComponentResource {
       { parent: this },
     );
 
+    const deadLetter = new ScheduleDeadLetter(
+      `${name}-schedule-dead-letter`,
+      {
+        queueName: `boxalarm-${env}-alerting-canary-scheduler-dlq`,
+        schedulerRole,
+        alarmActions: [args.pageTopicArn],
+        actionsEnabled: canaryEnabled,
+      },
+      { parent: this },
+    );
+
     this.schedule = new aws.scheduler.Schedule(
       `${name}-schedule`,
       {
@@ -151,7 +167,11 @@ export class AlertingCanary extends pulumi.ComponentResource {
         scheduleExpression: `rate(${rateMinutes} minutes)`,
         state: canaryEnabled ? "ENABLED" : "DISABLED",
         flexibleTimeWindow: { mode: "OFF" },
-        target: { arn: this.lambda.function.arn, roleArn: schedulerRole.arn },
+        target: {
+          arn: this.lambda.function.arn,
+          roleArn: schedulerRole.arn,
+          ...deadLetter.targetConfig,
+        },
       },
       { parent: this },
     );

@@ -41,6 +41,7 @@ async function build() {
     serviceName: "apparatus-service",
   });
   new TestDueScanners("scanners", {
+    opsAlarmTopicArn: "arn:aws:sns:us-east-1:123456789012:boxalarm-dev-chief-notifications",
     env: "dev",
     deptId: "nichols-fd",
     platformTableName: "boxalarm-dev-platform-service",

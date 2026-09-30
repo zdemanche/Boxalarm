@@ -26,6 +26,8 @@ export interface AvailabilityArgs {
   alertingTableName: pulumi.Input<string>;
   alertingLogGroup: ServiceLogGroup;
   alertingPermissionsBoundaryArn?: pulumi.Input<string>;
+  /** alerting-page topic (alerting/page-topic.ts): the snapshot / revocation consumer's alarms page. */
+  pageTopicArn: pulumi.Input<string>;
 }
 
 /**
@@ -201,10 +203,16 @@ export class Availability extends pulumi.ComponentResource {
       {
         env,
         ruleName: `boxalarm-${env}-availability-changed`,
-        eventPattern: JSON.stringify({ "detail-type": ["personnel.availability.changed"] }),
+        // Producer matched as well as the detail-type: only personnel-service may mark a
+        // member on or off in the alerting snapshot.
+        eventPattern: JSON.stringify({
+          source: ["personnel-service"],
+          "detail-type": ["personnel.availability.changed"],
+        }),
         queueName: `boxalarm-${env}-availability-snapshot-queue`,
         lambda: this.availabilityChangedConsumer.function,
         lambdaRole: this.availabilityChangedConsumer.role,
+        alarmTopicArn: args.pageTopicArn,
         maxReceiveCount: 5,
       },
       { parent: this },

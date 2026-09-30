@@ -65,6 +65,7 @@ async function build() {
   });
   const platformBus = new PlatformBus("test-sr-bus", { env: "dev" });
   return new SessionRevocation("test-sr", {
+    pageTopicArn: "arn:aws:sns:us-east-1:123456789012:boxalarm-dev-alerting-page",
     env: "dev",
     userPoolId: pulumi.output("pool-1"),
     userPoolArn: pulumi.output(POOL_ARN),
@@ -206,6 +207,15 @@ describe("SessionRevocation (review C1)", () => {
     expect(namespace).toBe("Boxalarm/session-revocation");
     expect(threshold).toBe(0);
     expect(actions).toEqual(["arn:aws:sns:us-east-1:123456789012:chief"]);
+  });
+
+  it("revokes only on personnel-service's personnel.member.updated (no other producer can drive it)", async () => {
+    const sr = await build();
+    const pattern = await resolve(sr.memberStatusConsumer.rule.eventPattern);
+    expect(JSON.parse(pattern as string)).toEqual({
+      source: ["personnel-service"],
+      "detail-type": ["personnel.member.updated"],
+    });
   });
 
   it("reports partial batch failures on the status consumer (review minor 15)", async () => {

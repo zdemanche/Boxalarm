@@ -246,12 +246,12 @@ export class Reporting extends pulumi.ComponentResource {
       {
         env,
         busName: args.platformBusName,
-        busArn: args.platformBusArn,
         ruleName: `boxalarm-${env}-reporting-projections`,
         eventPattern: JSON.stringify({ "detail-type": [...PROJECTION_EVENT_TYPES] }),
         queueName: `boxalarm-${env}-reporting-projection-queue`,
         lambda: this.projectionsLambda.function,
         lambdaRole: this.projectionsLambda.role,
+        alarmTopicArn: args.chiefNotificationTopicArn,
         maxReceiveCount: 5,
         reportBatchItemFailures: true,
       },

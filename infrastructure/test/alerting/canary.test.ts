@@ -81,6 +81,13 @@ describe("AlertingCanary schedule is config-driven per stack", { timeout: 30_000
     }
   });
 
+  it("needs no canaryMemberId while disabled (m4), and requires one once enabled", async () => {
+    installMocks();
+    await expect(build()).resolves.toBeDefined();
+    installMocks({ "boxalarm-infra:canaryEnabled": "true" });
+    await expect(build()).rejects.toThrow(/canaryMemberId/);
+  });
+
   it("runs only when the stack sets canaryEnabled=true, at the configured rate", async () => {
     installMocks({
       "boxalarm-infra:canaryMemberId": "test-canary-member",

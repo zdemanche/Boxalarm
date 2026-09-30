@@ -58,6 +58,8 @@ async function build() {
     httpApi,
   };
   new Certifications("certifications", {
+    opsAlarmTopicArn: "arn:aws:sns:us-east-1:123456789012:boxalarm-dev-chief-notifications",
+    pageTopicArn: "arn:aws:sns:us-east-1:123456789012:boxalarm-dev-alerting-page",
     ...common,
     assetsBucketName: "boxalarm-dev-platform-assets",
     assetsBucketArn: "arn:aws:s3:::boxalarm-dev-platform-assets",

@@ -2,6 +2,7 @@ import * as pulumi from "@pulumi/pulumi";
 import * as aws from "@pulumi/aws";
 import { ServiceLambda } from "../observability/service-lambda";
 import { ServiceLogGroup } from "../observability/service-log-group";
+import { RuleDeliveryGuard } from "../messaging/rule-delivery";
 import { requireEnv } from "../shared/env";
 import { lambdaCode, LAMBDA_HANDLER } from "../shared/lambda-code";
 import { grantAlertingCmk } from "./alerting-cmk";
@@ -95,10 +96,28 @@ export class AlertRulesCopy extends pulumi.ComponentResource {
       { parent: this },
     );
 
+    // A rules event EventBridge cannot deliver dead-letters into the alarmed DLQ, and pages.
+    const deliveryGuard = new RuleDeliveryGuard(
+      `${name}-delivery`,
+      {
+        alarmName: `boxalarm-${env}-alerting-alert-rules-copy-failed-invocations`,
+        rule: this.rule,
+        busName: args.busName,
+        deadLetterQueue: this.dlq,
+        alarmActions: [args.pageTopicArn],
+      },
+      { parent: this },
+    );
+
     new aws.cloudwatch.EventTarget(
       `${name}-target`,
-      { rule: this.rule.name, eventBusName: args.busName, arn: this.queue.arn },
-      { parent: this },
+      {
+        rule: this.rule.name,
+        eventBusName: args.busName,
+        arn: this.queue.arn,
+        deadLetterConfig: { arn: this.dlq.arn },
+      },
+      { parent: this, dependsOn: [deliveryGuard] },
     );
 
     this.lambda = new ServiceLambda(

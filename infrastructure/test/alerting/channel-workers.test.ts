@@ -1,4 +1,5 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import * as pulumi from "@pulumi/pulumi";
 import { ServiceLogGroup } from "../../components/observability/service-log-group";
 import { MessagingAlerting } from "../../components/alerting/messaging-alerting";
 import { ChannelWorkers } from "../../components/alerting/channel-workers";
@@ -54,11 +55,12 @@ describe("ChannelWorkers — each worker can drain only its own queue", { timeou
   });
 });
 
-describe("ChannelWorkers — placeholder provider endpoints", { timeout: 30_000 }, () => {
+describe("ChannelWorkers — provider endpoints are config-driven (M5)", { timeout: 30_000 }, () => {
   it.each(["sms", "voice"])(
-    "%s worker's default endpoint is on the RFC 2606 reserved .invalid TLD",
+    "%s worker falls back to the RFC 2606 reserved .invalid TLD, and preview warns",
     async (channel) => {
-      await buildWorkers();
+      const warn = vi.spyOn(pulumi.log, "warn");
+      const { workers } = await buildWorkers();
       const url = new URL(
         lambdaEnv(`boxalarm-dev-alerting-${channel}-worker`)[
           `${channel.toUpperCase()}_PROVIDER_ENDPOINT_URL`
@@ -66,8 +68,33 @@ describe("ChannelWorkers — placeholder provider endpoints", { timeout: 30_000 
       );
       expect(url.protocol).toBe("https:");
       expect(url.hostname.endsWith(".invalid")).toBe(true);
+      expect(workers.vendorEndpointConfigured[channel as "sms" | "voice"]).toBe(false);
+      expect(
+        warn.mock.calls.some(([message]) =>
+          String(message).includes(`${channel}ProviderEndpointUrl`),
+        ),
+      ).toBe(true);
+      warn.mockRestore();
     },
   );
+
+  it("uses the configured endpoint for each vendor channel, and does not warn", async () => {
+    installMocks({
+      "boxalarm-infra:smsProviderEndpointUrl": "https://api.sms-vendor.test/v1/messages",
+      "boxalarm-infra:voiceProviderEndpointUrl": "https://api.voice-vendor.test/v1/calls",
+    });
+    const warn = vi.spyOn(pulumi.log, "warn");
+    const { workers } = await buildWorkers();
+    expect(lambdaEnv("boxalarm-dev-alerting-sms-worker").SMS_PROVIDER_ENDPOINT_URL).toBe(
+      "https://api.sms-vendor.test/v1/messages",
+    );
+    expect(lambdaEnv("boxalarm-dev-alerting-voice-worker").VOICE_PROVIDER_ENDPOINT_URL).toBe(
+      "https://api.voice-vendor.test/v1/calls",
+    );
+    expect(workers.vendorEndpointConfigured).toEqual({ sms: true, voice: true });
+    expect(warn.mock.calls.some(([m]) => String(m).includes("ProviderEndpointUrl"))).toBe(false);
+    warn.mockRestore();
+  });
 });
 
 const secretArn = (name: string) => `arn:aws:secretsmanager:us-east-1:123456789012:secret:${name}`;

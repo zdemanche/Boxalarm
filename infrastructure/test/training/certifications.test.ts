@@ -54,6 +54,8 @@ describe("Certifications — certExpiredReactor stream consumer (#221)", () => {
       platformLogGroup: logGroup,
     });
     return new Certifications("test-certifications", {
+      opsAlarmTopicArn: "arn:aws:sns:us-east-1:123456789012:boxalarm-dev-chief-notifications",
+      pageTopicArn: "arn:aws:sns:us-east-1:123456789012:boxalarm-dev-alerting-page",
       env: "dev",
       deptId: "nichols-fd",
       platformTableName: pulumi.output("platform-table"),

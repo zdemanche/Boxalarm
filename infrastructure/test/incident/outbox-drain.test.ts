@@ -50,6 +50,7 @@ describe("IncidentOutboxDrain", () => {
       serviceName: "incident-service",
     });
     return new IncidentOutboxDrain("test-incident-outbox-drain", {
+      opsAlarmTopicArn: "arn:aws:sns:us-east-1:123456789012:boxalarm-dev-chief-notifications",
       env: "dev",
       incidentTableName: pulumi.output("boxalarm-dev-incident-service"),
       incidentTableArn: pulumi.output(TABLE_ARN),

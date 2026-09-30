@@ -73,6 +73,7 @@ describe("PushTokens — member-updated consumer IAM isolation (#208 AC3)", () =
       alertingPermissionsBoundaryArn: pulumi.output(
         "arn:aws:iam::123456789012:policy/boxalarm-dev-alerting-plane-boundary",
       ),
+      pageTopicArn: "arn:aws:sns:us-east-1:123456789012:boxalarm-dev-alerting-page",
     });
   }
 

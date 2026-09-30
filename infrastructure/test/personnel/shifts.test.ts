@@ -54,6 +54,7 @@ describe("Shifts — shift-completion schedule (#213)", () => {
       platformLogGroup: logGroup,
     });
     return new Shifts("test-shifts", {
+      opsAlarmTopicArn: "arn:aws:sns:us-east-1:123456789012:boxalarm-dev-chief-notifications",
       env: "dev",
       deptId: "nichols-fd",
       platformTableName: pulumi.output("platform-table"),

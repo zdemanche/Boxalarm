@@ -127,7 +127,9 @@ export class BoxalarmUserPool extends pulumi.ComponentResource {
           logGroup: this.functionLogGroup.name,
         },
         tracingConfig: ACTIVE_TRACING_CONFIG,
-        environment: { variables: { PLATFORM_TABLE_NAME: args.platformTableName } },
+        environment: {
+          variables: { PLATFORM_TABLE_NAME: args.platformTableName, BOXALARM_ENV: env },
+        },
         // Cognito abandons the trigger at 5 s; the status read is bounded well inside that
         // (one attempt, 800 ms) and fails open, so sign-in never waits on a slow table.
         timeout: 5,

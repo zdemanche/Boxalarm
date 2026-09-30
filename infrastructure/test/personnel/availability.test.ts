@@ -63,6 +63,7 @@ describe("Availability — availability-changed consumer (#207)", () => {
     });
     const platformBus = new PlatformBus("test-availability-platform-bus", { env: "dev" });
     return new Availability("test-availability", {
+      pageTopicArn: "arn:aws:sns:us-east-1:123456789012:boxalarm-dev-alerting-page",
       env: "dev",
       platformTableName: pulumi.output("platform-table"),
       platformTableArn: pulumi.output("arn:aws:dynamodb:us-east-1:123456789012:table/platform"),
@@ -102,10 +103,11 @@ describe("Availability — availability-changed consumer (#207)", () => {
     expect(comparison).toBe("GreaterThanThreshold");
   });
 
-  it("routes only personnel.availability.changed onto the queue", async () => {
+  it("routes only personnel-service's personnel.availability.changed onto the queue", async () => {
     const availability = await build();
     const pattern = await resolve(availability.availabilityChangedQueueConsumer.rule.eventPattern);
     expect(JSON.parse(pattern as string)).toEqual({
+      source: ["personnel-service"],
       "detail-type": ["personnel.availability.changed"],
     });
   });

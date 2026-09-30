@@ -3,6 +3,7 @@ import * as aws from "@pulumi/aws";
 import { ServiceLambda } from "../observability/service-lambda";
 import { ServiceLogGroup } from "../observability/service-log-group";
 import { lambdaCode, LAMBDA_HANDLER } from "../shared/lambda-code";
+import { ScheduleDeadLetter } from "../shared/schedule-dead-letter";
 import { requireEnv } from "../shared/env";
 import { nerisBaseUrlForEnv, nerisUserAgentForEnv } from "../neris/neris-config";
 
@@ -13,6 +14,8 @@ export interface SchemaRefreshArgs {
   incidentCmkArn: pulumi.Input<string>;
   nerisSchemaSourceUrl: pulumi.Input<string>;
   logGroup: ServiceLogGroup;
+  /** Ops alarm topic (chief-notifications): every alarm here notifies it, none is silent. */
+  opsAlarmTopicArn: pulumi.Input<string>;
 }
 
 /**
@@ -167,6 +170,16 @@ export class SchemaRefresh extends pulumi.ComponentResource {
       { parent: this },
     );
 
+    const deadLetter = new ScheduleDeadLetter(
+      `${name}-schedule-dead-letter`,
+      {
+        queueName: `boxalarm-${env}-incident-neris-schema-refresh-scheduler-dlq`,
+        schedulerRole: this.schedulerRole,
+        alarmActions: [args.opsAlarmTopicArn],
+      },
+      { parent: this },
+    );
+
     this.schedule = new aws.scheduler.Schedule(
       `${name}-schedule`,
       {
@@ -176,6 +189,7 @@ export class SchemaRefresh extends pulumi.ComponentResource {
         target: {
           arn: this.refreshLambda.function.arn,
           roleArn: this.schedulerRole.arn,
+          ...deadLetter.targetConfig,
         },
       },
       { parent: this },
@@ -193,6 +207,7 @@ export class SchemaRefresh extends pulumi.ComponentResource {
         evaluationPeriods: 1,
         threshold: 0,
         comparisonOperator: "GreaterThanThreshold",
+        alarmActions: [args.opsAlarmTopicArn],
         treatMissingData: "notBreaching",
       },
       { parent: this },

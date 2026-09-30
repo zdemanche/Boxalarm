@@ -15,6 +15,11 @@ import { ApparatusArgs, apparatusRoute } from "./apparatus-lambda";
  * A defect that names a photo gets a presigned S3 PUT (defectPhotoUpload.ts) into the
  * platform-assets bucket under {deptId}/defect/, the only prefix its role may write.
  */
+export interface ChecksArgs extends ApparatusArgs {
+  /** Ops alarm topic (chief-notifications): every alarm here notifies it, none is silent. */
+  opsAlarmTopicArn: pulumi.Input<string>;
+}
+
 export class Checks extends pulumi.ComponentResource {
   public readonly checklistLambda: ServiceLambda;
   public readonly submitCheckLambda: ServiceLambda;
@@ -25,7 +30,7 @@ export class Checks extends pulumi.ComponentResource {
   public readonly defectReportFailedAlarm: aws.cloudwatch.MetricAlarm;
   public readonly defectOosTransitionFailedAlarm: aws.cloudwatch.MetricAlarm;
 
-  constructor(name: string, args: ApparatusArgs, opts?: pulumi.ComponentResourceOptions) {
+  constructor(name: string, args: ChecksArgs, opts?: pulumi.ComponentResourceOptions) {
     requireEnv("ApparatusChecks", args.env);
     super("boxalarm:apparatus:Checks", name, {}, opts);
     const { env } = args;
@@ -100,6 +105,7 @@ export class Checks extends pulumi.ComponentResource {
           evaluationPeriods: 1,
           threshold: 0,
           comparisonOperator: "GreaterThanThreshold",
+          alarmActions: [args.opsAlarmTopicArn],
           treatMissingData: "notBreaching",
         },
         { parent: this },
@@ -120,6 +126,7 @@ export class Checks extends pulumi.ComponentResource {
           evaluationPeriods: 1,
           threshold: 0,
           comparisonOperator: "GreaterThanThreshold",
+          alarmActions: [args.opsAlarmTopicArn],
           treatMissingData: "notBreaching",
         },
         { parent: this },

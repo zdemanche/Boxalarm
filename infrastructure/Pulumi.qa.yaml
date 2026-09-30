@@ -1,3 +1,17 @@
+# Required before the first preview (validated all at once by components/shared/stack-config.ts;
+# full runbook: docs/runbooks/first-deploy.md). Never commit a secret value here.
+#   pulumi config set nerisSchemaSourceUrl https://<schema-pipeline-host>/neris/schema.json --stack qa
+#   pulumi config set notificationSesFromAddress notifications@<ses-verified-domain> --stack qa
+#   pulumi config set --secret smsWebhookSecret "$(openssl rand -hex 32)" --stack qa
+#   pulumi config set --secret voiceWebhookSecret "$(openssl rand -hex 32)" --stack qa
+#   pulumi config set --secret pushWebhookSecret "$(openssl rand -hex 32)" --stack qa
+#   pulumi config set alertingPageEmail oncall@<dept-domain> --stack qa   # prod-required; warned elsewhere
+#   pulumi config set chiefNotificationEmail chief@<dept-domain> --stack qa   # prod-required; warned elsewhere
+# Only once canaryEnabled is true:
+#   pulumi config set --secret canaryMemberId <canary member id> --stack qa
+# webOrigin below is a placeholder: preview fails on a .example/.invalid/.test/localhost host
+# outside dev until it is the real web origin:
+#   pulumi config set webOrigin https://<real web host> --stack qa
 config:
   aws:region: us-east-1
   boxalarm-infra:env: qa

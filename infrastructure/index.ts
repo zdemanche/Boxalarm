@@ -73,15 +73,20 @@ import { RoutesLadderControls } from "./components/alerting/routes-ladder-contro
 import { PushTokens } from "./components/alerting/push-tokens";
 import { RidingBoard } from "./components/alerting/riding-board";
 import { AlertingAlarms } from "./components/alerting/alarms";
+import { AlertingPageTopic } from "./components/alerting/page-topic";
 import { PrePlanCopies } from "./components/alerting/pre-plan-copies";
 import { homeLocalityLacksZips, resolveHomeLocality } from "./components/alerting/home-locality";
 import { EligibilityStaleness } from "./components/alerting/staleness";
 import { AlertingCanary } from "./components/alerting/canary";
 import { AlertingOutboxDrain } from "./components/alerting/outbox-drain";
 import { AlertRulesCopy } from "./components/alerting/alert-rules-copy";
+import { validateStackConfig } from "./components/shared/stack-config";
 
 export const stack = getStack();
 const config = new Config("boxalarm-infra");
+// Every missing required key in one error, before any component reads its own (C2). Reads
+// secrets only to test presence; no value is logged.
+validateStackConfig((key) => config.get(key), stack);
 export const env = config.require("env");
 export const webOrigin = config.require("webOrigin");
 // Single-tenant today (Nichols FD) — {deptId} is in every partition key so a second
@@ -221,6 +226,11 @@ export const policyStore = new PolicyStore("policy-store", {
 // E8-S8-INFRA #259: shared LOB EventBridge bus.
 export const platformBus = new PlatformBus("platform-bus", { env });
 
+// E1-S11-INFRA: the alerting-page topic. Created ahead of every component whose alarms feed
+// paging — the outbox publisher, eligibility/availability snapshot consumers, session
+// revocation — not only the alerting components further down (deploy-readiness M1).
+export const alertingPageTopic = new AlertingPageTopic("alerting-page", { env });
+
 // E2-S1-INFRA #203: the ONE platform-table outbox → platform-bus publisher.
 export const outboxPublisher = new OutboxPublisher("outbox-publisher", {
   env,
@@ -230,6 +240,7 @@ export const outboxPublisher = new OutboxPublisher("outbox-publisher", {
   busName: platformBus.busName,
   busArn: platformBus.busArn,
   logGroup: platformLogGroup,
+  alarmTopicArn: alertingPageTopic.topicArn,
 });
 
 // Created ahead of sessionRevocation, whose credential-reset alarm notifies it.
@@ -247,11 +258,13 @@ export const sessionRevocation = new SessionRevocation("session-revocation", {
   platformLogGroup,
   httpApi,
   platformBus,
+  pageTopicArn: alertingPageTopic.topicArn,
 });
 
 export const recoveryMonitor = new RecoveryMonitor("recovery-monitor", {
   env,
   logGroup: platformLogGroup,
+  opsAlarmTopicArn: chiefNotificationTopic.topicArn,
 });
 
 export const personnelMembers = new Members("personnel-members", {
@@ -284,6 +297,7 @@ export const personnelQuals = new Quals("personnel-quals", {
   alertingTableName: alertingTable.tableName,
   alertingLogGroup,
   alertingPermissionsBoundaryArn: alertingBoundaryArn,
+  pageTopicArn: alertingPageTopic.topicArn,
 });
 
 export const personnelAttendance = new Attendance("personnel-attendance", {
@@ -310,6 +324,7 @@ export const personnelAvailability = new Availability("personnel-availability", 
   alertingTableName: alertingTable.tableName,
   alertingLogGroup,
   alertingPermissionsBoundaryArn: alertingBoundaryArn,
+  pageTopicArn: alertingPageTopic.topicArn,
 });
 
 export const personnelLosap = new Losap("personnel-losap", {
@@ -331,6 +346,7 @@ export const personnelShifts = new Shifts("personnel-shifts", {
   policyStoreId: policyStore.policyStoreId,
   logGroup: personnelLogGroup,
   httpApi,
+  opsAlarmTopicArn: chiefNotificationTopic.topicArn,
 });
 
 // E3-S1 through E3-S8-INFRA (#214-#221): training domain — certifications (with
@@ -352,6 +368,8 @@ export const trainingCertifications = new Certifications("training-certification
   assetsBucketArn: platformAssets.bucketArn,
   logGroup: trainingLogGroup,
   httpApi,
+  opsAlarmTopicArn: chiefNotificationTopic.topicArn,
+  pageTopicArn: alertingPageTopic.topicArn,
 });
 
 export const trainingEvents = new TrainingEvents("training-events", {
@@ -409,7 +427,10 @@ const apparatusArgs = {
   httpApi,
 };
 export const apparatusRegistry = new ApparatusRegistry("apparatus-registry", apparatusArgs);
-export const apparatusChecks = new ApparatusChecks("apparatus-checks", apparatusArgs);
+export const apparatusChecks = new ApparatusChecks("apparatus-checks", {
+  ...apparatusArgs,
+  opsAlarmTopicArn: chiefNotificationTopic.topicArn,
+});
 export const apparatusRecords = new ApparatusRecords("apparatus-records", apparatusArgs);
 export const apparatusInventory = new ApparatusInventory("apparatus-inventory", apparatusArgs);
 // Daily apparatus/SCBA test-due scanners -> apparatus.test.due on the platform bus.
@@ -423,6 +444,7 @@ export const apparatusTestDueScanners = new ApparatusTestDueScanners(
     platformBusName: platformBus.busName,
     platformBusArn: platformBus.busArn,
     logGroup: apparatusLogGroup,
+    opsAlarmTopicArn: chiefNotificationTopic.topicArn,
   },
 );
 
@@ -447,6 +469,7 @@ export const inventoryConsumables = new InventoryConsumables("inventory-consumab
   deptId,
   platformBusName: platformBus.busName,
   platformBusArn: platformBus.busArn,
+  opsAlarmTopicArn: chiefNotificationTopic.topicArn,
 });
 
 export const inventoryPpe = new InventoryPpe("inventory-ppe", {
@@ -454,6 +477,7 @@ export const inventoryPpe = new InventoryPpe("inventory-ppe", {
   deptId,
   platformBusName: platformBus.busName,
   platformBusArn: platformBus.busArn,
+  opsAlarmTopicArn: chiefNotificationTopic.topicArn,
 });
 
 // F6 inspections-service: occupancies + pre-plans, hydrants, inspection records + field
@@ -493,6 +517,7 @@ export const inspectionsRecords = new InspectionRecords("inspections-records", {
   ...inspectionsBase,
   assetsBucketName: platformAssets.bucketName,
   assetsBucketArn: platformAssets.bucketArn,
+  opsAlarmTopicArn: chiefNotificationTopic.topicArn,
 });
 
 export const inspectionsMap = new InspectionsMap("inspections-map", inspectionsBase);
@@ -522,6 +547,7 @@ export const notificationDigest = new NotificationDigest("notification-digest", 
   platformBusArn: platformBus.busArn,
   sesFromAddress: notificationSesFromAddress,
   logGroup: notificationLogGroup,
+  opsAlarmTopicArn: chiefNotificationTopic.topicArn,
 });
 
 export const platformConfig = new PlatformConfig("platform-config", {
@@ -607,6 +633,7 @@ export const incidentSchemaRefresh = new SchemaRefresh("incident-schema-refresh"
   incidentCmkArn: incidentTable.cmkArn,
   nerisSchemaSourceUrl,
   logGroup: incidentServiceLogGroup,
+  opsAlarmTopicArn: chiefNotificationTopic.topicArn,
 });
 
 export const incident = new Incident("incident", {
@@ -623,6 +650,7 @@ export const incident = new Incident("incident", {
   nerisCredentialsSecretArn: nerisConfig.secret.arn,
   logGroup: incidentServiceLogGroup,
   httpApi,
+  opsAlarmTopicArn: chiefNotificationTopic.topicArn,
 });
 
 // Incident-table outbox → platform-bus. The platform OutboxPublisher only reads the
@@ -637,6 +665,7 @@ export const incidentOutboxDrain = new IncidentOutboxDrain("incident-outbox-drai
   busName: platformBus.busName,
   busArn: platformBus.busArn,
   logGroup: incidentServiceLogGroup,
+  opsAlarmTopicArn: chiefNotificationTopic.topicArn,
 });
 
 // NERIS submission worker: consumes neris.incident.submitted off the platform bus and
@@ -778,6 +807,7 @@ export const pushTokens = new PushTokens("push-tokens", {
   policyStoreId: policyStore.policyStoreId,
   busName: platformBus.busName,
   alertingPermissionsBoundaryArn: alertingBoundaryArn,
+  pageTopicArn: alertingPageTopic.topicArn,
 });
 
 // E1-S18-INFRA #111 (partial — see riding-board.ts for the deviation from the ticket).
@@ -801,6 +831,7 @@ export const alertingAlarms = new AlertingAlarms("alerting-alarms", {
   escalationOnFailureQueue: escalation.onFailureQueue,
   memberUpdatedDlq: pushTokens.memberUpdatedDlq,
   memberUpdatedFunctionName: pushTokens.memberUpdatedConsumer.function.name,
+  pageTopic: alertingPageTopic,
 });
 
 // F1.13/F1.14: officer tone-ladder advance/halt and mutual-aid trigger/acknowledge.
@@ -949,8 +980,13 @@ export const INCIDENT_TABLE_NAME = incidentTable.tableName;
 export const ALERTING_TABLE_NAME = alertingTable.tableName;
 export const VERIFIED_PERMISSIONS_POLICY_STORE_ID = policyStore.policyStoreId;
 export const PLATFORM_BUS_NAME = platformBus.busName;
+// false = that channel has no provider endpoint (OQ-3) and cannot page; see channel-workers.ts.
+export const ALERTING_VENDOR_ENDPOINTS_CONFIGURED = channelWorkers.vendorEndpointConfigured;
 
 // Review M4: every route is registered by now. Fix the reserved alerting routes' per-route
 // throttles, and fail the deploy if one of them was renamed and never registered.
 httpApi.sealRouteSettings({ requireAll: true });
-export const httpApiAlarms = httpApi.addAlarms(chiefNotificationTopic.topicArn);
+export const httpApiAlarms = httpApi.addAlarms(
+  chiefNotificationTopic.topicArn,
+  alertingPageTopic.topicArn,
+);

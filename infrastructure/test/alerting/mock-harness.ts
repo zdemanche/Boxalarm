@@ -126,11 +126,21 @@ export const STACK_CONFIG: Record<string, string> = {
   "boxalarm-infra:notificationSesFromAddress": "notifications@boxalarm.example",
 };
 
-/** Waits until no new mocked resources appear — index.ts registers many via apply(). */
+/**
+ * Waits until the whole stack has registered. index.ts registers many resources inside
+ * apply() callbacks, some only after long chains of mocked outputs resolve, so a quiet
+ * timer alone stops early (deploy-readiness m10: 990 of 1,871 resources, no queues or
+ * alarms). Waits on the runtime's outstanding-RPC promise first, then requires the count to
+ * hold steady across several rounds.
+ */
 export async function settleStack(): Promise<void> {
+  const { waitForRPCs } = pulumi.runtime as unknown as { waitForRPCs?: () => Promise<void> };
   let previous = -1;
   let stableRounds = 0;
   while (stableRounds < 5) {
+    if (waitForRPCs !== undefined) {
+      await waitForRPCs();
+    }
     await new Promise((r) => setTimeout(r, 20));
     stableRounds = resources.length === previous ? stableRounds + 1 : 0;
     previous = resources.length;

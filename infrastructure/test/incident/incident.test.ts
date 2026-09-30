@@ -67,6 +67,7 @@ describe("Incident", () => {
       platformLogGroup: logGroup,
     });
     return new Incident("test-incident", {
+      opsAlarmTopicArn: "arn:aws:sns:us-east-1:123456789012:boxalarm-dev-chief-notifications",
       env: "dev",
       incidentTableName: pulumi.output("boxalarm-dev-incident-service"),
       incidentTableArn: pulumi.output(TABLE_ARN),

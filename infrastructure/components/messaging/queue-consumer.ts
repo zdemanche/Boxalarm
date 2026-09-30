@@ -1,10 +1,10 @@
 import * as pulumi from "@pulumi/pulumi";
 import * as aws from "@pulumi/aws";
+import { RuleDeliveryGuard, ruleSendPolicy } from "./rule-delivery";
 
 export interface QueueConsumerArgs {
   env: string;
   busName: pulumi.Input<string>;
-  busArn: pulumi.Input<string>;
   ruleName: string;
   eventPattern: string;
   queueName: string;
@@ -34,11 +34,18 @@ export interface QueueConsumerArgs {
    * whose Lambda timeout is longer must set at least 6x that timeout (AWS guidance).
    */
   visibilityTimeoutSeconds?: number;
+  /**
+   * Where the DLQ-depth and FailedInvocations alarms notify. alerting-page for a consumer
+   * that feeds paging (eligibility, availability, session revocation); the ops alarm topic
+   * (chief-notifications) for the rest. Required: no consumer alarm may page nobody.
+   */
+  alarmTopicArn: pulumi.Input<string>;
 }
 
 /**
  * Reusable "Lambda consumes an EventBridge rule via SQS" wiring: DLQ, main
- * queue with redrive, an EventBridge rule + target on the given bus, an SQS
+ * queue with redrive, an EventBridge rule + target on the given bus (the target
+ * dead-letters into the same DLQ, with a FailedInvocations alarm), an SQS
  * event source mapping, and the IAM the consumer Lambda needs to drain it.
  */
 export class QueueConsumer extends pulumi.ComponentResource {
@@ -48,6 +55,7 @@ export class QueueConsumer extends pulumi.ComponentResource {
   public readonly target: aws.cloudwatch.EventTarget;
   public readonly eventSourceMapping: aws.lambda.EventSourceMapping;
   public readonly dlqDepthAlarm: aws.cloudwatch.MetricAlarm;
+  public readonly deliveryGuard: RuleDeliveryGuard;
 
   constructor(name: string, args: QueueConsumerArgs, opts?: pulumi.ComponentResourceOptions) {
     super("boxalarm:messaging:QueueConsumer", name, {}, opts);
@@ -73,39 +81,48 @@ export class QueueConsumer extends pulumi.ComponentResource {
       { parent: this },
     );
 
-    const queuePolicy = new aws.sqs.QueuePolicy(
-      `${name}-queue-policy`,
-      {
-        queueUrl: this.queue.id,
-        policy: pulumi.all([this.queue.arn, args.busArn]).apply(([queueArn, busArn]) =>
-          JSON.stringify({
-            Version: "2012-10-17",
-            Statement: [
-              {
-                Sid: "AllowEventBridgeSend",
-                Effect: "Allow",
-                Principal: { Service: "events.amazonaws.com" },
-                Action: "sqs:SendMessage",
-                Resource: queueArn,
-                Condition: { ArnEquals: { "aws:SourceArn": busArn } },
-              },
-            ],
-          }),
-        ),
-      },
-      { parent: this },
-    );
-
     this.rule = new aws.cloudwatch.EventRule(
       `${name}-rule`,
       { name: args.ruleName, eventBusName: args.busName, eventPattern: args.eventPattern },
       { parent: this },
     );
 
+    // aws:SourceArn is the RULE ARN for an EventBridge -> SQS delivery, never the bus ARN.
+    // Conditioning on the bus ARN denied every delivery through this component, silently
+    // (deploy-readiness C1).
+    const queuePolicy = new aws.sqs.QueuePolicy(
+      `${name}-queue-policy`,
+      {
+        queueUrl: this.queue.id,
+        policy: ruleSendPolicy(this.queue.arn, this.rule.arn, "AllowEventBridgeSend"),
+      },
+      { parent: this },
+    );
+
+    // An event the rule cannot deliver goes to the same DLQ as a message the consumer could
+    // not process, so the one DLQ alarm covers both; FailedInvocations pages even if the DLQ
+    // write itself is refused.
+    this.deliveryGuard = new RuleDeliveryGuard(
+      `${name}-delivery`,
+      {
+        alarmName: `${args.ruleName}-failed-invocations`,
+        rule: this.rule,
+        busName: args.busName,
+        deadLetterQueue: this.dlq,
+        alarmActions: [args.alarmTopicArn],
+      },
+      { parent: this },
+    );
+
     this.target = new aws.cloudwatch.EventTarget(
       `${name}-target`,
-      { rule: this.rule.name, eventBusName: args.busName, arn: this.queue.arn },
-      { parent: this, dependsOn: [queuePolicy] },
+      {
+        rule: this.rule.name,
+        eventBusName: args.busName,
+        arn: this.queue.arn,
+        deadLetterConfig: { arn: this.dlq.arn },
+      },
+      { parent: this, dependsOn: [queuePolicy, this.deliveryGuard] },
     );
 
     this.eventSourceMapping = new aws.lambda.EventSourceMapping(
@@ -155,6 +172,7 @@ export class QueueConsumer extends pulumi.ComponentResource {
         evaluationPeriods: 1,
         threshold: 0,
         comparisonOperator: "GreaterThanThreshold",
+        alarmActions: [args.alarmTopicArn],
       },
       { parent: this },
     );

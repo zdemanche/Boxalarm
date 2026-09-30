@@ -66,7 +66,11 @@ async function build() {
   };
   new Occupancies("occupancies", { ...base, ...assets });
   new Hydrants("hydrants", base);
-  new Records("records", { ...base, ...assets });
+  new Records("records", {
+    ...base,
+    ...assets,
+    opsAlarmTopicArn: "arn:aws:sns:us-east-1:123456789012:boxalarm-dev-chief-notifications",
+  });
   new InspectionsMap("map", base);
   await settle();
 }

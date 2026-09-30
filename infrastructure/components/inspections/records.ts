@@ -7,6 +7,8 @@ import { InspectionsBaseArgs, dynamoGrant, inspectionsRoute } from "./shared";
 export interface RecordsArgs extends InspectionsBaseArgs {
   assetsBucketName: pulumi.Input<string>;
   assetsBucketArn: pulumi.Input<string>;
+  /** Ops alarm topic (chief-notifications): every alarm here notifies it, none is silent. */
+  opsAlarmTopicArn: pulumi.Input<string>;
 }
 
 /**
@@ -95,6 +97,7 @@ export class Records extends pulumi.ComponentResource {
         evaluationPeriods: 1,
         threshold: 0,
         comparisonOperator: "GreaterThanThreshold",
+        alarmActions: [args.opsAlarmTopicArn],
         treatMissingData: "notBreaching",
       },
       { parent: this },

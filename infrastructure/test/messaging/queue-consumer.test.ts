@@ -37,11 +37,9 @@ describe("QueueConsumer", () => {
     const role = new awsMod.iam.Role("consumer-role", { assumeRolePolicy: "{}" });
     const fn = { name: pulumi.output("consumer-fn") } as unknown as aws.lambda.Function;
     return new QueueConsumer("test-consumer", {
+      alarmTopicArn: "arn:aws:sns:us-east-1:123456789012:boxalarm-dev-alerting-page",
       env: "dev",
       busName: pulumi.output("boxalarm-dev-platform-bus"),
-      busArn: pulumi.output(
-        "arn:aws:events:us-east-1:123456789012:event-bus/boxalarm-dev-platform-bus",
-      ),
       ruleName: "boxalarm-dev-test-rule",
       eventPattern: JSON.stringify({ "detail-type": ["personnel.member.updated"] }),
       queueName: "boxalarm-dev-test-queue",
@@ -77,7 +75,7 @@ describe("QueueConsumer", () => {
     expect(dlqName).toBe("boxalarm-dev-test-queue-dlq");
   });
 
-  it("scopes the EventBridge send permission to this bus (confused-deputy hardening)", async () => {
+  it("creates the rule with the given pattern (its ARN scopes the send permission — rule-delivery.test.ts)", async () => {
     const consumer = await build();
     await settle(consumer);
     const policy = await resolve(consumer.queue.id);

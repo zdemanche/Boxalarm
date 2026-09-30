@@ -34,11 +34,15 @@ let callLog: string;
 // Answers just enough of the AWS CLI for the script to reach the 409 resume branch: an
 // empty ADMIN/CHIEF group, a create Lambda that answers 409, and an existing login whose
 // status the test chooses.
-function writeFakeAws(userStatus: string): void {
+function writeFakeAws(userStatus: string, stackDept = "NICHOLS"): void {
   const fake = `#!/usr/bin/env bash
 echo "$*" >> "${callLog}"
 case "$1 $2" in
-  "lambda get-function-configuration") echo "us-east-1_pool" ;;
+  "lambda get-function-configuration")
+    case "$*" in
+      *alerting-canary*) echo "${stackDept}" ;;
+      *) echo "us-east-1_pool" ;;
+    esac ;;
   "cognito-idp list-users-in-group") echo '{"Users":[]}' ;;
   "lambda invoke")
     for last; do :; done
@@ -82,6 +86,16 @@ describe("bootstrap-first-admin.sh", () => {
       expect(awsCalls()).toBe("");
     },
   );
+
+  it("refuses a --dept-id that is not the stack's deptId, before touching Cognito (m11)", () => {
+    writeFakeAws("FORCE_CHANGE_PASSWORD", "nichols-fd");
+    const result = run([...BASE_ARGS, "--dept-id", "NICHOLS"]);
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("not this stack's department (nichols-fd)");
+    expect(awsCalls()).not.toContain("cognito-idp");
+    expect(awsCalls()).not.toContain("lambda invoke");
+  });
 
   it("refuses to promote an existing login unless --resume is passed", () => {
     writeFakeAws("FORCE_CHANGE_PASSWORD");

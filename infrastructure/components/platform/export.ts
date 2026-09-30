@@ -197,6 +197,7 @@ export class Export extends pulumi.ComponentResource {
           variables: {
             SERVICE_NAME: "platform-service",
             ENVIRONMENT: env,
+            BOXALARM_ENV: env,
             // worker.ts scans its tables in order starting with alerting-service
             // (TABLES/ALERTING_TABLE_NAME) — empty strings made every Scan raise a
             // ValidationException, so every export failed immediately.

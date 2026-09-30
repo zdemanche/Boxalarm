@@ -434,9 +434,13 @@ export class HttpApi extends pulumi.ComponentResource {
    *    request was let through on the token alone. Every occurrence is worth a look: while it
    *    lasts, a revoked session still reaches the alerting plane.
    */
-  addAlarms(topicArn: pulumi.Input<string>): {
+  addAlarms(
+    opsTopicArn: pulumi.Input<string>,
+    alertingPageTopicArn: pulumi.Input<string>,
+  ): {
     failOpen: aws.cloudwatch.MetricAlarm;
     alertingAuthorizerThrottles: aws.cloudwatch.MetricAlarm;
+    alertingAuthorizerErrors: aws.cloudwatch.MetricAlarm;
   } {
     const env = this.env;
     const failOpen = new aws.cloudwatch.MetricAlarm(
@@ -454,14 +458,15 @@ export class HttpApi extends pulumi.ComponentResource {
         threshold: 0,
         comparisonOperator: "GreaterThanThreshold",
         treatMissingData: "notBreaching",
-        alarmActions: [topicArn],
+        alarmActions: [opsTopicArn],
       },
       { parent: this },
     );
     // Review MAJOR 3: the alerting authorizer is throttled only when its reserved concurrency
     // is exhausted - by a call-time burst or by a junk-token flood aimed at these routes
     // (HTTP APIs cannot take AWS WAF, so there is no per-IP limit in front of it). Either way,
-    // requests on the alerting plane are being refused.
+    // requests on the alerting plane are being refused - dispatch create and respond fail - so
+    // it pages alerting-page, not the ops topic (deploy-readiness M2).
     const alertingAuthorizerThrottles = new aws.cloudwatch.MetricAlarm(
       `${this.name}-alerting-authorizer-throttles-alarm`,
       {
@@ -477,11 +482,31 @@ export class HttpApi extends pulumi.ComponentResource {
         threshold: 0,
         comparisonOperator: "GreaterThanThreshold",
         treatMissingData: "notBreaching",
-        alarmActions: [topicArn],
+        alarmActions: [alertingPageTopicArn],
       },
       { parent: this },
     );
-    return { failOpen, alertingAuthorizerThrottles };
+    // An erroring alerting authorizer refuses alerting-plane requests the same way.
+    const alertingAuthorizerErrors = new aws.cloudwatch.MetricAlarm(
+      `${this.name}-alerting-authorizer-errors-alarm`,
+      {
+        name: `boxalarm-${env}-platform-authorizer-alerting-errors`,
+        alarmDescription:
+          "The alerting authorizer is failing: alerting-plane requests (dispatch create, respond) are refused.",
+        namespace: "AWS/Lambda",
+        metricName: "Errors",
+        dimensions: { FunctionName: this.alertingAuthorizerLambda.function.name },
+        statistic: "Sum",
+        period: 60,
+        evaluationPeriods: 1,
+        threshold: 0,
+        comparisonOperator: "GreaterThanThreshold",
+        treatMissingData: "notBreaching",
+        alarmActions: [alertingPageTopicArn],
+      },
+      { parent: this },
+    );
+    return { failOpen, alertingAuthorizerThrottles, alertingAuthorizerErrors };
   }
 
   /**

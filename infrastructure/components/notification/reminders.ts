@@ -235,12 +235,12 @@ export class Reminders extends pulumi.ComponentResource {
         {
           env,
           busName: args.platformBusName,
-          busArn: args.platformBusArn,
           ruleName: `boxalarm-${env}-notification-${spec.key}`,
           eventPattern: JSON.stringify({ source: [spec.source], "detail-type": spec.detailTypes }),
           queueName: `boxalarm-${env}-notification-${spec.key}-queue`,
           lambda: lambda.function,
           lambdaRole: lambda.role,
+          alarmTopicArn: args.chiefNotificationTopicArn,
           maxReceiveCount: 5,
         },
         { parent: this },

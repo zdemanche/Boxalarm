@@ -24,6 +24,8 @@ export interface IncidentArgs {
   nerisCredentialsSecretArn: pulumi.Input<string>;
   logGroup: ServiceLogGroup;
   httpApi: HttpApi;
+  /** Ops alarm topic (chief-notifications): every alarm here notifies it, none is silent. */
+  opsAlarmTopicArn: pulumi.Input<string>;
 }
 
 const CMK_STATEMENT = (cmkArn: pulumi.Input<string>) =>
@@ -604,7 +606,6 @@ export class Incident extends pulumi.ComponentResource {
       {
         env,
         busName: args.busName,
-        busArn: args.busArn,
         ruleName: `boxalarm-${env}-incident-neris-settings-copy`,
         eventPattern: JSON.stringify({
           source: ["platform-service"],
@@ -613,6 +614,7 @@ export class Incident extends pulumi.ComponentResource {
         queueName: `boxalarm-${env}-incident-neris-settings-copy-queue`,
         lambda: nerisSettingsLambda.function,
         lambdaRole: nerisSettingsLambda.role,
+        alarmTopicArn: args.opsAlarmTopicArn,
         maxReceiveCount: 5,
         reportBatchItemFailures: true,
       },
@@ -653,12 +655,12 @@ export class Incident extends pulumi.ComponentResource {
       {
         env,
         busName: args.busName,
-        busArn: args.busArn,
         ruleName: `boxalarm-${env}-incident-dispatch-alert-copy`,
         eventPattern: JSON.stringify({ "detail-type": ["dispatch.alert.received"] }),
         queueName: `boxalarm-${env}-incident-dispatch-alert-copy-queue`,
         lambda: dispatchAlertLambda.function,
         lambdaRole: dispatchAlertLambda.role,
+        alarmTopicArn: args.opsAlarmTopicArn,
         maxReceiveCount: 5,
         reportBatchItemFailures: true,
       },
@@ -694,12 +696,12 @@ export class Incident extends pulumi.ComponentResource {
       {
         env,
         busName: args.busName,
-        busArn: args.busArn,
         ruleName: `boxalarm-${env}-incident-dispatch-response-copy`,
         eventPattern: JSON.stringify({ "detail-type": ["alerting.response.confirmed"] }),
         queueName: `boxalarm-${env}-incident-dispatch-response-copy-queue`,
         lambda: dispatchResponseLambda.function,
         lambdaRole: dispatchResponseLambda.role,
+        alarmTopicArn: args.opsAlarmTopicArn,
         maxReceiveCount: 5,
         reportBatchItemFailures: true,
       },
