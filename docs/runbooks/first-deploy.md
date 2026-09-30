@@ -1,6 +1,6 @@
 # First deploy of a stack (dev first), from an empty AWS account
 
-Written from the post-merge deploy-readiness review (`.analysis/post-merge/deploy-readiness.md`) and updated for the fixes on `fix/post-merge-infra`. Every command runs from the monorepo root unless it says `cd`. Nothing here is optional on the alert path: a step skipped silently is a page that silently does not happen.
+Written from the post-merge deploy-readiness review (`.analysis/post-merge/deploy-readiness.md`) and updated for the fixes on `fix/post-merge-infra`. Every command block runs from the monorepo root and leaves the shell there: directory changes happen inside `( … )` subshells, and Pulumi commands take `-C infrastructure`. Nothing here is optional on the alert path: a step skipped silently is a page that silently does not happen.
 
 ## Account strategy
 
@@ -15,8 +15,7 @@ Written from the post-merge deploy-readiness review (`.analysis/post-merge/deplo
 3. Run the preflight. It only reads the account:
 
    ```
-   cd infrastructure && npm ci
-   node scripts/preflight.mjs dev --first-deploy
+   (cd infrastructure && npm ci && node scripts/preflight.mjs dev --first-deploy)
    ```
 
    It exits 1 and explains when the concurrency quota is under 1,000, when the stack's reservations would leave under 100 unreserved, when the stack's 2 trails would exceed 5 in the region, or when prod would share an account with another stack. Fix what it says and re-run until it passes.
@@ -24,8 +23,8 @@ Written from the post-merge deploy-readiness review (`.analysis/post-merge/deplo
 ## 1. Build the Lambda bundles
 
 ```
-cd backend && npm ci && npm run bundle
-ls backend/dist/*/ | wc -l     # expect 188 function directories
+(cd backend && npm ci && npm run bundle)
+ls -d backend/dist/*/*/ | wc -l     # expect 188 function directories (dist/<service>/<function>/)
 ```
 
 Only dev (and unit tests) fall back to placeholder code when a bundle is missing, with a `lambdaCode: no bundle found for ...` warning. The placeholder answers HTTP with 501 and throws on every queue, stream and schedule, so do not skip this step on dev either.
@@ -33,34 +32,33 @@ Only dev (and unit tests) fall back to placeholder code when a bundle is missing
 ## 2. Set the stack config
 
 ```
-cd infrastructure
-pulumi stack select dev        # or: pulumi stack init dev
-pulumi preview                 # first run: lists EVERY missing key at once, with its set command
+pulumi -C infrastructure stack select dev    # or: pulumi -C infrastructure stack init dev
+pulumi -C infrastructure preview            # first run: lists EVERY missing key at once, with its set command
 ```
 
 `components/shared/stack-config.ts` validates the whole config before anything is built and reports every missing or invalid key in one error. Each `Pulumi.<stack>.yaml` also lists, in its header comments, the keys it does not set. For dev:
 
 ```
-pulumi config set notificationSesFromAddress notifications@<ses-verified-domain>
-pulumi config set --secret smsWebhookSecret "$(openssl rand -hex 32)"
-pulumi config set --secret voiceWebhookSecret "$(openssl rand -hex 32)"
-pulumi config set --secret pushWebhookSecret "$(openssl rand -hex 32)"
-pulumi config set alertingPageEmail oncall@<domain>
-pulumi config set chiefNotificationEmail chief@<domain>
+pulumi -C infrastructure config set notificationSesFromAddress notifications@<ses-verified-domain>
+pulumi -C infrastructure config set --secret smsWebhookSecret "$(openssl rand -hex 32)"
+pulumi -C infrastructure config set --secret voiceWebhookSecret "$(openssl rand -hex 32)"
+pulumi -C infrastructure config set --secret pushWebhookSecret "$(openssl rand -hex 32)"
+pulumi -C infrastructure config set alertingPageEmail oncall@<domain>
+pulumi -C infrastructure config set chiefNotificationEmail <ops or chief address>
 ```
 
 - `Pulumi.dev.yaml` already carries the two safe non-secret values: `nerisSchemaSourceUrl` (an `.invalid` placeholder until the NERIS schema pipeline exists; the daily refresh fails and notifies chief-notifications) and `alertingMinEligibleMembers: "1"` (a dev department has one or two test members).
 - Secrets are only ever set with `--secret`; none is committed.
 - `canaryMemberId` is not needed while `canaryEnabled` is unset (false). Keep the canary off for a first deploy.
 - `alertingPageEmail` and `chiefNotificationEmail` are required on prod and warned about elsewhere. Set them on dev too: without them every alarm notifies nobody.
-- **qa, staging and prod:** `webOrigin` in their yaml is a `*.boxalarm.example` placeholder, and preview refuses a placeholder host (`.example`, `.invalid`, `.test`, localhost) outside dev. Set the real origin: `pulumi config set webOrigin https://<real web host> --stack <stack>`. They also need `nerisSchemaSourceUrl`.
+- **qa, staging and prod:** `webOrigin` in their yaml is a `*.boxalarm.example` placeholder, and preview refuses a placeholder host (`.example`, `.invalid`, `.test`, localhost) outside dev. Set the real origin: `pulumi -C infrastructure config set webOrigin https://<real web host> --stack <stack>`. They also need `nerisSchemaSourceUrl`.
 - **SMS / voice vendor (OQ-3, open):** `smsProviderEndpointUrl` / `voiceProviderEndpointUrl` are **required on prod** (prod may not ship push-only) and optional elsewhere. Until they are set on a non-prod stack, see step 3.
 
 ## 3. Deploy
 
 ```
-pulumi preview
-pulumi up
+pulumi -C infrastructure preview
+pulumi -C infrastructure up
 ```
 
 Expect these warnings, and no others:
@@ -120,7 +118,7 @@ Then check that `DEPT#nichols-fd#ELIGIBILITY` / `MEMBER#<id>` exists in `boxalar
 - **Alert rules**, after saving the department's ALERT_RULES:
 
   ```
-  cd backend && npm run reemit-alert-rules -- --table boxalarm-dev-platform-service --dept nichols-fd
+  (cd backend && npm run reemit-alert-rules -- --table boxalarm-dev-platform-service --dept nichols-fd)
   ```
 
 - **Pre-plan and hydrant copies**, once inspections data exists: invoke `boxalarm-dev-inspections-alert-context-replay` with `{"deptId":"nichols-fd","dryRun":true}`, then without `dryRun` (`docs/runbooks/alert-context-replay.md`).
