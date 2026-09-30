@@ -204,6 +204,58 @@ describe('availability mark-off routes', () => {
       });
     });
 
+    // Paging review MAJOR-R2-1: an ACTIVATE landing between the read and the write.
+    it('conditions on the activatedAt it read, and after losing to an activation re-reads and stamps AVAILABLE after it', async () => {
+      let reads = 0;
+      let writes = 0;
+      ddbSend.mockImplementation((command: Command) => {
+        if (command.constructor.name === 'GetCommand') {
+          reads += 1;
+          return Promise.resolve({
+            Item:
+              reads === 1
+                ? markoff(NOW + 1, NOW + 3600)
+                : markoff(NOW + 1, NOW + 3600, { activatedAt: NOW + 1 }),
+          });
+        }
+        if (command.constructor.name === 'TransactWriteCommand') {
+          writes += 1;
+          if (writes === 1) {
+            return Promise.reject(
+              Object.assign(new Error('cancelled'), {
+                name: 'TransactionCanceledException',
+                CancellationReasons: [{ Code: 'ConditionalCheckFailed' }],
+              }),
+            );
+          }
+        }
+        return Promise.resolve({});
+      });
+      const { end } = await routes();
+
+      const result = await end(event('MEMBER', 'mbr-1', 'mbr-1', String(NOW + 1)));
+
+      expect(result).toMatchObject({ statusCode: 200 });
+      const transacts = ddbSend.mock.calls
+        .map(([c]) => c as Command)
+        .filter((c) => c.constructor.name === 'TransactWriteCommand');
+      type Items = Array<{
+        Update?: {
+          ConditionExpression: string;
+          ExpressionAttributeValues: Record<string, unknown>;
+        };
+        Put?: { Item: Record<string, unknown> };
+      }>;
+      const first = transacts[0]!.input.TransactItems as Items;
+      const second = transacts[1]!.input.TransactItems as Items;
+      expect(first[0]!.Update!.ConditionExpression).toContain('attribute_not_exists(activatedAt)');
+      expect(second[0]!.Update!.ConditionExpression).toContain('activatedAt = :readActivatedAt');
+      expect(second[0]!.Update!.ExpressionAttributeValues[':readActivatedAt']).toBe(NOW + 1);
+      expect(Date.parse(String(second[1]!.Put!.Item.eventTime))).toBeGreaterThanOrEqual(
+        (NOW + 2) * 1000,
+      );
+    });
+
     it('an already-ended mark-off answers 200 alreadyEnded and writes nothing', async () => {
       table(markoff(NOW - 600, NOW - 60, { revertedAt: NOW - 60 }));
       const { end } = await routes();

@@ -47,6 +47,8 @@ async function createTable(client: DynamoDBClient, name: string): Promise<void> 
 describe('availability mark-off → outbox drain → alerting snapshot (LocalStack)', () => {
   let container: StartedLocalStackContainer;
   let docClient: DynamoDBDocumentClient;
+  /** When set, what the personnel handlers get instead of docClient (a race injector). */
+  let personnelClient: DynamoDBDocumentClient | undefined;
   const originalEnv = { ...process.env };
 
   beforeAll(async () => {
@@ -80,7 +82,7 @@ describe('availability mark-off → outbox drain → alerting snapshot (LocalSta
       ...(await importOriginal<
         typeof import('../../personnel-service/availability/dynamoClient.js')
       >()),
-      createDdbClient: () => docClient,
+      createDdbClient: () => personnelClient ?? docClient,
     }));
     vi.doMock('./dynamoClient.js', async (importOriginal) => ({
       ...(await importOriginal<typeof import('./dynamoClient.js')>()),
@@ -94,6 +96,75 @@ describe('availability mark-off → outbox drain → alerting snapshot (LocalSta
     vi.doUnmock('./dynamoClient.js');
     vi.restoreAllMocks();
   });
+
+  /** Mocked scheduler, the real platform drain + availability consumer, and a snapshot read. */
+  async function harness(member: string, snapshotKey: { pk: string; sk: string }) {
+    const schedulerSend = vi.fn().mockResolvedValue({});
+    const scheduler = { send: schedulerSend } as unknown as SchedulerClient;
+    const published: { Source: string; DetailType: string; Detail: string }[] = [];
+    const { createOutboxDrainHandler } = await import('@boxalarm/outbox');
+    const drain = createOutboxDrainHandler('platform-service', {
+      eventBridgeClient: {
+        send: vi.fn((command: { input: { Entries: typeof published } }) => {
+          published.push(...command.input.Entries);
+          return Promise.resolve({ Entries: command.input.Entries.map(() => ({})) });
+        }),
+      } as unknown as EventBridgeClient,
+      ddbClient: docClient,
+    });
+    const { handler: consume } = await import('./consumer.js');
+    let sequence = 0;
+    /** Drains every not-yet-sent outbox row for the member and delivers it to alerting. */
+    async function relay(): Promise<void> {
+      const { Items = [] } = await docClient.send(
+        new QueryCommand({
+          TableName: PLATFORM_TABLE,
+          KeyConditionExpression: 'pk = :pk',
+          ExpressionAttributeValues: { ':pk': `DEPT#${DEPT}#OUTBOX#MEMBER#${member}` },
+          ConsistentRead: true,
+        }),
+      );
+      const pending = Items.filter((item) => item.sentAt === undefined || item.sentAt === null);
+      const before = published.length;
+      for (const row of pending) {
+        sequence += 1;
+        await drain(
+          {
+            Records: [
+              {
+                eventID: `s-${sequence}`,
+                eventName: 'INSERT',
+                dynamodb: { SequenceNumber: `s-${sequence}`, NewImage: marshall(row) },
+              },
+            ],
+          } as unknown as DynamoDBStreamEvent,
+          {} as never,
+          () => undefined,
+        );
+      }
+      for (const entry of published.slice(before)) {
+        await consume({
+          Records: [
+            {
+              messageId: `m-${sequence}-${entry.Detail.length}`,
+              body: JSON.stringify({
+                'detail-type': entry.DetailType,
+                source: entry.Source,
+                detail: JSON.parse(entry.Detail) as unknown,
+              }),
+            },
+          ],
+        } as unknown as SQSEvent);
+      }
+    }
+    const snapshotState = async (): Promise<unknown> =>
+      (
+        await docClient.send(
+          new GetCommand({ TableName: ALERTING_TABLE, Key: snapshotKey, ConsistentRead: true }),
+        )
+      ).Item?.availabilityState;
+    return { schedulerSend, scheduler, relay, snapshotState };
+  }
 
   it('a member marking off now is MARKED_OFF in the alerting snapshot, and the outbox row is marked sent', async () => {
     await docClient.send(
@@ -225,70 +296,7 @@ describe('availability mark-off → outbox drain → alerting snapshot (LocalSta
         },
       }),
     );
-    const schedulerSend = vi.fn().mockResolvedValue({});
-    const scheduler = { send: schedulerSend } as unknown as SchedulerClient;
-    const published: { Source: string; DetailType: string; Detail: string }[] = [];
-    const { createOutboxDrainHandler } = await import('@boxalarm/outbox');
-    const drain = createOutboxDrainHandler('platform-service', {
-      eventBridgeClient: {
-        send: vi.fn((command: { input: { Entries: typeof published } }) => {
-          published.push(...command.input.Entries);
-          return Promise.resolve({ Entries: command.input.Entries.map(() => ({})) });
-        }),
-      } as unknown as EventBridgeClient,
-      ddbClient: docClient,
-    });
-    const { handler: consume } = await import('./consumer.js');
-    let sequence = 0;
-    /** Drains every not-yet-sent outbox row for the member and delivers it to alerting. */
-    async function relay(): Promise<void> {
-      const { Items = [] } = await docClient.send(
-        new QueryCommand({
-          TableName: PLATFORM_TABLE,
-          KeyConditionExpression: 'pk = :pk',
-          ExpressionAttributeValues: { ':pk': `DEPT#${DEPT}#OUTBOX#MEMBER#${member}` },
-          ConsistentRead: true,
-        }),
-      );
-      const pending = Items.filter((item) => item.sentAt === undefined || item.sentAt === null);
-      const before = published.length;
-      for (const row of pending) {
-        sequence += 1;
-        await drain(
-          {
-            Records: [
-              {
-                eventID: `s-${sequence}`,
-                eventName: 'INSERT',
-                dynamodb: { SequenceNumber: `s-${sequence}`, NewImage: marshall(row) },
-              },
-            ],
-          } as unknown as DynamoDBStreamEvent,
-          {} as never,
-          () => undefined,
-        );
-      }
-      for (const entry of published.slice(before)) {
-        await consume({
-          Records: [
-            {
-              messageId: `m-${sequence}-${entry.Detail.length}`,
-              body: JSON.stringify({
-                'detail-type': entry.DetailType,
-                source: entry.Source,
-                detail: JSON.parse(entry.Detail) as unknown,
-              }),
-            },
-          ],
-        } as unknown as SQSEvent);
-      }
-    }
-    const snapshotState = async (): Promise<unknown> =>
-      (
-        await docClient.send(
-          new GetCommand({ TableName: ALERTING_TABLE, Key: snapshotKey, ConsistentRead: true }),
-        )
-      ).Item?.availabilityState;
+    const { schedulerSend, scheduler, relay, snapshotState } = await harness(member, snapshotKey);
 
     const { createAvailability } = await import('../../personnel-service/availability/handler.js');
     const { endMarkoff } = await import('../../personnel-service/availability/markoffs.js');
@@ -340,6 +348,80 @@ describe('availability mark-off → outbox drain → alerting snapshot (LocalSta
     expect(
       await createAvailability(createEvent, principal, { schedulerClient: scheduler }),
     ).toMatchObject({ statusCode: 409 });
+    await relay();
+    expect(await snapshotState()).toBe('AVAILABLE');
+  }, 60_000);
+
+  // Paging review MAJOR-R2-1: an ACTIVATE committing between end-early's read and its write
+  // emitted MARKED_OFF later than end's AVAILABLE, leaving the member marked off.
+  it('an activation that lands between end-early’s read and write still leaves the member AVAILABLE', async () => {
+    const member = 'mbr-3';
+    const snapshotKey = { pk: `DEPT#${DEPT}#ELIGIBILITY`, sk: `MEMBER#${member}` };
+    await docClient.send(
+      new PutCommand({
+        TableName: ALERTING_TABLE,
+        Item: {
+          ...snapshotKey,
+          entityType: 'MEMBER_ELIGIBILITY_SNAPSHOT',
+          memberId: member,
+          active: true,
+          quals: [],
+          roles: [],
+          availabilityState: 'AVAILABLE',
+          snapshotUpdatedAt: Date.now() - 60_000,
+        },
+      }),
+    );
+    const { scheduler, relay, snapshotState } = await harness(member, snapshotKey);
+    const { createAvailability } = await import('../../personnel-service/availability/handler.js');
+    const { endMarkoff } = await import('../../personnel-service/availability/markoffs.js');
+    const { handler: expiry } =
+      await import('../../personnel-service/availability/expiryHandler.js');
+    const principal = { sub: member, deptId: DEPT, 'cognito:groups': 'MEMBER' };
+    const startAt = Math.floor(Date.now() / 1000) + 120;
+    expect(
+      await createAvailability(
+        {
+          pathParameters: { memberId: member },
+          headers: {},
+          body: JSON.stringify({ startAt, endAt: startAt + 3600 }),
+        } as unknown as GuardEvent,
+        principal,
+        { schedulerClient: scheduler },
+      ),
+    ).toMatchObject({ statusCode: 201 });
+
+    // The race: end reads "not activated"; before its write lands, the ACTIVATE schedule fires.
+    let injected = false;
+    personnelClient = {
+      send: async (command: { constructor: { name: string } }) => {
+        if (!injected && command.constructor.name === 'TransactWriteCommand') {
+          injected = true;
+          personnelClient = undefined;
+          expect(
+            await expiry({ deptId: DEPT, memberId: member, startAt, action: 'ACTIVATE' }),
+          ).toEqual({ outcome: 'ACTIVATED' });
+          personnelClient = racingClient;
+        }
+        return docClient.send(command as never);
+      },
+    } as unknown as DynamoDBDocumentClient;
+    const racingClient = personnelClient;
+    try {
+      const ended = await endMarkoff(
+        {
+          pathParameters: { memberId: member, markoffId: String(startAt) },
+          headers: {},
+        } as unknown as GuardEvent,
+        principal,
+        { schedulerClient: scheduler },
+      );
+      expect(ended).toMatchObject({ statusCode: 200 });
+    } finally {
+      personnelClient = undefined;
+    }
+    expect(injected).toBe(true);
+
     await relay();
     expect(await snapshotState()).toBe('AVAILABLE');
   }, 60_000);

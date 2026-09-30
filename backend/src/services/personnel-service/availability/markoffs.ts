@@ -40,6 +40,8 @@ import { availabilityScheduleBaseName, getSchedulerClient } from './handler.js';
 
 const METRIC_NAMESPACE = 'Boxalarm/personnel-availability';
 const MARKOFF_ID = /^\d{1,10}$/;
+/** Re-reads after a lost race (an ACTIVATE or another end landing between read and write). */
+const MAX_END_ATTEMPTS = 3;
 
 export interface MarkoffRouteDeps {
   readonly schedulerClient?: SchedulerClient;
@@ -185,12 +187,16 @@ export async function endMarkoff(
   const pk = buildDeptScopedPk(deptId, 'MEMBER', memberId);
   const sk = `MARKOFF#${startAt}`;
 
-  let markoff;
-  try {
+  const readMarkoff = async () => {
     const result = await ddb.send(
       new GetCommand({ TableName: tableName, Key: { pk, sk }, ConsistentRead: true }),
     );
-    markoff = parseMarkoffItem(result.Item);
+    return parseMarkoffItem(result.Item);
+  };
+
+  let markoff;
+  try {
+    markoff = await readMarkoff();
   } catch (error) {
     logError('availability.end.read_failed', error, traceId, { memberId, markoffId });
     return serviceUnavailable(traceId);
@@ -198,81 +204,111 @@ export async function endMarkoff(
   if (!markoff) {
     return notFoundProblem(traceId, `No mark-off ${markoffId} for member ${memberId}.`);
   }
-  if (markoff.revertedAt !== undefined) {
-    // Already over (ended, or reverted at endAt): nothing to do, and saying so is the truth.
-    return json(200, { markoffId, endedAt: markoff.revertedAt, alreadyEnded: true });
-  }
 
-  const nowMs = Date.now();
-  const nowSeconds = Math.floor(nowMs / 1000);
-  const eventId = randomUUID();
-  const cancelled = startAt > nowSeconds;
-  const newEndAt = cancelled ? startAt : Math.min(nowSeconds, markoff.endAt);
-  try {
-    await ddb.send(
-      new TransactWriteCommand({
-        TransactItems: [
-          {
-            Update: {
-              TableName: tableName,
-              Key: { pk, sk },
-              UpdateExpression:
-                'SET endAt = :endAt, revertedAt = :now, endedAt = :now, endedBy = :actor, cancelled = :cancelled',
-              ConditionExpression: 'attribute_exists(sk) AND attribute_not_exists(revertedAt)',
-              ExpressionAttributeValues: {
-                ':endAt': newEndAt,
-                ':now': nowSeconds,
-                ':actor': principal.sub,
-                ':cancelled': cancelled,
-              },
-            },
-          },
-          {
-            // Always AVAILABLE, even for a window not yet activated: an ACTIVATE racing this
-            // end could have marked the member off a moment ago, and the alerting snapshot's
-            // clock orders the two. AVAILABLE for a member never marked off is a no-op there.
-            Put: {
-              TableName: tableName,
-              Item: {
-                pk: buildDeptScopedPk(deptId, 'OUTBOX', 'MEMBER', memberId),
-                sk: `EVT#${eventId}`,
-                entityType: 'OUTBOX_ENTRY',
-                eventId,
-                eventType: 'personnel.availability.changed',
-                correlationId: memberId,
-                eventTime: new Date(nowMs).toISOString(),
-                source: 'personnel-service',
-                schemaVersion: '1.0',
-                createdAt: nowSeconds,
-                payload: { deptId, memberId, availabilityState: 'AVAILABLE', startAt },
-              },
-            },
-          },
-          buildAuditLogEntryTransactItem(tableName, {
-            deptId,
-            actorId: principal.sub,
-            mutatedEntityType: 'AVAILABILITY_MARKOFF',
-            mutatedEntityId: `${memberId}-${startAt}`,
-            action: 'UPDATE',
-            before: { endAt: markoff.endAt },
-            after: { endAt: newEndAt, endedEarly: true, cancelled },
-            ts: nowMs,
-            traceId,
-          }),
-        ],
-      }),
-    );
-  } catch (error) {
-    if (error instanceof Error && error.name === 'TransactionCanceledException') {
-      const reasons = (error as { CancellationReasons?: { Code?: string }[] }).CancellationReasons;
-      if (reasons?.[0]?.Code === 'ConditionalCheckFailed') {
-        // Ended (or reverted at endAt) between the read and this write.
-        return json(200, { markoffId, endedAt: nowSeconds, alreadyEnded: true });
-      }
+  /**
+   * Paging review MAJOR-R2-1: an ACTIVATE committing between this read and the write below
+   * emits MARKED_OFF with a later eventTime than an AVAILABLE stamped before it, so the
+   * snapshot would drop AVAILABLE as stale and keep the member marked off. The write is
+   * therefore conditioned on the activatedAt state just read; on a conflict the row is re-read
+   * and the end retried. The AVAILABLE eventTime is at least a second after activatedAt (whose
+   * MARKED_OFF was stamped within that second), so it always sorts after the activation.
+   */
+  let nowSeconds: number;
+  let cancelled: boolean;
+  for (let attempt = 1; ; attempt += 1) {
+    if (markoff.revertedAt !== undefined) {
+      // Already over (ended, or reverted at endAt): nothing to do, and saying so is the truth.
+      return json(200, { markoffId, endedAt: markoff.revertedAt, alreadyEnded: true });
     }
-    logError('availability.end.write_failed', error, traceId, { memberId, markoffId });
-    emitOutcomeMetric(METRIC_NAMESPACE, 'MarkoffEndFailed', 'DynamoDbUnavailable');
-    return serviceUnavailable(traceId);
+    const readActivatedAt = markoff.activatedAt;
+    const eventTimeMs = Math.max(
+      Date.now(),
+      readActivatedAt !== undefined ? (readActivatedAt + 1) * 1000 : 0,
+    );
+    nowSeconds = Math.floor(Date.now() / 1000);
+    const eventId = randomUUID();
+    cancelled = readActivatedAt === undefined && startAt > nowSeconds;
+    const newEndAt = cancelled ? startAt : Math.min(nowSeconds, markoff.endAt);
+    try {
+      await ddb.send(
+        new TransactWriteCommand({
+          TransactItems: [
+            {
+              Update: {
+                TableName: tableName,
+                Key: { pk, sk },
+                UpdateExpression:
+                  'SET endAt = :endAt, revertedAt = :now, endedAt = :now, endedBy = :actor, cancelled = :cancelled',
+                ConditionExpression:
+                  readActivatedAt === undefined
+                    ? 'attribute_exists(sk) AND attribute_not_exists(revertedAt) AND attribute_not_exists(activatedAt)'
+                    : 'attribute_exists(sk) AND attribute_not_exists(revertedAt) AND activatedAt = :readActivatedAt',
+                ExpressionAttributeValues: {
+                  ':endAt': newEndAt,
+                  ':now': nowSeconds,
+                  ':actor': principal.sub,
+                  ':cancelled': cancelled,
+                  ...(readActivatedAt !== undefined ? { ':readActivatedAt': readActivatedAt } : {}),
+                },
+              },
+            },
+            {
+              // Always AVAILABLE, even for a window not yet activated: AVAILABLE for a member
+              // never marked off is a no-op in the snapshot.
+              Put: {
+                TableName: tableName,
+                Item: {
+                  pk: buildDeptScopedPk(deptId, 'OUTBOX', 'MEMBER', memberId),
+                  sk: `EVT#${eventId}`,
+                  entityType: 'OUTBOX_ENTRY',
+                  eventId,
+                  eventType: 'personnel.availability.changed',
+                  correlationId: memberId,
+                  eventTime: new Date(eventTimeMs).toISOString(),
+                  source: 'personnel-service',
+                  schemaVersion: '1.0',
+                  createdAt: nowSeconds,
+                  payload: { deptId, memberId, availabilityState: 'AVAILABLE', startAt },
+                },
+              },
+            },
+            buildAuditLogEntryTransactItem(tableName, {
+              deptId,
+              actorId: principal.sub,
+              mutatedEntityType: 'AVAILABILITY_MARKOFF',
+              mutatedEntityId: `${memberId}-${startAt}`,
+              action: 'UPDATE',
+              before: { endAt: markoff.endAt },
+              after: { endAt: newEndAt, endedEarly: true, cancelled },
+              ts: eventTimeMs,
+              traceId,
+            }),
+          ],
+        }),
+      );
+      break;
+    } catch (error) {
+      const reasons =
+        error instanceof Error && error.name === 'TransactionCanceledException'
+          ? (error as { CancellationReasons?: { Code?: string }[] }).CancellationReasons
+          : undefined;
+      if (reasons?.[0]?.Code === 'ConditionalCheckFailed' && attempt < MAX_END_ATTEMPTS) {
+        // Activated or ended since the read: read again and decide on what is there now.
+        try {
+          markoff = await readMarkoff();
+        } catch (readError) {
+          logError('availability.end.read_failed', readError, traceId, { memberId, markoffId });
+          return serviceUnavailable(traceId);
+        }
+        if (!markoff) {
+          return notFoundProblem(traceId, `No mark-off ${markoffId} for member ${memberId}.`);
+        }
+        continue;
+      }
+      logError('availability.end.write_failed', error, traceId, { memberId, markoffId });
+      emitOutcomeMetric(METRIC_NAMESPACE, 'MarkoffEndFailed', 'DynamoDbUnavailable');
+      return serviceUnavailable(traceId);
+    }
   }
 
   await deleteMarkoffSchedules(
