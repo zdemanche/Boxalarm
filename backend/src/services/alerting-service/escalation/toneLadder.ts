@@ -38,7 +38,7 @@ export async function readDepartmentToneConfig(
   );
   if (!result.Item) {
     // No ALERT_RULES_COPY: the department never saved rules, or they predate the copy consumer
-    // (backfill: platform-service config/reemitAlertRules.ts). Logged so defaults are visible.
+    // (backfill: the LOB config re-emit, see infrastructure/README.md). Logged so defaults show.
     logError(
       'alerting.toneLadder.rules_default',
       new Error('no ALERT_RULES_COPY; using defaults'),
