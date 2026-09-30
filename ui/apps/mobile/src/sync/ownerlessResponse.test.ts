@@ -6,6 +6,8 @@ import { getInternetCredentials } from 'react-native-keychain';
 import { apiRequest } from '../lib/apiClient';
 import { handleNotificationEvent } from '../features/alerts/notificationActions';
 import { migrateOutboxOwnerColumns } from './db';
+import { kvDelete, kvSet } from './kvStore';
+import { LAST_SESSION_SUB_KEY } from './memberCache';
 import * as outbox from './outbox';
 import * as store from './outboxStore';
 import * as syncManager from './syncManager';
@@ -113,25 +115,56 @@ test('a lock-screen answer with no session configured is stamped with the stored
   await expect(store.find(row!.id)).resolves.toBeUndefined();
 });
 
-test('an answer whose owner cannot be resolved is stored ownerless, never blank, and still sends', async () => {
+// R4-M1: a phone with no stored session has nobody to answer as.
+test('signed out: a lock-screen answer is not queued, and a different member signing in sends nothing', async () => {
   mockCredentials.mockResolvedValue(false);
-  syncManager.configure(null, null);
-  await syncManager.enqueueResponse('resp-ownerless', 'D-LOCK', 'Responding — D-LOCK', {
-    ackStatus: 'RESPONDING',
-  });
-  const row = await store.find('resp-ownerless');
-  expect(row?.ownerMemberId).toBeNull();
-
   mockApiRequest.mockResolvedValue({ json: async () => ({}) });
+
+  await handleNotificationEvent(pressResponding);
+
+  expect(await store.all()).toEqual([]);
+  const last = displayNotification.mock.calls.at(-1)![0];
+  expect(last.body).toMatch(/^You're signed out on this phone\. Open Boxalarm and sign in/);
+
+  // Member B signs in within the answer window.
+  syncManager.configure({ ...memberK, memberId: 'member-b' }, 'https://api.example.com');
+  await flush();
+  await flush();
+  expect(mockApiRequest).not.toHaveBeenCalled();
+});
+
+test('a keychain read failure queues the answer ownerless with a hint; only that member sends it', async () => {
+  mockCredentials.mockRejectedValue(new Error('keychain unavailable'));
+  await kvSet(LAST_SESSION_SUB_KEY, 'member-k');
+  mockApiRequest.mockRejectedValue(new TypeError('Network request failed'));
+
+  await handleNotificationEvent(pressResponding);
+
+  const [row] = await store.all();
+  expect(row).toMatchObject({ ownerMemberId: null, answeredAsHint: 'member-k' });
+
+  // Another member signing in does not send it; it is offered for Send/Discard instead.
+  mockApiRequest.mockReset().mockResolvedValue({ json: async () => ({}) });
+  syncManager.configure({ ...memberK, memberId: 'member-b' }, 'https://api.example.com');
+  await syncManager.retry(row!.id);
+  await flush();
+  await flush();
+  expect(mockApiRequest).not.toHaveBeenCalled();
+  expect((await outbox.getStatus(null, 'member-b')).items).toEqual([
+    expect.objectContaining({ id: row!.id, needsOwner: true }),
+  ]);
+
+  // The member who was signed in sends it automatically.
+  syncManager.configure(null, null);
   syncManager.configure(memberK, 'https://api.example.com');
   await flush();
   await flush();
-
   expect(mockApiRequest).toHaveBeenCalledWith(
     'alerting/dispatches/D-LOCK/responses',
     memberK,
     expect.anything(),
   );
+  await kvDelete(LAST_SESSION_SUB_KEY);
 });
 
 test('an ownerless answer older than 2 hours is not auto-sent: it is shown for Send or Discard', async () => {
@@ -197,11 +230,12 @@ describe('owner-column migration on an existing outbox', () => {
       'PRAGMA table_info(outbox)',
       'ALTER TABLE outbox ADD COLUMN ownerMemberId TEXT',
       'ALTER TABLE outbox ADD COLUMN ownerDeptId TEXT',
+      'ALTER TABLE outbox ADD COLUMN answeredAsHint TEXT',
     ]);
   });
 
   test('does nothing when the columns are already there', () => {
-    const db = fakeDb(['id', 'ownerMemberId', 'ownerDeptId']);
+    const db = fakeDb(['id', 'ownerMemberId', 'ownerDeptId', 'answeredAsHint']);
     expect(migrateOutboxOwnerColumns(db as never)).toBe(true);
     expect(db.statements).toEqual(['PRAGMA table_info(outbox)']);
   });

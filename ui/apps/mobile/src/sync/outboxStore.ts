@@ -28,6 +28,9 @@ export interface OutboxRow {
    * before owners were recorded; '' = a session with no member id (dev/test builds only). */
   readonly ownerMemberId: string | null;
   readonly ownerDeptId: string | null;
+  /** Only on ownerless rows: the member the phone's last session belonged to when the row was
+   * queued (R4-M1). Never an owner - it only decides whether an ownerless answer may auto-send. */
+  readonly answeredAsHint?: string | null;
 }
 
 function toRow(record: Record<string, unknown>): OutboxRow {
@@ -51,6 +54,7 @@ function toRow(record: Record<string, unknown>): OutboxRow {
     // '' was stamped by one pre-release build for "no member id"; it means the same as NULL.
     ownerMemberId: (record.ownerMemberId as string | null) || null,
     ownerDeptId: (record.ownerDeptId as string | null) ?? null,
+    answeredAsHint: (record.answeredAsHint as string | null) || null,
   };
 }
 
@@ -85,8 +89,9 @@ export async function insert(row: OutboxRow): Promise<void> {
   await getDb().execute(
     `INSERT INTO outbox
       (id, kind, label, method, path, body, stage, photoLocalUri, photoS3Key, photoUploadUrl,
-       status, attempts, lastError, queuedAt, nextAttemptAt, syncedAt, ownerMemberId, ownerDeptId)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       status, attempts, lastError, queuedAt, nextAttemptAt, syncedAt, ownerMemberId, ownerDeptId,
+       answeredAsHint)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       row.id,
       row.kind,
@@ -106,6 +111,7 @@ export async function insert(row: OutboxRow): Promise<void> {
       row.syncedAt,
       row.ownerMemberId,
       row.ownerDeptId,
+      row.answeredAsHint ?? null,
     ],
   );
 }
@@ -123,7 +129,9 @@ export async function find(id: string): Promise<OutboxRow | undefined> {
 
 export async function update(id: string, patch: Partial<OutboxRow>): Promise<void> {
   const entries = Object.entries(patch).filter(
-    ([key]) => outboxHasOwnerColumns() || (key !== 'ownerMemberId' && key !== 'ownerDeptId'),
+    ([key]) =>
+      outboxHasOwnerColumns() ||
+      (key !== 'ownerMemberId' && key !== 'ownerDeptId' && key !== 'answeredAsHint'),
   );
   if (entries.length === 0) return;
   const assignments = entries.map(([key]) => `${key} = ?`).join(', ');

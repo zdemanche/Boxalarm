@@ -17,6 +17,8 @@ export interface EnqueueInput {
   /** The member (and department) whose work this is; null only when no session could say. */
   readonly ownerMemberId: string | null;
   readonly ownerDeptId: string | null;
+  /** Set only when ownerMemberId is null: see OutboxRow.answeredAsHint. */
+  readonly answeredAsHint?: string | null;
 }
 
 // Create-only by design: the id is the client idempotency key, so re-enqueueing an id already in
@@ -45,6 +47,7 @@ export async function enqueue(input: EnqueueInput): Promise<OutboxRow> {
     syncedAt: null,
     ownerMemberId: input.ownerMemberId,
     ownerDeptId: input.ownerDeptId,
+    answeredAsHint: input.ownerMemberId === null ? (input.answeredAsHint ?? null) : null,
   };
   await store.insert(row);
   return row;
@@ -90,16 +93,23 @@ export async function find(id: string): Promise<OutboxRow | undefined> {
 }
 
 /**
- * An alert answer never stranded by a missing owner (R3-C1): an ownerless RESPONSE queued on this
- * phone within the answer window is the signed-in member's own (only a signed-in member's
- * session answers from this phone) and sends automatically. Older ones wait for Send/Discard.
+ * An alert answer never stranded by a missing owner (R3-C1), and never sent as someone else
+ * (R4-M1): an ownerless RESPONSE auto-sends only if it was queued within the answer window AND
+ * the phone's session at the time (answeredAsHint, cleared on every sign-out) is the member now
+ * signed in. Anything else waits for an explicit Send or Discard.
  */
 export const OWNERLESS_RESPONSE_WINDOW_MS = 2 * 60 * 60 * 1000;
 
-export function isRecentOwnerlessResponse(row: OutboxRow, now: number): boolean {
+export function isRecentOwnerlessResponse(
+  row: OutboxRow,
+  now: number,
+  signedInMemberId: string | null,
+): boolean {
   return (
     row.ownerMemberId === null &&
     row.kind === 'RESPONSE' &&
+    signedInMemberId !== null &&
+    row.answeredAsHint === signedInMemberId &&
     now - Date.parse(row.queuedAt) < OWNERLESS_RESPONSE_WINDOW_MS
   );
 }
@@ -114,7 +124,7 @@ export async function listDrainable(
   return rows.filter(
     (row) =>
       ((ownerMemberId !== null && row.ownerMemberId === ownerMemberId) ||
-        isRecentOwnerlessResponse(row, now)) &&
+        isRecentOwnerlessResponse(row, now, ownerMemberId)) &&
       row.status !== 'SYNCING' &&
       row.status !== 'REJECTED' &&
       row.nextAttemptAt <= now,
@@ -234,7 +244,7 @@ export async function getStatus(
     status: row.status,
     queuedAt: row.queuedAt,
     lastError: row.lastError,
-    ...(row.ownerMemberId === null && !isRecentOwnerlessResponse(row, now)
+    ...(row.ownerMemberId === null && !isRecentOwnerlessResponse(row, now, ownerMemberId)
       ? { needsOwner: true }
       : {}),
   }));

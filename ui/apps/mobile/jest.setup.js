@@ -62,6 +62,7 @@ jest.mock('@op-engineering/op-sqlite', () => {
             'syncedAt',
             'ownerMemberId',
             'ownerDeptId',
+            'answeredAsHint',
           ];
           const row = {};
           columns.forEach((column, index) => {

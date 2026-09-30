@@ -20,7 +20,8 @@ import Config from 'react-native-config';
 import * as Keychain from 'react-native-keychain';
 import { revokePushToken } from '../features/alerts/pushTokens';
 import { buildOidcConfig } from './config';
-import { clearMemberCache } from '../sync/memberCache';
+import { kvDelete, kvSet } from '../sync/kvStore';
+import { clearMemberCache, LAST_SESSION_SUB_KEY } from '../sync/memberCache';
 
 const KEYCHAIN_SERVER = 'boxalarm-auth';
 const FOREGROUND_RENEWAL_WINDOW_MS = 5 * 60_000;
@@ -150,7 +151,9 @@ export interface StoredSessionOwner {
 export async function readStoredSessionOwner(
   deps: AuthDeps = defaultDeps,
 ): Promise<StoredSessionOwner | null> {
-  const stored = await readStoredTokens(deps).catch(() => null);
+  // A keychain read error is thrown, not reported as "no session": the caller must tell "signed
+  // out" (refuse to queue an answer) from "couldn't read" (queue it with a hint) apart (R4-M1).
+  const stored = await readStoredTokens(deps);
   if (!stored) return null;
   const memberId = decodeMemberId(stored.idToken);
   return memberId ? { memberId, deptId: decodeDeptId(stored.idToken) } : null;
@@ -232,6 +235,9 @@ export function AuthProvider({
   depsRef.current = deps;
 
   const applyTokens = useCallback((tokens: StoredTokens | null) => {
+    const sub = tokens ? decodeMemberId(tokens.idToken) : null;
+    if (sub) void kvSet(LAST_SESSION_SUB_KEY, sub);
+    else void kvDelete(LAST_SESSION_SUB_KEY);
     setState({
       roles: tokens ? decodeRoles(tokens.idToken) : [],
       memberId: tokens ? decodeMemberId(tokens.idToken) : null,
@@ -343,6 +349,8 @@ export function AuthProvider({
         // otherwise (review m8). Queued writes in the outbox are kept: they are the member's
         // work and sync once someone signs in.
         if (memberId) await clearMemberCache(memberId).catch(() => undefined);
+        // Before the keychain reset, so no window exists where the hint outlives the session.
+        await kvDelete(LAST_SESSION_SUB_KEY);
         await depsRef.current.resetInternetCredentials({ server: KEYCHAIN_SERVER });
         applyTokens(null);
       },

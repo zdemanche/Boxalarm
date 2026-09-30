@@ -135,6 +135,24 @@ export async function answerFromNotification(
     await notifee
       .cancelTriggerNotification(dispatchNotificationId(payload.dispatchId))
       .catch((error: unknown) => console.warn('[push] cancelling the ring cap failed', error));
+    // No stored session means nobody is signed in on this phone: there is no one to send the
+    // answer as, and queuing it would credit it to whoever signs in next (R4-M1). Say so instead.
+    // A keychain read error is not "signed out": that answer is queued, ownerless, with a hint.
+    if (!syncManager.isConfigured()) {
+      const signedOut = await readStoredSessionOwner().then(
+        (stored) => stored === null,
+        () => false,
+      );
+      if (signedOut) {
+        await showAnswerNotification(
+          notificationId,
+          data,
+          answer,
+          "You're signed out on this phone. Open Boxalarm and sign in to answer, or use the radio.",
+        );
+        return;
+      }
+    }
     await ensureSyncConfigured();
     const outboxId = await queueAlertResponse(payload.dispatchId, answer, null);
     await showAnswerNotification(notificationId, data, answer, 'Saved on this phone. Sending…');

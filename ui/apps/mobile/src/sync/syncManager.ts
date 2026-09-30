@@ -1,6 +1,8 @@
 import NetInfo from '@react-native-community/netinfo';
 import { ApiError, apiRequest, type AuthTokenSource } from '../lib/apiClient';
 import type { SyncQueueStatus } from '../features/sync/types';
+import { kvGet } from './kvStore';
+import { LAST_SESSION_SUB_KEY } from './memberCache';
 import * as outbox from './outbox';
 import type { OutboxKind, OutboxRow } from './outbox';
 
@@ -128,12 +130,19 @@ function unitPath(unitId: string, suffix: string): string {
  * stored session's (headless task, cold start), else NULL - which is adoptable, and for an alert
  * answer sent automatically by the next signed-in member within the answer window.
  */
-async function ownerStamp(): Promise<{ ownerMemberId: string | null; ownerDeptId: string | null }> {
+async function ownerStamp(): Promise<{
+  ownerMemberId: string | null;
+  ownerDeptId: string | null;
+  answeredAsHint?: string | null;
+}> {
   if (owner.memberId) return { ownerMemberId: owner.memberId, ownerDeptId: owner.deptId };
   const resolved = ownerResolver ? await ownerResolver().catch(() => null) : null;
-  return resolved
-    ? { ownerMemberId: resolved.memberId, ownerDeptId: resolved.deptId }
-    : { ownerMemberId: null, ownerDeptId: null };
+  if (resolved) return { ownerMemberId: resolved.memberId, ownerDeptId: resolved.deptId };
+  // Ownerless (a keychain read failure): record which member's session the phone last had, so
+  // only that member's sign-in can auto-send it (R4-M1). Cleared on sign-out, so a signed-out
+  // phone records nothing.
+  const hint = await kvGet<string>(LAST_SESSION_SUB_KEY);
+  return { ownerMemberId: null, ownerDeptId: null, answeredAsHint: hint?.value ?? null };
 }
 
 async function enqueueAndDrain(

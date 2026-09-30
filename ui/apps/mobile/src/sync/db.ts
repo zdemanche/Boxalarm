@@ -3,7 +3,8 @@ import { open, type DB } from '@op-engineering/op-sqlite';
 let db: DB | null = null;
 let ownerColumns = true;
 
-const OWNER_COLUMNS = ['ownerMemberId', 'ownerDeptId'] as const;
+// answeredAsHint (R4-M1): the signed-in member when an ownerless answer was queued.
+const OWNER_COLUMNS = ['ownerMemberId', 'ownerDeptId', 'answeredAsHint'] as const;
 
 /**
  * Adds the owner columns (R2-M3) to an outbox created before they existed. Checks
