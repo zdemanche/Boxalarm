@@ -235,4 +235,28 @@ describe('M1: department ALERT_RULES reach the ladder the alerting plane runs', 
       },
     );
   });
+
+  // Review R2-m3: a value saved before the platform bounds existed is clamped here too.
+  it('clamps out-of-bounds rules (e.g. re-emitted from before the bounds) and logs it', async () => {
+    const { toAlertRulesCopy } = await import('./alertRulesCopyHandler.js');
+    const adjustments: unknown[] = [];
+    expect(
+      toAlertRulesCopy(
+        {
+          escalationThresholdN: 1,
+          defaultRule: { minResponders: 500 },
+          toneLadder: { tone2AtSeconds: 400 },
+        },
+        adjustments as never,
+      ),
+    ).toEqual({
+      toneLadder: { escalationThresholdSeconds: 30 },
+      defaultRule: { minResponders: 100 },
+    });
+    expect(adjustments).toEqual([
+      { field: 'tone2AtSeconds', from: 400, to: null },
+      { field: 'escalationThresholdSeconds', from: 1, to: 30 },
+      { field: 'minResponders', from: 500, to: 100 },
+    ]);
+  });
 });

@@ -75,21 +75,76 @@ function positiveInteger(value: unknown): number | undefined {
  * The copy in the shape its readers read. Only fields the platform validator accepts are
  * carried; anything else is dropped (and the reader's default applies), never passed through.
  */
-export function toAlertRulesCopy(value: Record<string, unknown>): Record<string, unknown> {
+/**
+ * The same bounds the platform validator applies to a saved config (keep in step with the
+ * platform config schema): a value saved before those bounds existed - re-emitted by the
+ * backfill, say - is clamped here, never applied as is (review R2-m3: `escalationThresholdN: 1`
+ * would voice-call everyone a second after the page). Every adjustment is logged.
+ */
+const BOUNDS = {
+  escalationThresholdSeconds: [30, 900],
+  tone2AtSeconds: [60, 3600],
+  tone3AtSeconds: [120, 7200],
+  minResponders: [1, 100],
+} as const;
+const DEFAULT_TONE_2_AT_SECONDS = 180;
+const DEFAULT_TONE_3_AT_SECONDS = 360;
+
+type Adjustment = { readonly field: string; readonly from: number; readonly to: number | null };
+
+function bounded(
+  value: unknown,
+  field: keyof typeof BOUNDS,
+  adjustments: Adjustment[],
+): number | undefined {
+  const n = positiveInteger(value);
+  if (n === undefined) {
+    return undefined;
+  }
+  const [min, max] = BOUNDS[field];
+  const clamped = Math.min(Math.max(n, min), max);
+  if (clamped !== n) {
+    adjustments.push({ field, from: n, to: clamped });
+  }
+  return clamped;
+}
+
+export function toAlertRulesCopy(
+  value: Record<string, unknown>,
+  adjustments: Adjustment[] = [],
+): Record<string, unknown> {
   const toneLadderIn = asRecord(value.toneLadder) ?? {};
   const defaultRuleIn = asRecord(value.defaultRule) ?? {};
   const toneLadder: Record<string, number> = {};
-  const tone2AtSeconds = positiveInteger(toneLadderIn.tone2AtSeconds);
-  const tone3AtSeconds = positiveInteger(toneLadderIn.tone3AtSeconds);
+  let tone2AtSeconds = bounded(toneLadderIn.tone2AtSeconds, 'tone2AtSeconds', adjustments);
+  let tone3AtSeconds = bounded(toneLadderIn.tone3AtSeconds, 'tone3AtSeconds', adjustments);
+  // Tone 3 must follow tone 2 (counting the default for an omitted one); otherwise both fall
+  // back to the defaults rather than run the ladder out of order.
+  if (
+    (tone3AtSeconds ?? DEFAULT_TONE_3_AT_SECONDS) <= (tone2AtSeconds ?? DEFAULT_TONE_2_AT_SECONDS)
+  ) {
+    for (const [field, from] of [
+      ['tone2AtSeconds', tone2AtSeconds],
+      ['tone3AtSeconds', tone3AtSeconds],
+    ] as const) {
+      if (from !== undefined) adjustments.push({ field, from, to: null });
+    }
+    tone2AtSeconds = undefined;
+    tone3AtSeconds = undefined;
+  }
   // escalationThresholdN is the seconds before a member's voice escalation.
-  const escalationThresholdSeconds = positiveInteger(value.escalationThresholdN);
+  const escalationThresholdSeconds = bounded(
+    value.escalationThresholdN,
+    'escalationThresholdSeconds',
+    adjustments,
+  );
   if (tone2AtSeconds !== undefined) toneLadder.tone2AtSeconds = tone2AtSeconds;
   if (tone3AtSeconds !== undefined) toneLadder.tone3AtSeconds = tone3AtSeconds;
   if (escalationThresholdSeconds !== undefined) {
     toneLadder.escalationThresholdSeconds = escalationThresholdSeconds;
   }
   const defaultRule: Record<string, number | string[]> = {};
-  const minResponders = positiveInteger(defaultRuleIn.minResponders);
+  const minResponders = bounded(defaultRuleIn.minResponders, 'minResponders', adjustments);
   if (minResponders !== undefined) defaultRule.minResponders = minResponders;
   if (Array.isArray(defaultRuleIn.requiredQuals)) {
     defaultRule.requiredQuals = (defaultRuleIn.requiredQuals as unknown[]).filter(
@@ -108,6 +163,16 @@ async function writeCopy(
   update: AlertRulesUpdate,
 ): Promise<'applied' | 'stale'> {
   const deptId = toVerifiedDeptId({ deptId: update.deptId });
+  const adjustments: Adjustment[] = [];
+  const copy = toAlertRulesCopy(update.value, adjustments);
+  if (adjustments.length > 0) {
+    logInfo('alerting.alertRulesCopy.adjusted', {
+      deptId,
+      version: update.version,
+      adjustments,
+    });
+    emitOutcomeMetric(METRIC_NAMESPACE, 'AlertRulesCopyAdjusted');
+  }
   try {
     await client.send(
       new PutCommand({
@@ -119,7 +184,7 @@ async function writeCopy(
           deptId,
           sourceVersion: update.version,
           snapshotUpdatedAt: Date.parse(update.eventTime),
-          ...toAlertRulesCopy(update.value),
+          ...copy,
         },
         // Versions only move forward: a redelivered or out-of-order older config never
         // replaces a newer one.

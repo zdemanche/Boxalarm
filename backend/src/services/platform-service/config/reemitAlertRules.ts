@@ -12,9 +12,8 @@ import { DynamoDBDocumentClient, GetCommand, PutCommand } from '@aws-sdk/lib-dyn
  * PUT /platform/config does; the consumer then writes the copy (guarded on the config version,
  * so running it twice is harmless).
  *
- * Self-contained (AWS SDK only) so it runs directly under Node's type stripping:
- *   node src/services/platform-service/config/reemitAlertRules.ts \
- *     --table boxalarm-<env>-platform --dept <deptId> [--dept <deptId> ...]
+ * Run (bundled by esbuild first, so any supported Node - 22+ - works):
+ *   npm run reemit-alert-rules -- --table boxalarm-<env>-platform --dept <deptId> [--dept ...]
  */
 
 interface AlertRulesRow {
