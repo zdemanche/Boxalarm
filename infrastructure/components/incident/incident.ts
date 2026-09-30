@@ -104,7 +104,11 @@ export class Incident extends pulumi.ComponentResource {
         handler: LAMBDA_HANDLER,
         code: lambdaCode("incident-service", "create"),
         logGroup: args.logGroup,
-        environment: baseEnvironment,
+        // Cedar CreateIncidentReport (NERIS officer tier) - createIncident.ts withAuthorization.
+        environment: {
+          ...baseEnvironment,
+          VERIFIED_PERMISSIONS_POLICY_STORE_ID: args.policyStoreId,
+        },
         additionalPolicyStatements: pulumi
           .all([cmkStatement, vpStatement, args.incidentTableArn])
           .apply(([cmk, vp, tableArn]) => [

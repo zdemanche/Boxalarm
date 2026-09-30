@@ -370,6 +370,9 @@ export const NERIS_MEMBER_ACTIONS = [
   "EditIncidentExposures",
 ] as const;
 export const NERIS_OFFICER_ACTIONS = [
+  // Starting a report, from a dispatch or by hand (createIncident.ts): the officer who
+  // completes, locks and submits it also starts it (docs/decisions/2026-09-30-officers-start-reports.md).
+  "CreateIncidentReport",
   "LockIncidentReport",
   "SubmitIncidentReport",
   "ResubmitIncidentReport",
@@ -401,6 +404,7 @@ const NERIS_ACTION_RESOURCE: Record<
 > = {
   ValidateIncidentReport: "Incident",
   ViewNerisSchema: "Department",
+  CreateIncidentReport: "Department",
   EditIncidentModule: "Incident",
   EditIncidentExposures: "Incident",
   LockIncidentReport: "Incident",

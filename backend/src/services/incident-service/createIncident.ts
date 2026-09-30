@@ -1,5 +1,5 @@
-import type { APIGatewayProxyHandlerV2WithLambdaAuthorizer } from 'aws-lambda';
-import type { AuthorizerContext } from '../platform-service/authorizer/handler.js';
+import type { APIGatewayProxyResultV2 } from 'aws-lambda';
+import { withAuthorization, type CedarPrincipalContext, type GuardEvent } from '@boxalarm/authz';
 import type { IncidentEvent } from './authContext.js';
 import {
   emitIncidentMetric,
@@ -209,14 +209,22 @@ async function buildInputFromDispatch(
   };
 }
 
-export const handler: APIGatewayProxyHandlerV2WithLambdaAuthorizer<AuthorizerContext> = async (
-  event,
-) => {
+/**
+ * POST /api/v1/incidents — start a report, from a dispatch or by hand. Cedar
+ * CreateIncidentReport, the NERIS officer tier (OFFICER/CHIEF/ADMIN): the officer who completes,
+ * locks and submits a report also starts it (docs/decisions/2026-09-30-officers-start-reports.md).
+ * It was a hand-rolled CHIEF/ADMIN groups check while the web offered officers the button.
+ */
+async function inner(
+  guardEvent: GuardEvent,
+  principal: CedarPrincipalContext,
+): Promise<APIGatewayProxyResultV2> {
+  const event = guardEvent as unknown as IncidentEvent;
   const traceId = resolveTraceId(event.headers, event.requestContext.requestId);
 
-  let deptId, isAdmin, sub;
+  let deptId, sub;
   try {
-    ({ deptId, isAdmin, sub } = readAuthorizerContext(event));
+    ({ deptId, sub } = readAuthorizerContext(event));
   } catch (error) {
     console.error(
       JSON.stringify({
@@ -232,12 +240,11 @@ export const handler: APIGatewayProxyHandlerV2WithLambdaAuthorizer<AuthorizerCon
       traceId,
     );
   }
-
-  if (!isAdmin) {
+  if (sub !== principal.sub) {
     return problemResponse(
-      403,
-      'Forbidden',
-      'Creating an incident record requires an admin or chief role.',
+      401,
+      'Unauthorized',
+      'The authorization context is inconsistent.',
       traceId,
     );
   }
@@ -312,4 +319,11 @@ export const handler: APIGatewayProxyHandlerV2WithLambdaAuthorizer<AuthorizerCon
     emitIncidentMetric('IncidentCreateFailed');
     return problemResponse(503, 'Service Unavailable', 'Unable to create incident.', traceId);
   }
-};
+}
+
+export const handler = withAuthorization(inner, {
+  actionType: 'Boxalarm::Action',
+  actionId: 'CreateIncidentReport',
+  resourceType: 'Boxalarm::Department',
+  resourceId: (event) => event.requestContext.authorizer?.lambda?.deptId ?? '',
+});

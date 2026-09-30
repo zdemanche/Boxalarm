@@ -163,6 +163,7 @@ describe("Incident", () => {
   it("gives the submission Lambdas the incident table name and CMK access", async () => {
     const incident = await build();
     for (const lambda of [
+      incident.createLambda,
       incident.submitLambda,
       incident.submissionGetLambda,
       incident.submissionRetryLambda,
@@ -174,9 +175,10 @@ describe("Incident", () => {
   });
 
   // Security-web MINOR 2: submit, retry, the submission reads and exposures are Cedar-gated.
-  it("gives the Cedar-gated submission and exposure Lambdas the policy store and IsAuthorized", async () => {
+  it("gives the Cedar-gated create, submission and exposure Lambdas the policy store and IsAuthorized", async () => {
     const incident = await build();
     for (const lambda of [
+      incident.createLambda,
       incident.submitLambda,
       incident.submissionGetLambda,
       incident.submissionRetryLambda,

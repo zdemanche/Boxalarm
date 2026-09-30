@@ -13,9 +13,9 @@ import {
 import { ApiError } from '../../lib/apiClient';
 import { useOptionalConnectivity } from '../../sync/ConnectivityContext';
 
-// Starting a report creates it (createIncident.ts admits CHIEF/ADMIN); listing is the NERIS
-// officer tier (Cedar ListRecentDispatches: OFFICER/CHIEF/ADMIN).
-const CAN_START: readonly string[] = ['CHIEF', 'ADMIN'];
+// Listing dispatches and starting a report are both the NERIS officer tier (Cedar
+// ListRecentDispatches, CreateIncidentReport): OFFICER, CHIEF, ADMIN.
+const CAN_START: readonly string[] = ['OFFICER', 'CHIEF', 'ADMIN'];
 
 function when(epochSeconds: number): string {
   return new Date(epochSeconds * 1000).toLocaleString(undefined, {
@@ -189,11 +189,6 @@ export function ReportDispatchesScreen() {
             </Text>
             <Button label="Try again" onPress={() => void load()} />
           </View>
-        ) : null}
-        {!canStart ? (
-          <Text style={{ color: theme.fgMuted, fontSize: typeScale.body.size }}>
-            The chief or an administrator starts a report from a dispatch.
-          </Text>
         ) : null}
         <Text
           accessibilityRole="header"

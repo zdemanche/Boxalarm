@@ -10,7 +10,7 @@ import { DataTable, type DataTableColumn } from '../../components/ui/DataTable';
 import { StatusChip } from '../../components/ui/Chip';
 import { Checkbox, DatePicker, TextInput } from '../../components/ui/Field';
 import { PageHeader } from '../../components/ui/PageHeader';
-import { canListRecentDispatches } from '../../auth/roles';
+import { canListRecentDispatches, canStartIncidentReport } from '../../auth/roles';
 import { createIncidentFromDispatch, listRecentDispatches, searchIncidents } from './api';
 import { dateInputToEpoch, epochToDateInput, formatDate } from './format';
 import type { Incident, IncidentStatus, RecentDispatch, RecentDispatchPage } from './types';
@@ -151,11 +151,6 @@ function RecentDispatchesToReport({
           {recent.map(row)}
         </ul>
       )}
-      {!canStart ? (
-        <p className={styles.muted}>
-          The chief or an administrator starts a report from a dispatch.
-        </p>
-      ) : null}
       {older.length > 0 ? (
         <>
           <h3 style={{ margin: 0 }}>Older</h3>
@@ -189,9 +184,8 @@ export function IncidentsListPage() {
   const auth = useAuth();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
-  // Starting a report: createIncident.ts admits CHIEF/ADMIN (and the web has offered OFFICER).
-  const canCreate =
-    auth.roles.includes('CHIEF') || auth.roles.includes('OFFICER') || auth.roles.includes('ADMIN');
+  // Starting a report (Cedar CreateIncidentReport) and listing dispatches: the NERIS officer tier.
+  const canCreate = canStartIncidentReport(auth.roles);
   const canList = canListRecentDispatches(auth.roles);
 
   const now = Math.floor(Date.now() / 1000);

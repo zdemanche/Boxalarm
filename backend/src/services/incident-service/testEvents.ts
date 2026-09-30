@@ -48,6 +48,7 @@ export const MEMBER_AUTH = { sub: 'MBR-0099', deptId: 'NICHOLS', 'cognito:groups
 
 /** The deployed NERIS tiers (infrastructure cedar-policies.ts) for the actions faked below. */
 const NERIS_OFFICER_TIER_ACTIONS = new Set([
+  'CreateIncidentReport',
   'SubmitIncidentReport',
   'RetryIncidentSubmission',
   'ViewIncidentSubmission',

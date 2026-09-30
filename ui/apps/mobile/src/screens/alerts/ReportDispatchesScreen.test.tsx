@@ -102,16 +102,65 @@ test('older dispatches load with the cursor', async () => {
   expect(mockApiRequest.mock.calls[1]?.[0]).toBe('incidents/dispatches?cursor=c-1');
 });
 
-test('an officer sees the list but not Start, and offline says plainly it needs a connection', async () => {
+test('an officer can start a report (Cedar CreateIncidentReport, officer tier)', async () => {
   mockAuth = { roles: ['OFFICER'], getAccessToken: jest.fn(), renewSilently: jest.fn() };
+  mockApiRequest
+    .mockResolvedValueOnce(
+      page({
+        recentWindowHours: 72,
+        nextCursor: null,
+        dispatches: [
+          {
+            dispatchId: 'd-3',
+            incidentType: 'Alarm activation',
+            address: '7 Elm St',
+            dispatchedAt: now - 600,
+            report: null,
+          },
+        ],
+      }),
+    )
+    .mockResolvedValueOnce(page({ incidentId: 'd-3' }));
+
+  await render(<ReportDispatchesScreen />);
+  await act(async () => {
+    fireEvent.press(
+      await screen.findByRole('button', { name: 'Start report for Alarm activation at 7 Elm St' }),
+    );
+  });
+  expect(JSON.parse(mockApiRequest.mock.calls[1]?.[2].body as string)).toEqual({
+    dispatchId: 'd-3',
+  });
+});
+
+test('a member gets no Start button', async () => {
+  mockAuth = { roles: ['MEMBER'], getAccessToken: jest.fn(), renewSilently: jest.fn() };
+  mockApiRequest.mockResolvedValueOnce(
+    page({
+      recentWindowHours: 72,
+      nextCursor: null,
+      dispatches: [
+        {
+          dispatchId: 'd-4',
+          incidentType: 'MVA',
+          address: '1 Oak',
+          dispatchedAt: now - 60,
+          report: null,
+        },
+      ],
+    }),
+  );
+  await render(<ReportDispatchesScreen />);
+  expect(await screen.findByText('No report yet')).toBeTruthy();
+  expect(screen.queryByRole('button', { name: /Start report/ })).toBeNull();
+});
+
+test('offline says plainly it needs a connection and sends nothing', async () => {
   mockOnline = false;
 
   await render(<ReportDispatchesScreen />);
 
   expect(await screen.findByText(/You're offline/)).toBeTruthy();
-  expect(
-    screen.getByText('The chief or an administrator starts a report from a dispatch.'),
-  ).toBeTruthy();
   expect(mockApiRequest).not.toHaveBeenCalled();
   expect(screen.queryByRole('button', { name: /Start report/ })).toBeNull();
 });

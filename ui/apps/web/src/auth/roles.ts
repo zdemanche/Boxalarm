@@ -99,8 +99,13 @@ export function primaryRole(roles: readonly Role[]): Role {
   return ROLE_PRIORITY.find((role) => roles.includes(role)) ?? 'MEMBER';
 }
 
-/** The department's recent dispatches to report on (Cedar ListRecentDispatches, the NERIS
- * officer tier): OFFICER, CHIEF, ADMIN. */
+/** The department's recent dispatches to report on, and starting a report from one (Cedar
+ * ListRecentDispatches and CreateIncidentReport, the NERIS officer tier): OFFICER, CHIEF, ADMIN. */
 export function canListRecentDispatches(roles: readonly Role[]): boolean {
   return (['OFFICER', 'CHIEF', 'ADMIN'] as const).some((r) => roles.includes(r));
+}
+
+/** Starting an incident report (Cedar CreateIncidentReport, NERIS officer tier). */
+export function canStartIncidentReport(roles: readonly Role[]): boolean {
+  return canListRecentDispatches(roles);
 }
