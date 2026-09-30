@@ -106,5 +106,39 @@ describe(
         .filter((name) => !watched.has(name));
       expect(unwatched).toEqual([]);
     });
+
+    it("every Scheduler target has a retry policy and a DLQ its role may write (m2)", () => {
+      const schedules = resourcesOfType("aws:scheduler/schedule:Schedule");
+      expect(schedules.length).toBeGreaterThanOrEqual(12);
+      const roleArnToName = new Map(
+        resourcesOfType("aws:iam/role:Role").map((r) => [
+          `arn:aws:iam::${ACCOUNT_ID}:role/${(r.inputs.name as string | undefined) ?? r.name}`,
+          `${r.name}-id`,
+        ]),
+      );
+      const problems = schedules.flatMap((schedule) => {
+        const target = schedule.inputs.target as {
+          roleArn: string;
+          retryPolicy?: unknown;
+          deadLetterConfig?: { arn: string };
+        };
+        const name = schedule.inputs.name as string;
+        if (target.deadLetterConfig === undefined || target.retryPolicy === undefined) {
+          return [`${name}: no DLQ/retry policy`];
+        }
+        const roleId = roleArnToName.get(target.roleArn);
+        const canWrite = resourcesOfType("aws:iam/rolePolicy:RolePolicy")
+          .filter((p) => p.inputs.role === roleId)
+          .flatMap((p) => policyStatements(p))
+          .some(
+            (st) =>
+              st.Effect === "Allow" &&
+              [st.Action].flat().includes("sqs:SendMessage") &&
+              [st.Resource].flat().includes(target.deadLetterConfig!.arn),
+          );
+        return canWrite ? [] : [`${name}: role cannot write its DLQ`];
+      });
+      expect(problems).toEqual([]);
+    });
   },
 );

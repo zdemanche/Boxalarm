@@ -2,6 +2,7 @@ import * as pulumi from "@pulumi/pulumi";
 import * as aws from "@pulumi/aws";
 import { ServiceLambda } from "../observability/service-lambda";
 import { ServiceLogGroup } from "../observability/service-log-group";
+import { ScheduleDeadLetter } from "../shared/schedule-dead-letter";
 import { requireEnv } from "../shared/env";
 import { lambdaCode, LAMBDA_HANDLER } from "../shared/lambda-code";
 import { grantAlertingCmk } from "./alerting-cmk";
@@ -108,13 +109,27 @@ export class EligibilityStaleness extends pulumi.ComponentResource {
       { parent: this },
     );
 
+    const deadLetter = new ScheduleDeadLetter(
+      `${name}-schedule-dead-letter`,
+      {
+        queueName: `boxalarm-${env}-alerting-eligibility-staleness-scheduler-dlq`,
+        schedulerRole,
+        alarmActions: [args.pageTopicArn],
+      },
+      { parent: this },
+    );
+
     this.schedule = new aws.scheduler.Schedule(
       `${name}-schedule`,
       {
         name: `boxalarm-${env}-alerting-${deptId}-eligibility-staleness`,
         scheduleExpression: "rate(5 minutes)",
         flexibleTimeWindow: { mode: "OFF" },
-        target: { arn: this.lambda.function.arn, roleArn: schedulerRole.arn },
+        target: {
+          arn: this.lambda.function.arn,
+          roleArn: schedulerRole.arn,
+          ...deadLetter.targetConfig,
+        },
       },
       { parent: this },
     );

@@ -5,6 +5,7 @@ import { ServiceLogGroup } from "../observability/service-log-group";
 import { IamPolicyStatement } from "../observability/observability-policy";
 import { nerisClientPolicyStatements } from "../neris/neris-config";
 import { lambdaCode, LAMBDA_HANDLER } from "../shared/lambda-code";
+import { ScheduleDeadLetter } from "../shared/schedule-dead-letter";
 import { requireEnv } from "../shared/env";
 
 export interface NerisSyncArgs {
@@ -157,6 +158,15 @@ export class NerisSync extends pulumi.ComponentResource {
       );
       lambdas[job.key] = lambda;
 
+      const deadLetter = new ScheduleDeadLetter(
+        `${name}-${job.key}-schedule-dead-letter`,
+        {
+          queueName: `boxalarm-${env}-incident-${job.key}-scheduler-dlq`,
+          schedulerRole: this.schedulerRole,
+          alarmActions: [args.chiefNotificationTopicArn],
+        },
+        { parent: this },
+      );
       this.schedules.push(
         new aws.scheduler.Schedule(
           `${name}-${job.key}-schedule`,
@@ -167,7 +177,11 @@ export class NerisSync extends pulumi.ComponentResource {
               ? { scheduleExpressionTimezone: job.scheduleExpressionTimezone }
               : {}),
             flexibleTimeWindow: { mode: "OFF" },
-            target: { arn: lambda.function.arn, roleArn: this.schedulerRole.arn },
+            target: {
+              arn: lambda.function.arn,
+              roleArn: this.schedulerRole.arn,
+              ...deadLetter.targetConfig,
+            },
           },
           { parent: this },
         ),
