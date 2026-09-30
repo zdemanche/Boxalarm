@@ -21,10 +21,16 @@ import {
   buildChecklistAuditEntry,
   buildChecklistIdempotencyLockItem,
   buildChecklistRunItem,
+  enforceCriticalItems,
   parseChecklistRunItem,
   validateSubmitCheckBody,
 } from './checklistRun.js';
-import { resolveApparatusIdByUnitId } from './checklistResolution.js';
+import {
+  resolveApparatusIdByUnitId,
+  resolveChecklistTemplateForUnit,
+  resolveDepartmentDefaultTemplate,
+  type ChecklistTemplate,
+} from './checklistResolution.js';
 import { logError } from './logger.js';
 import {
   apparatusNotFoundProblem,
@@ -36,6 +42,18 @@ interface PostChecksDeps {
   readonly client: DynamoDBDocumentClient;
   readonly tableName: string;
   readonly now: () => number;
+}
+
+/** The sheet the unit is checked against now: its own template, else the department default. */
+async function currentSheet(
+  deps: PostChecksDeps,
+  deptId: Parameters<typeof resolveApparatusIdByUnitId>[2],
+  apparatusId: string,
+): Promise<ChecklistTemplate | undefined> {
+  return (
+    (await resolveChecklistTemplateForUnit(deps.client, deps.tableName, deptId, apparatusId)) ??
+    (await resolveDepartmentDefaultTemplate(deps.client, deps.tableName, deptId))
+  );
 }
 
 const CHECK_TRANSACT_INDEX = 0;
@@ -111,7 +129,25 @@ async function postChecks(
       return apparatusNotFoundProblem(traceId);
     }
 
-    const item = buildChecklistRunItem(deptId, apparatusId, validation.value);
+    // Critical items (review minor 5). Judged only against the sheet the run was answered on:
+    // when the sheet has changed since (the templateId no longer matches), there is no telling
+    // which of the run's items were critical, so the run is kept as sent.
+    operation = 'resolveSheet';
+    const sheet = await currentSheet(deps, deptId, apparatusId);
+    let run = validation.value;
+    if (sheet && sheet.templateId === run.templateId) {
+      const critical = new Set(sheet.items.filter((i) => i.critical).map((i) => i.code));
+      const enforced = enforceCriticalItems(run.itemResults, critical);
+      if (enforced.errors.length > 0) {
+        emitOutcomeMetric('Boxalarm/apparatus-service', 'SubmitCheckCriticalRefused');
+        return validationProblem(traceId, enforced.errors);
+      }
+      run = { ...run, itemResults: enforced.itemResults };
+    } else if (sheet) {
+      emitOutcomeMetric('Boxalarm/apparatus-service', 'SubmitCheckSheetChanged');
+    }
+
+    const item = buildChecklistRunItem(deptId, apparatusId, run);
     const checkSk = item.sk as string;
     const lockItem = buildChecklistIdempotencyLockItem(
       deptId,

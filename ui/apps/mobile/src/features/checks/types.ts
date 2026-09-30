@@ -33,6 +33,9 @@ export interface ItemResult {
   code: string;
   pass: boolean;
   note?: string;
+  /** How it was answered: on its own, or by "Mark the other N OK". The server refuses BULK (or
+   * no answer) on an item the sheet marks critical. */
+  answeredBy: 'ITEM' | 'BULK';
 }
 
 export interface ChecklistRunSubmission {

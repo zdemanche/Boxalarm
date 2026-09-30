@@ -18,7 +18,7 @@ test('submitChecklistRun resolves without throwing (optimistic local-first write
       apparatusId: 'APP-ENGINE-2',
       templateId: 'CT-01',
       durationSeconds: 74,
-      itemResults: [{ code: 'TIRES', pass: true }],
+      itemResults: [{ code: 'TIRES', pass: true, answeredBy: 'ITEM' }],
       idempotencyKey: 'check-test-1',
     }),
   ).resolves.toBeUndefined();

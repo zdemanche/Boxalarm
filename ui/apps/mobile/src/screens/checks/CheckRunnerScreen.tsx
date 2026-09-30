@@ -62,6 +62,8 @@ interface CheckDraft {
   readonly notes: Record<string, string>;
   /** The captured photo per item (its local file), so it can ride on the defect it backs. */
   readonly photos: Record<string, CapturedPhoto>;
+  /** Items passed by "Mark the other N OK" (absent in drafts from before it was kept). */
+  readonly bulk?: Record<string, true>;
 }
 
 interface CompletedSummary {
@@ -142,6 +144,8 @@ export function CheckRunnerScreen() {
   const [templateAttempt, setTemplateAttempt] = useState(0);
   const [hydrated, setHydrated] = useState(false);
   const [results, setResults] = useState<Record<string, boolean>>({});
+  // Items answered by "Mark the other N OK" rather than on their own (sent as answeredBy).
+  const [bulk, setBulk] = useState<Record<string, true>>({});
   const [severities, setSeverities] = useState<Record<string, DefectSeverity>>({});
   const [notes, setNotes] = useState<Record<string, string>>({});
   const [photosCaptured, setPhotosCaptured] = useState<Record<string, CapturedPhoto>>({});
@@ -206,6 +210,7 @@ export function CheckRunnerScreen() {
           Object.keys(draft.value.results).length > 0
         ) {
           setResults(draft.value.results);
+          setBulk(draft.value.bulk ?? {});
           setSeverities(draft.value.severities);
           setNotes(draft.value.notes);
           // Drafts from before photos were kept stored `true`; those have no file to send.
@@ -255,6 +260,7 @@ export function CheckRunnerScreen() {
       severities,
       notes,
       photos: photosCaptured,
+      bulk,
     };
     if (draftKey) void kvSet(draftKey, draft);
   }, [
@@ -265,6 +271,7 @@ export function CheckRunnerScreen() {
     severities,
     notes,
     photosCaptured,
+    bulk,
     startedAt,
     idempotencyKey,
     draftKey,
@@ -286,6 +293,12 @@ export function CheckRunnerScreen() {
   const answer = useCallback((code: string, pass: boolean, knownSeverity?: DefectSeverity) => {
     setSubmitError(null);
     setResults((prev) => ({ ...prev, [code]: pass }));
+    setBulk((prev) => {
+      if (!prev[code]) return prev;
+      const next = { ...prev };
+      delete next[code];
+      return next;
+    });
     if (!pass) {
       // A known defect starts at its reported severity, so failing it again adds nothing unless
       // the member raises it or adds a note or photo.
@@ -381,6 +394,11 @@ export function CheckRunnerScreen() {
       for (const item of markableAsOk) next[item.code] = true;
       return next;
     });
+    setBulk((prev) => {
+      const next = { ...prev };
+      for (const item of markableAsOk) next[item.code] = true;
+      return next;
+    });
     AccessibilityInfo.announceForAccessibility(
       `${markableAsOk.length} items marked Pass. ${total - unanswered.length + markableAsOk.length} of ${total} checked.`,
     );
@@ -402,6 +420,7 @@ export function CheckRunnerScreen() {
         code: item.code,
         pass: results[item.code] ?? false,
         ...(note ? { note } : {}),
+        answeredBy: bulk[item.code] ? 'BULK' : 'ITEM',
       };
     });
     const failedItems = template.items.filter((item) => results[item.code] === false);

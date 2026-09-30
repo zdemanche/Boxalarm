@@ -122,6 +122,24 @@ test('critical items are never included in bulk OK', async () => {
     fireEvent.press(await findByText('Submit check — 1 unanswered'));
   });
   expect((await screen.findByRole('alert')).props.children).toMatch(/Answer 1 more item.*Brakes/);
+
+  // Answered on its own, the critical item goes as ITEM; the bulk-passed one as BULK.
+  const submitSpy = jest.spyOn(mockChecksRepository, 'submitChecklistRun');
+  const brakesPass = (await screen.findAllByRole('radio')).filter(
+    (r) => r.props.accessibilityLabel === 'Pass',
+  )[1]!;
+  await act(async () => {
+    fireEvent.press(brakesPass);
+  });
+  await act(async () => {
+    fireEvent.press(await findByText('Submit check'));
+  });
+  expect(submitSpy.mock.calls[0]?.[0].itemResults).toEqual([
+    { code: 'A', pass: true, answeredBy: 'ITEM' },
+    { code: 'B', pass: true, answeredBy: 'ITEM' },
+    { code: 'C', pass: true, answeredBy: 'BULK' },
+  ]);
+  submitSpy.mockRestore();
   spy.mockRestore();
 });
 
@@ -183,6 +201,7 @@ test('a failed item becomes a pre-filled defect report on submit, so it reaches 
     code: 'TIRES',
     pass: false,
     note: 'Sidewall cut, left front',
+    answeredBy: 'ITEM',
   });
   expect(await findByText('Reported to the apparatus officer:')).toBeTruthy();
   expect(await findByText('✕ Tires and wheels — Out of service now')).toBeTruthy();

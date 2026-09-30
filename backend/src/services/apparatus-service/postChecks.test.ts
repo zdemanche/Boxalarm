@@ -4,6 +4,7 @@ import { TransactionCanceledException } from '@aws-sdk/client-dynamodb';
 import {
   GetCommand,
   QueryCommand,
+  ScanCommand,
   TransactWriteCommand,
   type DynamoDBDocumentClient,
 } from '@aws-sdk/lib-dynamodb';
@@ -72,9 +73,15 @@ function keyOf(pk: string, sk: string): string {
   return `${pk}#${sk}`;
 }
 
-function statefulDynamoClient(apparatusExists: boolean): DynamoDBDocumentClient {
+function statefulDynamoClient(
+  apparatusExists: boolean,
+  sheet?: Record<string, unknown>,
+): DynamoDBDocumentClient {
   const store = new Map<string, Record<string, unknown>>();
   const send = vi.fn((command: unknown) => {
+    if (command instanceof ScanCommand) {
+      return Promise.resolve({ Items: sheet ? [sheet] : [] });
+    }
     if (command instanceof QueryCommand) {
       return Promise.resolve(apparatusExists ? { Items: [{ pk: APPARATUS_PK }] } : { Items: [] });
     }
@@ -120,6 +127,9 @@ function fakeDynamoClient(options: {
   readonly getResponses?: Record<string, Record<string, unknown>>;
 }): DynamoDBDocumentClient {
   const send = vi.fn((command: unknown) => {
+    if (command instanceof ScanCommand) {
+      return Promise.resolve({ Items: [] });
+    }
     if (command instanceof QueryCommand) {
       return Promise.resolve(
         options.apparatusExists ? { Items: [{ pk: APPARATUS_PK }] } : { Items: [] },
@@ -442,5 +452,68 @@ describe('postChecks handler', () => {
     expect(result).toMatchObject({ statusCode: 503 });
     const [lastCall] = logErrorSpy.mock.calls.at(-1) ?? [];
     expect(lastCall?.message).toContain('table throttled');
+  });
+
+  describe('critical items (review minor 5)', () => {
+    const SHEET = {
+      pk: 'DEPT#dept-001#CHECKLIST_TEMPLATE#template-1',
+      sk: 'METADATA',
+      name: 'Engine',
+      applicableApparatusIds: ['apparatus-1'],
+      items: [
+        { code: 'BRAKES', label: 'Brakes', requiresPhoto: false, critical: true },
+        { code: 'LIGHTS', label: 'Lights', requiresPhoto: false },
+      ],
+    };
+
+    async function submit(itemResults: unknown[], templateId = 'template-1') {
+      const client = statefulDynamoClient(true, SHEET);
+      const handler = (await importHandler())({
+        client,
+        authzClient: fakeAuthzClient('ALLOW'),
+        now: NOW,
+      });
+      const result = await handler(buildEvent(validBody({ itemResults, templateId }), 'ENGINE-2'));
+      return { result, client };
+    }
+
+    it('refuses a run that passed a critical item in bulk, or without saying how', async () => {
+      const bulk = await submit([
+        { code: 'BRAKES', pass: true, answeredBy: 'BULK' },
+        { code: 'LIGHTS', pass: true, answeredBy: 'ITEM' },
+      ]);
+      expect(bulk.result).toMatchObject({ statusCode: 400 });
+      expect((bulk.result as { body: string }).body).toContain('itemResults[0].answeredBy');
+
+      const unsaid = await submit([
+        { code: 'BRAKES', pass: true },
+        { code: 'LIGHTS', pass: true },
+      ]);
+      expect(unsaid.result).toMatchObject({ statusCode: 400 });
+
+      const missing = await submit([{ code: 'LIGHTS', pass: true, answeredBy: 'BULK' }]);
+      expect(missing.result).toMatchObject({ statusCode: 400 });
+      expect((missing.result as { body: string }).body).toContain('critical item BRAKES');
+    });
+
+    it('accepts critical items answered on their own, bulk for the rest, and records which were critical', async () => {
+      const { result, client } = await submit([
+        { code: 'BRAKES', pass: false, answeredBy: 'ITEM' },
+        { code: 'LIGHTS', pass: true, answeredBy: 'BULK' },
+      ]);
+      expect(result).toMatchObject({ statusCode: 201 });
+      expect(findChecklistRunItem(client).itemResults).toEqual([
+        { code: 'BRAKES', pass: false, note: null, answeredBy: 'ITEM', critical: true },
+        { code: 'LIGHTS', pass: true, note: null, answeredBy: 'BULK' },
+      ]);
+    });
+
+    it('keeps a run answered on a sheet that has since changed, as sent', async () => {
+      const { result } = await submit(
+        [{ code: 'BRAKES', pass: true, answeredBy: 'BULK' }],
+        'old-sheet',
+      );
+      expect(result).toMatchObject({ statusCode: 201 });
+    });
   });
 });
