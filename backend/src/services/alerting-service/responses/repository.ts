@@ -22,7 +22,7 @@ export interface RecordResponseInput {
   readonly dispatchId: string;
   readonly memberId: string;
   readonly ackStatus: ResponseAckStatus;
-  /** Minutes; null when unknown (always null for NOT_RESPONDING). */
+  /** Expected arrival time, epoch seconds; null when unknown (always null for NOT_RESPONDING). */
   readonly eta: number | null;
   readonly assignedApparatusId: string | null;
   /** Epoch seconds the member answered: DISPATCH_RESPONSE_RECORD.answeredAt, roster ackAt. */

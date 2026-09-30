@@ -31,6 +31,10 @@ interface RecordResponseBody {
   readonly answeredAtMs?: number;
 }
 
+/** An ETA is an arrival time: not long past (clock skew), not more than a day ahead. */
+const MAX_ETA_PAST_SECONDS = 60 * 60;
+const MAX_ETA_AHEAD_SECONDS = 24 * 60 * 60;
+
 const CLIENT_ANSWER_ID_PATTERN = /^[A-Za-z0-9._:-]{1,128}$/;
 /** An answer queued offline is still ordered by when it was given - within reason. */
 const MAX_ANSWER_AGE_MS = 24 * 60 * 60 * 1000;
@@ -107,6 +111,9 @@ function parseBody(
   // DIRECT_TO_SCENE answer without one is recorded with eta null and shown as unknown - never
   // rejected: a 400 here would drop the one signal that someone is coming, e.g. from a
   // lock-screen action that has no ETA to give. A provided value must still be valid.
+  // The unit is the expected ARRIVAL TIME in epoch seconds - what the app sends
+  // (now + minutes * 60) and renders (review MINOR-5). A small number is a duration in
+  // minutes from a client that has the unit wrong; it is refused rather than shown as 1970.
   const eta = body.eta;
   if (ackStatus === 'NOT_RESPONDING') {
     if (eta !== undefined && eta !== null) {
@@ -115,9 +122,14 @@ function parseBody(
   } else if (
     eta !== undefined &&
     eta !== null &&
-    (typeof eta !== 'number' || !Number.isInteger(eta) || eta <= 0)
+    (typeof eta !== 'number' ||
+      !Number.isInteger(eta) ||
+      eta < Math.floor(receivedAtMs / 1000) - MAX_ETA_PAST_SECONDS ||
+      eta > Math.floor(receivedAtMs / 1000) + MAX_ETA_AHEAD_SECONDS)
   ) {
-    throw new Error('eta, if provided, must be a positive integer (minutes)');
+    throw new Error(
+      'eta, if provided, must be the expected arrival time in epoch seconds, within the next 24 hours',
+    );
   }
 
   const assignedApparatusId = body.assignedApparatusId;

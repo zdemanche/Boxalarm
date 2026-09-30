@@ -11,9 +11,10 @@ The architecture asks for "response confirmation … with ETA" (F1.6). Its data 
 Refusing costs more than it protects. A 400 on a RESPONDING answer drops the one signal that someone is coming. That can happen from a lock-screen action button, or from any client with no ETA to give. The tone ladder counts answers, not ETAs, so a null ETA never changes whether tone 2 or 3 fires.
 
 - If an ETA is absent or null, it is recorded as `null` and shown as unknown.
-- The app defaults to 10 minutes, so it normally sends one.
-- A value that is provided must be a positive whole number of minutes.
+- **The unit is the expected arrival time, in epoch seconds.** The only client, the mobile app, sends `now + minutes × 60` (defaulting to 10 minutes) and renders it as a time. The web app does not send or render an ETA.
+- A value that is provided must be a whole number no more than an hour in the past and no more than 24 hours ahead. A small number, such as a duration in minutes from a client with the unit wrong, is refused. It is not shown as a time in 1970.
 - An ETA is still refused on NOT_RESPONDING.
+- `docs/architecture.md` still describes the roster's and response record's `eta` as "minutes". That is left as is because the file is hash-guarded (editing it makes `docs/architecture.compiled/` stale). Fold the correction into the next architecture revision.
 
 ## Ordering
 

@@ -51,6 +51,11 @@ beforeEach(() => {
   vi.clearAllMocks();
 });
 
+/** An arrival time `minutes` from now, in epoch seconds - the unit the app sends. */
+function etaIn(minutes: number): number {
+  return Math.floor(Date.now() / 1000) + minutes * 60;
+}
+
 function recorded(
   answer: Partial<{ ackStatus: string; eta: number | null }> = {},
   roster: 'APPLIED' | 'SUPERSEDED' = 'APPLIED',
@@ -92,7 +97,7 @@ describe('responses handler', () => {
   });
 
   it('returns 400 when ackStatus is missing', async () => {
-    const result = (await handler(buildEvent({ body: JSON.stringify({ eta: 6 }) }))) as {
+    const result = (await handler(buildEvent({ body: JSON.stringify({ eta: etaIn(6) }) }))) as {
       statusCode: number;
     };
     expect(result.statusCode).toBe(400);
@@ -101,7 +106,7 @@ describe('responses handler', () => {
 
   it('returns 400 when ackStatus is not a recognized enum value', async () => {
     const result = (await handler(
-      buildEvent({ body: JSON.stringify({ ackStatus: 'MAYBE', eta: 6 }) }),
+      buildEvent({ body: JSON.stringify({ ackStatus: 'MAYBE', eta: etaIn(6) }) }),
     )) as { statusCode: number };
     expect(result.statusCode).toBe(400);
   });
@@ -126,12 +131,17 @@ describe('responses handler', () => {
     },
   );
 
-  it.each([[0], [-3], [2.5]])('returns 400 for a provided but invalid eta %j', async (eta) => {
-    const result = (await handler(
-      buildEvent({ body: JSON.stringify({ ackStatus: 'RESPONDING', eta }) }),
-    )) as { statusCode: number };
-    expect(result.statusCode).toBe(400);
-  });
+  // Review MINOR-5: the unit is the arrival time in epoch seconds (what the app sends); a
+  // duration in minutes (10) is refused rather than shown as a time in 1970.
+  it.each([[0], [-3], [2.5], [10], [4_000_000_000]])(
+    'returns 400 for a provided but invalid eta %j',
+    async (eta) => {
+      const result = (await handler(
+        buildEvent({ body: JSON.stringify({ ackStatus: 'RESPONDING', eta }) }),
+      )) as { statusCode: number };
+      expect(result.statusCode).toBe(400);
+    },
+  );
 
   it('returns 400 when eta is wrong-typed', async () => {
     const result = (await handler(
@@ -172,7 +182,7 @@ describe('responses handler', () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-09-15T00:00:00.000Z'));
     vi.mocked(recordResponse).mockResolvedValue(recorded());
-    await handler(buildEvent({ body: JSON.stringify({ ackStatus: 'RESPONDING', eta: 6 }) }));
+    await handler(buildEvent({ body: JSON.stringify({ ackStatus: 'RESPONDING', eta: etaIn(6) }) }));
     expect(recordResponse).toHaveBeenCalledWith(
       expect.anything(),
       'alerting-table',
@@ -186,7 +196,7 @@ describe('responses handler', () => {
   it('returns 200 with the recorded response, using the caller sub as memberId (AC1, no impersonation)', async () => {
     vi.mocked(recordResponse).mockResolvedValue(recorded({ ackStatus: 'DIRECT_TO_SCENE', eta: 3 }));
     const result = (await handler(
-      buildEvent({ body: JSON.stringify({ ackStatus: 'DIRECT_TO_SCENE', eta: 3 }) }),
+      buildEvent({ body: JSON.stringify({ ackStatus: 'DIRECT_TO_SCENE', eta: etaIn(3) }) }),
     )) as { statusCode: number; body: string };
     expect(result.statusCode).toBe(200);
     expect(JSON.parse(result.body)).toMatchObject({
@@ -197,7 +207,11 @@ describe('responses handler', () => {
     expect(recordResponse).toHaveBeenCalledWith(
       expect.anything(),
       'alerting-table',
-      expect.objectContaining({ memberId: 'MBR-0012', ackStatus: 'DIRECT_TO_SCENE', eta: 3 }),
+      expect.objectContaining({
+        memberId: 'MBR-0012',
+        ackStatus: 'DIRECT_TO_SCENE',
+        eta: etaIn(3),
+      }),
     );
   });
 
@@ -205,7 +219,7 @@ describe('responses handler', () => {
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     vi.mocked(recordResponse).mockRejectedValue(new Error('table unavailable'));
     const result = (await handler(
-      buildEvent({ body: JSON.stringify({ ackStatus: 'RESPONDING', eta: 6 }) }),
+      buildEvent({ body: JSON.stringify({ ackStatus: 'RESPONDING', eta: etaIn(6) }) }),
     )) as { statusCode: number };
     expect(result.statusCode).toBe(503);
     expect(errorSpy).toHaveBeenCalled();
@@ -214,7 +228,7 @@ describe('responses handler', () => {
   it('emits a business metric on success', async () => {
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
     vi.mocked(recordResponse).mockResolvedValue(recorded());
-    await handler(buildEvent({ body: JSON.stringify({ ackStatus: 'RESPONDING', eta: 6 }) }));
+    await handler(buildEvent({ body: JSON.stringify({ ackStatus: 'RESPONDING', eta: etaIn(6) }) }));
     expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('ResponseConfirmed'));
   });
 
@@ -222,7 +236,7 @@ describe('responses handler', () => {
     vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
     vi.mocked(recordResponse).mockRejectedValue(new Error('table unavailable'));
-    await handler(buildEvent({ body: JSON.stringify({ ackStatus: 'RESPONDING', eta: 6 }) }));
+    await handler(buildEvent({ body: JSON.stringify({ ackStatus: 'RESPONDING', eta: etaIn(6) }) }));
     expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('ResponseConfirmFailed'));
   });
 
@@ -236,7 +250,7 @@ describe('responses handler', () => {
         buildEvent({
           body: JSON.stringify({
             ackStatus: 'RESPONDING',
-            eta: 6,
+            eta: etaIn(6),
             clientAnswerId: 'ans-1',
             answeredAtMs,
           }),
@@ -263,7 +277,7 @@ describe('responses handler', () => {
         buildEvent({
           body: JSON.stringify({
             ackStatus: 'RESPONDING',
-            eta: 6,
+            eta: etaIn(6),
             answeredAtMs: Date.parse('2026-09-15T01:00:00.000Z'),
           }),
         }),
@@ -281,7 +295,7 @@ describe('responses handler', () => {
       await handler(
         buildEvent({
           headers: { 'Idempotency-Key': 'hdr-1' },
-          body: JSON.stringify({ ackStatus: 'RESPONDING', eta: 6 }),
+          body: JSON.stringify({ ackStatus: 'RESPONDING', eta: etaIn(6) }),
         }),
       );
       expect(recordResponse).toHaveBeenCalledWith(
@@ -299,7 +313,7 @@ describe('responses handler', () => {
       const result = (await handler(
         buildEvent({
           headers,
-          body: JSON.stringify({ ackStatus: 'RESPONDING', eta: 6, ...extra }),
+          body: JSON.stringify({ ackStatus: 'RESPONDING', eta: etaIn(6), ...extra }),
         }),
       )) as { statusCode: number };
       expect(result.statusCode).toBe(400);
@@ -321,7 +335,7 @@ describe('responses handler', () => {
       );
       const result = (await handler(
         buildEvent({
-          body: JSON.stringify({ ackStatus: 'RESPONDING', eta: 6, clientAnswerId: 'ans-1' }),
+          body: JSON.stringify({ ackStatus: 'RESPONDING', eta: etaIn(6), clientAnswerId: 'ans-1' }),
         }),
       )) as { statusCode: number; headers: Record<string, string>; body: string };
       expect(result.statusCode).toBe(200);
