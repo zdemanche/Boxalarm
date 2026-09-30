@@ -167,7 +167,7 @@ test('a keychain read failure queues the answer ownerless with a hint; only that
   await kvDelete(LAST_SESSION_SUB_KEY);
 });
 
-test('an ownerless answer older than 2 hours is not auto-sent: it is shown for Send or Discard', async () => {
+test('an ownerless answer older than the 2 h window is past its call: it is dropped, not sent', async () => {
   await store.insert({
     id: 'resp-old',
     kind: 'RESPONSE',
@@ -188,6 +188,7 @@ test('an ownerless answer older than 2 hours is not auto-sent: it is shown for S
     // One pre-release build stamped '' for "no member id": treated exactly like NULL.
     ownerMemberId: '',
     ownerDeptId: null,
+    answeredAsHint: 'member-k',
   });
   mockApiRequest.mockResolvedValue({ json: async () => ({}) });
   syncManager.configure(memberK, 'https://api.example.com');
@@ -195,18 +196,33 @@ test('an ownerless answer older than 2 hours is not auto-sent: it is shown for S
   await flush();
 
   expect(mockApiRequest).not.toHaveBeenCalled();
-  const status = await outbox.getStatus(null, 'member-k');
-  expect(status.items).toEqual([expect.objectContaining({ id: 'resp-old', needsOwner: true })]);
-  expect(status.heldForOtherMembers).toBe(0);
+  await expect(store.find('resp-old')).resolves.toBeUndefined();
+});
 
-  await syncManager.sendAsMe('resp-old');
-  await flush();
-  await flush();
-  expect(mockApiRequest).toHaveBeenCalledWith(
-    'alerting/dispatches/D-OLD/responses',
-    memberK,
-    expect.anything(),
-  );
+test('an owned answer is never dropped by the stale-answer rule, however old', async () => {
+  await store.insert({
+    id: 'resp-owned-old',
+    kind: 'RESPONSE',
+    label: 'Responding — D-OLD',
+    method: 'POST',
+    path: 'alerting/dispatches/D-OLD/responses',
+    body: '{}',
+    stage: 'CREATE',
+    photoLocalUri: null,
+    photoS3Key: null,
+    photoUploadUrl: null,
+    status: 'FAILED',
+    attempts: 1,
+    lastError: 'offline',
+    queuedAt: new Date(Date.now() - 3 * outbox.OWNERLESS_RESPONSE_WINDOW_MS).toISOString(),
+    nextAttemptAt: Date.now() + 60_000,
+    syncedAt: null,
+    ownerMemberId: 'member-k',
+    ownerDeptId: null,
+  });
+
+  expect(await outbox.discardStaleOwnerlessResponses(Date.now())).toBe(0);
+  expect(await store.find('resp-owned-old')).toBeDefined();
 });
 
 describe('owner-column migration on an existing outbox', () => {

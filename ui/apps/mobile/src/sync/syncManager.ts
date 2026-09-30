@@ -116,6 +116,7 @@ export function subscribe(listener: Listener): () => void {
 }
 
 async function notify(): Promise<void> {
+  await outbox.discardStaleOwnerlessResponses(Date.now());
   // The current (or last signed-in) member's view; nothing is sent without a signed-in session.
   const status = await outbox.getStatus(lastSyncAt, owner.memberId, Date.now());
   listeners.forEach((listener) => listener(status));

@@ -115,6 +115,33 @@ export function isRecentOwnerlessResponse(
   );
 }
 
+/**
+ * Drops ownerless alert answers queued longer ago than the answer window. The answer was given
+ * after the page arrived, so its dispatch is at least that old: past the alerting plane's active
+ * window (2 h, dispatches/list/repository.ts ACTIVE_WINDOW_SECONDS) and no longer on any roster
+ * that could use it, with no member it can be attributed to. Keeping it would only ask someone
+ * to decide whose stale answer it was. Not applied without owner columns, where every row reads
+ * ownerless. Returns how many were dropped.
+ */
+export async function discardStaleOwnerlessResponses(now: number): Promise<number> {
+  if (!db.outboxHasOwnerColumns()) return 0;
+  const rows = await store.all();
+  const stale = rows.filter(
+    (row) =>
+      row.ownerMemberId === null &&
+      row.kind === 'RESPONSE' &&
+      row.status !== 'SYNCING' &&
+      now - Date.parse(row.queuedAt) >= OWNERLESS_RESPONSE_WINDOW_MS,
+  );
+  for (const row of stale) {
+    console.warn(
+      `[outbox] dropping ownerless answer ${row.id}: its call is past the active window`,
+    );
+    await store.remove(row.id);
+  }
+  return stale.length;
+}
+
 /** Rows the signed-in member may send now: their own (R2-M3) and recent ownerless answers
  * (R3-C1). Another member's rows, and other ownerless rows, are held. */
 export async function listDrainable(
