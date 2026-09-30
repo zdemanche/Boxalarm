@@ -7,7 +7,7 @@ import notifee, {
 } from '@notifee/react-native';
 import { Platform } from 'react-native';
 import Config from 'react-native-config';
-import { createStoredTokenSource } from '../../auth/AuthContext';
+import { createStoredTokenSource, readStoredSessionOwner } from '../../auth/AuthContext';
 import * as outbox from '../../sync/outbox';
 import * as syncManager from '../../sync/syncManager';
 import { RESPONSE_NOT_RECORDED, RESPONSE_SUPERSEDED } from '../../sync/syncManager';
@@ -71,12 +71,28 @@ export async function registerNotificationCategories(): Promise<void> {
   }
 }
 
-/** A headless task has no AuthProvider: point the outbox at the stored session if nothing has. */
-function ensureSyncConfigured(): void {
+// Work queued anywhere without an AuthProvider-configured owner (this headless task, a cold
+// start) resolves its owner from the stored session instead of being stamped blank (R3-C1).
+syncManager.setOwnerResolver(() => readStoredSessionOwner());
+
+/**
+ * A headless task has no AuthProvider: point the outbox at the stored session if nothing has,
+ * with the member and department it belongs to, so the answer is stamped as theirs (R3-C1).
+ */
+async function ensureSyncConfigured(): Promise<void> {
   if (syncManager.isConfigured()) return;
   const apiBaseUrl = Config.API_BASE_URL;
   if (!apiBaseUrl) return;
-  syncManager.configure(createStoredTokenSource(), apiBaseUrl);
+  const owner = await readStoredSessionOwner().catch(() => null);
+  if (syncManager.isConfigured()) return;
+  syncManager.configure(
+    {
+      ...createStoredTokenSource(),
+      memberId: owner?.memberId ?? null,
+      deptId: owner?.deptId ?? null,
+    },
+    apiBaseUrl,
+  );
 }
 
 async function showAnswerNotification(
@@ -119,7 +135,7 @@ export async function answerFromNotification(
     await notifee
       .cancelTriggerNotification(dispatchNotificationId(payload.dispatchId))
       .catch((error: unknown) => console.warn('[push] cancelling the ring cap failed', error));
-    ensureSyncConfigured();
+    await ensureSyncConfigured();
     const outboxId = await queueAlertResponse(payload.dispatchId, answer, null);
     await showAnswerNotification(notificationId, data, answer, 'Saved on this phone. Sending…');
     await syncManager.drainAndSettle();

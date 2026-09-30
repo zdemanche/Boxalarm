@@ -14,8 +14,8 @@ export interface EnqueueInput {
   readonly path: string;
   readonly body: Record<string, unknown>;
   readonly photoLocalUri?: string;
-  /** The signed-in member (and department) whose work this is. Required: never guessed later. */
-  readonly ownerMemberId: string;
+  /** The member (and department) whose work this is; null only when no session could say. */
+  readonly ownerMemberId: string | null;
   readonly ownerDeptId: string | null;
 }
 
@@ -89,13 +89,32 @@ export async function find(id: string): Promise<OutboxRow | undefined> {
   return store.find(id);
 }
 
-/** Rows the signed-in member may send now: only their own (R2-M3). Another member's rows, and
- * rows with no recorded owner, are held. */
-export async function listDrainable(now: number, ownerMemberId: string): Promise<OutboxRow[]> {
+/**
+ * An alert answer never stranded by a missing owner (R3-C1): an ownerless RESPONSE queued on this
+ * phone within the answer window is the signed-in member's own (only a signed-in member's
+ * session answers from this phone) and sends automatically. Older ones wait for Send/Discard.
+ */
+export const OWNERLESS_RESPONSE_WINDOW_MS = 2 * 60 * 60 * 1000;
+
+export function isRecentOwnerlessResponse(row: OutboxRow, now: number): boolean {
+  return (
+    row.ownerMemberId === null &&
+    row.kind === 'RESPONSE' &&
+    now - Date.parse(row.queuedAt) < OWNERLESS_RESPONSE_WINDOW_MS
+  );
+}
+
+/** Rows the signed-in member may send now: their own (R2-M3) and recent ownerless answers
+ * (R3-C1). Another member's rows, and other ownerless rows, are held. */
+export async function listDrainable(
+  now: number,
+  ownerMemberId: string | null,
+): Promise<OutboxRow[]> {
   const rows = await store.all();
   return rows.filter(
     (row) =>
-      row.ownerMemberId === ownerMemberId &&
+      ((ownerMemberId !== null && row.ownerMemberId === ownerMemberId) ||
+        isRecentOwnerlessResponse(row, now)) &&
       row.status !== 'SYNCING' &&
       row.status !== 'REJECTED' &&
       row.nextAttemptAt <= now,
@@ -201,10 +220,12 @@ export async function advanceStage(
 export async function getStatus(
   lastSyncAt: string | null,
   ownerMemberId: string | null,
+  now: number = Date.now(),
 ): Promise<SyncQueueStatus> {
   const rows = await store.all();
   const visible = rows.filter(
-    (row) => row.ownerMemberId === null || row.ownerMemberId === ownerMemberId,
+    (row) =>
+      row.ownerMemberId === null || (ownerMemberId !== null && row.ownerMemberId === ownerMemberId),
   );
   const items: SyncItem[] = visible.map((row) => ({
     id: row.id,
@@ -213,7 +234,9 @@ export async function getStatus(
     status: row.status,
     queuedAt: row.queuedAt,
     lastError: row.lastError,
-    ...(row.ownerMemberId === null ? { needsOwner: true } : {}),
+    ...(row.ownerMemberId === null && !isRecentOwnerlessResponse(row, now)
+      ? { needsOwner: true }
+      : {}),
   }));
   return {
     items,

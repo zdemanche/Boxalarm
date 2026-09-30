@@ -78,7 +78,7 @@ test('a valid stored session lands on the AppTabs shell (Alerts · Checks · Sch
 });
 
 test('the authenticated shell shows the persistent sync-status banner above the tabs', async () => {
-  const idToken = `h.${base64url(JSON.stringify({ roles: ['MEMBER'] }))}.s`;
+  const idToken = `h.${base64url(JSON.stringify({ roles: ['MEMBER'], sub: 'member-app' }))}.s`;
   mockedGetInternetCredentials.mockResolvedValue({
     username: 'boxalarm-auth',
     password: JSON.stringify({
@@ -108,8 +108,8 @@ test('the authenticated shell shows the persistent sync-status banner above the 
     queuedAt: new Date().toISOString(),
     nextAttemptAt: Date.now() + 60_000,
     syncedAt: null,
-    // The signed-in session's member (this token has no sub, so the empty owner).
-    ownerMemberId: '',
+    // Queued by the signed-in member.
+    ownerMemberId: 'member-app',
     ownerDeptId: null,
   });
 

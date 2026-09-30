@@ -15,7 +15,7 @@ function problem(status: number, title: string): ApiError {
   return new ApiError({ type: 'about:blank', title, status, traceId: 't' });
 }
 
-const tokens = { getAccessToken: jest.fn(), renewSilently: jest.fn() };
+const tokens = { getAccessToken: jest.fn(), renewSilently: jest.fn(), memberId: 'm-test' };
 
 async function clearOutbox(): Promise<void> {
   const rows = await store.all();
@@ -162,7 +162,7 @@ test('the first drain after app start recovers a row left SYNCING by a killed pr
     freshApi.apiRequest.mockResolvedValue({ json: async () => ({}) });
 
     await freshOutbox.enqueue({
-      ownerMemberId: '',
+      ownerMemberId: 'm-test',
       ownerDeptId: null,
       id: 'orphan-1',
       kind: 'CHECKLIST_RUN',
@@ -233,6 +233,8 @@ const mockAddEventListener = NetInfo.addEventListener as jest.Mock;
 
 test('configuring tokens drains items that were queued while signed out', async () => {
   syncManager.configure(null, null);
+  // No configured session: the owner comes from the stored session (R3-C1).
+  syncManager.setOwnerResolver(async () => ({ memberId: 'm-test', deptId: null }));
   mockApiRequest.mockResolvedValue({ json: async () => ({}) });
 
   await syncManager.enqueueChecklistRun('ENGINE-2', 'check-signed-out', {});
@@ -244,6 +246,7 @@ test('configuring tokens drains items that were queued while signed out', async 
 
   expect(mockApiRequest).toHaveBeenCalledTimes(1);
   await expect(store.find('check-signed-out')).resolves.toBeUndefined();
+  syncManager.setOwnerResolver(null);
 });
 
 test('the reconnect listener is registered once while configured and removed on sign-out', async () => {
@@ -594,11 +597,11 @@ describe('attendance', () => {
     const markOff = { startAt: 1790000000, endAt: 1790086400, reason: 'Travel' };
     mockApiRequest.mockResolvedValueOnce({ json: async () => ({}) });
 
-    await syncManager.enqueueAvailability('availability-a', 'm-1', 'Mark unavailable', markOff);
+    await syncManager.enqueueAvailability('availability-a', 'm-test', 'Mark unavailable', markOff);
     await flush();
 
     expect(mockApiRequest).toHaveBeenCalledWith(
-      'personnel/members/m-1/availability',
+      'personnel/members/m-test/availability',
       tokens,
       expect.objectContaining({ method: 'POST', body: JSON.stringify(markOff) }),
     );
@@ -609,7 +612,7 @@ describe('attendance', () => {
   test('a 409 on a mark-off is REJECTED with a plain reason, not counted as delivered', async () => {
     mockApiRequest.mockRejectedValueOnce(problem(409, 'Conflict'));
 
-    await syncManager.enqueueAvailability('availability-b', 'm-1', 'Mark unavailable', {
+    await syncManager.enqueueAvailability('availability-b', 'm-test', 'Mark unavailable', {
       startAt: 1790000000,
       endAt: 1790020000,
     });
@@ -627,7 +630,7 @@ describe('attendance', () => {
       .mockRejectedValueOnce(new TypeError('Network request failed'))
       .mockRejectedValueOnce(problem(409, 'Conflict'));
 
-    await syncManager.enqueueAvailability('availability-lost', 'm-1', 'Mark unavailable', {
+    await syncManager.enqueueAvailability('availability-lost', 'm-test', 'Mark unavailable', {
       startAt: 1790000000,
       endAt: 1790020000,
     });
@@ -645,7 +648,7 @@ describe('attendance', () => {
   // R2-M1 (b): an older mark-off that was already sent may have landed; it is kept, not dropped.
   test('a correction keeps an older mark-off that was already attempted, and says both may stand', async () => {
     mockApiRequest.mockRejectedValueOnce(new TypeError('Network request failed'));
-    await syncManager.enqueueAvailability('availability-sent', 'm-1', 'Mark unavailable', {
+    await syncManager.enqueueAvailability('availability-sent', 'm-test', 'Mark unavailable', {
       startAt: 1790000000,
       endAt: 1790604800,
     });
@@ -655,7 +658,7 @@ describe('attendance', () => {
     syncManager.configure(null, null);
     const result = await syncManager.enqueueAvailability(
       'availability-fixed',
-      'm-1',
+      'm-test',
       'Mark unavailable',
       { startAt: 1790000020, endAt: 1790030000 },
     );
@@ -669,21 +672,21 @@ describe('attendance', () => {
   test('a row the drain has claimed for sending cannot be discarded, and vice versa', async () => {
     syncManager.configure(null, null);
     await outbox.enqueue({
-      ownerMemberId: '',
+      ownerMemberId: 'm-test',
       ownerDeptId: null,
       id: 'race-1',
       kind: 'AVAILABILITY',
       label: 'x',
-      path: 'personnel/members/m-1/availability',
+      path: 'personnel/members/m-test/availability',
       body: {},
     });
     await outbox.enqueue({
-      ownerMemberId: '',
+      ownerMemberId: 'm-test',
       ownerDeptId: null,
       id: 'race-2',
       kind: 'AVAILABILITY',
       label: 'x',
-      path: 'personnel/members/m-1/availability',
+      path: 'personnel/members/m-test/availability',
       body: {},
     });
 
@@ -699,10 +702,10 @@ describe('attendance', () => {
     const week = { startAt: 1790000000, endAt: 1790604800 };
     const tonight = { startAt: 1790000010, endAt: 1790030000 };
 
-    await syncManager.enqueueAvailability('availability-week', 'm-1', 'Mark unavailable', week);
+    await syncManager.enqueueAvailability('availability-week', 'm-test', 'Mark unavailable', week);
     const { replaced } = await syncManager.enqueueAvailability(
       'availability-tonight',
-      'm-1',
+      'm-test',
       'Mark unavailable',
       tonight,
     );
@@ -970,7 +973,7 @@ describe('alert responses (RESPONSE)', () => {
       queuedAt: '2026-01-01T00:00:00.000Z',
       nextAttemptAt: 0,
       syncedAt: null,
-      ownerMemberId: '',
+      ownerMemberId: 'm-test',
       ownerDeptId: null,
     });
     await store.insert({
@@ -990,7 +993,7 @@ describe('alert responses (RESPONSE)', () => {
       queuedAt: '2026-01-01T00:00:05.000Z',
       nextAttemptAt: 0,
       syncedAt: null,
-      ownerMemberId: '',
+      ownerMemberId: 'm-test',
       ownerDeptId: null,
     });
     mockApiRequest.mockResolvedValue({ json: async () => ({}) });

@@ -21,7 +21,9 @@ export function useSyncEngine(): void {
   authRef.current = auth;
 
   useEffect(() => {
-    const tokens = apiBaseUrl && isAuthenticated ? (authRef.current ?? null) : null;
+    // The session is passed even without an API base URL (dev builds) so the outbox knows whose
+    // work it holds; nothing drains without both (syncManager.drain).
+    const tokens = isAuthenticated ? (authRef.current ?? null) : null;
     syncManager.configure(tokens, apiBaseUrl || null);
   }, [apiBaseUrl, isAuthenticated, memberId]);
 }

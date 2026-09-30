@@ -136,6 +136,26 @@ async function writeStoredTokens(deps: AuthDeps, tokens: StoredTokens): Promise<
  * entry as AuthProvider and renews it the same way; never signs anyone out (an invalid refresh
  * token just yields null, and the answer stays queued for the next session).
  */
+export interface StoredSessionOwner {
+  readonly memberId: string;
+  readonly deptId: string | null;
+}
+
+/**
+ * Who the stored session belongs to (id token sub and custom:deptId), read straight from the
+ * keychain - for code with no AuthProvider (the headless notification task, a cold start before
+ * the provider has loaded) that queues work and must stamp its owner (R3-C1). Null when there is
+ * no stored session or the token has no sub.
+ */
+export async function readStoredSessionOwner(
+  deps: AuthDeps = defaultDeps,
+): Promise<StoredSessionOwner | null> {
+  const stored = await readStoredTokens(deps).catch(() => null);
+  if (!stored) return null;
+  const memberId = decodeMemberId(stored.idToken);
+  return memberId ? { memberId, deptId: decodeDeptId(stored.idToken) } : null;
+}
+
 export function createStoredTokenSource(deps: AuthDeps = defaultDeps) {
   let renewing: Promise<string | null> | null = null;
   const renewSilently = (): Promise<string | null> => {

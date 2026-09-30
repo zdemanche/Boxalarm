@@ -46,16 +46,28 @@ function rememberSynced(id: string): void {
  * Whose work this phone is queueing and sending (R2-M3). Read from the signed-in session the
  * token source belongs to (AuthContext's value carries memberId/deptId). Every row is stamped with
  * it at enqueue, and only rows stamped with the signed-in member are sent: member B signing in on
- * a station phone never sends member A's attendance, checks or mark-offs under B's token. Kept
- * after sign-out so it is always the last member who signed in; '' only where a session has no
- * member id (dev/test builds).
+ * a station phone never sends member A's attendance, checks or mark-offs under B's token.
  */
-let owner: { memberId: string; deptId: string | null } = { memberId: '', deptId: null };
+interface Owner {
+  readonly memberId: string | null;
+  readonly deptId: string | null;
+}
 
-function ownerOf(source: AuthTokenSource): { memberId: string; deptId: string | null } {
+let owner: Owner = { memberId: null, deptId: null };
+
+/** Looks up the stored session's member when no configured session carries one (R3-C1). */
+let ownerResolver: (() => Promise<{ memberId: string; deptId: string | null } | null>) | null =
+  null;
+
+export function setOwnerResolver(resolver: typeof ownerResolver): void {
+  ownerResolver = resolver;
+}
+
+function ownerOf(source: AuthTokenSource): Owner {
   const session = source as AuthTokenSource & { memberId?: unknown; deptId?: unknown };
   return {
-    memberId: typeof session.memberId === 'string' ? session.memberId : '',
+    memberId:
+      typeof session.memberId === 'string' && session.memberId.length > 0 ? session.memberId : null,
     deptId: typeof session.deptId === 'string' ? session.deptId : null,
   };
 }
@@ -65,10 +77,22 @@ function signedInMember(): string | null {
   return tokens ? owner.memberId : null;
 }
 
-export function configure(nextTokens: AuthTokenSource | null, nextApiBaseUrl: string | null): void {
+/** A token source that may also say whose session it is (AuthContext's value, the headless
+ * stored-session source). */
+export type SessionTokenSource = AuthTokenSource & {
+  readonly memberId?: string | null;
+  readonly deptId?: string | null;
+};
+
+export function configure(
+  nextTokens: SessionTokenSource | null,
+  nextApiBaseUrl: string | null,
+): void {
   tokens = nextTokens;
   apiBaseUrl = nextApiBaseUrl;
-  if (nextTokens) owner = ownerOf(nextTokens);
+  // Signed out: no configured owner. Anything queued without a session (the headless answer
+  // task) resolves its owner from the stored session instead (R3-C1).
+  owner = nextTokens ? ownerOf(nextTokens) : { memberId: null, deptId: null };
   void notify();
   if (tokens && apiBaseUrl) {
     unsubscribeNetInfo ??= NetInfo.addEventListener((state) => {
@@ -91,7 +115,7 @@ export function subscribe(listener: Listener): () => void {
 
 async function notify(): Promise<void> {
   // The current (or last signed-in) member's view; nothing is sent without a signed-in session.
-  const status = await outbox.getStatus(lastSyncAt, owner.memberId);
+  const status = await outbox.getStatus(lastSyncAt, owner.memberId, Date.now());
   listeners.forEach((listener) => listener(status));
 }
 
@@ -99,8 +123,17 @@ function unitPath(unitId: string, suffix: string): string {
   return `apparatus/${encodeURIComponent(unitId)}/${suffix}`;
 }
 
-function ownerStamp(): { ownerMemberId: string; ownerDeptId: string | null } {
-  return { ownerMemberId: owner.memberId, ownerDeptId: owner.deptId };
+/**
+ * The owner stamped on a new row. Never blank (R3-C1): the configured session's member, else the
+ * stored session's (headless task, cold start), else NULL - which is adoptable, and for an alert
+ * answer sent automatically by the next signed-in member within the answer window.
+ */
+async function ownerStamp(): Promise<{ ownerMemberId: string | null; ownerDeptId: string | null }> {
+  if (owner.memberId) return { ownerMemberId: owner.memberId, ownerDeptId: owner.deptId };
+  const resolved = ownerResolver ? await ownerResolver().catch(() => null) : null;
+  return resolved
+    ? { ownerMemberId: resolved.memberId, ownerDeptId: resolved.deptId }
+    : { ownerMemberId: null, ownerDeptId: null };
 }
 
 async function enqueueAndDrain(
@@ -111,7 +144,7 @@ async function enqueueAndDrain(
   body: Record<string, unknown>,
   photoLocalUri?: string,
 ): Promise<void> {
-  await outbox.enqueue({ id, kind, label, path, body, photoLocalUri, ...ownerStamp() });
+  await outbox.enqueue({ id, kind, label, path, body, photoLocalUri, ...(await ownerStamp()) });
   await notify();
   void drain();
 }
@@ -183,13 +216,16 @@ export async function enqueueAvailability(
 ): Promise<{ replaced: number; mayStand: number }> {
   if (!memberId) throw new Error('A mark-off needs the signed-in member');
   const path = `personnel/members/${encodeURIComponent(memberId)}/availability`;
+  // The mark-off names its member in the path, so that member owns it.
+  const stamp = await ownerStamp();
   const row = await outbox.enqueue({
     id: idempotencyKey,
     kind: 'AVAILABILITY',
     label,
     path,
     body,
-    ...ownerStamp(),
+    ownerMemberId: memberId,
+    ownerDeptId: stamp.ownerMemberId === memberId ? stamp.ownerDeptId : null,
   });
   // Only a row that was never sent can be dropped: one that was attempted may have reached the
   // server with its response lost, so it stays, and the member is told both may stand (R2-M1).
@@ -241,7 +277,14 @@ export async function enqueueResponse(
   body: Record<string, unknown>,
 ): Promise<void> {
   const path = `alerting/dispatches/${encodeURIComponent(dispatchId)}/responses`;
-  const row = await outbox.enqueue({ id, kind: 'RESPONSE', label, path, body, ...ownerStamp() });
+  const row = await outbox.enqueue({
+    id,
+    kind: 'RESPONSE',
+    label,
+    path,
+    body,
+    ...(await ownerStamp()),
+  });
   const older = await outbox.olderSiblings(row);
   await Promise.all(
     older

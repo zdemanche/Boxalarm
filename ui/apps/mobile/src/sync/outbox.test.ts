@@ -12,7 +12,7 @@ beforeEach(async () => {
 
 test('enqueue is idempotent: re-enqueueing the same id does not create a second row', async () => {
   await outbox.enqueue({
-    ownerMemberId: '',
+    ownerMemberId: 'm-test',
     ownerDeptId: null,
     id: 'IDEMP-1',
     kind: 'CHECKLIST_RUN',
@@ -21,7 +21,7 @@ test('enqueue is idempotent: re-enqueueing the same id does not create a second 
     body: { templateId: 'CT-01' },
   });
   await outbox.enqueue({
-    ownerMemberId: '',
+    ownerMemberId: 'm-test',
     ownerDeptId: null,
     id: 'IDEMP-1',
     kind: 'CHECKLIST_RUN',
@@ -37,7 +37,7 @@ test('enqueue is idempotent: re-enqueueing the same id does not create a second 
 
 test('listDrainable returns rows in queuedAt order, oldest first', async () => {
   await outbox.enqueue({
-    ownerMemberId: '',
+    ownerMemberId: 'm-test',
     ownerDeptId: null,
     id: 'ORDER-2',
     kind: 'DEFECT',
@@ -46,7 +46,7 @@ test('listDrainable returns rows in queuedAt order, oldest first', async () => {
     body: {},
   });
   await outbox.enqueue({
-    ownerMemberId: '',
+    ownerMemberId: 'm-test',
     ownerDeptId: null,
     id: 'ORDER-1',
     kind: 'DEFECT',
@@ -59,14 +59,14 @@ test('listDrainable returns rows in queuedAt order, oldest first', async () => {
   await store.update('ORDER-1', { queuedAt: '2020-01-01T00:00:00.000Z' });
   await store.update('ORDER-2', { queuedAt: '2020-01-02T00:00:00.000Z' });
 
-  const drainable = await outbox.listDrainable(Date.now(), '');
+  const drainable = await outbox.listDrainable(Date.now(), 'm-test');
   const ids = drainable.map((row) => row.id);
   expect(ids.indexOf('ORDER-1')).toBeLessThan(ids.indexOf('ORDER-2'));
 });
 
 test('listDrainable excludes rows that are SYNCING or not yet due for retry', async () => {
   await outbox.enqueue({
-    ownerMemberId: '',
+    ownerMemberId: 'm-test',
     ownerDeptId: null,
     id: 'DRAIN-SYNCING',
     kind: 'DEFECT',
@@ -77,7 +77,7 @@ test('listDrainable excludes rows that are SYNCING or not yet due for retry', as
   await outbox.markSyncing('DRAIN-SYNCING');
 
   await outbox.enqueue({
-    ownerMemberId: '',
+    ownerMemberId: 'm-test',
     ownerDeptId: null,
     id: 'DRAIN-BACKOFF',
     kind: 'DEFECT',
@@ -88,7 +88,7 @@ test('listDrainable excludes rows that are SYNCING or not yet due for retry', as
   await store.update('DRAIN-BACKOFF', { nextAttemptAt: Date.now() + 60_000 });
 
   await outbox.enqueue({
-    ownerMemberId: '',
+    ownerMemberId: 'm-test',
     ownerDeptId: null,
     id: 'DRAIN-DUE',
     kind: 'DEFECT',
@@ -97,7 +97,7 @@ test('listDrainable excludes rows that are SYNCING or not yet due for retry', as
     body: {},
   });
 
-  const drainable = await outbox.listDrainable(Date.now(), '');
+  const drainable = await outbox.listDrainable(Date.now(), 'm-test');
   const ids = drainable.map((row) => row.id);
   expect(ids).toContain('DRAIN-DUE');
   expect(ids).not.toContain('DRAIN-SYNCING');
@@ -106,7 +106,7 @@ test('listDrainable excludes rows that are SYNCING or not yet due for retry', as
 
 test('markFailed applies exponential backoff and never drops the item', async () => {
   await outbox.enqueue({
-    ownerMemberId: '',
+    ownerMemberId: 'm-test',
     ownerDeptId: null,
     id: 'BACKOFF-1',
     kind: 'DEFECT',
@@ -133,7 +133,7 @@ test('markFailed applies exponential backoff and never drops the item', async ()
 
 test('markSynced removes the row entirely', async () => {
   await outbox.enqueue({
-    ownerMemberId: '',
+    ownerMemberId: 'm-test',
     ownerDeptId: null,
     id: 'SYNCED-1',
     kind: 'CHECKLIST_RUN',
@@ -148,7 +148,7 @@ test('markSynced removes the row entirely', async () => {
 
 test('retry clears FAILED status and makes the row immediately due again', async () => {
   await outbox.enqueue({
-    ownerMemberId: '',
+    ownerMemberId: 'm-test',
     ownerDeptId: null,
     id: 'RETRY-1',
     kind: 'DEFECT',
@@ -167,7 +167,7 @@ test('retry clears FAILED status and makes the row immediately due again', async
 
 test('recoverOrphanedSyncing returns rows stranded in SYNCING (app killed mid-upload) to the queue', async () => {
   await outbox.enqueue({
-    ownerMemberId: '',
+    ownerMemberId: 'm-test',
     ownerDeptId: null,
     id: 'ORPHAN-1',
     kind: 'DEFECT',
@@ -177,7 +177,7 @@ test('recoverOrphanedSyncing returns rows stranded in SYNCING (app killed mid-up
   });
   await outbox.markSyncing('ORPHAN-1');
   await outbox.enqueue({
-    ownerMemberId: '',
+    ownerMemberId: 'm-test',
     ownerDeptId: null,
     id: 'NOT-ORPHAN',
     kind: 'DEFECT',
@@ -192,13 +192,15 @@ test('recoverOrphanedSyncing returns rows stranded in SYNCING (app killed mid-up
 
   const recovered = await store.find('ORPHAN-1');
   expect(recovered?.status).toBe('QUEUED');
-  expect((await outbox.listDrainable(Date.now(), '')).map((row) => row.id)).toContain('ORPHAN-1');
+  expect((await outbox.listDrainable(Date.now(), 'm-test')).map((row) => row.id)).toContain(
+    'ORPHAN-1',
+  );
   expect(await store.find('NOT-ORPHAN')).toEqual(failedBefore);
 });
 
 test('markRejected is terminal: the row is kept but excluded from drains until manually retried', async () => {
   await outbox.enqueue({
-    ownerMemberId: '',
+    ownerMemberId: 'm-test',
     ownerDeptId: null,
     id: 'REJECT-1',
     kind: 'DEFECT',
@@ -211,17 +213,17 @@ test('markRejected is terminal: the row is kept but excluded from drains until m
   const row = await store.find('REJECT-1');
   expect(row?.status).toBe('REJECTED');
   expect(row?.lastError).toBe('Validation failed');
-  expect((await outbox.listDrainable(Date.now() + 60 * 60_000, '')).map((r) => r.id)).not.toContain(
-    'REJECT-1',
-  );
+  expect(
+    (await outbox.listDrainable(Date.now() + 60 * 60_000, 'm-test')).map((r) => r.id),
+  ).not.toContain('REJECT-1');
 
   await outbox.retry('REJECT-1');
-  expect((await outbox.listDrainable(Date.now(), '')).map((r) => r.id)).toContain('REJECT-1');
+  expect((await outbox.listDrainable(Date.now(), 'm-test')).map((r) => r.id)).toContain('REJECT-1');
 });
 
 test('discard removes the row', async () => {
   await outbox.enqueue({
-    ownerMemberId: '',
+    ownerMemberId: 'm-test',
     ownerDeptId: null,
     id: 'DISCARD-1',
     kind: 'DEFECT',

@@ -1,4 +1,4 @@
-import { getDb } from './db';
+import { getDb, outboxHasOwnerColumns } from './db';
 
 export type OutboxKind =
   'CHECKLIST_RUN' | 'DEFECT' | 'FIELD_CAPTURE' | 'ATTENDANCE' | 'RESPONSE' | 'AVAILABILITY';
@@ -48,12 +48,40 @@ function toRow(record: Record<string, unknown>): OutboxRow {
     queuedAt: String(record.queuedAt),
     nextAttemptAt: Number(record.nextAttemptAt),
     syncedAt: (record.syncedAt as string | null) ?? null,
-    ownerMemberId: (record.ownerMemberId as string | null) ?? null,
+    // '' was stamped by one pre-release build for "no member id"; it means the same as NULL.
+    ownerMemberId: (record.ownerMemberId as string | null) || null,
     ownerDeptId: (record.ownerDeptId as string | null) ?? null,
   };
 }
 
 export async function insert(row: OutboxRow): Promise<void> {
+  if (!outboxHasOwnerColumns()) {
+    await getDb().execute(
+      `INSERT INTO outbox
+        (id, kind, label, method, path, body, stage, photoLocalUri, photoS3Key, photoUploadUrl,
+         status, attempts, lastError, queuedAt, nextAttemptAt, syncedAt)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        row.id,
+        row.kind,
+        row.label,
+        row.method,
+        row.path,
+        row.body,
+        row.stage,
+        row.photoLocalUri,
+        row.photoS3Key,
+        row.photoUploadUrl,
+        row.status,
+        row.attempts,
+        row.lastError,
+        row.queuedAt,
+        row.nextAttemptAt,
+        row.syncedAt,
+      ],
+    );
+    return;
+  }
   await getDb().execute(
     `INSERT INTO outbox
       (id, kind, label, method, path, body, stage, photoLocalUri, photoS3Key, photoUploadUrl,
@@ -94,7 +122,9 @@ export async function find(id: string): Promise<OutboxRow | undefined> {
 }
 
 export async function update(id: string, patch: Partial<OutboxRow>): Promise<void> {
-  const entries = Object.entries(patch);
+  const entries = Object.entries(patch).filter(
+    ([key]) => outboxHasOwnerColumns() || (key !== 'ownerMemberId' && key !== 'ownerDeptId'),
+  );
   if (entries.length === 0) return;
   const assignments = entries.map(([key]) => `${key} = ?`).join(', ');
   const values = entries.map(([, value]) => value ?? null);
