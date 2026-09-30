@@ -42,6 +42,22 @@ export function canUnlockIncident(roles: readonly Role[]): boolean {
   return roles.includes('CHIEF') || roles.includes('ADMIN');
 }
 
+/** Place a unit out of service / return it (Cedar UpdateServiceStatus, APPARATUS_OFFICER_GROUPS). */
+export function canUpdateServiceStatus(roles: readonly Role[]): boolean {
+  return (['APPARATUS', 'OFFICER', 'CHIEF', 'ADMIN'] as const).some((r) => roles.includes(r));
+}
+
+/** Register a new apparatus: apparatus-service createApparatus checks CHIEF/ADMIN
+ * (authContext.ts ADMIN_GROUPS), not Cedar. */
+export function canCreateApparatus(roles: readonly Role[]): boolean {
+  return roles.includes('CHIEF') || roles.includes('ADMIN');
+}
+
+/** Equipment and PPE writes (Cedar INVENTORY_ADMIN_GROUPS). */
+export function canManageInventory(roles: readonly Role[]): boolean {
+  return (['OFFICER', 'CHIEF', 'ADMIN'] as const).some((r) => roles.includes(r));
+}
+
 /** Highest-authority first. Cognito group order is arbitrary, so anything that shows a single
  * role (dashboard choice, the top-bar label) picks by this order, never roles[0]. */
 export const ROLE_PRIORITY: readonly Role[] = [

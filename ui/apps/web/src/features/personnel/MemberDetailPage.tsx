@@ -2,7 +2,7 @@ import { FormEvent, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useParams } from 'react-router-dom';
 import { useAuth } from '../../auth/AuthContext';
-import { canManageTraining } from '../../auth/roles';
+import { canManageInventory, canManageTraining } from '../../auth/roles';
 import { ApiForbiddenGate } from '../../components/ApiForbiddenGate';
 import { Badge } from '../../components/ui/Chip';
 import { PageHeader } from '../../components/ui/PageHeader';
@@ -234,9 +234,8 @@ export function MemberDetailPage() {
   const canManageRoles = canUseAccountKillSwitches(auth.roles);
 
   const isTraining = canManageTraining(auth.roles);
-  // Matches the inspections write-access precedent (ADMIN || CHIEF) — PPE issuance is a new
-  // control added in this PR, unlike the pre-existing ADMIN-only member-status gate below.
-  const canIssuePpe = isAdmin || auth.roles.includes('CHIEF');
+  // IssuePpeAssignment is an INVENTORY_ADMIN_GROUPS action: OFFICER, CHIEF, ADMIN (review m6).
+  const canIssuePpe = canManageInventory(auth.roles);
   const [ppeForm, setPpeForm] = useState<IssuePpeInput>(emptyPpeForm);
   const [ppeFormError, setPpeFormError] = useState<string | null>(null);
 

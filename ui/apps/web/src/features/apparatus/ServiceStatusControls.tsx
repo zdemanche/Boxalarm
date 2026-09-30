@@ -1,6 +1,7 @@
 import { FormEvent, useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useAuth } from '../../auth/AuthContext';
+import { canUpdateServiceStatus } from '../../auth/roles';
 import { Button, Card, StatusChip, TextInput } from '../../components/ui';
 import { setServiceStatus } from './api';
 import { serviceStatusRole } from './StatusBadge';
@@ -15,7 +16,7 @@ function formatElapsed(elapsedSeconds: number): string {
 export function ServiceStatusControls({ unit }: { unit: ApparatusDetail }) {
   const auth = useAuth();
   const queryClient = useQueryClient();
-  const canControl = auth.roles.includes('APPARATUS') || auth.roles.includes('CHIEF');
+  const canControl = canUpdateServiceStatus(auth.roles);
   const [reason, setReason] = useState('');
   const [formError, setFormError] = useState<string | null>(null);
 
@@ -45,7 +46,10 @@ export function ServiceStatusControls({ unit }: { unit: ApparatusDetail }) {
       ) : null}
 
       {!canControl ? (
-        <p>Changing service status is limited to the apparatus officer and the chief.</p>
+        <p>
+          Changing service status is limited to officers, the apparatus officer, the chief and the
+          administrator.
+        </p>
       ) : unit.status === 'IN_SERVICE' ? (
         <form
           aria-label="Place out of service"
