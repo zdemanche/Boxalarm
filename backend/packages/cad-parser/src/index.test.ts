@@ -190,11 +190,56 @@ describe('resolveCadMessageTime (chain review R3-M1)', () => {
     const original = resolveCadMessageTime('2355', { receivedAt: nearMidnight, timeZone: tz })!;
     const correction = resolveCadMessageTime('0003', {
       receivedAt: nearMidnight + 480,
-      anchor: original,
       timeZone: tz,
     })!;
     expect(new Date(original * 1000).toISOString()).toBe('2026-10-01T03:55:00.000Z');
     expect(correction - original).toBe(8 * 60);
+  });
+
+  it('a bare time is placed on the day nearest its OWN receipt, however long the incident (R3b-M1)', () => {
+    const at2130 = Date.UTC(2026, 9, 1, 1, 30, 40) / 1000; // 21:30:40 EDT on 30 Sep
+    expect(resolveCadMessageTime('2130', { receivedAt: at2130, timeZone: tz })).toBe(
+      Date.UTC(2026, 9, 1, 1, 30) / 1000,
+    );
+    // 2358 received at 00:01 is the previous day; 0002 received at 23:59 the next.
+    const at0001 = Date.UTC(2026, 9, 1, 4, 1) / 1000;
+    expect(resolveCadMessageTime('2358', { receivedAt: at0001, timeZone: tz })).toBe(
+      Date.UTC(2026, 9, 1, 3, 58) / 1000,
+    );
+    const at2359 = Date.UTC(2026, 9, 1, 3, 59) / 1000;
+    expect(resolveCadMessageTime('0002', { receivedAt: at2359, timeZone: tz })).toBe(
+      Date.UTC(2026, 9, 1, 4, 2) / 1000,
+    );
+  });
+
+  it('a wall time repeated at fall-back takes the instant nearest receipt (R3b-M1)', () => {
+    // 1 Nov 2026: 01:00-01:59 happens in EDT (05:xxZ) and again in EST (06:xxZ).
+    const edt = resolveCadMessageTime('0150', {
+      receivedAt: Date.UTC(2026, 10, 1, 5, 50, 20) / 1000,
+      timeZone: tz,
+    });
+    const est = resolveCadMessageTime('0110', {
+      receivedAt: Date.UTC(2026, 10, 1, 6, 10, 20) / 1000,
+      timeZone: tz,
+    });
+    expect(edt).toBe(Date.UTC(2026, 10, 1, 5, 50) / 1000);
+    expect(est).toBe(Date.UTC(2026, 10, 1, 6, 10) / 1000);
+    expect(
+      resolveCadMessageTime('11/01/2026 01:10', {
+        receivedAt: Date.UTC(2026, 10, 1, 6, 11) / 1000,
+        timeZone: tz,
+      }),
+    ).toBe(Date.UTC(2026, 10, 1, 6, 10) / 1000);
+  });
+
+  it('a wall time skipped at spring-forward still resolves (read at the pre-jump offset)', () => {
+    // 8 Mar 2026: 02:00 EST jumps to 03:00 EDT; a CAD stamping 0230 is at 07:30Z.
+    expect(
+      resolveCadMessageTime('0230', {
+        receivedAt: Date.UTC(2026, 2, 8, 7, 31) / 1000,
+        timeZone: tz,
+      }),
+    ).toBe(Date.UTC(2026, 2, 8, 7, 30) / 1000);
   });
 
   it('reads HH:MM and HH:MM:SS, in the department time zone', () => {

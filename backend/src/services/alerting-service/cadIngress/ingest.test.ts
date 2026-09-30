@@ -427,6 +427,40 @@ describe('CAD updates to an incident already paged (decision 2026-09-30)', () =>
     expect(logged.some((l) => l.includes('"CadIngressOlderMessage":1'))).toBe(false);
   });
 
+  const expectAppliedAndPushed = () => {
+    const logged = vi.mocked(console.log).mock.calls.map(([l]) => String(l));
+    expect(logged.some((l) => l.includes('"CadIngressUpdated":1'))).toBe(true);
+    expect(logged.some((l) => l.includes('"CadIngressOlderMessage":1'))).toBe(false);
+  };
+
+  it('R3b-M1: an update 13.5 h after the last applied one (long incident) is applied and pushed', async () => {
+    const table: FakeTable = { items: new Map() };
+    const at0800 = Date.UTC(2026, 8, 30, 12, 0) / 1000; // 08:00 EDT on 30 Sep
+    const original = 'INC: 2026-11\nTIME: 0800\nADDR: 5 MILL RD, NICHOLS\nUNITS: E1';
+    const later = 'INC: 2026-11\nTIME: 2130\nADDR: 5 MILL RD, NICHOLS\nUNITS: E1, T1';
+    expect((await at(table, original, at0800)).outcome).toBe('created');
+    expect((await at(table, later, at0800 + 13.5 * 3600 + 30)).outcome).toBe('updated');
+    expect(items(table, 'DISPATCH_ALERT')[0]).toMatchObject({
+      unitsRequested: ['E1', 'T1'],
+      cadMessageTime: Date.UTC(2026, 9, 1, 1, 30) / 1000, // 21:30 EDT on 30 Sep
+    });
+    expectAppliedAndPushed();
+  });
+
+  it('R3b-M1: on the fall-back night, 0110 EST twenty minutes after 0150 EDT is applied and pushed', async () => {
+    const table: FakeTable = { items: new Map() };
+    const at0150Edt = Date.UTC(2026, 10, 1, 5, 50) / 1000; // 1 Nov 2026 01:50 EDT
+    const original = 'INC: 2026-12\nTIME: 0150\nADDR: 7 OAK ST, NICHOLS\nUNITS: E1';
+    const later = 'INC: 2026-12\nTIME: 0110\nADDR: 7 OAK ST, NICHOLS\nUNITS: E1, L1';
+    expect((await at(table, original, at0150Edt + 20)).outcome).toBe('created');
+    expect((await at(table, later, at0150Edt + 20 * 60 + 20)).outcome).toBe('updated');
+    expect(items(table, 'DISPATCH_ALERT')[0]).toMatchObject({
+      unitsRequested: ['E1', 'L1'],
+      cadMessageTime: Date.UTC(2026, 10, 1, 6, 10) / 1000, // 01:10 EST
+    });
+    expectAppliedAndPushed();
+  });
+
   it('R3-M1: a time the CAD writes in a shape it cannot order by leaves updates in arrival order', async () => {
     const table: FakeTable = { items: new Map() };
     await at(table, 'INC: 2026-10\nTIME: TUE 2355\nADDR: 1 A ST', 1_800_000_000);

@@ -341,34 +341,46 @@ export async function parseCadTextBounded(
  * midnight looked older than the original). Only two shapes are trusted:
  *  - a full date and time (MM/DD/YYYY or YYYY-MM-DD, then HH:MM[:SS]), read in the
  *    department's time zone, accepted only within 24 h of the message's receipt;
- *  - a bare time of day (HHMM, HH:MM, HHMMSS, HH:MM:SS), placed on the day of `anchor` (the
- *    original dispatch's time, or the receipt for the original itself) - and when that lands
- *    more than 12 h before or after the anchor, on the next or previous day (midnight wrap).
- * Anything else is undefined: unordered, applied in arrival order.
+ *  - a bare time of day (HHMM, HH:MM, HHMMSS, HH:MM:SS), placed on the day before, of, or after
+ *    THIS message's receipt (in the department's time zone), whichever is nearest the receipt.
+ *    CAD messages arrive within minutes of their stamp, so the nearest reading is the right
+ *    one however long the incident has run (chain review R3b-M1: anchoring on the last
+ *    applied message read an update 13.5 h later as a day early).
+ * A wall time that occurs twice (the repeated hour on the DST fall-back night) takes the
+ * instant nearest the receipt, too (R3b-M1: `0110` EST after `0150` EDT is 20 minutes later,
+ * not 40 earlier). Anything else is undefined: unordered, applied in arrival order.
  */
 export function resolveCadMessageTime(
   text: string | undefined,
   options: {
     readonly receivedAt: number;
-    readonly anchor?: number | undefined;
     readonly timeZone: string;
   },
 ): number | undefined {
   if (!text) return undefined;
   const value = text.trim();
-  const within = (epoch: number) =>
-    Math.abs(epoch - options.receivedAt) <= 24 * 3600 ? epoch : undefined;
+  const { receivedAt, timeZone } = options;
+  const within = (epoch: number | undefined) =>
+    epoch !== undefined && Math.abs(epoch - receivedAt) <= 24 * 3600 ? epoch : undefined;
 
   const bare = /^(\d{1,2}):?(\d{2})(?::?(\d{2}))?$/.exec(value);
   if (bare) {
     const [hour, minute, second] = [Number(bare[1]), Number(bare[2]), Number(bare[3] ?? 0)];
     if (hour > 23 || minute > 59 || second > 59) return undefined;
-    const anchor = options.anchor ?? options.receivedAt;
-    const day = zonedParts(anchor, options.timeZone);
-    let epoch = zonedToEpoch(day.year, day.month, day.day, hour, minute, second, options.timeZone);
-    if (epoch < anchor - 12 * 3600) epoch += 24 * 3600;
-    else if (epoch > anchor + 12 * 3600) epoch -= 24 * 3600;
-    return within(epoch);
+    const today = zonedParts(receivedAt, timeZone);
+    const candidates = [-1, 0, 1].flatMap((offsetDays) => {
+      const date = new Date(Date.UTC(today.year, today.month - 1, today.day + offsetDays));
+      return zonedInstants(
+        date.getUTCFullYear(),
+        date.getUTCMonth() + 1,
+        date.getUTCDate(),
+        hour,
+        minute,
+        second,
+        timeZone,
+      );
+    });
+    return within(nearest(candidates, receivedAt));
   }
 
   const full =
@@ -383,7 +395,19 @@ export function resolveCadMessageTime(
   if (month < 1 || month > 12 || day < 1 || day > 31 || hour > 23 || minute > 59 || second > 59) {
     return undefined;
   }
-  return within(zonedToEpoch(year, month, day, hour, minute, second, options.timeZone));
+  return within(
+    nearest(zonedInstants(year, month, day, hour, minute, second, timeZone), receivedAt),
+  );
+}
+
+function nearest(candidates: readonly number[], target: number): number | undefined {
+  let best: number | undefined;
+  for (const candidate of candidates) {
+    if (best === undefined || Math.abs(candidate - target) < Math.abs(best - target)) {
+      best = candidate;
+    }
+  }
+  return best;
 }
 
 function zonedParts(epoch: number, timeZone: string) {
@@ -408,8 +432,20 @@ function zonedParts(epoch: number, timeZone: string) {
   };
 }
 
-/** Wall-clock time in `timeZone` -> epoch seconds (two passes settle a DST offset). */
-function zonedToEpoch(
+/** The zone's UTC offset (seconds) at an instant. */
+function offsetAt(epoch: number, timeZone: string): number {
+  const seen = zonedParts(epoch, timeZone);
+  const wall =
+    Date.UTC(seen.year, seen.month - 1, seen.day, seen.hour, seen.minute, seen.second) / 1000;
+  return wall - epoch;
+}
+
+/**
+ * Every instant at which the wall clock in `timeZone` reads this time: usually one, two in the
+ * repeated fall-back hour. A time skipped at spring-forward has none; it is then read with the
+ * offset in force before the gap (the clock a CAD that did not jump yet would show).
+ */
+function zonedInstants(
   year: number,
   month: number,
   day: number,
@@ -417,16 +453,17 @@ function zonedToEpoch(
   minute: number,
   second: number,
   timeZone: string,
-): number {
+): number[] {
   const wall = Date.UTC(year, month - 1, day, hour, minute, second) / 1000;
-  let epoch = wall;
-  for (let i = 0; i < 2; i++) {
-    const seen = zonedParts(epoch, timeZone);
-    const seenWall =
-      Date.UTC(seen.year, seen.month - 1, seen.day, seen.hour, seen.minute, seen.second) / 1000;
-    epoch += wall - seenWall;
-  }
-  return epoch;
+  // Any DST transition near this wall time lies within a day of it: the offsets before and
+  // after are the only ones that can apply.
+  const offsets = [
+    ...new Set([offsetAt(wall - 86400, timeZone), offsetAt(wall + 86400, timeZone)]),
+  ];
+  const instants = offsets
+    .map((offset) => wall - offset)
+    .filter((epoch) => offsetAt(epoch, timeZone) + epoch === wall);
+  return instants.length > 0 ? instants : [wall - offsets[0]!];
 }
 
 /** A valid IANA time zone name? */

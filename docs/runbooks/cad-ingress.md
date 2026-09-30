@@ -131,7 +131,7 @@ If a source's address has leaked into spam lists (the token is noise reduction, 
 
 ## Dispatch times
 
-CAD updates to a call are ordered by the dispatch time the template reads, but only when it is one of two shapes: a full date and time (`MM/DD/YYYY HH:MM[:SS]` or `YYYY-MM-DD HH:MM[:SS]`, within 24 hours of receipt), or a bare time of day (`HHMM`, `HH:MM`, `HHMMSS`, `HH:MM:SS`), placed on the original dispatch's day - `0003` after `2355` is the next day. Times are read in the source's time zone (default `America/New_York`). Any other shape leaves updates in the order they arrive, and re-arrivals of earlier messages are still caught as duplicates. Test parse shows how a sample's time resolves.
+CAD updates to a call are ordered by the dispatch time the template reads, but only when it is one of two shapes: a full date and time (`MM/DD/YYYY HH:MM[:SS]` or `YYYY-MM-DD HH:MM[:SS]`, within 24 hours of receipt), or a bare time of day (`HHMM`, `HH:MM`, `HHMMSS`, `HH:MM:SS`), placed on the day (before, of or after the message's own receipt) nearest that receipt - `0003` after `2355` is the next day, and `2130` thirteen hours into a long incident is the same day. In the repeated hour on the DST fall-back night, a time takes the instant nearest receipt, so `0110` EST after `0150` EDT is later. Times are read in the source's time zone (default `America/New_York`). Any other shape leaves updates in the order they arrive, and re-arrivals of earlier messages are still caught as duplicates. Test parse shows how a sample's time resolves.
 
 ## Request body
 

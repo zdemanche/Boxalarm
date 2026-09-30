@@ -159,14 +159,13 @@ export async function recordCadUpdate(
 
   // A message the CAD stamped EARLIER than the one last applied (a delayed email, a re-signed
   // retry of the original) is history only: it never reverts newer fields and never pushes.
-  // The time is resolved against the stored one (a bare 0003 after 2355 is the next day,
-  // chain review R3-M1); a time that does not resolve leaves the message unordered.
+  // A bare time is placed nearest THIS message's receipt (a bare 0003 after 2355 is the next
+  // day, chain review R3-M1; an update 13.5 h into a long incident is today, R3b-M1), then
+  // compared with the stored one; a time that does not resolve leaves the message unordered.
   const appliedTime =
     typeof current.cadMessageTime === 'number' ? current.cadMessageTime : undefined;
   const messageTime = resolveCadMessageTime(input.messageTimeText, {
     receivedAt: input.receivedAt,
-    anchor:
-      appliedTime ?? (typeof current.dispatchedAt === 'number' ? current.dispatchedAt : undefined),
     timeZone: input.timeZone,
   });
   input = { ...input, messageTime };
