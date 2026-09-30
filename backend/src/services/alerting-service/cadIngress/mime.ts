@@ -17,6 +17,8 @@ export interface DkimSignature {
   readonly signedHeaders: readonly string[];
   /** l= body length: present means only part of the body is signed (refused). */
   readonly bodyLength?: number;
+  /** bh= the signed body hash: with b=, the replay key when Message-ID is not signed. */
+  readonly bodyHash?: string;
 }
 
 export interface ParsedEmail {
@@ -30,7 +32,11 @@ export interface ParsedEmail {
    * separator, a DKIM-Signature header that does not parse, or one with a body-length l= tag.
    */
   readonly headerError?:
-    'BareLineBreak' | 'NoHeaderTerminator' | 'UnparseableDkimSignature' | 'DkimBodyLength';
+    | 'BareLineBreak'
+    | 'NoHeaderTerminator'
+    | 'UnparseableDkimSignature'
+    | 'DkimBodyLength'
+    | 'DuplicateHeader';
   readonly date: number | undefined;
   readonly messageId: string | undefined;
   /** Every address in the To and Cc headers (address.ts parseAddressList). */
@@ -94,6 +100,7 @@ export function parseDkimSignature(value: string): DkimSignature | undefined {
     signature,
     signedHeaders,
     ...(l !== undefined ? { bodyLength: Number(l) } : {}),
+    ...(tags.get('bh') ? { bodyHash: tags.get('bh')!.replace(/\s+/g, '') } : {}),
     ...(t && /^\d{1,12}$/.test(t) ? { timestamp: Number(t) } : {}),
   };
 }
@@ -199,36 +206,63 @@ function strictHeaderSection(
   return { headerBlock, body: raw.slice(end + 4) };
 }
 
+/**
+ * RFC 5322 §3.6 allows at most one of each. A second instance is how a genuine signed message is
+ * "re-headed": DKIM verifies the BOTTOM-most instance of each signed header (RFC 6376 §5.4.2),
+ * so an instance PREPENDED above it is unsigned yet would be read first (security review R2-C1).
+ */
+const SINGLETON_HEADERS = [
+  'from',
+  'to',
+  'cc',
+  'subject',
+  'date',
+  'message-id',
+  'sender',
+  'reply-to',
+] as const;
+
 export function parseEmail(raw: string): ParsedEmail {
   const section = strictHeaderSection(raw);
   const { headerBlock, body } = 'error' in section ? splitMessage(raw) : section;
   const headers = parseHeaders(headerBlock);
   const rawSignatures = all(headers, 'dkim-signature');
   const dkimSignatures = rawSignatures.map(parseDkimSignature);
+  const duplicated = SINGLETON_HEADERS.some((name) => all(headers, name).length > 1);
   const headerError =
     'error' in section
       ? section.error
-      : dkimSignatures.some((signature) => signature === undefined)
-        ? ('UnparseableDkimSignature' as const)
-        : dkimSignatures.some((signature) => signature?.bodyLength !== undefined)
-          ? ('DkimBodyLength' as const)
-          : undefined;
+      : duplicated
+        ? ('DuplicateHeader' as const)
+        : dkimSignatures.some((signature) => signature === undefined)
+          ? ('UnparseableDkimSignature' as const)
+          : dkimSignatures.some((signature) => signature?.bodyLength !== undefined)
+            ? ('DkimBodyLength' as const)
+            : undefined;
+  const signatures = dkimSignatures.filter((sig): sig is DkimSignature => sig !== undefined);
+  // A header's value is used only when EVERY signature covers it: an unsigned Subject, Date,
+  // Message-ID, To or Cc is attacker-controlled on a forwarded genuine message (R2-C1).
+  const signed = (name: string): string | undefined =>
+    signatures.length > 0 && signatures.every((sig) => sig.signedHeaders.includes(name))
+      ? first(headers, name)
+      : undefined;
   const from = parseFromHeaders(all(headers, 'from'));
-  const dateHeader = first(headers, 'date');
+  const dateHeader = signed('date');
   const date = dateHeader ? Date.parse(dateHeader) : Number.NaN;
   const found = extractText(headers, body);
+  const subject = signed('subject');
+  const to = signed('to');
+  const cc = signed('cc');
   return {
     fromAddress: from.ok ? from.address : undefined,
     fromDomain: from.ok ? from.domain : undefined,
     ...(from.ok ? {} : { fromError: from.reason }),
     date: Number.isFinite(date) ? Math.floor(date / 1000) : undefined,
-    messageId: first(headers, 'message-id'),
-    toAddresses: all(headers, 'to').flatMap(parseAddressList),
-    ccAddresses: all(headers, 'cc').flatMap(parseAddressList),
-    subject: ((subject) => (subject ? decodeEncodedWords(subject).trim() || undefined : undefined))(
-      first(headers, 'subject'),
-    ),
-    dkimSignatures: dkimSignatures.filter((sig): sig is DkimSignature => sig !== undefined),
+    messageId: signed('message-id'),
+    toAddresses: to ? parseAddressList(to) : [],
+    ccAddresses: cc ? parseAddressList(cc) : [],
+    subject: subject ? decodeEncodedWords(subject).trim() || undefined : undefined,
+    dkimSignatures: signatures,
     ...(headerError ? { headerError } : {}),
     text: (found.plain ?? found.html ?? '').trim(),
   };

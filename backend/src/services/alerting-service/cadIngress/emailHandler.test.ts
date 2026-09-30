@@ -246,6 +246,73 @@ describe('CAD email handler', () => {
     });
   });
 
+  describe('prepended headers on a genuine signed message (security review R2-C1)', () => {
+    // The reviewer's probe: a genuine email to department A, re-sent with headers PREPENDED above
+    // the signed originals. DKIM verifies the bottom-most instance, so SES still says PASS.
+    // The genuine message carries every singleton header once (Subject and Reply-To included).
+    const prepend = (lines: string) =>
+      `${lines}\r\n${rawEmail({
+        subject: 'DISPATCH',
+        headers: 'Reply-To: dispatch@cad.county.gov\r\nContent-Type: text/plain',
+      })}`;
+
+    it.each([
+      ['Subject', 'Subject: ADDR: 1 FAKE ST'],
+      ['Date', `Date: ${new Date(NOW * 1000).toUTCString()}`],
+      ['Message-ID', 'Message-ID: <new@x>'],
+      ['To (this department)', `To: ${RECIPIENT}`],
+      ['To (another department)', `To: dispatch+other-fd.county.zzzzzzzzzzzz@${DOMAIN}`],
+      ['Reply-To', 'Reply-To: attacker@evil.example'],
+    ])('a prepended %s does not page', async (_name, line) => {
+      serve(prepend(line));
+      await run();
+      expectDropped('MalformedHeaders');
+    });
+
+    it('the full probe (Subject + Date + Message-ID + To for another department) does not page either department', async () => {
+      const probe = [
+        'Subject: ADDR: 1 FAKE ST',
+        `Date: ${new Date(NOW * 1000).toUTCString()}`,
+        'Message-ID: <new@x>',
+        `To: dispatch+other-fd.county.zzzzzzzzzzzz@${DOMAIN}`,
+      ].join('\r\n');
+      serve(prepend(probe));
+      await run();
+      await run(sesEvent({}, [`dispatch+other-fd.county.zzzzzzzzzzzz@${DOMAIN}`]));
+      expect(alerts()).toHaveLength(0);
+    });
+
+    it('a Subject no signature covers never reaches the dispatch text', async () => {
+      serve(rawEmail({ subject: 'ADDR: 1 FAKE ST', signedHeaders: 'from:to:date:message-id' }));
+      await run();
+      expect(alerts()).toHaveLength(1);
+      expect(alerts()[0]?.address).toBe('123 MAIN ST, NICHOLS');
+      expect(String(alerts()[0]?.narrative)).not.toContain('FAKE');
+    });
+
+    it('an unsigned Date with no DKIM t= is refused as stale (age unknown)', async () => {
+      const raw = rawEmail({ signedHeaders: 'from:to:message-id' }).replace(/ t=\d+;/, '');
+      serve(raw);
+      await run();
+      expect(alerts()).toHaveLength(0);
+      expect(metric('CadIngressStale', 'Stale')).toBe(true);
+    });
+
+    it('an unsigned Date with a fresh DKIM t= pages (freshness from the signature)', async () => {
+      serve(rawEmail({ signedHeaders: 'from:to:message-id' }));
+      await run();
+      expect(alerts()).toHaveLength(1);
+    });
+
+    it('without a signed Message-ID the replay key is the signed body hash + signature', async () => {
+      serve(rawEmail({ signedHeaders: 'from:to:date' }));
+      await run();
+      await run();
+      expect(alerts()).toHaveLength(1);
+      expect(metric('CadIngressReplayRejected')).toBe(true);
+    });
+  });
+
   describe('recipient binding (security review M2)', () => {
     it('a genuine county email to department A, redirected unchanged to B, does not page B', async () => {
       // Signed To is A's address; SES delivered it to B's (the configured RECIPIENT).
@@ -300,7 +367,7 @@ describe('CAD email handler', () => {
       allowOnly(['dispatch@cad.county.gov']);
       serve(rawEmail({ headers: 'From: clerk@cad.county.gov\r\nContent-Type: text/plain' }));
       await run(sesEvent({ dmarc: 'PASS' }));
-      expectDropped('FromUnparseable');
+      expectDropped('MalformedHeaders');
     });
 
     it('the exact allowlisted address with a display name pages', async () => {
@@ -472,6 +539,7 @@ describe('CAD email Subject (chain review C1)', () => {
 describe('parseEmail', () => {
   it('reads a quoted-printable text part out of multipart/alternative', () => {
     const raw = [
+      'DKIM-Signature: v=1; d=cad.county.gov; h=from:date; bh=x; b=y',
       'From: CAD <dispatch@cad.county.gov>',
       'Date: Wed, 30 Sep 2026 07:00:00 GMT',
       'Content-Type: multipart/alternative; boundary="b1"',

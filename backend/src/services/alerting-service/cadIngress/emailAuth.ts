@@ -100,8 +100,16 @@ export function checkEmailSender(
       return 'RecipientNotSigned';
     }
   }
-  if (email.date === undefined) return 'Stale';
-  if (Math.abs(nowSeconds - email.date) > EMAIL_DATE_FRESHNESS_SECONDS) return 'Stale';
+  // Date counts only when signed (mime.ts). Unsigned or absent, freshness rests on the DKIM t=
+  // tags; with neither, the message's age is unknown and it is refused (R2-C1).
+  const signingTimes = email.dkimSignatures.map((signature) => signature.timestamp);
+  if (email.date === undefined && signingTimes.every((time) => time === undefined)) return 'Stale';
+  if (
+    email.date !== undefined &&
+    Math.abs(nowSeconds - email.date) > EMAIL_DATE_FRESHNESS_SECONDS
+  ) {
+    return 'Stale';
+  }
   if (
     email.dkimSignatures.some(
       (signature) =>
@@ -115,15 +123,21 @@ export function checkEmailSender(
 }
 
 /**
- * Replay key: RFC 5322 Message-ID + a hash of the message's text (Subject and body). SES's own
- * messageId is not used - a re-sent copy gets a new one - and neither are the DKIM b= values,
- * which a replayer can multiply by adding a bogus DKIM-Signature (security review minor m2).
+ * Replay key. With a SIGNED Message-ID: that id + a hash of the signed Subject and the body.
+ * Without one (unsigned or absent, R2-C1): the signed body hashes (bh=) and signatures (b=) -
+ * the parts an attacker cannot change on a genuine message. SES's own messageId is never used
+ * (a re-sent copy gets a new one).
  */
 export function emailReplayToken(email: ParsedEmail): string {
-  const content = createHash('sha256')
-    .update(`${email.subject ?? ''}\n${email.text}`, 'utf8')
-    .digest('hex');
-  return createHash('sha256')
-    .update(`${email.messageId ?? ''}|${content}`, 'utf8')
-    .digest('hex');
+  if (email.messageId) {
+    const content = createHash('sha256')
+      .update(`${email.subject ?? ''}\n${email.text}`, 'utf8')
+      .digest('hex');
+    return createHash('sha256').update(`${email.messageId}|${content}`, 'utf8').digest('hex');
+  }
+  const signed = email.dkimSignatures
+    .map((signature) => `${signature.bodyHash ?? ''}:${signature.signature}`)
+    .sort()
+    .join('|');
+  return createHash('sha256').update(`NOMSGID|${signed}`, 'utf8').digest('hex');
 }
