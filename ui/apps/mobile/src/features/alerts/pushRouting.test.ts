@@ -2,7 +2,7 @@ import { Alert, AppState, Platform, Settings } from 'react-native';
 import * as auth from '../../auth/AuthContext';
 import notifee, { EventType } from '@notifee/react-native';
 import * as messaging from '@react-native-firebase/messaging';
-import { navigateToAlertDetail } from '../../navigation/navigationRef';
+import { navigateToAlertDetail, navigateToMutualAidPrompt } from '../../navigation/navigationRef';
 import {
   dispatchIdFromNotificationData,
   resetRoutedRingingPagesForTest,
@@ -18,6 +18,7 @@ let mockAppTabs = true;
 let mockNavigationListener: (() => void) | undefined;
 jest.mock('../../navigation/navigationRef', () => ({
   navigateToAlertDetail: jest.fn(),
+  navigateToMutualAidPrompt: jest.fn(),
   isNavigationReady: jest.fn(() => mockNavigationReady),
   isAlertRouteAvailable: jest.fn(() => mockNavigationReady && mockAppTabs),
   hasPendingAlertNavigation: jest.fn(() => false),
@@ -132,6 +133,29 @@ test('a foreground press on the Android critical notification navigates immediat
     'DISP-5',
     expect.objectContaining({ dispatchId: 'DISP-5' }),
   );
+});
+
+test("an officer's mutual-aid prompt opens the prompt screen, not the call's alert screen", () => {
+  let foregroundCallback: ((event: unknown) => void) | undefined;
+  (notifee.onForegroundEvent as jest.Mock).mockImplementationOnce((cb) => {
+    foregroundCallback = cb;
+    return () => {};
+  });
+  (navigateToMutualAidPrompt as jest.Mock).mockClear();
+
+  subscribePushNotificationRouting();
+  foregroundCallback?.({
+    type: EventType.PRESS,
+    detail: {
+      notification: { data: { dispatchId: 'DISP-MA', alertKind: 'mutual_aid_prompt' } },
+    },
+  });
+
+  expect(navigateToMutualAidPrompt).toHaveBeenCalledWith(
+    'DISP-MA',
+    expect.objectContaining({ dispatchId: 'DISP-MA', mutualAidPrompt: true }),
+  );
+  expect(navigateToAlertDetail).not.toHaveBeenCalled();
 });
 
 test('a non-press foreground event (e.g. dismissed) does not navigate', () => {

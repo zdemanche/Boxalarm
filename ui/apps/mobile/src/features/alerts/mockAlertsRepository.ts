@@ -95,6 +95,21 @@ export const mockAlertsRepository: AlertsRepository = {
     };
   },
 
+  async acknowledgeMutualAid(dispatchId, notes) {
+    const dispatch = DISPATCHES.get(dispatchId);
+    const now = Math.floor(Date.now() / 1000);
+    const mutualAid = {
+      triggeredAt: dispatch?.mutualAid?.triggeredAt ?? now,
+      reason: dispatch?.mutualAid?.reason ?? 'MANUAL',
+      triggeredBy: dispatch?.mutualAid?.triggeredBy ?? null,
+      acknowledgedBy: 'MBR-1',
+      acknowledgedAt: now,
+      notes: notes.trim() || null,
+    };
+    if (dispatch) DISPATCHES.set(dispatchId, { ...dispatch, mutualAid });
+    return { changed: true, mutualAid };
+  },
+
   async getRoster(dispatchId) {
     return ROSTERS.get(dispatchId) ?? [];
   },

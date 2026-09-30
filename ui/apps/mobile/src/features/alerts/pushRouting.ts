@@ -11,6 +11,7 @@ import {
   isAlertRouteAvailable,
   isNavigationReady,
   navigateToAlertDetail,
+  navigateToMutualAidPrompt,
   navigationRef,
   onNavigationStateChange,
 } from '../../navigation/navigationRef';
@@ -32,9 +33,14 @@ export function dispatchIdFromNotificationData(
   return typeof id === 'string' && id.length > 0 ? id : null;
 }
 
-/** Opens the alert screen with the page's own payload, so it paints before any fetch. */
+/**
+ * Opens the alert screen with the page's own payload, so it paints before any fetch - or, for an
+ * officer's mutual-aid prompt, the prompt screen with its confirm action.
+ */
 function openAlert(payload: AlertPayload | null): void {
-  if (payload) navigateToAlertDetail(payload.dispatchId, payload);
+  if (!payload) return;
+  if (payload.mutualAidPrompt) navigateToMutualAidPrompt(payload.dispatchId, payload);
+  else navigateToAlertDetail(payload.dispatchId, payload);
 }
 
 /** An FCM RemoteMessage (sentTime in epoch ms), as delivered to the open/initial callbacks. */

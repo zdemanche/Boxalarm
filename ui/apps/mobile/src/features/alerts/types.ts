@@ -91,6 +91,20 @@ export interface PrePlanEnrichment {
   candidates?: PrePlanCandidate[];
 }
 
+/**
+ * The mutual-aid record on a dispatch (alerting ladderControls/shared.ts toMutualAidView). Times
+ * are epoch seconds.
+ */
+export interface MutualAid {
+  triggeredAt: number | null;
+  /** AUTO (the tone ladder ran out) or MANUAL (an officer pressed Trigger). */
+  reason: string | null;
+  triggeredBy: string | null;
+  acknowledgedBy: string | null;
+  acknowledgedAt: number | null;
+  notes: string | null;
+}
+
 export interface DispatchAlert {
   dispatchId: string;
   incidentType: string;
@@ -115,6 +129,11 @@ export interface DispatchAlert {
   nearestHydrantsUnavailable?: boolean;
   /** The server's geo read hit its cap: a nearer hydrant may be missing. */
   nearestHydrantsIncomplete?: boolean;
+  /**
+   * null: mutual aid has not been requested. Absent: unknown - the server could not read it, or
+   * predates it; never shown as "not requested".
+   */
+  mutualAid?: MutualAid | null;
 }
 
 /** One row of GET alerting/dispatches?status=active (dispatches/list/handler.ts). */
@@ -245,6 +264,15 @@ export interface AlertsRepository {
   getHomeLocality(): Promise<HomeLocality>;
   getReceipts(dispatchId: string): Promise<DeliveryReceipt[]>;
   getRidingBoard(dispatchId: string): Promise<RidingBoard>;
+  /**
+   * The officer confirms the mutual-aid call was made (POST .../mutual-aid/acknowledge). The
+   * first confirmation is the record; a repeat by the same officer returns it unchanged, another
+   * officer's is refused (409, ApiError) naming the stored record.
+   */
+  acknowledgeMutualAid(
+    dispatchId: string,
+    notes: string,
+  ): Promise<{ changed: boolean; mutualAid: MutualAid }>;
   assignRidingSeat(
     dispatchId: string,
     seat: {

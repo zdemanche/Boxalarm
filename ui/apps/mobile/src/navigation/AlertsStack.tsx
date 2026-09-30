@@ -4,6 +4,7 @@ import type { AlertPayload } from '../features/alerts/alertPayload';
 import { AlertDetailScreen } from '../screens/alerts/AlertDetailScreen';
 import { AlertsHomeScreen } from '../screens/alerts/AlertsHomeScreen';
 import { ManualDispatchEntryScreen } from '../screens/alerts/ManualDispatchEntryScreen';
+import { MutualAidPromptScreen } from '../screens/alerts/MutualAidPromptScreen';
 import { RidingBoardScreen } from '../screens/alerts/RidingBoardScreen';
 import { RosterScreen } from '../screens/alerts/RosterScreen';
 import { RequireRole } from './RequireRole';
@@ -20,6 +21,8 @@ export type AlertsStackParamList = {
   ManualEntry: undefined;
   /** `payload` is what the page itself carried, so the screen paints before any fetch. */
   AlertDetail: { dispatchId: string; payload?: AlertPayload };
+  /** An officer's mutual-aid prompt for a call (push alertKind mutual_aid_prompt). */
+  MutualAidPrompt: { dispatchId: string; payload?: AlertPayload };
   Roster: { dispatchId: string };
   RidingBoard: { dispatchId: string };
 };
@@ -43,6 +46,12 @@ export function AlertsStack() {
         name="AlertDetail"
         component={AlertDetailScreen}
         options={{ title: 'Alert' }}
+        getId={({ params }) => params.dispatchId}
+      />
+      <Stack.Screen
+        name="MutualAidPrompt"
+        component={MutualAidPromptScreen}
+        options={{ title: 'Mutual aid' }}
         getId={({ params }) => params.dispatchId}
       />
       <Stack.Screen name="Roster" component={RosterScreen} options={{ title: 'Roster' }} />

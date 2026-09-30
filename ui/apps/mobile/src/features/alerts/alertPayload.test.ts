@@ -125,3 +125,15 @@ test('a later tone with an empty address does not blank the address in the offli
     receivedAt: 100,
   });
 });
+
+test('a mutual-aid prompt is marked as one and round-trips through the notification data', () => {
+  const payload = alertPayloadFromPushData(
+    { dispatchId: 'D-MA', alertKind: 'mutual_aid_prompt', incidentType: 'MVA', address: '1 Main' },
+    5,
+  );
+  expect(payload).toMatchObject({ dispatchId: 'D-MA', incidentType: 'MVA', mutualAidPrompt: true });
+  expect(alertPayloadFromNotificationData(alertPayloadToNotificationData(payload!))).toMatchObject({
+    mutualAidPrompt: true,
+  });
+  expect(alertPayloadFromPushData({ dispatchId: 'D-1' }, 5)).not.toHaveProperty('mutualAidPrompt');
+});

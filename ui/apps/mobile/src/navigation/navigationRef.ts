@@ -7,23 +7,34 @@ export const navigationRef = createNavigationContainerRef<AppTabsParamList>();
 // A notification opened before the navigator mounted (Android cold start from a page: the
 // initial notification resolves while the keychain is still loading) used to be dropped here.
 // It is now held until the container reports ready - the newest one wins.
-let pendingAlert: { dispatchId: string; payload?: AlertPayload } | null = null;
+type AlertScreen = 'AlertDetail' | 'MutualAidPrompt';
 
-function navigateNow(dispatchId: string, payload?: AlertPayload): void {
+let pendingAlert: { screen: AlertScreen; dispatchId: string; payload?: AlertPayload } | null = null;
+
+function navigateNow(screen: AlertScreen, dispatchId: string, payload?: AlertPayload): void {
   navigationRef.navigate('Alerts', {
-    screen: 'AlertDetail',
+    screen,
     params: payload ? { dispatchId, payload } : { dispatchId },
   });
 }
 
-export function navigateToAlertDetail(dispatchId: string, payload?: AlertPayload): void {
+function navigateOrHold(screen: AlertScreen, dispatchId: string, payload?: AlertPayload): void {
   // Also held while signed out (the sign-in screens have no alert route): it opens after sign-in.
   if (!isAlertRouteAvailable()) {
-    pendingAlert = payload ? { dispatchId, payload } : { dispatchId };
+    pendingAlert = payload ? { screen, dispatchId, payload } : { screen, dispatchId };
     return;
   }
   pendingAlert = null;
-  navigateNow(dispatchId, payload);
+  navigateNow(screen, dispatchId, payload);
+}
+
+export function navigateToAlertDetail(dispatchId: string, payload?: AlertPayload): void {
+  navigateOrHold('AlertDetail', dispatchId, payload);
+}
+
+/** The officer's mutual-aid prompt for a call (a push with alertKind mutual_aid_prompt). */
+export function navigateToMutualAidPrompt(dispatchId: string, payload?: AlertPayload): void {
+  navigateOrHold('MutualAidPrompt', dispatchId, payload);
 }
 
 export function hasPendingAlertNavigation(): boolean {
@@ -33,9 +44,9 @@ export function hasPendingAlertNavigation(): boolean {
 /** Wired to NavigationContainer onReady and onStateChange (RootNavigator). */
 export function flushPendingAlertNavigation(): void {
   if (!pendingAlert || !isAlertRouteAvailable()) return;
-  const { dispatchId, payload } = pendingAlert;
+  const { screen, dispatchId, payload } = pendingAlert;
   pendingAlert = null;
-  navigateNow(dispatchId, payload);
+  navigateNow(screen, dispatchId, payload);
 }
 
 export function isNavigationReady(): boolean {

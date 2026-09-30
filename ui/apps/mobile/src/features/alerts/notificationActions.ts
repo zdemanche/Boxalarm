@@ -258,7 +258,7 @@ export async function handleNotificationEvent({ type, detail }: Event): Promise<
   // call is still in the Alerts list, and dismissing is a deliberate act.
   if (type === EventType.DISMISSED) {
     const id = detail.notification?.id;
-    if (id?.startsWith('dispatch:')) {
+    if (id?.startsWith('dispatch:') || id?.startsWith('mutual-aid:')) {
       await notifee
         .cancelTriggerNotification(id)
         .catch((error: unknown) => console.warn('[push] cancelling the ring cap failed', error));

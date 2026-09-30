@@ -123,7 +123,11 @@ extension AppDelegate {
       // crossStreets, dispatchedAt as epoch seconds) win over parsing the body in JS, and give
       // the alert screen the dispatch time instead of "RECEIVED" (round 2 C-4). Strings or
       // numbers are copied as sent; JS reads both.
-      for key in ["toneSequence", "incidentType", "address", "crossStreets", "dispatchedAt"] {
+      // alertKind: an officer's mutual-aid prompt (mutual_aid_prompt) opens the prompt screen,
+      // not the call's alert screen.
+      for key in [
+        "toneSequence", "incidentType", "address", "crossStreets", "dispatchedAt", "alertKind",
+      ] {
         if let value = userInfo[key] as? String, !value.isEmpty {
           record[key] = value
         } else if let value = userInfo[key] as? NSNumber {
