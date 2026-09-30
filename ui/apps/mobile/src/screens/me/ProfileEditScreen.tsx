@@ -87,7 +87,9 @@ export function ProfileEditScreen() {
     setStatus('saving');
     setError(null);
     try {
-      await repository.updateProfile({ firstName, lastName, email, phone });
+      // No email: the server refuses a member changing their own (403) - only a chief or admin
+      // can, because it is also their sign-in, kept in step with Cognito.
+      await repository.updateProfile({ firstName, lastName, phone });
       setStatus('saved');
       AccessibilityInfo.announceForAccessibility('Profile saved');
       navigation.goBack();
@@ -110,7 +112,29 @@ export function ProfileEditScreen() {
     <SafeAreaView style={{ flex: 1, backgroundColor: tokens.background, padding: spacing.lg }}>
       <Field label="First name" value={firstName} onChangeText={setFirstName} tokens={tokens} />
       <Field label="Last name" value={lastName} onChangeText={setLastName} tokens={tokens} />
-      <Field label="Email" value={email} onChangeText={setEmail} tokens={tokens} />
+      <View style={{ marginTop: spacing.lg }}>
+        <Text
+          style={{
+            color: tokens.foreground,
+            fontSize: typography.size.sm,
+            marginBottom: spacing.xs,
+          }}
+        >
+          Email
+        </Text>
+        <Text
+          accessibilityLabel={`Email, ${email}. To change your email, ask a chief or admin.`}
+          style={{ color: tokens.foreground, fontSize: typography.size.base }}
+        >
+          {email}
+        </Text>
+        <Text
+          importantForAccessibility="no"
+          style={{ color: tokens.foreground, fontSize: typography.size.sm, marginTop: spacing.xs }}
+        >
+          To change your email, ask a chief or admin.
+        </Text>
+      </View>
       <Field label="Phone" value={phone} onChangeText={setPhone} tokens={tokens} />
       {error ? (
         <Text accessibilityRole="alert" style={{ color: tokens.error, marginTop: spacing.md }}>
