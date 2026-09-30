@@ -22,6 +22,28 @@ export interface NerisEntityArgs {
 }
 
 /**
+ * Security-web MINOR 3: the NERIS entity Lambdas touch only the department's own partition
+ * (`DEPT#{deptId}`: the NERIS#ENTITY row and the CONFIG#NERIS settings) and, for the worker,
+ * its outbox (`DEPT#{deptId}#OUTBOX`). The platform table also holds member rows, revocation
+ * markers and every other outbox; a whole-table grant let a defect in the Lambda that holds the
+ * NERIS secret and calls out to the internet forge a personnel.member.updated row or overwrite
+ * a marker. Department ids never contain `#` (assertNoDelimiter), so "DEPT#*" and not
+ * "DEPT#*#*" is exactly the bare department partition.
+ */
+function deptPartitionStatement(sid: string, actions: string[], tableArn: string) {
+  return {
+    Sid: sid,
+    Effect: "Allow" as const,
+    Action: actions,
+    Resource: tableArn,
+    Condition: {
+      "ForAllValues:StringLike": { "dynamodb:LeadingKeys": ["DEPT#*"] },
+      "ForAllValues:StringNotLike": { "dynamodb:LeadingKeys": ["DEPT#*#*"] },
+    },
+  };
+}
+
+/**
  * GET/PUT /api/v1/platform/neris/entity (platform-service/neris/{get,put}Entity.ts): the
  * department's stations and units registered with its NERIS entity. The PUT starts a sync
  * (202) and the sync worker makes the NERIS calls asynchronously, so only the worker reads
@@ -58,12 +80,7 @@ export class NerisEntity extends pulumi.ComponentResource {
         additionalPolicyStatements: pulumi
           .all([args.platformTableArn, args.policyStoreArn])
           .apply(([tableArn, policyStoreArn]): IamPolicyStatement[] => [
-            {
-              Sid: "NerisEntityRead",
-              Effect: "Allow",
-              Action: ["dynamodb:GetItem"],
-              Resource: tableArn,
-            },
+            deptPartitionStatement("NerisEntityRead", ["dynamodb:GetItem"], tableArn),
             verifiedPermissionsPolicyStatement(policyStoreArn),
           ]),
       },
@@ -102,12 +119,21 @@ export class NerisEntity extends pulumi.ComponentResource {
         additionalPolicyStatements: pulumi
           .all([args.platformTableArn, args.nerisCredentialsSecretArn])
           .apply(([tableArn, secretArn]): IamPolicyStatement[] => [
+            // UpdateItem: a crashed sync marks the row FAILED (entitySync.markSyncFailed).
+            deptPartitionStatement(
+              "NerisEntitySyncAccess",
+              ["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:UpdateItem"],
+              tableArn,
+            ),
             {
-              // UpdateItem: a crashed sync marks the row FAILED (entitySync.markSyncFailed).
-              Sid: "NerisEntitySyncAccess",
+              // The neris.entity.synced outbox row, written in the same transaction.
+              Sid: "NerisEntitySyncOutbox",
               Effect: "Allow",
-              Action: ["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:UpdateItem"],
+              Action: ["dynamodb:PutItem"],
               Resource: tableArn,
+              Condition: {
+                "ForAllValues:StringLike": { "dynamodb:LeadingKeys": ["DEPT#*#OUTBOX"] },
+              },
             },
             auditMutationDenyStatement(tableArn),
             ...nerisClientPolicyStatements(secretArn, env),
@@ -170,12 +196,11 @@ export class NerisEntity extends pulumi.ComponentResource {
         additionalPolicyStatements: pulumi
           .all([args.platformTableArn, args.policyStoreArn, this.workerLambda.function.arn])
           .apply(([tableArn, policyStoreArn, workerArn]): IamPolicyStatement[] => [
-            {
-              Sid: "NerisEntitySyncStart",
-              Effect: "Allow",
-              Action: ["dynamodb:GetItem", "dynamodb:UpdateItem"],
-              Resource: tableArn,
-            },
+            deptPartitionStatement(
+              "NerisEntitySyncStart",
+              ["dynamodb:GetItem", "dynamodb:UpdateItem"],
+              tableArn,
+            ),
             auditMutationDenyStatement(tableArn),
             verifiedPermissionsPolicyStatement(policyStoreArn),
             {
