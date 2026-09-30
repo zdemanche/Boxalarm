@@ -64,6 +64,7 @@ describe("Members", () => {
       logGroup,
       httpApi,
       chiefNotificationTopicArn: pulumi.output("arn:aws:sns:us-east-1:123456789012:chief"),
+      sesFromAddress: "notifications@nicholsfd.example",
     });
   }
 
@@ -130,7 +131,7 @@ describe("Members", () => {
       }
     ).Statement;
     const login = statements.find((s) => s.Sid === "MembersUpdateProfileLoginEmail");
-    expect(login?.Action).toEqual(["cognito-idp:AdminUpdateUserAttributes"]);
+    expect(login?.Action).toContain("cognito-idp:AdminUpdateUserAttributes");
     expect(login?.Resource).toEqual([
       "arn:aws:cognito-idp:us-east-1:123456789012:userpool/us-east-1_pool",
     ]);
@@ -141,6 +142,13 @@ describe("Members", () => {
     });
     expect(env?.variables?.COGNITO_USER_POOL_ID).toBe("us-east-1_pool");
     expect(policyJson).not.toContain("AdminCreateUser");
+    // Server-fix security MAJOR 1: an email change ends the member's sessions and emails the
+    // previous address.
+    expect(login?.Action).toContain("cognito-idp:AdminUserGlobalSignOut");
+    const notice = statements.find((s) => s.Sid === "MembersUpdateProfileEmailNotice");
+    expect(notice?.Action).toEqual(["ses:SendEmail"]);
+    expect(notice?.Resource.every((r) => r.startsWith("arn:aws:ses:"))).toBe(true);
+    expect(env?.variables?.NOTIFICATION_SES_FROM_ADDRESS).toBe("notifications@nicholsfd.example");
   });
 
   it("alarms the chief on every email change and on a Cognito/row divergence", async () => {

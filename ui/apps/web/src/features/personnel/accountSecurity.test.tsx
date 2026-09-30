@@ -353,6 +353,7 @@ test('change email: confirm states where reset codes go, then saves the new addr
   await user.click(await screen.findByRole('button', { name: 'Change email' }));
   const dialog = await screen.findByRole('dialog');
   expect(dialog.textContent).toContain('Password-reset codes go to the new address');
+  expect(dialog.textContent).toContain('signed out on every device');
   const input = within(dialog).getByLabelText('New email');
   await user.clear(input);
   await user.type(input, 'sam.lee@example.com');

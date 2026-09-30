@@ -265,6 +265,7 @@ export const personnelMembers = new Members("personnel-members", {
   userPoolArn: identity.userPool.arn,
   logGroup: personnelLogGroup,
   httpApi,
+  sesFromAddress: notificationSesFromAddress,
 });
 
 // E2-S2 through E2-S11-INFRA (#204-#213): personnel domain routes beyond the roster CRUD

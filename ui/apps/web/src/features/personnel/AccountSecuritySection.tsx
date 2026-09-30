@@ -278,7 +278,9 @@ export function AccountSecuritySection({ member }: { member: Member }) {
         title={`Change ${name}'s email?`}
         consequence={
           'Password-reset codes go to the new address from now on, so enter one they can read. ' +
-          'They keep signing in with the email their account was created with.'
+          `${name} is signed out on every device and their current address is told of the ` +
+          'change. They keep signing in with the email their account was created with. ' +
+          'Only an admin can change a chief’s or an admin’s email.'
         }
         confirmLabel="Change email"
         onConfirm={() => run('changeEmail')}

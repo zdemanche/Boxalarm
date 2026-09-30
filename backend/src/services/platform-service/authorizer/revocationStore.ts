@@ -11,7 +11,8 @@ import { buildDeptScopedPk, toVerifiedDeptId } from '@boxalarm/dept-scope';
  */
 export const REVOCATION_ENTITY = 'SESSION_REVOCATION';
 
-export type RevocationReason = 'MEMBER_STATUS' | 'DEVICE_LOSS' | 'CREDENTIAL_RESET';
+export type RevocationReason =
+  'MEMBER_STATUS' | 'DEVICE_LOSS' | 'CREDENTIAL_RESET' | 'LOGIN_EMAIL_CHANGE';
 
 function revocationKey(deptId: string, sub: string): { pk: string; sk: string } {
   return {

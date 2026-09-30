@@ -5,6 +5,7 @@ import {
   AdminListGroupsForUserCommand,
   AdminRemoveUserFromGroupCommand,
   AdminUpdateUserAttributesCommand,
+  AdminUserGlobalSignOutCommand,
   CognitoIdentityProviderClient,
   UsernameExistsException,
 } from '@aws-sdk/client-cognito-identity-provider';
@@ -204,5 +205,16 @@ export async function syncMemberLoginEmail(
         { Name: 'email_verified', Value: 'true' },
       ],
     }),
+  );
+}
+
+/** Ends every session of the member's login (refresh tokens); the revocation marker ends access tokens. */
+export async function signOutMemberLogin(
+  client: CognitoIdentityProviderClient,
+  config: MemberLoginConfig,
+  memberId: string,
+): Promise<void> {
+  await client.send(
+    new AdminUserGlobalSignOutCommand({ UserPoolId: config.userPoolId, Username: memberId }),
   );
 }

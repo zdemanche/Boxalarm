@@ -459,6 +459,8 @@ describe('updateMember email changes', () => {
     process.env.VERIFIED_PERMISSIONS_POLICY_STORE_ID = 'ps-1';
     process.env.PLATFORM_TABLE_NAME = 'platform-table';
     process.env.COGNITO_USER_POOL_ID = 'us-east-1_pool';
+    process.env.NOTIFICATION_SES_FROM_ADDRESS = 'notifications@nicholsfd.example';
+    sesSend.mockReset().mockResolvedValue({});
   });
 
   afterEach(() => {
@@ -470,16 +472,21 @@ describe('updateMember email changes', () => {
   function table(
     storedEmail: string | undefined,
     transact: () => Promise<unknown> = () => Promise.resolve({}),
+    roles: string[] = ['MEMBER'],
   ) {
     return vi.fn((command: Command) => {
       if (command.constructor.name === 'GetCommand') {
         return Promise.resolve(
-          storedEmail === undefined ? {} : { Item: { memberId: 'mbr-2', email: storedEmail } },
+          storedEmail === undefined
+            ? {}
+            : { Item: { memberId: 'mbr-2', email: storedEmail, roles } },
         );
       }
       return transact();
     });
   }
+
+  const sesSend = vi.fn();
 
   function cognito(send = vi.fn().mockResolvedValue({})) {
     return { client: { send } as never, send };
@@ -500,6 +507,7 @@ describe('updateMember email changes', () => {
       client: fakeDocClient(docSend),
       vpClient: fakeVpClient('ALLOW'),
       cognito: cognitoSend.client,
+      ses: { send: sesSend } as never,
     });
     return wrapped(
       buildEvent(memberId, JSON.stringify(body), { authorization: 'Bearer token' }, principal),
@@ -514,7 +522,10 @@ describe('updateMember email changes', () => {
     const result = await run('mbr-2', { email: 'new@example.com' }, ADMIN, docSend, idp);
 
     expect(result).toMatchObject({ statusCode: 200 });
-    expect(idp.send).toHaveBeenCalledOnce();
+    expect(idp.send.mock.calls.map(([c]) => (c as Command).constructor.name)).toEqual([
+      'AdminUpdateUserAttributesCommand',
+      'AdminUserGlobalSignOutCommand',
+    ]);
     expect(attributesOf(idp.send.mock.calls[0]!)).toMatchObject({
       UserPoolId: 'us-east-1_pool',
       Username: 'mbr-2',
@@ -523,13 +534,116 @@ describe('updateMember email changes', () => {
         { Name: 'email_verified', Value: 'true' },
       ],
     });
-    expect(docSend.mock.calls.map(([c]) => c.constructor.name)).toEqual([
+    // Row, then the revocation marker before and after the global sign-out.
+    const commands = docSend.mock.calls.map(([c]) => c);
+    expect(commands.map((c) => c.constructor.name)).toEqual([
       'GetCommand',
       'TransactWriteCommand',
+      'PutCommand',
+      'PutCommand',
     ]);
+    expect(commands[2]!.input.Item).toMatchObject({
+      pk: 'DEPT#NICHOLS#SESSION_REVOCATION#mbr-2',
+      reason: 'LOGIN_EMAIL_CHANGE',
+      actorId: 'chief-1',
+    });
     expect(logSpy.mock.calls.some(([line]) => String(line).includes('"MemberEmailChanged"'))).toBe(
       true,
     );
+    logSpy.mockRestore();
+  });
+
+  // Server-fix security MAJOR 1: the recovery address is a takeover lever.
+  it.each([
+    ['CHIEF', 403],
+    ['ADMIN', 200],
+  ] as const)('a %s changing a chief’s email gets %i', async (group, status) => {
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    const docSend = table('chief2@example.com', undefined, ['MEMBER', 'CHIEF']);
+    const idp = cognito();
+
+    const result = await run(
+      'mbr-2',
+      { email: 'new@example.com' },
+      { ...ADMIN, 'cognito:groups': group },
+      docSend,
+      idp,
+    );
+
+    expect(result).toMatchObject({ statusCode: status });
+    expect(idp.send).toHaveBeenCalledTimes(status === 200 ? 2 : 0);
+    logSpy.mockRestore();
+  });
+
+  it('tells the previous address who changed it, and a failed notice never blocks the change', async () => {
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    sesSend.mockRejectedValueOnce(new Error('MessageRejected'));
+
+    const result = await run(
+      'mbr-2',
+      { email: 'new@example.com' },
+      ADMIN,
+      table('old@example.com'),
+      cognito(),
+    );
+
+    expect(result).toMatchObject({ statusCode: 200 });
+    const input = (sesSend.mock.calls[0]![0] as { input: Record<string, unknown> }).input;
+    expect(input).toMatchObject({
+      FromEmailAddress: 'notifications@nicholsfd.example',
+      Destination: { ToAddresses: ['old@example.com'] },
+    });
+    expect(JSON.stringify(input)).toContain('chief-1');
+    expect(
+      logSpy.mock.calls.some(([line]) => String(line).includes('"MemberEmailNoticeFailed"')),
+    ).toBe(true);
+    logSpy.mockRestore();
+    errorSpy.mockRestore();
+  });
+
+  it('a failed sign-out after the change is counted, and the change stands', async () => {
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const idp = cognito(
+      vi.fn().mockResolvedValueOnce({}).mockRejectedValueOnce(new Error('TooManyRequests')),
+    );
+
+    const result = await run(
+      'mbr-2',
+      { email: 'new@example.com' },
+      ADMIN,
+      table('old@example.com'),
+      idp,
+    );
+
+    expect(result).toMatchObject({ statusCode: 200 });
+    expect(
+      logSpy.mock.calls.some(([line]) => String(line).includes('"MemberEmailSignOutFailed"')),
+    ).toBe(true);
+    logSpy.mockRestore();
+    errorSpy.mockRestore();
+  });
+
+  it('normalises case and whitespace: a case-only re-send is a no-op, a new address is stored lowercase', async () => {
+    const idp = cognito();
+    const selfResult = await run(
+      'mbr-1',
+      { email: '  Mine@Example.COM ', firstName: 'Sam' },
+      SELF,
+      table('mine@example.com'),
+      idp,
+    );
+    expect(selfResult).toMatchObject({ statusCode: 200 });
+    expect(idp.send).not.toHaveBeenCalled();
+
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    const adminIdp = cognito();
+    await run('mbr-2', { email: ' New@Example.com' }, ADMIN, table('old@example.com'), adminIdp);
+    expect(attributesOf(adminIdp.send.mock.calls[0]!).UserAttributes).toEqual([
+      { Name: 'email', Value: 'new@example.com' },
+      { Name: 'email_verified', Value: 'true' },
+    ]);
     logSpy.mockRestore();
   });
 

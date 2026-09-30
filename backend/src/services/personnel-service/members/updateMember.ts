@@ -19,8 +19,11 @@ import { INVALID_PHONE_MESSAGE, normalizePhoneE164 } from '../lib/phone.js';
 import {
   getCognitoClient,
   readMemberLoginConfig,
+  signOutMemberLogin,
   syncMemberLoginEmail,
 } from '../lib/memberLogin.js';
+import { SendEmailCommand, SESv2Client } from '@aws-sdk/client-sesv2';
+import { writeRevocationMarker } from '../../platform-service/authorizer/revocationStore.js';
 
 const UPDATABLE_FIELDS = ['phone', 'email', 'firstName', 'lastName'] as const;
 type UpdatableField = (typeof UPDATABLE_FIELDS)[number];
@@ -71,7 +74,9 @@ function emitPersonnelMetric(
     | 'MemberProfileUpdateFailed'
     | 'MemberEmailChanged'
     | 'MemberEmailSyncFailed'
-    | 'MemberEmailCompensationFailed',
+    | 'MemberEmailCompensationFailed'
+    | 'MemberEmailSignOutFailed'
+    | 'MemberEmailNoticeFailed',
   reason?: string,
 ): void {
   console.log(
@@ -129,6 +134,118 @@ type EditMode = 'self' | 'admin';
 interface ProfileDeps {
   readonly client?: DynamoDBDocumentClient;
   readonly cognito?: CognitoIdentityProviderClient;
+  readonly ses?: SESv2Client;
+}
+
+/** Trim + lowercase: the unchanged check and what is stored agree on case and whitespace. */
+function normalizeEmail(email: string): string {
+  return email.trim().toLowerCase();
+}
+
+/**
+ * Server-fix security MAJOR 1: the email is the recovery address and is set verified, so
+ * whoever changes it can complete "forgot password". A CHIEF or ADMIN target's email is
+ * therefore changed only by an ADMIN (the kill switches' protected-target rule).
+ */
+const PROTECTED_TARGET_ROLES = new Set(['CHIEF', 'ADMIN']);
+
+function isProtectedEmailTarget(roles: unknown): boolean {
+  return Array.isArray(roles) && roles.some((role) => PROTECTED_TARGET_ROLES.has(String(role)));
+}
+
+let cachedSes: SESv2Client | undefined;
+
+/**
+ * Detective control, never a challenge (the settled no-step-up decision): the PREVIOUS address
+ * is told its recovery email changed and by whom, so a quiet takeover is noticed. Best effort -
+ * a failure is logged and counted, never blocks the change.
+ */
+async function noticePreviousEmail(
+  deps: ProfileDeps,
+  previousEmail: string,
+  newEmail: string,
+  actorId: string,
+  traceId: string,
+  memberId: string,
+): Promise<void> {
+  const from = process.env.NOTIFICATION_SES_FROM_ADDRESS;
+  if (!from) {
+    logEvent('personnel.member.email.noticeSkipped', {
+      correlationId: traceId,
+      memberId,
+      reason: 'NOTIFICATION_SES_FROM_ADDRESS is not set',
+    });
+    emitPersonnelMetric('MemberEmailNoticeFailed', 'Unconfigured');
+    return;
+  }
+  try {
+    const ses = deps.ses ?? (cachedSes ??= new SESv2Client({}));
+    await ses.send(
+      new SendEmailCommand({
+        FromEmailAddress: from,
+        Destination: { ToAddresses: [previousEmail] },
+        Content: {
+          Simple: {
+            Subject: { Data: 'Your Boxalarm sign-in email was changed' },
+            Body: {
+              Text: {
+                Data:
+                  `The email on your Boxalarm account was changed to ${newEmail} by member ${actorId}. ` +
+                  'Password-reset codes now go there, and you have been signed out everywhere. ' +
+                  'If you did not expect this, tell your chief at once. ' +
+                  `Reference: ${traceId}`,
+              },
+            },
+          },
+        },
+      }),
+    );
+  } catch (error) {
+    logEvent('personnel.member.email.noticeFailed', { correlationId: traceId, memberId }, error);
+    emitPersonnelMetric(
+      'MemberEmailNoticeFailed',
+      error instanceof Error ? error.name : 'UnknownError',
+    );
+  }
+}
+
+/**
+ * A changed login email ends every session of that member: the revocation marker (existing
+ * access tokens stop at the authorizer) and a global sign-out (refresh tokens), so the real
+ * member notices at once and no session opened before the change outlives it. Runs after the
+ * row write: a failure is counted (alarmed) but does not undo the change.
+ */
+async function endSessionsAfterEmailChange(
+  client: CognitoIdentityProviderClient,
+  loginConfig: ReturnType<typeof readMemberLoginConfig>,
+  docClient: DynamoDBDocumentClient,
+  tableName: string,
+  input: { deptId: string; memberId: string; actorId: string; traceId: string },
+): Promise<void> {
+  const marker = () =>
+    writeRevocationMarker(docClient, tableName, {
+      deptId: input.deptId,
+      sub: input.memberId,
+      reason: 'LOGIN_EMAIL_CHANGE',
+      actorId: input.actorId,
+    });
+  try {
+    await marker();
+    await signOutMemberLogin(client, loginConfig, input.memberId);
+    // Again after the sign-out: a refresh that landed in between minted a token newer than
+    // the first revokedAt (the kill switches' pattern).
+    await marker();
+  } catch (error) {
+    logEvent(
+      'personnel.member.email.signOutFailed',
+      { correlationId: input.traceId, memberId: input.memberId },
+      error,
+    );
+    emitPersonnelMetric(
+      'MemberEmailSignOutFailed',
+      error instanceof Error ? error.name : 'UnknownError',
+    );
+  }
 }
 
 /**
@@ -162,13 +279,14 @@ async function updateMemberProfile(
     );
   }
   // Stored in E.164: the alerting plane texts and dials exactly this string (lib/phone.ts).
-  let updates: UpdateMemberBody = parsed;
+  let updates: UpdateMemberBody =
+    parsed.email !== undefined ? { ...parsed, email: normalizeEmail(parsed.email) } : parsed;
   if (parsed.phone !== undefined && parsed.phone !== null) {
     const phone = normalizePhoneE164(parsed.phone);
     if (!phone) {
       return badRequestProblem(traceId, INVALID_PHONE_MESSAGE);
     }
-    updates = { ...parsed, phone };
+    updates = { ...updates, phone };
   }
 
   const deptId = toVerifiedDeptId(principal);
@@ -190,7 +308,7 @@ async function updateMemberProfile(
       return notFoundProblem(traceId, `Member ${memberId} was not found.`);
     }
     const stored = typeof current.Item.email === 'string' ? current.Item.email : undefined;
-    if (stored === updates.email) {
+    if (stored !== undefined && normalizeEmail(stored) === updates.email) {
       updates = Object.fromEntries(Object.entries(updates).filter(([field]) => field !== 'email'));
     } else if (mode === 'self') {
       logEvent('personnel.member.update.selfEmailRefused', { correlationId: traceId, memberId });
@@ -198,6 +316,21 @@ async function updateMemberProfile(
         403,
         'Forbidden',
         'Your email is also where password-reset codes go, so only a chief or admin can change it. Ask them to update it.',
+        traceId,
+      );
+    } else if (
+      isProtectedEmailTarget(current.Item.roles) &&
+      !principal['cognito:groups'].split(' ').includes('ADMIN')
+    ) {
+      logEvent('personnel.member.update.protectedEmailRefused', {
+        correlationId: traceId,
+        memberId,
+        actorId: principal.sub,
+      });
+      return problem(
+        403,
+        'Forbidden',
+        'Only an admin can change the email of a chief or an admin: it is where their password-reset codes go.',
         traceId,
       );
     } else {
@@ -332,6 +465,25 @@ async function updateMemberProfile(
 
   emitPersonnelMetric('MemberProfileUpdated');
   if (updates.email !== undefined) {
+    if (loginConfig) {
+      await endSessionsAfterEmailChange(
+        cognito ?? getCognitoClient(),
+        loginConfig,
+        docClient,
+        config.tableName,
+        { deptId, memberId, actorId: principal.sub, traceId },
+      );
+    }
+    if (previousEmail !== undefined) {
+      await noticePreviousEmail(
+        deps,
+        previousEmail,
+        updates.email,
+        principal.sub,
+        traceId,
+        memberId,
+      );
+    }
     // Alarmed to the chief (infra personnel/members.ts): the recovery address moved.
     emitPersonnelMetric('MemberEmailChanged');
     logEvent('personnel.member.email.changed', {
@@ -383,6 +535,7 @@ export function createHandler(
     client?: DynamoDBDocumentClient;
     vpClient?: VerifiedPermissionsClient;
     cognito?: CognitoIdentityProviderClient;
+    ses?: SESv2Client;
   } = {},
 ) {
   const common = {

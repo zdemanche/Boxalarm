@@ -20,6 +20,11 @@ export interface MembersArgs {
   httpApi: HttpApi;
   /** Every LOA/RETIRED change notifies the chief (review M5). */
   chiefNotificationTopicArn: pulumi.Input<string>;
+  /**
+   * Verified SES sender (stack config notificationSesFromAddress): an email change is
+   * notified to the member's previous address (server-fix security MAJOR 1).
+   */
+  sesFromAddress: pulumi.Input<string>;
 }
 
 // Per-route IAM, scoped to what each real handler (backend/src/services/personnel-service/
@@ -149,7 +154,7 @@ export class Members extends pulumi.ComponentResource {
   public readonly deactivationAlarms: Record<"LOA" | "RETIRED", aws.cloudwatch.MetricAlarm>;
   /** Security-web MAJOR 2: a member's recovery address moved, or Cognito and the row diverged. */
   public readonly emailAlarms: Record<
-    "MemberEmailChanged" | "MemberEmailCompensationFailed",
+    "MemberEmailChanged" | "MemberEmailCompensationFailed" | "MemberEmailSignOutFailed",
     aws.cloudwatch.MetricAlarm
   >;
 
@@ -304,7 +309,8 @@ export class Members extends pulumi.ComponentResource {
     // code (updateMember.ts syncs it to Cognito). The chief hears of every one, as for LOA -
     // and of a row write whose Cognito change could not be undone (the two now differ).
     const emailAlarm = (
-      metricName: "MemberEmailChanged" | "MemberEmailCompensationFailed",
+      metricName:
+        "MemberEmailChanged" | "MemberEmailCompensationFailed" | "MemberEmailSignOutFailed",
       slug: string,
       alarmDescription: string,
     ) =>
@@ -337,6 +343,12 @@ export class Members extends pulumi.ComponentResource {
         "A member's email change reached Cognito but not the member row, and could not be undone: their recovery code goes to an address the console does not show. " +
           "Re-save the email from the member's page (personnel.member.email.compensationFailed names the member).",
       ),
+      MemberEmailSignOutFailed: emailAlarm(
+        "MemberEmailSignOutFailed",
+        "member-email-signout-failed",
+        "A member's login email changed but their sessions could not be ended (personnel.member.email.signOutFailed names the member). " +
+          "Use Account security > Report device lost for them (all devices) so no session from before the change survives.",
+      ),
     };
 
     // E2-S6-INFRA #208: member self-service profile/contact update (F2.6, AP 12). One route,
@@ -360,14 +372,25 @@ export class Members extends pulumi.ComponentResource {
           PLATFORM_TABLE_NAME: args.platformTableName,
           VERIFIED_PERMISSIONS_POLICY_STORE_ID: args.policyStoreId,
           COGNITO_USER_POOL_ID: args.userPoolId,
+          NOTIFICATION_SES_FROM_ADDRESS: args.sesFromAddress,
         },
+        // A login-email change also ends the member's sessions (the revocation marker is a
+        // PutItem the table-wide grant below already covers; AdminUserGlobalSignOut) and
+        // emails the previous address (ses:SendEmail on the sending identity only).
         // UpdateItem (member row) + PutItem (outbox row), one transaction; plus the
         // audit-key mutation deny every table-wide UpdateItem holder carries (F9.4).
         // GetItem on member rows only: an email edit reads the stored address first.
         // AdminUpdateUserAttributes in this pool only: the email sync and its undo.
         additionalPolicyStatements: pulumi
-          .all([args.platformTableArn, vpStatement, args.userPoolArn])
-          .apply(([tableArn, vp, userPoolArn]) => [
+          .all([
+            args.platformTableArn,
+            vpStatement,
+            args.userPoolArn,
+            args.sesFromAddress,
+            aws.getRegionOutput({}, { parent: this }).name,
+            aws.getCallerIdentityOutput({}, { parent: this }).accountId,
+          ])
+          .apply(([tableArn, vp, userPoolArn, fromAddress, regionName, accountId]) => [
             {
               Sid: "MembersUpdateProfileAccess" as const,
               Effect: "Allow" as const,
@@ -386,8 +409,22 @@ export class Members extends pulumi.ComponentResource {
             {
               Sid: "MembersUpdateProfileLoginEmail" as const,
               Effect: "Allow" as const,
-              Action: ["cognito-idp:AdminUpdateUserAttributes"],
+              Action: [
+                "cognito-idp:AdminUpdateUserAttributes",
+                "cognito-idp:AdminUserGlobalSignOut",
+              ],
               Resource: [userPoolArn],
+            },
+            {
+              // SES authorizes SendEmail against the sending identity: the address itself,
+              // or its domain when the domain is the verified identity.
+              Sid: "MembersUpdateProfileEmailNotice" as const,
+              Effect: "Allow" as const,
+              Action: ["ses:SendEmail"],
+              Resource: [
+                `arn:aws:ses:${regionName}:${accountId}:identity/${fromAddress}`,
+                `arn:aws:ses:${regionName}:${accountId}:identity/${fromAddress.split("@")[1] ?? fromAddress}`,
+              ],
             },
             ...vp,
             auditMutationDenyStatement(tableArn),
