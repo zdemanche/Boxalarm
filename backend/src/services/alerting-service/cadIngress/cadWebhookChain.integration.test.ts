@@ -96,6 +96,7 @@ describe('CAD webhook -> DISPATCH_ALERT -> stream fan-out pages every member at 
   beforeEach(() => {
     vi.resetModules();
     process.env.ALERTING_TABLE_NAME = TABLE_NAME;
+    process.env.CAD_WEBHOOK_SECRET_PREFIX = 'boxalarm-dev-cad-webhook/';
     process.env.ALERTING_TOPIC_ARN = 'arn:aws:sns:us-east-1:1:boxalarm-dev-alerting.fifo';
     process.env.ESCALATION_HANDLER_ARN = 'arn:aws:lambda:us-east-1:1:function:escalation';
     process.env.TONE_EVALUATOR_HANDLER_ARN = 'arn:aws:lambda:us-east-1:1:function:tone-evaluator';
@@ -132,7 +133,11 @@ describe('CAD webhook -> DISPATCH_ALERT -> stream fan-out pages every member at 
     }));
     const keys = await import('./webhookKeys.js');
     keys.resetWebhookKeyCache({
-      send: vi.fn().mockResolvedValue({ SecretString: JSON.stringify({ current: KEY }) }),
+      send: vi
+        .fn()
+        .mockResolvedValue({
+          SecretString: JSON.stringify({ deptId: DEPT, sourceId: 'county', current: KEY }),
+        }),
     } as unknown as SecretsManagerClient);
   }
 
@@ -160,7 +165,7 @@ describe('CAD webhook -> DISPATCH_ALERT -> stream fan-out pages every member at 
     const value = {
       sources: withWebhookKey(saved.sources, 'county', {
         keyId: `${DEPT}.county`,
-        secretName: 'boxalarm-dev-cad-webhook-nichols-fd-county',
+        secretName: 'boxalarm-dev-cad-webhook/nichols-fd/county',
         rotatedAt: '2026-09-30T00:00:00.000Z',
       }),
     };

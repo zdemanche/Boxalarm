@@ -8,6 +8,7 @@ import {
 } from '@aws-sdk/client-secrets-manager';
 import type { APIGatewayProxyResultV2 } from 'aws-lambda';
 import {
+  conflictProblem,
   extractTraceId,
   notFoundProblem,
   withAuthorization,
@@ -48,37 +49,75 @@ export function setSecretsClient(override: SecretsManagerClient | undefined): vo
   client = override;
 }
 
+/**
+ * `{prefix}{deptId}/{sourceId}` - '/' can occur in neither part (deptIds are [A-Za-z0-9_-],
+ * sourceIds [a-z0-9-]), so two departments' sources can never name the same secret (security
+ * review M1: with '-' as the separator, dept "nichols" source "fd-county" and dept "nichols-fd"
+ * source "county" collided and one chief could mint the other's key).
+ */
+export function cadWebhookSecretName(prefix: string, deptId: string, sourceId: string): string {
+  if (!/^[A-Za-z0-9_-]{1,64}$/.test(deptId) || !SOURCE_ID.test(sourceId)) {
+    throw new Error('deptId or sourceId cannot name a CAD webhook secret');
+  }
+  return `${prefix}${deptId}/${sourceId}`;
+}
+
 function secretName(deptId: VerifiedDeptId, sourceId: string): string {
   const prefix = process.env.CAD_WEBHOOK_SECRET_PREFIX;
   if (!prefix) throw new Error('CAD_WEBHOOK_SECRET_PREFIX is required and was not set');
-  return `${prefix}${deptId}-${sourceId}`;
+  return cadWebhookSecretName(prefix, deptId, sourceId);
 }
 
-async function readCurrentKey(name: string): Promise<string | undefined> {
+/** The secret's value: its owner, so ingress can refuse a secret that is not this source's. */
+interface WebhookSecretValue {
+  readonly deptId: string;
+  readonly sourceId: string;
+  readonly current: string;
+  readonly previous?: string;
+}
+
+export class SecretOwnerMismatchError extends Error {
+  constructor() {
+    super('the CAD webhook secret belongs to another department or source');
+    this.name = 'SecretOwnerMismatchError';
+  }
+}
+
+async function readSecret(
+  name: string,
+  owner: { deptId: string; sourceId: string },
+): Promise<WebhookSecretValue | undefined> {
   try {
     const output = await secrets().send(new GetSecretValueCommand({ SecretId: name }));
-    const parsed = JSON.parse(output.SecretString ?? '{}') as { current?: unknown };
-    return typeof parsed.current === 'string' ? parsed.current : undefined;
+    const parsed = JSON.parse(output.SecretString ?? '{}') as Partial<WebhookSecretValue>;
+    if (parsed.deptId !== owner.deptId || parsed.sourceId !== owner.sourceId) {
+      throw new SecretOwnerMismatchError();
+    }
+    return parsed as WebhookSecretValue;
   } catch (error) {
     if (error instanceof ResourceNotFoundException) return undefined;
     throw error;
   }
 }
 
-async function writeKeys(name: string, current: string, previous: string | undefined) {
-  const value = JSON.stringify(previous ? { current, previous } : { current });
-  try {
-    await secrets().send(new PutSecretValueCommand({ SecretId: name, SecretString: value }));
-  } catch (error) {
-    if (!(error instanceof ResourceNotFoundException)) throw error;
-    await secrets().send(
-      new CreateSecretCommand({
-        Name: name,
-        Description: 'CAD webhook HMAC keys { current, previous } (Boxalarm CAD ingress)',
-        SecretString: value,
-      }),
-    );
+async function writeSecret(name: string, value: WebhookSecretValue, exists: boolean) {
+  const secretString = JSON.stringify(value);
+  if (exists) {
+    await secrets().send(new PutSecretValueCommand({ SecretId: name, SecretString: secretString }));
+    return;
   }
+  await secrets().send(
+    new CreateSecretCommand({
+      Name: name,
+      Description: 'CAD webhook HMAC keys (Boxalarm CAD ingress)',
+      SecretString: secretString,
+      Tags: [
+        { Key: 'boxalarm:deptId', Value: value.deptId },
+        { Key: 'boxalarm:sourceId', Value: value.sourceId },
+        { Key: 'boxalarm:purpose', Value: 'cad-webhook' },
+      ],
+    }),
+  );
 }
 
 async function rotate(
@@ -96,7 +135,25 @@ async function rotate(
 
   const name = secretName(deptId, sourceId);
   const key = randomBytes(32).toString('hex');
-  await writeKeys(name, key, await readCurrentKey(name));
+  const owner = { deptId, sourceId };
+  let existing: WebhookSecretValue | undefined;
+  try {
+    existing = await readSecret(name, owner);
+  } catch (error) {
+    if (error instanceof SecretOwnerMismatchError) {
+      logger.error({ event: 'platform.cadSources.secretOwnerMismatch', correlationId: traceId });
+      return conflictProblem(
+        traceId,
+        'This source cannot be keyed; contact the platform operator.',
+      );
+    }
+    throw error;
+  }
+  await writeSecret(
+    name,
+    { ...owner, current: key, ...(existing?.current ? { previous: existing.current } : {}) },
+    existing !== undefined,
+  );
 
   const rotatedAt = new Date().toISOString();
   const keyId = `${deptId}.${sourceId}`;

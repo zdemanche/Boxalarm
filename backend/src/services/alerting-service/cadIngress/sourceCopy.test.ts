@@ -15,7 +15,7 @@ const SOURCE = {
   label: 'County CAD',
   enabled: true,
   email: { allowedSenders: ['CAD.County.gov'], recipientToken: 'k3j9x2m4p7q8' },
-  webhook: { keyId: 'nichols-fd.county', secretName: 'boxalarm-dev-cad-webhook-nichols-fd-county' },
+  webhook: { keyId: 'nichols-fd.county', secretName: 'boxalarm-dev-cad-webhook/nichols-fd/county' },
   parser: { version: 2, fields: { address: { label: 'ADDR' } } },
 };
 

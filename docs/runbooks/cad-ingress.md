@@ -15,7 +15,7 @@ Both write the same `DISPATCH_ALERT` the manual route writes (`sourceSystem: CAD
 |---|---|---|
 | Sources, sender allowlists, parser templates | platform table `DEPT#<deptId>` / `CONFIG#CAD_INGRESS` | Web: Settings → CAD sources (CHIEF/ADMIN, Cedar `ManageCadIngress`) |
 | What ingress reads | alerting table `DEPT#<deptId>#CAD_INGRESS` / `METADATA` (`CAD_INGRESS_COPY`) | `boxalarm-<env>-alerting-cad-source-copy-consumer`, from `platform.config.updated` |
-| Webhook HMAC keys `{current, previous}` | Secrets Manager `boxalarm-<env>-cad-webhook-<deptId>-<sourceId>` | `boxalarm-<env>-platform-cad-sources-rotate-key` only |
+| Webhook HMAC keys `{current, previous}` | Secrets Manager `boxalarm-<env>-cad-webhook/<deptId>/<sourceId>` | `boxalarm-<env>-platform-cad-sources-rotate-key` only |
 | Raw inbound mail | `s3://boxalarm-<env>-cad-mail-<account>/inbound/<SES message id>` (SSE-KMS, expires after 30 days) | SES |
 | Replay markers | alerting table `DEPT#<deptId>#CAD_REPLAY#<sourceId>#<token>` (TTL 15 min webhook, 24 h email) | the ingress Lambdas |
 

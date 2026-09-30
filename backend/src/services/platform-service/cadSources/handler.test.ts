@@ -19,7 +19,7 @@ process.env.VERIFIED_PERMISSIONS_POLICY_STORE_ID = 'ps-1';
 process.env.PLATFORM_TABLE_NAME = 'platform-table';
 process.env.CAD_INGRESS_EMAIL_DOMAIN = 'ingress.example.org';
 process.env.CAD_WEBHOOK_URL = 'https://cad.example.org/api/v1/alerting/ingress/cad-webhook';
-process.env.CAD_WEBHOOK_SECRET_PREFIX = 'boxalarm-dev-cad-webhook-';
+process.env.CAD_WEBHOOK_SECRET_PREFIX = 'boxalarm-dev-cad-webhook/';
 
 import { Decision } from '@aws-sdk/client-verifiedpermissions';
 import {
@@ -228,8 +228,18 @@ describe('POST /platform/cad-sources/{sourceId}/webhook-key', () => {
     const create = smSend.mock.calls.find(
       ([c]) => (c as Command).constructor.name === 'CreateSecretCommand',
     )?.[0] as Command;
-    expect(create.input.Name).toBe('boxalarm-dev-cad-webhook-nichols-fd-county');
-    expect(JSON.parse(String(create.input.SecretString))).toEqual({ current: body.secret });
+    expect(create.input.Name).toBe('boxalarm-dev-cad-webhook/nichols-fd/county');
+    expect(create.input.Tags).toEqual(
+      expect.arrayContaining([
+        { Key: 'boxalarm:deptId', Value: 'nichols-fd' },
+        { Key: 'boxalarm:sourceId', Value: 'county' },
+      ]),
+    );
+    expect(JSON.parse(String(create.input.SecretString))).toEqual({
+      deptId: 'nichols-fd',
+      sourceId: 'county',
+      current: body.secret,
+    });
     // The config now points the alerting plane at the secret.
     const [config] = transactItems();
     expect(JSON.stringify(config)).toContain('"webhook":{"keyId":"nichols-fd.county"');
@@ -247,7 +257,13 @@ describe('POST /platform/cad-sources/{sourceId}/webhook-key', () => {
     smSend.mockImplementation((command: Command) =>
       Promise.resolve(
         command.constructor.name === 'GetSecretValueCommand'
-          ? { SecretString: JSON.stringify({ current: old }) }
+          ? {
+              SecretString: JSON.stringify({
+                deptId: 'nichols-fd',
+                sourceId: 'county',
+                current: old,
+              }),
+            }
           : {},
       ),
     );
@@ -258,9 +274,43 @@ describe('POST /platform/cad-sources/{sourceId}/webhook-key', () => {
       ([c]) => (c as Command).constructor.name === 'PutSecretValueCommand',
     )?.[0] as Command;
     expect(JSON.parse(String(put.input.SecretString))).toEqual({
+      deptId: 'nichols-fd',
+      sourceId: 'county',
       current: (JSON.parse(response.body) as { secret: string }).secret,
       previous: old,
     });
+  });
+
+  it('secret names cannot collide across departments (security review M1)', async () => {
+    const { cadWebhookSecretName } = await import('./rotateKey.js');
+    const a = cadWebhookSecretName('p/', 'nichols', 'fd-county');
+    const b = cadWebhookSecretName('p/', 'nichols-fd', 'county');
+    expect(a).not.toBe(b);
+    expect(() => cadWebhookSecretName('p/', 'a/b', 'c')).toThrow();
+  });
+
+  it('refuses to rotate a secret whose value names another owner (409), writing nothing', async () => {
+    await saveSource();
+    smSend.mockImplementation((command: Command) =>
+      Promise.resolve(
+        command.constructor.name === 'GetSecretValueCommand'
+          ? {
+              SecretString: JSON.stringify({
+                deptId: 'nichols',
+                sourceId: 'fd-county',
+                current: 'x',
+              }),
+            }
+          : {},
+      ),
+    );
+    const response = (await rotateHandler(event('POST /x', undefined, { sourceId: 'county' }))) as {
+      statusCode: number;
+    };
+    expect(response.statusCode).toBe(409);
+    expect(
+      smSend.mock.calls.some(([c]) => (c as Command).constructor.name === 'PutSecretValueCommand'),
+    ).toBe(false);
   });
 
   it('is 404 for a source that has not been saved', async () => {

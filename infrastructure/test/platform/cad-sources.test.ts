@@ -14,7 +14,7 @@ import {
 const PLATFORM_TABLE = "arn:aws:dynamodb:us-east-1:123456789012:table/boxalarm-dev-platform-table";
 const SETTINGS_FN = "boxalarm-dev-platform-cad-sources";
 const ROTATE_FN = "boxalarm-dev-platform-cad-sources-rotate-key";
-const SECRETS = `arn:aws:secretsmanager:us-east-1:${ACCOUNT_ID}:secret:boxalarm-dev-cad-webhook-*`;
+const SECRETS = `arn:aws:secretsmanager:us-east-1:${ACCOUNT_ID}:secret:boxalarm-dev-cad-webhook/*`;
 
 const routes: { routeKey: string; lambda: string }[] = [];
 
@@ -76,7 +76,7 @@ describe("CadSources (platform settings routes)", { timeout: 30_000 }, () => {
       expect(isGranted(rotate, action, SECRETS)).toBe(true);
       expect(isGranted(rotate, action, "*")).toBe(false);
     }
-    expect(lambdaEnv(ROTATE_FN).CAD_WEBHOOK_SECRET_PREFIX).toBe("boxalarm-dev-cad-webhook-");
+    expect(lambdaEnv(ROTATE_FN).CAD_WEBHOOK_SECRET_PREFIX).toBe("boxalarm-dev-cad-webhook/");
   });
 
   it("scopes the table to the department partition and its outbox", async () => {

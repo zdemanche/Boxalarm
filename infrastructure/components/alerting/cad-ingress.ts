@@ -62,9 +62,12 @@ export interface CadIngressArgs {
   emailDomain?: string;
 }
 
-/** The webhook secret names the rotation route creates: `{prefix}{deptId}-{sourceId}`. */
+/**
+ * The webhook secret names the rotation route creates: `{prefix}{deptId}/{sourceId}`. '/' is in
+ * neither id, so names cannot collide across departments (security review M1).
+ */
 export function cadWebhookSecretPrefix(env: string): string {
-  return `boxalarm-${env}-cad-webhook-`;
+  return `boxalarm-${env}-cad-webhook/`;
 }
 
 /**
@@ -401,6 +404,8 @@ export class CadIngress extends pulumi.ComponentResource {
         environment: {
           ALERTING_TABLE_NAME: args.alertingTableName,
           CAD_UPDATE_NOTIFIER_FUNCTION: this.updateNotifierLambda.function.name,
+          // The webhook refuses a source whose secret is not exactly {prefix}{dept}/{source}.
+          CAD_WEBHOOK_SECRET_PREFIX: cadWebhookSecretPrefix(env),
         },
         additionalPolicyStatements: pulumi
           .all([tableArn, secretArnPattern, invokeNotifier])

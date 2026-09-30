@@ -91,7 +91,7 @@ describe("CadIngress IAM: alerting boundary, never a LOB table", { timeout: 30_0
   it("the webhook Lambda reads only the CAD webhook secrets and cannot write them", async () => {
     await build();
     const statements = statementsForRole(WEBHOOK_FN);
-    const secretArn = `arn:aws:secretsmanager:us-east-1:${ACCOUNT_ID}:secret:boxalarm-dev-cad-webhook-*`;
+    const secretArn = `arn:aws:secretsmanager:us-east-1:${ACCOUNT_ID}:secret:boxalarm-dev-cad-webhook/*`;
     expect(isGranted(statements, "secretsmanager:GetSecretValue", secretArn)).toBe(true);
     expect(isGranted(statements, "secretsmanager:PutSecretValue", () => true)).toBe(false);
     expect(isGranted(statements, "secretsmanager:GetSecretValue", "*")).toBe(false);
@@ -145,6 +145,9 @@ describe("CadIngress update notifier (CAD updates to a paged call)", { timeout: 
         isGranted(statementsForRole(fn), "lambda:InvokeFunction", (r) => r.endsWith(NOTIFIER_FN)),
       ).toBe(true);
       expect(lambdaEnv(fn).CAD_UPDATE_NOTIFIER_FUNCTION).toBe(NOTIFIER_FN);
+      if (fn === WEBHOOK_FN) {
+        expect(lambdaEnv(fn).CAD_WEBHOOK_SECRET_PREFIX).toBe("boxalarm-dev-cad-webhook/");
+      }
     }
     expect(
       resourcesOfType("aws:lambda/eventSourceMapping:EventSourceMapping").some(

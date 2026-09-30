@@ -21,7 +21,7 @@ const INPUT: CadSourceInput = {
 
 const KEY = {
   keyId: 'nichols-fd.county',
-  secretName: 'boxalarm-dev-cad-webhook-nichols-fd-county',
+  secretName: 'boxalarm-dev-cad-webhook/nichols-fd/county',
   rotatedAt: '2026-09-30T00:00:00.000Z',
 };
 

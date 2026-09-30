@@ -13,6 +13,7 @@ const CURRENT = 'c'.repeat(64);
 const PREVIOUS = 'p'.repeat(64);
 const KEY_ID = 'nichols-fd.county';
 const NOW = 1_800_000_000;
+const OWNER = { deptId: 'nichols-fd', sourceId: 'county' };
 
 const COPY = {
   pk: 'DEPT#nichols-fd#CAD_INGRESS',
@@ -22,7 +23,7 @@ const COPY = {
       sourceId: 'county',
       label: 'County CAD',
       enabled: true,
-      webhook: { keyId: KEY_ID, secretName: 'boxalarm-dev-cad-webhook-nichols-fd-county' },
+      webhook: { keyId: KEY_ID, secretName: 'boxalarm-dev-cad-webhook/nichols-fd/county' },
       parser: {
         version: 1,
         fields: { address: { label: 'ADDR' }, incidentNumber: { label: 'INC' } },
@@ -32,7 +33,7 @@ const COPY = {
       sourceId: 'off',
       label: 'Disabled',
       enabled: false,
-      webhook: { keyId: 'nichols-fd.off', secretName: 'boxalarm-dev-cad-webhook-nichols-fd-off' },
+      webhook: { keyId: 'nichols-fd.off', secretName: 'boxalarm-dev-cad-webhook/nichols-fd/off' },
     },
   ],
 };
@@ -80,11 +81,12 @@ describe('CAD webhook handler', () => {
     vi.useFakeTimers({ toFake: ['Date'] });
     vi.setSystemTime(NOW * 1000);
     process.env.ALERTING_TABLE_NAME = 'alerting';
+    process.env.CAD_WEBHOOK_SECRET_PREFIX = 'boxalarm-dev-cad-webhook/';
     vi.spyOn(console, 'log').mockImplementation(() => undefined);
     vi.spyOn(console, 'error').mockImplementation(() => undefined);
     table = { items: new Map([[`${COPY.pk}|${COPY.sk}`, COPY]]) };
     secretSend = vi.fn().mockResolvedValue({
-      SecretString: JSON.stringify({ current: CURRENT, previous: PREVIOUS }),
+      SecretString: JSON.stringify({ ...OWNER, current: CURRENT, previous: PREVIOUS }),
     });
     const dynamo = fakeDynamo(table);
     vi.doMock('../eligibility/dynamoClient.js', async (importOriginal) => ({
@@ -140,7 +142,7 @@ describe('CAD webhook handler', () => {
     });
     expect(metric('CadIngressAccepted')).toBe(true);
     expect((secretSend.mock.calls[0]?.[0] as { input: unknown }).input).toEqual({
-      SecretId: 'boxalarm-dev-cad-webhook-nichols-fd-county',
+      SecretId: 'boxalarm-dev-cad-webhook/nichols-fd/county',
     });
   });
 
@@ -185,7 +187,7 @@ describe('CAD webhook handler', () => {
     const NEW = 'n'.repeat(64);
     expect((await call(webhookEvent(DISPATCH))).statusCode).toBe(202); // caches {CURRENT, PREVIOUS}
     secretSend.mockResolvedValue({
-      SecretString: JSON.stringify({ current: NEW, previous: CURRENT }),
+      SecretString: JSON.stringify({ ...OWNER, current: NEW, previous: CURRENT }),
     });
     vi.setSystemTime((NOW + 10) * 1000);
     const other = JSON.stringify({ text: 'INC: 2026-2\nADDR: 9 OAK AVE' });
@@ -277,8 +279,32 @@ describe('CAD webhook handler', () => {
     expect(alerts()).toHaveLength(0);
   });
 
+  it('a secret whose value names another department or source yields no key (401)', async () => {
+    secretSend.mockResolvedValue({
+      SecretString: JSON.stringify({ deptId: 'nichols', sourceId: 'fd-county', current: CURRENT }),
+    });
+    expect((await call(webhookEvent(DISPATCH))).statusCode).toBe(401);
+    expect(alerts()).toHaveLength(0);
+  });
+
+  it("a copy pointing at a secret name that is not this source's own is refused before any read", async () => {
+    const copy = table.items.get(`${COPY.pk}|${COPY.sk}`)!;
+    const sources = copy.sources as Record<string, unknown>[];
+    table.items.set(`${COPY.pk}|${COPY.sk}`, {
+      ...copy,
+      sources: [
+        {
+          ...sources[0],
+          webhook: { keyId: KEY_ID, secretName: 'boxalarm-dev-cad-webhook/nichols/fd-county' },
+        },
+      ],
+    });
+    expect((await call(webhookEvent(DISPATCH))).statusCode).toBe(401);
+    expect(secretSend).not.toHaveBeenCalled();
+  });
+
   it('a secret with no usable key is 401 (NoActiveKey)', async () => {
-    secretSend.mockResolvedValue({ SecretString: '{"current":"short"}' });
+    secretSend.mockResolvedValue({ SecretString: JSON.stringify({ ...OWNER, current: 'short' }) });
     expect((await call(webhookEvent(DISPATCH))).statusCode).toBe(401);
     expect(metric('CadIngressAuthFailed', 'NoActiveKey')).toBe(true);
   });

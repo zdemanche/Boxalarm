@@ -27,7 +27,15 @@ export function resetWebhookKeyCache(override?: SecretsManagerClient): void {
   client = override;
 }
 
-export function parseWebhookSecret(secretString: string | undefined): string[] {
+/**
+ * The active keys in a source's secret, current first - but only when the secret names this
+ * source as its owner (security review M1): a secret written for another department or source
+ * yields no key, so the request fails closed (NoActiveKey).
+ */
+export function parseWebhookSecret(
+  secretString: string | undefined,
+  owner: { readonly deptId: string; readonly sourceId: string },
+): string[] {
   if (!secretString) return [];
   let parsed: unknown;
   try {
@@ -36,20 +44,25 @@ export function parseWebhookSecret(secretString: string | undefined): string[] {
     return [];
   }
   if (typeof parsed !== 'object' || parsed === null) return [];
-  const { current, previous } = parsed as Record<string, unknown>;
+  const { deptId, sourceId, current, previous } = parsed as Record<string, unknown>;
+  if (deptId !== owner.deptId || sourceId !== owner.sourceId) return [];
   return [current, previous].filter(
     (key): key is string => typeof key === 'string' && key.length >= MIN_KEY_LENGTH,
   );
 }
 
 /** The active keys (current first). Empty when the secret has none. Throws on a read error. */
-export async function getWebhookKeys(secretName: string, now = Date.now()): Promise<string[]> {
+export async function getWebhookKeys(
+  secretName: string,
+  owner: { readonly deptId: string; readonly sourceId: string },
+  now = Date.now(),
+): Promise<string[]> {
   const cached = cache.get(secretName);
   if (cached && now - cached.loadedAt < KEY_CACHE_TTL_MS) {
     return [...cached.keys];
   }
   const output = await getClient().send(new GetSecretValueCommand({ SecretId: secretName }));
-  const keys = parseWebhookSecret(output.SecretString);
+  const keys = parseWebhookSecret(output.SecretString, owner);
   cache.set(secretName, { keys, loadedAt: now });
   return keys;
 }
@@ -63,11 +76,12 @@ export async function getWebhookKeys(secretName: string, now = Date.now()): Prom
  */
 export async function refreshWebhookKeysIfStale(
   secretName: string,
+  owner: { readonly deptId: string; readonly sourceId: string },
   minAgeMs = KEY_REFRESH_MIN_AGE_MS,
   now = Date.now(),
 ): Promise<string[] | undefined> {
   const cached = cache.get(secretName);
   if (cached && now - cached.loadedAt < minAgeMs) return undefined;
   cache.delete(secretName);
-  return getWebhookKeys(secretName, now);
+  return getWebhookKeys(secretName, owner, now);
 }

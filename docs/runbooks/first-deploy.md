@@ -178,7 +178,7 @@ Then run the test-message procedure in `docs/runbooks/cad-ingress.md` before tel
 
 ## Known gaps a first deploy does not close
 
-- **CAD webhook secrets are created by the app, not by Pulumi.** The key-rotation route creates `boxalarm-<env>-cad-webhook-<deptId>-<sourceId>` in Secrets Manager on first use; `pulumi destroy` does not delete them. Delete them by hand when tearing a stack down.
+- **CAD webhook secrets are created by the app, not by Pulumi.** The key-rotation route creates `boxalarm-<env>-cad-webhook/<deptId>/<sourceId>` in Secrets Manager on first use; `pulumi destroy` does not delete them. Delete them by hand when tearing a stack down.
 - **SMS / voice** cannot page until the OQ-3 vendor is chosen and its endpoint set (step 3).
 - **Runtime escalation schedules.** Infra provides `boxalarm-<env>-alerting-schedule-dlq` (its ARN is `ESCALATION_SCHEDULE_DLQ_ARN` on the fan-out and tone evaluator; `…-alerting-schedule-dlq-not-empty` pages). On this branch alerting-service still creates the tone-2/3 and voice-escalation one-time schedules without `ActionAfterCompletion: DELETE` (they accumulate) and without using that DLQ; `fix/post-merge-server` adds both. Until it is merged, a scheduler-side invoke failure is not captured (Lambda's async on-failure queue still covers handler errors).
 - **Availability events.** On this branch the personnel availability handlers write `personnel.availability.changed` outbox rows without `source`, `eventTime` or `schemaVersion`, which the outbox publisher's parser requires, so mark-offs never reach the bus or the alerting snapshot. `fix/post-merge-server` stamps them; until it is merged a mark-off does not stop that member being paged.

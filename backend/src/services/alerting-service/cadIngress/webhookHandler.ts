@@ -162,10 +162,16 @@ export const handler: Handler<APIGatewayProxyEventV2, APIGatewayProxyStructuredR
     return reject('StaleTimestamp', { keyId: keyIdHeader });
   }
 
-  // 3. Signature.
+  // 3. Signature. The source's secret must be exactly this department's and source's name
+  // (and its value names them as owner - webhookKeys.ts): never another tenant's key (M1).
+  const owner = { deptId: key.deptId, sourceId: source.sourceId };
+  const prefix = process.env.CAD_WEBHOOK_SECRET_PREFIX;
+  if (!prefix || source.webhook.secretName !== `${prefix}${key.deptId}/${source.sourceId}`) {
+    return reject('NoActiveKey', { keyId: keyIdHeader, secretNameMismatch: true });
+  }
   let keys: string[];
   try {
-    keys = await getWebhookKeys(source.webhook.secretName);
+    keys = await getWebhookKeys(source.webhook.secretName, owner);
   } catch (error) {
     return unavailable('SecretUnavailable', error);
   }
@@ -176,7 +182,7 @@ export const handler: Handler<APIGatewayProxyEventV2, APIGatewayProxyStructuredR
   if (!signature) {
     // The key may have been rotated since this instance cached it (chain review M4).
     try {
-      const fresh = await refreshWebhookKeysIfStale(source.webhook.secretName);
+      const fresh = await refreshWebhookKeysIfStale(source.webhook.secretName, owner);
       if (fresh) {
         keys = fresh;
         signature = verifySignature(
