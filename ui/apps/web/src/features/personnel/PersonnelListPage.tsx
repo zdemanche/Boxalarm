@@ -110,7 +110,7 @@ export function PersonnelListPage() {
 
   return (
     <main id="main-content">
-      <PageHeader title="Personnel" />
+      <PageHeader title="Members" />
 
       <DataTable
         caption="Member roster"

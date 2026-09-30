@@ -4,7 +4,7 @@ import { primaryRole as pickPrimaryRole } from '../auth/roles';
 import { useOnlineStatus } from '../lib/useOnlineStatus';
 import { usePalette } from '../lib/usePalette';
 import { IconButton } from './ui/Button';
-import { AlertTriangle, CheckCircle2, Menu, Moon, Sun } from './ui/icons';
+import { Menu, Moon, Sun, WifiOff } from './ui/icons';
 import styles from './AppShell.module.css';
 
 const ROLE_LABEL: Record<string, string> = {
@@ -37,7 +37,7 @@ export function TopBar({ onOpenNav, notifications }: TopBarProps) {
   // reflected reality, including when the API was down or the browser was offline. This is the
   // only connectivity signal available in this app's current scope (no dispatch/API reachability
   // channel exists yet), so it is labelled for exactly what it measures rather than implied to
-  // be a general "connected" status.
+  // be a general "connected" status. Online is the normal case and shows nothing.
   const isOnline = useOnlineStatus();
 
   return (
@@ -47,20 +47,21 @@ export function TopBar({ onOpenNav, notifications }: TopBarProps) {
           icon={Menu}
           label="Open navigation"
           onClick={onOpenNav}
-          size="sm"
           className={styles.menuButton}
         />
-        <div
-          className={styles.connectivity}
-          role="status"
-          title="Your browser's network connection. Does not reflect dispatch or server connectivity."
-        >
-          {isOnline ? (
-            <CheckCircle2 size={15} aria-hidden="true" />
-          ) : (
-            <AlertTriangle size={15} aria-hidden="true" />
+        {/* The live region is always mounted so going offline is announced; it is empty while
+            online. It measures the browser's network only, not API or dispatch reachability,
+            and says only what that means for the user's work. */}
+        <div className={styles.connectivity} role="status">
+          {isOnline ? null : (
+            <span
+              className={styles.offlinePill}
+              title="Your browser has no network connection. This does not reflect dispatch or paging."
+            >
+              <WifiOff size={14} aria-hidden="true" />
+              Offline — changes won&rsquo;t save
+            </span>
           )}
-          <span>Browser network: {isOnline ? 'online' : 'offline'}</span>
         </div>
       </div>
       <div className={styles.topbarRight}>
@@ -72,7 +73,6 @@ export function TopBar({ onOpenNav, notifications }: TopBarProps) {
           icon={isCab ? Sun : Moon}
           label={isCab ? 'Switch to day palette' : 'Switch to cab palette'}
           onClick={() => setPalette(isCab ? 'day' : 'cab')}
-          size="sm"
         />
       </div>
     </header>

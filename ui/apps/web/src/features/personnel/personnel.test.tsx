@@ -87,7 +87,7 @@ test('admin create form posts a member that appears as PROBATIONARY', async () =
 
   const user = userEvent.setup();
   renderPersonnel(['ADMIN']);
-  await screen.findByRole('heading', { name: 'Personnel' });
+  await screen.findByRole('heading', { name: 'Members' });
 
   await user.type(screen.getByLabelText('First name'), 'Alex');
   await user.type(screen.getByLabelText('Last name'), 'Rivera');

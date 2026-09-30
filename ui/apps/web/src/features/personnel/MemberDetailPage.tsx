@@ -284,7 +284,7 @@ export function MemberDetailPage() {
       <PageHeader
         title={member ? `${member.firstName} ${member.lastName}` : '…'}
         breadcrumbs={[
-          { label: 'Personnel', to: '/personnel' },
+          { label: 'Members', to: '/personnel' },
           { label: member ? `${member.firstName} ${member.lastName}` : '…' },
         ]}
         actions={member ? <Badge>{member.status}</Badge> : undefined}

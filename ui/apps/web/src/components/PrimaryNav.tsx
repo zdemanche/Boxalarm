@@ -1,12 +1,17 @@
+import { useId } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { useAuth } from '../auth/AuthContext';
-import { activeNavPathFor, routesForRoles } from '../routing/routeTable';
+import { activeNavPathFor, navSectionsForRoles } from '../routing/routeTable';
 import {
+  Building2,
   CalendarClock,
+  ClipboardCheck,
   ClipboardList,
+  Droplets,
   Flame,
   GraduationCap,
   LayoutDashboard,
+  MapIcon,
   Package,
   RadioTower,
   ScrollText,
@@ -20,8 +25,13 @@ import styles from './AppShell.module.css';
 
 // Keyed by navPath prefix so a sibling ticket's route (appended to routeTable.ts) still gets a
 // sensible icon without this file needing to change — falls back to LayoutDashboard.
+// First match wins, so the specific /inspections/* entries sit above /inspections.
 const ICON_BY_PREFIX: Array<[string, LucideIcon]> = [
   ['/alerts', RadioTower],
+  ['/inspections/occupancies', Building2],
+  ['/inspections/hydrants', Droplets],
+  ['/inspections/map', MapIcon],
+  ['/inspections', ClipboardCheck],
   ['/incidents', Flame],
   ['/personnel', Users],
   ['/certifications', ShieldAlert],
@@ -49,11 +59,13 @@ interface NavListContentProps {
  * route/role/icon logic lives in exactly one place. */
 export function NavListContent({ onNavigate }: NavListContentProps) {
   const { roles, signOut } = useAuth();
-  const links = routesForRoles(roles);
+  const sections = navSectionsForRoles(roles);
   // Exactly one active entry: the nav entry the current route belongs to. A prefix match
   // (NavLink's default) lit up both "Apparatus" and "Apparatus compliance" on
   // /apparatus/compliance.
   const activeNavPath = activeNavPathFor(useLocation().pathname);
+  // The sidebar and the drawer can both be mounted, so group-label ids must be unique per copy.
+  const idPrefix = useId();
 
   return (
     <>
@@ -61,29 +73,41 @@ export function NavListContent({ onNavigate }: NavListContentProps) {
         <Flame size={18} aria-hidden="true" />
         Boxalarm
       </div>
-      <ul className={styles.navList}>
-        {links.map((route) => {
-          const Icon = iconFor(route.navPath);
+      {/* Grouped per docs/design.md §3.4. Each group is a labelled list, so a screen reader
+          announces "Response, list, 3 items" rather than one flat list of up to 20 links. */}
+      <div className={styles.navList}>
+        {sections.map((section) => {
+          const headingId = `${idPrefix}-nav-${section.group.toLowerCase()}`;
           return (
-            <li key={route.navPath}>
-              <Link
-                to={route.navPath}
-                className={[
-                  styles.navLink,
-                  route.navPath === activeNavPath ? styles.navLinkActive : '',
-                ]
-                  .filter(Boolean)
-                  .join(' ')}
-                aria-current={route.navPath === activeNavPath ? 'page' : undefined}
-                onClick={onNavigate}
-              >
-                <Icon size={18} aria-hidden="true" />
-                {route.label}
-              </Link>
-            </li>
+            <div key={section.group} className={styles.navGroup}>
+              <p id={headingId} className={styles.navGroupLabel}>
+                {section.group}
+              </p>
+              <ul aria-labelledby={headingId} className={styles.navGroupList}>
+                {section.routes.map((route) => {
+                  const Icon = iconFor(route.navPath);
+                  const active = route.navPath === activeNavPath;
+                  return (
+                    <li key={route.navPath}>
+                      <Link
+                        to={route.navPath}
+                        className={[styles.navLink, active ? styles.navLinkActive : '']
+                          .filter(Boolean)
+                          .join(' ')}
+                        aria-current={active ? 'page' : undefined}
+                        onClick={onNavigate}
+                      >
+                        <Icon size={18} aria-hidden="true" />
+                        {route.label}
+                      </Link>
+                    </li>
+                  );
+                })}
+              </ul>
+            </div>
           );
         })}
-      </ul>
+      </div>
       <div className={styles.signOutWrap}>
         <button
           type="button"

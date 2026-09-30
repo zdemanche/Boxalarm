@@ -27,14 +27,31 @@
 }
 
 .navList {
-  list-style: none;
   margin: 0;
   padding: 0 var(--bx-space-sm);
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: var(--bx-space-md);
   flex: 1;
   overflow-y: auto;
+}
+
+.navGroupList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+/* docs/design.md §2.4: no ALL CAPS, so group labels are sentence case, set small and muted. */
+.navGroupLabel {
+  margin: 0 0 var(--bx-space-xs);
+  padding: 0 var(--bx-space-sm);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--bx-fg-muted);
 }
 
 .navLink {
@@ -144,6 +161,21 @@
   align-items: center;
   gap: var(--bx-space-sm);
   min-width: 0;
+}
+
+/* Shown only while the browser reports no network: an amber pill that says what it means for
+   the user's work. Nothing is shown when online (the old "Browser network: online" text was
+   developer copy on every page). */
+.offlinePill {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--bx-space-xs);
+  padding: var(--bx-space-2xs) var(--bx-space-sm);
+  border-radius: var(--bx-radius-sm);
+  background: var(--bx-chip-fill-warning);
+  color: var(--bx-chip-onfill-warning);
+  font-size: 13px;
+  font-weight: 600;
 }
 
 .topbarRight {

@@ -282,7 +282,7 @@ test('a failed apparatus query does not hide the active-call tile', async () => 
 // is a DASHBOARD_ROLES member and this dashboard used to fetch apparatus for every dashboard
 // role regardless — an OFFICER's dashboard triggered a request Cedar denies with 403 on every
 // visit, and the failure rendered as a clean "0 / 0 apparatus in service" tile.
-test('OFFICER dashboard never requests apparatus (routeTable denies it) and shows no apparatus tiles', async () => {
+test('OFFICER dashboard shows apparatus tiles: the officer decides whether a rig rolls', async () => {
   let apparatusRequested = false;
   server.use(
     http.get('/api/v1/apparatus', () => {
@@ -293,12 +293,10 @@ test('OFFICER dashboard never requests apparatus (routeTable denies it) and show
 
   renderLanding({ sub: 'm1', 'cognito:groups': ['OFFICER'] });
   await screen.findByRole('heading', { name: 'Officer dashboard' });
-  // Members is granted to OFFICER, so that tile should still render.
   await screen.findByText('Active members');
 
-  expect(apparatusRequested).toBe(false);
-  expect(screen.queryByText('Apparatus in service')).toBeNull();
-  expect(screen.queryByText('Out of service')).toBeNull();
+  expect(await screen.findByText('Apparatus in service')).toBeTruthy();
+  expect(apparatusRequested).toBe(true);
 });
 
 // Regression for MAJOR-3: a failed query (offline, 500, or a 403 that slips through role gating)

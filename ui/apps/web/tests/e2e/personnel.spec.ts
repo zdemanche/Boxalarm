@@ -104,7 +104,7 @@ test('roster table headers are associated with cells and the page passes axe (AC
 
   await signInAs(page, ['OFFICER']);
   await page.goto('/personnel');
-  await expect(page.getByRole('heading', { name: 'Personnel' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Members' })).toBeVisible();
 
   const table = page.getByRole('table');
   await expect(table).toBeVisible();

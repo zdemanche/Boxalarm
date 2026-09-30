@@ -74,12 +74,34 @@ test('Training events and Inventory get their own icons, not the Dashboard fallb
   expect(inventory.querySelector('svg.lucide-package')).not.toBeNull();
 });
 
-test('ADMIN compliance breadcrumb does not link to /apparatus, which ADMIN cannot open (m4)', async () => {
+test('ADMIN compliance breadcrumb links to /apparatus, now that ADMIN can open it', async () => {
   renderAt(['ADMIN'], '/apparatus/compliance', <CompliancePage />);
 
   const crumbs = await screen.findByRole('navigation', { name: 'Breadcrumb' });
-  expect(within(crumbs).queryByRole('link', { name: 'Apparatus' })).toBeNull();
-  expect(within(crumbs).getByText('Apparatus')).toBeTruthy();
+  expect(within(crumbs).getByRole('link', { name: 'Apparatus' }).getAttribute('href')).toBe(
+    '/apparatus',
+  );
+});
+
+test('the nav is grouped: each design.md group is a labelled list of its links', async () => {
+  renderAt(['CHIEF'], '/', <NavListContent />);
+
+  const response = await screen.findByRole('list', { name: 'Response' });
+  expect(within(response).getByRole('link', { name: 'Incidents' })).toBeTruthy();
+  const people = screen.getByRole('list', { name: 'People' });
+  expect(within(people).getByRole('link', { name: 'Members' })).toBeTruthy();
+  expect(within(people).getByRole('link', { name: 'Schedule' })).toBeTruthy();
+  const apparatus = screen.getByRole('list', { name: 'Apparatus' });
+  expect(within(apparatus).getByRole('link', { name: 'Apparatus compliance' })).toBeTruthy();
+});
+
+test('prevention routes get their own icons, not the Dashboard fallback', async () => {
+  renderAt(['CHIEF'], '/', <NavListContent />);
+
+  const prevention = await screen.findByRole('list', { name: 'Prevention' });
+  for (const link of within(prevention).getAllByRole('link')) {
+    expect(link.querySelector('svg.lucide-layout-dashboard')).toBeNull();
+  }
 });
 
 test('CHIEF compliance breadcrumb links back to /apparatus (m4)', async () => {

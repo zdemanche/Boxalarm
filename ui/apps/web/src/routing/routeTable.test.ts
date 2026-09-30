@@ -1,5 +1,10 @@
 import { describe, expect, test } from 'vitest';
-import { canAccessPath, firstGrantedNavPath, routesForRoles } from './routeTable';
+import {
+  canAccessPath,
+  firstGrantedNavPath,
+  navSectionsForRoles,
+  routesForRoles,
+} from './routeTable';
 
 describe('routeTable', () => {
   test('CHIEF nav includes dashboard, roster, audit-log; excludes settings', () => {
@@ -8,14 +13,34 @@ describe('routeTable', () => {
     expect(labels).toContain('Live roster');
     expect(labels).toContain('Audit log');
     expect(labels).not.toContain('Settings');
-    expect(labels).not.toContain('Certifications');
+    // The chief reads schedule and training (officer-tier Cedar actions include CHIEF).
+    expect(labels).toContain('Schedule');
+    expect(labels).toContain('Certifications');
+    expect(labels).toContain('Training events');
+  });
+
+  test('OFFICER and ADMIN see Apparatus; nobody sees "Personnel"', () => {
+    expect(routesForRoles(['OFFICER']).map((r) => r.label)).toContain('Apparatus');
+    expect(routesForRoles(['ADMIN']).map((r) => r.label)).toContain('Apparatus');
+    expect(canAccessPath('/apparatus/E1', ['OFFICER'])).toBe(true);
+    for (const role of ['OFFICER', 'TRAINING', 'APPARATUS', 'ADMIN', 'CHIEF'] as const) {
+      expect(routesForRoles([role]).map((r) => r.label)).not.toContain('Personnel');
+    }
+  });
+
+  test('nav sections follow the design.md group order and drop empty groups', () => {
+    const chief = navSectionsForRoles(['CHIEF']).map((s) => s.group);
+    expect(chief).toEqual(['Overview', 'Response', 'People', 'Apparatus', 'Prevention', 'Admin']);
+    const apparatusOfficer = navSectionsForRoles(['APPARATUS']);
+    expect(apparatusOfficer.map((s) => s.group)).toEqual(['Apparatus']);
+    expect(apparatusOfficer[0]?.routes.map((r) => r.label)).toEqual(['Apparatus', 'Inventory']);
   });
 
   test('ADMIN nav includes settings and audit-log; excludes dashboard', () => {
     const labels = routesForRoles(['ADMIN']).map((r) => r.label);
     expect(labels).toContain('Settings');
     expect(labels).toContain('Audit log');
-    expect(labels).toContain('Personnel');
+    expect(labels).toContain('Members');
     expect(labels).not.toContain('Dashboard');
     expect(labels).not.toContain('Live roster');
   });

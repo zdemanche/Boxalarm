@@ -98,7 +98,7 @@ const ALL_NAV_LABELS = [
   'Live roster',
   'Alert diagnostics',
   'Incidents',
-  'Personnel',
+  'Members',
   'Certifications',
   'Training events',
   'Apparatus',

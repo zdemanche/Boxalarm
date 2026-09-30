@@ -72,7 +72,7 @@ test('a valid stored session lands on the AppTabs shell (Alerts · Checks · Sch
   const { findAllByText, findByText } = await render(<App />);
 
   expect((await findAllByText('Alerts')).length).toBeGreaterThan(0);
-  expect(await findByText('Checks')).toBeTruthy();
+  expect((await findAllByText('Apparatus')).length).toBeGreaterThan(0);
   expect(await findByText('Schedule')).toBeTruthy();
   expect(await findByText('Me')).toBeTruthy();
 });

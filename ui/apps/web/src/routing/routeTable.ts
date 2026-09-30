@@ -1,5 +1,18 @@
 import type { Role } from '../auth/roles';
 
+/** Sidebar groups, docs/design.md §3.4 (Overview · Response · People · Apparatus · Admin), plus
+ * Prevention for the F6 occupancy / hydrant / inspection routes, which the §3.4 table predates. */
+export type NavGroup = 'Overview' | 'Response' | 'People' | 'Apparatus' | 'Prevention' | 'Admin';
+
+export const NAV_GROUP_ORDER: readonly NavGroup[] = [
+  'Overview',
+  'Response',
+  'People',
+  'Apparatus',
+  'Prevention',
+  'Admin',
+];
+
 export interface AppRoute {
   path: string;
   /** Path used for nav links (no params). */
@@ -8,6 +21,8 @@ export interface AppRoute {
   roles: readonly Role[];
   /** When true, shown in PrimaryNav. Param routes use a parent list entry. */
   showInNav: boolean;
+  /** Sidebar group the nav entry sits under. */
+  group: NavGroup;
 }
 
 /**
@@ -20,6 +35,7 @@ export const APP_ROUTES: readonly AppRoute[] = [
     navPath: '/',
     label: 'Dashboard',
     roles: ['CHIEF', 'OFFICER'],
+    group: 'Overview',
     showInNav: true,
   },
   {
@@ -27,6 +43,7 @@ export const APP_ROUTES: readonly AppRoute[] = [
     navPath: '/alerts/roster',
     label: 'Live roster',
     roles: ['OFFICER', 'CHIEF'],
+    group: 'Response',
     showInNav: true,
   },
   {
@@ -34,6 +51,7 @@ export const APP_ROUTES: readonly AppRoute[] = [
     navPath: '/alerts/diagnostics',
     label: 'Alert diagnostics',
     roles: ['OFFICER', 'CHIEF', 'ADMIN'],
+    group: 'Response',
     showInNav: true,
   },
   {
@@ -43,6 +61,7 @@ export const APP_ROUTES: readonly AppRoute[] = [
     // ADMIN: creates reports (createIncident) and is one of the two roles that may
     // unlock a reviewed one, so it needs the pages.
     roles: ['OFFICER', 'CHIEF', 'ADMIN'],
+    group: 'Response',
     showInNav: true,
   },
   {
@@ -52,13 +71,17 @@ export const APP_ROUTES: readonly AppRoute[] = [
     // ADMIN: creates reports (createIncident) and is one of the two roles that may
     // unlock a reviewed one, so it needs the pages.
     roles: ['OFFICER', 'CHIEF', 'ADMIN'],
+    group: 'Response',
     showInNav: false,
   },
   {
     path: '/personnel',
     navPath: '/personnel',
-    label: 'Personnel',
+    // docs/design.md §3.2: "Member", never "personnel". The URL keeps /personnel so existing
+    // links and bookmarks still resolve.
+    label: 'Members',
     roles: ['OFFICER', 'TRAINING', 'ADMIN', 'CHIEF'],
+    group: 'People',
     showInNav: true,
   },
   {
@@ -66,20 +89,27 @@ export const APP_ROUTES: readonly AppRoute[] = [
     navPath: '/personnel',
     label: 'Member detail',
     roles: ['OFFICER', 'TRAINING', 'ADMIN', 'CHIEF'],
+    group: 'People',
     showInNav: false,
   },
   {
     path: '/certifications',
     navPath: '/certifications',
     label: 'Certifications',
-    roles: ['TRAINING', 'ADMIN'],
+    // CHIEF: ViewCertifications is every-role and ViewExpiringCertifications/CreateCertification
+    // are the officer tier, which includes CHIEF (cedar-policies.ts). The page keeps its write
+    // controls for canManageTraining roles, so the chief reads.
+    roles: ['TRAINING', 'ADMIN', 'CHIEF'],
+    group: 'People',
     showInNav: true,
   },
   {
     path: '/training/events',
     navPath: '/training/events',
     label: 'Training events',
-    roles: ['TRAINING', 'ADMIN'],
+    // CHIEF: listing events is every-role and CreateTrainingEvent is the officer tier.
+    roles: ['TRAINING', 'ADMIN', 'CHIEF'],
+    group: 'People',
     showInNav: true,
   },
   {
@@ -89,13 +119,19 @@ export const APP_ROUTES: readonly AppRoute[] = [
     navPath: '/training/hours',
     label: 'Training hours',
     roles: ['TRAINING', 'ADMIN', 'OFFICER', 'CHIEF'],
+    group: 'People',
     showInNav: true,
   },
   {
     path: '/apparatus',
     navPath: '/apparatus',
     label: 'Apparatus',
-    roles: ['APPARATUS', 'CHIEF'],
+    // OFFICER/ADMIN: the apparatus list and detail read on the department-scoped authorizer with
+    // no Cedar tier, and every tab the detail page reads is every-role or the apparatus-officer
+    // tier (APPARATUS, OFFICER, CHIEF, ADMIN). The officer decides whether a rig rolls, so they
+    // need to see what is out of service and why.
+    roles: ['APPARATUS', 'OFFICER', 'ADMIN', 'CHIEF'],
+    group: 'Apparatus',
     showInNav: true,
   },
   {
@@ -103,27 +139,32 @@ export const APP_ROUTES: readonly AppRoute[] = [
     navPath: '/apparatus/compliance',
     label: 'Apparatus compliance',
     roles: ['ADMIN', 'CHIEF'],
+    group: 'Apparatus',
     showInNav: true,
   },
   {
     path: '/apparatus/:id',
     navPath: '/apparatus',
     label: 'Apparatus detail',
-    roles: ['APPARATUS', 'CHIEF'],
+    roles: ['APPARATUS', 'OFFICER', 'ADMIN', 'CHIEF'],
+    group: 'Apparatus',
     showInNav: false,
   },
   {
     path: '/inventory',
     navPath: '/inventory',
     label: 'Inventory',
-    roles: ['ADMIN', 'APPARATUS', 'CHIEF'],
+    // OFFICER: inventory reads are every-role and its writes are OFFICER/CHIEF/ADMIN.
+    roles: ['ADMIN', 'APPARATUS', 'OFFICER', 'CHIEF'],
+    group: 'Apparatus',
     showInNav: true,
   },
   {
     path: '/inventory/:assetId',
     navPath: '/inventory',
     label: 'Equipment detail',
-    roles: ['ADMIN', 'APPARATUS', 'CHIEF'],
+    roles: ['ADMIN', 'APPARATUS', 'OFFICER', 'CHIEF'],
+    group: 'Apparatus',
     showInNav: false,
   },
   {
@@ -131,6 +172,7 @@ export const APP_ROUTES: readonly AppRoute[] = [
     navPath: '/inspections/occupancies',
     label: 'Occupancies',
     roles: ['OFFICER', 'ADMIN', 'CHIEF'],
+    group: 'Prevention',
     showInNav: true,
   },
   {
@@ -138,6 +180,7 @@ export const APP_ROUTES: readonly AppRoute[] = [
     navPath: '/inspections/occupancies',
     label: 'Occupancy detail',
     roles: ['OFFICER', 'ADMIN', 'CHIEF'],
+    group: 'Prevention',
     showInNav: false,
   },
   {
@@ -145,6 +188,7 @@ export const APP_ROUTES: readonly AppRoute[] = [
     navPath: '/inspections/hydrants',
     label: 'Hydrants',
     roles: ['OFFICER', 'ADMIN', 'CHIEF'],
+    group: 'Prevention',
     showInNav: true,
   },
   {
@@ -152,6 +196,7 @@ export const APP_ROUTES: readonly AppRoute[] = [
     navPath: '/inspections',
     label: 'Inspections',
     roles: ['OFFICER', 'ADMIN', 'CHIEF'],
+    group: 'Prevention',
     showInNav: true,
   },
   {
@@ -159,13 +204,17 @@ export const APP_ROUTES: readonly AppRoute[] = [
     navPath: '/inspections/map',
     label: 'Inspections map',
     roles: ['OFFICER', 'ADMIN', 'CHIEF'],
+    group: 'Prevention',
     showInNav: true,
   },
   {
     path: '/schedule',
     navPath: '/schedule',
     label: 'Schedule',
-    roles: ['OFFICER', 'ADMIN'],
+    // CHIEF: shift writes are OFFICER/ADMIN/CHIEF (personnel-service shifts OFFICER_ROLES) and
+    // ListPendingShiftSwaps/ApproveShiftSwap are the officer tier, which includes CHIEF.
+    roles: ['OFFICER', 'ADMIN', 'CHIEF'],
+    group: 'People',
     showInNav: true,
   },
   {
@@ -173,6 +222,7 @@ export const APP_ROUTES: readonly AppRoute[] = [
     navPath: '/reporting',
     label: 'Reporting',
     roles: ['CHIEF', 'ADMIN', 'TRAINING'],
+    group: 'Admin',
     showInNav: true,
   },
   {
@@ -180,6 +230,7 @@ export const APP_ROUTES: readonly AppRoute[] = [
     navPath: '/settings',
     label: 'Settings',
     roles: ['ADMIN'],
+    group: 'Admin',
     showInNav: true,
   },
   {
@@ -187,6 +238,7 @@ export const APP_ROUTES: readonly AppRoute[] = [
     navPath: '/settings',
     label: 'LOSAP settings',
     roles: ['ADMIN'],
+    group: 'Admin',
     showInNav: false,
   },
   {
@@ -196,6 +248,7 @@ export const APP_ROUTES: readonly AppRoute[] = [
     navPath: '/notifications',
     label: 'Notifications',
     roles: ['MEMBER', 'OFFICER', 'TRAINING', 'APPARATUS', 'ADMIN', 'CHIEF'],
+    group: 'Overview',
     showInNav: false,
   },
   {
@@ -203,6 +256,7 @@ export const APP_ROUTES: readonly AppRoute[] = [
     navPath: '/audit-log',
     label: 'Audit log',
     roles: ['ADMIN', 'CHIEF'],
+    group: 'Admin',
     showInNav: true,
   },
 ] as const;
@@ -224,6 +278,20 @@ export function canAccessPath(pathname: string, userRoles: readonly Role[]): boo
  * doesn't also light up its parent (PR #321 review m4). */
 export function activeNavPathFor(pathname: string): string | null {
   return APP_ROUTES.find((route) => pathMatches(route.path, pathname))?.navPath ?? null;
+}
+
+export interface NavSection {
+  group: NavGroup;
+  routes: AppRoute[];
+}
+
+/** routesForRoles, bucketed into the sidebar groups in NAV_GROUP_ORDER; empty groups dropped. */
+export function navSectionsForRoles(userRoles: readonly Role[]): NavSection[] {
+  const routes = routesForRoles(userRoles);
+  return NAV_GROUP_ORDER.map((group) => ({
+    group,
+    routes: routes.filter((route) => route.group === group),
+  })).filter((section) => section.routes.length > 0);
 }
 
 export function firstGrantedNavPath(userRoles: readonly Role[]): string | null {
