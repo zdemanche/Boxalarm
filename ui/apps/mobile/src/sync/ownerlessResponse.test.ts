@@ -143,6 +143,10 @@ test('a keychain read failure queues the answer ownerless with a hint; only that
 
   const [row] = await store.all();
   expect(row).toMatchObject({ ownerMemberId: null, answeredAsHint: 'member-k' });
+  // It sends only once that member's session is open here - not merely with signal (m4).
+  expect(displayNotification.mock.calls.at(-1)![0].body).toMatch(
+    /open boxalarm to send it, or use the radio/i,
+  );
 
   // Another member signing in does not send it; it is offered for Send/Discard instead.
   mockApiRequest.mockReset().mockResolvedValue({ json: async () => ({}) });

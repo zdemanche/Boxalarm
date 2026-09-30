@@ -230,7 +230,11 @@ export async function answerFromNotification(
             : row.lastError === RESPONSE_NOT_RECORDED
               ? 'NOT ON THE ROSTER - the server did not record it. Tap to send again, or use the radio.'
               : 'REFUSED by the server - not recorded. Tap to open the call, or use the radio.'
-          : 'NOT SENT YET - saved on this phone and it sends when you have signal. Tap to check.',
+          : row?.ownerMemberId === null
+            ? // Queued without an owner (the keychain could not be read): it sends only once the
+              // member's own session is open on this phone, not merely when signal returns (m4).
+              'NOT SENT YET - saved on this phone. Open Boxalarm to send it, or use the radio.'
+            : 'NOT SENT YET - saved on this phone and it sends when you have signal. Tap to check.',
     );
   } catch (error) {
     console.error('[push] answering from the notification failed', error);
