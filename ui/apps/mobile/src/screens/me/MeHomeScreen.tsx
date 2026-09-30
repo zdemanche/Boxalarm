@@ -75,6 +75,10 @@ export function reportSignOut(result: SignOutResult | void): void {
   ]);
 }
 
+function reportSignOutError(error: unknown): void {
+  console.error('[auth] sign-out did not finish cleanly', error);
+}
+
 export async function confirmSignOut(
   signOut: () => Promise<SignOutResult | void>,
   phone?: string | null,
@@ -103,7 +107,7 @@ export async function confirmSignOut(
                 void syncManager
                   .discardAllFor(memberId)
                   .then(() => signOut())
-                  .then(reportSignOut);
+                  .then(reportSignOut, reportSignOutError);
               },
             },
           ]
@@ -111,7 +115,7 @@ export async function confirmSignOut(
       {
         text: 'Sign out',
         style: 'destructive',
-        onPress: () => void signOut().then(reportSignOut),
+        onPress: () => void signOut().then(reportSignOut, reportSignOutError),
       },
     ],
     { cancelable: true },

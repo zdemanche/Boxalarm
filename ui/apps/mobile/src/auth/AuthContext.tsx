@@ -549,11 +549,16 @@ export function AuthProvider({
         // cannot land after the reset below (M4).
         beginSessionChange();
         await settleRenewals();
-        if (memberId) await clearMemberCache(memberId).catch(() => undefined);
-        // Before the keychain reset, so no window exists where the hint outlives the session.
-        await kvDelete(LAST_SESSION_SUB_KEY);
-        await depsRef.current.resetInternetCredentials({ server: KEYCHAIN_SERVER });
-        applyTokens(null);
+        try {
+          if (memberId) await clearMemberCache(memberId).catch(() => undefined);
+          // Before the keychain reset, so no window exists where the hint outlives the session.
+          await kvDelete(LAST_SESSION_SUB_KEY);
+          await depsRef.current.resetInternetCredentials({ server: KEYCHAIN_SERVER });
+        } finally {
+          // Signed out in the app even if clearing failed (m12): staying half signed in would
+          // queue later answers with no hint, never auto-sent.
+          applyTokens(null);
+        }
         return { pushRevoked };
       },
       getAccessToken,

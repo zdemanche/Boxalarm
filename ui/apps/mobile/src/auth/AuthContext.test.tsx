@@ -773,3 +773,29 @@ describe('a token source pinned to one member (m1)', () => {
     await expect(pinned.renewSilently()).resolves.toBeNull();
   });
 });
+
+test('m12: a keychain reset that throws still leaves the app signed out', async () => {
+  const deps = makeDeps();
+  withStored(deps, issuedTokens());
+  deps.resetInternetCredentials = jest.fn(async () => {
+    throw new Error('keychain locked');
+  }) as unknown as AuthDeps['resetInternetCredentials'];
+  globalThis.fetch = jest.fn(
+    async () => new Response('{}', { status: 200 }),
+  ) as unknown as typeof fetch;
+  let contextValue: ReturnType<typeof useAuth> | undefined;
+  function Capture() {
+    contextValue = useAuth();
+    return null;
+  }
+  await render(
+    <AuthProvider deps={deps}>
+      <Capture />
+    </AuthProvider>,
+  );
+  await waitFor(() => expect(contextValue?.isAuthenticated).toBe(true));
+
+  await expect(contextValue!.signOut()).rejects.toThrow('keychain locked');
+
+  await waitFor(() => expect(contextValue?.isAuthenticated).toBe(false));
+});
