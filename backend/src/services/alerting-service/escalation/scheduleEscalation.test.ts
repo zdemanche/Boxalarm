@@ -96,7 +96,7 @@ describe('createEscalationSchedule', () => {
   // scheduler gave up on, instead of piling up in the group or vanishing.
   it('deletes the schedule after it fires and dead-letters a failed target to the configured DLQ', async () => {
     process.env.ESCALATION_SCHEDULE_DLQ_ARN =
-      'arn:aws:sqs:us-east-1:1:boxalarm-dev-alerting-schedule-dlq';
+      'arn:aws:sqs:us-east-1:123456789012:boxalarm-dev-alerting-schedule-dlq';
     const { createEscalationSchedule } = await import('./scheduleEscalation.js');
     const send = vi.fn().mockResolvedValue({});
 
@@ -111,7 +111,9 @@ describe('createEscalationSchedule', () => {
     const input = (send.mock.calls[0]?.[0] as { input: Record<string, unknown> }).input;
     expect(input.ActionAfterCompletion).toBe('DELETE');
     expect(input.Target).toMatchObject({
-      DeadLetterConfig: { Arn: 'arn:aws:sqs:us-east-1:1:boxalarm-dev-alerting-schedule-dlq' },
+      DeadLetterConfig: {
+        Arn: 'arn:aws:sqs:us-east-1:123456789012:boxalarm-dev-alerting-schedule-dlq',
+      },
     });
   });
 
@@ -137,6 +139,32 @@ describe('createEscalationSchedule', () => {
     );
     logSpy.mockRestore();
   });
+
+  // Paging review m7: a malformed DLQ ARN must never block the timer.
+  it.each(['not-an-arn', 'arn:aws:sns:us-east-1:123456789012:topic'])(
+    'ignores a malformed ESCALATION_SCHEDULE_DLQ_ARN (%s) and still creates the schedule',
+    async (arn) => {
+      process.env.ESCALATION_SCHEDULE_DLQ_ARN = arn;
+      const logSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+      const { createEscalationSchedule } = await import('./scheduleEscalation.js');
+      const send = vi.fn().mockResolvedValue({});
+
+      await createEscalationSchedule({ send } as unknown as SchedulerClient, {
+        deptId: DEPT_ID,
+        dispatchId: 'dispatch-1',
+        memberId: 'mbr-1',
+        toneSequence: 1,
+        delaySeconds: 75,
+      });
+
+      const input = (send.mock.calls[0]?.[0] as { input: Record<string, unknown> }).input;
+      expect((input.Target as Record<string, unknown>).DeadLetterConfig).toBeUndefined();
+      expect(
+        logSpy.mock.calls.some(([line]) => String(line).includes('not an SQS queue ARN')),
+      ).toBe(true);
+      logSpy.mockRestore();
+    },
+  );
 
   it('a re-create after the schedule deleted itself is absorbed by name conflict or by the idempotent target', async () => {
     const { createEscalationSchedule } = await import('./scheduleEscalation.js');

@@ -45,14 +45,21 @@ export function readScheduleGroupName(env: NodeJS.ProcessEnv): string {
  * The DLQ ARN comes from ESCALATION_SCHEDULE_DLQ_ARN. Until infrastructure sets it the
  * schedule is still created (a missing DLQ must never stop a page) and the gap is logged.
  */
+const SQS_ARN = /^arn:aws[\w-]*:sqs:[a-z0-9-]+:\d{12}:[\w-]{1,80}(\.fifo)?$/;
+
 export function alertingScheduleLifecycle(env: NodeJS.ProcessEnv): {
   readonly ActionAfterCompletion: ActionAfterCompletion;
   readonly deadLetterConfig?: DeadLetterConfig;
 } {
-  const dlqArn = env.ESCALATION_SCHEDULE_DLQ_ARN;
+  const configured = env.ESCALATION_SCHEDULE_DLQ_ARN;
+  // Paging review m7: a malformed ARN would make CreateSchedule fail validation and block the
+  // timer - so anything that is not an SQS ARN is ignored, logged, as if unset.
+  const dlqArn = configured && SQS_ARN.test(configured) ? configured : undefined;
   if (!dlqArn) {
     logInfo('alerting.schedule.dlq_unconfigured', {
-      reason: 'ESCALATION_SCHEDULE_DLQ_ARN is not set; schedule created without a DeadLetterConfig',
+      reason: configured
+        ? 'ESCALATION_SCHEDULE_DLQ_ARN is not an SQS queue ARN; ignored, schedule created without a DeadLetterConfig'
+        : 'ESCALATION_SCHEDULE_DLQ_ARN is not set; schedule created without a DeadLetterConfig',
     });
   }
   return {

@@ -93,7 +93,7 @@ describe('scheduleDepartmentToneLadder records the ladder times (architecture ne
 
   // Post-merge: tone 2/3 timers delete themselves after firing and dead-letter a failed target.
   it('creates tone 2 and 3 schedules that delete after firing, with the configured DLQ', async () => {
-    process.env.ESCALATION_SCHEDULE_DLQ_ARN = 'arn:aws:sqs:us-east-1:1:schedule-dlq';
+    process.env.ESCALATION_SCHEDULE_DLQ_ARN = 'arn:aws:sqs:us-east-1:123456789012:schedule-dlq';
     const { scheduler, ddb } = fakes();
 
     await scheduleDepartmentToneLadder(scheduler, ddb, 'alerting-table', deptId, 'dispatch-1');
@@ -105,7 +105,7 @@ describe('scheduleDepartmentToneLadder records the ladder times (architecture ne
     for (const input of inputs) {
       expect(input.ActionAfterCompletion).toBe('DELETE');
       expect(input.Target).toMatchObject({
-        DeadLetterConfig: { Arn: 'arn:aws:sqs:us-east-1:1:schedule-dlq' },
+        DeadLetterConfig: { Arn: 'arn:aws:sqs:us-east-1:123456789012:schedule-dlq' },
       });
     }
   });
