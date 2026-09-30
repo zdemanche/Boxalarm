@@ -105,12 +105,10 @@ async function updateEligibilitySnapshot(
   for (let attempt = 0; attempt < MAX_SNAPSHOT_UPDATE_ATTEMPTS; attempt += 1) {
     const existing = await client.send(new GetCommand({ TableName: tableName, Key: snapshotKey }));
     const existingItem = existing.Item as { quals?: unknown; qualsUpdatedAt?: unknown } | undefined;
-    // Deliberately gate staleness on our own qualsUpdatedAt field, not the shared
-    // snapshotUpdatedAt also written by eligibility-consumer (personnel.availability.changed).
-    // Two independent, uncorrelated event streams write this same snapshot item; comparing
-    // against a shared timestamp means a later-arriving-but-unrelated availability update
-    // could make an otherwise-valid, still-current qual update look "stale" and get silently
-    // dropped (or vice versa). See consumer.ts's own snapshotUpdatedAt gate.
+    // Staleness is gated on quals' own clock, qualsUpdatedAt - every snapshot field has one
+    // (activeUpdatedAt, availabilityUpdatedAt, rolesUpdatedAt, pushContactsUpdatedAt,
+    // phoneUpdatedAt), and snapshotUpdatedAt guards nothing: a newer event for another field
+    // can never make a still-current qual change look stale (review CRITICAL-1).
     const priorQualsUpdatedAt =
       typeof existingItem?.qualsUpdatedAt === 'number' ? existingItem.qualsUpdatedAt : undefined;
     if (priorQualsUpdatedAt !== undefined && priorQualsUpdatedAt > eventSnapshotUpdatedAt) {
