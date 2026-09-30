@@ -6,6 +6,7 @@ import {
   type DynamoDBDocumentClient,
 } from '@aws-sdk/lib-dynamodb';
 import { buildDeptScopedPk, type VerifiedDeptId } from '@boxalarm/dept-scope';
+import { emitOutcomeMetric } from '@boxalarm/metrics';
 
 /**
  * A member's push devices. Each signed-in app installation registers its own PUSH entry,
@@ -72,9 +73,23 @@ export function withRegisteredDevice(
       !isPush(existing) ||
       !(sameDevice(existing, entry.deviceId) || existing.token === entry.token),
   );
-  const devices = [...kept.filter(isPush), entry]
-    .sort((a, b) => (b.registeredAt ?? 0) - (a.registeredAt ?? 0))
-    .slice(0, MAX_PUSH_DEVICES);
+  const sorted = [...kept.filter(isPush), entry].sort(
+    (a, b) => (b.registeredAt ?? 0) - (a.registeredAt ?? 0),
+  );
+  const devices = sorted.slice(0, MAX_PUSH_DEVICES);
+  // An evicted device stops being paged: never silently (review MINOR-3).
+  for (const evicted of sorted.slice(MAX_PUSH_DEVICES)) {
+    console.warn(
+      JSON.stringify({
+        event: 'personnel.pushDevices.evicted',
+        service: 'personnel-service',
+        deviceId: evicted.deviceId ?? null,
+        registeredAt: evicted.registeredAt ?? null,
+        maxDevices: MAX_PUSH_DEVICES,
+      }),
+    );
+    emitOutcomeMetric('Boxalarm/push-token', 'PushDeviceEvicted');
+  }
   return [...kept.filter((existing) => !isPush(existing)), ...devices];
 }
 

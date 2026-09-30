@@ -71,6 +71,22 @@ describe('push devices: one PUSH entry per app installation', () => {
     expect(devices[0]?.deviceId).toBe('d-new');
   });
 
+  it('logs and counts a device evicted by the cap, naming the device', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    const many = Array.from({ length: MAX_PUSH_DEVICES }, (_, i) => ({
+      channel: 'PUSH',
+      token: `tok-${i}`,
+      deviceId: `d-${i}`,
+      registeredAt: 100 + i,
+    }));
+    withRegisteredDevice(many, { channel: 'PUSH', token: 't', deviceId: 'new', registeredAt: 999 });
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('"deviceId":"d-0"'));
+    expect(log.mock.calls.some(([line]) => String(line).includes('PushDeviceEvicted'))).toBe(true);
+    warn.mockRestore();
+    log.mockRestore();
+  });
+
   it("sign-out removes only that device's entry", () => {
     expect(withoutDevice([phone, tablet, legacy], 'tablet')).toEqual([phone, legacy]);
   });
