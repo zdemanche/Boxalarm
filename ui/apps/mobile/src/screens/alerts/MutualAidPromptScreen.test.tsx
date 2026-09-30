@@ -111,3 +111,11 @@ test("Open the call goes to the call's alert screen, not the prompt", async () =
   expect(route).toBe('AlertDetail');
   expect(params.payload).not.toHaveProperty('mutualAidPrompt');
 });
+
+test('an admin can confirm the call too, as the server allows (N-m7)', async () => {
+  (useOptionalAuth as jest.Mock).mockReturnValue({ roles: ['ADMIN'], memberId: 'MBR-ADM' });
+  await render(<MutualAidPromptScreen />);
+  await screen.findByText(/has not been confirmed yet/);
+
+  expect(screen.getByRole('button', { name: 'I made the mutual-aid call' })).toBeTruthy();
+});

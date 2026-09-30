@@ -11,8 +11,12 @@ import type { MutualAid } from '../../features/alerts/types';
 import { ApiError } from '../../lib/apiClient';
 import type { AlertsStackParamList } from '../../navigation/AlertsStack';
 
-/** The roles the backend lets confirm the call (Cedar AcknowledgeMutualAid). */
-const CONFIRMING_ROLES: readonly Role[] = ['OFFICER', 'CHIEF'];
+/**
+ * The roles the backend lets confirm the call: Cedar AcknowledgeMutualAid is granted to
+ * ALERTING_OFFICER_GROUPS (infrastructure authz/cedar-policies.ts) - officer, chief and admin.
+ * The server stays the authority; this only decides whether to offer the button.
+ */
+const CONFIRMING_ROLES: readonly Role[] = ['OFFICER', 'CHIEF', 'ADMIN'];
 /** Matches the backend's MAX_NOTES_LENGTH (mutualAidAcknowledgeHandler.ts). */
 const MAX_NOTES_LENGTH = 1000;
 
