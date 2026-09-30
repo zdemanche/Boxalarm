@@ -32,7 +32,11 @@ import {
 } from './pendingUnregister';
 import { kvDelete, kvSet } from '../sync/kvStore';
 import * as syncManager from '../sync/syncManager';
-import { clearMemberCache, LAST_SESSION_SUB_KEY } from '../sync/memberCache';
+import {
+  clearAlertCachesIfDeptChanged,
+  clearMemberCache,
+  LAST_SESSION_SUB_KEY,
+} from '../sync/memberCache';
 
 /** How long sign-out waits for one last try at sending queued work (alert answers first). */
 const SIGN_OUT_DRAIN_MS = 3000;
@@ -382,6 +386,7 @@ export function AuthProvider({
     const sub = tokens ? decodeMemberId(tokens.idToken) : null;
     if (sub) void kvSet(LAST_SESSION_SUB_KEY, sub);
     else void kvDelete(LAST_SESSION_SUB_KEY);
+    if (tokens) void clearAlertCachesIfDeptChanged(decodeDeptId(tokens.idToken)).catch(() => {});
     setState({
       roles: tokens ? decodeRoles(tokens.idToken) : [],
       memberId: tokens ? decodeMemberId(tokens.idToken) : null,
