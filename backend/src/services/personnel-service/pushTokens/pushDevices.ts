@@ -106,7 +106,7 @@ export function withoutAllDevices(current: readonly ContactChannelEntry[]): Cont
   return current.filter((existing) => !isPush(existing));
 }
 
-export type PushDevicesWriteOutcome = 'written' | 'not_found' | 'unchanged';
+export type PushDevicesWriteOutcome = 'written' | 'not_found';
 
 export interface WritePushDevicesOptions {
   /** The outbox event's correlationId; defaults to the memberId. */
@@ -117,8 +117,6 @@ export interface WritePushDevicesOptions {
    * own push-token revoke.
    */
   readonly changedBy?: Readonly<Record<string, unknown>>;
-  /** Write nothing (and return 'unchanged') when the change leaves the device list as it is. */
-  readonly skipIfUnchanged?: boolean;
 }
 
 /**
@@ -148,9 +146,6 @@ export async function writePushDevices(
     }
     const current = (existing.Item.contactChannels as ContactChannelEntry[] | undefined) ?? [];
     const contactChannels = change(current);
-    if (options.skipIfUnchanged && JSON.stringify(contactChannels) === JSON.stringify(current)) {
-      return 'unchanged';
-    }
     const previousUpdatedAt = existing.Item.updatedAt as number | undefined;
     const now = Math.max(Date.now(), (previousUpdatedAt ?? 0) + 1);
     const eventId = randomUUID();

@@ -6,7 +6,11 @@ import { setupServer } from 'msw/node';
 import type { User, UserManager } from 'oidc-client-ts';
 import { afterAll, afterEach, beforeAll, expect, test, vi } from 'vitest';
 import { AuthProvider } from '../../auth/AuthContext';
-import { AccountSecuritySection, canUseAccountKillSwitches } from './AccountSecuritySection';
+import {
+  AccountSecuritySection,
+  canUseAccountKillSwitches,
+  deviceLostMessage,
+} from './AccountSecuritySection';
 import type { Member } from './types';
 
 const server = setupServer();
@@ -165,17 +169,14 @@ const DEVICES = [
   { deviceId: null, platform: 'APNS', registeredAt: null, valid: true },
 ];
 
-function serveDevicesAndRevoke(posts: unknown[]) {
+function serveDevicesAndRevoke(posts: unknown[], push = 'invalidated') {
   server.use(
     http.get('/api/v1/platform/sessions/m1/devices', () =>
       HttpResponse.json({ memberId: 'm1', devices: DEVICES }),
     ),
     http.post('/api/v1/platform/sessions/revoke', async ({ request }) => {
       posts.push(await request.json());
-      return HttpResponse.json(
-        { memberId: 'm1', status: 'revoked', push: 'invalidated' },
-        { status: 202 },
-      );
+      return HttpResponse.json({ memberId: 'm1', status: 'revoked', push }, { status: 202 });
     }),
   );
 }
@@ -228,6 +229,47 @@ test('report device lost removes only the device the admin picks', async () => {
     expect(screen.getByRole('status').textContent).toContain('no longer receives dispatch');
   });
   expect(posts).toEqual([{ memberId: 'm1', deviceId: 'install-phone-7f3a9c' }]);
+});
+
+// Review minor 2: the message follows the server outcome, not the request.
+test('says the chosen device was not found when the server had nothing to remove', async () => {
+  const posts: unknown[] = [];
+  serveDevicesAndRevoke(posts, 'no-push-entry');
+  const user = userEvent.setup();
+  renderSection(['CHIEF']);
+
+  await user.click(await screen.findByRole('button', { name: 'Report device lost' }));
+  const dialog = await screen.findByRole('dialog');
+  await user.click(await within(dialog).findByRole('radio', { name: /iPhone .* id …7f3a9c/ }));
+  await user.click(within(dialog).getByRole('button', { name: 'Sign out everywhere' }));
+
+  await waitFor(() => {
+    expect(screen.getByRole('status').textContent).toMatch(
+      /iPhone .* id …7f3a9c was not found - it was already removed or has registered again\. Paging on their other devices is unchanged\./,
+    );
+  });
+  expect(screen.getByRole('status').textContent).not.toContain('no longer receives');
+  expect(posts).toEqual([{ memberId: 'm1', deviceId: 'install-phone-7f3a9c' }]);
+});
+
+test('deviceLostMessage covers every server outcome', () => {
+  const phone = { deviceId: 'install-7f3a9c', platform: 'APNS', registeredAt: null, valid: true };
+  expect(deviceLostMessage('Sam Lee', phone, 'invalidated')).toContain(
+    'no longer receives dispatch notifications',
+  );
+  expect(deviceLostMessage('Sam Lee', undefined, 'invalidated')).toContain(
+    'None of their devices receives',
+  );
+  expect(deviceLostMessage('Sam Lee', phone, 'no-push-entry')).toContain('was not found');
+  expect(deviceLostMessage('Sam Lee', undefined, 'no-push-entry')).toContain(
+    'No devices were registered',
+  );
+  expect(deviceLostMessage('Sam Lee', undefined, 'no-member')).toContain(
+    'No devices were registered',
+  );
+  for (const push of ['invalidated', 'no-push-entry']) {
+    expect(deviceLostMessage('Sam Lee', phone, push)).toContain('signed out everywhere');
+  }
 });
 
 test('report device lost still offers all devices when the list cannot load', async () => {

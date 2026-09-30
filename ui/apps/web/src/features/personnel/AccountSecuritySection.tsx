@@ -23,6 +23,31 @@ function platformName(platform: string | null): string {
   return platform ?? 'Unknown device';
 }
 
+/**
+ * Review minor 2: the message follows what the server did, not what was asked. `push` is
+ * 'invalidated' (removed), or 'no-push-entry' / 'no-member' (nothing to remove: the chosen
+ * device was already removed or re-registered under a new id). Sessions are signed out either
+ * way.
+ */
+export function deviceLostMessage(
+  name: string,
+  chosen: MemberDevice | undefined,
+  push: string | undefined,
+): string {
+  const signedOut = `${name} is signed out everywhere and must sign in again on each device.`;
+  if (push !== 'invalidated') {
+    return chosen
+      ? `${signedOut} ${describeDevice(chosen)} was not found - it was already removed or ` +
+          'has registered again. Paging on their other devices is unchanged.'
+      : `${signedOut} No devices were registered for push notifications.`;
+  }
+  return chosen
+    ? `${signedOut} ${describeDevice(chosen)} no longer receives dispatch notifications; ` +
+        'their other devices keep receiving pages.'
+    : `${signedOut} None of their devices receives dispatch notifications until they sign in ` +
+        'again.';
+}
+
 /** "iPhone · registered 9/29/2026, 3:04 PM · id …7f3a9c" - enough to tell two phones apart. */
 export function describeDevice(device: MemberDevice): string {
   const parts = [platformName(device.platform)];
@@ -98,15 +123,8 @@ export function AccountSecuritySection({ member }: { member: Member }) {
     setMessage('');
     try {
       if (action === 'deviceLost') {
-        await revokeMemberSessions(auth, member.memberId, chosen?.deviceId);
-        setMessage(
-          chosen
-            ? `${name} is signed out everywhere and ${describeDevice(chosen)} no longer ` +
-                'receives dispatch notifications. They will need to sign in again on the ' +
-                'devices they still have; those keep receiving pages.'
-            : `${name} is signed out everywhere and none of their devices receives dispatch ` +
-                'notifications until they sign in again.',
-        );
+        const result = await revokeMemberSessions(auth, member.memberId, chosen?.deviceId);
+        setMessage(deviceLostMessage(name, chosen, result.push));
       } else {
         await resetMemberCredentials(auth, member.memberId);
         setMessage(
