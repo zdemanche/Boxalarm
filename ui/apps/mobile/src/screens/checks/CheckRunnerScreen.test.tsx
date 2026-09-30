@@ -116,6 +116,12 @@ test('critical items are never included in bulk OK', async () => {
   });
 
   expect(await findByText('Submit check — 1 unanswered')).toBeTruthy();
+  expect(await findByText('◆ Critical — answer this one yourself')).toBeTruthy();
+  // The critical item still needs its own answer: submit names it instead of sending.
+  await act(async () => {
+    fireEvent.press(await findByText('Submit check — 1 unanswered'));
+  });
+  expect((await screen.findByRole('alert')).props.children).toMatch(/Answer 1 more item.*Brakes/);
   spy.mockRestore();
 });
 

@@ -289,7 +289,13 @@ function validateChecklistDefaults(value: Record<string, unknown>): FieldError[]
         message: 'is required and must be a boolean',
       });
     }
-    errors.push(...unknownFieldErrors(item, ['code', 'label', 'requiresPhoto'], `${prefix}.`));
+    // Optional: absent reads as not critical, so sheets saved before the flag stay valid.
+    if (item.critical !== undefined && typeof item.critical !== 'boolean') {
+      errors.push({ field: `${prefix}.critical`, message: 'must be a boolean when provided' });
+    }
+    errors.push(
+      ...unknownFieldErrors(item, ['code', 'label', 'requiresPhoto', 'critical'], `${prefix}.`),
+    );
   });
   return errors;
 }

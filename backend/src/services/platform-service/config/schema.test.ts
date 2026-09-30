@@ -187,6 +187,26 @@ describe('validateConfigValue', () => {
         message: 'is required and must be a boolean',
       });
     });
+
+    it('accepts critical: true and false on an item', () => {
+      const errors = validateConfigValue('CHECKLIST_DEFAULTS', {
+        items: [
+          { code: 'BRAKES', label: 'Brakes', requiresPhoto: false, critical: true },
+          { code: 'OIL', label: 'Check oil', requiresPhoto: true, critical: false },
+        ],
+      });
+      expect(errors).toEqual([]);
+    });
+
+    it('rejects a non-boolean critical', () => {
+      const errors = validateConfigValue('CHECKLIST_DEFAULTS', {
+        items: [{ code: 'BRAKES', label: 'Brakes', requiresPhoto: false, critical: 'yes' }],
+      });
+      expect(errors).toContainEqual({
+        field: 'items[0].critical',
+        message: 'must be a boolean when provided',
+      });
+    });
   });
 
   describe('RETENTION', () => {

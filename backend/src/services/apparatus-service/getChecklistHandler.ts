@@ -13,6 +13,7 @@ import { createDynamoClient, readApparatusServiceConfig } from './dynamoClient.j
 import {
   resolveApparatusIdByUnitId,
   resolveChecklistTemplateForUnit,
+  resolveDepartmentDefaultTemplate,
 } from './checklistResolution.js';
 
 function emitChecklistMetric(outcome: 'Found' | 'NotFound' | 'Error'): void {
@@ -71,12 +72,17 @@ async function getChecklist(
     }
 
     operation = 'resolveTemplate';
-    const template = await resolveChecklistTemplateForUnit(
+    let template = await resolveChecklistTemplateForUnit(
       client,
       config.tableName,
       deptId,
       apparatusId,
     );
+    if (!template) {
+      // No unit-specific sheet: the department's default sheet (settings, CHECKLIST_DEFAULTS).
+      operation = 'resolveDepartmentDefault';
+      template = await resolveDepartmentDefaultTemplate(client, config.tableName, deptId);
+    }
     if (!template) {
       emitChecklistMetric('NotFound');
       return notFoundProblem(

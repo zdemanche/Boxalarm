@@ -47,6 +47,8 @@ export interface ChecklistItem {
   code: string;
   label: string;
   requiresPhoto: boolean;
+  /** Answered on its own in the truck check (never covered by a bulk "OK"). */
+  critical?: boolean;
 }
 
 export interface ChecklistTemplate {

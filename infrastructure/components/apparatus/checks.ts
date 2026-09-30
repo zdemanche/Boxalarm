@@ -37,7 +37,9 @@ export class Checks extends pulumi.ComponentResource {
 
     // getChecklistHandler.ts: resolveApparatusIdByUnitId queries GSI3;
     // resolveChecklistTemplateForUnit is a filtered base-table Scan (checklistResolution.ts)
-    // — there is no template index, so Scan is what the handler needs.
+    // — there is no template index, so Scan is what the handler needs. A unit no template
+    // names falls back to the department's default sheet: one GetItem of the
+    // CONFIG#CHECKLIST_DEFAULTS row settings saves (resolveDepartmentDefaultTemplate).
     this.checklistLambda = apparatusRoute(this, name, args, {
       functionKey: "checklist-get",
       routeKey: "GET /api/v1/apparatus/{unitId}/checklist",
@@ -45,6 +47,7 @@ export class Checks extends pulumi.ComponentResource {
       grants: [
         { sid: "ChecklistApparatusLookup", actions: ["dynamodb:Query"], on: ["GSI3"] },
         { sid: "ChecklistTemplateScan", actions: ["dynamodb:Scan"], on: ["table"] },
+        { sid: "ChecklistDefaultSheetGet", actions: ["dynamodb:GetItem"], on: ["table"] },
       ],
     });
 

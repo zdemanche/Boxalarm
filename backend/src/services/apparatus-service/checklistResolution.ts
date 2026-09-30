@@ -1,4 +1,4 @@
-import { QueryCommand, ScanCommand } from '@aws-sdk/lib-dynamodb';
+import { GetCommand, QueryCommand, ScanCommand } from '@aws-sdk/lib-dynamodb';
 import type { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
 import { buildDeptScopedPk } from '@boxalarm/dept-scope';
 import type { VerifiedDeptId } from '@boxalarm/dept-scope';
@@ -8,6 +8,11 @@ export interface ChecklistItem {
   readonly code: string;
   readonly label: string;
   readonly requiresPhoto: boolean;
+  /**
+   * Must be answered on its own (brakes, SCBA pressure): the mobile truck check never covers it
+   * with "Mark the other N OK". Absent on older records, which reads as false.
+   */
+  readonly critical: boolean;
 }
 
 export interface ChecklistTemplate {
@@ -40,6 +45,7 @@ function toChecklistItem(raw: unknown): ChecklistItem {
     code: readString(record, 'code') ?? '',
     label: readString(record, 'label') ?? '',
     requiresPhoto: record.requiresPhoto === true,
+    critical: record.critical === true,
   };
 }
 
@@ -109,4 +115,37 @@ export async function resolveChecklistTemplateForUnit(
     exclusiveStartKey = result.LastEvaluatedKey;
   } while (exclusiveStartKey);
   return undefined;
+}
+
+/** templateId prefix of the department-wide sheet: `department-default-v{version}`. */
+export const DEPARTMENT_DEFAULT_TEMPLATE_PREFIX = 'department-default-v';
+
+/**
+ * The department's default check sheet: the CHECKLIST_DEFAULTS config the web settings page
+ * edits (platform-service/config), stored in this same table under the department's own
+ * partition. It is the sheet for any unit no CHECKLIST_TEMPLATE names. The version is part of
+ * the templateId, so a check in progress on an older sheet is not restored against a newer one.
+ */
+export async function resolveDepartmentDefaultTemplate(
+  client: DynamoDBDocumentClient,
+  tableName: string,
+  deptId: VerifiedDeptId,
+): Promise<ChecklistTemplate | undefined> {
+  const result = await client.send(
+    new GetCommand({
+      TableName: tableName,
+      Key: { pk: buildDeptScopedPk(deptId), sk: 'CONFIG#CHECKLIST_DEFAULTS' },
+    }),
+  );
+  const value = result.Item?.value as Record<string, unknown> | undefined;
+  if (!value || !Array.isArray(value.items)) {
+    return undefined;
+  }
+  const version = typeof result.Item?.version === 'number' ? result.Item.version : 0;
+  return {
+    templateId: `${DEPARTMENT_DEFAULT_TEMPLATE_PREFIX}${version}`,
+    name: 'Department check sheet',
+    applicableApparatusIds: [],
+    items: value.items.map(toChecklistItem),
+  };
 }

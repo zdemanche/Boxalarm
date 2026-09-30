@@ -733,6 +733,12 @@ function ItemRowView({
       <Text style={{ color: theme.fg, fontSize: typeScale.heading.size, fontWeight: '600' }}>
         {item.label}
       </Text>
+      {item.critical ? (
+        // Glyph + word: "Mark the other N OK" skips this item, so the member has to answer it.
+        <Text style={{ color: theme.status.warning, fontSize: typeScale.body.size }}>
+          ◆ Critical — answer this one yourself
+        </Text>
+      ) : null}
       {knownDefect ? (
         <StatusChip
           status="caution"

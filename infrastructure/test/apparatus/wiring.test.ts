@@ -48,7 +48,7 @@ const EXPECTED: Record<string, Expected> = {
   create: { grants: [put], cedar: false },
   get: { grants: [q(GSI3), q(TABLE)], cedar: false },
   "service-status-update": { grants: [q(GSI3), q(TABLE), update, put], cedar: true },
-  "checklist-get": { grants: [q(GSI3), ["dynamodb:Scan", TABLE]], cedar: true },
+  "checklist-get": { grants: [q(GSI3), ["dynamodb:Scan", TABLE], get], cedar: true },
   "checks-submit": { grants: [q(GSI3), put, get], cedar: true },
   "defects-report": { grants: [q(GSI3), q(TABLE), get, put, update], cedar: true },
   compliance: { grants: [q(GSI3)], cedar: true },

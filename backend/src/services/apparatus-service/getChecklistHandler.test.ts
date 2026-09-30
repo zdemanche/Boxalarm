@@ -167,6 +167,50 @@ describe('getChecklistHandler', () => {
     expect(body.items[0]?.requiresPhoto).toBe(true);
   });
 
+  it("falls back to the department's default sheet, critical flags included, when no unit template applies", async () => {
+    vi.doMock('./dynamoClient.js', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('./dynamoClient.js')>();
+      return {
+        ...actual,
+        createDynamoClient: () =>
+          dynamoClient((command) => {
+            const input = command.input as { IndexName?: string; Key?: unknown };
+            if (input.IndexName) return Promise.resolve({ Items: [APPARATUS_ITEM] });
+            if (input.Key) {
+              return Promise.resolve({
+                Item: {
+                  version: 2,
+                  value: {
+                    items: [
+                      { code: 'BRAKES', label: 'Brakes', requiresPhoto: false, critical: true },
+                    ],
+                  },
+                },
+              });
+            }
+            return Promise.resolve({ Items: [] });
+          }),
+      };
+    });
+    vi.doMock('@boxalarm/authz', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('@boxalarm/authz')>();
+      return {
+        ...actual,
+        withAuthorization: (inner: never, options: WithAuthorizationOptions) =>
+          actual.withAuthorization(inner, { ...options, client: authzClient('ALLOW') }),
+      };
+    });
+    const { handler } = await import('./getChecklistHandler.js');
+
+    const result = (await handler(buildEvent('ENGINE-2'))) as { statusCode: number; body: string };
+
+    expect(result.statusCode).toBe(200);
+    expect(JSON.parse(result.body)).toMatchObject({
+      templateId: 'department-default-v2',
+      items: [{ code: 'BRAKES', critical: true }],
+    });
+  });
+
   it('returns 404 when the unitId does not resolve to a known apparatus', async () => {
     vi.doMock('./dynamoClient.js', async (importOriginal) => {
       const actual = await importOriginal<typeof import('./dynamoClient.js')>();
