@@ -14,15 +14,27 @@ import {
 import { grantAlertingCmk } from "./alerting-cmk";
 
 /** Channels still on the generic HTTP vendor adapter (channels/httpProviderAdapter.ts). */
-type VendorChannel = Exclude<AlertingChannel, "push">;
+export type VendorChannel = Exclude<AlertingChannel, "push">;
 
-// OQ-3 (SMS/voice vendor selection) is open — placeholder endpoints until a vendor is
-// chosen. Values are read verbatim by channels/httpProviderAdapter.ts at send time, which
-// POSTs the member's target, the dispatch narrative and the Bearer provider secret. The
-// placeholders therefore use the RFC 2606 reserved `.invalid` TLD, which can never resolve,
-// so nothing is ever sent to a domain the project does not control. Push has no endpoint:
-// it goes to APNs and FCM directly (see PushGatewaySecrets).
-const PLACEHOLDER_ENDPOINT_URL: Record<VendorChannel, string> = {
+// OQ-3 (SMS/voice vendor selection) is open. The endpoint channels/httpProviderAdapter.ts
+// POSTs to (the member's target, the dispatch narrative, the Bearer provider secret) is stack
+// config: `boxalarm-infra:smsProviderEndpointUrl` / `voiceProviderEndpointUrl`. Unset, the
+// worker gets a placeholder on the RFC 2606 reserved `.invalid` TLD, which can never resolve,
+// so nothing is ever sent to a domain the project does not control - and every SMS/voice page
+// fails, dead-letters and fires `…-sms-dlq-not-empty` / `…-voice-dlq-not-empty`. The workers
+// stay deployed and subscribed on purpose: unsubscribing them would make SNS drop those pages
+// with no DLQ and no alarm. Preview warns while either is unset (deploy-readiness M5).
+//
+// Two-vendor rule (architecture §1.3, N1.2): push and SMS fire in parallel at T+0 as two
+// independent failure domains - push straight to APNs/FCM, SMS through a third-party vendor -
+// with voice as the only escalation tier. The SMS/voice vendor must therefore never be a push
+// relay, and until one is configured a stack has ONE failure domain (push) plus radio tone-out.
+// Push has no endpoint: it goes to APNs and FCM directly (see PushGatewaySecrets).
+export const PROVIDER_ENDPOINT_CONFIG_KEY: Record<VendorChannel, string> = {
+  sms: "smsProviderEndpointUrl",
+  voice: "voiceProviderEndpointUrl",
+};
+export const PLACEHOLDER_ENDPOINT_URL: Record<VendorChannel, string> = {
   sms: "https://sms-provider.not-yet-selected.invalid",
   voice: "https://voice-provider.not-yet-selected.invalid",
 };
@@ -103,11 +115,34 @@ export class ChannelWorkers extends pulumi.ComponentResource {
   public readonly providerSecrets: Record<VendorChannel, aws.secretsmanager.Secret>;
   public readonly sandboxSecrets: Record<VendorChannel, aws.secretsmanager.Secret>;
   public readonly pushSecrets: PushGatewaySecrets;
+  /** Whether each vendor channel has a real provider endpoint (false: it cannot page). */
+  public readonly vendorEndpointConfigured: Record<VendorChannel, boolean>;
 
   constructor(name: string, args: ChannelWorkersArgs, opts?: pulumi.ComponentResourceOptions) {
     requireEnv("ChannelWorkers", args.env);
     super("boxalarm:alerting:ChannelWorkers", name, {}, opts);
     const { env } = args;
+
+    const config = new pulumi.Config("boxalarm-infra");
+    const endpointUrls = {} as Record<VendorChannel, string>;
+    const configured = {} as Record<VendorChannel, boolean>;
+    for (const channel of Object.keys(PROVIDER_ENDPOINT_CONFIG_KEY) as VendorChannel[]) {
+      const url = config.get(PROVIDER_ENDPOINT_CONFIG_KEY[channel]);
+      configured[channel] = url !== undefined && url.trim() !== "";
+      endpointUrls[channel] = configured[channel] ? url!.trim() : PLACEHOLDER_ENDPOINT_URL[channel];
+    }
+    this.vendorEndpointConfigured = configured;
+    const unconfigured = (Object.keys(configured) as VendorChannel[]).filter((c) => !configured[c]);
+    if (unconfigured.length > 0) {
+      pulumi.log.warn(
+        `ChannelWorkers: no provider endpoint for ${unconfigured.join(" and ")} ` +
+          `(boxalarm-infra:${unconfigured.map((c) => PROVIDER_ENDPOINT_CONFIG_KEY[c]).join(", ")}; ` +
+          `vendor OQ-3 open). Those workers are deployed against a .invalid placeholder: every ` +
+          `${unconfigured.join("/")} page dead-letters and pages alerting-page. Push is this ` +
+          `stack's only paging channel, and radio tone-out (N1.9) is the page of record.`,
+        this,
+      );
+    }
 
     const workers: Partial<Record<AlertingChannel, ServiceLambda>> = {};
     const providerSecrets: Partial<Record<VendorChannel, aws.secretsmanager.Secret>> = {};
@@ -137,7 +172,15 @@ export class ChannelWorkers extends pulumi.ComponentResource {
       const credentials =
         channel === "push"
           ? pushWorkerCredentials(pushSecrets)
-          : vendorWorkerCredentials(this, name, env, channel, providerSecrets, sandboxSecrets);
+          : vendorWorkerCredentials(
+              this,
+              name,
+              env,
+              channel,
+              endpointUrls[channel],
+              providerSecrets,
+              sandboxSecrets,
+            );
 
       const worker = new ServiceLambda(
         `${name}-${channel}-fn`,
@@ -244,6 +287,7 @@ function vendorWorkerCredentials(
   name: string,
   env: string,
   channel: VendorChannel,
+  endpointUrl: string,
   providerSecrets: Partial<Record<VendorChannel, aws.secretsmanager.Secret>>,
   sandboxSecrets: Partial<Record<VendorChannel, aws.secretsmanager.Secret>>,
 ): WorkerCredentials {
@@ -268,7 +312,7 @@ function vendorWorkerCredentials(
   const channelUpper = channel.toUpperCase();
   return {
     environment: {
-      [`${channelUpper}_PROVIDER_ENDPOINT_URL`]: PLACEHOLDER_ENDPOINT_URL[channel],
+      [`${channelUpper}_PROVIDER_ENDPOINT_URL`]: endpointUrl,
       [`${channelUpper}_PROVIDER_SECRET_ID`]: providerSecret.name,
       // Self-test and canary messages (isTest=true) must authenticate with the
       // sandbox/loopback credentials, never the prod ones (architecture §1.3).

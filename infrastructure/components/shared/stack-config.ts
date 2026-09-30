@@ -144,6 +144,34 @@ function webOriginProblems(env: string | undefined, webOrigin: string | undefine
   return [];
 }
 
+/**
+ * SMS/voice provider endpoints are optional (vendor OQ-3 open; ChannelWorkers warns while
+ * unset), but a value that is set must be a real https URL: a typo would otherwise send member
+ * phone numbers and dispatch narratives somewhere unintended, or dead-letter every page.
+ */
+function providerEndpointProblems(read: ConfigReader, stack: string): string[] {
+  return ["smsProviderEndpointUrl", "voiceProviderEndpointUrl"].flatMap((key) => {
+    const value = read(key);
+    if (value === undefined || value.trim() === "") {
+      return [];
+    }
+    const fix = `pulumi config set ${key} https://<vendor API host>/<path> --stack ${stack}`;
+    let url: URL;
+    try {
+      url = new URL(value);
+    } catch {
+      return [`  - ${CONFIG_NAMESPACE}:${key} "${value}" is not a URL: ${fix}`];
+    }
+    if (url.protocol !== "https:" || isPlaceholderHost(url.hostname)) {
+      return [
+        `  - ${CONFIG_NAMESPACE}:${key} "${value}" must be the vendor's https endpoint, not a ` +
+          `placeholder host (leave it unset until the vendor is chosen): ${fix}`,
+      ];
+    }
+    return [];
+  });
+}
+
 function setCommand(k: RequiredConfigKey, stack: string): string {
   return `pulumi config set ${k.secret ? "--secret " : ""}${k.key} ${k.example} --stack ${stack}`;
 }
@@ -160,7 +188,11 @@ export function stackConfigProblems(read: ConfigReader, stack: string): string[]
       return value === undefined || value.trim() === "";
     })
     .map((k) => `  - ${CONFIG_NAMESPACE}:${k.key} (${k.why}): ${setCommand(k, stack)}`);
-  return [...missing, ...webOriginProblems(ctx.env, read("webOrigin"), stack)];
+  return [
+    ...missing,
+    ...webOriginProblems(ctx.env, read("webOrigin"), stack),
+    ...providerEndpointProblems(read, stack),
+  ];
 }
 
 /** Throws one error naming every problem, or returns quietly. */

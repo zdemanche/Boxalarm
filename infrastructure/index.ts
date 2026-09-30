@@ -980,6 +980,8 @@ export const INCIDENT_TABLE_NAME = incidentTable.tableName;
 export const ALERTING_TABLE_NAME = alertingTable.tableName;
 export const VERIFIED_PERMISSIONS_POLICY_STORE_ID = policyStore.policyStoreId;
 export const PLATFORM_BUS_NAME = platformBus.busName;
+// false = that channel has no provider endpoint (OQ-3) and cannot page; see channel-workers.ts.
+export const ALERTING_VENDOR_ENDPOINTS_CONFIGURED = channelWorkers.vendorEndpointConfigured;
 
 // Review M4: every route is registered by now. Fix the reserved alerting routes' per-route
 // throttles, and fail the deploy if one of them was renamed and never registered.
