@@ -190,6 +190,36 @@ test('Primary nav and Sign out are reachable on every viewport this suite runs a
   await expect(nav.getByRole('button', { name: 'Sign out' })).toBeVisible();
 });
 
+// The sidebar used to render under the page on phones and the hamburger showed on desktop
+// (AppShell.module.css cascade order); openNavIfCollapsed alone could not catch either, because
+// it only asks whether the button is visible.
+test('exactly one navigation affordance per viewport, and no sideways page scroll', async ({
+  page,
+}) => {
+  const { publicKey, privateKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
+  const jwk = publicKey.export({ format: 'jwk' }) as JsonWebKey;
+  await stubCognitoWithGroups(page, privateKey, jwk, ['CHIEF']);
+
+  await page.goto('/login');
+  await page.getByRole('button', { name: 'Sign in' }).click();
+  await expect(page.getByRole('heading', { level: 1 })).toBeVisible();
+
+  const narrow = (page.viewportSize()?.width ?? 1280) < 768;
+  const sidebar = page.getByRole('navigation', { name: 'Primary' });
+  const menuButton = page.getByRole('button', { name: 'Open navigation' });
+  if (narrow) {
+    await expect(sidebar).toBeHidden();
+    await expect(menuButton).toBeVisible();
+  } else {
+    await expect(sidebar).toBeVisible();
+    await expect(menuButton).toBeHidden();
+  }
+  const overflow = await page.evaluate(
+    () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
+  );
+  expect(overflow).toBeLessThanOrEqual(0);
+});
+
 test('CHIEF landing shows chief dashboard (cognito:groups, not roles claim)', async ({ page }) => {
   const { publicKey, privateKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
   const jwk = publicKey.export({ format: 'jwk' }) as JsonWebKey;
