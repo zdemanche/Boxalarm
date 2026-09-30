@@ -75,10 +75,10 @@ export function AvailabilityPage() {
   const presetLabels: { value: Preset; label: string }[] = [
     {
       value: 'tonight',
-      label: `Tonight — until ${nextSixAm(now).toLocaleTimeString(undefined, {
+      label: `Tonight — until ${nextSixAm(new Date()).toLocaleTimeString(undefined, {
         hour: '2-digit',
         minute: '2-digit',
-      })} ${nextSixAm(now).toLocaleDateString(undefined, { weekday: 'short' })}`,
+      })} ${nextSixAm(new Date()).toLocaleDateString(undefined, { weekday: 'short' })}`,
     },
     { value: '24h', label: '24 hours' },
     { value: '3d', label: '3 days' },
@@ -96,8 +96,11 @@ export function AvailabilityPage() {
       setFormError("You're offline, so this can't be saved. Nothing was marked off.");
       return;
     }
-    const start = preset === 'custom' ? new Date(customStart) : now;
-    const end = preset === 'custom' ? new Date(customEnd) : presetEnd(preset, now, now);
+    // Taken at submit, not at page load: a page left open for an hour must not send a window
+    // that started an hour ago.
+    const submitNow = new Date();
+    const start = preset === 'custom' ? new Date(customStart) : submitNow;
+    const end = preset === 'custom' ? new Date(customEnd) : presetEnd(preset, submitNow, submitNow);
     if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) {
       setFormError('Enter both the start and the end.');
       return;
@@ -127,6 +130,7 @@ export function AvailabilityPage() {
             You won&rsquo;t be alerted for calls until then. You&rsquo;ll still get drill and shift
             reminders.
           </p>
+          <p>To end it early, ask an officer to clear it. Boxalarm can&rsquo;t cancel one yet.</p>
           <Button variant="secondary" onClick={() => mutation.reset()}>
             Mark another period
           </Button>
@@ -137,7 +141,7 @@ export function AvailabilityPage() {
 
   const submitError =
     mutation.error instanceof ApiError && mutation.error.problem.status === 409
-      ? 'You already have a mark-off starting at that time.'
+      ? 'Not recorded: you already have a mark-off starting at that exact time. To change it, ask an officer to clear it.'
       : mutation.error
         ? 'This could not be saved, so you are not marked unavailable. Try again.'
         : null;

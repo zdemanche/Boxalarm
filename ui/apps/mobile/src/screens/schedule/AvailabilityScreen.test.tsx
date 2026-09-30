@@ -107,3 +107,73 @@ test('tonight runs until the next 06:00', () => {
   const { start, end } = presetWindow('1w', new Date(2026, 8, 29, 21, 30, 45));
   expect(end.getTime() - start.getTime()).toBe(7 * 24 * 60 * 60 * 1000);
 });
+
+// Review M1: a member who corrects a mark-off within the same minute must never be told the new
+// window is in effect while the server keeps the old one.
+test('correcting within the minute sends a distinct mark-off, with a start taken at submit', async () => {
+  const submitSpy = jest.spyOn(mockScheduleRepository, 'markUnavailable');
+  const first = await render(<AvailabilityScreen />);
+  await act(async () => {
+    fireEvent.press(await first.findByText('1 week'));
+  });
+  await act(async () => {
+    fireEvent.press(await first.findByRole('button', { name: 'Mark unavailable' }));
+  });
+  await act(async () => {
+    first.unmount();
+  });
+
+  const second = await render(<AvailabilityScreen />);
+  await act(async () => {
+    fireEvent.press(await second.findByText('24 hours'));
+  });
+  await act(async () => {
+    fireEvent.press(await second.findByRole('button', { name: 'Mark unavailable' }));
+  });
+
+  const [start1, end1] = submitSpy.mock.calls[0] as [string, string];
+  const [start2, end2] = submitSpy.mock.calls[1] as [string, string];
+  expect(end2).not.toBe(end1);
+  // Not floored to the minute: the start carries seconds from the moment of submit.
+  expect(Date.parse(end1) - Date.parse(start1)).toBe(7 * 24 * 60 * 60 * 1000);
+  expect(Date.parse(end2) - Date.parse(start2)).toBe(24 * 60 * 60 * 1000);
+  submitSpy.mockRestore();
+});
+
+test('a mark-off the server refused reads "Not marked unavailable", never "in effect"', async () => {
+  const syncManager =
+    jest.requireActual<typeof import('../../sync/syncManager')>('../../sync/syncManager');
+  const submitSpy = jest
+    .spyOn(mockScheduleRepository, 'markUnavailable')
+    .mockResolvedValueOnce({ outboxId: 'availability-refused' });
+  const subscribeSpy = jest.spyOn(syncManager, 'subscribe').mockImplementation((listener) => {
+    listener({
+      items: [
+        {
+          id: 'availability-refused',
+          kind: 'AVAILABILITY',
+          label: 'Mark unavailable',
+          status: 'REJECTED',
+          queuedAt: new Date().toISOString(),
+          lastError: syncManager.AVAILABILITY_CONFLICT,
+        },
+      ],
+      lastSyncAt: null,
+    });
+    return () => undefined;
+  });
+  const { findByText, findByRole, queryByText } = await render(<AvailabilityScreen />);
+
+  await act(async () => {
+    fireEvent.press(await findByText('Tonight', { exact: false }));
+  });
+  await act(async () => {
+    fireEvent.press(await findByRole('button', { name: 'Mark unavailable' }));
+  });
+
+  expect(await findByText('Not marked unavailable')).toBeTruthy();
+  expect(queryByText(/^Marked unavailable until/)).toBeNull();
+  expect(await findByText(/ask an officer to clear it/)).toBeTruthy();
+  submitSpy.mockRestore();
+  subscribeSpy.mockRestore();
+});

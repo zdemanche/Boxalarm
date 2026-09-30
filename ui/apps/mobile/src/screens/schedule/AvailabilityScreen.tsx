@@ -25,8 +25,10 @@ export function nextSixAm(now: Date): Date {
   return now.getTime() < six.getTime() ? six : new Date(six.getTime() + DAY_MS);
 }
 
+/** Called at submit time with the real current time: no rounding, so two mark-offs made a few
+ * seconds apart have different starts (review M1). */
 export function presetWindow(preset: Exclude<DurationPreset, 'custom'>, now: Date) {
-  const start = new Date(Math.floor(now.getTime() / 60_000) * 60_000);
+  const start = new Date(now.getTime());
   switch (preset) {
     case 'tonight':
       return { start, end: nextSixAm(now) };
@@ -199,7 +201,12 @@ export function AvailabilityScreen() {
   const [reason, setReason] = useState<(typeof REASONS)[number] | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [submitted, setSubmitted] = useState<{ end: Date; outboxId: string | null } | null>(null);
+  const [submitted, setSubmitted] = useState<{
+    start: Date;
+    end: Date;
+    outboxId: string | null;
+    replacedUnsent: number;
+  } | null>(null);
   const [lastMarkOff, setLastMarkOff] = useState<LastMarkOff | null>(null);
   const delivery = useOutboxItem(submitted?.outboxId ?? null);
 
@@ -215,14 +222,29 @@ export function AvailabilityScreen() {
     };
   }, [lastKey]);
 
-  const markOff =
+  // Remember a mark-off as "last marked off" only once the server has it (review m9): a rejected
+  // or never-sent one must not be reported back to the member as their status.
+  useEffect(() => {
+    if (!submitted) return;
+    if (submitted.outboxId !== null && delivery.state !== 'SYNCED') return;
+    void kvSet<LastMarkOff>(lastKey, {
+      startAt: submitted.start.toISOString(),
+      endAt: submitted.end.toISOString(),
+    });
+  }, [submitted, delivery.state, lastKey]);
+
+  const windowAt = (at: Date) =>
     preset === null
       ? null
       : preset === 'custom'
         ? { start: customStart, end: customEnd }
-        : presetWindow(preset, now);
+        : presetWindow(preset, at);
+  // Preview only; the window actually sent is computed at submit (a screen left open for an hour
+  // must not send a window that started an hour ago).
+  const markOff = windowAt(new Date());
 
   const handleSubmit = async () => {
+    const markOff = windowAt(new Date());
     if (!markOff) {
       const message = 'Choose how long you will be unavailable first.';
       setError(message);
@@ -245,11 +267,12 @@ export function AvailabilityScreen() {
         markOff.end.toISOString(),
         reason ?? undefined,
       );
-      await kvSet<LastMarkOff>(lastKey, {
-        startAt: markOff.start.toISOString(),
-        endAt: markOff.end.toISOString(),
+      setSubmitted({
+        start: markOff.start,
+        end: markOff.end,
+        outboxId: result.outboxId,
+        replacedUnsent: result.replacedUnsent ?? 0,
       });
-      setSubmitted({ end: markOff.end, outboxId: result.outboxId });
       AccessibilityInfo.announceForAccessibility(
         result.outboxId === null
           ? `Marked unavailable until ${formatWhen(markOff.end)}.`
@@ -267,6 +290,14 @@ export function AvailabilityScreen() {
 
   if (submitted) {
     const inEffect = submitted.outboxId === null || delivery.state === 'SYNCED';
+    const failed = delivery.state === 'REJECTED' || delivery.state === 'DISCARDED';
+    // A mark-off this phone delivered earlier, still running, that this one does not cancel.
+    const earlier =
+      lastMarkOff &&
+      new Date(lastMarkOff.endAt).getTime() > Date.now() &&
+      new Date(lastMarkOff.endAt).getTime() !== submitted.end.getTime()
+        ? lastMarkOff
+        : null;
     return (
       <Screen>
         <View style={{ gap: spacing.md }}>
@@ -274,11 +305,23 @@ export function AvailabilityScreen() {
             accessibilityRole="header"
             style={{ color: theme.fg, fontSize: typeScale.title.size, fontWeight: '700' }}
           >
-            {inEffect
-              ? `Marked unavailable until ${formatWhen(submitted.end)}`
-              : 'Saved on this phone — not in effect yet'}
+            {failed
+              ? 'Not marked unavailable'
+              : inEffect
+                ? `Marked unavailable until ${formatWhen(submitted.end)}`
+                : 'Saved on this phone — not in effect yet'}
           </Text>
-          {inEffect ? (
+          {failed ? (
+            <Text
+              style={{
+                color: theme.status.danger,
+                fontSize: typeScale.body.size,
+                fontWeight: '600',
+              }}
+            >
+              This mark-off was not recorded, so you will still be alerted.
+            </Text>
+          ) : inEffect ? (
             <Text style={{ color: theme.fg, fontSize: typeScale.body.size }}>
               You won&apos;t be alerted for calls until then. You&apos;ll still get drill and shift
               reminders.
@@ -295,6 +338,26 @@ export function AvailabilityScreen() {
               does.
             </Text>
           )}
+          {submitted.replacedUnsent > 0 ? (
+            <Text style={{ color: theme.fg, fontSize: typeScale.body.size }}>
+              This replaces the mark-off you saved earlier that hadn&apos;t been sent yet.
+            </Text>
+          ) : null}
+          {earlier && !failed ? (
+            <Text
+              style={{
+                color: theme.status.warning,
+                fontSize: typeScale.body.size,
+                fontWeight: '600',
+              }}
+            >
+              Your earlier mark-off until {formatWhen(new Date(earlier.endAt))} is still in effect.
+              This one does not cancel it.
+            </Text>
+          ) : null}
+          <Text style={{ color: theme.fg, fontSize: typeScale.body.size }}>
+            To end a mark-off early, ask an officer to clear it. The app can&apos;t cancel one yet.
+          </Text>
           {submitted.outboxId !== null ? (
             <DeliveryStatus
               itemId={submitted.outboxId}
@@ -322,7 +385,8 @@ export function AvailabilityScreen() {
         {lastMarkOff ? (
           <Text style={{ color: theme.fg, fontSize: typeScale.body.size }}>
             From this phone, you last marked yourself unavailable until{' '}
-            {formatWhen(new Date(lastMarkOff.endAt))}.
+            {formatWhen(new Date(lastMarkOff.endAt))}. A new mark-off does not cancel it; to end it
+            early, ask an officer to clear it.
           </Text>
         ) : null}
         <Text style={{ color: theme.fg, fontSize: typeScale.body.size }}>
@@ -341,7 +405,7 @@ export function AvailabilityScreen() {
           {PRESETS.map((option) => (
             <Choice
               key={option.value}
-              label={option.label(now)}
+              label={option.label(new Date())}
               selected={preset === option.value}
               onPress={() => {
                 setPreset(option.value);

@@ -8,6 +8,7 @@ import * as syncManager from '../../sync/syncManager';
 import { mockScheduleRepository } from './mockScheduleRepository';
 import {
   ClaimNeedsConnectionError,
+  NotSignedInError,
   type ClaimResult,
   type DutyShift,
   type MarkUnavailableResult,
@@ -138,18 +139,24 @@ export function useScheduleRepository(): ScheduleRepository {
       async markUnavailable(startAt, endAt, reason): Promise<MarkUnavailableResult> {
         const tokens = authRef.current;
         if (!tokens) return mockScheduleRepository.markUnavailable(startAt, endAt, reason);
-        const memberId = auth?.memberId ?? '';
+        const memberId = auth?.memberId;
+        if (!memberId) throw new NotSignedInError();
         const startSeconds = Math.floor(new Date(startAt).getTime() / 1000);
         const endSeconds = Math.floor(new Date(endAt).getTime() / 1000);
-        // The server keys a mark-off on member + startAt, so that pair is the outbox id: a
-        // replay after a lost response is answered 409, which the outbox reads as delivered.
-        const outboxId = `availability-${memberId}-${startSeconds}`;
-        await syncManager.enqueueAvailability(outboxId, memberId, 'Mark unavailable', {
-          startAt: startSeconds,
-          endAt: endSeconds,
-          ...(reason ? { reason } : {}),
-        });
-        return { outboxId };
+        // The id covers the whole window, so a corrected mark-off is never collapsed into an
+        // earlier one with the same start (review M1). An identical resubmit is the same id.
+        const outboxId = `availability-${memberId}-${startSeconds}-${endSeconds}`;
+        const { replaced } = await syncManager.enqueueAvailability(
+          outboxId,
+          memberId,
+          'Mark unavailable',
+          {
+            startAt: startSeconds,
+            endAt: endSeconds,
+            ...(reason ? { reason } : {}),
+          },
+        );
+        return { outboxId, replacedUnsent: replaced };
       },
     };
   }, [apiBaseUrl, isAuthenticated, isOnline, auth?.memberId]);

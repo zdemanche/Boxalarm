@@ -39,6 +39,16 @@ export class ClaimNeedsConnectionError extends Error {
 
 export interface MarkUnavailableResult {
   readonly outboxId: string | null;
+  /** Older mark-offs from this phone that had not been sent yet and were dropped for this one. */
+  readonly replacedUnsent?: number;
+}
+
+/** No member id on the session: nothing is queued or cached under a shared/blank key. */
+export class NotSignedInError extends Error {
+  constructor() {
+    super('Sign in again to do this - this phone has no signed-in member.');
+    this.name = 'NotSignedInError';
+  }
 }
 
 export interface ScheduleRepository {

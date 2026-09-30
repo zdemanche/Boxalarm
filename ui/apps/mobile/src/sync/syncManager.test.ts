@@ -587,16 +587,11 @@ describe('attendance', () => {
     expect(syncManager.hasSynced('attendance-1790000000')).toBe(true);
   });
 
-  test('a mark-off is POSTed to the member availability path, and a 409 replay is delivered', async () => {
+  test('a mark-off is POSTed to the member availability path', async () => {
     const markOff = { startAt: 1790000000, endAt: 1790086400, reason: 'Travel' };
-    mockApiRequest.mockRejectedValueOnce(problem(409, 'Conflict'));
+    mockApiRequest.mockResolvedValueOnce({ json: async () => ({}) });
 
-    await syncManager.enqueueAvailability(
-      'availability-m-1-1790000000',
-      'm-1',
-      'Mark unavailable',
-      markOff,
-    );
+    await syncManager.enqueueAvailability('availability-a', 'm-1', 'Mark unavailable', markOff);
     await flush();
 
     expect(mockApiRequest).toHaveBeenCalledWith(
@@ -604,8 +599,48 @@ describe('attendance', () => {
       tokens,
       expect.objectContaining({ method: 'POST', body: JSON.stringify(markOff) }),
     );
-    await expect(store.find('availability-m-1-1790000000')).resolves.toBeUndefined();
-    expect(syncManager.hasSynced('availability-m-1-1790000000')).toBe(true);
+    expect(syncManager.hasSynced('availability-a')).toBe(true);
+  });
+
+  // Review M1: a 409 means another window already holds this start - never "delivered".
+  test('a 409 on a mark-off is REJECTED with a plain reason, not counted as delivered', async () => {
+    mockApiRequest.mockRejectedValueOnce(problem(409, 'Conflict'));
+
+    await syncManager.enqueueAvailability('availability-b', 'm-1', 'Mark unavailable', {
+      startAt: 1790000000,
+      endAt: 1790020000,
+    });
+    await flush();
+
+    const row = await store.find('availability-b');
+    expect(row?.status).toBe('REJECTED');
+    expect(row?.lastError).toBe(syncManager.AVAILABILITY_CONFLICT);
+    expect(syncManager.hasSynced('availability-b')).toBe(false);
+  });
+
+  test('a corrected mark-off replaces an older one that has not been sent yet', async () => {
+    syncManager.configure(null, null);
+    const week = { startAt: 1790000000, endAt: 1790604800 };
+    const tonight = { startAt: 1790000010, endAt: 1790030000 };
+
+    await syncManager.enqueueAvailability('availability-week', 'm-1', 'Mark unavailable', week);
+    const { replaced } = await syncManager.enqueueAvailability(
+      'availability-tonight',
+      'm-1',
+      'Mark unavailable',
+      tonight,
+    );
+
+    expect(replaced).toBe(1);
+    await expect(store.find('availability-week')).resolves.toBeUndefined();
+    expect((await store.find('availability-tonight'))?.body).toBe(JSON.stringify(tonight));
+    syncManager.configure(tokens, 'https://api.example.com');
+  });
+
+  test('a mark-off without a member id is refused, never sent to a blank path', async () => {
+    await expect(
+      syncManager.enqueueAvailability('availability-x', '', 'Mark unavailable', {}),
+    ).rejects.toThrow();
   });
 
   test('a 409 is still a rejection for kinds that carry their own idempotency key', async () => {

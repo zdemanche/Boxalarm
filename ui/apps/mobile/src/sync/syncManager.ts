@@ -139,23 +139,31 @@ export async function enqueueFieldCapture(
 // is the member plus occurredAt, and the handler answers a repeat of that key with 409, so the
 // natural key doubles as the outbox id and a 409 on replay means "already recorded".
 // POST /api/v1/personnel/members/{memberId}/availability (personnel-service availability/handler.ts).
-// The mark-off's key is the member plus startAt and the handler answers a repeat of that key with
-// 409 ("A markoff already exists ... starting at this time"), so, as for attendance, the natural
-// key is the outbox id and a 409 on replay means the first attempt landed.
+// Unlike attendance, a 409 here is NOT "delivered": the handler keys a mark-off on member +
+// startAt only, so a 409 can mean a different window already holds that start, and counting it
+// as success told a member paging resumed at 06:00 while the server kept a week (review M1). The
+// id covers the whole window, and a newer mark-off drops any older one still waiting to send, so
+// a correction made before sync is the one that goes out. Returns how many older unsent
+// mark-offs it replaced.
 export async function enqueueAvailability(
   idempotencyKey: string,
   memberId: string,
   label: string,
   body: Record<string, unknown>,
-): Promise<void> {
-  await enqueueAndDrain(
-    'AVAILABILITY',
-    idempotencyKey,
-    label,
-    `personnel/members/${encodeURIComponent(memberId)}/availability`,
-    body,
-  );
+): Promise<{ replaced: number }> {
+  if (!memberId) throw new Error('A mark-off needs the signed-in member');
+  const path = `personnel/members/${encodeURIComponent(memberId)}/availability`;
+  const row = await outbox.enqueue({ id: idempotencyKey, kind: 'AVAILABILITY', label, path, body });
+  const older = (await outbox.olderSiblings(row)).filter((sibling) => sibling.status !== 'SYNCING');
+  await Promise.all(older.map((sibling) => outbox.discard(sibling.id)));
+  await notify();
+  void drain();
+  return { replaced: older.length };
 }
+
+/** lastError of an AVAILABILITY row the server answered 409. */
+export const AVAILABILITY_CONFLICT =
+  'Not recorded: the server already has a mark-off starting at this exact time. If this was a resend, the first one may already be in effect. Ask an officer to check.';
 
 export async function enqueueAttendance(
   idempotencyKey: string,
@@ -226,6 +234,12 @@ export const RESPONSE_NOT_RECORDED = "Not recorded on the officer's roster";
  */
 export const RESPONSE_SUPERSEDED = 'A newer answer is already on the roster';
 
+class AvailabilityConflictError extends Error {
+  constructor() {
+    super(AVAILABILITY_CONFLICT);
+  }
+}
+
 class ResponseNotCurrentError extends Error {
   constructor(message: string) {
     super(message);
@@ -263,6 +277,7 @@ export function signedUrlExpiresAtMs(url: string): number | null {
 function isPermanentRejection(error: unknown): boolean {
   if (error instanceof PhotoUploadUrlExpiredError) return true;
   if (error instanceof ResponseNotCurrentError) return true;
+  if (error instanceof AvailabilityConflictError) return true;
   if (!(error instanceof ApiError)) return false;
   const { status } = error.problem;
   return status >= 400 && status < 500 && status !== 401 && status !== 408 && status !== 429;
@@ -368,7 +383,7 @@ function readUploadTarget(row: OutboxRow, parsed: Record<string, unknown>): Uplo
 // Kinds whose create endpoint has no idempotency key and instead answers a replay of an
 // already-stored natural key with 409 - for them a 409 means the first attempt landed (its
 // response was lost), so the entry is delivered, not refused.
-const CONFLICT_MEANS_DELIVERED: ReadonlySet<OutboxKind> = new Set(['ATTENDANCE', 'AVAILABILITY']);
+const CONFLICT_MEANS_DELIVERED: ReadonlySet<OutboxKind> = new Set(['ATTENDANCE']);
 
 /**
  * Minutes of the placeholder ETA sent only to a server that still requires one (see
@@ -426,6 +441,9 @@ async function postOnce(row: OutboxRow): Promise<Response | null> {
       throw new ResponseNotCurrentError(
         code === 'SUPERSEDED' ? RESPONSE_SUPERSEDED : RESPONSE_NOT_RECORDED,
       );
+    }
+    if (row.kind === 'AVAILABILITY' && error instanceof ApiError && error.problem.status === 409) {
+      throw new AvailabilityConflictError();
     }
     if (
       CONFLICT_MEANS_DELIVERED.has(row.kind) &&
