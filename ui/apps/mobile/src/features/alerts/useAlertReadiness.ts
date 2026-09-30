@@ -254,6 +254,16 @@ export function registrationReadinessItem(
   const base = { id: 'registration', label: 'Pages on this phone', wakes: true } as const;
   if (status === 'registered')
     return { ...base, status: 'ok', detail: 'Registered for your pages.' };
+  if (status === 'unverified') {
+    return {
+      ...base,
+      status: 'warn',
+      detail:
+        "Couldn't check with Boxalarm that this phone is still registered for your pages - no signal. It checks again when you have signal.",
+      fixLabel: 'Check now',
+      fix: retryPushRegistration,
+    };
+  }
   if (status === 'registering') {
     return {
       ...base,

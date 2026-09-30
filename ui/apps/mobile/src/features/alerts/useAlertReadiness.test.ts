@@ -161,6 +161,13 @@ describe('registration with the server (C1)', () => {
     expect(item.status).not.toBe('ok');
   });
 
+  test("a re-confirm that couldn't reach the server is amber with a check-now, not the red banner", () => {
+    const item = registrationReadinessItem('A', { memberId: 'A', status: 'unverified' });
+    expect(item).toMatchObject({ status: 'warn', fixLabel: 'Check now' });
+    expect(item.detail).toMatch(/couldn't check/i);
+    expect(blockingReadinessItems([item])).toHaveLength(0);
+  });
+
   test('registering is a warning (no red flash at sign-in); registered is ok', () => {
     expect(registrationReadinessItem('A', null).status).toBe('warn');
     expect(registrationReadinessItem('A', { memberId: 'A', status: 'registered' }).status).toBe(

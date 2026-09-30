@@ -3,7 +3,12 @@
  * usePushTokenRegistration for one sign-in at a time and read by the readiness checklist, so a
  * phone the server does not know about raises the red banner instead of showing ready.
  */
-export type PushRegistrationStatus = 'registering' | 'registered' | 'failed' | 'permissionDenied';
+/**
+ * unverified: registered earlier in this sign-in, but the latest re-confirm could not reach the
+ * server (no signal) - not known to be gone, so amber, not red.
+ */
+export type PushRegistrationStatus =
+  'registering' | 'registered' | 'unverified' | 'failed' | 'permissionDenied';
 
 export interface PushRegistrationState {
   readonly memberId: string;

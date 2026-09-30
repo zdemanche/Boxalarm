@@ -1,8 +1,13 @@
 import { useEffect, useRef } from 'react';
 import { AppState } from 'react-native';
 import Config from 'react-native-config';
+import { ApiError } from '../../lib/apiClient';
 import { useOptionalAuth } from '../../auth/AuthContext';
-import { setPushRegistration, setPushRegistrationRetry } from './pushRegistrationState';
+import {
+  setPushRegistration,
+  setPushRegistrationRetry,
+  type PushRegistrationStatus,
+} from './pushRegistrationState';
 import {
   currentRegistrationEpoch,
   getNativePushBridge,
@@ -67,7 +72,7 @@ export function usePushTokenRegistration(): void {
       }
     };
 
-    const report = (status: 'registering' | 'registered' | 'failed' | 'permissionDenied') => {
+    const report = (status: PushRegistrationStatus) => {
       if (!cancelled) setPushRegistration({ memberId, status });
     };
 
@@ -90,7 +95,10 @@ export function usePushTokenRegistration(): void {
 
     const onFailure = (error: unknown) => {
       if (cancelled || error instanceof RegistrationCancelledError) return;
-      report('failed');
+      // A re-confirm of a phone registered earlier this sign-in that got no answer (no signal,
+      // a timeout) says "couldn't check", amber; only a server refusal, or never having been
+      // registered, is red.
+      report(confirmedAt > 0 && !(error instanceof ApiError) ? 'unverified' : 'failed');
       needsRetry = true;
       failures += 1;
       const delay = retryDelayMs(failures);

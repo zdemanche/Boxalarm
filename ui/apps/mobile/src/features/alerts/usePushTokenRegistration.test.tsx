@@ -1,6 +1,7 @@
 import { act, renderHook } from '@testing-library/react-native';
 import { AppState, type AppStateStatus } from 'react-native';
 import { useOptionalAuth } from '../../auth/AuthContext';
+import { ApiError } from '../../lib/apiClient';
 import { getPushRegistration, retryPushRegistration } from './pushRegistrationState';
 import { getNativePushBridge, registerPushToken, type DeviceToken } from './pushTokens';
 import {
@@ -198,11 +199,36 @@ test('a later return to the foreground re-confirms with the server, and a refusa
   await flush();
   await advance(RECONFIRM_MIN_INTERVAL_MS);
 
-  mockRegisterPushToken.mockRejectedValueOnce(new Error('404 member not found'));
+  mockRegisterPushToken.mockRejectedValueOnce(
+    new ApiError({ type: 'about:blank', title: 'Not Found', status: 404, traceId: 't' }),
+  );
   fireAppState('active');
   await flush();
 
   expect(mockRegisterPushToken).toHaveBeenCalledTimes(2);
+  expect(getPushRegistration()).toEqual({ memberId: 'MBR-1', status: 'failed' });
+});
+
+test('a re-confirm that gets no answer (no signal) is "couldn\'t check", not red', async () => {
+  await renderHook(() => usePushTokenRegistration());
+  await flush();
+  await advance(RECONFIRM_MIN_INTERVAL_MS);
+
+  mockRegisterPushToken.mockRejectedValueOnce(new TypeError('Network request failed'));
+  fireAppState('active');
+  await flush();
+
+  expect(getPushRegistration()).toEqual({ memberId: 'MBR-1', status: 'unverified' });
+  // It keeps checking, and a later answer turns it green again.
+  await advance(5_000);
+  expect(getPushRegistration()).toEqual({ memberId: 'MBR-1', status: 'registered' });
+});
+
+test('never registered and no signal is still red', async () => {
+  mockRegisterPushToken.mockRejectedValueOnce(new TypeError('Network request failed'));
+  await renderHook(() => usePushTokenRegistration());
+  await flush();
+
   expect(getPushRegistration()).toEqual({ memberId: 'MBR-1', status: 'failed' });
 });
 
