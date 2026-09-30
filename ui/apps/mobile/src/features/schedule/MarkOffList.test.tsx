@@ -1,7 +1,8 @@
 import { act, fireEvent, render, screen } from '@testing-library/react-native';
 import { useOptionalConnectivity } from '../../sync/ConnectivityContext';
 import { useScheduleRepository } from './apiScheduleRepository';
-import { MarkOffList } from './MarkOffList';
+import { ApiError } from '../../lib/apiClient';
+import { MarkOffList, resetMarkOffSupportForTest } from './MarkOffList';
 import { MarkOffNeedsConnectionError } from './types';
 
 jest.mock('./apiScheduleRepository', () => ({ useScheduleRepository: jest.fn() }));
@@ -16,6 +17,7 @@ function online(isOnline: boolean) {
 }
 
 beforeEach(() => {
+  resetMarkOffSupportForTest();
   online(true);
   repository = {
     listMarkOffs: jest.fn(async () => [
@@ -49,6 +51,11 @@ test('shows current and upcoming mark-offs; "I\'m available again" ends the curr
 });
 
 test('offline: the list says it cannot be shown, and nothing is sent', async () => {
+  // Once the server has shown it supports mark-offs...
+  const first = await render(<MarkOffList />);
+  await screen.findByText(/^Marked unavailable until/);
+  await first.unmount();
+  repository.listMarkOffs.mockClear();
   online(false);
   await render(<MarkOffList />);
 
@@ -86,6 +93,30 @@ test('a server failure says the mark-off still stands, until when', async () => 
 
 test('no mark-offs: nothing is shown', async () => {
   repository.listMarkOffs.mockResolvedValue([]);
+  await render(<MarkOffList />);
+  await act(async () => {});
+
+  expect(screen.toJSON()).toBeNull();
+});
+
+// R3-M1: the app ships on its own cadence; a server without the routes answers 404/405.
+test.each([404, 405])(
+  'a server without the mark-off routes (%i): nothing is shown or promised',
+  async (status) => {
+    repository.listMarkOffs.mockRejectedValue(
+      new ApiError({ type: 'about:blank', title: 'Not Found', status, traceId: 't' }),
+    );
+    const onSupportKnown = jest.fn();
+    await render(<MarkOffList onSupportKnown={onSupportKnown} />);
+    await act(async () => {});
+
+    expect(onSupportKnown).toHaveBeenCalledWith(false);
+    expect(screen.toJSON()).toBeNull();
+  },
+);
+
+test('offline before the server was ever seen to support it: nothing is promised', async () => {
+  online(false);
   await render(<MarkOffList />);
   await act(async () => {});
 

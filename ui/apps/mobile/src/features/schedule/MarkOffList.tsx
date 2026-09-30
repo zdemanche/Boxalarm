@@ -5,6 +5,7 @@ import { AccessibilityInfo, Text, View } from 'react-native';
 import { Button, useTheme } from '../../components/ui';
 import { useOptionalConnectivity } from '../../sync/ConnectivityContext';
 import { useScheduleRepository } from './apiScheduleRepository';
+import { ApiError } from '../../lib/apiClient';
 import { MarkOffNeedsConnectionError, type MarkOff } from './types';
 
 function formatWhen(epochSeconds: number): string {
@@ -22,7 +23,27 @@ type Load =
   | { state: 'loading' }
   | { state: 'offline' }
   | { state: 'failed' }
-  | { state: 'loaded'; markOffs: MarkOff[] };
+  | { state: 'loaded'; markOffs: MarkOff[] }
+  /** The server has no mark-off list/end routes yet (404/405): the app ships on its own cadence. */
+  | { state: 'unsupported' };
+
+/** A route the deployed server does not have yet (R3-M1). */
+function isUnsupported(error: unknown): boolean {
+  return (
+    error instanceof ApiError && (error.problem.status === 404 || error.problem.status === 405)
+  );
+}
+
+/**
+ * Whether this process has seen the server's mark-off list work. Until it has, nothing about
+ * ending a mark-off early is promised - not even while offline.
+ */
+let knownSupported = false;
+
+/** Test seam. */
+export function resetMarkOffSupportForTest(): void {
+  knownSupported = false;
+}
 
 /**
  * The member's current and upcoming mark-offs, each with an "I'm available again" (end it now)
@@ -30,7 +51,12 @@ type Load =
  * whether they are paged right now, so it either reaches the server or the member is told plainly
  * they are still marked off. Renders nothing when there are none (or no repository support).
  */
-export function MarkOffList() {
+export function MarkOffList({
+  onSupportKnown,
+}: {
+  /** Told true once the list loaded (ending early works), false when the server lacks it. */
+  onSupportKnown?: (supported: boolean) => void;
+} = {}) {
   const theme = useTheme();
   const repository = useScheduleRepository();
   const { isOnline } = useOptionalConnectivity();
@@ -41,10 +67,16 @@ export function MarkOffList() {
   const [load, setLoad] = useState<Load>({ state: 'loading' });
   const [ending, setEnding] = useState<string | null>(null);
   const [message, setMessage] = useState<{ text: string; danger: boolean } | null>(null);
+  const onSupportKnownRef = useRef(onSupportKnown);
+  onSupportKnownRef.current = onSupportKnown;
 
   const refresh = useCallback(async () => {
+    const unsupported = () => {
+      setLoad({ state: 'unsupported' });
+      onSupportKnownRef.current?.(false);
+    };
     if (!repository.listMarkOffs) {
-      setLoad({ state: 'loaded', markOffs: [] });
+      unsupported();
       return;
     }
     if (!isOnline) {
@@ -52,11 +84,14 @@ export function MarkOffList() {
       return;
     }
     try {
-      setLoad({ state: 'loaded', markOffs: await repository.listMarkOffs() });
+      const markOffs = await repository.listMarkOffs();
+      knownSupported = true;
+      setLoad({ state: 'loaded', markOffs });
+      onSupportKnownRef.current?.(true);
     } catch (error) {
-      setLoad(
-        error instanceof MarkOffNeedsConnectionError ? { state: 'offline' } : { state: 'failed' },
-      );
+      if (isUnsupported(error)) unsupported();
+      else if (error instanceof MarkOffNeedsConnectionError) setLoad({ state: 'offline' });
+      else setLoad({ state: 'failed' });
     }
   }, [repository, isOnline]);
 
@@ -96,10 +131,11 @@ export function MarkOffList() {
   };
 
   const now = Date.now() / 1000;
+  // Nothing is promised about ending early until the server has shown it can (R3-M1).
   const status =
-    load.state === 'offline'
+    load.state === 'offline' && knownSupported
       ? "You're offline, so your current mark-offs can't be shown. Ending one needs signal."
-      : load.state === 'failed'
+      : load.state === 'failed' && knownSupported
         ? "Couldn't load your mark-offs."
         : null;
   const markOffs = load.state === 'loaded' ? load.markOffs : [];

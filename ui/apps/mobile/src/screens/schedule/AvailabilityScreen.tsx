@@ -214,6 +214,9 @@ export function AvailabilityScreen() {
     earlierMayStand: number;
   } | null>(null);
   const [lastMarkOff, setLastMarkOff] = useState<LastMarkOff | null>(null);
+  // Only once the server's mark-off list has loaded does the copy point at "I'm available
+  // again"; a server without it keeps the old advice (R3-M1).
+  const [endEarly, setEndEarly] = useState(false);
   const delivery = useOutboxItem(submitted?.outboxId ?? null);
 
   useEffect(() => {
@@ -411,8 +414,9 @@ export function AvailabilityScreen() {
             </Text>
           ) : null}
           <Text style={{ color: theme.fg, fontSize: typeScale.body.size }}>
-            To end a mark-off early, tap &ldquo;I&apos;m available again&rdquo; on Me (it needs
-            signal).
+            {endEarly
+              ? "To end a mark-off early, tap “I'm available again” on Me (it needs signal)."
+              : 'To end a mark-off early, ask an officer to clear it.'}
           </Text>
           {submitted.outboxId !== null ? (
             <DeliveryStatus
@@ -442,10 +446,10 @@ export function AvailabilityScreen() {
           <Text style={{ color: theme.fg, fontSize: typeScale.body.size }}>
             From this phone, you last marked yourself unavailable until{' '}
             {formatWhen(new Date(lastMarkOff.endAt))}. A new mark-off does not cancel it; to end it
-            early, use &ldquo;I&apos;m available again&rdquo; below.
+            early, {endEarly ? "use “I'm available again” below." : 'ask an officer to clear it.'}
           </Text>
         ) : null}
-        <MarkOffList />
+        <MarkOffList onSupportKnown={setEndEarly} />
         <Text style={{ color: theme.fg, fontSize: typeScale.body.size }}>
           You won&apos;t be alerted for calls while you&apos;re marked off. You&apos;ll still get
           drill and shift reminders. Shifts you have claimed are not cancelled.

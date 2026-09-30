@@ -215,3 +215,25 @@ test('a resend refused as a duplicate reads "May already be in effect", not "sti
   submitSpy.mockRestore();
   subscribeSpy.mockRestore();
 });
+
+// R3-M1: until the server's mark-off list loads, the copy keeps the old advice.
+test('a server without the end-early routes keeps "ask an officer to clear it"', async () => {
+  const { ApiError } = jest.requireActual('../../lib/apiClient');
+  const listSpy = jest
+    .spyOn(mockScheduleRepository, 'listMarkOffs')
+    .mockRejectedValue(
+      new ApiError({ type: 'about:blank', title: 'x', status: 404, traceId: 't' }),
+    );
+  const { findByText, findByRole, queryByText } = await render(<AvailabilityScreen />);
+
+  await act(async () => {
+    fireEvent.press(await findByText('24 hours'));
+  });
+  await act(async () => {
+    fireEvent.press(await findByRole('button', { name: 'Mark unavailable' }));
+  });
+
+  expect(await findByText(/ask an officer to clear it/)).toBeTruthy();
+  expect(queryByText(/I'm available again/)).toBeNull();
+  listSpy.mockRestore();
+});
