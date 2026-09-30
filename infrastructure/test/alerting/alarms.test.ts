@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as aws from "@pulumi/aws";
 import * as pulumi from "@pulumi/pulumi";
 import { AlertingAlarms } from "../../components/alerting/alarms";
+import { AlertingPageTopic } from "../../components/alerting/page-topic";
 import { MessagingAlerting } from "../../components/alerting/messaging-alerting";
 import { alarmByName, installMocks, resourcesOfType, settle } from "./mock-harness";
 
@@ -27,6 +28,7 @@ async function build(env = "dev") {
       name: "boxalarm-dev-alerting-member-updated-dlq",
     }),
     memberUpdatedFunctionName: "boxalarm-dev-alerting-member-updated-consumer",
+    pageTopic: new AlertingPageTopic("alerting-page", { env }),
   });
   await settle();
   return alarms;

@@ -73,6 +73,7 @@ import { RoutesLadderControls } from "./components/alerting/routes-ladder-contro
 import { PushTokens } from "./components/alerting/push-tokens";
 import { RidingBoard } from "./components/alerting/riding-board";
 import { AlertingAlarms } from "./components/alerting/alarms";
+import { AlertingPageTopic } from "./components/alerting/page-topic";
 import { PrePlanCopies } from "./components/alerting/pre-plan-copies";
 import { homeLocalityLacksZips, resolveHomeLocality } from "./components/alerting/home-locality";
 import { EligibilityStaleness } from "./components/alerting/staleness";
@@ -220,6 +221,11 @@ export const policyStore = new PolicyStore("policy-store", {
 
 // E8-S8-INFRA #259: shared LOB EventBridge bus.
 export const platformBus = new PlatformBus("platform-bus", { env });
+
+// E1-S11-INFRA: the alerting-page topic. Created ahead of every component whose alarms feed
+// paging — the outbox publisher, eligibility/availability snapshot consumers, session
+// revocation — not only the alerting components further down (deploy-readiness M1).
+export const alertingPageTopic = new AlertingPageTopic("alerting-page", { env });
 
 // E2-S1-INFRA #203: the ONE platform-table outbox → platform-bus publisher.
 export const outboxPublisher = new OutboxPublisher("outbox-publisher", {
@@ -801,6 +807,7 @@ export const alertingAlarms = new AlertingAlarms("alerting-alarms", {
   escalationOnFailureQueue: escalation.onFailureQueue,
   memberUpdatedDlq: pushTokens.memberUpdatedDlq,
   memberUpdatedFunctionName: pushTokens.memberUpdatedConsumer.function.name,
+  pageTopic: alertingPageTopic,
 });
 
 // F1.13/F1.14: officer tone-ladder advance/halt and mutual-aid trigger/acknowledge.
