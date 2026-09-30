@@ -1,0 +1,190 @@
+import { createHash } from 'node:crypto';
+import type { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
+import type { VerifiedDeptId } from '@boxalarm/dept-scope';
+import {
+  MAX_NARRATIVE_CHARS,
+  dispatchTextFingerprint,
+  normalizeDispatchText,
+  parseCadText,
+  type CadParsedFields,
+} from '@boxalarm/cad-parser';
+import {
+  cadLocality,
+  deriveIngressIdempotencyKey,
+  type DispatchReceived,
+} from '../dispatches/dispatchIngressPort.js';
+import { createManualDispatch } from '../dispatches/repository.js';
+import { logInfo } from '../dispatches/logger.js';
+import { emitCadMetric, type CadChannel } from './metrics.js';
+import type { CadSourceCopy } from './sourceCopy.js';
+
+/**
+ * The single CAD ingestion core. Both ingress paths (emailHandler.ts, webhookHandler.ts) call
+ * this ONLY after the sender is authenticated, and it writes the SAME DISPATCH_ALERT
+ * transaction the manual path writes (createManualDispatch: idempotency lock, alert, bridge
+ * outbox row). It never fans out: the table stream's fan-out is the single tone-1 producer
+ * (design review C1), so a CAD page and a manual page are the same page from there on.
+ *
+ * Parsing fails OPEN (roadmap-defaults row 3): text the source's template cannot structure
+ * still pages, with the raw text as the narrative, the address "SEE DISPATCH TEXT" and
+ * verifyRequired set.
+ */
+
+export const RAW_ADDRESS = 'SEE DISPATCH TEXT';
+export const RAW_INCIDENT_TYPE = 'CAD DISPATCH - VERIFY';
+const DEFAULT_INCIDENT_TYPE = 'CAD DISPATCH';
+
+export interface CadIngestInput {
+  /** From the authenticated source's configuration, never from the message. */
+  readonly deptId: VerifiedDeptId;
+  readonly source: CadSourceCopy;
+  readonly channel: CadChannel;
+  /** The dispatch text as received (email body, or webhook body/text). */
+  readonly text: string;
+  /** Webhook only: fields the CAD sent already structured (they win over the template). */
+  readonly structured?: CadParsedFields;
+  /** Epoch seconds. */
+  readonly receivedAt: number;
+}
+
+export type CadIngestResult =
+  | {
+      readonly outcome: 'created';
+      readonly dispatchId: string;
+      readonly parseStatus: 'PARSED' | 'RAW';
+    }
+  | { readonly outcome: 'duplicate'; readonly parseStatus: 'PARSED' | 'RAW' };
+
+function sha256(text: string): string {
+  return createHash('sha256').update(text, 'utf8').digest('hex');
+}
+
+/**
+ * The source's own dispatch identity: incident number + dispatch time, so a CAD resend does
+ * not double-page while an update to the same incident (a new dispatch time) does. When the
+ * CAD gives no dispatch time the text fingerprint stands in for it, and with no incident
+ * number the fingerprint alone identifies the dispatch. Hashed so the key never carries '#'.
+ */
+export function cadExternalDispatchId(
+  sourceId: string,
+  fields: CadParsedFields,
+  text: string,
+): string {
+  const incident = fields.incidentNumber?.toUpperCase();
+  const time = fields.dispatchTime?.replace(/\s+/g, ' ').toUpperCase();
+  const identity = incident
+    ? `INC|${incident}|${time ?? `TEXT|${dispatchTextFingerprint(text)}`}`
+    : `TEXT|${dispatchTextFingerprint(text)}`;
+  return `${sourceId}.${sha256(identity).slice(0, 40)}`;
+}
+
+/** "123 MAIN ST, NICHOLS" -> "NICHOLS": the town when the template has no town field. */
+function townFromAddress(address: string): string | undefined {
+  const comma = address.lastIndexOf(',');
+  return comma > 0 ? address.slice(comma + 1) : undefined;
+}
+
+function splitUnits(units: string | undefined): string[] {
+  return units ? units.split(/[\s,;/]+/).filter((unit) => unit.length > 0) : [];
+}
+
+export function buildCadDispatch(
+  source: CadSourceCopy,
+  text: string,
+  structured: CadParsedFields | undefined,
+): {
+  readonly dispatch: DispatchReceived;
+  readonly parseStatus: 'PARSED' | 'RAW';
+  readonly parserVersion: number | null;
+  readonly fields: CadParsedFields;
+} {
+  const rawText = normalizeDispatchText(text).trim();
+  const structuredResult = structured?.address ? structured : undefined;
+  const parsed = structuredResult ? undefined : parseCadText(source.parser, rawText);
+  const fields: CadParsedFields = structuredResult ?? { ...structured, ...parsed?.fields };
+  const isParsed = structuredResult !== undefined || parsed?.status === 'PARSED';
+  const narrativeFallback = rawText.slice(0, MAX_NARRATIVE_CHARS);
+  const externalDispatchId = cadExternalDispatchId(source.sourceId, fields, rawText);
+
+  if (isParsed && fields.address) {
+    const locality = cadLocality(fields.town ?? townFromAddress(fields.address));
+    return {
+      parseStatus: 'PARSED',
+      parserVersion: structuredResult ? null : (parsed?.version ?? null),
+      fields,
+      dispatch: {
+        sourceSystem: 'CAD',
+        incidentType: fields.incidentType ?? DEFAULT_INCIDENT_TYPE,
+        address: fields.address,
+        crossStreets: fields.crossStreets ?? '',
+        unitsRequested: splitUnits(fields.units),
+        narrative: fields.narrative ?? narrativeFallback,
+        externalDispatchId,
+        ...(locality ? { locality } : {}),
+      },
+    };
+  }
+  // Fail open: the whole text is the narrative. Nothing the template half-read is shown as
+  // the address; the crew reads the dispatch text.
+  return {
+    parseStatus: 'RAW',
+    parserVersion: parsed?.version ?? null,
+    fields,
+    dispatch: {
+      sourceSystem: 'CAD',
+      incidentType: RAW_INCIDENT_TYPE,
+      address: RAW_ADDRESS,
+      crossStreets: '',
+      unitsRequested: splitUnits(fields.units),
+      narrative: narrativeFallback.length > 0 ? narrativeFallback : '(empty dispatch text)',
+      externalDispatchId,
+    },
+  };
+}
+
+export async function ingestCadDispatch(
+  client: DynamoDBDocumentClient,
+  tableName: string,
+  input: CadIngestInput,
+): Promise<CadIngestResult> {
+  const { deptId, source, channel } = input;
+  const built = buildCadDispatch(source, input.text, input.structured);
+  const idempotencyKey = deriveIngressIdempotencyKey(
+    deptId,
+    'CAD',
+    built.dispatch.externalDispatchId,
+  );
+
+  const result = await createManualDispatch(client, tableName, {
+    deptId,
+    dispatch: built.dispatch,
+    idempotencyKey,
+    dispatchedAt: input.receivedAt,
+    cad: {
+      ingressChannel: channel,
+      sourceId: source.sourceId,
+      parseStatus: built.parseStatus,
+      parserVersion: built.parserVersion,
+      verifyRequired: built.parseStatus === 'RAW',
+      ...(built.fields.incidentNumber ? { incidentNumber: built.fields.incidentNumber } : {}),
+      ...(built.fields.dispatchTime ? { dispatchTimeText: built.fields.dispatchTime } : {}),
+    },
+  });
+
+  if (result.outcome === 'duplicate') {
+    emitCadMetric('CadIngressDuplicate', { Channel: channel });
+    logInfo('cadIngress.duplicate', { deptId, sourceId: source.sourceId, channel });
+    return { outcome: 'duplicate', parseStatus: built.parseStatus };
+  }
+  emitCadMetric('CadIngressAccepted', { Channel: channel });
+  emitCadMetric('CadIngressParsed', { Channel: channel, Outcome: built.parseStatus });
+  logInfo('cadIngress.accepted', {
+    deptId,
+    sourceId: source.sourceId,
+    channel,
+    dispatchId: result.dispatchId,
+    parseStatus: built.parseStatus,
+    parserVersion: built.parserVersion,
+  });
+  return { outcome: 'created', dispatchId: result.dispatchId, parseStatus: built.parseStatus };
+}

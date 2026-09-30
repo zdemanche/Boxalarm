@@ -20,6 +20,23 @@ export interface CreateManualDispatchInput {
   readonly channelsTested?: readonly string[];
   /** Test dispatches: whether FCM really delivers (channels/channelEnvelope.ts TestDelivery). */
   readonly testDelivery?: 'deliver' | 'validate';
+  /** CAD ingress only (cadIngress/ingest.ts): which authenticated source and how it parsed. */
+  readonly cad?: CadDispatchTags;
+}
+
+/**
+ * Stored on a CAD-originated DISPATCH_ALERT for the record and the dispatch detail. Fan-out
+ * reads none of it: a CAD page is the same tone-1 page as any other.
+ */
+export interface CadDispatchTags {
+  readonly ingressChannel: 'cad-email' | 'cad-webhook';
+  readonly sourceId: string;
+  readonly parseStatus: 'PARSED' | 'RAW';
+  readonly parserVersion: number | null;
+  /** RAW (fail-open) dispatches: the address is "SEE DISPATCH TEXT" and must be verified. */
+  readonly verifyRequired: boolean;
+  readonly incidentNumber?: string;
+  readonly dispatchTimeText?: string;
 }
 
 export type CreateManualDispatchResult =
@@ -33,7 +50,8 @@ function mintDispatchId(
   dispatchedAt: number,
   sourceSystem: SourceSystem,
 ): string {
-  const kind = sourceSystem === 'SELF_TEST' ? 'SELFTEST' : 'MANUAL';
+  const kind =
+    sourceSystem === 'SELF_TEST' ? 'SELFTEST' : sourceSystem === 'CAD' ? 'CAD' : 'MANUAL';
   return `${deptId}-${kind}-${dispatchedAt}-${randomUUID().slice(0, 8)}`;
 }
 
@@ -96,6 +114,21 @@ export async function createManualDispatch(
             ...(input.selfTestId ? { selfTestId: input.selfTestId } : {}),
             ...(input.channelsTested ? { channelsTested: input.channelsTested } : {}),
             ...(isTest && input.testDelivery ? { testDelivery: input.testDelivery } : {}),
+            ...(input.cad
+              ? {
+                  ingressChannel: input.cad.ingressChannel,
+                  cadSourceId: input.cad.sourceId,
+                  cadParseStatus: input.cad.parseStatus,
+                  cadParserVersion: input.cad.parserVersion,
+                  verifyRequired: input.cad.verifyRequired,
+                  ...(input.cad.incidentNumber
+                    ? { cadIncidentNumber: input.cad.incidentNumber }
+                    : {}),
+                  ...(input.cad.dispatchTimeText
+                    ? { cadDispatchTime: input.cad.dispatchTimeText }
+                    : {}),
+                }
+              : {}),
             ...(isTest
               ? { ttl: dispatchedAt + TEST_AUDIT_TTL_SECONDS }
               : { gsi2pk: buildDeptScopedPk(deptId), gsi2sk: `DISPATCH#${dispatchedAt}` }),
@@ -106,7 +139,8 @@ export async function createManualDispatch(
       // INVARIANT: every writer of a non-test DISPATCH_ALERT must emit
       // dispatch.alert.received in the SAME transaction. This function is the only
       // DISPATCH_ALERT writer today (MANUAL, CAD, SELF_TEST all come through here),
-      // despite its name. A future ingress path (e.g. /ingress/{adapter}) that writes
+      // despite its name - CAD email and webhook ingress reach it through
+      // cadIngress/ingest.ts. A future ingress path (e.g. /ingress/{adapter}) that writes
       // DISPATCH_ALERT any other way would silently skip the platform-bus bridge,
       // so the alert pages but no incident draft is ever pre-populated. SELF_TEST is
       // excluded on purpose: a member self-test must never reach the LOB bus.
