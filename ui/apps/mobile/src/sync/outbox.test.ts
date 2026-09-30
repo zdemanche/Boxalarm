@@ -234,3 +234,26 @@ test('discard removes the row', async () => {
   await outbox.discard('DISCARD-1');
   expect(await store.find('DISCARD-1')).toBeUndefined();
 });
+
+test("with no owner columns (failed migration) every row is the signed-in member's and sends", async () => {
+  const dbModule = jest.requireActual<typeof import('./db')>('./db');
+  const spy = jest.spyOn(dbModule, 'outboxHasOwnerColumns').mockReturnValue(false);
+  await outbox.enqueue({
+    id: 'UNSCOPED-1',
+    kind: 'DEFECT',
+    label: 'Defect report — E1',
+    path: 'apparatus/E1/defects',
+    body: {},
+    ownerMemberId: null,
+    ownerDeptId: null,
+  });
+
+  expect((await outbox.listDrainable(Date.now(), 'm-test')).map((r) => r.id)).toContain(
+    'UNSCOPED-1',
+  );
+  const status = await outbox.getStatus(null, 'm-test');
+  expect(status.items.find((item) => item.id === 'UNSCOPED-1')?.needsOwner).toBeUndefined();
+  expect(status.heldForOtherMembers).toBe(0);
+  spy.mockRestore();
+  await outbox.discard('UNSCOPED-1');
+});

@@ -1,3 +1,4 @@
+import * as db from './db';
 import * as store from './outboxStore';
 import type { OutboxKind, OutboxRow } from './outboxStore';
 import type { SyncItem, SyncQueueStatus } from '../features/sync/types';
@@ -121,9 +122,13 @@ export async function listDrainable(
   ownerMemberId: string | null,
 ): Promise<OutboxRow[]> {
   const rows = await store.all();
+  // No owner columns (failed migration): nothing can be scoped, so every row is the signed-in
+  // member's, as before R2-M3 - checks, defects, attendance and mark-offs keep sending.
+  const unscoped = !db.outboxHasOwnerColumns();
   return rows.filter(
     (row) =>
-      ((ownerMemberId !== null && row.ownerMemberId === ownerMemberId) ||
+      (unscoped ||
+        (ownerMemberId !== null && row.ownerMemberId === ownerMemberId) ||
         isRecentOwnerlessResponse(row, now, ownerMemberId)) &&
       row.status !== 'SYNCING' &&
       row.status !== 'REJECTED' &&
@@ -233,6 +238,22 @@ export async function getStatus(
   now: number = Date.now(),
 ): Promise<SyncQueueStatus> {
   const rows = await store.all();
+  const unscoped = !db.outboxHasOwnerColumns();
+  if (unscoped) {
+    // See listDrainable: without owner columns every row is shown and sent as the member's own.
+    return {
+      items: rows.map((row) => ({
+        id: row.id,
+        kind: row.kind,
+        label: row.label,
+        status: row.status,
+        queuedAt: row.queuedAt,
+        lastError: row.lastError,
+      })),
+      lastSyncAt,
+      heldForOtherMembers: 0,
+    };
+  }
   const visible = rows.filter(
     (row) =>
       row.ownerMemberId === null || (ownerMemberId !== null && row.ownerMemberId === ownerMemberId),

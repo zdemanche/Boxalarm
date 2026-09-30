@@ -9,8 +9,11 @@ const OWNER_COLUMNS = ['ownerMemberId', 'ownerDeptId', 'answeredAsHint'] as cons
 /**
  * Adds the owner columns (R2-M3) to an outbox created before they existed. Checks
  * PRAGMA table_info rather than catching every error: if an ALTER genuinely fails (locked or
- * read-only file, full disk) it logs and returns false, and the outbox keeps working without
- * owner scoping instead of every insert throwing - an alert answer must always be saveable.
+ * read-only file, full disk) it logs and returns false instead of every insert throwing - an
+ * alert answer must always be saveable. In that mode rows are stored without owners and the
+ * outbox runs unscoped, as before R2-M3: listDrainable and getStatus (outbox.ts) treat every row
+ * as the signed-in member's, so checks, defects, attendance and mark-offs keep sending. What is
+ * lost is only the protection against sending one member's rows under another's session.
  */
 export function migrateOutboxOwnerColumns(
   database: Pick<DB, 'executeSync'>,
