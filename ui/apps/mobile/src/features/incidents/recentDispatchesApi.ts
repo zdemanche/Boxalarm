@@ -9,6 +9,10 @@ export interface ReportableDispatch {
   dispatchedAt: number;
   /** The report already started from it; null when there is none yet. */
   report: { incidentId: string; status: string } | null;
+  /** A CAD dispatch that couldn't be parsed: its address is a placeholder. */
+  verifyRequired?: true;
+  /** The start of its dispatch text, sent with verifyRequired. */
+  textExcerpt?: string;
 }
 
 export interface ReportableDispatchPage {

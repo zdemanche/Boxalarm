@@ -16,6 +16,8 @@ export interface DispatchAlertCopy {
   readonly crossStreets: string;
   readonly narrative: string;
   readonly dispatchedAt: number;
+  /** A CAD dispatch that couldn't be parsed: the address is a placeholder; read the text. */
+  readonly verifyRequired?: true;
 }
 
 export interface RosterCopyEntry {
@@ -46,6 +48,7 @@ export async function putDispatchAlertCopy(
         crossStreets: copy.crossStreets,
         narrative: copy.narrative,
         dispatchedAt: copy.dispatchedAt,
+        ...(copy.verifyRequired ? { verifyRequired: true } : {}),
         // Lists the department's dispatches newest first for "Start a report" (GSI1, beside
         // the INCIDENT#{alarmAt} rows in the same department partition).
         gsi1pk: buildDeptScopedPk(copy.deptId),
@@ -62,7 +65,14 @@ export interface RecentDispatch {
   readonly incidentType: string;
   readonly address: string;
   readonly dispatchedAt: number;
+  /** Present (true) only on a CAD dispatch that needs its text read to know where it is. */
+  readonly verifyRequired?: true;
+  /** The start of the dispatch text, sent only with verifyRequired - the address is not real. */
+  readonly textExcerpt?: string;
 }
+
+/** How much of an unparsed dispatch's text the list shows in place of its address. */
+export const TEXT_EXCERPT_CHARS = 160;
 
 export interface RecentDispatchPage {
   readonly dispatches: readonly RecentDispatch[];
@@ -106,6 +116,13 @@ export async function queryRecentDispatchCopies(
       incidentType: typeof item.incidentType === 'string' ? item.incidentType : '',
       address: typeof item.address === 'string' ? item.address : '',
       dispatchedAt: Number(item.dispatchedAt),
+      ...(item.verifyRequired === true
+        ? {
+            verifyRequired: true as const,
+            textExcerpt:
+              typeof item.narrative === 'string' ? item.narrative.slice(0, TEXT_EXCERPT_CHARS) : '',
+          }
+        : {}),
     })),
     ...(result.LastEvaluatedKey ? { lastEvaluatedKey: result.LastEvaluatedKey } : {}),
   };

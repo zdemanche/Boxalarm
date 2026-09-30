@@ -58,11 +58,23 @@ function DispatchRow({
   onStart: (dispatchId: string) => void;
 }) {
   const type = dispatch.incidentType || 'Unknown call type';
-  const address = dispatch.address || 'no address on the dispatch';
+  // An unparsed CAD dispatch's address is a placeholder: say so and show its text instead.
+  const verify = dispatch.verifyRequired === true;
+  const address = verify
+    ? `unverified location: "${dispatch.textExcerpt ?? ''}"`
+    : dispatch.address || 'no address on the dispatch';
   return (
     <li className={styles.recentCall}>
       <span>
-        <strong>{type}</strong> — {address}
+        <strong>{type}</strong> —{' '}
+        {verify ? (
+          <>
+            <StatusChip status="warning">VERIFY</StatusChip>{' '}
+            <q className={styles.mono}>{dispatch.textExcerpt ?? ''}</q>
+          </>
+        ) : (
+          address
+        )}
         <span className={styles.recentMeta}>
           {' '}
           · dispatched {dispatchTime(dispatch.dispatchedAt)}

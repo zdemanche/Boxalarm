@@ -21,6 +21,7 @@ interface DispatchAlertReceivedEnvelope {
   readonly crossStreets: string;
   readonly narrative: string;
   readonly dispatchedAt: number;
+  readonly verifyRequired?: true;
 }
 
 function parseEnvelope(body: string): DispatchAlertReceivedEnvelope {
@@ -46,6 +47,9 @@ function parseEnvelope(body: string): DispatchAlertReceivedEnvelope {
     crossStreets: typeof payload.crossStreets === 'string' ? payload.crossStreets : '',
     narrative: payload.narrative,
     dispatchedAt: payload.dispatchedAt,
+    // CAD ingress (feat/cad-ingress) flags a dispatch it could not parse: the address is a
+    // placeholder and the text must be read. Optional - a producer without it sends nothing.
+    ...(payload.verifyRequired === true ? { verifyRequired: true as const } : {}),
   };
 }
 
@@ -86,6 +90,7 @@ async function processRecord(record: SQSRecord, deps: DispatchAlertConsumerDeps)
       crossStreets: envelope.crossStreets,
       narrative: envelope.narrative,
       dispatchedAt: envelope.dispatchedAt,
+      ...(envelope.verifyRequired ? { verifyRequired: true as const } : {}),
     });
     emitOutcomeMetric(METRIC_NAMESPACE, 'DispatchAlertCopyUpdated');
   } catch (error) {

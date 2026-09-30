@@ -55,6 +55,26 @@ describe('dispatchAlertConsumer', () => {
     });
   });
 
+  it('carries a CAD verifyRequired flag onto the copy only when the payload has it', async () => {
+    const send = vi.fn().mockResolvedValue({});
+    const handler = createHandler({ client: { send } as never });
+
+    await handler(
+      sqsEvent([
+        validBody({ address: 'SEE DISPATCH TEXT', verifyRequired: true }),
+        validBody({ dispatchId: 'D-2' }),
+      ]),
+      {} as never,
+      () => undefined,
+    );
+
+    const items = send.mock.calls.map(
+      (call) => (call[0] as { input: { Item: Record<string, unknown> } }).input.Item,
+    );
+    expect(items[0]).toMatchObject({ verifyRequired: true });
+    expect(items[1]).not.toHaveProperty('verifyRequired');
+  });
+
   it('reports a malformed record as a batch item failure without writing it', async () => {
     const send = vi.fn().mockResolvedValue({});
     const handler = createHandler({ client: { send } as never });

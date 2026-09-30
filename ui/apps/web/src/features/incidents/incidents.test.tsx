@@ -1277,3 +1277,38 @@ test('older dispatches load a page at a time with the cursor', async () => {
   expect(cursors).toEqual([null, 'c-older']);
   expect(screen.queryByRole('button', { name: 'Load older dispatches' })).toBeNull();
 });
+
+test('an unparsed CAD dispatch shows a VERIFY marker and its text, not the placeholder address', async () => {
+  const now = Math.floor(Date.now() / 1000);
+  server.use(
+    http.get('/api/v1/incidents', () => HttpResponse.json({ incidents: [] })),
+    http.get('/api/v1/incidents/dispatches', () =>
+      HttpResponse.json({
+        recentWindowHours: 72,
+        nextCursor: null,
+        dispatches: [
+          {
+            dispatchId: 'd-raw',
+            incidentType: 'STRUCTURE FIRE',
+            address: 'SEE DISPATCH TEXT',
+            dispatchedAt: now - 600,
+            report: null,
+            verifyRequired: true,
+            textExcerpt: 'STRUC FIRE 12 ELM ST X OAK',
+          },
+        ],
+      }),
+    ),
+  );
+
+  renderIncidents(['OFFICER']);
+  const recent = await screen.findByRole('list', { name: 'Dispatches in the last 72 hours' });
+  expect(recent.textContent).toContain('VERIFY');
+  expect(recent.textContent).toContain('STRUC FIRE 12 ELM ST X OAK');
+  expect(recent.textContent).not.toContain('SEE DISPATCH TEXT');
+  expect(
+    within(recent).getByRole('button', {
+      name: 'Start report for STRUCTURE FIRE at unverified location: "STRUC FIRE 12 ELM ST X OAK"',
+    }),
+  ).toBeTruthy();
+});

@@ -127,6 +127,19 @@ describe('GET /incidents/dispatches', () => {
     expect(JSON.stringify(payload)).not.toContain('smoke showing');
   });
 
+  it('an unparsed CAD dispatch is flagged with its text excerpt in place of an address', async () => {
+    const raw = { ...copy('d-raw', NOW - 60), address: 'SEE DISPATCH TEXT', verifyRequired: true };
+    raw.narrative = `STRUC FIRE 12 ELM ST X OAK ${'.'.repeat(300)}`;
+    const { client } = fakeClient([{ Items: [raw, copy('d-ok', NOW - 120)] }]);
+    const payload = body(await (await handlerFor(client))(event()));
+    const [flagged, plain] = payload.dispatches as Record<string, unknown>[];
+    expect(flagged).toMatchObject({ verifyRequired: true });
+    expect(flagged?.textExcerpt).toMatch(/^STRUC FIRE 12 ELM ST X OAK/);
+    expect((flagged?.textExcerpt as string).length).toBe(160);
+    expect(plain).not.toHaveProperty('verifyRequired');
+    expect(plain).not.toHaveProperty('textExcerpt');
+  });
+
   it('hands out a cursor to older dispatches, and pages them `limit` at a time', async () => {
     const first = fakeClient([{ Items: [] }]);
     const cursor = body(await (await handlerFor(first.client))(event())).nextCursor as string;

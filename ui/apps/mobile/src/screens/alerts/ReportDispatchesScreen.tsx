@@ -4,7 +4,7 @@ import { AccessibilityInfo, ScrollView, Text, View } from 'react-native';
 import Config from 'react-native-config';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useOptionalAuth } from '../../auth/AuthContext';
-import { Button, useTheme } from '../../components/ui';
+import { Button, StatusChip, useTheme } from '../../components/ui';
 import {
   listRecentDispatches,
   startReportFromDispatch,
@@ -98,7 +98,7 @@ export function ReportDispatchesScreen() {
             : d,
         ),
       );
-      const text = `Report started for ${dispatch.address || dispatch.incidentType}. Finish it on the web under Incidents.`;
+      const text = `Report started for ${dispatch.verifyRequired ? dispatch.incidentType : dispatch.address || dispatch.incidentType}. Finish it on the web under Incidents.`;
       setMessage(text);
       AccessibilityInfo.announceForAccessibility(text);
     } catch (error) {
@@ -127,9 +127,19 @@ export function ReportDispatchesScreen() {
       <Text style={{ color: theme.fg, fontSize: typeScale.heading.size, fontWeight: '700' }}>
         {dispatch.incidentType || 'Dispatch'}
       </Text>
-      <Text style={{ color: theme.fg, fontSize: typeScale.body.size }}>
-        {dispatch.address || 'No address on the dispatch'}
-      </Text>
+      {dispatch.verifyRequired ? (
+        // An unparsed CAD dispatch: the address is a placeholder, so show the text itself.
+        <>
+          <StatusChip status="caution" label="VERIFY — location not parsed" />
+          <Text style={{ color: theme.fg, fontSize: typeScale.body.size, fontFamily: 'monospace' }}>
+            “{dispatch.textExcerpt ?? ''}”
+          </Text>
+        </>
+      ) : (
+        <Text style={{ color: theme.fg, fontSize: typeScale.body.size }}>
+          {dispatch.address || 'No address on the dispatch'}
+        </Text>
+      )}
       <Text style={{ color: theme.fgMuted, fontSize: typeScale.caption.size }}>
         Dispatched {when(dispatch.dispatchedAt)}
       </Text>
@@ -140,7 +150,7 @@ export function ReportDispatchesScreen() {
       ) : canStart ? (
         <Button
           label="Start report"
-          accessibilityLabel={`Start report for ${dispatch.incidentType || 'dispatch'} at ${dispatch.address || 'unknown address'}`}
+          accessibilityLabel={`Start report for ${dispatch.incidentType || 'dispatch'} at ${dispatch.verifyRequired ? 'an unverified location' : dispatch.address || 'unknown address'}`}
           loading={starting === dispatch.dispatchId}
           disabled={!isOnline || starting !== null}
           onPress={() => void start(dispatch)}

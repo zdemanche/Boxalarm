@@ -164,3 +164,27 @@ test('offline says plainly it needs a connection and sends nothing', async () =>
   expect(mockApiRequest).not.toHaveBeenCalled();
   expect(screen.queryByRole('button', { name: /Start report/ })).toBeNull();
 });
+
+test('an unparsed CAD dispatch shows VERIFY and its text instead of the placeholder address', async () => {
+  mockApiRequest.mockResolvedValueOnce(
+    page({
+      recentWindowHours: 72,
+      nextCursor: null,
+      dispatches: [
+        {
+          dispatchId: 'd-raw',
+          incidentType: 'STRUCTURE FIRE',
+          address: 'SEE DISPATCH TEXT',
+          dispatchedAt: now - 60,
+          report: null,
+          verifyRequired: true,
+          textExcerpt: 'STRUC FIRE 12 ELM ST X OAK',
+        },
+      ],
+    }),
+  );
+  await render(<ReportDispatchesScreen />);
+  expect(await screen.findByText('VERIFY — location not parsed')).toBeTruthy();
+  expect(screen.getByText('“STRUC FIRE 12 ELM ST X OAK”')).toBeTruthy();
+  expect(screen.queryByText('SEE DISPATCH TEXT')).toBeNull();
+});

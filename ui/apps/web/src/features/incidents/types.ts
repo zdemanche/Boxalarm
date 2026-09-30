@@ -281,6 +281,10 @@ export interface RecentDispatch {
   dispatchedAt: number;
   /** The report already started from this dispatch, if any. */
   report: { incidentId: string; status: IncidentStatus } | null;
+  /** A CAD dispatch that couldn't be parsed: its address is a placeholder. */
+  verifyRequired?: true;
+  /** The start of its dispatch text, sent with verifyRequired. */
+  textExcerpt?: string;
 }
 
 export interface RecentDispatchPage {
