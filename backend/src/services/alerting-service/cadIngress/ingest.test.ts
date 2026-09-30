@@ -209,5 +209,6 @@ describe('ingestCadDispatch', () => {
     expect(logged.some((l) => l.includes('"CadIngressParsed":1') && l.includes('"RAW"'))).toBe(
       true,
     );
+    expect(logged.some((l) => l.includes('"CadIngressRawFallback":1'))).toBe(true);
   });
 });

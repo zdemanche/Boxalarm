@@ -17,6 +17,8 @@ export type CadMetric =
   | 'CadIngressRejected'
   /** Outcome PARSED or RAW (fail-open) for every accepted dispatch. */
   | 'CadIngressParsed'
+  /** An accepted dispatch the source's template could not structure: paged as raw text. */
+  | 'CadIngressRawFallback'
   /** A CAD resend of a dispatch already written: not paged again. */
   | 'CadIngressDuplicate';
 

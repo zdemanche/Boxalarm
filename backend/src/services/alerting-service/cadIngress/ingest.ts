@@ -178,6 +178,10 @@ export async function ingestCadDispatch(
   }
   emitCadMetric('CadIngressAccepted', { Channel: channel });
   emitCadMetric('CadIngressParsed', { Channel: channel, Outcome: built.parseStatus });
+  if (built.parseStatus === 'RAW') {
+    // Alarmed on its own (the dimensionless set): the template needs attention, the page went.
+    emitCadMetric('CadIngressRawFallback', { Channel: channel });
+  }
   logInfo('cadIngress.accepted', {
     deptId,
     sourceId: source.sourceId,
