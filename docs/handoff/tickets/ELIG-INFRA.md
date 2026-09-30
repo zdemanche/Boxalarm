@@ -122,7 +122,7 @@ This repo deploys mark-off capture, its one-time expiry schedules, and the avail
 ## Current state
 `boxalarm-infrastructure` at origin/main has only Cognito (`components/identity/*`) and observability (`components/observability/*`) — no API Gateway, DynamoDB table, EventBridge bus, SQS, Scheduler, or service Lambda exists yet.
 
-Backend (PR zdemanche/boxalarm-backend#32) expects: `PLATFORM_TABLE_NAME`, `AVAILABILITY_EXPIRY_HANDLER_ARN`, `AVAILABILITY_SCHEDULER_ROLE_ARN` (`availability/handler.ts`), `PLATFORM_EVENT_BUS_NAME` (`outbox/publisher.ts`), `ALERTING_TABLE_NAME` (consumer), `DEPT_ID` (staleness check). Schedules are created in the default group with no `ActionAfterCompletion`, so fired schedules persist.
+Backend (PR zdemanche/boxalarm-backend#32) expects: `PLATFORM_TABLE_NAME`, `AVAILABILITY_EXPIRY_HANDLER_ARN`, `AVAILABILITY_SCHEDULER_ROLE_ARN` (`availability/handler.ts`), `ALERTING_TABLE_NAME` (consumer), `DEPT_ID` (staleness check). Mark-off outbox rows are relayed to the bus by the platform table's outbox drain (`platform-service/outbox-publisher/handler.ts`, `PLATFORM_EVENT_BUS_NAME`); the personnel-specific `outbox/publisher.ts` this ticket once named was never deployed and was deleted (2026-09-30). Schedules are created in the default group with `ActionAfterCompletion: DELETE`.
 
 ## Depends on
 - E8-S7 (platform-service table with GSI1–3 + Streams), E8-S1 (HTTP API + shared authorizer route wiring; infrastructure#6 covers only the Cognito claim), E8-S3 (Verified Permissions policy store)
