@@ -717,6 +717,7 @@ export const escalation = new Escalation("escalation", {
   alertingTableName: alertingTable.tableName,
   logGroup: alertingLogGroup,
   permissionsBoundaryArn: alertingBoundaryArn,
+  pageTopicArn: alertingPageTopic.topicArn,
 });
 
 export const fanOut = new FanOut("fan-out", {

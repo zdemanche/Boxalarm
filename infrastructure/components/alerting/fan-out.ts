@@ -58,6 +58,7 @@ export class FanOut extends pulumi.ComponentResource {
           ESCALATION_SCHEDULER_ROLE_ARN: args.escalation.schedulerRole.arn,
           TONE_EVALUATOR_HANDLER_ARN: args.escalation.toneEvaluatorLambda.function.arn,
           ESCALATION_SCHEDULE_GROUP_NAME: args.escalation.scheduleGroupName,
+          ESCALATION_SCHEDULE_DLQ_ARN: args.escalation.scheduleDlq.arn,
         },
         additionalPolicyStatements: pulumi
           .all([args.escalation.scheduleResourcePattern, args.alertingStreamArn])

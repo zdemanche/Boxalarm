@@ -61,6 +61,7 @@ async function build() {
     }),
   });
   const escalation = new Escalation("escalation", {
+    pageTopicArn: "arn:aws:sns:us-east-1:123456789012:boxalarm-dev-alerting-page",
     env: "dev",
     alertingTableArn: TABLE_ARN,
     alertingCmkArn: CMK_ARN,

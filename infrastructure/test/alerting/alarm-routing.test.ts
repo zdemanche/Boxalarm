@@ -38,6 +38,7 @@ describe("full stack: no alarm notifies nobody (deploy-readiness M1)", { timeout
       "boxalarm-dev-cert-expired-reactor-onfailure-depth",
       "boxalarm-dev-training-eligibility-flip-failed",
       "boxalarm-dev-alerting-bridge-malformed-row",
+      "boxalarm-dev-alerting-schedule-dlq-not-empty",
     ]) {
       expect(actionsOf(name), name).toEqual([PAGE_TOPIC]);
     }

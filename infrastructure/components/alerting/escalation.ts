@@ -17,6 +17,8 @@ export interface EscalationArgs {
   alertingTableName: pulumi.Input<string>;
   logGroup: ServiceLogGroup;
   permissionsBoundaryArn?: pulumi.Input<string>;
+  /** alerting-page topic (page-topic.ts): a dead-lettered escalation schedule pages. */
+  pageTopicArn: pulumi.Input<string>;
 }
 
 /**
@@ -45,6 +47,15 @@ export class Escalation extends pulumi.ComponentResource {
    * `default` group, outside scheduleResourcePattern, and is denied.
    */
   public readonly scheduleGroupName: pulumi.Output<string>;
+  /**
+   * DLQ for the runtime one-time schedules (tone 2/3 evaluator, voice escalation). Cross-seam
+   * contract: every Lambda that creates them gets its ARN as ESCALATION_SCHEDULE_DLQ_ARN and
+   * sets it as the schedule target's DeadLetterConfig (scheduleEscalation.ts
+   * alertingScheduleLifecycle). A message here is a target invocation Scheduler gave up on -
+   * a tone evaluation or voice call that never happened.
+   */
+  public readonly scheduleDlq: aws.sqs.Queue;
+  public readonly scheduleDlqAlarm: aws.cloudwatch.MetricAlarm;
 
   constructor(name: string, args: EscalationArgs, opts?: pulumi.ComponentResourceOptions) {
     requireEnv("Escalation", args.env);
@@ -129,6 +140,16 @@ export class Escalation extends pulumi.ComponentResource {
       { parent: this },
     );
 
+    this.scheduleDlq = new aws.sqs.Queue(
+      `${name}-schedule-dlq`,
+      {
+        name: `boxalarm-${env}-alerting-schedule-dlq`,
+        messageRetentionSeconds: 1209600,
+        sqsManagedSseEnabled: true,
+      },
+      { parent: this },
+    );
+
     // Tone-ladder evaluator (E1-S3/E1-S15-INFRA): fired by the tone-2/tone-3 one-time
     // schedules toneLadder.ts creates via this same scheduler role, and itself schedules
     // each member's voice escalation on the escalation Lambda above.
@@ -147,6 +168,7 @@ export class Escalation extends pulumi.ComponentResource {
           ESCALATION_HANDLER_ARN: this.lambda.function.arn,
           ESCALATION_SCHEDULER_ROLE_ARN: this.schedulerRole.arn,
           ESCALATION_SCHEDULE_GROUP_NAME: this.scheduleGroupName,
+          ESCALATION_SCHEDULE_DLQ_ARN: this.scheduleDlq.arn,
         },
         additionalPolicyStatements: pulumi
           .all([args.alertingTableArn, args.alertingTopicArn, this.scheduleResourcePattern])
@@ -215,8 +237,12 @@ export class Escalation extends pulumi.ComponentResource {
       {
         role: this.schedulerRole.id,
         policy: pulumi
-          .all([this.lambda.function.arn, this.toneEvaluatorLambda.function.arn])
-          .apply(([escalationArn, toneEvaluatorArn]) =>
+          .all([
+            this.lambda.function.arn,
+            this.toneEvaluatorLambda.function.arn,
+            this.scheduleDlq.arn,
+          ])
+          .apply(([escalationArn, toneEvaluatorArn, dlqArn]) =>
             JSON.stringify({
               Version: "2012-10-17",
               Statement: [
@@ -226,9 +252,68 @@ export class Escalation extends pulumi.ComponentResource {
                   Action: "lambda:InvokeFunction",
                   Resource: [escalationArn, toneEvaluatorArn],
                 },
+                {
+                  // Scheduler writes a target it gave up on to the schedule's DeadLetterConfig
+                  // with this execution role.
+                  Sid: "DeadLetterToScheduleDlqOnly",
+                  Effect: "Allow",
+                  Action: "sqs:SendMessage",
+                  Resource: dlqArn,
+                },
               ],
             }),
           ),
+      },
+      { parent: this },
+    );
+
+    // Only the escalation scheduler role may write the schedule DLQ (the role also holds
+    // SendMessage). Scheduler delivers dead letters with that role's own credentials, not as a
+    // service principal, so there is no aws:SourceArn/aws:SourceAccount to pin - the principal
+    // is the pin.
+    new aws.sqs.QueuePolicy(
+      `${name}-schedule-dlq-policy`,
+      {
+        queueUrl: this.scheduleDlq.id,
+        policy: pulumi
+          .all([this.scheduleDlq.arn, this.schedulerRole.arn])
+          .apply(([queueArn, roleArn]) =>
+            JSON.stringify({
+              Version: "2012-10-17",
+              Statement: [
+                {
+                  Sid: "EscalationSchedulerRoleOnly",
+                  Effect: "Allow",
+                  Principal: { AWS: roleArn },
+                  Action: "sqs:SendMessage",
+                  Resource: queueArn,
+                },
+              ],
+            }),
+          ),
+      },
+      { parent: this },
+    );
+
+    this.scheduleDlqAlarm = new aws.cloudwatch.MetricAlarm(
+      `${name}-schedule-dlq-alarm`,
+      {
+        name: `boxalarm-${env}-alerting-schedule-dlq-not-empty`,
+        alarmDescription:
+          "EventBridge Scheduler gave up invoking a tone 2/3 evaluation or a voice escalation and " +
+          "dead-lettered it: that tone or call never happened. Each message names the schedule " +
+          "and its target input; re-invoke the target with it (both handlers are idempotent). " +
+          "Runbook: docs/runbooks/alerting-escalation-onfailure.md.",
+        namespace: "AWS/SQS",
+        metricName: "ApproximateNumberOfMessagesVisible",
+        dimensions: { QueueName: this.scheduleDlq.name },
+        statistic: "Maximum",
+        period: 60,
+        evaluationPeriods: 1,
+        threshold: 0,
+        comparisonOperator: "GreaterThanThreshold",
+        treatMissingData: "notBreaching",
+        alarmActions: [args.pageTopicArn],
       },
       { parent: this },
     );
