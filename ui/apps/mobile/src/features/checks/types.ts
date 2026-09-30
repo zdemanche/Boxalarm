@@ -78,4 +78,16 @@ export interface ChecksRepository {
   // the mock just "writes" synchronously, which is the same UX contract.
   submitChecklistRun(run: ChecklistRunSubmission): Promise<void>;
   submitDefect(defect: DefectSubmission): Promise<void>;
+  /** Queues a photo taken on a check item that passed, attached to the run by its idempotency
+   * key (a failed item's photo goes with its defect instead). Optional: the mock drops it. */
+  submitCheckPhoto?(photo: CheckPhotoSubmission): Promise<void>;
+}
+
+export interface CheckPhotoSubmission {
+  apparatusId: string;
+  /** The run's idempotencyKey. */
+  checkKey: string;
+  itemCode: string;
+  photoLocalUri: string;
+  photoFileName: string;
 }

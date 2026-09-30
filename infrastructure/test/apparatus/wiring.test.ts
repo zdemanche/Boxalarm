@@ -50,6 +50,7 @@ const EXPECTED: Record<string, Expected> = {
   "service-status-update": { grants: [q(GSI3), q(TABLE), update, put], cedar: true },
   "checklist-get": { grants: [q(GSI3), ["dynamodb:Scan", TABLE], get], cedar: true },
   "checks-submit": { grants: [q(GSI3), put, get], cedar: true },
+  "check-photo-attach": { grants: [q(GSI3), put, get], cedar: true },
   "defects-report": { grants: [q(GSI3), q(TABLE), get, put, update], cedar: true },
   compliance: { grants: [q(GSI3)], cedar: true },
   "maintenance-get": { grants: [q(TABLE)], cedar: true },
@@ -117,7 +118,7 @@ async function build() {
 }
 
 describe("apparatus Lambdas: env and IAM match their handlers", { timeout: 30_000 }, () => {
-  it("deploys exactly the seventeen apparatus route Lambdas", async () => {
+  it("deploys exactly the eighteen apparatus route Lambdas", async () => {
     await build();
     const names = resourcesOfType("aws:lambda/function:Function")
       .map((r) => r.inputs.name as string)
@@ -172,15 +173,20 @@ describe("apparatus Lambdas: env and IAM match their handlers", { timeout: 30_00
     },
   );
 
-  // Defect photos: a presigned S3 PUT into platform-assets, never CloudFront (N6.1).
-  it("only defects-report may write assets, and only under {deptId}/defect/", async () => {
+  // Defect and check photos: a presigned S3 PUT into platform-assets, never CloudFront (N6.1).
+  const ASSET_PREFIX: Record<string, string> = {
+    "defects-report": "defect",
+    "check-photo-attach": "check",
+  };
+  it("only defects-report and check-photo-attach may write assets, each under its own prefix", async () => {
     await build();
     for (const key of Object.keys(EXPECTED)) {
       const s = statementsForRole(fnName(key));
       const put = s.filter((st) => st.Sid === "AssetsPresignedPut");
-      if (key === "defects-report") {
+      const prefix = ASSET_PREFIX[key];
+      if (prefix) {
         expect(put.map((st) => st.Resource)).toEqual([
-          ["arn:aws:s3:::boxalarm-dev-platform-assets/*/defect/*"],
+          [`arn:aws:s3:::boxalarm-dev-platform-assets/*/${prefix}/*`],
         ]);
         expect(lambdaEnv(fnName(key)).PLATFORM_ASSETS_BUCKET_NAME).toBe(
           "boxalarm-dev-platform-assets",

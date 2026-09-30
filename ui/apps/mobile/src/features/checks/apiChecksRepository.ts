@@ -8,6 +8,7 @@ import * as syncManager from '../../sync/syncManager';
 import { mockChecksRepository } from './mockChecksRepository';
 import type {
   Apparatus,
+  CheckPhotoSubmission,
   ChecklistRunSubmission,
   ChecklistTemplate,
   ChecksRepository,
@@ -121,6 +122,14 @@ export function useChecksRepository(): ChecksRepositoryWithFallbackFlag {
           itemResults: run.itemResults,
           idempotencyKey: run.idempotencyKey,
           capturedOffline: run.capturedOffline ?? false,
+        });
+      },
+
+      async submitCheckPhoto(photo: CheckPhotoSubmission): Promise<void> {
+        if (!authRef.current) return;
+        await syncManager.enqueueCheckPhoto(photo.apparatusId, photo.checkKey, photo.itemCode, {
+          localUri: photo.photoLocalUri,
+          fileName: photo.photoFileName,
         });
       },
 

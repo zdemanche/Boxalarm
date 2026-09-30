@@ -13,6 +13,7 @@ import type { WithAuthorizationOptions } from '@boxalarm/authz';
 const HANDLER_MODULES: Record<string, string> = {
   './getChecklistHandler.js': 'GetChecklist',
   './postChecks.js': 'SubmitApparatusCheck',
+  './attachCheckPhoto.js': 'AttachCheckPhoto',
   './reportDefectHandler.js': 'ReportDefect',
   './serviceStatusHandler.js': 'UpdateServiceStatus',
   './getMaintenance.js': 'ViewMaintenanceHistory',

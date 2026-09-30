@@ -65,8 +65,8 @@ interface CheckDraft {
 }
 
 interface CompletedSummary {
-  /** Photos taken on items that passed: the check-run API has no field for them. */
-  readonly photosNotSent: number;
+  /** Photos taken on items that passed, queued to go up with the check. */
+  readonly passedItemPhotos: number;
   readonly passed: number;
   readonly defects: { label: string; severity: DefectSeverity; plan: DefectPlan }[];
   readonly durationSeconds: number;
@@ -445,6 +445,19 @@ export function CheckRunnerScreen() {
         idempotencyKey,
         capturedOffline: !isOnline,
       });
+      // A photo on an item that passed is attached to the run itself (its own signed upload),
+      // so it is kept as evidence the item was looked at.
+      for (const item of template.items) {
+        const photo = photosCaptured[item.code];
+        if (results[item.code] !== true || !photo || !repository.submitCheckPhoto) continue;
+        await repository.submitCheckPhoto({
+          apparatusId,
+          checkKey: idempotencyKey,
+          itemCode: item.code,
+          photoLocalUri: photo.uri,
+          photoFileName: photo.fileName,
+        });
+      }
       // A failed item has to reach the apparatus officer: each becomes a defect report through
       // the existing defect API, pre-filled with the unit and item, so nothing is typed twice.
       for (const item of failedItems) {
@@ -479,7 +492,7 @@ export function CheckRunnerScreen() {
     if (draftKey) await kvDelete(draftKey);
     setSubmitting(false);
     setCompleted({
-      photosNotSent: template.items.filter(
+      passedItemPhotos: template.items.filter(
         (item) => results[item.code] === true && photosCaptured[item.code] !== undefined,
       ).length,
       passed: template.items.length - failedItems.length,
@@ -929,11 +942,11 @@ function CompletionView({
             ))}
           </View>
         ) : null}
-        {summary.photosNotSent > 0 ? (
-          <Text style={{ color: theme.status.warning, fontSize: typeScale.body.size }}>
-            {summary.photosNotSent === 1 ? '1 photo' : `${summary.photosNotSent} photos`} taken on
-            items that passed {summary.photosNotSent === 1 ? 'was' : 'were'} not sent: Boxalarm can
-            only attach photos to defects so far. Photos on failed items went with their defect.
+        {summary.passedItemPhotos > 0 ? (
+          <Text style={{ color: theme.fg, fontSize: typeScale.body.size }}>
+            {summary.passedItemPhotos === 1 ? '1 photo' : `${summary.passedItemPhotos} photos`} on
+            items that passed {summary.passedItemPhotos === 1 ? 'goes' : 'go'} with the check.
+            Photos on failed items go with their defect.
           </Text>
         ) : null}
         {delivery.state !== 'NOT_QUEUED' ? (

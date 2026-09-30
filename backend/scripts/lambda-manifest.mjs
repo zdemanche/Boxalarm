@@ -584,6 +584,11 @@ export const LAMBDA_ENTRIES = [
   },
   {
     service: 'apparatus-service',
+    function: 'check-photo-attach',
+    entry: 'src/services/apparatus-service/attachCheckPhoto.ts',
+  },
+  {
+    service: 'apparatus-service',
     function: 'defects-report',
     entry: 'src/services/apparatus-service/reportDefectHandler.ts',
   },

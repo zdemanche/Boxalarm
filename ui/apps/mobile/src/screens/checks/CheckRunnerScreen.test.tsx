@@ -377,7 +377,7 @@ test('a failed local save does not confirm the check, and a retry reuses the ide
   submitSpy.mockRestore();
 });
 
-test('a photo on a failed item goes with its defect; one on a passing item is reported as not sent', async () => {
+test('a photo on a failed item goes with its defect; one on a passing item goes with the check', async () => {
   const templateSpy = jest
     .spyOn(mockChecksRepository, 'getChecklistTemplate')
     .mockResolvedValueOnce({
@@ -389,6 +389,8 @@ test('a photo on a failed item goes with its defect; one on a passing item is re
       ],
     });
   const defectSpy = jest.spyOn(mockChecksRepository, 'submitDefect');
+  const photoSpy = jest.fn().mockResolvedValue(undefined);
+  (mockChecksRepository as { submitCheckPhoto?: unknown }).submitCheckPhoto = photoSpy;
   mockLaunchCamera
     .mockResolvedValueOnce({
       didCancel: false,
@@ -422,7 +424,20 @@ test('a photo on a failed item goes with its defect; one on a passing item is re
   expect(defectSpy).toHaveBeenCalledWith(
     expect.objectContaining({ photoLocalUri: 'file:///tmp/hose.jpg', photoFileName: 'hose.jpg' }),
   );
-  expect(await findByText(/1 photo taken on items that passed was not sent/)).toBeTruthy();
+  // The passed item's photo is attached to the run (keyed by the run's idempotency key).
+  expect(photoSpy).toHaveBeenCalledTimes(1);
+  expect(photoSpy).toHaveBeenCalledWith(
+    expect.objectContaining({
+      apparatusId: 'APP-ENGINE-2',
+      checkKey: expect.stringMatching(/^check-/),
+      itemCode: 'SCBA',
+      photoLocalUri: 'file:///tmp/scba.jpg',
+      photoFileName: 'scba.jpg',
+    }),
+  );
+  expect(await findByText(/1 photo on items that passed goes with the check/)).toBeTruthy();
+  expect(screen.queryByText(/not sent/)).toBeNull();
+  delete (mockChecksRepository as { submitCheckPhoto?: unknown }).submitCheckPhoto;
   templateSpy.mockRestore();
   defectSpy.mockRestore();
 });

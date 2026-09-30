@@ -211,6 +211,29 @@ export async function enqueueChecklistRun(
   );
 }
 
+// POST /api/v1/apparatus/{unitId}/checks/{checkKey}/photos (apparatus-service
+// attachCheckPhoto.ts): one photo on one check item, passed or failed, attached to the run by
+// the run's idempotencyKey. Its own row, so it doesn't wait on (or hold up) the run itself, and a
+// replay answers with a freshly signed link like a defect's.
+export async function enqueueCheckPhoto(
+  unitId: string,
+  checkKey: string,
+  itemCode: string,
+  photo: { readonly localUri: string; readonly fileName: string },
+): Promise<void> {
+  // The id is built outside the call: the route contract test reads every whitespace-free
+  // template literal inside enqueueAndDrain(...) as a request path.
+  const id = `${checkKey}-photo-${itemCode}`;
+  await enqueueAndDrain(
+    'CHECK_PHOTO',
+    id,
+    `Check photo — ${unitId}`,
+    `apparatus/${encodeURIComponent(unitId)}/checks/${encodeURIComponent(checkKey)}/photos`,
+    { itemCode, photo: { filename: photo.fileName } },
+    photo.localUri,
+  );
+}
+
 export async function enqueueDefect(
   unitId: string,
   idempotencyKey: string,
@@ -415,12 +438,16 @@ export async function discard(id: string): Promise<void> {
 }
 
 // A signed photo URL is short-lived (an S3 presigned PUT, 10 min) - shorter than a phone can
-// easily spend without signal between the create and the upload. Both photo-carrying creates
-// answer an idempotent replay with a freshly signed link for the stored photo (field capture's
-// photoUploadUrls, the defect's uploadUrl), so an expired link is recovered by replaying the
-// POST rather than losing the photo. A kind added here later without that server support
-// would be rejected with a clear reason instead of retried forever.
-const RESIGNS_ON_REPLAY: ReadonlySet<OutboxKind> = new Set(['FIELD_CAPTURE', 'DEFECT']);
+// easily spend without signal between the create and the upload. Every photo-carrying create
+// answers an idempotent replay with a freshly signed link for the stored photo (field capture's
+// photoUploadUrls, the defect's and the check photo's uploadUrl), so an expired link is
+// recovered by replaying the POST rather than losing the photo. A kind added here later without
+// that server support would be rejected with a clear reason instead of retried forever.
+const RESIGNS_ON_REPLAY: ReadonlySet<OutboxKind> = new Set([
+  'FIELD_CAPTURE',
+  'DEFECT',
+  'CHECK_PHOTO',
+]);
 
 /**
  * lastError of a RESPONSE row answered 409 with any code but SUPERSEDED (e.g. ANSWER_ID_REUSED):
@@ -559,8 +586,8 @@ interface UploadTarget {
   readonly photoS3Key: string | null;
 }
 
-// Each create endpoint names its photo upload URL differently: the defect POST returns a single
-// { uploadUrl, photoS3Key }; field capture returns photoUploadUrls: [{ filename, uploadUrl }] for
+// Each create endpoint names its photo upload URL differently: the defect and check-photo POSTs
+// return a single { uploadUrl, photoS3Key }; field capture returns photoUploadUrls: [{ filename, uploadUrl }] for
 // the photoFilenames it was sent (the outbox row carries one photo, the first filename).
 function readUploadTarget(row: OutboxRow, parsed: Record<string, unknown>): UploadTarget {
   if (row.kind === 'FIELD_CAPTURE') {

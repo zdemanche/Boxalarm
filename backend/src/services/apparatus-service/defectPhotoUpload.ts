@@ -48,7 +48,7 @@ export const presignPut: PresignPutFn = (bucketName, key, expiresIn, contentType
   );
 };
 
-const UPLOAD_URL_EXPIRY_SECONDS = 10 * 60;
+export const UPLOAD_URL_EXPIRY_SECONDS = 10 * 60;
 
 export interface CreateDefectPhotoUploadUrlParams {
   readonly deptId: VerifiedDeptId;
@@ -63,12 +63,12 @@ export interface DefectPhotoUpload {
   readonly contentType: string;
 }
 
-const SAFE_FILENAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
+export const SAFE_FILENAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 
 // A defect photo is an image: the shared upload allowlist (inspections-service/assetsSigner.ts,
 // review minor 11) narrowed to image/* types, so it is never .html/.svg/.js or a document.
 // The PUT is signed with that content type, so S3 refuses any other Content-Type.
-const ALLOWED_PHOTO_EXTENSIONS: ReadonlySet<string> = new Set([
+export const ALLOWED_PHOTO_EXTENSIONS: ReadonlySet<string> = new Set([
   'jpg',
   'jpeg',
   'png',
@@ -77,7 +77,8 @@ const ALLOWED_PHOTO_EXTENSIONS: ReadonlySet<string> = new Set([
   'webp',
 ]);
 
-function isSafeFilename(filename: string): boolean {
+/** A safe image filename: the shared upload allowlist narrowed to image types. */
+export function isSafeFilename(filename: string): boolean {
   if (!SAFE_FILENAME.test(filename)) {
     return false;
   }

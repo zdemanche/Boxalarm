@@ -13,7 +13,8 @@ import { ApparatusArgs, apparatusRoute } from "./apparatus-lambda";
  * are alarmed too.
  *
  * A defect that names a photo gets a presigned S3 PUT (defectPhotoUpload.ts) into the
- * platform-assets bucket under {deptId}/defect/, the only prefix its role may write.
+ * platform-assets bucket under {deptId}/defect/, the only prefix its role may write; a photo on
+ * any check item (passed or failed) gets one under {deptId}/check/ the same way.
  */
 export interface ChecksArgs extends ApparatusArgs {
   /** Ops alarm topic (chief-notifications): every alarm here notifies it, none is silent. */
@@ -23,6 +24,7 @@ export interface ChecksArgs extends ApparatusArgs {
 export class Checks extends pulumi.ComponentResource {
   public readonly checklistLambda: ServiceLambda;
   public readonly submitCheckLambda: ServiceLambda;
+  public readonly checkPhotoLambda: ServiceLambda;
   public readonly reportDefectLambda: ServiceLambda;
   public readonly complianceLambda: ServiceLambda;
   public readonly submitCheckErrorsAlarm: aws.cloudwatch.MetricAlarm;
@@ -61,6 +63,24 @@ export class Checks extends pulumi.ComponentResource {
         { sid: "SubmitCheckApparatusLookup", actions: ["dynamodb:Query"], on: ["GSI3"] },
         {
           sid: "SubmitCheckWrite",
+          actions: ["dynamodb:PutItem", "dynamodb:GetItem"],
+          on: ["table"],
+        },
+      ],
+    });
+
+    // attachCheckPhoto.ts: GSI3 lookup; a transaction of two Puts (CHECK_PHOTO row, audit
+    // row); on a replay, one consistent GetItem of the stored row to re-sign its key. The
+    // presigned PUT goes under {deptId}/check/, the only prefix this role may write.
+    this.checkPhotoLambda = apparatusRoute(this, name, args, {
+      functionKey: "check-photo-attach",
+      routeKey: "POST /api/v1/apparatus/{unitId}/checks/{checkKey}/photos",
+      cedar: true,
+      assetsPutPrefix: "check",
+      grants: [
+        { sid: "CheckPhotoApparatusLookup", actions: ["dynamodb:Query"], on: ["GSI3"] },
+        {
+          sid: "CheckPhotoWrite",
           actions: ["dynamodb:PutItem", "dynamodb:GetItem"],
           on: ["table"],
         },
@@ -144,6 +164,7 @@ export class Checks extends pulumi.ComponentResource {
     this.registerOutputs({
       checklistLambda: this.checklistLambda,
       submitCheckLambda: this.submitCheckLambda,
+      checkPhotoLambda: this.checkPhotoLambda,
       reportDefectLambda: this.reportDefectLambda,
       complianceLambda: this.complianceLambda,
     });

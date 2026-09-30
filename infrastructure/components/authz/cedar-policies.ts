@@ -140,6 +140,9 @@ export const OFFICER_TIER_GROUPS = ["OFFICER", "TRAINING", "CHIEF", "ADMIN"] as 
 export const APPARATUS_MEMBER_ACTIONS = [
   "GetChecklist",
   "SubmitApparatusCheck",
+  // A photo on a truck-check item (attachCheckPhoto.ts): part of performing the check, so the
+  // same every-role tier as SubmitApparatusCheck.
+  "AttachCheckPhoto",
   "ReportDefect",
   "ViewMaintenanceHistory",
   "LogScbaRecord",
@@ -166,6 +169,7 @@ const APPARATUS_ACTION_RESOURCE: Record<
 > = {
   GetChecklist: "Apparatus",
   SubmitApparatusCheck: "Apparatus",
+  AttachCheckPhoto: "Apparatus",
   ReportDefect: "Apparatus",
   ViewMaintenanceHistory: "Apparatus",
   LogScbaRecord: "Apparatus",
