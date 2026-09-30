@@ -3,7 +3,11 @@ import { AppState, type AppStateStatus } from 'react-native';
 import { useOptionalAuth } from '../../auth/AuthContext';
 import { getPushRegistration, retryPushRegistration } from './pushRegistrationState';
 import { getNativePushBridge, registerPushToken, type DeviceToken } from './pushTokens';
-import { retryDelayMs, usePushTokenRegistration } from './usePushTokenRegistration';
+import {
+  RECONFIRM_MIN_INTERVAL_MS,
+  retryDelayMs,
+  usePushTokenRegistration,
+} from './usePushTokenRegistration';
 
 jest.mock('../../auth/AuthContext', () => ({ useOptionalAuth: jest.fn() }));
 jest.mock('./pushTokens', () => ({
@@ -177,7 +181,7 @@ test('returning to the foreground retries immediately while unregistered', async
   expect(mockRegisterPushToken).toHaveBeenCalledTimes(2);
 });
 
-test('returning to the foreground does nothing extra once registered', async () => {
+test('returning to the foreground right after registering does nothing extra', async () => {
   await renderHook(() => usePushTokenRegistration());
   await flush();
 
@@ -186,6 +190,20 @@ test('returning to the foreground does nothing extra once registered', async () 
 
   expect(bridge.getToken).toHaveBeenCalledTimes(1);
   expect(mockRegisterPushToken).toHaveBeenCalledTimes(1);
+});
+
+// N-m2: "registered" must mean the server still has this phone.
+test('a later return to the foreground re-confirms with the server, and a refusal turns it red', async () => {
+  await renderHook(() => usePushTokenRegistration());
+  await flush();
+  await advance(RECONFIRM_MIN_INTERVAL_MS);
+
+  mockRegisterPushToken.mockRejectedValueOnce(new Error('404 member not found'));
+  fireAppState('active');
+  await flush();
+
+  expect(mockRegisterPushToken).toHaveBeenCalledTimes(2);
+  expect(getPushRegistration()).toEqual({ memberId: 'MBR-1', status: 'failed' });
 });
 
 test('denied permission is logged, not timer-retried, and re-checked on foreground', async () => {

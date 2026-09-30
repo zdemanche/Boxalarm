@@ -13,6 +13,14 @@ import {
 
 const RETRY_BASE_MS = 5_000;
 const RETRY_MAX_MS = 5 * 60_000;
+/**
+ * A registered phone re-confirms with the server on a return to the foreground at most this often
+ * (N-m2): "Registered" must mean the server still has this phone's entry, not that a POST once
+ * worked - the entry can be removed later (a token disabled after a delivery error, an admin
+ * removing a lost device, another member's registration of the same token). Registration is
+ * idempotent, so the re-confirm is a plain re-POST.
+ */
+export const RECONFIRM_MIN_INTERVAL_MS = 60_000;
 
 /** Backoff before the Nth consecutive retry (1-based): 5s, 10s, 20s ... capped at 5 minutes. */
 export function retryDelayMs(failures: number): number {
@@ -50,6 +58,7 @@ export function usePushTokenRegistration(): void {
     let needsRetry = false;
     let failures = 0;
     let retryTimer: ReturnType<typeof setTimeout> | null = null;
+    let confirmedAt = 0;
 
     const clearRetryTimer = () => {
       if (retryTimer !== null) {
@@ -65,6 +74,7 @@ export function usePushTokenRegistration(): void {
     const markRegistered = () => {
       needsRetry = false;
       failures = 0;
+      confirmedAt = Date.now();
       clearRetryTimer();
       report('registered');
     };
@@ -135,8 +145,16 @@ export function usePushTokenRegistration(): void {
     });
 
     const appStateSubscription = AppState.addEventListener('change', (status) => {
-      if (status !== 'active' || !needsRetry) return;
-      failures = 0;
+      if (status !== 'active') return;
+      if (needsRetry) {
+        failures = 0;
+        void attempt();
+        return;
+      }
+      // Registered: confirm the server still has it (N-m2). The status stays "registered" while
+      // this runs - no banner flash - and turns red only if the server refuses or is unreachable.
+      if (Date.now() - confirmedAt < RECONFIRM_MIN_INTERVAL_MS) return;
+      lastRegistered = null;
       void attempt();
     });
 
