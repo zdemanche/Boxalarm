@@ -95,16 +95,30 @@ describe(
       expect(unwritable.map((t) => t.inputs.rule)).toEqual([]);
     });
 
-    it("every rule has a FailedInvocations alarm", () => {
-      const watched = new Set(
-        resourcesOfType("aws:cloudwatch/metricAlarm:MetricAlarm")
-          .filter((a) => a.inputs.metricName === "FailedInvocations")
-          .map((a) => (a.inputs.dimensions as { RuleName: string }).RuleName),
-      );
-      const unwatched = resourcesOfType("aws:cloudwatch/eventRule:EventRule")
-        .map((r) => r.inputs.name as string)
-        .filter((name) => !watched.has(name));
-      expect(unwatched).toEqual([]);
+    it.each(["FailedInvocations", "InvocationsFailedToBeSentToDlq"])(
+      "every rule has a %s alarm with an action",
+      (metricName) => {
+        const alarms = resourcesOfType("aws:cloudwatch/metricAlarm:MetricAlarm").filter(
+          (a) => a.inputs.metricName === metricName,
+        );
+        expect(alarms.every((a) => (a.inputs.alarmActions as unknown[]).length > 0)).toBe(true);
+        const watched = new Set(
+          alarms.map((a) => (a.inputs.dimensions as { RuleName: string }).RuleName),
+        );
+        const unwatched = resourcesOfType("aws:cloudwatch/eventRule:EventRule")
+          .map((r) => r.inputs.name as string)
+          .filter((name) => !watched.has(name));
+        expect(unwatched).toEqual([]);
+      },
+    );
+
+    it("never tells the operator a FailedInvocations event is in the DLQ (review F2)", () => {
+      for (const alarm of resourcesOfType("aws:cloudwatch/metricAlarm:MetricAlarm").filter(
+        (a) => a.inputs.metricName === "FailedInvocations",
+      )) {
+        expect(alarm.inputs.alarmDescription).toMatch(/most likely lost/);
+        expect(alarm.inputs.alarmDescription).not.toMatch(/goes to the target DLQ/);
+      }
     });
 
     it("every Scheduler target has a retry policy and a DLQ its role may write (m2)", () => {

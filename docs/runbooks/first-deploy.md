@@ -131,7 +131,7 @@ Then check that `DEPT#nichols-fd#ELIGIBILITY` / `MEMBER#<id>` exists in `boxalar
 - `GET /api/v1/{service}/health/readiness` for all 10 services.
 - A self-test from the app.
 - One manual dispatch. Watch alerting-page: expect the SMS DLQ alarm while no SMS vendor is configured (step 3); the fan-out empty-roster and small-roster alarms must stay OK.
-- Any `…-failed-invocations` alarm means EventBridge could not deliver to a consumer; the event is in that consumer's DLQ.
+- A `…-failed-invocations` or `…-dlq-send-failed` alarm means EventBridge could not deliver an event to a consumer and did **not** dead-letter it: the event is most likely lost, so there is nothing to redrive. Fix the target's policy, then have the producer re-emit the event (member state: `docs/runbooks/eligibility-snapshot-repair.md`). An event that *was* dead-lettered shows up only through that consumer's DLQ depth alarm; redrive those.
 - Run `docs/runbooks/push-device-verification.md` on iOS (Sleep Focus, time-sensitive) and Android.
 - Only after all of that, consider `canaryEnabled: true` with a dedicated device (then `canaryMemberId` becomes required).
 
