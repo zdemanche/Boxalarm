@@ -216,7 +216,9 @@ export class OutboxPublisher extends pulumi.ComponentResource {
         threshold: 0,
         comparisonOperator: "GreaterThanThreshold",
         treatMissingData: "notBreaching",
-        alarmActions: [args.opsAlarmTopicArn],
+        // The platform publisher carries the member and availability events that decide who is
+        // paged, so a dropped row pages on-call as well as notifying the chief.
+        alarmActions: [args.alarmTopicArn, args.opsAlarmTopicArn],
       },
       { parent: this },
     );

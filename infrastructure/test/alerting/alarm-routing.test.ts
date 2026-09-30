@@ -49,9 +49,10 @@ describe("full stack: no alarm notifies nobody (deploy-readiness M1)", { timeout
       "boxalarm-dev-incident-outbox-drain-onfailure-depth",
       "boxalarm-dev-notification-digest-errors",
       "boxalarm-dev-inventory-ppe-expiry-scanner-dlq-depth",
-      "boxalarm-dev-outbox-malformed-row",
     ]) {
       expect(actionsOf(name), name).toEqual([OPS_TOPIC]);
     }
+    // A dropped platform outbox row can lose a member or availability event, so it pages too.
+    expect(actionsOf("boxalarm-dev-outbox-malformed-row")).toEqual([PAGE_TOPIC, OPS_TOPIC]);
   });
 });

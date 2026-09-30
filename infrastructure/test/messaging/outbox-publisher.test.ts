@@ -75,7 +75,9 @@ describe("OutboxPublisher", () => {
       0,
     ]);
     expect(dimensions).toBeUndefined();
+    // Pages on-call (it can drop the events that decide who is paged) and notifies the chief.
     expect(actions).toEqual([
+      "arn:aws:sns:us-east-1:123456789012:boxalarm-dev-alerting-page",
       "arn:aws:sns:us-east-1:123456789012:boxalarm-dev-chief-notifications",
     ]);
   });
