@@ -830,6 +830,30 @@ describe('deliverChannelMessage — multi-device push', () => {
     ]);
   });
 
+  // Review round 2 item b: an FCM test send that only validated is VALIDATED, never SENT.
+  it.each([
+    ['a self-test (deliver)', 'deliver', 'SENT', { isTest: true, fcmDeliver: true }],
+    ['the canary (validate)', 'validate', 'VALIDATED', { isTest: true }],
+  ] as const)('%s on Android is recorded %s', async (_label, testDelivery, state, options) => {
+    const sendPush = vi.fn().mockResolvedValue({ outcome: 'sent' });
+    mockPush(sendPush);
+    const send = vi.fn().mockResolvedValue({});
+    const { deliverChannelMessage } = await import('./deliverChannelMessage.js');
+
+    await deliverChannelMessage(fakeDdb(send), 'alerting-table', {
+      ...params,
+      isTest: true,
+      testDelivery,
+      contactChannels: [TABLET],
+    });
+
+    expect(sendPush.mock.calls[0]?.[3]).toEqual(options);
+    expect(updates(send).at(-1)?.ExpressionAttributeValues).toMatchObject({
+      ':sent': 'SENT',
+      ':deviceSends': { tablet: state },
+    });
+  });
+
   it('one device accepted, one transiently failed: FAILED and rethrown, and the redelivery sends only to the failed device', async () => {
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const sendPush = vi

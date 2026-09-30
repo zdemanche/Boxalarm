@@ -41,6 +41,12 @@ export interface SendPushOptions {
   readonly isTest?: boolean;
   /** The iOS device token's APNs environment; unset is production. */
   readonly apnsEnvironment?: ApnsEnvironment;
+  /**
+   * A test FCM push that really delivers (a member's self-test, or the canary on a dedicated
+   * device): production FCM credentials, no validate_only, labelled TEST. Otherwise an FCM
+   * test uses the FCM sandbox secret with validate_only - credentials verified, not delivered.
+   */
+  readonly fcmDeliver?: boolean;
   readonly secretsClient?: SecretsManagerClient;
   /** Test seams. */
   readonly apnsTransport?: Http2Transport;
@@ -62,7 +68,11 @@ export async function sendPush(
 ): Promise<PushSendResult> {
   const isTest = options.isTest === true;
   const apnsEnvironment = options.apnsEnvironment ?? 'production';
-  const secretId = readPushSecretId(platform, env, { isTest, apnsEnvironment });
+  const fcmValidateOnly = isTest && options.fcmDeliver !== true;
+  const secretId = readPushSecretId(platform, env, {
+    isTest: platform === 'FCM' ? fcmValidateOnly : isTest,
+    apnsEnvironment,
+  });
   const secretsClient = createChannelSecretsClient(options.secretsClient);
   const common = { secretId, isTest, secretsClient, timeoutMs: PUSH_PROVIDER_REQUEST_TIMEOUT_MS };
   if (platform === 'APNS') {
@@ -76,6 +86,7 @@ export async function sendPush(
   const apnsInterruptionLevel = await apnsInterruptionLevelFor(env, secretsClient);
   return sendViaFcm(notification, {
     ...common,
+    validateOnly: fcmValidateOnly,
     ...(apnsInterruptionLevel ? { apnsInterruptionLevel } : {}),
     ...(options.fcmOrigin ? { fcmOrigin: options.fcmOrigin } : {}),
     ...(options.oauthTokenUrl ? { oauthTokenUrl: options.oauthTokenUrl } : {}),

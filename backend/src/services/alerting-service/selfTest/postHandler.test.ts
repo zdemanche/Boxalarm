@@ -100,11 +100,14 @@ describe('selfTest postHandler', () => {
     const input = createManualDispatch.mock.calls[0]?.[2] as {
       targetMemberId: string;
       channelsTested: string[];
+      testDelivery: string;
       dispatch: { sourceSystem: string };
     };
     expect(input.targetMemberId).toBe('mbr-102');
     expect(input.dispatch.sourceSystem).toBe('SELF_TEST');
     expect(input.channelsTested).toEqual(['PUSH', 'SMS']);
+    // A member's self-test really rings their Android phone (review round 2 item b).
+    expect(input.testDelivery).toBe('deliver');
   });
 
   it('returns 429 and never creates a dispatch when the per-member cooldown is still active (P1)', async () => {

@@ -18,7 +18,7 @@ import {
   type EligibilitySnapshotItem,
 } from '../eligibility/selector.js';
 import { resolvePushTarget, resolveSmsTarget } from '../eligibility/resolvePushTarget.js';
-import { buildChannelPagePayload } from '../channels/channelEnvelope.js';
+import { buildChannelPagePayload, type TestDelivery } from '../channels/channelEnvelope.js';
 import { getSchedulerClient } from '../escalation/scheduleEscalation.js';
 import { scheduleRealtimeFanOutEscalation } from './fanOut.js';
 import {
@@ -55,6 +55,7 @@ interface DispatchAlertRecord {
   readonly selfTestId: string | undefined;
   readonly channelsTested: readonly string[] | undefined;
   readonly dispatchedAt: number | undefined;
+  readonly testDelivery: TestDelivery | undefined;
 }
 
 interface FanOutTask {
@@ -148,6 +149,10 @@ function parseDispatchAlertRecord(record: DynamoDBRecord): DispatchAlertRecord |
       ? (item.channelsTested as string[])
       : undefined,
     dispatchedAt: typeof item.dispatchedAt === 'number' ? item.dispatchedAt : undefined,
+    testDelivery:
+      item.testDelivery === 'deliver' || item.testDelivery === 'validate'
+        ? item.testDelivery
+        : undefined,
   };
 }
 

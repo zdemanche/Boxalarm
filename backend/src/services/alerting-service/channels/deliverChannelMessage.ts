@@ -18,6 +18,7 @@ import {
   type ChannelName,
   type ContactChannelSnapshot,
   type MutualAidPromptPayload,
+  type TestDelivery,
 } from './channelEnvelope.js';
 import { sendViaHttpProvider } from './httpProviderAdapter.js';
 import { resolvePushPlatform, sendPush, type PushSendResult } from './push/pushProviderAdapter.js';
@@ -67,6 +68,8 @@ interface DeliverChannelMessageCommon {
   readonly title?: string;
   /** Push only: the dispatch's own fields, sent to the app as their own keys. */
   readonly alert?: PushAlertFields;
+  /** Test pages: whether FCM really delivers (channelEnvelope.ts TestDelivery). */
+  readonly testDelivery?: TestDelivery;
   readonly env: NodeJS.ProcessEnv;
   /**
    * Self-test/canary message: labelled TEST; APNs on the device's own environment, FCM
@@ -221,7 +224,20 @@ interface GuardRef {
  * configuration reason). A redelivery after a transient failure skips the SENT and INVALID
  * devices, so a member's phone is not buzzed twice because their tablet's gateway call failed.
  */
-type DeviceSendState = 'SENT' | 'INVALID' | 'REFUSED';
+type DeviceSendState = 'SENT' | 'VALIDATED' | 'INVALID' | 'REFUSED';
+
+/**
+ * An FCM test send that only validates (the canary without a dedicated device): FCM checked
+ * the credentials and the token but delivered nothing. Recorded VALIDATED, never SENT, so the
+ * self-test result can say "credentials verified, not delivered" (review round 2 item b).
+ */
+function isFcmValidateOnly(params: DeliverChannelMessageParams, device: PushDeviceTarget): boolean {
+  return (
+    params.isTest === true &&
+    params.testDelivery !== 'deliver' &&
+    resolvePushPlatform(device.platform, device.token) === 'FCM'
+  );
+}
 type DeviceSends = Record<string, DeviceSendState>;
 
 /**
@@ -276,7 +292,9 @@ async function deliverPushToDevices(
   const deviceSends: DeviceSends = { ...priorDeviceSends };
   const pending = resolvePushTargets(params.contactChannels).filter(
     (device) =>
-      deviceSends[device.deviceKey] !== 'SENT' && deviceSends[device.deviceKey] !== 'INVALID',
+      deviceSends[device.deviceKey] !== 'SENT' &&
+      deviceSends[device.deviceKey] !== 'VALIDATED' &&
+      deviceSends[device.deviceKey] !== 'INVALID',
   );
 
   const outcomes = await Promise.allSettled(
@@ -302,7 +320,7 @@ async function deliverPushToDevices(
     }
     const result = outcome.value;
     if (result.outcome === 'sent') {
-      deviceSends[device.deviceKey] = 'SENT';
+      deviceSends[device.deviceKey] = isFcmValidateOnly(params, device) ? 'VALIDATED' : 'SENT';
       continue;
     }
     if (result.outcome === 'test_refused') {
@@ -362,7 +380,9 @@ async function deliverPushToDevices(
     }
     return;
   }
-  const anySent = Object.values(deviceSends).includes('SENT');
+  const anySent = Object.values(deviceSends).some(
+    (state) => state === 'SENT' || state === 'VALIDATED',
+  );
   if (massInvalidationError !== undefined) {
     await recordClaimedFailure(
       ddb,
@@ -415,6 +435,7 @@ function sendPushToDevice(
     {
       isTest: params.isTest === true,
       ...(device.apnsEnvironment ? { apnsEnvironment: device.apnsEnvironment } : {}),
+      ...(params.testDelivery === 'deliver' ? { fcmDeliver: true } : {}),
     },
   );
 }
@@ -630,6 +651,7 @@ export function createChannelWorkerHandler(
         contactChannels,
         env: process.env,
         isTest: envelope.isTest,
+        ...(envelope.testDelivery ? { testDelivery: envelope.testDelivery } : {}),
         alert: {
           incidentType: envelope.incidentType,
           address: envelope.address,

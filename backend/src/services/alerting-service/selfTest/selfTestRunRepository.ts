@@ -16,6 +16,11 @@ export interface SelfTestChannelResult {
   readonly ok: boolean;
   readonly ms: number;
   readonly reason?: string;
+  /**
+   * false when the provider only validated the message (FCM validate_only - the canary without
+   * a dedicated device): credentials and token verified, nothing reached the phone.
+   */
+  readonly delivered?: boolean;
 }
 
 export interface SelfTestRunItem {

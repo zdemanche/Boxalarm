@@ -431,3 +431,74 @@ describe('the Android path caches the APNs-level lookup, failures included (revi
     expect(apnsReads()).toBe(2);
   });
 });
+
+// Review round 2 item (b): a member's Android self-test really rings the phone.
+describe('FCM test delivery', () => {
+  const rsa = generateKeyPairSync('rsa', { modulusLength: 2048 })
+    .privateKey.export({ type: 'pkcs8', format: 'pem' })
+    .toString();
+
+  async function sendFcmTest(options: { fcmDeliver?: boolean }) {
+    const secretIds: string[] = [];
+    const client = {
+      send: vi.fn((command: { input: { SecretId: string } }) => {
+        secretIds.push(command.input.SecretId);
+        return Promise.resolve({
+          SecretString: JSON.stringify({
+            project_id: 'p',
+            client_email: 'sa@p.iam.gserviceaccount.com',
+            private_key: rsa,
+          }),
+        });
+      }),
+    } as unknown as SecretsManagerClient;
+    let body: Record<string, unknown> | undefined;
+    const fetchSpy = vi
+      .spyOn(globalThis, 'fetch')
+      .mockImplementation((url: string | URL | Request, init?: RequestInit) => {
+        if ((url as string).endsWith('/token')) {
+          return Promise.resolve(
+            new Response(JSON.stringify({ access_token: 'a', expires_in: 3599 }), { status: 200 }),
+          );
+        }
+        body = JSON.parse(init?.body as string) as Record<string, unknown>;
+        return Promise.resolve(new Response(JSON.stringify({ name: 'm' }), { status: 200 }));
+      });
+    const { sendPush } = await import('./pushProviderAdapter.js');
+    await sendPush(
+      { ...notification, token: 'fcm', isTest: true },
+      'FCM',
+      {
+        FCM_SECRET_ID: 'fcm-prod',
+        FCM_SANDBOX_SECRET_ID: 'fcm-sandbox',
+        APNS_SECRET_ID: 'apns-prod',
+      },
+      {
+        isTest: true,
+        ...options,
+        secretsClient: client,
+        fcmOrigin: 'https://fcm.test',
+        oauthTokenUrl: 'https://oauth.test/token',
+      },
+    );
+    fetchSpy.mockRestore();
+    return { secretIds, body };
+  }
+
+  it('a self-test (fcmDeliver) uses production FCM, really delivers, and is labelled TEST', async () => {
+    const { secretIds, body } = await sendFcmTest({ fcmDeliver: true });
+    expect(secretIds).toContain('fcm-prod');
+    expect(secretIds).not.toContain('fcm-sandbox');
+    expect(body).not.toHaveProperty('validate_only');
+    const data = (body?.message as { data: Record<string, string> }).data;
+    expect(data.test).toBe('true');
+    expect(data.title?.startsWith('TEST — ')).toBe(true);
+  });
+
+  it('otherwise (the canary) an FCM test only validates, with the sandbox secret', async () => {
+    const { secretIds, body } = await sendFcmTest({});
+    expect(secretIds).toContain('fcm-sandbox');
+    expect(secretIds).not.toContain('fcm-prod');
+    expect(body).toMatchObject({ validate_only: true });
+  });
+});

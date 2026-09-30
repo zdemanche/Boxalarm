@@ -178,4 +178,40 @@ describe('evaluateSelfTestRun — PASS comes from worker receipts (design review
     expect(result).toMatchObject({ overallResult: 'PASS', latencyMs: 1_200 });
     expect(t.completion()).toBeUndefined();
   });
+
+  // Review round 2 item b: the canary's Android push only validates (FCM validate_only).
+  it('reports a validate-only Android send as credentials verified, not delivered', async () => {
+    const t = table({
+      PUSH: {
+        sendState: 'SENT',
+        completedAtMs: START_MS + 400,
+        deviceSends: { 'android-1': 'VALIDATED' },
+      },
+      SMS: { sendState: 'SENT', completedAtMs: START_MS + 500 },
+    });
+    const result = await evaluateSelfTestRun(t.client, 'tbl', KEY, running(), START_MS + 1_000, {
+      latencyBudgetMs: 5_000,
+    });
+    expect(result.channelResults.PUSH).toEqual({
+      ok: true,
+      ms: 400,
+      delivered: false,
+      reason: 'credentials verified, not delivered',
+    });
+  });
+
+  it('a push that rang at least one device is a delivery', async () => {
+    const t = table({
+      PUSH: {
+        sendState: 'SENT',
+        completedAtMs: START_MS + 400,
+        deviceSends: { ios: 'SENT', 'android-1': 'VALIDATED' },
+      },
+      SMS: { sendState: 'SENT', completedAtMs: START_MS + 500 },
+    });
+    const result = await evaluateSelfTestRun(t.client, 'tbl', KEY, running(), START_MS + 1_000, {
+      latencyBudgetMs: 5_000,
+    });
+    expect(result.channelResults.PUSH).toEqual({ ok: true, ms: 400 });
+  });
 });

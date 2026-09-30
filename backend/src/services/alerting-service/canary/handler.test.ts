@@ -135,6 +135,22 @@ describe('canary handler', () => {
     expect(typeof pointer?.pendingTestId).toBe('string');
     const run = [...items.values()].find((item) => item.entityType === 'SELF_TEST_RUN');
     expect(run).toMatchObject({ memberId: 'canary-device', overallResult: 'RUNNING' });
+    // Without a dedicated canary device, Android is validated only (round 2 item b).
+    const alert = [...items.values()].find((item) => item.entityType === 'DISPATCH_ALERT');
+    expect(alert?.testDelivery).toBe('validate');
+  });
+
+  it('really delivers when the canary member is a dedicated device', async () => {
+    process.env.CANARY_DEDICATED_DEVICE = 'true';
+    const { send, items } = createFakeDdb();
+    const { createDynamoClient } = await import('../eligibility/dynamoClient.js');
+    vi.mocked(createDynamoClient).mockReturnValue({ send } as unknown as DynamoDBDocumentClient);
+
+    const { handler } = await import('./handler.js');
+    await handler();
+
+    const alert = [...items.values()].find((item) => item.entityType === 'DISPATCH_ALERT');
+    expect(alert?.testDelivery).toBe('deliver');
   });
 
   it('completes a pending run as PASS when the self-test finished within the latency budget, and records a CANARY_RUN (AC1)', async () => {

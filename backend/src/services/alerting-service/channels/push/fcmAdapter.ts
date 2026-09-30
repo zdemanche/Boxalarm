@@ -33,6 +33,11 @@ export interface SendViaFcmOptions {
    */
   readonly apnsInterruptionLevel?: ApnsInterruptionLevel;
   readonly isTest: boolean;
+  /**
+   * FCM validates the whole message (token included) but delivers nothing. The scheduled
+   * canary without a dedicated device; a member's self-test really delivers (labelled TEST).
+   */
+  readonly validateOnly?: boolean;
   readonly secretsClient: SecretsManagerClient;
   readonly timeoutMs: number;
   /** Test seams: a local HTTP server in place of Google. */
@@ -49,13 +54,13 @@ export interface SendViaFcmOptions {
  */
 export function buildFcmRequest(
   notification: PushNotification,
-  isTest: boolean,
+  validateOnly: boolean,
   nowMs: number = Date.now(),
   apnsInterruptionLevel: ApnsInterruptionLevel = 'critical',
 ): Record<string, unknown> {
   return {
-    // Self-test/canary: FCM validates the whole message (token included) but delivers nothing.
-    ...(isTest ? { validate_only: true } : {}),
+    // FCM validates the whole message (token included) but delivers nothing.
+    ...(validateOnly ? { validate_only: true } : {}),
     message: {
       token: notification.token,
       data: pushDataFields(notification),
@@ -156,7 +161,7 @@ async function sendViaFcmOnce(
       body: JSON.stringify(
         buildFcmRequest(
           notification,
-          options.isTest,
+          options.validateOnly ?? options.isTest,
           Date.now(),
           options.apnsInterruptionLevel ?? credentials.apnsInterruptionLevel,
         ),

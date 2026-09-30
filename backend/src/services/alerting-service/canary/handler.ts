@@ -131,6 +131,9 @@ async function startNextRun(
     targetMemberId: memberId,
     selfTestId: testId,
     channelsTested: SELF_TEST_CHANNELS,
+    // The canary rings a phone every tick, so on Android it only validates (credentials, not
+    // delivery) unless the stack says the canary member is a dedicated device.
+    testDelivery: process.env.CANARY_DEDICATED_DEVICE === 'true' ? 'deliver' : 'validate',
   });
   if (result.outcome === 'duplicate') {
     logError('alerting.canary.unexpectedDuplicate', new Error('canary idempotency collision'), {

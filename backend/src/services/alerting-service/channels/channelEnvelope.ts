@@ -21,6 +21,20 @@ export interface ChannelEnvelopePayload {
   readonly crossStreets?: string | undefined;
   /** DISPATCH_ALERT.dispatchedAt, epoch seconds. */
   readonly dispatchedAt?: number | undefined;
+  /** Test pages only: whether FCM really delivers (see TestDelivery). */
+  readonly testDelivery?: TestDelivery | undefined;
+}
+
+/**
+ * How a test page reaches Android: `deliver` (a member's self-test, or the canary on a
+ * dedicated device) really rings the phone through production FCM, labelled TEST; `validate`
+ * (the default canary) is FCM validate_only - credentials verified, nothing delivered. APNs
+ * always delivers on the device's own environment.
+ */
+export type TestDelivery = 'deliver' | 'validate';
+
+function asTestDelivery(value: unknown): TestDelivery | undefined {
+  return value === 'deliver' || value === 'validate' ? value : undefined;
 }
 
 export type ChannelTier = 'primary' | 'escalation';
@@ -39,6 +53,7 @@ export interface DispatchAlertText {
   readonly sourceSystem?: string | undefined;
   /** Epoch seconds the dispatch was received. */
   readonly dispatchedAt?: number | undefined;
+  readonly testDelivery?: TestDelivery | undefined;
 }
 
 // Ingress rejects a dispatch without incidentType/address, so these only fire on a corrupt or
@@ -63,6 +78,7 @@ export function readDispatchAlertText(item: Record<string, unknown>): DispatchAl
     mapLink: optional('mapLink'),
     sourceSystem: optional('sourceSystem'),
     dispatchedAt: typeof item.dispatchedAt === 'number' ? item.dispatchedAt : undefined,
+    testDelivery: asTestDelivery(item.testDelivery),
   };
 }
 
@@ -112,6 +128,7 @@ export function buildChannelPagePayload(input: ChannelPageInput): ChannelPagePay
     mapLink: dispatch.mapLink,
     sourceSystem: dispatch.sourceSystem,
     dispatchedAt: dispatch.dispatchedAt,
+    ...(dispatch.isTest && dispatch.testDelivery ? { testDelivery: dispatch.testDelivery } : {}),
     ...(input.reason ? { reason: input.reason } : {}),
   };
 }
@@ -119,10 +136,12 @@ export function buildChannelPagePayload(input: ChannelPageInput): ChannelPagePay
 /** The optional alert fields a page may carry, kept only when well-typed. */
 function optionalAlertFields(
   payload: Record<string, unknown> | undefined,
-): Pick<ChannelEnvelopePayload, 'crossStreets' | 'dispatchedAt'> {
+): Pick<ChannelEnvelopePayload, 'crossStreets' | 'dispatchedAt' | 'testDelivery'> {
   const crossStreets = payload?.crossStreets;
   const dispatchedAt = payload?.dispatchedAt;
+  const testDelivery = asTestDelivery(payload?.testDelivery);
   return {
+    ...(testDelivery ? { testDelivery } : {}),
     ...(typeof crossStreets === 'string' && crossStreets.trim().length > 0 ? { crossStreets } : {}),
     ...(typeof dispatchedAt === 'number' && Number.isFinite(dispatchedAt) ? { dispatchedAt } : {}),
   };
@@ -191,6 +210,7 @@ export interface MutualAidPromptPayload {
   readonly isTest: boolean;
   readonly crossStreets?: string | undefined;
   readonly dispatchedAt?: number | undefined;
+  readonly testDelivery?: TestDelivery | undefined;
 }
 
 export type MutualAidPromptPagePayload = MutualAidPromptPayload;

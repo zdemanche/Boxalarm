@@ -85,6 +85,20 @@ async function readWorkerOutcome(
         : startMs;
   const ms = Math.max(atMs - startMs, 0);
   if (guard.sendState === 'SENT') {
+    // Every device only validated (FCM validate_only): the credentials and the token are good,
+    // but nothing rang - said so, never passed off as a delivery (review round 2 item b).
+    const deviceStates =
+      typeof guard.deviceSends === 'object' && guard.deviceSends !== null
+        ? Object.values(guard.deviceSends as Record<string, string>)
+        : [];
+    const validatedOnly = deviceStates.includes('VALIDATED') && !deviceStates.includes('SENT');
+    if (validatedOnly && ms <= latencyBudgetMs) {
+      return {
+        state: 'done',
+        atMs,
+        result: { ok: true, ms, delivered: false, reason: 'credentials verified, not delivered' },
+      };
+    }
     return ms <= latencyBudgetMs
       ? { state: 'done', atMs, result: { ok: true, ms } }
       : {

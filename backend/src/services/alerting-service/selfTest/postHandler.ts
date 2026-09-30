@@ -84,6 +84,10 @@ async function postSelfTest(
       targetMemberId: memberId,
       selfTestId: testId,
       channelsTested: SELF_TEST_CHANNELS,
+      // A member's self-test rings their real phone on Android too (labelled TEST): an FCM
+      // validate_only check says nothing about the channel, DND or battery settings the member
+      // runs a self-test to find.
+      testDelivery: 'deliver',
     });
 
     if (result.outcome === 'duplicate') {
