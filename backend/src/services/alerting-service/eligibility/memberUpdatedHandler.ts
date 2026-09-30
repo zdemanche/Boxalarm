@@ -266,67 +266,96 @@ function emitPropagationLatency(memberId: string, eventTimeMs: number): void {
   emitEmf(LATENCY_METRIC_NAMESPACE, 'SnapshotPropagationLatencyMs', Math.max(latencyMs, 0), [[]]);
 }
 
-export const handler = async (event: SQSEvent): Promise<SQSBatchResponse> => {
-  const client = createDynamoClient(process.env);
-  const tableName = readAlertingConfig(process.env).tableName;
+async function applyRecord(
+  client: ReturnType<typeof createDynamoClient>,
+  tableName: string,
+  record: SQSEvent['Records'][number],
+): Promise<void> {
+  const envelope = parseEnvelope(record.body);
+  const { payload } = envelope;
+  const deptId = toVerifiedDeptId({ deptId: payload.deptId });
+  const pk = buildDeptScopedPk(deptId, 'ELIGIBILITY');
+  const snapshotUpdatedAt = Date.parse(envelope.eventTime);
+  const updates = [
+    ...buildFieldExpressions(payload, snapshotUpdatedAt),
+    payload.roles !== undefined
+      ? buildRolesExpression(payload.roles, payload.memberId, snapshotUpdatedAt)
+      : undefined,
+  ].filter((update) => update !== undefined);
 
-  for (const record of event.Records) {
-    const envelope = parseEnvelope(record.body);
-    const { payload } = envelope;
-    const deptId = toVerifiedDeptId({ deptId: payload.deptId });
-    const pk = buildDeptScopedPk(deptId, 'ELIGIBILITY');
-    const snapshotUpdatedAt = Date.parse(envelope.eventTime);
-    const updates = [
-      ...buildFieldExpressions(payload, snapshotUpdatedAt),
-      payload.roles !== undefined
-        ? buildRolesExpression(payload.roles, payload.memberId, snapshotUpdatedAt)
-        : undefined,
-    ].filter((update) => update !== undefined);
-
-    for (const update of updates) {
-      try {
-        await client.send(
-          new UpdateCommand({
-            TableName: tableName,
-            Key: { pk, sk: `MEMBER#${payload.memberId}` },
-            ...update,
-          }),
-        );
-        emitSnapshotMetric('Updated');
-        emitPropagationLatency(payload.memberId, snapshotUpdatedAt);
-      } catch (error) {
-        if (error instanceof ConditionalCheckFailedException) {
-          logStale(payload.memberId);
-          continue;
-        }
-        logUpdateFailed(payload.memberId, error);
-        throw error;
+  for (const update of updates) {
+    try {
+      await client.send(
+        new UpdateCommand({
+          TableName: tableName,
+          Key: { pk, sk: `MEMBER#${payload.memberId}` },
+          ...update,
+        }),
+      );
+      emitSnapshotMetric('Updated');
+      emitPropagationLatency(payload.memberId, snapshotUpdatedAt);
+    } catch (error) {
+      if (error instanceof ConditionalCheckFailedException) {
+        logStale(payload.memberId);
+        continue;
       }
-    }
-
-    const contactUpdate = contactUpdateFrom(payload);
-    if (contactUpdate) {
-      try {
-        const outcome = await applyContactUpdate(
-          client,
-          tableName,
-          { pk, sk: `MEMBER#${payload.memberId}` },
-          payload.memberId,
-          contactUpdate,
-          snapshotUpdatedAt,
-        );
-        if (outcome === 'stale') {
-          logStale(payload.memberId);
-        } else {
-          emitSnapshotMetric('Updated');
-          emitPropagationLatency(payload.memberId, snapshotUpdatedAt);
-        }
-      } catch (error) {
-        logUpdateFailed(payload.memberId, error);
-        throw error;
-      }
+      logUpdateFailed(payload.memberId, error);
+      throw error;
     }
   }
 
-  return { batchItemFailures: [] };
+  const contactUpdate = contactUpdateFrom(payload);
+  if (contactUpdate) {
+    try {
+      const outcome = await applyContactUpdate(
+        client,
+        tableName,
+        { pk, sk: `MEMBER#${payload.memberId}` },
+        payload.memberId,
+        contactUpdate,
+        snapshotUpdatedAt,
+      );
+      if (outcome === 'stale') {
+        logStale(payload.memberId);
+      } else {
+        emitSnapshotMetric('Updated');
+        emitPropagationLatency(payload.memberId, snapshotUpdatedAt);
+      }
+    } catch (error) {
+      logUpdateFailed(payload.memberId, error);
+      throw error;
+    }
+  }
+}
+
+/**
+ * Post-merge MINOR-7: each record succeeds or fails on its own (ReportBatchItemFailures is on
+ * the event source mapping). One malformed event used to throw the whole batch, so its good
+ * siblings were redelivered with it and dead-lettered after maxReceiveCount - their writes had
+ * already applied, but the DLQ alarm then paged for good events. Records still run in order;
+ * a failed one retried later is safe, because every field write is guarded by its own clock.
+ */
+export const handler = async (event: SQSEvent): Promise<SQSBatchResponse> => {
+  const client = createDynamoClient(process.env);
+  const tableName = readAlertingConfig(process.env).tableName;
+  const batchItemFailures: SQSBatchResponse['batchItemFailures'] = [];
+
+  for (const record of event.Records) {
+    try {
+      await applyRecord(client, tableName, record);
+    } catch (error) {
+      console.error(
+        JSON.stringify({
+          event: 'alerting.eligibility.member_updated.record_failed',
+          service: 'alerting-service',
+          correlationId: record.messageId,
+          reason: error instanceof Error ? error.constructor.name : 'UnknownError',
+          message: error instanceof Error ? error.message : String(error),
+        }),
+      );
+      batchItemFailures.push({ itemIdentifier: record.messageId });
+    }
+  }
+
+  return { batchItemFailures };
 };

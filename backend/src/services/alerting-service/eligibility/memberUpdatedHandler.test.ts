@@ -17,7 +17,9 @@ function buildSqsEvent(envelope: unknown): SQSEvent {
     resources: [],
     detail: envelope,
   };
-  return { Records: [{ body: JSON.stringify(eventBridgeEvent) }] } as unknown as SQSEvent;
+  return {
+    Records: [{ messageId: 'msg-1', body: JSON.stringify(eventBridgeEvent) }],
+  } as unknown as SQSEvent;
 }
 
 const VALID_ENVELOPE = {
@@ -69,12 +71,13 @@ describe('memberUpdatedHandler', () => {
     vi.doUnmock('./dynamoClient.js');
   });
 
-  it('throws (never swallows) when the payload is missing memberId, so SQS retries/DLQs (AC-matrix)', async () => {
+  it('reports (never swallows) a record whose payload is missing memberId, so SQS retries/DLQs it (AC-matrix)', async () => {
     const send = vi.fn();
     vi.doMock('./dynamoClient.js', () => ({
       createDynamoClient: () => ({ send }),
       readAlertingConfig: () => ({ tableName: 'alerting-table' }),
     }));
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const { handler } = await import('./memberUpdatedHandler.js');
     await expect(
       handler(
@@ -83,8 +86,10 @@ describe('memberUpdatedHandler', () => {
           payload: { ...VALID_ENVELOPE.payload, memberId: undefined },
         }),
       ),
-    ).rejects.toThrow('memberId');
+    ).resolves.toEqual({ batchItemFailures: [{ itemIdentifier: 'msg-1' }] });
     expect(send).not.toHaveBeenCalled();
+    expect(errorSpy.mock.calls.some(([line]) => String(line).includes('memberId'))).toBe(true);
+    errorSpy.mockRestore();
   });
 
   it('rejects a bare envelope with no EventBridge `detail` wrapper (never what the rule delivers)', async () => {
@@ -93,10 +98,19 @@ describe('memberUpdatedHandler', () => {
       createDynamoClient: () => ({ send }),
       readAlertingConfig: () => ({ tableName: 'alerting-table' }),
     }));
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const { handler } = await import('./memberUpdatedHandler.js');
-    const bare = { Records: [{ body: JSON.stringify(VALID_ENVELOPE) }] } as unknown as SQSEvent;
-    await expect(handler(bare)).rejects.toThrow('missing detail');
+    const bare = {
+      Records: [{ messageId: 'bare-1', body: JSON.stringify(VALID_ENVELOPE) }],
+    } as unknown as SQSEvent;
+    await expect(handler(bare)).resolves.toEqual({
+      batchItemFailures: [{ itemIdentifier: 'bare-1' }],
+    });
     expect(send).not.toHaveBeenCalled();
+    expect(errorSpy.mock.calls.some(([line]) => String(line).includes('missing detail'))).toBe(
+      true,
+    );
+    errorSpy.mockRestore();
   });
 
   it('upserts MEMBER_ELIGIBILITY_SNAPSHOT with the PUSH entries denormalized from the event payload (AC1, AC2)', async () => {
@@ -605,15 +619,57 @@ describe('memberUpdatedHandler', () => {
     vi.useRealTimers();
   });
 
-  it('rethrows a non-conditional DynamoDB failure (never swallows) so SQS retries/DLQs', async () => {
+  it('reports a non-conditional DynamoDB failure (never swallows) so SQS retries/DLQs that record', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const send = vi.fn().mockRejectedValue(new Error('ProvisionedThroughputExceededException'));
     vi.doMock('./dynamoClient.js', () => ({
       createDynamoClient: () => ({ send }),
       readAlertingConfig: () => ({ tableName: 'alerting-table' }),
     }));
     const { handler } = await import('./memberUpdatedHandler.js');
-    await expect(handler(buildSqsEvent(VALID_ENVELOPE))).rejects.toThrow(
-      'ProvisionedThroughputExceededException',
+    await expect(handler(buildSqsEvent(VALID_ENVELOPE))).resolves.toEqual({
+      batchItemFailures: [{ itemIdentifier: 'msg-1' }],
+    });
+    expect(
+      errorSpy.mock.calls.some(([line]) =>
+        String(line).includes('ProvisionedThroughputExceededException'),
+      ),
+    ).toBe(true);
+    errorSpy.mockRestore();
+  });
+
+  // Post-merge MINOR-7: one bad record no longer fails (and eventually dead-letters) its siblings.
+  it('reports only the failing record of a batch and applies the good ones', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    const send = vi.fn().mockResolvedValue({ Attributes: {} });
+    vi.doMock('./dynamoClient.js', () => ({
+      createDynamoClient: () => ({ send }),
+      readAlertingConfig: () => ({ tableName: 'alerting-table' }),
+    }));
+    const { handler } = await import('./memberUpdatedHandler.js');
+    const good = buildSqsEvent(VALID_ENVELOPE).Records[0]!;
+    const bad = buildSqsEvent({
+      ...VALID_ENVELOPE,
+      payload: { ...VALID_ENVELOPE.payload, deptId: undefined },
+    }).Records[0]!;
+    const batch = {
+      Records: [
+        { ...good, messageId: 'good-1' },
+        { ...bad, messageId: 'bad-1' },
+        { ...good, messageId: 'good-2' },
+      ],
+    };
+
+    await expect(handler(batch)).resolves.toEqual({
+      batchItemFailures: [{ itemIdentifier: 'bad-1' }],
+    });
+    const memberWrites = send.mock.calls.filter(
+      ([command]) =>
+        (command as { input: { Key?: { sk?: string } } }).input.Key?.sk === 'MEMBER#mbr-102',
     );
+    expect(memberWrites.length).toBeGreaterThanOrEqual(2);
+    errorSpy.mockRestore();
+    logSpy.mockRestore();
   });
 });
