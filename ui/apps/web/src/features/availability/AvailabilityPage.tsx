@@ -64,8 +64,8 @@ export function AvailabilityPage() {
   const [formError, setFormError] = useState<string | null>(null);
 
   const mutation = useMutation({
-    mutationFn: (input: { start: Date; end: Date; reason: string }) =>
-      markUnavailable(auth, auth.memberId ?? '', {
+    mutationFn: (input: { memberId: string; start: Date; end: Date; reason: string }) =>
+      markUnavailable(auth, input.memberId, {
         startAt: Math.floor(input.start.getTime() / 1000),
         endAt: Math.floor(input.end.getTime() / 1000),
         ...(input.reason ? { reason: input.reason } : {}),
@@ -114,8 +114,24 @@ export function AvailabilityPage() {
       return;
     }
     setFormError(null);
-    mutation.mutate({ start, end, reason });
+    if (!auth.memberId) return;
+    mutation.mutate({ memberId: auth.memberId, start, end, reason });
   };
+
+  // Never POST to personnel/members//availability: with no member id on the session, say so.
+  if (!auth.memberId) {
+    return (
+      <main id="main-content">
+        <PageHeader title="My availability" />
+        <Card>
+          <p role="alert">
+            Your sign-in doesn&rsquo;t say which member you are, so a mark-off can&rsquo;t be sent.
+            Sign out and sign back in. Until then, tell an officer if you can&rsquo;t respond.
+          </p>
+        </Card>
+      </main>
+    );
+  }
 
   if (mutation.isSuccess) {
     const end = new Date(mutation.data.endAt * 1000);

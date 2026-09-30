@@ -26,6 +26,7 @@ import type { ChecksStackParamList } from '../../navigation/ChecksStack';
 import { useOptionalConnectivity } from '../../sync/ConnectivityContext';
 import { DeliveryStatus } from '../../sync/DeliveryStatus';
 import { kvDelete, kvGet, kvSet } from '../../sync/kvStore';
+import { memberCacheKey } from '../../sync/memberCache';
 import { capturePhoto, type CapturedPhoto } from '../../sync/photoCapture';
 import { formatAsOf, NoCachedDataError } from '../../sync/readThrough';
 import { useOutboxItem } from '../../sync/useOutboxItem';
@@ -101,7 +102,8 @@ export function CheckRunnerScreen() {
   const auth = useOptionalAuth();
   const repository = useChecksRepository();
   const { isOnline } = useOptionalConnectivity();
-  const draftKey = `check-draft:${auth?.memberId ?? 'anon'}:${apparatusId}`;
+  // No member id, no journal: a check in progress is never stored under a shared key (m8).
+  const draftKey = auth?.memberId ? memberCacheKey.checkDraft(auth.memberId, apparatusId) : null;
 
   const [template, setTemplate] = useState<ChecklistTemplate | null>(null);
   const [templateError, setTemplateError] = useState<string | null>(null);
@@ -163,7 +165,7 @@ export function CheckRunnerScreen() {
       .then(async (result) => {
         if (cancelled) return;
         // Resume a check in progress for this unit and sheet, if the phone has one.
-        const draft = await kvGet<CheckDraft>(draftKey);
+        const draft = draftKey ? await kvGet<CheckDraft>(draftKey) : null;
         if (cancelled) return;
         if (
           draft &&
@@ -222,7 +224,7 @@ export function CheckRunnerScreen() {
       notes,
       photos: photosCaptured,
     };
-    void kvSet(draftKey, draft);
+    if (draftKey) void kvSet(draftKey, draft);
   }, [
     hydrated,
     template,
@@ -406,7 +408,7 @@ export function CheckRunnerScreen() {
       setSubmitting(false);
       return;
     }
-    await kvDelete(draftKey);
+    if (draftKey) await kvDelete(draftKey);
     setSubmitting(false);
     setCompleted({
       photosNotSent: template.items.filter(

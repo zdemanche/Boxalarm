@@ -29,17 +29,18 @@ export interface ReadThroughResult<T> {
  * With nothing cached it throws NoCachedDataError.
  */
 export async function readThrough<T>(
-  key: string,
+  key: string | null,
   what: string,
   fetchLive: () => Promise<T>,
 ): Promise<ReadThroughResult<T>> {
+  // key null = no signed-in member id: read live, never cache under a shared key (review m8).
   try {
     const value = await fetchLive();
-    await kvSet(key, value);
+    if (key) await kvSet(key, value);
     return { value, cachedAt: null };
   } catch (error) {
     if (error instanceof ApiError) throw error;
-    const cached = await kvGet<T>(key);
+    const cached = key ? await kvGet<T>(key) : null;
     if (cached) return { value: cached.value, cachedAt: cached.updatedAt };
     throw new NoCachedDataError(what, { cause: error });
   }

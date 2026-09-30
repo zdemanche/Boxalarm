@@ -20,6 +20,7 @@ import Config from 'react-native-config';
 import * as Keychain from 'react-native-keychain';
 import { revokePushToken } from '../features/alerts/pushTokens';
 import { buildOidcConfig } from './config';
+import { clearMemberCache } from '../sync/memberCache';
 
 const KEYCHAIN_SERVER = 'boxalarm-auth';
 const FOREGROUND_RENEWAL_WINDOW_MS = 5 * 60_000;
@@ -309,6 +310,10 @@ export function AuthProvider({
             apiBaseUrl,
           ).catch(() => undefined);
         }
+        // The member's cached apparatus, shifts, check drafts and last mark-off stay on the phone
+        // otherwise (review m8). Queued writes in the outbox are kept: they are the member's
+        // work and sync once someone signs in.
+        if (memberId) await clearMemberCache(memberId).catch(() => undefined);
         await depsRef.current.resetInternetCredentials({ server: KEYCHAIN_SERVER });
         applyTokens(null);
       },

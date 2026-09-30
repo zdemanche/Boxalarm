@@ -104,6 +104,12 @@ jest.mock('@op-engineering/op-sqlite', () => {
           const row = kv.get(params[0]);
           return { rows: row ? [row] : [] };
         }
+        if (statement.startsWith('DELETE FROM kv WHERE key >= ? AND key < ?')) {
+          for (const key of [...kv.keys()]) {
+            if (key >= params[0] && key < params[1]) kv.delete(key);
+          }
+          return { rows: [] };
+        }
         if (statement.startsWith('DELETE FROM kv WHERE key = ?')) {
           kv.delete(params[0]);
           return { rows: [] };

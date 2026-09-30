@@ -8,6 +8,7 @@ import { useScheduleRepository } from '../../features/schedule/apiScheduleReposi
 import { useOptionalConnectivity } from '../../sync/ConnectivityContext';
 import { DeliveryStatus } from '../../sync/DeliveryStatus';
 import { kvGet, kvSet } from '../../sync/kvStore';
+import { memberCacheKey } from '../../sync/memberCache';
 import { useOutboxItem } from '../../sync/useOutboxItem';
 
 // F2.5 / design.md F-06: a mark-off suppresses alerting, so nothing here is pre-chosen - the old
@@ -191,7 +192,9 @@ export function AvailabilityScreen() {
   const auth = useOptionalAuth();
   const repository = useScheduleRepository();
   const { isOnline } = useOptionalConnectivity();
-  const lastKey = `availability:last:${auth?.memberId ?? 'anon'}`;
+  const lastKey = auth?.memberId ? memberCacheKey.lastMarkOff(auth.memberId) : null;
+  // Signed in but with no member id on the session: nothing can be sent for "me" (review m8).
+  const signedInWithoutId = auth?.isAuthenticated === true && !auth.memberId;
   const [now] = useState(() => new Date());
   const [preset, setPreset] = useState<DurationPreset | null>(null);
   const [customStart, setCustomStart] = useState(() => startOfNextHour(now));
@@ -212,6 +215,7 @@ export function AvailabilityScreen() {
 
   useEffect(() => {
     let cancelled = false;
+    if (!lastKey) return undefined;
     void kvGet<LastMarkOff>(lastKey).then((entry) => {
       if (!cancelled && entry && new Date(entry.value.endAt).getTime() > Date.now()) {
         setLastMarkOff(entry.value);
@@ -225,7 +229,7 @@ export function AvailabilityScreen() {
   // Remember a mark-off as "last marked off" only once the server has it (review m9): a rejected
   // or never-sent one must not be reported back to the member as their status.
   useEffect(() => {
-    if (!submitted) return;
+    if (!submitted || !lastKey) return;
     if (submitted.outboxId !== null && delivery.state !== 'SYNCED') return;
     void kvSet<LastMarkOff>(lastKey, {
       startAt: submitted.start.toISOString(),
@@ -287,6 +291,23 @@ export function AvailabilityScreen() {
       setSubmitting(false);
     }
   };
+
+  if (signedInWithoutId) {
+    return (
+      <Screen>
+        <Text
+          accessibilityRole="header"
+          style={{ color: theme.fg, fontSize: typeScale.title.size, fontWeight: '700' }}
+        >
+          Sign in again to mark yourself unavailable
+        </Text>
+        <Text style={{ color: theme.fg, fontSize: typeScale.body.size, marginTop: spacing.md }}>
+          This phone's sign-in doesn't say which member you are, so a mark-off can't be sent. Sign
+          out from Me and sign back in. Until then, tell an officer if you can't respond.
+        </Text>
+      </Screen>
+    );
+  }
 
   if (submitted) {
     const inEffect = submitted.outboxId === null || delivery.state === 'SYNCED';

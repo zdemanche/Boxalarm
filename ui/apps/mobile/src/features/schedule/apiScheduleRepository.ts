@@ -3,6 +3,7 @@ import Config from 'react-native-config';
 import { useOptionalAuth } from '../../auth/AuthContext';
 import { useOptionalConnectivity } from '../../sync/ConnectivityContext';
 import { apiRequest, ApiError } from '../../lib/apiClient';
+import { memberCacheKey } from '../../sync/memberCache';
 import { readThrough } from '../../sync/readThrough';
 import * as syncManager from '../../sync/syncManager';
 import { mockScheduleRepository } from './mockScheduleRepository';
@@ -47,7 +48,7 @@ export function useScheduleRepository(): ScheduleRepository {
         const tokens = authRef.current;
         if (!tokens) return mockScheduleRepository.getShifts();
         const result = await readThrough(
-          `cache:${tokens.memberId ?? 'anon'}:shifts`,
+          tokens.memberId ? memberCacheKey.read(tokens.memberId, 'shifts') : null,
           'the shift list',
           async () => {
             const response = await apiRequest('personnel/shifts', tokens, { apiBaseUrl });

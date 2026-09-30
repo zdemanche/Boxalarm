@@ -2,6 +2,7 @@ import { useMemo, useRef } from 'react';
 import Config from 'react-native-config';
 import { useOptionalAuth } from '../../auth/AuthContext';
 import { apiRequest } from '../../lib/apiClient';
+import { memberCacheKey } from '../../sync/memberCache';
 import { readThrough } from '../../sync/readThrough';
 import * as syncManager from '../../sync/syncManager';
 import { mockChecksRepository } from './mockChecksRepository';
@@ -56,7 +57,10 @@ export function useChecksRepository(): ChecksRepositoryWithFallbackFlag {
     let lastApparatusCachedAt: number | null = null;
     // Cache keys carry the member, so a phone handed to another member never shows the previous
     // member's cached data as theirs.
-    const cacheKey = (suffix: string) => `cache:${authRef.current?.memberId ?? 'anon'}:${suffix}`;
+    const cacheKey = (suffix: string) => {
+      const memberId = authRef.current?.memberId;
+      return memberId ? memberCacheKey.read(memberId, suffix) : null;
+    };
 
     return {
       ...mockChecksRepository,

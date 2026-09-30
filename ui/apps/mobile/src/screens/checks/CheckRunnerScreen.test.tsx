@@ -10,6 +10,12 @@ const mockLaunchCamera = launchCamera as jest.Mock;
 
 const mockRoute = { params: { apparatusId: 'APP-ENGINE-2' } };
 const mockNavigate = jest.fn();
+// A signed-in member id is what scopes the on-phone check journal (review m8). Not authenticated,
+// so useChecksRepository still serves the mock repository.
+jest.mock('../../auth/AuthContext', () => ({
+  useOptionalAuth: () => ({ memberId: 'm-test', isAuthenticated: false }),
+}));
+
 jest.mock('@react-navigation/native', () => ({
   useRoute: () => mockRoute,
   useNavigation: () => ({ goBack: jest.fn(), navigate: mockNavigate }),
@@ -32,7 +38,7 @@ beforeEach(async () => {
   mockNavigate.mockClear();
   // The on-device journal persists across renders by design; start each test with no check in
   // progress.
-  await kvDelete('check-draft:anon:APP-ENGINE-2');
+  await kvDelete('check-draft:m-test:APP-ENGINE-2');
 });
 
 test('lists every item from the apparatus\u2019s checklist template', async () => {

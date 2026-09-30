@@ -17,11 +17,11 @@ afterEach(() => {
 });
 afterAll(() => server.close());
 
-function makeManager(): UserManager {
+function makeManager(sub: string | undefined = 'member-7'): UserManager {
   const user = {
     access_token: 'access-token',
     expired: false,
-    profile: { sub: 'member-7', 'cognito:groups': ['MEMBER'] },
+    profile: { sub, 'cognito:groups': ['MEMBER'] },
   } as unknown as User;
   return {
     getUser: vi.fn(async () => user),
@@ -36,11 +36,11 @@ function makeManager(): UserManager {
   } as unknown as UserManager;
 }
 
-function renderPage() {
+function renderPage(sub?: string) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={client}>
-      <AuthProvider userManager={makeManager()}>
+      <AuthProvider userManager={makeManager(sub)}>
         <MemoryRouter>
           <AvailabilityPage />
         </MemoryRouter>
@@ -123,4 +123,19 @@ test('tonight ends at the next 06:00', () => {
   expect(nextSixAm(new Date(2026, 8, 29, 23, 0)).getTime()).toBe(
     new Date(2026, 8, 30, 6, 0).getTime(),
   );
+});
+
+test('with no member id on the session it asks to sign in again and sends nothing', async () => {
+  const posted = vi.fn();
+  server.use(
+    http.post('/api/v1/personnel/members/:memberId/availability', () => {
+      posted();
+      return HttpResponse.json({}, { status: 201 });
+    }),
+  );
+  renderPage('');
+
+  expect((await screen.findByRole('alert')).textContent).toMatch(/Sign out and sign back in/);
+  expect(screen.queryByRole('button', { name: 'Mark unavailable' })).toBeNull();
+  expect(posted).not.toHaveBeenCalled();
 });

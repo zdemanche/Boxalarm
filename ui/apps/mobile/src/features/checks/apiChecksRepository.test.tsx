@@ -121,3 +121,17 @@ test('a 403 from the API surfaces as an error instead of silently falling back t
 
   await expect(result.current.getApparatus()).rejects.toBe(forbidden);
 });
+
+test('with no member id on the session nothing is cached, so nothing can be served to another member', async () => {
+  mockUseOptionalAuth.mockReturnValue({ ...mockAuthValue, memberId: null });
+  mockApiRequest.mockResolvedValueOnce({
+    json: async () => ({
+      apparatus: [{ apparatusId: 'a', unitId: 'E1', type: 'E', status: 'IN_SERVICE' }],
+    }),
+  });
+  const { result } = await renderHook(() => useChecksRepository());
+  await result.current.getApparatus();
+
+  mockApiRequest.mockRejectedValueOnce(new TypeError('Failed to fetch'));
+  await expect(result.current.getApparatus()).rejects.toBeInstanceOf(NoCachedDataError);
+});
