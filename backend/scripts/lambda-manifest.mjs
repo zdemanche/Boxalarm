@@ -681,6 +681,12 @@ export const LAMBDA_ENTRIES = [
     entry: 'src/services/alerting-service/cadIngress/sourceCopyHandler.ts',
   },
   {
+    // POST /api/v1/alerting/ingress/cad-webhook - signed JSON CAD webhook (own API, no Cognito).
+    service: 'alerting-service',
+    function: 'cad-webhook',
+    entry: 'src/services/alerting-service/cadIngress/webhookHandler.ts',
+  },
+  {
     service: 'personnel-service',
     function: 'shift-completion',
     entry: 'src/services/personnel-service/shifts/completionHandler.ts',
