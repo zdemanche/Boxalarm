@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
+import { REQUIRED_CONFIG } from "../components/shared/stack-config";
 
 const repoRoot = join(__dirname, "..");
 const environments = ["dev", "qa", "staging", "prod"] as const;
@@ -33,6 +34,20 @@ describe.each(environments)("Pulumi.%s.yaml", (env) => {
 
   it("pins a U.S. AWS region", () => {
     expect(stack.config["aws:region"]).toMatch(/^us-(east|west)-\d$/);
+  });
+
+  it("commits no secret-valued key (secrets are set with --secret, never in the file)", () => {
+    for (const key of Object.keys(stack.config)) {
+      expect(key).not.toMatch(/Secret$|canaryMemberId/);
+    }
+  });
+
+  it("documents every required key it does not set, with its set command", () => {
+    const text = readFileSync(join(repoRoot, `Pulumi.${env}.yaml`), "utf8");
+    for (const k of REQUIRED_CONFIG) {
+      if (stack.config[`boxalarm-infra:${k.key}`] !== undefined) continue;
+      expect(text, k.key).toContain(`pulumi config set ${k.secret ? "--secret " : ""}${k.key} `);
+    }
   });
 
   it("declares an https webOrigin for Cognito callback/logout URLs", () => {

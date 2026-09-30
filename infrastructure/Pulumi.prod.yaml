@@ -1,3 +1,14 @@
+# Required before the first preview (validated all at once by components/shared/stack-config.ts;
+# full runbook: docs/runbooks/first-deploy.md). Never commit a secret value here.
+#   pulumi config set nerisSchemaSourceUrl https://<schema-pipeline-host>/neris/schema.json --stack prod
+#   pulumi config set notificationSesFromAddress notifications@<ses-verified-domain> --stack prod
+#   pulumi config set --secret smsWebhookSecret "$(openssl rand -hex 32)" --stack prod
+#   pulumi config set --secret voiceWebhookSecret "$(openssl rand -hex 32)" --stack prod
+#   pulumi config set --secret pushWebhookSecret "$(openssl rand -hex 32)" --stack prod
+#   pulumi config set alertingPageEmail oncall@<dept-domain> --stack prod   # required in prod
+#   pulumi config set chiefNotificationEmail chief@<dept-domain> --stack prod   # required in prod
+# Only once canaryEnabled is true:
+#   pulumi config set --secret canaryMemberId <canary member id> --stack prod
 config:
   aws:region: us-east-1
   boxalarm-infra:env: prod

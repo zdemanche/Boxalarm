@@ -57,7 +57,11 @@ export class AlertingCanary extends pulumi.ComponentResource {
     // to the canary member on every channel, so a stack runs it only on purpose. While it is
     // off, its breaching-on-missing alarms must not page, so their actions are disabled too.
     const canaryEnabled = config.getBoolean("canaryEnabled") ?? false;
-    const canaryMemberId = config.requireSecret("canaryMemberId");
+    // Required only once the canary is on (deploy-readiness m4): a disabled canary is never
+    // scheduled, so a stack no longer needs a dummy member id to preview.
+    const canaryMemberId = canaryEnabled
+      ? config.requireSecret("canaryMemberId")
+      : (config.getSecret("canaryMemberId") ?? pulumi.secret(""));
     // Only when the canary member is a dedicated device (it is woken every tick) does the
     // canary really deliver on Android; otherwise FCM validate_only - credentials verified, not
     // delivered. iOS always delivers on the device's own APNs environment.

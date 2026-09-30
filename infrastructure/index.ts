@@ -80,9 +80,13 @@ import { EligibilityStaleness } from "./components/alerting/staleness";
 import { AlertingCanary } from "./components/alerting/canary";
 import { AlertingOutboxDrain } from "./components/alerting/outbox-drain";
 import { AlertRulesCopy } from "./components/alerting/alert-rules-copy";
+import { validateStackConfig } from "./components/shared/stack-config";
 
 export const stack = getStack();
 const config = new Config("boxalarm-infra");
+// Every missing required key in one error, before any component reads its own (C2). Reads
+// secrets only to test presence; no value is logged.
+validateStackConfig((key) => config.get(key), stack);
 export const env = config.require("env");
 export const webOrigin = config.require("webOrigin");
 // Single-tenant today (Nichols FD) — {deptId} is in every partition key so a second
