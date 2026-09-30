@@ -5,6 +5,7 @@ import { AccessibilityInfo, Alert, Text, TouchableOpacity, View } from 'react-na
 import { Button, Screen, useTheme, type SurfaceTheme } from '../../components/ui';
 import { retryPendingUnregister, useAuth, type SignOutResult } from '../../auth/AuthContext';
 import { useMeRepository } from '../../features/me/apiMeRepository';
+import { MarkOffList } from '../../features/schedule/MarkOffList';
 import type { LosapTotal, MemberProfile, Qualification } from '../../features/me/types';
 import * as syncManager from '../../sync/syncManager';
 
@@ -198,6 +199,7 @@ export function MeHomeScreen() {
           onPress={() => navigation.navigate('Availability' as never)}
         />
       </View>
+      <MarkOffList />
       <NavRow
         label="Edit profile"
         theme={theme}

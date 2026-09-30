@@ -173,7 +173,7 @@ test('a mark-off the server refused reads "Not marked unavailable", never "in ef
 
   expect(await findByText('Not marked unavailable')).toBeTruthy();
   expect(queryByText(/^Marked unavailable until/)).toBeNull();
-  expect(await findByText(/ask an officer to clear it/)).toBeTruthy();
+  expect(await findByText(/I'm available again/)).toBeTruthy();
   submitSpy.mockRestore();
   subscribeSpy.mockRestore();
 });

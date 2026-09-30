@@ -5,7 +5,7 @@ import { apiRequest, ApiError } from '../../lib/apiClient';
 import { useOptionalConnectivity } from '../../sync/ConnectivityContext';
 import { useScheduleRepository } from './apiScheduleRepository';
 import { mockScheduleRepository } from './mockScheduleRepository';
-import { ClaimNeedsConnectionError } from './types';
+import { ClaimNeedsConnectionError, MarkOffNeedsConnectionError } from './types';
 import { NoCachedDataError } from '../../sync/readThrough';
 
 // Mock factories are fully self-contained (no closures over outer consts), matching
@@ -175,4 +175,52 @@ test('claimPosition refuses while offline instead of returning a made-up result'
     ClaimNeedsConnectionError,
   );
   expect(mockApiRequest).not.toHaveBeenCalled();
+});
+
+describe('mark-offs: list and end early (server contract pending on fix/post-merge-server)', () => {
+  test('lists current and upcoming mark-offs from GET .../availability, soonest first', async () => {
+    const now = Math.floor(Date.now() / 1000);
+    mockApiRequest.mockResolvedValue({
+      json: async () => ({
+        markOffs: [
+          { startAt: now + 86400, endAt: now + 90000 },
+          { markoffId: 'm-1', startAt: now - 60, endAt: now + 3600, reason: 'Work' },
+          { markoffId: 'old', startAt: now - 7200, endAt: now - 3600 },
+        ],
+      }),
+    });
+    const { result } = await renderHook(() => useScheduleRepository());
+
+    const markOffs = await result.current.listMarkOffs!();
+
+    expect(mockApiRequest).toHaveBeenCalledWith(
+      'personnel/members/MBR-0012/availability',
+      mockAuthValue,
+      { apiBaseUrl: 'https://api.example.com' },
+    );
+    expect(markOffs).toEqual([
+      { markoffId: 'm-1', startAt: now - 60, endAt: now + 3600, reason: 'Work' },
+      { markoffId: String(now + 86400), startAt: now + 86400, endAt: now + 90000 },
+    ]);
+  });
+
+  test('ending one POSTs .../availability/{id}/end; offline it throws instead of queueing', async () => {
+    mockApiRequest.mockResolvedValue({ json: async () => ({}) });
+    const { result, rerender } = await renderHook(() => useScheduleRepository());
+
+    await result.current.endMarkOff!('m 1');
+    expect(mockApiRequest).toHaveBeenCalledWith(
+      'personnel/members/MBR-0012/availability/m%201/end',
+      mockAuthValue,
+      { apiBaseUrl: 'https://api.example.com', method: 'POST' },
+    );
+
+    mockApiRequest.mockClear();
+    mockUseOptionalConnectivity.mockReturnValue({ isOnline: false });
+    await rerender({});
+    await expect(result.current.endMarkOff!('m-1')).rejects.toBeInstanceOf(
+      MarkOffNeedsConnectionError,
+    );
+    expect(mockApiRequest).not.toHaveBeenCalled();
+  });
 });

@@ -45,6 +45,32 @@ export interface MarkUnavailableResult {
   readonly earlierMayStand?: number;
 }
 
+/**
+ * One of the member's current or upcoming mark-offs (GET personnel/members/{id}/availability).
+ * Times are epoch seconds, as the server stores MARKOFF#{startAt}.
+ */
+export interface MarkOff {
+  /** The server's id for it; the start time as a string when the server sends none. */
+  readonly markoffId: string;
+  readonly startAt: number;
+  readonly endAt: number;
+  readonly reason?: string;
+}
+
+/**
+ * Ending a mark-off early changes whether the member is paged right now, so it is never queued:
+ * a queued "I'm available again" that lands later would leave them unpaged in between while the
+ * app said otherwise.
+ */
+export class MarkOffNeedsConnectionError extends Error {
+  constructor() {
+    super(
+      "You're offline. Ending a mark-off needs signal - you're still marked unavailable. Try again with signal, or tell an officer.",
+    );
+    this.name = 'MarkOffNeedsConnectionError';
+  }
+}
+
 /** No member id on the session: nothing is queued or cached under a shared/blank key. */
 export class NotSignedInError extends Error {
   constructor() {
@@ -71,6 +97,10 @@ export interface ScheduleRepository {
    * design.md §4.2) and resolves once it is saved on this phone - not once the server has it.
    * The returned outboxId lets the screen show honest delivery state; null from the mock. */
   markUnavailable(startAt: string, endAt: string, reason?: string): Promise<MarkUnavailableResult>;
+  /** The member's current and upcoming mark-offs, soonest first. Online only. */
+  listMarkOffs?(): Promise<MarkOff[]>;
+  /** Ends a mark-off now ("I'm available again"). Online only; throws when offline. */
+  endMarkOff?(markoffId: string): Promise<void>;
   // F2.11: give-back and swap. Optional so the original two-method mock (still exercised by
   // ShiftBoardScreen/AvailabilityScreen tests) needs no change to keep satisfying this interface.
   releasePosition?(shiftId: string, positionCode: string): Promise<void>;
