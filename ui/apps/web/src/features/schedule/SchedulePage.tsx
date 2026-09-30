@@ -21,6 +21,7 @@ import {
   listPendingShiftSwaps,
   listShifts,
 } from './api';
+import { formatShiftWindow } from './format';
 import { SHIFT_STATUS_LABEL, type CoverageStatus, type CreateShiftPosition } from './types';
 
 const COVERAGE_STATUS: Record<CoverageStatus, StatusRole> = {
@@ -40,19 +41,6 @@ const COVERAGE_WORD: Record<CoverageStatus, string> = {
 // seconds made every web-created shift read as 1970 — never in coverage, never completable.
 function toEpochMillis(localDateTime: string): number {
   return new Date(localDateTime).getTime();
-}
-
-/** "Wed, Oct 1, 18:00 – 06:00": the window a volunteer plans around, without seconds. */
-export function formatShiftWindow(startAt: number, endAt: number): string {
-  const start = new Date(startAt).toLocaleString(undefined, {
-    weekday: 'short',
-    month: 'short',
-    day: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-  });
-  const end = new Date(endAt).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
-  return `${start} – ${end}`;
 }
 
 const emptyPosition: CreateShiftPosition = { positionCode: '', requiredQual: '' };

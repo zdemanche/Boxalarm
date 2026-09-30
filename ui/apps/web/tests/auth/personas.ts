@@ -6,7 +6,7 @@ import type { Role } from '../../src/auth/roles';
  * `routesForRoles()`, or a wrong route table would make the E2E pass vacuously.
  */
 export const PERSONAS: Record<Role, { groups: Role[]; expectedNavLabels: readonly string[] }> = {
-  MEMBER: { groups: ['MEMBER'], expectedNavLabels: [] },
+  MEMBER: { groups: ['MEMBER'], expectedNavLabels: ['Dashboard'] },
   OFFICER: {
     groups: ['OFFICER'],
     expectedNavLabels: [
@@ -21,15 +21,16 @@ export const PERSONAS: Record<Role, { groups: Role[]; expectedNavLabels: readonl
   },
   TRAINING: {
     groups: ['TRAINING'],
-    expectedNavLabels: ['Members', 'Certifications', 'Training events', 'Reporting'],
+    expectedNavLabels: ['Dashboard', 'Members', 'Certifications', 'Training events', 'Reporting'],
   },
   APPARATUS: {
     groups: ['APPARATUS'],
-    expectedNavLabels: ['Apparatus'],
+    expectedNavLabels: ['Dashboard', 'Apparatus'],
   },
   ADMIN: {
     groups: ['ADMIN'],
     expectedNavLabels: [
+      'Dashboard',
       'Alert diagnostics',
       'Members',
       'Certifications',

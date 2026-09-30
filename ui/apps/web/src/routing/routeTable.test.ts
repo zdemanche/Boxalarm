@@ -27,16 +27,16 @@ describe('routeTable', () => {
     const chief = navSectionsForRoles(['CHIEF']).map((s) => s.group);
     expect(chief).toEqual(['Overview', 'Response', 'People', 'Apparatus', 'Prevention', 'Admin']);
     const apparatusOfficer = navSectionsForRoles(['APPARATUS']);
-    expect(apparatusOfficer.map((s) => s.group)).toEqual(['People', 'Apparatus']);
-    expect(apparatusOfficer[1]?.routes.map((r) => r.label)).toEqual(['Apparatus', 'Inventory']);
+    expect(apparatusOfficer.map((s) => s.group)).toEqual(['Overview', 'People', 'Apparatus']);
+    expect(apparatusOfficer[2]?.routes.map((r) => r.label)).toEqual(['Apparatus', 'Inventory']);
   });
 
-  test('ADMIN nav includes settings and audit-log; excludes dashboard', () => {
+  test('ADMIN nav includes settings, audit-log and a dashboard to land on', () => {
     const labels = routesForRoles(['ADMIN']).map((r) => r.label);
     expect(labels).toContain('Settings');
     expect(labels).toContain('Audit log');
     expect(labels).toContain('Members');
-    expect(labels).not.toContain('Dashboard');
+    expect(labels).toContain('Dashboard');
     expect(labels).not.toContain('Live roster');
   });
 
@@ -46,7 +46,7 @@ describe('routeTable', () => {
   });
 
   test('MEMBER nav is their own self-service: availability, nothing department-wide', () => {
-    expect(routesForRoles(['MEMBER']).map((r) => r.navPath)).toEqual(['/availability']);
+    expect(routesForRoles(['MEMBER']).map((r) => r.navPath)).toEqual(['/', '/availability']);
   });
 
   test('every role can mark themselves unavailable', () => {

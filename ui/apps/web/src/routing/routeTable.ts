@@ -34,7 +34,9 @@ export const APP_ROUTES: readonly AppRoute[] = [
     path: '/',
     navPath: '/',
     label: 'Dashboard',
-    roles: ['CHIEF', 'OFFICER'],
+    // Every role has a home: members get their own summary, managing roles a dashboard gated
+    // tile by tile on what they can read.
+    roles: ['MEMBER', 'OFFICER', 'TRAINING', 'APPARATUS', 'ADMIN', 'CHIEF'],
     group: 'Overview',
     showInNav: true,
   },

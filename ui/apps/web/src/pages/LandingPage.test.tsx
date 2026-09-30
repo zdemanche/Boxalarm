@@ -83,14 +83,59 @@ test('renders the highest-priority role dashboard when CHIEF is present', async 
   await screen.findByRole('heading', { name: 'Chief dashboard' });
 });
 
-test('falls back to member home when no groups are present', async () => {
+test('falls back to the member summary when no groups are present', async () => {
   renderLanding({ sub: 'm1' });
-  await screen.findByRole('heading', { name: 'Member home' });
+  await screen.findByRole('heading', { name: 'My summary' });
+});
+
+test('a member home is a real summary: availability, shifts, certs, points, out of service', async () => {
+  server.use(
+    http.get('/api/v1/training/members/m1/certifications', () =>
+      HttpResponse.json([
+        {
+          certId: 'c-1',
+          memberId: 'm1',
+          certType: 'FF1',
+          issueDate: '2020-01-01',
+          expiryDate: '2099-01-01',
+          issuingAuthority: 'CT',
+          attachmentS3Key: null,
+          status: 'CURRENT',
+        },
+      ]),
+    ),
+    http.get('/api/v1/personnel/members/m1/losap', () =>
+      HttpResponse.json({ memberId: 'm1', year: 2026, totalPoints: 42 }),
+    ),
+    http.get('/api/v1/apparatus', () =>
+      HttpResponse.json({
+        apparatus: [
+          {
+            apparatusId: 'a-2',
+            unitId: 'E2',
+            type: 'Engine',
+            status: 'OUT_OF_SERVICE',
+            outOfService: { reason: 'Pump seal', startAt: 1, elapsedSeconds: 1 },
+          },
+        ],
+      }),
+    ),
+  );
+  renderLanding({ sub: 'm1', 'cognito:groups': ['MEMBER'] });
+
+  await screen.findByRole('heading', { name: 'My summary' });
+  expect(screen.getByRole('link', { name: 'Mark unavailable' }).getAttribute('href')).toBe(
+    '/availability',
+  );
+  expect(await screen.findByText('FF1')).toBeTruthy();
+  expect(await screen.findByText('42')).toBeTruthy();
+  expect(await screen.findByText(/Pump seal/)).toBeTruthy();
+  expect(screen.getByText(/No shifts scheduled this week/)).toBeTruthy();
 });
 
 test('the heading uses the design-token type scale, matching the sign-in page', async () => {
   renderLanding({ sub: 'm1' });
-  const heading = await screen.findByRole('heading', { name: 'Member home' });
+  const heading = await screen.findByRole('heading', { name: 'My summary' });
   expect(heading.style.fontSize).toBe(`${typography.size.xl}px`);
 });
 

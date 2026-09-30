@@ -5,6 +5,7 @@ import { activeNavPathFor, navSectionsForRoles } from '../routing/routeTable';
 import {
   Building2,
   CalendarClock,
+  CalendarX,
   ClipboardCheck,
   ClipboardList,
   Droplets,
@@ -28,6 +29,7 @@ import styles from './AppShell.module.css';
 // First match wins, so the specific /inspections/* entries sit above /inspections.
 const ICON_BY_PREFIX: Array<[string, LucideIcon]> = [
   ['/alerts', RadioTower],
+  ['/availability', CalendarX],
   ['/inspections/occupancies', Building2],
   ['/inspections/hydrants', Droplets],
   ['/inspections/map', MapIcon],

@@ -122,17 +122,7 @@ for (const role of Object.keys(PERSONAS) as Role[]) {
       await page.getByRole('button', { name: 'Sign in' }).click();
 
       if (role === 'MEMBER') {
-        await expect(page.getByRole('heading', { name: 'Member home' })).toBeVisible();
-        await openNavIfCollapsed(page);
-        await expect(page.getByRole('navigation', { name: 'Primary' })).toBeVisible();
-        for (const label of ALL_NAV_LABELS) {
-          await expect(
-            page
-              .getByRole('navigation', { name: 'Primary' })
-              .getByRole('link', { name: label, exact: true }),
-          ).toHaveCount(0);
-        }
-        return;
+        await expect(page.getByRole('heading', { name: 'My summary' })).toBeVisible();
       }
 
       await openNavIfCollapsed(page);

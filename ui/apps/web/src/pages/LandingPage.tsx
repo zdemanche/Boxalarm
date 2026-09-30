@@ -15,8 +15,10 @@ import { NerisComplianceTile } from '../features/reporting/NerisComplianceTile';
 import { listExpiringCertifications } from '../features/training/api';
 import type { ExpiringCertification } from '../features/training/types';
 import { ApiError } from '../lib/apiClient';
+import { useStations } from '../lib/useStations';
 import { ApiForbiddenGate } from '../components/ApiForbiddenGate';
 import { Button, Card, Skeleton, Stat } from '../components/ui';
+import { MemberHome } from './MemberHome';
 import styles from './LandingPage.module.css';
 
 const ROLE_LABEL: Record<Role, string> = {
@@ -25,12 +27,14 @@ const ROLE_LABEL: Record<Role, string> = {
   OFFICER: 'Officer dashboard',
   TRAINING: 'Training dashboard',
   APPARATUS: 'Apparatus dashboard',
-  MEMBER: 'Member home',
+  MEMBER: 'My summary',
 };
 
-// Command-console dashboards are shown for roles that manage the department; a plain member's
-// home stays a simple summary (docs/design.md §4.4 — member read-only scope).
-const DASHBOARD_ROLES: readonly Role[] = ['CHIEF', 'ADMIN', 'OFFICER', 'APPARATUS'];
+// Command-console dashboards are shown for roles that manage the department; a plain member gets
+// their own summary (docs/design.md O-02 no-permission row: a reduced dashboard, not a denial).
+// Every role lands here - ADMIN used to be bounced to an empty Alert diagnostics form, and
+// TRAINING/APPARATUS to a bare list.
+const DASHBOARD_ROLES: readonly Role[] = ['CHIEF', 'ADMIN', 'OFFICER', 'TRAINING', 'APPARATUS'];
 
 // GET training/certifications/expiring is ViewExpiringCertifications, an OFFICER_TIER_ACTIONS
 // action (infrastructure/components/authz/cedar-policies.ts OFFICER_TIER_GROUPS). A role outside
@@ -188,6 +192,7 @@ const SHIFT_STATUS_WORD: Record<string, string> = {
 
 function TodaysShifts() {
   const auth = useAuth();
+  const { nameFor } = useStations();
   const query = useQuery({ queryKey: ['schedule', 'shifts'], queryFn: () => listShifts(auth) });
 
   let body: React.ReactNode;
@@ -204,7 +209,7 @@ function TodaysShifts() {
         <ul className={styles.list}>
           {today.map((shift) => (
             <li key={shift.shiftId} className={styles.listItem}>
-              <strong>{shift.stationId}</strong> {formatTime(shift.startAt)}–
+              <strong>{nameFor(shift.stationId)}</strong> {formatTime(shift.startAt)}–
               {formatTime(shift.endAt)}
               <span className={styles.meta}>
                 {' · '}
@@ -410,7 +415,7 @@ export function LandingPage() {
   return (
     <main id="main-content" style={{ padding: spacing.lg }}>
       <h1 style={{ fontSize: typography.size.xl, margin: 0 }}>{ROLE_LABEL[role]}</h1>
-      {DASHBOARD_ROLES.includes(role) ? <CommandConsole /> : null}
+      {DASHBOARD_ROLES.includes(role) ? <CommandConsole /> : <MemberHome />}
     </main>
   );
 }
