@@ -162,7 +162,7 @@ async function processRecord(record: SESEventRecord, config: MailConfig): Promis
 
   // 6. Replay: early read-only answer; the marker is written inside the dispatch transaction
   // (step 7), so a failed write can never leave it behind to swallow the retry (chain M3).
-  const replayKey = emailReplayToken(email);
+  const replayKey = emailReplayToken(email, nowSeconds);
   const replayRef = {
     deptId: target.deptId,
     sourceId: source.sourceId,

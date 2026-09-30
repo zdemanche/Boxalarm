@@ -17,7 +17,7 @@ Both write the same `DISPATCH_ALERT` the manual route writes (`sourceSystem: CAD
 | What ingress reads | alerting table `DEPT#<deptId>#CAD_INGRESS` / `METADATA` (`CAD_INGRESS_COPY`) | `boxalarm-<env>-alerting-cad-source-copy-consumer`, from `platform.config.updated` |
 | Webhook HMAC keys `{current, previous}` | Secrets Manager `boxalarm-<env>-cad-webhook/<deptId>/<sourceId>` | `boxalarm-<env>-platform-cad-sources-rotate-key` only |
 | Raw inbound mail | `s3://boxalarm-<env>-cad-mail-<account>/inbound/<SES message id>` (SSE-KMS, expires after 30 days) | SES |
-| Replay markers | alerting table `DEPT#<deptId>#CAD_REPLAY#<sourceId>#<token>` (TTL 15 min webhook, 24 h email) | the ingress Lambdas |
+| Replay markers | alerting table `DEPT#<deptId>#CAD_REPLAY#<sourceId>#<token>` (TTL 15 min webhook; email 24 h with a signed Message-ID, otherwise until the message would fail freshness + 5 min: about 65 min with a signed Date, 15 min with only DKIM `t=`) | the ingress Lambdas |
 
 A saved change reaches ingress in seconds. If `…-alerting-cad-source-copy-dlq-not-empty` fires, ingress is still using the previous sources: read the consumer's logs, fix, redrive the DLQ.
 

@@ -46,13 +46,15 @@ function rawEmail(
     signedHeaders?: string;
     /** The To header value (default: this department's ingress address). */
     to?: string;
+    /** Omit the DKIM t= tag (the signer sets no signing time). */
+    noSigningTime?: boolean;
   } = {},
 ): string {
   const date = new Date((options.date ?? NOW) * 1000).toUTCString();
   const dkim = (options.dkimDomains ?? ['cad.county.gov'])
     .map(
       (domain, i) =>
-        `DKIM-Signature: v=1; a=rsa-sha256; d=${domain}; s=sel; t=${options.date ?? NOW}; h=${options.signedHeaders ?? 'from:to:subject:date:message-id'};\r\n\tb=SIG${i}${domain.replace(/\W/g, '')}abc/def+==`,
+        `DKIM-Signature: v=1; a=rsa-sha256; d=${domain}; s=sel;${options.noSigningTime ? '' : ` t=${options.date ?? NOW};`} h=${options.signedHeaders ?? 'from:to:subject:date:message-id'};\r\n\tb=SIG${i}${domain.replace(/\W/g, '')}abc/def+==`,
     )
     .join('\r\n');
   return [
@@ -351,6 +353,51 @@ describe('CAD email handler', () => {
       await run();
       expect(alerts()).toHaveLength(1);
       expect(metric('CadIngressReplayRejected')).toBe(true);
+    });
+  });
+
+  describe('the body-only replay hold covers the freshness window that applied (security review R3b-M1)', () => {
+    // No incident number: a text-identity dispatch, whose lock expires after 10 minutes, so
+    // only the replay marker stands between a resend and a second page.
+    const noIncident = 'ADDR: 123 MAIN ST, NICHOLS\r\nNATURE: STRUCTURE FIRE\r\n';
+
+    it('Date signed, Message-ID unsigned, no t=: the same email resent 30 minutes later is refused as a replay', async () => {
+      const genuine = {
+        signedHeaders: 'from:to:subject:date',
+        noSigningTime: true,
+        body: noIncident,
+      };
+      serve(rawEmail(genuine));
+      await run();
+      expect(alerts()).toHaveLength(1);
+      vi.setSystemTime((NOW + 30 * 60) * 1000);
+      await run();
+      expect(alerts()).toHaveLength(1);
+      expect(metric('CadIngressReplayRejected')).toBe(true);
+    });
+
+    it('the hold is the remaining freshness plus the margin: ~65 min with a signed Date, ~15 min with only t=', async () => {
+      const {
+        emailReplayToken,
+        EMAIL_DATE_FRESHNESS_SECONDS,
+        EMAIL_FRESHNESS_SECONDS,
+        EMAIL_REPLAY_MARGIN_SECONDS,
+      } = await import('./emailAuth.js');
+      const dateSigned = parseEmail(
+        rawEmail({ signedHeaders: 'from:to:date', noSigningTime: true }),
+      );
+      expect(emailReplayToken(dateSigned, NOW).ttlSeconds).toBe(
+        EMAIL_DATE_FRESHNESS_SECONDS + EMAIL_REPLAY_MARGIN_SECONDS,
+      );
+      const tOnly = parseEmail(rawEmail({ signedHeaders: 'from:to' }));
+      expect(emailReplayToken(tOnly, NOW).ttlSeconds).toBe(
+        EMAIL_FRESHNESS_SECONDS + EMAIL_REPLAY_MARGIN_SECONDS,
+      );
+      // A signed Date 40 minutes old stops passing freshness in 20: held 20 + margin.
+      const older = parseEmail(
+        rawEmail({ signedHeaders: 'from:to:date', noSigningTime: true, date: NOW - 40 * 60 }),
+      );
+      expect(emailReplayToken(older, NOW).ttlSeconds).toBe(20 * 60 + EMAIL_REPLAY_MARGIN_SECONDS);
     });
   });
 

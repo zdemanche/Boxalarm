@@ -127,13 +127,42 @@ export function checkEmailSender(
   return undefined;
 }
 
+/** How long a body-only replay key outlives the moment the message would go stale. */
+export const EMAIL_REPLAY_MARGIN_SECONDS = 5 * 60;
+
 /**
- * How long a body-only replay key is held: a little longer than the freshness a message
- * without a signed Date must meet (every t= within 10 minutes), so every replay that could
- * still pass freshness is refused, while two genuine messages with identical bodies an hour
- * apart are not mistaken for a replay.
+ * The last second at which checkEmailSender's freshness rule still accepts this message,
+ * computed from the SAME constants and the same "which times count" rule, so the replay hold
+ * cannot drift from the freshness window (security review R3b-M1):
+ *  - Date signed by every signature: Date + 60 min, and no later than any t= + 10 min;
+ *  - Date unsigned: the earliest t= + 10 min (every signature must carry a fresh t=).
+ * Undefined when no time bounds the message (it fails freshness anyway).
  */
-export const EMAIL_BODY_REPLAY_TTL_SECONDS = 15 * 60;
+export function emailFreshUntil(email: ParsedEmail): number | undefined {
+  const signatureBounds = email.dkimSignatures
+    .map((signature) => signature.timestamp)
+    .filter((t): t is number => t !== undefined)
+    .map((t) => t + EMAIL_FRESHNESS_SECONDS);
+  if (email.date !== undefined) {
+    return Math.min(email.date + EMAIL_DATE_FRESHNESS_SECONDS, ...signatureBounds);
+  }
+  if (email.dkimSignatures.length === 0 || signatureBounds.length !== email.dkimSignatures.length) {
+    return undefined;
+  }
+  return Math.min(...signatureBounds);
+}
+
+/**
+ * How long a body-only replay key is held: until the message could no longer pass freshness,
+ * plus a margin. That is about 65 minutes for a just-sent message with a signed Date, and about
+ * 15 minutes when only t= bounds it (security review R3b-M1: a flat 15 minutes let an
+ * unchanged genuine email with a signed Date re-page 15 to 60 minutes later). Short enough that
+ * two genuine messages with identical bodies well apart are not mistaken for a replay.
+ */
+export function emailBodyReplayTtlSeconds(email: ParsedEmail, nowSeconds: number): number {
+  const freshUntil = emailFreshUntil(email) ?? nowSeconds;
+  return Math.max(0, freshUntil - nowSeconds) + EMAIL_REPLAY_MARGIN_SECONDS;
+}
 
 /**
  * Replay key. With a SIGNED Message-ID: that id + a hash of the signed Subject and the body
@@ -142,7 +171,10 @@ export const EMAIL_BODY_REPLAY_TTL_SECONDS = 15 * 60;
  * their own, and each would change the key (security review R3-M1). SES's own messageId is
  * never used either (a re-sent copy gets a new one).
  */
-export function emailReplayToken(email: ParsedEmail): {
+export function emailReplayToken(
+  email: ParsedEmail,
+  nowSeconds: number,
+): {
   readonly token: string;
   readonly ttlSeconds: number;
 } {
@@ -158,6 +190,6 @@ export function emailReplayToken(email: ParsedEmail): {
   const body = createHash('sha256').update(email.text, 'utf8').digest('hex');
   return {
     token: createHash('sha256').update(`NOMSGID|${body}`, 'utf8').digest('hex'),
-    ttlSeconds: EMAIL_BODY_REPLAY_TTL_SECONDS,
+    ttlSeconds: emailBodyReplayTtlSeconds(email, nowSeconds),
   };
 }
