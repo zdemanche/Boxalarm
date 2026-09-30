@@ -53,6 +53,16 @@ export function canCreateApparatus(roles: readonly Role[]): boolean {
   return roles.includes('CHIEF') || roles.includes('ADMIN');
 }
 
+/**
+ * Member status changes (LOA/RETIRED end every session and stop all paging): CHIEF or ADMIN on
+ * the web. The API also admits OFFICER for ordinary members; the web leaves the most
+ * destructive control to the chief (OQ-24) - and only CHIEF/ADMIN may reinstate a RETIRED
+ * member or change a CHIEF/ADMIN's status.
+ */
+export function canChangeMemberStatus(roles: readonly Role[]): boolean {
+  return roles.includes('CHIEF') || roles.includes('ADMIN');
+}
+
 /** Equipment and PPE writes (Cedar INVENTORY_ADMIN_GROUPS). */
 export function canManageInventory(roles: readonly Role[]): boolean {
   return (['OFFICER', 'CHIEF', 'ADMIN'] as const).some((r) => roles.includes(r));

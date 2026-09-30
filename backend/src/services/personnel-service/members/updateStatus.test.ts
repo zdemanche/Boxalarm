@@ -91,15 +91,59 @@ describe('members/updateStatus handler (entrypoint test)', () => {
     );
   });
 
-  it('rejects an illegal transition out of the terminal RETIRED status with 409', async () => {
+  it('rejects RETIRED -> LOA with 409: a retired member is only ever reinstated to ACTIVE', async () => {
     getMemberMock.mockResolvedValueOnce({ memberId: 'm1', status: 'RETIRED' });
     const result = await handler(
-      buildEvent('m1', JSON.stringify({ status: 'ACTIVE' }), 'ADMIN'),
+      buildEvent('m1', JSON.stringify({ status: 'LOA' }), 'ADMIN'),
       {} as never,
       () => undefined,
     );
     expect(result).toMatchObject({ statusCode: 409 });
     expect(updateMemberStatusMock).not.toHaveBeenCalled();
+  });
+
+  // Post-merge MAJOR-2: a mis-set RETIRED had no way back.
+  it.each(['CHIEF', 'ADMIN'])('lets a %s reinstate a RETIRED member to ACTIVE', async (group) => {
+    getMemberMock.mockResolvedValueOnce({ memberId: 'm1', status: 'RETIRED', roles: ['MEMBER'] });
+    updateMemberStatusMock.mockResolvedValueOnce({ updatedAt: 1, eventId: 'evt-1' });
+    const result = await handler(
+      buildEvent('m1', JSON.stringify({ status: 'ACTIVE' }), group),
+      {} as never,
+      () => undefined,
+    );
+    expect(result).toMatchObject({ statusCode: 200 });
+    expect(updateMemberStatusMock).toHaveBeenCalledWith(
+      'boxalarm-dev-platform',
+      expect.objectContaining({ sub: 'actor-1' }),
+      'm1',
+      'RETIRED',
+      'ACTIVE',
+      'actor-1',
+    );
+  });
+
+  it('refuses an OFFICER reinstating a RETIRED member with 403', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    getMemberMock.mockResolvedValueOnce({ memberId: 'm1', status: 'RETIRED', roles: ['MEMBER'] });
+    const result = await handler(
+      buildEvent('m1', JSON.stringify({ status: 'ACTIVE' }), 'OFFICER'),
+      {} as never,
+      () => undefined,
+    );
+    expect(result).toMatchObject({ statusCode: 403 });
+    expect(updateMemberStatusMock).not.toHaveBeenCalled();
+    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('Reinstatement'));
+    errorSpy.mockRestore();
+  });
+
+  it('rejects PROBATIONARY with 400: it is set only at creation', async () => {
+    const result = await handler(
+      buildEvent('m1', JSON.stringify({ status: 'PROBATIONARY' }), 'ADMIN'),
+      {} as never,
+      () => undefined,
+    );
+    expect(result).toMatchObject({ statusCode: 400 });
+    expect(getMemberMock).not.toHaveBeenCalled();
   });
 
   it('rejects an absent status field with 400', async () => {

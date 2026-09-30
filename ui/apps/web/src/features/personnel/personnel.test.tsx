@@ -104,40 +104,109 @@ test('admin create form posts a member that appears as Probationary', async () =
   });
 });
 
-test('admin can change status on detail without full reload; non-admin has no control', async () => {
+function statusFixture(status: Member['status'] = 'ACTIVE'): {
+  member: Member;
+  puts: Member['status'][];
+} {
   const member: Member = {
     memberId: 'm1',
     firstName: 'Sam',
     lastName: 'Lee',
     email: 'sam@example.com',
     phone: '203-555-0199',
-    status: 'ACTIVE',
+    status,
     joinDate: '2020-01-01',
     rank: 'Lt',
     agencyId: 'NFD-1',
   };
-
+  const puts: Member['status'][] = [];
   server.use(
     http.get('/api/v1/personnel/members/m1', () => HttpResponse.json(member)),
     http.put('/api/v1/personnel/members/m1/status', async ({ request }) => {
       const body = (await request.json()) as { status: Member['status'] };
+      puts.push(body.status);
       member.status = body.status;
       return HttpResponse.json(member);
     }),
   );
+  return { member, puts };
+}
 
+// Post-merge MAJOR-2: choosing a status never saves by itself; a confirmation states the
+// consequence, and only its confirm button saves.
+test('choosing a status alone never saves; LOA is confirmed with its consequence, then applied', async () => {
+  const { puts } = statusFixture('ACTIVE');
   const user = userEvent.setup();
   renderPersonnel(['ADMIN'], '/personnel/m1');
   await screen.findByRole('heading', { name: 'Sam Lee' });
-  await user.selectOptions(screen.getByLabelText('Member status'), 'LOA');
-  await waitFor(() => {
-    expect((screen.getByLabelText('Member status') as HTMLSelectElement).value).toBe('LOA');
-  });
+
+  const select = screen.getByLabelText('New member status') as HTMLSelectElement;
+  select.focus();
+  await user.keyboard('{ArrowDown}{ArrowDown}');
+  await user.selectOptions(select, 'LOA');
+  expect(puts).toEqual([]);
+
+  await user.click(screen.getByRole('button', { name: 'Change status' }));
+  const dialog = await screen.findByRole('dialog');
+  expect(dialog.textContent).toContain('stops receiving all pages');
+  expect(dialog.textContent).toContain('signed out of every device until set back to Active');
+  expect(puts).toEqual([]);
+
+  await user.click(screen.getByRole('button', { name: 'Set leave of absence' }));
+  await waitFor(() => expect(puts).toEqual(['LOA']));
+  await screen.findByText('Sam Lee is now Leave of absence.');
+});
+
+test('cancelling the confirmation saves nothing', async () => {
+  const { puts } = statusFixture('ACTIVE');
+  const user = userEvent.setup();
+  renderPersonnel(['CHIEF'], '/personnel/m1');
+  await screen.findByRole('heading', { name: 'Sam Lee' });
+  await user.selectOptions(screen.getByLabelText('New member status'), 'RETIRED');
+  await user.click(screen.getByRole('button', { name: 'Change status' }));
+  const dialog = await screen.findByRole('dialog');
+  expect(dialog.textContent).toContain('permanent');
+  await user.click(screen.getByRole('button', { name: 'Cancel' }));
+  await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+  expect(puts).toEqual([]);
+});
+
+test('offers only the statuses the server accepts: never PROBATIONARY, and RETIRED only back to Active', async () => {
+  statusFixture('PROBATIONARY');
+  renderPersonnel(['ADMIN'], '/personnel/m1');
+  await screen.findByRole('heading', { name: 'Sam Lee' });
+  const options = () =>
+    Array.from((screen.getByLabelText('New member status') as HTMLSelectElement).options)
+      .map((option) => option.value)
+      .filter(Boolean);
+  expect(options()).toEqual(['ACTIVE', 'LOA', 'RETIRED']);
 
   cleanup();
+  statusFixture('RETIRED');
+  renderPersonnel(['ADMIN'], '/personnel/m1');
+  await screen.findByRole('heading', { name: 'Sam Lee' });
+  expect(options()).toEqual(['ACTIVE']);
+  expect(screen.getByRole('button', { name: 'Reinstate member' })).toBeTruthy();
+});
+
+test('a chief can reinstate a retired member after confirming', async () => {
+  const { puts } = statusFixture('RETIRED');
+  const user = userEvent.setup();
+  renderPersonnel(['CHIEF'], '/personnel/m1');
+  await screen.findByRole('heading', { name: 'Sam Lee' });
+  await user.selectOptions(screen.getByLabelText('New member status'), 'ACTIVE');
+  await user.click(screen.getByRole('button', { name: 'Reinstate member' }));
+  const dialog = await screen.findByRole('dialog');
+  expect(dialog.textContent).toContain('paged again');
+  await user.click(screen.getByRole('button', { name: 'Reinstate' }));
+  await waitFor(() => expect(puts).toEqual(['ACTIVE']));
+});
+
+test('an officer has no status control', async () => {
+  statusFixture('ACTIVE');
   renderPersonnel(['OFFICER'], '/personnel/m1');
   await screen.findByRole('heading', { name: 'Sam Lee' });
-  expect(screen.queryByLabelText('Member status')).toBeNull();
+  expect(screen.queryByLabelText('New member status')).toBeNull();
 });
 
 test('CHIEF can issue PPE, consistent with inspections write-access (MAJOR-3)', async () => {

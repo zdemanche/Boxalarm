@@ -26,6 +26,14 @@ export function requireAdminRole(ctx: VerifiedAccessToken): void {
  */
 const ROLE_MANAGER_GROUPS = new Set(['ADMIN', 'CHIEF']);
 
+/** Reinstating a RETIRED member is CHIEF/ADMIN only, like the protected-target rule below. */
+export function requireReinstatementAuthority(ctx: VerifiedAccessToken): void {
+  const groups = ctx['cognito:groups'].split(' ').filter((group) => group.length > 0);
+  if (!groups.some((group) => ROLE_MANAGER_GROUPS.has(group))) {
+    throw new ForbiddenError('only ADMIN or CHIEF may reinstate a RETIRED member');
+  }
+}
+
 export function requireRoleManager(ctx: VerifiedAccessToken): void {
   const groups = ctx['cognito:groups'].split(' ').filter((group) => group.length > 0);
   if (!groups.some((group) => ROLE_MANAGER_GROUPS.has(group))) {
