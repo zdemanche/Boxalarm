@@ -11,7 +11,8 @@
     { "path": "packages/outbox" },
     { "path": "packages/metrics" },
     { "path": "packages/logging" },
-    { "path": "packages/health" }
+    { "path": "packages/health" },
+    { "path": "packages/cad-parser" }
   ],
   "include": ["src", "test", "vitest.config.ts"]
 }

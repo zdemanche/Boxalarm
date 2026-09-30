@@ -39,6 +39,7 @@
     "@aws-sdk/s3-request-presigner": "3.1136.0",
     "@aws-sdk/util-dynamodb": "3.996.9",
     "@boxalarm/authz": "*",
+    "@boxalarm/cad-parser": "*",
     "@boxalarm/dept-scope": "*",
     "@boxalarm/health": "*",
     "@boxalarm/logging": "*",
