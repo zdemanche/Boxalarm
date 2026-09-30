@@ -8,6 +8,7 @@ import {
 import {
   isNavigationReady,
   navigateToAlertDetail,
+  navigationRef,
   onNavigationStateChange,
 } from '../../navigation/navigationRef';
 import { queueAlertResponse } from './alertResponses';
@@ -167,10 +168,62 @@ export function subscribePushNotificationRouting(): () => void {
 
   const unsubscribeIosTaps = Platform.OS === 'ios' ? subscribeIosAlertTaps() : () => {};
 
+  const ringingSubscription =
+    Platform.OS === 'android'
+      ? AppState.addEventListener('change', (status) => {
+          if (status === 'active') void routeToRingingPage();
+        })
+      : null;
+
   return () => {
     clearTimeout(grace);
     unsubscribeOpened();
     unsubscribeForeground();
     unsubscribeIosTaps();
+    ringingSubscription?.remove();
   };
+}
+
+// Notification ids already routed to by routeToRingingPage, so returning to the app does not
+// pull the member back to the same page again and again.
+const routedRingingPages = new Set<string>();
+
+/**
+ * Review m2-1 / round 3 K3-5 (Android): a full-screen page that reaches an app already running on
+ * another tab may raise no press event, leaving that tab over the keyguard. When the app becomes
+ * active while a page is still showing on the critical channel (ringing or capped - an answered
+ * page is replaced on the default channel), open the newest such call, once per notification.
+ */
+export async function routeToRingingPage(): Promise<void> {
+  if (Platform.OS !== 'android') return;
+  let shown: Awaited<ReturnType<typeof notifee.getDisplayedNotifications>>;
+  try {
+    shown = await notifee.getDisplayedNotifications();
+  } catch (error) {
+    console.warn('[push] reading the showing notifications failed', error);
+    return;
+  }
+  const ringing = shown
+    .filter((entry) => {
+      const id = entry.id ?? entry.notification?.id ?? '';
+      const channel = entry.notification?.android?.channelId ?? '';
+      return id.startsWith('dispatch:') && channel.startsWith('dispatch-critical');
+    })
+    .sort((a, b) => Number(b.date ?? 0) - Number(a.date ?? 0));
+  const newest = ringing[0];
+  const id = newest?.id ?? newest?.notification?.id;
+  if (!newest || !id || routedRingingPages.has(id)) return;
+  const payload = alertPayloadFromNotificationData(newest.notification?.data);
+  if (!payload) return;
+  routedRingingPages.add(id);
+  const current = navigationRef.isReady() ? navigationRef.getCurrentRoute() : undefined;
+  const onIt =
+    current?.name === 'AlertDetail' &&
+    (current.params as { dispatchId?: string } | undefined)?.dispatchId === payload.dispatchId;
+  if (!onIt) openAlert(payload);
+}
+
+/** Test seam. */
+export function resetRoutedRingingPagesForTest(): void {
+  routedRingingPages.clear();
 }

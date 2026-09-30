@@ -2,7 +2,12 @@ import { AppState, Platform, Settings } from 'react-native';
 import notifee, { EventType } from '@notifee/react-native';
 import * as messaging from '@react-native-firebase/messaging';
 import { navigateToAlertDetail } from '../../navigation/navigationRef';
-import { dispatchIdFromNotificationData, subscribePushNotificationRouting } from './pushRouting';
+import {
+  dispatchIdFromNotificationData,
+  resetRoutedRingingPagesForTest,
+  routeToRingingPage,
+  subscribePushNotificationRouting,
+} from './pushRouting';
 
 const getInitialNotification = messaging.getInitialNotification as jest.Mock;
 const onNotificationOpenedApp = messaging.onNotificationOpenedApp as jest.Mock;
@@ -341,5 +346,58 @@ describe('iOS taps on raw-APNs dispatch notifications (review round 2 N3)', () =
 
     expect(Settings.get).not.toHaveBeenCalled();
     expect(navigateToAlertDetail).not.toHaveBeenCalled();
+  });
+});
+
+describe('returning to the app while a page is ringing (m2-1 / K3-5)', () => {
+  const page = (dispatchId: string, date: number, channelId = 'dispatch-critical-v2-dnd') => ({
+    id: `dispatch:${dispatchId}`,
+    date: String(date),
+    notification: {
+      id: `dispatch:${dispatchId}`,
+      data: { dispatchId, incidentType: 'MVA', address: `${dispatchId} Main St`, receivedAt: '1' },
+      android: { channelId },
+    },
+  });
+
+  beforeEach(() => {
+    Platform.OS = 'android';
+    resetRoutedRingingPagesForTest();
+  });
+
+  test('opens the newest ringing call, once', async () => {
+    (notifee.getDisplayedNotifications as jest.Mock).mockResolvedValue([
+      page('OLDER', 1_000),
+      page('NEWEST', 2_000),
+    ]);
+
+    await routeToRingingPage();
+    await routeToRingingPage();
+
+    expect(navigateToAlertDetail).toHaveBeenCalledTimes(1);
+    expect(navigateToAlertDetail).toHaveBeenCalledWith(
+      'NEWEST',
+      expect.objectContaining({ address: 'NEWEST Main St' }),
+    );
+  });
+
+  test('an answered page (replaced on the default channel) does not pull the member back', async () => {
+    (notifee.getDisplayedNotifications as jest.Mock).mockResolvedValue([
+      page('ANSWERED', 3_000, 'notifications-default'),
+    ]);
+
+    await routeToRingingPage();
+
+    expect(navigateToAlertDetail).not.toHaveBeenCalled();
+  });
+
+  test('wired to the app becoming active on Android', async () => {
+    (notifee.getDisplayedNotifications as jest.Mock).mockResolvedValue([page('ACTIVE', 1)]);
+
+    subscribePushNotificationRouting();
+    appStateListener?.('active');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(navigateToAlertDetail).toHaveBeenCalledWith('ACTIVE', expect.anything());
   });
 });
