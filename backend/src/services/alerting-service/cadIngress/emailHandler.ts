@@ -88,6 +88,14 @@ async function processRecord(record: SESEventRecord, config: MailConfig): Promis
   const nowSeconds = Math.floor(Date.now() / 1000);
 
   const quarantine = (reason: EmailAuthFailure | 'UnknownRecipient' | 'TooLarge') => {
+    if (reason === 'UnknownRecipient') {
+      // Mail to an address no source owns is internet spam to the domain, not a CAD problem:
+      // counted on its own and never on the chief-facing auth/quarantine alarms, which it would
+      // otherwise hold permanently in ALARM (security review minor m5). Still kept in the bucket.
+      emitCadMetric('CadIngressUnknownRecipient', { Channel: CHANNEL });
+      logInfo('cadIngress.email.unknownRecipient', { sesMessageId });
+      return;
+    }
     // A stale genuine message (a slow relay) is not an authentication failure: counted apart
     // so on-call can tell a delayed relay from a forgery (chain review m3).
     emitCadMetric(reason === 'Stale' ? 'CadIngressStale' : 'CadIngressAuthFailed', {

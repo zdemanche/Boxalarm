@@ -370,10 +370,16 @@ describe('CAD email handler', () => {
     ['a wrong recipient token', `dispatch+nichols-fd.county.zzzzzzzzzzzz@${DOMAIN}`],
     ['another domain', 'dispatch+nichols-fd.county.k3j9x2m4p7q8@other.test'],
     ['an unknown source', `dispatch+nichols-fd.nope.k3j9x2m4p7q8@${DOMAIN}`],
-  ])('%s does not page', async (_name, recipient) => {
-    await run(sesEvent({}, [recipient]));
-    expectDropped('UnknownRecipient');
-  });
+  ])(
+    '%s does not page, and is counted apart from auth failures (spam)',
+    async (_name, recipient) => {
+      await run(sesEvent({}, [recipient]));
+      expect(alerts()).toHaveLength(0);
+      expect(metric('CadIngressUnknownRecipient')).toBe(true);
+      expect(metric('CadIngressAuthFailed')).toBe(false);
+      expect(metric('CadIngressQuarantined')).toBe(false);
+    },
+  );
 
   it('the same Message-ID + DKIM signature replayed does not page twice', async () => {
     await run();

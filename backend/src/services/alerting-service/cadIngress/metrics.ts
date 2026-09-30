@@ -11,6 +11,8 @@ export type CadMetric =
   | 'CadIngressAuthFailed'
   /** An authenticated-looking email too old to trust (Date > 60 min, DKIM t= > 10 min). */
   | 'CadIngressStale'
+  /** Mail to an address no source owns (spam to the domain): dropped, not alarmed. */
+  | 'CadIngressUnknownRecipient'
   /** A replayed webhook signature or email Message-ID/DKIM pair: dropped. */
   | 'CadIngressReplayRejected'
   /** A failed email kept in the mail bucket for review. */

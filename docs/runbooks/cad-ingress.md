@@ -47,7 +47,7 @@ Metrics are in `Boxalarm/alerting-cad-ingress`: `CadIngressAccepted`, `CadIngres
 
 | Reason | Usual cause | Fix |
 |---|---|---|
-| `UnknownSource` / `UnknownRecipient` | Wrong `X-Boxalarm-Source`, source disabled, webhook off, no key yet; wrong recipient address or token | Compare with Settings → CAD sources |
+| `UnknownSource` / `UnknownRecipient` (email: counted as `CadIngressUnknownRecipient`, not alarmed - it is mostly spam to the domain) | Wrong `X-Boxalarm-Source`, source disabled, webhook off, no key yet; wrong recipient address or token | Compare with Settings → CAD sources |
 | `StaleTimestamp` | CAD clock off by more than 5 minutes, or timestamp in milliseconds | NTP on the CAD host; send Unix **seconds** |
 | `BadSignature` | Wrong key, or the signature was computed over re-serialized JSON rather than the exact bytes sent | Sign the raw body bytes exactly as sent |
 | `NoActiveKey` | The secret has no key (created by hand, or emptied) | Rotate the key from the web app |
