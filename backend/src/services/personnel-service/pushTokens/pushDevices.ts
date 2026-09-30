@@ -101,12 +101,34 @@ export function withoutDevice(
   return current.filter((existing) => !isPush(existing) || !sameDevice(existing, deviceId));
 }
 
-export type PushDevicesWriteOutcome = 'written' | 'not_found';
+/** Removes every push device (device loss with no device identified). */
+export function withoutAllDevices(current: readonly ContactChannelEntry[]): ContactChannelEntry[] {
+  return current.filter((existing) => !isPush(existing));
+}
+
+export type PushDevicesWriteOutcome = 'written' | 'not_found' | 'unchanged';
+
+export interface WritePushDevicesOptions {
+  /** The outbox event's correlationId; defaults to the memberId. */
+  readonly correlationId?: string;
+  /**
+   * Who made the change when it is not the member's own device - e.g. platform-service device
+   * loss and the admin - carried on the event payload so it is not mistaken for the member's
+   * own push-token revoke.
+   */
+  readonly changedBy?: Readonly<Record<string, unknown>>;
+  /** Write nothing (and return 'unchanged') when the change leaves the device list as it is. */
+  readonly skipIfUnchanged?: boolean;
+}
 
 /**
  * Read, change, write the member's contact channels with the personnel.member.updated outbox
  * row in one transaction - guarded on the updatedAt that was read, so two devices registering
- * at once cannot drop each other's entry (the write that loses re-reads and retries).
+ * at once cannot drop each other's entry (the write that loses re-reads and retries). The event
+ * time is max(now, previous updatedAt + 1): strictly after every earlier write to the row, so
+ * the alerting projection (per-group clock) never discards it as stale - even two writes in one
+ * millisecond. The ONLY writer of a member's push devices: registration, sign-out and
+ * platform-service device loss all go through it.
  */
 export async function writePushDevices(
   client: DynamoDBDocumentClient,
@@ -114,6 +136,7 @@ export async function writePushDevices(
   deptId: VerifiedDeptId,
   memberId: string,
   change: (current: readonly ContactChannelEntry[]) => ContactChannelEntry[],
+  options: WritePushDevicesOptions = {},
 ): Promise<PushDevicesWriteOutcome> {
   const pk = buildDeptScopedPk(deptId, 'MEMBER', memberId);
   for (let attempt = 0; attempt < MAX_WRITE_ATTEMPTS; attempt += 1) {
@@ -125,6 +148,9 @@ export async function writePushDevices(
     }
     const current = (existing.Item.contactChannels as ContactChannelEntry[] | undefined) ?? [];
     const contactChannels = change(current);
+    if (options.skipIfUnchanged && JSON.stringify(contactChannels) === JSON.stringify(current)) {
+      return 'unchanged';
+    }
     const previousUpdatedAt = existing.Item.updatedAt as number | undefined;
     const now = Math.max(Date.now(), (previousUpdatedAt ?? 0) + 1);
     const eventId = randomUUID();
@@ -162,9 +188,14 @@ export async function writePushDevices(
                   eventTime: new Date(now).toISOString(),
                   eventType: 'personnel.member.updated',
                   source: 'personnel-service',
-                  correlationId: memberId,
+                  correlationId: options.correlationId ?? memberId,
                   schemaVersion: '1.0',
-                  payload: { memberId, deptId, contactChannels },
+                  payload: {
+                    memberId,
+                    deptId,
+                    contactChannels,
+                    ...(options.changedBy ? { changedBy: options.changedBy } : {}),
+                  },
                   sentAt: null,
                 },
               },
