@@ -301,6 +301,39 @@ test('a new email address is confirmed first and then shown', async () => {
   ).toBeTruthy();
 });
 
+test("test parse sends the draft's CAD time zone and names the zone that resolved the time", async () => {
+  let sent: unknown;
+  server.use(
+    http.get('/api/v1/platform/cad-sources', () => HttpResponse.json(STORED)),
+    http.post('/api/v1/platform/cad-sources/test-parse', async ({ request }) => {
+      sent = await request.json();
+      return HttpResponse.json({
+        status: 'PARSED',
+        fields: { address: '1 MAIN ST', dispatchTime: '01:10' },
+        dispatchTimeResolved: '2026-10-01T06:10:00.000Z',
+      });
+    }),
+  );
+  const user = userEvent.setup();
+  renderPage();
+  fireEvent.change(await screen.findByLabelText('CAD time zone'), {
+    target: { value: 'America/Chicago' },
+  });
+  fireEvent.change(screen.getByLabelText('Sample dispatch text'), {
+    target: { value: 'ADDR: 1 MAIN ST\nTIME: 01:10' },
+  });
+  await user.click(screen.getByRole('button', { name: 'Test parse' }));
+
+  expect(await screen.findByText(/in America\/Chicago/)).toBeTruthy();
+  expect(sent).toMatchObject({ timeZone: 'America/Chicago' });
+
+  // Changing the zone drops the stale preview - its resolved time no longer applies.
+  fireEvent.change(screen.getByLabelText('CAD time zone'), {
+    target: { value: 'America/Denver' },
+  });
+  await waitFor(() => expect(screen.queryByText(/Dispatch time read as/)).toBeNull());
+});
+
 test('test parse says when the dispatch time cannot be ordered by', async () => {
   server.use(
     http.get('/api/v1/platform/cad-sources', () => HttpResponse.json(STORED)),

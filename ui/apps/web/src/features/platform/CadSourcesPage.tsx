@@ -46,6 +46,9 @@ const FIELD_LABELS: Record<CadField, string> = {
   narrative: 'Narrative',
 };
 
+/** The handler's fallback zone (backend cadSources/handler.ts DEFAULT_CAD_TIME_ZONE). */
+const DEFAULT_CAD_TIME_ZONE = 'America/New_York';
+
 const RAW_REASONS: Record<string, string> = {
   NO_ADDRESS: 'the template did not find the address',
   NO_TEMPLATE: 'this source has no template',
@@ -570,18 +573,31 @@ function ParserEditor({
   const sampleId = useId();
   const [sample, setSample] = useState('');
   const [result, setResult] = useState<CadTestParseResult | null>(null);
+  /** The zone the shown result resolved times in, so a zone change can invalidate it. */
+  const [testedZone, setTestedZone] = useState<string | null>(null);
   const [testError, setTestError] = useState<unknown>(null);
+  const timeZone = draft.timeZone.trim();
   const test = useMutation({
-    mutationFn: () => testParseCad(auth, parserFields(draft), sample),
+    mutationFn: () => testParseCad(auth, parserFields(draft), sample, timeZone || undefined),
     onSuccess: (r) => {
       setTestError(null);
       setResult(r);
+      setTestedZone(timeZone || DEFAULT_CAD_TIME_ZONE);
     },
     onError: (error: unknown) => {
       setResult(null);
       setTestError(error);
     },
   });
+
+  // A changed CAD time zone silently keeping the old preview would read as "the setting does
+  // nothing" (the preview's resolved time is zone-dependent), so the stale result is dropped.
+  useEffect(() => {
+    if (result && testedZone !== null && (timeZone || DEFAULT_CAD_TIME_ZONE) !== testedZone) {
+      setResult(null);
+      setTestedZone(null);
+    }
+  }, [result, testedZone, timeZone]);
 
   function setRule(field: CadField, patch: Partial<RuleDraft>) {
     onChange({ rules: { ...draft.rules, [field]: { ...draft.rules[field], ...patch } } });
@@ -664,8 +680,8 @@ function ParserEditor({
         ) : null}
         {result?.dispatchTimeResolved ? (
           <p>
-            Dispatch time read as {new Date(result.dispatchTimeResolved).toLocaleString()} - CAD
-            updates to a call are ordered by it.
+            Dispatch time read as {new Date(result.dispatchTimeResolved).toLocaleString()} in{' '}
+            {testedZone ?? DEFAULT_CAD_TIME_ZONE} - CAD updates to a call are ordered by it.
           </p>
         ) : result?.dispatchTimeUnordered ? (
           <p>
