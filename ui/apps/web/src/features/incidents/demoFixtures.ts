@@ -186,6 +186,9 @@ const seededDispatches: Record<
   Pick<Incident, 'incidentType' | 'address' | 'narrative' | 'alarmAt' | 'dispatchAt'> & {
     units: Array<Pick<ResponseUnit, 'unitId' | 'unitType' | 'assignedPositions'>>;
     members: NonNullable<IncidentDetail['respondingMembers']>;
+    /** A RAW (fail-open) CAD dispatch: placeholder address, VERIFY marker, text excerpt. */
+    verifyRequired?: true;
+    textExcerpt?: string;
   }
 > = {
   'd-1': {
@@ -203,6 +206,20 @@ const seededDispatches: Record<
       { memberId: 'm-rivera', status: 'RESPONDING' },
       { memberId: 'm-chen', status: 'RESPONDING' },
     ],
+  },
+  // A RAW (fail-open) CAD dispatch, so the VERIFY marker and text excerpt show in demo mode.
+  'd-2': {
+    incidentType: 'CAD dispatch (unparsed)',
+    address: 'SEE DISPATCH TEXT',
+    narrative:
+      'INC 26-004210 TIME 14:02 FIRE ALARM SOUNDING 44 WHITE PLAINS RD CROSS HUNTINGTON TPKE',
+    alarmAt: nowSeconds - 1800,
+    dispatchAt: nowSeconds - 1770,
+    verifyRequired: true,
+    textExcerpt:
+      'INC 26-004210 TIME 14:02 FIRE ALARM SOUNDING 44 WHITE PLAINS RD CROSS HUNTINGTON TPKE',
+    units: [{ unitId: 'Engine 301', unitType: 'APPARATUS', assignedPositions: ['Officer'] }],
+    members: [{ memberId: 'm-rivera', status: 'RESPONDING' }],
   },
 };
 
@@ -355,6 +372,12 @@ export async function incidentsDemoRequest(
           address: seed.address ?? '',
           dispatchedAt: seed.dispatchAt ?? seed.alarmAt ?? nowSeconds,
           report: report ? { incidentId: report.incidentId, status: report.status } : null,
+          ...(seed.verifyRequired
+            ? {
+                verifyRequired: true,
+                ...(seed.textExcerpt ? { textExcerpt: seed.textExcerpt } : {}),
+              }
+            : {}),
         };
       })
       .sort((a, b) => b.dispatchedAt - a.dispatchedAt);

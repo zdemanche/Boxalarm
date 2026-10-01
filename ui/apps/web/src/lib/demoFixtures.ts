@@ -33,6 +33,7 @@ import type {
   RetentionConfig,
 } from '../features/platform/types';
 import { tryHandleLosapExtras } from '../features/losap/demoFixtures';
+import { tryHandleCadSourcesDemo } from '../features/platform/demoFixtures';
 import { tryHandleNotificationExtras } from '../features/notifications/demoFixtures';
 import { tryHandlePersonnelExtras } from '../features/personnel/demoFixtures';
 import { reportingDemoRequest } from '../features/reporting/demoFixtures';
@@ -358,6 +359,11 @@ export async function demoRequest(
       takesEffect:
         "The change applies when the member's app next refreshes its session, within one hour.",
     });
+  }
+
+  if (parts[0] === 'platform' && parts[1] === 'cad-sources') {
+    const cadResponse = tryHandleCadSourcesDemo(parts, method, body);
+    if (cadResponse) return cadResponse;
   }
 
   if (parts[0] === 'platform' && parts[1] === 'config' && parts.length === 3) {

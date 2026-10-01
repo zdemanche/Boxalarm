@@ -193,6 +193,21 @@ function ensureSeeded(dispatchId: string): void {
 const DEMO_ACTIVE_DISPATCH_ID = 'NICHOLS-DEMO-1';
 ensureSeeded(DEMO_ACTIVE_DISPATCH_ID);
 DISPATCHED_AT.set(DEMO_ACTIVE_DISPATCH_ID, Math.floor(Date.now() / 1000) - 12 * 60);
+// The CAD sent two later messages for the call, so the CAD-updates history shows in demo mode.
+DISPATCHES.get(DEMO_ACTIVE_DISPATCH_ID)!.updates = [
+  {
+    updateId: 'demo-update-1',
+    receivedAt: Math.floor(Date.now() / 1000) - 9 * 60,
+    summary: 'Units: Engine 301, Truck 304',
+    changes: [{ field: 'unitsRequested', from: 'Engine 301', to: 'Engine 301, Truck 304' }],
+  },
+  {
+    updateId: 'demo-update-2',
+    receivedAt: Math.floor(Date.now() / 1000) - 5 * 60,
+    summary: 'Occupants reported out of the building',
+    changes: [{ field: 'narrative', from: '', to: 'Occupants reported out of the building' }],
+  },
+];
 
 function json(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data), {
