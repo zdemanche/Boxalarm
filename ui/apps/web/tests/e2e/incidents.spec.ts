@@ -143,6 +143,26 @@ test('incident list and report pass axe on the default, error, and validated sta
       await route.fulfill({ json: nerisSchema });
       return;
     }
+    if (url.includes('/incidents/dispatches')) {
+      // The "Start a report" list the page loads alongside the search. Without this branch the
+      // catch-all's search-shaped body used to crash the page into the route error boundary.
+      await route.fulfill({
+        json: {
+          recentWindowHours: 72,
+          dispatches: [
+            {
+              dispatchId: 'D-2026-0007',
+              incidentType: 'STRUCTURE FIRE',
+              address: '12 Oak St',
+              dispatchedAt: Math.floor(Date.now() / 1000) - 1800,
+              report: null,
+            },
+          ],
+          nextCursor: null,
+        },
+      });
+      return;
+    }
     if (url.endsWith('/incidents/i-1/validate')) {
       // "What's blocking lock" runs when the report opens: answer it as the API does.
       await route.fulfill({ json: VALIDATION_REPORT });
@@ -159,6 +179,8 @@ test('incident list and report pass axe on the default, error, and validated sta
   await page.goto('/incidents');
   await expect(page.getByRole('heading', { name: 'Incidents', exact: true })).toBeVisible();
   await expect(page.getByRole('link', { name: '26-001841' })).toBeVisible();
+  // The recent-dispatches section rendered from its own endpoint's shape.
+  await expect(page.getByText('12 Oak St')).toBeVisible();
 
   const listResults = await new AxeBuilder({ page }).include('main').analyze();
   expect(listResults.violations).toEqual([]);

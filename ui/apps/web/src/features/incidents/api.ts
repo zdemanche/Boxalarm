@@ -58,7 +58,14 @@ export async function listRecentDispatches(
 ): Promise<RecentDispatchPage> {
   const qs = cursor ? `?${new URLSearchParams({ cursor }).toString()}` : '';
   const response = await apiRequest(`incidents/dispatches${qs}`, tokens);
-  return (await response.json()) as RecentDispatchPage;
+  const page = (await response.json()) as RecentDispatchPage;
+  // A body without a dispatches array (a proxy error page, a stale mock) must surface as a
+  // query error - the page renders its "couldn't load" fallback - never reach the render
+  // path, where an undefined entry would throw into the route error boundary.
+  if (!Array.isArray(page.dispatches)) {
+    throw new Error('incidents/dispatches returned a body without a dispatches array');
+  }
+  return page;
 }
 
 export async function getIncident(

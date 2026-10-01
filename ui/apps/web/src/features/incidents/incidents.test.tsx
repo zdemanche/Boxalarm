@@ -1240,6 +1240,17 @@ test('an officer starts a report from a recent dispatch, with no Dispatch ID typ
   expect(posted).toEqual({ dispatchId: 'd-recent' });
 });
 
+test('a dispatches body without a dispatches array falls back, never the error boundary', async () => {
+  server.use(
+    http.get('/api/v1/incidents', () => HttpResponse.json({ incidents: [] })),
+    // A proxy error page or a stale mock: 200, but not a RecentDispatchPage.
+    http.get('/api/v1/incidents/dispatches', () => HttpResponse.json({ incidents: [] })),
+  );
+  renderIncidents(['CHIEF']);
+  await screen.findByRole('heading', { name: 'Incidents' });
+  await screen.findByText(/Recent dispatches couldn’t load/);
+});
+
 test('older dispatches load a page at a time with the cursor', async () => {
   const now = Math.floor(Date.now() / 1000);
   const cursors: (string | null)[] = [];
