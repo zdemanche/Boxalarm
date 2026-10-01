@@ -301,6 +301,25 @@ test('a new source is added with every field labelled', async () => {
   expect(screen.getByLabelText('Address (required): read by')).toBeTruthy();
 });
 
+test('removing a saved source is confirmed first, naming the permanent key loss', async () => {
+  server.use(http.get('/api/v1/platform/cad-sources', () => HttpResponse.json(STORED)));
+  const user = userEvent.setup();
+  renderPage();
+  await user.click(await screen.findByRole('button', { name: 'Remove County CAD' }));
+
+  // Cancelling removes nothing.
+  let confirm = await screen.findByRole('dialog', { name: 'Remove County CAD?' });
+  expect(confirm.textContent).toContain('deletes its webhook key and API key permanently');
+  expect(confirm.textContent).toContain('A re-created source starts with no key');
+  await user.click(within(confirm).getByRole('button', { name: 'Cancel' }));
+  expect(await screen.findByRole('heading', { name: 'County CAD' })).toBeTruthy();
+
+  await user.click(screen.getByRole('button', { name: 'Remove County CAD' }));
+  confirm = await screen.findByRole('dialog', { name: 'Remove County CAD?' });
+  await user.click(within(confirm).getByRole('button', { name: 'Remove source' }));
+  await waitFor(() => expect(screen.queryByRole('heading', { name: 'County CAD' })).toBeNull());
+});
+
 test('revoking the previous key is confirmed first and then reported', async () => {
   let revoked = false;
   server.use(

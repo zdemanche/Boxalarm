@@ -306,6 +306,7 @@ function SourceEditor({
   const errorFor = (suffix: string) =>
     errors.find((e) => e.field === `sources[${index}].${suffix}`)?.message;
   const title = draft.label.trim() || draft.sourceId || `New source ${index + 1}`;
+  const [removeOpen, setRemoveOpen] = useState(false);
 
   return (
     <Card title={title}>
@@ -396,9 +397,30 @@ function SourceEditor({
         />
         <ParserEditor draft={draft} index={index} errors={errors} onChange={onChange} />
 
-        <Button type="button" variant="danger" onClick={onRemove} style={{ width: 'fit-content' }}>
+        <Button
+          type="button"
+          variant="danger"
+          onClick={() => setRemoveOpen(true)}
+          style={{ width: 'fit-content' }}
+        >
           Remove {title}
         </Button>
+        {/* Save permanently deletes a removed source's webhook secret and API keys (backend
+            cadSources/handler.ts, security review M5) - the page's most destructive action, so
+            it is confirmed like the others, with the consequence named. */}
+        <ConfirmDialog
+          open={removeOpen}
+          onOpenChange={setRemoveOpen}
+          title={`Remove ${title}?`}
+          consequence={
+            draft.saved
+              ? 'When you save, this deletes its webhook key and API key permanently and its email address stops paging - dispatches from this source are refused. A re-created source starts with no key.'
+              : 'This new source has not been saved; its draft is discarded.'
+          }
+          confirmLabel="Remove source"
+          onConfirm={onRemove}
+          danger
+        />
       </div>
     </Card>
   );
