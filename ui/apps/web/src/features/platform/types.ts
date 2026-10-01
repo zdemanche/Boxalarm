@@ -120,6 +120,11 @@ export interface CadSourcesResponse {
   sources: CadSourceView[];
   /** Non-blocking warnings about the saved sources (e.g. no incident number rule). */
   warnings?: { field: string; message: string }[];
+  /**
+   * PUT only: this many removed sources' webhook secrets could not be deleted - an old key is
+   * still alive. Saving again retries the cleanup.
+   */
+  secretCleanupFailed?: number;
 }
 
 /** PUT /platform/cad-sources: one source as the chief edits it. */

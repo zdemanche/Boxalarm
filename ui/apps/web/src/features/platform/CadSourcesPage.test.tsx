@@ -149,6 +149,29 @@ test('saving sends every source with the loaded version and the senders one per 
   });
 });
 
+test("a failed secret cleanup and the server's warnings are surfaced after a save", async () => {
+  server.use(
+    http.get('/api/v1/platform/cad-sources', () => HttpResponse.json(STORED)),
+    http.put('/api/v1/platform/cad-sources', () =>
+      HttpResponse.json({
+        ...STORED,
+        version: 4,
+        secretCleanupFailed: 1,
+        warnings: [{ field: 'sources[0]', message: 'this source reads no incident number' }],
+      }),
+    ),
+  );
+  const user = userEvent.setup();
+  renderPage();
+  await screen.findByRole('heading', { name: 'County CAD' });
+  await user.click(screen.getByRole('button', { name: 'Save CAD sources' }));
+
+  const message = await screen.findByText(/an old webhook key of a removed source/);
+  expect(message.getAttribute('role')).toBe('status');
+  expect(message.textContent).toContain('may still work');
+  expect(await screen.findByText(/this source reads no incident number/)).toBeTruthy();
+});
+
 test('a rejected save lists the field errors', async () => {
   server.use(
     http.get('/api/v1/platform/cad-sources', () => HttpResponse.json(STORED)),
@@ -237,6 +260,53 @@ test('rotating the webhook key shows the new key once, then never again', async 
   await waitFor(() => expect(screen.queryByText('f'.repeat(64))).toBeNull());
 });
 
+test('the one-time key dialog copies each value and a paste-ready vendor block', async () => {
+  server.use(
+    http.get('/api/v1/platform/cad-sources', () => HttpResponse.json(STORED)),
+    http.post('/api/v1/platform/cad-sources/county/webhook-key', () =>
+      HttpResponse.json({
+        keyId: 'nichols-fd.county',
+        secret: 'f'.repeat(64),
+        apiKey: 'A'.repeat(32),
+        rotatedAt: '2026-09-30T13:00:00.000Z',
+        previousKeyStillValid: true,
+        previousKeyExpiresAt: '2026-10-01T13:00:00.000Z',
+        webhookUrl: STORED.webhookUrl,
+      }),
+    ),
+  );
+  const user = userEvent.setup(); // installs a working clipboard stub in jsdom
+  renderPage();
+  await user.click(await screen.findByRole('button', { name: 'Rotate webhook key' }));
+  const confirm = await screen.findByRole('dialog');
+  await user.click(within(confirm).getByRole('button', { name: 'Rotate key' }));
+  const shown = await screen.findByRole('dialog', { name: 'Copy the webhook key now' });
+
+  await user.click(within(shown).getByRole('button', { name: 'Copy key' }));
+  expect(await within(shown).findByText('Copied.')).toBeTruthy();
+  expect(await navigator.clipboard.readText()).toBe('f'.repeat(64));
+  expect(within(shown).getByRole('button', { name: 'Copy x-api-key' })).toBeTruthy();
+  expect(within(shown).getByRole('button', { name: 'Copy address' })).toBeTruthy();
+
+  // The vendor block carries the whole contract: URL, headers, key, body, retries, warning.
+  await user.click(within(shown).getByRole('button', { name: 'Copy set-up instructions' }));
+  const block = await navigator.clipboard.readText();
+  expect(block).toContain(`POST ${STORED.webhookUrl}`);
+  expect(block).toContain('f'.repeat(64));
+  expect(block).toContain(`x-api-key: ${'A'.repeat(32)}`);
+  expect(block).toContain('X-Boxalarm-Source: nichols-fd.county');
+  expect(block).toContain('UTF-8 JSON');
+  expect(block).toContain(
+    'retry a 429 and any 5xx with back-off, signed again with a fresh timestamp',
+  );
+  expect(block).toContain('Never retry 401, 403 or 409');
+  expect(block).toContain('202 {"status":"accepted"} or 200 {"status":"duplicate"}');
+  expect(block).toContain('pages every eligible member');
+
+  // The pages-everyone warning is also visible in the dialog itself.
+  expect(within(shown).getByRole('note').textContent).toContain('pages every eligible member');
+});
+
 test('a new source is added with every field labelled', async () => {
   server.use(
     http.get('/api/v1/platform/cad-sources', () =>
@@ -252,6 +322,25 @@ test('a new source is added with every field labelled', async () => {
   // Every parser field has a labelled mode and value control.
   expect(screen.getAllByRole('combobox')).toHaveLength(8);
   expect(screen.getByLabelText('Address (required): read by')).toBeTruthy();
+});
+
+test('removing a saved source is confirmed first, naming the permanent key loss', async () => {
+  server.use(http.get('/api/v1/platform/cad-sources', () => HttpResponse.json(STORED)));
+  const user = userEvent.setup();
+  renderPage();
+  await user.click(await screen.findByRole('button', { name: 'Remove County CAD' }));
+
+  // Cancelling removes nothing.
+  let confirm = await screen.findByRole('dialog', { name: 'Remove County CAD?' });
+  expect(confirm.textContent).toContain('deletes its webhook key and API key permanently');
+  expect(confirm.textContent).toContain('A re-created source starts with no key');
+  await user.click(within(confirm).getByRole('button', { name: 'Cancel' }));
+  expect(await screen.findByRole('heading', { name: 'County CAD' })).toBeTruthy();
+
+  await user.click(screen.getByRole('button', { name: 'Remove County CAD' }));
+  confirm = await screen.findByRole('dialog', { name: 'Remove County CAD?' });
+  await user.click(within(confirm).getByRole('button', { name: 'Remove source' }));
+  await waitFor(() => expect(screen.queryByRole('heading', { name: 'County CAD' })).toBeNull());
 });
 
 test('revoking the previous key is confirmed first and then reported', async () => {
@@ -299,6 +388,39 @@ test('a new email address is confirmed first and then shown', async () => {
   expect(
     await screen.findByText('dispatch+nichols-fd.county.zzzzzzzzzzzzzzzz@cad.nichols.example.org'),
   ).toBeTruthy();
+});
+
+test("test parse sends the draft's CAD time zone and names the zone that resolved the time", async () => {
+  let sent: unknown;
+  server.use(
+    http.get('/api/v1/platform/cad-sources', () => HttpResponse.json(STORED)),
+    http.post('/api/v1/platform/cad-sources/test-parse', async ({ request }) => {
+      sent = await request.json();
+      return HttpResponse.json({
+        status: 'PARSED',
+        fields: { address: '1 MAIN ST', dispatchTime: '01:10' },
+        dispatchTimeResolved: '2026-10-01T06:10:00.000Z',
+      });
+    }),
+  );
+  const user = userEvent.setup();
+  renderPage();
+  fireEvent.change(await screen.findByLabelText('CAD time zone'), {
+    target: { value: 'America/Chicago' },
+  });
+  fireEvent.change(screen.getByLabelText('Sample dispatch text'), {
+    target: { value: 'ADDR: 1 MAIN ST\nTIME: 01:10' },
+  });
+  await user.click(screen.getByRole('button', { name: 'Test parse' }));
+
+  expect(await screen.findByText(/in America\/Chicago/)).toBeTruthy();
+  expect(sent).toMatchObject({ timeZone: 'America/Chicago' });
+
+  // Changing the zone drops the stale preview - its resolved time no longer applies.
+  fireEvent.change(screen.getByLabelText('CAD time zone'), {
+    target: { value: 'America/Denver' },
+  });
+  await waitFor(() => expect(screen.queryByText(/Dispatch time read as/)).toBeNull());
 });
 
 test('test parse says when the dispatch time cannot be ordered by', async () => {

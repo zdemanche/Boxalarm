@@ -46,6 +46,9 @@ const FIELD_LABELS: Record<CadField, string> = {
   narrative: 'Narrative',
 };
 
+/** The handler's fallback zone (backend cadSources/handler.ts DEFAULT_CAD_TIME_ZONE). */
+const DEFAULT_CAD_TIME_ZONE = 'America/New_York';
+
 const RAW_REASONS: Record<string, string> = {
   NO_ADDRESS: 'the template did not find the address',
   NO_TEMPLATE: 'this source has no template',
@@ -174,7 +177,12 @@ export function CadSourcesPage() {
     mutationFn: () => putCadSources(auth, drafts.map(toInput), query.data?.version ?? null),
     onSuccess: (saved) => {
       setSaveError(null);
-      setSaveMessage('CAD sources saved. Ingress picks up the change within a minute.');
+      // A removed source's old key left alive is exactly what the chief must know about.
+      setSaveMessage(
+        saved.secretCleanupFailed
+          ? 'Saved - but an old webhook key of a removed source could not be deleted and may still work. Save again to retry, or tell your administrator.'
+          : 'CAD sources saved. Ingress picks up the change within a minute.',
+      );
       queryClient.setQueryData(QUERY_KEY, saved);
     },
     onError: async (error: unknown) => {
@@ -279,6 +287,20 @@ export function CadSourcesPage() {
             </div>
           ) : null}
           {saveMessage ? <p role="status">{saveMessage}</p> : null}
+          {(query.data?.warnings ?? []).length > 0 ? (
+            // The server's non-blocking warnings about the saved sources - rendered as sent, so
+            // a warning the backend adds later is visible without a web release.
+            <div role="status">
+              <p>Warnings about the saved sources:</p>
+              <ul>
+                {(query.data?.warnings ?? []).map((w) => (
+                  <li key={`${w.field}-${w.message}`}>
+                    <code>{w.field}</code>: {w.message}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
         </form>
       )}
     </main>
@@ -303,6 +325,7 @@ function SourceEditor({
   const errorFor = (suffix: string) =>
     errors.find((e) => e.field === `sources[${index}].${suffix}`)?.message;
   const title = draft.label.trim() || draft.sourceId || `New source ${index + 1}`;
+  const [removeOpen, setRemoveOpen] = useState(false);
 
   return (
     <Card title={title}>
@@ -342,7 +365,7 @@ function SourceEditor({
           />
           <Textarea
             label="Allowed senders"
-            help="One per line: a domain (cad.county.gov) or an address (dispatch@cad.county.gov). The From address and every DKIM signing domain must be on this list."
+            help="One per line: an exact address (dispatch@cad.county.gov, preferred) or a domain (cad.county.gov) - a domain entry allows every mailbox at that domain. The sender's mail must also pass SPF/DKIM/DMARC for its own domain, so never add a relay's or mail provider's domain."
             rows={3}
             value={draft.sendersText}
             onChange={(e) => onChange({ sendersText: e.target.value })}
@@ -393,9 +416,30 @@ function SourceEditor({
         />
         <ParserEditor draft={draft} index={index} errors={errors} onChange={onChange} />
 
-        <Button type="button" variant="danger" onClick={onRemove} style={{ width: 'fit-content' }}>
+        <Button
+          type="button"
+          variant="danger"
+          onClick={() => setRemoveOpen(true)}
+          style={{ width: 'fit-content' }}
+        >
           Remove {title}
         </Button>
+        {/* Save permanently deletes a removed source's webhook secret and API keys (backend
+            cadSources/handler.ts, security review M5) - the page's most destructive action, so
+            it is confirmed like the others, with the consequence named. */}
+        <ConfirmDialog
+          open={removeOpen}
+          onOpenChange={setRemoveOpen}
+          title={`Remove ${title}?`}
+          consequence={
+            draft.saved
+              ? 'When you save, this deletes its webhook key and API key permanently and its email address stops paging - dispatches from this source are refused. A re-created source starts with no key.'
+              : 'This new source has not been saved; its draft is discarded.'
+          }
+          confirmLabel="Remove source"
+          onConfirm={onRemove}
+          danger
+        />
       </div>
     </Card>
   );
@@ -424,6 +468,84 @@ function NewEmailAddress({ sourceId, label }: { sourceId: string; label: string 
       />
     </>
   );
+}
+
+/**
+ * Copies one value and says so in its own live region - a chief transcribing a 64-hex secret
+ * by hand is the realistic failure mode behind BadSignature, and the clipboard can be denied,
+ * so both outcomes are announced.
+ */
+function CopyButton({ label, value }: { label: string; value: string }) {
+  const [copied, setCopied] = useState<'copied' | 'failed' | null>(null);
+  return (
+    <span style={{ display: 'inline-flex', gap: 'var(--bx-space-sm)', alignItems: 'center' }}>
+      <Button
+        type="button"
+        variant="secondary"
+        onClick={() => {
+          void (async () => {
+            try {
+              await navigator.clipboard.writeText(value);
+              setCopied('copied');
+            } catch {
+              setCopied('failed');
+            }
+          })();
+        }}
+      >
+        {label}
+      </Button>
+      <span role="status" aria-live="polite">
+        {copied === 'copied'
+          ? 'Copied.'
+          : copied === 'failed'
+            ? 'Copy failed - select the text and copy it by hand.'
+            : ''}
+      </span>
+    </span>
+  );
+}
+
+/**
+ * The paste-ready vendor hand-off: everything the CAD operator needs, in one block, so the
+ * dialog's one-time values and the contract travel together into the email to the dispatch
+ * centre. Each section restates docs/runbooks/cad-ingress.md (the section is named on each
+ * block) - a change to the runbook's contract must be carried here too.
+ */
+function vendorInstructions(rotated: RotatedWebhookKey): string {
+  return [
+    `Boxalarm CAD webhook - set-up for source ${rotated.keyId}`,
+    '',
+    // Runbook "Checks, in order" (webhook) and "Rotating a webhook key".
+    `POST ${rotated.webhookUrl ?? '(ask the department for the webhook address)'}`,
+    'Headers on every request:',
+    '  content-type: application/json',
+    `  x-api-key: ${rotated.apiKey}`,
+    `  X-Boxalarm-Source: ${rotated.keyId}`,
+    '  X-Boxalarm-Timestamp: <Unix seconds, within 5 minutes of now>',
+    '  X-Boxalarm-Signature: v1=<hex HMAC-SHA256(key, timestamp + "." + raw body)>',
+    '',
+    `Signing key (HMAC-SHA256): ${rotated.secret}`,
+    '',
+    // Runbook "Request body".
+    'Body: UTF-8 JSON (content-type application/json), at most 64 KiB, signed over exactly',
+    'the bytes sent - a signature computed over re-serialized JSON does not match and the',
+    'request is refused (401).',
+    '',
+    // Runbook "Retry contract for the CAD".
+    'Retries: retry a 429 and any 5xx with back-off, signed again with a fresh timestamp and',
+    'signature (a request older than 5 minutes is refused). Never retry 401, 403 or 409 -',
+    'fix the configuration instead.',
+    '',
+    // Runbook "Test-message procedure", expected results.
+    'Responses: 202 {"status":"accepted"} or 200 {"status":"duplicate"} means the dispatch is',
+    'safely recorded. 409 means this exact signed request was already received (a replay).',
+    '',
+    'WARNING: a successful test message pages every eligible member of the department and',
+    'starts the tone ladder, exactly like a real call - there is no test flag. Coordinate',
+    'every positive test with the department first.',
+    '',
+  ].join('\n');
 }
 
 function WebhookKey({ draft }: { draft: SourceDraft }) {
@@ -508,47 +630,62 @@ function WebhookKey({ draft }: { draft: SourceDraft }) {
         }
       >
         {rotated ? (
-          <dl>
-            {rotated.webhookUrl ? (
-              <>
-                <dt>Address (POST)</dt>
-                <dd>
-                  <code style={{ wordBreak: 'break-all' }}>{rotated.webhookUrl}</code>
-                </dd>
-              </>
-            ) : null}
-            <dt>X-Boxalarm-Source</dt>
-            <dd>
-              <code>{rotated.keyId}</code>
-            </dd>
-            <dt>Key</dt>
-            <dd>
-              <code style={{ wordBreak: 'break-all' }}>{rotated.secret}</code>
-            </dd>
-            <dt>x-api-key</dt>
-            <dd>
-              <code style={{ wordBreak: 'break-all' }}>{rotated.apiKey}</code> - send it as the{' '}
-              <code>x-api-key</code> header on every request. It is this source&apos;s own capacity;
-              without it API Gateway refuses the request.
-            </dd>
-            {rotated.previousKeyExpiresAt ? (
-              <>
-                <dt>Previous key</dt>
-                <dd>
-                  Keeps working until {new Date(rotated.previousKeyExpiresAt).toLocaleString()}, or
-                  until you revoke it.
-                </dd>
-              </>
-            ) : null}
-            <dt>Signature</dt>
-            <dd>
-              <code>
-                X-Boxalarm-Signature: v1=hex(HMAC-SHA256(key, timestamp + &quot;.&quot; + body))
-              </code>{' '}
-              over the exact request bytes, keyed with the key text exactly as shown, with{' '}
-              <code>X-Boxalarm-Timestamp</code> in Unix seconds (within 5 minutes).
-            </dd>
-          </dl>
+          <>
+            <dl>
+              {rotated.webhookUrl ? (
+                <>
+                  <dt>Address (POST)</dt>
+                  <dd>
+                    <code style={{ wordBreak: 'break-all' }}>{rotated.webhookUrl}</code>{' '}
+                    <CopyButton label="Copy address" value={rotated.webhookUrl} />
+                  </dd>
+                </>
+              ) : null}
+              <dt>X-Boxalarm-Source</dt>
+              <dd>
+                <code>{rotated.keyId}</code>
+              </dd>
+              <dt>Key</dt>
+              <dd>
+                <code style={{ wordBreak: 'break-all' }}>{rotated.secret}</code>{' '}
+                <CopyButton label="Copy key" value={rotated.secret} />
+              </dd>
+              <dt>x-api-key</dt>
+              <dd>
+                <code style={{ wordBreak: 'break-all' }}>{rotated.apiKey}</code>{' '}
+                <CopyButton label="Copy x-api-key" value={rotated.apiKey} /> - send it as the{' '}
+                <code>x-api-key</code> header on every request. It is this source&apos;s own
+                capacity; without it API Gateway refuses the request.
+              </dd>
+              {rotated.previousKeyExpiresAt ? (
+                <>
+                  <dt>Previous key</dt>
+                  <dd>
+                    Keeps working until {new Date(rotated.previousKeyExpiresAt).toLocaleString()},
+                    or until you revoke it.
+                  </dd>
+                </>
+              ) : null}
+              <dt>Signature</dt>
+              <dd>
+                <code>
+                  X-Boxalarm-Signature: v1=hex(HMAC-SHA256(key, timestamp + &quot;.&quot; + body))
+                </code>{' '}
+                over the exact request bytes, keyed with the key text exactly as shown, with{' '}
+                <code>X-Boxalarm-Timestamp</code> in Unix seconds (within 5 minutes).
+              </dd>
+            </dl>
+            <p>
+              <CopyButton label="Copy set-up instructions" value={vendorInstructions(rotated)} /> -
+              one paste-ready block for the CAD vendor: the address, every header, the signature
+              rule, the body and retry rules, and the responses to expect.
+            </p>
+            <p role="note">
+              <strong>Testing the feed:</strong> a successful test message pages every eligible
+              member and starts the tone ladder, exactly like a real call - there is no test flag.
+              Coordinate any positive test before it is sent.
+            </p>
+          </>
         ) : null}
       </Dialog>
     </div>
@@ -570,18 +707,31 @@ function ParserEditor({
   const sampleId = useId();
   const [sample, setSample] = useState('');
   const [result, setResult] = useState<CadTestParseResult | null>(null);
+  /** The zone the shown result resolved times in, so a zone change can invalidate it. */
+  const [testedZone, setTestedZone] = useState<string | null>(null);
   const [testError, setTestError] = useState<unknown>(null);
+  const timeZone = draft.timeZone.trim();
   const test = useMutation({
-    mutationFn: () => testParseCad(auth, parserFields(draft), sample),
+    mutationFn: () => testParseCad(auth, parserFields(draft), sample, timeZone || undefined),
     onSuccess: (r) => {
       setTestError(null);
       setResult(r);
+      setTestedZone(timeZone || DEFAULT_CAD_TIME_ZONE);
     },
     onError: (error: unknown) => {
       setResult(null);
       setTestError(error);
     },
   });
+
+  // A changed CAD time zone silently keeping the old preview would read as "the setting does
+  // nothing" (the preview's resolved time is zone-dependent), so the stale result is dropped.
+  useEffect(() => {
+    if (result && testedZone !== null && (timeZone || DEFAULT_CAD_TIME_ZONE) !== testedZone) {
+      setResult(null);
+      setTestedZone(null);
+    }
+  }, [result, testedZone, timeZone]);
 
   function setRule(field: CadField, patch: Partial<RuleDraft>) {
     onChange({ rules: { ...draft.rules, [field]: { ...draft.rules[field], ...patch } } });
@@ -664,8 +814,8 @@ function ParserEditor({
         ) : null}
         {result?.dispatchTimeResolved ? (
           <p>
-            Dispatch time read as {new Date(result.dispatchTimeResolved).toLocaleString()} - CAD
-            updates to a call are ordered by it.
+            Dispatch time read as {new Date(result.dispatchTimeResolved).toLocaleString()} in{' '}
+            {testedZone ?? DEFAULT_CAD_TIME_ZONE} - CAD updates to a call are ordered by it.
           </p>
         ) : result?.dispatchTimeUnordered ? (
           <p>

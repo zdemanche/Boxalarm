@@ -167,16 +167,21 @@ export async function putCadSources(
   return (await response.json()) as CadSourcesResponse;
 }
 
-/** Run a draft parser template over a pasted sample - the same parser real dispatches use. */
+/**
+ * Run a draft parser template over a pasted sample - the same parser real dispatches use.
+ * `timeZone` is the draft's CAD time zone, so the dispatch-time preview resolves in the zone
+ * live dispatches will (the handler falls back to America/New_York without it).
+ */
 export async function testParseCad(
   tokens: AuthTokenSource,
   fields: CadParserFields,
   sample: string,
+  timeZone?: string,
 ): Promise<CadTestParseResult> {
   const response = await apiRequest('platform/cad-sources/test-parse', tokens, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ fields, sample }),
+    body: JSON.stringify({ fields, sample, ...(timeZone ? { timeZone } : {}) }),
   });
   return (await response.json()) as CadTestParseResult;
 }

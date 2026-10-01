@@ -108,6 +108,23 @@ test('another officer already confirmed it: says so, never silently', async () =
   expect(await screen.findByText(/already acknowledged by another officer/)).toBeTruthy();
 });
 
+test('a failed dispatch read says so with a retry, never an endless "Checking…"', async () => {
+  repository.getDispatch.mockRejectedValueOnce(new Error('network down'));
+  await render(<MutualAidPromptScreen />);
+
+  expect(
+    await screen.findByText(/Couldn't check whether the call has been confirmed/),
+  ).toBeTruthy();
+  expect(screen.queryByText(/Checking whether the call has been confirmed/)).toBeNull();
+  // The confirm button stays usable - the officer may have made the call regardless.
+  expect(screen.getByRole('button', { name: 'I made the mutual-aid call' })).toBeTruthy();
+
+  await fireEvent.press(screen.getByRole('button', { name: 'Check again' }));
+
+  expect(await screen.findByText(/has not been confirmed yet/)).toBeTruthy();
+  expect(screen.queryByText(/Couldn't check/)).toBeNull();
+});
+
 test('a member who is not an officer sees the request read-only', async () => {
   (useOptionalAuth as jest.Mock).mockReturnValue({ roles: ['MEMBER'], memberId: 'MBR-1' });
   await render(<MutualAidPromptScreen />);

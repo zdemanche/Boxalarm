@@ -114,7 +114,12 @@ export function MarkOffList({
     setEnding(markOff.markoffId);
     try {
       await repository.endMarkOff(markOff);
-      const text = "You're available again. You'll be alerted for calls.";
+      // Cancelling an upcoming mark-off never changed availability - the member was never
+      // unavailable, so "available again" would be wrong (the web makes the same distinction).
+      const text =
+        markOff.startAt > Date.now() / 1000
+          ? 'Mark-off cancelled — you stay available.'
+          : "You're available again. You'll be alerted for calls.";
       setMessage({ text, danger: false });
       AccessibilityInfo.announceForAccessibility(text);
       await refresh();

@@ -180,6 +180,49 @@ test('lists the member’s mark-offs and End now ends the current one', async ()
   );
 });
 
+test('a failed mark-off list gets a real Try again button', async () => {
+  let calls = 0;
+  server.use(
+    http.get('/api/v1/personnel/members/member-7/availability', () => {
+      calls += 1;
+      return calls === 1
+        ? HttpResponse.json(
+            { type: 'about:blank', title: 'Service Unavailable', status: 503, traceId: 't' },
+            { status: 503 },
+          )
+        : HttpResponse.json({ markOffs: [] });
+    }),
+  );
+  const user = userEvent.setup();
+  renderPage();
+
+  const failure = await screen.findByText(/could not be loaded/);
+  expect(failure.closest('[role="alert"]')).toBeTruthy();
+  await user.click(screen.getByRole('button', { name: 'Try again' }));
+
+  expect(await screen.findByText('You’re not marked off.')).toBeTruthy();
+});
+
+// The guard the mobile app has (R3-M1): a deployed server without the routes answers 404/405.
+test.each([404, 405])(
+  'a server without the mark-off routes (%i) says so instead of a dead error',
+  async (status) => {
+    server.use(
+      http.get('/api/v1/personnel/members/member-7/availability', () =>
+        HttpResponse.json(
+          { type: 'about:blank', title: 'Not Found', status, traceId: 't' },
+          { status },
+        ),
+      ),
+    );
+    renderPage();
+
+    const notice = await screen.findByText(/can’t list or end mark-offs yet/);
+    expect(notice.getAttribute('role')).toBe('status');
+    expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull();
+  },
+);
+
 test('refuses a custom mark-off longer than 90 days before sending it', async () => {
   const posted = vi.fn();
   server.use(

@@ -52,6 +52,24 @@ test('shows current and upcoming mark-offs; "I\'m available again" ends the curr
   expect(screen.queryByText(/^Marked unavailable until/)).toBeNull();
 });
 
+test('cancelling an upcoming mark-off says it stays cancelled, not "available again"', async () => {
+  await render(<MarkOffList />);
+  await screen.findByText(/^Unavailable from/);
+
+  repository.listMarkOffs.mockResolvedValueOnce([
+    { markoffId: 'active-1', startAt: now() - 3600, endAt: now() + 3600, reason: 'Work' },
+  ]);
+  await act(async () => {
+    fireEvent.press(screen.getByRole('button', { name: /^Cancel this mark-off/ }));
+  });
+
+  expect(repository.endMarkOff).toHaveBeenCalledWith(
+    expect.objectContaining({ markoffId: 'later-1' }),
+  );
+  expect(await screen.findByText('Mark-off cancelled — you stay available.')).toBeTruthy();
+  expect(screen.queryByText("You're available again. You'll be alerted for calls.")).toBeNull();
+});
+
 test('offline: the list says it cannot be shown, and nothing is sent', async () => {
   // Once the server has shown it supports mark-offs...
   const first = await render(<MarkOffList />);
