@@ -63,6 +63,8 @@ export function MutualAidPromptScreen() {
   const [notes, setNotes] = useState('');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // The dispatch read failed while the state is still unknown - never an endless "Checking…".
+  const [loadFailed, setLoadFailed] = useState(false);
 
   // Like a page (N-m8): shown over the lock screen and ringing until the officer acts on it - a
   // touch, or opening it unlocked. It stops showing over the lock screen once confirmed or when
@@ -100,6 +102,7 @@ export function MutualAidPromptScreen() {
   const load = useCallback(async () => {
     try {
       const dispatch = await repository.getDispatch(dispatchId);
+      setLoadFailed(false);
       setCall({ incidentType: dispatch.incidentType, address: dispatch.address });
       setMutualAid(dispatch.mutualAid);
       // Another officer already confirmed the call: nothing is left to act on, so it stops
@@ -111,6 +114,7 @@ export function MutualAidPromptScreen() {
       }
     } catch (loadError) {
       console.warn('[mutual-aid] reading the dispatch failed', loadError);
+      setLoadFailed(true);
     }
   }, [dispatchId, repository, silence]);
 
@@ -179,9 +183,25 @@ export function MutualAidPromptScreen() {
         </Text>
 
         {mutualAid === undefined ? (
-          <Text accessibilityRole="text" style={{ color: theme.fg, fontSize: typeScale.body.size }}>
-            Checking whether the call has been confirmed…
-          </Text>
+          loadFailed ? (
+            <View style={{ gap: spacing.sm }}>
+              <Text
+                accessibilityRole="alert"
+                style={{ color: theme.status.danger, fontSize: typeScale.body.size }}
+              >
+                Couldn&apos;t check whether the call has been confirmed. Confirm below only if you
+                made the call yourself.
+              </Text>
+              <Button label="Check again" variant="secondary" onPress={() => void load()} />
+            </View>
+          ) : (
+            <Text
+              accessibilityRole="text"
+              style={{ color: theme.fg, fontSize: typeScale.body.size }}
+            >
+              Checking whether the call has been confirmed…
+            </Text>
+          )
         ) : acknowledged ? (
           <Text
             accessibilityRole="summary"
