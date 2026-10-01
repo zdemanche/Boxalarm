@@ -365,7 +365,7 @@ function SourceEditor({
           />
           <Textarea
             label="Allowed senders"
-            help="One per line: a domain (cad.county.gov) or an address (dispatch@cad.county.gov). The From address and every DKIM signing domain must be on this list."
+            help="One per line: an exact address (dispatch@cad.county.gov, preferred) or a domain (cad.county.gov) - a domain entry allows every mailbox at that domain. The sender's mail must also pass SPF/DKIM/DMARC for its own domain, so never add a relay's or mail provider's domain."
             rows={3}
             value={draft.sendersText}
             onChange={(e) => onChange({ sendersText: e.target.value })}
