@@ -47,6 +47,11 @@ export function MarkOffList({ memberId, ownRecord }: { memberId: string; ownReco
 
   const nowSeconds = Math.floor(Date.now() / 1000);
   const markOffs = query.data ?? [];
+  // A deployed server without the mark-off routes yet (the mobile app's R3-M1 guard): say so
+  // instead of a dead error - and never promise an end-early the server cannot do.
+  const unsupported =
+    query.error instanceof ApiError &&
+    (query.error.problem.status === 404 || query.error.problem.status === 405);
 
   return (
     <section aria-labelledby={`markoffs-${memberId}`}>
@@ -55,11 +60,24 @@ export function MarkOffList({ memberId, ownRecord }: { memberId: string; ownReco
       </h2>
       {query.isLoading ? <p>Loading mark-offs…</p> : null}
       {query.error ? (
-        <p role="alert">
-          {query.error instanceof ApiError && query.error.problem.status === 403
-            ? 'You do not have access to this member’s mark-offs.'
-            : 'Mark-offs could not be loaded. Try again.'}
-        </p>
+        unsupported ? (
+          <p role="status">
+            This server can’t list or end mark-offs yet. A mark-off still ends at its end time.
+          </p>
+        ) : (
+          <div role="alert" style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
+            <p style={{ margin: 0 }}>
+              {query.error instanceof ApiError && query.error.problem.status === 403
+                ? 'You do not have access to this member’s mark-offs.'
+                : 'Mark-offs could not be loaded.'}
+            </p>
+            {query.error instanceof ApiError && query.error.problem.status === 403 ? null : (
+              <Button variant="secondary" onClick={() => void query.refetch()}>
+                Try again
+              </Button>
+            )}
+          </div>
+        )
       ) : null}
       {query.isSuccess && markOffs.length === 0 ? (
         <p>{ownRecord ? 'You’re not marked off.' : 'Not marked off.'}</p>
