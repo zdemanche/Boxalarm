@@ -429,6 +429,84 @@ function NewEmailAddress({ sourceId, label }: { sourceId: string; label: string 
   );
 }
 
+/**
+ * Copies one value and says so in its own live region - a chief transcribing a 64-hex secret
+ * by hand is the realistic failure mode behind BadSignature, and the clipboard can be denied,
+ * so both outcomes are announced.
+ */
+function CopyButton({ label, value }: { label: string; value: string }) {
+  const [copied, setCopied] = useState<'copied' | 'failed' | null>(null);
+  return (
+    <span style={{ display: 'inline-flex', gap: 'var(--bx-space-sm)', alignItems: 'center' }}>
+      <Button
+        type="button"
+        variant="secondary"
+        onClick={() => {
+          void (async () => {
+            try {
+              await navigator.clipboard.writeText(value);
+              setCopied('copied');
+            } catch {
+              setCopied('failed');
+            }
+          })();
+        }}
+      >
+        {label}
+      </Button>
+      <span role="status" aria-live="polite">
+        {copied === 'copied'
+          ? 'Copied.'
+          : copied === 'failed'
+            ? 'Copy failed - select the text and copy it by hand.'
+            : ''}
+      </span>
+    </span>
+  );
+}
+
+/**
+ * The paste-ready vendor hand-off: everything the CAD operator needs, in one block, so the
+ * dialog's one-time values and the contract travel together into the email to the dispatch
+ * centre. Each section restates docs/runbooks/cad-ingress.md (the section is named on each
+ * block) - a change to the runbook's contract must be carried here too.
+ */
+function vendorInstructions(rotated: RotatedWebhookKey): string {
+  return [
+    `Boxalarm CAD webhook - set-up for source ${rotated.keyId}`,
+    '',
+    // Runbook "Checks, in order" (webhook) and "Rotating a webhook key".
+    `POST ${rotated.webhookUrl ?? '(ask the department for the webhook address)'}`,
+    'Headers on every request:',
+    '  content-type: application/json',
+    `  x-api-key: ${rotated.apiKey}`,
+    `  X-Boxalarm-Source: ${rotated.keyId}`,
+    '  X-Boxalarm-Timestamp: <Unix seconds, within 5 minutes of now>',
+    '  X-Boxalarm-Signature: v1=<hex HMAC-SHA256(key, timestamp + "." + raw body)>',
+    '',
+    `Signing key (HMAC-SHA256): ${rotated.secret}`,
+    '',
+    // Runbook "Request body".
+    'Body: UTF-8 JSON (content-type application/json), at most 64 KiB, signed over exactly',
+    'the bytes sent - a signature computed over re-serialized JSON does not match and the',
+    'request is refused (401).',
+    '',
+    // Runbook "Retry contract for the CAD".
+    'Retries: retry a 429 and any 5xx with back-off, signed again with a fresh timestamp and',
+    'signature (a request older than 5 minutes is refused). Never retry 401, 403 or 409 -',
+    'fix the configuration instead.',
+    '',
+    // Runbook "Test-message procedure", expected results.
+    'Responses: 202 {"status":"accepted"} or 200 {"status":"duplicate"} means the dispatch is',
+    'safely recorded. 409 means this exact signed request was already received (a replay).',
+    '',
+    'WARNING: a successful test message pages every eligible member of the department and',
+    'starts the tone ladder, exactly like a real call - there is no test flag. Coordinate',
+    'every positive test with the department first.',
+    '',
+  ].join('\n');
+}
+
 function WebhookKey({ draft }: { draft: SourceDraft }) {
   const auth = useAuth();
   const queryClient = useQueryClient();
@@ -511,47 +589,62 @@ function WebhookKey({ draft }: { draft: SourceDraft }) {
         }
       >
         {rotated ? (
-          <dl>
-            {rotated.webhookUrl ? (
-              <>
-                <dt>Address (POST)</dt>
-                <dd>
-                  <code style={{ wordBreak: 'break-all' }}>{rotated.webhookUrl}</code>
-                </dd>
-              </>
-            ) : null}
-            <dt>X-Boxalarm-Source</dt>
-            <dd>
-              <code>{rotated.keyId}</code>
-            </dd>
-            <dt>Key</dt>
-            <dd>
-              <code style={{ wordBreak: 'break-all' }}>{rotated.secret}</code>
-            </dd>
-            <dt>x-api-key</dt>
-            <dd>
-              <code style={{ wordBreak: 'break-all' }}>{rotated.apiKey}</code> - send it as the{' '}
-              <code>x-api-key</code> header on every request. It is this source&apos;s own capacity;
-              without it API Gateway refuses the request.
-            </dd>
-            {rotated.previousKeyExpiresAt ? (
-              <>
-                <dt>Previous key</dt>
-                <dd>
-                  Keeps working until {new Date(rotated.previousKeyExpiresAt).toLocaleString()}, or
-                  until you revoke it.
-                </dd>
-              </>
-            ) : null}
-            <dt>Signature</dt>
-            <dd>
-              <code>
-                X-Boxalarm-Signature: v1=hex(HMAC-SHA256(key, timestamp + &quot;.&quot; + body))
-              </code>{' '}
-              over the exact request bytes, keyed with the key text exactly as shown, with{' '}
-              <code>X-Boxalarm-Timestamp</code> in Unix seconds (within 5 minutes).
-            </dd>
-          </dl>
+          <>
+            <dl>
+              {rotated.webhookUrl ? (
+                <>
+                  <dt>Address (POST)</dt>
+                  <dd>
+                    <code style={{ wordBreak: 'break-all' }}>{rotated.webhookUrl}</code>{' '}
+                    <CopyButton label="Copy address" value={rotated.webhookUrl} />
+                  </dd>
+                </>
+              ) : null}
+              <dt>X-Boxalarm-Source</dt>
+              <dd>
+                <code>{rotated.keyId}</code>
+              </dd>
+              <dt>Key</dt>
+              <dd>
+                <code style={{ wordBreak: 'break-all' }}>{rotated.secret}</code>{' '}
+                <CopyButton label="Copy key" value={rotated.secret} />
+              </dd>
+              <dt>x-api-key</dt>
+              <dd>
+                <code style={{ wordBreak: 'break-all' }}>{rotated.apiKey}</code>{' '}
+                <CopyButton label="Copy x-api-key" value={rotated.apiKey} /> - send it as the{' '}
+                <code>x-api-key</code> header on every request. It is this source&apos;s own
+                capacity; without it API Gateway refuses the request.
+              </dd>
+              {rotated.previousKeyExpiresAt ? (
+                <>
+                  <dt>Previous key</dt>
+                  <dd>
+                    Keeps working until {new Date(rotated.previousKeyExpiresAt).toLocaleString()},
+                    or until you revoke it.
+                  </dd>
+                </>
+              ) : null}
+              <dt>Signature</dt>
+              <dd>
+                <code>
+                  X-Boxalarm-Signature: v1=hex(HMAC-SHA256(key, timestamp + &quot;.&quot; + body))
+                </code>{' '}
+                over the exact request bytes, keyed with the key text exactly as shown, with{' '}
+                <code>X-Boxalarm-Timestamp</code> in Unix seconds (within 5 minutes).
+              </dd>
+            </dl>
+            <p>
+              <CopyButton label="Copy set-up instructions" value={vendorInstructions(rotated)} /> -
+              one paste-ready block for the CAD vendor: the address, every header, the signature
+              rule, the body and retry rules, and the responses to expect.
+            </p>
+            <p role="note">
+              <strong>Testing the feed:</strong> a successful test message pages every eligible
+              member and starts the tone ladder, exactly like a real call - there is no test flag.
+              Coordinate any positive test before it is sent.
+            </p>
+          </>
         ) : null}
       </Dialog>
     </div>

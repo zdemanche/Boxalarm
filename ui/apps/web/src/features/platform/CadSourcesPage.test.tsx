@@ -237,6 +237,53 @@ test('rotating the webhook key shows the new key once, then never again', async 
   await waitFor(() => expect(screen.queryByText('f'.repeat(64))).toBeNull());
 });
 
+test('the one-time key dialog copies each value and a paste-ready vendor block', async () => {
+  server.use(
+    http.get('/api/v1/platform/cad-sources', () => HttpResponse.json(STORED)),
+    http.post('/api/v1/platform/cad-sources/county/webhook-key', () =>
+      HttpResponse.json({
+        keyId: 'nichols-fd.county',
+        secret: 'f'.repeat(64),
+        apiKey: 'A'.repeat(32),
+        rotatedAt: '2026-09-30T13:00:00.000Z',
+        previousKeyStillValid: true,
+        previousKeyExpiresAt: '2026-10-01T13:00:00.000Z',
+        webhookUrl: STORED.webhookUrl,
+      }),
+    ),
+  );
+  const user = userEvent.setup(); // installs a working clipboard stub in jsdom
+  renderPage();
+  await user.click(await screen.findByRole('button', { name: 'Rotate webhook key' }));
+  const confirm = await screen.findByRole('dialog');
+  await user.click(within(confirm).getByRole('button', { name: 'Rotate key' }));
+  const shown = await screen.findByRole('dialog', { name: 'Copy the webhook key now' });
+
+  await user.click(within(shown).getByRole('button', { name: 'Copy key' }));
+  expect(await within(shown).findByText('Copied.')).toBeTruthy();
+  expect(await navigator.clipboard.readText()).toBe('f'.repeat(64));
+  expect(within(shown).getByRole('button', { name: 'Copy x-api-key' })).toBeTruthy();
+  expect(within(shown).getByRole('button', { name: 'Copy address' })).toBeTruthy();
+
+  // The vendor block carries the whole contract: URL, headers, key, body, retries, warning.
+  await user.click(within(shown).getByRole('button', { name: 'Copy set-up instructions' }));
+  const block = await navigator.clipboard.readText();
+  expect(block).toContain(`POST ${STORED.webhookUrl}`);
+  expect(block).toContain('f'.repeat(64));
+  expect(block).toContain(`x-api-key: ${'A'.repeat(32)}`);
+  expect(block).toContain('X-Boxalarm-Source: nichols-fd.county');
+  expect(block).toContain('UTF-8 JSON');
+  expect(block).toContain(
+    'retry a 429 and any 5xx with back-off, signed again with a fresh timestamp',
+  );
+  expect(block).toContain('Never retry 401, 403 or 409');
+  expect(block).toContain('202 {"status":"accepted"} or 200 {"status":"duplicate"}');
+  expect(block).toContain('pages every eligible member');
+
+  // The pages-everyone warning is also visible in the dialog itself.
+  expect(within(shown).getByRole('note').textContent).toContain('pages every eligible member');
+});
+
 test('a new source is added with every field labelled', async () => {
   server.use(
     http.get('/api/v1/platform/cad-sources', () =>
