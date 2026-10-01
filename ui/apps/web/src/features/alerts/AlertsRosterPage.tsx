@@ -551,6 +551,23 @@ const UPDATE_FIELD_LABELS: Record<string, string> = {
   narrative: 'Narrative',
 };
 
+/**
+ * When an update arrived: time only while it is today, day and time otherwise - on a long
+ * incident a bare "01:10" could be either night.
+ */
+function updateWhen(epochSeconds: number): string {
+  const date = new Date(epochSeconds * 1000);
+  return date.toDateString() === new Date().toDateString()
+    ? date.toLocaleTimeString()
+    : date.toLocaleString(undefined, {
+        month: 'short',
+        day: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+      });
+}
+
 /** The CAD's later messages for this call: what changed, when. */
 export function DispatchUpdates({
   updates,
@@ -572,7 +589,7 @@ export function DispatchUpdates({
         {updates.map((update) => (
           <li key={update.updateId}>
             <time dateTime={new Date(update.receivedAt * 1000).toISOString()}>
-              {new Date(update.receivedAt * 1000).toLocaleTimeString()}
+              {updateWhen(update.receivedAt)}
             </time>
             : {update.summary}
             {update.changes.filter((c) => c.field !== 'narrative').length > 0 ? (
