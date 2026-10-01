@@ -1,4 +1,4 @@
-import { apiRequest, type AuthTokenSource } from '../../lib/apiClient';
+import { apiRequest, requireArrayField, type AuthTokenSource } from '../../lib/apiClient';
 import type {
   AuditPage,
   CadParserFields,
@@ -48,7 +48,7 @@ export async function getAuditTrail(
 ): Promise<AuditPage> {
   const params = new URLSearchParams({ entityType, entityId, ...(cursor ? { cursor } : {}) });
   const response = await apiRequest(`platform/audit?${params.toString()}`, tokens);
-  return (await response.json()) as AuditPage;
+  return requireArrayField((await response.json()) as AuditPage, 'entries', 'platform/audit');
 }
 
 export async function startExport(tokens: AuthTokenSource): Promise<{ jobId: string }> {

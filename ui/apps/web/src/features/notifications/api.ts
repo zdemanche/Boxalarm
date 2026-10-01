@@ -1,4 +1,4 @@
-import { apiRequest, type AuthTokenSource } from '../../lib/apiClient';
+import { apiRequest, requireArrayField, type AuthTokenSource } from '../../lib/apiClient';
 import type { InboxPage, NotificationChannelMutes, NotificationPreference } from './types';
 
 export async function listNotifications(
@@ -7,7 +7,7 @@ export async function listNotifications(
 ): Promise<InboxPage> {
   const query = cursor ? `?cursor=${encodeURIComponent(cursor)}` : '';
   const response = await apiRequest(`notifications${query}`, tokens);
-  return (await response.json()) as InboxPage;
+  return requireArrayField((await response.json()) as InboxPage, 'items', 'notifications');
 }
 
 export async function markNotificationRead(

@@ -193,6 +193,21 @@ test('audit log lookup renders a readable diff; a 400 shows detail next to the i
   });
 });
 
+test('an audit body without an entries array shows the error state, not a crash', async () => {
+  // A proxy error page or a stale mock: 200, but not an AuditPage.
+  server.use(http.get('/api/v1/platform/audit', () => HttpResponse.json({ records: [] })));
+  const user = userEvent.setup();
+  renderRoute(['ADMIN'], '/audit-log');
+  await screen.findByRole('heading', { name: 'Audit log' });
+  await user.type(screen.getByLabelText('Entity type'), 'DEPARTMENT_CONFIG');
+  await user.type(screen.getByLabelText('Entity ID'), 'ALERT_RULES');
+  await user.click(screen.getByRole('button', { name: 'Look up' }));
+  // The gate's generic retryable state - never the route error boundary.
+  expect(
+    (await screen.findAllByText(/Try again, or contact your department administrator/)).length,
+  ).toBeGreaterThan(0);
+});
+
 /** Default MSW handlers so /settings can render (all config GETs empty + a stored retention
  * config), reused by the 403 no-leak tests below. */
 function settingsDefaultHandlers() {

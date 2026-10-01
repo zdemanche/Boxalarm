@@ -92,3 +92,17 @@ export async function apiRequest(
 
   return response;
 }
+
+/**
+ * Asserts a list endpoint's 200 body really carries its array. A proxy error page or a
+ * stale mock can answer 200 with some other JSON; letting that through puts `undefined`
+ * into a pages flatMap, and the first property read crashes the route into its error
+ * boundary. Throwing here turns the malformed body into an ordinary query error, which
+ * every list page already renders as its fallback or error state.
+ */
+export function requireArrayField<T>(body: T, field: keyof T & string, endpoint: string): T {
+  if (!Array.isArray(body[field])) {
+    throw new Error(`${endpoint} returned a body without a ${field} array`);
+  }
+  return body;
+}

@@ -1,6 +1,7 @@
 import {
   ApiError,
   apiRequest,
+  requireArrayField,
   type AuthTokenSource,
   type ProblemDetails,
 } from '../../lib/apiClient';
@@ -59,13 +60,7 @@ export async function listRecentDispatches(
   const qs = cursor ? `?${new URLSearchParams({ cursor }).toString()}` : '';
   const response = await apiRequest(`incidents/dispatches${qs}`, tokens);
   const page = (await response.json()) as RecentDispatchPage;
-  // A body without a dispatches array (a proxy error page, a stale mock) must surface as a
-  // query error - the page renders its "couldn't load" fallback - never reach the render
-  // path, where an undefined entry would throw into the route error boundary.
-  if (!Array.isArray(page.dispatches)) {
-    throw new Error('incidents/dispatches returned a body without a dispatches array');
-  }
-  return page;
+  return requireArrayField(page, 'dispatches', 'incidents/dispatches');
 }
 
 export async function getIncident(

@@ -105,6 +105,18 @@ test('a MEMBER sees their inbox, digest items, and read state', async () => {
   expect(screen.getByText('Unread:')).toBeTruthy();
 });
 
+test('an inbox body without an items array shows the error state, not a crash', async () => {
+  server.use(
+    // A proxy error page or a stale mock: 200, but not an InboxPage.
+    http.get('/api/v1/notifications', () => HttpResponse.json({ notifications: [] })),
+    NO_PREFS,
+  );
+  renderWithProviders(<NotificationsPage />);
+  expect(
+    await screen.findByText(/Try again, or contact your department administrator/),
+  ).toBeTruthy();
+});
+
 test('Mark read POSTs to /api/v1/notifications/{id}/read and refreshes the inbox', async () => {
   let readAt: number | null = null;
   const posted = vi.fn();
