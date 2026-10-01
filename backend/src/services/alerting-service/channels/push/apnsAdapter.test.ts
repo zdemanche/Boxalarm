@@ -426,11 +426,19 @@ describe('http2Transport connection handling (review M1)', () => {
 
   afterAll(async () => {
     resetApnsSessions();
+    // Belt and braces: nothing should be left (afterEach destroys per test), but a session
+    // created during teardown of the last test would still hold server.close() open.
+    for (const session of serverSessions) session.destroy();
     await new Promise<void>((resolve) => server.close(() => resolve()));
   });
 
   afterEach(() => {
     resetApnsSessions();
+    // resetApnsSessions only destroys sessions still in the adapter's cache. A RETIRED client
+    // session gracefully draining a /hang stream is out of the cache, keeps its connection
+    // open for the retire window, and makes afterAll's server.close() wait on it until the
+    // 10 s hook timeout (the CI flake on PR #374). Destroying the server side ends it now.
+    for (const session of serverSessions) session.destroy();
     serverSessions.length = 0;
     mode = 'ok';
     vi.useRealTimers();
