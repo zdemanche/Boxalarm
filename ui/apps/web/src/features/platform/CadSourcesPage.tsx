@@ -177,7 +177,12 @@ export function CadSourcesPage() {
     mutationFn: () => putCadSources(auth, drafts.map(toInput), query.data?.version ?? null),
     onSuccess: (saved) => {
       setSaveError(null);
-      setSaveMessage('CAD sources saved. Ingress picks up the change within a minute.');
+      // A removed source's old key left alive is exactly what the chief must know about.
+      setSaveMessage(
+        saved.secretCleanupFailed
+          ? 'Saved - but an old webhook key of a removed source could not be deleted and may still work. Save again to retry, or tell your administrator.'
+          : 'CAD sources saved. Ingress picks up the change within a minute.',
+      );
       queryClient.setQueryData(QUERY_KEY, saved);
     },
     onError: async (error: unknown) => {
@@ -282,6 +287,20 @@ export function CadSourcesPage() {
             </div>
           ) : null}
           {saveMessage ? <p role="status">{saveMessage}</p> : null}
+          {(query.data?.warnings ?? []).length > 0 ? (
+            // The server's non-blocking warnings about the saved sources - rendered as sent, so
+            // a warning the backend adds later is visible without a web release.
+            <div role="status">
+              <p>Warnings about the saved sources:</p>
+              <ul>
+                {(query.data?.warnings ?? []).map((w) => (
+                  <li key={`${w.field}-${w.message}`}>
+                    <code>{w.field}</code>: {w.message}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
         </form>
       )}
     </main>

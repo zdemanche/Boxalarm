@@ -149,6 +149,29 @@ test('saving sends every source with the loaded version and the senders one per 
   });
 });
 
+test("a failed secret cleanup and the server's warnings are surfaced after a save", async () => {
+  server.use(
+    http.get('/api/v1/platform/cad-sources', () => HttpResponse.json(STORED)),
+    http.put('/api/v1/platform/cad-sources', () =>
+      HttpResponse.json({
+        ...STORED,
+        version: 4,
+        secretCleanupFailed: 1,
+        warnings: [{ field: 'sources[0]', message: 'this source reads no incident number' }],
+      }),
+    ),
+  );
+  const user = userEvent.setup();
+  renderPage();
+  await screen.findByRole('heading', { name: 'County CAD' });
+  await user.click(screen.getByRole('button', { name: 'Save CAD sources' }));
+
+  const message = await screen.findByText(/an old webhook key of a removed source/);
+  expect(message.getAttribute('role')).toBe('status');
+  expect(message.textContent).toContain('may still work');
+  expect(await screen.findByText(/this source reads no incident number/)).toBeTruthy();
+});
+
 test('a rejected save lists the field errors', async () => {
   server.use(
     http.get('/api/v1/platform/cad-sources', () => HttpResponse.json(STORED)),
