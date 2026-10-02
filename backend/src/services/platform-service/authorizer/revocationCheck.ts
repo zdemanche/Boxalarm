@@ -21,23 +21,44 @@
  * An alerting-plane route is recognised two ways, either being enough: the alerting
  * authorizer Lambda runs with REVOCATION_CHECK_FAIL_OPEN=true (every route it serves is
  * alerting-plane - infrastructure/components/api/http-api.ts ALERTING_PLANE_ROUTES), and
- * the route key itself matches ALERTING_PLANE_ROUTE_PATTERNS, so a route wired to the main
+ * the route key itself is in FAIL_OPEN_ROUTE_KEYS, so a route wired to the main
  * authorizer by mistake still fails open.
+ *
+ * FAIL_OPEN_ROUTE_KEYS lists exact route keys, never a path prefix: the officer read
+ * routes (receipts, diagnostics, audit, canary status, delivery baseline) also live under
+ * /api/v1/alerting/ but sit on the main authorizer BY DESIGN (http-api.ts
+ * OFFICER_ALERTING_READ_ROUTES), so that during a platform-table outage a revoked token
+ * cannot keep reading delivery evidence. A prefix match here used to force them open
+ * anyway (arch-amendments review, M7). An infrastructure contract test pins this list to
+ * ALERTING_PLANE_ROUTES so the two cannot drift.
  */
 export const CACHE_TTL_MS = 30_000;
 const MAX_CACHE_ENTRIES = 5_000;
 
-export const ALERTING_PLANE_ROUTE_PATTERNS: readonly RegExp[] = [
-  /^[A-Z]+ \/api\/v1\/alerting\//,
-  /^[A-Z]+ \/api\/v1\/apparatus\/riding-board\//,
-  /^[A-Z]+ \/api\/v1\/personnel\/members\/\{memberId\}\/push-tokens$/,
+export const FAIL_OPEN_ROUTE_KEYS: readonly string[] = [
+  'POST /api/v1/alerting/dispatches',
+  'GET /api/v1/alerting/dispatches',
+  'GET /api/v1/alerting/dispatches/{dispatchId}',
+  'GET /api/v1/alerting/dispatches/{dispatchId}/roster',
+  'POST /api/v1/alerting/dispatches/{dispatchId}/responses',
+  'POST /api/v1/alerting/dispatches/{dispatchId}/tone-ladder/advance',
+  'POST /api/v1/alerting/dispatches/{dispatchId}/tone-ladder/halt',
+  'POST /api/v1/alerting/dispatches/{dispatchId}/mutual-aid/trigger',
+  'POST /api/v1/alerting/dispatches/{dispatchId}/mutual-aid/acknowledge',
+  'GET /api/v1/apparatus/riding-board/{dispatchId}',
+  'POST /api/v1/apparatus/riding-board/{dispatchId}/assignments',
+  'POST /api/v1/personnel/members/{memberId}/push-tokens',
+  'DELETE /api/v1/personnel/members/{memberId}/push-tokens',
+  'GET /api/v1/alerting/home-locality',
+  'POST /api/v1/alerting/devices/state',
+  'POST /api/v1/alerting/self-test',
+  'GET /api/v1/alerting/self-test/{testId}',
 ];
 
+const FAIL_OPEN_ROUTE_KEY_SET: ReadonlySet<string> = new Set(FAIL_OPEN_ROUTE_KEYS);
+
 export function revocationFailsOpen(routeKey: string, env: NodeJS.ProcessEnv): boolean {
-  return (
-    env.REVOCATION_CHECK_FAIL_OPEN === 'true' ||
-    ALERTING_PLANE_ROUTE_PATTERNS.some((pattern) => pattern.test(routeKey))
-  );
+  return env.REVOCATION_CHECK_FAIL_OPEN === 'true' || FAIL_OPEN_ROUTE_KEY_SET.has(routeKey);
 }
 
 export type RevocationDecision = 'allow' | 'revoked' | 'unavailable';

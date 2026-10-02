@@ -80,9 +80,27 @@ describe('revocationFailsOpen', () => {
     'POST /api/v1/apparatus/riding-board/{dispatchId}/assignments',
     'POST /api/v1/personnel/members/{memberId}/push-tokens',
     'DELETE /api/v1/personnel/members/{memberId}/push-tokens',
-    'GET /api/v1/alerting/dispatches/{dispatchId}/receipts',
+    'GET /api/v1/alerting/home-locality',
+    'POST /api/v1/alerting/devices/state',
+    'POST /api/v1/alerting/self-test',
+    'GET /api/v1/alerting/self-test/{testId}',
   ])('fails open for the alerting-plane route %s on any authorizer', (routeKey) => {
     expect(revocationFailsOpen(routeKey, {})).toBe(true);
+  });
+
+  // The officer reads live under /api/v1/alerting/ but sit on the main authorizer BY
+  // DESIGN (OFFICER_ALERTING_READ_ROUTES): a revoked token must not keep reading delivery
+  // evidence during a platform-table outage. A path-prefix match used to force these open
+  // (arch-amendments review M7).
+  it.each([
+    'GET /api/v1/alerting/dispatches/{dispatchId}/receipts',
+    'GET /api/v1/alerting/dispatches/{dispatchId}/diagnostics',
+    'GET /api/v1/alerting/dispatches/{dispatchId}/diagnostics/{memberId}',
+    'GET /api/v1/alerting/audit',
+    'GET /api/v1/alerting/canary/status',
+    'GET /api/v1/alerting/delivery-baseline',
+  ])('fails closed for the officer read route %s on the main authorizer', (routeKey) => {
+    expect(revocationFailsOpen(routeKey, {})).toBe(false);
   });
 
   it.each([
