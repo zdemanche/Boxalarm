@@ -15,6 +15,8 @@ export const CERT_EXPIRY_CATEGORY = 'cert-expiry';
 export const TRAINING_OFFICER_DIGEST_CATEGORY = 'cert-expiry-officer';
 export const APPARATUS_TEST_DUE_CATEGORY = 'apparatus-test-due';
 export const APPARATUS_DEFECT_CATEGORY = 'apparatus-defect';
+/** A manual service-status change (owed review minor 10): apparatus holders, officers, chief. */
+export const APPARATUS_STATUS_CATEGORY = 'apparatus-status';
 export const INVENTORY_REORDER_CATEGORY = 'inventory-reorder';
 export const PPE_EXPIRY_CATEGORY = 'ppe-expiry';
 /** The APPARATUS role's department-wide PPE copy: its own mute, apart from the holder's. */
@@ -155,6 +157,15 @@ const CONFIGS: readonly ReminderCategoryConfig[] = [
     pushChannelId: 'apparatus-defect',
     subject: (n) => `${plural(n, 'apparatus defect', 'apparatus defects')} reported`,
     summary: (n) => `${plural(n, 'defect', 'defects')} reported`,
+  },
+  {
+    // Immediate-only (no digest rows): a unit going out of or back into service is news now.
+    category: APPARATUS_STATUS_CATEGORY,
+    muteKey: APPARATUS_STATUS_CATEGORY,
+    roles: ['APPARATUS', 'OFFICER', 'CHIEF'],
+    pushChannelId: 'apparatus-status',
+    subject: (n) => `${plural(n, 'apparatus status change', 'apparatus status changes')}`,
+    summary: (n) => `${plural(n, 'status change', 'status changes')}`,
   },
   {
     category: INVENTORY_REORDER_CATEGORY,

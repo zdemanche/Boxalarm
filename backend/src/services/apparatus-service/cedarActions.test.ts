@@ -23,6 +23,8 @@ const HANDLER_MODULES: Record<string, string> = {
   './postTestRecord.js': 'LogApparatusTestRecord',
   './getTestingSchedules.js': 'ViewTestingSchedules',
   './getComplianceHandler.js': 'GetComplianceReport',
+  './listOpenDefectsHandler.js': 'ListOpenDefects',
+  './resolveDefectHandler.js': 'ResolveDefect',
   './inventory-list/handler.js': 'ListCompartmentInventory',
   './inventory-create/handler.js': 'CreateCompartmentItem',
   './inventory-quantity/handler.js': 'UpdateCompartmentItemQuantity',

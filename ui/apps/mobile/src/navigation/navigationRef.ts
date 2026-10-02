@@ -62,8 +62,34 @@ export function hasPendingAlertNavigation(): boolean {
   return pendingAlert !== null;
 }
 
+// A non-critical notification tap (category 'digest') held until the signed-in tabs exist,
+// like a page — but it only ever opens the inbox, never an alert screen.
+let pendingInboxHeldAt: number | null = null;
+
+/**
+ * Opens Me > Inbox — the destination of every notification-service push tap
+ * (pushRouting.ts). Held like an alert while the tabs are not mounted yet (cold start,
+ * sign-in screens), and dropped on the same 2 h staleness window.
+ */
+export function navigateToInbox(): void {
+  if (!isInboxRouteAvailable()) {
+    pendingInboxHeldAt = Date.now();
+    return;
+  }
+  pendingInboxHeldAt = null;
+  navigationRef.navigate('Me', { screen: 'Inbox' });
+}
+
 /** Wired to NavigationContainer onReady and onStateChange (RootNavigator). */
 export function flushPendingAlertNavigation(): void {
+  // Inbox first, alert second: when both are held, the call must end up on top.
+  if (pendingInboxHeldAt !== null && isInboxRouteAvailable()) {
+    const heldAt = pendingInboxHeldAt;
+    pendingInboxHeldAt = null;
+    if (Date.now() - heldAt <= HELD_ALERT_MAX_AGE_MS) {
+      navigationRef.navigate('Me', { screen: 'Inbox' });
+    }
+  }
   if (!pendingAlert || !isAlertRouteAvailable()) return;
   const held = pendingAlert;
   pendingAlert = null;
@@ -82,6 +108,12 @@ export function isNavigationReady(): boolean {
 export function isAlertRouteAvailable(): boolean {
   if (!navigationRef.isReady()) return false;
   return navigationRef.getRootState()?.routeNames?.includes('Alerts') ?? false;
+}
+
+/** Whether the Me tab (and so the Inbox screen) is mounted — the signed-in tabs. */
+export function isInboxRouteAvailable(): boolean {
+  if (!navigationRef.isReady()) return false;
+  return navigationRef.getRootState()?.routeNames?.includes('Me') ?? false;
 }
 
 /** Calls `listener` whenever the navigation state changes (including when it first mounts). */

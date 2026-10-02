@@ -9,6 +9,7 @@
     { "path": "packages/dept-scope" },
     { "path": "packages/authz" },
     { "path": "packages/outbox" },
+    { "path": "packages/push-transport" },
     { "path": "packages/metrics" },
     { "path": "packages/logging" },
     { "path": "packages/health" },

@@ -47,11 +47,13 @@ const EXPECTED: Record<string, Expected> = {
   list: { grants: [q(GSI3)], cedar: false },
   create: { grants: [put], cedar: false },
   get: { grants: [q(GSI3), q(TABLE)], cedar: false },
+  "defects-list": { grants: [q(GSI3)], cedar: true },
   "service-status-update": { grants: [q(GSI3), q(TABLE), update, put], cedar: true },
   "checklist-get": { grants: [q(GSI3), ["dynamodb:Scan", TABLE], get], cedar: true },
   "checks-submit": { grants: [q(GSI3), put, get], cedar: true },
   "check-photo-attach": { grants: [q(GSI3), put, get], cedar: true },
   "defects-report": { grants: [q(GSI3), q(TABLE), get, put, update], cedar: true },
+  "defects-resolve": { grants: [q(GSI3), get, update, put], cedar: true },
   compliance: { grants: [q(GSI3)], cedar: true },
   "maintenance-get": { grants: [q(TABLE)], cedar: true },
   "maintenance-log": { grants: [get, put], cedar: true },
@@ -118,7 +120,7 @@ async function build() {
 }
 
 describe("apparatus Lambdas: env and IAM match their handlers", { timeout: 30_000 }, () => {
-  it("deploys exactly the eighteen apparatus route Lambdas", async () => {
+  it("deploys exactly the twenty apparatus route Lambdas", async () => {
     await build();
     const names = resourcesOfType("aws:lambda/function:Function")
       .map((r) => r.inputs.name as string)
@@ -204,7 +206,7 @@ describe("apparatus Lambdas: env and IAM match their handlers", { timeout: 30_00
       isGranted(statementsForRole(fnName(key)), "dynamodb:UpdateItem", TABLE),
     );
     expect(mutating.sort()).toEqual(
-      ["defects-report", "inventory-quantity", "service-status-update"].sort(),
+      ["defects-report", "defects-resolve", "inventory-quantity", "service-status-update"].sort(),
     );
     for (const key of mutating) {
       const deny = statementsForRole(fnName(key)).find((st) => st.Sid === "DenyAuditMutations");

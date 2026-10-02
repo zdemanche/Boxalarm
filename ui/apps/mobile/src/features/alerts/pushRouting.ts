@@ -11,10 +11,12 @@ import {
   isAlertRouteAvailable,
   isNavigationReady,
   navigateToAlertDetail,
+  navigateToInbox,
   navigateToMutualAidPrompt,
   navigationRef,
   onNavigationStateChange,
 } from '../../navigation/navigationRef';
+import { categoryFromPushData } from './pushChannel';
 import { queueAlertResponse } from './alertResponses';
 import { markInitialAlertRoutingSettled } from './lockScreenPresentation';
 import { answerFromActionId, handleNotificationEvent } from './notificationActions';
@@ -44,20 +46,45 @@ function openAlert(payload: AlertPayload | null): void {
   else navigateToAlertDetail(payload.dispatchId, payload);
 }
 
+/**
+ * A notification-service push (category 'digest' — the non-critical channel's routing key,
+ * pushChannel.ts). Its tap opens the in-app inbox, NEVER an alert screen: even if such a push
+ * somehow carried a dispatchId, the category check runs first, so it cannot reach openAlert.
+ */
+function isInboxPushData(data: Record<string, unknown> | undefined): boolean {
+  return categoryFromPushData(data) === 'digest';
+}
+
+/** Category first — inbox for a digest, the alert/prompt screens for everything else. */
+function routeTappedPushData(data: Record<string, unknown> | undefined, receivedAt: number): void {
+  if (isInboxPushData(data)) {
+    navigateToInbox();
+    return;
+  }
+  openAlert(alertPayloadFromPushData(data, receivedAt));
+}
+
 /** An FCM RemoteMessage (sentTime in epoch ms), as delivered to the open/initial callbacks. */
-function payloadFromRemoteMessage(
+function routeTappedRemoteMessage(
   message: { data?: Record<string, unknown>; sentTime?: number } | null | undefined,
-): AlertPayload | null {
-  return alertPayloadFromPushData(message?.data, message?.sentTime ?? Date.now());
+): void {
+  if (!message) return;
+  routeTappedPushData(message.data, message.sentTime ?? Date.now());
 }
 
 async function routeToInitialNotification(): Promise<void> {
   if (Platform.OS === 'android') {
     const initial = await notifee.getInitialNotification();
-    openAlert(alertPayloadFromNotificationData(initial?.notification.data));
+    if (!initial) return;
+    const data = initial.notification.data;
+    if (isInboxPushData(data)) {
+      navigateToInbox();
+      return;
+    }
+    openAlert(alertPayloadFromNotificationData(data));
     return;
   }
-  openAlert(payloadFromRemoteMessage(await getInitialNotification(messagingInstance)));
+  routeTappedRemoteMessage(await getInitialNotification(messagingInstance));
 }
 
 /**
@@ -82,25 +109,42 @@ interface PendingIosTap {
   deliveredAt?: unknown;
   /** A notification action ("respond:RESPONDING") pressed instead of a plain tap. */
   action?: unknown;
+  /** 'digest' when the tapped notification was a non-critical notification-service push. */
+  category?: unknown;
   title?: unknown;
   body?: unknown;
   toneSequence?: unknown;
 }
 
-function readPendingIosTap(nowMs: number): AlertPayload | null {
+type PendingIosRoute = { kind: 'alert'; payload: AlertPayload } | { kind: 'inbox' };
+
+function readPendingIosTap(nowMs: number): PendingIosRoute | null {
   const pending = Settings.get(IOS_PENDING_ALERT_TAP_KEY) as PendingIosTap | null | undefined;
   if (!pending || typeof pending !== 'object') return null;
   const { dispatchId, tappedAt } = pending;
   const fresh =
     typeof tappedAt === 'number' &&
     nowMs / 1000 - tappedAt <= IOS_PENDING_ALERT_TAP_MAX_AGE_SECONDS;
+  // A tapped non-critical notification (AppDelegate records category 'digest', never a
+  // dispatchId) opens the inbox — by category, before any dispatch field is even looked at.
+  if (pending.category === 'digest') {
+    if (!fresh) {
+      Settings.set({ [IOS_PENDING_ALERT_TAP_KEY]: null });
+      return null;
+    }
+    return { kind: 'inbox' };
+  }
   if (typeof dispatchId !== 'string' || dispatchId.length === 0 || !fresh) {
     Settings.set({ [IOS_PENDING_ALERT_TAP_KEY]: null });
     return null;
   }
   const receivedSeconds =
     typeof pending.deliveredAt === 'number' ? pending.deliveredAt : (tappedAt as number);
-  return alertPayloadFromPushData(pending as Record<string, unknown>, receivedSeconds * 1000);
+  const payload = alertPayloadFromPushData(
+    pending as Record<string, unknown>,
+    receivedSeconds * 1000,
+  );
+  return payload ? { kind: 'alert', payload } : null;
 }
 
 /** What a signed-out member is told when they answer a page from its notification (M2). */
@@ -152,8 +196,16 @@ function answerPendingIosAction(dispatchId: string): void {
  * pending and is routed on the first navigation state change that can take it.
  */
 export function routePendingIosAlertTap(nowMs: number = Date.now()): void {
-  const payload = readPendingIosTap(nowMs);
-  if (!payload) return;
+  const pending = readPendingIosTap(nowMs);
+  if (!pending) return;
+  if (pending.kind === 'inbox') {
+    if (!isNavigationReady()) return;
+    Settings.set({ [IOS_PENDING_ALERT_TAP_KEY]: null });
+    // navigateToInbox holds its own navigation until the signed-in tabs exist.
+    navigateToInbox();
+    return;
+  }
+  const { payload } = pending;
   answerPendingIosAction(payload.dispatchId);
   if (!isNavigationReady() || !isAlertRouteAvailable()) return;
   Settings.set({ [IOS_PENDING_ALERT_TAP_KEY]: null });
@@ -189,7 +241,7 @@ export function subscribePushNotificationRouting(): () => void {
     });
 
   const unsubscribeOpened = onNotificationOpenedApp(messagingInstance, (remoteMessage) => {
-    openAlert(payloadFromRemoteMessage(remoteMessage));
+    routeTappedRemoteMessage(remoteMessage);
   });
 
   const unsubscribeForeground = notifee.onForegroundEvent((event) => {
@@ -198,7 +250,12 @@ export function subscribePushNotificationRouting(): () => void {
       return;
     }
     if (event.type !== EventType.PRESS) return;
-    openAlert(alertPayloadFromNotificationData(event.detail.notification?.data));
+    const data = event.detail.notification?.data;
+    if (isInboxPushData(data)) {
+      navigateToInbox();
+      return;
+    }
+    openAlert(alertPayloadFromNotificationData(data));
   });
 
   const unsubscribeIosTaps = Platform.OS === 'ios' ? subscribeIosAlertTaps() : () => {};

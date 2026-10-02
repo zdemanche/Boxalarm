@@ -285,6 +285,7 @@ describe('digestJob handler (entrypoint-test obligation)', () => {
     expect(sendEmailDigest).toHaveBeenCalledTimes(1);
     expect(sendPushDigest.mock.calls[0]?.[1]).toEqual({
       memberId: 'OFFICER-1',
+      deptId: 'NICHOLS',
       email: 'officer1@example.com',
     });
   });

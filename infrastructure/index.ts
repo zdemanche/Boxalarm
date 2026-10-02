@@ -50,6 +50,7 @@ import { InspectionsMap } from "./components/inspections/map";
 import { Inbox as NotificationInbox } from "./components/notification/inbox";
 import { Digest as NotificationDigest } from "./components/notification/digest";
 import { Reminders as NotificationReminders } from "./components/notification/reminders";
+import { PushWorker as NotificationPushWorker } from "./components/notification/push-worker";
 import { Config as PlatformConfig } from "./components/platform/config";
 import { AuditRoute } from "./components/platform/audit-route";
 import { Export } from "./components/platform/export";
@@ -745,6 +746,20 @@ export const channelWorkers = new ChannelWorkers("channel-workers", {
   channelQueues: messagingAlerting.channelQueues,
   logGroup: alertingLogGroup,
   permissionsBoundaryArn: alertingBoundaryArn,
+});
+
+// The non-critical push worker (design review M7): subscribes the device-delivery Lambda to
+// boxalarm-{env}-notification-push, so digests and immediate out-of-service notices actually
+// reach phones. It shares only the APNs/FCM gateway secrets with the alerting plane (one
+// Apple/Firebase app, one set of signing keys) — no queue, no table, no concurrency.
+export const notificationPushWorker = new NotificationPushWorker("notification-push-worker", {
+  env,
+  platformTableName: platformTable.tableName,
+  platformTableArn: platformTable.tableArn,
+  pushTopicArn: notificationDigest.pushTopic.arn,
+  pushSecrets: channelWorkers.pushSecrets,
+  logGroup: serviceLogGroupByName["notification-service"],
+  opsAlarmTopicArn: chiefNotificationTopic.topicArn,
 });
 
 // E1-S1/S5/S6-INFRA: manual dispatch ingress, response confirmation, roster, detail.

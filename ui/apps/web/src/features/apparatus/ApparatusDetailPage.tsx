@@ -1,4 +1,5 @@
 import type { StatusRole } from '@boxalarm/design-tokens';
+import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Link, useParams } from 'react-router-dom';
 import { useAuth } from '../../auth/AuthContext';
@@ -9,6 +10,7 @@ import { getApparatus } from './api';
 import { InventoryTab } from './InventoryTab';
 import { MaintenanceTab } from './MaintenanceTab';
 import { ScbaTab } from './ScbaTab';
+import { ResolveDefectControl, resolveWarningFor } from './ResolveDefectControl';
 import { ServiceStatusControls } from './ServiceStatusControls';
 import { TestingTab } from './TestingTab';
 import type { OpenDefectSummary } from './types';
@@ -44,6 +46,8 @@ export function ApparatusDetailPage() {
   // unitId (apparatus-service getApparatus.ts -> getApparatusByUnitId), not by apparatusId.
   const { id = '' } = useParams();
   const auth = useAuth();
+  // Survives the resolved defect leaving the list: resolving never returns the unit to service.
+  const [resolveWarning, setResolveWarning] = useState<string | null>(null);
 
   const detailQuery = useQuery({
     queryKey: ['apparatus', id],
@@ -111,6 +115,7 @@ export function ApparatusDetailPage() {
           <ServiceStatusControls unit={unit} />
 
           <Card title="Open defects">
+            {resolveWarning ? <p role="status">{resolveWarning}</p> : null}
             {unit.openDefects.length === 0 ? (
               <p>No open defects.</p>
             ) : (
@@ -170,6 +175,16 @@ export function ApparatusDetailPage() {
                             No photo.
                           </p>
                         )}
+                        <div style={{ marginTop: 'var(--bx-space-sm)' }}>
+                          <ResolveDefectControl
+                            unitId={unit.unitId}
+                            defectId={defect.defectId}
+                            description={defect.description}
+                            onResolved={(result) =>
+                              setResolveWarning(resolveWarningFor(unit.unitId, result))
+                            }
+                          />
+                        </div>
                       </div>
                     </li>
                   );

@@ -475,29 +475,91 @@ test('an officer or chief dashboard keeps their own record: mark off, certs, poi
   expect(await screen.findByText('17')).toBeTruthy();
 });
 
-test('the apparatus dashboard lists checks due today, open defects and units out of service', async () => {
+const APPARATUS_LIST = {
+  apparatus: [
+    { apparatusId: 'a-1', unitId: 'E1', type: 'ENGINE', status: 'IN_SERVICE' },
+    {
+      apparatusId: 'a-2',
+      unitId: 'L1',
+      type: 'LADDER',
+      status: 'OUT_OF_SERVICE',
+      outOfService: { reason: 'Brakes', startAt: 1, elapsedSeconds: 60 },
+    },
+  ],
+};
+
+const COMPLIANCE_TODAY = {
+  report: [
+    { unitId: 'E1', expectedChecks: 1, actualChecks: 1, compliant: true },
+    { unitId: 'L1', expectedChecks: 1, actualChecks: 0, compliant: false },
+  ],
+};
+
+test('the apparatus dashboard lists checks due, open defects (one request) and units out of service', async () => {
+  const perUnitCalls: string[] = [];
   server.use(
-    http.get('/api/v1/apparatus', () =>
+    http.get('/api/v1/apparatus', () => HttpResponse.json(APPARATUS_LIST)),
+    http.get('/api/v1/apparatus/compliance', () => HttpResponse.json(COMPLIANCE_TODAY)),
+    http.get('/api/v1/apparatus/defects', () =>
       HttpResponse.json({
-        apparatus: [
-          { apparatusId: 'a-1', unitId: 'E1', type: 'ENGINE', status: 'IN_SERVICE' },
+        defects: [
           {
+            defectId: 'd1',
+            apparatusId: 'a-1',
+            unitId: 'E1',
+            description: 'Cracked mirror',
+            severity: 'MINOR',
+            reportedAt: 1,
+            photoS3Key: null,
+            itemCode: null,
+          },
+          {
+            defectId: 'd2',
             apparatusId: 'a-2',
             unitId: 'L1',
-            type: 'LADDER',
-            status: 'OUT_OF_SERVICE',
-            outOfService: { reason: 'Brakes', startAt: 1, elapsedSeconds: 60 },
+            description: 'Brakes',
+            severity: 'OUT_OF_SERVICE',
+            reportedAt: 2,
+            photoS3Key: null,
+            itemCode: null,
           },
         ],
       }),
     ),
-    http.get('/api/v1/apparatus/compliance', () =>
-      HttpResponse.json({
-        report: [
-          { unitId: 'E1', expectedChecks: 1, actualChecks: 1, compliant: true },
-          { unitId: 'L1', expectedChecks: 1, actualChecks: 0, compliant: false },
-        ],
-      }),
+    http.get('/api/v1/apparatus/:unitId', ({ params }) => {
+      perUnitCalls.push(String(params.unitId));
+      return serverError();
+    }),
+  );
+  renderLanding({ sub: 'm1', 'cognito:groups': ['APPARATUS'] });
+
+  const due = await screen.findByRole('list', { name: 'Units not checked today' });
+  expect(due.textContent).toBe('L1 — not checked yet today');
+  const defects = await screen.findByRole('list', { name: 'Open defects' });
+  // Severity first (the out-of-service defect leads), then age; each row carries a Resolve.
+  const rows = within(defects)
+    .getAllByRole('listitem')
+    .map((item) => item.textContent ?? '');
+  expect(rows[0]).toContain('L1 — Out of service now: Brakes');
+  expect(rows[1]).toContain('E1 — Note: Cracked mirror');
+  expect(
+    within(defects).getByRole('button', { name: 'Resolve defect: Cracked mirror' }),
+  ).toBeTruthy();
+  const oos = screen.getByRole('list', { name: 'Units out of service' });
+  expect(oos.textContent).toBe('L1 — Brakes');
+  // The whole list came from GET apparatus/defects: no per-unit detail fetches (minor 8).
+  expect(perUnitCalls).toEqual([]);
+});
+
+test('an older server without the defects route falls back to per-unit details, reporting failures', async () => {
+  server.use(
+    http.get('/api/v1/apparatus', () => HttpResponse.json(APPARATUS_LIST)),
+    http.get('/api/v1/apparatus/compliance', () => HttpResponse.json(COMPLIANCE_TODAY)),
+    http.get('/api/v1/apparatus/defects', () =>
+      HttpResponse.json(
+        { type: 'about:blank', title: 'Not Found', status: 404, traceId: 't-404' },
+        { status: 404 },
+      ),
     ),
     http.get('/api/v1/apparatus/E1', () =>
       HttpResponse.json({
@@ -521,14 +583,10 @@ test('the apparatus dashboard lists checks due today, open defects and units out
   );
   renderLanding({ sub: 'm1', 'cognito:groups': ['APPARATUS'] });
 
-  const due = await screen.findByRole('list', { name: 'Units not checked today' });
-  expect(due.textContent).toBe('L1 — not checked yet today');
   const defects = await screen.findByRole('list', { name: 'Open defects' });
   expect(defects.textContent).toContain('E1 — Note: Cracked mirror');
   // One unit's defects failed: said so, not shown as "no defects".
   expect(await screen.findByText('Defects for 1 unit couldn’t load.')).toBeTruthy();
-  const oos = screen.getByRole('list', { name: 'Units out of service' });
-  expect(oos.textContent).toBe('L1 — Brakes');
 });
 
 test('the apparatus to-do is not shown to roles without the compliance read', async () => {

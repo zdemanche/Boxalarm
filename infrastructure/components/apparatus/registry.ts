@@ -19,6 +19,7 @@ export class Registry extends pulumi.ComponentResource {
   public readonly listLambda: ServiceLambda;
   public readonly createLambda: ServiceLambda;
   public readonly getLambda: ServiceLambda;
+  public readonly defectsListLambda: ServiceLambda;
   public readonly serviceStatusLambda: ServiceLambda;
 
   constructor(name: string, args: ApparatusArgs, opts?: pulumi.ComponentResourceOptions) {
@@ -50,6 +51,16 @@ export class Registry extends pulumi.ComponentResource {
       grants: [{ sid: "ApparatusGetQuery", actions: ["dynamodb:Query"], on: ["table", "GSI3"] }],
     });
 
+    // listOpenDefectsHandler.ts -> defectRepository.listOpenDefects: one dept-wide GSI3
+    // query (gsi3pk DEPT#{dept}#DEFECT, gsi3sk OPEN#…) — the dashboard to-do card's single
+    // request (owed review minor 8). Officer tier (Cedar ListOpenDefects).
+    this.defectsListLambda = apparatusRoute(this, name, args, {
+      functionKey: "defects-list",
+      routeKey: "GET /api/v1/apparatus/defects",
+      cedar: true,
+      grants: [{ sid: "OpenDefectsQuery", actions: ["dynamodb:Query"], on: ["GSI3"] }],
+    });
+
     // serviceStatusHandler.ts -> repository.setServiceStatus: GSI3 lookup, base-table query
     // for the open OOS# record, then a transaction of Update (METADATA) + Put or Update
     // (OOS# record).
@@ -71,6 +82,7 @@ export class Registry extends pulumi.ComponentResource {
       listLambda: this.listLambda,
       createLambda: this.createLambda,
       getLambda: this.getLambda,
+      defectsListLambda: this.defectsListLambda,
       serviceStatusLambda: this.serviceStatusLambda,
     });
   }

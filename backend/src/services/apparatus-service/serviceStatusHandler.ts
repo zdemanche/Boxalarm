@@ -88,6 +88,8 @@ async function updateServiceStatus(
       unitId,
       status: body.status,
       ...(reason ? { reason } : {}),
+      changedBy: principal.sub,
+      correlationId: traceId,
     });
     return { statusCode: 204 };
   } catch (error) {

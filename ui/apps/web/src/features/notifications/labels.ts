@@ -10,6 +10,7 @@ const CATEGORY_LABEL: Record<string, string> = {
   'cert-expiry-officer': 'Department certifications expiring',
   'apparatus-test-due': 'Apparatus tests due',
   'apparatus-defect': 'Apparatus defects reported',
+  'apparatus-status': 'Apparatus status changes',
   'inventory-reorder': 'Supplies to reorder',
   'ppe-expiry': 'Your PPE expiring',
   'ppe-expiry-officer': 'Department PPE expiring',
@@ -52,6 +53,11 @@ export const REMINDER_PREFERENCES: readonly ReminderPreference[] = [
     category: 'apparatus-defect',
     legend: 'Apparatus defect reports',
     roles: ['APPARATUS', 'OFFICER'],
+  },
+  {
+    category: 'apparatus-status',
+    legend: 'Apparatus status changes',
+    roles: ['APPARATUS', 'OFFICER', 'CHIEF'],
   },
   {
     category: 'inventory-reorder',

@@ -137,6 +137,20 @@ extension AppDelegate {
       if isResponseAction { record["action"] = actionId }
       UserDefaults.standard.set(record, forKey: pendingAlertTapKey)
     }
+    // A tap on a non-critical notification-service push (category "digest", sent by the LOB
+    // push worker with no dispatchId) opens the in-app inbox, never an alert screen. Recorded
+    // under the same key; the JS router branches on `category` before any dispatch field.
+    if actionId == UNNotificationDefaultActionIdentifier,
+      userInfo["gcm.message_id"] == nil,
+      (userInfo["category"] as? String) == "digest"
+    {
+      var record: [String: Any] = [
+        "category": "digest",
+        "tappedAt": Date().timeIntervalSince1970,
+      ]
+      if let path = userInfo["path"] as? String, !path.isEmpty { record["path"] = path }
+      UserDefaults.standard.set(record, forKey: pendingAlertTapKey)
+    }
     completionHandler()
   }
 }

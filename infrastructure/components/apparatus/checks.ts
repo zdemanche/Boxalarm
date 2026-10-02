@@ -26,6 +26,7 @@ export class Checks extends pulumi.ComponentResource {
   public readonly submitCheckLambda: ServiceLambda;
   public readonly checkPhotoLambda: ServiceLambda;
   public readonly reportDefectLambda: ServiceLambda;
+  public readonly resolveDefectLambda: ServiceLambda;
   public readonly complianceLambda: ServiceLambda;
   public readonly submitCheckErrorsAlarm: aws.cloudwatch.MetricAlarm;
   public readonly reportDefectErrorsAlarm: aws.cloudwatch.MetricAlarm;
@@ -108,6 +109,24 @@ export class Checks extends pulumi.ComponentResource {
       ],
     });
 
+    // resolveDefectHandler.ts -> defectRepository.resolveDefect (review MAJOR-2): GSI3 unit
+    // lookup, a consistent GetItem on the DEFECT row, then a transaction of Update (status ->
+    // RESOLVED, gsi3sk OPEN#->RESOLVED#) + Put (AUDIT_LOG_ENTRY). The audit-mutation deny
+    // rides along since UpdateItem is granted.
+    this.resolveDefectLambda = apparatusRoute(this, name, args, {
+      functionKey: "defects-resolve",
+      routeKey: "POST /api/v1/apparatus/{unitId}/defects/{defectId}/resolve",
+      cedar: true,
+      grants: [
+        { sid: "ResolveDefectQuery", actions: ["dynamodb:Query"], on: ["GSI3"] },
+        {
+          sid: "ResolveDefectWrite",
+          actions: ["dynamodb:GetItem", "dynamodb:UpdateItem", "dynamodb:PutItem"],
+          on: ["table"],
+        },
+      ],
+    });
+
     // getComplianceHandler.ts: repository.listApparatus and queryChecklistRunsInRange both
     // query GSI3; nothing touches the base table.
     this.complianceLambda = apparatusRoute(this, name, args, {
@@ -168,6 +187,7 @@ export class Checks extends pulumi.ComponentResource {
       submitCheckLambda: this.submitCheckLambda,
       checkPhotoLambda: this.checkPhotoLambda,
       reportDefectLambda: this.reportDefectLambda,
+      resolveDefectLambda: this.resolveDefectLambda,
       complianceLambda: this.complianceLambda,
     });
   }

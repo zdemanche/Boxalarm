@@ -251,7 +251,7 @@ describe('apparatusDefectConsumer — out-of-service defect (immediate path)', (
     const { handler } = await load(table.send, push);
 
     await expect(handler(sqsEvent(defect({ outOfService: true })))).rejects.toThrow(
-      'immediate defect delivery failed for 1 recipient(s)',
+      'immediate delivery failed for 1 recipient(s)',
     );
     expect(
       inboxRows(table)
@@ -397,8 +397,8 @@ describe('apparatusDefectConsumer — out-of-service email (review M1)', () => {
     await handler(sqsEvent(defect({ outOfService: true })));
 
     expect(email.mock.calls.map((call) => call[1] as unknown)).toEqual([
-      { memberId: 'APP-1', email: 'app1@example.com' },
-      { memberId: 'LT-1', email: 'lt1@example.com' },
+      { memberId: 'APP-1', deptId: 'NICHOLS', email: 'app1@example.com' },
+      { memberId: 'LT-1', deptId: 'NICHOLS', email: 'lt1@example.com' },
     ]);
     expect(email.mock.calls.map((call) => String(call[5]))).toEqual([
       'apparatus-defect',

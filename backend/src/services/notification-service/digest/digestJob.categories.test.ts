@@ -276,8 +276,8 @@ describe('digestJob across reminder categories', () => {
     );
     expect(recipients).toEqual(
       expect.arrayContaining([
-        { memberId: 'QM-1', email: 'qm@example.com' },
-        { memberId: 'FF-1', email: 'from-metadata@example.com' },
+        { memberId: 'QM-1', deptId: 'NICHOLS', email: 'qm@example.com' },
+        { memberId: 'FF-1', deptId: 'NICHOLS', email: 'from-metadata@example.com' },
       ]),
     );
   });

@@ -616,6 +616,16 @@ export const LAMBDA_ENTRIES = [
   },
   {
     service: 'apparatus-service',
+    function: 'defects-list',
+    entry: 'src/services/apparatus-service/listOpenDefectsHandler.ts',
+  },
+  {
+    service: 'apparatus-service',
+    function: 'defects-resolve',
+    entry: 'src/services/apparatus-service/resolveDefectHandler.ts',
+  },
+  {
+    service: 'apparatus-service',
     function: 'maintenance-get',
     entry: 'src/services/apparatus-service/getMaintenance.ts',
   },
@@ -962,6 +972,16 @@ export const LAMBDA_ENTRIES = [
     service: 'notification-service',
     function: 'neris-no-activity-consumer',
     entry: 'src/services/notification-service/events/nerisNoActivityConsumer.ts',
+  },
+  {
+    service: 'notification-service',
+    function: 'push-worker',
+    entry: 'src/services/notification-service/push/worker.ts',
+  },
+  {
+    service: 'notification-service',
+    function: 'apparatus-status-consumer',
+    entry: 'src/services/notification-service/events/apparatusStatusConsumer.ts',
   },
   // One health Lambda per service serves GET health/liveness and health/readiness.
   {

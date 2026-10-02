@@ -33,7 +33,7 @@ const SES_IDENTITY = `arn:aws:ses:${REGION}:${ACCOUNT_ID}:identity`;
 
 const fn = (key: string) => `boxalarm-dev-notification-${key}-consumer`;
 const DIGEST_ONLY = ["apparatus-test-due", "inventory-reorder", "ppe-expiry"];
-const ALL = [...DIGEST_ONLY, "apparatus-defect"];
+const ALL = [...DIGEST_ONLY, "apparatus-defect", "apparatus-status"];
 
 beforeEach(() => {
   installMocks();
@@ -62,6 +62,7 @@ describe("notification reminder consumers", { timeout: 30_000 }, () => {
   it.each([
     ["apparatus-test-due", "apparatus-service", ["apparatus.test.due"]],
     ["apparatus-defect", "apparatus-service", ["apparatus.defect.reported"]],
+    ["apparatus-status", "apparatus-service", ["apparatus.serviceStatus.changed"]],
     ["inventory-reorder", "inventory-service", ["inventory.reorder.due"]],
     ["ppe-expiry", "inventory-service", ["ppe.expiry.due", "inventory.expiry.due"]],
   ])(
@@ -148,6 +149,26 @@ describe("notification reminder consumers", { timeout: 30_000 }, () => {
     expect(s.find((st) => st.Sid === "DenyAuditMutations")?.Effect).toBe("Deny");
     const env = lambdaEnv(fn("apparatus-defect"));
     expect(env.PLATFORM_SERVICE_TABLE_NAME).toBe("boxalarm-dev-platform-service");
+    expect(env.NOTIFICATION_PUSH_TOPIC_ARN).toBe(PUSH_TOPIC);
+    expect(env.NOTIFICATION_SES_FROM_ADDRESS).toBe(FROM);
+  });
+
+  it("apparatus-status: the same immediate pipeline as the defect — roster, inbox, push, email (minor 10)", async () => {
+    await build();
+    const s = statementsForRole(fn("apparatus-status"));
+    expect(isGranted(s, "dynamodb:Query", GSI3)).toBe(true);
+    for (const action of ["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:DeleteItem"]) {
+      expect(isGranted(s, action, TABLE), action).toBe(true);
+    }
+    expect(isGranted(s, "dynamodb:UpdateItem", TABLE)).toBe(false);
+    expect(isGranted(s, "sns:Publish", PUSH_TOPIC)).toBe(true);
+    expect(isGranted(s, "sns:Publish", (r) => r.includes("alerting") || r.endsWith("*"))).toBe(
+      false,
+    );
+    expect(isGranted(s, "ses:SendEmail", `${SES_IDENTITY}/${FROM}`)).toBe(true);
+    expect(isGranted(s, "ses:SendEmail", (r) => r.endsWith("*"))).toBe(false);
+    expect(s.find((st) => st.Sid === "DenyAuditMutations")?.Effect).toBe("Deny");
+    const env = lambdaEnv(fn("apparatus-status"));
     expect(env.NOTIFICATION_PUSH_TOPIC_ARN).toBe(PUSH_TOPIC);
     expect(env.NOTIFICATION_SES_FROM_ADDRESS).toBe(FROM);
   });

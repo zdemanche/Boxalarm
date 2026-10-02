@@ -5,7 +5,7 @@ import { Text } from 'react-native';
 import { useTheme } from '../components/ui/theme';
 import { AlertsStack, type AlertsStackParamList } from './AlertsStack';
 import { ChecksStack } from './ChecksStack';
-import { MeStack } from './MeStack';
+import { MeStack, type MeStackParamList } from './MeStack';
 import { ScheduleStack } from './ScheduleStack';
 
 // Bottom tab bar per architecture.md §7.2 — Alerts · Checks · Schedule · Me, in that order.
@@ -17,7 +17,8 @@ export type AppTabsParamList = {
   Alerts: NavigatorScreenParams<AlertsStackParamList> | undefined;
   Checks: undefined;
   Schedule: undefined;
-  Me: undefined;
+  // Addressable screens so a non-critical notification tap can land on Me > Inbox.
+  Me: NavigatorScreenParams<MeStackParamList> | undefined;
 };
 
 const Tab = createBottomTabNavigator<AppTabsParamList>();

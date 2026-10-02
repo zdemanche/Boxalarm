@@ -20,6 +20,8 @@ function logSkip(event: string, correlationId: string, extra: Record<string, unk
 
 export interface DigestRecipient {
   readonly memberId: string;
+  /** The push worker reads the member's PUSH devices from the platform table by this key. */
+  readonly deptId: string;
   readonly email?: string | undefined;
 }
 
@@ -68,6 +70,7 @@ export async function sendPushDigest(
       Message: JSON.stringify({
         channelId: config.pushChannelId,
         memberId: recipient.memberId,
+        deptId: recipient.deptId,
         notificationCategory: category,
         // The mobile app routes anything but an explicit 'digest' to its DND-bypassing
         // dispatch channel (pushChannel.ts categoryFromPushData); every reminder is 'digest'.

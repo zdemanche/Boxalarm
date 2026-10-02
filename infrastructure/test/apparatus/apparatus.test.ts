@@ -72,12 +72,14 @@ function apparatusRoutes() {
 const UI_CALLS = [
   "GET apparatus",
   "POST apparatus",
+  "GET apparatus/defects",
   "GET apparatus/{unitId}",
   "PUT apparatus/{unitId}/service-status",
   "GET apparatus/{unitId}/checklist",
   "POST apparatus/{unitId}/checks",
   "POST apparatus/{unitId}/checks/{checkKey}/photos",
   "POST apparatus/{unitId}/defects",
+  "POST apparatus/{unitId}/defects/{defectId}/resolve",
   "GET apparatus/{unitId}/maintenance",
   "POST apparatus/{unitId}/maintenance",
   "POST apparatus/{unitId}/scba",
@@ -114,6 +116,8 @@ describe("apparatus-service routes", { timeout: 30_000 }, () => {
       "/inventory`",
       "/inventory/${encodeURIComponent(itemId)}`",
       "apparatus/compliance",
+      "apparatus/defects?status=open",
+      "/resolve`",
     ]) {
       expect(web, suffix).toContain(suffix);
     }
