@@ -342,7 +342,9 @@ Base path `/api/v1/{service}/...`, JSON camelCase, RFC 7807 errors with `traceId
 | PUT | `/api/v1/personnel/members/{memberId}/quals` | Update quals | Cognito(admin) |
 | POST | `/api/v1/personnel/attendance` | Record attendance for call/drill/meeting/detail/standby (F2.3) | Cognito |
 | GET | `/api/v1/personnel/members/{memberId}/losap` | LOSAP running point total (F2.4) | Cognito |
-| POST | `/api/v1/personnel/members/{memberId}/availability` | Mark unavailable / return (F2.5) | Cognito |
+| POST | `/api/v1/personnel/members/{memberId}/availability` | Mark unavailable / return (F2.5). **Amendment (2026-10-02):** capped at 90 days; a replayed create for the same `startAt` is 409 (see Data Model `AVAILABILITY_MARKOFF` amendment) | Cognito |
+| GET | `/api/v1/personnel/members/{memberId}/availability` | **Amendment (2026-10-02, `docs/decisions/2026-09-30-post-merge-server.md`).** Current and upcoming mark-offs (`{markOffs: [{markoffId, startAt, endAt, reason?}]}`, epoch seconds); ended/cancelled/past ones left out. Own record: every role (`ViewOwnAvailability`); anyone's: officer tier (`ViewMemberAvailability`) | Cognito |
+| POST | `/api/v1/personnel/members/{memberId}/availability/{markoffId}/end` | **Amendment (2026-10-02).** End a current mark-off now, or cancel an upcoming one; a repeat call is 200 `alreadyEnded: true`. Own: `EndOwnMarkoff` (every role); anyone's: officer tier (`EndMemberMarkoff`) | Cognito |
 | GET | `/api/v1/personnel/shifts` | List duty shifts (F2.8) | Cognito |
 | POST | `/api/v1/personnel/shifts` | Define a shift with required positions/quals | Cognito(admin) |
 | POST | `/api/v1/personnel/shifts/{shiftId}/claim` | Atomic open-shift claim, no double-booking (F2.9) | Cognito |
@@ -1045,6 +1047,8 @@ Generic GSI roles used throughout this table:
 | `startAt` / `endAt` | Number (epoch) | | |
 | `reason` | String (nullable) | | `Vacation` |
 | `affectsAlerting` | Boolean | **Corrected (#113).** Event-propagated into `MEMBER_ELIGIBILITY_SNAPSHOT.availabilityState` via `personnel.availability.changed` when this changes — never read cross-service at fan-out time. The C-2 isolation invariant (§Backend `:212`) already states this; this row previously contradicted it by describing a read that would fail closed at runtime (`alerting-service`'s execution role holds no permission to read this table at all). Note the field also **renames**, not just relocates: the snapshot carries the three-valued `availabilityState` (`AVAILABLE`\|`MARKED_OFF`\|`LOA`), not a same-named boolean copy of this flag. | `true` |
+
+**Amendment (2026-10-02, `docs/decisions/2026-09-30-post-merge-server.md` MAJOR-A) — mark-offs really unpage now, so they are capped, listable, and endable early.** The outbox path above is wired end to end (the platform drain previously dropped every mark-off, so none ever reached alerting). With a mark-off now genuinely suppressing a member's pages, three contract rules follow: a mark-off may last at most **90 days** (400 otherwise — a longer absence is LOA, a status change); current and upcoming mark-offs are listable (`GET …/availability`); and a mark-off can be **ended early or cancelled** (`POST …/availability/{markoffId}/end` — `markoffId` is the stored `startAt`). Ending **keeps the `MARKOFF#` row** (sets `endAt` to now — or `endAt = startAt`, `cancelled: true` for an upcoming one — plus `revertedAt`/`endedAt`/`endedBy`), so a replayed create for the same `startAt` still gets 409 and cannot unpage the member again. It emits `personnel.availability.changed AVAILABLE` through the outbox (a racing `ACTIVATE` is ordered by the snapshot clock), writes an audit entry, and deletes both schedules — a schedule that fires anyway finds `revertedAt` and no-ops. Residual, accepted: with overlapping windows, ending the first emits `AVAILABLE` while the second is still active — that **over-pages**, the safe direction.
 
 #### DUTY_SHIFT (F2.8)
 
