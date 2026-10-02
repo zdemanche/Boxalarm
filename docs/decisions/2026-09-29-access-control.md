@@ -19,9 +19,9 @@
 
 **Revisit if** a flood is ever observed, or if the department accepts the WAF cost. The change would be a REST API stage for `ALERTING_PLANE_ROUTES` with a regional WAF rate-based rule.
 
-## Architecture updates pending `docs/architecture.md` (for the next `/sdlc:arch-compile`)
+## Architecture updates — applied 2026-10-02 (`docs/arch-amendments`)
 
-These are not yet in `docs/architecture.md`. Editing that document makes `docs/architecture.compiled/` stale, so the changes are recorded here to be folded in and recompiled together. Each item names the architecture passage it amends.
+All ten items below are now dated amendments in `docs/architecture.md` (§4.1 Auth, §1.3 isolation-invariant note, §2 route tables, Data Model `MEMBER.status`/`INCIDENT_SECONDARY`, §8 S3 conventions, Cross-Cutting session policy). `docs/architecture.compiled/` is stale until the next `/sdlc:arch-compile`. Each item names the architecture passage it amends.
 
 1. **§Session and re-authentication policy, "Compensating controls" (`architecture.md:2625`).** The phrase "per-device revocation from the admin console" is not deliverable today. Replace it with the behaviour below.
    - Cognito device tracking does not apply to the hosted-UI authorization-code flow that both apps use.
