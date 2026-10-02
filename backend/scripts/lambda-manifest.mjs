@@ -963,6 +963,11 @@ export const LAMBDA_ENTRIES = [
     function: 'neris-no-activity-consumer',
     entry: 'src/services/notification-service/events/nerisNoActivityConsumer.ts',
   },
+  {
+    service: 'notification-service',
+    function: 'push-worker',
+    entry: 'src/services/notification-service/push/worker.ts',
+  },
   // One health Lambda per service serves GET health/liveness and health/readiness.
   {
     service: 'alerting-service',

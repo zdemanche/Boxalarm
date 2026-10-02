@@ -206,7 +206,7 @@ async function deliverTo(
     : await sendOnce(ddb, tableName, deptId, memberId, 'DEFECTPUSH', envelope, () =>
         sendPushDigest(
           process.env,
-          { memberId, email },
+          { memberId, deptId, email },
           [item],
           envelope.correlationId ?? envelope.eventId,
           undefined,
@@ -222,7 +222,7 @@ async function deliverTo(
     : await sendOnce(ddb, tableName, deptId, memberId, 'DEFECTEMAIL', envelope, () =>
         sendEmailDigest(
           process.env,
-          { memberId, email },
+          { memberId, deptId, email },
           [item],
           envelope.correlationId ?? envelope.eventId,
           undefined,

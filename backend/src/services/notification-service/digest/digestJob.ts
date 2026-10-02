@@ -329,7 +329,7 @@ async function sendDigest(
     if (!mutes.push) {
       await sendPushDigest(
         process.env,
-        { memberId, email },
+        { memberId, deptId, email },
         items,
         correlationId,
         undefined,
@@ -339,7 +339,7 @@ async function sendDigest(
     if (!mutes.email) {
       await sendEmailDigest(
         process.env,
-        { memberId, email },
+        { memberId, deptId, email },
         items,
         correlationId,
         undefined,
