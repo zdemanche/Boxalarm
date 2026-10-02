@@ -154,7 +154,10 @@ describe("notification push worker wiring (M7)", { timeout: 30_000 }, () => {
       "dynamodb:BatchWriteItem",
     ]) {
       expect(isGranted(statements, action, PLATFORM_TABLE), action).toBe(false);
-      expect(isGranted(statements, action, (r) => r.length > 0), action).toBe(false);
+      expect(
+        isGranted(statements, action, (r) => r.length > 0),
+        action,
+      ).toBe(false);
     }
     for (const key of ["apns", "apns-sandbox", "fcm"]) {
       expect(

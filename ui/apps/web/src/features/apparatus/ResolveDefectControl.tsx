@@ -89,10 +89,7 @@ export function ResolveDefectControl({
 }
 
 /** The page-level warning for a resolved OUT_OF_SERVICE defect on a unit still out of service. */
-export function resolveWarningFor(
-  unitId: string,
-  result: ResolveDefectResponse,
-): string | null {
+export function resolveWarningFor(unitId: string, result: ResolveDefectResponse): string | null {
   return result.unitStillOutOfService
     ? `${unitId} is still out of service — return it to service when it is ready.`
     : null;

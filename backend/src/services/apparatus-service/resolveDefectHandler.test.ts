@@ -87,7 +87,7 @@ function fakeTable(
       });
     }
     if (command instanceof TransactWriteCommand) {
-      transactions.push(command.input as Record<string, unknown>);
+      transactions.push(command.input);
       return Promise.resolve({});
     }
     return Promise.reject(new Error('unexpected command'));

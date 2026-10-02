@@ -48,11 +48,9 @@ function stubFetch(responses: FakeResponses): { bodies: string[] } {
           status: 200,
           body: { access_token: 'at-1', expires_in: 3600 },
         };
-        return Promise.resolve(
-          new Response(JSON.stringify(oauth.body), { status: oauth.status }),
-        );
+        return Promise.resolve(new Response(JSON.stringify(oauth.body), { status: oauth.status }));
       }
-      bodies.push(String(init?.body ?? ''));
+      bodies.push(typeof init?.body === 'string' ? init.body : '');
       const next = responses.send.shift() ?? { status: 200, body: { name: 'projects/x/m/1' } };
       return Promise.resolve(new Response(JSON.stringify(next.body), { status: next.status }));
     }),
@@ -65,12 +63,11 @@ afterEach(() => {
   resetPushCredentialCaches();
 });
 
-const send = (
-  secrets: ReturnType<typeof secretsClient>,
-  options: Record<string, unknown> = {},
-) =>
+const send = (secrets: ReturnType<typeof secretsClient>, options: Record<string, unknown> = {}) =>
   sendFcm(
-    { buildRequest: (credentials) => ({ message: { token: 'tok-1', meta: credentials.projectId } }) },
+    {
+      buildRequest: (credentials) => ({ message: { token: 'tok-1', meta: credentials.projectId } }),
+    },
     {
       secretId: 'fcm-prod',
       isTest: false,
@@ -192,9 +189,9 @@ describe('budget and retry helpers', () => {
 
     const httpError = new Error('nope');
     fetchMock.mockReset().mockRejectedValue(httpError);
-    await expect(
-      fetchRetryingConnectionLoss('https://x.invalid', {}, () => 1_000),
-    ).rejects.toBe(httpError);
+    await expect(fetchRetryingConnectionLoss('https://x.invalid', {}, () => 1_000)).rejects.toBe(
+      httpError,
+    );
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });

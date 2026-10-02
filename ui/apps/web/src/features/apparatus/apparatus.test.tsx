@@ -603,12 +603,9 @@ test('resolving requires a note before anything is sent', async () => {
   await screen.findByRole('heading', { name: 'L1' });
 
   const user = userEvent.setup();
-  await user.click(
-    await screen.findByRole('button', { name: 'Resolve defect: Marker light out' }),
-  );
+  await user.click(await screen.findByRole('button', { name: 'Resolve defect: Marker light out' }));
   await user.click(screen.getByRole('button', { name: 'Confirm resolve' }));
 
   expect(await screen.findByText('A note saying how it was fixed is required.')).toBeTruthy();
   expect(posts).toBe(0);
 });
-

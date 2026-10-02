@@ -72,9 +72,7 @@ function parseNote(rawBody: string | undefined): string | undefined {
     return undefined;
   }
   const trimmed = note.trim();
-  return trimmed.length > 0 && trimmed.length <= RESOLUTION_NOTE_MAX_LENGTH
-    ? trimmed
-    : undefined;
+  return trimmed.length > 0 && trimmed.length <= RESOLUTION_NOTE_MAX_LENGTH ? trimmed : undefined;
 }
 
 interface ResolveDefectDeps {
