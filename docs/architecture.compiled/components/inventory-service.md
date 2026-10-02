@@ -1,27 +1,26 @@
 # Inventory Service
 
 ## Purpose & Boundaries
-Equipment registry (F5.1), PPE assignment + NFPA expiry (F5.2), consumable stock/reorder (F5.3), asset lifecycle (F5.4). Platform table.
+Equipment registry (F5.1), PPE assignment with NFPA service-life expiry (F5.2), consumable stock/reorder (F5.3), asset lifecycle (F5.4). Wave 4; shares `platform` table. Scheduled stock scan emits reorder events; PPE expiry scanner daily.
 
 ## Interfaces
-`/api/v1/inventory`: GET/POST `/equipment` (POST admin); GET `/ppe/{memberId}`; GET `/consumables`; PUT `/consumables/{itemId}` (admin; sets `stockLevel`/`reorderThreshold` directly, last-writer-wins, no ledger); PUT `/equipment/{assetId}/lifecycle` (admin); health pair.
+`/api/v1/inventory`: GET/POST `/equipment` (POST admin); GET `/ppe/{memberId}`; GET `/consumables`; PUT `/consumables/{itemId}` (admin; sets `stockLevel`/`reorderThreshold` directly, last-writer-wins, no adjustment ledger); PUT `/equipment/{assetId}/lifecycle` (admin); health pair.
 
 ## Data Ownership
-`EQUIPMENT_ASSET` (`pk=DEPT#{d}#ASSET#{assetId}`; lifecycleStatus ACQUIRED|IN_SERVICE|RETIRED; assignedToType MEMBER|APPARATUS; gsi1 when member-assigned), `PPE_ASSIGNMENT` (`pk=DEPT#{d}#MEMBER#{m}`, `sk=PPE#{ppeItemId}`; `nfpaExpiryDate` 10-year life; status ISSUED|RETIRED|EXPIRED; gsi1, gsi2 `DEPT#{d}#DUE#PPE_ASSIGNMENT#{YYYY-MM}`), `CONSUMABLE_STOCK` (`pk=DEPT#{d}#CONSUMABLE#{itemId}`; gsi3 `DEPT#{d}#CONSUMABLE`).
+EQUIPMENT_ASSET `pk=DEPT#{deptId}#ASSET#{assetId}` `sk=METADATA` (lifecycleStatus ACQUIRED|IN_SERVICE|RETIRED; assignedToType MEMBER|APPARATUS; gsi1 when member-assigned); PPE_ASSIGNMENT `pk=DEPT#{deptId}#MEMBER#{memberId}` `sk=PPE#{ppeItemId}` (status ISSUED|RETIRED|EXPIRED; 10-year `nfpaExpiryDate`; gsi1 `PPE_ASSIGNMENT#{nfpaExpiryDate}`, gsi2 `DEPT#{deptId}#DUE#PPE_ASSIGNMENT#{YYYY-MM}`); CONSUMABLE_STOCK `pk=DEPT#{deptId}#CONSUMABLE#{itemId}` (gsi3 `DEPT#{deptId}#CONSUMABLE`).
 
 ## Events Produced
-`inventory.expiry.due` `{memberId, ppeItemId, expiryDate}` (daily PPE scanner) -> `inventory-notify-queue`; `inventory.reorder.due` `{itemId, itemName, currentQty, reorderThreshold, deptId}` (scheduled stock scan) -> `inventory-notify-queue`.
+`inventory.expiry.due` (`{memberId, ppeItemId, expiryDate}`; renamed from `ppe.expiry.due`; -> `inventory-notify-queue`); `inventory.reorder.due` (`itemId, itemName, currentQty, reorderThreshold, deptId` -> `inventory-notify-queue`+DLQ).
 
 ## Events Consumed
-absent — the source document does not address this
+absent — the source document does not address this.
 
 ## Dependencies
-internal: notification-service. external: DynamoDB.
+internal: notification-service, personnel-service, apparatus-service (equipment assignment). external: EventBridge Scheduler.
 
 ## Gotchas & Constraints
-- Event names renamed from `ppe.expiry.due` (N-5).
-- Reorder check filters stock vs threshold app-side over small item count.
-- Test matrix F5.3n (reorder notification delivered).
+- Domain prefix `inventory.`, never `ppe.`.
+- Whether Valkey is needed for LOB caching at all is an open cost question.
 
 ## Source Sections
-§1.1 122–150; §2 inventory API 490–501; Data Model EQUIPMENT_ASSET..CONSUMABLE 1277–1314; Events item 7 1640–1647; Testing F5 2359–2363.
+Backend §1.1 (122-150); §2 inventory-service (490-501); Data Model EQUIPMENT_ASSET..CONSUMABLE_STOCK (1277-1314); Events reconciliation 7 (1640-1647); §4.2 (1883)

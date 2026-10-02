@@ -1,28 +1,28 @@
 # Apparatus Service
 
 ## Purpose & Boundaries
-Apparatus registry (F4.1), check sheets (F4.2, glove-friendly <90s, offline-capable), defects (F4.3), out-of-service (F4.4), maintenance (F4.5), SCBA (F4.6), testing schedules (F4.7), compartment inventory (F4.8), compliance (F4.9), plus the riding board for active dispatches (alerting-plane, fail-open routes).
+Apparatus registry, daily check sheets (glove-friendly, <90s target N4.2), defects with photo, out-of-service tracking, maintenance, SCBA, hose/ladder/pump/aerial testing schedules, compartment inventory, check compliance. Also hosts the riding board (alerting-plane, fail-open routes) used by crews during a call. Shares `platform` table; wave 2.
 
 ## Interfaces
-`/api/v1/apparatus`: GET `/`, `/{unitId}`, `/{unitId}/checklist`; POST `/{unitId}/checks`, `/{unitId}/defects`; PUT `/{unitId}/defects/{defectId}/status` (admin; sets `status`, and `resolvedAt`/`resolvedBy` on RESOLVED); PUT `/{unitId}/service-status` (admin); GET `/{unitId}/maintenance`; POST `/{unitId}/scba`; GET `/testing-schedules`, `/{unitId}/inventory`, `/compliance` (admin); GET `/riding-board/{dispatchId}`, POST `/riding-board/{dispatchId}/assignments` (Cognito, ALERTING_PLANE fail-open); health pair. Further unlisted routes (apparatus inventory writes) exist; authoritative registry = `infrastructure/components/api/http-api.ts`.
+GET `/api/v1/apparatus`, GET `/{unitId}`, GET `/{unitId}/checklist`, POST `/{unitId}/checks`, POST `/{unitId}/defects`, PUT `/{unitId}/defects/{defectId}/status` (admin; sets `status`, plus `resolvedAt`/`resolvedBy` on RESOLVED), PUT `/{unitId}/service-status` (admin), GET `/{unitId}/maintenance`, POST `/{unitId}/scba`, GET `/testing-schedules`, GET `/{unitId}/inventory`, GET `/compliance` (admin), health pair — all under `/api/v1/apparatus`. Riding board (alerting plane, Cognito, fail-open authorizer): GET `/api/v1/apparatus/riding-board/{dispatchId}`, POST `.../assignments`. Further routes (apparatus inventory writes) registered but untabulated.
 
 ## Data Ownership
-Platform table: `APPARATUS` (`pk=DEPT#{d}#APPARATUS#{apparatusId}`, METADATA; status IN_SERVICE|OUT_OF_SERVICE; gsi3 `DEPT#{d}#APPARATUS`/`{unitId}`), `CHECKLIST_TEMPLATE` (`DEPT#{d}#CHECKLIST_TEMPLATE#{id}`), `CHECKLIST_RUN` (`CHECK#{completedAt}`, durationSeconds, capturedOffline, gsi3 `DEPT#{d}#CHECKLIST_RUN`), `DEFECT` (`DEFECT#{defectId}`; severity MINOR|MAJOR|OUT_OF_SERVICE; status OPEN|RESOLVED; gsi3 `DEPT#{d}#DEFECT`/`{status}#{reportedAt}`), `OUT_OF_SERVICE_RECORD` (`OOS#{startAt}`), `MAINTENANCE_RECORD` (`MAINT#{performedAt}`), `SCBA_RECORD` (`pk=DEPT#{d}#SCBA#{id}`; gsi2 due), `APPARATUS_TEST_RECORD` (`TEST#{testType}#{date}`; HOSE|LADDER|PUMP|AERIAL), `COMPARTMENT_ITEM`.
+APPARATUS `pk=DEPT#{deptId}#APPARATUS#{apparatusId}` `sk=METADATA` (status IN_SERVICE|OUT_OF_SERVICE; gsi3 `DEPT#{deptId}#APPARATUS`/`{unitId}`); CHECKLIST_TEMPLATE `pk=DEPT#{deptId}#CHECKLIST_TEMPLATE#{templateId}`; CHECKLIST_RUN `sk=CHECK#{completedAt}` (durationSeconds, capturedOffline, syncedAt; gsi3 `DEPT#{deptId}#CHECKLIST_RUN`); DEFECT `sk=DEFECT#{defectId}` (severity MINOR|MAJOR|OUT_OF_SERVICE; status OPEN|RESOLVED; gsi3 `DEPT#{deptId}#DEFECT`/`{status}#{reportedAt}`); OUT_OF_SERVICE_RECORD `sk=OOS#{startAt}`; MAINTENANCE_RECORD `sk=MAINT#{performedAt}`; SCBA_RECORD `pk=DEPT#{deptId}#SCBA#{scbaUnitId}` `sk=METADATA|TEST#{testDate}` (gsi2 `DUE#SCBA_TEST`); APPARATUS_TEST_RECORD `sk=TEST#{testType}#{testDate}` (HOSE|LADDER|PUMP|AERIAL; gsi2 `DUE#APPARATUS_TEST`); COMPARTMENT_ITEM `sk=COMPARTMENT_ITEM#{itemId}`. S3 photos `{deptId}/defect/{id}/...`. No TTL on CHECKLIST_RUN/MAINTENANCE/APPARATUS_TEST (ISO history).
 
 ## Events Produced
-`apparatus.defect.reported` `{defectId, apparatusId, unitLabel, reportedByMemberId, severity, photoS3Key?, outOfService, deptId}` (outbox) -> `apparatus-notify-queue`; `apparatus.test.due` `{apparatusId, testType, dueDate}` (daily scanner); `apparatus.check.completed`.
+`apparatus.defect.reported` (outbox, on defect from a check; payload defectId, apparatusId, unitLabel, reportedByMemberId, severity, photoS3Key?, outOfService boolean, deptId -> `apparatus-notify-queue`+DLQ); `apparatus.test.due` (daily scanner; `{apparatusId, testType, dueDate}`); `apparatus.check.completed`.
 
 ## Events Consumed
-absent — the source document does not address this
+absent — the source document does not address this (beyond mobile outbox replay).
 
 ## Dependencies
-internal: alerting-service (riding board), notification-service. external: S3 (photos), DynamoDB.
+internal: notification-service (consumer), alerting-service (riding board dispatch context), mobile-app, web-console, platform-service. external: S3.
 
 ## Gotchas & Constraints
-- Submit-check is one `TransactWriteItems` (CHECK + DEFECT per defect), offline-queued, replayed with client idempotency key (N3.4).
-- CHECKLIST_RUN/MAINTENANCE/TEST records have no TTL (ISO compliance history).
-- Test-matrix: F4.3n and F4.7n notification rows required.
-- Riding-board routes are fail-open: must remain in `ALERTING_PLANE_ROUTES`.
+- Submit-check is TransactWriteItems of `CHECK#{ts}` + `DEFECT#{id}` per defect; offline-queued, replayed on reconnect with client idempotency key (N3.4).
+- Riding-board routes are on the fail-open alerting authorizer set even though apparatus-owned.
+- PUT defect status is last-writer-wins current-state.
+- Defects route to apparatus officer via notification-service; no SMS/voice.
 
 ## Source Sections
-§1.1 122–150; §2 apparatus API 400–417 and riding board 345–346; Data Model apparatus entities 1168–1275; AP 27–34 1484–1491; Testing F4 2345–2357.
+Backend §1.1 (122-150); §2 apparatus-service (400-417) and riding board (345-346); Data Model APPARATUS..COMPARTMENT_ITEM (1168-1275); access patterns 27-34 (1484-1491); Events §1-reconciliation 7 (1640-1647)

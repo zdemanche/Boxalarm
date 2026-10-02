@@ -1,27 +1,27 @@
 # Notification Service
 
 ## Purpose & Boundaries
-NON-alert member/officer notifications: cert expiry (F3.2), defect routing to apparatus officer (F4.3), testing-due (F4.7), PPE expiry, reorder thresholds (F5.3), shift-coverage gaps. Preferences, in-app inbox, digest batching (required: grouped per member per category per day). Failure domain = LOB plane: shares NO SQS queue, Lambda concurrency reservation, SNS topic, or provider account with alerting; consumes only from `boxalarm-{env}-platform-bus`, never the alerting FIFO topic. Channels: APNs/FCM via separate non-critical channel (distinct channel ID, not Critical Alerts) + email. No SMS, no voice in v1.
+Non-alert member/officer notifications: cert expiry (F3.2), defect routing to apparatus officer (F4.3), testing-due (F4.7), PPE expiry, reorder thresholds (F5.3), shift-coverage gaps. Preference management, in-app inbox, digest batching (required: group per member per category per day). Service 10, wave 1, LOB failure domain. Channels: APNs/FCM on a separate non-critical channel in the same app (distinct channel ID, never Critical Alerts) plus email. NO SMS, NO voice in v1. Shares `platform` table.
 
 ## Interfaces
-Paths verbatim (not `/api/v1`): GET `/notifications` (inbox, paginated); POST `/notifications/{id}/read`; GET/PUT `/notifications/preferences`; GET `/notifications/health/liveness|readiness`. All Cognito.
+Canonical paths (NOT under /api/v1; Backend §1.1 note is source of truth): GET `/notifications` (paginated inbox), POST `/notifications/{id}/read`, GET `/notifications/preferences`, PUT `/notifications/preferences`, GET `/notifications/health/liveness`, GET `/notifications/health/readiness` (all Cognito except health).
 
 ## Data Ownership
-Platform table: `NOTIFICATION_PREFERENCE` (`sk=NOTIFPREF#{memberId}#{category}`), `NOTIFICATION` (`sk=NOTIF#{memberId}#{ts}#{notificationId}`, `readAt`, TTL 180 days).
+NOTIFICATION_PREFERENCE `sk=NOTIFPREF#{memberId}#{category}` (channel opt-ins, digest cadence); NOTIFICATION `sk=NOTIF#{memberId}#{ts}#{notificationId}` (`readAt`, TTL 180 days). Both on `platform` table.
 
 ## Events Produced
-absent — the source document does not address this
+absent — the source document does not address this.
 
 ## Events Consumed
-`training.expiry.due`, `apparatus.test.due`, `inventory.expiry.due`, `inventory.reorder.due`, `scheduling.coverage_gap.detected`, `apparatus.defect.reported` (routes to apparatus officer role), `neris.incident.missing`; queues `training-notify-queue`, `apparatus-notify-queue`, `inventory-notify-queue`, `scheduling-notify-queue`. Terminal NERIS send failure puts inbox item immediately (not digest-only).
+From `boxalarm-{env}-platform-bus`: `training.expiry.due` (`training-notify-queue`), `apparatus.test.due`, `apparatus.defect.reported` (`apparatus-notify-queue`, routes to apparatus officer role), `inventory.expiry.due`, `inventory.reorder.due` (`inventory-notify-queue`, routes to quartermaster/admin), `scheduling.coverage_gap.detected` (`scheduling-notify-queue`); `neris.incident.missing`/terminal NERIS failures (immediate inbox, not digest-only). Each queue + DLQ maxReceive 5.
 
 ## Dependencies
-internal: training-service, apparatus-service, inventory-service, personnel-service, incident-service (producers). external: APNs/FCM, email provider (unnamed).
+internal: training, apparatus, inventory, personnel, incident services; mobile-app. external: APNs/FCM (read-only shared signing credentials), email.
 
 ## Gotchas & Constraints
-- Isolation test NOTIF-ISO required (shares no queue/concurrency/provider with alerting).
-- Test-matrix rows required: F3.2n, F4.3n, F4.7n, F5.3n, F2.10n.
-- Email provider: absent.
+- Shares NO queue, concurrency reservation, SNS topic, table, or writable resource with alerting plane; never subscribes to alerting FIFO topic. Only shared item: three APNs/FCM signing secrets, read-only (pinned by test). Documented alternative not built: separate APNs .p8 key + FCM service account for LOB.
+- Test-matrix rows required for F3.2n, F4.3n, F4.7n, F5.3n, F2.10n, NOTIF-ISO.
+- Expiry scanners are daily; without digest batching they would push one per item.
 
 ## Source Sections
-§1.1 notification note 135–146; §2 notification API 503–514; Events item 7 1640–1647; Testing matrix 2306–2311.
+Backend §1.1 service 10 note (139-146); §2 notification-service (503-514); Events reconciliations 4, 7 (1619-1647); §5 table (1903-1909); Testing matrix (2306-2311)
