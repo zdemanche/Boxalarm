@@ -11,7 +11,7 @@
 # re-run that file alone before concluding anything:
 #   cd backend && npx vitest run <file>
 #
-# Usage: scripts/verify-all.sh   (from the repo root; exits non-zero on the first failure)
+# Usage: scripts/verify-all.sh   (runs every step even after a failure; exits non-zero if any failed)
 set -u
 root="$(cd "$(dirname "$0")/.." && pwd)"
 fail=0
