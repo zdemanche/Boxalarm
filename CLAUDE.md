@@ -77,5 +77,6 @@ each fix landed on one link of the chain and left another inconsistent.
 - **Trace cross-domain seams end to end as a chain, not edit-by-edit.** Every defect in this project so far lived *between* domains, never inside one. Verifying a single edit is how the alerting bug survived three rounds.
 - This is life-safety software. The app replaces radio tone-out as the path of record.
 - Route codegen/architecture/review through the `sdlc:*` agents — don't hand-write it.
+- **Before any push, run `scripts/verify-all.sh`** - every project's gates and suites, sequentially, ending with the Playwright e2e suite against a production build. CI's first run caught a crash only e2e could see; don't skip it. LocalStack files that time out under full-suite load: re-run alone.
 - **Decide, don't ask.** The user wants defaults picked and stated, not decisions handed back. Reserve questions for spend, destructive actions, or scope of a whole run.
 - Prefer Read/Grep/Glob/Edit/Write over `cat`/`sed`/`grep`; a repo hook blocks Bash reads.
