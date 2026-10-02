@@ -166,6 +166,19 @@ export async function apparatusDemoRequest(
     return json({ report });
   }
 
+  // Before the 2-segment unit lookup: "defects" is a literal path, never a unitId.
+  if (path.startsWith('apparatus/defects') && method === 'GET') {
+    const defects = apparatus.flatMap((unit) =>
+      toDetail(unit).openDefects.map((defect) => ({
+        ...defect,
+        apparatusId: unit.apparatusId,
+        unitId: unit.unitId,
+        itemCode: null,
+      })),
+    );
+    return json({ defects });
+  }
+
   if (parts.length === 2 && method === 'GET') {
     const unit = findByUnitId(decodeURIComponent(parts[1] ?? ''));
     return unit ? json(toDetail(unit)) : problem(404, 'Apparatus not found');

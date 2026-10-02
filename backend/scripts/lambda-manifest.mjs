@@ -616,6 +616,11 @@ export const LAMBDA_ENTRIES = [
   },
   {
     service: 'apparatus-service',
+    function: 'defects-list',
+    entry: 'src/services/apparatus-service/listOpenDefectsHandler.ts',
+  },
+  {
+    service: 'apparatus-service',
     function: 'maintenance-get',
     entry: 'src/services/apparatus-service/getMaintenance.ts',
   },

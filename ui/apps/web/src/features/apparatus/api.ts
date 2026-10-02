@@ -1,8 +1,9 @@
-import { apiRequest, type AuthTokenSource } from '../../lib/apiClient';
+import { apiRequest, requireArrayField, type AuthTokenSource } from '../../lib/apiClient';
 import type {
   Apparatus,
   ApparatusDetail,
   ApparatusStatus,
+  DeptOpenDefect,
   ChecklistTemplate,
   ComplianceEntry,
   CreateApparatusInput,
@@ -33,6 +34,17 @@ export async function getApparatus(
 ): Promise<ApparatusDetail> {
   const response = await apiRequest(unit(apparatusId), tokens);
   return (await response.json()) as ApparatusDetail;
+}
+
+/** Every open defect in the department in one request (the dashboard to-do card). */
+export async function listOpenDefects(tokens: AuthTokenSource): Promise<DeptOpenDefect[]> {
+  const response = await apiRequest('apparatus/defects?status=open', tokens);
+  const body = requireArrayField(
+    (await response.json()) as { defects: DeptOpenDefect[] },
+    'defects',
+    'apparatus/defects',
+  );
+  return body.defects;
 }
 
 export async function createApparatus(

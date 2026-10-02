@@ -47,6 +47,7 @@ const EXPECTED: Record<string, Expected> = {
   list: { grants: [q(GSI3)], cedar: false },
   create: { grants: [put], cedar: false },
   get: { grants: [q(GSI3), q(TABLE)], cedar: false },
+  "defects-list": { grants: [q(GSI3)], cedar: true },
   "service-status-update": { grants: [q(GSI3), q(TABLE), update, put], cedar: true },
   "checklist-get": { grants: [q(GSI3), ["dynamodb:Scan", TABLE], get], cedar: true },
   "checks-submit": { grants: [q(GSI3), put, get], cedar: true },
@@ -118,7 +119,7 @@ async function build() {
 }
 
 describe("apparatus Lambdas: env and IAM match their handlers", { timeout: 30_000 }, () => {
-  it("deploys exactly the eighteen apparatus route Lambdas", async () => {
+  it("deploys exactly the nineteen apparatus route Lambdas", async () => {
     await build();
     const names = resourcesOfType("aws:lambda/function:Function")
       .map((r) => r.inputs.name as string)

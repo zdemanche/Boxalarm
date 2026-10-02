@@ -1,8 +1,10 @@
-import { useQueries, useQuery } from '@tanstack/react-query';
+import { useQuery } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import { useAuth } from '../../auth/AuthContext';
+import type { AuthTokenSource } from '../../lib/apiClient';
+import { ApiError } from '../../lib/apiClient';
 import { Card, Skeleton } from '../../components/ui';
-import { getApparatus, getCompliance, listApparatus } from './api';
+import { getApparatus, getCompliance, listApparatus, listOpenDefects } from './api';
 import type { Apparatus, OpenDefectSummary } from './types';
 
 const SEVERITY_WORD: Record<OpenDefectSummary['severity'], string> = {
@@ -20,11 +22,59 @@ function unitLink(unitId: string) {
   return <Link to={`/apparatus/${encodeURIComponent(unitId)}`}>{unitId}</Link>;
 }
 
+interface DefectEntry {
+  readonly unitId: string;
+  readonly defect: OpenDefectSummary;
+}
+
+interface OpenDefectsResult {
+  readonly entries: DefectEntry[];
+  /** Fallback mode only: units whose detail could not be read. */
+  readonly failedUnits: number;
+}
+
 /**
- * The apparatus officer's to-do list (review R4), built from data the apparatus API already
- * serves: units with no check today (the compliance report for today, which expects one per
- * day), open defects per unit (each unit's detail), and units out of service. Each list says
- * when it couldn't load instead of showing a clean "nothing to do".
+ * One request for the whole department (owed review minor 8). An older server without the
+ * route answers 404; only then fall back to the previous shape — the unit list, then each
+ * unit's detail — keeping the partial-failure count the card already reports.
+ */
+async function fetchOpenDefects(auth: AuthTokenSource): Promise<OpenDefectsResult> {
+  try {
+    const defects = await listOpenDefects(auth);
+    return {
+      entries: defects.map((defect) => ({ unitId: defect.unitId, defect })),
+      failedUnits: 0,
+    };
+  } catch (error) {
+    if (!(error instanceof ApiError) || error.problem.status !== 404) throw error;
+    const units = await listApparatus(auth);
+    const settled = await Promise.allSettled(
+      units.map(async (unit) => ({ unit, detail: await getApparatus(auth, unit.unitId) })),
+    );
+    const entries: DefectEntry[] = [];
+    let failedUnits = 0;
+    for (const result of settled) {
+      if (result.status === 'fulfilled') {
+        entries.push(
+          ...result.value.detail.openDefects.map((defect) => ({
+            unitId: result.value.unit.unitId,
+            defect,
+          })),
+        );
+      } else {
+        failedUnits += 1;
+      }
+    }
+    return { entries, failedUnits };
+  }
+}
+
+/**
+ * The apparatus officer's to-do list (review R4): units with no check today (the compliance
+ * report for today, which expects one per day), the department's open defects (one
+ * GET apparatus/defects request; per-unit details only as the 404 fallback for an older
+ * server), and units out of service. Each list says when it couldn't load instead of showing
+ * a clean "nothing to do".
  */
 export function ApparatusToDo() {
   const auth = useAuth();
@@ -39,24 +89,20 @@ export function ApparatusToDo() {
     queryFn: () => getCompliance(auth, from, to),
   });
   const units: Apparatus[] = apparatusQuery.data ?? [];
-  const detailQueries = useQueries({
-    queries: units.map((unit) => ({
-      queryKey: ['apparatus', unit.unitId],
-      queryFn: () => getApparatus(auth, unit.unitId),
-    })),
+  const defectsQuery = useQuery({
+    queryKey: ['apparatus', 'defects', 'open'],
+    queryFn: () => fetchOpenDefects(auth),
   });
 
   const checksDue = (complianceQuery.data ?? []).filter((entry) => entry.actualChecks === 0);
-  const defects = units.flatMap((unit, index) =>
-    (detailQueries[index]?.data?.openDefects ?? []).map((defect) => ({ unit, defect })),
-  );
+  const defects = [...(defectsQuery.data?.entries ?? [])];
   defects.sort(
     (a, b) =>
       SEVERITY_RANK[b.defect.severity] - SEVERITY_RANK[a.defect.severity] ||
       a.defect.reportedAt - b.defect.reportedAt,
   );
-  const defectsFailed = detailQueries.filter((q) => q.error).length;
-  const defectsLoading = apparatusQuery.isLoading || detailQueries.some((q) => q.isLoading);
+  const defectsFailed = defectsQuery.data?.failedUnits ?? 0;
+  const defectsLoading = defectsQuery.isLoading;
   const outOfService = units.filter((unit) => unit.status === 'OUT_OF_SERVICE');
 
   return (
@@ -79,16 +125,16 @@ export function ApparatusToDo() {
       <h3 style={{ margin: 0 }}>Open defects</h3>
       {defectsLoading ? (
         <Skeleton lines={2} />
-      ) : apparatusQuery.error ? (
-        <p role="status">Couldn&rsquo;t load the apparatus list. This is not an empty list.</p>
+      ) : defectsQuery.error ? (
+        <p role="status">Couldn&rsquo;t load open defects. This is not an empty list.</p>
       ) : (
         <>
           {defects.length === 0 && defectsFailed === 0 ? <p>No open defects.</p> : null}
           {defects.length > 0 ? (
             <ul aria-label="Open defects">
-              {defects.map(({ unit, defect }) => (
+              {defects.map(({ unitId, defect }) => (
                 <li key={defect.defectId}>
-                  {unitLink(unit.unitId)} — {SEVERITY_WORD[defect.severity]}: {defect.description}
+                  {unitLink(unitId)} — {SEVERITY_WORD[defect.severity]}: {defect.description}
                 </li>
               ))}
             </ul>

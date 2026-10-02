@@ -276,3 +276,66 @@ export async function createDefect(
     itemCode,
   };
 }
+
+/** A defect on the dashboard's dept-wide open list: the DEFECT row's own fields. */
+export interface OpenDefect {
+  readonly defectId: string;
+  readonly apparatusId: string;
+  readonly unitId: string;
+  readonly description: string;
+  readonly severity: DefectSeverity;
+  readonly reportedAt: number;
+  readonly photoS3Key: string | null;
+  readonly itemCode: string | null;
+}
+
+/** Bounds the dashboard response; far beyond a single department's plausible open defects. */
+export const MAX_OPEN_DEFECTS = 500;
+
+/**
+ * Every open defect in the department, oldest first, in one GSI3 Query (owed-stories review
+ * minor 8: the dashboard previously fetched each unit's detail). Serves on the index the
+ * DEFECT rows already carry — `gsi3pk = DEPT#{dept}#DEFECT`, `gsi3sk = OPEN#{reportedAt}` —
+ * so no new key attributes and no backfill. Capped, never a Scan.
+ */
+export async function listOpenDefects(
+  client: DynamoDBDocumentClient,
+  tableName: string,
+  deptId: VerifiedDeptId,
+): Promise<OpenDefect[]> {
+  const defects: OpenDefect[] = [];
+  let exclusiveStartKey: Record<string, unknown> | undefined;
+  try {
+    do {
+      const page = await client.send(
+        new QueryCommand({
+          TableName: tableName,
+          IndexName: 'GSI3',
+          KeyConditionExpression: 'gsi3pk = :gsi3pk AND begins_with(gsi3sk, :open)',
+          ExpressionAttributeValues: {
+            ':gsi3pk': buildDeptScopedPk(deptId, 'DEFECT'),
+            ':open': 'OPEN#',
+          },
+          Limit: MAX_OPEN_DEFECTS - defects.length,
+          ExclusiveStartKey: exclusiveStartKey,
+        }),
+      );
+      for (const item of page.Items ?? []) {
+        defects.push({
+          defectId: item.defectId as string,
+          apparatusId: item.apparatusId as string,
+          unitId: item.unitId as string,
+          description: item.description as string,
+          severity: item.severity as DefectSeverity,
+          reportedAt: item.reportedAt as number,
+          photoS3Key: (item.photoS3Key as string | null | undefined) ?? null,
+          itemCode: (item.itemCode as string | null | undefined) ?? null,
+        });
+      }
+      exclusiveStartKey = page.LastEvaluatedKey as Record<string, unknown> | undefined;
+    } while (exclusiveStartKey && defects.length < MAX_OPEN_DEFECTS);
+  } catch (error) {
+    throw new DefectRepositoryUnavailableError(error);
+  }
+  return defects;
+}

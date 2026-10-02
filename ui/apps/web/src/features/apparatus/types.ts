@@ -32,6 +32,13 @@ export interface OpenDefectSummary {
   photoUrl?: string | null;
 }
 
+/** One row of GET apparatus/defects?status=open: a defect with the unit it belongs to. */
+export interface DeptOpenDefect extends OpenDefectSummary {
+  apparatusId: string;
+  unitId: string;
+  itemCode: string | null;
+}
+
 export interface FailedTestSummary {
   testType: string;
   testDate: string;
