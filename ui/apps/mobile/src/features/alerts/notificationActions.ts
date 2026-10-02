@@ -18,7 +18,8 @@ import {
   cachedAlertPayload,
 } from './alertPayload';
 import { queueAlertResponse, type ResponseAnswer } from './alertResponses';
-import { DEFAULT_CHANNEL_ID } from './pushChannel';
+import { navigateToInbox } from '../../navigation/navigationRef';
+import { categoryFromPushData, DEFAULT_CHANNEL_ID } from './pushChannel';
 import { dispatchNotificationId } from './notificationIds';
 
 /** The action ids a page's notification carries; the same ids on Android and iOS. */
@@ -263,6 +264,14 @@ export async function handleNotificationEvent({ type, detail }: Event): Promise<
         .cancelTriggerNotification(id)
         .catch((error: unknown) => console.warn('[push] cancelling the ring cap failed', error));
     }
+    return;
+  }
+  // A background tap on a non-critical notification (category 'digest') is bringing the app
+  // forward: open the inbox. navigateToInbox holds until the signed-in tabs can take it. A
+  // dispatch PRESS stays unhandled here — cold starts route through the initial notification,
+  // and routeToRingingPage re-routes a page still ringing when the app becomes active.
+  if (type === EventType.PRESS) {
+    if (categoryFromPushData(detail.notification?.data) === 'digest') navigateToInbox();
     return;
   }
   if (type !== EventType.ACTION_PRESS) return;

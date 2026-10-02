@@ -2,7 +2,11 @@ import { Alert, AppState, Platform, Settings } from 'react-native';
 import * as auth from '../../auth/AuthContext';
 import notifee, { EventType } from '@notifee/react-native';
 import * as messaging from '@react-native-firebase/messaging';
-import { navigateToAlertDetail, navigateToMutualAidPrompt } from '../../navigation/navigationRef';
+import {
+  navigateToAlertDetail,
+  navigateToInbox,
+  navigateToMutualAidPrompt,
+} from '../../navigation/navigationRef';
 import {
   dispatchIdFromNotificationData,
   resetRoutedRingingPagesForTest,
@@ -18,7 +22,9 @@ let mockAppTabs = true;
 let mockNavigationListener: (() => void) | undefined;
 jest.mock('../../navigation/navigationRef', () => ({
   navigateToAlertDetail: jest.fn(),
+  navigateToInbox: jest.fn(),
   navigateToMutualAidPrompt: jest.fn(),
+  isInboxRouteAvailable: jest.fn(() => mockNavigationReady && mockAppTabs),
   isNavigationReady: jest.fn(() => mockNavigationReady),
   isAlertRouteAvailable: jest.fn(() => mockNavigationReady && mockAppTabs),
   hasPendingAlertNavigation: jest.fn(() => false),
@@ -55,6 +61,8 @@ beforeEach(() => {
     return { remove: () => {} } as ReturnType<typeof AppState.addEventListener>;
   });
   (navigateToAlertDetail as jest.Mock).mockClear();
+  (navigateToInbox as jest.Mock).mockClear();
+  (navigateToMutualAidPrompt as jest.Mock).mockClear();
   getInitialNotification.mockClear();
   (notifee.getInitialNotification as jest.Mock).mockClear();
   onNotificationOpenedApp.mockClear();
@@ -489,5 +497,108 @@ describe('returning to the app while a page is ringing (m2-1 / K3-5)', () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     expect(navigateToAlertDetail).toHaveBeenCalledWith('ACTIVE', expect.anything());
+  });
+});
+
+describe('non-critical notification taps route to the inbox, never an alert screen (M7)', () => {
+  test('Android cold start: a digest initial notification opens the inbox', async () => {
+    Platform.OS = 'android';
+    (notifee.getInitialNotification as jest.Mock).mockResolvedValueOnce({
+      notification: { data: { category: 'digest', notificationCategory: 'apparatus-defect' } },
+    });
+
+    subscribePushNotificationRouting();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(navigateToInbox).toHaveBeenCalledTimes(1);
+    expect(navigateToAlertDetail).not.toHaveBeenCalled();
+    expect(navigateToMutualAidPrompt).not.toHaveBeenCalled();
+  });
+
+  test('a digest push that somehow carries a dispatchId still opens the inbox, not the call', async () => {
+    Platform.OS = 'android';
+    (notifee.getInitialNotification as jest.Mock).mockResolvedValueOnce({
+      notification: { data: { category: 'digest', dispatchId: 'DISP-SNEAK' } },
+    });
+
+    subscribePushNotificationRouting();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(navigateToInbox).toHaveBeenCalledTimes(1);
+    expect(navigateToAlertDetail).not.toHaveBeenCalled();
+  });
+
+  test('iOS cold start: a digest FCM initial notification (legacy token) opens the inbox', async () => {
+    Platform.OS = 'ios';
+    getInitialNotification.mockResolvedValueOnce({ data: { category: 'digest' } });
+
+    subscribePushNotificationRouting();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(navigateToInbox).toHaveBeenCalledTimes(1);
+    expect(navigateToAlertDetail).not.toHaveBeenCalled();
+  });
+
+  test('background-to-foreground: a digest open via onNotificationOpenedApp goes to the inbox', () => {
+    let openedCallback: ((message: unknown) => void) | undefined;
+    onNotificationOpenedApp.mockImplementationOnce(
+      (_instance: unknown, cb: (m: unknown) => void) => {
+        openedCallback = cb;
+        return () => {};
+      },
+    );
+
+    subscribePushNotificationRouting();
+    openedCallback?.({ data: { category: 'digest' } });
+
+    expect(navigateToInbox).toHaveBeenCalledTimes(1);
+    expect(navigateToAlertDetail).not.toHaveBeenCalled();
+  });
+
+  test('a foreground press on a digest notifee notification goes to the inbox', () => {
+    let foregroundCallback: ((event: unknown) => void) | undefined;
+    (notifee.onForegroundEvent as jest.Mock).mockImplementationOnce((cb) => {
+      foregroundCallback = cb;
+      return () => {};
+    });
+
+    subscribePushNotificationRouting();
+    foregroundCallback?.({
+      type: EventType.PRESS,
+      detail: { notification: { data: { category: 'digest', dispatchId: '' } } },
+    });
+
+    expect(navigateToInbox).toHaveBeenCalledTimes(1);
+    expect(navigateToAlertDetail).not.toHaveBeenCalled();
+  });
+
+  test('iOS raw-APNs digest tap (AppDelegate records category, no dispatchId) opens the inbox and clears', () => {
+    Platform.OS = 'ios';
+    nativeWrite({
+      'boxalarm.pendingAlertTap': { category: 'digest', tappedAt: Date.now() / 1000 },
+    });
+    coldStart();
+
+    subscribePushNotificationRouting();
+
+    expect(navigateToInbox).toHaveBeenCalledTimes(1);
+    expect(navigateToAlertDetail).not.toHaveBeenCalled();
+    expect(Settings.get('boxalarm.pendingAlertTap')).toBeNull();
+  });
+
+  test('a stale iOS digest tap is cleared and routes nowhere', () => {
+    Platform.OS = 'ios';
+    nativeWrite({
+      'boxalarm.pendingAlertTap': { category: 'digest', tappedAt: Date.now() / 1000 - 601 },
+    });
+    coldStart();
+
+    subscribePushNotificationRouting();
+
+    expect(navigateToInbox).not.toHaveBeenCalled();
+    expect(Settings.get('boxalarm.pendingAlertTap')).toBeNull();
   });
 });

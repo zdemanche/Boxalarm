@@ -84,3 +84,51 @@ test('a page held while signed out is dropped once its call is past the 2 h wind
 
   expect(navigate).not.toHaveBeenCalled();
 });
+
+test('an inbox tap before the navigator is ready is held and opened on flush, once', () => {
+  const { navigateToInbox } = jest.requireActual<typeof import('./navigationRef')>(
+    './navigationRef',
+  );
+  const ready = jest.spyOn(navigationRef, 'isReady').mockReturnValue(false);
+  const navigate = jest.spyOn(navigationRef, 'navigate').mockImplementation(() => {});
+
+  navigateToInbox();
+  expect(navigate).not.toHaveBeenCalled();
+
+  ready.mockReturnValue(true);
+  flushPendingAlertNavigation();
+  expect(navigate).toHaveBeenCalledWith('Me', { screen: 'Inbox' });
+
+  navigate.mockClear();
+  flushPendingAlertNavigation();
+  expect(navigate).not.toHaveBeenCalled();
+});
+
+test('a ready navigator opens the inbox immediately on Me > Inbox', () => {
+  const { navigateToInbox } = jest.requireActual<typeof import('./navigationRef')>(
+    './navigationRef',
+  );
+  jest.spyOn(navigationRef, 'isReady').mockReturnValue(true);
+  const navigate = jest.spyOn(navigationRef, 'navigate').mockImplementation(() => {});
+
+  navigateToInbox();
+
+  expect(navigate).toHaveBeenCalledWith('Me', { screen: 'Inbox' });
+});
+
+test('an inbox tap while the sign-in screens show is held until the tabs mount', () => {
+  const { navigateToInbox } = jest.requireActual<typeof import('./navigationRef')>(
+    './navigationRef',
+  );
+  jest.spyOn(navigationRef, 'isReady').mockReturnValue(true);
+  const root = jest.spyOn(navigationRef, 'getRootState').mockReturnValue(signIn);
+  const navigate = jest.spyOn(navigationRef, 'navigate').mockImplementation(() => {});
+
+  navigateToInbox();
+  flushPendingAlertNavigation();
+  expect(navigate).not.toHaveBeenCalled();
+
+  root.mockReturnValue(tabs);
+  flushPendingAlertNavigation();
+  expect(navigate).toHaveBeenCalledWith('Me', { screen: 'Inbox' });
+});
