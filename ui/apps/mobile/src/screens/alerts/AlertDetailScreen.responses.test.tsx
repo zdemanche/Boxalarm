@@ -18,6 +18,7 @@ jest.mock('../../lib/apiClient', () => ({
 jest.mock('../../auth/AuthContext', () => ({ useOptionalAuth: jest.fn() }));
 jest.mock('react-native-config', () => ({ __esModule: true, default: { API_BASE_URL: '' } }));
 jest.mock('@react-navigation/native', () => ({
+  ...jest.requireActual('@react-navigation/native'),
   useNavigation: () => ({ navigate: jest.fn() }),
   useRoute: () => mockRoute,
 }));
