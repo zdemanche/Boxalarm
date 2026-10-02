@@ -181,29 +181,6 @@ export async function releaseInstallationFromOtherMembers(
   return holders;
 }
 
-/**
- * Marks a token a push gateway refused as dead (`valid: false`) without removing the entry, so
- * the device row still shows the member a device that needs re-registration. A device that
- * re-registered the same token at or after `invalidSinceMs` (APNs 410's timestamp) has a live
- * token again and is left alone — the same re-registration rule the alerting snapshot applies.
- * Used by the notification-service push worker: the LOB plane may write the personnel row, so
- * a dead token is corrected at its source and the personnel.member.updated event carries it to
- * the alerting snapshot, never silently.
- */
-export function withTokenInvalidated(
-  current: readonly ContactChannelEntry[],
-  token: string,
-  invalidSinceMs?: number,
-): ContactChannelEntry[] {
-  return current.map((entry) =>
-    holdsToken(entry, token) &&
-    entry.valid !== false &&
-    !(invalidSinceMs !== undefined && (entry.registeredAt ?? 0) >= invalidSinceMs)
-      ? { ...entry, valid: false }
-      : entry,
-  );
-}
-
 /** Removes every push device (device loss with no device identified). */
 export function withoutAllDevices(current: readonly ContactChannelEntry[]): ContactChannelEntry[] {
   return current.filter((existing) => !isPush(existing));

@@ -5,11 +5,7 @@ import { emitOutcomeMetric } from '@boxalarm/metrics';
 import { readPushSecretId, sendApns, sendFcm, type PushSendResult } from '@boxalarm/push-transport';
 import AWSXRay from 'aws-xray-sdk-core';
 import type { SQSBatchResponse, SQSEvent } from 'aws-lambda';
-import {
-  withTokenInvalidated,
-  writePushDevices,
-  type ContactChannelEntry,
-} from '../../personnel-service/pushTokens/pushDevices.js';
+import type { ContactChannelEntry } from '../../personnel-service/pushTokens/pushDevices.js';
 import { createDynamoClient, readNotificationConfig } from '../dynamoClient.js';
 import { logError } from '../log.js';
 import {
@@ -158,45 +154,31 @@ function createSecretsClient(client?: SecretsManagerClient): SecretsManagerClien
 }
 
 /**
- * A dead token is corrected at its source: the personnel member row, through writePushDevices,
- * whose transaction also emits personnel.member.updated so the alerting snapshot follows.
- * Never silently — but also never fatally: the push was already refused terminally, so a
- * bookkeeping failure is logged and counted rather than dead-lettering the record.
+ * This worker NEVER writes token validity (post-merge review MAJOR-1). A `valid: false` on the
+ * personnel row flows through personnel.member.updated into the alerting eligibility snapshot
+ * and stops PAGING push to the device — a life-safety decision. The alerting plane guards that
+ * exact step with its mass-invalidation guard (admitTokenInvalidation: a per-department burst
+ * latch that dead-letters and pages on-call); this plane has no such guard, so one daily
+ * digest sent while the shared APNs secret is misconfigured (environment/bundle mismatch →
+ * BadDeviceToken for every device) would strip every iOS device from paging, and they would
+ * stay stripped after the fix. So a refused token here is counted and logged — the device
+ * suffix only, enough to correlate with the alerting plane's own invalidation — and alarmed on
+ * a sustained level (infrastructure notification/push-worker.ts: a burst means a
+ * credentials/config problem, not dead phones). The guarded alerting worker remains the sole
+ * invalidator of paging tokens; APNs-410 re-registration handling stays there with it.
  */
-async function invalidateDeadToken(
-  ddb: DynamoDBDocumentClient,
-  tableName: string,
-  deptId: VerifiedDeptId,
-  message: NotificationPushMessage,
-  token: string,
-  reason: string,
-  invalidSinceMs?: number,
-): Promise<void> {
-  logError(
-    `${LOG_PREFIX}.token_invalid`,
-    new Error(reason),
-    message.correlationId,
-    { memberId: message.memberId }, // never the token
+function recordDeadToken(message: NotificationPushMessage, token: string, reason: string): void {
+  console.error(
+    JSON.stringify({
+      event: `${LOG_PREFIX}.token_invalid`,
+      service: 'notification-service',
+      reason,
+      correlationId: message.correlationId,
+      memberId: message.memberId,
+      tokenSuffix: token.slice(-8), // never the whole token
+    }),
   );
   emitOutcomeMetric(PUSH_WORKER_METRIC_NAMESPACE, 'PushTokenInvalid', reason);
-  try {
-    await writePushDevices(
-      ddb,
-      tableName,
-      deptId,
-      message.memberId,
-      (current) => withTokenInvalidated(current, token, invalidSinceMs),
-      {
-        correlationId: message.correlationId,
-        changedBy: { service: 'notification-service', cause: 'push_gateway_refusal', reason },
-      },
-    );
-  } catch (error) {
-    logError(`${LOG_PREFIX}.invalidate_failed`, error, message.correlationId, {
-      memberId: message.memberId,
-    });
-    emitOutcomeMetric(PUSH_WORKER_METRIC_NAMESPACE, 'PushTokenInvalidateFailed');
-  }
 }
 
 async function sendToDevice(
@@ -309,15 +291,8 @@ async function deliverRecord(
       continue;
     }
     if (result.outcome === 'invalid_token') {
-      await invalidateDeadToken(
-        ddb,
-        tableName,
-        deptId,
-        message,
-        device.token,
-        result.reason,
-        result.invalidSinceMs,
-      );
+      // Terminal for the device, never a write: see recordDeadToken.
+      recordDeadToken(message, device.token, result.reason);
       continue;
     }
     // test_refused is unreachable with isTest hard-coded false; a result this worker cannot

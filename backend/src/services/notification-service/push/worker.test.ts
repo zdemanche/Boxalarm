@@ -171,44 +171,44 @@ describe('notification push worker (M7)', () => {
     expect(sendFcm).not.toHaveBeenCalled();
   });
 
-  it('invalidates a dead token through writePushDevices — the personnel row, with its event', async () => {
+  it('an invalid token is counted and skipped — the member row is NEVER written (MAJOR-1)', async () => {
     const sendFcm = vi
       .fn()
       .mockResolvedValue({ outcome: 'invalid_token', reason: 'FCM_UNREGISTERED' });
-    const transactWrites: Record<string, unknown>[] = [];
-    const row = memberRow([{ channel: 'PUSH', platform: 'FCM', token: 'dead-token' }]);
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    const row = memberRow([{ channel: 'PUSH', platform: 'FCM', token: 'dead-token-123456789' }]);
+    const commands: string[] = [];
     const ddb: FakeDdb = {
-      send: vi
-        .fn()
-        .mockImplementation((command: { constructor: { name: string }; input?: unknown }) => {
-          if (command.constructor.name === 'GetCommand') {
-            return Promise.resolve({ Item: row });
-          }
-          if (command.constructor.name === 'TransactWriteCommand') {
-            transactWrites.push(command.input as Record<string, unknown>);
-            return Promise.resolve({});
-          }
-          return Promise.resolve({});
-        }),
+      send: vi.fn().mockImplementation((command: { constructor: { name: string } }) => {
+        commands.push(command.constructor.name);
+        if (command.constructor.name === 'GetCommand') {
+          return Promise.resolve({ Item: row });
+        }
+        return Promise.resolve({});
+      }),
     };
     const handler = await loadWorker(ddb, { sendFcm });
 
     const result = await handler(sqsEvent(message()));
 
+    // Not a batch failure (a redelivery cannot revive the token), and not a write: token
+    // validity on the personnel row feeds the alerting snapshot and is the guarded alerting
+    // worker's alone to change. Only reads happened.
     expect(result.batchItemFailures).toEqual([]);
-    expect(transactWrites).toHaveLength(1);
-    const items = (transactWrites[0] as { TransactItems: Record<string, unknown>[] }).TransactItems;
-    const update = items[0] as {
-      Update: { ExpressionAttributeValues: { ':cc': { token?: string; valid?: boolean }[] } };
-    };
-    expect(update.Update.ExpressionAttributeValues[':cc']).toEqual([
-      { channel: 'PUSH', platform: 'FCM', token: 'dead-token', valid: false },
-    ]);
-    const put = items[1] as {
-      Put: { Item: { eventType: string; payload: { changedBy?: unknown } } };
-    };
-    expect(put.Put.Item.eventType).toBe('personnel.member.updated');
-    expect(put.Put.Item.payload.changedBy).toMatchObject({ service: 'notification-service' });
+    expect(commands).toEqual(['GetCommand']);
+    // Counted (PushTokenInvalid, alarmed in infra) and logged with the device suffix only.
+    const logged = errorSpy.mock.calls
+      .map((call) => JSON.parse(String(call[0])) as Record<string, unknown>)
+      .find((entry) => entry.event === 'notification.push.token_invalid');
+    expect(logged).toMatchObject({ reason: 'FCM_UNREGISTERED', tokenSuffix: '23456789' });
+    expect(JSON.stringify(logged)).not.toContain('dead-token-123456789');
+    // The EMF metric the infra alarm watches, with the Reason dimension.
+    const metric = logSpy.mock.calls
+      .map((call) => String(call[0]))
+      .find((line) => line.includes('"PushTokenInvalid":1'));
+    expect(metric).toBeDefined();
+    expect(metric).toContain('"Reason":"FCM_UNREGISTERED"');
   });
 
   it('succeeds without sending when the member has no devices', async () => {

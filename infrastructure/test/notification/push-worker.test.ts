@@ -122,6 +122,17 @@ describe("notification push worker wiring (M7)", { timeout: 30_000 }, () => {
     }
   });
 
+  it("alarms the ops topic on a PushTokenInvalid burst — a config problem, not dead phones", async () => {
+    await build();
+    const alarm = alarmByName("boxalarm-dev-notification-push-token-invalid-burst");
+    expect(alarm.inputs.namespace).toBe("Boxalarm/NotificationPush");
+    expect(alarm.inputs.metricName).toBe("PushTokenInvalid");
+    expect(alarm.inputs.statistic).toBe("Sum");
+    expect(alarm.inputs.period).toBe(900);
+    expect(alarm.inputs.threshold).toBe(5);
+    expect(alarm.inputs.alarmActions).toEqual([CHIEF_TOPIC]);
+  });
+
   it("gets the member table and exactly the three gateway secrets it uses", async () => {
     await build();
     expect(lambdaEnv(WORKER)).toMatchObject({
@@ -134,9 +145,17 @@ describe("notification push worker wiring (M7)", { timeout: 30_000 }, () => {
     expect(lambdaEnv(WORKER).FCM_SANDBOX_SECRET_ID).toBeUndefined();
     const statements = statementsForRole(WORKER);
     expect(isGranted(statements, "dynamodb:GetItem", PLATFORM_TABLE)).toBe(true);
-    // writePushDevices' dead-token correction: METADATA update + outbox Put, in one transaction.
-    expect(isGranted(statements, "dynamodb:UpdateItem", PLATFORM_TABLE)).toBe(true);
-    expect(isGranted(statements, "dynamodb:PutItem", PLATFORM_TABLE)).toBe(true);
+    // MAJOR-1: this worker never writes — token validity is the guarded alerting worker's
+    // alone to change, so no mutation action exists to misuse.
+    for (const action of [
+      "dynamodb:UpdateItem",
+      "dynamodb:PutItem",
+      "dynamodb:DeleteItem",
+      "dynamodb:BatchWriteItem",
+    ]) {
+      expect(isGranted(statements, action, PLATFORM_TABLE), action).toBe(false);
+      expect(isGranted(statements, action, (r) => r.length > 0), action).toBe(false);
+    }
     for (const key of ["apns", "apns-sandbox", "fcm"]) {
       expect(
         isGranted(

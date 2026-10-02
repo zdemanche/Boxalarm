@@ -2,7 +2,6 @@ import * as pulumi from "@pulumi/pulumi";
 import * as aws from "@pulumi/aws";
 import { ServiceLambda } from "../observability/service-lambda";
 import { ServiceLogGroup } from "../observability/service-log-group";
-import { auditMutationDenyStatement } from "../data/platform-table";
 import { lambdaCode, LAMBDA_HANDLER } from "../shared/lambda-code";
 import { requireEnv } from "../shared/env";
 import type { PushGatewaySecrets } from "../alerting/channel-workers";
@@ -52,6 +51,7 @@ export class PushWorker extends pulumi.ComponentResource {
   public readonly dlqDepthAlarm: aws.cloudwatch.MetricAlarm;
   public readonly errorsAlarm: aws.cloudwatch.MetricAlarm;
   public readonly sendFailedAlarm: aws.cloudwatch.MetricAlarm;
+  public readonly tokenInvalidBurstAlarm: aws.cloudwatch.MetricAlarm;
 
   constructor(name: string, args: PushWorkerArgs, opts?: pulumi.ComponentResourceOptions) {
     requireEnv("PushWorker", args.env);
@@ -117,10 +117,11 @@ export class PushWorker extends pulumi.ComponentResource {
       { parent: this },
     );
 
-    // push/worker.ts: GetItem (member METADATA devices, and writePushDevices' consistent
-    // re-read); UpdateItem + PutItem only for the dead-token correction, which is
-    // writePushDevices' own transaction (METADATA update + personnel.member.updated outbox
-    // row). GetSecretValue on exactly the three gateway secrets. Nothing alerting-shaped.
+    // push/worker.ts: GetItem (member METADATA devices) and the three gateway secrets —
+    // nothing else. Deliberately NO write actions (post-merge MAJOR-1): token validity on the
+    // personnel row feeds the alerting snapshot, and only the alerting worker (behind its
+    // mass-invalidation guard) may change it. A refused token is counted (PushTokenInvalid,
+    // alarmed below) instead.
     this.workerLambda = new ServiceLambda(
       `${name}-worker`,
       {
@@ -159,13 +160,6 @@ export class PushWorker extends pulumi.ComponentResource {
               Action: ["dynamodb:GetItem"],
               Resource: [tableArn],
             },
-            {
-              Sid: "NotificationPushTokenInvalidation" as const,
-              Effect: "Allow" as const,
-              Action: ["dynamodb:UpdateItem", "dynamodb:PutItem"],
-              Resource: [tableArn],
-            },
-            auditMutationDenyStatement(tableArn),
             {
               Sid: "OwnPushGatewaySecretsOnly" as const,
               Effect: "Allow" as const,
@@ -236,6 +230,28 @@ export class PushWorker extends pulumi.ComponentResource {
         period: 300,
         evaluationPeriods: 1,
         threshold: 0,
+        comparisonOperator: "GreaterThanThreshold",
+        alarmActions: [args.opsAlarmTopicArn],
+        treatMissingData: "notBreaching",
+      },
+      { parent: this },
+    );
+
+    // This worker never invalidates a token (MAJOR-1): it only counts PushTokenInvalid. A
+    // sustained level is a credentials/config problem on the shared gateway secrets (APNs
+    // environment or bundle mismatch refuses every device at once), not dead phones — the
+    // alerting plane's own mass-invalidation guard would be latching on the same cause. 5 in
+    // 15 minutes is far above organic token churn at single-department scale.
+    this.tokenInvalidBurstAlarm = new aws.cloudwatch.MetricAlarm(
+      `${name}-token-invalid-burst-alarm`,
+      {
+        name: `boxalarm-${env}-notification-push-token-invalid-burst`,
+        namespace: PUSH_METRIC_NAMESPACE,
+        metricName: "PushTokenInvalid",
+        statistic: "Sum",
+        period: 900,
+        evaluationPeriods: 1,
+        threshold: 5,
         comparisonOperator: "GreaterThanThreshold",
         alarmActions: [args.opsAlarmTopicArn],
         treatMissingData: "notBreaching",
