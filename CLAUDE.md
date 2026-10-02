@@ -12,7 +12,7 @@ Read `README.md` for the full locked-decision table. This file is the working ha
 | Artifact | State |
 |---|---|
 | `docs/prd.md` | v0.2 + the no-MFA auth decision (F9.1, N5.2) |
-| `docs/architecture.md` | v1.0, 2,410 lines — done after **4 rounds** of independent review, plus the 2026-09-04 auth amendment |
+| `docs/architecture.md` | v1.0, 2,840 lines — 4 rounds of independent review, the 2026-09-04 auth amendment, and the 2026-10-02 amendment pass (24 dated amendments bringing it up to the as-built system; two review rounds) |
 | `docs/architecture.compiled/` | Tiered artifacts for `generate-code` — spine, fact sheets, routing manifest, contracts. **Hash-guarded: any edit to `architecture.md` makes it stale — re-run `/sdlc:arch-compile` or runs fall back to the full document** |
 | `docs/build-order.md` + `dependency-graph.json` | 8 epics · 90 stories · 13 waves · 160 edges · acyclic |
 | GitHub Issues | All in this repo (transferred 2026-09-23, renumbered — every issue link in docs and code comments is rewritten). Label `area:<docs\|backend\|ui\|infrastructure>` records where each came from. Each backend story is the parent; its `<KEY>-UI` / `<KEY>-INFRA` children are sub-issues for the **ui/** / **infrastructure/** side, so run `generate-code` per child. Shared infra resources have one owner issue each — map is commented on #180. Single-dir stories: ui E1-S7, E7-S8; infra E8-S10. Epics are the top of the sub-issue tree; open questions, architecture defects, and non-code stories E1-S16, E6-S12 carry `area:docs` |

@@ -1,53 +1,33 @@
-# infrastructure
+# Infrastructure
 
 ## Purpose & Boundaries
-
-All Pulumi IaC for every environment (dev/qa/staging/prod, not every stage necessarily used by this single-department deployment). Sole owner of every AWS resource and all Pulumi state — the `boxalarm-infrastructure` repo. Wires the 10 backend services to API Gateway, DynamoDB, EventBridge, SNS/SQS, Cognito, Verified Permissions, S3. Deploys via GitHub OIDC → central org role. Contains no application/business logic of its own.
+All Pulumi (`infrastructure/`; dev/qa/staging/prod, U.S. region pinned `us-east-1`): HTTP API + routes (`infrastructure/components/api/http-api.ts`), the two authorizer Lambdas, CAD webhook REST API, Cognito, Verified Permissions store, DynamoDB tables, messaging (`messaging-alerting.ts` separate from `messaging.ts`), outbox publisher/rule delivery, S3, alarms, CodeDeploy alias rollout. Deploys via GitHub OIDC -> central org role. Backend/UI carry no IaC. State backend unset (Pulumi Cloud).
 
 ## Interfaces
-
-None (no API surface) — this component provisions the infrastructure other components run on and call.
+Authorizers: main (fail-closed) and alerting (serves only `ALERTING_PLANE_ROUTES`, reserved concurrency 20, `REVOCATION_CHECK_FAIL_OPEN=true`). Fail-open set (17): manual dispatch, dispatch list/detail, roster, responses, tone-ladder advance/halt, mutual-aid trigger/acknowledge, riding board (read+assignments), push-token register/remove, device state, home-locality, self-test (trigger+result). Six officer alerting reads (receipts, diagnostics x2, audit, canary status, delivery baseline) fail CLOSED. `requireAll` seal covers only the 17 alerting routes. Tests: `infrastructure/test/api/fail-open-contract.test.ts` (`FAIL_OPEN_ROUTE_KEYS` == `ALERTING_PLANE_ROUTES`, never an officer read), `infrastructure/test/api/ui-route-contract.test.ts`.
 
 ## Data Ownership
+Tables: alerting (CMK KMS), incident (CMK KMS), platform (AWS-managed key); Streams on, PITR on, on-demand. CloudTrail data events on alerting table; audit entries/receipts archived to S3 Object Lock compliance mode. Buckets: `nichols-boxalarm-platform-assets`, `boxalarm-incident-assets` (SSE-KMS), `boxalarm-exports-staging` (7-day expiry); Block Public Access, SSE-S3, versioning off, AbortIncompleteMultipartUpload 7d, Intelligent-Tiering IA at 60d, S3 PRESIGNED URLs (not CloudFront) scoped to `{deptId}/{entityType}/{entityId}/` with 10-minute expiry, extension allowlist, PUT signed over Content-Type, size not capped (gap). Valkey VPC-only; no alerting Lambda in a VPC.
 
-None directly, but provisions and configures:
+## Events Produced
+absent — the source document does not address this (infra provisions queues): alerting FIFO queues push/sms/voice/receipts (4) + DLQs; LOB queues training/apparatus/inventory/neris(2)/scheduling/personnel(2)/alert-rules-copy -> 11 SQS queues each with DLQ; scheduler DLQ and Lambda on-failure queue.
 
-- **3 DynamoDB tables** — `alerting-service` (customer-managed KMS), `incident-service` (customer-managed KMS), `platform-service` (AWS-managed KMS, cost grounds). All on-demand, PITR on, Streams on.
-- **2 S3 buckets** — `nichols-boxalarm-platform-assets`, `boxalarm-incident-assets` — plus a third short-lived `boxalarm-exports-staging` (7-day lifecycle, temporary by design). Block Public Access on, SSE-S3 (SSE-KMS for incident bucket), versioning off, `AbortIncompleteMultipartUpload` at 7 days, Intelligent-Tiering with IA transition at 60 days.
-- **Messaging:** SNS FIFO alerting topic + per-channel SQS FIFO queues/DLQs; EventBridge bus `boxalarm-{env}-platform-bus` + rule-routed SQS queues/DLQs (11 total SQS queues across both planes); EventBridge Scheduler for one-time timers.
-- **Cognito** user pool (single pool per environment, `MfaConfiguration: OFF`).
-- **Verified Permissions** policy store (one per environment, Cedar policies).
-- **ElastiCache Serverless (Valkey)** — VPC-only; the alert path's Lambdas are explicitly excluded from this VPC.
-- **API Gateway HTTP API** (not REST API) + Lambda authorizer.
-
-## Events Produced / Consumed
-
-None directly — provisions the transport (SNS/SQS/EventBridge) that every other component's events flow through.
+## Events Consumed
+absent — the source document does not address this
 
 ## Dependencies
-
-**Internal:** every backend service depends on this component for its runtime infrastructure. No backend/frontend repo contains any IaC of its own.
-
-**External:** AWS (all regions pinned `us-east-1`), GitHub OIDC (deploy auth), Pulumi Cloud (state backend, unset explicitly — `pulumi stack export|import` moves it to org S3 later per project handoff notes, not stated in this architecture document itself).
+internal: all services. external: AWS (Lambda, API GW, DynamoDB, SNS/SQS FIFO, EventBridge/Scheduler, Cognito, AVP, KMS, S3, CloudWatch, X-Ray, CodeDeploy, SES, Secrets Manager, SSM, ElastiCache Valkey).
 
 ## Gotchas & Constraints
-
-- **`alerting-service`'s execution roles hold literally no IAM permission on `platform-service`/`incident-service` tables** — this is the enforcement mechanism for the whole N1.5/N1.7 isolation invariant; a future code change cannot quietly reintroduce the coupling because the permission simply does not exist to be exploited.
-- **No alerting-plane Lambda attaches to a VPC** — Valkey is VPC-only and is the one exception; the alert path deliberately avoids ENI cold-start latency by staying VPC-less, reaching AWS services over TLS-protected, IAM-authenticated public endpoints. Gateway endpoints for DynamoDB/S3 are provisioned in the Valkey VPC for the services that do attach.
-- **`alerting-service` deploys have no maintenance window, ever** — every Lambda deploys via a versioned alias with CodeDeploy canary/linear traffic shift; the N1.6 canary is the deployment gate (not a separate synthetic check); existing CloudWatch alarms double as automatic rollback triggers.
-- **DLQ `maxReceiveCount`: 3 on alerting-plane queues (tighter — escalate to a human faster, don't burn the 5s p99 budget on retries), 3-5 on LOB-plane queues.**
-- **DR targets:** PITR on all three tables gives RPO ≤ 5 minutes. RTO ≤ 4 hours for the LOB plane; a **target** (not yet proven) of ≤ 1 hour for the alerting plane, flagged as optimistic — a release-gate restore drill must measure the actual RTO and replace this target with evidence.
-- **CloudTrail enabled including DynamoDB data events on the alerting table** — audit entries and delivery receipts archived to S3 with Object Lock in compliance mode; the IAM write path for audit entries is kept separate from the services whose mutations they record.
-- **Repo topology is fixed and non-negotiable per requirements:** 4 repos (`boxalarm-ui`, `boxalarm-backend`, `boxalarm-infrastructure`, `boxalarm-docs`), never a monorepo, never per-service repos — UI and backend are build-only, this repo is the single owner of Pulumi state and the only thing that touches AWS. **Note:** per the project's own working handoff (CLAUDE.md), the repos have since been consolidated into one monorepo (`Boxalarm-monorepo`) with `backend/`, `ui/`, `infrastructure/` directories — this is a post-architecture-document operational change, not a revision to this document's repo-topology section.
-- **No dollar figure existed for the "hard budget constraint" until a back-of-envelope estimate was added** (~$120-175/month total, not a quote) — the two largest, least-certain lines are the Valkey per-cache floor cost (~$40-50/mo, AWS-side, resolvable without a vendor decision) and SMS/voice vendor costs (~$60-95/mo combined, blocked on OQ-3).
+- Queue policies allow `SendMessage` with `aws:SourceArn` = delivering RULE ARN, not bus ARN.
+- Outbox publisher: malformed row (missing `source`/`eventTime`/`schemaVersion`) dropped + `MalformedOutboxRow` metric + alarm; per-producer allow-list pending.
+- Alerting plane: no maintenance window; every Lambda via versioned alias, CodeDeploy 10%/2min style shift; N1.6 canary against NEW version gates the shift; N8.2 alarms are rollback triggers; new required GSI backfilled before reaching 100%.
+- Visibility timeout >= 2x consumer timeout; DLQ maxReceiveCount 3 (alerting)/5 (LOB); `ApproximateNumberOfMessagesVisible > 0` alarm; alerting DLQ pages immediately.
+- CAD webhook REST API: usage-plan keys, per-key throttle 5 rps/burst 5; WAF cannot attach to HTTP API; CloudFront ruled out (N6.1, residency test enforces). Alerting authorizer throttle alarms to chief; per-route throttles never below 50 rps/100 burst (100/200 on call-time roster routes).
+- Alarms: fan-out p99 vs 5s, per-channel failure, canary, duplicate-delivery counter (=0), `ToneFiredZeroReceipts` P0, `RevocationCheckFailOpen`, snapshot staleness 15 min, export invocation, off-hours privileged activity, `MemberEmailChanged`.
+- DR: RPO <=5 min (PITR); RTO <=4h LOB, alerting target <=1h (optimistic; restore drill measures); region loss accepted.
+- Region residency test; no moonaan-prod names. Cost: on-demand; Valkey floor flagged.
+- Runbooks: `docs/runbooks/first-deploy.md`, `cad-ingress.md`, `alerting-escalation-onfailure.md`, `alert-context-replay.md`, `eligibility-snapshot-repair.md`.
 
 ## Source Sections
-
-- Backend §0 Governing decision, house-standard reconciliation (API Gateway) (`:110-114`)
-- Backend §3 Tech stack table (`:448-464`)
-- Backend §4.5 Deployment strategy (`:499-509`)
-- Data Model §7 Cost and performance considerations, §7.1 Monthly cost estimate (`:1445-1477`)
-- Data Model §8 S3 conventions (`:1479-1488`)
-- Cross-Cutting: Data Protection & DR (encryption, network posture, RPO/RTO) (`:2617-2629`)
-- Cross-Cutting: Repository Topology (`:2568-2581`)
-- Eventing Architecture §1 Design rule — alerting's own isolated messaging infra (`:1559-1565`)
+Overview 7–105; Backend §0 110–118; §3 stack 522–538; §4.1 auth/authorizer 544–554; §4.3–4.5 562–585; Events §1,5,6 1651–1657, 1891–1926; Cost 1544–1567; S3 1569–1580; Cross-cutting 2670–2735.

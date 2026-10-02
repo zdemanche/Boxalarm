@@ -1,129 +1,129 @@
 {
   "version": 2,
   "source": {
-    "path": "/Users/zacharydemanche/Projects/boxalarm/docs/architecture.md",
-    "sha256": "bf82b5634184aa43b430eb5b6923c87e7d667147875eaf51836b734b56e964fa",
-    "lines": 2734
+    "path": "/Users/benjaminrussell/Desktop/Firehouse/Boxalarm-monorepo/.worktrees/member-roles/docs/architecture.md",
+    "sha256": "0e0c04a3a9d85d5a15a3de4b214895e261ebcbb3d85c83015c54407d6305d626",
+    "lines": 2840
   },
   "plugin_version": "2.16.0",
-  "created": "2026-09-25",
+  "created": "2026-10-02",
   "spine": "spine.md",
   "contracts": "contracts.json",
   "components": [
     {
-      "name": "alerting-service",
+      "name": "Alerting Service",
       "slug": "alerting-service",
       "file": "components/alerting-service.md",
-      "keywords": ["dispatch", "fan-out", "toneSequence", "toneLadder", "DELIVERY_RECEIPT", "escalation", "mutual aid", "canary", "self-test", "DISPATCH_ALERT", "MEMBER_ELIGIBILITY_SNAPSHOT", "channelTier"],
-      "aliases": ["alerting", "alert path", "dispatch ingress", "life-safety plane", "N1"],
+      "keywords": ["dispatch", "fan-out", "tone ladder", "toneSequence", "DELIVERY_RECEIPT", "DISPATCH_ROSTER_ENTRY", "mutual aid", "canary", "self-test", "CAD ingress", "escalation", "eligibility snapshot"],
+      "aliases": ["alerting plane", "alert service", "paging", "life-safety plane"],
       "jira": { "epics": [], "labels": [] },
-      "depends_on": ["personnel-service", "inspections-service", "platform-service"]
+      "depends_on": ["platform-service", "personnel-service", "inspections-service", "apparatus-service", "infrastructure"]
     },
     {
-      "name": "platform-service",
+      "name": "Platform Service",
       "slug": "platform-service",
       "file": "components/platform-service.md",
-      "keywords": ["DEPARTMENT_CONFIG", "AUDIT_LOG_ENTRY", "ALERT_RULES", "data export", "Cognito triggers", "Verified Permissions admin", "F9.3", "F9.4", "F9.5"],
-      "aliases": ["platform", "config service", "audit sink"],
+      "keywords": ["DEPARTMENT_CONFIG", "ALERT_RULES", "session revocation", "reset-credentials", "audit log", "AUDIT_LOG_ENTRY", "data export", "cad-sources", "NERIS entity", "Pre Token Generation", "Verified Permissions", "Cedar"],
+      "aliases": ["platform", "admin config service", "access control"],
       "jira": { "epics": [], "labels": [] },
-      "depends_on": []
+      "depends_on": ["personnel-service", "infrastructure"]
     },
     {
-      "name": "personnel-service",
+      "name": "Personnel Service",
       "slug": "personnel-service",
       "file": "components/personnel-service.md",
-      "keywords": ["MEMBER", "MEMBER_QUALIFICATION", "LOSAP_POINT_ENTRY", "DUTY_SHIFT", "SHIFT_POSITION", "roster", "quals", "availability", "shift claim"],
-      "aliases": ["personnel", "roster service", "shifts"],
+      "keywords": ["MEMBER", "roster", "LOSAP", "AVAILABILITY_MARKOFF", "mark-off", "DUTY_SHIFT", "SHIFT_POSITION", "shift claim", "attendance", "qualifications", "writePushDevices", "member status"],
+      "aliases": ["roster service", "membership", "scheduling"],
       "jira": { "epics": [], "labels": [] },
-      "depends_on": ["platform-service"]
+      "depends_on": ["platform-service", "infrastructure"]
     },
     {
-      "name": "apparatus-service",
+      "name": "Apparatus Service",
       "slug": "apparatus-service",
       "file": "components/apparatus-service.md",
-      "keywords": ["APPARATUS", "CHECKLIST_RUN", "DEFECT", "SCBA_RECORD", "APPARATUS_TEST_RECORD", "truck check", "OOS", "compartment"],
-      "aliases": ["apparatus", "truck checks", "rig checks"],
+      "keywords": ["apparatus", "CHECKLIST_RUN", "check sheet", "DEFECT", "out-of-service", "SCBA", "riding board", "testing schedules", "compartment inventory", "maintenance"],
+      "aliases": ["truck checks", "rig checks", "riding-board"],
       "jira": { "epics": [], "labels": [] },
-      "depends_on": ["platform-service", "notification-service"]
+      "depends_on": ["alerting-service", "notification-service", "infrastructure"]
     },
     {
-      "name": "incident-service",
+      "name": "Incident Service",
       "slug": "incident-service",
       "file": "components/incident-service.md",
-      "keywords": ["INCIDENT", "NERIS", "corePayload", "INCIDENT_SECONDARY", "NERIS_SUBMISSION_ATTEMPT", "SCHEMA_VERSION", "nerisSchemaVersion"],
-      "aliases": ["incidents", "NERIS reporting", "incident reporting"],
+      "keywords": ["NERIS", "INCIDENT", "incident report", "lock", "resubmit", "NERIS_SUBMISSION_ATTEMPT", "SCHEMA_VERSION", "INCIDENT_SECONDARY", "submissionsEnabled", "casualty_rescues"],
+      "aliases": ["NERIS service", "incident reporting", "incident-reporting"],
       "jira": { "epics": [], "labels": [] },
-      "depends_on": ["alerting-service"]
+      "depends_on": ["alerting-service", "platform-service", "notification-service", "infrastructure"]
     },
     {
-      "name": "training-service",
+      "name": "Training Service",
       "slug": "training-service",
       "file": "components/training-service.md",
-      "keywords": ["CERTIFICATION", "TRAINING_EVENT", "TRAINING_ATTENDANCE", "cert expiry", "ISO training hours", "transcript"],
-      "aliases": ["training", "certifications"],
+      "keywords": ["CERTIFICATION", "certification", "TRAINING_EVENT", "TRAINING_ATTENDANCE", "training hours", "transcript", "training.expiry.due", "ISO training report"],
+      "aliases": ["certs", "drills"],
       "jira": { "epics": [], "labels": [] },
-      "depends_on": ["platform-service", "notification-service"]
+      "depends_on": ["personnel-service", "notification-service", "infrastructure"]
     },
     {
-      "name": "reporting-service",
+      "name": "Reporting Service",
       "slug": "reporting-service",
       "file": "components/reporting-service.md",
-      "keywords": ["chief dashboard", "LOSAP year-end", "ISO report", "grant report", "response-time analytics", "Reporting Projections", "CSV export"],
-      "aliases": ["reporting", "dashboard service"],
+      "keywords": ["chief dashboard", "LOSAP year-end", "grant report", "response-times", "membership-trends", "CSV export", "PDF export", "reporting projections", "ISO report"],
+      "aliases": ["reports", "analytics", "dashboard"],
       "jira": { "epics": [], "labels": [] },
-      "depends_on": ["personnel-service", "training-service", "apparatus-service", "inspections-service", "incident-service"]
+      "depends_on": ["personnel-service", "incident-service", "training-service", "alerting-service", "infrastructure"]
     },
     {
-      "name": "inspections-service",
+      "name": "Inspections Service",
       "slug": "inspections-service",
       "file": "components/inspections-service.md",
-      "keywords": ["OCCUPANCY", "PRE_PLAN", "INSPECTION_RECORD", "HYDRANT", "pre-incident plan", "violation", "geohash"],
-      "aliases": ["inspections", "pre-plans", "hydrants"],
+      "keywords": ["OCCUPANCY", "PRE_PLAN", "pre-plan", "INSPECTION_RECORD", "violations", "HYDRANT", "hydrant", "field-capture", "geohash", "occupancy archive"],
+      "aliases": ["pre-incident plans", "fire marshal inspections"],
       "jira": { "epics": [], "labels": [] },
-      "depends_on": ["platform-service"]
+      "depends_on": ["alerting-service", "infrastructure"]
     },
     {
-      "name": "inventory-service",
+      "name": "Inventory Service",
       "slug": "inventory-service",
       "file": "components/inventory-service.md",
-      "keywords": ["EQUIPMENT_ASSET", "PPE_ASSIGNMENT", "CONSUMABLE_STOCK", "nfpaExpiryDate", "reorder threshold"],
-      "aliases": ["inventory", "PPE"],
+      "keywords": ["EQUIPMENT_ASSET", "PPE_ASSIGNMENT", "PPE", "CONSUMABLE_STOCK", "reorder threshold", "equipment lifecycle", "nfpaExpiryDate", "inventory.reorder.due"],
+      "aliases": ["equipment registry", "supplies"],
       "jira": { "epics": [], "labels": [] },
-      "depends_on": ["platform-service", "notification-service"]
+      "depends_on": ["notification-service", "infrastructure"]
     },
     {
-      "name": "notification-service",
+      "name": "Notification Service",
       "slug": "notification-service",
       "file": "components/notification-service.md",
-      "keywords": ["NOTIFICATION_PREFERENCE", "NOTIFICATION", "digest batching", "in-app inbox", "non-alert channel", "NOTIF-ISO"],
-      "aliases": ["notifications", "notification inbox"],
+      "keywords": ["NOTIFICATION", "NOTIFICATION_PREFERENCE", "inbox", "digest", "notifications/preferences", "notify-queue", "non-critical push channel"],
+      "aliases": ["notifications", "inbox service"],
       "jira": { "epics": [], "labels": [] },
-      "depends_on": ["platform-service"]
+      "depends_on": ["training-service", "apparatus-service", "inventory-service", "personnel-service", "incident-service", "infrastructure"]
     },
     {
-      "name": "web-spa",
+      "name": "Web SPA",
       "slug": "web-spa",
       "file": "components/web-spa.md",
-      "keywords": ["React SPA", "officer console", "admin console", "PrimaryNav", "TanStack Query", "oidc-client-ts", "AppShell"],
-      "aliases": ["web app", "officer/admin console", "boxalarm-ui web"],
+      "keywords": ["apps/web", "React SPA", "AppShell", "oidc-client-ts", "alerts/roster", "tone-ladder panel", "settings", "audit-log", "officer console", "cab mode"],
+      "aliases": ["web console", "officer/admin console", "ui web"],
       "jira": { "epics": [], "labels": [] },
-      "depends_on": ["alerting-service", "platform-service", "incident-service"]
+      "depends_on": ["alerting-service", "platform-service", "personnel-service", "apparatus-service", "incident-service", "training-service", "reporting-service"]
     },
     {
-      "name": "mobile-app",
+      "name": "Mobile App",
       "slug": "mobile-app",
       "file": "components/mobile-app.md",
-      "keywords": ["React Native", "Critical Alerts", "full-screen intent", "apns-collapse-id", "WatermelonDB", "op-sqlite", "outbox sync", "AlertsStack"],
-      "aliases": ["native app", "RN app", "boxalarm-ui mobile", "iOS app", "Android app"],
+      "keywords": ["apps/mobile", "React Native", "Critical Alerts", "Notification Service Extension", "FirebaseMessagingService", "apns-collapse-id", "full-screen intent", "outbox sync", "react-native-app-auth", "AlertsStack"],
+      "aliases": ["native app", "iOS app", "Android app", "RN app"],
       "jira": { "epics": [], "labels": [] },
-      "depends_on": ["alerting-service", "platform-service"]
+      "depends_on": ["alerting-service", "apparatus-service", "personnel-service"]
     },
     {
-      "name": "infrastructure",
+      "name": "Infrastructure",
       "slug": "infrastructure",
       "file": "components/infrastructure.md",
-      "keywords": ["Pulumi", "GitHub OIDC", "customer-managed KMS", "Verified Permissions policy store", "VPC-less", "RTO", "RPO", "CloudTrail"],
-      "aliases": ["boxalarm-infrastructure", "IaC", "Pulumi project"],
+      "keywords": ["Pulumi", "http-api.ts", "ALERTING_PLANE_ROUTES", "fail-open", "authorizer", "CodeDeploy", "platform-bus", "outbox-publisher", "presigned", "CAD webhook REST API", "KMS", "DLQ"],
+      "aliases": ["IaC", "infra", "pulumi stack"],
       "jira": { "epics": [], "labels": [] },
       "depends_on": []
     }
