@@ -106,6 +106,9 @@ describe('service-status change chain: route write -> event -> inbox + non-criti
 
   beforeEach(() => {
     vi.resetModules();
+    // The real outbox drain reads its own config (readOutboxDrainConfig).
+    process.env.PLATFORM_EVENT_BUS_NAME = 'boxalarm-dev-platform-bus';
+    process.env.PLATFORM_TABLE_NAME = PLATFORM_TABLE;
     process.env.PLATFORM_SERVICE_TABLE_NAME = PLATFORM_TABLE;
     process.env.NOTIFICATION_PUSH_TOPIC_ARN = topicArn;
     process.env.NOTIFICATION_SES_FROM_ADDRESS = 'notifications@boxalarm.dev';
