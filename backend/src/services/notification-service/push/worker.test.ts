@@ -178,16 +178,18 @@ describe('notification push worker (M7)', () => {
     const transactWrites: Record<string, unknown>[] = [];
     const row = memberRow([{ channel: 'PUSH', platform: 'FCM', token: 'dead-token' }]);
     const ddb: FakeDdb = {
-      send: vi.fn().mockImplementation((command: { constructor: { name: string }; input?: unknown }) => {
-        if (command.constructor.name === 'GetCommand') {
-          return Promise.resolve({ Item: row });
-        }
-        if (command.constructor.name === 'TransactWriteCommand') {
-          transactWrites.push(command.input as Record<string, unknown>);
+      send: vi
+        .fn()
+        .mockImplementation((command: { constructor: { name: string }; input?: unknown }) => {
+          if (command.constructor.name === 'GetCommand') {
+            return Promise.resolve({ Item: row });
+          }
+          if (command.constructor.name === 'TransactWriteCommand') {
+            transactWrites.push(command.input as Record<string, unknown>);
+            return Promise.resolve({});
+          }
           return Promise.resolve({});
-        }
-        return Promise.resolve({});
-      }),
+        }),
     };
     const handler = await loadWorker(ddb, { sendFcm });
 
@@ -195,15 +197,16 @@ describe('notification push worker (M7)', () => {
 
     expect(result.batchItemFailures).toEqual([]);
     expect(transactWrites).toHaveLength(1);
-    const items = (transactWrites[0] as { TransactItems: Record<string, unknown>[] })
-      .TransactItems;
+    const items = (transactWrites[0] as { TransactItems: Record<string, unknown>[] }).TransactItems;
     const update = items[0] as {
       Update: { ExpressionAttributeValues: { ':cc': { token?: string; valid?: boolean }[] } };
     };
     expect(update.Update.ExpressionAttributeValues[':cc']).toEqual([
       { channel: 'PUSH', platform: 'FCM', token: 'dead-token', valid: false },
     ]);
-    const put = items[1] as { Put: { Item: { eventType: string; payload: { changedBy?: unknown } } } };
+    const put = items[1] as {
+      Put: { Item: { eventType: string; payload: { changedBy?: unknown } } };
+    };
     expect(put.Put.Item.eventType).toBe('personnel.member.updated');
     expect(put.Put.Item.payload.changedBy).toMatchObject({ service: 'notification-service' });
   });
@@ -244,7 +247,10 @@ describe('notification push worker (M7)', () => {
     const sendApns = vi
       .fn()
       .mockRejectedValue(
-        new PushCredentialsUnavailableError('APNS_SANDBOX_SECRET_ID is required and was not set', 'APNS_SANDBOX_SECRET_ID'),
+        new PushCredentialsUnavailableError(
+          'APNS_SANDBOX_SECRET_ID is required and was not set',
+          'APNS_SANDBOX_SECRET_ID',
+        ),
       );
     const ddb = fakeDdb(
       memberRow([

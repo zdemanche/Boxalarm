@@ -172,7 +172,7 @@ describe('non-critical push chain: immediate OOS defect -> topic -> worker -> tr
       }
     }
     expect(records.length).toBeGreaterThan(0);
-    return { Records: records } as SQSEvent;
+    return { Records: records };
   }
 
   it('delivers the out-of-service push to the member device, strictly non-critical', async () => {

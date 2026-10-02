@@ -30,8 +30,7 @@ const CHIEF_TOPIC = `arn:aws:sns:${REGION}:${ACCOUNT_ID}:boxalarm-dev-chief-noti
 const QUEUE_NAME = "boxalarm-dev-notification-push-queue";
 const QUEUE_ARN = `arn:aws:sqs:${REGION}:${ACCOUNT_ID}:${QUEUE_NAME}`;
 const WORKER = "boxalarm-dev-notification-push-worker";
-const secretArn = (name: string) =>
-  `arn:aws:secretsmanager:${REGION}:${ACCOUNT_ID}:secret:${name}`;
+const secretArn = (name: string) => `arn:aws:secretsmanager:${REGION}:${ACCOUNT_ID}:secret:${name}`;
 
 beforeEach(() => {
   installMocks();
@@ -98,12 +97,8 @@ describe("notification push worker wiring (M7)", { timeout: 30_000 }, () => {
     const esm = esmFor(WORKER);
     expect(esm.inputs.eventSourceArn).toBe(QUEUE_ARN);
     expect(esm.inputs.functionResponseTypes).toEqual(["ReportBatchItemFailures"]);
-    expect((esm.inputs.scalingConfig as { maximumConcurrency: number }).maximumConcurrency).toBe(
-      5,
-    );
-    const queue = resourcesOfType("aws:sqs/queue:Queue").find(
-      (q) => q.inputs.name === QUEUE_NAME,
-    );
+    expect((esm.inputs.scalingConfig as { maximumConcurrency: number }).maximumConcurrency).toBe(5);
+    const queue = resourcesOfType("aws:sqs/queue:Queue").find((q) => q.inputs.name === QUEUE_NAME);
     const redrive = JSON.parse(queue?.inputs.redrivePolicy as string) as {
       deadLetterTargetArn: string;
       maxReceiveCount: number;
@@ -182,9 +177,7 @@ describe("notification push worker wiring (M7)", { timeout: 30_000 }, () => {
       expect(actions.some((action) => action.startsWith("kms:"))).toBe(false);
     }
     expect(isGranted(statements, "dynamodb:GetItem", ALERTING_TABLE)).toBe(false);
-    expect(isGranted(statements, "sqs:ReceiveMessage", (r) => r.includes("alerting"))).toBe(
-      false,
-    );
+    expect(isGranted(statements, "sqs:ReceiveMessage", (r) => r.includes("alerting"))).toBe(false);
   });
 
   it("stays in the LOB failure domain: no reserved concurrency, standard queue", async () => {
@@ -193,9 +186,7 @@ describe("notification push worker wiring (M7)", { timeout: 30_000 }, () => {
       (l) => l.inputs.name === WORKER,
     );
     expect(lambda?.inputs.reservedConcurrentExecutions).toBeUndefined();
-    const queue = resourcesOfType("aws:sqs/queue:Queue").find(
-      (q) => q.inputs.name === QUEUE_NAME,
-    );
+    const queue = resourcesOfType("aws:sqs/queue:Queue").find((q) => q.inputs.name === QUEUE_NAME);
     expect(queue?.inputs.fifoQueue).toBeFalsy();
   });
 });

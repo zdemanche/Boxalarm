@@ -537,9 +537,7 @@ test('the apparatus dashboard lists checks due, open defects (one request) and u
   expect(due.textContent).toBe('L1 — not checked yet today');
   const defects = await screen.findByRole('list', { name: 'Open defects' });
   // Severity first (the out-of-service defect leads), then age.
-  expect(defects.textContent).toBe(
-    'L1 — Out of service now: BrakesE1 — Note: Cracked mirror',
-  );
+  expect(defects.textContent).toBe('L1 — Out of service now: BrakesE1 — Note: Cracked mirror');
   const oos = screen.getByRole('list', { name: 'Units out of service' });
   expect(oos.textContent).toBe('L1 — Brakes');
   // The whole list came from GET apparatus/defects: no per-unit detail fetches (minor 8).

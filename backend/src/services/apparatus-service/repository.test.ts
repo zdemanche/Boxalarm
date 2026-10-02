@@ -147,7 +147,13 @@ describe('setServiceStatus', () => {
     });
     const client = { send } as unknown as DynamoDBDocumentClient;
 
-    await setServiceStatus(client, TABLE, { deptId: DEPT_ID, unitId: 'E1', status: 'IN_SERVICE', changedBy: 'MBR-1', correlationId: 'corr-1' });
+    await setServiceStatus(client, TABLE, {
+      deptId: DEPT_ID,
+      unitId: 'E1',
+      status: 'IN_SERVICE',
+      changedBy: 'MBR-1',
+      correlationId: 'corr-1',
+    });
 
     const items = lastTransactItems(send);
     const closeUpdate = findUpdate(items, 'OOS#1700000000');
@@ -183,7 +189,13 @@ describe('setServiceStatus', () => {
     });
     const client = { send } as unknown as DynamoDBDocumentClient;
 
-    await setServiceStatus(client, TABLE, { deptId: DEPT_ID, unitId: 'E1', status: 'IN_SERVICE', changedBy: 'MBR-1', correlationId: 'corr-1' });
+    await setServiceStatus(client, TABLE, {
+      deptId: DEPT_ID,
+      unitId: 'E1',
+      status: 'IN_SERVICE',
+      changedBy: 'MBR-1',
+      correlationId: 'corr-1',
+    });
 
     const closeUpdate = findUpdate(lastTransactItems(send), 'OOS#1700000000');
     expect(closeUpdate).toBeDefined();
@@ -224,7 +236,13 @@ describe('setServiceStatus', () => {
     const client = { send } as unknown as DynamoDBDocumentClient;
 
     await expect(
-      setServiceStatus(client, TABLE, { deptId: DEPT_ID, unitId: 'E1', status: 'IN_SERVICE', changedBy: 'MBR-1', correlationId: 'corr-1' }),
+      setServiceStatus(client, TABLE, {
+        deptId: DEPT_ID,
+        unitId: 'E1',
+        status: 'IN_SERVICE',
+        changedBy: 'MBR-1',
+        correlationId: 'corr-1',
+      }),
     ).rejects.toBeInstanceOf(ServiceStatusConflictError);
   });
 

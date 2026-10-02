@@ -141,7 +141,7 @@ describe('service-status change chain: route write -> event -> inbox + non-criti
       }
     }
     expect(records.length).toBeGreaterThan(0);
-    return { Records: records } as SQSEvent;
+    return { Records: records };
   }
 
   it('a manual out-of-service notifies the officer: inbox record and captured push', async () => {
@@ -218,7 +218,9 @@ describe('service-status change chain: route write -> event -> inbox + non-criti
             eventName: 'INSERT',
             dynamodb: {
               SequenceNumber: '1',
-              NewImage: marshall(outboxRows![0], { removeUndefinedValues: true }),
+              NewImage: marshall(outboxRows![0] as Record<string, unknown>, {
+                removeUndefinedValues: true,
+              }),
             },
           },
         ],

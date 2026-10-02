@@ -176,15 +176,23 @@ export async function deliverTo(
 
   const push: ChannelOutcome = mutes.push
     ? 'Muted'
-    : await sendOnce(ddb, tableName, deptId, memberId, spec.pushMarker, envelope, spec.logPrefix, () =>
-        sendPushDigest(
-          process.env,
-          { memberId, deptId, email },
-          [item],
-          envelope.correlationId ?? envelope.eventId,
-          undefined,
-          spec.category,
-        ),
+    : await sendOnce(
+        ddb,
+        tableName,
+        deptId,
+        memberId,
+        spec.pushMarker,
+        envelope,
+        spec.logPrefix,
+        () =>
+          sendPushDigest(
+            process.env,
+            { memberId, deptId, email },
+            [item],
+            envelope.correlationId ?? envelope.eventId,
+            undefined,
+            spec.category,
+          ),
       );
   emitOutcomeMetric(METRIC_NAMESPACE, `${spec.metricPrefix}Push${push}`);
 
@@ -192,15 +200,23 @@ export async function deliverTo(
   // away from the app still hears now — it must not wait for tomorrow's digest.
   const emailed: ChannelOutcome = mutes.email
     ? 'Muted'
-    : await sendOnce(ddb, tableName, deptId, memberId, spec.emailMarker, envelope, spec.logPrefix, () =>
-        sendEmailDigest(
-          process.env,
-          { memberId, deptId, email },
-          [item],
-          envelope.correlationId ?? envelope.eventId,
-          undefined,
-          spec.category,
-        ),
+    : await sendOnce(
+        ddb,
+        tableName,
+        deptId,
+        memberId,
+        spec.emailMarker,
+        envelope,
+        spec.logPrefix,
+        () =>
+          sendEmailDigest(
+            process.env,
+            { memberId, deptId, email },
+            [item],
+            envelope.correlationId ?? envelope.eventId,
+            undefined,
+            spec.category,
+          ),
       );
   emitOutcomeMetric(METRIC_NAMESPACE, `${spec.metricPrefix}Email${emailed}`);
   return push === 'Failed' || emailed === 'Failed' ? 'Failed' : 'Delivered';
@@ -241,9 +257,14 @@ export async function deliverImmediately(
   if (recipients.length === 0) {
     // A change nobody is told about: infrastructure alarms on this metric and notifies the
     // chief (notification/reminders.ts).
-    logError(`${spec.logPrefix}.no_recipients`, new Error(spec.noRecipientsError), envelope.eventId, {
-      subjectId: item.subjectId,
-    });
+    logError(
+      `${spec.logPrefix}.no_recipients`,
+      new Error(spec.noRecipientsError),
+      envelope.eventId,
+      {
+        subjectId: item.subjectId,
+      },
+    );
     emitOutcomeMetric(METRIC_NAMESPACE, `${spec.metricPrefix}ImmediateNoRecipients`);
   }
   if (failed > 0) {

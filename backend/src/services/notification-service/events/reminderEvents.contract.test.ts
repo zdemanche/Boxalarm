@@ -342,8 +342,8 @@ describe('apparatus.serviceStatus.changed (outbox) -> apparatusStatusConsumer', 
   ): Promise<{ event: SQSEvent | null; outbox: Record<string, unknown> | undefined }> {
     const ddbSend = vi.fn().mockImplementation((command: SentCommand) => {
       if (command.constructor.name === 'QueryCommand') {
-        const expression = String(command.input.KeyConditionExpression ?? '');
-        if (expression.includes('gsi3')) {
+        const expression = command.input.KeyConditionExpression;
+        if (typeof expression === 'string' && expression.includes('gsi3')) {
           return Promise.resolve({
             Items: [
               {
@@ -363,15 +363,19 @@ describe('apparatus.serviceStatus.changed (outbox) -> apparatusStatusConsumer', 
       return Promise.resolve({});
     });
     const { setServiceStatus } = await import('../../apparatus-service/repository.js');
-    await setServiceStatus({ send: ddbSend } as unknown as DynamoDBDocumentClient, 'platform-table', {
-      deptId,
-      unitId: 'E1',
-      status,
-      ...(status === 'OUT_OF_SERVICE' ? { reason: 'Pump failure' } : {}),
-      changedBy: 'OFF-9',
-      correlationId: 'trace-7',
-      ...(suppressEvent ? { suppressEvent: true } : {}),
-    });
+    await setServiceStatus(
+      { send: ddbSend } as unknown as DynamoDBDocumentClient,
+      'platform-table',
+      {
+        deptId,
+        unitId: 'E1',
+        status,
+        ...(status === 'OUT_OF_SERVICE' ? { reason: 'Pump failure' } : {}),
+        changedBy: 'OFF-9',
+        correlationId: 'trace-7',
+        ...(suppressEvent ? { suppressEvent: true } : {}),
+      },
+    );
     const transact = ddbSend.mock.calls
       .map((call) => call[0] as SentCommand)
       .find((command) => command.constructor.name === 'TransactWriteCommand')!;

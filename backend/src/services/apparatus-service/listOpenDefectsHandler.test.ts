@@ -132,7 +132,7 @@ describe('listOpenDefectsHandler (entrypoint)', () => {
     });
 
     for (const query of [undefined, {}, { status: 'resolved' }]) {
-      const result = await handler(buildEvent(query as Record<string, string> | undefined));
+      const result = await handler(buildEvent(query));
       expect(result).toMatchObject({ statusCode: 400 });
     }
     expect(send).not.toHaveBeenCalled();

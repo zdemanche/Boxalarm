@@ -140,7 +140,10 @@ function readPendingIosTap(nowMs: number): PendingIosRoute | null {
   }
   const receivedSeconds =
     typeof pending.deliveredAt === 'number' ? pending.deliveredAt : (tappedAt as number);
-  const payload = alertPayloadFromPushData(pending as Record<string, unknown>, receivedSeconds * 1000);
+  const payload = alertPayloadFromPushData(
+    pending as Record<string, unknown>,
+    receivedSeconds * 1000,
+  );
   return payload ? { kind: 'alert', payload } : null;
 }
 
