@@ -215,8 +215,8 @@ async function deliverTo(
       );
   emitOutcomeMetric(METRIC_NAMESPACE, `ApparatusDefectPush${push}`);
 
-  // Nothing subscribes to the push topic yet, so email is the channel that actually reaches
-  // an officer away from the app — it must not wait for tomorrow's digest.
+  // Email runs alongside push (the push worker delivers the topic's messages), so an officer
+  // away from the app still hears now — it must not wait for tomorrow's digest.
   const emailed: ChannelOutcome = mutes.email
     ? 'Muted'
     : await sendOnce(ddb, tableName, deptId, memberId, 'DEFECTEMAIL', envelope, () =>
@@ -285,8 +285,8 @@ async function deliverImmediately(
  * officers. Every defect is recorded for the daily digest (push + email + inbox). A defect
  * that takes the unit out of service (outOfService, or the OUT_OF_SERVICE severity)
  * is additionally written to their inboxes and emailed now, with a push on the
- * non-critical notification channel (published, though no device subscriber exists yet) —
- * never an interruption-level alert. Recording it for the digest too means an out-of-service
+ * non-critical notification channel (delivered by the push worker) — never an
+ * interruption-level alert. Recording it for the digest too means an out-of-service
  * defect reaches at least every channel a minor one does, even if the immediate email fails.
  */
 export const handler = async (event: SQSEvent): Promise<void> => {

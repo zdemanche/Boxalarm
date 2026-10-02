@@ -48,10 +48,9 @@ const DIGEST_METRIC_NAMESPACE = "Boxalarm/NotificationDigest";
  *
  * The other reminder categories (apparatus test due, apparatus defect, consumable reorder,
  * PPE expiry) reach the same DIGEST_PENDING rows through reminders.ts's consumers; the job
- * routes each category to its roles (backend reminders/categories.ts). Nothing subscribes
- * to the push topic yet — no device-delivery Lambda for the non-critical channel exists in
- * backend/ — so a push is published and dropped; the email digest and the inbox record are
- * the delivered surfaces today.
+ * routes each category to its roles (backend reminders/categories.ts). The push topic's
+ * device-delivery subscriber is push-worker.ts (design review M7): published pushes reach
+ * phones on the non-critical channel, alongside the email digest and the inbox record.
  */
 export class Digest extends pulumi.ComponentResource {
   public readonly pushTopic: aws.sns.Topic;
