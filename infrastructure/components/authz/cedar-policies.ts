@@ -15,12 +15,11 @@ export type RoleGroup = (typeof ROLE_GROUPS)[number];
 //
 // RunRecordsDisposal / ViewRetentionConfig / UpdateRetentionConfig / UpdateMember are
 // live today (retention/disposalHandler.ts, retention/configHandler.ts,
-// members/updateMember.ts). ViewConfig / UpdateConfig / ExportData are not yet called —
-// config/handler.ts and export/authz.ts still gate on assertChiefOrAdmin, with a TODO to
-// swap to Cedar once this policy store ships — defined ahead of that swap so it isn't a
-// companion infra change later. RevokeSession is the same: deviceLossHandler.ts still
-// gates on a manual ADMIN_GROUPS check (TODO: E8-S3), defined ahead of time per the
-// audit finding that this schema doesn't yet cover session-revocation actions.
+// members/updateMember.ts), and so is RevokeSession: deviceLossHandler.ts gates on it through
+// withAuthorization (alarmed on every invocation), with no manual group check left.
+// ViewConfig / UpdateConfig / ExportData are not yet called — config/handler.ts and
+// export/authz.ts still gate on assertChiefOrAdmin, with a TODO to swap to Cedar — defined
+// ahead of that swap so it isn't a companion infra change later.
 export const ADMIN_ONLY_ACTIONS = [
   "UpdateConfig",
   "ExportData",
@@ -29,6 +28,32 @@ export const ADMIN_ONLY_ACTIONS = [
   "UpdateRetentionConfig",
   "UpdateMember",
   "RevokeSession",
+  // The compromised-password kill switch (review C1, OQ-24): puts the login into
+  // RESET_REQUIRED and signs every session out (session-revocation/credentialResetHandler.ts).
+  "ResetMemberCredentials",
+  // Lists a member's registered push devices so device loss can remove just the lost one
+  // (session-revocation/listDevicesHandler.ts) - the roles that may report a device lost.
+  "ViewMemberDevices",
+  // The department's audit trail (platform-service/audit/handler.ts), which the web shows to
+  // CHIEF/ADMIN only (security-web MINOR 12; it was a groups check that also admitted OFFICER).
+  "ViewAuditTrail",
+  // reporting-service (P1 #8): CSV/PDF export of a named report (export/handler.ts) and
+  // the N1.9 cutover accept/defer write (cutoverDecision/post.ts). Export sits with
+  // ExportData — CLAUDE.md: "Export and destructive actions are gated by Cedar role check
+  // alone" — and the cutover gate is the chief's life-safety sign-off (#40 AC3), so both
+  // are CHIEF/ADMIN, not the officer tier that may read the reports themselves.
+  "ExportReport",
+  "RecordCutoverDecision",
+  // inspections-service archive (archive/archiveHandler.ts): destructive — it takes an
+  // occupancy's pre-plan or a hydrant off every dispatch — so CHIEF/ADMIN, not the officer
+  // tier that may edit them.
+  "ArchiveOccupancy",
+  "ArchiveHydrant",
+  // CAD ingress sources (platform-service cadSources/): who may page the whole department
+  // from a CAD feed - sender allowlists, webhook keys, parser templates - is the chief's call.
+  // View is admin-only too: the view carries the recipient address and key ids.
+  "ViewCadIngress",
+  "ManageCadIngress",
 ] as const;
 export const ADMIN_ONLY_GROUPS = ["CHIEF", "ADMIN"] as const;
 
@@ -39,18 +64,37 @@ export const VIEW_ACTIONS = ["ViewConfig"] as const;
 // above) — including quals/handler.ts, certifications/*.ts, transcript/get.ts and
 // reports/iso.ts, whose actionType/resourceType literals ('PersonnelService', 'Training',
 // 'Member', 'TrainingReport') were normalized to the Boxalarm::Action / Boxalarm::<Type>
-// convention every other route uses, so one schema can express a policy for all of them —
-// Verified Permissions treats actionType/resourceType as the literal, unqualified entity
-// type name, and there is no way to grant an action whose type isn't declared here.
+// convention every other route uses, so one schema can express a policy for all of them.
+// decide.ts sends those namespace-qualified type names (Boxalarm::Action,
+// Boxalarm::Member, ...) verbatim, and the namespaced schema below only declares
+// Boxalarm::-qualified types — an unqualified or unknown type can never match a policy.
 export const SELF_SERVICE_ACTIONS = [
+  // F2.6 / AP 12: a member editing their OWN profile. updateMember.ts routes a request to
+  // this action only when the path memberId is the caller's sub, and re-checks that
+  // against the verified principal before writing; editing anyone else is UpdateMember
+  // (ADMIN_ONLY_ACTIONS above).
+  "SelfUpdateMember",
   "RecordAttendance",
   "ViewOwnAttendance",
   "MarkAvailability",
+  // A member's own mark-offs: list them and end one early (availability/markoffs.ts routes a
+  // request here only when the path memberId is the caller's sub, and re-checks it).
+  "ViewOwnAvailability",
+  "EndOwnMarkoff",
   "ViewOwnLosapTotal",
   "GetQuals",
   "ViewTranscript",
   "ViewCertifications",
   "ViewTrainingHours",
+  // notification-service inbox + preferences (inbox/handler.ts, preferences/handler.ts).
+  // Strictly own-record: every one keys its DynamoDB access on the caller's own
+  // principal.sub, never a path memberId. MarkNotificationRead's resource is the path
+  // notification id, and the handler only finds it under the caller's own partition — a
+  // foreign id is a 404, so a role check is the whole Cedar decision.
+  "ViewOwnNotifications",
+  "MarkNotificationRead",
+  "ViewOwnNotificationPreferences",
+  "UpdateOwnNotificationPreferences",
 ] as const;
 
 export const OFFICER_TIER_ACTIONS = [
@@ -66,8 +110,224 @@ export const OFFICER_TIER_ACTIONS = [
   "ViewExpiringCertifications",
   "ViewIsoTrainingReport",
   "ViewRosterTrainingHours",
+  // PRD §personas: the officer makes riding assignments. ridingBoard/handler.ts
+  // (assignRidingPositionHandler) sends this against Boxalarm::RidingBoard.
+  "AssignRidingPosition",
+  // reporting-service read routes (P1 #8). Every one is `Cognito(admin)` in the
+  // architecture route table (docs/architecture.md:390-396), and :274 defines that as
+  // "a Verified Permissions check requiring chief/admin/officer role" — the same tier as
+  // training's ViewIsoTrainingReport, which the route table also marks Cognito(admin).
+  "ViewOperationalDashboard",
+  "GetLosapYearEnd",
+  "ViewIsoReport",
+  "ViewGrantsReport",
+  "ViewResponseTimes",
+  "ViewMembershipTrends",
+  "ViewCutoverDecision",
+  // ViewDeliveryBaseline, which GET /api/v1/reporting/cutover-decision forwards the caller's
+  // token to (cutoverDecision/deliveryBaseline.ts), is declared once, in the alerting
+  // officer tier below.
 ] as const;
 export const OFFICER_TIER_GROUPS = ["OFFICER", "TRAINING", "CHIEF", "ADMIN"] as const;
+
+// apparatus-service (api-gap P0 #5): the actionIds its withAuthorization callers send
+// (grepped from backend/src/services/apparatus-service, pinned by that service's
+// cedarActions.test.ts). Tiers follow docs/architecture.md §2's apparatus table: routes
+// marked "Cognito" are every-role; "Cognito(admin)" (service-status, compliance) and the
+// write routes the table does not list (maintenance log, hose/ladder/pump/aerial test log,
+// compartment item create/restock) are the apparatus-officer tier. That tier adds the
+// APPARATUS group to the architecture's chief/admin/officer definition of Cognito(admin),
+// because §7.1 gives /apparatus and /apparatus/:id to the apparatus role and the
+// APPARATUS group exists for exactly this officer.
+// Not here: riding-board actions (owned by the riding-board fix), and the three routes
+// that authorize without Cedar (list/get read on the dept-scoped authorizer context,
+// create on a manual CHIEF/ADMIN group check in authContext.ts).
+export const APPARATUS_MEMBER_ACTIONS = [
+  "GetChecklist",
+  "SubmitApparatusCheck",
+  // A photo on a truck-check item (attachCheckPhoto.ts): part of performing the check, so the
+  // same every-role tier as SubmitApparatusCheck.
+  "AttachCheckPhoto",
+  "ReportDefect",
+  "ViewMaintenanceHistory",
+  "LogScbaRecord",
+  "ViewScbaTestingSchedules",
+  "ViewTestingSchedules",
+  "ListCompartmentInventory",
+] as const;
+
+export const APPARATUS_OFFICER_ACTIONS = [
+  "UpdateServiceStatus",
+  "GetComplianceReport",
+  // The dashboard's dept-wide open-defects list (owed review minor 8): the same tier that
+  // acts on a defect (service status, maintenance).
+  "ListOpenDefects",
+  // Closing a defect with a note (review MAJOR-2): the tier that acts on defects.
+  "ResolveDefect",
+  "LogMaintenanceRecord",
+  "LogApparatusTestRecord",
+  "CreateCompartmentItem",
+  "UpdateCompartmentItemQuantity",
+] as const;
+export const APPARATUS_OFFICER_GROUPS = ["APPARATUS", "OFFICER", "CHIEF", "ADMIN"] as const;
+
+// Resource type each apparatus action is sent with. Every apparatus route passes
+// Boxalarm::Apparatus except the SCBA due-soon feed, which is department-wide.
+const APPARATUS_ACTION_RESOURCE: Record<
+  (typeof APPARATUS_MEMBER_ACTIONS)[number] | (typeof APPARATUS_OFFICER_ACTIONS)[number],
+  "Apparatus" | "Department"
+> = {
+  GetChecklist: "Apparatus",
+  SubmitApparatusCheck: "Apparatus",
+  AttachCheckPhoto: "Apparatus",
+  ReportDefect: "Apparatus",
+  ViewMaintenanceHistory: "Apparatus",
+  LogScbaRecord: "Apparatus",
+  ViewScbaTestingSchedules: "Department",
+  ViewTestingSchedules: "Apparatus",
+  ListCompartmentInventory: "Apparatus",
+  UpdateServiceStatus: "Apparatus",
+  GetComplianceReport: "Apparatus",
+  ListOpenDefects: "Apparatus",
+  ResolveDefect: "Apparatus",
+  LogMaintenanceRecord: "Apparatus",
+  LogApparatusTestRecord: "Apparatus",
+  CreateCompartmentItem: "Apparatus",
+  UpdateCompartmentItemQuantity: "Apparatus",
+};
+
+const APPARATUS_SCHEMA_ACTIONS = Object.fromEntries(
+  Object.entries(APPARATUS_ACTION_RESOURCE).map(([action, resourceType]) => [
+    action,
+    { appliesTo: { principalTypes: ["User"], resourceTypes: [resourceType] } },
+  ]),
+);
+
+// inventory-service (api-gap P0-6): the actionIds its withAuthorization callers send
+// (backend/src/services/inventory-service/{equipment,consumables,lifecycle,ppe}). The
+// architecture's inventory table marks every read "Cognito" (any member) and the writes
+// "Cognito(admin)" — a Verified Permissions check requiring chief/admin/officer (§2
+// Auth column) — so reads go to every role and writes to exactly those three groups.
+// TRAINING and APPARATUS are deliberately not in the write tier: the architecture names
+// only chief/admin/officer, and the handlers' previous manual check allowed the same three.
+// IssuePpeAssignment has no row in the architecture table; issuing gear to a member is an
+// admin-tier write like registering equipment, so it sits with the other writes.
+export const INVENTORY_READ_ACTIONS = [
+  "ListEquipment",
+  "ViewEquipmentAsset",
+  "ListConsumables",
+  "ViewPpeAssignments",
+] as const;
+
+export const INVENTORY_ADMIN_ACTIONS = [
+  "RegisterEquipmentAsset",
+  "AssignEquipmentAsset",
+  "SetEquipmentLocation",
+  "TransitionAssetLifecycle",
+  "IssuePpeAssignment",
+] as const;
+export const INVENTORY_ADMIN_GROUPS = ["OFFICER", "CHIEF", "ADMIN"] as const;
+
+// alerting-service (+ personnel-service push tokens, which the alerting plane reads). None of
+// these were declared, so under STRICT validation every one failed: members could not
+// record a response, see the roster, run a self-test, or register a device for push.
+// Tiers follow architecture.md §2's alerting table: "Cognito" routes are every-role;
+// "Cognito(admin)" is "a Verified Permissions check requiring chief/admin/officer role".
+// Own-record scoping for the every-role Member actions is enforced in the handlers
+// (resourceId is the caller's sub, or a 403 when the path member is someone else),
+// because no entity attributes reach Cedar - see the department-scoping note below.
+export const ALERTING_MEMBER_ACTIONS = [
+  "ViewAlertDetail",
+  // GET /alerting/dispatches?status=active (dashboard active-call tile) - same department-wide
+  // summary every member already sees per dispatch through ViewAlertDetail.
+  "ListActiveDispatches",
+  "ViewRoster",
+  "RecordResponse",
+  "SelfTestAlertPath",
+  "ReportDeviceState",
+  "ViewOwnDiagnostics",
+  "ViewOwnDeliveryHistory",
+  "RegisterPushToken",
+  "RevokePushToken",
+] as const;
+
+export const ALERTING_OFFICER_ACTIONS = [
+  "SubmitManualDispatch",
+  "GetDeliveryReceipts",
+  "ViewDiagnostics",
+  "ViewAlertingAuditLog",
+  "ViewCanaryStatus",
+  "ViewDeliveryBaseline",
+  // F1.14 / F1.13 officer ladder controls (architecture.md §2, Cognito(admin)). OQ-25 (who
+  // may halt, and what the SOG says a halt means) is open; until it is answered they take the
+  // same chief/admin/officer tier as every other Cognito(admin) alerting route.
+  "AdvanceToneLadder",
+  "HaltToneLadder",
+  "TriggerMutualAid",
+  "AcknowledgeMutualAid",
+] as const;
+export const ALERTING_OFFICER_GROUPS = ["OFFICER", "CHIEF", "ADMIN"] as const;
+
+// Resource type each alerting action is sent with (backend withAuthorization call sites).
+const ALERTING_ACTION_RESOURCE: Record<
+  (typeof ALERTING_MEMBER_ACTIONS)[number] | (typeof ALERTING_OFFICER_ACTIONS)[number],
+  "Dispatch" | "Member" | "Department"
+> = {
+  ViewAlertDetail: "Department",
+  ListActiveDispatches: "Department",
+  ViewRoster: "Dispatch",
+  RecordResponse: "Dispatch",
+  SelfTestAlertPath: "Member",
+  ReportDeviceState: "Member",
+  ViewOwnDiagnostics: "Member",
+  ViewOwnDeliveryHistory: "Member",
+  RegisterPushToken: "Member",
+  RevokePushToken: "Member",
+  SubmitManualDispatch: "Department",
+  GetDeliveryReceipts: "Dispatch",
+  ViewDiagnostics: "Dispatch",
+  ViewAlertingAuditLog: "Department",
+  ViewCanaryStatus: "Department",
+  ViewDeliveryBaseline: "Department",
+  AdvanceToneLadder: "Dispatch",
+  HaltToneLadder: "Dispatch",
+  TriggerMutualAid: "Dispatch",
+  AcknowledgeMutualAid: "Dispatch",
+};
+
+const ALERTING_SCHEMA_ACTIONS = Object.fromEntries(
+  Object.entries(ALERTING_ACTION_RESOURCE).map(([action, resourceType]) => [
+    action,
+    { appliesTo: { principalTypes: ["User"], resourceTypes: [resourceType] } },
+  ]),
+);
+
+// inspections-service (F6). Actions are what its withAuthorization / IsAuthorizedWithToken
+// callers send (getPrePlanHandler, putPrePlanHandler, listInspections, recordInspection,
+// fieldCapture, map, hydrant/*, occupancy/authorization.ts). Tiers follow architecture.md's
+// inspections route table: `Cognito` routes are every role; `Cognito(admin)` routes — defined
+// there as "chief/admin/officer role" — are OFFICER/CHIEF/ADMIN (no TRAINING/APPARATUS).
+//  - Every role: read a pre-plan, list the inspection schedule, the map, and recording work in
+//    the field — POST /inspections (schedule + conduct) and POST /field-capture are `Cognito`.
+//  - Officer/chief/admin: create or edit occupancies (POST is `Cognito(admin)`; the PUT has no
+//    row and takes the same action), pre-plan edits and hydrant writes (PUT is
+//    `Cognito(admin)`; hydrant create has no row and takes the write tier).
+export const INSPECTIONS_MEMBER_ACTIONS = [
+  "GetPrePlan",
+  "ListInspections",
+  "ViewInspectionsMap",
+  "ScheduleInspection",
+  "ConductInspection",
+  "SubmitFieldCapture",
+] as const;
+
+export const INSPECTIONS_OFFICER_ACTIONS = [
+  "WriteOccupancy",
+  "UpdatePrePlan",
+  "CreateHydrant",
+  "UpdateHydrant",
+] as const;
+export const INSPECTIONS_OFFICER_GROUPS = ["OFFICER", "CHIEF", "ADMIN"] as const;
 
 // Department-scoping is NOT expressed here as a `when` clause comparing
 // principal/resource attributes. Two things rule that out for every action above:
@@ -88,6 +348,98 @@ export const OFFICER_TIER_GROUPS = ["OFFICER", "TRAINING", "CHIEF", "ADMIN"] as 
 // destructive actions are gated by Cedar role check alone." Department isolation is
 // enforced where CLAUDE.md says it lives — dept-scoped DynamoDB keys built from the
 // verified JWT (buildDeptScopedPk) — not duplicated here.
+// Every reporting action is department-wide: each
+// handler's resourceId is the caller's verified deptId, sent as Boxalarm::Department.
+export const REPORTING_DEPARTMENT_ACTIONS = [
+  "ViewOperationalDashboard",
+  "GetLosapYearEnd",
+  "ViewIsoReport",
+  "ViewGrantsReport",
+  "ViewResponseTimes",
+  "ViewMembershipTrends",
+  "ViewCutoverDecision",
+  "RecordCutoverDecision",
+  "ExportReport",
+] as const;
+
+// incident-service NERIS loop + its platform/reporting companions. Validate is every role
+// (read-only: members write reports too). Locking, resubmitting a corrected report to NERIS,
+// filing a no-activity month, and the NERIS compliance/entity reads are the officer's review
+// job — OFFICER/CHIEF/ADMIN, the architecture's Cognito(admin) tier. Unlocking a reviewed
+// report (audited, with a reason) and registering stations/units with the NERIS entity are
+// CHIEF/ADMIN only.
+// EditIncidentModule is every role like the other incident edit routes (members write
+// reports); the lock, not the role, is what stops edits after review.
+// EditIncidentExposures (putExposures.ts) is every role too: a member records their own
+// exposure. Naming or correcting other members on it is RecordExposureForOthers, officer tier.
+// Security-web MINOR 2: submit, retry and the submission reads were hand-rolled groups checks
+// (submit CHIEF/ADMIN while resubmit was officer tier); the officer who reviews a report now
+// submits it as well as resubmits it.
+export const NERIS_MEMBER_ACTIONS = [
+  "ValidateIncidentReport",
+  "ViewNerisSchema",
+  "EditIncidentModule",
+  "EditIncidentExposures",
+] as const;
+export const NERIS_OFFICER_ACTIONS = [
+  // Starting a report, from a dispatch or by hand (createIncident.ts): the officer who
+  // completes, locks and submits it also starts it (docs/decisions/2026-09-30-officers-start-reports.md).
+  "CreateIncidentReport",
+  "LockIncidentReport",
+  "SubmitIncidentReport",
+  "ResubmitIncidentReport",
+  "RetryIncidentSubmission",
+  "ViewIncidentSubmission",
+  "RecordExposureForOthers",
+  "FileNoActivityReport",
+  "ViewNerisCompliance",
+  "ViewNerisEntity",
+  // "Start a report": the department's recent dispatches with the report started from each
+  // (incident-service listRecentDispatches.ts) - the officer's report-writing queue.
+  "ListRecentDispatches",
+] as const;
+export const NERIS_OFFICER_GROUPS = ["OFFICER", "CHIEF", "ADMIN"] as const;
+
+// Another member's mark-offs (paging review MAJOR-A): a mark-off stops that member's pages, so
+// an officer can see who is marked off and end a window entered by mistake. OFFICER/CHIEF/ADMIN
+// (not TRAINING/APPARATUS): the same officers who run the call.
+export const AVAILABILITY_OFFICER_ACTIONS = ["ViewMemberAvailability", "EndMemberMarkoff"] as const;
+export const AVAILABILITY_OFFICER_GROUPS = ["OFFICER", "CHIEF", "ADMIN"] as const;
+export const NERIS_ADMIN_ACTIONS = ["UnlockIncidentReport", "SyncNerisEntity"] as const;
+
+// Resource type each NERIS action is sent with (the handlers' withAuthorization options).
+const NERIS_ACTION_RESOURCE: Record<
+  | (typeof NERIS_MEMBER_ACTIONS)[number]
+  | (typeof NERIS_OFFICER_ACTIONS)[number]
+  | (typeof NERIS_ADMIN_ACTIONS)[number],
+  "Incident" | "Department"
+> = {
+  ValidateIncidentReport: "Incident",
+  ViewNerisSchema: "Department",
+  CreateIncidentReport: "Department",
+  EditIncidentModule: "Incident",
+  EditIncidentExposures: "Incident",
+  LockIncidentReport: "Incident",
+  SubmitIncidentReport: "Incident",
+  ResubmitIncidentReport: "Incident",
+  RetryIncidentSubmission: "Incident",
+  ViewIncidentSubmission: "Incident",
+  RecordExposureForOthers: "Incident",
+  UnlockIncidentReport: "Incident",
+  FileNoActivityReport: "Department",
+  ViewNerisCompliance: "Department",
+  ViewNerisEntity: "Department",
+  ListRecentDispatches: "Department",
+  SyncNerisEntity: "Department",
+};
+
+const NERIS_SCHEMA_ACTIONS = Object.fromEntries(
+  Object.entries(NERIS_ACTION_RESOURCE).map(([action, resourceType]) => [
+    action,
+    { appliesTo: { principalTypes: ["User"], resourceTypes: [resourceType] } },
+  ]),
+);
+
 export const CEDAR_SCHEMA = JSON.stringify({
   Boxalarm: {
     entityTypes: {
@@ -99,6 +451,17 @@ export const CEDAR_SCHEMA = JSON.stringify({
       ShiftSwapRequest: {},
       TrainingEvent: {},
       TrainingReport: {},
+      RidingBoard: {},
+      Apparatus: {},
+      Asset: {},
+      Dispatch: {},
+      Occupancy: {},
+      Hydrant: {},
+      Inspection: {},
+      InspectionList: {},
+      InspectionsMap: {},
+      Notification: {},
+      Incident: {},
     },
     actions: {
       ViewConfig: { appliesTo: { principalTypes: ["User"], resourceTypes: ["Department"] } },
@@ -114,7 +477,15 @@ export const CEDAR_SCHEMA = JSON.stringify({
         appliesTo: { principalTypes: ["User"], resourceTypes: ["Department"] },
       },
       UpdateMember: { appliesTo: { principalTypes: ["User"], resourceTypes: ["Member"] } },
+      SelfUpdateMember: { appliesTo: { principalTypes: ["User"], resourceTypes: ["Member"] } },
       RevokeSession: { appliesTo: { principalTypes: ["User"], resourceTypes: ["Member"] } },
+      ResetMemberCredentials: {
+        appliesTo: { principalTypes: ["User"], resourceTypes: ["Member"] },
+      },
+      ViewMemberDevices: { appliesTo: { principalTypes: ["User"], resourceTypes: ["Member"] } },
+      ViewAuditTrail: { appliesTo: { principalTypes: ["User"], resourceTypes: ["Department"] } },
+      ViewCadIngress: { appliesTo: { principalTypes: ["User"], resourceTypes: ["Department"] } },
+      ManageCadIngress: { appliesTo: { principalTypes: ["User"], resourceTypes: ["Department"] } },
       RecordAttendance: { appliesTo: { principalTypes: ["User"], resourceTypes: ["Member"] } },
       RecordAttendanceOnBehalf: {
         appliesTo: { principalTypes: ["User"], resourceTypes: ["Member"] },
@@ -124,6 +495,14 @@ export const CEDAR_SCHEMA = JSON.stringify({
         appliesTo: { principalTypes: ["User"], resourceTypes: ["Member"] },
       },
       MarkAvailability: { appliesTo: { principalTypes: ["User"], resourceTypes: ["Member"] } },
+      ViewOwnAvailability: {
+        appliesTo: { principalTypes: ["User"], resourceTypes: ["Member"] },
+      },
+      EndOwnMarkoff: { appliesTo: { principalTypes: ["User"], resourceTypes: ["Member"] } },
+      ViewMemberAvailability: {
+        appliesTo: { principalTypes: ["User"], resourceTypes: ["Member"] },
+      },
+      EndMemberMarkoff: { appliesTo: { principalTypes: ["User"], resourceTypes: ["Member"] } },
       ViewOwnLosapTotal: { appliesTo: { principalTypes: ["User"], resourceTypes: ["Member"] } },
       GetQuals: { appliesTo: { principalTypes: ["User"], resourceTypes: ["Member"] } },
       UpdateQuals: { appliesTo: { principalTypes: ["User"], resourceTypes: ["Member"] } },
@@ -151,12 +530,73 @@ export const CEDAR_SCHEMA = JSON.stringify({
       RecordTrainingAttendance: {
         appliesTo: { principalTypes: ["User"], resourceTypes: ["TrainingEvent"] },
       },
+      ViewOwnNotifications: {
+        appliesTo: { principalTypes: ["User"], resourceTypes: ["Member"] },
+      },
+      MarkNotificationRead: {
+        appliesTo: { principalTypes: ["User"], resourceTypes: ["Notification"] },
+      },
+      ViewOwnNotificationPreferences: {
+        appliesTo: { principalTypes: ["User"], resourceTypes: ["Member"] },
+      },
+      UpdateOwnNotificationPreferences: {
+        appliesTo: { principalTypes: ["User"], resourceTypes: ["Member"] },
+      },
       ApproveShiftSwap: {
         appliesTo: { principalTypes: ["User"], resourceTypes: ["ShiftSwapRequest"] },
       },
       ListPendingShiftSwaps: {
         appliesTo: { principalTypes: ["User"], resourceTypes: ["Department"] },
       },
+      AssignRidingPosition: {
+        appliesTo: { principalTypes: ["User"], resourceTypes: ["RidingBoard"] },
+      },
+      ...APPARATUS_SCHEMA_ACTIONS,
+      ...ALERTING_SCHEMA_ACTIONS,
+      ...NERIS_SCHEMA_ACTIONS,
+      ListEquipment: { appliesTo: { principalTypes: ["User"], resourceTypes: ["Department"] } },
+      ViewEquipmentAsset: { appliesTo: { principalTypes: ["User"], resourceTypes: ["Asset"] } },
+      ListConsumables: {
+        appliesTo: { principalTypes: ["User"], resourceTypes: ["Department"] },
+      },
+      ViewPpeAssignments: { appliesTo: { principalTypes: ["User"], resourceTypes: ["Member"] } },
+      RegisterEquipmentAsset: {
+        appliesTo: { principalTypes: ["User"], resourceTypes: ["Department"] },
+      },
+      AssignEquipmentAsset: { appliesTo: { principalTypes: ["User"], resourceTypes: ["Asset"] } },
+      SetEquipmentLocation: { appliesTo: { principalTypes: ["User"], resourceTypes: ["Asset"] } },
+      TransitionAssetLifecycle: {
+        appliesTo: { principalTypes: ["User"], resourceTypes: ["Asset"] },
+      },
+      IssuePpeAssignment: { appliesTo: { principalTypes: ["User"], resourceTypes: ["Member"] } },
+      GetPrePlan: { appliesTo: { principalTypes: ["User"], resourceTypes: ["Occupancy"] } },
+      UpdatePrePlan: { appliesTo: { principalTypes: ["User"], resourceTypes: ["Occupancy"] } },
+      WriteOccupancy: { appliesTo: { principalTypes: ["User"], resourceTypes: ["Occupancy"] } },
+      CreateHydrant: { appliesTo: { principalTypes: ["User"], resourceTypes: ["Hydrant"] } },
+      UpdateHydrant: { appliesTo: { principalTypes: ["User"], resourceTypes: ["Hydrant"] } },
+      ArchiveOccupancy: { appliesTo: { principalTypes: ["User"], resourceTypes: ["Occupancy"] } },
+      ArchiveHydrant: { appliesTo: { principalTypes: ["User"], resourceTypes: ["Hydrant"] } },
+      ListInspections: {
+        appliesTo: { principalTypes: ["User"], resourceTypes: ["InspectionList"] },
+      },
+      ScheduleInspection: {
+        appliesTo: { principalTypes: ["User"], resourceTypes: ["Inspection"] },
+      },
+      ConductInspection: {
+        appliesTo: { principalTypes: ["User"], resourceTypes: ["Inspection"] },
+      },
+      SubmitFieldCapture: {
+        appliesTo: { principalTypes: ["User"], resourceTypes: ["Inspection"] },
+      },
+      ViewInspectionsMap: {
+        appliesTo: { principalTypes: ["User"], resourceTypes: ["InspectionsMap"] },
+      },
+      ...Object.fromEntries(
+        REPORTING_DEPARTMENT_ACTIONS.map((action) => [
+          action,
+          { appliesTo: { principalTypes: ["User"], resourceTypes: ["Department"] } },
+        ]),
+      ),
     },
   },
 });
@@ -196,24 +636,135 @@ export function viewConfigPolicy(userPoolId: string): string {
 }
 
 /**
- * Own-record personnel/training actions (E2/E3-INFRA): every resourceId(event) call site
- * for these actions passes the caller's own principal.sub (attendance/availability/losap)
- * or a memberId the caller supplied for themself (quals/certifications/transcript/hours) —
- * open to every role rather than gated by group.
+ * Every-role personnel/training/notification actions (E2/E3-INFRA). Three scopes live here:
+ *  - Own-record: attendance, availability, LOSAP total and SelfUpdateMember act on the
+ *    caller's own principal.sub (the handler derives it, or rejects a path memberId that is
+ *    not the caller's).
+ *  - In-department read: GetQuals, ViewCertifications, ViewTranscript and ViewTrainingHours
+ *    take an arbitrary path memberId and nothing checks it is the caller's — any member may
+ *    read any same-department member's quals, certifications (including attachmentS3Key),
+ *    transcript and hours. The architecture's "Cognito" auth on those routes permits that;
+ *    the department boundary is enforced by the dept-scoped keys, not by Cedar (see above).
+ *  - Own inbox: the four notification actions read/write only the caller's own
+ *    notifications and preferences (principal.sub), so every role holds them.
  */
-export function selfServiceActionsPolicy(): string {
-  const groupCheck = ROLE_GROUPS.map((g) => `principal in Boxalarm::UserGroup::"${g}"`).join(
-    " || ",
-  );
+export function selfServiceActionsPolicy(userPoolId: string): string {
+  const groupCheck = ROLE_GROUPS.map(
+    (g) => `principal in Boxalarm::UserGroup::"${groupEntityId(userPoolId, g)}"`,
+  ).join(" || ");
   const actions = SELF_SERVICE_ACTIONS.map((a) => `Boxalarm::Action::"${a}"`).join(", ");
   return `permit (\n  principal,\n  action in [${actions}],\n  resource\n) when {\n  ${groupCheck}\n};`;
 }
 
 /** On-behalf-of-others personnel/training actions — duty officer, training officer, or admin tier only. */
-export function officerTierActionsPolicy(): string {
+export function officerTierActionsPolicy(userPoolId: string): string {
   const groupCheck = OFFICER_TIER_GROUPS.map(
-    (g) => `principal in Boxalarm::UserGroup::"${g}"`,
+    (g) => `principal in Boxalarm::UserGroup::"${groupEntityId(userPoolId, g)}"`,
   ).join(" || ");
   const actions = OFFICER_TIER_ACTIONS.map((a) => `Boxalarm::Action::"${a}"`).join(", ");
   return `permit (\n  principal,\n  action in [${actions}],\n  resource\n) when {\n  ${groupCheck}\n};`;
+}
+
+function roleGatedPolicy(
+  userPoolId: string,
+  groups: readonly RoleGroup[],
+  actions: readonly string[],
+): string {
+  const groupCheck = groups
+    .map((g) => `principal in Boxalarm::UserGroup::"${groupEntityId(userPoolId, g)}"`)
+    .join(" || ");
+  const actionList = actions.map((a) => `Boxalarm::Action::"${a}"`).join(", ");
+  return `permit (\n  principal,\n  action in [${actionList}],\n  resource\n) when {\n  ${groupCheck}\n};`;
+}
+
+/** Every-role apparatus actions: checks, defects, and the reads architecture marks "Cognito". */
+export function apparatusMemberActionsPolicy(userPoolId: string): string {
+  return roleGatedPolicy(userPoolId, ROLE_GROUPS, APPARATUS_MEMBER_ACTIONS);
+}
+
+/** Apparatus-officer tier: service status, compliance, and maintenance/test/compartment writes. */
+export function apparatusOfficerActionsPolicy(userPoolId: string): string {
+  return roleGatedPolicy(userPoolId, APPARATUS_OFFICER_GROUPS, APPARATUS_OFFICER_ACTIONS);
+}
+
+/**
+ * inventory-service reads (equipment registry, consumable stock, PPE) — every role. Like
+ * ViewCertifications, ViewPpeAssignments takes an arbitrary path memberId, so any member
+ * may read any same-department member's PPE; the architecture's "Cognito" auth on
+ * GET /inventory/ppe/{memberId} permits that, and the dept-scoped keys hold the boundary.
+ */
+export function inventoryReadActionsPolicy(userPoolId: string): string {
+  const groupCheck = ROLE_GROUPS.map(
+    (g) => `principal in Boxalarm::UserGroup::"${groupEntityId(userPoolId, g)}"`,
+  ).join(" || ");
+  const actions = INVENTORY_READ_ACTIONS.map((a) => `Boxalarm::Action::"${a}"`).join(", ");
+  return `permit (\n  principal,\n  action in [${actions}],\n  resource\n) when {\n  ${groupCheck}\n};`;
+}
+
+/** inventory-service writes (register/assign/locate equipment, lifecycle, issue PPE) — chief/admin/officer. */
+export function inventoryAdminActionsPolicy(userPoolId: string): string {
+  const groupCheck = INVENTORY_ADMIN_GROUPS.map(
+    (g) => `principal in Boxalarm::UserGroup::"${groupEntityId(userPoolId, g)}"`,
+  ).join(" || ");
+  const actions = INVENTORY_ADMIN_ACTIONS.map((a) => `Boxalarm::Action::"${a}"`).join(", ");
+  return `permit (\n  principal,\n  action in [${actions}],\n  resource\n) when {\n  ${groupCheck}\n};`;
+}
+
+/** Every-role alerting actions: respond, roster, alert detail, self-test, own device/history. */
+export function alertingMemberActionsPolicy(userPoolId: string): string {
+  const groupCheck = ROLE_GROUPS.map(
+    (g) => `principal in Boxalarm::UserGroup::"${groupEntityId(userPoolId, g)}"`,
+  ).join(" || ");
+  const actions = ALERTING_MEMBER_ACTIONS.map((a) => `Boxalarm::Action::"${a}"`).join(", ");
+  return `permit (\n  principal,\n  action in [${actions}],\n  resource\n) when {\n  ${groupCheck}\n};`;
+}
+
+/**
+ * Cognito(admin) alerting actions: manual dispatch, receipts, audit, canary, diagnostics of
+ * others, and the tone-ladder / mutual-aid controls.
+ */
+export function alertingOfficerActionsPolicy(userPoolId: string): string {
+  const groupCheck = ALERTING_OFFICER_GROUPS.map(
+    (g) => `principal in Boxalarm::UserGroup::"${groupEntityId(userPoolId, g)}"`,
+  ).join(" || ");
+  const actions = ALERTING_OFFICER_ACTIONS.map((a) => `Boxalarm::Action::"${a}"`).join(", ");
+  return `permit (\n  principal,\n  action in [${actions}],\n  resource\n) when {\n  ${groupCheck}\n};`;
+}
+
+/** inspections-service every-role actions (architecture.md `Cognito` inspections routes). */
+export function inspectionsMemberActionsPolicy(userPoolId: string): string {
+  const groupCheck = ROLE_GROUPS.map(
+    (g) => `principal in Boxalarm::UserGroup::"${groupEntityId(userPoolId, g)}"`,
+  ).join(" || ");
+  const actions = INSPECTIONS_MEMBER_ACTIONS.map((a) => `Boxalarm::Action::"${a}"`).join(", ");
+  return `permit (\n  principal,\n  action in [${actions}],\n  resource\n) when {\n  ${groupCheck}\n};`;
+}
+
+/** inspections-service writes — officer/chief/admin (architecture.md `Cognito(admin)`). */
+export function inspectionsOfficerActionsPolicy(userPoolId: string): string {
+  const groupCheck = INSPECTIONS_OFFICER_GROUPS.map(
+    (g) => `principal in Boxalarm::UserGroup::"${groupEntityId(userPoolId, g)}"`,
+  ).join(" || ");
+  const actions = INSPECTIONS_OFFICER_ACTIONS.map((a) => `Boxalarm::Action::"${a}"`).join(", ");
+  return `permit (\n  principal,\n  action in [${actions}],\n  resource\n) when {\n  ${groupCheck}\n};`;
+}
+
+/** Another member's mark-offs: list and end early — OFFICER/CHIEF/ADMIN. */
+export function availabilityOfficerActionsPolicy(userPoolId: string): string {
+  return roleGatedPolicy(userPoolId, AVAILABILITY_OFFICER_GROUPS, AVAILABILITY_OFFICER_ACTIONS);
+}
+
+/** Validating an incident report against NERIS rules — every role (read-only). */
+export function nerisMemberActionsPolicy(userPoolId: string): string {
+  return roleGatedPolicy(userPoolId, ROLE_GROUPS, NERIS_MEMBER_ACTIONS);
+}
+
+/** Officer review: lock, resubmit, no-activity month, compliance and entity reads. */
+export function nerisOfficerActionsPolicy(userPoolId: string): string {
+  return roleGatedPolicy(userPoolId, NERIS_OFFICER_GROUPS, NERIS_OFFICER_ACTIONS);
+}
+
+/** Unlock a reviewed report (audited) and register stations/units with NERIS — chief/admin. */
+export function nerisAdminActionsPolicy(userPoolId: string): string {
+  return roleGatedPolicy(userPoolId, ADMIN_ONLY_GROUPS, NERIS_ADMIN_ACTIONS);
 }

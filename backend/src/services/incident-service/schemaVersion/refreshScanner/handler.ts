@@ -7,6 +7,7 @@ import { getS3Client } from '../../../platform-service/export/awsClients.js';
 import { putSchemaDocument } from '../s3Schema.js';
 import { createSchemaVersionRepository, DuplicateSchemaVersionError } from '../repository.js';
 import type { NerisSchemaDocument, NerisSecondarySchemaDocument } from '../entity.js';
+import { compileNerisSchema, type CompiledNerisSchema } from '../../neris/apiSchema.js';
 
 const METRIC_NAMESPACE = 'Boxalarm/neris-schema-version-refresh';
 
@@ -51,6 +52,32 @@ export async function fetchUpstreamSchemaFeed(
   return feed as UpstreamSchemaFeed;
 }
 
+/**
+ * The NERIS OpenAPI document of this environment's NERIS host (public; the WAF wants a
+ * User-Agent). Compiled into the payload schema that the picker, local validation and the
+ * payload builder all read, so the incident-type list is never hand-copied.
+ */
+export async function fetchNerisApiSchema(
+  url: string,
+  userAgent: string,
+  fetchFn: typeof fetch = fetch,
+): Promise<CompiledNerisSchema> {
+  const response = await fetchFn(url, { headers: { 'User-Agent': userAgent } });
+  if (!response.ok) {
+    throw new Error(`NERIS OpenAPI document returned ${response.status}`);
+  }
+  return compileNerisSchema(await response.json());
+}
+
+function readOpenApiSource(env: NodeJS.ProcessEnv): { url: string; userAgent: string } {
+  const url = env.NERIS_OPENAPI_URL;
+  const userAgent = env.NERIS_USER_AGENT;
+  if (!url || !userAgent) {
+    throw new Error('NERIS_OPENAPI_URL and NERIS_USER_AGENT are required and were not set');
+  }
+  return { url, userAgent };
+}
+
 export interface SchemaVersionRefreshDeps {
   readonly dynamoClient?: DynamoDBDocumentClient;
   readonly s3Client?: S3Client;
@@ -65,25 +92,42 @@ export async function runSchemaVersionRefresh(
   const tableName = getTableName(process.env);
   const bucket = readBucketName(process.env);
   const sourceUrl = readSourceUrl(process.env);
+  const openApi = readOpenApiSource(process.env);
   const ddb = deps.dynamoClient ?? getDocumentClient();
   const s3 = deps.s3Client ?? getS3Client();
   const now = deps.now ?? Date.now;
   const repository = createSchemaVersionRepository(ddb, tableName);
 
   try {
-    const feed = await fetchUpstreamSchemaFeed(sourceUrl, deps.fetchFn ?? fetch);
-    const coreKey = `neris-schema/${feed.version}/core.json`;
-    const secondaryKey = `neris-schema/${feed.version}/secondary.json`;
+    const [feed, nerisApi] = await Promise.all([
+      fetchUpstreamSchemaFeed(sourceUrl, deps.fetchFn ?? fetch),
+      fetchNerisApiSchema(openApi.url, openApi.userAgent, deps.fetchFn ?? fetch),
+    ]);
+    // One pin names both sources: a new NERIS API release publishes a new version even when
+    // the framework feed is unchanged, and N-1 pins keep resolving.
+    const version = `${feed.version}+neris-${nerisApi.apiVersion}`;
+    const coreKey = `neris-schema/${version}/core.json`;
+    const secondaryKey = `neris-schema/${version}/secondary.json`;
+    const nerisApiKey = `neris-schema/${version}/neris-api.json`;
+    // The incident-type list comes from the NERIS API itself (TypeIncidentValue), never
+    // from the feed or a hand-kept copy.
+    const core: NerisSchemaDocument = {
+      ...feed.core,
+      version,
+      enumerations: { ...feed.core.enumerations, incident_type: nerisApi.incidentTypes },
+    };
 
     await Promise.all([
-      putSchemaDocument(s3, bucket, coreKey, feed.core),
-      putSchemaDocument(s3, bucket, secondaryKey, feed.secondary),
+      putSchemaDocument(s3, bucket, coreKey, core),
+      putSchemaDocument(s3, bucket, secondaryKey, { ...feed.secondary, version }),
+      putSchemaDocument(s3, bucket, nerisApiKey, nerisApi),
     ]);
 
     await repository.publishSchemaVersion({
-      version: feed.version,
+      version,
       coreSchemaS3Key: coreKey,
       secondarySchemaS3Key: secondaryKey,
+      nerisApiS3Key: nerisApiKey,
       publishedAt: now(),
     });
 

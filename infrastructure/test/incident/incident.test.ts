@@ -1,0 +1,283 @@
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import * as pulumi from "@pulumi/pulumi";
+import { ServiceLogGroup } from "../../components/observability/service-log-group";
+import { HttpApi } from "../../components/api/http-api";
+
+const TABLE_ARN = "arn:aws:dynamodb:us-east-1:123456789012:table/boxalarm-dev-incident-service";
+
+const routeKeys: string[] = [];
+
+beforeEach(() => {
+  routeKeys.length = 0;
+  pulumi.runtime.setMocks({
+    newResource: (args: pulumi.runtime.MockResourceArgs) => {
+      const state: Record<string, unknown> = { ...args.inputs };
+      if (args.type === "aws:apigatewayv2/route:Route") {
+        routeKeys.push(args.inputs.routeKey as string);
+      }
+      if (args.type === "aws:iam/role:Role") {
+        state.arn = `arn:aws:iam::123456789012:role/${args.inputs.name ?? args.name}`;
+      }
+      if (args.type === "aws:lambda/function:Function") {
+        state.arn = `arn:aws:lambda:us-east-1:123456789012:function:${args.inputs.name ?? args.name}`;
+        state.invokeArn = `${state.arn}-invoke`;
+      }
+      if (args.type === "aws:sqs/queue:Queue") {
+        state.arn = `arn:aws:sqs:us-east-1:123456789012:${args.inputs.name ?? args.name}`;
+      }
+      if (args.type === "aws:cloudwatch/logGroup:LogGroup") {
+        state.arn = `arn:aws:logs:us-east-1:123456789012:log-group:${args.inputs.name}`;
+      }
+      if (args.type === "aws:apigatewayv2/api:Api") {
+        state.apiEndpoint = `https://${args.name}.execute-api.us-east-1.amazonaws.com`;
+        state.executionArn = `arn:aws:execute-api:us-east-1:123456789012:${args.name}`;
+      }
+      return { id: `${args.name}-id`, state };
+    },
+    call: (args: pulumi.runtime.MockCallArgs) => args.inputs,
+  });
+});
+
+afterEach(async () => {
+  await new Promise((r) => setImmediate(r));
+  await new Promise((r) => setImmediate(r));
+});
+
+async function resolve<T>(output: pulumi.Output<T>): Promise<T> {
+  return new Promise((res) => output.apply(res));
+}
+
+interface PolicyDoc {
+  Statement: Array<{ Sid: string; Action: string[]; Resource: string | string[] }>;
+}
+
+describe("Incident", () => {
+  async function build() {
+    const { Incident } = await import("../../components/incident/incident");
+    const logGroup = new ServiceLogGroup("test-incident-log-group", {
+      env: "dev",
+      serviceName: "incident-service",
+    });
+    const httpApi = new HttpApi("test-incident-http-api", {
+      env: "dev",
+      userPoolId: pulumi.output("pool-1"),
+      platformTableName: "platform-table",
+      platformTableArn: "arn:aws:dynamodb:us-east-1:123456789012:table/platform",
+      allowedClientIds: [pulumi.output("client-1")],
+      platformLogGroup: logGroup,
+    });
+    return new Incident("test-incident", {
+      opsAlarmTopicArn: "arn:aws:sns:us-east-1:123456789012:boxalarm-dev-chief-notifications",
+      env: "dev",
+      incidentTableName: pulumi.output("boxalarm-dev-incident-service"),
+      incidentTableArn: pulumi.output(TABLE_ARN),
+      incidentCmkArn: pulumi.output("arn:aws:kms:us-east-1:123456789012:key/incident-cmk"),
+      busName: pulumi.output("boxalarm-dev-platform-bus"),
+      busArn: pulumi.output(
+        "arn:aws:events:us-east-1:123456789012:event-bus/boxalarm-dev-platform-bus",
+      ),
+      nerisSchemaBucketArn: pulumi.output("arn:aws:s3:::neris-schema"),
+      nerisSchemaBucketName: pulumi.output("neris-schema"),
+      policyStoreArn: pulumi.output("arn:aws:verifiedpermissions::123456789012:policy-store/ps-1"),
+      policyStoreId: pulumi.output("ps-1"),
+      nerisCredentialsSecretArn: pulumi.output(
+        "arn:aws:secretsmanager:us-east-1:123456789012:secret:boxalarm-dev-neris-client-credentials",
+      ),
+      logGroup,
+      httpApi,
+    });
+  }
+
+  async function actionsFor(
+    lambda: { rolePolicy: { policy: pulumi.Output<string> } },
+    sid: string,
+  ): Promise<string[]> {
+    const policy = JSON.parse(await resolve(lambda.rolePolicy.policy)) as PolicyDoc;
+    return policy.Statement.find((s) => s.Sid === sid)?.Action ?? [];
+  }
+
+  it("lets every mutation Lambda Put its OUTBOX_ENTRY in the same transaction as the entity write", async () => {
+    const incident = await build();
+    expect(await actionsFor(incident.updateLambda, "IncidentUpdateAccess")).toContain(
+      "dynamodb:PutItem",
+    );
+    expect(await actionsFor(incident.narrativeLambda, "IncidentNarrativeAccess")).toContain(
+      "dynamodb:PutItem",
+    );
+    expect(await actionsFor(incident.exposuresLambda, "IncidentExposuresAccess")).toContain(
+      "dynamodb:PutItem",
+    );
+    expect(await actionsFor(incident.responseTimesLambda, "IncidentResponseTimesAccess")).toEqual(
+      expect.arrayContaining(["dynamodb:PutItem", "dynamodb:UpdateItem"]),
+    );
+  });
+
+  it("grants response-times the transactional parent-exists ConditionCheck and the read-back GetItem", async () => {
+    const incident = await build();
+    expect(await actionsFor(incident.responseTimesLambda, "IncidentResponseTimesAccess")).toEqual(
+      expect.arrayContaining(["dynamodb:ConditionCheckItem", "dynamodb:GetItem"]),
+    );
+  });
+
+  it("opts both dispatch-copy consumers into ReportBatchItemFailures (their handlers return batchItemFailures)", async () => {
+    const incident = await build();
+    const [alert, response] = await Promise.all([
+      resolve(incident.dispatchAlertConsumer.eventSourceMapping.functionResponseTypes),
+      resolve(incident.dispatchResponseConsumer.eventSourceMapping.functionResponseTypes),
+    ]);
+    expect(alert).toEqual(["ReportBatchItemFailures"]);
+    expect(response).toEqual(["ReportBatchItemFailures"]);
+  });
+
+  // F7.6/F7.7: the NERIS submit, status and retry handlers were bundled but never
+  // routed, so no incident could be submitted to NERIS through the API.
+  it("routes NERIS submit, submission status and retry at the architecture's paths", async () => {
+    const incident = await build();
+    await resolve(incident.submissionRetryLambda.function.arn);
+    await new Promise((r) => setImmediate(r));
+    expect(routeKeys).toEqual(
+      expect.arrayContaining([
+        "POST /api/v1/incidents/{incidentId}/submit",
+        "GET /api/v1/incidents/{incidentId}/submission",
+        "POST /api/v1/incidents/{incidentId}/submission/retry",
+      ]),
+    );
+  });
+
+  it("grants submit and retry the Update + outbox Put of their transaction and the conflict GetItem", async () => {
+    const incident = await build();
+    for (const lambda of [incident.submitLambda, incident.submissionRetryLambda]) {
+      expect((await actionsFor(lambda, "IncidentSubmissionAccess")).sort()).toEqual([
+        "dynamodb:GetItem",
+        "dynamodb:PutItem",
+        "dynamodb:UpdateItem",
+      ]);
+    }
+    // GetItem: the METADATA row; Query: the ledger's attempts and NERIS status history.
+    expect(await actionsFor(incident.submissionGetLambda, "IncidentSubmissionAccess")).toEqual([
+      "dynamodb:GetItem",
+      "dynamodb:Query",
+    ]);
+  });
+
+  it("gives the submission Lambdas the incident table name and CMK access", async () => {
+    const incident = await build();
+    for (const lambda of [
+      incident.createLambda,
+      incident.submitLambda,
+      incident.submissionGetLambda,
+      incident.submissionRetryLambda,
+    ]) {
+      const env = await resolve(lambda.function.environment);
+      expect(env?.variables?.INCIDENT_TABLE_NAME).toBe("boxalarm-dev-incident-service");
+      expect(await actionsFor(lambda, "IncidentCmkAccess")).toContain("kms:Decrypt");
+    }
+  });
+
+  // Security-web MINOR 2: submit, retry, the submission reads and exposures are Cedar-gated.
+  it("gives the Cedar-gated create, submission and exposure Lambdas the policy store and IsAuthorized", async () => {
+    const incident = await build();
+    for (const lambda of [
+      incident.createLambda,
+      incident.submitLambda,
+      incident.submissionGetLambda,
+      incident.submissionRetryLambda,
+      incident.exposuresLambda,
+    ]) {
+      const env = await resolve(lambda.function.environment);
+      expect(env?.variables?.VERIFIED_PERMISSIONS_POLICY_STORE_ID).toBeTruthy();
+      expect(await resolve(lambda.rolePolicy.policy)).toContain(
+        "verifiedpermissions:IsAuthorizedWithToken",
+      );
+    }
+  });
+
+  it("routes the NERIS loop: validate, lock, unlock, resubmit, no-activity month, and the plural ledger path", async () => {
+    const incident = await build();
+    await resolve(incident.nerisRouteLambdas["no-activity-report"]!.function.arn);
+    await new Promise((r) => setImmediate(r));
+    expect(routeKeys).toEqual(
+      expect.arrayContaining([
+        "POST /api/v1/incidents/{incidentId}/validate",
+        "POST /api/v1/incidents/{incidentId}/lock",
+        "POST /api/v1/incidents/{incidentId}/unlock",
+        "POST /api/v1/incidents/{incidentId}/resubmit",
+        "POST /api/v1/incidents/no-activity-reports",
+        "GET /api/v1/incidents/{incidentId}/submissions",
+        "GET /api/v1/incidents/neris-schema",
+        "PUT /api/v1/incidents/{incidentId}/modules/{module}",
+      ]),
+    );
+  });
+
+  it("routes recent dispatches with GSI1 Query + BatchGetItem only, Cedar-gated", async () => {
+    const incident = await build();
+    await resolve(incident.recentDispatchesLambda.function.arn);
+    await new Promise((r) => setImmediate(r));
+    expect(routeKeys).toContain("GET /api/v1/incidents/dispatches");
+    const policy = JSON.parse(
+      await resolve(incident.recentDispatchesLambda.rolePolicy.policy),
+    ) as PolicyDoc;
+    const query = policy.Statement.find((s) => s.Sid === "RecentDispatchesQuery");
+    const batch = policy.Statement.find((s) => s.Sid === "RecentDispatchesReportRead");
+    expect(query?.Action).toEqual(["dynamodb:Query"]);
+    expect(query?.Resource).toEqual([`${TABLE_ARN}/index/GSI1`]);
+    expect(batch?.Action).toEqual(["dynamodb:BatchGetItem"]);
+    expect(batch?.Resource).toEqual([TABLE_ARN]);
+    const dynamo = policy.Statement.flatMap((s) => s.Action).filter((a) =>
+      a.startsWith("dynamodb:"),
+    );
+    expect(dynamo.sort()).toEqual(["dynamodb:BatchGetItem", "dynamodb:Query"]);
+    expect(JSON.stringify(policy)).toContain("verifiedpermissions:IsAuthorizedWithToken");
+    expect(JSON.stringify(policy)).not.toMatch(/alerting/);
+  });
+
+  it("gives NERIS credentials only to the routes that call NERIS, and Cedar to all of them", async () => {
+    const incident = await build();
+    const expectations: [string, boolean][] = [
+      ["validate", true],
+      ["lock", true],
+      ["no-activity-report", true],
+      ["unlock", false],
+      ["resubmit", false],
+    ];
+    for (const [key, callsNeris] of expectations) {
+      const lambda = incident.nerisRouteLambdas[key]!;
+      const policy = JSON.parse(await resolve(lambda.rolePolicy.policy)) as PolicyDoc;
+      const sids = policy.Statement.map((s) => s.Sid);
+      expect(
+        sids.some((sid) => sid.startsWith("NerisGet")),
+        key,
+      ).toBe(callsNeris);
+      expect(sids, key).toContain("AuthorizeWithVerifiedPermissions");
+      const env = await resolve(lambda.function.environment);
+      expect(env?.variables?.VERIFIED_PERMISSIONS_POLICY_STORE_ID, key).toBe("ps-1");
+      expect(Boolean(env?.variables?.NERIS_BASE_URL_PARAM), key).toBe(callsNeris);
+    }
+  });
+
+  it("keeps unlock to the METADATA update and its audit/outbox Puts", async () => {
+    const incident = await build();
+    expect(
+      await actionsFor(incident.nerisRouteLambdas.unlock!, "IncidentNerisRouteAccess"),
+    ).toEqual(["dynamodb:GetItem", "dynamodb:UpdateItem", "dynamodb:PutItem"]);
+  });
+
+  it("lets the exposures write check, in its transaction, that the report is not locked", async () => {
+    const incident = await build();
+    expect(await actionsFor(incident.exposuresLambda, "IncidentExposuresAccess")).toContain(
+      "dynamodb:ConditionCheckItem",
+    );
+  });
+
+  it("projects platform NERIS settings and unit ids from platform-service events", async () => {
+    const incident = await build();
+    const pattern = JSON.parse(
+      (await resolve(incident.nerisSettingsConsumer.rule.eventPattern)) ?? "{}",
+    ) as Record<string, string[]>;
+    expect(pattern).toEqual({
+      source: ["platform-service"],
+      "detail-type": ["platform.config.updated", "neris.entity.synced"],
+    });
+  });
+});

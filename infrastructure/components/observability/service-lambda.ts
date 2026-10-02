@@ -14,7 +14,7 @@ export interface ServiceLambdaArgs {
   handler: string;
   code: pulumi.Input<pulumi.asset.Archive>;
   logGroup: ServiceLogGroup;
-  /** Merged after SERVICE_NAME and ENVIRONMENT (those win if keys collide). */
+  /** Merged after SERVICE_NAME, ENVIRONMENT and BOXALARM_ENV (those win if keys collide). */
   environment?: Record<string, pulumi.Input<string>>;
   additionalPolicyStatements?: pulumi.Input<IamPolicyStatement[]>;
   runtime?: aws.lambda.Runtime;
@@ -99,6 +99,9 @@ export class ServiceLambda extends pulumi.ComponentResource {
       ...(args.environment ?? {}),
       SERVICE_NAME: args.serviceName,
       ENVIRONMENT: args.env,
+      // @boxalarm/logging labels every log line from BOXALARM_ENV, then NODE_ENV, then "dev"
+      // (packages/logging/src/logger.ts): without it prod logs said "dev" (deploy-readiness m6).
+      BOXALARM_ENV: args.env,
     };
 
     this.function = new aws.lambda.Function(

@@ -1,27 +1,9 @@
 .shell {
   display: grid;
-  grid-template-columns: var(--bx-sidebar-width, 232px) 1fr;
+  grid-template-columns: var(--bx-sidebar-width, 232px) minmax(0, 1fr);
   grid-template-rows: 56px 1fr;
   grid-template-areas: 'sidebar topbar' 'sidebar main';
   min-height: 100vh;
-}
-
-@media (max-width: 767px) {
-  .shell {
-    grid-template-columns: 1fr;
-    grid-template-areas: 'topbar' 'main';
-  }
-  .sidebar {
-    display: none;
-  }
-  /* MAJOR-1 (PR #318 review): the static sidebar above is hidden here with no replacement,
-     which left the web app with no route navigation and no Sign out below 768px (and at 200%
-     zoom on a 1280px window). TopBar's hamburger button (hidden at md and up, see .menuButton
-     below) opens NavDrawer as the reflow-safe replacement, per docs/design.md:286 ("Sidebar
-     collapses to a top drawer"). */
-  .menuButton {
-    display: inline-flex;
-  }
 }
 
 .sidebar {
@@ -45,14 +27,31 @@
 }
 
 .navList {
-  list-style: none;
   margin: 0;
   padding: 0 var(--bx-space-sm);
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: var(--bx-space-md);
   flex: 1;
   overflow-y: auto;
+}
+
+.navGroupList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+/* docs/design.md §2.4: no ALL CAPS, so group labels are sentence case, set small and muted. */
+.navGroupLabel {
+  margin: 0 0 var(--bx-space-xs);
+  padding: 0 var(--bx-space-sm);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--bx-fg-muted);
 }
 
 .navLink {
@@ -85,9 +84,12 @@
   border-top: 1px solid var(--bx-border-decorative);
 }
 
-/* NavDrawer — the below-md replacement for .sidebar (MAJOR-1). */
-.menuButton {
-  /* Shown only below md; see the max-width: 767px block above. */
+/* NavDrawer — the below-md replacement for .sidebar (MAJOR-1). Scoped under .topbar so it
+   outranks IconButton's own `.button { display: inline-flex }`, whatever order the two CSS
+   modules load in; the old single-class rule lost that race and showed the hamburger on
+   desktop. */
+.topbar .menuButton {
+  /* Shown only below md; see the max-width: 767px block at the end of this file. */
   display: none;
 }
 
@@ -161,6 +163,21 @@
   min-width: 0;
 }
 
+/* Shown only while the browser reports no network: an amber pill that says what it means for
+   the user's work. Nothing is shown when online (the old "Browser network: online" text was
+   developer copy on every page). */
+.offlinePill {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--bx-space-xs);
+  padding: var(--bx-space-2xs) var(--bx-space-sm);
+  border-radius: var(--bx-radius-sm);
+  background: var(--bx-chip-fill-warning);
+  color: var(--bx-chip-onfill-warning);
+  font-size: 13px;
+  font-weight: 600;
+}
+
 .topbarRight {
   display: flex;
   align-items: center;
@@ -175,6 +192,31 @@
 
 .main {
   grid-area: main;
+  /* A grid item defaults to min-width: auto, so a wide child (a table, the incident editor's
+     step list) would widen the 1fr track past the viewport instead of wrapping or scrolling
+     inside its own container. */
+  min-width: 0;
   padding: var(--bx-space-lg);
   overflow-x: hidden;
+}
+
+/* Must stay after the base .sidebar / .menuButton rules: at equal specificity the later rule
+   wins, and when this block sat above them the sidebar still rendered on phones (stacked under
+   the page) and the page scrolled sideways. */
+@media (max-width: 767px) {
+  .shell {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas: 'topbar' 'main';
+  }
+  .sidebar {
+    display: none;
+  }
+  /* MAJOR-1 (PR #318 review): hiding the static sidebar here used to leave no
+     replacement, which left the web app with no route navigation and no Sign out below 768px (and at 200%
+     zoom on a 1280px window). TopBar's hamburger button (hidden at md and up, see .menuButton
+     above) opens NavDrawer as the reflow-safe replacement, per docs/design.md:286 ("Sidebar
+     collapses to a top drawer"). */
+  .topbar .menuButton {
+    display: inline-flex;
+  }
 }

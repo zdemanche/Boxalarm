@@ -1,11 +1,13 @@
 import { randomUUID } from 'node:crypto';
 import type { APIGatewayProxyResultV2 } from 'aws-lambda';
 import { DynamoDBClient, TransactionCanceledException } from '@aws-sdk/client-dynamodb';
-import { DynamoDBDocumentClient, TransactWriteCommand } from '@aws-sdk/lib-dynamodb';
+import { DynamoDBDocumentClient, GetCommand, TransactWriteCommand } from '@aws-sdk/lib-dynamodb';
+import type { CognitoIdentityProviderClient } from '@aws-sdk/client-cognito-identity-provider';
 import type { VerifiedPermissionsClient } from '@aws-sdk/client-verifiedpermissions';
 import {
   badRequestProblem,
   extractTraceId,
+  forbiddenProblem,
   notFoundProblem,
   withAuthorization,
   type CedarPrincipalContext,
@@ -13,10 +15,22 @@ import {
 } from '@boxalarm/authz';
 import { buildDeptScopedPk, toVerifiedDeptId } from '@boxalarm/dept-scope';
 import { readMemberServiceConfig } from '../config.js';
+import { INVALID_PHONE_MESSAGE, normalizePhoneE164 } from '../lib/phone.js';
+import {
+  getCognitoClient,
+  readMemberLoginConfig,
+  signOutMemberLogin,
+  syncMemberLoginEmail,
+} from '../lib/memberLogin.js';
+import { SendEmailCommand, SESv2Client } from '@aws-sdk/client-sesv2';
+import { writeRevocationMarker } from '../../platform-service/authorizer/revocationStore.js';
 
 const UPDATABLE_FIELDS = ['phone', 'email', 'firstName', 'lastName'] as const;
 type UpdatableField = (typeof UPDATABLE_FIELDS)[number];
-type UpdateMemberBody = Partial<Record<UpdatableField, string>>;
+/** `phone: null` clears the member's phone (and so their SMS and voice targets). */
+type UpdateMemberBody = Partial<Record<Exclude<UpdatableField, 'phone'>, string>> & {
+  phone?: string | null;
+};
 
 function parseBody(raw: string | undefined | null): UpdateMemberBody | undefined {
   if (!raw) {
@@ -32,10 +46,14 @@ function parseBody(raw: string | undefined | null): UpdateMemberBody | undefined
     return undefined;
   }
   const record = parsed as Record<string, unknown>;
-  const updates: Record<string, string> = {};
+  const updates: Record<string, string | null> = {};
   for (const field of UPDATABLE_FIELDS) {
     const value = record[field];
     if (value === undefined) {
+      continue;
+    }
+    if (field === 'phone' && value === null) {
+      updates.phone = null;
       continue;
     }
     if (typeof value !== 'string' || value.trim().length === 0) {
@@ -51,7 +69,14 @@ function isMemberConditionFailure(error: TransactionCanceledException): boolean 
 }
 
 function emitPersonnelMetric(
-  outcome: 'MemberProfileUpdated' | 'MemberProfileUpdateFailed',
+  outcome:
+    | 'MemberProfileUpdated'
+    | 'MemberProfileUpdateFailed'
+    | 'MemberEmailChanged'
+    | 'MemberEmailSyncFailed'
+    | 'MemberEmailCompensationFailed'
+    | 'MemberEmailSignOutFailed'
+    | 'MemberEmailNoticeFailed',
   reason?: string,
 ): void {
   console.log(
@@ -79,10 +104,166 @@ function getDocClient(client?: DynamoDBDocumentClient): DynamoDBDocumentClient {
   return cachedClient;
 }
 
+function problem(status: number, title: string, detail: string, traceId: string) {
+  return {
+    statusCode: status,
+    headers: { 'content-type': 'application/problem+json' },
+    body: JSON.stringify({ type: 'about:blank', title, status, detail, traceId }),
+  };
+}
+
+function logEvent(event: string, fields: Record<string, unknown>, error?: unknown): void {
+  const log = error === undefined ? console.log : console.error;
+  log(
+    JSON.stringify({
+      event,
+      service: 'personnel-service',
+      ...fields,
+      ...(error !== undefined
+        ? {
+            reason: error instanceof Error ? error.constructor.name : 'UnknownError',
+            message: error instanceof Error ? error.message : undefined,
+          }
+        : {}),
+    }),
+  );
+}
+
+type EditMode = 'self' | 'admin';
+
+interface ProfileDeps {
+  readonly client?: DynamoDBDocumentClient;
+  readonly cognito?: CognitoIdentityProviderClient;
+  readonly ses?: SESv2Client;
+}
+
+/** Trim + lowercase: the unchanged check and what is stored agree on case and whitespace. */
+function normalizeEmail(email: string): string {
+  return email.trim().toLowerCase();
+}
+
+/**
+ * Server-fix security MAJOR 1: the email is the recovery address and is set verified, so
+ * whoever changes it can complete "forgot password". A CHIEF or ADMIN target's email is
+ * therefore changed only by an ADMIN (the kill switches' protected-target rule).
+ */
+const PROTECTED_TARGET_ROLES = new Set(['CHIEF', 'ADMIN']);
+
+function isProtectedEmailTarget(roles: unknown): boolean {
+  return Array.isArray(roles) && roles.some((role) => PROTECTED_TARGET_ROLES.has(String(role)));
+}
+
+let cachedSes: SESv2Client | undefined;
+
+/**
+ * Detective control, never a challenge (the settled no-step-up decision): the PREVIOUS address
+ * is told its recovery email changed and by whom, so a quiet takeover is noticed. Best effort -
+ * a failure is logged and counted, never blocks the change.
+ */
+async function noticePreviousEmail(
+  deps: ProfileDeps,
+  previousEmail: string,
+  newEmail: string,
+  actorId: string,
+  traceId: string,
+  memberId: string,
+): Promise<void> {
+  const from = process.env.NOTIFICATION_SES_FROM_ADDRESS;
+  if (!from) {
+    logEvent('personnel.member.email.noticeSkipped', {
+      correlationId: traceId,
+      memberId,
+      reason: 'NOTIFICATION_SES_FROM_ADDRESS is not set',
+    });
+    emitPersonnelMetric('MemberEmailNoticeFailed', 'Unconfigured');
+    return;
+  }
+  try {
+    const ses = deps.ses ?? (cachedSes ??= new SESv2Client({}));
+    await ses.send(
+      new SendEmailCommand({
+        FromEmailAddress: from,
+        Destination: { ToAddresses: [previousEmail] },
+        Content: {
+          Simple: {
+            Subject: { Data: 'Your Boxalarm sign-in email was changed' },
+            Body: {
+              Text: {
+                Data:
+                  `The email on your Boxalarm account was changed to ${newEmail} by member ${actorId}. ` +
+                  'Password-reset codes now go there, and you have been signed out everywhere. ' +
+                  'If you did not expect this, tell your chief at once. ' +
+                  `Reference: ${traceId}`,
+              },
+            },
+          },
+        },
+      }),
+    );
+  } catch (error) {
+    logEvent('personnel.member.email.noticeFailed', { correlationId: traceId, memberId }, error);
+    emitPersonnelMetric(
+      'MemberEmailNoticeFailed',
+      error instanceof Error ? error.name : 'UnknownError',
+    );
+  }
+}
+
+/**
+ * A changed login email ends every session of that member: the revocation marker (existing
+ * access tokens stop at the authorizer) and a global sign-out (refresh tokens), so the real
+ * member notices at once and no session opened before the change outlives it. Runs after the
+ * row write: a failure is counted (alarmed) but does not undo the change.
+ */
+async function endSessionsAfterEmailChange(
+  client: CognitoIdentityProviderClient,
+  loginConfig: ReturnType<typeof readMemberLoginConfig>,
+  docClient: DynamoDBDocumentClient,
+  tableName: string,
+  input: { deptId: string; memberId: string; actorId: string; traceId: string },
+): Promise<void> {
+  const marker = () =>
+    writeRevocationMarker(docClient, tableName, {
+      deptId: input.deptId,
+      sub: input.memberId,
+      reason: 'LOGIN_EMAIL_CHANGE',
+      actorId: input.actorId,
+    });
+  try {
+    await marker();
+    await signOutMemberLogin(client, loginConfig, input.memberId);
+    // Again after the sign-out: a refresh that landed in between minted a token newer than
+    // the first revokedAt (the kill switches' pattern).
+    await marker();
+  } catch (error) {
+    logEvent(
+      'personnel.member.email.signOutFailed',
+      { correlationId: input.traceId, memberId: input.memberId },
+      error,
+    );
+    emitPersonnelMetric(
+      'MemberEmailSignOutFailed',
+      error instanceof Error ? error.name : 'UnknownError',
+    );
+  }
+}
+
+/**
+ * Security-web MAJOR 2: the member's email is also their login's recovery address - where
+ * "Reset password" sends its code. An edit that reached only this row left Cognito on the old
+ * address, so recovery diverged. A changed email is therefore written to Cognito first and the
+ * row second, with the Cognito change undone if the row write fails.
+ *
+ * Only a chief or admin (UpdateMember) may change it. A member's own edit (SelfUpdateMember)
+ * that changes it is refused: a stolen session could otherwise move the recovery address and
+ * defeat "Reset password and sign out", the one control that ends that session. An own edit
+ * that re-sends the unchanged address (the app's profile form always does) is a no-op.
+ */
 async function updateMemberProfile(
   event: GuardEvent,
   principal: CedarPrincipalContext,
-  client?: DynamoDBDocumentClient,
+  mode: EditMode,
+  deps: ProfileDeps,
 ): Promise<APIGatewayProxyResultV2> {
   const traceId = extractTraceId(event);
   const memberId = event.pathParameters?.memberId;
@@ -90,28 +271,120 @@ async function updateMemberProfile(
     return badRequestProblem(traceId, 'memberId path parameter is required.');
   }
 
-  const updates = parseBody(event.body);
-  if (!updates) {
+  const parsed = parseBody(event.body);
+  if (!parsed) {
     return badRequestProblem(
       traceId,
-      'Request body must be JSON with at least one of phone, email, firstName, lastName as a non-empty string.',
+      'Request body must be JSON with at least one of phone, email, firstName, lastName as a non-empty string (phone may be null to clear it).',
     );
+  }
+  // Stored in E.164: the alerting plane texts and dials exactly this string (lib/phone.ts).
+  let updates: UpdateMemberBody =
+    parsed.email !== undefined ? { ...parsed, email: normalizeEmail(parsed.email) } : parsed;
+  if (parsed.phone !== undefined && parsed.phone !== null) {
+    const phone = normalizePhoneE164(parsed.phone);
+    if (!phone) {
+      return badRequestProblem(traceId, INVALID_PHONE_MESSAGE);
+    }
+    updates = { ...updates, phone };
   }
 
   const deptId = toVerifiedDeptId(principal);
   const now = Date.now();
   const eventId = randomUUID();
   const config = readMemberServiceConfig(process.env);
-  const docClient = getDocClient(client);
+  const docClient = getDocClient(deps.client);
+  const rowKey = { pk: buildDeptScopedPk(deptId, 'MEMBER', memberId), sk: 'METADATA' };
 
+  // The previous address, when this edit really changes it (read in the caller's own
+  // department: a member of another department is a 404 before Cognito is touched).
+  let previousEmail: string | undefined;
+  if (updates.email !== undefined) {
+    const current = await docClient.send(
+      new GetCommand({ TableName: config.tableName, Key: rowKey, ConsistentRead: true }),
+    );
+    if (!current.Item) {
+      emitPersonnelMetric('MemberProfileUpdateFailed', 'NotFound');
+      return notFoundProblem(traceId, `Member ${memberId} was not found.`);
+    }
+    const stored = typeof current.Item.email === 'string' ? current.Item.email : undefined;
+    if (stored !== undefined && normalizeEmail(stored) === updates.email) {
+      updates = Object.fromEntries(Object.entries(updates).filter(([field]) => field !== 'email'));
+    } else if (mode === 'self') {
+      logEvent('personnel.member.update.selfEmailRefused', { correlationId: traceId, memberId });
+      return problem(
+        403,
+        'Forbidden',
+        'Your email is also where password-reset codes go, so only a chief or admin can change it. Ask them to update it.',
+        traceId,
+      );
+    } else if (
+      isProtectedEmailTarget(current.Item.roles) &&
+      !principal['cognito:groups'].split(' ').includes('ADMIN')
+    ) {
+      logEvent('personnel.member.update.protectedEmailRefused', {
+        correlationId: traceId,
+        memberId,
+        actorId: principal.sub,
+      });
+      return problem(
+        403,
+        'Forbidden',
+        'Only an admin can change the email of a chief or an admin: it is where their password-reset codes go.',
+        traceId,
+      );
+    } else {
+      previousEmail = stored;
+    }
+  }
+
+  const cognito =
+    previousEmail !== undefined || updates.email !== undefined ? deps.cognito : undefined;
+  const loginConfig = updates.email !== undefined ? readMemberLoginConfig(process.env) : undefined;
+  if (updates.email !== undefined && loginConfig) {
+    try {
+      await syncMemberLoginEmail(
+        cognito ?? getCognitoClient(),
+        loginConfig,
+        memberId,
+        updates.email,
+      );
+    } catch (error) {
+      const reason = error instanceof Error ? error.name : 'UnknownError';
+      logEvent('personnel.member.email.syncFailed', { correlationId: traceId, memberId }, error);
+      emitPersonnelMetric('MemberEmailSyncFailed', reason);
+      if (reason === 'InvalidParameterException') {
+        return badRequestProblem(traceId, 'email is not a valid email address.');
+      }
+      if (reason === 'UserNotFoundException') {
+        return problem(
+          409,
+          'Conflict',
+          'This member has no sign-in account to update, so the email was not changed.',
+          traceId,
+        );
+      }
+      return problem(
+        503,
+        'Service Unavailable',
+        'The sign-in service could not be updated, so the email was not changed. Try again.',
+        traceId,
+      );
+    }
+  }
+
+  // A cleared phone is REMOVEd from the row; the event still carries `phone: null`, which the
+  // alerting plane reads as "remove this member's SMS and voice targets".
+  const setFields = Object.entries(updates).filter(([, value]) => value !== null);
+  const clearsPhone = updates.phone === null;
   const nameExpressions = Object.fromEntries(
     Object.keys(updates).map((field) => [`#${field}`, field]),
   );
   const valueExpressions: Record<string, unknown> = Object.fromEntries(
-    Object.entries(updates).map(([field, value]) => [`:${field}`, value]),
+    setFields.map(([field, value]) => [`:${field}`, value]),
   );
-  const setClauses = Object.keys(updates)
-    .map((field) => `#${field} = :${field}`)
+  const setClauses = setFields
+    .map(([field]) => `#${field} = :${field}`)
     .concat('#updatedAt = :updatedAt');
 
   try {
@@ -121,9 +394,9 @@ async function updateMemberProfile(
           {
             Update: {
               TableName: config.tableName,
-              Key: { pk: buildDeptScopedPk(deptId, 'MEMBER', memberId), sk: 'METADATA' },
+              Key: rowKey,
               ConditionExpression: 'attribute_exists(pk)',
-              UpdateExpression: `SET ${setClauses.join(', ')}`,
+              UpdateExpression: `SET ${setClauses.join(', ')}${clearsPhone ? ' REMOVE #phone' : ''}`,
               ExpressionAttributeNames: { ...nameExpressions, '#updatedAt': 'updatedAt' },
               ExpressionAttributeValues: { ...valueExpressions, ':updatedAt': now },
             },
@@ -152,6 +425,15 @@ async function updateMemberProfile(
       }),
     );
   } catch (error) {
+    if (updates.email !== undefined && loginConfig && previousEmail !== undefined) {
+      await restoreLoginEmail(
+        cognito ?? getCognitoClient(),
+        loginConfig,
+        memberId,
+        previousEmail,
+        traceId,
+      );
+    }
     if (error instanceof TransactionCanceledException && isMemberConditionFailure(error)) {
       console.error(
         JSON.stringify({
@@ -182,6 +464,34 @@ async function updateMemberProfile(
   }
 
   emitPersonnelMetric('MemberProfileUpdated');
+  if (updates.email !== undefined) {
+    if (loginConfig) {
+      await endSessionsAfterEmailChange(
+        cognito ?? getCognitoClient(),
+        loginConfig,
+        docClient,
+        config.tableName,
+        { deptId, memberId, actorId: principal.sub, traceId },
+      );
+    }
+    if (previousEmail !== undefined) {
+      await noticePreviousEmail(
+        deps,
+        previousEmail,
+        updates.email,
+        principal.sub,
+        traceId,
+        memberId,
+      );
+    }
+    // Alarmed to the chief (infra personnel/members.ts): the recovery address moved.
+    emitPersonnelMetric('MemberEmailChanged');
+    logEvent('personnel.member.email.changed', {
+      correlationId: traceId,
+      memberId,
+      actorId: principal.sub,
+    });
+  }
   return {
     statusCode: 200,
     headers: { 'content-type': 'application/json' },
@@ -189,19 +499,72 @@ async function updateMemberProfile(
   };
 }
 
+/** Compensation: the row write failed after Cognito took the new address. */
+async function restoreLoginEmail(
+  cognito: CognitoIdentityProviderClient,
+  loginConfig: ReturnType<typeof readMemberLoginConfig>,
+  memberId: string,
+  previousEmail: string,
+  traceId: string,
+): Promise<void> {
+  try {
+    await syncMemberLoginEmail(cognito, loginConfig, memberId, previousEmail);
+  } catch (error) {
+    // Cognito now holds an address the row does not: recovery goes somewhere the admin
+    // console does not show. Counted (alarmed with the email change) and named in the log.
+    logEvent(
+      'personnel.member.email.compensationFailed',
+      { correlationId: traceId, memberId },
+      error,
+    );
+    emitPersonnelMetric('MemberEmailCompensationFailed');
+  }
+}
+
+/**
+ * PUT /members/{memberId} serves two Cedar actions (F2.6, AP 12):
+ *  - SelfUpdateMember — a member editing their OWN profile; every role holds it.
+ *  - UpdateMember — editing ANOTHER member's profile; admin-only (CHIEF/ADMIN).
+ * withAuthorization binds one static action, so the request is routed to the matching
+ * guard by comparing the path memberId to the authorizer's sub. The self path re-checks
+ * memberId === principal.sub against the guard-verified principal before any write, so a
+ * SelfUpdateMember ALLOW can never reach another member's row.
+ */
 export function createHandler(
-  deps: { client?: DynamoDBDocumentClient; vpClient?: VerifiedPermissionsClient } = {},
+  deps: {
+    client?: DynamoDBDocumentClient;
+    vpClient?: VerifiedPermissionsClient;
+    cognito?: CognitoIdentityProviderClient;
+    ses?: SESv2Client;
+  } = {},
 ) {
-  return withAuthorization(
-    (event, principal) => updateMemberProfile(event, principal, deps.client),
-    {
-      actionType: 'Boxalarm::Action',
-      actionId: 'UpdateMember',
-      resourceType: 'Boxalarm::Member',
-      resourceId: (event) => event.pathParameters?.memberId ?? '',
-      ...(deps.vpClient ? { client: deps.vpClient } : {}),
+  const common = {
+    actionType: 'Boxalarm::Action',
+    resourceType: 'Boxalarm::Member',
+    resourceId: (event: GuardEvent) => event.pathParameters?.memberId ?? '',
+    ...(deps.vpClient ? { client: deps.vpClient } : {}),
+  };
+
+  const selfUpdate = withAuthorization(
+    async (event, principal) => {
+      if (event.pathParameters?.memberId !== principal.sub) {
+        return forbiddenProblem(extractTraceId(event));
+      }
+      return updateMemberProfile(event, principal, 'self', deps);
     },
+    { ...common, actionId: 'SelfUpdateMember' },
   );
+
+  const adminUpdate = withAuthorization(
+    (event, principal) => updateMemberProfile(event, principal, 'admin', deps),
+    { ...common, actionId: 'UpdateMember' },
+  );
+
+  return (event: GuardEvent) => {
+    const callerSub = event.requestContext.authorizer?.lambda?.sub;
+    const memberId = event.pathParameters?.memberId;
+    return callerSub && memberId === callerSub ? selfUpdate(event) : adminUpdate(event);
+  };
 }
 
 export const handler = createHandler();

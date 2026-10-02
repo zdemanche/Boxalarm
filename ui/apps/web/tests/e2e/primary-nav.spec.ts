@@ -87,6 +87,9 @@ async function stubCognitoWithGroups(
 // sidebar is display:none and NavDrawer is closed until TopBar's hamburger button is used — open
 // it first so the assertions below see the same "Primary" nav landmark on every project.
 async function openNavIfCollapsed(page: Page): Promise<void> {
+  // isVisible() doesn't wait, so settle on the signed-in shell first; otherwise the check runs
+  // before the top bar renders and the drawer never opens.
+  await expect(page.getByRole('banner')).toBeVisible();
   const menuButton = page.getByRole('button', { name: 'Open navigation' });
   if (await menuButton.isVisible()) {
     await menuButton.click();
@@ -98,8 +101,9 @@ const ALL_NAV_LABELS = [
   'Live roster',
   'Alert diagnostics',
   'Incidents',
-  'Personnel',
+  'Members',
   'Certifications',
+  'Training events',
   'Apparatus',
   'Apparatus compliance',
   'Schedule',
@@ -121,17 +125,7 @@ for (const role of Object.keys(PERSONAS) as Role[]) {
       await page.getByRole('button', { name: 'Sign in' }).click();
 
       if (role === 'MEMBER') {
-        await expect(page.getByRole('heading', { name: 'Member home' })).toBeVisible();
-        await openNavIfCollapsed(page);
-        await expect(page.getByRole('navigation', { name: 'Primary' })).toBeVisible();
-        for (const label of ALL_NAV_LABELS) {
-          await expect(
-            page
-              .getByRole('navigation', { name: 'Primary' })
-              .getByRole('link', { name: label, exact: true }),
-          ).toHaveCount(0);
-        }
-        return;
+        await expect(page.getByRole('heading', { name: 'My summary' })).toBeVisible();
       }
 
       await openNavIfCollapsed(page);
@@ -187,6 +181,36 @@ test('Primary nav and Sign out are reachable on every viewport this suite runs a
   await expect(nav).toBeVisible();
   await expect(nav.getByRole('link', { name: 'Dashboard' })).toBeVisible();
   await expect(nav.getByRole('button', { name: 'Sign out' })).toBeVisible();
+});
+
+// The sidebar used to render under the page on phones and the hamburger showed on desktop
+// (AppShell.module.css cascade order); openNavIfCollapsed alone could not catch either, because
+// it only asks whether the button is visible.
+test('exactly one navigation affordance per viewport, and no sideways page scroll', async ({
+  page,
+}) => {
+  const { publicKey, privateKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
+  const jwk = publicKey.export({ format: 'jwk' }) as JsonWebKey;
+  await stubCognitoWithGroups(page, privateKey, jwk, ['CHIEF']);
+
+  await page.goto('/login');
+  await page.getByRole('button', { name: 'Sign in' }).click();
+  await expect(page.getByRole('heading', { level: 1 })).toBeVisible();
+
+  const narrow = (page.viewportSize()?.width ?? 1280) < 768;
+  const sidebar = page.getByRole('navigation', { name: 'Primary' });
+  const menuButton = page.getByRole('button', { name: 'Open navigation' });
+  if (narrow) {
+    await expect(sidebar).toBeHidden();
+    await expect(menuButton).toBeVisible();
+  } else {
+    await expect(sidebar).toBeVisible();
+    await expect(menuButton).toBeHidden();
+  }
+  const overflow = await page.evaluate(
+    () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
+  );
+  expect(overflow).toBeLessThanOrEqual(0);
 });
 
 test('CHIEF landing shows chief dashboard (cognito:groups, not roles claim)', async ({ page }) => {

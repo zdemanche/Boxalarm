@@ -32,6 +32,28 @@ export interface OpenDefectSummary {
   photoUrl?: string | null;
 }
 
+/** One row of GET apparatus/defects?status=open: a defect with the unit it belongs to. */
+export interface DeptOpenDefect extends OpenDefectSummary {
+  apparatusId: string;
+  unitId: string;
+  itemCode: string | null;
+}
+
+export interface DeptOpenDefectsPage {
+  defects: DeptOpenDefect[];
+  /** The server capped the list at its 500 newest: the oldest open defects are not shown. */
+  truncated: boolean;
+}
+
+export interface ResolveDefectResponse {
+  defectId: string;
+  status: 'RESOLVED';
+  resolvedAt: number;
+  severity: OpenDefectSummary['severity'];
+  /** The unit itself is still out of service — resolve does not return it to service. */
+  unitStillOutOfService: boolean;
+}
+
 export interface FailedTestSummary {
   testType: string;
   testDate: string;
@@ -47,6 +69,8 @@ export interface ChecklistItem {
   code: string;
   label: string;
   requiresPhoto: boolean;
+  /** Answered on its own in the truck check (never covered by a bulk "OK"). */
+  critical?: boolean;
 }
 
 export interface ChecklistTemplate {

@@ -1,126 +1,122 @@
-import { generateKeyPairSync } from 'node:crypto';
-import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { SecretsManagerClient } from '@aws-sdk/client-secrets-manager';
+import { describe, expect, it, vi } from 'vitest';
 import { toVerifiedDeptId } from '@boxalarm/dept-scope';
-import { createDefectPhotoUploadUrl } from './defectPhotoUpload.js';
+import {
+  createDefectPhotoUploadUrl,
+  presignPut,
+  readDefectPhotoUploadConfig,
+  resignDefectPhotoUploadUrl,
+} from './defectPhotoUpload.js';
 
 const deptId = toVerifiedDeptId({ deptId: 'NICHOLS' });
-const { privateKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
-const testPrivateKeyPem = privateKey.export({ type: 'pkcs1', format: 'pem' }).toString();
+const config = { bucketName: 'boxalarm-dev-platform-assets' };
 
-function fakeSecretsClient(secretString: string | undefined): {
-  client: SecretsManagerClient;
-  send: ReturnType<typeof vi.fn>;
-} {
-  const send = vi.fn().mockResolvedValue({ SecretString: secretString });
-  return { client: { send } as unknown as SecretsManagerClient, send };
+function fakePresign() {
+  return vi.fn((bucket: string, key: string, expiresIn: number) =>
+    Promise.resolve(
+      `https://${bucket}.s3.us-east-1.amazonaws.com/${key}?X-Amz-Expires=${expiresIn}`,
+    ),
+  );
 }
 
 describe('readDefectPhotoUploadConfig', () => {
-  afterEach(() => {
-    vi.resetModules();
-  });
-
-  it.each([
-    ['CLOUDFRONT_DISTRIBUTION_DOMAIN'],
-    ['CLOUDFRONT_KEY_PAIR_ID'],
-    ['CLOUDFRONT_PRIVATE_KEY_SECRET_ID'],
-  ])('throws when %s is not set', async (missingKey) => {
-    const { readDefectPhotoUploadConfig } = await import('./defectPhotoUpload.js');
-    const env: NodeJS.ProcessEnv = {
-      CLOUDFRONT_DISTRIBUTION_DOMAIN: 'assets.boxalarm.dev',
-      CLOUDFRONT_KEY_PAIR_ID: 'KEYPAIR123',
-      CLOUDFRONT_PRIVATE_KEY_SECRET_ID: 'cf-signing-key',
-      [missingKey]: undefined,
-    };
+  it('reads the platform-assets bucket, never CloudFront (N6.1 forbids it)', async () => {
     await expect(
-      readDefectPhotoUploadConfig(env, fakeSecretsClient(testPrivateKeyPem).client),
-    ).rejects.toThrow(`${missingKey} is required and was not set`);
+      readDefectPhotoUploadConfig({ PLATFORM_ASSETS_BUCKET_NAME: 'bucket-1' }),
+    ).resolves.toEqual({ bucketName: 'bucket-1' });
   });
 
-  it('resolves the private key from Secrets Manager, not from a raw env literal', async () => {
-    const { readDefectPhotoUploadConfig } = await import('./defectPhotoUpload.js');
-    const env: NodeJS.ProcessEnv = {
-      CLOUDFRONT_DISTRIBUTION_DOMAIN: 'assets.boxalarm.dev',
-      CLOUDFRONT_KEY_PAIR_ID: 'KEYPAIR123',
-      CLOUDFRONT_PRIVATE_KEY_SECRET_ID: 'cf-signing-key',
-    };
-    const { client, send } = fakeSecretsClient(testPrivateKeyPem);
-    const config = await readDefectPhotoUploadConfig(env, client);
-
-    expect(send).toHaveBeenCalledTimes(1);
-    expect(config).toEqual({
-      distributionDomain: 'assets.boxalarm.dev',
-      keyPairId: 'KEYPAIR123',
-      privateKey: testPrivateKeyPem,
-    });
+  it('fails when PLATFORM_ASSETS_BUCKET_NAME is unset', async () => {
+    await expect(readDefectPhotoUploadConfig({})).rejects.toThrow('PLATFORM_ASSETS_BUCKET_NAME');
   });
 });
 
 describe('createDefectPhotoUploadUrl', () => {
-  const config = {
-    distributionDomain: 'assets.boxalarm.dev',
-    keyPairId: 'KEYPAIR123',
-    privateKey: testPrivateKeyPem,
-  };
-
-  it('scopes the photo key and signed URL to {deptId}/defect/{defectId}/', () => {
-    const result = createDefectPhotoUploadUrl(config, {
-      deptId,
-      defectId: 'DEF-0033',
-      filename: 'photo.jpg',
-    });
-
+  it('presigns a 10-minute PUT for {deptId}/defect/{defectId}/{filename}', async () => {
+    const presign = fakePresign();
+    const result = await createDefectPhotoUploadUrl(
+      config,
+      { deptId, defectId: 'DEF-0033', filename: 'photo.jpg' },
+      presign,
+    );
     expect(result.photoS3Key).toBe('NICHOLS/defect/DEF-0033/photo.jpg');
-    expect(
-      result.uploadUrl.startsWith('https://assets.boxalarm.dev/NICHOLS/defect/DEF-0033/photo.jpg'),
-    ).toBe(true);
-    expect(result.uploadUrl).toContain('Key-Pair-Id=KEYPAIR123');
+    expect(presign).toHaveBeenCalledWith(
+      'boxalarm-dev-platform-assets',
+      'NICHOLS/defect/DEF-0033/photo.jpg',
+      600,
+      'image/jpeg',
+    );
+    expect(result.contentType).toBe('image/jpeg');
+    expect(result.uploadUrl).toContain('boxalarm-dev-platform-assets.s3.us-east-1.amazonaws.com');
   });
 
-  it('rejects a filename attempting a prefix-escape via a path separator', () => {
-    expect(() =>
-      createDefectPhotoUploadUrl(config, {
-        deptId,
-        defectId: 'DEF-0033',
-        filename: 'sub/photo.jpg',
-      }),
-    ).toThrow(TypeError);
-  });
-
-  it('rejects a filename attempting a prefix-escape via ..', () => {
-    expect(() =>
-      createDefectPhotoUploadUrl(config, {
-        deptId,
-        defectId: 'DEF-0033',
-        filename: '../photo.jpg',
-      }),
-    ).toThrow(TypeError);
-  });
+  it.each([['sub/photo.jpg'], ['../photo.jpg'], ['photo.svg'], ['photo.pdf'], ['photo.html']])(
+    'rejects a prefix-escaping filename without presigning: %s',
+    async (filename) => {
+      const presign = fakePresign();
+      await expect(
+        createDefectPhotoUploadUrl(config, { deptId, defectId: 'DEF-0033', filename }, presign),
+      ).rejects.toThrow(TypeError);
+      expect(presign).not.toHaveBeenCalled();
+    },
+  );
 
   it.each([['photo.html'], ['photo.svg'], ['photo.js'], ['photo.exe'], ['photo']])(
     'rejects a disallowed or missing file extension: %s',
-    (filename) => {
-      expect(() =>
-        createDefectPhotoUploadUrl(config, {
-          deptId,
-          defectId: 'DEF-0033',
-          filename,
-        }),
-      ).toThrow(TypeError);
+    async (filename) => {
+      await expect(
+        createDefectPhotoUploadUrl(
+          config,
+          { deptId, defectId: 'DEF-0033', filename },
+          fakePresign(),
+        ),
+      ).rejects.toThrow(TypeError);
     },
   );
 
   it.each([['photo.jpg'], ['photo.JPEG'], ['photo.png'], ['photo.heic'], ['photo.webp']])(
     'accepts an allowed image extension regardless of case: %s',
-    (filename) => {
-      expect(() =>
-        createDefectPhotoUploadUrl(config, {
-          deptId,
-          defectId: 'DEF-0033',
-          filename,
-        }),
-      ).not.toThrow();
+    async (filename) => {
+      await expect(
+        createDefectPhotoUploadUrl(
+          config,
+          { deptId, defectId: 'DEF-0033', filename },
+          fakePresign(),
+        ),
+      ).resolves.toMatchObject({ photoS3Key: `NICHOLS/defect/DEF-0033/${filename}` });
     },
   );
+});
+
+describe('resignDefectPhotoUploadUrl', () => {
+  it('refuses a stored key outside the department defect prefix', async () => {
+    const presign = vi.fn().mockResolvedValue('https://signed');
+
+    await expect(
+      resignDefectPhotoUploadUrl(config, deptId, 'OTHER/defect/D-1/p.jpg', presign),
+    ).rejects.toThrow(TypeError);
+    await expect(
+      resignDefectPhotoUploadUrl(config, deptId, 'NICHOLS/defect/../CERTIFICATION/x', presign),
+    ).rejects.toThrow(TypeError);
+    await expect(
+      resignDefectPhotoUploadUrl(config, deptId, 'NICHOLS/defect/D-1/p.jpg', presign),
+    ).resolves.toEqual({ uploadUrl: 'https://signed', contentType: 'image/jpeg' });
+    expect(presign).toHaveBeenCalledWith(
+      'boxalarm-dev-platform-assets',
+      'NICHOLS/defect/D-1/p.jpg',
+      600,
+      'image/jpeg',
+    );
+  });
+});
+
+describe('presignPut (real SigV4 presigner, no network)', () => {
+  it('signs the Content-Type, so S3 refuses any other type on the PUT (review minor 11)', async () => {
+    const originalEnv = { ...process.env };
+    process.env.AWS_REGION = 'us-east-1';
+    process.env.AWS_ACCESS_KEY_ID = 'AKIDEXAMPLE';
+    process.env.AWS_SECRET_ACCESS_KEY = 'secret';
+    const url = new URL(await presignPut('bucket', 'NICHOLS/defect/D-1/p.jpg', 600, 'image/jpeg'));
+    process.env = originalEnv;
+    expect(url.searchParams.get('X-Amz-SignedHeaders')).toContain('content-type');
+  });
 });

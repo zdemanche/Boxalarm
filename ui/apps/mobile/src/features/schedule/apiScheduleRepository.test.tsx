@@ -5,6 +5,14 @@ import { apiRequest, ApiError } from '../../lib/apiClient';
 import { useOptionalConnectivity } from '../../sync/ConnectivityContext';
 import { useScheduleRepository } from './apiScheduleRepository';
 import { mockScheduleRepository } from './mockScheduleRepository';
+import {
+  ClaimNeedsConnectionError,
+  MarkOffBeingSentError,
+  MarkOffNeedsConnectionError,
+} from './types';
+import * as store from '../../sync/outboxStore';
+import * as syncManager from '../../sync/syncManager';
+import { NoCachedDataError } from '../../sync/readThrough';
 
 // Mock factories are fully self-contained (no closures over outer consts), matching
 // apiChecksRepository.test.tsx's precedent.
@@ -47,8 +55,8 @@ test('getShifts returns the real shifts (with empty positions) on a successful c
       shifts: [
         {
           shiftId: 'SHIFT-1',
-          startAt: '2026-10-01T00:00:00Z',
-          endAt: '2026-10-01T12:00:00Z',
+          startAt: Date.parse('2026-10-01T00:00:00Z'),
+          endAt: Date.parse('2026-10-01T12:00:00Z'),
           stationId: 'STATION-1',
           status: 'OPEN',
         },
@@ -76,13 +84,35 @@ test('getShifts re-throws an ApiError instead of silently falling back to mock d
   await expect(result.current.getShifts()).rejects.toBe(forbidden);
 });
 
-test('getShifts falls back to mock data on a genuine network failure', async () => {
+test('offline with nothing cached, getShifts refuses rather than inventing shifts', async () => {
+  // A member this file has never fetched for: nothing of theirs is cached on the phone.
+  mockUseOptionalAuth.mockReturnValue({ ...mockAuthValue, memberId: 'MBR-NEVER-FETCHED' });
   mockApiRequest.mockRejectedValue(new TypeError('Failed to fetch'));
 
   const { result } = await renderHook(() => useScheduleRepository());
 
+  await expect(result.current.getShifts()).rejects.toBeInstanceOf(NoCachedDataError);
+});
+
+test('offline, getShifts serves the last real list with its timestamp, never the mock', async () => {
+  const realShift = {
+    shiftId: 'SHIFT-REAL',
+    startAt: Date.parse('2026-10-02T22:00:00Z'),
+    endAt: Date.parse('2026-10-03T10:00:00Z'),
+    stationId: 'STATION-2',
+    status: 'OPEN',
+  };
+  mockApiRequest.mockResolvedValueOnce({ json: async () => ({ shifts: [realShift] }) });
+  const { result } = await renderHook(() => useScheduleRepository());
+  await result.current.getShifts();
+  expect(result.current.shiftsCachedAt?.()).toBeNull();
+
+  mockApiRequest.mockRejectedValueOnce(new TypeError('Network request failed'));
   const shifts = await result.current.getShifts();
-  expect(shifts).toEqual(await mockScheduleRepository.getShifts());
+
+  expect(shifts.map((shift) => shift.shiftId)).toEqual(['SHIFT-REAL']);
+  expect(shifts).not.toEqual(await mockScheduleRepository.getShifts());
+  expect(result.current.shiftsCachedAt?.()).toEqual(expect.any(Number));
 });
 
 test('claimPosition resolves CLAIMED on a bare 2xx with no outcome field', async () => {
@@ -142,11 +172,107 @@ test('claimPosition reuses a caller-supplied idempotencyKey instead of generatin
   expect(body.idempotencyKey).toBe('fixed-key-123');
 });
 
-test('claimPosition falls back to the mock repository while offline', async () => {
+test('claimPosition refuses while offline instead of returning a made-up result', async () => {
   mockUseOptionalConnectivity.mockReturnValue({ isOnline: false });
 
   const { result } = await renderHook(() => useScheduleRepository());
 
-  await expect(result.current.claimPosition('SHIFT-0511', 'DRIVER')).resolves.toBe('CLAIMED');
+  await expect(result.current.claimPosition('SHIFT-0511', 'DRIVER')).rejects.toBeInstanceOf(
+    ClaimNeedsConnectionError,
+  );
   expect(mockApiRequest).not.toHaveBeenCalled();
+});
+
+describe('mark-offs: list and end early (server contract pending on fix/post-merge-server)', () => {
+  test('lists current and upcoming mark-offs from GET .../availability, soonest first', async () => {
+    const now = Math.floor(Date.now() / 1000);
+    mockApiRequest.mockResolvedValue({
+      json: async () => ({
+        markOffs: [
+          { startAt: now + 86400, endAt: now + 90000 },
+          { markoffId: 'm-1', startAt: now - 60, endAt: now + 3600, reason: 'Work' },
+          { markoffId: 'old', startAt: now - 7200, endAt: now - 3600 },
+        ],
+      }),
+    });
+    const { result } = await renderHook(() => useScheduleRepository());
+
+    const markOffs = await result.current.listMarkOffs!();
+
+    expect(mockApiRequest).toHaveBeenCalledWith(
+      'personnel/members/MBR-0012/availability',
+      mockAuthValue,
+      { apiBaseUrl: 'https://api.example.com' },
+    );
+    expect(markOffs).toEqual([
+      { markoffId: 'm-1', startAt: now - 60, endAt: now + 3600, reason: 'Work' },
+      { markoffId: String(now + 86400), startAt: now + 86400, endAt: now + 90000 },
+    ]);
+  });
+
+  test('ending one POSTs .../availability/{id}/end; offline it throws instead of queueing', async () => {
+    mockApiRequest.mockResolvedValue({ json: async () => ({}) });
+    const { result, rerender } = await renderHook(() => useScheduleRepository());
+
+    await result.current.endMarkOff!({ markoffId: 'm 1', startAt: 100, endAt: 200 });
+    expect(mockApiRequest).toHaveBeenCalledWith(
+      'personnel/members/MBR-0012/availability/m%201/end',
+      mockAuthValue,
+      { apiBaseUrl: 'https://api.example.com', method: 'POST' },
+    );
+
+    mockApiRequest.mockClear();
+    mockUseOptionalConnectivity.mockReturnValue({ isOnline: false });
+    await rerender({});
+    await expect(
+      result.current.endMarkOff!({ markoffId: 'm-1', startAt: 100, endAt: 200 }),
+    ).rejects.toBeInstanceOf(MarkOffNeedsConnectionError);
+    expect(mockApiRequest).not.toHaveBeenCalled();
+  });
+});
+
+// R3-M2: a copy of the mark-off still in the outbox would re-create it after it was ended.
+describe('ending a mark-off with a copy of it still in the outbox', () => {
+  const START = 1_900_000_000;
+  const path = 'personnel/members/MBR-0012/availability';
+
+  async function queueCopy(status: 'FAILED' | 'SYNCING') {
+    for (const row of await store.all()) await store.remove(row.id);
+    syncManager.configure(null, null);
+    await syncManager.enqueueAvailability('availability-copy', 'MBR-0012', 'Mark unavailable', {
+      startAt: START,
+      endAt: START + 3600,
+    });
+    await store.update('availability-copy', { status, attempts: 1 });
+  }
+
+  test('a failed copy is dropped before the end, so a later drain never re-posts it', async () => {
+    await queueCopy('FAILED');
+    mockApiRequest.mockResolvedValue({ json: async () => ({}) });
+    const { result } = await renderHook(() => useScheduleRepository());
+
+    await result.current.endMarkOff!({
+      markoffId: String(START),
+      startAt: START,
+      endAt: START + 3600,
+    });
+    syncManager.configure(mockAuthValue, 'https://api.example.com');
+    await syncManager.retry('availability-copy').catch(() => undefined);
+    await syncManager.drainAndSettle();
+
+    expect(await store.find('availability-copy')).toBeUndefined();
+    expect(mockApiRequest.mock.calls.filter(([p]) => p === path)).toHaveLength(0);
+    syncManager.configure(null, null);
+  });
+
+  test('a copy being sent right now: the end is refused and says so', async () => {
+    await queueCopy('SYNCING');
+    const { result } = await renderHook(() => useScheduleRepository());
+
+    await expect(
+      result.current.endMarkOff!({ markoffId: String(START), startAt: START, endAt: START + 3600 }),
+    ).rejects.toBeInstanceOf(MarkOffBeingSentError);
+    expect(mockApiRequest).not.toHaveBeenCalled();
+    await store.remove('availability-copy');
+  });
 });

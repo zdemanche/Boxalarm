@@ -1,0 +1,176 @@
+import { describe, expect, it } from 'vitest';
+import {
+  apnsCollapseId,
+  apnsIdFor,
+  buildApnsPayload,
+  pushDataFields,
+  truncateUtf8,
+  type PushNotification,
+} from './pushPayload.js';
+import { buildFcmRequest } from './fcmAdapter.js';
+
+const dispatch: PushNotification = {
+  token: 'tok',
+  alertKind: 'dispatch',
+  dispatchId: 'dispatch-1',
+  toneSequence: 1,
+  title: 'STRUCTURE_FIRE',
+  body: 'STRUCTURE_FIRE — 12 Main St',
+  idempotencyKey: 'dispatch-1#1#mbr-1#PUSH',
+  collapseKey: 'dispatch-1#1',
+};
+
+const prompt: PushNotification = {
+  ...dispatch,
+  alertKind: 'mutual_aid_prompt',
+  toneSequence: undefined,
+  title: 'MUTUAL AID REQUESTED',
+  idempotencyKey: 'dispatch-1#MUTUALAID#officer-1#PUSH#SEND',
+  collapseKey: 'dispatch-1#MUTUALAID',
+};
+
+describe('push payloads', () => {
+  // The architecture reserves the non-critical push channel for the LOB notification service (LOB
+  // plane); nothing on the alerting plane — the mutual-aid prompt included — is non-critical.
+  it.each([
+    ['a dispatch page', dispatch],
+    ['the officer mutual-aid prompt', prompt],
+  ])('%s is a critical alert routed to the app’s dispatch-critical channel', (_label, n) => {
+    const aps = buildApnsPayload(n, 'critical').aps as Record<string, unknown>;
+    expect(aps['interruption-level']).toBe('critical');
+    expect(aps.sound).toEqual({ critical: 1, name: 'default', volume: 1 });
+    // The app treats anything but category 'digest' as critical (pushChannel.ts).
+    expect(pushDataFields(n).category).toBe('dispatch');
+  });
+
+  it('a CAD update is NOT a page: ordinary category, active interruption, default sound, no answer buttons', () => {
+    const update: PushNotification = {
+      ...dispatch,
+      alertKind: 'dispatch_update',
+      toneSequence: undefined,
+      title: 'UPDATE — STRUCTURE_FIRE',
+      body: 'UPDATE: Units: E1, L2, R1 — 12 Main St',
+      idempotencyKey: 'dispatch-1#CADUPDATE#u1#mbr-1#PUSH#SEND',
+      collapseKey: 'dispatch-1#UPDATE#u1',
+    };
+    const apns = buildApnsPayload(update, 'critical');
+    const aps = apns.aps as Record<string, unknown>;
+    expect(aps['interruption-level']).toBe('active');
+    expect(aps.sound).toBe('default');
+    expect(aps.category).toBeUndefined();
+    expect(pushDataFields(update).category).toBe('dispatch_update');
+    expect(pushDataFields(update)).not.toHaveProperty('toneSequence');
+  });
+
+  it('the prompt carries no toneSequence; a dispatch page carries it as a string', () => {
+    expect(pushDataFields(prompt)).not.toHaveProperty('toneSequence');
+    expect(pushDataFields(dispatch).toneSequence).toBe('1');
+  });
+
+  it('keeps a short collapse id verbatim and hashes one over 64 bytes to 64 hex chars', () => {
+    expect(apnsCollapseId('dispatch-1#2')).toBe('dispatch-1#2');
+    const long = apnsCollapseId(`${'x'.repeat(70)}#2`);
+    expect(long).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it('apns-id is a stable UUID per exactly-once key', () => {
+    expect(apnsIdFor('a#1#m#PUSH')).toBe(apnsIdFor('a#1#m#PUSH'));
+    expect(apnsIdFor('a#1#m#PUSH')).not.toBe(apnsIdFor('a#2#m#PUSH'));
+  });
+
+  // iOS shows the RESPONDING / NOT RESPONDING action buttons only for a notification whose
+  // aps.category names the category the app registered them under.
+  it('a dispatch page carries aps.category DISPATCH; the mutual-aid prompt does not', () => {
+    expect((buildApnsPayload(dispatch, 'critical').aps as Record<string, unknown>).category).toBe(
+      'DISPATCH',
+    );
+    expect(
+      (buildApnsPayload(dispatch, 'time-sensitive').aps as Record<string, unknown>).category,
+    ).toBe('DISPATCH');
+    expect(buildApnsPayload(prompt, 'critical').aps).not.toHaveProperty('category');
+  });
+
+  it('adding the category leaves the critical / time-sensitive handling as it was', () => {
+    const aps = buildApnsPayload(dispatch, 'time-sensitive').aps as Record<string, unknown>;
+    expect(aps['interruption-level']).toBe('time-sensitive');
+    expect(aps.sound).toBe('default');
+    expect(aps['mutable-content']).toBe(1);
+  });
+
+  describe('explicit alert keys (the app stops parsing "{type} — {address}" from the body)', () => {
+    const withAlert: PushNotification = {
+      ...dispatch,
+      alert: {
+        incidentType: 'STRUCTURE_FIRE',
+        address: '12 Main St',
+        crossStreets: 'Main & Elm',
+        dispatchedAt: 1798000000,
+      },
+    };
+
+    it('sends incidentType, address, crossStreets and dispatchedAt as their own keys, alongside the existing ones', () => {
+      const expected = {
+        category: 'dispatch',
+        dispatchId: 'dispatch-1',
+        toneSequence: '1',
+        incidentType: 'STRUCTURE_FIRE',
+        address: '12 Main St',
+        crossStreets: 'Main & Elm',
+        dispatchedAt: '1798000000',
+      };
+      expect(pushDataFields(withAlert)).toMatchObject({ ...expected, body: dispatch.body });
+      expect(buildApnsPayload(withAlert, 'critical')).toMatchObject(expected);
+    });
+
+    it('omits absent optional keys rather than sending them empty', () => {
+      const fields = pushDataFields({
+        ...dispatch,
+        alert: { incidentType: 'ALARM', address: '1 Elm St' },
+      });
+      expect(fields).not.toHaveProperty('crossStreets');
+      expect(fields).not.toHaveProperty('dispatchedAt');
+    });
+
+    it('keeps the largest possible APNs payload, direct and via FCM, under the 4 KB limit', () => {
+      const huge = '🔥'.repeat(5_000);
+      const worst: PushNotification = {
+        ...dispatch,
+        dispatchId: 'NICHOLS-MANUAL-1798000000-abcd1234',
+        title: huge,
+        body: huge,
+        alert: { incidentType: huge, address: huge, crossStreets: huge, dispatchedAt: 1798000000 },
+      };
+      for (const level of ['critical', 'time-sensitive'] as const) {
+        expect(Buffer.byteLength(JSON.stringify(buildApnsPayload(worst, level)))).toBeLessThan(
+          4096,
+        );
+        const request = buildFcmRequest(worst, false, Date.now(), level) as {
+          message: { apns: { payload: unknown }; data: unknown };
+        };
+        expect(Buffer.byteLength(JSON.stringify(request.message.apns.payload))).toBeLessThan(4096);
+        // FCM's own data-message limit is 4 KB too.
+        expect(Buffer.byteLength(JSON.stringify(request.message.data))).toBeLessThan(4096);
+      }
+    });
+
+    it('truncates on a character boundary', () => {
+      expect(truncateUtf8('short', 10)).toBe('short');
+      const cut = truncateUtf8('ab🔥🔥🔥', 9);
+      expect(Buffer.byteLength(cut)).toBeLessThanOrEqual(9);
+      expect(cut.endsWith('…')).toBe(true);
+      expect(cut).not.toContain('\uFFFD');
+    });
+  });
+
+  // Review R2-m4: a test push offers no response actions but still sounds like a real page.
+  it('a test push has no DISPATCH category but keeps the critical interruption and sound', () => {
+    const aps = buildApnsPayload({ ...dispatch, isTest: true }, 'critical').aps as Record<
+      string,
+      unknown
+    >;
+    expect(aps).not.toHaveProperty('category');
+    expect(aps['interruption-level']).toBe('critical');
+    expect(aps.sound).toEqual({ critical: 1, name: 'default', volume: 1 });
+    expect((aps.alert as { title: string }).title.startsWith('TEST — ')).toBe(true);
+  });
+});

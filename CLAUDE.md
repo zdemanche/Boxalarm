@@ -1,7 +1,7 @@
 # Boxalarm — session handoff
 
 Fire department operations platform replacing Chief360. Tenant zero: Nichols FD, Trumbull CT.
-**Monorepo** (`zdemanche/Boxalarm-monorepo`, consolidated 2026-09-23): PRD/architecture/backlog at the root and in `docs/`,
+**Monorepo** (`zdemanche/Boxalarm`, consolidated 2026-09-23): PRD/architecture/backlog at the root and in `docs/`,
 code in `backend/`, `ui/`, `infrastructure/` — each its own npm project with its own lockfile, CI in `.github/workflows/<dir>.yml`
 (path-filtered). The four `boxalarm-*` repos are retired; their full history, every issue, and every open PR came along.
 
@@ -12,7 +12,7 @@ Read `README.md` for the full locked-decision table. This file is the working ha
 | Artifact | State |
 |---|---|
 | `docs/prd.md` | v0.2 + the no-MFA auth decision (F9.1, N5.2) |
-| `docs/architecture.md` | v1.0, 2,410 lines — done after **4 rounds** of independent review, plus the 2026-09-04 auth amendment |
+| `docs/architecture.md` | v1.0, 2,840 lines — 4 rounds of independent review, the 2026-09-04 auth amendment, and the 2026-10-02 amendment pass (24 dated amendments bringing it up to the as-built system; two review rounds) |
 | `docs/architecture.compiled/` | Tiered artifacts for `generate-code` — spine, fact sheets, routing manifest, contracts. **Hash-guarded: any edit to `architecture.md` makes it stale — re-run `/sdlc:arch-compile` or runs fall back to the full document** |
 | `docs/build-order.md` + `dependency-graph.json` | 8 epics · 90 stories · 13 waves · 160 edges · acyclic |
 | GitHub Issues | All in this repo (transferred 2026-09-23, renumbered — every issue link in docs and code comments is rewritten). Label `area:<docs\|backend\|ui\|infrastructure>` records where each came from. Each backend story is the parent; its `<KEY>-UI` / `<KEY>-INFRA` children are sub-issues for the **ui/** / **infrastructure/** side, so run `generate-code` per child. Shared infra resources have one owner issue each — map is commented on #180. Single-dir stories: ui E1-S7, E7-S8; infra E8-S10. Epics are the top of the sub-issue tree; open questions, architecture defects, and non-code stories E1-S16, E6-S12 carry `area:docs` |
@@ -27,7 +27,7 @@ E6-S7 waits on the NERIS vendor account.
 `/sdlc:execute-backlog` is **unusable here** — it STOPs when the plan names local keys (`E1-S2`) with
 no Jira keys. Run stories individually instead:
 
-1. Export the issue to a ticket file: `gh issue view <n> --repo zdemanche/Boxalarm-monorepo --json ...` (find the link in `docs/build-order.md`)
+1. Export the issue to a ticket file: `gh issue view <n> --repo zdemanche/Boxalarm --json ...` (find the link in `docs/build-order.md`)
    → `.analysis/wave-1/tickets/<KEY>.md`.
 2. `/sdlc:generate-code docs/architecture.md <KEY> --no-jira --ticket-file <path> --repo <monorepo root>`
 
@@ -39,12 +39,12 @@ monorepo layout — confirm on the first run that the change lands in the right 
 
 These gate real calendar time and are not code:
 
-- [#2](https://github.com/zdemanche/Boxalarm-monorepo/issues/2) CAD integration surface — how does Chief360 get dispatch today?
-- [#3](https://github.com/zdemanche/Boxalarm-monorepo/issues/3) Regional dispatch authority approval — longest pole
-- [#4](https://github.com/zdemanche/Boxalarm-monorepo/issues/4) Apple Critical Alerts entitlement — can be rejected
-- [#5](https://github.com/zdemanche/Boxalarm-monorepo/issues/5) Who carries the pager at 03:00
+- [#2](https://github.com/zdemanche/Boxalarm/issues/2) CAD integration surface — how does Chief360 get dispatch today?
+- [#3](https://github.com/zdemanche/Boxalarm/issues/3) Regional dispatch authority approval — longest pole
+- [#4](https://github.com/zdemanche/Boxalarm/issues/4) Apple Critical Alerts entitlement — can be rejected
+- [#5](https://github.com/zdemanche/Boxalarm/issues/5) Who carries the pager at 03:00
 - **OQ-24** Who revokes a compromised session, and how fast — now the *only* control that ends access
-- [#12](https://github.com/zdemanche/Boxalarm-monorepo/issues/12) ⚠️ **Read before touching the alert path** — tracks the last unverified alerting edits
+- [#12](https://github.com/zdemanche/Boxalarm/issues/12) ⚠️ **Read before touching the alert path** — tracks the last unverified alerting edits
 
 ## Do not relitigate
 
@@ -77,5 +77,6 @@ each fix landed on one link of the chain and left another inconsistent.
 - **Trace cross-domain seams end to end as a chain, not edit-by-edit.** Every defect in this project so far lived *between* domains, never inside one. Verifying a single edit is how the alerting bug survived three rounds.
 - This is life-safety software. The app replaces radio tone-out as the path of record.
 - Route codegen/architecture/review through the `sdlc:*` agents — don't hand-write it.
+- **Before any push, run `scripts/verify-all.sh`** - every project's gates and suites, sequentially, ending with the Playwright e2e suite against a production build. CI's first run caught a crash only e2e could see; don't skip it. LocalStack files that time out under full-suite load: re-run alone.
 - **Decide, don't ask.** The user wants defaults picked and stated, not decisions handed back. Reserve questions for spend, destructive actions, or scope of a whole run.
 - Prefer Read/Grep/Glob/Edit/Write over `cat`/`sed`/`grep`; a repo hook blocks Bash reads.

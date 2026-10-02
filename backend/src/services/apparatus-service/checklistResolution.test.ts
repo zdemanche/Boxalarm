@@ -4,6 +4,7 @@ import { toVerifiedDeptId } from '@boxalarm/dept-scope';
 import {
   resolveApparatusIdByUnitId,
   resolveChecklistTemplateForUnit,
+  resolveDepartmentDefaultTemplate,
 } from './checklistResolution.js';
 
 const DEPT_ID = toVerifiedDeptId({ deptId: 'NICHOLS' });
@@ -77,8 +78,8 @@ describe('resolveChecklistTemplateForUnit', () => {
       name: 'Engine daily check',
       applicableApparatusIds: ['APP-ENGINE-2'],
       items: [
-        { code: 'TIRES', label: 'Tire pressure', requiresPhoto: false },
-        { code: 'LADDER-MOUNT', label: 'Ladder mount photo', requiresPhoto: true },
+        { code: 'TIRES', label: 'Tire pressure', requiresPhoto: false, critical: false },
+        { code: 'LADDER-MOUNT', label: 'Ladder mount photo', requiresPhoto: true, critical: false },
       ],
     });
   });
@@ -176,5 +177,74 @@ describe('resolveChecklistTemplateForUnit', () => {
       ':sk': 'METADATA',
       ':apparatusId': 'APP-ENGINE-2',
     });
+  });
+});
+
+describe('critical items', () => {
+  it('passes critical through and reads a record without it as not critical', async () => {
+    const client = fakeClient([
+      {
+        pk: 'DEPT#NICHOLS#CHECKLIST_TEMPLATE#CT-01',
+        sk: 'METADATA',
+        name: 'Engine daily check',
+        applicableApparatusIds: ['APP-ENGINE-2'],
+        items: [
+          { code: 'BRAKES', label: 'Brakes', requiresPhoto: false, critical: true },
+          { code: 'LIGHTS', label: 'Lights', requiresPhoto: false },
+          { code: 'MIRRORS', label: 'Mirrors', requiresPhoto: false, critical: 'yes' },
+        ],
+      },
+    ]);
+    const template = await resolveChecklistTemplateForUnit(
+      client,
+      'platform-service',
+      DEPT_ID,
+      'APP-ENGINE-2',
+    );
+    expect(template?.items.map((item) => [item.code, item.critical])).toEqual([
+      ['BRAKES', true],
+      ['LIGHTS', false],
+      ['MIRRORS', false],
+    ]);
+  });
+});
+
+describe('resolveDepartmentDefaultTemplate', () => {
+  it("reads the department's CHECKLIST_DEFAULTS config and versions the templateId", async () => {
+    const send = vi.fn().mockResolvedValue({
+      Item: {
+        pk: 'DEPT#NICHOLS',
+        sk: 'CONFIG#CHECKLIST_DEFAULTS',
+        version: 3,
+        value: {
+          items: [
+            { code: 'BRAKES', label: 'Brakes', requiresPhoto: false, critical: true },
+            { code: 'LIGHTS', label: 'Lights', requiresPhoto: true },
+          ],
+        },
+      },
+    });
+    const client = { send } as unknown as DynamoDBDocumentClient;
+
+    const template = await resolveDepartmentDefaultTemplate(client, 'platform-service', DEPT_ID);
+
+    expect(template).toEqual({
+      templateId: 'department-default-v3',
+      name: 'Department check sheet',
+      applicableApparatusIds: [],
+      items: [
+        { code: 'BRAKES', label: 'Brakes', requiresPhoto: false, critical: true },
+        { code: 'LIGHTS', label: 'Lights', requiresPhoto: true, critical: false },
+      ],
+    });
+    const sent = send.mock.calls[0]?.[0] as { input: { Key: unknown } };
+    expect(sent.input.Key).toEqual({ pk: 'DEPT#NICHOLS', sk: 'CONFIG#CHECKLIST_DEFAULTS' });
+  });
+
+  it('returns undefined when the department has no default sheet', async () => {
+    const client = { send: vi.fn().mockResolvedValue({}) } as unknown as DynamoDBDocumentClient;
+    await expect(
+      resolveDepartmentDefaultTemplate(client, 'platform-service', DEPT_ID),
+    ).resolves.toBeUndefined();
   });
 });

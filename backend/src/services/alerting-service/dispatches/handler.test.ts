@@ -16,14 +16,6 @@ vi.mock('./repository.js', () => ({
   createManualDispatch: vi.fn(),
 }));
 
-vi.mock('../fanout/fanOut.js', () => ({
-  runFanOut: vi.fn().mockResolvedValue(undefined),
-}));
-
-vi.mock('../escalation/scheduleEscalation.js', () => ({
-  getSchedulerClient: vi.fn(() => ({})),
-}));
-
 interface DispatchAuthorizerContext {
   readonly sub: string;
   readonly deptId: string;
@@ -169,6 +161,58 @@ describe('handler (POST /api/v1/alerting/dispatches)', () => {
     expect(result.statusCode).toBe(400);
   });
 
+  it('m1: a malformed locality is dropped, logged and counted; the dispatch still pages', async () => {
+    const { authorizeManualDispatchSubmission } = await import('./authorization.js');
+    vi.mocked(authorizeManualDispatchSubmission).mockResolvedValue('ALLOWED');
+    const { createManualDispatch } = await import('./repository.js');
+    vi.mocked(createManualDispatch).mockClear();
+    vi.mocked(createManualDispatch).mockResolvedValue({ outcome: 'created', dispatchId: 'D-2' });
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    const { handler } = await import('./handler.js');
+    const event = buildEvent({
+      headers: AUTH_HEADERS,
+      authorizerContext: AUTH_CONTEXT,
+      body: JSON.stringify({
+        ...VALID_BODY,
+        locality: { town: 'x'.repeat(200), choice: 'OTHER' },
+      }),
+    });
+    const result = (await handler(event, {} as never, () => undefined)) as { statusCode: number };
+
+    expect(result.statusCode).toBe(201);
+    const input = vi.mocked(createManualDispatch).mock.calls.at(-1)?.[2];
+    expect(input?.dispatch).not.toHaveProperty('locality');
+    const errors = errorSpy.mock.calls.map(([line]) => String(line));
+    expect(errors.some((line) => line.includes('dispatches.locality_dropped'))).toBe(true);
+    expect(errors.some((line) => line.includes('x'.repeat(200)))).toBe(false);
+    const metrics = logSpy.mock.calls.map(([line]) => String(line));
+    expect(metrics.some((line) => line.includes('DispatchLocalityDropped'))).toBe(true);
+    logSpy.mockRestore();
+    errorSpy.mockRestore();
+  });
+
+  it('R3-A: passes a valid locality to the DISPATCH_ALERT write (an older body without it is still accepted)', async () => {
+    const { authorizeManualDispatchSubmission } = await import('./authorization.js');
+    vi.mocked(authorizeManualDispatchSubmission).mockResolvedValue('ALLOWED');
+    const { createManualDispatch } = await import('./repository.js');
+    vi.mocked(createManualDispatch).mockResolvedValue({ outcome: 'created', dispatchId: 'D-1' });
+
+    const { handler } = await import('./handler.js');
+    const withLocality = buildEvent({
+      headers: AUTH_HEADERS,
+      authorizerContext: AUTH_CONTEXT,
+      body: JSON.stringify({ ...VALID_BODY, locality: { town: 'Nichols', choice: 'HOME' } }),
+    });
+    const created = (await handler(withLocality, {} as never, () => undefined)) as {
+      statusCode: number;
+    };
+    expect(created.statusCode).toBe(201);
+    const input = vi.mocked(createManualDispatch).mock.calls.at(-1)?.[2];
+    expect(input?.dispatch.locality).toEqual({ town: 'Nichols', choice: 'HOME' });
+  });
+
   it('returns 409 for a duplicate manual submission (AC4)', async () => {
     const { authorizeManualDispatchSubmission } = await import('./authorization.js');
     vi.mocked(authorizeManualDispatchSubmission).mockResolvedValue('ALLOWED');
@@ -236,17 +280,18 @@ describe('handler (POST /api/v1/alerting/dispatches)', () => {
     expect(dispatchedAt).toBeLessThan(10_000_000_000);
   });
 
-  it('invokes fan-out on a created dispatch, and a fan-out rejection does not affect the 201 ingress response', async () => {
+  it('C1: writes only the DISPATCH_ALERT transaction - no receipts, no synchronous fan-out - so the stream fan-out is the single tone-1 producer', async () => {
     const { authorizeManualDispatchSubmission } = await import('./authorization.js');
     vi.mocked(authorizeManualDispatchSubmission).mockResolvedValue('ALLOWED');
     const { createManualDispatch } = await import('./repository.js');
+    vi.mocked(createManualDispatch).mockClear();
     vi.mocked(createManualDispatch).mockResolvedValue({
       outcome: 'created',
       dispatchId: 'NICHOLS-MANUAL-1798000000-abc12345',
     });
-    const { runFanOut } = await import('../fanout/fanOut.js');
-    vi.mocked(runFanOut).mockRejectedValue(new Error('scheduler unavailable'));
-    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const send = vi.fn();
+    const { getDynamoClient } = await import('./dynamoClient.js');
+    vi.mocked(getDynamoClient).mockReturnValue({ send } as never);
 
     const { handler } = await import('./handler.js');
     const event = buildEvent({
@@ -257,15 +302,10 @@ describe('handler (POST /api/v1/alerting/dispatches)', () => {
     const result = (await handler(event, {} as never, () => undefined)) as { statusCode: number };
 
     expect(result.statusCode).toBe(201);
-    expect(runFanOut).toHaveBeenCalledWith(
-      expect.anything(),
-      expect.anything(),
-      'alerting-dispatches',
-      'NICHOLS',
-      'NICHOLS-MANUAL-1798000000-abc12345',
-      expect.any(Number),
-    );
-    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('scheduler unavailable'));
+    expect(createManualDispatch).toHaveBeenCalledTimes(1);
+    // Every table write goes through createManualDispatch (mocked); the handler itself sends
+    // nothing else - a receipt pre-write here is exactly what suppressed tone 1.
+    expect(send).not.toHaveBeenCalled();
   });
 
   it('emits a DispatchIngress business metric on both accept and reject (business-metrics obligation)', async () => {

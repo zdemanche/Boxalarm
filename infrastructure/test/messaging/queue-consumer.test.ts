@@ -31,22 +31,21 @@ async function resolve<T>(output: pulumi.Output<T>): Promise<T> {
 }
 
 describe("QueueConsumer", () => {
-  async function build() {
+  async function build(extra: { reportBatchItemFailures?: boolean } = {}) {
     const { QueueConsumer } = await import("../../components/messaging/queue-consumer");
     const awsMod = await import("@pulumi/aws");
     const role = new awsMod.iam.Role("consumer-role", { assumeRolePolicy: "{}" });
     const fn = { name: pulumi.output("consumer-fn") } as unknown as aws.lambda.Function;
     return new QueueConsumer("test-consumer", {
+      alarmTopicArn: "arn:aws:sns:us-east-1:123456789012:boxalarm-dev-alerting-page",
       env: "dev",
       busName: pulumi.output("boxalarm-dev-platform-bus"),
-      busArn: pulumi.output(
-        "arn:aws:events:us-east-1:123456789012:event-bus/boxalarm-dev-platform-bus",
-      ),
       ruleName: "boxalarm-dev-test-rule",
       eventPattern: JSON.stringify({ "detail-type": ["personnel.member.updated"] }),
       queueName: "boxalarm-dev-test-queue",
       lambda: fn,
       lambdaRole: role,
+      ...extra,
     });
   }
 
@@ -76,7 +75,7 @@ describe("QueueConsumer", () => {
     expect(dlqName).toBe("boxalarm-dev-test-queue-dlq");
   });
 
-  it("scopes the EventBridge send permission to this bus (confused-deputy hardening)", async () => {
+  it("creates the rule with the given pattern (its ARN scopes the send permission — rule-delivery.test.ts)", async () => {
     const consumer = await build();
     await settle(consumer);
     const policy = await resolve(consumer.queue.id);
@@ -90,6 +89,20 @@ describe("QueueConsumer", () => {
     await settle(consumer);
     const scalingConfig = await resolve(consumer.eventSourceMapping.scalingConfig);
     expect(scalingConfig?.maximumConcurrency).toBeGreaterThanOrEqual(2);
+  });
+
+  it("leaves ReportBatchItemFailures off by default so throw-to-fail handlers keep their semantics", async () => {
+    const consumer = await build();
+    await settle(consumer);
+    const responseTypes = await resolve(consumer.eventSourceMapping.functionResponseTypes);
+    expect(responseTypes ?? []).not.toContain("ReportBatchItemFailures");
+  });
+
+  it("sets ReportBatchItemFailures when a batchItemFailures-returning handler opts in", async () => {
+    const consumer = await build({ reportBatchItemFailures: true });
+    await settle(consumer);
+    const responseTypes = await resolve(consumer.eventSourceMapping.functionResponseTypes);
+    expect(responseTypes).toEqual(["ReportBatchItemFailures"]);
   });
 
   it("alarms on DLQ depth above zero", async () => {

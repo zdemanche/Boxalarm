@@ -72,13 +72,13 @@ test('a valid stored session lands on the AppTabs shell (Alerts · Checks · Sch
   const { findAllByText, findByText } = await render(<App />);
 
   expect((await findAllByText('Alerts')).length).toBeGreaterThan(0);
-  expect(await findByText('Checks')).toBeTruthy();
+  expect((await findAllByText('Apparatus')).length).toBeGreaterThan(0);
   expect(await findByText('Schedule')).toBeTruthy();
   expect(await findByText('Me')).toBeTruthy();
 });
 
 test('the authenticated shell shows the persistent sync-status banner above the tabs', async () => {
-  const idToken = `h.${base64url(JSON.stringify({ roles: ['MEMBER'] }))}.s`;
+  const idToken = `h.${base64url(JSON.stringify({ roles: ['MEMBER'], sub: 'member-app' }))}.s`;
   mockedGetInternetCredentials.mockResolvedValue({
     username: 'boxalarm-auth',
     password: JSON.stringify({
@@ -108,6 +108,9 @@ test('the authenticated shell shows the persistent sync-status banner above the 
     queuedAt: new Date().toISOString(),
     nextAttemptAt: Date.now() + 60_000,
     syncedAt: null,
+    // Queued by the signed-in member.
+    ownerMemberId: 'member-app',
+    ownerDeptId: null,
   });
 
   const { findByText } = await render(<App />);

@@ -3,7 +3,7 @@ import { LocalstackContainer, type StartedLocalStackContainer } from '@testconta
 import { CreateTableCommand, DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import { DynamoDBDocumentClient, GetCommand, PutCommand } from '@aws-sdk/lib-dynamodb';
 import type { SNSClient } from '@aws-sdk/client-sns';
-import type { DynamoDBStreamEvent } from 'aws-lambda';
+import type { DynamoDBStreamEvent, SQSEvent } from 'aws-lambda';
 
 const TABLE_NAME = 'alerting-table';
 
@@ -73,7 +73,108 @@ describe('self-test through the real ingress -> idempotency -> fan-out pipeline 
     vi.resetModules();
     process.env.ALERTING_TABLE_NAME = TABLE_NAME;
     process.env.ALERTING_TOPIC_ARN = 'arn:aws:sns:us-east-1:1:boxalarm-dev-alerting-topic.fifo';
+    vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
   });
+
+  /**
+   * Seeds the target member, writes the self-test dispatch through the real ingress write,
+   * runs the real fan-out, then hands every published Message to the real channel worker for
+   * its routed channel, with the provider (sandbox) calls stubbed as given.
+   */
+  async function runSelfTestThroughWorkers(
+    testId: string,
+    providers: {
+      readonly push: () => Promise<{ outcome: 'sent' }>;
+      readonly http: () => Promise<void>;
+    },
+  ): Promise<{ run: Record<string, unknown>; pushIsTest: unknown[] }> {
+    const { createManualDispatch } = await import('../dispatches/repository.js');
+    const { deriveIngressIdempotencyKey } = await import('../dispatches/dispatchIngressPort.js');
+    const { buildSelfTestDispatch } = await import('./dispatchAdapter.js');
+    const { toVerifiedDeptId } = await import('@boxalarm/dept-scope');
+    const { upsertSelfTestRun, getSelfTestRun } = await import('./selfTestRunRepository.js');
+    const deptId = toVerifiedDeptId({ deptId: 'NICHOLS' });
+    const runAtMs = Date.now();
+    const created = await createManualDispatch(docClient, TABLE_NAME, {
+      deptId,
+      dispatch: buildSelfTestDispatch(testId),
+      idempotencyKey: deriveIngressIdempotencyKey(deptId, 'SELF_TEST', testId),
+      dispatchedAt: Math.floor(runAtMs / 1000),
+      targetMemberId: 'mbr-int-1',
+      selfTestId: testId,
+      channelsTested: ['PUSH', 'SMS'],
+    });
+    const dispatchId = created.outcome === 'created' ? created.dispatchId : '';
+    await upsertSelfTestRun(
+      docClient,
+      TABLE_NAME,
+      {
+        deptId,
+        memberId: 'mbr-int-1',
+        testId,
+        runAt: Math.floor(runAtMs / 1000),
+        channelsTested: ['PUSH', 'SMS'],
+        channelResults: {},
+        overallResult: 'RUNNING',
+        runAtMs,
+      },
+      { onlyIfAbsent: true },
+    );
+
+    const published: {
+      Message: string;
+      MessageAttributes: Record<string, { StringValue: string }>;
+    }[] = [];
+    vi.doMock('../eligibility/dynamoClient.js', async (importOriginal) => ({
+      ...(await importOriginal<typeof import('../eligibility/dynamoClient.js')>()),
+      createDynamoClient: () => docClient,
+    }));
+    vi.doMock('../fanout/snsClient.js', async (importOriginal) => ({
+      ...(await importOriginal<typeof import('../fanout/snsClient.js')>()),
+      createSnsClient: () =>
+        ({
+          send: vi.fn((command: { input: (typeof published)[number] }) => {
+            published.push(command.input);
+            return Promise.resolve({ MessageId: 'm' });
+          }),
+        }) as unknown as SNSClient,
+    }));
+    const pushIsTest: unknown[] = [];
+    vi.doMock('../channels/push/pushProviderAdapter.js', async (importOriginal) => ({
+      ...(await importOriginal<typeof import('../channels/push/pushProviderAdapter.js')>()),
+      sendPush: vi.fn((_n: unknown, _p: unknown, _e: unknown, options: { isTest?: boolean }) => {
+        pushIsTest.push(options.isTest);
+        return providers.push();
+      }),
+    }));
+    vi.doMock('../channels/httpProviderAdapter.js', () => ({
+      sendViaHttpProvider: vi.fn(() => providers.http()),
+    }));
+
+    const { handler: fanOut } = await import('../fanout/handler.js');
+    await fanOut(selfTestDispatchInsertEvent(dispatchId, testId));
+    const { createChannelWorkerHandler } = await import('../channels/deliverChannelMessage.js');
+    for (const publish of published) {
+      const channel = publish.MessageAttributes.channel!.StringValue as 'push' | 'sms';
+      await createChannelWorkerHandler(channel)({
+        Records: [{ messageId: `${channel}-1`, body: publish.Message }],
+      } as unknown as SQSEvent);
+    }
+
+    const { evaluateSelfTestRun } = await import('./evaluateSelfTestRun.js');
+    const item = (await getSelfTestRun(docClient, TABLE_NAME, deptId, 'mbr-int-1', testId))!;
+    await evaluateSelfTestRun(
+      docClient,
+      TABLE_NAME,
+      { deptId, memberId: 'mbr-int-1', testId },
+      item,
+      Date.now(),
+      { latencyBudgetMs: 30_000 },
+    );
+    const run = (await getSelfTestRun(docClient, TABLE_NAME, deptId, 'mbr-int-1', testId))!;
+    return { run, pushIsTest };
+  }
 
   it('creates the DISPATCH_ALERT via the real idempotent write, then fans out only to the target member and writes a distinct SELF_TEST_RUN item — never a real roster scan (AC1/AC3/AC4, side-effect-free per AC4)', async () => {
     await docClient.send(
@@ -171,6 +272,31 @@ describe('self-test through the real ingress -> idempotency -> fan-out pipeline 
       }),
     );
     expect(run.Item?.entityType).toBe('SELF_TEST_RUN');
-    expect(run.Item?.overallResult).toBe('PASS');
+    // Published is not passed (design review C3): the workers' receipts decide.
+    expect(run.Item?.overallResult).toBe('RUNNING');
+    expect(run.Item?.publishedChannels).toEqual(['PUSH', 'SMS']);
+  }, 60_000);
+
+  it('C3: PASS only once each channel worker recorded its page SENT - through the sandbox provider', async () => {
+    const { run, pushIsTest } = await runSelfTestThroughWorkers(`int-pass-${Date.now()}`, {
+      push: () => Promise.resolve({ outcome: 'sent' }),
+      http: () => Promise.resolve(),
+    });
+    expect(run.overallResult).toBe('PASS');
+    expect(run.channelResults).toMatchObject({ PUSH: { ok: true }, SMS: { ok: true } });
+    // Test isolation holds on the shared path: the worker selected the sandbox credentials.
+    expect(pushIsTest).toEqual([true]);
+  }, 60_000);
+
+  it('C3: a provider refusal after a successful SNS publish is a FAIL, not a PASS', async () => {
+    const { run } = await runSelfTestThroughWorkers(`int-fail-${Date.now()}`, {
+      push: () => Promise.resolve({ outcome: 'sent' }),
+      http: () => Promise.reject(new Error('SMS sandbox endpoint not-yet-selected.invalid')),
+    });
+    expect(run.overallResult).toBe('FAIL');
+    const results = run.channelResults as Record<string, { ok: boolean; reason?: string }>;
+    expect(results.PUSH?.ok).toBe(true);
+    expect(results.SMS?.ok).toBe(false);
+    expect(results.SMS?.reason).toContain('not-yet-selected.invalid');
   }, 60_000);
 });

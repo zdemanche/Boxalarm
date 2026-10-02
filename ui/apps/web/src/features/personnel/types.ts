@@ -1,3 +1,5 @@
+import type { Role } from '../../auth/roles';
+
 export type MemberStatus = 'PROBATIONARY' | 'ACTIVE' | 'LOA' | 'RETIRED';
 
 export interface Member {
@@ -5,11 +7,22 @@ export interface Member {
   firstName: string;
   lastName: string;
   email: string;
-  phone: string;
+  /** E.164; null once cleared - the member then gets no SMS or voice pages. */
+  phone: string | null;
   status: MemberStatus;
   joinDate: string;
   rank: string;
   agencyId: string;
+  /** Always holds MEMBER on the server; absent only on fixtures that predate roles. */
+  roles?: Role[];
+}
+
+/** PUT /personnel/members/{memberId}/roles. `takesEffect` is the server's own wording. */
+export interface UpdateRolesResult {
+  memberId: string;
+  roles: Role[];
+  changed: boolean;
+  takesEffect: string;
 }
 
 export interface CreateMemberInput {

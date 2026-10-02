@@ -26,7 +26,7 @@ vi.mock('@aws-sdk/lib-dynamodb', () => {
   };
 });
 
-const { createMember, getMember, listMembers, updateMemberStatus } =
+const { createMember, getMember, listMembers, updateMemberRoles, updateMemberStatus } =
   await import('./memberRepository.js');
 
 const PRINCIPAL = { deptId: 'NICHOLS' };
@@ -40,7 +40,11 @@ interface FakeCommandCall {
     readonly ConditionExpression?: string;
     readonly ExclusiveStartKey?: Record<string, unknown>;
     readonly TransactItems?: ReadonlyArray<{
-      readonly Update?: { Key: Record<string, unknown>; ConditionExpression: string };
+      readonly Update?: {
+        Key: Record<string, unknown>;
+        ConditionExpression: string;
+        ExpressionAttributeValues?: Record<string, unknown>;
+      };
       readonly Put?: { Item: Record<string, unknown>; ConditionExpression?: string };
     }>;
   };
@@ -76,9 +80,10 @@ describe('memberRepository', () => {
 
     it('creates a dept-scoped MEMBER item defaulted to PROBATIONARY status (AC1)', async () => {
       sendMock.mockResolvedValueOnce({});
-      const member = await createMember('table', PRINCIPAL, input, 'actor-1');
+      const member = await createMember('table', PRINCIPAL, input, 'actor-1', 'sub-jamie');
 
       expect(member.status).toBe('PROBATIONARY');
+      expect(member.memberId).toBe('sub-jamie');
       expect(member.deptId).toBe('NICHOLS');
       const items = lastCall().input.TransactItems ?? [];
       const memberPut = items[0]?.Put;
@@ -89,22 +94,73 @@ describe('memberRepository', () => {
 
     it('conditions the MEMBER write on the pk not already existing', async () => {
       sendMock.mockResolvedValueOnce({});
-      await createMember('table', PRINCIPAL, input, 'actor-1');
+      await createMember('table', PRINCIPAL, input, 'actor-1', 'sub-jamie');
       const items = lastCall().input.TransactItems ?? [];
       expect(items[0]?.Put?.ConditionExpression).toBe('attribute_not_exists(pk)');
     });
 
     it('writes an AUDIT_LOG_ENTRY alongside the MEMBER item in the same transaction (P9)', async () => {
       sendMock.mockResolvedValueOnce({});
-      const member = await createMember('table', PRINCIPAL, input, 'actor-1');
+      const member = await createMember('table', PRINCIPAL, input, 'actor-1', 'sub-jamie');
       const items = lastCall().input.TransactItems ?? [];
-      expect(items).toHaveLength(2);
+      expect(items).toHaveLength(3);
       const auditPut = items[1]?.Put;
       expect(auditPut?.Item.entityType).toBe('AUDIT_LOG_ENTRY');
       expect(auditPut?.Item.action).toBe('CREATE');
       expect(auditPut?.Item.mutatedEntityId).toBe(member.memberId);
       expect(auditPut?.Item.actorId).toBe('actor-1');
       expect(auditPut?.Item.pk).toMatch(/^DEPT#NICHOLS#AUDIT#\d{4}-\d{2}-\d{2}$/);
+    });
+
+    // Design review C2: the alerting plane projects `phone` into the member's SMS and VOICE
+    // contact entries. Without this event a new member had no snapshot (and never an SMS/voice
+    // target) until they registered a push token.
+    it('emits personnel.member.updated carrying phone and roles in the same transaction (C2)', async () => {
+      sendMock.mockResolvedValueOnce({});
+      await createMember('table', PRINCIPAL, input, 'actor-1', 'sub-jamie');
+      const outbox = (lastCall().input.TransactItems ?? [])[2]?.Put?.Item;
+      expect(outbox).toMatchObject({
+        pk: 'DEPT#NICHOLS#OUTBOX#sub-jamie',
+        entityType: 'OUTBOX_ENTRY',
+        eventType: 'personnel.member.updated',
+        source: 'personnel-service',
+        correlationId: 'sub-jamie',
+        schemaVersion: '1.0',
+        payload: {
+          deptId: 'NICHOLS',
+          memberId: 'sub-jamie',
+          phone: '203-555-0100',
+          roles: ['MEMBER'],
+        },
+        sentAt: null,
+      });
+      expect(outbox?.sk).toMatch(/^EVT#/);
+      expect(typeof outbox?.eventTime).toBe('string');
+      // Eligibility (`active`) is owned by status changes, never asserted at creation.
+      expect(outbox?.payload).not.toHaveProperty('active');
+    });
+  });
+
+  describe('getMember with a cleared phone (review R2-m5)', () => {
+    it('maps an absent phone to null rather than undefined-as-string', async () => {
+      sendMock.mockResolvedValueOnce({
+        Item: {
+          memberId: 'm1',
+          deptId: 'NICHOLS',
+          firstName: 'Jamie',
+          lastName: 'Rios',
+          email: 'y',
+          status: 'ACTIVE',
+          joinDate: '2026-01-01',
+          rank: 'FF',
+          agencyId: 'A1',
+          roles: ['MEMBER'],
+          createdAt: 1,
+          updatedAt: 2,
+        },
+      });
+      const member = await getMember('table', PRINCIPAL, 'm1');
+      expect(member?.phone).toBeNull();
     });
   });
 
@@ -201,6 +257,9 @@ describe('memberRepository', () => {
         deptId: 'NICHOLS',
         previousStatus: 'PROBATIONARY',
         newStatus: 'ACTIVE',
+        // What session revocation and the alerting eligibility snapshot read.
+        status: 'ACTIVE',
+        active: true,
         actorId: 'actor-1',
         changedAt: (outboxPut?.Put?.Item.payload as { changedAt: string }).changedAt,
       });
@@ -211,6 +270,62 @@ describe('memberRepository', () => {
       await expect(
         updateMemberStatus('table', PRINCIPAL, 'm1', 'PROBATIONARY', 'ACTIVE', 'actor-1'),
       ).rejects.toThrow('ConditionalCheckFailed');
+    });
+  });
+
+  describe('updateMemberRoles', () => {
+    it('writes roles, the audit row, and a member.updated outbox entry carrying roles in one transaction', async () => {
+      sendMock.mockResolvedValueOnce({});
+      await updateMemberRoles(
+        'table',
+        PRINCIPAL,
+        'm1',
+        ['MEMBER'],
+        ['MEMBER', 'OFFICER'],
+        'actor-1',
+      );
+
+      expect(sendMock).toHaveBeenCalledTimes(1);
+      const [memberUpdate, auditPut, outboxPut] = lastCall().input.TransactItems ?? [];
+
+      expect(memberUpdate?.Update?.Key).toEqual({ pk: 'DEPT#NICHOLS#MEMBER#m1', sk: 'METADATA' });
+      expect(memberUpdate?.Update?.ConditionExpression).toBe(
+        'attribute_exists(pk) AND #roles = :previousRoles',
+      );
+      expect(memberUpdate?.Update?.ExpressionAttributeValues).toMatchObject({
+        ':previousRoles': ['MEMBER'],
+        ':roles': ['MEMBER', 'OFFICER'],
+      });
+
+      expect(auditPut?.Put?.Item.pk).toMatch(/^DEPT#NICHOLS#AUDIT#\d{4}-\d{2}-\d{2}$/);
+      expect(auditPut?.Put?.Item.changedFields).toEqual({
+        roles: { old: ['MEMBER'], new: ['MEMBER', 'OFFICER'] },
+      });
+      expect(auditPut?.Put?.Item.actorId).toBe('actor-1');
+
+      const outbox = outboxPut?.Put?.Item;
+      expect(outbox).toMatchObject({
+        pk: 'DEPT#NICHOLS#OUTBOX#m1',
+        entityType: 'OUTBOX_ENTRY',
+        eventType: 'personnel.member.updated',
+        source: 'personnel-service',
+        correlationId: 'm1',
+        schemaVersion: '1.0',
+      });
+      expect(typeof outbox?.eventId).toBe('string');
+      expect(Number.isNaN(Date.parse(outbox?.eventTime as string))).toBe(false);
+      expect(outbox?.payload).toEqual({
+        deptId: 'NICHOLS',
+        memberId: 'm1',
+        roles: ['MEMBER', 'OFFICER'],
+      });
+    });
+
+    it('propagates a failed transaction so the handler can answer 503', async () => {
+      sendMock.mockRejectedValueOnce(new Error('TransactionCanceledException'));
+      await expect(
+        updateMemberRoles('table', PRINCIPAL, 'm1', ['MEMBER'], ['MEMBER', 'CHIEF'], 'actor-1'),
+      ).rejects.toThrow('TransactionCanceledException');
     });
   });
 

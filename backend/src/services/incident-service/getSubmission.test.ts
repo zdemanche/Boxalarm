@@ -1,5 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { IncidentEvent } from './authContext.js';
+import { bearerFor, fakeCedarDecision } from './testEvents.js';
+
+const vpSend = vi.hoisted(() => vi.fn());
+vi.mock('@aws-sdk/client-verifiedpermissions', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@aws-sdk/client-verifiedpermissions')>();
+  return {
+    ...actual,
+    VerifiedPermissionsClient: vi.fn(() => ({ send: vpSend })),
+  };
+});
 
 function buildEvent(
   lambdaContext: Record<string, unknown> | undefined,
@@ -11,7 +21,7 @@ function buildEvent(
     routeKey: 'GET /api/v1/incidents/{incidentId}/submission',
     rawPath: `/api/v1/incidents/${incidentId ?? ''}/submission`,
     rawQueryString: '',
-    headers,
+    headers: { ...bearerFor(lambdaContext), ...headers },
     isBase64Encoded: false,
     body: undefined,
     pathParameters: incidentId !== undefined ? { incidentId } : undefined,
@@ -45,17 +55,22 @@ const INCIDENT_ID = 'NICHOLS-4471-1798000000';
 describe('getSubmission handler', () => {
   beforeEach(() => {
     vi.resetModules();
+    process.env.VERIFIED_PERMISSIONS_POLICY_STORE_ID = 'ps-1';
+    vpSend.mockImplementation(fakeCedarDecision);
+    process.env.INCIDENT_TABLE_NAME = 'incident-table';
   });
 
   afterEach(() => {
     vi.unmock('./submissionRepository.js');
+    vi.unmock('./reviewRepository.js');
+    vi.unmock('./reportContext.js');
     vi.restoreAllMocks();
   });
 
   it('returns 401 when the authorizer context is missing', async () => {
     const { handler } = await import('./getSubmission.js');
 
-    const result = await handler(buildEvent(undefined, INCIDENT_ID), {} as never, () => undefined);
+    const result = await handler(buildEvent(undefined, INCIDENT_ID));
 
     expect(result).toMatchObject({ statusCode: 401 });
   });
@@ -63,11 +78,7 @@ describe('getSubmission handler', () => {
   it('returns 403 for a member who is not an officer or admin', async () => {
     const { handler } = await import('./getSubmission.js');
 
-    const result = await handler(
-      buildEvent(MEMBER_AUTH, INCIDENT_ID),
-      {} as never,
-      () => undefined,
-    );
+    const result = await handler(buildEvent(MEMBER_AUTH, INCIDENT_ID));
 
     expect(result).toMatchObject({ statusCode: 403 });
   });
@@ -75,7 +86,7 @@ describe('getSubmission handler', () => {
   it('returns 400 when incidentId path parameter is absent', async () => {
     const { handler } = await import('./getSubmission.js');
 
-    const result = await handler(buildEvent(ADMIN_AUTH, undefined), {} as never, () => undefined);
+    const result = await handler(buildEvent(ADMIN_AUTH, undefined));
 
     expect(result).toMatchObject({ statusCode: 400 });
   });
@@ -83,12 +94,125 @@ describe('getSubmission handler', () => {
   it('returns 400 when incidentId contains the pk delimiter', async () => {
     const { handler } = await import('./getSubmission.js');
 
-    const result = await handler(buildEvent(ADMIN_AUTH, 'bad#id'), {} as never, () => undefined);
+    const result = await handler(buildEvent(ADMIN_AUTH, 'bad#id'));
 
     expect(result).toMatchObject({ statusCode: 400 });
   });
 
+  function mockContext(context: unknown = undefined) {
+    vi.doMock('./reportContext.js', () => ({
+      loadReportContext: () => Promise.resolve(context),
+    }));
+  }
+
+  function mockLedger(ledger = { attempts: [], statusHistory: [] }) {
+    mockContext();
+    vi.doMock('./reviewRepository.js', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('./reviewRepository.js')>();
+      return { ...actual, querySubmissionLedger: () => Promise.resolve(ledger) };
+    });
+  }
+
+  const EMPTY_LEDGER_FIELDS = {
+    nerisIncidentId: null,
+    nerisStatus: null,
+    nerisStatusAt: null,
+    lockedAt: null,
+    lockedBy: null,
+    payloadHash: null,
+    firstSubmittedAt: null,
+    editedSinceSubmission: false,
+    attempts: [],
+    statusHistory: [],
+  };
+
+  it('returns the full submission ledger: attempts, NERIS id and status history', async () => {
+    const attempts = [
+      {
+        attempt: 1,
+        attemptedAt: '2026-09-29T10:00:00.000Z',
+        outcome: 'VALIDATION_ERROR',
+        httpStatus: 422,
+        retryCount: 0,
+        errors: [{ path: 'dispatch.call_create', code: 'missing', message: 'Field required' }],
+      },
+      {
+        attempt: 2,
+        attemptedAt: '2026-09-29T11:00:00.000Z',
+        outcome: 'SUCCESS',
+        httpStatus: 201,
+        retryCount: 0,
+        operation: 'CREATE',
+        nerisIncidentId: 'FD09190828|4471|1798000000',
+        payloadHash: 'abc',
+        errors: [],
+      },
+    ];
+    const statusHistory = [
+      { status: 'SUBMITTED', at: '2026-09-29T11:00:00Z', current: false },
+      { status: 'REJECTED', at: '2026-09-30T09:00:00Z', current: true },
+    ];
+    mockLedger({ attempts, statusHistory } as never);
+    // The report as it stands now builds a payload whose hash is not 'abc': edited.
+    mockContext({
+      incident: {
+        incidentId: INCIDENT_ID,
+        deptId: 'NICHOLS',
+        dispatchNumber: '4471',
+        epochSeconds: 1_798_000_000,
+        nerisSchemaVersion: 'v',
+        corePayload: { incident_type: 'FIRE||STRUCTURE_FIRE||CHIMNEY_FIRE' },
+        status: 'REJECTED',
+        sourceDispatchId: INCIDENT_ID,
+        createdBy: 'MBR-0034',
+        createdAt: 1,
+        updatedAt: 1,
+      },
+      units: [],
+      settings: { departmentNerisId: 'FD09190828', unitNerisIds: {} },
+      nerisApi: (await import('./neris/fixtures/neris-api-1.5.1.json', { with: { type: 'json' } }))
+        .default,
+    });
+    vi.doMock('./submissionRepository.js', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('./submissionRepository.js')>();
+      return {
+        ...actual,
+        getSubmissionRepository: () => ({
+          getSubmission: () =>
+            Promise.resolve({
+              incidentId: INCIDENT_ID,
+              status: 'REJECTED',
+              submissionStatus: 'ACCEPTED',
+              nerisIncidentId: 'FD09190828|4471|1798000000',
+              nerisStatus: 'REJECTED',
+              nerisStatusAt: 1_798_090_000,
+              lockedAt: 1_798_003_000,
+              lockedBy: 'MBR-0034',
+              lastPayloadHash: 'abc',
+              firstSubmittedAt: 1_798_003_600,
+              lastSubmittedAt: 1_798_003_600,
+              updatedAt: 1_798_095_000,
+            }),
+        }),
+      };
+    });
+    const { handler } = await import('./getSubmission.js');
+
+    const result = await handler(buildEvent(OFFICER_AUTH, INCIDENT_ID));
+
+    const body = JSON.parse((result as { body: string }).body) as Record<string, unknown>;
+    expect(body).toMatchObject({
+      nerisIncidentId: 'FD09190828|4471|1798000000',
+      nerisStatus: 'REJECTED',
+      payloadHash: 'abc',
+      editedSinceSubmission: true,
+      attempts,
+      statusHistory,
+    });
+  });
+
   it('returns 200 with submissionStatus and the failure reason when FAILED, read for the caller dept (AC4)', async () => {
+    mockLedger();
     const getSubmission = vi.fn().mockResolvedValue({
       incidentId: INCIDENT_ID,
       status: 'REJECTED',
@@ -101,7 +225,7 @@ describe('getSubmission handler', () => {
     });
     const { handler } = await import('./getSubmission.js');
 
-    const result = await handler(buildEvent(ADMIN_AUTH, INCIDENT_ID), {} as never, () => undefined);
+    const result = await handler(buildEvent(ADMIN_AUTH, INCIDENT_ID));
 
     expect(result).toMatchObject({ statusCode: 200 });
     const body = JSON.parse((result as { body: string }).body) as Record<string, unknown>;
@@ -110,11 +234,13 @@ describe('getSubmission handler', () => {
       status: 'REJECTED',
       submissionStatus: 'FAILED',
       submissionFailureReason: 'NERIS rejected the submission with HTTP 400',
+      ...EMPTY_LEDGER_FIELDS,
     });
     expect(getSubmission).toHaveBeenCalledWith('NICHOLS', INCIDENT_ID);
   });
 
   it('lets an officer read submission status', async () => {
+    mockLedger();
     const getSubmission = vi.fn().mockResolvedValue({
       incidentId: INCIDENT_ID,
       status: 'SUBMITTED',
@@ -126,11 +252,7 @@ describe('getSubmission handler', () => {
     });
     const { handler } = await import('./getSubmission.js');
 
-    const result = await handler(
-      buildEvent(OFFICER_AUTH, INCIDENT_ID),
-      {} as never,
-      () => undefined,
-    );
+    const result = await handler(buildEvent(OFFICER_AUTH, INCIDENT_ID));
 
     expect(result).toMatchObject({ statusCode: 200 });
     const body = JSON.parse((result as { body: string }).body) as Record<string, unknown>;
@@ -138,6 +260,7 @@ describe('getSubmission handler', () => {
       incidentId: INCIDENT_ID,
       status: 'SUBMITTED',
       submissionStatus: 'RETRYING',
+      ...EMPTY_LEDGER_FIELDS,
     });
   });
 
@@ -153,7 +276,7 @@ describe('getSubmission handler', () => {
     });
     const { handler } = await import('./getSubmission.js');
 
-    const result = await handler(buildEvent(ADMIN_AUTH, INCIDENT_ID), {} as never, () => undefined);
+    const result = await handler(buildEvent(ADMIN_AUTH, INCIDENT_ID));
 
     expect(result).toMatchObject({ statusCode: 404 });
   });
@@ -170,7 +293,7 @@ describe('getSubmission handler', () => {
     });
     const { handler } = await import('./getSubmission.js');
 
-    const result = await handler(buildEvent(ADMIN_AUTH, INCIDENT_ID), {} as never, () => undefined);
+    const result = await handler(buildEvent(ADMIN_AUTH, INCIDENT_ID));
 
     expect(result).toMatchObject({ statusCode: 503 });
     const body = JSON.parse((result as { body: string }).body) as Record<string, unknown>;

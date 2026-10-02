@@ -11,10 +11,12 @@ import { SERVICES, ServiceName } from "./components/observability/services";
 import { BoxalarmUserPool } from "./components/identity/user-pool";
 import { BoxalarmUserPoolClient } from "./components/identity/user-pool-client";
 import { HttpApi } from "./components/api/http-api";
+import { ServiceHealth } from "./components/api/service-health";
 import { PlatformTable } from "./components/data/platform-table";
 import { IncidentTable } from "./components/data/incident-table";
 import { AlertingTable } from "./components/data/alerting-table";
 import { AuditTrail } from "./components/data/audit-trail";
+import { PlatformAssetsBucket } from "./components/data/platform-assets";
 import { NerisConfig } from "./components/neris/neris-config";
 import { PolicyStore } from "./components/authz/policy-store";
 import { PlatformBus } from "./components/messaging/platform-bus";
@@ -32,6 +34,23 @@ import { Events as TrainingEvents } from "./components/training/events";
 import { Hours as TrainingHours } from "./components/training/hours";
 import { Reports as TrainingReports } from "./components/training/reports";
 import { Transcript as TrainingTranscript } from "./components/training/transcript";
+import { Registry as ApparatusRegistry } from "./components/apparatus/registry";
+import { Checks as ApparatusChecks } from "./components/apparatus/checks";
+import { Records as ApparatusRecords } from "./components/apparatus/records";
+import { Inventory as ApparatusInventory } from "./components/apparatus/inventory";
+import { TestDueScanners as ApparatusTestDueScanners } from "./components/apparatus/test-due-scanners";
+import { Equipment as InventoryEquipment } from "./components/inventory/equipment";
+import { Consumables as InventoryConsumables } from "./components/inventory/consumables";
+import { Ppe as InventoryPpe } from "./components/inventory/ppe";
+import { Occupancies } from "./components/inspections/occupancies";
+import { AlertContextReplay } from "./components/inspections/alert-context-replay";
+import { Hydrants } from "./components/inspections/hydrants";
+import { Records as InspectionRecords } from "./components/inspections/records";
+import { InspectionsMap } from "./components/inspections/map";
+import { Inbox as NotificationInbox } from "./components/notification/inbox";
+import { Digest as NotificationDigest } from "./components/notification/digest";
+import { Reminders as NotificationReminders } from "./components/notification/reminders";
+import { PushWorker as NotificationPushWorker } from "./components/notification/push-worker";
 import { Config as PlatformConfig } from "./components/platform/config";
 import { AuditRoute } from "./components/platform/audit-route";
 import { Export } from "./components/platform/export";
@@ -40,6 +59,10 @@ import { ChiefNotificationTopic } from "./components/shared/chief-notifications"
 import { Reporting } from "./components/reporting/reporting";
 import { Incident } from "./components/incident/incident";
 import { SchemaRefresh } from "./components/incident/schema-refresh";
+import { IncidentOutboxDrain } from "./components/incident/outbox-drain";
+import { NerisSubmissionWorker } from "./components/incident/submission-worker";
+import { NerisSync } from "./components/incident/neris-sync";
+import { NerisEntity } from "./components/platform/neris-entity";
 import { AlertingPlaneBoundary } from "./components/alerting/iam-boundary";
 import { MessagingAlerting } from "./components/alerting/messaging-alerting";
 import { Escalation } from "./components/alerting/escalation";
@@ -47,14 +70,26 @@ import { FanOut } from "./components/alerting/fan-out";
 import { ChannelWorkers } from "./components/alerting/channel-workers";
 import { RoutesCore } from "./components/alerting/routes-core";
 import { RoutesOps } from "./components/alerting/routes-ops";
+import { RoutesLadderControls } from "./components/alerting/routes-ladder-controls";
 import { PushTokens } from "./components/alerting/push-tokens";
 import { RidingBoard } from "./components/alerting/riding-board";
 import { AlertingAlarms } from "./components/alerting/alarms";
+import { AlertingPageTopic } from "./components/alerting/page-topic";
+import { PrePlanCopies } from "./components/alerting/pre-plan-copies";
+import { homeLocalityLacksZips, resolveHomeLocality } from "./components/alerting/home-locality";
 import { EligibilityStaleness } from "./components/alerting/staleness";
 import { AlertingCanary } from "./components/alerting/canary";
+import { AlertingOutboxDrain } from "./components/alerting/outbox-drain";
+import { AlertRulesCopy } from "./components/alerting/alert-rules-copy";
+import { CadIngress } from "./components/alerting/cad-ingress";
+import { CadSources } from "./components/platform/cad-sources";
+import { isPlaceholderUrl, validateStackConfig } from "./components/shared/stack-config";
 
 export const stack = getStack();
 const config = new Config("boxalarm-infra");
+// Every missing required key in one error, before any component reads its own (C2). Reads
+// secrets only to test presence; no value is logged.
+validateStackConfig((key) => config.get(key), stack);
 export const env = config.require("env");
 export const webOrigin = config.require("webOrigin");
 // Single-tenant today (Nichols FD) — {deptId} is in every partition key so a second
@@ -68,10 +103,22 @@ export const deptId = config.require("deptId");
 // #246's own scope note). Required config, set out-of-band per env once
 // that pipeline exists, rather than a guessed literal.
 export const nerisSchemaSourceUrl = config.require("nerisSchemaSourceUrl");
+// Verified SES sender for notification-service's email digests (e.g.
+// notifications@<dept domain>). Required, not defaulted: without it every digest
+// send throws and no reminder ever reaches the inbox. SES identity verification (and
+// production access) is out-of-band per env.
+export const notificationSesFromAddress = config.require("notificationSesFromAddress");
+
+export const platformTable = new PlatformTable("platform", { env });
 
 // #180 / #6: base identity + pre-token-generation trigger that puts
-// custom:deptId on the ACCESS token for the shared authorizer.
-export const identity = new BoxalarmUserPool("identity", { env });
+// custom:deptId on the ACCESS token for the shared authorizer, and refuses a token to an
+// LOA/RETIRED member (review C1) by reading the member row from the platform table.
+export const identity = new BoxalarmUserPool("identity", {
+  env,
+  platformTableName: platformTable.tableName,
+  platformTableArn: platformTable.tableArn,
+});
 export const userPoolId = identity.userPool.id;
 
 const SELF_SERVICE_WRITE_ATTRIBUTES = ["email", "name", "phone_number"] as const;
@@ -139,12 +186,17 @@ export const httpApi = new HttpApi("http-api", {
   userPoolId: identity.userPool.id,
   allowedClientIds: [webUserPoolClient.userPoolClient.id, mobileUserPoolClient.userPoolClient.id],
   platformLogGroup,
+  platformTableName: platformTable.tableName,
+  platformTableArn: platformTable.tableArn,
 });
 
-// Shared data plane tables (ownership: #84 platform, #62 incident, #48 alerting).
-export const platformTable = new PlatformTable("platform", { env });
+// Shared data plane tables (ownership: #84 platform, #62 incident, #48 alerting). The
+// platform table is created above, with identity, which reads member status from it.
 export const incidentTable = new IncidentTable("incident", { env });
 export const alertingTable = new AlertingTable("alerting", { env });
+// architecture.md §8 platform-assets bucket (pre-plan files, inspection photos, and later
+// cert/PPE/defect attachments), reached by clients through S3 presigned URLs.
+export const platformAssets = new PlatformAssetsBucket("platform-assets", { env, webOrigin });
 
 // E8-S5-INFRA #84: CloudTrail data events on alerting table + Object Lock archive.
 export const auditTrail = new AuditTrail("audit-trail", {
@@ -159,9 +211,7 @@ export const auditTrail = new AuditTrail("audit-trail", {
 export const alertingPlaneBoundary = new AlertingPlaneBoundary("alerting-plane-boundary", {
   env,
   platformTableArn: platformTable.tableArn,
-  platformStreamArn: platformTable.streamArn,
   incidentTableArn: incidentTable.tableArn,
-  incidentStreamArn: incidentTable.streamArn,
 });
 const alertingBoundaryArn = alertingPlaneBoundary.policy.arn;
 
@@ -179,6 +229,19 @@ export const policyStore = new PolicyStore("policy-store", {
 // E8-S8-INFRA #259: shared LOB EventBridge bus.
 export const platformBus = new PlatformBus("platform-bus", { env });
 
+// E1-S11-INFRA: the alerting-page topic. Created ahead of every component whose alarms feed
+// paging — the outbox publisher, eligibility/availability snapshot consumers, session
+// revocation — not only the alerting components further down (deploy-readiness M1).
+export const alertingPageTopic = new AlertingPageTopic("alerting-page", {
+  env,
+  // The topic used to be a child of AlertingAlarms("alerting-alarms"): keep its URN (F1).
+  legacyAlarmsComponentName: "alerting-alarms",
+});
+
+// The ops alarm topic. Created ahead of the outbox publisher (MalformedOutboxRow) and
+// sessionRevocation (credential-reset alarm), which notify it.
+export const chiefNotificationTopic = new ChiefNotificationTopic("chief-notifications", { env });
+
 // E2-S1-INFRA #203: the ONE platform-table outbox → platform-bus publisher.
 export const outboxPublisher = new OutboxPublisher("outbox-publisher", {
   env,
@@ -188,10 +251,15 @@ export const outboxPublisher = new OutboxPublisher("outbox-publisher", {
   busName: platformBus.busName,
   busArn: platformBus.busArn,
   logGroup: platformLogGroup,
+  alarmTopicArn: alertingPageTopic.topicArn,
+  opsAlarmTopicArn: chiefNotificationTopic.topicArn,
 });
 
 export const sessionRevocation = new SessionRevocation("session-revocation", {
   env,
+  platformTableName: platformTable.tableName,
+  platformTableArn: platformTable.tableArn,
+  chiefNotificationTopicArn: chiefNotificationTopic.topicArn,
   userPoolId: identity.userPool.id,
   userPoolArn: identity.userPool.arn,
   policyStoreArn: policyStore.policyStoreArn,
@@ -199,21 +267,27 @@ export const sessionRevocation = new SessionRevocation("session-revocation", {
   platformLogGroup,
   httpApi,
   platformBus,
+  pageTopicArn: alertingPageTopic.topicArn,
 });
 
 export const recoveryMonitor = new RecoveryMonitor("recovery-monitor", {
   env,
   logGroup: platformLogGroup,
+  opsAlarmTopicArn: chiefNotificationTopic.topicArn,
 });
 
 export const personnelMembers = new Members("personnel-members", {
   env,
+  chiefNotificationTopicArn: chiefNotificationTopic.topicArn,
   platformTableName: platformTable.tableName,
   platformTableArn: platformTable.tableArn,
   policyStoreArn: policyStore.policyStoreArn,
   policyStoreId: policyStore.policyStoreId,
+  userPoolId: identity.userPool.id,
+  userPoolArn: identity.userPool.arn,
   logGroup: personnelLogGroup,
   httpApi,
+  sesFromAddress: notificationSesFromAddress,
 });
 
 // E2-S2 through E2-S11-INFRA (#204-#213): personnel domain routes beyond the roster CRUD
@@ -229,9 +303,11 @@ export const personnelQuals = new Quals("personnel-quals", {
   httpApi,
   platformBus,
   alertingTableArn: alertingTable.tableArn,
+  alertingCmkArn: alertingTable.cmkArn,
   alertingTableName: alertingTable.tableName,
   alertingLogGroup,
   alertingPermissionsBoundaryArn: alertingBoundaryArn,
+  pageTopicArn: alertingPageTopic.topicArn,
 });
 
 export const personnelAttendance = new Attendance("personnel-attendance", {
@@ -254,9 +330,11 @@ export const personnelAvailability = new Availability("personnel-availability", 
   httpApi,
   platformBus,
   alertingTableArn: alertingTable.tableArn,
+  alertingCmkArn: alertingTable.cmkArn,
   alertingTableName: alertingTable.tableName,
   alertingLogGroup,
   alertingPermissionsBoundaryArn: alertingBoundaryArn,
+  pageTopicArn: alertingPageTopic.topicArn,
 });
 
 export const personnelLosap = new Losap("personnel-losap", {
@@ -278,6 +356,7 @@ export const personnelShifts = new Shifts("personnel-shifts", {
   policyStoreId: policyStore.policyStoreId,
   logGroup: personnelLogGroup,
   httpApi,
+  opsAlarmTopicArn: chiefNotificationTopic.topicArn,
 });
 
 // E3-S1 through E3-S8-INFRA (#214-#221): training domain — certifications (with
@@ -295,8 +374,12 @@ export const trainingCertifications = new Certifications("training-certification
   platformBusName: platformBus.busName,
   platformBusArn: platformBus.busArn,
   platformTableStreamArn: platformTable.streamArn,
+  assetsBucketName: platformAssets.bucketName,
+  assetsBucketArn: platformAssets.bucketArn,
   logGroup: trainingLogGroup,
   httpApi,
+  opsAlarmTopicArn: chiefNotificationTopic.topicArn,
+  pageTopicArn: alertingPageTopic.topicArn,
 });
 
 export const trainingEvents = new TrainingEvents("training-events", {
@@ -339,6 +422,144 @@ export const trainingTranscript = new TrainingTranscript("training-transcript", 
   httpApi,
 });
 
+// api-gap P0 #5: apparatus-service registry, checks/defects/compliance, maintenance/SCBA/
+// testing records, and compartment inventory. All on the platform table and the shared
+// policy store; the riding board stays in components/alerting/riding-board.ts.
+const apparatusArgs = {
+  env,
+  platformTableName: platformTable.tableName,
+  platformTableArn: platformTable.tableArn,
+  policyStoreArn: policyStore.policyStoreArn,
+  policyStoreId: policyStore.policyStoreId,
+  assetsBucketName: platformAssets.bucketName,
+  assetsBucketArn: platformAssets.bucketArn,
+  logGroup: apparatusLogGroup,
+  httpApi,
+};
+export const apparatusRegistry = new ApparatusRegistry("apparatus-registry", apparatusArgs);
+export const apparatusChecks = new ApparatusChecks("apparatus-checks", {
+  ...apparatusArgs,
+  opsAlarmTopicArn: chiefNotificationTopic.topicArn,
+});
+export const apparatusRecords = new ApparatusRecords("apparatus-records", apparatusArgs);
+export const apparatusInventory = new ApparatusInventory("apparatus-inventory", apparatusArgs);
+// Daily apparatus/SCBA test-due scanners -> apparatus.test.due on the platform bus.
+export const apparatusTestDueScanners = new ApparatusTestDueScanners(
+  "apparatus-test-due-scanners",
+  {
+    env,
+    deptId,
+    platformTableName: platformTable.tableName,
+    platformTableArn: platformTable.tableArn,
+    platformBusName: platformBus.busName,
+    platformBusArn: platformBus.busArn,
+    logGroup: apparatusLogGroup,
+    opsAlarmTopicArn: chiefNotificationTopic.topicArn,
+  },
+);
+
+// api-gap P0-6: inventory-service — equipment registry, consumables and PPE, plus the
+// daily consumable-reorder and PPE-expiry scanners. All share the platform table.
+// Compartment inventory (/apparatus/{unitId}/inventory) belongs to apparatus-service.
+const inventoryLogGroup = serviceLogGroupByName["inventory-service"];
+const inventoryCommon = {
+  env,
+  platformTableName: platformTable.tableName,
+  platformTableArn: platformTable.tableArn,
+  policyStoreArn: policyStore.policyStoreArn,
+  policyStoreId: policyStore.policyStoreId,
+  logGroup: inventoryLogGroup,
+  httpApi,
+};
+
+export const inventoryEquipment = new InventoryEquipment("inventory-equipment", inventoryCommon);
+
+export const inventoryConsumables = new InventoryConsumables("inventory-consumables", {
+  ...inventoryCommon,
+  deptId,
+  platformBusName: platformBus.busName,
+  platformBusArn: platformBus.busArn,
+  opsAlarmTopicArn: chiefNotificationTopic.topicArn,
+});
+
+export const inventoryPpe = new InventoryPpe("inventory-ppe", {
+  ...inventoryCommon,
+  deptId,
+  platformBusName: platformBus.busName,
+  platformBusArn: platformBus.busArn,
+  opsAlarmTopicArn: chiefNotificationTopic.topicArn,
+});
+
+// F6 inspections-service: occupancies + pre-plans, hydrants, inspection records + field
+// capture, and the map. All state is in the platform table; pre-plan files and field-capture
+// photos go to the platform-assets bucket through S3 presigned URLs.
+const inspectionsLogGroup = serviceLogGroupByName["inspections-service"];
+const inspectionsBase = {
+  env,
+  platformTableName: platformTable.tableName,
+  platformTableArn: platformTable.tableArn,
+  policyStoreArn: policyStore.policyStoreArn,
+  policyStoreId: policyStore.policyStoreId,
+  logGroup: inspectionsLogGroup,
+  httpApi,
+};
+
+export const inspectionsOccupancies = new Occupancies("inspections-occupancies", {
+  ...inspectionsBase,
+  assetsBucketName: platformAssets.bucketName,
+  assetsBucketArn: platformAssets.bucketArn,
+});
+
+export const inspectionsHydrants = new Hydrants("inspections-hydrants", inspectionsBase);
+
+// Post-deploy backfill / normalizer replay for the alerting pre-plan and hydrant copies.
+export const inspectionsAlertContextReplay = new AlertContextReplay(
+  "inspections-alert-context-replay",
+  {
+    env,
+    platformTableName: platformTable.tableName,
+    platformTableArn: platformTable.tableArn,
+    logGroup: inspectionsLogGroup,
+  },
+);
+
+export const inspectionsRecords = new InspectionRecords("inspections-records", {
+  ...inspectionsBase,
+  assetsBucketName: platformAssets.bucketName,
+  assetsBucketArn: platformAssets.bucketArn,
+  opsAlarmTopicArn: chiefNotificationTopic.topicArn,
+});
+
+export const inspectionsMap = new InspectionsMap("inspections-map", inspectionsBase);
+
+// notification-service (architecture.md §1.1 service 10): LOB-plane in-app inbox,
+// preferences, and the cert-expiry -> daily digest chain that fills the inbox. Entities
+// live on the platform table; shares no queue, concurrency reservation, topic or
+// provider with the alerting plane.
+const notificationLogGroup = serviceLogGroupByName["notification-service"];
+
+export const notificationInbox = new NotificationInbox("notification-inbox", {
+  env,
+  platformTableName: platformTable.tableName,
+  platformTableArn: platformTable.tableArn,
+  policyStoreArn: policyStore.policyStoreArn,
+  policyStoreId: policyStore.policyStoreId,
+  logGroup: notificationLogGroup,
+  httpApi,
+});
+
+export const notificationDigest = new NotificationDigest("notification-digest", {
+  env,
+  deptId,
+  platformTableName: platformTable.tableName,
+  platformTableArn: platformTable.tableArn,
+  platformBusName: platformBus.busName,
+  platformBusArn: platformBus.busArn,
+  sesFromAddress: notificationSesFromAddress,
+  logGroup: notificationLogGroup,
+  opsAlarmTopicArn: chiefNotificationTopic.topicArn,
+});
+
 export const platformConfig = new PlatformConfig("platform-config", {
   env,
   platformTableName: platformTable.tableName,
@@ -349,15 +570,45 @@ export const platformConfig = new PlatformConfig("platform-config", {
   httpApi,
 });
 
-export const auditRoute = new AuditRoute("audit-route", {
+// NERIS entity sync (stations/units -> NERIS ids for unit responses).
+export const nerisEntity = new NerisEntity("neris-entity", {
   env,
   platformTableName: platformTable.tableName,
   platformTableArn: platformTable.tableArn,
+  policyStoreArn: policyStore.policyStoreArn,
+  policyStoreId: policyStore.policyStoreId,
+  nerisCredentialsSecretArn: nerisConfig.secret.arn,
   logGroup: platformLogGroup,
   httpApi,
 });
 
-export const chiefNotificationTopic = new ChiefNotificationTopic("chief-notifications", { env });
+export const auditRoute = new AuditRoute("audit-route", {
+  env,
+  platformTableName: platformTable.tableName,
+  platformTableArn: platformTable.tableArn,
+  policyStoreArn: policyStore.policyStoreArn,
+  policyStoreId: policyStore.policyStoreId,
+  logGroup: platformLogGroup,
+  httpApi,
+});
+
+export const nerisEntitySyncFailedAlarm = nerisEntity.alarmOnSyncFailure(
+  chiefNotificationTopic.topicArn,
+);
+
+// Apparatus test-due, apparatus defect, consumable reorder and PPE expiry reminders ->
+// the digest (and, for an out-of-service defect, the inbox and push at once).
+export const notificationReminders = new NotificationReminders("notification-reminders", {
+  env,
+  platformTableName: platformTable.tableName,
+  platformTableArn: platformTable.tableArn,
+  platformBusName: platformBus.busName,
+  platformBusArn: platformBus.busArn,
+  pushTopicArn: notificationDigest.pushTopic.arn,
+  sesFromAddress: notificationSesFromAddress,
+  chiefNotificationTopicArn: chiefNotificationTopic.topicArn,
+  logGroup: notificationLogGroup,
+});
 
 export const platformExport = new Export("platform-export", {
   env,
@@ -385,16 +636,6 @@ export const platformRetention = new Retention("platform-retention", {
   httpApi,
 });
 
-export const reporting = new Reporting("reporting", {
-  env,
-  platformTableName: platformTable.tableName,
-  platformTableArn: platformTable.tableArn,
-  policyStoreArn: policyStore.policyStoreArn,
-  policyStoreId: policyStore.policyStoreId,
-  logGroup: serviceLogGroupByName["reporting-service"],
-  httpApi,
-});
-
 const incidentServiceLogGroup = serviceLogGroupByName["incident-service"];
 
 export const incidentSchemaRefresh = new SchemaRefresh("incident-schema-refresh", {
@@ -403,7 +644,11 @@ export const incidentSchemaRefresh = new SchemaRefresh("incident-schema-refresh"
   incidentTableArn: incidentTable.tableArn,
   incidentCmkArn: incidentTable.cmkArn,
   nerisSchemaSourceUrl,
+  // dev's committed .invalid placeholder: keep the daily refresh off rather than fail and
+  // email the ops topic every day (review F6). The validator refuses a placeholder elsewhere.
+  enabled: !isPlaceholderUrl(nerisSchemaSourceUrl),
   logGroup: incidentServiceLogGroup,
+  opsAlarmTopicArn: chiefNotificationTopic.topicArn,
 });
 
 export const incident = new Incident("incident", {
@@ -417,8 +662,53 @@ export const incident = new Incident("incident", {
   nerisSchemaBucketName: incidentSchemaRefresh.bucket.bucket,
   policyStoreArn: policyStore.policyStoreArn,
   policyStoreId: policyStore.policyStoreId,
+  nerisCredentialsSecretArn: nerisConfig.secret.arn,
   logGroup: incidentServiceLogGroup,
   httpApi,
+  opsAlarmTopicArn: chiefNotificationTopic.topicArn,
+});
+
+// Incident-table outbox → platform-bus. The platform OutboxPublisher only reads the
+// platform table's stream; without this, incident-service OUTBOX_ENTRY rows are never
+// published.
+export const incidentOutboxDrain = new IncidentOutboxDrain("incident-outbox-drain", {
+  env,
+  incidentTableName: incidentTable.tableName,
+  incidentTableArn: incidentTable.tableArn,
+  incidentTableStreamArn: incidentTable.streamArn,
+  incidentCmkArn: incidentTable.cmkArn,
+  busName: platformBus.busName,
+  busArn: platformBus.busArn,
+  logGroup: incidentServiceLogGroup,
+  opsAlarmTopicArn: chiefNotificationTopic.topicArn,
+});
+
+// NERIS submission worker: consumes neris.incident.submitted off the platform bus and
+// schedules its own backoff retries via EventBridge Scheduler.
+export const nerisSubmissionWorker = new NerisSubmissionWorker("neris-submission-worker", {
+  env,
+  incidentTableName: incidentTable.tableName,
+  incidentTableArn: incidentTable.tableArn,
+  incidentCmkArn: incidentTable.cmkArn,
+  busName: platformBus.busName,
+  busArn: platformBus.busArn,
+  nerisCredentialsSecretArn: nerisConfig.secret.arn,
+  nerisSchemaBucketArn: incidentSchemaRefresh.bucket.arn,
+  nerisSchemaBucketName: incidentSchemaRefresh.bucket.bucket,
+  chiefNotificationTopicArn: chiefNotificationTopic.topicArn,
+  logGroup: incidentServiceLogGroup,
+});
+
+// NERIS status poller (every 5 min) and nightly reconciliation + no-activity reminder.
+export const nerisSync = new NerisSync("neris-sync", {
+  env,
+  deptId,
+  incidentTableName: incidentTable.tableName,
+  incidentTableArn: incidentTable.tableArn,
+  incidentCmkArn: incidentTable.cmkArn,
+  nerisCredentialsSecretArn: nerisConfig.secret.arn,
+  chiefNotificationTopicArn: chiefNotificationTopic.topicArn,
+  logGroup: incidentServiceLogGroup,
 });
 
 // E1-S2/S3-INFRA #28/#29: alerting messaging plane — SNS FIFO topic + per-channel SQS
@@ -428,15 +718,18 @@ export const messagingAlerting = new MessagingAlerting("messaging-alerting", { e
 export const escalation = new Escalation("escalation", {
   env,
   alertingTableArn: alertingTable.tableArn,
+  alertingCmkArn: alertingTable.cmkArn,
   alertingTopicArn: messagingAlerting.topic.arn,
   alertingTableName: alertingTable.tableName,
   logGroup: alertingLogGroup,
   permissionsBoundaryArn: alertingBoundaryArn,
+  pageTopicArn: alertingPageTopic.topicArn,
 });
 
 export const fanOut = new FanOut("fan-out", {
   env,
   alertingTableArn: alertingTable.tableArn,
+  alertingCmkArn: alertingTable.cmkArn,
   alertingTableName: alertingTable.tableName,
   alertingStreamArn: alertingTable.streamArn,
   alertingTopicArn: messagingAlerting.topic.arn,
@@ -448,22 +741,52 @@ export const fanOut = new FanOut("fan-out", {
 export const channelWorkers = new ChannelWorkers("channel-workers", {
   env,
   alertingTableArn: alertingTable.tableArn,
+  alertingCmkArn: alertingTable.cmkArn,
   alertingTableName: alertingTable.tableName,
   channelQueues: messagingAlerting.channelQueues,
   logGroup: alertingLogGroup,
   permissionsBoundaryArn: alertingBoundaryArn,
 });
 
+// The non-critical push worker (design review M7): subscribes the device-delivery Lambda to
+// boxalarm-{env}-notification-push, so digests and immediate out-of-service notices actually
+// reach phones. It shares only the APNs/FCM gateway secrets with the alerting plane (one
+// Apple/Firebase app, one set of signing keys) — no queue, no table, no concurrency.
+export const notificationPushWorker = new NotificationPushWorker("notification-push-worker", {
+  env,
+  platformTableName: platformTable.tableName,
+  platformTableArn: platformTable.tableArn,
+  pushTopicArn: notificationDigest.pushTopic.arn,
+  pushSecrets: channelWorkers.pushSecrets,
+  logGroup: serviceLogGroupByName["notification-service"],
+  opsAlarmTopicArn: chiefNotificationTopic.topicArn,
+});
+
 // E1-S1/S5/S6-INFRA: manual dispatch ingress, response confirmation, roster, detail.
+const alertingHomeLocality = resolveHomeLocality(deptId, config.get("alertingHomeLocality"));
+if (alertingHomeLocality === undefined) {
+  pulumi.log.warn(
+    `No home locality for deptId ${deptId}: set boxalarm-infra:alertingHomeLocality, or every ` +
+      `pre-plan address match on the dispatch detail is shown "verify address".`,
+  );
+}
+if (homeLocalityLacksZips(alertingHomeLocality)) {
+  pulumi.log.warn(
+    `The home locality for deptId ${deptId} lists no ZIPs: add the home ZIPs to ` +
+      `boxalarm-infra:alertingHomeLocality, or a pre-plan whose address carries only a ZIP is ` +
+      `always shown "verify address" (docs/runbooks/alert-context-replay.md).`,
+  );
+}
 export const routesCore = new RoutesCore("routes-core", {
   env,
   httpApi,
   alertingTableArn: alertingTable.tableArn,
+  alertingCmkArn: alertingTable.cmkArn,
   alertingTableName: alertingTable.tableName,
   logGroup: alertingLogGroup,
-  escalation,
   policyStoreId: policyStore.policyStoreId,
   permissionsBoundaryArn: alertingBoundaryArn,
+  ...(alertingHomeLocality !== undefined ? { homeLocality: alertingHomeLocality } : {}),
 });
 
 // E1-S4/S8/S9-INFRA: self-test, audit, and provider delivery-receipt routes.
@@ -471,10 +794,32 @@ export const routesOps = new RoutesOps("routes-ops", {
   env,
   httpApi,
   alertingTableArn: alertingTable.tableArn,
+  alertingCmkArn: alertingTable.cmkArn,
   alertingTableName: alertingTable.tableName,
   logGroup: alertingLogGroup,
   policyStoreId: policyStore.policyStoreId,
   permissionsBoundaryArn: alertingBoundaryArn,
+});
+
+// reporting-service: every chief/officer report, CSV/PDF export, and the N1.9 cutover
+// decision. Declared after routesOps because GET cutover-decision invokes alerting's
+// delivery-baseline Lambda (its only cross-plane dependency).
+export const reporting = new Reporting("reporting", {
+  env,
+  platformTableName: platformTable.tableName,
+  platformTableArn: platformTable.tableArn,
+  incidentTableName: incidentTable.tableName,
+  incidentTableArn: incidentTable.tableArn,
+  incidentCmkArn: incidentTable.cmkArn,
+  deliveryBaselineFunctionName: routesOps.deliveryBaseline.lambda.function.name,
+  deliveryBaselineFunctionArn: routesOps.deliveryBaseline.lambda.function.arn,
+  platformBusName: platformBus.busName,
+  platformBusArn: platformBus.busArn,
+  chiefNotificationTopicArn: chiefNotificationTopic.topicArn,
+  policyStoreArn: policyStore.policyStoreArn,
+  policyStoreId: policyStore.policyStoreId,
+  logGroup: serviceLogGroupByName["reporting-service"],
+  httpApi,
 });
 
 // E1-S14-INFRA #39: push-token routes (platform table) + member-updated consumer
@@ -485,12 +830,14 @@ export const pushTokens = new PushTokens("push-tokens", {
   platformTableArn: platformTable.tableArn,
   platformTableName: platformTable.tableName,
   alertingTableArn: alertingTable.tableArn,
+  alertingCmkArn: alertingTable.cmkArn,
   alertingTableName: alertingTable.tableName,
   personnelLogGroup,
   alertingLogGroup,
   policyStoreId: policyStore.policyStoreId,
   busName: platformBus.busName,
   alertingPermissionsBoundaryArn: alertingBoundaryArn,
+  pageTopicArn: alertingPageTopic.topicArn,
 });
 
 // E1-S18-INFRA #111 (partial — see riding-board.ts for the deviation from the ticket).
@@ -507,6 +854,102 @@ export const ridingBoard = new RidingBoard("riding-board", {
 export const alertingAlarms = new AlertingAlarms("alerting-alarms", {
   env,
   channelQueues: messagingAlerting.channelQueues,
+  fanOutFunctionName: fanOut.lambda.function.name,
+  fanOutOnFailureQueue: fanOut.onFailureQueue,
+  escalationFunctionName: escalation.lambda.function.name,
+  toneEvaluatorFunctionName: escalation.toneEvaluatorLambda.function.name,
+  escalationOnFailureQueue: escalation.onFailureQueue,
+  memberUpdatedDlq: pushTokens.memberUpdatedDlq,
+  memberUpdatedFunctionName: pushTokens.memberUpdatedConsumer.function.name,
+  pageTopic: alertingPageTopic,
+});
+
+// F1.13/F1.14: officer tone-ladder advance/halt and mutual-aid trigger/acknowledge.
+// Declared after alertingAlarms so a failed control pages through the alerting-page topic.
+export const routesLadderControls = new RoutesLadderControls("routes-ladder-controls", {
+  env,
+  httpApi,
+  alertingTableArn: alertingTable.tableArn,
+  alertingCmkArn: alertingTable.cmkArn,
+  alertingTableName: alertingTable.tableName,
+  alertingTopicArn: messagingAlerting.topic.arn,
+  escalation,
+  logGroup: alertingLogGroup,
+  policyStoreId: policyStore.policyStoreId,
+  pageTopicArn: alertingAlarms.pageTopic.arn,
+  permissionsBoundaryArn: alertingBoundaryArn,
+});
+
+// E5-S4/E5-S8: inspections pre-plan/hydrant events -> alerting-owned PRE_PLAN_COPY /
+// HYDRANT_COPY projections the dispatch detail reads. Declared after alertingAlarms so a
+// dead-lettered copy event pages through the alerting-page topic.
+export const prePlanCopies = new PrePlanCopies("pre-plan-copies", {
+  env,
+  alertingTableArn: alertingTable.tableArn,
+  alertingCmkArn: alertingTable.cmkArn,
+  alertingTableName: alertingTable.tableName,
+  busName: platformBus.busName,
+  pageTopicArn: alertingAlarms.pageTopic.arn,
+  logGroup: alertingLogGroup,
+  permissionsBoundaryArn: alertingBoundaryArn,
+});
+
+// Design review M1: department ALERT_RULES -> the alerting-owned ALERT_RULES_COPY.
+export const alertRulesCopy = new AlertRulesCopy("alert-rules-copy", {
+  env,
+  alertingTableArn: alertingTable.tableArn,
+  alertingCmkArn: alertingTable.cmkArn,
+  alertingTableName: alertingTable.tableName,
+  busName: platformBus.busName,
+  pageTopicArn: alertingAlarms.pageTopic.arn,
+  logGroup: alertingLogGroup,
+  permissionsBoundaryArn: alertingBoundaryArn,
+});
+
+// CAD dispatch ingress (roadmap-defaults row 3, cad-ingress-auth): the signed webhook on its
+// own API and stage, and - once the department's inbound mail domain exists - SES email. Both
+// write the same DISPATCH_ALERT as the manual route; the stream fan-out pages.
+const cadIngressEmailDomain = config.get("cadIngressEmailDomain");
+// Optional: the CAD dispatch centres' egress CIDRs, comma-separated. When set, the webhook API's
+// resource policy refuses every other source address before anything runs (security M4).
+const cadWebhookAllowedCidrs = (config.get("cadWebhookAllowedCidrs") ?? "")
+  .split(",")
+  .map((cidr) => cidr.trim())
+  .filter((cidr) => cidr.length > 0);
+if (cadIngressEmailDomain === undefined) {
+  pulumi.log.warn(
+    "No boxalarm-infra:cadIngressEmailDomain: the CAD email path is not created (webhook only). " +
+      "See docs/runbooks/first-deploy.md, 'CAD ingress'.",
+  );
+}
+export const cadIngress = new CadIngress("cad-ingress", {
+  env,
+  deptId,
+  alertingTableArn: alertingTable.tableArn,
+  alertingCmkArn: alertingTable.cmkArn,
+  alertingTableName: alertingTable.tableName,
+  alertingTopicArn: messagingAlerting.topic.arn,
+  busName: platformBus.busName,
+  pageTopicArn: alertingAlarms.pageTopic.arn,
+  opsTopicArn: chiefNotificationTopic.topicArn,
+  logGroup: alertingLogGroup,
+  permissionsBoundaryArn: alertingBoundaryArn,
+  ...(cadIngressEmailDomain !== undefined ? { emailDomain: cadIngressEmailDomain } : {}),
+  ...(cadWebhookAllowedCidrs.length > 0 ? { webhookAllowedCidrs: cadWebhookAllowedCidrs } : {}),
+});
+
+// The chief's CAD sources settings (Cedar View/ManageCadIngress) and webhook key rotation.
+export const cadSources = new CadSources("cad-sources", {
+  env,
+  platformTableName: platformTable.tableName,
+  platformTableArn: platformTable.tableArn,
+  policyStoreArn: policyStore.policyStoreArn,
+  policyStoreId: policyStore.policyStoreId,
+  logGroup: platformLogGroup,
+  httpApi,
+  webhookUrl: cadIngress.webhookUrl,
+  webhookUsagePlanId: cadIngress.webhookUsagePlan.id,
+  ...(cadIngressEmailDomain !== undefined ? { emailDomain: cadIngressEmailDomain } : {}),
 });
 
 // E1-S13-INFRA #38: eligibility-snapshot staleness schedule + alarm.
@@ -514,6 +957,7 @@ export const eligibilityStaleness = new EligibilityStaleness("eligibility-stalen
   env,
   deptId,
   alertingTableArn: alertingTable.tableArn,
+  alertingCmkArn: alertingTable.cmkArn,
   alertingTableName: alertingTable.tableName,
   pageTopicArn: alertingAlarms.pageTopic.arn,
   logGroup: alertingLogGroup,
@@ -525,11 +969,82 @@ export const alertingCanary = new AlertingCanary("alerting-canary", {
   env,
   deptId,
   alertingTableArn: alertingTable.tableArn,
+  alertingCmkArn: alertingTable.cmkArn,
   alertingTableName: alertingTable.tableName,
   pageTopicArn: alertingAlarms.pageTopic.arn,
   logGroup: alertingLogGroup,
   permissionsBoundaryArn: alertingBoundaryArn,
 });
+
+// PR #324 follow-up: alerting-table outbox -> platform-bus bridge (the allow-listed,
+// one-way path incident-service's dispatch/roster consumers depend on).
+export const alertingOutboxDrain = new AlertingOutboxDrain("alerting-outbox-drain", {
+  pageTopicArn: alertingAlarms.pageTopic.arn,
+  env,
+  alertingTableName: alertingTable.tableName,
+  alertingTableArn: alertingTable.tableArn,
+  alertingStreamArn: alertingTable.streamArn,
+  alertingCmkArn: alertingTable.cmkArn,
+  busName: platformBus.busName,
+  busArn: platformBus.busArn,
+  logGroup: alertingLogGroup,
+  permissionsBoundaryArn: alertingBoundaryArn,
+});
+
+// architecture.md §2/§4.3: GET health/liveness + health/readiness for every service, one
+// unauthenticated Lambda per service. Per service rather than one shared Lambda: Lambda has
+// no idle cost, so ten cost the same as one per request, and a shared one would have to
+// read both planes' tables across the alerting IAM boundary. Readiness reads each service's
+// own table only. Alerting's also carries the N1.6 canary signal.
+const LOB_HEALTH_ROUTE_PREFIXES: Record<Exclude<ServiceName, "alerting-service">, string> = {
+  "platform-service": "/api/v1/platform",
+  "personnel-service": "/api/v1/personnel",
+  "apparatus-service": "/api/v1/apparatus",
+  "incident-service": "/api/v1/incidents",
+  "training-service": "/api/v1/training",
+  "reporting-service": "/api/v1/reporting",
+  "inspections-service": "/api/v1/inspections",
+  "inventory-service": "/api/v1/inventory",
+  // architecture.md lists a bare /notifications prefix; the deployed inbox lives under
+  // /api/v1/notifications (api-gap P1 #11), so its health pair does too.
+  "notification-service": "/api/v1/notifications",
+};
+
+export const serviceHealth: ServiceHealth[] = [
+  new ServiceHealth("alerting-health", {
+    env,
+    serviceName: "alerting-service",
+    routePrefix: "/api/v1/alerting",
+    httpApi,
+    logGroup: alertingLogGroup,
+    tableName: alertingTable.tableName,
+    tableArn: alertingTable.tableArn,
+    tableCmkArn: alertingTable.cmkArn,
+    queryLeadingKeys: [`DEPT#${deptId}#CANARY#*`],
+    environment: {
+      CANARY_ENABLED: String(alertingCanary.enabled),
+      CANARY_DEPT_ID: deptId,
+      CANARY_MAX_AGE_SECONDS: String(alertingCanary.maxRunAgeSeconds),
+    },
+    permissionsBoundaryArn: alertingBoundaryArn,
+  }),
+  ...(Object.keys(LOB_HEALTH_ROUTE_PREFIXES) as (keyof typeof LOB_HEALTH_ROUTE_PREFIXES)[]).map(
+    (serviceName) => {
+      const table = serviceName === "incident-service" ? incidentTable : platformTable;
+      return new ServiceHealth(`${serviceName.replace(/-service$/, "")}-health`, {
+        env,
+        serviceName,
+        routePrefix: LOB_HEALTH_ROUTE_PREFIXES[serviceName],
+        httpApi,
+        logGroup: serviceLogGroupByName[serviceName],
+        tableName: table.tableName,
+        tableArn: table.tableArn,
+        tableCmkArn: serviceName === "incident-service" ? incidentTable.cmkArn : undefined,
+        eventBus: { name: platformBus.busName, arn: platformBus.busArn },
+      });
+    },
+  ),
+];
 
 // Stack outputs for boxalarm-ui / later children.
 export const COGNITO_ISSUER = cognitoIssuer;
@@ -541,3 +1056,16 @@ export const INCIDENT_TABLE_NAME = incidentTable.tableName;
 export const ALERTING_TABLE_NAME = alertingTable.tableName;
 export const VERIFIED_PERMISSIONS_POLICY_STORE_ID = policyStore.policyStoreId;
 export const PLATFORM_BUS_NAME = platformBus.busName;
+// Where a CAD POSTs, and where its dispatch email goes (MX -> inbound-smtp.us-east-1.amazonaws.com).
+export const CAD_WEBHOOK_URL = cadIngress.webhookUrl;
+export const CAD_INGRESS_EMAIL_DOMAIN = cadIngressEmailDomain ?? null;
+// false = that channel has no provider endpoint (OQ-3) and cannot page; see channel-workers.ts.
+export const ALERTING_VENDOR_ENDPOINTS_CONFIGURED = channelWorkers.vendorEndpointConfigured;
+
+// Review M4: every route is registered by now. Fix the reserved alerting routes' per-route
+// throttles, and fail the deploy if one of them was renamed and never registered.
+httpApi.sealRouteSettings({ requireAll: true });
+export const httpApiAlarms = httpApi.addAlarms(
+  chiefNotificationTopic.topicArn,
+  alertingPageTopic.topicArn,
+);

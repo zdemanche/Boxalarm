@@ -1,101 +1,39 @@
-# alerting-service
+# Alerting Service
 
 ## Purpose & Boundaries
-
-Isolated life-safety alerting plane. Dispatch ingress, exactly-once fan-out to eligible members across push/SMS/voice, per-member channel escalation, department-level tone ladder (re-toning the whole eligible roster up to 2 more times based on aggregate response), mutual-aid prompt, delivery receipts, self-test, continuous production canary, alert audit log. This is service 1 of 10, Wave 1. N1/N1.5/N1.7 govern the whole shape of this service: it must degrade **independently** of every other module in the platform, enforced as an IAM boundary (no alerting execution role can read/write `platform-service` or `incident-service` tables). Own DynamoDB table, own SNS FIFO topic, own SQS FIFO queues + DLQs, own Lambda reserved concurrency — shares nothing with any other service.
+Life-safety plane. Owns CAD ingress (SES inbound email + signed JSON webhook on its own REST API + manual-entry adapter; `DispatchIngressPort` -> `DISPATCH_ALERT`), fan-out, per-member channel escalation (push+SMS parallel at T+0, voice at T+N default 75s, F9.3-configurable), department tone ladder (Tone Evaluator: T+180s -> tone 2, T+360s -> tone 3), mutual-aid prompt (officer manual adapter), delivery receipts, live roster, self-test (F1.10), canary (N1.6), audit log. Handlers inside this one deployment unit: Live Roster, Canary Monitor, Tone Evaluator, receipt/webhook adapters. Own table, own SNS FIFO topic, SQS FIFO queues (push, sms, voice, receipts) + DLQs, reserved concurrency, dedicated `messaging-alerting.ts`. Execution roles hold NO permission on platform/incident tables. Self-test/canary use identical pipeline flagged `isTest: true`. No Valkey on this path. Push is direct APNs/FCM (no vendor); SMS and voice must be two different commercial vendors (OQ-3).
 
 ## Interfaces
-
-Base path `/api/v1/alerting/...`, JSON camelCase, RFC 7807 errors + `traceId`. Auth: `Cognito` = end-user JWT; `Cognito(admin)` = JWT + Verified Permissions chief/admin/officer check; `Vendor` = webhook signature/shared secret.
-
-| Method | Path | Description | Auth |
-|---|---|---|---|
-| POST | `/ingress/{adapter}` | CAD/vendor dispatch ingress, adapter-specific payload | Vendor |
-| POST | `/dispatches` | Manual dispatch entry (N1.8 degraded-mode fallback) | Cognito(admin) |
-| GET | `/dispatches/{dispatchId}` | Dispatch detail; `toneLadder` object (`status`, `currentToneSequence`, `nextToneAt`, `predicateGaps`) | Cognito |
-| GET | `/dispatches/{dispatchId}/roster` | Live response roster (F1.7) | Cognito |
-| POST | `/dispatches/{dispatchId}/responses` | Member response confirmation + ETA (F1.6) | Cognito |
-| GET | `/dispatches/{dispatchId}/receipts` | Per-member sent/delivered/opened receipts (F1.3) | Cognito(admin) |
-| POST | `/self-test` | Trigger self-test alert to caller's own devices (F1.10) | Cognito |
-| GET | `/self-test/{testId}` | Self-test result | Cognito |
-| POST | `/receipts/push` \| `/receipts/sms` \| `/receipts/voice` | Provider delivery/status/call-outcome callbacks | Vendor |
-| GET | `/audit` | Alert delivery audit log, filterable (F1.11) | Cognito(admin) |
-| GET | `/canary/status` | Current canary health (N1.6) | Cognito(admin) |
-| POST | `/dispatches/{dispatchId}/tone-ladder/advance` | Fire next tone now, bypassing timer/predicate (F1.14) | Cognito(admin) |
-| POST | `/dispatches/{dispatchId}/tone-ladder/halt` | Halt scheduled tone evals + suppress auto mutual-aid (F1.14) | Cognito(admin) |
-| POST | `/dispatches/{dispatchId}/mutual-aid/trigger` | Manually trigger mutual aid pre-tone-3 (F1.13) | Cognito(admin) |
-| POST | `/dispatches/{dispatchId}/mutual-aid/acknowledge` | Confirm mutual-aid phone call made; notes | Cognito(admin) |
-| GET | `/health/liveness` \| `/health/readiness` | Health (readiness includes N1.6 canary signal) | none |
+Alerting-plane routes (17 sealed by `requireAll`; fail-open authorizer): POST `/api/v1/alerting/dispatches` (manual, admin), GET `/dispatches` (list), GET `/dispatches/{dispatchId}` (detail + `toneLadder{status,currentToneSequence,nextToneAt,predicateGaps}`), GET `/dispatches/{id}/roster`, POST `/dispatches/{id}/responses`, GET `/home-locality`, POST `/self-test`, GET `/self-test/{testId}`, POST `/devices/state`, POST `/dispatches/{id}/tone-ladder/advance|halt`, POST `/dispatches/{id}/mutual-aid/trigger|acknowledge` (admin), riding board GET/POST `/api/v1/apparatus/riding-board/{dispatchId}[/assignments]`, push-token register/remove. Fail-closed officer reads: GET `/dispatches/{id}/receipts`, `/dispatches/{id}/diagnostics`, `/diagnostics/{memberId}`, `/audit`, `/canary/status`, `/delivery-baseline`. Vendor (signature auth): POST `/receipts/push|sms|voice`; `/ingress/{adapter}` (CAD webhook actually on own REST API, per-source path `<CAD_WEBHOOK_URL>/<deptId>.<sourceId>`, `x-api-key` = capacity partition not credential, 5 rps/burst 5). Health: `/health/liveness`, `/health/readiness` (readiness includes canary; hard deps DynamoDB + SNS/SQS).
+Responses: ETA optional, epoch seconds (refused on NOT_RESPONDING; >1h before / >24h after answer time recorded null + `EtaOutOfRange`); latest answer decided by client `answeredAtMs` (capped at server clock, <=24h old), receipt time breaks ties; stale answer -> 409 `SUPERSEDED`; replay via `clientAnswerId` or `Idempotency-Key` (7-day guard, `Idempotent-Replayed: true` on 200 only), reuse for different answer -> 409 `ANSWER_ID_REUSED`. Client `toneSequence` is clamped to stored `currentToneSequence`.
+CAD webhook auth: `HMAC-SHA256(secret, timestamp + "." + rawBody)`, constant-time, two active keys, +-300s, replay cache TTL 900s. Email: SPF PASS + DKIM PASS + allowlisted single From + DMARC/aligned DKIM, Message-ID+signature replay guard 24h; address `dispatch+<deptId>.<sourceId>.<token>@<cadIngressEmailDomain>` (token is noise cut, not auth).
 
 ## Data Ownership
-
-Own DynamoDB table (`alerting-service`), on-demand, PITR on, Streams on (feeds a future OSI pipeline only, not consumed in v1), customer-managed KMS key.
-
-- **DISPATCH_ALERT** — `pk=DEPT#{deptId}#DISPATCH#{dispatchId}`, `sk=METADATA`. Core dispatch record: address/crossStreets (**PII**), narrative, hydrant/pre-plan refs, `idempotencyKey` (CAD dedup), `toneLadderStatus` (`ACTIVE`|`HALTED_MANUAL`|`COMPLETED`), `currentToneSequence`, `nextToneAt`. GSI2: `DEPT#{deptId}` / `DISPATCH#{dispatchedAt}`.
-- **DELIVERY_RECEIPT** — `sk=RECEIPT#{memberId}#{channel}#{toneSequence}`. One immutable item per member per channel per tone attempt — never mutated across escalation. `channel` (`PUSH`|`SMS`|`VOICE`) is the routing/dedup key; `channelTier` (`primary`|`escalation`) is bookkeeping only. `idempotencyKey = {dispatchId}#{toneSequence}#{memberId}#{channel}`, `attribute_not_exists` guard. No TTL (life-safety evidence). GSI1: `MEMBER#{memberId}` / `RECEIPT#{sentAt}#{dispatchId}`.
-- **DISPATCH_ROSTER_ENTRY** — `sk=ROSTER#{memberId}`. Member-level mutable rollup for F1.7 live view: `ackStatus`, `ackAt`, `eta`, `assignedApparatusId`, denormalized `quals`, `currentChannelTier`, `lastAnsweredTone`. Last-writer-wins on `ackAt`. No TTL.
-- **DISPATCH_RESPONSE_RECORD** — `sk=RESPONSE#{memberId}#{answeredAt}`. Append-only immutable answer history (every answer ever given, any tone). No TTL.
-- **MEMBER_ELIGIBILITY_SNAPSHOT** — `pk=DEPT#{deptId}#ELIGIBILITY`, `sk=MEMBER#{memberId}`. Denormalized eligibility copy (C-2 isolation invariant), maintained by `personnel.member.updated`/`personnel.eligibility.changed`/`personnel.availability.changed`. Fields: `active`, `quals`, `roles`, `contactChannels` (**PII**), `availabilityState`, `snapshotUpdatedAt`. **Fan-out reads this, never the platform table.** Staleness alarm at 15 min; propagation target <30s p99.
-- **PRE_PLAN_COPY** — `pk=DEPT#{deptId}#PREPLAN`, `sk=OCCUPANCY#{occupancyId}`. Denormalized pre-plan copy (F1.8/F6.2), hydrant refs resolved at copy-write time, never at fan-out.
-- **ALERT_RULES_COPY** — `pk=DEPT#{deptId}#ALERT_RULES`, `sk=METADATA`. Denormalized copy of tone-ladder config: `toneLadder` (`tone2AtSeconds`/`tone3AtSeconds`/`mutualAidAfterTone`), `retoneRespondingMembers` (default `true`), `voiceEscalatesPerTone` (default `true`), `defaultRule`/`callTypeOverrides` (`minResponders`, `requiredQuals`). Maintained by `platform.config.alert_rules.updated`.
-- **ESCALATION_EVENT** — `sk=ESCALATION#{memberId}#{toneSequence}#{escalatedAt}`. Per-member channel escalation log.
-- **TONE_EVENT** — two shapes: singleton fire-guard `sk=TONE#{toneSequence}` (conditional-put guard, `attribute_not_exists`), and timestamped audit row `sk=TONE#{toneSequence}#{evaluatedAt}` (append-only). `outcome`: `FIRED`|`FIRED_MANUAL_OVERRIDE`|`SKIPPED_PREDICATE_MET`|`SKIPPED_ALREADY_FIRED`|`SKIPPED_MANUALLY_HALTED`|`SKIPPED_NO_CONFIG`.
-- **MUTUAL_AID_EVENT** — `sk=MUTUALAID#SINGLETON` (fixed, one per dispatch ever, conditional put). `adapterUsed=OFFICER_MANUAL_PROMPT`; `officersNotified` from `MEMBER_ELIGIBILITY_SNAPSHOT.roles` containing `OFFICER`|`CHIEF`; `notes` free text (guidance-only PII scrub, not enforced).
-- **SELF_TEST_RUN** — `pk=DEPT#{deptId}#MEMBER#{memberId}`, `sk=SELFTEST#{runAt}`. TTL 365 days.
-- **CANARY_RUN** — `pk=DEPT#{deptId}#CANARY#{YYYY-MM-DD}`, `sk=RUN#{ranAt}`. Date-bucketed. TTL 90 days.
+Alerting table (Streams on, PITR, CMK KMS). Entities/keys: DISPATCH_ALERT `pk=DEPT#{deptId}#DISPATCH#{dispatchId}` `sk=METADATA` (gsi2pk `DEPT#{deptId}`, gsi2sk `DISPATCH#{dispatchedAt}`; fields incl. idempotencyKey, toneLadderStatus ACTIVE|HALTED_MANUAL|COMPLETED, currentToneSequence, nextToneAt, locality, hydrantRefs, prePlanRefs); DELIVERY_RECEIPT same pk, `sk=RECEIPT#{memberId}#{channel}#{toneSequence}`, `idempotencyKey={dispatchId}#{toneSequence}#{memberId}#{channel}`, gsi1pk `MEMBER#{memberId}` gsi1sk `RECEIPT#{sentAt}#{dispatchId}`, PUSH-only `deviceSends`/`deviceAttempts`; DISPATCH_ROSTER_ENTRY `sk=ROSTER#{memberId}` (ackStatus NONE|RESPONDING|NOT_RESPONDING|DIRECT_TO_SCENE, lastAnsweredTone, denormalized quals); DISPATCH_RESPONSE_RECORD append-only `sk=RESPONSE#{memberId}#{answeredAt}`; ESCALATION_EVENT `sk=ESCALATION#{memberId}#{toneSequence}#{escalatedAt}`; TONE_EVENT singleton guard `sk=TONE#{toneSequence}` + audit row `TONE#{toneSequence}#{evaluatedAt}` (outcomes FIRED|FIRED_MANUAL_OVERRIDE|SKIPPED_PREDICATE_MET|SKIPPED_ALREADY_FIRED|SKIPPED_MANUALLY_HALTED|SKIPPED_NO_CONFIG); MUTUAL_AID_EVENT `sk=MUTUALAID#SINGLETON` (conditional put), officer prompt item `sk=MAPROMPT#{memberId}#PUSH`, idempotencyKey `{dispatchId}#MUTUALAID#{memberId}#push`; DISPATCH_UPDATE immutable items; CADUPDATE claims `CADUPDATE#{updateId}#{memberId}#PUSH`; SELF_TEST_RUN `pk=DEPT#{deptId}#MEMBER#{memberId}` `sk=SELFTEST#{runAt}` TTL 365d; CANARY_RUN `pk=DEPT#{deptId}#CANARY#{YYYY-MM-DD}` `sk=RUN#{ranAt}` TTL 90d. Denormalized: MEMBER_ELIGIBILITY_SNAPSHOT `pk=DEPT#{deptId}#ELIGIBILITY` `sk=MEMBER#{memberId}` (active, quals, roles, contactChannels one PUSH entry per installation, availabilityState AVAILABLE|MARKED_OFF|LOA; per-field-group clocks activeUpdatedAt/availabilityUpdatedAt/qualsUpdatedAt/rolesUpdatedAt/pushContactsUpdatedAt/phoneUpdatedAt, snapshotUpdatedAt alarm at 15min, propagation <30s p99); PRE_PLAN_COPY `pk=DEPT#{deptId}#PREPLAN` `sk=OCCUPANCY#{occupancyId}`; HYDRANT_COPY; ALERT_RULES_COPY `pk=DEPT#{deptId}#ALERT_RULES` `sk=METADATA`; CAD_INGRESS_COPY. No TTL on receipts/escalations/dispatches/responses/tone/mutual-aid (7yr default via export job). No TTL on roster/snapshot/copies.
 
 ## Events Produced
-
-- `alerting.dispatch.normalized` — per `{member, channel, toneSequence}` publish (one publish per triple, not per member); `toneSequence` defaults 1, tones 2/3 carry the literal value from the invoking schedule payload, never incremented at publish time.
-- `alerting.delivery.receipt` — normalized provider webhook status, `toneSequence` included.
-- `alerting.escalation.triggered` — per-member channel escalation (push/SMS → voice), `reason: "no_ack_at_tier"`.
-- `alerting.tone.escalated` — dept-level tone fire, audit/observability only, not delivery-critical. Also republished across the one-way bridge to the LOB plane.
-- `alerting.mutual_aid.triggered` — mutual-aid trigger fact. Also republished across the one-way bridge.
-- `alerting.canary.result` — direct to CloudWatch PutMetricData, bypasses the queue under test.
-- `alerting.dispatch.received` — republished across the one-way bridge (allow-listed).
-- `alerting.response.confirmed` — republished across the one-way bridge (allow-listed).
-
-Transport for all of the above: SNS FIFO `boxalarm-{env}-alerting-topic.fifo`, `MessageGroupId=dispatchId`, `MessageDeduplicationId=hash(dispatchId, toneSequence, memberId, channel)` → per-channel SQS FIFO queues (`alerting-push-queue.fifo`, `alerting-sms-queue.fifo`, `alerting-voice-queue.fifo`, `alerting-receipts-queue.fifo`), each with its own DLQ, `maxReceiveCount: 3`.
+`alerting.dispatch.received`; `alerting.dispatch.normalized` (payload dispatchId, memberId, channel, channelTier, toneSequence, incidentType, address, crossStreets, mapLink, narrative, prePlanLink, hydrantLink, eligibilityBasis; one publish per {member,channel,toneSequence}; attrs channel/channelTier/toneSequence; source `alert-fanout-service`); `alerting.delivery.receipt` (dispatchId, memberId, channel, channelTier, toneSequence, status, providerTimestamp, providerMessageId); `alerting.escalation.triggered` (normalized shape + `reason: "no_ack_at_tier"`, channel=voice, channelTier=escalation); `alerting.tone.escalated` (dispatchId, toneSequence, firedAt, outcome, predicateSnapshot, eligibleMemberCount; source `tone-evaluator`); `alerting.mutual_aid.triggered` (dispatchId, triggeredAt, reason, predicateSnapshot, adapterUsed, officersNotified); `alerting.canary.result` (runId, channelsTested, endToEndLatencyMs, outcome; direct to CloudWatch PutMetricData, not queued); `alerting.response.confirmed`. One-way bridge: only `alerting.dispatch.received`, `alerting.response.confirmed`, `alerting.tone.escalated`, `alerting.mutual_aid.triggered` republished to platform bus. Audit events never block member sends.
 
 ## Events Consumed
-
-- `personnel.member.updated`, `personnel.eligibility.changed`, `personnel.availability.changed` — maintain `MEMBER_ELIGIBILITY_SNAPSHOT`.
-- `inspections.preplan.updated`, `inspections.hydrant.updated` — maintain `PRE_PLAN_COPY`.
-- `platform.config.alert_rules.updated` — maintain `ALERT_RULES_COPY`. Transport: `boxalarm-{env}-platform-bus` → `alert-rules-copy-queue` + DLQ (`maxReceiveCount: 5`) — this is the one sanctioned inbound direction into the alerting plane (same direction as the other two denormalized-copy events, not against the one-way bridge).
+`personnel.member.updated`, `personnel.eligibility.changed`, `personnel.availability.changed` -> eligibility snapshot (per-field clocks); `inspections.preplan.updated`, `inspections.hydrant.updated` -> PRE_PLAN_COPY/HYDRANT_COPY; `platform.config.alert_rules.updated` -> ALERT_RULES_COPY via `alert-rules-copy-queue`+DLQ (maxReceive 5); CAD_INGRESS_COPY config copy. Provider webhooks -> receipt service.
 
 ## Dependencies
-
-**Internal:** none synchronous — by design (C-2 isolation invariant), only event-driven denormalized copies from `personnel-service`, `inspections-service`, `platform-service`. `incident-service` correlates via a shared, ID-only `dispatchId`/`incidentId` (no table join).
-
-**External:** APNs / FCM (push, unavoidable single vendor per platform but independent of SMS/voice); SMS vendor (**unselected — OQ-3**); Voice vendor (**unselected, must differ from SMS vendor — OQ-3**); CAD/dispatch vendor via `DispatchIngressPort` (**unselected — OQ-1/OQ-2, blocking**).
+internal: platform-service (config/outbox events), personnel-service, inspections-service, apparatus-service (riding board), infrastructure, mobile-app. external: APNs/FCM direct, SMS vendor (TBD, Twilio recommended), voice vendor (TBD, AWS End User Messaging Voice recommended), SES, EventBridge Scheduler, SNS FIFO, SQS FIFO, CloudWatch, S3 Object Lock archive, Secrets Manager (APNs/FCM signing, read-only to LOB push worker).
 
 ## Gotchas & Constraints
-
-- **`channelTier` is NEVER a routing or dedup input.** Push and SMS share tier `primary`; a tier-keyed dedup ID makes their two publishes byte-identical and SNS FIFO silently discards the SMS one — no error, no DLQ, no receipt. This is a named, previously-shipped defect class (#119) — regression test required: one dispatch, one member, assert two distinct provider sends at T+0.
-- **`toneSequence` must be a literal fixed at schedule-creation time, never computed from observed state at fire time.** EventBridge Scheduler is at-least-once; deriving "next tone = current+1" at fire time lets a redelivered invocation mint a tone early (duplicate-storm generator on the tone axis).
-- **Audience for tones 2/3 is NEVER filtered by `ackStatus`** — re-resolved fresh from `MEMBER_ELIGIBILITY_SNAPSHOT` every tone; only ineligibility (marked off, unqualified, inactive) removes a member. A `NOT_RESPONDING` or `RESPONDING` answer at tone 1 does not exempt a member from tone 2/3 by default.
-- **Conditional-put idempotency happens in the channel worker, immediately before the provider send call — not only at fan-out.** A fan-out-only put leaves a redelivery outside FIFO's 5-minute dedup window unguarded against the provider.
-- **Never `BatchWriteItem` for any guarded write** — it cannot carry a `ConditionExpression`. Use `TransactWriteItems` or per-item `PutItem`.
-- **Officer manual mutual-aid push uses `MAPROMPT#{memberId}#PUSH`, never `RECEIPT#...`** — an already-toned officer already holds a `RECEIPT#` key at that sk shape, and reusing it would silently no-op.
-- **No cache on the alerting hot path, ever.** Eligibility/pre-plan/config reads come straight from the denormalized DynamoDB copies in this table.
-- **APNs `apns-collapse-id` and the Android notification id must be `{dispatchId}#{toneSequence}`, not `dispatchId` alone** — a dispatchId-only id lets the OS coalesce a tone-2 push into tone-1's existing notification, silently swallowing the re-tone at the device even though the backend correctly sent it (mobile-app concern, but the backend key discipline is what makes it possible to get right).
-- **`ALERT_RULES_COPY` absent (greenfield, no config written)** → Tone Evaluator does not fire blind: outcome `SKIPPED_NO_CONFIG`, CloudWatch alarm raised. Manual advance remains available regardless.
-- **`PUT /platform/config` (owned by platform-service) must reject a `requiredQuals` entry naming a qualification no currently-eligible member holds** — an unvalidated impossible predicate fires tone 3 + mutual aid on every dispatch of that call type. Validator is a named obligation, not designed in the source document.
-- **N1.7 is NOT literally satisfied** — the SNS FIFO topic, the DynamoDB table, the region, and the Fan-out Lambda are each an accepted, documented single point of failure. The retained parallel tone-out paging (N1.9) is the compensating control and is therefore not optional until this changes. Chaos testing must be scoped to the channel layer only, never the topic/table/region layer.
-- **`ToneFiredZeroReceipts` custom metric** — emitted by the Tone Evaluator whenever a `FIRED`/`FIRED_MANUAL_OVERRIDE` `TONE_EVENT` produces zero corresponding `DELIVERY_RECEIPT` items for the expected audience within a short window — P0 page-immediately alarm, the direct instrument for a silently-swallowed re-tone.
+- Conditional put happens once in the channel worker immediately before the provider send (fan-out puts create receipt rows). Never BatchWriteItem (no ConditionExpression).
+- Mutual-aid prompt branch: worker branches on `alertKind` (`dispatch` default key `RECEIPT#...`; `mutual_aid_prompt` key `MAPROMPT#{memberId}#PUSH`, ignores toneSequence).
+- Tone-ladder advance: conditional UpdateItem `currentToneSequence = :expectedCurrentToneSequence`, sets +1, then AP 5b; advance does not re-base schedules. Fire = TransactWriteItems: `TONE#{n}` attribute_not_exists + ConditionCheck `toneLadderStatus <> HALTED_MANUAL`. Halt: suppresses future tones + automatic mutual aid; an already-scheduled voice call STILL goes out (escalation never reads HALTED_MANUAL; `haltCancelsPendingVoice` NOT built).
+- Missing ALERT_RULES_COPY -> `SKIPPED_NO_CONFIG` + alarm, never guess. Copy consumer clamps every numeric rule to platform bounds; tone 3 <= tone 2 resets both to defaults. Copy carries only toneLadder.{tone2AtSeconds,tone3AtSeconds,escalationThresholdSeconds} and defaultRule.{minResponders,requiredQuals}.
+- Every runtime schedule: unique name + `ActionAfterCompletion: DELETE`; names schedule DLQ `boxalarm-{env}-alerting-schedule-dlq`; handler failures -> `...-alerting-escalation-onfailure` (paged).
+- Multi-device push: one publish/receipt/guard per member per channel per tone; per-device max 2 attempts (`MAX_DEVICE_SEND_ATTEMPTS`); once any device accepted, transient-failed devices set FAILED and NOT retried (FIFO group hold); redelivery only when no device accepted; UNAVAILABLE = no APNs-env credentials (`PushCredentialsUnavailable`); `SendFailed` alarmed; per-device APNs environment; registration keeps newest 10, releases another member's entry on exact token match; invalidation marks only the dead token.
+- CAD: authenticate before reading any field; unauthenticated never pages (dropped, counted, alarmed, quarantined); authenticated always pages (parse failure -> raw text, address `SEE DISPATCH TEXT`, VERIFY flag; `CadParseTimeout`). Incident number = dispatch identity (24h; no number -> 10min text fingerprint); later message = UPDATE (no tone ladder rerun, no second incident draft, non-escalating push-only to existing roster; RAW never overwrites structured address). Dept comes from source config, never body.
+- ETA/answers: roster update `attribute_not_exists(ackAt) OR :newAckAt > ackAt`; response record always lands.
+- Alarm `ToneFiredZeroReceipts` is P0. Snapshot never rewritten by replaying old DLQ events (repair = re-emit member state, `docs/runbooks/eligibility-snapshot-repair.md`).
+- Fan-out latency 5s p99 applies to tone 1; tones 2/3 share the same MessageGroupId — load test must cover tone-2/3 volume.
+- Retained notification identity: APNs `apns-collapse-id` and Android notification id = `{dispatchId}#{toneSequence}` (see mobile-app).
+- Webhook receipts must round-trip `toneSequence` to rebuild exact SK.
+- N1.9 parallel run with tone-out is mandatory compensating control.
 
 ## Source Sections
-
-- Architecture Overview & diagram (`:7-104`)
-- Backend §0-1.3a Service architecture, CAD ingress, alerting pipeline, tone ladder (`:110-246`)
-- Backend §1.4 Cross-service integration / messaging transport (`:249-268`)
-- Backend §2 alerting-service API endpoints (`:276-299`)
-- Backend §3-4 Tech stack, Auth, Health checks, Deployment strategy (`:448-509`)
-- Data Model §3.1 `alerting-service` table entities (`:619-844`)
-- Data Model §3.4 Retention/TTL (`:1321-1333`)
-- Data Model §4 Access patterns 1-11 (`:1357-1418`)
-- Events §Alerting domain, producer/consumer table (`:1520-1821`)
-- Eventing Architecture §1-3, §7-7a (`:1557-1621`, `:1836-1851`)
-- Cross-Cutting: Single Points of Failure table (`:2600-2615`)
-- Cross-Cutting: Data Protection (encryption, session policy) (`:2617-2629`)
-- Open Questions OQ-1 through OQ-25 alerting-relevant items (`:2650-2719`)
+Overview/diagram (lines 7-104); Backend §0 (110-116); §1.1 (122-150); §1.2 CAD (152-169); §1.3 alerting pipeline (171-253); §1.3a tone ladder (255-265); §1.4 transport (267-284); §2 alerting-service endpoints (322-352); Data Model §3.1 (695-922); §3.4 retention (1410-1422); Access patterns 1-9, 11, 37 (1447-1467, 1494); Events §1-2, §4.1, §5-§7a (1651-1709, 1751-1877, 1891-1943); Cross-Cutting SPOF (2704-2719)

@@ -56,11 +56,14 @@ describe("Availability — availability-changed consumer (#207)", () => {
     const httpApi = new HttpApi("test-availability-http-api", {
       env: "dev",
       userPoolId: pulumi.output("pool-1"),
+      platformTableName: "platform-table",
+      platformTableArn: "arn:aws:dynamodb:us-east-1:123456789012:table/platform",
       allowedClientIds: [pulumi.output("client-1")],
       platformLogGroup: logGroup,
     });
     const platformBus = new PlatformBus("test-availability-platform-bus", { env: "dev" });
     return new Availability("test-availability", {
+      pageTopicArn: "arn:aws:sns:us-east-1:123456789012:boxalarm-dev-alerting-page",
       env: "dev",
       platformTableName: pulumi.output("platform-table"),
       platformTableArn: pulumi.output("arn:aws:dynamodb:us-east-1:123456789012:table/platform"),
@@ -70,6 +73,7 @@ describe("Availability — availability-changed consumer (#207)", () => {
       httpApi,
       platformBus,
       alertingTableArn: pulumi.output("arn:aws:dynamodb:us-east-1:123456789012:table/alerting"),
+      alertingCmkArn: "arn:aws:kms:us-east-1:123456789012:key/alerting-cmk",
       alertingTableName: pulumi.output("alerting-table"),
       alertingLogGroup,
       alertingPermissionsBoundaryArn: pulumi.output(
@@ -99,10 +103,11 @@ describe("Availability — availability-changed consumer (#207)", () => {
     expect(comparison).toBe("GreaterThanThreshold");
   });
 
-  it("routes only personnel.availability.changed onto the queue", async () => {
+  it("routes only personnel-service's personnel.availability.changed onto the queue", async () => {
     const availability = await build();
     const pattern = await resolve(availability.availabilityChangedQueueConsumer.rule.eventPattern);
     expect(JSON.parse(pattern as string)).toEqual({
+      source: ["personnel-service"],
       "detail-type": ["personnel.availability.changed"],
     });
   });
@@ -113,6 +118,54 @@ describe("Availability — availability-changed consumer (#207)", () => {
     expect(policyJson).toContain("table/alerting");
     expect(policyJson).not.toContain("table/platform");
     expect(policyJson).not.toContain("table/incident");
+  });
+
+  it("grants the availability-changed consumer every item action of its transaction (Put + Update)", async () => {
+    const availability = await build();
+    const policyJson = await resolve(availability.availabilityChangedConsumer.rolePolicy.policy);
+    const statements = (
+      JSON.parse(policyJson) as { Statement: { Sid?: string; Action: string[] }[] }
+    ).Statement;
+    const write = statements.find((s) => s.Sid === "AlertingTableWrite");
+    expect(write?.Action).toEqual(
+      expect.arrayContaining(["dynamodb:PutItem", "dynamodb:UpdateItem"]),
+    );
+  });
+
+  // Paging review MAJOR-A: list and end mark-offs early, key-scoped, Cedar-gated.
+  it("gives list and end their own Lambdas, key-scoped grants and the policy store", async () => {
+    const availability = await build();
+    type Statement = { Sid?: string; Action: string[]; Condition?: unknown; Effect: string };
+    const statementsOf = async (lambda: typeof availability.listLambda) =>
+      (JSON.parse(await resolve(lambda.rolePolicy.policy)) as { Statement: Statement[] }).Statement;
+
+    const list = await statementsOf(availability.listLambda);
+    expect(list.find((s) => s.Sid === "AvailabilityListMarkoffs")).toMatchObject({
+      Action: ["dynamodb:Query"],
+      Condition: { "ForAllValues:StringLike": { "dynamodb:LeadingKeys": ["DEPT#*#MEMBER#*"] } },
+    });
+
+    const end = await statementsOf(availability.endLambda);
+    const dynamoActions = end
+      .filter((s) => s.Effect === "Allow")
+      .flatMap((s) => s.Action)
+      .filter((a) => a.startsWith("dynamodb:"));
+    expect(dynamoActions.sort()).toEqual([
+      "dynamodb:GetItem",
+      "dynamodb:PutItem",
+      "dynamodb:UpdateItem",
+    ]);
+    // (No DeleteItem allowed: the mark-off row is never deleted, so a replayed create 409s.)
+    expect(end.find((s) => s.Sid === "AvailabilityDeleteSchedules")?.Action).toEqual([
+      "scheduler:DeleteSchedule",
+    ]);
+    for (const lambda of [availability.listLambda, availability.endLambda]) {
+      const env = await resolve(lambda.function.environment);
+      expect(env?.variables?.VERIFIED_PERMISSIONS_POLICY_STORE_ID).toBe("ps-1");
+      expect(await resolve(lambda.rolePolicy.policy)).toContain(
+        "verifiedpermissions:IsAuthorizedWithToken",
+      );
+    }
   });
 
   it("does not VPC-attach the availability-changed consumer", async () => {

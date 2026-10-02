@@ -1,4 +1,3 @@
-import { generateKeyPairSync } from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Decision, type VerifiedPermissionsClient } from '@aws-sdk/client-verifiedpermissions';
 import {
@@ -10,16 +9,16 @@ import {
 import type { CedarPrincipalContext, GuardEvent } from '@boxalarm/authz';
 
 const originalEnv = { ...process.env };
-const { privateKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
-const testPrivateKeyPem = privateKey.export({ type: 'pkcs1', format: 'pem' }).toString();
 
 beforeEach(() => {
   vi.resetModules();
   process.env.PLATFORM_TABLE_NAME = 'platform-table';
   process.env.VERIFIED_PERMISSIONS_POLICY_STORE_ID = 'ps-1';
-  process.env.CLOUDFRONT_DISTRIBUTION_DOMAIN = 'assets.boxalarm.dev';
-  process.env.CLOUDFRONT_KEY_PAIR_ID = 'KEYPAIR123';
-  process.env.CLOUDFRONT_PRIVATE_KEY_SECRET_ID = 'cf-signing-key';
+  process.env.PLATFORM_ASSETS_BUCKET_NAME = 'boxalarm-dev-platform-assets';
+  // Presigning is local SigV4: any credentials will do.
+  process.env.AWS_ACCESS_KEY_ID = 'test';
+  process.env.AWS_SECRET_ACCESS_KEY = 'test';
+  process.env.AWS_REGION = 'us-east-1';
 });
 
 afterEach(() => {
@@ -77,7 +76,7 @@ function apparatusItem() {
 function fakeDynamoClient(options: {
   readonly apparatusExists?: boolean;
   readonly onTransact?: (command: TransactWriteCommand) => Promise<unknown>;
-  readonly existingIdempotency?: { defectId: string };
+  readonly existingIdempotency?: { defectId: string; photoS3Key?: string };
 }): DynamoDBDocumentClient {
   const send = vi.fn(async (command: unknown) => {
     if (command instanceof QueryCommand && command.input.IndexName === 'GSI3') {
@@ -112,7 +111,7 @@ function fakeDynamoClient(options: {
             status: 'OPEN',
             reportedBy: 'MBR-0012',
             reportedAt: 1798050000,
-            photoS3Key: null,
+            photoS3Key: options.existingIdempotency.photoS3Key ?? null,
           },
         };
       }
@@ -124,12 +123,6 @@ function fakeDynamoClient(options: {
     return {};
   });
   return { send } as unknown as DynamoDBDocumentClient;
-}
-
-function fakeSecretsClient() {
-  return {
-    send: vi.fn().mockResolvedValue({ SecretString: testPrivateKeyPem }),
-  };
 }
 
 describe('reportDefect handler', () => {
@@ -255,10 +248,70 @@ describe('reportDefect handler', () => {
     });
   });
 
-  it('signs a photo upload URL when photo.filename is provided (training attachment pattern)', async () => {
-    const { createSecretsManagerClient } = await import('./defectPhotoUpload.js');
-    createSecretsManagerClient(fakeSecretsClient() as never);
+  it('stores the check-sheet itemCode on the defect, its event and its response', async () => {
+    const client = fakeDynamoClient({});
+    const { createReportDefectHandler } = await import('./reportDefectHandler.js');
+    const handler = createReportDefectHandler({
+      client,
+      authzClient: fakeAuthzClient('ALLOW'),
+      now: () => 1798050000,
+      newDefectId: () => 'DEF-0034',
+    });
 
+    const result = await handler(
+      buildEvent(
+        JSON.stringify({
+          description: 'Failed on the E1 truck check: Brakes.',
+          severity: 'MAJOR',
+          itemCode: 'BRAKES',
+        }),
+      ),
+    );
+
+    expect(result).toMatchObject({ statusCode: 201 });
+    expect(JSON.parse((result as { body: string }).body)).toMatchObject({ itemCode: 'BRAKES' });
+    const transact = (client.send as ReturnType<typeof vi.fn>).mock.calls.find(
+      (call) => call[0] instanceof TransactWriteCommand,
+    )?.[0] as TransactWriteCommand;
+    expect(transact.input.TransactItems?.[0]?.Put?.Item).toMatchObject({ itemCode: 'BRAKES' });
+    expect(
+      (transact.input.TransactItems?.[1]?.Put?.Item as { payload: Record<string, unknown> })
+        .payload,
+    ).toMatchObject({ itemCode: 'BRAKES' });
+  });
+
+  it('a hand-typed defect has no itemCode, and a malformed one is dropped, not refused', async () => {
+    const client = fakeDynamoClient({});
+    const { createReportDefectHandler } = await import('./reportDefectHandler.js');
+    const handler = createReportDefectHandler({
+      client,
+      authzClient: fakeAuthzClient('ALLOW'),
+      now: () => 1798050000,
+      newDefectId: () => 'DEF-0035',
+    });
+
+    const typed = await handler(
+      buildEvent(JSON.stringify({ description: 'Cracked mirror', severity: 'MINOR' })),
+    );
+    expect(JSON.parse((typed as { body: string }).body)).toMatchObject({ itemCode: null });
+    const transact = (client.send as ReturnType<typeof vi.fn>).mock.calls.find(
+      (call) => call[0] instanceof TransactWriteCommand,
+    )?.[0] as TransactWriteCommand;
+    expect(transact.input.TransactItems?.[0]?.Put?.Item).not.toHaveProperty('itemCode');
+
+    // A malformed code never costs the defect: it is filed without the code.
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const bad = await handler(
+      buildEvent(
+        JSON.stringify({ description: 'x', severity: 'MINOR', itemCode: 'Brake pressure' }),
+      ),
+    );
+    expect(bad).toMatchObject({ statusCode: 201 });
+    expect(JSON.parse((bad as { body: string }).body)).toMatchObject({ itemCode: null });
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('apparatus.defect.itemCodeIgnored'));
+  });
+
+  it('signs a photo upload URL when photo.filename is provided (training attachment pattern)', async () => {
     const { createReportDefectHandler } = await import('./reportDefectHandler.js');
     const handler = createReportDefectHandler({
       client: fakeDynamoClient({}),
@@ -284,6 +337,36 @@ describe('reportDefect handler', () => {
     };
     expect(body.photoS3Key).toBe('NICHOLS/defect/DEF-0033/photo.jpg');
     expect(body.uploadUrl).toContain(body.photoS3Key);
+  });
+
+  it('an OUT_OF_SERVICE defect with a malformed itemCode still takes the unit out of service (review M1)', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const setServiceStatus = vi.fn().mockResolvedValue(undefined);
+    const { createReportDefectHandler } = await import('./reportDefectHandler.js');
+    const handler = createReportDefectHandler({
+      client: fakeDynamoClient({}),
+      authzClient: fakeAuthzClient('ALLOW'),
+      now: () => 1798050000,
+      newDefectId: () => 'DEF-0100',
+      setServiceStatus,
+    });
+
+    const result = await handler(
+      buildEvent(
+        JSON.stringify({
+          description: 'Failed on the E1 truck check: Brakes.',
+          severity: 'OUT_OF_SERVICE',
+          itemCode: 'Brake pressure',
+        }),
+      ),
+    );
+
+    expect(result).toMatchObject({ statusCode: 201 });
+    expect(setServiceStatus).toHaveBeenCalledWith(
+      expect.anything(),
+      'platform-table',
+      expect.objectContaining({ unitId: 'E1', status: 'OUT_OF_SERVICE' }),
+    );
   });
 
   it('triggers OUT_OF_SERVICE transition when severity is OUT_OF_SERVICE without re-entering apparatus details', async () => {
@@ -346,5 +429,58 @@ describe('reportDefect handler', () => {
       (call) => call[0] instanceof TransactWriteCommand,
     );
     expect(transactCalls).toHaveLength(0);
+  });
+
+  // The offline outbox replays the POST when the first 10-minute link expired before the photo
+  // went up; without a fresh link the photo was dropped ("reported without its photo").
+  it('re-signs the stored photo key when a replay still carries a photo', async () => {
+    const client = fakeDynamoClient({
+      existingIdempotency: {
+        defectId: 'DEF-EXISTING',
+        photoS3Key: 'NICHOLS/defect/DEF-EXISTING/photo.jpg',
+      },
+    });
+    const { createReportDefectHandler } = await import('./reportDefectHandler.js');
+    const handler = createReportDefectHandler({ client, authzClient: fakeAuthzClient('ALLOW') });
+
+    const result = await handler(
+      buildEvent(
+        JSON.stringify({
+          description: 'ignored on replay',
+          severity: 'MINOR',
+          clientMutationId: 'offline-1',
+          // A replay names its own file; the stored key is what gets signed.
+          photo: { filename: 'other.jpg' },
+        }),
+      ),
+    );
+
+    expect(result).toMatchObject({ statusCode: 200 });
+    const body = JSON.parse((result as { body: string }).body) as {
+      photoS3Key: string;
+      uploadUrl?: string;
+    };
+    expect(body.photoS3Key).toBe('NICHOLS/defect/DEF-EXISTING/photo.jpg');
+    expect(body.uploadUrl).toContain('NICHOLS/defect/DEF-EXISTING/photo.jpg');
+    expect(body.uploadUrl).toContain('X-Amz-Expires=600');
+  });
+
+  it('does not sign anything on a replay without a photo', async () => {
+    const client = fakeDynamoClient({
+      existingIdempotency: {
+        defectId: 'DEF-EXISTING',
+        photoS3Key: 'NICHOLS/defect/DEF-EXISTING/photo.jpg',
+      },
+    });
+    const { createReportDefectHandler } = await import('./reportDefectHandler.js');
+    const handler = createReportDefectHandler({ client, authzClient: fakeAuthzClient('ALLOW') });
+
+    const result = await handler(
+      buildEvent(
+        JSON.stringify({ description: 'x', severity: 'MINOR', clientMutationId: 'offline-1' }),
+      ),
+    );
+
+    expect(JSON.parse((result as { body: string }).body)).not.toHaveProperty('uploadUrl');
   });
 });

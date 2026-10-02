@@ -1,11 +1,13 @@
 import { GetSecretValueCommand, SecretsManagerClient } from '@aws-sdk/client-secrets-manager';
 import { captureAWSv3Client } from 'aws-xray-sdk-core';
+import { ALERTING_SDK_CLIENT_CONFIG } from '../awsClientConfig.js';
 import type { ChannelName } from './channelEnvelope.js';
 
 let cachedSecretsClient: SecretsManagerClient | undefined;
 
 export function createChannelSecretsClient(client?: SecretsManagerClient): SecretsManagerClient {
-  cachedSecretsClient ??= client ?? captureAWSv3Client(new SecretsManagerClient({}));
+  cachedSecretsClient ??=
+    client ?? captureAWSv3Client(new SecretsManagerClient(ALERTING_SDK_CLIENT_CONFIG));
   return cachedSecretsClient;
 }
 
@@ -14,20 +16,37 @@ export interface ChannelProviderConfig {
   readonly secretId: string;
 }
 
-const ENV_PREFIX: Record<ChannelName, string> = { push: 'PUSH', sms: 'SMS', voice: 'VOICE' };
+/**
+ * The generic vendor adapter serves SMS and voice only, pending their vendor choice (OQ-3).
+ * Push goes to APNs/FCM directly (push/pushProviderAdapter.ts); excluding it here makes a
+ * regression back onto this path a compile error.
+ */
+export type HttpProviderChannel = Exclude<ChannelName, 'push'>;
 
+const ENV_PREFIX: Record<HttpProviderChannel, string> = { sms: 'SMS', voice: 'VOICE' };
+
+/**
+ * `isTest` (self-test and canary dispatches) selects the vendor sandbox/loopback credentials
+ * from `{CH}_PROVIDER_SANDBOX_SECRET_ID`, so a test never pages through a real vendor account
+ * (architecture §1.3). It fails closed: a test message with no sandbox secret configured throws
+ * rather than falling back to the prod credentials.
+ */
 export function readChannelProviderConfig(
-  channel: ChannelName,
+  channel: HttpProviderChannel,
   env: NodeJS.ProcessEnv,
+  options: { readonly isTest?: boolean } = {},
 ): ChannelProviderConfig {
   const prefix = ENV_PREFIX[channel];
+  const secretKey = options.isTest
+    ? `${prefix}_PROVIDER_SANDBOX_SECRET_ID`
+    : `${prefix}_PROVIDER_SECRET_ID`;
   const endpointUrl = env[`${prefix}_PROVIDER_ENDPOINT_URL`];
-  const secretId = env[`${prefix}_PROVIDER_SECRET_ID`];
+  const secretId = env[secretKey];
   if (!endpointUrl) {
     throw new Error(`${prefix}_PROVIDER_ENDPOINT_URL is required and was not set`);
   }
   if (!secretId) {
-    throw new Error(`${prefix}_PROVIDER_SECRET_ID is required and was not set`);
+    throw new Error(`${secretKey} is required and was not set`);
   }
   return { endpointUrl, secretId };
 }
@@ -46,12 +65,13 @@ export function resetChannelSecretsCache(): void {
   secretCache.clear();
 }
 
+// Keyed by secret ID, not channel: the prod and sandbox credentials for one channel must never
+// share a cache slot, or a self-test could reuse a cached prod key (or a real page a sandbox one).
 async function resolveApiKey(
-  channel: ChannelName,
   secretId: string,
   secretsClient: SecretsManagerClient,
 ): Promise<string> {
-  const cached = secretCache.get(channel);
+  const cached = secretCache.get(secretId);
   if (cached && cached.expiresAt > Date.now()) {
     return cached.apiKey;
   }
@@ -60,20 +80,26 @@ async function resolveApiKey(
   if (!apiKey) {
     throw new Error(`Secret ${secretId} has no SecretString value`);
   }
-  secretCache.set(channel, { apiKey, expiresAt: Date.now() + SECRET_CACHE_TTL_MS });
+  secretCache.set(secretId, { apiKey, expiresAt: Date.now() + SECRET_CACHE_TTL_MS });
   return apiKey;
 }
 
+export interface SendViaHttpProviderOptions {
+  /** Self-test/canary message: authenticate with the sandbox credentials. */
+  readonly isTest?: boolean;
+  readonly secretsClient?: SecretsManagerClient;
+}
+
 export async function sendViaHttpProvider(
-  channel: ChannelName,
+  channel: HttpProviderChannel,
   target: string,
   message: string,
   env: NodeJS.ProcessEnv,
-  secretsClient?: SecretsManagerClient,
+  options: SendViaHttpProviderOptions = {},
 ): Promise<void> {
-  const config = readChannelProviderConfig(channel, env);
-  const client = createChannelSecretsClient(secretsClient);
-  const apiKey = await resolveApiKey(channel, config.secretId, client);
+  const config = readChannelProviderConfig(channel, env, { isTest: options.isTest === true });
+  const client = createChannelSecretsClient(options.secretsClient);
+  const apiKey = await resolveApiKey(config.secretId, client);
   const response = await fetch(config.endpointUrl, {
     method: 'POST',
     headers: { 'content-type': 'application/json', authorization: `Bearer ${apiKey}` },

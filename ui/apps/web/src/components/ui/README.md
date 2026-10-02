@@ -62,7 +62,13 @@ requires `icon: LucideIcon` and `label: string` (used as the accessible name).
   rowKey={(unit) => unit.apparatusId}
   columns={[
     { key: 'unitId', header: 'Unit', render: (u) => u.unitId, sortValue: (u) => u.unitId },
-    { key: 'status', header: 'Status', render: (u) => <StatusChip status={u.status === 'IN_SERVICE' ? 'ok' : 'danger'}>{u.status}</StatusChip> },
+    {
+      key: 'status',
+      header: 'Status',
+      render: (u) => (
+        <StatusChip status={u.status === 'IN_SERVICE' ? 'ok' : 'danger'}>{u.status}</StatusChip>
+      ),
+    },
   ]}
   rows={units}
   density="comfortable"
@@ -137,7 +143,9 @@ ConfirmDialog; choosing it also dismisses the toast.
 ## Skeleton / SkeletonBlock
 
 ```tsx
-{query.isLoading ? <Skeleton lines={4} /> : <MemberList members={query.data} />}
+{
+  query.isLoading ? <Skeleton lines={4} /> : <MemberList members={query.data} />;
+}
 ```
 
 Matches the shape of the content that will replace it — never a bare spinner.
@@ -158,7 +166,9 @@ Matches the shape of the content that will replace it — never a bare spinner.
 ```tsx
 <Toolbar>
   <FilterBar searchLabel="Search members" searchValue={q} onSearchChange={setQ}>
-    <Select label="Status" value={status} onChange={(e) => setStatus(e.target.value)}>…</Select>
+    <Select label="Status" value={status} onChange={(e) => setStatus(e.target.value)}>
+      …
+    </Select>
   </FilterBar>
   <ToolbarGroup>
     <Button>Add member</Button>

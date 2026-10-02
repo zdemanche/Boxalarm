@@ -195,3 +195,47 @@ test('an out-of-service hydrant is distinguished by text and icon, not color alo
   const statusChip = screen.getByText('Out of service');
   expect(statusChip.closest('[data-status="danger"]')).toBeTruthy();
 });
+
+test('N10: a rejected "Mark out of service" is shown, never silent (409 conflict and 503)', async () => {
+  const hydrant = {
+    hydrantId: 'HYD-2',
+    latitude: 41.2,
+    longitude: -73.2,
+    size: '6 inch',
+    flowRatingGpm: 1000,
+    nextFlowTestDue: '2027-01-01',
+    status: 'IN_SERVICE',
+  };
+  let status = 409;
+  server.use(
+    http.get('/api/v1/inspections/hydrants', () => HttpResponse.json({ hydrants: [hydrant] })),
+    http.put('/api/v1/inspections/hydrants/HYD-2', () =>
+      HttpResponse.json(
+        { type: 'about:blank', title: 'Hydrant update conflict', status, traceId: 't-1' },
+        { status },
+      ),
+    ),
+  );
+  const user = userEvent.setup();
+  renderApp(['CHIEF'], '/inspections/hydrants');
+  await screen.findByText('HYD-2');
+
+  await user.click(screen.getByRole('button', { name: 'Mark out of service' }));
+  expect((await screen.findByRole('alert')).textContent).toContain(
+    'HYD-2 was changed by someone else just now',
+  );
+
+  status = 503;
+  await user.click(screen.getByRole('button', { name: 'Mark out of service' }));
+  expect((await screen.findByText(/not saved \(HTTP 503\)/)).textContent).toContain(
+    'Marking out of service for HYD-2 was not saved',
+  );
+});
+
+test('round-3 minor 4: the occupancy address field tells inspectors to include an out-of-area town', async () => {
+  server.use(http.get('/api/v1/inspections/occupancies', () => HttpResponse.json({ items: [] })));
+  renderApp(['CHIEF'], '/inspections/occupancies');
+  const address = await screen.findByLabelText(/^Address/);
+  const help = document.getElementById(address.getAttribute('aria-describedby') ?? '');
+  expect(help?.textContent).toContain('Include the town');
+});

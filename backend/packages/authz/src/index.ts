@@ -9,6 +9,7 @@ export {
   notFoundProblem,
   badRequestProblem,
   tooManyRequestsProblem,
+  conflictProblem,
 } from './problemDetails.js';
 export type { ProblemResponse, ProblemDetailsBody, FieldError } from './problemDetails.js';
 export { emitAuthzMetric, emitInvocationMetric } from './metrics.js';

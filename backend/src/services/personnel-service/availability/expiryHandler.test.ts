@@ -88,6 +88,56 @@ describe('expiryHandler (entrypoint-test obligation)', () => {
     expect(outboxPayload?.availabilityState).toBe('AVAILABLE');
   });
 
+  // Paging review MAJOR-R2-1: an ACTIVATE landing between the REVERT's read and its write.
+  it('a REVERT that loses to an activation re-reads and stamps AVAILABLE after it', async () => {
+    const row = {
+      pk: 'DEPT#NICHOLS#MEMBER#mbr-1',
+      sk: 'MARKOFF#100',
+      entityType: 'AVAILABILITY_MARKOFF',
+      memberId: 'mbr-1',
+      deptId: 'NICHOLS',
+      startAt: 100,
+      endAt: 200,
+      affectsAlerting: true,
+    };
+    const activatedAt = Math.floor(Date.now() / 1000);
+    const send = vi
+      .fn()
+      .mockResolvedValueOnce({ Item: row })
+      .mockRejectedValueOnce(
+        Object.assign(new Error('cancelled'), {
+          name: 'TransactionCanceledException',
+          CancellationReasons: [{ Code: 'ConditionalCheckFailed' }],
+        }),
+      )
+      .mockResolvedValueOnce({ Item: { ...row, activatedAt } })
+      .mockResolvedValueOnce({});
+    mockDdb({ send });
+    const { handler } = await import('./expiryHandler.js');
+
+    expect(await handler({ deptId: 'NICHOLS', memberId: 'mbr-1', startAt: 100 })).toEqual({
+      outcome: 'REVERTED',
+    });
+    type Transact = {
+      input: {
+        TransactItems: {
+          Update?: { ConditionExpression: string };
+          Put?: { Item: Record<string, unknown> };
+        }[];
+      };
+    };
+    const first = send.mock.calls[1]![0] as Transact;
+    const retry = send.mock.calls[3]![0] as Transact;
+    expect(first.input.TransactItems[0]!.Update!.ConditionExpression).toContain(
+      'attribute_not_exists(activatedAt)',
+    );
+    expect(retry.input.TransactItems[0]!.Update!.ConditionExpression).toContain(
+      'activatedAt = :readActivatedAt',
+    );
+    const eventTime = Date.parse(String(retry.input.TransactItems[1]!.Put!.Item.eventTime));
+    expect(eventTime).toBeGreaterThanOrEqual((activatedAt + 1) * 1000);
+  });
+
   it('rethrows on a genuine DynamoDB failure so the scheduler invocation retries', async () => {
     const send = vi
       .fn()

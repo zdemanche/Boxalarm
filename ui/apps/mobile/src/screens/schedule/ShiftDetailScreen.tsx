@@ -16,6 +16,7 @@ import { useScheduleRepository } from '../../features/schedule/apiScheduleReposi
 import type { DutyShift } from '../../features/schedule/types';
 import { ApiError } from '../../lib/apiClient';
 import { useOptionalConnectivity } from '../../sync/ConnectivityContext';
+import { NoCachedDataError } from '../../sync/readThrough';
 
 // Mirrors ProfileEditScreen's error-handling pattern: a 403 gets its own message, everything
 // else (offline, 409, 500) gets a generic retry prompt, shown on screen and announced for a
@@ -42,7 +43,7 @@ export function ShiftDetailScreen() {
   const [claimState, setClaimState] = useState<Record<string, ClaimUiState>>({});
   const [swapTargetMemberId, setSwapTargetMemberId] = useState('');
   const [error, setError] = useState<string | null>(null);
-  const pendingClaims = useRef(new Set<string>());
+  const [loadError, setLoadError] = useState<string | null>(null);
   // Generated once per claim intent (in handleClaim) and reused verbatim by every resolveClaim
   // call for that intent, including the reconnect-resubmit retry below - a value regenerated per
   // attempt (as this used to be, inline in apiScheduleRepository.ts) cannot function as an
@@ -51,16 +52,30 @@ export function ShiftDetailScreen() {
 
   useEffect(() => {
     let cancelled = false;
-    repository.getShifts().then((shifts) => {
-      const found = shifts.find((s) => s.shiftId === shiftId) ?? null;
-      if (cancelled || !found) return;
-      setShift(found);
-      const initial: Record<string, ClaimUiState> = {};
-      for (const position of found.positions) {
-        initial[position.positionCode] = position.claimedByMemberId ? 'claimed_by_other' : 'open';
-      }
-      setClaimState(initial);
-    });
+    repository
+      .getShifts()
+      .then((shifts) => {
+        const found = shifts.find((s) => s.shiftId === shiftId) ?? null;
+        if (cancelled) return;
+        if (!found) {
+          setLoadError('This shift is no longer on the schedule.');
+          return;
+        }
+        setShift(found);
+        const initial: Record<string, ClaimUiState> = {};
+        for (const position of found.positions) {
+          initial[position.positionCode] = position.claimedByMemberId ? 'claimed_by_other' : 'open';
+        }
+        setClaimState(initial);
+      })
+      .catch((e: unknown) => {
+        if (cancelled) return;
+        setLoadError(
+          e instanceof NoCachedDataError
+            ? "You're offline, and this phone hasn't loaded this shift yet."
+            : 'This shift could not be loaded. Check your connection and try again.',
+        );
+      });
     return () => {
       cancelled = true;
     };
@@ -77,21 +92,55 @@ export function ShiftDetailScreen() {
   const resolveClaim = (positionCode: string) => {
     setClaimState((prev) => ({ ...prev, [positionCode]: 'pending' }));
     const idempotencyKey = claimIdempotencyKeys.current.get(positionCode);
-    repository.claimPosition(shiftId, positionCode, idempotencyKey).then((result) => {
-      pendingClaims.current.delete(positionCode);
-      claimIdempotencyKeys.current.delete(positionCode);
-      // ALREADY_MINE (this member already holds it - e.g. a reconnect resubmit of a claim that
-      // actually succeeded before the connection dropped) reads the same as a fresh CLAIMED:
-      // only ALREADY_TAKEN (someone else holds it) is the honest "you lost this one" outcome.
-      const next: ClaimUiState = result === 'ALREADY_TAKEN' ? 'already_taken' : 'claimed_by_you';
-      setClaimState((prev) => ({ ...prev, [positionCode]: next }));
-      // Pending resolves in place (no screen swap), so a screen-reader user focused elsewhere
-      // wouldn't otherwise notice the outcome land.
-      AccessibilityInfo.announceForAccessibility(STATE_LABEL[next]);
-    });
+    repository
+      .claimPosition(shiftId, positionCode, idempotencyKey)
+      .catch((e: unknown) => {
+        // Nothing was claimed. Never leave the row saying "Pending..." or promise a retry this
+        // screen can't keep (review m5): back to Open, with the reason. A lost connection keeps
+        // the idempotency key, so tapping Claim again can't double-book if the first one landed.
+        setClaimState((prev) => ({ ...prev, [positionCode]: 'open' }));
+        if (!(e instanceof ApiError)) {
+          const message =
+            'Not claimed: the connection dropped. When you have signal, tap Claim again.';
+          setError(message);
+          AccessibilityInfo.announceForAccessibility(message);
+          return null;
+        }
+        claimIdempotencyKeys.current.delete(positionCode);
+        const message = describeError(
+          e,
+          'You do not have access to claim this position.',
+          'The shift was not claimed. Try again.',
+        );
+        setError(message);
+        AccessibilityInfo.announceForAccessibility(message);
+        return null;
+      })
+      .then((result) => {
+        if (result === null) return;
+        claimIdempotencyKeys.current.delete(positionCode);
+        // ALREADY_MINE (this member already holds it - e.g. a reconnect resubmit of a claim that
+        // actually succeeded before the connection dropped) reads the same as a fresh CLAIMED:
+        // only ALREADY_TAKEN (someone else holds it) is the honest "you lost this one" outcome.
+        const next: ClaimUiState = result === 'ALREADY_TAKEN' ? 'already_taken' : 'claimed_by_you';
+        setClaimState((prev) => ({ ...prev, [positionCode]: next }));
+        // Pending resolves in place (no screen swap), so a screen-reader user focused elsewhere
+        // wouldn't otherwise notice the outcome land.
+        AccessibilityInfo.announceForAccessibility(STATE_LABEL[next]);
+      });
   };
 
   const handleClaim = (positionCode: string) => {
+    setError(null);
+    if (!isOnline) {
+      // Claiming is atomic on the server (F2.9) and can't be queued; say so instead of showing
+      // "Pending" for a claim nothing will send (review m5).
+      const message =
+        "Not claimed: you need a connection to claim a shift - claiming has to be instant so two people can't take the same one.";
+      setError(message);
+      AccessibilityInfo.announceForAccessibility(message);
+      return;
+    }
     setClaimState((prev) => ({ ...prev, [positionCode]: 'pending' }));
     if (!claimIdempotencyKeys.current.has(positionCode)) {
       claimIdempotencyKeys.current.set(
@@ -99,25 +148,8 @@ export function ShiftDetailScreen() {
         `${shiftId}#${positionCode}#${Date.now()}#${Math.random().toString(36).slice(2)}`,
       );
     }
-    if (!isOnline) {
-      // Claiming is not queueable server-side (must be atomic, no double-booking) - the pending
-      // claim is retried in full once connectivity returns, in resolveClaim's onSuccess path,
-      // reusing the idempotency key generated just above.
-      pendingClaims.current.add(positionCode);
-      AccessibilityInfo.announceForAccessibility('Pending. Waiting for a connection.');
-      return;
-    }
     resolveClaim(positionCode);
   };
-
-  // Reconnect: resubmit every claim that was queued while offline through the same claim call.
-  useEffect(() => {
-    if (!isOnline) return;
-    for (const positionCode of pendingClaims.current) {
-      resolveClaim(positionCode);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isOnline]);
 
   const handleGiveBack = (positionCode: string) => {
     setError(null);
@@ -159,7 +191,19 @@ export function ShiftDetailScreen() {
   };
 
   if (!shift) {
-    return <SafeAreaView style={{ flex: 1, backgroundColor: tokens.background }} />;
+    return (
+      <SafeAreaView style={{ flex: 1, backgroundColor: tokens.background, padding: spacing.lg }}>
+        <Text
+          accessibilityRole={loadError ? 'alert' : undefined}
+          style={{
+            color: loadError ? tokens.error : tokens.foreground,
+            fontSize: typography.size.base,
+          }}
+        >
+          {loadError ?? 'Loading shift…'}
+        </Text>
+      </SafeAreaView>
+    );
   }
 
   return (

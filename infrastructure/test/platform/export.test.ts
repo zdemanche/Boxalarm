@@ -50,6 +50,8 @@ describe("Export", () => {
     const httpApi = new HttpApi("test-export-http-api", {
       env: "dev",
       userPoolId: pulumi.output("pool-1"),
+      platformTableName: "platform-table",
+      platformTableArn: "arn:aws:dynamodb:us-east-1:123456789012:table/platform",
       allowedClientIds: [pulumi.output("client-1")],
       platformLogGroup: logGroup,
     });
@@ -179,6 +181,8 @@ describe("Export", () => {
     const httpApi = new HttpApi("test-export-http-api-bad", {
       env: "dev",
       userPoolId: pulumi.output("pool-1"),
+      platformTableName: "platform-table",
+      platformTableArn: "arn:aws:dynamodb:us-east-1:123456789012:table/platform",
       allowedClientIds: [pulumi.output("client-1")],
       platformLogGroup: logGroup,
     });

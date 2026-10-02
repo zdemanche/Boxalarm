@@ -46,6 +46,8 @@ describe("Members", () => {
     const httpApi = new HttpApi("test-members-http-api", {
       env: "dev",
       userPoolId: pulumi.output("pool-1"),
+      platformTableName: "platform-table",
+      platformTableArn: "arn:aws:dynamodb:us-east-1:123456789012:table/platform",
       allowedClientIds: [pulumi.output("client-1")],
       platformLogGroup: logGroup,
     });
@@ -55,10 +57,113 @@ describe("Members", () => {
       platformTableArn: pulumi.output("arn:aws:dynamodb:us-east-1:123456789012:table/platform"),
       policyStoreArn: pulumi.output("arn:aws:verifiedpermissions::123456789012:policy-store/ps-1"),
       policyStoreId: pulumi.output("ps-1"),
+      userPoolId: pulumi.output("us-east-1_pool"),
+      userPoolArn: pulumi.output(
+        "arn:aws:cognito-idp:us-east-1:123456789012:userpool/us-east-1_pool",
+      ),
       logGroup,
       httpApi,
+      chiefNotificationTopicArn: pulumi.output("arn:aws:sns:us-east-1:123456789012:chief"),
+      sesFromAddress: "notifications@nicholsfd.example",
     });
   }
+
+  // Review M5: every LOA/RETIRED change ends sessions and stops paging - the chief hears of each.
+  it("alarms the chief on every LOA and every RETIRED change, with no threshold", async () => {
+    const members = await build();
+    for (const status of ["LOA", "RETIRED"] as const) {
+      const alarm = members.deactivationAlarms[status];
+      const [metricName, namespace, dimensions, threshold, actions] = await Promise.all([
+        resolve(alarm.metricName),
+        resolve(alarm.namespace),
+        resolve(alarm.dimensions),
+        resolve(alarm.threshold),
+        resolve(alarm.alarmActions),
+      ]);
+      expect(metricName).toBe("MemberStatusUpdated");
+      expect(namespace).toBe("Boxalarm/personnel");
+      expect(dimensions).toEqual({ NewStatus: status });
+      expect(threshold).toBe(0);
+      expect(actions).toEqual(["arn:aws:sns:us-east-1:123456789012:chief"]);
+    }
+  });
+
+  // create.ts provisions the member's login and keys the member on its sub.
+  it("lets only the create Lambda manage logins, in this pool, and tells it the pool id", async () => {
+    const members = await build();
+    const [createPolicy, env, listPolicy] = await Promise.all([
+      resolve(members.createLambda.rolePolicy.policy),
+      resolve(members.createLambda.function.environment),
+      resolve(members.listLambda.rolePolicy.policy),
+    ]);
+    const statement = (
+      JSON.parse(createPolicy) as {
+        Statement: Array<{ Sid: string; Action: string[]; Resource: string[] }>;
+      }
+    ).Statement.find((s) => s.Sid === "MembersCreateLogin");
+    expect(statement?.Action.sort()).toEqual([
+      "cognito-idp:AdminAddUserToGroup",
+      "cognito-idp:AdminCreateUser",
+      "cognito-idp:AdminDeleteUser",
+    ]);
+    expect(statement?.Resource).toEqual([
+      "arn:aws:cognito-idp:us-east-1:123456789012:userpool/us-east-1_pool",
+    ]);
+    expect(env?.variables?.COGNITO_USER_POOL_ID).toBe("us-east-1_pool");
+    expect(listPolicy).not.toContain("cognito-idp");
+  });
+
+  // Security-web MAJOR 2: an email edit syncs the member's login.
+  it("lets the profile Lambda update login attributes in this pool and read member rows only", async () => {
+    const members = await build();
+    const [policyJson, env] = await Promise.all([
+      resolve(members.updateProfileLambda.rolePolicy.policy),
+      resolve(members.updateProfileLambda.function.environment),
+    ]);
+    const statements = (
+      JSON.parse(policyJson) as {
+        Statement: Array<{
+          Sid: string;
+          Action: string[];
+          Resource: string[];
+          Condition?: unknown;
+        }>;
+      }
+    ).Statement;
+    const login = statements.find((s) => s.Sid === "MembersUpdateProfileLoginEmail");
+    expect(login?.Action).toContain("cognito-idp:AdminUpdateUserAttributes");
+    expect(login?.Resource).toEqual([
+      "arn:aws:cognito-idp:us-east-1:123456789012:userpool/us-east-1_pool",
+    ]);
+    const read = statements.find((s) => s.Sid === "MembersUpdateProfileReadMember");
+    expect(read?.Action).toEqual(["dynamodb:GetItem"]);
+    expect(read?.Condition).toEqual({
+      "ForAllValues:StringLike": { "dynamodb:LeadingKeys": ["DEPT#*#MEMBER#*"] },
+    });
+    expect(env?.variables?.COGNITO_USER_POOL_ID).toBe("us-east-1_pool");
+    expect(policyJson).not.toContain("AdminCreateUser");
+    // Server-fix security MAJOR 1: an email change ends the member's sessions and emails the
+    // previous address.
+    expect(login?.Action).toContain("cognito-idp:AdminUserGlobalSignOut");
+    const notice = statements.find((s) => s.Sid === "MembersUpdateProfileEmailNotice");
+    expect(notice?.Action).toEqual(["ses:SendEmail"]);
+    expect(notice?.Resource.every((r) => r.startsWith("arn:aws:ses:"))).toBe(true);
+    expect(env?.variables?.NOTIFICATION_SES_FROM_ADDRESS).toBe("notifications@nicholsfd.example");
+  });
+
+  it("alarms the chief on every email change and on a Cognito/row divergence", async () => {
+    const members = await build();
+    for (const [metric, alarm] of Object.entries(members.emailAlarms)) {
+      const [metricName, threshold, actions] = await Promise.all([
+        resolve(alarm.metricName),
+        resolve(alarm.threshold),
+        resolve(alarm.alarmActions),
+      ]);
+      expect(metricName).toBe(metric);
+      expect(threshold).toBe(0);
+      expect(actions).toEqual(["arn:aws:sns:us-east-1:123456789012:chief"]);
+    }
+  });
 
   it("grants no personnel role any permission on the alerting or incident tables (AC4)", async () => {
     const members = await build();

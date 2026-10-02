@@ -1,6 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { IncidentEvent } from './authContext.js';
 import type { CreateIncidentInput } from './entity.js';
+import { bearerFor, fakeCedarDecision } from './testEvents.js';
+
+const vpSend = vi.hoisted(() => vi.fn());
+vi.mock('@aws-sdk/client-verifiedpermissions', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@aws-sdk/client-verifiedpermissions')>();
+  return { ...actual, VerifiedPermissionsClient: vi.fn(() => ({ send: vpSend })) };
+});
 
 function buildEvent(
   lambdaContext: Record<string, unknown> | undefined,
@@ -12,7 +19,7 @@ function buildEvent(
     routeKey: 'POST /api/v1/incidents',
     rawPath: '/api/v1/incidents',
     rawQueryString: '',
-    headers,
+    headers: { ...bearerFor(lambdaContext), ...headers },
     isBase64Encoded: false,
     body: body === undefined ? undefined : JSON.stringify(body),
     requestContext: {
@@ -40,6 +47,7 @@ function buildEvent(
 const ADMIN_AUTH = { sub: 'MBR-0034', deptId: 'NICHOLS', 'cognito:groups': 'ADMIN' };
 const CHIEF_AUTH = { sub: 'MBR-0001', deptId: 'NICHOLS', 'cognito:groups': 'CHIEF' };
 const MEMBER_AUTH = { sub: 'MBR-0099', deptId: 'NICHOLS', 'cognito:groups': 'MEMBER' };
+const OFFICER_AUTH = { sub: 'MBR-0050', deptId: 'NICHOLS', 'cognito:groups': 'OFFICER' };
 
 const VALID_BODY = {
   dispatchNumber: '4471',
@@ -53,6 +61,8 @@ const VALID_BODY = {
 describe('createIncident handler', () => {
   beforeEach(() => {
     vi.resetModules();
+    process.env.VERIFIED_PERMISSIONS_POLICY_STORE_ID = 'ps-1';
+    vpSend.mockImplementation(fakeCedarDecision);
   });
 
   afterEach(() => {
@@ -76,7 +86,7 @@ describe('createIncident handler', () => {
     });
     const { handler } = await import('./createIncident.js');
 
-    const result = await handler(buildEvent(ADMIN_AUTH, VALID_BODY), {} as never, () => undefined);
+    const result = await handler(buildEvent(ADMIN_AUTH, VALID_BODY));
 
     expect(result).toMatchObject({ statusCode: 201 });
     const body = JSON.parse((result as { body: string }).body) as Record<string, unknown>;
@@ -101,11 +111,13 @@ describe('createIncident handler', () => {
     const { handler } = await import('./createIncident.js');
 
     const result = await handler(
-      buildEvent(MEMBER_AUTH, VALID_BODY, {
-        traceparent: '00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01',
-      }),
-      {} as never,
-      () => undefined,
+      buildEvent(
+        OFFICER_AUTH,
+        { dispatchNumber: '4471' },
+        {
+          traceparent: '00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01',
+        },
+      ),
     );
 
     const body = JSON.parse((result as { body: string }).body) as Record<string, unknown>;
@@ -115,7 +127,7 @@ describe('createIncident handler', () => {
   it('falls back to the API Gateway requestId when no traceparent header is sent', async () => {
     const { handler } = await import('./createIncident.js');
 
-    const result = await handler(buildEvent(MEMBER_AUTH, VALID_BODY), {} as never, () => undefined);
+    const result = await handler(buildEvent(OFFICER_AUTH, { dispatchNumber: '4471' }));
 
     const body = JSON.parse((result as { body: string }).body) as Record<string, unknown>;
     expect(body.traceId).toBe('req-1');
@@ -127,8 +139,6 @@ describe('createIncident handler', () => {
 
     const result = await handler(
       buildEvent(ADMIN_AUTH, { ...VALID_BODY, corePayload: oversizedCorePayload }),
-      {} as never,
-      () => undefined,
     );
 
     expect(result).toMatchObject({ statusCode: 400 });
@@ -141,8 +151,6 @@ describe('createIncident handler', () => {
 
     const result = await handler(
       buildEvent({ deptId: 'NICHOLS', 'cognito:groups': 'ADMIN' }, VALID_BODY),
-      {} as never,
-      () => undefined,
     );
 
     expect(result).toMatchObject({ statusCode: 401 });
@@ -159,9 +167,37 @@ describe('createIncident handler', () => {
     });
     const { handler } = await import('./createIncident.js');
 
-    const result = await handler(buildEvent(CHIEF_AUTH, VALID_BODY), {} as never, () => undefined);
+    const result = await handler(buildEvent(CHIEF_AUTH, VALID_BODY));
 
     expect(result).toMatchObject({ statusCode: 201 });
+  });
+
+  it('allows an OFFICER to start a report (NERIS officer tier), asking Cedar CreateIncidentReport', async () => {
+    const createIncident = vi.fn().mockResolvedValue({
+      incidentId: 'NICHOLS-4471-1798000000',
+      status: 'DRAFT',
+    });
+    vi.doMock('./repository.js', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('./repository.js')>();
+      return { ...actual, getIncidentRepository: () => ({ createIncident }) };
+    });
+    const { handler } = await import('./createIncident.js');
+
+    const result = await handler(buildEvent(OFFICER_AUTH, VALID_BODY));
+
+    expect(result).toMatchObject({ statusCode: 201 });
+    const sent = vpSend.mock.calls[0]?.[0] as {
+      input: { action: unknown; resource: unknown };
+    };
+    expect(sent.input.action).toEqual({
+      actionType: 'Boxalarm::Action',
+      actionId: 'CreateIncidentReport',
+    });
+    expect(sent.input.resource).toEqual({
+      entityType: 'Boxalarm::Department',
+      entityId: 'NICHOLS',
+    });
+    expect(createIncident.mock.calls[0]?.[1]).toMatchObject({ createdBy: 'MBR-0050' });
   });
 
   it('never derives deptId from the request body (core-harm)', async () => {
@@ -172,11 +208,7 @@ describe('createIncident handler', () => {
     });
     const { handler } = await import('./createIncident.js');
 
-    await handler(
-      buildEvent(ADMIN_AUTH, { ...VALID_BODY, deptId: 'FORGED-DEPT' }),
-      {} as never,
-      () => undefined,
-    );
+    await handler(buildEvent(ADMIN_AUTH, { ...VALID_BODY, deptId: 'FORGED-DEPT' }));
 
     expect(createIncident).toHaveBeenCalledWith(
       'NICHOLS',
@@ -186,10 +218,10 @@ describe('createIncident handler', () => {
     );
   });
 
-  it('returns 403 for a non-admin caller', async () => {
+  it('returns 403 for a member (Cedar CreateIncidentReport is the officer tier), before any read', async () => {
     const { handler } = await import('./createIncident.js');
 
-    const result = await handler(buildEvent(MEMBER_AUTH, VALID_BODY), {} as never, () => undefined);
+    const result = await handler(buildEvent(MEMBER_AUTH, VALID_BODY));
 
     expect(result).toMatchObject({ statusCode: 403 });
   });
@@ -197,7 +229,7 @@ describe('createIncident handler', () => {
   it('returns 401 when the authorizer context is missing', async () => {
     const { handler } = await import('./createIncident.js');
 
-    const result = await handler(buildEvent(undefined, VALID_BODY), {} as never, () => undefined);
+    const result = await handler(buildEvent(undefined, VALID_BODY));
 
     expect(result).toMatchObject({ statusCode: 401 });
   });
@@ -208,7 +240,15 @@ describe('createIncident handler', () => {
       Object.entries(VALID_BODY).filter(([key]) => key !== 'corePayload'),
     );
 
-    const result = await handler(buildEvent(ADMIN_AUTH, rest), {} as never, () => undefined);
+    const result = await handler(buildEvent(ADMIN_AUTH, rest));
+
+    expect(result).toMatchObject({ statusCode: 400 });
+  });
+
+  it('refuses a client-supplied status beyond DRAFT (VALIDATED comes only from review)', async () => {
+    const { handler } = await import('./createIncident.js');
+
+    const result = await handler(buildEvent(ADMIN_AUTH, { ...VALID_BODY, status: 'VALIDATED' }));
 
     expect(result).toMatchObject({ statusCode: 400 });
   });
@@ -216,11 +256,7 @@ describe('createIncident handler', () => {
   it('returns 400 when status is an unknown enum value (AC4)', async () => {
     const { handler } = await import('./createIncident.js');
 
-    const result = await handler(
-      buildEvent(ADMIN_AUTH, { ...VALID_BODY, status: 'OPEN' }),
-      {} as never,
-      () => undefined,
-    );
+    const result = await handler(buildEvent(ADMIN_AUTH, { ...VALID_BODY, status: 'OPEN' }));
 
     expect(result).toMatchObject({ statusCode: 400 });
   });
@@ -239,7 +275,7 @@ describe('createIncident handler', () => {
     });
     const { handler } = await import('./createIncident.js');
 
-    const result = await handler(buildEvent(ADMIN_AUTH, VALID_BODY), {} as never, () => undefined);
+    const result = await handler(buildEvent(ADMIN_AUTH, VALID_BODY));
 
     expect(result).toMatchObject({ statusCode: 409 });
   });
@@ -287,8 +323,6 @@ describe('createIncident handler', () => {
 
     const result = await handler(
       buildEvent(ADMIN_AUTH, { dispatchId: 'NICHOLS-MANUAL-1798000000-abcd1234' }),
-      {} as never,
-      () => undefined,
     );
 
     expect(result).toMatchObject({ statusCode: 201 });
@@ -318,16 +352,90 @@ describe('createIncident handler', () => {
       queryIncidentResponseUnits: vi.fn(),
       queryRosterCopy: vi.fn(),
     }));
+    vi.doMock('./schemaVersion/repository.js', () => ({
+      createSchemaVersionRepository: () => ({
+        getActiveSchemaVersion: vi.fn().mockResolvedValue({ version: '2026.2' }),
+      }),
+    }));
     const { handler } = await import('./createIncident.js');
 
-    const result = await handler(
-      buildEvent(ADMIN_AUTH, { dispatchId: 'NICHOLS-MISSING' }),
-      {} as never,
-      () => undefined,
-    );
+    const result = await handler(buildEvent(ADMIN_AUTH, { dispatchId: 'NICHOLS-MISSING' }));
 
     expect(result).toMatchObject({ statusCode: 404 });
     vi.doUnmock('./dispatchProjection.js');
+    vi.doUnmock('./schemaVersion/repository.js');
+  });
+
+  it('still returns 404 for a missing dispatch when the concurrent schema lookup fails', async () => {
+    vi.doMock('./dispatchProjection.js', () => ({
+      getDispatchAlertCopy: vi.fn().mockResolvedValue(undefined),
+      queryIncidentResponseUnits: vi.fn(),
+      queryRosterCopy: vi.fn(),
+    }));
+    vi.doMock('./schemaVersion/repository.js', () => ({
+      createSchemaVersionRepository: () => ({
+        getActiveSchemaVersion: vi.fn().mockRejectedValue(new Error('DynamoDB unavailable')),
+      }),
+    }));
+    const { handler } = await import('./createIncident.js');
+
+    const result = await handler(buildEvent(ADMIN_AUTH, { dispatchId: 'NICHOLS-MISSING' }));
+
+    expect(result).toMatchObject({ statusCode: 404 });
+    vi.doUnmock('./dispatchProjection.js');
+    vi.doUnmock('./schemaVersion/repository.js');
+  });
+
+  it('starts the active-schema lookup without waiting for the dispatch-copy read', async () => {
+    let copyResolved = false;
+    let schemaStartedBeforeCopyResolved: boolean | undefined;
+    vi.doMock('./repository.js', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('./repository.js')>();
+      return {
+        ...actual,
+        getIncidentRepository: () => ({
+          createIncident: (_deptId: string, input: CreateIncidentInput) =>
+            Promise.resolve({ ...input, sourceDispatchId: input.incidentId }),
+        }),
+        getDocumentClient: () => ({}),
+        getTableName: () => 'boxalarm-dev-incident',
+      };
+    });
+    vi.doMock('./dispatchProjection.js', () => ({
+      getDispatchAlertCopy: () =>
+        new Promise((resolve) =>
+          setTimeout(() => {
+            copyResolved = true;
+            resolve({
+              dispatchId: 'D-1',
+              deptId: 'NICHOLS',
+              incidentType: 'STRUCTURE_FIRE',
+              address: '123 Main St',
+              crossStreets: '',
+              narrative: 'n',
+              dispatchedAt: 1_798_000_000,
+            });
+          }, 10),
+        ),
+      queryIncidentResponseUnits: vi.fn().mockResolvedValue([]),
+      queryRosterCopy: vi.fn().mockResolvedValue([]),
+    }));
+    vi.doMock('./schemaVersion/repository.js', () => ({
+      createSchemaVersionRepository: () => ({
+        getActiveSchemaVersion: () => {
+          schemaStartedBeforeCopyResolved = !copyResolved;
+          return Promise.resolve({ version: '2026.2' });
+        },
+      }),
+    }));
+    const { handler } = await import('./createIncident.js');
+
+    const result = await handler(buildEvent(ADMIN_AUTH, { dispatchId: 'D-1' }));
+
+    expect(result).toMatchObject({ statusCode: 201 });
+    expect(schemaStartedBeforeCopyResolved).toBe(true);
+    vi.doUnmock('./dispatchProjection.js');
+    vi.doUnmock('./schemaVersion/repository.js');
   });
 
   it('returns 503 when DynamoDB is unavailable', async () => {
@@ -343,7 +451,7 @@ describe('createIncident handler', () => {
     vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const { handler } = await import('./createIncident.js');
 
-    const result = await handler(buildEvent(ADMIN_AUTH, VALID_BODY), {} as never, () => undefined);
+    const result = await handler(buildEvent(ADMIN_AUTH, VALID_BODY));
 
     expect(result).toMatchObject({ statusCode: 503 });
   });

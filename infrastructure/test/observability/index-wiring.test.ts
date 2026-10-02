@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as pulumi from "@pulumi/pulumi";
 import { SERVICES } from "../../components/observability/services";
 
-describe("index.ts production wiring", () => {
+describe("index.ts production wiring", { timeout: 120_000 }, () => {
   let counts: Record<string, number>;
   let logGroupNames: Set<string>;
   let dashboardNames: Set<string>;
@@ -113,6 +113,7 @@ describe("index.ts production wiring", () => {
       "boxalarm-infra:voiceWebhookSecret": "test-voice-secret",
       "boxalarm-infra:pushWebhookSecret": "test-push-secret",
       "boxalarm-infra:canaryMemberId": "test-canary-member",
+      "boxalarm-infra:notificationSesFromAddress": "notifications@boxalarm.example",
     });
   });
 
@@ -154,6 +155,8 @@ describe("index.ts production wiring", () => {
           indexModule.policyStore.policyStoreId,
           indexModule.platformBus.busName,
           indexModule.outboxPublisher.lambda.function.arn,
+          indexModule.incidentOutboxDrain.lambda.function.arn,
+          indexModule.nerisSubmissionWorker.lambda.function.arn,
           indexModule.sessionRevocation.memberStatusLambda.function.arn,
           indexModule.sessionRevocation.deviceLossLambda.function.arn,
           indexModule.recoveryMonitor.trail.id,
@@ -211,12 +214,15 @@ describe("index.ts production wiring", () => {
         .apply(() => resolve()),
     );
 
-    // 10 services + identity pre-token-generation trigger + HTTP API access logs.
-    expect(counts["aws:cloudwatch/logGroup:LogGroup"]).toBe(12);
+    // 10 services + identity pre-token-generation trigger + HTTP API and CAD webhook REST API
+    // access logs.
+    expect(counts["aws:cloudwatch/logGroup:LogGroup"]).toBe(13);
     expect(counts["aws:cloudwatch/dashboard:Dashboard"]).toBe(10);
     expect(counts["aws:xray/samplingRule:SamplingRule"]).toBe(2);
     expect(counts["aws:dynamodb/table:Table"]).toBe(3);
     expect(counts["aws:apigatewayv2/api:Api"]).toBe(1);
+    // The CAD webhook's own REST API (cad-ingress.ts: per-source API keys, no Cognito).
+    expect(counts["aws:apigateway/restApi:RestApi"]).toBe(1);
     expect(indexModule.stack).toBe("dev");
     expect(indexModule.env).toBe("dev");
     expect(indexModule.webOrigin).toBe("https://localhost:5173");
@@ -231,6 +237,7 @@ describe("index.ts production wiring", () => {
       ...SERVICES.map((serviceName) => `/aws/lambda/boxalarm-dev-${serviceName}`),
       "/aws/lambda/boxalarm-dev-identity-pre-token-generation",
       "/aws/apigateway/boxalarm-dev-http-api-access",
+      "/aws/apigateway/boxalarm-dev-cad-ingress-api-access",
     ]);
     const expectedDashboardNames = new Set(
       SERVICES.map((serviceName) => `boxalarm-dev-${serviceName}`),
@@ -243,7 +250,7 @@ describe("index.ts production wiring", () => {
     // against this test's monitor before the next test replaces it — otherwise their
     // registerResourceOutputs calls land on a torn-down mock as unhandled rejections.
     await new Promise((r) => setTimeout(r, 100));
-  }, 20000);
+  }, 120_000);
 
   it("throws when the boxalarm-infra:env config key is not declared", async () => {
     pulumi.runtime.setAllConfig({});

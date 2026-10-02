@@ -5,6 +5,8 @@ import type { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
 import type { SNSClient } from '@aws-sdk/client-sns';
 import type { SchedulerClient } from '@aws-sdk/client-scheduler';
 import type { DynamoDBStreamEvent } from 'aws-lambda';
+import { escalationScheduleName } from '../escalation/scheduleEscalation.js';
+import { toneScheduleName } from '../escalation/toneLadder.js';
 
 interface FakeItem {
   pk: string;
@@ -68,19 +70,29 @@ function createFakeDdb(
       return { Item: items.get(`${Key.pk}#${Key.sk}`) };
     }
     if (name === 'UpdateCommand') {
-      const { Key, UpdateExpression, ExpressionAttributeValues } = input as {
-        Key: { pk: string; sk: string };
-        UpdateExpression: string;
-        ExpressionAttributeValues?: Record<string, unknown>;
-      };
+      const { Key, UpdateExpression, ExpressionAttributeValues, ExpressionAttributeNames } =
+        input as {
+          Key: { pk: string; sk: string };
+          UpdateExpression: string;
+          ExpressionAttributeValues?: Record<string, unknown>;
+          ExpressionAttributeNames?: Record<string, string>;
+        };
       const key = `${Key.pk}#${Key.sk}`;
       const existing: FakeItem = items.get(key) ?? { pk: Key.pk, sk: Key.sk };
       const setMatch = /SET (.+?)(?: REMOVE|$)/.exec(UpdateExpression);
       if (setMatch) {
-        for (const assignment of setMatch[1]!.split(',')) {
-          const [field, placeholder] = assignment.split('=').map((part) => part.trim());
-          if (field && placeholder) {
-            existing[field] = ExpressionAttributeValues?.[placeholder];
+        // Top-level commas only: if_not_exists(a, :b) holds one of its own.
+        for (const assignment of setMatch[1]!.split(/,(?![^(]*\))/)) {
+          const [rawField, rhs] = assignment.split('=').map((part) => part.trim());
+          const field = rawField && (ExpressionAttributeNames?.[rawField] ?? rawField);
+          if (!field || !rhs) {
+            continue;
+          }
+          const ifNotExists = /^if_not_exists\([^,]+,\s*(:\w+)\)$/.exec(rhs);
+          if (ifNotExists) {
+            existing[field] ??= ExpressionAttributeValues?.[ifNotExists[1]!];
+          } else if (rhs in (ExpressionAttributeValues ?? {})) {
+            existing[field] = ExpressionAttributeValues?.[rhs];
           }
         }
       }
@@ -159,8 +171,17 @@ function createFakeScheduler(options: { failCreate?: (name: string) => Error | u
     if (ctorName !== 'CreateScheduleCommand') {
       throw new Error(`handler.test.ts fake scheduler: unsupported command ${ctorName}`);
     }
-    const { Name } = (command as { input: { Name: string } }).input;
+    const { Name, GroupName } = (command as { input: { Name: string; GroupName?: string } }).input;
     attemptedNames.push(Name);
+    // Mirrors the IAM grant: scheduler:CreateSchedule is scoped to the dedicated group
+    // only, so a schedule without GroupName (the implicit `default` group) is denied.
+    if (GroupName !== 'boxalarm-dev-alerting-escalation') {
+      const denied = new Error(
+        `not authorized to create schedule in group ${GroupName ?? 'default'}`,
+      );
+      denied.name = 'AccessDeniedException';
+      return Promise.reject(denied);
+    }
     const failure = options.failCreate?.(Name);
     if (failure) {
       return Promise.reject(failure);
@@ -268,7 +289,7 @@ describe('fanout/handler self-test branch (E1-S8 AC1/AC2/AC3/AC4/AC5)', () => {
     process.env = { ...originalEnv };
   });
 
-  it('addresses SNS/DELIVERY_RECEIPT only to targetMemberId even when the roster has other members, and records a PASS SELF_TEST_RUN (AC1/AC3/AC4, core-harm)', async () => {
+  it('addresses SNS/DELIVERY_RECEIPT only to targetMemberId even when the roster has other members, and leaves the run RUNNING for the workers to decide (AC1/AC3/AC4, C3)', async () => {
     const ddb = createFakeDdb([
       memberSnapshot({ memberId: 'mbr-1' }),
       memberSnapshot({ memberId: 'mbr-2' }),
@@ -295,13 +316,14 @@ describe('fanout/handler self-test branch (E1-S8 AC1/AC2/AC3/AC4/AC5)', () => {
 
     const run = ddb.items.get('DEPT#NICHOLS#MEMBER#mbr-1#SELFTEST#1798000000');
     expect(run?.entityType).toBe('SELF_TEST_RUN');
-    expect(run?.overallResult).toBe('PASS');
-    const channelResults = run?.channelResults as Record<string, { ok: boolean; ms: number }>;
-    expect(channelResults.PUSH?.ok).toBe(true);
-    expect(channelResults.SMS?.ok).toBe(true);
+    // A successful SNS publish is not a pass (design review C3): the run waits for the
+    // workers' receipts, and records which dispatch and channels to read them from.
+    expect(run?.overallResult).toBe('RUNNING');
+    expect(run?.dispatchId).toBe('NICHOLS-SELFTEST-1798000000');
+    expect(run?.publishedChannels).toEqual(['PUSH', 'SMS']);
+    expect(run?.completedAtMs).toBeUndefined();
   });
-
-  it('records a specific push failure reason and overallResult FAIL when the member has no registered push token (AC5)', async () => {
+  it('records a specific push failure reason, and publishes only SMS, when the member has no registered push token (AC5)', async () => {
     const ddb = createFakeDdb([
       memberSnapshot({
         memberId: 'mbr-1',
@@ -322,12 +344,11 @@ describe('fanout/handler self-test branch (E1-S8 AC1/AC2/AC3/AC4/AC5)', () => {
     await handler(selfTestDispatchInsertEvent());
 
     const run = ddb.items.get('DEPT#NICHOLS#MEMBER#mbr-1#SELFTEST#1798000000');
-    expect(run?.overallResult).toBe('FAIL');
+    expect(run?.publishedChannels).toEqual(['SMS']);
     const channelResults = run?.channelResults as Record<string, { ok: boolean; reason?: string }>;
     expect(channelResults.PUSH).toEqual({ ok: false, ms: 0, reason: 'push: no token registered' });
-    expect(channelResults.SMS?.ok).toBe(true);
+    expect(channelResults.SMS).toBeUndefined();
   });
-
   it('records overallResult FAIL with reason "member not found" and never publishes when the targeted member has no MEMBER_ELIGIBILITY_SNAPSHOT, without failing the batch', async () => {
     const ddb = createFakeDdb([]);
     const sns = createFakeSns();
@@ -371,14 +392,12 @@ describe('fanout/handler self-test branch (E1-S8 AC1/AC2/AC3/AC4/AC5)', () => {
     });
 
     const run = ddb.items.get('DEPT#NICHOLS#MEMBER#mbr-1#SELFTEST#1798000000');
-    expect(run?.overallResult).toBe('FAIL');
+    expect(run?.publishedChannels).toEqual(['SMS']);
     const channelResults = run?.channelResults as Record<string, { ok: boolean; reason?: string }>;
     expect(channelResults.PUSH?.ok).toBe(false);
     expect(channelResults.PUSH?.reason).toContain('send failed');
-    expect(channelResults.SMS?.ok).toBe(true);
   });
-
-  it('records a specific SMS failure reason and overallResult FAIL when the member has no registered SMS number (P5)', async () => {
+  it('records a specific SMS failure reason, and publishes only push, when the member has no registered SMS number (P5)', async () => {
     const ddb = createFakeDdb([
       memberSnapshot({
         memberId: 'mbr-1',
@@ -394,19 +413,27 @@ describe('fanout/handler self-test branch (E1-S8 AC1/AC2/AC3/AC4/AC5)', () => {
       const actual = await importOriginal<typeof import('./snsClient.js')>();
       return { ...actual, createSnsClient: () => sns as unknown as SNSClient };
     });
+    const logSpy = vi.spyOn(console, 'log');
 
     const { handler } = await import('./handler.js');
     await handler(selfTestDispatchInsertEvent());
 
     const run = ddb.items.get('DEPT#NICHOLS#MEMBER#mbr-1#SELFTEST#1798000000');
-    expect(run?.overallResult).toBe('FAIL');
     const channelResults = run?.channelResults as Record<string, { ok: boolean; reason?: string }>;
     expect(channelResults.SMS).toEqual({ ok: false, ms: 0, reason: 'sms: no number registered' });
-    expect(channelResults.PUSH?.ok).toBe(true);
+    expect(run?.publishedChannels).toEqual(['PUSH']);
     expect(sns.calls).toHaveLength(1);
+    // A test's skip is counted in the self-test namespace, never the paging SmsSkipped series.
+    const lines = logSpy.mock.calls.map(([line]) => String(line));
+    expect(
+      lines.some(
+        (line) =>
+          line.includes('"Namespace":"Boxalarm/alerting-fan-out"') && line.includes('SmsSkipped'),
+      ),
+    ).toBe(false);
+    logSpy.mockRestore();
   });
-
-  it('reports overallResult FAIL with an eligibility reason for a MARKED_OFF member even though both channels send successfully (P6)', async () => {
+  it('records the eligibility reason for a MARKED_OFF member even though both channels are published (P6)', async () => {
     const ddb = createFakeDdb([
       memberSnapshot({ memberId: 'mbr-1', availabilityState: 'MARKED_OFF' }),
     ]);
@@ -425,15 +452,11 @@ describe('fanout/handler self-test branch (E1-S8 AC1/AC2/AC3/AC4/AC5)', () => {
 
     expect(sns.calls).toHaveLength(2);
     const run = ddb.items.get('DEPT#NICHOLS#MEMBER#mbr-1#SELFTEST#1798000000');
-    expect(run?.overallResult).toBe('FAIL');
     expect(run?.eligibilityReason).toBe(
       'member is MARKED_OFF — a real dispatch would not page you',
     );
-    const channelResults = run?.channelResults as Record<string, { ok: boolean }>;
-    expect(channelResults.PUSH?.ok).toBe(true);
-    expect(channelResults.SMS?.ok).toBe(true);
+    expect(run?.publishedChannels).toEqual(['PUSH', 'SMS']);
   });
-
   it('writes self-test DISPATCH_ALERT and DELIVERY_RECEIPT items without gsi2pk/gsi1pk so synthetic runs never surface in dept dispatch history or member receipt history (P7)', async () => {
     const ddb = createFakeDdb([memberSnapshot({ memberId: 'mbr-1' })]);
     const sns = createFakeSns();
@@ -469,6 +492,7 @@ describe('fanout/handler', () => {
     process.env.ALERTING_TOPIC_ARN = 'arn:aws:sns:us-east-1:1:boxalarm-dev-alerting-topic.fifo';
     process.env.ESCALATION_HANDLER_ARN = 'arn:aws:lambda:us-east-1:1:function:escalation';
     process.env.ESCALATION_SCHEDULER_ROLE_ARN = 'arn:aws:iam::1:role/scheduler';
+    process.env.ESCALATION_SCHEDULE_GROUP_NAME = 'boxalarm-dev-alerting-escalation';
     process.env.TONE_EVALUATOR_HANDLER_ARN = 'arn:aws:lambda:us-east-1:1:function:tone-evaluator';
     const defaultScheduler = createFakeScheduler();
     vi.doMock('../escalation/scheduleEscalation.js', async (importOriginal) => {
@@ -605,11 +629,60 @@ describe('fanout/handler', () => {
       return { ...actual, createSnsClient: () => sns as unknown as SNSClient };
     });
 
+    const logSpy = vi.spyOn(console, 'log');
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
     const { handler } = await import('./handler.js');
     await expect(handler(dispatchAlertInsertEvent())).resolves.toEqual({
       batchItemFailures: [],
     });
     expect(sns.calls).toHaveLength(0);
+    // Both alarmed (design review M6): nobody paged, and an eligible count of zero.
+    const metrics = logSpy.mock.calls.map(([line]) => String(line));
+    expect(metrics.some((line) => line.includes('"Name":"EmptyRoster"'))).toBe(true);
+    expect(metrics.some((line) => line.includes('"EligibleMemberCount":0'))).toBe(true);
+    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('fanout.empty_roster'));
+    logSpy.mockRestore();
+    errorSpy.mockRestore();
+  });
+
+  // Review MINOR-6: eligible members, none reachable right now. Still alarmed, but the roster
+  // and the tone ladder are scheduled, so tones 2/3 re-resolve and page a member whose device or
+  // phone arrives in the meantime.
+  it('with eligible members but no reachable channel, still seeds the roster and schedules the tone ladder', async () => {
+    const ddb = createFakeDdb([memberSnapshot({ contactChannels: [] })]);
+    const sns = createFakeSns();
+    const scheduler = createFakeScheduler();
+    vi.doMock('../eligibility/dynamoClient.js', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('../eligibility/dynamoClient.js')>();
+      return { ...actual, createDynamoClient: () => ddb as unknown as DynamoDBDocumentClient };
+    });
+    vi.doMock('./snsClient.js', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('./snsClient.js')>();
+      return { ...actual, createSnsClient: () => sns as unknown as SNSClient };
+    });
+    vi.doMock('../escalation/scheduleEscalation.js', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('../escalation/scheduleEscalation.js')>();
+      return {
+        ...actual,
+        getSchedulerClient: () => ({ send: scheduler.send }) as unknown as SchedulerClient,
+      };
+    });
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    const { handler } = await import('./handler.js');
+    await expect(handler(dispatchAlertInsertEvent())).resolves.toEqual({ batchItemFailures: [] });
+
+    expect(sns.calls).toHaveLength(0);
+    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('fanout.empty_roster'));
+    expect(ddb.items.get('DEPT#NICHOLS#DISPATCH#NICHOLS-1-1798000000#ROSTER#mbr-1')).toBeDefined();
+    expect(scheduler.createdNames).toEqual(
+      expect.arrayContaining([
+        toneScheduleName('NICHOLS', 'NICHOLS-1-1798000000', 2),
+        toneScheduleName('NICHOLS', 'NICHOLS-1-1798000000', 3),
+      ]),
+    );
+    errorSpy.mockRestore();
   });
 
   it('skips only the push send when the member has no registered push token — SMS is unaffected (E1-S14 dependency)', async () => {
@@ -631,6 +704,36 @@ describe('fanout/handler', () => {
 
     expect(sns.calls).toHaveLength(1);
     expect(sns.calls[0]!.MessageAttributes.channel?.StringValue).toBe('sms');
+  });
+
+  // Design review C2: an SMS published for a member with no SMS entry was dropped by the worker
+  // as NoTargetRegistered, acknowledged with no DLQ and no alarm. The producer now applies the
+  // worker's own lookup first, and counts the skip (SmsSkipped is alarmed).
+  it('skips only the SMS send when the member has no SMS entry, and counts it — push is unaffected (C2)', async () => {
+    const ddb = createFakeDdb([
+      memberSnapshot({
+        contactChannels: [{ channel: 'PUSH', token: 'tok-1', platform: 'APNS', valid: true }],
+      }),
+    ]);
+    const sns = createFakeSns();
+    vi.doMock('../eligibility/dynamoClient.js', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('../eligibility/dynamoClient.js')>();
+      return { ...actual, createDynamoClient: () => ddb as unknown as DynamoDBDocumentClient };
+    });
+    vi.doMock('./snsClient.js', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('./snsClient.js')>();
+      return { ...actual, createSnsClient: () => sns as unknown as SNSClient };
+    });
+    const logSpy = vi.spyOn(console, 'log');
+
+    const { handler } = await import('./handler.js');
+    await handler(dispatchAlertInsertEvent());
+
+    expect(sns.calls.map((call) => call.MessageAttributes.channel?.StringValue)).toEqual(['push']);
+    expect(logSpy.mock.calls.some(([line]) => String(line).includes('"Name":"SmsSkipped"'))).toBe(
+      true,
+    );
+    logSpy.mockRestore();
   });
 
   it('reports the failing record as a batch item failure when one channel publish fails, without aborting the whole invocation — Streams redrives only that record (R3, no shard-blocking)', async () => {
@@ -900,9 +1003,9 @@ describe('fanout/handler', () => {
 
     expect(new Set(scheduler.attemptedNames)).toEqual(
       new Set([
-        'esc-NICHOLS-NICHOLS-1-1798000000-mbr-1-1',
-        'tone-NICHOLS-NICHOLS-1-1798000000-2',
-        'tone-NICHOLS-NICHOLS-1-1798000000-3',
+        escalationScheduleName('NICHOLS', 'NICHOLS-1-1798000000', 'mbr-1', 1),
+        toneScheduleName('NICHOLS', 'NICHOLS-1-1798000000', 2),
+        toneScheduleName('NICHOLS', 'NICHOLS-1-1798000000', 3),
       ]),
     );
     expect(scheduler.attemptedNames).toHaveLength(6);
@@ -912,6 +1015,12 @@ describe('fanout/handler', () => {
     const roster = ddb.items.get('DEPT#NICHOLS#DISPATCH#NICHOLS-1-1798000000#ROSTER#mbr-1');
     expect(roster?.entityType).toBe('DISPATCH_ROSTER_ENTRY');
     expect(roster?.ackStatus).toBe('NONE');
+
+    // The officer's "next tone at" (architecture nextToneAt): tone 2's time, with tone 3's kept
+    // for the Tone Evaluator to move to - the default T+180s / T+360s ladder.
+    const metadata = ddb.items.get('DEPT#NICHOLS#DISPATCH#NICHOLS-1-1798000000#METADATA');
+    expect(metadata?.nextToneAt).toEqual(expect.any(Number));
+    expect(Number(metadata?.tone3At) - Number(metadata?.nextToneAt)).toBe(180);
   });
 
   it('still sends both tone-1 channel publishes when the escalation schedule create fails, then fails the batch item so Streams retries (core-harm, not silently swallowed)', async () => {

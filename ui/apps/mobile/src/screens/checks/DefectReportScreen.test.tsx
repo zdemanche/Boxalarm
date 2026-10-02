@@ -63,7 +63,7 @@ test('submitting a defect report calls submitDefect with the entered description
     fireEvent.changeText(input, 'Low tire pressure, rear axle');
   });
   await act(async () => {
-    fireEvent.press(await findByText('Major'));
+    fireEvent.press(await findByText('Affects service'));
   });
   await act(async () => {
     fireEvent.press(await findByText('Submit defect report'));
@@ -91,7 +91,9 @@ test('a failed submission does not show the confirmation and surfaces an error i
     fireEvent.press(await findByText('Submit defect report'));
   });
 
-  expect(await findByText('Network request failed')).toBeTruthy();
+  expect(await findByText(/could not be saved on this phone/)).toBeTruthy();
+  // The raw error text is never shown to the member.
+  expect(queryByText('Network request failed')).toBeNull();
   expect(queryByText('Defect reported')).toBeNull();
   submitSpy.mockRestore();
 });
@@ -109,7 +111,7 @@ test('a retry after a failure reuses the same idempotency key, so a resent repor
   await act(async () => {
     fireEvent.press(await findByText('Submit defect report'));
   });
-  await findByText('Network request failed');
+  await findByText(/could not be saved on this phone/);
   await act(async () => {
     fireEvent.press(await findByText('Submit defect report'));
   });
@@ -170,7 +172,7 @@ test('selecting out-of-service severity shows the OOS consequence without a sepa
   expect(queryByText(/takes the unit out of service/i)).toBeNull();
 
   await act(async () => {
-    fireEvent.press(await findByText('Out of service'));
+    fireEvent.press(await findByText('Out of service now'));
   });
 
   expect(

@@ -4,10 +4,12 @@ import { ServiceLambda } from "../observability/service-lambda";
 import { ServiceLogGroup } from "../observability/service-log-group";
 import { HttpApi } from "../api/http-api";
 import { verifiedPermissionsPolicyStatement } from "../authz/policy-store";
+import { auditMutationDenyStatement } from "../data/platform-table";
 import { lambdaCode, LAMBDA_HANDLER } from "../shared/lambda-code";
 import { requireEnv } from "../shared/env";
 import { PlatformBus } from "../messaging/platform-bus";
 import { QueueConsumer } from "../messaging/queue-consumer";
+import { grantAlertingCmk } from "../alerting/alerting-cmk";
 
 export interface AvailabilityArgs {
   env: string;
@@ -19,9 +21,13 @@ export interface AvailabilityArgs {
   httpApi: HttpApi;
   platformBus: PlatformBus;
   alertingTableArn: pulumi.Input<string>;
+  /** Alerting-table CMK — every role touching the table needs it (alerting-cmk.ts). */
+  alertingCmkArn: pulumi.Input<string>;
   alertingTableName: pulumi.Input<string>;
   alertingLogGroup: ServiceLogGroup;
   alertingPermissionsBoundaryArn?: pulumi.Input<string>;
+  /** alerting-page topic (alerting/page-topic.ts): the snapshot / revocation consumer's alarms page. */
+  pageTopicArn: pulumi.Input<string>;
 }
 
 /**
@@ -34,6 +40,10 @@ export interface AvailabilityArgs {
 export class Availability extends pulumi.ComponentResource {
   public readonly expiryLambda: ServiceLambda;
   public readonly createLambda: ServiceLambda;
+  /** GET .../availability: the member's current and upcoming mark-offs (markoffs.ts). */
+  public readonly listLambda: ServiceLambda;
+  /** POST .../availability/{markoffId}/end: end a mark-off early (markoffs.ts). */
+  public readonly endLambda: ServiceLambda;
   public readonly schedulerRole: aws.iam.Role;
   public readonly availabilityChangedConsumer: ServiceLambda;
   public readonly availabilityChangedQueueConsumer: QueueConsumer;
@@ -50,6 +60,8 @@ export class Availability extends pulumi.ComponentResource {
         Action: ["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:UpdateItem"],
         Resource: [arn],
       },
+      // F9.4: holding table-wide UpdateItem, never on a DEPT#*#AUDIT#* row.
+      auditMutationDenyStatement(arn),
     ]);
 
     this.expiryLambda = new ServiceLambda(
@@ -106,6 +118,12 @@ export class Availability extends pulumi.ComponentResource {
       { parent: this },
     );
 
+    // availability/handler.ts creates/deletes schedules named avail-* in the default
+    // group of this account and region only.
+    const region = aws.getRegionOutput({}, { parent: this });
+    const caller = aws.getCallerIdentityOutput({}, { parent: this });
+    const scheduleResourcePattern = pulumi.interpolate`arn:aws:scheduler:${region.name}:${caller.accountId}:schedule/default/avail-*`;
+
     this.createLambda = new ServiceLambda(
       `${name}-create`,
       {
@@ -122,15 +140,20 @@ export class Availability extends pulumi.ComponentResource {
           AVAILABILITY_SCHEDULER_ROLE_ARN: this.schedulerRole.arn,
         },
         additionalPolicyStatements: pulumi
-          .all([tableStatement, pulumi.output(args.policyStoreArn), this.schedulerRole.arn])
-          .apply(([table, policyStoreArn, schedulerRoleArn]) => [
+          .all([
+            tableStatement,
+            pulumi.output(args.policyStoreArn),
+            this.schedulerRole.arn,
+            scheduleResourcePattern,
+          ])
+          .apply(([table, policyStoreArn, schedulerRoleArn, schedulePattern]) => [
             ...table,
             verifiedPermissionsPolicyStatement(policyStoreArn),
             {
               Sid: "AvailabilityManageSchedules" as const,
               Effect: "Allow" as const,
               Action: ["scheduler:CreateSchedule", "scheduler:DeleteSchedule"],
-              Resource: `arn:aws:scheduler:*:*:schedule/default/avail-*`,
+              Resource: schedulePattern,
             },
             {
               Sid: "AvailabilityPassSchedulerRole" as const,
@@ -151,6 +174,110 @@ export class Availability extends pulumi.ComponentResource {
       { parent: this },
     );
 
+    // Paging review MAJOR-A: a mark-off really stops pages, so it can be listed and ended early
+    // - by the member, or by an officer (Cedar two-guard in availability/markoffs.ts).
+    const vp = pulumi
+      .output(args.policyStoreArn)
+      .apply((policyStoreArn) => verifiedPermissionsPolicyStatement(policyStoreArn));
+    this.listLambda = new ServiceLambda(
+      `${name}-list`,
+      {
+        env,
+        serviceName: "personnel-service",
+        functionName: `boxalarm-${env}-personnel-availability-list`,
+        handler: LAMBDA_HANDLER,
+        code: lambdaCode("personnel-service", "availability-list"),
+        logGroup: args.logGroup,
+        environment: {
+          PLATFORM_TABLE_NAME: args.platformTableName,
+          VERIFIED_PERMISSIONS_POLICY_STORE_ID: args.policyStoreId,
+        },
+        additionalPolicyStatements: pulumi
+          .all([pulumi.output(args.platformTableArn), vp])
+          .apply(([tableArn, vpStatement]) => [
+            {
+              // MARKOFF# rows live under the member partition only.
+              Sid: "AvailabilityListMarkoffs" as const,
+              Effect: "Allow" as const,
+              Action: ["dynamodb:Query"],
+              Resource: [tableArn],
+              Condition: {
+                "ForAllValues:StringLike": { "dynamodb:LeadingKeys": ["DEPT#*#MEMBER#*"] },
+              },
+            },
+            vpStatement,
+          ]),
+      },
+      { parent: this },
+    );
+    args.httpApi.route(
+      `${name}-list-route`,
+      {
+        routeKey: "GET /api/v1/personnel/members/{memberId}/availability",
+        lambda: this.listLambda,
+      },
+      { parent: this },
+    );
+
+    this.endLambda = new ServiceLambda(
+      `${name}-end`,
+      {
+        env,
+        serviceName: "personnel-service",
+        functionName: `boxalarm-${env}-personnel-availability-end`,
+        handler: LAMBDA_HANDLER,
+        code: lambdaCode("personnel-service", "availability-end"),
+        logGroup: args.logGroup,
+        environment: {
+          PLATFORM_TABLE_NAME: args.platformTableName,
+          VERIFIED_PERMISSIONS_POLICY_STORE_ID: args.policyStoreId,
+        },
+        additionalPolicyStatements: pulumi
+          .all([pulumi.output(args.platformTableArn), vp, scheduleResourcePattern])
+          .apply(([tableArn, vpStatement, schedulePattern]) => [
+            {
+              // Read + end the MARKOFF# row (never deleted: a replayed create must 409).
+              Sid: "AvailabilityEndMarkoff" as const,
+              Effect: "Allow" as const,
+              Action: ["dynamodb:GetItem", "dynamodb:UpdateItem"],
+              Resource: [tableArn],
+              Condition: {
+                "ForAllValues:StringLike": { "dynamodb:LeadingKeys": ["DEPT#*#MEMBER#*"] },
+              },
+            },
+            {
+              // The AVAILABLE outbox row and the audit row, in the same transaction.
+              Sid: "AvailabilityEndOutboxAndAudit" as const,
+              Effect: "Allow" as const,
+              Action: ["dynamodb:PutItem"],
+              Resource: [tableArn],
+              Condition: {
+                "ForAllValues:StringLike": {
+                  "dynamodb:LeadingKeys": ["DEPT#*#OUTBOX#MEMBER#*", "DEPT#*#AUDIT#*"],
+                },
+              },
+            },
+            auditMutationDenyStatement(tableArn),
+            vpStatement,
+            {
+              Sid: "AvailabilityDeleteSchedules" as const,
+              Effect: "Allow" as const,
+              Action: ["scheduler:DeleteSchedule"],
+              Resource: schedulePattern,
+            },
+          ]),
+      },
+      { parent: this },
+    );
+    args.httpApi.route(
+      `${name}-end-route`,
+      {
+        routeKey: "POST /api/v1/personnel/members/{memberId}/availability/{markoffId}/end",
+        lambda: this.endLambda,
+      },
+      { parent: this },
+    );
+
     // #207: personnel.availability.changed -> availability-snapshot-queue ->
     // alerting-service's eligibility/consumer.ts, alerting-table-only (IAM boundary).
     this.availabilityChangedConsumer = new ServiceLambda(
@@ -165,9 +292,12 @@ export class Availability extends pulumi.ComponentResource {
         environment: { ALERTING_TABLE_NAME: args.alertingTableName },
         additionalPolicyStatements: pulumi.output(args.alertingTableArn).apply((arn) => [
           {
+            // eligibility/consumer.ts: one transaction of Put (dedup marker) + Update
+            // (MEMBER_ELIGIBILITY_SNAPSHOT) items, authorized item-by-item —
+            // dynamodb:TransactWriteItems is not an IAM action.
             Sid: "AlertingTableWrite" as const,
             Effect: "Allow" as const,
-            Action: ["dynamodb:TransactWriteItems"],
+            Action: ["dynamodb:PutItem", "dynamodb:UpdateItem"],
             Resource: [arn],
           },
         ]),
@@ -181,12 +311,28 @@ export class Availability extends pulumi.ComponentResource {
       {
         env,
         ruleName: `boxalarm-${env}-availability-changed`,
-        eventPattern: JSON.stringify({ "detail-type": ["personnel.availability.changed"] }),
+        // Matches the declared producer (personnel-service) as well as the detail-type. This is a
+        // routing filter, not a trust boundary: `source` is whatever the publisher declares - the
+        // platform outbox publisher copies each row's own `source`, and no events:PutEvents grant
+        // on the bus carries an events:source condition - so it keeps a same-named event from
+        // another producer out by accident, not by force (review F3).
+        eventPattern: JSON.stringify({
+          source: ["personnel-service"],
+          "detail-type": ["personnel.availability.changed"],
+        }),
         queueName: `boxalarm-${env}-availability-snapshot-queue`,
         lambda: this.availabilityChangedConsumer.function,
         lambdaRole: this.availabilityChangedConsumer.role,
+        alarmTopicArn: args.pageTopicArn,
         maxReceiveCount: 5,
       },
+      { parent: this },
+    );
+
+    grantAlertingCmk(
+      name,
+      { availabilityChangedConsumer: this.availabilityChangedConsumer.role },
+      args.alertingCmkArn,
       { parent: this },
     );
 

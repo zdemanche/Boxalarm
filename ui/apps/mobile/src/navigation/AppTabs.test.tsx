@@ -26,11 +26,11 @@ async function renderTabs() {
   );
 }
 
-test('renders all four tabs from architecture.md §7.2: Alerts, Checks, Schedule, Me', async () => {
+test('renders all four tabs from architecture.md §7.2: Alerts, Apparatus (Checks stack), Schedule, Me', async () => {
   const { findAllByText, findByText } = await renderTabs();
 
   expect((await findAllByText('Alerts')).length).toBeGreaterThan(0);
-  expect(await findByText('Checks')).toBeTruthy();
+  expect((await findAllByText('Apparatus')).length).toBeGreaterThan(0);
   expect(await findByText('Schedule')).toBeTruthy();
   expect(await findByText('Me')).toBeTruthy();
 });
@@ -41,13 +41,13 @@ test('opens on the Alerts tab by default, showing its real content', async () =>
   expect(await findByRole('header', { name: 'Alerts' })).toBeTruthy();
 });
 
-test("switching tabs shows that tab's real content - Checks (5), Schedule (6), Alerts (7)", async () => {
+test("switching tabs shows that tab's real content - Apparatus (5), Schedule (6), Alerts (7)", async () => {
   const { findByText, findAllByText, findByRole } = await renderTabs();
 
   expect(await findByRole('header', { name: 'Alerts' })).toBeTruthy();
 
   await act(async () => {
-    fireEvent.press(await findByText('Checks'));
+    fireEvent.press((await findAllByText('Apparatus'))[0]!);
   });
   expect(await findByText('ENGINE-2')).toBeTruthy();
 

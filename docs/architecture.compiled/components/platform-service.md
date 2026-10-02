@@ -1,59 +1,33 @@
-# platform-service
+# Platform Service
 
 ## Purpose & Boundaries
-
-Cognito triggers, department configuration (F9.3), Verified Permissions policy admin, cross-service audit log sink (F9.4), full data export (F9.5). Service 2 of 10, Wave 1. Also the **physical DynamoDB table owner** for 7 other logical services (personnel, apparatus, training, reporting-read-model, inspections, inventory, notification) — a deliberate deviation from one-table-per-service since these share one operational lifecycle (general CRUD/config) with no independent scaling need.
+Cognito triggers (incl. Pre Token Generation), department configuration (F9.3: STATIONS, RANKS, LOSAP_POINT_RULES, ALERT_RULES, CHECKLIST_DEFAULTS, `retention`, CAD_INGRESS, NERIS), Verified Permissions policy admin, cross-service audit-log sink (F9.4), data export (F9.5), session revoke/credential reset, CAD source management, NERIS entity registry + async entity sync worker. Owns the `platform` DynamoDB table which the eight LOB services share. Out of scope: alert delivery.
 
 ## Interfaces
-
-Base path `/api/v1/platform/...`.
-
-| Method | Path | Description | Auth |
-|---|---|---|---|
-| GET | `/config` | Department config: apparatus, stations, ranks, point rules, checklists, alert rules (F9.3) | Cognito(admin) |
-| PUT | `/config` | Update config. **Obligation:** `configType=ALERT_RULES` write must reject `requiredQuals` naming a qual no currently-eligible member holds (validator not designed, named obligation) | Cognito(admin) |
-| GET | `/audit` | Cross-service record-mutation audit log (F9.4) | Cognito(admin) |
-| POST | `/export` | Request full data export job, accept-and-queue (F9.5) | Cognito(admin) |
-| GET | `/export/{jobId}` | Export job status + download link | Cognito(admin) |
-| GET | `/health/liveness` \| `/health/readiness` | Health | none |
+GET/PUT `/api/v1/platform/config` (admin; PUT ALERT_RULES must reject `requiredQuals` naming a qual code no currently-eligible member holds — validator NOT yet built; amendment obligation); GET `/audit`; POST `/export`, GET `/export/{jobId}` (accept-and-queue; Cedar CHIEF/ADMIN only, alarmed on every invocation); POST `/sessions/revoke` (Cedar `RevokeSession`; body `{memberId, deviceId?}`; signs out on every device via marker+global sign-out, removes push from deviceId or all; chief notified; protected-target gated); GET `/sessions/{memberId}/devices` (Cedar `ViewMemberDevices`; installation id, platform, last registration — never the token); POST `/sessions/reset-credentials` (Cedar `ResetMemberCredentials`; `AdminResetUserPassword` then sign-out; marker written before reset and again after sign-out); GET/PUT `/platform/neris/entity` (PUT -> 202 + worker); GET/PUT `/platform/cad-sources` (Cedar `ManageCadIngress`); POST `/cad-sources/test-parse`; POST `/cad-sources/{sourceId}/email-address` (old address stops within a minute); POST `/cad-sources/{sourceId}/webhook-key` (rotate HMAC + API Gateway key; previous lives 24h); POST `/cad-sources/{sourceId}/webhook-key/revoke-previous`; health pair. Table is non-exhaustive; registrations in `infrastructure/components/api/http-api.ts` authoritative.
 
 ## Data Ownership
-
-Physical table `platform-service` (shared, on-demand, PITR on, Streams on, AWS-managed KMS key — cost grounds, unlike alerting/incident's customer-managed key). Three generic GSI roles used across all entities on this table: **GSI1** "my records" (`gsi1pk=MEMBER#{memberId}`), **GSI2** "due within window" (`gsi2pk=DEPT#{deptId}#DUE#{entityType}#{YYYY-MM}`, month-bucketed), **GSI3** "department lists/geo/audit-by-entity" (`gsi3pk=DEPT#{deptId}#{entityType}[#GEO#{geohash5}|#ADDR#{normalizedAddress}]`).
-
-- **DEPARTMENT_CONFIG** — `pk=DEPT#{deptId}`, `sk=CONFIG#{configType}` (`STATIONS`|`RANKS`|`LOSAP_POINT_RULES`|`ALERT_RULES`|`CHECKLIST_DEFAULTS`|`retention`). `version` optimistic-lock counter. Read-mostly, Valkey caching candidate.
-- **AUDIT_LOG_ENTRY** (F9.4) — `pk=DEPT#{deptId}#AUDIT#{YYYY-MM-DD}` (daily-bucketed), `sk={ts}#{entityType}#{entityId}#{actorId}`. `changedFields` inherits PII classification from the audited entity. No TTL; export-to-S3 archival after 2 years.
-- **NOTIFICATION_PREFERENCE** / **NOTIFICATION** — see notification-service sheet (owned logically by notification-service, physically on this table).
+Platform table (AWS-managed key, Streams, PITR). Generic GSIs: GSI1 `gsi1pk=MEMBER#{memberId}`/`gsi1sk={entityType}#{sortValue}`; GSI2 `gsi2pk=DEPT#{deptId}#DUE#{entityType}#{YYYY-MM}`/`gsi2sk={dueDate}#{entityId}`; GSI3 `gsi3pk=DEPT#{deptId}#{entityType}[#GEO#{geohash5}|#ADDR#{normalizedAddress}]`/`gsi3sk={sortValue}#{entityId}`. DEPARTMENT_CONFIG `pk=DEPT#{deptId}` `sk=CONFIG#{configType}`, `value`, `version`. NERIS entity row `sk=NERIS#ENTITY` on same bare partition; `CONFIG#NERIS` holds `submissionsEnabled` kill switch and `timeZone` (default America/New_York). AUDIT_LOG_ENTRY `pk=DEPT#{deptId}#AUDIT#{YYYY-MM-DD}` `sk={ts}#{entityType}#{entityId}#{actorId}`, gsi3 `DEPT#{deptId}#AUDIT#ENTITY#{mutatedEntityType}#{mutatedEntityId}`/`{ts}`; no TTL, archive to S3 after 2 years. Session revocation marker `DEPT#{deptId}#SESSION_REVOCATION#{sub}` (platform table). OUTBOX_ENTRY `pk=OUTBOX#{aggregateId}` `sk=EVT#{eventId}` TTL 7d after sentAt; EVENT_DEDUP `pk=DEDUP#{consumerName}` `sk=EVT#{eventId}` TTL 48h. S3 buckets `nichols-boxalarm-platform-assets` and `boxalarm-exports-staging` (7-day expiry). Valkey keys: `platform-service:dept-config:{deptId}#{configType}` TTL 5min; `platform-service:dashboard:{deptId}` 5-15min.
 
 ## Events Produced
-
-- `platform.config.alert_rules.updated` — outbox pattern, on `PUT /config` write with `configType=ALERT_RULES`. Crosses **into** the alerting plane (sanctioned direction). Consumer: `alerting-service`'s `ALERT_RULES_COPY` maintainer. Transport: `boxalarm-{env}-platform-bus` → `alert-rules-copy-queue` + DLQ, `maxReceiveCount: 5`.
-- Outbox pattern used generally for every write that must also raise an event (write + outbox row in one DynamoDB transaction; Streams-triggered Lambda publishes and marks sent).
+`platform.config.alert_rules.updated` (outbox, on PUT config with configType=ALERT_RULES; payload deptId, toneLadder{tone2AtSeconds,tone3AtSeconds,mutualAidAfterTone}, retoneRespondingMembers, voiceEscalatesPerTone, defaultRule, callTypeOverrides; transport platform bus -> `alert-rules-copy-queue`+DLQ maxReceive 5). `personnel.member.updated` emitted from device-loss handler with `source: personnel-service` (known widening; `changedBy` names actor; per-producer allow-list at drain pending). Audit events (outbox AuditEvent stream). CAD config propagates to `CAD_INGRESS_COPY`. NERIS entity sync events.
 
 ## Events Consumed
-
-None directly (platform-service is largely a producer/sink for config and audit).
+AuditEvent stream from all services (sink); member status changes (LOA/RETIRED) -> revocation + login-disable consumer.
 
 ## Dependencies
-
-**Internal:** consumed by every other LOB service for config reads (Valkey-fronted, §6) and audit-entry writes. `alerting-service` consumes `platform.config.alert_rules.updated` only (event-driven, never a synchronous read — C-2 isolation invariant is enforced by IAM on alerting-service's side).
-
-**External:** ElastiCache Serverless Valkey (config caching, `platform-service:dept-config:{deptId}#{configType}`, 5 min TTL, soft dependency).
+internal: personnel-service (`writePushDevices` imported across boundary), alerting-service, incident-service, infrastructure. external: Cognito (AdminDisableUser/AdminEnableUser/AdminUserGlobalSignOut/AdminResetUserPassword), Verified Permissions, NERIS API (entity sync, holds client credentials), Secrets Manager, SSM, S3, Valkey.
 
 ## Gotchas & Constraints
-
-- **`POST /platform/export` is the one sanctioned exception to the alerting isolation invariant** — it runs under a dedicated read-only role with read access to all three physical tables (the only principal outside alerting-service holding any alerting-table permission). Cedar chief/admin-gated, **no re-authentication challenge** (per session policy), and **alarmed on every single invocation**, not just on volume.
-- **No MFA, no step-up, no session timeout anywhere** — export and destructive admin actions are gated by a Cedar role check alone. A valid session on a chief/admin account is, by itself, sufficient to export every member's PII/LOSAP/incident history. Controls that remain are detection and reversal (alarms, audit, revocation), never prevention.
-- **`PUT /platform/config` with `configType=ALERT_RULES` must reject an impossible `requiredQuals` predicate** (naming a qual no eligible member holds) — unvalidated, this fires mutual aid on every dispatch of that call type. Validator is a named, not-yet-designed obligation.
-- **GSI3's low-cardinality list partitions are an accepted, documented tradeoff** at single-department scale (one partition per department per entity type) — resharding path (suffix or geohash) named if a second department pools cross-department lists or any entity type exceeds ~50k items.
-- **DEPARTMENT_CONFIG gains a `retention` configType** so N6.3's "configurable to CT/municipal requirements" has an actual configuration surface (not yet populated — CT rules unresolved, OQ-19).
+- LOA/RETIRED consumer: write revocation marker, `AdminDisableUser`, then `AdminUserGlobalSignOut`; ACTIVE/PROBATIONARY -> `AdminEnableUser`; acts on current member status, re-reads after each Cognito call; only failed records retried; `LoginEnableFailed` alarms.
+- Pre Token Generation refuses tokens for LOA/RETIRED on sign-in and every refresh; FAILS OPEN on lookup error (single 800ms attempt).
+- Self sign-up off (`allowAdminCreateUserOnly: true`). Cognito: `MfaConfiguration: OFF`, refresh 3650d, rotation with grace window.
+- Export uses a dedicated read-only role with read to all three tables — only sanctioned cross-table IAM principal; Cedar CHIEF/ADMIN, no step-up.
+- NERIS entity sync worker holds NERIS client secret; LeadingKeys grant matches partition key only, so it can still write `CONFIG#*` rows including kill switch and `DEPT#*#OUTBOX` — accepted known gap; fix = move row to `DEPT#{deptId}#NERIS_ENTITY` (migration, follow-on).
+- Malformed outbox row dropped (`MalformedOutboxRow` alarm); queue policies key on rule ARN not bus ARN.
+- Reporting Projections DynamoDB rollup counters live on this table (not CQRS).
+- Disposal: verified hard delete for LOB; crypto-shredding for archived incident/receipt classes.
+- Member-email change is guarded in personnel-service but writes marker `LOGIN_EMAIL_CHANGE`.
 
 ## Source Sections
-
-- Backend §1.1 Service inventory, service-to-table mapping (`:120-146`)
-- Backend §2 platform-service API endpoints (`:300-311`)
-- Data Model §1, §3.3 (MEMBER GSI roles, DEPARTMENT_CONFIG, AUDIT_LOG_ENTRY) (`:534-546`, `:925-1320`)
-- Data Model §6 Caching (`:1433-1443`)
-- Events §Producer/consumer table, `platform.config.alert_rules.updated` (`:1766-1821`)
-- Cross-Cutting: Data Protection — export IAM path, anomalous access monitoring, session policy (`:2617-2629`)
-- Cross-Cutting: Security & Auth (`:2631-2649`)
+Backend §1.1 (122-150); §1.4 outbox amendment (285-291); §2 platform-service endpoints (354-373); §4.1-4.2 (544-560); Data Model DEPARTMENT_CONFIG/AUDIT/retention (1379-1422); Events reconciliations 6 (1633-1639); Events ALERT_RULES event (1858-1877); Cross-Cutting Data Protection/Session policy (2721-2734); Security (2736-2754)

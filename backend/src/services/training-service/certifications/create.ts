@@ -125,16 +125,18 @@ async function createCertificationInner(
 
   let attachmentS3Key: string | null = null;
   let uploadUrl: string | undefined;
+  let uploadContentType: string | undefined;
   if (value.attachmentFilename) {
     try {
       const config = await readAttachmentUploadConfig(process.env);
-      const upload = createAttachmentUploadUrl(config, {
+      const upload = await createAttachmentUploadUrl(config, {
         deptId,
         certId,
         filename: value.attachmentFilename,
       });
       attachmentS3Key = upload.attachmentS3Key;
       uploadUrl = upload.uploadUrl;
+      uploadContentType = upload.contentType;
     } catch (error) {
       if (error instanceof TypeError) {
         console.error(
@@ -183,7 +185,7 @@ async function createCertificationInner(
     return {
       statusCode: 201,
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(uploadUrl ? { ...record, uploadUrl } : record),
+      body: JSON.stringify(uploadUrl ? { ...record, uploadUrl, uploadContentType } : record),
     };
   } catch (error) {
     emitCertificationMetric('Failed');

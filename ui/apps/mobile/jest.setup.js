@@ -32,11 +32,12 @@ jest.mock('react-native-image-picker', () => ({
 
 // @op-engineering/op-sqlite has no native binding under Jest (NativeModules.OPSQLite is
 // undefined), so importing it for real throws at module load. This fake implements exactly the
-// statements outboxStore.ts issues against an in-memory array, scoped per test file (module
+// statements outboxStore.ts and kvStore.ts issue against in-memory structures, scoped per test file (module
 // registry resets between files) so tests don't leak rows into each other.
 jest.mock('@op-engineering/op-sqlite', () => {
   function createFakeDb() {
     let rows = [];
+    const kv = new Map();
     return {
       executeSync: () => ({ rows: [] }),
       execute: async (sql, params = []) => {
@@ -59,6 +60,9 @@ jest.mock('@op-engineering/op-sqlite', () => {
             'queuedAt',
             'nextAttemptAt',
             'syncedAt',
+            'ownerMemberId',
+            'ownerDeptId',
+            'answeredAsHint',
           ];
           const row = {};
           columns.forEach((column, index) => {
@@ -73,6 +77,25 @@ jest.mock('@op-engineering/op-sqlite', () => {
         }
         if (statement.startsWith('SELECT * FROM outbox WHERE id = ?')) {
           return { rows: rows.filter((row) => row.id === params[0]) };
+        }
+        if (statement.startsWith("UPDATE outbox SET status = 'SYNCING' WHERE id = ? AND status")) {
+          const row = rows.find((candidate) => candidate.id === params[0]);
+          if (!row || row.status === 'SYNCING') return { rows: [], rowsAffected: 0 };
+          row.status = 'SYNCING';
+          return { rows: [], rowsAffected: 1 };
+        }
+        if (statement.startsWith("DELETE FROM outbox WHERE id = ? AND status != 'SYNCING'")) {
+          const before = rows.length;
+          rows = rows.filter((row) => !(row.id === params[0] && row.status !== 'SYNCING'));
+          return { rows: [], rowsAffected: before - rows.length };
+        }
+        if (statement.startsWith("DELETE FROM outbox WHERE id = ? AND status = 'QUEUED'")) {
+          const before = rows.length;
+          rows = rows.filter(
+            (row) =>
+              !(row.id === params[0] && row.status === 'QUEUED' && Number(row.attempts) === 0),
+          );
+          return { rows: [], rowsAffected: before - rows.length };
         }
         if (statement.startsWith('UPDATE outbox SET')) {
           const id = params[params.length - 1];
@@ -95,11 +118,77 @@ jest.mock('@op-engineering/op-sqlite', () => {
           rows = rows.filter((row) => row.id !== params[0]);
           return { rows: [] };
         }
+        if (statement.startsWith('INSERT OR REPLACE INTO kv')) {
+          kv.set(params[0], { key: params[0], value: params[1], updatedAt: params[2] });
+          return { rows: [] };
+        }
+        if (statement.startsWith('SELECT key, value, updatedAt FROM kv WHERE key = ?')) {
+          const row = kv.get(params[0]);
+          return { rows: row ? [row] : [] };
+        }
+        if (statement.startsWith('DELETE FROM kv WHERE key >= ? AND key < ?')) {
+          for (const key of [...kv.keys()]) {
+            if (key >= params[0] && key < params[1]) kv.delete(key);
+          }
+          return { rows: [] };
+        }
+        if (statement.startsWith('DELETE FROM kv WHERE key = ?')) {
+          kv.delete(params[0]);
+          return { rows: [] };
+        }
         throw new Error(`op-sqlite fake does not support: ${sql}`);
       },
     };
   }
   return { open: () => createFakeDb() };
+});
+
+// React Native's Settings (NSUserDefaults on iOS) needs the native SettingsManager, which Jest
+// does not link. This stand-in models what Settings.ios.js really does. `get` reads a JS-side copy
+// taken from the native constants at module load (`__coldStart`) and refreshed only by the
+// native settingsUpdated event (`__emitChange`). A native NSUserDefaults write (`__nativeWrite`,
+// e.g. AppDelegate recording a tap) is invisible to `get` until that event arrives. `set` writes
+// both copies without an event, as RCTSettingsManager ignores its own writes.
+jest.mock('react-native/Libraries/Settings/Settings', () => {
+  let native = {};
+  let js = {};
+  const watchers = [];
+  const merge = (target, next) => {
+    const merged = { ...target, ...next };
+    Object.keys(next).forEach((key) => {
+      if (next[key] === null || next[key] === undefined) delete merged[key];
+    });
+    return merged;
+  };
+  return {
+    __esModule: true,
+    default: {
+      get: jest.fn((key) => js[key]),
+      set: jest.fn((next) => {
+        js = { ...js, ...next };
+        native = merge(native, next);
+      }),
+      watchKeys: jest.fn((_keys, callback) => watchers.push(callback) - 1),
+      clearWatch: jest.fn((id) => {
+        watchers[id] = null;
+      }),
+      __reset: () => {
+        native = {};
+        js = {};
+        watchers.length = 0;
+      },
+      __nativeWrite: (next) => {
+        native = merge(native, next);
+      },
+      __coldStart: () => {
+        js = { ...native };
+      },
+      __emitChange: () => {
+        js = { ...native };
+        watchers.forEach((callback) => callback && callback());
+      },
+    },
+  };
 });
 
 // No Firebase/notifee native modules are linked in Jest - every push-path test supplies its own
@@ -129,11 +218,31 @@ jest.mock('@notifee/react-native', () => {
     getInitialNotification: jest.fn(async () => null),
     onForegroundEvent: jest.fn(() => () => {}),
     onBackgroundEvent: jest.fn(),
+    cancelDisplayedNotification: jest.fn(async () => undefined),
+    cancelTriggerNotification: jest.fn(async () => undefined),
+    getDisplayedNotifications: jest.fn(async () => []),
+    createTriggerNotification: jest.fn(async () => 'trigger'),
+    setNotificationCategories: jest.fn(async () => undefined),
+    getNotificationSettings: jest.fn(async () => ({ authorizationStatus: 1 })),
+    isChannelBlocked: jest.fn(async () => false),
+    getChannel: jest.fn(async (id) => ({
+      id,
+      importance: 4,
+      sound: 'alarm',
+      soundURI: 'content://settings/system/alarm_alert',
+      blocked: false,
+    })),
+    isBatteryOptimizationEnabled: jest.fn(async () => false),
+    openNotificationSettings: jest.fn(async () => undefined),
+    openBatteryOptimizationSettings: jest.fn(async () => undefined),
   };
   return {
     __esModule: true,
     default: instance,
     AndroidImportance: { NONE: 0, MIN: 1, LOW: 2, DEFAULT: 3, HIGH: 4 },
+    AndroidCategory: { ALARM: 'alarm', CALL: 'call', STATUS: 'status' },
+    AndroidVisibility: { PRIVATE: 0, PUBLIC: 1, SECRET: -1 },
+    TriggerType: { TIMESTAMP: 0, INTERVAL: 1 },
     AuthorizationStatus: { NOT_DETERMINED: -1, DENIED: 0, AUTHORIZED: 1, PROVISIONAL: 2 },
     EventType: { DISMISSED: 0, PRESS: 1, ACTION_PRESS: 2, DELIVERED: 3, APP_BLOCKED: 4 },
   };

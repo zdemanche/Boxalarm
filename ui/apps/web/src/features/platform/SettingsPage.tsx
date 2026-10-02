@@ -1,11 +1,13 @@
 import { Link } from 'react-router-dom';
 import { Card, PageHeader } from '../../components/ui';
+import { CheckSheetEditor } from './CheckSheetEditor';
 import { ExportSection } from './ExportSection';
 import { JsonConfigEditor } from './JsonConfigEditor';
 import { RetentionSection } from './RetentionSection';
+import type { EditableConfigType } from './types';
 
 const CONFIG_SECTIONS: {
-  configType: 'STATIONS' | 'RANKS' | 'LOSAP_POINT_RULES' | 'ALERT_RULES' | 'CHECKLIST_DEFAULTS';
+  configType: EditableConfigType;
   label: string;
   helpText: string;
 }[] = [
@@ -28,13 +30,13 @@ const CONFIG_SECTIONS: {
     configType: 'ALERT_RULES',
     label: 'Alert rule timing',
     helpText:
-      'Escalation threshold N in seconds, e.g. {"escalationThresholdN":90}. This changes how long Boxalarm waits before escalating to SMS for every member.',
+      'Paging timers and the ladder stop rule, e.g. {"escalationThresholdN":90,"toneLadder":{"tone2AtSeconds":180,"tone3AtSeconds":360},"defaultRule":{"minResponders":3,"requiredQuals":["INTERIOR"]}}. escalationThresholdN (30-900 s) is how long Boxalarm waits before calling a member who has not answered by voice; push and SMS go out together at the page. Tones 2 and 3 re-page everyone until minResponders have answered RESPONDING.',
   },
   {
-    configType: 'CHECKLIST_DEFAULTS',
-    label: 'Checklist templates',
+    configType: 'NERIS',
+    label: 'NERIS reporting',
     helpText:
-      'Checklist items, e.g. {"items":[{"code":"LIGHTS","label":"Lights","requiresPhoto":false}]}',
+      'Department NERIS id and submission rules, e.g. {"departmentNerisId":"FD09190250","autoSubmitOnLock":false,"submissionsEnabled":true,"rules":{"requireNarrative":true,"minNarrativeLength":50,"requireUnitTimes":true}}',
   },
 ];
 
@@ -46,6 +48,13 @@ export function SettingsPage() {
         <p>Points awarded per attendance activity type for the length-of-service award program.</p>
         <Link to="/settings/losap">LOSAP point rules</Link>
       </Card>
+      <Card title="CAD dispatch ingress">
+        <p>
+          Which CAD systems may page the department by email or signed webhook, and how their
+          dispatch text is read.
+        </p>
+        <Link to="/settings/cad-sources">CAD sources</Link>
+      </Card>
       {CONFIG_SECTIONS.map((section) => (
         <JsonConfigEditor
           key={section.configType}
@@ -54,6 +63,7 @@ export function SettingsPage() {
           helpText={section.helpText}
         />
       ))}
+      <CheckSheetEditor />
       <RetentionSection />
       <ExportSection />
     </main>

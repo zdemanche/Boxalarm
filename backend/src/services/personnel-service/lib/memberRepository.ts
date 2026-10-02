@@ -9,16 +9,26 @@ import {
 import { captureAWSv3Client } from 'aws-xray-sdk-core';
 import { buildDeptScopedPk, toVerifiedDeptId } from '@boxalarm/dept-scope';
 import type { VerifiedPrincipal } from '@boxalarm/dept-scope';
-import type { MemberStatus, SettableStatus } from './statusTransitions.js';
+import { isPagedStatus, type MemberStatus, type SettableStatus } from './statusTransitions.js';
 
-export type MemberRole = 'MEMBER' | 'OFFICER' | 'TRAINING' | 'APPARATUS' | 'ADMIN' | 'CHIEF';
+/** Every role is also a Cognito group of the same name (authz/policy-store.ts ROLE_GROUPS). */
+export const MEMBER_ROLES = [
+  'MEMBER',
+  'OFFICER',
+  'TRAINING',
+  'APPARATUS',
+  'ADMIN',
+  'CHIEF',
+] as const;
+export type MemberRole = (typeof MEMBER_ROLES)[number];
 
 export interface Member {
   readonly memberId: string;
   readonly deptId: string;
   readonly firstName: string;
   readonly lastName: string;
-  readonly phone: string;
+  /** E.164, or null once cleared (PUT phone: null removes it - the member gets no SMS/voice). */
+  readonly phone: string | null;
   readonly email: string;
   readonly status: MemberStatus;
   readonly joinDate: string;
@@ -57,7 +67,7 @@ function toMember(item: Record<string, unknown>): Member {
     deptId: item.deptId as string,
     firstName: item.firstName as string,
     lastName: item.lastName as string,
-    phone: item.phone as string,
+    phone: typeof item.phone === 'string' ? item.phone : null,
     email: item.email as string,
     status: item.status as MemberStatus,
     joinDate: item.joinDate as string,
@@ -69,15 +79,26 @@ function toMember(item: Record<string, unknown>): Member {
   };
 }
 
+/**
+ * memberId is the member's Cognito `sub` (see memberLogin.ts), never a generated id.
+ *
+ * The member row, its audit row and a `personnel.member.updated` outbox entry are one
+ * transaction. The event carries `phone` and `roles`, which the alerting plane projects into
+ * the member's eligibility snapshot (the alerting plane's member-updated consumer):
+ * `phone` becomes the SMS and VOICE contact entries every SMS page and voice escalation
+ * resolves its target from. Without it a new member had no snapshot until they registered a
+ * push token, and then only a push entry - no SMS, no voice (design review C2).
+ */
 export async function createMember(
   tableName: string,
   principal: VerifiedPrincipal,
   input: NewMemberInput,
   actorId: string,
+  memberId: string,
 ): Promise<Member> {
   const deptId = toVerifiedDeptId(principal);
-  const memberId = randomUUID();
   const now = Date.now();
+  const eventId = randomUUID();
   const changedAt = new Date(now).toISOString();
   const auditDate = changedAt.slice(0, 10);
   const member: Member = {
@@ -134,6 +155,26 @@ export async function createMember(
               gsi3sk: changedAt,
             },
             ConditionExpression: 'attribute_not_exists(pk) AND attribute_not_exists(sk)',
+          },
+        },
+        {
+          Put: {
+            TableName: tableName,
+            Item: {
+              pk: buildDeptScopedPk(deptId, 'OUTBOX', memberId),
+              sk: `EVT#${eventId}`,
+              entityType: 'OUTBOX_ENTRY',
+              eventId,
+              eventTime: changedAt,
+              eventType: 'personnel.member.updated',
+              source: 'personnel-service',
+              correlationId: memberId,
+              schemaVersion: '1.0',
+              // `active` is deliberately absent: the snapshot seeds a new member as active,
+              // as it always has; status changes own that field.
+              payload: { deptId, memberId, phone: member.phone, roles: member.roles },
+              sentAt: null,
+            },
           },
         },
       ],
@@ -246,11 +287,113 @@ export async function updateMemberStatus(
               source: 'personnel-service',
               correlationId: memberId,
               schemaVersion: '1.0',
-              payload: { memberId, deptId, previousStatus, newStatus, actorId, changedAt },
+              payload: {
+                memberId,
+                deptId,
+                previousStatus,
+                newStatus,
+                // Read by the consumers that act on a status change: session revocation keys
+                // on `status` (LOA/RETIRED end every session) and the alerting eligibility
+                // snapshot on `active`. With only newStatus, a member set to LOA or RETIRED
+                // kept their sessions and kept being paged.
+                status: newStatus,
+                active: isPagedStatus(newStatus),
+                actorId,
+                changedAt,
+              },
               status: 'PENDING',
               // ponytail: outbox relay left unbuilt (durable OUTBOX_ENTRY write only); upgrade
               // path is a DynamoDB Streams -> EventBridge Lambda once a ticket owns it (see
               // plan.md §3, §16) — no ttl here so an unpublished entry is never silently dropped.
+            },
+          },
+        },
+      ],
+    }),
+  );
+
+  return { updatedAt: now, eventId };
+}
+
+export interface RolesChangeResult {
+  readonly updatedAt: number;
+  readonly eventId: string;
+}
+
+/**
+ * Writes the member's full role set with its audit row and a personnel.member.updated
+ * outbox entry carrying `roles`, which the alerting plane copies into the eligibility
+ * snapshot (memberUpdatedHandler.ts) - that is how mutual aid finds the officers. The
+ * `roles = :previousRoles` condition makes a concurrent role change fail this write
+ * instead of silently overwriting it.
+ */
+export async function updateMemberRoles(
+  tableName: string,
+  principal: VerifiedPrincipal,
+  memberId: string,
+  previousRoles: readonly MemberRole[],
+  roles: readonly MemberRole[],
+  actorId: string,
+): Promise<RolesChangeResult> {
+  const deptId = toVerifiedDeptId(principal);
+  const now = Date.now();
+  const eventId = randomUUID();
+  const changedAt = new Date(now).toISOString();
+  const auditDate = changedAt.slice(0, 10);
+
+  await getDocClient().send(
+    new TransactWriteCommand({
+      TransactItems: [
+        {
+          Update: {
+            TableName: tableName,
+            Key: { pk: buildDeptScopedPk(deptId, 'MEMBER', memberId), sk: 'METADATA' },
+            ConditionExpression: 'attribute_exists(pk) AND #roles = :previousRoles',
+            UpdateExpression: 'SET #roles = :roles, updatedAt = :now',
+            ExpressionAttributeNames: { '#roles': 'roles' },
+            ExpressionAttributeValues: {
+              ':previousRoles': previousRoles,
+              ':roles': roles,
+              ':now': now,
+            },
+          },
+        },
+        {
+          Put: {
+            TableName: tableName,
+            Item: {
+              pk: buildDeptScopedPk(deptId, 'AUDIT', auditDate),
+              sk: `${now}#MEMBER#${memberId}#${actorId}`,
+              entityType: 'AUDIT_LOG_ENTRY',
+              mutatedEntityType: 'MEMBER',
+              mutatedEntityId: memberId,
+              action: 'UPDATE',
+              actorId,
+              changedFields: { roles: { old: previousRoles, new: roles } },
+              ts: now,
+              gsi3pk: buildDeptScopedPk(deptId, 'AUDIT', 'ENTITY', 'MEMBER', memberId),
+              gsi3sk: changedAt,
+            },
+            ConditionExpression: 'attribute_not_exists(pk) AND attribute_not_exists(sk)',
+          },
+        },
+        {
+          Put: {
+            TableName: tableName,
+            Item: {
+              pk: buildDeptScopedPk(deptId, 'OUTBOX', memberId),
+              sk: `EVT#${eventId}`,
+              entityType: 'OUTBOX_ENTRY',
+              eventId,
+              eventTime: changedAt,
+              eventType: 'personnel.member.updated',
+              source: 'personnel-service',
+              correlationId: memberId,
+              schemaVersion: '1.0',
+              deptId,
+              memberId,
+              payload: { deptId, memberId, roles },
+              createdAt: now,
             },
           },
         },

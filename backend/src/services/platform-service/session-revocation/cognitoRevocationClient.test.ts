@@ -1,6 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  AdminDisableUserCommand,
+  AdminEnableUserCommand,
   AdminGetUserCommand,
+  AdminResetUserPasswordCommand,
   AdminUserGlobalSignOutCommand,
   TooManyRequestsException,
   UserNotFoundException,
@@ -8,7 +11,10 @@ import {
 import type { CognitoIdentityProviderClient } from '@aws-sdk/client-cognito-identity-provider';
 import {
   createRevocationClient,
+  disableMemberLogin,
+  enableMemberLogin,
   readRevocationConfig,
+  resetMemberPassword,
   resolveMemberDeptId,
   revokeMemberSession,
 } from './cognitoRevocationClient.js';
@@ -162,5 +168,52 @@ describe('resolveMemberDeptId', () => {
     await expect(
       resolveMemberDeptId(client, { userPoolId: 'pool-1', username: 'mbr-ghost' }),
     ).rejects.toBeInstanceOf(UserNotFoundException);
+  });
+});
+
+describe('login state commands (C1)', () => {
+  beforeEach(() => {
+    vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it.each([
+    ['disableMemberLogin', disableMemberLogin, AdminDisableUserCommand],
+    ['enableMemberLogin', enableMemberLogin, AdminEnableUserCommand],
+    ['resetMemberPassword', resetMemberPassword, AdminResetUserPasswordCommand],
+  ] as const)(
+    '%s sends its admin command with the member id (the sub) as Username',
+    async (_name, operation, commandClass) => {
+      const sent: unknown[] = [];
+      const client = fakeClient((command) => {
+        sent.push(command);
+        return Promise.resolve({});
+      });
+
+      await operation(client, { userPoolId: 'pool-1', username: 'sub-123' });
+
+      expect(sent).toHaveLength(1);
+      expect(sent[0]).toBeInstanceOf(commandClass);
+      expect((sent[0] as { input: unknown }).input).toEqual({
+        UserPoolId: 'pool-1',
+        Username: 'sub-123',
+      });
+    },
+  );
+
+  it('rethrows and logs a failure metric when Cognito rejects the call', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const client = fakeClient(() =>
+      Promise.reject(new UserNotFoundException({ message: 'gone', $metadata: {} })),
+    );
+
+    await expect(
+      disableMemberLogin(client, { userPoolId: 'pool-1', username: 'sub-404' }),
+    ).rejects.toBeInstanceOf(UserNotFoundException);
+    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('memberLogin.disable.failed'));
   });
 });

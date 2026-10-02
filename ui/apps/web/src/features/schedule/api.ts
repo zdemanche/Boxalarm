@@ -1,5 +1,11 @@
 import { apiRequest, type AuthTokenSource } from '../../lib/apiClient';
-import type { CreateShiftInput, DutyShift, ShiftCoverage, ShiftSwapApproval } from './types';
+import type {
+  CreateShiftInput,
+  DutyShift,
+  PendingShiftSwap,
+  ShiftCoverage,
+  ShiftSwapApproval,
+} from './types';
 
 export async function listShifts(tokens: AuthTokenSource): Promise<DutyShift[]> {
   const response = await apiRequest('personnel/shifts', tokens);
@@ -36,4 +42,11 @@ export async function approveShiftSwap(
     { method: 'POST' },
   );
   return (await response.json()) as ShiftSwapApproval;
+}
+
+/** ListPendingShiftSwaps: officer tier. Only swaps that still need an officer's approval. */
+export async function listPendingShiftSwaps(tokens: AuthTokenSource): Promise<PendingShiftSwap[]> {
+  const response = await apiRequest('personnel/shifts/swaps/pending', tokens);
+  const body = (await response.json()) as { swaps: PendingShiftSwap[] };
+  return body.swaps;
 }

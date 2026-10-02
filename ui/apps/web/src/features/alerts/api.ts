@@ -1,12 +1,18 @@
 import { apiRequest, type AuthTokenSource } from '../../lib/apiClient';
 import type {
+  ActiveDispatchList,
+  AcknowledgeMutualAidResult,
+  AdvanceToneResult,
   CanaryStatus,
   DeliveryReceipt,
   DiagnosticsResult,
   DispatchAlert,
+  HaltToneLadderResult,
   ManualDispatchInput,
   RidingBoard,
   RosterEntry,
+  TriggerMutualAidResult,
+  HomeLocality,
 } from './types';
 
 export async function getDispatch(
@@ -18,6 +24,11 @@ export async function getDispatch(
     tokens,
   );
   return (await response.json()) as DispatchAlert;
+}
+
+export async function listActiveDispatches(tokens: AuthTokenSource): Promise<ActiveDispatchList> {
+  const response = await apiRequest('alerting/dispatches?status=active', tokens);
+  return (await response.json()) as ActiveDispatchList;
 }
 
 export async function getRoster(
@@ -60,7 +71,7 @@ export async function assignRidingSeat(
   dispatchId: string,
   seat: { unitId: string; positionCode: string; memberId: string | null; expectedVersion: number },
 ): Promise<void> {
-  await apiRequest(`apparatus/riding-board/${encodeURIComponent(dispatchId)}/assign`, tokens, {
+  await apiRequest(`apparatus/riding-board/${encodeURIComponent(dispatchId)}/assignments`, tokens, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -90,6 +101,15 @@ export async function getCanaryStatus(tokens: AuthTokenSource): Promise<CanarySt
   return (await response.json()) as CanaryStatus;
 }
 
+/**
+ * The department's home towns/villages for the manual-entry locality choice. A failure is not
+ * fatal to the form: it then offers only "Other town".
+ */
+export async function getHomeLocality(tokens: AuthTokenSource): Promise<HomeLocality> {
+  const response = await apiRequest('alerting/home-locality', tokens);
+  return (await response.json()) as HomeLocality;
+}
+
 export async function submitManualDispatch(
   tokens: AuthTokenSource,
   input: ManualDispatchInput,
@@ -100,4 +120,67 @@ export async function submitManualDispatch(
     body: JSON.stringify(input),
   });
   return (await response.json()) as { dispatchId: string };
+}
+
+// Officer tone-ladder and mutual-aid controls (F1.13/F1.14) - architecture.md §2 routes,
+// deployed by infrastructure/components/alerting/routes-ladder-controls.ts.
+
+/** Fires the tone after `expectedCurrentToneSequence` - the tone the officer is looking at, so
+ * a double-click or stale screen can never fire a further tone (the server 409s instead). */
+export async function advanceToneLadder(
+  tokens: AuthTokenSource,
+  dispatchId: string,
+  expectedCurrentToneSequence: number,
+): Promise<AdvanceToneResult> {
+  const response = await apiRequest(
+    `alerting/dispatches/${encodeURIComponent(dispatchId)}/tone-ladder/advance`,
+    tokens,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ expectedCurrentToneSequence }),
+    },
+  );
+  return (await response.json()) as AdvanceToneResult;
+}
+
+export async function haltToneLadder(
+  tokens: AuthTokenSource,
+  dispatchId: string,
+): Promise<HaltToneLadderResult> {
+  const response = await apiRequest(
+    `alerting/dispatches/${encodeURIComponent(dispatchId)}/tone-ladder/halt`,
+    tokens,
+    { method: 'POST' },
+  );
+  return (await response.json()) as HaltToneLadderResult;
+}
+
+export async function triggerMutualAid(
+  tokens: AuthTokenSource,
+  dispatchId: string,
+): Promise<TriggerMutualAidResult> {
+  const response = await apiRequest(
+    `alerting/dispatches/${encodeURIComponent(dispatchId)}/mutual-aid/trigger`,
+    tokens,
+    { method: 'POST' },
+  );
+  return (await response.json()) as TriggerMutualAidResult;
+}
+
+export async function acknowledgeMutualAid(
+  tokens: AuthTokenSource,
+  dispatchId: string,
+  notes: string,
+): Promise<AcknowledgeMutualAidResult> {
+  const response = await apiRequest(
+    `alerting/dispatches/${encodeURIComponent(dispatchId)}/mutual-aid/acknowledge`,
+    tokens,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(notes.trim() ? { notes: notes.trim() } : {}),
+    },
+  );
+  return (await response.json()) as AcknowledgeMutualAidResult;
 }

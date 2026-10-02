@@ -2,9 +2,10 @@ import { useMemo, useRef } from 'react';
 import Config from 'react-native-config';
 import { useOptionalAuth } from '../../auth/AuthContext';
 import { apiRequest, type ApiRequestOptions, type AuthTokenSource } from '../../lib/apiClient';
+import { etaFor, queueAlertResponse } from './alertResponses';
 import { mockAlertsRepository } from './mockAlertsRepository';
 import type {
-  AckStatus,
+  ActiveDispatchList,
   AlertsRepository,
   DeliveryReceipt,
   DispatchAlert,
@@ -12,7 +13,14 @@ import type {
   RidingBoard,
   RosterEntry,
   SelfTestRun,
+  HomeLocality,
+  MutualAid,
+  ToneLadderStatus,
 } from './types';
+
+/** The alert screen already shows the page's own text; enrichment that has not arrived by now is
+ * replaced by a retryable "couldn't load" rather than an open-ended spinner (a11y-spec N1). */
+export const ALERT_DETAIL_TIMEOUT_MS = 8_000;
 
 function buildApiAlertsRepository(tokens: AuthTokenSource, apiBaseUrl: string): AlertsRepository {
   const req = (path: string, init?: Omit<ApiRequestOptions, 'apiBaseUrl'>) =>
@@ -31,7 +39,9 @@ function buildApiAlertsRepository(tokens: AuthTokenSource, apiBaseUrl: string): 
     },
 
     async getDispatch(dispatchId): Promise<DispatchAlert> {
-      const response = await req(`alerting/dispatches/${encodeURIComponent(dispatchId)}`);
+      const response = await req(`alerting/dispatches/${encodeURIComponent(dispatchId)}`, {
+        timeoutMs: ALERT_DETAIL_TIMEOUT_MS,
+      });
       const body = (await response.json()) as {
         dispatchId: string;
         incidentType: string;
@@ -39,7 +49,20 @@ function buildApiAlertsRepository(tokens: AuthTokenSource, apiBaseUrl: string): 
         crossStreets: string;
         mapLink: string | null;
         narrative: string;
+        fanOutStartedAt?: number | null;
+        toneLadder?: {
+          status: ToneLadderStatus;
+          currentToneSequence: number;
+          nextToneAt: string | number | null;
+        };
         prePlan: DispatchAlert['prePlan'];
+        prePlanUnavailable?: boolean;
+        nearestHydrants?: DispatchAlert['nearestHydrants'];
+        nearestHydrantsUnavailable?: boolean;
+        nearestHydrantsIncomplete?: boolean;
+        mutualAid?: MutualAid | null;
+        updates?: { updateId: string; receivedAt: number; summary: string }[];
+        verifyRequired?: boolean;
       };
       return {
         dispatchId: body.dispatchId,
@@ -49,7 +72,80 @@ function buildApiAlertsRepository(tokens: AuthTokenSource, apiBaseUrl: string): 
         mapLink: body.mapLink,
         narrative: body.narrative,
         isSelfTest: false,
+        ...(typeof body.fanOutStartedAt === 'number' ? { dispatchedAt: body.fanOutStartedAt } : {}),
+        // Previously dropped: the tone number is part of the alert header ("TONE 2").
+        ...(body.toneLadder
+          ? {
+              toneLadder: {
+                status: body.toneLadder.status,
+                currentToneSequence: body.toneLadder.currentToneSequence,
+                nextToneAt:
+                  typeof body.toneLadder.nextToneAt === 'number'
+                    ? new Date(body.toneLadder.nextToneAt * 1000).toISOString()
+                    : body.toneLadder.nextToneAt,
+                predicateGaps: [],
+              },
+            }
+          : {}),
         prePlan: body.prePlan,
+        ...(body.prePlanUnavailable === true ? { prePlanUnavailable: true } : {}),
+        ...(body.nearestHydrants ? { nearestHydrants: body.nearestHydrants } : {}),
+        ...(body.nearestHydrantsUnavailable === true ? { nearestHydrantsUnavailable: true } : {}),
+        ...(body.nearestHydrantsIncomplete === true ? { nearestHydrantsIncomplete: true } : {}),
+        ...(body.mutualAid !== undefined ? { mutualAid: body.mutualAid } : {}),
+        ...(body.verifyRequired === true ? { verifyRequired: true } : {}),
+        ...(Array.isArray(body.updates) && body.updates.length > 0
+          ? {
+              updates: body.updates.map((u) => ({
+                updateId: u.updateId,
+                receivedAt: u.receivedAt,
+                summary: u.summary,
+              })),
+            }
+          : {}),
+      };
+    },
+
+    async acknowledgeMutualAid(dispatchId, notes) {
+      const response = await req(
+        `alerting/dispatches/${encodeURIComponent(dispatchId)}/mutual-aid/acknowledge`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(notes.trim() ? { notes: notes.trim() } : {}),
+        },
+      );
+      const body = (await response.json()) as { changed: boolean; mutualAid: MutualAid };
+      return { changed: body.changed, mutualAid: body.mutualAid };
+    },
+
+    async listActiveDispatches(): Promise<ActiveDispatchList> {
+      const response = await req('alerting/dispatches?status=active', {
+        timeoutMs: ALERT_DETAIL_TIMEOUT_MS,
+      });
+      const body = (await response.json()) as {
+        dispatches: {
+          dispatchId: string;
+          incidentType: string | null;
+          address: string | null;
+          crossStreets: string | null;
+          dispatchedAt: number;
+          toneLadder?: { currentToneSequence?: number };
+        }[];
+        asOf: number;
+        truncated?: boolean;
+      };
+      return {
+        dispatches: body.dispatches.map((d) => ({
+          dispatchId: d.dispatchId,
+          incidentType: d.incidentType,
+          address: d.address,
+          crossStreets: d.crossStreets,
+          dispatchedAt: d.dispatchedAt,
+          toneSequence: d.toneLadder?.currentToneSequence ?? 1,
+        })),
+        asOf: body.asOf,
+        truncated: body.truncated === true,
       };
     },
 
@@ -59,18 +155,11 @@ function buildApiAlertsRepository(tokens: AuthTokenSource, apiBaseUrl: string): 
       return body.members;
     },
 
-    async submitResponse(dispatchId, ackStatus: AckStatus, etaMinutes) {
-      const eta =
-        ackStatus === 'NOT_RESPONDING'
-          ? null
-          : (etaMinutes ?? 0) > 0
-            ? Math.floor(Date.now() / 1000) + (etaMinutes as number) * 60
-            : null;
-      await req(`alerting/dispatches/${encodeURIComponent(dispatchId)}/responses`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ackStatus, eta, assignedApparatusId: null }),
-      });
+    // Through the SQLite outbox, never a bare POST: the old `void submitResponse` dropped a failed
+    // answer on the floor while the screen said "You responded" (alert-ux C2).
+    async submitResponse(dispatchId, ackStatus, eta) {
+      const outboxId = await queueAlertResponse(dispatchId, ackStatus, etaFor(ackStatus, eta));
+      return { outboxId };
     },
 
     async submitManualDispatch(input: ManualDispatchInput) {
@@ -81,6 +170,11 @@ function buildApiAlertsRepository(tokens: AuthTokenSource, apiBaseUrl: string): 
       });
       const body = (await response.json()) as { dispatchId: string };
       return { dispatchId: body.dispatchId };
+    },
+
+    async getHomeLocality(): Promise<HomeLocality> {
+      const response = await req('alerting/home-locality');
+      return (await response.json()) as HomeLocality;
     },
 
     async getReceipts(dispatchId): Promise<DeliveryReceipt[]> {
@@ -95,7 +189,7 @@ function buildApiAlertsRepository(tokens: AuthTokenSource, apiBaseUrl: string): 
     },
 
     async assignRidingSeat(dispatchId, seat) {
-      await req(`apparatus/riding-board/${encodeURIComponent(dispatchId)}/assign`, {
+      await req(`apparatus/riding-board/${encodeURIComponent(dispatchId)}/assignments`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

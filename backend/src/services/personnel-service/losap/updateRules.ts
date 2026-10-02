@@ -3,7 +3,7 @@ import type { VerifiedAccessToken } from '../../platform-service/authorizer/toke
 import { toVerifiedDeptId } from '@boxalarm/dept-scope';
 import { createDynamoClient, readAttendanceTableConfig } from '../dynamoClient.js';
 import { problemResponse, resolveTraceId } from '../lib/problemDetails.js';
-import { ForbiddenError, requireAdminRole } from '../lib/authz.js';
+import { ForbiddenError, requireLosapRulesManager } from '../lib/authz.js';
 import { logError, logInfo } from '../lib/logger.js';
 import { ACTIVITY_TYPES } from '../attendance/handler.js';
 import { isValidLosapPointRules, type LosapPointRules } from './rules.js';
@@ -36,7 +36,7 @@ export const handler: APIGatewayProxyHandlerV2WithLambdaAuthorizer<VerifiedAcces
   const traceId = resolveTraceId(event.headers, event.requestContext.requestId);
 
   try {
-    requireAdminRole(ctx);
+    requireLosapRulesManager(ctx);
   } catch (error) {
     if (error instanceof ForbiddenError) {
       logError('losap.rules.update.forbidden', traceId, error, { actorId: ctx.sub });

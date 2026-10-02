@@ -1,0 +1,207 @@
+import notifee from '@notifee/react-native';
+import { NativeModules, Platform } from 'react-native';
+import {
+  blockingReadinessItems,
+  evaluateAlertReadiness,
+  registrationReadinessItem,
+} from './useAlertReadiness';
+
+const nativeModules = NativeModules as { BoxalarmAlertReadiness?: unknown };
+const getNotificationSettings = notifee.getNotificationSettings as jest.Mock;
+const getChannel = notifee.getChannel as jest.Mock;
+const isChannelBlocked = notifee.isChannelBlocked as jest.Mock;
+
+function installNative(
+  readiness: { dndAccessGranted: boolean; fullScreenIntentAllowed: boolean; sdkInt: number },
+  bypass: boolean | Error = true,
+) {
+  nativeModules.BoxalarmAlertReadiness = {
+    getReadiness: jest.fn(async () => readiness),
+    getChannelBypassDnd: jest.fn(async () => {
+      if (bypass instanceof Error) throw bypass;
+      return bypass;
+    }),
+  };
+}
+
+const ids = (items: { id: string }[]) => items.map((item) => item.id);
+
+afterEach(() => {
+  delete nativeModules.BoxalarmAlertReadiness;
+  getNotificationSettings.mockReset().mockResolvedValue({ authorizationStatus: 1 });
+  jest.restoreAllMocks();
+});
+
+test('denied notifications block the page', async () => {
+  Platform.OS = 'ios';
+  getNotificationSettings.mockResolvedValue({ authorizationStatus: 0 });
+
+  const blocking = blockingReadinessItems(await evaluateAlertReadiness());
+
+  expect(ids(blocking)).toEqual(['notifications']);
+  expect(blocking[0]!.detail).toMatch(/will not show or sound/i);
+});
+
+test('provisional (quiet) authorization counts as not ready', async () => {
+  Platform.OS = 'ios';
+  getNotificationSettings.mockResolvedValue({ authorizationStatus: 2 });
+
+  const blocking = blockingReadinessItems(await evaluateAlertReadiness());
+
+  expect(blocking[0]).toMatchObject({ id: 'notifications', status: 'fail' });
+  expect(blocking[0]!.detail).toMatch(/quietly/i);
+});
+
+test('iOS with Sounds turned off for Boxalarm is not ready', async () => {
+  Platform.OS = 'ios';
+  getNotificationSettings.mockResolvedValue({
+    authorizationStatus: 1,
+    ios: { sound: 0, alert: 1, criticalAlert: -1 },
+  });
+
+  const blocking = blockingReadinessItems(await evaluateAlertReadiness());
+
+  expect(blocking[0]).toMatchObject({ id: 'notifications', status: 'fail' });
+  expect(blocking[0]!.detail).toMatch(/sounds are off/i);
+});
+
+test('Android without Do Not Disturb access or full-screen permission (Android 14+) is not ready', async () => {
+  Platform.OS = 'android';
+  installNative({ dndAccessGranted: false, fullScreenIntentAllowed: false, sdkInt: 34 });
+
+  expect(ids(blockingReadinessItems(await evaluateAlertReadiness()))).toEqual([
+    'dnd',
+    'fullScreen',
+  ]);
+});
+
+test('DND access granted but the live channel does not bypass DND is not ready', async () => {
+  Platform.OS = 'android';
+  installNative({ dndAccessGranted: true, fullScreenIntentAllowed: true, sdkInt: 35 }, false);
+
+  const blocking = blockingReadinessItems(await evaluateAlertReadiness());
+
+  expect(ids(blocking)).toEqual(['dnd']);
+  expect(blocking[0]!.detail).toMatch(/Override Do Not Disturb/);
+});
+
+test('a dispatch channel set to silent, or lowered below high importance, is not ready', async () => {
+  Platform.OS = 'android';
+  installNative({ dndAccessGranted: true, fullScreenIntentAllowed: true, sdkInt: 35 });
+
+  getChannel.mockResolvedValueOnce({ id: 'x', importance: 4, blocked: false });
+  expect(ids(blockingReadinessItems(await evaluateAlertReadiness()))).toEqual(['channel']);
+
+  getChannel.mockResolvedValueOnce({
+    id: 'x',
+    importance: 3,
+    soundURI: 'content://a',
+    blocked: false,
+  });
+  const lowered = blockingReadinessItems(await evaluateAlertReadiness());
+  expect(lowered[0]!.detail).toMatch(/lowered/);
+});
+
+test('before Android 14 the full-screen check is not asked, and a healthy phone is ready', async () => {
+  Platform.OS = 'android';
+  installNative({ dndAccessGranted: true, fullScreenIntentAllowed: true, sdkInt: 33 });
+
+  const items = await evaluateAlertReadiness();
+
+  expect(ids(items)).not.toContain('fullScreen');
+  expect(blockingReadinessItems(items)).toEqual([]);
+});
+
+test('without the native module, the wake-critical checks are unknown and raise the banner', async () => {
+  Platform.OS = 'android';
+
+  const blocking = blockingReadinessItems(await evaluateAlertReadiness());
+
+  expect(blocking.find((item) => item.id === 'dnd')).toMatchObject({ status: 'unknown' });
+  expect(blocking.find((item) => item.id === 'dnd')!.detail).toMatch(/couldn't confirm/i);
+});
+
+test('check errors fail closed: a bypass read error or channel-blocked read error is unknown, not ready', async () => {
+  Platform.OS = 'android';
+  installNative(
+    { dndAccessGranted: true, fullScreenIntentAllowed: true, sdkInt: 35 },
+    new Error('boom'),
+  );
+  isChannelBlocked.mockRejectedValueOnce(new Error('boom'));
+
+  const blocking = blockingReadinessItems(await evaluateAlertReadiness());
+
+  expect(blocking.map((item) => [item.id, item.status])).toEqual([
+    ['notifications', 'unknown'],
+    ['dnd', 'unknown'],
+  ]);
+});
+
+test('a blocked dispatch channel counts as notifications off', async () => {
+  Platform.OS = 'android';
+  installNative({ dndAccessGranted: true, fullScreenIntentAllowed: true, sdkInt: 35 });
+  isChannelBlocked.mockResolvedValueOnce(true);
+
+  const blocking = blockingReadinessItems(await evaluateAlertReadiness());
+
+  expect(blocking[0]).toMatchObject({ id: 'notifications', status: 'fail' });
+  expect(blocking[0]!.detail).toMatch(/turned off for Boxalarm/);
+});
+
+describe('registration with the server (C1)', () => {
+  test('a phone not registered for the signed-in member blocks, and offers a retry', () => {
+    const item = registrationReadinessItem('B', { memberId: 'B', status: 'failed' });
+    expect(item).toMatchObject({ id: 'registration', status: 'fail', fixLabel: 'Try again' });
+    expect(item.detail).toMatch(/not registered for pages on this phone/i);
+    expect(blockingReadinessItems([item])).toHaveLength(1);
+  });
+
+  test("the previous member's registration does not count for the next one", () => {
+    const item = registrationReadinessItem('B', { memberId: 'A', status: 'registered' });
+    expect(item.status).not.toBe('ok');
+  });
+
+  test("a re-confirm that couldn't reach the server is amber with a check-now, not the red banner", () => {
+    const item = registrationReadinessItem('A', { memberId: 'A', status: 'unverified' });
+    expect(item).toMatchObject({ status: 'warn', fixLabel: 'Check now' });
+    expect(item.detail).toMatch(/couldn't check/i);
+    expect(blockingReadinessItems([item])).toHaveLength(0);
+  });
+
+  test('registering is a warning (no red flash at sign-in); registered is ok', () => {
+    expect(registrationReadinessItem('A', null).status).toBe('warn');
+    expect(registrationReadinessItem('A', { memberId: 'A', status: 'registered' }).status).toBe(
+      'ok',
+    );
+  });
+});
+
+// m8: returning from Settings runs channel setup and readiness on the same foreground event.
+test('readiness reads the dispatch channel only after the channel setup in progress', async () => {
+  Platform.OS = 'android';
+  installNative({ dndAccessGranted: true, fullScreenIntentAllowed: true, sdkInt: 35 });
+  const native = nativeModules.BoxalarmAlertReadiness as Record<string, unknown>;
+  let created = false;
+  let finishCreate: () => void = () => undefined;
+  native.createCriticalChannel = jest.fn(
+    () =>
+      new Promise<boolean>((resolve) => {
+        finishCreate = () => {
+          created = true;
+          resolve(true);
+        };
+      }),
+  );
+  native.deleteChannel = jest.fn(async () => undefined);
+  getChannel.mockImplementation(async () => (created ? { importance: 4, sound: 'alarm' } : null));
+  const { ensureNotificationChannels } = jest.requireActual('./pushChannel');
+
+  const setup = ensureNotificationChannels();
+  const evaluating = evaluateAlertReadiness();
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  finishCreate();
+  await setup;
+
+  const channel = (await evaluating).find((item) => item.id === 'channel');
+  expect(channel?.status).toBe('ok');
+});

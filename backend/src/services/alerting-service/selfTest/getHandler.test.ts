@@ -135,7 +135,7 @@ describe('selfTest getHandler', () => {
     vi.doMock('./selfTestRunRepository.js', () => ({
       getSelfTestRun: vi.fn().mockResolvedValue({
         testId: '1798000000',
-        runAt: 1798000000,
+        runAt: Math.floor(Date.now() / 1000),
         channelsTested: ['PUSH', 'SMS'],
         channelResults: {},
         overallResult: 'RUNNING',
@@ -148,6 +148,60 @@ describe('selfTest getHandler', () => {
     expect(result).toMatchObject({ statusCode: 200 });
     const body = JSON.parse((result as { body: string }).body) as { overallResult: string };
     expect(body.overallResult).toBe('RUNNING');
+  });
+
+  // Design review C3: the fan-out's publish leaves the run RUNNING; the GET decides it from the
+  // channel workers' receipts the first time the member polls after they land.
+  it("decides a RUNNING run from the workers' SENT receipts and records the verdict once", async () => {
+    mockVerifiedPermissions(() => Promise.resolve({ decision: 'ALLOW' }));
+    const nowMs = Date.now();
+    const send = vi.fn(
+      (command: { constructor: { name: string }; input: { Key: { sk: string } } }) =>
+        Promise.resolve(
+          command.constructor.name === 'GetCommand'
+            ? { Item: { sendState: 'SENT', completedAtMs: nowMs - 500 } }
+            : {},
+        ),
+    );
+    vi.doMock('../eligibility/dynamoClient.js', () => ({
+      createDynamoClient: vi.fn(() => ({ send })),
+      readAlertingConfig: vi.fn(() => ({ tableName: 'alerting-table' })),
+    }));
+    const completeSelfTestRun = vi.fn().mockResolvedValue(true);
+    vi.doMock('./selfTestRunRepository.js', () => ({
+      SELF_TEST_METRIC_NAMESPACE: 'Boxalarm/AlertingSelfTest',
+      completeSelfTestRun,
+      getSelfTestRun: vi.fn().mockResolvedValue({
+        testId: 't-1',
+        runAt: Math.floor((nowMs - 2_000) / 1000),
+        runAtMs: nowMs - 2_000,
+        channelsTested: ['PUSH', 'SMS'],
+        channelResults: {},
+        overallResult: 'RUNNING',
+        dispatchId: 'NICHOLS-SELFTEST-1',
+        publishedChannels: ['PUSH', 'SMS'],
+      }),
+    }));
+
+    const { handler } = await import('./getHandler.js');
+    const result = await handler(buildEvent('t-1'));
+
+    const body = JSON.parse((result as { body: string }).body) as {
+      overallResult: string;
+      channelResults: Record<string, { ok: boolean }>;
+    };
+    expect(body.overallResult).toBe('PASS');
+    expect(body.channelResults).toMatchObject({ PUSH: { ok: true }, SMS: { ok: true } });
+    expect(send.mock.calls.map(([command]) => command.input.Key.sk).sort()).toEqual([
+      'RECEIPT#mbr-102#PUSH#1',
+      'RECEIPT#mbr-102#SMS#1',
+    ]);
+    expect(completeSelfTestRun).toHaveBeenCalledWith(
+      expect.anything(),
+      'alerting-table',
+      { deptId: 'NICHOLS', memberId: 'mbr-102', testId: 't-1' },
+      expect.objectContaining({ overallResult: 'PASS' }),
+    );
   });
 
   it('returns 503 and does not throw when DynamoDB is unavailable on read (AC-matrix)', async () => {

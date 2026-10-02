@@ -104,7 +104,7 @@ test('roster table headers are associated with cells and the page passes axe (AC
 
   await signInAs(page, ['OFFICER']);
   await page.goto('/personnel');
-  await expect(page.getByRole('heading', { name: 'Personnel' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Members' })).toBeVisible();
 
   const table = page.getByRole('table');
   await expect(table).toBeVisible();
@@ -182,11 +182,63 @@ test('member transcript tab renders certs/attendance/hours and passes axe (#153 
   const transcript = page.getByRole('heading', { name: 'Transcript' }).locator('..');
   await expect(transcript).toBeVisible();
   await expect(
-    transcript.getByText('FF1 — CURRENT · expires 2028-01-01', { exact: true }),
+    transcript.getByText('FF1 — Current · expires 2028-01-01', { exact: true }),
   ).toBeVisible();
   await expect(page.getByText(/Drill — 2h on/)).toBeVisible();
   await expect(page.getByText('Drill: 2h')).toBeVisible();
 
   const results = await new AxeBuilder({ page }).analyze();
   expect(results.violations).toEqual([]);
+});
+
+test('the roles editor and its confirm dialog pass axe (F2.7)', async ({ page }) => {
+  await page.route('**/api/v1/personnel/members/m-3', (route) =>
+    route.fulfill({
+      json: {
+        memberId: 'm-3',
+        firstName: 'Sam',
+        lastName: 'Lee',
+        email: 'slee@nicholsfd.org',
+        phone: '203-555-0133',
+        status: 'ACTIVE',
+        joinDate: '2019-05-01',
+        rank: 'Lieutenant',
+        agencyId: 'nichols-fd',
+        roles: ['MEMBER', 'ADMIN'],
+      },
+    }),
+  );
+  await page.route('**/api/v1/personnel/members/m-3/quals', (route) => route.fulfill({ json: [] }));
+  await page.route('**/api/v1/personnel/members/m-3/losap', (route) =>
+    route.fulfill({ json: { memberId: 'm-3', year: 2026, totalPoints: 0 } }),
+  );
+  await page.route('**/api/v1/inventory/ppe/m-3', (route) => route.fulfill({ json: [] }));
+  await page.route('**/api/v1/training/members/m-3/certifications', (route) =>
+    route.fulfill({ json: [] }),
+  );
+  await page.route('**/api/v1/training/members/m-3/transcript', (route) =>
+    route.fulfill({
+      json: { memberId: 'm-3', certifications: [], attendance: [], hoursByCategory: {} },
+    }),
+  );
+
+  await signInAs(page, ['CHIEF']);
+  await page.goto('/personnel/m-3');
+  const form = page.getByRole('form', { name: 'Member roles' });
+  await expect(form).toBeVisible();
+
+  const formResults = await new AxeBuilder({ page })
+    .include('form[aria-label="Member roles"]')
+    .analyze();
+  expect(formResults.violations).toEqual([]);
+
+  // Removing ADMIN opens the confirm dialog with the session warning (review MINOR-8).
+  await form.getByRole('checkbox', { name: 'ADMIN' }).uncheck();
+  await form.getByRole('button', { name: 'Review role changes' }).click();
+  const dialog = page.getByRole('dialog', { name: 'Change roles for Sam Lee?' });
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByText(/Report device lost/)).toBeVisible();
+
+  const dialogResults = await new AxeBuilder({ page }).include('[role="dialog"]').analyze();
+  expect(dialogResults.violations).toEqual([]);
 });

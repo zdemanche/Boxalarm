@@ -3,6 +3,7 @@ import { useEffect, useRef } from 'react';
 import Config from 'react-native-config';
 import { useOptionalAuth, type AuthContextValue } from '../../auth/AuthContext';
 import { apiRequest, ApiError } from '../../lib/apiClient';
+import { NoCachedDataError } from '../../sync/readThrough';
 import { useChecksRepository, type ChecksRepositoryWithFallbackFlag } from './apiChecksRepository';
 
 // Mock factories are fully self-contained (no closures over outer consts): the module under
@@ -69,16 +70,41 @@ test('a re-render with unchanged inputs does not refire the fetch effect (regres
   expect(mockApiRequest).toHaveBeenCalledTimes(1);
 });
 
-test('network failure falls back to mock apparatus and flags the result as fallback data', async () => {
+test('offline with nothing cached, getApparatus refuses rather than showing fixture units', async () => {
+  // A member this file has never fetched for: nothing of theirs is cached on the phone.
+  mockUseOptionalAuth.mockReturnValue({ ...mockAuthValue, memberId: 'MBR-NEVER-FETCHED' });
   mockApiRequest.mockRejectedValue(new TypeError('Failed to fetch'));
 
   const { result } = await renderHook(() => useChecksRepository());
-  const repository = result.current as ChecksRepositoryWithFallbackFlag;
 
+  await expect(result.current.getApparatus()).rejects.toBeInstanceOf(NoCachedDataError);
+});
+
+test('offline, getApparatus serves the last real list, flagged with when it was fetched', async () => {
+  const real = [{ apparatusId: 'a-9', unitId: 'E9', type: 'Engine', status: 'IN_SERVICE' }];
+  mockApiRequest.mockResolvedValueOnce({ json: async () => ({ apparatus: real }) });
+  const { result } = await renderHook(() => useChecksRepository());
+  const repository = result.current as ChecksRepositoryWithFallbackFlag;
+  await repository.getApparatus();
+  expect(repository.apparatusCachedAt?.()).toBeNull();
+
+  mockApiRequest.mockRejectedValueOnce(new TypeError('Failed to fetch'));
   const apparatus = await repository.getApparatus();
 
-  expect(apparatus.length).toBeGreaterThan(0);
-  expect(repository.isApparatusFallback?.()).toBe(true);
+  expect(apparatus).toEqual(real);
+  expect(repository.apparatusCachedAt?.()).toEqual(expect.any(Number));
+});
+
+test('offline, the check sheet comes from this phone with cachedAt, or not at all', async () => {
+  const template = { templateId: 't-1', name: 'E9 daily', items: [] };
+  mockApiRequest.mockResolvedValueOnce({ json: async () => template });
+  const { result } = await renderHook(() => useChecksRepository());
+  expect(await result.current.getChecklistTemplate('E9')).toEqual(template);
+
+  mockApiRequest.mockRejectedValue(new TypeError('Failed to fetch'));
+  const cached = await result.current.getChecklistTemplate('E9');
+  expect(cached).toEqual({ ...template, cachedAt: expect.any(Number) });
+  await expect(result.current.getChecklistTemplate('L1')).rejects.toBeInstanceOf(NoCachedDataError);
 });
 
 test('a 403 from the API surfaces as an error instead of silently falling back to mock data', async () => {
@@ -94,4 +120,42 @@ test('a 403 from the API surfaces as an error instead of silently falling back t
   const { result } = await renderHook(() => useChecksRepository());
 
   await expect(result.current.getApparatus()).rejects.toBe(forbidden);
+});
+
+test('with no member id on the session nothing is cached, so nothing can be served to another member', async () => {
+  mockUseOptionalAuth.mockReturnValue({ ...mockAuthValue, memberId: null });
+  mockApiRequest.mockResolvedValueOnce({
+    json: async () => ({
+      apparatus: [{ apparatusId: 'a', unitId: 'E1', type: 'E', status: 'IN_SERVICE' }],
+    }),
+  });
+  const { result } = await renderHook(() => useChecksRepository());
+  await result.current.getApparatus();
+
+  mockApiRequest.mockRejectedValueOnce(new TypeError('Failed to fetch'));
+  await expect(result.current.getApparatus()).rejects.toBeInstanceOf(NoCachedDataError);
+});
+
+test('a truck-check defect is queued with the check-sheet item code', async () => {
+  const syncManager = jest.requireActual(
+    '../../sync/syncManager',
+  ) as typeof import('../../sync/syncManager');
+  const enqueueSpy = jest.spyOn(syncManager, 'enqueueDefect').mockResolvedValue(undefined);
+  const { result } = await renderHook(() => useChecksRepository());
+
+  await result.current.submitDefect({
+    apparatusId: 'E1',
+    description: 'Failed on the E1 truck check: Brakes.',
+    severity: 'MAJOR',
+    idempotencyKey: 'check-1-defect-BRAKES',
+    itemCode: 'BRAKES',
+  });
+
+  expect(enqueueSpy).toHaveBeenCalledWith(
+    'E1',
+    'check-1-defect-BRAKES',
+    expect.objectContaining({ itemCode: 'BRAKES' }),
+    undefined,
+  );
+  enqueueSpy.mockRestore();
 });

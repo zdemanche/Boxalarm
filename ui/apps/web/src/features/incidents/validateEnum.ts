@@ -17,6 +17,20 @@ export interface NerisSecondarySchemaDocument {
   >;
 }
 
+/**
+ * The core schema with `incident_type` checked against the NERIS TypeIncidentValue list from
+ * GET incidents/neris-schema (the server validates against the same list).
+ */
+export function withIncidentTypes(
+  schema: NerisSchemaDocument,
+  types: readonly { readonly value: string }[],
+): NerisSchemaDocument {
+  return {
+    ...schema,
+    enumerations: { ...schema.enumerations, incident_type: types.map((type) => type.value) },
+  };
+}
+
 /** Same rule as incident-service `validateCoreFields`. */
 export function validateCoreFields(
   schema: NerisSchemaDocument,

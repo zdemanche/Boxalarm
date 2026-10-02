@@ -1,8 +1,25 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { SQSEvent } from 'aws-lambda';
 
-function buildSqsEvent(body: unknown): SQSEvent {
-  return { Records: [{ body: JSON.stringify(body) }] } as unknown as SQSEvent;
+/**
+ * A real EventBridge→SQS body: the rule target has no inputPath, so SQS receives the whole
+ * EventBridge event and the outbox drainer's envelope (drainHandler.ts `Detail`) is under `detail`.
+ */
+function buildSqsEvent(envelope: unknown): SQSEvent {
+  const eventBridgeEvent = {
+    version: '0',
+    id: '6a7e8feb-b491-4cf7-a9f1-bf3703467718',
+    'detail-type': 'personnel.member.updated',
+    source: 'personnel-service',
+    account: '123456789012',
+    time: '2026-09-14T00:00:00Z',
+    region: 'us-east-1',
+    resources: [],
+    detail: envelope,
+  };
+  return {
+    Records: [{ messageId: 'msg-1', body: JSON.stringify(eventBridgeEvent) }],
+  } as unknown as SQSEvent;
 }
 
 const VALID_ENVELOPE = {
@@ -20,6 +37,27 @@ const VALID_ENVELOPE = {
   },
 };
 
+interface SentUpdate {
+  readonly input: {
+    Key: { pk: string; sk: string };
+    UpdateExpression: string;
+    ConditionExpression?: string;
+    ExpressionAttributeNames?: Record<string, string>;
+    ExpressionAttributeValues: Record<string, unknown>;
+  };
+}
+
+/** The UpdateCommand that wrote contactChannels (the contact projection's write). */
+function contactWrite(send: ReturnType<typeof vi.fn>): SentUpdate['input'] | undefined {
+  const commands = send.mock.calls.map((call: unknown[]) => call[0]) as (SentUpdate & {
+    constructor: { name: string };
+  })[];
+  return commands
+    .filter((command) => command.constructor.name === 'UpdateCommand')
+    .map((command) => command.input)
+    .find((input) => input.ExpressionAttributeValues[':contactChannels'] !== undefined);
+}
+
 describe('memberUpdatedHandler', () => {
   const originalEnv = { ...process.env };
 
@@ -33,12 +71,13 @@ describe('memberUpdatedHandler', () => {
     vi.doUnmock('./dynamoClient.js');
   });
 
-  it('throws (never swallows) when the payload is missing memberId, so SQS retries/DLQs (AC-matrix)', async () => {
+  it('reports (never swallows) a record whose payload is missing memberId, so SQS retries/DLQs it (AC-matrix)', async () => {
     const send = vi.fn();
     vi.doMock('./dynamoClient.js', () => ({
       createDynamoClient: () => ({ send }),
       readAlertingConfig: () => ({ tableName: 'alerting-table' }),
     }));
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const { handler } = await import('./memberUpdatedHandler.js');
     await expect(
       handler(
@@ -47,11 +86,34 @@ describe('memberUpdatedHandler', () => {
           payload: { ...VALID_ENVELOPE.payload, memberId: undefined },
         }),
       ),
-    ).rejects.toThrow('memberId');
+    ).resolves.toEqual({ batchItemFailures: [{ itemIdentifier: 'msg-1' }] });
     expect(send).not.toHaveBeenCalled();
+    expect(errorSpy.mock.calls.some(([line]) => String(line).includes('memberId'))).toBe(true);
+    errorSpy.mockRestore();
   });
 
-  it('upserts MEMBER_ELIGIBILITY_SNAPSHOT with contactChannels denormalized from the event payload (AC1, AC2)', async () => {
+  it('rejects a bare envelope with no EventBridge `detail` wrapper (never what the rule delivers)', async () => {
+    const send = vi.fn();
+    vi.doMock('./dynamoClient.js', () => ({
+      createDynamoClient: () => ({ send }),
+      readAlertingConfig: () => ({ tableName: 'alerting-table' }),
+    }));
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const { handler } = await import('./memberUpdatedHandler.js');
+    const bare = {
+      Records: [{ messageId: 'bare-1', body: JSON.stringify(VALID_ENVELOPE) }],
+    } as unknown as SQSEvent;
+    await expect(handler(bare)).resolves.toEqual({
+      batchItemFailures: [{ itemIdentifier: 'bare-1' }],
+    });
+    expect(send).not.toHaveBeenCalled();
+    expect(errorSpy.mock.calls.some(([line]) => String(line).includes('missing detail'))).toBe(
+      true,
+    );
+    errorSpy.mockRestore();
+  });
+
+  it('upserts MEMBER_ELIGIBILITY_SNAPSHOT with the PUSH entries denormalized from the event payload (AC1, AC2)', async () => {
     const send = vi.fn().mockResolvedValue({});
     vi.doMock('./dynamoClient.js', () => ({
       createDynamoClient: () => ({ send }),
@@ -61,14 +123,9 @@ describe('memberUpdatedHandler', () => {
     const result = await handler(buildSqsEvent(VALID_ENVELOPE));
 
     expect(result).toEqual({ batchItemFailures: [] });
-    const updateCall = send.mock.calls[0]?.[0] as {
-      input: {
-        Key: { pk: string; sk: string };
-        ExpressionAttributeValues: Record<string, unknown>;
-      };
-    };
-    expect(updateCall.input.Key).toEqual({ pk: 'DEPT#NICHOLS#ELIGIBILITY', sk: 'MEMBER#mbr-102' });
-    expect(updateCall.input.ExpressionAttributeValues[':contactChannels']).toEqual(
+    const write = contactWrite(send);
+    expect(write?.Key).toEqual({ pk: 'DEPT#NICHOLS#ELIGIBILITY', sk: 'MEMBER#mbr-102' });
+    expect(write?.ExpressionAttributeValues[':contactChannels']).toEqual(
       VALID_ENVELOPE.payload.contactChannels,
     );
   });
@@ -87,11 +144,10 @@ describe('memberUpdatedHandler', () => {
       }),
     );
 
-    const updateCall = send.mock.calls[0]?.[0] as {
-      input: { ExpressionAttributeValues: Record<string, unknown> };
-    };
-    expect(updateCall.input.ExpressionAttributeValues[':contactChannels']).toEqual([]);
-    expect(updateCall.input.ExpressionAttributeValues[':active']).toBe(false);
+    expect(contactWrite(send)?.ExpressionAttributeValues[':contactChannels']).toEqual([]);
+    const eligibility = (send.mock.calls[0]?.[0] as SentUpdate).input;
+    expect(eligibility.ExpressionAttributeValues[':value']).toBe(false);
+    expect(eligibility.UpdateExpression).toContain('active = :value');
   });
 
   it('a register-only event (no quals/roles/availabilityState) does not clear those fields (P6 regression)', async () => {
@@ -112,14 +168,110 @@ describe('memberUpdatedHandler', () => {
       }),
     );
 
-    const updateCall = send.mock.calls[0]?.[0] as {
-      input: { UpdateExpression: string; ExpressionAttributeValues: Record<string, unknown> };
-    };
-    expect(updateCall.input.UpdateExpression).not.toContain('quals');
-    expect(updateCall.input.UpdateExpression).not.toContain('roles');
-    expect(updateCall.input.UpdateExpression).not.toContain('active');
-    expect(updateCall.input.ExpressionAttributeValues[':quals']).toBeUndefined();
-    expect(updateCall.input.ExpressionAttributeValues[':active']).toBeUndefined();
+    const write = contactWrite(send)!;
+    // Absent fields are only seeded where the snapshot has none (if_not_exists), never
+    // overwritten - so a stored quals/roles/active survives a register-only event.
+    for (const field of ['quals', '#roles', 'active', 'availabilityState']) {
+      expect(write.UpdateExpression).not.toContain(`${field} = :${field.replace('#', '')},`);
+      expect(write.UpdateExpression).toContain(`${field} = if_not_exists(${field},`);
+    }
+    // `roles` is a DynamoDB reserved word: it must only ever appear through its name alias.
+    expect(write.UpdateExpression).not.toMatch(/(^|[^#])roles = /);
+    expect(write.ExpressionAttributeNames).toEqual({ '#roles': 'roles' });
+    expect(write.ExpressionAttributeValues[':quals']).toBeUndefined();
+    expect(write.ExpressionAttributeValues[':active']).toBeUndefined();
+    // A contact change never moves snapshotUpdatedAt, which the availability consumer guards
+    // on - it only seeds it for a first-ever event.
+    expect(write.UpdateExpression).toContain(
+      'snapshotUpdatedAt = if_not_exists(snapshotUpdatedAt, :eventTime)',
+    );
+  });
+
+  // Review MAJOR-2: a role change was guarded on the snapshot-wide snapshotUpdatedAt, so any
+  // newer availability/push-token/status event applied first made it "stale" - the promoted
+  // officer never reached mutual aid.
+  it('guards a role change on rolesUpdatedAt alone, so a newer unrelated event cannot drop it', async () => {
+    const send = vi.fn().mockResolvedValue({});
+    vi.doMock('./dynamoClient.js', () => ({
+      createDynamoClient: () => ({ send }),
+      readAlertingConfig: () => ({ tableName: 'alerting-table' }),
+    }));
+    const { handler } = await import('./memberUpdatedHandler.js');
+    await handler(
+      buildSqsEvent({
+        ...VALID_ENVELOPE,
+        payload: { deptId: 'NICHOLS', memberId: 'mbr-102', roles: ['MEMBER', 'OFFICER'] },
+      }),
+    );
+
+    expect(send).toHaveBeenCalledTimes(1);
+    const input = (
+      send.mock.calls[0]?.[0] as {
+        input: { ConditionExpression: string; UpdateExpression: string };
+      }
+    ).input;
+    expect(input.ConditionExpression).toBe(
+      'attribute_not_exists(rolesUpdatedAt) OR rolesUpdatedAt < :rolesUpdatedAt',
+    );
+    // Only seeds snapshotUpdatedAt; never moves it, so it cannot make other events stale.
+    expect(input.UpdateExpression).toContain(
+      'snapshotUpdatedAt = if_not_exists(snapshotUpdatedAt, :rolesUpdatedAt)',
+    );
+    // A first-ever event (a brand-new chief) still yields a snapshot the selector accepts.
+    expect(input.UpdateExpression).toContain('active = if_not_exists(active, :defaultActive)');
+  });
+
+  // `roles` is a DynamoDB reserved word. Bare in an expression it fails the whole UpdateItem
+  // (ValidationException), and every member.updated event seeds or sets roles - so the
+  // consumer DLQ'd every push-token, status and role change. Found against LocalStack; the
+  // in-memory fakes accepted it.
+  it('names roles only through #roles in every expression it sends', async () => {
+    const send = vi.fn().mockResolvedValue({});
+    vi.doMock('./dynamoClient.js', () => ({
+      createDynamoClient: () => ({ send }),
+      readAlertingConfig: () => ({ tableName: 'alerting-table' }),
+    }));
+    const { handler } = await import('./memberUpdatedHandler.js');
+    await handler(
+      buildSqsEvent({
+        ...VALID_ENVELOPE,
+        payload: { deptId: 'NICHOLS', memberId: 'mbr-102', active: true, roles: ['OFFICER'] },
+      }),
+    );
+
+    expect(send).toHaveBeenCalledTimes(2);
+    for (const [command] of send.mock.calls) {
+      const input = (
+        command as {
+          input: { UpdateExpression: string; ExpressionAttributeNames?: Record<string, string> };
+        }
+      ).input;
+      expect(input.UpdateExpression).not.toMatch(/(^|[\s,(])roles\b/);
+      expect(input.ExpressionAttributeNames).toEqual({ '#roles': 'roles' });
+    }
+  });
+
+  it('applies roles and other fields as two independently guarded updates', async () => {
+    const send = vi.fn().mockResolvedValue({});
+    vi.doMock('./dynamoClient.js', () => ({
+      createDynamoClient: () => ({ send }),
+      readAlertingConfig: () => ({ tableName: 'alerting-table' }),
+    }));
+    const { handler } = await import('./memberUpdatedHandler.js');
+    await handler(
+      buildSqsEvent({
+        ...VALID_ENVELOPE,
+        payload: { deptId: 'NICHOLS', memberId: 'mbr-102', active: false, roles: ['MEMBER'] },
+      }),
+    );
+
+    const conditions = send.mock.calls.map(
+      (call) => (call[0] as { input: { ConditionExpression: string } }).input.ConditionExpression,
+    );
+    expect(conditions).toEqual([
+      'attribute_not_exists(activeUpdatedAt) OR activeUpdatedAt < :eventTime',
+      'attribute_not_exists(rolesUpdatedAt) OR rolesUpdatedAt < :rolesUpdatedAt',
+    ]);
   });
 
   it('a status->ACTIVE event with no contactChannels field does not clear the stored contactChannels (P7 regression)', async () => {
@@ -141,14 +293,17 @@ describe('memberUpdatedHandler', () => {
     };
     expect(updateCall.input.UpdateExpression).not.toContain('contactChannels');
     expect(updateCall.input.ExpressionAttributeValues[':contactChannels']).toBeUndefined();
-    expect(updateCall.input.ExpressionAttributeValues[':active']).toBe(true);
+    expect(updateCall.input.ExpressionAttributeValues[':value']).toBe(true);
   });
 
   it('discards a stale/redelivered event (ConditionalCheckFailedException) without throwing (last-writer-wins)', async () => {
     const { ConditionalCheckFailedException } = await import('@aws-sdk/client-dynamodb');
-    const send = vi
-      .fn()
-      .mockRejectedValue(new ConditionalCheckFailedException({ message: 'stale', $metadata: {} }));
+    const eventTime = Date.parse(VALID_ENVELOPE.eventTime);
+    const send = vi.fn((command: { constructor: { name: string } }) =>
+      command.constructor.name === 'GetCommand'
+        ? Promise.resolve({ Item: { pushContactsUpdatedAt: eventTime, contactVersion: 4 } })
+        : Promise.reject(new ConditionalCheckFailedException({ message: 'stale', $metadata: {} })),
+    );
     vi.doMock('./dynamoClient.js', () => ({
       createDynamoClient: () => ({ send }),
       readAlertingConfig: () => ({ tableName: 'alerting-table' }),
@@ -156,6 +311,268 @@ describe('memberUpdatedHandler', () => {
     const { handler } = await import('./memberUpdatedHandler.js');
     const result = await handler(buildSqsEvent(VALID_ENVELOPE));
     expect(result).toEqual({ batchItemFailures: [] });
+    // The redelivered push entries are no newer than what is stored: nothing is written.
+    expect(contactWrite(send)).toBeUndefined();
+  });
+
+  describe('contact projection (design review C2)', () => {
+    const PHONE_EVENT = {
+      ...VALID_ENVELOPE,
+      eventTime: '2026-09-14T00:00:05.000Z',
+      payload: { deptId: 'NICHOLS', memberId: 'mbr-102', phone: '+12035550100' },
+    };
+
+    function storedSnapshot(item: Record<string, unknown>) {
+      return vi.fn((command: { constructor: { name: string } }) =>
+        Promise.resolve(command.constructor.name === 'GetCommand' ? { Item: item } : {}),
+      );
+    }
+
+    it('projects phone into SMS and VOICE entries and keeps the registered PUSH devices', async () => {
+      const push = { channel: 'PUSH', platform: 'APNS', token: 'tok-1', valid: true };
+      const send = storedSnapshot({ contactChannels: [push], contactVersion: 2 });
+      vi.doMock('./dynamoClient.js', () => ({
+        createDynamoClient: () => ({ send }),
+        readAlertingConfig: () => ({ tableName: 'alerting-table' }),
+      }));
+      const { handler } = await import('./memberUpdatedHandler.js');
+      await handler(buildSqsEvent(PHONE_EVENT));
+
+      const write = contactWrite(send)!;
+      expect(write.ExpressionAttributeValues[':contactChannels']).toEqual([
+        push,
+        { channel: 'SMS', phoneNumber: '+12035550100', valid: true },
+        { channel: 'VOICE', phoneNumber: '+12035550100', valid: true },
+      ]);
+      expect(write.ConditionExpression).toBe('contactVersion = :version');
+      expect(write.ExpressionAttributeValues[':version']).toBe(2);
+      expect(write.ExpressionAttributeValues[':nextVersion']).toBe(3);
+      expect(write.UpdateExpression).toContain('phoneUpdatedAt = :eventTime');
+      expect(write.UpdateExpression).not.toContain('pushContactsUpdatedAt');
+    });
+
+    it('a push-token event replaces only the PUSH entries and keeps the phone entries', async () => {
+      const sms = { channel: 'SMS', phoneNumber: '+12035550100', valid: true };
+      const voice = { channel: 'VOICE', phoneNumber: '+12035550100', valid: true };
+      const send = storedSnapshot({
+        contactChannels: [{ channel: 'PUSH', token: 'old', valid: true }, sms, voice],
+        contactVersion: 7,
+      });
+      vi.doMock('./dynamoClient.js', () => ({
+        createDynamoClient: () => ({ send }),
+        readAlertingConfig: () => ({ tableName: 'alerting-table' }),
+      }));
+      const { handler } = await import('./memberUpdatedHandler.js');
+      await handler(buildSqsEvent(VALID_ENVELOPE));
+
+      expect(contactWrite(send)!.ExpressionAttributeValues[':contactChannels']).toEqual([
+        ...VALID_ENVELOPE.payload.contactChannels,
+        sms,
+        voice,
+      ]);
+    });
+
+    it('a newer push event does not make an older phone event stale (per-group timestamps)', async () => {
+      const send = storedSnapshot({
+        contactChannels: [{ channel: 'PUSH', token: 'tok-1' }],
+        pushContactsUpdatedAt: Date.parse('2026-09-14T01:00:00.000Z'),
+        contactVersion: 1,
+      });
+      vi.doMock('./dynamoClient.js', () => ({
+        createDynamoClient: () => ({ send }),
+        readAlertingConfig: () => ({ tableName: 'alerting-table' }),
+      }));
+      const { handler } = await import('./memberUpdatedHandler.js');
+      await handler(buildSqsEvent(PHONE_EVENT));
+
+      const write = contactWrite(send);
+      expect(write?.ExpressionAttributeValues[':contactChannels']).toEqual([
+        { channel: 'PUSH', token: 'tok-1' },
+        { channel: 'SMS', phoneNumber: '+12035550100', valid: true },
+        { channel: 'VOICE', phoneNumber: '+12035550100', valid: true },
+      ]);
+    });
+
+    it('re-reads and retries when a concurrent contact write wins the version race', async () => {
+      const { ConditionalCheckFailedException } = await import('@aws-sdk/client-dynamodb');
+      let gets = 0;
+      let updates = 0;
+      const send = vi.fn((command: { constructor: { name: string } }) => {
+        if (command.constructor.name === 'GetCommand') {
+          gets += 1;
+          return Promise.resolve({
+            Item: {
+              contactChannels:
+                gets === 1 ? [] : [{ channel: 'PUSH', token: 'tok-registered-meanwhile' }],
+              contactVersion: gets,
+            },
+          });
+        }
+        updates += 1;
+        return updates === 1
+          ? Promise.reject(new ConditionalCheckFailedException({ message: 'race', $metadata: {} }))
+          : Promise.resolve({});
+      });
+      vi.doMock('./dynamoClient.js', () => ({
+        createDynamoClient: () => ({ send }),
+        readAlertingConfig: () => ({ tableName: 'alerting-table' }),
+      }));
+      const { handler } = await import('./memberUpdatedHandler.js');
+      await handler(buildSqsEvent(PHONE_EVENT));
+
+      const writes = (send.mock.calls.map((call) => call[0]) as unknown as SentUpdate[])
+        .filter((command) => command.input.ExpressionAttributeValues?.[':contactChannels'])
+        .map((command) => command.input);
+      expect(writes).toHaveLength(2);
+      // The retry merged onto what the concurrent writer stored: its device is not lost.
+      expect(writes[1]!.ExpressionAttributeValues[':contactChannels']).toEqual([
+        { channel: 'PUSH', token: 'tok-registered-meanwhile' },
+        { channel: 'SMS', phoneNumber: '+12035550100', valid: true },
+        { channel: 'VOICE', phoneNumber: '+12035550100', valid: true },
+      ]);
+      expect(writes[1]!.ExpressionAttributeValues[':version']).toBe(2);
+    });
+
+    // Review MAJOR-3: a number stored before personnel normalised is normalised here; one that
+    // cannot be read is never projected (the vendor refuses it on every page) but is counted.
+    it('projects a national-format phone as E.164', async () => {
+      const send = storedSnapshot({ contactChannels: [], contactVersion: 1 });
+      vi.doMock('./dynamoClient.js', () => ({
+        createDynamoClient: () => ({ send }),
+        readAlertingConfig: () => ({ tableName: 'alerting-table' }),
+      }));
+      const { handler } = await import('./memberUpdatedHandler.js');
+      await handler(
+        buildSqsEvent({
+          ...PHONE_EVENT,
+          payload: { ...PHONE_EVENT.payload, phone: '(270) 555-0142' },
+        }),
+      );
+      expect(contactWrite(send)?.ExpressionAttributeValues[':contactChannels']).toEqual([
+        { channel: 'SMS', phoneNumber: '+12705550142', valid: true },
+        { channel: 'VOICE', phoneNumber: '+12705550142', valid: true },
+      ]);
+    });
+
+    it('does not project an unreadable phone, and counts it', async () => {
+      const send = storedSnapshot({ contactChannels: [], contactVersion: 1 });
+      vi.doMock('./dynamoClient.js', () => ({
+        createDynamoClient: () => ({ send }),
+        readAlertingConfig: () => ({ tableName: 'alerting-table' }),
+      }));
+      const logSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+      const { handler } = await import('./memberUpdatedHandler.js');
+      await handler(
+        buildSqsEvent({
+          ...PHONE_EVENT,
+          payload: { ...PHONE_EVENT.payload, phone: 'ask dispatch' },
+        }),
+      );
+      expect(contactWrite(send)).toBeUndefined();
+      expect(logSpy.mock.calls.some(([line]) => String(line).includes('InvalidPhoneSkipped'))).toBe(
+        true,
+      );
+      expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('phone_invalid'));
+      logSpy.mockRestore();
+      errorSpy.mockRestore();
+    });
+
+    it('phone: null removes the SMS and VOICE entries and keeps the devices', async () => {
+      const push = { channel: 'PUSH', token: 'tok-1', valid: true };
+      const send = storedSnapshot({
+        contactChannels: [
+          push,
+          { channel: 'SMS', phoneNumber: '+12035550100', valid: true },
+          { channel: 'VOICE', phoneNumber: '+12035550100', valid: true },
+        ],
+        contactVersion: 3,
+      });
+      vi.doMock('./dynamoClient.js', () => ({
+        createDynamoClient: () => ({ send }),
+        readAlertingConfig: () => ({ tableName: 'alerting-table' }),
+      }));
+      const { handler } = await import('./memberUpdatedHandler.js');
+      await handler(
+        buildSqsEvent({ ...PHONE_EVENT, payload: { ...PHONE_EVENT.payload, phone: null } }),
+      );
+      expect(contactWrite(send)?.ExpressionAttributeValues[':contactChannels']).toEqual([push]);
+    });
+
+    // Review MINOR-2: the personnel list still lists a token the worker found dead; another
+    // device's registration re-sends it. It must stay dead unless that device re-registered.
+    it('a token the worker invalidated stays invalid when the device list is re-sent', async () => {
+      const dead = {
+        channel: 'PUSH',
+        token: 'tok-dead',
+        deviceId: 'old',
+        valid: false,
+        registeredAt: 100,
+      };
+      const send = storedSnapshot({ contactChannels: [dead], contactVersion: 2 });
+      vi.doMock('./dynamoClient.js', () => ({
+        createDynamoClient: () => ({ send }),
+        readAlertingConfig: () => ({ tableName: 'alerting-table' }),
+      }));
+      const { handler } = await import('./memberUpdatedHandler.js');
+      const resent = { ...dead, valid: true };
+      const tablet = {
+        channel: 'PUSH',
+        token: 'tok-tab',
+        deviceId: 'tab',
+        valid: true,
+        registeredAt: 200,
+      };
+      await handler(
+        buildSqsEvent({
+          ...VALID_ENVELOPE,
+          payload: { deptId: 'NICHOLS', memberId: 'mbr-102', contactChannels: [tablet, resent] },
+        }),
+      );
+      expect(contactWrite(send)?.ExpressionAttributeValues[':contactChannels']).toEqual([
+        tablet,
+        { ...resent, valid: false },
+      ]);
+    });
+
+    it('a device that re-registers the same token (newer registeredAt) is valid again', async () => {
+      const dead = {
+        channel: 'PUSH',
+        token: 'tok-1',
+        deviceId: 'ph',
+        valid: false,
+        registeredAt: 100,
+      };
+      const send = storedSnapshot({ contactChannels: [dead], contactVersion: 2 });
+      vi.doMock('./dynamoClient.js', () => ({
+        createDynamoClient: () => ({ send }),
+        readAlertingConfig: () => ({ tableName: 'alerting-table' }),
+      }));
+      const { handler } = await import('./memberUpdatedHandler.js');
+      const reregistered = { ...dead, valid: true, registeredAt: 500 };
+      await handler(
+        buildSqsEvent({
+          ...VALID_ENVELOPE,
+          payload: { deptId: 'NICHOLS', memberId: 'mbr-102', contactChannels: [reregistered] },
+        }),
+      );
+      expect(contactWrite(send)?.ExpressionAttributeValues[':contactChannels']).toEqual([
+        reregistered,
+      ]);
+    });
+
+    it('ignores an empty phone rather than projecting a blank target', async () => {
+      const send = vi.fn().mockResolvedValue({});
+      vi.doMock('./dynamoClient.js', () => ({
+        createDynamoClient: () => ({ send }),
+        readAlertingConfig: () => ({ tableName: 'alerting-table' }),
+      }));
+      const { handler } = await import('./memberUpdatedHandler.js');
+      await handler(
+        buildSqsEvent({ ...PHONE_EVENT, payload: { ...PHONE_EVENT.payload, phone: '  ' } }),
+      );
+      expect(send).not.toHaveBeenCalled();
+    });
   });
 
   it('emits SnapshotPropagationLatencyMs with the elapsed ms from eventTime to now (AC5)', async () => {
@@ -202,15 +619,57 @@ describe('memberUpdatedHandler', () => {
     vi.useRealTimers();
   });
 
-  it('rethrows a non-conditional DynamoDB failure (never swallows) so SQS retries/DLQs', async () => {
+  it('reports a non-conditional DynamoDB failure (never swallows) so SQS retries/DLQs that record', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const send = vi.fn().mockRejectedValue(new Error('ProvisionedThroughputExceededException'));
     vi.doMock('./dynamoClient.js', () => ({
       createDynamoClient: () => ({ send }),
       readAlertingConfig: () => ({ tableName: 'alerting-table' }),
     }));
     const { handler } = await import('./memberUpdatedHandler.js');
-    await expect(handler(buildSqsEvent(VALID_ENVELOPE))).rejects.toThrow(
-      'ProvisionedThroughputExceededException',
+    await expect(handler(buildSqsEvent(VALID_ENVELOPE))).resolves.toEqual({
+      batchItemFailures: [{ itemIdentifier: 'msg-1' }],
+    });
+    expect(
+      errorSpy.mock.calls.some(([line]) =>
+        String(line).includes('ProvisionedThroughputExceededException'),
+      ),
+    ).toBe(true);
+    errorSpy.mockRestore();
+  });
+
+  // Post-merge MINOR-7: one bad record no longer fails (and eventually dead-letters) its siblings.
+  it('reports only the failing record of a batch and applies the good ones', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    const send = vi.fn().mockResolvedValue({ Attributes: {} });
+    vi.doMock('./dynamoClient.js', () => ({
+      createDynamoClient: () => ({ send }),
+      readAlertingConfig: () => ({ tableName: 'alerting-table' }),
+    }));
+    const { handler } = await import('./memberUpdatedHandler.js');
+    const good = buildSqsEvent(VALID_ENVELOPE).Records[0]!;
+    const bad = buildSqsEvent({
+      ...VALID_ENVELOPE,
+      payload: { ...VALID_ENVELOPE.payload, deptId: undefined },
+    }).Records[0]!;
+    const batch = {
+      Records: [
+        { ...good, messageId: 'good-1' },
+        { ...bad, messageId: 'bad-1' },
+        { ...good, messageId: 'good-2' },
+      ],
+    };
+
+    await expect(handler(batch)).resolves.toEqual({
+      batchItemFailures: [{ itemIdentifier: 'bad-1' }],
+    });
+    const memberWrites = send.mock.calls.filter(
+      ([command]) =>
+        (command as { input: { Key?: { sk?: string } } }).input.Key?.sk === 'MEMBER#mbr-102',
     );
+    expect(memberWrites.length).toBeGreaterThanOrEqual(2);
+    errorSpy.mockRestore();
+    logSpy.mockRestore();
   });
 });

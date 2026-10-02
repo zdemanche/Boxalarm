@@ -1,20 +1,32 @@
 import type { DutyShift, ShiftCoverage } from './types';
 
+// Tonight's 18:00-06:00 standby, relative to when the demo loads, so the dashboard's
+// today's-shifts tile has a shift to show.
+const tonight = new Date();
+tonight.setHours(18, 0, 0, 0);
+
 let shifts: DutyShift[] = [
   {
     shiftId: 's-1',
-    startAt: 1758391200,
-    endAt: 1758434400,
+    startAt: 1758391200000,
+    endAt: 1758434400000,
     stationId: 'STATION-1',
     status: 'OPEN',
+  },
+  {
+    shiftId: 's-tonight',
+    startAt: tonight.getTime(),
+    endAt: tonight.getTime() + 12 * 60 * 60 * 1000,
+    stationId: 'STATION-1',
+    status: 'PARTIALLY_FILLED',
   },
 ];
 
 const coverage: ShiftCoverage[] = [
   {
     shiftId: 's-1',
-    startAt: 1758391200,
-    endAt: 1758434400,
+    startAt: 1758391200000,
+    endAt: 1758434400000,
     stationId: 'STATION-1',
     status: 'short',
     positions: [
@@ -51,6 +63,21 @@ export function tryHandleScheduleExtras(
     return json({ ...created, positions: body.positions }, 201);
   }
   if (parts[2] === 'coverage' && method === 'GET') return json({ shifts: coverage });
+  if (parts[2] === 'swaps' && parts[3] === 'pending' && method === 'GET') {
+    return json({
+      swaps: [
+        {
+          shiftId: 's-tonight',
+          positionCode: 'DRIVER',
+          fromMemberId: 'm-3',
+          toMemberId: 'm-2',
+          status: 'PENDING',
+          requiresOfficerApproval: true,
+          requestedAt: 1758300000000,
+        },
+      ],
+    });
+  }
   if (parts[3] === 'swap' && parts[5] === 'approve' && method === 'POST') {
     return json({
       shiftId: parts[2],

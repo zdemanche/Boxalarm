@@ -4,6 +4,7 @@ import { ServiceLambda } from "../observability/service-lambda";
 import { ServiceLogGroup } from "../observability/service-log-group";
 import { HttpApi } from "../api/http-api";
 import { verifiedPermissionsPolicyStatement } from "../authz/policy-store";
+import { auditMutationDenyStatement } from "../data/platform-table";
 import { lambdaCode, LAMBDA_HANDLER } from "../shared/lambda-code";
 import { requireEnv } from "../shared/env";
 
@@ -17,28 +18,41 @@ export interface CertificationsArgs {
   platformBusName: pulumi.Input<string>;
   platformBusArn: pulumi.Input<string>;
   platformTableStreamArn: pulumi.Input<string>;
+  /** platform-assets bucket the create route presigns attachment PUTs into. */
+  assetsBucketName: pulumi.Input<string>;
+  assetsBucketArn: pulumi.Input<string>;
   logGroup: ServiceLogGroup;
   httpApi: HttpApi;
+  /** Ops alarm topic (chief-notifications): every alarm here notifies it, none is silent. */
+  opsAlarmTopicArn: pulumi.Input<string>;
+  /** alerting-page topic (alerting/page-topic.ts): a failed eligibility flip leaves an expired member paged. */
+  pageTopicArn: pulumi.Input<string>;
 }
 
 /**
- * E3-S1/S2/S8-INFRA (#214, #215, #221): certification records, plus the lead-time expiry
- * scanner that also gates alerting eligibility currency. #221's propagation chain is a
- * DynamoDB Streams consumer on the platform table (events/certExpiredReactor.ts, filtered to
- * entityType=CERTIFICATION) — a second, independent stream mapping alongside the shared
- * OutboxPublisher's own OUTBOX_ENTRY-filtered mapping, not something that foundation covers.
+ * E3-S1/S2/S8-INFRA (#214, #215, #221): certification records, plus the daily expiry scanner.
+ *
+ * #221 chain (expiry -> alerting eligibility), end to end:
+ *   1. The daily scanner (certificationExpiryScanner/handler.ts) writes status=EXPIRED on
+ *      every CURRENT certification past its expiryDate (certifications/expiryScan.ts's
+ *      flipExpiredCertifications, conditional on CURRENT, with an audit row). It also
+ *      publishes the lead-time cert.expiry.due notification — that event is a reminder
+ *      only; nothing consumes it for eligibility.
+ *   2. That status write reaches events/certExpiredReactor.ts through a DynamoDB Streams
+ *      mapping on the platform table, filtered to entityType=CERTIFICATION — a second,
+ *      independent stream mapping alongside the shared OutboxPublisher's OUTBOX_ENTRY one.
+ *      A manual revoke (status=REVOKED) takes the same path.
+ *   3. The reactor sets MEMBER_QUALIFICATION.currentlyEligible=false and writes a
+ *      personnel.eligibility.changed outbox row, which the OutboxPublisher delivers to the
+ *      alerting eligibility snapshot (quals.ts's eligibility-changed consumer).
  * Training records share the platform table (no dedicated training table exists) — both
  * TRAINING_TABLE_NAME (client.ts) and TRAINING_DYNAMO_TABLE_NAME (dynamoClient.ts) point
  * at it, and PLATFORM_CONFIG_DYNAMO_TABLE_NAME (per-dept CONFIG#ALERT_RULES lead-time) too.
  *
- * NOT wired here: attachmentUpload.ts's CloudFront signed-URL upload path
- * (CLOUDFRONT_DISTRIBUTION_DOMAIN / _KEY_PAIR_ID / _PRIVATE_KEY_SECRET_ID). CloudFront is a
- * global-edge service and residency-encryption.test.ts enforces N6.1 (U.S.-only, no global
- * edge) repo-wide — provisioning it here would fail that gate. createCertification without
- * an attachmentFilename works; a request that includes one reaches
- * readAttachmentUploadConfig() and fails closed with a 503, since none of those three env
- * vars are set. Fixing this needs a region-pinned replacement (e.g. S3 presigned PutObject)
- * in attachmentUpload.ts itself — backend work outside this infra ticket's footprint.
+ * Attachments: createCertification with an attachmentFilename returns a presigned S3 PUT
+ * (attachmentUpload.ts) into the platform-assets bucket under {deptId}/CERTIFICATION/ -
+ * regional, as N6.1 requires, instead of the CloudFront URL it used to sign, which could
+ * never be configured here. The create role may write only that prefix.
  */
 export class Certifications extends pulumi.ComponentResource {
   public readonly createLambda: ServiceLambda;
@@ -47,8 +61,12 @@ export class Certifications extends pulumi.ComponentResource {
   public readonly expiringLambda: ServiceLambda;
   public readonly scannerLambda: ServiceLambda;
   public readonly scannerSchedule: aws.scheduler.Schedule;
+  public readonly scannerDlq: aws.sqs.Queue;
+  public readonly scannerDlqAlarm: aws.cloudwatch.MetricAlarm;
+  public readonly scannerErrorsAlarm: aws.cloudwatch.MetricAlarm;
   public readonly certExpiredReactorLambda: ServiceLambda;
   public readonly certExpiredReactorOnFailureQueue: aws.sqs.Queue;
+  public readonly certExpiredReactorStreamPolicy: aws.iam.RolePolicy;
   public readonly certExpiredReactorEventSourceMapping: aws.lambda.EventSourceMapping;
   public readonly certExpiredReactorOnFailureAlarm: aws.cloudwatch.MetricAlarm;
   public readonly eligibilityFlipFailedAlarm: aws.cloudwatch.MetricAlarm;
@@ -66,21 +84,34 @@ export class Certifications extends pulumi.ComponentResource {
     const vpStatement = pulumi
       .output(args.policyStoreArn)
       .apply((policyStoreArn) => [verifiedPermissionsPolicyStatement(policyStoreArn)]);
-    const readWriteStatement = pulumi.output(args.platformTableArn).apply((arn) => [
+    // Per-Lambda least privilege, scoped to what each handler actually calls.
+    // create.ts: createCertification is one transaction of two Puts (cert + audit row).
+    const createStatement = pulumi.output(args.platformTableArn).apply((arn) => [
       {
-        Sid: "CertificationsReadWriteAccess" as const,
+        Sid: "CertificationsCreateAccess" as const,
         Effect: "Allow" as const,
-        Action: ["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:UpdateItem", "dynamodb:Query"],
+        Action: ["dynamodb:PutItem"],
         Resource: [arn],
       },
     ]);
-    const readOnlyStatement = pulumi.output(args.platformTableArn).apply((arn) => [
+    // list.ts: listCertificationsForMember is a base-table Query.
+    const listStatement = pulumi.output(args.platformTableArn).apply((arn) => [
       {
-        Sid: "CertificationsReadAccess" as const,
+        Sid: "CertificationsListAccess" as const,
         Effect: "Allow" as const,
-        Action: ["dynamodb:GetItem", "dynamodb:Query"],
+        Action: ["dynamodb:Query"],
         Resource: [arn],
       },
+    ]);
+    // revoke.ts: GetItem (current status), then one transaction of Update (cert) + Put (audit).
+    const revokeStatement = pulumi.output(args.platformTableArn).apply((arn) => [
+      {
+        Sid: "CertificationsRevokeAccess" as const,
+        Effect: "Allow" as const,
+        Action: ["dynamodb:GetItem", "dynamodb:UpdateItem", "dynamodb:PutItem"],
+        Resource: [arn],
+      },
+      auditMutationDenyStatement(arn),
     ]);
 
     this.createLambda = new ServiceLambda(
@@ -92,10 +123,19 @@ export class Certifications extends pulumi.ComponentResource {
         handler: LAMBDA_HANDLER,
         code: lambdaCode("training-service", "certifications-create"),
         logGroup: args.logGroup,
-        environment: baseEnvironment,
+        environment: { ...baseEnvironment, PLATFORM_ASSETS_BUCKET_NAME: args.assetsBucketName },
         additionalPolicyStatements: pulumi
-          .all([readWriteStatement, vpStatement])
-          .apply(([table, vp]) => [...table, ...vp]),
+          .all([createStatement, vpStatement, args.assetsBucketArn])
+          .apply(([table, vp, bucketArn]) => [
+            ...table,
+            ...vp,
+            {
+              Sid: "CertificationAttachmentPut" as const,
+              Effect: "Allow" as const,
+              Action: ["s3:PutObject"],
+              Resource: [`${bucketArn}/*/CERTIFICATION/*`],
+            },
+          ]),
       },
       { parent: this },
     );
@@ -119,7 +159,7 @@ export class Certifications extends pulumi.ComponentResource {
         logGroup: args.logGroup,
         environment: baseEnvironment,
         additionalPolicyStatements: pulumi
-          .all([readOnlyStatement, vpStatement])
+          .all([listStatement, vpStatement])
           .apply(([table, vp]) => [...table, ...vp]),
       },
       { parent: this },
@@ -144,7 +184,7 @@ export class Certifications extends pulumi.ComponentResource {
         logGroup: args.logGroup,
         environment: baseEnvironment,
         additionalPolicyStatements: pulumi
-          .all([readWriteStatement, vpStatement])
+          .all([revokeStatement, vpStatement])
           .apply(([table, vp]) => [...table, ...vp]),
       },
       { parent: this },
@@ -157,6 +197,23 @@ export class Certifications extends pulumi.ComponentResource {
       },
       { parent: this },
     );
+
+    // expiring.ts: readCertExpiryLeadDays GetItems CONFIG#ALERT_RULES from the base table;
+    // queryCertificationsDueInMonth Queries GSI2 (AP 13) — IAM needs the index ARN for that.
+    const expiringStatement = pulumi.output(args.platformTableArn).apply((arn) => [
+      {
+        Sid: "CertificationsExpiringConfigRead" as const,
+        Effect: "Allow" as const,
+        Action: ["dynamodb:GetItem"],
+        Resource: [arn],
+      },
+      {
+        Sid: "CertificationsExpiringDueQuery" as const,
+        Effect: "Allow" as const,
+        Action: ["dynamodb:Query"],
+        Resource: [`${arn}/index/GSI2`],
+      },
+    ]);
 
     this.expiringLambda = new ServiceLambda(
       `${name}-expiring`,
@@ -172,7 +229,7 @@ export class Certifications extends pulumi.ComponentResource {
           PLATFORM_CONFIG_DYNAMO_TABLE_NAME: args.platformTableName,
         },
         additionalPolicyStatements: pulumi
-          .all([readOnlyStatement, vpStatement])
+          .all([expiringStatement, vpStatement])
           .apply(([table, vp]) => [...table, ...vp]),
       },
       { parent: this },
@@ -202,15 +259,20 @@ export class Certifications extends pulumi.ComponentResource {
           .all([args.platformTableArn, args.platformBusArn])
           .apply(([tableArn, busArn]) => [
             {
+              // GetItem: readCertExpiryLeadDays (CONFIG#ALERT_RULES). PutItem/UpdateItem:
+              // publishDueEvent's CERT_EXPIRY_FLAG dedup marker, and the EXPIRED flip's
+              // transaction (Update on the cert row + Put of its audit row).
               Sid: "CertExpiryScannerTableAccess" as const,
               Effect: "Allow" as const,
-              Action: [
-                "dynamodb:GetItem",
-                "dynamodb:PutItem",
-                "dynamodb:UpdateItem",
-                "dynamodb:Query",
-              ],
+              Action: ["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:UpdateItem"],
               Resource: [tableArn],
+            },
+            {
+              // queryCertificationsDueInMonth: GSI2 (AP 13).
+              Sid: "CertExpiryScannerDueQuery" as const,
+              Effect: "Allow" as const,
+              Action: ["dynamodb:Query"],
+              Resource: [`${tableArn}/index/GSI2`],
             },
             {
               Sid: "CertExpiryScannerPublish" as const,
@@ -218,7 +280,52 @@ export class Certifications extends pulumi.ComponentResource {
               Action: ["events:PutEvents"],
               Resource: busArn,
             },
+            auditMutationDenyStatement(tableArn),
           ]),
+      },
+      { parent: this },
+    );
+
+    // Mirrors shifts.ts's completion schedule: retry, DLQ + depth alarm, and an Errors alarm,
+    // so a failing daily run (AccessDenied, throttle, or an unflipped expired cert — the
+    // handler fails the invocation for those) never goes unnoticed.
+    this.scannerDlq = new aws.sqs.Queue(
+      `${name}-scanner-dlq`,
+      { name: `boxalarm-${env}-training-cert-expiry-scanner-dlq` },
+      { parent: this },
+    );
+
+    this.scannerDlqAlarm = new aws.cloudwatch.MetricAlarm(
+      `${name}-scanner-dlq-depth-alarm`,
+      {
+        name: `boxalarm-${env}-training-cert-expiry-scanner-dlq-depth`,
+        namespace: "AWS/SQS",
+        metricName: "ApproximateNumberOfMessagesVisible",
+        dimensions: { QueueName: this.scannerDlq.name },
+        statistic: "Maximum",
+        period: 300,
+        evaluationPeriods: 1,
+        threshold: 0,
+        comparisonOperator: "GreaterThanThreshold",
+        alarmActions: [args.opsAlarmTopicArn],
+      },
+      { parent: this },
+    );
+
+    this.scannerErrorsAlarm = new aws.cloudwatch.MetricAlarm(
+      `${name}-scanner-errors-alarm`,
+      {
+        name: `boxalarm-${env}-training-cert-expiry-scanner-errors`,
+        namespace: "AWS/Lambda",
+        metricName: "Errors",
+        dimensions: { FunctionName: this.scannerLambda.function.name },
+        statistic: "Sum",
+        period: 300,
+        evaluationPeriods: 1,
+        threshold: 0,
+        comparisonOperator: "GreaterThanThreshold",
+        alarmActions: [args.opsAlarmTopicArn],
+        treatMissingData: "notBreaching",
       },
       { parent: this },
     );
@@ -245,19 +352,27 @@ export class Certifications extends pulumi.ComponentResource {
       `${name}-scanner-scheduler-role-policy`,
       {
         role: schedulerRole.id,
-        policy: this.scannerLambda.function.arn.apply((arn) =>
-          JSON.stringify({
-            Version: "2012-10-17",
-            Statement: [
-              {
-                Sid: "InvokeCertExpiryScanner",
-                Effect: "Allow",
-                Action: "lambda:InvokeFunction",
-                Resource: arn,
-              },
-            ],
-          }),
-        ),
+        policy: pulumi
+          .all([this.scannerLambda.function.arn, this.scannerDlq.arn])
+          .apply(([lambdaArn, dlqArn]) =>
+            JSON.stringify({
+              Version: "2012-10-17",
+              Statement: [
+                {
+                  Sid: "InvokeCertExpiryScanner",
+                  Effect: "Allow",
+                  Action: "lambda:InvokeFunction",
+                  Resource: lambdaArn,
+                },
+                {
+                  Sid: "CertExpirySchedulerDlq",
+                  Effect: "Allow",
+                  Action: "sqs:SendMessage",
+                  Resource: dlqArn,
+                },
+              ],
+            }),
+          ),
       },
       { parent: this },
     );
@@ -266,9 +381,20 @@ export class Certifications extends pulumi.ComponentResource {
       `${name}-scanner-schedule`,
       {
         name: `boxalarm-${env}-training-cert-expiry-scanner-daily`,
-        scheduleExpression: "rate(1 day)",
+        // A fixed UTC time, not rate(1 day): notification-service buckets the
+        // cert.expiry.due events this run publishes by UTC day, and its daily digest
+        // (components/notification/digest.ts, 12:00 UTC) only reads today's bucket. With
+        // rate(1 day) the run time is whenever the schedule was created — a run after the
+        // digest would strand that day's reminders forever.
+        scheduleExpression: "cron(0 10 * * ? *)",
+        scheduleExpressionTimezone: "UTC",
         flexibleTimeWindow: { mode: "OFF" },
-        target: { arn: this.scannerLambda.function.arn, roleArn: schedulerRole.arn },
+        target: {
+          arn: this.scannerLambda.function.arn,
+          roleArn: schedulerRole.arn,
+          retryPolicy: { maximumRetryAttempts: 3, maximumEventAgeInSeconds: 3600 },
+          deadLetterConfig: { arn: this.scannerDlq.arn },
+        },
       },
       { parent: this },
     );
@@ -294,11 +420,16 @@ export class Certifications extends pulumi.ComponentResource {
         },
         additionalPolicyStatements: pulumi.output(args.platformTableArn).apply((tableArn) => [
           {
+            // flipEligibilityOnCertExpired: Query (held quals), then one transaction of
+            // Update (QUAL row) + Put (OUTBOX row) items. IAM authorizes each transaction
+            // item as its own UpdateItem/PutItem — dynamodb:TransactWriteItems is not an
+            // IAM action and grants nothing.
             Sid: "CertExpiredReactorAccess" as const,
             Effect: "Allow" as const,
-            Action: ["dynamodb:Query", "dynamodb:TransactWriteItems"],
+            Action: ["dynamodb:Query", "dynamodb:UpdateItem", "dynamodb:PutItem"],
             Resource: [tableArn],
           },
+          auditMutationDenyStatement(tableArn),
         ]),
       },
       { parent: this },
@@ -337,28 +468,38 @@ export class Certifications extends pulumi.ComponentResource {
       { parent: this },
     );
 
-    new aws.iam.RolePolicy(
+    this.certExpiredReactorStreamPolicy = new aws.iam.RolePolicy(
       `${name}-cert-expired-reactor-stream-read-policy`,
       {
         role: this.certExpiredReactorLambda.role.id,
-        policy: pulumi.output(args.platformTableStreamArn).apply((streamArn) =>
-          JSON.stringify({
-            Version: "2012-10-17",
-            Statement: [
-              {
-                Sid: "ReadPlatformTableStream",
-                Effect: "Allow",
-                Action: [
-                  "dynamodb:GetRecords",
-                  "dynamodb:GetShardIterator",
-                  "dynamodb:DescribeStream",
-                  "dynamodb:ListStreams",
-                ],
-                Resource: streamArn,
-              },
-            ],
-          }),
-        ),
+        policy: pulumi
+          .all([args.platformTableStreamArn, this.certExpiredReactorOnFailureQueue.arn])
+          .apply(([streamArn, onFailureQueueArn]) =>
+            JSON.stringify({
+              Version: "2012-10-17",
+              Statement: [
+                {
+                  Sid: "ReadPlatformTableStream",
+                  Effect: "Allow",
+                  Action: [
+                    "dynamodb:GetRecords",
+                    "dynamodb:GetShardIterator",
+                    "dynamodb:DescribeStream",
+                    "dynamodb:ListStreams",
+                  ],
+                  Resource: streamArn,
+                },
+                {
+                  // The on-failure destination is written with this execution role;
+                  // without it, exhausted records are dropped instead of queued.
+                  Sid: "SendToOnFailureQueue",
+                  Effect: "Allow",
+                  Action: ["sqs:SendMessage"],
+                  Resource: onFailureQueueArn,
+                },
+              ],
+            }),
+          ),
       },
       { parent: this },
     );
@@ -375,6 +516,7 @@ export class Certifications extends pulumi.ComponentResource {
         evaluationPeriods: 1,
         threshold: 0,
         comparisonOperator: "GreaterThanThreshold",
+        alarmActions: [args.pageTopicArn],
       },
       { parent: this },
     );
@@ -390,6 +532,7 @@ export class Certifications extends pulumi.ComponentResource {
         evaluationPeriods: 1,
         threshold: 0,
         comparisonOperator: "GreaterThanThreshold",
+        alarmActions: [args.pageTopicArn],
         treatMissingData: "notBreaching",
       },
       { parent: this },

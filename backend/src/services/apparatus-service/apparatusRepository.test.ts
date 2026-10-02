@@ -207,6 +207,7 @@ describe('getApparatusDetail (AC3)', () => {
           severity: 'MINOR',
           reportedAt: 1798050000,
           photoS3Key: 'dept-1/defect/DEF-1/tire.jpg',
+          itemCode: null,
         },
       ],
       failedTests: [{ testType: 'HOSE', testDate: '2026-05-01', nextDueDate: '2027-05-01' }],

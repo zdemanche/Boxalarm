@@ -5,6 +5,7 @@ import {
   type DynamoDBDocumentClient,
 } from '@aws-sdk/lib-dynamodb';
 import { buildDeptScopedPk, type VerifiedDeptId } from '@boxalarm/dept-scope';
+import { buildOutboxRecord } from '@boxalarm/outbox';
 
 export type ApparatusStatus = 'IN_SERVICE' | 'OUT_OF_SERVICE';
 
@@ -36,6 +37,45 @@ export interface SetServiceStatusInput {
   readonly unitId: string;
   readonly status: ApparatusStatus;
   readonly reason?: string;
+  /** The member who made the change (Cognito sub), carried on the outbox event. */
+  readonly changedBy: string;
+  /** The request's traceId, so the notification can be traced back to the change. */
+  readonly correlationId: string;
+  /**
+   * The OOS flip driven by an OUT_OF_SERVICE defect report suppresses the status event: the
+   * apparatus.defect.reported event already notifies the same roles about the same change,
+   * and a second event would double-notify (reportDefectHandler.ts).
+   */
+  readonly suppressEvent?: boolean;
+}
+
+/**
+ * apparatus.serviceStatus.changed (owed-stories review minor 10): a manual status change —
+ * web and mobile share this route — previously notified nobody, while an OUT_OF_SERVICE
+ * defect did. The event rides the same transaction as the status write (outbox pattern), so
+ * a recorded change and its notification cannot drift apart.
+ */
+export const SERVICE_STATUS_EVENT_TYPE = 'apparatus.serviceStatus.changed';
+
+function serviceStatusOutboxPut(tableName: string, input: SetServiceStatusInput) {
+  return {
+    Put: {
+      TableName: tableName,
+      Item: buildOutboxRecord(
+        input.deptId,
+        'apparatus-service',
+        SERVICE_STATUS_EVENT_TYPE,
+        input.correlationId,
+        {
+          unitId: input.unitId,
+          status: input.status,
+          ...(input.reason ? { reason: input.reason } : {}),
+          changedBy: input.changedBy,
+          deptId: input.deptId,
+        },
+      ),
+    },
+  };
 }
 
 export class ApparatusNotFoundError extends Error {
@@ -271,6 +311,7 @@ export async function setServiceStatus(
                 ConditionExpression: 'attribute_not_exists(sk)',
               },
             },
+            ...(input.suppressEvent ? [] : [serviceStatusOutboxPut(tableName, input)]),
           ],
         }),
       );
@@ -299,6 +340,7 @@ export async function setServiceStatus(
                 ExpressionAttributeValues: { ':endAt': epochSeconds() },
               },
             },
+            ...(input.suppressEvent ? [] : [serviceStatusOutboxPut(tableName, input)]),
           ],
         }),
       );

@@ -36,7 +36,7 @@ Read boxalarm-docs#11 before touching the alert path. Infra side: boxalarm-infra
 
 ## #204 — E2-S2-INFRA: Qualifications and quals-based eligibility
 
-**Parent:** https://github.com/zdemanche/Boxalarm-monorepo/issues/43 · **Wave:** 4
+**Parent:** https://github.com/zdemanche/Boxalarm/issues/43 · **Wave:** 4
 
 This repo deploys the quals endpoints and the cert-expired → eligibility-changed → alerting snapshot chain.
 
@@ -72,7 +72,7 @@ Backend expects: `PERSONNEL_TABLE_NAME` + `PLATFORM_BUS_NAME` (`awsClients.ts`),
 
 ## #221 — E3-S8-INFRA: Expired certification revokes qual currency and propagates to alerting eligibility
 
-**Parent:** https://github.com/zdemanche/Boxalarm-monorepo/issues/60 · **Wave:** 5
+**Parent:** https://github.com/zdemanche/Boxalarm/issues/60 · **Wave:** 5
 
 This repo extends the expiry scanner and certification revoke path so an expired or revoked cert provably reaches the alerting snapshot.
 
@@ -101,7 +101,7 @@ This repo extends the expiry scanner and certification revoke path so an expired
 
 ## #207 — E2-S5-INFRA: Planned unavailability (marking off) that suppresses alerting
 
-**Parent:** https://github.com/zdemanche/Boxalarm-monorepo/issues/46 · **Wave:** 4
+**Parent:** https://github.com/zdemanche/Boxalarm/issues/46 · **Wave:** 4
 
 This repo deploys mark-off capture, its one-time expiry schedules, and the availability → alerting snapshot path with its staleness alarm.
 
@@ -122,7 +122,7 @@ This repo deploys mark-off capture, its one-time expiry schedules, and the avail
 ## Current state
 `boxalarm-infrastructure` at origin/main has only Cognito (`components/identity/*`) and observability (`components/observability/*`) — no API Gateway, DynamoDB table, EventBridge bus, SQS, Scheduler, or service Lambda exists yet.
 
-Backend (PR zdemanche/boxalarm-backend#32) expects: `PLATFORM_TABLE_NAME`, `AVAILABILITY_EXPIRY_HANDLER_ARN`, `AVAILABILITY_SCHEDULER_ROLE_ARN` (`availability/handler.ts`), `PLATFORM_EVENT_BUS_NAME` (`outbox/publisher.ts`), `ALERTING_TABLE_NAME` (consumer), `DEPT_ID` (staleness check). Schedules are created in the default group with no `ActionAfterCompletion`, so fired schedules persist.
+Backend (PR zdemanche/boxalarm-backend#32) expects: `PLATFORM_TABLE_NAME`, `AVAILABILITY_EXPIRY_HANDLER_ARN`, `AVAILABILITY_SCHEDULER_ROLE_ARN` (`availability/handler.ts`), `ALERTING_TABLE_NAME` (consumer), `DEPT_ID` (staleness check). Mark-off outbox rows are relayed to the bus by the platform table's outbox drain (`platform-service/outbox-publisher/handler.ts`, `PLATFORM_EVENT_BUS_NAME`); the personnel-specific `outbox/publisher.ts` this ticket once named was never deployed and was deleted (2026-09-30). Schedules are created in the default group with `ActionAfterCompletion: DELETE`.
 
 ## Depends on
 - E8-S7 (platform-service table with GSI1–3 + Streams), E8-S1 (HTTP API + shared authorizer route wiring; infrastructure#6 covers only the Cognito claim), E8-S3 (Verified Permissions policy store)
@@ -136,7 +136,7 @@ Backend (PR zdemanche/boxalarm-backend#32) expects: `PLATFORM_TABLE_NAME`, `AVAI
 
 ## #208 — E2-S6-INFRA: Member self-service profile and contact update
 
-**Parent:** https://github.com/zdemanche/Boxalarm-monorepo/issues/47 · **Wave:** 4
+**Parent:** https://github.com/zdemanche/Boxalarm/issues/47 · **Wave:** 4
 
 This repo deploys the self-service profile endpoint and routes `personnel.member.updated` into the alerting snapshot.
 
@@ -168,7 +168,7 @@ Backend expects: `PLATFORM_TABLE_NAME` + `PLATFORM_BUS_NAME` (`personnel-service
 
 ## #213 — E2-S11-INFRA: Shift attendance feeds LOSAP and reporting automatically
 
-**Parent:** https://github.com/zdemanche/Boxalarm-monorepo/issues/52 · **Wave:** 6
+**Parent:** https://github.com/zdemanche/Boxalarm/issues/52 · **Wave:** 6
 
 This repo deploys the scheduled shift-completion job that turns worked shifts into attendance.
 

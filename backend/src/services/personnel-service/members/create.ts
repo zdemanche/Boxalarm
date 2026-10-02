@@ -6,6 +6,15 @@ import { ForbiddenError, requireAdminRole } from '../lib/authz.js';
 import { createMember } from '../lib/memberRepository.js';
 import type { NewMemberInput } from '../lib/memberRepository.js';
 import { logError, logInfo } from '../lib/logger.js';
+import {
+  MemberLoginExistsError,
+  createMemberLogin,
+  deleteMemberLogin,
+  getCognitoClient,
+  readMemberLoginConfig,
+} from '../lib/memberLogin.js';
+import { toVerifiedDeptId } from '@boxalarm/dept-scope';
+import { INVALID_PHONE_MESSAGE, normalizePhoneE164 } from '../lib/phone.js';
 
 const REQUIRED_FIELDS = [
   'firstName',
@@ -36,6 +45,12 @@ function parseCreateInput(body: string | undefined): NewMemberInput {
     }
     input[field] = value;
   }
+  // Stored in E.164: the alerting plane texts and dials exactly this string (lib/phone.ts).
+  const phone = normalizePhoneE164(input.phone!);
+  if (!phone) {
+    throw new Error(INVALID_PHONE_MESSAGE);
+  }
+  input.phone = phone;
   return input as NewMemberInput;
 }
 
@@ -84,9 +99,34 @@ export const handler: APIGatewayProxyHandlerV2WithLambdaAuthorizer<VerifiedAcces
     return problemResponse(400, 'Bad Request', detail, traceId);
   }
 
+  let config;
+  let loginConfig;
   try {
-    const config = readPersonnelConfig(process.env);
-    const member = await createMember(config.tableName, ctx, input, ctx.sub);
+    config = readPersonnelConfig(process.env);
+    loginConfig = readMemberLoginConfig(process.env);
+  } catch (error) {
+    logError('member.create.misconfigured', traceId, error);
+    return problemResponse(503, 'Service Unavailable', 'unable to create member', traceId);
+  }
+
+  // The login comes first: its sub is the memberId (lib/memberLogin.ts).
+  const cognito = getCognitoClient();
+  let memberId: string;
+  try {
+    memberId = await createMemberLogin(cognito, loginConfig, {
+      email: input.email,
+      deptId: toVerifiedDeptId(ctx),
+    });
+  } catch (error) {
+    if (error instanceof MemberLoginExistsError) {
+      return problemResponse(409, 'Conflict', error.message, traceId);
+    }
+    logError('member.create.login_failed', traceId, error);
+    return problemResponse(503, 'Service Unavailable', 'unable to create member', traceId);
+  }
+
+  try {
+    const member = await createMember(config.tableName, ctx, input, ctx.sub, memberId);
     emitMemberCreatedMetric();
     logInfo('member.created', traceId, { memberId: member.memberId });
     return {
@@ -96,6 +136,12 @@ export const handler: APIGatewayProxyHandlerV2WithLambdaAuthorizer<VerifiedAcces
     };
   } catch (error) {
     logError('member.create.failed', traceId, error);
+    try {
+      await deleteMemberLogin(cognito, loginConfig, input.email);
+    } catch (cleanupError) {
+      // The login now exists with no member row; re-adding the member will answer 409.
+      logError('member.create.login_orphaned', traceId, cleanupError, { memberId });
+    }
     return problemResponse(503, 'Service Unavailable', 'unable to create member', traceId);
   }
 };

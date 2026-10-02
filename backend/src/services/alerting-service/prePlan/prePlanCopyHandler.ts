@@ -1,8 +1,11 @@
 import { TransactWriteCommand } from '@aws-sdk/lib-dynamodb';
-import { buildDeptScopedPk, toVerifiedDeptId } from '@boxalarm/dept-scope';
+import { buildDeptScopedPk, toVerifiedDeptId, type VerifiedDeptId } from '@boxalarm/dept-scope';
 import { emitOutcomeMetric } from '@boxalarm/metrics';
-import type { SQSEvent } from 'aws-lambda';
+import type { SQSBatchResponse, SQSEvent } from 'aws-lambda';
 import { createDynamoClient, readAlertingConfig } from '../eligibility/dynamoClient.js';
+import { normalizeAddress } from './addressKey.js';
+import { prePlanAddressIndexKeys, prePlanCopyKey, prePlanGeoIndexKeys } from './copyKeys.js';
+import { isGeoPoint, type GeoPoint } from './geo.js';
 
 const METRIC_NAMESPACE = 'Boxalarm/alerting-pre-plan';
 const DEDUP_TTL_SECONDS = 48 * 60 * 60;
@@ -16,7 +19,13 @@ interface UtilityShutoff {
 interface PrePlanUpdatedPayload {
   readonly deptId: string;
   readonly occupancyId: string;
+  /** The occupancy was archived: tombstone the copy (inspections archive/archiveRepository.ts). */
+  readonly archived?: true;
+  readonly prePlanId?: string;
   readonly summary?: string;
+  readonly occupancyType?: string;
+  readonly address?: string;
+  readonly location?: GeoPoint;
   readonly hazards?: readonly string[];
   readonly utilityShutoffs?: readonly UtilityShutoff[];
 }
@@ -27,11 +36,25 @@ interface PrePlanUpdatedEnvelope {
   readonly payload: PrePlanUpdatedPayload;
 }
 
+function optionalString(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim().length > 0 ? value : undefined;
+}
+
+/**
+ * The queue is fed by an EventBridge rule target with no input transformer, so each SQS body
+ * is the whole EventBridge event and the outbox envelope sits under `detail` (the same
+ * contract memberUpdatedHandler parses).
+ */
 function parseEnvelope(body: string): PrePlanUpdatedEnvelope {
-  const raw = JSON.parse(body) as Record<string, unknown>;
-  const eventId = raw.eventId;
-  const eventTime = raw.eventTime;
-  const payload = raw.payload as Record<string, unknown> | undefined;
+  const parsed = JSON.parse(body) as { detail?: unknown };
+  const raw = parsed.detail;
+  if (typeof raw !== 'object' || raw === null) {
+    throw new Error('inspections.preplan.updated message is missing detail');
+  }
+  const envelope = raw as Record<string, unknown>;
+  const eventId = envelope.eventId;
+  const eventTime = envelope.eventTime;
+  const payload = envelope.payload as Record<string, unknown> | undefined;
   const deptId = payload?.deptId;
   const occupancyId = payload?.occupancyId;
   if (
@@ -39,7 +62,8 @@ function parseEnvelope(body: string): PrePlanUpdatedEnvelope {
     typeof eventTime !== 'string' ||
     !Number.isFinite(Date.parse(eventTime)) ||
     typeof deptId !== 'string' ||
-    typeof occupancyId !== 'string'
+    typeof occupancyId !== 'string' ||
+    occupancyId.length === 0
   ) {
     throw new Error('inspections.preplan.updated event failed shape validation');
   }
@@ -47,14 +71,22 @@ function parseEnvelope(body: string): PrePlanUpdatedEnvelope {
   const utilityShutoffs = Array.isArray(payload?.utilityShutoffs)
     ? (payload.utilityShutoffs as UtilityShutoff[])
     : undefined;
-  const summary = typeof payload?.summary === 'string' ? payload.summary : undefined;
+  const location = { latitude: payload?.latitude, longitude: payload?.longitude };
+  const optional = {
+    prePlanId: optionalString(payload?.prePlanId),
+    summary: optionalString(payload?.summary),
+    occupancyType: optionalString(payload?.occupancyType),
+    address: optionalString(payload?.address),
+  };
   return {
     eventId,
     eventTime,
     payload: {
       deptId,
       occupancyId,
-      ...(summary !== undefined ? { summary } : {}),
+      ...(payload?.archived === true ? { archived: true as const } : {}),
+      ...Object.fromEntries(Object.entries(optional).filter(([, value]) => value !== undefined)),
+      ...(isGeoPoint(location) ? { location } : {}),
       ...(hazards !== undefined ? { hazards } : {}),
       ...(utilityShutoffs !== undefined ? { utilityShutoffs } : {}),
     },
@@ -90,48 +122,124 @@ function asTransactionCancellation(error: unknown): TransactCancellationError | 
     : undefined;
 }
 
-function buildCopyUpdate(payload: PrePlanUpdatedPayload, snapshotUpdatedAt: number) {
+/**
+ * An archived occupancy's copy keeps its content for the record but loses every index key, so
+ * no dispatch can reach it again; archivedAt also blocks any later non-archive event.
+ */
+function buildTombstoneUpdate(payload: PrePlanUpdatedPayload, snapshotUpdatedAt: number) {
+  return {
+    UpdateExpression:
+      'SET entityType = :entityType, occupancyId = :occupancyId, archivedAt = :snapshotUpdatedAt, ' +
+      'snapshotUpdatedAt = :snapshotUpdatedAt, prePlanUpdatedAt = :snapshotUpdatedAt ' +
+      'REMOVE gsi1pk, gsi1sk, gsi2pk, gsi2sk',
+    values: {
+      ':entityType': 'PRE_PLAN_COPY',
+      ':occupancyId': payload.occupancyId,
+      ':snapshotUpdatedAt': snapshotUpdatedAt,
+    } as Record<string, unknown>,
+  };
+}
+
+function buildCopyUpdate(
+  deptId: VerifiedDeptId,
+  payload: PrePlanUpdatedPayload,
+  snapshotUpdatedAt: number,
+) {
+  if (payload.archived) {
+    return buildTombstoneUpdate(payload, snapshotUpdatedAt);
+  }
   const setClauses = [
     'entityType = :entityType',
+    'occupancyId = :occupancyId',
     'snapshotUpdatedAt = :snapshotUpdatedAt',
     'prePlanUpdatedAt = :snapshotUpdatedAt',
   ];
   const values: Record<string, unknown> = {
     ':entityType': 'PRE_PLAN_COPY',
+    ':occupancyId': payload.occupancyId,
     ':snapshotUpdatedAt': snapshotUpdatedAt,
   };
-  if (payload.summary !== undefined) {
-    setClauses.push('summary = :summary');
-    values[':summary'] = payload.summary;
-  }
-  if (payload.hazards !== undefined) {
-    setClauses.push('hazards = :hazards');
-    values[':hazards'] = payload.hazards;
-  }
-  if (payload.utilityShutoffs !== undefined) {
-    setClauses.push('utilityShutoffs = :utilityShutoffs');
-    values[':utilityShutoffs'] = payload.utilityShutoffs;
-  }
-  return { UpdateExpression: `SET ${setClauses.join(', ')}`, values };
+  const assign = (field: string, value: unknown) => {
+    if (value !== undefined) {
+      setClauses.push(`${field} = :${field}`);
+      values[`:${field}`] = value;
+    }
+  };
+  assign('prePlanId', payload.prePlanId);
+  assign('summary', payload.summary);
+  assign('occupancyType', payload.occupancyType);
+  assign('hazards', payload.hazards);
+  assign('utilityShutoffs', payload.utilityShutoffs);
+
+  // The event carries the occupancy's full address/location state, so every derived field is
+  // either set or REMOVEd: a replay after a normalizer change must clear a unit, town or index
+  // key the new rules no longer produce, not leave the old one behind.
+  const removeClauses: string[] = [];
+  const setOrRemove = (field: string, value: unknown) => {
+    if (value === undefined || value === null) removeClauses.push(field);
+    else assign(field, value);
+  };
+
+  // The address key is recomputed here with the alerting plane's own normalizer — never taken
+  // from the producer's normalizedAddress — so the dispatch side and the copy side of the
+  // match always run the same rules.
+  const normalized = payload.address !== undefined ? normalizeAddress(payload.address) : null;
+  setOrRemove('address', payload.address);
+  const addressIndex = normalized
+    ? prePlanAddressIndexKeys(deptId, normalized.key, payload.occupancyId)
+    : undefined;
+  setOrRemove('addressKey', normalized?.key);
+  setOrRemove('addressUnit', normalized?.unit);
+  setOrRemove('addressTown', normalized?.town);
+  setOrRemove('addressZip', normalized?.zip);
+  setOrRemove('addressState', normalized?.state);
+  setOrRemove('gsi1pk', addressIndex?.gsi1pk);
+  setOrRemove('gsi1sk', addressIndex?.gsi1sk);
+
+  const geoIndex = payload.location
+    ? prePlanGeoIndexKeys(deptId, payload.location, payload.occupancyId)
+    : undefined;
+  setOrRemove('latitude', payload.location?.latitude);
+  setOrRemove('longitude', payload.location?.longitude);
+  setOrRemove('geohash', geoIndex?.geohash);
+  setOrRemove('gsi2pk', geoIndex?.gsi2pk);
+  setOrRemove('gsi2sk', geoIndex?.gsi2sk);
+
+  return {
+    UpdateExpression:
+      `SET ${setClauses.join(', ')}` +
+      (removeClauses.length > 0 ? ` REMOVE ${removeClauses.join(', ')}` : ''),
+    values,
+  };
 }
 
-export const handler = async (event: SQSEvent): Promise<void> => {
+/**
+ * Reports failures per message (the event source mapping sets ReportBatchItemFailures): a
+ * malformed or unwritable record is retried — and eventually dead-lettered — on its own,
+ * never taking the valid records of its batch down with it.
+ */
+export const handler = async (event: SQSEvent): Promise<SQSBatchResponse> => {
+  const batchItemFailures: SQSBatchResponse['batchItemFailures'] = [];
   const { tableName } = readAlertingConfig(process.env);
   const ddb = createDynamoClient(process.env);
 
   for (const record of event.Records) {
     let envelope: PrePlanUpdatedEnvelope;
+    let deptId: VerifiedDeptId;
+    let update: ReturnType<typeof buildCopyUpdate>;
     try {
       envelope = parseEnvelope(record.body);
+      deptId = toVerifiedDeptId({ deptId: envelope.payload.deptId });
+      // Keys are built here too: an id carrying the pk delimiter is a malformed event.
+      update = buildCopyUpdate(deptId, envelope.payload, Date.parse(envelope.eventTime));
     } catch (error) {
       logError('preplan_copy.malformed_event', error, record.messageId);
-      throw error;
+      batchItemFailures.push({ itemIdentifier: record.messageId });
+      continue;
     }
 
     const { eventId, payload } = envelope;
-    const snapshotUpdatedAt = Date.parse(envelope.eventTime);
-    const deptId = toVerifiedDeptId({ deptId: payload.deptId });
-    const { UpdateExpression, values } = buildCopyUpdate(payload, snapshotUpdatedAt);
+    const { UpdateExpression, values } = update;
 
     try {
       await ddb.send(
@@ -152,13 +260,18 @@ export const handler = async (event: SQSEvent): Promise<void> => {
             {
               Update: {
                 TableName: tableName,
-                Key: {
-                  pk: buildDeptScopedPk(deptId, 'PREPLAN'),
-                  sk: `OCCUPANCY#${payload.occupancyId}`,
-                },
+                Key: prePlanCopyKey(deptId, payload.occupancyId),
                 UpdateExpression,
-                ConditionExpression:
-                  'attribute_not_exists(prePlanUpdatedAt) OR :snapshotUpdatedAt > prePlanUpdatedAt',
+                // An update: newer than what is stored, and never over a tombstone (there is no
+                // un-archive). A tombstone: unconditional beyond its dedup marker — event times
+                // are stamped before commit, so a pre-plan save racing the archive can carry a
+                // later eventTime, and a watermark would then discard the tombstone for good.
+                ...(payload.archived
+                  ? {}
+                  : {
+                      ConditionExpression:
+                        '(attribute_not_exists(prePlanUpdatedAt) OR :snapshotUpdatedAt > prePlanUpdatedAt) AND attribute_not_exists(archivedAt)',
+                    }),
                 ExpressionAttributeValues: values,
               },
             },
@@ -186,10 +299,17 @@ export const handler = async (event: SQSEvent): Promise<void> => {
       }
       logError('preplan_copy.write_failed', error, eventId, { occupancyId: payload.occupancyId });
       emitOutcomeMetric(METRIC_NAMESPACE, 'PrePlanCopyFailed');
-      throw error;
+      batchItemFailures.push({ itemIdentifier: record.messageId });
+      continue;
     }
 
-    const missingAc1Fields = (['summary', 'hazards', 'utilityShutoffs'] as const).filter(
+    // The address is what makes the copy findable from a dispatch: without it the copy is
+    // stored but no alert will ever show it. (Coordinates are optional on an occupancy.)
+    if (payload.archived) {
+      emitOutcomeMetric(METRIC_NAMESPACE, 'PrePlanCopyArchived');
+      continue;
+    }
+    const missingAc1Fields = (['summary', 'hazards', 'utilityShutoffs', 'address'] as const).filter(
       (field) => payload[field] === undefined,
     );
     if (missingAc1Fields.length > 0) {
@@ -204,4 +324,5 @@ export const handler = async (event: SQSEvent): Promise<void> => {
 
     emitOutcomeMetric(METRIC_NAMESPACE, 'PrePlanCopyUpdated');
   }
+  return { batchItemFailures };
 };

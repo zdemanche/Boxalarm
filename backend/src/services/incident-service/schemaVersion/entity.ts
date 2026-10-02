@@ -6,6 +6,8 @@ export interface SchemaVersion {
   readonly status: SchemaVersionStatus;
   readonly coreSchemaS3Key: string;
   readonly secondarySchemaS3Key: string;
+  /** The compiled NERIS payload schema (neris/apiSchema.ts) published with this version. */
+  readonly nerisApiS3Key?: string;
   readonly publishedAt: number;
 }
 

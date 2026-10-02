@@ -1,5 +1,6 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import {
+  ActionAfterCompletion,
   SchedulerClient,
   CreateScheduleCommand,
   DeleteScheduleCommand,
@@ -21,6 +22,7 @@ import { createDdbClient, readPersonnelDdbConfig } from './dynamoClient.js';
 
 const METRIC_NAMESPACE = 'Boxalarm/personnel-availability';
 const MAX_EPOCH_SECONDS = 4_102_444_800;
+export const MAX_MARKOFF_WINDOW_SECONDS = 90 * 24 * 60 * 60;
 
 function conflictProblem(detail: string, traceId: string): APIGatewayProxyResultV2 {
   return {
@@ -72,7 +74,7 @@ function readSchedulerConfig(env: NodeJS.ProcessEnv): SchedulerConfig {
 
 let cachedSchedulerClient: SchedulerClient | undefined;
 
-function getSchedulerClient(client?: SchedulerClient): SchedulerClient {
+export function getSchedulerClient(client?: SchedulerClient): SchedulerClient {
   cachedSchedulerClient ??= client ?? AWSXRay.captureAWSv3Client(new SchedulerClient({}));
   return cachedSchedulerClient;
 }
@@ -106,6 +108,14 @@ function parseBody(body: string | undefined): ParsedBody | { error: string } {
   }
   if (endAt <= startAt) {
     return { error: 'endAt must be strictly after startAt.' };
+  }
+  // Paging review MAJOR-A: a mark-off really stops pages now, so a mistyped year cannot take a
+  // member off paging until 2100. Longer absences are LOA (a status change), not a mark-off.
+  if (endAt - startAt > MAX_MARKOFF_WINDOW_SECONDS) {
+    return {
+      error:
+        'A mark-off can last at most 90 days. For a longer absence, ask an officer to set leave of absence.',
+    };
   }
   if (endAt <= Math.floor(Date.now() / 1000)) {
     return { error: 'endAt must be in the future.' };
@@ -152,6 +162,23 @@ function dependencyUnavailableProblem(traceId: string): APIGatewayProxyResultV2 
   };
 }
 
+/**
+ * EventBridge Scheduler names are capped at 64 chars ([0-9a-zA-Z-_.]). The readable form
+ * `avail-{deptId}-{memberId}-{startAt}` is already 64 chars for a 36-char Cognito sub and
+ * deptId `nichols-fd`, so a `-start`/`-end` suffix got truncated away and the two schedules
+ * of a future-dated markoff collided. A 40-hex-char sha256 of the same triple keeps the name
+ * deterministic and unique per markoff at a fixed 46 chars, and keeps the `avail-` prefix the
+ * create Lambda's IAM resource pattern (schedule/default/avail-*) matches.
+ */
+export function availabilityScheduleBaseName(
+  deptId: string,
+  memberId: string,
+  startAt: number,
+): string {
+  const digest = createHash('sha256').update(`${deptId}#${memberId}#${startAt}`).digest('hex');
+  return `avail-${digest.slice(0, 40)}`;
+}
+
 interface ScheduleSpec {
   readonly action: TransitionAction;
   readonly at: number;
@@ -195,6 +222,7 @@ export async function createAvailability(
   const { tableName } = readPersonnelDdbConfig(process.env);
   const eventId = randomUUID();
   const nowSeconds = Math.floor(Date.now() / 1000);
+  const eventTime = new Date().toISOString();
   const activatesImmediately = parsed.startAt <= nowSeconds;
 
   const markoffItem = {
@@ -217,6 +245,11 @@ export async function createAvailability(
     eventId,
     eventType: 'personnel.availability.changed',
     correlationId: memberId,
+    // The platform drain publishes only rows carrying the full envelope
+    // (eventTime, source, schemaVersion); without them it drops the row silently.
+    eventTime,
+    source: 'personnel-service',
+    schemaVersion: '1.0',
     createdAt: nowSeconds,
     payload: {
       deptId,
@@ -228,7 +261,7 @@ export async function createAvailability(
   };
 
   const scheduler = getSchedulerClient(deps.schedulerClient);
-  const scheduleBaseName = `avail-${deptId}-${memberId}-${parsed.startAt}`;
+  const scheduleBaseName = availabilityScheduleBaseName(deptId, memberId, parsed.startAt);
   const schedulesToCreate: readonly ScheduleSpec[] = activatesImmediately
     ? [{ action: 'REVERT', at: parsed.endAt, suffix: 'end' }]
     : [
@@ -239,11 +272,14 @@ export async function createAvailability(
   const createdScheduleNames: string[] = [];
   try {
     for (const schedule of schedulesToCreate) {
-      const scheduleName = `${scheduleBaseName}-${schedule.suffix}`.slice(0, 64);
+      const scheduleName = `${scheduleBaseName}-${schedule.suffix}`;
       await scheduler.send(
         new CreateScheduleCommand({
           Name: scheduleName,
           ScheduleExpression: `at(${new Date(schedule.at * 1000).toISOString().slice(0, 19)})`,
+          // One-time at() schedules otherwise linger after firing and accumulate toward the
+          // account's Scheduler quota (#327 review SUG-1).
+          ActionAfterCompletion: ActionAfterCompletion.DELETE,
           FlexibleTimeWindow: { Mode: FlexibleTimeWindowMode.OFF },
           Target: {
             Arn: schedulerConfig.expiryHandlerFunctionArn,

@@ -1,4 +1,5 @@
 import type {
+  ActiveDispatchList,
   CanaryStatus,
   DeliveryReceipt,
   DeviceState,
@@ -14,6 +15,9 @@ const DISPATCHES = new Map<string, DispatchAlert>();
 const ROSTERS = new Map<string, RosterEntry[]>();
 const RECEIPTS = new Map<string, DeliveryReceipt[]>();
 const RIDING_BOARDS = new Map<string, RidingBoard>();
+/** Epoch seconds each demo dispatch went out — drives the active-dispatch list. */
+const DISPATCHED_AT = new Map<string, number>();
+const DEMO_ACTIVE_WINDOW_SECONDS = 2 * 60 * 60;
 
 const DEVICE_STATES = new Map<string, DeviceState>([
   [
@@ -99,11 +103,19 @@ function seedDispatch(dispatchId: string, input?: Partial<DispatchAlert>): Dispa
     crossStreets: input?.crossStreets ?? 'Main St & Nichols Ave',
     mapLink: input?.mapLink ?? null,
     narrative: input?.narrative ?? 'Smoke showing from the second floor.',
+    toneLadder: {
+      status: 'ACTIVE',
+      currentToneSequence: 1,
+      nextToneAt: Math.floor(Date.now() / 1000) + 180,
+    },
+    mutualAid: null,
     prePlan: {
       summary: 'Two-story wood-frame occupancy, residential above commercial.',
       hazards: ['Rooftop solar array'],
       utilityShutoffs: [{ utility: 'Gas', location: 'Rear exterior wall' }],
-      nearestHydrants: [{ hydrantId: 'H-014', size: '4"', flowRatingGpm: 1000 }],
+      nearestHydrants: [
+        { hydrantId: 'H-014', distanceMeters: 60, size: '4"', flowRatingGpm: 1000, flowClass: 'A' },
+      ],
     },
   };
 }
@@ -176,11 +188,162 @@ function ensureSeeded(dispatchId: string): void {
   RIDING_BOARDS.set(dispatchId, seedRidingBoard(dispatchId));
 }
 
+// One call dispatched a few minutes before the demo loads, so the dashboard's active-call tile
+// has something real (to the demo) to show.
+const DEMO_ACTIVE_DISPATCH_ID = 'NICHOLS-DEMO-1';
+ensureSeeded(DEMO_ACTIVE_DISPATCH_ID);
+DISPATCHED_AT.set(DEMO_ACTIVE_DISPATCH_ID, Math.floor(Date.now() / 1000) - 12 * 60);
+// The CAD sent two later messages for the call, so the CAD-updates history shows in demo mode.
+DISPATCHES.get(DEMO_ACTIVE_DISPATCH_ID)!.updates = [
+  {
+    updateId: 'demo-update-1',
+    receivedAt: Math.floor(Date.now() / 1000) - 9 * 60,
+    summary: 'Units: Engine 301, Truck 304',
+    changes: [{ field: 'unitsRequested', from: 'Engine 301', to: 'Engine 301, Truck 304' }],
+  },
+  {
+    updateId: 'demo-update-2',
+    receivedAt: Math.floor(Date.now() / 1000) - 5 * 60,
+    summary: 'Occupants reported out of the building',
+    changes: [{ field: 'narrative', from: '', to: 'Occupants reported out of the building' }],
+  },
+];
+
 function json(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data), {
     status,
     headers: { 'Content-Type': 'application/json' },
   });
+}
+
+function conflict(detail: string): Response {
+  return new Response(
+    JSON.stringify({
+      type: 'https://boxalarm.dev/problems/conflict',
+      title: 'Conflict',
+      status: 409,
+      detail,
+      traceId: 'demo',
+    }),
+    { status: 409, headers: { 'Content-Type': 'application/problem+json' } },
+  );
+}
+
+const FINAL_TONE = 3;
+
+/** Mirrors alerting-service/ladderControls: same preconditions, same 409s, same bodies. */
+function demoLadderControl(
+  dispatchId: string,
+  control: string,
+  body: Record<string, unknown>,
+): Response | null {
+  ensureSeeded(dispatchId);
+  const dispatch = DISPATCHES.get(dispatchId)!;
+  const ladder = dispatch.toneLadder!;
+  const now = Math.floor(Date.now() / 1000);
+
+  if (control === 'tone-ladder/advance') {
+    if (ladder.status === 'HALTED_MANUAL') {
+      return conflict('The tone ladder is halted. No tone was sent.');
+    }
+    if (ladder.status === 'COMPLETED' || ladder.currentToneSequence >= FINAL_TONE) {
+      return conflict('Every tone has already fired. No tone was sent.');
+    }
+    if (body.expectedCurrentToneSequence !== ladder.currentToneSequence) {
+      return conflict(
+        `The ladder is now at tone ${ladder.currentToneSequence}, not tone ${String(body.expectedCurrentToneSequence)}. No tone was sent; refresh before advancing again.`,
+      );
+    }
+    const toneSequence = ladder.currentToneSequence + 1;
+    dispatch.toneLadder = {
+      status: toneSequence >= FINAL_TONE ? 'COMPLETED' : 'ACTIVE',
+      currentToneSequence: toneSequence,
+      nextToneAt: toneSequence >= FINAL_TONE ? null : now + 180,
+    };
+    const roster = ROSTERS.get(dispatchId) ?? [];
+    RECEIPTS.set(dispatchId, [
+      ...(RECEIPTS.get(dispatchId) ?? []),
+      ...roster.map((entry) => ({
+        memberId: entry.memberId,
+        channel: 'PUSH',
+        toneSequence,
+        status: 'SENT' as const,
+        sentAt: now,
+        deliveredAt: null,
+        openedAt: null,
+        failureReason: null,
+      })),
+    ]);
+    return json({ dispatchId, toneSequence, outcome: 'FIRED_MANUAL_OVERRIDE' });
+  }
+
+  if (control === 'tone-ladder/halt') {
+    if (ladder.status === 'HALTED_MANUAL') {
+      return json({ dispatchId, toneLadder: ladder, changed: false });
+    }
+    if (ladder.status === 'COMPLETED' || ladder.currentToneSequence >= FINAL_TONE) {
+      return conflict('Every tone has already fired, so there is nothing left to halt.');
+    }
+    dispatch.toneLadder = { ...ladder, status: 'HALTED_MANUAL', nextToneAt: null };
+    return json({
+      dispatchId,
+      toneLadder: { status: 'HALTED_MANUAL', currentToneSequence: ladder.currentToneSequence },
+      changed: true,
+    });
+  }
+
+  if (control === 'mutual-aid/trigger') {
+    if (dispatch.mutualAid) {
+      return json({
+        dispatchId,
+        created: false,
+        officersNotified: 0,
+        adapterUsed: 'OFFICER_MANUAL_PROMPT',
+        mutualAid: dispatch.mutualAid,
+      });
+    }
+    dispatch.mutualAid = {
+      triggeredAt: now,
+      reason: 'MANUAL',
+      triggeredBy: 'demo-officer',
+      acknowledgedBy: null,
+      acknowledgedAt: null,
+      notes: null,
+    };
+    return json({
+      dispatchId,
+      created: true,
+      officersNotified: 2,
+      adapterUsed: 'OFFICER_MANUAL_PROMPT',
+      mutualAid: dispatch.mutualAid,
+    });
+  }
+
+  if (control === 'mutual-aid/acknowledge') {
+    const mutualAid = dispatch.mutualAid;
+    if (!mutualAid) {
+      return conflict(
+        'Mutual aid has not been requested for this dispatch, so there is nothing to acknowledge.',
+      );
+    }
+    if (mutualAid.acknowledgedAt !== null) {
+      return mutualAid.acknowledgedBy === 'demo-officer'
+        ? json({ dispatchId, changed: false, mutualAid })
+        : conflict(
+            'Mutual aid was already acknowledged by another officer. Your notes were not saved.',
+          );
+    }
+    const notes = typeof body.notes === 'string' && body.notes.trim() ? body.notes.trim() : null;
+    dispatch.mutualAid = {
+      ...mutualAid,
+      acknowledgedBy: 'demo-officer',
+      acknowledgedAt: now,
+      notes,
+    };
+    return json({ dispatchId, changed: true, mutualAid: dispatch.mutualAid });
+  }
+
+  return null;
 }
 
 /** Returns null when the path isn't an alerting/apparatus-riding-board route this file owns. */
@@ -191,13 +354,49 @@ export function demoAlertsRequest(
 ): Response | null {
   const parts = path.split('/');
 
+  if (path === 'alerting/home-locality' && method === 'GET') {
+    return json({
+      towns: ['Trumbull', 'Nichols', 'Long Hill', 'Trumbull Center'],
+      zips: ['06611'],
+      state: 'CT',
+    });
+  }
   if (path === 'alerting/dispatches' && method === 'POST') {
     dispatchCounter += 1;
     const dispatchId = `MANUAL-${dispatchCounter}`;
     const input = body as unknown as ManualDispatchInput;
     ensureSeeded(dispatchId);
     DISPATCHES.set(dispatchId, seedDispatch(dispatchId, input));
+    DISPATCHED_AT.set(dispatchId, Math.floor(Date.now() / 1000));
     return json({ dispatchId, sourceSystem: 'MANUAL' }, 201);
+  }
+
+  if (path === 'alerting/dispatches' && method === 'GET') {
+    const asOf = Math.floor(Date.now() / 1000);
+    const list: ActiveDispatchList = {
+      dispatches: [...DISPATCHED_AT.entries()]
+        .filter(([, at]) => at >= asOf - DEMO_ACTIVE_WINDOW_SECONDS)
+        .sort(([, a], [, b]) => b - a)
+        .flatMap(([dispatchId, dispatchedAt]) => {
+          const dispatch = DISPATCHES.get(dispatchId);
+          return dispatch
+            ? [
+                {
+                  dispatchId,
+                  incidentType: dispatch.incidentType,
+                  address: dispatch.address,
+                  crossStreets: dispatch.crossStreets,
+                  dispatchedAt,
+                  toneLadder: { status: 'ACTIVE', currentToneSequence: 1 },
+                },
+              ]
+            : [];
+        }),
+      activeWindowSeconds: DEMO_ACTIVE_WINDOW_SECONDS,
+      asOf,
+      truncated: false,
+    };
+    return json(list);
   }
 
   if (
@@ -266,6 +465,21 @@ export function demoAlertsRequest(
     return json(result);
   }
 
+  if (
+    parts[0] === 'alerting' &&
+    parts[1] === 'dispatches' &&
+    parts.length === 5 &&
+    (parts[3] === 'tone-ladder' || parts[3] === 'mutual-aid') &&
+    method === 'POST'
+  ) {
+    const response = demoLadderControl(
+      decodeURIComponent(parts[2] ?? ''),
+      `${parts[3]}/${parts[4] ?? ''}`,
+      body,
+    );
+    if (response) return response;
+  }
+
   if (path === 'alerting/canary/status' && method === 'GET') {
     const latest = CANARY_RUNS[0];
     const status: CanaryStatus = {
@@ -292,7 +506,7 @@ export function demoAlertsRequest(
   if (
     parts[0] === 'apparatus' &&
     parts[1] === 'riding-board' &&
-    parts[3] === 'assign' &&
+    parts[3] === 'assignments' &&
     method === 'POST'
   ) {
     const dispatchId = decodeURIComponent(parts[2] ?? '');

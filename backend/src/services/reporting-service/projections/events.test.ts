@@ -119,4 +119,30 @@ describe('projection event parsing', () => {
     );
     expect(writes[0]).toMatchObject({ sk: 'MEMBER#m-1', values: { available: false } });
   });
+
+  it('writes nothing for a member.updated that carries no status (e.g. a role change)', () => {
+    const parsed = parseDomainEvent(
+      JSON.stringify({
+        detail: {
+          eventId: 'evt-9',
+          eventType: 'personnel.member.updated',
+          payload: { deptId: 'NICHOLS', memberId: 'm-1', roles: ['MEMBER', 'OFFICER'] },
+        },
+      }),
+    );
+    expect(projectionWrites(parsed, now)).toEqual([]);
+  });
+
+  it('rejects a member.updated with neither memberId nor status instead of skipping it', () => {
+    const parsed = parseDomainEvent(
+      JSON.stringify({
+        detail: {
+          eventId: 'evt-10',
+          eventType: 'personnel.member.updated',
+          payload: { deptId: 'NICHOLS' },
+        },
+      }),
+    );
+    expect(() => projectionWrites(parsed, now)).toThrow();
+  });
 });

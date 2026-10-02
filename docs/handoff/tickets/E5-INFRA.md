@@ -31,7 +31,7 @@ Every E5 backend handler already exists on main under `backend/src/services/insp
 
 ## #195 — E5-S1-INFRA: Occupancy records: create, view, edit
 
-**Parent:** https://github.com/zdemanche/Boxalarm-monorepo/issues/75 · **Wave:** 3
+**Parent:** https://github.com/zdemanche/Boxalarm/issues/75 · **Wave:** 3
 
 Deploy the merged occupancy handler.
 
@@ -58,7 +58,7 @@ Deploy the merged occupancy handler.
 
 ## #196 — E5-S2-INFRA: Pre-incident plans with attachments, site diagrams, and utility shutoffs
 
-**Parent:** https://github.com/zdemanche/Boxalarm-monorepo/issues/76 · **Wave:** 4
+**Parent:** https://github.com/zdemanche/Boxalarm/issues/76 · **Wave:** 4
 
 Pre-plan routes, the platform-assets bucket + signed-URL CloudFront, and the platform-table outbox drain to the bus.
 
@@ -91,7 +91,7 @@ Pre-plan routes, the platform-assets bucket + signed-URL CloudFront, and the pla
 
 ## #197 — E5-S3-INFRA: Hydrant registry: location, size, flow, last test, out-of-service
 
-**Parent:** https://github.com/zdemanche/Boxalarm-monorepo/issues/77 · **Wave:** 3
+**Parent:** https://github.com/zdemanche/Boxalarm/issues/77 · **Wave:** 3
 
 Deploy the merged hydrant handlers.
 
@@ -119,7 +119,7 @@ Deploy the merged hydrant handlers.
 
 ## #198 — E5-S4-INFRA: Publish inspections.preplan.updated and inspections.hydrant.updated to the alerting-plane copy
 
-**Parent:** https://github.com/zdemanche/Boxalarm-monorepo/issues/78 · **Wave:** 5
+**Parent:** https://github.com/zdemanche/Boxalarm/issues/78 · **Wave:** 5
 
 The LOB-to-alerting copy queue and a PRE_PLAN_COPY consumer whose IAM boundary proves isolation.
 
@@ -153,7 +153,7 @@ The LOB-to-alerting copy queue and a PRE_PLAN_COPY consumer whose IAM boundary p
 
 ## #199 — E5-S5-INFRA: Inspection scheduling, conduct, and violation tracking
 
-**Parent:** https://github.com/zdemanche/Boxalarm-monorepo/issues/79 · **Wave:** 4
+**Parent:** https://github.com/zdemanche/Boxalarm/issues/79 · **Wave:** 4
 
 Deploy the merged inspection handlers.
 
@@ -180,7 +180,7 @@ Deploy the merged inspection handlers.
 
 ## #200 — E5-S6-INFRA: Map-based retrieval of occupancies and hydrants
 
-**Parent:** https://github.com/zdemanche/Boxalarm-monorepo/issues/80 · **Wave:** 4
+**Parent:** https://github.com/zdemanche/Boxalarm/issues/80 · **Wave:** 4
 
 Deploy the merged map handler.
 
@@ -208,7 +208,7 @@ Deploy the merged map handler.
 
 ## #201 — E5-S7-INFRA: Mobile field capture with photos, offline-tolerant
 
-**Parent:** https://github.com/zdemanche/Boxalarm-monorepo/issues/81 · **Wave:** 5
+**Parent:** https://github.com/zdemanche/Boxalarm/issues/81 · **Wave:** 5
 
 Field-capture route with signed-URL access for occupancy and inspection photo prefixes.
 
@@ -237,7 +237,7 @@ Field-capture route with signed-URL access for occupancy and inspection photo pr
 
 ## #202 — E5-S8-INFRA: Pre-plan and hydrant panel inside an active alert
 
-**Parent:** https://github.com/zdemanche/Boxalarm-monorepo/issues/82 · **Wave:** 7
+**Parent:** https://github.com/zdemanche/Boxalarm/issues/82 · **Wave:** 7
 
 Alerting-plane read route for PRE_PLAN_COPY, isolated from the LOB failure domain.
 

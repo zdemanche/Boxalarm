@@ -1,10 +1,18 @@
-import type { ClaimResult, DutyShift, ScheduleRepository } from './types';
+import type { ClaimResult, DutyShift, MarkOff, ScheduleRepository } from './types';
+
+// Mark-offs made with the mock (no API): listed and ended in memory.
+let MARK_OFFS: MarkOff[] = [];
+
+/** Test seam. */
+export function resetMockMarkOffs(markOffs: MarkOff[] = []): void {
+  MARK_OFFS = [...markOffs];
+}
 
 const SHIFTS: DutyShift[] = [
   {
     shiftId: 'SHIFT-0511',
-    startAt: '2026-09-20T18:00:00Z',
-    endAt: '2026-09-21T06:00:00Z',
+    startAt: Date.parse('2026-09-20T18:00:00Z'),
+    endAt: Date.parse('2026-09-21T06:00:00Z'),
     stationId: 'STATION-1',
     status: 'PARTIALLY_FILLED',
     positions: [
@@ -14,8 +22,8 @@ const SHIFTS: DutyShift[] = [
   },
   {
     shiftId: 'SHIFT-0512',
-    startAt: '2026-09-27T18:00:00Z',
-    endAt: '2026-09-28T06:00:00Z',
+    startAt: Date.parse('2026-09-27T18:00:00Z'),
+    endAt: Date.parse('2026-09-28T06:00:00Z'),
     stationId: 'STATION-1',
     status: 'OPEN',
     positions: [
@@ -44,8 +52,27 @@ export const mockScheduleRepository: ScheduleRepository = {
     return 'CLAIMED';
   },
 
-  async markUnavailable() {
-    return undefined;
+  async markUnavailable(startAt, endAt, reason) {
+    const start = Math.floor(Date.parse(startAt) / 1000);
+    MARK_OFFS = [
+      ...MARK_OFFS.filter((m) => m.startAt !== start),
+      {
+        markoffId: String(start),
+        startAt: start,
+        endAt: Math.floor(Date.parse(endAt) / 1000),
+        ...(reason ? { reason } : {}),
+      },
+    ].sort((a, b) => a.startAt - b.startAt);
+    return { outboxId: null };
+  },
+
+  async listMarkOffs() {
+    const now = Date.now() / 1000;
+    return MARK_OFFS.filter((m) => m.endAt > now);
+  },
+
+  async endMarkOff(markOff) {
+    MARK_OFFS = MARK_OFFS.filter((m) => m.markoffId !== markOff.markoffId);
   },
 
   async releasePosition(shiftId, positionCode) {

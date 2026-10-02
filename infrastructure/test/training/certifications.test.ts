@@ -48,10 +48,14 @@ describe("Certifications — certExpiredReactor stream consumer (#221)", () => {
     const httpApi = new HttpApi("test-certifications-http-api", {
       env: "dev",
       userPoolId: pulumi.output("pool-1"),
+      platformTableName: "platform-table",
+      platformTableArn: "arn:aws:dynamodb:us-east-1:123456789012:table/platform",
       allowedClientIds: [pulumi.output("client-1")],
       platformLogGroup: logGroup,
     });
     return new Certifications("test-certifications", {
+      opsAlarmTopicArn: "arn:aws:sns:us-east-1:123456789012:boxalarm-dev-chief-notifications",
+      pageTopicArn: "arn:aws:sns:us-east-1:123456789012:boxalarm-dev-alerting-page",
       env: "dev",
       deptId: "nichols-fd",
       platformTableName: pulumi.output("platform-table"),
@@ -65,6 +69,8 @@ describe("Certifications — certExpiredReactor stream consumer (#221)", () => {
       platformTableStreamArn: pulumi.output(
         "arn:aws:dynamodb:us-east-1:123456789012:table/platform/stream/2026-01-01T00:00:00.000",
       ),
+      assetsBucketName: pulumi.output("boxalarm-dev-platform-assets"),
+      assetsBucketArn: pulumi.output("arn:aws:s3:::boxalarm-dev-platform-assets"),
       logGroup,
       httpApi,
     });
@@ -101,6 +107,20 @@ describe("Certifications — certExpiredReactor stream consumer (#221)", () => {
     expect(comparison).toBe("GreaterThanThreshold");
   });
 
+  it("grants the reactor sqs:SendMessage on its on-failure queue so exhausted records reach it", async () => {
+    const certifications = await build();
+    const [policyJson, queueArn] = await Promise.all([
+      resolve(certifications.certExpiredReactorStreamPolicy.policy),
+      resolve(certifications.certExpiredReactorOnFailureQueue.arn),
+    ]);
+    const policy = JSON.parse(policyJson) as {
+      Statement: Array<{ Sid: string; Action: string[]; Resource: string }>;
+    };
+    const statement = policy.Statement.find((s) => s.Sid === "SendToOnFailureQueue");
+    expect(statement?.Action).toEqual(["sqs:SendMessage"]);
+    expect(statement?.Resource).toBe(queueArn);
+  });
+
   it("alarms on the EligibilityFlipFailed metric under the exact namespace the reactor emits", async () => {
     const certifications = await build();
     const [namespace, metricName] = await Promise.all([
@@ -121,13 +141,33 @@ describe("Certifications — certExpiredReactor stream consumer (#221)", () => {
     expect(scannerPolicy).not.toContain("table/alerting");
   });
 
-  it("grants the reactor role only Query and TransactWriteItems on the platform table", async () => {
+  it("grants the reactor role Query plus the item-level writes its transaction needs", async () => {
     const certifications = await build();
     const policyJson = await resolve(certifications.certExpiredReactorLambda.rolePolicy.policy);
     const policy = JSON.parse(policyJson) as {
       Statement: Array<{ Sid: string; Action: string[] }>;
     };
     const statement = policy.Statement.find((s) => s.Sid === "CertExpiredReactorAccess");
-    expect(statement?.Action).toEqual(["dynamodb:Query", "dynamodb:TransactWriteItems"]);
+    // IAM authorizes transaction items as UpdateItem/PutItem; TransactWriteItems is not
+    // an IAM action and must not be relied on.
+    expect(statement?.Action).toEqual([
+      "dynamodb:Query",
+      "dynamodb:UpdateItem",
+      "dynamodb:PutItem",
+    ]);
+  });
+
+  it("lets the create role presign attachment PUTs only under {deptId}/CERTIFICATION/", async () => {
+    const certs = await build();
+    const [policyJson, env] = await Promise.all([
+      resolve(certs.createLambda.rolePolicy.policy),
+      resolve(certs.createLambda.function.environment),
+    ]);
+    const put = (
+      JSON.parse(policyJson) as { Statement: Array<{ Sid: string; Resource: string[] }> }
+    ).Statement.find((s) => s.Sid === "CertificationAttachmentPut");
+    expect(put?.Resource).toEqual(["arn:aws:s3:::boxalarm-dev-platform-assets/*/CERTIFICATION/*"]);
+    expect(env?.variables?.PLATFORM_ASSETS_BUCKET_NAME).toBe("boxalarm-dev-platform-assets");
+    expect(policyJson).not.toContain("cloudfront");
   });
 });

@@ -52,6 +52,29 @@ test('updates a member status through the fixture store', async () => {
   expect(member.status).toBe('ACTIVE');
 });
 
+test('sets member roles through the fixture store the way the server normalizes them', async () => {
+  const response = await apiRequest('personnel/members/m-4/roles', tokens, {
+    method: 'PUT',
+    body: JSON.stringify({ roles: ['CHIEF', 'OFFICER', 'OFFICER'] }),
+  });
+  const result = (await response.json()) as { roles: string[]; changed: boolean };
+  expect(result).toMatchObject({ roles: ['MEMBER', 'OFFICER', 'CHIEF'], changed: true });
+
+  const member = await apiRequest('personnel/members/m-4', tokens);
+  expect(((await member.json()) as { roles: string[] }).roles).toEqual([
+    'MEMBER',
+    'OFFICER',
+    'CHIEF',
+  ]);
+
+  await expect(
+    apiRequest('personnel/members/m-4/roles', tokens, {
+      method: 'PUT',
+      body: JSON.stringify({ roles: ['SUPERUSER'] }),
+    }),
+  ).rejects.toBeInstanceOf(ApiError);
+});
+
 test('gets and puts department config through the fixture store', async () => {
   const initial = await apiRequest('platform/config/ALERT_RULES', tokens);
   const config = (await initial.json()) as { value: { escalationThresholdN: number } };
@@ -66,7 +89,7 @@ test('gets and puts department config through the fixture store', async () => {
 });
 
 test('an unset config type is a 404 fixture', async () => {
-  await expect(apiRequest('platform/config/STATIONS', tokens)).rejects.toBeInstanceOf(ApiError);
+  await expect(apiRequest('platform/config/RANKS', tokens)).rejects.toBeInstanceOf(ApiError);
 });
 
 test('starts and polls a demo export job to COMPLETE', async () => {
@@ -84,4 +107,129 @@ test('revokes a member session through the fixture store', async () => {
   });
   const body = (await response.json()) as { status: string };
   expect(body.status).toBe('revoked');
+});
+
+test("lists a member's push devices for the device-loss dialog", async () => {
+  const response = await apiRequest('platform/sessions/m-1/devices', tokens);
+  const body = (await response.json()) as { memberId: string; devices: { deviceId: string }[] };
+  expect(body.memberId).toBe('m-1');
+  expect(body.devices.length).toBeGreaterThan(0);
+});
+
+test('serves the notification inbox, marks one read, and round-trips a preference', async () => {
+  const list = await apiRequest('notifications', tokens);
+  const inbox = (await list.json()) as {
+    items: { notificationId: string; readAt: number | null }[];
+    nextCursor: string | null;
+  };
+  expect(inbox.nextCursor).toBeNull();
+  const unread = inbox.items.find((n) => n.readAt === null);
+  expect(unread).toBeDefined();
+
+  await apiRequest(`notifications/${unread!.notificationId}/read`, tokens, { method: 'POST' });
+  const after = (await (await apiRequest('notifications?cursor=x', tokens)).json()) as {
+    items: { notificationId: string; readAt: number | null }[];
+  };
+  expect(
+    after.items.find((n) => n.notificationId === unread!.notificationId)?.readAt,
+  ).not.toBeNull();
+
+  await apiRequest('notifications/preferences', tokens, {
+    method: 'PUT',
+    body: JSON.stringify({ category: 'cert-expiry', channels: { push: true, email: false } }),
+  });
+  const prefs = (await (await apiRequest('notifications/preferences', tokens)).json()) as {
+    preferences: { category: string; channels: { push: boolean; email: boolean } }[];
+  };
+  expect(prefs.preferences).toEqual([
+    { category: 'cert-expiry', channels: { push: true, email: false } },
+  ]);
+
+  await expect(
+    apiRequest('notifications/missing/read', tokens, { method: 'POST' }),
+  ).rejects.toBeInstanceOf(ApiError);
+});
+
+test('serves the reporting dashboard and response-time fixtures', async () => {
+  const dashboard = await apiRequest('reporting/dashboard', tokens);
+  const view = (await dashboard.json()) as { lastUpdated: string | null };
+  expect(view.lastUpdated).not.toBeNull();
+
+  const times = await apiRequest('reporting/response-times?from=1700000000&to=1800000000', tokens);
+  const body = (await times.json()) as { units: unknown[]; from: number };
+  expect(body.units.length).toBeGreaterThan(0);
+  expect(body.from).toBe(1700000000);
+});
+
+test('rejects a reporting range the real handler would reject', async () => {
+  await expect(
+    apiRequest('reporting/iso?from=1800000000&to=1700000000', tokens),
+  ).rejects.toBeInstanceOf(ApiError);
+  await expect(apiRequest('reporting/losap/year-end?year=26', tokens)).rejects.toBeInstanceOf(
+    ApiError,
+  );
+});
+
+test('queues a demo report export and polls it to COMPLETED with a download link', async () => {
+  const started = await apiRequest('reporting/export?report=losap&format=csv&year=2026', tokens, {
+    method: 'POST',
+  });
+  const { jobId, status } = (await started.json()) as { jobId: string; status: string };
+  expect(status).toBe('PENDING');
+  const polled = await apiRequest(`reporting/export/${jobId}`, tokens);
+  const job = (await polled.json()) as { status: string; downloadUrl?: string };
+  expect(job.status).toBe('COMPLETED');
+  expect(job.downloadUrl).toBeTruthy();
+});
+
+test('demo tone ladder: advance is guarded by the observed tone, halt then blocks advance', async () => {
+  const detail = async () =>
+    (await (await apiRequest('alerting/dispatches/DEMO-LADDER', tokens)).json()) as {
+      toneLadder: { status: string; currentToneSequence: number };
+    };
+  const post = (control: string, body?: unknown) =>
+    apiRequest(`alerting/dispatches/DEMO-LADDER/${control}`, tokens, {
+      method: 'POST',
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    });
+
+  expect((await detail()).toneLadder).toMatchObject({ status: 'ACTIVE', currentToneSequence: 1 });
+  const fired = (await (
+    await post('tone-ladder/advance', { expectedCurrentToneSequence: 1 })
+  ).json()) as { toneSequence: number };
+  expect(fired.toneSequence).toBe(2);
+  // A double-submit of the same observed tone never fires a further tone.
+  await expect(
+    post('tone-ladder/advance', { expectedCurrentToneSequence: 1 }),
+  ).rejects.toMatchObject({ problem: { status: 409 } });
+
+  expect(await (await post('tone-ladder/halt')).json()).toMatchObject({ changed: true });
+  expect(await (await post('tone-ladder/halt')).json()).toMatchObject({ changed: false });
+  await expect(
+    post('tone-ladder/advance', { expectedCurrentToneSequence: 2 }),
+  ).rejects.toMatchObject({ problem: { status: 409 } });
+  expect((await detail()).toneLadder).toMatchObject({
+    status: 'HALTED_MANUAL',
+    currentToneSequence: 2,
+  });
+});
+
+test('demo mutual aid: trigger once, acknowledge once, and acknowledge before trigger is a 409', async () => {
+  const post = (control: string, body?: unknown) =>
+    apiRequest(`alerting/dispatches/DEMO-MA/${control}`, tokens, {
+      method: 'POST',
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    });
+
+  await expect(post('mutual-aid/acknowledge')).rejects.toMatchObject({ problem: { status: 409 } });
+  expect(await (await post('mutual-aid/trigger')).json()).toMatchObject({ created: true });
+  expect(await (await post('mutual-aid/trigger')).json()).toMatchObject({ created: false });
+  expect(
+    await (await post('mutual-aid/acknowledge', { notes: 'Called Trumbull Center' })).json(),
+  ).toMatchObject({ changed: true, mutualAid: { notes: 'Called Trumbull Center' } });
+  const detail = (await (await apiRequest('alerting/dispatches/DEMO-MA', tokens)).json()) as {
+    mutualAid: { reason: string; acknowledgedAt: number | null };
+  };
+  expect(detail.mutualAid.reason).toBe('MANUAL');
+  expect(detail.mutualAid.acknowledgedAt).not.toBeNull();
 });

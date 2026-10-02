@@ -1,55 +1,28 @@
-# reporting-service
+# Reporting Service
 
 ## Purpose & Boundaries
-
-Chief dashboard, LOSAP/ISO/grant reports, response-time analytics, CSV/PDF export. Service 7 of 10, Wave 3. Has no primary data of its own — in v1 it queries purpose-built GSIs on the `platform-service` physical table. The OpenSearch/OSI read model the house standard would normally supply is explicitly deferred on cost-floor grounds, not rejected.
+Chief dashboard (F8.1), LOSAP year-end (F8.2), ISO (F8.3), grant-support (F8.4), response-time analytics (F8.5), membership trends (F8.6), CSV/PDF export (F8.7). Charter: owns every named compliance/grant report F8.1-F8.7. No primary data; reads purpose-built GSIs on the `platform` table (v1; OpenSearch deferred). "Reporting Projections" handler maintains DynamoDB rollup counters (not CQRS). Wave 3.
 
 ## Interfaces
-
-Base path `/api/v1/reporting/...`. All endpoints `Cognito(admin)`.
-
-| Method | Path | Description |
-|---|---|---|
-| GET | `/dashboard` | Chief dashboard: staffing, response perf, OOS, expiring certs, NERIS compliance (F8.1) |
-| GET | `/losap/year-end` | LOSAP year-end report (F8.2). Sole owner (N-3, decided) — the duplicate `/api/v1/personnel/losap/year-end` was removed; `personnel-service` keeps only the per-member running total this endpoint aggregates |
-| GET | `/iso` | ISO reporting support (F8.3) |
-| GET | `/grants` | AFG/SAFER-style grant-support report (F8.4) |
-| GET | `/response-times` | Turnout/travel/total analytics (F8.5) |
-| GET | `/membership-trends` | Membership/attendance trends (F8.6) |
-| GET | `/export` | CSV/PDF export, accept-and-queue for large ranges (F8.7) |
-| GET | `/health/liveness` and `/health/readiness` | Health (none auth) |
+`/api/v1/reporting` (all Cognito admin): GET `/dashboard` (staffing, response perf, OOS, expiring certs, NERIS compliance), `/losap/year-end` (sole owner; `/api/v1/personnel/losap/year-end` removed N-3; aggregates per-member `/personnel/members/{memberId}/losap`), `/iso`, `/grants`, `/response-times`, `/membership-trends`, `/export` (accept-and-queue for large ranges); health pair. Cutover-decision and NERIS-compliance reports registered but untabulated.
 
 ## Data Ownership
-
-None. Reads GSIs on the `platform-service` table only. "Reporting Projections" (a handler within this service, not CQRS) maintains DynamoDB rollup items on the shared `platform-service` table (pre-aggregated counters for the chief dashboard), not a separate read store.
+No tables of its own; rollup items on `platform` table (shape not specified). Valkey `platform-service:dashboard:{deptId}` TTL 5-15min. NERIS compliance view uses incident GSI1 with `FilterExpression status IN (SUBMITTED,REJECTED)`. Access patterns 16 (GSI1 per member, aggregated app-side), 26, 30, 36, 49. Exports staged in `boxalarm-exports-staging` (7-day lifecycle).
 
 ## Events Produced
-
-None.
+absent — the source document does not address this.
 
 ## Events Consumed
-
-- `personnel.attendance.recorded` — drives Reporting Projections rollups.
+`personnel.attendance.recorded` (via `reporting-projection-queue`+DLQ); `neris.submission.failed` (chief dashboard projection); `alerting.tone.escalated`, `alerting.mutual_aid.triggered` (annotate dashboard).
 
 ## Dependencies
-
-Internal: `personnel-service`, `training-service`, `apparatus-service`, `inspections-service`, `incident-service` — all read via GSI on their shared/own tables, never a synchronous API call between services.
-
-External: ElastiCache Valkey for chief-dashboard aggregations (5-15 min TTL, soft dependency, tolerant of staleness).
+internal: platform-service table, personnel-service, incident-service, training-service, apparatus-service. external: Valkey, S3.
 
 ## Gotchas & Constraints
-
-- No OpenSearch/CQRS in v1 — a genuine, explicit architecture decision, not an oversight. AOSS carries a standing cost floor disproportionate to this department's volume (dozens of members, low hundreds of incidents/year). Every read pattern this service needs (search, "expiring soon," map lookup, audit-by-member) is served by a GSI designed directly from the access pattern.
-- Fast-follow trigger for CQRS (adopt Streams to OSI to AOSS): (a) a second department goes live and cross-department search is required, or (b) incident volume or full-text narrative search needs exceed what a GSI + FilterExpression over a few-thousand-item partition can serve interactively.
-- No full-text narrative search exists in v1 (F7.4 narrative capture has no keyword-search access pattern) — acceptable at current volume, a real limitation if incident volume grows materially before the CQRS trigger fires.
-- This service never caches anything that must reflect source-of-truth-at-read-time correctness (e.g., it must never be the source for "did this NERIS submission go out" — that's `incident-service`'s `NERIS_SUBMISSION_ATTEMPT`).
+- Reporting must stay off transactional and alerting paths.
+- Cache is a soft dependency; NERIS submission status ("did it go out") is never cached.
+- No full-text narrative search in v1; fast-follow trigger for OpenSearch = second department live or narrative search need.
+- 90% coverage target on LOSAP year-end logic. N1.9 delivery-rate comparison uses alerting `/delivery-baseline`.
 
 ## Source Sections
-
-- Backend Section 1.1 Service inventory (line 120-146, reporting-service row)
-- Backend Section 1.4 Reporting read model rationale (line 268)
-- Backend Section 2 reporting-service API endpoints, N-3 LOSAP dedup decision (line 386-398)
-- Data Model Section 1, Section 5 No-OpenSearch rationale and fast-follow trigger (line 534-546, 1421-1432)
-- Data Model Section 6 Caching — chief dashboard aggregations (line 1433-1443)
-- Events Section 4 Service-name mapping, "Reporting Projections is not CQRS" (line 1527-1540)
-- Risks and limitations item 7, no full-text search (line 1508)
+Backend §1.1 (122-150); §1.4 reporting read model (314); §2 reporting-service (456-468); Events reconciliation 5 (1632); Data Model caching (1523-1533); Testing F8 (2391-2401)

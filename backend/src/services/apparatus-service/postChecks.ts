@@ -21,10 +21,17 @@ import {
   buildChecklistAuditEntry,
   buildChecklistIdempotencyLockItem,
   buildChecklistRunItem,
+  enforceCriticalItems,
   parseChecklistRunItem,
   validateSubmitCheckBody,
 } from './checklistRun.js';
-import { resolveApparatusIdByUnitId } from './checklistResolution.js';
+import {
+  DEPARTMENT_DEFAULT_TEMPLATE_PREFIX,
+  getChecklistTemplateById,
+  resolveApparatusIdByUnitId,
+  resolveDepartmentDefaultTemplate,
+  type ChecklistTemplate,
+} from './checklistResolution.js';
 import { logError } from './logger.js';
 import {
   apparatusNotFoundProblem,
@@ -36,6 +43,26 @@ interface PostChecksDeps {
   readonly client: DynamoDBDocumentClient;
   readonly tableName: string;
   readonly now: () => number;
+}
+
+/**
+ * The sheet a run says it was answered on, read by key from its templateId - never a table
+ * Scan on the submit path. `department-default-v{n}` is the department default sheet, and counts
+ * only while it is still version n; any other id is a CHECKLIST_TEMPLATE, which counts only if
+ * it still applies to this unit. Undefined when that sheet is gone or has changed since.
+ */
+async function sheetForRun(
+  deps: PostChecksDeps,
+  deptId: Parameters<typeof resolveApparatusIdByUnitId>[2],
+  apparatusId: string,
+  templateId: string,
+): Promise<ChecklistTemplate | undefined> {
+  if (templateId.startsWith(DEPARTMENT_DEFAULT_TEMPLATE_PREFIX)) {
+    const sheet = await resolveDepartmentDefaultTemplate(deps.client, deps.tableName, deptId);
+    return sheet?.templateId === templateId ? sheet : undefined;
+  }
+  const sheet = await getChecklistTemplateById(deps.client, deps.tableName, deptId, templateId);
+  return sheet?.applicableApparatusIds.includes(apparatusId) ? sheet : undefined;
 }
 
 const CHECK_TRANSACT_INDEX = 0;
@@ -92,6 +119,11 @@ async function postChecks(
     return validationProblem(traceId, validation.errors);
   }
 
+  if (validation.value.templateId.includes('#')) {
+    // A key segment of the sheet read below (assertNoDelimiter): refuse it up front.
+    return validationProblem(traceId, [{ field: 'templateId', message: "must not contain '#'" }]);
+  }
+
   if (validation.value.completedBy !== principal.sub) {
     return validationProblem(traceId, [
       { field: 'completedBy', message: 'must match the authenticated principal' },
@@ -111,7 +143,25 @@ async function postChecks(
       return apparatusNotFoundProblem(traceId);
     }
 
-    const item = buildChecklistRunItem(deptId, apparatusId, validation.value);
+    // Critical items (review minor 5). Judged only against the sheet the run was answered on,
+    // read by key: when that sheet has changed or gone since, there is no telling which of the
+    // run's items were critical, so the run is kept as sent.
+    operation = 'resolveSheet';
+    const sheet = await sheetForRun(deps, deptId, apparatusId, validation.value.templateId);
+    let run = validation.value;
+    if (sheet) {
+      const critical = new Set(sheet.items.filter((i) => i.critical).map((i) => i.code));
+      const enforced = enforceCriticalItems(run.itemResults, critical);
+      if (enforced.errors.length > 0) {
+        emitOutcomeMetric('Boxalarm/apparatus-service', 'SubmitCheckCriticalRefused');
+        return validationProblem(traceId, enforced.errors);
+      }
+      run = { ...run, itemResults: enforced.itemResults };
+    } else {
+      emitOutcomeMetric('Boxalarm/apparatus-service', 'SubmitCheckSheetChanged');
+    }
+
+    const item = buildChecklistRunItem(deptId, apparatusId, run);
     const checkSk = item.sk as string;
     const lockItem = buildChecklistIdempotencyLockItem(
       deptId,

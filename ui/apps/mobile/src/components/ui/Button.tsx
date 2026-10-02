@@ -12,26 +12,33 @@ export type ButtonSize = 'field' | 'alert';
 
 interface ButtonProps {
   label: string;
+  /** Overrides the spoken name when the visible label alone is ambiguous (e.g. "Retry" in a
+   * list of several records). */
+  accessibilityLabel?: string;
   onPress: (event: GestureResponderEvent) => void;
   variant?: ButtonVariant;
   /** 'field' = the 56dp glove-sized floor; 'alert' = the 72dp alert-path floor
-   * (a11y-spec.draft.md §1.11 target-size tokens). */
+   * (docs/a11y-spec.md §1.11 target-size tokens). */
   size?: ButtonSize;
   disabled?: boolean;
   loading?: boolean;
   fullWidth?: boolean;
+  /** For a button that is one choice of several (a yes/no answer): exposed to screen readers. */
+  selected?: boolean;
 }
 
 const SIZE_HEIGHT: Record<ButtonSize, number> = { field: targetSize.field, alert: 72 };
 
 export function Button({
   label,
+  accessibilityLabel,
   onPress,
   variant = 'primary',
   size = 'field',
   disabled = false,
   loading = false,
   fullWidth = false,
+  selected,
 }: ButtonProps) {
   const theme = useTheme();
   const isDisabled = disabled || loading;
@@ -44,7 +51,12 @@ export function Button({
   return (
     <TouchableOpacity
       accessibilityRole="button"
-      accessibilityState={{ disabled: isDisabled, busy: loading }}
+      accessibilityLabel={accessibilityLabel}
+      accessibilityState={{
+        disabled: isDisabled,
+        busy: loading,
+        ...(selected === undefined ? {} : { selected }),
+      }}
       onPress={onPress}
       disabled={isDisabled}
       style={{

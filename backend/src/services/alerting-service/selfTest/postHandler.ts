@@ -27,7 +27,8 @@ async function postSelfTest(
   const traceId = extractTraceId(event);
   const deptId = toVerifiedDeptId(principal);
   const memberId = principal.sub;
-  const runAt = Math.floor(Date.now() / 1000);
+  const runAtMs = Date.now();
+  const runAt = Math.floor(runAtMs / 1000);
   const testId = `${memberId}-${runAt}-${randomUUID().slice(0, 8)}`;
 
   const normalized = selfTestAdapter.normalize({ testId });
@@ -83,9 +84,14 @@ async function postSelfTest(
       targetMemberId: memberId,
       selfTestId: testId,
       channelsTested: SELF_TEST_CHANNELS,
+      // A member's self-test rings their real phone on Android too (labelled TEST): an FCM
+      // validate_only check says nothing about the channel, DND or battery settings the member
+      // runs a self-test to find.
+      testDelivery: 'deliver',
     });
 
-    if (result.outcome === 'duplicate') {
+    // 'replay' cannot occur here (no replay marker is passed); it is handled as a duplicate.
+    if (result.outcome !== 'created') {
       logError('selfTest.post.unexpectedDuplicate', new Error('self-test idempotency collision'), {
         traceId,
         deptId,
@@ -107,6 +113,7 @@ async function postSelfTest(
         channelsTested: SELF_TEST_CHANNELS,
         channelResults: {},
         overallResult: 'RUNNING',
+        runAtMs,
       },
       { onlyIfAbsent: true },
     );
@@ -129,8 +136,8 @@ async function postSelfTest(
 }
 
 export const handler = withAuthorization(postSelfTest, {
-  actionType: 'MEMBER',
+  actionType: 'Boxalarm::Action',
   actionId: 'SelfTestAlertPath',
-  resourceType: 'MEMBER',
+  resourceType: 'Boxalarm::Member',
   resourceId: (event) => event.requestContext.authorizer?.lambda?.sub ?? '',
 });

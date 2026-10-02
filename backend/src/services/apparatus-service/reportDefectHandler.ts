@@ -10,7 +10,11 @@ import {
 } from '@boxalarm/authz';
 import { toVerifiedDeptId, type VerifiedDeptId } from '@boxalarm/dept-scope';
 import { createDynamoClient, readApparatusTableConfig } from './dynamoClient.js';
-import { createDefectPhotoUploadUrl, readDefectPhotoUploadConfig } from './defectPhotoUpload.js';
+import {
+  createDefectPhotoUploadUrl,
+  readDefectPhotoUploadConfig,
+  resignDefectPhotoUploadUrl,
+} from './defectPhotoUpload.js';
 import {
   ApparatusNotFoundError,
   DuplicateDefectReportError,
@@ -48,8 +52,15 @@ interface ValidatedDefectBody {
   readonly severity: DefectSeverity;
   readonly photoS3Key?: string;
   readonly photoFilename?: string;
+  readonly itemCode?: string;
+  /** A malformed itemCode arrived and was dropped (logged + DefectItemCodeIgnored). */
+  readonly ignoredItemCode?: boolean;
   readonly clientMutationId?: string;
 }
+
+// A check-sheet item code (CHECKLIST_DEFAULTS / CHECKLIST_TEMPLATE `code`): stored and compared,
+// never a key segment, but kept to the same safe shape the web editor generates.
+const ITEM_CODE = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/;
 
 function emitDefectMetric(name: string): void {
   console.log(
@@ -134,6 +145,19 @@ function validateBody(
     }
   }
 
+  // The defect is the life-safety payload; itemCode is only a duplicate-detection hint. A
+  // malformed one (a sheet authored before codes were checked) is dropped, never a reason to
+  // refuse the defect - an OUT_OF_SERVICE report must still take the unit out of service.
+  let itemCode: string | undefined;
+  let ignoredItemCode = false;
+  if (body.itemCode !== undefined && body.itemCode !== null) {
+    if (typeof body.itemCode === 'string' && ITEM_CODE.test(body.itemCode)) {
+      itemCode = body.itemCode;
+    } else {
+      ignoredItemCode = true;
+    }
+  }
+
   const rawMutationId = body.clientMutationId ?? body.idempotencyKey;
   let clientMutationId: string | undefined;
   if (rawMutationId !== undefined) {
@@ -158,12 +182,17 @@ function validateBody(
       severity: body.severity as DefectSeverity,
       ...(photoS3Key !== undefined ? { photoS3Key } : {}),
       ...(photoFilename !== undefined ? { photoFilename } : {}),
+      ...(itemCode !== undefined ? { itemCode } : {}),
+      ...(ignoredItemCode ? { ignoredItemCode } : {}),
       ...(clientMutationId !== undefined ? { clientMutationId } : {}),
     },
   };
 }
 
-function toResponseBody(defect: DefectRecord, uploadUrl?: string): Record<string, unknown> {
+function toResponseBody(
+  defect: DefectRecord,
+  upload?: { uploadUrl: string; contentType: string },
+): Record<string, unknown> {
   return {
     defectId: defect.defectId,
     apparatusId: defect.apparatusId,
@@ -175,7 +204,36 @@ function toResponseBody(defect: DefectRecord, uploadUrl?: string): Record<string
     reportedAt: defect.reportedAt,
     photoS3Key: defect.photoS3Key,
     outOfService: defect.outOfService,
-    ...(uploadUrl !== undefined ? { uploadUrl } : {}),
+    itemCode: defect.itemCode,
+    ...(upload !== undefined
+      ? { uploadUrl: upload.uploadUrl, uploadContentType: upload.contentType }
+      : {}),
+  };
+}
+
+/**
+ * The stored defect for a replayed clientMutationId. When the replay still carries a photo,
+ * the stored photo key is re-signed: the offline outbox replays the POST precisely when the
+ * first upload link expired before the photo went up, and without a new link the photo was
+ * lost for good.
+ */
+async function replayedDefectResponse(
+  existing: DefectRecord,
+  photoFilename: string | undefined,
+  deptId: VerifiedDeptId,
+): Promise<APIGatewayProxyResultV2> {
+  const upload =
+    photoFilename && existing.photoS3Key
+      ? await resignDefectPhotoUploadUrl(
+          await readDefectPhotoUploadConfig(process.env),
+          deptId,
+          existing.photoS3Key,
+        )
+      : undefined;
+  return {
+    statusCode: 200,
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(toResponseBody(existing, upload)),
   };
 }
 
@@ -212,6 +270,17 @@ async function reportDefect(
     return validationProblem(traceId, validation.errors);
   }
   const { value } = validation;
+  if (value.ignoredItemCode) {
+    console.warn(
+      JSON.stringify({
+        event: 'apparatus.defect.itemCodeIgnored',
+        correlationId: traceId,
+        deptId,
+        unitId,
+      }),
+    );
+    emitDefectMetric('DefectItemCodeIgnored');
+  }
 
   if (value.clientMutationId) {
     try {
@@ -221,11 +290,7 @@ async function reportDefect(
         clientMutationId: value.clientMutationId,
       });
       if (existing) {
-        return {
-          statusCode: 200,
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify(toResponseBody(existing)),
-        };
+        return await replayedDefectResponse(existing, value.photoFilename, deptId);
       }
     } catch (error) {
       console.error(
@@ -244,18 +309,18 @@ async function reportDefect(
 
   const defectId = deps.newDefectId();
   let photoS3Key = value.photoS3Key ?? null;
-  let uploadUrl: string | undefined;
+  let upload: { uploadUrl: string; contentType: string } | undefined;
 
   if (value.photoFilename) {
     try {
       const config = await readDefectPhotoUploadConfig(process.env);
-      const upload = createDefectPhotoUploadUrl(config, {
+      const created = await createDefectPhotoUploadUrl(config, {
         deptId,
         defectId,
         filename: value.photoFilename,
       });
-      photoS3Key = upload.photoS3Key;
-      uploadUrl = upload.uploadUrl;
+      photoS3Key = created.photoS3Key;
+      upload = { uploadUrl: created.uploadUrl, contentType: created.contentType };
     } catch (error) {
       if (error instanceof TypeError) {
         console.error(
@@ -293,6 +358,7 @@ async function reportDefect(
       reportedByMemberId: principal.sub,
       correlationId: traceId,
       photoS3Key,
+      ...(value.itemCode ? { itemCode: value.itemCode } : {}),
       ...(value.clientMutationId ? { clientMutationId: value.clientMutationId } : {}),
       defectId,
       now: deps.now,
@@ -308,11 +374,7 @@ async function reportDefect(
         clientMutationId: value.clientMutationId,
       });
       if (existing) {
-        return {
-          statusCode: 200,
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify(toResponseBody(existing)),
-        };
+        return replayedDefectResponse(existing, value.photoFilename, deptId);
       }
     }
     console.error(
@@ -335,6 +397,11 @@ async function reportDefect(
         unitId,
         status: 'OUT_OF_SERVICE',
         reason: value.description,
+        changedBy: principal.sub,
+        correlationId: traceId,
+        // apparatus.defect.reported (outOfService: true) already notifies the same roles
+        // about this change; a serviceStatus.changed event too would double-notify.
+        suppressEvent: true,
       });
     } catch (error) {
       if (!(error instanceof ServiceStatusConflictError)) {
@@ -358,7 +425,7 @@ async function reportDefect(
   return {
     statusCode: 201,
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify(toResponseBody(defect, uploadUrl)),
+    body: JSON.stringify(toResponseBody(defect, upload)),
   };
 }
 

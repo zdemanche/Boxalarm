@@ -56,11 +56,14 @@ describe("Quals — eligibility-changed consumer (#114/#204)", () => {
     const httpApi = new HttpApi("test-quals-http-api", {
       env: "dev",
       userPoolId: pulumi.output("pool-1"),
+      platformTableName: "platform-table",
+      platformTableArn: "arn:aws:dynamodb:us-east-1:123456789012:table/platform",
       allowedClientIds: [pulumi.output("client-1")],
       platformLogGroup: logGroup,
     });
     const platformBus = new PlatformBus("test-quals-platform-bus", { env: "dev" });
     return new Quals("test-quals", {
+      pageTopicArn: "arn:aws:sns:us-east-1:123456789012:boxalarm-dev-alerting-page",
       env: "dev",
       platformTableName: pulumi.output("platform-table"),
       platformTableArn: pulumi.output("arn:aws:dynamodb:us-east-1:123456789012:table/platform"),
@@ -70,6 +73,7 @@ describe("Quals — eligibility-changed consumer (#114/#204)", () => {
       httpApi,
       platformBus,
       alertingTableArn: pulumi.output("arn:aws:dynamodb:us-east-1:123456789012:table/alerting"),
+      alertingCmkArn: "arn:aws:kms:us-east-1:123456789012:key/alerting-cmk",
       alertingTableName: pulumi.output("alerting-table"),
       alertingLogGroup,
       alertingPermissionsBoundaryArn: pulumi.output(
@@ -99,10 +103,11 @@ describe("Quals — eligibility-changed consumer (#114/#204)", () => {
     expect(comparison).toBe("GreaterThanThreshold");
   });
 
-  it("routes only personnel.eligibility.changed onto the queue (#114)", async () => {
+  it("routes only personnel-service's personnel.eligibility.changed onto the queue (#114)", async () => {
     const quals = await build();
     const pattern = await resolve(quals.eligibilityChangedQueueConsumer.rule.eventPattern);
     expect(JSON.parse(pattern as string)).toEqual({
+      source: ["personnel-service"],
       "detail-type": ["personnel.eligibility.changed"],
     });
   });

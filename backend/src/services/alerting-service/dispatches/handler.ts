@@ -12,10 +12,9 @@ import {
 import { deriveIngressIdempotencyKey, normalizeManualEntry } from './dispatchIngressPort.js';
 import { getDynamoClient, readDispatchesConfig } from './dynamoClient.js';
 import { problemResponse } from './errorResponse.js';
+import { emitOutcomeMetric } from '@boxalarm/metrics';
 import { logError } from './logger.js';
 import { createManualDispatch } from './repository.js';
-import { runFanOut } from '../fanout/fanOut.js';
-import { getSchedulerClient } from '../escalation/scheduleEscalation.js';
 
 interface DispatchAuthorizerContext {
   readonly sub: string;
@@ -123,6 +122,21 @@ export const handler: Handler<DispatchEvent, APIGatewayProxyStructuredResultV2> 
     });
   }
 
+  if (normalized.droppedLocality) {
+    // Round-4 m1: a bad locality never blocks the page. It is dropped (the pre-plan is then
+    // flagged VERIFY ADDRESS), logged and counted. The raw town is not logged.
+    logError('dispatches.locality_dropped', new Error(normalized.droppedLocality.message), {
+      traceId,
+      deptId,
+      field: normalized.droppedLocality.field,
+    });
+    emitOutcomeMetric(
+      'Boxalarm/alerting',
+      'DispatchLocalityDropped',
+      normalized.droppedLocality.field,
+    );
+  }
+
   let dynamoConfig: ReturnType<typeof readDispatchesConfig>;
   try {
     dynamoConfig = readDispatchesConfig(process.env);
@@ -146,27 +160,18 @@ export const handler: Handler<DispatchEvent, APIGatewayProxyStructuredResultV2> 
       dispatchedAt: Math.floor(Date.now() / 1000),
     });
 
-    if (result.outcome === 'duplicate') {
+    // 'replay' cannot occur here (no replay marker is passed); it is handled as a duplicate.
+    if (result.outcome !== 'created') {
       emitIngressMetric('Rejected', 'DuplicateSubmission');
       return problemResponse({ status: 409, title: 'Duplicate dispatch submission', traceId });
     }
 
-    try {
-      await runFanOut(
-        getDynamoClient(),
-        getSchedulerClient(),
-        dynamoConfig.tableName,
-        deptId,
-        result.dispatchId,
-        Math.floor(Date.now() / 1000),
-      );
-    } catch (error) {
-      logError('dispatches.fanout.failed', error, {
-        traceId,
-        deptId,
-        dispatchId: result.dispatchId,
-      });
-    }
+    // Fan-out is NOT run here. The DISPATCH_ALERT insert above reaches the stream fan-out
+    // (fanout/handler.ts), the single producer of tone-1 pages: it writes the per-channel
+    // receipts, publishes, and schedules escalation and the tone ladder. A second, synchronous
+    // fan-out here once pre-wrote tone-1 receipts with sentAt under the same exactly-once key
+    // and never published, so the stream fan-out skipped every member as a duplicate and the
+    // first page went out at tone 2 (design review C1).
 
     emitIngressMetric('Accepted');
     return {

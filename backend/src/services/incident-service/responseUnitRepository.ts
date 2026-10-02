@@ -1,6 +1,18 @@
-import { GetCommand, UpdateCommand, type DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
+import {
+  GetCommand,
+  TransactWriteCommand,
+  type DynamoDBDocumentClient,
+} from '@aws-sdk/lib-dynamodb';
 import { buildDeptScopedPk, type VerifiedDeptId } from '@boxalarm/dept-scope';
-import { IncidentNotFoundError } from './repository.js';
+import { buildOutboxRecord } from '@boxalarm/outbox';
+import { IncidentNotFoundError, isConditionFailureAt } from './repository.js';
+import {
+  BUMP_CONTENT_VERSION,
+  CONTENT_VERSION_VALUES,
+  IncidentLockedError,
+  NOT_LOCKED_CONDITION,
+  explainMetadataConditionFailure,
+} from './lock.js';
 
 const TIME_FIELDS = ['dispatchedAt', 'enRouteAt', 'arrivedAt', 'clearedAt'] as const;
 type TimeField = (typeof TIME_FIELDS)[number];
@@ -39,27 +51,18 @@ function toResponseUnit(item: Record<string, unknown>): ResponseUnit {
  * Independently settable per-timestamp update (E6-S5 AC1/AC2): only the fields present in
  * `times` are written, so editing one timestamp never disturbs the others or the
  * assignedPositions ridingAssignmentConsumer.ts already wrote for this unit (E6-S5 AC2).
+ * Commits atomically with an `incident.response_unit.updated` OUTBOX_ENTRY.
  */
 export async function upsertResponseUnitTimes(
   client: DynamoDBDocumentClient,
   tableName: string,
   input: ResponseUnitTimesInput,
+  traceId: string,
 ): Promise<ResponseUnit> {
-  // Guard against a bad incidentId silently creating an orphan RESPONSE#{unitId} item: this
-  // Update's own ConditionExpression can't do it, since RESPONSE# is a different sk than
-  // METADATA and the first-ever write for a unit must still be allowed to create that item.
-  // So check the parent INCIDENT METADATA item exists first and 404 (as IncidentNotFoundError)
-  // if it doesn't, matching the pattern repository.ts's updateNarrative/updateCorePayload use.
-  const incidentCheck = await client.send(
-    new GetCommand({
-      TableName: tableName,
-      Key: { pk: buildDeptScopedPk(input.deptId, 'INCIDENT', input.incidentId), sk: 'METADATA' },
-      ProjectionExpression: 'pk',
-    }),
-  );
-  if (!incidentCheck.Item) {
-    throw new IncidentNotFoundError(input.incidentId);
-  }
+  const responseUnitKey = {
+    pk: buildDeptScopedPk(input.deptId, 'INCIDENT', input.incidentId),
+    sk: `RESPONSE#${input.unitId}`,
+  };
 
   const setClauses = [
     'entityType = :entityType',
@@ -81,17 +84,75 @@ export async function upsertResponseUnitTimes(
     }
   }
 
-  const result = await client.send(
-    new UpdateCommand({
-      TableName: tableName,
-      Key: {
-        pk: buildDeptScopedPk(input.deptId, 'INCIDENT', input.incidentId),
-        sk: `RESPONSE#${input.unitId}`,
-      },
-      UpdateExpression: `SET ${setClauses.join(', ')}`,
-      ExpressionAttributeValues: values,
-      ReturnValues: 'ALL_NEW',
-    }),
+  const outboxRecord = buildOutboxRecord(
+    input.deptId,
+    'incident-service',
+    'incident.response_unit.updated',
+    traceId,
+    {
+      incidentId: input.incidentId,
+      deptId: input.deptId,
+      unitId: input.unitId,
+      unitType: input.unitType,
+      ...input.times,
+    },
   );
-  return toResponseUnit(result.Attributes as Record<string, unknown>);
+
+  try {
+    await client.send(
+      new TransactWriteCommand({
+        TransactItems: [
+          // Guard against a bad incidentId silently creating an orphan RESPONSE#{unitId}
+          // item: the Update's own condition can't, since RESPONSE# is a different sk and
+          // the first-ever write for a unit must still create it. The parent INCIDENT
+          // METADATA existence check rides in the same transaction instead.
+          {
+            // ...that it is not locked for review, and a unit-time edit is a content edit:
+            // it bumps contentVersion so a lock pinned before it fails (lock.ts).
+            Update: {
+              TableName: tableName,
+              Key: {
+                pk: buildDeptScopedPk(input.deptId, 'INCIDENT', input.incidentId),
+                sk: 'METADATA',
+              },
+              ConditionExpression: `attribute_exists(pk) AND ${NOT_LOCKED_CONDITION}`,
+              UpdateExpression: `SET ${BUMP_CONTENT_VERSION}, updatedAt = :metadataUpdatedAt`,
+              ExpressionAttributeValues: {
+                ...CONTENT_VERSION_VALUES,
+                ':metadataUpdatedAt': Math.floor(Date.now() / 1000),
+              },
+            },
+          },
+          {
+            Update: {
+              TableName: tableName,
+              Key: responseUnitKey,
+              UpdateExpression: `SET ${setClauses.join(', ')}`,
+              ExpressionAttributeValues: values,
+            },
+          },
+          { Put: { TableName: tableName, Item: outboxRecord } },
+        ],
+      }),
+    );
+  } catch (error) {
+    if (isConditionFailureAt(error, 0)) {
+      const reason = await explainMetadataConditionFailure(
+        client,
+        tableName,
+        input.deptId,
+        input.incidentId,
+      );
+      throw reason === 'locked'
+        ? new IncidentLockedError(input.incidentId)
+        : new IncidentNotFoundError(input.incidentId);
+    }
+    throw error;
+  }
+
+  // TransactWriteItems can't return ALL_NEW; read the committed row back.
+  const result = await client.send(
+    new GetCommand({ TableName: tableName, Key: responseUnitKey, ConsistentRead: true }),
+  );
+  return toResponseUnit(result.Item as Record<string, unknown>);
 }

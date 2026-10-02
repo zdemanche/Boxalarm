@@ -23,6 +23,7 @@ import type {
   Violation,
 } from '../features/inspections/types';
 import type { CreateMemberInput, Member, MemberStatus } from '../features/personnel/types';
+import { KNOWN_ROLES } from '../auth/roles';
 import type {
   AuditEntry,
   ConfigResponse,
@@ -32,7 +33,10 @@ import type {
   RetentionConfig,
 } from '../features/platform/types';
 import { tryHandleLosapExtras } from '../features/losap/demoFixtures';
+import { tryHandleCadSourcesDemo } from '../features/platform/demoFixtures';
+import { tryHandleNotificationExtras } from '../features/notifications/demoFixtures';
 import { tryHandlePersonnelExtras } from '../features/personnel/demoFixtures';
+import { reportingDemoRequest } from '../features/reporting/demoFixtures';
 import { tryHandleScheduleExtras } from '../features/schedule/demoFixtures';
 import type { ApiRequestOptions, ProblemDetails } from './apiClient';
 import { trainingDemoRequest } from './trainingDemoFixtures';
@@ -48,6 +52,7 @@ let members: Member[] = [
     joinDate: '2018-04-12',
     rank: 'Chief',
     agencyId: 'nichols-fd',
+    roles: ['MEMBER', 'CHIEF'],
   },
   {
     memberId: 'm-2',
@@ -59,6 +64,7 @@ let members: Member[] = [
     joinDate: '2015-09-01',
     rank: 'Deputy Chief',
     agencyId: 'nichols-fd',
+    roles: ['MEMBER', 'OFFICER', 'ADMIN'],
   },
   {
     memberId: 'm-3',
@@ -70,6 +76,7 @@ let members: Member[] = [
     joinDate: '2019-06-20',
     rank: 'Captain',
     agencyId: 'nichols-fd',
+    roles: ['MEMBER', 'OFFICER'],
   },
   {
     memberId: 'm-4',
@@ -81,6 +88,7 @@ let members: Member[] = [
     joinDate: '2025-11-03',
     rank: 'Firefighter',
     agencyId: 'nichols-fd',
+    roles: ['MEMBER'],
   },
   {
     memberId: 'm-5',
@@ -92,10 +100,21 @@ let members: Member[] = [
     joinDate: '2012-02-14',
     rank: 'Firefighter',
     agencyId: 'nichols-fd',
+    roles: ['MEMBER'],
   },
 ];
 
 const configStore = new Map<EditableConfigType, ConfigResponse>([
+  [
+    'STATIONS',
+    {
+      configType: 'STATIONS',
+      value: { stations: [{ stationId: 'STATION-1', name: 'Station 1 — Nichols' }] },
+      version: 1,
+      updatedAt: '2026-08-01T00:00:00.000Z',
+      updatedBy: 'demo-admin',
+    },
+  ],
   [
     'ALERT_RULES',
     {
@@ -268,6 +287,9 @@ export async function demoRequest(
     if (response) return response;
   }
 
+  const reportingResponse = reportingDemoRequest(path, method, query);
+  if (reportingResponse) return reportingResponse;
+
   if (path === 'personnel/members' && method === 'GET') return json({ items: members });
 
   if (path === 'personnel/members' && method === 'POST') {
@@ -275,6 +297,7 @@ export async function demoRequest(
     const created: Member = {
       memberId: `m-${members.length + 1}`,
       status: 'PROBATIONARY',
+      roles: ['MEMBER'],
       ...input,
     };
     members = [...members, created];
@@ -306,6 +329,41 @@ export async function demoRequest(
       return updated;
     });
     return updated ? json(updated) : problem(404, 'Member not found');
+  }
+
+  if (
+    parts[0] === 'personnel' &&
+    parts[1] === 'members' &&
+    parts[3] === 'roles' &&
+    method === 'PUT'
+  ) {
+    const id = decodeURIComponent(parts[2] ?? '');
+    const requested = (body as { roles?: unknown }).roles;
+    if (
+      !Array.isArray(requested) ||
+      requested.some((r) => !(KNOWN_ROLES as readonly unknown[]).includes(r))
+    ) {
+      return problem(400, `roles must contain only: ${KNOWN_ROLES.join(', ')}`);
+    }
+    const found = members.find((m) => m.memberId === id);
+    if (!found) return problem(404, `no member found with id ${id}`);
+    // Same normalization as the server: canonical order, deduped, MEMBER always kept.
+    const roles = KNOWN_ROLES.filter((r) => r === 'MEMBER' || requested.includes(r));
+    const before = found.roles ?? ['MEMBER'];
+    const changed = before.length !== roles.length || roles.some((r) => !before.includes(r));
+    members = members.map((m) => (m.memberId === id ? { ...m, roles } : m));
+    return json({
+      memberId: id,
+      roles,
+      changed,
+      takesEffect:
+        "The change applies when the member's app next refreshes its session, within one hour.",
+    });
+  }
+
+  if (parts[0] === 'platform' && parts[1] === 'cad-sources') {
+    const cadResponse = tryHandleCadSourcesDemo(parts, method, body);
+    if (cadResponse) return cadResponse;
   }
 
   if (parts[0] === 'platform' && parts[1] === 'config' && parts.length === 3) {
@@ -370,9 +428,39 @@ export async function demoRequest(
     return json(result);
   }
 
+  if (parts[0] === 'platform' && parts[1] === 'sessions' && parts[3] === 'devices') {
+    const memberId = decodeURIComponent(parts[2] ?? '');
+    const now = Date.now();
+    return json({
+      memberId,
+      devices: [
+        {
+          deviceId: 'demo-install-7f3a9c',
+          platform: 'APNS',
+          registeredAt: now - 3_600_000,
+          valid: true,
+        },
+        {
+          deviceId: 'demo-install-41be02',
+          platform: 'FCM',
+          registeredAt: now - 86_400_000 * 9,
+          valid: true,
+        },
+      ],
+    });
+  }
+
   if (path === 'platform/sessions/revoke' && method === 'POST') {
+    const { memberId, deviceId } = body as { memberId: string; deviceId?: string };
+    return json(
+      { memberId, status: 'revoked', push: 'invalidated', ...(deviceId ? { deviceId } : {}) },
+      202,
+    );
+  }
+
+  if (path === 'platform/sessions/reset-credentials' && method === 'POST') {
     const memberId = (body as { memberId: string }).memberId;
-    return json({ memberId, status: 'revoked' }, 202);
+    return json({ memberId, status: 'password-reset-and-signed-out' }, 202);
   }
 
   if (path === 'inventory/equipment' && method === 'GET') {
@@ -652,7 +740,8 @@ export async function demoRequest(
   const extras =
     tryHandleScheduleExtras(parts, method, body) ??
     tryHandlePersonnelExtras(parts, method, body) ??
-    tryHandleLosapExtras(parts, method, body);
+    tryHandleLosapExtras(parts, method, body) ??
+    tryHandleNotificationExtras(parts, method, body);
   if (extras) return extras;
 
   return problem(404, 'Not found');

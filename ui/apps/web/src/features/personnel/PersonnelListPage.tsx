@@ -11,6 +11,7 @@ import { TextInput } from '../../components/ui/Field';
 import { PageHeader } from '../../components/ui/PageHeader';
 import { createMember, listMembers } from './api';
 import type { CreateMemberInput, Member } from './types';
+import { humanize } from '../../lib/labels';
 
 const emptyForm: CreateMemberInput = {
   firstName: '',
@@ -88,7 +89,7 @@ export function PersonnelListPage() {
         <span>
           {m.email}
           <br />
-          {m.phone}
+          {m.phone ?? 'No phone'}
         </span>
       ),
     },
@@ -96,7 +97,7 @@ export function PersonnelListPage() {
       key: 'status',
       header: 'Status',
       sortValue: (m) => m.status,
-      render: (m) => <Badge>{m.status}</Badge>,
+      render: (m) => <Badge>{humanize(m.status)}</Badge>,
     },
     {
       key: 'joinDate',
@@ -110,7 +111,7 @@ export function PersonnelListPage() {
 
   return (
     <main id="main-content">
-      <PageHeader title="Personnel" />
+      <PageHeader title="Members" />
 
       <DataTable
         caption="Member roster"

@@ -1,21 +1,26 @@
-import { useEffect, useMemo, useRef } from 'react';
+import { useMemo, useRef } from 'react';
 import Config from 'react-native-config';
 import { useOptionalAuth } from '../../auth/AuthContext';
-import { apiRequest, ApiError } from '../../lib/apiClient';
+import { apiRequest } from '../../lib/apiClient';
+import { memberCacheKey } from '../../sync/memberCache';
+import { readThrough } from '../../sync/readThrough';
 import * as syncManager from '../../sync/syncManager';
 import { mockChecksRepository } from './mockChecksRepository';
 import type {
   Apparatus,
+  CheckPhotoSubmission,
   ChecklistRunSubmission,
   ChecklistTemplate,
   ChecksRepository,
   DefectSubmission,
+  OpenDefect,
 } from './types';
 
-/** ChecksRepository plus a way for callers to know the last getApparatus() call served
- * offline/fallback data instead of a real API response (undefined on the plain mock repo). */
+/** ChecksRepository plus a way for callers to know the last getApparatus() call was served from
+ * this phone's cache of the last real response, and how old it is (undefined on the mock repo). */
 export type ChecksRepositoryWithFallbackFlag = ChecksRepository & {
-  isApparatusFallback?: () => boolean;
+  /** Epoch ms of the cached apparatus list the last getApparatus() returned; null when live. */
+  apparatusCachedAt?: () => number | null;
 };
 
 function unitPath(unitId: string, suffix: string): string {
@@ -23,9 +28,9 @@ function unitPath(unitId: string, suffix: string): string {
 }
 
 /**
- * Prefers GET /api/v1/apparatus when authenticated + API base is configured;
- * falls back to the local mock so Checks stays usable offline / pre-infra /
- * outside AuthProvider (navigation unit tests).
+ * Prefers GET /api/v1/apparatus when authenticated + API base is configured. The local mock is
+ * used only when no API is configured or nobody is signed in (pre-infra dev builds, navigation
+ * unit tests) - never as an offline stand-in for real data (see readThrough).
  *
  * The returned object is memoized (useMemo keyed on the primitives that actually change its
  * behavior) so callers can safely put it in a useEffect dependency array: a screen re-render
@@ -45,60 +50,65 @@ export function useChecksRepository(): ChecksRepositoryWithFallbackFlag {
   const authRef = useRef(auth);
   authRef.current = auth;
 
-  useEffect(() => {
-    const tokens = apiBaseUrl && isAuthenticated ? (authRef.current ?? null) : null;
-    syncManager.configure(tokens, apiBaseUrl || null);
-  }, [apiBaseUrl, isAuthenticated]);
-
   return useMemo<ChecksRepositoryWithFallbackFlag>(() => {
     if (!apiBaseUrl || !isAuthenticated) {
       return mockChecksRepository;
     }
 
-    let lastGetApparatusWasFallback = false;
+    let lastApparatusCachedAt: number | null = null;
+    // Cache keys carry the member, so a phone handed to another member never shows the previous
+    // member's cached data as theirs.
+    const cacheKey = (suffix: string) => {
+      const memberId = authRef.current?.memberId;
+      return memberId ? memberCacheKey.read(memberId, suffix) : null;
+    };
 
     return {
       ...mockChecksRepository,
+      // Offline (the apparatus bay is the designed-for case) this serves the last real list this
+      // phone fetched, flagged with its time - never the mock fixtures, which are not this
+      // department's apparatus. With nothing cached it throws NoCachedDataError.
       async getApparatus(): Promise<Apparatus[]> {
         const tokens = authRef.current;
-        if (!tokens) {
-          lastGetApparatusWasFallback = true;
-          return mockChecksRepository.getApparatus();
-        }
-
-        try {
+        if (!tokens) return mockChecksRepository.getApparatus();
+        const result = await readThrough(cacheKey('apparatus'), 'the apparatus list', async () => {
           const response = await apiRequest('apparatus', tokens, { apiBaseUrl });
           const body = (await response.json()) as { apparatus: Apparatus[] };
-          lastGetApparatusWasFallback = false;
           return body.apparatus;
-        } catch (error) {
-          if (error instanceof ApiError) {
-            // Auth (401/403) and server (5xx) errors are real signal — e.g. a revoked member
-            // or a stale token must not be masked by fake apparatus data in a safety-critical
-            // truck-check flow. Surface it to the caller instead of silently substituting mocks.
-            throw error;
-          }
-          // Genuine network/offline failure (e.g. TypeError: Failed to fetch): fall back to
-          // the local mock so Checks stays usable, and flag it so the caller can show an
-          // "offline data" indicator rather than presenting it as a real fetch.
-          lastGetApparatusWasFallback = true;
-          return mockChecksRepository.getApparatus();
-        }
+        });
+        lastApparatusCachedAt = result.cachedAt;
+        return result.value;
       },
-      isApparatusFallback(): boolean {
-        return lastGetApparatusWasFallback;
+      apparatusCachedAt(): number | null {
+        return lastApparatusCachedAt;
       },
 
       async getChecklistTemplate(unitId: string): Promise<ChecklistTemplate> {
         const tokens = authRef.current;
         if (!tokens) return mockChecksRepository.getChecklistTemplate(unitId);
-        try {
-          const response = await apiRequest(unitPath(unitId, 'checklist'), tokens, { apiBaseUrl });
-          return (await response.json()) as ChecklistTemplate;
-        } catch (error) {
-          if (error instanceof ApiError) throw error;
-          return mockChecksRepository.getChecklistTemplate(unitId);
-        }
+        const result = await readThrough(
+          cacheKey(`checklist:${unitId}`),
+          `the check sheet for ${unitId}`,
+          async () => {
+            const response = await apiRequest(unitPath(unitId, 'checklist'), tokens, {
+              apiBaseUrl,
+            });
+            return (await response.json()) as ChecklistTemplate;
+          },
+        );
+        return result.cachedAt === null
+          ? result.value
+          : { ...result.value, cachedAt: result.cachedAt };
+      },
+
+      async getOpenDefects(unitId: string): Promise<OpenDefect[]> {
+        const tokens = authRef.current;
+        if (!tokens) return [];
+        const response = await apiRequest(`apparatus/${encodeURIComponent(unitId)}`, tokens, {
+          apiBaseUrl,
+        });
+        const body = (await response.json()) as { openDefects?: OpenDefect[] };
+        return body.openDefects ?? [];
       },
 
       async submitChecklistRun(run: ChecklistRunSubmission): Promise<void> {
@@ -115,6 +125,14 @@ export function useChecksRepository(): ChecksRepositoryWithFallbackFlag {
         });
       },
 
+      async submitCheckPhoto(photo: CheckPhotoSubmission): Promise<void> {
+        if (!authRef.current) return;
+        await syncManager.enqueueCheckPhoto(photo.apparatusId, photo.checkKey, photo.itemCode, {
+          localUri: photo.photoLocalUri,
+          fileName: photo.photoFileName,
+        });
+      },
+
       async submitDefect(defect: DefectSubmission): Promise<void> {
         const tokens = authRef.current;
         if (!tokens) return mockChecksRepository.submitDefect(defect);
@@ -125,6 +143,7 @@ export function useChecksRepository(): ChecksRepositoryWithFallbackFlag {
             description: defect.description,
             severity: defect.severity,
             idempotencyKey: defect.idempotencyKey,
+            ...(defect.itemCode ? { itemCode: defect.itemCode } : {}),
             ...(defect.photoFileName ? { photo: { filename: defect.photoFileName } } : {}),
           },
           defect.photoLocalUri,

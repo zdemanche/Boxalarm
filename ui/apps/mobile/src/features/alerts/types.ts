@@ -31,20 +31,78 @@ export interface UtilityShutoff {
   location: string;
 }
 
+/** NFPA 291 hydrant marking class (rated flow): AA >=1500, A 1000-1499, B 500-999, C <500 gpm. */
+export type HydrantFlowClass = 'AA' | 'A' | 'B' | 'C';
+
+// Nearest hydrants to the matched occupancy, nearest first (alerting-service
+// prePlan/nearestHydrants.ts): up to five usable ones, plus any OUT_OF_SERVICE hydrant nearer
+// than the last of them (status says which). distanceMeters/flowClass are absent from older
+// responses.
 export interface NearestHydrant {
   hydrantId: string;
   status?: string;
   size?: string;
   flowRatingGpm?: number;
+  flowClass?: HydrantFlowClass;
+  distanceMeters?: number;
 }
 
 // E1-S17-UI / E5-S8-UI enrichment block, embedded in GET /dispatches/{dispatchId} - alerting
 // route only (N1.5: never a separate call to /inspections/*).
-export interface PrePlanEnrichment {
+/**
+ * How the server tied the pre-plan to this dispatch (alerting dispatches/detail/prePlanContext.ts).
+ * Only ADDRESS is this building's own plan. Everything else, ADDRESS_BUILDING included (the
+ * building's plan for a unit that has none of its own), is shown flagged "VERIFY ADDRESS",
+ * never as the call's plan.
+ */
+export type PrePlanMatchType =
+  'ADDRESS' | 'ADDRESS_BUILDING' | 'ADDRESS_UNVERIFIED' | 'UNIT_MISMATCH' | 'NEARBY' | 'CANDIDATES';
+
+/** One of several pre-plans the crew must choose between (matchType CANDIDATES). */
+export interface PrePlanCandidate {
+  occupancyId: string;
+  matchedAddress: string;
+  unit: string | null;
   summary?: string;
   hazards: string[];
   utilityShutoffs: UtilityShutoff[];
+  distanceMeters?: number;
+}
+
+export interface PrePlanEnrichment {
+  /** Absent only from a server that predates match provenance. */
+  matchType?: PrePlanMatchType;
+  matchedAddress?: string;
+  unit?: string | null;
+  /** NEARBY only: meters from the dispatch location. */
+  distanceMeters?: number;
+  /** ADDRESS_BUILDING: the dispatched unit ("BLDG 2", "REAR") the building-level plan does not cover. */
+  dispatchUnit?: string;
+  /**
+   * Legacy line for clients without matchType support (the server prefixes it with the
+   * provenance for anything but a plain ADDRESS match). Render occupancySummary instead
+   * whenever matchType is present.
+   */
+  summary?: string;
+  occupancySummary?: string;
+  hazards: string[];
+  utilityShutoffs: UtilityShutoff[];
   nearestHydrants: NearestHydrant[];
+  candidates?: PrePlanCandidate[];
+}
+
+/**
+ * The mutual-aid record on a dispatch (alerting ladderControls/shared.ts toMutualAidView). Times
+ * are epoch seconds.
+ */
+export interface MutualAid {
+  triggeredAt: number | null;
+  /** AUTO (the tone ladder ran out) or MANUAL (an officer pressed Trigger). */
+  reason: string | null;
+  triggeredBy: string | null;
+  acknowledgedBy: string | null;
+  acknowledgedAt: number | null;
+  notes: string | null;
 }
 
 export interface DispatchAlert {
@@ -55,8 +113,57 @@ export interface DispatchAlert {
   mapLink: string | null;
   narrative: string;
   isSelfTest: boolean;
+  /** Epoch seconds the fan-out started (detail's fanOutStartedAt) - the best dispatch time the
+   * server returns today. Absent from older responses. */
+  dispatchedAt?: number;
   toneLadder?: ToneLadder;
   prePlan?: PrePlanEnrichment | null;
+  /** The server could not look the pre-plan up (prePlan is then absent) - not "none on file". */
+  prePlanUnavailable?: boolean;
+  /**
+   * Nearest hydrants to the matched building or the dispatch's own coordinates - present with
+   * or without a pre-plan match; includes flagged OUT_OF_SERVICE hydrants. Absent when there
+   * is no reference point (or from an older server).
+   */
+  nearestHydrants?: NearestHydrant[];
+  nearestHydrantsUnavailable?: boolean;
+  /** The server's geo read hit its cap: a nearer hydrant may be missing. */
+  nearestHydrantsIncomplete?: boolean;
+  /**
+   * null: mutual aid has not been requested. Absent: unknown - the server could not read it, or
+   * predates it; never shown as "not requested".
+   */
+  mutualAid?: MutualAid | null;
+  /** CAD updates to this call, oldest first (decision 2026-09-30-cad-dispatch-updates.md). */
+  updates?: DispatchUpdateSummary[];
+  /** A CAD dispatch its template could not read: the location is only in the narrative. */
+  verifyRequired?: boolean;
+}
+
+export interface DispatchUpdateSummary {
+  updateId: string;
+  /** Epoch seconds. */
+  receivedAt: number;
+  summary: string;
+}
+
+/** One row of GET alerting/dispatches?status=active (dispatches/list/handler.ts). */
+export interface ActiveDispatchSummary {
+  dispatchId: string;
+  incidentType: string | null;
+  address: string | null;
+  crossStreets: string | null;
+  /** Epoch seconds. */
+  dispatchedAt: number;
+  toneSequence: number;
+}
+
+export interface ActiveDispatchList {
+  dispatches: ActiveDispatchSummary[];
+  /** Epoch seconds the server answered for. */
+  asOf: number;
+  /** The server capped the list - there may be more active calls than shown. */
+  truncated: boolean;
 }
 
 export interface SelfTestChannelResult {
@@ -86,6 +193,12 @@ export interface DeliveryReceipt {
   failureReason: string | null;
 }
 
+/** Where the incident is: a home town/village, or another town typed in (R3-A). */
+export interface DispatchLocality {
+  town: string;
+  choice: 'HOME' | 'OTHER';
+}
+
 export interface ManualDispatchInput {
   incidentType: string;
   address: string;
@@ -93,6 +206,14 @@ export interface ManualDispatchInput {
   unitsRequested: string[];
   narrative: string;
   externalDispatchId: string;
+  locality?: DispatchLocality;
+}
+
+/** GET alerting/home-locality: the department's home towns/villages. */
+export interface HomeLocality {
+  towns: string[];
+  zips: string[];
+  state: string | null;
 }
 
 export interface FieldError {
@@ -136,11 +257,33 @@ export interface AlertsRepository {
   triggerSelfTest(): Promise<{ testId: string; dispatchId: string }>;
   getSelfTestRun(testId: string): Promise<SelfTestRun>;
   getDispatch(dispatchId: string): Promise<DispatchAlert>;
+  /** The department's active calls - the in-app path to a call whose notification is gone. */
+  listActiveDispatches(): Promise<ActiveDispatchList>;
   getRoster(dispatchId: string): Promise<RosterEntry[]>;
-  submitResponse(dispatchId: string, ackStatus: AckStatus, etaMinutes?: number): Promise<void>;
+  /**
+   * Saves the answer on the phone and starts sending it; resolves with the outbox row carrying it
+   * (null when there is no API to send to - the local mock), never with the network result.
+   */
+  submitResponse(
+    dispatchId: string,
+    ackStatus: Exclude<AckStatus, 'UNANSWERED'>,
+    /** Only an ETA the member chose; null/undefined = not given. */
+    eta?: import('./alertResponses').EtaGiven | null,
+  ): Promise<{ outboxId: string | null }>;
   submitManualDispatch(input: ManualDispatchInput): Promise<{ dispatchId: string }>;
+  /** The manual-entry locality choices; callers treat a failure as "no home list". */
+  getHomeLocality(): Promise<HomeLocality>;
   getReceipts(dispatchId: string): Promise<DeliveryReceipt[]>;
   getRidingBoard(dispatchId: string): Promise<RidingBoard>;
+  /**
+   * The officer confirms the mutual-aid call was made (POST .../mutual-aid/acknowledge). The
+   * first confirmation is the record; a repeat by the same officer returns it unchanged, another
+   * officer's is refused (409, ApiError) naming the stored record.
+   */
+  acknowledgeMutualAid(
+    dispatchId: string,
+    notes: string,
+  ): Promise<{ changed: boolean; mutualAid: MutualAid }>;
   assignRidingSeat(
     dispatchId: string,
     seat: {

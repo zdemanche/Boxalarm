@@ -1,18 +1,15 @@
-import {
-  PutCommand,
-  TransactWriteCommand,
-  type DynamoDBDocumentClient,
-} from '@aws-sdk/lib-dynamodb';
+import { UpdateCommand, type DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
 import type { SchedulerClient } from '@aws-sdk/client-scheduler';
 import { buildDeptScopedPk, type VerifiedDeptId } from '@boxalarm/dept-scope';
-import { emitOutcomeMetric } from '@boxalarm/metrics';
-import { queryEligibleMembers } from '../eligibility/selector.js';
-import { logError, logInfo } from '../dispatches/logger.js';
 import { createEscalationSchedule } from '../escalation/scheduleEscalation.js';
 import { scheduleDepartmentToneLadder } from '../escalation/toneLadder.js';
-import { deriveFanOutKey, type FanOutChannel } from './idempotencyKey.js';
 
-const METRIC_NAMESPACE = 'Boxalarm/Alerting';
+/**
+ * Roster rows and escalation scheduling for the stream fan-out (fanout/handler.ts), which is the
+ * single producer of tone-1 pages. The synchronous `runFanOut` that used to live here pre-wrote
+ * tone-1 receipts with `sentAt` and never published - the stream fan-out then skipped every
+ * member as a duplicate (design review C1). It is gone; do not reintroduce a second producer.
+ */
 const TONE_SEQUENCE_ONE = 1;
 
 export type RosterAckStatus = 'NONE' | 'RESPONDING' | 'NOT_RESPONDING' | 'DIRECT_TO_SCENE';
@@ -47,109 +44,13 @@ export function parseRosterItem(
   return { pk, sk, entityType, memberId, ackStatus, currentChannelTier };
 }
 
-function buildReceiptItem(
-  deptId: VerifiedDeptId,
-  dispatchId: string,
-  memberId: string,
-  channel: FanOutChannel,
-  dispatchedAt: number,
-): Record<string, unknown> {
-  const { sk, idempotencyKey } = deriveFanOutKey({
-    dispatchId,
-    toneSequence: TONE_SEQUENCE_ONE,
-    memberId,
-    channel,
-  });
-  return {
-    pk: buildDeptScopedPk(deptId, 'DISPATCH', dispatchId),
-    sk,
-    entityType: 'DELIVERY_RECEIPT',
-    dispatchId,
-    memberId,
-    deptId,
-    channel,
-    channelTier: 'primary',
-    toneSequence: TONE_SEQUENCE_ONE,
-    sentAt: dispatchedAt,
-    idempotencyKey,
-  };
-}
-
-function buildRosterItem(
-  deptId: VerifiedDeptId,
-  dispatchId: string,
-  memberId: string,
-  quals: readonly string[],
-): Record<string, unknown> {
-  return {
-    pk: buildDeptScopedPk(deptId, 'DISPATCH', dispatchId),
-    sk: `ROSTER#${memberId}`,
-    entityType: 'DISPATCH_ROSTER_ENTRY',
-    memberId,
-    quals,
-    ackStatus: 'NONE',
-    currentChannelTier: 'primary',
-    escalationLevel: 0,
-  };
-}
-
-async function fanOutOneMember(
-  ddb: DynamoDBDocumentClient,
-  scheduler: SchedulerClient,
-  tableName: string,
-  deptId: VerifiedDeptId,
-  dispatchId: string,
-  dispatchedAt: number,
-  memberId: string,
-  quals: readonly string[],
-): Promise<void> {
-  const pushItem = buildReceiptItem(deptId, dispatchId, memberId, 'push', dispatchedAt);
-  const smsItem = buildReceiptItem(deptId, dispatchId, memberId, 'sms', dispatchedAt);
-  const rosterItem = buildRosterItem(deptId, dispatchId, memberId, quals);
-
-  try {
-    await ddb.send(
-      new TransactWriteCommand({
-        TransactItems: [
-          {
-            Put: {
-              TableName: tableName,
-              Item: pushItem,
-              ConditionExpression: 'attribute_not_exists(idempotencyKey)',
-            },
-          },
-          {
-            Put: {
-              TableName: tableName,
-              Item: smsItem,
-              ConditionExpression: 'attribute_not_exists(idempotencyKey)',
-            },
-          },
-          { Put: { TableName: tableName, Item: rosterItem } },
-        ],
-      }),
-    );
-  } catch (error) {
-    if (error instanceof Error && error.name === 'TransactionCanceledException') {
-      logInfo('alerting.fanout.duplicate', { deptId, dispatchId, memberId });
-      return;
-    }
-    logError('alerting.fanout.write_failed', error, { deptId, dispatchId, memberId });
-    throw error;
-  }
-
-  try {
-    await createEscalationSchedule(
-      scheduler,
-      { deptId, dispatchId, memberId, toneSequence: TONE_SEQUENCE_ONE },
-      ddb,
-      tableName,
-    );
-  } catch (error) {
-    logError('alerting.fanout.schedule_failed', error, { deptId, dispatchId, memberId });
-  }
-}
-
+/**
+ * Seeds the member's roster row for this dispatch. Every field is `if_not_exists`: a member can
+ * answer (responses/repository.ts) before the fan-out gets here - the pages go out first - and
+ * that answer must survive, while the row still gets the currentChannelTier / escalationLevel
+ * the escalation handler requires (review MAJOR-1: an answer-first row had neither, and the
+ * member's 75 s escalation failed its parse and paged on-call).
+ */
 async function ensureRosterEntry(
   ddb: DynamoDBDocumentClient,
   tableName: string,
@@ -158,20 +59,29 @@ async function ensureRosterEntry(
   memberId: string,
   quals: readonly string[],
 ): Promise<void> {
-  try {
-    await ddb.send(
-      new PutCommand({
-        TableName: tableName,
-        Item: buildRosterItem(deptId, dispatchId, memberId, quals),
-        ConditionExpression: 'attribute_not_exists(pk)',
-      }),
-    );
-  } catch (error) {
-    if (error instanceof Error && error.name === 'ConditionalCheckFailedException') {
-      return;
-    }
-    throw error;
-  }
+  await ddb.send(
+    new UpdateCommand({
+      TableName: tableName,
+      Key: { pk: buildDeptScopedPk(deptId, 'DISPATCH', dispatchId), sk: `ROSTER#${memberId}` },
+      UpdateExpression: ROSTER_SEED_EXPRESSION,
+      ExpressionAttributeValues: rosterSeedValues(memberId, quals),
+    }),
+  );
+}
+
+/** The roster row's required fields, each seeded only where absent. */
+const ROSTER_SEED_EXPRESSION =
+  'SET entityType = :rosterEntityType, memberId = :rosterMemberId, quals = if_not_exists(quals, :rosterQuals), ackStatus = if_not_exists(ackStatus, :rosterNone), currentChannelTier = if_not_exists(currentChannelTier, :rosterPrimary), escalationLevel = if_not_exists(escalationLevel, :rosterZero)';
+
+function rosterSeedValues(memberId: string, quals: readonly string[]): Record<string, unknown> {
+  return {
+    ':rosterEntityType': 'DISPATCH_ROSTER_ENTRY',
+    ':rosterMemberId': memberId,
+    ':rosterQuals': quals,
+    ':rosterNone': 'NONE',
+    ':rosterPrimary': 'primary',
+    ':rosterZero': 0,
+  };
 }
 
 export async function scheduleRealtimeFanOutEscalation(
@@ -194,61 +104,4 @@ export async function scheduleRealtimeFanOutEscalation(
   if (members.length > 0) {
     await scheduleDepartmentToneLadder(scheduler, ddb, tableName, deptId, dispatchId);
   }
-}
-
-export async function runFanOut(
-  ddb: DynamoDBDocumentClient,
-  scheduler: SchedulerClient,
-  tableName: string,
-  deptId: VerifiedDeptId,
-  dispatchId: string,
-  dispatchedAt: number,
-): Promise<void> {
-  let eligibleMembers;
-  try {
-    eligibleMembers = await queryEligibleMembers(ddb, tableName, deptId);
-  } catch (error) {
-    logError('alerting.fanout.eligibility_query_failed', error, { deptId, dispatchId });
-    throw error;
-  }
-
-  for (const member of eligibleMembers) {
-    try {
-      await fanOutOneMember(
-        ddb,
-        scheduler,
-        tableName,
-        deptId,
-        dispatchId,
-        dispatchedAt,
-        member.memberId,
-        member.quals,
-      );
-    } catch (error) {
-      // One member's failure must never silently stop the rest of the roster from being
-      // alerted — that would leave the remaining department un-notified with only a log line
-      // to show for it. Record and continue.
-      logError('alerting.fanout.member_failed', error, {
-        deptId,
-        dispatchId,
-        memberId: member.memberId,
-      });
-      emitOutcomeMetric(METRIC_NAMESPACE, 'FanOutMemberFailed');
-    }
-  }
-
-  if (eligibleMembers.length > 0) {
-    try {
-      await scheduleDepartmentToneLadder(scheduler, ddb, tableName, deptId, dispatchId);
-    } catch (error) {
-      logError('alerting.fanout.toneLadderScheduleFailed', error, { deptId, dispatchId });
-    }
-  }
-
-  emitOutcomeMetric(METRIC_NAMESPACE, 'FanOutCompleted');
-  logInfo('alerting.fanout.completed', {
-    deptId,
-    dispatchId,
-    eligibleMemberCount: eligibleMembers.length,
-  });
 }

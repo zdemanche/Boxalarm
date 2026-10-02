@@ -8,14 +8,15 @@ const PRINCIPAL: CedarPrincipalContext = {
   'cognito:groups': 'member',
 };
 
-function buildEvent(memberId: string): GuardEvent {
+function buildEvent(memberId: string, deviceId?: string): GuardEvent {
   return {
     version: '2.0',
     routeKey: 'DELETE /api/v1/personnel/members/{memberId}/push-tokens',
     rawPath: `/api/v1/personnel/members/${memberId}/push-tokens`,
-    rawQueryString: '',
+    rawQueryString: deviceId ? `deviceId=${deviceId}` : '',
     headers: { authorization: 'Bearer token' },
     pathParameters: { memberId },
+    ...(deviceId !== undefined ? { queryStringParameters: { deviceId } } : {}),
     requestContext: { authorizer: { lambda: PRINCIPAL } },
   } as unknown as GuardEvent;
 }
@@ -99,7 +100,7 @@ describe('revokeToken handler', () => {
     mockAuthzPassthrough();
 
     const { handler } = await import('./revokeToken.js');
-    const event = buildEvent('mbr-missing');
+    const event = buildEvent('mbr-102');
     const result = await (
       handler as unknown as (
         e: GuardEvent,
@@ -131,5 +132,89 @@ describe('revokeToken handler', () => {
         PRINCIPAL,
       ),
     ).rejects.toThrow('ProvisionedThroughputExceededException');
+  });
+
+  it('returns 403 without touching DynamoDB when the path member is not the caller', async () => {
+    const send = vi.fn();
+    vi.doMock('../dynamoClient.js', () => ({
+      createDynamoClient: () => ({ send }) as unknown as DynamoDBDocumentClient,
+      readPersonnelConfig: () => ({ tableName: 'personnel-table' }),
+    }));
+    mockAuthzPassthrough();
+
+    const { handler } = await import('./revokeToken.js');
+    const event = buildEvent('mbr-someone-else');
+    const result = await (
+      handler as unknown as (
+        e: GuardEvent,
+        p: CedarPrincipalContext,
+      ) => Promise<{ statusCode: number }>
+    )(event, PRINCIPAL);
+
+    expect(result.statusCode).toBe(403);
+    expect(send).not.toHaveBeenCalled();
+    vi.doUnmock('../dynamoClient.js');
+    vi.doUnmock('@boxalarm/authz');
+  });
+
+  // Multi-device: signing out of the tablet must not stop paging the phone.
+  it("removes only the signed-out device (?deviceId=) and keeps the member's other devices", async () => {
+    const phone = { channel: 'PUSH', token: 'tok-phone', deviceId: 'phone', valid: true };
+    const tablet = { channel: 'PUSH', token: 'tok-tablet', deviceId: 'tablet', valid: true };
+    const send = vi
+      .fn()
+      .mockImplementation((command: { constructor: { name: string } }) =>
+        Promise.resolve(
+          command.constructor.name === 'GetCommand'
+            ? { Item: { pk: 'x', sk: 'METADATA', contactChannels: [phone, tablet], updatedAt: 5 } }
+            : {},
+        ),
+      );
+    vi.doMock('../dynamoClient.js', () => ({
+      createDynamoClient: () => ({ send }) as unknown as DynamoDBDocumentClient,
+      readPersonnelConfig: () => ({ tableName: 'personnel-table' }),
+    }));
+    mockAuthzPassthrough();
+
+    const { handler } = await import('./revokeToken.js');
+    const result = await (
+      handler as unknown as (
+        e: GuardEvent,
+        p: CedarPrincipalContext,
+      ) => Promise<{ statusCode: number; body: string }>
+    )(buildEvent('mbr-102', 'tablet'), PRINCIPAL);
+
+    expect(result.statusCode).toBe(200);
+    expect(JSON.parse(result.body)).toMatchObject({ revoked: true, deviceId: 'tablet' });
+    const transact = send.mock.calls[1]?.[0] as {
+      input: { TransactItems: [{ Update: { ExpressionAttributeValues: { ':cc': unknown } } }] };
+    };
+    expect(transact.input.TransactItems[0].Update.ExpressionAttributeValues[':cc']).toEqual([
+      phone,
+    ]);
+    vi.doUnmock('../dynamoClient.js');
+    vi.doUnmock('@boxalarm/authz');
+  });
+
+  it('answers 400 for an unusable deviceId without touching DynamoDB', async () => {
+    const send = vi.fn();
+    vi.doMock('../dynamoClient.js', () => ({
+      createDynamoClient: () => ({ send }) as unknown as DynamoDBDocumentClient,
+      readPersonnelConfig: () => ({ tableName: 'personnel-table' }),
+    }));
+    mockAuthzPassthrough();
+
+    const { handler } = await import('./revokeToken.js');
+    const result = await (
+      handler as unknown as (
+        e: GuardEvent,
+        p: CedarPrincipalContext,
+      ) => Promise<{ statusCode: number }>
+    )(buildEvent('mbr-102', 'bad#id'), PRINCIPAL);
+
+    expect(result.statusCode).toBe(400);
+    expect(send).not.toHaveBeenCalled();
+    vi.doUnmock('../dynamoClient.js');
+    vi.doUnmock('@boxalarm/authz');
   });
 });

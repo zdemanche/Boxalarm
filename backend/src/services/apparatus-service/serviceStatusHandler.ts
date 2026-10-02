@@ -88,6 +88,8 @@ async function updateServiceStatus(
       unitId,
       status: body.status,
       ...(reason ? { reason } : {}),
+      changedBy: principal.sub,
+      correlationId: traceId,
     });
     return { statusCode: 204 };
   } catch (error) {
@@ -105,8 +107,8 @@ async function updateServiceStatus(
 }
 
 export const handler = withAuthorization(updateServiceStatus, {
-  actionType: 'Apparatus',
+  actionType: 'Boxalarm::Action',
   actionId: 'UpdateServiceStatus',
-  resourceType: 'Apparatus',
+  resourceType: 'Boxalarm::Apparatus',
   resourceId: (event) => event.pathParameters?.unitId ?? '',
 });

@@ -98,6 +98,52 @@ describe('normalizeManualEntry (AC1)', () => {
   });
 });
 
+describe('normalizeManualEntry locality (round-3 R3-A)', () => {
+  it('carries a home or other-town locality choice through, trimmed', () => {
+    for (const locality of [
+      { town: 'Nichols', choice: 'HOME' },
+      { town: '  Bridgeport ', choice: 'OTHER' },
+    ]) {
+      const result = normalizeManualEntry({ ...validPayload, locality });
+      expect(result.ok).toBe(true);
+      expect(result.ok ? result.value.locality : undefined).toEqual({
+        town: locality.town.trim(),
+        choice: locality.choice,
+      });
+    }
+  });
+
+  it('accepts an older caller that sends no locality (treated as none)', () => {
+    const result = normalizeManualEntry(validPayload);
+    expect(result.ok).toBe(true);
+    expect(result.ok ? result.value : {}).not.toHaveProperty('locality');
+  });
+
+  it.each([
+    ['a string', 'Trumbull', 'locality'],
+    ['no town', { choice: 'HOME' }, 'locality.town'],
+    ['a blank town', { town: '  ', choice: 'HOME' }, 'locality.town'],
+    ['an over-long town', { town: 'x'.repeat(81), choice: 'OTHER' }, 'locality.town'],
+    ['a control character', { town: 'Trum\u0000bull', choice: 'HOME' }, 'locality.town'],
+    ['an unknown choice', { town: 'Trumbull', choice: 'MAYBE' }, 'locality.choice'],
+  ])(
+    'drops a malformed locality (%s) instead of rejecting the dispatch (round-4 m1)',
+    (_label, locality, field) => {
+      const result = normalizeManualEntry({ ...validPayload, locality });
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.value).not.toHaveProperty('locality');
+      expect(result.droppedLocality?.field).toBe(field);
+    },
+  );
+
+  it('still reports the other field errors when the locality is also malformed', () => {
+    const result = normalizeManualEntry({ ...validPayload, address: '', locality: 'x' });
+    expect(result.ok).toBe(false);
+    expect(result.ok ? [] : result.errors.map((error) => error.field)).toEqual(['address']);
+  });
+});
+
 describe('manualEntryAdapter (DispatchIngressPort, AC1)', () => {
   it('identifies itself as the MANUAL source system and normalizes through the same contract', () => {
     expect(manualEntryAdapter.sourceSystem).toBe('MANUAL');

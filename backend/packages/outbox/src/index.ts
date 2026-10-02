@@ -4,9 +4,12 @@ import { buildDeptScopedPk, type VerifiedDeptId } from '@boxalarm/dept-scope';
 export {
   createOutboxDrainHandler,
   createOutboxDrainClients,
+  missingOutboxEnvelopeFields,
+  OUTBOX_ENVELOPE_FIELDS,
   readOutboxDrainConfig,
   type OutboxDrainClients,
   type OutboxDrainConfig,
+  type OutboxDrainOptions,
 } from './drainHandler.js';
 
 export interface EventEnvelope<TPayload> {

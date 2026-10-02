@@ -98,6 +98,15 @@ describe("IncidentTable", () => {
     expect(await resolve(incident.cmkArn)).toBe(cmkArn);
   });
 
+  it("enables TTL on the `ttl` attribute its expiring rows set (review MINOR 5)", async () => {
+    const { IncidentTable } = await import("../../components/data/incident-table");
+    const table = new IncidentTable("incident-ttl", { env: "dev" });
+    await settle(table);
+
+    const ttl = await resolve(table.table.ttl);
+    expect(ttl).toEqual({ attributeName: "ttl", enabled: true });
+  });
+
   it("enables deletionProtectionEnabled so a replace-forcing schema change can't destroy the table", async () => {
     const { IncidentTable } = await import("../../components/data/incident-table");
     const incident = new IncidentTable("incident-deletion-protection", { env: "dev" });

@@ -25,6 +25,8 @@ export interface OpenDefectSummary {
   readonly severity: string;
   readonly reportedAt: number;
   readonly photoS3Key: string | null;
+  /** The check-sheet item a truck check filed this against; null for a hand-typed defect. */
+  readonly itemCode: string | null;
 }
 
 export interface FailedTestSummary {
@@ -89,6 +91,7 @@ function toOpenDefectSummary(item: Record<string, unknown>): OpenDefectSummary {
     severity: item.severity as string,
     reportedAt: item.reportedAt as number,
     photoS3Key: (item.photoS3Key as string | null | undefined) ?? null,
+    itemCode: typeof item.itemCode === 'string' ? item.itemCode : null,
   };
 }
 

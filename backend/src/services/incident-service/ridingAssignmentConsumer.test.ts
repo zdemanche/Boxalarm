@@ -47,6 +47,21 @@ function stubSend(
     );
 }
 
+/** The RESPONSE# Update inside the consumer's transaction, shaped like a sent command. */
+function responseUnitUpdate(
+  send: ReturnType<typeof vi.fn>,
+): [{ input: Record<string, unknown> }] | undefined {
+  const transact = send.mock.calls.find(
+    (call) =>
+      (call[0] as { constructor: { name: string } }).constructor.name === 'TransactWriteCommand',
+  );
+  if (!transact) return undefined;
+  const items = (
+    transact[0] as { input: { TransactItems: { Update?: Record<string, unknown> }[] } }
+  ).input.TransactItems;
+  return [{ input: items[0]!.Update! }];
+}
+
 describe('ridingAssignmentConsumer handler (entrypoint, AC6)', () => {
   it('adds the memberId to assignedPositions on the INCIDENT_RESPONSE_UNIT row', async () => {
     const send = stubSend((command) => {
@@ -62,9 +77,7 @@ describe('ridingAssignmentConsumer handler (entrypoint, AC6)', () => {
       () => undefined,
     );
 
-    const updateCall = send.mock.calls.find(
-      (call) => (call[0] as { constructor: { name: string } }).constructor.name === 'UpdateCommand',
-    );
+    const updateCall = responseUnitUpdate(send);
     expect(updateCall).toBeDefined();
     const values = (
       updateCall?.[0] as { input: { ExpressionAttributeValues: Record<string, unknown> } }
@@ -94,9 +107,7 @@ describe('ridingAssignmentConsumer handler (entrypoint, AC6)', () => {
       () => undefined,
     );
 
-    const updateCall = send.mock.calls.find(
-      (call) => (call[0] as { constructor: { name: string } }).constructor.name === 'UpdateCommand',
-    );
+    const updateCall = responseUnitUpdate(send);
     const values = (
       updateCall?.[0] as { input: { ExpressionAttributeValues: Record<string, unknown> } }
     ).input.ExpressionAttributeValues;
@@ -130,9 +141,7 @@ describe('ridingAssignmentConsumer handler (entrypoint, AC6)', () => {
       () => undefined,
     );
 
-    const updateCall = send.mock.calls.find(
-      (call) => (call[0] as { constructor: { name: string } }).constructor.name === 'UpdateCommand',
-    );
+    const updateCall = responseUnitUpdate(send);
     const values = (
       updateCall?.[0] as { input: { ExpressionAttributeValues: Record<string, unknown> } }
     ).input.ExpressionAttributeValues;
@@ -158,29 +167,28 @@ describe('ridingAssignmentConsumer handler (entrypoint, AC6)', () => {
       () => undefined,
     );
 
-    const updateCall = send.mock.calls.find(
-      (call) => (call[0] as { constructor: { name: string } }).constructor.name === 'UpdateCommand',
-    );
+    const updateCall = responseUnitUpdate(send);
     expect(updateCall).toBeUndefined();
   });
 
-  it('throws on a malformed payload so SQS retries the batch', async () => {
+  it('reports a malformed payload as a batch item failure so SQS retries only that record', async () => {
     const send = vi.fn();
     const { createHandler } = await import('./ridingAssignmentConsumer.js');
     const handler = createHandler({ client: { send } as unknown as DynamoDBDocumentClient });
 
-    await expect(
-      handler(
-        {
-          Records: [{ messageId: 'm1', body: detailBody({}, { apparatusId: undefined }) }],
-        } as unknown as SQSEvent,
-        {} as never,
-        () => undefined,
-      ),
-    ).rejects.toThrow();
+    const result = await handler(
+      {
+        Records: [{ messageId: 'm1', body: detailBody({}, { apparatusId: undefined }) }],
+      } as unknown as SQSEvent,
+      {} as never,
+      () => undefined,
+    );
+
+    expect(result).toEqual({ batchItemFailures: [{ itemIdentifier: 'm1' }] });
+    expect(send).not.toHaveBeenCalled();
   });
 
-  it('throws when the DynamoDB update fails unexpectedly (fail-closed, SQS retry/DLQ)', async () => {
+  it('reports a DynamoDB update failure as a batch item failure (fail-closed, SQS retry/DLQ)', async () => {
     const send = stubSend((command) => {
       if (command.constructor.name === 'GetCommand') return {};
       throw new Error('DynamoDB unavailable');
@@ -188,12 +196,107 @@ describe('ridingAssignmentConsumer handler (entrypoint, AC6)', () => {
     const { createHandler } = await import('./ridingAssignmentConsumer.js');
     const handler = createHandler({ client: { send } as unknown as DynamoDBDocumentClient });
 
-    await expect(
-      handler(
-        { Records: [{ messageId: 'm1', body: detailBody() }] } as unknown as SQSEvent,
-        {} as never,
-        () => undefined,
-      ),
-    ).rejects.toThrow('DynamoDB unavailable');
+    const result = await handler(
+      { Records: [{ messageId: 'm1', body: detailBody() }] } as unknown as SQSEvent,
+      {} as never,
+      () => undefined,
+    );
+
+    expect(result).toEqual({ batchItemFailures: [{ itemIdentifier: 'm1' }] });
+  });
+
+  it('keeps processing the rest of the batch after one record fails, reporting only the failure', async () => {
+    const send = stubSend(() => ({}));
+    const { createHandler } = await import('./ridingAssignmentConsumer.js');
+    const handler = createHandler({ client: { send } as unknown as DynamoDBDocumentClient });
+
+    const result = await handler(
+      {
+        Records: [
+          { messageId: 'bad', body: detailBody({}, { apparatusId: undefined }) },
+          { messageId: 'good', body: detailBody({ eventId: 'evt-2' }) },
+        ],
+      } as unknown as SQSEvent,
+      {} as never,
+      () => undefined,
+    );
+
+    expect(result).toEqual({ batchItemFailures: [{ itemIdentifier: 'bad' }] });
+    const updateCall = responseUnitUpdate(send);
+    expect(updateCall).toBeDefined();
+  });
+
+  it('does not change staffing on a report locked for review, and consumes the event', async () => {
+    const { TransactionCanceledException } = await import('@aws-sdk/client-dynamodb');
+    const send = stubSend((command) => {
+      if (command.constructor.name === 'TransactWriteCommand') {
+        throw new TransactionCanceledException({
+          message: 'cancelled',
+          $metadata: {},
+          CancellationReasons: [{ Code: 'None' }, { Code: 'ConditionalCheckFailed' }],
+        });
+      }
+      if (
+        command.constructor.name === 'GetCommand' &&
+        (command.input.Key as { sk: string }).sk === 'METADATA'
+      ) {
+        return { Item: { lockedAt: 1 } };
+      }
+      return {};
+    });
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const { createHandler } = await import('./ridingAssignmentConsumer.js');
+    const handler = createHandler({ client: { send } as unknown as DynamoDBDocumentClient });
+
+    const result = await handler(
+      { Records: [{ messageId: 'm1', body: detailBody() }] } as unknown as SQSEvent,
+      {} as never,
+      () => undefined,
+    );
+
+    expect(result).toEqual({ batchItemFailures: [] });
+    const transact = send.mock.calls.find(
+      (call) =>
+        (call[0] as { constructor: { name: string } }).constructor.name === 'TransactWriteCommand',
+    );
+    const items = (transact![0] as { input: { TransactItems: Record<string, unknown>[] } }).input
+      .TransactItems;
+    expect(items[1]).toMatchObject({
+      Update: {
+        Key: { sk: 'METADATA' },
+        ConditionExpression: 'attribute_exists(pk) AND attribute_not_exists(lockedAt)',
+        UpdateExpression: 'SET contentVersion = if_not_exists(contentVersion, :cvZero) + :cvOne',
+      },
+    });
+  });
+
+  it('writes staffing before the report exists without creating a METADATA row', async () => {
+    const { TransactionCanceledException } = await import('@aws-sdk/client-dynamodb');
+    let transactCalls = 0;
+    const send = stubSend((command) => {
+      if (command.constructor.name === 'TransactWriteCommand') {
+        transactCalls += 1;
+        const items = command.input.TransactItems as unknown[];
+        if (items.length === 2) {
+          throw new TransactionCanceledException({
+            message: 'cancelled',
+            $metadata: {},
+            CancellationReasons: [{ Code: 'None' }, { Code: 'ConditionalCheckFailed' }],
+          });
+        }
+      }
+      return {};
+    });
+    const { createHandler } = await import('./ridingAssignmentConsumer.js');
+    const handler = createHandler({ client: { send } as unknown as DynamoDBDocumentClient });
+
+    const result = await handler(
+      { Records: [{ messageId: 'm1', body: detailBody() }] } as unknown as SQSEvent,
+      {} as never,
+      () => undefined,
+    );
+
+    expect(result).toEqual({ batchItemFailures: [] });
+    expect(transactCalls).toBe(2);
   });
 });

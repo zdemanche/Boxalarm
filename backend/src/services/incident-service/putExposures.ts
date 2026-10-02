@@ -1,16 +1,35 @@
-import type { APIGatewayProxyHandlerV2WithLambdaAuthorizer } from 'aws-lambda';
-import { assertNoDelimiter } from '@boxalarm/dept-scope';
-import type { AuthorizerContext } from '../platform-service/authorizer/handler.js';
-import type { IncidentEvent } from './authContext.js';
+import type { APIGatewayProxyResultV2 } from 'aws-lambda';
 import {
+  AuthzUnavailableError,
+  createAuthzClient,
+  isAuthorized,
+  readAuthzConfig,
+  withAuthorization,
+  type CedarPrincipalContext,
+  type GuardEvent,
+} from '@boxalarm/authz';
+import { assertNoDelimiter } from '@boxalarm/dept-scope';
+import {
+  RequestValidationError,
   emitIncidentMetric,
   nowEpochSeconds,
   problemResponse,
-  readAuthorizerContext,
-  resolveTraceId,
+  readIncidentWriteRequest,
+  type IncidentEvent,
 } from './authContext.js';
-import { getDocumentClient, getIncidentRepository, getTableName } from './repository.js';
-import { putIncidentSecondary } from './secondaryRepository.js';
+import {
+  IncidentNotFoundError,
+  getDocumentClient,
+  getIncidentRepository,
+  getTableName,
+} from './repository.js';
+import { IncidentLockedError, lockedProblem } from './lock.js';
+import {
+  SecondaryConflictError,
+  getIncidentSecondary,
+  putIncidentSecondary,
+  type IncidentSecondary,
+} from './secondaryRepository.js';
 import { createSchemaVersionRepository } from './schemaVersion/repository.js';
 import { getSecondarySchemaDocument } from './schemaVersion/s3Schema.js';
 import { getS3Client } from '../platform-service/export/awsClients.js';
@@ -19,47 +38,30 @@ import {
   validateSecondaryFields,
 } from './schemaVersion/validateEnum.js';
 
-class ValidationError extends Error {}
-
 interface ParsedExposureInput {
   readonly secondaryType: string;
   readonly payload: Record<string, string>;
   readonly affectedMemberIds: readonly string[];
+  /** The version the client last read; a mismatch is a 409, not a silent overwrite. */
+  readonly expectedVersion?: number;
 }
 
-function parseInput(event: IncidentEvent): ParsedExposureInput {
-  if (!event.body) {
-    throw new ValidationError('request body is required');
-  }
-  const raw = event.isBase64Encoded
-    ? Buffer.from(event.body, 'base64').toString('utf8')
-    : event.body;
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw);
-  } catch {
-    throw new ValidationError('request body must be valid JSON');
-  }
-  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
-    throw new ValidationError('request body must be a JSON object');
-  }
-  const record = parsed as Record<string, unknown>;
-
+function parseInput(record: Record<string, unknown>): ParsedExposureInput {
   const secondaryType = record.secondaryType;
   if (typeof secondaryType !== 'string' || secondaryType.trim().length === 0) {
-    throw new ValidationError('secondaryType is required and must be a non-empty string');
+    throw new RequestValidationError('secondaryType is required and must be a non-empty string');
   }
   assertNoDelimiter(secondaryType, 'secondaryType');
 
   const payload = record.payload;
   if (typeof payload !== 'object' || payload === null || Array.isArray(payload)) {
-    throw new ValidationError('payload is required and must be a JSON object');
+    throw new RequestValidationError('payload is required and must be a JSON object');
   }
   const payloadRecord = payload as Record<string, unknown>;
   const stringPayload: Record<string, string> = {};
   for (const [key, value] of Object.entries(payloadRecord)) {
     if (typeof value !== 'string') {
-      throw new ValidationError(`payload field "${key}" must be a string`);
+      throw new RequestValidationError(`payload field "${key}" must be a string`);
     }
     stringPayload[key] = value;
   }
@@ -69,61 +71,112 @@ function parseInput(event: IncidentEvent): ParsedExposureInput {
     !Array.isArray(affectedMemberIds) ||
     !affectedMemberIds.every((id) => typeof id === 'string')
   ) {
-    throw new ValidationError('affectedMemberIds is required and must be an array of strings');
+    throw new RequestValidationError(
+      'affectedMemberIds is required and must be an array of strings',
+    );
   }
 
-  return { secondaryType, payload: stringPayload, affectedMemberIds };
+  const expectedVersion = record.expectedVersion;
+  if (
+    expectedVersion !== undefined &&
+    (typeof expectedVersion !== 'number' ||
+      !Number.isInteger(expectedVersion) ||
+      expectedVersion < 0)
+  ) {
+    throw new RequestValidationError('expectedVersion must be a non-negative integer when present');
+  }
+
+  return {
+    secondaryType,
+    payload: stringPayload,
+    affectedMemberIds,
+    ...(expectedVersion !== undefined ? { expectedVersion } : {}),
+  };
 }
 
-export const handler: APIGatewayProxyHandlerV2WithLambdaAuthorizer<AuthorizerContext> = async (
-  event,
-) => {
-  const traceId = resolveTraceId(event.headers, event.requestContext.requestId);
+function sameMembers(a: readonly string[], b: readonly string[]): boolean {
+  const left = new Set(a);
+  const right = new Set(b);
+  return left.size === right.size && [...left].every((id) => right.has(id));
+}
 
-  let deptId;
-  try {
-    ({ deptId } = readAuthorizerContext(event));
-  } catch (error) {
-    console.error(
-      JSON.stringify({
-        event: 'incident.exposures.denied',
-        correlationId: traceId,
-        message: error instanceof Error ? error.message : undefined,
-      }),
-    );
-    return problemResponse(
-      401,
-      'Unauthorized',
-      'A valid department-scoped authorization context is required.',
-      traceId,
-    );
+/**
+ * Who may write a responder-exposure module (review M3). Reads were already narrowed to the
+ * affected member and chief/admin (getIncident.ts); writes were open to any member, so one
+ * member could erase an exposure naming a colleague - cancer-presumption evidence.
+ *  - Officer tier (OFFICER/CHIEF/ADMIN) records and corrects any module.
+ *  - Any other member only a module that names them, and cannot change who it names: on a
+ *    new module they may name only themselves; on an existing one the named set must stay
+ *    exactly as it is.
+ * Returns the 403 detail, or undefined when allowed.
+ */
+export function exposureWriteDenial(
+  caller: { readonly sub: string; readonly isOfficerTier: boolean },
+  existing: IncidentSecondary | undefined,
+  nextAffectedMemberIds: readonly string[],
+): string | undefined {
+  if (caller.isOfficerTier) {
+    return undefined;
   }
+  if (!existing) {
+    return nextAffectedMemberIds.length === 1 && nextAffectedMemberIds[0] === caller.sub
+      ? undefined
+      : 'A member may record only their own exposure; naming other members is an officer action.';
+  }
+  if (!existing.affectedMemberIds.includes(caller.sub)) {
+    return 'Only an officer, or a member this exposure record names, may change it.';
+  }
+  if (!sameMembers(existing.affectedMemberIds, nextAffectedMemberIds)) {
+    return 'Only an officer may change which members an exposure record names.';
+  }
+  return undefined;
+}
 
-  const incidentId = event.pathParameters?.incidentId;
-  if (!incidentId) {
-    return problemResponse(400, 'Bad Request', 'incidentId path parameter is required.', traceId);
+/**
+ * The officer override (security-web MINOR 2): recording or correcting a module that names
+ * other members is Cedar RecordExposureForOthers (NERIS officer tier), decided on the caller's
+ * own token - no longer a cognito:groups check.
+ */
+async function mayRecordForOthers(event: GuardEvent, incidentId: string): Promise<boolean> {
+  const header = event.headers?.authorization ?? event.headers?.Authorization ?? '';
+  const [scheme, token] = header.split(' ');
+  if (scheme?.toLowerCase() !== 'bearer' || !token) {
+    return false;
   }
-  try {
-    assertNoDelimiter(incidentId, 'incidentId');
-  } catch (error) {
-    return problemResponse(
-      400,
-      'Bad Request',
-      error instanceof Error ? error.message : 'incidentId path parameter is invalid.',
-      traceId,
-    );
-  }
+  return isAuthorized(createAuthzClient(process.env), readAuthzConfig(process.env), token, {
+    actionType: 'Boxalarm::Action',
+    actionId: 'RecordExposureForOthers',
+    resourceType: 'Boxalarm::Incident',
+    resourceId: incidentId,
+  });
+}
 
-  let input: ParsedExposureInput;
+async function inner(
+  guardEvent: GuardEvent,
+  principal: CedarPrincipalContext,
+): Promise<APIGatewayProxyResultV2> {
+  const event = guardEvent as unknown as IncidentEvent;
+  const request = readIncidentWriteRequest(event, 'incident.exposures.denied', parseInput);
+  if (!request.ok) {
+    return request.response;
+  }
+  const { traceId, deptId, incidentId, input: input } = request;
+  let caller: { readonly sub: string; readonly isOfficerTier: boolean };
   try {
-    input = parseInput(event);
+    caller = {
+      sub: principal.sub,
+      isOfficerTier: await mayRecordForOthers(guardEvent, incidentId),
+    };
   } catch (error) {
-    return problemResponse(
-      400,
-      'Bad Request',
-      error instanceof ValidationError ? error.message : 'invalid request body',
-      traceId,
-    );
+    if (error instanceof AuthzUnavailableError) {
+      return problemResponse(
+        503,
+        'Service Unavailable',
+        'The authorization service is temporarily unavailable.',
+        traceId,
+      );
+    }
+    throw error;
   }
 
   try {
@@ -137,9 +190,45 @@ export const handler: APIGatewayProxyHandlerV2WithLambdaAuthorizer<AuthorizerCon
         traceId,
       );
     }
+    if (incident.lockedAt !== undefined) {
+      return lockedProblem(traceId);
+    }
 
     const client = getDocumentClient();
     const tableName = getTableName(process.env);
+
+    const existing = await getIncidentSecondary(
+      client,
+      tableName,
+      deptId,
+      incidentId,
+      input.secondaryType,
+    );
+    const denial = exposureWriteDenial(caller, existing, input.affectedMemberIds);
+    if (denial) {
+      console.error(
+        JSON.stringify({
+          event: 'incident.exposures.denied',
+          reason: 'NotOfficerOrAffectedMember',
+          correlationId: traceId,
+          deptId,
+          incidentId,
+          actorId: caller.sub,
+        }),
+      );
+      emitIncidentMetric('IncidentSecondaryWriteDenied');
+      return problemResponse(403, 'Forbidden', denial, traceId);
+    }
+    if (input.expectedVersion !== undefined && input.expectedVersion !== (existing?.version ?? 0)) {
+      return problemResponse(
+        409,
+        'Conflict',
+        'The exposure record changed since it was read; reload it and retry.',
+        traceId,
+        { currentVersion: existing?.version ?? 0 },
+      );
+    }
+
     const schemaVersionRepository = createSchemaVersionRepository(client, tableName);
     // Validate against the schema version this incident was authored under, not whatever
     // is newest: the scheduled refresh job can promote a new ACTIVE schema at any time, and
@@ -166,18 +255,13 @@ export const handler: APIGatewayProxyHandlerV2WithLambdaAuthorizer<AuthorizerCon
 
     const errors = validateSecondaryFields(secondarySchema, input.secondaryType, input.payload);
     if (errors.length > 0) {
-      return {
-        statusCode: 400,
-        headers: { 'Content-Type': 'application/problem+json' },
-        body: JSON.stringify({
-          type: 'about:blank',
-          title: 'Bad Request',
-          status: 400,
-          detail: 'One or more fields failed NERIS Secondary enumeration validation.',
-          traceId,
-          errors,
-        }),
-      };
+      return problemResponse(
+        400,
+        'Bad Request',
+        'One or more fields failed NERIS Secondary enumeration validation.',
+        traceId,
+        { errors },
+      );
     }
 
     const missing = missingRequiredSecondaryFields(
@@ -186,13 +270,20 @@ export const handler: APIGatewayProxyHandlerV2WithLambdaAuthorizer<AuthorizerCon
       input.payload,
     );
     const updatedAt = nowEpochSeconds();
-    await putIncidentSecondary(client, tableName, deptId, {
-      incidentId,
-      secondaryType: input.secondaryType,
-      payload: input.payload,
-      affectedMemberIds: input.affectedMemberIds,
-      updatedAt,
-    });
+    const version = await putIncidentSecondary(
+      client,
+      tableName,
+      deptId,
+      {
+        incidentId,
+        secondaryType: input.secondaryType,
+        payload: input.payload,
+        affectedMemberIds: input.affectedMemberIds,
+        updatedAt,
+      },
+      traceId,
+      { previous: existing, actorId: caller.sub },
+    );
 
     emitIncidentMetric('IncidentSecondaryUpdated');
     return {
@@ -205,9 +296,24 @@ export const handler: APIGatewayProxyHandlerV2WithLambdaAuthorizer<AuthorizerCon
         affectedMemberIds: input.affectedMemberIds,
         complete: missing.length === 0,
         updatedAt,
+        version,
       }),
     };
   } catch (error) {
+    if (error instanceof IncidentLockedError) {
+      return lockedProblem(traceId);
+    }
+    if (error instanceof IncidentNotFoundError) {
+      return problemResponse(404, 'Not Found', error.message, traceId);
+    }
+    if (error instanceof SecondaryConflictError) {
+      return problemResponse(
+        409,
+        'Conflict',
+        'The exposure record changed while this request was in flight; reload it and retry.',
+        traceId,
+      );
+    }
     console.error(
       JSON.stringify({
         event: 'incident.exposures.failed',
@@ -226,4 +332,15 @@ export const handler: APIGatewayProxyHandlerV2WithLambdaAuthorizer<AuthorizerCon
       traceId,
     );
   }
-};
+}
+
+/**
+ * Every role may write an exposure module (EditIncidentExposures): a member records their own.
+ * Who it may name is then exposureWriteDenial's rule, with the officer override from Cedar.
+ */
+export const handler = withAuthorization(inner, {
+  actionType: 'Boxalarm::Action',
+  actionId: 'EditIncidentExposures',
+  resourceType: 'Boxalarm::Incident',
+  resourceId: (event) => event.pathParameters?.incidentId ?? '',
+});

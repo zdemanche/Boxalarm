@@ -1,8 +1,11 @@
-import { apiRequest, type AuthTokenSource } from '../../lib/apiClient';
+import { apiRequest, requireArrayField, type AuthTokenSource } from '../../lib/apiClient';
 import type {
   Apparatus,
   ApparatusDetail,
   ApparatusStatus,
+  DeptOpenDefect,
+  DeptOpenDefectsPage,
+  ResolveDefectResponse,
   ChecklistTemplate,
   ComplianceEntry,
   CreateApparatusInput,
@@ -33,6 +36,36 @@ export async function getApparatus(
 ): Promise<ApparatusDetail> {
   const response = await apiRequest(unit(apparatusId), tokens);
   return (await response.json()) as ApparatusDetail;
+}
+
+/** Every open defect in the department in one request (the dashboard to-do card). */
+export async function listOpenDefects(tokens: AuthTokenSource): Promise<DeptOpenDefectsPage> {
+  const response = await apiRequest('apparatus/defects?status=open', tokens);
+  const body = requireArrayField(
+    (await response.json()) as { defects: DeptOpenDefect[]; truncated?: boolean },
+    'defects',
+    'apparatus/defects',
+  );
+  return { defects: body.defects, truncated: body.truncated === true };
+}
+
+/** Closes a defect with a required note; the unit's own service status is untouched. */
+export async function resolveDefect(
+  tokens: AuthTokenSource,
+  unitId: string,
+  defectId: string,
+  note: string,
+): Promise<ResolveDefectResponse> {
+  const response = await apiRequest(
+    `${unit(unitId)}/defects/${encodeURIComponent(defectId)}/resolve`,
+    tokens,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ note }),
+    },
+  );
+  return (await response.json()) as ResolveDefectResponse;
 }
 
 export async function createApparatus(
@@ -160,7 +193,7 @@ export async function updateInventoryQuantity(
   itemId: string,
   quantity: number,
 ): Promise<void> {
-  await apiRequest(`${unit(unitId)}/inventory/${encodeURIComponent(itemId)}/quantity`, tokens, {
+  await apiRequest(`${unit(unitId)}/inventory/${encodeURIComponent(itemId)}`, tokens, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ quantity }),

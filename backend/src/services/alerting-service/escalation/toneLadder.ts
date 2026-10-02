@@ -3,8 +3,11 @@ import {
   CreateScheduleCommand,
   FlexibleTimeWindowMode,
 } from '@aws-sdk/client-scheduler';
-import { GetCommand, type DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
+import { GetCommand, UpdateCommand, type DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
 import { buildDeptScopedPk, type VerifiedDeptId } from '@boxalarm/dept-scope';
+import { createHash } from 'node:crypto';
+import { logError } from '../dispatches/logger.js';
+import { alertingScheduleLifecycle, readScheduleGroupName } from './scheduleEscalation.js';
 
 export const TONE_SEQUENCE_TWO = 2;
 export const TONE_SEQUENCE_THREE = 3;
@@ -33,6 +36,17 @@ export async function readDepartmentToneConfig(
       Key: { pk: buildDeptScopedPk(deptId, 'ALERT_RULES'), sk: 'METADATA' },
     }),
   );
+  if (!result.Item) {
+    // No ALERT_RULES_COPY: the department never saved rules, or they predate the copy consumer
+    // (backfill: the LOB config re-emit, see infrastructure/README.md). Logged so defaults show.
+    logError(
+      'alerting.toneLadder.rules_default',
+      new Error('no ALERT_RULES_COPY; using defaults'),
+      {
+        deptId,
+      },
+    );
+  }
   const toneLadder = result.Item?.toneLadder as Record<string, unknown> | undefined;
   const defaultRule = result.Item?.defaultRule as Record<string, unknown> | undefined;
   return {
@@ -57,6 +71,7 @@ export async function readDepartmentToneConfig(
 export interface ToneEvaluatorSchedulerConfig {
   readonly toneEvaluatorHandlerArn: string;
   readonly schedulerRoleArn: string;
+  readonly scheduleGroupName: string;
 }
 
 export function readToneEvaluatorSchedulerConfig(
@@ -70,7 +85,24 @@ export function readToneEvaluatorSchedulerConfig(
   if (!schedulerRoleArn) {
     throw new Error('ESCALATION_SCHEDULER_ROLE_ARN is required and was not set');
   }
-  return { toneEvaluatorHandlerArn, schedulerRoleArn };
+  return {
+    toneEvaluatorHandlerArn,
+    schedulerRoleArn,
+    scheduleGroupName: readScheduleGroupName(env),
+  };
+}
+
+/**
+ * Unique within 64 characters: `tone-{deptId}-{dispatchId}-{tone}`.slice(0, 64) dropped the
+ * tone for a deptId over 14 characters, merging the tone-3 schedule into tone 2's
+ * (ConflictException, treated as created) - tone 3 would silently never be evaluated.
+ */
+export function toneScheduleName(deptId: string, dispatchId: string, toneSequence: number): string {
+  const digest = createHash('sha256')
+    .update(`${deptId}#${dispatchId}#${toneSequence}`)
+    .digest('hex')
+    .slice(0, 48);
+  return `tone-${toneSequence}-${digest}`;
 }
 
 async function createToneSchedule(
@@ -80,27 +112,72 @@ async function createToneSchedule(
   dispatchId: string,
   toneSequence: number,
   delaySeconds: number,
-): Promise<void> {
+): Promise<number> {
   const fireAt = Math.floor(Date.now() / 1000) + delaySeconds;
-  const scheduleName = `tone-${deptId}-${dispatchId}-${toneSequence}`.slice(0, 64);
+  const scheduleName = toneScheduleName(deptId, dispatchId, toneSequence);
+  // DELETE after firing + DLQ: see alertingScheduleLifecycle (scheduleEscalation.ts).
+  const lifecycle = alertingScheduleLifecycle(process.env);
   try {
     await scheduler.send(
       new CreateScheduleCommand({
         Name: scheduleName,
+        GroupName: config.scheduleGroupName,
         ScheduleExpression: `at(${new Date(fireAt * 1000).toISOString().slice(0, 19)})`,
         FlexibleTimeWindow: { Mode: FlexibleTimeWindowMode.OFF },
+        ActionAfterCompletion: lifecycle.ActionAfterCompletion,
         Target: {
           Arn: config.toneEvaluatorHandlerArn,
           RoleArn: config.schedulerRoleArn,
           Input: JSON.stringify({ deptId, dispatchId, toneSequence }),
+          ...(lifecycle.deadLetterConfig ? { DeadLetterConfig: lifecycle.deadLetterConfig } : {}),
         },
       }),
     );
   } catch (error) {
-    if (error instanceof Error && error.name === 'ConflictException') {
+    if (!(error instanceof Error) || error.name !== 'ConflictException') {
+      throw error;
+    }
+  }
+  return fireAt;
+}
+
+/**
+ * Records when the ladder's automatic tones fire (architecture `nextToneAt`, B6): the tone-2
+ * time now, and the tone-3 time for the Tone Evaluator to move `nextToneAt` to once tone 2 is
+ * evaluated. Display-only - the schedules drive the firing - so a failure is logged, never
+ * thrown into the paging path. Written once, and only while tone 2 is still to come on an
+ * active ladder: a retried fan-out, or one racing a halt or an early manual advance, must not
+ * re-open a ladder that has already moved on.
+ */
+async function recordToneTimes(
+  ddb: DynamoDBDocumentClient,
+  tableName: string,
+  deptId: VerifiedDeptId,
+  dispatchId: string,
+  tone2At: number,
+  tone3At: number,
+): Promise<void> {
+  try {
+    await ddb.send(
+      new UpdateCommand({
+        TableName: tableName,
+        Key: { pk: buildDeptScopedPk(deptId, 'DISPATCH', dispatchId), sk: 'METADATA' },
+        UpdateExpression: 'SET nextToneAt = :tone2At, tone3At = :tone3At',
+        ConditionExpression:
+          'attribute_exists(pk) AND attribute_not_exists(tone3At) AND (attribute_not_exists(toneLadderStatus) OR toneLadderStatus = :active) AND (attribute_not_exists(currentToneSequence) OR currentToneSequence < :two)',
+        ExpressionAttributeValues: {
+          ':tone2At': tone2At,
+          ':tone3At': tone3At,
+          ':active': 'ACTIVE',
+          ':two': TONE_SEQUENCE_TWO,
+        },
+      }),
+    );
+  } catch (error) {
+    if (error instanceof Error && error.name === 'ConditionalCheckFailedException') {
       return;
     }
-    throw error;
+    logError('alerting.toneLadder.toneTimesWriteFailed', error, { deptId, dispatchId });
   }
 }
 
@@ -113,7 +190,7 @@ export async function scheduleDepartmentToneLadder(
 ): Promise<void> {
   const config = readToneEvaluatorSchedulerConfig(process.env);
   const toneConfig = await readDepartmentToneConfig(ddb, tableName, deptId);
-  await createToneSchedule(
+  const tone2At = await createToneSchedule(
     scheduler,
     config,
     deptId,
@@ -121,7 +198,7 @@ export async function scheduleDepartmentToneLadder(
     TONE_SEQUENCE_TWO,
     toneConfig.tone2AtSeconds,
   );
-  await createToneSchedule(
+  const tone3At = await createToneSchedule(
     scheduler,
     config,
     deptId,
@@ -129,6 +206,7 @@ export async function scheduleDepartmentToneLadder(
     TONE_SEQUENCE_THREE,
     toneConfig.tone3AtSeconds,
   );
+  await recordToneTimes(ddb, tableName, deptId, dispatchId, tone2At, tone3At);
 }
 
 export interface RosterAckLike {
