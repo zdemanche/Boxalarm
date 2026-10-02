@@ -483,6 +483,7 @@ test('preferences: an apparatus officer can mute each apparatus reminder categor
     'Department PPE expiry reminders',
     'Apparatus test reminders',
     'Apparatus defect reports',
+    'Apparatus status changes',
     'Supply reorder reminders',
   ]);
 

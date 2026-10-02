@@ -968,6 +968,11 @@ export const LAMBDA_ENTRIES = [
     function: 'push-worker',
     entry: 'src/services/notification-service/push/worker.ts',
   },
+  {
+    service: 'notification-service',
+    function: 'apparatus-status-consumer',
+    entry: 'src/services/notification-service/events/apparatusStatusConsumer.ts',
+  },
   // One health Lambda per service serves GET health/liveness and health/readiness.
   {
     service: 'alerting-service',

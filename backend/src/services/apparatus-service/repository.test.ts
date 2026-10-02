@@ -104,6 +104,8 @@ describe('setServiceStatus', () => {
       unitId: 'E1',
       status: 'OUT_OF_SERVICE',
       reason: 'Transmission failure',
+      changedBy: 'MBR-1',
+      correlationId: 'corr-1',
     });
 
     const items = lastTransactItems(send);
@@ -145,7 +147,7 @@ describe('setServiceStatus', () => {
     });
     const client = { send } as unknown as DynamoDBDocumentClient;
 
-    await setServiceStatus(client, TABLE, { deptId: DEPT_ID, unitId: 'E1', status: 'IN_SERVICE' });
+    await setServiceStatus(client, TABLE, { deptId: DEPT_ID, unitId: 'E1', status: 'IN_SERVICE', changedBy: 'MBR-1', correlationId: 'corr-1' });
 
     const items = lastTransactItems(send);
     const closeUpdate = findUpdate(items, 'OOS#1700000000');
@@ -181,7 +183,7 @@ describe('setServiceStatus', () => {
     });
     const client = { send } as unknown as DynamoDBDocumentClient;
 
-    await setServiceStatus(client, TABLE, { deptId: DEPT_ID, unitId: 'E1', status: 'IN_SERVICE' });
+    await setServiceStatus(client, TABLE, { deptId: DEPT_ID, unitId: 'E1', status: 'IN_SERVICE', changedBy: 'MBR-1', correlationId: 'corr-1' });
 
     const closeUpdate = findUpdate(lastTransactItems(send), 'OOS#1700000000');
     expect(closeUpdate).toBeDefined();
@@ -202,6 +204,8 @@ describe('setServiceStatus', () => {
         unitId: 'E1',
         status: 'OUT_OF_SERVICE',
         reason: 'still down',
+        changedBy: 'MBR-1',
+        correlationId: 'corr-1',
       }),
     ).rejects.toBeInstanceOf(ServiceStatusConflictError);
     expect(send).toHaveBeenCalledTimes(1);
@@ -220,7 +224,7 @@ describe('setServiceStatus', () => {
     const client = { send } as unknown as DynamoDBDocumentClient;
 
     await expect(
-      setServiceStatus(client, TABLE, { deptId: DEPT_ID, unitId: 'E1', status: 'IN_SERVICE' }),
+      setServiceStatus(client, TABLE, { deptId: DEPT_ID, unitId: 'E1', status: 'IN_SERVICE', changedBy: 'MBR-1', correlationId: 'corr-1' }),
     ).rejects.toBeInstanceOf(ServiceStatusConflictError);
   });
 
@@ -234,6 +238,8 @@ describe('setServiceStatus', () => {
         unitId: 'missing',
         status: 'OUT_OF_SERVICE',
         reason: 'x',
+        changedBy: 'MBR-1',
+        correlationId: 'corr-1',
       }),
     ).rejects.toBeInstanceOf(ApparatusNotFoundError);
   });
@@ -262,6 +268,8 @@ describe('setServiceStatus', () => {
         unitId: 'E1',
         status: 'OUT_OF_SERVICE',
         reason: 'x',
+        changedBy: 'MBR-1',
+        correlationId: 'corr-1',
       }),
     ).rejects.toBeInstanceOf(ServiceStatusConflictError);
 
@@ -298,6 +306,8 @@ describe('setServiceStatus', () => {
         unitId: 'E1',
         status: 'OUT_OF_SERVICE',
         reason: 'x',
+        changedBy: 'MBR-1',
+        correlationId: 'corr-1',
       }),
     ).rejects.toBeInstanceOf(ApparatusRepositoryUnavailableError);
     expect(errorSpy).toHaveBeenCalled();

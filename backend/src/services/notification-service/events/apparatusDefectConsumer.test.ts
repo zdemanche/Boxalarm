@@ -251,7 +251,7 @@ describe('apparatusDefectConsumer — out-of-service defect (immediate path)', (
     const { handler } = await load(table.send, push);
 
     await expect(handler(sqsEvent(defect({ outOfService: true })))).rejects.toThrow(
-      'immediate defect delivery failed for 1 recipient(s)',
+      'immediate delivery failed for 1 recipient(s)',
     );
     expect(
       inboxRows(table)

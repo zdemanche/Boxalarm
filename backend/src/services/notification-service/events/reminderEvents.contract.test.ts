@@ -333,3 +333,218 @@ describe('apparatus.defect.reported (outbox) -> apparatusDefectConsumer', () => 
     expect(email).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('apparatus.serviceStatus.changed (outbox) -> apparatusStatusConsumer', () => {
+  /** setServiceStatus's outbox row, drained by the real platform outbox publisher. */
+  async function changedStatus(
+    status: 'OUT_OF_SERVICE' | 'IN_SERVICE',
+    suppressEvent = false,
+  ): Promise<{ event: SQSEvent | null; outbox: Record<string, unknown> | undefined }> {
+    const ddbSend = vi.fn().mockImplementation((command: SentCommand) => {
+      if (command.constructor.name === 'QueryCommand') {
+        const expression = String(command.input.KeyConditionExpression ?? '');
+        if (expression.includes('gsi3')) {
+          return Promise.resolve({
+            Items: [
+              {
+                pk: 'DEPT#NICHOLS#APPARATUS#APP-E1',
+                apparatusId: 'APP-E1',
+                unitId: 'E1',
+                status: status === 'OUT_OF_SERVICE' ? 'IN_SERVICE' : 'OUT_OF_SERVICE',
+              },
+            ],
+          });
+        }
+        // The open OOS# record a return-to-service closes.
+        return Promise.resolve({
+          Items: [{ sk: 'OOS#100', reason: 'Pump failure', startAt: 100 }],
+        });
+      }
+      return Promise.resolve({});
+    });
+    const { setServiceStatus } = await import('../../apparatus-service/repository.js');
+    await setServiceStatus({ send: ddbSend } as unknown as DynamoDBDocumentClient, 'platform-table', {
+      deptId,
+      unitId: 'E1',
+      status,
+      ...(status === 'OUT_OF_SERVICE' ? { reason: 'Pump failure' } : {}),
+      changedBy: 'OFF-9',
+      correlationId: 'trace-7',
+      ...(suppressEvent ? { suppressEvent: true } : {}),
+    });
+    const transact = ddbSend.mock.calls
+      .map((call) => call[0] as SentCommand)
+      .find((command) => command.constructor.name === 'TransactWriteCommand')!;
+    const outbox = (
+      transact.input.TransactItems as Array<{ Put?: { Item: Record<string, unknown> } }>
+    ).find((item) => item.Put?.Item.entityType === 'OUTBOX_ENTRY')?.Put?.Item;
+    if (!outbox) {
+      return { event: null, outbox: undefined };
+    }
+
+    const eb = fakeEventBridge();
+    const { createOutboxDrainHandler } = await import('@boxalarm/outbox');
+    const drain = createOutboxDrainHandler('platform-service', {
+      eventBridgeClient: eb.client,
+      ddbClient: { send: vi.fn().mockResolvedValue({}) } as unknown as DynamoDBDocumentClient,
+    });
+    await drain(
+      {
+        Records: [
+          {
+            eventName: 'INSERT',
+            dynamodb: {
+              SequenceNumber: String((sequence += 1)),
+              NewImage: marshall(outbox, { removeUndefinedValues: true }),
+            },
+          },
+        ],
+      } as unknown as DynamoDBStreamEvent,
+      {} as Context,
+      () => undefined,
+    );
+    const entry = eb.entry();
+    expect(entry.Source).toBe('apparatus-service');
+    expect(entry.DetailType).toBe('apparatus.serviceStatus.changed');
+    expect(JSON.parse(entry.Detail) as Record<string, unknown>).toMatchObject({
+      schemaVersion: '1.0',
+      eventTime: expect.any(String) as string,
+      payload: expect.objectContaining({ unitId: 'E1', status, changedBy: 'OFF-9' }) as unknown,
+    });
+    return { event: asSqs(entry), outbox };
+  }
+
+  function consumerDdb(writes: Array<Record<string, unknown>>, muted = false) {
+    const send = vi.fn().mockImplementation((command: SentCommand) => {
+      if (command.constructor.name === 'QueryCommand') {
+        return Promise.resolve({
+          Items: [{ memberId: 'LT-1', roles: ['MEMBER', 'OFFICER'], email: 'lt@example.com' }],
+        });
+      }
+      if (command.constructor.name === 'GetCommand') {
+        const key = command.input.Key as { sk?: string };
+        if (muted && key.sk?.startsWith('NOTIFPREF#')) {
+          return Promise.resolve({
+            Item: {
+              memberId: 'LT-1',
+              category: 'apparatus-status',
+              channels: { push: true, email: false },
+            },
+          });
+        }
+        return Promise.resolve({ Item: undefined });
+      }
+      if (command.constructor.name === 'PutCommand') {
+        writes.push(command.input.Item as Record<string, unknown>);
+      }
+      return Promise.resolve({});
+    });
+    vi.doMock('../dynamoClient.js', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('../dynamoClient.js')>();
+      return {
+        ...actual,
+        createDynamoClient: () => ({ send }) as unknown as DynamoDBDocumentClient,
+      };
+    });
+  }
+
+  it('a manual out-of-service reaches APPARATUS/OFFICER/CHIEF inboxes, email and push at once', async () => {
+    const { event } = await changedStatus('OUT_OF_SERVICE');
+    expect(event).not.toBeNull();
+
+    const writes: Array<Record<string, unknown>> = [];
+    consumerDdb(writes);
+    const push = vi.fn().mockResolvedValue(undefined);
+    const email = vi.fn().mockResolvedValue(undefined);
+    vi.doMock('../channelSender.js', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('../channelSender.js')>();
+      return { ...actual, sendPushDigest: push, sendEmailDigest: email };
+    });
+    const { handler } = await import('./apparatusStatusConsumer.js');
+
+    await handler(event!);
+
+    expect(writes.filter((w) => w.entityType === 'NOTIFICATION')).toEqual([
+      expect.objectContaining({
+        entityType: 'NOTIFICATION',
+        pk: 'DEPT#NICHOLS#MEMBER#LT-1',
+        category: 'apparatus-status',
+      }),
+    ]);
+    expect(push).toHaveBeenCalledTimes(1);
+    expect(push.mock.calls[0]?.[1]).toEqual({
+      memberId: 'LT-1',
+      deptId: 'NICHOLS',
+      email: 'lt@example.com',
+    });
+    expect(String(push.mock.calls[0]?.[5])).toBe('apparatus-status');
+    expect(email).toHaveBeenCalledTimes(1);
+  });
+
+  it('a return to service notifies too, and an apparatus-status push mute is honoured before publish', async () => {
+    const { event } = await changedStatus('IN_SERVICE');
+    expect(event).not.toBeNull();
+
+    const writes: Array<Record<string, unknown>> = [];
+    consumerDdb(writes, true);
+    const push = vi.fn().mockResolvedValue(undefined);
+    const email = vi.fn().mockResolvedValue(undefined);
+    vi.doMock('../channelSender.js', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('../channelSender.js')>();
+      return { ...actual, sendPushDigest: push, sendEmailDigest: email };
+    });
+    const { handler } = await import('./apparatusStatusConsumer.js');
+
+    await handler(event!);
+
+    // The inbox record is written regardless; the muted push is never published.
+    expect(writes.filter((w) => w.entityType === 'NOTIFICATION')).toHaveLength(1);
+    expect(push).not.toHaveBeenCalled();
+    expect(email).toHaveBeenCalledTimes(1);
+  });
+
+  it('the defect-driven OOS flip suppresses the status event (the defect event already notifies)', async () => {
+    const { outbox } = await changedStatus('OUT_OF_SERVICE', true);
+    expect(outbox).toBeUndefined();
+  });
+
+  it('a redelivery is a no-op for an inbox already written and a channel already sent', async () => {
+    const { event } = await changedStatus('OUT_OF_SERVICE');
+    const conditionalFailure = Object.assign(new Error('conditional'), {
+      name: 'ConditionalCheckFailedException',
+    });
+    const send = vi.fn().mockImplementation((command: SentCommand) => {
+      if (command.constructor.name === 'QueryCommand') {
+        return Promise.resolve({
+          Items: [{ memberId: 'LT-1', roles: ['OFFICER'], email: 'lt@example.com' }],
+        });
+      }
+      if (command.constructor.name === 'GetCommand') {
+        return Promise.resolve({ Item: undefined });
+      }
+      if (command.constructor.name === 'PutCommand') {
+        return Promise.reject(conditionalFailure);
+      }
+      return Promise.resolve({});
+    });
+    vi.doMock('../dynamoClient.js', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('../dynamoClient.js')>();
+      return {
+        ...actual,
+        createDynamoClient: () => ({ send }) as unknown as DynamoDBDocumentClient,
+      };
+    });
+    const push = vi.fn();
+    const email = vi.fn();
+    vi.doMock('../channelSender.js', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('../channelSender.js')>();
+      return { ...actual, sendPushDigest: push, sendEmailDigest: email };
+    });
+    const { handler } = await import('./apparatusStatusConsumer.js');
+
+    await handler(event!);
+
+    expect(push).not.toHaveBeenCalled();
+    expect(email).not.toHaveBeenCalled();
+  });
+});

@@ -140,6 +140,51 @@ export class Reminders extends pulumi.ComponentResource {
         ],
       },
       {
+        // Owed-stories review minor 10: a manual service-status change notifies the
+        // APPARATUS/OFFICER/CHIEF roles immediately — inbox + mute-checked push and email —
+        // through the same pipeline as the out-of-service defect. No digest rows.
+        key: "apparatus-status",
+        source: "apparatus-service",
+        detailTypes: ["apparatus.serviceStatus.changed"],
+        // Roster query plus a sequential inbox write + push per recipient; still under the
+        // queue's default 30s visibility timeout.
+        timeout: 25,
+        environment: {
+          NOTIFICATION_PUSH_TOPIC_ARN: args.pushTopicArn,
+          NOTIFICATION_SES_FROM_ADDRESS: args.sesFromAddress,
+        },
+        statements: ({ tableArn, topicArn, fromAddress, sesIdentityArn }) => [
+          {
+            Sid: "NotificationStatusTableAccess",
+            Effect: "Allow",
+            Action: ["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:DeleteItem"],
+            Resource: [tableArn],
+          },
+          {
+            Sid: "NotificationStatusRoster",
+            Effect: "Allow",
+            Action: ["dynamodb:Query"],
+            Resource: [`${tableArn}/index/GSI3`],
+          },
+          auditMutationDenyStatement(tableArn),
+          {
+            Sid: "NotificationPushPublish",
+            Effect: "Allow",
+            Action: ["sns:Publish"],
+            Resource: [topicArn],
+          },
+          {
+            Sid: "NotificationEmailSend",
+            Effect: "Allow",
+            Action: ["ses:SendEmail"],
+            Resource: [
+              `${sesIdentityArn}/${fromAddress}`,
+              `${sesIdentityArn}/${fromAddress.split("@")[1] ?? fromAddress}`,
+            ],
+          },
+        ],
+      },
+      {
         key: "inventory-reorder",
         source: "inventory-service",
         detailTypes: ["inventory.reorder.due"],
