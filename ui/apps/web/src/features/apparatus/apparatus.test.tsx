@@ -516,3 +516,99 @@ test('a failed SCBA due-soon read is shown inline and keeps the log form usable 
   expect(await screen.findByText('The SCBA due-soon list could not be loaded.')).toBeTruthy();
   expect(screen.getByRole('form', { name: 'Log SCBA record' })).toBeTruthy();
 });
+
+test('an officer resolves a defect with a note; it leaves the list and the OOS warning shows', async () => {
+  let resolveBody: unknown;
+  let resolved = false;
+  server.use(
+    http.get('/api/v1/apparatus/L1', () =>
+      HttpResponse.json({
+        apparatusId: 'a1',
+        unitId: 'L1',
+        type: 'Engine',
+        status: 'OUT_OF_SERVICE',
+        outOfService: { reason: 'Pump failure', startAt: 1, elapsedSeconds: 7200 },
+        openDefects: resolved
+          ? []
+          : [
+              {
+                defectId: 'DEF-9',
+                description: 'Pump will not engage',
+                severity: 'OUT_OF_SERVICE',
+                reportedAt: 1700000000,
+                photoS3Key: null,
+              },
+            ],
+        failedTests: [],
+      }),
+    ),
+    http.post('/api/v1/apparatus/L1/defects/DEF-9/resolve', async ({ request }) => {
+      resolveBody = await request.json();
+      resolved = true;
+      return HttpResponse.json({
+        defectId: 'DEF-9',
+        status: 'RESOLVED',
+        resolvedAt: 1700005000,
+        severity: 'OUT_OF_SERVICE',
+        unitStillOutOfService: true,
+      });
+    }),
+  );
+
+  renderApp(['OFFICER'], '/apparatus/L1');
+  await screen.findByRole('heading', { name: 'L1' });
+
+  const user = userEvent.setup();
+  await user.click(
+    await screen.findByRole('button', { name: 'Resolve defect: Pump will not engage' }),
+  );
+  await user.type(screen.getByLabelText('How was it fixed?'), 'Replaced the pump seal');
+  await user.click(screen.getByRole('button', { name: 'Confirm resolve' }));
+
+  expect(resolveBody).toEqual({ note: 'Replaced the pump seal' });
+  // Resolving never returns the unit to service: the server said it is still out, and we warn.
+  expect(
+    await screen.findByText('L1 is still out of service — return it to service when it is ready.'),
+  ).toBeTruthy();
+});
+
+test('resolving requires a note before anything is sent', async () => {
+  let posts = 0;
+  server.use(
+    http.get('/api/v1/apparatus/L1', () =>
+      HttpResponse.json({
+        apparatusId: 'a1',
+        unitId: 'L1',
+        type: 'Engine',
+        status: 'IN_SERVICE',
+        openDefects: [
+          {
+            defectId: 'DEF-9',
+            description: 'Marker light out',
+            severity: 'MINOR',
+            reportedAt: 1700000000,
+            photoS3Key: null,
+          },
+        ],
+        failedTests: [],
+      }),
+    ),
+    http.post('/api/v1/apparatus/L1/defects/DEF-9/resolve', () => {
+      posts += 1;
+      return HttpResponse.json({});
+    }),
+  );
+
+  renderApp(['OFFICER'], '/apparatus/L1');
+  await screen.findByRole('heading', { name: 'L1' });
+
+  const user = userEvent.setup();
+  await user.click(
+    await screen.findByRole('button', { name: 'Resolve defect: Marker light out' }),
+  );
+  await user.click(screen.getByRole('button', { name: 'Confirm resolve' }));
+
+  expect(await screen.findByText('A note saying how it was fixed is required.')).toBeTruthy();
+  expect(posts).toBe(0);
+});
+

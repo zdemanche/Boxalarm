@@ -48,11 +48,11 @@ async function listDefects(
   }
   const deptId = toVerifiedDeptId(principal);
   try {
-    const defects = await listOpenDefects(deps.client, deps.tableName, deptId);
+    const page = await listOpenDefects(deps.client, deps.tableName, deptId);
     return {
       statusCode: 200,
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ defects }),
+      body: JSON.stringify({ defects: page.defects, truncated: page.truncated }),
     };
   } catch (error) {
     logListError(error, traceId);

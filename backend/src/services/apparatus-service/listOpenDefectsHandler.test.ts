@@ -60,13 +60,15 @@ async function importHandler() {
 }
 
 describe('listOpenDefectsHandler (entrypoint)', () => {
-  it('returns every open defect in the department from one GSI3 query, never a Scan', async () => {
+  it('returns every open defect in the department from one GSI3 query, newest first, never a Scan', async () => {
     const createHandler = await importHandler();
     const send = vi.fn((command: unknown) => {
       expect(command).toBeInstanceOf(QueryCommand);
       const input = (command as QueryCommand).input;
       expect(input.IndexName).toBe('GSI3');
       expect(input.KeyConditionExpression).toContain('begins_with');
+      // MAJOR-2: newest first, so the cap cuts the oldest, never a new OUT_OF_SERVICE defect.
+      expect(input.ScanIndexForward).toBe(false);
       expect(input.ExpressionAttributeValues).toMatchObject({
         ':gsi3pk': 'DEPT#dept-001#DEFECT',
         ':open': 'OPEN#',
@@ -85,7 +87,11 @@ describe('listOpenDefectsHandler (entrypoint)', () => {
 
     expect(result.statusCode).toBe(200);
     expect(send).toHaveBeenCalledTimes(1);
-    const body = JSON.parse(result.body) as { defects: Record<string, unknown>[] };
+    const body = JSON.parse(result.body) as {
+      defects: Record<string, unknown>[];
+      truncated: boolean;
+    };
+    expect(body.truncated).toBe(false);
     expect(body.defects).toEqual([
       {
         defectId: 'DEF-1',
@@ -98,6 +104,28 @@ describe('listOpenDefectsHandler (entrypoint)', () => {
         itemCode: null,
       },
     ]);
+  });
+
+  it('caps at 500 newest and says so with truncated: true', async () => {
+    const createHandler = await importHandler();
+    const send = vi.fn().mockResolvedValue({
+      Items: Array.from({ length: 500 }, (_, index) => ({
+        ...DEFECT_ROW,
+        defectId: `DEF-${index}`,
+      })),
+      LastEvaluatedKey: { gsi3pk: 'DEPT#dept-001#DEFECT', gsi3sk: 'OPEN#1' },
+    });
+    const handler = createHandler({
+      client: { send } as unknown as DynamoDBDocumentClient,
+      authzClient: fakeAuthzClient(),
+    });
+
+    const result = (await handler(buildEvent({ status: 'open' }))) as { body: string };
+
+    const body = JSON.parse(result.body) as { defects: unknown[]; truncated: boolean };
+    expect(body.defects).toHaveLength(500);
+    expect(body.truncated).toBe(true);
+    expect(send).toHaveBeenCalledTimes(1);
   });
 
   it('follows pagination across GSI3 pages and returns all rows', async () => {

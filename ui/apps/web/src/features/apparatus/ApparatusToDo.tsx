@@ -4,7 +4,9 @@ import { useAuth } from '../../auth/AuthContext';
 import type { AuthTokenSource } from '../../lib/apiClient';
 import { ApiError } from '../../lib/apiClient';
 import { Card, Skeleton } from '../../components/ui';
+import { useState } from 'react';
 import { getApparatus, getCompliance, listApparatus, listOpenDefects } from './api';
+import { ResolveDefectControl, resolveWarningFor } from './ResolveDefectControl';
 import type { Apparatus, OpenDefectSummary } from './types';
 
 const SEVERITY_WORD: Record<OpenDefectSummary['severity'], string> = {
@@ -31,6 +33,8 @@ interface OpenDefectsResult {
   readonly entries: DefectEntry[];
   /** Fallback mode only: units whose detail could not be read. */
   readonly failedUnits: number;
+  /** The server capped the list at its 500 newest open defects. */
+  readonly truncated: boolean;
 }
 
 /**
@@ -40,10 +44,11 @@ interface OpenDefectsResult {
  */
 async function fetchOpenDefects(auth: AuthTokenSource): Promise<OpenDefectsResult> {
   try {
-    const defects = await listOpenDefects(auth);
+    const page = await listOpenDefects(auth);
     return {
-      entries: defects.map((defect) => ({ unitId: defect.unitId, defect })),
+      entries: page.defects.map((defect) => ({ unitId: defect.unitId, defect })),
       failedUnits: 0,
+      truncated: page.truncated,
     };
   } catch (error) {
     if (!(error instanceof ApiError) || error.problem.status !== 404) throw error;
@@ -65,7 +70,7 @@ async function fetchOpenDefects(auth: AuthTokenSource): Promise<OpenDefectsResul
         failedUnits += 1;
       }
     }
-    return { entries, failedUnits };
+    return { entries, failedUnits, truncated: false };
   }
 }
 
@@ -78,6 +83,8 @@ async function fetchOpenDefects(auth: AuthTokenSource): Promise<OpenDefectsResul
  */
 export function ApparatusToDo() {
   const auth = useAuth();
+  // Survives the resolved defect leaving the list: resolving never returns the unit to service.
+  const [resolveWarning, setResolveWarning] = useState<string | null>(null);
   const startOfToday = new Date();
   startOfToday.setHours(0, 0, 0, 0);
   const from = Math.floor(startOfToday.getTime() / 1000);
@@ -130,11 +137,29 @@ export function ApparatusToDo() {
       ) : (
         <>
           {defects.length === 0 && defectsFailed === 0 ? <p>No open defects.</p> : null}
+          {resolveWarning ? <p role="status">{resolveWarning}</p> : null}
+          {defectsQuery.data?.truncated ? (
+            <p role="status">
+              Showing the 500 newest open defects — older ones are not listed. Resolve defects to
+              shorten this list.
+            </p>
+          ) : null}
           {defects.length > 0 ? (
             <ul aria-label="Open defects">
               {defects.map(({ unitId, defect }) => (
-                <li key={defect.defectId}>
-                  {unitLink(unitId)} — {SEVERITY_WORD[defect.severity]}: {defect.description}
+                <li
+                  key={defect.defectId}
+                  style={{ display: 'flex', gap: 'var(--bx-space-sm)', alignItems: 'center' }}
+                >
+                  <span>
+                    {unitLink(unitId)} — {SEVERITY_WORD[defect.severity]}: {defect.description}
+                  </span>
+                  <ResolveDefectControl
+                    unitId={unitId}
+                    defectId={defect.defectId}
+                    description={defect.description}
+                    onResolved={(result) => setResolveWarning(resolveWarningFor(unitId, result))}
+                  />
                 </li>
               ))}
             </ul>

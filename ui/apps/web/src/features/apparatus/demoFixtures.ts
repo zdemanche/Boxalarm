@@ -107,6 +107,9 @@ function withLiveElapsed(unit: Apparatus): Apparatus {
 
 const ENGINE_301_TIRE_PHOTO = '/demo/engine-301-tire.svg';
 
+// Defects resolved during this demo session (POST .../defects/{defectId}/resolve).
+const resolvedDefectIds = new Set<string>();
+
 function toDetail(unit: Apparatus): ApparatusDetail {
   const openDefects =
     unit.apparatusId === 'a-2'
@@ -121,7 +124,11 @@ function toDetail(unit: Apparatus): ApparatusDetail {
           },
         ]
       : [];
-  return { ...withLiveElapsed(unit), openDefects, failedTests: [] };
+  return {
+    ...withLiveElapsed(unit),
+    openDefects: openDefects.filter((defect) => !resolvedDefectIds.has(defect.defectId)),
+    failedTests: [],
+  };
 }
 
 export async function apparatusDemoRequest(
@@ -176,7 +183,7 @@ export async function apparatusDemoRequest(
         itemCode: null,
       })),
     );
-    return json({ defects });
+    return json({ defects, truncated: false });
   }
 
   if (parts.length === 2 && method === 'GET') {
@@ -190,6 +197,18 @@ export async function apparatusDemoRequest(
     : findByUnitId(segment);
   if (!unit) return problem(404, 'Apparatus not found');
   const apparatusId = unit.apparatusId;
+
+  if (parts[2] === 'defects' && parts[4] === 'resolve' && method === 'POST') {
+    const defectId = decodeURIComponent(parts[3] ?? '');
+    resolvedDefectIds.add(defectId);
+    return json({
+      defectId,
+      status: 'RESOLVED',
+      resolvedAt: Math.floor(Date.now() / 1000),
+      severity: 'MAJOR',
+      unitStillOutOfService: unit.status === 'OUT_OF_SERVICE',
+    });
+  }
 
   if (parts[2] === 'checklist' && method === 'GET') {
     return json(checklistTemplate);

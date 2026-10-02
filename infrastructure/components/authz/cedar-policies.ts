@@ -162,6 +162,8 @@ export const APPARATUS_OFFICER_ACTIONS = [
   // The dashboard's dept-wide open-defects list (owed review minor 8): the same tier that
   // acts on a defect (service status, maintenance).
   "ListOpenDefects",
+  // Closing a defect with a note (review MAJOR-2): the tier that acts on defects.
+  "ResolveDefect",
   "LogMaintenanceRecord",
   "LogApparatusTestRecord",
   "CreateCompartmentItem",
@@ -187,6 +189,7 @@ const APPARATUS_ACTION_RESOURCE: Record<
   UpdateServiceStatus: "Apparatus",
   GetComplianceReport: "Apparatus",
   ListOpenDefects: "Apparatus",
+  ResolveDefect: "Apparatus",
   LogMaintenanceRecord: "Apparatus",
   LogApparatusTestRecord: "Apparatus",
   CreateCompartmentItem: "Apparatus",

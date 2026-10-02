@@ -79,6 +79,7 @@ const UI_CALLS = [
   "POST apparatus/{unitId}/checks",
   "POST apparatus/{unitId}/checks/{checkKey}/photos",
   "POST apparatus/{unitId}/defects",
+  "POST apparatus/{unitId}/defects/{defectId}/resolve",
   "GET apparatus/{unitId}/maintenance",
   "POST apparatus/{unitId}/maintenance",
   "POST apparatus/{unitId}/scba",
@@ -116,6 +117,7 @@ describe("apparatus-service routes", { timeout: 30_000 }, () => {
       "/inventory/${encodeURIComponent(itemId)}`",
       "apparatus/compliance",
       "apparatus/defects?status=open",
+      "/resolve`",
     ]) {
       expect(web, suffix).toContain(suffix);
     }
