@@ -1,9 +1,11 @@
+import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useAuth } from '../../auth/AuthContext';
 import { ApiForbiddenGate } from '../../components/ApiForbiddenGate';
 import { Button, Card, Skeleton } from '../../components/ui';
 import { downloadTranscript, getTranscript } from './api';
 import type { TranscriptExportFormat } from './types';
+import { humanize } from '../../lib/labels';
 
 function triggerDownload(blob: Blob, filename: string): void {
   const url = URL.createObjectURL(blob);
@@ -22,9 +24,16 @@ export function TranscriptPanel({ memberId }: { memberId: string }) {
     queryFn: () => getTranscript(auth, memberId),
   });
 
+  const [exportError, setExportError] = useState<string | null>(null);
+
   const onExport = async (format: TranscriptExportFormat) => {
-    const blob = await downloadTranscript(auth, memberId, format);
-    triggerDownload(blob, `transcript-${memberId}.${format}`);
+    setExportError(null);
+    try {
+      const blob = await downloadTranscript(auth, memberId, format);
+      triggerDownload(blob, `transcript-${memberId}.${format}`);
+    } catch {
+      setExportError(`The ${format.toUpperCase()} export failed. Try again.`);
+    }
   };
 
   if (transcriptQuery.error) {
@@ -56,6 +65,7 @@ export function TranscriptPanel({ memberId }: { memberId: string }) {
           Export PDF
         </Button>
       </div>
+      {exportError ? <p role="alert">{exportError}</p> : null}
 
       {!hasHistory ? (
         <p>No training history on file.</p>
@@ -65,7 +75,7 @@ export function TranscriptPanel({ memberId }: { memberId: string }) {
           <ul>
             {transcript.certifications.map((cert) => (
               <li key={cert.certId}>
-                {cert.certType} — {cert.status} · expires {cert.expiryDate}
+                {cert.certType} — {humanize(cert.status)} · expires {cert.expiryDate}
               </li>
             ))}
           </ul>

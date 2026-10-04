@@ -3,6 +3,12 @@
 // infrastructure's lambdaCode() helper looks up that same key.
 export const LAMBDA_ENTRIES = [
   {
+    // The HTTP API's REQUEST authorizer (infrastructure/components/api/http-api.ts).
+    service: 'platform-service',
+    function: 'authorizer',
+    entry: 'src/services/platform-service/authorizer/handler.ts',
+  },
+  {
     service: 'platform-service',
     function: 'credential-recovery-monitor',
     entry: 'src/services/platform-service/credential-recovery-monitor/handler.ts',
@@ -19,6 +25,16 @@ export const LAMBDA_ENTRIES = [
   },
   {
     service: 'platform-service',
+    function: 'session-revocation-list-devices',
+    entry: 'src/services/platform-service/session-revocation/listDevicesHandler.ts',
+  },
+  {
+    service: 'platform-service',
+    function: 'session-revocation-credential-reset',
+    entry: 'src/services/platform-service/session-revocation/credentialResetHandler.ts',
+  },
+  {
+    service: 'platform-service',
     function: 'audit',
     entry: 'src/services/platform-service/audit/handler.ts',
   },
@@ -26,6 +42,33 @@ export const LAMBDA_ENTRIES = [
     service: 'platform-service',
     function: 'config',
     entry: 'src/services/platform-service/config/handler.ts',
+  },
+  {
+    // GET/PUT /platform/cad-sources and POST .../test-parse (Cedar View/ManageCadIngress).
+    service: 'platform-service',
+    function: 'cad-sources',
+    entry: 'src/services/platform-service/cadSources/handler.ts',
+  },
+  {
+    // POST /platform/cad-sources/{sourceId}/webhook-key - the only CAD secret writer.
+    service: 'platform-service',
+    function: 'cad-sources-rotate-key',
+    entry: 'src/services/platform-service/cadSources/rotateKey.ts',
+  },
+  {
+    service: 'platform-service',
+    function: 'neris-entity-get',
+    entry: 'src/services/platform-service/neris/getEntity.ts',
+  },
+  {
+    service: 'platform-service',
+    function: 'neris-entity-put',
+    entry: 'src/services/platform-service/neris/putEntity.ts',
+  },
+  {
+    service: 'platform-service',
+    function: 'neris-entity-sync-worker',
+    entry: 'src/services/platform-service/neris/syncWorker.ts',
   },
   {
     service: 'platform-service',
@@ -41,6 +84,11 @@ export const LAMBDA_ENTRIES = [
     service: 'platform-service',
     function: 'retention-disposal',
     entry: 'src/services/platform-service/retention/disposalHandler.ts',
+  },
+  {
+    service: 'platform-service',
+    function: 'retention-config',
+    entry: 'src/services/platform-service/retention/configHandler.ts',
   },
   {
     service: 'platform-service',
@@ -74,6 +122,11 @@ export const LAMBDA_ENTRIES = [
   },
   {
     service: 'personnel-service',
+    function: 'members-update-roles',
+    entry: 'src/services/personnel-service/members/updateRoles.ts',
+  },
+  {
+    service: 'personnel-service',
     function: 'quals',
     entry: 'src/services/personnel-service/quals/handler.ts',
   },
@@ -96,6 +149,16 @@ export const LAMBDA_ENTRIES = [
     service: 'personnel-service',
     function: 'availability-expiry',
     entry: 'src/services/personnel-service/availability/expiryHandler.ts',
+  },
+  {
+    service: 'personnel-service',
+    function: 'availability-list',
+    entry: 'src/services/personnel-service/availability/listMarkoffsHandler.ts',
+  },
+  {
+    service: 'personnel-service',
+    function: 'availability-end',
+    entry: 'src/services/personnel-service/availability/endMarkoffHandler.ts',
   },
   {
     service: 'personnel-service',
@@ -247,6 +310,62 @@ export const LAMBDA_ENTRIES = [
     function: 'submission-retry',
     entry: 'src/services/incident-service/retrySubmission.ts',
   },
+  // NERIS loop: validation, review lock, resubmission, status sync, reconciliation.
+  {
+    service: 'incident-service',
+    function: 'module',
+    entry: 'src/services/incident-service/putModule.ts',
+  },
+  {
+    service: 'incident-service',
+    function: 'recent-dispatches',
+    entry: 'src/services/incident-service/listRecentDispatches.ts',
+  },
+  {
+    service: 'incident-service',
+    function: 'neris-schema',
+    entry: 'src/services/incident-service/getNerisSchema.ts',
+  },
+  {
+    service: 'incident-service',
+    function: 'validate',
+    entry: 'src/services/incident-service/validateIncident.ts',
+  },
+  {
+    service: 'incident-service',
+    function: 'lock',
+    entry: 'src/services/incident-service/lockIncident.ts',
+  },
+  {
+    service: 'incident-service',
+    function: 'unlock',
+    entry: 'src/services/incident-service/unlockIncident.ts',
+  },
+  {
+    service: 'incident-service',
+    function: 'resubmit',
+    entry: 'src/services/incident-service/resubmitIncident.ts',
+  },
+  {
+    service: 'incident-service',
+    function: 'no-activity-report',
+    entry: 'src/services/incident-service/noActivityReport.ts',
+  },
+  {
+    service: 'incident-service',
+    function: 'neris-settings-consumer',
+    entry: 'src/services/incident-service/nerisSettingsConsumer.ts',
+  },
+  {
+    service: 'incident-service',
+    function: 'neris-status-poller',
+    entry: 'src/services/incident-service/neris/statusPoller.ts',
+  },
+  {
+    service: 'incident-service',
+    function: 'neris-reconciliation',
+    entry: 'src/services/incident-service/neris/reconciliation.ts',
+  },
   {
     service: 'reporting-service',
     function: 'losap-year-end',
@@ -281,6 +400,11 @@ export const LAMBDA_ENTRIES = [
     service: 'alerting-service',
     function: 'dispatch-detail',
     entry: 'src/services/alerting-service/dispatches/detail/handler.ts',
+  },
+  {
+    service: 'alerting-service',
+    function: 'dispatches-list-active',
+    entry: 'src/services/alerting-service/dispatches/list/handler.ts',
   },
   {
     service: 'alerting-service',
@@ -358,6 +482,24 @@ export const LAMBDA_ENTRIES = [
     entry: 'src/services/alerting-service/eligibility/memberUpdatedHandler.ts',
   },
   {
+    // GET /api/v1/alerting/home-locality: manual-entry locality choices.
+    service: 'alerting-service',
+    function: 'home-locality',
+    entry: 'src/services/alerting-service/prePlan/homeLocalityHandler.ts',
+  },
+  {
+    // inspections.preplan.updated -> PRE_PLAN_COPY (dispatch-detail pre-plan context).
+    service: 'alerting-service',
+    function: 'preplan-copy-consumer',
+    entry: 'src/services/alerting-service/prePlan/prePlanCopyHandler.ts',
+  },
+  {
+    // inspections.hydrant.updated -> HYDRANT_COPY (dispatch-detail nearest hydrants).
+    service: 'alerting-service',
+    function: 'hydrant-copy-consumer',
+    entry: 'src/services/alerting-service/prePlan/hydrantCopyHandler.ts',
+  },
+  {
     service: 'alerting-service',
     function: 'canary',
     entry: 'src/services/alerting-service/canary/handler.ts',
@@ -388,6 +530,26 @@ export const LAMBDA_ENTRIES = [
     entry: 'src/services/alerting-service/audit/deliveryBaselineHandler.ts',
   },
   {
+    service: 'alerting-service',
+    function: 'tone-ladder-advance',
+    entry: 'src/services/alerting-service/ladderControls/advanceHandler.ts',
+  },
+  {
+    service: 'alerting-service',
+    function: 'tone-ladder-halt',
+    entry: 'src/services/alerting-service/ladderControls/haltHandler.ts',
+  },
+  {
+    service: 'alerting-service',
+    function: 'mutual-aid-trigger',
+    entry: 'src/services/alerting-service/ladderControls/mutualAidTriggerHandler.ts',
+  },
+  {
+    service: 'alerting-service',
+    function: 'mutual-aid-acknowledge',
+    entry: 'src/services/alerting-service/ladderControls/mutualAidAcknowledgeHandler.ts',
+  },
+  {
     service: 'personnel-service',
     function: 'push-tokens-register',
     entry: 'src/services/personnel-service/pushTokens/registerToken.ts',
@@ -408,6 +570,117 @@ export const LAMBDA_ENTRIES = [
     entry: 'src/services/apparatus-service/ridingBoard/assignHandler.ts',
   },
   {
+    service: 'apparatus-service',
+    function: 'list',
+    entry: 'src/services/apparatus-service/listApparatus.ts',
+  },
+  {
+    service: 'apparatus-service',
+    function: 'create',
+    entry: 'src/services/apparatus-service/createApparatus.ts',
+  },
+  {
+    service: 'apparatus-service',
+    function: 'get',
+    entry: 'src/services/apparatus-service/getApparatus.ts',
+  },
+  {
+    service: 'apparatus-service',
+    function: 'service-status-update',
+    entry: 'src/services/apparatus-service/serviceStatusHandler.ts',
+  },
+  {
+    service: 'apparatus-service',
+    function: 'checklist-get',
+    entry: 'src/services/apparatus-service/getChecklistHandler.ts',
+  },
+  {
+    service: 'apparatus-service',
+    function: 'checks-submit',
+    entry: 'src/services/apparatus-service/postChecks.ts',
+  },
+  {
+    service: 'apparatus-service',
+    function: 'check-photo-attach',
+    entry: 'src/services/apparatus-service/attachCheckPhoto.ts',
+  },
+  {
+    service: 'apparatus-service',
+    function: 'defects-report',
+    entry: 'src/services/apparatus-service/reportDefectHandler.ts',
+  },
+  {
+    service: 'apparatus-service',
+    function: 'compliance',
+    entry: 'src/services/apparatus-service/getComplianceHandler.ts',
+  },
+  {
+    service: 'apparatus-service',
+    function: 'defects-list',
+    entry: 'src/services/apparatus-service/listOpenDefectsHandler.ts',
+  },
+  {
+    service: 'apparatus-service',
+    function: 'defects-resolve',
+    entry: 'src/services/apparatus-service/resolveDefectHandler.ts',
+  },
+  {
+    service: 'apparatus-service',
+    function: 'maintenance-get',
+    entry: 'src/services/apparatus-service/getMaintenance.ts',
+  },
+  {
+    service: 'apparatus-service',
+    function: 'maintenance-log',
+    entry: 'src/services/apparatus-service/postMaintenance.ts',
+  },
+  {
+    service: 'apparatus-service',
+    function: 'scba-log',
+    entry: 'src/services/apparatus-service/postScba.ts',
+  },
+  {
+    service: 'apparatus-service',
+    function: 'scba-testing-schedules',
+    entry: 'src/services/apparatus-service/getScbaTestingSchedules.ts',
+  },
+  {
+    service: 'apparatus-service',
+    function: 'tests-log',
+    entry: 'src/services/apparatus-service/postTestRecord.ts',
+  },
+  {
+    service: 'apparatus-service',
+    function: 'testing-schedules',
+    entry: 'src/services/apparatus-service/getTestingSchedules.ts',
+  },
+  {
+    // Daily scheduled scanners (no HTTP route) that publish apparatus.test.due.
+    service: 'apparatus-service',
+    function: 'test-due-scanner',
+    entry: 'src/services/apparatus-service/testDueScanner/handler.ts',
+  },
+  {
+    service: 'apparatus-service',
+    function: 'scba-test-due-scanner',
+    entry: 'src/services/apparatus-service/apparatusTestingScanner/handler.ts',
+  },
+  {
+    service: 'apparatus-service',
+    function: 'inventory-list',
+    entry: 'src/services/apparatus-service/inventory-list/handler.ts',
+  },
+  {
+    service: 'apparatus-service',
+    function: 'inventory-create',
+    entry: 'src/services/apparatus-service/inventory-create/handler.ts',
+  },
+  {
+    service: 'apparatus-service',
+    function: 'inventory-quantity',
+    entry: 'src/services/apparatus-service/inventory-quantity/handler.ts',
+  },
+  {
     service: 'alerting-service',
     function: 'outbox-drain',
     entry: 'src/services/alerting-service/outboxDrainHandler.ts',
@@ -426,6 +699,42 @@ export const LAMBDA_ENTRIES = [
     service: 'alerting-service',
     function: 'availability-changed-consumer',
     entry: 'src/services/alerting-service/eligibility/consumer.ts',
+  },
+  {
+    // platform.config.updated (ALERT_RULES) -> ALERT_RULES_COPY (design review M1).
+    service: 'alerting-service',
+    function: 'alert-rules-copy-consumer',
+    entry: 'src/services/alerting-service/alertRules/alertRulesCopyHandler.ts',
+  },
+  {
+    // platform.config.updated (CAD_INGRESS) -> CAD_INGRESS_COPY, read by both CAD ingress paths.
+    service: 'alerting-service',
+    function: 'cad-source-copy-consumer',
+    entry: 'src/services/alerting-service/cadIngress/sourceCopyHandler.ts',
+  },
+  {
+    // POST /api/v1/alerting/ingress/cad-webhook - signed JSON CAD webhook (own API, no Cognito).
+    service: 'alerting-service',
+    function: 'cad-webhook',
+    entry: 'src/services/alerting-service/cadIngress/webhookHandler.ts',
+  },
+  {
+    // SES receipt rule (S3 then async Lambda action) - inbound CAD dispatch email.
+    service: 'alerting-service',
+    function: 'cad-email',
+    entry: 'src/services/alerting-service/cadIngress/emailHandler.ts',
+  },
+  {
+    // Async-invoked by the CAD ingress Lambdas: the non-escalating UPDATE push to a roster.
+    service: 'alerting-service',
+    function: 'cad-update-notifier',
+    entry: 'src/services/alerting-service/cadIngress/updateNotifierHandler.ts',
+  },
+  {
+    // Every 5 minutes: CAD updates still owing their UPDATE push are re-driven and alarmed.
+    service: 'alerting-service',
+    function: 'cad-update-sweep',
+    entry: 'src/services/alerting-service/cadIngress/updateSweepHandler.ts',
   },
   {
     service: 'personnel-service',
@@ -459,6 +768,11 @@ export const LAMBDA_ENTRIES = [
   },
   {
     service: 'reporting-service',
+    function: 'neris-compliance',
+    entry: 'src/services/reporting-service/nerisCompliance/handler.ts',
+  },
+  {
+    service: 'reporting-service',
     function: 'iso',
     entry: 'src/services/reporting-service/iso/handler.ts',
   },
@@ -471,5 +785,253 @@ export const LAMBDA_ENTRIES = [
     service: 'reporting-service',
     function: 'export-worker',
     entry: 'src/services/reporting-service/export/worker.ts',
+  },
+  {
+    service: 'inventory-service',
+    function: 'equipment-list',
+    entry: 'src/services/inventory-service/equipment/list/handler.ts',
+  },
+  {
+    service: 'inventory-service',
+    function: 'equipment-get',
+    entry: 'src/services/inventory-service/equipment/get/handler.ts',
+  },
+  {
+    service: 'inventory-service',
+    function: 'equipment-create',
+    entry: 'src/services/inventory-service/equipment/create/handler.ts',
+  },
+  {
+    service: 'inventory-service',
+    function: 'equipment-assignment',
+    entry: 'src/services/inventory-service/equipment/assignment/handler.ts',
+  },
+  {
+    service: 'inventory-service',
+    function: 'equipment-location',
+    entry: 'src/services/inventory-service/equipment/location/handler.ts',
+  },
+  {
+    service: 'inventory-service',
+    function: 'equipment-lifecycle',
+    entry: 'src/services/inventory-service/lifecycle/handler.ts',
+  },
+  {
+    service: 'inventory-service',
+    function: 'consumables-list',
+    entry: 'src/services/inventory-service/consumables/list/handler.ts',
+  },
+  {
+    service: 'inventory-service',
+    function: 'consumable-reorder-scanner',
+    entry: 'src/services/inventory-service/consumableReorderScanner/handler.ts',
+  },
+  {
+    service: 'inventory-service',
+    function: 'ppe-get',
+    entry: 'src/services/inventory-service/ppe/get/handler.ts',
+  },
+  {
+    service: 'inventory-service',
+    function: 'ppe-issue',
+    entry: 'src/services/inventory-service/ppe/issue/handler.ts',
+  },
+  {
+    service: 'inventory-service',
+    function: 'ppe-expiry-scanner',
+    entry: 'src/services/inventory-service/ppeExpiryScanner/handler.ts',
+  },
+  {
+    service: 'inspections-service',
+    function: 'occupancies-list',
+    entry: 'src/services/inspections-service/occupancy/listHandler.ts',
+  },
+  {
+    service: 'inspections-service',
+    function: 'occupancies-create',
+    entry: 'src/services/inspections-service/occupancy/createHandler.ts',
+  },
+  {
+    service: 'inspections-service',
+    function: 'occupancies-get',
+    entry: 'src/services/inspections-service/occupancy/getHandler.ts',
+  },
+  {
+    service: 'inspections-service',
+    function: 'occupancies-update',
+    entry: 'src/services/inspections-service/occupancy/updateHandler.ts',
+  },
+  {
+    service: 'inspections-service',
+    function: 'pre-plan-get',
+    entry: 'src/services/inspections-service/getPrePlanHandler.ts',
+  },
+  {
+    service: 'inspections-service',
+    function: 'pre-plan-put',
+    entry: 'src/services/inspections-service/putPrePlanHandler.ts',
+  },
+  {
+    service: 'inspections-service',
+    function: 'hydrants-list',
+    entry: 'src/services/inspections-service/hydrant/listHydrantsHandler.ts',
+  },
+  {
+    service: 'inspections-service',
+    function: 'hydrants-create',
+    entry: 'src/services/inspections-service/hydrant/createHydrantHandler.ts',
+  },
+  {
+    service: 'inspections-service',
+    function: 'hydrants-update',
+    entry: 'src/services/inspections-service/hydrant/updateHydrantHandler.ts',
+  },
+  {
+    service: 'inspections-service',
+    function: 'hydrants-archive',
+    entry: 'src/services/inspections-service/archive/archiveHydrantHandler.ts',
+  },
+  {
+    service: 'inspections-service',
+    function: 'occupancies-archive',
+    entry: 'src/services/inspections-service/archive/archiveOccupancyHandler.ts',
+  },
+  {
+    // Not a route: invoked by hand after deploy and after an alerting address-normalizer
+    // change (docs/runbooks/alert-context-replay.md).
+    service: 'inspections-service',
+    function: 'alert-context-replay',
+    entry: 'src/services/inspections-service/replay/alertContextReplayHandler.ts',
+  },
+  {
+    service: 'inspections-service',
+    function: 'inspections-list',
+    entry: 'src/services/inspections-service/listInspections/handler.ts',
+  },
+  {
+    service: 'inspections-service',
+    function: 'inspections-record',
+    entry: 'src/services/inspections-service/recordInspection/handler.ts',
+  },
+  {
+    service: 'inspections-service',
+    function: 'map',
+    entry: 'src/services/inspections-service/map/handler.ts',
+  },
+  {
+    service: 'inspections-service',
+    function: 'field-capture',
+    entry: 'src/services/inspections-service/fieldCapture/handler.ts',
+  },
+  {
+    service: 'notification-service',
+    function: 'inbox',
+    entry: 'src/services/notification-service/inbox/handler.ts',
+  },
+  {
+    service: 'notification-service',
+    function: 'preferences',
+    entry: 'src/services/notification-service/preferences/handler.ts',
+  },
+  {
+    service: 'notification-service',
+    function: 'cert-expiry-consumer',
+    entry: 'src/services/notification-service/events/certExpiryConsumer.ts',
+  },
+  {
+    service: 'notification-service',
+    function: 'digest-job',
+    entry: 'src/services/notification-service/digest/digestJob.ts',
+  },
+  {
+    service: 'notification-service',
+    function: 'apparatus-test-due-consumer',
+    entry: 'src/services/notification-service/events/apparatusTestDueConsumer.ts',
+  },
+  {
+    service: 'notification-service',
+    function: 'apparatus-defect-consumer',
+    entry: 'src/services/notification-service/events/apparatusDefectConsumer.ts',
+  },
+  {
+    service: 'notification-service',
+    function: 'inventory-reorder-consumer',
+    entry: 'src/services/notification-service/events/inventoryReorderDueConsumer.ts',
+  },
+  {
+    service: 'notification-service',
+    function: 'ppe-expiry-consumer',
+    entry: 'src/services/notification-service/events/ppeExpiryConsumer.ts',
+  },
+  {
+    service: 'notification-service',
+    function: 'neris-rejected-consumer',
+    entry: 'src/services/notification-service/events/nerisReportConsumer.ts',
+  },
+  {
+    service: 'notification-service',
+    function: 'neris-no-activity-consumer',
+    entry: 'src/services/notification-service/events/nerisNoActivityConsumer.ts',
+  },
+  {
+    service: 'notification-service',
+    function: 'push-worker',
+    entry: 'src/services/notification-service/push/worker.ts',
+  },
+  {
+    service: 'notification-service',
+    function: 'apparatus-status-consumer',
+    entry: 'src/services/notification-service/events/apparatusStatusConsumer.ts',
+  },
+  // One health Lambda per service serves GET health/liveness and health/readiness.
+  {
+    service: 'alerting-service',
+    function: 'health',
+    entry: 'src/services/alerting-service/health/handler.ts',
+  },
+  {
+    service: 'platform-service',
+    function: 'health',
+    entry: 'src/services/platform-service/health/handler.ts',
+  },
+  {
+    service: 'personnel-service',
+    function: 'health',
+    entry: 'src/services/personnel-service/health/handler.ts',
+  },
+  {
+    service: 'apparatus-service',
+    function: 'health',
+    entry: 'src/services/apparatus-service/health/handler.ts',
+  },
+  {
+    service: 'incident-service',
+    function: 'health',
+    entry: 'src/services/incident-service/health/handler.ts',
+  },
+  {
+    service: 'training-service',
+    function: 'health',
+    entry: 'src/services/training-service/health/handler.ts',
+  },
+  {
+    service: 'reporting-service',
+    function: 'health',
+    entry: 'src/services/reporting-service/health/handler.ts',
+  },
+  {
+    service: 'inspections-service',
+    function: 'health',
+    entry: 'src/services/inspections-service/health/handler.ts',
+  },
+  {
+    service: 'inventory-service',
+    function: 'health',
+    entry: 'src/services/inventory-service/health/handler.ts',
+  },
+  {
+    service: 'notification-service',
+    function: 'health',
+    entry: 'src/services/notification-service/health/handler.ts',
   },
 ];

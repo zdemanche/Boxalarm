@@ -13,36 +13,33 @@ import { assertNoDelimiter, toVerifiedDeptId, type VerifiedDeptId } from '@boxal
 import { emitOutcomeMetric } from '@boxalarm/metrics';
 import { createDynamoClient, readAlertingConfig } from '../../eligibility/dynamoClient.js';
 import { logError } from '../logger.js';
-import { getDispatchDetail, getPrePlanCopy, type PrePlanCopyItem } from './repository.js';
+import { toMutualAidView, type MutualAidView } from '../../ladderControls/shared.js';
+import { getDispatchDetail, getDispatchUpdates, getMutualAidEvent } from './repository.js';
 import { buildMapLink } from './mapLink.js';
 import { dataUnavailableProblem } from './problemDetails.js';
+import { PRE_PLAN_UNAVAILABLE, fetchDispatchContext } from './prePlanContext.js';
 
 const METRICS_NAMESPACE = 'Boxalarm/Alerting';
 
-// TODO(E1-S1/architecture): DISPATCH_ALERT.prePlanRefs holds pre-plan IDs (e.g. "PP-0044",
-// architecture.md:637) but PRE_PLAN_COPY.sk is keyed by occupancyId (e.g. "OCCUPANCY#OCC-0231",
-// architecture.md:734) — two different identifier spaces. alerting-service's data model carries
-// no occupancyId anywhere, so there is currently no correct value to pass here; this lookup is a
-// documented no-op (always misses, AC2's error boundary renders prePlan: null) until either
-// DISPATCH_ALERT gains an occupancyId (an ingress/architecture change owned by another story) or
-// PRE_PLAN_COPY grows a prePlanId-keyed access path. Do not "fix" by treating prePlanRef as an
-// occupancyId — that reintroduces the silent-miss bug this comment documents.
-async function fetchPrePlan(
+const UNAVAILABLE = Symbol('unavailable');
+
+// The officer ladder controls (F1.13) need to know whether mutual aid is already requested
+// or acknowledged. Like the pre-plan, this is enrichment: a failed read must not take the
+// alert's core content (address, narrative) down with it, and must not be reported as "not
+// requested" either.
+async function fetchMutualAid(
   client: DynamoDBDocumentClient,
   tableName: string,
   deptId: VerifiedDeptId,
-  prePlanRef: string | undefined,
+  dispatchId: string,
   traceId: string,
-): Promise<PrePlanCopyItem | null> {
-  if (!prePlanRef) {
-    return null;
-  }
+): Promise<MutualAidView | null | typeof UNAVAILABLE> {
   try {
-    const item = await getPrePlanCopy(client, tableName, deptId, prePlanRef);
-    return item ?? null;
+    const item = await getMutualAidEvent(client, tableName, deptId, dispatchId);
+    return item ? toMutualAidView(item) : null;
   } catch (error) {
-    logError('dispatches.detail.preplan_read_failed', error, { traceId, prePlanRef });
-    return null;
+    logError('dispatches.detail.mutual_aid_read_failed', error, { traceId, dispatchId });
+    return UNAVAILABLE;
   }
 }
 
@@ -73,13 +70,15 @@ async function handleGetAlertDetail(
       return notFoundProblem(traceId, `No dispatch alert found for dispatchId "${dispatchId}"`);
     }
 
-    const prePlan = await fetchPrePlan(
-      doc,
-      config.tableName,
-      deptId,
-      item.prePlanRefs?.[0],
-      traceId,
-    );
+    const [context, mutualAid, updates] = await Promise.all([
+      fetchDispatchContext(doc, config.tableName, deptId, item, traceId),
+      fetchMutualAid(doc, config.tableName, deptId, dispatchId, traceId),
+      // Enrichment: a failed read omits the history and says so, never fails the detail.
+      getDispatchUpdates(doc, config.tableName, deptId, dispatchId).catch((error: unknown) => {
+        logError('dispatches.detail.updates_read_failed', error, { traceId, dispatchId });
+        return UNAVAILABLE;
+      }),
+    ]);
 
     emitOutcomeMetric(METRICS_NAMESPACE, 'AlertDetailViewed');
     return {
@@ -90,7 +89,10 @@ async function handleGetAlertDetail(
         incidentType: item.incidentType,
         address: item.address,
         crossStreets: item.crossStreets,
-        mapLink: item.mapLink ?? buildMapLink(item),
+        // A RAW (VERIFY) CAD dispatch has no real address: a map search for the placeholder
+        // "SEE DISPATCH TEXT" would send a crew nowhere (chain review M1).
+        mapLink: item.verifyRequired === true ? null : (item.mapLink ?? buildMapLink(item)),
+        ...(item.verifyRequired === true ? { verifyRequired: true } : {}),
         narrative: item.narrative,
         eligibleMemberCount: item.eligibleMemberCount ?? null,
         fanOutStartedAt: item.fanOutStartedAt ?? null,
@@ -99,7 +101,22 @@ async function handleGetAlertDetail(
           currentToneSequence: item.currentToneSequence ?? 1,
           nextToneAt: item.nextToneAt ?? null,
         },
-        prePlan,
+        // null = not requested; the key is omitted when the read failed, so an officer's
+        // screen shows "unknown" rather than "not requested" (see fetchMutualAid).
+        ...(mutualAid === UNAVAILABLE ? {} : { mutualAid }),
+        // null = no pre-plan matched; on a failed lookup the key is omitted and
+        // prePlanUnavailable says so (the mutualAid precedent above), so the crew reads
+        // "unavailable", never "no pre-plan on file".
+        ...(context.prePlan === PRE_PLAN_UNAVAILABLE
+          ? { prePlanUnavailable: true }
+          : { prePlan: context.prePlan }),
+        // Nearest hydrants stand on their own: shown with or without a pre-plan match
+        // whenever there is a reference point (matched building or dispatch coordinates).
+        ...(context.nearestHydrants ? { nearestHydrants: context.nearestHydrants } : {}),
+        ...(context.hydrantsUnavailable ? { nearestHydrantsUnavailable: true } : {}),
+        ...(context.hydrantsIncomplete ? { nearestHydrantsIncomplete: true } : {}),
+        // CAD updates to this call (decision 2026-09-30-cad-dispatch-updates.md), oldest first.
+        ...(updates === UNAVAILABLE ? { updatesUnavailable: true } : { updates }),
       }),
     };
   } catch (error) {
@@ -125,9 +142,9 @@ export function createHandler(
   return withAuthorization(
     (event, principal) => handleGetAlertDetail(event, principal, deps.docClient),
     {
-      actionType: 'Action',
+      actionType: 'Boxalarm::Action',
       actionId: 'ViewAlertDetail',
-      resourceType: 'AlertingDispatches',
+      resourceType: 'Boxalarm::Department',
       resourceId: (event) =>
         toVerifiedDeptId({ deptId: event.requestContext.authorizer.lambda?.deptId ?? '' }),
       ...(deps.authzClient ? { client: deps.authzClient } : {}),

@@ -91,15 +91,59 @@ describe('members/updateStatus handler (entrypoint test)', () => {
     );
   });
 
-  it('rejects an illegal transition out of the terminal RETIRED status with 409', async () => {
+  it('rejects RETIRED -> LOA with 409: a retired member is only ever reinstated to ACTIVE', async () => {
     getMemberMock.mockResolvedValueOnce({ memberId: 'm1', status: 'RETIRED' });
     const result = await handler(
-      buildEvent('m1', JSON.stringify({ status: 'ACTIVE' }), 'ADMIN'),
+      buildEvent('m1', JSON.stringify({ status: 'LOA' }), 'ADMIN'),
       {} as never,
       () => undefined,
     );
     expect(result).toMatchObject({ statusCode: 409 });
     expect(updateMemberStatusMock).not.toHaveBeenCalled();
+  });
+
+  // Post-merge MAJOR-2: a mis-set RETIRED had no way back.
+  it.each(['CHIEF', 'ADMIN'])('lets a %s reinstate a RETIRED member to ACTIVE', async (group) => {
+    getMemberMock.mockResolvedValueOnce({ memberId: 'm1', status: 'RETIRED', roles: ['MEMBER'] });
+    updateMemberStatusMock.mockResolvedValueOnce({ updatedAt: 1, eventId: 'evt-1' });
+    const result = await handler(
+      buildEvent('m1', JSON.stringify({ status: 'ACTIVE' }), group),
+      {} as never,
+      () => undefined,
+    );
+    expect(result).toMatchObject({ statusCode: 200 });
+    expect(updateMemberStatusMock).toHaveBeenCalledWith(
+      'boxalarm-dev-platform',
+      expect.objectContaining({ sub: 'actor-1' }),
+      'm1',
+      'RETIRED',
+      'ACTIVE',
+      'actor-1',
+    );
+  });
+
+  it('refuses an OFFICER reinstating a RETIRED member with 403', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    getMemberMock.mockResolvedValueOnce({ memberId: 'm1', status: 'RETIRED', roles: ['MEMBER'] });
+    const result = await handler(
+      buildEvent('m1', JSON.stringify({ status: 'ACTIVE' }), 'OFFICER'),
+      {} as never,
+      () => undefined,
+    );
+    expect(result).toMatchObject({ statusCode: 403 });
+    expect(updateMemberStatusMock).not.toHaveBeenCalled();
+    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('Reinstatement'));
+    errorSpy.mockRestore();
+  });
+
+  it('rejects PROBATIONARY with 400: it is set only at creation', async () => {
+    const result = await handler(
+      buildEvent('m1', JSON.stringify({ status: 'PROBATIONARY' }), 'ADMIN'),
+      {} as never,
+      () => undefined,
+    );
+    expect(result).toMatchObject({ statusCode: 400 });
+    expect(getMemberMock).not.toHaveBeenCalled();
   });
 
   it('rejects an absent status field with 400', async () => {
@@ -168,5 +212,69 @@ describe('members/updateStatus handler (entrypoint test)', () => {
       () => undefined,
     );
     expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('MemberStatusUpdated'));
+  });
+
+  // Review M5: one officer password could take the chief and admins out of paging.
+  describe('protected targets (M5)', () => {
+    it.each(['CHIEF', 'ADMIN'])(
+      'refuses an OFFICER changing a %s member and writes nothing',
+      async (role) => {
+        vi.spyOn(console, 'error').mockImplementation(() => undefined);
+        getMemberMock.mockResolvedValueOnce({
+          memberId: 'chief-1',
+          status: 'ACTIVE',
+          roles: ['MEMBER', role],
+        });
+        const result = await handler(
+          buildEvent('chief-1', JSON.stringify({ status: 'LOA' }), 'MEMBER OFFICER'),
+          {} as never,
+          () => undefined,
+        );
+        expect(result).toMatchObject({ statusCode: 403 });
+        expect(updateMemberStatusMock).not.toHaveBeenCalled();
+      },
+    );
+
+    it.each(['CHIEF', 'ADMIN'])('lets a %s change a CHIEF member', async (group) => {
+      getMemberMock.mockResolvedValueOnce({
+        memberId: 'chief-1',
+        status: 'ACTIVE',
+        roles: ['MEMBER', 'CHIEF'],
+      });
+      updateMemberStatusMock.mockResolvedValueOnce({ updatedAt: 1, eventId: 'evt-1' });
+      const result = await handler(
+        buildEvent('chief-1', JSON.stringify({ status: 'RETIRED' }), group),
+        {} as never,
+        () => undefined,
+      );
+      expect(result).toMatchObject({ statusCode: 200 });
+    });
+
+    it('still lets an OFFICER change an ordinary member', async () => {
+      getMemberMock.mockResolvedValueOnce({ memberId: 'm1', status: 'ACTIVE', roles: ['MEMBER'] });
+      updateMemberStatusMock.mockResolvedValueOnce({ updatedAt: 1, eventId: 'evt-1' });
+      const result = await handler(
+        buildEvent('m1', JSON.stringify({ status: 'LOA' }), 'OFFICER'),
+        {} as never,
+        () => undefined,
+      );
+      expect(result).toMatchObject({ statusCode: 200 });
+    });
+
+    it('emits the NewStatus metric the chief alarm watches on an LOA change', async () => {
+      const logSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+      getMemberMock.mockResolvedValueOnce({ memberId: 'm1', status: 'ACTIVE', roles: ['MEMBER'] });
+      updateMemberStatusMock.mockResolvedValueOnce({ updatedAt: 1, eventId: 'evt-1' });
+      await handler(
+        buildEvent('m1', JSON.stringify({ status: 'LOA' }), 'OFFICER'),
+        {} as never,
+        () => undefined,
+      );
+      const emf = logSpy.mock.calls
+        .map(([line]) => String(line))
+        .find((line) => line.includes('MemberStatusUpdated'));
+      expect(JSON.parse(emf ?? '{}')).toMatchObject({ NewStatus: 'LOA', MemberStatusUpdated: 1 });
+      logSpy.mockRestore();
+    });
   });
 });

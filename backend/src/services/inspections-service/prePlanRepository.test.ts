@@ -17,6 +17,17 @@ function fakeDoc(send: (command: unknown) => Promise<unknown>): DynamoDBDocument
   return { send } as unknown as DynamoDBDocumentClient;
 }
 
+const OCCUPANCY = {
+  pk: 'DEPT#NICHOLS#OCCUPANCY#OCC-1',
+  sk: 'METADATA',
+  occupancyId: 'OCC-1',
+  address: '12 Oak Street',
+  normalizedAddress: '12 OAK STREET',
+  occupancyType: 'MULTI_FAMILY',
+  latitude: 41.2417,
+  longitude: -73.2004,
+};
+
 const INPUT = {
   siteDiagramFilename: 'diagram.pdf',
   attachmentFilenames: ['photo1.jpg'],
@@ -52,11 +63,12 @@ describe('putPrePlan', () => {
     const send = vi
       .fn()
       .mockResolvedValueOnce({ Items: [] }) // getPrePlan lookup for an existing prePlanId
+      .mockResolvedValueOnce({ Item: OCCUPANCY }) // occupancy address/location for the event
       .mockResolvedValueOnce({}); // TransactWriteCommand
     const item = await putPrePlan(fakeDoc(send), TABLE, DEPT_ID, 'OCC-1', INPUT);
 
-    expect(send).toHaveBeenCalledTimes(2);
-    const transactCommand = send.mock.calls[1]?.[0] as {
+    expect(send).toHaveBeenCalledTimes(3);
+    const transactCommand = send.mock.calls[2]?.[0] as {
       input: { TransactItems: unknown[] };
     };
     const transactItems = transactCommand.input.TransactItems as Array<Record<string, unknown>>;
@@ -68,9 +80,16 @@ describe('putPrePlan', () => {
     expect(outboxPut.Item.entityType).toBe('OUTBOX_ENTRY');
     expect(outboxPut.Item.eventType).toBe('inspections.preplan.updated');
     expect(outboxPut.Item.pk).toBe('DEPT#NICHOLS#OUTBOX');
-    expect(outboxPut.Item.payload).toMatchObject({
+    expect(outboxPut.Item.payload).toEqual({
       deptId: DEPT_ID,
       occupancyId: 'OCC-1',
+      prePlanId: item.prePlanId,
+      summary: 'Multi family — 12 Oak Street',
+      occupancyType: 'MULTI_FAMILY',
+      address: '12 Oak Street',
+      normalizedAddress: '12 OAK STREET',
+      latitude: 41.2417,
+      longitude: -73.2004,
       hazards: INPUT.hazards,
       utilityShutoffs: INPUT.utilityShutoffs,
     });
@@ -82,9 +101,13 @@ describe('putPrePlan', () => {
   });
 
   it('carries attribute_not_exists(sk) on the PRE_PLAN Put when creating (concurrent-create guard)', async () => {
-    const send = vi.fn().mockResolvedValueOnce({ Items: [] }).mockResolvedValueOnce({});
+    const send = vi
+      .fn()
+      .mockResolvedValueOnce({ Items: [] })
+      .mockResolvedValueOnce({ Item: OCCUPANCY })
+      .mockResolvedValueOnce({});
     await putPrePlan(fakeDoc(send), TABLE, DEPT_ID, 'OCC-1', INPUT);
-    const transactCommand = send.mock.calls[1]?.[0] as { input: { TransactItems: unknown[] } };
+    const transactCommand = send.mock.calls[2]?.[0] as { input: { TransactItems: unknown[] } };
     const transactItems = transactCommand.input.TransactItems as Array<Record<string, unknown>>;
     const prePlanPut = transactItems[1]?.Put as { ConditionExpression?: string };
     expect(prePlanPut.ConditionExpression).toBe('attribute_not_exists(sk)');
@@ -94,9 +117,10 @@ describe('putPrePlan', () => {
     const send = vi
       .fn()
       .mockResolvedValueOnce({ Items: [{ prePlanId: 'PP-EXISTING' }] })
+      .mockResolvedValueOnce({ Item: OCCUPANCY })
       .mockResolvedValueOnce({});
     await putPrePlan(fakeDoc(send), TABLE, DEPT_ID, 'OCC-1', INPUT);
-    const transactCommand = send.mock.calls[1]?.[0] as { input: { TransactItems: unknown[] } };
+    const transactCommand = send.mock.calls[2]?.[0] as { input: { TransactItems: unknown[] } };
     const transactItems = transactCommand.input.TransactItems as Array<Record<string, unknown>>;
     const prePlanPut = transactItems[1]?.Put as { ConditionExpression?: string };
     expect(prePlanPut.ConditionExpression).toBeUndefined();
@@ -106,6 +130,7 @@ describe('putPrePlan', () => {
     const send = vi
       .fn()
       .mockResolvedValueOnce({ Items: [] })
+      .mockResolvedValueOnce({ Item: OCCUPANCY })
       .mockRejectedValueOnce(
         new TransactionCanceledException({
           message: 'Transaction cancelled',
@@ -126,6 +151,7 @@ describe('putPrePlan', () => {
     const send = vi
       .fn()
       .mockResolvedValueOnce({ Items: [{ prePlanId: 'PP-EXISTING' }] })
+      .mockResolvedValueOnce({ Item: OCCUPANCY })
       .mockResolvedValueOnce({});
     const item = await putPrePlan(fakeDoc(send), TABLE, DEPT_ID, 'OCC-1', INPUT);
     expect(item.prePlanId).toBe('PP-EXISTING');
@@ -135,6 +161,7 @@ describe('putPrePlan', () => {
     const send = vi
       .fn()
       .mockResolvedValueOnce({ Items: [] })
+      .mockResolvedValueOnce({ Item: OCCUPANCY })
       .mockRejectedValueOnce(
         new TransactionCanceledException({
           message: 'Transaction cancelled',
@@ -155,6 +182,7 @@ describe('putPrePlan', () => {
     const send = vi
       .fn()
       .mockResolvedValueOnce({ Items: [] })
+      .mockResolvedValueOnce({ Item: OCCUPANCY })
       .mockRejectedValueOnce(new Error('ProvisionedThroughputExceededException'));
     await expect(putPrePlan(fakeDoc(send), TABLE, DEPT_ID, 'OCC-1', INPUT)).rejects.toThrow(
       PrePlanDependencyError,
@@ -162,7 +190,11 @@ describe('putPrePlan', () => {
   });
 
   it('defaults absent hazards/utilityShutoffs/attachments to empty lists', async () => {
-    const send = vi.fn().mockResolvedValueOnce({ Items: [] }).mockResolvedValueOnce({});
+    const send = vi
+      .fn()
+      .mockResolvedValueOnce({ Items: [] })
+      .mockResolvedValueOnce({ Item: OCCUPANCY })
+      .mockResolvedValueOnce({});
     const item = await putPrePlan(fakeDoc(send), TABLE, DEPT_ID, 'OCC-1', {
       attachmentFilenames: [],
       utilityShutoffs: [],
@@ -172,5 +204,41 @@ describe('putPrePlan', () => {
     expect(item.utilityShutoffs).toEqual([]);
     expect(item.attachmentS3Keys).toEqual([]);
     expect(item.siteDiagramS3Key).toBeNull();
+  });
+
+  it('omits coordinates from the event when the occupancy has none (address match only)', async () => {
+    const noCoords: Record<string, unknown> = { ...OCCUPANCY };
+    delete noCoords.latitude;
+    delete noCoords.longitude;
+    const send = vi
+      .fn()
+      .mockResolvedValueOnce({ Items: [] })
+      .mockResolvedValueOnce({ Item: noCoords })
+      .mockResolvedValueOnce({});
+    await putPrePlan(fakeDoc(send), TABLE, DEPT_ID, 'OCC-1', INPUT);
+    const transactCommand = send.mock.calls[2]?.[0] as { input: { TransactItems: unknown[] } };
+    const outboxPut = (transactCommand.input.TransactItems as Array<Record<string, unknown>>)[2]
+      ?.Put as { Item: { payload: Record<string, unknown> } };
+    expect(outboxPut.Item.payload).not.toHaveProperty('latitude');
+    expect(outboxPut.Item.payload).not.toHaveProperty('longitude');
+    expect(outboxPut.Item.payload.address).toBe('12 Oak Street');
+  });
+
+  it('throws OccupancyNotFoundError before writing when the occupancy does not exist', async () => {
+    const send = vi.fn().mockResolvedValueOnce({ Items: [] }).mockResolvedValueOnce({});
+    await expect(putPrePlan(fakeDoc(send), TABLE, DEPT_ID, 'OCC-missing', INPUT)).rejects.toThrow(
+      OccupancyNotFoundError,
+    );
+    expect(send).toHaveBeenCalledTimes(2);
+  });
+
+  it('wraps an occupancy read failure in PrePlanDependencyError (503)', async () => {
+    const send = vi
+      .fn()
+      .mockResolvedValueOnce({ Items: [] })
+      .mockRejectedValueOnce(new Error('ProvisionedThroughputExceededException'));
+    await expect(putPrePlan(fakeDoc(send), TABLE, DEPT_ID, 'OCC-1', INPUT)).rejects.toThrow(
+      PrePlanDependencyError,
+    );
   });
 });

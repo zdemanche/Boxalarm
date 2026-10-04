@@ -3,10 +3,16 @@ import * as pulumi from "@pulumi/pulumi";
 import { ServiceLogGroup } from "../../components/observability/service-log-group";
 import { HttpApi } from "../../components/api/http-api";
 
+const routeKeys: string[] = [];
+
 beforeEach(() => {
+  routeKeys.length = 0;
   pulumi.runtime.setMocks({
     newResource: (args: pulumi.runtime.MockResourceArgs) => {
       const state: Record<string, unknown> = { ...args.inputs };
+      if (args.type === "aws:apigatewayv2/route:Route") {
+        routeKeys.push(args.inputs.routeKey as string);
+      }
       if (args.type === "aws:iam/role:Role") {
         state.arn = `arn:aws:iam::123456789012:role/${args.inputs.name ?? args.name}`;
       }
@@ -46,6 +52,8 @@ describe("Config", () => {
     const httpApi = new HttpApi("test-config-http-api", {
       env: "dev",
       userPoolId: pulumi.output("pool-1"),
+      platformTableName: "platform-table",
+      platformTableArn: "arn:aws:dynamodb:us-east-1:123456789012:table/platform",
       allowedClientIds: [pulumi.output("client-1")],
       platformLogGroup: logGroup,
     });
@@ -74,6 +82,19 @@ describe("Config", () => {
     expect(policyJson).not.toContain("TransactWriteItems");
   });
 
+  it("routes /platform/config/{configType}, the path parameter the handler reads", async () => {
+    // config/handler.ts reads event.pathParameters.configType and 400s without it; the
+    // web client calls platform/config/{configType}. A bare /platform/config route 404ed
+    // the client and would 400 every request that did reach the handler.
+    const cfg = await build();
+    await resolve(cfg.lambda.function.arn);
+    await new Promise((r) => setImmediate(r));
+    expect(routeKeys.filter((k) => k.includes("/platform/config")).sort()).toEqual([
+      "GET /api/v1/platform/config/{configType}",
+      "PUT /api/v1/platform/config/{configType}",
+    ]);
+  });
+
   it("wires VERIFIED_PERMISSIONS_POLICY_STORE_ID into the config Lambda's environment", async () => {
     const cfg = await build();
     const env = await resolve(cfg.lambda.function.environment);
@@ -89,6 +110,8 @@ describe("Config", () => {
     const httpApi = new HttpApi("test-config-http-api-bad", {
       env: "dev",
       userPoolId: pulumi.output("pool-1"),
+      platformTableName: "platform-table",
+      platformTableArn: "arn:aws:dynamodb:us-east-1:123456789012:table/platform",
       allowedClientIds: [pulumi.output("client-1")],
       platformLogGroup: logGroup,
     });

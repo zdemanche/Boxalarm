@@ -14,8 +14,8 @@ const AuthCallbackPage = lazy(() =>
 const LandingPage = lazy(() =>
   import('./pages/LandingPage').then((mod) => ({ default: mod.LandingPage })),
 );
-const PlaceholderPage = lazy(() =>
-  import('./pages/PlaceholderPage').then((mod) => ({ default: mod.PlaceholderPage })),
+const ReportingPage = lazy(() =>
+  import('./features/reporting/ReportingPage').then((mod) => ({ default: mod.ReportingPage })),
 );
 const ApparatusListPage = lazy(() =>
   import('./features/apparatus/ApparatusListPage').then((mod) => ({
@@ -59,6 +59,11 @@ const CertificationsPage = lazy(() =>
     default: mod.CertificationsPage,
   })),
 );
+const TrainingHoursPage = lazy(() =>
+  import('./features/training/TrainingHoursPage').then((mod) => ({
+    default: mod.TrainingHoursPage,
+  })),
+);
 const TrainingEventsPage = lazy(() =>
   import('./features/training/TrainingEventsPage').then((mod) => ({
     default: mod.TrainingEventsPage,
@@ -96,6 +101,9 @@ const MapPage = lazy(() =>
 const SchedulePage = lazy(() =>
   import('./features/schedule/SchedulePage').then((mod) => ({ default: mod.SchedulePage })),
 );
+const CadSourcesPage = lazy(() =>
+  import('./features/platform/CadSourcesPage').then((mod) => ({ default: mod.CadSourcesPage })),
+);
 const LosapSettingsPage = lazy(() =>
   import('./features/losap/LosapSettingsPage').then((mod) => ({
     default: mod.LosapSettingsPage,
@@ -109,6 +117,18 @@ const IncidentsListPage = lazy(() =>
 const IncidentDetailPage = lazy(() =>
   import('./features/incidents/IncidentDetailPage').then((mod) => ({
     default: mod.IncidentDetailPage,
+  })),
+);
+
+const AvailabilityPage = lazy(() =>
+  import('./features/availability/AvailabilityPage').then((mod) => ({
+    default: mod.AvailabilityPage,
+  })),
+);
+
+const NotificationsPage = lazy(() =>
+  import('./features/notifications/NotificationsPage').then((mod) => ({
+    default: mod.NotificationsPage,
   })),
 );
 
@@ -147,10 +167,6 @@ function roleGuarded(element: ReactNode) {
   return <RequireRole>{element}</RequireRole>;
 }
 
-function placeholder(title: string) {
-  return roleGuarded(<PlaceholderPage title={title} />);
-}
-
 export function App() {
   return (
     <ConfigErrorBoundary>
@@ -182,6 +198,7 @@ export function App() {
                   <Route path="personnel/:id" element={roleGuarded(<MemberDetailPage />)} />
                   <Route path="certifications" element={roleGuarded(<CertificationsPage />)} />
                   <Route path="training/events" element={roleGuarded(<TrainingEventsPage />)} />
+                  <Route path="training/hours" element={roleGuarded(<TrainingHoursPage />)} />
                   <Route path="apparatus" element={roleGuarded(<ApparatusListPage />)} />
                   <Route path="apparatus/compliance" element={roleGuarded(<CompliancePage />)} />
                   <Route path="apparatus/:id" element={roleGuarded(<ApparatusDetailPage />)} />
@@ -199,10 +216,13 @@ export function App() {
                   <Route path="inspections/map" element={roleGuarded(<MapPage />)} />
                   <Route path="inspections" element={roleGuarded(<InspectionsPage />)} />
                   <Route path="schedule" element={roleGuarded(<SchedulePage />)} />
-                  <Route path="reporting" element={placeholder('Reporting')} />
+                  <Route path="reporting" element={roleGuarded(<ReportingPage />)} />
                   <Route path="settings" element={roleGuarded(<SettingsPage />)} />
                   <Route path="settings/losap" element={roleGuarded(<LosapSettingsPage />)} />
+                  <Route path="settings/cad-sources" element={roleGuarded(<CadSourcesPage />)} />
                   <Route path="audit-log" element={roleGuarded(<AuditLogPage />)} />
+                  <Route path="notifications" element={roleGuarded(<NotificationsPage />)} />
+                  <Route path="availability" element={roleGuarded(<AvailabilityPage />)} />
                 </Route>
                 <Route path="*" element={<Navigate to="/" replace />} />
               </Routes>

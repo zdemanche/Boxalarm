@@ -12,6 +12,7 @@ jest.mock('../auth/AuthContext', () => ({
 
 jest.mock('../sync/ConnectivityContext', () => ({
   useConnectivity: () => ({ isOnline: true }),
+  useOptionalConnectivity: () => ({ isOnline: true }),
 }));
 
 function authWithRoles(roles: AuthContextValue['roles']): AuthContextValue {
@@ -92,4 +93,29 @@ test('deep-linking an OFFICER to RidingBoard is allowed through', async () => {
   // RidingBoardScreen falls back to the offline mock repository (no auth/API base wired in
   // this test), which seeds a riding board including "Engine 301".
   expect(await findByText('Engine 301')).toBeTruthy();
+});
+
+test('a second call is pushed as its own alert screen, not swapped into the first (review CR-1)', async () => {
+  const navigationRef = createNavigationContainerRef<AlertsStackParamList>();
+  await render(
+    <SafeAreaProvider>
+      <NavigationContainer ref={navigationRef}>
+        <AlertsStack />
+      </NavigationContainer>
+    </SafeAreaProvider>,
+  );
+
+  await act(async () => {
+    navigationRef.navigate('AlertDetail', { dispatchId: 'SELFTEST-A' });
+  });
+  await act(async () => {
+    navigationRef.navigate('AlertDetail', { dispatchId: 'SELFTEST-B' });
+  });
+
+  const routes = navigationRef.getRootState()?.routes ?? [];
+  const alertRoutes = routes.filter((route) => route.name === 'AlertDetail');
+  expect(alertRoutes.map((route) => (route.params as { dispatchId: string }).dispatchId)).toEqual([
+    'SELFTEST-A',
+    'SELFTEST-B',
+  ]);
 });

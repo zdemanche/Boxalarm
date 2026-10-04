@@ -5,6 +5,7 @@ import type {
   CreateCertificationInput,
   CreateTrainingEventInput,
   ExpiringCertification,
+  RosterTrainingHours,
   Transcript,
   TranscriptExportFormat,
   TrainingEvent,
@@ -41,8 +42,18 @@ export async function createCertification(
   return (await response.json()) as Certification;
 }
 
-export async function uploadCertificationAttachment(uploadUrl: string, file: File): Promise<void> {
-  const response = await fetch(uploadUrl, { method: 'PUT', body: file });
+// The PUT is signed over Content-Type: send exactly the type the API signed it with
+// (uploadContentType), or S3 refuses it. Falls back to the file's own type for an older API.
+export async function uploadCertificationAttachment(
+  uploadUrl: string,
+  file: File,
+  contentType?: string,
+): Promise<void> {
+  const response = await fetch(uploadUrl, {
+    method: 'PUT',
+    body: file,
+    headers: { 'Content-Type': contentType ?? file.type },
+  });
   if (!response.ok) {
     throw new Error(`Attachment upload failed with status ${response.status}`);
   }
@@ -66,6 +77,16 @@ export async function listExpiringCertifications(
 ): Promise<ExpiringCertification[]> {
   const response = await apiRequest('training/certifications/expiring', tokens);
   return (await response.json()) as ExpiringCertification[];
+}
+
+/** Department-wide hours by member and category for events starting in [from, to] (epoch ms). */
+export async function getRosterTrainingHours(
+  tokens: AuthTokenSource,
+  from: number,
+  to: number,
+): Promise<RosterTrainingHours> {
+  const response = await apiRequest(`training/hours?from=${from}&to=${to}`, tokens);
+  return (await response.json()) as RosterTrainingHours;
 }
 
 export async function listTrainingEvents(tokens: AuthTokenSource): Promise<TrainingEvent[]> {

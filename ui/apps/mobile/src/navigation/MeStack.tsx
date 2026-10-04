@@ -1,5 +1,6 @@
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { AttendanceScreen } from '../screens/me/AttendanceScreen';
+import { AvailabilityScreen } from '../screens/schedule/AvailabilityScreen';
 import { CertificationsScreen } from '../screens/me/CertificationsScreen';
 import { DiagnosticsScreen } from '../screens/me/DiagnosticsScreen';
 import { InboxScreen } from '../screens/me/InboxScreen';
@@ -15,6 +16,8 @@ import { TranscriptScreen } from '../screens/me/TranscriptScreen';
 // architecture.md §7.2 MeStack.
 export type MeStackParamList = {
   MeHome: undefined;
+  // Also in ScheduleStack; here so "Mark unavailable" is one tap from Me, and Back returns to Me.
+  Availability: undefined;
   ProfileEdit: undefined;
   Attendance: undefined;
   Certifications: undefined;
@@ -33,6 +36,11 @@ export function MeStack() {
   return (
     <Stack.Navigator>
       <Stack.Screen name="MeHome" component={MeHomeScreen} options={{ title: 'Me' }} />
+      <Stack.Screen
+        name="Availability"
+        component={AvailabilityScreen}
+        options={{ title: 'Availability' }}
+      />
       <Stack.Screen
         name="ProfileEdit"
         component={ProfileEditScreen}

@@ -1,70 +1,33 @@
-# incident-service
+# Incident Service
 
 ## Purpose & Boundaries
-
-NERIS-native incident model, pre-population from alert/roster, guided completion, NERIS submission, submission status tracking, incident search. Service 5 of 10, Wave 2. **Own dedicated physical DynamoDB table** (distinct lifecycle from platform-service: compliance-submission workflow with external-API retry semantics and its own schema-versioning concern).
+NERIS-native incident model (Core + Secondary), pre-population from dispatch/roster, guided completion with pre-submit NERIS enum validation, officer lock, NERIS submission (accept-and-queue 202), submission status, search/history. Holds its own NERIS OAuth2 client-credentials grant (Secrets Manager per env, token cached until near expiry). Own `incident` table (CMK KMS), own S3 bucket `boxalarm-incident-assets` (SSE-KMS). Submission Status Service is a handler here. NERIS entity sync is NOT here (platform-service). Fire-only: no ePCR/PHI.
 
 ## Interfaces
-
-Base path `/api/v1/incidents/...`.
-
-| Method | Path | Description | Auth |
-|---|---|---|---|
-| POST | `/` | Create incident, pre-populated from dispatch/roster (F7.2) | Cognito |
-| GET | `/` | Search/history (F7.9) | Cognito |
-| GET | `/{incidentId}` | Incident detail, NERIS Core-native (F7.1) | Cognito |
-| PUT | `/{incidentId}` | Guided completion, validated against NERIS enums pre-submit (F7.3) | Cognito |
-| PUT | `/{incidentId}/narrative` | Narrative capture (F7.4) | Cognito |
-| PUT | `/{incidentId}/response-times` | Unit assignment + response times (F7.5) | Cognito |
-| PUT | `/{incidentId}/exposures` | Exposure/responder-safety, Secondary schema (F7.8) | Cognito |
-| POST | `/{incidentId}/submit` | Submit to NERIS — accept-and-queue, 202 (F7.6) | Cognito(admin) |
-| GET | `/{incidentId}/submission` | Submission status: submitted/accepted/rejected/retrying/failed (F7.7) | Cognito |
-| POST | `/{incidentId}/submission/retry` | Manually retry failed submission | Cognito(admin) |
-| GET | `/health/liveness` \| `/health/readiness` | Health | none |
+`/api/v1/incidents`: POST (create DRAFT only; Cedar `CreateIncidentReport`, NERIS officer tier OFFICER/CHIEF/ADMIN — MEMBER/TRAINING/APPARATUS get 403 before any read); GET (search); GET `/{incidentId}`; PUT `/{incidentId}` (guided completion); PUT `/{incidentId}/narrative`; PUT `/{incidentId}/response-times`; PUT `/{incidentId}/exposures` (Secondary); POST `/{incidentId}/submit` (202; Cedar `SubmitIncidentReport`, officer tier; needs lock; kill switch -> 409 `SUBMISSIONS_DISABLED`); GET `/{incidentId}/submission`; POST `/{incidentId}/submission/retry` (admin); POST `/{incidentId}/lock`, `/unlock`, `/resubmit` (officer tier); GET `/incidents/dispatches` (Cedar `ListRecentDispatches`, officer tier); GET `/incidents/neris-schema?version=`; health pair. Untabulated but registered: NERIS `validate`, per-module PUTs, no-activity reports, submissions ledger.
 
 ## Data Ownership
-
-Own physical table (Streams on, PITR on, customer-managed KMS key — federally-reportable records).
-
-- **INCIDENT** (NERIS Core) — `pk=DEPT#{deptId}#INCIDENT#{incidentId}`, `sk=METADATA`. `incidentId` = **same value as the originating `dispatchId`** (assumed minted once at alert ingestion — see Open Questions). `corePayload` stored as opaque versioned document, not exploded attributes — a schema bump needs no migration/redeploy. `address` **PII**. `status`: `DRAFT`|`VALIDATED`|`SUBMITTED`|`ACCEPTED`|`REJECTED`. `sourceDispatchId` FK (ID reference only, no join) to alerting-service's `DISPATCH_ALERT`.
-- **INCIDENT_SECONDARY** — `sk=SECONDARY#{secondaryType}`. `payload` **Sensitive, non-PHI** — the most sensitive non-PHI data in the system; access narrower than the general incident read (affected member, chief, safety officer only).
-- **INCIDENT_RESPONSE_UNIT** — `sk=RESPONSE#{apparatusId or memberId}`. Response-time capture.
-- **NERIS_SUBMISSION_ATTEMPT** — `sk=SUBMISSION#{attemptedAt}`. Append-only, never overwritten. `nerisEnvironment`: `DEV`|`PROD`, never PROD before N6.2 compatibility check passes. No TTL (compliance evidence).
-- **SCHEMA_VERSION** — `pk=SCHEMA_VERSION`, `sk=NERIS#{version}`. Reference data, Valkey-cached. `coreSchemaS3Key`/`secondarySchemaS3Key` pin published XLSX/YAML from `ulfsri/neris-framework`.
-
-No TTL on `INCIDENT`/`INCIDENT_SECONDARY` — federally reportable records, retention via export job per N6.3.
+Incident table (Streams, PITR). INCIDENT `pk=DEPT#{deptId}#INCIDENT#{incidentId}` `sk=METADATA` (`incidentId` = dispatchId = deptId+dispatchNumber+epochSeconds; nerisSchemaVersion; corePayload opaque versioned doc; status DRAFT|VALIDATED|SUBMITTED|ACCEPTED|REJECTED; `lockedAt`+`lockedContentVersion`, `contentVersion`; gsi1pk `DEPT#{deptId}` gsi1sk `INCIDENT#{alarmAt}`; PII address); INCIDENT_SECONDARY `sk=SECONDARY#{secondaryType}` (payload Sensitive non-PHI; affectedMemberIds); INCIDENT_RESPONSE_UNIT `sk=RESPONSE#{apparatusId or memberId}`; NERIS_SUBMISSION_ATTEMPT `sk=SUBMISSION#{attemptedAt}` (outcome SUCCESS|RATE_LIMITED|VALIDATION_ERROR|SERVER_ERROR; nerisEnvironment DEV|PROD; append-only); SCHEMA_VERSION `pk=SCHEMA_VERSION` `sk=NERIS#{version}` (status ACTIVE|DEPRECATED, coreSchemaS3Key/secondarySchemaS3Key; Valkey `incident-service:schema-version:active` 5min). No TTL on any incident entity.
 
 ## Events Produced
-
-- `neris.incident.submitted` — outbox, on submission. Consumer: NERIS Submission Worker.
-- `neris.submission.failed` — from the Submission Worker. Consumers: Submission Status Service (handler within this service), Chief Dashboard projection.
+`neris.incident.submitted` (`{incidentId, departmentId, nerisSchemaVersion, submissionStatus}`; outbox -> `neris-submit-queue`); `neris.submission.failed` (`{incidentId, httpStatus, attemptNumber, willRetry, failureReason}` -> `neris-status-queue`; always published); `neris.incident.missing` (notifies owner, locker, every officer).
 
 ## Events Consumed
-
-None named directly — pre-population reads `alerting-service`'s dispatch record and roster via ID reference, not an event subscription.
+`alerting.dispatch.received`, `alerting.tone.escalated`, `alerting.mutual_aid.triggered` (via platform bus one-way bridge, to annotate incident); `neris.incident.submitted` (worker).
 
 ## Dependencies
-
-**Internal:** `alerting-service` — ID-reference-only correlation via shared `dispatchId`/`incidentId` (assumed minted once at alert ingestion — **verify against actual NERIS behavior before incident stories are built**, per Risks §17). `reporting-service` reads this table's GSI1 for compliance views.
-
-**External:** **NERIS API** (Verified tier — public docs read directly: OAuth 2.0, Swagger at `api.neris.fsri.org/v1/docs`, schemas at `github.com/ulfsri/neris-framework`, WAF rate limits, mandatory `User-Agent`, U.S. residency, mandatory separate dev environment). NERIS Integration Partner account provisioning is unresolved (OQ-23, blocking any production submission).
+internal: alerting-service (dispatch copy; `sourceDispatchId` ID ref only), platform-service (entity registry, kill switch config), notification-service, reporting-service. external: NERIS API (OAuth2 CC, mandatory per-env User-Agent, 4s call timeout `NERIS_CALL_TIMEOUT_MS`), `ulfsri/neris-framework` schemas pinned in S3, Secrets Manager, S3, Step Functions/Scheduler.
 
 ## Gotchas & Constraints
-
-- **`nerisSchemaVersion` per-incident, opaque payload storage** — a NERIS schema bump changes only validation/mapping code and the `SCHEMA_VERSION` reference item; the table itself needs no migration. Existing incidents keep validating against the version they were written under.
-- **Never PROD before N6.2 Integration Partner compatibility check passes** — base URL, credentials, `User-Agent` are all per-environment config (SSM/Secrets Manager) so dev traffic can never reach NERIS production by accident.
-- **A 429 from NERIS is expected, not terminal** — exponential backoff internally before `maxReceiveCount` exhausts to DLQ; `neris.submission.failed` is always published regardless, so a submission is never silently dropped (F7.7).
-- **No incident data migrates from Chief360** — Chief360 is not NERIS-native and NFIRS is retired; migration scope is limited to `MEMBER`/`MEMBER_QUALIFICATION`/`CERTIFICATION`/`APPARATUS`/possibly historical `ATTENDANCE_RECORD`/`LOSAP_POINT_ENTRY` (personnel-service's domain, not this service's).
-- **Assumed:** a single NERIS `dispatchId`/`incidentId` is minted once at alert ingestion and reused unchanged as this table's key. If NERIS or the eventual CAD integration mints the number later in the workflow, this ID-composition timing needs revisiting.
+- Lock is NOT a status: `lockedAt`+`lockedContentVersion`; every content write bumps `contentVersion` and carries `attribute_not_exists(lockedAt)`; unlock returns to DRAFT. Worker re-reads strongly consistent immediately before POST/PUT and abandons if unlocked/not in flight/version moved.
+- Idempotent create: record expected NERIS id BEFORE POST; retry looks up and adopts an existing record; 409/422 duplicate with findable record = adopt.
+- Worker: one report per invocation, 90s timeout, 540s queue visibility; retry schedules self-delete; 429 = expected, exponential backoff bounded, then DLQ; never silent drop; failures put inbox item to owner/locker/all officers immediately; alarms ClientError, NotConfigured, repeated poll failure.
+- Poller keeps cursor; nightly reconciliation (`ReconciliationNewDrift` alarm); record not listed for 3 nights -> `nerisMissingAt`; resubmit adopts-then-creates keeping `previousNerisIncidentId`.
+- Payload to NERIS deep-picked to schema; deny-list `NEVER_SENT_KEYS` (names, DOB, SSN, phone, email, PCR id, civilian demographics) at any depth; `casualty_rescues` sends all required fields + enum outcome codes; `medical_details` only for MEDICAL incident types and only patient_care_evaluation/patient_status/transport_disposition; casualty lacking FF/NONFF type or bad code blocks lock `CASUALTY_INCOMPLETE`. Stored corePayload keeps full entered data (Sensitive PII).
+- INCIDENT_SECONDARY write rule: officer tier any module; others only a module naming them and cannot change who it names; version-conditional (409); create-once audit row old/new. Read: affected member, chief, safety officer only.
+- Month bucketing uses `CONFIG#NERIS timeZone`.
+- Never PROD before N6.2; dev/prod host separation; whole loop unverified against live NERIS (OQ-23); NERIS ID minted once at alert time assumed (verify).
+- Schema bump = config publish, no redeploy (F7.10).
 
 ## Source Sections
-
-- Backend §1.1 Service inventory (`:120-146`)
-- Backend §1.4 NERIS submission pattern (`:267`)
-- Backend §2 incident-service API endpoints (`:354-369`)
-- Data Model §1, §3.2 INCIDENT through SCHEMA_VERSION (`:538-546`, `:841-924`)
-- Data Model §3.4 Retention, §3.5 PII classification (`:1321-1354`)
-- Data Model §4 Access patterns 44-51 (`:1412-1420`)
-- Events §Other domains, `neris.incident.submitted`/`neris.submission.failed` (`:1787-1817`)
-- Testing §2 F7 test matrix (`:2284-2297`)
-- Risks and limitations item 17 (`:2719`)
+Backend §1.4 NERIS (293-313); §2 incident-service (419-439); Data Model §3.2 (924-1008); §3.4-3.5 (1410-1443); access patterns 44-50 (1502-1508); Events neris (1884-1885, 1906-1907, 1919); Testing F7 (2376-2389); Cross-Cutting (2723)

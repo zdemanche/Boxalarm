@@ -1,0 +1,350 @@
+import { act, renderHook } from '@testing-library/react-native';
+import { AppState, type AppStateStatus } from 'react-native';
+import { useOptionalAuth } from '../../auth/AuthContext';
+import { ApiError } from '../../lib/apiClient';
+import { getPushRegistration, retryPushRegistration } from './pushRegistrationState';
+import { getNativePushBridge, registerPushToken, type DeviceToken } from './pushTokens';
+import {
+  RECONFIRM_MIN_INTERVAL_MS,
+  retryDelayMs,
+  usePushTokenRegistration,
+} from './usePushTokenRegistration';
+
+jest.mock('../../auth/AuthContext', () => ({ useOptionalAuth: jest.fn() }));
+jest.mock('./pushTokens', () => ({
+  ...jest.requireActual('./pushTokens'),
+  getNativePushBridge: jest.fn(),
+  registerPushToken: jest.fn(),
+}));
+// jest.setup.js pins API_BASE_URL to '' globally, which short-circuits the hook.
+jest.mock('react-native-config', () => ({
+  __esModule: true,
+  default: { API_BASE_URL: 'https://api.example.test' },
+}));
+
+const mockUseOptionalAuth = useOptionalAuth as jest.Mock;
+const mockGetNativePushBridge = getNativePushBridge as jest.Mock;
+const mockRegisterPushToken = registerPushToken as jest.Mock;
+
+const DEVICE: DeviceToken = { platform: 'APNS', token: 'apns-token' };
+
+let refreshListener: ((device: DeviceToken) => void) | undefined;
+let fireAppState: (status: AppStateStatus) => void;
+let removeAppStateListener: jest.Mock;
+let warn: jest.SpyInstance;
+const bridge = {
+  requestPermission: jest.fn(),
+  getToken: jest.fn(),
+  onTokenRefresh: jest.fn(),
+};
+
+// The hook awaits permission -> token -> register in sequence; drain enough microtask turns for
+// the whole chain to settle without advancing fake time.
+async function flush(): Promise<void> {
+  await act(async () => {
+    for (let i = 0; i < 10; i += 1) await Promise.resolve();
+  });
+}
+
+async function advance(ms: number): Promise<void> {
+  await act(async () => {
+    await jest.advanceTimersByTimeAsync(ms);
+  });
+}
+
+beforeEach(() => {
+  jest.useFakeTimers();
+  mockUseOptionalAuth.mockReturnValue({
+    isAuthenticated: true,
+    memberId: 'MBR-1',
+    getAccessToken: jest.fn(),
+    renewSilently: jest.fn(),
+  });
+  bridge.requestPermission.mockReset().mockResolvedValue(true);
+  bridge.getToken.mockReset().mockResolvedValue(DEVICE);
+  bridge.onTokenRefresh.mockReset().mockImplementation((listener) => {
+    refreshListener = listener;
+    return () => {};
+  });
+  mockGetNativePushBridge.mockReturnValue(bridge);
+  mockRegisterPushToken.mockReset().mockResolvedValue(undefined);
+
+  let appStateHandler: ((status: AppStateStatus) => void) | undefined;
+  removeAppStateListener = jest.fn();
+  const addEventListener = jest.spyOn(AppState, 'addEventListener').mockImplementation(((
+    _event: string,
+    listener: (status: AppStateStatus) => void,
+  ) => {
+    appStateHandler = listener;
+    return { remove: removeAppStateListener };
+  }) as unknown as typeof AppState.addEventListener);
+  addEventListener.mockClear();
+  fireAppState = (status) => appStateHandler?.(status);
+
+  warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+});
+
+afterEach(() => {
+  jest.useRealTimers();
+  jest.restoreAllMocks();
+});
+
+test('registers the device token once permission is granted', async () => {
+  await renderHook(() => usePushTokenRegistration());
+  await flush();
+
+  expect(mockRegisterPushToken).toHaveBeenCalledTimes(1);
+  expect(mockRegisterPushToken).toHaveBeenCalledWith(
+    'MBR-1',
+    expect.anything(),
+    'https://api.example.test',
+    DEVICE,
+    expect.any(Number),
+  );
+});
+
+test('retryDelayMs backs off exponentially and caps at five minutes', () => {
+  expect(retryDelayMs(1)).toBe(5_000);
+  expect(retryDelayMs(2)).toBe(10_000);
+  expect(retryDelayMs(3)).toBe(20_000);
+  expect(retryDelayMs(50)).toBe(300_000);
+});
+
+test('a failed register call is logged and retried in-session with backoff', async () => {
+  mockRegisterPushToken
+    .mockRejectedValueOnce(new Error('network down'))
+    .mockRejectedValueOnce(new Error('network down'))
+    .mockResolvedValue(undefined);
+
+  await renderHook(() => usePushTokenRegistration());
+  await flush();
+  expect(mockRegisterPushToken).toHaveBeenCalledTimes(1);
+  expect(warn).toHaveBeenCalledWith(expect.stringContaining('[push]'), expect.any(Error));
+
+  await advance(4_999);
+  expect(mockRegisterPushToken).toHaveBeenCalledTimes(1);
+  await advance(1);
+  expect(mockRegisterPushToken).toHaveBeenCalledTimes(2);
+
+  await advance(9_999);
+  expect(mockRegisterPushToken).toHaveBeenCalledTimes(2);
+  await advance(1);
+  expect(mockRegisterPushToken).toHaveBeenCalledTimes(3);
+
+  // Registered now - no further timed attempts.
+  await advance(600_000);
+  expect(mockRegisterPushToken).toHaveBeenCalledTimes(3);
+});
+
+test('a platform that has not issued a token yet is retried instead of silently giving up', async () => {
+  bridge.getToken.mockResolvedValueOnce(null).mockResolvedValue(DEVICE);
+
+  await renderHook(() => usePushTokenRegistration());
+  await flush();
+  expect(mockRegisterPushToken).not.toHaveBeenCalled();
+
+  await advance(5_000);
+  expect(mockRegisterPushToken).toHaveBeenCalledWith(
+    'MBR-1',
+    expect.anything(),
+    'https://api.example.test',
+    DEVICE,
+    expect.any(Number),
+  );
+});
+
+test('a thrown native bridge error is caught and retried', async () => {
+  bridge.getToken
+    .mockRejectedValueOnce(new Error('native module missing'))
+    .mockResolvedValue(DEVICE);
+
+  await renderHook(() => usePushTokenRegistration());
+  await flush();
+  expect(warn).toHaveBeenCalledWith(expect.stringContaining('[push]'), expect.any(Error));
+
+  await advance(5_000);
+  expect(mockRegisterPushToken).toHaveBeenCalledTimes(1);
+});
+
+test('returning to the foreground retries immediately while unregistered', async () => {
+  mockRegisterPushToken.mockRejectedValueOnce(new Error('network down'));
+
+  await renderHook(() => usePushTokenRegistration());
+  await flush();
+  expect(mockRegisterPushToken).toHaveBeenCalledTimes(1);
+
+  fireAppState('active');
+  await flush();
+  expect(mockRegisterPushToken).toHaveBeenCalledTimes(2);
+
+  // The pending backoff timer was superseded by the successful foreground retry.
+  await advance(600_000);
+  expect(mockRegisterPushToken).toHaveBeenCalledTimes(2);
+});
+
+test('returning to the foreground right after registering does nothing extra', async () => {
+  await renderHook(() => usePushTokenRegistration());
+  await flush();
+
+  fireAppState('active');
+  await flush();
+
+  expect(bridge.getToken).toHaveBeenCalledTimes(1);
+  expect(mockRegisterPushToken).toHaveBeenCalledTimes(1);
+});
+
+// N-m2: "registered" must mean the server still has this phone.
+test('a later return to the foreground re-confirms with the server, and a refusal turns it red', async () => {
+  await renderHook(() => usePushTokenRegistration());
+  await flush();
+  await advance(RECONFIRM_MIN_INTERVAL_MS);
+
+  mockRegisterPushToken.mockRejectedValueOnce(
+    new ApiError({ type: 'about:blank', title: 'Not Found', status: 404, traceId: 't' }),
+  );
+  fireAppState('active');
+  await flush();
+
+  expect(mockRegisterPushToken).toHaveBeenCalledTimes(2);
+  expect(getPushRegistration()).toEqual({ memberId: 'MBR-1', status: 'failed' });
+});
+
+test('a re-confirm that gets no answer (no signal) is "couldn\'t check", not red', async () => {
+  await renderHook(() => usePushTokenRegistration());
+  await flush();
+  await advance(RECONFIRM_MIN_INTERVAL_MS);
+
+  mockRegisterPushToken.mockRejectedValueOnce(new TypeError('Network request failed'));
+  fireAppState('active');
+  await flush();
+
+  expect(getPushRegistration()).toEqual({ memberId: 'MBR-1', status: 'unverified' });
+  // It keeps checking, and a later answer turns it green again.
+  await advance(5_000);
+  expect(getPushRegistration()).toEqual({ memberId: 'MBR-1', status: 'registered' });
+});
+
+test('never registered and no signal is still red', async () => {
+  mockRegisterPushToken.mockRejectedValueOnce(new TypeError('Network request failed'));
+  await renderHook(() => usePushTokenRegistration());
+  await flush();
+
+  expect(getPushRegistration()).toEqual({ memberId: 'MBR-1', status: 'failed' });
+});
+
+test('denied permission is logged, not timer-retried, and re-checked on foreground', async () => {
+  bridge.requestPermission.mockResolvedValueOnce(false).mockResolvedValue(true);
+
+  await renderHook(() => usePushTokenRegistration());
+  await flush();
+  expect(mockRegisterPushToken).not.toHaveBeenCalled();
+  expect(warn).toHaveBeenCalledWith(expect.stringContaining('[push]'));
+
+  await advance(600_000);
+  expect(bridge.requestPermission).toHaveBeenCalledTimes(1);
+
+  fireAppState('active');
+  await flush();
+  expect(mockRegisterPushToken).toHaveBeenCalledTimes(1);
+});
+
+test('a rotated token from the bridge is registered, and a failure there is retried', async () => {
+  await renderHook(() => usePushTokenRegistration());
+  await flush();
+  expect(mockRegisterPushToken).toHaveBeenCalledTimes(1);
+
+  const rotated: DeviceToken = { platform: 'APNS', token: 'rotated' };
+  bridge.getToken.mockResolvedValue(rotated);
+  mockRegisterPushToken.mockRejectedValueOnce(new Error('network down'));
+  refreshListener?.(rotated);
+  await flush();
+  expect(mockRegisterPushToken).toHaveBeenCalledTimes(2);
+
+  await advance(5_000);
+  expect(mockRegisterPushToken).toHaveBeenCalledTimes(3);
+  expect(mockRegisterPushToken).toHaveBeenLastCalledWith(
+    'MBR-1',
+    expect.anything(),
+    'https://api.example.test',
+    rotated,
+    expect.any(Number),
+  );
+});
+
+test('an unchanged token from the bridge is not re-registered', async () => {
+  await renderHook(() => usePushTokenRegistration());
+  await flush();
+
+  refreshListener?.(DEVICE);
+  await flush();
+
+  expect(mockRegisterPushToken).toHaveBeenCalledTimes(1);
+});
+
+test('unmounting cancels pending retries and removes the foreground listener', async () => {
+  mockRegisterPushToken.mockRejectedValue(new Error('network down'));
+
+  const { unmount } = await renderHook(() => usePushTokenRegistration());
+  await flush();
+  await unmount();
+
+  await advance(600_000);
+  expect(mockRegisterPushToken).toHaveBeenCalledTimes(1);
+  expect(removeAppStateListener).toHaveBeenCalled();
+});
+
+function signedInAs(memberId: string | null) {
+  mockUseOptionalAuth.mockReturnValue({
+    isAuthenticated: memberId !== null,
+    memberId,
+    getAccessToken: jest.fn(),
+    renewSilently: jest.fn(),
+  });
+}
+
+test('C1: after sign-out, the next member on this phone is registered too', async () => {
+  signedInAs('A');
+  const { rerender } = await renderHook(() => usePushTokenRegistration());
+  await flush();
+
+  signedInAs(null);
+  await rerender({});
+  await flush();
+
+  signedInAs('B');
+  await rerender({});
+  await flush();
+
+  expect(mockRegisterPushToken.mock.calls.map((call) => call[0])).toEqual(['A', 'B']);
+  expect(getPushRegistration()).toEqual({ memberId: 'B', status: 'registered' });
+});
+
+test('C1: the same member signing out and back in is registered again', async () => {
+  signedInAs('A');
+  const { rerender } = await renderHook(() => usePushTokenRegistration());
+  await flush();
+
+  signedInAs(null);
+  await rerender({});
+  await flush();
+  expect(getPushRegistration()).toBeNull();
+
+  signedInAs('A');
+  await rerender({});
+  await flush();
+
+  expect(mockRegisterPushToken.mock.calls.map((call) => call[0])).toEqual(['A', 'A']);
+});
+
+test('a failed registration is reported for the readiness banner, and its retry registers', async () => {
+  mockRegisterPushToken.mockRejectedValueOnce(new Error('network down'));
+  await renderHook(() => usePushTokenRegistration());
+  await flush();
+  expect(getPushRegistration()).toEqual({ memberId: 'MBR-1', status: 'failed' });
+
+  await act(async () => retryPushRegistration());
+  await flush();
+
+  expect(mockRegisterPushToken).toHaveBeenCalledTimes(2);
+  expect(getPushRegistration()).toEqual({ memberId: 'MBR-1', status: 'registered' });
+});

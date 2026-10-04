@@ -48,10 +48,13 @@ describe("Shifts — shift-completion schedule (#213)", () => {
     const httpApi = new HttpApi("test-shifts-http-api", {
       env: "dev",
       userPoolId: pulumi.output("pool-1"),
+      platformTableName: "platform-table",
+      platformTableArn: "arn:aws:dynamodb:us-east-1:123456789012:table/platform",
       allowedClientIds: [pulumi.output("client-1")],
       platformLogGroup: logGroup,
     });
     return new Shifts("test-shifts", {
+      opsAlarmTopicArn: "arn:aws:sns:us-east-1:123456789012:boxalarm-dev-chief-notifications",
       env: "dev",
       deptId: "nichols-fd",
       platformTableName: pulumi.output("platform-table"),
@@ -102,11 +105,15 @@ describe("Shifts — shift-completion schedule (#213)", () => {
     expect(target.roleArn).toBeDefined();
   });
 
-  it("grants the completion role Query on GSI3 and TransactWriteItems, never on the alerting table", async () => {
+  it("grants the completion role Query on GSI3 and item-level Put/Update, never on the alerting table", async () => {
     const shifts = await build();
     const policyJson = await resolve(shifts.completionLambda.rolePolicy.policy);
     expect(policyJson).toContain("/index/GSI3");
-    expect(policyJson).toContain("dynamodb:TransactWriteItems");
+    // TransactWriteItems is not an IAM action; transaction items are authorized as
+    // PutItem/UpdateItem.
+    expect(policyJson).not.toContain("dynamodb:TransactWriteItems");
+    expect(policyJson).toContain("dynamodb:PutItem");
+    expect(policyJson).toContain("dynamodb:UpdateItem");
     expect(policyJson).not.toContain("table/alerting");
   });
 });

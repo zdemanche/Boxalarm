@@ -65,6 +65,15 @@ describe("PlatformTable", () => {
     expect(sse?.kmsKeyArn).toBeUndefined();
   });
 
+  it("enables TTL on the `ttl` attribute its expiring rows set (review MINOR 5)", async () => {
+    const { PlatformTable } = await import("../../components/data/platform-table");
+    const table = new PlatformTable("platform-ttl", { env: "dev" });
+    await settle(table);
+
+    const ttl = await resolve(table.table.ttl);
+    expect(ttl).toEqual({ attributeName: "ttl", enabled: true });
+  });
+
   it("enables deletionProtectionEnabled so a replace-forcing schema change can't destroy the table", async () => {
     const { PlatformTable } = await import("../../components/data/platform-table");
     const platform = new PlatformTable("platform-deletion-protection", { env: "dev" });

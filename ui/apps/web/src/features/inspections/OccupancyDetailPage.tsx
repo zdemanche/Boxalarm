@@ -66,11 +66,15 @@ export function OccupancyDetailPage() {
         hazards: splitLines(prePlanHazardsText),
       });
       if (diagramFile && result.siteDiagramUploadUrl) {
-        await uploadPrePlanFile(result.siteDiagramUploadUrl, diagramFile);
+        await uploadPrePlanFile(
+          result.siteDiagramUploadUrl,
+          diagramFile,
+          result.siteDiagramContentType,
+        );
       }
       for (const attachment of result.attachmentUploadUrls) {
         const file = attachmentFiles.find((f) => f.name === attachment.filename);
-        if (file) await uploadPrePlanFile(attachment.uploadUrl, file);
+        if (file) await uploadPrePlanFile(attachment.uploadUrl, file, attachment.contentType);
       }
       return result;
     },

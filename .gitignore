@@ -1,4 +1,5 @@
 .DS_Store
 .analysis/
+.worktrees/
 .claude/sdlc.config.json
 .env

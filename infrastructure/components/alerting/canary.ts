@@ -2,8 +2,10 @@ import * as pulumi from "@pulumi/pulumi";
 import * as aws from "@pulumi/aws";
 import { ServiceLambda } from "../observability/service-lambda";
 import { ServiceLogGroup } from "../observability/service-log-group";
+import { ScheduleDeadLetter } from "../shared/schedule-dead-letter";
 import { requireEnv } from "../shared/env";
 import { lambdaCode, LAMBDA_HANDLER } from "../shared/lambda-code";
+import { grantAlertingCmk } from "./alerting-cmk";
 
 const DEFAULT_SCHEDULE_RATE_MINUTES = 2;
 const CANARY_METRIC_NAMESPACE = "Boxalarm/AlertingCanary";
@@ -13,6 +15,8 @@ export interface AlertingCanaryArgs {
   env: string;
   deptId: string;
   alertingTableArn: pulumi.Input<string>;
+  /** Alerting-table CMK — every role touching the table needs it (alerting-cmk.ts). */
+  alertingCmkArn: pulumi.Input<string>;
   alertingTableName: pulumi.Input<string>;
   pageTopicArn: pulumi.Input<string>;
   logGroup: ServiceLogGroup;
@@ -32,6 +36,15 @@ export class AlertingCanary extends pulumi.ComponentResource {
   public readonly schedule: aws.scheduler.Schedule;
   public readonly failureAlarm: aws.cloudwatch.MetricAlarm;
   public readonly latencyAlarm: aws.cloudwatch.MetricAlarm;
+  public readonly errorsAlarm: aws.cloudwatch.MetricAlarm;
+  /** Whether this stack runs the canary (`boxalarm-infra:canaryEnabled`). */
+  public readonly enabled: boolean;
+  /**
+   * How old the latest CANARY_RUN may be before alerting readiness treats the canary as
+   * stalled: three schedule ticks, and never under 10 minutes so the 60 s self-test
+   * cooldown skipping a tick cannot flap readiness.
+   */
+  public readonly maxRunAgeSeconds: number;
 
   constructor(name: string, args: AlertingCanaryArgs, opts?: pulumi.ComponentResourceOptions) {
     requireEnv("AlertingCanary", args.env);
@@ -41,7 +54,21 @@ export class AlertingCanary extends pulumi.ComponentResource {
     const config = new pulumi.Config("boxalarm-infra");
     const rateMinutes =
       config.getNumber("canaryScheduleRateMinutes") ?? DEFAULT_SCHEDULE_RATE_MINUTES;
-    const canaryMemberId = config.requireSecret("canaryMemberId");
+    // Off unless a stack opts in with `boxalarm-infra:canaryEnabled: true`. Every tick sends
+    // to the canary member on every channel, so a stack runs it only on purpose. While it is
+    // off, its breaching-on-missing alarms must not page, so their actions are disabled too.
+    const canaryEnabled = config.getBoolean("canaryEnabled") ?? false;
+    // Required only once the canary is on (deploy-readiness m4): a disabled canary is never
+    // scheduled, so a stack no longer needs a dummy member id to preview.
+    const canaryMemberId = canaryEnabled
+      ? config.requireSecret("canaryMemberId")
+      : (config.getSecret("canaryMemberId") ?? pulumi.secret(""));
+    // Only when the canary member is a dedicated device (it is woken every tick) does the
+    // canary really deliver on Android; otherwise FCM validate_only - credentials verified, not
+    // delivered. iOS always delivers on the device's own APNs environment.
+    const canaryDedicatedDevice = config.getBoolean("canaryDedicatedDevice") ?? false;
+    this.enabled = canaryEnabled;
+    this.maxRunAgeSeconds = Math.max(rateMinutes * 60 * 3, 600);
 
     this.lambda = new ServiceLambda(
       `${name}-fn`,
@@ -56,15 +83,20 @@ export class AlertingCanary extends pulumi.ComponentResource {
           ALERTING_TABLE_NAME: args.alertingTableName,
           CANARY_DEPT_ID: deptId,
           CANARY_MEMBER_ID: canaryMemberId,
+          CANARY_DEDICATED_DEVICE: String(canaryDedicatedDevice),
         },
         additionalPolicyStatements: [
           {
             Sid: "AlertingTableCanaryReadWrite",
             Effect: "Allow",
+            // canary/handler.ts: Get (pointer, self-test run), Put (pointer, CANARY_RUN,
+            // self-test run, cooldown), Delete (clearCanaryPointer), and createManualDispatch's
+            // TransactWriteCommand, whose Put items are authorized as PutItem.
             Action: [
               "dynamodb:GetItem",
               "dynamodb:PutItem",
               "dynamodb:UpdateItem",
+              "dynamodb:DeleteItem",
               "dynamodb:Query",
               "dynamodb:TransactWriteItems",
             ],
@@ -117,13 +149,29 @@ export class AlertingCanary extends pulumi.ComponentResource {
       { parent: this },
     );
 
+    const deadLetter = new ScheduleDeadLetter(
+      `${name}-schedule-dead-letter`,
+      {
+        queueName: `boxalarm-${env}-alerting-canary-scheduler-dlq`,
+        schedulerRole,
+        alarmActions: [args.pageTopicArn],
+        actionsEnabled: canaryEnabled,
+      },
+      { parent: this },
+    );
+
     this.schedule = new aws.scheduler.Schedule(
       `${name}-schedule`,
       {
         name: `boxalarm-${env}-alerting-${deptId}-canary`,
         scheduleExpression: `rate(${rateMinutes} minutes)`,
+        state: canaryEnabled ? "ENABLED" : "DISABLED",
         flexibleTimeWindow: { mode: "OFF" },
-        target: { arn: this.lambda.function.arn, roleArn: schedulerRole.arn },
+        target: {
+          arn: this.lambda.function.arn,
+          roleArn: schedulerRole.arn,
+          ...deadLetter.targetConfig,
+        },
       },
       { parent: this },
     );
@@ -140,6 +188,7 @@ export class AlertingCanary extends pulumi.ComponentResource {
         period: 300,
         evaluationPeriods: 1,
         treatMissingData: "breaching",
+        actionsEnabled: canaryEnabled,
         alarmActions: [args.pageTopicArn],
       },
       { parent: this },
@@ -157,16 +206,39 @@ export class AlertingCanary extends pulumi.ComponentResource {
         period: 300,
         evaluationPeriods: 1,
         treatMissingData: "breaching",
+        actionsEnabled: canaryEnabled,
         alarmActions: [args.pageTopicArn],
       },
       { parent: this },
     );
+
+    // A canary Lambda that throws (e.g. missing config) emits no CanaryFailed of its own.
+    this.errorsAlarm = new aws.cloudwatch.MetricAlarm(
+      `${name}-errors-alarm`,
+      {
+        name: `boxalarm-${env}-alerting-canary-errors`,
+        namespace: "AWS/Lambda",
+        metricName: "Errors",
+        dimensions: { FunctionName: this.lambda.function.name },
+        statistic: "Sum",
+        comparisonOperator: "GreaterThanThreshold",
+        threshold: 0,
+        period: 60,
+        evaluationPeriods: 1,
+        treatMissingData: "notBreaching",
+        alarmActions: [args.pageTopicArn],
+      },
+      { parent: this },
+    );
+
+    grantAlertingCmk(name, { canary: this.lambda.role }, args.alertingCmkArn, { parent: this });
 
     this.registerOutputs({
       lambda: this.lambda,
       schedule: this.schedule,
       failureAlarm: this.failureAlarm,
       latencyAlarm: this.latencyAlarm,
+      errorsAlarm: this.errorsAlarm,
     });
   }
 }

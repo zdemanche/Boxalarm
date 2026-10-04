@@ -41,6 +41,8 @@ describe("OutboxPublisher", () => {
       serviceName: "platform-service",
     });
     return new OutboxPublisher("test-outbox", {
+      alarmTopicArn: "arn:aws:sns:us-east-1:123456789012:boxalarm-dev-alerting-page",
+      opsAlarmTopicArn: "arn:aws:sns:us-east-1:123456789012:boxalarm-dev-chief-notifications",
       env: "dev",
       platformTableName: pulumi.output("boxalarm-dev-platform-service"),
       platformTableArn: pulumi.output(
@@ -56,6 +58,29 @@ describe("OutboxPublisher", () => {
       logGroup,
     });
   }
+
+  it("alarms the ops topic on any MalformedOutboxRow from the platform or incident drain", async () => {
+    const publisher = await build();
+    const [namespace, metric, dimensions, threshold, actions] = await Promise.all([
+      resolve(publisher.malformedRowAlarm.namespace),
+      resolve(publisher.malformedRowAlarm.metricName),
+      resolve(publisher.malformedRowAlarm.dimensions),
+      resolve(publisher.malformedRowAlarm.threshold),
+      resolve(publisher.malformedRowAlarm.alarmActions),
+    ]);
+    // The shared drain's default namespace, used by both drains with no service dimension.
+    expect([namespace, metric, threshold]).toEqual([
+      "Boxalarm/outbox-publisher",
+      "MalformedOutboxRow",
+      0,
+    ]);
+    expect(dimensions).toBeUndefined();
+    // Pages on-call (it can drop the events that decide who is paged) and notifies the chief.
+    expect(actions).toEqual([
+      "arn:aws:sns:us-east-1:123456789012:boxalarm-dev-alerting-page",
+      "arn:aws:sns:us-east-1:123456789012:boxalarm-dev-chief-notifications",
+    ]);
+  });
 
   it("grants dynamodb:UpdateItem on the platform table so the publisher can mark entries sent", async () => {
     const publisher = await build();
@@ -94,6 +119,26 @@ describe("OutboxPublisher", () => {
     const env = await resolve(publisher.lambda.function.environment);
     expect(env?.variables?.PLATFORM_BUS_NAME).toBe("boxalarm-dev-platform-bus");
     expect(env?.variables?.PLATFORM_EVENT_BUS_NAME).toBe("boxalarm-dev-platform-bus");
+  });
+
+  it("grants sqs:SendMessage on its own on-failure queue so exhausted records reach it", async () => {
+    const publisher = await build();
+    const [policyJson, queueArn] = await Promise.all([
+      resolve(publisher.onFailureSendPolicy.policy),
+      resolve(publisher.onFailureQueue.arn),
+    ]);
+    const policy = JSON.parse(policyJson) as {
+      Statement: Array<{ Sid: string; Action: string[]; Resource: string }>;
+    };
+    const statement = policy.Statement.find((s) => s.Sid === "SendToOnFailureQueue");
+    expect(statement?.Action).toEqual(["sqs:SendMessage"]);
+    expect(statement?.Resource).toBe(queueArn);
+  });
+
+  it("honours the drain handler's batchItemFailures (ReportBatchItemFailures) so a failed publish is retried, not skipped", async () => {
+    const publisher = await build();
+    const responseTypes = await resolve(publisher.eventSourceMapping.functionResponseTypes);
+    expect(responseTypes).toEqual(["ReportBatchItemFailures"]);
   });
 
   it("bisects the batch on function error so one bad record doesn't stall the whole stream", async () => {

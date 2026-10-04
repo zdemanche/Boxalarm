@@ -1,11 +1,13 @@
 import { spacing, targetSize, typeScale } from '@boxalarm/design-tokens';
 import { useNavigation } from '@react-navigation/native';
-import { useEffect, useState } from 'react';
-import { Text, TouchableOpacity, View } from 'react-native';
+import { useEffect, useRef, useState } from 'react';
+import { AccessibilityInfo, Alert, Text, TouchableOpacity, View } from 'react-native';
 import { Button, Screen, useTheme, type SurfaceTheme } from '../../components/ui';
-import { useAuth } from '../../auth/AuthContext';
+import { retryPendingUnregister, useAuth, type SignOutResult } from '../../auth/AuthContext';
 import { useMeRepository } from '../../features/me/apiMeRepository';
+import { MarkOffList } from '../../features/schedule/MarkOffList';
 import type { LosapTotal, MemberProfile, Qualification } from '../../features/me/types';
+import * as syncManager from '../../sync/syncManager';
 
 function NavRow({
   label,
@@ -34,14 +36,120 @@ function NavRow({
   );
 }
 
+/**
+ * Sign-out is not a routine tap on this app: it removes THIS installation's push registration
+ * (personnel-service pushTokens, one registration per device since fix/page-chain), so this phone
+ * stops being paged while the member's other signed-in devices keep getting pages (alert-ux C7,
+ * review MJ-5 / round 2 C-9). Text or voice pages are mentioned only as conditional. Staying signed
+ * in is the default.
+ */
+export function signOutWarning(phone: string | null | undefined): string {
+  const appPages =
+    'Boxalarm pages stop on this phone until you sign in again; your other signed-in devices keep getting pages.';
+  const other = phone
+    ? ` Text and voice pages to ${phone} continue only if they are set up for you - check with your officer if you are not sure.`
+    : ' No phone number is on file, so you would get no text or voice pages either.';
+  return appPages + other;
+}
+
+export const PUSH_NOT_REVOKED_TITLE = 'This phone may still get pages for you';
+export const PUSH_NOT_REVOKED_MESSAGE =
+  "You're signed out, but Boxalarm couldn't confirm this phone was taken off paging for you. It keeps trying whenever there's signal. Try again with signal, or ask an officer to remove this phone.";
+
+/**
+ * A sign-out whose push revoke did not land is never silent (M3): the phone may keep ringing for
+ * the member who just left it. Retry runs the pending revoke at once; if it still cannot land,
+ * the member is told again.
+ */
+export function reportSignOut(result: SignOutResult | void): void {
+  if (!result || result.pushRevoked) return;
+  Alert.alert(PUSH_NOT_REVOKED_TITLE, PUSH_NOT_REVOKED_MESSAGE, [
+    { text: 'OK', style: 'cancel' },
+    {
+      text: 'Retry',
+      onPress: () => {
+        void retryPendingUnregister().then((outcome) => {
+          if (outcome === 'failed') reportSignOut({ pushRevoked: false });
+        });
+      },
+    },
+  ]);
+}
+
+function reportSignOutError(error: unknown): void {
+  console.error('[auth] sign-out did not finish cleanly', error);
+}
+
+export async function confirmSignOut(
+  signOut: () => Promise<SignOutResult | void>,
+  phone?: string | null,
+  memberId?: string | null,
+): Promise<void> {
+  // Work this member queued stays theirs: it is held on the phone and sent only when they sign
+  // in again, never under the next member (R2-M3). Say so, and let them discard it instead.
+  const unsent = memberId ? await syncManager.countUnsentFor(memberId).catch(() => 0) : 0;
+  const unsentNote =
+    unsent > 0
+      ? `\n\n${unsent} ${unsent === 1 ? "item hasn't" : "items haven't"} been sent yet. ${
+          unsent === 1 ? 'It' : 'They'
+        }'ll send next time you sign in on this phone.`
+      : '';
+  Alert.alert(
+    'Sign out and stop getting pages on this phone?',
+    signOutWarning(phone) + unsentNote,
+    [
+      { text: 'Stay signed in', style: 'cancel' },
+      ...(unsent > 0 && memberId
+        ? [
+            {
+              text: `Discard ${unsent} unsent and sign out`,
+              style: 'destructive' as const,
+              onPress: () => {
+                void syncManager
+                  .discardAllFor(memberId)
+                  .then(() => signOut())
+                  .then(reportSignOut, reportSignOutError);
+              },
+            },
+          ]
+        : []),
+      {
+        text: 'Sign out',
+        style: 'destructive',
+        onPress: () => void signOut().then(reportSignOut, reportSignOutError),
+      },
+    ],
+    { cancelable: true },
+  );
+}
+
 export function MeHomeScreen() {
-  const { signOut } = useAuth();
+  const { signOut, memberId } = useAuth();
   const navigation = useNavigation();
   const theme = useTheme();
   const repository = useMeRepository();
   const [profile, setProfile] = useState<MemberProfile | null>(null);
   const [quals, setQuals] = useState<Qualification[]>([]);
   const [losap, setLosap] = useState<LosapTotal | null>(null);
+  // Sign-out can take a while on a weak link (a last send, the push revoke with a renewal): say
+  // so and take the button away, so nobody taps it again wondering whether it worked (N-m5).
+  const [signingOut, setSigningOut] = useState(false);
+  const mountedRef = useRef(true);
+  useEffect(
+    () => () => {
+      mountedRef.current = false;
+    },
+    [],
+  );
+  const signOutWithProgress = async () => {
+    setSigningOut(true);
+    AccessibilityInfo.announceForAccessibility('Signing out.');
+    try {
+      return await signOut();
+    } finally {
+      if (mountedRef.current) setSigningOut(false);
+    }
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -80,6 +188,18 @@ export function MeHomeScreen() {
           </Text>
         )}
       </View>
+      {/* F2.5 / design.md F-06: marking off is the member's core self-service task, so it is the
+          first action on Me - it was unreachable from anywhere in the app. */}
+      <View style={{ marginBottom: spacing.md }}>
+        <Button
+          label="Mark unavailable"
+          size="alert"
+          fullWidth
+          accessibilityLabel="Mark unavailable. Choose how long you won't be alerted."
+          onPress={() => navigation.navigate('Availability' as never)}
+        />
+      </View>
+      <MarkOffList />
       <NavRow
         label="Edit profile"
         theme={theme}
@@ -147,7 +267,15 @@ export function MeHomeScreen() {
         onPress={() => navigation.navigate('Diagnostics' as never)}
       />
       <View style={{ paddingTop: spacing.lg }}>
-        <Button label="Sign out" variant="danger" onPress={() => void signOut()} />
+        <Button
+          label={signingOut ? 'Signing out…' : 'Sign out'}
+          variant="danger"
+          accessibilityLabel={
+            signingOut ? 'Signing out.' : 'Sign out. Boxalarm pages stop on this phone.'
+          }
+          disabled={signingOut}
+          onPress={() => void confirmSignOut(signOutWithProgress, profile?.phone, memberId)}
+        />
       </View>
     </Screen>
   );

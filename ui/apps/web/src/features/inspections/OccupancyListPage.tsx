@@ -106,6 +106,7 @@ export function OccupancyListPage() {
           >
             <TextInput
               label="Address"
+              help="Include the town for any occupancy outside your department's home area (e.g. 12 Oak St, Monroe). A pre-plan filed without a town is treated as in the home area on dispatches."
               value={address}
               required
               onChange={(e) => setAddress(e.target.value)}

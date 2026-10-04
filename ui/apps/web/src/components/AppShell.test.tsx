@@ -14,8 +14,9 @@ import { RequireAuth } from '../routing/RequireAuth';
 import { RequireRole } from '../routing/RequireRole';
 
 const server = setupServer(
-  http.get('/api/v1/apparatus', () => HttpResponse.json({ items: [] })),
+  http.get('/api/v1/apparatus', () => HttpResponse.json({ apparatus: [] })),
   http.get('/api/v1/personnel/members', () => HttpResponse.json({ items: [] })),
+  http.get('/api/v1/notifications', () => HttpResponse.json({ items: [], nextCursor: null })),
 );
 beforeAll(() => server.listen());
 afterEach(() => {
@@ -109,6 +110,29 @@ test('CHIEF PrimaryNav shows dashboard and audit-log, not settings', async () =>
   expect(nav.textContent).not.toContain('Settings');
 });
 
+test('the top bar carries the notification bell, linking to the inbox, for every role', async () => {
+  server.use(
+    http.get('/api/v1/notifications', () =>
+      HttpResponse.json({
+        items: [
+          {
+            notificationId: 'n-1',
+            category: 'cert-expiry',
+            summary: '1 item expiring',
+            items: [],
+            createdAt: 1,
+            readAt: null,
+          },
+        ],
+        nextCursor: null,
+      }),
+    ),
+  );
+  renderShell(['ADMIN'], '/settings');
+  const bell = await screen.findByRole('link', { name: 'Notifications, 1 unread' });
+  expect(bell.getAttribute('href')).toBe('/notifications');
+});
+
 test('ADMIN visiting /settings sees the page; CHIEF visiting /settings sees Forbidden', async () => {
   renderShell(['ADMIN'], '/settings');
   await screen.findByRole('heading', { name: 'Settings' });
@@ -122,11 +146,10 @@ test('ADMIN visiting /settings sees the page; CHIEF visiting /settings sees Forb
   expect(screen.queryByText(/Reference:/i)).toBeNull();
 });
 
-test('ADMIN landing on / redirects to first granted route', async () => {
+test('ADMIN lands on a dashboard, not an empty Alert diagnostics form', async () => {
   renderShell(['ADMIN'], '/');
-  await waitFor(() => {
-    expect(screen.getByRole('heading', { name: 'Alert diagnostics' })).toBeTruthy();
-  });
+  await screen.findByRole('heading', { level: 1, name: 'Admin dashboard' });
+  expect(screen.queryByRole('heading', { name: 'Alert diagnostics' })).toBeNull();
 });
 
 // Regression for MAJOR-1: below 768px (and at 200% zoom), PrimaryNav's static sidebar is

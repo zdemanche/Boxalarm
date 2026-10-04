@@ -20,7 +20,22 @@ export interface CreateNerisClientDeps {
   readonly fetchFn?: FetchFn;
   readonly tokenCache?: TokenCache;
   readonly nowMs?: () => number;
+  /** Per-call timeout; defaults to {@link NERIS_CALL_TIMEOUT_MS}. */
+  readonly timeoutMs?: number;
 }
+
+/**
+ * Every NERIS call is abandoned after this long. The submission worker's worst chain is
+ * seven calls — token, up to two adopt lookups, the POST, up to two adopt lookups after a
+ * refused create, then the PUT — 28 s; a 401 on each call (token dropped, fetched again
+ * and the call repeated once) adds 8 s per call, 76 s at most. The worker Lambda
+ * runs one report per invocation with a 90 s timeout and a 540 s queue visibility timeout
+ * (infrastructure/components/incident/submission-worker.ts). The HTTP routes make at most
+ * a token fetch and one call (validate, entity reads) — 8 s, or 16 s with a 401 retry —
+ * inside API Gateway's 30 s limit. A send cut off part-way is still safe: the create
+ * marker plus adopt-before-create make a redelivery idempotent (review M2, round 2 N10).
+ */
+export const NERIS_CALL_TIMEOUT_MS = 4_000;
 
 /**
  * Resolves a relative path against the configured base URL, or accepts an
@@ -71,16 +86,32 @@ export function createNerisClient(
   const fetchFn = deps.fetchFn ?? fetch;
   const tokenCache = deps.tokenCache ?? createTokenCache();
   const nowMs = deps.nowMs ?? Date.now;
+  const timeoutMs = deps.timeoutMs ?? NERIS_CALL_TIMEOUT_MS;
 
   return {
     async fetch(pathOrUrl: string, init?: RequestInit): Promise<Response> {
       const url = resolveUrl(config.baseUrl, pathOrUrl);
-      const accessToken = await getAccessToken(config, { fetchFn, cache: tokenCache, nowMs });
-      const headers = mergeHeaders(init, config.userAgent, accessToken);
-      return fetchFn(url, {
-        ...init,
-        headers,
-      });
+      const send = async (): Promise<Response> => {
+        const accessToken = await getAccessToken(config, {
+          fetchFn,
+          cache: tokenCache,
+          nowMs,
+          timeoutMs,
+        });
+        return fetchFn(url, {
+          ...init,
+          headers: mergeHeaders(init, config.userAgent, accessToken),
+          signal: init?.signal ?? AbortSignal.timeout(timeoutMs),
+        });
+      };
+      const response = await send();
+      if (response.status !== 401) {
+        return response;
+      }
+      // A cached token NERIS no longer honours (revoked or rotated server-side) would
+      // otherwise fail every call until it expired: drop it and try once with a fresh one.
+      tokenCache.clear();
+      return send();
     },
   };
 }

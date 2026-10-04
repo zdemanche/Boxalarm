@@ -10,6 +10,8 @@ export interface Certification {
   attachmentS3Key: string | null;
   status: CertificationStatus;
   uploadUrl?: string;
+  /** The Content-Type the upload URL is signed with; send it on the PUT. */
+  uploadContentType?: string;
 }
 
 export interface CreateCertificationInput {
@@ -63,3 +65,16 @@ export interface Transcript {
 }
 
 export type TranscriptExportFormat = 'csv' | 'pdf';
+
+export interface CategoryHours {
+  category: string;
+  hours: number;
+}
+
+/** GET training/hours without memberId (training-service hoursHandler.ts roster path). */
+export interface RosterTrainingHours {
+  /** Epoch milliseconds, as sent. */
+  from: number;
+  to: number;
+  members: { memberId: string; categories: CategoryHours[] }[];
+}

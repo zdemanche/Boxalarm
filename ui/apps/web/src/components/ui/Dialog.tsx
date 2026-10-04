@@ -35,7 +35,7 @@ export function Dialog({ open, onOpenChange, title, description, children, foote
 interface ConfirmDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  /** Names the object and the consequence — design.draft.md §4.5. */
+  /** Names the object and the consequence — docs/design.md §4.5. */
   title: string;
   consequence: string;
   confirmLabel: string;
@@ -47,6 +47,8 @@ interface ConfirmDialogProps {
    * call-then-close-immediately behaviour unchanged. */
   onConfirm: () => void | Promise<void>;
   danger?: boolean;
+  /** Choices the confirmation acts on (e.g. which device), shown under the consequence. */
+  children?: ReactNode;
 }
 
 /** Irreversible, high-blast-radius confirmation (§4.5). No password/step-up prompt is ever
@@ -59,6 +61,7 @@ export function ConfirmDialog({
   confirmLabel,
   onConfirm,
   danger = false,
+  children,
 }: ConfirmDialogProps) {
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -117,6 +120,8 @@ export function ConfirmDialog({
           </Button>
         </>
       }
-    />
+    >
+      {children}
+    </Dialog>
   );
 }

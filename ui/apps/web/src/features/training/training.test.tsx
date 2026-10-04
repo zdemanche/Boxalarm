@@ -1,4 +1,4 @@
-import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { HttpResponse, http } from 'msw';
@@ -11,6 +11,8 @@ import { RequireRole } from '../../routing/RequireRole';
 import { CertificationsPage } from './CertificationsPage';
 import { CertificationsPanel } from './CertificationsPanel';
 import { TrainingEventsPage } from './TrainingEventsPage';
+import { TrainingHoursPage } from './TrainingHoursPage';
+import { TranscriptPanel } from './TranscriptPanel';
 import type { Certification, TrainingEvent } from './types';
 
 const server = setupServer();
@@ -151,6 +153,12 @@ test('training officer creates an event and it appears in start order; a member 
   await user.type(screen.getByLabelText('Ends'), '2026-07-01T11:00');
   await user.click(screen.getByRole('button', { name: 'Create event' }));
   await screen.findByText('Hose drill');
+  // M9: the date inputs are controlled, so a reset form really is empty and the next create
+  // can't pass `required` while posting startAt/endAt = 0.
+  await waitFor(() => {
+    expect((screen.getByLabelText('Starts') as HTMLInputElement).value).toBe('');
+    expect((screen.getByLabelText('Ends') as HTMLInputElement).value).toBe('');
+  });
 
   const signUpButtons = screen.getAllByRole('button', { name: 'Sign up' });
   await user.click(signUpButtons[0]!);
@@ -245,9 +253,11 @@ test('training officer adds a certification and can revoke it; a non-training ro
 
   await screen.findByText(/FF1/);
   await user.click(screen.getByRole('button', { name: 'Revoke' }));
+  const dialog = await screen.findByRole('dialog', { name: 'Revoke FF1?' });
+  await user.click(within(dialog).getByRole('button', { name: 'Revoke certification' }));
 
   await waitFor(() => {
-    expect(screen.getByText(/REVOKED/)).toBeTruthy();
+    expect(screen.getByText(/Revoked/)).toBeTruthy();
   });
 
   cleanup();
@@ -255,4 +265,227 @@ test('training officer adds a certification and can revoke it; a non-training ro
   await screen.findByText(/FF1/);
   expect(screen.queryByRole('form', { name: 'Add certification' })).toBeNull();
   expect(screen.queryByRole('button', { name: 'Revoke' })).toBeNull();
+});
+
+test('a failed revoke stays in the confirm dialog and shows the error (m2)', async () => {
+  const cert: Certification = {
+    certId: 'CERT-1',
+    memberId: 'm-1',
+    certType: 'FF1',
+    issueDate: '2024-01-01',
+    expiryDate: '2029-01-01',
+    issuingAuthority: 'CT DESPP',
+    attachmentS3Key: null,
+    status: 'CURRENT',
+  };
+  server.use(
+    http.get('/api/v1/training/members/m-1/certifications', () => HttpResponse.json([cert])),
+    http.post('/api/v1/training/members/m-1/certifications/CERT-1/revoke', () =>
+      HttpResponse.json(
+        { type: 'about:blank', title: 'Service Unavailable', status: 503, traceId: 't' },
+        { status: 503 },
+      ),
+    ),
+  );
+
+  const user = userEvent.setup();
+  renderPanel(<CertificationsPanel memberId="m-1" />, ['TRAINING']);
+  await user.click(await screen.findByRole('button', { name: 'Revoke' }));
+  const dialog = await screen.findByRole('dialog', { name: 'Revoke FF1?' });
+  await user.click(within(dialog).getByRole('button', { name: 'Revoke certification' }));
+
+  expect(await within(dialog).findByRole('alert')).toBeTruthy();
+  expect(screen.getByRole('dialog', { name: 'Revoke FF1?' })).toBeTruthy();
+});
+
+test('failed sign-up and failed hours recording are shown, not swallowed (m2)', async () => {
+  const events: TrainingEvent[] = [
+    {
+      eventId: 'evt-1',
+      title: 'Ladder drill',
+      category: 'Ladders',
+      startAt: Date.parse('2020-01-01T18:00:00Z'),
+      endAt: Date.parse('2020-01-01T20:00:00Z'),
+      signedUp: false,
+    },
+  ];
+  server.use(
+    http.get('/api/v1/training/events', () => HttpResponse.json(events)),
+    http.post('/api/v1/training/events/:eventId/signup', () =>
+      HttpResponse.json(
+        { type: 'about:blank', title: 'Service Unavailable', status: 503, traceId: 't' },
+        { status: 503 },
+      ),
+    ),
+  );
+
+  const user = userEvent.setup();
+  renderPage(<TrainingEventsPage />, ['TRAINING'], '/training/events');
+  await screen.findByText('Ladder drill');
+
+  await user.click(screen.getByRole('button', { name: 'Sign up' }));
+  expect(await screen.findByText(/Sign-up failed/)).toBeTruthy();
+
+  const form = screen.getByRole('form', { name: 'Record hours for Ladder drill' });
+  await user.type(within(form).getByLabelText('Member ID'), 'm-1');
+  await user.type(within(form).getByLabelText('Hours'), '2');
+  await user.click(within(form).getByRole('button', { name: 'Record hours' }));
+  expect(await within(form).findByText(/Hours not recorded/)).toBeTruthy();
+});
+
+test('a failed transcript export is reported instead of an unhandled rejection (m2)', async () => {
+  server.use(
+    http.get('/api/v1/training/members/m-1/transcript', ({ request }) => {
+      if (new URL(request.url).searchParams.get('format')) {
+        return HttpResponse.json(
+          { type: 'about:blank', title: 'Service Unavailable', status: 503, traceId: 't' },
+          { status: 503 },
+        );
+      }
+      return HttpResponse.json({
+        memberId: 'm-1',
+        certifications: [],
+        attendance: [],
+        hoursByCategory: {},
+      });
+    }),
+  );
+
+  const user = userEvent.setup();
+  renderPanel(<TranscriptPanel memberId="m-1" />, ['TRAINING']);
+  await user.click(await screen.findByRole('button', { name: 'Export CSV' }));
+
+  expect(await screen.findByText('The CSV export failed. Try again.')).toBeTruthy();
+});
+
+test('certifications views are a full tabs pattern: tabpanel, aria-controls, arrow keys (m7)', async () => {
+  server.use(
+    http.get('/api/v1/training/certifications/expiring', () => HttpResponse.json([])),
+    http.get('/api/v1/personnel/members', () => HttpResponse.json({ items: [] })),
+  );
+
+  const user = userEvent.setup();
+  renderPage(<CertificationsPage />, ['TRAINING'], '/certifications');
+  const certsTab = await screen.findByRole('tab', { name: 'Certifications' });
+  const panel = screen.getByRole('tabpanel');
+  expect(certsTab.getAttribute('aria-controls')).toBe(panel.id);
+
+  certsTab.focus();
+  await user.keyboard('{ArrowRight}');
+  const expiringTab = screen.getByRole('tab', { name: 'Expiring' });
+  expect(document.activeElement).toBe(expiringTab);
+  expect(expiringTab.getAttribute('aria-selected')).toBe('true');
+});
+
+test('training hours: roster hours by member and category, named from the roster, year to date', async () => {
+  let params: URLSearchParams | undefined;
+  server.use(
+    http.get('/api/v1/training/hours', ({ request }) => {
+      params = new URL(request.url).searchParams;
+      return HttpResponse.json({
+        from: Number(params.get('from')),
+        to: Number(params.get('to')),
+        members: [
+          {
+            memberId: 'm-1',
+            categories: [
+              { category: 'Ladders', hours: 6 },
+              { category: 'Hazmat', hours: 2.5 },
+            ],
+          },
+          { memberId: 'm-9', categories: [{ category: 'Ladders', hours: 3 }] },
+        ],
+      });
+    }),
+    http.get('/api/v1/personnel/members', () =>
+      HttpResponse.json({
+        items: [{ memberId: 'm-1', firstName: 'Alex', lastName: 'Rivera', status: 'ACTIVE' }],
+      }),
+    ),
+  );
+
+  renderPage(<TrainingHoursPage />, ['TRAINING'], '/training/hours');
+
+  const table = await screen.findByRole('table');
+  const rivera = await within(table).findByRole('rowheader', { name: 'Alex Rivera' });
+  const riveraRow = rivera.closest('tr')!;
+  expect(
+    within(riveraRow)
+      .getAllByRole('cell')
+      .map((c) => c.textContent),
+  ).toEqual(['2.5', '6', '8.5']);
+  const unknownRow = within(table).getByRole('rowheader', { name: 'm-9' }).closest('tr')!;
+  expect(
+    within(unknownRow)
+      .getAllByRole('cell')
+      .map((c) => c.textContent),
+  ).toEqual(['0', '3', '3']);
+  expect(
+    within(table)
+      .getAllByRole('columnheader')
+      .map((h) => h.textContent),
+  ).toEqual(['Member', 'Hazmat', 'Ladders', 'Total hours']);
+
+  const now = new Date();
+  expect(Number(params?.get('from'))).toBe(new Date(now.getFullYear(), 0, 1).getTime());
+  const endOfToday =
+    new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime() + 86_400_000 - 1;
+  expect(Number(params?.get('to'))).toBe(endOfToday);
+});
+
+test('training hours: an empty range says no hours were recorded for it', async () => {
+  server.use(
+    http.get('/api/v1/training/hours', () => HttpResponse.json({ from: 0, to: 0, members: [] })),
+    http.get('/api/v1/personnel/members', () => HttpResponse.json({ items: [] })),
+  );
+
+  renderPage(<TrainingHoursPage />, ['OFFICER'], '/training/hours');
+
+  expect(
+    await screen.findByText(/No training hours were recorded for events between/),
+  ).toBeTruthy();
+});
+
+test('training hours: a 403 renders the forbidden state, not an empty table', async () => {
+  server.use(
+    http.get('/api/v1/training/hours', () =>
+      HttpResponse.json(
+        { type: 'about:blank', title: 'Forbidden', status: 403, traceId: 't' },
+        { status: 403 },
+      ),
+    ),
+    http.get('/api/v1/personnel/members', () => HttpResponse.json({ items: [] })),
+  );
+
+  renderPage(<TrainingHoursPage />, ['CHIEF'], '/training/hours');
+
+  expect(await screen.findByText('You do not have access to this page.')).toBeTruthy();
+  expect(screen.queryByText(/No training hours were recorded/)).toBeNull();
+});
+
+test('training hours: a reversed range is rejected before any request', async () => {
+  let requested = 0;
+  server.use(
+    http.get('/api/v1/training/hours', () => {
+      requested += 1;
+      return HttpResponse.json({ from: 0, to: 0, members: [] });
+    }),
+    http.get('/api/v1/personnel/members', () => HttpResponse.json({ items: [] })),
+  );
+
+  renderPage(<TrainingHoursPage />, ['TRAINING'], '/training/hours');
+  await screen.findByRole('table');
+  const before = requested;
+
+  const from = screen.getByLabelText('From');
+  fireEvent.change(from, { target: { value: '2999-01-01' } });
+
+  expect(await screen.findByText('Choose a start date on or before the end date.')).toBeTruthy();
+  expect(screen.queryByRole('table')).toBeNull();
+  expect(requested).toBe(before);
+});
+
+test('training hours: MEMBER is not granted the page', async () => {
+  renderPage(<TrainingHoursPage />, ['MEMBER'], '/training/hours');
+  await waitFor(() => expect(screen.queryByRole('heading', { name: 'Training hours' })).toBeNull());
 });

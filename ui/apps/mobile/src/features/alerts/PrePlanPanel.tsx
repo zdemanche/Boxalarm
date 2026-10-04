@@ -1,30 +1,293 @@
 import { palette, spacing, typography } from '@boxalarm/design-tokens';
 import { Text, useColorScheme, View } from 'react-native';
-import type { PrePlanEnrichment } from './types';
+import type { NearestHydrant, PrePlanEnrichment, UtilityShutoff } from './types';
+
+type Tokens = (typeof palette)[keyof typeof palette];
+
+export const UNAVAILABLE_TEXT =
+  'Pre-plan unavailable right now. This does not mean there is no pre-plan for this address.';
+export const NO_MATCH_TEXT = 'No pre-plan matched this address.';
+
+/** Listed only when nearer than a usable one - so the crew knows not to lay in from it. */
+function isOutOfService(hydrant: NearestHydrant): boolean {
+  return hydrant.status === 'OUT_OF_SERVICE';
+}
+
+/**
+ * "H-014 · 90 m · 6-inch · 1000 gpm (class A)" / "H-015 · 15 m · OUT OF SERVICE" - one
+ * glanceable line per hydrant.
+ */
+function describeHydrant(hydrant: NearestHydrant): string {
+  const flow =
+    hydrant.flowRatingGpm !== undefined
+      ? `${hydrant.flowRatingGpm} gpm${hydrant.flowClass ? ` (class ${hydrant.flowClass})` : ''}`
+      : hydrant.flowClass
+        ? `class ${hydrant.flowClass}`
+        : undefined;
+  return [
+    hydrant.hydrantId,
+    hydrant.distanceMeters !== undefined ? `${hydrant.distanceMeters} m` : undefined,
+    isOutOfService(hydrant) ? 'OUT OF SERVICE' : undefined,
+    hydrant.size,
+    flow,
+  ]
+    .filter((part): part is string => Boolean(part))
+    .join(' · ');
+}
+
+/** The occupancy's own summary: occupancySummary when the server sends provenance. */
+function summaryOf(prePlan: PrePlanEnrichment): string | undefined {
+  return prePlan.matchType ? prePlan.occupancySummary : prePlan.summary;
+}
+
+function withUnit(address: string, unit: string | null | undefined): string {
+  // Skip when the address already names the unit ("40 Oak Ave Apt 2").
+  const words = address.toUpperCase().split(/[\s,#.]+/);
+  return unit && !words.slice(1).includes(unit.toUpperCase())
+    ? `${address} (unit ${unit})`
+    : address;
+}
+
+/**
+ * What the pre-plan was matched on, in words. `warning` notices are guesses the crew must
+ * check - they lead with "VERIFY ADDRESS" so the meaning never rests on colour alone.
+ */
+export function matchNotice(prePlan: PrePlanEnrichment): { text: string; warning: boolean } | null {
+  const address = prePlan.matchedAddress;
+  switch (prePlan.matchType) {
+    case 'ADDRESS':
+      return address ? { text: `Pre-plan for ${address}`, warning: false } : null;
+    case 'ADDRESS_BUILDING':
+      // Always a warning (R3-C): the dispatched unit may be a separate structure - a rear
+      // cottage, Bldg 2, Lot 12 - that the main building's plan does not describe.
+      return {
+        text: `VERIFY ADDRESS: building-level pre-plan${address ? ` for ${address}` : ''}; no plan for ${prePlan.dispatchUnit ?? 'the dispatched unit'}.`,
+        warning: true,
+      };
+    case 'ADDRESS_UNVERIFIED':
+      // Same street address, but the town (or the address itself) could not be confirmed as
+      // this call's - e.g. a dispatch that may be in another town.
+      return {
+        text: `VERIFY ADDRESS: pre-plan for ${address ?? 'this street address'}, but its town could not be confirmed as this call's.`,
+        warning: true,
+      };
+    case 'UNIT_MISMATCH':
+      return {
+        // The server also returns this for a dispatch that named no unit, so say only what is
+        // known: the plan covers one unit, not the whole address.
+        text: `VERIFY ADDRESS: this pre-plan is for ${withUnit(address ?? 'one unit', prePlan.unit)} only.`,
+        warning: true,
+      };
+    case 'NEARBY':
+      return {
+        text: `VERIFY ADDRESS: nearby pre-plan for ${address ?? 'another address'}${prePlan.distanceMeters !== undefined ? `, ${prePlan.distanceMeters} m from the dispatch location` : ''}.`,
+        warning: true,
+      };
+    case 'CANDIDATES':
+      return {
+        text: `VERIFY ADDRESS: ${prePlan.candidates?.length ?? 'Several'} pre-plans match this address. Confirm which one applies.`,
+        warning: true,
+      };
+    default:
+      return null;
+  }
+}
+
+function Heading({ tokens, children }: { tokens: Tokens; children: string }) {
+  return (
+    <Text style={{ color: tokens.foreground, fontSize: typography.size.sm, fontWeight: '600' }}>
+      {children}
+    </Text>
+  );
+}
+
+function HazardList({ tokens, hazards }: { tokens: Tokens; hazards: readonly string[] }) {
+  if (hazards.length === 0) return null;
+  return (
+    <View style={{ marginTop: spacing.md }}>
+      <Heading tokens={tokens}>Hazards</Heading>
+      {hazards.map((hazard) => (
+        <Text
+          key={hazard}
+          style={{ color: tokens.error, fontSize: typography.size.sm, marginTop: 2 }}
+        >
+          {hazard}
+        </Text>
+      ))}
+    </View>
+  );
+}
+
+function ShutoffList({
+  tokens,
+  shutoffs,
+}: {
+  tokens: Tokens;
+  shutoffs: readonly UtilityShutoff[];
+}) {
+  if (shutoffs.length === 0) return null;
+  return (
+    <View style={{ marginTop: spacing.md }}>
+      <Heading tokens={tokens}>Utility shutoffs</Heading>
+      {shutoffs.map((shutoff) => (
+        <Text
+          key={`${shutoff.utility}-${shutoff.location}`}
+          style={{ color: tokens.foreground, fontSize: typography.size.sm, marginTop: 2 }}
+        >
+          {shutoff.utility}: {shutoff.location}
+        </Text>
+      ))}
+    </View>
+  );
+}
+
+const HYDRANTS_UNAVAILABLE_TEXT = 'Hydrant list unavailable right now.';
+const HYDRANTS_INCOMPLETE_TEXT = 'Hydrant list may be incomplete: a nearer hydrant may be missing.';
+
+function WarningNotice({ tokens, children }: { tokens: Tokens; children: string }) {
+  return (
+    <Text
+      accessibilityRole="alert"
+      style={{
+        color: tokens.warning,
+        fontSize: typography.size.base,
+        fontWeight: '700',
+        marginTop: spacing.xs,
+        borderLeftWidth: 4,
+        borderLeftColor: tokens.warning,
+        paddingLeft: spacing.sm,
+      }}
+    >
+      {children}
+    </Text>
+  );
+}
+
+function HydrantSection({
+  tokens,
+  hydrants,
+  unavailable,
+  incomplete,
+}: {
+  tokens: Tokens;
+  hydrants: readonly NearestHydrant[];
+  unavailable: boolean;
+  incomplete: boolean;
+}) {
+  if (unavailable)
+    return <WarningNotice tokens={tokens}>{HYDRANTS_UNAVAILABLE_TEXT}</WarningNotice>;
+  if (hydrants.length === 0) return null;
+  return (
+    <View style={{ marginTop: spacing.md }}>
+      <Heading tokens={tokens}>Nearest hydrants</Heading>
+      {incomplete ? (
+        <WarningNotice tokens={tokens}>{HYDRANTS_INCOMPLETE_TEXT}</WarningNotice>
+      ) : null}
+      {hydrants.map((hydrant) => (
+        <Text
+          key={hydrant.hydrantId}
+          style={{
+            color: isOutOfService(hydrant) ? tokens.error : tokens.foreground,
+            fontWeight: isOutOfService(hydrant) ? '700' : '400',
+            fontSize: typography.size.sm,
+            marginTop: 2,
+          }}
+        >
+          {describeHydrant(hydrant)}
+        </Text>
+      ))}
+    </View>
+  );
+}
+
+function MatchedPrePlan({ tokens, prePlan }: { tokens: Tokens; prePlan: PrePlanEnrichment }) {
+  const notice = matchNotice(prePlan);
+  return (
+    <>
+      {notice ? (
+        notice.warning ? (
+          <WarningNotice tokens={tokens}>{notice.text}</WarningNotice>
+        ) : (
+          <Text
+            style={{
+              color: tokens.foreground,
+              fontSize: typography.size.base,
+              fontWeight: '600',
+              marginTop: spacing.xs,
+            }}
+          >
+            {notice.text}
+          </Text>
+        )
+      ) : null}
+
+      {prePlan.matchType === 'CANDIDATES'
+        ? (prePlan.candidates ?? []).map((candidate) => (
+            <View key={candidate.occupancyId} style={{ marginTop: spacing.md }}>
+              <Text
+                style={{
+                  color: tokens.foreground,
+                  fontSize: typography.size.base,
+                  fontWeight: '700',
+                }}
+              >
+                {withUnit(candidate.matchedAddress, candidate.unit)}
+                {candidate.distanceMeters !== undefined ? ` · ${candidate.distanceMeters} m` : ''}
+              </Text>
+              {candidate.summary ? (
+                <Text style={{ color: tokens.foreground, fontSize: typography.size.sm }}>
+                  {candidate.summary}
+                </Text>
+              ) : null}
+              <HazardList tokens={tokens} hazards={candidate.hazards} />
+              <ShutoffList tokens={tokens} shutoffs={candidate.utilityShutoffs} />
+            </View>
+          ))
+        : null}
+
+      {summaryOf(prePlan) ? (
+        <Text
+          style={{
+            color: tokens.foreground,
+            fontSize: typography.size.base,
+            marginTop: spacing.xs,
+          }}
+        >
+          {summaryOf(prePlan)}
+        </Text>
+      ) : null}
+
+      <HazardList tokens={tokens} hazards={prePlan.hazards} />
+      <ShutoffList tokens={tokens} shutoffs={prePlan.utilityShutoffs} />
+    </>
+  );
+}
 
 // E1-S17-UI / E5-S8-UI: pre-plan/hydrant enrichment, sourced only from the alerting-service
 // dispatch-detail response (N1.5 - never a call to /inspections/*). Renders nothing (no empty
-// shell, no spinner) when the dispatch carries no pre-plan copy, per AC2.
-export function PrePlanPanel({ prePlan }: { prePlan: PrePlanEnrichment | null | undefined }) {
+// shell, no spinner) when the dispatch carries neither a pre-plan answer nor hydrants, per AC2.
+// Nearest hydrants render whether or not a pre-plan matched: the top-level list when the
+// server sends one (it includes flagged out-of-service hydrants), else the pre-plan's own.
+export function PrePlanPanel({
+  prePlan,
+  unavailable = false,
+  nearestHydrants,
+  hydrantsUnavailable = false,
+  hydrantsIncomplete = false,
+}: {
+  prePlan: PrePlanEnrichment | null | undefined;
+  /** The lookup failed: say so, never "no pre-plan" (a throttle is not an empty binder). */
+  unavailable?: boolean;
+  nearestHydrants?: readonly NearestHydrant[];
+  hydrantsUnavailable?: boolean;
+  hydrantsIncomplete?: boolean;
+}) {
   const scheme = useColorScheme();
   const tokens = scheme === 'dark' ? palette.cab : palette.day;
+  const hydrants = nearestHydrants ?? prePlan?.nearestHydrants ?? [];
 
-  if (prePlan === undefined) return null;
-
-  if (prePlan === null) {
-    return (
-      <View style={{ marginTop: spacing.lg }}>
-        <Text
-          accessibilityRole="header"
-          style={{ color: tokens.foreground, fontSize: typography.size.lg, fontWeight: '700' }}
-        >
-          Pre-plan
-        </Text>
-        <Text style={{ color: tokens.foreground, opacity: 0.7, fontSize: typography.size.base }}>
-          No pre-plan on file for this address.
-        </Text>
-      </View>
-    );
+  if (!unavailable && prePlan === undefined && hydrants.length === 0 && !hydrantsUnavailable) {
+    return null;
   }
 
   return (
@@ -35,73 +298,21 @@ export function PrePlanPanel({ prePlan }: { prePlan: PrePlanEnrichment | null | 
       >
         Pre-plan
       </Text>
-      {prePlan.summary ? (
-        <Text
-          style={{
-            color: tokens.foreground,
-            fontSize: typography.size.base,
-            marginTop: spacing.xs,
-          }}
-        >
-          {prePlan.summary}
+      {unavailable ? (
+        <WarningNotice tokens={tokens}>{UNAVAILABLE_TEXT}</WarningNotice>
+      ) : prePlan === null ? (
+        <Text style={{ color: tokens.foreground, opacity: 0.7, fontSize: typography.size.base }}>
+          {NO_MATCH_TEXT}
         </Text>
+      ) : prePlan ? (
+        <MatchedPrePlan tokens={tokens} prePlan={prePlan} />
       ) : null}
-
-      {prePlan.hazards.length > 0 ? (
-        <View style={{ marginTop: spacing.md }}>
-          <Text
-            style={{ color: tokens.foreground, fontSize: typography.size.sm, fontWeight: '600' }}
-          >
-            Hazards
-          </Text>
-          {prePlan.hazards.map((hazard) => (
-            <Text
-              key={hazard}
-              style={{ color: tokens.error, fontSize: typography.size.sm, marginTop: 2 }}
-            >
-              {hazard}
-            </Text>
-          ))}
-        </View>
-      ) : null}
-
-      {prePlan.utilityShutoffs.length > 0 ? (
-        <View style={{ marginTop: spacing.md }}>
-          <Text
-            style={{ color: tokens.foreground, fontSize: typography.size.sm, fontWeight: '600' }}
-          >
-            Utility shutoffs
-          </Text>
-          {prePlan.utilityShutoffs.map((shutoff) => (
-            <Text
-              key={`${shutoff.utility}-${shutoff.location}`}
-              style={{ color: tokens.foreground, fontSize: typography.size.sm, marginTop: 2 }}
-            >
-              {shutoff.utility}: {shutoff.location}
-            </Text>
-          ))}
-        </View>
-      ) : null}
-
-      {prePlan.nearestHydrants.length > 0 ? (
-        <View style={{ marginTop: spacing.md }}>
-          <Text
-            style={{ color: tokens.foreground, fontSize: typography.size.sm, fontWeight: '600' }}
-          >
-            Nearest hydrants
-          </Text>
-          {prePlan.nearestHydrants.map((hydrant) => (
-            <Text
-              key={hydrant.hydrantId}
-              style={{ color: tokens.foreground, fontSize: typography.size.sm, marginTop: 2 }}
-            >
-              {hydrant.hydrantId}
-              {hydrant.size ? ` · ${hydrant.size}` : ''}
-              {hydrant.flowRatingGpm ? ` · ${hydrant.flowRatingGpm} gpm` : ''}
-            </Text>
-          ))}
-        </View>
-      ) : null}
+      <HydrantSection
+        tokens={tokens}
+        hydrants={hydrants}
+        unavailable={hydrantsUnavailable}
+        incomplete={hydrantsIncomplete}
+      />
     </View>
   );
 }

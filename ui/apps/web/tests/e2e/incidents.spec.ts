@@ -1,6 +1,7 @@
 import { generateKeyPairSync, sign, type KeyObject } from 'node:crypto';
 import AxeBuilder from '@axe-core/playwright';
 import { expect, test, type Page } from '@playwright/test';
+import { DEMO_NERIS_SCHEMA } from '../../src/features/incidents/nerisSchemaFixture';
 
 const ISSUER = 'https://cognito-idp.us-east-1.amazonaws.com/us-east-1_test';
 const CLIENT_ID = 'test-web-client';
@@ -85,7 +86,10 @@ const incident = {
   dispatchNumber: '26-001841',
   epochSeconds: 1_700_000_000,
   nerisSchemaVersion: '2026.2',
-  corePayload: { incident_type: 'STRUCTURE_FIRE', address: '14 Elm St, Trumbull, CT' },
+  corePayload: {
+    incident_type: 'FIRE||STRUCTURE_FIRE||ROOM_AND_CONTENTS_FIRE',
+    address: '14 Elm St, Trumbull, CT',
+  },
   incidentType: 'Structure fire',
   address: '14 Elm St, Trumbull, CT',
   alarmAt: Math.floor(Date.now() / 1000) - 86_400,
@@ -109,11 +113,61 @@ const incident = {
   respondingMembers: [{ memberId: 'm-rivera', status: 'RESPONDING' }],
 };
 
+const VALIDATION_REPORT = {
+  blocking: [],
+  warnings: [],
+  nerisValidatedAt: null,
+  sectionsComplete: { core: true, dispatch: true, units: true, narrative: true },
+};
+
+const nerisSchema = {
+  version: '2026.2+neris-1.5.1',
+  apiVersion: '1.5.1',
+  incidentTypes: [
+    {
+      value: 'FIRE||STRUCTURE_FIRE||ROOM_AND_CONTENTS_FIRE',
+      label: 'Fire › Structure fire › Room and contents fire',
+    },
+    { value: 'FIRE||STRUCTURE_FIRE||CHIMNEY_FIRE', label: 'Fire › Structure fire › Chimney fire' },
+    { value: 'NOEMERG||CANCELLED', label: 'Noemerg › Cancelled' },
+  ],
+  modules: {},
+};
+
 test('incident list and report pass axe on the default, error, and validated states', async ({
   page,
 }) => {
   await page.route('**/api/v1/incidents**', async (route) => {
     const url = route.request().url();
+    if (url.includes('/incidents/neris-schema')) {
+      await route.fulfill({ json: nerisSchema });
+      return;
+    }
+    if (url.includes('/incidents/dispatches')) {
+      // The "Start a report" list the page loads alongside the search. Without this branch the
+      // catch-all's search-shaped body used to crash the page into the route error boundary.
+      await route.fulfill({
+        json: {
+          recentWindowHours: 72,
+          dispatches: [
+            {
+              dispatchId: 'D-2026-0007',
+              incidentType: 'STRUCTURE FIRE',
+              address: '12 Oak St',
+              dispatchedAt: Math.floor(Date.now() / 1000) - 1800,
+              report: null,
+            },
+          ],
+          nextCursor: null,
+        },
+      });
+      return;
+    }
+    if (url.endsWith('/incidents/i-1/validate')) {
+      // "What's blocking lock" runs when the report opens: answer it as the API does.
+      await route.fulfill({ json: VALIDATION_REPORT });
+      return;
+    }
     if (url.includes('/incidents/i-1')) {
       await route.fulfill({ json: incident });
       return;
@@ -125,6 +179,8 @@ test('incident list and report pass axe on the default, error, and validated sta
   await page.goto('/incidents');
   await expect(page.getByRole('heading', { name: 'Incidents', exact: true })).toBeVisible();
   await expect(page.getByRole('link', { name: '26-001841' })).toBeVisible();
+  // The recent-dispatches section rendered from its own endpoint's shape.
+  await expect(page.getByText('12 Oak St')).toBeVisible();
 
   const listResults = await new AxeBuilder({ page }).include('main').analyze();
   expect(listResults.violations).toEqual([]);
@@ -132,15 +188,66 @@ test('incident list and report pass axe on the default, error, and validated sta
   await page.getByRole('link', { name: '26-001841' }).click();
   await expect(page.getByRole('heading', { level: 1 })).toContainText('14 Elm St');
   await page.getByRole('button', { name: 'Incident type and actions' }).click();
-  await page.getByLabel('NERIS incident type').fill('NOT_A_CODE');
+  await page.getByLabel('NERIS incident type').selectOption('FIRE||STRUCTURE_FIRE||CHIMNEY_FIRE');
+  await page.getByLabel('Action taken').fill('NOT_A_CODE');
   await page.getByRole('button', { name: 'Save and continue' }).click();
-  await expect(page.getByRole('alert')).toContainText('must be one of: STRUCTURE_FIRE');
+  await expect(page.getByRole('alert')).toContainText('must be one of: EXTINGUISH');
 
   const errorResults = await new AxeBuilder({ page }).include('main').analyze();
   expect(errorResults.violations).toEqual([]);
 
   await page.getByRole('button', { name: 'Review and submit' }).click();
-  await expect(page.getByRole('button', { name: 'Submit', exact: true })).toBeEnabled();
+  // Validated is not enough: Submit opens only once an officer has reviewed and locked it.
+  await expect(page.getByRole('button', { name: 'Submit', exact: true })).toBeDisabled();
+  await expect(
+    page.getByText('Submit stays unavailable until an officer reviews and locks the report.'),
+  ).toBeVisible();
   const reviewResults = await new AxeBuilder({ page }).include('main').analyze();
   expect(reviewResults.violations).toEqual([]);
+});
+
+test('the NERIS module editors pass axe with a module filled in', async ({ page }) => {
+  const draft = {
+    ...incident,
+    status: 'DRAFT',
+    corePayload: {
+      ...incident.corePayload,
+      smoke_alarm: {
+        presence: {
+          type: 'PRESENT',
+          working: false,
+          alarm_types: ['HARDWIRED'],
+          operation: { alerted_failed_other: { type: 'OPERATED_ALERTED_OCCUPANT' } },
+        },
+      },
+    },
+  };
+  await page.route('**/api/v1/incidents**', async (route) => {
+    const url = route.request().url();
+    if (url.includes('/incidents/neris-schema')) {
+      await route.fulfill({ json: DEMO_NERIS_SCHEMA });
+      return;
+    }
+    if (url.endsWith('/incidents/i-1/validate')) {
+      // "What's blocking lock" runs when the report opens: answer it as the API does.
+      await route.fulfill({ json: VALIDATION_REPORT });
+      return;
+    }
+    if (url.includes('/incidents/i-1')) {
+      await route.fulfill({ json: draft });
+      return;
+    }
+    await route.fulfill({ json: { incidents: [draft] } });
+  });
+
+  await signInAs(page, ['OFFICER', 'CHIEF']);
+  await page.goto('/incidents/i-1');
+  await expect(page.getByRole('heading', { level: 1 })).toContainText('14 Elm St');
+  await page.getByRole('button', { name: 'Fire protection systems' }).click();
+  const smoke = page.getByRole('region', { name: 'Smoke alarm' });
+  await expect(smoke.getByRole('radio', { name: 'Present', exact: true })).toBeChecked();
+  await expect(smoke.getByRole('group', { name: 'Working' })).toBeVisible();
+
+  const results = await new AxeBuilder({ page }).include('main').analyze();
+  expect(results.violations).toEqual([]);
 });

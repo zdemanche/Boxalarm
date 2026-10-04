@@ -77,3 +77,26 @@
     display: grid;
   }
 }
+
+.recentCalls {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: var(--bx-space-sm);
+}
+
+.recentCall {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--bx-space-sm);
+  padding: var(--bx-space-sm) 0;
+  border-bottom: 1px solid var(--bx-border-decorative);
+  overflow-wrap: anywhere;
+}
+
+.recentMeta {
+  color: var(--bx-fg-muted);
+}

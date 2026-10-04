@@ -28,7 +28,7 @@ Every handler these stories need already exists on main under `backend/src/servi
 
 ## #181 — E4-S1-INFRA: Apparatus registry with in/out-of-service status
 
-**Parent:** https://github.com/zdemanche/Boxalarm-monorepo/issues/61 · **Wave:** 3
+**Parent:** https://github.com/zdemanche/Boxalarm/issues/61 · **Wave:** 3
 
 Deploy the merged apparatus registry handlers behind the HTTP API.
 
@@ -57,7 +57,7 @@ Deploy the merged apparatus registry handlers behind the HTTP API.
 
 ## #182 — E4-S2-INFRA: Configurable per-apparatus check-sheet templates
 
-**Parent:** https://github.com/zdemanche/Boxalarm-monorepo/issues/62 · **Wave:** 4
+**Parent:** https://github.com/zdemanche/Boxalarm/issues/62 · **Wave:** 4
 
 Deploy the merged checklist-resolution handler.
 
@@ -84,7 +84,7 @@ Deploy the merged checklist-resolution handler.
 
 ## #183 — E4-S3-INFRA: Complete a glove-friendly truck check in under 90 seconds, offline-capable
 
-**Parent:** https://github.com/zdemanche/Boxalarm-monorepo/issues/63 · **Wave:** 5
+**Parent:** https://github.com/zdemanche/Boxalarm/issues/63 · **Wave:** 5
 
 Route and Lambda for check submission with idempotent writes.
 
@@ -112,7 +112,7 @@ Route and Lambda for check submission with idempotent writes.
 
 ## #184 — E4-S4-INFRA: Report a defect with photo, routed to the apparatus officer
 
-**Parent:** https://github.com/zdemanche/Boxalarm-monorepo/issues/64 · **Wave:** 7
+**Parent:** https://github.com/zdemanche/Boxalarm/issues/64 · **Wave:** 7
 
 Defect route, photo storage prefix, outbox publication, and bus rule to notification-service.
 
@@ -144,7 +144,7 @@ Defect route, photo storage prefix, outbox publication, and bus rule to notifica
 
 ## #185 — E4-S5-INFRA: Out-of-service tracking with reason, duration, and availability impact
 
-**Parent:** https://github.com/zdemanche/Boxalarm-monorepo/issues/65 · **Wave:** 4
+**Parent:** https://github.com/zdemanche/Boxalarm/issues/65 · **Wave:** 4
 
 Deploy the merged service-status and OOS-aware registry handlers.
 
@@ -172,7 +172,7 @@ Deploy the merged service-status and OOS-aware registry handlers.
 
 ## #186 — E4-S6-INFRA: Maintenance history and scheduled maintenance
 
-**Parent:** https://github.com/zdemanche/Boxalarm-monorepo/issues/66 · **Wave:** 4
+**Parent:** https://github.com/zdemanche/Boxalarm/issues/66 · **Wave:** 4
 
 Deploy the merged maintenance handlers.
 
@@ -198,7 +198,7 @@ Deploy the merged maintenance handlers.
 
 ## #187 — E4-S7-INFRA: SCBA unit, cylinder, flow-test, and hydro-test records
 
-**Parent:** https://github.com/zdemanche/Boxalarm-monorepo/issues/67 · **Wave:** 7
+**Parent:** https://github.com/zdemanche/Boxalarm/issues/67 · **Wave:** 7
 
 SCBA and testing-schedule routes plus the daily Apparatus Testing Scanner.
 
@@ -228,7 +228,7 @@ SCBA and testing-schedule routes plus the daily Apparatus Testing Scanner.
 
 ## #188 — E4-S8-INFRA: Hose, ladder, pump, and aerial testing schedules with due-alerting
 
-**Parent:** https://github.com/zdemanche/Boxalarm-monorepo/issues/68 · **Wave:** 7
+**Parent:** https://github.com/zdemanche/Boxalarm/issues/68 · **Wave:** 7
 
 Test-record write route; reuses E4-S7's scanner, schedule and notify rule.
 
@@ -255,7 +255,7 @@ Test-record write route; reuses E4-S7's scanner, schedule and notify rule.
 
 ## #189 — E4-S9-INFRA: Compartment inventory per apparatus
 
-**Parent:** https://github.com/zdemanche/Boxalarm-monorepo/issues/69 · **Wave:** 4
+**Parent:** https://github.com/zdemanche/Boxalarm/issues/69 · **Wave:** 4
 
 Deploy the merged compartment inventory handlers.
 
@@ -281,7 +281,7 @@ Deploy the merged compartment inventory handlers.
 
 ## #190 — E4-S10-INFRA: Check-compliance reporting — what got checked, what didn't
 
-**Parent:** https://github.com/zdemanche/Boxalarm-monorepo/issues/70 · **Wave:** 6
+**Parent:** https://github.com/zdemanche/Boxalarm/issues/70 · **Wave:** 6
 
 Read-only compliance route.
 
@@ -309,7 +309,7 @@ Read-only compliance route.
 
 ## #191 — E4-S11-INFRA: Equipment/asset registry with serial numbers, assignment, and location
 
-**Parent:** https://github.com/zdemanche/Boxalarm-monorepo/issues/71 · **Wave:** 3
+**Parent:** https://github.com/zdemanche/Boxalarm/issues/71 · **Wave:** 3
 
 Deploy the merged equipment registry handlers.
 
@@ -336,7 +336,7 @@ Deploy the merged equipment registry handlers.
 
 ## #192 — E4-S12-INFRA: PPE assignment with sizes and NFPA service-life expiry alerting
 
-**Parent:** https://github.com/zdemanche/Boxalarm-monorepo/issues/72 · **Wave:** 7
+**Parent:** https://github.com/zdemanche/Boxalarm/issues/72 · **Wave:** 7
 
 PPE routes, daily PPE Expiry Scanner, and the inventory notify queue.
 
@@ -365,7 +365,7 @@ PPE routes, daily PPE Expiry Scanner, and the inventory notify queue.
 
 ## #193 — E4-S13-INFRA: Consumable stock levels and reorder-threshold alerting
 
-**Parent:** https://github.com/zdemanche/Boxalarm-monorepo/issues/73 · **Wave:** 7
+**Parent:** https://github.com/zdemanche/Boxalarm/issues/73 · **Wave:** 7
 
 Consumables routes, scheduled stock scan, and the reorder rule.
 
@@ -394,7 +394,7 @@ Consumables routes, scheduled stock scan, and the reorder rule.
 
 ## #194 — E4-S14-INFRA: Asset lifecycle: acquisition through retirement
 
-**Parent:** https://github.com/zdemanche/Boxalarm-monorepo/issues/74 · **Wave:** 4
+**Parent:** https://github.com/zdemanche/Boxalarm/issues/74 · **Wave:** 4
 
 Deploy the merged lifecycle handler.
 

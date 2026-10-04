@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { HttpResponse, http } from 'msw';
@@ -11,9 +11,43 @@ import { RequireRole } from '../../routing/RequireRole';
 import { dateTimeLocalToEpoch } from './format';
 import { IncidentDetailPage } from './IncidentDetailPage';
 import { IncidentsListPage } from './IncidentsListPage';
-import type { IncidentDetail } from './types';
+import type { IncidentDetail, SubmissionState, ValidationReport } from './types';
 
-const server = setupServer();
+/** Nothing blocking: the review checklist runs on every detail load. */
+function cleanReport(mode = 'local'): ValidationReport {
+  return {
+    incidentId: 'i-1',
+    mode: mode as ValidationReport['mode'],
+    blocking: [],
+    warnings: [],
+    nerisValidatedAt: null,
+    sectionsComplete: { core: true, dispatch: true, units: true, narrative: true },
+  };
+}
+
+/** A few NERIS TypeIncidentValues, as GET /incidents/neris-schema serves them. */
+const NERIS_SCHEMA = {
+  version: '2026.2+neris-1.5.1',
+  apiVersion: '1.5.1',
+  incidentTypes: [
+    { value: 'FIRE||STRUCTURE_FIRE||CHIMNEY_FIRE', label: 'Fire › Structure fire › Chimney fire' },
+    {
+      value: 'FIRE||STRUCTURE_FIRE||ROOM_AND_CONTENTS_FIRE',
+      label: 'Fire › Structure fire › Room and contents fire',
+    },
+    {
+      value: 'MEDICAL||ILLNESS||BREATHING_PROBLEMS',
+      label: 'Medical › Illness › Breathing problems',
+    },
+    { value: 'NOEMERG||CANCELLED', label: 'Noemerg › Cancelled' },
+  ],
+  modules: {},
+};
+
+const server = setupServer(
+  http.post('/api/v1/incidents/:incidentId/validate', () => HttpResponse.json(cleanReport())),
+  http.get('/api/v1/incidents/neris-schema', () => HttpResponse.json(NERIS_SCHEMA)),
+);
 beforeAll(() => server.listen());
 afterEach(() => {
   server.resetHandlers();
@@ -78,7 +112,7 @@ function detail(overrides: Partial<IncidentDetail> = {}): IncidentDetail {
     epochSeconds: 1_700_000_000,
     nerisSchemaVersion: '2026.2',
     corePayload: {
-      incident_type: 'STRUCTURE_FIRE',
+      incident_type: 'FIRE||STRUCTURE_FIRE||ROOM_AND_CONTENTS_FIRE',
       address: '14 Elm St, Trumbull, CT',
     },
     incidentType: 'Structure fire',
@@ -171,7 +205,7 @@ test('detail loads the record, including core payload, from one request', async 
         incidents: [detail({ alarmAt: Math.floor(Date.now() / 1000) - 86400 })],
       }),
     ),
-    http.get('/api/v1/incidents/:incidentId', () => {
+    http.get('/api/v1/incidents/i-1', () => {
       detailGets += 1;
       return HttpResponse.json(detail());
     }),
@@ -188,7 +222,10 @@ test('detail loads the record, including core payload, from one request', async 
   await user.click(screen.getAllByRole('link', { name: '26-001841' })[0]!);
   await screen.findByRole('heading', { level: 1, name: /14 Elm St/ });
   await user.click(screen.getByRole('button', { name: 'Incident type and actions' }));
-  expect(screen.getByLabelText('NERIS incident type')).toHaveProperty('value', 'STRUCTURE_FIRE');
+  expect(await screen.findByLabelText('NERIS incident type')).toHaveProperty(
+    'value',
+    'FIRE||STRUCTURE_FIRE||ROOM_AND_CONTENTS_FIRE',
+  );
   expect(detailGets).toBe(1);
 });
 
@@ -218,6 +255,10 @@ test('chief creates a report from a dispatch and sees the prefilled fields', asy
   });
   server.use(
     http.get('/api/v1/incidents', () => HttpResponse.json({ incidents: [] })),
+    // The typed Dispatch ID is only the fallback when the dispatch list can't load.
+    http.get('/api/v1/incidents/dispatches', () =>
+      HttpResponse.json({ title: 'Service Unavailable', status: 503 }, { status: 503 }),
+    ),
     http.post('/api/v1/incidents', async ({ request }) => {
       const body = (await request.json()) as { dispatchId: string };
       expect(body).toEqual({ dispatchId: 'd-1' });
@@ -229,7 +270,7 @@ test('chief creates a report from a dispatch and sees the prefilled fields', asy
   const user = userEvent.setup();
   renderIncidents(['CHIEF']);
   await screen.findByRole('heading', { name: 'Incidents' });
-  await user.type(screen.getByLabelText('Dispatch ID'), 'd-1');
+  await user.type(await screen.findByLabelText('Dispatch ID'), 'd-1');
   await user.click(screen.getByRole('button', { name: 'Create report' }));
 
   await screen.findByRole('heading', { level: 1, name: /212 Church Hill Rd/ });
@@ -254,6 +295,9 @@ test('chief creates a report from a dispatch and sees the prefilled fields', asy
 test('unknown dispatch shows the problem title and detail and moves focus to it', async () => {
   server.use(
     http.get('/api/v1/incidents', () => HttpResponse.json({ incidents: [] })),
+    http.get('/api/v1/incidents/dispatches', () =>
+      HttpResponse.json({ title: 'Service Unavailable', status: 503 }, { status: 503 }),
+    ),
     http.post('/api/v1/incidents', () =>
       HttpResponse.json(
         {
@@ -271,7 +315,7 @@ test('unknown dispatch shows the problem title and detail and moves focus to it'
   const user = userEvent.setup();
   renderIncidents(['OFFICER']);
   await screen.findByRole('heading', { name: 'Incidents' });
-  await user.type(screen.getByLabelText('Dispatch ID'), 'missing');
+  await user.type(await screen.findByLabelText('Dispatch ID'), 'missing');
   await user.click(screen.getByRole('button', { name: 'Create report' }));
 
   const alert = await screen.findByRole('alert');
@@ -294,19 +338,130 @@ test('an invalid NERIS code blocks the step, shows allowed values, and focuses t
   renderIncidents(['OFFICER'], '/incidents/i-1');
   await screen.findByRole('heading', { level: 1, name: /14 Elm St/ });
   await user.click(screen.getByRole('button', { name: 'Incident type and actions' }));
-  fireEvent.change(screen.getByLabelText('NERIS incident type'), {
-    target: { value: 'NOT_A_CODE' },
-  });
+  await screen.findByLabelText('NERIS incident type');
+  fireEvent.change(screen.getByLabelText('Action taken'), { target: { value: 'NOT_A_CODE' } });
   await user.click(screen.getByRole('button', { name: 'Save and continue' }));
 
   expect((await screen.findByRole('alert')).textContent).toMatch(
-    /must be one of: STRUCTURE_FIRE, VEHICLE_FIRE, EMS_ASSIST, FALSE_ALARM/,
+    /must be one of: EXTINGUISH, INVESTIGATE, ASSIST_EMS, NO_ACTION/,
   );
-  await waitFor(() =>
-    expect(document.activeElement).toBe(screen.getByLabelText('NERIS incident type')),
-  );
+  await waitFor(() => expect(document.activeElement).toBe(screen.getByLabelText('Action taken')));
   expect(screen.getByRole('heading', { level: 2, name: 'Incident type and actions' })).toBeTruthy();
   expect(puts).toBe(0);
+});
+
+test('the incident type picker lists NERIS labels by category and saves the NERIS value', async () => {
+  const puts: Array<{ fields: Record<string, string> }> = [];
+  server.use(
+    http.get('/api/v1/incidents/i-1', () => HttpResponse.json(detail())),
+    http.put('/api/v1/incidents/i-1', async ({ request }) => {
+      const body = (await request.json()) as { fields: Record<string, string> };
+      puts.push(body);
+      return HttpResponse.json(
+        detail({ corePayload: { ...detail().corePayload, ...body.fields } }),
+      );
+    }),
+  );
+
+  const user = userEvent.setup();
+  renderIncidents(['OFFICER'], '/incidents/i-1');
+  await screen.findByRole('heading', { level: 1, name: /14 Elm St/ });
+  await user.click(screen.getByRole('button', { name: 'Incident type and actions' }));
+
+  const picker = await screen.findByLabelText('NERIS incident type');
+  const category = screen.getByLabelText(/Incident category/);
+  expect(category).toHaveProperty('value', 'FIRE');
+  expect(
+    within(category)
+      .getAllByRole('option')
+      .map((option) => option.textContent),
+  ).toEqual(['All categories', 'Fire', 'Medical', 'No emergency']);
+  expect(picker.getAttribute('aria-describedby')).toBeTruthy();
+  expect(screen.getByText('Selected: Fire › Structure fire › Room and contents fire')).toBeTruthy();
+
+  // Narrowing to another category drops the Fire types and clears the Fire choice.
+  await user.selectOptions(category, 'MEDICAL');
+  expect(
+    within(picker).queryByRole('option', { name: 'Structure fire › Chimney fire' }),
+  ).toBeNull();
+  expect(within(picker).getByRole('option', { name: 'Illness › Breathing problems' })).toBeTruthy();
+  expect(picker).toHaveProperty('value', '');
+
+  await user.selectOptions(category, '');
+  await user.selectOptions(picker, 'FIRE||STRUCTURE_FIRE||CHIMNEY_FIRE');
+  expect(screen.getByText('Selected: Fire › Structure fire › Chimney fire')).toBeTruthy();
+  await user.click(screen.getByRole('button', { name: 'Save and continue' }));
+
+  await waitFor(() => expect(puts).toHaveLength(1));
+  expect(puts[0]?.fields.incident_type).toBe('FIRE||STRUCTURE_FIRE||CHIMNEY_FIRE');
+});
+
+test('without downloaded NERIS types the picker says so and the step still saves', async () => {
+  const puts: Array<{ fields: Record<string, string> }> = [];
+  server.use(
+    http.get('/api/v1/incidents/neris-schema', () =>
+      HttpResponse.json(
+        {
+          type: 'about:blank',
+          title: 'Service Unavailable',
+          status: 503,
+          detail: "The NERIS schema hasn't been downloaded yet.",
+          traceId: 'trace-503',
+          code: 'NERIS_SCHEMA_UNAVAILABLE',
+        },
+        { status: 503 },
+      ),
+    ),
+    http.get('/api/v1/incidents/i-1', () => HttpResponse.json(detail())),
+    http.put('/api/v1/incidents/i-1', async ({ request }) => {
+      const body = (await request.json()) as { fields: Record<string, string> };
+      puts.push(body);
+      return HttpResponse.json(detail());
+    }),
+  );
+
+  const user = userEvent.setup();
+  renderIncidents(['OFFICER'], '/incidents/i-1');
+  await screen.findByRole('heading', { level: 1, name: /14 Elm St/ });
+  await user.click(screen.getByRole('button', { name: 'Incident type and actions' }));
+
+  expect(await screen.findByText(/NERIS incident types are not downloaded yet/)).toBeTruthy();
+  expect(screen.queryByLabelText('NERIS incident type')).toBeNull();
+  fireEvent.change(screen.getByLabelText('Action taken'), { target: { value: 'EXTINGUISH' } });
+  await user.click(screen.getByRole('button', { name: 'Save and continue' }));
+
+  await waitFor(() => expect(puts).toHaveLength(1));
+  expect(puts[0]).toEqual({ fields: { action_taken: 'EXTINGUISH' } });
+});
+
+test('a stored non-NERIS incident type is flagged, not silently dropped or re-sent', async () => {
+  const legacy = detail({
+    corePayload: { incident_type: 'STRUCTURE_FIRE', address: '14 Elm St, Trumbull, CT' },
+  });
+  const puts: Array<{ fields: Record<string, string> }> = [];
+  server.use(
+    http.get('/api/v1/incidents/i-1', () => HttpResponse.json(legacy)),
+    http.put('/api/v1/incidents/i-1', async ({ request }) => {
+      const body = (await request.json()) as { fields: Record<string, string> };
+      puts.push(body);
+      return HttpResponse.json(legacy);
+    }),
+  );
+
+  const user = userEvent.setup();
+  renderIncidents(['OFFICER'], '/incidents/i-1');
+  await screen.findByRole('heading', { level: 1, name: /14 Elm St/ });
+  await user.click(screen.getByRole('button', { name: 'Incident type and actions' }));
+
+  const picker = await screen.findByLabelText('NERIS incident type');
+  expect(picker).toHaveProperty('value', '');
+  const hint = screen.getByText('Not a NERIS type: STRUCTURE_FIRE — pick one.');
+  expect(picker.getAttribute('aria-describedby')).toContain(hint.id);
+
+  fireEvent.change(screen.getByLabelText('Action taken'), { target: { value: 'EXTINGUISH' } });
+  await user.click(screen.getByRole('button', { name: 'Save and continue' }));
+  await waitFor(() => expect(puts).toHaveLength(1));
+  expect(puts[0]).toEqual({ fields: { action_taken: 'EXTINGUISH' } });
 });
 
 test('a server enumeration 400 is mapped onto the field and blocks progress', async () => {
@@ -363,7 +518,138 @@ test('valid core fields reach Validated and enable Submit', async () => {
   await user.click(await screen.findByRole('button', { name: 'Review and submit' }));
 
   expect(await screen.findByText('Validated')).toBeTruthy();
-  expect(screen.getByRole('button', { name: 'Submit' })).toHaveProperty('disabled', false);
+  // Validated is not enough: nothing goes to NERIS until an officer reviews and locks it.
+  expect(screen.getByRole('button', { name: 'Submit' })).toHaveProperty('disabled', true);
+  expect(
+    screen.getByText('Submit stays unavailable until an officer reviews and locks the report.'),
+  ).toBeTruthy();
+});
+
+test('Submit sends a locked, validated report to NERIS and shows the submission status', async () => {
+  let current = detail({ status: 'VALIDATED', lockedAt: 1_798_003_000, lockedBy: 'MBR-0034' });
+  let submitCalls = 0;
+  server.use(
+    http.get('/api/v1/incidents/i-1', () => HttpResponse.json(current)),
+    http.post('/api/v1/incidents/i-1/submit', () => {
+      submitCalls += 1;
+      current = { ...current, status: 'SUBMITTED' };
+      return HttpResponse.json(
+        { incidentId: 'i-1', submissionStatus: 'SUBMITTED' },
+        { status: 202 },
+      );
+    }),
+    http.get('/api/v1/incidents/i-1/submissions', () =>
+      HttpResponse.json({ incidentId: 'i-1', status: 'SUBMITTED', submissionStatus: 'SUBMITTED' }),
+    ),
+  );
+
+  const user = userEvent.setup();
+  renderIncidents(['CHIEF'], '/incidents/i-1');
+  await screen.findByRole('heading', { level: 1, name: /14 Elm St/ });
+  await user.click(screen.getByRole('button', { name: 'Review and submit' }));
+  await user.click(screen.getByRole('button', { name: 'Submit' }));
+
+  expect(await screen.findByText('Sent to NERIS, waiting for a response')).toBeTruthy();
+  expect(submitCalls).toBe(1);
+  expect(screen.queryByRole('button', { name: 'Submit' })).toBeNull();
+});
+
+// Security-web MINOR 2: Submit is Cedar SubmitIncidentReport, the NERIS officer tier. An
+// officer used to see an enabled Submit the server refused (403); now it sends.
+test('an officer submits a locked, validated report to NERIS', async () => {
+  let current = detail({ status: 'VALIDATED', lockedAt: 1_798_003_000, lockedBy: 'MBR-0034' });
+  let submitCalls = 0;
+  server.use(
+    http.get('/api/v1/incidents/i-1', () => HttpResponse.json(current)),
+    http.post('/api/v1/incidents/i-1/submit', () => {
+      submitCalls += 1;
+      current = { ...current, status: 'SUBMITTED' };
+      return HttpResponse.json(
+        { incidentId: 'i-1', submissionStatus: 'SUBMITTED' },
+        { status: 202 },
+      );
+    }),
+    http.get('/api/v1/incidents/i-1/submissions', () =>
+      HttpResponse.json({ incidentId: 'i-1', status: 'SUBMITTED', submissionStatus: 'SUBMITTED' }),
+    ),
+  );
+
+  const user = userEvent.setup();
+  renderIncidents(['OFFICER'], '/incidents/i-1');
+  await screen.findByRole('heading', { level: 1, name: /14 Elm St/ });
+  await user.click(screen.getByRole('button', { name: 'Review and submit' }));
+  await user.click(screen.getByRole('button', { name: 'Submit' }));
+
+  expect(await screen.findByText('Sent to NERIS, waiting for a response')).toBeTruthy();
+  expect(submitCalls).toBe(1);
+});
+
+test('a failed NERIS submission shows its reason and can be retried', async () => {
+  let submissionStatus = 'FAILED';
+  let retryCalls = 0;
+  server.use(
+    http.get('/api/v1/incidents/i-1', () =>
+      HttpResponse.json(detail({ status: 'SUBMITTED', lockedAt: 1_798_003_000 })),
+    ),
+    http.get('/api/v1/incidents/i-1/submissions', () =>
+      HttpResponse.json({
+        incidentId: 'i-1',
+        status: 'SUBMITTED',
+        submissionStatus,
+        ...(submissionStatus === 'FAILED' ? { submissionFailureReason: 'SERVER_ERROR' } : {}),
+      }),
+    ),
+    http.post('/api/v1/incidents/i-1/submission/retry', () => {
+      retryCalls += 1;
+      submissionStatus = 'RETRYING';
+      return HttpResponse.json(
+        { incidentId: 'i-1', submissionStatus: 'RETRYING' },
+        { status: 202 },
+      );
+    }),
+  );
+
+  const user = userEvent.setup();
+  renderIncidents(['OFFICER'], '/incidents/i-1');
+  await screen.findByRole('heading', { level: 1, name: /14 Elm St/ });
+  await user.click(screen.getByRole('button', { name: 'Review and submit' }));
+
+  expect(await screen.findByText('NERIS submission failed')).toBeTruthy();
+  expect(screen.getByText('Reason: SERVER_ERROR')).toBeTruthy();
+  await user.click(screen.getByRole('button', { name: 'Retry submission' }));
+  expect(await screen.findByText('Retrying, NERIS has not accepted it yet')).toBeTruthy();
+  expect(retryCalls).toBe(1);
+});
+
+test('a submit rejected by the API is shown, not swallowed', async () => {
+  server.use(
+    http.get('/api/v1/incidents/i-1', () =>
+      HttpResponse.json(detail({ status: 'VALIDATED', lockedAt: 1_798_003_000 })),
+    ),
+    http.post('/api/v1/incidents/i-1/submit', () =>
+      HttpResponse.json(
+        {
+          type: 'about:blank',
+          title: 'Forbidden',
+          status: 403,
+          detail: 'Submitting an incident to NERIS requires an admin or chief role.',
+          traceId: 't-1',
+        },
+        { status: 403 },
+      ),
+    ),
+  );
+
+  const user = userEvent.setup();
+  renderIncidents(['OFFICER'], '/incidents/i-1');
+  await screen.findByRole('heading', { level: 1, name: /14 Elm St/ });
+  await user.click(screen.getByRole('button', { name: 'Review and submit' }));
+  await user.click(screen.getByRole('button', { name: 'Submit' }));
+
+  expect(
+    (await screen.findAllByText('Submitting an incident to NERIS requires an admin or chief role.'))
+      .length,
+  ).toBeGreaterThan(0);
 });
 
 test('narrative saves and reloads unchanged, and an over-long narrative is kept', async () => {
@@ -519,4 +805,521 @@ test('a member cannot open the incident list', async () => {
   renderIncidents(['MEMBER']);
   expect(await screen.findByRole('heading', { name: 'Forbidden' })).toBeTruthy();
   expect(screen.queryByRole('heading', { name: 'Incidents' })).toBeNull();
+});
+
+const LOCKED = { lockedAt: 1_700_100_000, lockedBy: 'Capt. Nolan' };
+
+async function reviewPanel() {
+  return within(await screen.findByRole('region', { name: /blocking lock/ }));
+}
+
+test('the review checklist lists blocking before warnings, goes to the field, and a fix sends the right PUT', async () => {
+  let fixed = false;
+  const modes: string[] = [];
+  let timesBody: unknown;
+  server.use(
+    http.get('/api/v1/incidents/i-1', () => HttpResponse.json(detail())),
+    http.post('/api/v1/incidents/i-1/validate', async ({ request }) => {
+      modes.push(((await request.json()) as { mode: string }).mode);
+      if (fixed) return HttpResponse.json(cleanReport());
+      return HttpResponse.json({
+        ...cleanReport(),
+        blocking: [
+          {
+            path: 'units.Truck 304.arrivedAt',
+            code: 'MISSING_TIME',
+            message: 'Truck 304 has no arrived time.',
+            section: 'units',
+            fix: {
+              label: 'Use 14:32 for Truck 304',
+              path: 'units.Truck 304.arrivedAt',
+              value: 1_700_000_400,
+            },
+          },
+        ],
+        warnings: [
+          {
+            path: 'narrative',
+            code: 'SHORT',
+            message: 'The narrative is shorter than usual.',
+            section: 'narrative',
+          },
+        ],
+        sectionsComplete: { core: true, units: false },
+      });
+    }),
+    http.put('/api/v1/incidents/i-1/response-times', async ({ request }) => {
+      timesBody = await request.json();
+      fixed = true;
+      return HttpResponse.json({
+        incidentId: 'i-1',
+        unitId: 'Truck 304',
+        unitType: 'APPARATUS',
+        dispatchedAt: 1_700_000_045,
+        arrivedAt: 1_700_000_400,
+      });
+    }),
+  );
+
+  const user = userEvent.setup();
+  renderIncidents(['OFFICER'], '/incidents/i-1');
+  const panel = await reviewPanel();
+  expect(await panel.findByText('Truck 304 has no arrived time.')).toBeTruthy();
+  const blockingHeading = panel.getByRole('heading', { name: 'Blocking (1)' });
+  const warningsHeading = panel.getByRole('heading', { name: 'Warnings (1)' });
+  expect(
+    blockingHeading.compareDocumentPosition(warningsHeading) & Node.DOCUMENT_POSITION_FOLLOWING,
+  ).toBeTruthy();
+  expect(panel.getByText('Units: incomplete')).toBeTruthy();
+  expect(panel.getByText('Core: complete')).toBeTruthy();
+  expect(panel.getByText('Fire: not checked')).toBeTruthy();
+  expect(modes).toEqual(['local']);
+
+  await user.click(panel.getByRole('button', { name: 'Go to Units' }));
+  await waitFor(() =>
+    expect(document.activeElement).toBe(screen.getByLabelText('Arrived for Truck 304')),
+  );
+
+  await user.click(panel.getByRole('button', { name: 'Fix: Use 14:32 for Truck 304' }));
+  await waitFor(() =>
+    expect(timesBody).toEqual({
+      unitId: 'Truck 304',
+      unitType: 'APPARATUS',
+      arrivedAt: 1_700_000_400,
+    }),
+  );
+  expect(await panel.findByText('Nothing blocking — ready to lock.')).toBeTruthy();
+  expect(modes.length).toBeGreaterThanOrEqual(2);
+});
+
+test('Check with NERIS validates in both modes and shows when NERIS checked it', async () => {
+  const modes: string[] = [];
+  server.use(
+    http.get('/api/v1/incidents/i-1', () => HttpResponse.json(detail())),
+    http.post('/api/v1/incidents/i-1/validate', async ({ request }) => {
+      const { mode } = (await request.json()) as { mode: string };
+      modes.push(mode);
+      return HttpResponse.json({
+        ...cleanReport(mode),
+        nerisValidatedAt: mode === 'both' ? '2026-09-29T12:00:00.000Z' : null,
+      });
+    }),
+  );
+
+  const user = userEvent.setup();
+  renderIncidents(['OFFICER'], '/incidents/i-1');
+  const panel = await reviewPanel();
+  expect(await panel.findByText('Nothing blocking — ready to lock.')).toBeTruthy();
+  await user.click(panel.getByRole('button', { name: 'Check with NERIS' }));
+  expect(await panel.findByText(/Checked with NERIS at/)).toBeTruthy();
+  expect(modes).toEqual(['local', 'both']);
+});
+
+test('an officer attests and locks; the banner takes focus and edits close', async () => {
+  let current = detail({ status: 'VALIDATED' });
+  let lockBody: unknown;
+  server.use(
+    http.get('/api/v1/incidents/i-1', () => HttpResponse.json(current)),
+    http.post('/api/v1/incidents/i-1/lock', async ({ request }) => {
+      lockBody = await request.json();
+      current = { ...current, ...LOCKED };
+      return HttpResponse.json({
+        incidentId: 'i-1',
+        ...LOCKED,
+        status: 'VALIDATED',
+        submission: null,
+        nerisValidatedAt: null,
+        warnings: [],
+      });
+    }),
+  );
+
+  const user = userEvent.setup();
+  renderIncidents(['OFFICER'], '/incidents/i-1');
+  const panel = await reviewPanel();
+  const lock = panel.getByRole('button', { name: 'Lock report' });
+  expect(lock).toHaveProperty('disabled', true);
+  await user.click(panel.getByRole('checkbox', { name: 'I reviewed this report' }));
+  await user.click(panel.getByRole('button', { name: 'Lock report' }));
+
+  const banner = await screen.findByText(/^Locked by Capt\. Nolan at .+; edits are closed\.$/);
+  expect(lockBody).toEqual({ attest: true });
+  await waitFor(() => expect(document.activeElement).toBe(banner));
+  expect(panel.queryByRole('button', { name: 'Lock report' })).toBeNull();
+  // Unlock is chief/admin only.
+  expect(panel.queryByRole('button', { name: 'Unlock report' })).toBeNull();
+  expect(panel.getByText('Only a chief or admin can unlock this report.')).toBeTruthy();
+
+  await user.click(screen.getByRole('button', { name: 'Narrative' }));
+  expect(screen.getByRole('button', { name: 'Save narrative' })).toHaveProperty('disabled', true);
+});
+
+test('a lock refused with 409 VALIDATION_BLOCKED shows the returned blocking list', async () => {
+  server.use(
+    http.get('/api/v1/incidents/i-1', () => HttpResponse.json(detail({ status: 'VALIDATED' }))),
+    http.post('/api/v1/incidents/i-1/lock', () =>
+      HttpResponse.json(
+        {
+          type: 'about:blank',
+          title: 'Conflict',
+          status: 409,
+          detail: "The report can't be locked yet: 1 item to fix.",
+          traceId: 't-9',
+          code: 'VALIDATION_BLOCKED',
+          blocking: [
+            {
+              path: 'fields.action_taken',
+              code: 'REQUIRED',
+              message: 'Action taken is required.',
+              section: 'core',
+            },
+          ],
+          warnings: [],
+          sectionsComplete: { core: false },
+        },
+        { status: 409 },
+      ),
+    ),
+  );
+
+  const user = userEvent.setup();
+  renderIncidents(['CHIEF'], '/incidents/i-1');
+  const panel = await reviewPanel();
+  await panel.findByText('Nothing blocking — ready to lock.');
+  await user.click(panel.getByRole('checkbox', { name: 'I reviewed this report' }));
+  await user.click(panel.getByRole('button', { name: 'Lock report' }));
+
+  expect(await panel.findByText('Lock refused. Fix these first.')).toBeTruthy();
+  expect(panel.getByText('Action taken is required.')).toBeTruthy();
+  expect(panel.getByText('Core: incomplete')).toBeTruthy();
+  expect(screen.queryByText(/edits are closed/)).toBeNull();
+
+  await user.click(panel.getByRole('button', { name: 'Go to Core' }));
+  await waitFor(() => expect(document.activeElement).toBe(screen.getByLabelText('Action taken')));
+});
+
+test('a chief unlocks only with a reason; Escape closes the dialog', async () => {
+  let current = detail({ status: 'VALIDATED', ...LOCKED });
+  let unlockBody: unknown;
+  server.use(
+    http.get('/api/v1/incidents/i-1', () => HttpResponse.json(current)),
+    http.post('/api/v1/incidents/i-1/unlock', async ({ request }) => {
+      unlockBody = await request.json();
+      current = { ...current, lockedAt: null, lockedBy: null };
+      return HttpResponse.json({
+        incidentId: 'i-1',
+        unlockedAt: 1_700_200_000,
+        unlockedBy: 'u1',
+        reason: (unlockBody as { reason: string }).reason,
+      });
+    }),
+  );
+
+  const user = userEvent.setup();
+  renderIncidents(['CHIEF'], '/incidents/i-1');
+  expect(await screen.findByText(/edits are closed/)).toBeTruthy();
+  const panel = await reviewPanel();
+
+  await user.click(panel.getByRole('button', { name: 'Unlock report' }));
+  expect(await screen.findByRole('dialog', { name: 'Unlock this report' })).toBeTruthy();
+  await user.keyboard('{Escape}');
+  await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+
+  await user.click(panel.getByRole('button', { name: 'Unlock report' }));
+  const dialog = within(await screen.findByRole('dialog', { name: 'Unlock this report' }));
+  await user.click(dialog.getByRole('button', { name: 'Unlock' }));
+  expect(await dialog.findByText(/Enter a reason of at least 5 characters/)).toBeTruthy();
+  expect(unlockBody).toBeUndefined();
+
+  await user.type(dialog.getByLabelText('Reason for unlocking'), 'Wrong unit times');
+  await user.click(dialog.getByRole('button', { name: 'Unlock' }));
+  await waitFor(() => expect(unlockBody).toEqual({ reason: 'Wrong unit times' }));
+  await waitFor(() => expect(screen.queryByText(/edits are closed/)).toBeNull());
+  expect(screen.queryByRole('dialog')).toBeNull();
+  expect(panel.getByRole('button', { name: 'Lock report' })).toBeTruthy();
+});
+
+function ledgerState(overrides: Partial<SubmissionState> = {}): SubmissionState {
+  return {
+    incidentId: 'i-1',
+    status: 'ACCEPTED',
+    submissionStatus: 'ACCEPTED',
+    nerisIncidentId: 'FD09190250|26-001841',
+    nerisStatus: 'PENDING_APPROVAL',
+    nerisStatusAt: 1_700_050_000,
+    ...LOCKED,
+    payloadHash: 'abc123',
+    firstSubmittedAt: 1_700_000_500,
+    editedSinceSubmission: true,
+    attempts: [
+      {
+        attempt: 1,
+        attemptedAt: '2026-09-20T12:00:00Z',
+        outcome: 'VALIDATION_ERROR',
+        httpStatus: 422,
+        retryCount: 0,
+        operation: 'CREATE',
+        errors: [
+          { path: 'base.incident_type', code: 'INVALID', message: 'Unknown incident type.' },
+        ],
+      },
+      {
+        attempt: 2,
+        attemptedAt: '2026-09-20T13:00:00Z',
+        outcome: 'SUCCESS',
+        httpStatus: 201,
+        retryCount: 0,
+        operation: 'CREATE',
+        nerisIncidentId: 'FD09190250|26-001841',
+        errors: [],
+      },
+    ],
+    statusHistory: [
+      { status: 'SUBMITTED', at: '2026-09-20T13:00:00Z', current: false },
+      { status: 'PENDING_APPROVAL', at: '2026-09-21T09:00:00Z', current: true },
+    ],
+    ...overrides,
+  };
+}
+
+test('the submission ledger shows NERIS status, id, attempts and history, and resubmit shows the diff', async () => {
+  let resubmits = 0;
+  server.use(
+    http.get('/api/v1/incidents/i-1', () =>
+      HttpResponse.json(
+        detail({ status: 'ACCEPTED', ...LOCKED, nerisIncidentId: 'FD09190250|26-001841' }),
+      ),
+    ),
+    http.get('/api/v1/incidents/i-1/submissions', () => HttpResponse.json(ledgerState())),
+    http.post('/api/v1/incidents/i-1/resubmit', () => {
+      resubmits += 1;
+      return HttpResponse.json(
+        {
+          incidentId: 'i-1',
+          nerisIncidentId: 'FD09190250|26-001841',
+          diff: [
+            { path: 'narrative', before: 'Working fire.', after: 'Working fire, first floor.' },
+          ],
+          status: 'QUEUED',
+          submissionStatus: 'SUBMITTED',
+        },
+        { status: 202 },
+      );
+    }),
+  );
+
+  const user = userEvent.setup();
+  renderIncidents(['OFFICER'], '/incidents/i-1');
+  await screen.findByRole('heading', { level: 1, name: /14 Elm St/ });
+  await user.click(screen.getByRole('button', { name: 'Review and submit' }));
+
+  const ledger = within(await screen.findByRole('region', { name: 'NERIS submission record' }));
+  expect(ledger.getAllByText('Waiting for NERIS approval').length).toBe(2);
+  expect(ledger.getByText('FD09190250|26-001841')).toBeTruthy();
+  expect(ledger.getByText(/edited after it was last sent to NERIS/)).toBeTruthy();
+
+  const table = within(ledger.getByRole('table', { name: 'Submission attempts' }));
+  expect(table.getAllByRole('row')).toHaveLength(3);
+  expect(table.getByText('Rejected by NERIS validation')).toBeTruthy();
+  expect(table.getByText('422')).toBeTruthy();
+  expect(table.getByText(/Unknown incident type\./)).toBeTruthy();
+  expect(table.getByText('Accepted')).toBeTruthy();
+  expect(ledger.getByText('(current)')).toBeTruthy();
+  expect(ledger.getByText('Received by NERIS')).toBeTruthy();
+
+  await user.click(ledger.getByRole('button', { name: 'Resubmit to NERIS' }));
+  expect(await ledger.findByText('Sent 1 change to NERIS:')).toBeTruthy();
+  expect(ledger.getByText(/Working fire\. → Working fire, first floor\./)).toBeTruthy();
+  expect(resubmits).toBe(1);
+});
+
+test('a resubmit with nothing changed says so', async () => {
+  server.use(
+    http.get('/api/v1/incidents/i-1', () =>
+      HttpResponse.json(
+        detail({ status: 'ACCEPTED', ...LOCKED, nerisIncidentId: 'FD09190250|26-001841' }),
+      ),
+    ),
+    http.get('/api/v1/incidents/i-1/submissions', () =>
+      HttpResponse.json(ledgerState({ editedSinceSubmission: false })),
+    ),
+    http.post('/api/v1/incidents/i-1/resubmit', () =>
+      HttpResponse.json({ incidentId: 'i-1', diff: [], status: 'UNCHANGED' }),
+    ),
+  );
+
+  const user = userEvent.setup();
+  renderIncidents(['OFFICER'], '/incidents/i-1');
+  await screen.findByRole('heading', { level: 1, name: /14 Elm St/ });
+  await user.click(screen.getByRole('button', { name: 'Review and submit' }));
+  const ledger = within(await screen.findByRole('region', { name: 'NERIS submission record' }));
+  expect(ledger.queryByText(/edited after it was last sent/)).toBeNull();
+  await user.click(ledger.getByRole('button', { name: 'Resubmit to NERIS' }));
+  expect(await ledger.findByText(/No changes to send/)).toBeTruthy();
+});
+
+test('an edit refused with 409 INCIDENT_LOCKED shows the server message', async () => {
+  server.use(
+    http.get('/api/v1/incidents/i-1', () => HttpResponse.json(detail())),
+    http.put('/api/v1/incidents/i-1/narrative', () =>
+      HttpResponse.json(
+        {
+          type: 'about:blank',
+          title: 'Conflict',
+          status: 409,
+          detail: 'This report is locked. A chief or admin must unlock it first.',
+          traceId: 't-3',
+          code: 'INCIDENT_LOCKED',
+        },
+        { status: 409 },
+      ),
+    ),
+  );
+
+  const user = userEvent.setup();
+  renderIncidents(['OFFICER'], '/incidents/i-1');
+  await screen.findByRole('heading', { level: 1, name: /14 Elm St/ });
+  await user.click(screen.getByRole('button', { name: 'Narrative' }));
+  await user.click(screen.getByRole('button', { name: 'Save narrative' }));
+  expect(
+    (await screen.findAllByText('This report is locked. A chief or admin must unlock it first.'))
+      .length,
+  ).toBeGreaterThan(0);
+});
+
+test('an officer starts a report from a recent dispatch, with no Dispatch ID typed', async () => {
+  let posted: unknown;
+  const now = Math.floor(Date.now() / 1000);
+  server.use(
+    http.get('/api/v1/incidents', () => HttpResponse.json({ incidents: [] })),
+    http.get('/api/v1/incidents/dispatches', () =>
+      HttpResponse.json({
+        recentWindowHours: 72,
+        nextCursor: null,
+        dispatches: [
+          {
+            dispatchId: 'd-recent',
+            incidentType: 'Structure fire',
+            address: '18 Nichols Ave',
+            // Two days ago: past the alerting plane's active window, inside the 72 hours.
+            dispatchedAt: now - 48 * 3600,
+            report: null,
+          },
+          {
+            dispatchId: 'd-done',
+            incidentType: 'MVA',
+            address: '5 Main St',
+            dispatchedAt: now - 3 * 3600,
+            report: { incidentId: 'd-done', status: 'DRAFT' },
+          },
+        ],
+      }),
+    ),
+    http.post('/api/v1/incidents', async ({ request }) => {
+      posted = await request.json();
+      return HttpResponse.json(
+        { type: 'about:blank', title: 'Not Found', status: 404, traceId: 't' },
+        { status: 404 },
+      );
+    }),
+  );
+
+  const user = userEvent.setup();
+  renderIncidents(['OFFICER']);
+  await screen.findByRole('heading', { name: 'Incidents' });
+  const recent = await screen.findByRole('list', { name: 'Dispatches in the last 72 hours' });
+  expect(recent.textContent).toContain('18 Nichols Ave');
+  // A dispatch with a report links to it instead of offering a second one.
+  expect(within(recent).getByRole('link', { name: 'Open report (Draft)' })).toBeTruthy();
+  expect(screen.queryByLabelText('Dispatch ID')).toBeNull();
+  await user.click(
+    screen.getByRole('button', { name: 'Start report for Structure fire at 18 Nichols Ave' }),
+  );
+
+  await screen.findByRole('alert');
+  expect(posted).toEqual({ dispatchId: 'd-recent' });
+});
+
+test('a dispatches body without a dispatches array falls back, never the error boundary', async () => {
+  server.use(
+    http.get('/api/v1/incidents', () => HttpResponse.json({ incidents: [] })),
+    // A proxy error page or a stale mock: 200, but not a RecentDispatchPage.
+    http.get('/api/v1/incidents/dispatches', () => HttpResponse.json({ incidents: [] })),
+  );
+  renderIncidents(['CHIEF']);
+  await screen.findByRole('heading', { name: 'Incidents' });
+  await screen.findByText(/Recent dispatches couldn’t load/);
+});
+
+test('older dispatches load a page at a time with the cursor', async () => {
+  const now = Math.floor(Date.now() / 1000);
+  const cursors: (string | null)[] = [];
+  server.use(
+    http.get('/api/v1/incidents', () => HttpResponse.json({ incidents: [] })),
+    http.get('/api/v1/incidents/dispatches', ({ request }) => {
+      const cursor = new URL(request.url).searchParams.get('cursor');
+      cursors.push(cursor);
+      return HttpResponse.json(
+        cursor
+          ? {
+              recentWindowHours: 72,
+              nextCursor: null,
+              dispatches: [
+                {
+                  dispatchId: 'd-old',
+                  incidentType: 'Brush fire',
+                  address: '9 Old Rd',
+                  dispatchedAt: now - 10 * 86400,
+                  report: null,
+                },
+              ],
+            }
+          : { recentWindowHours: 72, nextCursor: 'c-older', dispatches: [] },
+      );
+    }),
+  );
+
+  const user = userEvent.setup();
+  renderIncidents(['CHIEF']);
+  expect(await screen.findByText('No dispatches in the last 72 hours.')).toBeTruthy();
+  await user.click(screen.getByRole('button', { name: 'Load older dispatches' }));
+  const older = await screen.findByRole('list', { name: 'Older dispatches' });
+  expect(older.textContent).toContain('9 Old Rd');
+  expect(cursors).toEqual([null, 'c-older']);
+  expect(screen.queryByRole('button', { name: 'Load older dispatches' })).toBeNull();
+});
+
+test('an unparsed CAD dispatch shows a VERIFY marker and its text, not the placeholder address', async () => {
+  const now = Math.floor(Date.now() / 1000);
+  server.use(
+    http.get('/api/v1/incidents', () => HttpResponse.json({ incidents: [] })),
+    http.get('/api/v1/incidents/dispatches', () =>
+      HttpResponse.json({
+        recentWindowHours: 72,
+        nextCursor: null,
+        dispatches: [
+          {
+            dispatchId: 'd-raw',
+            incidentType: 'STRUCTURE FIRE',
+            address: 'SEE DISPATCH TEXT',
+            dispatchedAt: now - 600,
+            report: null,
+            verifyRequired: true,
+            textExcerpt: 'STRUC FIRE 12 ELM ST X OAK',
+          },
+        ],
+      }),
+    ),
+  );
+
+  renderIncidents(['OFFICER']);
+  const recent = await screen.findByRole('list', { name: 'Dispatches in the last 72 hours' });
+  expect(recent.textContent).toContain('VERIFY');
+  expect(recent.textContent).toContain('STRUC FIRE 12 ELM ST X OAK');
+  expect(recent.textContent).not.toContain('SEE DISPATCH TEXT');
+  expect(
+    within(recent).getByRole('button', {
+      name: 'Start report for STRUCTURE FIRE at unverified location: "STRUC FIRE 12 ELM ST X OAK"',
+    }),
+  ).toBeTruthy();
 });

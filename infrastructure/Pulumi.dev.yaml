@@ -1,5 +1,28 @@
+# Required before the first preview (validated all at once by components/shared/stack-config.ts;
+# full runbook: docs/runbooks/first-deploy.md). Never commit a secret value here.
+#   pulumi config set notificationSesFromAddress notifications@<ses-verified-domain> --stack dev
+#   pulumi config set --secret smsWebhookSecret "$(openssl rand -hex 32)" --stack dev
+#   pulumi config set --secret voiceWebhookSecret "$(openssl rand -hex 32)" --stack dev
+#   pulumi config set --secret pushWebhookSecret "$(openssl rand -hex 32)" --stack dev
+#   pulumi config set alertingPageEmail oncall@<dept-domain> --stack dev   # prod-required; warned elsewhere
+#   pulumi config set chiefNotificationEmail chief@<dept-domain> --stack dev   # prod-required; warned elsewhere
+#   pulumi config set smsProviderEndpointUrl https://<sms vendor API host>/<path> --stack dev   # prod-required; warned elsewhere
+#   pulumi config set voiceProviderEndpointUrl https://<voice vendor API host>/<path> --stack dev   # prod-required; warned elsewhere
+# Once the department's CAD inbound mail domain has its MX record (docs/runbooks/first-deploy.md, CAD ingress):
+#   pulumi config set cadIngressEmailDomain cad.<dept-domain> --stack dev
+# Optional: the CAD dispatch centres' egress CIDRs for the webhook's resource policy:
+#   pulumi config set cadWebhookAllowedCidrs 203.0.113.0/28 --stack dev
+# Only once canaryEnabled is true:
+#   pulumi config set --secret canaryMemberId <canary member id> --stack dev
 config:
   aws:region: us-east-1
   boxalarm-infra:env: dev
   boxalarm-infra:webOrigin: https://localhost:5173
   boxalarm-infra:deptId: nichols-fd
+  # Placeholder until the NERIS schema pipeline publishes a URL (E6-S11-INFRA #246). Safe:
+  # while the host is a placeholder the daily refresh schedule is DISABLED (index.ts), so it
+  # neither fails nor emails chief-notifications; nothing else reads it.
+  boxalarm-infra:nerisSchemaSourceUrl: https://neris-schema-source.invalid/neris/schema.json
+  # A dev department has 1-2 test members; the default (3) would fire fan-out-small-roster on
+  # every manual dispatch (deploy-readiness m5).
+  boxalarm-infra:alertingMinEligibleMembers: "1"

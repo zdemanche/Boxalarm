@@ -2,11 +2,15 @@ import { FormEvent, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useParams } from 'react-router-dom';
 import { useAuth } from '../../auth/AuthContext';
-import { ApiError } from '../../lib/apiClient';
+import {
+  canManageInventory,
+  canManageMemberAvailability,
+  canManageTraining,
+} from '../../auth/roles';
+import { MarkOffList } from '../availability/MarkOffList';
 import { ApiForbiddenGate } from '../../components/ApiForbiddenGate';
 import { Badge } from '../../components/ui/Chip';
 import { PageHeader } from '../../components/ui/PageHeader';
-import { revokeMemberSessions } from '../platform/api';
 import { CertificationsPanel } from '../training/CertificationsPanel';
 import { TranscriptPanel } from '../training/TranscriptPanel';
 import { issueMemberPpe, listMemberPpe } from '../inventory/api';
@@ -18,11 +22,13 @@ import {
   listOwnAttendance,
   putQual,
   recordAttendance,
-  updateMemberStatus,
 } from './api';
-import type { AttendanceActivityType, MemberStatus } from './types';
+import type { AttendanceActivityType } from './types';
+import { RolesSection } from './RolesSection';
+import { AccountSecuritySection, canUseAccountKillSwitches } from './AccountSecuritySection';
+import { MemberStatusSection } from './MemberStatusSection';
+import { humanize } from '../../lib/labels';
 
-const STATUSES: MemberStatus[] = ['PROBATIONARY', 'ACTIVE', 'LOA', 'RETIRED'];
 const ACTIVITY_TYPES: AttendanceActivityType[] = [
   'CALL',
   'DRILL',
@@ -62,7 +68,7 @@ function QualsSection({ memberId, canEdit }: { memberId: string; canEdit: boolea
         <ul style={{ listStyle: 'none', padding: 0 }}>
           {(qualsQuery.data ?? []).map((qual) => (
             <li key={qual.qualCode} style={{ padding: 'var(--boxalarm-spacing-xs) 0' }}>
-              <strong>{qual.qualCode}</strong> —{' '}
+              <strong>{humanize(qual.qualCode)}</strong> —{' '}
               {qual.currentlyEligible ? 'Eligible' : 'Not currently eligible'}
               {qual.grantedByCertId ? (
                 <>
@@ -228,42 +234,12 @@ export function MemberDetailPage() {
   const auth = useAuth();
   const queryClient = useQueryClient();
   const isAdmin = auth.roles.includes('ADMIN');
-  const canRevokeSessions = auth.roles.includes('ADMIN') || auth.roles.includes('CHIEF');
-  const [revokeError, setRevokeError] = useState<string | null>(null);
-  const [revokeForbidden, setRevokeForbidden] = useState<unknown>(null);
-  const [revoked, setRevoked] = useState(false);
+  // Role assignment is CHIEF/ADMIN only - not OFFICER, who could otherwise promote themselves.
+  const canManageRoles = canUseAccountKillSwitches(auth.roles);
 
-  const revokeMutation = useMutation({
-    mutationFn: () => revokeMemberSessions(auth, id),
-    onSuccess: () => {
-      setRevokeError(null);
-      setRevokeForbidden(null);
-      setRevoked(true);
-    },
-    onError: (error: unknown) => {
-      if (error instanceof ApiError && error.problem.status === 403) {
-        setRevokeError(null);
-        setRevokeForbidden(error);
-        return;
-      }
-      setRevokeForbidden(null);
-      setRevokeError('Could not revoke this member’s sessions. Try again.');
-    },
-  });
-
-  function handleRevoke() {
-    if (
-      window.confirm('Revoke all sessions for this member? They will be signed out everywhere.')
-    ) {
-      setRevoked(false);
-      revokeMutation.mutate();
-    }
-  }
-
-  const isTraining = auth.roles.includes('TRAINING') || auth.roles.includes('ADMIN');
-  // Matches the inspections write-access precedent (ADMIN || CHIEF) — PPE issuance is a new
-  // control added in this PR, unlike the pre-existing ADMIN-only member-status gate below.
-  const canIssuePpe = isAdmin || auth.roles.includes('CHIEF');
+  const isTraining = canManageTraining(auth.roles);
+  // IssuePpeAssignment is an INVENTORY_ADMIN_GROUPS action: OFFICER, CHIEF, ADMIN (review m6).
+  const canIssuePpe = canManageInventory(auth.roles);
   const [ppeForm, setPpeForm] = useState<IssuePpeInput>(emptyPpeForm);
   const [ppeFormError, setPpeFormError] = useState<string | null>(null);
 
@@ -289,14 +265,6 @@ export function MemberDetailPage() {
     onError: (error: Error) => setPpeFormError(error.message),
   });
 
-  const statusMutation = useMutation({
-    mutationFn: (status: MemberStatus) => updateMemberStatus(auth, id, status),
-    onSuccess: (member) => {
-      queryClient.setQueryData(['personnel', 'members', id], member);
-      void queryClient.invalidateQueries({ queryKey: ['personnel', 'members'] });
-    },
-  });
-
   if (memberQuery.error) {
     return (
       <ApiForbiddenGate error={memberQuery.error}>
@@ -312,10 +280,10 @@ export function MemberDetailPage() {
       <PageHeader
         title={member ? `${member.firstName} ${member.lastName}` : '…'}
         breadcrumbs={[
-          { label: 'Personnel', to: '/personnel' },
+          { label: 'Members', to: '/personnel' },
           { label: member ? `${member.firstName} ${member.lastName}` : '…' },
         ]}
-        actions={member ? <Badge>{member.status}</Badge> : undefined}
+        actions={member ? <Badge>{humanize(member.status)}</Badge> : undefined}
       />
       {memberQuery.isLoading || !member ? (
         <p>Loading member…</p>
@@ -333,7 +301,9 @@ export function MemberDetailPage() {
             <dt style={{ color: 'var(--bx-fg-muted)' }}>Email</dt>
             <dd style={{ margin: 0 }}>{member.email}</dd>
             <dt style={{ color: 'var(--bx-fg-muted)' }}>Phone</dt>
-            <dd style={{ margin: 0, fontFamily: 'var(--bx-font-mono)' }}>{member.phone}</dd>
+            <dd style={{ margin: 0, fontFamily: 'var(--bx-font-mono)' }}>
+              {member.phone ?? 'No phone (no SMS or voice pages)'}
+            </dd>
             <dt style={{ color: 'var(--bx-fg-muted)' }}>Rank</dt>
             <dd style={{ margin: 0 }}>{member.rank}</dd>
             <dt style={{ color: 'var(--bx-fg-muted)' }}>Agency ID</dt>
@@ -342,72 +312,18 @@ export function MemberDetailPage() {
             <dd style={{ margin: 0 }}>{member.joinDate}</dd>
           </dl>
 
-          {isAdmin ? (
-            <label
-              style={{
-                display: 'grid',
-                gap: 4,
-                maxWidth: 320,
-                marginTop: 'var(--bx-space-lg)',
-                fontSize: 13,
-                fontWeight: 600,
-              }}
-            >
-              Change status
-              <select
-                aria-label="Member status"
-                value={member.status}
-                disabled={statusMutation.isPending}
-                onChange={(e) => statusMutation.mutate(e.target.value as MemberStatus)}
-                style={{
-                  minHeight: 'var(--bx-target-office)',
-                  padding: '0 var(--bx-space-sm)',
-                  fontSize: 14,
-                  fontWeight: 400,
-                  background: 'var(--bx-surface-raised)',
-                  color: 'var(--bx-fg)',
-                  border: '1px solid var(--bx-border)',
-                  borderRadius: 'var(--bx-radius-md)',
-                }}
-              >
-                {STATUSES.map((status) => (
-                  <option key={status} value={status}>
-                    {status}
-                  </option>
-                ))}
-              </select>
-            </label>
+          <MemberStatusSection member={member} />
+
+          {canManageMemberAvailability(auth.roles) ? (
+            <MarkOffList
+              memberId={member.memberId}
+              ownRecord={member.memberId === auth.user?.profile.sub}
+            />
           ) : null}
 
-          {statusMutation.error ? (
-            <ApiForbiddenGate error={statusMutation.error} embedded>
-              <p role="alert">{statusMutation.error.message}</p>
-            </ApiForbiddenGate>
-          ) : null}
+          <RolesSection member={member} canEdit={canManageRoles} />
 
-          {canRevokeSessions ? (
-            <div style={{ marginTop: 'var(--boxalarm-spacing-lg)' }}>
-              <button
-                type="button"
-                onClick={handleRevoke}
-                disabled={revokeMutation.isPending}
-                style={{ minHeight: 44 }}
-              >
-                Revoke all sessions (lost device)
-              </button>
-              {revokeForbidden ? (
-                <ApiForbiddenGate error={revokeForbidden} embedded>
-                  <p role="alert">Could not revoke this member’s sessions.</p>
-                </ApiForbiddenGate>
-              ) : null}
-              {revokeError ? (
-                <p role="alert" aria-live="assertive">
-                  {revokeError}
-                </p>
-              ) : null}
-              {revoked ? <p role="status">Sessions revoked.</p> : null}
-            </div>
-          ) : null}
+          <AccountSecuritySection member={member} />
           <CertificationsPanel memberId={member.memberId} />
           {isTraining ? <TranscriptPanel memberId={member.memberId} /> : null}
           <h2
@@ -426,13 +342,13 @@ export function MemberDetailPage() {
             <ul>
               {(ppeQuery.data ?? []).map((item) => (
                 <li key={item.ppeItemId}>
-                  {item.itemType} · size {item.size} · expires {item.nfpaExpiryDate} ·{' '}
+                  {humanize(item.itemType)} · size {item.size} · expires {item.nfpaExpiryDate} ·{' '}
                   <strong
                     style={
                       item.status === 'EXPIRED' ? { color: 'var(--boxalarm-error)' } : undefined
                     }
                   >
-                    {item.status === 'EXPIRED' ? 'EXPIRED' : item.status}
+                    {humanize(item.status)}
                   </strong>
                 </li>
               ))}

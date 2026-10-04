@@ -2,3 +2,4 @@ dist
 coverage
 package-lock.json
 *.md
+src/services/incident-service/neris/fixtures/

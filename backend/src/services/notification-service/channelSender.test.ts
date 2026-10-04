@@ -14,7 +14,7 @@ describe('sendPushDigest', () => {
     const send = vi.fn().mockResolvedValue({});
     const client = { send } as unknown as SNSClient;
 
-    await sendPushDigest(ENV, { memberId: 'MBR-1' }, ITEMS, 'corr-1', client);
+    await sendPushDigest(ENV, { memberId: 'MBR-1', deptId: 'NICHOLS' }, ITEMS, 'corr-1', client);
 
     expect(send).toHaveBeenCalledTimes(1);
     const call = send.mock.calls[0]?.[0] as { input: { Message: string } };
@@ -27,7 +27,7 @@ describe('sendPushDigest', () => {
     const send = vi.fn();
     const client = { send } as unknown as SNSClient;
     await expect(
-      sendPushDigest({}, { memberId: 'MBR-1' }, ITEMS, 'corr-1', client),
+      sendPushDigest({}, { memberId: 'MBR-1', deptId: 'NICHOLS' }, ITEMS, 'corr-1', client),
     ).rejects.toThrow('NOTIFICATION_PUSH_TOPIC_ARN');
     expect(send).not.toHaveBeenCalled();
   });
@@ -40,7 +40,7 @@ describe('sendEmailDigest', () => {
 
     await sendEmailDigest(
       ENV,
-      { memberId: 'MBR-1', email: 'mbr1@example.com' },
+      { memberId: 'MBR-1', deptId: 'NICHOLS', email: 'mbr1@example.com' },
       ITEMS,
       'corr-1',
       client,
@@ -56,7 +56,7 @@ describe('sendEmailDigest', () => {
     const client = { send } as unknown as SESv2Client;
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
 
-    await sendEmailDigest(ENV, { memberId: 'MBR-1' }, ITEMS, 'corr-1', client);
+    await sendEmailDigest(ENV, { memberId: 'MBR-1', deptId: 'NICHOLS' }, ITEMS, 'corr-1', client);
 
     expect(send).not.toHaveBeenCalled();
     expect(
@@ -73,7 +73,7 @@ describe('sendEmailDigest', () => {
     await expect(
       sendEmailDigest(
         {},
-        { memberId: 'MBR-1', email: 'mbr1@example.com' },
+        { memberId: 'MBR-1', deptId: 'NICHOLS', email: 'mbr1@example.com' },
         ITEMS,
         'corr-1',
         client,

@@ -1,4 +1,10 @@
-import type { Handler, SQSEvent, SQSRecord } from 'aws-lambda';
+import type {
+  Handler,
+  SQSBatchItemFailure,
+  SQSBatchResponse,
+  SQSEvent,
+  SQSRecord,
+} from 'aws-lambda';
 import type { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
 import { toVerifiedDeptId, type VerifiedDeptId } from '@boxalarm/dept-scope';
 import { emitOutcomeMetric } from '@boxalarm/metrics';
@@ -15,6 +21,7 @@ interface DispatchAlertReceivedEnvelope {
   readonly crossStreets: string;
   readonly narrative: string;
   readonly dispatchedAt: number;
+  readonly verifyRequired?: true;
 }
 
 function parseEnvelope(body: string): DispatchAlertReceivedEnvelope {
@@ -40,6 +47,9 @@ function parseEnvelope(body: string): DispatchAlertReceivedEnvelope {
     crossStreets: typeof payload.crossStreets === 'string' ? payload.crossStreets : '',
     narrative: payload.narrative,
     dispatchedAt: payload.dispatchedAt,
+    // CAD ingress (feat/cad-ingress) flags a dispatch it could not parse: the address is a
+    // placeholder and the text must be read. Optional - a producer without it sends nothing.
+    ...(payload.verifyRequired === true ? { verifyRequired: true as const } : {}),
   };
 }
 
@@ -80,6 +90,7 @@ async function processRecord(record: SQSRecord, deps: DispatchAlertConsumerDeps)
       crossStreets: envelope.crossStreets,
       narrative: envelope.narrative,
       dispatchedAt: envelope.dispatchedAt,
+      ...(envelope.verifyRequired ? { verifyRequired: true as const } : {}),
     });
     emitOutcomeMetric(METRIC_NAMESPACE, 'DispatchAlertCopyUpdated');
   } catch (error) {
@@ -95,11 +106,22 @@ async function processRecord(record: SQSRecord, deps: DispatchAlertConsumerDeps)
   }
 }
 
-export function createHandler(deps: DispatchAlertConsumerDeps = {}): Handler<SQSEvent, void> {
+// Partial batch response: a failing record is reported alone (its error was already
+// logged inside processRecord) so SQS redelivers only that record instead of the whole
+// batch. Requires ReportBatchItemFailures on the event source mapping.
+export function createHandler(
+  deps: DispatchAlertConsumerDeps = {},
+): Handler<SQSEvent, SQSBatchResponse> {
   return async (event) => {
+    const batchItemFailures: SQSBatchItemFailure[] = [];
     for (const record of event.Records) {
-      await processRecord(record, deps);
+      try {
+        await processRecord(record, deps);
+      } catch {
+        batchItemFailures.push({ itemIdentifier: record.messageId });
+      }
     }
+    return { batchItemFailures };
   };
 }
 

@@ -2,6 +2,7 @@ import { FormEvent, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useSearchParams } from 'react-router-dom';
 import { useAuth } from '../../auth/AuthContext';
+import { ApiError } from '../../lib/apiClient';
 import { ApiForbiddenGate } from '../../components/ApiForbiddenGate';
 import {
   Button,
@@ -15,13 +16,21 @@ import {
 import {
   assignRidingSeat,
   getDispatch,
+  getHomeLocality,
   getReceipts,
   getRidingBoard,
   getRoster,
   submitManualDispatch,
 } from './api';
 import { PrePlanPanel } from './PrePlanPanel';
-import type { DeliveryReceipt, FieldError, ManualDispatchInput, RosterEntry } from './types';
+import { ToneLadderPanel } from './ToneLadderPanel';
+import type {
+  DeliveryReceipt,
+  DispatchUpdate,
+  FieldError,
+  ManualDispatchInput,
+  RosterEntry,
+} from './types';
 
 const REFETCH_INTERVAL_MS = 10_000;
 const RECEIPT_CHANNELS = ['push', 'sms', 'voice'];
@@ -42,8 +51,75 @@ function ackLabel(status: RosterEntry['ackStatus']): string {
   return 'Awaiting response';
 }
 
+const OTHER_TOWN = '__other__';
+
+/**
+ * The required "where is this?" choice (round-3 R3-A): one of the department's home towns or
+ * villages, or "Other town" with the town typed in. It only decides whether a pre-plan can be
+ * shown as this building's; it never delays or blocks the page. If the home list cannot be
+ * loaded the choice is just "Other town".
+ */
+function LocalityField({
+  homeTowns,
+  choice,
+  otherTown,
+  onChoice,
+  onOtherTown,
+  error,
+}: {
+  homeTowns: string[];
+  choice: string;
+  otherTown: string;
+  onChoice: (value: string) => void;
+  onOtherTown: (value: string) => void;
+  error: string | undefined;
+}) {
+  return (
+    <>
+      <Select
+        label="Town / village"
+        required
+        value={choice}
+        onChange={(e) => onChoice(e.target.value)}
+        help="Pick a home town, or Other town for a mutual-aid call."
+        error={error}
+      >
+        <option value="" disabled>
+          Choose…
+        </option>
+        {homeTowns.map((town) => (
+          <option key={town} value={town}>
+            {town}
+          </option>
+        ))}
+        <option value={OTHER_TOWN}>Other town…</option>
+      </Select>
+      {choice === OTHER_TOWN ? (
+        <TextInput
+          label="Other town name"
+          required
+          maxLength={MAX_TOWN_LENGTH}
+          value={otherTown}
+          onChange={(e) => onOtherTown(e.target.value)}
+        />
+      ) : null}
+    </>
+  );
+}
+
+// Matches the backend's MAX_LOCALITY_TOWN_LENGTH; a longer town is dropped server-side.
+const MAX_TOWN_LENGTH = 80;
+
 function ManualEntryForm({ onCreated }: { onCreated: (dispatchId: string) => void }) {
   const auth = useAuth();
+  const homeQuery = useQuery({
+    queryKey: ['alerts', 'home-locality'],
+    queryFn: () => getHomeLocality(auth),
+    staleTime: 5 * 60_000,
+  });
+  const homeTowns = homeQuery.data?.towns ?? [];
+  const [localityChoice, setLocalityChoice] = useState('');
+  const [otherTown, setOtherTown] = useState('');
   const [form, setForm] = useState<ManualDispatchInput>(EMPTY_FORM);
   const [unitsText, setUnitsText] = useState('');
   const [fieldErrors, setFieldErrors] = useState<FieldError[]>([]);
@@ -53,6 +129,8 @@ function ManualEntryForm({ onCreated }: { onCreated: (dispatchId: string) => voi
     mutationFn: (input: ManualDispatchInput) => submitManualDispatch(auth, input),
     onSuccess: ({ dispatchId }) => {
       setForm(EMPTY_FORM);
+      setLocalityChoice('');
+      setOtherTown('');
       setUnitsText('');
       setFieldErrors([]);
       setFormError(null);
@@ -83,8 +161,17 @@ function ManualEntryForm({ onCreated }: { onCreated: (dispatchId: string) => voi
         aria-label="Enter dispatch manually"
         onSubmit={(event: FormEvent) => {
           event.preventDefault();
+          const locality =
+            localityChoice === OTHER_TOWN
+              ? { town: otherTown.trim(), choice: 'OTHER' as const }
+              : { town: localityChoice, choice: 'HOME' as const };
+          if (locality.town.length === 0) {
+            setFieldErrors([{ field: 'locality', message: 'Choose the town or village.' }]);
+            return;
+          }
           mutation.mutate({
             ...form,
+            locality,
             unitsRequested: unitsText
               .split(',')
               .map((u) => u.trim())
@@ -109,6 +196,14 @@ function ManualEntryForm({ onCreated }: { onCreated: (dispatchId: string) => voi
             error={errorFor(key)}
           />
         ))}
+        <LocalityField
+          homeTowns={homeTowns}
+          choice={localityChoice}
+          otherTown={otherTown}
+          onChoice={setLocalityChoice}
+          onOtherTown={setOtherTown}
+          error={errorFor('locality') ?? errorFor('locality.town') ?? errorFor('locality.choice')}
+        />
         <TextInput
           label="Units requested (comma separated)"
           optional
@@ -142,6 +237,27 @@ function ManualEntryForm({ onCreated }: { onCreated: (dispatchId: string) => voi
   );
 }
 
+/**
+ * Receipts sit behind the fail-closed authorizer (server-fix security MINOR 2): during a
+ * platform-table outage they are refused while the roster and responses keep working. Only a
+ * handler's own problem+json 403 (a Cedar denial) means "no access"; an authorizer refusal
+ * (API Gateway's plain {"message":"Forbidden"}, no problem status), a 5xx or a network failure
+ * is the service being down, and says so - an officer deciding whether to advance the tone
+ * ladder must not be told they lack access.
+ */
+function ReceiptsUnavailable({ error }: { error: unknown }) {
+  const refused = error instanceof ApiError && error.problem.status === 403;
+  return (
+    <Card title="Delivery receipts" style={{ marginTop: 'var(--bx-space-lg)' }}>
+      <p role="status">
+        {refused
+          ? 'You do not have access to delivery receipts.'
+          : 'Delivery receipts are temporarily unavailable. The roster and responses above are unaffected; receipts retry on their own.'}
+      </p>
+    </Card>
+  );
+}
+
 function ReceiptsTable({ dispatchId }: { dispatchId: string }) {
   const auth = useAuth();
   const query = useQuery({
@@ -151,11 +267,7 @@ function ReceiptsTable({ dispatchId }: { dispatchId: string }) {
   });
 
   if (query.error) {
-    return (
-      <ApiForbiddenGate error={query.error} embedded>
-        <p>Receipts are unavailable.</p>
-      </ApiForbiddenGate>
-    );
+    return <ReceiptsUnavailable error={query.error} />;
   }
 
   const byMember = new Map<string, Map<string, DeliveryReceipt>>();
@@ -388,6 +500,7 @@ function DispatchHeader({ dispatchId }: { dispatchId: string }) {
 
   return (
     <Card>
+      {query.data.verifyRequired ? <VerifyBanner /> : null}
       <h2 style={{ fontSize: 20, fontWeight: 700, margin: 0 }}>{query.data.incidentType}</h2>
       <p>{query.data.address}</p>
       {query.data.crossStreets ? <p>Cross streets: {query.data.crossStreets}</p> : null}
@@ -397,15 +510,111 @@ function DispatchHeader({ dispatchId }: { dispatchId: string }) {
         </a>
       ) : null}
       <p>{query.data.narrative}</p>
-      <PrePlanPanel prePlan={query.data.prePlan} />
+      <PrePlanPanel
+        prePlan={query.data.prePlan}
+        unavailable={query.data.prePlanUnavailable === true}
+        {...(query.data.nearestHydrants ? { nearestHydrants: query.data.nearestHydrants } : {})}
+        hydrantsUnavailable={query.data.nearestHydrantsUnavailable === true}
+        hydrantsIncomplete={query.data.nearestHydrantsIncomplete === true}
+      />
+      <DispatchUpdates
+        updates={query.data.updates}
+        unavailable={query.data.updatesUnavailable === true}
+      />
     </Card>
   );
 }
 
+/** A RAW (fail-open) CAD dispatch: the location is only in the dispatch text below. */
+export function VerifyBanner() {
+  return (
+    <div
+      role="alert"
+      style={{
+        border: '2px solid var(--bx-color-danger, #b00020)',
+        borderRadius: 8,
+        padding: 'var(--bx-space-sm)',
+        fontWeight: 700,
+      }}
+    >
+      VERIFY: the CAD message could not be read automatically. The location is in the dispatch text
+      below - confirm it by radio before responding.
+    </div>
+  );
+}
+
+const UPDATE_FIELD_LABELS: Record<string, string> = {
+  incidentType: 'Type',
+  address: 'Address',
+  crossStreets: 'Cross streets',
+  unitsRequested: 'Units',
+  narrative: 'Narrative',
+};
+
+/**
+ * When an update arrived: time only while it is today, day and time otherwise - on a long
+ * incident a bare "01:10" could be either night.
+ */
+function updateWhen(epochSeconds: number): string {
+  const date = new Date(epochSeconds * 1000);
+  return date.toDateString() === new Date().toDateString()
+    ? date.toLocaleTimeString()
+    : date.toLocaleString(undefined, {
+        month: 'short',
+        day: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+      });
+}
+
+/** The CAD's later messages for this call: what changed, when. */
+export function DispatchUpdates({
+  updates,
+  unavailable,
+}: {
+  updates: DispatchUpdate[] | undefined;
+  unavailable: boolean;
+}) {
+  if (unavailable) {
+    return <p role="status">CAD updates for this call could not be loaded.</p>;
+  }
+  if (!updates || updates.length === 0) return null;
+  return (
+    <section aria-labelledby="dispatch-updates-heading">
+      <h3 id="dispatch-updates-heading" style={{ fontSize: 17, fontWeight: 600 }}>
+        CAD updates ({updates.length})
+      </h3>
+      <ol>
+        {updates.map((update) => (
+          <li key={update.updateId}>
+            <time dateTime={new Date(update.receivedAt * 1000).toISOString()}>
+              {updateWhen(update.receivedAt)}
+            </time>
+            : {update.summary}
+            {update.changes.filter((c) => c.field !== 'narrative').length > 0 ? (
+              <ul>
+                {update.changes
+                  .filter((c) => c.field !== 'narrative')
+                  .map((c) => (
+                    <li key={c.field}>
+                      {UPDATE_FIELD_LABELS[c.field] ?? c.field}: {c.from || '(none)'} → {c.to}
+                    </li>
+                  ))}
+              </ul>
+            ) : null}
+          </li>
+        ))}
+      </ol>
+    </section>
+  );
+}
+
 // E1-S1-UI, E1-S4-UI, E1-S5-UI, E1-S6-UI, E1-S17-UI, E5-S8-UI, E1-S18-UI: one screen (/alerts/roster
-// per the existing route table) - dispatch header + pre-plan, live roster, delivery receipts, and
-// the riding board, plus the manual-entry fallback that lands here on submit. No endpoint exists
-// to list active dispatches, so an officer enters/keeps a dispatchId in the URL (?dispatchId=).
+// per the existing route table) - dispatch header + pre-plan, the tone-ladder / mutual-aid
+// controls (F1.13/F1.14), live roster, delivery receipts, and the riding board, plus the
+// manual-entry fallback that lands here on submit. The dispatchId is kept in the URL
+// (?dispatchId=); the dashboard's active-call tile links here with it set.
 export function AlertsRosterPage() {
   const auth = useAuth();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -437,6 +646,7 @@ export function AlertsRosterPage() {
       {dispatchId ? (
         <>
           <DispatchHeader dispatchId={dispatchId} />
+          <ToneLadderPanel dispatchId={dispatchId} />
           <RosterTable dispatchId={dispatchId} />
           <ReceiptsTable dispatchId={dispatchId} />
           <RidingBoardSection dispatchId={dispatchId} />

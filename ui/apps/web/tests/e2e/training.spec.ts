@@ -76,7 +76,8 @@ async function signInAs(page: Page, groups: string[]): Promise<void> {
 
   await page.goto('/login');
   await page.getByRole('button', { name: 'Sign in' }).click();
-  await expect(page.getByRole('navigation', { name: 'Primary' })).toBeVisible();
+  // Signed in: the top bar renders on every viewport (the Primary nav is a closed drawer below 768px).
+  await expect(page.getByRole('banner')).toBeVisible();
 }
 
 test('training officer creates an event, signs up, and records attendance (#152)', async ({

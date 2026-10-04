@@ -7,7 +7,7 @@ Product context, architecture, and the backlog live at the monorepo root — rea
 
 ## Where things stand (2026-09-03)
 
-**Nothing is scaffolded yet.** The repo holds a README and bootstrap issue [#115](https://github.com/zdemanche/Boxalarm-monorepo/issues/115). Architecture v1.0 and a 90-story backlog are done in `boxalarm-docs`; the user has asked for a **decision gate before the build phase begins**, so do not start generating screens until they say go.
+**Nothing is scaffolded yet.** The repo holds a README and bootstrap issue [#115](https://github.com/zdemanche/Boxalarm/issues/115). Architecture v1.0 and a 90-story backlog are done in `boxalarm-docs`; the user has asked for a **decision gate before the build phase begins**, so do not start generating screens until they say go.
 
 Work is tracked as `<KEY>-UI` monorepo issues labelled `area:ui`, each a sub-issue of its backend story.
 
@@ -28,7 +28,7 @@ Alert delivery is life-safety critical: the app **replaces radio tone-out as the
 
 **Alert receipt must not depend on the app being foregrounded, recently opened, or exempt from battery optimization.**
 
-Blocked on the Apple Critical Alerts entitlement — [#4](https://github.com/zdemanche/Boxalarm-monorepo/issues/4). It can be rejected; that is a known risk with no workaround inside this repo.
+Blocked on the Apple Critical Alerts entitlement — [#4](https://github.com/zdemanche/Boxalarm/issues/4). It can be rejected; that is a known risk with no workaround inside this repo.
 
 ## Design center
 

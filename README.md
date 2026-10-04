@@ -46,12 +46,12 @@ Architecture went through **4 rounds of independent review** (cap extended once 
 
 Blocking items with external lead times — these gate everything and should be moving now:
 
-- [#2](https://github.com/zdemanche/Boxalarm-monorepo/issues/2) CAD integration surface — *how does Chief360 get dispatch today?*
-- [#3](https://github.com/zdemanche/Boxalarm-monorepo/issues/3) Regional dispatch authority approval — likely the longest pole
-- [#4](https://github.com/zdemanche/Boxalarm-monorepo/issues/4) Apple Critical Alerts entitlement — can be rejected
-- [#5](https://github.com/zdemanche/Boxalarm-monorepo/issues/5) Who carries the pager at 03:00
+- [#2](https://github.com/zdemanche/Boxalarm/issues/2) CAD integration surface — *how does Chief360 get dispatch today?*
+- [#3](https://github.com/zdemanche/Boxalarm/issues/3) Regional dispatch authority approval — likely the longest pole
+- [#4](https://github.com/zdemanche/Boxalarm/issues/4) Apple Critical Alerts entitlement — can be rejected
+- [#5](https://github.com/zdemanche/Boxalarm/issues/5) Who carries the pager at 03:00
 - **OQ-24** — who revokes a compromised or lost session, and how fast; with expiry gone this is the only control that ends access
-- [#12](https://github.com/zdemanche/Boxalarm-monorepo/issues/12) ⚠️ Read before implementing the alert path
+- [#12](https://github.com/zdemanche/Boxalarm/issues/12) ⚠️ Read before implementing the alert path
 
 ## Docs
 

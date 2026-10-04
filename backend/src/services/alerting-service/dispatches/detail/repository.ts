@@ -1,4 +1,4 @@
-import { GetCommand, type DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
+import { GetCommand, QueryCommand, type DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
 import { buildDeptScopedPk, type VerifiedDeptId } from '@boxalarm/dept-scope';
 
 export interface DispatchAlertItem {
@@ -13,15 +13,13 @@ export interface DispatchAlertItem {
   readonly eligibleMemberCount?: number;
   readonly fanOutStartedAt?: number;
   readonly prePlanRefs?: readonly string[];
+  /** Dispatcher's locality choice (dispatchIngressPort.ts), when ingress captured one. */
+  readonly locality?: { readonly town: string; readonly choice: 'HOME' | 'OTHER' };
   readonly toneLadderStatus?: string;
   readonly currentToneSequence?: number;
   readonly nextToneAt?: number | null;
-}
-
-export interface PrePlanCopyItem {
-  readonly summary: string;
-  readonly hazards: readonly string[];
-  readonly nearestHydrants: readonly unknown[];
+  /** RAW (fail-open) CAD dispatch: the address is a placeholder; the text is the source. */
+  readonly verifyRequired?: boolean;
 }
 
 export async function getDispatchDetail(
@@ -39,19 +37,59 @@ export async function getDispatchDetail(
   return result.Item as DispatchAlertItem | undefined;
 }
 
-// Keyed by occupancyId per architecture.md:734 (`sk = OCCUPANCY#{occupancyId}`). The caller
-// (handler.ts fetchPrePlan) currently has no occupancyId to give this — see the TODO there.
-export async function getPrePlanCopy(
+/** The MUTUAL_AID_EVENT singleton (architecture §3.1), or undefined if none was requested. */
+export async function getMutualAidEvent(
   client: DynamoDBDocumentClient,
   tableName: string,
   deptId: VerifiedDeptId,
-  occupancyId: string,
-): Promise<PrePlanCopyItem | undefined> {
+  dispatchId: string,
+): Promise<Record<string, unknown> | undefined> {
   const result = await client.send(
     new GetCommand({
       TableName: tableName,
-      Key: { pk: buildDeptScopedPk(deptId, 'PREPLAN'), sk: `OCCUPANCY#${occupancyId}` },
+      Key: { pk: buildDeptScopedPk(deptId, 'DISPATCH', dispatchId), sk: 'MUTUALAID#SINGLETON' },
     }),
   );
-  return result.Item as PrePlanCopyItem | undefined;
+  return result.Item?.entityType === 'MUTUAL_AID_EVENT' ? result.Item : undefined;
+}
+
+export interface DispatchUpdateView {
+  readonly updateId: string;
+  readonly receivedAt: number;
+  readonly summary: string;
+  readonly changes: readonly { field: string; from: string; to: string }[];
+}
+
+/**
+ * The CAD updates recorded for this dispatch (cadIngress/updateRepository.ts), oldest first.
+ * Bounded: a dispatch with more than 100 updates shows the first 100.
+ */
+export async function getDispatchUpdates(
+  client: DynamoDBDocumentClient,
+  tableName: string,
+  deptId: VerifiedDeptId,
+  dispatchId: string,
+): Promise<DispatchUpdateView[]> {
+  const result = await client.send(
+    new QueryCommand({
+      TableName: tableName,
+      KeyConditionExpression: 'pk = :pk AND begins_with(sk, :update)',
+      ExpressionAttributeValues: {
+        ':pk': buildDeptScopedPk(deptId, 'DISPATCH', dispatchId),
+        ':update': 'UPDATE#',
+      },
+      Limit: 100,
+    }),
+  );
+  return (result.Items ?? [])
+    .filter((item) => item.entityType === 'DISPATCH_UPDATE')
+    .map((item) => ({
+      updateId: String(item.updateId),
+      receivedAt: Number(item.receivedAt),
+      summary: typeof item.summary === 'string' ? item.summary : '',
+      changes: Array.isArray(item.changes)
+        ? (item.changes as { field: string; from: string; to: string }[])
+        : [],
+    }))
+    .sort((a, b) => a.receivedAt - b.receivedAt);
 }

@@ -1,5 +1,5 @@
-import { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { FormEvent, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../../auth/AuthContext';
 import { ApiError } from '../../lib/apiClient';
@@ -10,9 +10,10 @@ import { DataTable, type DataTableColumn } from '../../components/ui/DataTable';
 import { StatusChip } from '../../components/ui/Chip';
 import { Checkbox, DatePicker, TextInput } from '../../components/ui/Field';
 import { PageHeader } from '../../components/ui/PageHeader';
-import { createIncidentFromDispatch, searchIncidents } from './api';
+import { canListRecentDispatches, canStartIncidentReport } from '../../auth/roles';
+import { createIncidentFromDispatch, listRecentDispatches, searchIncidents } from './api';
 import { dateInputToEpoch, epochToDateInput, formatDate } from './format';
-import type { Incident, IncidentStatus } from './types';
+import type { Incident, IncidentStatus, RecentDispatch, RecentDispatchPage } from './types';
 import styles from './IncidentsList.module.css';
 
 const STATUS_ROLE: Record<IncidentStatus, 'neutral' | 'info' | 'warning' | 'ok' | 'danger'> = {
@@ -35,6 +36,158 @@ const STATUS_ORDER: IncidentStatus[] = ['DRAFT', 'VALIDATED', 'SUBMITTED', 'ACCE
 
 const DEFAULT_RANGE_DAYS = 90;
 
+function dispatchTime(epochSeconds: number): string {
+  return new Date(epochSeconds * 1000).toLocaleString(undefined, {
+    weekday: 'short',
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+}
+
+function DispatchRow({
+  dispatch,
+  canStart,
+  pending,
+  onStart,
+}: {
+  dispatch: RecentDispatch;
+  canStart: boolean;
+  pending: boolean;
+  onStart: (dispatchId: string) => void;
+}) {
+  const type = dispatch.incidentType || 'Unknown call type';
+  // An unparsed CAD dispatch's address is a placeholder: say so and show its text instead.
+  const verify = dispatch.verifyRequired === true;
+  const address = verify
+    ? `unverified location: "${dispatch.textExcerpt ?? ''}"`
+    : dispatch.address || 'no address on the dispatch';
+  return (
+    <li className={styles.recentCall}>
+      <span>
+        <strong>{type}</strong> —{' '}
+        {verify ? (
+          <>
+            <StatusChip status="warning">VERIFY</StatusChip>{' '}
+            <q className={styles.mono}>{dispatch.textExcerpt ?? ''}</q>
+          </>
+        ) : (
+          address
+        )}
+        <span className={styles.recentMeta}>
+          {' '}
+          · dispatched {dispatchTime(dispatch.dispatchedAt)}
+        </span>
+      </span>
+      {dispatch.report ? (
+        <Link to={`/incidents/${encodeURIComponent(dispatch.report.incidentId)}`}>
+          Open report ({STATUS_LABEL[dispatch.report.status] ?? dispatch.report.status})
+        </Link>
+      ) : canStart ? (
+        <Button
+          variant="secondary"
+          loading={pending}
+          aria-label={`Start report for ${type} at ${address}`}
+          onClick={() => onStart(dispatch.dispatchId)}
+        >
+          Start report
+        </Button>
+      ) : (
+        <span className={styles.recentMeta}>No report yet</span>
+      )}
+    </li>
+  );
+}
+
+/**
+ * "Start a report" from the department's dispatches (incident-service GET
+ * /incidents/dispatches): every dispatch of the last 72 hours, then older ones on request - the
+ * officer picks the call instead of typing its Dispatch ID (review M9/M10, m7). The typed ID is
+ * offered only when that list can't be loaded.
+ */
+function RecentDispatchesToReport({
+  query,
+  canStart,
+  pendingDispatchId,
+  onStart,
+  fallback,
+}: {
+  query: {
+    isLoading: boolean;
+    error: unknown;
+    data: { pages: RecentDispatchPage[] } | undefined;
+    hasNextPage: boolean;
+    isFetchingNextPage: boolean;
+    fetchNextPage: () => unknown;
+  };
+  canStart: boolean;
+  pendingDispatchId: string | undefined;
+  onStart: (dispatchId: string) => void;
+  fallback: ReactNode;
+}) {
+  if (query.isLoading) return <p>Loading recent dispatches…</p>;
+  if (query.error || !query.data) {
+    return (
+      <>
+        <p role="status">
+          Recent dispatches couldn&rsquo;t load. You can start a report from the dispatch ID
+          instead.
+        </p>
+        {fallback}
+      </>
+    );
+  }
+  const [first, ...olderPages] = query.data.pages;
+  const hours = first?.recentWindowHours ?? 72;
+  const windowStart = Math.floor(Date.now() / 1000) - hours * 3600;
+  const all = query.data.pages.flatMap((page) => page.dispatches);
+  const recent = all.filter((d) => d.dispatchedAt >= windowStart);
+  const older = all.filter((d) => d.dispatchedAt < windowStart);
+  const row = (dispatch: RecentDispatch) => (
+    <DispatchRow
+      key={dispatch.dispatchId}
+      dispatch={dispatch}
+      canStart={canStart}
+      pending={pendingDispatchId === dispatch.dispatchId}
+      onStart={onStart}
+    />
+  );
+  return (
+    <>
+      <h3 style={{ margin: 0 }}>Last {hours} hours</h3>
+      {recent.length === 0 ? (
+        <p>No dispatches in the last {hours} hours.</p>
+      ) : (
+        <ul className={styles.recentCalls} aria-label={`Dispatches in the last ${hours} hours`}>
+          {recent.map(row)}
+        </ul>
+      )}
+      {older.length > 0 ? (
+        <>
+          <h3 style={{ margin: 0 }}>Older</h3>
+          <ul className={styles.recentCalls} aria-label="Older dispatches">
+            {older.map(row)}
+          </ul>
+        </>
+      ) : olderPages.length > 0 && !query.hasNextPage ? (
+        <p>No older dispatches.</p>
+      ) : null}
+      {query.hasNextPage ? (
+        <Button
+          type="button"
+          variant="secondary"
+          loading={query.isFetchingNextPage}
+          onClick={() => void query.fetchNextPage()}
+          style={{ width: 'fit-content' }}
+        >
+          Load older dispatches
+        </Button>
+      ) : null}
+    </>
+  );
+}
+
 function StatusCell({ status }: { status: IncidentStatus }) {
   return <StatusChip status={STATUS_ROLE[status]}>{STATUS_LABEL[status]}</StatusChip>;
 }
@@ -43,7 +196,9 @@ export function IncidentsListPage() {
   const auth = useAuth();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
-  const canCreate = auth.roles.includes('CHIEF') || auth.roles.includes('OFFICER');
+  // Starting a report (Cedar CreateIncidentReport) and listing dispatches: the NERIS officer tier.
+  const canCreate = canStartIncidentReport(auth.roles);
+  const canList = canListRecentDispatches(auth.roles);
 
   const now = Math.floor(Date.now() / 1000);
   const [fromDate, setFromDate] = useState(epochToDateInput(now - DEFAULT_RANGE_DAYS * 86400));
@@ -61,8 +216,19 @@ export function IncidentsListPage() {
       }),
   });
 
+  // The department's dispatches (incident-service's copies: last 72 h, then older on request)
+  // are the report starting points, so an officer picks the call instead of typing its ID.
+  const recentQuery = useInfiniteQuery({
+    queryKey: ['incidents', 'dispatches'],
+    queryFn: ({ pageParam }) => listRecentDispatches(auth, pageParam),
+    initialPageParam: undefined as string | undefined,
+    getNextPageParam: (last: RecentDispatchPage) => last.nextCursor ?? undefined,
+    enabled: canList,
+  });
+
   const createMutation = useMutation({
-    mutationFn: () => createIncidentFromDispatch(auth, { dispatchId }),
+    mutationFn: (targetDispatchId: string) =>
+      createIncidentFromDispatch(auth, { dispatchId: targetDispatchId }),
     onSuccess: (created) => {
       queryClient.setQueryData(['incident', created.incidentId], created);
       setDispatchId('');
@@ -289,35 +455,47 @@ export function IncidentsListPage() {
         </>
       )}
 
-      {canCreate ? (
-        <Card
-          title="Create report from dispatch"
-          style={{ marginTop: 'var(--bx-space-lg)', maxWidth: 480 }}
-        >
-          <form
-            aria-label="Create report from dispatch"
-            onSubmit={(event: FormEvent) => {
-              event.preventDefault();
-              createMutation.mutate();
-            }}
-            style={{ display: 'grid', gap: 'var(--bx-space-md)' }}
-          >
-            <TextInput
-              label="Dispatch ID"
-              value={dispatchId}
-              required
-              onChange={(event) => setDispatchId(event.target.value)}
-            />
-            {createError ? (
-              <div ref={errorRef} tabIndex={-1} role="alert">
-                <p style={{ fontWeight: 600, margin: 0 }}>{createError.title}</p>
-                {createError.detail ? <p style={{ margin: 0 }}>{createError.detail}</p> : null}
-              </div>
-            ) : null}
-            <Button type="submit" loading={createMutation.isPending} disabled={!dispatchId}>
-              Create report
-            </Button>
-          </form>
+      {canList ? (
+        <Card title="Start a report" style={{ marginTop: 'var(--bx-space-lg)', maxWidth: 720 }}>
+          <RecentDispatchesToReport
+            query={recentQuery}
+            canStart={canCreate}
+            pendingDispatchId={createMutation.isPending ? createMutation.variables : undefined}
+            onStart={(id) => createMutation.mutate(id)}
+            fallback={
+              canCreate ? (
+                <form
+                  aria-label="Create report from dispatch"
+                  onSubmit={(event: FormEvent) => {
+                    event.preventDefault();
+                    createMutation.mutate(dispatchId);
+                  }}
+                  style={{
+                    display: 'grid',
+                    gap: 'var(--bx-space-md)',
+                    marginTop: 'var(--bx-space-sm)',
+                  }}
+                >
+                  <TextInput
+                    label="Dispatch ID"
+                    help="The CAD dispatch number."
+                    value={dispatchId}
+                    required
+                    onChange={(event) => setDispatchId(event.target.value)}
+                  />
+                  <Button type="submit" loading={createMutation.isPending} disabled={!dispatchId}>
+                    Create report
+                  </Button>
+                </form>
+              ) : null
+            }
+          />
+          {createError ? (
+            <div ref={errorRef} tabIndex={-1} role="alert">
+              <p style={{ fontWeight: 600, margin: 0 }}>{createError.title}</p>
+              {createError.detail ? <p style={{ margin: 0 }}>{createError.detail}</p> : null}
+            </div>
+          ) : null}
         </Card>
       ) : null}
     </main>

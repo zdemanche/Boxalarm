@@ -2,6 +2,7 @@ import { FormEvent, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useParams } from 'react-router-dom';
 import { useAuth } from '../../auth/AuthContext';
+import { canManageInventory } from '../../auth/roles';
 import { ApiForbiddenGate } from '../../components/ApiForbiddenGate';
 import {
   Button,
@@ -21,6 +22,7 @@ import {
   transitionEquipmentLifecycle,
 } from './api';
 import type { AssignedToType, LifecycleStatus } from './types';
+import { humanize } from '../../lib/labels';
 
 const NEXT_LIFECYCLE: Record<LifecycleStatus, readonly LifecycleStatus[]> = {
   ACQUIRED: ['IN_SERVICE', 'RETIRED'],
@@ -32,7 +34,7 @@ export function EquipmentDetailPage() {
   const { assetId = '' } = useParams();
   const auth = useAuth();
   const queryClient = useQueryClient();
-  const canWrite = auth.roles.includes('ADMIN') || auth.roles.includes('CHIEF');
+  const canWrite = canManageInventory(auth.roles);
   const [assignedToType, setAssignedToType] = useState<AssignedToType>('MEMBER');
   const [assignedToId, setAssignedToId] = useState('');
   const [location, setLocation] = useState('');
@@ -109,7 +111,9 @@ export function EquipmentDetailPage() {
         <>
           <Card>
             <p role="status">
-              <StatusChip status={retired ? 'neutral' : 'ok'}>{asset.lifecycleStatus}</StatusChip>
+              <StatusChip status={retired ? 'neutral' : 'ok'}>
+                {humanize(asset.lifecycleStatus)}
+              </StatusChip>
             </p>
             <dl style={{ margin: 0 }}>
               <dt>Location</dt>

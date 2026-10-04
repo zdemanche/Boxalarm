@@ -3,10 +3,15 @@ import * as aws from "@pulumi/aws";
 import { IamPolicyStatement } from "../observability/observability-policy";
 import { requireEnv } from "../shared/env";
 
-/** Documented NERIS non-prod API host (N6.4 — never used from prod). */
-export const NERIS_DEV_BASE_URL = "https://api-test.neris.fsri.org";
-/** Documented NERIS production API host. */
-export const NERIS_PROD_BASE_URL = "https://api.neris.fsri.org";
+// Both NERIS OpenAPI documents (prod v1.4.78, test v1.5.1, checked 2026-09-29) declare their
+// server as `https://<host>/v1`: `<host>/health` is a 404 and `<host>/v1/health` a 200. The
+// backend client resolves every path (`/token`, `/incident/{entity}`, ...) against this base,
+// so the `/v1` prefix belongs here — without it every NERIS call, the token request included,
+// misses the API.
+/** Documented NERIS non-prod API base (N6.4 — never used from prod). */
+export const NERIS_DEV_BASE_URL = "https://api-test.neris.fsri.org/v1";
+/** Documented NERIS production API base. */
+export const NERIS_PROD_BASE_URL = "https://api.neris.fsri.org/v1";
 
 const NON_PROD_ENVS = new Set(["dev", "qa", "staging"]);
 
@@ -28,9 +33,18 @@ export function nerisUserAgentForEnv(env: string): string {
   return `Boxalarm/${env}`;
 }
 
+/** The per-env SSM parameters every NERIS caller reads (NerisConfig creates them). */
+export function nerisParameterNames(env: string): readonly [string, string] {
+  return [`/boxalarm/${env}/neris/base-url`, `/boxalarm/${env}/neris/user-agent`];
+}
+
+const CREDENTIALS_ARN = /^arn:(aws[\w-]*):secretsmanager:([a-z0-9-]+):(\d{12}):secret:.+$/;
+
 /**
- * IAM statements for a Lambda (or other principal) that calls NERIS: read the
- * OAuth client secret and the per-env base-url / user-agent SSM parameters.
+ * IAM statements for a Lambda (or other principal) that calls NERIS: read the OAuth client
+ * secret and exactly the two per-env SSM parameters (base-url, user-agent). The parameters live
+ * in the secret's own region and account (one stack), so their ARNs are pinned from the
+ * secret's ARN rather than wildcarded (security-web MINOR 3).
  */
 export function nerisClientPolicyStatements(secretArn: string, env: string): IamPolicyStatement[] {
   if (typeof secretArn !== "string" || secretArn.length === 0) {
@@ -39,6 +53,13 @@ export function nerisClientPolicyStatements(secretArn: string, env: string): Iam
     );
   }
   requireEnv("nerisClientPolicyStatements", env);
+  const match = CREDENTIALS_ARN.exec(secretArn);
+  if (!match) {
+    throw new Error(
+      `nerisClientPolicyStatements: secretArn must be a full Secrets Manager ARN (received ${JSON.stringify(secretArn)})`,
+    );
+  }
+  const [, partition, region, accountId] = match;
 
   return [
     {
@@ -51,7 +72,9 @@ export function nerisClientPolicyStatements(secretArn: string, env: string): Iam
       Sid: "NerisGetParameters",
       Effect: "Allow",
       Action: ["ssm:GetParameter", "ssm:GetParameters"],
-      Resource: `arn:aws:ssm:*:*:parameter/boxalarm/${env}/neris/*`,
+      Resource: nerisParameterNames(env).map(
+        (name) => `arn:${partition}:ssm:${region}:${accountId}:parameter${name}`,
+      ),
     },
   ];
 }

@@ -15,18 +15,81 @@ export interface UtilityShutoff {
   location: string;
 }
 
+/** NFPA 291 hydrant marking class (rated flow): AA >=1500, A 1000-1499, B 500-999, C <500 gpm. */
+export type HydrantFlowClass = 'AA' | 'A' | 'B' | 'C';
+
+// Nearest hydrants to the matched occupancy, nearest first (alerting-service
+// prePlan/nearestHydrants.ts): up to five usable ones, plus any OUT_OF_SERVICE hydrant nearer
+// than the last of them (status says which). distanceMeters/flowClass are absent from older
+// responses.
 export interface NearestHydrant {
   hydrantId: string;
   status?: string;
   size?: string;
   flowRatingGpm?: number;
+  flowClass?: HydrantFlowClass;
+  distanceMeters?: number;
 }
 
-export interface PrePlanEnrichment {
+/**
+ * How the server tied the pre-plan to this dispatch (alerting dispatches/detail/prePlanContext.ts).
+ * Only ADDRESS is this building's own plan. Everything else, ADDRESS_BUILDING included (the
+ * building's plan for a unit that has none of its own), is shown flagged "VERIFY ADDRESS",
+ * never as the call's plan.
+ */
+export type PrePlanMatchType =
+  'ADDRESS' | 'ADDRESS_BUILDING' | 'ADDRESS_UNVERIFIED' | 'UNIT_MISMATCH' | 'NEARBY' | 'CANDIDATES';
+
+/** One of several pre-plans the crew must choose between (matchType CANDIDATES). */
+export interface PrePlanCandidate {
+  occupancyId: string;
+  matchedAddress: string;
+  unit: string | null;
   summary?: string;
   hazards: string[];
   utilityShutoffs: UtilityShutoff[];
+  distanceMeters?: number;
+}
+
+export interface PrePlanEnrichment {
+  /** Absent only from a server that predates match provenance. */
+  matchType?: PrePlanMatchType;
+  matchedAddress?: string;
+  unit?: string | null;
+  /** NEARBY only: meters from the dispatch location. */
+  distanceMeters?: number;
+  /** ADDRESS_BUILDING: the dispatched unit ("BLDG 2", "REAR") the building-level plan does not cover. */
+  dispatchUnit?: string;
+  /**
+   * Legacy line for clients without matchType support (the server prefixes it with the
+   * provenance for anything but a plain ADDRESS match). Render occupancySummary instead
+   * whenever matchType is present.
+   */
+  summary?: string;
+  occupancySummary?: string;
+  hazards: string[];
+  utilityShutoffs: UtilityShutoff[];
   nearestHydrants: NearestHydrant[];
+  candidates?: PrePlanCandidate[];
+}
+
+export type ToneLadderStatus = 'ACTIVE' | 'HALTED_MANUAL' | 'COMPLETED';
+
+/** GET /alerting/dispatches/{id} `toneLadder` (F1.14). */
+export interface ToneLadder {
+  status: ToneLadderStatus | string;
+  currentToneSequence: number;
+  nextToneAt: number | null;
+}
+
+/** The MUTUAL_AID_EVENT projection (F1.13). */
+export interface MutualAid {
+  triggeredAt: number | null;
+  reason: string | null;
+  triggeredBy: string | null;
+  acknowledgedBy: string | null;
+  acknowledgedAt: number | null;
+  notes: string | null;
 }
 
 export interface DispatchAlert {
@@ -37,6 +100,90 @@ export interface DispatchAlert {
   mapLink: string | null;
   narrative: string;
   prePlan?: PrePlanEnrichment | null;
+  /** The server could not look the pre-plan up (prePlan is then absent) - not "none on file". */
+  prePlanUnavailable?: boolean;
+  /**
+   * Nearest hydrants to the matched building or the dispatch's own coordinates - present with
+   * or without a pre-plan match; includes flagged OUT_OF_SERVICE hydrants. Absent when there
+   * is no reference point (or from an older server).
+   */
+  nearestHydrants?: NearestHydrant[];
+  nearestHydrantsUnavailable?: boolean;
+  /** The server's geo read hit its cap: a nearer hydrant may be missing. */
+  nearestHydrantsIncomplete?: boolean;
+  toneLadder?: ToneLadder;
+  /** null = not requested; absent = the server could not read it (state unknown). */
+  mutualAid?: MutualAid | null;
+  /** CAD updates to this call, oldest first (absent from older servers). */
+  updates?: DispatchUpdate[];
+  /**
+   * A CAD dispatch its source's template could not read: the address is a placeholder and the
+   * dispatch text (narrative) is the only source of the location. There is no map link.
+   */
+  verifyRequired?: boolean;
+  /** The server could not read the update history (updates is then absent). */
+  updatesUnavailable?: boolean;
+}
+
+/** One CAD update to a call already paged (decision 2026-09-30-cad-dispatch-updates.md). */
+export interface DispatchUpdate {
+  updateId: string;
+  /** Epoch seconds. */
+  receivedAt: number;
+  summary: string;
+  changes: { field: string; from: string; to: string }[];
+}
+
+export interface AdvanceToneResult {
+  dispatchId: string;
+  toneSequence: number;
+  outcome: string;
+}
+
+export interface HaltToneLadderResult {
+  dispatchId: string;
+  toneLadder: { status: string; currentToneSequence: number };
+  changed: boolean;
+}
+
+export interface TriggerMutualAidResult {
+  dispatchId: string;
+  created: boolean;
+  /**
+   * Officers pushed by this request. On a repeat (created=false) these are re-sends to
+   * officers an earlier attempt missed. null only from a server that predates re-sends.
+   */
+  officersNotified: number | null;
+  mutualAid: MutualAid | null;
+}
+
+export interface AcknowledgeMutualAidResult {
+  dispatchId: string;
+  changed: boolean;
+  mutualAid: MutualAid;
+}
+
+/** One row of GET alerting/dispatches?status=active (dispatches/list/handler.ts). */
+export interface ActiveDispatch {
+  dispatchId: string;
+  incidentType: string | null;
+  address: string | null;
+  crossStreets: string | null;
+  /** Epoch seconds. */
+  dispatchedAt: number;
+  toneLadder: { status: string; currentToneSequence: number };
+}
+
+/**
+ * "Active" is a server-side recency window (the alerting plane has no cleared state), so the
+ * response carries the window it applied — render it rather than implying a lifecycle state.
+ */
+export interface ActiveDispatchList {
+  dispatches: ActiveDispatch[];
+  activeWindowSeconds: number;
+  /** Epoch seconds the window was evaluated at. */
+  asOf: number;
+  truncated: boolean;
 }
 
 export type DeliveryReceiptStatus = 'FAILED' | 'OPENED' | 'DELIVERED' | 'SENT_UNCONFIRMED' | 'SENT';
@@ -52,6 +199,12 @@ export interface DeliveryReceipt {
   failureReason: string | null;
 }
 
+/** Where the incident is: a home town/village, or another town typed in (R3-A). */
+export interface DispatchLocality {
+  town: string;
+  choice: 'HOME' | 'OTHER';
+}
+
 export interface ManualDispatchInput {
   incidentType: string;
   address: string;
@@ -59,6 +212,14 @@ export interface ManualDispatchInput {
   unitsRequested: string[];
   narrative: string;
   externalDispatchId: string;
+  locality?: DispatchLocality;
+}
+
+/** GET alerting/home-locality: the department's home towns/villages. */
+export interface HomeLocality {
+  towns: string[];
+  zips: string[];
+  state: string | null;
 }
 
 export interface FieldError {
@@ -111,6 +272,7 @@ export interface DiagnosticsTimelineEntry {
   sentAt?: number;
   deliveredAt?: number | null;
   openedAt?: number | null;
+  failureReason?: string | null;
   escalatedAt?: number;
   reason?: string;
   answeredAt?: number;

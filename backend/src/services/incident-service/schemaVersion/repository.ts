@@ -26,6 +26,7 @@ function toSchemaVersion(item: Record<string, unknown>): SchemaVersion {
     status: item.status as SchemaVersionStatus,
     coreSchemaS3Key: item.coreSchemaS3Key as string,
     secondarySchemaS3Key: item.secondarySchemaS3Key as string,
+    ...(typeof item.nerisApiS3Key === 'string' ? { nerisApiS3Key: item.nerisApiS3Key } : {}),
     publishedAt: item.publishedAt as number,
   };
 }
@@ -34,22 +35,31 @@ export interface PublishSchemaVersionInput {
   readonly version: string;
   readonly coreSchemaS3Key: string;
   readonly secondarySchemaS3Key: string;
+  readonly nerisApiS3Key?: string;
   readonly publishedAt: number;
 }
 
+// Function-typed properties (not methods): the implementation never uses `this`, so
+// callers and test mocks may safely destructure them.
 export interface SchemaVersionRepository {
-  publishSchemaVersion(input: PublishSchemaVersionInput): Promise<SchemaVersion>;
-  getSchemaVersion(version: string): Promise<SchemaVersion | undefined>;
-  getActiveVersionNumber(): Promise<string | undefined>;
-  getActiveSchemaVersion(): Promise<SchemaVersion | undefined>;
+  readonly publishSchemaVersion: (input: PublishSchemaVersionInput) => Promise<SchemaVersion>;
+  readonly getSchemaVersion: (version: string) => Promise<SchemaVersion | undefined>;
+  readonly getActiveVersionNumber: () => Promise<string | undefined>;
+  readonly getActiveSchemaVersion: () => Promise<SchemaVersion | undefined>;
 }
+
+// Module scope, not per call: handlers build a repository per request, so a default
+// cache created inside the factory never survived past one invocation and the
+// ACTIVE_POINTER lookup was never actually cached across requests.
+const sharedActivePointerCache = createConfigCache({ ttlMs: SCHEMA_VERSION_CACHE_TTL_MS });
 
 export function createSchemaVersionRepository(
   client: DynamoDBDocumentClient,
   tableName: string,
-  cache: ConfigCache = createConfigCache({ ttlMs: SCHEMA_VERSION_CACHE_TTL_MS }),
+  cache: ConfigCache = sharedActivePointerCache,
 ): SchemaVersionRepository {
-  return {
+  // Methods reference `repository`, never `this`, so they still work when destructured.
+  const repository: SchemaVersionRepository = {
     async publishSchemaVersion(input) {
       const item = {
         pk: 'SCHEMA_VERSION',
@@ -59,6 +69,7 @@ export function createSchemaVersionRepository(
         status: 'ACTIVE',
         coreSchemaS3Key: input.coreSchemaS3Key,
         secondarySchemaS3Key: input.secondarySchemaS3Key,
+        ...(input.nerisApiS3Key ? { nerisApiS3Key: input.nerisApiS3Key } : {}),
         publishedAt: input.publishedAt,
       };
       try {
@@ -124,13 +135,14 @@ export function createSchemaVersionRepository(
     },
 
     async getActiveSchemaVersion() {
-      const version = await this.getActiveVersionNumber();
+      const version = await repository.getActiveVersionNumber();
       if (!version) {
         return undefined;
       }
-      return this.getSchemaVersion(version);
+      return repository.getSchemaVersion(version);
     },
   };
+  return repository;
 }
 
 let cachedRepository: SchemaVersionRepository | undefined;

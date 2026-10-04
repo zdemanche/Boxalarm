@@ -46,55 +46,226 @@ function buildEvent(
 function mockRevocationClient(overrides: {
   revokeMemberSession?: ReturnType<typeof vi.fn>;
   resolveMemberDeptId?: ReturnType<typeof vi.fn>;
+  isProtectedTarget?: ReturnType<typeof vi.fn>;
 }): void {
-  vi.doMock('./cognitoRevocationClient.js', () => ({
+  vi.doMock('./cognitoRevocationClient.js', async (importOriginal) => ({
     readRevocationConfig: () => ({ userPoolId: 'pool-1' }),
     createRevocationClient: () => ({}),
     revokeMemberSession: overrides.revokeMemberSession ?? vi.fn(),
     resolveMemberDeptId: overrides.resolveMemberDeptId ?? vi.fn().mockResolvedValue('dept-001'),
+    isProtectedTarget: overrides.isProtectedTarget ?? vi.fn().mockResolvedValue(false),
+    mayActOnProtectedTarget: (await importOriginal<typeof import('./cognitoRevocationClient.js')>())
+      .mayActOnProtectedTarget,
   }));
 }
 
 describe('deviceLossHandler', () => {
   const originalEnv = { ...process.env };
 
+  let writeRevocationMarker: ReturnType<typeof vi.fn>;
+  let invalidateMemberPush: ReturnType<typeof vi.fn>;
+
   beforeEach(() => {
     vi.resetModules();
     process.env.COGNITO_USER_POOL_ID = 'pool-1';
+    process.env.PLATFORM_TABLE_NAME = 'platform-table';
+    writeRevocationMarker = vi.fn().mockResolvedValue(1_700_000_000);
+    invalidateMemberPush = vi.fn().mockResolvedValue('invalidated');
+    vi.doMock('./memberAccessStore.js', () => ({
+      readPlatformTableName: () => 'platform-table',
+      getAccessStoreClient: () => ({}),
+      invalidateMemberPush: (...args: unknown[]) =>
+        invalidateMemberPush(...args) as Promise<string>,
+    }));
+    vi.doMock('../authorizer/revocationStore.js', () => ({
+      writeRevocationMarker: (...args: unknown[]) =>
+        writeRevocationMarker(...args) as Promise<number>,
+    }));
+    // Cedar (RevokeSession) is exercised by the wiring test below and by infrastructure's
+    // cedar-coverage test; here the guard passes the verified principal straight through.
+    vi.doMock('@boxalarm/authz', async () => {
+      const actual = await vi.importActual<typeof import('@boxalarm/authz')>('@boxalarm/authz');
+      return {
+        ...actual,
+        withAuthorization:
+          (inner: (event: unknown, principal: unknown) => unknown) =>
+          (event: { requestContext: { authorizer: { lambda: unknown } } }) =>
+            inner(event, event.requestContext.authorizer.lambda),
+      };
+    });
   });
 
   afterEach(() => {
     process.env = { ...originalEnv };
     vi.unmock('./cognitoRevocationClient.js');
+    vi.unmock('./memberAccessStore.js');
+    vi.unmock('../authorizer/revocationStore.js');
+    vi.doUnmock('@boxalarm/authz');
     vi.restoreAllMocks();
   });
 
-  it('denies (403, fail-secure) when the caller has no CHIEF/ADMIN group', async () => {
+  it('is gated by the Cedar RevokeSession action and alarms on every invocation', async () => {
+    const withAuthorization = vi.fn((inner: unknown) => inner);
+    vi.doMock('@boxalarm/authz', async () => {
+      const actual = await vi.importActual<typeof import('@boxalarm/authz')>('@boxalarm/authz');
+      return { ...actual, withAuthorization };
+    });
+    await import('./deviceLossHandler.js');
+
+    expect(withAuthorization).toHaveBeenCalledWith(
+      expect.any(Function),
+      expect.objectContaining({
+        actionType: 'Boxalarm::Action',
+        actionId: 'RevokeSession',
+        resourceType: 'Boxalarm::Member',
+        alarmOnInvocation: 'RevokeSessionInvoked',
+      }),
+    );
+  });
+
+  it('marks the member revoked (M1) before signing out, so the lost device token stops now', async () => {
+    const order: string[] = [];
+    writeRevocationMarker.mockImplementation(() => {
+      order.push('marker');
+      return Promise.resolve(1);
+    });
+    const revokeMemberSession = vi.fn(() => {
+      order.push('signOut');
+      return Promise.resolve();
+    });
+    mockRevocationClient({ revokeMemberSession });
+    const { handler } = await import('./deviceLossHandler.js');
+
+    const result = (await handler(
+      buildEvent('CHIEF', JSON.stringify({ memberId: 'mbr-102' })),
+    )) as APIGatewayProxyStructuredResultV2;
+
+    expect(result.statusCode).toBe(202);
+    // Review minor 4: marked again after the sign-out, so a refresh racing it cannot survive.
+    expect(order).toEqual(['marker', 'signOut', 'marker']);
+    expect(writeRevocationMarker).toHaveBeenCalledWith({}, 'platform-table', {
+      deptId: 'dept-001',
+      sub: 'mbr-102',
+      reason: 'DEVICE_LOSS',
+      actorId: 'admin-1',
+    });
+  });
+
+  // M2: the stolen phone kept receiving dispatch pushes (type + address on the lock screen).
+  it('removes the member push registration after revoking, in the caller department', async () => {
+    const order: string[] = [];
+    const revokeMemberSession = vi.fn(() => {
+      order.push('signOut');
+      return Promise.resolve();
+    });
+    invalidateMemberPush.mockImplementation(() => {
+      order.push('push');
+      return Promise.resolve('invalidated');
+    });
+    mockRevocationClient({ revokeMemberSession });
+    const { handler } = await import('./deviceLossHandler.js');
+
+    const result = (await handler(
+      buildEvent('ADMIN', JSON.stringify({ memberId: 'mbr-102' })),
+    )) as APIGatewayProxyStructuredResultV2;
+
+    expect(result.statusCode).toBe(202);
+    expect(JSON.parse(result.body as string)).toEqual({
+      memberId: 'mbr-102',
+      status: 'revoked',
+      push: 'invalidated',
+    });
+    expect(order).toEqual(['signOut', 'push']);
+    expect(invalidateMemberPush).toHaveBeenCalledWith(
+      {},
+      'platform-table',
+      'dept-001',
+      'mbr-102',
+      expect.any(String),
+      'admin-1',
+      undefined,
+    );
+  });
+
+  // Integration item 2: the admin picked the lost device from GET .../devices.
+  it('passes the identified deviceId through and still signs out everywhere', async () => {
+    const revokeMemberSession = vi.fn().mockResolvedValue(undefined);
+    mockRevocationClient({ revokeMemberSession });
+    const { handler } = await import('./deviceLossHandler.js');
+
+    const result = (await handler(
+      buildEvent('CHIEF', JSON.stringify({ memberId: 'mbr-102', deviceId: 'install-phone' })),
+    )) as APIGatewayProxyStructuredResultV2;
+
+    expect(result.statusCode).toBe(202);
+    expect(JSON.parse(result.body as string)).toEqual({
+      memberId: 'mbr-102',
+      status: 'revoked',
+      push: 'invalidated',
+      deviceId: 'install-phone',
+    });
+    expect(revokeMemberSession).toHaveBeenCalled();
+    expect(invalidateMemberPush).toHaveBeenCalledWith(
+      {},
+      'platform-table',
+      'dept-001',
+      'mbr-102',
+      expect.any(String),
+      'admin-1',
+      'install-phone',
+    );
+  });
+
+  it('returns 400 before signing anyone out when deviceId is malformed', async () => {
+    const revokeMemberSession = vi.fn();
+    mockRevocationClient({ revokeMemberSession });
+    const { handler } = await import('./deviceLossHandler.js');
+
+    for (const deviceId of ['', 'has space', 42]) {
+      const result = (await handler(
+        buildEvent('CHIEF', JSON.stringify({ memberId: 'mbr-102', deviceId })),
+      )) as APIGatewayProxyStructuredResultV2;
+      expect(result.statusCode).toBe(400);
+    }
+    expect(revokeMemberSession).not.toHaveBeenCalled();
+    expect(writeRevocationMarker).not.toHaveBeenCalled();
+  });
+
+  it('answers 503 (retryable) when the push registration cannot be removed', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    invalidateMemberPush.mockRejectedValue(new Error('TransactionCanceled'));
+    mockRevocationClient({ revokeMemberSession: vi.fn().mockResolvedValue(undefined) });
+    const { handler } = await import('./deviceLossHandler.js');
+
+    const result = (await handler(
+      buildEvent('ADMIN', JSON.stringify({ memberId: 'mbr-102' })),
+    )) as APIGatewayProxyStructuredResultV2;
+
+    expect(result.statusCode).toBe(503);
+  });
+
+  it('does not touch the push registration when the target is in another department', async () => {
+    mockRevocationClient({ resolveMemberDeptId: vi.fn().mockResolvedValue('dept-999') });
+    const { handler } = await import('./deviceLossHandler.js');
+
+    await handler(buildEvent('ADMIN', JSON.stringify({ memberId: 'mbr-102' })));
+
+    expect(invalidateMemberPush).not.toHaveBeenCalled();
+  });
+
+  it('answers 503 without signing out when the marker cannot be written', async () => {
+    writeRevocationMarker.mockRejectedValue(new Error('dynamo down'));
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const revokeMemberSession = vi.fn();
     mockRevocationClient({ revokeMemberSession });
     const { handler } = await import('./deviceLossHandler.js');
 
     const result = (await handler(
-      buildEvent('officer', JSON.stringify({ memberId: 'mbr-102' })),
-      {} as never,
-      () => undefined,
+      buildEvent('CHIEF', JSON.stringify({ memberId: 'mbr-102' })),
     )) as APIGatewayProxyStructuredResultV2;
 
-    expect(result.statusCode).toBe(403);
+    expect(result.statusCode).toBe(503);
     expect(revokeMemberSession).not.toHaveBeenCalled();
-  });
-
-  it('denies (403, fail-secure) when cognito:groups is empty', async () => {
-    mockRevocationClient({});
-    const { handler } = await import('./deviceLossHandler.js');
-
-    const result = (await handler(
-      buildEvent('', JSON.stringify({ memberId: 'mbr-102' })),
-      {} as never,
-      () => undefined,
-    )) as APIGatewayProxyStructuredResultV2;
-
-    expect(result.statusCode).toBe(403);
   });
 
   it('returns 400 when memberId is absent', async () => {
@@ -103,8 +274,6 @@ describe('deviceLossHandler', () => {
 
     const result = (await handler(
       buildEvent('CHIEF', JSON.stringify({})),
-      {} as never,
-      () => undefined,
     )) as APIGatewayProxyStructuredResultV2;
 
     expect(result.statusCode).toBe(400);
@@ -116,8 +285,6 @@ describe('deviceLossHandler', () => {
 
     const result = (await handler(
       buildEvent('ADMIN', JSON.stringify({ memberId: '' })),
-      {} as never,
-      () => undefined,
     )) as APIGatewayProxyStructuredResultV2;
 
     expect(result.statusCode).toBe(400);
@@ -129,8 +296,6 @@ describe('deviceLossHandler', () => {
 
     const result = (await handler(
       buildEvent('ADMIN', JSON.stringify({ memberId: 12345 })),
-      {} as never,
-      () => undefined,
     )) as APIGatewayProxyStructuredResultV2;
 
     expect(result.statusCode).toBe(400);
@@ -142,8 +307,6 @@ describe('deviceLossHandler', () => {
 
     const result = (await handler(
       buildEvent('ADMIN', undefined),
-      {} as never,
-      () => undefined,
     )) as APIGatewayProxyStructuredResultV2;
 
     expect(result.statusCode).toBe(400);
@@ -156,8 +319,6 @@ describe('deviceLossHandler', () => {
 
     const result = (await handler(
       buildEvent('CHIEF', JSON.stringify({ memberId: 'mbr-102' })),
-      {} as never,
-      () => undefined,
     )) as APIGatewayProxyStructuredResultV2;
 
     expect(result.statusCode).toBe(202);
@@ -177,8 +338,6 @@ describe('deviceLossHandler', () => {
 
     const result = (await handler(
       buildEvent('ADMIN', JSON.stringify({ memberId: 'mbr-ghost' })),
-      {} as never,
-      () => undefined,
     )) as APIGatewayProxyStructuredResultV2;
 
     expect(result.statusCode).toBe(404);
@@ -192,8 +351,6 @@ describe('deviceLossHandler', () => {
 
     const result = (await handler(
       buildEvent('CHIEF', JSON.stringify({ memberId: 'mbr-102' })),
-      {} as never,
-      () => undefined,
     )) as APIGatewayProxyStructuredResultV2;
 
     expect(result.statusCode).toBe(503);
@@ -209,8 +366,6 @@ describe('deviceLossHandler', () => {
 
     const result = (await handler(
       buildEvent('CHIEF', JSON.stringify({ memberId: 'mbr-other-dept' }), 'dept-001'),
-      {} as never,
-      () => undefined,
     )) as APIGatewayProxyStructuredResultV2;
 
     expect(result.statusCode).toBe(403);
@@ -227,8 +382,6 @@ describe('deviceLossHandler', () => {
 
     const result = (await handler(
       buildEvent('CHIEF', JSON.stringify({ memberId: 'mbr-unresolved' })),
-      {} as never,
-      () => undefined,
     )) as APIGatewayProxyStructuredResultV2;
 
     expect(result.statusCode).toBe(403);
@@ -248,8 +401,6 @@ describe('deviceLossHandler', () => {
 
     const result = (await handler(
       buildEvent('CHIEF', JSON.stringify({ memberId: 'mbr-102' })),
-      {} as never,
-      () => undefined,
     )) as APIGatewayProxyStructuredResultV2;
 
     expect(result.statusCode).toBe(500);
@@ -264,8 +415,6 @@ describe('deviceLossHandler', () => {
 
     const result = (await handler(
       buildEvent('CHIEF', JSON.stringify({ memberId: 'mbr-102' })),
-      {} as never,
-      () => undefined,
     )) as APIGatewayProxyStructuredResultV2;
 
     expect(result.statusCode).toBe(202);
@@ -277,13 +426,63 @@ describe('deviceLossHandler', () => {
     const { handler } = await import('./deviceLossHandler.js');
 
     const result = (await handler(
-      buildEvent('officer', JSON.stringify({ memberId: 'mbr-102' })),
-      {} as never,
-      () => undefined,
+      buildEvent('CHIEF', JSON.stringify({})),
     )) as APIGatewayProxyStructuredResultV2;
 
     const parsed = JSON.parse(result.body ?? '{}') as { traceId?: string; type?: string };
     expect(parsed.traceId).toBeTruthy();
     expect(parsed.type).toBe('about:blank');
+  });
+
+  // Security-web MINOR 6: another chief's or admin's sessions are ended only by an admin.
+  it.each([
+    ['CHIEF', 403],
+    ['ADMIN', 202],
+  ] as const)('a %s reporting a chief’s device lost gets %i', async (group, status) => {
+    const revokeMemberSession = vi.fn().mockResolvedValue(undefined);
+    mockRevocationClient({
+      revokeMemberSession,
+      isProtectedTarget: vi.fn().mockResolvedValue(true),
+    });
+    const { handler } = await import('./deviceLossHandler.js');
+
+    const result = (await handler(
+      buildEvent(group, JSON.stringify({ memberId: 'chief-2' })),
+    )) as APIGatewayProxyStructuredResultV2;
+
+    expect(result.statusCode).toBe(status);
+    expect(revokeMemberSession).toHaveBeenCalledTimes(status === 202 ? 1 : 0);
+  });
+
+  it('a CHIEF may report their own device lost (self is never an escalation)', async () => {
+    const revokeMemberSession = vi.fn().mockResolvedValue(undefined);
+    mockRevocationClient({
+      revokeMemberSession,
+      isProtectedTarget: vi.fn().mockResolvedValue(true),
+    });
+    const { handler } = await import('./deviceLossHandler.js');
+
+    const result = (await handler(
+      buildEvent('CHIEF', JSON.stringify({ memberId: 'admin-1' })),
+    )) as APIGatewayProxyStructuredResultV2;
+
+    expect(result.statusCode).toBe(202);
+    expect(revokeMemberSession).toHaveBeenCalledTimes(1);
+  });
+
+  it('fails closed (503) when the target’s groups cannot be read', async () => {
+    const revokeMemberSession = vi.fn();
+    mockRevocationClient({
+      revokeMemberSession,
+      isProtectedTarget: vi.fn().mockRejectedValue(new Error('TooManyRequests')),
+    });
+    const { handler } = await import('./deviceLossHandler.js');
+
+    const result = (await handler(
+      buildEvent('ADMIN', JSON.stringify({ memberId: 'chief-2' })),
+    )) as APIGatewayProxyStructuredResultV2;
+
+    expect(result.statusCode).toBe(503);
+    expect(revokeMemberSession).not.toHaveBeenCalled();
   });
 });

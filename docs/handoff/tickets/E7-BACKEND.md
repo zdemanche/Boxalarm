@@ -26,7 +26,7 @@ Only LOSAP year-end, grants, and membership trends exist in reporting-service. B
 
 ## #248 — E7-S2-INFRA: Reporting rollup projections from domain events
 
-**Parent:** https://github.com/zdemanche/Boxalarm-monorepo/issues/95 · **Wave:** 11
+**Parent:** https://github.com/zdemanche/Boxalarm/issues/95 · **Wave:** 11
 
 The Reporting Projections consumer's queue, rules and isolation.
 
@@ -97,7 +97,7 @@ Compute and surface turnout, travel, and total response-time analytics per incid
 1. Given an incident with recorded dispatchedAt/enRouteAt/arrivedAt timestamps per unit, when response-time analytics are computed, then turnout time (dispatchedAt to enRouteAt), travel time (enRouteAt to arrivedAt), and total time (dispatchedAt to arrivedAt) are calculated correctly per unit
 2. Given a period-level analytics request, when computed, then median and 90th-percentile turnout/travel/total times are shown across all incidents with complete timestamp data in the period
 3. Given an incident's unit is missing one or more timestamps, when the aggregate is computed, then that unit's incomplete record is excluded from the specific metric it cannot support, and the report indicates how many records were excluded
-4. Given the requested period, when queried, then incident-service's GSI1 date-range query (architecture access pattern zdemanche/Boxalarm-monorepo#56) is used rather than a full table scan
+4. Given the requested period, when queried, then incident-service's GSI1 date-range query (architecture access pattern zdemanche/Boxalarm#56) is used rather than a full table scan
 
 ## Depends on
 

@@ -1,0 +1,68 @@
+.form {
+  display: grid;
+  gap: var(--bx-space-md);
+  max-width: 36rem;
+}
+
+.consequence {
+  margin: 0;
+}
+
+.fieldset {
+  border: 0;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: var(--bx-space-xs);
+}
+
+.legend {
+  padding: 0;
+  margin-bottom: var(--bx-space-xs);
+  font-weight: 600;
+}
+
+/* The whole row is the target: 44px office minimum (docs/design.md §2.5). */
+.choice {
+  display: flex;
+  align-items: center;
+  gap: var(--bx-space-sm);
+  min-height: var(--bx-target-office);
+  padding: 0 var(--bx-space-sm);
+  border: 1px solid var(--bx-border-decorative);
+  border-radius: var(--bx-radius-md);
+  cursor: pointer;
+}
+
+.choice:has(input:checked) {
+  border-color: var(--bx-fg);
+  font-weight: 600;
+}
+
+.choice input {
+  width: 18px;
+  height: 18px;
+  margin: 0;
+}
+
+.custom {
+  display: grid;
+  gap: var(--bx-space-md);
+}
+
+@media (min-width: 768px) {
+  .custom {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+.error {
+  margin: 0;
+  color: var(--bx-status-danger);
+  font-weight: 600;
+}
+
+.confirmation {
+  margin-top: 0;
+  font-weight: 700;
+}

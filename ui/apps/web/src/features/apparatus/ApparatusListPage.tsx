@@ -2,6 +2,7 @@ import { FormEvent, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import { useAuth } from '../../auth/AuthContext';
+import { canCreateApparatus } from '../../auth/roles';
 import { ApiForbiddenGate } from '../../components/ApiForbiddenGate';
 import { Button } from '../../components/ui/Button';
 import { Card } from '../../components/ui/Card';
@@ -24,8 +25,9 @@ function formatElapsed(elapsedSeconds: number): string {
 export function ApparatusListPage() {
   const auth = useAuth();
   const queryClient = useQueryClient();
-  // §7.1: /apparatus is APPARATUS|CHIEF only — create is the APPARATUS officer action.
-  const canCreate = auth.roles.includes('APPARATUS');
+  // Mirrors the backend: createApparatus allows CHIEF/ADMIN only, so the apparatus officer used
+  // to see a form that could only 403 (review m6).
+  const canCreate = canCreateApparatus(auth.roles);
   const [form, setForm] = useState<CreateApparatusInput>(emptyForm);
   const [formError, setFormError] = useState<string | null>(null);
 
@@ -59,7 +61,7 @@ export function ApparatusListPage() {
       sortValue: (u) => u.unitId,
       render: (u) => (
         <Link
-          to={`/apparatus/${u.apparatusId}`}
+          to={`/apparatus/${encodeURIComponent(u.unitId)}`}
           style={{ fontFamily: 'var(--bx-font-mono)', fontWeight: 600 }}
         >
           {u.unitId}

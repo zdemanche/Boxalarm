@@ -5,6 +5,8 @@ import { emitOutcomeMetric } from '@boxalarm/metrics';
 import { createDdbClient, parseMarkoffItem, readPersonnelDdbConfig } from './dynamoClient.js';
 
 const METRIC_NAMESPACE = 'Boxalarm/personnel-availability';
+/** A revert that loses a race to an ACTIVATE re-reads and tries again (MAJOR-R2-1). */
+const MAX_REVERT_ATTEMPTS = 3;
 
 export type TransitionAction = 'ACTIVATE' | 'REVERT';
 
@@ -99,6 +101,7 @@ export const handler = async (payload: unknown): Promise<{ outcome: ExpiryOutcom
   }
 
   const nowSeconds = Math.floor(Date.now() / 1000);
+  const eventTime = new Date().toISOString();
   const eventId = randomUUID();
 
   if (action === 'ACTIVATE') {
@@ -130,6 +133,11 @@ export const handler = async (payload: unknown): Promise<{ outcome: ExpiryOutcom
                   eventId,
                   eventType: 'personnel.availability.changed',
                   correlationId: memberId,
+                  // The platform drain publishes only rows carrying the full envelope
+                  // (eventTime, source, schemaVersion); without them it drops the row silently.
+                  eventTime,
+                  source: 'personnel-service',
+                  schemaVersion: '1.0',
                   createdAt: nowSeconds,
                   payload: {
                     deptId,
@@ -165,52 +173,99 @@ export const handler = async (payload: unknown): Promise<{ outcome: ExpiryOutcom
     return { outcome: 'ACTIVATED' };
   }
 
-  try {
-    await ddb.send(
-      new TransactWriteCommand({
-        TransactItems: [
-          {
-            Update: {
-              TableName: tableName,
-              Key: { pk, sk },
-              UpdateExpression: 'SET revertedAt = :now',
-              ConditionExpression: 'attribute_exists(sk) AND attribute_not_exists(revertedAt)',
-              ExpressionAttributeValues: { ':now': nowSeconds },
-            },
-          },
-          {
-            Put: {
-              TableName: tableName,
-              Item: {
-                pk: buildDeptScopedPk(deptId, 'OUTBOX', 'MEMBER', memberId),
-                sk: `EVT#${eventId}`,
-                entityType: 'OUTBOX_ENTRY',
-                eventId,
-                eventType: 'personnel.availability.changed',
-                correlationId: memberId,
-                createdAt: nowSeconds,
-                payload: { deptId, memberId, availabilityState: 'AVAILABLE', startAt },
+  // Paging review MAJOR-R2-1 (same race as ending early): an ACTIVATE committing between this
+  // read and the write would stamp MARKED_OFF later than an AVAILABLE stamped at handler start,
+  // leaving the member marked off. The revert is conditioned on the activatedAt state read, and
+  // its AVAILABLE eventTime is at least a second after activatedAt; a lost race re-reads.
+  for (let attempt = 1; ; attempt += 1) {
+    const readActivatedAt: number | undefined = markoff.activatedAt;
+    const revertNow = Math.floor(Date.now() / 1000);
+    const revertEventTime = new Date(
+      Math.max(Date.now(), readActivatedAt !== undefined ? (readActivatedAt + 1) * 1000 : 0),
+    ).toISOString();
+    const revertEventId = randomUUID();
+    try {
+      await ddb.send(
+        new TransactWriteCommand({
+          TransactItems: [
+            {
+              Update: {
+                TableName: tableName,
+                Key: { pk, sk },
+                UpdateExpression: 'SET revertedAt = :now',
+                ConditionExpression:
+                  readActivatedAt === undefined
+                    ? 'attribute_exists(sk) AND attribute_not_exists(revertedAt) AND attribute_not_exists(activatedAt)'
+                    : 'attribute_exists(sk) AND attribute_not_exists(revertedAt) AND activatedAt = :readActivatedAt',
+                ExpressionAttributeValues: {
+                  ':now': revertNow,
+                  ...(readActivatedAt !== undefined ? { ':readActivatedAt': readActivatedAt } : {}),
+                },
               },
             },
-          },
-        ],
-      }),
-    );
-  } catch (error) {
-    const cancellation = asTransactionCancellation(error);
-    if (cancellation) {
-      if (cancellation.CancellationReasons?.[0]?.Code === 'ConditionalCheckFailed') {
-        return { outcome: 'SKIPPED_ALREADY_REVERTED' };
+            {
+              Put: {
+                TableName: tableName,
+                Item: {
+                  pk: buildDeptScopedPk(deptId, 'OUTBOX', 'MEMBER', memberId),
+                  sk: `EVT#${revertEventId}`,
+                  entityType: 'OUTBOX_ENTRY',
+                  eventId: revertEventId,
+                  eventType: 'personnel.availability.changed',
+                  correlationId: memberId,
+                  // The platform drain publishes only rows carrying the full envelope
+                  // (eventTime, source, schemaVersion); without them it drops the row silently.
+                  eventTime: revertEventTime,
+                  source: 'personnel-service',
+                  schemaVersion: '1.0',
+                  createdAt: revertNow,
+                  payload: { deptId, memberId, availabilityState: 'AVAILABLE', startAt },
+                },
+              },
+            },
+          ],
+        }),
+      );
+      break;
+    } catch (error) {
+      const cancellation = asTransactionCancellation(error);
+      if (cancellation?.CancellationReasons?.[0]?.Code === 'ConditionalCheckFailed') {
+        let current;
+        try {
+          const reread = await ddb.send(
+            new GetCommand({ TableName: tableName, Key: { pk, sk }, ConsistentRead: true }),
+          );
+          current = parseMarkoffItem(reread.Item);
+        } catch (readError) {
+          logError('availability.expiry.read_failed', readError, correlationId);
+          throw readError;
+        }
+        if (!current) {
+          return { outcome: 'SKIPPED_NOT_FOUND' };
+        }
+        if (current.revertedAt !== undefined) {
+          return { outcome: 'SKIPPED_ALREADY_REVERTED' };
+        }
+        if (attempt >= MAX_REVERT_ATTEMPTS) {
+          // Still changing: throw so the scheduler retries rather than leave it marked off.
+          throw new Error(`mark-off ${correlationId} kept changing while being reverted`, {
+            cause: error,
+          });
+        }
+        markoff = current;
+        continue;
       }
-      logError('availability.expiry.write_failed', error, correlationId, {
-        cancellationReasons: cancellation.CancellationReasons?.map((r) => r.Code),
-      });
+      if (cancellation) {
+        logError('availability.expiry.write_failed', error, correlationId, {
+          cancellationReasons: cancellation.CancellationReasons?.map((r) => r.Code),
+        });
+        emitOutcomeMetric(METRIC_NAMESPACE, 'ExpiryFailed', 'DynamoDbUnavailable');
+        throw error;
+      }
+      logError('availability.expiry.write_failed', error, correlationId);
       emitOutcomeMetric(METRIC_NAMESPACE, 'ExpiryFailed', 'DynamoDbUnavailable');
       throw error;
     }
-    logError('availability.expiry.write_failed', error, correlationId);
-    emitOutcomeMetric(METRIC_NAMESPACE, 'ExpiryFailed', 'DynamoDbUnavailable');
-    throw error;
   }
 
   emitOutcomeMetric(METRIC_NAMESPACE, 'ExpiryReverted');

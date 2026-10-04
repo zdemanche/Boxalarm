@@ -138,7 +138,7 @@ describe('escalationHandler', () => {
     expect(publishEscalationTriggered).toHaveBeenCalledTimes(1);
   });
 
-  it('AC3: writes a new RECEIPT#{memberId}#VOICE item and never overwrites the push/sms receipts', async () => {
+  it('AC3: writes a new RECEIPT#{memberId}#voice item and never overwrites the push/sms receipts', async () => {
     const pushReceipt = {
       pk: ROSTER_PK,
       sk: 'RECEIPT#mbr-1#PUSH#1',
@@ -175,8 +175,15 @@ describe('escalationHandler', () => {
 
     expect(fakeDdb.items.get(`${ROSTER_PK}#RECEIPT#mbr-1#PUSH#1`)).toEqual(pushReceipt);
     expect(fakeDdb.items.get(`${ROSTER_PK}#RECEIPT#mbr-1#SMS#1`)).toEqual(smsReceipt);
-    const voiceReceipt = fakeDdb.items.get(`${ROSTER_PK}#RECEIPT#mbr-1#VOICE#1`);
-    expect(voiceReceipt).toMatchObject({ channel: 'VOICE', channelTier: 'escalation' });
+    const voiceReceipt = fakeDdb.items.get(`${ROSTER_PK}#RECEIPT#mbr-1#voice#1`);
+    expect(voiceReceipt).toMatchObject({
+      channel: 'voice',
+      channelTier: 'escalation',
+      idempotencyKey: 'dispatch-1#1#mbr-1#voice',
+    });
+    // The voice worker's own send guard lives under the uppercase key; the producer must not
+    // pre-claim it or the worker duplicate-skips the call.
+    expect(fakeDdb.items.has(`${ROSTER_PK}#RECEIPT#mbr-1#VOICE#1`)).toBe(false);
   });
 
   it('AC2: a member who has acked is skipped and no voice escalation is sent', async () => {
@@ -199,9 +206,65 @@ describe('escalationHandler', () => {
     const result = await handler(BASE_PAYLOAD);
 
     expect(result).toEqual({ outcome: 'SKIPPED_ACKED' });
-    expect(fakeDdb.items.has(`${ROSTER_PK}#RECEIPT#mbr-1#VOICE#1`)).toBe(false);
+    expect(fakeDdb.items.has(`${ROSTER_PK}#RECEIPT#mbr-1#voice#1`)).toBe(false);
     const { publishEscalationTriggered } = await import('./snsClient.js');
     expect(publishEscalationTriggered).not.toHaveBeenCalled();
+  });
+
+  // Post-merge MINOR-1: LOA/RETIRED after tone 1 flips the snapshot's `active`; the no-ack call
+  // for that tone must not ring.
+  it('a member set inactive since the page is skipped: no voice call, counted', async () => {
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    const fakeDdb = createFakeDdb([
+      {
+        pk: ROSTER_PK,
+        sk: 'ROSTER#mbr-1',
+        entityType: 'DISPATCH_ROSTER_ENTRY',
+        memberId: 'mbr-1',
+        ackStatus: 'NONE',
+        currentChannelTier: 'primary',
+      },
+      { pk: 'DEPT#NICHOLS#ELIGIBILITY', sk: 'MEMBER#mbr-1', active: false },
+    ]);
+    const { createDynamoClient } = await import('../eligibility/dynamoClient.js');
+    vi.mocked(createDynamoClient).mockReturnValue({
+      send: fakeDdb.send,
+    } as unknown as DynamoDBDocumentClient);
+
+    const { handler } = await import('./escalationHandler.js');
+    const result = await handler(BASE_PAYLOAD);
+
+    expect(result).toEqual({ outcome: 'SKIPPED_INACTIVE' });
+    const { publishEscalationTriggered } = await import('./snsClient.js');
+    expect(publishEscalationTriggered).not.toHaveBeenCalled();
+    expect(fakeDdb.items.has(`${ROSTER_PK}#RECEIPT#mbr-1#voice#1`)).toBe(false);
+    expect(
+      logSpy.mock.calls.some(
+        ([line]) => String(line).includes('EscalationSkipped') && String(line).includes('Inactive'),
+      ),
+    ).toBe(true);
+    logSpy.mockRestore();
+  });
+
+  it('an active member in the snapshot is still escalated', async () => {
+    const fakeDdb = createFakeDdb([
+      {
+        pk: ROSTER_PK,
+        sk: 'ROSTER#mbr-1',
+        entityType: 'DISPATCH_ROSTER_ENTRY',
+        memberId: 'mbr-1',
+        ackStatus: 'NONE',
+        currentChannelTier: 'primary',
+      },
+      { pk: 'DEPT#NICHOLS#ELIGIBILITY', sk: 'MEMBER#mbr-1', active: true },
+    ]);
+    const { createDynamoClient } = await import('../eligibility/dynamoClient.js');
+    vi.mocked(createDynamoClient).mockReturnValue({
+      send: fakeDdb.send,
+    } as unknown as DynamoDBDocumentClient);
+
+    const { handler } = await import('./escalationHandler.js');
+    expect(await handler(BASE_PAYLOAD)).toEqual({ outcome: 'ESCALATED' });
   });
 
   it('a roster row absent (fan-out gap) is skipped without throwing', async () => {
@@ -229,9 +292,9 @@ describe('escalationHandler', () => {
       },
       {
         pk: ROSTER_PK,
-        sk: 'RECEIPT#mbr-1#VOICE#1',
+        sk: 'RECEIPT#mbr-1#voice#1',
         entityType: 'DELIVERY_RECEIPT',
-        idempotencyKey: 'dispatch-1#1#mbr-1#VOICE',
+        idempotencyKey: 'dispatch-1#1#mbr-1#voice',
       },
     ]);
     const { createDynamoClient } = await import('../eligibility/dynamoClient.js');

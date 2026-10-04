@@ -1,23 +1,98 @@
 import { Platform } from 'react-native';
 import notifee from '@notifee/react-native';
+import { cachedAlertPayload } from './alertPayload';
 import { CRITICAL_CHANNEL_ID, DEFAULT_CHANNEL_ID } from './pushChannel';
-import { displayPushNotification } from './pushNotificationDisplay';
+import {
+  displayPushNotification,
+  handleBackgroundPushMessage,
+  handleForegroundPushMessage,
+  silenceDispatchNotification,
+} from './pushNotificationDisplay';
 
 const displayNotification = notifee.displayNotification as jest.Mock;
+const createChannel = notifee.createChannel as jest.Mock;
+let consoleError: jest.SpyInstance;
 
 beforeEach(() => {
-  displayNotification.mockClear();
+  displayNotification.mockReset().mockResolvedValue(undefined);
+  createChannel.mockClear();
+  consoleError = jest.spyOn(console, 'error').mockImplementation(() => {});
+});
+
+afterEach(() => {
+  consoleError.mockRestore();
 });
 
 test('a dispatch push displays on the critical channel with a full-screen action', async () => {
   Platform.OS = 'android';
 
-  await displayPushNotification({ dispatchId: 'DISP-1', title: 'Structure fire' });
+  await displayPushNotification(
+    { dispatchId: 'DISP-1', title: 'Structure fire', body: 'Structure fire — 21 Main St' },
+    1_000,
+  );
 
   const call = displayNotification.mock.calls[0][0];
   expect(call.android.channelId).toBe(CRITICAL_CHANNEL_ID);
   expect(call.android.fullScreenAction).toBeDefined();
-  expect(call.data).toEqual({ dispatchId: 'DISP-1', category: 'dispatch' });
+  // Loud until acknowledged: alarm category, the channel sound looping, not auto-cancelled.
+  expect(call.android).toMatchObject({
+    category: 'alarm',
+    loopSound: true,
+    autoCancel: false,
+    visibility: 1,
+  });
+  expect(
+    call.android.actions.map((a: { pressAction: { id: string } }) => a.pressAction.id),
+  ).toEqual(['respond:RESPONDING', 'respond:DIRECT_TO_SCENE', 'respond:NOT_RESPONDING']);
+  // One notification per call, carrying the page so a tap opens the address with no fetch.
+  expect(call.id).toBe('dispatch:DISP-1');
+  expect(call.data).toEqual({
+    dispatchId: 'DISP-1',
+    category: 'dispatch',
+    incidentType: 'Structure fire',
+    address: '21 Main St',
+    receivedAt: '1000',
+  });
+});
+
+test("a mutual-aid prompt gets its own notification - never replacing the call's page - and no answer buttons", async () => {
+  Platform.OS = 'android';
+
+  await displayPushNotification(
+    {
+      dispatchId: 'DISP-MA',
+      alertKind: 'mutual_aid_prompt',
+      title: 'MUTUAL AID REQUESTED',
+      body: 'MUTUAL AID REQUESTED — Structure fire — 21 Main St',
+      incidentType: 'Structure fire',
+      address: '21 Main St',
+    },
+    1_000,
+  );
+
+  const call = displayNotification.mock.calls[0][0];
+  expect(call.id).toBe('mutual-aid:DISP-MA');
+  expect(call.android.channelId).toBe(CRITICAL_CHANNEL_ID);
+  expect(call.android.actions).toBeUndefined();
+  expect(call.data).toMatchObject({ dispatchId: 'DISP-MA', alertKind: 'mutual_aid_prompt' });
+  const cap = (notifee.createTriggerNotification as jest.Mock).mock.calls.at(-1)![0];
+  expect(cap.id).toBe('mutual-aid:DISP-MA');
+  expect(cap.android.actions).toBeUndefined();
+});
+
+test('the background handler keeps the page on the phone for the Alerts list and offline opens', async () => {
+  Platform.OS = 'android';
+
+  await handleBackgroundPushMessage({
+    dispatchId: 'DISP-CACHE',
+    title: 'MVA',
+    body: 'MVA — 1 Main St',
+  });
+
+  await expect(cachedAlertPayload('DISP-CACHE')).resolves.toMatchObject({
+    incidentType: 'MVA',
+    address: '1 Main St',
+  });
 });
 
 test('a digest push displays on the default channel without a full-screen action', async () => {
@@ -30,10 +105,136 @@ test('a digest push displays on the default channel without a full-screen action
   expect(call.android.fullScreenAction).toBeUndefined();
 });
 
+test('a CAD update displays on the default channel: no alarm, no full-screen, no ring cap', async () => {
+  Platform.OS = 'android';
+
+  await displayPushNotification({
+    category: 'dispatch_update',
+    alertKind: 'dispatch_update',
+    dispatchId: 'DISP-1',
+    title: 'UPDATE — STRUCTURE FIRE',
+    body: 'UPDATE: Units: E1, R1 — 12 Main St',
+  });
+
+  const call = displayNotification.mock.calls[0][0];
+  expect(call.android.channelId).toBe(DEFAULT_CHANNEL_ID);
+  expect(call.android.fullScreenAction).toBeUndefined();
+  expect(call.android.loopSound).toBeUndefined();
+  // Never under the page's own notification id: the update must not replace the page.
+  expect(call.id).toBeUndefined();
+  expect(call.data.dispatchId).toBe('DISP-1');
+});
+
 test('does nothing on iOS, where the OS displays the push natively', async () => {
   Platform.OS = 'ios';
 
   await displayPushNotification({ dispatchId: 'DISP-1' });
 
   expect(displayNotification).not.toHaveBeenCalled();
+});
+
+test('background handler displays the push normally when display succeeds', async () => {
+  Platform.OS = 'android';
+
+  await handleBackgroundPushMessage({ dispatchId: 'DISP-1', title: 'Structure fire' });
+
+  expect(displayNotification).toHaveBeenCalledTimes(1);
+  expect(consoleError).not.toHaveBeenCalled();
+});
+
+test('background handler logs a failed dispatch display and posts a minimal critical-channel fallback', async () => {
+  Platform.OS = 'android';
+  displayNotification.mockRejectedValueOnce(new Error('full-screen intent not permitted'));
+
+  await expect(
+    handleBackgroundPushMessage({ dispatchId: 'DISP-1', title: 'Structure fire' }),
+  ).resolves.toBeUndefined();
+
+  expect(consoleError).toHaveBeenCalledWith(expect.stringContaining('[push]'), expect.any(Error));
+  // The channel may never have been created if the app has not been foregrounded since install.
+  expect(createChannel).toHaveBeenCalledWith(expect.objectContaining({ id: CRITICAL_CHANNEL_ID }));
+  expect(displayNotification).toHaveBeenCalledTimes(2);
+  const fallback = displayNotification.mock.calls[1][0];
+  expect(fallback.android.channelId).toBe(CRITICAL_CHANNEL_ID);
+  expect(fallback.android.fullScreenAction).toBeUndefined();
+  expect(fallback.title).toBe('Dispatch alert');
+  expect(fallback.data).toEqual({ dispatchId: 'DISP-1', category: 'dispatch' });
+});
+
+test('background handler does not post a critical fallback for a failed digest push', async () => {
+  Platform.OS = 'android';
+  displayNotification.mockRejectedValueOnce(new Error('boom'));
+
+  await handleBackgroundPushMessage({ category: 'digest', title: 'Cert expiring' });
+
+  expect(consoleError).toHaveBeenCalledWith(expect.stringContaining('[push]'), expect.any(Error));
+  expect(displayNotification).toHaveBeenCalledTimes(1);
+});
+
+test('background handler never throws, even when the fallback also fails', async () => {
+  Platform.OS = 'android';
+  displayNotification.mockRejectedValue(new Error('notifee unavailable'));
+
+  await expect(handleBackgroundPushMessage({ dispatchId: 'DISP-1' })).resolves.toBeUndefined();
+
+  expect(displayNotification).toHaveBeenCalledTimes(2);
+  expect(consoleError).toHaveBeenCalledTimes(2);
+});
+
+test('foreground handler creates the channels, then posts a dispatch on the critical channel with full-screen intent', async () => {
+  Platform.OS = 'android';
+
+  await handleForegroundPushMessage({ dispatchId: 'DISP-9', title: 'Structure fire' });
+
+  expect(createChannel).toHaveBeenCalledWith(expect.objectContaining({ id: CRITICAL_CHANNEL_ID }));
+  const channelOrder = createChannel.mock.invocationCallOrder[0]!;
+  expect(channelOrder).toBeLessThan(displayNotification.mock.invocationCallOrder[0]!);
+  const call = displayNotification.mock.calls[0][0];
+  expect(call.android.channelId).toBe(CRITICAL_CHANNEL_ID);
+  expect(call.android.fullScreenAction).toBeDefined();
+});
+
+test('foreground handler still displays the dispatch when channel creation fails, and never throws', async () => {
+  Platform.OS = 'android';
+  createChannel.mockRejectedValueOnce(new Error('channel create failed'));
+
+  await expect(handleForegroundPushMessage({ dispatchId: 'DISP-9' })).resolves.toBeUndefined();
+
+  expect(displayNotification).toHaveBeenCalledTimes(1);
+  expect(consoleError).toHaveBeenCalled();
+});
+
+test('opening the call silences its looping notification', async () => {
+  Platform.OS = 'android';
+  const cancel = notifee.cancelDisplayedNotification as jest.Mock;
+  cancel.mockClear();
+
+  await silenceDispatchNotification('DISP-1');
+
+  expect(cancel).toHaveBeenCalledWith('dispatch:DISP-1');
+});
+
+test('a page schedules a 60 s cap that replaces the looping alarm with a quiet copy of the same page', async () => {
+  Platform.OS = 'android';
+  const createTrigger = notifee.createTriggerNotification as jest.Mock;
+  createTrigger.mockClear();
+  const before = Date.now();
+
+  await displayPushNotification({ dispatchId: 'DISP-CAP', title: 'MVA', body: 'MVA — 1 Main St' });
+
+  const [notification, trigger] = createTrigger.mock.calls[0]!;
+  expect(notification.id).toBe('dispatch:DISP-CAP');
+  expect(notification.android).toMatchObject({ loopSound: false, onlyAlertOnce: true });
+  expect(notification.android.actions).toHaveLength(3);
+  expect(trigger.timestamp).toBeGreaterThanOrEqual(before + 60_000);
+});
+
+test('silencing also cancels the pending cap', async () => {
+  Platform.OS = 'android';
+  const cancelTrigger = notifee.cancelTriggerNotification as jest.Mock;
+  cancelTrigger.mockClear();
+
+  await silenceDispatchNotification('DISP-1');
+
+  expect(cancelTrigger).toHaveBeenCalledWith('dispatch:DISP-1');
 });

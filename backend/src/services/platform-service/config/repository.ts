@@ -19,6 +19,7 @@ export const DEPARTMENT_CONFIG_TYPES = [
   'CHECKLIST_DEFAULTS',
   'RETENTION',
   'RIDING_POSITIONS',
+  'NERIS',
 ] as const;
 
 export type DepartmentConfigType = (typeof DEPARTMENT_CONFIG_TYPES)[number];
@@ -27,11 +28,19 @@ export function isDepartmentConfigType(value: string): value is DepartmentConfig
   return (DEPARTMENT_CONFIG_TYPES as readonly string[]).includes(value);
 }
 
+/**
+ * Config types stored in DEPARTMENT_CONFIG but NOT editable through the generic
+ * `PUT /config/{configType}` route: CAD_INGRESS carries server-managed fields (recipient
+ * tokens, webhook key references, parser versions) and is written only by the CAD sources
+ * routes (cadSources/), behind their own Cedar actions.
+ */
+export type StoredConfigType = DepartmentConfigType | 'CAD_INGRESS';
+
 export interface DepartmentConfigItem {
   readonly pk: string;
   readonly sk: string;
   readonly entityType: 'DEPARTMENT_CONFIG';
-  readonly configType: DepartmentConfigType;
+  readonly configType: StoredConfigType;
   readonly value: Record<string, unknown>;
   readonly version: number;
   readonly updatedAt: string;
@@ -45,14 +54,14 @@ export class ConflictError extends Error {
   }
 }
 
-export function configSk(configType: DepartmentConfigType): string {
+export function configSk(configType: StoredConfigType): string {
   return `CONFIG#${configType}`;
 }
 
 export interface GetDepartmentConfigInput {
   readonly tableName: string;
   readonly deptId: VerifiedDeptId;
-  readonly configType: DepartmentConfigType;
+  readonly configType: StoredConfigType;
 }
 
 export async function getDepartmentConfig(
@@ -74,7 +83,7 @@ export async function getDepartmentConfig(
 export interface PutDepartmentConfigInput {
   readonly tableName: string;
   readonly deptId: VerifiedDeptId;
-  readonly configType: DepartmentConfigType;
+  readonly configType: StoredConfigType;
   readonly value: Record<string, unknown>;
   readonly actorId: string;
   readonly correlationId: string;

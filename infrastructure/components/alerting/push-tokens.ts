@@ -4,9 +4,13 @@ import { HttpApi } from "../api/http-api";
 import { ServiceLambda } from "../observability/service-lambda";
 import { ServiceLogGroup } from "../observability/service-log-group";
 import { IamPolicyStatement } from "../observability/observability-policy";
+import { RuleDeliveryGuard } from "../messaging/rule-delivery";
 import { requireEnv } from "../shared/env";
 import { lambdaCode, LAMBDA_HANDLER } from "../shared/lambda-code";
-import { AlertingRoute } from "./route-lambda";
+import { AlertingRoute, verifiedPermissionsStatement } from "./route-lambda";
+import { grantAlertingCmk } from "./alerting-cmk";
+
+const MEMBER_UPDATED_RESERVED_CONCURRENCY = 5;
 
 export interface PushTokensArgs {
   env: string;
@@ -14,12 +18,16 @@ export interface PushTokensArgs {
   platformTableArn: pulumi.Input<string>;
   platformTableName: pulumi.Input<string>;
   alertingTableArn: pulumi.Input<string>;
+  /** Alerting-table CMK — every role touching the table needs it (alerting-cmk.ts). */
+  alertingCmkArn: pulumi.Input<string>;
   alertingTableName: pulumi.Input<string>;
   personnelLogGroup: ServiceLogGroup;
   alertingLogGroup: ServiceLogGroup;
   policyStoreId: pulumi.Input<string>;
   busName: pulumi.Input<string>;
   alertingPermissionsBoundaryArn?: pulumi.Input<string>;
+  /** alerting-page topic (page-topic.ts): an undeliverable member update pages. */
+  pageTopicArn: pulumi.Input<string>;
 }
 
 /**
@@ -34,7 +42,9 @@ export class PushTokens extends pulumi.ComponentResource {
   public readonly memberUpdatedConsumer: ServiceLambda;
   public readonly memberUpdatedQueue: aws.sqs.Queue;
   public readonly memberUpdatedDlq: aws.sqs.Queue;
-  public readonly memberUpdatedDlqDepthAlarm: aws.cloudwatch.MetricAlarm;
+  public readonly memberUpdatedRule: aws.cloudwatch.EventRule;
+  public readonly memberUpdatedEventSource: aws.lambda.EventSourceMapping;
+  public readonly memberUpdatedDelivery: RuleDeliveryGuard;
 
   constructor(name: string, args: PushTokensArgs, opts?: pulumi.ComponentResourceOptions) {
     requireEnv("PushTokens", args.env);
@@ -45,15 +55,18 @@ export class PushTokens extends pulumi.ComponentResource {
       {
         Sid: "PlatformTableReadWrite",
         Effect: "Allow",
-        Action: ["dynamodb:GetItem", "dynamodb:TransactWriteItems"],
+        // registerToken/revokeToken issue one TransactWriteCommand with an Update (member
+        // METADATA) and a Put (OUTBOX_ENTRY). DynamoDB authorizes each transaction item as
+        // its own action, so TransactWriteItems alone authorizes nothing.
+        Action: [
+          "dynamodb:GetItem",
+          "dynamodb:TransactWriteItems",
+          "dynamodb:UpdateItem",
+          "dynamodb:PutItem",
+        ],
         Resource: args.platformTableArn as string,
       },
-      {
-        Sid: "VerifiedPermissionsIsAuthorized",
-        Effect: "Allow",
-        Action: ["verifiedpermissions:IsAuthorizedWithToken"],
-        Resource: "*",
-      },
+      verifiedPermissionsStatement(),
     ];
     const personnelEnv = {
       PERSONNEL_TABLE_NAME: args.platformTableName,
@@ -75,7 +88,18 @@ export class PushTokens extends pulumi.ComponentResource {
         code: lambdaCode("personnel-service", "push-tokens-register"),
         routeKey: "POST /api/v1/personnel/members/{memberId}/push-tokens",
         environment: personnelEnv,
-        additionalPolicyStatements: personnelTableStatements,
+        additionalPolicyStatements: [
+          ...personnelTableStatements,
+          {
+            // Registering an installation takes it off any other member of the department who
+            // still holds it (pushDevices releaseInstallationFromOtherMembers): one query of the
+            // department's members on GSI3, then that member's own writePushDevices.
+            Sid: "PlatformTableMemberIndexQuery",
+            Effect: "Allow",
+            Action: ["dynamodb:Query"],
+            Resource: pulumi.interpolate`${args.platformTableArn}/index/GSI3` as unknown as string,
+          },
+        ],
         reservedConcurrentExecutions: 5,
       },
       { parent: this },
@@ -117,17 +141,26 @@ export class PushTokens extends pulumi.ComponentResource {
       { parent: this },
     );
 
+    // Matches the declared producer too, not just the detail-type: every personnel.member.updated
+    // writer stamps `personnel-service`. This is a routing filter, not a trust boundary: `source`
+    // is whatever the publisher declares - the platform outbox publisher copies each row's own
+    // `source`, and no events:PutEvents grant on the bus carries an events:source condition - so it
+    // keeps a same-named event from another producer out by accident, not by force (review F3).
     const rule = new aws.cloudwatch.EventRule(
       `${name}-member-updated-rule`,
       {
         name: `boxalarm-${env}-alerting-member-updated`,
         eventBusName: args.busName,
-        eventPattern: JSON.stringify({ "detail-type": ["personnel.member.updated"] }),
+        eventPattern: JSON.stringify({
+          source: ["personnel-service"],
+          "detail-type": ["personnel.member.updated"],
+        }),
       },
       { parent: this },
     );
+    this.memberUpdatedRule = rule;
 
-    new aws.sqs.QueuePolicy(
+    const queuePolicy = new aws.sqs.QueuePolicy(
       `${name}-member-updated-queue-policy`,
       {
         queueUrl: this.memberUpdatedQueue.url,
@@ -150,10 +183,29 @@ export class PushTokens extends pulumi.ComponentResource {
       { parent: this },
     );
 
+    // An undeliverable member update dead-letters into the (paged) member-updated DLQ.
+    this.memberUpdatedDelivery = new RuleDeliveryGuard(
+      `${name}-member-updated-delivery`,
+      {
+        alarmName: `boxalarm-${env}-alerting-member-updated-failed-invocations`,
+        rule,
+        busName: args.busName,
+        deadLetterQueue: this.memberUpdatedDlq,
+        alarmActions: [args.pageTopicArn],
+      },
+      { parent: this },
+    );
+
     new aws.cloudwatch.EventTarget(
       `${name}-member-updated-target`,
-      { rule: rule.name, eventBusName: args.busName, arn: this.memberUpdatedQueue.arn },
-      { parent: this },
+      {
+        rule: rule.name,
+        eventBusName: args.busName,
+        arn: this.memberUpdatedQueue.arn,
+        deadLetterConfig: { arn: this.memberUpdatedDlq.arn },
+      },
+      // The main queue policy must exist before the target, or a first-deploy delivery is denied.
+      { parent: this, dependsOn: [queuePolicy, this.memberUpdatedDelivery] },
     );
 
     // src/services/alerting-service/eligibility/memberUpdatedHandler.handler
@@ -175,18 +227,21 @@ export class PushTokens extends pulumi.ComponentResource {
             Resource: args.alertingTableArn as string,
           },
         ],
-        reservedConcurrentExecutions: 5,
+        reservedConcurrentExecutions: MEMBER_UPDATED_RESERVED_CONCURRENCY,
         permissionsBoundaryArn: args.alertingPermissionsBoundaryArn,
       },
       { parent: this },
     );
 
-    new aws.lambda.EventSourceMapping(
+    this.memberUpdatedEventSource = new aws.lambda.EventSourceMapping(
       `${name}-member-updated-event-source`,
       {
         eventSourceArn: this.memberUpdatedQueue.arn,
         functionName: this.memberUpdatedConsumer.function.name,
         functionResponseTypes: ["ReportBatchItemFailures"],
+        // Pinned to reserved concurrency: throttled receives count toward maxReceiveCount,
+        // so a bulk roster change could otherwise push member updates to the DLQ early.
+        scalingConfig: { maximumConcurrency: MEMBER_UPDATED_RESERVED_CONCURRENCY },
       },
       { parent: this },
     );
@@ -215,19 +270,13 @@ export class PushTokens extends pulumi.ComponentResource {
       { parent: this },
     );
 
-    this.memberUpdatedDlqDepthAlarm = new aws.cloudwatch.MetricAlarm(
-      `${name}-member-updated-dlq-depth-alarm`,
-      {
-        name: `boxalarm-${env}-alerting-member-updated-dlq-depth`,
-        namespace: "AWS/SQS",
-        metricName: "ApproximateNumberOfMessagesVisible",
-        dimensions: { QueueName: this.memberUpdatedDlq.name },
-        statistic: "Maximum",
-        period: 300,
-        evaluationPeriods: 1,
-        threshold: 0,
-        comparisonOperator: "GreaterThanThreshold",
-      },
+    // The member-updated DLQ alarm lives in AlertingAlarms (alarms.ts), which owns the
+    // alerting-page topic it must page through.
+
+    grantAlertingCmk(
+      name,
+      { memberUpdatedConsumer: this.memberUpdatedConsumer.role },
+      args.alertingCmkArn,
       { parent: this },
     );
 

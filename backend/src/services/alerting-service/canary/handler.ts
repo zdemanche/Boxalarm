@@ -11,6 +11,7 @@ import {
   getSelfTestRun,
   upsertSelfTestRun,
 } from '../selfTest/selfTestRunRepository.js';
+import { evaluateSelfTestRun } from '../selfTest/evaluateSelfTestRun.js';
 import {
   clearCanaryPointer,
   getCanaryPointer,
@@ -46,21 +47,31 @@ async function completePendingRun(
   deptId: ReturnType<typeof toVerifiedDeptId>,
   memberId: string,
   now: number,
+  nowMs: number,
 ): Promise<void> {
   const pointer = await getCanaryPointer(ddb, tableName, deptId);
   if (!pointer) {
     return;
   }
   const run = await getSelfTestRun(ddb, tableName, deptId, memberId, pointer.pendingTestId);
-  const latencyMs = (now - pointer.pendingRunAt) * 1000;
-  const overallResult = run?.overallResult;
-
-  let result: CanaryResult;
-  if (overallResult === 'PASS' && latencyMs <= LATENCY_BUDGET_MS) {
-    result = 'PASS';
-  } else {
-    result = 'FAIL';
-  }
+  const startedAtMs = pointer.pendingRunAtMs ?? pointer.pendingRunAt * 1000;
+  // The run rode the real fan-out (one-member audience) and is decided from the channel
+  // workers' receipts - SENT within the N1 budget, per channel (design review C3) - never from
+  // the SNS publish. Latency is trigger-to-SENT for the slowest channel, never this tick's
+  // clock, which trails the run by the whole schedule interval.
+  const evaluated = run
+    ? await evaluateSelfTestRun(
+        ddb,
+        tableName,
+        { deptId, memberId, testId: pointer.pendingTestId },
+        { runAtMs: startedAtMs, ...run },
+        nowMs,
+        { latencyBudgetMs: LATENCY_BUDGET_MS },
+      )
+    : undefined;
+  const latencyMs = evaluated?.latencyMs ?? Math.max(nowMs - startedAtMs, 0);
+  const result: CanaryResult =
+    evaluated?.overallResult === 'PASS' && latencyMs <= LATENCY_BUDGET_MS ? 'PASS' : 'FAIL';
 
   await putCanaryRun(ddb, tableName, {
     deptId,
@@ -68,7 +79,7 @@ async function completePendingRun(
     ranAt: now,
     result,
     latencyMs,
-    channelResults: (run?.channelResults as Record<string, unknown> | undefined) ?? {},
+    channelResults: evaluated?.channelResults ?? {},
   });
 
   // Clear the pointer now that this pendingTestId has been recorded, regardless of whether
@@ -90,6 +101,7 @@ async function startNextRun(
   deptId: ReturnType<typeof toVerifiedDeptId>,
   memberId: string,
   now: number,
+  nowMs: number,
 ): Promise<void> {
   const cooldownAcquired = await acquireSelfTestCooldown(ddb, tableName, deptId, memberId, now);
   if (!cooldownAcquired) {
@@ -119,6 +131,9 @@ async function startNextRun(
     targetMemberId: memberId,
     selfTestId: testId,
     channelsTested: SELF_TEST_CHANNELS,
+    // The canary rings a phone every tick, so on Android it only validates (credentials, not
+    // delivery) unless the stack says the canary member is a dedicated device.
+    testDelivery: process.env.CANARY_DEDICATED_DEVICE === 'true' ? 'deliver' : 'validate',
   });
   if (result.outcome === 'duplicate') {
     logError('alerting.canary.unexpectedDuplicate', new Error('canary idempotency collision'), {
@@ -139,11 +154,16 @@ async function startNextRun(
       channelsTested: SELF_TEST_CHANNELS,
       channelResults: {},
       overallResult: 'RUNNING',
+      runAtMs: nowMs,
     },
     { onlyIfAbsent: true },
   );
 
-  await setCanaryPointer(ddb, tableName, deptId, { pendingTestId: testId, pendingRunAt: now });
+  await setCanaryPointer(ddb, tableName, deptId, {
+    pendingTestId: testId,
+    pendingRunAt: now,
+    pendingRunAtMs: nowMs,
+  });
 }
 
 export const handler = async (): Promise<void> => {
@@ -151,17 +171,18 @@ export const handler = async (): Promise<void> => {
   const deptId = toVerifiedDeptId({ deptId: config.deptId });
   const { tableName } = readAlertingConfig(process.env);
   const ddb = createDynamoClient(process.env);
-  const now = Math.floor(Date.now() / 1000);
+  const nowMs = Date.now();
+  const now = Math.floor(nowMs / 1000);
 
   try {
-    await completePendingRun(ddb, tableName, deptId, config.canaryMemberId, now);
+    await completePendingRun(ddb, tableName, deptId, config.canaryMemberId, now, nowMs);
   } catch (error) {
     logError('alerting.canary.completeFailed', error, { deptId });
     emitOutcomeMetric(METRIC_NAMESPACE, 'CanaryEvaluationFailed');
   }
 
   try {
-    await startNextRun(ddb, tableName, deptId, config.canaryMemberId, now);
+    await startNextRun(ddb, tableName, deptId, config.canaryMemberId, now, nowMs);
   } catch (error) {
     logError('alerting.canary.startFailed', error, { deptId });
     emitOutcomeMetric(METRIC_NAMESPACE, 'CanaryTriggerFailed');

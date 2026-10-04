@@ -7,6 +7,20 @@ import { buildAuditLogEntryTransactItem } from './auditEntry.js';
 
 const DEPT_ID: VerifiedDeptId = toVerifiedDeptId({ deptId: 'NICHOLS' });
 
+// Cedar ViewAuditTrail is CHIEF/ADMIN (ADMIN_ONLY_ACTIONS). The fake token is the caller's
+// groups, so the fake Verified Permissions client decides as the deployed policy does.
+const vpSend = vi.hoisted(() =>
+  vi.fn((command: { input: { accessToken?: string } }) => {
+    const groups = (command.input.accessToken ?? '').split(',');
+    const allowed = groups.includes('CHIEF') || groups.includes('ADMIN');
+    return Promise.resolve({ decision: allowed ? 'ALLOW' : 'DENY' });
+  }),
+);
+vi.mock('@aws-sdk/client-verifiedpermissions', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@aws-sdk/client-verifiedpermissions')>();
+  return { ...actual, VerifiedPermissionsClient: vi.fn(() => ({ send: vpSend })) };
+});
+
 function buildEvent(options: {
   groups?: string;
   queryStringParameters?: Record<string, string>;
@@ -17,7 +31,10 @@ function buildEvent(options: {
     routeKey: 'GET /api/v1/platform/audit',
     rawPath: '/api/v1/platform/audit',
     rawQueryString: '',
-    headers: options.headers ?? {},
+    headers: {
+      authorization: `Bearer ${(options.groups ?? 'CHIEF').replace(/ /g, ',')}`,
+      ...options.headers,
+    },
     ...(options.queryStringParameters !== undefined
       ? { queryStringParameters: options.queryStringParameters }
       : {}),
@@ -81,6 +98,7 @@ describe('handler', () => {
   beforeEach(() => {
     vi.resetModules();
     process.env.AUDIT_TABLE_NAME = 'platform-table';
+    process.env.VERIFIED_PERMISSIONS_POLICY_STORE_ID = 'ps-1';
   });
 
   afterEach(() => {
@@ -89,13 +107,28 @@ describe('handler', () => {
     vi.restoreAllMocks();
   });
 
-  it('denies with 403 problem+json when the caller lacks the chief/admin/officer role', async () => {
+  // Security-web MINOR 12: the web shows /audit-log to CHIEF/ADMIN; an officer no longer reads it.
+  it('denies an OFFICER with 403: Cedar ViewAuditTrail is chief/admin only', async () => {
     const { handler } = await import('./handler.js');
-    const result = (await handler(
-      buildEvent({ groups: 'MEMBER' }),
-      {} as never,
-      () => undefined,
-    )) as { statusCode: number; headers: Record<string, string>; body: string };
+    const result = (await handler(buildEvent({ groups: 'MEMBER OFFICER' }))) as {
+      statusCode: number;
+    };
+    expect(result.statusCode).toBe(403);
+    expect(vpSend.mock.calls.at(-1)?.[0]).toMatchObject({
+      input: {
+        action: { actionType: 'Boxalarm::Action', actionId: 'ViewAuditTrail' },
+        resource: { entityType: 'Boxalarm::Department', entityId: 'NICHOLS' },
+      },
+    });
+  });
+
+  it('denies with 403 problem+json when the caller lacks the chief/admin role', async () => {
+    const { handler } = await import('./handler.js');
+    const result = (await handler(buildEvent({ groups: 'MEMBER' }))) as {
+      statusCode: number;
+      headers: Record<string, string>;
+      body: string;
+    };
     expect(result.statusCode).toBe(403);
     expect(result.headers['content-type']).toBe('application/problem+json');
     expect((JSON.parse(result.body) as { traceId: string }).traceId).toBeTruthy();
@@ -103,11 +136,11 @@ describe('handler', () => {
 
   it('returns 400 problem+json when entityType/entityId are absent', async () => {
     const { handler } = await import('./handler.js');
-    const result = (await handler(
-      buildEvent({ queryStringParameters: {} }),
-      {} as never,
-      () => undefined,
-    )) as { statusCode: number; headers: Record<string, string>; body: string };
+    const result = (await handler(buildEvent({ queryStringParameters: {} }))) as {
+      statusCode: number;
+      headers: Record<string, string>;
+      body: string;
+    };
     expect(result.statusCode).toBe(400);
     expect(result.headers['content-type']).toBe('application/problem+json');
     const body = JSON.parse(result.body) as { title: string; detail: string; traceId: string };
@@ -120,8 +153,6 @@ describe('handler', () => {
     const { handler } = await import('./handler.js');
     const result = (await handler(
       buildEvent({ queryStringParameters: { entityType: 'CERTIFICATION', entityId: '' } }),
-      {} as never,
-      () => undefined,
     )) as { statusCode: number; headers: Record<string, string>; body: string };
     expect(result.statusCode).toBe(400);
     expect(result.headers['content-type']).toBe('application/problem+json');
@@ -136,8 +167,6 @@ describe('handler', () => {
       buildEvent({
         queryStringParameters: { entityType: 'CERTIFICATION', entityId: 'CERT-1,CERT-2' },
       }),
-      {} as never,
-      () => undefined,
     )) as { statusCode: number; headers: Record<string, string>; body: string };
     expect(result.statusCode).toBe(400);
     expect(result.headers['content-type']).toBe('application/problem+json');
@@ -152,8 +181,6 @@ describe('handler', () => {
       buildEvent({
         queryStringParameters: { entityType: 'CERTIFICATION', entityId: 'CERT#1' },
       }),
-      {} as never,
-      () => undefined,
     )) as { statusCode: number; headers: Record<string, string>; body: string };
     expect(result.statusCode).toBe(400);
     expect(result.headers['content-type']).toBe('application/problem+json');
@@ -178,8 +205,6 @@ describe('handler', () => {
           cursor: 'not-valid-base64url-json',
         },
       }),
-      {} as never,
-      () => undefined,
     )) as { statusCode: number; headers: Record<string, string>; body: string };
     expect(result.statusCode).toBe(400);
     expect(result.headers['content-type']).toBe('application/problem+json');
@@ -196,8 +221,6 @@ describe('handler', () => {
       buildEvent({
         queryStringParameters: { entityType: 'CERTIFICATION', entityId: 'CERT-0091' },
       }),
-      {} as never,
-      () => undefined,
     )) as { statusCode: number };
     expect(result.statusCode).toBe(500);
   });
@@ -213,8 +236,6 @@ describe('handler', () => {
       buildEvent({
         queryStringParameters: { entityType: 'CERTIFICATION', entityId: 'CERT-NEW' },
       }),
-      {} as never,
-      () => undefined,
     )) as { statusCode: number; body: string };
     expect(result.statusCode).toBe(200);
     expect(JSON.parse(result.body)).toEqual({ entries: [] });
@@ -237,8 +258,6 @@ describe('handler', () => {
       buildEvent({
         queryStringParameters: { entityType: 'CERTIFICATION', entityId: 'CERT-0091' },
       }),
-      {} as never,
-      () => undefined,
     )) as { statusCode: number; headers: Record<string, string> };
     expect(result.statusCode).toBe(503);
     expect(result.headers['content-type']).toBe('application/problem+json');
@@ -259,8 +278,6 @@ describe('handler', () => {
       buildEvent({
         queryStringParameters: { entityType: 'CERTIFICATION', entityId: 'CERT-NEW' },
       }),
-      {} as never,
-      () => undefined,
     );
     expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('AuditQueryServed'));
   });
@@ -289,8 +306,6 @@ describe('handler', () => {
       buildEvent({
         queryStringParameters: { entityType: 'CERTIFICATION', entityId: 'CERT-0091' },
       }),
-      {} as never,
-      () => undefined,
     )) as { statusCode: number; body: string };
 
     expect(result.statusCode).toBe(200);

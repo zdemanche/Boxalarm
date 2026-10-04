@@ -1,13 +1,11 @@
 import type { APIGatewayProxyHandlerV2WithLambdaAuthorizer } from 'aws-lambda';
-import { assertNoDelimiter } from '@boxalarm/dept-scope';
 import type { AuthorizerContext } from '../platform-service/authorizer/handler.js';
-import type { IncidentEvent } from './authContext.js';
 import {
+  RequestValidationError,
   emitIncidentMetric,
   nowEpochSeconds,
   problemResponse,
-  readAuthorizerContext,
-  resolveTraceId,
+  readIncidentWriteRequest,
 } from './authContext.js';
 import {
   IncidentNotFoundError,
@@ -16,37 +14,23 @@ import {
   getTableName,
 } from './repository.js';
 import { createSchemaVersionRepository } from './schemaVersion/repository.js';
+import { IncidentLockedError, lockedProblem } from './lock.js';
 import { getCoreSchemaDocument } from './schemaVersion/s3Schema.js';
 import { getS3Client } from '../platform-service/export/awsClients.js';
 import { missingRequiredCoreFields, validateCoreFields } from './schemaVersion/validateEnum.js';
 
-class ValidationError extends Error {}
-
-function parseFields(event: IncidentEvent): Record<string, string> {
-  if (!event.body) {
-    throw new ValidationError('request body is required');
-  }
-  const raw = event.isBase64Encoded
-    ? Buffer.from(event.body, 'base64').toString('utf8')
-    : event.body;
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw);
-  } catch {
-    throw new ValidationError('request body must be valid JSON');
-  }
-  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
-    throw new ValidationError('request body must be a JSON object');
-  }
-  const fields = (parsed as Record<string, unknown>).fields;
+function parseFields(body: Record<string, unknown>): Record<string, string> {
+  const fields = body.fields;
   if (typeof fields !== 'object' || fields === null || Array.isArray(fields)) {
-    throw new ValidationError('fields is required and must be a JSON object of field:value pairs');
+    throw new RequestValidationError(
+      'fields is required and must be a JSON object of field:value pairs',
+    );
   }
   const record = fields as Record<string, unknown>;
   const result: Record<string, string> = {};
   for (const [key, value] of Object.entries(record)) {
     if (typeof value !== 'string') {
-      throw new ValidationError(`field "${key}" must be a string`);
+      throw new RequestValidationError(`field "${key}" must be a string`);
     }
     result[key] = value;
   }
@@ -56,53 +40,11 @@ function parseFields(event: IncidentEvent): Record<string, string> {
 export const handler: APIGatewayProxyHandlerV2WithLambdaAuthorizer<AuthorizerContext> = async (
   event,
 ) => {
-  const traceId = resolveTraceId(event.headers, event.requestContext.requestId);
-
-  let deptId;
-  try {
-    ({ deptId } = readAuthorizerContext(event));
-  } catch (error) {
-    console.error(
-      JSON.stringify({
-        event: 'incident.update.denied',
-        correlationId: traceId,
-        message: error instanceof Error ? error.message : undefined,
-      }),
-    );
-    return problemResponse(
-      401,
-      'Unauthorized',
-      'A valid department-scoped authorization context is required.',
-      traceId,
-    );
+  const request = readIncidentWriteRequest(event, 'incident.update.denied', parseFields);
+  if (!request.ok) {
+    return request.response;
   }
-
-  const incidentId = event.pathParameters?.incidentId;
-  if (!incidentId) {
-    return problemResponse(400, 'Bad Request', 'incidentId path parameter is required.', traceId);
-  }
-  try {
-    assertNoDelimiter(incidentId, 'incidentId');
-  } catch (error) {
-    return problemResponse(
-      400,
-      'Bad Request',
-      error instanceof Error ? error.message : 'incidentId path parameter is invalid.',
-      traceId,
-    );
-  }
-
-  let fields: Record<string, string>;
-  try {
-    fields = parseFields(event);
-  } catch (error) {
-    return problemResponse(
-      400,
-      'Bad Request',
-      error instanceof ValidationError ? error.message : 'invalid request body',
-      traceId,
-    );
-  }
+  const { traceId, deptId, incidentId, input: fields } = request;
 
   try {
     const repository = getIncidentRepository(process.env);
@@ -114,6 +56,9 @@ export const handler: APIGatewayProxyHandlerV2WithLambdaAuthorizer<AuthorizerCon
         `No incident found with incidentId "${incidentId}".`,
         traceId,
       );
+    }
+    if (incident.lockedAt !== undefined) {
+      return lockedProblem(traceId);
     }
 
     const client = getDocumentClient();
@@ -136,26 +81,42 @@ export const handler: APIGatewayProxyHandlerV2WithLambdaAuthorizer<AuthorizerCon
         traceId,
       );
     }
-    const coreSchema = await getCoreSchemaDocument(
+    const pinnedCore = await getCoreSchemaDocument(
       getS3Client(),
       process.env.NERIS_SCHEMA_BUCKET_NAME ?? '',
       schema.coreSchemaS3Key,
     );
+    // The incident type must be a NERIS TypeIncidentValue. A pin that predates the NERIS
+    // schema download carries the old local list, so the ACTIVE pin's list governs that one
+    // field (it is refreshed from the NERIS OpenAPI document daily).
+    let coreSchema = pinnedCore;
+    if (!schema.nerisApiS3Key && fields.incident_type !== undefined) {
+      const active = await schemaVersionRepository.getActiveSchemaVersion();
+      if (active?.nerisApiS3Key && active.version !== schema.version) {
+        const activeCore = await getCoreSchemaDocument(
+          getS3Client(),
+          process.env.NERIS_SCHEMA_BUCKET_NAME ?? '',
+          active.coreSchemaS3Key,
+        );
+        const nerisTypes = activeCore.enumerations.incident_type;
+        if (nerisTypes) {
+          coreSchema = {
+            ...pinnedCore,
+            enumerations: { ...pinnedCore.enumerations, incident_type: nerisTypes },
+          };
+        }
+      }
+    }
 
     const errors = validateCoreFields(coreSchema, fields);
     if (errors.length > 0) {
-      return {
-        statusCode: 400,
-        headers: { 'Content-Type': 'application/problem+json' },
-        body: JSON.stringify({
-          type: 'about:blank',
-          title: 'Bad Request',
-          status: 400,
-          detail: 'One or more fields failed NERIS enumeration validation.',
-          traceId,
-          errors,
-        }),
-      };
+      return problemResponse(
+        400,
+        'Bad Request',
+        'One or more fields failed NERIS enumeration validation.',
+        traceId,
+        { errors },
+      );
     }
 
     const mergedFields = { ...incident.corePayload, ...fields } as Record<string, string>;
@@ -168,6 +129,7 @@ export const handler: APIGatewayProxyHandlerV2WithLambdaAuthorizer<AuthorizerCon
       mergedFields,
       nextStatus,
       nowEpochSeconds(),
+      traceId,
     );
 
     emitIncidentMetric('IncidentUpdated');
@@ -179,6 +141,9 @@ export const handler: APIGatewayProxyHandlerV2WithLambdaAuthorizer<AuthorizerCon
   } catch (error) {
     if (error instanceof IncidentNotFoundError) {
       return problemResponse(404, 'Not Found', error.message, traceId);
+    }
+    if (error instanceof IncidentLockedError) {
+      return lockedProblem(traceId);
     }
     console.error(
       JSON.stringify({

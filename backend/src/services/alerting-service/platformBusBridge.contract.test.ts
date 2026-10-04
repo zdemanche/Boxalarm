@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { EventBridgeClient } from '@aws-sdk/client-eventbridge';
+import type { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
 import { marshall } from '@aws-sdk/util-dynamodb';
 import type { DynamoDBRecord, SQSEvent } from 'aws-lambda';
 import type { VerifiedDeptId } from '@boxalarm/dept-scope';
@@ -13,10 +14,12 @@ const DEPT_ID: VerifiedDeptId = toVerifiedDeptId({ deptId: 'NICHOLS' });
 async function drainOneEntry(
   outboxItem: Record<string, unknown>,
 ): Promise<Record<string, unknown>> {
-  const { createOutboxDrainHandler } = await import('./outboxDrainHandler.js');
-  const send = vi.fn().mockResolvedValue({});
-  const client = { send } as unknown as EventBridgeClient;
-  const handler = createOutboxDrainHandler(client);
+  const { createAlertingOutboxDrainHandler } = await import('./outboxDrainHandler.js');
+  const send = vi.fn().mockResolvedValue({ Entries: [{ EventId: 'e-1' }] });
+  const handler = createAlertingOutboxDrainHandler({
+    eventBridgeClient: { send } as unknown as EventBridgeClient,
+    ddbClient: { send: vi.fn().mockResolvedValue({}) } as unknown as DynamoDBDocumentClient,
+  });
   const record: DynamoDBRecord = {
     eventName: 'INSERT',
     dynamodb: {
@@ -44,6 +47,7 @@ describe('platform-bus bridge contract (alerting-service producer -> incident-se
     vi.resetModules();
     process.env.PLATFORM_EVENT_BUS_NAME = 'boxalarm-dev-platform-bus';
     process.env.INCIDENT_TABLE_NAME = 'incident-table';
+    process.env.ALERTING_TABLE_NAME = 'alerting-table';
   });
 
   afterEach(() => {
@@ -73,7 +77,7 @@ describe('platform-bus bridge contract (alerting-service producer -> incident-se
     const consumer = createDispatchAlertConsumer({ client: { send } as never });
     await expect(
       consumer(sqsEventFromDetail(detail), {} as never, () => undefined),
-    ).resolves.toBeUndefined();
+    ).resolves.toEqual({ batchItemFailures: [] });
 
     expect(send).toHaveBeenCalledTimes(1);
     const [command] = send.mock.calls[0] as [{ input: { Item: Record<string, unknown> } }];
@@ -82,6 +86,55 @@ describe('platform-bus bridge contract (alerting-service producer -> incident-se
       incidentType: 'STRUCTURE_FIRE',
       address: '123 Main St',
     });
+  });
+
+  it('carries verifyRequired on dispatch.alert.received for a RAW CAD dispatch, and only then', async () => {
+    const { createManualDispatch } = await import('./dispatches/repository.js');
+    const outboxOf = async (verifyRequired: boolean) => {
+      const send = vi.fn().mockResolvedValue({});
+      await createManualDispatch({ send } as unknown as DynamoDBDocumentClient, 'alerting-table', {
+        deptId: DEPT_ID,
+        dispatch: {
+          sourceSystem: 'CAD',
+          incidentType: verifyRequired ? 'CAD DISPATCH - VERIFY' : 'ALARM',
+          address: verifyRequired ? 'SEE DISPATCH TEXT' : '1 Main St',
+          crossStreets: '',
+          unitsRequested: [],
+          narrative: 'raw text',
+          externalDispatchId: `county.${verifyRequired ? 'a' : 'b'}`,
+        },
+        idempotencyKey: 'k',
+        dispatchedAt: 1_798_000_000,
+        cad: {
+          ingressChannel: 'cad-email',
+          sourceId: 'county',
+          parseStatus: verifyRequired ? 'RAW' : 'PARSED',
+          parserVersion: null,
+          verifyRequired,
+        },
+      });
+      const items = (
+        send.mock.calls[0]?.[0] as {
+          input: { TransactItems: { Put: { Item: Record<string, unknown> } }[] };
+        }
+      ).input.TransactItems.map((t) => t.Put.Item);
+      return items.find((i) => i.eventType === 'dispatch.alert.received')!;
+    };
+
+    const raw = await outboxOf(true);
+    expect(raw.schemaVersion).toBe('1.0');
+    expect((raw.payload as Record<string, unknown>).verifyRequired).toBe(true);
+    const detail = await drainOneEntry(raw);
+    expect((detail.payload as Record<string, unknown>).verifyRequired).toBe(true);
+    // The consumer that predates the field still accepts the event.
+    const consumerSend = vi.fn().mockResolvedValue({});
+    const consumer = createDispatchAlertConsumer({ client: { send: consumerSend } as never });
+    await expect(
+      consumer(sqsEventFromDetail(detail), {} as never, () => undefined),
+    ).resolves.toEqual({ batchItemFailures: [] });
+
+    const parsed = await outboxOf(false);
+    expect(parsed.payload as Record<string, unknown>).not.toHaveProperty('verifyRequired');
   });
 
   it('bridges alerting.response.confirmed end to end: outbox -> EventBridge detail -> dispatchResponseConsumer', async () => {
@@ -105,7 +158,7 @@ describe('platform-bus bridge contract (alerting-service producer -> incident-se
     const consumer = createDispatchResponseConsumer({ client: { send } as never });
     await expect(
       consumer(sqsEventFromDetail(detail), {} as never, () => undefined),
-    ).resolves.toBeUndefined();
+    ).resolves.toEqual({ batchItemFailures: [] });
 
     expect(send).toHaveBeenCalledTimes(1);
     const [command] = send.mock.calls[0] as [{ input: { Item: Record<string, unknown> } }];

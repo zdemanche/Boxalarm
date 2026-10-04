@@ -125,19 +125,114 @@ function validateLosapPointRules(value: Record<string, unknown>): FieldError[] {
   return errors;
 }
 
-const ALERT_RULES_KNOWN_FIELDS = ['escalationThresholdN', 'certExpiryLeadDays'] as const;
+/**
+ * ALERT_RULES. `escalationThresholdN` (seconds before a member's voice escalation) and the
+ * tone-ladder fields are projected into the alerting plane's ALERT_RULES_COPY by its own
+ * consumer (alerting-service alertRules/alertRulesCopyHandler.ts), which the escalation
+ * scheduler and the tone evaluator read; `certExpiryLeadDays` is read by training-service.
+ *  - toneLadder: { tone2AtSeconds, tone3AtSeconds } - when tones 2 and 3 are evaluated;
+ *  - defaultRule: { minResponders, requiredQuals } - the predicate that stops the ladder:
+ *    at least minResponders answered RESPONDING / DIRECT_TO_SCENE holding one of requiredQuals
+ *    (any qual when empty).
+ */
+const ALERT_RULES_KNOWN_FIELDS = [
+  'escalationThresholdN',
+  'certExpiryLeadDays',
+  'toneLadder',
+  'defaultRule',
+] as const;
+
+function isPositiveInteger(value: unknown): value is number {
+  return typeof value === 'number' && Number.isInteger(value) && value >= 1;
+}
+
+/**
+ * Sane bounds for the paging timers (review MINOR-7): `escalationThresholdN: 1` would voice-call
+ * every member one second after the page; a tone at 5 hours is not a re-tone. Defaults the
+ * alerting plane applies when a field is absent (escalation/toneLadder.ts,
+ * scheduleEscalation.ts) are used to check the ladder's order.
+ */
+const BOUNDS = {
+  escalationThresholdN: [30, 900],
+  tone2AtSeconds: [60, 3600],
+  tone3AtSeconds: [120, 7200],
+  minResponders: [1, 100],
+} as const;
+const DEFAULT_TONE_2_AT_SECONDS = 180;
+const DEFAULT_TONE_3_AT_SECONDS = 360;
+
+function withinBounds(value: unknown, [min, max]: readonly [number, number]): boolean {
+  return isPositiveInteger(value) && value >= min && value <= max;
+}
+
+function boundsMessage([min, max]: readonly [number, number], unit: string): string {
+  return `must be a whole number of ${unit} from ${min} to ${max}`;
+}
+
+function validateToneLadder(value: unknown): FieldError[] {
+  if (!isPlainObject(value)) {
+    return [{ field: 'toneLadder', message: 'must be an object when provided' }];
+  }
+  const errors = unknownFieldErrors(value, ['tone2AtSeconds', 'tone3AtSeconds'], 'toneLadder.');
+  for (const field of ['tone2AtSeconds', 'tone3AtSeconds'] as const) {
+    if (value[field] !== undefined && !withinBounds(value[field], BOUNDS[field])) {
+      errors.push({
+        field: `toneLadder.${field}`,
+        message: boundsMessage(BOUNDS[field], 'seconds'),
+      });
+    }
+  }
+  // Checked against the default for whichever one is omitted: {tone2AtSeconds: 400} alone would
+  // otherwise run tone 3 at the default 360 s - before tone 2.
+  const tone2 = isPositiveInteger(value.tone2AtSeconds)
+    ? value.tone2AtSeconds
+    : DEFAULT_TONE_2_AT_SECONDS;
+  const tone3 = isPositiveInteger(value.tone3AtSeconds)
+    ? value.tone3AtSeconds
+    : DEFAULT_TONE_3_AT_SECONDS;
+  if (tone3 <= tone2) {
+    errors.push({
+      field: 'toneLadder.tone3AtSeconds',
+      message: `must be after tone 2 (tone 2 at ${tone2} s, tone 3 at ${tone3} s; the defaults are ${DEFAULT_TONE_2_AT_SECONDS} and ${DEFAULT_TONE_3_AT_SECONDS})`,
+    });
+  }
+  return errors;
+}
+
+function validateDefaultRule(value: unknown): FieldError[] {
+  if (!isPlainObject(value)) {
+    return [{ field: 'defaultRule', message: 'must be an object when provided' }];
+  }
+  const errors = unknownFieldErrors(value, ['minResponders', 'requiredQuals'], 'defaultRule.');
+  if (
+    value.minResponders !== undefined &&
+    !withinBounds(value.minResponders, BOUNDS.minResponders)
+  ) {
+    errors.push({
+      field: 'defaultRule.minResponders',
+      message: boundsMessage(BOUNDS.minResponders, 'responders'),
+    });
+  }
+  if (
+    value.requiredQuals !== undefined &&
+    (!Array.isArray(value.requiredQuals) || !value.requiredQuals.every(isNonEmptyString))
+  ) {
+    errors.push({
+      field: 'defaultRule.requiredQuals',
+      message: 'must be an array of qualification codes',
+    });
+  }
+  return errors;
+}
 
 function validateAlertRules(value: Record<string, unknown>): FieldError[] {
   const errors: FieldError[] = [...unknownFieldErrors(value, ALERT_RULES_KNOWN_FIELDS)];
   if (value.escalationThresholdN !== undefined) {
-    if (
-      typeof value.escalationThresholdN !== 'number' ||
-      !Number.isInteger(value.escalationThresholdN) ||
-      value.escalationThresholdN < 1
-    ) {
+    // Seconds from the page to a member's voice escalation.
+    if (!withinBounds(value.escalationThresholdN, BOUNDS.escalationThresholdN)) {
       errors.push({
         field: 'escalationThresholdN',
-        message: 'must be a positive integer when provided',
+        message: boundsMessage(BOUNDS.escalationThresholdN, 'seconds'),
       });
     }
   }
@@ -149,7 +244,13 @@ function validateAlertRules(value: Record<string, unknown>): FieldError[] {
       });
     }
   }
-  if (value.escalationThresholdN === undefined && value.certExpiryLeadDays === undefined) {
+  if (value.toneLadder !== undefined) {
+    errors.push(...validateToneLadder(value.toneLadder));
+  }
+  if (value.defaultRule !== undefined) {
+    errors.push(...validateDefaultRule(value.defaultRule));
+  }
+  if (ALERT_RULES_KNOWN_FIELDS.every((field) => value[field] === undefined)) {
     errors.push({
       field: 'value',
       message: `must include at least one of ${ALERT_RULES_KNOWN_FIELDS.join(', ')}`,
@@ -158,12 +259,19 @@ function validateAlertRules(value: Record<string, unknown>): FieldError[] {
   return errors;
 }
 
+/**
+ * A check-sheet item code: the defect and check-photo routes carry it (and the photo route puts it
+ * in a storage key), so it is held to their safe shape here, where it is authored.
+ */
+export const CHECKLIST_ITEM_CODE = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/;
+
 function validateChecklistDefaults(value: Record<string, unknown>): FieldError[] {
   const errors: FieldError[] = [...unknownFieldErrors(value, ['items'])];
   if (!Array.isArray(value.items) || value.items.length === 0) {
     errors.push({ field: 'items', message: 'is required and must be a non-empty array' });
     return errors;
   }
+  const seenCodes = new Set<string>();
   value.items.forEach((item, index) => {
     const prefix = `items[${index}]`;
     if (!isPlainObject(item)) {
@@ -175,6 +283,20 @@ function validateChecklistDefaults(value: Record<string, unknown>): FieldError[]
         field: `${prefix}.code`,
         message: 'is required and must be a non-empty string',
       });
+    } else if (!CHECKLIST_ITEM_CODE.test(item.code)) {
+      errors.push({
+        field: `${prefix}.code`,
+        message:
+          'must be 1-64 letters, digits, "_", "." or "-", starting with a letter or digit (e.g. BRAKE_PRESSURE)',
+      });
+    } else if (seenCodes.has(item.code)) {
+      // The truck check keys each answer by code: two items with one code collapse into one.
+      errors.push({
+        field: `${prefix}.code`,
+        message: `duplicates another item's code "${item.code}"`,
+      });
+    } else {
+      seenCodes.add(item.code);
     }
     if (!isNonEmptyString(item.label)) {
       errors.push({
@@ -188,7 +310,13 @@ function validateChecklistDefaults(value: Record<string, unknown>): FieldError[]
         message: 'is required and must be a boolean',
       });
     }
-    errors.push(...unknownFieldErrors(item, ['code', 'label', 'requiresPhoto'], `${prefix}.`));
+    // Optional: absent reads as not critical, so sheets saved before the flag stay valid.
+    if (item.critical !== undefined && typeof item.critical !== 'boolean') {
+      errors.push({ field: `${prefix}.critical`, message: 'must be a boolean when provided' });
+    }
+    errors.push(
+      ...unknownFieldErrors(item, ['code', 'label', 'requiresPhoto', 'critical'], `${prefix}.`),
+    );
   });
   return errors;
 }
@@ -248,6 +376,76 @@ function validateRetention(value: Record<string, unknown>): FieldError[] {
   return errors;
 }
 
+const NERIS_KNOWN_FIELDS = [
+  'departmentNerisId',
+  'autoSubmitOnLock',
+  'submissionsEnabled',
+  'rules',
+  'timeZone',
+] as const;
+const NERIS_RULE_FIELDS = ['requireNarrative', 'minNarrativeLength', 'requireUnitTimes'] as const;
+
+/**
+ * NERIS reporting settings, read by incident-service through its projected copy
+ * (incident-service/nerisSettings.ts): the department's NERIS entity id, whether an
+ * officer's lock submits straight away, a submission kill switch, and the department's own
+ * pre-lock rules on top of NERIS's.
+ */
+function validateNeris(value: Record<string, unknown>): FieldError[] {
+  const errors: FieldError[] = [...unknownFieldErrors(value, NERIS_KNOWN_FIELDS)];
+  if (typeof value.departmentNerisId !== 'string' || !/^FD\d{8}$/.test(value.departmentNerisId)) {
+    errors.push({
+      field: 'departmentNerisId',
+      message: 'is required and must be the NERIS department id: FD followed by 8 digits',
+    });
+  }
+  for (const field of ['autoSubmitOnLock', 'submissionsEnabled'] as const) {
+    if (value[field] !== undefined && typeof value[field] !== 'boolean') {
+      errors.push({ field, message: 'must be a boolean when provided' });
+    }
+  }
+  if (value.timeZone !== undefined) {
+    let valid = typeof value.timeZone === 'string' && value.timeZone.length > 0;
+    if (valid) {
+      try {
+        new Intl.DateTimeFormat('en-US', { timeZone: value.timeZone as string });
+      } catch {
+        valid = false;
+      }
+    }
+    if (!valid) {
+      errors.push({
+        field: 'timeZone',
+        message: 'must be an IANA time zone such as America/New_York when provided',
+      });
+    }
+  }
+  if (value.rules !== undefined) {
+    if (!isPlainObject(value.rules)) {
+      errors.push({ field: 'rules', message: 'must be an object when provided' });
+    } else {
+      const rules = value.rules;
+      errors.push(...unknownFieldErrors(rules, NERIS_RULE_FIELDS, 'rules.'));
+      for (const field of ['requireNarrative', 'requireUnitTimes'] as const) {
+        if (rules[field] !== undefined && typeof rules[field] !== 'boolean') {
+          errors.push({ field: `rules.${field}`, message: 'must be a boolean when provided' });
+        }
+      }
+      const min = rules.minNarrativeLength;
+      if (
+        min !== undefined &&
+        (typeof min !== 'number' || !Number.isInteger(min) || min < 0 || min > 100_000)
+      ) {
+        errors.push({
+          field: 'rules.minNarrativeLength',
+          message: 'must be an integer from 0 to 100000 when provided',
+        });
+      }
+    }
+  }
+  return errors;
+}
+
 /**
  * Validates `body.value` for a PUT against its configType's shape. Returns an
  * empty array when the value is valid, otherwise a list of field-level errors.
@@ -271,5 +469,7 @@ export function validateConfigValue(
       return validateRetention(value);
     case 'RIDING_POSITIONS':
       return validateRidingPositions(value);
+    case 'NERIS':
+      return validateNeris(value);
   }
 }

@@ -55,7 +55,10 @@ jest.mock('../../features/alerts/apiAlertsRepository', () => ({
 
 beforeEach(async () => {
   const { dispatchId } = await mockAlertsRepository.triggerSelfTest();
-  await mockAlertsRepository.submitResponse(dispatchId, 'RESPONDING', 10);
+  await mockAlertsRepository.submitResponse(dispatchId, 'RESPONDING', {
+    minutes: 10,
+    qualifier: null,
+  });
   mockRouteParams.dispatchId = dispatchId;
   mockConnectivity.isOnline = true;
   mockIsFocused.current = true;

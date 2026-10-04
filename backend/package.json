@@ -19,9 +19,11 @@
     "format:write": "prettier --write .",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
-    "bundle": "node scripts/bundle.mjs"
+    "bundle": "node scripts/bundle.mjs",
+    "reemit-alert-rules": "esbuild src/services/platform-service/config/reemitAlertRules.ts --bundle --platform=node --target=node22 --format=esm --log-level=warning --outfile=dist/scripts/reemit-alert-rules.mjs --banner:js=\"import { createRequire } from 'module'; const require = createRequire(import.meta.url);\" && node dist/scripts/reemit-alert-rules.mjs"
   },
   "dependencies": {
+    "@aws-sdk/client-api-gateway": "3.1136.0",
     "@aws-sdk/client-cognito-identity-provider": "3.1136.0",
     "@aws-sdk/client-dynamodb": "3.1136.0",
     "@aws-sdk/client-eventbridge": "3.1136.0",
@@ -34,12 +36,13 @@
     "@aws-sdk/client-sns": "3.1136.0",
     "@aws-sdk/client-ssm": "3.1136.0",
     "@aws-sdk/client-verifiedpermissions": "3.1136.0",
-    "@aws-sdk/cloudfront-signer": "3.1125.0",
     "@aws-sdk/lib-dynamodb": "3.1136.0",
     "@aws-sdk/s3-request-presigner": "3.1136.0",
     "@aws-sdk/util-dynamodb": "3.996.9",
     "@boxalarm/authz": "*",
+    "@boxalarm/cad-parser": "*",
     "@boxalarm/dept-scope": "*",
+    "@boxalarm/health": "*",
     "@boxalarm/logging": "*",
     "@boxalarm/metrics": "*",
     "@boxalarm/outbox": "*",
@@ -49,6 +52,7 @@
     "pino": "10.3.1"
   },
   "devDependencies": {
+    "@aws-sdk/client-sqs": "3.1136.0",
     "@eslint/js": "10.0.1",
     "@testcontainers/localstack": "12.1.0",
     "@types/aws-lambda": "8.10.163",

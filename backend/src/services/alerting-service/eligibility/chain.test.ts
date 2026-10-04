@@ -14,6 +14,38 @@ interface FakeItem {
   [key: string]: unknown;
 }
 
+/**
+ * The deployed relay for personnel's outbox rows: the platform table's drain
+ * (platform-service/outbox-publisher/handler.ts), which marks each row sent in that table.
+ */
+async function drainOutbox(
+  streamEvent: DynamoDBStreamEvent,
+  ebSend: unknown,
+  tableSend: unknown,
+): Promise<unknown> {
+  const { createOutboxDrainHandler } = await import('@boxalarm/outbox');
+  const drain = createOutboxDrainHandler('platform-service', {
+    eventBridgeClient: { send: ebSend } as unknown as EventBridgeClient,
+    ddbClient: { send: tableSend } as unknown as DynamoDBDocumentClient,
+  });
+  return drain(streamEvent, {} as never, () => undefined);
+}
+
+function outboxInsert(item: FakeItem, sequenceNumber: string): DynamoDBStreamEvent {
+  return {
+    Records: [
+      {
+        eventID: sequenceNumber,
+        eventName: 'INSERT',
+        dynamodb: {
+          SequenceNumber: sequenceNumber,
+          NewImage: marshall(item, { removeUndefinedValues: true }),
+        },
+      },
+    ],
+  } as unknown as DynamoDBStreamEvent;
+}
+
 function splitTopLevel(expression: string): string[] {
   const parts: string[] = [];
   let depth = 0;
@@ -238,7 +270,6 @@ describe('E2-S5 chain: markoff creation suppresses fan-out eligibility and rever
     const { createAvailability } = await import('../../personnel-service/availability/handler.js');
     const { handler: expiryHandler } =
       await import('../../personnel-service/availability/expiryHandler.js');
-    const { handler: publish } = await import('../../personnel-service/outbox/publisher.js');
     const { handler: consume } = await import('./consumer.js');
     const { queryEligibleMembers } = await import('./selector.js');
 
@@ -271,35 +302,7 @@ describe('E2-S5 chain: markoff creation suppresses fan-out eligibility and rever
       return Promise.resolve({ Entries: command.input.Entries.map(() => ({})) });
     });
 
-    const streamEvent = {
-      Records: [
-        {
-          eventName: 'INSERT',
-          dynamodb: {
-            NewImage: {
-              pk: { S: outboxEntry!.pk },
-              sk: { S: outboxEntry!.sk },
-              entityType: { S: 'OUTBOX_ENTRY' },
-              eventId: { S: outboxEntry!.eventId as string },
-              eventType: { S: 'personnel.availability.changed' },
-              correlationId: { S: 'mbr-1' },
-              createdAt: { N: String(outboxEntry!.createdAt) },
-              payload: {
-                M: {
-                  deptId: { S: 'NICHOLS' },
-                  memberId: { S: 'mbr-1' },
-                  availabilityState: { S: 'MARKED_OFF' },
-                },
-              },
-            },
-          },
-        },
-      ],
-    } as unknown as DynamoDBStreamEvent;
-
-    await publish(streamEvent, {
-      eventBridgeClient: { send: ebSend } as unknown as EventBridgeClient,
-    });
+    await drainOutbox(outboxInsert(outboxEntry!, 'seq-1'), ebSend, personnel.send);
     expect(publishedDetails).toHaveLength(1);
     const markedOffEnvelope = JSON.parse(publishedDetails[0]!) as {
       eventId: string;
@@ -315,7 +318,14 @@ describe('E2-S5 chain: markoff creation suppresses fan-out eligibility and rever
     expect(typeof markedOffEnvelope.eventTime).toBe('string');
 
     await consume({
-      Records: [{ messageId: 'm1', body: publishedDetails[0]! }],
+      Records: [
+        {
+          messageId: 'm1',
+          body: JSON.stringify({
+            detail: JSON.parse(publishedDetails[0]!) as Record<string, unknown>,
+          }),
+        },
+      ],
     } as unknown as SQSEvent);
 
     const eligibleWhileMarkedOff = await queryEligibleMembers(
@@ -340,39 +350,18 @@ describe('E2-S5 chain: markoff creation suppresses fan-out eligibility and rever
       );
     expect(revertOutboxEntry).toBeDefined();
 
-    const revertStreamEvent = {
-      Records: [
-        {
-          eventName: 'INSERT',
-          dynamodb: {
-            NewImage: {
-              pk: { S: revertOutboxEntry!.pk },
-              sk: { S: revertOutboxEntry!.sk },
-              entityType: { S: 'OUTBOX_ENTRY' },
-              eventId: { S: revertOutboxEntry!.eventId as string },
-              eventType: { S: 'personnel.availability.changed' },
-              correlationId: { S: 'mbr-1' },
-              createdAt: { N: String(revertOutboxEntry!.createdAt) },
-              payload: {
-                M: {
-                  deptId: { S: 'NICHOLS' },
-                  memberId: { S: 'mbr-1' },
-                  availabilityState: { S: 'AVAILABLE' },
-                },
-              },
-            },
-          },
-        },
-      ],
-    } as unknown as DynamoDBStreamEvent;
-
-    await publish(revertStreamEvent, {
-      eventBridgeClient: { send: ebSend } as unknown as EventBridgeClient,
-    });
+    await drainOutbox(outboxInsert(revertOutboxEntry!, 'seq-2'), ebSend, personnel.send);
     expect(publishedDetails).toHaveLength(2);
 
     await consume({
-      Records: [{ messageId: 'm2', body: publishedDetails[1]! }],
+      Records: [
+        {
+          messageId: 'm2',
+          body: JSON.stringify({
+            detail: JSON.parse(publishedDetails[1]!) as Record<string, unknown>,
+          }),
+        },
+      ],
     } as unknown as SQSEvent);
 
     const eligibleAfterRevert = await queryEligibleMembers(
@@ -529,11 +518,7 @@ describe('E3-S8 chain: expired certification revokes qual currency and suppresse
       });
     });
 
-    const { handler: publisherHandler } =
-      await import('../../personnel-service/outbox/publisher.js');
-    await publisherHandler(outboxStreamEvent, {
-      eventBridgeClient: { send: ebSend } as unknown as EventBridgeClient,
-    });
+    await drainOutbox(outboxStreamEvent, ebSend, shared.send);
     expect(publishedDetails).toHaveLength(1);
     expect(JSON.parse(publishedDetails[0]!)).toMatchObject({
       eventType: 'personnel.eligibility.changed',
@@ -703,11 +688,7 @@ describe('E3-S8 chain: expired certification revokes qual currency and suppresse
       });
     });
 
-    const { handler: publisherHandler } =
-      await import('../../personnel-service/outbox/publisher.js');
-    await publisherHandler(outboxStreamEvent, {
-      eventBridgeClient: { send: ebSend } as unknown as EventBridgeClient,
-    });
+    await drainOutbox(outboxStreamEvent, ebSend, shared.send);
     expect(publishedDetails).toHaveLength(1);
     expect(JSON.parse(publishedDetails[0]!)).toMatchObject({
       eventType: 'personnel.eligibility.changed',

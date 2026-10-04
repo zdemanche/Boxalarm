@@ -3,7 +3,9 @@ import * as aws from "@pulumi/aws";
 import { ServiceLambda } from "../observability/service-lambda";
 import { ServiceLogGroup } from "../observability/service-log-group";
 import { lambdaCode, LAMBDA_HANDLER } from "../shared/lambda-code";
+import { ScheduleDeadLetter } from "../shared/schedule-dead-letter";
 import { requireEnv } from "../shared/env";
+import { nerisBaseUrlForEnv, nerisUserAgentForEnv } from "../neris/neris-config";
 
 export interface SchemaRefreshArgs {
   env: string;
@@ -11,7 +13,16 @@ export interface SchemaRefreshArgs {
   incidentTableArn: pulumi.Input<string>;
   incidentCmkArn: pulumi.Input<string>;
   nerisSchemaSourceUrl: pulumi.Input<string>;
+  /**
+   * False while nerisSchemaSourceUrl is a known placeholder (dev's `.invalid` URL until the
+   * schema pipeline exists): the schedule is created DISABLED, so no run fails daily and the
+   * errors alarm does not email the ops topic about a known gap every day (review F6).
+   * Default true.
+   */
+  enabled?: boolean;
   logGroup: ServiceLogGroup;
+  /** Ops alarm topic (chief-notifications): every alarm here notifies it, none is silent. */
+  opsAlarmTopicArn: pulumi.Input<string>;
 }
 
 /**
@@ -95,6 +106,10 @@ export class SchemaRefresh extends pulumi.ComponentResource {
           INCIDENT_TABLE_NAME: args.incidentTableName,
           NERIS_SCHEMA_BUCKET_NAME: this.bucket.bucket,
           NERIS_SCHEMA_SOURCE_URL: args.nerisSchemaSourceUrl,
+          // The environment's own NERIS host (never prod from non-prod, N6.4): its public
+          // OpenAPI document is the source of the incident-type list and module schemas.
+          NERIS_OPENAPI_URL: `${nerisBaseUrlForEnv(env)}/openapi.json`,
+          NERIS_USER_AGENT: nerisUserAgentForEnv(env),
         },
         additionalPolicyStatements: pulumi
           .all([args.incidentCmkArn, args.incidentTableArn, this.bucket.arn])
@@ -162,15 +177,27 @@ export class SchemaRefresh extends pulumi.ComponentResource {
       { parent: this },
     );
 
+    const deadLetter = new ScheduleDeadLetter(
+      `${name}-schedule-dead-letter`,
+      {
+        queueName: `boxalarm-${env}-incident-neris-schema-refresh-scheduler-dlq`,
+        schedulerRole: this.schedulerRole,
+        alarmActions: [args.opsAlarmTopicArn],
+      },
+      { parent: this },
+    );
+
     this.schedule = new aws.scheduler.Schedule(
       `${name}-schedule`,
       {
         name: `boxalarm-${env}-incident-neris-schema-refresh`,
         scheduleExpression: "rate(1 day)",
+        state: args.enabled === false ? "DISABLED" : "ENABLED",
         flexibleTimeWindow: { mode: "OFF" },
         target: {
           arn: this.refreshLambda.function.arn,
           roleArn: this.schedulerRole.arn,
+          ...deadLetter.targetConfig,
         },
       },
       { parent: this },
@@ -188,6 +215,7 @@ export class SchemaRefresh extends pulumi.ComponentResource {
         evaluationPeriods: 1,
         threshold: 0,
         comparisonOperator: "GreaterThanThreshold",
+        alarmActions: [args.opsAlarmTopicArn],
         treatMissingData: "notBreaching",
       },
       { parent: this },

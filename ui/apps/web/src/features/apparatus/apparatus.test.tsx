@@ -69,7 +69,7 @@ function renderApp(groups: string[], path = '/apparatus') {
   );
 }
 
-test('APPARATUS create form adds a unit as IN_SERVICE', async () => {
+test('CHIEF create form adds a unit as IN_SERVICE (createApparatus is CHIEF/ADMIN)', async () => {
   const items: Apparatus[] = [];
   server.use(
     http.get('/api/v1/apparatus', () => HttpResponse.json({ apparatus: items })),
@@ -87,7 +87,7 @@ test('APPARATUS create form adds a unit as IN_SERVICE', async () => {
   );
 
   const user = userEvent.setup();
-  renderApp(['APPARATUS']);
+  renderApp(['CHIEF']);
   await screen.findByRole('heading', { name: 'Apparatus' });
   await user.type(screen.getByLabelText('Unit ID'), 'E1');
   await user.type(screen.getByLabelText('Type'), 'Engine');
@@ -98,23 +98,45 @@ test('APPARATUS create form adds a unit as IN_SERVICE', async () => {
   });
 });
 
-test('CHIEF can open registry but does not see create control', async () => {
+test('the apparatus officer opens the registry without a create form the backend would refuse', async () => {
   server.use(http.get('/api/v1/apparatus', () => HttpResponse.json({ apparatus: [] })));
 
-  renderApp(['CHIEF']);
+  renderApp(['APPARATUS']);
   await screen.findByRole('heading', { name: 'Apparatus' });
-  expect(screen.queryByRole('form', { name: 'Create apparatus' })).toBeNull();
+  expect(screen.queryByRole('button', { name: 'Create apparatus' })).toBeNull();
 });
 
-test('ADMIN cannot open /apparatus under §7.1 RequireRole', async () => {
+test('OFFICER and ADMIN can open the registry', async () => {
+  server.use(http.get('/api/v1/apparatus', () => HttpResponse.json({ apparatus: [] })));
+
+  renderApp(['OFFICER']);
+  await screen.findByRole('heading', { name: 'Apparatus' });
+  cleanup();
   renderApp(['ADMIN']);
-  await screen.findByRole('heading', { name: 'Forbidden' });
-  expect(screen.queryByRole('form', { name: 'Create apparatus' })).toBeNull();
+  await screen.findByRole('heading', { name: 'Apparatus' });
+});
+
+test('an officer can take a unit out of service (Cedar UpdateServiceStatus includes OFFICER)', async () => {
+  server.use(
+    http.get('/api/v1/apparatus/E1', () =>
+      HttpResponse.json({
+        apparatusId: 'a1',
+        unitId: 'E1',
+        type: 'Engine',
+        status: 'IN_SERVICE',
+        openDefects: [],
+        failedTests: [],
+      }),
+    ),
+  );
+
+  renderApp(['OFFICER'], '/apparatus/E1');
+  expect(await screen.findByRole('form', { name: 'Place out of service' })).toBeTruthy();
 });
 
 test('detail shows status badge shell', async () => {
   server.use(
-    http.get('/api/v1/apparatus/a1', () =>
+    http.get('/api/v1/apparatus/L1', () =>
       HttpResponse.json({
         apparatusId: 'a1',
         unitId: 'L1',
@@ -126,14 +148,14 @@ test('detail shows status badge shell', async () => {
     ),
   );
 
-  renderApp(['CHIEF'], '/apparatus/a1');
+  renderApp(['CHIEF'], '/apparatus/L1');
   await screen.findByRole('heading', { name: 'L1' });
   expect(screen.getByText(/Out of service/i)).toBeTruthy();
 });
 
 test('detail renders the OOS reason and elapsed time from the real backend nested outOfService shape', async () => {
   server.use(
-    http.get('/api/v1/apparatus/a1', () =>
+    http.get('/api/v1/apparatus/L1', () =>
       HttpResponse.json({
         apparatusId: 'a1',
         unitId: 'L1',
@@ -148,16 +170,17 @@ test('detail renders the OOS reason and elapsed time from the real backend neste
     ),
   );
 
-  renderApp(['CHIEF'], '/apparatus/a1');
+  renderApp(['CHIEF'], '/apparatus/L1');
   await screen.findByRole('heading', { name: 'L1' });
   expect(await screen.findByText(/Aerial hydraulic leak since 2 days ago/i)).toBeTruthy();
 });
 
 // apparatusId ('a1') and unitId ('L1') are deliberately different strings in these tests so a
 // tab that's handed the wrong identifier fails to match anything, instead of accidentally
-// passing because the two happened to be equal.
+// passing because the two happened to be equal. The detail route and GET are keyed on unitId
+// (backend getApparatus.ts resolves GET /apparatus/{unitId} by unitId).
 function mockDetail() {
-  return http.get('/api/v1/apparatus/a1', () =>
+  return http.get('/api/v1/apparatus/L1', () =>
     HttpResponse.json({
       apparatusId: 'a1',
       unitId: 'L1',
@@ -195,7 +218,7 @@ test('SCBA tab filters the due-soon list by apparatusId, matching the page detai
   );
 
   const user = userEvent.setup();
-  renderApp(['CHIEF'], '/apparatus/a1');
+  renderApp(['CHIEF'], '/apparatus/L1');
   await screen.findByRole('heading', { name: 'L1' });
   await user.click(screen.getByRole('tab', { name: 'SCBA' }));
 
@@ -215,7 +238,7 @@ test('Testing tab filters the schedule by the display unitId, which is what the 
   );
 
   const user = userEvent.setup();
-  renderApp(['CHIEF'], '/apparatus/a1');
+  renderApp(['CHIEF'], '/apparatus/L1');
   await screen.findByRole('heading', { name: 'L1' });
   await user.click(screen.getByRole('tab', { name: 'Testing' }));
 
@@ -246,7 +269,7 @@ test('Maintenance tab fetches from the apparatusId-keyed endpoint, matching the 
   );
 
   const user = userEvent.setup();
-  renderApp(['CHIEF'], '/apparatus/a1');
+  renderApp(['CHIEF'], '/apparatus/L1');
   await screen.findByRole('heading', { name: 'L1' });
   await user.click(screen.getByRole('tab', { name: 'Maintenance' }));
 
@@ -277,7 +300,7 @@ test('logging maintenance with a next-scheduled date sends scheduledNextAt', asy
   );
 
   const user = userEvent.setup();
-  renderApp(['CHIEF'], '/apparatus/a1');
+  renderApp(['CHIEF'], '/apparatus/L1');
   await screen.findByRole('heading', { name: 'L1' });
   await user.click(screen.getByRole('tab', { name: 'Maintenance' }));
 
@@ -293,10 +316,10 @@ test('logging maintenance with a next-scheduled date sends scheduledNextAt', asy
 test('open defects render the photo from the signed URL and ignore a bare S3 key', async () => {
   const signed = 'https://assets.example/NICHOLS/defect/DEF-1/tire.jpg?Signature=abc&Key-Pair-Id=k';
   server.use(
-    http.get('/api/v1/apparatus/a1', () =>
+    http.get('/api/v1/apparatus/L1', () =>
       HttpResponse.json({
         apparatusId: 'a1',
-        unitId: 'Engine 301',
+        unitId: 'L1',
         type: 'Engine',
         status: 'IN_SERVICE',
         openDefects: [
@@ -322,8 +345,8 @@ test('open defects render the photo from the signed URL and ignore a bare S3 key
     ),
   );
 
-  renderApp(['CHIEF'], '/apparatus/a1');
-  await screen.findByRole('heading', { name: 'Engine 301' });
+  renderApp(['CHIEF'], '/apparatus/L1');
+  await screen.findByRole('heading', { name: 'L1' });
 
   const photo = await screen.findByRole('img', { name: 'Low tire pressure, rear axle' });
   expect(photo.getAttribute('src')).toBe(signed);
@@ -367,4 +390,222 @@ test('the apparatus due-soon panel lists a unit inside the reminder window and o
 
   expect(await screen.findByText(/Engine 301: due/)).toBeTruthy();
   expect(screen.queryByText(/Truck 304: due/)).toBeNull();
+});
+
+test('registry links each unit to its unitId-keyed detail route, not the apparatusId (C2)', async () => {
+  server.use(
+    http.get('/api/v1/apparatus', () =>
+      HttpResponse.json({
+        apparatus: [
+          { apparatusId: 'a1', unitId: 'Engine 301', type: 'Engine', status: 'IN_SERVICE' },
+        ],
+      }),
+    ),
+    http.get('/api/v1/apparatus/a1/maintenance', () =>
+      HttpResponse.json({ records: [], nextScheduled: null }),
+    ),
+  );
+
+  renderApp(['CHIEF']);
+  const link = await screen.findByRole('link', { name: 'Engine 301' });
+  expect(link.getAttribute('href')).toBe('/apparatus/Engine%20301');
+});
+
+test('SCBA records post to the unitId-keyed route the backend resolves (C2)', async () => {
+  let postedPath: string | undefined;
+  server.use(
+    mockDetail(),
+    http.get('/api/v1/apparatus/scba/testing-schedules', () => HttpResponse.json({ dueSoon: [] })),
+    http.post('/api/v1/apparatus/:unitId/scba', async ({ request, params }) => {
+      postedPath = String(params.unitId);
+      const body = (await request.json()) as Record<string, string>;
+      return HttpResponse.json(
+        {
+          apparatusId: 'a1',
+          ...body,
+          nextFlowTestDue: '2027-01-01',
+          nextHydroTestDue: '2031-01-01',
+        },
+        { status: 201 },
+      );
+    }),
+  );
+
+  const user = userEvent.setup();
+  renderApp(['CHIEF'], '/apparatus/L1');
+  await screen.findByRole('heading', { name: 'L1' });
+  await user.click(screen.getByRole('tab', { name: 'SCBA' }));
+  await user.type(await screen.findByLabelText('SCBA unit'), 'SCBA-1');
+  await user.type(screen.getByLabelText('Cylinder ID'), 'C-1');
+  await user.type(screen.getByLabelText('Flow test date'), '2026-01-01');
+  await user.type(screen.getByLabelText('Hydro test date'), '2026-01-01');
+  await user.click(screen.getByRole('button', { name: 'Save SCBA record' }));
+
+  await waitFor(() => expect(postedPath).toBe('L1'));
+});
+
+test('service-status changes go to the unitId-keyed route (C2)', async () => {
+  let putPath: string | undefined;
+  server.use(
+    mockDetail(),
+    http.put('/api/v1/apparatus/:unitId/service-status', ({ params }) => {
+      putPath = String(params.unitId);
+      return new HttpResponse(null, { status: 204 });
+    }),
+  );
+
+  const user = userEvent.setup();
+  renderApp(['CHIEF'], '/apparatus/L1');
+  await screen.findByRole('heading', { name: 'L1' });
+  await user.type(screen.getByLabelText('Reason'), 'Pump failure');
+  await user.click(screen.getByRole('button', { name: 'Place out of service' }));
+
+  await waitFor(() => expect(putPath).toBe('L1'));
+});
+
+test('Inventory quantity edits PUT to /inventory/{itemId} and surface a failed save (M2)', async () => {
+  let putPath: string | undefined;
+  server.use(
+    mockDetail(),
+    http.get('/api/v1/apparatus/a1/inventory', () =>
+      HttpResponse.json({
+        compartments: [
+          { compartmentCode: 'C1', items: [{ itemId: 'i1', itemName: 'Halligan', quantity: 2 }] },
+        ],
+      }),
+    ),
+    http.put('/api/v1/apparatus/a1/inventory/:itemId', ({ params }) => {
+      putPath = `inventory/${String(params.itemId)}`;
+      return HttpResponse.json(
+        { type: 'about:blank', title: 'Service Unavailable', status: 503, traceId: 't' },
+        { status: 503 },
+      );
+    }),
+  );
+
+  const user = userEvent.setup();
+  renderApp(['CHIEF'], '/apparatus/L1');
+  await screen.findByRole('heading', { name: 'L1' });
+  await user.click(screen.getByRole('tab', { name: 'Inventory' }));
+  const input = await screen.findByLabelText('Quantity for Halligan');
+  await user.clear(input);
+  await user.type(input, '5');
+  await user.tab();
+
+  expect(await screen.findByText(/Quantity not saved/)).toBeTruthy();
+  expect(putPath).toBe('inventory/i1');
+  expect((screen.getByLabelText('Quantity for Halligan') as HTMLInputElement).value).toBe('2');
+});
+
+test('a failed SCBA due-soon read is shown inline and keeps the log form usable (M3)', async () => {
+  server.use(
+    mockDetail(),
+    http.get('/api/v1/apparatus/scba/testing-schedules', () =>
+      HttpResponse.json(
+        { type: 'about:blank', title: 'Service Unavailable', status: 503, traceId: 't' },
+        { status: 503 },
+      ),
+    ),
+  );
+
+  const user = userEvent.setup();
+  renderApp(['CHIEF'], '/apparatus/L1');
+  await screen.findByRole('heading', { name: 'L1' });
+  await user.click(screen.getByRole('tab', { name: 'SCBA' }));
+
+  expect(await screen.findByText('The SCBA due-soon list could not be loaded.')).toBeTruthy();
+  expect(screen.getByRole('form', { name: 'Log SCBA record' })).toBeTruthy();
+});
+
+test('an officer resolves a defect with a note; it leaves the list and the OOS warning shows', async () => {
+  let resolveBody: unknown;
+  let resolved = false;
+  server.use(
+    http.get('/api/v1/apparatus/L1', () =>
+      HttpResponse.json({
+        apparatusId: 'a1',
+        unitId: 'L1',
+        type: 'Engine',
+        status: 'OUT_OF_SERVICE',
+        outOfService: { reason: 'Pump failure', startAt: 1, elapsedSeconds: 7200 },
+        openDefects: resolved
+          ? []
+          : [
+              {
+                defectId: 'DEF-9',
+                description: 'Pump will not engage',
+                severity: 'OUT_OF_SERVICE',
+                reportedAt: 1700000000,
+                photoS3Key: null,
+              },
+            ],
+        failedTests: [],
+      }),
+    ),
+    http.post('/api/v1/apparatus/L1/defects/DEF-9/resolve', async ({ request }) => {
+      resolveBody = await request.json();
+      resolved = true;
+      return HttpResponse.json({
+        defectId: 'DEF-9',
+        status: 'RESOLVED',
+        resolvedAt: 1700005000,
+        severity: 'OUT_OF_SERVICE',
+        unitStillOutOfService: true,
+      });
+    }),
+  );
+
+  renderApp(['OFFICER'], '/apparatus/L1');
+  await screen.findByRole('heading', { name: 'L1' });
+
+  const user = userEvent.setup();
+  await user.click(
+    await screen.findByRole('button', { name: 'Resolve defect: Pump will not engage' }),
+  );
+  await user.type(screen.getByLabelText('How was it fixed?'), 'Replaced the pump seal');
+  await user.click(screen.getByRole('button', { name: 'Confirm resolve' }));
+
+  expect(resolveBody).toEqual({ note: 'Replaced the pump seal' });
+  // Resolving never returns the unit to service: the server said it is still out, and we warn.
+  expect(
+    await screen.findByText('L1 is still out of service — return it to service when it is ready.'),
+  ).toBeTruthy();
+});
+
+test('resolving requires a note before anything is sent', async () => {
+  let posts = 0;
+  server.use(
+    http.get('/api/v1/apparatus/L1', () =>
+      HttpResponse.json({
+        apparatusId: 'a1',
+        unitId: 'L1',
+        type: 'Engine',
+        status: 'IN_SERVICE',
+        openDefects: [
+          {
+            defectId: 'DEF-9',
+            description: 'Marker light out',
+            severity: 'MINOR',
+            reportedAt: 1700000000,
+            photoS3Key: null,
+          },
+        ],
+        failedTests: [],
+      }),
+    ),
+    http.post('/api/v1/apparatus/L1/defects/DEF-9/resolve', () => {
+      posts += 1;
+      return HttpResponse.json({});
+    }),
+  );
+
+  renderApp(['OFFICER'], '/apparatus/L1');
+  await screen.findByRole('heading', { name: 'L1' });
+
+  const user = userEvent.setup();
+  await user.click(await screen.findByRole('button', { name: 'Resolve defect: Marker light out' }));
+  await user.click(screen.getByRole('button', { name: 'Confirm resolve' }));
+
+  expect(await screen.findByText('A note saying how it was fixed is required.')).toBeTruthy();
+  expect(posts).toBe(0);
 });

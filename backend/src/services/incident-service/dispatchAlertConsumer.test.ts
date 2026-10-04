@@ -55,17 +55,54 @@ describe('dispatchAlertConsumer', () => {
     });
   });
 
-  it('throws without writing on a malformed payload', async () => {
+  it('carries a CAD verifyRequired flag onto the copy only when the payload has it', async () => {
     const send = vi.fn().mockResolvedValue({});
     const handler = createHandler({ client: { send } as never });
 
-    await expect(
-      handler(
-        sqsEvent([JSON.stringify({ detail: { payload: {} } })]),
-        {} as never,
-        () => undefined,
-      ),
-    ).rejects.toThrow(/shape validation/);
+    await handler(
+      sqsEvent([
+        validBody({ address: 'SEE DISPATCH TEXT', verifyRequired: true }),
+        validBody({ dispatchId: 'D-2' }),
+      ]),
+      {} as never,
+      () => undefined,
+    );
+
+    const items = send.mock.calls.map(
+      (call) => (call[0] as { input: { Item: Record<string, unknown> } }).input.Item,
+    );
+    expect(items[0]).toMatchObject({ verifyRequired: true });
+    expect(items[1]).not.toHaveProperty('verifyRequired');
+  });
+
+  it('reports a malformed record as a batch item failure without writing it', async () => {
+    const send = vi.fn().mockResolvedValue({});
+    const handler = createHandler({ client: { send } as never });
+
+    const result = await handler(
+      sqsEvent([JSON.stringify({ detail: { payload: {} } })]),
+      {} as never,
+      () => undefined,
+    );
+
+    expect(result).toEqual({ batchItemFailures: [{ itemIdentifier: 'msg-0' }] });
     expect(send).not.toHaveBeenCalled();
+  });
+
+  it('keeps processing after a failed write, reporting only the failed record', async () => {
+    const send = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('DynamoDB unavailable'))
+      .mockResolvedValueOnce({});
+    const handler = createHandler({ client: { send } as never });
+
+    const result = await handler(
+      sqsEvent([validBody(), validBody({ dispatchId: 'NICHOLS-MANUAL-1798000001-ef567890' })]),
+      {} as never,
+      () => undefined,
+    );
+
+    expect(result).toEqual({ batchItemFailures: [{ itemIdentifier: 'msg-0' }] });
+    expect(send).toHaveBeenCalledTimes(2);
   });
 });

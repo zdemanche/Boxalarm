@@ -11,6 +11,18 @@ let attendance: AttendanceRecord[] = [
   { activityType: 'DRILL', refId: null, occurredAt: 1758000000, hours: 2 },
 ];
 
+// One upcoming mark-off, so the list and Cancel are visible in demo mode without implying the
+// demo member is unavailable right now.
+const demoMarkOffStart = Math.floor(Date.now() / 1000) + 86_400;
+let markOffs: { markoffId: string; startAt: number; endAt: number; reason?: string }[] = [
+  {
+    markoffId: String(demoMarkOffStart),
+    startAt: demoMarkOffStart,
+    endAt: demoMarkOffStart + 43_200,
+    reason: 'Travel',
+  },
+];
+
 export function tryHandlePersonnelExtras(
   parts: string[],
   method: string,
@@ -30,6 +42,47 @@ export function tryHandlePersonnelExtras(
       attendance = [...attendance, record];
       return json(record, 201);
     }
+  }
+
+  if (parts[1] === 'members' && parts[3] === 'availability' && parts.length === 4) {
+    // Mirrors availability/handler.ts and markoffs.ts: markoffId is the startAt as a string.
+    if (method === 'GET') return json({ markOffs });
+    if (method === 'POST') {
+      const startAt = body.startAt as number;
+      markOffs = [
+        ...markOffs,
+        {
+          markoffId: String(startAt),
+          startAt,
+          endAt: body.endAt as number,
+          ...(typeof body.reason === 'string' ? { reason: body.reason } : {}),
+        },
+      ].sort((a, b) => a.startAt - b.startAt);
+      return json(
+        {
+          memberId: decodeURIComponent(parts[2] ?? ''),
+          startAt: body.startAt,
+          endAt: body.endAt,
+          affectsAlerting: true,
+          ...(typeof body.reason === 'string' ? { reason: body.reason } : {}),
+        },
+        201,
+      );
+    }
+  }
+
+  if (
+    parts[1] === 'members' &&
+    parts[3] === 'availability' &&
+    parts[5] === 'end' &&
+    method === 'POST'
+  ) {
+    const markoffId = decodeURIComponent(parts[4] ?? '');
+    const markOff = markOffs.find((m) => m.markoffId === markoffId);
+    if (!markOff) return json({ type: 'about:blank', title: 'Not Found', status: 404 }, 404);
+    const nowSeconds = Math.floor(Date.now() / 1000);
+    markOffs = markOffs.filter((m) => m.markoffId !== markoffId);
+    return json({ markoffId, endedAt: nowSeconds, cancelled: markOff.startAt > nowSeconds });
   }
 
   if (parts[1] === 'members' && parts[3] === 'quals') {

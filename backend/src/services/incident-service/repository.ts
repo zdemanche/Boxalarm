@@ -1,19 +1,21 @@
-import {
-  ConditionalCheckFailedException,
-  DynamoDBClient,
-  TransactionCanceledException,
-} from '@aws-sdk/client-dynamodb';
+import { DynamoDBClient, TransactionCanceledException } from '@aws-sdk/client-dynamodb';
 import {
   DynamoDBDocumentClient,
   GetCommand,
   QueryCommand,
   TransactWriteCommand,
-  UpdateCommand,
 } from '@aws-sdk/lib-dynamodb';
 import { captureAWSv3Client } from 'aws-xray-sdk-core';
 import { assertNoDelimiter, buildDeptScopedPk } from '@boxalarm/dept-scope';
 import type { VerifiedDeptId } from '@boxalarm/dept-scope';
-import { buildOutboxRecord } from '@boxalarm/outbox';
+import { buildOutboxRecord, type OutboxRecord } from '@boxalarm/outbox';
+import {
+  BUMP_CONTENT_VERSION,
+  CONTENT_VERSION_VALUES,
+  IncidentLockedError,
+  NOT_LOCKED_CONDITION,
+  explainMetadataConditionFailure,
+} from './lock.js';
 import {
   buildNerisIncidentId,
   isIncidentStatus,
@@ -34,12 +36,17 @@ export interface IncidentRepository {
     nowEpochSeconds: number,
     traceId: string,
   ): Promise<Incident>;
-  getIncident(deptId: VerifiedDeptId, incidentId: string): Promise<Incident | undefined>;
+  getIncident(
+    deptId: VerifiedDeptId,
+    incidentId: string,
+    options?: { readonly consistent?: boolean },
+  ): Promise<Incident | undefined>;
   updateNarrative(
     deptId: VerifiedDeptId,
     incidentId: string,
     narrative: string,
     nowEpochSeconds: number,
+    traceId: string,
   ): Promise<Incident>;
   updateCorePayload(
     deptId: VerifiedDeptId,
@@ -47,6 +54,16 @@ export interface IncidentRepository {
     corePayload: Readonly<Record<string, unknown>>,
     status: IncidentStatus,
     nowEpochSeconds: number,
+    traceId: string,
+  ): Promise<Incident>;
+  /** Replaces one NERIS module (e.g. `smoke_alarm`) on corePayload; lock-guarded, versioned. */
+  updateModule(
+    deptId: VerifiedDeptId,
+    incidentId: string,
+    module: string,
+    value: Readonly<Record<string, unknown>>,
+    nowEpochSeconds: number,
+    traceId: string,
   ): Promise<Incident>;
   searchIncidents(
     deptId: VerifiedDeptId,
@@ -123,6 +140,24 @@ function toIncident(item: Record<string, unknown>): Incident {
     createdBy: item.createdBy as string,
     createdAt: item.createdAt as number,
     updatedAt: item.updatedAt as number,
+    ...(typeof item.lockedAt === 'number' ? { lockedAt: item.lockedAt } : {}),
+    ...(typeof item.lockedBy === 'string' ? { lockedBy: item.lockedBy } : {}),
+    ...(typeof item.submissionStatus === 'string'
+      ? { submissionStatus: item.submissionStatus }
+      : {}),
+    ...(typeof item.nerisIncidentId === 'string' ? { nerisIncidentId: item.nerisIncidentId } : {}),
+    ...(typeof item.nerisStatus === 'string' ? { nerisStatus: item.nerisStatus } : {}),
+    ...(typeof item.nerisStatusAt === 'number' ? { nerisStatusAt: item.nerisStatusAt } : {}),
+    ...(typeof item.firstSubmittedAt === 'number'
+      ? { firstSubmittedAt: item.firstSubmittedAt }
+      : {}),
+    ...(typeof item.lastPayloadHash === 'string' ? { lastPayloadHash: item.lastPayloadHash } : {}),
+    ...(typeof item.pendingNerisId === 'string' ? { pendingNerisId: item.pendingNerisId } : {}),
+    ...(typeof item.nerisMissingAt === 'number' ? { nerisMissingAt: item.nerisMissingAt } : {}),
+    ...(typeof item.contentVersion === 'number' ? { contentVersion: item.contentVersion } : {}),
+    ...(typeof item.lockedContentVersion === 'number'
+      ? { lockedContentVersion: item.lockedContentVersion }
+      : {}),
   };
 }
 
@@ -136,10 +171,78 @@ function resolveStatus(input: CreateIncidentInput): IncidentStatus {
   return input.status;
 }
 
+/** True when a TransactWrite was cancelled by the condition on its item at `index`. */
+export function isConditionFailureAt(error: unknown, index: number): boolean {
+  return (
+    error instanceof TransactionCanceledException &&
+    error.CancellationReasons?.[index]?.Code === 'ConditionalCheckFailed'
+  );
+}
+
 export function createIncidentRepository(
   client: DynamoDBDocumentClient,
   tableName: string,
 ): IncidentRepository {
+  const metadataKey = (deptId: VerifiedDeptId, incidentId: string) => ({
+    pk: buildDeptScopedPk(deptId, 'INCIDENT', incidentId),
+    sk: 'METADATA',
+  });
+
+  // Every incident mutation that raises an event commits its entity Update and its
+  // OUTBOX_ENTRY Put atomically (the house outbox pattern createIncident follows).
+  // TransactWriteItems can't return ALL_NEW, so the committed item is read back with a
+  // strongly consistent Get.
+  async function updateWithOutbox(
+    deptId: VerifiedDeptId,
+    incidentId: string,
+    update: {
+      readonly UpdateExpression: string;
+      readonly ExpressionAttributeValues: Record<string, unknown>;
+      readonly ExpressionAttributeNames?: Record<string, string>;
+    },
+    outboxRecord: OutboxRecord<unknown>,
+  ): Promise<Incident> {
+    const Key = metadataKey(deptId, incidentId);
+    try {
+      await client.send(
+        new TransactWriteCommand({
+          TransactItems: [
+            {
+              Update: {
+                TableName: tableName,
+                Key,
+                // Locked reports reject every edit (lock.ts), atomically with the write.
+                ConditionExpression: `attribute_exists(pk) AND ${NOT_LOCKED_CONDITION}`,
+                ...update,
+                UpdateExpression: `${update.UpdateExpression}, ${BUMP_CONTENT_VERSION}`,
+                ExpressionAttributeValues: {
+                  ...update.ExpressionAttributeValues,
+                  ...CONTENT_VERSION_VALUES,
+                },
+              },
+            },
+            { Put: { TableName: tableName, Item: outboxRecord } },
+          ],
+        }),
+      );
+    } catch (error) {
+      if (isConditionFailureAt(error, 0)) {
+        const reason = await explainMetadataConditionFailure(client, tableName, deptId, incidentId);
+        throw reason === 'locked'
+          ? new IncidentLockedError(incidentId)
+          : new IncidentNotFoundError(incidentId);
+      }
+      throw error;
+    }
+    const result = await client.send(
+      new GetCommand({ TableName: tableName, Key, ConsistentRead: true }),
+    );
+    if (!result.Item) {
+      throw new IncidentNotFoundError(incidentId);
+    }
+    return toIncident(result.Item as Record<string, unknown>);
+  }
+
   return {
     async createIncident(deptId, input, nowEpochSeconds, traceId) {
       assertNoDelimiter(input.dispatchNumber, 'dispatchNumber');
@@ -237,10 +340,7 @@ export function createIncidentRepository(
           }),
         );
       } catch (error) {
-        if (
-          error instanceof TransactionCanceledException &&
-          error.CancellationReasons?.[0]?.Code === 'ConditionalCheckFailed'
-        ) {
+        if (isConditionFailureAt(error, 0)) {
           throw new DuplicateIncidentError(incidentId);
         }
         throw error;
@@ -248,45 +348,61 @@ export function createIncidentRepository(
       return toIncident(item);
     },
 
-    async getIncident(deptId, incidentId) {
+    async getIncident(deptId, incidentId, options = {}) {
       const result = await client.send(
         new GetCommand({
           TableName: tableName,
-          Key: {
-            pk: buildDeptScopedPk(deptId, 'INCIDENT', incidentId),
-            sk: 'METADATA',
-          },
+          Key: metadataKey(deptId, incidentId),
+          ...(options.consistent ? { ConsistentRead: true } : {}),
         }),
       );
       return result.Item ? toIncident(result.Item as Record<string, unknown>) : undefined;
     },
 
-    async updateNarrative(deptId, incidentId, narrative, nowEpochSeconds) {
+    async updateNarrative(deptId, incidentId, narrative, nowEpochSeconds, traceId) {
       if (narrative.length > MAX_NARRATIVE_LENGTH) {
         throw new NarrativeTooLongError(narrative.length);
       }
-      try {
-        const result = await client.send(
-          new UpdateCommand({
-            TableName: tableName,
-            Key: { pk: buildDeptScopedPk(deptId, 'INCIDENT', incidentId), sk: 'METADATA' },
-            ConditionExpression: 'attribute_exists(pk)',
-            UpdateExpression:
-              'SET narrative = :narrative, corePayload.narrative = :narrative, updatedAt = :updatedAt',
-            ExpressionAttributeValues: { ':narrative': narrative, ':updatedAt': nowEpochSeconds },
-            ReturnValues: 'ALL_NEW',
-          }),
-        );
-        return toIncident(result.Attributes as Record<string, unknown>);
-      } catch (error) {
-        if (error instanceof ConditionalCheckFailedException) {
-          throw new IncidentNotFoundError(incidentId);
-        }
-        throw error;
-      }
+      // Lean payload: identifiers only, not the (up to 25k-char) narrative text.
+      const outboxRecord = buildOutboxRecord(
+        deptId,
+        'incident-service',
+        'incident.narrative.updated',
+        traceId,
+        { incidentId, deptId, updatedAt: nowEpochSeconds },
+      );
+      return updateWithOutbox(
+        deptId,
+        incidentId,
+        {
+          UpdateExpression:
+            'SET narrative = :narrative, corePayload.narrative = :narrative, updatedAt = :updatedAt',
+          ExpressionAttributeValues: { ':narrative': narrative, ':updatedAt': nowEpochSeconds },
+        },
+        outboxRecord,
+      );
     },
 
-    async updateCorePayload(deptId, incidentId, corePayload, status, nowEpochSeconds) {
+    async updateModule(deptId, incidentId, module, value, nowEpochSeconds, traceId) {
+      assertNoDelimiter(module, 'module');
+      return updateWithOutbox(
+        deptId,
+        incidentId,
+        {
+          UpdateExpression: 'SET corePayload.#module = :value, updatedAt = :updatedAt',
+          ExpressionAttributeNames: { '#module': module },
+          ExpressionAttributeValues: { ':value': value, ':updatedAt': nowEpochSeconds },
+        },
+        buildOutboxRecord(deptId, 'incident-service', 'incident.module.updated', traceId, {
+          incidentId,
+          deptId,
+          module,
+          updatedAt: nowEpochSeconds,
+        }),
+      );
+    },
+
+    async updateCorePayload(deptId, incidentId, corePayload, status, nowEpochSeconds, traceId) {
       const setClauses = [
         'corePayload = :corePayload',
         '#status = :status',
@@ -315,25 +431,29 @@ export function createIncidentRepository(
         values[':address'] = address;
       }
 
-      try {
-        const result = await client.send(
-          new UpdateCommand({
-            TableName: tableName,
-            Key: { pk: buildDeptScopedPk(deptId, 'INCIDENT', incidentId), sk: 'METADATA' },
-            ConditionExpression: 'attribute_exists(pk)',
-            UpdateExpression: `SET ${setClauses.join(', ')}`,
-            ExpressionAttributeNames: { '#status': 'status' },
-            ExpressionAttributeValues: values,
-            ReturnValues: 'ALL_NEW',
-          }),
-        );
-        return toIncident(result.Attributes as Record<string, unknown>);
-      } catch (error) {
-        if (error instanceof ConditionalCheckFailedException) {
-          throw new IncidentNotFoundError(incidentId);
-        }
-        throw error;
-      }
+      const outboxRecord = buildOutboxRecord(
+        deptId,
+        'incident-service',
+        'incident.updated',
+        traceId,
+        {
+          incidentId,
+          deptId,
+          status,
+          ...(typeof incidentType === 'string' ? { incidentType } : {}),
+          updatedAt: nowEpochSeconds,
+        },
+      );
+      return updateWithOutbox(
+        deptId,
+        incidentId,
+        {
+          UpdateExpression: `SET ${setClauses.join(', ')}`,
+          ExpressionAttributeNames: { '#status': 'status' },
+          ExpressionAttributeValues: values,
+        },
+        outboxRecord,
+      );
     },
 
     async searchIncidents(deptId, input) {

@@ -169,6 +169,8 @@ describe('serviceStatusHandler', () => {
       unitId: 'E1',
       status: 'OUT_OF_SERVICE',
       reason: 'Pump failure',
+      changedBy: 'officer-1',
+      correlationId: expect.any(String) as string,
     });
   });
 
@@ -188,6 +190,8 @@ describe('serviceStatusHandler', () => {
       deptId: 'dept-001',
       unitId: 'E1',
       status: 'IN_SERVICE',
+      changedBy: 'officer-1',
+      correlationId: expect.any(String) as string,
     });
   });
 

@@ -1,47 +1,54 @@
-import { getSignedUrl } from '@aws-sdk/cloudfront-signer';
-import { SecretsManagerClient, GetSecretValueCommand } from '@aws-sdk/client-secrets-manager';
-import xray from 'aws-xray-sdk-core';
+import { PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
+import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import type { VerifiedDeptId } from '@boxalarm/dept-scope';
+import {
+  SIGNED_UPLOAD_HEADERS,
+  requireUploadContentType,
+  uploadContentTypeFor,
+} from '../inspections-service/assetsSigner.js';
 
+// Files go to the platform-assets bucket through a short-lived regional S3 presigned PUT.
+// architecture.md §8 describes CloudFront signed URLs, but N6.1 (U.S. residency, no global
+// edge) forbids CloudFront repo-wide - infrastructure/test/residency-encryption.test.ts
+// enforces it - so the CloudFront signer this module used could never be configured and
+// every upload request failed. Same approach as inspections-service/assetsSigner.ts.
 export interface DefectPhotoUploadConfig {
-  readonly distributionDomain: string;
-  readonly keyPairId: string;
-  readonly privateKey: string;
+  readonly bucketName: string;
 }
 
-let cachedSecretsClient: SecretsManagerClient | undefined;
-
-export function createSecretsManagerClient(client?: SecretsManagerClient): SecretsManagerClient {
-  cachedSecretsClient ??= client ?? xray.captureAWSv3Client(new SecretsManagerClient({}));
-  return cachedSecretsClient;
-}
-
-export async function readDefectPhotoUploadConfig(
+export function readDefectPhotoUploadConfig(
   env: NodeJS.ProcessEnv,
-  secretsClient?: SecretsManagerClient,
 ): Promise<DefectPhotoUploadConfig> {
-  const distributionDomain = env.CLOUDFRONT_DISTRIBUTION_DOMAIN;
-  const keyPairId = env.CLOUDFRONT_KEY_PAIR_ID;
-  const privateKeySecretId = env.CLOUDFRONT_PRIVATE_KEY_SECRET_ID;
-  if (!distributionDomain) {
-    throw new Error('CLOUDFRONT_DISTRIBUTION_DOMAIN is required and was not set');
+  const bucketName = env.PLATFORM_ASSETS_BUCKET_NAME;
+  if (!bucketName) {
+    return Promise.reject(new Error('PLATFORM_ASSETS_BUCKET_NAME is required and was not set'));
   }
-  if (!keyPairId) {
-    throw new Error('CLOUDFRONT_KEY_PAIR_ID is required and was not set');
-  }
-  if (!privateKeySecretId) {
-    throw new Error('CLOUDFRONT_PRIVATE_KEY_SECRET_ID is required and was not set');
-  }
-  const client = createSecretsManagerClient(secretsClient);
-  const output = await client.send(new GetSecretValueCommand({ SecretId: privateKeySecretId }));
-  const privateKey = output.SecretString;
-  if (!privateKey) {
-    throw new Error(`Secret ${privateKeySecretId} has no SecretString value`);
-  }
-  return { distributionDomain, keyPairId, privateKey };
+  return Promise.resolve({ bucketName });
 }
 
-const UPLOAD_URL_EXPIRY_MS = 10 * 60 * 1000;
+/** Presigns one PUT signed with `contentType`; injectable so tests need no AWS credentials. */
+export type PresignPutFn = (
+  bucketName: string,
+  key: string,
+  expiresIn: number,
+  contentType: string,
+) => Promise<string>;
+
+let cachedS3Client: S3Client | undefined;
+
+// Presigning is a local SigV4 computation with the Lambda role's credentials - no network
+// call - so the client is not wrapped in X-Ray.
+export const presignPut: PresignPutFn = (bucketName, key, expiresIn, contentType) => {
+  cachedS3Client ??= new S3Client({});
+  return getSignedUrl(
+    cachedS3Client,
+    new PutObjectCommand({ Bucket: bucketName, Key: key, ContentType: contentType }),
+    // Signed over content-type, or S3 would accept any Content-Type on the PUT.
+    { expiresIn, signableHeaders: new Set(SIGNED_UPLOAD_HEADERS) },
+  );
+};
+
+export const UPLOAD_URL_EXPIRY_SECONDS = 10 * 60;
 
 export interface CreateDefectPhotoUploadUrlParams {
   readonly deptId: VerifiedDeptId;
@@ -52,16 +59,16 @@ export interface CreateDefectPhotoUploadUrlParams {
 export interface DefectPhotoUpload {
   readonly photoS3Key: string;
   readonly uploadUrl: string;
+  /** The PUT is signed with this type; the client must send it as Content-Type. */
+  readonly contentType: string;
 }
 
-const SAFE_FILENAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
+export const SAFE_FILENAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 
-// The CloudFront signed URL this module issues has no way to constrain the Content-Type or
-// size of what the client PUTs (CloudFront signed-URL policies only support date/IP
-// conditions), so this extension allowlist is the only control available in this repo against
-// a defect "photo" upload that is actually an .html/.svg/.js payload later served back from
-// the trusted assets.boxalarm.dev origin (stored-content/XSS risk).
-const ALLOWED_PHOTO_EXTENSIONS: ReadonlySet<string> = new Set([
+// A defect photo is an image: the shared upload allowlist (inspections-service/assetsSigner.ts,
+// review minor 11) narrowed to image/* types, so it is never .html/.svg/.js or a document.
+// The PUT is signed with that content type, so S3 refuses any other Content-Type.
+export const ALLOWED_PHOTO_EXTENSIONS: ReadonlySet<string> = new Set([
   'jpg',
   'jpeg',
   'png',
@@ -70,7 +77,8 @@ const ALLOWED_PHOTO_EXTENSIONS: ReadonlySet<string> = new Set([
   'webp',
 ]);
 
-function isSafeFilename(filename: string): boolean {
+/** A safe image filename: the shared upload allowlist narrowed to image types. */
+export function isSafeFilename(filename: string): boolean {
   if (!SAFE_FILENAME.test(filename)) {
     return false;
   }
@@ -78,13 +86,17 @@ function isSafeFilename(filename: string): boolean {
   if (lastDot <= 0 || lastDot === filename.length - 1) {
     return false;
   }
-  return ALLOWED_PHOTO_EXTENSIONS.has(filename.slice(lastDot + 1).toLowerCase());
+  return (
+    ALLOWED_PHOTO_EXTENSIONS.has(filename.slice(lastDot + 1).toLowerCase()) &&
+    (uploadContentTypeFor(filename) ?? '').startsWith('image/')
+  );
 }
 
-export function createDefectPhotoUploadUrl(
+export async function createDefectPhotoUploadUrl(
   config: DefectPhotoUploadConfig,
   params: CreateDefectPhotoUploadUrlParams,
-): DefectPhotoUpload {
+  presign: PresignPutFn = presignPut,
+): Promise<DefectPhotoUpload> {
   if (!isSafeFilename(params.filename)) {
     throw new TypeError(
       `photo filename must match ${SAFE_FILENAME} with an allowed image extension ` +
@@ -92,12 +104,34 @@ export function createDefectPhotoUploadUrl(
     );
   }
   const photoS3Key = `${params.deptId}/defect/${params.defectId}/${params.filename}`;
-  const urlPath = `${params.deptId}/defect/${params.defectId}/${encodeURIComponent(params.filename)}`;
-  const uploadUrl = getSignedUrl({
-    url: `https://${config.distributionDomain}/${urlPath}`,
-    keyPairId: config.keyPairId,
-    privateKey: config.privateKey,
-    dateLessThan: new Date(Date.now() + UPLOAD_URL_EXPIRY_MS).toISOString(),
-  });
-  return { photoS3Key, uploadUrl };
+  const contentType = requireUploadContentType(params.filename);
+  const uploadUrl = await presign(
+    config.bucketName,
+    photoS3Key,
+    UPLOAD_URL_EXPIRY_SECONDS,
+    contentType,
+  );
+  return { photoS3Key, uploadUrl, contentType };
+}
+
+/**
+ * A fresh upload URL for a defect's stored photo key, for a replayed report whose first link
+ * expired before the photo went up - the mobile outbox replays the POST to get one, as it
+ * does for field capture. The key comes from the stored defect, never from the request, and
+ * must sit under this department's defect prefix (the only prefix the role may write).
+ */
+export async function resignDefectPhotoUploadUrl(
+  config: DefectPhotoUploadConfig,
+  deptId: VerifiedDeptId,
+  photoS3Key: string,
+  presign: PresignPutFn = presignPut,
+): Promise<{ uploadUrl: string; contentType: string }> {
+  if (!photoS3Key.startsWith(`${deptId}/defect/`) || photoS3Key.includes('..')) {
+    throw new TypeError(`stored photo key is outside ${deptId}/defect/: ${photoS3Key}`);
+  }
+  const contentType = requireUploadContentType(photoS3Key);
+  return {
+    uploadUrl: await presign(config.bucketName, photoS3Key, UPLOAD_URL_EXPIRY_SECONDS, contentType),
+    contentType,
+  };
 }

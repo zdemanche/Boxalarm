@@ -194,6 +194,9 @@ describe('recordResponse (real DynamoDB, AC1/AC5/core-harm)', () => {
       assignedApparatusId: 'APP-ENGINE-2',
       lastAnsweredTone: 1,
       quals: ['INTERIOR', 'DRIVER_OP'],
+      // Seeded for the escalation handler when the answer creates the row (review MAJOR-1).
+      currentChannelTier: 'primary',
+      escalationLevel: 0,
     });
 
     const responses = await client.send(
@@ -265,7 +268,8 @@ describe('recordResponse (real DynamoDB, AC1/AC5/core-harm)', () => {
       assignedApparatusId: null,
       answeredAt: 1798000100,
     });
-    expect(stale.outcome).toBe('recorded');
+    // Recorded for the audit trail, but reported as not the member's current answer.
+    expect(stale).toMatchObject({ outcome: 'recorded', roster: 'SUPERSEDED' });
 
     const roster = await client.send(
       new GetCommand({
@@ -368,5 +372,161 @@ describe('recordResponse (real DynamoDB, AC1/AC5/core-harm)', () => {
 
     const entries = await queryOutboxEntriesForDispatch(deptId, dispatchId);
     expect(entries).toHaveLength(0);
+  });
+
+  describe('answer ordering and replays (mobile review D)', () => {
+    async function rosterOf(dispatchId: string, memberId: string) {
+      const deptId = toVerifiedDeptId({ deptId: 'NICHOLS' });
+      const { Item } = await client.send(
+        new GetCommand({
+          TableName: TABLE_NAME,
+          Key: { pk: `DEPT#${deptId}#DISPATCH#${dispatchId}`, sk: `ROSTER#${memberId}` },
+          ConsistentRead: true,
+        }),
+      );
+      return Item;
+    }
+
+    async function recordsOf(dispatchId: string, memberId: string) {
+      const deptId = toVerifiedDeptId({ deptId: 'NICHOLS' });
+      const { Items } = await client.send(
+        new QueryCommand({
+          TableName: TABLE_NAME,
+          KeyConditionExpression: 'pk = :pk AND begins_with(sk, :prefix)',
+          ExpressionAttributeValues: {
+            ':pk': `DEPT#${deptId}#DISPATCH#${dispatchId}`,
+            ':prefix': `RESPONSE#${memberId}#`,
+          },
+          ConsistentRead: true,
+        }),
+      );
+      return Items ?? [];
+    }
+
+    it('a changed answer in the same second replaces the first on the roster, and both are recorded', async () => {
+      const deptId = toVerifiedDeptId({ deptId: 'NICHOLS' });
+      const dispatchId = 'NICHOLS-4471-SAMESEC';
+      await putDispatchAlert(dispatchId);
+      await putEligibilitySnapshot('MBR-0020');
+      const base = { deptId, dispatchId, memberId: 'MBR-0020', assignedApparatusId: null };
+
+      const first = await recordResponse(client, TABLE_NAME, {
+        ...base,
+        ackStatus: 'RESPONDING',
+        eta: 6,
+        answeredAt: 1798000900,
+        answeredAtMs: 1798000900100,
+      });
+      const second = await recordResponse(client, TABLE_NAME, {
+        ...base,
+        ackStatus: 'NOT_RESPONDING',
+        eta: null,
+        answeredAt: 1798000900,
+        answeredAtMs: 1798000900900,
+      });
+
+      expect(first).toMatchObject({ roster: 'APPLIED' });
+      expect(second).toMatchObject({ roster: 'APPLIED' });
+      expect(await rosterOf(dispatchId, 'MBR-0020')).toMatchObject({
+        ackStatus: 'NOT_RESPONDING',
+        ackAt: 1798000900,
+        ackAtMs: 1798000900900,
+      });
+      expect(await recordsOf(dispatchId, 'MBR-0020')).toHaveLength(2);
+    });
+
+    it('on an identical answeredAtMs, the later server receipt wins', async () => {
+      const deptId = toVerifiedDeptId({ deptId: 'NICHOLS' });
+      const dispatchId = 'NICHOLS-4471-TIE';
+      await putDispatchAlert(dispatchId);
+      await putEligibilitySnapshot('MBR-0021');
+      const base = {
+        deptId,
+        dispatchId,
+        memberId: 'MBR-0021',
+        assignedApparatusId: null,
+        answeredAt: 1798001000,
+        answeredAtMs: 1798001000500,
+      };
+
+      await recordResponse(client, TABLE_NAME, {
+        ...base,
+        ackStatus: 'RESPONDING',
+        eta: 4,
+        receivedAtMs: 1798001001000,
+      });
+      const earlierReceipt = await recordResponse(client, TABLE_NAME, {
+        ...base,
+        ackStatus: 'NOT_RESPONDING',
+        eta: null,
+        receivedAtMs: 1798001000900,
+      });
+
+      expect(earlierReceipt).toMatchObject({ roster: 'SUPERSEDED' });
+      expect((await rosterOf(dispatchId, 'MBR-0021'))?.ackStatus).toBe('RESPONDING');
+    });
+
+    it('a replay of the same clientAnswerId records once and answers with the original outcome', async () => {
+      const deptId = toVerifiedDeptId({ deptId: 'NICHOLS' });
+      const dispatchId = 'NICHOLS-4471-REPLAY';
+      await putDispatchAlert(dispatchId);
+      await putEligibilitySnapshot('MBR-0022');
+      const input = {
+        deptId,
+        dispatchId,
+        memberId: 'MBR-0022',
+        ackStatus: 'RESPONDING' as const,
+        eta: 7,
+        assignedApparatusId: null,
+        answeredAt: 1798001100,
+        answeredAtMs: 1798001100250,
+        clientAnswerId: 'ans-replay-1',
+      };
+
+      const original = await recordResponse(client, TABLE_NAME, input);
+      // The retry arrives later: a fresh server receipt time must not change anything.
+      const retry = await recordResponse(client, TABLE_NAME, {
+        ...input,
+        answeredAt: 1798001105,
+        answeredAtMs: 1798001105000,
+        receivedAtMs: 1798001105000,
+      });
+
+      expect(original).toMatchObject({ outcome: 'recorded', roster: 'APPLIED', replayed: false });
+      expect(retry).toMatchObject({
+        outcome: 'recorded',
+        roster: 'APPLIED',
+        replayed: true,
+        answer: { ackStatus: 'RESPONDING', eta: 7, answeredAt: 1798001100 },
+      });
+      expect(await recordsOf(dispatchId, 'MBR-0022')).toHaveLength(1);
+      expect(await queryOutboxEntriesForDispatch(deptId, dispatchId)).toHaveLength(1);
+    });
+
+    it('reusing a clientAnswerId for a different answer is a conflict and changes nothing', async () => {
+      const deptId = toVerifiedDeptId({ deptId: 'NICHOLS' });
+      const dispatchId = 'NICHOLS-4471-REUSE';
+      await putDispatchAlert(dispatchId);
+      await putEligibilitySnapshot('MBR-0023');
+      const base = {
+        deptId,
+        dispatchId,
+        memberId: 'MBR-0023',
+        assignedApparatusId: null,
+        answeredAt: 1798001200,
+        clientAnswerId: 'ans-reuse-1',
+      };
+
+      await recordResponse(client, TABLE_NAME, { ...base, ackStatus: 'RESPONDING', eta: 5 });
+      const reused = await recordResponse(client, TABLE_NAME, {
+        ...base,
+        ackStatus: 'NOT_RESPONDING',
+        eta: null,
+      });
+
+      expect(reused).toEqual({ outcome: 'answer-id-conflict' });
+      expect((await rosterOf(dispatchId, 'MBR-0023'))?.ackStatus).toBe('RESPONDING');
+      expect(await recordsOf(dispatchId, 'MBR-0023')).toHaveLength(1);
+    });
   });
 });

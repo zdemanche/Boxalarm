@@ -1,4 +1,5 @@
 import type { StatusRole } from '@boxalarm/design-tokens';
+import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Link, useParams } from 'react-router-dom';
 import { useAuth } from '../../auth/AuthContext';
@@ -9,6 +10,7 @@ import { getApparatus } from './api';
 import { InventoryTab } from './InventoryTab';
 import { MaintenanceTab } from './MaintenanceTab';
 import { ScbaTab } from './ScbaTab';
+import { ResolveDefectControl, resolveWarningFor } from './ResolveDefectControl';
 import { ServiceStatusControls } from './ServiceStatusControls';
 import { TestingTab } from './TestingTab';
 import type { OpenDefectSummary } from './types';
@@ -40,8 +42,12 @@ export function defectPhotoSrc(defect: OpenDefectSummary): string | null {
 }
 
 export function ApparatusDetailPage() {
+  // The route param is the display unitId: the backend resolves GET /apparatus/{unitId} by
+  // unitId (apparatus-service getApparatus.ts -> getApparatusByUnitId), not by apparatusId.
   const { id = '' } = useParams();
   const auth = useAuth();
+  // Survives the resolved defect leaving the list: resolving never returns the unit to service.
+  const [resolveWarning, setResolveWarning] = useState<string | null>(null);
 
   const detailQuery = useQuery({
     queryKey: ['apparatus', id],
@@ -49,10 +55,11 @@ export function ApparatusDetailPage() {
     enabled: Boolean(id),
   });
 
+  const apparatusId = detailQuery.data?.apparatusId ?? '';
   const equipmentQuery = useQuery({
-    queryKey: ['inventory', 'equipment', 'byApparatus', id],
-    queryFn: () => listEquipment(auth, { assignedToType: 'APPARATUS', assignedToId: id }),
-    enabled: Boolean(id),
+    queryKey: ['inventory', 'equipment', 'byApparatus', apparatusId],
+    queryFn: () => listEquipment(auth, { assignedToType: 'APPARATUS', assignedToId: apparatusId }),
+    enabled: Boolean(apparatusId),
   });
 
   if (detailQuery.error) {
@@ -108,6 +115,7 @@ export function ApparatusDetailPage() {
           <ServiceStatusControls unit={unit} />
 
           <Card title="Open defects">
+            {resolveWarning ? <p role="status">{resolveWarning}</p> : null}
             {unit.openDefects.length === 0 ? (
               <p>No open defects.</p>
             ) : (
@@ -167,6 +175,16 @@ export function ApparatusDetailPage() {
                             No photo.
                           </p>
                         )}
+                        <div style={{ marginTop: 'var(--bx-space-sm)' }}>
+                          <ResolveDefectControl
+                            unitId={unit.unitId}
+                            defectId={defect.defectId}
+                            description={defect.description}
+                            onResolved={(result) =>
+                              setResolveWarning(resolveWarningFor(unit.unitId, result))
+                            }
+                          />
+                        </div>
                       </div>
                     </li>
                   );
@@ -184,9 +202,11 @@ export function ApparatusDetailPage() {
                 content: <MaintenanceTab apparatusId={unit.apparatusId} />,
               },
               {
+                // POST /{unitId}/scba resolves the unit by unitId; the due-soon feed carries the
+                // resolved apparatusId, so the tab needs both.
                 value: 'scba',
                 label: 'SCBA',
-                content: <ScbaTab apparatusId={unit.apparatusId} />,
+                content: <ScbaTab unitId={unit.unitId} apparatusId={unit.apparatusId} />,
               },
               {
                 // Testing schedules are the one sub-resource the backend resolves and returns by

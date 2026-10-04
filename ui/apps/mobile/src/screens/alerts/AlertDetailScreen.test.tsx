@@ -1,13 +1,14 @@
-import { touchTarget } from '@boxalarm/design-tokens';
 import { act, fireEvent, render } from '@testing-library/react-native';
-import { AccessibilityInfo } from 'react-native';
+import notifee from '@notifee/react-native';
+import { AccessibilityInfo, AppState, NativeModules, Platform } from 'react-native';
 import { mockAlertsRepository } from '../../features/alerts/mockAlertsRepository';
 import { AlertDetailScreen } from './AlertDetailScreen';
 
 const mockNavigate = jest.fn();
-const mockRouteParams: { dispatchId: string } = { dispatchId: '' };
+const mockRouteParams: { dispatchId: string; payload?: unknown } = { dispatchId: '' };
 
 jest.mock('@react-navigation/native', () => ({
+  ...jest.requireActual('@react-navigation/native'),
   useNavigation: () => ({ navigate: mockNavigate }),
   useRoute: () => ({ params: mockRouteParams }),
 }));
@@ -19,39 +20,172 @@ beforeEach(async () => {
   const result = await mockAlertsRepository.triggerSelfTest();
   dispatchId = result.dispatchId;
   mockRouteParams.dispatchId = dispatchId;
+  delete mockRouteParams.payload;
+});
+
+afterEach(() => {
+  jest.restoreAllMocks();
+});
+
+const PAGE = {
+  dispatchId: 'DISP-PAGE',
+  incidentType: 'Structure fire',
+  address: '21 Main St',
+  crossStreets: 'Elm / Oak',
+  receivedAt: Date.now(),
+};
+
+test('paints the address and live response buttons from the page payload while the fetch is still pending', async () => {
+  jest.spyOn(mockAlertsRepository, 'getDispatch').mockImplementation(() => new Promise(() => {}));
+  mockRouteParams.dispatchId = PAGE.dispatchId;
+  mockRouteParams.payload = PAGE;
+
+  const { findByText, findByRole } = await render(<AlertDetailScreen />);
+
+  expect(await findByText('21 Main St')).toBeTruthy();
+  expect(await findByText('STRUCTURE FIRE')).toBeTruthy();
+  expect(await findByRole('button', { name: /^Not responding/ })).toBeTruthy();
+});
+
+test('a failed fetch is a named, retryable state that keeps the page address - never a blank screen', async () => {
+  const getDispatch = jest
+    .spyOn(mockAlertsRepository, 'getDispatch')
+    .mockRejectedValueOnce(new TypeError('Network request failed'));
+  jest.spyOn(console, 'warn').mockImplementation(() => {});
+  mockRouteParams.dispatchId = PAGE.dispatchId;
+  mockRouteParams.payload = PAGE;
+
+  const { findByText, findByRole } = await render(<AlertDetailScreen />);
+
+  expect(await findByText(/the address above came with the page and is correct/i)).toBeTruthy();
+  expect(await findByText('21 Main St')).toBeTruthy();
+
+  getDispatch.mockResolvedValueOnce({
+    dispatchId: PAGE.dispatchId,
+    incidentType: 'Structure fire',
+    address: '21 Main St',
+    crossStreets: 'Elm / Oak',
+    mapLink: null,
+    narrative: 'Smoke showing from the second floor',
+    isSelfTest: false,
+  });
+  await act(async () => {
+    fireEvent.press(await findByRole('button', { name: 'Retry loading the call details' }));
+  });
+
+  expect(await findByText('Smoke showing from the second floor')).toBeTruthy();
+});
+
+test('with no payload and a failed fetch the screen still names the call and keeps the buttons live', async () => {
+  jest.spyOn(mockAlertsRepository, 'getDispatch').mockRejectedValue(new Error('boom'));
+  jest.spyOn(console, 'warn').mockImplementation(() => {});
+  mockRouteParams.dispatchId = 'DISP-UNKNOWN';
+
+  const { findByText, findByRole } = await render(<AlertDetailScreen />);
+
+  expect(await findByText('DISPATCH DISP-UNKNOWN')).toBeTruthy();
+  expect(await findByText(/your response buttons still work/i)).toBeTruthy();
+  expect(await findByRole('button', { name: /^Responding — / })).toBeTruthy();
 });
 
 test('shows the dispatch details and the tone ladder panel', async () => {
   const { findByText } = await render(<AlertDetailScreen />);
 
-  expect(await findByText('Self-test')).toBeTruthy();
+  expect(await findByText('SELF-TEST')).toBeTruthy();
   expect(await findByText(/awaiting your response/i)).toBeTruthy();
 });
 
-test('confirming Responding with an ETA records the response and shows it back', async () => {
-  const { findByRole, findByText, findByPlaceholderText } = await render(<AlertDetailScreen />);
+const RESPONDING = /^Responding — you're going to the station/;
+const DIRECT = /^Responding direct to scene/;
+const NOT_RESPONDING = /^Not responding/;
+
+test('one tap on Responding records it at once with no invented ETA - "ETA ?" - no keyboard, no second screen', async () => {
+  const { findByRole, findByText, findAllByRole } = await render(<AlertDetailScreen />);
 
   await act(async () => {
-    fireEvent.press(await findByRole('button', { name: 'Responding' }));
-  });
-  await act(async () => {
-    fireEvent.changeText(await findByPlaceholderText('ETA in minutes'), '15');
-  });
-  await act(async () => {
-    fireEvent.press(await findByRole('button', { name: 'Confirm' }));
+    fireEvent.press(await findByRole('button', { name: RESPONDING }));
   });
 
-  expect(await findByText(/you responded: responding/i)).toBeTruthy();
+  expect(await findByText(/your response: responding · eta \?/i)).toBeTruthy();
+  const chips = await findAllByRole('radio');
+  chips.forEach((chip) => expect(chip.props.accessibilityState.selected).toBe(false));
 });
 
-test('tapping Not responding submits immediately without an ETA step', async () => {
+test('an ETA chip changes the ETA in one tap', async () => {
   const { findByRole, findByText } = await render(<AlertDetailScreen />);
 
   await act(async () => {
-    fireEvent.press(await findByRole('button', { name: 'Not responding' }));
+    fireEvent.press(await findByRole('button', { name: DIRECT }));
+  });
+  await act(async () => {
+    fireEvent.press(await findByRole('radio', { name: 'ETA 5 minutes' }));
   });
 
-  expect(await findByText(/you responded: not responding/i)).toBeTruthy();
+  expect(await findByText(/your response: direct to scene · eta 5 min/i)).toBeTruthy();
+  expect(await findByRole('radio', { name: 'ETA 5 minutes', selected: true })).toBeTruthy();
+});
+
+test('the ETA chips are 5 / 10 / 15 / 20+ / At station and alert-path sized', async () => {
+  const { findByRole, findAllByRole } = await render(<AlertDetailScreen />);
+
+  await act(async () => {
+    fireEvent.press(await findByRole('button', { name: RESPONDING }));
+  });
+  const chips = await findAllByRole('radio');
+
+  expect(chips.map((chip) => chip.props.accessibilityLabel)).toEqual([
+    'ETA 5 minutes',
+    'ETA 10 minutes',
+    'ETA 15 minutes',
+    'ETA 20 minutes or more',
+    'Already at the station',
+  ]);
+  chips.forEach((chip) => expect(chip.props.style.minHeight).toBeGreaterThanOrEqual(72));
+});
+
+test('tapping Not responding records it immediately, with no ETA', async () => {
+  const { findByRole, findByText, queryAllByRole } = await render(<AlertDetailScreen />);
+
+  await act(async () => {
+    fireEvent.press(await findByRole('button', { name: NOT_RESPONDING }));
+  });
+
+  expect(await findByText(/your response: not responding/i)).toBeTruthy();
+  expect(queryAllByRole('radio')).toHaveLength(0);
+});
+
+test('20+ and At station are expressible', async () => {
+  const { findByRole, findByText } = await render(<AlertDetailScreen />);
+
+  await act(async () => {
+    fireEvent.press(await findByRole('button', { name: RESPONDING }));
+  });
+  await act(async () => {
+    fireEvent.press(await findByRole('radio', { name: 'ETA 20 minutes or more' }));
+  });
+  expect(await findByText(/eta 20\+ min/i)).toBeTruthy();
+
+  await act(async () => {
+    fireEvent.press(await findByRole('radio', { name: 'Already at the station' }));
+  });
+  expect(await findByText(/your response: responding · at station/i)).toBeTruthy();
+});
+
+test('the answer can be changed, and the selected answer is exposed to screen readers', async () => {
+  const { findByRole, findByText } = await render(<AlertDetailScreen />);
+
+  await act(async () => {
+    fireEvent.press(await findByRole('button', { name: NOT_RESPONDING }));
+  });
+  await act(async () => {
+    fireEvent.press(await findByRole('button', { name: RESPONDING }));
+  });
+
+  expect(await findByText(/your response: responding/i)).toBeTruthy();
+  const chosen = await findByRole('button', { name: RESPONDING, selected: true });
+  // No server behind the fixture repository: the answer is never reported as sent (review m10).
+  expect(chosen.props.accessibilityLabel).toMatch(/your answer, not sent, no server connected/i);
+  expect(await findByRole('button', { name: NOT_RESPONDING, selected: false })).toBeTruthy();
 });
 
 test('announces the recorded response for screen reader users', async () => {
@@ -59,38 +193,81 @@ test('announces the recorded response for screen reader users', async () => {
   const { findByRole } = await render(<AlertDetailScreen />);
 
   await act(async () => {
-    fireEvent.press(await findByRole('button', { name: 'Not responding' }));
+    fireEvent.press(await findByRole('button', { name: NOT_RESPONDING }));
   });
 
   expect(announceSpy).toHaveBeenCalledWith(expect.stringMatching(/not responding/i));
   announceSpy.mockRestore();
 });
 
-test('Confirm shares the oversized touch target with Responding/Not responding (glove/moving-vehicle context)', async () => {
-  const { findByRole } = await render(<AlertDetailScreen />);
+test('layout per a11y-spec N1: stacked answers - Responding 88 tall, the others 72 - above the narrative', async () => {
+  const { findByRole, findByText } = await render(<AlertDetailScreen />);
 
-  await act(async () => {
-    fireEvent.press(await findByRole('button', { name: 'Responding' }));
-  });
-  const confirmButton = await findByRole('button', { name: 'Confirm' });
+  const responding = await findByRole('button', { name: RESPONDING });
+  const direct = await findByRole('button', { name: DIRECT });
+  const notResponding = await findByRole('button', { name: NOT_RESPONDING });
+  expect(responding.props.style.minHeight).toBe(88);
+  expect(direct.props.style.minHeight).toBe(72);
+  expect(notResponding.props.style.minHeight).toBe(72);
+  expect(responding.props.style.width).toBe('100%');
 
-  expect(confirmButton.props.style.minHeight).toBe(touchTarget.oversized.ios);
+  // Tree order is reading order: the answers come before the narrative.
+  const narrative = await findByText(/self-test alert/i);
+  const order = (node: { parent: unknown }) => {
+    const path: number[] = [];
+    let current = node as { parent: { children: unknown[] } | null };
+    while (current.parent) {
+      path.unshift(current.parent.children.indexOf(current));
+      current = current.parent as unknown as { parent: { children: unknown[] } | null };
+    }
+    return path;
+  };
+  const before = (a: number[], b: number[]) => {
+    for (let i = 0; i < Math.min(a.length, b.length); i += 1) {
+      if (a[i] !== b[i]) return a[i]! < b[i]!;
+    }
+    return a.length < b.length;
+  };
+  expect(before(order(notResponding as never), order(narrative as never))).toBe(true);
 });
 
-test('tapping Direct to scene is distinct in text from Responding', async () => {
-  const { findByRole, findByText, findByPlaceholderText } = await render(<AlertDetailScreen />);
+test('the address is 32 pt, and a VERIFY ADDRESS pre-plan match is raised directly under it', async () => {
+  jest.spyOn(mockAlertsRepository, 'getDispatch').mockResolvedValue({
+    dispatchId: PAGE.dispatchId,
+    incidentType: 'Structure fire',
+    address: '21 Main St',
+    crossStreets: '',
+    mapLink: null,
+    narrative: '',
+    isSelfTest: false,
+    prePlan: {
+      matchType: 'NEARBY',
+      matchedAddress: '23 Main St',
+      distanceMeters: 40,
+      hazards: [],
+      utilityShutoffs: [],
+      nearestHydrants: [],
+    },
+  });
+  mockRouteParams.dispatchId = PAGE.dispatchId;
+  mockRouteParams.payload = PAGE;
 
+  const { findByText, findAllByText } = await render(<AlertDetailScreen />);
+
+  expect((await findByText('21 Main St')).props.style.fontSize).toBe(32);
+  const notices = await findAllByText(/VERIFY ADDRESS: nearby pre-plan for 23 Main St/);
+  expect(notices.length).toBeGreaterThanOrEqual(1);
+});
+
+test('the voice-over rotor answers without finding the button (accessibilityActions)', async () => {
+  const { findByLabelText, findByText } = await render(<AlertDetailScreen />);
+
+  const root = await findByLabelText('Incoming call');
   await act(async () => {
-    fireEvent.press(await findByRole('button', { name: 'Direct to scene' }));
-  });
-  await act(async () => {
-    fireEvent.changeText(await findByPlaceholderText('ETA in minutes'), '5');
-  });
-  await act(async () => {
-    fireEvent.press(await findByRole('button', { name: 'Confirm' }));
+    root.props.onAccessibilityAction({ nativeEvent: { actionName: 'notResponding' } });
   });
 
-  expect(await findByText(/you responded: direct to scene/i)).toBeTruthy();
+  expect(await findByText(/your response: not responding/i)).toBeTruthy();
 });
 
 test('viewing the roster navigates with the dispatch id', async () => {
@@ -98,4 +275,211 @@ test('viewing the roster navigates with the dispatch id', async () => {
 
   fireEvent.press(await findByRole('button', { name: 'View roster' }));
   expect(mockNavigate).toHaveBeenCalledWith('Roster', { dispatchId });
+});
+
+test('the same screen re-rendered for a second call shows the second call - never the first call’s address (review CR-1)', async () => {
+  const pageA = { ...PAGE, dispatchId: 'DISP-A', address: '1 First St', incidentType: 'MVA' };
+  const pageB = { ...PAGE, dispatchId: 'DISP-B', address: '2 Second Ave', incidentType: 'Alarm' };
+  jest.spyOn(console, 'warn').mockImplementation(() => {});
+  const getDispatch = jest.spyOn(mockAlertsRepository, 'getDispatch').mockResolvedValueOnce({
+    dispatchId: 'DISP-A',
+    incidentType: 'MVA',
+    address: '1 First St',
+    crossStreets: '',
+    mapLink: 'https://maps.example/a',
+    narrative: 'Call A narrative',
+    isSelfTest: false,
+  });
+  mockRouteParams.dispatchId = 'DISP-A';
+  mockRouteParams.payload = pageA;
+  const view = await render(<AlertDetailScreen />);
+  expect(await view.findByText('Call A narrative')).toBeTruthy();
+
+  // Call B arrives while offline: same instance, new params, fetch fails.
+  getDispatch.mockRejectedValueOnce(new TypeError('Network request failed'));
+  mockRouteParams.dispatchId = 'DISP-B';
+  mockRouteParams.payload = pageB;
+  await act(async () => {
+    view.rerender(<AlertDetailScreen />);
+  });
+
+  expect(await view.findByText('2 Second Ave')).toBeTruthy();
+  expect(view.queryByText('1 First St')).toBeNull();
+  expect(view.queryByText('Call A narrative')).toBeNull();
+  expect(view.queryByRole('button', { name: 'Open the address in maps' })).toBeNull();
+  expect(
+    await view.findByText(/the address above came with the page and is correct/i),
+  ).toBeTruthy();
+});
+
+test('a detail answered for another dispatch is ignored, not shown', async () => {
+  jest.spyOn(console, 'error').mockImplementation(() => {});
+  jest.spyOn(mockAlertsRepository, 'getDispatch').mockResolvedValue({
+    dispatchId: 'SOMETHING-ELSE',
+    incidentType: 'MVA',
+    address: '9 Wrong Rd',
+    crossStreets: '',
+    mapLink: null,
+    narrative: '',
+    isSelfTest: false,
+  });
+  mockRouteParams.dispatchId = PAGE.dispatchId;
+  mockRouteParams.payload = PAGE;
+
+  const { findByText, queryByText } = await render(<AlertDetailScreen />);
+
+  expect(await findByText('21 Main St')).toBeTruthy();
+  expect(queryByText('9 Wrong Rd')).toBeNull();
+});
+
+describe('alarm silencing and lock screen (review CR-2)', () => {
+  const nativeModules = NativeModules as { BoxalarmAlertReadiness?: unknown };
+  let locked: boolean;
+  let setShowWhenLocked: jest.Mock;
+
+  beforeEach(() => {
+    Platform.OS = 'android';
+    locked = true;
+    setShowWhenLocked = jest.fn();
+    nativeModules.BoxalarmAlertReadiness = {
+      isKeyguardLocked: jest.fn(async () => locked),
+      setShowWhenLocked,
+    };
+    (notifee.cancelDisplayedNotification as jest.Mock).mockClear();
+  });
+
+  afterEach(() => {
+    delete nativeModules.BoxalarmAlertReadiness;
+    Platform.OS = 'ios';
+  });
+
+  test('on a locked phone, opening the alert keeps it ringing and over the lock screen until the member acts', async () => {
+    const view = await render(<AlertDetailScreen />);
+    await view.findByRole('button', { name: RESPONDING });
+    await act(async () => {});
+
+    expect(notifee.cancelDisplayedNotification).not.toHaveBeenCalled();
+    expect(setShowWhenLocked).toHaveBeenCalledWith(true);
+    expect(setShowWhenLocked).not.toHaveBeenCalledWith(false);
+
+    await act(async () => {
+      fireEvent.press(await view.findByRole('button', { name: RESPONDING }));
+    });
+    expect(notifee.cancelDisplayedNotification).toHaveBeenCalledWith(`dispatch:${dispatchId}`);
+  });
+
+  test('unmounting the alert screen does not clear show-over-lock-screen (navigation state owns that)', async () => {
+    const view = await render(<AlertDetailScreen />);
+    await view.findByRole('button', { name: RESPONDING });
+    view.unmount();
+
+    expect(setShowWhenLocked).not.toHaveBeenCalledWith(false);
+  });
+
+  test('on an unlocked phone in use, opening the alert silences it', async () => {
+    locked = false;
+    const appState = AppState as unknown as { currentState: unknown };
+    const original = appState.currentState;
+    appState.currentState = 'active';
+    const view = await render(<AlertDetailScreen />);
+    await view.findByRole('button', { name: RESPONDING });
+    await act(async () => {});
+    appState.currentState = original;
+
+    expect(notifee.cancelDisplayedNotification).toHaveBeenCalledWith(`dispatch:${dispatchId}`);
+  });
+
+  test('Silence stops the alarm without answering', async () => {
+    const view = await render(<AlertDetailScreen />);
+    await act(async () => {
+      fireEvent.press(
+        await view.findByRole('button', { name: 'Silence the alarm without answering' }),
+      );
+    });
+
+    expect(notifee.cancelDisplayedNotification).toHaveBeenCalledWith(`dispatch:${dispatchId}`);
+    expect(view.queryByText(/your response:/i)).toBeNull();
+  });
+});
+
+describe('dispatch time (review MJ-2)', () => {
+  test('a payload-only time is labelled "received", not shown as the dispatch time', async () => {
+    jest.spyOn(mockAlertsRepository, 'getDispatch').mockImplementation(() => new Promise(() => {}));
+    mockRouteParams.dispatchId = PAGE.dispatchId;
+    mockRouteParams.payload = { ...PAGE, receivedAt: new Date(2026, 0, 1, 2, 10).getTime() };
+
+    const { findByText } = await render(<AlertDetailScreen />);
+
+    expect(await findByText(/^RECEIVED 02:10 · /)).toBeTruthy();
+  });
+
+  test("the server's dispatch time wins over this phone's receipt time", async () => {
+    jest.spyOn(mockAlertsRepository, 'getDispatch').mockResolvedValue({
+      dispatchId: PAGE.dispatchId,
+      incidentType: 'Structure fire',
+      address: '21 Main St',
+      crossStreets: '',
+      mapLink: null,
+      narrative: '',
+      isSelfTest: false,
+      dispatchedAt: Math.floor(new Date(2026, 0, 1, 1, 5).getTime() / 1000),
+    });
+    mockRouteParams.dispatchId = PAGE.dispatchId;
+    mockRouteParams.payload = { ...PAGE, receivedAt: new Date(2026, 0, 1, 2, 10).getTime() };
+
+    const { findByText } = await render(<AlertDetailScreen />);
+
+    expect(await findByText(/^DISPATCHED 01:05 · /)).toBeTruthy();
+  });
+});
+
+test('without a server (fixture repository) an answer reads "Not sent - no server", never "Sent" (review m10)', async () => {
+  const { findByRole, findByText, queryByText } = await render(<AlertDetailScreen />);
+
+  await act(async () => {
+    fireEvent.press(await findByRole('button', { name: NOT_RESPONDING }));
+  });
+
+  expect(await findByText('Not sent - no server')).toBeTruthy();
+  expect(queryByText('Sent')).toBeNull();
+});
+
+test('lists the CAD updates to the call under their own header', async () => {
+  jest.spyOn(mockAlertsRepository, 'getDispatch').mockResolvedValue({
+    dispatchId: PAGE.dispatchId,
+    incidentType: 'Structure fire',
+    address: '21 Main St',
+    crossStreets: 'Elm / Oak',
+    mapLink: null,
+    narrative: 'Smoke showing',
+    isSelfTest: false,
+    updates: [{ updateId: 'u1', receivedAt: 1_800_000_180, summary: 'Units: E1, L2, R1' }],
+  });
+  mockRouteParams.dispatchId = PAGE.dispatchId;
+  mockRouteParams.payload = PAGE;
+
+  const { findByRole, findByText } = await render(<AlertDetailScreen />);
+
+  expect(await findByRole('header', { name: 'CAD updates' })).toBeTruthy();
+  expect(await findByText(/Units: E1, L2, R1/)).toBeTruthy();
+});
+
+test('a RAW (VERIFY) CAD dispatch shows the VERIFY banner and expands on the dispatch text', async () => {
+  jest.spyOn(mockAlertsRepository, 'getDispatch').mockResolvedValue({
+    dispatchId: PAGE.dispatchId,
+    incidentType: 'CAD DISPATCH - VERIFY',
+    address: 'SEE DISPATCH TEXT',
+    crossStreets: '',
+    mapLink: null,
+    narrative: 'SMOKE AT THE OLD MILL',
+    isSelfTest: false,
+    verifyRequired: true,
+  });
+  mockRouteParams.dispatchId = PAGE.dispatchId;
+  mockRouteParams.payload = PAGE;
+
+  const { findByText } = await render(<AlertDetailScreen />);
+
+  expect(await findByText(/the CAD message could not be read automatically/)).toBeTruthy();
+  expect(await findByText('SMOKE AT THE OLD MILL')).toBeTruthy();
 });

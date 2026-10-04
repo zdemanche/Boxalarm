@@ -1,11 +1,14 @@
-import { palette, spacing, touchTarget, typography } from '@boxalarm/design-tokens';
+import { spacing, targetSize, typeScale, type StatusRole } from '@boxalarm/design-tokens';
 import { useNavigation, type NavigationProp } from '@react-navigation/native';
 import { useEffect, useState } from 'react';
-import { FlatList, Text, TouchableOpacity, useColorScheme } from 'react-native';
+import { ActivityIndicator, FlatList, Text, TouchableOpacity, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { Button, StatusChip, useTheme } from '../../components/ui';
 import { useScheduleRepository } from '../../features/schedule/apiScheduleRepository';
 import type { DutyShift, ShiftStatus } from '../../features/schedule/types';
+import { ApiError } from '../../lib/apiClient';
 import type { ScheduleStackParamList } from '../../navigation/ScheduleStack';
+import { formatAsOf, NoCachedDataError } from '../../sync/readThrough';
 
 const STATUS_LABEL: Record<ShiftStatus, string> = {
   OPEN: 'Open',
@@ -14,83 +17,147 @@ const STATUS_LABEL: Record<ShiftStatus, string> = {
   CANCELLED: 'Cancelled',
 };
 
-function formatShiftTime(startAt: string): string {
-  return new Date(startAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+const STATUS_ROLE: Record<ShiftStatus, StatusRole> = {
+  OPEN: 'warning',
+  PARTIALLY_FILLED: 'warning',
+  FULL: 'ok',
+  CANCELLED: 'neutral',
+};
+
+/** "Sat, Sep 20 · 18:00–06:00": the day and the window, not just the date. */
+export function formatShiftWindow(startAt: number, endAt: number): string {
+  const day = new Date(startAt).toLocaleDateString(undefined, {
+    weekday: 'short',
+    month: 'short',
+    day: 'numeric',
+  });
+  const time = (ms: number) =>
+    new Date(ms).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+  return `${day} · ${time(startAt)}–${time(endAt)}`;
+}
+
+type LoadState =
+  | { kind: 'loading' }
+  | { kind: 'loaded'; shifts: DutyShift[]; cachedAt: number | null }
+  | { kind: 'error'; message: string };
+
+function describeLoadError(error: unknown): string {
+  if (error instanceof NoCachedDataError) {
+    return "You're offline, and this phone hasn't loaded the shift list yet. Connect once to download it.";
+  }
+  if (error instanceof ApiError && error.problem.status === 403) {
+    return 'You do not have access to shifts. Contact your department administrator.';
+  }
+  return 'Shifts could not be loaded. Check your connection and try again.';
 }
 
 export function ShiftBoardScreen() {
   const navigation = useNavigation<NavigationProp<ScheduleStackParamList>>();
-  const scheme = useColorScheme();
-  const tokens = scheme === 'dark' ? palette.cab : palette.day;
+  const theme = useTheme();
   const repository = useScheduleRepository();
-  const [shifts, setShifts] = useState<DutyShift[]>([]);
+  const [state, setState] = useState<LoadState>({ kind: 'loading' });
+  const [attempt, setAttempt] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
-    repository.getShifts().then((result) => {
-      if (!cancelled) setShifts(result);
-    });
+    setState({ kind: 'loading' });
+    repository
+      .getShifts()
+      .then((shifts) => {
+        if (cancelled) return;
+        setState({ kind: 'loaded', shifts, cachedAt: repository.shiftsCachedAt?.() ?? null });
+      })
+      .catch((error: unknown) => {
+        if (!cancelled) setState({ kind: 'error', message: describeLoadError(error) });
+      });
     return () => {
       cancelled = true;
     };
-  }, [repository]);
+  }, [repository, attempt]);
+
+  const header = (
+    <View style={{ gap: spacing.md, paddingBottom: spacing.md }}>
+      <Button label="Mark unavailable" onPress={() => navigation.navigate('Availability')} />
+      <Button
+        label="Training events"
+        variant="secondary"
+        onPress={() => navigation.navigate('TrainingEvents')}
+      />
+      {state.kind === 'loaded' && state.cachedAt !== null ? (
+        <Text
+          style={{ color: theme.status.warning, fontSize: typeScale.body.size, fontWeight: '600' }}
+        >
+          Offline. Showing shifts saved on this phone as of {formatAsOf(state.cachedAt)}. Claiming
+          needs a connection.
+        </Text>
+      ) : null}
+    </View>
+  );
+
+  if (state.kind !== 'loaded') {
+    return (
+      <SafeAreaView style={{ flex: 1, backgroundColor: theme.bg }}>
+        <View style={{ padding: spacing.lg, gap: spacing.md }}>
+          {header}
+          {state.kind === 'loading' ? (
+            <View
+              accessibilityRole="progressbar"
+              accessibilityLabel="Loading shifts"
+              style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.sm }}
+            >
+              <ActivityIndicator color={theme.fg} />
+              <Text style={{ color: theme.fg, fontSize: typeScale.body.size }}>
+                Loading shifts…
+              </Text>
+            </View>
+          ) : (
+            <>
+              <Text
+                accessibilityRole="alert"
+                style={{ color: theme.status.danger, fontSize: typeScale.body.size }}
+              >
+                {state.message}
+              </Text>
+              <Button label="Try again" onPress={() => setAttempt((n) => n + 1)} />
+            </>
+          )}
+        </View>
+      </SafeAreaView>
+    );
+  }
 
   return (
-    <SafeAreaView style={{ flex: 1, backgroundColor: tokens.background }}>
+    <SafeAreaView style={{ flex: 1, backgroundColor: theme.bg }}>
       <FlatList
-        data={shifts}
+        data={state.shifts}
         keyExtractor={(item) => item.shiftId}
         contentContainerStyle={{ padding: spacing.lg }}
-        ListHeaderComponent={
-          <TouchableOpacity
-            accessibilityRole="button"
-            onPress={() => navigation.navigate('TrainingEvents' as never)}
-            style={{
-              minHeight: touchTarget.baseline.ios,
-              justifyContent: 'center',
-              paddingBottom: spacing.md,
-            }}
-          >
-            <Text
-              style={{ color: tokens.accent, fontSize: typography.size.base, fontWeight: '600' }}
-            >
-              Training events
-            </Text>
-          </TouchableOpacity>
+        ListHeaderComponent={header}
+        ListEmptyComponent={
+          <Text style={{ color: theme.fg, fontSize: typeScale.body.size }}>
+            No open shifts right now. Officers post shifts as they&apos;re scheduled.
+          </Text>
         }
         renderItem={({ item }) => (
           <TouchableOpacity
             accessibilityRole="button"
             onPress={() => navigation.navigate('ShiftDetail', { shiftId: item.shiftId })}
             style={{
-              minHeight: touchTarget.baseline.ios,
+              minHeight: targetSize.field,
               justifyContent: 'center',
+              gap: spacing.xs,
               paddingVertical: spacing.md,
               borderBottomWidth: 1,
-              borderBottomColor: tokens.foreground + '22',
+              borderBottomColor: theme.borderDecorative,
             }}
           >
-            <Text
-              style={{
-                color: tokens.foreground,
-                fontSize: typography.size.base,
-                fontWeight: '600',
-              }}
-            >
+            <Text style={{ color: theme.fg, fontSize: typeScale.heading.size, fontWeight: '600' }}>
               {item.stationId}
             </Text>
-            <Text style={{ color: tokens.foreground, opacity: 0.7, fontSize: typography.size.sm }}>
-              {formatShiftTime(item.startAt)}
+            <Text style={{ color: theme.fgMuted, fontSize: typeScale.body.size }}>
+              {formatShiftWindow(item.startAt, item.endAt)}
             </Text>
-            <Text
-              style={{
-                color: item.status === 'FULL' ? tokens.success : tokens.accent,
-                fontSize: typography.size.sm,
-                marginTop: 2,
-              }}
-            >
-              {STATUS_LABEL[item.status]}
-            </Text>
+            <StatusChip status={STATUS_ROLE[item.status]} label={STATUS_LABEL[item.status]} />
           </TouchableOpacity>
         )}
       />

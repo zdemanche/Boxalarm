@@ -1,4 +1,5 @@
 import { apiRequest, type AuthTokenSource } from '../../lib/apiClient';
+import type { Role } from '../../auth/roles';
 import type {
   AttendanceActivityType,
   AttendanceRecord,
@@ -7,6 +8,7 @@ import type {
   Member,
   MemberStatus,
   Qualification,
+  UpdateRolesResult,
 } from './types';
 
 export async function listMembers(tokens: AuthTokenSource): Promise<Member[]> {
@@ -47,6 +49,40 @@ export async function updateMemberStatus(
     },
   );
   return (await response.json()) as Member;
+}
+
+/**
+ * Changes a member's email (CHIEF/ADMIN, UpdateMember). The server also moves their login's
+ * password-recovery address to it; their sign-in username does not change.
+ */
+export async function updateMemberEmail(
+  tokens: AuthTokenSource,
+  memberId: string,
+  email: string,
+): Promise<void> {
+  await apiRequest(`personnel/members/${encodeURIComponent(memberId)}`, tokens, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email }),
+  });
+}
+
+/** Sets the member's full role set (CHIEF/ADMIN only, never your own). */
+export async function updateMemberRoles(
+  tokens: AuthTokenSource,
+  memberId: string,
+  roles: Role[],
+): Promise<UpdateRolesResult> {
+  const response = await apiRequest(
+    `personnel/members/${encodeURIComponent(memberId)}/roles`,
+    tokens,
+    {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ roles }),
+    },
+  );
+  return (await response.json()) as UpdateRolesResult;
 }
 
 export async function getQuals(

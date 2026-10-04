@@ -4,6 +4,7 @@ import { ServiceLambda } from "../observability/service-lambda";
 import { ServiceLogGroup } from "../observability/service-log-group";
 import { HttpApi } from "../api/http-api";
 import { verifiedPermissionsPolicyStatement } from "../authz/policy-store";
+import { auditMutationDenyStatement } from "../data/platform-table";
 import { lambdaCode, LAMBDA_HANDLER } from "../shared/lambda-code";
 import { requireEnv } from "../shared/env";
 
@@ -16,6 +17,8 @@ export interface ShiftsArgs {
   policyStoreId: pulumi.Input<string>;
   logGroup: ServiceLogGroup;
   httpApi: HttpApi;
+  /** Ops alarm topic (chief-notifications): every alarm here notifies it, none is silent. */
+  opsAlarmTopicArn: pulumi.Input<string>;
 }
 
 /**
@@ -55,17 +58,21 @@ export class Shifts extends pulumi.ComponentResource {
           .all([args.platformTableArn, args.policyStoreArn])
           .apply(([tableArn, policyStoreArn]) => [
             {
+              // ConditionCheckItem: proposeShiftSwap's transaction opens with a
+              // ConditionCheck item (shiftSwap.ts), which IAM authorizes on its own action.
               Sid: "ShiftsTableAccess" as const,
               Effect: "Allow" as const,
               Action: [
                 "dynamodb:GetItem",
                 "dynamodb:PutItem",
                 "dynamodb:UpdateItem",
+                "dynamodb:ConditionCheckItem",
                 "dynamodb:Query",
               ],
               Resource: [tableArn, `${tableArn}/index/GSI3`],
             },
             verifiedPermissionsPolicyStatement(policyStoreArn),
+            auditMutationDenyStatement(tableArn),
           ]),
       },
       { parent: this },
@@ -84,7 +91,7 @@ export class Shifts extends pulumi.ComponentResource {
 
     // #213: hourly shift-completion sweep -> completionHandler.ts, writing
     // ATTENDANCE_RECORD + OUTBOX_ENTRY (personnel.attendance.recorded) via
-    // completeShiftAttendance.ts's TransactWriteItems.
+    // completeShiftAttendance.ts's transaction.
     this.completionLambda = new ServiceLambda(
       `${name}-completion`,
       {
@@ -103,11 +110,15 @@ export class Shifts extends pulumi.ComponentResource {
             Resource: [tableArn, `${tableArn}/index/GSI3`],
           },
           {
+            // completeShiftAttendance's transaction: Put items (attendance + outbox rows)
+            // plus an Update (shift METADATA), authorized item-by-item —
+            // dynamodb:TransactWriteItems is not an IAM action.
             Sid: "ShiftCompletionWrite" as const,
             Effect: "Allow" as const,
-            Action: ["dynamodb:TransactWriteItems"],
+            Action: ["dynamodb:PutItem", "dynamodb:UpdateItem"],
             Resource: [tableArn],
           },
+          auditMutationDenyStatement(tableArn),
         ]),
       },
       { parent: this },
@@ -131,6 +142,7 @@ export class Shifts extends pulumi.ComponentResource {
         evaluationPeriods: 1,
         threshold: 0,
         comparisonOperator: "GreaterThanThreshold",
+        alarmActions: [args.opsAlarmTopicArn],
       },
       { parent: this },
     );
@@ -147,6 +159,7 @@ export class Shifts extends pulumi.ComponentResource {
         evaluationPeriods: 1,
         threshold: 0,
         comparisonOperator: "GreaterThanThreshold",
+        alarmActions: [args.opsAlarmTopicArn],
       },
       { parent: this },
     );

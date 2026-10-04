@@ -1,74 +1,67 @@
 import * as pulumi from "@pulumi/pulumi";
-import * as aws from "@pulumi/aws";
 import { HttpApi } from "../api/http-api";
 import { ServiceLogGroup } from "../observability/service-log-group";
 import { IamPolicyStatement } from "../observability/observability-policy";
 import { requireEnv } from "../shared/env";
 import { lambdaCode, LAMBDA_HANDLER } from "../shared/lambda-code";
-import { AlertingRoute } from "./route-lambda";
-import { Escalation } from "./escalation";
+import { AlertingRoute, verifiedPermissionsStatement } from "./route-lambda";
+import { grantAlertingCmk } from "./alerting-cmk";
 
 export interface RoutesCoreArgs {
   env: string;
   httpApi: HttpApi;
   alertingTableArn: pulumi.Input<string>;
+  /** Alerting-table CMK — every role touching the table needs it (alerting-cmk.ts). */
+  alertingCmkArn: pulumi.Input<string>;
   alertingTableName: pulumi.Input<string>;
   logGroup: ServiceLogGroup;
-  escalation: Escalation;
   policyStoreId: pulumi.Input<string>;
   permissionsBoundaryArn?: pulumi.Input<string>;
-}
-
-function verifiedPermissionsStatement(): IamPolicyStatement {
-  return {
-    Sid: "VerifiedPermissionsIsAuthorized",
-    Effect: "Allow",
-    Action: ["verifiedpermissions:IsAuthorizedWithToken"],
-    Resource: "*",
-  };
+  /**
+   * JSON { towns, zips, state } — the department's home locality, the default the dispatch
+   * detail verifies pre-plan addresses against (prePlan/locality.ts). Overridable per
+   * department by the alerting-table item DEPT#{deptId}#CONFIG / HOME_LOCALITY.
+   */
+  homeLocality?: pulumi.Input<string>;
 }
 
 /**
  * Core alerting-service routes, each with its own reserved concurrency separate from
  * fan-out and the channel workers (E1-S1/S5/S6-INFRA): manual dispatch ingress
- * (degraded-mode fallback), response confirmation, live roster, and dispatch detail.
+ * (degraded-mode fallback), response confirmation, live roster, dispatch detail, and the
+ * active-dispatch list.
  */
 export class RoutesCore extends pulumi.ComponentResource {
   public readonly dispatchIngress: AlertingRoute;
   public readonly responses: AlertingRoute;
   public readonly roster: AlertingRoute;
   public readonly detail: AlertingRoute;
+  public readonly listActive: AlertingRoute;
+  public readonly homeLocality: AlertingRoute;
 
   constructor(name: string, args: RoutesCoreArgs, opts?: pulumi.ComponentResourceOptions) {
     requireEnv("RoutesCore", args.env);
     super("boxalarm:alerting:RoutesCore", name, {}, opts);
     const { env } = args;
 
-    const alertingTableStatements: pulumi.Input<IamPolicyStatement[]> =
-      args.escalation.scheduleResourcePattern.apply((schedulePattern) => [
-        {
-          Sid: "AlertingTableConditionalWrite",
-          Effect: "Allow" as const,
-          Action: [
-            "dynamodb:PutItem",
-            "dynamodb:ConditionCheckItem",
-            "dynamodb:TransactWriteItems",
-          ],
-          Resource: args.alertingTableArn as string,
-        },
-        {
-          Sid: "CreateEscalationSchedulesOnly",
-          Effect: "Allow" as const,
-          Action: ["scheduler:CreateSchedule"],
-          Resource: schedulePattern,
-        },
-        verifiedPermissionsStatement(),
-      ]);
-
     // src/services/alerting-service/dispatches/handler.handler — the manual/degraded-mode
-    // ingress route; it calls runFanOut synchronously (fanout/fanOut.ts), which schedules
-    // the tone-1 voice escalation and the tone-2/3 evaluator timers on the same scheduler
-    // role/group as the stream-driven fan-out path.
+    // ingress route. It writes the DISPATCH_ALERT transaction (idempotency lock, alert, bridge
+    // outbox row) and nothing else: the table stream's fan-out is the single tone-1 producer
+    // (design review C1). It holds no Query/GetItem/UpdateItem and no scheduler rights, so a
+    // reintroduced synchronous fan-out here fails loudly in AccessDenied instead of quietly
+    // pre-empting tone 1 again.
+    const ingressStatements: IamPolicyStatement[] = [
+      {
+        Sid: "AlertingTableDispatchWrite",
+        Effect: "Allow",
+        // createManualDispatch is one TransactWriteItems of conditional Puts; DynamoDB
+        // authorizes each transaction item as its own action.
+        Action: ["dynamodb:PutItem", "dynamodb:ConditionCheckItem", "dynamodb:TransactWriteItems"],
+        Resource: args.alertingTableArn as string,
+      },
+      verifiedPermissionsStatement(),
+    ];
+
     this.dispatchIngress = new AlertingRoute(
       `${name}-dispatch-ingress`,
       {
@@ -84,34 +77,13 @@ export class RoutesCore extends pulumi.ComponentResource {
           ALERTING_DISPATCHES_TABLE_NAME: args.alertingTableName,
           ALERTING_TABLE_NAME: args.alertingTableName,
           VERIFIED_PERMISSIONS_POLICY_STORE_ID: args.policyStoreId,
-          ESCALATION_HANDLER_ARN: args.escalation.lambda.function.arn,
-          ESCALATION_SCHEDULER_ROLE_ARN: args.escalation.schedulerRole.arn,
-          TONE_EVALUATOR_HANDLER_ARN: args.escalation.toneEvaluatorLambda.function.arn,
         },
-        additionalPolicyStatements: alertingTableStatements,
+        additionalPolicyStatements: ingressStatements,
         reservedConcurrentExecutions: 5,
+        // One Verified Permissions call and one transaction; well under the HTTP API's 30s
+        // integration ceiling.
+        timeout: 10,
         permissionsBoundaryArn: args.permissionsBoundaryArn,
-      },
-      { parent: this },
-    );
-
-    new aws.iam.RolePolicy(
-      `${name}-dispatch-ingress-pass-scheduler-role`,
-      {
-        role: this.dispatchIngress.lambda.role.id,
-        policy: args.escalation.schedulerRole.arn.apply((roleArn) =>
-          JSON.stringify({
-            Version: "2012-10-17",
-            Statement: [
-              {
-                Sid: "PassSchedulerRoleOnly",
-                Effect: "Allow",
-                Action: "iam:PassRole",
-                Resource: roleArn,
-              },
-            ],
-          }),
-        ),
       },
       { parent: this },
     );
@@ -198,19 +170,114 @@ export class RoutesCore extends pulumi.ComponentResource {
         environment: {
           ALERTING_TABLE_NAME: args.alertingTableName,
           VERIFIED_PERMISSIONS_POLICY_STORE_ID: args.policyStoreId,
+          ...(args.homeLocality !== undefined ? { ALERTING_HOME_LOCALITY: args.homeLocality } : {}),
         },
-        additionalPolicyStatements: [
+        additionalPolicyStatements: pulumi.output(args.alertingTableArn).apply((tableArn) => [
           {
             Sid: "AlertingTableReadOnly",
-            Effect: "Allow",
+            Effect: "Allow" as const,
             Action: ["dynamodb:GetItem", "dynamodb:Query"],
-            Resource: args.alertingTableArn as string,
+            Resource: tableArn,
+          },
+          {
+            // Pre-plan context (prePlan/prePlanCopyRepository.ts): PRE_PLAN_COPY by normalized
+            // address on GSI1, and PRE_PLAN_COPY / HYDRANT_COPY by geohash on GSI2. Read-only,
+            // alerting table only — the copies are projected here by alerting-owned consumers
+            // (pre-plan-copies.ts) so this route never touches a LOB table.
+            Sid: "AlertingCopyIndexQuery",
+            Effect: "Allow" as const,
+            Action: ["dynamodb:Query"],
+            Resource: [`${tableArn}/index/GSI1`, `${tableArn}/index/GSI2`],
           },
           verifiedPermissionsStatement(),
-        ],
+        ]),
         reservedConcurrentExecutions: 5,
         permissionsBoundaryArn: args.permissionsBoundaryArn,
       },
+      { parent: this },
+    );
+
+    // src/services/alerting-service/dispatches/list/handler.handler — dashboard active-call
+    // tile. Reads only GSI2 of the alerting table (architecture.md AP 7), never a Scan and never
+    // the base table, so the grant is Query on that one index.
+    this.listActive = new AlertingRoute(
+      `${name}-list-active`,
+      {
+        env,
+        httpApi: args.httpApi,
+        logGroup: args.logGroup,
+        serviceName: "alerting-service",
+        functionName: `boxalarm-${env}-alerting-dispatches-list-active`,
+        handler: LAMBDA_HANDLER,
+        code: lambdaCode("alerting-service", "dispatches-list-active"),
+        routeKey: "GET /api/v1/alerting/dispatches",
+        environment: {
+          ALERTING_TABLE_NAME: args.alertingTableName,
+          VERIFIED_PERMISSIONS_POLICY_STORE_ID: args.policyStoreId,
+        },
+        additionalPolicyStatements: pulumi.output(args.alertingTableArn).apply((tableArn) => [
+          {
+            Sid: "AlertingDispatchIndexQueryOnly",
+            Effect: "Allow" as const,
+            Action: ["dynamodb:Query"],
+            Resource: `${tableArn}/index/GSI2`,
+          },
+          verifiedPermissionsStatement(),
+        ]),
+        reservedConcurrentExecutions: 3,
+        permissionsBoundaryArn: args.permissionsBoundaryArn,
+      },
+      { parent: this },
+    );
+
+    // src/services/alerting-service/prePlan/homeLocalityHandler.handler — the department's home
+    // towns for the manual-entry form's required locality choice (round-3 R3-A). One GetItem on
+    // the department's CONFIG partition, nothing else.
+    this.homeLocality = new AlertingRoute(
+      `${name}-home-locality`,
+      {
+        env,
+        httpApi: args.httpApi,
+        logGroup: args.logGroup,
+        serviceName: "alerting-service",
+        functionName: `boxalarm-${env}-alerting-home-locality`,
+        handler: LAMBDA_HANDLER,
+        code: lambdaCode("alerting-service", "home-locality"),
+        routeKey: "GET /api/v1/alerting/home-locality",
+        environment: {
+          ALERTING_TABLE_NAME: args.alertingTableName,
+          VERIFIED_PERMISSIONS_POLICY_STORE_ID: args.policyStoreId,
+          ...(args.homeLocality !== undefined ? { ALERTING_HOME_LOCALITY: args.homeLocality } : {}),
+        },
+        additionalPolicyStatements: pulumi.output(args.alertingTableArn).apply((tableArn) => [
+          {
+            Sid: "HomeLocalityConfigRead",
+            Effect: "Allow" as const,
+            Action: ["dynamodb:GetItem"],
+            Resource: tableArn,
+            Condition: {
+              "ForAllValues:StringLike": { "dynamodb:LeadingKeys": ["DEPT#*#CONFIG"] },
+            },
+          },
+          verifiedPermissionsStatement(),
+        ]),
+        reservedConcurrentExecutions: 2,
+        permissionsBoundaryArn: args.permissionsBoundaryArn,
+      },
+      { parent: this },
+    );
+
+    grantAlertingCmk(
+      name,
+      {
+        homeLocality: this.homeLocality.lambda.role,
+        dispatchIngress: this.dispatchIngress.lambda.role,
+        responses: this.responses.lambda.role,
+        roster: this.roster.lambda.role,
+        detail: this.detail.lambda.role,
+        listActive: this.listActive.lambda.role,
+      },
+      args.alertingCmkArn,
       { parent: this },
     );
 
@@ -219,6 +286,8 @@ export class RoutesCore extends pulumi.ComponentResource {
       responses: this.responses,
       roster: this.roster,
       detail: this.detail,
+      listActive: this.listActive,
+      homeLocality: this.homeLocality,
     });
   }
 }
