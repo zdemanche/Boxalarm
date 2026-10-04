@@ -12,10 +12,15 @@ import {
 const TABLE = 'boxalarm-platform';
 const DEPT_ID = toVerifiedDeptId({ deptId: 'NICHOLS' });
 
-function fakeDocClient(send: (command: unknown) => unknown): DynamoDBDocumentClient {
+function fakeDocClient(handler: (command: unknown) => unknown): {
+  client: DynamoDBDocumentClient;
+  send: ReturnType<typeof vi.fn>;
+} {
+  const send = vi.fn((command: unknown) => Promise.resolve(handler(command)));
   return {
-    send: vi.fn((command: unknown) => Promise.resolve(send(command))),
-  } as unknown as DynamoDBDocumentClient;
+    client: { send } as unknown as DynamoDBDocumentClient,
+    send,
+  };
 }
 
 // Shaped exactly as Data Model §3.3 defines CONSUMABLE_STOCK: pk, sk, entityType,
@@ -48,7 +53,7 @@ function fakeGsi3QueryWithFilter(items: readonly Record<string, unknown>[]) {
 
 describe('listConsumables', () => {
   it('AC1: queries GSI3 by department, derives itemId/deptId from pk, and flags at/below-threshold items distinctly', async () => {
-    const client = fakeDocClient((command) => {
+    const { client } = fakeDocClient((command) => {
       const query = command as QueryCommand;
       expect(query).toBeInstanceOf(QueryCommand);
       expect(query.input.IndexName).toBe('GSI3');
@@ -71,7 +76,7 @@ describe('listConsumables', () => {
   });
 
   it('tolerates a missing stockLevel/reorderThreshold without crashing and never flags it (defensive)', async () => {
-    const client = fakeDocClient(() => ({
+    const { client } = fakeDocClient(() => ({
       Items: [consumableItem('GLOVES-L', { stockLevel: undefined, reorderThreshold: undefined })],
     }));
 
@@ -82,7 +87,7 @@ describe('listConsumables', () => {
   });
 
   it('returns an empty list for a department with zero consumable items', async () => {
-    const client = fakeDocClient(() => ({ Items: [] }));
+    const { client } = fakeDocClient(() => ({ Items: [] }));
 
     const items = await listConsumables(client, TABLE, DEPT_ID);
 
@@ -90,7 +95,7 @@ describe('listConsumables', () => {
   });
 
   it('skips (and never crashes on) an item with an unparseable pk or missing itemName, logging and metering it as malformed', async () => {
-    const client = fakeDocClient(() => ({
+    const { client } = fakeDocClient(() => ({
       Items: [
         { pk: 'DEPT#NICHOLS#CONSUMABLE#GLOVES-L', sk: 'METADATA', entityType: 'CONSUMABLE_STOCK' },
         { pk: 'not-a-valid-pk', sk: 'METADATA', entityType: 'CONSUMABLE_STOCK', itemName: 'X' },
@@ -107,7 +112,7 @@ describe('listConsumables', () => {
 
 describe('queryConsumablesBelowThreshold', () => {
   it('AC2: applies a stockLevel <= reorderThreshold filter server-side, in-partition by department', async () => {
-    const client = fakeDocClient((command) => {
+    const { client } = fakeDocClient((command) => {
       const query = command as QueryCommand;
       expect(query.input.FilterExpression).toBe('stockLevel <= reorderThreshold');
       expect(query.input.ExpressionAttributeValues?.[':gsi3Pk']).toBe('DEPT#NICHOLS#CONSUMABLE');
@@ -124,7 +129,7 @@ describe('queryConsumablesBelowThreshold', () => {
   it('AC3: a restocked item above threshold is excluded from the below-threshold query results (fake applies the real FilterExpression against both items)', async () => {
     const belowThreshold = consumableItem('GLOVES-L', { stockLevel: 3, reorderThreshold: 5 });
     const aboveThreshold = consumableItem('STRAPS-M', { stockLevel: 20, reorderThreshold: 5 });
-    const client = fakeDocClient(fakeGsi3QueryWithFilter([belowThreshold, aboveThreshold]));
+    const { client } = fakeDocClient(fakeGsi3QueryWithFilter([belowThreshold, aboveThreshold]));
 
     const items = await queryConsumablesBelowThreshold(client, TABLE, DEPT_ID);
 
@@ -136,7 +141,7 @@ describe('queryConsumablesBelowThreshold', () => {
 
 describe('restockConsumable', () => {
   it('AC1: last-writer-wins UpdateItem on stockLevel, returning the updated consumable', async () => {
-    const client = fakeDocClient((command) => {
+    const { client } = fakeDocClient((command) => {
       if (command instanceof UpdateCommand) {
         expect(command.input.Key).toEqual({
           pk: 'DEPT#NICHOLS#CONSUMABLE#GLOVES-L',
@@ -157,7 +162,7 @@ describe('restockConsumable', () => {
   });
 
   it('AC2: updates both stockLevel and reorderThreshold in a single UpdateItem', async () => {
-    const client = fakeDocClient((command) => {
+    const { client } = fakeDocClient((command) => {
       if (command instanceof UpdateCommand) {
         expect(command.input.ExpressionAttributeValues).toEqual({
           ':stockLevel': 40,
@@ -180,7 +185,7 @@ describe('restockConsumable', () => {
   });
 
   it('AC3: writes an undeletable-style AUDIT_LOG_ENTRY (attribute_not_exists guard) after a successful restock', async () => {
-    const client = fakeDocClient((command) => {
+    const { client, send } = fakeDocClient((command) => {
       if (command instanceof UpdateCommand) {
         return { Attributes: consumableItem('GLOVES-L', { stockLevel: 40 }) };
       }
@@ -199,11 +204,11 @@ describe('restockConsumable', () => {
 
     await restockConsumable(client, TABLE, DEPT_ID, 'chief-1', 'GLOVES-L', { stockLevel: 40 });
 
-    expect(client.send).toHaveBeenCalledTimes(2);
+    expect(send).toHaveBeenCalledTimes(2);
   });
 
   it('returns undefined (no audit write) when the item does not exist', async () => {
-    const client = fakeDocClient(() => {
+    const { client, send } = fakeDocClient(() => {
       throw new ConditionalCheckFailedException({ message: 'condition failed', $metadata: {} });
     });
 
@@ -212,11 +217,11 @@ describe('restockConsumable', () => {
     });
 
     expect(consumable).toBeUndefined();
-    expect(client.send).toHaveBeenCalledTimes(1);
+    expect(send).toHaveBeenCalledTimes(1);
   });
 
   it('rethrows an unrelated DynamoDB failure instead of swallowing it', async () => {
-    const client = fakeDocClient(() => {
+    const { client } = fakeDocClient(() => {
       throw new Error('boom');
     });
 
