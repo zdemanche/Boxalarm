@@ -139,7 +139,7 @@ export function CutoverPanel() {
                           key: 'member',
                           header: 'Member',
                           isRowHeader: true,
-                          render: (r) => r.memberId,
+                          render: (r) => r.memberName ?? r.memberId,
                         },
                         { key: 'sent', header: 'Sent', align: 'right', render: (r) => r.sent },
                         {

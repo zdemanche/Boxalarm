@@ -15,7 +15,8 @@ export interface DashboardView {
   outOfServiceApparatus: { unitId: string; reason: string; durationSeconds: number | null }[];
   expiringCertifications: {
     count: number;
-    certifications: { memberId: string; certId: string; expiryDate: string }[];
+    /** `memberName` is present when the service resolved the member record. */
+    certifications: { memberId: string; memberName?: string; certId: string; expiryDate: string }[];
   };
   nerisCompliance: {
     pendingCount: number;
@@ -97,7 +98,10 @@ export interface GrantsReport {
   fieldSetSource: 'default';
   activeMemberCount: number;
   memberCountTrend: { joinedInPeriod: number; trendMethod: 'joinDateApproximation' };
-  totalIncidentVolume: { available: false; reason: string };
+  /** Incident volume is `available: false` until the incident rollup is wired (E6-S1). */
+  totalIncidentVolume:
+    | { available: false; reason: string }
+    | { available: true; total: number; byType: { incidentType: string; count: number }[] };
   trainingHoursCompliance: { totalHours: number; memberCount: number; eventCount: number };
   apparatusOutOfServiceHistory: {
     records: { unitId: string; reason: string; startAt: number; endAt: number | null }[];
@@ -111,6 +115,8 @@ export interface LosapYearEndReport {
   year: number;
   members: {
     memberId: string;
+    /** Present when the service resolved the member record. */
+    memberName?: string;
     totalPoints: number;
     entryCount: number;
     unreadableEntryCount: number;
@@ -153,6 +159,8 @@ export type CutoverDecisionStatus = 'accept' | 'defer';
 
 export interface MemberDeliveryView {
   memberId: string;
+  /** Present when the service resolved the member record. */
+  memberName?: string;
   sent: number;
   delivered: number;
   missedPageCount: number;

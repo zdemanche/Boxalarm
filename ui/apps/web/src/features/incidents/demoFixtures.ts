@@ -1,4 +1,6 @@
 import type { ProblemDetails } from '../../lib/apiClient';
+import { demoMemberName } from '../../lib/demoRoster';
+import { buildDemoIncidentDataset, type DemoSubmissionLedger } from './demoIncidentSeeds';
 import { CORE_SCHEMA, SECONDARY_SCHEMA } from './nerisSchema';
 import { EDITABLE_MODULES, modulesForIncident } from './nerisModuleSchema';
 import { DEMO_NERIS_SCHEMA } from './nerisSchemaFixture';
@@ -8,6 +10,7 @@ import type {
   IncidentDetail,
   IncidentSecondary,
   PutExposureInput,
+  RespondingMember,
   ResponseUnit,
   ResponseUnitType,
   SubmissionAttempt,
@@ -51,6 +54,18 @@ function problem(status: number, title: string, detail?: string, errors?: unknow
 const nowSeconds = Math.floor(Date.now() / 1000);
 const daysAgo = (days: number) => nowSeconds - days * 86400;
 
+/**
+ * The year of seeded history (i-3 onward) comes from demoIncidentSeeds.ts. i-1 and i-2 are kept
+ * here by hand: unit tests and other fixtures reference their ids and shape. i-1 is a validated
+ * kitchen fire that was never sent, so the demo can walk lock → submit on it; i-2 is a draft
+ * whose incident type still carries a pre-NERIS value, so the picker shows the "not a NERIS
+ * type" hint.
+ */
+const seeded = buildDemoIncidentDataset(nowSeconds);
+
+const I1_MEMBERS = ['m-3', 'm-12', 'm-15', 'm-16', 'm-21', 'm-24'];
+const I2_MEMBERS = ['m-2', 'm-9', 'm-18', 'm-25'];
+
 let incidents: Incident[] = [
   {
     incidentId: 'i-1',
@@ -74,18 +89,25 @@ let incidents: Incident[] = [
           },
         },
       },
+      fire_alarm: { presence: { type: 'NOT_PRESENT' } },
+      other_alarm: { presence: { type: 'NOT_PRESENT' } },
+      fire_suppression: { presence: { type: 'NOT_PRESENT' } },
       address: '14 Elm St, Trumbull, CT',
-      narrative: 'Working fire, first floor kitchen, extinguished on arrival of Engine 301.',
+      narrative:
+        'Working fire, first floor kitchen, extinguished on arrival of Engine 301. Fire held to the kitchen; Truck 304 opened up the ceiling to check for extension. Occupants out before arrival.',
     },
     incidentType: 'Structure fire',
     address: '14 Elm St, Trumbull, CT',
     alarmAt: daysAgo(40),
     dispatchAt: daysAgo(40) + 30,
-    narrative: 'Working fire, first floor kitchen, extinguished on arrival of Engine 301.',
+    arrivedAt: daysAgo(40) + 30 + 240 + 210,
+    clearedAt: daysAgo(40) + 30 + 240 + 210 + 5400,
+    narrative:
+      'Working fire, first floor kitchen, extinguished on arrival of Engine 301. Fire held to the kitchen; Truck 304 opened up the ceiling to check for extension. Occupants out before arrival.',
     status: 'VALIDATED',
     sourceDispatchId: 'd-100',
-    createdBy: 'm-1',
-    createdAt: daysAgo(40),
+    createdBy: 'm-3',
+    createdAt: daysAgo(40) + 7200,
     updatedAt: daysAgo(39),
   },
   {
@@ -107,9 +129,10 @@ let incidents: Incident[] = [
     status: 'DRAFT',
     sourceDispatchId: 'd-101',
     createdBy: 'm-2',
-    createdAt: daysAgo(10),
-    updatedAt: daysAgo(10),
+    createdAt: daysAgo(10) + 3600,
+    updatedAt: daysAgo(10) + 3600,
   },
+  ...seeded.incidents,
 ];
 
 const unitsByIncident = new Map<string, ResponseUnit[]>([
@@ -121,15 +144,20 @@ const unitsByIncident = new Map<string, ResponseUnit[]>([
         unitId: 'Engine 301',
         unitType: 'APPARATUS',
         dispatchedAt: daysAgo(40) + 30,
-        enRouteAt: daysAgo(40) + 90,
-        assignedPositions: ['Officer'],
+        enRouteAt: daysAgo(40) + 30 + 240,
+        arrivedAt: daysAgo(40) + 30 + 240 + 210,
+        clearedAt: daysAgo(40) + 30 + 240 + 210 + 5400,
+        assignedPositions: ['Officer', 'Driver', 'Firefighter'],
       },
       {
         incidentId: 'i-1',
         unitId: 'Truck 304',
         unitType: 'APPARATUS',
         dispatchedAt: daysAgo(40) + 45,
-        assignedPositions: ['Driver'],
+        enRouteAt: daysAgo(40) + 45 + 330,
+        arrivedAt: daysAgo(40) + 45 + 330 + 260,
+        clearedAt: daysAgo(40) + 45 + 330 + 260 + 4500,
+        assignedPositions: ['Driver', 'Firefighter'],
       },
     ],
   ],
@@ -141,7 +169,8 @@ const unitsByIncident = new Map<string, ResponseUnit[]>([
         unitId: 'Rescue 300',
         unitType: 'APPARATUS',
         dispatchedAt: daysAgo(10) + 90,
-        assignedPositions: ['Officer'],
+        enRouteAt: daysAgo(10) + 90 + 270,
+        assignedPositions: ['Officer', 'Driver'],
       },
       {
         incidentId: 'i-2',
@@ -152,17 +181,13 @@ const unitsByIncident = new Map<string, ResponseUnit[]>([
       },
     ],
   ],
+  ...seeded.unitsByIncident,
 ]);
 
-const membersByIncident = new Map<string, IncidentDetail['respondingMembers']>([
-  [
-    'i-1',
-    [
-      { memberId: 'm-rivera', status: 'RESPONDING' },
-      { memberId: 'm-chen', status: 'RESPONDING' },
-    ],
-  ],
-  ['i-2', [{ memberId: 'm-owens', status: 'RESPONDING' }]],
+const membersByIncident = new Map<string, RespondingMember[]>([
+  ['i-1', I1_MEMBERS.map((memberId) => ({ memberId, status: 'RESPONDING' }))],
+  ['i-2', I2_MEMBERS.map((memberId) => ({ memberId, status: 'RESPONDING' }))],
+  ...seeded.membersByIncident,
 ]);
 
 const secondariesByIncident = new Map<string, IncidentSecondary[]>([
@@ -173,12 +198,13 @@ const secondariesByIncident = new Map<string, IncidentSecondary[]>([
         incidentId: 'i-1',
         secondaryType: 'EXPOSURE',
         payload: { exposure_type: 'SMOKE' },
-        affectedMemberIds: ['m-rivera'],
+        affectedMemberIds: ['m-15'],
         complete: true,
         updatedAt: daysAgo(39),
       },
     ],
   ],
+  ...seeded.secondariesByIncident,
 ]);
 
 const seededDispatches: Record<
@@ -194,17 +220,23 @@ const seededDispatches: Record<
   'd-1': {
     incidentType: 'Structure fire',
     address: '212 Church Hill Rd, Trumbull, CT',
-    narrative: 'Smoke showing on arrival, Engine 301 first-due, Truck 304 laddered the rear.',
+    narrative:
+      'Smoke showing on arrival, Engine 301 first-due; Engine 305 took the hydrant and Rescue 300 searched the second floor.',
     alarmAt: nowSeconds - 600,
     dispatchAt: nowSeconds - 570,
     units: [
       { unitId: 'Engine 301', unitType: 'APPARATUS', assignedPositions: ['Officer'] },
-      { unitId: 'Truck 304', unitType: 'APPARATUS', assignedPositions: ['Driver'] },
-      { unitId: 'Engine 305', unitType: 'APPARATUS', assignedPositions: ['Firefighter'] },
+      { unitId: 'Engine 305', unitType: 'APPARATUS', assignedPositions: ['Driver'] },
+      { unitId: 'Rescue 300', unitType: 'APPARATUS', assignedPositions: ['Firefighter'] },
     ],
     members: [
-      { memberId: 'm-rivera', status: 'RESPONDING' },
-      { memberId: 'm-chen', status: 'RESPONDING' },
+      { memberId: 'm-1', status: 'RESPONDING' },
+      { memberId: 'm-3', status: 'RESPONDING' },
+      { memberId: 'm-12', status: 'RESPONDING' },
+      { memberId: 'm-13', status: 'RESPONDING' },
+      { memberId: 'm-17', status: 'RESPONDING' },
+      { memberId: 'm-20', status: 'RESPONDING' },
+      { memberId: 'm-24', status: 'RESPONDING' },
     ],
   },
   // A RAW (fail-open) CAD dispatch, so the VERIFY marker and text excerpt show in demo mode.
@@ -219,39 +251,60 @@ const seededDispatches: Record<
     textExcerpt:
       'INC 26-004210 TIME 14:02 FIRE ALARM SOUNDING 44 WHITE PLAINS RD CROSS HUNTINGTON TPKE',
     units: [{ unitId: 'Engine 301', unitType: 'APPARATUS', assignedPositions: ['Officer'] }],
-    members: [{ memberId: 'm-rivera', status: 'RESPONDING' }],
+    members: [
+      { memberId: 'm-8', status: 'RESPONDING' },
+      { memberId: 'm-14', status: 'RESPONDING' },
+    ],
   },
 };
 
-const submissionByIncident = new Map<string, SubmissionStatus>();
-const attemptsByIncident = new Map<string, SubmissionAttempt[]>();
-const historyByIncident = new Map<string, SubmissionStatusEntry[]>();
-const nerisIdByIncident = new Map<string, string>();
+const submissionByIncident = new Map<string, SubmissionStatus>(seeded.submissionByIncident);
+const failureReasonByIncident = new Map<string, string>(seeded.failureReasonByIncident);
+const ledgerByIncident = new Map<string, DemoSubmissionLedger>(seeded.ledgerByIncident);
 
-function recordAttempt(incidentId: string, operation: 'CREATE' | 'UPDATE'): void {
-  const attempts = attemptsByIncident.get(incidentId) ?? [];
-  const nerisIncidentId = nerisIdByIncident.get(incidentId) ?? `FD09190250|${incidentId}`;
-  nerisIdByIncident.set(incidentId, nerisIncidentId);
+/** Read-only view of the demo incident store for the reporting fixtures. */
+export function demoIncidentState(): {
+  incidents: readonly Incident[];
+  unitsByIncident: ReadonlyMap<string, readonly ResponseUnit[]>;
+  membersByIncident: ReadonlyMap<string, readonly RespondingMember[]>;
+  ledgerByIncident: ReadonlyMap<string, DemoSubmissionLedger>;
+} {
+  return { incidents, unitsByIncident, membersByIncident, ledgerByIncident };
+}
+
+function recordAttempt(incident: Incident, operation: 'CREATE' | 'UPDATE'): void {
+  const existing = ledgerByIncident.get(incident.incidentId);
+  const attempts = existing?.attempts ?? [];
+  const nerisIncidentId = existing?.nerisIncidentId ?? `FD09190250|${incident.dispatchNumber}`;
   const at = new Date().toISOString();
-  attemptsByIncident.set(incidentId, [
-    ...attempts,
-    {
-      attempt: attempts.length + 1,
-      attemptedAt: at,
-      outcome: 'SUCCESS',
-      httpStatus: operation === 'CREATE' ? 201 : 200,
-      retryCount: 0,
-      operation,
-      nerisIncidentId,
-      nerisStatus: 'SUBMITTED',
-      errors: [],
-    },
-  ]);
-  const history = (historyByIncident.get(incidentId) ?? []).map((entry) => ({
+  const attempt: SubmissionAttempt = {
+    attempt: attempts.length + 1,
+    attemptedAt: at,
+    outcome: 'SUCCESS',
+    httpStatus: operation === 'CREATE' ? 201 : 200,
+    retryCount: 0,
+    operation,
+    nerisIncidentId,
+    nerisStatus: 'SUBMITTED',
+    errors: [],
+  };
+  const history: SubmissionStatusEntry[] = (existing?.statusHistory ?? []).map((entry) => ({
     ...entry,
     current: false,
   }));
-  historyByIncident.set(incidentId, [...history, { status: 'SUBMITTED', at, current: true }]);
+  ledgerByIncident.set(incident.incidentId, {
+    nerisIncidentId,
+    nerisStatus: 'SUBMITTED',
+    nerisStatusAt: nowSecondsNow(),
+    firstSubmittedAt: existing?.firstSubmittedAt ?? nowSecondsNow(),
+    payloadHash: existing?.payloadHash ?? null,
+    attempts: [...attempts, attempt],
+    statusHistory: [...history, { status: 'SUBMITTED', at, current: true }],
+  });
+}
+
+function nowSecondsNow(): number {
+  return Math.floor(Date.now() / 1000);
 }
 
 /** Demo review checklist: the local rules the backend runs, reduced to what the demo stores. */
@@ -292,6 +345,23 @@ function demoValidation(incident: Incident, mode: string) {
         },
       });
     }
+    if (
+      unit.arrivedAt !== undefined &&
+      unit.enRouteAt !== undefined &&
+      unit.arrivedAt < unit.enRouteAt
+    ) {
+      blocking.push({
+        path: `units.${unit.unitId}.arrivedAt`,
+        code: 'CHRONOLOGY',
+        message: `${unit.unitId} arrived before it went en route.`,
+        section: 'units',
+        fix: {
+          label: `Use en route + 4 min for ${unit.unitId}`,
+          path: `units.${unit.unitId}.arrivedAt`,
+          value: unit.enRouteAt + 240,
+        },
+      });
+    }
   }
   if (!incident.narrative) {
     blocking.push({
@@ -301,6 +371,7 @@ function demoValidation(incident: Incident, mode: string) {
       section: 'narrative',
     });
   }
+  const unitsComplete = !blocking.some((issue) => issue.section === 'units');
   return {
     incidentId: incident.incidentId,
     mode,
@@ -310,7 +381,7 @@ function demoValidation(incident: Incident, mode: string) {
     sectionsComplete: {
       core: missing.length === 0,
       dispatch: true,
-      units: warnings.length === 0,
+      units: unitsComplete && warnings.length === 0,
       narrative: Boolean(incident.narrative),
       ...(mode === 'local' ? {} : { neris: blocking.length === 0 }),
     },
@@ -350,6 +421,24 @@ function stringFields(payload: Record<string, unknown>): Record<string, string> 
   return fields;
 }
 
+/** The next free `i-N` id and the next CAD number in this year's sequence. */
+function nextIdentifiers(): { incidentId: string; dispatchNumber: string } {
+  const maxId = incidents.reduce((max, incident) => {
+    const n = Number(incident.incidentId.replace(/^i-/, ''));
+    return Number.isFinite(n) ? Math.max(max, n) : max;
+  }, 0);
+  const yearPrefix = String(new Date().getFullYear()).slice(-2);
+  const maxNumber = incidents.reduce((max, incident) => {
+    const [prefix, digits] = incident.dispatchNumber.split('-');
+    const n = Number(digits);
+    return prefix === yearPrefix && Number.isFinite(n) ? Math.max(max, n) : max;
+  }, 0);
+  return {
+    incidentId: `i-${maxId + 1}`,
+    dispatchNumber: `${yearPrefix}-${String(maxNumber + 1).padStart(6, '0')}`,
+  };
+}
+
 export async function incidentsDemoRequest(
   path: string,
   method: string,
@@ -362,25 +451,39 @@ export async function incidentsDemoRequest(
   if (path === 'incidents/neris-schema' && method === 'GET') return json(DEMO_NERIS_SCHEMA);
 
   if (path === 'incidents/dispatches' && method === 'GET') {
-    // One page: the seeded dispatches, each with the report started from it (if any).
-    const dispatches = Object.entries(seededDispatches)
-      .map(([dispatchId, seed]) => {
-        const report = incidents.find((incident) => incident.sourceDispatchId === dispatchId);
-        return {
-          dispatchId,
-          incidentType: seed.incidentType ?? '',
-          address: seed.address ?? '',
-          dispatchedAt: seed.dispatchAt ?? seed.alarmAt ?? nowSeconds,
-          report: report ? { incidentId: report.incidentId, status: report.status } : null,
-          ...(seed.verifyRequired
-            ? {
-                verifyRequired: true,
-                ...(seed.textExcerpt ? { textExcerpt: seed.textExcerpt } : {}),
-              }
-            : {}),
-        };
-      })
-      .sort((a, b) => b.dispatchedAt - a.dispatchedAt);
+    // One page: the two live dispatches plus every call of the last 72 hours, each with the
+    // report started from it (if any).
+    const windowStart = nowSeconds - 72 * 3600;
+    const live = Object.entries(seededDispatches).map(([dispatchId, seed]) => {
+      const report = incidents.find((incident) => incident.sourceDispatchId === dispatchId);
+      return {
+        dispatchId,
+        incidentType: seed.incidentType ?? '',
+        address: seed.address ?? '',
+        dispatchedAt: seed.dispatchAt ?? seed.alarmAt ?? nowSeconds,
+        report: report ? { incidentId: report.incidentId, status: report.status } : null,
+        ...(seed.verifyRequired
+          ? {
+              verifyRequired: true,
+              ...(seed.textExcerpt ? { textExcerpt: seed.textExcerpt } : {}),
+            }
+          : {}),
+      };
+    });
+    const recent = incidents
+      .filter(
+        (incident) =>
+          (incident.dispatchAt ?? incident.alarmAt ?? 0) >= windowStart &&
+          !(incident.sourceDispatchId in seededDispatches),
+      )
+      .map((incident) => ({
+        dispatchId: incident.sourceDispatchId,
+        incidentType: incident.incidentType ?? '',
+        address: incident.address ?? '',
+        dispatchedAt: incident.dispatchAt ?? incident.alarmAt ?? nowSeconds,
+        report: { incidentId: incident.incidentId, status: incident.status },
+      }));
+    const dispatches = [...live, ...recent].sort((a, b) => b.dispatchedAt - a.dispatchedAt);
     return json({ recentWindowHours: 72, dispatches, nextCursor: null });
   }
 
@@ -407,10 +510,11 @@ export async function incidentsDemoRequest(
         `No dispatch alert found for dispatchId "${input.dispatchId}".`,
       );
     }
+    const { incidentId, dispatchNumber } = nextIdentifiers();
     const created: Incident = {
-      incidentId: `i-${incidents.length + 1}`,
+      incidentId,
       deptId: 'nichols-fd',
-      dispatchNumber: `26-${2000 + incidents.length}`,
+      dispatchNumber,
       epochSeconds: nowSeconds,
       nerisSchemaVersion: '2026.2',
       corePayload: {
@@ -449,10 +553,17 @@ export async function incidentsDemoRequest(
     return problem(404, 'Not Found', `No incident found with incidentId "${incidentId}".`);
 
   if (parts.length === 2 && method === 'GET') {
+    const ledger = ledgerByIncident.get(incidentId);
     return json({
       ...toDetail(incident),
-      ...(nerisIdByIncident.has(incidentId)
-        ? { nerisIncidentId: nerisIdByIncident.get(incidentId), nerisStatus: 'SUBMITTED' }
+      ...(ledger
+        ? {
+            nerisIncidentId: ledger.nerisIncidentId,
+            nerisStatus: ledger.nerisStatus,
+            nerisStatusAt: ledger.nerisStatusAt,
+            firstSubmittedAt: ledger.firstSubmittedAt,
+            submissionStatus: submissionByIncident.get(incidentId) ?? null,
+          }
         : {}),
     });
   }
@@ -495,14 +606,14 @@ export async function incidentsDemoRequest(
     const lockedIncident: Incident = {
       ...incident,
       lockedAt,
-      lockedBy: 'demo-user',
+      lockedBy: demoMemberName('m-1'),
       status: incident.status === 'DRAFT' ? 'VALIDATED' : incident.status,
     };
     incidents = incidents.map((item) => (item.incidentId === incidentId ? lockedIncident : item));
     return json({
       incidentId,
       lockedAt,
-      lockedBy: 'demo-user',
+      lockedBy: lockedIncident.lockedBy,
       status: lockedIncident.status,
       submission: null,
       nerisValidatedAt: report.nerisValidatedAt,
@@ -525,7 +636,7 @@ export async function incidentsDemoRequest(
     return json({
       incidentId,
       unlockedAt: Math.floor(Date.now() / 1000),
-      unlockedBy: 'demo-user',
+      unlockedBy: demoMemberName('m-1'),
       reason,
     });
   }
@@ -534,7 +645,7 @@ export async function incidentsDemoRequest(
     if (!incident.lockedAt) {
       return json({ ...problemBody(409, 'Lock the report first.'), code: 'NOT_LOCKED' }, 409);
     }
-    const nerisIncidentId = nerisIdByIncident.get(incidentId);
+    const nerisIncidentId = ledgerByIncident.get(incidentId)?.nerisIncidentId;
     if (!nerisIncidentId) {
       return json(
         { ...problemBody(409, 'NERIS does not have this report yet.'), code: 'NOT_IN_NERIS' },
@@ -544,7 +655,8 @@ export async function incidentsDemoRequest(
     if (incident.updatedAt <= (incident.lockedAt ?? 0)) {
       return json({ incidentId, diff: [], status: 'UNCHANGED' });
     }
-    recordAttempt(incidentId, 'UPDATE');
+    recordAttempt(incident, 'UPDATE');
+    submissionByIncident.set(incidentId, 'SUBMITTED');
     return json(
       {
         incidentId,
@@ -590,7 +702,7 @@ export async function incidentsDemoRequest(
       ...incident,
       corePayload: { ...incident.corePayload, ...nextFields },
       status: missing.length === 0 ? 'VALIDATED' : incident.status,
-      updatedAt: nowSeconds,
+      updatedAt: nowSecondsNow(),
     };
     incidents = incidents.map((item) => (item.incidentId === incidentId ? updated : item));
     return json(updated);
@@ -598,7 +710,7 @@ export async function incidentsDemoRequest(
 
   // Demo NERIS submission: the worker is simulated as accepting on the next status read.
   if (parts[2] === 'submit' && method === 'POST') {
-    if (nerisIdByIncident.has(incidentId)) {
+    if (ledgerByIncident.get(incidentId)?.nerisIncidentId) {
       return json(
         {
           ...problemBody(409, 'NERIS already has this report; send the changes with Resubmit.'),
@@ -614,10 +726,11 @@ export async function incidentsDemoRequest(
         `incident "${incidentId}" is not VALIDATED and cannot be submitted (current status "${incident.status}")`,
       );
     }
-    const submitted: Incident = { ...incident, status: 'SUBMITTED', updatedAt: nowSeconds };
+    const submitted: Incident = { ...incident, status: 'SUBMITTED', updatedAt: nowSecondsNow() };
     incidents = incidents.map((item) => (item.incidentId === incidentId ? submitted : item));
     submissionByIncident.set(incidentId, 'SUBMITTED');
-    recordAttempt(incidentId, 'CREATE');
+    failureReasonByIncident.delete(incidentId);
+    recordAttempt(submitted, 'CREATE');
     return json({ incidentId, submissionStatus: 'SUBMITTED' }, 202);
   }
 
@@ -632,22 +745,40 @@ export async function incidentsDemoRequest(
       incidents = incidents.map((item) =>
         item.incidentId === incidentId ? { ...item, status: 'ACCEPTED' } : item,
       );
+      if (submissionStatus === 'RETRYING') {
+        // The retry went through: NERIS now holds the report.
+        recordAttempt(incident, 'CREATE');
+        failureReasonByIncident.delete(incidentId);
+      }
     }
     const current = findById(incidentId) ?? incident;
+    const ledger = ledgerByIncident.get(incidentId);
+    const lastAttemptAt = ledger?.attempts.length
+      ? Math.floor(
+          Date.parse(ledger.attempts[ledger.attempts.length - 1]?.attemptedAt ?? '') / 1000,
+        )
+      : null;
+    const failureReason = failureReasonByIncident.get(incidentId);
     return json({
       incidentId,
       status: current.status,
-      submissionStatus,
-      nerisIncidentId: nerisIdByIncident.get(incidentId) ?? null,
-      nerisStatus: nerisIdByIncident.has(incidentId) ? 'SUBMITTED' : null,
-      nerisStatusAt: null,
+      submissionStatus: submissionByIncident.get(incidentId) ?? null,
+      ...(failureReason && submissionByIncident.get(incidentId) === 'FAILED'
+        ? { submissionFailureReason: failureReason }
+        : {}),
+      nerisIncidentId: ledger?.nerisIncidentId ?? null,
+      nerisStatus: ledger?.nerisStatus ?? null,
+      nerisStatusAt: ledger?.nerisStatusAt ?? null,
       lockedAt: current.lockedAt ?? null,
       lockedBy: current.lockedBy ?? null,
-      payloadHash: null,
-      firstSubmittedAt: null,
-      editedSinceSubmission: false,
-      attempts: attemptsByIncident.get(incidentId) ?? [],
-      statusHistory: historyByIncident.get(incidentId) ?? [],
+      payloadHash: ledger?.payloadHash ?? null,
+      firstSubmittedAt: ledger?.firstSubmittedAt ?? null,
+      editedSinceSubmission:
+        lastAttemptAt !== null && Number.isFinite(lastAttemptAt)
+          ? current.updatedAt > lastAttemptAt
+          : false,
+      attempts: ledger?.attempts ?? [],
+      statusHistory: ledger?.statusHistory ?? [],
     });
   }
 
@@ -679,7 +810,7 @@ export async function incidentsDemoRequest(
     const updated: Incident = {
       ...incident,
       corePayload: { ...incident.corePayload, [module]: value },
-      updatedAt: nowSeconds,
+      updatedAt: nowSecondsNow(),
     };
     incidents = incidents.map((item) => (item.incidentId === incidentId ? updated : item));
     return json(toDetail(updated));
@@ -701,7 +832,7 @@ export async function incidentsDemoRequest(
       ...incident,
       narrative,
       corePayload: { ...incident.corePayload, narrative },
-      updatedAt: nowSeconds,
+      updatedAt: nowSecondsNow(),
     };
     incidents = incidents.map((item) => (item.incidentId === incidentId ? updated : item));
     return json(updated);
@@ -739,6 +870,9 @@ export async function incidentsDemoRequest(
       ? existing.map((unit) => (unit.unitId === unitId ? next : unit))
       : [...existing, next];
     unitsByIncident.set(incidentId, replaced);
+    incidents = incidents.map((item) =>
+      item.incidentId === incidentId ? { ...item, updatedAt: nowSecondsNow() } : item,
+    );
     return json(next);
   }
 
@@ -768,7 +902,7 @@ export async function incidentsDemoRequest(
       payload,
       affectedMemberIds: input.affectedMemberIds ?? [],
       complete: missing.length === 0,
-      updatedAt: nowSeconds,
+      updatedAt: nowSecondsNow(),
     };
     const current = secondariesByIncident.get(incidentId) ?? [];
     const without = current.filter((module) => module.secondaryType !== saved.secondaryType);

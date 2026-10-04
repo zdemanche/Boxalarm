@@ -1,4 +1,4 @@
-import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { HttpResponse, http } from 'msw';
@@ -140,8 +140,12 @@ test('an officer sees the manual entry form and, given a dispatch id, the roster
 
   expect(await screen.findByRole('form', { name: 'Enter dispatch manually' })).toBeTruthy();
   expect(await screen.findByRole('heading', { name: 'Structure fire' })).toBeTruthy();
-  expect(await screen.findByText('Jordan Osei')).toBeTruthy();
+  const roster = await screen.findByRole('region', { name: 'Live roster' });
+  expect(await within(roster).findByText('Jordan Osei')).toBeTruthy();
   expect(await screen.findByText('Direct to scene')).toBeTruthy();
+  // Receipts are keyed by member id on the wire; the table shows the roster name instead.
+  const receipts = await screen.findByRole('region', { name: 'Delivery receipts' });
+  expect(await within(receipts).findByText('Jordan Osei')).toBeTruthy();
   expect(await screen.findByText('Sent, not confirmed delivered')).toBeTruthy();
 });
 

@@ -171,7 +171,11 @@ function DashboardPanel() {
                     rows={view.expiringCertifications.certifications}
                     emptyMessage="No certifications are expiring."
                     columns={[
-                      { key: 'member', header: 'Member', render: (r) => r.memberId },
+                      {
+                        key: 'member',
+                        header: 'Member',
+                        render: (r) => r.memberName ?? r.memberId,
+                      },
                       { key: 'cert', header: 'Certification', render: (r) => r.certId },
                       {
                         key: 'expiry',
@@ -528,13 +532,46 @@ function GrantsPanel() {
                   label="Apparatus out-of-service events"
                   value={report.apparatusOutOfServiceHistory.totalOutOfServiceEvents}
                 />
-                <Stat
-                  label="Incident volume"
-                  value="Not available"
-                  hint="Incident data isn't connected to this report yet."
-                />
+                {report.totalIncidentVolume.available ? (
+                  <Stat
+                    label="Incident volume"
+                    value={report.totalIncidentVolume.total}
+                    hint="Incidents with an alarm time in the period"
+                  />
+                ) : (
+                  <Stat
+                    label="Incident volume"
+                    value="Not available"
+                    hint="Incident data isn't connected to this report yet."
+                  />
+                )}
               </div>
               <div className={styles.sections}>
+                {report.totalIncidentVolume.available ? (
+                  <Card title="Incident volume by type">
+                    <DataTable
+                      caption="Incident volume by type"
+                      rowKey={(r) => r.incidentType}
+                      rows={report.totalIncidentVolume.byType}
+                      emptyMessage="No incidents in this period."
+                      columns={[
+                        {
+                          key: 'type',
+                          header: 'Type',
+                          isRowHeader: true,
+                          render: (r) => r.incidentType,
+                        },
+                        {
+                          key: 'count',
+                          header: 'Incidents',
+                          align: 'right',
+                          sortValue: (r) => r.count,
+                          render: (r) => r.count,
+                        },
+                      ]}
+                    />
+                  </Card>
+                ) : null}
                 <Card title="Apparatus out-of-service history">
                   <DataTable
                     caption="Apparatus out-of-service history"
@@ -624,7 +661,7 @@ function LosapYearEndPanel() {
                       key: 'member',
                       header: 'Member',
                       isRowHeader: true,
-                      render: (r) => r.memberId,
+                      render: (r) => r.memberName ?? r.memberId,
                     },
                     {
                       key: 'points',

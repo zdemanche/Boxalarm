@@ -5,6 +5,7 @@ import { useAuth } from '../../auth/AuthContext';
 import { canSubmitIncident } from '../../auth/roles';
 import { ApiError } from '../../lib/apiClient';
 import { ApiForbiddenGate } from '../../components/ApiForbiddenGate';
+import { listMembers } from '../personnel/api';
 import { Button } from '../../components/ui/Button';
 import { Badge, StatusChip } from '../../components/ui/Chip';
 import { Checkbox, Textarea, TextInput } from '../../components/ui/Field';
@@ -128,6 +129,18 @@ function mergeDetail(current: IncidentDetail, patch: Partial<IncidentDetail>): I
 function IncidentReport({ incident }: { incident: IncidentDetail }) {
   const auth = useAuth();
   const queryClient = useQueryClient();
+  // Responding and affected members are stored as ids; show the roster name when the roster
+  // loads and fall back to the id (older fixtures, a member since removed, roster unavailable).
+  const rosterQuery = useQuery({
+    queryKey: ['personnel', 'members'],
+    queryFn: () => listMembers(auth),
+    staleTime: 60_000,
+    retry: false,
+  });
+  const memberName = (memberId: string): string => {
+    const member = rosterQuery.data?.find((candidate) => candidate.memberId === memberId);
+    return member ? `${member.firstName} ${member.lastName}` : memberId;
+  };
   const nerisModules = modulesForIncident(
     coreStrings(incident.corePayload).incident_type ?? '',
     incident.corePayload,
@@ -637,7 +650,7 @@ function IncidentReport({ incident }: { incident: IncidentDetail }) {
     if (stepId === 'dispatch') {
       const units = (incident.respondingUnits ?? []).map((unit) => unit.unitId).join(', ');
       const members = (incident.respondingMembers ?? [])
-        .map((member) => member.memberId)
+        .map((member) => memberName(member.memberId))
         .join(', ');
       return (
         <div className={styles.summary}>
@@ -871,7 +884,10 @@ function IncidentReport({ incident }: { incident: IncidentDetail }) {
               {modules.map((module) => (
                 <li key={module.secondaryType} className={styles.module}>
                   <h3>{secondaryTitle(module.secondaryType)}</h3>
-                  <p>Affected members: {module.affectedMemberIds.join(', ') || 'None'}</p>
+                  <p>
+                    Affected members:{' '}
+                    {module.affectedMemberIds.map(memberName).join(', ') || 'None'}
+                  </p>
                   <StatusChip status={module.complete ? 'ok' : 'warning'}>
                     {module.complete ? 'Complete' : 'Incomplete'}
                   </StatusChip>
@@ -907,7 +923,7 @@ function IncidentReport({ incident }: { incident: IncidentDetail }) {
             {(incident.respondingMembers ?? []).map((member) => (
               <Checkbox
                 key={member.memberId}
-                label={member.memberId}
+                label={memberName(member.memberId)}
                 checked={selectedMembers.includes(member.memberId)}
                 onCheckedChange={(checked) =>
                   setSelectedMembers((current) =>

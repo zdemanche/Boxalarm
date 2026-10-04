@@ -111,6 +111,26 @@ test('dashboard renders the real rollup figures and links a failed NERIS submiss
   expect(screen.getByText('No certifications are expiring.')).toBeTruthy();
 });
 
+test('expiring certifications show the member name when the service resolved it, else the id', async () => {
+  server.use(
+    dashboardHandler({
+      ...DASHBOARD,
+      expiringCertifications: {
+        count: 2,
+        certifications: [
+          { memberId: 'm-3', memberName: 'Casey Nolan', certId: 'EMR', expiryDate: '2026-10-25' },
+          { memberId: 'm-99', certId: 'CPR/AED', expiryDate: '2026-11-02' },
+        ],
+      },
+    }),
+  );
+  renderPage();
+
+  expect(await screen.findByRole('cell', { name: 'Casey Nolan' })).toBeTruthy();
+  expect(screen.getByRole('cell', { name: 'm-99' })).toBeTruthy();
+  expect(screen.queryByRole('cell', { name: 'm-3' })).toBeNull();
+});
+
 test('dashboard with no projected events says so instead of showing zero tiles', async () => {
   server.use(
     dashboardHandler({
@@ -282,6 +302,40 @@ test('grants shows incident volume as unavailable rather than a number', async (
   expect(Number(seen?.get('periodEnd'))).toBeGreaterThan(Number(seen?.get('periodStart')));
 });
 
+test('grants shows incident volume and the by-type table once the report carries it', async () => {
+  server.use(
+    dashboardHandler(DASHBOARD),
+    http.get('/api/v1/reporting/grants', () =>
+      HttpResponse.json({
+        periodStart: 1,
+        periodEnd: 2,
+        fields: [],
+        fieldSetSource: 'default',
+        activeMemberCount: 17,
+        memberCountTrend: { joinedInPeriod: 2, trendMethod: 'joinDateApproximation' },
+        totalIncidentVolume: {
+          available: true,
+          total: 53,
+          byType: [
+            { incidentType: 'Fire alarm activation', count: 20 },
+            { incidentType: 'Motor vehicle accident', count: 13 },
+          ],
+        },
+        trainingHoursCompliance: { totalHours: 120, memberCount: 15, eventCount: 9 },
+        apparatusOutOfServiceHistory: { records: [], totalOutOfServiceEvents: 0 },
+      }),
+    ),
+  );
+  renderPage();
+  await openTab('Grants');
+
+  expect(await screen.findByText('53')).toBeTruthy();
+  expect(screen.queryByText('Not available')).toBeNull();
+  const table = screen.getByRole('table', { name: 'Incident volume by type' });
+  expect(within(table).getByRole('rowheader', { name: 'Fire alarm activation' })).toBeTruthy();
+  expect(within(table).getByRole('cell', { name: '13' })).toBeTruthy();
+});
+
 test('membership trends refuses a range over 731 days without calling the API', async () => {
   const request = vi.fn();
   server.use(
@@ -379,6 +433,37 @@ test('LOSAP year-end lists member totals and flags unreadable entries', async ()
   expect(
     screen.getByText('2 point entries could not be read and are not counted in these totals.'),
   ).toBeTruthy();
+});
+
+test('LOSAP year-end shows the member name when present and falls back to the id', async () => {
+  server.use(
+    dashboardHandler(DASHBOARD),
+    http.get('/api/v1/reporting/losap/year-end', () =>
+      HttpResponse.json({
+        deptId: 'nichols-fd',
+        year: new Date().getFullYear(),
+        members: [
+          {
+            memberId: 'm-1',
+            memberName: 'Alex Rivera',
+            totalPoints: 64,
+            entryCount: 31,
+            unreadableEntryCount: 0,
+          },
+          { memberId: 'm-77', totalPoints: 12, entryCount: 6, unreadableEntryCount: 0 },
+        ],
+        hasData: true,
+        totalUnreadableEntryCount: 0,
+      } satisfies LosapYearEndReport),
+    ),
+  );
+  renderPage();
+  await openTab('LOSAP year-end');
+
+  const table = await screen.findByRole('table');
+  expect(within(table).getByRole('rowheader', { name: 'Alex Rivera' })).toBeTruthy();
+  expect(within(table).getByRole('rowheader', { name: 'm-77' })).toBeTruthy();
+  expect(within(table).queryByText('m-1')).toBeNull();
 });
 
 test('export queues a job with the on-screen parameters, polls it, and offers the signed link', async () => {

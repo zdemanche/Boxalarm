@@ -38,6 +38,14 @@ export const DEMO_NERIS_SCHEMA: NerisSchemaResponse = {
       label: 'Hazsit › Hazardous materials › Gas leak odor',
     },
     {
+      value: 'HAZSIT||HAZARDOUS_MATERIALS||FUEL_SPILL',
+      label: 'Hazsit › Hazardous materials › Fuel spill',
+    },
+    {
+      value: 'HAZSIT||ELECTRICAL_HAZARD||POWER_LINE_DOWN',
+      label: 'Hazsit › Electrical hazard › Power line down',
+    },
+    {
       value: 'MEDICAL||ILLNESS||BREATHING_PROBLEMS',
       label: 'Medical › Illness › Breathing problems',
     },
@@ -49,8 +57,24 @@ export const DEMO_NERIS_SCHEMA: NerisSchemaResponse = {
     { value: 'PUBSERV||ALARMS_NONMED||FIRE_ALARM', label: 'Pubserv › Alarms nonmed › Fire alarm' },
     { value: 'PUBSERV||ALARMS_NONMED||CO_ALARM', label: 'Pubserv › Alarms nonmed › Co alarm' },
     {
+      value: 'PUBSERV||SERVICE_CALL||WATER_PROBLEM',
+      label: 'Pubserv › Service call › Water problem',
+    },
+    {
+      value: 'PUBSERV||SERVICE_CALL||ASSIST_PUBLIC',
+      label: 'Pubserv › Service call › Assist public',
+    },
+    {
+      value: 'PUBSERV||SERVICE_CALL||COVER_ASSIGNMENT',
+      label: 'Pubserv › Service call › Cover assignment',
+    },
+    {
       value: 'RESCUE||OUTSIDE||EXTRICATION_ENTRAPPED',
       label: 'Rescue › Outside › Extrication entrapped',
+    },
+    {
+      value: 'RESCUE||TRANSPORTATION||MOTOR_VEHICLE_COLLISION',
+      label: 'Rescue › Transportation › Motor vehicle collision',
     },
     { value: 'LAWENFORCE', label: 'Lawenforce' },
   ],

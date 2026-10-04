@@ -267,6 +267,14 @@ function ReceiptsTable({ dispatchId }: { dispatchId: string }) {
     queryFn: () => getReceipts(auth, dispatchId),
     refetchInterval: REFETCH_INTERVAL_MS,
   });
+  // Receipts carry member ids; the roster (already fetched for this dispatch) has the names.
+  const roster = useQuery({
+    queryKey: ['alerts', 'roster', dispatchId],
+    queryFn: () => getRoster(auth, dispatchId),
+    refetchInterval: REFETCH_INTERVAL_MS,
+  });
+  const nameOf = (memberId: string): string =>
+    roster.data?.find((entry) => entry.memberId === memberId)?.name ?? memberId;
 
   if (query.error) {
     return <ReceiptsUnavailable error={query.error} />;
@@ -300,7 +308,7 @@ function ReceiptsTable({ dispatchId }: { dispatchId: string }) {
             {[...byMember.entries()].map(([memberId, channels]) => (
               <tr key={memberId}>
                 <th scope="row" style={{ textAlign: 'left', fontWeight: 500 }}>
-                  {memberId}
+                  {nameOf(memberId)}
                 </th>
                 {RECEIPT_CHANNELS.map((channel) => {
                   const receipt = channels.get(channel);
@@ -630,6 +638,19 @@ function formatClock(epochSeconds: number): string {
   });
 }
 
+function ladderLabel(status: string): string {
+  switch (status) {
+    case 'ACTIVE':
+      return 'ladder running';
+    case 'HALTED_MANUAL':
+      return 'ladder halted by an officer';
+    case 'COMPLETED':
+      return 'all tones fired';
+    default:
+      return `ladder ${status.toLowerCase().replace(/_/g, ' ')}`;
+  }
+}
+
 function formatWindow(seconds: number): string {
   if (seconds % 3600 === 0) {
     const hours = seconds / 3600;
@@ -658,10 +679,8 @@ function ActiveCallRow({ dispatch, onOpen }: { dispatch: ActiveDispatch; onOpen:
         {dispatch.address ?? 'No address on the dispatch'}
         {dispatch.crossStreets ? ` (${dispatch.crossStreets})` : null}
         <div style={{ color: 'var(--bx-fg-muted)', fontSize: 14 }}>
-          dispatched {formatClock(dispatch.dispatchedAt)} · tone {ladder.currentToneSequence}
-          {ladder.status === 'ACTIVE'
-            ? ' · ladder running'
-            : ` · ladder ${ladder.status.toLowerCase()}`}
+          dispatched {formatClock(dispatch.dispatchedAt)} · tone {ladder.currentToneSequence} ·{' '}
+          {ladderLabel(ladder.status)}
         </div>
       </div>
       <Button variant="primary" size="sm" onClick={onOpen}>
@@ -748,21 +767,6 @@ export function AlertsRosterPage() {
         <ActiveCallsCard onOpen={(id) => setSearchParams({ dispatchId: id })} />
       ) : null}
 
-      {canEnterManually ? (
-        <ManualEntryForm onCreated={(id) => setSearchParams({ dispatchId: id })} />
-      ) : null}
-
-      <TextInput
-        label="Dispatch ID"
-        defaultValue={dispatchId ?? ''}
-        onKeyDown={(e) => {
-          if (e.key !== 'Enter') return;
-          const value = (e.target as HTMLInputElement).value.trim();
-          if (value) setSearchParams({ dispatchId: value });
-        }}
-        style={{ maxWidth: 320, marginBottom: 'var(--bx-space-lg)' }}
-      />
-
       {dispatchId ? (
         <>
           <DispatchHeader dispatchId={dispatchId} />
@@ -771,9 +775,29 @@ export function AlertsRosterPage() {
           <ReceiptsTable dispatchId={dispatchId} />
           <RidingBoardSection dispatchId={dispatchId} />
         </>
-      ) : (
-        <p>Enter a dispatch ID to see its roster, receipts, and riding board.</p>
-      )}
+      ) : null}
+
+      {/* Manual-entry fallback and direct dispatch-id lookup: first on the screen when no call
+          is open, below the call when one is. */}
+      <div style={{ marginTop: dispatchId ? 'var(--bx-space-2xl)' : 0 }}>
+        {canEnterManually ? (
+          <ManualEntryForm onCreated={(id) => setSearchParams({ dispatchId: id })} />
+        ) : null}
+
+        <TextInput
+          label="Dispatch ID"
+          defaultValue={dispatchId ?? ''}
+          onKeyDown={(e) => {
+            if (e.key !== 'Enter') return;
+            const value = (e.target as HTMLInputElement).value.trim();
+            if (value) setSearchParams({ dispatchId: value });
+          }}
+          style={{ maxWidth: 320, marginBottom: 'var(--bx-space-lg)' }}
+        />
+        {!dispatchId ? (
+          <p>Enter a dispatch ID to see its roster, receipts, and riding board.</p>
+        ) : null}
+      </div>
     </main>
   );
 }

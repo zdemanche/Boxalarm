@@ -1,5 +1,32 @@
 import { expect, test } from 'vitest';
+import { DEMO_FLEET } from '../../lib/demoRoster';
 import { apparatusDemoRequest } from './demoFixtures';
+
+// The registry is the shared demo fleet, so the riding board, incidents and reports all name
+// the same units; Truck 304 is the one down, for the reason the alerting fixtures also carry.
+test('registry lists the shared demo fleet with Truck 304 out of service', async () => {
+  const response = await apparatusDemoRequest('apparatus', 'GET', {});
+  const body = (await response?.json()) as {
+    apparatus: { apparatusId: string; unitId: string; status: string; outOfService?: unknown }[];
+  };
+  expect(body.apparatus.map((a) => [a.apparatusId, a.unitId])).toEqual(
+    DEMO_FLEET.map((unit) => [unit.apparatusId, unit.unitId]),
+  );
+  const truck = body.apparatus.find((a) => a.unitId === 'Truck 304');
+  expect(truck?.status).toBe('OUT_OF_SERVICE');
+  expect(truck?.outOfService).toMatchObject({ reason: 'Aerial hydraulic leak' });
+});
+
+test('compliance covers every unit, with a weekly cadence for utility and brush', async () => {
+  const response = await apparatusDemoRequest('apparatus/compliance?from=0&to=1', 'GET', {});
+  const body = (await response?.json()) as {
+    report: { unitId: string; expectedChecks: number; actualChecks: number }[];
+  };
+  expect(body.report.map((r) => r.unitId)).toEqual(DEMO_FLEET.map((unit) => unit.unitId));
+  expect(body.report.find((r) => r.unitId === 'Utility 302')?.expectedChecks).toBe(1);
+  expect(body.report.find((r) => r.unitId === 'Engine 301')?.expectedChecks).toBe(7);
+  for (const row of body.report) expect(row.actualChecks).toBeLessThanOrEqual(row.expectedChecks);
+});
 
 // The demo fixture must resolve each path segment by the same identifier the real
 // apparatus-service handler does, or the demo hides live-mode 404s (PR #321 review C2).

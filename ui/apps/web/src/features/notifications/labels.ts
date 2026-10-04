@@ -16,6 +16,10 @@ const CATEGORY_LABEL: Record<string, string> = {
   'ppe-expiry-officer': 'Department PPE expiring',
   'neris-rejected': 'NERIS returned a report',
   'neris-no-activity': 'No-activity report due',
+  'neris-accepted': 'NERIS accepted a report',
+  dispatch: 'Dispatch',
+  'shift-open': 'Open duty shift',
+  'training-reminder': 'Training reminder',
 };
 
 export function categoryLabel(category: string): string {
