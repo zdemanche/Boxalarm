@@ -8,12 +8,14 @@ import type { GrantsReportConfig } from '../client.js';
 import {
   getActiveMemberCountAndTrend,
   getApparatusOosHistory,
+  getIncidentVolume,
   getTrainingHoursCompliance,
 } from './repository.js';
 
 const PERSONNEL_TABLE = 'reporting-personnel-test';
 const TRAINING_TABLE = 'reporting-training-test';
 const PLATFORM_TABLE = 'reporting-platform-test';
+const INCIDENT_TABLE = 'reporting-incident-test';
 const PERIOD = { periodStart: 1_700_000_000_000, periodEnd: 1_701_000_000_000 };
 
 function freshDeptId(): VerifiedDeptId {
@@ -45,6 +47,35 @@ async function createGsi3Table(base: DynamoDBClient, tableName: string): Promise
   );
 }
 
+async function createGsi1Table(base: DynamoDBClient, tableName: string): Promise<void> {
+  await base.send(
+    new CreateTableCommand({
+      TableName: tableName,
+      AttributeDefinitions: [
+        { AttributeName: 'pk', AttributeType: 'S' },
+        { AttributeName: 'sk', AttributeType: 'S' },
+        { AttributeName: 'gsi1pk', AttributeType: 'S' },
+        { AttributeName: 'gsi1sk', AttributeType: 'S' },
+      ],
+      KeySchema: [
+        { AttributeName: 'pk', KeyType: 'HASH' },
+        { AttributeName: 'sk', KeyType: 'RANGE' },
+      ],
+      GlobalSecondaryIndexes: [
+        {
+          IndexName: 'GSI1',
+          KeySchema: [
+            { AttributeName: 'gsi1pk', KeyType: 'HASH' },
+            { AttributeName: 'gsi1sk', KeyType: 'RANGE' },
+          ],
+          Projection: { ProjectionType: 'ALL' },
+        },
+      ],
+      BillingMode: 'PAY_PER_REQUEST',
+    }),
+  );
+}
+
 describe('reporting-service grants repository (real DynamoDB)', () => {
   let container: StartedLocalStackContainer;
   let client: DynamoDBDocumentClient;
@@ -61,6 +92,7 @@ describe('reporting-service grants repository (real DynamoDB)', () => {
       createGsi3Table(base, PERSONNEL_TABLE),
       createGsi3Table(base, TRAINING_TABLE),
       createGsi3Table(base, PLATFORM_TABLE),
+      createGsi1Table(base, INCIDENT_TABLE),
     ]);
     client = DynamoDBDocumentClient.from(base);
     config = {
@@ -405,6 +437,68 @@ describe('reporting-service grants repository (real DynamoDB)', () => {
       const badConfig: GrantsReportConfig = { ...config, platformTableName: 'no-such-table' };
 
       await expect(getApparatusOosHistory(client, badConfig, deptId, PERIOD)).rejects.toThrow();
+    });
+  });
+
+  describe('getIncidentVolume (#251)', () => {
+    it('counts incidents on GSI1 whose alarmAt (epoch seconds) falls within the epoch-ms period', async () => {
+      const deptId = freshDeptId();
+      await Promise.all(
+        [1_700_100_000, 1_700_500_000].map((alarmAt, index) =>
+          client.send(
+            new PutCommand({
+              TableName: INCIDENT_TABLE,
+              Item: {
+                pk: buildDeptScopedPk(deptId, 'INCIDENT', `INC-${index}`),
+                sk: 'METADATA',
+                incidentId: `INC-${index}`,
+                gsi1pk: buildDeptScopedPk(deptId),
+                gsi1sk: `INCIDENT#${alarmAt}`,
+              },
+            }),
+          ),
+        ),
+      );
+
+      const result = await getIncidentVolume(client, INCIDENT_TABLE, deptId, PERIOD);
+
+      expect(result).toEqual({ totalIncidents: 2 });
+    });
+
+    it('excludes an incident whose alarmAt falls outside the period', async () => {
+      const deptId = freshDeptId();
+      await client.send(
+        new PutCommand({
+          TableName: INCIDENT_TABLE,
+          Item: {
+            pk: buildDeptScopedPk(deptId, 'INCIDENT', 'INC-OLD'),
+            sk: 'METADATA',
+            incidentId: 'INC-OLD',
+            gsi1pk: buildDeptScopedPk(deptId),
+            gsi1sk: `INCIDENT#${1_699_000_000}`,
+          },
+        }),
+      );
+
+      const result = await getIncidentVolume(client, INCIDENT_TABLE, deptId, PERIOD);
+
+      expect(result).toEqual({ totalIncidents: 0 });
+    });
+
+    it('returns a zero-value result when the department has no incidents yet', async () => {
+      const deptId = freshDeptId();
+
+      const result = await getIncidentVolume(client, INCIDENT_TABLE, deptId, PERIOD);
+
+      expect(result).toEqual({ totalIncidents: 0 });
+    });
+
+    it('logs the original error and rethrows when the Query fails (error-path-logging; the caller is responsible for failing soft)', async () => {
+      const deptId = freshDeptId();
+
+      await expect(
+        getIncidentVolume(client, 'no-such-table', deptId, PERIOD),
+      ).rejects.toThrow();
     });
   });
 });

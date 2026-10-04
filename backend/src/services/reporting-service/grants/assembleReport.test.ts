@@ -53,8 +53,16 @@ describe('assembleGrantsReport', () => {
     expect(report.fields).toBe(DEFAULT_GRANT_REPORT_FIELDS);
   });
 
-  it('reports incident volume as unavailable rather than inventing incident data (AC1 scope gap)', () => {
+  it('reports incident volume as unavailable rather than inventing incident data when its own dependency failed (#251 fail-soft)', () => {
     const report = assembleGrantsReport(BASE_INPUT);
     expect(report.totalIncidentVolume).toEqual({ available: false, reason: 'E6-S1' });
+  });
+
+  it('#251: carries a real incident count through when the incident-table Query succeeded', () => {
+    const report = assembleGrantsReport({
+      ...BASE_INPUT,
+      incidentVolume: { available: true, totalIncidents: 17 },
+    });
+    expect(report.totalIncidentVolume).toEqual({ available: true, totalIncidents: 17 });
   });
 });

@@ -334,6 +334,7 @@ describe("reporting Lambdas: env and IAM match their handlers", { timeout: 30_00
       "PERSONNEL_TABLE_NAME",
       "TRAINING_DYNAMO_TABLE_NAME",
       "PLATFORM_TABLE_NAME",
+      "INCIDENT_TABLE_NAME",
       VP,
     ],
     "boxalarm-dev-reporting-membership-trends": [
