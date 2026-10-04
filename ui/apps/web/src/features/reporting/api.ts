@@ -1,5 +1,8 @@
 import { apiRequest, type AuthTokenSource } from '../../lib/apiClient';
 import type {
+  CutoverDecisionRecord,
+  CutoverDecisionStatus,
+  CutoverDecisionView,
   DashboardView,
   ExportFormat,
   GrantsReport,
@@ -100,4 +103,30 @@ export function getReportExportStatus(
   jobId: string,
 ): Promise<ReportExportJob> {
   return getJson(tokens, `reporting/export/${encodeURIComponent(jobId)}`);
+}
+
+/**
+ * The N1.9 cutover decision and, when `from`/`to` (epoch seconds) are given, the delivery-rate
+ * baseline those two dates bound (cutoverDecision/get.ts `wantsBaseline`). Readable by every
+ * reporting role (Cedar `ViewCutoverDecision`); recording a decision is CHIEF/ADMIN only.
+ */
+export function getCutoverDecision(
+  tokens: AuthTokenSource,
+  from?: number,
+  to?: number,
+): Promise<CutoverDecisionView> {
+  const params = from !== undefined && to !== undefined ? `?from=${from}&to=${to}` : '';
+  return getJson(tokens, `reporting/cutover-decision${params}`);
+}
+
+export async function recordCutoverDecision(
+  tokens: AuthTokenSource,
+  decision: CutoverDecisionStatus,
+): Promise<CutoverDecisionRecord> {
+  const response = await apiRequest('reporting/cutover-decision', tokens, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ decision }),
+  });
+  return (await response.json()) as CutoverDecisionRecord;
 }

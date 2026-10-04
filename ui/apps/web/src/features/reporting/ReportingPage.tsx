@@ -34,6 +34,7 @@ import {
   isoDateToEpochSeconds,
   todayIsoDate,
 } from './format';
+import { CutoverPanel } from './CutoverPanel';
 import { ReportExport } from './ReportExport';
 import { ACTIVITY_TYPES, type ReportName, type TimeSummary } from './types';
 import styles from './ReportingPage.module.css';
@@ -41,7 +42,7 @@ import styles from './ReportingPage.module.css';
 const MAX_TREND_RANGE_DAYS = 731;
 
 /** Loading → Skeleton; 403 → ForbiddenState; any other error → retryable ApiErrorState. */
-function QueryState<T>({
+export function QueryState<T>({
   query,
   children,
 }: {
@@ -74,7 +75,7 @@ function ExportIfAllowed(props: {
 }
 
 /** A from/to date pair, with the from-after-to case flagged on the field. */
-function useDateRange(defaultFrom: string, defaultTo: string) {
+export function useDateRange(defaultFrom: string, defaultTo: string) {
   const [from, setFrom] = useState(defaultFrom);
   const [to, setTo] = useState(defaultTo);
   const valid = from !== '' && to !== '' && from <= to;
@@ -680,6 +681,7 @@ export function ReportingPage() {
           },
           { value: 'grants', label: 'Grants', content: <GrantsPanel /> },
           { value: 'losap', label: 'LOSAP year-end', content: <LosapYearEndPanel /> },
+          { value: 'cutover', label: 'Cutover', content: <CutoverPanel /> },
         ]}
       />
     </main>

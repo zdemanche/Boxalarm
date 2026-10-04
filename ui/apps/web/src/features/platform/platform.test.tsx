@@ -129,6 +129,7 @@ test('admin edits alert-rule threshold N; a 409 shows the reloaded value', async
     http.get('/api/v1/platform/retention', () =>
       HttpResponse.json({ retentionYears: 7, version: 1, source: 'stored' }),
     ),
+    cutoverDecisionHandler(),
   );
 
   const user = userEvent.setup();
@@ -245,7 +246,20 @@ function settingsDefaultHandlers() {
     http.get('/api/v1/platform/retention', () =>
       HttpResponse.json({ retentionYears: 7, version: 1, source: 'stored' }),
     ),
+    cutoverDecisionHandler(),
   ];
+}
+
+/** #161: Settings' CutoverStatusNotice GET (no `from`/`to` - decision only, no baseline). */
+function cutoverDecisionHandler(retainedPagingRequired = true) {
+  return http.get('/api/v1/reporting/cutover-decision', () =>
+    HttpResponse.json({
+      decision: retainedPagingRequired ? null : 'accept',
+      decider: retainedPagingRequired ? null : 'chief-1',
+      decidedAt: retainedPagingRequired ? null : 1_700_000_000_000,
+      retainedPagingRequired,
+    }),
+  );
 }
 
 const SECRET_CEDAR_DETAIL = 'caller is not a CHIEF or ADMIN';
@@ -736,4 +750,62 @@ test('the check sheet editor refuses a hand-typed code the truck check could not
   expect(alerts.map((a) => a.textContent).join(' ')).toContain("the truck check can't send");
   expect(code.getAttribute('aria-invalid')).toBe('true');
   expect(puts).toBe(0);
+});
+
+// #161: Settings shows whether retained radio tone-out paging is still required, and never
+// implies this app can turn tone-out off either way (CLAUDE.md N1.9 - retained paging stays
+// mandatory as the compensating control regardless of the recorded cutover decision).
+test('Settings shows retained paging as still required when cutover has not been accepted', async () => {
+  server.use(...settingsDefaultHandlers());
+  renderRoute(['ADMIN'], '/settings');
+
+  expect(await screen.findByText('Still required')).toBeTruthy();
+  expect(
+    screen.getByText(/retained radio\s*\n?\s*tone-out paging is still required/i),
+  ).toBeTruthy();
+  expect(screen.getByRole('link', { name: 'See the full cutover report' })).toBeTruthy();
+});
+
+test('an accepted cutover decision never claims tone-out paging is disabled', async () => {
+  server.use(
+    http.get('/api/v1/platform/config/STATIONS', () =>
+      HttpResponse.json(
+        { type: 'about:blank', title: 'Not Found', status: 404, traceId: 't1' },
+        { status: 404 },
+      ),
+    ),
+    http.get('/api/v1/platform/config/RANKS', () =>
+      HttpResponse.json(
+        { type: 'about:blank', title: 'Not Found', status: 404, traceId: 't1' },
+        { status: 404 },
+      ),
+    ),
+    http.get('/api/v1/platform/config/LOSAP_POINT_RULES', () =>
+      HttpResponse.json(
+        { type: 'about:blank', title: 'Not Found', status: 404, traceId: 't1' },
+        { status: 404 },
+      ),
+    ),
+    http.get('/api/v1/platform/config/ALERT_RULES', () =>
+      HttpResponse.json(
+        { type: 'about:blank', title: 'Not Found', status: 404, traceId: 't1' },
+        { status: 404 },
+      ),
+    ),
+    http.get('/api/v1/platform/config/CHECKLIST_DEFAULTS', () =>
+      HttpResponse.json(
+        { type: 'about:blank', title: 'Not Found', status: 404, traceId: 't1' },
+        { status: 404 },
+      ),
+    ),
+    http.get('/api/v1/platform/retention', () =>
+      HttpResponse.json({ retentionYears: 7, version: 1, source: 'stored' }),
+    ),
+    cutoverDecisionHandler(false),
+  );
+  renderRoute(['ADMIN'], '/settings');
+
+  expect(await screen.findByText('Not required')).toBeTruthy();
+  expect(screen.queryByText(/does not disable, pause, or otherwise change/i)).toBeTruthy();
+  expect(screen.queryByText(/tone-out paging is (now )?disabled/i)).toBeNull();
 });

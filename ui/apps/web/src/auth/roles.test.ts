@@ -85,3 +85,14 @@ test('starting a report and listing dispatches admit OFFICER, CHIEF and ADMIN on
     expect(helper(['TRAINING', 'APPARATUS'])).toBe(false);
   }
 });
+
+// #161: RecordCutoverDecision is CHIEF/ADMIN only, same tier as ExportReport (policy-store.test.ts
+// ADMIN_WRITES) — reading the decision is every reporting role and is not gated by this helper.
+test('canRecordCutoverDecision admits only CHIEF and ADMIN', async () => {
+  const { canRecordCutoverDecision } = await import('./roles');
+  expect(canRecordCutoverDecision(['CHIEF'])).toBe(true);
+  expect(canRecordCutoverDecision(['ADMIN'])).toBe(true);
+  expect(canRecordCutoverDecision(['OFFICER'])).toBe(false);
+  expect(canRecordCutoverDecision(['TRAINING'])).toBe(false);
+  expect(canRecordCutoverDecision(['MEMBER', 'APPARATUS'])).toBe(false);
+});
