@@ -1,6 +1,6 @@
 import { FormEvent, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useSearchParams } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../../auth/AuthContext';
 import { ApiError } from '../../lib/apiClient';
 import { ApiForbiddenGate } from '../../components/ApiForbiddenGate';
@@ -20,11 +20,13 @@ import {
   getReceipts,
   getRidingBoard,
   getRoster,
+  listActiveDispatches,
   submitManualDispatch,
 } from './api';
 import { PrePlanPanel } from './PrePlanPanel';
 import { ToneLadderPanel } from './ToneLadderPanel';
 import type {
+  ActiveDispatch,
   DeliveryReceipt,
   DispatchUpdate,
   FieldError,
@@ -353,6 +355,9 @@ function RosterTable({ dispatchId }: { dispatchId: string }) {
               <th scope="col" style={{ textAlign: 'left' }}>
                 Assigned
               </th>
+              <th scope="col">
+                <span className="visually-hidden">Delivery</span>
+              </th>
             </tr>
           </thead>
           <tbody>
@@ -364,6 +369,14 @@ function RosterTable({ dispatchId }: { dispatchId: string }) {
                 <td>{ackLabel(entry.ackStatus)}</td>
                 <td>{entry.quals.join(', ')}</td>
                 <td>{entry.assignedApparatusId ?? '—'}</td>
+                <td>
+                  <Link
+                    to={`/alerts/diagnostics?dispatchId=${encodeURIComponent(dispatchId)}&memberId=${encodeURIComponent(entry.memberId)}`}
+                    aria-label={`Delivery diagnostics for ${entry.name}`}
+                  >
+                    Diagnose
+                  </Link>
+                </td>
               </tr>
             ))}
           </tbody>
@@ -610,6 +623,100 @@ export function DispatchUpdates({
   );
 }
 
+function formatClock(epochSeconds: number): string {
+  return new Date(epochSeconds * 1000).toLocaleTimeString(undefined, {
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+}
+
+function formatWindow(seconds: number): string {
+  if (seconds % 3600 === 0) {
+    const hours = seconds / 3600;
+    return hours === 1 ? 'hour' : `${hours} hours`;
+  }
+  return `${Math.round(seconds / 60)} minutes`;
+}
+
+function ActiveCallRow({ dispatch, onOpen }: { dispatch: ActiveDispatch; onOpen: () => void }) {
+  const ladder = dispatch.toneLadder;
+  return (
+    <li
+      style={{
+        display: 'flex',
+        flexWrap: 'wrap',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        gap: 'var(--bx-space-sm)',
+        padding: 'var(--bx-space-sm) 0',
+        borderTop: '1px solid var(--bx-border-decorative)',
+      }}
+    >
+      <div>
+        <strong>{dispatch.incidentType ?? 'Unknown call type'}</strong>
+        {' — '}
+        {dispatch.address ?? 'No address on the dispatch'}
+        {dispatch.crossStreets ? ` (${dispatch.crossStreets})` : null}
+        <div style={{ color: 'var(--bx-fg-muted)', fontSize: 14 }}>
+          dispatched {formatClock(dispatch.dispatchedAt)} · tone {ladder.currentToneSequence}
+          {ladder.status === 'ACTIVE'
+            ? ' · ladder running'
+            : ` · ladder ${ladder.status.toLowerCase()}`}
+        </div>
+      </div>
+      <Button variant="primary" size="sm" onClick={onOpen}>
+        Open roster
+      </Button>
+    </li>
+  );
+}
+
+/**
+ * The calls dispatched inside the alerting plane's recency window, newest first - what an
+ * officer opening this screen during a call is looking for, so it sits above the manual-entry
+ * fallback. The window comes from the server (the alerting plane has no "cleared" state).
+ */
+function ActiveCallsCard({ onOpen }: { onOpen: (dispatchId: string) => void }) {
+  const auth = useAuth();
+  const query = useQuery({
+    queryKey: ['alerting', 'dispatches', 'active'],
+    queryFn: () => listActiveDispatches(auth),
+    refetchInterval: REFETCH_INTERVAL_MS,
+  });
+
+  return (
+    <Card title="Active calls" style={{ marginBottom: 'var(--bx-space-lg)' }}>
+      {query.isLoading ? <Skeleton lines={2} /> : null}
+      {query.error ? (
+        <p role="status">
+          Active calls aren't available right now. Enter a dispatch ID below to open a call
+          directly.
+        </p>
+      ) : null}
+      {query.data ? (
+        query.data.dispatches.length === 0 ? (
+          <p>
+            No calls dispatched in the last {formatWindow(query.data.activeWindowSeconds)} (as of{' '}
+            {formatClock(query.data.asOf)}).
+          </p>
+        ) : (
+          <ul style={{ listStyle: 'none', margin: 0, padding: 0 }}>
+            {[...query.data.dispatches]
+              .sort((a, b) => b.dispatchedAt - a.dispatchedAt)
+              .map((dispatch) => (
+                <ActiveCallRow
+                  key={dispatch.dispatchId}
+                  dispatch={dispatch}
+                  onOpen={() => onOpen(dispatch.dispatchId)}
+                />
+              ))}
+          </ul>
+        )
+      ) : null}
+    </Card>
+  );
+}
+
 // E1-S1-UI, E1-S4-UI, E1-S5-UI, E1-S6-UI, E1-S17-UI, E5-S8-UI, E1-S18-UI: one screen (/alerts/roster
 // per the existing route table) - dispatch header + pre-plan, the tone-ladder / mutual-aid
 // controls (F1.13/F1.14), live roster, delivery receipts, and the riding board, plus the
@@ -626,7 +733,20 @@ export function AlertsRosterPage() {
 
   return (
     <main id="main-content">
-      <PageHeader title={!dispatchId ? 'Live roster' : 'Alert'} />
+      <PageHeader
+        title={!dispatchId ? 'Live roster' : 'Alert'}
+        actions={
+          dispatchId ? (
+            <Button variant="secondary" size="sm" onClick={() => setSearchParams({})}>
+              All active calls
+            </Button>
+          ) : undefined
+        }
+      />
+
+      {!dispatchId ? (
+        <ActiveCallsCard onOpen={(id) => setSearchParams({ dispatchId: id })} />
+      ) : null}
 
       {canEnterManually ? (
         <ManualEntryForm onCreated={(id) => setSearchParams({ dispatchId: id })} />

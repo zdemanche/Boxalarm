@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import { useEffect, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
 import { ChevronRight } from './icons';
 import styles from './PageHeader.module.css';
@@ -15,6 +15,16 @@ interface PageHeaderProps {
 }
 
 export function PageHeader({ title, breadcrumbs, actions }: PageHeaderProps) {
+  // Every routed page renders exactly one PageHeader, so it owns the browser tab title too:
+  // "Live roster · Boxalarm" in the tab strip and history, never a bare "Boxalarm".
+  useEffect(() => {
+    const previous = document.title;
+    document.title = `${title} · Boxalarm`;
+    return () => {
+      document.title = previous;
+    };
+  }, [title]);
+
   return (
     <header className={styles.header}>
       <div className={styles.titleGroup}>

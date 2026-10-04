@@ -3,11 +3,11 @@
 Client surfaces for **Boxalarm**, a fire department operations platform replacing Chief360. Tenant zero: Nichols FD, Trumbull CT.
 
 **Build only — no Pulumi in this directory.** All AWS lives in `../infrastructure/`.
-Product context, architecture, and the backlog live at the monorepo root — read `../docs/architecture.md` before implementing anything, and `../CLAUDE.md` for current state (this file's status section predates the build).
+Product context, architecture, and the backlog live at the monorepo root — read `../docs/architecture.md` before implementing anything, and `../CLAUDE.md` for current state.
 
-## Where things stand (2026-09-03)
+## Where things stand (2026-10-04)
 
-**Nothing is scaffolded yet.** The repo holds a README and bootstrap issue [#115](https://github.com/zdemanche/Boxalarm/issues/115). Architecture v1.0 and a 90-story backlog are done in `boxalarm-docs`; the user has asked for a **decision gate before the build phase begins**, so do not start generating screens until they say go.
+Both surfaces are built: `apps/web` (React SPA, ~30 role-gated routes) and `apps/mobile` (React Native). The web app ships a **demo mode** (`VITE_DEMO=true`: in-memory fake API, auto sign-in, live role switcher) that `.github/workflows/pages.yml` publishes to <https://zdemanche.github.io/Boxalarm/> on every push to `main`. The shared demo roster and fleet are in `apps/web/src/lib/demoRoster.ts`; every per-feature `demoFixtures.ts` keys on it. The build-phase gate was passed on 2026-09-04 (see `../CLAUDE.md`).
 
 Work is tracked as `<KEY>-UI` monorepo issues labelled `area:ui`, each a sub-issue of its backend story.
 
@@ -16,7 +16,7 @@ Work is tracked as `<KEY>-UI` monorepo issues labelled `area:ui`, each a sub-iss
 | Surface | Stack | Scope |
 |---|---|---|
 | Mobile | React Native, iOS + Android, one codebase | 5 stacks, 15 screens |
-| Web | React SPA | 15 routes — officer, chief, training, apparatus, admin |
+| Web | React SPA | ~30 routes — officer, chief, training, apparatus, admin, member |
 
 **No micro-frontend topology.** One application per surface, deliberately — the Moonaan MFE shell/remote pattern buys nothing at single-department scale. Do not apply `sdlc:mfe-architecture` here. Revisit only when a second department needs an independent deploy cadence.
 

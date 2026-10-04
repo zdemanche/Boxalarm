@@ -1,9 +1,11 @@
-import { useState } from 'react';
+import { useId, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
+import { useSearchParams } from 'react-router-dom';
 import { useAuth } from '../../auth/AuthContext';
 import { ApiForbiddenGate } from '../../components/ApiForbiddenGate';
-import { Card, PageHeader, Skeleton, StatusChip, TextInput } from '../../components/ui';
-import { getCanaryStatus, getDiagnostics } from './api';
+import { Button, Card, PageHeader, Skeleton, StatusChip, TextInput } from '../../components/ui';
+import { listMembers } from '../../features/personnel/api';
+import { getCanaryStatus, getDiagnostics, listActiveDispatches } from './api';
 import type { DeviceState, DiagnosticsTimelineEntry } from './types';
 
 // AC2 intent ("never a stale green"): canary/statusHandler.ts computes healthy purely from
@@ -220,20 +222,97 @@ function CanaryPanel() {
   );
 }
 
+function clock(epochSeconds: number): string {
+  return new Date(epochSeconds * 1000).toLocaleTimeString(undefined, {
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+}
+
+/**
+ * The calls in the alerting plane's recency window, as one-tap choices for the Dispatch ID
+ * field. Quiet when the list can't load - the typed fields still work on their own.
+ */
+function ActiveCallPicker({
+  selected,
+  onPick,
+}: {
+  selected: string;
+  onPick: (dispatchId: string) => void;
+}) {
+  const auth = useAuth();
+  const query = useQuery({
+    queryKey: ['alerting', 'dispatches', 'active'],
+    queryFn: () => listActiveDispatches(auth),
+  });
+  const dispatches = query.data?.dispatches ?? [];
+  if (dispatches.length === 0) return null;
+
+  return (
+    <div style={{ marginBottom: 'var(--bx-space-md)' }}>
+      <p style={{ margin: '0 0 var(--bx-space-xs)', fontSize: 14, color: 'var(--bx-fg-muted)' }}>
+        Recent calls
+      </p>
+      <ul
+        style={{
+          listStyle: 'none',
+          margin: 0,
+          padding: 0,
+          display: 'flex',
+          flexWrap: 'wrap',
+          gap: 'var(--bx-space-sm)',
+        }}
+      >
+        {[...dispatches]
+          .sort((a, b) => b.dispatchedAt - a.dispatchedAt)
+          .map((dispatch) => (
+            <li key={dispatch.dispatchId}>
+              <Button
+                variant={dispatch.dispatchId === selected ? 'primary' : 'secondary'}
+                size="sm"
+                aria-pressed={dispatch.dispatchId === selected}
+                onClick={() => onPick(dispatch.dispatchId)}
+              >
+                {dispatch.incidentType ?? 'Call'} · {dispatch.address ?? dispatch.dispatchId} ·{' '}
+                {clock(dispatch.dispatchedAt)}
+              </Button>
+            </li>
+          ))}
+      </ul>
+    </div>
+  );
+}
+
 // #160/#159: web /alerts/diagnostics (officer, chief, admin) - member+dispatch self-diagnosis
 // timeline and the N8.3 canary health panel. Follows AlertsRosterPage.tsx's shape (type-and-the
 // -view-updates, no submit button) - the diagnostics query only enables once both identifiers
 // are entered.
 export function AlertsDiagnosticsPage() {
-  const [dispatchId, setDispatchId] = useState('');
-  const [memberId, setMemberId] = useState('');
+  const auth = useAuth();
+  // The roster's per-member "Diagnose" link lands here with both ids in the URL.
+  const [searchParams] = useSearchParams();
+  const [dispatchId, setDispatchId] = useState(searchParams.get('dispatchId') ?? '');
+  const [memberId, setMemberId] = useState(searchParams.get('memberId') ?? '');
+  const membersListId = useId();
+  const members = useQuery({
+    queryKey: ['personnel', 'members'],
+    queryFn: () => listMembers(auth),
+    staleTime: 60_000,
+  });
 
   return (
     <main id="main-content">
       <PageHeader title="Alert diagnostics" />
 
+      <ActiveCallPicker selected={dispatchId.trim()} onPick={setDispatchId} />
+
       <div
-        style={{ display: 'flex', gap: 'var(--bx-space-md)', marginBottom: 'var(--bx-space-lg)' }}
+        style={{
+          display: 'flex',
+          flexWrap: 'wrap',
+          gap: 'var(--bx-space-md)',
+          marginBottom: 'var(--bx-space-lg)',
+        }}
       >
         <TextInput
           label="Dispatch ID"
@@ -243,10 +322,21 @@ export function AlertsDiagnosticsPage() {
         />
         <TextInput
           label="Member ID"
+          help={members.data ? 'Start typing a name to pick from the roster.' : undefined}
           value={memberId}
+          list={members.data ? membersListId : undefined}
           onChange={(e) => setMemberId(e.target.value)}
           style={{ maxWidth: 260 }}
         />
+        {members.data ? (
+          <datalist id={membersListId}>
+            {members.data.map((member) => (
+              <option key={member.memberId} value={member.memberId}>
+                {member.lastName}, {member.firstName} · {member.rank}
+              </option>
+            ))}
+          </datalist>
+        ) : null}
       </div>
 
       {dispatchId.trim() && memberId.trim() ? (
