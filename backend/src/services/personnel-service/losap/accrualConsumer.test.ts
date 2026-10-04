@@ -104,9 +104,9 @@ describe('losap accrual consumer (#206, entrypoint-test obligation)', () => {
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const { handler } = await import('./accrualConsumer.js');
 
-    await expect(
-      handler(sqsEvent({ deptId: 'NICHOLS', memberId: 'mbr-1' })),
-    ).rejects.toThrow('personnel.attendance.recorded event failed shape validation');
+    await expect(handler(sqsEvent({ deptId: 'NICHOLS', memberId: 'mbr-1' }))).rejects.toThrow(
+      'personnel.attendance.recorded event failed shape validation',
+    );
     expect(send).not.toHaveBeenCalled();
     errorSpy.mockRestore();
   });
