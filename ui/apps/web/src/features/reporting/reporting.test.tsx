@@ -472,6 +472,126 @@ test('TRAINING can read reports but is not offered export (ExportReport is CHIEF
   expect(screen.queryByRole('button', { name: /^Export/ })).toBeNull();
 });
 
+// #161: the delivery-rate comparison and the accept/defer decision for N1.9 cutover.
+test('cutover shows the delivery baseline and lets a CHIEF accept the decision', async () => {
+  let posted: unknown;
+  server.use(
+    dashboardHandler(DASHBOARD),
+    http.get('/api/v1/reporting/cutover-decision', () =>
+      HttpResponse.json({
+        decision: null,
+        decider: null,
+        decidedAt: null,
+        retainedPagingRequired: true,
+        deliveryBaseline: {
+          periodFrom: 0,
+          periodTo: 0,
+          deliveryRate: 0.9,
+          missedPageCount: 3,
+          timeToFirstAckAverageSeconds: 42,
+          timeToFirstAckMedianSeconds: 30,
+          perMember: [
+            { memberId: 'm-1', sent: 10, delivered: 9, missedPageCount: 1, deliveryRate: 0.9 },
+          ],
+          meetsThreshold: false,
+          threshold: 0.95,
+        },
+      }),
+    ),
+    http.post('/api/v1/reporting/cutover-decision', async ({ request }) => {
+      posted = await request.json();
+      return HttpResponse.json({ decision: 'accept', decider: 'chief-1', decidedAt: 1_700_000 });
+    }),
+  );
+  renderPage(['CHIEF']);
+  await openTab('Cutover');
+
+  expect(await screen.findByText('Not yet decided')).toBeTruthy();
+  expect(screen.getByText('Still required')).toBeTruthy();
+  // 90% appears twice: the overall delivery-rate Stat and m-1's own row (both 0.9).
+  expect(screen.getAllByText('90%').length).toBeGreaterThanOrEqual(2);
+  expect(screen.getByRole('rowheader', { name: 'm-1' })).toBeTruthy();
+  // Never implies radio tone-out is disabled by this decision (CLAUDE.md N1.9).
+  expect(
+    screen.getByText(/does not disable, pause, or otherwise change tone-out paging/),
+  ).toBeTruthy();
+
+  const user = userEvent.setup();
+  await user.click(screen.getByRole('button', { name: 'Accept cutover data' }));
+  const dialog = await screen.findByRole('dialog', {
+    name: "Accept Boxalarm's cutover delivery data?",
+  });
+  await user.click(within(dialog).getByRole('button', { name: 'Accept' }));
+
+  await waitFor(() => expect(posted).toEqual({ decision: 'accept' }));
+});
+
+test('cutover decide buttons are not offered to TRAINING (RecordCutoverDecision is CHIEF/ADMIN)', async () => {
+  server.use(
+    dashboardHandler(DASHBOARD),
+    http.get('/api/v1/reporting/cutover-decision', () =>
+      HttpResponse.json({
+        decision: 'defer',
+        decider: 'chief-1',
+        decidedAt: 1_700_000_000_000,
+        retainedPagingRequired: true,
+      }),
+    ),
+  );
+  renderPage(['TRAINING']);
+  await openTab('Cutover');
+
+  expect(await screen.findByText('Deferred')).toBeTruthy();
+  expect(screen.queryByRole('button', { name: 'Accept cutover data' })).toBeNull();
+  expect(screen.queryByRole('button', { name: 'Defer' })).toBeNull();
+});
+
+test('a failed cutover-decision POST is shown, not swallowed', async () => {
+  server.use(
+    dashboardHandler(DASHBOARD),
+    http.get('/api/v1/reporting/cutover-decision', () =>
+      HttpResponse.json({
+        decision: null,
+        decider: null,
+        decidedAt: null,
+        retainedPagingRequired: true,
+      }),
+    ),
+    http.post('/api/v1/reporting/cutover-decision', () =>
+      HttpResponse.json(problem(503, 'Service Unavailable'), { status: 503 }),
+    ),
+  );
+  renderPage(['ADMIN']);
+  await openTab('Cutover');
+
+  const user = userEvent.setup();
+  await user.click(await screen.findByRole('button', { name: 'Defer' }));
+  const dialog = await screen.findByRole('dialog', { name: 'Defer the cutover decision?' });
+  await user.click(within(dialog).getByRole('button', { name: 'Defer' }));
+
+  expect(await screen.findByText('Could not record the decision. Try again.')).toBeTruthy();
+});
+
+test('an accepted decision reports retained paging as not required, without saying tone-out is off', async () => {
+  server.use(
+    dashboardHandler(DASHBOARD),
+    http.get('/api/v1/reporting/cutover-decision', () =>
+      HttpResponse.json({
+        decision: 'accept',
+        decider: 'chief-1',
+        decidedAt: 1_700_000_000_000,
+        retainedPagingRequired: false,
+      }),
+    ),
+  );
+  renderPage(['CHIEF']);
+  await openTab('Cutover');
+
+  expect(await screen.findByText('Accepted')).toBeTruthy();
+  expect(screen.getByText('Not required')).toBeTruthy();
+  expect(screen.queryByText(/tone-out paging is (now )?disabled/i)).toBeNull();
+});
+
 test('the route guard blocks a MEMBER before any report is requested', async () => {
   const request = vi.fn();
   server.use(

@@ -1,6 +1,6 @@
 import { palette, radius, spacing, touchTarget, typography } from '@boxalarm/design-tokens';
-import { useNavigation, useRoute } from '@react-navigation/native';
-import { useState } from 'react';
+import { useNavigation, useRoute, type NavigationProp } from '@react-navigation/native';
+import { useEffect, useState } from 'react';
 import {
   AccessibilityInfo,
   ScrollView,
@@ -11,9 +11,12 @@ import {
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { useOptionalAuth } from '../../auth/AuthContext';
 import { Button } from '../../components/ui';
 import { useChecksRepository } from '../../features/checks/apiChecksRepository';
-import type { DefectSeverity } from '../../features/checks/types';
+import { SERVICE_STATUS_ROLES } from '../../features/checks/serviceStatusApi';
+import type { ApparatusStatus, DefectSeverity } from '../../features/checks/types';
+import type { ChecksStackParamList } from '../../navigation/ChecksStack';
 import { capturePhoto, type CapturedPhoto } from '../../sync/photoCapture';
 
 // docs/design.md §8.4 severity words - the same ones the check runner uses for a failed item.
@@ -29,11 +32,15 @@ function newIdempotencyKey(): string {
 
 export function DefectReportScreen() {
   const route = useRoute();
-  const navigation = useNavigation();
+  const navigation = useNavigation<NavigationProp<ChecksStackParamList>>();
+  // Despite the field name, this is the apparatus's unitId (ApparatusPickerScreen navigates here
+  // with `apparatusId: item.unitId`) - the same value ServiceStatusScreen's `unitId` param wants.
   const apparatusId = (route.params as { apparatusId: string }).apparatusId;
   const scheme = useColorScheme();
   const tokens = scheme === 'dark' ? palette.cab : palette.day;
   const repository = useChecksRepository();
+  const roles = useOptionalAuth()?.roles ?? [];
+  const canChangeServiceStatus = SERVICE_STATUS_ROLES.some((role) => roles.includes(role));
   const [description, setDescription] = useState('');
   const [severity, setSeverity] = useState<DefectSeverity>('MINOR');
   const [submitted, setSubmitted] = useState(false);
@@ -41,9 +48,33 @@ export function DefectReportScreen() {
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [photo, setPhoto] = useState<CapturedPhoto | null>(null);
   const [photoError, setPhotoError] = useState<string | null>(null);
+  // So the OUT_OF_SERVICE handoff (#122) can pre-fill ServiceStatusScreen's `status` param
+  // without the officer re-entering or re-picking the unit; null until it loads (or if it can't -
+  // e.g. offline), in which case the handoff falls back to assuming IN_SERVICE rather than
+  // blocking the handoff entirely.
+  const [currentStatus, setCurrentStatus] = useState<ApparatusStatus | null>(null);
   // Stable across retries of the same report, so a resend after a real failure can't create a
   // duplicate defect record server-side (same pattern as CheckRunnerScreen's idempotencyKey).
   const [idempotencyKey] = useState(newIdempotencyKey);
+
+  useEffect(() => {
+    if (!canChangeServiceStatus) return;
+    let cancelled = false;
+    repository
+      .getApparatus()
+      .then((list) => {
+        if (cancelled) return;
+        const match = list.find((a) => a.unitId === apparatusId);
+        if (match) setCurrentStatus(match.status);
+      })
+      .catch(() => {
+        // Offline or unreachable: the handoff below falls back to assuming IN_SERVICE rather
+        // than hiding it - the photo/offline defect-filing path above is unaffected either way.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [canChangeServiceStatus, repository, apparatusId]);
 
   const handleAddPhoto = async () => {
     setPhotoError(null);
@@ -102,6 +133,25 @@ export function DefectReportScreen() {
         >
           Defect reported
         </Text>
+        {/* #122: an OUT_OF_SERVICE report's natural next step is taking the unit out of service -
+            offered inline, with the unit already filled in, instead of sending the officer back
+            through the apparatus picker to find it again. Not shown once it's already OOS. */}
+        {severity === 'OUT_OF_SERVICE' &&
+        canChangeServiceStatus &&
+        currentStatus !== 'OUT_OF_SERVICE' ? (
+          <View style={{ marginTop: spacing.lg, width: '100%' }}>
+            <Button
+              label={`Take ${apparatusId} out of service now`}
+              variant="danger"
+              onPress={() =>
+                navigation.navigate('ServiceStatus', {
+                  unitId: apparatusId,
+                  status: currentStatus ?? 'IN_SERVICE',
+                })
+              }
+            />
+          </View>
+        ) : null}
         <TouchableOpacity
           accessibilityRole="button"
           onPress={() => navigation.goBack()}

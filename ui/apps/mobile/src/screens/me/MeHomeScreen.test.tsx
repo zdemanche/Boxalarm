@@ -2,6 +2,7 @@ import { act, fireEvent, render, waitFor } from '@testing-library/react-native';
 import * as syncManager from '../../sync/syncManager';
 import { Alert } from 'react-native';
 import { MeHomeScreen, signOutWarning } from './MeHomeScreen';
+import { mockMeRepository } from '../../features/me/mockMeRepository';
 
 const mockSignOut = jest.fn(async (): Promise<{ pushRevoked: boolean } | void> => {});
 const mockRetryPendingUnregister = jest.fn();
@@ -15,8 +16,17 @@ jest.mock('../../auth/AuthContext', () => ({
 jest.mock('react-native-config', () => ({ __esModule: true, default: {} }));
 
 const mockNavigate = jest.fn();
+// Captures the latest callback react-navigation would re-invoke on every focus, and runs it once
+// on mount - enough to exercise the refetch-on-focus wiring without a full NavigationContainer.
+const mockUseFocusEffect = jest.fn();
 jest.mock('@react-navigation/native', () => ({
   useNavigation: () => ({ navigate: mockNavigate }),
+  useFocusEffect: (callback: () => void | (() => void)) => {
+    mockUseFocusEffect(callback);
+    // jest.mock factories may not reference out-of-scope imports; require() is the workaround.
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    require('react').useEffect(() => callback(), []);
+  },
 }));
 
 beforeEach(() => {
@@ -29,6 +39,26 @@ test('shows the member profile once it loads', async () => {
 
   expect(await findByText('Jamie Rios')).toBeTruthy();
   expect(await findByText('Firefighter')).toBeTruthy();
+});
+
+// #144: ProfileEditScreen saves and calls navigation.goBack() straight back to Me, so a stale
+// name/phone surviving the trip would be a visible save-didn't-work bug, not just a cache nit.
+test('refetches the profile on focus, so a ProfileEdit save is not stale on return (#144)', async () => {
+  const { findByText } = await render(<MeHomeScreen />);
+  expect(await findByText('Jamie Rios')).toBeTruthy();
+
+  const getProfileSpy = jest
+    .spyOn(mockMeRepository, 'getProfile')
+    .mockResolvedValueOnce({ ...(await mockMeRepository.getProfile()), firstName: 'Jordan' });
+
+  // Simulates React Navigation re-running the focus effect when the member returns from
+  // ProfileEditScreen - not a second mount, the same focus-effect callback firing again.
+  await act(async () => {
+    mockUseFocusEffect.mock.calls.at(-1)![0]();
+  });
+
+  expect(await findByText('Jordan Rios')).toBeTruthy();
+  getProfileSpy.mockRestore();
 });
 
 test('lists held qualifications with eligibility (E2-S2)', async () => {

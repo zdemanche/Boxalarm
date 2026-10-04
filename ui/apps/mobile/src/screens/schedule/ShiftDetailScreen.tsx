@@ -53,28 +53,35 @@ export function ShiftDetailScreen() {
   useEffect(() => {
     let cancelled = false;
     repository
-      .getShifts()
-      .then((shifts) => {
-        const found = shifts.find((s) => s.shiftId === shiftId) ?? null;
+      .getShift(shiftId)
+      .then((found) => {
         if (cancelled) return;
-        if (!found) {
-          setLoadError('This shift is no longer on the schedule.');
-          return;
-        }
         setShift(found);
         const initial: Record<string, ClaimUiState> = {};
         for (const position of found.positions) {
-          initial[position.positionCode] = position.claimedByMemberId ? 'claimed_by_other' : 'open';
+          // claimedByMe (server-computed, handleGetShift) takes priority over comparing ids
+          // client-side: a position this member already holds from a previous session must
+          // read "Claimed by you" on load, not the generic "Claimed" of claimed_by_other, or
+          // give-back/propose-swap would be offered with no explanation of why.
+          if (position.claimedByMe) {
+            initial[position.positionCode] = 'claimed_by_you';
+          } else if (position.claimedByMemberId) {
+            initial[position.positionCode] = 'claimed_by_other';
+          } else {
+            initial[position.positionCode] = 'open';
+          }
         }
         setClaimState(initial);
       })
       .catch((e: unknown) => {
         if (cancelled) return;
-        setLoadError(
-          e instanceof NoCachedDataError
-            ? "You're offline, and this phone hasn't loaded this shift yet."
-            : 'This shift could not be loaded. Check your connection and try again.',
-        );
+        if (e instanceof NoCachedDataError) {
+          setLoadError("You're offline, and this phone hasn't loaded this shift yet.");
+        } else if (e instanceof ApiError && e.problem.status === 404) {
+          setLoadError('This shift is no longer on the schedule.');
+        } else {
+          setLoadError('This shift could not be loaded. Check your connection and try again.');
+        }
       });
     return () => {
       cancelled = true;
@@ -224,7 +231,9 @@ export function ShiftDetailScreen() {
         {shift.positions.map((position) => {
           const state = claimState[position.positionCode] ?? 'open';
           const isMine =
-            state === 'claimed_by_you' || position.claimedByMemberId === auth?.memberId;
+            state === 'claimed_by_you' ||
+            position.claimedByMe === true ||
+            position.claimedByMemberId === auth?.memberId;
           return (
             <View
               key={position.positionCode}

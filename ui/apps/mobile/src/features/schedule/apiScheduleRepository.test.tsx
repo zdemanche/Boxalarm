@@ -115,6 +115,77 @@ test('offline, getShifts serves the last real list with its timestamp, never the
   expect(result.current.shiftsCachedAt?.()).toEqual(expect.any(Number));
 });
 
+test('getShift reads one shift with its positions, normalising a missing claim to null', async () => {
+  mockApiRequest.mockResolvedValue({
+    json: async () => ({
+      shiftId: 'SHIFT-1',
+      startAt: Date.parse('2026-10-01T00:00:00Z'),
+      endAt: Date.parse('2026-10-01T12:00:00Z'),
+      stationId: 'STATION-1',
+      status: 'PARTIALLY_FILLED',
+      positions: [
+        { positionCode: 'DRIVER' },
+        {
+          positionCode: 'OFFICER',
+          requiredQual: 'OFFICER',
+          claimedByMemberId: 'MBR-0034',
+          claimedByMe: false,
+        },
+      ],
+    }),
+  });
+
+  const { result } = await renderHook(() => useScheduleRepository());
+  const shift = await result.current.getShift('SHIFT-1');
+
+  expect(mockApiRequest).toHaveBeenCalledWith('personnel/shifts/SHIFT-1', mockAuthValue, {
+    apiBaseUrl: 'https://api.example.com',
+  });
+  expect(shift.positions).toEqual([
+    { positionCode: 'DRIVER', requiredQual: null, claimedByMemberId: null },
+    {
+      positionCode: 'OFFICER',
+      requiredQual: 'OFFICER',
+      claimedByMemberId: 'MBR-0034',
+      claimedByMe: false,
+    },
+  ]);
+});
+
+test('getShift re-throws a 404 (ApiError) rather than falling back to cache or mock', async () => {
+  const notFound = new ApiError({
+    type: 'about:blank',
+    title: 'Not Found',
+    status: 404,
+    traceId: 'trace-404',
+  });
+  mockApiRequest.mockRejectedValue(notFound);
+
+  const { result } = await renderHook(() => useScheduleRepository());
+
+  await expect(result.current.getShift('SHIFT-GONE')).rejects.toBe(notFound);
+});
+
+test("offline, getShift serves this phone's last read of that same shift", async () => {
+  mockApiRequest.mockResolvedValueOnce({
+    json: async () => ({
+      shiftId: 'SHIFT-1',
+      startAt: Date.parse('2026-10-01T00:00:00Z'),
+      endAt: Date.parse('2026-10-01T12:00:00Z'),
+      stationId: 'STATION-1',
+      status: 'OPEN',
+      positions: [{ positionCode: 'DRIVER' }],
+    }),
+  });
+  const { result } = await renderHook(() => useScheduleRepository());
+  await result.current.getShift('SHIFT-1');
+
+  mockApiRequest.mockRejectedValueOnce(new TypeError('Network request failed'));
+  const shift = await result.current.getShift('SHIFT-1');
+
+  expect(shift.shiftId).toBe('SHIFT-1');
+});
+
 test('claimPosition resolves CLAIMED on a bare 2xx with no outcome field', async () => {
   mockApiRequest.mockResolvedValue({ json: async () => ({}) });
 

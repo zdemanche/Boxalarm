@@ -37,3 +37,11 @@
   align-items: flex-end;
   gap: var(--bx-space-md);
 }
+
+.decisionRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--bx-space-md);
+  margin-top: var(--bx-space-md);
+}

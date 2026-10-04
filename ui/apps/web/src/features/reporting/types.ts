@@ -148,6 +148,47 @@ export interface ReportExportJob {
   downloadUrl?: string;
 }
 
+// GET/POST reporting/cutover-decision (reporting-service cutoverDecision)
+export type CutoverDecisionStatus = 'accept' | 'defer';
+
+export interface MemberDeliveryView {
+  memberId: string;
+  sent: number;
+  delivered: number;
+  missedPageCount: number;
+  deliveryRate: number;
+}
+
+export interface DeliveryBaselineView {
+  periodFrom: number;
+  periodTo: number;
+  deliveryRate: number;
+  missedPageCount: number;
+  timeToFirstAckAverageSeconds: number | null;
+  timeToFirstAckMedianSeconds: number | null;
+  perMember: MemberDeliveryView[];
+  meetsThreshold: boolean;
+  threshold: number;
+}
+
+/** GET reporting/cutover-decision. `deliveryBaseline` is present only when the request carried
+ * `?from&to` (cutoverDecision/get.ts `wantsBaseline`). */
+export interface CutoverDecisionView {
+  decision: CutoverDecisionStatus | null;
+  decider: string | null;
+  decidedAt: number | null;
+  /** False only once an `accept` decision is on record — never flips on `defer` alone. */
+  retainedPagingRequired: boolean;
+  deliveryBaseline?: DeliveryBaselineView;
+}
+
+/** POST reporting/cutover-decision response (cutoverDecision/post.ts `record`). */
+export interface CutoverDecisionRecord {
+  decision: CutoverDecisionStatus;
+  decider: string;
+  decidedAt: number;
+}
+
 // GET reporting/neris-compliance (reporting-service nerisCompliance)
 export interface NerisOpenDraft {
   id: string;

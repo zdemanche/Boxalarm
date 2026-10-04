@@ -1,6 +1,7 @@
 import { Link } from 'react-router-dom';
 import { Card, PageHeader } from '../../components/ui';
 import { CheckSheetEditor } from './CheckSheetEditor';
+import { CutoverStatusNotice } from './CutoverStatusNotice';
 import { ExportSection } from './ExportSection';
 import { JsonConfigEditor } from './JsonConfigEditor';
 import { RetentionSection } from './RetentionSection';
@@ -44,6 +45,7 @@ export function SettingsPage() {
   return (
     <main id="main-content">
       <PageHeader title="Settings" />
+      <CutoverStatusNotice />
       <Card title="LOSAP">
         <p>Points awarded per attendance activity type for the length-of-service award program.</p>
         <Link to="/settings/losap">LOSAP point rules</Link>

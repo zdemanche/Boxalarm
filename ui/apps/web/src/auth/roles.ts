@@ -109,3 +109,10 @@ export function canListRecentDispatches(roles: readonly Role[]): boolean {
 export function canStartIncidentReport(roles: readonly Role[]): boolean {
   return canListRecentDispatches(roles);
 }
+
+/** Recording the N1.9 cutover accept/defer decision (Cedar RecordCutoverDecision): CHIEF or
+ * ADMIN only, same tier as ExportReport. Reading it (ViewCutoverDecision) is every reporting
+ * role and needs no gate here. */
+export function canRecordCutoverDecision(roles: readonly Role[]): boolean {
+  return roles.includes('CHIEF') || roles.includes('ADMIN');
+}

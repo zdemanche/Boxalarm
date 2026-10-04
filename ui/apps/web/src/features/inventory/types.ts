@@ -26,6 +26,13 @@ export interface ConsumableStock {
   reorderFlagged: boolean;
 }
 
+/** PUT /api/v1/inventory/consumables/{itemId} (#131, N-9): last-writer-wins, at least one
+ * field required. */
+export interface RestockConsumableInput {
+  stockLevel?: number;
+  reorderThreshold?: number;
+}
+
 export type PpeStatus = 'ISSUED' | 'RETIRED' | 'EXPIRED';
 
 export interface PpeAssignment {
