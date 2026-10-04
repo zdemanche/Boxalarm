@@ -41,10 +41,11 @@ describe("EligibilityStaleness", { timeout: 30_000 }, () => {
     expect(role?.inputs.permissionsBoundary).toBe(BOUNDARY_ARN);
   });
 
-  it("keeps the SnapshotStale alarm dashboard-only (no page) until the backend metric is fixed", async () => {
+  it("#232: pages on SnapshotStale now that the metric measures department-wide propagation lag", async () => {
     await build();
     const alarm = alarmByName("boxalarm-dev-alerting-eligibility-snapshot-stale");
-    expect(alarm.inputs.alarmActions ?? []).toEqual([]);
+    expect(alarm.inputs.namespace).toBe("Boxalarm/AlertingEligibility");
+    expect(alarm.inputs.alarmActions).toEqual([PAGE_TOPIC_ARN]);
   });
 
   it("pages on the staleness Lambda's own Errors (the stale alarm goes silent if it throws)", async () => {

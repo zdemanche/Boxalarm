@@ -22,12 +22,14 @@ export interface EligibilityStalenessArgs {
 /**
  * Eligibility-snapshot staleness check (E1-S13-INFRA): a recurring 5-minute schedule per
  * department invoking `eligibility/staleness/checkHandler.handler`, and an alarm on the
- * `SnapshotStale` metric it emits under `Boxalarm/alerting-eligibility` (namespace as
- * emitted by the handler, not the title-cased form in the ticket text).
+ * `SnapshotStale` metric it emits under `Boxalarm/AlertingEligibility`.
  *
- * boxalarm-backend#32: the handler currently measures absolute snapshot age, not
- * propagation lag, so this alarm can fire permanently for a member with no recent
- * change until the backend metric is corrected — tracked there, not fixed here.
+ * #232 (fixed): the handler used to measure each member's own absolute snapshot-write age,
+ * so one idle-but-correct member could pin this alarm in ALARM permanently — which is why
+ * it shipped dashboard-only (no `alarmActions`). It now measures department-wide
+ * propagation lag (`now - max(snapshotUpdatedAt)` across the partition), so `SnapshotStale`
+ * is 0 unless the whole department has gone 15+ minutes without an applied eligibility
+ * write. `alarmActions` is restored now that the metric can safely page.
  */
 export class EligibilityStaleness extends pulumi.ComponentResource {
   public readonly lambda: ServiceLambda;
@@ -138,7 +140,7 @@ export class EligibilityStaleness extends pulumi.ComponentResource {
       `${name}-alarm`,
       {
         name: `boxalarm-${env}-alerting-eligibility-snapshot-stale`,
-        namespace: "Boxalarm/alerting-eligibility",
+        namespace: "Boxalarm/AlertingEligibility",
         metricName: "SnapshotStale",
         statistic: "Maximum",
         comparisonOperator: "GreaterThanThreshold",
@@ -146,12 +148,10 @@ export class EligibilityStaleness extends pulumi.ComponentResource {
         period: 300,
         evaluationPeriods: 1,
         treatMissingData: "notBreaching",
-        // Deliberately NO alarmActions (dashboard-only) until the backend measures propagation
-        // lag instead of absolute snapshot age (boxalarm-backend#32, pre-monorepo number; see
-        // the class comment and the PR #326 review). As measured today, any member unchanged
-        // for 15 minutes is "stale", so this alarm sits in ALARM permanently and routing it to
-        // alerting-page would bury real pages under a constant noise floor. Restore
-        // `alarmActions: [args.pageTopicArn]` when the metric is fixed.
+        // #232: the metric is now a department-wide propagation-lag flag (0 unless every
+        // member's snapshot write is 15+ minutes stale), so it no longer sits in ALARM
+        // permanently — safe to page on.
+        alarmActions: [args.pageTopicArn],
       },
       { parent: this },
     );
