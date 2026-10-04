@@ -3,6 +3,7 @@ import { ServiceLambda } from "../observability/service-lambda";
 import { ServiceLogGroup } from "../observability/service-log-group";
 import { HttpApi } from "../api/http-api";
 import { verifiedPermissionsPolicyStatement } from "../authz/policy-store";
+import { auditMutationDenyStatement } from "../data/platform-table";
 import { IamPolicyStatement } from "../observability/observability-policy";
 import { lambdaCode } from "../shared/lambda-code";
 import { requireEnv } from "../shared/env";
@@ -50,6 +51,8 @@ const PUT_TABLE_STATEMENT = (tableArn: pulumi.Input<string>) =>
       Action: ["dynamodb:GetItem", "dynamodb:PutItem"],
       Resource: [arn],
     },
+    // #257 sweep: every platform-table-writing role carries the audit-row deny.
+    auditMutationDenyStatement(arn),
   ]);
 
 /** E2-S2-INFRA #204: qualifications get/put, scoped to the platform table + policy store. */

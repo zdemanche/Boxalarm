@@ -5,6 +5,7 @@ import { ServiceLogGroup } from "../observability/service-log-group";
 import { HttpApi } from "../api/http-api";
 import { observabilityPolicyStatements } from "../observability/observability-policy";
 import { ACTIVE_TRACING_CONFIG } from "../observability/xray-sampling";
+import { auditMutationDenyStatement } from "../data/platform-table";
 import { lambdaCode, LAMBDA_HANDLER } from "../shared/lambda-code";
 import { requireEnv } from "../shared/env";
 
@@ -241,6 +242,8 @@ export class Export extends pulumi.ComponentResource {
               Action: ["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:UpdateItem"],
               Resource: platformArn,
             },
+            // #257 sweep: markJobFailed's UpdateItem makes this a mutating role.
+            auditMutationDenyStatement(platformArn),
             {
               Sid: "InvokeExportWorker" as const,
               Effect: "Allow" as const,

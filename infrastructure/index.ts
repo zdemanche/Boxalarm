@@ -345,6 +345,8 @@ export const personnelLosap = new Losap("personnel-losap", {
   policyStoreId: policyStore.policyStoreId,
   logGroup: personnelLogGroup,
   httpApi,
+  platformBus,
+  opsAlarmTopicArn: chiefNotificationTopic.topicArn,
 });
 
 export const personnelShifts = new Shifts("personnel-shifts", {
@@ -848,6 +850,13 @@ export const ridingBoard = new RidingBoard("riding-board", {
   platformTableName: platformTable.tableName,
   logGroup: apparatusLogGroup,
   policyStoreId: policyStore.policyStoreId,
+  platformBus,
+  alertingTableArn: alertingTable.tableArn,
+  alertingTableName: alertingTable.tableName,
+  alertingCmkArn: alertingTable.cmkArn,
+  alertingLogGroup,
+  alertingPermissionsBoundaryArn: alertingBoundaryArn,
+  pageTopicArn: alertingPageTopic.topicArn,
 });
 
 // E1-S11-INFRA #36: alerting-page topic, DLQ/failure alarms, non-prod fault injection.

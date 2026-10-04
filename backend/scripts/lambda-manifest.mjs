@@ -92,6 +92,11 @@ export const LAMBDA_ENTRIES = [
   },
   {
     service: 'platform-service',
+    function: 'retention-disposal-discovery',
+    entry: 'src/services/platform-service/retention/discoveryHandler.ts',
+  },
+  {
+    service: 'platform-service',
     function: 'outbox-publisher',
     entry: 'src/services/platform-service/outbox-publisher/handler.ts',
   },
@@ -174,6 +179,14 @@ export const LAMBDA_ENTRIES = [
     service: 'personnel-service',
     function: 'losap-year-end-report',
     entry: 'src/services/personnel-service/losap/yearEndReport.ts',
+  },
+  {
+    // personnel.attendance.recorded -> the accrual queue's idempotent EVENT_DEDUP record
+    // (infra #206). The points award itself stays inline (attendance/handler.ts,
+    // shifts/completeShiftAttendance.ts) until a later change moves it off that path.
+    service: 'personnel-service',
+    function: 'losap-accrual-consumer',
+    entry: 'src/services/personnel-service/losap/accrualConsumer.ts',
   },
   {
     service: 'personnel-service',
@@ -279,6 +292,13 @@ export const LAMBDA_ENTRIES = [
     service: 'incident-service',
     function: 'dispatch-response-consumer',
     entry: 'src/services/incident-service/dispatchResponseConsumer.ts',
+  },
+  {
+    // apparatus.riding_assignment.{assigned,vacated} -> incident-service's INCIDENT_RESPONSE_UNIT
+    // pre-populate (infra #235). The handler predates its infra wiring.
+    service: 'incident-service',
+    function: 'riding-assignment-consumer',
+    entry: 'src/services/incident-service/ridingAssignmentConsumer.ts',
   },
   {
     service: 'incident-service',
@@ -701,6 +721,14 @@ export const LAMBDA_ENTRIES = [
     entry: 'src/services/alerting-service/eligibility/consumer.ts',
   },
   {
+    // apparatus.serviceStatus.changed -> alerting-owned copy (infra #235). Backend handler
+    // not yet written; entry path follows the eligibility consumers' module convention
+    // above so a backend agent's first bundle lands at this exact key.
+    service: 'alerting-service',
+    function: 'apparatus-status-changed-consumer',
+    entry: 'src/services/alerting-service/apparatusStatus/changedHandler.ts',
+  },
+  {
     // platform.config.updated (ALERT_RULES) -> ALERT_RULES_COPY (design review M1).
     service: 'alerting-service',
     function: 'alert-rules-copy-consumer',
@@ -820,6 +848,11 @@ export const LAMBDA_ENTRIES = [
     service: 'inventory-service',
     function: 'consumables-list',
     entry: 'src/services/inventory-service/consumables/list/handler.ts',
+  },
+  {
+    service: 'inventory-service',
+    function: 'consumables-restock',
+    entry: 'src/services/inventory-service/consumables/restock/handler.ts',
   },
   {
     service: 'inventory-service',

@@ -81,6 +81,7 @@ export class Incident extends pulumi.ComponentResource {
   public readonly submissionRetryLambda: ServiceLambda;
   public readonly dispatchAlertConsumer: QueueConsumer;
   public readonly dispatchResponseConsumer: QueueConsumer;
+  public readonly ridingAssignmentConsumer: QueueConsumer;
   public readonly nerisRouteLambdas: Record<string, ServiceLambda> = {};
   public readonly nerisSettingsConsumer: QueueConsumer;
 
@@ -766,6 +767,63 @@ export class Incident extends pulumi.ComponentResource {
       { parent: this },
     );
 
+    // #235: apparatus.riding_assignment.{assigned,vacated} one-way allow-list bridge onto
+    // incident-service's own table, for incident pre-populate. Allow-listed to exactly
+    // these two detail-types (not a wildcard apparatus.* subscription) so a future,
+    // unrelated apparatus event can't silently start writing into incident rows.
+    // incident-table only, same as dispatchAlertConsumer/dispatchResponseConsumer above —
+    // no grant on the platform-service or alerting-service tables. The backend handler
+    // (incident-service/ridingAssignmentConsumer.ts) already existed on main unwired: its
+    // own GetCommand (dedup check + stale-event read + locked-report read-back),
+    // TransactWriteCommand (RESPONSE# Update + METADATA contentVersion Update), and
+    // PutCommand (dedup marker) drive the three actions below.
+    const ridingAssignmentLambda = new ServiceLambda(
+      `${name}-riding-assignment-consumer`,
+      {
+        env,
+        serviceName: "incident-service",
+        functionName: `boxalarm-${env}-incident-riding-assignment-consumer`,
+        handler: LAMBDA_HANDLER,
+        code: lambdaCode("incident-service", "riding-assignment-consumer"),
+        logGroup: args.logGroup,
+        environment: baseEnvironment,
+        additionalPolicyStatements: pulumi
+          .all([cmkStatement, args.incidentTableArn])
+          .apply(([cmk, tableArn]) => [
+            {
+              Sid: "IncidentRidingAssignmentAccess" as const,
+              Effect: "Allow" as const,
+              Action: ["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:UpdateItem"],
+              Resource: [tableArn],
+            },
+            ...cmk,
+          ]),
+      },
+      { parent: this },
+    );
+    this.ridingAssignmentConsumer = new QueueConsumer(
+      `${name}-riding-assignment-consumer`,
+      {
+        env,
+        busName: args.busName,
+        ruleName: `boxalarm-${env}-incident-riding-assignment-copy`,
+        eventPattern: JSON.stringify({
+          source: ["apparatus-service"],
+          "detail-type": [
+            "apparatus.riding_assignment.assigned",
+            "apparatus.riding_assignment.vacated",
+          ],
+        }),
+        queueName: `boxalarm-${env}-incident-riding-assignment-copy-queue`,
+        lambda: ridingAssignmentLambda.function,
+        lambdaRole: ridingAssignmentLambda.role,
+        alarmTopicArn: args.opsAlarmTopicArn,
+        maxReceiveCount: 5,
+        reportBatchItemFailures: true,
+      },
+      { parent: this },
+    );
+
     this.registerOutputs({
       createLambda: this.createLambda,
       updateLambda: this.updateLambda,
@@ -777,6 +835,7 @@ export class Incident extends pulumi.ComponentResource {
       submitLambda: this.submitLambda,
       submissionGetLambda: this.submissionGetLambda,
       submissionRetryLambda: this.submissionRetryLambda,
+      ridingAssignmentConsumer: this.ridingAssignmentConsumer,
     });
   }
 }

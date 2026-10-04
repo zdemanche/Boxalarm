@@ -7,6 +7,7 @@ import { verifiedPermissionsPolicyStatement } from "../authz/policy-store";
 import { auditMutationDenyStatement } from "../data/platform-table";
 import { dynamodbCmkPolicy } from "../data/cmk-policy";
 import { lambdaCode, LAMBDA_HANDLER } from "../shared/lambda-code";
+import { ScheduleDeadLetter } from "../shared/schedule-dead-letter";
 import { requireEnv } from "../shared/env";
 
 export interface RetentionArgs {
@@ -18,28 +19,43 @@ export interface RetentionArgs {
   chiefNotificationTopicArn: pulumi.Input<string>;
   logGroup: ServiceLogGroup;
   httpApi: HttpApi;
+  /** The daily discovery sweep's schedule state. Default true. False only disables the
+   * non-destructive scan itself (e.g. during initial rollout); never a lever for
+   * disposal — runDisposal is never on a schedule regardless of this flag. */
+  discoveryEnabled?: boolean;
 }
 
 /**
  * E8-S9-INFRA #260 records retention: the retention-config and admin disposal routes, the
- * disposal role, and the crypto-shred CMKs.
+ * disposal role, the crypto-shred CMKs, and the daily, read-only candidate-discovery sweep.
  *
- * No scheduled disposal. runDisposal (disposal.ts) acts only on the explicit pk/sk
- * candidates a CHIEF/ADMIN posts - nothing in the backend discovers candidates - so a
- * scheduled invocation has nothing to dispose even with a non-HTTP entry point. The
- * daily Scheduler target this component used to create hit an API-Gateway-shaped
- * handler with a raw event and 401/404ed every run. Automatic discovery would make hard
- * delete and KMS key destruction run unattended on a timer, which the architecture
- * frames as an explicit, alarmed admin action (Data Protection: "destructive admin
- * actions (... records disposal under N6.3)"), against a retention schedule that is
- * itself still OQ-19. Disposal stays manual until that is decided.
+ * Disposal itself is never scheduled. runDisposal (disposal.ts) acts only on the
+ * explicit pk/sk candidates a CHIEF/ADMIN posts to POST /platform/retention/disposal —
+ * no schedule, role, or Lambda in this component ever invokes it. Automatic,
+ * unattended hard delete and KMS key destruction on a timer is exactly what the
+ * architecture says destructive admin actions must NOT be (Security & Auth: those
+ * actions are controlled by "detection and reversal, not prevention" — unconditional
+ * alarming plus an admin's own Cedar-gated action, never an automatic trigger).
+ *
+ * What IS scheduled is the other half of that "detection": discoveryLambda
+ * (discoveryHandler.ts) runs daily, scans for rows whose age has crossed the owning
+ * department's retention window, and emits DisposalCandidatesFound so
+ * candidatesFoundAlarm can notify the chief. It cannot destroy anything — its role
+ * grants dynamodb:Scan/GetItem only, nothing that mutates the table. A human still
+ * decides whether to act, by posting the disposal candidates to the existing endpoint.
+ * This was previously deferred ("nothing in the backend discovers candidates") until a
+ * discovery implementation landed (backend discovery.ts/discoveryHandler.ts).
  */
 export class Retention extends pulumi.ComponentResource {
   public readonly archivedIncidentCmk: aws.kms.Key;
   public readonly archivedDeliveryReceiptCmk: aws.kms.Key;
   public readonly disposalLambda: ServiceLambda;
   public readonly configLambda: ServiceLambda;
+  public readonly discoveryLambda: ServiceLambda;
+  public readonly discoverySchedule: aws.scheduler.Schedule;
   public readonly invokedAlarm: aws.cloudwatch.MetricAlarm;
+  public readonly candidatesFoundAlarm: aws.cloudwatch.MetricAlarm;
+  public readonly discoveryErrorsAlarm: aws.cloudwatch.MetricAlarm;
 
   constructor(name: string, args: RetentionArgs, opts?: pulumi.ComponentResourceOptions) {
     requireEnv("Retention", args.env);
@@ -210,9 +226,145 @@ export class Retention extends pulumi.ComponentResource {
       { parent: this },
     );
 
+    // discoveryHandler.ts: a single ScanCommand pass (paginated) plus one GetItem per
+    // distinct department for its retention config — read-only, nothing that mutates
+    // the table. No alerting-table grant (this never touches alerting data at all),
+    // and no CMK grant (it never schedules a key deletion — only disposalLambda does).
+    this.discoveryLambda = new ServiceLambda(
+      `${name}-discovery`,
+      {
+        env,
+        serviceName: "platform-service",
+        functionName: `boxalarm-${env}-platform-retention-disposal-discovery`,
+        handler: LAMBDA_HANDLER,
+        code: lambdaCode("platform-service", "retention-disposal-discovery"),
+        logGroup: args.logGroup,
+        timeout: 60,
+        environment: {
+          PLATFORM_TABLE_NAME: args.platformTableName,
+        },
+        additionalPolicyStatements: pulumi.output(args.platformTableArn).apply((tableArn) => [
+          {
+            Sid: "DisposalDiscoveryReadOnly" as const,
+            Effect: "Allow" as const,
+            Action: ["dynamodb:Scan", "dynamodb:GetItem"],
+            Resource: [tableArn],
+          },
+        ]),
+      },
+      { parent: this },
+    );
+
+    const discoverySchedulerRole = new aws.iam.Role(
+      `${name}-discovery-scheduler-role`,
+      {
+        name: `boxalarm-${env}-platform-retention-discovery-scheduler`,
+        assumeRolePolicy: JSON.stringify({
+          Version: "2012-10-17",
+          Statement: [
+            {
+              Effect: "Allow",
+              Principal: { Service: "scheduler.amazonaws.com" },
+              Action: "sts:AssumeRole",
+            },
+          ],
+        }),
+      },
+      { parent: this },
+    );
+
+    new aws.iam.RolePolicy(
+      `${name}-discovery-scheduler-invoke-policy`,
+      {
+        role: discoverySchedulerRole.id,
+        policy: this.discoveryLambda.function.arn.apply((arn) =>
+          JSON.stringify({
+            Version: "2012-10-17",
+            Statement: [
+              {
+                Sid: "InvokeDisposalDiscoveryLambda",
+                Effect: "Allow",
+                Action: ["lambda:InvokeFunction"],
+                Resource: arn,
+              },
+            ],
+          }),
+        ),
+      },
+      { parent: this },
+    );
+
+    const discoveryDeadLetter = new ScheduleDeadLetter(
+      `${name}-discovery-schedule-dead-letter`,
+      {
+        queueName: `boxalarm-${env}-platform-retention-discovery-scheduler-dlq`,
+        schedulerRole: discoverySchedulerRole,
+        alarmActions: [args.chiefNotificationTopicArn],
+      },
+      { parent: this },
+    );
+
+    this.discoverySchedule = new aws.scheduler.Schedule(
+      `${name}-discovery-schedule`,
+      {
+        name: `boxalarm-${env}-platform-retention-disposal-discovery`,
+        scheduleExpression: "rate(1 day)",
+        state: args.discoveryEnabled === false ? "DISABLED" : "ENABLED",
+        flexibleTimeWindow: { mode: "OFF" },
+        target: {
+          arn: this.discoveryLambda.function.arn,
+          roleArn: discoverySchedulerRole.arn,
+          ...discoveryDeadLetter.targetConfig,
+        },
+      },
+      { parent: this },
+    );
+
+    this.candidatesFoundAlarm = new aws.cloudwatch.MetricAlarm(
+      `${name}-candidates-found-alarm`,
+      {
+        name: `boxalarm-${env}-platform-retention-disposal-candidates-found`,
+        alarmDescription:
+          "The daily disposal candidate-discovery sweep found at least one record past " +
+          "its department's configured retention window. Nothing was deleted or " +
+          "shredded — review the Lambda's logs for the locator list, then POST the " +
+          "ones to act on to POST /platform/retention/disposal.",
+        namespace: "Boxalarm/platform",
+        metricName: "DisposalCandidatesFound",
+        statistic: "Sum",
+        period: 3600,
+        evaluationPeriods: 1,
+        threshold: 0,
+        comparisonOperator: "GreaterThanThreshold",
+        treatMissingData: "notBreaching",
+        alarmActions: [args.chiefNotificationTopicArn],
+      },
+      { parent: this },
+    );
+
+    this.discoveryErrorsAlarm = new aws.cloudwatch.MetricAlarm(
+      `${name}-discovery-errors-alarm`,
+      {
+        name: `boxalarm-${env}-platform-retention-disposal-discovery-errors`,
+        namespace: "AWS/Lambda",
+        metricName: "Errors",
+        dimensions: { FunctionName: this.discoveryLambda.function.name },
+        statistic: "Sum",
+        period: 300,
+        evaluationPeriods: 1,
+        threshold: 0,
+        comparisonOperator: "GreaterThanThreshold",
+        treatMissingData: "notBreaching",
+        alarmActions: [args.chiefNotificationTopicArn],
+      },
+      { parent: this },
+    );
+
     this.registerOutputs({
       disposalLambda: this.disposalLambda,
       configLambda: this.configLambda,
+      discoveryLambda: this.discoveryLambda,
+      discoverySchedule: this.discoverySchedule,
       archivedIncidentCmk: this.archivedIncidentCmk,
       archivedDeliveryReceiptCmk: this.archivedDeliveryReceiptCmk,
     });

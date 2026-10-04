@@ -3,8 +3,11 @@ import { ServiceLambda } from "../observability/service-lambda";
 import { ServiceLogGroup } from "../observability/service-log-group";
 import { HttpApi } from "../api/http-api";
 import { verifiedPermissionsPolicyStatement } from "../authz/policy-store";
+import { auditMutationDenyStatement } from "../data/platform-table";
 import { lambdaCode, LAMBDA_HANDLER } from "../shared/lambda-code";
 import { requireEnv } from "../shared/env";
+import { PlatformBus } from "../messaging/platform-bus";
+import { QueueConsumer } from "../messaging/queue-consumer";
 
 export interface LosapArgs {
   env: string;
@@ -14,6 +17,9 @@ export interface LosapArgs {
   policyStoreId: pulumi.Input<string>;
   logGroup: ServiceLogGroup;
   httpApi: HttpApi;
+  platformBus: PlatformBus;
+  /** chief-notifications: the accrual queue's DLQ-depth alarm is LOB, not alerting-page. */
+  opsAlarmTopicArn: pulumi.Input<string>;
 }
 
 /**
@@ -25,6 +31,8 @@ export class Losap extends pulumi.ComponentResource {
   public readonly getMemberTotalLambda: ServiceLambda;
   public readonly updateRulesLambda: ServiceLambda;
   public readonly yearEndReportLambda: ServiceLambda;
+  public readonly accrualConsumer: ServiceLambda;
+  public readonly accrualQueueConsumer: QueueConsumer;
 
   constructor(name: string, args: LosapArgs, opts?: pulumi.ComponentResourceOptions) {
     requireEnv("Losap", args.env);
@@ -56,6 +64,8 @@ export class Losap extends pulumi.ComponentResource {
         Action: ["dynamodb:GetItem", "dynamodb:PutItem"],
         Resource: [arn],
       },
+      // #257 sweep: every platform-table-writing role carries the audit-row deny.
+      auditMutationDenyStatement(arn),
     ]);
 
     this.getMemberTotalLambda = new ServiceLambda(
@@ -132,10 +142,60 @@ export class Losap extends pulumi.ComponentResource {
       { parent: this },
     );
 
+    // #206: personnel.attendance.recorded -> boxalarm-{env}-losap-accrual-queue (+DLQ,
+    // depth alarm) -> an idempotent EVENT_DEDUP record. The points award itself stays
+    // inline on the attendance write path (attendance/handler.ts,
+    // shifts/completeShiftAttendance.ts); re-awarding here would double-count a member's
+    // points, so this consumer only establishes the event-driven path's own dedup ledger
+    // ahead of a later change that moves the award off the write path.
+    this.accrualConsumer = new ServiceLambda(
+      `${name}-accrual-consumer`,
+      {
+        env,
+        serviceName: "personnel-service",
+        functionName: `boxalarm-${env}-personnel-losap-accrual-consumer`,
+        handler: LAMBDA_HANDLER,
+        code: lambdaCode("personnel-service", "losap-accrual-consumer"),
+        logGroup: args.logGroup,
+        environment: { PLATFORM_SERVICE_TABLE_NAME: args.platformTableName },
+        additionalPolicyStatements: pulumi.output(args.platformTableArn).apply((arn) => [
+          {
+            Sid: "LosapAccrualDedupWrite" as const,
+            Effect: "Allow" as const,
+            Action: ["dynamodb:PutItem"],
+            Resource: [arn],
+          },
+          // #257 sweep: every platform-table-writing role carries the audit-row deny.
+          auditMutationDenyStatement(arn),
+        ]),
+      },
+      { parent: this },
+    );
+
+    this.accrualQueueConsumer = args.platformBus.addQueueConsumer(
+      `${name}-accrual-queue-consumer`,
+      {
+        env,
+        ruleName: `boxalarm-${env}-losap-accrual`,
+        // Routing filter, not a trust boundary — see availability.ts's identical note.
+        eventPattern: JSON.stringify({
+          source: ["personnel-service"],
+          "detail-type": ["personnel.attendance.recorded"],
+        }),
+        queueName: `boxalarm-${env}-losap-accrual-queue`,
+        lambda: this.accrualConsumer.function,
+        lambdaRole: this.accrualConsumer.role,
+        alarmTopicArn: args.opsAlarmTopicArn,
+        maxReceiveCount: 5,
+      },
+      { parent: this },
+    );
+
     this.registerOutputs({
       getMemberTotalLambda: this.getMemberTotalLambda,
       updateRulesLambda: this.updateRulesLambda,
       yearEndReportLambda: this.yearEndReportLambda,
+      accrualConsumer: this.accrualConsumer,
     });
   }
 }

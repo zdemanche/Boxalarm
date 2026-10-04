@@ -14,6 +14,8 @@ import {
   CMK_ARN,
   BOUNDARY_ARN,
   REGION,
+  alarmByName,
+  esmFor,
   grantsFor,
   installMocks,
   isGranted,
@@ -79,7 +81,11 @@ async function build() {
     userPoolArn: "arn:aws:cognito-idp:us-east-1:123456789012:userpool/us-east-1_pool",
     sesFromAddress: "notifications@nicholsfd.example",
   });
-  new Losap("losap", common);
+  new Losap("losap", {
+    ...common,
+    platformBus,
+    opsAlarmTopicArn: "arn:aws:sns:us-east-1:123456789012:boxalarm-dev-chief-notifications",
+  });
   new Attendance("attendance", common);
   new Quals("quals", {
     ...common,
@@ -127,6 +133,15 @@ describe("personnel Lambdas: env and IAM match their handlers", { timeout: 30_00
       const s = statementsForRole("boxalarm-dev-personnel-quals-put");
       expect(isGranted(s, "dynamodb:GetItem", TABLE)).toBe(true);
       expect(isGranted(s, "dynamodb:PutItem", TABLE)).toBe(true);
+    });
+
+    // #257: PUT is PutItem-only (no UpdateItem) but still carries the deny.
+    it("PUT carries the audit-row deny despite holding no UpdateItem", async () => {
+      await build();
+      const deny = statementsForRole("boxalarm-dev-personnel-quals-put").find(
+        (st) => st.Sid === "DenyAuditMutations",
+      );
+      expect(deny?.Effect).toBe("Deny");
     });
   });
 
@@ -283,6 +298,63 @@ describe("personnel Lambdas: env and IAM match their handlers", { timeout: 30_00
       expect(isGranted(yearEnd, "dynamodb:Query", TABLE)).toBe(true);
       expect(isGranted(yearEnd, "dynamodb:Query", `${TABLE}/index/GSI3`)).toBe(true);
     });
+
+    // #257: update-rules is PutItem-only (no UpdateItem) but still carries the deny.
+    it("update-rules carries the audit-row deny", async () => {
+      await build();
+      const deny = statementsForRole("boxalarm-dev-personnel-losap-update-rules").find(
+        (st) => st.Sid === "DenyAuditMutations",
+      );
+      expect(deny?.Effect).toBe("Deny");
+    });
+  });
+
+  // #206: personnel.attendance.recorded -> boxalarm-{env}-losap-accrual-queue (+DLQ,
+  // depth alarm) -> an idempotent EVENT_DEDUP record (not a re-award of points).
+  describe("losap accrual consumer (#206)", () => {
+    const FN = "boxalarm-dev-personnel-losap-accrual-consumer";
+
+    it("holds PutItem only on the platform table (no UpdateItem/DeleteItem) plus the audit-row deny", async () => {
+      await build();
+      const s = statementsForRole(FN);
+      expect(isGranted(s, "dynamodb:PutItem", TABLE)).toBe(true);
+      expect(isGranted(s, "dynamodb:UpdateItem", TABLE)).toBe(false);
+      expect(isGranted(s, "dynamodb:DeleteItem", TABLE)).toBe(false);
+      const deny = s.find((st) => st.Sid === "DenyAuditMutations");
+      expect(deny?.Effect).toBe("Deny");
+    });
+
+    it("routes only personnel-service's personnel.attendance.recorded to the accrual queue", async () => {
+      await build();
+      const rule = resourcesOfType("aws:cloudwatch/eventRule:EventRule").find(
+        (r) => r.inputs.name === "boxalarm-dev-losap-accrual",
+      );
+      expect(rule).toBeDefined();
+      const pattern = JSON.parse(rule!.inputs.eventPattern as string);
+      expect(pattern.source).toEqual(["personnel-service"]);
+      expect(pattern["detail-type"]).toEqual(["personnel.attendance.recorded"]);
+    });
+
+    it("names the queue boxalarm-{env}-losap-accrual-queue with a DLQ depth alarm (maxReceiveCount 5)", async () => {
+      await build();
+      const queue = resourcesOfType("aws:sqs/queue:Queue").find(
+        (r) => r.inputs.name === "boxalarm-dev-losap-accrual-queue",
+      );
+      expect(queue).toBeDefined();
+      const redrive = JSON.parse(queue!.inputs.redrivePolicy as string);
+      expect(redrive.maxReceiveCount).toBe(5);
+      expect(alarmByName("boxalarm-dev-losap-accrual-queue-dlq-depth")).toBeDefined();
+    });
+
+    it("carries PLATFORM_SERVICE_TABLE_NAME, the env key readAttendanceTableConfig requires", async () => {
+      await build();
+      expect(lambdaEnv(FN).PLATFORM_SERVICE_TABLE_NAME).toBe("boxalarm-dev-platform-service");
+    });
+
+    it("is driven by the accrual queue's event source mapping", async () => {
+      await build();
+      expect(esmFor(FN)).toBeDefined();
+    });
   });
 
   it("every role holding UpdateItem/DeleteItem on the platform table carries the audit-row deny (MIN-3)", async () => {
@@ -334,6 +406,7 @@ describe("personnel Lambdas: env and IAM match their handlers", { timeout: 30_00
       "PERSONNEL_TABLE_NAME",
       "PLATFORM_SERVICE_TABLE_NAME",
     ],
+    "boxalarm-dev-personnel-losap-accrual-consumer": ["PLATFORM_SERVICE_TABLE_NAME"],
     "boxalarm-dev-personnel-shifts": ["PLATFORM_TABLE_NAME", VP],
     "boxalarm-dev-personnel-shift-completion": ["PLATFORM_TABLE_NAME"],
   };
@@ -360,6 +433,19 @@ describe("personnel Lambdas: env and IAM match their handlers", { timeout: 30_00
         expect(isGranted(s, "dynamodb:GetItem", TABLE), fn).toBe(true);
         expect(isGranted(s, "dynamodb:PutItem", TABLE), fn).toBe(true);
         expect(isGranted(s, "dynamodb:UpdateItem", TABLE), fn).toBe(false);
+      }
+    });
+
+    // #257: PutItem alone can overwrite an existing item if the sort key is guessed,
+    // so attendance's write roles carry the deny even though they hold no UpdateItem.
+    it("record (self + on-behalf) carries the audit-row deny despite holding no UpdateItem", async () => {
+      await build();
+      for (const fn of [
+        "boxalarm-dev-personnel-attendance-record",
+        "boxalarm-dev-personnel-attendance-record-on-behalf",
+      ]) {
+        const deny = statementsForRole(fn).find((st) => st.Sid === "DenyAuditMutations");
+        expect(deny?.Effect, fn).toBe("Deny");
       }
     });
 

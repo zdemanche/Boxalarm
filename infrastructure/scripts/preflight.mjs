@@ -30,7 +30,7 @@ export const MIN_UNRESERVED_CONCURRENCY = 100;
  * Sum of reservedConcurrentExecutions across one stack's functions. Kept in step with the
  * code by test/scripts/preflight.test.ts, which sums the full stack under Pulumi mocks.
  */
-export const STACK_RESERVED_CONCURRENCY = 236;
+export const STACK_RESERVED_CONCURRENCY = 241;
 export const TRAIL_LIMIT_PER_REGION = 5;
 export const TRAILS_PER_STACK = 2;
 const STACK_TRAIL =

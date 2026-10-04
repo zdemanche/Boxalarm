@@ -26,14 +26,17 @@ export interface ConsumablesArgs {
 
 /**
  * api-gap P0-6: consumable stock (F5.3) — the Cedar-gated list route (ListConsumables,
- * every role) and the daily reorder scanner that publishes inventory.reorder.due.
+ * every role), the restock write route (RestockConsumable, chief/admin/officer — #131), and
+ * the daily reorder scanner that publishes inventory.reorder.due.
  *
- * Not wired: PUT /api/v1/inventory/consumables/{itemId} (architecture §2, N-9) has no
- * handler in backend/, so there is nothing to deploy. inventory.reorder.due is consumed by
- * notification-service (notification/reminders.ts) as an inventory-reorder digest reminder.
+ * PUT /api/v1/inventory/consumables/{itemId} (architecture §2, N-9) now has a handler in
+ * backend/ (consumables/restock/handler.ts) and is wired below. inventory.reorder.due is
+ * consumed by notification-service (notification/reminders.ts) as an inventory-reorder
+ * digest reminder.
  */
 export class Consumables extends pulumi.ComponentResource {
   public readonly listLambda: ServiceLambda;
+  public readonly restockLambda: ServiceLambda;
   public readonly reorderScannerLambda: ServiceLambda;
   public readonly reorderScannerSchedule: aws.scheduler.Schedule;
 
@@ -73,6 +76,42 @@ export class Consumables extends pulumi.ComponentResource {
     args.httpApi.route(
       `${name}-list-route`,
       { routeKey: "GET /api/v1/inventory/consumables", lambda: this.listLambda },
+      { parent: this },
+    );
+
+    this.restockLambda = new ServiceLambda(
+      `${name}-restock`,
+      {
+        env,
+        serviceName: "inventory-service",
+        functionName: `boxalarm-${env}-inventory-consumables-restock`,
+        handler: LAMBDA_HANDLER,
+        code: lambdaCode("inventory-service", "consumables-restock"),
+        logGroup: args.logGroup,
+        environment: {
+          PLATFORM_TABLE_NAME: args.platformTableName,
+          VERIFIED_PERMISSIONS_POLICY_STORE_ID: args.policyStoreId,
+        },
+        additionalPolicyStatements: pulumi
+          .all([args.platformTableArn, args.policyStoreArn])
+          .apply(([tableArn, policyStoreArn]) => [
+            {
+              // restockConsumable: conditional UpdateItem on the CONSUMABLE_STOCK item,
+              // then a PutItem of its AUDIT_LOG_ENTRY (attribute_not_exists-guarded).
+              Sid: "ConsumablesRestockWrite" as const,
+              Effect: "Allow" as const,
+              Action: ["dynamodb:UpdateItem", "dynamodb:PutItem"],
+              Resource: [tableArn],
+            },
+            verifiedPermissionsPolicyStatement(policyStoreArn),
+            auditMutationDenyStatement(tableArn),
+          ]),
+      },
+      { parent: this },
+    );
+    args.httpApi.route(
+      `${name}-restock-route`,
+      { routeKey: "PUT /api/v1/inventory/consumables/{itemId}", lambda: this.restockLambda },
       { parent: this },
     );
 
@@ -133,6 +172,7 @@ export class Consumables extends pulumi.ComponentResource {
 
     this.registerOutputs({
       listLambda: this.listLambda,
+      restockLambda: this.restockLambda,
       reorderScannerLambda: this.reorderScannerLambda,
     });
   }

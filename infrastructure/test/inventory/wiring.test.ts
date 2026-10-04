@@ -87,6 +87,7 @@ const ROUTES: Record<string, string> = {
   "PUT /api/v1/inventory/equipment/{assetId}/location": fn("equipment-location"),
   "PUT /api/v1/inventory/equipment/{assetId}/lifecycle": fn("equipment-lifecycle"),
   "GET /api/v1/inventory/consumables": fn("consumables-list"),
+  "PUT /api/v1/inventory/consumables/{itemId}": fn("consumables-restock"),
   "GET /api/v1/inventory/ppe/{memberId}": fn("ppe-get"),
   "POST /api/v1/inventory/ppe/{memberId}": fn("ppe-issue"),
 };
@@ -172,6 +173,15 @@ describe("inventory Lambdas: routes, env and IAM match their handlers", { timeou
       }
     });
 
+    it("consumables restock holds UpdateItem (stock) + PutItem (audit row), no reads", async () => {
+      await build();
+      const s = statementsForRole(fn("consumables-restock"));
+      expect(isGranted(s, "dynamodb:UpdateItem", TABLE)).toBe(true);
+      expect(isGranted(s, "dynamodb:PutItem", TABLE)).toBe(true);
+      expect(isGranted(s, "dynamodb:GetItem", TABLE)).toBe(false);
+      expect(isGranted(s, "dynamodb:Query", TABLE)).toBe(false);
+    });
+
     it("ppe get Queries the base table only", async () => {
       await build();
       const s = statementsForRole(fn("ppe-get"));
@@ -218,7 +228,7 @@ describe("inventory Lambdas: routes, env and IAM match their handlers", { timeou
         isGranted(s, "dynamodb:UpdateItem", TABLE) || isGranted(s, "dynamodb:DeleteItem", TABLE)
       );
     });
-    expect(mutating.length).toBe(5);
+    expect(mutating.length).toBe(6);
     for (const role of mutating) {
       const deny = statementsForRole(role).find((st) => st.Sid === "DenyAuditMutations");
       expect(deny?.Effect, role).toBe("Deny");

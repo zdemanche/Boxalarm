@@ -225,6 +225,10 @@ export const INVENTORY_ADMIN_ACTIONS = [
   "SetEquipmentLocation",
   "TransitionAssetLifecycle",
   "IssuePpeAssignment",
+  // #131 / N-9 (decided): PUT /api/v1/inventory/consumables/{itemId} sets stockLevel
+  // and/or reorderThreshold directly — last-writer-wins, same chief/admin/officer tier as
+  // every other inventory write (architecture.md:498).
+  "RestockConsumable",
 ] as const;
 export const INVENTORY_ADMIN_GROUPS = ["OFFICER", "CHIEF", "ADMIN"] as const;
 
@@ -569,6 +573,7 @@ export const CEDAR_SCHEMA = JSON.stringify({
         appliesTo: { principalTypes: ["User"], resourceTypes: ["Asset"] },
       },
       IssuePpeAssignment: { appliesTo: { principalTypes: ["User"], resourceTypes: ["Member"] } },
+      RestockConsumable: { appliesTo: { principalTypes: ["User"], resourceTypes: ["Asset"] } },
       GetPrePlan: { appliesTo: { principalTypes: ["User"], resourceTypes: ["Occupancy"] } },
       UpdatePrePlan: { appliesTo: { principalTypes: ["User"], resourceTypes: ["Occupancy"] } },
       WriteOccupancy: { appliesTo: { principalTypes: ["User"], resourceTypes: ["Occupancy"] } },

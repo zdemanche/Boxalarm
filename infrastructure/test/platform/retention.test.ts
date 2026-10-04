@@ -188,9 +188,112 @@ describe("Retention", () => {
     expect(policy.Statement.some((s) => s.Sid === "DenyAuditMutations")).toBe(true);
   });
 
-  it("creates no disposal schedule: disposal runs only on an explicit admin request", async () => {
+  it("creates no schedule that invokes the destructive disposal Lambda: disposal runs only on an explicit admin request", async () => {
+    const retention = await build();
     await routeKeys();
-    expect(created.some((r) => r.type === "aws:scheduler/schedule:Schedule")).toBe(false);
+    const disposalArn = await resolve(retention.disposalLambda.function.arn);
+    const schedules = created.filter((r) => r.type === "aws:scheduler/schedule:Schedule");
+    expect(schedules.length).toBeGreaterThan(0);
+    for (const schedule of schedules) {
+      const target = schedule.inputs.target as { arn?: unknown } | undefined;
+      expect(target?.arn).not.toBe(disposalArn);
+    }
+  });
+
+  it("schedules the discovery sweep daily, ENABLED by default, targeting discoveryLambda (not disposalLambda)", async () => {
+    const retention = await build();
+    const [discoveryArn, scheduleExpression, state, target] = await Promise.all([
+      resolve(retention.discoveryLambda.function.arn),
+      resolve(retention.discoverySchedule.scheduleExpression),
+      resolve(retention.discoverySchedule.state),
+      resolve(retention.discoverySchedule.target),
+    ]);
+    expect(scheduleExpression).toBe("rate(1 day)");
+    expect(state).toBe("ENABLED");
+    expect(target.arn).toBe(discoveryArn);
+  });
+
+  it("can disable the discovery schedule via discoveryEnabled: false without touching disposal", async () => {
+    const { Retention } = await import("../../components/platform/retention");
+    const logGroup = new ServiceLogGroup("test-retention-log-group-disabled", {
+      env: "dev",
+      serviceName: "platform-service",
+    });
+    const httpApi = new HttpApi("test-retention-http-api-disabled", {
+      env: "dev",
+      userPoolId: pulumi.output("pool-1"),
+      platformTableName: "platform-table",
+      platformTableArn: "arn:aws:dynamodb:us-east-1:123456789012:table/platform",
+      allowedClientIds: [pulumi.output("client-1")],
+      platformLogGroup: logGroup,
+    });
+    const retention = new Retention("test-retention-disabled", {
+      env: "dev",
+      platformTableName: pulumi.output("platform-table"),
+      platformTableArn: pulumi.output("arn:aws:dynamodb:us-east-1:123456789012:table/platform"),
+      policyStoreArn: pulumi.output("arn:aws:verifiedpermissions::123456789012:policy-store/ps-1"),
+      policyStoreId: pulumi.output("ps-1"),
+      chiefNotificationTopicArn: pulumi.output("arn:aws:sns:us-east-1:123456789012:chief"),
+      logGroup,
+      httpApi,
+      discoveryEnabled: false,
+    });
+    const state = await resolve(retention.discoverySchedule.state);
+    expect(state).toBe("DISABLED");
+  });
+
+  it("grants the discovery Lambda read-only Scan/GetItem, no alerting-table access, and no CMK/KMS access", async () => {
+    const retention = await build();
+    const policyJson = await resolve(retention.discoveryLambda.rolePolicy.policy);
+    const policy = JSON.parse(policyJson) as {
+      Statement: Array<{ Sid: string; Effect: string; Action: string | string[] }>;
+    };
+    const access = policy.Statement.find((s) => s.Sid === "DisposalDiscoveryReadOnly");
+    expect(access?.Action).toEqual(["dynamodb:Scan", "dynamodb:GetItem"]);
+    expect(policyJson).not.toContain("table/alerting");
+    expect(policyJson).not.toContain("kms:ScheduleKeyDeletion");
+    expect(
+      policy.Statement.some((s) =>
+        [
+          "dynamodb:PutItem",
+          "dynamodb:UpdateItem",
+          "dynamodb:DeleteItem",
+          "dynamodb:BatchWriteItem",
+        ].some(
+          (action) =>
+            (Array.isArray(s.Action) ? s.Action : [s.Action]).includes(action) &&
+            s.Effect === "Allow",
+        ),
+      ),
+    ).toBe(false);
+  });
+
+  it("alarms the chief topic when the discovery sweep finds candidates, no volume threshold", async () => {
+    const retention = await build();
+    const [namespace, metricName, threshold, comparison, actions] = await Promise.all([
+      resolve(retention.candidatesFoundAlarm.namespace),
+      resolve(retention.candidatesFoundAlarm.metricName),
+      resolve(retention.candidatesFoundAlarm.threshold),
+      resolve(retention.candidatesFoundAlarm.comparisonOperator),
+      resolve(retention.candidatesFoundAlarm.alarmActions),
+    ]);
+    expect(namespace).toBe("Boxalarm/platform");
+    expect(metricName).toBe("DisposalCandidatesFound");
+    expect(threshold).toBe(0);
+    expect(comparison).toBe("GreaterThanThreshold");
+    expect(actions).toContain("arn:aws:sns:us-east-1:123456789012:chief");
+  });
+
+  it("alarms the chief topic on discovery Lambda errors", async () => {
+    const retention = await build();
+    const [namespace, metricName, actions] = await Promise.all([
+      resolve(retention.discoveryErrorsAlarm.namespace),
+      resolve(retention.discoveryErrorsAlarm.metricName),
+      resolve(retention.discoveryErrorsAlarm.alarmActions),
+    ]);
+    expect(namespace).toBe("AWS/Lambda");
+    expect(metricName).toBe("Errors");
+    expect(actions).toContain("arn:aws:sns:us-east-1:123456789012:chief");
   });
 
   it("alarms the chief topic on every disposal invocation, no volume threshold", async () => {

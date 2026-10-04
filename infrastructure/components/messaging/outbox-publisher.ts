@@ -2,6 +2,7 @@ import * as pulumi from "@pulumi/pulumi";
 import * as aws from "@pulumi/aws";
 import { ServiceLambda } from "../observability/service-lambda";
 import { ServiceLogGroup } from "../observability/service-log-group";
+import { auditMutationDenyStatement } from "../data/platform-table";
 import { lambdaCode, LAMBDA_HANDLER } from "../shared/lambda-code";
 import { requireEnv } from "../shared/env";
 
@@ -88,6 +89,8 @@ export class OutboxPublisher extends pulumi.ComponentResource {
               Action: ["dynamodb:UpdateItem"],
               Resource: tableArn,
             },
+            // #257 sweep: a table-wide UpdateItem grant makes this a mutating role.
+            auditMutationDenyStatement(tableArn),
           ]),
       },
       { parent: this },
