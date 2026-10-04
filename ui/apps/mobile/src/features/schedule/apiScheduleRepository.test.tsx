@@ -125,7 +125,12 @@ test('getShift reads one shift with its positions, normalising a missing claim t
       status: 'PARTIALLY_FILLED',
       positions: [
         { positionCode: 'DRIVER' },
-        { positionCode: 'OFFICER', requiredQual: 'OFFICER', claimedByMemberId: 'MBR-0034', claimedByMe: false },
+        {
+          positionCode: 'OFFICER',
+          requiredQual: 'OFFICER',
+          claimedByMemberId: 'MBR-0034',
+          claimedByMe: false,
+        },
       ],
     }),
   });
@@ -161,7 +166,7 @@ test('getShift re-throws a 404 (ApiError) rather than falling back to cache or m
   await expect(result.current.getShift('SHIFT-GONE')).rejects.toBe(notFound);
 });
 
-test('offline, getShift serves this phone\'s last read of that same shift', async () => {
+test("offline, getShift serves this phone's last read of that same shift", async () => {
   mockApiRequest.mockResolvedValueOnce({
     json: async () => ({
       shiftId: 'SHIFT-1',

@@ -315,7 +315,11 @@ test('restocking a below-threshold consumable clears its reorder flag (#131)', a
     http.get('/api/v1/inventory/consumables', () => HttpResponse.json({ items: [current] })),
     http.put('/api/v1/inventory/consumables/foam', async ({ request }) => {
       const body = (await request.json()) as { stockLevel?: number };
-      current = { ...current, stockLevel: body.stockLevel ?? current.stockLevel, reorderFlagged: false };
+      current = {
+        ...current,
+        stockLevel: body.stockLevel ?? current.stockLevel,
+        reorderFlagged: false,
+      };
       return HttpResponse.json(current);
     }),
   );

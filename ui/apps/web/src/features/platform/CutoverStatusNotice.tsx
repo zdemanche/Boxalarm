@@ -29,16 +29,16 @@ export function CutoverStatusNotice() {
             <>
               {query.data.retainedPagingRequired ? (
                 <p role="status">
-                  <StatusChip status="warning">Still required</StatusChip> Retained radio
-                  tone-out paging is still required — the department has not accepted
-                  Boxalarm&apos;s delivery data as meeting the N1.9 cutover threshold.
+                  <StatusChip status="warning">Still required</StatusChip> Retained radio tone-out
+                  paging is still required — the department has not accepted Boxalarm&apos;s
+                  delivery data as meeting the N1.9 cutover threshold.
                 </p>
               ) : (
                 <p role="status">
                   <StatusChip status="ok">Not required</StatusChip> The department has accepted
                   Boxalarm&apos;s delivery data for cutover. This records that decision only — it
-                  does not disable, pause, or otherwise change radio tone-out paging, which
-                  remains a separate department decision.
+                  does not disable, pause, or otherwise change radio tone-out paging, which remains
+                  a separate department decision.
                 </p>
               )}
               <Link to="/reporting">See the full cutover report</Link>

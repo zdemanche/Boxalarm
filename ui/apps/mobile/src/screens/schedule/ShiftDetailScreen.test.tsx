@@ -107,7 +107,12 @@ function shiftWithMyClaimedPosition() {
     stationId: 'STATION-1',
     status: 'OPEN',
     positions: [
-      { positionCode: 'DRIVER', requiredQual: null, claimedByMemberId: 'MBR-0012', claimedByMe: true },
+      {
+        positionCode: 'DRIVER',
+        requiredQual: null,
+        claimedByMemberId: 'MBR-0012',
+        claimedByMe: true,
+      },
     ],
   });
 }
@@ -175,7 +180,9 @@ test('propose swap sends the request to the entered member and clears the field,
   });
 
   expect(swapSpy).toHaveBeenCalledWith('SHIFT-0512', 'DRIVER', 'MBR-0099');
-  expect(announceSpy).toHaveBeenCalledWith(expect.stringMatching(/swap proposed, pending approval/i));
+  expect(announceSpy).toHaveBeenCalledWith(
+    expect.stringMatching(/swap proposed, pending approval/i),
+  );
   expect((await findByLabelText('Propose swap to member ID')).props.value).toBe('');
   swapSpy.mockRestore();
   announceSpy.mockRestore();

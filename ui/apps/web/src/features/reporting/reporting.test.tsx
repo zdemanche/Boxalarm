@@ -512,7 +512,9 @@ test('cutover shows the delivery baseline and lets a CHIEF accept the decision',
   expect(screen.getAllByText('90%').length).toBeGreaterThanOrEqual(2);
   expect(screen.getByRole('rowheader', { name: 'm-1' })).toBeTruthy();
   // Never implies radio tone-out is disabled by this decision (CLAUDE.md N1.9).
-  expect(screen.getByText(/does not disable, pause, or otherwise change tone-out paging/)).toBeTruthy();
+  expect(
+    screen.getByText(/does not disable, pause, or otherwise change tone-out paging/),
+  ).toBeTruthy();
 
   const user = userEvent.setup();
   await user.click(screen.getByRole('button', { name: 'Accept cutover data' }));

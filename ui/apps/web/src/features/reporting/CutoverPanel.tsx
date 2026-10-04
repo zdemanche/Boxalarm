@@ -77,10 +77,10 @@ export function CutoverPanel() {
                   />
                 </div>
                 <p className={styles.meta}>
-                  Radio tone-out paging is a department operational decision made outside this
-                  app (N1.9) — this page records only whether Boxalarm&apos;s own delivery data
-                  has been accepted as meeting the department&apos;s threshold. Accepting this
-                  decision does not disable, pause, or otherwise change tone-out paging.
+                  Radio tone-out paging is a department operational decision made outside this app
+                  (N1.9) — this page records only whether Boxalarm&apos;s own delivery data has been
+                  accepted as meeting the department&apos;s threshold. Accepting this decision does
+                  not disable, pause, or otherwise change tone-out paging.
                 </p>
                 {canDecide ? (
                   <>
