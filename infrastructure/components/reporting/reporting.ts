@@ -104,9 +104,10 @@ function incidentReadStatements(incidentArn: string, cmkArn: string): IamPolicyS
  * platform table, per the architecture's single platform-table domain-per-service-name
  * convention (see personnel/members.ts's PERSONNEL_TABLE_NAME for the same pattern).
  *
- * #251's incident-table grant for the grants report's incident-volume figure is still not
- * wired: grants/handler.ts hardcodes `incidentVolume: { available: false, reason: 'E6-S1' }`,
- * so that Lambda makes no incident-table call a grant would authorize.
+ * #251: the grants report's incident-volume figure now Queries the incident table's GSI1
+ * (grantsLambda carries `incidentReadStatements` + `INCIDENT_TABLE_NAME`, same grant as
+ * responseTimesLambda) and fails soft to `{ available: false }` on any error rather than
+ * 503ing the whole report — see grants/handler.ts's `getIncidentVolumeFailSoft`.
  */
 export class Reporting extends pulumi.ComponentResource {
   public readonly losapYearEndLambda: ServiceLambda;
@@ -177,10 +178,22 @@ export class Reporting extends pulumi.ComponentResource {
           PERSONNEL_TABLE_NAME: args.platformTableName,
           TRAINING_DYNAMO_TABLE_NAME: args.platformTableName,
           PLATFORM_TABLE_NAME: args.platformTableName,
+          // #251: the grants report's incident-volume figure (GSI1 Query, read-only,
+          // fail-soft to unavailable on any error — getIncidentVolumeFailSoft in handler.ts).
+          INCIDENT_TABLE_NAME: args.incidentTableName,
         },
         additionalPolicyStatements: pulumi
-          .all([QUERY_STATEMENT(args.platformTableArn), vpStatement])
-          .apply(([table, vp]) => [...table, ...vp]),
+          .all([
+            QUERY_STATEMENT(args.platformTableArn),
+            vpStatement,
+            args.incidentTableArn,
+            args.incidentCmkArn,
+          ])
+          .apply(([table, vp, incidentArn, cmkArn]) => [
+            ...table,
+            ...vp,
+            ...incidentReadStatements(incidentArn, cmkArn),
+          ]),
       },
       { parent: this },
     );

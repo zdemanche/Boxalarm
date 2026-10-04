@@ -1,9 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { STACK_CONFIG, installMocks, resourcesOfType, settleStack } from "./mock-harness";
 
-// Dashboard-only on purpose until the backend's staleness metric measures propagation
-// lag rather than absolute snapshot age (staleness.ts) — it would page permanently.
-const DASHBOARD_ONLY = new Set(["boxalarm-dev-alerting-eligibility-snapshot-stale"]);
 const PAGE_TOPIC = "arn:aws:sns:us-east-1:123456789012:boxalarm-dev-alerting-page";
 const OPS_TOPIC = "arn:aws:sns:us-east-1:123456789012:boxalarm-dev-chief-notifications";
 
@@ -19,7 +16,6 @@ describe("full stack: no alarm notifies nobody (deploy-readiness M1)", { timeout
       alarms.filter((a) => String(a.inputs.name).includes("-alerting-")).length,
     ).toBeGreaterThan(10);
     const silent = alarms
-      .filter((a) => !DASHBOARD_ONLY.has(String(a.inputs.name)))
       .filter((a) => !Array.isArray(a.inputs.alarmActions) || a.inputs.alarmActions.length === 0)
       .map((a) => a.inputs.name);
     expect(silent).toEqual([]);
@@ -39,6 +35,8 @@ describe("full stack: no alarm notifies nobody (deploy-readiness M1)", { timeout
       "boxalarm-dev-training-eligibility-flip-failed",
       "boxalarm-dev-alerting-bridge-malformed-row",
       "boxalarm-dev-alerting-schedule-dlq-not-empty",
+      // #232: now a department-wide propagation-lag flag, safe to page on (staleness.ts).
+      "boxalarm-dev-alerting-eligibility-snapshot-stale",
     ]) {
       expect(actionsOf(name), name).toEqual([PAGE_TOPIC]);
     }

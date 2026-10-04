@@ -10,8 +10,10 @@ import { assembleGrantsReport } from '../grants/assembleReport.js';
 import {
   getActiveMemberCountAndTrend,
   getApparatusOosHistory,
+  getIncidentVolume,
   getTrainingHoursCompliance,
 } from '../grants/repository.js';
+import type { IncidentVolume } from '../grants/assembleReport.js';
 import { loadIsoReport } from '../iso/repository.js';
 import { fetchAttendanceRecords, fetchMemberTimelines } from '../lib/memberTimeline.js';
 import { computeMembershipTrend } from '../lib/membershipTrend.js';
@@ -105,6 +107,21 @@ export async function buildExportTable(
           getApparatusOosHistory(client, config, deptId, period, 'export'),
         ],
       );
+      // #251: same fail-soft contract as grants/handler.ts — an incident-table failure
+      // degrades this one field, not the whole export.
+      let incidentVolume: IncidentVolume;
+      try {
+        const { totalIncidents } = await getIncidentVolume(
+          platform,
+          readIncidentTableName(process.env),
+          deptId,
+          period,
+          'export',
+        );
+        incidentVolume = { available: true, totalIncidents };
+      } catch {
+        incidentVolume = { available: false, reason: 'INFRA_ERROR' };
+      }
       return tabularFromJson(
         'Grant support report',
         assembleGrantsReport({
@@ -112,7 +129,7 @@ export async function buildExportTable(
           memberCountAndTrend,
           trainingHoursCompliance,
           apparatusOosHistory,
-          incidentVolume: { available: false, reason: 'E6-S1' },
+          incidentVolume,
         }),
       );
     }

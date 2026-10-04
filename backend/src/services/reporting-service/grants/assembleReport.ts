@@ -15,17 +15,30 @@ export const DEFAULT_GRANT_REPORT_FIELDS = [
 
 export type GrantReportField = (typeof DEFAULT_GRANT_REPORT_FIELDS)[number];
 
+export interface IncidentVolumeAvailable {
+  readonly available: true;
+  readonly totalIncidents: number;
+}
+
 export interface IncidentVolumeUnavailable {
   readonly available: false;
-  readonly reason: 'E6-S1';
+  /**
+   * `E6-S1` is the historical scope-gap reason (no incident-table read existed at all).
+   * `#251` closed that gap; an unavailable result past that point is always `INFRA_ERROR`
+   * (fail-soft on a Query/config failure) — the literal `E6-S1` value is kept only so a
+   * caller that cached the old shape still type-checks against this union.
+   */
+  readonly reason: 'E6-S1' | 'INFRA_ERROR';
 }
+
+export type IncidentVolume = IncidentVolumeAvailable | IncidentVolumeUnavailable;
 
 export interface AssembleGrantsReportInput {
   readonly period: ReportPeriod;
   readonly memberCountAndTrend: MemberCountAndTrend;
   readonly trainingHoursCompliance: TrainingHoursCompliance;
   readonly apparatusOosHistory: ApparatusOosHistory;
-  readonly incidentVolume: IncidentVolumeUnavailable;
+  readonly incidentVolume: IncidentVolume;
 }
 
 export interface GrantsReport {
@@ -38,7 +51,7 @@ export interface GrantsReport {
     readonly joinedInPeriod: number;
     readonly trendMethod: 'joinDateApproximation';
   };
-  readonly totalIncidentVolume: IncidentVolumeUnavailable;
+  readonly totalIncidentVolume: IncidentVolume;
   readonly trainingHoursCompliance: TrainingHoursCompliance;
   readonly apparatusOutOfServiceHistory: ApparatusOosHistory;
 }

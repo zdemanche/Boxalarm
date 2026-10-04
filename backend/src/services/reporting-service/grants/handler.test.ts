@@ -51,12 +51,30 @@ function fakeDynamoClient(
   return { send } as unknown as DynamoDBDocumentClient;
 }
 
+/** #251: lets a test fail only the incident-table Query while the other three succeed. */
+function fakeDynamoClientPerTable(
+  responses: Record<string, readonly Record<string, unknown>[] | Error>,
+): DynamoDBDocumentClient {
+  const send = vi.fn((command: unknown) => {
+    if (!(command instanceof QueryCommand)) {
+      return Promise.reject(new Error('unexpected command'));
+    }
+    const tableName = command.input.TableName as string;
+    const response = responses[tableName] ?? [];
+    return response instanceof Error
+      ? Promise.reject(response)
+      : Promise.resolve({ Items: response });
+  });
+  return { send } as unknown as DynamoDBDocumentClient;
+}
+
 beforeEach(() => {
   vi.resetModules();
   process.env.VERIFIED_PERMISSIONS_POLICY_STORE_ID = 'ps-1';
   process.env.PERSONNEL_TABLE_NAME = 'personnel-table';
   process.env.TRAINING_DYNAMO_TABLE_NAME = 'training-table';
   process.env.PLATFORM_TABLE_NAME = 'platform-table';
+  process.env.INCIDENT_TABLE_NAME = 'incident-table';
 });
 
 afterEach(() => {
@@ -173,7 +191,53 @@ describe('grants/handler.ts (entrypoint)', () => {
     expect(result).toMatchObject({ statusCode: 503 });
   });
 
-  it('returns 200 with the assembled grants report for an authorized admin (AC1, AC2)', async () => {
+  it('returns 200 with the assembled grants report for an authorized admin, including a real incident count (#251, AC1, AC2)', async () => {
+    const { createAuthzClient } = await import('@boxalarm/authz');
+    createAuthzClient(process.env, fakeAuthzClient('ALLOW'));
+    const { createDynamoClient } = await import('../client.js');
+    createDynamoClient(
+      process.env,
+      fakeDynamoClientPerTable({
+        'incident-table': [{ incidentId: 'INC-1' }, { incidentId: 'INC-2' }],
+      }),
+    );
+    const { handler } = await import('./handler.js');
+
+    const result = await handler(buildEvent());
+
+    expect(result).toMatchObject({ statusCode: 200 });
+    const body = JSON.parse((result as { body: string }).body) as {
+      fieldSetSource: string;
+      totalIncidentVolume: { available: boolean; totalIncidents?: number };
+    };
+    expect(body.fieldSetSource).toBe('default');
+    expect(body.totalIncidentVolume).toEqual({ available: true, totalIncidents: 2 });
+  });
+
+  it('#251: fails soft to unavailable (still a 200) when only the incident-table Query fails', async () => {
+    const { createAuthzClient } = await import('@boxalarm/authz');
+    createAuthzClient(process.env, fakeAuthzClient('ALLOW'));
+    const { createDynamoClient } = await import('../client.js');
+    createDynamoClient(
+      process.env,
+      fakeDynamoClientPerTable({ 'incident-table': new Error('incident table throttled') }),
+    );
+    const { handler } = await import('./handler.js');
+
+    const result = await handler(buildEvent());
+
+    expect(result).toMatchObject({ statusCode: 200 });
+    const body = JSON.parse((result as { body: string }).body) as {
+      activeMemberCount: number;
+      totalIncidentVolume: { available: boolean; reason?: string };
+    };
+    expect(body.totalIncidentVolume).toEqual({ available: false, reason: 'INFRA_ERROR' });
+    // The other three domains, which did succeed, are still served.
+    expect(body.activeMemberCount).toBe(0);
+  });
+
+  it('#251: fails soft to unavailable when INCIDENT_TABLE_NAME is not configured, without 503ing the report', async () => {
+    delete process.env.INCIDENT_TABLE_NAME;
     const { createAuthzClient } = await import('@boxalarm/authz');
     createAuthzClient(process.env, fakeAuthzClient('ALLOW'));
     const { createDynamoClient } = await import('../client.js');
@@ -184,10 +248,8 @@ describe('grants/handler.ts (entrypoint)', () => {
 
     expect(result).toMatchObject({ statusCode: 200 });
     const body = JSON.parse((result as { body: string }).body) as {
-      fieldSetSource: string;
       totalIncidentVolume: { available: boolean };
     };
-    expect(body.fieldSetSource).toBe('default');
-    expect(body.totalIncidentVolume).toEqual({ available: false, reason: 'E6-S1' });
+    expect(body.totalIncidentVolume).toEqual({ available: false, reason: 'INFRA_ERROR' });
   });
 });

@@ -1,4 +1,5 @@
 import type { APIGatewayProxyResultV2 } from 'aws-lambda';
+import type { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
 import {
   badRequestProblem,
   extractTraceId,
@@ -7,14 +8,17 @@ import {
   type CedarPrincipalContext,
   type GuardEvent,
 } from '@boxalarm/authz';
-import { toVerifiedDeptId } from '@boxalarm/dept-scope';
+import { toVerifiedDeptId, type VerifiedDeptId } from '@boxalarm/dept-scope';
 import { emitOutcomeMetric } from '@boxalarm/metrics';
 import { createDynamoClient, readGrantsReportConfig } from '../client.js';
 import { logError } from '../logger.js';
+import { readIncidentTableName } from '../responseTimes/handler.js';
 import { assembleGrantsReport } from './assembleReport.js';
+import type { IncidentVolume } from './assembleReport.js';
 import {
   getActiveMemberCountAndTrend,
   getApparatusOosHistory,
+  getIncidentVolume,
   getTrainingHoursCompliance,
   type ReportPeriod,
 } from './repository.js';
@@ -34,6 +38,40 @@ function parsePeriod(event: GuardEvent): ReportPeriod | undefined {
     return undefined;
   }
   return { periodStart, periodEnd };
+}
+
+/**
+ * #251: incident volume is fetched outside the Promise.all above on purpose — that trio
+ * is fail-closed (one dependency throwing 503s the whole report; see the "never a
+ * partial/degraded 200" test), but incident volume must fail soft, per the ticket. Any
+ * failure here — missing INCIDENT_TABLE_NAME config, a throttled/unavailable Query — yields
+ * `{ available: false }` rather than 503ing a report the other three domains could still
+ * serve.
+ */
+async function getIncidentVolumeFailSoft(
+  client: DynamoDBDocumentClient,
+  deptId: VerifiedDeptId,
+  period: ReportPeriod,
+  traceId: string,
+): Promise<IncidentVolume> {
+  try {
+    const incidentTableName = readIncidentTableName(process.env);
+    const { totalIncidents } = await getIncidentVolume(
+      client,
+      incidentTableName,
+      deptId,
+      period,
+      traceId,
+    );
+    return { available: true, totalIncidents };
+  } catch (error) {
+    logError('reporting.grants.incidentVolume.unavailable', error, {
+      deptId,
+      correlationId: traceId,
+    });
+    emitOutcomeMetric(METRIC_NAMESPACE, 'GrantsReportIncidentVolumeUnavailable');
+    return { available: false, reason: 'INFRA_ERROR' };
+  }
 }
 
 async function getGrantsReport(
@@ -59,13 +97,14 @@ async function getGrantsReport(
       getTrainingHoursCompliance(client, config, deptId, period, traceId),
       getApparatusOosHistory(client, config, deptId, period, traceId),
     ]);
+    const incidentVolume = await getIncidentVolumeFailSoft(client, deptId, period, traceId);
 
     const report = assembleGrantsReport({
       period,
       memberCountAndTrend,
       trainingHoursCompliance,
       apparatusOosHistory,
-      incidentVolume: { available: false, reason: 'E6-S1' },
+      incidentVolume,
     });
 
     emitOutcomeMetric(METRIC_NAMESPACE, METRIC_NAME, 'Served');

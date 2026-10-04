@@ -33,6 +33,10 @@ export interface ApparatusOosHistory {
   readonly totalOutOfServiceEvents: number;
 }
 
+export interface IncidentVolumeCount {
+  readonly totalIncidents: number;
+}
+
 async function queryAllPages(
   client: DynamoDBDocumentClient,
   buildCommand: (exclusiveStartKey?: Record<string, unknown>) => QueryCommand,
@@ -236,6 +240,46 @@ export async function getApparatusOosHistory(
     return { records, totalOutOfServiceEvents: records.length };
   } catch (error) {
     logError('reporting.grants.apparatusOos.failed', error, { deptId, correlationId: traceId });
+    throw error;
+  }
+}
+
+/**
+ * #251: incident count for the grants report's `totalIncidentVolume` field, over the same
+ * GSI1 `INCIDENT#{alarmAt}` range responseTimes/repository.ts and incident-service's
+ * `searchIncidents` already query — `alarmAt` is stored in epoch seconds, so the caller's
+ * epoch-ms `period` bounds are floored to seconds before the Query. The caller
+ * (handler.ts's `getIncidentVolumeFailSoft`) is responsible for failing soft on any error
+ * this throws; this function itself fails closed, matching every other repository read here.
+ */
+export async function getIncidentVolume(
+  client: DynamoDBDocumentClient,
+  incidentTableName: string,
+  deptId: VerifiedDeptId,
+  period: ReportPeriod,
+  traceId?: string,
+): Promise<IncidentVolumeCount> {
+  try {
+    const fromAlarmAt = Math.floor(period.periodStart / 1000);
+    const toAlarmAt = Math.floor(period.periodEnd / 1000);
+    const items = await queryAllPages(
+      client,
+      (exclusiveStartKey) =>
+        new QueryCommand({
+          TableName: incidentTableName,
+          IndexName: 'GSI1',
+          KeyConditionExpression: 'gsi1pk = :pk AND gsi1sk BETWEEN :from AND :to',
+          ExpressionAttributeValues: {
+            ':pk': buildDeptScopedPk(deptId),
+            ':from': `INCIDENT#${fromAlarmAt}`,
+            ':to': `INCIDENT#${toAlarmAt}`,
+          },
+          ExclusiveStartKey: exclusiveStartKey,
+        }),
+    );
+    return { totalIncidents: items.length };
+  } catch (error) {
+    logError('reporting.grants.incidentVolume.failed', error, { deptId, correlationId: traceId });
     throw error;
   }
 }
