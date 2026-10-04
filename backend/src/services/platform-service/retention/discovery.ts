@@ -1,5 +1,5 @@
 import { ScanCommand, type DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
-import { toVerifiedDeptId } from '@boxalarm/dept-scope';
+import { buildDeptScopedPk, toVerifiedDeptId } from '@boxalarm/dept-scope';
 import {
   CRYPTO_SHRED_ENTITY_TYPES,
   HARD_DELETE_ENTITY_TYPES,
@@ -30,8 +30,31 @@ export interface DiscoverDisposalCandidatesInput {
 
 /** pk is always `DEPT#{deptId}` or `DEPT#{deptId}#...` (the dept-scoping invariant
  * every writer on this table is held to — see findPkScopingViolations). */
-function deptIdFromPk(pk: string): string | undefined {
-  return /^DEPT#([^#]+)/.exec(pk)?.[1];
+function deptIdFromPk(partitionKey: string): string | undefined {
+  return /^DEPT#([^#]+)/.exec(partitionKey)?.[1];
+}
+
+/** Parse a stored DEPT#-scoped pk into buildDeptScopedPk rest args (entity + ids). */
+function rebuildDeptScopedPkParts(
+  storedPk: string,
+  deptId: string,
+): readonly [string, ...string[]] | readonly [] | undefined {
+  const parts = storedPk.split('#');
+  if (parts[0] !== 'DEPT' || parts[1] !== deptId) {
+    return undefined;
+  }
+  if (parts.length === 2) {
+    return [];
+  }
+  if (parts.length < 4) {
+    return undefined;
+  }
+  const entity = parts[2];
+  const rest = parts.slice(3);
+  if (!entity || rest.some((p) => p.length === 0)) {
+    return undefined;
+  }
+  return [entity, ...rest];
 }
 
 /**
@@ -72,13 +95,17 @@ export async function discoverDisposalCandidates(
 
     const items = (page.Items ?? []) as Record<string, unknown>[];
     for (const item of items) {
-      const pk = item.pk;
-      const sk = item.sk;
+      const itemPk = item.pk;
+      const itemSk = item.sk;
       const entityType = item.entityType;
-      if (typeof pk !== 'string' || typeof sk !== 'string' || typeof entityType !== 'string') {
+      if (
+        typeof itemPk !== 'string' ||
+        typeof itemSk !== 'string' ||
+        typeof entityType !== 'string'
+      ) {
         continue;
       }
-      const deptId = deptIdFromPk(pk);
+      const deptId = deptIdFromPk(itemPk);
       if (!deptId) {
         continue;
       }
@@ -99,7 +126,16 @@ export async function discoverDisposalCandidates(
         continue;
       }
 
-      candidates.push({ deptId, pk, sk, entityType });
+      const rebuilt = rebuildDeptScopedPkParts(itemPk, deptId);
+      if (!rebuilt) {
+        continue;
+      }
+      candidates.push({
+        deptId,
+        pk: buildDeptScopedPk(toVerifiedDeptId({ deptId }), ...rebuilt),
+        sk: itemSk,
+        entityType,
+      });
     }
 
     exclusiveStartKey = page.LastEvaluatedKey as Record<string, unknown> | undefined;
