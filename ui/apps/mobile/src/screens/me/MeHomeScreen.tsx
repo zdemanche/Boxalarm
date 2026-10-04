@@ -1,6 +1,6 @@
 import { spacing, targetSize, typeScale } from '@boxalarm/design-tokens';
-import { useNavigation } from '@react-navigation/native';
-import { useEffect, useRef, useState } from 'react';
+import { useFocusEffect, useNavigation } from '@react-navigation/native';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { AccessibilityInfo, Alert, Text, TouchableOpacity, View } from 'react-native';
 import { Button, Screen, useTheme, type SurfaceTheme } from '../../components/ui';
 import { retryPendingUnregister, useAuth, type SignOutResult } from '../../auth/AuthContext';
@@ -151,11 +151,23 @@ export function MeHomeScreen() {
     }
   };
 
+  // ProfileEditScreen saves and navigates straight back here (goBack), so the profile the member
+  // just edited has to come back on screen focus, not only on first mount - otherwise Me shows
+  // the stale name/phone until the app is force-closed and reopened (#144).
+  useFocusEffect(
+    useCallback(() => {
+      let cancelled = false;
+      repository.getProfile().then((result) => {
+        if (!cancelled) setProfile(result);
+      });
+      return () => {
+        cancelled = true;
+      };
+    }, [repository]),
+  );
+
   useEffect(() => {
     let cancelled = false;
-    repository.getProfile().then((result) => {
-      if (!cancelled) setProfile(result);
-    });
     repository.getQualifications().then((result) => {
       if (!cancelled) setQuals(result);
     });
