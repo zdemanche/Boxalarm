@@ -345,6 +345,8 @@ export const personnelLosap = new Losap("personnel-losap", {
   policyStoreId: policyStore.policyStoreId,
   logGroup: personnelLogGroup,
   httpApi,
+  platformBus,
+  opsAlarmTopicArn: chiefNotificationTopic.topicArn,
 });
 
 export const personnelShifts = new Shifts("personnel-shifts", {
