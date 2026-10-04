@@ -110,7 +110,7 @@ test('apparatus registry passes axe for CHIEF', async ({ page }) => {
     .getByRole('navigation', { name: 'Primary' })
     .getByRole('link', { name: 'Apparatus', exact: true })
     .click();
-  await expect(page.getByRole('heading', { name: 'Apparatus' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Apparatus', exact: true })).toBeVisible();
 
   const results = await new AxeBuilder({ page }).analyze();
   expect(results.violations).toEqual([]);
