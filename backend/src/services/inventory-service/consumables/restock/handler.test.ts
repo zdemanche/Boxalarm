@@ -97,7 +97,8 @@ describe('handler (PUT /api/v1/inventory/consumables/{itemId})', () => {
     });
     await invoke(event('gloves-m', { stockLevel: 40 }), client);
     const putCalls = client.sendMock.mock.calls.filter(
-      ([command]: [{ constructor: { name: string } }]) => command.constructor.name === 'PutCommand',
+      ([command]: [unknown]) =>
+        (command as { constructor: { name: string } }).constructor.name === 'PutCommand',
     );
     expect(putCalls).toHaveLength(1);
     const input = (putCalls[0]![0] as { input: { Item: Record<string, unknown> } }).input;

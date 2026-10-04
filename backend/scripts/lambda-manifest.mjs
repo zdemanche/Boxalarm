@@ -92,6 +92,11 @@ export const LAMBDA_ENTRIES = [
   },
   {
     service: 'platform-service',
+    function: 'retention-disposal-discovery',
+    entry: 'src/services/platform-service/retention/discoveryHandler.ts',
+  },
+  {
+    service: 'platform-service',
     function: 'outbox-publisher',
     entry: 'src/services/platform-service/outbox-publisher/handler.ts',
   },
