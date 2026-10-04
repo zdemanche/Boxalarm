@@ -68,10 +68,7 @@ export const handler = async (): Promise<StalenessCheckResult> => {
   }
 
   const now = Date.now();
-  const lastAppliedAt = items.reduce(
-    (latest, item) => Math.max(latest, item.snapshotUpdatedAt),
-    0,
-  );
+  const lastAppliedAt = items.reduce((latest, item) => Math.max(latest, item.snapshotUpdatedAt), 0);
   const propagationLagMs = items.length === 0 ? 0 : Math.max(now - lastAppliedAt, 0);
   const isStale = items.length > 0 && propagationLagMs > STALENESS_THRESHOLD_MILLISECONDS;
   const staleCount = isStale ? 1 : 0;

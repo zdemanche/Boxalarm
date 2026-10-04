@@ -496,9 +496,7 @@ describe('reporting-service grants repository (real DynamoDB)', () => {
     it('logs the original error and rethrows when the Query fails (error-path-logging; the caller is responsible for failing soft)', async () => {
       const deptId = freshDeptId();
 
-      await expect(
-        getIncidentVolume(client, 'no-such-table', deptId, PERIOD),
-      ).rejects.toThrow();
+      await expect(getIncidentVolume(client, 'no-such-table', deptId, PERIOD)).rejects.toThrow();
     });
   });
 });

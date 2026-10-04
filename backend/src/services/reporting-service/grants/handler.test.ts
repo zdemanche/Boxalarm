@@ -197,7 +197,9 @@ describe('grants/handler.ts (entrypoint)', () => {
     const { createDynamoClient } = await import('../client.js');
     createDynamoClient(
       process.env,
-      fakeDynamoClientPerTable({ 'incident-table': [{ incidentId: 'INC-1' }, { incidentId: 'INC-2' }] }),
+      fakeDynamoClientPerTable({
+        'incident-table': [{ incidentId: 'INC-1' }, { incidentId: 'INC-2' }],
+      }),
     );
     const { handler } = await import('./handler.js');
 

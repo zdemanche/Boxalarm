@@ -56,10 +56,19 @@ async function getIncidentVolumeFailSoft(
 ): Promise<IncidentVolume> {
   try {
     const incidentTableName = readIncidentTableName(process.env);
-    const { totalIncidents } = await getIncidentVolume(client, incidentTableName, deptId, period, traceId);
+    const { totalIncidents } = await getIncidentVolume(
+      client,
+      incidentTableName,
+      deptId,
+      period,
+      traceId,
+    );
     return { available: true, totalIncidents };
   } catch (error) {
-    logError('reporting.grants.incidentVolume.unavailable', error, { deptId, correlationId: traceId });
+    logError('reporting.grants.incidentVolume.unavailable', error, {
+      deptId,
+      correlationId: traceId,
+    });
     emitOutcomeMetric(METRIC_NAMESPACE, 'GrantsReportIncidentVolumeUnavailable');
     return { available: false, reason: 'INFRA_ERROR' };
   }
