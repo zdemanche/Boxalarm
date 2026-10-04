@@ -5,6 +5,7 @@ import { ServiceLogGroup } from "../observability/service-log-group";
 import { HttpApi } from "../api/http-api";
 import { PlatformBus } from "../messaging/platform-bus";
 import { verifiedPermissionsPolicyStatement } from "../authz/policy-store";
+import { auditMutationDenyStatement } from "../data/platform-table";
 import { IamPolicyStatement } from "../observability/observability-policy";
 import { lambdaCode, LAMBDA_HANDLER } from "../shared/lambda-code";
 import { requireEnv } from "../shared/env";
@@ -163,6 +164,8 @@ export class SessionRevocation extends pulumi.ComponentResource {
               },
             },
             revocationMarkerStatement(tableArn),
+            // #257 sweep: every platform-table-writing role carries the audit-row deny.
+            auditMutationDenyStatement(tableArn),
           ]),
       },
       { parent: this },
@@ -224,6 +227,9 @@ export class SessionRevocation extends pulumi.ComponentResource {
             verifiedPermissionsPolicyStatement(policyStoreArn),
             revocationMarkerStatement(tableArn),
             ...pushInvalidationStatements(tableArn),
+            // #257 sweep: InvalidateMemberPush's UpdateItem makes this a mutating role
+            // (the Condition already excludes AUDIT# keys; this is defense-in-depth).
+            auditMutationDenyStatement(tableArn),
           ]),
       },
       { parent: this },
@@ -306,6 +312,8 @@ export class SessionRevocation extends pulumi.ComponentResource {
             ...revocation,
             verifiedPermissionsPolicyStatement(policyStoreArn),
             revocationMarkerStatement(tableArn),
+            // #257 sweep: every platform-table-writing role carries the audit-row deny.
+            auditMutationDenyStatement(tableArn),
           ]),
       },
       { parent: this },

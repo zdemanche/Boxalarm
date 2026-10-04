@@ -3,6 +3,7 @@ import { ServiceLambda } from "../observability/service-lambda";
 import { ServiceLogGroup } from "../observability/service-log-group";
 import { HttpApi } from "../api/http-api";
 import { verifiedPermissionsPolicyStatement } from "../authz/policy-store";
+import { auditMutationDenyStatement } from "../data/platform-table";
 import { lambdaCode, LAMBDA_HANDLER } from "../shared/lambda-code";
 import { requireEnv } from "../shared/env";
 
@@ -56,6 +57,8 @@ export class Losap extends pulumi.ComponentResource {
         Action: ["dynamodb:GetItem", "dynamodb:PutItem"],
         Resource: [arn],
       },
+      // #257 sweep: every platform-table-writing role carries the audit-row deny.
+      auditMutationDenyStatement(arn),
     ]);
 
     this.getMemberTotalLambda = new ServiceLambda(

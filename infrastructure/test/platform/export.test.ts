@@ -172,6 +172,17 @@ describe("Export", () => {
     expect(policyJson).not.toContain("TransactWriteItems");
   });
 
+  // #257 sweep: markJobFailed's UpdateItem makes the handler a mutating role.
+  it("carries the audit-row deny on the handler's UpdateItem grant", async () => {
+    const exp = await build();
+    const policyJson = await resolve(exp.handlerLambda.rolePolicy.policy);
+    const policy = JSON.parse(policyJson) as {
+      Statement: Array<{ Sid: string; Effect: string }>;
+    };
+    const deny = policy.Statement.find((s) => s.Sid === "DenyAuditMutations");
+    expect(deny?.Effect).toBe("Deny");
+  });
+
   it("throws on absent or unknown env", async () => {
     const { Export } = await import("../../components/platform/export");
     const logGroup = new ServiceLogGroup("test-export-log-group-bad", {

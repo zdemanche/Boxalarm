@@ -3,6 +3,7 @@ import { ServiceLambda } from "../observability/service-lambda";
 import { ServiceLogGroup } from "../observability/service-log-group";
 import { HttpApi } from "../api/http-api";
 import { verifiedPermissionsPolicyStatement } from "../authz/policy-store";
+import { auditMutationDenyStatement } from "../data/platform-table";
 import { lambdaCode } from "../shared/lambda-code";
 import { requireEnv } from "../shared/env";
 
@@ -24,6 +25,10 @@ const WRITE_STATEMENT = (tableArn: pulumi.Input<string>) =>
       Action: ["dynamodb:GetItem", "dynamodb:PutItem"],
       Resource: [arn],
     },
+    // #257 sweep: PutItem alone can overwrite an existing item if the sort key is
+    // guessed, so every platform-table-writing role carries this even though it
+    // grants no UpdateItem/DeleteItem of its own.
+    auditMutationDenyStatement(arn),
   ]);
 
 const READ_STATEMENT = (tableArn: pulumi.Input<string>) =>

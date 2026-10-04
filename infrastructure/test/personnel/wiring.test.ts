@@ -128,6 +128,15 @@ describe("personnel Lambdas: env and IAM match their handlers", { timeout: 30_00
       expect(isGranted(s, "dynamodb:GetItem", TABLE)).toBe(true);
       expect(isGranted(s, "dynamodb:PutItem", TABLE)).toBe(true);
     });
+
+    // #257: PUT is PutItem-only (no UpdateItem) but still carries the deny.
+    it("PUT carries the audit-row deny despite holding no UpdateItem", async () => {
+      await build();
+      const deny = statementsForRole("boxalarm-dev-personnel-quals-put").find(
+        (st) => st.Sid === "DenyAuditMutations",
+      );
+      expect(deny?.Effect).toBe("Deny");
+    });
   });
 
   describe("members update-profile", () => {
@@ -283,6 +292,15 @@ describe("personnel Lambdas: env and IAM match their handlers", { timeout: 30_00
       expect(isGranted(yearEnd, "dynamodb:Query", TABLE)).toBe(true);
       expect(isGranted(yearEnd, "dynamodb:Query", `${TABLE}/index/GSI3`)).toBe(true);
     });
+
+    // #257: update-rules is PutItem-only (no UpdateItem) but still carries the deny.
+    it("update-rules carries the audit-row deny", async () => {
+      await build();
+      const deny = statementsForRole("boxalarm-dev-personnel-losap-update-rules").find(
+        (st) => st.Sid === "DenyAuditMutations",
+      );
+      expect(deny?.Effect).toBe("Deny");
+    });
   });
 
   it("every role holding UpdateItem/DeleteItem on the platform table carries the audit-row deny (MIN-3)", async () => {
@@ -360,6 +378,19 @@ describe("personnel Lambdas: env and IAM match their handlers", { timeout: 30_00
         expect(isGranted(s, "dynamodb:GetItem", TABLE), fn).toBe(true);
         expect(isGranted(s, "dynamodb:PutItem", TABLE), fn).toBe(true);
         expect(isGranted(s, "dynamodb:UpdateItem", TABLE), fn).toBe(false);
+      }
+    });
+
+    // #257: PutItem alone can overwrite an existing item if the sort key is guessed,
+    // so attendance's write roles carry the deny even though they hold no UpdateItem.
+    it("record (self + on-behalf) carries the audit-row deny despite holding no UpdateItem", async () => {
+      await build();
+      for (const fn of [
+        "boxalarm-dev-personnel-attendance-record",
+        "boxalarm-dev-personnel-attendance-record-on-behalf",
+      ]) {
+        const deny = statementsForRole(fn).find((st) => st.Sid === "DenyAuditMutations");
+        expect(deny?.Effect, fn).toBe("Deny");
       }
     });
 

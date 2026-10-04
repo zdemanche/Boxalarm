@@ -82,6 +82,7 @@ async function build() {
 
 interface Statement {
   Sid?: string;
+  Effect?: string;
   Action: string | string[];
   Resource: string | string[];
 }
@@ -93,9 +94,12 @@ async function statementsOf(lambda: {
     .Statement;
 }
 
+/** Allow-only actions on `resource` — #257 added a same-resource Deny (DenyAuditMutations)
+ * to several of these roles, which this helper's callers (asserting what a role CAN do)
+ * must not pick up. */
 function actionsOn(statements: Statement[], resource: string): string[] {
   return statements
-    .filter((s) => s.Resource === resource)
+    .filter((s) => s.Effect !== "Deny" && s.Resource === resource)
     .flatMap((s) => (Array.isArray(s.Action) ? s.Action : [s.Action]));
 }
 
@@ -135,6 +139,18 @@ describe("SessionRevocation (review C1)", () => {
       });
       const env = await resolve(lambda.function.environment);
       expect(env?.variables?.PLATFORM_TABLE_NAME).toBe("platform-table");
+    }
+  });
+
+  // #257 sweep: every revocation-path role writes the platform table (the marker, or
+  // the push-invalidation Update), so every one carries the audit-row deny — even
+  // though their own Allow statements are already key-scoped away from AUDIT# rows.
+  it("every revocation-path role carries the audit-row deny (#257)", async () => {
+    const sr = await build();
+    for (const lambda of [sr.memberStatusLambda, sr.deviceLossLambda, sr.credentialResetLambda]) {
+      const statements = await statementsOf(lambda);
+      const deny = statements.find((s) => s.Sid === "DenyAuditMutations");
+      expect(deny).toBeDefined();
     }
   });
 

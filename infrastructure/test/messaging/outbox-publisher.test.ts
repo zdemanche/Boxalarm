@@ -95,6 +95,15 @@ describe("OutboxPublisher", () => {
     );
   });
 
+  // #257 sweep: the table-wide UpdateItem grant above makes this a mutating role.
+  it("carries the audit-row deny on its table-wide UpdateItem grant", async () => {
+    const publisher = await build();
+    const policyJson = await resolve(publisher.lambda.rolePolicy.policy);
+    const policy = JSON.parse(policyJson) as { Statement: Array<{ Sid: string; Effect: string }> };
+    const deny = policy.Statement.find((s) => s.Sid === "DenyAuditMutations");
+    expect(deny?.Effect).toBe("Deny");
+  });
+
   it("bounds the stream mapping's retry attempts and record age instead of the unbounded default", async () => {
     const publisher = await build();
     const [retries, maxAge] = await Promise.all([
