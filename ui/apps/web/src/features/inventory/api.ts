@@ -7,6 +7,7 @@ import type {
   IssuePpeInput,
   LifecycleStatus,
   PpeAssignment,
+  RestockConsumableInput,
 } from './types';
 
 export async function listEquipment(
@@ -98,6 +99,19 @@ export async function listConsumables(tokens: AuthTokenSource): Promise<Consumab
   const response = await apiRequest('inventory/consumables', tokens);
   const body = (await response.json()) as { items: ConsumableStock[] };
   return body.items;
+}
+
+export async function restockConsumable(
+  tokens: AuthTokenSource,
+  itemId: string,
+  input: RestockConsumableInput,
+): Promise<ConsumableStock> {
+  const response = await apiRequest(`inventory/consumables/${encodeURIComponent(itemId)}`, tokens, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  });
+  return (await response.json()) as ConsumableStock;
 }
 
 export async function listMemberPpe(

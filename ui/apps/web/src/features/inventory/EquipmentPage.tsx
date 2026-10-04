@@ -17,6 +17,7 @@ import {
   type DataTableColumn,
 } from '../../components/ui';
 import { createEquipmentAsset, listConsumables, listEquipment } from './api';
+import { RestockConsumableControl } from './RestockConsumableControl';
 import type { ConsumableStock, CreateEquipmentAssetInput, EquipmentAsset } from './types';
 
 const emptyForm: CreateEquipmentAssetInput = { serialNumber: '', location: '' };
@@ -94,6 +95,11 @@ export function EquipmentPage() {
         ) : (
           <StatusChip status="ok">OK</StatusChip>
         ),
+    },
+    {
+      key: 'actions',
+      header: 'Actions',
+      render: (c) => <RestockConsumableControl item={c} />,
     },
   ];
 

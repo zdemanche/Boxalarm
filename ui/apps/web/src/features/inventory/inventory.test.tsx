@@ -300,3 +300,66 @@ test('below-threshold consumables are flagged (AC1)', async () => {
     expect(chip.closest('[data-status="warning"]')).toBeTruthy();
   });
 });
+
+test('restocking a below-threshold consumable clears its reorder flag (#131)', async () => {
+  let current = {
+    itemId: 'foam',
+    deptId: 'd1',
+    itemName: 'Foam',
+    stockLevel: 1,
+    reorderThreshold: 5,
+    reorderFlagged: true,
+  };
+  server.use(
+    http.get('/api/v1/inventory/equipment', () => HttpResponse.json({ items: [] })),
+    http.get('/api/v1/inventory/consumables', () => HttpResponse.json({ items: [current] })),
+    http.put('/api/v1/inventory/consumables/foam', async ({ request }) => {
+      const body = (await request.json()) as { stockLevel?: number };
+      current = { ...current, stockLevel: body.stockLevel ?? current.stockLevel, reorderFlagged: false };
+      return HttpResponse.json(current);
+    }),
+  );
+
+  const user = userEvent.setup();
+  renderApp(['ADMIN']);
+  await screen.findByRole('heading', { name: 'Inventory' });
+  await user.click(screen.getByRole('tab', { name: 'Consumables' }));
+  await screen.findByText('Reorder needed');
+
+  await user.click(screen.getByRole('button', { name: 'Restock Foam' }));
+  await user.type(screen.getByLabelText('New stock level'), '20');
+  await user.click(screen.getByRole('button', { name: 'Save' }));
+
+  await waitFor(() => {
+    expect(screen.queryByText('Reorder needed')).toBeNull();
+    expect(screen.getByText('OK')).toBeTruthy();
+  });
+});
+
+test('a non-admin viewer sees no restock control on consumables (#131)', async () => {
+  server.use(
+    http.get('/api/v1/inventory/equipment', () => HttpResponse.json({ items: [] })),
+    http.get('/api/v1/inventory/consumables', () =>
+      HttpResponse.json({
+        items: [
+          {
+            itemId: 'foam',
+            deptId: 'd1',
+            itemName: 'Foam',
+            stockLevel: 1,
+            reorderThreshold: 5,
+            reorderFlagged: true,
+          },
+        ],
+      }),
+    ),
+  );
+
+  const user = userEvent.setup();
+  renderApp(['APPARATUS']);
+  await screen.findByRole('heading', { name: 'Inventory' });
+  await user.click(screen.getByRole('tab', { name: 'Consumables' }));
+  await screen.findByText('Reorder needed');
+
+  expect(screen.queryByRole('button', { name: /Restock/ })).toBeNull();
+});
