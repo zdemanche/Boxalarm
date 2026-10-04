@@ -97,8 +97,7 @@ describe('handler (PUT /api/v1/inventory/consumables/{itemId})', () => {
     });
     await invoke(event('gloves-m', { stockLevel: 40 }), client);
     const putCalls = client.sendMock.mock.calls.filter(
-      ([command]: [{ constructor: { name: string } }]) =>
-        command.constructor.name === 'PutCommand',
+      ([command]: [{ constructor: { name: string } }]) => command.constructor.name === 'PutCommand',
     );
     expect(putCalls).toHaveLength(1);
     const input = (putCalls[0]![0] as { input: { Item: Record<string, unknown> } }).input;
@@ -136,7 +135,10 @@ describe('handler (PUT /api/v1/inventory/consumables/{itemId})', () => {
   });
 
   it('400 problem+json when neither stockLevel nor reorderThreshold is present', async () => {
-    const result = await invoke(event('gloves-m', {}), fakeDocClient(() => ({})));
+    const result = await invoke(
+      event('gloves-m', {}),
+      fakeDocClient(() => ({})),
+    );
     expect(result.statusCode).toBe(400);
   });
 

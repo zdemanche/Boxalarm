@@ -50,14 +50,7 @@ export function createRestockHandler(docClient?: DynamoDBDocumentClient) {
 
       const client = getDocClient(docClient);
       const { tableName } = readInventoryConfig(process.env);
-      const consumable = await restockConsumable(
-        client,
-        tableName,
-        deptId,
-        actorId,
-        itemId,
-        input,
-      );
+      const consumable = await restockConsumable(client, tableName, deptId, actorId, itemId, input);
       if (!consumable) {
         throw new NotFoundError(`consumable item ${itemId} was not found`);
       }
