@@ -1,8 +1,13 @@
-import { QueryCommand } from '@aws-sdk/lib-dynamodb';
+import { ConditionalCheckFailedException } from '@aws-sdk/client-dynamodb';
+import { PutCommand, QueryCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
 import type { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
 import { describe, expect, it, vi } from 'vitest';
 import { toVerifiedDeptId } from '@boxalarm/dept-scope';
-import { listConsumables, queryConsumablesBelowThreshold } from './consumableRepository.js';
+import {
+  listConsumables,
+  queryConsumablesBelowThreshold,
+  restockConsumable,
+} from './consumableRepository.js';
 
 const TABLE = 'boxalarm-platform';
 const DEPT_ID = toVerifiedDeptId({ deptId: 'NICHOLS' });
@@ -126,5 +131,97 @@ describe('queryConsumablesBelowThreshold', () => {
     expect(items).toHaveLength(1);
     expect(items[0]?.itemId).toBe('GLOVES-L');
     expect(items.some((item) => item.itemId === 'STRAPS-M')).toBe(false);
+  });
+});
+
+describe('restockConsumable', () => {
+  it('AC1: last-writer-wins UpdateItem on stockLevel, returning the updated consumable', async () => {
+    const client = fakeDocClient((command) => {
+      if (command instanceof UpdateCommand) {
+        expect(command.input.Key).toEqual({
+          pk: 'DEPT#NICHOLS#CONSUMABLE#GLOVES-L',
+          sk: 'METADATA',
+        });
+        expect(command.input.ConditionExpression).toBe('attribute_exists(pk)');
+        expect(command.input.ExpressionAttributeValues).toEqual({ ':stockLevel': 40 });
+        return { Attributes: consumableItem('GLOVES-L', { stockLevel: 40 }) };
+      }
+      return {};
+    });
+
+    const consumable = await restockConsumable(client, TABLE, DEPT_ID, 'chief-1', 'GLOVES-L', {
+      stockLevel: 40,
+    });
+
+    expect(consumable?.stockLevel).toBe(40);
+  });
+
+  it('AC2: updates both stockLevel and reorderThreshold in a single UpdateItem', async () => {
+    const client = fakeDocClient((command) => {
+      if (command instanceof UpdateCommand) {
+        expect(command.input.ExpressionAttributeValues).toEqual({
+          ':stockLevel': 40,
+          ':reorderThreshold': 8,
+        });
+        return {
+          Attributes: consumableItem('GLOVES-L', { stockLevel: 40, reorderThreshold: 8 }),
+        };
+      }
+      return {};
+    });
+
+    const consumable = await restockConsumable(client, TABLE, DEPT_ID, 'chief-1', 'GLOVES-L', {
+      stockLevel: 40,
+      reorderThreshold: 8,
+    });
+
+    expect(consumable?.stockLevel).toBe(40);
+    expect(consumable?.reorderThreshold).toBe(8);
+  });
+
+  it('AC3: writes an undeletable-style AUDIT_LOG_ENTRY (attribute_not_exists guard) after a successful restock', async () => {
+    const client = fakeDocClient((command) => {
+      if (command instanceof UpdateCommand) {
+        return { Attributes: consumableItem('GLOVES-L', { stockLevel: 40 }) };
+      }
+      if (command instanceof PutCommand) {
+        expect(command.input.ConditionExpression).toBe(
+          'attribute_not_exists(pk) AND attribute_not_exists(sk)',
+        );
+        expect(command.input.Item?.entityType).toBe('AUDIT_LOG_ENTRY');
+        expect(command.input.Item?.mutatedEntityType).toBe('CONSUMABLE_STOCK');
+        expect(command.input.Item?.mutatedEntityId).toBe('GLOVES-L');
+        expect(command.input.Item?.actorId).toBe('chief-1');
+        return {};
+      }
+      return {};
+    });
+
+    await restockConsumable(client, TABLE, DEPT_ID, 'chief-1', 'GLOVES-L', { stockLevel: 40 });
+
+    expect(client.send).toHaveBeenCalledTimes(2);
+  });
+
+  it('returns undefined (no audit write) when the item does not exist', async () => {
+    const client = fakeDocClient(() => {
+      throw new ConditionalCheckFailedException({ message: 'condition failed', $metadata: {} });
+    });
+
+    const consumable = await restockConsumable(client, TABLE, DEPT_ID, 'chief-1', 'missing', {
+      stockLevel: 40,
+    });
+
+    expect(consumable).toBeUndefined();
+    expect(client.send).toHaveBeenCalledTimes(1);
+  });
+
+  it('rethrows an unrelated DynamoDB failure instead of swallowing it', async () => {
+    const client = fakeDocClient(() => {
+      throw new Error('boom');
+    });
+
+    await expect(
+      restockConsumable(client, TABLE, DEPT_ID, 'chief-1', 'GLOVES-L', { stockLevel: 40 }),
+    ).rejects.toThrow('boom');
   });
 });

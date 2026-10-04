@@ -846,6 +846,11 @@ export const LAMBDA_ENTRIES = [
   },
   {
     service: 'inventory-service',
+    function: 'consumables-restock',
+    entry: 'src/services/inventory-service/consumables/restock/handler.ts',
+  },
+  {
+    service: 'inventory-service',
     function: 'consumable-reorder-scanner',
     entry: 'src/services/inventory-service/consumableReorderScanner/handler.ts',
   },

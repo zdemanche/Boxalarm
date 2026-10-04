@@ -395,6 +395,7 @@ describe("PolicyStore", () => {
       SetEquipmentLocation: asset,
       TransitionAssetLifecycle: asset,
       IssuePpeAssignment: member,
+      RestockConsumable: asset,
     };
 
     async function decide(
@@ -463,6 +464,7 @@ describe("PolicyStore", () => {
       "SetEquipmentLocation",
       "TransitionAssetLifecycle",
       "IssuePpeAssignment",
+      "RestockConsumable",
     ];
 
     it.each(["OFFICER", "CHIEF", "ADMIN"])("ALLOWs %s every inventory write", async (group) => {
