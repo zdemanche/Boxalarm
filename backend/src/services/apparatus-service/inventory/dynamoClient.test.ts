@@ -1,7 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('@aws-sdk/client-dynamodb', () => ({
-  DynamoDBClient: vi.fn().mockImplementation(() => ({ marker: 'raw-client' })),
+  DynamoDBClient: vi.fn().mockImplementation(function () {
+    return { marker: 'raw-client' };
+  }),
 }));
 vi.mock('@aws-sdk/lib-dynamodb', () => ({
   DynamoDBDocumentClient: { from: vi.fn().mockImplementation((raw: unknown) => ({ raw })) },

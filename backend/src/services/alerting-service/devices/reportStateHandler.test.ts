@@ -21,11 +21,17 @@ function buildEvent(body: unknown): GuardEvent {
 
 function mockVerifiedPermissions(decision: 'ALLOW' | 'DENY'): void {
   vi.doMock('@aws-sdk/client-verifiedpermissions', () => ({
-    VerifiedPermissionsClient: vi.fn().mockImplementation(() => ({
-      send: vi.fn().mockResolvedValue({ decision }),
-    })),
-    IsAuthorizedWithTokenCommand: vi.fn().mockImplementation((input: unknown) => ({ input })),
-    BatchIsAuthorizedWithTokenCommand: vi.fn().mockImplementation((input: unknown) => ({ input })),
+    VerifiedPermissionsClient: vi.fn().mockImplementation(function () {
+      return {
+        send: vi.fn().mockResolvedValue({ decision }),
+      };
+    }),
+    IsAuthorizedWithTokenCommand: vi.fn().mockImplementation(function (input: unknown) {
+      return { input };
+    }),
+    BatchIsAuthorizedWithTokenCommand: vi.fn().mockImplementation(function (input: unknown) {
+      return { input };
+    }),
     Decision: { ALLOW: 'ALLOW', DENY: 'DENY' },
   }));
 }

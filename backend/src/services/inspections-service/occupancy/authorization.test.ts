@@ -24,7 +24,7 @@ describe('assertOccupancyWriteAuthorized', () => {
   });
 
   afterEach(() => {
-    vi.unmock('@aws-sdk/client-verifiedpermissions');
+    vi.doUnmock('@aws-sdk/client-verifiedpermissions');
     vi.restoreAllMocks();
   });
 

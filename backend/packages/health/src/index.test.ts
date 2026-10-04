@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
 import { mockClient } from 'aws-sdk-client-mock';
 import { DynamoDBClient, GetItemCommand } from '@aws-sdk/client-dynamodb';
 import { DescribeEventBusCommand, EventBridgeClient } from '@aws-sdk/client-eventbridge';
@@ -25,7 +25,7 @@ function check(result: boolean | Error): ReadinessCheck {
   };
 }
 
-let errorSpy: ReturnType<typeof vi.spyOn>;
+let errorSpy: MockInstance<typeof console.error>;
 
 beforeEach(() => {
   ddb.reset();

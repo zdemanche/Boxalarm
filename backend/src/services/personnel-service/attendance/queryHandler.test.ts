@@ -30,12 +30,14 @@ function mockAuthzDecision(decision: 'ALLOW' | 'DENY' | 'ERROR'): void {
     const actual = await importOriginal<typeof import('@aws-sdk/client-verifiedpermissions')>();
     return {
       ...actual,
-      VerifiedPermissionsClient: vi.fn().mockImplementation(() => ({
-        send:
-          decision === 'ERROR'
-            ? vi.fn().mockRejectedValue(new Error('VP outage'))
-            : vi.fn().mockResolvedValue({ decision: actual.Decision[decision] }),
-      })),
+      VerifiedPermissionsClient: vi.fn().mockImplementation(function () {
+        return {
+          send:
+            decision === 'ERROR'
+              ? vi.fn().mockRejectedValue(new Error('VP outage'))
+              : vi.fn().mockResolvedValue({ decision: actual.Decision[decision] }),
+        };
+      }),
     };
   });
 }

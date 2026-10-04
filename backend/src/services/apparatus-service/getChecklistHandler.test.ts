@@ -59,8 +59,8 @@ describe('getChecklistHandler', () => {
 
   afterEach(() => {
     process.env = { ...originalEnv };
-    vi.unmock('./dynamoClient.js');
-    vi.unmock('@boxalarm/authz');
+    vi.doUnmock('./dynamoClient.js');
+    vi.doUnmock('@boxalarm/authz');
     vi.resetModules();
   });
 

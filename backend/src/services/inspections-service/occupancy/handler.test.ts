@@ -88,8 +88,8 @@ describe('occupancy handler', () => {
 
   afterEach(() => {
     process.env = { ...originalEnv };
-    vi.unmock('./authorization.js');
-    vi.unmock('./repository.js');
+    vi.doUnmock('./authorization.js');
+    vi.doUnmock('./repository.js');
     vi.restoreAllMocks();
   });
 

@@ -175,12 +175,12 @@ function mockDeps(options: {
 }
 
 function unmockAll(): void {
-  vi.unmock('../repository.js');
-  vi.unmock('../submissionRepository.js');
-  vi.unmock('../nerisSettings.js');
-  vi.unmock('../dispatchProjection.js');
-  vi.unmock('../reportContext.js');
-  vi.unmock('./index.js');
+  vi.doUnmock('../repository.js');
+  vi.doUnmock('../submissionRepository.js');
+  vi.doUnmock('../nerisSettings.js');
+  vi.doUnmock('../dispatchProjection.js');
+  vi.doUnmock('../reportContext.js');
+  vi.doUnmock('./index.js');
 }
 
 describe('submissionWorker handler (SQS trigger)', () => {

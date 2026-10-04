@@ -11,7 +11,9 @@ vi.mock('@aws-sdk/client-verifiedpermissions', async () => {
   );
   return {
     ...actual,
-    VerifiedPermissionsClient: vi.fn().mockImplementation(() => ({ send })),
+    VerifiedPermissionsClient: vi.fn().mockImplementation(function () {
+      return { send };
+    }),
   };
 });
 

@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 import {
   InvalidParameterException,
   UserNotFoundException,
@@ -56,13 +56,12 @@ function mockDeps(overrides: Partial<Mocks> = {}): Mocks {
     getAccessStoreClient: () => ({}),
   }));
   vi.doMock('../authorizer/revocationStore.js', () => ({
-    writeRevocationMarker: (...args: unknown[]) =>
-      writeRevocationMarker(...args) as Promise<number>,
+    writeRevocationMarker: (...args: unknown[]) => writeRevocationMarker(...args),
   }));
   return mocks;
 }
 
-let writeRevocationMarker: ReturnType<typeof vi.fn>;
+let writeRevocationMarker: Mock<(...args: unknown[]) => Promise<number>>;
 
 async function load(): Promise<Inner> {
   const { handler } = await import('./credentialResetHandler.js');
@@ -72,7 +71,9 @@ async function load(): Promise<Inner> {
 describe('credentialResetHandler', () => {
   beforeEach(() => {
     vi.resetModules();
-    writeRevocationMarker = vi.fn().mockResolvedValue(1_700_000_000);
+    writeRevocationMarker = vi
+      .fn<(...args: unknown[]) => Promise<number>>()
+      .mockResolvedValue(1_700_000_000);
     vi.spyOn(console, 'log').mockImplementation(() => undefined);
     vi.spyOn(console, 'error').mockImplementation(() => undefined);
   });

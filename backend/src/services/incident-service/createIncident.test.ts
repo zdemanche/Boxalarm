@@ -6,7 +6,12 @@ import { bearerFor, fakeCedarDecision } from './testEvents.js';
 const vpSend = vi.hoisted(() => vi.fn());
 vi.mock('@aws-sdk/client-verifiedpermissions', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@aws-sdk/client-verifiedpermissions')>();
-  return { ...actual, VerifiedPermissionsClient: vi.fn(() => ({ send: vpSend })) };
+  return {
+    ...actual,
+    VerifiedPermissionsClient: vi.fn(function () {
+      return { send: vpSend };
+    }),
+  };
 });
 
 function buildEvent(
@@ -59,15 +64,21 @@ const VALID_BODY = {
 };
 
 describe('createIncident handler', () => {
+  const originalEnv = { ...process.env };
+
   beforeEach(() => {
     vi.resetModules();
     process.env.VERIFIED_PERMISSIONS_POLICY_STORE_ID = 'ps-1';
+    // The dispatch-lookup path reads the real repository's table name; set it so the
+    // 404 tests exercise the lookup rather than failing on configuration.
+    process.env.INCIDENT_TABLE_NAME = 'incident-table';
     vpSend.mockImplementation(fakeCedarDecision);
   });
 
   afterEach(() => {
-    vi.unmock('./repository.js');
+    vi.doUnmock('./repository.js');
     vi.restoreAllMocks();
+    process.env = { ...originalEnv };
   });
 
   it('returns 201 with NERIS-format incidentId equal to sourceDispatchId for ADMIN (AC3)', async () => {

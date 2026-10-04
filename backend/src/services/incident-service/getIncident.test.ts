@@ -55,8 +55,8 @@ describe('getIncident handler', () => {
   });
 
   afterEach(() => {
-    vi.unmock('./repository.js');
-    vi.unmock('./secondaryRepository.js');
+    vi.doUnmock('./repository.js');
+    vi.doUnmock('./secondaryRepository.js');
     vi.restoreAllMocks();
   });
 

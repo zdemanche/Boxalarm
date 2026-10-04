@@ -102,8 +102,8 @@ describe('shifts handler', () => {
 
   afterEach(() => {
     process.env = { ...originalEnv };
-    vi.unmock('./dynamoClient.js');
-    vi.unmock('../lib/memberRepository.js');
+    vi.doUnmock('./dynamoClient.js');
+    vi.doUnmock('../lib/memberRepository.js');
     vi.restoreAllMocks();
   });
 
@@ -463,7 +463,7 @@ describe('shifts handler — release/swap/approve routes', () => {
 
   afterEach(() => {
     process.env = { ...originalEnv };
-    vi.unmock('./dynamoClient.js');
+    vi.doUnmock('./dynamoClient.js');
     vi.restoreAllMocks();
   });
 

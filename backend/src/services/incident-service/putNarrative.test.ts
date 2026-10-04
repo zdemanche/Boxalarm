@@ -45,7 +45,7 @@ describe('putNarrative handler', () => {
   });
 
   afterEach(() => {
-    vi.unmock('./repository.js');
+    vi.doUnmock('./repository.js');
     vi.restoreAllMocks();
   });
 

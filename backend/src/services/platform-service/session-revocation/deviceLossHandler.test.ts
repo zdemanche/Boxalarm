@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 import { UserNotFoundException } from '@aws-sdk/client-cognito-identity-provider';
 import type {
   APIGatewayProxyEventV2WithLambdaAuthorizer,
@@ -62,24 +62,26 @@ function mockRevocationClient(overrides: {
 describe('deviceLossHandler', () => {
   const originalEnv = { ...process.env };
 
-  let writeRevocationMarker: ReturnType<typeof vi.fn>;
-  let invalidateMemberPush: ReturnType<typeof vi.fn>;
+  let writeRevocationMarker: Mock<(...args: unknown[]) => Promise<number>>;
+  let invalidateMemberPush: Mock<(...args: unknown[]) => Promise<string>>;
 
   beforeEach(() => {
     vi.resetModules();
     process.env.COGNITO_USER_POOL_ID = 'pool-1';
     process.env.PLATFORM_TABLE_NAME = 'platform-table';
-    writeRevocationMarker = vi.fn().mockResolvedValue(1_700_000_000);
-    invalidateMemberPush = vi.fn().mockResolvedValue('invalidated');
+    writeRevocationMarker = vi
+      .fn<(...args: unknown[]) => Promise<number>>()
+      .mockResolvedValue(1_700_000_000);
+    invalidateMemberPush = vi
+      .fn<(...args: unknown[]) => Promise<string>>()
+      .mockResolvedValue('invalidated');
     vi.doMock('./memberAccessStore.js', () => ({
       readPlatformTableName: () => 'platform-table',
       getAccessStoreClient: () => ({}),
-      invalidateMemberPush: (...args: unknown[]) =>
-        invalidateMemberPush(...args) as Promise<string>,
+      invalidateMemberPush: (...args: unknown[]) => invalidateMemberPush(...args),
     }));
     vi.doMock('../authorizer/revocationStore.js', () => ({
-      writeRevocationMarker: (...args: unknown[]) =>
-        writeRevocationMarker(...args) as Promise<number>,
+      writeRevocationMarker: (...args: unknown[]) => writeRevocationMarker(...args),
     }));
     // Cedar (RevokeSession) is exercised by the wiring test below and by infrastructure's
     // cedar-coverage test; here the guard passes the verified principal straight through.
@@ -97,9 +99,9 @@ describe('deviceLossHandler', () => {
 
   afterEach(() => {
     process.env = { ...originalEnv };
-    vi.unmock('./cognitoRevocationClient.js');
-    vi.unmock('./memberAccessStore.js');
-    vi.unmock('../authorizer/revocationStore.js');
+    vi.doUnmock('./cognitoRevocationClient.js');
+    vi.doUnmock('./memberAccessStore.js');
+    vi.doUnmock('../authorizer/revocationStore.js');
     vi.doUnmock('@boxalarm/authz');
     vi.restoreAllMocks();
   });

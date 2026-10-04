@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, vi, type Mock } from 'vitest';
 import { TransactionCanceledException } from '@aws-sdk/client-dynamodb';
 import type { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
 import { toVerifiedDeptId } from '@boxalarm/dept-scope';
@@ -9,7 +9,7 @@ const DEPT_ID = toVerifiedDeptId({ deptId: 'NICHOLS' });
 const TABLE_NAME = 'boxalarm-dev-incident';
 const TRACE_ID = 'trace-abc-123';
 
-function fakeClient(send: (command: unknown) => unknown): DynamoDBDocumentClient {
+function fakeClient(send: (command: SentCommand) => unknown): DynamoDBDocumentClient {
   return { send } as unknown as DynamoDBDocumentClient;
 }
 
@@ -28,17 +28,17 @@ interface TransactInput {
 type SentCommand = { constructor: { name: string }; input: unknown };
 
 /** Transact succeeds; the read-back Get returns `item`. */
-function fakeSend(item: Record<string, unknown>): ReturnType<typeof vi.fn> {
+function fakeSend(item: Record<string, unknown>): Mock<(command: SentCommand) => Promise<unknown>> {
   return vi
-    .fn()
+    .fn<(command: SentCommand) => Promise<unknown>>()
     .mockImplementation((command: SentCommand) =>
       Promise.resolve(command.constructor.name === 'GetCommand' ? { Item: item } : {}),
     );
 }
 
-function transactOf(send: ReturnType<typeof vi.fn>): TransactInput[] {
+function transactOf(send: Mock<(command: SentCommand) => Promise<unknown>>): TransactInput[] {
   return send.mock.calls
-    .map(([command]) => command as SentCommand)
+    .map(([command]) => command)
     .filter((command) => command.constructor.name === 'TransactWriteCommand')
     .map((command) => command.input as TransactInput);
 }

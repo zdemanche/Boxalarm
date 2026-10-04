@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, vi, type MockInstance } from 'vitest';
 import type { EventBridgeEvent } from 'aws-lambda';
 import { classifyRecoveryEvent, handler } from './handler.js';
 import type { CognitoRecoveryDetail } from './handler.js';
@@ -33,7 +33,10 @@ function buildEvent(
   };
 }
 
-function findMetricLine(logSpy: ReturnType<typeof vi.spyOn>, metricName: string): ParsedMetricLine {
+function findMetricLine(
+  logSpy: MockInstance<typeof console.log>,
+  metricName: string,
+): ParsedMetricLine {
   const line = logSpy.mock.calls
     .map((call) => call[0] as string)
     .find((l) => l.includes(`"${metricName}":1`));

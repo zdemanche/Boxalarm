@@ -7,7 +7,9 @@ vi.mock('@aws-sdk/client-verifiedpermissions', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@aws-sdk/client-verifiedpermissions')>();
   return {
     ...actual,
-    VerifiedPermissionsClient: vi.fn(() => ({ send: vpSend })),
+    VerifiedPermissionsClient: vi.fn(function () {
+      return { send: vpSend };
+    }),
   };
 });
 
@@ -76,8 +78,8 @@ describe('submit handler', () => {
   });
 
   afterEach(() => {
-    vi.unmock('./submissionRepository.js');
-    vi.unmock('./nerisSettings.js');
+    vi.doUnmock('./submissionRepository.js');
+    vi.doUnmock('./nerisSettings.js');
     vi.unstubAllEnvs();
     vi.restoreAllMocks();
   });

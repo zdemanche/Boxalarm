@@ -21,9 +21,15 @@ function buildEvent(testId: string | undefined): GuardEvent {
 
 function mockVerifiedPermissions(sendImpl: () => Promise<{ decision: string }>): void {
   vi.doMock('@aws-sdk/client-verifiedpermissions', () => ({
-    VerifiedPermissionsClient: vi.fn().mockImplementation(() => ({ send: vi.fn(sendImpl) })),
-    IsAuthorizedWithTokenCommand: vi.fn().mockImplementation((input: unknown) => ({ input })),
-    BatchIsAuthorizedWithTokenCommand: vi.fn().mockImplementation((input: unknown) => ({ input })),
+    VerifiedPermissionsClient: vi.fn().mockImplementation(function () {
+      return { send: vi.fn(sendImpl) };
+    }),
+    IsAuthorizedWithTokenCommand: vi.fn().mockImplementation(function (input: unknown) {
+      return { input };
+    }),
+    BatchIsAuthorizedWithTokenCommand: vi.fn().mockImplementation(function (input: unknown) {
+      return { input };
+    }),
     Decision: { ALLOW: 'ALLOW', DENY: 'DENY' },
   }));
 }

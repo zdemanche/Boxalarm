@@ -37,20 +37,32 @@ function fakeDocClient(sendImpl: (command: unknown) => unknown) {
 
 function mockVerifiedPermissions(sendImpl: () => Promise<{ decision: string }>): void {
   vi.doMock('@aws-sdk/client-verifiedpermissions', () => ({
-    VerifiedPermissionsClient: vi.fn().mockImplementation(() => ({ send: vi.fn(sendImpl) })),
-    IsAuthorizedWithTokenCommand: vi.fn().mockImplementation((input: unknown) => ({ input })),
-    BatchIsAuthorizedWithTokenCommand: vi.fn().mockImplementation((input: unknown) => ({ input })),
+    VerifiedPermissionsClient: vi.fn().mockImplementation(function () {
+      return { send: vi.fn(sendImpl) };
+    }),
+    IsAuthorizedWithTokenCommand: vi.fn().mockImplementation(function (input: unknown) {
+      return { input };
+    }),
+    BatchIsAuthorizedWithTokenCommand: vi.fn().mockImplementation(function (input: unknown) {
+      return { input };
+    }),
     Decision: { ALLOW: 'ALLOW', DENY: 'DENY' },
   }));
 }
 
 function mockVerifiedPermissionsOutage(): void {
   vi.doMock('@aws-sdk/client-verifiedpermissions', () => ({
-    VerifiedPermissionsClient: vi.fn().mockImplementation(() => ({
-      send: vi.fn().mockRejectedValue(new Error('VP outage')),
-    })),
-    IsAuthorizedWithTokenCommand: vi.fn().mockImplementation((input: unknown) => ({ input })),
-    BatchIsAuthorizedWithTokenCommand: vi.fn().mockImplementation((input: unknown) => ({ input })),
+    VerifiedPermissionsClient: vi.fn().mockImplementation(function () {
+      return {
+        send: vi.fn().mockRejectedValue(new Error('VP outage')),
+      };
+    }),
+    IsAuthorizedWithTokenCommand: vi.fn().mockImplementation(function (input: unknown) {
+      return { input };
+    }),
+    BatchIsAuthorizedWithTokenCommand: vi.fn().mockImplementation(function (input: unknown) {
+      return { input };
+    }),
     Decision: { ALLOW: 'ALLOW', DENY: 'DENY' },
   }));
 }

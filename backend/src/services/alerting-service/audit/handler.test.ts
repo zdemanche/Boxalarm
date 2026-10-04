@@ -39,7 +39,9 @@ function mockAuthzDecision(decision: 'ALLOW' | 'DENY' | 'ERROR'): {
     const actual = await importOriginal<typeof import('@aws-sdk/client-verifiedpermissions')>();
     return {
       ...actual,
-      VerifiedPermissionsClient: vi.fn().mockImplementation(() => ({ send })),
+      VerifiedPermissionsClient: vi.fn().mockImplementation(function () {
+        return { send };
+      }),
     };
   });
   return { send };

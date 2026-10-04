@@ -7,7 +7,9 @@ vi.mock('@aws-sdk/client-verifiedpermissions', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@aws-sdk/client-verifiedpermissions')>();
   return {
     ...actual,
-    VerifiedPermissionsClient: vi.fn(() => ({ send: vpSend })),
+    VerifiedPermissionsClient: vi.fn(function () {
+      return { send: vpSend };
+    }),
   };
 });
 import { SECONDARY_SCHEMA_V_N, SECONDARY_SCHEMA_V_N_MINUS_1 } from './schemaVersion/fixtures.js';

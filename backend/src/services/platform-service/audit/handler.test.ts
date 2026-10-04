@@ -18,7 +18,12 @@ const vpSend = vi.hoisted(() =>
 );
 vi.mock('@aws-sdk/client-verifiedpermissions', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@aws-sdk/client-verifiedpermissions')>();
-  return { ...actual, VerifiedPermissionsClient: vi.fn(() => ({ send: vpSend })) };
+  return {
+    ...actual,
+    VerifiedPermissionsClient: vi.fn(function () {
+      return { send: vpSend };
+    }),
+  };
 });
 
 function buildEvent(options: {

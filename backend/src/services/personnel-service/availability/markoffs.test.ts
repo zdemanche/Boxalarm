@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 import type { GuardEvent } from '@boxalarm/authz';
 
 /**
@@ -11,7 +11,12 @@ const OFFICER_ACTIONS = new Set(['ViewMemberAvailability', 'EndMemberMarkoff']);
 const vpSend = vi.hoisted(() => vi.fn());
 vi.mock('@aws-sdk/client-verifiedpermissions', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@aws-sdk/client-verifiedpermissions')>();
-  return { ...actual, VerifiedPermissionsClient: vi.fn(() => ({ send: vpSend })) };
+  return {
+    ...actual,
+    VerifiedPermissionsClient: vi.fn(function () {
+      return { send: vpSend };
+    }),
+  };
 });
 
 const NOW = 1_800_000_000;
@@ -43,7 +48,7 @@ function event(groups: string, sub: string, memberId: string, markoffId?: string
 
 describe('availability mark-off routes', () => {
   const originalEnv = { ...process.env };
-  let ddbSend: ReturnType<typeof vi.fn>;
+  let ddbSend: Mock<(command: Command) => Promise<unknown>>;
   let schedulerSend: ReturnType<typeof vi.fn>;
 
   beforeEach(() => {
@@ -60,7 +65,7 @@ describe('availability mark-off routes', () => {
         return Promise.resolve({ decision: allowed ? 'ALLOW' : 'DENY' });
       },
     );
-    ddbSend = vi.fn().mockResolvedValue({});
+    ddbSend = vi.fn<(command: Command) => Promise<unknown>>().mockResolvedValue({});
     schedulerSend = vi.fn().mockResolvedValue({});
     vi.doMock('./dynamoClient.js', async (importOriginal) => ({
       ...(await importOriginal<typeof import('./dynamoClient.js')>()),
@@ -114,7 +119,7 @@ describe('availability mark-off routes', () => {
           },
         ],
       });
-      const query = ddbSend.mock.calls[0]![0] as Command;
+      const query = ddbSend.mock.calls[0]![0];
       expect(query.input.ExpressionAttributeValues).toMatchObject({
         ':pk': 'DEPT#NICHOLS#MEMBER#mbr-1',
         ':prefix': 'MARKOFF#',
@@ -151,7 +156,7 @@ describe('availability mark-off routes', () => {
       expect(result).toMatchObject({ statusCode: 200 });
       expect(bodyOf(result)).toMatchObject({ endedAt: NOW, cancelled: false });
       const transact = ddbSend.mock.calls
-        .map(([c]) => c as Command)
+        .map(([c]) => c)
         .find((c) => c.constructor.name === 'TransactWriteCommand')!;
       const items = transact.input.TransactItems as Array<
         Record<
@@ -190,7 +195,7 @@ describe('availability mark-off routes', () => {
 
       expect(bodyOf(result)).toMatchObject({ cancelled: true });
       const transact = ddbSend.mock.calls
-        .map(([c]) => c as Command)
+        .map(([c]) => c)
         .find((c) => c.constructor.name === 'TransactWriteCommand')!;
       const update = (
         transact.input.TransactItems as Array<{
@@ -237,7 +242,7 @@ describe('availability mark-off routes', () => {
 
       expect(result).toMatchObject({ statusCode: 200 });
       const transacts = ddbSend.mock.calls
-        .map(([c]) => c as Command)
+        .map(([c]) => c)
         .filter((c) => c.constructor.name === 'TransactWriteCommand');
       type Items = Array<{
         Update?: {
@@ -263,11 +268,9 @@ describe('availability mark-off routes', () => {
       const result = await end(event('MEMBER', 'mbr-1', 'mbr-1', String(NOW - 600)));
 
       expect(bodyOf(result)).toMatchObject({ alreadyEnded: true });
-      expect(
-        ddbSend.mock.calls.some(
-          ([c]) => (c as Command).constructor.name === 'TransactWriteCommand',
-        ),
-      ).toBe(false);
+      expect(ddbSend.mock.calls.some(([c]) => c.constructor.name === 'TransactWriteCommand')).toBe(
+        false,
+      );
     });
 
     it('404s an unknown mark-off, 400s a malformed id, and refuses a member ending someone else’s', async () => {

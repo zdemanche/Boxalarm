@@ -1,5 +1,5 @@
 import { generateKeyPairSync, sign as cryptoSign, type KeyObject } from 'node:crypto';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 import type { APIGatewayRequestAuthorizerEventV2 } from 'aws-lambda';
 import type { Fetcher } from 'aws-jwt-verify/https';
 
@@ -88,13 +88,15 @@ function mockCreateVerifierWithFetcher(fetcher: Fetcher): void {
 
 // The revocation store (M1) is a DynamoDB read; every test gets a store that answers "never
 // revoked" unless it swaps readRevokedAt for something else.
-let readRevokedAt: ReturnType<typeof vi.fn>;
+let readRevokedAt: Mock<(...args: unknown[]) => Promise<number | undefined>>;
 
 function mockRevocationStore(): void {
-  readRevokedAt = vi.fn().mockResolvedValue(undefined);
+  readRevokedAt = vi
+    .fn<(...args: unknown[]) => Promise<number | undefined>>()
+    .mockResolvedValue(undefined);
   vi.doMock('./revocationStore.js', () => ({
     getAuthorizerStoreClient: () => ({}),
-    readRevokedAt: (...args: unknown[]) => readRevokedAt(...args) as Promise<number | undefined>,
+    readRevokedAt: (...args: unknown[]) => readRevokedAt(...args),
   }));
 }
 
@@ -112,8 +114,8 @@ describe('handler', () => {
 
   afterEach(() => {
     process.env = { ...originalEnv };
-    vi.unmock('./tokenVerifier.js');
-    vi.unmock('./revocationStore.js');
+    vi.doUnmock('./tokenVerifier.js');
+    vi.doUnmock('./revocationStore.js');
     vi.restoreAllMocks();
   });
 
@@ -435,8 +437,8 @@ describe('handler: server-side revocation check (M1)', () => {
 
   afterEach(() => {
     process.env = { ...originalEnv };
-    vi.unmock('./tokenVerifier.js');
-    vi.unmock('./revocationStore.js');
+    vi.doUnmock('./tokenVerifier.js');
+    vi.doUnmock('./revocationStore.js');
     vi.restoreAllMocks();
   });
 

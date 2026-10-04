@@ -43,7 +43,7 @@ describe('getApparatus handler', () => {
   });
 
   afterEach(() => {
-    vi.unmock('./apparatusRepository.js');
+    vi.doUnmock('./apparatusRepository.js');
     vi.restoreAllMocks();
   });
 

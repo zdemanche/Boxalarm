@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 import type {
   APIGatewayProxyEventV2WithLambdaAuthorizer,
   APIGatewayProxyStructuredResultV2,
@@ -26,18 +26,18 @@ function buildEvent(
 }
 
 describe('listDevicesHandler', () => {
-  let listMemberDevices: ReturnType<typeof vi.fn>;
+  let listMemberDevices: Mock<(...args: unknown[]) => Promise<unknown>>;
 
   beforeEach(() => {
     vi.resetModules();
-    listMemberDevices = vi.fn().mockResolvedValue([
+    listMemberDevices = vi.fn<(...args: unknown[]) => Promise<unknown>>().mockResolvedValue([
       { deviceId: 'install-tablet', platform: 'FCM', registeredAt: 2, valid: true },
       { deviceId: 'install-phone', platform: 'APNS', registeredAt: 1, valid: true },
     ]);
     vi.doMock('./memberAccessStore.js', () => ({
       readPlatformTableName: () => 'platform-table',
       getAccessStoreClient: () => ({}),
-      listMemberDevices: (...args: unknown[]) => listMemberDevices(...args) as Promise<unknown>,
+      listMemberDevices: (...args: unknown[]) => listMemberDevices(...args),
     }));
     vi.doMock('@boxalarm/authz', async () => {
       const actual = await vi.importActual<typeof import('@boxalarm/authz')>('@boxalarm/authz');
@@ -52,7 +52,7 @@ describe('listDevicesHandler', () => {
   });
 
   afterEach(() => {
-    vi.unmock('./memberAccessStore.js');
+    vi.doUnmock('./memberAccessStore.js');
     vi.doUnmock('@boxalarm/authz');
     vi.restoreAllMocks();
   });

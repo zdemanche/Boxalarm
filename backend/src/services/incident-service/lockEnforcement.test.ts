@@ -5,7 +5,12 @@ import { MEMBER_AUTH, buildIncidentEvent, fakeCedarDecision } from './testEvents
 const vpSend = vi.hoisted(() => vi.fn());
 vi.mock('@aws-sdk/client-verifiedpermissions', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@aws-sdk/client-verifiedpermissions')>();
-  return { ...actual, VerifiedPermissionsClient: vi.fn(() => ({ send: vpSend })) };
+  return {
+    ...actual,
+    VerifiedPermissionsClient: vi.fn(function () {
+      return { send: vpSend };
+    }),
+  };
 });
 
 /**
@@ -75,9 +80,9 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  vi.unmock('./repository.js');
-  vi.unmock('./responseUnitRepository.js');
-  vi.unmock('./secondaryRepository.js');
+  vi.doUnmock('./repository.js');
+  vi.doUnmock('./responseUnitRepository.js');
+  vi.doUnmock('./secondaryRepository.js');
   vi.restoreAllMocks();
 });
 
@@ -178,8 +183,8 @@ describe('locked reports reject edits on every PUT route', () => {
       'PUT /api/v1/incidents/{incidentId}/exposures',
       { secondaryType: 'EXPOSURE', payload: {}, affectedMemberIds: [MEMBER_AUTH.sub] },
     );
-    vi.unmock('./schemaVersion/repository.js');
-    vi.unmock('./schemaVersion/s3Schema.js');
+    vi.doUnmock('./schemaVersion/repository.js');
+    vi.doUnmock('./schemaVersion/s3Schema.js');
     expectLocked(result);
   });
 });

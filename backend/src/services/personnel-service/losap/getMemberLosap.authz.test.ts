@@ -35,9 +35,11 @@ describe('getMemberLosap authz', () => {
       const actual = await importOriginal<typeof import('@aws-sdk/client-verifiedpermissions')>();
       return {
         ...actual,
-        VerifiedPermissionsClient: vi.fn().mockImplementation(() => ({
-          send: vi.fn().mockResolvedValue({ decision: actual.Decision.DENY }),
-        })),
+        VerifiedPermissionsClient: vi.fn().mockImplementation(function () {
+          return {
+            send: vi.fn().mockResolvedValue({ decision: actual.Decision.DENY }),
+          };
+        }),
       };
     });
     const dynamoSend = vi.fn();

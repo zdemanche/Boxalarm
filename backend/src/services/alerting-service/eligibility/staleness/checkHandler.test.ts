@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
 import type { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
 
 const originalEnv = { ...process.env };
@@ -38,7 +38,7 @@ function mockDdb(send: ReturnType<typeof vi.fn>): void {
   });
 }
 
-function metricValue(logSpy: ReturnType<typeof vi.spyOn>, metricName: string): number {
+function metricValue(logSpy: MockInstance<typeof console.log>, metricName: string): number {
   const line = logSpy.mock.calls.find((call) => (call[0] as string).includes(metricName));
   const parsed = JSON.parse(line?.[0] as string) as Record<string, number>;
   return parsed[metricName] as number;

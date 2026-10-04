@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 import type { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
 import type { SQSEvent } from 'aws-lambda';
 
@@ -75,15 +75,17 @@ interface CommandLike {
   input: Record<string, unknown>;
 }
 
+type TableSend = Mock<(command: CommandLike) => Promise<unknown>>;
+
 interface Table {
   rows: Map<string, Record<string, unknown>>;
-  send: ReturnType<typeof vi.fn>;
+  send: TableSend;
 }
 
 /** A tiny in-memory table: conditional Puts, Deletes, the roster query and pref reads. */
 function fakeTable(mutes: Record<string, { push: boolean; email: boolean }> = {}): Table {
   const rows = new Map<string, Record<string, unknown>>();
-  const send = vi.fn().mockImplementation((command: CommandLike) => {
+  const send = vi.fn<(command: CommandLike) => Promise<unknown>>().mockImplementation((command) => {
     const name = command.constructor.name;
     if (name === 'QueryCommand') {
       return Promise.resolve({ Items: ROSTER });
@@ -127,7 +129,7 @@ function fakeTable(mutes: Record<string, { push: boolean; email: boolean }> = {}
 }
 
 async function load(
-  send: ReturnType<typeof vi.fn>,
+  send: TableSend,
   push: ReturnType<typeof vi.fn>,
   email: ReturnType<typeof vi.fn> = vi.fn().mockResolvedValue(undefined),
 ) {
@@ -204,9 +206,7 @@ describe('apparatusDefectConsumer — out-of-service defect (immediate path)', (
       ]);
       // It is also recorded for the digest, so it reaches every channel a minor defect does.
       expect(
-        table.send.mock.calls.some(
-          (call) => (call[0] as CommandLike).constructor.name === 'TransactWriteCommand',
-        ),
+        table.send.mock.calls.some((call) => call[0].constructor.name === 'TransactWriteCommand'),
       ).toBe(true);
     },
   );
@@ -415,7 +415,7 @@ describe('apparatusDefectConsumer — out-of-service email (review M1)', () => {
     await expect(handler(sqsEvent(defect({ outOfService: true })))).rejects.toThrow();
 
     const transact = table.send.mock.calls
-      .map((call) => call[0] as CommandLike)
+      .map((call) => call[0])
       .find((command) => command.constructor.name === 'TransactWriteCommand');
     const pks = (transact?.input.TransactItems as { Put: { Item: { pk: string } } }[]).map(
       (t) => t.Put.Item.pk,

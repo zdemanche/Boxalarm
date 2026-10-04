@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 import type { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
 
 vi.mock('../eligibility/dynamoClient.js', () => ({
@@ -98,7 +98,16 @@ function throwTransactionCanceled(reasons: ReadonlyArray<{ readonly Code: string
   throw error;
 }
 
-function publishedMemberIds(sns: { send: ReturnType<typeof vi.fn> }): string[] {
+type SnsSend = Mock<(command: SnsPublishCommand) => Promise<unknown>>;
+type SnsPublishCommand = {
+  input: {
+    Message: string;
+    MessageDeduplicationId: string;
+    MessageAttributes: { channel: { StringValue: string } };
+  };
+};
+
+function publishedMemberIds(sns: { send: SnsSend }): string[] {
   return sns.send.mock.calls.map((call) => {
     const message = JSON.parse((call[0] as { input: { Message: string } }).input.Message) as {
       payload: { memberId: string };
@@ -123,7 +132,7 @@ function createFakeDdb(
   } = {},
 ): {
   send: DynamoDBDocumentClient['send'];
-  sns: { send: ReturnType<typeof vi.fn> };
+  sns: { send: SnsSend };
   items: Map<string, FakeItem>;
 } {
   const items = new Map<string, FakeItem>();
@@ -135,7 +144,9 @@ function createFakeDdb(
       ? 0
       : (options.failReceiptTimes ?? Number.POSITIVE_INFINITY);
   let remainingTransactFailures = options.failTransactTimes ?? 0;
-  const sns = { send: vi.fn().mockResolvedValue({}) };
+  const sns = {
+    send: vi.fn<(command: SnsPublishCommand) => Promise<unknown>>().mockResolvedValue({}),
+  };
   const send = vi.fn((command: unknown) => {
     const name = (command as { constructor: { name: string } }).constructor.name;
     const input = (command as { input: Record<string, unknown> }).input;
@@ -878,10 +889,7 @@ describe('toneEvaluatorHandler manual override (POST /tone-ladder/advance)', () 
     // (an unsent claim is never trusted - see publishToneChannel). Both publishes carry
     // the same deterministic MessageDeduplicationId, so SNS FIFO delivers the page once.
     const dedupIds = new Set(
-      sns.send.mock.calls.map(
-        (call) =>
-          (call[0] as { input: { MessageDeduplicationId: string } }).input.MessageDeduplicationId,
-      ),
+      sns.send.mock.calls.map((call) => call[0].input.MessageDeduplicationId),
     );
     expect(dedupIds.size).toBe(1);
     expect(new Set(publishedMemberIds(sns))).toEqual(new Set(['mbr-1']));
@@ -982,11 +990,10 @@ describe('toneEvaluatorHandler manual override (POST /tone-ladder/advance)', () 
       ],
     };
     const { handler, sns } = await load([METADATA_ITEM, withSms]);
-    sns.send.mockImplementation(
-      (command: { input: { MessageAttributes: { channel: { StringValue: string } } } }) =>
-        command.input.MessageAttributes.channel.StringValue === 'push'
-          ? Promise.reject(new Error('push provider down'))
-          : Promise.resolve({}),
+    sns.send.mockImplementation((command) =>
+      command.input.MessageAttributes.channel.StringValue === 'push'
+        ? Promise.reject(new Error('push provider down'))
+        : Promise.resolve({}),
     );
 
     await expect(handler(manual(2))).rejects.toThrow('push provider down');

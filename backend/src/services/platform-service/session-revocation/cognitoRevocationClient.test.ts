@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
 import {
   AdminDisableUserCommand,
   AdminEnableUserCommand,
@@ -43,8 +43,8 @@ describe('createRevocationClient', () => {
 });
 
 describe('revokeMemberSession', () => {
-  let logSpy: ReturnType<typeof vi.spyOn>;
-  let errorSpy: ReturnType<typeof vi.spyOn>;
+  let logSpy: MockInstance<typeof console.log>;
+  let errorSpy: MockInstance<typeof console.error>;
 
   beforeEach(() => {
     logSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);

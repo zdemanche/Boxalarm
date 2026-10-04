@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 import { UserNotFoundException } from '@aws-sdk/client-cognito-identity-provider';
 import type { SQSEvent, SQSRecord } from 'aws-lambda';
 
@@ -32,13 +32,14 @@ function mockCognito(overrides: Record<string, unknown>): void {
   }));
 }
 
-let writeRevocationMarker: ReturnType<typeof vi.fn>;
+let writeRevocationMarker: Mock<(...args: unknown[]) => Promise<number>>;
 
 function mockMarker(): void {
-  writeRevocationMarker = vi.fn().mockResolvedValue(1_700_000_000);
+  writeRevocationMarker = vi
+    .fn<(...args: unknown[]) => Promise<number>>()
+    .mockResolvedValue(1_700_000_000);
   vi.doMock('../authorizer/revocationStore.js', () => ({
-    writeRevocationMarker: (...args: unknown[]) =>
-      writeRevocationMarker(...args) as Promise<number>,
+    writeRevocationMarker: (...args: unknown[]) => writeRevocationMarker(...args),
   }));
 }
 
@@ -63,9 +64,9 @@ describe('memberStatusRevocationHandler', () => {
 
   afterEach(() => {
     process.env = { ...originalEnv };
-    vi.unmock('./cognitoRevocationClient.js');
-    vi.unmock('./memberAccessStore.js');
-    vi.unmock('../authorizer/revocationStore.js');
+    vi.doUnmock('./cognitoRevocationClient.js');
+    vi.doUnmock('./memberAccessStore.js');
+    vi.doUnmock('../authorizer/revocationStore.js');
     vi.restoreAllMocks();
   });
 

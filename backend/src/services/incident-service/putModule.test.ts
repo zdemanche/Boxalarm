@@ -13,7 +13,9 @@ vi.mock('@aws-sdk/client-verifiedpermissions', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@aws-sdk/client-verifiedpermissions')>();
   return {
     ...actual,
-    VerifiedPermissionsClient: vi.fn().mockImplementation(() => ({ send: vpSend })),
+    VerifiedPermissionsClient: vi.fn().mockImplementation(function () {
+      return { send: vpSend };
+    }),
   };
 });
 vi.mock('./repository.js', async (importOriginal) => {
