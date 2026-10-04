@@ -6,6 +6,10 @@ export interface ShiftPosition {
   positionCode: string;
   requiredQual: string | null;
   claimedByMemberId: string | null;
+  /** Server-computed "this position is held by the member making the request" (handleGetShift).
+   * Optional: the shift-list read (no positions) and the mock never send it, so callers fall
+   * back to comparing claimedByMemberId to the signed-in member's id. */
+  claimedByMe?: boolean;
 }
 
 export interface DutyShift {
@@ -94,6 +98,10 @@ export interface ScheduleRepository {
   /** Epoch ms of the cached shift list the last getShifts() returned; null when it was live.
    * Optional: the mock repository never serves from cache. */
   shiftsCachedAt?(): number | null;
+  /** One shift with its positions and their claim state (GET personnel/shifts/{shiftId},
+   * handleGetShift) - the read ShiftDetailScreen uses, since getShifts()'s list omits
+   * positions entirely. Throws when the shift does not exist. */
+  getShift(shiftId: string): Promise<DutyShift>;
   // idempotencyKey is optional so existing single-attempt callers/tests are unaffected, but a
   // caller that may retry the same claim intent (e.g. ShiftDetailScreen's offline-queue reconnect
   // resubmit) must generate it once, up front, and pass the same value on every retry - a value

@@ -42,6 +42,12 @@ export const mockScheduleRepository: ScheduleRepository = {
     return SHIFTS;
   },
 
+  async getShift(shiftId) {
+    const shift = SHIFTS.find((s) => s.shiftId === shiftId);
+    if (!shift) throw new Error(`Shift not found: ${shiftId}`);
+    return shift;
+  },
+
   async claimPosition(shiftId, positionCode): Promise<ClaimResult> {
     const shift = SHIFTS.find((s) => s.shiftId === shiftId);
     const position = shift?.positions.find((p) => p.positionCode === positionCode);

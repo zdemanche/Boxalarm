@@ -27,9 +27,10 @@ import {
  * claimPosition refuses rather than inventing a result.
  *
  * getShifts() reads GET /shifts (list metadata only - no positions per the personnel-service
- * fact sheet). Position-level claim state has no member-facing read endpoint yet; positions is
- * left empty for real-backend shifts until that lands (ponytail: backend gap, upgrade path is
- * the E2-S8 backend ticket wiring a per-shift positions read).
+ * fact sheet); positions is always empty on that read. Position-level claim state comes from
+ * getShift(shiftId) - GET /shifts/{shiftId} (handleGetShift) - which ShiftDetailScreen calls
+ * once it knows which shift it is showing, so the list screen never pays for data it doesn't
+ * render.
  */
 export function useScheduleRepository(): ScheduleRepository {
   const auth = useOptionalAuth();
@@ -67,6 +68,42 @@ export function useScheduleRepository(): ScheduleRepository {
 
       shiftsCachedAt(): number | null {
         return lastShiftsCachedAt;
+      },
+
+      async getShift(shiftId): Promise<DutyShift> {
+        const tokens = authRef.current;
+        if (!tokens) return mockScheduleRepository.getShift(shiftId);
+        const result = await readThrough(
+          tokens.memberId ? memberCacheKey.read(tokens.memberId, `shift:${shiftId}`) : null,
+          'this shift',
+          async () => {
+            const response = await apiRequest(
+              `personnel/shifts/${encodeURIComponent(shiftId)}`,
+              tokens,
+              { apiBaseUrl },
+            );
+            const body = (await response.json()) as Omit<DutyShift, 'positions'> & {
+              positions: Array<{
+                positionCode: string;
+                requiredQual?: string;
+                claimedByMemberId?: string;
+                claimedByMe?: boolean;
+              }>;
+            };
+            return {
+              ...body,
+              positions: body.positions.map((position) => ({
+                positionCode: position.positionCode,
+                requiredQual: position.requiredQual ?? null,
+                claimedByMemberId: position.claimedByMemberId ?? null,
+                ...(position.claimedByMe !== undefined
+                  ? { claimedByMe: position.claimedByMe }
+                  : {}),
+              })),
+            };
+          },
+        );
+        return result.value;
       },
 
       async claimPosition(shiftId, positionCode, idempotencyKey): Promise<ClaimResult> {

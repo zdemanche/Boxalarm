@@ -52,16 +52,14 @@ test('announces the claim result for screen reader users once it resolves', asyn
 
 /** A fresh, unclaimed shift: the mock repository's shifts are mutated by earlier claims. */
 function freshShift() {
-  return jest.spyOn(mockScheduleRepository, 'getShifts').mockResolvedValue([
-    {
-      shiftId: 'SHIFT-0512',
-      startAt: Date.parse('2026-09-27T18:00:00Z'),
-      endAt: Date.parse('2026-09-28T06:00:00Z'),
-      stationId: 'STATION-1',
-      status: 'OPEN',
-      positions: [{ positionCode: 'DRIVER', requiredQual: null, claimedByMemberId: null }],
-    },
-  ]);
+  return jest.spyOn(mockScheduleRepository, 'getShift').mockResolvedValue({
+    shiftId: 'SHIFT-0512',
+    startAt: Date.parse('2026-09-27T18:00:00Z'),
+    endAt: Date.parse('2026-09-28T06:00:00Z'),
+    stationId: 'STATION-1',
+    status: 'OPEN',
+    positions: [{ positionCode: 'DRIVER', requiredQual: null, claimedByMemberId: null }],
+  });
 }
 
 test('offline, a claim says plainly it was not sent, and the position stays open', async () => {
@@ -98,4 +96,104 @@ test('a connection lost mid-claim returns the position to Open with the reason',
   expect((await findAllByText('Claim')).length).toBeGreaterThan(0);
   claimSpy.mockRestore();
   shiftsSpy.mockRestore();
+});
+
+/** A shift with one position this member already holds (claimedByMe), per handleGetShift. */
+function shiftWithMyClaimedPosition() {
+  return jest.spyOn(mockScheduleRepository, 'getShift').mockResolvedValue({
+    shiftId: 'SHIFT-0512',
+    startAt: Date.parse('2026-09-27T18:00:00Z'),
+    endAt: Date.parse('2026-09-28T06:00:00Z'),
+    stationId: 'STATION-1',
+    status: 'OPEN',
+    positions: [
+      { positionCode: 'DRIVER', requiredQual: null, claimedByMemberId: 'MBR-0012', claimedByMe: true },
+    ],
+  });
+}
+
+test('a position this member already holds shows "Claimed by you" on load, not the generic "Claimed" (#146/#148)', async () => {
+  const shiftSpy = shiftWithMyClaimedPosition();
+  const { findByText, queryByText } = await render(<ShiftDetailScreen />);
+
+  expect(await findByText('Claimed by you')).toBeTruthy();
+  expect(queryByText('Claimed')).toBeNull();
+  shiftSpy.mockRestore();
+});
+
+test('give back releases a claimed position, returning it to Open (#146/#148)', async () => {
+  const shiftSpy = shiftWithMyClaimedPosition();
+  const releaseSpy = jest
+    .spyOn(mockScheduleRepository, 'releasePosition')
+    .mockResolvedValue(undefined);
+  const { findByText, queryByText } = await render(<ShiftDetailScreen />);
+  await findByText('Claimed by you');
+  const giveBackButton = await findByText('Give back');
+
+  await act(async () => {
+    fireEvent.press(giveBackButton);
+  });
+
+  expect(await findByText('Open')).toBeTruthy();
+  expect(queryByText('Claimed by you')).toBeNull();
+  expect(releaseSpy).toHaveBeenCalledWith('SHIFT-0512', 'DRIVER');
+  releaseSpy.mockRestore();
+  shiftSpy.mockRestore();
+});
+
+test('a give-back failure keeps the position claimed by you and says so, not a silent no-op', async () => {
+  const shiftSpy = shiftWithMyClaimedPosition();
+  const releaseSpy = jest
+    .spyOn(mockScheduleRepository, 'releasePosition')
+    .mockRejectedValueOnce(new TypeError('Network request failed'));
+  const { findByText } = await render(<ShiftDetailScreen />);
+  await findByText('Claimed by you');
+  const giveBackButton = await findByText('Give back');
+
+  await act(async () => {
+    fireEvent.press(giveBackButton);
+  });
+
+  expect(await findByText(/Could not give back this position/)).toBeTruthy();
+  expect(await findByText('Claimed by you')).toBeTruthy();
+  releaseSpy.mockRestore();
+  shiftSpy.mockRestore();
+});
+
+test('propose swap sends the request to the entered member and clears the field, announced (#146/#148)', async () => {
+  const shiftSpy = shiftWithMyClaimedPosition();
+  const swapSpy = jest.spyOn(mockScheduleRepository, 'proposeSwap').mockResolvedValue(undefined);
+  const announceSpy = jest.spyOn(AccessibilityInfo, 'announceForAccessibility');
+  const { findByText, findByLabelText } = await render(<ShiftDetailScreen />);
+  await findByText('Claimed by you');
+
+  const input = await findByLabelText('Propose swap to member ID');
+  fireEvent.changeText(input, 'MBR-0099');
+  const proposeButton = await findByText('Propose swap');
+  await act(async () => {
+    fireEvent.press(proposeButton);
+  });
+
+  expect(swapSpy).toHaveBeenCalledWith('SHIFT-0512', 'DRIVER', 'MBR-0099');
+  expect(announceSpy).toHaveBeenCalledWith(expect.stringMatching(/swap proposed, pending approval/i));
+  expect((await findByLabelText('Propose swap to member ID')).props.value).toBe('');
+  swapSpy.mockRestore();
+  announceSpy.mockRestore();
+  shiftSpy.mockRestore();
+});
+
+test('propose swap does nothing when no member id has been entered', async () => {
+  const shiftSpy = shiftWithMyClaimedPosition();
+  const swapSpy = jest.spyOn(mockScheduleRepository, 'proposeSwap');
+  const { findByText } = await render(<ShiftDetailScreen />);
+  await findByText('Claimed by you');
+  const proposeButton = await findByText('Propose swap');
+
+  await act(async () => {
+    fireEvent.press(proposeButton);
+  });
+
+  expect(swapSpy).not.toHaveBeenCalled();
+  swapSpy.mockRestore();
+  shiftSpy.mockRestore();
 });
