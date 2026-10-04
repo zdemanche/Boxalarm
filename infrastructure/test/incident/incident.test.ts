@@ -6,9 +6,11 @@ import { HttpApi } from "../../components/api/http-api";
 const TABLE_ARN = "arn:aws:dynamodb:us-east-1:123456789012:table/boxalarm-dev-incident-service";
 
 const routeKeys: string[] = [];
+let rolePolicies: { role: string; policy: string }[] = [];
 
 beforeEach(() => {
   routeKeys.length = 0;
+  rolePolicies = [];
   pulumi.runtime.setMocks({
     newResource: (args: pulumi.runtime.MockResourceArgs) => {
       const state: Record<string, unknown> = { ...args.inputs };
@@ -17,6 +19,12 @@ beforeEach(() => {
       }
       if (args.type === "aws:iam/role:Role") {
         state.arn = `arn:aws:iam::123456789012:role/${args.inputs.name ?? args.name}`;
+      }
+      if (args.type === "aws:iam/rolePolicy:RolePolicy") {
+        rolePolicies.push({
+          role: args.inputs.role as string,
+          policy: args.inputs.policy as string,
+        });
       }
       if (args.type === "aws:lambda/function:Function") {
         state.arn = `arn:aws:lambda:us-east-1:123456789012:function:${args.inputs.name ?? args.name}`;
@@ -279,5 +287,43 @@ describe("Incident", () => {
       source: ["platform-service"],
       "detail-type": ["platform.config.updated", "neris.entity.synced"],
     });
+  });
+
+  // #235: apparatus.riding_assignment.{assigned,vacated} one-way bridge for incident
+  // pre-populate, wiring the backend's already-existing ridingAssignmentConsumer.ts.
+  // Allow-listed to exactly these two detail-types.
+  it("bridges only apparatus-service's riding-assignment assigned/vacated events, allow-listed", async () => {
+    const incident = await build();
+    const pattern = JSON.parse(
+      (await resolve(incident.ridingAssignmentConsumer.rule.eventPattern)) ?? "{}",
+    ) as Record<string, string[]>;
+    expect(pattern).toEqual({
+      source: ["apparatus-service"],
+      "detail-type": [
+        "apparatus.riding_assignment.assigned",
+        "apparatus.riding_assignment.vacated",
+      ],
+    });
+  });
+
+  it("opts the riding-assignment bridge into ReportBatchItemFailures", async () => {
+    const incident = await build();
+    expect(
+      await resolve(incident.ridingAssignmentConsumer.eventSourceMapping.functionResponseTypes),
+    ).toEqual(["ReportBatchItemFailures"]);
+  });
+
+  it("gives the riding-assignment consumer only incident-table/CMK access — no platform or alerting grant", async () => {
+    const incident = await build();
+    await resolve(incident.ridingAssignmentConsumer.eventSourceMapping.functionName);
+    await new Promise((r) => setImmediate(r));
+    const policy = rolePolicies.find((p) => p.role.includes("riding-assignment-consumer-role"));
+    expect(policy).toBeDefined();
+    const dynamo = (JSON.parse(policy!.policy) as PolicyDoc).Statement.flatMap(
+      (s) => s.Action,
+    ).filter((a) => a.startsWith("dynamodb:"));
+    expect(dynamo.sort()).toEqual(["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:UpdateItem"]);
+    expect(policy!.policy).toContain(TABLE_ARN);
+    expect(policy!.policy).not.toMatch(/platform|alerting/);
   });
 });

@@ -848,6 +848,13 @@ export const ridingBoard = new RidingBoard("riding-board", {
   platformTableName: platformTable.tableName,
   logGroup: apparatusLogGroup,
   policyStoreId: policyStore.policyStoreId,
+  platformBus,
+  alertingTableArn: alertingTable.tableArn,
+  alertingTableName: alertingTable.tableName,
+  alertingCmkArn: alertingTable.cmkArn,
+  alertingLogGroup,
+  alertingPermissionsBoundaryArn: alertingBoundaryArn,
+  pageTopicArn: alertingPageTopic.topicArn,
 });
 
 // E1-S11-INFRA #36: alerting-page topic, DLQ/failure alarms, non-prod fault injection.

@@ -281,6 +281,13 @@ export const LAMBDA_ENTRIES = [
     entry: 'src/services/incident-service/dispatchResponseConsumer.ts',
   },
   {
+    // apparatus.riding_assignment.{assigned,vacated} -> incident-service's INCIDENT_RESPONSE_UNIT
+    // pre-populate (infra #235). The handler predates its infra wiring.
+    service: 'incident-service',
+    function: 'riding-assignment-consumer',
+    entry: 'src/services/incident-service/ridingAssignmentConsumer.ts',
+  },
+  {
     service: 'incident-service',
     function: 'schema-version-refresh',
     entry: 'src/services/incident-service/schemaVersion/refreshScanner/handler.ts',
@@ -699,6 +706,14 @@ export const LAMBDA_ENTRIES = [
     service: 'alerting-service',
     function: 'availability-changed-consumer',
     entry: 'src/services/alerting-service/eligibility/consumer.ts',
+  },
+  {
+    // apparatus.serviceStatus.changed -> alerting-owned copy (infra #235). Backend handler
+    // not yet written; entry path follows the eligibility consumers' module convention
+    // above so a backend agent's first bundle lands at this exact key.
+    service: 'alerting-service',
+    function: 'apparatus-status-changed-consumer',
+    entry: 'src/services/alerting-service/apparatusStatus/changedHandler.ts',
   },
   {
     // platform.config.updated (ALERT_RULES) -> ALERT_RULES_COPY (design review M1).
