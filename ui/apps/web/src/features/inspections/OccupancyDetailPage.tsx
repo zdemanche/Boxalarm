@@ -19,6 +19,9 @@ function oversizedFileNames(files: File[]): string[] {
 }
 
 /** Stored asset keys end in the uploaded file's name: `{dept}/PRE_PLAN/{prePlanId}/{filename}`. */
+/** putPrePlanHandler's MAX_LIST_LENGTH for attachmentFilenames. */
+const MAX_PREPLAN_ATTACHMENTS = 50;
+
 function fileNameOf(key: string): string {
   return key.slice(key.lastIndexOf('/') + 1);
 }
@@ -170,10 +173,39 @@ export function OccupancyDetailPage() {
     </>
   ) : null;
 
+  // Every stored file is `{prePlanId}/{name}`: a new attachment named like the diagram would
+  // overwrite it, and the service accepts at most 50 attachments per save.
+  function prePlanFileProblem(): string | null {
+    const onFile = prePlanQuery.data;
+    const diagramName =
+      diagramFile?.name ?? (onFile?.siteDiagramS3Key ? fileNameOf(onFile.siteDiagramS3Key) : null);
+    const clash = attachmentFiles.find((file) => file.name === diagramName);
+    if (clash) {
+      return `${clash.name} has the same name as the site diagram. Rename one of them before saving.`;
+    }
+    const newNames = attachmentFiles.map((file) => file.name);
+    const kept = (onFile?.attachmentS3Keys ?? [])
+      .map(fileNameOf)
+      .filter((name) => !newNames.includes(name));
+    if (kept.length + newNames.length > MAX_PREPLAN_ATTACHMENTS) {
+      return `A pre-plan holds at most ${MAX_PREPLAN_ATTACHMENTS} attachments; this save would have ${kept.length + newNames.length}.`;
+    }
+    return null;
+  }
+
   const prePlanPanel = (
     <>
       {prePlanQuery.isLoading ? (
         <Skeleton lines={4} />
+      ) : prePlanQuery.isError ? (
+        // Not "no pre-plan": the editor stays hidden too, or a save would replace whatever is
+        // on file with an empty pre-plan.
+        <div role="alert" className={styles.readError}>
+          <p>Couldn&rsquo;t load the pre-plan, so it can&rsquo;t be edited right now.</p>
+          <Button type="button" variant="secondary" onClick={() => void prePlanQuery.refetch()}>
+            Retry
+          </Button>
+        </div>
       ) : prePlanQuery.data ? (
         <Card>
           <dl className={styles.facts}>
@@ -217,13 +249,19 @@ export function OccupancyDetailPage() {
         <p>No pre-plan is on file.</p>
       )}
 
-      {canWrite && !prePlanQuery.isLoading ? (
+      {/* Success includes a 404 (no pre-plan yet), which the client maps to null. */}
+      {canWrite && prePlanQuery.isSuccess ? (
         <Card title="Update pre-plan" style={{ marginTop: 'var(--bx-space-xl)', maxWidth: 480 }}>
           <form
             aria-label="Save pre-plan"
             onSubmit={(event: FormEvent) => {
               event.preventDefault();
               setUploadStatus(null);
+              const problem = prePlanFileProblem();
+              if (problem) {
+                setFileError(problem);
+                return;
+              }
               prePlanMutation.mutate();
             }}
             style={{ display: 'grid', gap: 'var(--bx-space-md)' }}

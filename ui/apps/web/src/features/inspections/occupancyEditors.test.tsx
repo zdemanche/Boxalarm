@@ -164,3 +164,73 @@ test('attachments are listed by file name, not by storage key', async () => {
   expect(await screen.findByRole('link', { name: 'floor-1.pdf' })).toBeTruthy();
   expect(screen.queryByText(/nichols-fd\/PRE_PLAN/)).toBeNull();
 });
+
+// A failed pre-plan read is not "no pre-plan": an editor offered then would save an empty
+// pre-plan over whatever is on file.
+test('a failed pre-plan read shows an error and offers no editor to save over it', async () => {
+  server.use(
+    http.get('/api/v1/inspections/occupancies/occ-1', () => HttpResponse.json(OCCUPANCY)),
+    http.get('/api/v1/inspections/occupancies/occ-1/pre-plan', () =>
+      HttpResponse.json(
+        { type: 'about:blank', title: 'Service Unavailable', status: 503, traceId: 't1' },
+        { status: 503 },
+      ),
+    ),
+  );
+
+  const user = userEvent.setup();
+  renderDetail();
+  await screen.findByRole('heading', { name: '9 Elm St' });
+  await user.click(screen.getByRole('tab', { name: 'Pre-plan' }));
+
+  expect(await screen.findByText(/couldn.t load the pre-plan/i)).toBeTruthy();
+  expect(screen.queryByText('No pre-plan is on file.')).toBeNull();
+  expect(screen.queryByRole('form', { name: 'Save pre-plan' })).toBeNull();
+});
+
+test('a new attachment named like the site diagram is refused before it can overwrite it', async () => {
+  let putCalled = false;
+  server.use(
+    http.get('/api/v1/inspections/occupancies/occ-1', () => HttpResponse.json(OCCUPANCY)),
+    http.get('/api/v1/inspections/occupancies/occ-1/pre-plan', () => HttpResponse.json(PRE_PLAN)),
+    http.put('/api/v1/inspections/occupancies/occ-1/pre-plan', () => {
+      putCalled = true;
+      return HttpResponse.json({ prePlanId: 'pp-1', attachmentUploadUrls: [] });
+    }),
+  );
+
+  const user = userEvent.setup();
+  renderDetail();
+  await screen.findByRole('heading', { name: '9 Elm St' });
+  await user.click(screen.getByRole('tab', { name: 'Pre-plan' }));
+  await screen.findByRole('form', { name: 'Save pre-plan' });
+  await user.upload(
+    screen.getByLabelText('Attachments'),
+    new File(['x'], 'site.pdf', { type: 'application/pdf' }),
+  );
+  await user.click(screen.getByRole('button', { name: 'Save pre-plan' }));
+
+  expect(await screen.findByText(/same name as the site diagram/)).toBeTruthy();
+  expect(putCalled).toBe(false);
+});
+
+test('with no pre-plan yet (404) the editor is offered so the first one can be created', async () => {
+  server.use(
+    http.get('/api/v1/inspections/occupancies/occ-1', () => HttpResponse.json(OCCUPANCY)),
+    http.get('/api/v1/inspections/occupancies/occ-1/pre-plan', () =>
+      HttpResponse.json(
+        { type: 'about:blank', title: 'Not Found', status: 404, traceId: 't1' },
+        { status: 404 },
+      ),
+    ),
+  );
+
+  const user = userEvent.setup();
+  renderDetail();
+  await screen.findByRole('heading', { name: '9 Elm St' });
+  await user.click(screen.getByRole('tab', { name: 'Pre-plan' }));
+
+  expect(await screen.findByText('No pre-plan is on file.')).toBeTruthy();
+  expect(await screen.findByRole('form', { name: 'Save pre-plan' })).toBeTruthy();
+  expect(screen.queryByRole('alert')).toBeNull();
+});

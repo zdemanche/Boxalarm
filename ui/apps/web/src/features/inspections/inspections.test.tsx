@@ -157,7 +157,7 @@ test('pre-plan file inputs restrict type and reject oversized files client-side 
   await screen.findByRole('heading', { name: '9 Elm St' });
   await user.click(screen.getByRole('tab', { name: 'Pre-plan' }));
 
-  const diagramInput = screen.getByLabelText('Site diagram') as HTMLInputElement;
+  const diagramInput = (await screen.findByLabelText('Site diagram')) as HTMLInputElement;
   expect(diagramInput.accept).toContain('application/pdf');
   expect(diagramInput.accept).toContain('image/png');
 

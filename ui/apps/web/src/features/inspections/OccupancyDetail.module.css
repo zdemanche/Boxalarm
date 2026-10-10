@@ -19,3 +19,14 @@
   margin: 0;
   padding-left: var(--bx-space-md);
 }
+
+.readError {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--bx-space-sm) var(--bx-space-md);
+}
+
+.readError p {
+  margin: 0;
+}
