@@ -188,3 +188,29 @@ test('a failed conduct save stays in the dialog and says so', async () => {
     'The inspection was not saved',
   );
 });
+
+// Review MAJOR: the service never moves nextDueDate when an inspection is conducted, so one done
+// ahead of its scheduled date fell through to "Due in N days" - finished work flagged as due.
+test('an inspection conducted before its scheduled date reads Conducted, not due', async () => {
+  const doneOn = isoDaysFromToday(-1);
+  server.use(
+    http.get('/api/v1/inspections/occupancies', () => HttpResponse.json({ items: OCCUPANCIES })),
+    http.get('/api/v1/inspections', () =>
+      HttpResponse.json({
+        items: [
+          inspection('insp-early', 'occ-2', isoDaysFromToday(5), {
+            conductedDate: `${doneOn}T15:00:00.000Z`,
+            conductedBy: 'Luis Ortega',
+          }),
+        ],
+      }),
+    ),
+  );
+  renderPage();
+
+  const table = await screen.findByRole('table', { name: 'Inspections due' });
+  const row = (await within(table).findByRole('rowheader', { name: '9 Elm St (Residential)' }))
+    .parentElement!;
+  expect(within(row).getByText('Conducted').closest('[data-status="ok"]')).toBeTruthy();
+  expect(within(row).queryByText(/Due in/)).toBeNull();
+});

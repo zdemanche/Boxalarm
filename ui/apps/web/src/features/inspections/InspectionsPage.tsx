@@ -38,20 +38,15 @@ const WRAPPING_CELL = {
 
 /**
  * Where an inspection stands against its due date - colour, glyph and word via StatusChip. The
- * service leaves `nextDueDate` at the scheduled date when an inspection is conducted, so a
- * conducted inspection is only due again once its next due date falls after the day it was done.
+ * service never moves `nextDueDate` when an inspection is conducted (recordInspection leaves it at
+ * the scheduled date), so a conducted inspection is done, however early - it must not read as due.
  */
 function inspectionState(inspection: Inspection): { status: StatusRole; label: string } {
+  if (inspection.conductedDate !== undefined) return { status: 'ok', label: 'Conducted' };
   const days = daysUntil(inspection.nextDueDate);
-  const conducted = inspection.conductedDate !== undefined;
-  if (conducted && days <= daysUntil(inspection.conductedDate!)) {
-    return { status: 'ok', label: 'Conducted' };
-  }
   if (days < 0) return { status: 'danger', label: dueLabel(days) };
   if (days <= DUE_SOON_DAYS) return { status: 'warning', label: dueLabel(days) };
-  return conducted
-    ? { status: 'ok', label: 'Conducted' }
-    : { status: 'neutral', label: 'Scheduled' };
+  return { status: 'neutral', label: 'Scheduled' };
 }
 
 export function InspectionsPage() {
