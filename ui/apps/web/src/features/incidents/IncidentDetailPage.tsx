@@ -170,6 +170,16 @@ function IncidentReport({ incident }: { incident: IncidentDetail }) {
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const lockedBannerRef = useRef<HTMLDivElement>(null);
+  const stepListRef = useRef<HTMLOListElement>(null);
+
+  // Below lg the step list is one sideways-scrolling row; keep the current step in view without
+  // scrolling the page vertically (scrollIntoView would).
+  useEffect(() => {
+    const list = stepListRef.current;
+    const current = list?.querySelector<HTMLElement>('[aria-current="step"]');
+    if (!list || !current || list.scrollWidth <= list.clientWidth) return;
+    list.scrollLeft = current.offsetLeft - list.offsetLeft - 16;
+  }, [step]);
   const pendingFieldFocus = useRef<string | null>(null);
   const locked = typeof incident.lockedAt === 'number';
   const nerisSchema = useNerisSchema(incident.nerisSchemaVersion);
@@ -590,7 +600,7 @@ function IncidentReport({ incident }: { incident: IncidentDetail }) {
       ) : null}
       <div className={styles.layout}>
         <nav aria-label="Report steps">
-          <ol className={styles.steps} onKeyDown={onStepKeyDown}>
+          <ol ref={stepListRef} className={styles.steps} onKeyDown={onStepKeyDown}>
             {steps.map((item, index) => (
               <li key={item.id}>
                 <button
