@@ -200,6 +200,13 @@
   overflow-x: hidden;
 }
 
+/* design.md §2.7 2xl: content caps at 1680px, centred, so a station wall display doesn't stretch
+   a table across 3,000px. */
+.main > main {
+  max-width: 1680px;
+  margin-inline: auto;
+}
+
 /* Must stay after the base .sidebar / .menuButton rules: at equal specificity the later rule
    wins, and when this block sat above them the sidebar still rendered on phones (stacked under
    the page) and the page scrolled sideways. */
@@ -210,6 +217,10 @@
   }
   .sidebar {
     display: none;
+  }
+  /* 24px gutters on both sides cost a 390px phone an eighth of its width. */
+  .main {
+    padding: var(--bx-space-md);
   }
   /* MAJOR-1 (PR #318 review): hiding the static sidebar here used to leave no
      replacement, which left the web app with no route navigation and no Sign out below 768px (and at 200%

@@ -26,6 +26,19 @@
   min-width: 0;
 }
 
+.statLink {
+  color: inherit;
+  text-decoration: none;
+  transition:
+    background-color var(--bx-duration-fast) var(--bx-ease-standard),
+    border-color var(--bx-duration-fast) var(--bx-ease-standard);
+}
+
+.statLink:hover {
+  background: var(--bx-surface-raised);
+  border-color: var(--bx-border);
+}
+
 .statLabel {
   font-size: 12px;
   font-weight: 600;
@@ -35,9 +48,11 @@
 }
 
 .statValue {
-  font-family: var(--bx-font-mono);
-  font-size: 28px;
+  /* design.md §2.4: KPI values are `office.display` in the UI face. Mono is for identifiers read
+     aloud (unit IDs, incident numbers); tabular figures keep columns of counts aligned. */
+  font-size: var(--boxalarm-type-display-size, 28px);
   font-weight: 700;
+  font-variant-numeric: tabular-nums;
   color: var(--bx-fg);
   line-height: 1.15;
 }
@@ -49,4 +64,10 @@
 .statHint {
   font-size: 12px;
   color: var(--bx-fg-faint);
+}
+
+@media (max-width: 767px) {
+  .card {
+    padding: var(--bx-space-md);
+  }
 }

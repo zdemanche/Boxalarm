@@ -1,4 +1,5 @@
 import type { HTMLAttributes, ReactNode } from 'react';
+import { Link } from 'react-router-dom';
 import styles from './Card.module.css';
 
 interface CardProps extends HTMLAttributes<HTMLDivElement> {
@@ -29,17 +30,27 @@ interface StatProps {
   value: ReactNode;
   hint?: ReactNode;
   alarm?: boolean;
+  /** The tile's source list (design.md O-02: "every KPI tile links to its source list"). */
+  to?: string;
 }
 
 /** KPI tile — dashboard command-console numbers (unit counts, expiring certs, OOS apparatus). */
-export function Stat({ label, value, hint, alarm = false }: StatProps) {
-  return (
-    <div className={styles.stat}>
+export function Stat({ label, value, hint, alarm = false, to }: StatProps) {
+  const content = (
+    <>
       <span className={styles.statLabel}>{label}</span>
       <span className={[styles.statValue, alarm ? styles.statValueAlarm : ''].join(' ')}>
         {value}
       </span>
       {hint ? <span className={styles.statHint}>{hint}</span> : null}
-    </div>
+    </>
   );
+  if (to) {
+    return (
+      <Link to={to} className={[styles.stat, styles.statLink].join(' ')}>
+        {content}
+      </Link>
+    );
+  }
+  return <div className={styles.stat}>{content}</div>;
 }

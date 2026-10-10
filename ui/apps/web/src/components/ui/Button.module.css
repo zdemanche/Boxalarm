@@ -9,6 +9,7 @@
   border: 1px solid transparent;
   cursor: pointer;
   white-space: nowrap;
+  text-decoration: none;
   transition:
     background-color var(--bx-duration-fast) var(--bx-ease-standard),
     border-color var(--bx-duration-fast) var(--bx-ease-standard),
