@@ -9,7 +9,9 @@ import {
 } from '../../auth/roles';
 import { MarkOffList } from '../availability/MarkOffList';
 import { ApiForbiddenGate } from '../../components/ApiForbiddenGate';
+import { Button } from '../../components/ui/Button';
 import { Badge } from '../../components/ui/Chip';
+import { DatePicker, Select, TextInput } from '../../components/ui/Field';
 import { PageHeader } from '../../components/ui/PageHeader';
 import { CertificationsPanel } from '../training/CertificationsPanel';
 import { TranscriptPanel } from '../training/TranscriptPanel';
@@ -27,7 +29,9 @@ import type { AttendanceActivityType } from './types';
 import { RolesSection } from './RolesSection';
 import { AccountSecuritySection, canUseAccountKillSwitches } from './AccountSecuritySection';
 import { MemberStatusSection } from './MemberStatusSection';
+import { formatCalendarDate } from '../../lib/dates';
 import { humanize } from '../../lib/labels';
+import styles from './MemberDetailPage.module.css';
 
 const ACTIVITY_TYPES: AttendanceActivityType[] = [
   'CALL',
@@ -87,20 +91,17 @@ function QualsSection({ memberId, canEdit }: { memberId: string; canEdit: boolea
             event.preventDefault();
             addQual.mutate();
           }}
-          style={{ display: 'flex', gap: 'var(--boxalarm-spacing-sm)', alignItems: 'end' }}
+          className={styles.inlineForm}
         >
-          <label style={{ display: 'grid', gap: 4 }}>
-            Qual code
-            <input
-              value={qualCode}
-              onChange={(e) => setQualCode(e.target.value)}
-              required
-              style={{ minHeight: 44, padding: '0 12px' }}
-            />
-          </label>
-          <button type="submit" style={{ minHeight: 44 }}>
+          <TextInput
+            label="Qual code"
+            value={qualCode}
+            onChange={(e) => setQualCode(e.target.value)}
+            required
+          />
+          <Button type="submit" variant="secondary" loading={addQual.isPending}>
             Assign
-          </button>
+          </Button>
         </form>
       ) : null}
     </section>
@@ -176,7 +177,12 @@ function AttendanceSection({ memberId, isOwnRecord }: { memberId: string; isOwnR
             .sort((a, b) => a.occurredAt - b.occurredAt)
             .map((record) => (
               <li key={`${record.activityType}-${record.occurredAt}`}>
-                {record.activityType} — {new Date(record.occurredAt * 1000).toLocaleDateString()}
+                {humanize(record.activityType)} —{' '}
+                {new Date(record.occurredAt * 1000).toLocaleDateString(undefined, {
+                  month: 'short',
+                  day: 'numeric',
+                  year: 'numeric',
+                })}
                 {record.refId ? ` — dispatch ${record.refId}` : ''} — {record.hours}h
               </li>
             ))}
@@ -188,42 +194,37 @@ function AttendanceSection({ memberId, isOwnRecord }: { memberId: string; isOwnR
           event.preventDefault();
           addEntry.mutate();
         }}
-        style={{ display: 'flex', gap: 'var(--boxalarm-spacing-sm)', alignItems: 'end' }}
+        className={styles.inlineForm}
       >
-        <label style={{ display: 'grid', gap: 4 }}>
-          Activity
-          <select
-            value={form.activityType}
-            onChange={(e) =>
-              setForm((prev) => ({
-                ...prev,
-                activityType: e.target.value as AttendanceActivityType,
-              }))
-            }
-            style={{ minHeight: 44 }}
-          >
-            {ACTIVITY_TYPES.map((type) => (
-              <option key={type} value={type}>
-                {type}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label style={{ display: 'grid', gap: 4 }}>
-          Hours
-          <input
-            type="number"
-            min="0"
-            step="0.25"
-            value={form.hours}
-            onChange={(e) => setForm((prev) => ({ ...prev, hours: e.target.value }))}
-            required
-            style={{ minHeight: 44, padding: '0 12px', width: 100 }}
-          />
-        </label>
-        <button type="submit" style={{ minHeight: 44 }}>
+        <Select
+          label="Activity"
+          value={form.activityType}
+          onChange={(e) =>
+            setForm((prev) => ({
+              ...prev,
+              activityType: e.target.value as AttendanceActivityType,
+            }))
+          }
+        >
+          {ACTIVITY_TYPES.map((type) => (
+            <option key={type} value={type}>
+              {humanize(type)}
+            </option>
+          ))}
+        </Select>
+        <TextInput
+          label="Hours"
+          type="number"
+          min="0"
+          step="0.25"
+          value={form.hours}
+          onChange={(e) => setForm((prev) => ({ ...prev, hours: e.target.value }))}
+          required
+          style={{ width: 100 }}
+        />
+        <Button type="submit" variant="secondary" loading={addEntry.isPending}>
           Record
-        </button>
+        </Button>
       </form>
     </section>
   );
@@ -309,7 +310,7 @@ export function MemberDetailPage() {
             <dt style={{ color: 'var(--bx-fg-muted)' }}>Agency ID</dt>
             <dd style={{ margin: 0 }}>{member.agencyId}</dd>
             <dt style={{ color: 'var(--bx-fg-muted)' }}>Join date</dt>
-            <dd style={{ margin: 0 }}>{member.joinDate}</dd>
+            <dd style={{ margin: 0 }}>{formatCalendarDate(member.joinDate)}</dd>
           </dl>
 
           <MemberStatusSection member={member} />
@@ -342,10 +343,11 @@ export function MemberDetailPage() {
             <ul>
               {(ppeQuery.data ?? []).map((item) => (
                 <li key={item.ppeItemId}>
-                  {humanize(item.itemType)} · size {item.size} · expires {item.nfpaExpiryDate} ·{' '}
+                  {humanize(item.itemType)} · size {item.size} · expires{' '}
+                  {formatCalendarDate(item.nfpaExpiryDate)} ·{' '}
                   <strong
                     style={
-                      item.status === 'EXPIRED' ? { color: 'var(--boxalarm-error)' } : undefined
+                      item.status === 'EXPIRED' ? { color: 'var(--bx-status-danger)' } : undefined
                     }
                   >
                     {humanize(item.status)}
@@ -362,49 +364,34 @@ export function MemberDetailPage() {
                 event.preventDefault();
                 issuePpeMutation.mutate(ppeForm);
               }}
-              style={{
-                marginTop: 'var(--boxalarm-spacing-lg)',
-                display: 'grid',
-                gap: 'var(--boxalarm-spacing-md)',
-                maxWidth: 480,
-              }}
+              className={styles.stackForm}
             >
-              <label style={{ display: 'grid', gap: 4 }}>
-                Item type
-                <input
-                  value={ppeForm.itemType}
-                  required
-                  onChange={(e) => setPpeForm((prev) => ({ ...prev, itemType: e.target.value }))}
-                  style={{ minHeight: 44, padding: '0 12px' }}
-                />
-              </label>
-              <label style={{ display: 'grid', gap: 4 }}>
-                Size
-                <input
-                  value={ppeForm.size}
-                  required
-                  onChange={(e) => setPpeForm((prev) => ({ ...prev, size: e.target.value }))}
-                  style={{ minHeight: 44, padding: '0 12px' }}
-                />
-              </label>
-              <label style={{ display: 'grid', gap: 4 }}>
-                Issue date
-                <input
-                  type="date"
-                  value={ppeForm.issueDate}
-                  required
-                  onChange={(e) => setPpeForm((prev) => ({ ...prev, issueDate: e.target.value }))}
-                  style={{ minHeight: 44, padding: '0 12px' }}
-                />
-              </label>
+              <TextInput
+                label="Item type"
+                value={ppeForm.itemType}
+                required
+                onChange={(e) => setPpeForm((prev) => ({ ...prev, itemType: e.target.value }))}
+              />
+              <TextInput
+                label="Size"
+                value={ppeForm.size}
+                required
+                onChange={(e) => setPpeForm((prev) => ({ ...prev, size: e.target.value }))}
+              />
+              <DatePicker
+                label="Issue date"
+                value={ppeForm.issueDate}
+                required
+                onChange={(e) => setPpeForm((prev) => ({ ...prev, issueDate: e.target.value }))}
+              />
               {ppeFormError ? (
-                <p role="alert" aria-live="assertive">
+                <p role="alert" aria-live="assertive" className={styles.error}>
                   {ppeFormError}
                 </p>
               ) : null}
-              <button type="submit" style={{ minHeight: 44 }}>
+              <Button type="submit" loading={issuePpeMutation.isPending}>
                 Issue PPE
-              </button>
+              </Button>
             </form>
           ) : null}
           <QualsSection memberId={id} canEdit={isAdmin} />

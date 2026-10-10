@@ -11,6 +11,7 @@ import { TextInput } from '../../components/ui/Field';
 import { PageHeader } from '../../components/ui/PageHeader';
 import { createMember, listMembers } from './api';
 import type { CreateMemberInput, Member } from './types';
+import { formatCalendarDate } from '../../lib/dates';
 import { humanize } from '../../lib/labels';
 
 const emptyForm: CreateMemberInput = {
@@ -102,11 +103,12 @@ export function PersonnelListPage() {
     {
       key: 'joinDate',
       header: 'Join date',
+      // ISO sorts chronologically; the cell reads "Apr 12, 2018".
       sortValue: (m) => m.joinDate,
-      render: (m) => m.joinDate,
+      render: (m) => formatCalendarDate(m.joinDate),
     },
+    // No agency ID column: one department per deployment, so it is the same on every row.
     { key: 'rank', header: 'Rank', sortValue: (m) => m.rank, render: (m) => m.rank },
-    { key: 'agencyId', header: 'Agency ID', render: (m) => m.agencyId },
   ];
 
   return (

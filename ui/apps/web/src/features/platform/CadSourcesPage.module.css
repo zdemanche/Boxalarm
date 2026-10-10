@@ -1,0 +1,86 @@
+/* Webhook URLs, the per-source email address and key ids have no break opportunities; on a
+   phone one of them used to set the width of every field in the card. They wrap anywhere. */
+.page code {
+  overflow-wrap: anywhere;
+}
+
+.page input,
+.page select,
+.page textarea {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.sources {
+  display: grid;
+  gap: var(--bx-space-lg);
+}
+
+.sources > p {
+  margin: 0;
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--bx-space-sm);
+}
+
+/* One column that may shrink below its content's min-content width. */
+.editor {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--bx-space-sm);
+  max-width: 640px;
+}
+
+/* A token border instead of the UA groove, which is bright on the cab palette. `min-width: 0`
+   overrides the fieldset's UA `min-inline-size: min-content`. */
+.fieldset {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--bx-space-sm);
+  min-width: 0;
+  margin: var(--bx-space-xs) 0 0;
+  padding: var(--bx-space-sm) var(--bx-space-md) var(--bx-space-md);
+  border: 1px solid var(--bx-border-decorative);
+  border-radius: var(--bx-radius-md);
+}
+
+.legend {
+  padding: 0 var(--bx-space-xs);
+  font-weight: 600;
+}
+
+.fieldset > p,
+.stack > p {
+  margin: 0;
+}
+
+.fieldset > button {
+  justify-self: start;
+}
+
+.stack {
+  display: grid;
+  gap: var(--bx-space-sm);
+}
+
+/* The parser rules are a looser list than the rest of the fieldset, so each field's pair of
+   controls reads as one row. */
+.rules {
+  gap: var(--bx-space-md);
+}
+
+.ruleRow {
+  display: grid;
+  grid-template-columns: minmax(10rem, 14rem) minmax(0, 1fr);
+  gap: var(--bx-space-sm);
+}
+
+/* Below `sm` the two controls stack: "Incident number: read by" cannot share 300px. */
+@media (max-width: 479px) {
+  .ruleRow {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

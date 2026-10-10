@@ -2,11 +2,14 @@ import { useEffect, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { ApiError } from '../../lib/apiClient';
 import { useAuth } from '../../auth/AuthContext';
+import { Button } from '../../components/ui/Button';
 import { ConfirmDialog } from '../../components/ui/Dialog';
+import { TextInput } from '../../components/ui/Field';
 import { listMemberDevices, resetMemberCredentials, revokeMemberSessions } from '../platform/api';
 import type { MemberDevice } from '../platform/types';
 import { updateMemberEmail } from './api';
 import type { Member } from './types';
+import styles from './MemberDetailPage.module.css';
 
 /** Mirrors the Cedar policy for both actions (ADMIN_ONLY_ACTIONS: CHIEF/ADMIN). */
 export function canUseAccountKillSwitches(roles: readonly string[]): boolean {
@@ -185,15 +188,15 @@ export function AccountSecuritySection({ member }: { member: Member }) {
           marginTop: 'var(--boxalarm-spacing-sm)',
         }}
       >
-        <button type="button" onClick={() => setOpen('deviceLost')} style={{ minHeight: 44 }}>
+        <Button variant="secondary" onClick={() => setOpen('deviceLost')}>
           Report device lost
-        </button>
-        <button type="button" onClick={() => setOpen('resetCredentials')} style={{ minHeight: 44 }}>
+        </Button>
+        <Button variant="secondary" onClick={() => setOpen('resetCredentials')}>
           Reset password and sign out
-        </button>
-        <button type="button" onClick={() => setOpen('changeEmail')} style={{ minHeight: 44 }}>
+        </Button>
+        <Button variant="secondary" onClick={() => setOpen('changeEmail')}>
           Change email
-        </button>
+        </Button>
       </div>
       {/* Always mounted: a live region that appears already filled is skipped by some readers. */}
       <p role="status" aria-live="polite">
@@ -217,9 +220,9 @@ export function AccountSecuritySection({ member }: { member: Member }) {
         onConfirm={() => run('deviceLost')}
         danger
       >
-        <fieldset style={{ border: 'none', padding: 0, margin: 'var(--boxalarm-spacing-sm) 0' }}>
-          <legend style={{ fontWeight: 600 }}>Which device was lost?</legend>
-          <label style={{ display: 'flex', gap: 8, alignItems: 'center', minHeight: 44 }}>
+        <fieldset className={styles.fieldset} style={{ margin: 'var(--bx-space-sm) 0' }}>
+          <legend className={styles.legend}>Which device was lost?</legend>
+          <label className={styles.choice}>
             <input
               type="radio"
               name="lost-device"
@@ -230,10 +233,7 @@ export function AccountSecuritySection({ member }: { member: Member }) {
             All devices
           </label>
           {selectable.map((device) => (
-            <label
-              key={device.deviceId}
-              style={{ display: 'flex', gap: 8, alignItems: 'center', minHeight: 44 }}
-            >
+            <label key={device.deviceId} className={styles.choice}>
               <input
                 type="radio"
                 name="lost-device"
@@ -285,16 +285,15 @@ export function AccountSecuritySection({ member }: { member: Member }) {
         confirmLabel="Change email"
         onConfirm={() => run('changeEmail')}
       >
-        <label style={{ display: 'grid', gap: 4, margin: 'var(--boxalarm-spacing-sm) 0' }}>
-          New email
-          <input
+        <div style={{ margin: 'var(--bx-space-sm) 0' }}>
+          <TextInput
+            label="New email"
             type="email"
             value={newEmail}
             onChange={(e) => setNewEmail(e.target.value)}
             autoComplete="off"
-            style={{ minHeight: 44, padding: '0 12px' }}
           />
-        </label>
+        </div>
       </ConfirmDialog>
     </section>
   );

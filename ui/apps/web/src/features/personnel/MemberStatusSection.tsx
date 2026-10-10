@@ -4,10 +4,12 @@ import { useAuth } from '../../auth/AuthContext';
 import { canChangeMemberStatus } from '../../auth/roles';
 import { Button } from '../../components/ui/Button';
 import { ConfirmDialog } from '../../components/ui/Dialog';
+import { Select } from '../../components/ui/Field';
 import { ApiError } from '../../lib/apiClient';
 import { humanize } from '../../lib/labels';
 import { updateMemberStatus } from './api';
 import type { Member, MemberStatus } from './types';
+import styles from './MemberDetailPage.module.css';
 
 /**
  * What the server lets anyone set (personnel statusTransitions.ts SETTABLE_STATUSES).
@@ -109,43 +111,22 @@ export function MemberStatusSection({ member }: { member: Member }) {
       >
         Status
       </h2>
-      <p style={{ margin: 'var(--bx-space-xs) 0', fontSize: 14 }}>
-        Current status: <strong>{humanize(member.status)}</strong>
-      </p>
-      <div
-        style={{
-          display: 'flex',
-          flexWrap: 'wrap',
-          gap: 'var(--bx-space-sm)',
-          alignItems: 'end',
-        }}
-      >
-        <label style={{ display: 'grid', gap: 4, fontSize: 13, fontWeight: 600 }}>
-          {reinstating ? 'Reinstate as' : 'New status'}
-          <select
-            aria-label="New member status"
-            value={selected}
-            onChange={(e) => setChoice(e.target.value as MemberStatus | '')}
-            style={{
-              minHeight: 'var(--bx-target-office)',
-              minWidth: 200,
-              padding: '0 var(--bx-space-sm)',
-              fontSize: 14,
-              fontWeight: 400,
-              background: 'var(--bx-surface-raised)',
-              color: 'var(--bx-fg)',
-              border: '1px solid var(--bx-border)',
-              borderRadius: 'var(--bx-radius-md)',
-            }}
-          >
-            <option value="">Choose a status…</option>
-            {targets.map((status) => (
-              <option key={status} value={status}>
-                {humanize(status)}
-              </option>
-            ))}
-          </select>
-        </label>
+      {/* The current status is the chip in the page header; it is not repeated here. */}
+      <div className={styles.inlineForm} style={{ marginTop: 'var(--bx-space-sm)' }}>
+        <Select
+          label={reinstating ? 'Reinstate as' : 'New status'}
+          aria-label="New member status"
+          value={selected}
+          onChange={(e) => setChoice(e.target.value as MemberStatus | '')}
+          style={{ minWidth: 200 }}
+        >
+          <option value="">Choose a status…</option>
+          {targets.map((status) => (
+            <option key={status} value={status}>
+              {humanize(status)}
+            </option>
+          ))}
+        </Select>
         <Button variant="secondary" disabled={selected === ''} onClick={() => setConfirming(true)}>
           {reinstating ? 'Reinstate member' : 'Change status'}
         </Button>

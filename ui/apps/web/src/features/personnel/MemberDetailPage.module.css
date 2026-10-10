@@ -1,0 +1,135 @@
+/* Member detail and its sections (RolesSection, AccountSecuritySection, MemberStatusSection). */
+
+/* A field and its submit button on one line, wrapping on a phone. */
+.inlineForm {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--bx-space-sm);
+}
+
+.stackForm {
+  display: grid;
+  gap: var(--bx-space-md);
+  max-width: 480px;
+  margin-top: var(--bx-space-lg);
+}
+
+.stackForm > button {
+  justify-self: start;
+}
+
+.error {
+  margin: 0;
+  color: var(--bx-status-danger);
+  font-weight: 600;
+}
+
+.note {
+  margin: 0;
+  font-size: 13px;
+  color: var(--bx-fg-muted);
+}
+
+.fieldset {
+  border: 0;
+  margin: 0;
+  padding: 0;
+  min-width: 0;
+  display: grid;
+  gap: var(--bx-space-xs);
+}
+
+.legend {
+  padding: 0;
+  margin-bottom: var(--bx-space-xs);
+  font-weight: 600;
+}
+
+.choices {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--bx-space-sm);
+}
+
+/* The whole row is the target: 44px office minimum (docs/design.md §2.5), the same choice row
+   as My availability. */
+.choice {
+  display: flex;
+  align-items: center;
+  gap: var(--bx-space-sm);
+  min-height: var(--bx-target-office);
+  padding: var(--bx-space-xs) var(--bx-space-sm);
+  border: 1px solid var(--bx-border-decorative);
+  border-radius: var(--bx-radius-md);
+  cursor: pointer;
+}
+
+.choice:has(input:checked) {
+  border-color: var(--bx-fg);
+}
+
+.choice:has(input:disabled) {
+  cursor: not-allowed;
+  color: var(--bx-fg-muted);
+}
+
+/* Native checkbox and radio, drawn with the palette tokens: the platform control stays light
+   (and OS-blue) on the cab palette. The look matches the Checkbox primitive; the element stays
+   a real <input>, which keeps `disabled` and `aria-describedby` the primitive does not take. */
+.choice input {
+  appearance: none;
+  flex-shrink: 0;
+  display: inline-grid;
+  place-content: center;
+  width: 22px;
+  height: 22px;
+  margin: 0;
+  background: var(--bx-surface-raised);
+  border: 1px solid var(--bx-border-strong);
+  border-radius: var(--bx-radius-sm);
+  cursor: inherit;
+}
+
+.choice input[type='radio'] {
+  border-radius: 50%;
+}
+
+.choice input:checked {
+  background: var(--bx-fg);
+  border-color: var(--bx-fg);
+}
+
+.choice input[type='checkbox']:checked::before {
+  content: '';
+  width: 6px;
+  height: 11px;
+  margin-top: -2px;
+  border: solid var(--bx-bg);
+  border-width: 0 2px 2px 0;
+  transform: rotate(45deg);
+}
+
+.choice input[type='radio']:checked::before {
+  content: '';
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--bx-bg);
+}
+
+.choice input:disabled {
+  opacity: 0.55;
+}
+
+.choice input:focus-visible {
+  outline: 3px solid var(--bx-focus);
+  outline-offset: 2px;
+}
+
+/* Forced colours drop the fills that carry the checked state; the platform control does not. */
+@media (forced-colors: active) {
+  .choice input {
+    appearance: auto;
+  }
+}

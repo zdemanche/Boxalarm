@@ -32,6 +32,7 @@ import {
   type CadTestParseResult,
   type RotatedWebhookKey,
 } from './types';
+import styles from './CadSourcesPage.module.css';
 
 const QUERY_KEY = ['platform', 'cad-sources'];
 
@@ -207,7 +208,7 @@ export function CadSourcesPage() {
   const errors = fieldErrorsOf(saveError);
 
   return (
-    <main id="main-content">
+    <main id="main-content" className={styles.page}>
       <PageHeader
         title="CAD sources"
         breadcrumbs={[{ label: 'Settings', to: '/settings' }, { label: 'CAD sources' }]}
@@ -238,7 +239,7 @@ export function CadSourcesPage() {
           <p role="alert">Unable to load the CAD sources.</p>
         </ApiForbiddenGate>
       ) : (
-        <form onSubmit={handleSubmit} noValidate>
+        <form onSubmit={handleSubmit} noValidate className={styles.sources}>
           {drafts.length === 0 ? <p>No CAD sources yet.</p> : null}
           {drafts.map((draft, index) => (
             <SourceEditor
@@ -251,7 +252,7 @@ export function CadSourcesPage() {
               emailDomainConfigured={Boolean(query.data?.emailDomain)}
             />
           ))}
-          <div style={{ display: 'flex', gap: 'var(--bx-space-sm)', flexWrap: 'wrap' }}>
+          <div className={styles.actions}>
             <Button
               type="button"
               variant="secondary"
@@ -329,7 +330,7 @@ function SourceEditor({
 
   return (
     <Card title={title}>
-      <div style={{ display: 'grid', gap: 'var(--bx-space-sm)', maxWidth: 640 }}>
+      <div className={styles.editor}>
         <TextInput
           label="Name"
           value={draft.label}
@@ -356,8 +357,8 @@ function SourceEditor({
           onCheckedChange={(checked) => onChange({ enabled: checked })}
         />
 
-        <fieldset>
-          <legend>Email</legend>
+        <fieldset className={styles.fieldset}>
+          <legend className={styles.legend}>Email</legend>
           <Checkbox
             label="Accept dispatch email for this source"
             checked={draft.emailEnabled}
@@ -389,8 +390,8 @@ function SourceEditor({
           ) : null}
         </fieldset>
 
-        <fieldset>
-          <legend>Webhook</legend>
+        <fieldset className={styles.fieldset}>
+          <legend className={styles.legend}>Webhook</legend>
           <Checkbox
             label="Accept signed webhook requests for this source"
             checked={draft.webhookEnabled}
@@ -569,7 +570,7 @@ function WebhookKey({ draft }: { draft: SourceDraft }) {
   }
 
   return (
-    <div>
+    <div className={styles.stack}>
       {hasKey ? (
         <p>
           POST to <code>{draft.view?.webhookEndpoint ?? '(save to see the address)'}</code>. Key id{' '}
@@ -582,14 +583,16 @@ function WebhookKey({ draft }: { draft: SourceDraft }) {
       ) : (
         <p>No key yet: the webhook refuses every request until one is created.</p>
       )}
-      <Button type="button" variant="secondary" onClick={() => setConfirmOpen(true)}>
-        {hasKey ? 'Rotate webhook key' : 'Create webhook key'}
-      </Button>
-      {hasKey ? (
-        <Button type="button" variant="danger" onClick={() => setRevokeOpen(true)}>
-          Revoke previous key now
+      <div className={styles.actions}>
+        <Button type="button" variant="secondary" onClick={() => setConfirmOpen(true)}>
+          {hasKey ? 'Rotate webhook key' : 'Create webhook key'}
         </Button>
-      ) : null}
+        {hasKey ? (
+          <Button type="button" variant="danger" onClick={() => setRevokeOpen(true)}>
+            Revoke previous key now
+          </Button>
+        ) : null}
+      </div>
       {revoked ? <p role="status">The previous key no longer works.</p> : null}
       <ConfirmDialog
         open={revokeOpen}
@@ -740,8 +743,8 @@ function ParserEditor({
   const testErrors = fieldErrorsOf(testError);
 
   return (
-    <fieldset>
-      <legend>
+    <fieldset className={`${styles.fieldset} ${styles.rules}`}>
+      <legend className={styles.legend}>
         Parser template{draft.view?.parser ? ` (version ${draft.view.parser.version})` : ''}
       </legend>
       <p>
@@ -755,10 +758,7 @@ function ParserEditor({
           e.field.startsWith(`sources[${index}].parser.fields.${field}`),
         )?.message;
         return (
-          <div
-            key={field}
-            style={{ display: 'grid', gridTemplateColumns: 'minmax(10rem, 14rem) 1fr', gap: 8 }}
-          >
+          <div key={field} className={styles.ruleRow}>
             <Select
               label={`${FIELD_LABELS[field]}: read by`}
               value={rule.mode}
