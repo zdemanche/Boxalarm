@@ -306,7 +306,16 @@ export function InspectionsPage() {
               </p>
             ) : null}
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 'var(--bx-space-sm)' }}>
-              <Button type="button" variant="secondary" onClick={() => setConducting(null)}>
+              {/* Not natively disabled (a11y-spec: never disabled), but a click while the save
+                  is in flight is ignored - closing then would lose a failure message. */}
+              <Button
+                type="button"
+                variant="secondary"
+                aria-disabled={conductMutation.isPending || undefined}
+                onClick={() => {
+                  if (!conductMutation.isPending) setConducting(null);
+                }}
+              >
                 Cancel
               </Button>
               <Button type="submit" loading={conductMutation.isPending}>

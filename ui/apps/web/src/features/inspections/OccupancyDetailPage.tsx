@@ -18,10 +18,10 @@ function oversizedFileNames(files: File[]): string[] {
   return files.filter((file) => file.size > MAX_PREPLAN_FILE_BYTES).map((file) => file.name);
 }
 
-/** Stored asset keys end in the uploaded file's name: `{dept}/PRE_PLAN/{prePlanId}/{filename}`. */
 /** putPrePlanHandler's MAX_LIST_LENGTH for attachmentFilenames. */
 const MAX_PREPLAN_ATTACHMENTS = 50;
 
+/** Stored asset keys end in the uploaded file's name: `{dept}/PRE_PLAN/{prePlanId}/{filename}`. */
 function fileNameOf(key: string): string {
   return key.slice(key.lastIndexOf('/') + 1);
 }
