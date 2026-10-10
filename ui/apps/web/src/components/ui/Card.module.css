@@ -5,6 +5,13 @@
   padding: var(--bx-space-lg);
 }
 
+/* Cards stacked straight down a page (not in a grid, which owns its own gap) used to touch.
+   Block margins collapse, so this never doubles the PageHeader's bottom margin. */
+:where(main) > .card + *,
+:where(main) > * + .card {
+  margin-top: var(--bx-space-lg);
+}
+
 .cardRaised {
   background: var(--bx-surface-raised);
 }
