@@ -241,7 +241,8 @@ export function IncidentsListPage() {
   }, [createMutation.error]);
 
   const ranged = useMemo(
-    () => [...(listQuery.data ?? [])].sort((a, b) => (a.alarmAt ?? 0) - (b.alarmAt ?? 0)),
+    // Newest first: the reports an officer still has to write are the recent ones.
+    () => [...(listQuery.data ?? [])].sort((a, b) => (b.alarmAt ?? 0) - (a.alarmAt ?? 0)),
     [listQuery.data],
   );
   const visible =
@@ -340,6 +341,51 @@ export function IncidentsListPage() {
             : ''}
       </p>
 
+      {/* The page's primary action, above the search rather than under a year of rows. */}
+      {canList ? (
+        <Card title="Start a report" className={styles.startCard}>
+          <RecentDispatchesToReport
+            query={recentQuery}
+            canStart={canCreate}
+            pendingDispatchId={createMutation.isPending ? createMutation.variables : undefined}
+            onStart={(id) => createMutation.mutate(id)}
+            fallback={
+              canCreate ? (
+                <form
+                  aria-label="Create report from dispatch"
+                  onSubmit={(event: FormEvent) => {
+                    event.preventDefault();
+                    createMutation.mutate(dispatchId);
+                  }}
+                  style={{
+                    display: 'grid',
+                    gap: 'var(--bx-space-md)',
+                    marginTop: 'var(--bx-space-sm)',
+                  }}
+                >
+                  <TextInput
+                    label="Dispatch ID"
+                    help="The CAD dispatch number."
+                    value={dispatchId}
+                    required
+                    onChange={(event) => setDispatchId(event.target.value)}
+                  />
+                  <Button type="submit" loading={createMutation.isPending} disabled={!dispatchId}>
+                    Create report
+                  </Button>
+                </form>
+              ) : null
+            }
+          />
+          {createError ? (
+            <div ref={errorRef} tabIndex={-1} role="alert">
+              <p style={{ fontWeight: 600, margin: 0 }}>{createError.title}</p>
+              {createError.detail ? <p style={{ margin: 0 }}>{createError.detail}</p> : null}
+            </div>
+          ) : null}
+        </Card>
+      ) : null}
+
       <section className={styles.section} aria-labelledby="incident-filters-heading">
         <h2 id="incident-filters-heading">Filters</h2>
         <div className={styles.filters}>
@@ -416,7 +462,7 @@ export function IncidentsListPage() {
             <h2 id="all-incidents-heading">All incidents</h2>
             <div className={styles.table}>
               <DataTable
-                caption="Incident search results, ordered by alarm time"
+                caption="Incident search results, newest first"
                 rowKey={(incident) => incident.incidentId}
                 columns={columns}
                 rows={visible}
@@ -433,10 +479,7 @@ export function IncidentsListPage() {
                 }
               />
             </div>
-            <ul
-              className={styles.cards}
-              aria-label="Incident search results, ordered by alarm time"
-            >
+            <ul className={styles.cards} aria-label="Incident search results, newest first">
               {visible.map((incident) => (
                 <li key={incident.incidentId}>
                   <Link to={`/incidents/${incident.incidentId}`} className={styles.card}>
@@ -454,50 +497,6 @@ export function IncidentsListPage() {
           </section>
         </>
       )}
-
-      {canList ? (
-        <Card title="Start a report" style={{ marginTop: 'var(--bx-space-lg)', maxWidth: 720 }}>
-          <RecentDispatchesToReport
-            query={recentQuery}
-            canStart={canCreate}
-            pendingDispatchId={createMutation.isPending ? createMutation.variables : undefined}
-            onStart={(id) => createMutation.mutate(id)}
-            fallback={
-              canCreate ? (
-                <form
-                  aria-label="Create report from dispatch"
-                  onSubmit={(event: FormEvent) => {
-                    event.preventDefault();
-                    createMutation.mutate(dispatchId);
-                  }}
-                  style={{
-                    display: 'grid',
-                    gap: 'var(--bx-space-md)',
-                    marginTop: 'var(--bx-space-sm)',
-                  }}
-                >
-                  <TextInput
-                    label="Dispatch ID"
-                    help="The CAD dispatch number."
-                    value={dispatchId}
-                    required
-                    onChange={(event) => setDispatchId(event.target.value)}
-                  />
-                  <Button type="submit" loading={createMutation.isPending} disabled={!dispatchId}>
-                    Create report
-                  </Button>
-                </form>
-              ) : null
-            }
-          />
-          {createError ? (
-            <div ref={errorRef} tabIndex={-1} role="alert">
-              <p style={{ fontWeight: 600, margin: 0 }}>{createError.title}</p>
-              {createError.detail ? <p style={{ margin: 0 }}>{createError.detail}</p> : null}
-            </div>
-          ) : null}
-        </Card>
-      ) : null}
     </main>
   );
 }

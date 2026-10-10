@@ -191,6 +191,26 @@ a:hover {
   text-decoration-thickness: 2px;
 }
 
+/* Bare headings follow the type scale; the browser's 2em/1.5em defaults made a section <h2>
+   larger than the page title. Component classes still override these. */
+h1 {
+  font-size: var(--boxalarm-type-title-size);
+  line-height: var(--boxalarm-type-title-lh);
+}
+
+h2 {
+  font-size: var(--boxalarm-type-heading-size);
+  line-height: var(--boxalarm-type-heading-lh);
+  font-weight: 600;
+}
+
+h3,
+h4 {
+  font-size: var(--boxalarm-type-subheading-size);
+  line-height: var(--boxalarm-type-subheading-lh);
+  font-weight: 600;
+}
+
 /* Native controls default to the platform UI font at 13px, not the page's type. */
 button,
 input,

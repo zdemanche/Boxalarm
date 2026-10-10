@@ -151,7 +151,7 @@ function detail(overrides: Partial<IncidentDetail> = {}): IncidentDetail {
   };
 }
 
-test('date range lists only in-range incidents, ordered by alarm time', async () => {
+test('date range lists only in-range incidents, newest first', async () => {
   const now = Math.floor(Date.now() / 1000);
   const recent = detail({
     incidentId: 'recent',
@@ -191,8 +191,8 @@ test('date range lists only in-range incidents, ordered by alarm time', async ()
 
   await waitFor(() => {
     expect(screen.getAllByRole('rowheader').map((header) => header.textContent)).toEqual([
-      '26-000100',
       '26-009000',
+      '26-000100',
     ]);
   });
 });

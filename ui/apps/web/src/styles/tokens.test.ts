@@ -33,3 +33,14 @@ test('styles links with the palette link colour in both day and cab', () => {
   expect(darkBlock).toContain(`--bx-link: ${surfacePalette.cab.link};`);
   expect(GLOBAL_TOKENS_CSS).toMatch(/\ba\s*\{[^}]*color: var\(--bx-link\);/);
 });
+
+// Raw <h2>s fell back to the browser's 1.5em, rendering section headings larger than the 22px
+// page <h1> on every page that doesn't style its own.
+test('sizes bare headings from the type scale so h2 never outranks the page title', () => {
+  expect(GLOBAL_TOKENS_CSS).toMatch(
+    /\bh2\s*\{[^}]*font-size: var\(--boxalarm-type-heading-size\);/,
+  );
+  expect(GLOBAL_TOKENS_CSS).toMatch(
+    /\bh3,\s*h4\s*\{[^}]*font-size: var\(--boxalarm-type-subheading-size\);/,
+  );
+});

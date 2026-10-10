@@ -24,6 +24,10 @@
   margin-top: var(--bx-space-lg);
 }
 
+.startCard {
+  max-width: 720px;
+}
+
 .attentionList,
 .cards {
   list-style: none;
