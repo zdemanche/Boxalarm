@@ -57,7 +57,7 @@ export function MapPage() {
       <div
         role="group"
         aria-label="Pan and zoom"
-        style={{ display: 'flex', gap: 'var(--bx-space-sm)' }}
+        style={{ display: 'flex', flexWrap: 'wrap', gap: 'var(--bx-space-sm)' }}
       >
         <Button type="button" variant="secondary" onClick={() => pan(latSpan * 0.5, 0)}>
           Pan north

@@ -2,6 +2,10 @@
   display: flex;
   gap: var(--bx-space-xs);
   border-bottom: 1px solid var(--bx-border-decorative);
+  /* On a phone the tab row scrolls sideways (the partly visible last tab is the cue) instead of
+     running off a clipped page. */
+  overflow-x: auto;
+  scrollbar-width: thin;
 }
 
 .trigger {
@@ -15,6 +19,8 @@
   font-weight: 600;
   color: var(--bx-fg-muted);
   cursor: pointer;
+  flex-shrink: 0;
+  white-space: nowrap;
 }
 
 .trigger[data-state='active'] {

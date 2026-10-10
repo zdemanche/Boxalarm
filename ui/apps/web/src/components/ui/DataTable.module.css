@@ -18,6 +18,12 @@
   border-bottom: 1px solid var(--bx-border-decorative);
 }
 
+/* Column headers and the row-header column (unit, hydrant and asset IDs) never break mid-token
+   ("HYD-/001"); the wrapper scrolls instead. */
+.table th {
+  white-space: nowrap;
+}
+
 .table thead th {
   height: 40px;
   font-size: 12px;
