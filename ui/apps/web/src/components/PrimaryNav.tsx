@@ -10,6 +10,7 @@ import {
   ClipboardList,
   Droplets,
   Flame,
+  LogOut,
   GraduationCap,
   LayoutDashboard,
   MapIcon,
@@ -117,9 +118,9 @@ export function NavListContent({ onNavigate }: NavListContentProps) {
             onNavigate?.();
             void signOut();
           }}
-          className={styles.navLink}
-          style={{ width: '100%' }}
+          className={[styles.navLink, styles.navButton].join(' ')}
         >
+          <LogOut size={18} aria-hidden="true" />
           Sign out
         </button>
       </div>

@@ -84,6 +84,17 @@
   border-top: 1px solid var(--bx-border-decorative);
 }
 
+/* Sign out is a <button> wearing .navLink; without this it kept the native border and fill and
+   read as an empty text field. */
+.navButton {
+  width: 100%;
+  background: none;
+  border: 0;
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
 /* NavDrawer — the below-md replacement for .sidebar (MAJOR-1). Scoped under .topbar so it
    outranks IconButton's own `.button { display: inline-flex }`, whatever order the two CSS
    modules load in; the old single-class rule lost that race and showed the hamburger on
