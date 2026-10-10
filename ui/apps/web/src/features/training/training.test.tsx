@@ -429,15 +429,15 @@ test('certifications views are a full tabs pattern: tabpanel, aria-controls, arr
 
   const user = userEvent.setup();
   renderPage(<CertificationsPage />, ['TRAINING'], '/certifications');
-  const certsTab = await screen.findByRole('tab', { name: 'Certifications' });
+  const expiringTab = await screen.findByRole('tab', { name: 'Expiring' });
   const panel = screen.getByRole('tabpanel');
-  expect(certsTab.getAttribute('aria-controls')).toBe(panel.id);
+  expect(expiringTab.getAttribute('aria-controls')).toBe(panel.id);
 
-  certsTab.focus();
+  expiringTab.focus();
   await user.keyboard('{ArrowRight}');
-  const expiringTab = screen.getByRole('tab', { name: 'Expiring' });
-  expect(document.activeElement).toBe(expiringTab);
-  expect(expiringTab.getAttribute('aria-selected')).toBe('true');
+  const byMemberTab = screen.getByRole('tab', { name: 'By member' });
+  expect(document.activeElement).toBe(byMemberTab);
+  expect(byMemberTab.getAttribute('aria-selected')).toBe('true');
 });
 
 test('training hours: roster hours by member and category, named from the roster, year to date', async () => {
@@ -551,4 +551,41 @@ test('training hours: a reversed range is rejected before any request', async ()
 test('training hours: MEMBER is not granted the page', async () => {
   renderPage(<TrainingHoursPage />, ['MEMBER'], '/training/hours');
   await waitFor(() => expect(screen.queryByRole('heading', { name: 'Training hours' })).toBeNull());
+});
+
+// design.md O-11: the page opens on the department's certifications soonest-expiring first. It
+// used to open on a lone "Select a member…" picker, with the expiring list one tab over showing
+// member ids and ISO dates.
+test('certifications open on the expiring list, named from the roster, with a status', async () => {
+  const soon = new Date();
+  soon.setDate(soon.getDate() + 10);
+  const pad = (n: number) => String(n).padStart(2, '0');
+  const soonIso = `${soon.getFullYear()}-${pad(soon.getMonth() + 1)}-${pad(soon.getDate())}`;
+  server.use(
+    http.get('/api/v1/training/certifications/expiring', () =>
+      HttpResponse.json([
+        {
+          certId: 'c-1',
+          memberId: 'm-2',
+          certType: 'EVOC',
+          expiryDate: soonIso,
+          issuingAuthority: 'CT',
+          status: 'CURRENT',
+        },
+      ]),
+    ),
+    http.get('/api/v1/personnel/members', () =>
+      HttpResponse.json({
+        items: [{ memberId: 'm-2', firstName: 'Jordan', lastName: 'Osei', status: 'ACTIVE' }],
+      }),
+    ),
+  );
+
+  renderPage(<CertificationsPage />, ['TRAINING'], '/certifications');
+  const expiringTab = await screen.findByRole('tab', { name: 'Expiring' });
+  expect(expiringTab.getAttribute('aria-selected')).toBe('true');
+  const row = (await screen.findByText('Jordan Osei')).closest('tr')!;
+  expect(row.textContent).toContain('EVOC');
+  expect(row.textContent).not.toContain(soonIso);
+  expect(row.textContent).toContain('Expires in 10 days');
 });
