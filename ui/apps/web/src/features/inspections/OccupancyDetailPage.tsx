@@ -6,6 +6,7 @@ import { ApiForbiddenGate } from '../../components/ApiForbiddenGate';
 import { Button, Card, PageHeader, Skeleton, Tabs, Textarea, TextInput } from '../../components/ui';
 import { getOccupancy, getPrePlan, putPrePlan, updateOccupancy, uploadPrePlanFile } from './api';
 import type { UtilityShutoff } from './types';
+import styles from './OccupancyDetail.module.css';
 
 type Tab = 'details' | 'preplan';
 
@@ -15,6 +16,11 @@ const MAX_PREPLAN_FILE_BYTES = 20 * 1024 * 1024; // 20MB — generous for a scan
 
 function oversizedFileNames(files: File[]): string[] {
   return files.filter((file) => file.size > MAX_PREPLAN_FILE_BYTES).map((file) => file.name);
+}
+
+/** Stored asset keys end in the uploaded file's name: `{dept}/PRE_PLAN/{prePlanId}/{filename}`. */
+function fileNameOf(key: string): string {
+  return key.slice(key.lastIndexOf('/') + 1);
 }
 
 function splitLines(value: string): string[] {
@@ -30,11 +36,14 @@ export function OccupancyDetailPage() {
   const queryClient = useQueryClient();
   const canWrite = auth.roles.includes('ADMIN') || auth.roles.includes('CHIEF');
   const [tab, setTab] = useState<Tab>('details');
-  const [hazardsText, setHazardsText] = useState('');
+  // Both saves replace whole lists, so each editor shows what is on file until it is edited
+  // (null = untouched). An editor that opened empty deleted every existing hazard and shutoff
+  // the first time someone added one.
+  const [hazardsDraft, setHazardsDraft] = useState<string | null>(null);
   const [diagramFile, setDiagramFile] = useState<File | null>(null);
   const [attachmentFiles, setAttachmentFiles] = useState<File[]>([]);
-  const [shutoffs, setShutoffs] = useState<UtilityShutoff[]>([]);
-  const [prePlanHazardsText, setPrePlanHazardsText] = useState('');
+  const [shutoffsDraft, setShutoffsDraft] = useState<UtilityShutoff[] | null>(null);
+  const [prePlanHazardsDraft, setPrePlanHazardsDraft] = useState<string | null>(null);
   const [uploadStatus, setUploadStatus] = useState<string | null>(null);
   const [fileError, setFileError] = useState<string | null>(null);
 
@@ -50,18 +59,34 @@ export function OccupancyDetailPage() {
     enabled: Boolean(id) && tab === 'preplan',
   });
 
+  const hazardsText = hazardsDraft ?? occupancyQuery.data?.hazards.join('\n') ?? '';
+  const shutoffs = shutoffsDraft ?? prePlanQuery.data?.utilityShutoffs ?? [];
+  const setShutoffs = (update: (prev: UtilityShutoff[]) => UtilityShutoff[]) =>
+    setShutoffsDraft(update(shutoffs));
+  const prePlanHazardsText = prePlanHazardsDraft ?? prePlanQuery.data?.hazards.join('\n') ?? '';
+
   const hazardsMutation = useMutation({
     mutationFn: () => updateOccupancy(auth, id, { hazards: splitLines(hazardsText) }),
     onSuccess: (occupancy) => {
       queryClient.setQueryData(['inspections', 'occupancies', id], occupancy);
+      setHazardsDraft(null);
     },
   });
 
   const prePlanMutation = useMutation({
     mutationFn: async () => {
+      // The PUT replaces the whole pre-plan, so files already on file are named again (same
+      // pre-plan id, same key) or the save would drop them. Only new files are uploaded below.
+      const onFile = prePlanQuery.data;
+      const diagramOnFile = onFile?.siteDiagramS3Key ? fileNameOf(onFile.siteDiagramS3Key) : null;
+      const newNames = attachmentFiles.map((file) => file.name);
+      const keptAttachments = (onFile?.attachmentS3Keys ?? [])
+        .map(fileNameOf)
+        .filter((name) => !newNames.includes(name));
+      const siteDiagramFilename = diagramFile?.name ?? diagramOnFile;
       const result = await putPrePlan(auth, id, {
-        ...(diagramFile ? { siteDiagramFilename: diagramFile.name } : {}),
-        attachmentFilenames: attachmentFiles.map((file) => file.name),
+        ...(siteDiagramFilename ? { siteDiagramFilename } : {}),
+        attachmentFilenames: [...keptAttachments, ...newNames],
         utilityShutoffs: shutoffs,
         hazards: splitLines(prePlanHazardsText),
       });
@@ -83,6 +108,8 @@ export function OccupancyDetailPage() {
       setDiagramFile(null);
       setAttachmentFiles([]);
       await queryClient.invalidateQueries({ queryKey: ['inspections', 'preplan', id] });
+      setShutoffsDraft(null);
+      setPrePlanHazardsDraft(null);
     },
   });
 
@@ -99,7 +126,7 @@ export function OccupancyDetailPage() {
   const detailsPanel = occupancy ? (
     <>
       <Card>
-        <dl style={{ margin: 0 }}>
+        <dl className={styles.facts}>
           <dt>Type</dt>
           <dd>{occupancy.occupancyType}</dd>
           <dt>Contacts</dt>
@@ -126,7 +153,7 @@ export function OccupancyDetailPage() {
             <Textarea
               label="Hazards (one per line)"
               value={hazardsText}
-              onChange={(e) => setHazardsText(e.target.value)}
+              onChange={(e) => setHazardsDraft(e.target.value)}
             />
             <Button type="submit" loading={hazardsMutation.isPending}>
               Save hazards
@@ -149,7 +176,7 @@ export function OccupancyDetailPage() {
         <Skeleton lines={4} />
       ) : prePlanQuery.data ? (
         <Card>
-          <dl style={{ margin: 0 }}>
+          <dl className={styles.facts}>
             <dt>Site diagram</dt>
             <dd>
               {prePlanQuery.data.siteDiagramUrl ? (
@@ -164,7 +191,7 @@ export function OccupancyDetailPage() {
                 <ul>
                   {prePlanQuery.data.attachmentUrls.map((a) => (
                     <li key={a.key}>
-                      <a href={a.url}>{a.key}</a>
+                      <a href={a.url}>{fileNameOf(a.key)}</a>
                     </li>
                   ))}
                 </ul>
@@ -190,7 +217,7 @@ export function OccupancyDetailPage() {
         <p>No pre-plan is on file.</p>
       )}
 
-      {canWrite ? (
+      {canWrite && !prePlanQuery.isLoading ? (
         <Card title="Update pre-plan" style={{ marginTop: 'var(--bx-space-xl)', maxWidth: 480 }}>
           <form
             aria-label="Save pre-plan"
@@ -285,7 +312,7 @@ export function OccupancyDetailPage() {
             <Textarea
               label="Hazards (one per line)"
               value={prePlanHazardsText}
-              onChange={(e) => setPrePlanHazardsText(e.target.value)}
+              onChange={(e) => setPrePlanHazardsDraft(e.target.value)}
             />
             <Button type="submit" loading={prePlanMutation.isPending}>
               Save pre-plan

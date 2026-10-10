@@ -1,0 +1,21 @@
+.facts {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: var(--bx-space-sm) var(--bx-space-lg);
+  margin: 0;
+  font-size: 14px;
+}
+
+.facts dt {
+  color: var(--bx-fg-muted);
+}
+
+.facts dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.facts ul {
+  margin: 0;
+  padding-left: var(--bx-space-md);
+}

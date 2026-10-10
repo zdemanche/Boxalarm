@@ -94,7 +94,8 @@ test('occupancy detail shows address, type, contacts, hazards after create (AC1,
   await screen.findByRole('heading', { name: '9 Elm St' });
   expect(screen.getByText('Residential')).toBeTruthy();
   expect(screen.getByText('Pat Doyle (Owner) 203-555-0100')).toBeTruthy();
-  expect(screen.getByText('Propane tank')).toBeTruthy();
+  // Scoped to the details list: the hazards editor below is pre-filled with the same text.
+  expect(screen.getByText('Propane tank', { selector: 'dd' })).toBeTruthy();
 });
 
 test('a member without write permission sees no create controls (AC4)', async () => {
