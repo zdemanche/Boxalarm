@@ -98,7 +98,7 @@ test('a MEMBER sees their inbox, digest items, and read state', async () => {
   renderWithProviders(<NotificationsPage />);
 
   expect(await screen.findByText('Your certifications expiring')).toBeTruthy();
-  expect(screen.getByText('EMR-1 expires 2026-10-14')).toBeTruthy();
+  expect(screen.getByText(/^EMR-1 expires Oct 14, 2026$/)).toBeTruthy();
   expect(screen.getByText('Department certifications expiring')).toBeTruthy();
   // Only the unread notification offers "Mark read".
   expect(screen.getAllByRole('button', { name: /^Mark ".*" from .* read$/ })).toHaveLength(1);

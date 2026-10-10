@@ -17,7 +17,7 @@ import {
 } from '../../components/ui';
 import { ClipboardList, LayoutDashboard } from '../../components/ui/icons';
 import { ApiError } from '../../lib/apiClient';
-import { formatCalendarDate, formatElapsed } from '../../lib/dates';
+import { formatCalendarDate, formatElapsed, parseCalendarDate } from '../../lib/dates';
 import { canAccessPath } from '../../routing/routeTable';
 import {
   getDashboard,
@@ -484,7 +484,7 @@ function MembershipTrendsPanel() {
                     rowKey={(r) => r.bucket}
                     rows={trends.buckets}
                     columns={[
-                      { key: 'month', header: 'Month', render: (r) => r.bucket },
+                      { key: 'month', header: 'Month', render: (r) => formatMonth(r.bucket) },
                       {
                         key: 'active',
                         header: 'Active members',
@@ -720,6 +720,16 @@ function LosapYearEndPanel() {
  * /reporting — the chief/officer reports (F8.1-F8.7). Each tab owns its own filters and query,
  * and Radix unmounts inactive tabs, so only the report on screen is fetched.
  */
+
+/** A "YYYY-MM" bucket as "Aug 2026"; anything else is shown as sent. */
+function formatMonth(bucket: string): string {
+  if (!/^\d{4}-\d{2}$/.test(bucket)) return bucket;
+  return parseCalendarDate(`${bucket}-01`).toLocaleDateString(undefined, {
+    month: 'short',
+    year: 'numeric',
+  });
+}
+
 export function ReportingPage() {
   return (
     <main id="main-content">

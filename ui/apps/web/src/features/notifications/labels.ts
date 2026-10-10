@@ -1,5 +1,6 @@
 import type { Role } from '../../auth/roles';
 import type { NotificationDigestItem } from './types';
+import { formatCalendarDate } from '../../lib/dates';
 
 /**
  * Human labels for the categories notification-service writes (backend
@@ -77,12 +78,14 @@ export function preferencesFor(roles: readonly Role[]): ReminderPreference[] {
   );
 }
 
-/** One inbox item as text: "E1 hose test due 2026-10-20". Pre-category items carry certId. */
+/** One inbox item as text. Titled items read as the server wrote them; pre-category items carry
+ * only certId + expiryDate, which read "CPR-9 expires Sep 30, 2026". */
 export function itemText(item: NotificationDigestItem): string {
   if (item.title) {
     return item.detail ? `${item.title} ${item.detail}` : item.title;
   }
-  return `${item.certId ?? ''} expires ${item.expiryDate ?? ''}`.trim();
+  const expires = item.expiryDate ? formatCalendarDate(item.expiryDate) : '';
+  return `${item.certId ?? ''} expires ${expires}`.trim();
 }
 
 /** The in-app route an item links to, when there is one. */

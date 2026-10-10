@@ -10,6 +10,7 @@ import type { MemberDevice } from '../platform/types';
 import { updateMemberEmail } from './api';
 import type { Member } from './types';
 import styles from './MemberDetailPage.module.css';
+import { formatDateTime } from '../../lib/dates';
 
 /** Mirrors the Cedar policy for both actions (ADMIN_ONLY_ACTIONS: CHIEF/ADMIN). */
 export function canUseAccountKillSwitches(roles: readonly string[]): boolean {
@@ -56,7 +57,7 @@ export function deviceLostMessage(
 export function describeDevice(device: MemberDevice): string {
   const parts = [platformName(device.platform)];
   if (device.registeredAt !== null) {
-    parts.push(`registered ${new Date(device.registeredAt).toLocaleString()}`);
+    parts.push(`registered ${formatDateTime(device.registeredAt)}`);
   }
   if (device.deviceId !== null) {
     parts.push(`id …${device.deviceId.slice(-6)}`);

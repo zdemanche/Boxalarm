@@ -11,6 +11,7 @@ import { listCertifications } from '../features/training/api';
 import type { Certification } from '../features/training/types';
 import { useStations } from '../lib/useStations';
 import styles from './LandingPage.module.css';
+import { formatCalendarDate } from '../lib/dates';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const SHIFT_HORIZON_DAYS = 7;
@@ -44,7 +45,7 @@ function CertLine({ cert, now }: { cert: Certification; now: number }) {
   return (
     <li className={styles.listItem}>
       <strong>{cert.certType}</strong> <StatusChip status={role}>{word}</StatusChip>
-      <span className={styles.meta}> · expires {cert.expiryDate}</span>
+      <span className={styles.meta}> · expires {formatCalendarDate(cert.expiryDate)}</span>
     </li>
   );
 }
