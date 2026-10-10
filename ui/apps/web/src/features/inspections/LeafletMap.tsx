@@ -3,6 +3,7 @@ import { DivIcon } from 'leaflet';
 import { MapContainer, Marker, Popup, TileLayer, useMap } from 'react-leaflet';
 import 'leaflet/dist/leaflet.css';
 import type { BoundingBox, MapHydrant, MapOccupancy } from './types';
+import styles from './LeafletMap.module.css';
 
 // Colour + glyph, matching StatusChip's status roles (never colour alone, N7.1) — plain SVG
 // divIcons so no default Leaflet marker image assets need bundling.
@@ -56,6 +57,7 @@ export function LeafletMap({ bbox, occupancies, hydrants, onOccupancySelect }: L
     >
       <FitBounds bbox={bbox} />
       <TileLayer
+        className={styles.tiles}
         attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
         url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
       />

@@ -875,7 +875,7 @@ test('the review checklist lists blocking before warnings, goes to the field, an
   expect(panel.getByText('Fire: not checked')).toBeTruthy();
   expect(modes).toEqual(['local']);
 
-  await user.click(panel.getByRole('button', { name: 'Go to Units' }));
+  await user.click(panel.getByRole('button', { name: 'Go to Apparatus and personnel' }));
   await waitFor(() =>
     expect(document.activeElement).toBe(screen.getByLabelText('Arrived for Truck 304')),
   );
@@ -994,7 +994,7 @@ test('a lock refused with 409 VALIDATION_BLOCKED shows the returned blocking lis
   expect(panel.getByText('Core: incomplete')).toBeTruthy();
   expect(screen.queryByText(/edits are closed/)).toBeNull();
 
-  await user.click(panel.getByRole('button', { name: 'Go to Core' }));
+  await user.click(panel.getByRole('button', { name: 'Go to Incident type and actions' }));
   await waitFor(() => expect(document.activeElement).toBe(screen.getByLabelText('Action taken')));
 });
 

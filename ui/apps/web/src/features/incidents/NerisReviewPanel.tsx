@@ -58,12 +58,16 @@ export function NerisReviewPanel({
   incident,
   onPatched,
   onGoTo,
+  stepTitleFor,
 }: {
   incident: IncidentDetail;
   /** Merge a server response into the cached incident. */
   onPatched: (patch: Partial<IncidentDetail>) => void;
   /** Move to the report step (and field) an issue points at. */
   onGoTo: (issue: ValidationIssue) => void;
+  /** The editor step an issue opens, so "Go to" names a step that exists ("Apparatus and
+   * personnel", not the validator's "Units"). Falls back to the section name. */
+  stepTitleFor?: (issue: ValidationIssue) => string | undefined;
 }) {
   const auth = useAuth();
   const queryClient = useQueryClient();
@@ -227,7 +231,7 @@ export function NerisReviewPanel({
             aria-describedby={messageId}
             onClick={() => onGoTo(issue)}
           >
-            Go to {SECTION_LABEL[issue.section]}
+            Go to {stepTitleFor?.(issue) ?? SECTION_LABEL[issue.section]}
           </Button>
           {issue.fix && !locked ? (
             <Button

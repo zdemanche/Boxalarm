@@ -271,7 +271,7 @@ test('"Go to" on a MODULE_REQUIRED item opens the step and focuses that module e
   renderReport();
   const panel = within(await screen.findByRole('region', { name: /blocking lock/ }));
   expect(await panel.findByText('Structure fires need the fire alarm.')).toBeTruthy();
-  await user.click(panel.getByRole('button', { name: 'Go to Fire' }));
+  await user.click(panel.getByRole('button', { name: 'Go to Fire protection systems' }));
 
   expect(
     await screen.findByRole('heading', { level: 2, name: 'Fire protection systems' }),

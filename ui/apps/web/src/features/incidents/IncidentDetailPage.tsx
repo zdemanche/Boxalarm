@@ -640,7 +640,14 @@ function IncidentReport({ incident }: { incident: IncidentDetail }) {
               ))}
             </ul>
           ) : null}
-          <NerisReviewPanel incident={incident} onPatched={applyReviewPatch} onGoTo={goToIssue} />
+          <NerisReviewPanel
+            incident={incident}
+            onPatched={applyReviewPatch}
+            onGoTo={goToIssue}
+            stepTitleFor={(issue) =>
+              steps.find((item) => item.id === focusTargetFor(issue).stepId)?.title
+            }
+          />
         </aside>
       </div>
     </main>

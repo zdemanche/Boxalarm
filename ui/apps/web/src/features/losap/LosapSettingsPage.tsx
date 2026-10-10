@@ -2,6 +2,7 @@ import { FormEvent, useState } from 'react';
 import { useMutation } from '@tanstack/react-query';
 import { useAuth } from '../../auth/AuthContext';
 import { Button, Card, PageHeader, TextInput } from '../../components/ui';
+import { canAccessPath } from '../../routing/routeTable';
 import type { AttendanceActivityType } from '../personnel/types';
 import { updateLosapRules } from './api';
 
@@ -40,7 +41,15 @@ export function LosapSettingsPage() {
     <main id="main-content">
       <PageHeader
         title="LOSAP point rules"
-        breadcrumbs={[{ label: 'Settings', to: '/settings' }, { label: 'LOSAP' }]}
+        // A chief can edit LOSAP rules but not open /settings (ADMIN only); a linked crumb
+        // would dead-end them on Forbidden.
+        breadcrumbs={[
+          {
+            label: 'Settings',
+            to: canAccessPath('/settings', auth.roles) ? '/settings' : undefined,
+          },
+          { label: 'LOSAP' },
+        ]}
       />
       <Card>
         <form
