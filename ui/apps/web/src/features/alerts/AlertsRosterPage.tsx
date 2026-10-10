@@ -13,6 +13,7 @@ import {
   Textarea,
   TextInput,
 } from '../../components/ui';
+import { AlertTriangle } from '../../components/ui/icons';
 import {
   assignRidingSeat,
   getDispatch,
@@ -679,21 +680,43 @@ function ActiveCallRow({ dispatch, onOpen }: { dispatch: ActiveDispatch; onOpen:
         alignItems: 'center',
         justifyContent: 'space-between',
         gap: 'var(--bx-space-sm)',
-        padding: 'var(--bx-space-sm) 0',
+        padding: 'var(--bx-space-md) 0',
         borderTop: '1px solid var(--bx-border-decorative)',
       }}
     >
-      <div>
-        <strong>{dispatch.incidentType ?? 'Unknown call type'}</strong>
-        {' — '}
-        {dispatch.address ?? 'No address on the dispatch'}
-        {dispatch.crossStreets ? ` (${dispatch.crossStreets})` : null}
-        <div style={{ color: 'var(--bx-fg-muted)', fontSize: 14 }}>
-          dispatched {formatClock(dispatch.dispatchedAt)} · tone {ladder.currentToneSequence} ·{' '}
-          {ladderLabel(ladder.status)}
-        </div>
+      <div style={{ display: 'grid', gap: 2, minWidth: 0, flex: '1 1 280px' }}>
+        {/* design.md §2.3: active dispatch = alarm colour + triangle + the word, as on the
+            dashboard's Active calls card. */}
+        <span
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 'var(--bx-space-xs)',
+            color: 'var(--bx-status-danger)',
+            fontSize: 13,
+            fontWeight: 600,
+          }}
+        >
+          <AlertTriangle size={14} aria-hidden="true" />
+          Dispatched{' '}
+          <span style={{ fontFamily: 'var(--bx-font-mono)' }}>
+            {formatClock(dispatch.dispatchedAt)}
+          </span>
+          <span style={{ color: 'var(--bx-fg-muted)' }}>
+            · tone {ladder.currentToneSequence} · {ladderLabel(ladder.status)}
+          </span>
+        </span>
+        <strong style={{ fontSize: 'var(--boxalarm-type-heading-size)' }}>
+          {dispatch.incidentType ?? 'Unknown call type'}
+        </strong>
+        <span style={{ overflowWrap: 'anywhere' }}>
+          {dispatch.address ?? 'No address on the dispatch'}
+          {dispatch.crossStreets ? (
+            <span style={{ color: 'var(--bx-fg-muted)' }}> ({dispatch.crossStreets})</span>
+          ) : null}
+        </span>
       </div>
-      <Button variant="primary" size="sm" onClick={onOpen}>
+      <Button variant="primary" onClick={onOpen}>
         Open roster
       </Button>
     </li>
@@ -713,8 +736,16 @@ function ActiveCallsCard({ onOpen }: { onOpen: (dispatchId: string) => void }) {
     refetchInterval: REFETCH_INTERVAL_MS,
   });
 
+  const hasLiveCalls = !query.error && (query.data?.dispatches.length ?? 0) > 0;
   return (
-    <Card title="Active calls" style={{ marginBottom: 'var(--bx-space-lg)' }}>
+    <Card
+      title="Active calls"
+      style={{
+        marginBottom: 'var(--bx-space-lg)',
+        // design.md §2.6 elevation.alarm - a live call only.
+        ...(hasLiveCalls ? { border: '2px solid var(--bx-status-danger)' } : {}),
+      }}
+    >
       {query.isLoading ? <Skeleton lines={2} /> : null}
       {query.error ? (
         <p role="status">
