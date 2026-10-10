@@ -157,7 +157,7 @@ function ManualEntryForm({ onCreated }: { onCreated: (dispatchId: string) => voi
   return (
     <Card
       title="Enter dispatch manually"
-      style={{ maxWidth: 480, marginBottom: 'var(--bx-space-xl)' }}
+      style={{ maxWidth: 880, marginBottom: 'var(--bx-space-xl)' }}
     >
       <form
         aria-label="Enter dispatch manually"
@@ -180,7 +180,13 @@ function ManualEntryForm({ onCreated }: { onCreated: (dispatchId: string) => voi
               .filter(Boolean),
           });
         }}
-        style={{ display: 'grid', gap: 'var(--bx-space-md)' }}
+        // Short fields pair up on a desk-width screen so the fallback form isn't a page-long
+        // column; narrative and submit always span the row.
+        style={{
+          display: 'grid',
+          gridTemplateColumns: 'repeat(auto-fit, minmax(min(240px, 100%), 1fr))',
+          gap: 'var(--bx-space-md)',
+        }}
       >
         {(
           [
@@ -212,13 +218,15 @@ function ManualEntryForm({ onCreated }: { onCreated: (dispatchId: string) => voi
           value={unitsText}
           onChange={(e) => setUnitsText(e.target.value)}
         />
-        <Textarea
-          label="Narrative"
-          required
-          value={form.narrative}
-          onChange={(e) => setForm((prev) => ({ ...prev, narrative: e.target.value }))}
-          error={errorFor('narrative')}
-        />
+        <div style={{ gridColumn: '1 / -1' }}>
+          <Textarea
+            label="Narrative"
+            required
+            value={form.narrative}
+            onChange={(e) => setForm((prev) => ({ ...prev, narrative: e.target.value }))}
+            error={errorFor('narrative')}
+          />
+        </div>
         <TextInput
           label="Operator-entered reference"
           required
@@ -227,13 +235,15 @@ function ManualEntryForm({ onCreated }: { onCreated: (dispatchId: string) => voi
           error={errorFor('externalDispatchId')}
         />
         {formError ? (
-          <p role="alert" aria-live="assertive">
+          <p role="alert" aria-live="assertive" style={{ gridColumn: '1 / -1', margin: 0 }}>
             {formError}
           </p>
         ) : null}
-        <Button type="submit" loading={mutation.isPending}>
-          {mutation.isPending ? 'Submitting…' : 'Submit dispatch'}
-        </Button>
+        <div style={{ gridColumn: '1 / -1' }}>
+          <Button type="submit" loading={mutation.isPending}>
+            {mutation.isPending ? 'Submitting…' : 'Submit dispatch'}
+          </Button>
+        </div>
       </form>
     </Card>
   );
@@ -784,18 +794,38 @@ export function AlertsRosterPage() {
           <ManualEntryForm onCreated={(id) => setSearchParams({ dispatchId: id })} />
         ) : null}
 
-        <TextInput
-          label="Dispatch ID"
-          defaultValue={dispatchId ?? ''}
-          onKeyDown={(e) => {
-            if (e.key !== 'Enter') return;
-            const value = (e.target as HTMLInputElement).value.trim();
+        {/* Was Enter-only with no visible way to submit. */}
+        <form
+          aria-label="Open a call by dispatch ID"
+          onSubmit={(event: FormEvent<HTMLFormElement>) => {
+            event.preventDefault();
+            const value = String(new FormData(event.currentTarget).get('dispatchId') ?? '').trim();
             if (value) setSearchParams({ dispatchId: value });
           }}
-          style={{ maxWidth: 320, marginBottom: 'var(--bx-space-lg)' }}
-        />
+          style={{
+            display: 'flex',
+            flexWrap: 'wrap',
+            alignItems: 'flex-end',
+            gap: 'var(--bx-space-sm)',
+            marginBottom: 'var(--bx-space-lg)',
+          }}
+        >
+          <TextInput
+            key={dispatchId ?? ''}
+            label="Dispatch ID"
+            name="dispatchId"
+            defaultValue={dispatchId ?? ''}
+            style={{ width: 320, maxWidth: '100%' }}
+          />
+          <Button type="submit" variant="secondary">
+            Open
+          </Button>
+        </form>
         {!dispatchId ? (
-          <p>Enter a dispatch ID to see its roster, receipts, and riding board.</p>
+          <p style={{ color: 'var(--bx-fg-muted)', fontSize: 14, marginTop: 0 }}>
+            Opens any call&rsquo;s roster, receipts, and riding board — including one past the
+            active window.
+          </p>
         ) : null}
       </div>
     </main>
