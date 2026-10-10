@@ -23,6 +23,7 @@ import {
 } from './api';
 import type { AssignedToType, LifecycleStatus } from './types';
 import { humanize } from '../../lib/labels';
+import { useAssignmentLabel } from './useAssignmentLabel';
 
 const NEXT_LIFECYCLE: Record<LifecycleStatus, readonly LifecycleStatus[]> = {
   ACQUIRED: ['IN_SERVICE', 'RETIRED'],
@@ -38,6 +39,8 @@ export function EquipmentDetailPage() {
   const [assignedToType, setAssignedToType] = useState<AssignedToType>('MEMBER');
   const [assignedToId, setAssignedToId] = useState('');
   const [location, setLocation] = useState('');
+
+  const assignmentLabel = useAssignmentLabel();
 
   const assetQuery = useQuery({
     queryKey: ['inventory', 'equipment', assetId],
@@ -119,11 +122,7 @@ export function EquipmentDetailPage() {
               <dt>Location</dt>
               <dd>{asset.location || '—'}</dd>
               <dt>Assignment</dt>
-              <dd>
-                {asset.assignedToType
-                  ? `${asset.assignedToType} · ${asset.assignedToId}`
-                  : 'Unassigned'}
-              </dd>
+              <dd>{assignmentLabel(asset.assignedToType, asset.assignedToId)}</dd>
             </dl>
           </Card>
 
@@ -218,7 +217,7 @@ export function EquipmentDetailPage() {
                         loading={lifecycleMutation.isPending}
                         onClick={() => lifecycleMutation.mutate(target)}
                       >
-                        Move to {target}
+                        Move to {humanize(target)}
                       </Button>
                     ))}
                   </div>

@@ -1,6 +1,7 @@
 import { FormEvent, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
+import type { StatusRole } from '@boxalarm/design-tokens';
 import { useAuth } from '../../auth/AuthContext';
 import { canManageInventory } from '../../auth/roles';
 import { ApiForbiddenGate } from '../../components/ApiForbiddenGate';
@@ -18,12 +19,26 @@ import {
 } from '../../components/ui';
 import { createEquipmentAsset, listConsumables, listEquipment } from './api';
 import { RestockConsumableControl } from './RestockConsumableControl';
-import type { ConsumableStock, CreateEquipmentAssetInput, EquipmentAsset } from './types';
+import type {
+  ConsumableStock,
+  CreateEquipmentAssetInput,
+  EquipmentAsset,
+  LifecycleStatus,
+} from './types';
+import { humanize } from '../../lib/labels';
+import { useAssignmentLabel } from './useAssignmentLabel';
 
 const emptyForm: CreateEquipmentAssetInput = { serialNumber: '', location: '' };
+
+const LIFECYCLE_STATUS: Record<LifecycleStatus, StatusRole> = {
+  ACQUIRED: 'info',
+  IN_SERVICE: 'ok',
+  RETIRED: 'neutral',
+};
 type Tab = 'equipment' | 'consumables';
 
 export function EquipmentPage() {
+  const assignmentLabel = useAssignmentLabel();
   const auth = useAuth();
   const queryClient = useQueryClient();
   const canWrite = canManageInventory(auth.roles);
@@ -77,9 +92,17 @@ export function EquipmentPage() {
     {
       key: 'assignment',
       header: 'Assignment',
-      render: (a) => (a.assignedToType ? `${a.assignedToType} · ${a.assignedToId}` : 'Unassigned'),
+      render: (a) => assignmentLabel(a.assignedToType, a.assignedToId),
     },
-    { key: 'lifecycleStatus', header: 'Lifecycle', render: (a) => a.lifecycleStatus },
+    {
+      key: 'lifecycleStatus',
+      header: 'Lifecycle',
+      render: (a) => (
+        <StatusChip status={LIFECYCLE_STATUS[a.lifecycleStatus]}>
+          {humanize(a.lifecycleStatus)}
+        </StatusChip>
+      ),
+    },
   ];
 
   const consumableColumns: DataTableColumn<ConsumableStock>[] = [
