@@ -1,4 +1,4 @@
-import { cleanup, render, screen } from '@testing-library/react';
+import { cleanup, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { HttpResponse, http } from 'msw';
@@ -221,14 +221,17 @@ test('N10: a rejected "Mark out of service" is shown, never silent (409 conflict
   renderApp(['CHIEF'], '/inspections/hydrants');
   await screen.findByText('HYD-2');
 
+  // The action is confirmed first (design §4.5); a rejection stays in the dialog with the reason.
   await user.click(screen.getByRole('button', { name: 'Mark out of service' }));
-  expect((await screen.findByRole('alert')).textContent).toContain(
+  const dialog = await screen.findByRole('dialog', { name: 'Mark hydrant HYD-2 out of service?' });
+  await user.click(within(dialog).getByRole('button', { name: 'Mark HYD-2 out of service' }));
+  expect((await within(dialog).findByRole('alert')).textContent).toContain(
     'HYD-2 was changed by someone else just now',
   );
 
   status = 503;
-  await user.click(screen.getByRole('button', { name: 'Mark out of service' }));
-  expect((await screen.findByText(/not saved \(HTTP 503\)/)).textContent).toContain(
+  await user.click(within(dialog).getByRole('button', { name: 'Mark HYD-2 out of service' }));
+  expect((await within(dialog).findByText(/not saved \(HTTP 503\)/)).textContent).toContain(
     'Marking out of service for HYD-2 was not saved',
   );
 });
