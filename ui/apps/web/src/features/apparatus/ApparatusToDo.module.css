@@ -1,0 +1,39 @@
+.section + .section {
+  margin-top: var(--bx-space-md);
+  padding-top: var(--bx-space-md);
+  border-top: 1px solid var(--bx-border-decorative);
+}
+
+.heading {
+  margin: 0 0 var(--bx-space-xs);
+  font-size: var(--boxalarm-type-subheading-size, 15px);
+  font-weight: 600;
+  color: var(--bx-fg-muted);
+}
+
+.list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--bx-space-sm);
+  padding: var(--bx-space-xs) 0;
+  overflow-wrap: anywhere;
+}
+
+.message {
+  margin: 0;
+  color: var(--bx-fg-muted);
+  font-size: 14px;
+}
+
+.message + .message,
+.message + .list,
+.list + .message {
+  margin-top: var(--bx-space-xs);
+}

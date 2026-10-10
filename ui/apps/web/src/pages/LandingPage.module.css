@@ -1,6 +1,10 @@
 .statGrid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  /* Two-up on a phone rather than one tall tile per row. */
+  grid-template-columns: repeat(
+    auto-fit,
+    minmax(min(180px, calc(50% - var(--bx-space-md) / 2)), 1fr)
+  );
   gap: var(--bx-space-md);
   margin-top: var(--bx-space-lg);
 }
@@ -28,7 +32,68 @@
 }
 
 .callCard {
-  margin-top: var(--bx-space-lg);
+  margin-top: 0;
+}
+
+/* design.md §2.6 elevation.alarm - a live call only. */
+.callCardLive {
+  border: 2px solid var(--bx-status-danger);
+}
+
+.callList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.callRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--bx-space-sm) var(--bx-space-md);
+  padding: var(--bx-space-md) 0;
+  border-top: 1px solid var(--bx-border-decorative);
+}
+
+.callBody {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1 1 280px;
+}
+
+.callStatus {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--bx-space-xs);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--bx-status-danger);
+}
+
+.callType {
+  font-size: var(--boxalarm-type-heading-size, 18px);
+  line-height: var(--boxalarm-type-heading-lh, 26px);
+}
+
+.callAddress {
+  overflow-wrap: anywhere;
+}
+
+/* Spans the whole section grid row. */
+.wide {
+  grid-column: 1 / -1;
+}
+
+.metaLine {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--bx-space-xs) var(--bx-space-sm);
+  margin-top: 2px;
+  font-size: 14px;
 }
 
 .tileMessage {
@@ -51,7 +116,7 @@
 }
 
 .listItem {
-  padding: var(--bx-space-xs) 0;
+  padding: var(--bx-space-sm) 0;
   overflow-wrap: anywhere;
 }
 

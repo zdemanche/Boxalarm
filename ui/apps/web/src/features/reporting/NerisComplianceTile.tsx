@@ -43,7 +43,7 @@ function DraftItem({ draft, canOpen }: { draft: NerisOpenDraft; canOpen: boolean
  * Chief-dashboard tile for GET reporting/neris-compliance: on-time submission rate, rejection
  * rate and the oldest open drafts. A failed read never renders as a healthy zero.
  */
-export function NerisComplianceTile() {
+export function NerisComplianceTile({ className }: { className?: string } = {}) {
   const auth = useAuth();
   const query = useQuery({
     queryKey: ['reporting', 'neris-compliance'],
@@ -120,5 +120,9 @@ export function NerisComplianceTile() {
     );
   }
 
-  return <Card title="NERIS compliance">{body}</Card>;
+  return (
+    <Card title="NERIS compliance" className={className}>
+      {body}
+    </Card>
+  );
 }

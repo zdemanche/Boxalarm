@@ -5,6 +5,7 @@ import type { AuthTokenSource } from '../../lib/apiClient';
 import { ApiError } from '../../lib/apiClient';
 import { Card, Skeleton } from '../../components/ui';
 import { useState } from 'react';
+import styles from './ApparatusToDo.module.css';
 import { getApparatus, getCompliance, listApparatus, listOpenDefects } from './api';
 import { ResolveDefectControl, resolveWarningFor } from './ResolveDefectControl';
 import type { Apparatus, OpenDefectSummary } from './types';
@@ -114,77 +115,92 @@ export function ApparatusToDo() {
 
   return (
     <Card title="Apparatus to-do">
-      <h3 style={{ margin: 0 }}>Checks due today</h3>
-      {complianceQuery.isLoading ? (
-        <Skeleton lines={2} />
-      ) : complianceQuery.error ? (
-        <p role="status">Couldn&rsquo;t load today&rsquo;s checks. This is not an empty list.</p>
-      ) : checksDue.length === 0 ? (
-        <p>Every unit has been checked today.</p>
-      ) : (
-        <ul aria-label="Units not checked today">
-          {checksDue.map((entry) => (
-            <li key={entry.unitId}>{unitLink(entry.unitId)} — not checked yet today</li>
-          ))}
-        </ul>
-      )}
-
-      <h3 style={{ margin: 0 }}>Open defects</h3>
-      {defectsLoading ? (
-        <Skeleton lines={2} />
-      ) : defectsQuery.error ? (
-        <p role="status">Couldn&rsquo;t load open defects. This is not an empty list.</p>
-      ) : (
-        <>
-          {defects.length === 0 && defectsFailed === 0 ? <p>No open defects.</p> : null}
-          {resolveWarning ? <p role="status">{resolveWarning}</p> : null}
-          {defectsQuery.data?.truncated ? (
-            <p role="status">
-              Showing the 500 newest open defects — older ones are not listed. Resolve defects to
-              shorten this list.
-            </p>
-          ) : null}
-          {defects.length > 0 ? (
-            <ul aria-label="Open defects">
-              {defects.map(({ unitId, defect }) => (
-                <li
-                  key={defect.defectId}
-                  style={{ display: 'flex', gap: 'var(--bx-space-sm)', alignItems: 'center' }}
-                >
-                  <span>
-                    {unitLink(unitId)} — {SEVERITY_WORD[defect.severity]}: {defect.description}
-                  </span>
-                  <ResolveDefectControl
-                    unitId={unitId}
-                    defectId={defect.defectId}
-                    description={defect.description}
-                    onResolved={(result) => setResolveWarning(resolveWarningFor(unitId, result))}
-                  />
-                </li>
-              ))}
-            </ul>
-          ) : null}
-          {defectsFailed > 0 ? (
-            <p role="status">
-              Defects for {defectsFailed} {defectsFailed === 1 ? 'unit' : 'units'} couldn&rsquo;t
-              load.
-            </p>
-          ) : null}
-        </>
-      )}
-
-      {outOfService.length > 0 ? (
-        <>
-          <h3 style={{ margin: 0 }}>Out of service</h3>
-          <ul aria-label="Units out of service">
-            {outOfService.map((unit) => (
-              <li key={unit.unitId}>
-                {unitLink(unit.unitId)}
-                {unit.outOfService?.reason ? ` — ${unit.outOfService.reason}` : ''}
+      <section className={styles.section}>
+        <h3 className={styles.heading}>Checks due today</h3>
+        {complianceQuery.isLoading ? (
+          <Skeleton lines={2} />
+        ) : complianceQuery.error ? (
+          <p role="status" className={styles.message}>
+            Couldn&rsquo;t load today&rsquo;s checks. This is not an empty list.
+          </p>
+        ) : checksDue.length === 0 ? (
+          <p className={styles.message}>Every unit has been checked today.</p>
+        ) : (
+          <ul aria-label="Units not checked today" className={styles.list}>
+            {checksDue.map((entry) => (
+              <li key={entry.unitId} className={styles.item}>
+                <span>{unitLink(entry.unitId)} — not checked yet today</span>
               </li>
             ))}
           </ul>
-        </>
+        )}
+      </section>
+
+      <section className={styles.section}>
+        <h3 className={styles.heading}>Open defects</h3>
+        {defectsLoading ? (
+          <Skeleton lines={2} />
+        ) : defectsQuery.error ? (
+          <p role="status" className={styles.message}>
+            Couldn&rsquo;t load open defects. This is not an empty list.
+          </p>
+        ) : (
+          <>
+            {defects.length === 0 && defectsFailed === 0 ? (
+              <p className={styles.message}>No open defects.</p>
+            ) : null}
+            {resolveWarning ? (
+              <p role="status" className={styles.message}>
+                {resolveWarning}
+              </p>
+            ) : null}
+            {defectsQuery.data?.truncated ? (
+              <p role="status" className={styles.message}>
+                Showing the 500 newest open defects — older ones are not listed. Resolve defects to
+                shorten this list.
+              </p>
+            ) : null}
+            {defects.length > 0 ? (
+              <ul aria-label="Open defects" className={styles.list}>
+                {defects.map(({ unitId, defect }) => (
+                  <li key={defect.defectId} className={styles.item}>
+                    <span>
+                      {unitLink(unitId)} — {SEVERITY_WORD[defect.severity]}: {defect.description}
+                    </span>
+                    <ResolveDefectControl
+                      unitId={unitId}
+                      defectId={defect.defectId}
+                      description={defect.description}
+                      onResolved={(result) => setResolveWarning(resolveWarningFor(unitId, result))}
+                    />
+                  </li>
+                ))}
+              </ul>
+            ) : null}
+            {defectsFailed > 0 ? (
+              <p role="status" className={styles.message}>
+                Defects for {defectsFailed} {defectsFailed === 1 ? 'unit' : 'units'} couldn&rsquo;t
+                load.
+              </p>
+            ) : null}
+          </>
+        )}
+      </section>
+
+      {outOfService.length > 0 ? (
+        <section className={styles.section}>
+          <h3 className={styles.heading}>Out of service</h3>
+          <ul aria-label="Units out of service" className={styles.list}>
+            {outOfService.map((unit) => (
+              <li key={unit.unitId} className={styles.item}>
+                <span>
+                  {unitLink(unit.unitId)}
+                  {unit.outOfService?.reason ? ` — ${unit.outOfService.reason}` : ''}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </section>
       ) : null}
     </Card>
   );
