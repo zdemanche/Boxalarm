@@ -2,6 +2,7 @@ import { useEffect, useId, useState, type FormEvent } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useAuth } from '../../auth/AuthContext';
 import { ApiError } from '../../lib/apiClient';
+import { canAccessPath } from '../../routing/routeTable';
 import { ApiForbiddenGate } from '../../components/ApiForbiddenGate';
 import {
   Button,
@@ -211,7 +212,15 @@ export function CadSourcesPage() {
     <main id="main-content" className={styles.page}>
       <PageHeader
         title="CAD sources"
-        breadcrumbs={[{ label: 'Settings', to: '/settings' }, { label: 'CAD sources' }]}
+        // Chiefs manage CAD sources but can't open /settings (ADMIN only); a linked crumb
+        // would dead-end them on Forbidden.
+        breadcrumbs={[
+          {
+            label: 'Settings',
+            to: canAccessPath('/settings', auth.roles) ? '/settings' : undefined,
+          },
+          { label: 'CAD sources' },
+        ]}
       />
       <Card title="How CAD dispatches reach the app">
         <p>

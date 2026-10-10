@@ -107,8 +107,13 @@ export function PersonnelListPage() {
       sortValue: (m) => m.joinDate,
       render: (m) => formatCalendarDate(m.joinDate),
     },
-    // No agency ID column: one department per deployment, so it is the same on every row.
     { key: 'rank', header: 'Rank', sortValue: (m) => m.rank, render: (m) => m.rank },
+    {
+      key: 'agencyId',
+      header: 'Agency ID',
+      sortValue: (m) => m.agencyId,
+      render: (m) => <span style={{ fontFamily: 'var(--bx-font-mono)' }}>{m.agencyId}</span>,
+    },
   ];
 
   return (
