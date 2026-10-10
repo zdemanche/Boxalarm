@@ -105,8 +105,8 @@ test('dashboard renders the real rollup figures and links a failed NERIS submiss
   expect(screen.getByText('Active members')).toBeTruthy();
   expect(screen.getByText('1 failed')).toBeTruthy();
   expect(screen.getByRole('rowheader', { name: 'Truck 304' })).toBeTruthy();
-  // 3900 s → 1:05:00
-  expect(screen.getByText('1:05:00')).toBeTruthy();
+  // An out-of-service span reads in hours/days, never as a stopwatch: 3900 s → 1 h 5 min.
+  expect(screen.getByText('1 h 5 min')).toBeTruthy();
   expect(screen.getByRole('link', { name: 'i-7' }).getAttribute('href')).toBe('/incidents/i-7');
   expect(screen.getByText('No certifications are expiring.')).toBeTruthy();
 });
@@ -129,6 +129,9 @@ test('expiring certifications show the member name when the service resolved it,
   expect(await screen.findByRole('cell', { name: 'Casey Nolan' })).toBeTruthy();
   expect(screen.getByRole('cell', { name: 'm-99' })).toBeTruthy();
   expect(screen.queryByRole('cell', { name: 'm-3' })).toBeNull();
+  // The expiry is a date a volunteer reads, not the ISO string the rollup stores.
+  expect(screen.queryByText('2026-10-25')).toBeNull();
+  expect(screen.getByRole('cell', { name: /\b25\b/ })).toBeTruthy();
 });
 
 test('dashboard with no projected events says so instead of showing zero tiles', async () => {

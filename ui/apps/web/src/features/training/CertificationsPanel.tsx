@@ -11,6 +11,7 @@ import {
   uploadCertificationAttachment,
 } from './api';
 import type { Certification, CreateCertificationInput } from './types';
+import { formatCalendarDate } from '../../lib/dates';
 import { humanize } from '../../lib/labels';
 
 const emptyForm: CreateCertificationInput = {
@@ -111,8 +112,8 @@ export function CertificationsPanel({ memberId }: { memberId: string }) {
                 borderBottom: '1px solid var(--bx-border-decorative)',
               }}
             >
-              <strong>{cert.certType}</strong> — {humanize(cert.status)} · expires {cert.expiryDate}{' '}
-              · {cert.issuingAuthority}
+              <strong>{cert.certType}</strong> — {humanize(cert.status)} · expires{' '}
+              {formatCalendarDate(cert.expiryDate)} · {cert.issuingAuthority}
               {cert.attachmentS3Key ? (
                 <>
                   {' '}

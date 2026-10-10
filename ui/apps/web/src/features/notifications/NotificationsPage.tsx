@@ -7,6 +7,7 @@ import { ForbiddenState } from '../../components/ForbiddenState';
 import { Button, Card, Checkbox, EmptyState, PageHeader, Skeleton } from '../../components/ui';
 import { Bell } from '../../components/ui/icons';
 import { ApiError } from '../../lib/apiClient';
+import { formatCalendarDate, formatDateTime, toCalendarDate } from '../../lib/dates';
 import { canAccessPath } from '../../routing/routeTable';
 import {
   getNotificationPreferences,
@@ -77,7 +78,10 @@ function NotificationRow({ notification }: { notification: InboxNotification }) 
           {title}
         </p>
         <p className={styles.itemMeta}>
-          {notification.summary} · {new Date(notification.createdAt).toLocaleString()}
+          {notification.summary} ·{' '}
+          <span style={{ fontFamily: 'var(--bx-font-mono)', whiteSpace: 'nowrap' }}>
+            {formatDateTime(notification.createdAt)}
+          </span>
           {unread ? '' : ' · Read'}
         </p>
         {notification.items.length > 0 ? (
@@ -102,7 +106,7 @@ function NotificationRow({ notification }: { notification: InboxNotification }) 
           size="sm"
           loading={markRead.isPending}
           onClick={() => markRead.mutate()}
-          aria-label={`Mark "${title}" from ${new Date(notification.createdAt).toLocaleDateString()} read`}
+          aria-label={`Mark "${title}" from ${formatCalendarDate(toCalendarDate(notification.createdAt))} read`}
         >
           Mark read
         </Button>

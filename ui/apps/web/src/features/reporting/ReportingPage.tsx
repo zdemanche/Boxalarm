@@ -17,6 +17,7 @@ import {
 } from '../../components/ui';
 import { ClipboardList, LayoutDashboard } from '../../components/ui/icons';
 import { ApiError } from '../../lib/apiClient';
+import { formatCalendarDate, formatElapsed } from '../../lib/dates';
 import { canAccessPath } from '../../routing/routeTable';
 import {
   getDashboard,
@@ -40,6 +41,9 @@ import { ACTIVITY_TYPES, type ReportName, type TimeSummary } from './types';
 import styles from './ReportingPage.module.css';
 
 const MAX_TREND_RANGE_DAYS = 731;
+
+/** Incident IDs are compared character by character, so they read in mono (design §2.4). */
+const MONO = { fontFamily: 'var(--bx-font-mono)' } as const;
 
 /** Loading → Skeleton; 403 → ForbiddenState; any other error → retryable ApiErrorState. */
 export function QueryState<T>({
@@ -159,7 +163,8 @@ function DashboardPanel() {
                       {
                         key: 'duration',
                         header: 'Out of service for',
-                        render: (r) => formatDuration(r.durationSeconds),
+                        // Days and hours: a stopwatch format would read two days as "48:00:00".
+                        render: (r) => formatElapsed(r.durationSeconds),
                       },
                     ]}
                   />
@@ -181,7 +186,7 @@ function DashboardPanel() {
                         key: 'expiry',
                         header: 'Expires',
                         sortValue: (r) => r.expiryDate,
-                        render: (r) => r.expiryDate,
+                        render: (r) => formatCalendarDate(r.expiryDate),
                       },
                     ]}
                   />
@@ -196,13 +201,18 @@ function DashboardPanel() {
                       {
                         key: 'incident',
                         header: 'Incident',
+                        // The rollup carries only the incident ID (no dispatch number), so the
+                        // ID is what the officer gets until reporting-service adds one.
                         render: (r) =>
                           canOpenIncidents ? (
-                            <Link to={`/incidents/${encodeURIComponent(r.incidentId)}`}>
+                            <Link
+                              to={`/incidents/${encodeURIComponent(r.incidentId)}`}
+                              style={MONO}
+                            >
                               {r.incidentId}
                             </Link>
                           ) : (
-                            r.incidentId
+                            <span style={MONO}>{r.incidentId}</span>
                           ),
                       },
                       {
@@ -277,7 +287,11 @@ function ResponseTimesPanel() {
                     rowKey={(r) => `${r.incidentId}-${r.unitId}`}
                     rows={report.units}
                     columns={[
-                      { key: 'incident', header: 'Incident', render: (r) => r.incidentId },
+                      {
+                        key: 'incident',
+                        header: 'Incident',
+                        render: (r) => <span style={MONO}>{r.incidentId}</span>,
+                      },
                       { key: 'unit', header: 'Unit', render: (r) => r.unitId },
                       {
                         key: 'turnout',
@@ -382,7 +396,12 @@ function IsoPanel() {
                   emptyMessage="No hydrant flow tests fall due in this period."
                   columns={[
                     { key: 'hydrant', header: 'Hydrant', render: (r) => r.hydrantId },
-                    { key: 'due', header: 'Next flow test due', render: (r) => r.nextFlowTestDue },
+                    {
+                      key: 'due',
+                      header: 'Next flow test due',
+                      sortValue: (r) => r.nextFlowTestDue,
+                      render: (r) => formatCalendarDate(r.nextFlowTestDue),
+                    },
                     {
                       key: 'current',
                       header: 'Status',

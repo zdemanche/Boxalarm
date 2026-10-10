@@ -118,13 +118,14 @@ test('expiring tab renders an empty state instead of an error when none are due'
 });
 
 test('training officer creates an event and it appears in start order; a member can sign up', async () => {
+  // Upcoming: an event that has already started offers no sign-up.
   let events: TrainingEvent[] = [
     {
       eventId: 'evt-1',
       title: 'Ladder drill',
       category: 'Ladders',
-      startAt: Date.parse('2026-06-01T18:00:00Z'),
-      endAt: Date.parse('2026-06-01T20:00:00Z'),
+      startAt: Date.parse('2099-06-01T18:00:00Z'),
+      endAt: Date.parse('2099-06-01T20:00:00Z'),
       signedUp: false,
     },
   ];
@@ -149,8 +150,8 @@ test('training officer creates an event and it appears in start order; a member 
 
   await user.type(screen.getByLabelText('Title'), 'Hose drill');
   await user.type(screen.getByLabelText('Category'), 'Hose');
-  await user.type(screen.getByLabelText('Starts'), '2026-07-01T09:00');
-  await user.type(screen.getByLabelText('Ends'), '2026-07-01T11:00');
+  await user.type(screen.getByLabelText('Starts'), '2099-07-01T09:00');
+  await user.type(screen.getByLabelText('Ends'), '2099-07-01T11:00');
   await user.click(screen.getByRole('button', { name: 'Create event' }));
   await screen.findByText('Hose drill');
   // M9: the date inputs are controlled, so a reset form really is empty and the next create
@@ -251,7 +252,10 @@ test('training officer adds a certification and can revoke it; a non-training ro
   await user.type(screen.getByLabelText('Issuing authority'), 'CT DESPP');
   await user.click(screen.getByRole('button', { name: 'Add certification' }));
 
-  await screen.findByText(/FF1/);
+  const certRow = (await screen.findByText('FF1')).closest('li')!;
+  // A volunteer reads the expiry as a date, not the ISO string the API sends.
+  expect(certRow.textContent).toMatch(/expires .*2029/);
+  expect(certRow.textContent).not.toContain('2029-01-01');
   await user.click(screen.getByRole('button', { name: 'Revoke' }));
   const dialog = await screen.findByRole('dialog', { name: 'Revoke FF1?' });
   await user.click(within(dialog).getByRole('button', { name: 'Revoke certification' }));
@@ -308,6 +312,14 @@ test('failed sign-up and failed hours recording are shown, not swallowed (m2)', 
       endAt: Date.parse('2020-01-01T20:00:00Z'),
       signedUp: false,
     },
+    {
+      eventId: 'evt-2',
+      title: 'Hose drill',
+      category: 'Hose',
+      startAt: Date.parse('2099-01-01T18:00:00Z'),
+      endAt: Date.parse('2099-01-01T20:00:00Z'),
+      signedUp: false,
+    },
   ];
   server.use(
     http.get('/api/v1/training/events', () => HttpResponse.json(events)),
@@ -331,6 +343,57 @@ test('failed sign-up and failed hours recording are shown, not swallowed (m2)', 
   await user.type(within(form).getByLabelText('Hours'), '2');
   await user.click(within(form).getByRole('button', { name: 'Record hours' }));
   expect(await within(form).findByText(/Hours not recorded/)).toBeTruthy();
+});
+
+test('a started event offers no sign-up and says why; only the clicked row shows pending', async () => {
+  const event = (eventId: string, title: string, start: string, end: string): TrainingEvent => ({
+    eventId,
+    title,
+    category: 'Drill',
+    startAt: Date.parse(start),
+    endAt: Date.parse(end),
+    signedUp: false,
+  });
+  const now = Date.now();
+  const events: TrainingEvent[] = [
+    event('evt-past', 'Ladder drill', '2020-01-01T18:00:00Z', '2020-01-01T20:00:00Z'),
+    {
+      ...event('evt-now', 'Live burn', '2020-01-01T00:00:00Z', '2020-01-01T00:00:00Z'),
+      startAt: now - 3_600_000,
+      endAt: now + 3_600_000,
+    },
+    event('evt-a', 'Hose drill', '2099-01-01T18:00:00Z', '2099-01-01T20:00:00Z'),
+    event('evt-b', 'Pump drill', '2099-02-01T18:00:00Z', '2099-02-01T20:00:00Z'),
+  ];
+  let requested = false;
+  let release: () => void = () => undefined;
+  server.use(
+    http.get('/api/v1/training/events', () => HttpResponse.json(events)),
+    http.post('/api/v1/training/events/:eventId/signup', async () => {
+      requested = true;
+      await new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      return HttpResponse.json({ eventId: 'evt-a' }, { status: 201 });
+    }),
+  );
+
+  const user = userEvent.setup();
+  renderPage(<TrainingEventsPage />, ['TRAINING'], '/training/events');
+  const pastRow = (await screen.findByText('Ladder drill')).closest('li')!;
+  expect(within(pastRow).queryByRole('button', { name: 'Sign up' })).toBeNull();
+  expect(pastRow.textContent).toContain('Sign-up closed: the event is over');
+  const runningRow = screen.getByText('Live burn').closest('li')!;
+  expect(within(runningRow).queryByRole('button', { name: 'Sign up' })).toBeNull();
+  expect(runningRow.textContent).toContain('Sign-up closed: the event has started');
+
+  const [hose, pump] = screen.getAllByRole('button', { name: 'Sign up' });
+  expect(screen.getByText('Hose drill').closest('li')!.contains(hose!)).toBe(true);
+  await user.click(hose!);
+  await waitFor(() => expect(requested).toBe(true));
+  expect(hose!.getAttribute('aria-busy')).toBe('true');
+  expect(pump!.getAttribute('aria-busy')).toBeNull();
+  release();
 });
 
 test('a failed transcript export is reported instead of an unhandled rejection (m2)', async () => {

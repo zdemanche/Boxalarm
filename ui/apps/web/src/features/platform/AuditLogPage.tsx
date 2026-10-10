@@ -11,8 +11,11 @@ import {
   TextInput,
   type DataTableColumn,
 } from '../../components/ui';
+import { formatDateTime } from '../../lib/dates';
 import { getAuditTrail } from './api';
 import type { AuditEntry } from './types';
+
+const MONO = { fontFamily: 'var(--bx-font-mono)' } as const;
 
 interface Query {
   entityType: string;
@@ -52,9 +55,14 @@ export function AuditLogPage() {
   const validationDetail =
     error instanceof ApiError && error.problem.status === 400 ? error.problem.detail : null;
 
+  // Timestamps and IDs are compared character by character, so they read in mono (design §2.4).
   const columns: DataTableColumn<AuditEntry>[] = [
-    { key: 'ts', header: 'Timestamp', render: (e) => new Date(e.ts).toLocaleString() },
-    { key: 'actorId', header: 'Actor', render: (e) => e.actorId },
+    {
+      key: 'ts',
+      header: 'Timestamp',
+      render: (e) => <span style={{ ...MONO, whiteSpace: 'nowrap' }}>{formatDateTime(e.ts)}</span>,
+    },
+    { key: 'actorId', header: 'Actor', render: (e) => <span style={MONO}>{e.actorId}</span> },
     { key: 'action', header: 'Action', render: (e) => e.action },
     {
       key: 'changedFields',

@@ -4,6 +4,7 @@ import { useAuth } from '../../auth/AuthContext';
 import { canManageTraining } from '../../auth/roles';
 import { ApiForbiddenGate } from '../../components/ApiForbiddenGate';
 import { Button, Card, PageHeader, Skeleton, TextInput } from '../../components/ui';
+import { formatDateTime } from '../../lib/dates';
 import { createTrainingEvent, listTrainingEvents, recordEventHours, signUpForEvent } from './api';
 import type { TrainingEvent } from './types';
 
@@ -135,34 +136,50 @@ export function TrainingEventsPage() {
         <Skeleton lines={4} />
       ) : (
         <ul style={{ listStyle: 'none', margin: 'var(--bx-space-lg) 0', padding: 0 }}>
-          {events.map((event) => (
-            <li
-              key={event.eventId}
-              style={{
-                padding: 'var(--bx-space-md) 0',
-                borderBottom: '1px solid var(--bx-border-decorative)',
-              }}
-            >
-              <strong>{event.title}</strong> ({event.category}) —{' '}
-              {new Date(event.startAt).toLocaleString()}
-              {event.signedUp ? ' · Signed up' : ''}
-              {!event.signedUp ? (
-                <>
-                  {' '}
-                  <Button
-                    type="button"
-                    variant="secondary"
-                    size="sm"
-                    onClick={() => signUpMutation.mutate(event.eventId)}
-                    loading={signUpMutation.isPending}
-                  >
-                    Sign up
-                  </Button>
-                </>
-              ) : null}
-              {isTraining && event.startAt <= now ? <HoursForm event={event} /> : null}
-            </li>
-          ))}
+          {events.map((event) => {
+            const started = event.startAt <= now;
+            return (
+              <li
+                key={event.eventId}
+                style={{
+                  padding: 'var(--bx-space-md) 0',
+                  borderBottom: '1px solid var(--bx-border-decorative)',
+                }}
+              >
+                <strong>{event.title}</strong> ({event.category}) —{' '}
+                <span style={{ fontFamily: 'var(--bx-font-mono)', whiteSpace: 'nowrap' }}>
+                  {formatDateTime(event.startAt)}
+                </span>
+                {event.signedUp ? (
+                  ' · Signed up'
+                ) : started ? (
+                  // Signing up for a drill that has already begun is no use to the officer
+                  // running it: say why the button is gone rather than leave a dead control.
+                  <span style={{ color: 'var(--bx-fg-muted)' }}>
+                    {' '}
+                    · Sign-up closed: the event {now >= event.endAt ? 'is over' : 'has started'}
+                  </span>
+                ) : (
+                  <>
+                    {' '}
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      size="sm"
+                      onClick={() => signUpMutation.mutate(event.eventId)}
+                      // Only the row that was clicked spins; the others stay usable.
+                      loading={
+                        signUpMutation.isPending && signUpMutation.variables === event.eventId
+                      }
+                    >
+                      Sign up
+                    </Button>
+                  </>
+                )}
+                {isTraining && started ? <HoursForm event={event} /> : null}
+              </li>
+            );
+          })}
           {events.length === 0 ? <li>No training events scheduled.</li> : null}
         </ul>
       )}
