@@ -78,7 +78,9 @@ export function HydrantsPage() {
   const [form, setForm] = useState<HydrantForm>(emptyForm);
   const [formError, setFormError] = useState<string | null>(null);
   const [updateError, setUpdateError] = useState<string | null>(null);
+  // The target outlives the open flag so the dialog's title doesn't blank while it closes.
   const [oosTarget, setOosTarget] = useState<Hydrant | null>(null);
+  const [oosOpen, setOosOpen] = useState(false);
 
   const listQuery = useQuery({
     queryKey: ['inspections', 'hydrants'],
@@ -197,7 +199,10 @@ export function HydrantsPage() {
                     type="button"
                     variant="secondary"
                     size="sm"
-                    onClick={() => setOosTarget(h)}
+                    onClick={() => {
+                      setOosTarget(h);
+                      setOosOpen(true);
+                    }}
                   >
                     Mark out of service
                   </Button>
@@ -232,10 +237,8 @@ export function HydrantsPage() {
           naming the hydrant and the consequence (design §4.5). A failed update stays in the
           dialog with the reason instead of closing blind. */}
       <ConfirmDialog
-        open={oosTarget !== null}
-        onOpenChange={(open) => {
-          if (!open) setOosTarget(null);
-        }}
+        open={oosOpen}
+        onOpenChange={setOosOpen}
         title={`Mark hydrant ${oosTarget?.hydrantId ?? ''} out of service?`}
         consequence={`${oosTarget?.hydrantId ?? 'This hydrant'} will show as out of service in the hydrant registry and on the inspections map. Recording a flow test puts it back in service.`}
         confirmLabel={`Mark ${oosTarget?.hydrantId ?? 'hydrant'} out of service`}

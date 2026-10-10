@@ -115,7 +115,6 @@ export function MemberStatusSection({ member }: { member: Member }) {
       <div className={styles.inlineForm} style={{ marginTop: 'var(--bx-space-sm)' }}>
         <Select
           label={reinstating ? 'Reinstate as' : 'New status'}
-          aria-label="New member status"
           value={selected}
           onChange={(e) => setChoice(e.target.value as MemberStatus | '')}
           style={{ minWidth: 200 }}

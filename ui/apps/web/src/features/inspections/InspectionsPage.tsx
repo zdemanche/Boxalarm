@@ -306,12 +306,7 @@ export function InspectionsPage() {
               </p>
             ) : null}
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 'var(--bx-space-sm)' }}>
-              <Button
-                type="button"
-                variant="secondary"
-                disabled={conductMutation.isPending}
-                onClick={() => setConducting(null)}
-              >
+              <Button type="button" variant="secondary" onClick={() => setConducting(null)}>
                 Cancel
               </Button>
               <Button type="submit" loading={conductMutation.isPending}>

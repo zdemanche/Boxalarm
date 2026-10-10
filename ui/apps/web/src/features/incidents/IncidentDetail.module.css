@@ -63,6 +63,11 @@
     width: auto;
     white-space: nowrap;
   }
+
+  /* The scroll container clips anything outside it; draw the focus ring inside the button. */
+  .stepButton:focus-visible {
+    outline-offset: -3px;
+  }
 }
 
 .panel {

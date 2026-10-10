@@ -15,6 +15,7 @@ import type {
   ResponseTimesReport,
   ReportExportJob,
 } from './types';
+import { formatCalendarDate } from '../../lib/dates';
 
 const server = setupServer();
 beforeAll(() => server.listen({ onUnhandledRequest: 'error' }));
@@ -131,7 +132,7 @@ test('expiring certifications show the member name when the service resolved it,
   expect(screen.queryByRole('cell', { name: 'm-3' })).toBeNull();
   // The expiry is a date a volunteer reads, not the ISO string the rollup stores.
   expect(screen.queryByText('2026-10-25')).toBeNull();
-  expect(screen.getByRole('cell', { name: /\b25\b/ })).toBeTruthy();
+  expect(screen.getByRole('cell', { name: formatCalendarDate('2026-10-25') })).toBeTruthy();
 });
 
 test('dashboard with no projected events says so instead of showing zero tiles', async () => {

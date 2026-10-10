@@ -716,11 +716,6 @@ function LosapYearEndPanel() {
   );
 }
 
-/**
- * /reporting — the chief/officer reports (F8.1-F8.7). Each tab owns its own filters and query,
- * and Radix unmounts inactive tabs, so only the report on screen is fetched.
- */
-
 /** A "YYYY-MM" bucket as "Aug 2026"; anything else is shown as sent. */
 function formatMonth(bucket: string): string {
   if (!/^\d{4}-\d{2}$/.test(bucket)) return bucket;
@@ -730,6 +725,10 @@ function formatMonth(bucket: string): string {
   });
 }
 
+/**
+ * /reporting — the chief/officer reports (F8.1-F8.7). Each tab owns its own filters and query,
+ * and Radix unmounts inactive tabs, so only the report on screen is fetched.
+ */
 export function ReportingPage() {
   return (
     <main id="main-content">
