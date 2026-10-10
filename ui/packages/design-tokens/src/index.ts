@@ -73,6 +73,8 @@ export const surfacePalette = {
     borderDecorative: '#2a2d33',
     focus: '#ffd166',
     focusGap: palette.cab.background,
+    // design.md §2.2 `color.text.link`.
+    link: '#7fb8ff',
     scrim: 'rgba(0,0,0,0.72)',
     skeleton: '#2a2d33',
   },
@@ -88,6 +90,7 @@ export const surfacePalette = {
     borderDecorative: '#e4e6ea',
     focus: '#101114',
     focusGap: palette.day.background,
+    link: '#0b4fa8',
     scrim: 'rgba(16,17,20,0.55)',
     skeleton: '#e4e6ea',
   },

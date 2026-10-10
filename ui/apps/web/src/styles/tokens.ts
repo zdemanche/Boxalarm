@@ -46,6 +46,7 @@ function surfaceVars(theme: 'day' | 'cab') {
   --bx-border-decorative: ${s.borderDecorative};
   --bx-focus: ${s.focus};
   --bx-focus-gap: ${s.focusGap};
+  --bx-link: ${s.link};
   --bx-scrim: ${s.scrim};
   --bx-skeleton: ${s.skeleton};
   --bx-status-danger: ${status.danger};
@@ -178,6 +179,24 @@ body {
   line-height: var(--boxalarm-line-height);
   font-family: var(--bx-font-ui);
   -webkit-font-smoothing: antialiased;
+}
+
+a {
+  color: var(--bx-link);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 0.18em;
+}
+
+a:hover {
+  text-decoration-thickness: 2px;
+}
+
+/* Native controls default to the platform UI font at 13px, not the page's type. */
+button,
+input,
+select,
+textarea {
+  font-family: inherit;
 }
 
 ::selection {

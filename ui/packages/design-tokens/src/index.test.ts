@@ -161,6 +161,18 @@ describe('surfacePalette', () => {
     const { bg, focus } = surfacePalette[name];
     expect(meetsAA(bg, focus, 'large')).toBe(true);
   });
+
+  // Links sit inside cards and table rows as often as on the page ground, so they must clear
+  // normal-text AA on every surface step, not just bg.
+  test.each(['day', 'cab'] as const)(
+    '%s: link clears normal-text AA on bg, surface and the raised surface',
+    (name) => {
+      const { bg, surface, surfaceRaised, link } = surfacePalette[name];
+      expect(meetsAA(bg, link, 'normal')).toBe(true);
+      expect(meetsAA(surface, link, 'normal')).toBe(true);
+      expect(meetsAA(surfaceRaised, link, 'normal')).toBe(true);
+    },
+  );
 });
 
 describe('statusPalette', () => {
