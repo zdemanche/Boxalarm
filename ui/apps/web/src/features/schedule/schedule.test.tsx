@@ -230,3 +230,43 @@ test('positions are picked from the riding positions, filling in the required qu
   await waitFor(() => expect(posted).toBeDefined());
   expect(posted?.positions).toEqual([{ positionCode: 'DRIVER', requiredQual: 'DO' }]);
 });
+
+// Coverage printed raw position codes ("OFF", "FF") and keyed rows on the code, so a shift short
+// two firefighters raised React's duplicate-key warning and could drop a row.
+test('coverage names short positions by their riding-position label, one row each', async () => {
+  const errors = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+  server.use(
+    http.get('/api/v1/personnel/shifts', () => HttpResponse.json({ shifts: [] })),
+    http.get('/api/v1/platform/config/RIDING_POSITIONS', () =>
+      HttpResponse.json({
+        configType: 'RIDING_POSITIONS',
+        value: { ENGINE: [{ code: 'FF', label: 'Firefighter' }] },
+        version: 1,
+        updatedAt: '2026-01-01T00:00:00.000Z',
+      }),
+    ),
+    http.get('/api/v1/personnel/shifts/coverage', () =>
+      HttpResponse.json({
+        shifts: [
+          {
+            shiftId: 's-1',
+            stationId: 'st-1',
+            startAt: 1_760_000_000_000,
+            endAt: 1_760_043_200_000,
+            status: 'short',
+            positions: [
+              { positionCode: 'FF', status: 'short' },
+              { positionCode: 'FF', status: 'short' },
+            ],
+          },
+        ],
+      }),
+    ),
+  );
+  renderSchedule();
+
+  const coverage = (await screen.findByRole('heading', { name: 'Coverage' })).parentElement!;
+  await waitFor(() => expect(within(coverage).getAllByText(/^Firefighter/)).toHaveLength(2));
+  expect(errors.mock.calls.some((call) => String(call[0]).includes('same key'))).toBe(false);
+  errors.mockRestore();
+});

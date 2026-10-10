@@ -12,6 +12,7 @@ import {
   StatusChip,
   TextInput,
 } from '../../components/ui';
+import { humanize } from '../../lib/labels';
 import { useRidingPositions } from '../../lib/useRidingPositions';
 import { useStations } from '../../lib/useStations';
 import { listMembers } from '../personnel/api';
@@ -23,7 +24,63 @@ import {
   listShifts,
 } from './api';
 import { formatShiftWindow } from './format';
-import { SHIFT_STATUS_LABEL, type CoverageStatus, type CreateShiftPosition } from './types';
+import {
+  SHIFT_STATUS_LABEL,
+  type CoverageStatus,
+  type CreateShiftPosition,
+  type DutyShift,
+} from './types';
+
+/** The department's label for a riding-position code ("FF" -> "Firefighter (interior)"), or the
+ * code itself when no riding positions are configured. */
+function usePositionLabel(): (code: string) => string {
+  const { positions } = useRidingPositions();
+  return (code) => positions.find((position) => position.code === code)?.label ?? code;
+}
+
+/** Spelled-out qual codes ("DRIVER_OPERATOR") read as words; short department codes ("DO") stay. */
+function qualLabel(code: string): string {
+  return code.includes('_') ? humanize(code) : code;
+}
+
+const SHIFT_STATUS_ROLE: Record<DutyShift['status'], StatusRole> = {
+  FULL: 'ok',
+  PARTIALLY_FILLED: 'warning',
+  OPEN: 'warning',
+  CANCELLED: 'neutral',
+};
+
+function ShiftRows({
+  shifts,
+  nameFor,
+}: {
+  shifts: readonly DutyShift[];
+  nameFor: (stationId: string) => string;
+}) {
+  return (
+    <ul style={{ listStyle: 'none', padding: 0, margin: 0 }}>
+      {shifts.map((shift) => (
+        <li
+          key={shift.shiftId}
+          style={{
+            display: 'flex',
+            flexWrap: 'wrap',
+            alignItems: 'center',
+            gap: 'var(--bx-space-xs) var(--bx-space-sm)',
+            padding: 'var(--bx-space-sm) 0',
+            borderBottom: '1px solid var(--bx-border-decorative)',
+          }}
+        >
+          <strong>{nameFor(shift.stationId)}</strong>
+          <span>{formatShiftWindow(shift.startAt, shift.endAt)}</span>
+          <StatusChip status={SHIFT_STATUS_ROLE[shift.status]}>
+            {SHIFT_STATUS_LABEL[shift.status]}
+          </StatusChip>
+        </li>
+      ))}
+    </ul>
+  );
+}
 
 const COVERAGE_STATUS: Record<CoverageStatus, StatusRole> = {
   covered: 'ok',
@@ -208,6 +265,7 @@ function CreateShiftForm({ onCreated }: { onCreated: () => void }) {
 function CoverageSection() {
   const auth = useAuth();
   const { nameFor } = useStations();
+  const positionLabel = usePositionLabel();
   const coverageQuery = useQuery({
     queryKey: ['schedule', 'coverage'],
     queryFn: () => getShiftCoverage(auth),
@@ -237,14 +295,15 @@ function CoverageSection() {
               <ul style={{ listStyle: 'none', paddingLeft: 'var(--bx-space-md)' }}>
                 {shift.positions
                   .filter((position) => position.status !== 'covered')
-                  .map((position) => (
-                    <li key={position.positionCode}>
-                      {position.positionCode} —{' '}
+                  .map((position, index) => (
+                    // A shift can be short the same position twice (two firefighters).
+                    <li key={`${position.positionCode}-${index}`}>
+                      {positionLabel(position.positionCode)} —{' '}
                       <StatusChip status={COVERAGE_STATUS[position.status]}>
                         {COVERAGE_WORD[position.status]}
                       </StatusChip>
                       {position.status === 'qual-gapped' && position.requiredQual
-                        ? ` (${position.requiredQual})`
+                        ? ` (needs ${qualLabel(position.requiredQual)})`
                         : ''}
                     </li>
                   ))}
@@ -262,6 +321,7 @@ function PendingSwaps() {
   const auth = useAuth();
   const queryClient = useQueryClient();
   const { nameFor } = useStations();
+  const positionLabel = usePositionLabel();
   const swapsQuery = useQuery({
     queryKey: ['schedule', 'swaps', 'pending'],
     queryFn: () => listPendingShiftSwaps(auth),
@@ -303,7 +363,7 @@ function PendingSwaps() {
       <ul style={{ listStyle: 'none', padding: 0, margin: 0 }}>
         {swapsQuery.data.map((swap) => {
           const shift = shiftsQuery.data?.find((s) => s.shiftId === swap.shiftId);
-          const what = `${memberName(swap.fromMemberId)} to ${memberName(swap.toMemberId)}, ${swap.positionCode}`;
+          const what = `${memberName(swap.fromMemberId)} to ${memberName(swap.toMemberId)}, ${positionLabel(swap.positionCode)}`;
           const approving =
             approveMutation.isPending &&
             approveMutation.variables?.shiftId === swap.shiftId &&
@@ -325,7 +385,7 @@ function PendingSwaps() {
                 <strong>
                   {memberName(swap.fromMemberId)} → {memberName(swap.toMemberId)}
                 </strong>{' '}
-                · {swap.positionCode}
+                · {positionLabel(swap.positionCode)}
                 {shift
                   ? ` · ${nameFor(shift.stationId)}, ${formatShiftWindow(shift.startAt, shift.endAt)}`
                   : ''}
@@ -378,28 +438,40 @@ export function SchedulePage() {
     );
   }
 
+  const now = Date.now();
+  const byStart = [...(shiftsQuery.data ?? [])].sort((a, b) => a.startAt - b.startAt);
+  const upcoming = byStart.filter((shift) => shift.endAt > now);
+  const past = byStart.filter((shift) => shift.endAt <= now).reverse();
+
   return (
     <main id="main-content">
       <PageHeader title="Schedule" />
 
-      {shiftsQuery.isLoading ? (
-        <Skeleton lines={4} />
-      ) : (
-        <ul style={{ listStyle: 'none', padding: 0 }}>
-          {(shiftsQuery.data ?? []).map((shift) => (
-            <li key={shift.shiftId} style={{ padding: 'var(--bx-space-sm) 0' }}>
-              <strong>{nameFor(shift.stationId)}</strong> —{' '}
-              {formatShiftWindow(shift.startAt, shift.endAt)} — {SHIFT_STATUS_LABEL[shift.status]}
-            </li>
-          ))}
-        </ul>
-      )}
+      {/* What needs an officer first: swaps to approve, then gaps, then the plan itself. */}
+      <PendingSwaps />
+      <CoverageSection />
+
+      <Card title="Upcoming shifts" style={{ marginTop: 'var(--bx-space-xl)' }}>
+        {shiftsQuery.isLoading ? (
+          <Skeleton lines={4} />
+        ) : upcoming.length === 0 ? (
+          <p>No upcoming shifts are scheduled.</p>
+        ) : (
+          <ShiftRows shifts={upcoming} nameFor={nameFor} />
+        )}
+        {past.length > 0 ? (
+          <details style={{ marginTop: 'var(--bx-space-md)' }}>
+            <summary style={{ cursor: 'pointer', color: 'var(--bx-fg-muted)' }}>
+              Earlier shifts ({past.length})
+            </summary>
+            <ShiftRows shifts={past} nameFor={nameFor} />
+          </details>
+        ) : null}
+      </Card>
 
       <CreateShiftForm
         onCreated={() => void queryClient.invalidateQueries({ queryKey: ['schedule', 'shifts'] })}
       />
-      <CoverageSection />
-      <PendingSwaps />
     </main>
   );
 }
