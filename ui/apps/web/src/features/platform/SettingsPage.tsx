@@ -67,7 +67,7 @@ export function SettingsPage() {
       />
       <div className={[styles.layout, styles.topRow].join(' ')}>
         <CutoverStatusNotice />
-        <Card title="More settings">
+        <Card title="Related pages">
           <ul className={styles.rows}>
             {RELATED_SETTINGS.map((setting) => (
               <li key={setting.to} className={styles.row}>
