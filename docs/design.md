@@ -61,6 +61,25 @@ status vocabulary, the string catalogue, the error taxonomy, and the seven-state
 
 ## 2. Design system — "Command console"
 
+> **Amendment 2026-10-11 — web visual layer.** Built as specified, the office surface read as an
+> unstyled wireframe (flat grey boxes on white, square corners, black buttons) and the user
+> rejected it. The office surface keeps every rule below about status (§2.3), contrast, targets,
+> typography sizes and motion, with these changes:
+> - **Accent.** The office surface now uses the mobile app's amber (`palette.accent`) through
+>   `accentPalette`: a bright fill with dark text for primary buttons and selected controls, and
+>   a text-safe amber for emphasis on cards. Red remains reserved for alarm status; amber never
+>   carries a status meaning. This supersedes "no accent colour" in §2.2 for the office surface.
+> - **Shell.** Navigation is a dark frame (`shellPalette`) in both palettes, with the Boxalarm
+>   mark, an amber selection marker and an amber focus ring.
+> - **Canvas and cards.** The page is a canvas (`day` grey, `cab` black) and content sits on cards
+>   (`day` white, `cab` lifted dark) with radius `lg` and the `raised` shadow; nothing sits loose
+>   on the canvas. Chips are pills. This supersedes "nearly square" (§2.5) and the flat surface
+>   rule for cards on the office surface.
+> - **Page header.** Title 28px/700 with an optional one-line description.
+>
+> All new pairs are AA-verified in `packages/design-tokens/src/index.test.ts`. The field surface
+> (native) is unchanged by this amendment.
+
 No design system, component library, or Storybook exists in `boxalarm-ui` (codebase-context §3).
 The only existing tokens are `palette.day`/`palette.cab` (background + foreground) and a five-step
 `spacing` scale (§4). **This design extends those two exports rather than replacing them** — existing
