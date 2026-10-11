@@ -1,5 +1,7 @@
 import { Card } from '../../components/ui';
+import { AlertTriangle, Ban, Droplets } from '../../components/ui/icons';
 import type { NearestHydrant, PrePlanEnrichment, UtilityShutoff } from './types';
+import styles from './Alerts.module.css';
 
 /** Listed only when nearer than a usable one - so the crew knows not to lay in from it. */
 function isOutOfService(hydrant: NearestHydrant): boolean {
@@ -90,23 +92,27 @@ export const UNAVAILABLE_TEXT =
   'Pre-plan unavailable right now. This does not mean there is no pre-plan for this address.';
 export const NO_MATCH_TEXT = 'No pre-plan matched this address.';
 
-const noticeStyle = (warning: boolean) =>
-  warning
-    ? {
-        borderLeft: '4px solid var(--bx-status-warning)',
-        paddingLeft: 8,
-        fontWeight: 700,
-      }
-    : { fontWeight: 600 };
+/** A guess the crew must check: warning edge + glyph + "VERIFY ADDRESS" leading the words. */
+function Notice({ warning, children }: { warning: boolean; children: string }) {
+  return warning ? (
+    <p role="note" className={styles.notice}>
+      <AlertTriangle size={16} aria-hidden="true" />
+      {children}
+    </p>
+  ) : (
+    <p className={styles.matched}>{children}</p>
+  );
+}
 
 function HazardList({ hazards }: { hazards: readonly string[] }) {
   if (hazards.length === 0) return null;
   return (
-    <div>
-      <h3 style={{ fontSize: 15, fontWeight: 600 }}>Hazards</h3>
-      <ul>
+    <div className={styles.ppSection}>
+      <h3>Hazards</h3>
+      <ul className={styles.ppList}>
         {hazards.map((hazard) => (
-          <li key={hazard} style={{ color: 'var(--bx-status-danger)' }}>
+          <li key={hazard} className={styles.hazard}>
+            <AlertTriangle size={14} aria-hidden="true" />
             {hazard}
           </li>
         ))}
@@ -118,9 +124,9 @@ function HazardList({ hazards }: { hazards: readonly string[] }) {
 function ShutoffList({ shutoffs }: { shutoffs: readonly UtilityShutoff[] }) {
   if (shutoffs.length === 0) return null;
   return (
-    <div>
-      <h3 style={{ fontSize: 15, fontWeight: 600 }}>Utility shutoffs</h3>
-      <ul>
+    <div className={styles.ppSection}>
+      <h3>Utility shutoffs</h3>
+      <ul className={styles.ppList}>
         {shutoffs.map((shutoff) => (
           <li key={`${shutoff.utility}-${shutoff.location}`}>
             {shutoff.utility}: {shutoff.location}
@@ -144,31 +150,30 @@ function HydrantSection({
   incomplete: boolean;
 }) {
   if (unavailable) {
-    return (
-      <p role="note" style={noticeStyle(true)}>
-        {HYDRANTS_UNAVAILABLE_TEXT}
-      </p>
-    );
+    return <Notice warning>{HYDRANTS_UNAVAILABLE_TEXT}</Notice>;
   }
   if (hydrants.length === 0) return null;
   return (
-    <div>
-      <h3 style={{ fontSize: 15, fontWeight: 600 }}>Nearest hydrants</h3>
-      {incomplete ? (
-        <p role="note" style={noticeStyle(true)}>
-          {HYDRANTS_INCOMPLETE_TEXT}
-        </p>
-      ) : null}
-      <ul aria-label="Nearest hydrants">
+    <div className={styles.ppSection}>
+      <h3>Nearest hydrants</h3>
+      {incomplete ? <Notice warning>{HYDRANTS_INCOMPLETE_TEXT}</Notice> : null}
+      <ul aria-label="Nearest hydrants" className={styles.ppList}>
         {hydrants.map((hydrant) => (
+          // Out of service = alarm colour + glyph + the words "OUT OF SERVICE" in the line.
           <li
             key={hydrant.hydrantId}
+            className={[styles.hydrant, isOutOfService(hydrant) ? styles.hydrantOos : ''].join(' ')}
             style={
               isOutOfService(hydrant)
                 ? { color: 'var(--bx-status-danger)', fontWeight: 700 }
                 : undefined
             }
           >
+            {isOutOfService(hydrant) ? (
+              <Ban size={14} aria-hidden="true" />
+            ) : (
+              <Droplets size={14} aria-hidden="true" />
+            )}
             {describeHydrant(hydrant)}
           </li>
         ))}
@@ -181,21 +186,17 @@ function MatchedPrePlan({ prePlan }: { prePlan: PrePlanEnrichment }) {
   const notice = matchNotice(prePlan);
   return (
     <>
-      {notice ? (
-        <p role={notice.warning ? 'note' : undefined} style={noticeStyle(notice.warning)}>
-          {notice.text}
-        </p>
-      ) : null}
+      {notice ? <Notice warning={notice.warning}>{notice.text}</Notice> : null}
 
       {prePlan.matchType === 'CANDIDATES' ? (
-        <ul aria-label="Matching pre-plans">
+        <ul aria-label="Matching pre-plans" className={styles.candidates}>
           {(prePlan.candidates ?? []).map((candidate) => (
             <li key={candidate.occupancyId}>
-              <h3 style={{ fontSize: 15, fontWeight: 700 }}>
+              <h3>
                 {withUnit(candidate.matchedAddress, candidate.unit)}
                 {candidate.distanceMeters !== undefined ? ` · ${candidate.distanceMeters} m` : ''}
               </h3>
-              {candidate.summary ? <p>{candidate.summary}</p> : null}
+              {candidate.summary ? <p className={styles.summary}>{candidate.summary}</p> : null}
               <HazardList hazards={candidate.hazards} />
               <ShutoffList shutoffs={candidate.utilityShutoffs} />
             </li>
@@ -203,7 +204,7 @@ function MatchedPrePlan({ prePlan }: { prePlan: PrePlanEnrichment }) {
         </ul>
       ) : null}
 
-      {summaryOf(prePlan) ? <p>{summaryOf(prePlan)}</p> : null}
+      {summaryOf(prePlan) ? <p className={styles.summary}>{summaryOf(prePlan)}</p> : null}
       <HazardList hazards={prePlan.hazards} />
       <ShutoffList shutoffs={prePlan.utilityShutoffs} />
     </>
@@ -233,13 +234,11 @@ export function PrePlanPanel({
   }
 
   return (
-    <Card title="Pre-plan">
+    <Card title="Pre-plan" className={styles.prePlan}>
       {unavailable ? (
-        <p role="note" style={noticeStyle(true)}>
-          {UNAVAILABLE_TEXT}
-        </p>
+        <Notice warning>{UNAVAILABLE_TEXT}</Notice>
       ) : prePlan === null ? (
-        <p>{NO_MATCH_TEXT}</p>
+        <p className={styles.summary}>{NO_MATCH_TEXT}</p>
       ) : prePlan ? (
         <MatchedPrePlan prePlan={prePlan} />
       ) : null}

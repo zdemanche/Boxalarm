@@ -6,7 +6,9 @@ import { ApiForbiddenGate } from '../../components/ApiForbiddenGate';
 import { Button, Card, PageHeader, Skeleton, StatusChip, TextInput } from '../../components/ui';
 import { listMembers } from '../../features/personnel/api';
 import { getCanaryStatus, getDiagnostics, listActiveDispatches } from './api';
+import type { StatusRole } from '@boxalarm/design-tokens';
 import type { DeviceState, DiagnosticsTimelineEntry } from './types';
+import styles from './Alerts.module.css';
 
 // AC2 intent ("never a stale green"): canary/statusHandler.ts computes healthy purely from
 // latestResult, with no staleness check. OQ-8 leaves the real cadence unresolved (proposed
@@ -34,6 +36,15 @@ function timelineLabel(entry: DiagnosticsTimelineEntry): string {
   return entry.entityType;
 }
 
+/** A delivery event carries its status as colour + glyph + word; other events are plain text. */
+function timelineRole(entry: DiagnosticsTimelineEntry): StatusRole | null {
+  if (entry.entityType !== 'DELIVERY_RECEIPT') return null;
+  if (entry.failureReason || entry.status === 'FAILED') return 'danger';
+  if (entry.openedAt || entry.status === 'OPENED') return 'ok';
+  if (entry.deliveredAt || entry.status === 'DELIVERED') return 'ok';
+  return 'warning';
+}
+
 function timelineTime(entry: DiagnosticsTimelineEntry): number | undefined {
   return entry.sentAt ?? entry.escalatedAt ?? entry.answeredAt;
 }
@@ -42,7 +53,7 @@ function DeviceCheckPanel({ deviceState }: { deviceState: DeviceState | null }) 
   if (!deviceState) {
     return (
       <Card title="Device check">
-        <p>No device report on file.</p>
+        <p className={styles.muted}>No device report on file.</p>
       </Card>
     );
   }
@@ -56,19 +67,19 @@ function DeviceCheckPanel({ deviceState }: { deviceState: DeviceState | null }) 
   ];
   return (
     <Card title="Device check">
-      <ul style={{ listStyle: 'none', padding: 0, margin: 0 }}>
+      <ul className={styles.checkList}>
         {checks.map((check) => (
-          <li key={check.label} style={{ padding: 'var(--bx-space-xs) 0' }}>
-            <StatusChip status={check.ok ? 'ok' : 'danger'}>
+          <li key={check.label}>
+            <StatusChip status={check.ok ? 'ok' : 'danger'} className={styles.wrapChip}>
               {check.label}: {check.ok ? 'OK' : 'Not granted'}
             </StatusChip>
           </li>
         ))}
-        <li style={{ padding: 'var(--bx-space-xs) 0' }}>
+        <li>
           App {deviceState.appVersion} on {deviceState.osVersion}
         </li>
       </ul>
-      <p style={{ fontSize: 13, color: 'var(--bx-fg-muted)' }}>
+      <p className={styles.lookupHelp}>
         Reported {new Date(deviceState.reportedAt * 1000).toLocaleString()}
       </p>
     </Card>
@@ -89,7 +100,13 @@ function TimelineTable({ dispatchId, memberId }: { dispatchId: string; memberId:
       </ApiForbiddenGate>
     );
   }
-  if (query.isLoading || !query.data) return <Skeleton lines={4} />;
+  if (query.isLoading || !query.data) {
+    return (
+      <Card title="Delivery timeline">
+        <Skeleton lines={4} />
+      </Card>
+    );
+  }
 
   const { diagnosis, timeline, deviceState } = query.data;
 
@@ -97,7 +114,7 @@ function TimelineTable({ dispatchId, memberId }: { dispatchId: string; memberId:
     return (
       <Card title="Diagnosis">
         <StatusChip status="danger">Not on the eligible roster</StatusChip>
-        <p>
+        <p className={styles.diagnosis}>
           This member had no delivery record for this dispatch because they were not on the eligible
           roster — this is distinct from a page that was sent but not delivered.
         </p>
@@ -109,43 +126,42 @@ function TimelineTable({ dispatchId, memberId }: { dispatchId: string; memberId:
     <>
       <Card title="Delivery timeline">
         {timeline.length === 0 ? (
-          <p>Sent, not yet delivered — no timeline entries recorded.</p>
+          <p className={styles.muted}>Sent, not yet delivered — no timeline entries recorded.</p>
         ) : (
           <div
             role="region"
             aria-label="Delivery timeline"
             tabIndex={0}
-            style={{ overflowX: 'auto' }}
+            className={styles.tableWrap}
           >
-            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+            <table className={styles.table}>
               <caption className="visually-hidden">Delivery timeline</caption>
               <thead>
                 <tr>
-                  <th scope="col" style={{ textAlign: 'left' }}>
-                    Channel
-                  </th>
-                  <th scope="col" style={{ textAlign: 'left' }}>
-                    Tone
-                  </th>
-                  <th scope="col" style={{ textAlign: 'left' }}>
-                    Event
-                  </th>
-                  <th scope="col" style={{ textAlign: 'left' }}>
-                    Time
-                  </th>
+                  <th scope="col">Channel</th>
+                  <th scope="col">Tone</th>
+                  <th scope="col">Event</th>
+                  <th scope="col">Time</th>
                 </tr>
               </thead>
               <tbody>
                 {timeline.map((entry, index) => {
                   const time = timelineTime(entry);
+                  const role = timelineRole(entry);
                   return (
                     <tr key={`${entry.entityType}-${index}`}>
-                      <th scope="row" style={{ textAlign: 'left', fontWeight: 500 }}>
-                        {entry.channel ?? '—'}
-                      </th>
+                      <th scope="row">{entry.channel ?? '—'}</th>
                       <td>{entry.toneSequence ?? '—'}</td>
-                      <td>{timelineLabel(entry)}</td>
-                      <td>{time ? new Date(time * 1000).toLocaleString() : '—'}</td>
+                      <td>
+                        {role ? (
+                          <StatusChip status={role}>{timelineLabel(entry)}</StatusChip>
+                        ) : (
+                          timelineLabel(entry)
+                        )}
+                      </td>
+                      <td className={styles.timeCell}>
+                        {time ? new Date(time * 1000).toLocaleString() : '—'}
+                      </td>
                     </tr>
                   );
                 })}
@@ -173,7 +189,13 @@ function CanaryPanel() {
       </ApiForbiddenGate>
     );
   }
-  if (query.isLoading || !query.data) return <Skeleton lines={3} />;
+  if (query.isLoading || !query.data) {
+    return (
+      <Card title="Canary health">
+        <Skeleton lines={3} />
+      </Card>
+    );
+  }
 
   const { healthy, latestResult, latestLatencyMs, latestRanAt } = query.data;
   const stale = latestRanAt === null || Date.now() - latestRanAt * 1000 > CANARY_STALE_AFTER_MS;
@@ -185,32 +207,21 @@ function CanaryPanel() {
       <StatusChip status={isHealthy ? 'ok' : 'danger'}>
         {isHealthy ? 'Healthy' : stale ? 'Unhealthy — last run is stale' : 'Unhealthy'}
       </StatusChip>
-      <dl
-        style={{
-          display: 'grid',
-          gridTemplateColumns: 'max-content 1fr',
-          columnGap: 'var(--bx-space-lg)',
-          rowGap: 'var(--bx-space-sm)',
-          fontSize: 14,
-          marginTop: 'var(--bx-space-md)',
-        }}
-      >
-        <dt style={{ color: 'var(--bx-fg-muted)' }}>Last run</dt>
-        <dd style={{ margin: 0 }}>
-          {latestRanAt ? new Date(latestRanAt * 1000).toLocaleString() : 'No runs recorded'}
-        </dd>
-        <dt style={{ color: 'var(--bx-fg-muted)' }}>Result</dt>
-        <dd style={{ margin: 0 }}>{latestResult ?? '—'}</dd>
-        <dt style={{ color: 'var(--bx-fg-muted)' }}>Latency vs 5s budget</dt>
-        <dd style={{ margin: 0 }}>
+      <dl className={styles.facts}>
+        <dt>Last run</dt>
+        <dd>{latestRanAt ? new Date(latestRanAt * 1000).toLocaleString() : 'No runs recorded'}</dd>
+        <dt>Result</dt>
+        <dd>{latestResult ?? '—'}</dd>
+        <dt>Latency vs 5s budget</dt>
+        <dd>
           {latestLatencyMs !== null ? `${latestLatencyMs}ms` : '—'}
           {overBudget ? ' (over budget)' : ''}
         </dd>
       </dl>
       {query.data.runs[0] ? (
-        <ul style={{ listStyle: 'none', padding: 0, marginTop: 'var(--bx-space-md)' }}>
+        <ul className={styles.chipRow} aria-label="Latest run by channel">
           {Object.entries(query.data.runs[0].channelResults).map(([channel, result]) => (
-            <li key={channel} style={{ padding: 'var(--bx-space-xs) 0' }}>
+            <li key={channel}>
               <StatusChip status={result === 'PASS' ? 'ok' : 'danger'}>
                 {channel.toUpperCase()}: {String(result)}
               </StatusChip>
@@ -249,20 +260,9 @@ function ActiveCallPicker({
   if (dispatches.length === 0) return null;
 
   return (
-    <div style={{ marginBottom: 'var(--bx-space-md)' }}>
-      <p style={{ margin: '0 0 var(--bx-space-xs)', fontSize: 14, color: 'var(--bx-fg-muted)' }}>
-        Recent calls
-      </p>
-      <ul
-        style={{
-          listStyle: 'none',
-          margin: 0,
-          padding: 0,
-          display: 'flex',
-          flexWrap: 'wrap',
-          gap: 'var(--bx-space-sm)',
-        }}
-      >
+    <div className={styles.picker}>
+      <p className={styles.pickerLabel}>Recent calls</p>
+      <ul className={styles.chipRow}>
         {[...dispatches]
           .sort((a, b) => b.dispatchedAt - a.dispatchedAt)
           .map((dispatch) => (
@@ -302,51 +302,53 @@ export function AlertsDiagnosticsPage() {
 
   return (
     <main id="main-content">
-      <PageHeader title="Alert diagnostics" />
+      <PageHeader
+        title="Alert diagnostics"
+        description="Trace one member's page for one call, and check that alerting is healthy right now."
+      />
 
-      <ActiveCallPicker selected={dispatchId.trim()} onPick={setDispatchId} />
+      <div className={styles.grid}>
+        <div className={styles.column}>
+          <Card title="Look up a delivery">
+            <ActiveCallPicker selected={dispatchId.trim()} onPick={setDispatchId} />
+            <div className={styles.formGrid}>
+              <TextInput
+                label="Dispatch ID"
+                value={dispatchId}
+                onChange={(e) => setDispatchId(e.target.value)}
+              />
+              <TextInput
+                label="Member ID"
+                help={members.data ? 'Start typing a name to pick from the roster.' : undefined}
+                value={memberId}
+                list={members.data ? membersListId : undefined}
+                onChange={(e) => setMemberId(e.target.value)}
+              />
+              {members.data ? (
+                <datalist id={membersListId}>
+                  {members.data.map((member) => (
+                    <option key={member.memberId} value={member.memberId}>
+                      {member.lastName}, {member.firstName} · {member.rank}
+                    </option>
+                  ))}
+                </datalist>
+              ) : null}
+            </div>
+            {dispatchId.trim() && memberId.trim() ? null : (
+              <p className={styles.lookupHelp}>
+                Enter a dispatch and member to see their delivery timeline and device checks.
+              </p>
+            )}
+          </Card>
 
-      <div
-        style={{
-          display: 'flex',
-          flexWrap: 'wrap',
-          gap: 'var(--bx-space-md)',
-          marginBottom: 'var(--bx-space-lg)',
-        }}
-      >
-        <TextInput
-          label="Dispatch ID"
-          value={dispatchId}
-          onChange={(e) => setDispatchId(e.target.value)}
-          style={{ maxWidth: 260 }}
-        />
-        <TextInput
-          label="Member ID"
-          help={members.data ? 'Start typing a name to pick from the roster.' : undefined}
-          value={memberId}
-          list={members.data ? membersListId : undefined}
-          onChange={(e) => setMemberId(e.target.value)}
-          style={{ maxWidth: 260 }}
-        />
-        {members.data ? (
-          <datalist id={membersListId}>
-            {members.data.map((member) => (
-              <option key={member.memberId} value={member.memberId}>
-                {member.lastName}, {member.firstName} · {member.rank}
-              </option>
-            ))}
-          </datalist>
-        ) : null}
-      </div>
+          {dispatchId.trim() && memberId.trim() ? (
+            <TimelineTable dispatchId={dispatchId.trim()} memberId={memberId.trim()} />
+          ) : null}
+        </div>
 
-      {dispatchId.trim() && memberId.trim() ? (
-        <TimelineTable dispatchId={dispatchId.trim()} memberId={memberId.trim()} />
-      ) : (
-        <p>Enter a dispatch and member to see their delivery timeline and device checks.</p>
-      )}
-
-      <div style={{ marginTop: 'var(--bx-space-lg)' }}>
-        <CanaryPanel />
+        <div className={styles.column}>
+          <CanaryPanel />
+        </div>
       </div>
     </main>
   );

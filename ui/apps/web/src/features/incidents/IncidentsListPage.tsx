@@ -4,7 +4,7 @@ import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../../auth/AuthContext';
 import { ApiError } from '../../lib/apiClient';
 import { ApiForbiddenGate } from '../../components/ApiForbiddenGate';
-import { Button } from '../../components/ui/Button';
+import { Button, buttonClassName } from '../../components/ui/Button';
 import { Card } from '../../components/ui/Card';
 import { DataTable, type DataTableColumn } from '../../components/ui/DataTable';
 import { StatusChip } from '../../components/ui/Chip';
@@ -64,29 +64,35 @@ function DispatchRow({
     ? `unverified location: "${dispatch.textExcerpt ?? ''}"`
     : dispatch.address || 'no address on the dispatch';
   return (
-    <li className={styles.recentCall}>
-      <span>
-        <strong>{type}</strong> —{' '}
-        {verify ? (
-          <>
-            <StatusChip status="warning">VERIFY</StatusChip>{' '}
-            <q className={styles.mono}>{dispatch.textExcerpt ?? ''}</q>
-          </>
-        ) : (
-          address
-        )}
-        <span className={styles.recentMeta}>
-          {' '}
-          · dispatched {dispatchTime(dispatch.dispatchedAt)}
+    <li className={styles.row}>
+      <span className={styles.rowBody}>
+        <span className={styles.rowTitle}>{type}</span>
+        <span className={styles.rowLine}>
+          {verify ? (
+            <>
+              <StatusChip status="warning">VERIFY</StatusChip>{' '}
+              <q className={styles.excerpt}>{dispatch.textExcerpt ?? ''}</q>
+            </>
+          ) : (
+            address
+          )}
+          <span className={styles.rowMeta}>
+            {' '}
+            · dispatched {dispatchTime(dispatch.dispatchedAt)}
+          </span>
         </span>
       </span>
       {dispatch.report ? (
-        <Link to={`/incidents/${encodeURIComponent(dispatch.report.incidentId)}`}>
+        <Link
+          to={`/incidents/${encodeURIComponent(dispatch.report.incidentId)}`}
+          className={buttonClassName({ variant: 'secondary', size: 'sm' })}
+        >
           Open report ({STATUS_LABEL[dispatch.report.status] ?? dispatch.report.status})
         </Link>
       ) : canStart ? (
         <Button
           variant="secondary"
+          size="sm"
           loading={pending}
           aria-label={`Start report for ${type} at ${address}`}
           onClick={() => onStart(dispatch.dispatchId)}
@@ -94,7 +100,7 @@ function DispatchRow({
           Start report
         </Button>
       ) : (
-        <span className={styles.recentMeta}>No report yet</span>
+        <span className={styles.rowMeta}>No report yet</span>
       )}
     </li>
   );
@@ -126,11 +132,11 @@ function RecentDispatchesToReport({
   onStart: (dispatchId: string) => void;
   fallback: ReactNode;
 }) {
-  if (query.isLoading) return <p>Loading recent dispatches…</p>;
+  if (query.isLoading) return <p className={styles.muted}>Loading recent dispatches…</p>;
   if (query.error || !query.data) {
     return (
       <>
-        <p role="status">
+        <p role="status" className={styles.muted}>
           Recent dispatches couldn&rsquo;t load. You can start a report from the dispatch ID
           instead.
         </p>
@@ -155,34 +161,35 @@ function RecentDispatchesToReport({
   );
   return (
     <>
-      <h3 style={{ margin: 0 }}>Last {hours} hours</h3>
+      <h3 className={styles.groupLabel}>Last {hours} hours</h3>
       {recent.length === 0 ? (
-        <p>No dispatches in the last {hours} hours.</p>
+        <p className={styles.muted}>No dispatches in the last {hours} hours.</p>
       ) : (
-        <ul className={styles.recentCalls} aria-label={`Dispatches in the last ${hours} hours`}>
+        <ul className={styles.rows} aria-label={`Dispatches in the last ${hours} hours`}>
           {recent.map(row)}
         </ul>
       )}
       {older.length > 0 ? (
         <>
-          <h3 style={{ margin: 0 }}>Older</h3>
-          <ul className={styles.recentCalls} aria-label="Older dispatches">
+          <h3 className={styles.groupLabel}>Older</h3>
+          <ul className={styles.rows} aria-label="Older dispatches">
             {older.map(row)}
           </ul>
         </>
       ) : olderPages.length > 0 && !query.hasNextPage ? (
-        <p>No older dispatches.</p>
+        <p className={styles.muted}>No older dispatches.</p>
       ) : null}
       {query.hasNextPage ? (
-        <Button
-          type="button"
-          variant="secondary"
-          loading={query.isFetchingNextPage}
-          onClick={() => void query.fetchNextPage()}
-          style={{ width: 'fit-content' }}
-        >
-          Load older dispatches
-        </Button>
+        <div className={styles.loadOlder}>
+          <Button
+            type="button"
+            variant="secondary"
+            loading={query.isFetchingNextPage}
+            onClick={() => void query.fetchNextPage()}
+          >
+            Load older dispatches
+          </Button>
+        </div>
       ) : null}
     </>
   );
@@ -330,9 +337,88 @@ export function IncidentsListPage() {
     );
   }
 
+  const startCard = canList ? (
+    // The page's primary action, above the search rather than under a year of rows.
+    <Card title="Start a report">
+      <RecentDispatchesToReport
+        query={recentQuery}
+        canStart={canCreate}
+        pendingDispatchId={createMutation.isPending ? createMutation.variables : undefined}
+        onStart={(id) => createMutation.mutate(id)}
+        fallback={
+          canCreate ? (
+            <form
+              aria-label="Create report from dispatch"
+              onSubmit={(event: FormEvent) => {
+                event.preventDefault();
+                createMutation.mutate(dispatchId);
+              }}
+              className={styles.fallbackForm}
+            >
+              <div className={styles.fallbackField}>
+                <TextInput
+                  label="Dispatch ID"
+                  help="The CAD dispatch number."
+                  value={dispatchId}
+                  required
+                  onChange={(event) => setDispatchId(event.target.value)}
+                />
+              </div>
+              <Button
+                type="submit"
+                className={styles.fallbackSubmit}
+                loading={createMutation.isPending}
+                disabled={!dispatchId}
+              >
+                Create report
+              </Button>
+            </form>
+          ) : null
+        }
+      />
+      {createError ? (
+        <div ref={errorRef} tabIndex={-1} role="alert" className={styles.createError}>
+          <p className={styles.createErrorTitle}>{createError.title}</p>
+          {createError.detail ? <p>{createError.detail}</p> : null}
+        </div>
+      ) : null}
+    </Card>
+  ) : null;
+
+  const attentionCard = loadError ? null : (
+    <Card title="Needs attention">
+      <p className={styles.summary}>
+        {attention.length === 0
+          ? 'Nothing needs attention.'
+          : `${attention.length} incidents need attention: ${draftCount} drafts, ${rejectedCount} rejected.`}
+      </p>
+      {attention.length > 0 ? (
+        <ul className={styles.rows}>
+          {attention.map((incident) => (
+            <li key={incident.incidentId} className={styles.attentionRow}>
+              <span className={styles.attentionHead}>
+                <Link to={`/incidents/${incident.incidentId}`} className={styles.mono}>
+                  {incident.dispatchNumber}
+                </Link>
+                <StatusCell status={incident.status} />
+              </span>
+              <span className={styles.rowMeta}>
+                {incident.incidentType ?? 'Unclassified'} · {incident.address ?? '—'} ·{' '}
+                {formatDate(incident.alarmAt)}
+              </span>
+            </li>
+          ))}
+        </ul>
+      ) : null}
+    </Card>
+  );
+
   return (
     <main id="main-content">
-      <PageHeader title="Incidents" />
+      <PageHeader
+        title="Incidents"
+        description="NERIS reports for every call: start one from a dispatch, then finish and submit it."
+      />
       <p className="visually-hidden" aria-live="polite">
         {listQuery.isLoading
           ? 'Loading incidents.'
@@ -341,53 +427,14 @@ export function IncidentsListPage() {
             : ''}
       </p>
 
-      {/* The page's primary action, above the search rather than under a year of rows. */}
-      {canList ? (
-        <Card title="Start a report" className={styles.startCard}>
-          <RecentDispatchesToReport
-            query={recentQuery}
-            canStart={canCreate}
-            pendingDispatchId={createMutation.isPending ? createMutation.variables : undefined}
-            onStart={(id) => createMutation.mutate(id)}
-            fallback={
-              canCreate ? (
-                <form
-                  aria-label="Create report from dispatch"
-                  onSubmit={(event: FormEvent) => {
-                    event.preventDefault();
-                    createMutation.mutate(dispatchId);
-                  }}
-                  style={{
-                    display: 'grid',
-                    gap: 'var(--bx-space-md)',
-                    marginTop: 'var(--bx-space-sm)',
-                  }}
-                >
-                  <TextInput
-                    label="Dispatch ID"
-                    help="The CAD dispatch number."
-                    value={dispatchId}
-                    required
-                    onChange={(event) => setDispatchId(event.target.value)}
-                  />
-                  <Button type="submit" loading={createMutation.isPending} disabled={!dispatchId}>
-                    Create report
-                  </Button>
-                </form>
-              ) : null
-            }
-          />
-          {createError ? (
-            <div ref={errorRef} tabIndex={-1} role="alert">
-              <p style={{ fontWeight: 600, margin: 0 }}>{createError.title}</p>
-              {createError.detail ? <p style={{ margin: 0 }}>{createError.detail}</p> : null}
-            </div>
-          ) : null}
-        </Card>
+      {startCard || attentionCard ? (
+        <div className={styles.grid}>
+          {startCard}
+          {attentionCard}
+        </div>
       ) : null}
 
-      <section className={styles.section} aria-labelledby="incident-filters-heading">
-        <h2 id="incident-filters-heading">Filters</h2>
+      <Card title="All incidents">
         <div className={styles.filters}>
           <DatePicker
             label="From"
@@ -412,54 +459,27 @@ export function IncidentsListPage() {
               />
             ))}
           </fieldset>
-          <Button type="button" variant="secondary" onClick={clearFilters}>
-            Clear filters
-          </Button>
+          <div className={styles.filterActions}>
+            <Button type="button" variant="secondary" onClick={clearFilters}>
+              Clear filters
+            </Button>
+          </div>
         </div>
-      </section>
 
-      {loadError ? (
-        <div role="alert" tabIndex={-1}>
-          <h2>We couldn&apos;t load incidents.</h2>
-          <p>
-            {loadError instanceof ApiError && loadError.problem.status === 400
-              ? 'The incident request was rejected by the server.'
-              : 'Try again. The date range you chose is still here.'}
-          </p>
-          <Button type="button" onClick={() => void listQuery.refetch()}>
-            Try again
-          </Button>
-        </div>
-      ) : (
-        <>
-          <section className={styles.section} aria-labelledby="needs-attention-heading">
-            <h2 id="needs-attention-heading">Needs attention</h2>
-            <p className={styles.muted}>
-              {attention.length === 0
-                ? 'Nothing needs attention.'
-                : `${attention.length} incidents need attention: ${draftCount} drafts, ${rejectedCount} rejected.`}
+        {loadError ? (
+          <div role="alert" tabIndex={-1} className={styles.loadError}>
+            <h3>We couldn&apos;t load incidents.</h3>
+            <p>
+              {loadError instanceof ApiError && loadError.problem.status === 400
+                ? 'The incident request was rejected by the server.'
+                : 'Try again. The date range you chose is still here.'}
             </p>
-            {attention.length > 0 ? (
-              <ul className={styles.attentionList}>
-                {attention.map((incident) => (
-                  <li key={incident.incidentId} className={styles.attentionItem}>
-                    <Link to={`/incidents/${incident.incidentId}`} className={styles.mono}>
-                      {incident.dispatchNumber}
-                    </Link>
-                    <span className={styles.attentionMeta}>
-                      <span>{incident.incidentType ?? 'Unclassified'}</span>
-                      <span>{incident.address ?? '—'}</span>
-                      <span>{formatDate(incident.alarmAt)}</span>
-                      <StatusCell status={incident.status} />
-                    </span>
-                  </li>
-                ))}
-              </ul>
-            ) : null}
-          </section>
-
-          <section className={styles.section} aria-labelledby="all-incidents-heading">
-            <h2 id="all-incidents-heading">All incidents</h2>
+            <Button type="button" onClick={() => void listQuery.refetch()}>
+              Try again
+            </Button>
+          </div>
+        ) : (
+          <>
             <div className={styles.table}>
               <DataTable
                 caption="Incident search results, newest first"
@@ -482,21 +502,24 @@ export function IncidentsListPage() {
             <ul className={styles.cards} aria-label="Incident search results, newest first">
               {visible.map((incident) => (
                 <li key={incident.incidentId}>
-                  <Link to={`/incidents/${incident.incidentId}`} className={styles.card}>
-                    <span className={styles.mono}>{incident.dispatchNumber}</span>
-                    <span>{incident.incidentType ?? 'Unclassified'}</span>
-                    <span>{incident.address ?? '—'}</span>
-                    <span className={styles.cardMeta}>
-                      <span>{formatDate(incident.alarmAt)}</span>
-                      <StatusCell status={incident.status} />
+                  <Link to={`/incidents/${incident.incidentId}`} className={styles.cardLink}>
+                    <span className={styles.cardBody}>
+                      <span className={styles.mono}>{incident.dispatchNumber}</span>
+                      <span className={styles.rowLine}>
+                        {incident.incidentType ?? 'Unclassified'}
+                      </span>
+                      <span className={styles.rowMeta}>
+                        {incident.address ?? '—'} · {formatDate(incident.alarmAt)}
+                      </span>
                     </span>
+                    <StatusCell status={incident.status} />
                   </Link>
                 </li>
               ))}
             </ul>
-          </section>
-        </>
-      )}
+          </>
+        )}
+      </Card>
     </main>
   );
 }

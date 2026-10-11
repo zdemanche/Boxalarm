@@ -236,6 +236,7 @@ export function NerisReviewPanel({
           {issue.fix && !locked ? (
             <Button
               type="button"
+              variant="secondary"
               aria-describedby={messageId}
               loading={fixing === key}
               onClick={() => void applyFix(issue, key)}
@@ -363,8 +364,10 @@ export function NerisReviewPanel({
             Locking closes every edit until a chief or admin unlocks it.
           </p>
           <div className={styles.actions}>
+            {/* Secondary like the rest of the rail: the step form owns the page's amber action. */}
             <Button
               type="button"
+              variant="secondary"
               disabled={!attested}
               loading={locking}
               aria-describedby={`${headingId}-lock-help`}

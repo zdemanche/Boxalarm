@@ -458,7 +458,14 @@ export function NerisModuleEditor({
           : renderProp(module, root, true, draft, setDraft, '')}
       </fieldset>
       <div className={styles.actions}>
-        <Button type="button" loading={saving} disabled={locked} onClick={() => void save()}>
+        {/* Secondary: one Save per module; the step's Continue is the form's amber action. */}
+        <Button
+          type="button"
+          variant="secondary"
+          loading={saving}
+          disabled={locked}
+          onClick={() => void save()}
+        >
           Save {title.toLowerCase()}
         </Button>
       </div>
