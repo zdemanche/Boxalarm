@@ -1,7 +1,6 @@
-import { Link, useInRouterContext, useLocation } from 'react-router-dom';
+import { Link, useInRouterContext } from 'react-router-dom';
 import { ROLE_PRIORITY, type Role } from '../auth/roles';
 import type { ProblemDetails } from '../lib/apiClient';
-import { APP_ROUTES, type AppRoute } from '../routing/routeTable';
 import { buttonClassName } from './ui/Button';
 import { ShieldAlert } from './ui/icons';
 import styles from './StateScreen.module.css';
@@ -11,11 +10,6 @@ import styles from './StateScreen.module.css';
  * an authenticated user could otherwise probe internal authorization details via 403 bodies.
  * `traceId` stays out of the DOM too; both remain available to telemetry/console logging. */
 const GENERIC_FORBIDDEN_MESSAGE = 'You do not have access to this page.';
-
-/** RequireRole marks its synthetic problem with this traceId: the denial is the route table's
- * role list, so that list is exactly who can open the page. An API 403 on a page the user can
- * open says nothing about who could, so it never names roles. */
-const ROUTE_GUARD_TRACE_ID = 'route-guard';
 
 const ASK_FOR_ACCESS = 'Ask the chief or the department administrator to change your role.';
 
@@ -40,35 +34,18 @@ function whoCanOpen(roles: readonly Role[], pageLabel?: string): string {
   return `Only the ${joinNouns(nouns)} can open ${pageLabel ? `the ${pageLabel} page` : 'this page'}.`;
 }
 
-/** The route-table entry a pathname resolves to — same first-match rule as canAccessPath. */
-function routeFor(pathname: string): AppRoute | undefined {
-  const parts = pathname.split('/').filter(Boolean);
-  return APP_ROUTES.find((route) => {
-    const pattern = route.path.split('/').filter(Boolean);
-    return (
-      pattern.length === parts.length &&
-      pattern.every((segment, i) => segment.startsWith(':') || segment === parts[i])
-    );
-  });
-}
-
-/** Who can open the page, and the way back. Needs the router (useLocation, Link), so it only
- * renders inside one; unit tests that mount the state bare still get the message. */
+/** Who can open the page, and the way back to the dashboard. */
 function RouteAccess({
   allowedRoles,
-  fromRouteGuard,
+  pageLabel,
 }: {
   allowedRoles?: readonly Role[];
-  fromRouteGuard: boolean;
+  pageLabel?: string;
 }) {
-  const { pathname } = useLocation();
-  const route = routeFor(pathname);
-  const roles = allowedRoles ?? (fromRouteGuard ? route?.roles : undefined);
-
   return (
     <>
       <p className={styles.detail}>
-        {roles && roles.length > 0 ? `${whoCanOpen(roles, route?.label)} ` : null}
+        {allowedRoles && allowedRoles.length > 0 ? `${whoCanOpen(allowedRoles, pageLabel)} ` : null}
         {ASK_FOR_ACCESS}
       </p>
       <div className={styles.actions}>
@@ -85,6 +62,7 @@ export function ForbiddenState({
   embedded = false,
   headingLevel = 'h1',
   allowedRoles,
+  pageLabel,
 }: {
   problem?: Pick<ProblemDetails, 'detail' | 'traceId' | 'title'>;
   /** When true, render as an alert region (safe inside an existing <main>). */
@@ -92,9 +70,12 @@ export function ForbiddenState({
   /** Heading level for the title. Pass 'h2' when embedding inside a page that already
    * renders its own <h1>, so the document never ends up with two level-1 headings. */
   headingLevel?: 'h1' | 'h2';
-  /** The roles that can open this page, when the caller knows them. A full-page route-guard
-   * denial works them out from the route table on its own. */
+  /** The roles that can open this page, when the caller knows them - RequireRole passes the
+   * route table's list. An API 403 on a page the user can open says nothing about who could, so
+   * those callers pass nothing and no roles are named. */
   allowedRoles?: readonly Role[];
+  /** The page's name for the "Only the … can open the X page" line. */
+  pageLabel?: string;
 }) {
   const Heading = headingLevel;
   const inRouter = useInRouterContext();
@@ -132,10 +113,7 @@ export function ForbiddenState({
         <Heading className={styles.title}>{title}</Heading>
         {message}
         {inRouter ? (
-          <RouteAccess
-            allowedRoles={allowedRoles}
-            fromRouteGuard={problem?.traceId === ROUTE_GUARD_TRACE_ID}
-          />
+          <RouteAccess allowedRoles={allowedRoles} pageLabel={pageLabel} />
         ) : (
           <p className={styles.detail}>
             {allowedRoles && allowedRoles.length > 0 ? `${whoCanOpen(allowedRoles)} ` : null}

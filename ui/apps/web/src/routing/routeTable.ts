@@ -288,8 +288,13 @@ export function routesForRoles(userRoles: readonly Role[]): AppRoute[] {
   );
 }
 
+/** The route-table entry a pathname resolves to (first match, `:param` segments match any). */
+export function routeForPath(pathname: string): AppRoute | undefined {
+  return APP_ROUTES.find((route) => pathMatches(route.path, pathname));
+}
+
 export function canAccessPath(pathname: string, userRoles: readonly Role[]): boolean {
-  const match = APP_ROUTES.find((route) => pathMatches(route.path, pathname));
+  const match = routeForPath(pathname);
   if (!match) return false;
   return match.roles.some((r) => userRoles.includes(r));
 }
