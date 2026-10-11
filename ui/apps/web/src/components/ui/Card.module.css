@@ -25,6 +25,25 @@
   letter-spacing: -0.005em;
 }
 
+.cardHead {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--bx-space-sm);
+  margin-bottom: var(--bx-space-md);
+}
+
+.cardHead .cardTitle {
+  margin: 0;
+}
+
+.cardActions {
+  display: flex;
+  align-items: center;
+  gap: var(--bx-space-sm);
+}
+
 .stat {
   background: var(--bx-card);
   border: 1px solid var(--bx-border-decorative);

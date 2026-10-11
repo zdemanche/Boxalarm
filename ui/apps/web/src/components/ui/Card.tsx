@@ -6,9 +6,11 @@ import styles from './Card.module.css';
 interface CardProps extends HTMLAttributes<HTMLDivElement> {
   title?: string;
   raised?: boolean;
+  /** Right-aligned beside the title: a "View all" link or the card's one action. */
+  actions?: ReactNode;
 }
 
-export function Card({ title, raised = false, className, children, ...rest }: CardProps) {
+export function Card({ title, raised = false, actions, className, children, ...rest }: CardProps) {
   return (
     <div
       className={[styles.card, raised ? styles.cardRaised : '', className]
@@ -20,7 +22,14 @@ export function Card({ title, raised = false, className, children, ...rest }: Ca
           own heading) directly above it, with nothing at h2 in between — axe's heading-order
           rule (run for real for the first time via tests/e2e/primary-nav.spec.ts's
           mobile-chromium project, MAJOR-1) flagged the previous h3 as an invalid h1-to-h3 skip. */}
-      {title ? <h2 className={styles.cardTitle}>{title}</h2> : null}
+      {title && actions ? (
+        <div className={styles.cardHead}>
+          <h2 className={styles.cardTitle}>{title}</h2>
+          <div className={styles.cardActions}>{actions}</div>
+        </div>
+      ) : title ? (
+        <h2 className={styles.cardTitle}>{title}</h2>
+      ) : null}
       {children}
     </div>
   );

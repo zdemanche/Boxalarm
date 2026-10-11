@@ -1,7 +1,7 @@
 import { cleanup, render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, describe, expect, test } from 'vitest';
-import { Stat } from './Card';
+import { Card, Stat } from './Card';
 
 afterEach(cleanup);
 
@@ -22,5 +22,17 @@ describe('Stat', () => {
     );
     const link = screen.getByRole('link', { name: /out of service\s*2/i });
     expect(link.getAttribute('href')).toBe('/apparatus');
+  });
+});
+
+describe('Card', () => {
+  test('puts actions beside the title', () => {
+    render(
+      <Card title="Open defects" actions={<button type="button">View all</button>}>
+        body
+      </Card>,
+    );
+    const heading = screen.getByRole('heading', { name: 'Open defects' });
+    expect(heading.parentElement?.textContent).toContain('View all');
   });
 });
