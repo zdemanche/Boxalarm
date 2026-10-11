@@ -2,10 +2,13 @@ import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useAuth } from '../../auth/AuthContext';
 import { ApiForbiddenGate } from '../../components/ApiForbiddenGate';
-import { Button, Card, Skeleton } from '../../components/ui';
+import { Badge, Button, Card, Skeleton } from '../../components/ui';
+import { Download } from '../../components/ui/icons';
 import { downloadTranscript, getTranscript } from './api';
 import type { TranscriptExportFormat } from './types';
+import { formatCalendarDate, toCalendarDate } from '../../lib/dates';
 import { humanize } from '../../lib/labels';
+import styles from './training.module.css';
 
 function triggerDownload(blob: Blob, filename: string): void {
   const url = URL.createObjectURL(blob);
@@ -57,49 +60,70 @@ export function TranscriptPanel({ memberId }: { memberId: string }) {
 
   return (
     <Card title="Transcript">
-      <div style={{ display: 'flex', gap: 'var(--bx-space-sm)' }}>
+      {!hasHistory ? (
+        <p className={styles.muted}>No training history on file.</p>
+      ) : (
+        <>
+          <section className={styles.section}>
+            <h3 className={styles.subhead}>Certifications</h3>
+            <ul className={styles.list}>
+              {transcript.certifications.map((cert) => (
+                <li key={cert.certId} className={styles.textRow}>
+                  <span className={styles.rowTitle}>{cert.certType}</span>
+                  <span className={styles.rowMeta}>
+                    {' '}
+                    — {humanize(cert.status)} · expires {formatCalendarDate(cert.expiryDate)}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </section>
+
+          <section className={styles.section}>
+            <h3 className={styles.subhead}>Attendance</h3>
+            <ul className={styles.list}>
+              {transcript.attendance.map((record) => (
+                <li key={`${record.eventId}-${record.startAt}`} className={styles.textRow}>
+                  <span className={styles.rowTitle}>{record.category}</span>
+                  <span className={styles.rowMeta}>
+                    {' '}
+                    — {record.hours}h on {formatCalendarDate(toCalendarDate(record.startAt))}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </section>
+
+          <section className={styles.section}>
+            <h3 className={styles.subhead}>Hours by category</h3>
+            <ul className={styles.pills}>
+              {Object.entries(transcript.hoursByCategory).map(([category, hours]) => (
+                <li key={category}>
+                  <Badge>
+                    {category}: {hours}h
+                  </Badge>
+                </li>
+              ))}
+            </ul>
+          </section>
+        </>
+      )}
+
+      <div className={styles.formActions}>
+        {exportError ? (
+          <p role="alert" className={styles.error}>
+            {exportError}
+          </p>
+        ) : null}
         <Button type="button" variant="secondary" onClick={() => void onExport('csv')}>
+          <Download size={16} aria-hidden="true" />
           Export CSV
         </Button>
         <Button type="button" variant="secondary" onClick={() => void onExport('pdf')}>
+          <Download size={16} aria-hidden="true" />
           Export PDF
         </Button>
       </div>
-      {exportError ? <p role="alert">{exportError}</p> : null}
-
-      {!hasHistory ? (
-        <p>No training history on file.</p>
-      ) : (
-        <>
-          <h3 style={{ fontSize: 15, fontWeight: 600 }}>Certifications</h3>
-          <ul>
-            {transcript.certifications.map((cert) => (
-              <li key={cert.certId}>
-                {cert.certType} — {humanize(cert.status)} · expires {cert.expiryDate}
-              </li>
-            ))}
-          </ul>
-
-          <h3 style={{ fontSize: 15, fontWeight: 600 }}>Attendance</h3>
-          <ul>
-            {transcript.attendance.map((record) => (
-              <li key={`${record.eventId}-${record.startAt}`}>
-                {record.category} — {record.hours}h on{' '}
-                {new Date(record.startAt).toLocaleDateString()}
-              </li>
-            ))}
-          </ul>
-
-          <h3 style={{ fontSize: 15, fontWeight: 600 }}>Hours by category</h3>
-          <ul>
-            {Object.entries(transcript.hoursByCategory).map(([category, hours]) => (
-              <li key={category}>
-                {category}: {hours}h
-              </li>
-            ))}
-          </ul>
-        </>
-      )}
     </Card>
   );
 }

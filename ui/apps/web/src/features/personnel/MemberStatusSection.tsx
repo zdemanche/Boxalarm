@@ -3,6 +3,7 @@ import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useAuth } from '../../auth/AuthContext';
 import { canChangeMemberStatus } from '../../auth/roles';
 import { Button } from '../../components/ui/Button';
+import { Card } from '../../components/ui/Card';
 import { ConfirmDialog } from '../../components/ui/Dialog';
 import { Select } from '../../components/ui/Field';
 import { ApiError } from '../../lib/apiClient';
@@ -104,20 +105,13 @@ export function MemberStatusSection({ member }: { member: Member }) {
   }
 
   return (
-    <section aria-labelledby="member-status-heading" style={{ marginTop: 'var(--bx-space-lg)' }}>
-      <h2
-        id="member-status-heading"
-        style={{ fontSize: 'var(--boxalarm-font-size-lg)', margin: 0 }}
-      >
-        Status
-      </h2>
-      {/* The current status is the chip in the page header; it is not repeated here. */}
-      <div className={styles.inlineForm} style={{ marginTop: 'var(--bx-space-sm)' }}>
+    <Card title="Change status" role="region" aria-label="Change status">
+      {/* The current status is the chip in the Profile card just above; it is not repeated. */}
+      <div className={styles.inlineForm}>
         <Select
           label={reinstating ? 'Reinstate as' : 'New status'}
           value={selected}
           onChange={(e) => setChoice(e.target.value as MemberStatus | '')}
-          style={{ minWidth: 200 }}
         >
           <option value="">Choose a status…</option>
           {targets.map((status) => (
@@ -131,7 +125,7 @@ export function MemberStatusSection({ member }: { member: Member }) {
         </Button>
       </div>
       {/* Always mounted: a live region that appears already filled is skipped by some readers. */}
-      <p role="status" aria-live="polite">
+      <p role="status" aria-live="polite" className={styles.status}>
         {message}
       </p>
       <ConfirmDialog
@@ -157,6 +151,6 @@ export function MemberStatusSection({ member }: { member: Member }) {
         onConfirm={() => (selected === '' ? undefined : apply(selected))}
         danger={selected === 'LOA' || selected === 'RETIRED'}
       />
-    </section>
+    </Card>
   );
 }

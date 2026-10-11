@@ -3,6 +3,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { ApiError } from '../../lib/apiClient';
 import { useAuth } from '../../auth/AuthContext';
 import { Button } from '../../components/ui/Button';
+import { Card } from '../../components/ui/Card';
 import { ConfirmDialog } from '../../components/ui/Dialog';
 import { TextInput } from '../../components/ui/Field';
 import { listMemberDevices, resetMemberCredentials, revokeMemberSessions } from '../platform/api';
@@ -171,24 +172,11 @@ export function AccountSecuritySection({ member }: { member: Member }) {
   }
 
   return (
-    <section
-      aria-labelledby="account-security-heading"
-      style={{ marginTop: 'var(--boxalarm-spacing-lg)' }}
-    >
-      <h2
-        id="account-security-heading"
-        style={{ fontSize: 'var(--boxalarm-font-size-lg)', margin: 0 }}
-      >
-        Account security
-      </h2>
-      <div
-        style={{
-          display: 'flex',
-          flexWrap: 'wrap',
-          gap: 'var(--boxalarm-spacing-sm)',
-          marginTop: 'var(--boxalarm-spacing-sm)',
-        }}
-      >
+    <Card title="Account security" role="region" aria-label="Account security">
+      <p className={styles.note}>
+        For a lost phone or a leaked password. Each action asks you to confirm first.
+      </p>
+      <div className={styles.buttonStack}>
         <Button variant="secondary" onClick={() => setOpen('deviceLost')}>
           Report device lost
         </Button>
@@ -200,7 +188,7 @@ export function AccountSecuritySection({ member }: { member: Member }) {
         </Button>
       </div>
       {/* Always mounted: a live region that appears already filled is skipped by some readers. */}
-      <p role="status" aria-live="polite">
+      <p role="status" aria-live="polite" className={styles.status}>
         {message}
       </p>
       <ConfirmDialog
@@ -296,6 +284,6 @@ export function AccountSecuritySection({ member }: { member: Member }) {
           />
         </div>
       </ConfirmDialog>
-    </section>
+    </Card>
   );
 }

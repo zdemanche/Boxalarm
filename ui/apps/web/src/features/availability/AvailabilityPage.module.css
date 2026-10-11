@@ -1,25 +1,45 @@
+/* The form in the wide column, the member's own mark-offs beside it; one column below 1024px. */
+.layout {
+  display: grid;
+  gap: var(--bx-space-lg);
+  align-items: start;
+}
+
+@media (min-width: 1024px) {
+  .layout {
+    grid-template-columns: minmax(0, 2fr) minmax(280px, 1fr);
+  }
+}
+
 .form {
   display: grid;
   gap: var(--bx-space-md);
-  max-width: 36rem;
 }
 
 .consequence {
   margin: 0;
+  font-size: 14px;
+  color: var(--bx-fg-muted);
 }
 
 .fieldset {
   border: 0;
   margin: 0;
   padding: 0;
-  display: grid;
-  gap: var(--bx-space-xs);
+  min-width: 0;
 }
 
 .legend {
   padding: 0;
-  margin-bottom: var(--bx-space-xs);
+  margin-bottom: var(--bx-space-sm);
+  font-size: 13px;
   font-weight: 600;
+}
+
+.choices {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(200px, 100%), 1fr));
+  gap: var(--bx-space-sm);
 }
 
 /* The whole row is the target: 44px office minimum (docs/design.md §2.5). */
@@ -28,32 +48,58 @@
   align-items: center;
   gap: var(--bx-space-sm);
   min-height: var(--bx-target-office);
-  padding: 0 var(--bx-space-sm);
-  border: 1px solid var(--bx-border-decorative);
+  padding: var(--bx-space-xs) var(--bx-space-md);
+  border: 1px solid var(--bx-border);
   border-radius: var(--bx-radius-md);
+  background: var(--bx-card);
+  font-size: 14px;
   cursor: pointer;
 }
 
+.choice:hover {
+  background: var(--bx-surface);
+}
+
 .choice:has(input:checked) {
-  border-color: var(--bx-fg);
+  border-color: var(--bx-accent-fill);
+  background: var(--bx-accent-subtle);
+  color: var(--bx-on-accent-subtle);
   font-weight: 600;
+}
+
+.choice:has(input:focus-visible) {
+  outline: 3px solid var(--bx-focus);
+  outline-offset: 2px;
 }
 
 .choice input {
   width: 18px;
   height: 18px;
   margin: 0;
+  flex-shrink: 0;
+  accent-color: var(--bx-fg);
 }
 
 .custom {
   display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(220px, 100%), 1fr));
   gap: var(--bx-space-md);
 }
 
-@media (min-width: 768px) {
-  .custom {
-    grid-template-columns: 1fr 1fr;
-  }
+.reason {
+  max-width: 320px;
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  align-items: center;
+  gap: var(--bx-space-sm);
+}
+
+.actions .error {
+  margin-right: auto;
 }
 
 .error {
@@ -63,6 +109,89 @@
 }
 
 .confirmation {
-  margin-top: 0;
+  margin: 0 0 var(--bx-space-sm);
+  font-size: 18px;
   font-weight: 700;
+}
+
+.confirmationText {
+  margin: 0 0 var(--bx-space-xs);
+  font-size: 14px;
+  color: var(--bx-fg-muted);
+}
+
+.confirmationActions {
+  margin-top: var(--bx-space-md);
+}
+
+/* MarkOffList: divided rows inside its card. */
+.list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--bx-space-xs) var(--bx-space-md);
+  padding: 12px 0;
+  border-top: 1px solid var(--bx-border-decorative);
+}
+
+.row:first-child {
+  border-top: 0;
+  padding-top: 0;
+}
+
+.rowMain {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  flex: 1 1 180px;
+}
+
+.rowTitle {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.rowMeta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--bx-space-xs) var(--bx-space-sm);
+  font-size: 13px;
+  color: var(--bx-fg-muted);
+}
+
+.muted {
+  margin: 0;
+  font-size: 14px;
+  color: var(--bx-fg-muted);
+}
+
+.errorRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--bx-space-sm);
+}
+
+/* Live regions stay mounted; an empty one takes no room. */
+.status {
+  margin: 0;
+  font-size: 14px;
+}
+
+.status:not(:empty) {
+  margin-top: var(--bx-space-sm);
+}
+
+.list + .error,
+.muted + .error {
+  margin-top: var(--bx-space-sm);
 }

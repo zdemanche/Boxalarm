@@ -4,6 +4,7 @@ import { useAuth } from '../../auth/AuthContext';
 import { KNOWN_ROLES, type Role } from '../../auth/roles';
 import { ApiError } from '../../lib/apiClient';
 import { Button } from '../../components/ui/Button';
+import { Card } from '../../components/ui/Card';
 import { ConfirmDialog } from '../../components/ui/Dialog';
 import { updateMemberRoles } from './api';
 import type { Member } from './types';
@@ -92,21 +93,21 @@ export function RolesSection({ member, canEdit }: { member: Member; canEdit: boo
     }
   }
 
-  const heading = <h2 style={{ fontSize: 'var(--boxalarm-font-size-lg)', margin: 0 }}>Roles</h2>;
-
   if (!canEdit || isSelf) {
     return (
-      <section style={{ marginTop: 'var(--boxalarm-spacing-lg)' }}>
-        {heading}
-        <p>{roleList(saved)}</p>
-        {canEdit ? <p>You cannot change your own roles. Another chief or admin must.</p> : null}
-      </section>
+      <Card title="Roles">
+        <p className={styles.rolesLine}>{roleList(saved)}</p>
+        {canEdit ? (
+          <p className={styles.note}>
+            You cannot change your own roles. Another chief or admin must.
+          </p>
+        ) : null}
+      </Card>
     );
   }
 
   return (
-    <section style={{ marginTop: 'var(--boxalarm-spacing-lg)' }}>
-      {heading}
+    <Card title="Roles">
       <form
         aria-label="Member roles"
         onSubmit={(event: FormEvent) => {
@@ -145,13 +146,17 @@ export function RolesSection({ member, canEdit }: { member: Member; canEdit: boo
             Every member keeps the Member role.
           </p>
         </fieldset>
-        <Button type="submit" variant="secondary" style={{ marginTop: 'var(--bx-space-sm)' }}>
-          Review role changes
-        </Button>
+        <div className={styles.formActions}>
+          <Button type="submit" variant="secondary">
+            Review role changes
+          </Button>
+        </div>
       </form>
       {/* Always mounted: several screen readers skip a live region that appears already
           filled, so the message is swapped into an existing one. */}
-      <p role="status">{message ?? ''}</p>
+      <p role="status" className={styles.status}>
+        {message ?? ''}
+      </p>
       <ConfirmDialog
         open={confirmOpen}
         onOpenChange={setConfirmOpen}
@@ -165,6 +170,6 @@ export function RolesSection({ member, canEdit }: { member: Member; canEdit: boo
         confirmLabel="Save roles"
         onConfirm={confirmSave}
       />
-    </section>
+    </Card>
   );
 }

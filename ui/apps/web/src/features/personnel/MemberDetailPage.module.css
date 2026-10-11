@@ -1,5 +1,135 @@
 /* Member detail and its sections (RolesSection, AccountSecuritySection, MemberStatusSection). */
 
+/* Who the member is and what can be done to their account on the left; their records
+   (certifications, qualifications, PPE, transcript) in the wider column. One column below
+   1024px, in the same order. */
+.layout {
+  display: grid;
+  gap: var(--bx-space-lg);
+  align-items: start;
+}
+
+@media (min-width: 1024px) {
+  .layout {
+    grid-template-columns: minmax(280px, 1fr) minmax(0, 2fr);
+  }
+}
+
+.column {
+  display: grid;
+  gap: var(--bx-space-lg);
+  align-content: start;
+  min-width: 0;
+}
+
+/* Key-value facts: a two-column grid, never the browser's indented <dl>. */
+.facts {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 8px 24px;
+  margin: 0;
+  font-size: 14px;
+}
+
+.facts dt {
+  font-size: 13px;
+  color: var(--bx-fg-muted);
+}
+
+.facts dd {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.mono {
+  font-family: var(--bx-font-mono);
+}
+
+/* Divided rows inside a card. */
+.list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--bx-space-xs) var(--bx-space-md);
+  padding: 12px 0;
+  border-top: 1px solid var(--bx-border-decorative);
+}
+
+.row:first-child {
+  border-top: 0;
+  padding-top: 0;
+}
+
+.rowMain {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1 1 200px;
+}
+
+.rowTitle {
+  font-size: 15px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.rowMeta {
+  font-size: 13px;
+  color: var(--bx-fg-muted);
+  overflow-wrap: anywhere;
+}
+
+.rowAside {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--bx-space-sm);
+}
+
+.muted {
+  margin: 0;
+  font-size: 14px;
+  color: var(--bx-fg-muted);
+}
+
+/* A form that follows a list inside the same card. */
+.subsection {
+  margin-top: var(--bx-space-md);
+  padding-top: var(--bx-space-md);
+  border-top: 1px solid var(--bx-border-decorative);
+}
+
+.subhead {
+  margin: 0 0 var(--bx-space-sm);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.formGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(200px, 100%), 1fr));
+  gap: var(--bx-space-md);
+  align-items: end;
+}
+
+.formActions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  align-items: center;
+  gap: var(--bx-space-sm);
+  margin-top: var(--bx-space-md);
+}
+
 /* A field and its submit button on one line, wrapping on a phone. */
 .inlineForm {
   display: flex;
@@ -8,20 +138,53 @@
   gap: var(--bx-space-sm);
 }
 
-.stackForm {
-  display: grid;
-  gap: var(--bx-space-md);
-  max-width: 480px;
-  margin-top: var(--bx-space-lg);
+.inlineForm > :first-child {
+  flex: 1 1 180px;
 }
 
-.stackForm > button {
-  justify-self: start;
+/* The account kill switches: one full-width button per line in the narrow column. */
+.buttonStack {
+  display: grid;
+  gap: var(--bx-space-sm);
+  margin-top: var(--bx-space-md);
+}
+
+.figure {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--bx-space-sm);
+  margin: 0;
+}
+
+.bigNumber {
+  margin: 0;
+  font-size: 30px;
+  line-height: 1.1;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.02em;
 }
 
 .error {
   margin: 0;
   color: var(--bx-status-danger);
+  font-weight: 600;
+}
+
+/* Live regions stay mounted; an empty one takes no room. */
+.status {
+  margin: 0;
+  font-size: 14px;
+}
+
+.status:not(:empty) {
+  margin-top: var(--bx-space-sm);
+}
+
+.rolesLine {
+  margin: 0 0 var(--bx-space-xs);
+  font-size: 15px;
   font-weight: 600;
 }
 
@@ -43,6 +206,7 @@
 .legend {
   padding: 0;
   margin-bottom: var(--bx-space-xs);
+  font-size: 13px;
   font-weight: 600;
 }
 
@@ -62,11 +226,16 @@
   padding: var(--bx-space-xs) var(--bx-space-sm);
   border: 1px solid var(--bx-border-decorative);
   border-radius: var(--bx-radius-md);
+  font-size: 14px;
   cursor: pointer;
 }
 
-.choice:has(input:checked) {
-  border-color: var(--bx-fg);
+/* Not on a disabled choice (the always-held Member role): its muted label stays on the card. */
+.choice:has(input:checked:not(:disabled)) {
+  border-color: var(--bx-accent-fill);
+  background: var(--bx-accent-subtle);
+  color: var(--bx-on-accent-subtle);
+  font-weight: 600;
 }
 
 .choice:has(input:disabled) {

@@ -1,9 +1,10 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 import { useAuth } from '../../auth/AuthContext';
-import { Button } from '../../components/ui';
+import { Button, Card, Skeleton, StatusChip } from '../../components/ui';
 import { ApiError } from '../../lib/apiClient';
 import { endMarkOff, listMarkOffs, type ListedMarkOff } from './api';
+import styles from './AvailabilityPage.module.css';
 
 function when(epochSeconds: number): string {
   return new Date(epochSeconds * 1000).toLocaleString(undefined, {
@@ -52,21 +53,19 @@ export function MarkOffList({ memberId, ownRecord }: { memberId: string; ownReco
   const unsupported =
     query.error instanceof ApiError &&
     (query.error.problem.status === 404 || query.error.problem.status === 405);
+  const title = ownRecord ? 'Your mark-offs' : 'Mark-offs';
 
   return (
-    <section aria-labelledby={`markoffs-${memberId}`}>
-      <h2 id={`markoffs-${memberId}`} style={{ fontSize: 'var(--boxalarm-font-size-lg)' }}>
-        {ownRecord ? 'Your mark-offs' : 'Mark-offs'}
-      </h2>
-      {query.isLoading ? <p>Loading mark-offs…</p> : null}
+    <Card title={title} role="region" aria-label={title}>
+      {query.isLoading ? <Skeleton lines={2} /> : null}
       {query.error ? (
         unsupported ? (
-          <p role="status">
+          <p role="status" className={styles.muted}>
             This server can’t list or end mark-offs yet. A mark-off still ends at its end time.
           </p>
         ) : (
-          <div role="alert" style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
-            <p style={{ margin: 0 }}>
+          <div role="alert" className={styles.errorRow}>
+            <p className={styles.muted}>
               {query.error instanceof ApiError && query.error.problem.status === 403
                 ? 'You do not have access to this member’s mark-offs.'
                 : 'Mark-offs could not be loaded.'}
@@ -80,42 +79,53 @@ export function MarkOffList({ memberId, ownRecord }: { memberId: string; ownReco
         )
       ) : null}
       {query.isSuccess && markOffs.length === 0 ? (
-        <p>{ownRecord ? 'You’re not marked off.' : 'Not marked off.'}</p>
+        <p className={styles.muted}>{ownRecord ? 'You’re not marked off.' : 'Not marked off.'}</p>
       ) : null}
-      <ul style={{ listStyle: 'none', padding: 0 }}>
-        {markOffs.map((markOff) => {
-          const current = markOff.startAt <= nowSeconds;
-          return (
-            <li
-              key={markOff.markoffId}
-              style={{ display: 'flex', gap: 12, alignItems: 'center', minHeight: 44 }}
-            >
-              <span>
-                {current
-                  ? `Marked off now, until ${when(markOff.endAt)}`
-                  : `${when(markOff.startAt)} until ${when(markOff.endAt)}`}
-                {markOff.reason ? ` · ${markOff.reason}` : ''}
-              </span>
-              <Button
-                variant="secondary"
-                loading={end.isPending && end.variables?.markoffId === markOff.markoffId}
-                onClick={() => end.mutate(markOff)}
-                aria-label={
-                  current
-                    ? `End the mark-off until ${when(markOff.endAt)} now`
-                    : `Cancel the mark-off from ${when(markOff.startAt)}`
-                }
-              >
-                {current ? 'End now' : 'Cancel'}
-              </Button>
-            </li>
-          );
-        })}
-      </ul>
-      {end.error ? <p role="alert">The mark-off could not be ended. Try again.</p> : null}
-      <p role="status" aria-live="polite">
+      {markOffs.length > 0 ? (
+        <ul className={styles.list}>
+          {markOffs.map((markOff) => {
+            const current = markOff.startAt <= nowSeconds;
+            return (
+              <li key={markOff.markoffId} className={styles.row}>
+                <span className={styles.rowMain}>
+                  <span className={styles.rowTitle}>
+                    {current
+                      ? `Until ${when(markOff.endAt)}`
+                      : `${when(markOff.startAt)} until ${when(markOff.endAt)}`}
+                  </span>
+                  <span className={styles.rowMeta}>
+                    <StatusChip status={current ? 'warning' : 'info'}>
+                      {current ? 'Marked off now' : 'Upcoming'}
+                    </StatusChip>
+                    {markOff.reason ? <span>{markOff.reason}</span> : null}
+                  </span>
+                </span>
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  loading={end.isPending && end.variables?.markoffId === markOff.markoffId}
+                  onClick={() => end.mutate(markOff)}
+                  aria-label={
+                    current
+                      ? `End the mark-off until ${when(markOff.endAt)} now`
+                      : `Cancel the mark-off from ${when(markOff.startAt)}`
+                  }
+                >
+                  {current ? 'End now' : 'Cancel'}
+                </Button>
+              </li>
+            );
+          })}
+        </ul>
+      ) : null}
+      {end.error ? (
+        <p role="alert" className={styles.error}>
+          The mark-off could not be ended. Try again.
+        </p>
+      ) : null}
+      <p role="status" aria-live="polite" className={styles.status}>
         {message}
       </p>
-    </section>
+    </Card>
   );
 }

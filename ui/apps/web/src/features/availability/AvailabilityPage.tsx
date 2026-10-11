@@ -127,13 +127,20 @@ export function AvailabilityPage() {
     mutation.mutate({ memberId: auth.memberId, start, end, reason });
   };
 
+  const header = (
+    <PageHeader
+      title="My availability"
+      description="Mark yourself off when you can’t respond, so calls don’t page you while you’re away."
+    />
+  );
+
   // Never POST to personnel/members//availability: with no member id on the session, say so.
   if (!auth.memberId) {
     return (
       <main id="main-content">
-        <PageHeader title="My availability" />
+        {header}
         <Card>
-          <p role="alert">
+          <p role="alert" className={styles.error}>
             Your sign-in doesn&rsquo;t say which member you are, so a mark-off can&rsquo;t be sent.
             Sign out and sign back in. Until then, tell an officer if you can&rsquo;t respond.
           </p>
@@ -146,23 +153,27 @@ export function AvailabilityPage() {
     const end = new Date(mutation.data.endAt * 1000);
     return (
       <main id="main-content">
-        <PageHeader title="My availability" />
-        <Card>
-          <p role="status" className={styles.confirmation}>
-            You&rsquo;re marked unavailable until {formatWhen(end)}.
-          </p>
-          <p>
-            You won&rsquo;t be alerted for calls until then. You&rsquo;ll still get drill and shift
-            reminders.
-          </p>
-          <p>To be alerted again sooner, use End now below.</p>
-          <Button variant="secondary" onClick={() => mutation.reset()}>
-            Mark another period
-          </Button>
-        </Card>
-        <Card>
+        {header}
+        <div className={styles.layout}>
+          <Card title="Marked unavailable">
+            <p role="status" className={styles.confirmation}>
+              You&rsquo;re marked unavailable until {formatWhen(end)}.
+            </p>
+            <p className={styles.confirmationText}>
+              You won&rsquo;t be alerted for calls until then. You&rsquo;ll still get drill and
+              shift reminders.
+            </p>
+            <p className={styles.confirmationText}>
+              To be alerted again sooner, use End now in Your mark-offs.
+            </p>
+            <div className={styles.confirmationActions}>
+              <Button variant="secondary" onClick={() => mutation.reset()}>
+                Mark another period
+              </Button>
+            </div>
+          </Card>
           <MarkOffList memberId={auth.memberId} ownRecord />
-        </Card>
+        </div>
       </main>
     );
   }
@@ -176,77 +187,81 @@ export function AvailabilityPage() {
 
   return (
     <main id="main-content">
-      <PageHeader title="My availability" />
-      <Card>
-        <form onSubmit={onSubmit} aria-label="Mark unavailable" className={styles.form}>
-          <p className={styles.consequence}>
-            You won&rsquo;t be alerted for calls while you&rsquo;re marked off. You&rsquo;ll still
-            get drill and shift reminders. Shifts you have claimed are not cancelled.
-          </p>
-          <fieldset className={styles.fieldset}>
-            <legend className={styles.legend}>How long</legend>
-            {presetLabels.map((option) => (
-              <label key={option.value} className={styles.choice}>
-                <input
-                  type="radio"
-                  name="duration"
-                  value={option.value}
-                  checked={preset === option.value}
-                  onChange={() => {
-                    setPreset(option.value);
-                    setFormError(null);
-                  }}
-                />
-                {option.label}
-              </label>
-            ))}
-          </fieldset>
-          {preset === 'custom' ? (
-            <div className={styles.custom}>
-              <TextInput
-                label="From"
-                type="datetime-local"
-                value={customStart}
-                onChange={(e) => setCustomStart(e.target.value)}
-                required
-              />
-              <TextInput
-                label="Until"
-                type="datetime-local"
-                value={customEnd}
-                onChange={(e) => setCustomEnd(e.target.value)}
-                required
-              />
-            </div>
-          ) : null}
-          <Select
-            label="Reason"
-            optional
-            value={reason}
-            onChange={(e) => setReason(e.target.value)}
-          >
-            <option value="">No reason given</option>
-            {REASONS.map((value) => (
-              <option key={value} value={value}>
-                {value}
-              </option>
-            ))}
-          </Select>
-          {formError || submitError ? (
-            <p role="alert" className={styles.error}>
-              {formError ?? submitError}
+      {header}
+      <div className={styles.layout}>
+        <Card title="Mark yourself unavailable">
+          <form onSubmit={onSubmit} aria-label="Mark unavailable" className={styles.form}>
+            <p className={styles.consequence}>
+              You won&rsquo;t be alerted for calls while you&rsquo;re marked off. You&rsquo;ll still
+              get drill and shift reminders. Shifts you have claimed are not cancelled.
             </p>
-          ) : null}
-          <div>
-            <Button type="submit" loading={mutation.isPending}>
-              Mark unavailable
-            </Button>
-          </div>
-        </form>
-      </Card>
-      <Card>
+            <fieldset className={styles.fieldset}>
+              <legend className={styles.legend}>How long</legend>
+              <div className={styles.choices}>
+                {presetLabels.map((option) => (
+                  <label key={option.value} className={styles.choice}>
+                    <input
+                      type="radio"
+                      name="duration"
+                      value={option.value}
+                      checked={preset === option.value}
+                      onChange={() => {
+                        setPreset(option.value);
+                        setFormError(null);
+                      }}
+                    />
+                    {option.label}
+                  </label>
+                ))}
+              </div>
+            </fieldset>
+            {preset === 'custom' ? (
+              <div className={styles.custom}>
+                <TextInput
+                  label="From"
+                  type="datetime-local"
+                  value={customStart}
+                  onChange={(e) => setCustomStart(e.target.value)}
+                  required
+                />
+                <TextInput
+                  label="Until"
+                  type="datetime-local"
+                  value={customEnd}
+                  onChange={(e) => setCustomEnd(e.target.value)}
+                  required
+                />
+              </div>
+            ) : null}
+            <div className={styles.reason}>
+              <Select
+                label="Reason"
+                optional
+                value={reason}
+                onChange={(e) => setReason(e.target.value)}
+              >
+                <option value="">No reason given</option>
+                {REASONS.map((value) => (
+                  <option key={value} value={value}>
+                    {value}
+                  </option>
+                ))}
+              </Select>
+            </div>
+            <div className={styles.actions}>
+              {formError || submitError ? (
+                <p role="alert" className={styles.error}>
+                  {formError ?? submitError}
+                </p>
+              ) : null}
+              <Button type="submit" loading={mutation.isPending}>
+                Mark unavailable
+              </Button>
+            </div>
+          </form>
+        </Card>
         <MarkOffList memberId={auth.memberId} ownRecord />
-      </Card>
+      </div>
     </main>
   );
 }

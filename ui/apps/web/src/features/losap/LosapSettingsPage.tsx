@@ -4,7 +4,9 @@ import { useAuth } from '../../auth/AuthContext';
 import { Button, Card, PageHeader, TextInput } from '../../components/ui';
 import { canAccessPath } from '../../routing/routeTable';
 import type { AttendanceActivityType } from '../personnel/types';
+import { humanize } from '../../lib/labels';
 import { updateLosapRules } from './api';
+import styles from './LosapSettingsPage.module.css';
 
 const ACTIVITY_TYPES: AttendanceActivityType[] = [
   'CALL',
@@ -41,6 +43,7 @@ export function LosapSettingsPage() {
     <main id="main-content">
       <PageHeader
         title="LOSAP point rules"
+        description="Points a member earns for each kind of activity toward their yearly LOSAP total."
         // A chief can edit LOSAP rules but not open /settings (ADMIN only); a linked crumb
         // would dead-end them on Forbidden.
         breadcrumbs={[
@@ -51,40 +54,45 @@ export function LosapSettingsPage() {
           { label: 'LOSAP' },
         ]}
       />
-      <Card>
+      <Card title="Points per activity">
+        <p className={styles.intro}>
+          Saving publishes a new rule version. An activity left blank is left out of it.
+        </p>
         <form
           aria-label="LOSAP point rules"
           onSubmit={(event: FormEvent) => {
             event.preventDefault();
             saveMutation.mutate();
           }}
-          style={{ display: 'grid', gap: 'var(--bx-space-md)', maxWidth: 320 }}
         >
-          {ACTIVITY_TYPES.map((type) => (
-            <TextInput
-              key={type}
-              label={`${type} points`}
-              type="number"
-              min="0"
-              step="1"
-              value={points[type]}
-              onChange={(e) => setPoints((prev) => ({ ...prev, [type]: e.target.value }))}
-            />
-          ))}
-          {saveMutation.error ? (
-            <p role="alert" aria-live="assertive">
-              {saveMutation.error.message}
-            </p>
-          ) : null}
-          <Button type="submit" style={{ width: 'fit-content' }}>
-            Save rules
-          </Button>
+          <div className={styles.grid}>
+            {ACTIVITY_TYPES.map((type) => (
+              <TextInput
+                key={type}
+                label={`${humanize(type)} points`}
+                type="number"
+                min="0"
+                step="1"
+                inputMode="numeric"
+                value={points[type]}
+                onChange={(e) => setPoints((prev) => ({ ...prev, [type]: e.target.value }))}
+              />
+            ))}
+          </div>
+          <div className={styles.actions}>
+            {saveMutation.error ? (
+              <p role="alert" aria-live="assertive" className={styles.error}>
+                {saveMutation.error.message}
+              </p>
+            ) : null}
+            {saveMutation.data ? (
+              <p role="status">Saved as rule version {saveMutation.data.ruleVersionId}.</p>
+            ) : null}
+            <Button type="submit" loading={saveMutation.isPending}>
+              Save rules
+            </Button>
+          </div>
         </form>
-        {saveMutation.data ? (
-          <p role="status" style={{ marginTop: 'var(--bx-space-sm)' }}>
-            Saved as rule version {saveMutation.data.ruleVersionId}.
-          </p>
-        ) : null}
       </Card>
     </main>
   );

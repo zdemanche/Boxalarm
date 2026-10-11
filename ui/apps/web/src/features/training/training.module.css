@@ -1,0 +1,351 @@
+/* Shared by the training pages and the panels the member page embeds. */
+
+/* A main column of lists with the create form beside it; one column below 1024px. */
+.layout {
+  display: grid;
+  gap: var(--bx-space-lg);
+  align-items: start;
+}
+
+@media (min-width: 1024px) {
+  .layoutWithAside {
+    grid-template-columns: minmax(0, 2fr) minmax(280px, 1fr);
+  }
+}
+
+.column {
+  display: grid;
+  gap: var(--bx-space-lg);
+  align-content: start;
+  min-width: 0;
+}
+
+/* Divided rows inside a card. */
+.list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--bx-space-xs) var(--bx-space-md);
+  padding: 12px 0;
+  border-top: 1px solid var(--bx-border-decorative);
+}
+
+.row:first-child {
+  border-top: 0;
+  padding-top: 0;
+}
+
+.rowLead {
+  display: flex;
+  align-items: center;
+  gap: var(--bx-space-md);
+  min-width: 0;
+  flex: 1 1 240px;
+}
+
+.rowMain {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1 1 200px;
+}
+
+.rowTitle {
+  font-size: 15px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.rowMeta {
+  font-size: 13px;
+  color: var(--bx-fg-muted);
+  overflow-wrap: anywhere;
+}
+
+.rowAside {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--bx-space-sm);
+}
+
+.rowNote {
+  font-size: 13px;
+  color: var(--bx-fg-muted);
+}
+
+/* The calendar tile at the start of an event row: month over day. */
+.dateTile {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 52px;
+  height: 52px;
+  border-radius: var(--bx-radius-md);
+  background: var(--bx-surface);
+  border: 1px solid var(--bx-border-decorative);
+  line-height: 1;
+}
+
+.dateTileUpcoming {
+  background: var(--bx-accent-subtle);
+  border-color: transparent;
+  color: var(--bx-on-accent-subtle);
+}
+
+.dateMonth {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.dateDay {
+  margin-top: 3px;
+  font-size: 20px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Post-event hours, under the row it belongs to. */
+.rowForm {
+  flex: 1 1 100%;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--bx-space-sm);
+  margin-top: var(--bx-space-xs);
+  padding: var(--bx-space-sm) var(--bx-space-md);
+  border-radius: var(--bx-radius-md);
+  background: var(--bx-surface);
+}
+
+.rowForm > :first-child {
+  flex: 1 1 160px;
+}
+
+.muted {
+  margin: 0;
+  font-size: 14px;
+  color: var(--bx-fg-muted);
+}
+
+.error {
+  margin: 0;
+  color: var(--bx-status-danger);
+  font-weight: 600;
+}
+
+.banner {
+  margin: 0 0 var(--bx-space-md);
+}
+
+/* A form that follows a list inside the same card. */
+.subsection {
+  margin-top: var(--bx-space-md);
+  padding-top: var(--bx-space-md);
+  border-top: 1px solid var(--bx-border-decorative);
+}
+
+.subhead {
+  margin: 0 0 var(--bx-space-sm);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.formGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(200px, 100%), 1fr));
+  gap: var(--bx-space-md);
+}
+
+.formStack {
+  display: grid;
+  gap: var(--bx-space-md);
+}
+
+.formActions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  align-items: center;
+  gap: var(--bx-space-sm);
+  margin-top: var(--bx-space-md);
+}
+
+.formActions .error {
+  margin-right: auto;
+}
+
+.fileField {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  min-width: 0;
+}
+
+.fileField input {
+  min-height: var(--bx-target-office);
+  font-size: 14px;
+  font-weight: 400;
+  max-width: 100%;
+}
+
+.uploadAlert {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--bx-space-sm);
+  margin-top: var(--bx-space-md);
+}
+
+.buttonRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--bx-space-sm);
+}
+
+/* Transcript: three short sections inside one card. */
+.section + .section {
+  margin-top: var(--bx-space-md);
+  padding-top: var(--bx-space-md);
+  border-top: 1px solid var(--bx-border-decorative);
+}
+
+.facts {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 8px 24px;
+  margin: 0;
+  font-size: 14px;
+}
+
+.facts dt {
+  font-size: 13px;
+  color: var(--bx-fg-muted);
+}
+
+.facts dd {
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.hours {
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.picker {
+  max-width: 360px;
+}
+
+.tabPanel {
+  display: grid;
+  gap: var(--bx-space-lg);
+}
+
+.date {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.stats {
+  display: grid;
+  grid-template-columns: repeat(
+    auto-fit,
+    minmax(min(180px, calc(50% - var(--bx-space-md) / 2)), 1fr)
+  );
+  gap: var(--bx-space-md);
+}
+
+.rangeForm {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--bx-space-md);
+}
+
+.rangeForm > * {
+  flex: 0 1 220px;
+}
+
+/* A record line that reads as one sentence ("FF1 — Current · expires Jan 1, 2028"). */
+.textRow {
+  padding: 10px 0;
+  border-top: 1px solid var(--bx-border-decorative);
+  font-size: 14px;
+  overflow-wrap: anywhere;
+}
+
+.textRow:first-child {
+  border-top: 0;
+  padding-top: 0;
+}
+
+.textRow .rowTitle {
+  font-size: 14px;
+}
+
+.textRow .rowMeta {
+  font-size: 14px;
+}
+
+.pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--bx-space-xs);
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+/* Training hours: the date range, then its two totals side by side; one row on a wide screen. */
+.hoursTop {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--bx-space-md);
+}
+
+.hoursTop > :first-child {
+  grid-column: 1 / -1;
+}
+
+@media (min-width: 1200px) {
+  .hoursTop {
+    grid-template-columns: minmax(0, 2fr) minmax(0, 1fr) minmax(0, 1fr);
+  }
+
+  .hoursTop > :first-child {
+    grid-column: auto;
+  }
+}
+
+.rangeError {
+  margin-top: var(--bx-space-sm);
+}
+
+.fileField input::file-selector-button {
+  min-height: 36px;
+  margin-right: var(--bx-space-sm);
+  padding: 0 var(--bx-space-sm);
+  border: 1px solid var(--bx-border);
+  border-radius: var(--bx-radius-md);
+  background: var(--bx-card);
+  color: var(--bx-fg);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}

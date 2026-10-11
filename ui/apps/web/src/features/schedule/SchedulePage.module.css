@@ -1,0 +1,163 @@
+/* The officer's queue and the plan in the wide column, the new-shift form beside it; one column
+   below 1024px, in the same order. */
+.layout {
+  display: grid;
+  gap: var(--bx-space-lg);
+  align-items: start;
+}
+
+@media (min-width: 1024px) {
+  .layout {
+    grid-template-columns: minmax(0, 2fr) minmax(300px, 1fr);
+  }
+}
+
+.column {
+  display: grid;
+  gap: var(--bx-space-lg);
+  align-content: start;
+  min-width: 0;
+}
+
+/* Divided rows inside a card. */
+.list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--bx-space-xs) var(--bx-space-md);
+  padding: 12px 0;
+  border-top: 1px solid var(--bx-border-decorative);
+}
+
+.row:first-child {
+  border-top: 0;
+  padding-top: 0;
+}
+
+.rowMain {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1 1 220px;
+}
+
+.rowTitle {
+  font-size: 15px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.rowMeta {
+  font-size: 13px;
+  color: var(--bx-fg-muted);
+  overflow-wrap: anywhere;
+}
+
+/* A coverage row's short positions, on a subtle fill under the shift they belong to. */
+.gaps {
+  flex: 1 1 100%;
+  list-style: none;
+  margin: var(--bx-space-xs) 0 0;
+  padding: var(--bx-space-xs) var(--bx-space-md);
+  border-radius: var(--bx-radius-md);
+  background: var(--bx-surface);
+}
+
+.gap {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--bx-space-xs) var(--bx-space-sm);
+  padding: 6px 0;
+  font-size: 14px;
+}
+
+.gap + .gap {
+  border-top: 1px solid var(--bx-border-decorative);
+}
+
+.need {
+  color: var(--bx-fg-muted);
+  font-size: 13px;
+}
+
+.muted {
+  margin: 0;
+  font-size: 14px;
+  color: var(--bx-fg-muted);
+}
+
+.error {
+  margin: 0;
+  color: var(--bx-status-danger);
+  font-weight: 600;
+}
+
+.message {
+  margin: var(--bx-space-sm) 0 0;
+  font-size: 14px;
+}
+
+.earlier {
+  margin-top: var(--bx-space-md);
+  padding-top: var(--bx-space-sm);
+  border-top: 1px solid var(--bx-border-decorative);
+}
+
+.earlier > summary {
+  display: flex;
+  align-items: center;
+  min-height: var(--bx-target-office);
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--bx-fg-muted);
+}
+
+.earlier[open] > summary {
+  margin-bottom: var(--bx-space-sm);
+}
+
+.form {
+  display: grid;
+  gap: var(--bx-space-md);
+}
+
+.pair {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(160px, 100%), 1fr));
+  gap: var(--bx-space-md);
+}
+
+.position {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(140px, 100%), 1fr));
+  gap: var(--bx-space-sm);
+  margin: 0;
+  padding: var(--bx-space-sm) var(--bx-space-md) var(--bx-space-md);
+  min-width: 0;
+  border: 1px solid var(--bx-border-decorative);
+  border-radius: var(--bx-radius-md);
+  background: var(--bx-surface);
+}
+
+.position > legend {
+  padding: 0 var(--bx-space-xs);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--bx-fg-muted);
+}
+
+.submit {
+  display: flex;
+  justify-content: flex-end;
+}
