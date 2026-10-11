@@ -1,12 +1,14 @@
 import { describe, expect, test } from 'vitest';
 import { meetsAA } from './contrast';
 import {
+  accentPalette,
   breakpoints,
   elevation,
   iconSize,
   palette,
   radius,
   radiusScale,
+  shellPalette,
   spacing,
   spacingScale,
   statusChipPalette,
@@ -280,5 +282,52 @@ describe('breakpoints', () => {
     for (let i = 1; i < values.length; i++) {
       expect(values[i]!).toBeGreaterThan(values[i - 1]!);
     }
+  });
+});
+
+// 2026-10-11 web redesign: the amber brand accent (the mobile app's palette.accent) on buttons
+// and selection, and a dark navigation shell in both palettes.
+describe('accentPalette', () => {
+  test.each(['day', 'cab'] as const)(
+    '%s: text on the accent fill clears normal-text AA',
+    (name) => {
+      const { fill, fillHover, onFill } = accentPalette[name];
+      expect(meetsAA(fill, onFill, 'normal')).toBe(true);
+      expect(meetsAA(fillHover, onFill, 'normal')).toBe(true);
+    },
+  );
+
+  // The web day card is surfacePalette.day.bg (white) and the cab card is cab.surface.
+  test.each([
+    ['day', surfacePalette.day.bg],
+    ['cab', surfacePalette.cab.surface],
+  ] as const)('%s: the text-safe accent clears normal-text AA on a card', (name, card) => {
+    expect(meetsAA(card, accentPalette[name].accent, 'normal')).toBe(true);
+  });
+
+  test.each(['day', 'cab'] as const)('%s: subtle accent pair clears normal-text AA', (name) => {
+    const { accentSubtle, onAccentSubtle } = accentPalette[name];
+    expect(meetsAA(accentSubtle, onAccentSubtle, 'normal')).toBe(true);
+  });
+
+  test.each(['day', 'cab'] as const)(
+    '%s: the accent is the mobile brand accent, so web and phone read as one product',
+    (name) => {
+      expect(accentPalette[name].accent).toBe(palette[name].accent);
+    },
+  );
+});
+
+describe('shellPalette', () => {
+  test('nav text clears normal-text AA on the shell and on a hovered/selected item', () => {
+    const { bg, bgRaised, fg, fgMuted } = shellPalette;
+    for (const surface of [bg, bgRaised]) {
+      expect(meetsAA(surface, fg, 'normal')).toBe(true);
+      expect(meetsAA(surface, fgMuted, 'normal')).toBe(true);
+    }
+  });
+
+  test('the selected-item marker clears non-text AA (3:1) on the shell', () => {
+    expect(meetsAA(shellPalette.bgRaised, shellPalette.accent, 'large')).toBe(true);
   });
 });

@@ -1,8 +1,9 @@
 .card {
-  background: var(--bx-surface);
+  background: var(--bx-card);
   border: 1px solid var(--bx-border-decorative);
   border-radius: var(--bx-radius-lg);
-  padding: var(--bx-space-lg);
+  padding: 20px 24px;
+  box-shadow: var(--bx-shadow-raised);
 }
 
 /* Cards stacked straight down a page (not in a grid, which owns its own gap) used to touch.
@@ -17,20 +18,47 @@
 }
 
 .cardTitle {
-  margin: 0 0 var(--bx-space-sm);
-  font-size: var(--boxalarm-type-heading-size, 18px);
-  font-weight: 600;
+  margin: 0 0 var(--bx-space-md);
+  font-size: 16px;
+  line-height: 22px;
+  font-weight: 650;
+  letter-spacing: -0.005em;
 }
 
 .stat {
-  background: var(--bx-surface);
+  background: var(--bx-card);
   border: 1px solid var(--bx-border-decorative);
   border-radius: var(--bx-radius-lg);
-  padding: var(--bx-space-md) var(--bx-space-lg);
+  padding: 18px 20px;
+  box-shadow: var(--bx-shadow-raised);
   display: flex;
   flex-direction: column;
-  gap: var(--bx-space-xs);
+  gap: 6px;
   min-width: 0;
+}
+
+.statHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--bx-space-sm);
+}
+
+.statIcon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  flex-shrink: 0;
+  border-radius: var(--bx-radius-md);
+  background: var(--bx-accent-subtle);
+  color: var(--bx-on-accent-subtle);
+}
+
+.statIconAlarm {
+  background: var(--bx-chip-fill-danger);
+  color: var(--bx-chip-onfill-danger);
 }
 
 .statLink {
@@ -42,26 +70,24 @@
 }
 
 .statLink:hover {
-  background: var(--bx-surface-raised);
   border-color: var(--bx-border);
 }
 
 .statLabel {
-  font-size: 12px;
-  font-weight: 600;
-  text-transform: none;
-  letter-spacing: 0.02em;
+  font-size: 13px;
+  font-weight: 500;
   color: var(--bx-fg-muted);
 }
 
 .statValue {
   /* design.md §2.4: KPI values are `office.display` in the UI face. Mono is for identifiers read
      aloud (unit IDs, incident numbers); tabular figures keep columns of counts aligned. */
-  font-size: var(--boxalarm-type-display-size, 28px);
+  font-size: 30px;
   font-weight: 700;
   font-variant-numeric: tabular-nums;
+  letter-spacing: -0.02em;
   color: var(--bx-fg);
-  line-height: 1.15;
+  line-height: 1.1;
 }
 
 .statValueAlarm {

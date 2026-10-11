@@ -26,7 +26,7 @@ import {
   StatusChip,
   buttonClassName,
 } from '../components/ui';
-import { AlertTriangle } from '../components/ui/icons';
+import { AlertTriangle, GraduationCap, Truck, Users, Wrench } from '../components/ui/icons';
 import { daysUntil, formatCalendarDate, relativeDays } from '../lib/dates';
 import { MemberHome, OwnRecordCards } from './MemberHome';
 import styles from './LandingPage.module.css';
@@ -401,12 +401,14 @@ function CommandConsole() {
                 label="Apparatus in service"
                 value={apparatusQuery.isLoading ? '—' : `${inService} / ${apparatus.length}`}
                 to="/apparatus"
+                icon={Truck}
               />
               <Stat
                 label="Out of service"
                 value={apparatusQuery.isLoading ? '—' : outOfService}
                 alarm={outOfService > 0}
                 to="/apparatus"
+                icon={Wrench}
               />
             </>
           ) : null}
@@ -415,6 +417,7 @@ function CommandConsole() {
               label="Active members"
               value={membersQuery.isLoading ? '—' : `${activeMembers} / ${members.length}`}
               to="/personnel"
+              icon={Users}
             />
           ) : null}
           {canViewExpiring ? (
@@ -424,6 +427,7 @@ function CommandConsole() {
               hint={expiringHint}
               alarm={typeof expiringValue === 'number' && expiringValue > 0}
               to={canAccessPath('/certifications', auth.roles) ? '/certifications' : undefined}
+              icon={GraduationCap}
             />
           ) : null}
         </div>
@@ -466,7 +470,14 @@ export function LandingPage() {
 
   return (
     <main id="main-content">
-      <PageHeader title={ROLE_LABEL[role]} />
+      <PageHeader
+        title={ROLE_LABEL[role]}
+        description={new Date().toLocaleDateString(undefined, {
+          weekday: 'long',
+          month: 'long',
+          day: 'numeric',
+        })}
+      />
       {DASHBOARD_ROLES.includes(role) ? <CommandConsole /> : <MemberHome />}
     </main>
   );

@@ -23,6 +23,7 @@ import {
   Users,
   type LucideIcon,
 } from './ui/icons';
+import { BrandMark } from './BrandMark';
 import styles from './AppShell.module.css';
 
 // Keyed by navPath prefix so a sibling ticket's route (appended to routeTable.ts) still gets a
@@ -73,7 +74,7 @@ export function NavListContent({ onNavigate }: NavListContentProps) {
   return (
     <>
       <div className={styles.brand}>
-        <Flame size={18} aria-hidden="true" />
+        <BrandMark className={styles.brandMark} />
         Boxalarm
       </div>
       {/* Grouped per docs/design.md §3.4. Each group is a labelled list, so a screen reader

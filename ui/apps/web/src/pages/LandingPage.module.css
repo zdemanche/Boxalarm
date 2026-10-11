@@ -35,9 +35,27 @@
   margin-top: 0;
 }
 
-/* design.md §2.6 elevation.alarm - a live call only. */
+/* design.md §2.6 elevation.alarm - a live call only: the alarm border plus a dot on the title. */
 .callCardLive {
-  border: 2px solid var(--bx-status-danger);
+  border: 1px solid var(--bx-status-danger);
+  box-shadow:
+    inset 4px 0 0 var(--bx-status-danger),
+    var(--bx-shadow-raised);
+}
+
+.callCardLive > h2 {
+  display: flex;
+  align-items: center;
+  gap: var(--bx-space-sm);
+}
+
+.callCardLive > h2::before {
+  content: '';
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--bx-status-danger);
+  box-shadow: 0 0 0 4px var(--bx-chip-fill-danger);
 }
 
 .callList {
@@ -149,5 +167,6 @@
 
 .sectionHeading {
   margin: var(--bx-space-xl) 0 0;
-  font-size: 17px;
+  font-size: 18px;
+  font-weight: 650;
 }

@@ -7,6 +7,7 @@
   font-weight: 600;
   border-radius: var(--bx-radius-md);
   border: 1px solid transparent;
+  letter-spacing: -0.005em;
   cursor: pointer;
   white-space: nowrap;
   text-decoration: none;
@@ -40,22 +41,24 @@
 }
 
 .primary {
-  background: var(--bx-fg);
-  color: var(--bx-bg);
-  border-color: var(--bx-fg);
+  background: var(--bx-accent-fill);
+  color: var(--bx-on-accent-fill);
+  border-color: var(--bx-accent-fill);
+  box-shadow: var(--bx-shadow-raised);
 }
 .primary:hover:not(:disabled) {
-  background: var(--bx-fg-muted);
-  border-color: var(--bx-fg-muted);
+  background: var(--bx-accent-fill-hover);
+  border-color: var(--bx-accent-fill-hover);
 }
 
 .secondary {
-  background: transparent;
+  background: var(--bx-card);
   color: var(--bx-fg);
-  border-color: var(--bx-border-strong);
+  border-color: var(--bx-border);
+  box-shadow: var(--bx-shadow-raised);
 }
 .secondary:hover:not(:disabled) {
-  background: var(--bx-surface-raised);
+  background: var(--bx-surface);
 }
 
 .ghost {

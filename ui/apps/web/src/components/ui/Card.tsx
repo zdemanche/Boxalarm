@@ -1,5 +1,6 @@
 import type { HTMLAttributes, ReactNode } from 'react';
 import { Link } from 'react-router-dom';
+import type { LucideIcon } from './icons';
 import styles from './Card.module.css';
 
 interface CardProps extends HTMLAttributes<HTMLDivElement> {
@@ -32,13 +33,22 @@ interface StatProps {
   alarm?: boolean;
   /** The tile's source list (design.md O-02: "every KPI tile links to its source list"). */
   to?: string;
+  /** Decorative glyph in the tile's corner; alarm-tinted when the value is an alarm. */
+  icon?: LucideIcon;
 }
 
 /** KPI tile — dashboard command-console numbers (unit counts, expiring certs, OOS apparatus). */
-export function Stat({ label, value, hint, alarm = false, to }: StatProps) {
+export function Stat({ label, value, hint, alarm = false, to, icon: Icon }: StatProps) {
   const content = (
     <>
-      <span className={styles.statLabel}>{label}</span>
+      <span className={styles.statHead}>
+        <span className={styles.statLabel}>{label}</span>
+        {Icon ? (
+          <span className={[styles.statIcon, alarm ? styles.statIconAlarm : ''].join(' ')}>
+            <Icon size={18} aria-hidden="true" />
+          </span>
+        ) : null}
+      </span>
       <span className={[styles.statValue, alarm ? styles.statValueAlarm : ''].join(' ')}>
         {value}
       </span>
