@@ -240,8 +240,12 @@
 }
 
 .roleLabel {
+  padding: 4px 10px;
+  border-radius: var(--bx-radius-pill);
+  background: var(--bx-accent-subtle);
+  color: var(--bx-on-accent-subtle);
   font-size: 13px;
-  color: var(--bx-fg-muted);
+  font-weight: 600;
 }
 
 .main {
