@@ -1,46 +1,96 @@
+/* The first screen a real user sees: one centred card on the canvas, the Boxalarm lockup on top
+   and a single amber action. */
 .page {
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
+  gap: var(--bx-space-lg);
   min-height: 100vh;
-  gap: var(--bx-space-xl);
-  padding: var(--bx-space-lg);
-  background: var(--bx-bg);
+  padding: var(--bx-space-lg) var(--bx-space-md);
+  background: var(--bx-canvas);
+}
+
+.card {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: var(--bx-space-lg);
+  width: 100%;
+  max-width: 400px;
+  padding: 40px 32px 32px;
+  background: var(--bx-card);
+  border: 1px solid var(--bx-border-decorative);
+  border-radius: var(--bx-radius-lg);
+  box-shadow: var(--bx-shadow-overlay);
+  text-align: center;
 }
 
 .brand {
   display: flex;
+  flex-direction: column;
   align-items: center;
-  gap: var(--bx-space-sm);
+  gap: var(--bx-space-md);
   color: var(--bx-fg);
 }
 
+.mark {
+  width: 64px;
+  height: 64px;
+  display: block;
+  /* The mark's own tile is near-black; a hairline keeps its edge on the cab palette's dark card. */
+  border-radius: 14px;
+  box-shadow: 0 0 0 1px var(--bx-border-decorative);
+}
+
 .wordmark {
-  margin: 0;
-  font-size: 28px;
   font-weight: 700;
-  letter-spacing: -0.02em;
+  line-height: 1.1;
+  letter-spacing: -0.03em;
+  color: var(--bx-fg);
 }
 
 .tagline {
-  margin: 0;
+  margin: calc(-1 * var(--bx-space-sm)) 0 0;
   color: var(--bx-fg-muted);
-  font-size: 14px;
-  text-align: center;
+  font-size: 15px;
 }
 
 .actions {
   display: flex;
   flex-direction: column;
-  align-items: center;
+  align-items: stretch;
   gap: var(--bx-space-sm);
+}
+
+.signIn {
   width: 100%;
-  max-width: 320px;
+  font-size: 17px;
+}
+
+/* The fill is inline (pinned by the test), so the hover is a gentle fade like the danger
+   button's rather than a background swap. */
+.signIn:hover {
+  opacity: 0.9;
 }
 
 .error {
+  margin: var(--bx-space-xs) 0 0;
   color: var(--bx-status-danger);
   font-size: 14px;
   text-align: center;
+}
+
+.footnote {
+  margin: 0;
+  max-width: 400px;
+  color: var(--bx-fg-muted);
+  font-size: 13px;
+  text-align: center;
+}
+
+@media (max-width: 479px) {
+  .card {
+    padding: 32px var(--bx-space-lg) var(--bx-space-lg);
+  }
 }

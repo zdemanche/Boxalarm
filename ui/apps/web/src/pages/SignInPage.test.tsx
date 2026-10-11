@@ -41,8 +41,10 @@ test('the sign-in button uses the accent token color and radius, matching the mo
   );
 
   const button = await screen.findByRole('button', { name: 'Sign in' });
-  expect(button.style.background).toBe('var(--boxalarm-accent)');
-  expect(button.style.color).toBe('var(--boxalarm-bg)');
+  // The 2026-10-11 redesign's amber fill (the mobile app's accent) and the text token paired
+  // with it, as on every other primary action in the web console.
+  expect(button.style.background).toBe('var(--bx-accent-fill)');
+  expect(button.style.color).toBe('var(--bx-on-accent-fill)');
   expect(button.style.borderRadius).toBe(`${radius.default}px`);
 });
 

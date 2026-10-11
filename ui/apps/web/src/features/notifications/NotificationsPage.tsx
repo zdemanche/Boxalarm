@@ -79,9 +79,7 @@ function NotificationRow({ notification }: { notification: InboxNotification }) 
         </p>
         <p className={styles.itemMeta}>
           {notification.summary} ·{' '}
-          <span style={{ fontFamily: 'var(--bx-font-mono)', whiteSpace: 'nowrap' }}>
-            {formatDateTime(notification.createdAt)}
-          </span>
+          <span className={styles.timestamp}>{formatDateTime(notification.createdAt)}</span>
           {unread ? '' : ' · Read'}
         </p>
         {notification.items.length > 0 ? (
@@ -155,19 +153,23 @@ function InboxSection() {
           ))}
         </ul>
       )}
-      {inbox.hasNextPage ? (
-        <Button
-          variant="secondary"
-          loading={inbox.isFetchingNextPage}
-          onClick={() => void inbox.fetchNextPage()}
-        >
-          Load older notifications
-        </Button>
-      ) : null}
-      {inbox.isFetchNextPageError ? (
-        <p role="alert" className={styles.itemMeta}>
-          Older notifications could not be loaded. Try again.
-        </p>
+      {inbox.hasNextPage || inbox.isFetchNextPageError ? (
+        <div className={styles.more}>
+          {inbox.hasNextPage ? (
+            <Button
+              variant="secondary"
+              loading={inbox.isFetchingNextPage}
+              onClick={() => void inbox.fetchNextPage()}
+            >
+              Load older notifications
+            </Button>
+          ) : null}
+          {inbox.isFetchNextPageError ? (
+            <p role="alert" className={styles.itemMeta}>
+              Older notifications could not be loaded. Try again.
+            </p>
+          ) : null}
+        </div>
       ) : null}
     </Card>
   );
@@ -286,8 +288,11 @@ function PreferencesSection() {
 export function NotificationsPage() {
   return (
     <main id="main-content">
-      <PageHeader title="Notifications" />
-      <div className={styles.stack}>
+      <PageHeader
+        title="Notifications"
+        description="Your reminders and daily digests. Dispatch alerts are delivered separately."
+      />
+      <div className={styles.layout}>
         <InboxSection />
         <PreferencesSection />
       </div>

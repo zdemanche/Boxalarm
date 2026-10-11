@@ -3,9 +3,10 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useAuth } from '../../auth/AuthContext';
 import { ApiError } from '../../lib/apiClient';
 import { ApiForbiddenGate } from '../../components/ApiForbiddenGate';
-import { Button, Card, ConfirmDialog, Skeleton, TextInput } from '../../components/ui';
+import { Badge, Button, Card, ConfirmDialog, Skeleton, TextInput } from '../../components/ui';
 import { getRetentionConfig, putRetentionConfig, runDisposal } from './api';
 import { LIFE_SAFETY_RECORD_CLASSES, type DisposalResult } from './types';
+import styles from './Settings.module.css';
 
 const RETENTION_QUERY_KEY = ['platform', 'retention'];
 
@@ -89,6 +90,9 @@ export function RetentionSection() {
 
   return (
     <Card title="Records retention">
+      <p className={styles.lead}>
+        How long department records are kept before disposal removes them.
+      </p>
       {retentionQuery.isLoading ? (
         <Skeleton lines={2} />
       ) : retentionQuery.error ? (
@@ -96,10 +100,7 @@ export function RetentionSection() {
           <p role="alert">Unable to load the retention configuration.</p>
         </ApiForbiddenGate>
       ) : (
-        <form
-          onSubmit={handleSubmit}
-          style={{ display: 'grid', gap: 'var(--bx-space-sm)', maxWidth: 320 }}
-        >
+        <form onSubmit={handleSubmit} className={styles.form}>
           <TextInput
             label="Retention period (years)"
             type="number"
@@ -114,31 +115,42 @@ export function RetentionSection() {
               <p role="alert">Could not save the retention period.</p>
             </ApiForbiddenGate>
           ) : null}
-          <Button type="submit" loading={saveMutation.isPending} style={{ width: 'fit-content' }}>
-            Save retention period
-          </Button>
+          <div className={styles.formFooter}>
+            <Button type="submit" variant="secondary" loading={saveMutation.isPending}>
+              Save retention period
+            </Button>
+          </div>
         </form>
       )}
 
-      <h3 style={{ fontSize: 17, fontWeight: 600, marginTop: 'var(--bx-space-lg)' }}>
-        Not subject to automatic disposal
-      </h3>
-      <ul>
-        {LIFE_SAFETY_RECORD_CLASSES.map((recordClass) => (
-          <li key={recordClass}>{recordClass}</li>
-        ))}
-      </ul>
+      <div className={styles.subsection}>
+        <h3 className={styles.subheading}>Not subject to automatic disposal</h3>
+        <ul className={styles.badges}>
+          {LIFE_SAFETY_RECORD_CLASSES.map((recordClass) => (
+            <li key={recordClass}>
+              <Badge>{recordClass}</Badge>
+            </li>
+          ))}
+        </ul>
+      </div>
 
-      <Button
-        type="button"
-        variant="danger"
-        onClick={() => setConfirmDisposalOpen(true)}
-        loading={disposalMutation.isPending}
-        disabled={retentionQuery.isLoading || Boolean(retentionQuery.error)}
-        style={{ marginTop: 'var(--bx-space-md)' }}
-      >
-        Run disposal
-      </Button>
+      <div className={styles.subsection}>
+        <h3 className={styles.subheading}>Dispose of expired records</h3>
+        <div className={styles.dangerRow}>
+          <span className={styles.rowMeta}>
+            Permanently removes records past the retention period.
+          </span>
+          <Button
+            type="button"
+            variant="danger"
+            onClick={() => setConfirmDisposalOpen(true)}
+            loading={disposalMutation.isPending}
+            disabled={retentionQuery.isLoading || Boolean(retentionQuery.error)}
+          >
+            Run disposal
+          </Button>
+        </div>
+      </div>
       <ConfirmDialog
         open={confirmDisposalOpen}
         onOpenChange={setConfirmDisposalOpen}
@@ -148,28 +160,30 @@ export function RetentionSection() {
         onConfirm={() => disposalMutation.mutate()}
         danger
       />
-      {retentionQuery.error ? (
-        <p role="alert">
-          The retention period could not be confirmed, so disposal is disabled until it loads
-          successfully.
-        </p>
-      ) : null}
-      {disposalForbidden ? (
-        <ApiForbiddenGate error={disposalForbidden} embedded>
-          <p role="alert">Disposal could not be run.</p>
-        </ApiForbiddenGate>
-      ) : null}
-      {disposalError ? (
-        <p role="alert" aria-live="assertive">
-          {disposalError}
-        </p>
-      ) : null}
-      {disposalResult ? (
-        <p role="status">
-          {disposalResult.hardDeleted} deleted, {disposalResult.cryptoShredded} crypto-shredded,{' '}
-          {disposalResult.refused.length} refused.
-        </p>
-      ) : null}
+      <div className={styles.feedback}>
+        {retentionQuery.error ? (
+          <p role="alert" className={styles.message}>
+            The retention period could not be confirmed, so disposal is disabled until it loads
+            successfully.
+          </p>
+        ) : null}
+        {disposalForbidden ? (
+          <ApiForbiddenGate error={disposalForbidden} embedded>
+            <p role="alert">Disposal could not be run.</p>
+          </ApiForbiddenGate>
+        ) : null}
+        {disposalError ? (
+          <p role="alert" aria-live="assertive" className={styles.message}>
+            {disposalError}
+          </p>
+        ) : null}
+        {disposalResult ? (
+          <p role="status" className={styles.message}>
+            {disposalResult.hardDeleted} deleted, {disposalResult.cryptoShredded} crypto-shredded,{' '}
+            {disposalResult.refused.length} refused.
+          </p>
+        ) : null}
+      </div>
     </Card>
   );
 }

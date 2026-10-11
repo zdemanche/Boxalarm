@@ -2,6 +2,8 @@
    phone one of them used to set the width of every field in the card. They wrap anywhere. */
 .page code {
   overflow-wrap: anywhere;
+  font-family: var(--bx-font-mono);
+  font-size: 13px;
 }
 
 .page input,
@@ -11,18 +13,72 @@
   max-width: 100%;
 }
 
+/* The sources and their save bar in the wide column, how ingress works beside them. The aside
+   comes first in the DOM (it has no controls) so a phone reads the explanation before the form. */
+.layout {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(280px, 1fr);
+  grid-template-areas: 'main aside';
+  align-items: start;
+  gap: var(--bx-space-lg);
+}
+
+.aside {
+  grid-area: aside;
+  min-width: 0;
+}
+
+.main {
+  grid-area: main;
+  min-width: 0;
+}
+
+@media (max-width: 1023px) {
+  .layout {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas: 'aside' 'main';
+  }
+}
+
 .sources {
   display: grid;
   gap: var(--bx-space-lg);
 }
 
-.sources > p {
+.prose {
+  display: grid;
+  gap: var(--bx-space-sm);
+  font-size: 14px;
+}
+
+.prose p {
   margin: 0;
+}
+
+.muted {
+  color: var(--bx-fg-muted);
+}
+
+.addressBlock {
+  display: grid;
+  gap: 2px;
+  margin-top: var(--bx-space-xs);
+  padding: var(--bx-space-sm) var(--bx-space-md);
+  background: var(--bx-surface);
+  border: 1px solid var(--bx-border-decorative);
+  border-radius: var(--bx-radius-md);
+}
+
+.addressLabel {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--bx-fg-muted);
 }
 
 .actions {
   display: flex;
   flex-wrap: wrap;
+  align-items: center;
   gap: var(--bx-space-sm);
 }
 
@@ -30,31 +86,63 @@
 .editor {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
-  gap: var(--bx-space-sm);
-  max-width: 640px;
+  gap: var(--bx-space-md);
 }
 
-/* A token border instead of the UA groove, which is bright on the cab palette. `min-width: 0`
-   overrides the fieldset's UA `min-inline-size: min-content`. */
+.editor > p {
+  margin: 0;
+}
+
+.fieldGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(220px, 100%), 1fr));
+  gap: var(--bx-space-sm) var(--bx-space-md);
+  align-items: start;
+}
+
+/* A single field that would read oddly stretched across the whole card. */
+.narrow {
+  max-width: 420px;
+}
+
+/* Email and webhook, side by side when there is room. */
+.channels {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(300px, 100%), 1fr));
+  gap: var(--bx-space-md);
+  align-items: stretch;
+}
+
+/* A subtle filled panel instead of the UA groove, which is bright on the cab palette.
+   `min-width: 0` overrides the fieldset's UA `min-inline-size: min-content`. */
 .fieldset {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
+  align-content: start;
   gap: var(--bx-space-sm);
   min-width: 0;
-  margin: var(--bx-space-xs) 0 0;
-  padding: var(--bx-space-sm) var(--bx-space-md) var(--bx-space-md);
+  margin: 0;
+  padding: var(--bx-space-md);
+  background: var(--bx-surface);
   border: 1px solid var(--bx-border-decorative);
   border-radius: var(--bx-radius-md);
 }
 
+/* Floated, so it is a grid item inside the panel rather than the fieldset's rendered legend
+   sitting on its border. */
 .legend {
-  padding: 0 var(--bx-space-xs);
+  float: left;
+  width: 100%;
+  padding: 0;
+  font-size: 14px;
   font-weight: 600;
+  color: var(--bx-fg);
 }
 
 .fieldset > p,
 .stack > p {
   margin: 0;
+  font-size: 14px;
 }
 
 .fieldset > button {
@@ -83,4 +171,95 @@
   .ruleRow {
     grid-template-columns: minmax(0, 1fr);
   }
+}
+
+.note {
+  margin: 0;
+  padding: var(--bx-space-sm) var(--bx-space-md);
+  border-radius: var(--bx-radius-md);
+  background: var(--bx-chip-fill-warning);
+  color: var(--bx-chip-onfill-warning);
+  font-size: 14px;
+}
+
+.result {
+  display: grid;
+  gap: var(--bx-space-sm);
+  font-size: 14px;
+}
+
+.result p {
+  margin: 0;
+}
+
+/* Key-value facts: a two-column grid, never the browser's indented <dl>. */
+.dl {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: var(--bx-space-sm) var(--bx-space-lg);
+  margin: 0;
+  font-size: 14px;
+}
+
+.dl > div {
+  display: contents;
+}
+
+.dl dt {
+  font-size: 13px;
+  color: var(--bx-fg-muted);
+}
+
+.dl dd {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 479px) {
+  .dl {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 2px;
+  }
+
+  .dl dd + dt {
+    margin-top: var(--bx-space-sm);
+  }
+}
+
+.copyRow {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--bx-space-sm);
+  margin-top: var(--bx-space-xs);
+}
+
+/* The save bar closing the form: add on the left, save on the right, results below. */
+.saveBar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--bx-space-sm);
+}
+
+.feedback {
+  display: grid;
+  gap: var(--bx-space-sm);
+  margin-top: var(--bx-space-md);
+  font-size: 14px;
+}
+
+.feedback:empty {
+  display: none;
+}
+
+.feedback p,
+.feedback ul {
+  margin: 0;
+}
+
+.feedback ul {
+  padding-left: var(--bx-space-lg);
 }

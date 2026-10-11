@@ -1,38 +1,59 @@
+/* --- Top-bar bell -------------------------------------------------------------------------- */
+
+/* Same 44px target and hover as the top bar's other icon button (the palette toggle). */
 .bell {
   position: relative;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-width: 32px;
-  min-height: 32px;
+  width: var(--bx-target-office);
+  height: var(--bx-target-office);
   border-radius: var(--bx-radius-md);
   color: var(--bx-fg);
   text-decoration: none;
+  transition: background-color var(--bx-duration-fast) var(--bx-ease-standard);
 }
 
 .bell:hover {
   background: var(--bx-surface-raised);
 }
 
-.bell:focus-visible {
-  outline: 2px solid var(--bx-fg);
-  outline-offset: 2px;
-}
-
+/* The count in the brand amber, ringed in the top bar's own colour so it reads as a badge
+   sitting on the bell rather than touching it. */
 .bellCount {
   position: absolute;
-  top: -2px;
-  right: -4px;
+  top: 5px;
+  right: 3px;
   min-width: 18px;
-  padding: 2px 5px;
+  padding: 3px 5px;
   border-radius: var(--bx-radius-pill);
-  background: var(--bx-fg);
-  color: var(--bx-bg);
+  background: var(--bx-accent-fill);
+  color: var(--bx-on-accent-fill);
+  box-shadow: 0 0 0 2px var(--bx-card);
   font-size: 11px;
   font-weight: 700;
   line-height: 1;
   text-align: center;
+  font-variant-numeric: tabular-nums;
 }
+
+/* --- Page layout --------------------------------------------------------------------------- */
+
+/* The inbox in the wide column, preferences beside it; one column under 1024px. */
+.layout {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(280px, 1fr);
+  align-items: start;
+  gap: var(--bx-space-lg);
+}
+
+@media (max-width: 1023px) {
+  .layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* --- Inbox ---------------------------------------------------------------------------------- */
 
 .list {
   list-style: none;
@@ -42,33 +63,58 @@
 
 .item {
   display: flex;
-  gap: var(--bx-space-md);
+  flex-wrap: wrap;
+  gap: var(--bx-space-sm) var(--bx-space-md);
   align-items: flex-start;
   justify-content: space-between;
   padding: var(--bx-space-md) 0;
-  border-bottom: 1px solid var(--bx-border-decorative);
+  border-top: 1px solid var(--bx-border-decorative);
+}
+
+.item:first-child {
+  border-top: 0;
+  padding-top: 0;
 }
 
 .item:last-child {
-  border-bottom: none;
+  padding-bottom: 0;
 }
 
 .itemBody {
   display: grid;
   gap: var(--bx-space-xs);
   min-width: 0;
+  /* On a phone "Mark read" wraps under the notification instead of squeezing it. */
+  flex: 1 1 280px;
 }
 
 .itemTitle {
+  display: flex;
+  align-items: center;
+  gap: var(--bx-space-sm);
   margin: 0;
   font-size: 15px;
-  font-weight: 700;
+  font-weight: 650;
   color: var(--bx-fg);
+}
+
+/* Unread: an amber dot beside the bold title; the word is the screen-reader "Unread:". */
+.itemTitle::before {
+  content: '';
+  flex-shrink: 0;
+  width: 8px;
+  height: 8px;
+  border-radius: var(--bx-radius-pill);
+  background: var(--bx-accent-fill);
 }
 
 .itemTitleRead {
   font-weight: 500;
   color: var(--bx-fg-muted);
+}
+
+.itemTitleRead::before {
+  background: transparent;
 }
 
 .itemMeta {
@@ -77,12 +123,68 @@
   color: var(--bx-fg-muted);
 }
 
+.itemBody > .itemMeta,
+.itemBody > .dueList {
+  margin-left: 16px;
+}
+
+.timestamp {
+  font-family: var(--bx-font-mono);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+/* What the digest is about: a tinted panel of divided rows, not a bulleted list. */
 .dueList {
-  margin: 0;
-  padding-left: var(--bx-space-md);
+  list-style: none;
+  margin: var(--bx-space-xs) 0 0;
+  padding: 0 var(--bx-space-md);
+  background: var(--bx-surface);
+  border: 1px solid var(--bx-border-decorative);
+  border-radius: var(--bx-radius-md);
   font-size: 14px;
   color: var(--bx-fg);
 }
+
+.dueList li {
+  display: flex;
+  align-items: center;
+  min-height: 40px;
+  padding: 9px 0;
+  border-top: 1px solid var(--bx-border-decorative);
+  overflow-wrap: anywhere;
+}
+
+.dueList li:first-child {
+  border-top: 0;
+}
+
+/* The whole row is the link's target - 44px tall for a gloved thumb - without the rows
+   themselves growing. */
+.dueLink {
+  display: block;
+  width: 100%;
+  margin: -11px 0;
+  padding: 11px 0;
+  color: var(--bx-fg);
+  text-decoration: underline;
+  text-decoration-color: var(--bx-border);
+  text-underline-offset: 3px;
+}
+
+.dueLink:hover {
+  text-decoration-color: currentColor;
+}
+
+.more {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--bx-space-sm);
+  margin-top: var(--bx-space-lg);
+}
+
+/* --- Preferences ------------------------------------------------------------------------- */
 
 .prefHint {
   margin: 0 0 var(--bx-space-md);
@@ -90,46 +192,38 @@
   color: var(--bx-fg-muted);
 }
 
-.dueList li {
-  min-height: 24px;
-}
-
-.dueLink {
-  display: inline-block;
-  min-height: 44px;
-  padding: 10px 0;
-  color: var(--bx-fg);
-  text-decoration: underline;
-  text-underline-offset: 2px;
-}
-
-.dueLink:focus-visible {
-  outline: 2px solid var(--bx-fg);
-  outline-offset: 2px;
-}
-
 .prefList {
   display: grid;
-  gap: var(--bx-space-lg);
 }
 
 .prefGroup {
   display: grid;
-  gap: var(--bx-space-sm);
+  gap: var(--bx-space-xs);
+  min-width: 0;
   border: none;
   margin: 0;
-  padding: 0;
+  padding: var(--bx-space-md) 0;
+  border-top: 1px solid var(--bx-border-decorative);
 }
 
+.prefGroup:first-child {
+  border-top: 0;
+  padding-top: 0;
+}
+
+.prefGroup:last-child {
+  padding-bottom: 0;
+}
+
+/* Floated: a grid row inside the group rather than the fieldset's rendered legend. */
 .prefGroup legend {
-  font-weight: 600;
+  float: left;
+  width: 100%;
+  padding: 0;
   margin-bottom: var(--bx-space-xs);
-}
-
-.stack {
-  display: grid;
-  gap: var(--bx-space-xl);
-  max-width: 760px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--bx-fg);
 }
 
 .srOnly {

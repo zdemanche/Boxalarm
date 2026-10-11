@@ -4,6 +4,7 @@ import { useAuth } from '../../auth/AuthContext';
 import { ApiForbiddenGate } from '../../components/ApiForbiddenGate';
 import { Card, Skeleton, StatusChip } from '../../components/ui';
 import { getCutoverDecision } from '../reporting/api';
+import styles from './Settings.module.css';
 
 /**
  * #161 (E1-S15-UI): tells ADMIN whether retained paging is still required under the N1.9 parallel
@@ -20,29 +21,30 @@ export function CutoverStatusNotice() {
   });
 
   return (
-    <Card title="Cutover">
+    <Card title="Cutover" actions={<Link to="/reporting">See the full cutover report</Link>}>
       {query.isLoading ? (
         <Skeleton lines={2} />
       ) : (
         <ApiForbiddenGate error={query.error} embedded>
           {query.data ? (
-            <>
-              {query.data.retainedPagingRequired ? (
-                <p role="status">
-                  <StatusChip status="warning">Still required</StatusChip> Retained radio tone-out
-                  paging is still required — the department has not accepted Boxalarm&apos;s
-                  delivery data as meeting the N1.9 cutover threshold.
+            query.data.retainedPagingRequired ? (
+              <div role="status" className={styles.statusBlock}>
+                <StatusChip status="warning">Still required</StatusChip>
+                <p>
+                  Retained radio tone-out paging is still required — the department has not accepted
+                  Boxalarm&apos;s delivery data as meeting the N1.9 cutover threshold.
                 </p>
-              ) : (
-                <p role="status">
-                  <StatusChip status="ok">Not required</StatusChip> The department has accepted
-                  Boxalarm&apos;s delivery data for cutover. This records that decision only — it
-                  does not disable, pause, or otherwise change radio tone-out paging, which remains
-                  a separate department decision.
+              </div>
+            ) : (
+              <div role="status" className={styles.statusBlock}>
+                <StatusChip status="ok">Not required</StatusChip>
+                <p>
+                  The department has accepted Boxalarm&apos;s delivery data for cutover. This
+                  records that decision only — it does not disable, pause, or otherwise change radio
+                  tone-out paging, which remains a separate department decision.
                 </p>
-              )}
-              <Link to="/reporting">See the full cutover report</Link>
-            </>
+              </div>
+            )
           ) : null}
         </ApiForbiddenGate>
       )}

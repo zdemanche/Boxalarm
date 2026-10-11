@@ -1,11 +1,13 @@
 import { Link } from 'react-router-dom';
 import { Card, PageHeader } from '../../components/ui';
+import { ChevronRight } from '../../components/ui/icons';
 import { CheckSheetEditor } from './CheckSheetEditor';
 import { CutoverStatusNotice } from './CutoverStatusNotice';
 import { ExportSection } from './ExportSection';
 import { JsonConfigEditor } from './JsonConfigEditor';
 import { RetentionSection } from './RetentionSection';
 import type { EditableConfigType } from './types';
+import styles from './Settings.module.css';
 
 const CONFIG_SECTIONS: {
   configType: EditableConfigType;
@@ -41,33 +43,63 @@ const CONFIG_SECTIONS: {
   },
 ];
 
+const RELATED_SETTINGS = [
+  {
+    to: '/settings/losap',
+    label: 'LOSAP point rules',
+    description:
+      'Points awarded per attendance activity type for the length-of-service award program.',
+  },
+  {
+    to: '/settings/cad-sources',
+    label: 'CAD sources',
+    description:
+      'Which CAD systems may page the department by email or signed webhook, and how their dispatch text is read.',
+  },
+];
+
 export function SettingsPage() {
   return (
     <main id="main-content">
-      <PageHeader title="Settings" />
-      <CutoverStatusNotice />
-      <Card title="LOSAP">
-        <p>Points awarded per attendance activity type for the length-of-service award program.</p>
-        <Link to="/settings/losap">LOSAP point rules</Link>
-      </Card>
-      <Card title="CAD dispatch ingress">
-        <p>
-          Which CAD systems may page the department by email or signed webhook, and how their
-          dispatch text is read.
-        </p>
-        <Link to="/settings/cad-sources">CAD sources</Link>
-      </Card>
-      {CONFIG_SECTIONS.map((section) => (
-        <JsonConfigEditor
-          key={section.configType}
-          configType={section.configType}
-          label={section.label}
-          helpText={section.helpText}
-        />
-      ))}
-      <CheckSheetEditor />
-      <RetentionSection />
-      <ExportSection />
+      <PageHeader
+        title="Settings"
+        description="How the department is set up: stations, ranks, paging, NERIS, the truck check and records."
+      />
+      <div className={[styles.layout, styles.topRow].join(' ')}>
+        <CutoverStatusNotice />
+        <Card title="More settings">
+          <ul className={styles.rows}>
+            {RELATED_SETTINGS.map((setting) => (
+              <li key={setting.to} className={styles.row}>
+                <span className={styles.rowBody}>
+                  <span className={styles.rowTitle}>
+                    <Link to={setting.to}>{setting.label}</Link>
+                  </span>
+                  <span className={styles.rowMeta}>{setting.description}</span>
+                </span>
+                <ChevronRight size={18} className={styles.rowGlyph} aria-hidden="true" />
+              </li>
+            ))}
+          </ul>
+        </Card>
+      </div>
+      <div className={styles.layout}>
+        <div className={styles.column}>
+          {CONFIG_SECTIONS.map((section) => (
+            <JsonConfigEditor
+              key={section.configType}
+              configType={section.configType}
+              label={section.label}
+              helpText={section.helpText}
+            />
+          ))}
+          <CheckSheetEditor />
+        </div>
+        <div className={styles.column}>
+          <RetentionSection />
+          <ExportSection />
+        </div>
+      </div>
     </main>
   );
 }

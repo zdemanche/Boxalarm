@@ -1,0 +1,126 @@
+/* A member's own summary (and the "You" cards on every dashboard). */
+
+/* The member home: shifts and certifications in the wide column; availability, points, what is
+   out of service and the note about department figures beside them. One column under 1024px. */
+.layout {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(280px, 1fr);
+  align-items: start;
+  gap: var(--bx-space-lg);
+}
+
+.column {
+  display: grid;
+  gap: var(--bx-space-lg);
+  min-width: 0;
+}
+
+@media (max-width: 1023px) {
+  .layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.message {
+  margin: 0;
+  color: var(--bx-fg-muted);
+  font-size: 14px;
+}
+
+.message + .action {
+  margin-top: var(--bx-space-md);
+}
+
+.action {
+  display: flex;
+}
+
+.footnote {
+  margin: var(--bx-space-md) 0 0;
+  padding-top: var(--bx-space-sm);
+  border-top: 1px solid var(--bx-border-decorative);
+  color: var(--bx-fg-muted);
+  font-size: 13px;
+}
+
+.error {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--bx-space-sm);
+}
+
+/* Divided rows: the thing on the left (name, then a muted line), its status on the right. */
+.list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--bx-space-md);
+  padding: 12px 0;
+  border-top: 1px solid var(--bx-border-decorative);
+}
+
+.row:first-child {
+  border-top: 0;
+  padding-top: 0;
+}
+
+.row:last-child {
+  padding-bottom: 0;
+}
+
+.rowBody {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.rowTitle {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--bx-fg);
+}
+
+.rowMeta {
+  font-size: 13px;
+  color: var(--bx-fg-muted);
+}
+
+.mono {
+  font-family: var(--bx-font-mono);
+}
+
+.rowStatus {
+  flex-shrink: 0;
+}
+
+/* LOSAP: the number is the content. */
+.points {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: var(--bx-space-xs) var(--bx-space-sm);
+  margin: 0;
+}
+
+.pointsValue {
+  font-size: 34px;
+  line-height: 1.1;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.02em;
+  color: var(--bx-fg);
+}
+
+.pointsLabel {
+  font-size: 14px;
+  color: var(--bx-fg-muted);
+}

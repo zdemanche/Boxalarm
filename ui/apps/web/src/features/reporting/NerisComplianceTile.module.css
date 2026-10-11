@@ -1,33 +1,125 @@
-.statGrid {
+/* Chief dashboard: NERIS compliance. The three rates as flat tinted figures (never cards inside
+   the card), the oldest drafts beside them as divided rows. Stacks when the tile is narrow. */
+.layout {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
-  gap: var(--bx-space-md);
+  grid-template-columns: minmax(0, 3fr) minmax(260px, 2fr);
+  align-items: start;
+  gap: var(--bx-space-lg);
+}
+
+@media (max-width: 1023px) {
+  .layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.metrics {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(160px, 100%), 1fr));
+  gap: var(--bx-space-sm);
+}
+
+.metric {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  padding: 12px var(--bx-space-md);
+  background: var(--bx-surface);
+  border: 1px solid var(--bx-border-decorative);
+  border-radius: var(--bx-radius-md);
+}
+
+.metricLabel {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--bx-fg-muted);
+}
+
+.metricValue {
+  font-size: 26px;
+  line-height: 1.15;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.02em;
+  color: var(--bx-fg);
+}
+
+.metricValueAlarm {
+  color: var(--bx-status-danger);
+}
+
+.metricHint {
+  font-size: 12px;
+  color: var(--bx-fg-muted);
+}
+
+.drafts {
+  min-width: 0;
+}
+
+.subheading {
+  margin: 0 0 var(--bx-space-xs);
+  font-size: 13px;
+  line-height: 18px;
+  font-weight: 600;
+  color: var(--bx-fg-muted);
 }
 
 .message {
-  margin: var(--bx-space-sm) 0;
+  margin: 0;
   color: var(--bx-fg-muted);
   font-size: 14px;
 }
 
 .list {
   list-style: none;
-  margin: var(--bx-space-sm) 0 0;
+  margin: 0;
   padding: 0;
 }
 
 .item {
-  padding: var(--bx-space-xs) 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--bx-space-md);
+  padding: 12px 0;
+  border-top: 1px solid var(--bx-border-decorative);
+}
+
+.item:first-child {
+  border-top: 0;
+  padding-top: var(--bx-space-xs);
+}
+
+.item:last-child {
+  padding-bottom: 0;
+}
+
+.itemBody {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
   overflow-wrap: anywhere;
 }
 
-.item a {
+.itemTitle {
+  font-size: 15px;
+  font-weight: 600;
+}
+
+/* A 44px hit area (gloves) without making the row 44px tall. */
+a.itemTitle {
   display: inline-flex;
   align-items: center;
-  min-height: var(--bx-target-office);
+  width: fit-content;
+  padding: 11px 0;
+  margin: -11px 0;
 }
 
 .meta {
+  font-size: 13px;
   color: var(--bx-fg-muted);
 }
 
