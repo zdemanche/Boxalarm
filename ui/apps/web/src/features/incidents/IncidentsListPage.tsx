@@ -85,14 +85,13 @@ function DispatchRow({
       {dispatch.report ? (
         <Link
           to={`/incidents/${encodeURIComponent(dispatch.report.incidentId)}`}
-          className={buttonClassName({ variant: 'secondary', size: 'sm' })}
+          className={buttonClassName({ variant: 'secondary' })}
         >
           Open report ({STATUS_LABEL[dispatch.report.status] ?? dispatch.report.status})
         </Link>
       ) : canStart ? (
         <Button
           variant="secondary"
-          size="sm"
           loading={pending}
           aria-label={`Start report for ${type} at ${address}`}
           onClick={() => onStart(dispatch.dispatchId)}

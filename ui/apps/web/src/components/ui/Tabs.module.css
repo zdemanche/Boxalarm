@@ -25,7 +25,7 @@
 
 .trigger[data-state='active'] {
   color: var(--bx-fg);
-  border-bottom-color: var(--bx-accent-fill);
+  border-bottom-color: var(--bx-accent-indicator);
 }
 
 .trigger:hover {

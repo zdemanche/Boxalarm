@@ -46,6 +46,7 @@ function surfaceVars(theme: 'day' | 'cab') {
   return `  --bx-canvas: ${canvas};
   --bx-card: ${card};
   --bx-accent: ${a.accent};
+  --bx-accent-indicator: ${a.indicator};
   --bx-accent-fill: ${a.fill};
   --bx-accent-fill-hover: ${a.fillHover};
   --bx-on-accent-fill: ${a.onFill};

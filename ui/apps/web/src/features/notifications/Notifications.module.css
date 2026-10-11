@@ -105,7 +105,7 @@
   width: 8px;
   height: 8px;
   border-radius: var(--bx-radius-pill);
-  background: var(--bx-accent-fill);
+  background: var(--bx-accent-indicator);
 }
 
 .itemTitleRead {

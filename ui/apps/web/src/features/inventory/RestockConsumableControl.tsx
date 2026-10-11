@@ -41,7 +41,6 @@ export function RestockConsumableControl({ item }: { item: ConsumableStock }) {
       <Button
         type="button"
         variant="secondary"
-        size="sm"
         onClick={() => setOpen(true)}
         aria-label={`Restock ${item.itemName}`}
       >

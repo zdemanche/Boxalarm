@@ -47,7 +47,7 @@
 /* ---- Active calls: the dashboard's live-call card (design.md §2.6 elevation.alarm) ---- */
 
 .liveCard {
-  border: 1px solid var(--bx-status-danger);
+  border: 2px solid var(--bx-status-danger);
   box-shadow:
     inset 4px 0 0 var(--bx-status-danger),
     var(--bx-shadow-raised);

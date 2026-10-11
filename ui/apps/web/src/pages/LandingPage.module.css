@@ -37,7 +37,7 @@
 
 /* design.md §2.6 elevation.alarm - a live call only: the alarm border plus a dot on the title. */
 .callCardLive {
-  border: 1px solid var(--bx-status-danger);
+  border: 2px solid var(--bx-status-danger);
   box-shadow:
     inset 4px 0 0 var(--bx-status-danger),
     var(--bx-shadow-raised);

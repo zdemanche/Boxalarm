@@ -51,7 +51,6 @@ export function ResolveDefectControl({
       <Button
         type="button"
         variant="secondary"
-        size="sm"
         onClick={() => setOpen(true)}
         aria-label={`Resolve defect: ${description}`}
       >

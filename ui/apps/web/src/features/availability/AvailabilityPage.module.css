@@ -61,7 +61,7 @@
 }
 
 .choice:has(input:checked) {
-  border-color: var(--bx-accent-fill);
+  border-color: var(--bx-accent-indicator);
   background: var(--bx-accent-subtle);
   color: var(--bx-on-accent-subtle);
   font-weight: 600;

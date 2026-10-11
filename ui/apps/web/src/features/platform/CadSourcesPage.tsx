@@ -380,7 +380,7 @@ function SourceEditor({
     <Card
       title={title}
       actions={
-        <Button type="button" variant="secondary" size="sm" onClick={() => setRemoveOpen(true)}>
+        <Button type="button" variant="secondary" onClick={() => setRemoveOpen(true)}>
           Remove {title}
         </Button>
       }

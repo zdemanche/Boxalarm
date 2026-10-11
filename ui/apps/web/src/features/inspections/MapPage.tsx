@@ -177,7 +177,7 @@ export function MapPage() {
                       </StatusChip>
                       <a
                         href={`https://www.openstreetmap.org/?mlat=${hydrant.latitude}&mlon=${hydrant.longitude}#map=18/${hydrant.latitude}/${hydrant.longitude}`}
-                        className={buttonClassName({ variant: 'secondary', size: 'sm' })}
+                        className={buttonClassName({ variant: 'secondary' })}
                         aria-label={`Open map for ${hydrant.hydrantId}`}
                       >
                         Open map

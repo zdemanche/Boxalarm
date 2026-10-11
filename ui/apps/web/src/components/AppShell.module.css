@@ -186,7 +186,7 @@
   color: var(--bx-shell-fg);
 }
 
-.drawerContent .drawerClose:hover {
+.drawerContent .drawerClose:hover:not(:disabled) {
   background: var(--bx-shell-bg-raised);
 }
 

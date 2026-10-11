@@ -76,8 +76,14 @@ status vocabulary, the string catalogue, the error taxonomy, and the seven-state
 >   on the canvas. Chips are pills. This supersedes "nearly square" (§2.5) and the flat surface
 >   rule for cards on the office surface.
 > - **Page header.** Title 28px/700 with an optional one-line description.
+> - **Selection marks** (active tab, current report step, checked box edge, unread dot) use
+>   `accentPalette.indicator`, which clears 3:1 on cards and canvas; the bright `fill` (~2:1 on
+>   white) is only ever a fill under dark text. Chip borders are a decorative tint: a chip is not a
+>   control, and its status is carried by fill, glyph and word.
+> - **Live call** keeps `elevation.alarm` (2px border in `status.alarm`), adding an inset bar.
 >
-> All new pairs are AA-verified in `packages/design-tokens/src/index.test.ts`. The field surface
+> All new colour pairs, including selection marks against card and canvas, are AA-verified in
+> `packages/design-tokens/src/index.test.ts`. The field surface
 > (native) is unchanged by this amendment.
 
 No design system, component library, or Storybook exists in `boxalarm-ui` (codebase-context §3).

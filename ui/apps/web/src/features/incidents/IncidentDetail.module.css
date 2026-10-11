@@ -113,7 +113,7 @@
   background: var(--bx-accent-subtle);
   color: var(--bx-fg);
   font-weight: 650;
-  box-shadow: inset 3px 0 0 var(--bx-accent-fill);
+  box-shadow: inset 3px 0 0 var(--bx-accent-indicator);
 }
 
 /* Single-column below lg: seven stacked step buttons filled a phone's first screen before any
@@ -136,7 +136,7 @@
   }
 
   .stepButton[aria-current='step'] {
-    box-shadow: inset 0 -3px 0 var(--bx-accent-fill);
+    box-shadow: inset 0 -3px 0 var(--bx-accent-indicator);
   }
 
   /* The scroll container clips anything outside it; draw the focus ring inside the button. */

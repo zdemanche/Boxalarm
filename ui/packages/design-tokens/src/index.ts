@@ -157,11 +157,13 @@ export const statusChipPalette = {
 // palettes. Red stays reserved for alarm status. Every pair is AA-verified in index.test.ts.
 export const accentPalette = {
   // `accent` is the text-safe amber - on a card; day's measures 4.2:1 on the grey canvas, so it is
-  // not used as text there. `fill` is the
+  // not used as text there. `indicator` draws selected-state marks (3:1 on card and canvas).
+  // `fill` is the
   // bright apparatus amber that buttons and selected controls are painted with, under dark text -
   // the day text-safe amber read as brown when used as a fill.
   day: {
     accent: palette.day.accent,
+    indicator: palette.day.accent,
     fill: palette.cab.accent,
     fillHover: '#dd9a35',
     onFill: '#111318',
@@ -170,6 +172,7 @@ export const accentPalette = {
   },
   cab: {
     accent: palette.cab.accent,
+    indicator: palette.cab.accent,
     fill: palette.cab.accent,
     fillHover: '#f0ba66',
     onFill: '#0b0b0d',

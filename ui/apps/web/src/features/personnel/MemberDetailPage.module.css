@@ -232,7 +232,7 @@
 
 /* Not on a disabled choice (the always-held Member role): its muted label stays on the card. */
 .choice:has(input:checked:not(:disabled)) {
-  border-color: var(--bx-accent-fill);
+  border-color: var(--bx-accent-indicator);
   background: var(--bx-accent-subtle);
   color: var(--bx-on-accent-subtle);
   font-weight: 600;

@@ -218,18 +218,9 @@ describe('statusChipPalette', () => {
     },
   );
 
-  // Chip.tsx draws its 1px border with `currentColor` (== onFill), so the label:fill pair above
-  // also governs the border:fill (non-text, 3:1) contrast - restated here explicitly since it's
-  // the property Chip.tsx actually relies on for the visible boundary.
-  test.each(['day', 'cab'] as const)(
-    '%s: onFill (the chip border colour) clears non-text AA (3:1) against its own fill',
-    (name) => {
-      const roles = statusChipPalette[name];
-      for (const { fill, onFill } of Object.values(roles)) {
-        expect(meetsAA(fill, onFill, 'large')).toBe(true);
-      }
-    },
-  );
+  // Since the 2026-10-11 redesign the chip's border is a soft tint of its label, drawn for looks;
+  // a chip is not a control, so it needs no 3:1 boundary. Status is carried by the label, the
+  // glyph and the word, all on the opaque fill tested above.
 });
 
 describe('typeScale', () => {
@@ -314,6 +305,22 @@ describe('accentPalette', () => {
     '%s: the accent is the mobile brand accent, so web and phone read as one product',
     (name) => {
       expect(accentPalette[name].accent).toBe(palette[name].accent);
+    },
+  );
+
+  // Selected-state marks (active tab underline, current report step, checked box edge, unread
+  // dot) are non-text and must clear 3:1 against the surface they sit on (WCAG 1.4.11). The bright
+  // day fill measures ~2:1 on white, so marks use `indicator`. Web cards: day bg, cab surface;
+  // web canvas: day surface, cab bg.
+  test.each([
+    ['day', [surfacePalette.day.bg, surfacePalette.day.surface]],
+    ['cab', [surfacePalette.cab.surface, surfacePalette.cab.bg]],
+  ] as const)(
+    '%s: the selection indicator clears 3:1 on the card and the canvas',
+    (name, grounds) => {
+      for (const ground of grounds) {
+        expect(meetsAA(ground, accentPalette[name].indicator, 'large')).toBe(true);
+      }
     },
   );
 });

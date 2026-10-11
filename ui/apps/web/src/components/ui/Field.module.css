@@ -77,7 +77,8 @@ textarea.control {
 
 .checkboxRoot[data-state='checked'] {
   background: var(--bx-accent-fill);
-  border-color: var(--bx-accent-fill);
+  /* The edge, not the bright fill, carries the 3:1 boundary of the checked box. */
+  border-color: var(--bx-accent-indicator);
   color: var(--bx-on-accent-fill);
 }
 
