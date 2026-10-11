@@ -16,6 +16,7 @@ import { ApiError } from '../../lib/apiClient';
 import { daysUntil, dueLabel, formatCalendarDate, toCalendarDate } from '../../lib/dates';
 import { createHydrant, listHydrants, updateHydrant } from './api';
 import type { Hydrant } from './types';
+import styles from './Inspections.module.css';
 
 /** Inside this many days a flow test reads as due soon. */
 const DUE_SOON_DAYS = 30;
@@ -216,118 +217,125 @@ export function HydrantsPage() {
 
   return (
     <main id="main-content">
-      <PageHeader title="Hydrants" />
-
-      {updateError ? (
-        <p role="alert" style={{ color: 'var(--bx-status-danger)', fontWeight: 600 }}>
-          {updateError}
-        </p>
-      ) : null}
-
-      <DataTable
-        caption="Hydrant registry"
-        rowKey={(h) => h.hydrantId}
-        columns={columns}
-        rows={listQuery.data ?? []}
-        loading={listQuery.isLoading}
-        emptyMessage="No hydrants registered yet."
+      <PageHeader
+        title="Hydrants"
+        description="Every hydrant in the district, its flow rating and when its next flow test is due."
       />
 
-      {/* Taking a hydrant out of service changes what crews see on the map mid-call: confirm,
+      <div className={styles.stack}>
+        {updateError ? (
+          <p role="alert" className={styles.alertBanner}>
+            {updateError}
+          </p>
+        ) : null}
+
+        <DataTable
+          caption="Hydrant registry"
+          rowKey={(h) => h.hydrantId}
+          columns={columns}
+          rows={listQuery.data ?? []}
+          loading={listQuery.isLoading}
+          emptyMessage="No hydrants registered yet."
+        />
+
+        {/* Taking a hydrant out of service changes what crews see on the map mid-call: confirm,
           naming the hydrant and the consequence (design §4.5). A failed update stays in the
           dialog with the reason instead of closing blind. */}
-      <ConfirmDialog
-        open={oosOpen}
-        onOpenChange={setOosOpen}
-        title={`Mark hydrant ${oosTarget?.hydrantId ?? ''} out of service?`}
-        consequence={`${oosTarget?.hydrantId ?? 'This hydrant'} will show as out of service in the hydrant registry and on the inspections map. Recording a flow test puts it back in service.`}
-        confirmLabel={`Mark ${oosTarget?.hydrantId ?? 'hydrant'} out of service`}
-        danger
-        onConfirm={async () => {
-          if (!oosTarget) return;
-          try {
-            await markOosMutation.mutateAsync(oosTarget.hydrantId);
-          } catch (error) {
-            throw new Error(
-              updateErrorMessage(oosTarget.hydrantId, 'Marking out of service', error as Error),
-              { cause: error },
-            );
-          }
-        }}
-      />
+        <ConfirmDialog
+          open={oosOpen}
+          onOpenChange={setOosOpen}
+          title={`Mark hydrant ${oosTarget?.hydrantId ?? ''} out of service?`}
+          consequence={`${oosTarget?.hydrantId ?? 'This hydrant'} will show as out of service in the hydrant registry and on the inspections map. Recording a flow test puts it back in service.`}
+          confirmLabel={`Mark ${oosTarget?.hydrantId ?? 'hydrant'} out of service`}
+          danger
+          onConfirm={async () => {
+            if (!oosTarget) return;
+            try {
+              await markOosMutation.mutateAsync(oosTarget.hydrantId);
+            } catch (error) {
+              throw new Error(
+                updateErrorMessage(oosTarget.hydrantId, 'Marking out of service', error as Error),
+                { cause: error },
+              );
+            }
+          }}
+        />
 
-      {canWrite ? (
-        <Card title="Register hydrant" style={{ marginTop: 'var(--bx-space-xl)', maxWidth: 480 }}>
-          <form
-            aria-label="Register hydrant"
-            onSubmit={(event: FormEvent) => {
-              event.preventDefault();
-              createMutation.mutate(form);
-            }}
-            style={{ display: 'grid', gap: 'var(--bx-space-md)' }}
-          >
-            <TextInput
-              label="Hydrant ID"
-              value={form.hydrantId}
-              required
-              onChange={(e) => setForm((prev) => ({ ...prev, hydrantId: e.target.value }))}
-            />
-            <TextInput
-              label="Latitude"
-              type="number"
-              step="any"
-              min={-90}
-              max={90}
-              inputMode="decimal"
-              help="Decimal degrees, e.g. 41.2429"
-              value={form.latitude}
-              required
-              onChange={(e) => setForm((prev) => ({ ...prev, latitude: e.target.value }))}
-            />
-            <TextInput
-              label="Longitude"
-              type="number"
-              step="any"
-              min={-180}
-              max={180}
-              inputMode="decimal"
-              help="Decimal degrees, e.g. -73.2007 (west is negative)"
-              value={form.longitude}
-              required
-              onChange={(e) => setForm((prev) => ({ ...prev, longitude: e.target.value }))}
-            />
-            <TextInput
-              label="Size"
-              value={form.size}
-              required
-              onChange={(e) => setForm((prev) => ({ ...prev, size: e.target.value }))}
-            />
-            <TextInput
-              label="Flow rating (gpm)"
-              type="number"
-              min={0}
-              value={form.flowRatingGpm}
-              required
-              onChange={(e) => setForm((prev) => ({ ...prev, flowRatingGpm: e.target.value }))}
-            />
-            <TextInput
-              label="Next flow test due"
-              type="date"
-              value={form.nextFlowTestDue}
-              required
-              onChange={(e) => setForm((prev) => ({ ...prev, nextFlowTestDue: e.target.value }))}
-            />
-            {formError ? (
-              <p role="alert" aria-live="assertive">
-                {formError}
-              </p>
-            ) : null}
-            <Button type="submit" loading={createMutation.isPending}>
-              Save hydrant
-            </Button>
-          </form>
-        </Card>
-      ) : null}
+        {canWrite ? (
+          <Card title="Register hydrant">
+            <form
+              aria-label="Register hydrant"
+              onSubmit={(event: FormEvent) => {
+                event.preventDefault();
+                createMutation.mutate(form);
+              }}
+              className={styles.formGrid}
+            >
+              <TextInput
+                label="Hydrant ID"
+                value={form.hydrantId}
+                required
+                onChange={(e) => setForm((prev) => ({ ...prev, hydrantId: e.target.value }))}
+              />
+              <TextInput
+                label="Latitude"
+                type="number"
+                step="any"
+                min={-90}
+                max={90}
+                inputMode="decimal"
+                help="Decimal degrees, e.g. 41.2429"
+                value={form.latitude}
+                required
+                onChange={(e) => setForm((prev) => ({ ...prev, latitude: e.target.value }))}
+              />
+              <TextInput
+                label="Longitude"
+                type="number"
+                step="any"
+                min={-180}
+                max={180}
+                inputMode="decimal"
+                help="Decimal degrees, e.g. -73.2007 (west is negative)"
+                value={form.longitude}
+                required
+                onChange={(e) => setForm((prev) => ({ ...prev, longitude: e.target.value }))}
+              />
+              <TextInput
+                label="Size"
+                value={form.size}
+                required
+                onChange={(e) => setForm((prev) => ({ ...prev, size: e.target.value }))}
+              />
+              <TextInput
+                label="Flow rating (gpm)"
+                type="number"
+                min={0}
+                value={form.flowRatingGpm}
+                required
+                onChange={(e) => setForm((prev) => ({ ...prev, flowRatingGpm: e.target.value }))}
+              />
+              <TextInput
+                label="Next flow test due"
+                type="date"
+                value={form.nextFlowTestDue}
+                required
+                onChange={(e) => setForm((prev) => ({ ...prev, nextFlowTestDue: e.target.value }))}
+              />
+              {formError ? (
+                <p role="alert" aria-live="assertive" className={styles.error}>
+                  {formError}
+                </p>
+              ) : null}
+              <div className={styles.formActions}>
+                <Button type="submit" loading={createMutation.isPending}>
+                  Save hydrant
+                </Button>
+              </div>
+            </form>
+          </Card>
+        ) : null}
+      </div>
     </main>
   );
 }

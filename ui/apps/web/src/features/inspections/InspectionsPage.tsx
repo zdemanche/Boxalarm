@@ -18,6 +18,7 @@ import { conductInspection, listDueInspections, listOccupancies, scheduleInspect
 import type { Inspection, Violation, ViolationStatus } from './types';
 import { daysUntil, dueLabel, formatCalendarDate } from '../../lib/dates';
 import { humanize } from '../../lib/labels';
+import styles from './Inspections.module.css';
 
 const emptyViolation: Violation = { code: '', description: '', status: 'open' };
 
@@ -192,196 +193,202 @@ export function InspectionsPage() {
 
   return (
     <main id="main-content">
-      <PageHeader title="Inspections" />
-
-      <DataTable
-        caption="Inspections due"
-        rowKey={(i) => i.inspectionId}
-        columns={columns}
-        rows={inspections}
-        loading={listQuery.isLoading}
-        emptyMessage="No inspections scheduled."
+      <PageHeader
+        title="Inspections"
+        description="Fire-code inspections, soonest due first: conduct one, or schedule the next."
       />
 
-      {/* The conduct form opens over the table: a row can't expand inside DataTable, and a
+      <div className={styles.stack}>
+        <DataTable
+          caption="Inspections due"
+          rowKey={(i) => i.inspectionId}
+          columns={columns}
+          rows={inspections}
+          loading={listQuery.isLoading}
+          emptyMessage="No inspections scheduled."
+        />
+
+        {/* The conduct form opens over the table: a row can't expand inside DataTable, and a
           dialog keeps the form next to the row's Conduct button on a phone. */}
-      <Dialog
-        open={conducting !== null}
-        onOpenChange={(open) => {
-          if (!open && !conductMutation.isPending) setConducting(null);
-        }}
-        title="Conduct inspection"
-        description={conductingLabel}
-      >
-        {conducting ? (
-          <form
-            aria-label={`Conduct inspection at ${conductingLabel}`}
-            onSubmit={(event: FormEvent) => {
-              event.preventDefault();
-              conductMutation.mutate({
-                occId: conducting.occupancyId,
-                inspectionId: conducting.inspectionId,
-              });
-            }}
-            style={{ display: 'grid', gap: 'var(--bx-space-md)' }}
-          >
-            <fieldset
-              style={{
-                display: 'grid',
-                gap: 'var(--bx-space-md)',
-                border: 'none',
-                padding: 0,
-                margin: 0,
-                minWidth: 0,
+        <Dialog
+          open={conducting !== null}
+          onOpenChange={(open) => {
+            if (!open && !conductMutation.isPending) setConducting(null);
+          }}
+          title="Conduct inspection"
+          description={conductingLabel}
+        >
+          {conducting ? (
+            <form
+              aria-label={`Conduct inspection at ${conductingLabel}`}
+              onSubmit={(event: FormEvent) => {
+                event.preventDefault();
+                conductMutation.mutate({
+                  occId: conducting.occupancyId,
+                  inspectionId: conducting.inspectionId,
+                });
               }}
+              style={{ display: 'grid', gap: 'var(--bx-space-md)' }}
             >
-              <legend style={{ fontWeight: 600, marginBottom: 'var(--bx-space-sm)' }}>
-                Violations
-              </legend>
-              {violations.length === 0 ? (
-                <p style={{ margin: 0, color: 'var(--bx-fg-muted)' }}>No violations recorded.</p>
-              ) : null}
-              {violations.map((violation, index) => (
-                // Code and status side by side, the description on its own full-width line.
-                <div
-                  key={index}
-                  style={{
-                    display: 'grid',
-                    gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
-                    gap: 'var(--bx-space-sm)',
-                    paddingBottom: 'var(--bx-space-md)',
-                    borderBottom: '1px solid var(--bx-border-decorative)',
-                  }}
-                >
-                  <TextInput
-                    label="Code"
-                    value={violation.code}
-                    onChange={(e) =>
-                      setViolations((prev) =>
-                        prev.map((v, i) => (i === index ? { ...v, code: e.target.value } : v)),
-                      )
-                    }
-                  />
-                  <Select
-                    label="Status"
-                    value={violation.status}
-                    onChange={(e) =>
-                      setViolations((prev) =>
-                        prev.map((v, i) =>
-                          i === index ? { ...v, status: e.target.value as ViolationStatus } : v,
-                        ),
-                      )
-                    }
+              <fieldset
+                style={{
+                  display: 'grid',
+                  gap: 'var(--bx-space-md)',
+                  border: 'none',
+                  padding: 0,
+                  margin: 0,
+                  minWidth: 0,
+                }}
+              >
+                <legend style={{ fontWeight: 600, marginBottom: 'var(--bx-space-sm)' }}>
+                  Violations
+                </legend>
+                {violations.length === 0 ? (
+                  <p style={{ margin: 0, color: 'var(--bx-fg-muted)' }}>No violations recorded.</p>
+                ) : null}
+                {violations.map((violation, index) => (
+                  // Code and status side by side, the description on its own full-width line.
+                  <div
+                    key={index}
+                    style={{
+                      display: 'grid',
+                      gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
+                      gap: 'var(--bx-space-sm)',
+                      paddingBottom: 'var(--bx-space-md)',
+                      borderBottom: '1px solid var(--bx-border-decorative)',
+                    }}
                   >
-                    <option value="open">Open</option>
-                    <option value="resolved">Resolved</option>
-                  </Select>
-                  <div style={{ gridColumn: '1 / -1' }}>
                     <TextInput
-                      label="Description"
-                      value={violation.description}
+                      label="Code"
+                      value={violation.code}
                       onChange={(e) =>
                         setViolations((prev) =>
-                          prev.map((v, i) =>
-                            i === index ? { ...v, description: e.target.value } : v,
-                          ),
+                          prev.map((v, i) => (i === index ? { ...v, code: e.target.value } : v)),
                         )
                       }
                     />
+                    <Select
+                      label="Status"
+                      value={violation.status}
+                      onChange={(e) =>
+                        setViolations((prev) =>
+                          prev.map((v, i) =>
+                            i === index ? { ...v, status: e.target.value as ViolationStatus } : v,
+                          ),
+                        )
+                      }
+                    >
+                      <option value="open">Open</option>
+                      <option value="resolved">Resolved</option>
+                    </Select>
+                    <div style={{ gridColumn: '1 / -1' }}>
+                      <TextInput
+                        label="Description"
+                        value={violation.description}
+                        onChange={(e) =>
+                          setViolations((prev) =>
+                            prev.map((v, i) =>
+                              i === index ? { ...v, description: e.target.value } : v,
+                            ),
+                          )
+                        }
+                      />
+                    </div>
                   </div>
-                </div>
-              ))}
-              <Button
-                type="button"
-                variant="secondary"
-                onClick={() => setViolations((prev) => [...prev, { ...emptyViolation }])}
-                style={{ justifySelf: 'start' }}
-              >
-                Add violation
-              </Button>
-            </fieldset>
-            {conductMutation.error ? (
-              <p role="alert" style={{ margin: 0, color: 'var(--bx-status-danger)' }}>
-                The inspection was not saved: {conductMutation.error.message}
-              </p>
-            ) : null}
-            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 'var(--bx-space-sm)' }}>
-              {/* Not natively disabled (a11y-spec: never disabled), but a click while the save
-                  is in flight is ignored - closing then would lose a failure message. */}
-              <Button
-                type="button"
-                variant="secondary"
-                aria-disabled={conductMutation.isPending || undefined}
-                onClick={() => {
-                  if (!conductMutation.isPending) setConducting(null);
-                }}
-              >
-                Cancel
-              </Button>
-              <Button type="submit" loading={conductMutation.isPending}>
-                Save conduct
-              </Button>
-            </div>
-          </form>
-        ) : null}
-      </Dialog>
-
-      {canWrite ? (
-        <Card
-          title="Schedule inspection"
-          style={{ marginTop: 'var(--bx-space-xl)', maxWidth: 480 }}
-        >
-          <form
-            aria-label="Schedule inspection"
-            onSubmit={(event: FormEvent) => {
-              event.preventDefault();
-              scheduleMutation.mutate();
-            }}
-            style={{ display: 'grid', gap: 'var(--bx-space-md)' }}
-          >
-            <Select
-              label="Occupancy"
-              value={occupancyId}
-              required
-              disabled={occupanciesQuery.isLoading}
-              help={
-                occupanciesQuery.error
-                  ? "Occupancies couldn't load. Try again later."
-                  : occupanciesQuery.data?.length === 0
-                    ? 'No occupancies yet. Add one on the Occupancies page first.'
-                    : undefined
-              }
-              onChange={(e) => setOccupancyId(e.target.value)}
-            >
-              <option value="">
-                {occupanciesQuery.isLoading ? 'Loading occupancies…' : 'Choose an occupancy'}
-              </option>
-              {[...(occupanciesQuery.data ?? [])]
-                .sort((a, b) => a.address.localeCompare(b.address))
-                .map((occupancy) => (
-                  <option key={occupancy.occupancyId} value={occupancy.occupancyId}>
-                    {occupancy.address} ({occupancy.occupancyType})
-                  </option>
                 ))}
-            </Select>
-            <TextInput
-              label="Scheduled date"
-              type="date"
-              value={scheduledDate}
-              required
-              onChange={(e) => setScheduledDate(e.target.value)}
-            />
-            {scheduleError ? (
-              <p role="alert" aria-live="assertive">
-                {scheduleError}
-              </p>
-            ) : null}
-            <Button type="submit" loading={scheduleMutation.isPending}>
-              Schedule
-            </Button>
-          </form>
-        </Card>
-      ) : null}
+                <Button
+                  type="button"
+                  variant="secondary"
+                  onClick={() => setViolations((prev) => [...prev, { ...emptyViolation }])}
+                  style={{ justifySelf: 'start' }}
+                >
+                  Add violation
+                </Button>
+              </fieldset>
+              {conductMutation.error ? (
+                <p role="alert" style={{ margin: 0, color: 'var(--bx-status-danger)' }}>
+                  The inspection was not saved: {conductMutation.error.message}
+                </p>
+              ) : null}
+              <div
+                style={{ display: 'flex', justifyContent: 'flex-end', gap: 'var(--bx-space-sm)' }}
+              >
+                {/* Not natively disabled (a11y-spec: never disabled), but a click while the save
+                  is in flight is ignored - closing then would lose a failure message. */}
+                <Button
+                  type="button"
+                  variant="secondary"
+                  aria-disabled={conductMutation.isPending || undefined}
+                  onClick={() => {
+                    if (!conductMutation.isPending) setConducting(null);
+                  }}
+                >
+                  Cancel
+                </Button>
+                <Button type="submit" loading={conductMutation.isPending}>
+                  Save conduct
+                </Button>
+              </div>
+            </form>
+          ) : null}
+        </Dialog>
+
+        {canWrite ? (
+          <Card title="Schedule inspection">
+            <form
+              aria-label="Schedule inspection"
+              onSubmit={(event: FormEvent) => {
+                event.preventDefault();
+                scheduleMutation.mutate();
+              }}
+              className={styles.formGrid}
+            >
+              <Select
+                label="Occupancy"
+                value={occupancyId}
+                required
+                disabled={occupanciesQuery.isLoading}
+                help={
+                  occupanciesQuery.error
+                    ? "Occupancies couldn't load. Try again later."
+                    : occupanciesQuery.data?.length === 0
+                      ? 'No occupancies yet. Add one on the Occupancies page first.'
+                      : undefined
+                }
+                onChange={(e) => setOccupancyId(e.target.value)}
+              >
+                <option value="">
+                  {occupanciesQuery.isLoading ? 'Loading occupancies…' : 'Choose an occupancy'}
+                </option>
+                {[...(occupanciesQuery.data ?? [])]
+                  .sort((a, b) => a.address.localeCompare(b.address))
+                  .map((occupancy) => (
+                    <option key={occupancy.occupancyId} value={occupancy.occupancyId}>
+                      {occupancy.address} ({occupancy.occupancyType})
+                    </option>
+                  ))}
+              </Select>
+              <TextInput
+                label="Scheduled date"
+                type="date"
+                value={scheduledDate}
+                required
+                onChange={(e) => setScheduledDate(e.target.value)}
+              />
+              {scheduleError ? (
+                <p role="alert" aria-live="assertive" className={styles.error}>
+                  {scheduleError}
+                </p>
+              ) : null}
+              <div className={styles.formActions}>
+                <Button type="submit" loading={scheduleMutation.isPending}>
+                  Schedule
+                </Button>
+              </div>
+            </form>
+          </Card>
+        ) : null}
+      </div>
     </main>
   );
 }

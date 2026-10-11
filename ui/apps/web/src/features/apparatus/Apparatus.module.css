@@ -1,0 +1,305 @@
+/* Shared page layout for the apparatus screens (registry, unit detail, compliance). */
+
+/* Cards stacked down the page, one gap between each. */
+.stack {
+  display: grid;
+  gap: var(--bx-space-lg);
+  min-width: 0;
+  align-content: start;
+}
+
+/* Main column plus a narrower column of secondary cards at desktop; one column below 1024px. */
+.layout {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(280px, 1fr);
+  gap: var(--bx-space-lg);
+  align-items: start;
+}
+
+@media (max-width: 1023px) {
+  .layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* Divided rows inside a card. */
+.list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--bx-space-sm) var(--bx-space-md);
+  padding: 12px 0;
+  border-top: 1px solid var(--bx-border-decorative);
+}
+
+.row:first-child {
+  border-top: none;
+  padding-top: 0;
+}
+
+.row:last-child {
+  padding-bottom: 0;
+}
+
+.rowBody {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1 1 140px;
+}
+
+.rowTitle {
+  font-size: 15px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.rowMeta {
+  font-size: 13px;
+  color: var(--bx-fg-muted);
+  overflow-wrap: anywhere;
+}
+
+.rowAside {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--bx-space-sm);
+  margin-left: auto;
+}
+
+.amount {
+  font-size: 14px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.mono {
+  font-family: var(--bx-font-mono);
+}
+
+/* Key-value facts: label column sized to its longest label, never the browser's indented dl. */
+.facts {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 8px 24px;
+  margin: 0;
+  font-size: 14px;
+}
+
+.facts dt {
+  font-size: 13px;
+  color: var(--bx-fg-muted);
+}
+
+.facts dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+/* Form fields side by side as space allows; actions sit at the end of the form. */
+.formGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(220px, 100%), 1fr));
+  gap: var(--bx-space-md);
+  align-items: start;
+}
+
+.formStack {
+  display: grid;
+  gap: var(--bx-space-md);
+}
+
+.formActions {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: var(--bx-space-sm);
+}
+
+.message {
+  margin: 0;
+  font-size: 14px;
+  color: var(--bx-fg-muted);
+}
+
+.message + .list,
+.list + .message,
+.message + .message {
+  margin-top: var(--bx-space-sm);
+}
+
+.error {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--bx-status-danger);
+}
+
+.formGrid > .error,
+.formGrid > [role='status'] {
+  grid-column: 1 / -1;
+}
+
+/* A failed read or save, said in the card it belongs to. */
+.notice {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--bx-space-sm) var(--bx-space-md);
+  margin: 0 0 var(--bx-space-md);
+  padding: var(--bx-space-sm) var(--bx-space-md);
+  border-radius: var(--bx-radius-md);
+  background: var(--bx-surface);
+  font-size: 14px;
+}
+
+.notice p {
+  margin: 0;
+}
+
+/* --- Unit detail ------------------------------------------------------------------------- */
+
+/* Desktop: defects over the record tabs on the left; service status and assigned equipment down
+   the right, spanning both rows so neither left card waits on the right column's height. A phone
+   reads defects, status, equipment, then the records. */
+.detailGrid {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(280px, 1fr);
+  grid-template-rows: auto 1fr;
+  gap: var(--bx-space-lg);
+  align-items: start;
+}
+
+.detailSide {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  display: grid;
+  gap: var(--bx-space-lg);
+  min-width: 0;
+}
+
+.detailRecords {
+  grid-column: 1;
+  grid-row: 2;
+  min-width: 0;
+}
+
+@media (max-width: 1023px) {
+  .detailGrid {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: none;
+  }
+
+  .detailSide,
+  .detailRecords {
+    grid-column: auto;
+    grid-row: auto;
+  }
+}
+
+.headerMeta {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--bx-space-xs) var(--bx-space-sm);
+}
+
+/* "In service  Engine · ID a-2": a dot between the facts after the chip. */
+.headerMeta > * + * + *::before {
+  content: '·';
+  margin-right: var(--bx-space-sm);
+  color: var(--bx-fg-faint);
+}
+
+.defectPhoto {
+  width: 96px;
+  height: 72px;
+  object-fit: cover;
+  border-radius: var(--bx-radius-md);
+  flex-shrink: 0;
+}
+
+.metaLine {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--bx-space-xs) var(--bx-space-sm);
+  margin-top: 4px;
+}
+
+.statusReason {
+  margin: 0 0 var(--bx-space-md);
+  font-size: 14px;
+}
+
+.failedTests {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--bx-space-xs) var(--bx-space-sm);
+  margin: 0 0 var(--bx-space-md);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+/* Quantity inputs in the compartment table: the column header names them on screen, the
+   per-item label stays for assistive tech. */
+.quantityCell {
+  display: block;
+  max-width: 240px;
+  padding: var(--bx-space-xs) 0;
+}
+
+.quantityCell input {
+  width: 96px;
+}
+
+.quantityCell label {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+/* --- Compliance report -------------------------------------------------------------------- */
+
+.rangeRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--bx-space-md);
+}
+
+.rangeRow > :not(p) {
+  flex: 0 1 200px;
+}
+
+.rangeSummary {
+  flex: 1 1 220px;
+  margin: 0;
+  min-height: var(--bx-target-office);
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  font-size: 14px;
+  color: var(--bx-fg-muted);
+}
+
+@media (max-width: 767px) {
+  .rangeSummary {
+    justify-content: flex-start;
+    min-height: 0;
+  }
+}

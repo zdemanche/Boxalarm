@@ -14,6 +14,7 @@ import {
 } from '../../components/ui';
 import { createOccupancy, listOccupancies } from './api';
 import type { CreateOccupancyInput, Occupancy } from './types';
+import styles from './Inspections.module.css';
 
 function splitLines(value: string): string[] {
   return value
@@ -61,7 +62,11 @@ export function OccupancyListPage() {
       key: 'address',
       header: 'Address',
       sortValue: (o) => o.address,
-      render: (o) => <Link to={`/inspections/occupancies/${o.occupancyId}`}>{o.address}</Link>,
+      render: (o) => (
+        <Link to={`/inspections/occupancies/${o.occupancyId}`} style={{ fontWeight: 600 }}>
+          {o.address}
+        </Link>
+      ),
     },
     {
       key: 'occupancyType',
@@ -76,64 +81,76 @@ export function OccupancyListPage() {
     },
   ];
 
+  const table = (
+    <DataTable
+      caption="Occupancy registry"
+      rowKey={(o) => o.occupancyId}
+      columns={columns}
+      rows={listQuery.data ?? []}
+      loading={listQuery.isLoading}
+      emptyMessage="No occupancies registered yet."
+    />
+  );
+
   return (
     <main id="main-content">
-      <PageHeader title="Occupancies" />
-
-      <DataTable
-        caption="Occupancy registry"
-        rowKey={(o) => o.occupancyId}
-        columns={columns}
-        rows={listQuery.data ?? []}
-        loading={listQuery.isLoading}
-        emptyMessage="No occupancies registered yet."
+      <PageHeader
+        title="Occupancies"
+        description="Buildings in the district: what each one is, its hazards and its pre-plan."
       />
 
       {canWrite ? (
-        <Card title="Register occupancy" style={{ marginTop: 'var(--bx-space-xl)', maxWidth: 480 }}>
-          <form
-            aria-label="Register occupancy"
-            onSubmit={(event: FormEvent) => {
-              event.preventDefault();
-              createMutation.mutate({
-                address,
-                occupancyType,
-                contacts: [],
-                hazards: splitLines(hazardsText),
-              });
-            }}
-            style={{ display: 'grid', gap: 'var(--bx-space-md)' }}
-          >
-            <TextInput
-              label="Address"
-              help="Include the town for any occupancy outside your department's home area (e.g. 12 Oak St, Monroe). A pre-plan filed without a town is treated as in the home area on dispatches."
-              value={address}
-              required
-              onChange={(e) => setAddress(e.target.value)}
-            />
-            <TextInput
-              label="Occupancy type"
-              value={occupancyType}
-              required
-              onChange={(e) => setOccupancyType(e.target.value)}
-            />
-            <Textarea
-              label="Hazards (one per line)"
-              optional
-              value={hazardsText}
-              onChange={(e) => setHazardsText(e.target.value)}
-            />
-            {formError ? (
-              <p role="alert" aria-live="assertive">
-                {formError}
-              </p>
-            ) : null}
-            <Button type="submit" loading={createMutation.isPending}>
-              Save occupancy
-            </Button>
-          </form>
-        </Card>
-      ) : null}
+        <div className={styles.layout}>
+          {table}
+          <Card title="Register occupancy">
+            <form
+              aria-label="Register occupancy"
+              onSubmit={(event: FormEvent) => {
+                event.preventDefault();
+                createMutation.mutate({
+                  address,
+                  occupancyType,
+                  contacts: [],
+                  hazards: splitLines(hazardsText),
+                });
+              }}
+              className={styles.formStack}
+            >
+              <TextInput
+                label="Address"
+                help="Include the town for any occupancy outside your department's home area (e.g. 12 Oak St, Monroe). A pre-plan filed without a town is treated as in the home area on dispatches."
+                value={address}
+                required
+                onChange={(e) => setAddress(e.target.value)}
+              />
+              <TextInput
+                label="Occupancy type"
+                value={occupancyType}
+                required
+                onChange={(e) => setOccupancyType(e.target.value)}
+              />
+              <Textarea
+                label="Hazards (one per line)"
+                optional
+                value={hazardsText}
+                onChange={(e) => setHazardsText(e.target.value)}
+              />
+              {formError ? (
+                <p role="alert" aria-live="assertive" className={styles.error}>
+                  {formError}
+                </p>
+              ) : null}
+              <div className={styles.formActions}>
+                <Button type="submit" loading={createMutation.isPending}>
+                  Save occupancy
+                </Button>
+              </div>
+            </form>
+          </Card>
+        </div>
+      ) : (
+        table
+      )}
     </main>
   );
 }

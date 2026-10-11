@@ -1,9 +1,11 @@
 import { useQueries } from '@tanstack/react-query';
+import { Link } from 'react-router-dom';
 import { useAuth } from '../../auth/AuthContext';
 import { Card, StatusChip } from '../../components/ui';
 import { daysUntil, dueLabel, formatCalendarDate, toCalendarDate } from '../../lib/dates';
 import { getMaintenance } from './api';
 import type { Apparatus } from './types';
+import styles from './Apparatus.module.css';
 
 // Stated default (no ticket or architecture text sets a reminder window) - see the plan's Risks.
 const REMINDER_WINDOW_SECONDS = 30 * 86400;
@@ -32,27 +34,25 @@ export function MaintenanceDueSoonPanel({ apparatus }: { apparatus: Apparatus[] 
     .sort((a, b) => a.nextScheduled - b.nextScheduled);
 
   return (
-    <Card title="Maintenance due soon" style={{ marginTop: 'var(--bx-space-lg)' }}>
+    <Card title="Maintenance due soon">
       {dueSoon.length === 0 ? (
-        <p>No maintenance due within 30 days.</p>
+        <p className={styles.message}>No maintenance due within 30 days.</p>
       ) : (
-        <ul style={{ listStyle: 'none', padding: 0, margin: 0 }}>
+        <ul className={styles.list}>
           {dueSoon.map(({ unit, nextScheduled }) => {
             const dueDate = toCalendarDate(nextScheduled * 1000);
             const days = daysUntil(dueDate);
             return (
-              <li
-                key={unit.apparatusId}
-                style={{
-                  display: 'flex',
-                  flexWrap: 'wrap',
-                  alignItems: 'center',
-                  gap: 'var(--bx-space-sm)',
-                  padding: 'var(--bx-space-xs) 0',
-                }}
-              >
-                <strong style={{ fontFamily: 'var(--bx-font-mono)' }}>{unit.unitId}</strong>
-                <span>{formatCalendarDate(dueDate)}</span>
+              <li key={unit.apparatusId} className={styles.row}>
+                <span className={styles.rowBody}>
+                  <Link
+                    to={`/apparatus/${encodeURIComponent(unit.unitId)}`}
+                    className={[styles.rowTitle, styles.mono].join(' ')}
+                  >
+                    {unit.unitId}
+                  </Link>
+                  <span className={styles.rowMeta}>Service {formatCalendarDate(dueDate)}</span>
+                </span>
                 <StatusChip status={days < 0 ? 'danger' : 'warning'}>{dueLabel(days)}</StatusChip>
               </li>
             );

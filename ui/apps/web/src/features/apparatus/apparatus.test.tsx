@@ -7,6 +7,7 @@ import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import type { User, UserManager } from 'oidc-client-ts';
 import { afterAll, afterEach, beforeAll, expect, test, vi } from 'vitest';
 import { AuthProvider } from '../../auth/AuthContext';
+import { formatCalendarDate } from '../../lib/dates';
 import { RequireRole } from '../../routing/RequireRole';
 import { ApparatusDetailPage, defectPhotoSrc } from './ApparatusDetailPage';
 import { ApparatusListPage } from './ApparatusListPage';
@@ -242,10 +243,12 @@ test('Testing tab filters the schedule by the display unitId, which is what the 
   await screen.findByRole('heading', { name: 'L1' });
   await user.click(screen.getByRole('tab', { name: 'Testing' }));
 
-  expect(await screen.findByText(/HOSE due 2026-11-01/)).toBeTruthy();
-  // "PUMP" alone also matches an <option> in the unrelated "Log test record" select below, so
-  // assert on the schedule-list wording specifically.
-  expect(screen.queryByText(/PUMP due 2026-11-05/)).toBeNull();
+  // "Pump" alone also matches an <option> in the unrelated "Log test record" select below, so
+  // assert on the schedule list itself.
+  const schedule = await screen.findByRole('list', { name: 'Scheduled tests' });
+  expect(schedule.textContent).toContain('Hose test');
+  expect(schedule.textContent).toContain(formatCalendarDate('2026-11-01'));
+  expect(schedule.textContent).not.toContain('Pump');
 });
 
 test('Maintenance tab fetches from the apparatusId-keyed endpoint, matching the page detail fetch (finding #4)', async () => {

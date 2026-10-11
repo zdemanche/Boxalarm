@@ -223,7 +223,8 @@ test('map screen supports keyboard pan/zoom, a list alternative, and passes axe 
 
   await page.goto('/inspections/map');
   await expect(page.getByText('HYD-1')).toBeVisible();
-  await expect(page.getByText('⊘ Out of service')).toBeVisible();
+  // The list's status is a StatusChip: its glyph is an icon, the word is the text.
+  await expect(page.getByText('Out of service', { exact: true })).toBeVisible();
 
   await page.getByRole('button', { name: 'Zoom in' }).focus();
   await page.keyboard.press('Enter');

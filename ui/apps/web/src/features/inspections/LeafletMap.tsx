@@ -52,7 +52,8 @@ export function LeafletMap({ bbox, occupancies, hydrants, onOccupancySelect }: L
       center={center}
       zoom={14}
       zoomControl={false}
-      style={{ height: 360, width: '100%' }}
+      className={styles.container}
+      style={{ height: 'clamp(320px, 55vh, 520px)', width: '100%' }}
       aria-label="Occupancies and hydrants map"
     >
       <FitBounds bbox={bbox} />

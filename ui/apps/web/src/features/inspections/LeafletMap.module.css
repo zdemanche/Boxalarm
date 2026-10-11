@@ -10,3 +10,9 @@
     filter: invert(1) hue-rotate(180deg) brightness(0.8) contrast(0.9);
   }
 }
+
+/* Leaflet paints #ddd under tiles that are still loading: a bright slab in the dark palettes.
+   Doubled class so it outranks leaflet.css's own .leaflet-container rule. */
+.container.container {
+  background: var(--bx-surface);
+}

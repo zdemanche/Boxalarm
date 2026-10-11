@@ -1,0 +1,234 @@
+/* Shared page layout for the prevention screens: occupancies, hydrants, inspections, map. */
+
+.stack {
+  display: grid;
+  gap: var(--bx-space-lg);
+  min-width: 0;
+  align-content: start;
+}
+
+/* Main column plus a narrower column of secondary cards at desktop; one column below 1024px. */
+.layout {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(280px, 1fr);
+  gap: var(--bx-space-lg);
+  align-items: start;
+}
+
+@media (max-width: 1023px) {
+  .layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* Divided rows inside a card. */
+.list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--bx-space-sm) var(--bx-space-md);
+  padding: 12px 0;
+  border-top: 1px solid var(--bx-border-decorative);
+}
+
+.row:first-child {
+  border-top: none;
+  padding-top: 0;
+}
+
+.row:last-child {
+  padding-bottom: 0;
+}
+
+.rowBody {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1 1 140px;
+}
+
+.rowTitle {
+  font-size: 15px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.rowMeta {
+  font-size: 13px;
+  color: var(--bx-fg-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.rowAside {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--bx-space-sm);
+  margin-left: auto;
+}
+
+.mono {
+  font-family: var(--bx-font-mono);
+}
+
+/* Key-value facts: label column sized to its longest label, never the browser's indented dl. */
+.facts {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 8px 24px;
+  margin: 0;
+  font-size: 14px;
+}
+
+.facts dt {
+  font-size: 13px;
+  color: var(--bx-fg-muted);
+}
+
+.facts dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.facts ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.formGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(220px, 100%), 1fr));
+  gap: var(--bx-space-md);
+  align-items: start;
+}
+
+.formStack {
+  display: grid;
+  gap: var(--bx-space-md);
+}
+
+.formFull {
+  grid-column: 1 / -1;
+}
+
+.formActions {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--bx-space-sm);
+}
+
+.formGrid > .error,
+.formStack > .error {
+  grid-column: 1 / -1;
+}
+
+.message {
+  margin: 0;
+  font-size: 14px;
+  color: var(--bx-fg-muted);
+}
+
+.error {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--bx-status-danger);
+}
+
+/* A failed action said at the top of the page, in the danger chip's opaque pair. */
+.alertBanner {
+  margin: 0;
+  padding: var(--bx-space-sm) var(--bx-space-md);
+  border-radius: var(--bx-radius-md);
+  background: var(--bx-chip-fill-danger);
+  color: var(--bx-chip-onfill-danger);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.readError {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--bx-space-sm) var(--bx-space-md);
+}
+
+.readError p {
+  margin: 0;
+}
+
+/* Native file inputs, labelled like the Field controls beside them. */
+.fileField {
+  display: grid;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  min-width: 0;
+}
+
+.fileField input {
+  font-size: 14px;
+  font-weight: 400;
+  max-width: 100%;
+}
+
+.fieldset {
+  display: grid;
+  gap: var(--bx-space-sm);
+  margin: 0;
+  padding: 0;
+  border: none;
+  min-width: 0;
+}
+
+.fieldset legend {
+  padding: 0;
+  margin-bottom: var(--bx-space-xs);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.shutoffRow {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--bx-space-sm);
+}
+
+.fieldsetAction {
+  justify-self: start;
+}
+
+/* --- Map --------------------------------------------------------------------------------- */
+
+.mapControls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--bx-space-sm);
+  margin-bottom: var(--bx-space-md);
+}
+
+.mapFrame {
+  overflow: hidden;
+  border-radius: var(--bx-radius-md);
+  border: 1px solid var(--bx-border-decorative);
+}
+
+/* The Tabs panel pads its top for a page; inside the map card the strip sits closer. */
+.mapCard [role='tabpanel'] {
+  padding-top: var(--bx-space-md);
+}

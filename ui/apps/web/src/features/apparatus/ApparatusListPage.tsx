@@ -13,6 +13,7 @@ import { PageHeader } from '../../components/ui/PageHeader';
 import { createApparatus, listApparatus } from './api';
 import { MaintenanceDueSoonPanel } from './MaintenanceDueSoonPanel';
 import type { Apparatus, CreateApparatusInput } from './types';
+import styles from './Apparatus.module.css';
 
 const emptyForm: CreateApparatusInput = { unitId: '', type: '' };
 
@@ -58,11 +59,13 @@ export function ApparatusListPage() {
     {
       key: 'unitId',
       header: 'Unit',
+      isRowHeader: true,
       sortValue: (u) => u.unitId,
       render: (u) => (
         <Link
           to={`/apparatus/${encodeURIComponent(u.unitId)}`}
-          style={{ fontFamily: 'var(--bx-font-mono)', fontWeight: 600 }}
+          className={styles.mono}
+          style={{ fontWeight: 600 }}
         >
           {u.unitId}
         </Link>
@@ -79,7 +82,7 @@ export function ApparatusListPage() {
             {u.status === 'IN_SERVICE' ? 'In service' : 'Out of service'}
           </StatusChip>
           {u.status === 'OUT_OF_SERVICE' && u.outOfService ? (
-            <span style={{ display: 'block', fontSize: 12, marginTop: 2 }}>
+            <span className={styles.rowMeta} style={{ display: 'block', marginTop: 2 }}>
               {u.outOfService.reason} — {formatElapsed(u.outOfService.elapsedSeconds)}
             </span>
           ) : null}
@@ -90,52 +93,58 @@ export function ApparatusListPage() {
 
   return (
     <main id="main-content">
-      <PageHeader title="Apparatus" />
+      <PageHeader title="Apparatus" description="Every unit, its status and what's due." />
 
-      <DataTable
-        caption="Apparatus registry"
-        rowKey={(u) => u.apparatusId}
-        columns={columns}
-        rows={listQuery.data ?? []}
-        loading={listQuery.isLoading}
-        emptyMessage="No apparatus yet."
-      />
+      <div className={styles.layout}>
+        <DataTable
+          caption="Apparatus registry"
+          rowKey={(u) => u.apparatusId}
+          columns={columns}
+          rows={listQuery.data ?? []}
+          loading={listQuery.isLoading}
+          emptyMessage="No apparatus yet."
+        />
 
-      <MaintenanceDueSoonPanel apparatus={listQuery.data ?? []} />
+        <div className={styles.stack}>
+          <MaintenanceDueSoonPanel apparatus={listQuery.data ?? []} />
 
-      {canCreate ? (
-        <Card title="Add apparatus" style={{ marginTop: 'var(--bx-space-lg)', maxWidth: 480 }}>
-          <form
-            aria-label="Create apparatus"
-            onSubmit={(event: FormEvent) => {
-              event.preventDefault();
-              createMutation.mutate(form);
-            }}
-            style={{ display: 'grid', gap: 'var(--bx-space-md)' }}
-          >
-            <TextInput
-              label="Unit ID"
-              value={form.unitId}
-              required
-              onChange={(e) => setForm((prev) => ({ ...prev, unitId: e.target.value }))}
-            />
-            <TextInput
-              label="Type"
-              value={form.type}
-              required
-              onChange={(e) => setForm((prev) => ({ ...prev, type: e.target.value }))}
-            />
-            {formError ? (
-              <p role="alert" aria-live="assertive" style={{ color: 'var(--bx-status-danger)' }}>
-                {formError}
-              </p>
-            ) : null}
-            <Button type="submit" loading={createMutation.isPending}>
-              Create apparatus
-            </Button>
-          </form>
-        </Card>
-      ) : null}
+          {canCreate ? (
+            <Card title="Add apparatus">
+              <form
+                aria-label="Create apparatus"
+                onSubmit={(event: FormEvent) => {
+                  event.preventDefault();
+                  createMutation.mutate(form);
+                }}
+                className={styles.formGrid}
+              >
+                <TextInput
+                  label="Unit ID"
+                  value={form.unitId}
+                  required
+                  onChange={(e) => setForm((prev) => ({ ...prev, unitId: e.target.value }))}
+                />
+                <TextInput
+                  label="Type"
+                  value={form.type}
+                  required
+                  onChange={(e) => setForm((prev) => ({ ...prev, type: e.target.value }))}
+                />
+                {formError ? (
+                  <p role="alert" aria-live="assertive" className={styles.error}>
+                    {formError}
+                  </p>
+                ) : null}
+                <div className={styles.formActions}>
+                  <Button type="submit" loading={createMutation.isPending}>
+                    Create apparatus
+                  </Button>
+                </div>
+              </form>
+            </Card>
+          ) : null}
+        </div>
+      </div>
     </main>
   );
 }
