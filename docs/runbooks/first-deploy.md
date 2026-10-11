@@ -173,6 +173,10 @@ Then run the test-message procedure in `docs/runbooks/cad-ingress.md` before tel
 - A self-test from the app.
 - One manual dispatch. Watch alerting-page: expect the SMS DLQ alarm while no SMS vendor is configured (step 3); the fan-out empty-roster and small-roster alarms must stay OK.
 - A `…-failed-invocations` or `…-dlq-send-failed` alarm means EventBridge could not deliver an event to a consumer and did **not** dead-letter it: the event is most likely lost, so there is nothing to redrive. Fix the target's policy, then have the producer re-emit the event (member state: `docs/runbooks/eligibility-snapshot-repair.md`). An event that *was* dead-lettered shows up only through that consumer's DLQ depth alarm; redrive those.
+- Before building the iOS app, put this environment's `GoogleService-Info.plist` (Firebase console →
+  project settings → the iOS app `com.boxalarm.mobile`) at `ui/apps/mobile/ios/Boxalarm/`. It is
+  git-ignored; the **Copy GoogleService-Info.plist** build phase bundles it, and a Release build
+  fails without it - the app calls `FirebaseApp.configure()` at launch and would crash.
 - Run `docs/runbooks/push-device-verification.md` on iOS (Sleep Focus, time-sensitive) and Android.
 - Only after all of that, consider `canaryEnabled: true` with a dedicated device (then `canaryMemberId` becomes required).
 

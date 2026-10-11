@@ -8,6 +8,12 @@ require Pod::Executable.execute_command('node', ['-p',
 platform :ios, min_ios_version_supported
 prepare_react_native_project!
 
+# React Native Firebase (messaging) resolves Firebase through Swift Package Manager by default,
+# which it refuses under this project's static linkage (duplicate Firebase copies at link time).
+# Take Firebase from CocoaPods instead; its Swift pods need module maps for their ObjC deps.
+$RNFirebaseDisableSPM = true
+use_modular_headers!
+
 linkage = ENV['USE_FRAMEWORKS']
 if linkage != nil
   Pod::UI.puts "Configuring Pod with #{linkage}ally linked Frameworks".green

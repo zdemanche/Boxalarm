@@ -579,6 +579,18 @@ export function AuthProvider({
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
 
+/** Supplies a prebuilt session instead of signing in - only the demo session
+ * (auth/demoMode.tsx) uses it; every real session goes through AuthProvider. */
+export function StaticAuthProvider({
+  value,
+  children,
+}: {
+  value: AuthContextValue;
+  children: ReactNode;
+}) {
+  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
+}
+
 export function useAuth(): AuthContextValue {
   const ctx = useContext(AuthContext);
   if (!ctx) throw new Error('useAuth must be used within AuthProvider');
