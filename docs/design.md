@@ -83,8 +83,14 @@ status vocabulary, the string catalogue, the error taxonomy, and the seven-state
 > - **Live call** keeps `elevation.alarm` (2px border in `status.alarm`), adding an inset bar.
 >
 > All new colour pairs, including selection marks against card and canvas, are AA-verified in
-> `packages/design-tokens/src/index.test.ts`. The field surface
-> (native) is unchanged by this amendment.
+> `packages/design-tokens/src/index.test.ts`.
+>
+> **Extended 2026-10-12 to the field surface (native).** The iPhone app takes the same layer: the
+> stack header, status area and tab bar are the dark shell in both palettes (current tab amber),
+> screens are a canvas with cards (radius `lg`, soft shadow in `day`), primary buttons are the
+> amber fill, chips are pills on the opaque chip pairs. Field rules are unchanged: 56dp targets,
+> 72dp on the alert path, comfortable density only, one decision per screen, alert-screen reading
+> order. The readiness banner keeps its words and 72dp actions, laid side by side.
 
 No design system, component library, or Storybook exists in `boxalarm-ui` (codebase-context §3).
 The only existing tokens are `palette.day`/`palette.cab` (background + foreground) and a five-step
