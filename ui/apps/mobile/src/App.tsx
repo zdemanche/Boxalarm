@@ -56,7 +56,7 @@ export function App() {
       <SafeAreaProvider initialMetrics={initialWindowMetrics}>
         <ConnectivityProvider>
           <SessionProvider>
-            <StatusBar barStyle="default" />
+            <StatusBar barStyle="light-content" />
             <PushTokenSync />
             <SyncEngine />
             <RootNavigator />

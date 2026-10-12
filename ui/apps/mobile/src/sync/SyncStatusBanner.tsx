@@ -1,6 +1,6 @@
 import { palette, spacing, touchTarget, typography } from '@boxalarm/design-tokens';
 import { useEffect, useState } from 'react';
-import { AccessibilityInfo, Text, TouchableOpacity, useColorScheme, View } from 'react-native';
+import { AccessibilityInfo, Text, TouchableOpacity, View } from 'react-native';
 import type { SyncItem, SyncQueueStatus } from '../features/sync/types';
 import * as syncManager from './syncManager';
 
@@ -16,8 +16,9 @@ function formatRelative(iso: string | null): string {
 // dropped - so dismissal is blocked while any item is FAILED or REJECTED, matching F7.7's "never silently
 // dropped" rule applied to the write side.
 export function SyncStatusBanner() {
-  const scheme = useColorScheme();
-  const tokens = scheme === 'dark' ? palette.cab : palette.day;
+  // Sits in the app's dark frame (status area, above the tabs) in both palettes, so it always
+  // draws with the cab palette's text colours.
+  const tokens = palette.cab;
   const [status, setStatus] = useState<SyncQueueStatus | null>(null);
   const [dismissed, setDismissed] = useState(false);
 
@@ -78,10 +79,9 @@ export function SyncStatusBanner() {
           ? tokens.error + '22'
           : pending.length > 0
             ? tokens.accent + '22'
-            : tokens.foreground + '11',
-        padding: spacing.sm,
-        borderBottomWidth: 1,
-        borderBottomColor: tokens.foreground + '22',
+            : 'transparent',
+        paddingVertical: spacing.xs,
+        paddingHorizontal: spacing.md,
       }}
     >
       {unowned.map((item) => (
@@ -191,7 +191,9 @@ export function SyncStatusBanner() {
               paddingHorizontal: spacing.sm,
             }}
           >
-            <Text style={{ color: tokens.foreground, fontSize: typography.size.sm }}>Dismiss</Text>
+            <Text style={{ color: tokens.accent, fontSize: typography.size.sm, fontWeight: '600' }}>
+              Dismiss
+            </Text>
           </TouchableOpacity>
         </View>
       )}

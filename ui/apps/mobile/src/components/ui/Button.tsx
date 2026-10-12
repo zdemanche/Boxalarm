@@ -1,4 +1,4 @@
-import { radius, targetSize, typeScale } from '@boxalarm/design-tokens';
+import { radiusScale, targetSize, typeScale } from '@boxalarm/design-tokens';
 import {
   ActivityIndicator,
   Text,
@@ -43,10 +43,16 @@ export function Button({
   const theme = useTheme();
   const isDisabled = disabled || loading;
 
+  // Primary is the brand amber under dark text; red stays the alarm (danger) colour.
   const background =
-    variant === 'primary' ? theme.fg : variant === 'danger' ? theme.status.danger : 'transparent';
-  const border = variant === 'secondary' ? theme.borderStrong : background;
-  const labelColor = variant === 'secondary' ? theme.fg : theme.bg;
+    variant === 'primary'
+      ? theme.accentFill
+      : variant === 'danger'
+        ? theme.status.danger
+        : theme.card;
+  const border = variant === 'secondary' ? theme.border : background;
+  const labelColor =
+    variant === 'primary' ? theme.onAccentFill : variant === 'secondary' ? theme.fg : theme.bg;
 
   return (
     <TouchableOpacity
@@ -67,7 +73,7 @@ export function Button({
         flexDirection: 'row',
         gap: 8,
         paddingHorizontal: 20,
-        borderRadius: radius.default,
+        borderRadius: radiusScale.lg,
         backgroundColor: background,
         borderWidth: variant === 'secondary' ? 1 : 0,
         borderColor: border,

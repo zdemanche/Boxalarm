@@ -17,3 +17,19 @@ test.each(['light', 'dark', null, undefined] as ReactNative.ColorSchemeName[])(
     spy.mockRestore();
   },
 );
+
+test.each([
+  ['light', 'day'],
+  ['dark', 'cab'],
+] as const)(
+  'useTheme puts %s cards on a canvas and carries the brand accent',
+  async (scheme, name) => {
+    const { accentPalette, surfacePalette } = jest.requireActual('@boxalarm/design-tokens');
+    const spy = jest.spyOn(ReactNative, 'useColorScheme').mockReturnValue(scheme);
+    const { result } = await renderHook(() => useTheme());
+    expect(result.current.canvas).not.toBe(result.current.card);
+    expect([surfacePalette[name].bg, surfacePalette[name].surface]).toContain(result.current.card);
+    expect(result.current.accentFill).toBe(accentPalette[name].fill);
+    spy.mockRestore();
+  },
+);

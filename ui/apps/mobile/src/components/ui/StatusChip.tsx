@@ -1,4 +1,4 @@
-import { typeScale, type StatusRole } from '@boxalarm/design-tokens';
+import { statusChipPalette, typeScale, type StatusRole } from '@boxalarm/design-tokens';
 import { Text, View } from 'react-native';
 import { useTheme } from './theme';
 
@@ -19,9 +19,11 @@ interface StatusChipProps {
   label: string;
 }
 
+/** A pill on the opaque chip fill/label pair (a11y-spec §1.2, AA-tested in design-tokens), so the
+ * label holds its contrast on any card - the same chip as the web console. */
 export function StatusChip({ status, label }: StatusChipProps) {
   const theme = useTheme();
-  const color = theme.status[status];
+  const chip = statusChipPalette[theme.palette][status];
 
   return (
     <View
@@ -30,17 +32,18 @@ export function StatusChip({ status, label }: StatusChipProps) {
         alignItems: 'center',
         gap: 6,
         alignSelf: 'flex-start',
-        paddingVertical: 4,
-        paddingHorizontal: 10,
-        borderRadius: 4,
-        borderWidth: 1,
-        borderColor: color,
+        paddingVertical: 5,
+        paddingHorizontal: 12,
+        borderRadius: 999,
+        backgroundColor: chip.fill,
       }}
     >
-      <Text style={{ color, fontSize: typeScale.label.size }} accessible={false}>
+      <Text style={{ color: chip.onFill, fontSize: typeScale.label.size }} accessible={false}>
         {STATUS_GLYPH[status]}
       </Text>
-      <Text style={{ color, fontSize: typeScale.label.size, fontWeight: '700' }}>{label}</Text>
+      <Text style={{ color: chip.onFill, fontSize: typeScale.label.size, fontWeight: '700' }}>
+        {label}
+      </Text>
     </View>
   );
 }

@@ -9,6 +9,8 @@ import { MutualAidPromptScreen } from '../screens/alerts/MutualAidPromptScreen';
 import { RidingBoardScreen } from '../screens/alerts/RidingBoardScreen';
 import { RosterScreen } from '../screens/alerts/RosterScreen';
 import { RequireRole } from './RequireRole';
+import { useTheme } from '../components/ui/theme';
+import { stackScreenOptions } from './stackScreenOptions';
 
 // Matches routeTable.ts's '/alerts/roster' entry on web (OFFICER/CHIEF) and
 // AlertsHomeScreen's own canEnterManually check - manual dispatch entry and riding-board seat
@@ -35,8 +37,9 @@ export type AlertsStackParamList = {
 const Stack = createNativeStackNavigator<AlertsStackParamList>();
 
 export function AlertsStack() {
+  const theme = useTheme();
   return (
-    <Stack.Navigator>
+    <Stack.Navigator screenOptions={stackScreenOptions(theme)}>
       <Stack.Screen name="AlertsHome" component={AlertsHomeScreen} options={{ title: 'Alerts' }} />
       <Stack.Screen name="ManualEntry" options={{ title: 'Manual entry' }}>
         {() => (

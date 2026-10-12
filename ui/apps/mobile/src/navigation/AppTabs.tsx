@@ -40,11 +40,12 @@ export function AppTabs() {
       initialRouteName="Alerts"
       screenOptions={({ route }) => ({
         headerShown: false,
-        tabBarActiveTintColor: theme.fg,
-        tabBarInactiveTintColor: theme.fgMuted,
+        // The dark frame in both palettes, amber marking the current tab (shellPalette, AA-tested).
+        tabBarActiveTintColor: theme.shell.accent,
+        tabBarInactiveTintColor: theme.shell.fgMuted,
         tabBarStyle: {
-          backgroundColor: theme.surface,
-          borderTopColor: theme.borderDecorative,
+          backgroundColor: theme.shell.bg,
+          borderTopColor: theme.shell.border,
           // Glove-sized targets (N3.5): taller bar than the platform default so each tab's
           // hit area clears the field floor with room to spare.
           height: targetSize.field + 24,

@@ -1,7 +1,7 @@
-import { radius, spacing, typeScale } from '@boxalarm/design-tokens';
+import { radiusScale, spacing, typeScale } from '@boxalarm/design-tokens';
 import type { ReactNode } from 'react';
 import { Text, View } from 'react-native';
-import { useTheme } from './theme';
+import { cardShadow, useTheme } from './theme';
 
 interface CardProps {
   title?: string;
@@ -13,16 +13,20 @@ export function Card({ title, children }: CardProps) {
   return (
     <View
       style={{
-        backgroundColor: theme.surface,
-        borderRadius: radius.card,
+        backgroundColor: theme.card,
+        borderRadius: radiusScale.lg,
         borderWidth: 1,
         borderColor: theme.borderDecorative,
-        padding: spacing.lg,
+        padding: spacing.md,
         gap: spacing.sm,
+        ...cardShadow(theme),
       }}
     >
       {title ? (
-        <Text style={{ color: theme.fg, fontSize: typeScale.heading.size, fontWeight: '600' }}>
+        <Text
+          accessibilityRole="header"
+          style={{ color: theme.fg, fontSize: typeScale.heading.size, fontWeight: '700' }}
+        >
           {title}
         </Text>
       ) : null}
@@ -42,13 +46,14 @@ export function Stat({ label, value, alarm = false }: StatProps) {
   return (
     <View
       style={{
-        backgroundColor: theme.surface,
-        borderRadius: radius.card,
+        backgroundColor: theme.card,
+        borderRadius: radiusScale.lg,
         borderWidth: 1,
         borderColor: theme.borderDecorative,
         padding: spacing.md,
         gap: 4,
         flex: 1,
+        ...cardShadow(theme),
       }}
     >
       <Text style={{ color: theme.fgMuted, fontSize: typeScale.caption.size, fontWeight: '600' }}>

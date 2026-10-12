@@ -7,6 +7,8 @@ import { ServiceStatusScreen } from '../screens/checks/ServiceStatusScreen';
 import type { ApparatusStatus } from '../features/checks/types';
 import { SERVICE_STATUS_ROLES } from '../features/checks/serviceStatusApi';
 import { RequireRole } from './RequireRole';
+import { useTheme } from '../components/ui/theme';
+import { stackScreenOptions } from './stackScreenOptions';
 
 // Apparatus picker, check runner, defect report - architecture.md §7.2 ChecksStack.
 // FieldCapture (E5-S7) has no stack of its own in §7.2, so it hangs off Checks per that
@@ -23,8 +25,9 @@ export type ChecksStackParamList = {
 const Stack = createNativeStackNavigator<ChecksStackParamList>();
 
 export function ChecksStack() {
+  const theme = useTheme();
   return (
-    <Stack.Navigator>
+    <Stack.Navigator screenOptions={stackScreenOptions(theme)}>
       <Stack.Screen
         name="ApparatusPicker"
         component={ApparatusPickerScreen}
