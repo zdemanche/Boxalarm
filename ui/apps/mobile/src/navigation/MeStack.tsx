@@ -69,7 +69,11 @@ export function MeStack() {
       />
       <Stack.Screen name="MyPpe" component={MyPpeScreen} options={{ title: 'My PPE' }} />
       <Stack.Screen name="SelfTest" component={SelfTestScreen} options={{ title: 'Self-test' }} />
-      <Stack.Screen name="Diagnostics" component={DiagnosticsScreen} />
+      <Stack.Screen
+        name="Diagnostics"
+        component={DiagnosticsScreen}
+        options={{ title: 'Alert diagnostics' }}
+      />
     </Stack.Navigator>
   );
 }
