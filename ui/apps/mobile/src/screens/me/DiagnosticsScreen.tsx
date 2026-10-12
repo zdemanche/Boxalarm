@@ -11,7 +11,8 @@ import {
   type RecentDispatch,
 } from '../../features/alerts/diagnosticsApi';
 import { ApiError } from '../../lib/apiClient';
-import { Button, Card, Screen, useTheme, type SurfaceTheme } from '../../components/ui';
+import { Button, Card, Screen, StatusChip, useTheme, type SurfaceTheme } from '../../components/ui';
+import { InfoRow, Rows } from './MeRows';
 
 const CHANNEL_LABEL: Record<string, string> = { PUSH: 'Push', SMS: 'SMS', VOICE: 'Voice' };
 
@@ -72,11 +73,7 @@ function groupByTone(timeline: readonly OwnTimelineEntry[]): [number, OwnTimelin
 }
 
 function Muted({ theme, children }: { theme: SurfaceTheme; children: React.ReactNode }) {
-  return (
-    <Text style={{ color: theme.fgMuted, fontSize: typeScale.body.size, marginTop: spacing.xs }}>
-      {children}
-    </Text>
-  );
+  return <Text style={{ color: theme.fgMuted, fontSize: typeScale.body.size }}>{children}</Text>;
 }
 
 function DispatchTimeline({
@@ -92,7 +89,10 @@ function DispatchTimeline({
   if (!result || result.kind === 'error') {
     return (
       <Card title={title}>
-        <Text accessibilityRole="alert" style={{ color: theme.status.danger }}>
+        <Text
+          accessibilityRole="alert"
+          style={{ color: theme.status.danger, fontSize: typeScale.body.size }}
+        >
           The timeline for this dispatch could not be loaded.
         </Text>
       </Card>
@@ -102,7 +102,9 @@ function DispatchTimeline({
   if (diagnostics.diagnosis === 'NOT_ON_ELIGIBLE_ROSTER') {
     return (
       <Card title={title}>
-        <Text style={{ color: theme.status.danger, fontWeight: '600' }}>
+        <Text
+          style={{ color: theme.status.danger, fontSize: typeScale.body.size, fontWeight: '600' }}
+        >
           You were not on the eligible roster
         </Text>
         <Muted theme={theme}>
@@ -123,25 +125,38 @@ function DispatchTimeline({
   }
   return (
     <Card title={title}>
-      {groupByTone(diagnostics.timeline).map(([tone, entries]) => (
-        <View key={tone} accessibilityLabel={`Tone ${tone}`} style={{ marginTop: spacing.xs }}>
-          <Text style={{ color: theme.fg, fontSize: typeScale.subheading.size, fontWeight: '600' }}>
-            Tone {tone}
-          </Text>
-          {entries.map((entry, index) => {
-            const { label, at } = describeEntry(entry);
-            return (
-              <Text
-                key={`${entry.entityType}-${index}`}
-                style={{ color: theme.fg, fontSize: typeScale.body.size }}
-              >
-                {label}
-                {at ? ` — ${formatTime(at)}` : ''}
-              </Text>
-            );
-          })}
-        </View>
-      ))}
+      <Rows>
+        {groupByTone(diagnostics.timeline).map(([tone, entries]) => (
+          <View
+            key={tone}
+            accessibilityLabel={`Tone ${tone}`}
+            style={{ paddingVertical: spacing.sm, gap: spacing.xs }}
+          >
+            <Text
+              style={{ color: theme.fgMuted, fontSize: typeScale.label.size, fontWeight: '600' }}
+            >
+              Tone {tone}
+            </Text>
+            {entries.map((entry, index) => {
+              const { label, at } = describeEntry(entry);
+              return (
+                <View key={`${entry.entityType}-${index}`}>
+                  <Text
+                    style={{ color: theme.fg, fontSize: typeScale.body.size, fontWeight: '600' }}
+                  >
+                    {label}
+                  </Text>
+                  {at ? (
+                    <Text style={{ color: theme.fgMuted, fontSize: typeScale.bodyDense.size }}>
+                      {formatTime(at)}
+                    </Text>
+                  ) : null}
+                </View>
+              );
+            })}
+          </View>
+        ))}
+      </Rows>
     </Card>
   );
 }
@@ -162,14 +177,21 @@ function DeviceCheck({ diagnostics, theme }: { diagnostics: OwnDiagnostics; them
   ];
   return (
     <Card title="This device">
-      {checks.map((check) => (
-        <Text
-          key={check.label}
-          style={{ color: check.ok ? theme.status.ok : theme.status.danger, fontWeight: '600' }}
-        >
-          {check.label}: {check.ok ? 'allowed' : 'not allowed'}
-        </Text>
-      ))}
+      <Rows>
+        {checks.map((check) => (
+          <InfoRow
+            key={check.label}
+            title={check.label}
+            accessibilityLabel={`${check.label}: ${check.ok ? 'allowed' : 'not allowed'}`}
+            trailing={
+              <StatusChip
+                status={check.ok ? 'ok' : 'danger'}
+                label={check.ok ? 'Allowed' : 'Not allowed'}
+              />
+            }
+          />
+        ))}
+      </Rows>
       <Muted theme={theme}>
         App {state.appVersion} on {state.osVersion}, reported {formatTime(state.reportedAt)}
       </Muted>
@@ -243,21 +265,28 @@ export function DiagnosticsScreen() {
 
   let body: React.ReactNode;
   if (!canFetch) {
-    body = <Muted theme={theme}>Sign in to see the delivery timeline for your recent pages.</Muted>;
+    body = (
+      <Card>
+        <Muted theme={theme}>Sign in to see the delivery timeline for your recent pages.</Muted>
+      </Card>
+    );
   } else if (state.kind === 'loading') {
     body = (
-      <View style={{ marginTop: spacing.lg }}>
+      <Card>
         <ActivityIndicator accessibilityLabel="Loading your delivery history" color={theme.fg} />
-      </View>
+      </Card>
     );
   } else if (state.kind === 'error') {
     body = (
-      <View style={{ marginTop: spacing.lg, gap: spacing.sm }}>
-        <Text accessibilityRole="alert" style={{ color: theme.status.danger }}>
+      <Card>
+        <Text
+          accessibilityRole="alert"
+          style={{ color: theme.status.danger, fontSize: typeScale.body.size }}
+        >
           {state.message}
         </Text>
         <Button label="Try again" variant="secondary" onPress={retry} />
-      </View>
+      </Card>
     );
   } else {
     const { dispatches, results, partial, activeWindowSeconds } = state.data;
@@ -265,19 +294,26 @@ export function DiagnosticsScreen() {
       .map((d) => results.get(d.dispatchId))
       .find((r): r is Extract<DispatchResult, { kind: 'ok' }> => r?.kind === 'ok');
     body = (
-      <View style={{ marginTop: spacing.lg, gap: spacing.md }}>
+      <>
         {partial ? (
-          <Text accessibilityRole="alert" style={{ color: theme.status.warning }}>
-            Part of your history could not be loaded, so a recent dispatch may be missing.
-          </Text>
+          <Card>
+            <Text
+              accessibilityRole="alert"
+              style={{ color: theme.status.warning, fontSize: typeScale.body.size }}
+            >
+              Part of your history could not be loaded, so a recent dispatch may be missing.
+            </Text>
+          </Card>
         ) : null}
         {dispatches.length === 0 ? (
-          <Muted theme={theme}>
-            No pages to you are on record
-            {activeWindowSeconds
-              ? `, and no calls were dispatched in the last ${Math.round(activeWindowSeconds / 3600)} hours.`
-              : '.'}
-          </Muted>
+          <Card>
+            <Muted theme={theme}>
+              No pages to you are on record
+              {activeWindowSeconds
+                ? `, and no calls were dispatched in the last ${Math.round(activeWindowSeconds / 3600)} hours.`
+                : '.'}
+            </Muted>
+          </Card>
         ) : (
           dispatches.map((d) => (
             <DispatchTimeline
@@ -289,23 +325,19 @@ export function DiagnosticsScreen() {
           ))
         )}
         {firstOk ? <DeviceCheck diagnostics={firstOk.diagnostics} theme={theme} /> : null}
-        <Button label="Refresh" variant="secondary" onPress={retry} />
-      </View>
+        <Button label="Refresh" variant="secondary" fullWidth onPress={retry} />
+      </>
     );
   }
 
   return (
     <Screen>
-      <Text
-        accessibilityRole="header"
-        style={{ color: theme.fg, fontSize: typeScale.title.size, fontWeight: '700' }}
-      >
-        Why didn&apos;t I get the page?
-      </Text>
-      <Muted theme={theme}>
-        Each page to you, per tone and channel — sent, delivered and opened — so you can see exactly
-        where a page didn&apos;t land.
-      </Muted>
+      <Card title="Why didn't I get the page?">
+        <Muted theme={theme}>
+          Each page to you, per tone and channel — sent, delivered and opened — so you can see
+          exactly where a page didn&apos;t land.
+        </Muted>
+      </Card>
       {body}
     </Screen>
   );

@@ -1,6 +1,6 @@
-import { radius, spacing, targetSize, typeScale } from '@boxalarm/design-tokens';
+import { radiusScale, spacing, targetSize, typeScale } from '@boxalarm/design-tokens';
 import { useEffect, useRef, useState } from 'react';
-import { AccessibilityInfo, FlatList, Text, TouchableOpacity, View } from 'react-native';
+import { AccessibilityInfo, Text, TouchableOpacity, View } from 'react-native';
 import { Button, Card, Screen, useTheme } from '../../components/ui';
 import {
   activityLabel,
@@ -12,6 +12,7 @@ import { ApiError } from '../../lib/apiClient';
 import { useOptionalConnectivity } from '../../sync/ConnectivityContext';
 import { DeliveryStatus } from '../../sync/DeliveryStatus';
 import * as syncManager from '../../sync/syncManager';
+import { InfoRow, ROW_TITLE_SIZE, Rows } from './MeRows';
 
 const ACTIVITY_TYPES: ActivityType[] = ['CALL', 'DRILL', 'MEETING', 'WORK_DETAIL', 'STANDBY'];
 
@@ -107,142 +108,114 @@ export function AttendanceScreen() {
 
   const sorted = [...records].sort((a, b) => b.occurredAt - a.occurredAt);
 
-  const header = (
-    <View style={{ gap: spacing.lg, paddingBottom: spacing.md }}>
-      <Text
-        accessibilityRole="header"
-        style={{ color: theme.fg, fontSize: typeScale.title.size, fontWeight: '700' }}
-      >
-        Attendance
-      </Text>
-      <View
-        accessibilityRole="radiogroup"
-        accessibilityLabel="Activity"
-        style={{ flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm }}
-      >
-        {ACTIVITY_TYPES.map((type) => {
-          const selected = activityType === type;
-          return (
-            <TouchableOpacity
-              key={type}
-              accessibilityRole="radio"
-              accessibilityLabel={activityLabel(type)}
-              accessibilityState={{ selected, checked: selected }}
-              onPress={() => setActivityType(type)}
-              style={{
-                minHeight: targetSize.field,
-                minWidth: targetSize.field,
-                paddingHorizontal: spacing.md,
-                justifyContent: 'center',
-                borderRadius: radius.default,
-                borderWidth: selected ? 2 : 1,
-                borderColor: selected ? theme.fg : theme.border,
-                backgroundColor: selected ? theme.fg : theme.surface,
-              }}
-            >
-              <Text
-                style={{
-                  color: selected ? theme.bg : theme.fg,
-                  fontSize: typeScale.body.size,
-                  fontWeight: '600',
-                }}
-              >
-                {activityLabel(type)}
-              </Text>
-            </TouchableOpacity>
-          );
-        })}
-      </View>
-      <Button
-        label={`Record ${activityLabel(activityType).toLowerCase()} attendance`}
-        fullWidth
-        loading={saving}
-        onPress={() => void handleRecord()}
-      />
-      {error ? (
-        <Text
-          accessibilityRole="alert"
-          style={{ color: theme.status.danger, fontSize: typeScale.body.size }}
-        >
-          {error}
-        </Text>
-      ) : null}
-      {pending.length > 0 ? (
-        <View style={{ gap: spacing.sm }}>
-          <Text
-            accessibilityRole="header"
-            style={{ color: theme.fg, fontSize: typeScale.heading.size, fontWeight: '600' }}
-          >
-            On this phone, not yet recorded
-          </Text>
-          {pending.map((item) => (
-            <Card key={item.id}>
-              <Text style={{ color: theme.fg, fontSize: typeScale.body.size }}>{item.label}</Text>
-              <DeliveryStatus
-                itemId={item.id}
-                label={item.label}
-                state={item.status}
-                lastError={item.lastError}
-                isOnline={isOnline}
-              />
-            </Card>
-          ))}
-        </View>
-      ) : null}
-      <Text
-        accessibilityRole="header"
-        style={{ color: theme.fg, fontSize: typeScale.heading.size, fontWeight: '600' }}
-      >
-        Recorded
-      </Text>
-    </View>
-  );
+  const muted = { color: theme.fgMuted, fontSize: typeScale.body.size };
 
   return (
-    <Screen scroll={false}>
-      <FlatList
-        data={sorted}
-        ListHeaderComponent={header}
-        ListEmptyComponent={
-          <Text style={{ color: theme.fgMuted, fontSize: typeScale.body.size }}>
+    <Screen>
+      <Card title="Record attendance">
+        <View
+          accessibilityRole="radiogroup"
+          accessibilityLabel="Activity"
+          style={{ flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm }}
+        >
+          {ACTIVITY_TYPES.map((type) => {
+            const selected = activityType === type;
+            return (
+              <TouchableOpacity
+                key={type}
+                accessibilityRole="radio"
+                accessibilityLabel={activityLabel(type)}
+                accessibilityState={{ selected, checked: selected }}
+                onPress={() => setActivityType(type)}
+                style={{
+                  minHeight: targetSize.field,
+                  minWidth: targetSize.field,
+                  paddingHorizontal: spacing.md,
+                  justifyContent: 'center',
+                  alignItems: 'center',
+                  borderRadius: radiusScale.pill,
+                  borderWidth: selected ? 2 : 1,
+                  borderColor: selected ? theme.indicator : theme.border,
+                  backgroundColor: selected ? theme.accentFill : theme.card,
+                }}
+              >
+                <Text
+                  style={{
+                    color: selected ? theme.onAccentFill : theme.fg,
+                    fontSize: typeScale.body.size,
+                    fontWeight: selected ? '700' : '600',
+                  }}
+                >
+                  {activityLabel(type)}
+                </Text>
+              </TouchableOpacity>
+            );
+          })}
+        </View>
+        <View style={{ marginTop: spacing.sm }}>
+          <Button
+            label={`Record ${activityLabel(activityType).toLowerCase()} attendance`}
+            fullWidth
+            loading={saving}
+            onPress={() => void handleRecord()}
+          />
+        </View>
+        {error ? (
+          <Text
+            accessibilityRole="alert"
+            style={{ color: theme.status.danger, fontSize: typeScale.body.size }}
+          >
+            {error}
+          </Text>
+        ) : null}
+      </Card>
+
+      {pending.length > 0 ? (
+        <Card title="On this phone, not yet recorded">
+          <Rows>
+            {pending.map((item) => (
+              <View key={item.id} style={{ paddingVertical: spacing.sm, gap: spacing.xs }}>
+                <Text style={{ color: theme.fg, fontSize: ROW_TITLE_SIZE, fontWeight: '600' }}>
+                  {item.label}
+                </Text>
+                <DeliveryStatus
+                  itemId={item.id}
+                  label={item.label}
+                  state={item.status}
+                  lastError={item.lastError}
+                  isOnline={isOnline}
+                />
+              </View>
+            ))}
+          </Rows>
+        </Card>
+      ) : null}
+
+      <Card title="Recorded">
+        {sorted.length === 0 ? (
+          <Text style={muted}>
             {historyUnavailable
               ? 'History loads when you have signal. New records are still saved on this phone.'
               : 'No attendance recorded yet.'}
           </Text>
-        }
-        ListFooterComponent={
-          historyUnavailable && sorted.length > 0 ? (
-            <Text
-              style={{
-                color: theme.fgMuted,
-                fontSize: typeScale.body.size,
-                marginTop: spacing.sm,
-              }}
-            >
-              History may be out of date - it refreshes when you have signal.
-            </Text>
-          ) : undefined
-        }
-        keyExtractor={(item) => `${item.activityType}-${item.occurredAt}`}
-        renderItem={({ item }) => (
-          <View
-            accessible
-            style={{
-              paddingVertical: spacing.sm,
-              borderBottomWidth: 1,
-              borderBottomColor: theme.borderDecorative,
-            }}
-          >
-            <Text style={{ color: theme.fg, fontSize: typeScale.body.size }}>
-              {activityLabel(item.activityType)}
-              {item.refId ? ` — dispatch ${item.refId}` : ''}
-            </Text>
-            <Text style={{ color: theme.fgMuted, fontSize: typeScale.bodyDense.size }}>
-              {new Date(item.occurredAt * 1000).toLocaleDateString()} — {item.hours}h
-            </Text>
-          </View>
+        ) : (
+          <Rows>
+            {sorted.map((item) => (
+              <InfoRow
+                key={`${item.activityType}-${item.occurredAt}`}
+                accessible
+                title={`${activityLabel(item.activityType)}${
+                  item.refId ? ` — dispatch ${item.refId}` : ''
+                }`}
+                detail={`${new Date(item.occurredAt * 1000).toLocaleDateString()} — ${item.hours}h`}
+              />
+            ))}
+          </Rows>
         )}
-      />
+        {historyUnavailable && sorted.length > 0 ? (
+          <Text style={muted}>History may be out of date - it refreshes when you have signal.</Text>
+        ) : null}
+      </Card>
     </Screen>
   );
 }

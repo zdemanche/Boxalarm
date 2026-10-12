@@ -1,54 +1,51 @@
-import { palette, radius, spacing, touchTarget, typography } from '@boxalarm/design-tokens';
+import { radiusScale, spacing, targetSize, typeScale } from '@boxalarm/design-tokens';
 import { useNavigation } from '@react-navigation/native';
 import { useEffect, useState } from 'react';
-import {
-  AccessibilityInfo,
-  Text,
-  TextInput,
-  TouchableOpacity,
-  useColorScheme,
-  View,
-} from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { AccessibilityInfo, Text, TextInput, View } from 'react-native';
+import { Button, Card, Screen, useTheme } from '../../components/ui';
 import { useMeRepository } from '../../features/me/apiMeRepository';
 import { ApiError } from '../../lib/apiClient';
+import { ROW_TITLE_SIZE } from './MeRows';
 
-function inputStyle(tokens: { foreground: string }) {
-  return {
-    minHeight: touchTarget.baseline.ios,
-    borderWidth: 1,
-    borderColor: tokens.foreground + '33',
-    borderRadius: radius.default,
-    paddingHorizontal: spacing.md,
-    color: tokens.foreground,
-    fontSize: typography.size.base,
-  };
+function FieldLabel({ children, nativeID }: { children: string; nativeID?: string }) {
+  const theme = useTheme();
+  return (
+    <Text
+      nativeID={nativeID}
+      style={{ color: theme.fgMuted, fontSize: typeScale.label.size, fontWeight: '600' }}
+    >
+      {children}
+    </Text>
+  );
 }
 
 function Field({
   label,
   value,
   onChangeText,
-  tokens,
 }: {
   label: string;
   value: string;
   onChangeText: (next: string) => void;
-  tokens: { foreground: string };
 }) {
+  const theme = useTheme();
   return (
-    <View style={{ marginTop: spacing.lg }}>
-      <Text
-        nativeID={`${label}-label`}
-        style={{ color: tokens.foreground, fontSize: typography.size.sm, marginBottom: spacing.xs }}
-      >
-        {label}
-      </Text>
+    <View style={{ gap: spacing.xs }}>
+      <FieldLabel nativeID={`${label}-label`}>{label}</FieldLabel>
       <TextInput
         accessibilityLabel={label}
         value={value}
         onChangeText={onChangeText}
-        style={inputStyle(tokens)}
+        style={{
+          minHeight: targetSize.field,
+          borderWidth: 1,
+          borderColor: theme.border,
+          borderRadius: radiusScale.lg,
+          backgroundColor: theme.card,
+          paddingHorizontal: spacing.md,
+          color: theme.fg,
+          fontSize: ROW_TITLE_SIZE,
+        }}
       />
     </View>
   );
@@ -56,8 +53,7 @@ function Field({
 
 export function ProfileEditScreen() {
   const navigation = useNavigation();
-  const scheme = useColorScheme();
-  const tokens = scheme === 'dark' ? palette.cab : palette.day;
+  const theme = useTheme();
   const repository = useMeRepository();
   const [firstName, setFirstName] = useState('');
   const [lastName, setLastName] = useState('');
@@ -105,62 +101,49 @@ export function ProfileEditScreen() {
   };
 
   if (status === 'loading') {
-    return <SafeAreaView style={{ flex: 1, backgroundColor: tokens.background }} />;
+    return <Screen scroll={false}>{null}</Screen>;
   }
 
+  // Not scrolling, as before: a scroll view would spend the first tap on Save dismissing the
+  // keyboard.
   return (
-    <SafeAreaView style={{ flex: 1, backgroundColor: tokens.background, padding: spacing.lg }}>
-      <Field label="First name" value={firstName} onChangeText={setFirstName} tokens={tokens} />
-      <Field label="Last name" value={lastName} onChangeText={setLastName} tokens={tokens} />
-      <View style={{ marginTop: spacing.lg }}>
-        <Text
-          style={{
-            color: tokens.foreground,
-            fontSize: typography.size.sm,
-            marginBottom: spacing.xs,
-          }}
-        >
-          Email
-        </Text>
-        <Text
-          accessibilityLabel={`Email, ${email}. To change your email, ask a chief or admin.`}
-          style={{ color: tokens.foreground, fontSize: typography.size.base }}
-        >
-          {email}
-        </Text>
-        <Text
-          importantForAccessibility="no"
-          style={{ color: tokens.foreground, fontSize: typography.size.sm, marginTop: spacing.xs }}
-        >
-          To change your email, ask a chief or admin.
-        </Text>
-      </View>
-      <Field label="Phone" value={phone} onChangeText={setPhone} tokens={tokens} />
-      {error ? (
-        <Text accessibilityRole="alert" style={{ color: tokens.error, marginTop: spacing.md }}>
-          {error}
-        </Text>
-      ) : null}
-      <TouchableOpacity
-        accessibilityRole="button"
-        onPress={() => void handleSave()}
-        disabled={status === 'saving'}
-        style={{
-          minHeight: touchTarget.baseline.ios,
-          alignItems: 'center',
-          justifyContent: 'center',
-          backgroundColor: tokens.accent,
-          borderRadius: radius.default,
-          marginTop: spacing.xl,
-          opacity: status === 'saving' ? 0.6 : 1,
-        }}
-      >
-        <Text
-          style={{ color: tokens.background, fontSize: typography.size.base, fontWeight: '600' }}
-        >
-          Save
-        </Text>
-      </TouchableOpacity>
-    </SafeAreaView>
+    <Screen scroll={false}>
+      <Card>
+        <View style={{ gap: spacing.md }}>
+          <Field label="First name" value={firstName} onChangeText={setFirstName} />
+          <Field label="Last name" value={lastName} onChangeText={setLastName} />
+          <View style={{ gap: spacing.xs }}>
+            <FieldLabel>Email</FieldLabel>
+            <Text
+              accessibilityLabel={`Email, ${email}. To change your email, ask a chief or admin.`}
+              style={{ color: theme.fg, fontSize: ROW_TITLE_SIZE }}
+            >
+              {email}
+            </Text>
+            <Text
+              importantForAccessibility="no"
+              style={{ color: theme.fgMuted, fontSize: typeScale.bodyDense.size }}
+            >
+              To change your email, ask a chief or admin.
+            </Text>
+          </View>
+          <Field label="Phone" value={phone} onChangeText={setPhone} />
+          {error ? (
+            <Text
+              accessibilityRole="alert"
+              style={{ color: theme.status.danger, fontSize: typeScale.body.size }}
+            >
+              {error}
+            </Text>
+          ) : null}
+          <Button
+            label="Save"
+            fullWidth
+            loading={status === 'saving'}
+            onPress={() => void handleSave()}
+          />
+        </View>
+      </Card>
+    </Screen>
   );
 }

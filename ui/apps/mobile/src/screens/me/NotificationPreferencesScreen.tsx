@@ -1,20 +1,20 @@
-import { palette, spacing, touchTarget, typography } from '@boxalarm/design-tokens';
+import { spacing, targetSize, typeScale } from '@boxalarm/design-tokens';
 import { useEffect, useState } from 'react';
 import Config from 'react-native-config';
-import { ScrollView, Switch, Text, View, useColorScheme } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { Switch, Text, View } from 'react-native';
 import { useOptionalAuth } from '../../auth/AuthContext';
+import { Card, Screen, useTheme } from '../../components/ui';
 import { preferencesFor } from '../../features/notifications/categories';
 import { getNotificationPreferences, putNotificationPreference } from '../../features/training/api';
 import type { NotificationPreference } from '../../features/training/types';
+import { ROW_TITLE_SIZE, Rows } from './MeRows';
 
 // Stored channels are MUTES (notification-service repository.ts) - true means that channel is
 // muted for the category - so each switch shows the inverse. No stored row: nothing is muted.
 const UNMUTED: NotificationPreference['channels'] = { push: false, email: false };
 
 export function NotificationPreferencesScreen() {
-  const scheme = useColorScheme();
-  const tokens = scheme === 'dark' ? palette.cab : palette.day;
+  const theme = useTheme();
   const auth = useOptionalAuth();
   const apiBaseUrl = Config.API_BASE_URL;
   const [preferences, setPreferences] = useState<NotificationPreference[]>([]);
@@ -65,78 +65,65 @@ export function NotificationPreferencesScreen() {
     }
   };
 
+  const alertText = { color: theme.status.danger, fontSize: typeScale.body.size };
+  const note = { color: theme.fgMuted, fontSize: typeScale.body.size };
+
   return (
-    <SafeAreaView style={{ flex: 1, backgroundColor: tokens.background }}>
-      <ScrollView contentContainerStyle={{ padding: spacing.lg }}>
-        {saveError ? (
-          <Text
-            accessibilityRole="alert"
-            style={{
-              color: tokens.error,
-              fontSize: typography.size.sm,
-              marginBottom: spacing.md,
-            }}
-          >
-            {saveError}
-          </Text>
-        ) : null}
-        {loadError ? (
-          <Text
-            accessibilityRole="alert"
-            style={{
-              color: tokens.error,
-              fontSize: typography.size.sm,
-              marginBottom: spacing.md,
-            }}
-          >
-            {loadError}
-          </Text>
-        ) : null}
-        <Text
-          style={{
-            color: tokens.foreground,
-            opacity: 0.7,
-            fontSize: typography.size.sm,
-            marginBottom: spacing.md,
-          }}
-        >
+    <Screen>
+      {saveError || loadError ? (
+        <Card>
+          {saveError ? (
+            <Text accessibilityRole="alert" style={alertText}>
+              {saveError}
+            </Text>
+          ) : null}
+          {loadError ? (
+            <Text accessibilityRole="alert" style={alertText}>
+              {loadError}
+            </Text>
+          ) : null}
+        </Card>
+      ) : null}
+      <Card title="Push reminders">
+        <Text style={note}>
           Muting push still delivers the reminder to your inbox. Dispatch alerts cannot be muted
           here.
         </Text>
         {auth?.roles.includes('TRAINING') ? (
-          <Text
-            style={{
-              color: tokens.foreground,
-              opacity: 0.7,
-              fontSize: typography.size.sm,
-              marginBottom: spacing.md,
-            }}
-          >
+          <Text style={note}>
             As a training officer you also get the department-wide certification-expiry digest; it
             cannot be muted. The switch below covers only your own certifications.
           </Text>
         ) : null}
-        {preferencesFor(auth?.roles ?? []).map(({ category, label }) => (
-          <View
-            key={category}
-            style={{
-              minHeight: touchTarget.baseline.ios,
-              flexDirection: 'row',
-              justifyContent: 'space-between',
-              alignItems: 'center',
-            }}
-          >
-            <Text style={{ color: tokens.foreground, fontSize: typography.size.base }}>
-              {label}
-            </Text>
-            <Switch
-              accessibilityLabel={`${label} push notifications`}
-              value={!channelsFor(category).push}
-              onValueChange={(value) => void togglePush(category, value)}
-            />
-          </View>
-        ))}
-      </ScrollView>
-    </SafeAreaView>
+        <Rows>
+          {preferencesFor(auth?.roles ?? []).map(({ category, label }) => (
+            <View
+              key={category}
+              style={{
+                minHeight: targetSize.field,
+                flexDirection: 'row',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                gap: spacing.md,
+                paddingVertical: spacing.sm,
+              }}
+            >
+              <Text
+                style={{ flex: 1, color: theme.fg, fontSize: ROW_TITLE_SIZE, fontWeight: '600' }}
+              >
+                {label}
+              </Text>
+              <Switch
+                accessibilityLabel={`${label} push notifications`}
+                value={!channelsFor(category).push}
+                onValueChange={(value) => void togglePush(category, value)}
+                trackColor={{ false: theme.border, true: theme.indicator }}
+                ios_backgroundColor={theme.border}
+              />
+            </View>
+          ))}
+        </Rows>
+      </Card>
+    </Screen>
   );
 }

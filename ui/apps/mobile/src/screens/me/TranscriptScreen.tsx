@@ -1,11 +1,13 @@
-import { palette, spacing, touchTarget, typography } from '@boxalarm/design-tokens';
+import { typeScale } from '@boxalarm/design-tokens';
 import { useEffect, useState } from 'react';
 import Config from 'react-native-config';
-import { ScrollView, Share, Text, TouchableOpacity, useColorScheme, View } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { Share, Text } from 'react-native';
 import { useOptionalAuth } from '../../auth/AuthContext';
+import { Button, Card, Screen, useTheme } from '../../components/ui';
+import { certificationStatusLabel } from '../../features/me/certificationStatus';
 import { getTranscript } from '../../features/training/api';
 import type { Transcript } from '../../features/training/types';
+import { CertificationChip, InfoRow, ROW_TITLE_SIZE, Rows } from './MeRows';
 
 const FORMULA_PREFIX_PATTERN = /^[=+\-@]/;
 
@@ -37,8 +39,7 @@ export function toCsv(transcript: Transcript): string {
 }
 
 export function TranscriptScreen() {
-  const scheme = useColorScheme();
-  const tokens = scheme === 'dark' ? palette.cab : palette.day;
+  const theme = useTheme();
   const auth = useOptionalAuth();
   const apiBaseUrl = Config.API_BASE_URL;
   const [transcript, setTranscript] = useState<Transcript | null>(null);
@@ -65,75 +66,74 @@ export function TranscriptScreen() {
   const hasHistory =
     transcript && (transcript.certifications.length > 0 || transcript.attendance.length > 0);
 
-  return (
-    <SafeAreaView style={{ flex: 1, backgroundColor: tokens.background }}>
-      <ScrollView contentContainerStyle={{ padding: spacing.lg }}>
-        <Text
-          accessibilityRole="header"
-          style={{ color: tokens.foreground, fontSize: typography.size.xl, fontWeight: '700' }}
-        >
-          Transcript
-        </Text>
+  const hours = transcript ? Object.entries(transcript.hoursByCategory) : [];
 
-        {loadError ? (
+  return (
+    <Screen>
+      {loadError ? (
+        <Card>
           <Text
             accessibilityRole="alert"
-            style={{
-              color: tokens.error,
-              fontSize: typography.size.sm,
-              marginTop: spacing.md,
-            }}
+            style={{ color: theme.status.danger, fontSize: typeScale.body.size }}
           >
             {loadError}
           </Text>
-        ) : null}
+        </Card>
+      ) : null}
 
-        {transcript ? (
-          <TouchableOpacity
-            accessibilityRole="button"
-            onPress={() => void Share.share({ message: toCsv(transcript) })}
-            style={{
-              minHeight: touchTarget.baseline.ios,
-              justifyContent: 'center',
-              marginTop: spacing.md,
-            }}
-          >
-            <Text style={{ color: tokens.accent, fontSize: typography.size.base }}>
-              Share transcript (CSV)
-            </Text>
-          </TouchableOpacity>
-        ) : null}
+      {transcript ? (
+        <Button
+          label="Share transcript (CSV)"
+          variant="secondary"
+          fullWidth
+          onPress={() => void Share.share({ message: toCsv(transcript) })}
+        />
+      ) : null}
 
-        {!hasHistory ? (
-          <Text style={{ color: tokens.foreground, opacity: 0.7, marginTop: spacing.lg }}>
+      {!hasHistory ? (
+        <Card>
+          <Text style={{ color: theme.fgMuted, fontSize: typeScale.body.size }}>
             No training history on file.
           </Text>
-        ) : (
-          <>
-            {transcript?.certifications.map((cert) => (
-              <View key={cert.certId} style={{ marginTop: spacing.md }}>
-                <Text style={{ color: tokens.foreground, fontSize: typography.size.base }}>
-                  {cert.certType} — {cert.status}
-                </Text>
-              </View>
-            ))}
-            {transcript &&
-              Object.entries(transcript.hoursByCategory).map(([category, hours]) => (
-                <View key={category} style={{ marginTop: spacing.xs }}>
-                  <Text
-                    style={{
-                      color: tokens.foreground,
-                      opacity: 0.7,
-                      fontSize: typography.size.sm,
-                    }}
-                  >
-                    {category}: {hours}h
-                  </Text>
-                </View>
-              ))}
-          </>
-        )}
-      </ScrollView>
-    </SafeAreaView>
+        </Card>
+      ) : (
+        <>
+          {transcript && transcript.certifications.length > 0 ? (
+            <Card title="Certifications">
+              <Rows>
+                {transcript.certifications.map((cert) => (
+                  <InfoRow
+                    key={cert.certId}
+                    title={cert.certType}
+                    accessibilityLabel={`${cert.certType}, ${certificationStatusLabel(cert.status)}`}
+                    trailing={<CertificationChip status={cert.status} />}
+                  />
+                ))}
+              </Rows>
+            </Card>
+          ) : null}
+          {hours.length > 0 ? (
+            <Card title="Training hours">
+              <Rows>
+                {hours.map(([category, value]) => (
+                  <InfoRow
+                    key={category}
+                    title={category}
+                    accessibilityLabel={`${category}, ${value} ${value === 1 ? 'hour' : 'hours'}`}
+                    trailing={
+                      <Text
+                        style={{ color: theme.fg, fontSize: ROW_TITLE_SIZE, fontWeight: '600' }}
+                      >
+                        {value} h
+                      </Text>
+                    }
+                  />
+                ))}
+              </Rows>
+            </Card>
+          ) : null}
+        </>
+      )}
+    </Screen>
   );
 }

@@ -1,14 +1,21 @@
-import { palette, spacing, typography } from '@boxalarm/design-tokens';
+import { typeScale, type StatusRole } from '@boxalarm/design-tokens';
 import { useEffect, useState } from 'react';
-import { FlatList, Text, useColorScheme, View } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { Text } from 'react-native';
+import { Card, Screen, StatusChip, useTheme } from '../../components/ui';
 import { useAuth } from '../../auth/AuthContext';
 import { useInventoryRepository } from '../../features/inventory/apiInventoryRepository';
-import type { PpeAssignment } from '../../features/inventory/types';
+import type { PpeAssignment, PpeStatus } from '../../features/inventory/types';
+import { InfoRow, Rows } from './MeRows';
+
+// Expired gear is an alarm (docs/design.md §2.3, Expired); it must stand out without officer help.
+const PPE_CHIP: Record<PpeStatus, { status: StatusRole; label: string }> = {
+  ISSUED: { status: 'ok', label: 'Issued' },
+  EXPIRED: { status: 'danger', label: 'Expired' },
+  RETIRED: { status: 'neutral', label: 'Retired' },
+};
 
 export function MyPpeScreen() {
-  const scheme = useColorScheme();
-  const tokens = scheme === 'dark' ? palette.cab : palette.day;
+  const theme = useTheme();
   const repository = useInventoryRepository();
   const { memberId } = useAuth();
   const [ppe, setPpe] = useState<PpeAssignment[]>([]);
@@ -25,47 +32,31 @@ export function MyPpeScreen() {
   }, [repository, memberId]);
 
   return (
-    <SafeAreaView style={{ flex: 1, backgroundColor: tokens.background }}>
-      <FlatList
-        data={ppe}
-        keyExtractor={(item) => item.ppeItemId}
-        contentContainerStyle={{ padding: spacing.lg }}
-        ListEmptyComponent={
-          <Text style={{ color: tokens.foreground, fontSize: typography.size.base }}>
+    <Screen>
+      <Card>
+        {ppe.length === 0 ? (
+          <Text style={{ color: theme.fgMuted, fontSize: typeScale.body.size }}>
             No PPE issued to you.
           </Text>
-        }
-        renderItem={({ item }) => (
-          <View
-            style={{
-              paddingVertical: spacing.md,
-              borderBottomWidth: 1,
-              borderBottomColor: tokens.foreground + '22',
-            }}
-          >
-            <Text
-              style={{
-                color: tokens.foreground,
-                fontSize: typography.size.base,
-                fontWeight: '600',
-              }}
-            >
-              {item.itemType} · size {item.size}
-            </Text>
-            <Text
-              style={{
-                color: item.status === 'EXPIRED' ? tokens.error : tokens.foreground,
-                opacity: item.status === 'EXPIRED' ? 1 : 0.7,
-                fontSize: typography.size.sm,
-                fontWeight: item.status === 'EXPIRED' ? '700' : '400',
-                marginTop: 2,
-              }}
-            >
-              {item.status === 'EXPIRED' ? 'EXPIRED' : item.status} · expires {item.nfpaExpiryDate}
-            </Text>
-          </View>
+        ) : (
+          <Rows>
+            {ppe.map((item) => {
+              const chip: { status: StatusRole; label: string } = PPE_CHIP[item.status] ?? {
+                status: 'neutral',
+                label: item.status,
+              };
+              return (
+                <InfoRow
+                  key={item.ppeItemId}
+                  title={`${item.itemType} · size ${item.size}`}
+                  detail={`expires ${item.nfpaExpiryDate}`}
+                  trailing={<StatusChip status={chip.status} label={chip.label} />}
+                />
+              );
+            })}
+          </Rows>
         )}
-      />
-    </SafeAreaView>
+      </Card>
+    </Screen>
   );
 }
