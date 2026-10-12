@@ -15,6 +15,13 @@ const ROSTERS = new Map<string, RosterEntry[]>();
 const SELF_TESTS = new Map<string, SelfTestRun>();
 const RIDING_BOARDS = new Map<string, RidingBoard>();
 
+/** Puts a call in the mock data - the Simulator demo's seed (demoAlerts.ts). Replaces any earlier
+ * entry with the same id. */
+export function seedMockDispatch(dispatch: DispatchAlert, roster: RosterEntry[]): void {
+  DISPATCHES.set(dispatch.dispatchId, dispatch);
+  ROSTERS.set(dispatch.dispatchId, roster);
+}
+
 // No backend access in every environment (offline / demo) - stands in for alerting-service's
 // self-test, dispatch detail, roster and response round trips (F1.10, F1.6, F1.7). Self-test
 // reuses the alert payload shape, so the mock returns a real DispatchAlert/RosterEntry rather
