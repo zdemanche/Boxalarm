@@ -1,4 +1,4 @@
-import { radius, spacing, targetSize, typeScale } from '@boxalarm/design-tokens';
+import { radiusScale, spacing, targetSize, typeScale } from '@boxalarm/design-tokens';
 import { useNavigation } from '@react-navigation/native';
 import { useEffect, useRef, useState } from 'react';
 import { AccessibilityInfo, Text, TextInput, View } from 'react-native';
@@ -8,6 +8,7 @@ import { DeliveryStatus, deliveryAnnouncement } from '../../sync/DeliveryStatus'
 import { capturePhoto, type CapturedPhoto } from '../../sync/photoCapture';
 import * as syncManager from '../../sync/syncManager';
 import { useOutboxItem } from '../../sync/useOutboxItem';
+import { ROW_TEXT_SIZE } from './fieldText';
 
 interface ViolationDraft {
   readonly key: number;
@@ -70,7 +71,7 @@ function LabeledInput({
           minHeight: multiline ? targetSize.field * 2 : targetSize.field,
           borderWidth: error ? 2 : 1,
           borderColor: error ? theme.status.danger : theme.border,
-          borderRadius: radius.default,
+          borderRadius: radiusScale.md,
           paddingHorizontal: spacing.md,
           paddingVertical: multiline ? spacing.sm : 0,
           color: theme.fg,
@@ -196,53 +197,43 @@ export function FieldCaptureScreen() {
   if (queuedId) {
     return (
       <Screen>
-        <View style={{ gap: spacing.lg }}>
+        <Card>
           <Text
             accessibilityRole="header"
             style={{ color: theme.fg, fontSize: typeScale.title.size, fontWeight: '700' }}
           >
             Capture saved
           </Text>
-          <Card>
-            <Text style={{ color: theme.fg, fontSize: typeScale.body.size }}>
-              Occupancy {occupancyId.trim()} · inspection {inspectionId.trim()}
-            </Text>
-            <Text style={{ color: theme.fgMuted, fontSize: typeScale.body.size }}>
-              {violations.length === 0
-                ? 'No violations'
-                : `${violations.length} violation${violations.length === 1 ? '' : 's'}`}
-              {photo ? ' · 1 photo' : ' · no photo'}
-            </Text>
-            <DeliveryStatus
-              itemId={queuedId}
-              label={label}
-              state={delivery.state}
-              lastError={delivery.lastError}
-              isOnline={isOnline}
-            />
-          </Card>
-          <Button label="New capture" variant="secondary" fullWidth onPress={handleNewCapture} />
-          <Button label="Done" fullWidth onPress={() => navigation.goBack()} />
-        </View>
+          <Text style={{ color: theme.fg, fontSize: typeScale.body.size }}>
+            Occupancy {occupancyId.trim()} · inspection {inspectionId.trim()}
+          </Text>
+          <Text style={{ color: theme.fgMuted, fontSize: typeScale.body.size }}>
+            {violations.length === 0
+              ? 'No violations'
+              : `${violations.length} violation${violations.length === 1 ? '' : 's'}`}
+            {photo ? ' · 1 photo' : ' · no photo'}
+          </Text>
+          <DeliveryStatus
+            itemId={queuedId}
+            label={label}
+            state={delivery.state}
+            lastError={delivery.lastError}
+            isOnline={isOnline}
+          />
+        </Card>
+        <Button label="Done" fullWidth onPress={() => navigation.goBack()} />
+        <Button label="New capture" variant="secondary" fullWidth onPress={handleNewCapture} />
       </Screen>
     );
   }
 
   return (
     <Screen>
-      <View style={{ gap: spacing.lg }}>
-        <View style={{ gap: spacing.xs }}>
-          <Text
-            accessibilityRole="header"
-            style={{ color: theme.fg, fontSize: typeScale.title.size, fontWeight: '700' }}
-          >
-            Field capture
-          </Text>
-          <Text style={{ color: theme.fgMuted, fontSize: typeScale.body.size }}>
-            Saved on this phone first, then sent when you have signal.
-          </Text>
-        </View>
+      <Text style={{ color: theme.fgMuted, fontSize: typeScale.body.size }}>
+        Saved on this phone first, then sent when you have signal.
+      </Text>
 
+      <Card>
         <LabeledInput
           label="Occupancy ID"
           value={occupancyId}
@@ -255,100 +246,112 @@ export function FieldCaptureScreen() {
           onChangeText={setInspectionId}
           error={inspectionError}
         />
+      </Card>
 
-        <View style={{ gap: spacing.sm }}>
-          <Text
-            accessibilityRole="header"
-            style={{ color: theme.fg, fontSize: typeScale.heading.size, fontWeight: '600' }}
-          >
-            Violations
+      <Card title="Violations">
+        {violations.length === 0 ? (
+          <Text style={{ color: theme.fgMuted, fontSize: typeScale.body.size }}>
+            None recorded.
           </Text>
-          {violations.length === 0 ? (
-            <Text style={{ color: theme.fgMuted, fontSize: typeScale.body.size }}>
-              None recorded.
-            </Text>
-          ) : null}
-          {violations.map((violation, index) => (
-            <Card key={violation.key} title={`Violation ${index + 1}`}>
-              <LabeledInput
-                label={`Violation ${index + 1} code`}
-                value={violation.code}
-                onChangeText={(code) => updateViolation(violation.key, { code })}
-              />
-              <LabeledInput
-                label={`Violation ${index + 1} description`}
-                value={violation.description}
-                onChangeText={(description) => updateViolation(violation.key, { description })}
-                multiline
-              />
-              <Button
-                label="Remove"
-                variant="secondary"
-                accessibilityLabel={`Remove violation ${index + 1}`}
-                onPress={() =>
-                  setViolations((current) => current.filter((item) => item.key !== violation.key))
-                }
-              />
-            </Card>
-          ))}
-          {incompleteViolation ? (
-            <Text style={{ color: theme.status.caution, fontSize: typeScale.label.size }}>
-              Each violation needs a code and a description.
-            </Text>
-          ) : null}
-          <Button
-            label="Add violation"
-            variant="secondary"
-            onPress={() => {
-              nextViolationKey.current += 1;
-              setViolations((current) => [
-                ...current,
-                { key: nextViolationKey.current, code: '', description: '' },
-              ]);
+        ) : null}
+        {violations.map((violation, index) => (
+          // One row per violation, divided like any list on a card.
+          <View
+            key={violation.key}
+            style={{
+              gap: spacing.sm,
+              paddingTop: spacing.md,
+              paddingBottom: spacing.sm,
+              borderTopWidth: 1,
+              borderTopColor: theme.borderDecorative,
             }}
-          />
-        </View>
-
-        <View style={{ gap: spacing.sm }}>
-          <Button
-            label={photo ? 'Retake photo' : 'Add photo'}
-            variant="secondary"
-            onPress={() => void handleAddPhoto()}
-          />
-          {photo ? (
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.sm }}>
-              <Text style={{ color: theme.status.ok, fontSize: typeScale.body.size, flex: 1 }}>
-                Photo attached: {photo.fileName}
-              </Text>
-              <Button label="Remove photo" variant="secondary" onPress={() => setPhoto(null)} />
-            </View>
-          ) : null}
-          {photoError ? (
+          >
             <Text
-              accessibilityRole="alert"
-              style={{ color: theme.status.danger, fontSize: typeScale.body.size }}
+              accessibilityRole="header"
+              style={{ color: theme.fg, fontSize: ROW_TEXT_SIZE, fontWeight: '600' }}
             >
-              {photoError}
+              Violation {index + 1}
             </Text>
-          ) : null}
-        </View>
+            <LabeledInput
+              label={`Violation ${index + 1} code`}
+              value={violation.code}
+              onChangeText={(code) => updateViolation(violation.key, { code })}
+            />
+            <LabeledInput
+              label={`Violation ${index + 1} description`}
+              value={violation.description}
+              onChangeText={(description) => updateViolation(violation.key, { description })}
+              multiline
+            />
+            <Button
+              label="Remove"
+              variant="secondary"
+              accessibilityLabel={`Remove violation ${index + 1}`}
+              onPress={() =>
+                setViolations((current) => current.filter((item) => item.key !== violation.key))
+              }
+            />
+          </View>
+        ))}
+        {incompleteViolation ? (
+          <Text style={{ color: theme.status.caution, fontSize: typeScale.label.size }}>
+            Each violation needs a code and a description.
+          </Text>
+        ) : null}
+        <Button
+          label="Add violation"
+          variant="secondary"
+          onPress={() => {
+            nextViolationKey.current += 1;
+            setViolations((current) => [
+              ...current,
+              { key: nextViolationKey.current, code: '', description: '' },
+            ]);
+          }}
+        />
+      </Card>
 
-        {saveError ? (
+      <Card>
+        <Button
+          label={photo ? 'Retake photo' : 'Add photo'}
+          variant="secondary"
+          onPress={() => void handleAddPhoto()}
+        />
+        {photo ? (
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.sm }}>
+            <Text style={{ color: theme.status.ok, fontSize: typeScale.body.size, flex: 1 }}>
+              Photo attached: {photo.fileName}
+            </Text>
+            <Button label="Remove photo" variant="secondary" onPress={() => setPhoto(null)} />
+          </View>
+        ) : null}
+        {photoError ? (
+          <Text
+            accessibilityRole="alert"
+            style={{ color: theme.status.danger, fontSize: typeScale.body.size }}
+          >
+            {photoError}
+          </Text>
+        ) : null}
+      </Card>
+
+      {saveError ? (
+        <Card>
           <Text
             accessibilityRole="alert"
             style={{ color: theme.status.danger, fontSize: typeScale.body.size, fontWeight: '600' }}
           >
             {saveError}
           </Text>
-        ) : null}
-        <Button
-          label="Save capture"
-          fullWidth
-          disabled={!canSave}
-          loading={saving}
-          onPress={() => void handleSave()}
-        />
-      </View>
+        </Card>
+      ) : null}
+      <Button
+        label="Save capture"
+        fullWidth
+        disabled={!canSave}
+        loading={saving}
+        onPress={() => void handleSave()}
+      />
     </Screen>
   );
 }

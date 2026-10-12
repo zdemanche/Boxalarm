@@ -1,9 +1,8 @@
-import { spacing, targetSize, typeScale } from '@boxalarm/design-tokens';
+import { radiusScale, spacing, targetSize, typeScale } from '@boxalarm/design-tokens';
 import { useNavigation, type NavigationProp } from '@react-navigation/native';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, FlatList, Platform, Text, TouchableOpacity, View } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
-import { Button, StatusChip, useTheme } from '../../components/ui';
+import { ActivityIndicator, Text, TouchableOpacity, View } from 'react-native';
+import { Button, Card, Screen, StatusChip, useTheme } from '../../components/ui';
 import { useOptionalAuth } from '../../auth/AuthContext';
 import { useChecksRepository } from '../../features/checks/apiChecksRepository';
 import type { Apparatus } from '../../features/checks/types';
@@ -11,6 +10,7 @@ import { ApiError } from '../../lib/apiClient';
 import { SERVICE_STATUS_ROLES } from '../../features/checks/serviceStatusApi';
 import type { ChecksStackParamList } from '../../navigation/ChecksStack';
 import { formatAsOf, NoCachedDataError } from '../../sync/readThrough';
+import { ROW_TEXT_SIZE } from './fieldText';
 
 type LoadState =
   | { kind: 'loading' }
@@ -28,6 +28,12 @@ function describeLoadError(error: unknown): string {
     return 'Boxalarm could not load the apparatus list. Try again.';
   }
   return 'Apparatus could not be loaded. Check your connection and try again.';
+}
+
+/** `ENGINE` / `BRUSH_TRUCK` as a reader says it: "Engine" / "Brush truck". */
+function typeLabel(type: string): string {
+  const words = type.replace(/_/g, ' ').toLowerCase();
+  return words.charAt(0).toUpperCase() + words.slice(1);
 }
 
 export function ApparatusPickerScreen() {
@@ -79,44 +85,57 @@ export function ApparatusPickerScreen() {
     [navigation],
   );
 
-  const header = (
-    <View style={{ gap: spacing.md, paddingBottom: spacing.md }}>
-      <Button
-        label="Field capture"
-        variant="secondary"
+  const fieldCapture = (
+    <Card>
+      <TouchableOpacity
+        accessibilityRole="button"
+        accessibilityLabel="Field capture"
+        accessibilityHint="Record an inspection, its violations and a photo."
         onPress={() => navigation.navigate('FieldCapture')}
-      />
-      {state.kind === 'loaded' && state.cachedAt !== null ? (
-        <Text
-          accessibilityRole="text"
-          style={{ color: theme.status.warning, fontSize: typeScale.body.size, fontWeight: '600' }}
-        >
-          Offline. Showing the apparatus list saved on this phone as of {formatAsOf(state.cachedAt)}
-          . Service status may have changed since.
+        style={{
+          minHeight: targetSize.field,
+          flexDirection: 'row',
+          alignItems: 'center',
+          gap: spacing.md,
+        }}
+      >
+        <View style={{ flex: 1, gap: 2 }}>
+          <Text style={{ color: theme.fg, fontSize: ROW_TEXT_SIZE, fontWeight: '600' }}>
+            Field capture
+          </Text>
+          <Text style={{ color: theme.fgMuted, fontSize: typeScale.body.size }}>
+            An inspection, its violations and a photo. Saved on this phone first.
+          </Text>
+        </View>
+        <Text accessible={false} style={{ color: theme.fgFaint, fontSize: typeScale.title.size }}>
+          ›
         </Text>
-      ) : null}
-    </View>
+      </TouchableOpacity>
+    </Card>
   );
 
   return (
-    <SafeAreaView style={{ flex: 1, backgroundColor: theme.bg }}>
+    <Screen>
       {state.kind === 'loading' ? (
-        <View style={{ padding: spacing.lg, gap: spacing.md }}>
-          {header}
+        <Card>
           <View
             accessibilityRole="progressbar"
             accessibilityLabel="Loading apparatus"
-            style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.sm }}
+            style={{
+              minHeight: targetSize.field,
+              flexDirection: 'row',
+              alignItems: 'center',
+              gap: spacing.sm,
+            }}
           >
             <ActivityIndicator color={theme.fg} />
             <Text style={{ color: theme.fg, fontSize: typeScale.body.size }}>
               Loading apparatus…
             </Text>
           </View>
-        </View>
+        </Card>
       ) : state.kind === 'error' ? (
-        <View style={{ padding: spacing.lg, gap: spacing.md }}>
-          {header}
+        <Card>
           <Text
             accessibilityRole="alert"
             style={{ color: theme.status.danger, fontSize: typeScale.body.size }}
@@ -124,62 +143,106 @@ export function ApparatusPickerScreen() {
             {state.message}
           </Text>
           <Button label="Try again" onPress={retry} />
-        </View>
+        </Card>
       ) : (
-        <FlatList
-          data={state.apparatus}
-          keyExtractor={(item) => item.apparatusId}
-          contentContainerStyle={{ padding: spacing.lg }}
-          ListHeaderComponent={header}
-          ListEmptyComponent={
-            <Text style={{ color: theme.fg, fontSize: typeScale.body.size }}>
-              No apparatus is set up yet. The department administrator adds apparatus in settings.
-            </Text>
-          }
-          renderItem={({ item }) => {
+        <>
+          {state.cachedAt !== null ? (
+            <Card>
+              <Text
+                accessibilityRole="text"
+                style={{
+                  color: theme.status.warning,
+                  fontSize: typeScale.body.size,
+                  fontWeight: '600',
+                }}
+              >
+                Offline. Showing the apparatus list saved on this phone as of{' '}
+                {formatAsOf(state.cachedAt)}. Service status may have changed since.
+              </Text>
+            </Card>
+          ) : null}
+          {state.apparatus.length === 0 ? (
+            <Card>
+              <Text style={{ color: theme.fg, fontSize: typeScale.body.size }}>
+                No apparatus is set up yet. The department administrator adds apparatus in settings.
+              </Text>
+            </Card>
+          ) : null}
+          {state.apparatus.map((item) => {
             const inService = item.status === 'IN_SERVICE';
             // Out-of-service units stay checkable (postChecks has no status gate): crews check a
             // unit before an officer returns it. The check itself doesn't change its status.
             return (
-              <View
-                style={{
-                  gap: spacing.sm,
-                  paddingVertical: spacing.md,
-                  paddingHorizontal: spacing.md,
-                  borderBottomWidth: 1,
-                  borderBottomColor: theme.borderDecorative,
-                }}
-              >
+              <Card key={item.apparatusId}>
+                {/* The whole top of the card - name, status and the amber bar - is one
+                    glove-sized target for the check, the main job on this tab. */}
                 <TouchableOpacity
                   accessibilityRole="button"
                   accessibilityLabel={`${item.unitId}, ${item.type}, ${
                     inService ? 'in service' : 'out of service'
                   }. Start check.`}
                   onPress={() => navigation.navigate('CheckRunner', { apparatusId: item.unitId })}
-                  style={{ minHeight: targetSize.field, justifyContent: 'center', gap: spacing.xs }}
+                  style={{ gap: spacing.md }}
                 >
-                  <Text
+                  <View
                     style={{
-                      color: theme.fg,
-                      fontSize: typeScale.heading.size,
-                      fontWeight: '700',
-                      fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
+                      flexDirection: 'row',
+                      flexWrap: 'wrap',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      gap: spacing.sm,
                     }}
                   >
-                    {item.unitId}
-                  </Text>
-                  <Text style={{ color: theme.fgMuted, fontSize: typeScale.body.size }}>
-                    {item.type}
-                  </Text>
-                  <StatusChip
-                    status={inService ? 'ok' : 'danger'}
-                    label={inService ? 'In service' : 'Out of service — you can still check it'}
-                  />
-                  <Text
-                    style={{ color: theme.fg, fontSize: typeScale.body.size, fontWeight: '600' }}
+                    <View style={{ flexShrink: 1, gap: 2 }}>
+                      <Text
+                        style={{
+                          color: theme.fg,
+                          fontSize: typeScale.title.size,
+                          fontWeight: '700',
+                        }}
+                      >
+                        {item.unitId}
+                      </Text>
+                      <Text style={{ color: theme.fgMuted, fontSize: typeScale.body.size }}>
+                        {typeLabel(item.type)}
+                      </Text>
+                    </View>
+                    <StatusChip
+                      status={inService ? 'ok' : 'danger'}
+                      label={inService ? 'In service' : 'Out of service — you can still check it'}
+                    />
+                  </View>
+                  <View
+                    style={{
+                      minHeight: targetSize.field,
+                      flexDirection: 'row',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      gap: spacing.sm,
+                      borderRadius: radiusScale.lg,
+                      backgroundColor: theme.accentFill,
+                    }}
                   >
-                    Start check ›
-                  </Text>
+                    <Text
+                      style={{
+                        color: theme.onAccentFill,
+                        fontSize: ROW_TEXT_SIZE,
+                        fontWeight: '700',
+                      }}
+                    >
+                      Start check
+                    </Text>
+                    <Text
+                      accessible={false}
+                      style={{
+                        color: theme.onAccentFill,
+                        fontSize: ROW_TEXT_SIZE,
+                        fontWeight: '700',
+                      }}
+                    >
+                      ›
+                    </Text>
+                  </View>
                 </TouchableOpacity>
                 {canChangeServiceStatus ? (
                   // A check doesn't change service status; this does (Cedar UpdateServiceStatus).
@@ -199,11 +262,12 @@ export function ApparatusPickerScreen() {
                     }
                   />
                 ) : null}
-              </View>
+              </Card>
             );
-          }}
-        />
+          })}
+        </>
       )}
-    </SafeAreaView>
+      {fieldCapture}
+    </Screen>
   );
 }
