@@ -44,7 +44,7 @@ async function renderAlertsStack() {
 
 test('opens on the alerts home screen', async () => {
   const { findByRole } = await renderAlertsStack();
-  expect(await findByRole('header', { name: 'Alerts' })).toBeTruthy();
+  expect(await findByRole('header', { name: 'Active calls' })).toBeTruthy();
 });
 
 test('a signed-out (no AuthProvider) render is not offered the officer-only manual entry action', async () => {
