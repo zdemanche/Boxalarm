@@ -1,9 +1,9 @@
-import { radius, spacing, targetSize, typeScale } from '@boxalarm/design-tokens';
+import { radiusScale, spacing, targetSize, typeScale } from '@boxalarm/design-tokens';
 import { useNavigation } from '@react-navigation/native';
 import { useEffect, useState } from 'react';
 import { AccessibilityInfo, Text, TouchableOpacity, View } from 'react-native';
 import { useOptionalAuth } from '../../auth/AuthContext';
-import { Button, Screen, useTheme, type SurfaceTheme } from '../../components/ui';
+import { Button, Card, Screen, useTheme, type SurfaceTheme } from '../../components/ui';
 import { useScheduleRepository } from '../../features/schedule/apiScheduleRepository';
 import { MarkOffList } from '../../features/schedule/MarkOffList';
 import { useOptionalConnectivity } from '../../sync/ConnectivityContext';
@@ -71,6 +71,9 @@ const PRESETS: { value: DurationPreset; label: (now: Date) => string }[] = [
 
 const REASONS = ['Work', 'Travel', 'Sick', 'Family', 'Other'] as const;
 
+/** Field rows: primary text 17/600 (docs/design.md §1 field body). */
+const ROW_TITLE_SIZE = 17;
+
 function startOfNextHour(now: Date): Date {
   const next = new Date(now.getTime() + HOUR_MS);
   next.setMinutes(0, 0, 0);
@@ -82,6 +85,8 @@ interface LastMarkOff {
   readonly endAt: string;
 }
 
+/** A selectable tile: the amber selection mark and tint carry "chosen" alongside the filled
+ * radio glyph and the bold label, so it holds in glare and without colour. */
 function Choice({
   label,
   selected,
@@ -107,19 +112,22 @@ function Choice({
         alignItems: 'center',
         gap: spacing.sm,
         paddingHorizontal: spacing.md,
-        borderRadius: radius.default,
+        borderRadius: radiusScale.md,
         borderWidth: selected ? 2 : 1,
-        borderColor: selected ? theme.fg : theme.borderStrong,
-        backgroundColor: selected ? theme.surfaceRaised : 'transparent',
+        borderColor: selected ? theme.indicator : theme.border,
+        backgroundColor: selected ? theme.accentSubtle : theme.card,
       }}
     >
-      <Text accessible={false} style={{ color: theme.fg, fontSize: typeScale.heading.size }}>
+      <Text
+        accessible={false}
+        style={{ color: selected ? theme.indicator : theme.fgFaint, fontSize: ROW_TITLE_SIZE }}
+      >
         {selected ? '●' : '○'}
       </Text>
       <Text
         style={{
-          color: theme.fg,
-          fontSize: typeScale.heading.size,
+          color: selected ? theme.onAccentSubtle : theme.fg,
+          fontSize: ROW_TITLE_SIZE,
           fontWeight: selected ? '700' : '400',
         }}
       >
@@ -150,7 +158,7 @@ function DateTimeStepper({
   ];
   return (
     <View style={{ gap: spacing.sm }}>
-      <Text style={{ color: theme.fg, fontSize: typeScale.label.size, fontWeight: '600' }}>
+      <Text style={{ color: theme.fgMuted, fontSize: typeScale.label.size, fontWeight: '600' }}>
         {label}
       </Text>
       <Text
@@ -172,9 +180,10 @@ function DateTimeStepper({
               minWidth: targetSize.field + 16,
               alignItems: 'center',
               justifyContent: 'center',
-              borderRadius: radius.default,
+              borderRadius: radiusScale.md,
               borderWidth: 1,
-              borderColor: theme.borderStrong,
+              borderColor: theme.border,
+              backgroundColor: theme.surface,
               paddingHorizontal: spacing.sm,
             }}
           >
@@ -299,19 +308,30 @@ export function AvailabilityScreen() {
     }
   };
 
+  const heading = {
+    color: theme.fg,
+    fontSize: typeScale.title.size,
+    fontWeight: '700' as const,
+  };
+  const body = { color: theme.fg, fontSize: typeScale.body.size };
+  const warning = {
+    color: theme.status.warning,
+    fontSize: typeScale.body.size,
+    fontWeight: '600' as const,
+  };
+
   if (signedInWithoutId) {
     return (
       <Screen>
-        <Text
-          accessibilityRole="header"
-          style={{ color: theme.fg, fontSize: typeScale.title.size, fontWeight: '700' }}
-        >
-          Sign in again to mark yourself unavailable
-        </Text>
-        <Text style={{ color: theme.fg, fontSize: typeScale.body.size, marginTop: spacing.md }}>
-          This phone's sign-in doesn't say which member you are, so a mark-off can't be sent. Sign
-          out from Me and sign back in. Until then, tell an officer if you can't respond.
-        </Text>
+        <Card>
+          <Text accessibilityRole="header" style={heading}>
+            Sign in again to mark yourself unavailable
+          </Text>
+          <Text style={body}>
+            This phone's sign-in doesn't say which member you are, so a mark-off can't be sent. Sign
+            out from Me and sign back in. Until then, tell an officer if you can't respond.
+          </Text>
+        </Card>
       </Screen>
     );
   }
@@ -330,139 +350,114 @@ export function AvailabilityScreen() {
       new Date(lastMarkOff.endAt).getTime() !== submitted.end.getTime()
         ? lastMarkOff
         : null;
+    // DeliveryStatus offers an amber "Retry now" in these states; Done steps back to secondary.
+    const retryOffered = delivery.state === 'FAILED' || delivery.state === 'REJECTED';
     return (
       <Screen>
-        <View style={{ gap: spacing.md }}>
-          <Text
-            accessibilityRole="header"
-            style={{ color: theme.fg, fontSize: typeScale.title.size, fontWeight: '700' }}
-          >
-            {maybeInEffect
-              ? 'May already be in effect'
-              : failed
-                ? 'Not marked unavailable'
-                : inEffect
-                  ? `Marked unavailable until ${formatWhen(submitted.end)}`
-                  : 'Saved on this phone — not in effect yet'}
-          </Text>
-          {maybeInEffect ? (
-            <Text
-              style={{
-                color: theme.status.warning,
-                fontSize: typeScale.body.size,
-                fontWeight: '600',
-              }}
-            >
-              An earlier send may have reached Boxalarm before the connection dropped, so you may
-              already be marked off until {formatWhen(submitted.end)}. Ask an officer to check.
+        <Card>
+          <View style={{ gap: spacing.md }}>
+            <Text accessibilityRole="header" style={heading}>
+              {maybeInEffect
+                ? 'May already be in effect'
+                : failed
+                  ? 'Not marked unavailable'
+                  : inEffect
+                    ? `Marked unavailable until ${formatWhen(submitted.end)}`
+                    : 'Saved on this phone — not in effect yet'}
             </Text>
-          ) : failed ? (
-            <Text
-              style={{
-                color: theme.status.danger,
-                fontSize: typeScale.body.size,
-                fontWeight: '600',
-              }}
-            >
-              This mark-off was not recorded, so you will still be alerted.
+            {maybeInEffect ? (
+              <Text style={warning}>
+                An earlier send may have reached Boxalarm before the connection dropped, so you may
+                already be marked off until {formatWhen(submitted.end)}. Ask an officer to check.
+              </Text>
+            ) : failed ? (
+              <Text
+                style={{
+                  color: theme.status.danger,
+                  fontSize: typeScale.body.size,
+                  fontWeight: '600',
+                }}
+              >
+                This mark-off was not recorded, so you will still be alerted.
+              </Text>
+            ) : inEffect ? (
+              <Text style={body}>
+                You won&apos;t be alerted for calls until then. You&apos;ll still get drill and
+                shift reminders.
+              </Text>
+            ) : (
+              <Text style={warning}>
+                You may still be alerted until this syncs. Until {formatWhen(submitted.end)} once it
+                does.
+              </Text>
+            )}
+            {submitted.earlierMayStand > 0 ? (
+              <Text style={warning}>
+                An earlier mark-off from this phone may already be in effect: it was sent before, so
+                it can&apos;t be taken back. This one does not cancel it, and both may stand. Ask an
+                officer to check.
+              </Text>
+            ) : null}
+            {submitted.replacedUnsent > 0 ? (
+              <Text style={body}>
+                This replaces the mark-off you saved earlier that hadn&apos;t been sent yet.
+              </Text>
+            ) : null}
+            {earlier && !failed ? (
+              <Text style={warning}>
+                Your earlier mark-off until {formatWhen(new Date(earlier.endAt))} is still in
+                effect. This one does not cancel it.
+              </Text>
+            ) : null}
+            <Text style={{ color: theme.fgMuted, fontSize: typeScale.body.size }}>
+              {endEarly
+                ? "To end a mark-off early, tap “I'm available again” on Me (it needs signal)."
+                : 'To end a mark-off early, ask an officer to clear it.'}
             </Text>
-          ) : inEffect ? (
-            <Text style={{ color: theme.fg, fontSize: typeScale.body.size }}>
-              You won&apos;t be alerted for calls until then. You&apos;ll still get drill and shift
-              reminders.
-            </Text>
-          ) : (
-            <Text
-              style={{
-                color: theme.status.warning,
-                fontSize: typeScale.body.size,
-                fontWeight: '600',
-              }}
-            >
-              You may still be alerted until this syncs. Until {formatWhen(submitted.end)} once it
-              does.
-            </Text>
-          )}
-          {submitted.earlierMayStand > 0 ? (
-            <Text
-              style={{
-                color: theme.status.warning,
-                fontSize: typeScale.body.size,
-                fontWeight: '600',
-              }}
-            >
-              An earlier mark-off from this phone may already be in effect: it was sent before, so
-              it can&apos;t be taken back. This one does not cancel it, and both may stand. Ask an
-              officer to check.
-            </Text>
-          ) : null}
-          {submitted.replacedUnsent > 0 ? (
-            <Text style={{ color: theme.fg, fontSize: typeScale.body.size }}>
-              This replaces the mark-off you saved earlier that hadn&apos;t been sent yet.
-            </Text>
-          ) : null}
-          {earlier && !failed ? (
-            <Text
-              style={{
-                color: theme.status.warning,
-                fontSize: typeScale.body.size,
-                fontWeight: '600',
-              }}
-            >
-              Your earlier mark-off until {formatWhen(new Date(earlier.endAt))} is still in effect.
-              This one does not cancel it.
-            </Text>
-          ) : null}
-          <Text style={{ color: theme.fg, fontSize: typeScale.body.size }}>
-            {endEarly
-              ? "To end a mark-off early, tap “I'm available again” on Me (it needs signal)."
-              : 'To end a mark-off early, ask an officer to clear it.'}
-          </Text>
-          {submitted.outboxId !== null ? (
-            <DeliveryStatus
-              itemId={submitted.outboxId}
-              label="Mark unavailable"
-              state={delivery.state}
-              lastError={delivery.lastError}
-              isOnline={isOnline}
+            {submitted.outboxId !== null ? (
+              <DeliveryStatus
+                itemId={submitted.outboxId}
+                label="Mark unavailable"
+                state={delivery.state}
+                lastError={delivery.lastError}
+                isOnline={isOnline}
+              />
+            ) : null}
+            <Button
+              label="Done"
+              variant={retryOffered ? 'secondary' : 'primary'}
+              fullWidth
+              onPress={() => navigation.goBack()}
             />
-          ) : null}
-          <Button label="Done" fullWidth onPress={() => navigation.goBack()} />
-        </View>
+          </View>
+        </Card>
       </Screen>
     );
   }
 
   return (
     <Screen>
-      <View style={{ gap: spacing.lg }}>
-        <Text
-          accessibilityRole="header"
-          style={{ color: theme.fg, fontSize: typeScale.title.size, fontWeight: '700' }}
-        >
-          Mark unavailable
-        </Text>
-        {lastMarkOff ? (
-          <Text style={{ color: theme.fg, fontSize: typeScale.body.size }}>
+      {lastMarkOff ? (
+        <Card>
+          <Text style={body}>
             From this phone, you last marked yourself unavailable until{' '}
             {formatWhen(new Date(lastMarkOff.endAt))}. A new mark-off does not cancel it; to end it
             early, {endEarly ? "use “I'm available again” below." : 'ask an officer to clear it.'}
           </Text>
-        ) : null}
-        <MarkOffList onSupportKnown={setEndEarly} />
-        <Text style={{ color: theme.fg, fontSize: typeScale.body.size }}>
+        </Card>
+      ) : null}
+      <MarkOffList onSupportKnown={setEndEarly} />
+
+      <Card title="How long">
+        <Text style={body}>
           You won&apos;t be alerted for calls while you&apos;re marked off. You&apos;ll still get
           drill and shift reminders. Shifts you have claimed are not cancelled.
         </Text>
-
         <View
           accessibilityRole="radiogroup"
           accessibilityLabel="How long"
-          style={{ gap: spacing.sm }}
+          style={{ gap: spacing.sm, marginTop: spacing.xs }}
         >
-          <Text style={{ color: theme.fg, fontSize: typeScale.label.size, fontWeight: '600' }}>
-            How long
-          </Text>
           {PRESETS.map((option) => (
             <Choice
               key={option.value}
@@ -476,8 +471,10 @@ export function AvailabilityScreen() {
             />
           ))}
         </View>
+      </Card>
 
-        {preset === 'custom' ? (
+      {preset === 'custom' ? (
+        <Card>
           <View style={{ gap: spacing.lg }}>
             <DateTimeStepper
               label="From"
@@ -492,31 +489,30 @@ export function AvailabilityScreen() {
               theme={theme}
             />
           </View>
-        ) : null}
+        </Card>
+      ) : null}
 
+      <Card title="Reason (optional)">
         <View
           accessibilityRole="radiogroup"
           accessibilityLabel="Reason (optional)"
-          style={{ gap: spacing.sm }}
+          style={{ flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm }}
         >
-          <Text style={{ color: theme.fg, fontSize: typeScale.label.size, fontWeight: '600' }}>
-            Reason (optional)
-          </Text>
-          <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm }}>
-            {REASONS.map((value) => (
-              <Choice
-                key={value}
-                label={value}
-                selected={reason === value}
-                onPress={() => setReason(reason === value ? null : value)}
-                theme={theme}
-              />
-            ))}
-          </View>
+          {REASONS.map((value) => (
+            <Choice
+              key={value}
+              label={value}
+              selected={reason === value}
+              onPress={() => setReason(reason === value ? null : value)}
+              theme={theme}
+            />
+          ))}
         </View>
+      </Card>
 
+      <Card>
         {markOff ? (
-          <Text style={{ color: theme.fg, fontSize: typeScale.body.size, fontWeight: '600' }}>
+          <Text style={{ color: theme.fg, fontSize: ROW_TITLE_SIZE, fontWeight: '600' }}>
             From {formatWhen(markOff.start)} until {formatWhen(markOff.end)}.
           </Text>
         ) : null}
@@ -541,7 +537,7 @@ export function AvailabilityScreen() {
           loading={submitting}
           onPress={() => void handleSubmit()}
         />
-      </View>
+      </Card>
     </Screen>
   );
 }
