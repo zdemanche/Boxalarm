@@ -1,8 +1,11 @@
-import { palette, spacing, typography } from '@boxalarm/design-tokens';
-import { Text, useColorScheme, View } from 'react-native';
+import { radiusScale, spacing, statusChipPalette, typeScale } from '@boxalarm/design-tokens';
+import type { ReactNode } from 'react';
+import { Platform, Text, View } from 'react-native';
+import { Card, useTheme, type SurfaceTheme } from '../../components/ui';
 import type { NearestHydrant, PrePlanEnrichment, UtilityShutoff } from './types';
 
-type Tokens = (typeof palette)[keyof typeof palette];
+/** Field body text (design.md §1: body 17 on the field surface). */
+const BODY = { size: 17, lineHeight: 24 };
 
 export const UNAVAILABLE_TEXT =
   'Pre-plan unavailable right now. This does not mean there is no pre-plan for this address.';
@@ -93,69 +96,93 @@ export function matchNotice(prePlan: PrePlanEnrichment): { text: string; warning
   }
 }
 
-function Heading({ tokens, children }: { tokens: Tokens; children: string }) {
+function Heading({ theme, children }: { theme: SurfaceTheme; children: string }) {
   return (
-    <Text style={{ color: tokens.foreground, fontSize: typography.size.sm, fontWeight: '600' }}>
+    <Text style={{ color: theme.fgMuted, fontSize: typeScale.body.size, fontWeight: '700' }}>
       {children}
     </Text>
   );
 }
 
-function HazardList({ tokens, hazards }: { tokens: Tokens; hazards: readonly string[] }) {
-  if (hazards.length === 0) return null;
+/** A sub-section of the card, set off by a divider. */
+function Section({ theme, children }: { theme: SurfaceTheme; children: ReactNode }) {
   return (
-    <View style={{ marginTop: spacing.md }}>
-      <Heading tokens={tokens}>Hazards</Heading>
-      {hazards.map((hazard) => (
-        <Text
-          key={hazard}
-          style={{ color: tokens.error, fontSize: typography.size.sm, marginTop: 2 }}
-        >
-          {hazard}
-        </Text>
-      ))}
+    <View
+      style={{
+        marginTop: spacing.xs,
+        paddingTop: spacing.sm,
+        gap: 4,
+        borderTopWidth: 1,
+        borderTopColor: theme.borderDecorative,
+      }}
+    >
+      {children}
     </View>
   );
 }
 
+function HazardList({ theme, hazards }: { theme: SurfaceTheme; hazards: readonly string[] }) {
+  if (hazards.length === 0) return null;
+  return (
+    <Section theme={theme}>
+      <Heading theme={theme}>Hazards</Heading>
+      {hazards.map((hazard) => (
+        <Text
+          key={hazard}
+          style={{ color: theme.status.danger, fontSize: BODY.size, fontWeight: '700' }}
+        >
+          {hazard}
+        </Text>
+      ))}
+    </Section>
+  );
+}
+
 function ShutoffList({
-  tokens,
+  theme,
   shutoffs,
 }: {
-  tokens: Tokens;
+  theme: SurfaceTheme;
   shutoffs: readonly UtilityShutoff[];
 }) {
   if (shutoffs.length === 0) return null;
   return (
-    <View style={{ marginTop: spacing.md }}>
-      <Heading tokens={tokens}>Utility shutoffs</Heading>
+    <Section theme={theme}>
+      <Heading theme={theme}>Utility shutoffs</Heading>
       {shutoffs.map((shutoff) => (
         <Text
           key={`${shutoff.utility}-${shutoff.location}`}
-          style={{ color: tokens.foreground, fontSize: typography.size.sm, marginTop: 2 }}
+          style={{ color: theme.fg, fontSize: BODY.size }}
         >
           {shutoff.utility}: {shutoff.location}
         </Text>
       ))}
-    </View>
+    </Section>
   );
 }
 
 const HYDRANTS_UNAVAILABLE_TEXT = 'Hydrant list unavailable right now.';
 const HYDRANTS_INCOMPLETE_TEXT = 'Hydrant list may be incomplete: a nearer hydrant may be missing.';
 
-function WarningNotice({ tokens, children }: { tokens: Tokens; children: string }) {
+/** On the opaque warning chip pair (a11y-spec §1.2); the words carry it, never the colour. */
+function WarningNotice({ theme, children }: { theme: SurfaceTheme; children: string }) {
+  const chip = statusChipPalette[theme.palette].warning;
   return (
     <Text
       accessibilityRole="alert"
       style={{
-        color: tokens.warning,
-        fontSize: typography.size.base,
+        color: chip.onFill,
+        backgroundColor: chip.fill,
+        fontSize: BODY.size,
+        lineHeight: BODY.lineHeight,
         fontWeight: '700',
         marginTop: spacing.xs,
+        padding: spacing.sm,
+        paddingLeft: spacing.md,
         borderLeftWidth: 4,
-        borderLeftColor: tokens.warning,
-        paddingLeft: spacing.sm,
+        borderLeftColor: chip.onFill,
+        borderRadius: radiusScale.md,
+        overflow: 'hidden',
       }}
     >
       {children}
@@ -164,58 +191,48 @@ function WarningNotice({ tokens, children }: { tokens: Tokens; children: string 
 }
 
 function HydrantSection({
-  tokens,
+  theme,
   hydrants,
   unavailable,
   incomplete,
 }: {
-  tokens: Tokens;
+  theme: SurfaceTheme;
   hydrants: readonly NearestHydrant[];
   unavailable: boolean;
   incomplete: boolean;
 }) {
-  if (unavailable)
-    return <WarningNotice tokens={tokens}>{HYDRANTS_UNAVAILABLE_TEXT}</WarningNotice>;
+  if (unavailable) return <WarningNotice theme={theme}>{HYDRANTS_UNAVAILABLE_TEXT}</WarningNotice>;
   if (hydrants.length === 0) return null;
   return (
-    <View style={{ marginTop: spacing.md }}>
-      <Heading tokens={tokens}>Nearest hydrants</Heading>
-      {incomplete ? (
-        <WarningNotice tokens={tokens}>{HYDRANTS_INCOMPLETE_TEXT}</WarningNotice>
-      ) : null}
+    <Section theme={theme}>
+      <Heading theme={theme}>Nearest hydrants</Heading>
+      {incomplete ? <WarningNotice theme={theme}>{HYDRANTS_INCOMPLETE_TEXT}</WarningNotice> : null}
       {hydrants.map((hydrant) => (
         <Text
           key={hydrant.hydrantId}
           style={{
-            color: isOutOfService(hydrant) ? tokens.error : tokens.foreground,
+            color: isOutOfService(hydrant) ? theme.status.danger : theme.fg,
             fontWeight: isOutOfService(hydrant) ? '700' : '400',
-            fontSize: typography.size.sm,
-            marginTop: 2,
+            fontSize: BODY.size,
+            fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
           }}
         >
           {describeHydrant(hydrant)}
         </Text>
       ))}
-    </View>
+    </Section>
   );
 }
 
-function MatchedPrePlan({ tokens, prePlan }: { tokens: Tokens; prePlan: PrePlanEnrichment }) {
+function MatchedPrePlan({ theme, prePlan }: { theme: SurfaceTheme; prePlan: PrePlanEnrichment }) {
   const notice = matchNotice(prePlan);
   return (
     <>
       {notice ? (
         notice.warning ? (
-          <WarningNotice tokens={tokens}>{notice.text}</WarningNotice>
+          <WarningNotice theme={theme}>{notice.text}</WarningNotice>
         ) : (
-          <Text
-            style={{
-              color: tokens.foreground,
-              fontSize: typography.size.base,
-              fontWeight: '600',
-              marginTop: spacing.xs,
-            }}
-          >
+          <Text style={{ color: theme.fg, fontSize: BODY.size, fontWeight: '700' }}>
             {notice.text}
           </Text>
         )
@@ -223,42 +240,30 @@ function MatchedPrePlan({ tokens, prePlan }: { tokens: Tokens; prePlan: PrePlanE
 
       {prePlan.matchType === 'CANDIDATES'
         ? (prePlan.candidates ?? []).map((candidate) => (
-            <View key={candidate.occupancyId} style={{ marginTop: spacing.md }}>
-              <Text
-                style={{
-                  color: tokens.foreground,
-                  fontSize: typography.size.base,
-                  fontWeight: '700',
-                }}
-              >
+            <Section key={candidate.occupancyId} theme={theme}>
+              <Text style={{ color: theme.fg, fontSize: BODY.size, fontWeight: '700' }}>
                 {withUnit(candidate.matchedAddress, candidate.unit)}
                 {candidate.distanceMeters !== undefined ? ` · ${candidate.distanceMeters} m` : ''}
               </Text>
               {candidate.summary ? (
-                <Text style={{ color: tokens.foreground, fontSize: typography.size.sm }}>
+                <Text style={{ color: theme.fg, fontSize: typeScale.body.size }}>
                   {candidate.summary}
                 </Text>
               ) : null}
-              <HazardList tokens={tokens} hazards={candidate.hazards} />
-              <ShutoffList tokens={tokens} shutoffs={candidate.utilityShutoffs} />
-            </View>
+              <HazardList theme={theme} hazards={candidate.hazards} />
+              <ShutoffList theme={theme} shutoffs={candidate.utilityShutoffs} />
+            </Section>
           ))
         : null}
 
       {summaryOf(prePlan) ? (
-        <Text
-          style={{
-            color: tokens.foreground,
-            fontSize: typography.size.base,
-            marginTop: spacing.xs,
-          }}
-        >
+        <Text style={{ color: theme.fg, fontSize: BODY.size, lineHeight: BODY.lineHeight }}>
           {summaryOf(prePlan)}
         </Text>
       ) : null}
 
-      <HazardList tokens={tokens} hazards={prePlan.hazards} />
-      <ShutoffList tokens={tokens} shutoffs={prePlan.utilityShutoffs} />
+      <HazardList theme={theme} hazards={prePlan.hazards} />
+      <ShutoffList theme={theme} shutoffs={prePlan.utilityShutoffs} />
     </>
   );
 }
@@ -282,8 +287,7 @@ export function PrePlanPanel({
   hydrantsUnavailable?: boolean;
   hydrantsIncomplete?: boolean;
 }) {
-  const scheme = useColorScheme();
-  const tokens = scheme === 'dark' ? palette.cab : palette.day;
+  const theme = useTheme();
   const hydrants = nearestHydrants ?? prePlan?.nearestHydrants ?? [];
 
   if (!unavailable && prePlan === undefined && hydrants.length === 0 && !hydrantsUnavailable) {
@@ -291,28 +295,20 @@ export function PrePlanPanel({
   }
 
   return (
-    <View style={{ marginTop: spacing.lg }}>
-      <Text
-        accessibilityRole="header"
-        style={{ color: tokens.foreground, fontSize: typography.size.lg, fontWeight: '700' }}
-      >
-        Pre-plan
-      </Text>
+    <Card title="Pre-plan">
       {unavailable ? (
-        <WarningNotice tokens={tokens}>{UNAVAILABLE_TEXT}</WarningNotice>
+        <WarningNotice theme={theme}>{UNAVAILABLE_TEXT}</WarningNotice>
       ) : prePlan === null ? (
-        <Text style={{ color: tokens.foreground, opacity: 0.7, fontSize: typography.size.base }}>
-          {NO_MATCH_TEXT}
-        </Text>
+        <Text style={{ color: theme.fgMuted, fontSize: BODY.size }}>{NO_MATCH_TEXT}</Text>
       ) : prePlan ? (
-        <MatchedPrePlan tokens={tokens} prePlan={prePlan} />
+        <MatchedPrePlan theme={theme} prePlan={prePlan} />
       ) : null}
       <HydrantSection
-        tokens={tokens}
+        theme={theme}
         hydrants={hydrants}
         unavailable={hydrantsUnavailable}
         incomplete={hydrantsIncomplete}
       />
-    </View>
+    </Card>
   );
 }

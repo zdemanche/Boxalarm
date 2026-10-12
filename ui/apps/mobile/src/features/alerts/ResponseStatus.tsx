@@ -1,6 +1,6 @@
 import { spacing, typeScale, type StatusRole } from '@boxalarm/design-tokens';
 import { Text, View } from 'react-native';
-import { Button, StatusChip, useTheme } from '../../components/ui';
+import { Button, Card, StatusChip, useTheme } from '../../components/ui';
 import * as syncManager from '../../sync/syncManager';
 import { ackStatusLabel } from './ackStatus';
 import { formatEta } from './alertResponses';
@@ -140,55 +140,66 @@ export function ResponseStatus({
     delivery === 'superseded';
 
   return (
-    <View accessibilityLiveRegion="polite" style={{ gap: spacing.sm }}>
-      <Text style={{ color: theme.fg, fontSize: typeScale.heading.size, fontWeight: '700' }}>
-        Your response: {ackStatusLabel(answer.ackStatus)}
-        {eta}
-      </Text>
-      <StatusChip status={copy.role} label={copy.chip} />
-      <Text style={{ color: theme.fg, fontSize: typeScale.body.size }}>{copy.detail}</Text>
-      {(delivery === 'disputed' || delivery === 'superseded') && rosterAnswer ? (
-        <Text style={{ color: theme.fg, fontSize: typeScale.body.size, fontWeight: '700' }}>
-          Roster shows: {describeAnswer(rosterAnswer)}. Your last answer from this phone:{' '}
-          {describeAnswer(answer)}.
+    <Card>
+      <View accessibilityLiveRegion="polite" style={{ gap: spacing.sm }}>
+        <Text
+          style={{
+            color: theme.fg,
+            fontSize: typeScale.heading.size,
+            lineHeight: typeScale.heading.lineHeight,
+            fontWeight: '700',
+          }}
+        >
+          Your response: {ackStatusLabel(answer.ackStatus)}
+          {eta}
         </Text>
-      ) : null}
-      {delivery === 'queued' && lastError ? (
-        <Text style={{ color: theme.fgMuted, fontSize: typeScale.body.size }}>
-          Last attempt: {lastError}
+        <StatusChip status={copy.role} label={copy.chip} />
+        <Text style={{ color: theme.fg, fontSize: typeScale.body.size, lineHeight: 22 }}>
+          {copy.detail}
         </Text>
-      ) : null}
-      {delivery === 'refused' && lastError ? (
-        <Text style={{ color: theme.status.danger, fontSize: typeScale.body.size }}>
-          {lastError}
-        </Text>
-      ) : null}
-      {delivery === 'queued' && outboxId ? (
-        <Button
-          label="Try sending now"
-          variant="secondary"
-          size="alert"
-          accessibilityLabel="Try sending your response now"
-          onPress={() => void syncManager.retry(outboxId)}
-        />
-      ) : null}
-      {canResend ? (
-        <Button
-          label="Send my answer again"
-          size="alert"
-          accessibilityLabel={`Send my answer again: ${ackStatusLabel(answer.ackStatus)}`}
-          onPress={onResend}
-        />
-      ) : null}
-      {(delivery === 'disputed' || delivery === 'superseded') && rosterAnswer && onKeepRoster ? (
-        <Button
-          label={`Keep ${ackStatusLabel(rosterAnswer.ackStatus)}`}
-          variant="secondary"
-          size="alert"
-          accessibilityLabel={`Keep what the roster shows: ${ackStatusLabel(rosterAnswer.ackStatus)}`}
-          onPress={onKeepRoster}
-        />
-      ) : null}
-    </View>
+        {(delivery === 'disputed' || delivery === 'superseded') && rosterAnswer ? (
+          <Text style={{ color: theme.fg, fontSize: typeScale.body.size, fontWeight: '700' }}>
+            Roster shows: {describeAnswer(rosterAnswer)}. Your last answer from this phone:{' '}
+            {describeAnswer(answer)}.
+          </Text>
+        ) : null}
+        {delivery === 'queued' && lastError ? (
+          <Text style={{ color: theme.fgMuted, fontSize: typeScale.body.size }}>
+            Last attempt: {lastError}
+          </Text>
+        ) : null}
+        {delivery === 'refused' && lastError ? (
+          <Text style={{ color: theme.status.danger, fontSize: typeScale.body.size }}>
+            {lastError}
+          </Text>
+        ) : null}
+        {delivery === 'queued' && outboxId ? (
+          <Button
+            label="Try sending now"
+            variant="secondary"
+            size="alert"
+            accessibilityLabel="Try sending your response now"
+            onPress={() => void syncManager.retry(outboxId)}
+          />
+        ) : null}
+        {canResend ? (
+          <Button
+            label="Send my answer again"
+            size="alert"
+            accessibilityLabel={`Send my answer again: ${ackStatusLabel(answer.ackStatus)}`}
+            onPress={onResend}
+          />
+        ) : null}
+        {(delivery === 'disputed' || delivery === 'superseded') && rosterAnswer && onKeepRoster ? (
+          <Button
+            label={`Keep ${ackStatusLabel(rosterAnswer.ackStatus)}`}
+            variant="secondary"
+            size="alert"
+            accessibilityLabel={`Keep what the roster shows: ${ackStatusLabel(rosterAnswer.ackStatus)}`}
+            onPress={onKeepRoster}
+          />
+        ) : null}
+      </View>
+    </Card>
   );
 }

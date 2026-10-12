@@ -1,9 +1,9 @@
-import { radius, spacing, typeScale } from '@boxalarm/design-tokens';
+import { radiusScale, spacing, typeScale } from '@boxalarm/design-tokens';
 import { useNavigation, useRoute, type NavigationProp } from '@react-navigation/native';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { AccessibilityInfo, AppState, Platform, Text, TextInput, View } from 'react-native';
 import { useOptionalAuth, type Role } from '../../auth/AuthContext';
-import { Button, Screen, useTheme } from '../../components/ui';
+import { Button, Card, Screen, useTheme } from '../../components/ui';
 import { useAlertsRepository } from '../../features/alerts/apiAlertsRepository';
 import type { AlertPayload } from '../../features/alerts/alertPayload';
 import { isDeviceLocked, setAlertShowsOverLockScreen } from '../../features/alerts/alertReadiness';
@@ -11,6 +11,7 @@ import { silenceMutualAidNotification } from '../../features/alerts/pushNotifica
 import type { MutualAid } from '../../features/alerts/types';
 import { ApiError } from '../../lib/apiClient';
 import type { AlertsStackParamList } from '../../navigation/AlertsStack';
+import { LiveCard, LiveDot, Notice, noticeText } from './alertsUi';
 
 /**
  * The roles the backend lets confirm the call: Cedar AcknowledgeMutualAid is granted to
@@ -158,70 +159,97 @@ export function MutualAidPromptScreen() {
 
   return (
     <Screen>
-      <View onTouchStart={silence}>
-        <Text
-          accessibilityRole="header"
-          style={{
-            color: theme.status.danger,
-            fontSize: typeScale.title.size,
-            fontWeight: '700',
-            marginBottom: spacing.sm,
-          }}
-        >
-          MUTUAL AID REQUESTED
-        </Text>
-        {call.incidentType || call.address ? (
-          <Text style={{ color: theme.fg, fontSize: typeScale.heading.size, fontWeight: '600' }}>
-            {[call.incidentType, call.address].filter(Boolean).join(' — ')}
-          </Text>
-        ) : null}
-        <Text
-          style={{ color: theme.fg, fontSize: typeScale.body.size, marginVertical: spacing.md }}
-        >
-          Boxalarm does not page the neighboring department. Call them now, then confirm here so the
-          other officers know it is done.
-        </Text>
-
-        {mutualAid === undefined ? (
-          loadFailed ? (
-            <View style={{ gap: spacing.sm }}>
-              <Text
-                accessibilityRole="alert"
-                style={{ color: theme.status.danger, fontSize: typeScale.body.size }}
-              >
-                Couldn&apos;t check whether the call has been confirmed. Confirm below only if you
-                made the call yourself.
-              </Text>
-              <Button label="Check again" variant="secondary" onPress={() => void load()} />
-            </View>
-          ) : (
+      <View onTouchStart={silence} style={{ gap: spacing.md }}>
+        {/* Rings like a page until acted on: the live-call edge. */}
+        <LiveCard>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.sm }}>
+            <LiveDot />
             <Text
-              accessibilityRole="text"
-              style={{ color: theme.fg, fontSize: typeScale.body.size }}
+              accessibilityRole="header"
+              style={{
+                flex: 1,
+                color: theme.status.danger,
+                fontSize: typeScale.title.size,
+                lineHeight: typeScale.title.lineHeight,
+                fontWeight: '800',
+                letterSpacing: 0.5,
+              }}
             >
-              Checking whether the call has been confirmed…
+              MUTUAL AID REQUESTED
             </Text>
-          )
-        ) : acknowledged ? (
-          <Text
-            accessibilityRole="summary"
-            style={{ color: theme.fg, fontSize: typeScale.body.size, fontWeight: '600' }}
+          </View>
+          {call.incidentType || call.address ? (
+            <Text
+              style={{
+                color: theme.fg,
+                fontSize: typeScale.title.size,
+                lineHeight: typeScale.title.lineHeight,
+                fontWeight: '700',
+              }}
+            >
+              {[call.incidentType, call.address].filter(Boolean).join(' — ')}
+            </Text>
+          ) : null}
+          <Text style={{ color: theme.fg, fontSize: 17, lineHeight: 24 }}>
+            Boxalarm does not page the neighboring department. Call them now, then confirm here so
+            the other officers know it is done.
+          </Text>
+
+          <View
+            style={{
+              gap: spacing.sm,
+              marginTop: spacing.xs,
+              paddingTop: spacing.sm,
+              borderTopWidth: 1,
+              borderTopColor: theme.borderDecorative,
+            }}
           >
-            Call confirmed at {formatTime(mutualAid.acknowledgedAt)}
-            {mutualAid.acknowledgedBy ? ` by ${mutualAid.acknowledgedBy}` : ''}
-            {mutualAid.notes ? `: ${mutualAid.notes}` : '.'}
-          </Text>
-        ) : (
-          <Text style={{ color: theme.fg, fontSize: typeScale.body.size }}>
-            {mutualAid
-              ? `Requested at ${formatTime(mutualAid.triggeredAt)}. The call has not been confirmed yet.`
-              : 'The server shows no mutual-aid request for this call yet.'}
-          </Text>
-        )}
+            {mutualAid === undefined ? (
+              loadFailed ? (
+                <>
+                  <Notice tone="warning">
+                    <Text accessibilityRole="alert" style={noticeText(theme, 'warning')}>
+                      Couldn&apos;t check whether the call has been confirmed. Confirm below only if
+                      you made the call yourself.
+                    </Text>
+                  </Notice>
+                  <Button label="Check again" variant="secondary" onPress={() => void load()} />
+                </>
+              ) : (
+                <Text
+                  accessibilityRole="text"
+                  style={{ color: theme.fgMuted, fontSize: typeScale.body.size }}
+                >
+                  Checking whether the call has been confirmed…
+                </Text>
+              )
+            ) : acknowledged ? (
+              <Text
+                accessibilityRole="summary"
+                style={{ color: theme.fg, fontSize: 17, lineHeight: 24, fontWeight: '700' }}
+              >
+                Call confirmed at {formatTime(mutualAid.acknowledgedAt)}
+                {mutualAid.acknowledgedBy ? ` by ${mutualAid.acknowledgedBy}` : ''}
+                {mutualAid.notes ? `: ${mutualAid.notes}` : '.'}
+              </Text>
+            ) : (
+              <Text style={{ color: theme.fg, fontSize: 17, lineHeight: 24, fontWeight: '600' }}>
+                {mutualAid
+                  ? `Requested at ${formatTime(mutualAid.triggeredAt)}. The call has not been confirmed yet.`
+                  : 'The server shows no mutual-aid request for this call yet.'}
+              </Text>
+            )}
+            {!acknowledged && !canConfirm && mutualAid !== undefined ? (
+              <Text style={{ color: theme.fgMuted, fontSize: typeScale.body.size }}>
+                Only an officer can confirm the call.
+              </Text>
+            ) : null}
+          </View>
+        </LiveCard>
 
         {!acknowledged && canConfirm ? (
-          <View style={{ gap: spacing.sm, marginTop: spacing.md }}>
-            <Text style={{ color: theme.fg }}>
+          <Card>
+            <Text style={{ color: theme.fg, fontSize: typeScale.body.size, fontWeight: '600' }}>
               Notes (optional) - who you spoke to, what they are sending
             </Text>
             <TextInput
@@ -230,41 +258,46 @@ export function MutualAidPromptScreen() {
               onChangeText={setNotes}
               maxLength={MAX_NOTES_LENGTH}
               multiline
+              placeholderTextColor={theme.fgFaint}
               style={{
-                minHeight: 80,
+                minHeight: 96,
                 borderWidth: 1,
-                borderColor: theme.borderStrong,
-                borderRadius: radius.default,
-                padding: spacing.sm,
+                borderColor: theme.border,
+                borderRadius: radiusScale.md,
+                backgroundColor: theme.surface,
+                padding: spacing.md,
                 color: theme.fg,
+                fontSize: 17,
+                textAlignVertical: 'top',
               }}
             />
+            {error ? (
+              <Notice tone="warning">
+                <Text accessibilityRole="alert" style={noticeText(theme, 'warning', true)}>
+                  {error}
+                </Text>
+              </Notice>
+            ) : null}
             <Button
               label={saving ? 'Confirming…' : 'I made the mutual-aid call'}
               onPress={() => void confirm()}
               disabled={saving}
+              fullWidth
             />
-          </View>
-        ) : null}
-        {!acknowledged && !canConfirm && mutualAid !== undefined ? (
-          <Text style={{ color: theme.fg, marginTop: spacing.md }}>
-            Only an officer can confirm the call.
-          </Text>
-        ) : null}
-
-        {error ? (
-          <Text
-            accessibilityRole="alert"
-            style={{ color: theme.status.danger, marginTop: spacing.md }}
-          >
-            {error}
-          </Text>
+          </Card>
+        ) : error ? (
+          <Notice tone="warning">
+            <Text accessibilityRole="alert" style={noticeText(theme, 'warning', true)}>
+              {error}
+            </Text>
+          </Notice>
         ) : null}
 
-        <View style={{ marginTop: spacing.lg }}>
+        <Card>
           <Button
             label="Open the call"
             variant="secondary"
+            fullWidth
             onPress={() => {
               // The call's own page, not the prompt: the alert screen must not treat it as one.
               const callPayload = payload ? { ...payload } : undefined;
@@ -275,7 +308,7 @@ export function MutualAidPromptScreen() {
               );
             }}
           />
-        </View>
+        </Card>
       </View>
     </Screen>
   );

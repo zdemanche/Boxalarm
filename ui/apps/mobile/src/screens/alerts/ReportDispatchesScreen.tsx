@@ -1,10 +1,9 @@
-import { radius, spacing, typeScale } from '@boxalarm/design-tokens';
+import { spacing, typeScale } from '@boxalarm/design-tokens';
 import { useCallback, useEffect, useState } from 'react';
-import { AccessibilityInfo, ScrollView, Text, View } from 'react-native';
+import { AccessibilityInfo, Platform, Text, View } from 'react-native';
 import Config from 'react-native-config';
-import { SafeAreaView } from 'react-native-safe-area-context';
 import { useOptionalAuth } from '../../auth/AuthContext';
-import { Button, StatusChip, useTheme } from '../../components/ui';
+import { Button, Card, Screen, StatusChip, useTheme } from '../../components/ui';
 import {
   listRecentDispatches,
   startReportFromDispatch,
@@ -12,6 +11,7 @@ import {
 } from '../../features/incidents/recentDispatchesApi';
 import { ApiError } from '../../lib/apiClient';
 import { useOptionalConnectivity } from '../../sync/ConnectivityContext';
+import { Notice, noticeText, ROW_PRIMARY, ROW_SECONDARY, rowDivider } from './alertsUi';
 
 // Listing dispatches and starting a report are both the NERIS officer tier (Cedar
 // ListRecentDispatches, CreateIncidentReport): OFFICER, CHIEF, ADMIN.
@@ -114,133 +114,122 @@ export function ReportDispatchesScreen() {
   const recent = dispatches.filter((d) => d.dispatchedAt >= windowStart);
   const older = dispatches.filter((d) => d.dispatchedAt < windowStart);
 
-  const row = (dispatch: ReportableDispatch) => (
+  const row = (dispatch: ReportableDispatch, index: number) => (
     <View
       key={dispatch.dispatchId}
-      style={{
-        gap: spacing.xs,
-        padding: spacing.md,
-        borderRadius: radius.default,
-        backgroundColor: theme.surface,
-      }}
+      style={{ minHeight: 56, gap: spacing.xs, ...rowDivider(theme, index) }}
     >
-      <Text style={{ color: theme.fg, fontSize: typeScale.heading.size, fontWeight: '700' }}>
-        {dispatch.incidentType || 'Dispatch'}
-      </Text>
+      <Text style={{ color: theme.fg, ...ROW_PRIMARY }}>{dispatch.incidentType || 'Dispatch'}</Text>
       {dispatch.verifyRequired ? (
         // An unparsed CAD dispatch: the address is a placeholder, so show the text itself.
         <>
           <StatusChip status="caution" label="VERIFY — location not parsed" />
-          <Text style={{ color: theme.fg, fontSize: typeScale.body.size, fontFamily: 'monospace' }}>
+          <Text
+            style={{
+              color: theme.fg,
+              ...ROW_SECONDARY,
+              fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
+            }}
+          >
             “{dispatch.textExcerpt ?? ''}”
           </Text>
         </>
       ) : (
-        <Text style={{ color: theme.fg, fontSize: typeScale.body.size }}>
+        <Text style={{ color: theme.fg, ...ROW_SECONDARY }}>
           {dispatch.address || 'No address on the dispatch'}
         </Text>
       )}
-      <Text style={{ color: theme.fgMuted, fontSize: typeScale.caption.size }}>
+      <Text style={{ color: theme.fgMuted, fontSize: typeScale.label.size }}>
         Dispatched {when(dispatch.dispatchedAt)}
       </Text>
       {dispatch.report ? (
-        <Text style={{ color: theme.status.ok, fontSize: typeScale.body.size }}>
-          ✓ Report started ({dispatch.report.status.toLowerCase()}) — finish it on the web
-        </Text>
+        <View style={{ gap: spacing.xs }}>
+          <StatusChip
+            status="ok"
+            label={`Report started (${dispatch.report.status.toLowerCase()})`}
+          />
+          <Text style={{ color: theme.fgMuted, ...ROW_SECONDARY }}>Finish it on the web.</Text>
+        </View>
       ) : canStart ? (
         <Button
           label="Start report"
+          variant="secondary"
           accessibilityLabel={`Start report for ${dispatch.incidentType || 'dispatch'} at ${dispatch.verifyRequired ? 'an unverified location' : dispatch.address || 'unknown address'}`}
           loading={starting === dispatch.dispatchId}
           disabled={!isOnline || starting !== null}
+          fullWidth
           onPress={() => void start(dispatch)}
         />
       ) : (
-        <Text style={{ color: theme.fgMuted, fontSize: typeScale.body.size }}>No report yet</Text>
+        <StatusChip status="neutral" label="No report yet" />
       )}
     </View>
   );
 
   return (
-    <SafeAreaView
-      style={{ flex: 1, backgroundColor: theme.bg }}
-      edges={['bottom', 'left', 'right']}
-    >
-      <ScrollView contentContainerStyle={{ padding: spacing.lg, gap: spacing.md }}>
-        <Text
-          accessibilityRole="header"
-          style={{ color: theme.fg, fontSize: typeScale.title.size, fontWeight: '700' }}
-        >
-          Start a report
-        </Text>
-        {!isOnline ? (
-          <Text
-            accessibilityRole="alert"
-            style={{ color: theme.status.warning, fontSize: typeScale.body.size }}
-          >
+    <Screen>
+      <Text style={{ color: theme.fgMuted, fontSize: typeScale.body.size }}>
+        Pick a dispatch to start its report. The report is finished on the web.
+      </Text>
+      {!isOnline ? (
+        <Notice tone="warning">
+          <Text accessibilityRole="alert" style={noticeText(theme, 'warning')}>
             You&apos;re offline. Listing dispatches and starting a report need a connection.
           </Text>
-        ) : null}
-        {message ? (
-          <Text
-            accessibilityLiveRegion="polite"
-            style={{ color: theme.fg, fontSize: typeScale.body.size }}
-          >
+        </Notice>
+      ) : null}
+      {message ? (
+        <Notice tone="info">
+          <Text accessibilityLiveRegion="polite" style={noticeText(theme, 'info')}>
             {message}
           </Text>
-        ) : null}
-        {loadError ? (
-          <View style={{ gap: spacing.sm }}>
-            <Text
-              accessibilityRole="alert"
-              style={{ color: theme.status.danger, fontSize: typeScale.body.size }}
-            >
-              {loadError}
-            </Text>
-            <Button label="Try again" onPress={() => void load()} />
-          </View>
-        ) : null}
-        <Text
-          accessibilityRole="header"
-          style={{ color: theme.fg, fontSize: typeScale.heading.size, fontWeight: '600' }}
-        >
-          Last {windowHours} hours
-        </Text>
-        {loading && dispatches.length === 0 ? (
-          <Text style={{ color: theme.fgMuted, fontSize: typeScale.body.size }}>
-            Loading dispatches…
+        </Notice>
+      ) : null}
+      {loadError ? (
+        <Notice tone="warning">
+          <Text accessibilityRole="alert" style={noticeText(theme, 'warning')}>
+            {loadError}
           </Text>
+          <Button label="Try again" onPress={() => void load()} />
+        </Notice>
+      ) : null}
+      <Card title={`Last ${windowHours} hours`}>
+        {loading && dispatches.length === 0 ? (
+          <Text style={{ color: theme.fgMuted, ...ROW_SECONDARY }}>Loading dispatches…</Text>
         ) : recent.length === 0 && !loadError && isOnline ? (
-          <Text style={{ color: theme.fgMuted, fontSize: typeScale.body.size }}>
+          <Text style={{ color: theme.fgMuted, ...ROW_SECONDARY }}>
             No dispatches in the last {windowHours} hours.
           </Text>
         ) : (
           recent.map(row)
         )}
-        {older.length > 0 ? (
-          <>
-            <Text
-              accessibilityRole="header"
-              style={{ color: theme.fg, fontSize: typeScale.heading.size, fontWeight: '600' }}
-            >
-              Older
-            </Text>
-            {older.map(row)}
-          </>
-        ) : loadedOlder && !cursor ? (
-          <Text style={{ color: theme.fgMuted, fontSize: typeScale.body.size }}>
-            No older dispatches.
-          </Text>
+        {older.length === 0 && loadedOlder && !cursor ? (
+          <Text style={{ color: theme.fgMuted, ...ROW_SECONDARY }}>No older dispatches.</Text>
         ) : null}
-        {cursor && isOnline ? (
+        {older.length === 0 && cursor && isOnline ? (
           <Button
             label="Load older dispatches"
             variant="secondary"
             loading={loading && dispatches.length > 0}
+            fullWidth
             onPress={() => void load(cursor)}
           />
         ) : null}
-      </ScrollView>
-    </SafeAreaView>
+      </Card>
+      {older.length > 0 ? (
+        <Card title="Older">
+          {older.map(row)}
+          {cursor && isOnline ? (
+            <Button
+              label="Load older dispatches"
+              variant="secondary"
+              loading={loading && dispatches.length > 0}
+              fullWidth
+              onPress={() => void load(cursor)}
+            />
+          ) : null}
+        </Card>
+      ) : null}
+    </Screen>
   );
 }
