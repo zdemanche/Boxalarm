@@ -185,14 +185,30 @@ test('audit log lookup renders a readable diff; a 400 shows detail next to the i
   renderRoute(['ADMIN'], '/audit-log');
   await screen.findByRole('heading', { name: 'Audit log' });
 
-  await user.type(screen.getByLabelText('Entity type'), 'DEPARTMENT_CONFIG');
-  await user.type(screen.getByLabelText('Entity ID'), 'ALERT_RULES');
+  await user.selectOptions(screen.getByLabelText('Record type'), 'DEPARTMENT_CONFIG');
+  await user.type(screen.getByLabelText('Record ID'), 'ALERT_RULES');
   await user.click(screen.getByRole('button', { name: 'Look up' }));
 
   await waitFor(() => {
-    expect(screen.getByText(/escalationThresholdN: 60 → 90/)).toBeTruthy();
+    expect(changeRowText('escalationThresholdN')).toBe('escalationThresholdN 60 → to 90');
   });
+
+  await user.clear(screen.getByLabelText('Record ID'));
+  await user.type(screen.getByLabelText('Record ID'), 'bad id');
+  await user.click(screen.getByRole('button', { name: 'Look up' }));
+  expect((await screen.findByRole('alert')).textContent).toBe(
+    'entityType and entityId query parameters are required and must not contain "," or "#".',
+  );
 });
+
+/** One changed-fields row as it reads: field, old value, arrow, the screen-reader "to", new. */
+function changeRowText(field: string): string | undefined {
+  return screen
+    .getByText(field, { selector: 'span' })
+    .closest('li')
+    ?.textContent?.replace(/\s+/g, ' ')
+    .trim();
+}
 
 test('an audit body without an entries array shows the error state, not a crash', async () => {
   // A proxy error page or a stale mock: 200, but not an AuditPage.
@@ -200,10 +216,10 @@ test('an audit body without an entries array shows the error state, not a crash'
   const user = userEvent.setup();
   renderRoute(['ADMIN'], '/audit-log');
   await screen.findByRole('heading', { name: 'Audit log' });
-  await user.type(screen.getByLabelText('Entity type'), 'DEPARTMENT_CONFIG');
-  await user.type(screen.getByLabelText('Entity ID'), 'ALERT_RULES');
+  await user.selectOptions(screen.getByLabelText('Record type'), 'DEPARTMENT_CONFIG');
+  await user.type(screen.getByLabelText('Record ID'), 'ALERT_RULES');
   await user.click(screen.getByRole('button', { name: 'Look up' }));
-  // The gate's generic retryable state - never the route error boundary.
+  // The generic retryable state - never the route error boundary.
   expect(
     (await screen.findAllByText(/Try again, or contact your department administrator/)).length,
   ).toBeGreaterThan(0);
@@ -511,12 +527,12 @@ test('resubmitting the same audit lookup refreshes the results table', async () 
   renderRoute(['ADMIN'], '/audit-log');
   await screen.findByRole('heading', { name: 'Audit log' });
 
-  await user.type(screen.getByLabelText('Entity type'), 'DEPARTMENT_CONFIG');
-  await user.type(screen.getByLabelText('Entity ID'), 'ALERT_RULES');
+  await user.selectOptions(screen.getByLabelText('Record type'), 'DEPARTMENT_CONFIG');
+  await user.type(screen.getByLabelText('Record ID'), 'ALERT_RULES');
   await user.click(screen.getByRole('button', { name: 'Look up' }));
 
   await waitFor(() => {
-    expect(screen.getByText(/escalationThresholdN: 60 → 90/)).toBeTruthy();
+    expect(changeRowText('escalationThresholdN')).toBe('escalationThresholdN 60 → to 90');
   });
   expect(screen.queryByText('No change history for this record.')).toBeNull();
 
@@ -526,8 +542,12 @@ test('resubmitting the same audit lookup refreshes the results table', async () 
   await user.click(screen.getByRole('button', { name: 'Look up' }));
 
   await waitFor(() => {
-    expect(screen.getByText(/escalationThresholdN: 90 → 120/)).toBeTruthy();
+    expect(screen.getAllByText('escalationThresholdN', { selector: 'span' })).toHaveLength(2);
   });
+  const rows = screen
+    .getAllByText('escalationThresholdN', { selector: 'span' })
+    .map((field) => field.closest('li')?.textContent?.replace(/\s+/g, ' ').trim());
+  expect(rows).toContain('escalationThresholdN 90 → to 120');
   expect(screen.queryByText('No change history for this record.')).toBeNull();
   expect(calls).toBe(2);
 });
@@ -564,6 +584,44 @@ test('admin revokes a member’s sessions from /personnel/:id', async () => {
   await waitFor(() => {
     expect(screen.getByText(/Sam Lee is signed out everywhere/)).toBeTruthy();
   });
+});
+
+test('a member page links to that member’s change history for CHIEF and ADMIN only', async () => {
+  const member: Member = {
+    memberId: 'm1',
+    firstName: 'Sam',
+    lastName: 'Lee',
+    email: 'sam@example.com',
+    phone: '203-555-0199',
+    status: 'ACTIVE',
+    joinDate: '2020-01-01',
+    rank: 'Lt',
+    agencyId: 'NFD-1',
+  };
+  server.use(http.get('/api/v1/personnel/members/m1', () => HttpResponse.json(member)));
+
+  renderRoute(['CHIEF'], '/personnel/m1');
+  await screen.findByRole('heading', { name: 'Sam Lee' });
+  expect(screen.getByRole('link', { name: 'Change history' }).getAttribute('href')).toBe(
+    '/audit-log?entityType=MEMBER&entityId=m1',
+  );
+
+  cleanup();
+  renderRoute(['OFFICER'], '/personnel/m1');
+  await screen.findByRole('heading', { name: 'Sam Lee' });
+  expect(screen.queryByRole('link', { name: 'Change history' })).toBeNull();
+});
+
+test('Settings links LOSAP point rules to its change history', async () => {
+  server.use(...settingsDefaultHandlers());
+  renderRoute(['ADMIN'], '/settings');
+
+  const link = await screen.findByRole('link', { name: 'Change history for LOSAP point rules' });
+  expect(link.getAttribute('href')).toBe(
+    '/audit-log?entityType=DEPARTMENT_CONFIG&entityId=LOSAP_POINT_RULES',
+  );
+  // Only the LOSAP page's saves are recorded; nothing else on Settings claims a history.
+  expect(screen.getAllByRole('link', { name: /^Change history/ })).toHaveLength(1);
 });
 
 test('a 400 saving a config lists the RFC 7807 field-level errors (m1)', async () => {

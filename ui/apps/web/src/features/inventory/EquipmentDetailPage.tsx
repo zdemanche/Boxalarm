@@ -4,6 +4,7 @@ import { useParams } from 'react-router-dom';
 import { useAuth } from '../../auth/AuthContext';
 import { canManageInventory } from '../../auth/roles';
 import { ApiForbiddenGate } from '../../components/ApiForbiddenGate';
+import { AuditHistoryLink } from '../../components/AuditHistoryLink';
 import {
   Button,
   Card,
@@ -119,6 +120,11 @@ export function EquipmentDetailPage() {
               </span>
               <span>Equipment asset</span>
             </span>
+          ) : undefined
+        }
+        actions={
+          asset ? (
+            <AuditHistoryLink entityType="EQUIPMENT_ASSET" entityId={asset.assetId} />
           ) : undefined
         }
       />

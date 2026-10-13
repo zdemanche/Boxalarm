@@ -10,6 +10,7 @@ import {
 } from '../../auth/roles';
 import { MarkOffList } from '../availability/MarkOffList';
 import { ApiForbiddenGate } from '../../components/ApiForbiddenGate';
+import { AuditHistoryLink } from '../../components/AuditHistoryLink';
 import {
   Button,
   Card,
@@ -407,6 +408,9 @@ export function MemberDetailPage() {
         title={name}
         description={member ? member.rank : undefined}
         breadcrumbs={[{ label: 'Members', to: '/personnel' }, { label: name }]}
+        actions={
+          member ? <AuditHistoryLink entityType="MEMBER" entityId={member.memberId} /> : undefined
+        }
       />
       {memberQuery.isLoading || !member ? (
         <Card>

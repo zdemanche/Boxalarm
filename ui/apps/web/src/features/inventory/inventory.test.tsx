@@ -250,6 +250,31 @@ test('a non-admin viewer sees no lifecycle transition control (AC3)', async () =
   expect(screen.queryByRole('button', { name: /Move to/ })).toBeNull();
 });
 
+test('the asset detail links to its change history for roles that can read the audit log', async () => {
+  const asset: EquipmentAsset = {
+    assetId: 'eq-1',
+    deptId: 'd1',
+    serialNumber: 'SCBA-1',
+    location: 'Station 1',
+    lifecycleStatus: 'IN_SERVICE',
+  };
+  server.use(
+    http.get('/api/v1/inventory/equipment/eq-1', () => HttpResponse.json(asset)),
+    http.get('/api/v1/personnel/members', () => HttpResponse.json({ items: [] })),
+  );
+
+  renderApp(['ADMIN'], '/inventory/eq-1');
+  await screen.findByRole('heading', { name: 'SCBA-1' });
+  expect(screen.getByRole('link', { name: 'Change history' }).getAttribute('href')).toBe(
+    '/audit-log?entityType=EQUIPMENT_ASSET&entityId=eq-1',
+  );
+
+  cleanup();
+  renderApp(['APPARATUS'], '/inventory/eq-1');
+  await screen.findByRole('heading', { name: 'SCBA-1' });
+  expect(screen.queryByRole('link', { name: 'Change history' })).toBeNull();
+});
+
 test('CHIEF has the same equipment write access as ADMIN, consistent with inspections (MAJOR-3)', async () => {
   const asset: EquipmentAsset = {
     assetId: 'eq-1',

@@ -137,6 +137,13 @@
   color: var(--bx-fg-faint);
 }
 
+.rowActions {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: var(--bx-space-sm);
+}
+
 /* --- Cutover status ---------------------------------------------------------------------- */
 
 .statusBlock {

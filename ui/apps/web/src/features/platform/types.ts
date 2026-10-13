@@ -22,13 +22,21 @@ export interface FieldError {
   message: string;
 }
 
+/** One field's change. Some writers record only the new value and leave `old` out. */
+export interface AuditFieldChange {
+  old?: unknown;
+  new?: unknown;
+}
+
 export interface AuditEntry {
+  /** The member's ID (their sign-in `sub`), or `system:…` for a scheduled job. */
   actorId: string;
+  /** Epoch milliseconds - or seconds, from the writers that store seconds (training, PPE, export). */
   ts: number;
   action: string;
   mutatedEntityType: string;
   mutatedEntityId: string;
-  changedFields: Record<string, unknown>;
+  changedFields: Record<string, AuditFieldChange>;
 }
 
 export interface AuditPage {

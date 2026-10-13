@@ -1,15 +1,9 @@
-/* /audit-log: the lookup on the left, the record's history beside it; one column under 1024px. */
-.layout {
+/* /audit-log: the lookup across the top, the record's history below it at full width - the
+   changed-fields column needs the room. */
+.stack {
   display: grid;
-  grid-template-columns: minmax(280px, 1fr) minmax(0, 2fr);
-  align-items: start;
   gap: var(--bx-space-lg);
-}
-
-@media (max-width: 1023px) {
-  .layout {
-    grid-template-columns: minmax(0, 1fr);
-  }
+  min-width: 0;
 }
 
 .form {
@@ -17,9 +11,20 @@
   gap: var(--bx-space-md);
 }
 
+.fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(220px, 100%), 1fr));
+  gap: var(--bx-space-sm) var(--bx-space-md);
+  align-items: start;
+}
+
 .formFooter {
   display: flex;
   justify-content: flex-end;
+}
+
+.monoInput {
+  font-family: var(--bx-font-mono);
 }
 
 .validation {
@@ -34,23 +39,87 @@
   color: var(--bx-fg-muted);
 }
 
+/* The record the table below is about - the form above can be edited without submitting. */
+.subject {
+  margin: 0 0 var(--bx-space-md);
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--bx-fg);
+  overflow-wrap: anywhere;
+}
+
+.partial {
+  margin: 0 0 var(--bx-space-md);
+  padding: var(--bx-space-sm) var(--bx-space-md);
+  border-radius: var(--bx-radius-md);
+  background: var(--bx-surface);
+  font-size: 14px;
+  color: var(--bx-fg);
+}
+
+.empty {
+  display: grid;
+  gap: var(--bx-space-xs);
+}
+
+.emptyTitle {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--bx-fg);
+}
+
 .mono {
   font-family: var(--bx-font-mono);
   font-size: 13px;
   white-space: nowrap;
 }
 
+/* Name over ID: the name to read, the ID to compare. */
+.actor {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.actor .mono {
+  color: var(--bx-fg-muted);
+}
+
+.actorName {
+  font-weight: 600;
+  white-space: nowrap;
+}
+
 .diffList {
   list-style: none;
   margin: 0;
-  padding: 0;
-  font-family: var(--bx-font-mono);
+  padding: var(--bx-space-sm) 0;
   font-size: 13px;
+  min-width: 220px;
+}
+
+.diffRow + .diffRow {
+  margin-top: 4px;
+}
+
+.field {
+  font-family: var(--bx-font-mono);
+  font-weight: 600;
+  color: var(--bx-fg);
+}
+
+.value {
+  font-family: var(--bx-font-mono);
   overflow-wrap: anywhere;
 }
 
-.diffList li + li {
-  margin-top: 2px;
+.none {
+  color: var(--bx-fg-muted);
+}
+
+.arrow {
+  color: var(--bx-fg-muted);
 }
 
 .more {
