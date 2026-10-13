@@ -11,6 +11,7 @@ import {
   ingestCadDispatch,
 } from './ingest.js';
 import { fakeDynamo as fakeDynamoTable, type FakeTable } from './__fixtures__/fakeTable.js';
+import { readWebhookBody } from './webhookHandler.js';
 import type { CadSourceCopy } from './sourceCopy.js';
 
 const DEPT = toVerifiedDeptId({ deptId: 'nichols-fd' });
@@ -547,4 +548,83 @@ describe('template deadline (security review M3)', () => {
     const logged = vi.mocked(console.log).mock.calls.map(([l]) => String(l));
     expect(logged.some((l) => l.includes('"CadParseTimeout":1'))).toBe(true);
   }, 10_000);
+});
+
+describe('webhook bodies with structured fields and a text key', () => {
+  beforeEach(() => {
+    vi.spyOn(console, 'log').mockImplementation(() => undefined);
+  });
+  afterEach(() => vi.restoreAllMocks());
+
+  const post = (table: FakeTable, body: Record<string, unknown>, receivedAt: number) => {
+    const read = readWebhookBody(JSON.stringify(body));
+    return ingestCadDispatch(fakeDynamoTable(table), 'alerting', {
+      deptId: DEPT,
+      source: SOURCE,
+      channel: 'cad-webhook',
+      text: read.text,
+      ...(read.structured ? { structured: read.structured } : {}),
+      ...(read.identityText ? { identityText: read.identityText } : {}),
+      receivedAt,
+    });
+  };
+  const alertOfTable = (table: FakeTable) =>
+    [...table.items.values()].find((i) => i.entityType === 'DISPATCH_ALERT')!;
+
+  it('two calls with no incident number, the same text and different addresses both page', async () => {
+    const table: FakeTable = { items: new Map() };
+    const first = await post(table, { address: '5 OAK AVE', text: '' }, 1_800_000_000);
+    const second = await post(table, { address: '99 PINE RD', text: '' }, 1_800_000_120);
+    expect([first.outcome, second.outcome]).toEqual(['created', 'created']);
+  });
+
+  it('an address correction with the same text is an update; an exact resend is a duplicate', async () => {
+    const table: FakeTable = { items: new Map() };
+    const body = { incidentNumber: '2026-5', address: '12 ELM ST', text: 'STRUCTURE FIRE' };
+    expect((await post(table, body, 1_800_000_000)).outcome).toBe('created');
+    expect((await post(table, body, 1_800_000_030)).outcome).toBe('duplicate');
+    const corrected = await post(table, { ...body, address: '21 ELM ST' }, 1_800_000_060);
+    expect(corrected.outcome).toBe('updated');
+    expect(alertOfTable(table)).toMatchObject({ address: '21 ELM ST' });
+  });
+});
+
+describe('a PARSED update that carries no TYPE keeps the paged type', () => {
+  beforeEach(() => {
+    vi.spyOn(console, 'log').mockImplementation(() => undefined);
+  });
+  afterEach(() => vi.restoreAllMocks());
+
+  const at = (table: FakeTable, text: string, receivedAt: number) =>
+    ingestCadDispatch(fakeDynamoTable(table), 'alerting', {
+      deptId: DEPT,
+      source: SOURCE,
+      channel: 'cad-webhook',
+      text,
+      receivedAt,
+    });
+  const alertOfTable = (table: FakeTable) =>
+    [...table.items.values()].find((i) => i.entityType === 'DISPATCH_ALERT')!;
+
+  it('adding units without a TYPE line leaves STRUCTURE FIRE and summarizes only the units', async () => {
+    const table: FakeTable = { items: new Map() };
+    await at(table, TEXT, 1_800_000_000);
+    const update = ['INC: 2026-4471', 'ADDR: 123 MAIN ST, NICHOLS', 'UNITS: E1, L2, R1'].join('\n');
+    expect((await at(table, update, 1_800_000_060)).outcome).toBe('updated');
+    expect(alertOfTable(table)).toMatchObject({ incidentType: 'STRUCTURE FIRE' });
+    const history = [...table.items.values()].find((i) => i.entityType === 'DISPATCH_UPDATE')!;
+    expect(history.summary).toBe('Units: E1, L2, R1');
+  });
+
+  it('a structured update with a TYPE still replaces the VERIFY placeholder of a RAW page', async () => {
+    const table: FakeTable = { items: new Map() };
+    await at(table, 'INC: 2026-4471\nunreadable text', 1_800_000_000);
+    expect(alertOfTable(table)).toMatchObject({ incidentType: RAW_INCIDENT_TYPE });
+    const update = ['INC: 2026-4471', 'ADDR: 123 MAIN ST, NICHOLS'].join('\n');
+    await at(table, update, 1_800_000_060);
+    expect(alertOfTable(table)).toMatchObject({
+      incidentType: 'CAD DISPATCH',
+      verifyRequired: false,
+    });
+  });
 });

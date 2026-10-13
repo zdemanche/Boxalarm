@@ -55,6 +55,8 @@ export interface CadIngestInput {
   readonly text: string;
   /** Webhook only: fields the CAD sent already structured (they win over the template). */
   readonly structured?: CadParsedFields;
+  /** Webhook only: structured fields plus the sender's text, so a change in either is new content. */
+  readonly identityText?: string;
   /** Epoch seconds. */
   readonly receivedAt: number;
   /** The authenticated message's replay marker, written in the same transaction. */
@@ -139,6 +141,7 @@ export function buildCadDispatch(
   structured: CadParsedFields | undefined,
   /** The template's result, when already run under its deadline (parseCadTextBounded). */
   preParsed?: CadParseResult,
+  identityText?: string,
 ): {
   readonly dispatch: DispatchReceived;
   readonly parseStatus: 'PARSED' | 'RAW';
@@ -153,7 +156,7 @@ export function buildCadDispatch(
   const fields: CadParsedFields = structuredResult ?? { ...parsed?.fields, ...structured };
   const isParsed = structuredResult !== undefined || parsed?.status === 'PARSED';
   const narrativeFallback = rawText.slice(0, MAX_NARRATIVE_CHARS);
-  const identity = cadIdentity(source.sourceId, fields, rawText);
+  const identity = cadIdentity(source.sourceId, fields, identityText ?? rawText);
   const { externalDispatchId } = identity;
 
   if (isParsed && fields.address) {
@@ -216,14 +219,22 @@ export async function ingestCadDispatch(
       reason: preParsed.reason,
     });
   }
-  const built = buildCadDispatch(source, input.text, input.structured, preParsed);
+  const built = buildCadDispatch(
+    source,
+    input.text,
+    input.structured,
+    preParsed,
+    input.identityText,
+  );
   const idempotencyKey = deriveIngressIdempotencyKey(
     deptId,
     'CAD',
     built.dispatch.externalDispatchId,
   );
 
-  const contentHash = dispatchTextFingerprint(normalizeDispatchText(input.text));
+  const contentHash = dispatchTextFingerprint(
+    normalizeDispatchText(input.identityText ?? input.text),
+  );
   const timeZone = source.timeZone ?? DEFAULT_CAD_TIME_ZONE;
   // The original's time, placed on the day it was received (chain review R3-M1).
   const messageTime = resolveCadMessageTime(built.fields.dispatchTime, {
@@ -274,6 +285,7 @@ export async function ingestCadDispatch(
           dispatchId,
           dispatch: built.dispatch,
           parseStatus: built.parseStatus,
+          typeCarried: built.fields.incidentType !== undefined,
           contentHash,
           channel,
           receivedAt: input.receivedAt,

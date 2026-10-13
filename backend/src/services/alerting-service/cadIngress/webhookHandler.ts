@@ -88,6 +88,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 export function readWebhookBody(rawText: string): {
   readonly text: string;
   readonly structured?: CadParsedFields;
+  readonly identityText?: string;
 } {
   let parsed: unknown;
   try {
@@ -113,7 +114,11 @@ export function readWebhookBody(rawText: string): {
   const rendered = (Object.entries(structured) as [CadField, string][])
     .map(([field, value]) => `${field}: ${value}`)
     .join('\n');
-  return { text: text ?? rendered, structured };
+  return {
+    text: text ?? rendered,
+    structured,
+    ...(text !== undefined ? { identityText: `${rendered}\n${text}` } : {}),
+  };
 }
 
 export const handler: Handler<WebhookEvent, APIGatewayProxyStructuredResultV2> = async (event) => {
@@ -249,6 +254,7 @@ export const handler: Handler<WebhookEvent, APIGatewayProxyStructuredResultV2> =
       channel: CHANNEL,
       text: body.text,
       ...(body.structured ? { structured: body.structured } : {}),
+      ...(body.identityText ? { identityText: body.identityText } : {}),
       receivedAt: nowSeconds,
       replay: { token: replayToken, ttlSeconds: REPLAY_TTL_SECONDS },
     });

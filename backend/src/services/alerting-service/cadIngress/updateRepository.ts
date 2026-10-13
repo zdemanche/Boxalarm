@@ -49,6 +49,7 @@ export interface RecordUpdateInput {
   readonly dispatchId: string;
   readonly dispatch: DispatchReceived;
   readonly parseStatus: 'PARSED' | 'RAW';
+  readonly typeCarried: boolean;
   readonly contentHash: string;
   readonly channel: CadChannel;
   readonly receivedAt: number;
@@ -75,13 +76,16 @@ export function diffDispatch(
   current: Record<string, unknown>,
   next: DispatchReceived,
   parseStatus: 'PARSED' | 'RAW',
+  typeCarried: boolean,
 ): CadFieldChange[] {
   // A RAW update carries only text: it never overwrites a structured address with the
   // "SEE DISPATCH TEXT" placeholder. Its text becomes the narrative.
   const candidates: [UpdatedField, string][] =
     parseStatus === 'PARSED'
       ? [
-          ['incidentType', next.incidentType],
+          ...(typeCarried || current.cadParseStatus === 'RAW'
+            ? [['incidentType', next.incidentType] as [UpdatedField, string]]
+            : []),
           ['address', next.address],
           ['crossStreets', next.crossStreets],
           ['unitsRequested', next.unitsRequested.join(', ')],
@@ -191,7 +195,9 @@ async function writeUpdate(
   input: ResolvedUpdateInput,
   historyOnly: boolean,
 ): Promise<RecordUpdateResult | 'raced'> {
-  const changes = historyOnly ? [] : diffDispatch(current, input.dispatch, input.parseStatus);
+  const changes = historyOnly
+    ? []
+    : diffDispatch(current, input.dispatch, input.parseStatus, input.typeCarried);
   const updateId = updateIdFor(input.contentHash);
   const next = input.dispatch;
   const set: string[] = [
