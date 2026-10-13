@@ -90,7 +90,10 @@ async function completePendingRun(
   // self-test that already resolved.
   await clearCanaryPointer(ddb, tableName, deptId);
 
-  emitOutcomeMetric(METRIC_NAMESPACE, result === 'PASS' ? 'CanaryPassed' : 'CanaryFailed');
+  if (result === 'PASS') {
+    emitOutcomeMetric(METRIC_NAMESPACE, 'CanaryPassed');
+  }
+  emitEmf(METRIC_NAMESPACE, 'CanaryFailed', result === 'PASS' ? 0 : 1, [[]]);
   emitEmf(METRIC_NAMESPACE, 'CanaryLatencyMs', latencyMs, [[]], {}, 'Milliseconds');
   logInfo('alerting.canary.result', { deptId, testId: pointer.pendingTestId, result, latencyMs });
 }
