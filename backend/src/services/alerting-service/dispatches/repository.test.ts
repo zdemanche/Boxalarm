@@ -262,6 +262,35 @@ describe('createManualDispatch (real DynamoDB, AC2/AC4)', () => {
     expect(scan.Items).toHaveLength(1);
   });
 
+  it('re-pages a reused manual reference only after the window, including over a legacy lock with no expiresAt', async () => {
+    const deptId = toVerifiedDeptId({ deptId: 'NICHOLS' });
+    const externalId = `reuse-${randomUUID()}`;
+    const idempotencyKey = deriveIngressIdempotencyKey(deptId, 'MANUAL', externalId);
+    const at = (dispatchedAt: number, windowed: boolean) => ({
+      deptId,
+      dispatch: dispatchPayload(externalId),
+      idempotencyKey,
+      dispatchedAt,
+      ...(windowed ? { lockExpiresAt: dispatchedAt + 600 } : {}),
+    });
+
+    expect((await createManualDispatch(client, TABLE_NAME, at(1798100000, false))).outcome).toBe(
+      'created',
+    );
+    expect((await createManualDispatch(client, TABLE_NAME, at(1798100060, true))).outcome).toBe(
+      'duplicate',
+    );
+    expect((await createManualDispatch(client, TABLE_NAME, at(1798100601, true))).outcome).toBe(
+      'created',
+    );
+    expect((await createManualDispatch(client, TABLE_NAME, at(1798100661, true))).outcome).toBe(
+      'duplicate',
+    );
+    expect((await createManualDispatch(client, TABLE_NAME, at(1798101202, true))).outcome).toBe(
+      'created',
+    );
+  });
+
   it('creates distinct DISPATCH_ALERT items for two different externalDispatchId submissions (survivor coverage)', async () => {
     const deptId = toVerifiedDeptId({ deptId: 'NICHOLS' });
     const externalIdA = `survivor-a-${randomUUID()}`;

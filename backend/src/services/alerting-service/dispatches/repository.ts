@@ -114,9 +114,14 @@ export async function createManualDispatch(
           },
           ...(input.lockExpiresAt !== undefined
             ? {
-                // An expired lock is no lock: the same identity is now a new dispatch.
-                ConditionExpression: 'attribute_not_exists(idempotencyKey) OR expiresAt <= :now',
-                ExpressionAttributeValues: { ':now': dispatchedAt },
+                // An expired lock is no lock: the same identity is now a new dispatch. A lock
+                // written before locks carried expiresAt expires by its age.
+                ConditionExpression:
+                  'attribute_not_exists(idempotencyKey) OR expiresAt <= :now OR (attribute_not_exists(expiresAt) AND createdAt <= :cutoff)',
+                ExpressionAttributeValues: {
+                  ':now': dispatchedAt,
+                  ':cutoff': dispatchedAt - (input.lockExpiresAt - dispatchedAt),
+                },
               }
             : { ConditionExpression: 'attribute_not_exists(idempotencyKey)' }),
         },
