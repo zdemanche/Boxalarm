@@ -10,6 +10,9 @@ export interface AuditRouteArgs {
   env: string;
   platformTableName: pulumi.Input<string>;
   platformTableArn: pulumi.Input<string>;
+  incidentTableName: pulumi.Input<string>;
+  incidentTableArn: pulumi.Input<string>;
+  incidentCmkArn: pulumi.Input<string>;
   policyStoreArn: pulumi.Input<string>;
   policyStoreId: pulumi.Input<string>;
   logGroup: ServiceLogGroup;
@@ -41,16 +44,34 @@ export class AuditRoute extends pulumi.ComponentResource {
         // audit/handler.ts is Cedar-gated (ViewAuditTrail, CHIEF/ADMIN; security-web MINOR 12).
         environment: {
           AUDIT_TABLE_NAME: args.platformTableName,
+          INCIDENT_AUDIT_TABLE_NAME: args.incidentTableName,
           VERIFIED_PERMISSIONS_POLICY_STORE_ID: args.policyStoreId,
         },
         additionalPolicyStatements: pulumi
-          .all([args.platformTableArn, args.policyStoreArn])
-          .apply(([tableArn, policyStoreArn]) => [
+          .all([
+            args.platformTableArn,
+            args.incidentTableArn,
+            args.incidentCmkArn,
+            args.policyStoreArn,
+          ])
+          .apply(([tableArn, incidentTableArn, incidentCmkArn, policyStoreArn]) => [
             {
               Sid: "AuditQueryGsi3Only" as const,
               Effect: "Allow" as const,
               Action: ["dynamodb:Query"],
               Resource: `${tableArn}/index/GSI3`,
+            },
+            {
+              Sid: "AuditQueryIncidentGsi3Only" as const,
+              Effect: "Allow" as const,
+              Action: ["dynamodb:Query"],
+              Resource: `${incidentTableArn}/index/GSI3`,
+            },
+            {
+              Sid: "DecryptIncidentTable" as const,
+              Effect: "Allow" as const,
+              Action: ["kms:Decrypt"],
+              Resource: incidentCmkArn,
             },
             verifiedPermissionsPolicyStatement(policyStoreArn),
           ]),

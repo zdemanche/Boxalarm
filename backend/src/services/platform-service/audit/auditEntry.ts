@@ -3,9 +3,26 @@ import { TransactWriteCommand } from '@aws-sdk/lib-dynamodb';
 import { buildDeptScopedPk, type VerifiedDeptId } from '@boxalarm/dept-scope';
 import { logger } from './dynamoClient.js';
 
-export type AuditAction = 'CREATE' | 'UPDATE' | 'DELETE' | 'ARCHIVE';
+export type AuditAction =
+  | 'CREATE'
+  | 'UPDATE'
+  | 'DELETE'
+  | 'ARCHIVE'
+  | 'LOCK'
+  | 'UNLOCK'
+  | 'CREATE_SECONDARY'
+  | 'UPDATE_SECONDARY';
 
-const VALID_ACTIONS: readonly AuditAction[] = ['CREATE', 'UPDATE', 'DELETE', 'ARCHIVE'];
+const VALID_ACTIONS: readonly AuditAction[] = [
+  'CREATE',
+  'UPDATE',
+  'DELETE',
+  'ARCHIVE',
+  'LOCK',
+  'UNLOCK',
+  'CREATE_SECONDARY',
+  'UPDATE_SECONDARY',
+];
 
 export interface ChangedFieldDiff {
   readonly old: unknown;
@@ -35,6 +52,7 @@ export type AuditLogEntry = AuditTableKeyFields & {
   readonly actorId: string;
   readonly changedFields: Record<string, ChangedFieldDiff>;
   readonly ts: number;
+  readonly secondaryType?: string;
 };
 
 function deepEqual(a: unknown, b: unknown): boolean {
@@ -147,6 +165,7 @@ export function parseAuditLogEntryItem(item: Record<string, unknown>): AuditLogE
     ts,
     gsi3pk,
     gsi3sk,
+    secondaryType,
   } = item;
   if (
     typeof pk !== 'string' ||
@@ -175,6 +194,7 @@ export function parseAuditLogEntryItem(item: Record<string, unknown>): AuditLogE
     ts,
     gsi3pk,
     gsi3sk,
+    ...(typeof secondaryType === 'string' ? { secondaryType } : {}),
   };
 }
 
