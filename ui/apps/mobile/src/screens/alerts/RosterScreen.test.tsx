@@ -1,13 +1,17 @@
-import { act, render } from '@testing-library/react-native';
+import { act, fireEvent, render } from '@testing-library/react-native';
+import { useOptionalAuth } from '../../auth/AuthContext';
 import { mockAlertsRepository } from '../../features/alerts/mockAlertsRepository';
 import { RosterScreen } from './RosterScreen';
 
 const mockRouteParams: { dispatchId: string } = { dispatchId: '' };
 const mockIsFocused = { current: true };
+const mockNavigate = jest.fn();
 jest.mock('@react-navigation/native', () => ({
   useRoute: () => ({ params: mockRouteParams }),
   useIsFocused: () => mockIsFocused.current,
+  useNavigation: () => ({ navigate: mockNavigate }),
 }));
+jest.mock('../../auth/AuthContext', () => ({ useOptionalAuth: jest.fn() }));
 
 const mockConnectivity: { isOnline: boolean } = { isOnline: true };
 jest.mock('../../sync/ConnectivityContext', () => ({
@@ -28,6 +32,8 @@ jest.mock('../../features/alerts/apiAlertsRepository', () => ({
 }));
 
 beforeEach(async () => {
+  mockNavigate.mockClear();
+  (useOptionalAuth as jest.Mock).mockReturnValue({ roles: ['MEMBER'] });
   const { dispatchId } = await mockAlertsRepository.triggerSelfTest();
   mockRouteParams.dispatchId = dispatchId;
   mockConnectivity.isOnline = true;
@@ -64,12 +70,40 @@ test('a direct-to-scene response is labelled distinctly from a station response'
   expect(await findByText(/direct to scene/i)).toBeTruthy();
 });
 
-test('shows an honest offline state instead of a stale or empty roster - F1.7 requires connectivity', async () => {
+test('offline with nothing loaded yet says the roster will resume', async () => {
   mockConnectivity.isOnline = false;
   const { findByText, queryByText } = await render(<RosterScreen />);
 
   expect(await findByText(/offline.*will resume/i)).toBeTruthy();
   expect(queryByText('Jamie Rios')).toBeNull();
+});
+
+test('B2-229: going offline keeps the last roster on screen, marked not live with its time', async () => {
+  const screen = await render(<RosterScreen />);
+  expect(await screen.findByText('Jamie Rios')).toBeTruthy();
+
+  mockConnectivity.isOnline = false;
+  await screen.rerender(<RosterScreen />);
+
+  expect(screen.getByText('Jamie Rios')).toBeTruthy();
+  expect(
+    screen.getByText(/offline\. this roster was last updated .* and is not live/i),
+  ).toBeTruthy();
+});
+
+test('B2-070: an officer can open the riding board from the roster, a member cannot', async () => {
+  const member = await render(<RosterScreen />);
+  await member.findByText('Jamie Rios');
+  expect(member.queryByRole('button', { name: 'Riding assignments' })).toBeNull();
+  await member.unmount();
+
+  (useOptionalAuth as jest.Mock).mockReturnValue({ roles: ['OFFICER'] });
+  const officer = await render(<RosterScreen />);
+  await fireEvent.press(await officer.findByRole('button', { name: 'Riding assignments' }));
+
+  expect(mockNavigate).toHaveBeenCalledWith('RidingBoard', {
+    dispatchId: mockRouteParams.dispatchId,
+  });
 });
 
 test('a poll failure surfaces a stale-data indicator instead of silently keeping the old roster forever', async () => {

@@ -8,12 +8,14 @@ import * as syncManager from '../../sync/syncManager';
 import { mockChecksRepository } from './mockChecksRepository';
 import type {
   Apparatus,
+  ApparatusStatus,
   CheckPhotoSubmission,
   ChecklistRunSubmission,
   ChecklistTemplate,
   ChecksRepository,
   DefectSubmission,
   OpenDefect,
+  OpenDefects,
 } from './types';
 
 /** ChecksRepository plus a way for callers to know the last getApparatus() call was served from
@@ -101,14 +103,17 @@ export function useChecksRepository(): ChecksRepositoryWithFallbackFlag {
           : { ...result.value, cachedAt: result.cachedAt };
       },
 
-      async getOpenDefects(unitId: string): Promise<OpenDefect[]> {
+      async getOpenDefects(unitId: string): Promise<OpenDefects> {
         const tokens = authRef.current;
-        if (!tokens) return [];
+        if (!tokens) return { defects: [] };
         const response = await apiRequest(`apparatus/${encodeURIComponent(unitId)}`, tokens, {
           apiBaseUrl,
         });
-        const body = (await response.json()) as { openDefects?: OpenDefect[] };
-        return body.openDefects ?? [];
+        const body = (await response.json()) as {
+          openDefects?: OpenDefect[];
+          status?: ApparatusStatus;
+        };
+        return { defects: body.openDefects ?? [], unitStatus: body.status };
       },
 
       async submitChecklistRun(run: ChecklistRunSubmission): Promise<void> {

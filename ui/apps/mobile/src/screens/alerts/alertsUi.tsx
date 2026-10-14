@@ -14,6 +14,7 @@ import {
   type ViewProps,
   type ViewStyle,
 } from 'react-native';
+import { useOptionalAuth, type Role } from '../../auth/AuthContext';
 import { Screen, useTheme, type SurfaceTheme } from '../../components/ui';
 import { cardShadow } from '../../components/ui/theme';
 
@@ -197,3 +198,10 @@ export const ROW_SECONDARY = {
   fontSize: typeScale.body.size,
   lineHeight: typeScale.body.lineHeight,
 };
+
+const RIDING_BOARD_ROLES: readonly Role[] = ['OFFICER', 'CHIEF'];
+
+export function useCanAssignRiding(): boolean {
+  const roles = useOptionalAuth()?.roles ?? [];
+  return roles.some((role) => RIDING_BOARD_ROLES.includes(role));
+}

@@ -55,13 +55,14 @@ test('fetches My PPE from the real endpoint when authenticated and configured (E
   expect(ppe[0]?.ppeItemId).toBe('coat');
 });
 
-test('network failure falls back to mock equipment', async () => {
-  mockApiRequest.mockRejectedValue(new TypeError('Failed to fetch'));
+test('a network failure for a signed-in member surfaces as an error, never mock equipment', async () => {
+  const failure = new TypeError('Failed to fetch');
+  mockApiRequest.mockRejectedValue(failure);
 
   const { result } = await renderHook(() => useInventoryRepository());
-  const equipment = await result.current.getMyEquipment('MBR-1');
 
-  expect(equipment.length).toBeGreaterThan(0);
+  await expect(result.current.getMyEquipment('MBR-1')).rejects.toBe(failure);
+  await expect(result.current.getMyPpe('MBR-1')).rejects.toBe(failure);
 });
 
 test('a 403 surfaces as an error instead of silently falling back', async () => {

@@ -1,6 +1,6 @@
 import NetInfo from '@react-native-community/netinfo';
 import { act, fireEvent, render, screen } from '@testing-library/react-native';
-import { Alert, AppState, NativeModules, Platform } from 'react-native';
+import { AccessibilityInfo, Alert, AppState, NativeModules, Platform } from 'react-native';
 import Config from 'react-native-config';
 import { useOptionalAuth } from '../../auth/AuthContext';
 import { ApiError, apiRequest } from '../../lib/apiClient';
@@ -8,6 +8,7 @@ import { ConnectivityProvider } from '../../sync/ConnectivityContext';
 import { kvDelete } from '../../sync/kvStore';
 import * as store from '../../sync/outboxStore';
 import * as syncManager from '../../sync/syncManager';
+import { queueAlertResponse, saveLocalAnswer } from '../../features/alerts/alertResponses';
 import { AlertDetailScreen } from './AlertDetailScreen';
 
 // The API path: answers go through the SQLite outbox and the screen reports where they are.
@@ -19,9 +20,12 @@ jest.mock('../../auth/AuthContext', () => ({ useOptionalAuth: jest.fn() }));
 jest.mock('react-native-config', () => ({ __esModule: true, default: { API_BASE_URL: '' } }));
 jest.mock('@react-navigation/native', () => ({
   ...jest.requireActual('@react-navigation/native'),
-  useNavigation: () => ({ navigate: jest.fn() }),
+  useNavigation: () => ({ navigate: mockNavigate, isFocused: () => mockFocus.current }),
   useRoute: () => mockRoute,
 }));
+
+const mockNavigate = jest.fn();
+const mockFocus = { current: true };
 
 const mockRoute = {
   params: {
@@ -53,6 +57,8 @@ function flush(): Promise<void> {
 }
 
 beforeEach(async () => {
+  mockNavigate.mockClear();
+  mockFocus.current = true;
   const rows = await store.all();
   await Promise.all(rows.map((row) => store.remove(row.id)));
   (Config as unknown as { API_BASE_URL: string }).API_BASE_URL = 'https://api.example.com';
@@ -134,6 +140,37 @@ test('an answer the server accepted reads "Sent" and posts the ETA the member ch
   expect(posted.at(-1)).toMatchObject({ ackStatus: 'RESPONDING', assignedApparatusId: null });
   const eta = posted.at(-1)!.eta as number;
   expect(eta - Math.floor(Date.now() / 1000)).toBeGreaterThan(14 * 60);
+});
+
+test('tapping the answer already given again re-sends it with the ETA the member chose (B2-225)', async () => {
+  await renderScreen();
+  await answerResponding();
+  expect(await screen.findByText('Sent')).toBeTruthy();
+
+  await tap(/^Responding — .*Your answer/);
+
+  const eta = posted.at(-1)!.eta as number;
+  expect(eta - Math.floor(Date.now() / 1000)).toBeGreaterThan(14 * 60);
+  expect(posted.at(-1)).toMatchObject({ ackStatus: 'RESPONDING' });
+  expect(posted.at(-1)!.etaSource).not.toBe('NOT_GIVEN');
+});
+
+describe('riding assignments entry (B2-070)', () => {
+  test('an officer reaches the riding board from the call', async () => {
+    (useOptionalAuth as jest.Mock).mockReturnValue({ ...auth, roles: ['OFFICER'] });
+    await renderScreen();
+
+    await tap('Riding assignments');
+
+    expect(mockNavigate).toHaveBeenCalledWith('RidingBoard', { dispatchId: 'D-1' });
+  });
+
+  test('a member is not offered it', async () => {
+    (useOptionalAuth as jest.Mock).mockReturnValue({ ...auth, roles: ['MEMBER'] });
+    await renderScreen();
+
+    expect(screen.queryByRole('button', { name: 'Riding assignments' })).toBeNull();
+  });
 });
 
 test('offline, the answer is kept on the phone and never shown as sent', async () => {
@@ -419,6 +456,27 @@ describe('lock screen after answering (round 2 m2-2)', () => {
     addEventListener.mockImplementation(previous ?? (() => ({ remove: () => {} })));
   });
 
+  test('a stacked, answered call that is not focused never takes a newer call off the keyguard (B2-068)', async () => {
+    const listeners: ((status: string) => void)[] = [];
+    const addEventListener = AppState.addEventListener as unknown as jest.Mock;
+    const previous = addEventListener.getMockImplementation();
+    addEventListener.mockImplementation((type: string, listener: (status: string) => void) => {
+      if (type === 'change') listeners.push(listener);
+      return { remove: () => {} };
+    });
+    await renderScreen();
+    await tap(/^Not responding/);
+    expect(await screen.findByText('Sent')).toBeTruthy();
+
+    mockFocus.current = false;
+    await act(async () => {
+      listeners.forEach((listener) => listener('background'));
+    });
+
+    expect(setShowWhenLocked).not.toHaveBeenCalledWith(false);
+    addEventListener.mockImplementation(previous ?? (() => ({ remove: () => {} })));
+  });
+
   test('changing a sent answer to a different one while the phone is locked asks first (R3-1)', async () => {
     const alertSpy = jest.spyOn(Alert, 'alert').mockImplementation(() => {});
     await renderScreen();
@@ -452,4 +510,63 @@ describe('lock screen after answering (round 2 m2-2)', () => {
 
     expect(setShowWhenLocked).not.toHaveBeenCalledWith(false);
   });
+});
+
+test('an answer queued from a notification action while the screen is open is shown with its delivery state (B2-220 / B2-224)', async () => {
+  await kvDelete('alert-answer:MBR-1:D-1');
+  await renderScreen();
+  expect(screen.queryByText(/your response/i)).toBeNull();
+
+  await act(async () => {
+    await queueAlertResponse('D-1', 'RESPONDING', null);
+  });
+  await act(flush);
+
+  expect(await screen.findByText(/your response: responding/i)).toBeTruthy();
+  expect(await screen.findByText('Sent')).toBeTruthy();
+});
+
+test('a new answer never flashes "Not confirmed" or "Sent" before its delivery state is known (B2-221)', async () => {
+  const announce = jest.spyOn(AccessibilityInfo, 'announceForAccessibility').mockClear();
+  const announceWithOptions = jest
+    .spyOn(AccessibilityInfo, 'announceForAccessibilityWithOptions')
+    .mockClear();
+  mockNetInfoFetch.mockResolvedValue({ isConnected: false });
+  roster = [{ memberId: 'MBR-1', ackStatus: 'RESPONDING', eta: null }];
+  await renderScreen(false);
+
+  await tap(/^Responding — /);
+
+  const spoken = [...announce.mock.calls, ...announceWithOptions.mock.calls].map(([message]) =>
+    String(message),
+  );
+  expect(spoken.some((message) => /not confirmed|has been sent/i.test(message))).toBe(false);
+  expect(spoken.some((message) => /saved on this phone/i.test(message))).toBe(true);
+});
+
+test('an older answer save finishing late never replaces the newer answer on screen (B2-220)', async () => {
+  await kvDelete('alert-answer:MBR-1:D-1');
+  await renderScreen();
+
+  await act(async () => {
+    await saveLocalAnswer('MBR-1', 'D-1', {
+      ackStatus: 'NOT_RESPONDING',
+      eta: null,
+      outboxId: null,
+      answeredAt: 2_000,
+    });
+  });
+  expect(await screen.findByText(/your response: not responding/i)).toBeTruthy();
+
+  await act(async () => {
+    await saveLocalAnswer('MBR-1', 'D-1', {
+      ackStatus: 'RESPONDING',
+      eta: null,
+      outboxId: null,
+      answeredAt: 1_000,
+    });
+  });
+
+  expect(screen.queryByText(/your response: responding/i)).toBeNull();
+  expect(screen.getByText(/your response: not responding/i)).toBeTruthy();
 });

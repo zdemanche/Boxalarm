@@ -143,6 +143,39 @@ test('a foreground press on the Android critical notification navigates immediat
   );
 });
 
+test('a press on a CAD update notification opens the call with its real incident type and address (B2-222)', () => {
+  let foregroundCallback: ((event: unknown) => void) | undefined;
+  (notifee.onForegroundEvent as jest.Mock).mockImplementationOnce((cb) => {
+    foregroundCallback = cb;
+    return () => {};
+  });
+
+  subscribePushNotificationRouting();
+  foregroundCallback?.({
+    type: EventType.PRESS,
+    detail: {
+      notification: {
+        data: {
+          category: 'dispatch_update',
+          dispatchId: 'DISP-UPD',
+          incidentType: 'STRUCTURE FIRE',
+          address: '12 Main St',
+          receivedAt: '2000',
+        },
+      },
+    },
+  });
+
+  expect(navigateToAlertDetail).toHaveBeenCalledWith(
+    'DISP-UPD',
+    expect.objectContaining({
+      dispatchId: 'DISP-UPD',
+      incidentType: 'STRUCTURE FIRE',
+      address: '12 Main St',
+    }),
+  );
+});
+
 test("an officer's mutual-aid prompt opens the prompt screen, not the call's alert screen", () => {
   let foregroundCallback: ((event: unknown) => void) | undefined;
   (notifee.onForegroundEvent as jest.Mock).mockImplementationOnce((cb) => {
@@ -453,6 +486,31 @@ describe('returning to the app while a page is ringing (m2-1 / K3-5)', () => {
     expect(navigateToAlertDetail).toHaveBeenCalledWith(
       'NEWEST',
       expect.objectContaining({ address: 'NEWEST Main St' }),
+    );
+  });
+
+  test('tone 2 of a call already routed routes again; the 60 s cap re-post of the same tone does not (B2-219)', async () => {
+    const tone = (toneSequence: string, date: number) => {
+      const entry = page('RETONED', date);
+      return {
+        ...entry,
+        notification: { ...entry.notification, data: { ...entry.notification.data, toneSequence } },
+      };
+    };
+    const showing = notifee.getDisplayedNotifications as jest.Mock;
+
+    showing.mockResolvedValue([tone('1', 1_000)]);
+    await routeToRingingPage();
+    showing.mockResolvedValue([tone('1', 61_000)]);
+    await routeToRingingPage();
+    expect(navigateToAlertDetail).toHaveBeenCalledTimes(1);
+
+    showing.mockResolvedValue([tone('2', 180_000)]);
+    await routeToRingingPage();
+    expect(navigateToAlertDetail).toHaveBeenCalledTimes(2);
+    expect(navigateToAlertDetail).toHaveBeenLastCalledWith(
+      'RETONED',
+      expect.objectContaining({ toneSequence: 2 }),
     );
   });
 

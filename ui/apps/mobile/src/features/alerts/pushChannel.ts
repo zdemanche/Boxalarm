@@ -56,7 +56,8 @@ export async function currentCriticalChannelId(): Promise<string> {
     return id;
   } catch {
     if (!lastKnownCriticalId) {
-      lastKnownCriticalId = (await kvGet<string>(LAST_CRITICAL_CHANNEL_KEY))?.value ?? null;
+      lastKnownCriticalId =
+        (await kvGet<string>(LAST_CRITICAL_CHANNEL_KEY).catch(() => null))?.value ?? null;
     }
     return lastKnownCriticalId ?? CRITICAL_CHANNEL_ID;
   }
@@ -159,11 +160,18 @@ async function createNotificationChannels(options: EnsureChannelsOptions): Promi
     });
   }
 
-  await notifee.createChannel({
-    id: DEFAULT_CHANNEL_ID,
-    name: 'Notifications',
-    importance: AndroidImportance.DEFAULT,
-    bypassDnd: false,
-  });
+  try {
+    await notifee.createChannel({
+      id: DEFAULT_CHANNEL_ID,
+      name: 'Notifications',
+      importance: AndroidImportance.DEFAULT,
+      bypassDnd: false,
+    });
+  } catch (error) {
+    console.error(
+      '[push] creating the default channel failed; the critical channel is unaffected',
+      error,
+    );
+  }
   return criticalId;
 }

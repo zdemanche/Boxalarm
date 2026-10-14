@@ -19,12 +19,12 @@ beforeEach(() => {
 test('submitting a valid manual entry navigates to the new dispatch roster', async () => {
   const { getByLabelText, findByRole } = await render(<ManualDispatchEntryScreen />);
 
-  await fireEvent.changeText(getByLabelText('Incident type'), 'Structure fire');
-  await fireEvent.changeText(getByLabelText('Address'), '12 Elm St');
-  await fireEvent.changeText(getByLabelText('Cross streets'), 'Main & Elm');
+  await fireEvent.changeText(getByLabelText('Incident type (required)'), 'Structure fire');
+  await fireEvent.changeText(getByLabelText('Address (required)'), '12 Elm St');
+  await fireEvent.changeText(getByLabelText('Cross streets (required)'), 'Main & Elm');
   await fireEvent.press(await findByRole('radio', { name: 'Nichols' }));
-  await fireEvent.changeText(getByLabelText('Narrative'), 'Smoke showing');
-  await fireEvent.changeText(getByLabelText('Operator-entered reference'), 'ext-1');
+  await fireEvent.changeText(getByLabelText('Narrative (required)'), 'Smoke showing');
+  await fireEvent.changeText(getByLabelText('Operator-entered reference (required)'), 'ext-1');
   await fireEvent.press(await findByRole('button', { name: 'Submit dispatch' }));
 
   expect(mockNavigate).toHaveBeenCalledWith('Roster', {
@@ -40,10 +40,12 @@ test('a 409 says no new page was sent and that a new call needs a different refe
     );
   const { getByLabelText, findByRole, findByText } = await render(<ManualDispatchEntryScreen />);
 
-  await fireEvent.changeText(getByLabelText('Incident type'), 'Structure fire');
-  await fireEvent.changeText(getByLabelText('Address'), '12 Elm St');
+  await fireEvent.changeText(getByLabelText('Incident type (required)'), 'Structure fire');
+  await fireEvent.changeText(getByLabelText('Address (required)'), '12 Elm St');
+  await fireEvent.changeText(getByLabelText('Cross streets (required)'), 'Main & Elm');
+  await fireEvent.changeText(getByLabelText('Narrative (required)'), 'Smoke showing');
   await fireEvent.press(await findByRole('radio', { name: 'Nichols' }));
-  await fireEvent.changeText(getByLabelText('Operator-entered reference'), 'ext-1');
+  await fireEvent.changeText(getByLabelText('Operator-entered reference (required)'), 'ext-1');
   await fireEvent.press(await findByRole('button', { name: 'Submit dispatch' }));
 
   expect(
@@ -52,6 +54,47 @@ test('a 409 says no new page was sent and that a new call needs a different refe
     ),
   ).toBeTruthy();
   expect(mockNavigate).not.toHaveBeenCalled();
+  submit.mockRestore();
+});
+
+test('B2-230: blank cross streets, narrative or reference is refused on the phone, in plain words, before anything is sent', async () => {
+  const submit = jest.spyOn(mockAlertsRepository, 'submitManualDispatch');
+  const { getByLabelText, findByRole, findByText } = await render(<ManualDispatchEntryScreen />);
+
+  await fireEvent.changeText(getByLabelText('Incident type (required)'), 'Structure fire');
+  await fireEvent.changeText(getByLabelText('Address (required)'), '12 Elm St');
+  await fireEvent.press(await findByRole('radio', { name: 'Nichols' }));
+  await fireEvent.press(await findByRole('button', { name: 'Submit dispatch' }));
+
+  expect(await findByText('Enter the cross streets.')).toBeTruthy();
+  expect(await findByText('Enter the narrative.')).toBeTruthy();
+  expect(await findByText('Enter a reference for this call.')).toBeTruthy();
+  expect(submit).not.toHaveBeenCalled();
+  expect(mockNavigate).not.toHaveBeenCalled();
+  submit.mockRestore();
+});
+
+test('a 400 from the server maps its field errors onto the fields', async () => {
+  const submit = jest.spyOn(mockAlertsRepository, 'submitManualDispatch').mockRejectedValueOnce(
+    new ApiError({
+      type: 'about:blank',
+      title: 'Bad Request',
+      status: 400,
+      traceId: 't',
+      errors: [{ field: 'externalDispatchId', message: "cannot contain '#'" }],
+    } as never),
+  );
+  const { getByLabelText, findByRole, findByText } = await render(<ManualDispatchEntryScreen />);
+
+  await fireEvent.changeText(getByLabelText('Incident type (required)'), 'Structure fire');
+  await fireEvent.changeText(getByLabelText('Address (required)'), '12 Elm St');
+  await fireEvent.changeText(getByLabelText('Cross streets (required)'), 'Main & Elm');
+  await fireEvent.changeText(getByLabelText('Narrative (required)'), 'Smoke showing');
+  await fireEvent.changeText(getByLabelText('Operator-entered reference (required)'), 'a#b');
+  await fireEvent.press(await findByRole('radio', { name: 'Nichols' }));
+  await fireEvent.press(await findByRole('button', { name: 'Submit dispatch' }));
+
+  expect(await findByText("cannot contain '#'")).toBeTruthy();
   submit.mockRestore();
 });
 
@@ -69,11 +112,11 @@ test('R3-A: the locality choice is required, and "Other town" sends the typed to
     <ManualDispatchEntryScreen />,
   );
 
-  await fireEvent.changeText(await findByLabelText('Incident type'), 'Structure fire');
-  await fireEvent.changeText(getByLabelText('Address'), '123 Main St');
-  await fireEvent.changeText(getByLabelText('Cross streets'), 'Main & Elm');
-  await fireEvent.changeText(getByLabelText('Narrative'), 'Mutual aid');
-  await fireEvent.changeText(getByLabelText('Operator-entered reference'), 'ext-2');
+  await fireEvent.changeText(await findByLabelText('Incident type (required)'), 'Structure fire');
+  await fireEvent.changeText(getByLabelText('Address (required)'), '123 Main St');
+  await fireEvent.changeText(getByLabelText('Cross streets (required)'), 'Main & Elm');
+  await fireEvent.changeText(getByLabelText('Narrative (required)'), 'Mutual aid');
+  await fireEvent.changeText(getByLabelText('Operator-entered reference (required)'), 'ext-2');
 
   await fireEvent.press(await findByRole('button', { name: 'Submit dispatch' }));
   expect(await findByText('Choose the town or village.')).toBeTruthy();
@@ -96,11 +139,13 @@ test('R3-A: the locality choice is required, and "Other town" sends the typed to
 test('M1: a successful submit resets the form, so the next call starts with no town chosen', async () => {
   const { getByLabelText, findByRole, findAllByRole } = await render(<ManualDispatchEntryScreen />);
 
-  await fireEvent.changeText(getByLabelText('Incident type'), 'Structure fire');
-  await fireEvent.changeText(getByLabelText('Address'), '12 Elm St');
+  await fireEvent.changeText(getByLabelText('Incident type (required)'), 'Structure fire');
+  await fireEvent.changeText(getByLabelText('Address (required)'), '12 Elm St');
+  await fireEvent.changeText(getByLabelText('Cross streets (required)'), 'Main & Elm');
+  await fireEvent.changeText(getByLabelText('Narrative (required)'), 'Smoke showing');
   await fireEvent.changeText(getByLabelText(/^Units requested/), 'E1, L1');
   await fireEvent.press(await findByRole('radio', { name: 'Trumbull' }));
-  await fireEvent.changeText(getByLabelText('Operator-entered reference'), 'ext-3');
+  await fireEvent.changeText(getByLabelText('Operator-entered reference (required)'), 'ext-3');
   await fireEvent.press(await findByRole('button', { name: 'Submit dispatch' }));
   expect(mockNavigate).toHaveBeenCalledTimes(1);
 
@@ -110,10 +155,10 @@ test('M1: a successful submit resets the form, so the next call starts with no t
   for (const radio of radios) {
     expect(radio.props.accessibilityState).toEqual({ checked: false });
   }
-  expect(getByLabelText('Incident type').props.value).toBe('');
-  expect(getByLabelText('Address').props.value).toBe('');
+  expect(getByLabelText('Incident type (required)').props.value).toBe('');
+  expect(getByLabelText('Address (required)').props.value).toBe('');
   expect(getByLabelText(/^Units requested/).props.value).toBe('');
-  expect(getByLabelText('Operator-entered reference').props.value).toBe('');
+  expect(getByLabelText('Operator-entered reference (required)').props.value).toBe('');
 });
 
 describe('m8: locality choice accessibility', () => {
@@ -138,7 +183,12 @@ describe('m8: locality choice accessibility', () => {
       .mockImplementation(() => undefined);
     // react-native's jest setup already mocks it: drop calls made by earlier tests.
     announce.mockClear();
-    const { findByRole, findByText } = await render(<ManualDispatchEntryScreen />);
+    const { getByLabelText, findByRole, findByText } = await render(<ManualDispatchEntryScreen />);
+    await fireEvent.changeText(getByLabelText('Incident type (required)'), 'Structure fire');
+    await fireEvent.changeText(getByLabelText('Address (required)'), '12 Elm St');
+    await fireEvent.changeText(getByLabelText('Cross streets (required)'), 'Main & Elm');
+    await fireEvent.changeText(getByLabelText('Narrative (required)'), 'Smoke showing');
+    await fireEvent.changeText(getByLabelText('Operator-entered reference (required)'), 'ext-4');
 
     await fireEvent.press(await findByRole('button', { name: 'Submit dispatch' }));
 

@@ -11,6 +11,7 @@ import {
   clearLocalAnswer,
   etaFor,
   getLocalAnswer,
+  onLocalAnswerSaved,
   saveLocalAnswer,
   type EtaGiven,
   type ResponseAnswer,
@@ -172,6 +173,7 @@ export function useAlertResponse(
     null,
   );
   const touchedRef = useRef(false);
+  const answeredAtRef = useRef(0);
 
   const loadRoster = useCallback(
     async (checkedAfter: string | null): Promise<void> => {
@@ -193,10 +195,12 @@ export function useAlertResponse(
   useEffect(() => {
     let cancelled = false;
     touchedRef.current = false;
+    answeredAtRef.current = 0;
     setLocal(null);
     setServer(null);
     void getLocalAnswer(memberId, dispatchId).then((saved) => {
-      if (cancelled || !saved || touchedRef.current) return;
+      if (cancelled || !saved || touchedRef.current || answeredAtRef.current > 0) return;
+      answeredAtRef.current = saved.answeredAt;
       setLocal({
         answer: { ackStatus: saved.ackStatus, eta: saved.eta },
         outboxId: saved.outboxId,
@@ -205,8 +209,24 @@ export function useAlertResponse(
       });
     });
     void loadRoster(null);
+    const unsubscribe = onLocalAnswerSaved((savedMember, savedDispatch, saved) => {
+      if (cancelled || savedMember !== memberId || savedDispatch !== dispatchId) return;
+      if (saved.answeredAt < answeredAtRef.current) return;
+      answeredAtRef.current = saved.answeredAt;
+      setLocal((current) =>
+        current?.saving
+          ? current
+          : {
+              answer: { ackStatus: saved.ackStatus, eta: saved.eta },
+              outboxId: saved.outboxId,
+              saving: false,
+              fresh: true,
+            },
+      );
+    });
     return () => {
       cancelled = true;
+      unsubscribe();
     };
   }, [dispatchId, memberId, loadRoster]);
 
@@ -248,7 +268,12 @@ export function useAlertResponse(
     delivery = isOnline ? 'sending' : 'queued';
   } else if (local) {
     answer = local.answer;
-    delivery = deliveryFor(local.outboxId, item.state, isOnline, serverConfirms, item.lastError);
+    delivery =
+      local.fresh && local.outboxId !== null && item.state === 'NOT_QUEUED'
+        ? isOnline
+          ? 'sending'
+          : 'queued'
+        : deliveryFor(local.outboxId, item.state, isOnline, serverConfirms, item.lastError);
     const stillQueued =
       item.state === 'QUEUED' ||
       item.state === 'SYNCING' ||
@@ -298,6 +323,7 @@ export function useAlertResponse(
   const respond = useCallback(
     async (ackStatus: ResponseAnswer, chosenEta?: EtaGiven | null) => {
       touchedRef.current = true;
+      answeredAtRef.current = Date.now();
       const eta = etaFor(ackStatus, chosenEta);
       // Instant selected state (a11y-spec §3.1 #4) before anything touches storage or network.
       setLocal({

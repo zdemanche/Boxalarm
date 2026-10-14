@@ -16,6 +16,7 @@ jest.mock('react-native-config', () => ({
 jest.mock('@react-navigation/native', () => ({
   useRoute: () => ({ params: { dispatchId: 'D-1' } }),
   useIsFocused: () => true,
+  useNavigation: () => ({ navigate: jest.fn() }),
 }));
 jest.mock('../../sync/ConnectivityContext', () => ({
   useConnectivity: () => ({ isOnline: true }),

@@ -15,8 +15,10 @@ import { dispatchNotificationId, mutualAidNotificationId } from './notificationI
 import {
   categoryFromPushData,
   CRITICAL_CHANNEL_ID,
+  currentCriticalChannelId,
   DEFAULT_CHANNEL_ID,
   ensureNotificationChannels,
+  type PushCategory,
 } from './pushChannel';
 
 export interface PushMessageData {
@@ -40,7 +42,7 @@ async function criticalChannel(): Promise<string> {
     return await ensureNotificationChannels();
   } catch (error) {
     console.error('[push] ensuring the critical channel before a page failed', error);
-    return CRITICAL_CHANNEL_ID;
+    return await currentCriticalChannelId().catch(() => CRITICAL_CHANNEL_ID);
   }
 }
 
@@ -83,6 +85,16 @@ export async function silenceMutualAidNotification(dispatchId: string): Promise<
   }
 }
 
+function pagePayloadFor(
+  category: PushCategory,
+  data: PushMessageData | undefined,
+  receivedAt: number,
+): ReturnType<typeof alertPayloadFromPushData> {
+  if (category === 'digest') return null;
+  if (category === 'dispatch_update' && !data?.address) return null;
+  return alertPayloadFromPushData(data, receivedAt);
+}
+
 export async function displayPushNotification(
   data: PushMessageData | undefined,
   receivedAt: number = Date.now(),
@@ -93,7 +105,8 @@ export async function displayPushNotification(
   const isCritical = category === 'dispatch';
   const channelId = isCritical ? await criticalChannel() : DEFAULT_CHANNEL_ID;
   // The page travels with the notification, so a tap opens the address with no fetch.
-  const payload = isCritical ? alertPayloadFromPushData(data, receivedAt) : null;
+  const pagePayload = pagePayloadFor(category, data, receivedAt);
+  const payload = isCritical ? pagePayload : null;
   // The officer's mutual-aid prompt: its own notification (never replacing the call's page) with
   // no answer buttons - a tap opens the prompt, where the call is confirmed.
   const prompt = payload?.mutualAidPrompt === true;
@@ -108,7 +121,7 @@ export async function displayPushNotification(
     title: data?.title ?? (isCritical ? 'Dispatch alert' : 'Notification'),
     body: data?.body,
     data: {
-      ...(payload ? alertPayloadToNotificationData(payload) : {}),
+      ...(pagePayload ? alertPayloadToNotificationData(pagePayload) : {}),
       dispatchId: data?.dispatchId ?? '',
       category,
     },
@@ -213,11 +226,13 @@ export async function handleBackgroundPushMessage(
   if (categoryFromPushData(data) !== 'dispatch') return;
 
   try {
-    const channelId = await ensureNotificationChannels();
+    const channelId = await criticalChannel();
+    const payload = alertPayloadFromPushData(data, receivedAt);
     await notifee.displayNotification({
       title: 'Dispatch alert',
       body: 'Open Boxalarm for details.',
       data: {
+        ...(payload ? alertPayloadToNotificationData(payload) : {}),
         dispatchId: typeof data?.dispatchId === 'string' ? data.dispatchId : '',
         category: 'dispatch',
       },

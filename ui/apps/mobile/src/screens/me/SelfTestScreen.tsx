@@ -161,6 +161,7 @@ export function SelfTestScreen() {
   };
 
   const failing = (readiness.items ?? []).filter((item) => item.status !== 'ok');
+  const textReachedYou = run?.channelResults.SMS?.ok === true && !run.eligibilityReason;
   const finished = timedOut || (run !== null && run.overallResult !== 'RUNNING');
 
   const bodyText = { color: theme.fg, fontSize: typeScale.body.size };
@@ -312,8 +313,10 @@ export function SelfTestScreen() {
                     : 'Turn the alarm volume up - pages ring on the alarm volume, not the ringer - and check Bedtime / Do Not Disturb lets Boxalarm through.'}
                 </Text>
                 <Text style={bodyText}>
-                  • Run the test again. If it still doesn't ring, tell your officer - text and voice
-                  pages still reach you, and radio tone-out is unchanged.
+                  • Run the test again. If it still doesn&apos;t ring, tell your officer
+                  {textReachedYou
+                    ? ' - the test text reached your number, and radio tone-out is unchanged.'
+                    : ' now - text pages are not confirmed for you, so add or fix your phone number. Radio tone-out is unchanged.'}
                 </Text>
               </View>
             ) : null}

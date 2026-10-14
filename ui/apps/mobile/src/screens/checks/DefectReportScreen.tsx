@@ -1,12 +1,10 @@
 import { radiusScale, spacing, typeScale } from '@boxalarm/design-tokens';
 import { useNavigation, useRoute, type NavigationProp } from '@react-navigation/native';
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { AccessibilityInfo, Text, TextInput, View } from 'react-native';
-import { useOptionalAuth } from '../../auth/AuthContext';
 import { Button, Card, Screen, useTheme } from '../../components/ui';
 import { useChecksRepository } from '../../features/checks/apiChecksRepository';
-import { SERVICE_STATUS_ROLES } from '../../features/checks/serviceStatusApi';
-import type { ApparatusStatus, DefectSeverity } from '../../features/checks/types';
+import type { DefectSeverity } from '../../features/checks/types';
 import type { ChecksStackParamList } from '../../navigation/ChecksStack';
 import { capturePhoto, type CapturedPhoto } from '../../sync/photoCapture';
 import { ROW_TEXT_SIZE } from './fieldText';
@@ -26,13 +24,9 @@ function newIdempotencyKey(): string {
 export function DefectReportScreen() {
   const route = useRoute();
   const navigation = useNavigation<NavigationProp<ChecksStackParamList>>();
-  // Despite the field name, this is the apparatus's unitId (ApparatusPickerScreen navigates here
-  // with `apparatusId: item.unitId`) - the same value ServiceStatusScreen's `unitId` param wants.
   const apparatusId = (route.params as { apparatusId: string }).apparatusId;
   const theme = useTheme();
   const repository = useChecksRepository();
-  const roles = useOptionalAuth()?.roles ?? [];
-  const canChangeServiceStatus = SERVICE_STATUS_ROLES.some((role) => roles.includes(role));
   const [description, setDescription] = useState('');
   const [severity, setSeverity] = useState<DefectSeverity>('MINOR');
   const [submitted, setSubmitted] = useState(false);
@@ -40,33 +34,9 @@ export function DefectReportScreen() {
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [photo, setPhoto] = useState<CapturedPhoto | null>(null);
   const [photoError, setPhotoError] = useState<string | null>(null);
-  // So the OUT_OF_SERVICE handoff (#122) can pre-fill ServiceStatusScreen's `status` param
-  // without the officer re-entering or re-picking the unit; null until it loads (or if it can't -
-  // e.g. offline), in which case the handoff falls back to assuming IN_SERVICE rather than
-  // blocking the handoff entirely.
-  const [currentStatus, setCurrentStatus] = useState<ApparatusStatus | null>(null);
   // Stable across retries of the same report, so a resend after a real failure can't create a
   // duplicate defect record server-side (same pattern as CheckRunnerScreen's idempotencyKey).
   const [idempotencyKey] = useState(newIdempotencyKey);
-
-  useEffect(() => {
-    if (!canChangeServiceStatus) return;
-    let cancelled = false;
-    repository
-      .getApparatus()
-      .then((list) => {
-        if (cancelled) return;
-        const match = list.find((a) => a.unitId === apparatusId);
-        if (match) setCurrentStatus(match.status);
-      })
-      .catch(() => {
-        // Offline or unreachable: the handoff below falls back to assuming IN_SERVICE rather
-        // than hiding it - the photo/offline defect-filing path above is unaffected either way.
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [canChangeServiceStatus, repository, apparatusId]);
 
   const handleAddPhoto = async () => {
     setPhotoError(null);
@@ -109,11 +79,6 @@ export function DefectReportScreen() {
   };
 
   if (submitted) {
-    // #122: an OUT_OF_SERVICE report's natural next step is taking the unit out of service -
-    // offered inline, with the unit already filled in, instead of sending the officer back
-    // through the apparatus picker to find it again. Not shown once it's already OOS.
-    const offerHandoff =
-      severity === 'OUT_OF_SERVICE' && canChangeServiceStatus && currentStatus !== 'OUT_OF_SERVICE';
     return (
       <Screen>
         <Card>
@@ -134,26 +99,13 @@ export function DefectReportScreen() {
           <Text style={{ color: theme.fgMuted, fontSize: typeScale.body.size }}>
             {apparatusId} · {SEVERITIES.find((option) => option.value === severity)?.label}
           </Text>
+          {severity === 'OUT_OF_SERVICE' ? (
+            <Text style={{ color: theme.fg, fontSize: typeScale.body.size }}>
+              This report asks for {apparatusId} to be taken out of service.
+            </Text>
+          ) : null}
         </Card>
-        {offerHandoff ? (
-          <Button
-            label={`Take ${apparatusId} out of service now`}
-            variant="danger"
-            fullWidth
-            onPress={() =>
-              navigation.navigate('ServiceStatus', {
-                unitId: apparatusId,
-                status: currentStatus ?? 'IN_SERVICE',
-              })
-            }
-          />
-        ) : null}
-        <Button
-          label="Back"
-          variant={offerHandoff ? 'secondary' : 'primary'}
-          fullWidth
-          onPress={() => navigation.goBack()}
-        />
+        <Button label="Back" fullWidth onPress={() => navigation.goBack()} />
       </Screen>
     );
   }

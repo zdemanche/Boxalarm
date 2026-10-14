@@ -85,3 +85,19 @@ test('a token fetch that never answers fails with ApiTimeoutError instead of han
   await assertion;
   expect(fetchSpy).not.toHaveBeenCalled();
 });
+
+test.each([
+  [401, 'Unauthorized'],
+  [403, 'Forbidden'],
+])('the API Gateway %i { message } body still carries the HTTP status', async (status, message) => {
+  globalThis.fetch = jest.fn(
+    async () => new Response(JSON.stringify({ message }), { status }),
+  ) as unknown as typeof fetch;
+
+  const error = await apiRequest('x', tokens, { apiBaseUrl: 'https://api.test' }).catch(
+    (caught: unknown) => caught,
+  );
+
+  expect(error).toBeInstanceOf(ApiError);
+  expect((error as ApiError).problem).toMatchObject({ status, title: message, traceId: 'unknown' });
+});

@@ -157,7 +157,7 @@ test('give back releases a claimed position, returning it to Open (#146/#148)', 
   const releaseSpy = jest
     .spyOn(mockScheduleRepository, 'releasePosition')
     .mockResolvedValue(undefined);
-  const { findByText, queryByText } = await render(<ShiftDetailScreen />);
+  const { findByText, queryByText, queryByLabelText } = await render(<ShiftDetailScreen />);
   await findByText('Claimed by you');
   const giveBackButton = await findByText('Give back');
 
@@ -167,6 +167,9 @@ test('give back releases a claimed position, returning it to Open (#146/#148)', 
 
   expect(await findByText('Open')).toBeTruthy();
   expect(queryByText('Claimed by you')).toBeNull();
+  expect(queryByText('Give back')).toBeNull();
+  expect(queryByText('Propose swap')).toBeNull();
+  expect(queryByLabelText('Propose swap to member ID')).toBeNull();
   expect(releaseSpy).toHaveBeenCalledWith('SHIFT-0512', 'DRIVER');
   releaseSpy.mockRestore();
   shiftSpy.mockRestore();

@@ -483,3 +483,202 @@ test('a RAW (VERIFY) CAD dispatch shows the VERIFY banner and expands on the dis
   expect(await findByText(/the CAD message could not be read automatically/)).toBeTruthy();
   expect(await findByText('SMOKE AT THE OLD MILL')).toBeTruthy();
 });
+
+test('the same call opened again with a CAD update shows the corrected address and tone 2 (B2-067)', async () => {
+  const base = {
+    dispatchId: PAGE.dispatchId,
+    incidentType: 'Structure fire',
+    address: '21 Main St',
+    crossStreets: '',
+    mapLink: null,
+    narrative: 'Smoke showing',
+    isSelfTest: false,
+  };
+  const getDispatch = jest
+    .spyOn(mockAlertsRepository, 'getDispatch')
+    .mockResolvedValueOnce({
+      ...base,
+      toneLadder: {
+        currentToneSequence: 1,
+        status: 'ACTIVE',
+        nextToneAt: null,
+        predicateGaps: [],
+      } as never,
+    })
+    .mockResolvedValue({
+      ...base,
+      address: '99 Oak Ave',
+      toneLadder: {
+        currentToneSequence: 2,
+        status: 'ACTIVE',
+        nextToneAt: null,
+        predicateGaps: [],
+      } as never,
+      updates: [{ updateId: 'U1', receivedAt: 1_700_000_000, summary: 'Address corrected' }],
+    });
+  mockRouteParams.dispatchId = PAGE.dispatchId;
+  mockRouteParams.payload = PAGE;
+
+  const { findByText, rerender } = await render(<AlertDetailScreen />);
+  expect(await findByText('21 Main St')).toBeTruthy();
+  expect(await findByText(/^TONE 1/)).toBeTruthy();
+
+  mockRouteParams.payload = {
+    ...PAGE,
+    address: '99 Oak Ave',
+    toneSequence: 2,
+    receivedAt: PAGE.receivedAt + 60_000,
+  };
+  await act(async () => {
+    rerender(<AlertDetailScreen />);
+  });
+
+  expect(await findByText('99 Oak Ave')).toBeTruthy();
+  expect(await findByText(/^TONE 2/)).toBeTruthy();
+  expect(await findByText('CAD updates')).toBeTruthy();
+  expect(getDispatch).toHaveBeenCalledTimes(2);
+});
+
+test('a refreshed page address beats the older detail while the refetch has not succeeded (B2-067)', async () => {
+  const base = {
+    dispatchId: PAGE.dispatchId,
+    incidentType: 'Structure fire',
+    address: '21 Main St',
+    crossStreets: '',
+    mapLink: null,
+    narrative: 'Smoke showing',
+    isSelfTest: false,
+  };
+  jest
+    .spyOn(mockAlertsRepository, 'getDispatch')
+    .mockResolvedValueOnce(base)
+    .mockRejectedValue(new TypeError('Network request failed'));
+  jest.spyOn(console, 'warn').mockImplementation(() => {});
+  mockRouteParams.dispatchId = PAGE.dispatchId;
+  mockRouteParams.payload = PAGE;
+
+  const { findByText, rerender } = await render(<AlertDetailScreen />);
+  expect(await findByText('21 Main St')).toBeTruthy();
+
+  mockRouteParams.payload = { ...PAGE, address: '99 Oak Ave', receivedAt: PAGE.receivedAt + 1 };
+  await act(async () => {
+    rerender(<AlertDetailScreen />);
+  });
+
+  expect(await findByText('99 Oak Ave')).toBeTruthy();
+});
+
+test('tapping the older page after a CAD update never brings the old address back (B2-067)', async () => {
+  const base = {
+    dispatchId: PAGE.dispatchId,
+    incidentType: 'Structure fire',
+    address: '21 Main St',
+    crossStreets: '',
+    mapLink: null,
+    narrative: 'Smoke showing',
+    isSelfTest: false,
+  };
+  jest
+    .spyOn(mockAlertsRepository, 'getDispatch')
+    .mockResolvedValueOnce(base)
+    .mockResolvedValueOnce({ ...base, address: '99 Oak Ave' })
+    .mockRejectedValue(new TypeError('Network request failed'));
+  jest.spyOn(console, 'warn').mockImplementation(() => {});
+  mockRouteParams.dispatchId = PAGE.dispatchId;
+  mockRouteParams.payload = PAGE;
+
+  const { findByText, queryByText, rerender } = await render(<AlertDetailScreen />);
+  expect(await findByText('21 Main St')).toBeTruthy();
+
+  mockRouteParams.payload = {
+    ...PAGE,
+    address: '99 Oak Ave',
+    receivedAt: PAGE.receivedAt + 60_000,
+  };
+  await act(async () => {
+    rerender(<AlertDetailScreen />);
+  });
+  expect(await findByText('99 Oak Ave')).toBeTruthy();
+
+  mockRouteParams.payload = PAGE;
+  await act(async () => {
+    rerender(<AlertDetailScreen />);
+  });
+
+  expect(await findByText('99 Oak Ave')).toBeTruthy();
+  expect(queryByText('21 Main St')).toBeNull();
+});
+
+describe('tone ordering (B2-067)', () => {
+  const base = {
+    dispatchId: PAGE.dispatchId,
+    incidentType: 'Structure fire',
+    address: '21 Main St',
+    crossStreets: '',
+    mapLink: null,
+    narrative: 'Smoke showing',
+    isSelfTest: false,
+  };
+  const ladder = (currentToneSequence: number) =>
+    ({ currentToneSequence, status: 'ACTIVE', nextToneAt: null, predicateGaps: [] }) as never;
+
+  test('a CAD update without a tone never drops the strip back to the older page tone', async () => {
+    jest
+      .spyOn(mockAlertsRepository, 'getDispatch')
+      .mockResolvedValueOnce({ ...base, toneLadder: ladder(2) })
+      .mockRejectedValue(new TypeError('Network request failed'));
+    jest.spyOn(console, 'warn').mockImplementation(() => {});
+    mockRouteParams.dispatchId = PAGE.dispatchId;
+    mockRouteParams.payload = { ...PAGE, toneSequence: 1 };
+
+    const { findByText, queryByText, rerender } = await render(<AlertDetailScreen />);
+    expect(await findByText(/^TONE 2/)).toBeTruthy();
+
+    mockRouteParams.payload = { ...PAGE, receivedAt: PAGE.receivedAt + 60_000 };
+    await act(async () => {
+      rerender(<AlertDetailScreen />);
+    });
+
+    expect(await findByText(/^TONE 2/)).toBeTruthy();
+    expect(queryByText(/^TONE 1/)).toBeNull();
+  });
+
+  test('a stale page payload after a fresher fetch never lowers the tone', async () => {
+    jest
+      .spyOn(mockAlertsRepository, 'getDispatch')
+      .mockResolvedValue({ ...base, toneLadder: ladder(3) });
+    mockRouteParams.dispatchId = PAGE.dispatchId;
+    mockRouteParams.payload = { ...PAGE, toneSequence: 1 };
+
+    const { findByText, queryByText, rerender } = await render(<AlertDetailScreen />);
+    expect(await findByText(/^TONE 3/)).toBeTruthy();
+
+    mockRouteParams.payload = { ...PAGE, toneSequence: 2, receivedAt: PAGE.receivedAt - 1 };
+    await act(async () => {
+      rerender(<AlertDetailScreen />);
+    });
+
+    expect(await findByText(/^TONE 3/)).toBeTruthy();
+    expect(queryByText(/^TONE 2/)).toBeNull();
+  });
+
+  test('a fresher page payload after a stale fetch raises the tone', async () => {
+    jest
+      .spyOn(mockAlertsRepository, 'getDispatch')
+      .mockResolvedValueOnce({ ...base, toneLadder: ladder(1) })
+      .mockRejectedValue(new TypeError('Network request failed'));
+    jest.spyOn(console, 'warn').mockImplementation(() => {});
+    mockRouteParams.dispatchId = PAGE.dispatchId;
+    mockRouteParams.payload = { ...PAGE, toneSequence: 1 };
+
+    const { findByText, rerender } = await render(<AlertDetailScreen />);
+    expect(await findByText(/^TONE 1/)).toBeTruthy();
+
+    mockRouteParams.payload = { ...PAGE, toneSequence: 2, receivedAt: PAGE.receivedAt + 60_000 };
+    await act(async () => {
+      rerender(<AlertDetailScreen />);
+    });
+
+    expect(await findByText(/^TONE 2/)).toBeTruthy();
+  });
+});

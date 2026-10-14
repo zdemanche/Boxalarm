@@ -35,9 +35,12 @@ function readinessChip(
 export function signOutWarning(phone: string | null | undefined): string {
   const appPages =
     'Boxalarm pages stop on this phone until you sign in again; your other signed-in devices keep getting pages.';
-  const other = phone
-    ? ` Text and voice pages to ${phone} continue only if they are set up for you - check with your officer if you are not sure.`
-    : ' No phone number is on file, so you would get no text or voice pages either.';
+  const other =
+    phone === undefined
+      ? ' Text and voice pages continue only if they are set up for you - check with your officer if you are not sure.'
+      : phone
+        ? ` Text and voice pages to ${phone} continue only if they are set up for you - check with your officer if you are not sure.`
+        : ' No phone number is on file, so you would get no text or voice pages either.';
   return appPages + other;
 }
 
@@ -121,6 +124,11 @@ export function MeHomeScreen() {
   const [profile, setProfile] = useState<MemberProfile | null>(null);
   const [quals, setQuals] = useState<Qualification[]>([]);
   const [losap, setLosap] = useState<LosapTotal | null>(null);
+  const [failedLoads, setFailedLoads] = useState({ profile: false, quals: false, losap: false });
+  const loadFailed = failedLoads.profile || failedLoads.quals || failedLoads.losap;
+  const setFailed = (load: 'profile' | 'quals' | 'losap', failed: boolean) =>
+    setFailedLoads((prev) => ({ ...prev, [load]: failed }));
+  const [loadAttempt, setLoadAttempt] = useState(0);
   // Sign-out can take a while on a weak link (a last send, the push revoke with a renewal): say
   // so and take the button away, so nobody taps it again wondering whether it worked (N-m5).
   const [signingOut, setSigningOut] = useState(false);
@@ -147,27 +155,50 @@ export function MeHomeScreen() {
   useFocusEffect(
     useCallback(() => {
       let cancelled = false;
-      repository.getProfile().then((result) => {
-        if (!cancelled) setProfile(result);
-      });
+      repository
+        .getProfile()
+        .then((result) => {
+          if (!cancelled) {
+            setProfile(result);
+            setFailed('profile', false);
+          }
+        })
+        .catch(() => {
+          if (!cancelled) setFailed('profile', true);
+        });
       return () => {
         cancelled = true;
       };
-    }, [repository]),
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [repository, loadAttempt]),
   );
 
   useEffect(() => {
     let cancelled = false;
-    repository.getQualifications().then((result) => {
-      if (!cancelled) setQuals(result);
-    });
-    repository.getLosapTotal().then((result) => {
-      if (!cancelled) setLosap(result);
-    });
+    repository
+      .getQualifications()
+      .then((result) => {
+        if (cancelled) return;
+        setQuals(result);
+        setFailed('quals', false);
+      })
+      .catch(() => {
+        if (!cancelled) setFailed('quals', true);
+      });
+    repository
+      .getLosapTotal()
+      .then((result) => {
+        if (cancelled) return;
+        setLosap(result);
+        setFailed('losap', false);
+      })
+      .catch(() => {
+        if (!cancelled) setFailed('losap', true);
+      });
     return () => {
       cancelled = true;
     };
-  }, [repository]);
+  }, [repository, loadAttempt]);
 
   const go = (screen: string) => () => navigation.navigate(screen as never);
   const chip = readinessChip(readiness.items, readiness.blocking);
@@ -214,6 +245,18 @@ export function MeHomeScreen() {
           </View>
         </View>
         <StatusChip status={chip.status} label={chip.label} />
+        {loadFailed ? (
+          <View style={{ gap: spacing.sm }}>
+            <Text
+              accessibilityRole="alert"
+              style={{ color: theme.status.danger, fontSize: typeScale.body.size }}
+            >
+              Some of your profile, qualifications or LOSAP could not be loaded. Check your
+              connection and try again.
+            </Text>
+            <Button label="Try again" onPress={() => setLoadAttempt((attempt) => attempt + 1)} />
+          </View>
+        ) : null}
         {/* F2.5 / design.md F-06: marking off is the member's core self-service task, so it is the
             first action on Me - it was unreachable from anywhere in the app. */}
         <View style={{ marginTop: spacing.sm }}>

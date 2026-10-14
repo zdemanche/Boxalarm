@@ -186,8 +186,6 @@ test('selecting out-of-service severity shows the OOS consequence without a sepa
   ).toBeTruthy();
 });
 
-// #122: an OUT_OF_SERVICE report's natural next step is handed off inline, pre-filled with the
-// same unit, instead of sending the officer back through the apparatus picker to find it again.
 async function submitOutOfServiceDefect() {
   const rendered = await render(<DefectReportScreen />);
   await act(async () => {
@@ -206,71 +204,16 @@ async function submitOutOfServiceDefect() {
   return rendered;
 }
 
-test('the OUT_OF_SERVICE handoff is not offered without a service-status role', async () => {
-  jest.spyOn(AuthContext, 'useOptionalAuth').mockReturnValue({
-    roles: ['MEMBER'],
-  } as ReturnType<typeof AuthContext.useOptionalAuth>);
-
-  const { queryByText } = await submitOutOfServiceDefect();
-
-  expect(queryByText(/Take .+ out of service now/)).toBeNull();
-});
-
-test('an officer gets an inline handoff to ServiceStatusScreen, pre-filled with the unit and its current status - no re-entering the unit', async () => {
+test('an officer is not sent to a second status change: the defect report already takes the unit out of service', async () => {
   jest.spyOn(AuthContext, 'useOptionalAuth').mockReturnValue({
     roles: ['OFFICER'],
   } as ReturnType<typeof AuthContext.useOptionalAuth>);
-  const getApparatusSpy = jest
-    .spyOn(mockChecksRepository, 'getApparatus')
-    .mockResolvedValueOnce([
-      { apparatusId: 'x', unitId: 'APP-ENGINE-2', type: 'ENGINE', status: 'IN_SERVICE' },
-    ]);
 
-  const { findByText } = await submitOutOfServiceDefect();
+  const { findByText, queryByText } = await submitOutOfServiceDefect();
 
-  const handoff = await findByText('Take APP-ENGINE-2 out of service now');
-  await act(async () => {
-    fireEvent.press(handoff);
-  });
-
-  expect(mockNavigate).toHaveBeenCalledWith('ServiceStatus', {
-    unitId: 'APP-ENGINE-2',
-    status: 'IN_SERVICE',
-  });
-  getApparatusSpy.mockRestore();
-});
-
-test('the handoff is not offered when the unit is already out of service', async () => {
-  jest.spyOn(AuthContext, 'useOptionalAuth').mockReturnValue({
-    roles: ['CHIEF'],
-  } as ReturnType<typeof AuthContext.useOptionalAuth>);
-  const getApparatusSpy = jest
-    .spyOn(mockChecksRepository, 'getApparatus')
-    .mockResolvedValueOnce([
-      { apparatusId: 'x', unitId: 'APP-ENGINE-2', type: 'ENGINE', status: 'OUT_OF_SERVICE' },
-    ]);
-
-  const { queryByText, findByText } = await submitOutOfServiceDefect();
-  // Give the status fetch's effect a chance to resolve before asserting its absence.
-  await act(async () => {
-    await Promise.resolve();
-  });
-
-  expect(await findByText('Defect reported')).toBeTruthy();
+  expect(
+    await findByText('This report asks for APP-ENGINE-2 to be taken out of service.'),
+  ).toBeTruthy();
   expect(queryByText(/Take .+ out of service now/)).toBeNull();
-  getApparatusSpy.mockRestore();
-});
-
-test('an unreachable apparatus list falls back to offering the handoff rather than hiding it', async () => {
-  jest.spyOn(AuthContext, 'useOptionalAuth').mockReturnValue({
-    roles: ['APPARATUS'],
-  } as ReturnType<typeof AuthContext.useOptionalAuth>);
-  const getApparatusSpy = jest
-    .spyOn(mockChecksRepository, 'getApparatus')
-    .mockRejectedValueOnce(new Error('offline'));
-
-  const { findByText } = await submitOutOfServiceDefect();
-
-  expect(await findByText('Take APP-ENGINE-2 out of service now')).toBeTruthy();
-  getApparatusSpy.mockRestore();
+  expect(mockNavigate).not.toHaveBeenCalled();
 });

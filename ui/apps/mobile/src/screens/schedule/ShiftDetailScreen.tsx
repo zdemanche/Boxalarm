@@ -78,7 +78,10 @@ export function ShiftDetailScreen() {
           // client-side: a position this member already holds from a previous session must
           // read "Claimed by you" on load, not the generic "Claimed" of claimed_by_other, or
           // give-back/propose-swap would be offered with no explanation of why.
-          if (position.claimedByMe) {
+          if (
+            position.claimedByMe ||
+            (position.claimedByMemberId && position.claimedByMemberId === auth?.memberId)
+          ) {
             initial[position.positionCode] = 'claimed_by_you';
           } else if (position.claimedByMemberId) {
             initial[position.positionCode] = 'claimed_by_other';
@@ -101,7 +104,7 @@ export function ShiftDetailScreen() {
     return () => {
       cancelled = true;
     };
-  }, [shiftId, repository]);
+  }, [shiftId, repository, auth?.memberId]);
 
   const STATE_LABEL: Record<ClaimUiState, string> = {
     open: 'Open',
@@ -254,10 +257,7 @@ export function ShiftDetailScreen() {
         <View>
           {shift.positions.map((position, index) => {
             const state = claimState[position.positionCode] ?? 'open';
-            const isMine =
-              state === 'claimed_by_you' ||
-              position.claimedByMe === true ||
-              position.claimedByMemberId === auth?.memberId;
+            const isMine = state === 'claimed_by_you';
             return (
               <View
                 key={position.positionCode}

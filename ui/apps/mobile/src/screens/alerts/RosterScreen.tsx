@@ -1,13 +1,26 @@
 import { spacing, typeScale, type StatusRole } from '@boxalarm/design-tokens';
-import { useIsFocused, useRoute } from '@react-navigation/native';
+import {
+  useIsFocused,
+  useNavigation,
+  useRoute,
+  type NavigationProp,
+} from '@react-navigation/native';
 import { useEffect, useRef, useState } from 'react';
 import { Text, View } from 'react-native';
-import { Card, Screen, StatusChip, useTheme } from '../../components/ui';
+import { Button, Card, Screen, StatusChip, useTheme } from '../../components/ui';
 import { useAlertsRepository } from '../../features/alerts/apiAlertsRepository';
 import { ackStatusLabel } from '../../features/alerts/ackStatus';
 import type { AckStatus, RosterEntry } from '../../features/alerts/types';
+import type { AlertsStackParamList } from '../../navigation/AlertsStack';
 import { useConnectivity } from '../../sync/ConnectivityContext';
-import { Notice, noticeText, ROW_PRIMARY, ROW_SECONDARY, rowDivider } from './alertsUi';
+import {
+  Notice,
+  noticeText,
+  ROW_PRIMARY,
+  ROW_SECONDARY,
+  rowDivider,
+  useCanAssignRiding,
+} from './alertsUi';
 
 const REFETCH_INTERVAL_MS = 10_000;
 // Backoff cap for repeated poll failures - retries slow down rather than hammering a struggling
@@ -33,10 +46,12 @@ function formatClockTime(epochMs: number): string {
 }
 
 // F1.7: live roster is one row per member, reflecting each member's current answer. It requires
-// connectivity by nature (real-time data) - architecture.md is explicit this is one of the two
-// screens that must show a clear "offline, will resume" state rather than pretending to work.
+// connectivity by nature (real-time data) - offline it keeps the last roster it loaded, marked
+// not live (design.md F-03), and shows "will resume" only when nothing was ever loaded.
 export function RosterScreen() {
   const route = useRoute();
+  const navigation = useNavigation<NavigationProp<AlertsStackParamList>>();
+  const canAssignRiding = useCanAssignRiding();
   const { dispatchId } = route.params as { dispatchId: string };
   const theme = useTheme();
   const isFocused = useIsFocused();
@@ -44,7 +59,8 @@ export function RosterScreen() {
   const repository = useAlertsRepository();
   const [roster, setRoster] = useState<RosterEntry[]>([]);
   const [staleSince, setStaleSince] = useState<number | null>(null);
-  const [loaded, setLoaded] = useState(false);
+  const [loadedAt, setLoadedAt] = useState<number | null>(null);
+  const loaded = loadedAt !== null;
   const failureCountRef = useRef(0);
 
   useEffect(() => {
@@ -71,7 +87,7 @@ export function RosterScreen() {
         .then((result) => {
           if (cancelled) return;
           setRoster(result);
-          setLoaded(true);
+          setLoadedAt(Date.now());
           setStaleSince(null);
           failureCountRef.current = 0;
           scheduleNext(REFETCH_INTERVAL_MS);
@@ -95,9 +111,19 @@ export function RosterScreen() {
     };
   }, [dispatchId, isOnline, isFocused, repository]);
 
-  if (!isOnline) {
+  const ridingAction = canAssignRiding ? (
+    <Button
+      label="Riding assignments"
+      variant="secondary"
+      fullWidth
+      onPress={() => navigation.navigate('RidingBoard', { dispatchId })}
+    />
+  ) : null;
+
+  if (!isOnline && !loaded) {
     return (
       <Screen>
+        {ridingAction}
         <Notice tone="warning">
           <Text style={noticeText(theme, 'warning')}>
             Offline — roster will resume when connected.
@@ -109,7 +135,15 @@ export function RosterScreen() {
 
   return (
     <Screen>
-      {staleSince ? (
+      {ridingAction}
+      {!isOnline && loadedAt !== null ? (
+        <Notice tone="warning">
+          <Text accessibilityRole="alert" style={noticeText(theme, 'warning')}>
+            {`Offline. This roster was last updated ${formatClockTime(loadedAt)} and is not live.`}
+          </Text>
+        </Notice>
+      ) : null}
+      {isOnline && staleSince ? (
         <Notice tone="warning">
           <Text accessibilityRole="alert" style={noticeText(theme, 'warning')}>
             {`Data stopped updating at ${formatClockTime(staleSince)} — retrying…`}

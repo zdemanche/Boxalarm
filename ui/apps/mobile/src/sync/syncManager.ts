@@ -1,5 +1,13 @@
 import NetInfo from '@react-native-community/netinfo';
-import { ApiError, apiRequest, type AuthTokenSource } from '../lib/apiClient';
+import { AppState, type NativeEventSubscription } from 'react-native';
+import {
+  ApiError,
+  ApiTimeoutError,
+  apiRequest,
+  fetchWithTimeout,
+  isGatewayDenial,
+  type AuthTokenSource,
+} from '../lib/apiClient';
 import type { SyncQueueStatus } from '../features/sync/types';
 import { kvGet } from './kvStore';
 import { LAST_SESSION_SUB_KEY } from './memberCache';
@@ -15,6 +23,12 @@ let draining = false;
 // instead of silently skipping an entry enqueued after it listed the outbox.
 let drainRequested = false;
 let unsubscribeNetInfo: (() => void) | null = null;
+let appStateSubscription: NativeEventSubscription | null = null;
+// Wakes the drain when the earliest FAILED row's backoff ends: NetInfo only fires on a change, so
+// a 503 or timeout on a steady link would otherwise leave the row unsent.
+let retryTimer: ReturnType<typeof setTimeout> | null = null;
+const MIN_RETRY_DELAY_MS = 1_000;
+const FAILED_RUN_RETRY_DELAY_MS = 5_000;
 // Set once the startup reconciliation of stranded SYNCING rows has run for this process.
 let recoveredOrphans = false;
 let lastSyncAt: string | null = null;
@@ -130,6 +144,7 @@ export function configure(
 ): void {
   tokens = nextTokens;
   apiBaseUrl = nextApiBaseUrl;
+  clearRetryTimer();
   // Signed out: no configured owner. Anything queued without a session (the headless answer
   // task) resolves its owner from the stored session instead (R3-C1).
   owner = nextTokens ? ownerOf(nextTokens) : { memberId: null, deptId: null };
@@ -138,11 +153,36 @@ export function configure(
     unsubscribeNetInfo ??= NetInfo.addEventListener((state) => {
       if (state.isConnected === true) void drain();
     });
+    appStateSubscription ??= AppState.addEventListener('change', (state) => {
+      if (state === 'active') void drain();
+    });
     void drain();
-  } else if (unsubscribeNetInfo) {
-    unsubscribeNetInfo();
+  } else {
+    unsubscribeNetInfo?.();
     unsubscribeNetInfo = null;
+    appStateSubscription?.remove();
+    appStateSubscription = null;
   }
+}
+
+function clearRetryTimer(): void {
+  if (retryTimer) clearTimeout(retryTimer);
+  retryTimer = null;
+}
+
+async function scheduleRetry(floorMs: number): Promise<void> {
+  if (!isConfigured()) return;
+  const now = Date.now();
+  const dueAt = await outbox.nextDueAt(now, signedInMember()).catch(() => null);
+  clearRetryTimer();
+  if (dueAt === null || !isConfigured()) return;
+  retryTimer = setTimeout(
+    () => {
+      retryTimer = null;
+      void drain();
+    },
+    Math.max(dueAt - now, floorMs),
+  );
 }
 
 export function subscribe(listener: Listener): () => void {
@@ -475,6 +515,14 @@ class ResponseNotCurrentError extends Error {
   }
 }
 
+const PHOTO_MISSING = 'The photo is no longer on this phone; the report was sent without it';
+
+class PhotoMissingError extends Error {
+  constructor() {
+    super(PHOTO_MISSING);
+  }
+}
+
 class PhotoUploadUrlExpiredError extends Error {
   constructor(kind: OutboxKind) {
     super(
@@ -505,9 +553,10 @@ export function signedUrlExpiresAtMs(url: string): number | null {
 // is recoverable by signing in again, so it is treated as transient too.
 function isPermanentRejection(error: unknown): boolean {
   if (error instanceof PhotoUploadUrlExpiredError) return true;
+  if (error instanceof PhotoMissingError) return true;
   if (error instanceof ResponseNotCurrentError) return true;
   if (error instanceof AvailabilityConflictError) return true;
-  if (!(error instanceof ApiError)) return false;
+  if (!(error instanceof ApiError) || isGatewayDenial(error)) return false;
   const { status } = error.problem;
   return status >= 400 && status < 500 && status !== 401 && status !== 408 && status !== 429;
 }
@@ -519,7 +568,9 @@ function isPermanentRejection(error: unknown): boolean {
 export const SIGN_IN_REJECTED = "The server did not accept this phone's sign-in";
 
 function describeError(error: unknown): string {
-  if (error instanceof ApiError && error.problem.status === 401) return SIGN_IN_REJECTED;
+  if (error instanceof ApiError && (error.problem.status === 401 || isGatewayDenial(error))) {
+    return SIGN_IN_REJECTED;
+  }
   if (error instanceof ApiError) return error.problem.detail ?? error.problem.title;
   return error instanceof Error ? error.message : String(error);
 }
@@ -530,6 +581,10 @@ function describeError(error: unknown): string {
 // is the URL's path, so the type is derived from it with the server's own mapping
 // (backend inspections-service/assetsSigner.ts UPLOAD_CONTENT_TYPES), not from the local
 // file URI, whose extension can differ.
+const LOCAL_PHOTO_READ_TIMEOUT_MS = 15_000;
+const MIN_PHOTO_UPLOAD_TIMEOUT_MS = 60_000;
+const SLOWEST_UPLOAD_BYTES_PER_SECOND = 16 * 1024;
+
 const UPLOAD_CONTENT_TYPES: Readonly<Record<string, string>> = {
   jpg: 'image/jpeg',
   jpeg: 'image/jpeg',
@@ -564,16 +619,39 @@ export function signedPhotoContentType(uploadUrl: string, localUri: string): str
   );
 }
 
+function isFileNotFound(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    /network request failed|no such file|not found|ENOENT|couldn't be opened/i.test(error.message)
+  );
+}
+
 async function uploadPhoto(row: OutboxRow): Promise<void> {
   if (!row.photoLocalUri || !row.photoUploadUrl) return;
   if (isExpired(row.photoUploadUrl)) throw new PhotoUploadUrlExpiredError(row.kind);
-  const fileResponse = await fetch(row.photoLocalUri);
-  const blob = await fileResponse.blob();
-  const uploadResponse = await fetch(row.photoUploadUrl, {
-    method: 'PUT',
-    body: blob,
-    headers: { 'Content-Type': signedPhotoContentType(row.photoUploadUrl, row.photoLocalUri) },
-  });
+  let blob: Blob;
+  try {
+    const fileResponse = await fetchWithTimeout(row.photoLocalUri, {}, LOCAL_PHOTO_READ_TIMEOUT_MS);
+    if (fileResponse.ok === false) throw new PhotoMissingError();
+    blob = await fileResponse.blob();
+  } catch (error) {
+    if (error instanceof PhotoMissingError || error instanceof ApiTimeoutError) throw error;
+    if (isFileNotFound(error)) throw new PhotoMissingError();
+    throw error;
+  }
+  const uploadTimeoutMs = Math.max(
+    MIN_PHOTO_UPLOAD_TIMEOUT_MS,
+    (blob.size / SLOWEST_UPLOAD_BYTES_PER_SECOND) * 1000,
+  );
+  const uploadResponse = await fetchWithTimeout(
+    row.photoUploadUrl,
+    {
+      method: 'PUT',
+      body: blob,
+      headers: { 'Content-Type': signedPhotoContentType(row.photoUploadUrl, row.photoLocalUri) },
+    },
+    uploadTimeoutMs,
+  );
   // S3 answers an expired or otherwise invalid signature with 403.
   if (uploadResponse.status === 403) throw new PhotoUploadUrlExpiredError(row.kind);
   if (!uploadResponse.ok) {
@@ -784,6 +862,8 @@ export async function drainAndSettle(): Promise<void> {
 async function runDrain(): Promise<void> {
   draining = true;
   drainRequested = false;
+  let reschedule = true;
+  let finishedNormally = false;
   try {
     // Runs inside the draining lock so no row of this process can be genuinely mid-sync.
     if (!recoveredOrphans) {
@@ -791,7 +871,10 @@ async function runDrain(): Promise<void> {
       recoveredOrphans = true;
     }
     const netState = await NetInfo.fetch();
-    if (netState.isConnected !== true) return;
+    if (netState.isConnected !== true) {
+      reschedule = false;
+      return;
+    }
 
     // One session for the whole run (R5-M1). If the member signs out and another signs in while
     // this run is still going (the bounded sign-out drain gives up waiting, not the drain), the
@@ -800,7 +883,10 @@ async function runDrain(): Promise<void> {
     const runTokens = tokens;
     const runApiBaseUrl = apiBaseUrl;
     const runOwner = owner.memberId;
-    if (!runTokens || !runApiBaseUrl) return;
+    if (!runTokens || !runApiBaseUrl) {
+      reschedule = false;
+      return;
+    }
     // Pinned to the run's member, not just to the source (m1): every call of the run - the 401
     // retry, the missing-ETA re-post, a photo re-create - gets no token once the session on the
     // phone is someone else's.
@@ -810,9 +896,17 @@ async function runDrain(): Promise<void> {
         : runTokens;
     const session: RunSession = { tokens: pinned, apiBaseUrl: runApiBaseUrl };
     // Only the signed-in member's own rows (R2-M3).
-    const pending = await outbox.listDrainable(Date.now(), runOwner);
-    for (const listed of pending) {
+    // Re-listed before every row so an answer queued mid-pass goes out before the remaining
+    // uploads: alert answers first, oldest first within each kind.
+    const attempted = new Set<string>();
+    for (;;) {
       if (tokens !== runTokens || owner.memberId !== runOwner) break;
+      const pending = (await outbox.listDrainable(Date.now(), runOwner)).filter(
+        (candidate) => !attempted.has(candidate.id),
+      );
+      const listed = pending.find((candidate) => candidate.kind === 'RESPONSE') ?? pending[0];
+      if (!listed) break;
+      attempted.add(listed.id);
       // Re-read: a row listed above may have been discarded or superseded since (a changed
       // answer), and a vanished row must not be reported as delivered.
       const row = await outbox.find(listed.id);
@@ -845,8 +939,11 @@ async function runDrain(): Promise<void> {
       }
       await notify();
     }
+    finishedNormally = true;
   } finally {
     draining = false;
+    if (reschedule)
+      void scheduleRetry(finishedNormally ? MIN_RETRY_DELAY_MS : FAILED_RUN_RETRY_DELAY_MS);
   }
   // Awaited (not fire-and-forget) so drainAndSettle covers the follow-up pass too.
   if (drainRequested) await drain();

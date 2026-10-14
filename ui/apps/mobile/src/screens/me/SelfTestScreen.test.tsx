@@ -81,6 +81,43 @@ test('a FAIL run with every channel ok shows why a real page would skip this mem
   expect(await findByText(reason)).toBeTruthy();
 });
 
+test('a "no" with SMS failed does not promise text or voice pages reach the member', async () => {
+  jest.spyOn(mockAlertsRepository, 'getSelfTestRun').mockResolvedValueOnce({
+    testId: 't2',
+    runAt: 1_700_000_000,
+    channelsTested: ['PUSH', 'SMS'],
+    channelResults: {
+      PUSH: { ok: true, ms: 10 },
+      SMS: { ok: false, ms: 10, reason: 'sms: no number registered' },
+    },
+    overallResult: 'FAIL',
+  });
+  const { findByRole, findByText, queryByText } = await render(<SelfTestScreen />);
+  await act(async () => {
+    fireEvent.press(await findByRole('button', { name: 'Run self-test' }));
+  });
+
+  await act(async () => {
+    fireEvent.press(await findByRole('button', { name: "No, it didn't ring" }));
+  });
+
+  expect(await findByText(/text pages are not confirmed for you/i)).toBeTruthy();
+  expect(queryByText(/still reach you/i)).toBeNull();
+});
+
+test('a "no" with SMS ok says the test text reached the member', async () => {
+  const { findByRole, findByText } = await render(<SelfTestScreen />);
+  await act(async () => {
+    fireEvent.press(await findByRole('button', { name: 'Run self-test' }));
+  });
+
+  await act(async () => {
+    fireEvent.press(await findByRole('button', { name: "No, it didn't ring" }));
+  });
+
+  expect(await findByText(/the test text reached your number/i)).toBeTruthy();
+});
+
 test('the "did it ring" answer is kept and shown next time', async () => {
   const first = await render(<SelfTestScreen />);
   await act(async () => {
