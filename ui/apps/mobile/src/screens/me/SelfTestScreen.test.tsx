@@ -58,6 +58,29 @@ test('if the result poll fails, it says so and still asks whether the phone rang
   expect(await findByText('Did your phone ring?')).toBeTruthy();
 });
 
+test('a FAIL run with every channel ok shows why a real page would skip this member', async () => {
+  const reason = 'member is inactive - a real dispatch would not page you';
+  const failedRun = {
+    testId: 't1',
+    runAt: 1_700_000_000,
+    channelsTested: ['PUSH', 'SMS'],
+    channelResults: { PUSH: { ok: true, ms: 10 }, SMS: { ok: true, ms: 10 } },
+    overallResult: 'FAIL',
+    eligibilityReason: reason,
+  } as const;
+  jest.spyOn(mockAlertsRepository, 'getSelfTestRun').mockResolvedValueOnce({
+    ...failedRun,
+    channelsTested: [...failedRun.channelsTested],
+  });
+  const { findByRole, findByText } = await render(<SelfTestScreen />);
+
+  await act(async () => {
+    fireEvent.press(await findByRole('button', { name: 'Run self-test' }));
+  });
+
+  expect(await findByText(reason)).toBeTruthy();
+});
+
 test('the "did it ring" answer is kept and shown next time', async () => {
   const first = await render(<SelfTestScreen />);
   await act(async () => {

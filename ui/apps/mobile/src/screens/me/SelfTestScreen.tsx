@@ -17,6 +17,8 @@ import { ROW_TITLE_SIZE, Rows } from './MeRows';
 const POLL_INTERVAL_MS = 1_500;
 const MAX_POLLS = 20;
 
+type SelfTestRunResult = SelfTestRun & { eligibilityReason?: string };
+
 const CHANNEL_LABEL: Record<string, string> = { PUSH: 'Push', SMS: 'SMS', VOICE: 'Voice' };
 
 interface LastSelfTest {
@@ -73,7 +75,7 @@ export function SelfTestScreen() {
   // Per member (m6): "this phone last rang" for the previous member says nothing about whether
   // this phone is registered for the member signed in now.
   const lastSelfTestKey = memberCacheKey.lastSelfTest(useOptionalAuth()?.memberId ?? null);
-  const [run, setRun] = useState<SelfTestRun | null>(null);
+  const [run, setRun] = useState<SelfTestRunResult | null>(null);
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [rang, setRang] = useState<'yes' | 'no' | null>(null);
@@ -97,7 +99,7 @@ export function SelfTestScreen() {
   const poll = useCallback(
     async (testId: string, attempt: number) => {
       if (cancelledRef.current) return;
-      let result: SelfTestRun;
+      let result: SelfTestRunResult;
       try {
         result = await repository.getSelfTestRun(testId);
       } catch (pollError) {
@@ -123,7 +125,8 @@ export function SelfTestScreen() {
           ? 'Test page sent on every channel. Did your phone ring?'
           : result.overallResult === 'RUNNING'
             ? 'No final result from the server. Did your phone ring?'
-            : 'Test failed on at least one channel. Check the results below.',
+            : (result.eligibilityReason ??
+              'Test failed on at least one channel. Check the results below.'),
       );
     },
     [repository],
@@ -222,6 +225,18 @@ export function SelfTestScreen() {
 
         {run ? (
           <View accessibilityLiveRegion="polite" style={{ marginTop: spacing.sm }}>
+            {run.overallResult === 'FAIL' && run.eligibilityReason ? (
+              <Text
+                accessibilityRole="alert"
+                style={{
+                  color: theme.status.danger,
+                  fontSize: typeScale.body.size,
+                  fontWeight: '700',
+                }}
+              >
+                {run.eligibilityReason}
+              </Text>
+            ) : null}
             <Rows>
               {run.channelsTested.map((channel) => {
                 const result = run.channelResults[channel];
