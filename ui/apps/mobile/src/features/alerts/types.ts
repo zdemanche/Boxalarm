@@ -237,6 +237,7 @@ export interface RidingSeatPosition {
   code: string;
   label: string;
   requiredQual?: string;
+  version: number;
   assignment?: RidingSeatAssignment;
 }
 
@@ -293,6 +294,7 @@ export interface AlertsRepository {
       positionCode: string;
       memberId: string | null;
       expectedVersion: number;
+      clientAssignmentId?: string;
     },
   ): Promise<void>;
 }

@@ -223,7 +223,9 @@ function buildApiAlertsRepository(tokens: AuthTokenSource, apiBaseUrl: string): 
           positionCode: seat.positionCode,
           memberId: seat.memberId,
           expectedVersion: seat.expectedVersion,
-          clientAssignmentId: `${dispatchId}-${seat.unitId}-${seat.positionCode}-${Date.now()}`,
+          clientAssignmentId:
+            seat.clientAssignmentId ??
+            `${dispatchId}-${seat.unitId}-${seat.positionCode}-${Date.now()}`,
         }),
       });
     },

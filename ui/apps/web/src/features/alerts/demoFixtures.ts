@@ -4,7 +4,6 @@ import {
   DEMO_INTERIOR_MEMBER_IDS,
   DEMO_MEMBER_BY_ID,
   DEMO_RESPONDING_MEMBER_IDS,
-  demoMemberName,
 } from '../../lib/demoRoster';
 import type {
   ActiveDispatchList,
@@ -158,7 +157,6 @@ function rosterFor(seed: Pick<DispatchSeed, 'reactions' | 'dispatchedAt'>): Rost
       reaction.etaMinutes !== undefined ? seed.dispatchedAt + reaction.etaMinutes * MINUTE : null;
     return {
       memberId,
-      name: demoMemberName(memberId),
       ackStatus: reaction.ackStatus,
       eta,
       assignedApparatusId: reaction.assignedApparatusId ?? null,
@@ -281,32 +279,38 @@ const DRIVER: RidingSeatPosition = {
   code: 'DRIVER',
   label: 'Driver/Operator',
   requiredQual: 'DRIVER_OPERATOR',
+  version: 0,
 };
-const OFFICER: RidingSeatPosition = { code: 'OFF', label: 'Officer', requiredQual: 'OFFICER' };
+const OFFICER: RidingSeatPosition = {
+  code: 'OFF',
+  label: 'Officer',
+  requiredQual: 'OFFICER',
+  version: 0,
+};
 
 const POSITIONS_BY_TYPE: Record<string, RidingSeatPosition[]> = {
   Engine: [
     OFFICER,
     DRIVER,
-    { code: 'NOZZLE', label: 'Nozzle', requiredQual: 'FF1' },
-    { code: 'BACKUP', label: 'Backup', requiredQual: 'FF1' },
-    { code: 'HYDRANT', label: 'Hydrant' },
+    { code: 'NOZZLE', label: 'Nozzle', requiredQual: 'FF1', version: 0 },
+    { code: 'BACKUP', label: 'Backup', requiredQual: 'FF1', version: 0 },
+    { code: 'HYDRANT', label: 'Hydrant', version: 0 },
   ],
   Ladder: [
     OFFICER,
     DRIVER,
-    { code: 'OV', label: 'Outside vent', requiredQual: 'FF2' },
-    { code: 'IRONS', label: 'Irons', requiredQual: 'FF1' },
+    { code: 'OV', label: 'Outside vent', requiredQual: 'FF2', version: 0 },
+    { code: 'IRONS', label: 'Irons', requiredQual: 'FF1', version: 0 },
   ],
   Rescue: [
     OFFICER,
     DRIVER,
-    { code: 'FF1', label: 'Firefighter (search)', requiredQual: 'FF1' },
-    { code: 'FF2', label: 'Firefighter (tools)', requiredQual: 'FF1' },
+    { code: 'FF1', label: 'Firefighter (search)', requiredQual: 'FF1', version: 0 },
+    { code: 'FF2', label: 'Firefighter (tools)', requiredQual: 'FF1', version: 0 },
   ],
-  Squad: [DRIVER, { code: 'FF1', label: 'Firefighter', requiredQual: 'FF1' }],
-  Utility: [DRIVER, { code: 'FF1', label: 'Firefighter' }],
-  Brush: [DRIVER, { code: 'FF1', label: 'Firefighter', requiredQual: 'FF1' }],
+  Squad: [DRIVER, { code: 'FF1', label: 'Firefighter', requiredQual: 'FF1', version: 0 }],
+  Utility: [DRIVER, { code: 'FF1', label: 'Firefighter', version: 0 }],
+  Brush: [DRIVER, { code: 'FF1', label: 'Firefighter', requiredQual: 'FF1', version: 0 }],
 };
 
 function clonePositions(type: string): RidingSeatPosition[] {
@@ -332,6 +336,7 @@ function ridingBoardFor(
     for (const position of positions) {
       const memberId = assigned[position.code];
       if (!memberId) continue;
+      position.version = 1;
       position.assignment = {
         memberId,
         version: 1,
@@ -1138,12 +1143,13 @@ export function demoAlertsRequest(
     const position = unit?.positions.find((p) => p.code === body.positionCode);
     if (position) {
       const memberId = body.memberId;
+      position.version = (body.expectedVersion as number) + 1;
       position.assignment =
         memberId === null || memberId === undefined
           ? undefined
           : {
               memberId: memberId as string,
-              version: ((body.expectedVersion as number) ?? 0) + 1,
+              version: position.version,
               assignedAt: Math.floor(Date.now() / 1000),
               assignedBy: 'demo',
               qualStatus: seatQualStatus(memberId as string, position),

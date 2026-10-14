@@ -2,7 +2,6 @@ export type AckStatus = 'RESPONDING' | 'NOT_RESPONDING' | 'DIRECT_TO_SCENE' | 'U
 
 export interface RosterEntry {
   memberId: string;
-  name: string;
   ackStatus: AckStatus;
   eta: number | null;
   assignedApparatusId: string | null;
@@ -242,6 +241,7 @@ export interface RidingSeatPosition {
   code: string;
   label: string;
   requiredQual?: string;
+  version: number;
   assignment?: RidingSeatAssignment;
 }
 

@@ -182,9 +182,14 @@ export const mockAlertsRepository: AlertsRepository = {
           status: 'IN_SERVICE',
           assignable: true,
           positions: [
-            { code: 'OFF', label: 'Officer' },
-            { code: 'DRIVER', label: 'Driver/Operator', requiredQual: 'DRIVER_OPERATOR' },
-            { code: 'FF1', label: 'Firefighter' },
+            { code: 'OFF', label: 'Officer', version: 0 },
+            {
+              code: 'DRIVER',
+              label: 'Driver/Operator',
+              requiredQual: 'DRIVER_OPERATOR',
+              version: 0,
+            },
+            { code: 'FF1', label: 'Firefighter', version: 0 },
           ],
         },
         {
@@ -194,7 +199,7 @@ export const mockAlertsRepository: AlertsRepository = {
           status: 'OUT_OF_SERVICE',
           assignable: false,
           outOfServiceReason: 'Scheduled maintenance',
-          positions: [{ code: 'DRIVER', label: 'Driver/Operator' }],
+          positions: [{ code: 'DRIVER', label: 'Driver/Operator', version: 0 }],
         },
       ],
     };
@@ -211,12 +216,13 @@ export const mockAlertsRepository: AlertsRepository = {
     }
     const position = unit.positions.find((p) => p.code === seat.positionCode);
     if (!position) return;
+    position.version = seat.expectedVersion + 1;
     position.assignment =
       seat.memberId === null
         ? undefined
         : {
             memberId: seat.memberId,
-            version: seat.expectedVersion + 1,
+            version: position.version,
             assignedAt: Math.floor(Date.now() / 1000),
             assignedBy: 'me',
             qualStatus: 'NO_REQUIREMENT',

@@ -4,6 +4,7 @@ import { Link, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../../auth/AuthContext';
 import { ApiError } from '../../lib/apiClient';
 import { ApiForbiddenGate } from '../../components/ApiForbiddenGate';
+import { listMembers } from '../personnel/api';
 import {
   Button,
   Card,
@@ -290,6 +291,19 @@ function ReceiptsUnavailable({ error }: { error: unknown }) {
   );
 }
 
+function useMemberNameOf(): (memberId: string) => string {
+  const auth = useAuth();
+  const members = useQuery({
+    queryKey: ['personnel', 'members'],
+    queryFn: () => listMembers(auth),
+    staleTime: 60_000,
+  });
+  return (memberId) => {
+    const member = members.data?.find((m) => m.memberId === memberId);
+    return member ? `${member.firstName} ${member.lastName}` : memberId;
+  };
+}
+
 function ReceiptsTable({ dispatchId }: { dispatchId: string }) {
   const auth = useAuth();
   const query = useQuery({
@@ -297,14 +311,7 @@ function ReceiptsTable({ dispatchId }: { dispatchId: string }) {
     queryFn: () => getReceipts(auth, dispatchId),
     refetchInterval: REFETCH_INTERVAL_MS,
   });
-  // Receipts carry member ids; the roster (already fetched for this dispatch) has the names.
-  const roster = useQuery({
-    queryKey: ['alerts', 'roster', dispatchId],
-    queryFn: () => getRoster(auth, dispatchId),
-    refetchInterval: REFETCH_INTERVAL_MS,
-  });
-  const nameOf = (memberId: string): string =>
-    roster.data?.find((entry) => entry.memberId === memberId)?.name ?? memberId;
+  const nameOf = useMemberNameOf();
 
   if (query.error) {
     return <ReceiptsUnavailable error={query.error} />;
@@ -368,6 +375,7 @@ function ReceiptsTable({ dispatchId }: { dispatchId: string }) {
 
 function RosterTable({ dispatchId }: { dispatchId: string }) {
   const auth = useAuth();
+  const nameOf = useMemberNameOf();
   const query = useQuery({
     queryKey: ['alerts', 'roster', dispatchId],
     queryFn: () => getRoster(auth, dispatchId),
@@ -401,7 +409,7 @@ function RosterTable({ dispatchId }: { dispatchId: string }) {
           <tbody>
             {(query.data ?? []).map((entry) => (
               <tr key={entry.memberId}>
-                <th scope="row">{entry.name}</th>
+                <th scope="row">{nameOf(entry.memberId)}</th>
                 <td>
                   <StatusChip status={ackRole(entry.ackStatus)}>
                     {ackLabel(entry.ackStatus)}
@@ -412,7 +420,7 @@ function RosterTable({ dispatchId }: { dispatchId: string }) {
                 <td className={styles.endCell}>
                   <Link
                     to={`/alerts/diagnostics?dispatchId=${encodeURIComponent(dispatchId)}&memberId=${encodeURIComponent(entry.memberId)}`}
-                    aria-label={`Delivery diagnostics for ${entry.name}`}
+                    aria-label={`Delivery diagnostics for ${nameOf(entry.memberId)}`}
                   >
                     Diagnose
                   </Link>
@@ -435,6 +443,7 @@ function RidingBoardSection({ dispatchId }: { dispatchId: string }) {
     queryFn: () => getRidingBoard(auth, dispatchId),
     refetchInterval: REFETCH_INTERVAL_MS,
   });
+  const nameOf = useMemberNameOf();
   const rosterQuery = useQuery({
     queryKey: ['alerts', 'roster', dispatchId],
     queryFn: () => getRoster(auth, dispatchId),
@@ -521,14 +530,14 @@ function RidingBoardSection({ dispatchId }: { dispatchId: string }) {
                       unitId: unit.unitId,
                       positionCode: position.code,
                       memberId: e.target.value || null,
-                      expectedVersion: position.assignment?.version ?? 0,
+                      expectedVersion: position.version,
                     })
                   }
                 >
                   <option value="">Unassigned</option>
                   {assignable.map((member) => (
                     <option key={member.memberId} value={member.memberId}>
-                      {member.name}
+                      {nameOf(member.memberId)}
                       {member.ackStatus === 'DIRECT_TO_SCENE' ? ' (direct to scene)' : ''}
                     </option>
                   ))}

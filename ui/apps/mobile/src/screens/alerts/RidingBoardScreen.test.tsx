@@ -243,3 +243,56 @@ test('polling stops while the screen is unfocused and resumes immediately once i
     jest.useRealTimers();
   }
 });
+
+test('a vacated seat is reassigned with the seat version the board returned, not 0', async () => {
+  mockRepository.getRidingBoard.mockResolvedValue({
+    dispatchId: mockRouteParams.dispatchId,
+    apparatus: [
+      {
+        apparatusId: 'a-301',
+        unitId: 'Engine 301',
+        type: 'Engine',
+        status: 'IN_SERVICE',
+        assignable: true,
+        positions: [{ code: 'OFF', label: 'Officer', version: 2 }],
+      },
+    ],
+  });
+
+  const screen = await render(<RidingBoardScreen />);
+  await screen.findByText('Engine 301');
+  await attemptAssignment(screen);
+
+  await waitFor(() => {
+    expect(mockRepository.assignRidingSeat).toHaveBeenCalledWith(
+      mockRouteParams.dispatchId,
+      expect.objectContaining({ positionCode: 'OFF', expectedVersion: 2 }),
+    );
+  });
+});
+
+test('a queued assignment is re-sent with the same clientAssignmentId after a failed flush', async () => {
+  mockConnectivity.isOnline = false;
+  mockRepository.assignRidingSeat.mockRejectedValueOnce(new TypeError('Failed to fetch'));
+
+  const screen = await render(<RidingBoardScreen />);
+  await screen.findByText('Engine 301');
+  await attemptAssignment(screen);
+
+  for (const isOnline of [true, false, true]) {
+    mockConnectivity.isOnline = isOnline;
+    await act(async () => {
+      screen.rerender(<RidingBoardScreen />);
+    });
+    if (isOnline && mockRepository.assignRidingSeat.mock.calls.length === 1) {
+      await waitFor(() => expect(mockRepository.assignRidingSeat).toHaveBeenCalledTimes(1));
+    }
+  }
+
+  await waitFor(() => expect(mockRepository.assignRidingSeat).toHaveBeenCalledTimes(2));
+  const [first, second] = mockRepository.assignRidingSeat.mock.calls.map(
+    (call) => call[1].clientAssignmentId,
+  );
+  expect(first).toBeTruthy();
+  expect(second).toBe(first);
+});

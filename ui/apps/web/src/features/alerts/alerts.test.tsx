@@ -105,7 +105,6 @@ test('an officer sees the manual entry form and, given a dispatch id, the roster
         members: [
           {
             memberId: 'm-1',
-            name: 'Jordan Osei',
             ackStatus: 'DIRECT_TO_SCENE',
             eta: null,
             assignedApparatusId: null,
@@ -114,6 +113,9 @@ test('an officer sees the manual entry form and, given a dispatch id, the roster
           },
         ],
       }),
+    ),
+    http.get('/api/v1/personnel/members', () =>
+      HttpResponse.json({ items: [{ memberId: 'm-1', firstName: 'Jordan', lastName: 'Osei' }] }),
     ),
     http.get('/api/v1/alerting/dispatches/D-1/receipts', () =>
       HttpResponse.json({
@@ -143,6 +145,9 @@ test('an officer sees the manual entry form and, given a dispatch id, the roster
   const roster = await screen.findByRole('region', { name: 'Live roster' });
   expect(await within(roster).findByText('Jordan Osei')).toBeTruthy();
   expect(await screen.findByText('Direct to scene')).toBeTruthy();
+  expect(
+    within(roster).getByRole('link', { name: 'Delivery diagnostics for Jordan Osei' }),
+  ).toBeTruthy();
   // Receipts are keyed by member id on the wire; the table shows the roster name instead.
   const receipts = await screen.findByRole('region', { name: 'Delivery receipts' });
   expect(await within(receipts).findByText('Jordan Osei')).toBeTruthy();
@@ -167,7 +172,6 @@ test('a FAILED receipt shows as Failed with its glyph and word, and a later tone
         members: [
           {
             memberId: 'm-1',
-            name: 'Jordan Osei',
             ackStatus: 'UNANSWERED',
             eta: null,
             assignedApparatusId: null,
@@ -324,6 +328,7 @@ test('submitting the manual entry form navigates the page to the new dispatch id
 });
 
 test('a failed riding-board seat assignment surfaces an error instead of silently reverting', async () => {
+  const postedBodies: Record<string, unknown>[] = [];
   server.use(
     http.get('/api/v1/alerting/dispatches/D-2', () =>
       HttpResponse.json({
@@ -341,7 +346,6 @@ test('a failed riding-board seat assignment surfaces an error instead of silentl
         members: [
           {
             memberId: 'm-1',
-            name: 'Jordan Osei',
             ackStatus: 'RESPONDING',
             eta: null,
             assignedApparatusId: null,
@@ -362,13 +366,14 @@ test('a failed riding-board seat assignment surfaces an error instead of silentl
             type: 'Engine',
             status: 'IN_SERVICE',
             assignable: true,
-            positions: [{ code: 'OFF', label: 'Officer' }],
+            positions: [{ code: 'OFF', label: 'Officer', version: 2 }],
           },
         ],
       }),
     ),
-    http.post('/api/v1/apparatus/riding-board/D-2/assignments', () =>
-      HttpResponse.json(
+    http.post('/api/v1/apparatus/riding-board/D-2/assignments', async ({ request }) => {
+      postedBodies.push((await request.json()) as Record<string, unknown>);
+      return HttpResponse.json(
         {
           type: 'about:blank',
           title: 'Conflict',
@@ -377,15 +382,17 @@ test('a failed riding-board seat assignment surfaces an error instead of silentl
           traceId: 'trace-409',
         },
         { status: 409 },
-      ),
-    ),
+      );
+    }),
   );
 
   const user = userEvent.setup();
   renderPage(['OFFICER'], '/alerts/roster?dispatchId=D-2');
 
   const select = await screen.findByLabelText(/officer/i);
+  await screen.findByRole('option', { name: 'm-1' });
   await user.selectOptions(select, 'm-1');
+  await waitFor(() => expect(postedBodies[0]?.expectedVersion).toBe(2));
 
   expect(
     await screen.findByText(

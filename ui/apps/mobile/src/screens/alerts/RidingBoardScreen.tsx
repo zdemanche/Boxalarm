@@ -23,6 +23,7 @@ interface PendingAssignment {
   positionCode: string;
   memberId: string;
   version: number;
+  clientAssignmentId: string;
 }
 
 // E1-S18-UI: the officer's riding board. Members come from the response roster (name, quals,
@@ -117,6 +118,7 @@ export function RidingBoardScreen() {
             positionCode: assignment.positionCode,
             memberId: assignment.memberId,
             expectedVersion: assignment.version,
+            clientAssignmentId: assignment.clientAssignmentId,
           });
           if (cancelled) return;
           setPending((prev) => {
@@ -124,10 +126,21 @@ export function RidingBoardScreen() {
             next.delete(seatKey);
             return next;
           });
-        } catch {
-          // Leave it queued - the next reconnect (or a future retry trigger) will try again.
-          // A stale version will surface as a 409 through the same assign() path once the
-          // officer is back online and can see/resolve it interactively.
+        } catch (error) {
+          // Leave it queued - the next reconnect (or a future retry trigger) will try again with
+          // the same clientAssignmentId, so a lost response replays instead of conflicting. A
+          // genuine 409 means the seat moved on: drop the entry rather than re-send it forever.
+          if (error instanceof ApiError && error.problem.status === 409) {
+            if (cancelled) return;
+            setPending((prev) => {
+              const next = new Map(prev);
+              next.delete(seatKey);
+              return next;
+            });
+            setConflict(
+              `${assignment.unitId} / ${assignment.positionCode} was reassigned by another officer. Refreshed.`,
+            );
+          }
         }
       }
       if (!cancelled) {
@@ -158,7 +171,13 @@ export function RidingBoardScreen() {
     if (!isOnline) {
       setPending((prev) => {
         const next = new Map(prev);
-        next.set(seatKey, { unitId, positionCode, memberId, version });
+        next.set(seatKey, {
+          unitId,
+          positionCode,
+          memberId,
+          version,
+          clientAssignmentId: `${dispatchId}-${unitId}-${positionCode}-${Date.now()}`,
+        });
         return next;
       });
       return;
@@ -295,12 +314,7 @@ export function RidingBoardScreen() {
                         key={member.memberId}
                         accessibilityRole="button"
                         onPress={() =>
-                          void assign(
-                            unit.unitId,
-                            position.code,
-                            member.memberId,
-                            position.assignment?.version ?? 0,
-                          )
+                          void assign(unit.unitId, position.code, member.memberId, position.version)
                         }
                         style={{
                           minHeight: targetSize.field,
