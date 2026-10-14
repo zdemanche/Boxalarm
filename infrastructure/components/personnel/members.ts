@@ -157,6 +157,7 @@ export class Members extends pulumi.ComponentResource {
     "MemberEmailChanged" | "MemberEmailCompensationFailed" | "MemberEmailSignOutFailed",
     aws.cloudwatch.MetricAlarm
   >;
+  public readonly rolesUpdateFailedAlarm: aws.cloudwatch.MetricAlarm;
 
   constructor(name: string, args: MembersArgs, opts?: pulumi.ComponentResourceOptions) {
     requireEnv("Members", args.env);
@@ -350,6 +351,26 @@ export class Members extends pulumi.ComponentResource {
           "Use Account security > Report device lost for them (all devices) so no session from before the change survives.",
       ),
     };
+
+    this.rolesUpdateFailedAlarm = new aws.cloudwatch.MetricAlarm(
+      `${name}-member-roles-update-failed-alarm`,
+      {
+        name: `boxalarm-${env}-personnel-member-roles-update-failed`,
+        alarmDescription:
+          "A role change failed after Cognito groups may already have moved, so a member's tokens can hold roles the roster and audit log do not show. " +
+          "Re-save the member's roles from the member's page (member.roles.update.partial names the member).",
+        namespace: "Boxalarm/personnel",
+        metricName: "MemberRolesUpdateFailed",
+        statistic: "Sum",
+        period: 60,
+        evaluationPeriods: 1,
+        threshold: 0,
+        comparisonOperator: "GreaterThanThreshold",
+        treatMissingData: "notBreaching",
+        alarmActions: [args.chiefNotificationTopicArn],
+      },
+      { parent: this },
+    );
 
     // E2-S6-INFRA #208: member self-service profile/contact update (F2.6, AP 12). One route,
     // two Cedar actions: updateMember.ts authorizes SelfUpdateMember (every role, via the

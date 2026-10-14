@@ -165,6 +165,21 @@ describe("Members", () => {
     }
   });
 
+  it("alarms the chief when a role change fails after Cognito may have moved", async () => {
+    const members = await build();
+    const alarm = members.rolesUpdateFailedAlarm;
+    const [metricName, namespace, threshold, actions] = await Promise.all([
+      resolve(alarm.metricName),
+      resolve(alarm.namespace),
+      resolve(alarm.threshold),
+      resolve(alarm.alarmActions),
+    ]);
+    expect(metricName).toBe("MemberRolesUpdateFailed");
+    expect(namespace).toBe("Boxalarm/personnel");
+    expect(threshold).toBe(0);
+    expect(actions).toEqual(["arn:aws:sns:us-east-1:123456789012:chief"]);
+  });
+
   it("grants no personnel role any permission on the alerting or incident tables (AC4)", async () => {
     const members = await build();
     const policies = await Promise.all([
