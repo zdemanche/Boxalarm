@@ -16,6 +16,7 @@ import { humanize } from '../../lib/labels';
 import { useRidingPositions } from '../../lib/useRidingPositions';
 import { useStations } from '../../lib/useStations';
 import { listMembers } from '../personnel/api';
+import { problemMessage } from '../personnel/problemMessage';
 import {
   approveShiftSwap,
   createShift,
@@ -94,7 +95,17 @@ function toEpochMillis(localDateTime: string): number {
   return new Date(localDateTime).getTime();
 }
 
-const emptyPosition: CreateShiftPosition = { positionCode: '', requiredQual: '' };
+const MAX_POSITIONS = 99;
+
+type PositionRow = CreateShiftPosition & { rowId: number };
+
+let nextRowId = 0;
+const newPositionRow = (): PositionRow => ({
+  rowId: nextRowId++,
+  positionCode: '',
+  requiredQual: '',
+});
+const initialPositionRows = () => [newPositionRow(), newPositionRow()];
 
 function CreateShiftForm({ onCreated }: { onCreated: () => void }) {
   const auth = useAuth();
@@ -103,10 +114,7 @@ function CreateShiftForm({ onCreated }: { onCreated: () => void }) {
   const [startAt, setStartAt] = useState('');
   const [endAt, setEndAt] = useState('');
   const [stationId, setStationId] = useState('');
-  const [positions, setPositions] = useState<CreateShiftPosition[]>([
-    { ...emptyPosition },
-    { ...emptyPosition },
-  ]);
+  const [positions, setPositions] = useState<PositionRow[]>(initialPositionRows);
 
   const createMutation = useMutation({
     mutationFn: () =>
@@ -126,7 +134,7 @@ function CreateShiftForm({ onCreated }: { onCreated: () => void }) {
       setStartAt('');
       setEndAt('');
       setStationId('');
-      setPositions([{ ...emptyPosition }, { ...emptyPosition }]);
+      setPositions(initialPositionRows());
       onCreated();
     },
   });
@@ -185,7 +193,7 @@ function CreateShiftForm({ onCreated }: { onCreated: () => void }) {
           />
         )}
         {positions.map((position, index) => (
-          <fieldset key={index} className={styles.position}>
+          <fieldset key={position.rowId} className={styles.position}>
             <legend>Position {index + 1}</legend>
             {ridingPositions.length > 0 ? (
               // Pick from the department's riding positions; the position's own required qual
@@ -239,11 +247,35 @@ function CreateShiftForm({ onCreated }: { onCreated: () => void }) {
                 )
               }
             />
+            {positions.length > 1 ? (
+              <Button
+                type="button"
+                variant="secondary"
+                size="sm"
+                aria-label={`Remove position ${index + 1}`}
+                onClick={() =>
+                  setPositions((prev) => prev.filter((p) => p.rowId !== position.rowId))
+                }
+              >
+                Remove
+              </Button>
+            ) : null}
           </fieldset>
         ))}
+        <div>
+          <Button
+            type="button"
+            variant="secondary"
+            size="sm"
+            disabled={positions.length >= MAX_POSITIONS}
+            onClick={() => setPositions((prev) => [...prev, newPositionRow()])}
+          >
+            Add position
+          </Button>
+        </div>
         {createMutation.error ? (
           <p role="alert" aria-live="assertive" className={styles.error}>
-            {createMutation.error.message}
+            {problemMessage(createMutation.error)}
           </p>
         ) : null}
         <div className={styles.submit}>
@@ -417,7 +449,7 @@ function PendingSwaps() {
       {body}
       {approveMutation.error ? (
         <p role="alert" aria-live="assertive" className={[styles.error, styles.message].join(' ')}>
-          The swap wasn&rsquo;t approved: {approveMutation.error.message}
+          The swap wasn&rsquo;t approved: {problemMessage(approveMutation.error)}
         </p>
       ) : null}
       {approveMutation.isSuccess ? (
@@ -483,7 +515,7 @@ export function SchedulePage() {
         </div>
 
         <CreateShiftForm
-          onCreated={() => void queryClient.invalidateQueries({ queryKey: ['schedule', 'shifts'] })}
+          onCreated={() => void queryClient.invalidateQueries({ queryKey: ['schedule'] })}
         />
       </div>
     </main>

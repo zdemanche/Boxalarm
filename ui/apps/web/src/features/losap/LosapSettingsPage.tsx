@@ -8,6 +8,7 @@ import { canAccessPath } from '../../routing/routeTable';
 import type { AttendanceActivityType } from '../personnel/types';
 import { humanize } from '../../lib/labels';
 import { getLosapRules, updateLosapRules } from './api';
+import { problemMessage } from '../personnel/problemMessage';
 import type { LosapPointRules } from './types';
 import styles from './LosapSettingsPage.module.css';
 
@@ -119,7 +120,7 @@ export function LosapSettingsPage() {
           <div className={styles.actions}>
             {saveMutation.error ? (
               <p role="alert" aria-live="assertive" className={styles.error}>
-                {saveMutation.error.message}
+                {problemMessage(saveMutation.error)}
               </p>
             ) : null}
             {saveMutation.data ? (

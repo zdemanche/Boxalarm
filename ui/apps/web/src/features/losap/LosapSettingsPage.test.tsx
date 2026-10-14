@@ -107,3 +107,30 @@ test('no rules yet (404) leaves the fields blank and editable', async () => {
   );
   expect(drill.value).toBe('');
 });
+
+test('a rejected save shows the server detail, not just the problem title', async () => {
+  server.use(
+    http.get('/api/v1/platform/config/LOSAP_POINT_RULES', () => HttpResponse.json(currentRules)),
+    http.put('/api/v1/personnel/losap/rules', () =>
+      HttpResponse.json(
+        {
+          type: 'about:blank',
+          title: 'Bad Request',
+          status: 400,
+          detail: 'points must be non-negative integers',
+          traceId: 't',
+        },
+        { status: 400 },
+      ),
+    ),
+  );
+  const user = userEvent.setup();
+  renderPage();
+
+  const drill = (await screen.findByLabelText('Drill points')) as HTMLInputElement;
+  await vi.waitFor(() => expect(drill.value).toBe('2'));
+  await user.click(screen.getByRole('button', { name: 'Save rules' }));
+
+  const alert = await screen.findByText('points must be non-negative integers');
+  expect(alert.getAttribute('role')).toBe('alert');
+});

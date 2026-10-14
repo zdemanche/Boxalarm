@@ -270,3 +270,84 @@ test('coverage names short positions by their riding-position label, one row eac
   expect(errors.mock.calls.some((call) => String(call[0]).includes('same key'))).toBe(false);
   errors.mockRestore();
 });
+
+async function fillShiftBasics(user: ReturnType<typeof userEvent.setup>) {
+  await user.type(await screen.findByLabelText('Start'), '2026-10-01T18:00');
+  await user.type(screen.getByLabelText('End'), '2026-10-02T06:00');
+  await user.type(screen.getByLabelText('Station'), 'STATION-1');
+}
+
+test('a rejected shift shows the server detail, not just the problem title', async () => {
+  server.use(
+    http.get('/api/v1/personnel/shifts', () => HttpResponse.json({ shifts: [] })),
+    http.post('/api/v1/personnel/shifts', () =>
+      HttpResponse.json(
+        {
+          type: 'about:blank',
+          title: 'Bad Request',
+          status: 400,
+          detail: 'endAt must be after startAt',
+          traceId: 't',
+        },
+        { status: 400 },
+      ),
+    ),
+  );
+  renderSchedule();
+  const user = userEvent.setup();
+  await fillShiftBasics(user);
+  await user.click(screen.getByRole('button', { name: 'Create shift' }));
+
+  const alert = await screen.findByRole('alert');
+  expect(alert.textContent).toBe('endAt must be after startAt');
+});
+
+test('creating a shift refetches coverage', async () => {
+  let coverageFetches = 0;
+  server.use(
+    http.get('/api/v1/personnel/shifts', () => HttpResponse.json({ shifts: [] })),
+    http.get('/api/v1/personnel/shifts/coverage', () => {
+      coverageFetches += 1;
+      return HttpResponse.json({ shifts: [] });
+    }),
+    http.post('/api/v1/personnel/shifts', () =>
+      HttpResponse.json({ shiftId: 's-9' }, { status: 201 }),
+    ),
+  );
+  renderSchedule();
+  const user = userEvent.setup();
+  await fillShiftBasics(user);
+  await waitFor(() => expect(coverageFetches).toBe(1));
+  await user.click(screen.getByRole('button', { name: 'Create shift' }));
+
+  await waitFor(() => expect(coverageFetches).toBe(2));
+});
+
+test('positions can be added and removed before the shift is created', async () => {
+  let posted: { positions: { positionCode: string }[] } | undefined;
+  server.use(
+    http.get('/api/v1/personnel/shifts', () => HttpResponse.json({ shifts: [] })),
+    http.post('/api/v1/personnel/shifts', async ({ request }) => {
+      posted = (await request.json()) as typeof posted;
+      return HttpResponse.json({ shiftId: 's-9' }, { status: 201 });
+    }),
+  );
+  renderSchedule();
+  const user = userEvent.setup();
+  await fillShiftBasics(user);
+
+  await user.click(screen.getByRole('button', { name: 'Add position' }));
+  await user.click(screen.getByRole('button', { name: 'Add position' }));
+  const codes = screen.getAllByLabelText('Position code');
+  expect(codes).toHaveLength(4);
+  await user.type(codes[0]!, 'OFFICER');
+  await user.type(codes[1]!, 'DRIVER');
+  await user.type(codes[2]!, 'FF');
+  await user.type(codes[3]!, 'EXTRA');
+  await user.click(screen.getByRole('button', { name: 'Remove position 4' }));
+  expect(screen.getAllByLabelText('Position code')).toHaveLength(3);
+  await user.click(screen.getByRole('button', { name: 'Create shift' }));
+
+  await waitFor(() => expect(posted).toBeDefined());
+  expect(posted?.positions.map((p) => p.positionCode)).toEqual(['OFFICER', 'DRIVER', 'FF']);
+});

@@ -302,3 +302,97 @@ test('an officer sees the member’s mark-offs and can end one now', async () =>
   await waitFor(() => expect(ended).toEqual([String(nowSeconds - 60)]));
   expect(await screen.findByText(/member is available again/)).toBeTruthy();
 });
+
+function problem(status: number, title: string, detail: string) {
+  return HttpResponse.json(
+    { type: 'about:blank', title, status, detail, traceId: 't' },
+    { status },
+  );
+}
+
+test('create member shows the server detail, not just the problem title', async () => {
+  const phoneMessage = 'phone must be a valid E.164 number';
+  server.use(
+    http.get('/api/v1/personnel/members', () => HttpResponse.json({ items: [] })),
+    http.post('/api/v1/personnel/members', () => problem(400, 'Bad Request', phoneMessage)),
+  );
+  const user = userEvent.setup();
+  renderPersonnel(['ADMIN']);
+  await screen.findByRole('heading', { name: 'Members' });
+  await user.type(screen.getByLabelText('First name'), 'Alex');
+  await user.type(screen.getByLabelText('Last name'), 'Rivera');
+  await user.type(screen.getByLabelText('Email'), 'alex@example.com');
+  await user.type(screen.getByLabelText('Phone'), '12');
+  await user.type(screen.getByLabelText('Join date'), '2026-01-15');
+  await user.type(screen.getByLabelText('Rank'), 'FF');
+  await user.type(screen.getByLabelText('Agency ID'), 'NFD-42');
+  await user.click(screen.getByRole('button', { name: 'Create member' }));
+
+  const alert = await screen.findByRole('alert');
+  expect(alert.textContent).toContain(phoneMessage);
+  expect(alert.textContent).not.toContain('Bad Request');
+});
+
+function ownRecordFixture() {
+  const member: Member = {
+    memberId: 'admin-1',
+    firstName: 'Sam',
+    lastName: 'Lee',
+    email: 'sam@example.com',
+    phone: '203-555-0199',
+    status: 'ACTIVE',
+    joinDate: '2020-01-01',
+    rank: 'Lt',
+    agencyId: 'NFD-1',
+  };
+  server.use(
+    http.get('/api/v1/personnel/members/admin-1', () => HttpResponse.json(member)),
+    http.get('/api/v1/personnel/members/admin-1/quals', () => HttpResponse.json([])),
+    http.get('/api/v1/personnel/attendance', () => HttpResponse.json({ records: [] })),
+  );
+}
+
+test('a failed qualifications load says so instead of "No qualifications on file."', async () => {
+  ownRecordFixture();
+  server.use(
+    http.get('/api/v1/personnel/members/admin-1/quals', () =>
+      problem(503, 'Service Unavailable', 'down'),
+    ),
+  );
+  renderPersonnel(['ADMIN'], '/personnel/admin-1');
+  await screen.findByText('Something went wrong loading this page');
+  expect(screen.queryByText('No qualifications on file.')).toBeNull();
+});
+
+test('a failed qualification save shows the server detail', async () => {
+  ownRecordFixture();
+  server.use(
+    http.put('/api/v1/personnel/members/admin-1/quals', () =>
+      problem(422, 'Unprocessable Entity', 'qualCode must not contain # or ,'),
+    ),
+  );
+  const user = userEvent.setup();
+  renderPersonnel(['ADMIN'], '/personnel/admin-1');
+  await user.type(await screen.findByLabelText('Qual code'), 'A#B');
+  await user.click(screen.getByRole('button', { name: 'Assign' }));
+  const message = await screen.findByText('qualCode must not contain # or ,');
+  expect(message.getAttribute('role')).toBe('alert');
+});
+
+test('a failed attendance load or save is reported, not swallowed', async () => {
+  ownRecordFixture();
+  server.use(
+    http.get('/api/v1/personnel/attendance', () => problem(500, 'Internal Server Error', 'boom')),
+    http.post('/api/v1/personnel/attendance', () =>
+      problem(500, 'Internal Server Error', 'could not record'),
+    ),
+  );
+  const user = userEvent.setup();
+  renderPersonnel(['ADMIN'], '/personnel/admin-1');
+  await screen.findByText('Something went wrong loading this page');
+  expect(screen.queryByText('No attendance recorded yet.')).toBeNull();
+  await user.type(screen.getByLabelText('Hours'), '2');
+  await user.click(screen.getByRole('button', { name: 'Record' }));
+  const message = await screen.findByText('could not record');
+  expect(message.getAttribute('role')).toBe('alert');
+});
