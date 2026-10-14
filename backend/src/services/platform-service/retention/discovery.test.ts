@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { GetCommand, ScanCommand, type DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
 import { buildDeptScopedPk, toVerifiedDeptId } from '@boxalarm/dept-scope';
-import { retentionCutoffEpochSeconds } from './disposal.js';
+import { LIFE_SAFETY_ENTITY_TYPES, retentionCutoffEpochSeconds } from './disposal.js';
 import { discoverDisposalCandidates } from './discovery.js';
 
 const DEPT_ID = toVerifiedDeptId({ deptId: 'NICHOLS' });
@@ -108,7 +108,7 @@ describe('discoverDisposalCandidates', () => {
     const receiptPk = buildDeptScopedPk(DEPT_ID, 'ALERT', 'RCPT-1');
     const receiptSk = 'RECEIPT#1';
 
-    const { client } = createMemoryDocClient({
+    const { client, send } = createMemoryDocClient({
       [keyOf(receiptPk, receiptSk)]: {
         pk: receiptPk,
         sk: receiptSk,
@@ -124,8 +124,20 @@ describe('discoverDisposalCandidates', () => {
       nowEpochSeconds: nowEpoch,
     });
 
-    // The scan's own FilterExpression never requests DELIVERY_RECEIPT in the first
-    // place — this proves that holds, not just that age-derivation later refuses it.
+    const scanInput = send.mock.calls
+      .map(([command]) => command)
+      .find((command): command is ScanCommand => command instanceof ScanCommand)?.input;
+    const requestedTypes = Object.values(scanInput?.ExpressionAttributeValues ?? {}) as string[];
+    expect([...requestedTypes].sort()).toEqual([
+      'ARCHIVED_DELIVERY_RECEIPT',
+      'ARCHIVED_INCIDENT',
+      'OUT_OF_SERVICE_RECORD',
+    ]);
+    expect(
+      requestedTypes.filter((type) =>
+        (LIFE_SAFETY_ENTITY_TYPES as readonly string[]).includes(type),
+      ),
+    ).toEqual([]);
     expect(candidates).toEqual([]);
   });
 
