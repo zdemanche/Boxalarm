@@ -1240,6 +1240,45 @@ test('an officer starts a report from a recent dispatch, with no Dispatch ID typ
   expect(posted).toEqual({ dispatchId: 'd-recent' });
 });
 
+test('a create refused with 409 refreshes the dispatch row to Open report', async () => {
+  const now = Math.floor(Date.now() / 1000);
+  let reportExists = false;
+  server.use(
+    http.get('/api/v1/incidents', () => HttpResponse.json({ incidents: [] })),
+    http.get('/api/v1/incidents/dispatches', () =>
+      HttpResponse.json({
+        recentWindowHours: 72,
+        nextCursor: null,
+        dispatches: [
+          {
+            dispatchId: 'd-race',
+            incidentType: 'Structure fire',
+            address: '18 Nichols Ave',
+            dispatchedAt: now - 3600,
+            report: reportExists ? { incidentId: 'd-race', status: 'DRAFT' } : null,
+          },
+        ],
+      }),
+    ),
+    http.post('/api/v1/incidents', () => {
+      reportExists = true;
+      return HttpResponse.json(
+        { type: 'about:blank', title: 'Conflict', status: 409, traceId: 't' },
+        { status: 409 },
+      );
+    }),
+  );
+
+  const user = userEvent.setup();
+  renderIncidents(['OFFICER']);
+  await user.click(
+    await screen.findByRole('button', {
+      name: 'Start report for Structure fire at 18 Nichols Ave',
+    }),
+  );
+  expect(await screen.findByRole('link', { name: 'Open report (Draft)' })).toBeTruthy();
+});
+
 test('a dispatches body without a dispatches array falls back, never the error boundary', async () => {
   server.use(
     http.get('/api/v1/incidents', () => HttpResponse.json({ incidents: [] })),

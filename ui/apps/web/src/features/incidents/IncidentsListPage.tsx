@@ -240,6 +240,11 @@ export function IncidentsListPage() {
       setDispatchId('');
       navigate(`/incidents/${created.incidentId}`);
     },
+    onError: (error) => {
+      if (error instanceof ApiError && error.problem.status === 409) {
+        void queryClient.invalidateQueries({ queryKey: ['incidents', 'dispatches'] });
+      }
+    },
   });
 
   useEffect(() => {
