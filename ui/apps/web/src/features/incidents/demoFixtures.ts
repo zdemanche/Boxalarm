@@ -896,6 +896,16 @@ export async function incidentsDemoRequest(
       );
     }
     const missing = missingRequiredSecondaryFields(SECONDARY_SCHEMA, input.secondaryType, payload);
+    const current = secondariesByIncident.get(incidentId) ?? [];
+    const existingVersion =
+      current.find((module) => module.secondaryType === input.secondaryType)?.version ?? 0;
+    if (input.expectedVersion !== undefined && input.expectedVersion !== existingVersion) {
+      return problem(
+        409,
+        'Conflict',
+        'The exposure record changed while this request was in flight; reload it and retry.',
+      );
+    }
     const saved: IncidentSecondary = {
       incidentId,
       secondaryType: input.secondaryType,
@@ -903,8 +913,8 @@ export async function incidentsDemoRequest(
       affectedMemberIds: input.affectedMemberIds ?? [],
       complete: missing.length === 0,
       updatedAt: nowSecondsNow(),
+      version: existingVersion + 1,
     };
-    const current = secondariesByIncident.get(incidentId) ?? [];
     const without = current.filter((module) => module.secondaryType !== saved.secondaryType);
     secondariesByIncident.set(incidentId, [...without, saved]);
     return json({
@@ -914,6 +924,7 @@ export async function incidentsDemoRequest(
       affectedMemberIds: saved.affectedMemberIds,
       complete: saved.complete,
       updatedAt: saved.updatedAt,
+      version: saved.version,
     });
   }
 

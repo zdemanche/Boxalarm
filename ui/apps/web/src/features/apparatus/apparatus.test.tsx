@@ -7,7 +7,7 @@ import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import type { User, UserManager } from 'oidc-client-ts';
 import { afterAll, afterEach, beforeAll, expect, test, vi } from 'vitest';
 import { AuthProvider } from '../../auth/AuthContext';
-import { formatCalendarDate } from '../../lib/dates';
+import { formatCalendarDate, toCalendarDate } from '../../lib/dates';
 import { RequireRole } from '../../routing/RequireRole';
 import { ApparatusDetailPage, defectPhotoSrc } from './ApparatusDetailPage';
 import { ApparatusListPage } from './ApparatusListPage';
@@ -314,6 +314,7 @@ test('logging maintenance with a next-scheduled date sends scheduledNextAt', asy
   await user.click(screen.getByRole('button', { name: 'Log maintenance' }));
 
   await waitFor(() => expect(capturedBody?.scheduledNextAt).toBeTypeOf('number'));
+  expect(toCalendarDate(capturedBody!.scheduledNextAt! * 1000)).toBe('2026-12-01');
 });
 
 test('open defects render the photo from the signed URL and ignore a bare S3 key', async () => {

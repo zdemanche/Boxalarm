@@ -194,8 +194,15 @@ function RecentDispatchesToReport({
   );
 }
 
-function StatusCell({ status }: { status: IncidentStatus }) {
-  return <StatusChip status={STATUS_ROLE[status]}>{STATUS_LABEL[status]}</StatusChip>;
+function StatusCell({ incident }: { incident: Incident }) {
+  return (
+    <>
+      <StatusChip status={STATUS_ROLE[incident.status]}>{STATUS_LABEL[incident.status]}</StatusChip>
+      {incident.submissionStatus === 'FAILED' ? (
+        <StatusChip status="danger">NERIS submission failed</StatusChip>
+      ) : null}
+    </>
+  );
 }
 
 export function IncidentsListPage() {
@@ -261,10 +268,16 @@ export function IncidentsListPage() {
       ? ranged
       : ranged.filter((incident) => selectedStatuses.includes(incident.status));
   const attention = ranged.filter(
-    (incident) => incident.status === 'DRAFT' || incident.status === 'REJECTED',
+    (incident) =>
+      incident.status === 'DRAFT' ||
+      incident.status === 'REJECTED' ||
+      incident.submissionStatus === 'FAILED',
   );
   const draftCount = attention.filter((incident) => incident.status === 'DRAFT').length;
   const rejectedCount = attention.filter((incident) => incident.status === 'REJECTED').length;
+  const failedCount = attention.filter(
+    (incident) => incident.status !== 'REJECTED' && incident.submissionStatus === 'FAILED',
+  ).length;
   const filtersActive =
     selectedStatuses.length > 0 ||
     fromDate !== epochToDateInput(now - DEFAULT_RANGE_DAYS * 86400) ||
@@ -304,7 +317,7 @@ export function IncidentsListPage() {
       key: 'status',
       header: 'Status',
       sortValue: (incident) => incident.status,
-      render: (incident) => <StatusCell status={incident.status} />,
+      render: (incident) => <StatusCell incident={incident} />,
     },
   ];
 
@@ -394,7 +407,7 @@ export function IncidentsListPage() {
       <p className={styles.summary}>
         {attention.length === 0
           ? 'Nothing needs attention.'
-          : `${attention.length} incidents need attention: ${draftCount} drafts, ${rejectedCount} rejected.`}
+          : `${attention.length} incidents need attention: ${draftCount} drafts, ${rejectedCount} rejected, ${failedCount} failed to send.`}
       </p>
       {attention.length > 0 ? (
         <ul className={styles.rows}>
@@ -404,7 +417,7 @@ export function IncidentsListPage() {
                 <Link to={`/incidents/${incident.incidentId}`} className={styles.mono}>
                   {incident.dispatchNumber}
                 </Link>
-                <StatusCell status={incident.status} />
+                <StatusCell incident={incident} />
               </span>
               <span className={styles.rowMeta}>
                 {incident.incidentType ?? 'Unclassified'} · {incident.address ?? '—'} ·{' '}
@@ -516,7 +529,7 @@ export function IncidentsListPage() {
                         {incident.address ?? '—'} · {formatDate(incident.alarmAt)}
                       </span>
                     </span>
-                    <StatusCell status={incident.status} />
+                    <StatusCell incident={incident} />
                   </Link>
                 </li>
               ))}

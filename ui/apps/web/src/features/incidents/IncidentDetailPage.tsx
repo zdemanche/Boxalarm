@@ -166,6 +166,15 @@ function IncidentReport({ incident }: { incident: IncidentDetail }) {
   const [injuryType, setInjuryType] = useState('');
   const [selectedMembers, setSelectedMembers] = useState<string[]>([]);
   const [extraMember, setExtraMember] = useState('');
+  const existingModule = incident.secondaryModules?.find(
+    (module) => module.secondaryType === secondaryType,
+  );
+  useEffect(() => {
+    const payload = existingModule?.payload ?? {};
+    setExposureType(payload.exposure_type ?? '');
+    setInjuryType(payload.injury_type ?? '');
+    setSelectedMembers(existingModule?.affectedMemberIds ?? []);
+  }, [existingModule]);
   const headingRef = useRef<HTMLHeadingElement>(null);
   const skipInitialFocus = useRef(true);
   const errorTick = useRef(0);
@@ -497,6 +506,7 @@ function IncidentReport({ incident }: { incident: IncidentDetail }) {
         secondaryType,
         payload,
         affectedMemberIds,
+        expectedVersion: existingModule?.version ?? 0,
       });
       const modules = incident.secondaryModules ?? [];
       const replaced: IncidentSecondary[] = [
@@ -508,12 +518,11 @@ function IncidentReport({ incident }: { incident: IncidentDetail }) {
           affectedMemberIds: saved.affectedMemberIds,
           complete: saved.complete,
           updatedAt: saved.updatedAt,
+          version: saved.version,
         },
       ];
       writeIncident({ secondaryModules: replaced });
       setErrors([]);
-      setExposureType('');
-      setInjuryType('');
       setAnnounce(
         saved.complete
           ? `${secondaryTitle(saved.secondaryType)} marked complete.`
@@ -521,6 +530,9 @@ function IncidentReport({ incident }: { incident: IncidentDetail }) {
       );
     } catch (error) {
       noteLocked(error);
+      if (error instanceof ApiError && error.problem.status === 409) {
+        void queryClient.invalidateQueries({ queryKey: ['incident', incident.incidentId] });
+      }
       const serverErrors = fieldErrorsFromUnknown(error);
       if (serverErrors.length > 0) {
         showErrors(serverErrors);
@@ -946,16 +958,19 @@ function IncidentReport({ incident }: { incident: IncidentDetail }) {
           />
           <fieldset className={styles.fieldset}>
             <legend>Affected members</legend>
-            {(incident.respondingMembers ?? []).map((member) => (
+            {[
+              ...new Set([
+                ...(incident.respondingMembers ?? []).map((member) => member.memberId),
+                ...selectedMembers,
+              ]),
+            ].map((memberId) => (
               <Checkbox
-                key={member.memberId}
-                label={memberName(member.memberId)}
-                checked={selectedMembers.includes(member.memberId)}
+                key={memberId}
+                label={memberName(memberId)}
+                checked={selectedMembers.includes(memberId)}
                 onCheckedChange={(checked) =>
                   setSelectedMembers((current) =>
-                    checked
-                      ? [...current, member.memberId]
-                      : current.filter((id) => id !== member.memberId),
+                    checked ? [...current, memberId] : current.filter((id) => id !== memberId),
                   )
                 }
               />

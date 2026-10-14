@@ -197,6 +197,34 @@ test('date range lists only in-range incidents, newest first', async () => {
   });
 });
 
+test('a submitted report whose NERIS submission failed needs attention and is counted once', async () => {
+  const now = Math.floor(Date.now() / 1000);
+  const failed = detail({
+    incidentId: 'failed',
+    dispatchNumber: '26-009001',
+    alarmAt: now - 1 * 86400,
+    status: 'SUBMITTED',
+    submissionStatus: 'FAILED',
+  });
+  const rejected = detail({
+    incidentId: 'rejected',
+    dispatchNumber: '26-009002',
+    alarmAt: now - 2 * 86400,
+    status: 'REJECTED',
+    submissionStatus: 'FAILED',
+  });
+  server.use(
+    http.get('/api/v1/incidents', () => HttpResponse.json({ incidents: [failed, rejected] })),
+  );
+
+  renderIncidents(['OFFICER']);
+  expect(
+    await screen.findByText(/2 incidents need attention: 0 drafts, 1 rejected, 1 failed to send\./),
+  ).toBeTruthy();
+  expect(screen.getAllByText('NERIS submission failed').length).toBeGreaterThanOrEqual(2);
+  expect(screen.queryByText('Nothing needs attention.')).toBeNull();
+});
+
 test('detail loads the record, including core payload, from one request', async () => {
   let detailGets = 0;
   server.use(
@@ -788,6 +816,86 @@ test('exposure modules save, reject an invalid enum, and stay hidden when the AP
     /must be one of: SMOKE, CHEMICAL, BLOODBORNE/,
   );
   await waitFor(() => expect(document.activeElement).toBe(screen.getByLabelText('Exposure type')));
+});
+
+test('marking an existing exposure module complete keeps its named members and sends its version', async () => {
+  let exposureBody: unknown;
+  server.use(
+    http.get('/api/v1/incidents/i-1', () =>
+      HttpResponse.json(
+        detail({
+          secondaryModules: [
+            {
+              incidentId: 'i-1',
+              secondaryType: 'EXPOSURE',
+              payload: { exposure_type: 'CHEMICAL' },
+              affectedMemberIds: ['m-rivera'],
+              complete: false,
+              updatedAt: 1,
+              version: 3,
+            },
+          ],
+        }),
+      ),
+    ),
+    http.put('/api/v1/incidents/i-1/exposures', async ({ request }) => {
+      exposureBody = await request.json();
+      return HttpResponse.json({
+        incidentId: 'i-1',
+        secondaryType: 'EXPOSURE',
+        payload: { exposure_type: 'SMOKE' },
+        affectedMemberIds: ['m-rivera'],
+        complete: true,
+        updatedAt: 2,
+        version: 4,
+      });
+    }),
+  );
+
+  const user = userEvent.setup();
+  renderIncidents(['OFFICER'], '/incidents/i-1');
+  await screen.findByRole('heading', { level: 1, name: /14 Elm St/ });
+  await user.click(screen.getByRole('button', { name: 'Exposure and responder safety' }));
+  fireEvent.change(screen.getByLabelText('Exposure type'), { target: { value: 'SMOKE' } });
+  await user.click(screen.getByRole('button', { name: 'Mark complete' }));
+
+  await waitFor(() => expect(exposureBody).toBeTruthy());
+  expect(exposureBody).toEqual({
+    secondaryType: 'EXPOSURE',
+    payload: { exposure_type: 'SMOKE' },
+    affectedMemberIds: ['m-rivera'],
+    expectedVersion: 3,
+  });
+});
+
+test('recording an exposure the caller cannot see sends expectedVersion 0 and surfaces a 409', async () => {
+  let exposureBody: unknown;
+  server.use(
+    http.get('/api/v1/incidents/i-1', () => HttpResponse.json(detail({ secondaryModules: [] }))),
+    http.put('/api/v1/incidents/i-1/exposures', async ({ request }) => {
+      exposureBody = await request.json();
+      return HttpResponse.json(
+        {
+          type: 'about:blank',
+          title: 'Conflict',
+          status: 409,
+          detail:
+            'The exposure record changed while this request was in flight; reload it and retry.',
+        },
+        { status: 409 },
+      );
+    }),
+  );
+
+  const user = userEvent.setup();
+  renderIncidents(['OFFICER'], '/incidents/i-1');
+  await screen.findByRole('heading', { level: 1, name: /14 Elm St/ });
+  await user.click(screen.getByRole('button', { name: 'Exposure and responder safety' }));
+  fireEvent.change(screen.getByLabelText('Exposure type'), { target: { value: 'SMOKE' } });
+  await user.click(screen.getByRole('button', { name: 'Mark complete' }));
+
+  expect((await screen.findByRole('alert')).textContent).toMatch(/changed while this request/);
+  expect(exposureBody).toMatchObject({ expectedVersion: 0 });
 });
 
 test('the exposure section is not rendered when the API does not return it', async () => {
