@@ -49,6 +49,10 @@ function sqsEvent(eventType: string, source: string, payload: Record<string, unk
   } as unknown as SQSEvent;
 }
 
+function failedIds(...ids: string[]) {
+  return { batchItemFailures: ids.map((itemIdentifier) => ({ itemIdentifier })) };
+}
+
 function mockDdb(send: ReturnType<typeof vi.fn>): void {
   vi.doMock('../dynamoClient.js', async (importOriginal) => {
     const actual = await importOriginal<typeof import('../dynamoClient.js')>();
@@ -160,7 +164,7 @@ describe('apparatusTestDueConsumer', () => {
 
     await expect(
       handler(sqsEvent('apparatus.test.due', 'apparatus-service', TEST_DUE)),
-    ).resolves.toBeUndefined();
+    ).resolves.toEqual(failedIds());
     expect(send).toHaveBeenCalledTimes(1);
   });
 
@@ -174,7 +178,7 @@ describe('apparatusTestDueConsumer', () => {
     delete withoutDept.deptId;
     await expect(
       handler(sqsEvent('apparatus.test.due', 'apparatus-service', withoutDept)),
-    ).rejects.toThrow('apparatus.test.due event failed shape validation');
+    ).resolves.toEqual(failedIds('msg-1'));
     expect(send).not.toHaveBeenCalled();
     expect(String(errorSpy.mock.calls[0]?.[0])).toContain(
       'notification.apparatusTestDue.malformed_event',
@@ -199,11 +203,35 @@ describe('apparatusTestDueConsumer', () => {
         },
       ],
     } as unknown as SQSEvent;
-    await expect(handler(bare)).rejects.toThrow('failed shape validation');
+    await expect(handler(bare)).resolves.toEqual(failedIds('m'));
     expect(send).not.toHaveBeenCalled();
   });
 
-  it('rethrows a genuine write failure so SQS redelivers', async () => {
+  it('reports only the malformed record, still recording the valid records around it', async () => {
+    const send = vi.fn().mockResolvedValue({});
+    mockDdb(send);
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const { handler } = await import('./apparatusTestDueConsumer.js');
+    const record = (messageId: string, payload: Record<string, unknown>) => ({
+      ...sqsEvent('apparatus.test.due', 'apparatus-service', payload).Records[0]!,
+      messageId,
+    });
+    const withoutDept: Record<string, unknown> = { ...TEST_DUE };
+    delete withoutDept.deptId;
+
+    const result = await handler({
+      Records: [
+        record('msg-a', TEST_DUE),
+        record('msg-bad', withoutDept),
+        record('msg-b', { ...TEST_DUE, testType: 'LADDER' }),
+      ],
+    });
+
+    expect(result).toEqual(failedIds('msg-bad'));
+    expect(send).toHaveBeenCalledTimes(2);
+  });
+
+  it('reports a genuine write failure so SQS redelivers that record', async () => {
     const send = vi.fn().mockRejectedValueOnce(new Error('throttled'));
     mockDdb(send);
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
@@ -211,9 +239,14 @@ describe('apparatusTestDueConsumer', () => {
 
     await expect(
       handler(sqsEvent('apparatus.test.due', 'apparatus-service', TEST_DUE)),
-    ).rejects.toThrow('throttled');
+    ).resolves.toEqual(failedIds('msg-1'));
     expect(String(errorSpy.mock.calls[0]?.[0])).toContain(
       'notification.apparatusTestDue.write_failed',
+    );
+    expect(errorSpy.mock.calls.map((call) => String(call[0]))).toContainEqual(
+      expect.stringContaining(
+        '"event":"notification.reminder.record_failed","service":"notification-service","reason":"Error","message":"throttled","correlationId":"msg-1"',
+      ),
     );
   });
 });
@@ -250,7 +283,7 @@ describe('inventoryReorderDueConsumer', () => {
       handler(
         sqsEvent('inventory.reorder.due', 'inventory-service', { ...REORDER, currentQty: '3' }),
       ),
-    ).rejects.toThrow('inventory.reorder.due event failed shape validation');
+    ).resolves.toEqual(failedIds('msg-1'));
     expect(send).not.toHaveBeenCalled();
   });
 
@@ -260,9 +293,9 @@ describe('inventoryReorderDueConsumer', () => {
     vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const { handler } = await import('./inventoryReorderDueConsumer.js');
 
-    await expect(handler(sqsEvent('ppe.expiry.due', 'inventory-service', REORDER))).rejects.toThrow(
-      'failed shape validation',
-    );
+    await expect(
+      handler(sqsEvent('ppe.expiry.due', 'inventory-service', REORDER)),
+    ).resolves.toEqual(failedIds('msg-1'));
   });
 });
 
@@ -453,6 +486,7 @@ describe('NERIS report consumers', () => {
   it('fails closed on a rejection with no owner', async () => {
     mockDdb(vi.fn());
     const { handler } = await import('./nerisReportConsumer.js');
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
     await expect(
       handler(
         sqsEvent('neris.incident.rejected', 'incident-service', {
@@ -460,6 +494,40 @@ describe('NERIS report consumers', () => {
           deptId: 'NICHOLS',
         }),
       ),
-    ).rejects.toThrow();
+    ).resolves.toEqual(failedIds('msg-1'));
+  });
+
+  it('acks a neris.submission.failed with no owner when submissions are switched off on purpose, writing nothing', async () => {
+    const send = vi.fn();
+    mockDdb(send);
+    const { handler } = await import('./nerisReportConsumer.js');
+
+    await expect(
+      handler(
+        sqsEvent('neris.submission.failed', 'incident-service', {
+          incidentId: 'I',
+          deptId: 'NICHOLS',
+          outcome: 'NOT_CONFIGURED',
+          failureReason: 'NERIS submissions are switched off',
+        }),
+      ),
+    ).resolves.toEqual(failedIds());
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it('still fails closed on an ownerless neris.submission.failed that is not the switched-off outcome', async () => {
+    mockDdb(vi.fn());
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const { handler } = await import('./nerisReportConsumer.js');
+
+    await expect(
+      handler(
+        sqsEvent('neris.submission.failed', 'incident-service', {
+          incidentId: 'I',
+          deptId: 'NICHOLS',
+          outcome: 'CLIENT_ERROR',
+        }),
+      ),
+    ).resolves.toEqual(failedIds('msg-1'));
   });
 });

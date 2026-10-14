@@ -122,6 +122,14 @@ describe("notification reminder consumers", { timeout: 30_000 }, () => {
     },
   );
 
+  it.each([...ALL, "neris-rejected", "neris-no-activity"])(
+    "%s: reports batch item failures, so a failed record is retried instead of deleted",
+    async (key) => {
+      await build();
+      expect(esmFor(fn(key)).inputs.functionResponseTypes).toEqual(["ReportBatchItemFailures"]);
+    },
+  );
+
   it.each(DIGEST_ONLY)(
     "%s: PutItems its pending rows + eventId marker and nothing else",
     async (key) => {

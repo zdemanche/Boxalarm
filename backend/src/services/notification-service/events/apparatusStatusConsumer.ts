@@ -1,10 +1,11 @@
 import { toVerifiedDeptId } from '@boxalarm/dept-scope';
 import { emitOutcomeMetric } from '@boxalarm/metrics';
-import type { SQSEvent } from 'aws-lambda';
+import type { SQSBatchResponse, SQSEvent } from 'aws-lambda';
 import { createDynamoClient, readNotificationConfig } from '../dynamoClient.js';
 import { APPARATUS_STATUS_CATEGORY, type ReminderItem } from '../reminders/categories.js';
 import { deliverImmediately, type ImmediateDeliverySpec } from './immediateDelivery.js';
 import {
+  handleRecords,
   logError,
   MalformedEventError,
   parseEnvelope,
@@ -69,11 +70,11 @@ function toStatusChange({ payload, eventTime }: EventEnvelope): StatusChange {
  * already delivered. An origin 'DEFECT' event is acked undelivered: apparatus.defect.reported
  * already notifies the same roles. No digest row — a status change is news now, not tomorrow.
  */
-export const handler = async (event: SQSEvent): Promise<void> => {
+export const handler = async (event: SQSEvent): Promise<SQSBatchResponse> => {
   const { tableName } = readNotificationConfig(process.env);
   const ddb = createDynamoClient(process.env);
 
-  for (const record of event.Records) {
+  return handleRecords(event, async (record) => {
     let envelope: EventEnvelope;
     let change: StatusChange;
     try {
@@ -84,7 +85,7 @@ export const handler = async (event: SQSEvent): Promise<void> => {
       throw error;
     }
     if (envelope.payload.origin === DEFECT_ORIGIN) {
-      continue;
+      return;
     }
     const deptId = toVerifiedDeptId({ deptId: change.deptId });
 
@@ -97,5 +98,5 @@ export const handler = async (event: SQSEvent): Promise<void> => {
       emitOutcomeMetric(METRIC_NAMESPACE, 'ApparatusStatusImmediateFailed');
       throw error;
     }
-  }
+  });
 };

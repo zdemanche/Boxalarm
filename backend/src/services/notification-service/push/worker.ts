@@ -35,7 +35,7 @@ import {
 export const PUSH_WORKER_METRIC_NAMESPACE = 'Boxalarm/NotificationPush';
 const LOG_PREFIX = 'notification.push';
 
-/** Same per-request budget as the alerting channel workers; the Lambda timeout is 15s. */
+/** Same per-request budget as the alerting channel workers. */
 export const PUSH_REQUEST_TIMEOUT_MS = 4_000;
 
 /** One member's pushes per SQS record; a member has at most 10 devices (MAX_PUSH_DEVICES). */

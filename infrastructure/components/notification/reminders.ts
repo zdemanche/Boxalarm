@@ -289,6 +289,7 @@ export class Reminders extends pulumi.ComponentResource {
           lambdaRole: lambda.role,
           alarmTopicArn: args.chiefNotificationTopicArn,
           maxReceiveCount: 5,
+          reportBatchItemFailures: true,
         },
         { parent: this },
       );

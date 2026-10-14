@@ -253,10 +253,11 @@ export function buildDigestSentMarker(
   category: string,
   today: string,
   now: number,
+  channel?: string,
 ): DigestSentMarker {
   return {
     pk: buildDeptScopedPk(deptId, recipientType, recipientId),
-    sk: `DIGESTSENT#${category}#${today}`,
+    sk: `DIGESTSENT#${category}#${today}${channel ? `#${channel}` : ''}`,
     entityType: 'DIGEST_SENT',
     ttl: Math.floor(now / 1000) + DIGEST_PENDING_TTL_SECONDS,
   };

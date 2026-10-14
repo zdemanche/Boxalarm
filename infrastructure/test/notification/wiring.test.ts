@@ -183,6 +183,7 @@ describe("notification Lambdas: env and IAM match their handlers", { timeout: 30
     it("drains its queue with a concurrency cap, redrives to a DLQ, and alarms on DLQ depth", async () => {
       await build();
       const esm = esmFor(CONSUMER);
+      expect(esm.inputs.functionResponseTypes).toEqual(["ReportBatchItemFailures"]);
       expect(esm.inputs.eventSourceArn).toBe(
         `arn:aws:sqs:${REGION}:${ACCOUNT_ID}:boxalarm-dev-notification-cert-expiry-queue`,
       );
@@ -219,7 +220,12 @@ describe("notification Lambdas: env and IAM match their handlers", { timeout: 30
       await build();
       const s = statementsForRole(DIGEST);
       expect(isGranted(s, "dynamodb:Query", GSI3)).toBe(true);
-      for (const action of ["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:DeleteItem"]) {
+      for (const action of [
+        "dynamodb:GetItem",
+        "dynamodb:PutItem",
+        "dynamodb:DeleteItem",
+        "dynamodb:ConditionCheckItem",
+      ]) {
         expect(isGranted(s, action, TABLE), action).toBe(true);
       }
       expect(isGranted(s, "sns:Publish", PUSH_TOPIC)).toBe(true);
