@@ -39,6 +39,34 @@ describe('createApparatusRepository', () => {
     });
   });
 
+  it('carries the out-of-service reason, start and elapsed time on listed apparatus', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-09-14T01:00:00Z'));
+    const startAt = Math.floor(Date.now() / 1000) - 3600;
+    const send = vi.fn().mockResolvedValue({
+      Items: [
+        {
+          apparatusId: 'APP-ENGINE-2',
+          unitId: 'ENGINE-2',
+          type: 'ENGINE',
+          status: 'OUT_OF_SERVICE',
+          outOfServiceReason: 'Brake repair',
+          outOfServiceStartAt: startAt,
+        },
+        { apparatusId: 'APP-ENGINE-3', unitId: 'ENGINE-3', type: 'ENGINE', status: 'IN_SERVICE' },
+      ],
+    });
+    const repository = createApparatusRepository(fakeClient(send), TABLE_NAME);
+
+    const result = await repository.listApparatus(DEPT_ID);
+
+    expect(result[0]).toMatchObject({
+      outOfService: { reason: 'Brake repair', startAt, elapsedSeconds: 3600 },
+    });
+    expect(result[1]).not.toHaveProperty('outOfService');
+    vi.useRealTimers();
+  });
+
   it('resolves detail via gsi3pk/gsi3sk on unitId, never a direct GetItem by unitId', async () => {
     const send = vi.fn().mockResolvedValue({
       Items: [

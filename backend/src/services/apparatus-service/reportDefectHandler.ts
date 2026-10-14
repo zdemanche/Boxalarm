@@ -13,6 +13,7 @@ import { createDynamoClient, readApparatusTableConfig } from './dynamoClient.js'
 import {
   createDefectPhotoUploadUrl,
   readDefectPhotoUploadConfig,
+  defectPhotoKeyPrefix,
   resignDefectPhotoUploadUrl,
 } from './defectPhotoUpload.js';
 import {
@@ -223,10 +224,12 @@ async function replayedDefectResponse(
   deptId: VerifiedDeptId,
 ): Promise<APIGatewayProxyResultV2> {
   const upload =
-    photoFilename && existing.photoS3Key
+    photoFilename &&
+    existing.photoS3Key?.startsWith(defectPhotoKeyPrefix(deptId, existing.defectId))
       ? await resignDefectPhotoUploadUrl(
           await readDefectPhotoUploadConfig(process.env),
           deptId,
+          existing.defectId,
           existing.photoS3Key,
         )
       : undefined;

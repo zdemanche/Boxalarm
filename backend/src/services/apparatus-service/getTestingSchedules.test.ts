@@ -172,7 +172,7 @@ describe('getTestingSchedules handler', () => {
     ]);
   });
 
-  it('issues a single ranged GSI2 Query (not one per month) spanning [today, end-of-window]', async () => {
+  it('issues a single ranged GSI2 Query (not one per month) spanning [floor, end-of-window]', async () => {
     const client = fakeDynamoClient([]);
     const createHandler = await importHandler();
     const handler = createHandler({
@@ -189,13 +189,11 @@ describe('getTestingSchedules handler', () => {
     );
     expect(queryCalls).toHaveLength(1);
     const command = queryCalls[0]?.[0] as QueryCommand;
-    expect(command.input.KeyConditionExpression).toBe(
-      'gsi2pk = :gsi2pk AND gsi2sk BETWEEN :start AND :end',
-    );
+    expect(command.input.KeyConditionExpression).toBe('gsi2pk = :gsi2pk AND gsi2sk <= :end');
     expect(command.input.ExpressionAttributeValues?.[':gsi2pk']).toBe(
       'DEPT#dept-001#DUE#APPARATUS_TEST',
     );
-    expect(command.input.ExpressionAttributeValues?.[':start']).toBe('2026-09-14');
+    expect(command.input.ExpressionAttributeValues).not.toHaveProperty(':start');
     // monthsAhead=2 from 2026-09-14 -> last day of 2026-11
     expect(command.input.ExpressionAttributeValues?.[':end']).toBe('2026-11-30#￿');
   });

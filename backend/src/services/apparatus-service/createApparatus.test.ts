@@ -172,6 +172,28 @@ describe('createApparatus handler', () => {
     expect(result).toMatchObject({ statusCode: 400 });
   });
 
+  it('returns 400 and writes nothing when created as OUT_OF_SERVICE (no OOS record to return from)', async () => {
+    const createApparatus = vi.fn();
+    vi.doMock('./apparatusRepository.js', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('./apparatusRepository.js')>();
+      return { ...actual, getApparatusRepository: () => ({ createApparatus }) };
+    });
+    const { handler } = await import('./createApparatus.js');
+
+    const result = await handler(
+      buildEvent(ADMIN_AUTH_CONTEXT, {
+        unitId: 'ENGINE-5',
+        type: 'ENGINE',
+        status: 'OUT_OF_SERVICE',
+      }),
+      {} as never,
+      () => undefined,
+    );
+
+    expect(result).toMatchObject({ statusCode: 400 });
+    expect(createApparatus).not.toHaveBeenCalled();
+  });
+
   it('returns 400 when status is an unknown enum value', async () => {
     const { handler } = await import('./createApparatus.js');
 

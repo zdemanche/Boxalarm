@@ -3,6 +3,7 @@ import { DynamoDBDocumentClient, PutCommand, QueryCommand } from '@aws-sdk/lib-d
 import { captureAWSv3Client } from 'aws-xray-sdk-core';
 import { buildDeptScopedPk } from '@boxalarm/dept-scope';
 import type { VerifiedDeptId } from '@boxalarm/dept-scope';
+import type { OutOfServiceSummary } from './repository.js';
 import type { TestType } from './testRecord.js';
 
 export type ApparatusStatus = 'IN_SERVICE' | 'OUT_OF_SERVICE';
@@ -12,6 +13,7 @@ export interface Apparatus {
   readonly unitId: string;
   readonly type: string;
   readonly status: ApparatusStatus;
+  readonly outOfService?: OutOfServiceSummary;
 }
 
 export interface CreateApparatusInput {
@@ -77,11 +79,22 @@ function toApparatusId(unitId: string): string {
 }
 
 function toApparatus(item: Record<string, unknown>): Apparatus {
+  const status = item.status as ApparatusStatus;
+  const startAt = item.outOfServiceStartAt;
   return {
     apparatusId: item.apparatusId as string,
     unitId: item.unitId as string,
     type: item.type as string,
-    status: item.status as ApparatusStatus,
+    status,
+    ...(status === 'OUT_OF_SERVICE' && typeof startAt === 'number'
+      ? {
+          outOfService: {
+            reason: item.outOfServiceReason as string,
+            startAt,
+            elapsedSeconds: Math.max(0, Math.floor(Date.now() / 1000) - startAt),
+          },
+        }
+      : {}),
   };
 }
 

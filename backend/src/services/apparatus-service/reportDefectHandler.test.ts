@@ -466,6 +466,31 @@ describe('reportDefect handler', () => {
     expect(body.uploadUrl).toContain('X-Amz-Expires=600');
   });
 
+  it("never re-signs a stored photo key that belongs to another defect's prefix", async () => {
+    const client = fakeDynamoClient({
+      existingIdempotency: {
+        defectId: 'DEF-EXISTING',
+        photoS3Key: 'NICHOLS/defect/DEF-A/brake.jpg',
+      },
+    });
+    const { createReportDefectHandler } = await import('./reportDefectHandler.js');
+    const handler = createReportDefectHandler({ client, authzClient: fakeAuthzClient('ALLOW') });
+
+    const result = await handler(
+      buildEvent(
+        JSON.stringify({
+          description: 'x',
+          severity: 'MINOR',
+          clientMutationId: 'offline-1',
+          photo: { filename: 'a.jpg' },
+        }),
+      ),
+    );
+
+    expect(result).toMatchObject({ statusCode: 200 });
+    expect(JSON.parse((result as { body: string }).body)).not.toHaveProperty('uploadUrl');
+  });
+
   it('does not sign anything on a replay without a photo', async () => {
     const client = fakeDynamoClient({
       existingIdempotency: {

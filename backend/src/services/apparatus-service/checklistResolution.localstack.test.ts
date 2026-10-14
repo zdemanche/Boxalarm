@@ -5,7 +5,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { toVerifiedDeptId } from '@boxalarm/dept-scope';
 import { putDepartmentConfig } from '../platform-service/config/repository.js';
 import {
-  resolveChecklistTemplateForUnit,
+  getChecklistTemplateById,
   resolveDepartmentDefaultTemplate,
 } from './checklistResolution.js';
 
@@ -90,7 +90,7 @@ describe('check sheet critical flag (LocalStack)', () => {
       }),
     );
 
-    const template = await resolveChecklistTemplateForUnit(client, TABLE_NAME, DEPT_ID, 'APP-E1');
+    const template = await getChecklistTemplateById(client, TABLE_NAME, DEPT_ID, 'CT-ENGINE');
 
     expect(template?.items[0]).toMatchObject({ code: 'SCBA', critical: true });
   });
