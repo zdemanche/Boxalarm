@@ -52,6 +52,13 @@ describe('handler (POST /api/v1/inventory/equipment)', () => {
     process.env = { ...originalEnv };
   });
 
+  it.each(['{bad', 'null'])('400 (not 500) for a malformed or non-object body %s', async (raw) => {
+    const send = vi.fn();
+    const result = await invoke({ ...event({}), body: raw }, fakeDocClient(send));
+    expect(result.statusCode).toBe(400);
+    expect(send).not.toHaveBeenCalled();
+  });
+
   it('AC1: creates an asset and returns it unassigned by default (entrypoint-test)', async () => {
     const client = fakeDocClient((command) => {
       expect(command).toBeInstanceOf(TransactWriteCommand);

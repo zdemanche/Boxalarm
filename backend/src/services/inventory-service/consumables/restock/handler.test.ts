@@ -53,6 +53,13 @@ describe('handler (PUT /api/v1/inventory/consumables/{itemId})', () => {
     process.env = { ...originalEnv };
   });
 
+  it.each(['{bad', 'null'])('400 (not 500) for a malformed or non-object body %s', async (raw) => {
+    const send = vi.fn();
+    const result = await invoke({ ...event('gloves-m', {}), body: raw }, fakeDocClient(send));
+    expect(result.statusCode).toBe(400);
+    expect(send).not.toHaveBeenCalled();
+  });
+
   it('AC1: updates stockLevel and returns the updated consumable (entrypoint-test)', async () => {
     const client = fakeDocClient((command) => {
       const name = (command as { constructor: { name: string } }).constructor.name;

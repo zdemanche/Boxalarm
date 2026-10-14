@@ -10,7 +10,7 @@ import {
 import { toVerifiedDeptId } from '@boxalarm/dept-scope';
 import { getDocClient, readInventoryConfig } from '../../lib/dynamoDb.js';
 import { emitMetric, logEvent } from '../../lib/logger.js';
-import { ValidationError, toProblemResponse } from '../../lib/problemDetails.js';
+import { ValidationError, parseJsonBody, toProblemResponse } from '../../lib/problemDetails.js';
 import { createConsumable } from '../consumableRepository.js';
 
 const MAX_TEXT_LENGTH = 200;
@@ -20,21 +20,6 @@ function parseNonNegativeNumber(value: unknown, field: string): number {
     throw new ValidationError(`${field} is required and must be a non-negative integer`);
   }
   return value;
-}
-
-function parseBody(raw: string | undefined): Record<string, unknown> {
-  if (!raw) {
-    return {};
-  }
-  try {
-    const parsed: unknown = JSON.parse(raw);
-    if (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)) {
-      return parsed as Record<string, unknown>;
-    }
-  } catch {
-    throw new ValidationError('request body must be valid JSON');
-  }
-  throw new ValidationError('request body must be a JSON object');
 }
 
 function parseText(value: unknown, field: string): string {
@@ -55,7 +40,7 @@ export function createCreateConsumableHandler(docClient?: DynamoDBDocumentClient
       const deptId = toVerifiedDeptId(principal);
       const actorId = principal.sub;
 
-      const body = parseBody(event.body);
+      const body = parseJsonBody(event.body);
       const itemName = parseText(body.itemName, 'itemName');
       if (!itemName) {
         throw new ValidationError('itemName is required and must be a non-empty string');

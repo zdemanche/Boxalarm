@@ -23,6 +23,7 @@ import {
 import {
   createSignupAttendance,
   DuplicateSignupError,
+  findUnknownMemberIds,
   getTrainingEvent,
   recordAttendanceHours,
   type AttendeeHoursInput,
@@ -148,6 +149,19 @@ async function recordAttendance(
   const config = readTrainingConfig(process.env);
   const client = createDocumentClient(process.env);
   try {
+    const unknownMemberIds = await findUnknownMemberIds(
+      client,
+      config,
+      deptId,
+      attendees.map((attendee) => attendee.memberId),
+    );
+    if (unknownMemberIds.length > 0) {
+      emitTrainingMetric('TrainingAttendanceRecordFailed', 'UnknownMember');
+      return badRequestProblem(
+        traceId,
+        `Unknown memberIds for this department: ${unknownMemberIds.join(', ')}.`,
+      );
+    }
     await recordAttendanceHours(client, config, deptId, trainingEvent, attendees);
   } catch (error) {
     logError('training.attendance.record_failed', error, {

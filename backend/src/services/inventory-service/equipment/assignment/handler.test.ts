@@ -53,6 +53,13 @@ describe('handler (PUT /api/v1/inventory/equipment/{assetId}/assignment)', () =>
     process.env = { ...originalEnv };
   });
 
+  it.each(['{bad', 'null'])('400 (not 500) for a malformed or non-object body %s', async (raw) => {
+    const send = vi.fn();
+    const result = await invoke({ ...event('AS-1', {}), body: raw }, fakeDocClient(send));
+    expect(result.statusCode).toBe(400);
+    expect(send).not.toHaveBeenCalled();
+  });
+
   it('AC2: assigns to a member and returns the updated asset (entrypoint-test)', async () => {
     const client = fakeDocClient(() => ({
       Attributes: {
