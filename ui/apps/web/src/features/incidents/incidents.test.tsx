@@ -1,7 +1,7 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { HttpResponse, http } from 'msw';
+import { HttpResponse, delay, http } from 'msw';
 import { setupServer } from 'msw/node';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import type { User, UserManager } from 'oidc-client-ts';
@@ -868,6 +868,36 @@ test('marking an existing exposure module complete keeps its named members and s
   });
 });
 
+test('the exposure module is picked from the two allowed types', async () => {
+  let exposureBody: unknown;
+  server.use(
+    http.get('/api/v1/incidents/i-1', () => HttpResponse.json(detail({ secondaryModules: [] }))),
+    http.put('/api/v1/incidents/i-1/exposures', async ({ request }) => {
+      exposureBody = await request.json();
+      return HttpResponse.json({
+        incidentId: 'i-1',
+        secondaryType: 'RESPONDER_SAFETY',
+        payload: { injury_type: 'BURN' },
+        affectedMemberIds: [],
+        complete: true,
+        updatedAt: 2,
+        version: 1,
+      });
+    }),
+  );
+
+  const user = userEvent.setup();
+  renderIncidents(['OFFICER'], '/incidents/i-1');
+  await screen.findByRole('heading', { level: 1, name: /14 Elm St/ });
+  await user.click(screen.getByRole('button', { name: 'Exposure and responder safety' }));
+  await user.selectOptions(screen.getByLabelText('Module'), 'RESPONDER_SAFETY');
+  fireEvent.change(screen.getByLabelText('Injury type'), { target: { value: 'BURN' } });
+  await user.click(screen.getByRole('button', { name: 'Mark complete' }));
+
+  await waitFor(() => expect(exposureBody).toBeTruthy());
+  expect(exposureBody).toMatchObject({ secondaryType: 'RESPONDER_SAFETY' });
+});
+
 test('recording an exposure the caller cannot see sends expectedVersion 0 and surfaces a 409', async () => {
   let exposureBody: unknown;
   server.use(
@@ -1434,6 +1464,48 @@ test('older dispatches load a page at a time with the cursor', async () => {
   expect(older.textContent).toContain('9 Old Rd');
   expect(cursors).toEqual([null, 'c-older']);
   expect(screen.queryByRole('button', { name: 'Load older dispatches' })).toBeNull();
+});
+
+test('a failed older-dispatches page keeps the loaded list and offers a retry', async () => {
+  const now = Math.floor(Date.now() / 1000);
+  server.use(
+    http.get('/api/v1/incidents', () => HttpResponse.json({ incidents: [] })),
+    http.get('/api/v1/incidents/dispatches', ({ request }) => {
+      if (new URL(request.url).searchParams.get('cursor')) {
+        return HttpResponse.json({ title: 'Unavailable', status: 503 }, { status: 503 });
+      }
+      return HttpResponse.json({
+        recentWindowHours: 72,
+        nextCursor: 'c-older',
+        dispatches: [
+          {
+            dispatchId: 'd-new',
+            incidentType: 'Structure fire',
+            address: '5 New Rd',
+            dispatchedAt: now - 3600,
+            report: null,
+          },
+        ],
+      });
+    }),
+  );
+
+  const user = userEvent.setup();
+  renderIncidents(['CHIEF']);
+  await screen.findByText(/5 New Rd/);
+  await user.click(screen.getByRole('button', { name: 'Load older dispatches' }));
+  expect((await screen.findByRole('alert')).textContent).toMatch(/Older dispatches couldn.t load/);
+  expect(screen.getByRole('heading', { name: 'Last 72 hours' })).toBeTruthy();
+  expect(screen.getByRole('button', { name: 'Load older dispatches' })).toBeTruthy();
+  expect(screen.queryByText(/Recent dispatches couldn.t load/)).toBeNull();
+});
+
+test('the attention card says it is checking, not all-clear, until the incident list arrives', async () => {
+  server.use(http.get('/api/v1/incidents', () => delay('infinite')));
+  renderIncidents(['OFFICER']);
+  await screen.findByRole('heading', { name: 'Incidents' });
+  expect(await screen.findByText('Checking reports…')).toBeTruthy();
+  expect(screen.queryByText('Nothing needs attention.')).toBeNull();
 });
 
 test('an unparsed CAD dispatch shows a VERIFY marker and its text, not the placeholder address', async () => {

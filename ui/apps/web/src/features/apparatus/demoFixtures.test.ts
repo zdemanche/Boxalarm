@@ -1,4 +1,4 @@
-import { expect, test } from 'vitest';
+import { expect, test, vi } from 'vitest';
 import { DEMO_FLEET } from '../../lib/demoRoster';
 import { apparatusDemoRequest } from './demoFixtures';
 
@@ -71,4 +71,19 @@ test('SCBA POST resolves by unitId and records the resolved apparatusId', async 
   );
   expect(response?.status).toBe(201);
   expect(((await response?.json()) as { apparatusId: string }).apparatusId).toBe('a-2');
+});
+
+test('defect photo URL honours the deployed base path', async () => {
+  vi.stubEnv('BASE_URL', '/Boxalarm/');
+  vi.resetModules();
+  try {
+    const { apparatusDemoRequest: request } = await import('./demoFixtures');
+    const response = await request('apparatus/defects', 'GET', {});
+    const body = (await response?.json()) as { defects: { defectId: string; photoUrl?: string }[] };
+    expect(body.defects.find((d) => d.defectId === 'DEF-301-TIRE')?.photoUrl).toBe(
+      '/Boxalarm/demo/engine-301-tire.svg',
+    );
+  } finally {
+    vi.unstubAllEnvs();
+  }
 });

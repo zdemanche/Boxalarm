@@ -36,8 +36,11 @@ export function problemFieldErrors(problem: ProblemDetails): ProblemFieldError[]
 }
 
 export class ApiError extends Error {
-  constructor(public readonly problem: ProblemDetails) {
-    super(problem.title);
+  constructor(
+    public readonly problem: ProblemDetails,
+    message?: string,
+  ) {
+    super(message ?? problem.title);
   }
 }
 
@@ -96,13 +99,22 @@ export async function apiRequest(
         endpoint: path,
       });
     }
+    const parsed =
+      typeof problem === 'object' && problem !== null && !Array.isArray(problem) ? problem : null;
+    if (typeof parsed?.title === 'string' && parsed.title !== '') throw new ApiError(parsed);
+    const gatewayMessage = (parsed as { message?: unknown } | null)?.message;
+    const message =
+      (typeof gatewayMessage === 'string' && gatewayMessage) ||
+      response.statusText ||
+      `Request failed (HTTP ${response.status})`;
     throw new ApiError(
-      problem ?? {
+      parsed ?? {
         type: 'about:blank',
         title: response.statusText,
         status: response.status,
         traceId: 'unknown',
       },
+      message,
     );
   }
 

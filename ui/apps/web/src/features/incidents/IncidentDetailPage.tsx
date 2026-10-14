@@ -8,7 +8,7 @@ import { ApiForbiddenGate } from '../../components/ApiForbiddenGate';
 import { listMembers } from '../personnel/api';
 import { Button } from '../../components/ui/Button';
 import { Badge, StatusChip } from '../../components/ui/Chip';
-import { Checkbox, Textarea, TextInput } from '../../components/ui/Field';
+import { Checkbox, Select, Textarea, TextInput } from '../../components/ui/Field';
 import { Card } from '../../components/ui/Card';
 import { PageHeader } from '../../components/ui/PageHeader';
 import { SkeletonBlock } from '../../components/ui/Skeleton';
@@ -948,21 +948,19 @@ function IncidentReport({ incident }: { incident: IncidentDetail }) {
               ))}
             </ul>
           )}
-          <TextInput
+          <Select
             label="Module"
             value={secondaryType}
-            list="secondary-types"
-            onChange={(event) => {
-              const next = event.target.value;
-              if (next === 'EXPOSURE' || next === 'RESPONDER_SAFETY') setSecondaryType(next);
-              else setSecondaryType(next as (typeof SECONDARY_TYPES)[number]);
-            }}
-          />
-          <datalist id="secondary-types">
+            onChange={(event) =>
+              setSecondaryType(event.target.value as (typeof SECONDARY_TYPES)[number])
+            }
+          >
             {SECONDARY_TYPES.map((type) => (
-              <option key={type} value={type} />
+              <option key={type} value={type}>
+                {secondaryTitle(type)}
+              </option>
             ))}
-          </datalist>
+          </Select>
           <EnumField
             field={fieldName}
             schema="secondary"

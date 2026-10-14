@@ -10,7 +10,7 @@ import type { ActiveDispatchList } from '../features/alerts/types';
 import { listMembers } from '../features/personnel/api';
 import type { Member } from '../features/personnel/types';
 import { listShifts } from '../features/schedule/api';
-import type { DutyShift } from '../features/schedule/types';
+import { SHIFT_STATUS_LABEL, type DutyShift } from '../features/schedule/types';
 import { NerisComplianceTile } from '../features/reporting/NerisComplianceTile';
 import { listExpiringCertifications } from '../features/training/api';
 import type { ExpiringCertification } from '../features/training/types';
@@ -28,7 +28,7 @@ import {
 } from '../components/ui';
 import { AlertTriangle, GraduationCap, Truck, Users, Wrench } from '../components/ui/icons';
 import { daysUntil, formatCalendarDate, relativeDays } from '../lib/dates';
-import { MemberHome, OwnRecordCards } from './MemberHome';
+import { MemberHome, OwnRecordCards, SHIFT_STATUS_ROLE } from './MemberHome';
 import styles from './LandingPage.module.css';
 
 const ROLE_LABEL: Record<Role, string> = {
@@ -208,16 +208,11 @@ function shiftsOverlappingToday(shifts: readonly DutyShift[], now: Date): DutySh
   const dayStart = startOfToday(now);
   const dayEnd = dayStart + 24 * 60 * 60 * 1000;
   return shifts
-    .filter((shift) => shift.startAt < dayEnd && shift.endAt > dayStart)
+    .filter(
+      (shift) => shift.status !== 'CANCELLED' && shift.startAt < dayEnd && shift.endAt > dayStart,
+    )
     .sort((a, b) => a.startAt - b.startAt);
 }
-
-const SHIFT_STATUS_WORD: Record<string, string> = {
-  OPEN: 'open',
-  PARTIALLY_FILLED: 'partially filled',
-  FULL: 'full',
-  CANCELLED: 'cancelled',
-};
 
 function TodaysShifts() {
   const auth = useAuth();
@@ -239,11 +234,10 @@ function TodaysShifts() {
           {today.map((shift) => (
             <li key={shift.shiftId} className={styles.listItem}>
               <strong>{nameFor(shift.stationId)}</strong> {formatTime(shift.startAt)}–
-              {formatTime(shift.endAt)}
-              <span className={styles.meta}>
-                {' · '}
-                {SHIFT_STATUS_WORD[shift.status] ?? shift.status}
-              </span>
+              {formatTime(shift.endAt)}{' '}
+              <StatusChip status={SHIFT_STATUS_ROLE[shift.status]}>
+                {SHIFT_STATUS_LABEL[shift.status]}
+              </StatusChip>
             </li>
           ))}
         </ul>

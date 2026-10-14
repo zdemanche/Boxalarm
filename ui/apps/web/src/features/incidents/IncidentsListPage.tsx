@@ -124,6 +124,7 @@ function RecentDispatchesToReport({
     data: { pages: RecentDispatchPage[] } | undefined;
     hasNextPage: boolean;
     isFetchingNextPage: boolean;
+    isFetchNextPageError: boolean;
     fetchNextPage: () => unknown;
   };
   canStart: boolean;
@@ -132,7 +133,7 @@ function RecentDispatchesToReport({
   fallback: ReactNode;
 }) {
   if (query.isLoading) return <p className={styles.muted}>Loading recent dispatches…</p>;
-  if (query.error || !query.data) {
+  if (!query.data) {
     return (
       <>
         <p role="status" className={styles.muted}>
@@ -177,6 +178,11 @@ function RecentDispatchesToReport({
         </>
       ) : olderPages.length > 0 && !query.hasNextPage ? (
         <p className={styles.muted}>No older dispatches.</p>
+      ) : null}
+      {query.isFetchNextPageError ? (
+        <p role="alert" className={styles.muted}>
+          Older dispatches couldn&rsquo;t load. Try again.
+        </p>
       ) : null}
       {query.hasNextPage ? (
         <div className={styles.loadOlder}>
@@ -412,12 +418,14 @@ export function IncidentsListPage() {
 
   const attentionCard = loadError ? null : (
     <Card title="Needs attention">
-      <p className={styles.summary}>
-        {attention.length === 0
-          ? 'Nothing needs attention.'
-          : `${attention.length} incidents need attention: ${draftCount} drafts, ${rejectedCount} rejected, ${failedCount} failed to send.`}
+      <p className={styles.summary} aria-busy={listQuery.data ? undefined : true}>
+        {!listQuery.data
+          ? 'Checking reports…'
+          : attention.length === 0
+            ? 'Nothing needs attention.'
+            : `${attention.length} incidents need attention: ${draftCount} drafts, ${rejectedCount} rejected, ${failedCount} failed to send.`}
       </p>
-      {attention.length > 0 ? (
+      {listQuery.data && attention.length > 0 ? (
         <ul className={styles.rows}>
           {attention.map((incident) => (
             <li key={incident.incidentId} className={styles.attentionRow}>
