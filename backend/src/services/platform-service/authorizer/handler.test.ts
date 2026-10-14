@@ -633,4 +633,25 @@ describe('handler: server-side revocation check (M1)', () => {
       true,
     );
   });
+
+  it('passes the token iat in the context of the push-token route only, so the write can re-check the marker', async () => {
+    const { handler, keyPair } = await loadWithKey();
+    const iat = nowSeconds() - 30;
+    const token = signAccessToken(keyPair, baseAccessTokenPayload({ iat }));
+
+    const register = await handler(
+      eventFor(token, 'POST /api/v1/personnel/members/{memberId}/push-tokens'),
+      {} as never,
+      () => undefined,
+    );
+    const other = await handler(
+      eventFor(token, 'GET /api/v1/personnel/members'),
+      {} as never,
+      () => undefined,
+    );
+
+    expect(register).toMatchObject({ isAuthorized: true, context: { iat: String(iat) } });
+    expect(other).toMatchObject({ isAuthorized: true });
+    expect((other as { context: object }).context).not.toHaveProperty('iat');
+  });
 });

@@ -10,7 +10,7 @@ import { createRevocationChecker, revocationFailsOpen } from './revocationCheck.
 import type { RevocationChecker } from './revocationCheck.js';
 import { getAuthorizerStoreClient, readRevokedAt } from './revocationStore.js';
 
-export type AuthorizerContext = VerifiedAccessToken;
+export type AuthorizerContext = VerifiedAccessToken & { readonly iat?: string };
 
 type AuthorizerResult =
   APIGatewaySimpleAuthorizerResult | APIGatewaySimpleAuthorizerWithContextResult<AuthorizerContext>;
@@ -144,12 +144,17 @@ export const handler: Handler<APIGatewayRequestAuthorizerEventV2, AuthorizerResu
 
     // M1: an access token is verified offline and lives an hour; a revoked member's token
     // must stop working now. See revocationCheck.ts for the cache and the fail-open rule.
+    const fresh = FRESH_REVOCATION_ROUTE_KEYS.has(event.routeKey);
     const revocation = await checker.check({
       deptId: context.deptId,
       sub: context.sub,
       issuedAt,
-      fresh: FRESH_REVOCATION_ROUTE_KEYS.has(event.routeKey),
+      fresh,
     });
+    // The fresh-read route re-checks the marker after its own write, against this iat.
+    const allowedContext: AuthorizerContext = fresh
+      ? { ...context, iat: String(issuedAt) }
+      : context;
     if (revocation === 'revoked') {
       console.error(
         JSON.stringify({
@@ -179,10 +184,10 @@ export const handler: Handler<APIGatewayRequestAuthorizerEventV2, AuthorizerResu
       emitAuthorizerMetric('Allowed', 'RevocationCheckFailOpen');
       // Its own metric so the alarm is a plain Sum > 0 (infra http-api.ts addAlarms).
       emitRevocationFailOpenMetric();
-      return { isAuthorized: true, context };
+      return { isAuthorized: true, context: allowedContext };
     }
     emitAuthorizerMetric('Allowed');
-    return { isAuthorized: true, context };
+    return { isAuthorized: true, context: allowedContext };
   } catch (error) {
     // constructor.name is what separates a JWKS outage (NonRetryableFetchError/FetchError)
     // from routine expiry (JwtExpiredError) — aws-jwt-verify does not set .name.

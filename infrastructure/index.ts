@@ -1090,3 +1090,7 @@ export const httpApiAlarms = httpApi.addAlarms(
   chiefNotificationTopic.topicArn,
   alertingPageTopic.topicArn,
 );
+export const identityAlarms = identity.addAlarms(
+  alertingPageTopic.topicArn,
+  chiefNotificationTopic.topicArn,
+);

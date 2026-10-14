@@ -933,7 +933,16 @@ describe("PolicyStore", () => {
       resolve(store.inventoryAdminActionsPolicy.definition),
       resolve(store.inspectionsMemberActionsPolicy.definition),
       resolve(store.inspectionsOfficerActionsPolicy.definition),
+      resolve(store.alertingMemberActionsPolicy.definition),
+      resolve(store.alertingOfficerActionsPolicy.definition),
+      resolve(store.apparatusMemberActionsPolicy.definition),
+      resolve(store.apparatusOfficerActionsPolicy.definition),
+      resolve(store.nerisMemberActionsPolicy.definition),
+      resolve(store.nerisOfficerActionsPolicy.definition),
+      resolve(store.nerisAdminActionsPolicy.definition),
+      resolve(store.availabilityOfficerActionsPolicy.definition),
     ]);
+    expect(defs).toHaveLength(16);
     for (const def of defs) {
       expect(def?.static?.statement).not.toMatch(
         /permit\s*\(\s*principal\s*,\s*action\s*,\s*resource\s*\)\s*;/,
