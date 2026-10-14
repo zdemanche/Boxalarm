@@ -3,7 +3,7 @@ import { buildDeptScopedPk, toVerifiedDeptId } from '@boxalarm/dept-scope';
 import { buildAttendanceKeys } from '../attendance/handler.js';
 import {
   completeShiftAttendance,
-  findEndedShiftsWithClaims,
+  sweepEndedShifts,
   zeroLosapCalculator,
   type LosapPointsCalculator,
 } from './completeShiftAttendance.js';
@@ -410,9 +410,34 @@ describe('completeShiftAttendance', () => {
     const shift = doc.peek(buildDeptScopedPk(DEPT_ID, 'SHIFT', SHIFT_ID), 'METADATA');
     expect(shift?.attendanceCompletedAt).toBeUndefined();
   });
+  it('B1-017: a member holding two positions gets one attendance record and the shift still completes', async () => {
+    const doc = createFakeDocumentClient([
+      buildDutyShift(DEPT_ID, SHIFT_ID, { startAt: START_AT, endAt: END_AT }),
+      buildShiftPosition(DEPT_ID, SHIFT_ID, 'DRIVER', {
+        claimedByMemberId: MEMBER_ID,
+        claimedAt: START_AT,
+      }),
+      buildShiftPosition(DEPT_ID, SHIFT_ID, 'FF', {
+        claimedByMemberId: MEMBER_ID,
+        claimedAt: START_AT,
+      }),
+      buildShiftPosition(DEPT_ID, SHIFT_ID, 'OFFICER', {
+        claimedByMemberId: 'MBR-0034',
+        claimedAt: START_AT,
+      }),
+    ]);
+
+    const outcome = await completeShiftAttendance(doc, TABLE, DEPT_ID, SHIFT_ID, {
+      now: NOW_AFTER_END,
+    });
+
+    expect(outcome).toEqual({ kind: 'COMPLETED', recordsCreated: 2 });
+    const records = [...doc.all()].filter((item) => item.entityType === 'ATTENDANCE_RECORD');
+    expect(records).toHaveLength(2);
+  });
 });
 
-describe('findEndedShiftsWithClaims', () => {
+describe('sweepEndedShifts', () => {
   it('PR #150 review finding #1 regression: queries the real uppercase GSI3 index rather than a locally-shadowed lowercase name', async () => {
     const doc = createFakeDocumentClient([
       buildDutyShift(DEPT_ID, 'SHIFT-REGRESSION', {
@@ -430,7 +455,7 @@ describe('findEndedShiftsWithClaims', () => {
     // (see testDynamoFake.ts) with a ResourceNotFoundException, exactly as real DynamoDB would
     // for a query against a nonexistent index — so this only resolves when the sweep queries the
     // actual physical 'GSI3' index rather than a mismatched local constant.
-    await expect(findEndedShiftsWithClaims(doc, TABLE, DEPT_ID, NOW_AFTER_END)).resolves.toEqual([
+    await expect(sweepEndedShifts(doc, TABLE, DEPT_ID, NOW_AFTER_END)).resolves.toEqual([
       'SHIFT-REGRESSION',
     ]);
   });
@@ -470,8 +495,40 @@ describe('findEndedShiftsWithClaims', () => {
       }),
     ]);
 
-    const found = await findEndedShiftsWithClaims(doc, TABLE, DEPT_ID, NOW_AFTER_END);
+    const found = await sweepEndedShifts(doc, TABLE, DEPT_ID, NOW_AFTER_END);
 
     expect(found).toEqual(['SHIFT-ENDED']);
+  });
+  it('B1-075: marks an unclaimed shift that ended past the grace window complete so later sweeps skip it', async () => {
+    const doc = createFakeDocumentClient([
+      buildDutyShift(DEPT_ID, 'SHIFT-UNCLAIMED', {
+        startAt: START_AT,
+        endAt: END_AT,
+        status: 'OPEN',
+      }),
+      buildShiftPosition(DEPT_ID, 'SHIFT-UNCLAIMED', 'DRIVER'),
+    ]);
+    const afterGrace = END_AT + 2 * 86_400_000;
+
+    await expect(sweepEndedShifts(doc, TABLE, DEPT_ID, afterGrace)).resolves.toEqual([]);
+
+    const shift = doc.peek(buildDeptScopedPk(DEPT_ID, 'SHIFT', 'SHIFT-UNCLAIMED'), 'METADATA');
+    expect(shift?.attendanceCompletedAt).toBe(afterGrace);
+  });
+
+  it('B1-075: leaves a just-ended unclaimed shift unmarked inside the grace window', async () => {
+    const doc = createFakeDocumentClient([
+      buildDutyShift(DEPT_ID, 'SHIFT-UNCLAIMED', {
+        startAt: START_AT,
+        endAt: END_AT,
+        status: 'OPEN',
+      }),
+      buildShiftPosition(DEPT_ID, 'SHIFT-UNCLAIMED', 'DRIVER'),
+    ]);
+
+    await sweepEndedShifts(doc, TABLE, DEPT_ID, NOW_AFTER_END);
+
+    const shift = doc.peek(buildDeptScopedPk(DEPT_ID, 'SHIFT', 'SHIFT-UNCLAIMED'), 'METADATA');
+    expect(shift?.attendanceCompletedAt).toBeUndefined();
   });
 });

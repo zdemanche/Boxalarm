@@ -238,6 +238,18 @@ export function createFakeDocumentClient(seed: readonly FakeItem[] = []): FakeDo
       const reasons: string[] = [];
       let anyFailed = false;
 
+      const keys = items.map((item) =>
+        itemKey(item.Put?.Item ?? item.Update?.Key ?? item.ConditionCheck?.Key ?? {}),
+      );
+      if (new Set(keys).size !== keys.length) {
+        return Promise.reject(
+          Object.assign(
+            new Error('Transaction request cannot include multiple operations on one item'),
+            { name: 'ValidationException' },
+          ),
+        );
+      }
+
       for (const item of items) {
         if (item.ConditionCheck) {
           const { Key, ConditionExpression, ExpressionAttributeValues, ExpressionAttributeNames } =

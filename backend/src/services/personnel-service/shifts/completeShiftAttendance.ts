@@ -1,8 +1,12 @@
 import { randomUUID } from 'node:crypto';
-import { TransactionCanceledException } from '@aws-sdk/client-dynamodb';
+import {
+  ConditionalCheckFailedException,
+  TransactionCanceledException,
+} from '@aws-sdk/client-dynamodb';
 import {
   QueryCommand,
   TransactWriteCommand,
+  UpdateCommand,
   type DynamoDBDocumentClient,
   type TransactWriteCommandInput,
 } from '@aws-sdk/lib-dynamodb';
@@ -34,10 +38,11 @@ const SHIFT_ACTIVITY_TYPES = [
 ] as const satisfies readonly ShiftActivityType[];
 
 const CLAIM_CHECK_CONCURRENCY = 10;
+const UNCLAIMED_SHIFT_GRACE_MS = 24 * 3_600_000;
 
-// DynamoDB TransactWriteItems supports at most 100 items. Each claimed position contributes up
+// DynamoDB TransactWriteItems supports at most 100 items. Each unique claimant contributes up
 // to 3 items (ATTENDANCE_RECORD Put, optional LOSAP_POINT_ENTRY Put, OUTBOX_ENTRY Put) plus one
-// shift-completion Update, so 33 positions is the safe ceiling regardless of whether the LOSAP
+// shift-completion Update, so 33 claimants is the safe ceiling regardless of whether the LOSAP
 // calculator awards points (3 * 33 + 1 = 100). shiftAssembly.ts allows up to 99 claimed positions
 // on a single shift, which would exceed this — surface a clear domain outcome instead of letting
 // DynamoDB reject an oversized transaction with an opaque ValidationException.
@@ -164,19 +169,21 @@ export async function completeShiftAttendance(
     return { kind: 'SKIPPED_NOT_ENDED' };
   }
 
-  const claimedPositions = items.filter(
-    (item) =>
-      typeof item.sk === 'string' &&
-      item.sk.startsWith('POSITION#') &&
-      typeof item.claimedByMemberId === 'string',
-  );
-  if (claimedPositions.length === 0) {
+  const claimedMemberIds = [
+    ...new Set(
+      items
+        .filter((item) => typeof item.sk === 'string' && item.sk.startsWith('POSITION#'))
+        .map((item): unknown => item.claimedByMemberId)
+        .filter((memberId): memberId is string => typeof memberId === 'string'),
+    ),
+  ];
+  if (claimedMemberIds.length === 0) {
     return { kind: 'SKIPPED_NO_CLAIMS' };
   }
-  if (claimedPositions.length > MAX_CLAIMED_POSITIONS_PER_TRANSACTION) {
+  if (claimedMemberIds.length > MAX_CLAIMED_POSITIONS_PER_TRANSACTION) {
     return {
       kind: 'SKIPPED_TOO_MANY_CLAIMS',
-      claimedCount: claimedPositions.length,
+      claimedCount: claimedMemberIds.length,
       maxSupported: MAX_CLAIMED_POSITIONS_PER_TRANSACTION,
     };
   }
@@ -190,8 +197,7 @@ export async function completeShiftAttendance(
   const year = new Date(endAt).getUTCFullYear();
   const transactItems: TransactItem[] = [];
 
-  for (const position of claimedPositions) {
-    const memberId = position.claimedByMemberId as string;
+  for (const memberId of claimedMemberIds) {
     const keys = buildAttendanceKeys(deptId, memberId, occurredAtSeconds);
     const award = await losapCalculator.compute({
       activityType,
@@ -294,17 +300,41 @@ export async function completeShiftAttendance(
     throw error;
   }
 
-  return { kind: 'COMPLETED', recordsCreated: claimedPositions.length };
+  return { kind: 'COMPLETED', recordsCreated: claimedMemberIds.length };
 }
 
-export async function findEndedShiftsWithClaims(
+async function markUnclaimedShiftSettled(
+  doc: DynamoDBDocumentClient,
+  tableName: string,
+  deptId: VerifiedDeptId,
+  shiftId: string,
+  now: number,
+): Promise<void> {
+  try {
+    await doc.send(
+      new UpdateCommand({
+        TableName: tableName,
+        Key: { pk: buildDeptScopedPk(deptId, 'SHIFT', shiftId), sk: 'METADATA' },
+        ConditionExpression: 'attribute_exists(pk) AND attribute_not_exists(attendanceCompletedAt)',
+        UpdateExpression: 'SET attendanceCompletedAt = :completedAt',
+        ExpressionAttributeValues: { ':completedAt': now },
+      }),
+    );
+  } catch (error) {
+    if (!(error instanceof ConditionalCheckFailedException)) {
+      throw error;
+    }
+  }
+}
+
+export async function sweepEndedShifts(
   doc: DynamoDBDocumentClient,
   tableName: string,
   deptId: VerifiedDeptId,
   now: number,
 ): Promise<readonly string[]> {
   const gsi3pk = buildDeptScopedPk(deptId, 'DUTY_SHIFT');
-  const candidateShiftIds: string[] = [];
+  const candidates: { readonly shiftId: string; readonly endAt: number }[] = [];
   let exclusiveStartKey: Record<string, unknown> | undefined;
 
   do {
@@ -337,8 +367,8 @@ export async function findEndedShiftsWithClaims(
           : typeof item.pk === 'string'
             ? item.pk.split('#').at(-1)
             : undefined;
-      if (shiftId) {
-        candidateShiftIds.push(shiftId);
+      if (shiftId && typeof item.endAt === 'number') {
+        candidates.push({ shiftId, endAt: item.endAt });
       }
     }
 
@@ -349,9 +379,9 @@ export async function findEndedShiftsWithClaims(
   // mirrors coverageRepository.ts's mapWithConcurrency use for the same shift-partition fetch
   // pattern. Order is preserved so callers get a stable shiftId ordering per invocation.
   const claimedOrUndefined = await mapWithConcurrency(
-    candidateShiftIds,
+    candidates,
     CLAIM_CHECK_CONCURRENCY,
-    async (shiftId) => {
+    async ({ shiftId, endAt }) => {
       const partition = await doc.send(
         new QueryCommand({
           TableName: tableName,
@@ -368,6 +398,21 @@ export async function findEndedShiftsWithClaims(
           row.sk.startsWith('POSITION#') &&
           typeof row.claimedByMemberId === 'string',
       );
+      if (!hasClaim && now - endAt > UNCLAIMED_SHIFT_GRACE_MS) {
+        try {
+          await markUnclaimedShiftSettled(doc, tableName, deptId, shiftId, now);
+        } catch (error) {
+          console.error(
+            JSON.stringify({
+              event: 'shifts.completion.settle_unclaimed_failed',
+              service: 'personnel-service',
+              shiftId,
+              reason: error instanceof Error ? error.constructor.name : 'UnknownError',
+              message: error instanceof Error ? error.message : undefined,
+            }),
+          );
+        }
+      }
       return hasClaim ? shiftId : undefined;
     },
   );

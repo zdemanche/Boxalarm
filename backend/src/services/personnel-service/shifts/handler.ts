@@ -41,6 +41,8 @@ import {
 import {
   badRequestProblem,
   conflictProblem,
+  notQualifiedProblem,
+  shiftClosedProblem,
   notFoundProblem,
   notPendingProblem,
 } from './problemDetails.js';
@@ -404,6 +406,14 @@ async function handleClaim(
     emitShiftMetric('ShiftClaimFailed');
     return conflictProblem(correlationId);
   }
+  if (outcome.kind === 'SHIFT_CLOSED') {
+    emitShiftMetric('ShiftClaimFailed');
+    return shiftClosedProblem(correlationId);
+  }
+  if (outcome.kind === 'NOT_QUALIFIED') {
+    emitShiftMetric('ShiftClaimFailed');
+    return notQualifiedProblem(correlationId, outcome.requiredQual);
+  }
 
   try {
     await recalculateShiftStatus(docClient, tableName, deptId, shiftId);
@@ -713,6 +723,10 @@ async function handleSwap(
       emitShiftMetric('ShiftSwapProposeFailed');
       return conflictProblem(correlationId);
     }
+    if (outcome.kind === 'SHIFT_CLOSED') {
+      emitShiftMetric('ShiftSwapProposeFailed');
+      return shiftClosedProblem(correlationId);
+    }
     emitShiftMetric('ShiftSwapProposed');
     return jsonResponse(201, {
       shiftId,
@@ -809,6 +823,14 @@ async function handleApproveSwap(
     if (outcome.kind === 'POSITION_CONFLICT') {
       emitShiftMetric('ShiftSwapApproveFailed');
       return conflictProblem(correlationId);
+    }
+    if (outcome.kind === 'SHIFT_CLOSED') {
+      emitShiftMetric('ShiftSwapApproveFailed');
+      return shiftClosedProblem(correlationId);
+    }
+    if (outcome.kind === 'NOT_QUALIFIED') {
+      emitShiftMetric('ShiftSwapApproveFailed');
+      return notQualifiedProblem(correlationId, outcome.requiredQual);
     }
     emitShiftMetric('ShiftSwapApproved');
     return jsonResponse(200, {

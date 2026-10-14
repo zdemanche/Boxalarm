@@ -5,7 +5,7 @@ import { getDocClient, readPersonnelTableConfig } from './dynamoClient.js';
 import {
   completeShiftAttendance,
   createRulesLosapCalculator,
-  findEndedShiftsWithClaims,
+  sweepEndedShifts,
   zeroLosapCalculator,
   type CompleteShiftOutcome,
   type LosapPointsCalculator,
@@ -83,7 +83,7 @@ export const handler = async (payload: unknown): Promise<ShiftCompletionResult> 
     shiftIds =
       payload.shiftId !== undefined
         ? [payload.shiftId]
-        : await findEndedShiftsWithClaims(doc, tableName, deptId, now);
+        : await sweepEndedShifts(doc, tableName, deptId, now);
   } catch (error) {
     logError('shifts.completion.find_failed', error, correlationId);
     emitOutcomeMetric(METRIC_NAMESPACE, 'CompletionFailed', 'DynamoDbUnavailable');
