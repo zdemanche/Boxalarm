@@ -118,9 +118,11 @@ describe("OutboxPublisher", () => {
     const publisher = await build();
     const filters = await resolve(publisher.eventSourceMapping.filterCriteria);
     const pattern = JSON.parse(filters?.filters?.[0]?.pattern ?? "{}") as {
+      eventName: string[];
       dynamodb: { NewImage: { entityType: { S: string[] } } };
     };
     expect(pattern.dynamodb.NewImage.entityType.S).toEqual(["OUTBOX_ENTRY"]);
+    expect(pattern.eventName).toEqual(["INSERT"]);
   });
 
   it("sets both bus env names backend outbox publishers read (PLATFORM_BUS_NAME, PLATFORM_EVENT_BUS_NAME)", async () => {

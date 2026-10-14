@@ -120,11 +120,11 @@ describe("Incident", () => {
     );
   });
 
-  it("grants response-times the transactional parent-exists ConditionCheck and the read-back GetItem", async () => {
+  it("grants response-times the conditional METADATA UpdateItem and the read-back GetItem, without ConditionCheckItem", async () => {
     const incident = await build();
-    expect(await actionsFor(incident.responseTimesLambda, "IncidentResponseTimesAccess")).toEqual(
-      expect.arrayContaining(["dynamodb:ConditionCheckItem", "dynamodb:GetItem"]),
-    );
+    const actions = await actionsFor(incident.responseTimesLambda, "IncidentResponseTimesAccess");
+    expect(actions).toEqual(expect.arrayContaining(["dynamodb:UpdateItem", "dynamodb:GetItem"]));
+    expect(actions).not.toContain("dynamodb:ConditionCheckItem");
   });
 
   it("opts both dispatch-copy consumers into ReportBatchItemFailures (their handlers return batchItemFailures)", async () => {
@@ -272,11 +272,11 @@ describe("Incident", () => {
     ).toEqual(["dynamodb:GetItem", "dynamodb:UpdateItem", "dynamodb:PutItem"]);
   });
 
-  it("lets the exposures write check, in its transaction, that the report is not locked", async () => {
+  it("lets the exposures write apply its conditional METADATA UpdateItem without ConditionCheckItem", async () => {
     const incident = await build();
-    expect(await actionsFor(incident.exposuresLambda, "IncidentExposuresAccess")).toContain(
-      "dynamodb:ConditionCheckItem",
-    );
+    const actions = await actionsFor(incident.exposuresLambda, "IncidentExposuresAccess");
+    expect(actions).toEqual(expect.arrayContaining(["dynamodb:UpdateItem", "dynamodb:GetItem"]));
+    expect(actions).not.toContain("dynamodb:ConditionCheckItem");
   });
 
   it("projects platform NERIS settings and unit ids from platform-service events", async () => {

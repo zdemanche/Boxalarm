@@ -81,6 +81,7 @@ async function build() {
     escalation,
     logGroup,
     policyStoreId: "policy-store-id",
+    policyStoreArn: "arn:aws:verifiedpermissions::123456789012:policy-store/policy-store-id",
     pageTopicArn: PAGE_TOPIC_ARN,
     permissionsBoundaryArn: BOUNDARY_ARN,
   });

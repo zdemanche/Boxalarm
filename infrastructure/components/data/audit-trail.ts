@@ -122,6 +122,7 @@ export class AuditTrail extends pulumi.ComponentResource {
           {
             id: "archive-and-expire",
             status: "Enabled",
+            filter: { prefix: "AWSLogs/" },
             transitions: [
               {
                 days: AUDIT_LIFECYCLE_GLACIER_TRANSITION_DAYS,
@@ -131,6 +132,13 @@ export class AuditTrail extends pulumi.ComponentResource {
             expiration: {
               days: AUDIT_LIFECYCLE_EXPIRATION_DAYS,
             },
+            noncurrentVersionExpiration: { noncurrentDays: 1 },
+          },
+          {
+            id: "clean-expired-delete-markers",
+            status: "Enabled",
+            filter: { prefix: "AWSLogs/" },
+            expiration: { expiredObjectDeleteMarker: true },
           },
         ],
       },

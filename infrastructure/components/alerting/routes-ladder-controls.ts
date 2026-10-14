@@ -20,6 +20,7 @@ export interface RoutesLadderControlsArgs {
   escalation: Escalation;
   logGroup: ServiceLogGroup;
   policyStoreId: pulumi.Input<string>;
+  policyStoreArn: pulumi.Input<string>;
   /** alerting-page topic (alarms.ts) — a failed officer control pages on-call. */
   pageTopicArn: pulumi.Input<string>;
   permissionsBoundaryArn?: pulumi.Input<string>;
@@ -67,7 +68,7 @@ export class RoutesLadderControls extends pulumi.ComponentResource {
     super("boxalarm:alerting:RoutesLadderControls", name, {}, opts);
     const { env } = args;
     const tableArn = args.alertingTableArn as string;
-    const vpStatement = verifiedPermissionsStatement();
+    const vpStatement = verifiedPermissionsStatement(args.policyStoreArn);
     const common = {
       env,
       httpApi: args.httpApi,

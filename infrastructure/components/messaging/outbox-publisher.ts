@@ -121,6 +121,7 @@ export class OutboxPublisher extends pulumi.ComponentResource {
           filters: [
             {
               pattern: JSON.stringify({
+                eventName: ["INSERT"],
                 dynamodb: { NewImage: { entityType: { S: ["OUTBOX_ENTRY"] } } },
               }),
             },

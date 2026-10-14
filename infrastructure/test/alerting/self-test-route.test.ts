@@ -38,6 +38,7 @@ async function build(): Promise<void> {
     alertingTableName: "boxalarm-dev-alerting-table",
     logGroup: new ServiceLogGroup("alerting-lg", { env: "dev", serviceName: "alerting-service" }),
     policyStoreId: "policy-store-id",
+    policyStoreArn: "arn:aws:verifiedpermissions::123456789012:policy-store/policy-store-id",
   });
   await settle();
 }

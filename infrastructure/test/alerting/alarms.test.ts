@@ -172,6 +172,22 @@ describe("AlertingAlarms — every alert-path failure mode pages", { timeout: 30
     expect(alarm.alarmActions).toEqual([PAGE_TOPIC_ARN]);
   });
 
+  it("pages on member-updated record failures the consumer reports instead of throwing", async () => {
+    await build();
+    const alarm = alarmByName("boxalarm-dev-alerting-member-updated-record-failed").inputs;
+    expect(alarm.namespace).toBe("Boxalarm/AlertingEligibility");
+    expect(alarm.metricName).toBe("MemberUpdatedRecordFailed");
+    expect(alarm.alarmActions).toEqual([PAGE_TOPIC_ARN]);
+  });
+
+  it.each(["dev", "qa", "staging"])(
+    "creates no fault-injection SSM parameters in %s",
+    async (env) => {
+      await build(env);
+      expect(resourcesOfType("aws:ssm/parameter:Parameter")).toHaveLength(0);
+    },
+  );
+
   // Review MINOR-R4: the page had no redrive path. The alarm names the runbook and script,
   // and both must exist where it says.
   it("points the escalation on-failure page at its runbook and redrive script", async () => {

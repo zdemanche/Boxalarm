@@ -4,8 +4,6 @@ import { requireEnv } from "../shared/env";
 import { AlertingPageTopic } from "./page-topic";
 import { ALERTING_CHANNELS, AlertingChannel, ChannelQueue } from "./messaging-alerting";
 
-const NON_PROD_ENVS = new Set(["dev", "qa", "staging"]);
-
 /** Backend namespace of the tone-1 fan-out's metrics (fanout/handler.ts METRIC_NAMESPACE). */
 export const FAN_OUT_METRIC_NAMESPACE = "Boxalarm/alerting-fan-out";
 
@@ -47,8 +45,7 @@ export const PUSH_SKIPPED_PERIOD_SECONDS = 6 * 60 * 60;
 
 /**
  * Alerting-plane paging (E1-S11-INFRA): an alarm on every alert-path failure mode, each
- * paging through the alerting-page topic (page-topic.ts), and a per-channel fault-injection
- * SSM switch present in dev/qa/staging only (never prod).
+ * paging through the alerting-page topic (page-topic.ts).
  */
 /**
  * What a message in each channel DLQ means. Every page in a DLQ failed all its attempts. The
@@ -75,7 +72,6 @@ const DLQ_ALARM_DESCRIPTION: Record<AlertingChannel, string> = {
 
 export class AlertingAlarms extends pulumi.ComponentResource {
   public readonly pageTopic: aws.sns.Topic;
-  public readonly faultInjectionParameters: Partial<Record<AlertingChannel, aws.ssm.Parameter>>;
 
   constructor(name: string, args: AlertingAlarmsArgs, opts?: pulumi.ComponentResourceOptions) {
     requireEnv("AlertingAlarms", args.env);
@@ -219,8 +215,20 @@ export class AlertingAlarms extends pulumi.ComponentResource {
       evaluationPeriods: 1,
     });
 
-    // The consumer throws on a bad record or a DynamoDB failure; the DLQ alarm only fires
-    // after 5 receives, so page on the errors themselves too.
+    // The consumer reports bad records and DynamoDB failures as batch item failures, so its
+    // Lambda Errors only count timeouts and crashes; the DLQ alarm only fires after 5
+    // receives, so page on each failed record too.
+    pageAlarm("member-updated-record-failed-alarm", {
+      name: `boxalarm-${env}-alerting-member-updated-record-failed`,
+      namespace: "Boxalarm/AlertingEligibility",
+      metricName: "MemberUpdatedRecordFailed",
+      statistic: "Sum",
+      comparisonOperator: "GreaterThanThreshold",
+      threshold: 0,
+      period: 60,
+      evaluationPeriods: 1,
+    });
+
     lambdaAlarm(
       "member-updated-errors-alarm",
       args.memberUpdatedFunctionName,
@@ -493,24 +501,6 @@ export class AlertingAlarms extends pulumi.ComponentResource {
         { parent: this },
       );
     }
-
-    this.faultInjectionParameters = NON_PROD_ENVS.has(env)
-      ? Object.fromEntries(
-          ALERTING_CHANNELS.map((channel) => [
-            channel,
-            new aws.ssm.Parameter(
-              `${name}-${channel}-fault-injection`,
-              {
-                name: `/boxalarm/${env}/alerting/${channel}/fault-injection`,
-                type: "String",
-                value: "off",
-                description: `Non-prod fault-injection switch for the ${channel} worker`,
-              },
-              { parent: this },
-            ),
-          ]),
-        )
-      : {};
 
     this.registerOutputs({ pageTopic: this.pageTopic });
   }

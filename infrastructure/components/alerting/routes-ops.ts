@@ -15,6 +15,7 @@ export interface RoutesOpsArgs {
   alertingTableName: pulumi.Input<string>;
   logGroup: ServiceLogGroup;
   policyStoreId: pulumi.Input<string>;
+  policyStoreArn: pulumi.Input<string>;
   permissionsBoundaryArn?: pulumi.Input<string>;
 }
 
@@ -51,7 +52,7 @@ export class RoutesOps extends pulumi.ComponentResource {
     super("boxalarm:alerting:RoutesOps", name, {}, opts);
     const { env } = args;
 
-    const vpStatement = verifiedPermissionsStatement();
+    const vpStatement = verifiedPermissionsStatement(args.policyStoreArn);
 
     // src/services/alerting-service/selfTest/postHandler.handler
     this.selfTestPost = new AlertingRoute(
