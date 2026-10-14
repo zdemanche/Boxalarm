@@ -413,6 +413,7 @@ export class Availability extends pulumi.ComponentResource {
         lambdaRole: this.availabilityChangedConsumer.role,
         alarmTopicArn: args.pageTopicArn,
         maxReceiveCount: 5,
+        reportBatchItemFailures: true,
       },
       { parent: this },
     );

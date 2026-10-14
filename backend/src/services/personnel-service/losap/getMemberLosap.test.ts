@@ -50,6 +50,7 @@ describe('getMemberLosap handler', () => {
     process.env = { ...originalEnv };
     vi.doUnmock('@aws-sdk/client-verifiedpermissions');
     vi.doUnmock('../dynamoClient.js');
+    vi.useRealTimers();
   });
 
   it('returns the current-year running total summed from LOSAP_POINT_ENTRY items (AC3)', async () => {
@@ -63,6 +64,37 @@ describe('getMemberLosap handler', () => {
     const body = JSON.parse(result.body ?? '{}') as { memberId: string; totalPoints: number };
     expect(body.memberId).toBe('mbr-102');
     expect(body.totalPoints).toBe(3);
+  });
+
+  it("files a New Year's Eve evening request under the department-local year, not the UTC year", async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(Date.parse('2026-12-31T21:30:00-05:00'));
+    mockAuthzAllow();
+    const send = vi.fn().mockResolvedValue({ Items: [{ points: 2 }] });
+    mockDynamo(send);
+    const { handler } = await import('./getMemberLosap.js');
+
+    const result = (await handler(buildEvent('mbr-102'))) as APIGatewayProxyStructuredResultV2;
+
+    expect(JSON.parse(result.body ?? '{}')).toMatchObject({ year: 2026, totalPoints: 2 });
+    const query = send.mock.calls[1]?.[0] as {
+      input: { ExpressionAttributeValues: Record<string, string> };
+    };
+    expect(Object.values(query.input.ExpressionAttributeValues)).toContain('LOSAP#2026#');
+  });
+
+  it('returns 503 without querying the ledger when the department time zone read fails', async () => {
+    mockAuthzAllow();
+    const send = vi.fn().mockRejectedValue(new Error('config unavailable'));
+    mockDynamo(send);
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const { handler } = await import('./getMemberLosap.js');
+
+    const result = await handler(buildEvent('mbr-102'));
+
+    expect(result).toMatchObject({ statusCode: 503 });
+    expect(send).toHaveBeenCalledOnce();
+    vi.mocked(console.error).mockRestore();
   });
 
   it('returns 400 when memberId path parameter is missing', async () => {
@@ -105,7 +137,7 @@ describe('getMemberLosap handler', () => {
 
     await handler(buildEvent('mbr-102'));
 
-    const call = dynamoSend.mock.calls[0]?.[0] as {
+    const call = dynamoSend.mock.calls[1]?.[0] as {
       input: { IndexName?: string; ExpressionAttributeValues: Record<string, string> };
     };
     expect(call.input.IndexName).toBeUndefined();

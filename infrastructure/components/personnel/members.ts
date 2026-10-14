@@ -71,9 +71,27 @@ const CREATE_STATEMENT = (tableArn: pulumi.Input<string>) =>
   ]);
 
 /**
+ * create.ts: GetItem on member rows only, to tell an adopted login that already has a
+ * member row (409) from one that does not.
+ */
+const CREATE_READ_MEMBER_STATEMENT = (tableArn: pulumi.Input<string>) =>
+  pulumi.output(tableArn).apply((arn) => [
+    {
+      Sid: "MembersCreateReadMember" as const,
+      Effect: "Allow" as const,
+      Action: ["dynamodb:GetItem"],
+      Resource: [arn],
+      Condition: {
+        "ForAllValues:StringLike": { "dynamodb:LeadingKeys": ["DEPT#*#MEMBER#*"] },
+      },
+    },
+  ]);
+
+/**
  * create.ts also creates the member's login (lib/memberLogin.ts): AdminCreateUser, then
- * AdminAddUserToGroup MEMBER, and AdminDeleteUser to undo a login whose member row could
- * not be written. Scoped to this env's pool only.
+ * AdminAddUserToGroup MEMBER, AdminGetUser to adopt a same-department login that has no
+ * member row yet, and AdminDeleteUser to undo a login whose member row could not be
+ * written. Scoped to this env's pool only.
  */
 const CREATE_LOGIN_STATEMENT = (userPoolArn: pulumi.Input<string>) =>
   pulumi.output(userPoolArn).apply((arn) => [
@@ -84,6 +102,7 @@ const CREATE_LOGIN_STATEMENT = (userPoolArn: pulumi.Input<string>) =>
         "cognito-idp:AdminCreateUser",
         "cognito-idp:AdminAddUserToGroup",
         "cognito-idp:AdminDeleteUser",
+        "cognito-idp:AdminGetUser",
       ],
       Resource: [arn],
     },
@@ -188,10 +207,11 @@ export class Members extends pulumi.ComponentResource {
         additionalPolicyStatements: pulumi
           .all([
             CREATE_STATEMENT(args.platformTableArn),
+            CREATE_READ_MEMBER_STATEMENT(args.platformTableArn),
             CREATE_LOGIN_STATEMENT(args.userPoolArn),
             vpStatement,
           ])
-          .apply(([table, login, vp]) => [...table, ...login, ...vp]),
+          .apply(([table, read, login, vp]) => [...table, ...read, ...login, ...vp]),
       },
       { parent: this },
     );

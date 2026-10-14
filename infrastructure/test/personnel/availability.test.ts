@@ -122,6 +122,14 @@ describe("Availability — availability-changed consumer (#207)", () => {
     });
   });
 
+  it("reports partial batch failures so a failed record is retried, not deleted with its batch", async () => {
+    const availability = await build();
+    const types = await resolve(
+      availability.availabilityChangedQueueConsumer.eventSourceMapping.functionResponseTypes,
+    );
+    expect(types).toEqual(["ReportBatchItemFailures"]);
+  });
+
   it("grants the availability-changed consumer role only the alerting table, denied on platform/incident (AC5)", async () => {
     const availability = await build();
     const policyJson = await resolve(availability.availabilityChangedConsumer.rolePolicy.policy);

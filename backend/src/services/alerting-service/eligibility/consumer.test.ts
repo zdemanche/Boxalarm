@@ -128,15 +128,15 @@ describe('eligibility consumer (entrypoint-test obligation)', () => {
     expect(dedupItem?.pk).toBe('DEPT#NICHOLS#DEDUP#eligibility-consumer#mbr-7');
   });
 
-  it('rethrows on a malformed/absent payload field, never silently dropping the message', async () => {
+  it('reports a malformed/absent payload field as a batch item failure, never silently dropping the message', async () => {
     const send = vi.fn();
     mockDdb(send);
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const { handler } = await import('./consumer.js');
 
-    await expect(handler(sqsEvent({ deptId: 'NICHOLS' }))).rejects.toThrow(
-      'personnel.availability.changed event failed shape validation',
-    );
+    await expect(handler(sqsEvent({ deptId: 'NICHOLS' }))).resolves.toEqual({
+      batchItemFailures: [{ itemIdentifier: 'msg-1' }],
+    });
     expect(send).not.toHaveBeenCalled();
     errorSpy.mockRestore();
   });
@@ -159,8 +159,34 @@ describe('eligibility consumer (entrypoint-test obligation)', () => {
       ],
     } as unknown as SQSEvent;
 
-    await expect(handler(bare)).rejects.toThrow('missing detail');
+    await expect(handler(bare)).resolves.toEqual({
+      batchItemFailures: [{ itemIdentifier: 'msg-bare' }],
+    });
     expect(send).not.toHaveBeenCalled();
+    errorSpy.mockRestore();
+  });
+
+  it('applies a valid record that follows a poison record and reports only the poison messageId', async () => {
+    const send = vi.fn().mockResolvedValue({});
+    mockDdb(send);
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const { handler } = await import('./consumer.js');
+    const poison = sqsEvent({ deptId: 'NICHOLS' }, 'msg-poison').Records[0]!;
+    const valid = sqsEvent(
+      { deptId: 'NICHOLS', memberId: 'mbr-2', availabilityState: 'AVAILABLE' },
+      'msg-valid',
+    ).Records[0]!;
+
+    await expect(handler({ Records: [poison, valid] })).resolves.toEqual({
+      batchItemFailures: [{ itemIdentifier: 'msg-poison' }],
+    });
+    expect(send).toHaveBeenCalledTimes(1);
+    const values = (
+      send.mock.calls[0]?.[0] as {
+        input: { TransactItems: { Update?: { ExpressionAttributeValues: Record<string, unknown> } }[] };
+      }
+    ).input.TransactItems[1]?.Update?.ExpressionAttributeValues;
+    expect(values?.[':state']).toBe('AVAILABLE');
     errorSpy.mockRestore();
   });
 

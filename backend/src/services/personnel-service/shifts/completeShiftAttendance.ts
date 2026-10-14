@@ -13,6 +13,7 @@ import {
 import { buildDeptScopedPk, type VerifiedDeptId } from '@boxalarm/dept-scope';
 import { buildOutboxRecord } from '@boxalarm/outbox';
 import { buildAttendanceKeys, type ActivityType } from '../attendance/handler.js';
+import { getLosapYear } from '../losap/departmentYear.js';
 import { buildLosapEntryItem } from '../losap/repository.js';
 import { computeLosapPoints } from '../losap/rules.js';
 import { GSI3_INDEX_NAME } from './dynamoClient.js';
@@ -194,7 +195,7 @@ export async function completeShiftAttendance(
   // attendance/handler.ts) — convert from the shift domain's milliseconds at this boundary so
   // shift-derived and manually-submitted attendance share one sortable key space (AC3).
   const occurredAtSeconds = Math.floor(endAt / 1000);
-  const year = new Date(endAt).getUTCFullYear();
+  let losapYear: number | undefined;
   const transactItems: TransactItem[] = [];
 
   for (const memberId of claimedMemberIds) {
@@ -226,13 +227,14 @@ export async function completeShiftAttendance(
     });
 
     if (award.ruleVersionId !== null) {
+      losapYear ??= await getLosapYear(doc, tableName, deptId, occurredAtSeconds);
       transactItems.push({
         Put: {
           TableName: tableName,
           Item: buildLosapEntryItem({
             deptId,
             memberId,
-            year,
+            year: losapYear,
             activityType,
             points: award.points,
             sourceRefId: keys.sk,

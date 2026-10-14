@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { APIGatewayProxyResultV2 } from 'aws-lambda';
 import {
+  conflictProblem,
   notFoundProblem,
   withAuthorization,
   type CedarPrincipalContext,
@@ -8,7 +9,13 @@ import {
 } from '@boxalarm/authz';
 import { toVerifiedDeptId } from '@boxalarm/dept-scope';
 import { createDynamoDocClient, readPersonnelServiceConfig } from '../awsClients.js';
-import { CertNotFoundError, memberExists, putQual, readQuals } from './repository.js';
+import {
+  CertChangedError,
+  CertNotFoundError,
+  memberExists,
+  putQual,
+  readQuals,
+} from './repository.js';
 
 interface PutQualsBody {
   readonly qualCode: string;
@@ -141,6 +148,7 @@ async function innerPutQualsHandler(
       parsedBody.qualCode,
       parsedBody.grantedByCertId,
       traceId,
+      principal.sub,
     );
     emitQualsWriteMetric('Succeeded');
     return {
@@ -151,6 +159,13 @@ async function innerPutQualsHandler(
   } catch (error) {
     if (error instanceof CertNotFoundError) {
       return notFoundProblem(traceId, 'Certification was not found');
+    }
+    if (error instanceof CertChangedError) {
+      emitQualsWriteMetric('Failed', 'CertChanged');
+      return conflictProblem(
+        traceId,
+        'The certification changed status while the qualification was being saved; retry.',
+      );
     }
     emitQualsWriteMetric(
       'Failed',

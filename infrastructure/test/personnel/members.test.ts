@@ -105,12 +105,29 @@ describe("Members", () => {
       "cognito-idp:AdminAddUserToGroup",
       "cognito-idp:AdminCreateUser",
       "cognito-idp:AdminDeleteUser",
+      "cognito-idp:AdminGetUser",
     ]);
     expect(statement?.Resource).toEqual([
       "arn:aws:cognito-idp:us-east-1:123456789012:userpool/us-east-1_pool",
     ]);
     expect(env?.variables?.COGNITO_USER_POOL_ID).toBe("us-east-1_pool");
     expect(listPolicy).not.toContain("cognito-idp");
+  });
+
+  it("lets the create Lambda read member rows only, for the adopted-login existence check", async () => {
+    const members = await build();
+    const policyJson = await resolve(members.createLambda.rolePolicy.policy);
+    const statements = (
+      JSON.parse(policyJson) as {
+        Statement: Array<{ Sid: string; Action: string[]; Condition?: unknown }>;
+      }
+    ).Statement;
+    const read = statements.find((s) => s.Sid === "MembersCreateReadMember");
+    expect(read?.Action).toEqual(["dynamodb:GetItem"]);
+    expect(read?.Condition).toEqual({
+      "ForAllValues:StringLike": { "dynamodb:LeadingKeys": ["DEPT#*#MEMBER#*"] },
+    });
+    expect(policyJson).not.toContain("dynamodb:Query");
   });
 
   // Security-web MAJOR 2: an email edit syncs the member's login.

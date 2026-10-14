@@ -2,14 +2,18 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { APIGatewayProxyEventV2WithLambdaAuthorizer } from 'aws-lambda';
 import type { VerifiedAccessToken } from '../../platform-service/authorizer/tokenVerifier.js';
 
-const { createMemberMock, createLoginMock, deleteLoginMock } = vi.hoisted(() => ({
-  createMemberMock: vi.fn(),
-  createLoginMock: vi.fn(),
-  deleteLoginMock: vi.fn(),
-}));
+const { createMemberMock, getMemberMock, createLoginMock, deleteLoginMock, adoptLoginMock } =
+  vi.hoisted(() => ({
+    createMemberMock: vi.fn(),
+    getMemberMock: vi.fn(),
+    createLoginMock: vi.fn(),
+    deleteLoginMock: vi.fn(),
+    adoptLoginMock: vi.fn(),
+  }));
 
 vi.mock('../lib/memberRepository.js', () => ({
   createMember: createMemberMock,
+  getMember: getMemberMock,
 }));
 
 vi.mock('../lib/memberLogin.js', async (importOriginal) => {
@@ -19,10 +23,12 @@ vi.mock('../lib/memberLogin.js', async (importOriginal) => {
     getCognitoClient: () => ({}),
     createMemberLogin: createLoginMock,
     deleteMemberLogin: deleteLoginMock,
+    adoptExistingLogin: adoptLoginMock,
   };
 });
 
-const { MemberLoginExistsError } = await import('../lib/memberLogin.js');
+const { MemberLoginExistsError, InvalidMemberEmailError } = await import('../lib/memberLogin.js');
+const { TransactionCanceledException } = await import('@aws-sdk/client-dynamodb');
 
 const { handler } = await import('./create.js');
 
@@ -73,6 +79,8 @@ const VALID_BODY = JSON.stringify({
 describe('members/create handler (entrypoint test)', () => {
   beforeEach(() => {
     createMemberMock.mockReset();
+    getMemberMock.mockReset().mockResolvedValue(undefined);
+    adoptLoginMock.mockReset().mockResolvedValue(undefined);
     createLoginMock.mockReset().mockResolvedValue('sub-jamie');
     deleteLoginMock.mockReset().mockResolvedValue(undefined);
     process.env.PERSONNEL_TABLE_NAME = 'boxalarm-dev-platform';
@@ -190,5 +198,98 @@ describe('members/create handler (entrypoint test)', () => {
     );
     expect(createLoginMock).not.toHaveBeenCalled();
     expect(createMemberMock).not.toHaveBeenCalled();
+  });
+
+  it('lowercases and trims the email before it becomes the login username and the row email', async () => {
+    createMemberMock.mockResolvedValueOnce({ memberId: 'sub-jamie', status: 'PROBATIONARY' });
+    const body = JSON.stringify({ ...JSON.parse(VALID_BODY), email: ' Jamie.Rios@Gmail.COM ' });
+    const result = await handler(buildEvent(body, 'ADMIN'), {} as never, () => undefined);
+    expect(result).toMatchObject({ statusCode: 201 });
+    expect(createLoginMock.mock.calls[0]?.[2]).toEqual({
+      email: 'jamie.rios@gmail.com',
+      deptId: 'NICHOLS',
+    });
+    expect(createMemberMock.mock.calls[0]?.[2]).toMatchObject({ email: 'jamie.rios@gmail.com' });
+  });
+
+  it('answers 400, not 503, when Cognito rejects the email as invalid, writing no member', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    createLoginMock.mockRejectedValueOnce(new InvalidMemberEmailError('jamie@example.com'));
+    const result = await handler(buildEvent(VALID_BODY, 'ADMIN'), {} as never, () => undefined);
+    expect(result).toMatchObject({ statusCode: 400 });
+    expect(createMemberMock).not.toHaveBeenCalled();
+  });
+
+  it('answers 503, not 400, when the login fails with an InvalidParameterException from elsewhere', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    createLoginMock.mockRejectedValueOnce(
+      Object.assign(new Error('bad group'), { name: 'InvalidParameterException' }),
+    );
+    const result = await handler(buildEvent(VALID_BODY, 'ADMIN'), {} as never, () => undefined);
+    expect(result).toMatchObject({ statusCode: 503 });
+  });
+
+  it('keeps the login and answers 409 when a concurrent request already wrote the member row', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    createMemberMock.mockRejectedValueOnce(
+      new TransactionCanceledException({
+        message: 'cancelled',
+        $metadata: {},
+        CancellationReasons: [{ Code: 'ConditionalCheckFailed' }, { Code: 'None' }],
+      }),
+    );
+    const result = await handler(buildEvent(VALID_BODY, 'ADMIN'), {} as never, () => undefined);
+    expect(result).toMatchObject({ statusCode: 409 });
+    expect(deleteLoginMock).not.toHaveBeenCalled();
+  });
+
+  describe('a login left without a member row (retry after a failed create)', () => {
+    beforeEach(() => {
+      createLoginMock.mockRejectedValue(new MemberLoginExistsError('jamie@example.com'));
+    });
+
+    it('adopts the same-department login and creates the member on its sub', async () => {
+      adoptLoginMock.mockResolvedValueOnce('sub-orphan');
+      createMemberMock.mockResolvedValueOnce({ memberId: 'sub-orphan', status: 'PROBATIONARY' });
+      const result = await handler(buildEvent(VALID_BODY, 'ADMIN'), {} as never, () => undefined);
+      expect(result).toMatchObject({ statusCode: 201 });
+      expect(adoptLoginMock.mock.calls[0]?.[2]).toEqual({
+        email: 'jamie@example.com',
+        deptId: 'NICHOLS',
+      });
+      expect(createMemberMock.mock.calls[0]?.[4]).toBe('sub-orphan');
+    });
+
+    it('answers 409 when the login already has a member row', async () => {
+      adoptLoginMock.mockResolvedValueOnce('sub-orphan');
+      getMemberMock.mockResolvedValueOnce({ memberId: 'sub-orphan' });
+      const result = await handler(buildEvent(VALID_BODY, 'ADMIN'), {} as never, () => undefined);
+      expect(result).toMatchObject({ statusCode: 409 });
+      expect(createMemberMock).not.toHaveBeenCalled();
+    });
+
+    it('answers 409 when the login belongs to another department', async () => {
+      const result = await handler(buildEvent(VALID_BODY, 'ADMIN'), {} as never, () => undefined);
+      expect(result).toMatchObject({ statusCode: 409 });
+      expect(createMemberMock).not.toHaveBeenCalled();
+    });
+
+    it('never deletes an adopted login when the member write fails', async () => {
+      vi.spyOn(console, 'error').mockImplementation(() => undefined);
+      adoptLoginMock.mockResolvedValueOnce('sub-orphan');
+      createMemberMock.mockRejectedValueOnce(new Error('TransactionCanceled'));
+      const result = await handler(buildEvent(VALID_BODY, 'ADMIN'), {} as never, () => undefined);
+      expect(result).toMatchObject({ statusCode: 503 });
+      expect(deleteLoginMock).not.toHaveBeenCalled();
+    });
+  });
+
+  it('counts a login that could not be cleaned up after a failed member write', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    createMemberMock.mockRejectedValueOnce(new Error('TransactionCanceled'));
+    deleteLoginMock.mockRejectedValueOnce(new Error('TooManyRequests'));
+    await handler(buildEvent(VALID_BODY, 'ADMIN'), {} as never, () => undefined);
+    expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('MemberLoginOrphaned'));
   });
 });

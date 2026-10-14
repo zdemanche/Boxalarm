@@ -324,8 +324,9 @@ export interface RolesChangeResult {
  * Writes the member's full role set with its audit row and a personnel.member.updated
  * outbox entry carrying `roles`, which the alerting plane copies into the eligibility
  * snapshot (memberUpdatedHandler.ts) - that is how mutual aid finds the officers. The
- * `roles = :previousRoles` condition makes a concurrent role change fail this write
- * instead of silently overwriting it.
+ * `updatedAt = :previousUpdatedAt` condition makes any concurrent write to the member row
+ * fail this write instead of silently overwriting it - including a role sync that left the
+ * roles themselves unchanged.
  */
 export async function updateMemberRoles(
   tableName: string,
@@ -334,6 +335,7 @@ export async function updateMemberRoles(
   previousRoles: readonly MemberRole[],
   roles: readonly MemberRole[],
   actorId: string,
+  previousUpdatedAt: number,
 ): Promise<RolesChangeResult> {
   const deptId = toVerifiedDeptId(principal);
   const now = Date.now();
@@ -348,11 +350,11 @@ export async function updateMemberRoles(
           Update: {
             TableName: tableName,
             Key: { pk: buildDeptScopedPk(deptId, 'MEMBER', memberId), sk: 'METADATA' },
-            ConditionExpression: 'attribute_exists(pk) AND #roles = :previousRoles',
+            ConditionExpression: 'attribute_exists(pk) AND updatedAt = :previousUpdatedAt',
             UpdateExpression: 'SET #roles = :roles, updatedAt = :now',
             ExpressionAttributeNames: { '#roles': 'roles' },
             ExpressionAttributeValues: {
-              ':previousRoles': previousRoles,
+              ':previousUpdatedAt': previousUpdatedAt,
               ':roles': roles,
               ':now': now,
             },

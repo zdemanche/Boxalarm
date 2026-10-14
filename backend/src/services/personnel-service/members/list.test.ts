@@ -62,10 +62,11 @@ describe('members/list handler (entrypoint test)', () => {
     const result = await handler(buildEvent(), {} as never, () => undefined);
     expect(result).toMatchObject({ statusCode: 200 });
     const parsed = JSON.parse((result as { body: string }).body) as {
-      members: Array<Record<string, unknown>>;
+      items: Array<Record<string, unknown>>;
     };
-    expect(parsed.members).toHaveLength(1);
-    expect(parsed.members[0]).toMatchObject({
+    expect(Object.keys(parsed)).toEqual(['items']);
+    expect(parsed.items).toHaveLength(1);
+    expect(parsed.items[0]).toMatchObject({
       phone: '203-555-0100',
       email: 'jamie@example.com',
       status: 'ACTIVE',
@@ -79,7 +80,7 @@ describe('members/list handler (entrypoint test)', () => {
     listMembersMock.mockResolvedValueOnce([]);
     const result = await handler(buildEvent(), {} as never, () => undefined);
     expect(result).toMatchObject({ statusCode: 200 });
-    expect(JSON.parse((result as { body: string }).body)).toEqual({ members: [] });
+    expect(JSON.parse((result as { body: string }).body)).toEqual({ items: [] });
   });
 
   it('returns 503 and logs the original error when the DynamoDB Query fails (fail-closed)', async () => {

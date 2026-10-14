@@ -6,7 +6,7 @@ import {
   DeleteScheduleCommand,
   FlexibleTimeWindowMode,
 } from '@aws-sdk/client-scheduler';
-import { TransactWriteCommand } from '@aws-sdk/lib-dynamodb';
+import { GetCommand, TransactWriteCommand } from '@aws-sdk/lib-dynamodb';
 import AWSXRay from 'aws-xray-sdk-core';
 import { buildDeptScopedPk, toVerifiedDeptId } from '@boxalarm/dept-scope';
 import {
@@ -19,9 +19,11 @@ import { emitOutcomeMetric } from '@boxalarm/metrics';
 import type { APIGatewayProxyResultV2 } from 'aws-lambda';
 import type { TransitionAction } from './expiryHandler.js';
 import { createDdbClient, readPersonnelDdbConfig } from './dynamoClient.js';
+import { isPlausibleEpochSeconds } from '../epochSeconds.js';
 
 const METRIC_NAMESPACE = 'Boxalarm/personnel-availability';
-const MAX_EPOCH_SECONDS = 4_102_444_800;
+const SCHEDULE_MAX_RETRY_ATTEMPTS = 3;
+const SCHEDULE_MAX_EVENT_AGE_SECONDS = 3600;
 export const MAX_MARKOFF_WINDOW_SECONDS = 90 * 24 * 60 * 60;
 
 function conflictProblem(detail: string, traceId: string): APIGatewayProxyResultV2 {
@@ -89,10 +91,6 @@ interface ParsedBody {
   readonly startAt: number;
   readonly endAt: number;
   readonly reason: string | undefined;
-}
-
-function isPlausibleEpochSeconds(value: number): boolean {
-  return Number.isInteger(value) && value > 0 && value < MAX_EPOCH_SECONDS;
 }
 
 function parseBody(body: string | undefined): ParsedBody | { error: string } {
@@ -266,6 +264,28 @@ export async function createAvailability(
     },
   };
 
+  const ddb = createDdbClient(process.env);
+  try {
+    const existing = await ddb.send(
+      new GetCommand({
+        TableName: tableName,
+        Key: { pk: markoffItem.pk, sk: markoffItem.sk },
+        ConsistentRead: true,
+      }),
+    );
+    if (existing.Item) {
+      emitOutcomeMetric(METRIC_NAMESPACE, 'MarkoffFailed', 'DuplicateWindow');
+      return conflictProblem(
+        'A markoff already exists for this member starting at this time.',
+        traceId,
+      );
+    }
+  } catch (error) {
+    logError('availability.duplicate_check_failed', error, traceId);
+    emitOutcomeMetric(METRIC_NAMESPACE, 'MarkoffFailed', 'DynamoDbUnavailable');
+    return dependencyUnavailableProblem(traceId);
+  }
+
   const scheduler = getSchedulerClient(deps.schedulerClient);
   const scheduleBaseName = availabilityScheduleBaseName(deptId, memberId, parsed.startAt);
   const schedulesToCreate: readonly ScheduleSpec[] = activatesImmediately
@@ -290,6 +310,10 @@ export async function createAvailability(
           Target: {
             Arn: schedulerConfig.expiryHandlerFunctionArn,
             RoleArn: schedulerConfig.schedulerRoleArn,
+            RetryPolicy: {
+              MaximumRetryAttempts: SCHEDULE_MAX_RETRY_ATTEMPTS,
+              MaximumEventAgeInSeconds: SCHEDULE_MAX_EVENT_AGE_SECONDS,
+            },
             ...(schedulerConfig.deadLetterArn
               ? { DeadLetterConfig: { Arn: schedulerConfig.deadLetterArn } }
               : {}),
@@ -312,7 +336,6 @@ export async function createAvailability(
   }
 
   try {
-    const ddb = createDdbClient(process.env);
     await ddb.send(
       new TransactWriteCommand({
         TransactItems: [

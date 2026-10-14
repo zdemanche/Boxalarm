@@ -377,3 +377,35 @@ test('a 403 shows the no-permission state; another failure offers Try again', as
   await user.click(tryAgain);
   await waitFor(() => expect(historyRows()).toHaveLength(1));
 });
+
+test('offers member qualifications as a record type, looked up by member ID and qualification code', async () => {
+  const requests: string[] = [];
+  server.use(
+    membersOk(),
+    http.get('/api/v1/platform/audit', ({ request }) => {
+      requests.push(new URL(request.url).search);
+      return HttpResponse.json({
+        entries: [
+          entry({
+            action: 'CREATE',
+            mutatedEntityType: 'MEMBER_QUALIFICATION',
+            mutatedEntityId: 'm-24-INTERIOR',
+            changedFields: { currentlyEligible: { old: null, new: true } },
+          }),
+        ],
+      });
+    }),
+  );
+
+  const user = userEvent.setup();
+  renderAuditLog();
+  await screen.findByRole('heading', { name: 'Audit log' });
+
+  await user.selectOptions(screen.getByLabelText('Record type'), 'MEMBER_QUALIFICATION');
+  expect(screen.getByText(/e\.g\. m-24-INTERIOR/)).toBeTruthy();
+  await user.type(screen.getByLabelText('Record ID'), 'm-24-INTERIOR');
+  await user.click(screen.getByRole('button', { name: 'Look up' }));
+
+  await waitFor(() => expect(historyRows()).toHaveLength(1));
+  expect(requests).toEqual(['?entityType=MEMBER_QUALIFICATION&entityId=m-24-INTERIOR']);
+});

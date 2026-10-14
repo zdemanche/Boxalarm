@@ -3,13 +3,17 @@ import {
   AdminAddUserToGroupCommand,
   AdminCreateUserCommand,
   AdminDeleteUserCommand,
+  AdminGetUserCommand,
   AdminListGroupsForUserCommand,
   AdminRemoveUserFromGroupCommand,
+  InvalidParameterException,
   UsernameExistsException,
   type CognitoIdentityProviderClient,
 } from '@aws-sdk/client-cognito-identity-provider';
 import {
+  InvalidMemberEmailError,
   MemberLoginExistsError,
+  adoptExistingLogin,
   createMemberLogin,
   readMemberLoginConfig,
   syncRoleGroups,
@@ -53,6 +57,15 @@ describe('createMemberLogin', () => {
     );
   });
 
+  it('maps an InvalidParameterException from AdminCreateUser to InvalidMemberEmailError', async () => {
+    const c = client(() =>
+      Promise.reject(new InvalidParameterException({ message: 'bad email', $metadata: {} })),
+    );
+    await expect(createMemberLogin(c, CONFIG, INPUT)).rejects.toBeInstanceOf(
+      InvalidMemberEmailError,
+    );
+  });
+
   it('deletes the login when adding it to the MEMBER group fails', async () => {
     const c = client((command) =>
       command instanceof AdminAddUserToGroupCommand
@@ -62,6 +75,51 @@ describe('createMemberLogin', () => {
     await expect(createMemberLogin(c, CONFIG, INPUT)).rejects.toThrow('throttled');
     const last = sentCommands(c).at(-1);
     expect(last).toBeInstanceOf(AdminDeleteUserCommand);
+  });
+});
+
+describe('adoptExistingLogin', () => {
+  const existing = (deptId: string, UserStatus = 'CONFIRMED') =>
+    client((command) =>
+      Promise.resolve(
+        command instanceof AdminGetUserCommand
+          ? {
+              UserStatus,
+              UserAttributes: [
+                { Name: 'sub', Value: 'sub-orphan' },
+                { Name: 'custom:deptId', Value: deptId },
+              ],
+            }
+          : {},
+      ),
+    );
+
+  it('returns the sub of a same-department login and re-adds it to MEMBER', async () => {
+    const c = existing('NICHOLS');
+    await expect(adoptExistingLogin(c, CONFIG, INPUT)).resolves.toBe('sub-orphan');
+    const group = sentCommands(c).at(-1) as AdminAddUserToGroupCommand;
+    expect(group).toBeInstanceOf(AdminAddUserToGroupCommand);
+    expect(group.input).toMatchObject({ Username: 'jamie@example.com', GroupName: 'MEMBER' });
+  });
+
+  it('re-sends the invite when the adopted login never set its password', async () => {
+    const c = existing('NICHOLS', 'FORCE_CHANGE_PASSWORD');
+    await adoptExistingLogin(c, CONFIG, INPUT);
+    const resend = sentCommands(c).at(-1) as AdminCreateUserCommand;
+    expect(resend).toBeInstanceOf(AdminCreateUserCommand);
+    expect(resend.input).toMatchObject({ Username: 'jamie@example.com', MessageAction: 'RESEND' });
+  });
+
+  it('sends no invite for an adopted login that is already confirmed', async () => {
+    const c = existing('NICHOLS');
+    await adoptExistingLogin(c, CONFIG, INPUT);
+    expect(sentCommands(c).some((cmd) => cmd instanceof AdminCreateUserCommand)).toBe(false);
+  });
+
+  it("refuses another department's login without touching its groups", async () => {
+    const c = existing('OTHER');
+    await expect(adoptExistingLogin(c, CONFIG, INPUT)).resolves.toBeUndefined();
+    expect(sentCommands(c)).toHaveLength(1);
   });
 });
 

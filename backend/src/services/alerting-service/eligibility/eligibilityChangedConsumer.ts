@@ -1,4 +1,4 @@
-import type { Handler, SQSEvent, SQSRecord } from 'aws-lambda';
+import type { Handler, SQSBatchResponse, SQSEvent, SQSRecord } from 'aws-lambda';
 import { ConditionalCheckFailedException } from '@aws-sdk/client-dynamodb';
 import {
   GetCommand,
@@ -287,11 +287,22 @@ async function processRecord(record: SQSRecord, deps: EligibilityChangedDeps): P
   emitOutcomeMetric(METRIC_NAMESPACE, 'EligibilityChangedUpdated');
 }
 
-export function createHandler(deps: EligibilityChangedDeps = {}): Handler<SQSEvent, void> {
+export function createHandler(
+  deps: EligibilityChangedDeps = {},
+): Handler<SQSEvent, SQSBatchResponse> {
   return async (event) => {
+    const batchItemFailures: SQSBatchResponse['batchItemFailures'] = [];
     for (const record of event.Records) {
-      await processRecord(record, deps);
+      try {
+        await processRecord(record, deps);
+      } catch (error) {
+        logError('alerting.eligibility.changed.record_failed', error, {
+          correlationId: record.messageId,
+        });
+        batchItemFailures.push({ itemIdentifier: record.messageId });
+      }
     }
+    return { batchItemFailures };
   };
 }
 

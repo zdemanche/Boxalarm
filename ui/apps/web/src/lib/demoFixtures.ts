@@ -202,6 +202,13 @@ const auditEntries: AuditEntry[] = [
   audit(12, 20, 'm-1', 'UPDATE', 'MEMBER', 'm-24', {
     status: diff('PROBATIONARY', 'ACTIVE'),
   }),
+  audit(14, 15, 'm-1', 'UPDATE', 'MEMBER_QUALIFICATION', 'm-24-INTERIOR', {
+    currentlyEligible: diff(true, false),
+  }),
+  audit(20, 14, 'm-1', 'CREATE', 'MEMBER_QUALIFICATION', 'm-24-INTERIOR', {
+    qualCode: diff(null, 'INTERIOR'),
+    currentlyEligible: diff(null, true),
+  }),
   audit(18, 9, 'm-1', 'ARCHIVE', 'HYDRANT', 'HYD-025', {
     archivedAt: diff(null, daysAgo(18, 9, Math.round(hash01(18 * 24 + 9) * 59))),
   }),

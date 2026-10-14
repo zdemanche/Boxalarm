@@ -283,6 +283,7 @@ describe('memberRepository', () => {
         ['MEMBER'],
         ['MEMBER', 'OFFICER'],
         'actor-1',
+        1700000000000,
       );
 
       expect(sendMock).toHaveBeenCalledTimes(1);
@@ -290,10 +291,10 @@ describe('memberRepository', () => {
 
       expect(memberUpdate?.Update?.Key).toEqual({ pk: 'DEPT#NICHOLS#MEMBER#m1', sk: 'METADATA' });
       expect(memberUpdate?.Update?.ConditionExpression).toBe(
-        'attribute_exists(pk) AND #roles = :previousRoles',
+        'attribute_exists(pk) AND updatedAt = :previousUpdatedAt',
       );
       expect(memberUpdate?.Update?.ExpressionAttributeValues).toMatchObject({
-        ':previousRoles': ['MEMBER'],
+        ':previousUpdatedAt': 1700000000000,
         ':roles': ['MEMBER', 'OFFICER'],
       });
 
@@ -324,7 +325,7 @@ describe('memberRepository', () => {
     it('propagates a failed transaction so the handler can answer 503', async () => {
       sendMock.mockRejectedValueOnce(new Error('TransactionCanceledException'));
       await expect(
-        updateMemberRoles('table', PRINCIPAL, 'm1', ['MEMBER'], ['MEMBER', 'CHIEF'], 'actor-1'),
+        updateMemberRoles('table', PRINCIPAL, 'm1', ['MEMBER'], ['MEMBER', 'CHIEF'], 'actor-1', 1),
       ).rejects.toThrow('TransactionCanceledException');
     });
   });

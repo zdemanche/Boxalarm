@@ -107,6 +107,29 @@ describe('queryHandler', () => {
     expect(JSON.parse(result.body ?? '{}')).toEqual({ records });
   });
 
+  it('follows LastEvaluatedKey so records past the first 1 MB page are returned', async () => {
+    mockAuthzDecision('ALLOW');
+    const lastKey = { pk: 'p', sk: 's', gsi1pk: 'MEMBER#mbr-102', gsi1sk: 'ATTENDANCE_RECORD#1' };
+    const send = vi
+      .fn()
+      .mockResolvedValueOnce({ Item: { entityType: 'MEMBER' } })
+      .mockResolvedValueOnce({ Items: [{ occurredAt: 1 }], LastEvaluatedKey: lastKey })
+      .mockResolvedValueOnce({ Items: [{ occurredAt: 2 }] });
+    vi.doMock('../dynamoClient.js', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('../dynamoClient.js')>();
+      return { ...actual, createDynamoClient: () => ({ send }) };
+    });
+    const { handler } = await import('./queryHandler.js');
+
+    const result = (await handler(buildEvent())) as APIGatewayProxyStructuredResultV2;
+
+    expect(JSON.parse(result.body ?? '{}')).toEqual({
+      records: [{ occurredAt: 1 }, { occurredAt: 2 }],
+    });
+    const secondQuery = send.mock.calls[2]?.[0] as { input: { ExclusiveStartKey?: unknown } };
+    expect(secondQuery.input.ExclusiveStartKey).toEqual(lastKey);
+  });
+
   it('filters GSI1 results by the caller deptId, since gsi1pk carries no dept segment (MAJOR #4 regression)', async () => {
     mockAuthzDecision('ALLOW');
     const client = mockDynamo('OK', []);

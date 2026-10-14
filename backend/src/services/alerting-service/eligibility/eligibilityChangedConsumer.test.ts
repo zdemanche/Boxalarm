@@ -219,7 +219,7 @@ describe('eligibilityChangedConsumer handler (entrypoint)', () => {
         {} as never,
         () => undefined,
       ),
-    ).resolves.toBeUndefined();
+    ).resolves.toEqual({ batchItemFailures: [] });
 
     const updateCall = send.mock.calls.find(
       (call) => (call[0] as { constructor: { name: string } }).constructor.name === 'UpdateCommand',
@@ -353,7 +353,7 @@ describe('eligibilityChangedConsumer handler (entrypoint)', () => {
         {} as never,
         () => undefined,
       ),
-    ).resolves.toBeUndefined();
+    ).resolves.toEqual({ batchItemFailures: [] });
 
     const updateCall = send.mock.calls.find(
       (call) => (call[0] as { constructor: { name: string } }).constructor.name === 'UpdateCommand',
@@ -365,7 +365,7 @@ describe('eligibilityChangedConsumer handler (entrypoint)', () => {
     expect(values[':quals']).toEqual([]);
   });
 
-  it('throws on a malformed payload (missing qualCode) so SQS retries the batch', async () => {
+  it('reports a malformed payload (missing qualCode) as a batch item failure', async () => {
     const send = vi.fn();
     const { createHandler } = await import('./eligibilityChangedConsumer.js');
     const handler = createHandler({ client: { send } as unknown as DynamoDBDocumentClient });
@@ -383,12 +383,33 @@ describe('eligibilityChangedConsumer handler (entrypoint)', () => {
         {} as never,
         () => undefined,
       ),
-    ).rejects.toThrow();
+    ).resolves.toEqual({ batchItemFailures: [{ itemIdentifier: 'm1' }] });
 
     expect(loggedErrors).toHaveBeenCalled();
   });
 
-  it('throws when the DynamoDB snapshot update fails unexpectedly (fail-closed, SQS retry/DLQ)', async () => {
+  it('applies a valid record that follows a poison record and reports only the poison messageId', async () => {
+    const { send, store } = createStatefulSend();
+    const { createHandler } = await import('./eligibilityChangedConsumer.js');
+    const handler = createHandler({ client: { send } as unknown as DynamoDBDocumentClient });
+
+    await expect(
+      handler(
+        {
+          Records: [
+            { messageId: 'poison', body: detailBody({}, { qualCode: undefined }) },
+            { messageId: 'valid', body: detailBody({ eventId: 'evt-2' }) },
+          ],
+        } as unknown as SQSEvent,
+        {} as never,
+        () => undefined,
+      ),
+    ).resolves.toEqual({ batchItemFailures: [{ itemIdentifier: 'poison' }] });
+
+    expect(store.get('MEMBER#mbr-1')).toBeDefined();
+  });
+
+  it('reports a batch item failure when the DynamoDB snapshot update fails unexpectedly (fail-closed, SQS retry/DLQ)', async () => {
     const send = vi.fn().mockImplementation((command: { constructor: { name: string } }) => {
       if (command.constructor.name === 'GetCommand') {
         return Promise.resolve({});
@@ -407,7 +428,7 @@ describe('eligibilityChangedConsumer handler (entrypoint)', () => {
         {} as never,
         () => undefined,
       ),
-    ).rejects.toThrow('DynamoDB unavailable');
+    ).resolves.toEqual({ batchItemFailures: [{ itemIdentifier: 'm1' }] });
 
     expect(loggedErrors).toHaveBeenCalled();
   });
@@ -515,7 +536,7 @@ describe('eligibilityChangedConsumer handler (entrypoint)', () => {
         {} as never,
         () => undefined,
       ),
-    ).resolves.toBeUndefined();
+    ).resolves.toEqual({ batchItemFailures: [] });
 
     expect(store.get('MEMBER#mbr-1')?.quals).toEqual(['DRIVER']);
     const updateCalls = send.mock.calls.filter(
