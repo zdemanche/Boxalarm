@@ -163,6 +163,33 @@ describe('projection event parsing', () => {
     expect(at('PENDING_APPROVAL')).toEqual([]);
   });
 
+  it('deletes the coverage row when the gap is resolved', () => {
+    const event = {
+      eventId: 'evt-7',
+      eventType: 'scheduling.coverage_gap.resolved',
+      deptId: 'NICHOLS',
+      payload: { shiftId: 'shift-1' },
+    };
+    expect(isProjectionEvent(event.eventType)).toBe(true);
+    expect(projectionWrites(event, now)).toEqual([{ kind: 'delete', sk: 'COVERAGE#shift-1' }]);
+  });
+
+  it('expires the coverage row a day after the shift ends and does not project member.created', () => {
+    const write = projectionWrites(
+      {
+        eventId: 'evt-8',
+        eventType: 'scheduling.coverage_gap.detected',
+        deptId: 'NICHOLS',
+        payload: { shiftId: 'shift-1', endAt: 1_800_000_000_000 },
+      },
+      now,
+    )[0];
+    expect(write).toMatchObject({
+      values: { endAt: 1_800_000_000_000, ttl: 1_800_000_000 + 86_400 },
+    });
+    expect(isProjectionEvent('personnel.member.created')).toBe(false);
+  });
+
   it('stores a coverage gap and an expiring certification', () => {
     expect(
       projectionWrites(

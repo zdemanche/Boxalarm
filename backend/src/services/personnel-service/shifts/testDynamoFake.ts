@@ -214,6 +214,12 @@ export function createFakeDocumentClient(seed: readonly FakeItem[] = []): FakeDo
       return Promise.resolve({ Items: items });
     }
 
+    if (name === 'PutCommand') {
+      const item = input.Item as FakeItem;
+      store.set(itemKey(item), item);
+      return Promise.resolve({});
+    }
+
     if (name === 'UpdateCommand') {
       const key = input.Key as FakeItem;
       const lookupKey = itemKey(key);

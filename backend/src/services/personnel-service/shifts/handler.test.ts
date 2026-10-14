@@ -124,7 +124,7 @@ describe('shifts handler', () => {
     };
     expect(body.status).toBe('OPEN');
     expect(body.positions).toHaveLength(1);
-    expect(mockSend).toHaveBeenCalledTimes(1);
+    expect(mockSend).toHaveBeenCalledTimes(2);
   });
 
   it('rejects a non-officer member with 403 (AC3)', async () => {
@@ -487,6 +487,62 @@ describe('shifts handler — release/swap/approve routes', () => {
     expect(result).toMatchObject({ statusCode: 200 });
     const body = JSON.parse((result as { body: string }).body) as { released: boolean };
     expect(body.released).toBe(true);
+  });
+
+  it('emits scheduling.coverage_gap.detected for a newly created, unclaimed shift', async () => {
+    const fakeDoc = createFakeDocumentClient([]);
+    vi.doMock('./dynamoClient.js', () => ({
+      getDocClient: () => fakeDoc,
+      readPersonnelTableConfig: () => ({ tableName: 'platform-service' }),
+      GSI3_INDEX_NAME: 'GSI3',
+    }));
+    const { handler } = await import('./handler.js');
+    const result = await handler(
+      buildEvent({ body: validCreateBody }),
+      {} as never,
+      () => undefined,
+    );
+    expect(result).toMatchObject({ statusCode: 201 });
+    const { shiftId } = JSON.parse((result as { body: string }).body) as { shiftId: string };
+    const outbox = [...fakeDoc.all()].filter((item) => item.entityType === 'OUTBOX_ENTRY');
+    expect(outbox).toMatchObject([
+      {
+        eventType: 'scheduling.coverage_gap.detected',
+        payload: { deptId: DEPT_ID, shiftId, requiredQuals: ['DRIVER_OPERATOR'] },
+      },
+    ]);
+  });
+
+  it('emits scheduling.coverage_gap.detected when a release leaves the shift short', async () => {
+    const fakeDoc = createFakeDocumentClient([
+      buildDutyShift(VERIFIED_DEPT_ID, 'shift-1', FUTURE_SHIFT),
+      buildShiftPosition(VERIFIED_DEPT_ID, 'shift-1', 'DRIVER', { claimedByMemberId: 'member-1' }),
+    ]);
+    vi.doMock('./dynamoClient.js', () => ({
+      getDocClient: () => fakeDoc,
+      readPersonnelTableConfig: () => ({ tableName: 'platform-service' }),
+      GSI3_INDEX_NAME: 'GSI3',
+    }));
+    const { handler } = await import('./handler.js');
+    const result = await handler(
+      buildEvent({
+        rawPath: '/api/v1/personnel/shifts/shift-1/release',
+        body: JSON.stringify({ positionCode: 'DRIVER' }),
+        sub: 'member-1',
+      }),
+      {} as never,
+      () => undefined,
+    );
+    expect(result).toMatchObject({ statusCode: 200 });
+    const gapEvents = [...fakeDoc.all()].filter(
+      (item) => typeof item.eventType === 'string' && item.eventType.startsWith('scheduling.'),
+    );
+    expect(gapEvents).toMatchObject([
+      {
+        eventType: 'scheduling.coverage_gap.detected',
+        payload: { deptId: DEPT_ID, shiftId: 'shift-1', gapReason: 'short' },
+      },
+    ]);
   });
 
   it('AC1: POST /shifts/{id}/release with a missing positionCode returns 400', async () => {
@@ -1067,6 +1123,38 @@ describe('shifts handler — release/swap/approve routes', () => {
         claimedByMemberId: string;
       };
       expect(body.claimedByMemberId).toBe('member-1');
+    });
+
+    it('emits scheduling.coverage_gap.resolved when the claim fills the last open position', async () => {
+      const fakeDoc = createFakeDocumentClient([
+        buildDutyShift(VERIFIED_DEPT_ID, 'shift-1', FUTURE_SHIFT),
+        buildShiftPosition(VERIFIED_DEPT_ID, 'shift-1', 'DRIVER'),
+      ]);
+      vi.doMock('./dynamoClient.js', () => ({
+        getDocClient: () => fakeDoc,
+        readPersonnelTableConfig: () => ({ tableName: 'platform-service' }),
+        GSI3_INDEX_NAME: 'GSI3',
+      }));
+      const { handler } = await import('./handler.js');
+      const result = await handler(
+        buildEvent({
+          rawPath: '/api/v1/personnel/shifts/shift-1/claim',
+          body: JSON.stringify({ positionCode: 'DRIVER' }),
+          sub: 'member-1',
+        }),
+        {} as never,
+        () => undefined,
+      );
+      expect(result).toMatchObject({ statusCode: 201 });
+      const gapEvents = [...fakeDoc.all()].filter(
+        (item) => typeof item.eventType === 'string' && item.eventType.startsWith('scheduling.'),
+      );
+      expect(gapEvents).toMatchObject([
+        {
+          eventType: 'scheduling.coverage_gap.resolved',
+          payload: { deptId: DEPT_ID, shiftId: 'shift-1' },
+        },
+      ]);
     });
 
     it('never uses BatchWriteItem for the claim (test note): only Get/TransactWrite commands are issued', async () => {

@@ -130,6 +130,7 @@ function jsonResponse(status: number, body: unknown): APIGatewayProxyResultV2 {
 type ShiftMetricOutcome =
   | 'ShiftCreated'
   | 'ShiftCreateFailed'
+  | 'ShiftCreateRecalculateFailed'
   | 'ShiftClaimed'
   | 'ShiftClaimFailed'
   | 'ShiftClaimRecalculateFailed'
@@ -326,6 +327,14 @@ async function handleCreate(
     logHandlerError('shifts.create.write_failed', correlationId, error);
     emitShiftMetric('ShiftCreateFailed');
     return problemResponse(503, 'Service Unavailable', 'shift could not be created', correlationId);
+  }
+
+  try {
+    const { tableName } = readPersonnelTableConfig(process.env);
+    await recalculateShiftStatus(getDocClient(process.env), tableName, deptId, shiftId);
+  } catch (error) {
+    logHandlerError('shifts.create.recalculate_failed', correlationId, error);
+    emitShiftMetric('ShiftCreateRecalculateFailed');
   }
 
   emitShiftMetric('ShiftCreated');

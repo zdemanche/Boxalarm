@@ -140,6 +140,10 @@ export function assembleDashboard(
       continue;
     }
     if (sk.startsWith('COVERAGE#')) {
+      const endAtMs = epochMs(item.endAt);
+      if (endAtMs !== undefined && endAtMs <= nowMs) {
+        continue;
+      }
       gaps.push({ shiftId: text(item, 'shiftId'), gapReason: text(item, 'gapReason') });
     }
   }

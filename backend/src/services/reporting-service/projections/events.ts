@@ -25,7 +25,6 @@ export type ProjectionWrite =
 const PROJECTION_EVENT_TYPES = new Set([
   'personnel.attendance.recorded',
   'personnel.member.updated',
-  'personnel.member.created',
   'personnel.availability.changed',
   'neris.incident.submitted',
   'neris.submission.failed',
@@ -39,6 +38,7 @@ const PROJECTION_EVENT_TYPES = new Set([
   'cert.expiry.due',
   'apparatus.serviceStatus.changed',
   'scheduling.coverage_gap.detected',
+  'scheduling.coverage_gap.resolved',
 ]);
 
 export function isProjectionEvent(eventType: string): boolean {
@@ -168,6 +168,10 @@ function certTtl(expiryDate: string): { ttl?: number } {
     : { ttl: Math.floor(expiryMs / 1000) + CERT_ROW_GRACE_SECONDS };
 }
 
+function shiftRowTtl(endAt: number): { ttl: number } {
+  return { ttl: Math.floor(epochMs(endAt, 0) / 1000) + CERT_ROW_GRACE_SECONDS };
+}
+
 export function projectionWrites(event: DomainEvent, nowMs: number): readonly ProjectionWrite[] {
   const payload = event.payload;
   switch (event.eventType) {
@@ -184,8 +188,6 @@ export function projectionWrites(event: DomainEvent, nowMs: number): readonly Pr
       return payload.status === undefined && payload.newStatus === undefined
         ? []
         : [memberStatusWrite(payload)];
-    case 'personnel.member.created':
-      return [memberStatusWrite(payload)];
     case 'personnel.availability.changed': {
       const memberId = requireString(payload, 'memberId');
       const state = stringField(payload, 'availabilityState') ?? 'MARKED_OFF';
@@ -302,10 +304,15 @@ export function projectionWrites(event: DomainEvent, nowMs: number): readonly Pr
             shiftId,
             gapReason: stringField(payload, 'gapReason') ?? 'unspecified',
             requiredQuals: payload.requiredQuals ?? [],
+            ...(typeof payload.endAt === 'number'
+              ? { endAt: payload.endAt, ...shiftRowTtl(payload.endAt) }
+              : {}),
           },
         },
       ];
     }
+    case 'scheduling.coverage_gap.resolved':
+      return [{ kind: 'delete', sk: `COVERAGE#${requireString(payload, 'shiftId')}` }];
     default:
       throw new MalformedEventError(`unsupported event type ${event.eventType}`);
   }

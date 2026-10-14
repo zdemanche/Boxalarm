@@ -37,6 +37,17 @@ describe('assembleDashboard', () => {
     });
   });
 
+  it('drops coverage gaps for shifts that have already ended', () => {
+    const view = assembleDashboard(
+      [
+        { sk: 'COVERAGE#ended', shiftId: 'ended', gapReason: 'short', endAt: now - 1_000 },
+        { sk: 'COVERAGE#live', shiftId: 'live', gapReason: 'short', endAt: now + 3_600_000 },
+      ],
+      now,
+    );
+    expect(view.staffing.shiftCoverage.gaps.map((gap) => gap.shiftId)).toEqual(['live']);
+  });
+
   it('drops expired certifications and those beyond their lead window', () => {
     const view = assembleDashboard(
       [
