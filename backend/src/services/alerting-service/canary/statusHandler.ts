@@ -12,6 +12,7 @@ import { logError } from '../dispatches/logger.js';
 import { canaryDateKey, queryLatestCanaryRuns } from './canaryRunRepository.js';
 
 const RUNS_TO_RETURN = 20;
+const SECONDS_PER_DAY = 86_400;
 
 async function getCanaryStatus(
   event: GuardEvent,
@@ -23,8 +24,25 @@ async function getCanaryStatus(
   try {
     const { tableName } = readAlertingConfig(process.env);
     const client = createDynamoClient(process.env);
-    const today = canaryDateKey(Math.floor(Date.now() / 1000));
-    const runs = await queryLatestCanaryRuns(client, tableName, deptId, today, RUNS_TO_RETURN);
+    const nowSec = Math.floor(Date.now() / 1000);
+    const todaysRuns = await queryLatestCanaryRuns(
+      client,
+      tableName,
+      deptId,
+      canaryDateKey(nowSec),
+      RUNS_TO_RETURN,
+    );
+    const earlierRuns =
+      todaysRuns.length < RUNS_TO_RETURN
+        ? await queryLatestCanaryRuns(
+            client,
+            tableName,
+            deptId,
+            canaryDateKey(nowSec - SECONDS_PER_DAY),
+            RUNS_TO_RETURN - todaysRuns.length,
+          )
+        : [];
+    const runs = [...todaysRuns, ...earlierRuns];
 
     const latest = runs[0];
     return {

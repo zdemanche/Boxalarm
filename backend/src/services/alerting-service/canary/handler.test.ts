@@ -140,6 +140,20 @@ describe('canary handler', () => {
     expect(alert?.testDelivery).toBe('validate');
   });
 
+  it('gives the idempotency lock an expiry so ticks do not leave permanent items', async () => {
+    const { send, items } = createFakeDdb();
+    const { createDynamoClient } = await import('../eligibility/dynamoClient.js');
+    vi.mocked(createDynamoClient).mockReturnValue({ send } as unknown as DynamoDBDocumentClient);
+
+    const { handler } = await import('./handler.js');
+    await handler();
+
+    const lock = [...items.values()].find(
+      (item) => item.entityType === 'DISPATCH_IDEMPOTENCY_LOCK',
+    );
+    expect(lock?.ttl).toEqual(expect.any(Number));
+  });
+
   it('really delivers when the canary member is a dedicated device', async () => {
     process.env.CANARY_DEDICATED_DEVICE = 'true';
     const { send, items } = createFakeDdb();

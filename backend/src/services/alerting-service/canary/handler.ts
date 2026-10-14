@@ -5,7 +5,11 @@ import { createDynamoClient, readAlertingConfig } from '../eligibility/dynamoCli
 import { logError, logInfo } from '../dispatches/logger.js';
 import { deriveIngressIdempotencyKey } from '../dispatches/dispatchIngressPort.js';
 import { createManualDispatch } from '../dispatches/repository.js';
-import { SELF_TEST_CHANNELS, selfTestAdapter } from '../selfTest/dispatchAdapter.js';
+import {
+  SELF_TEST_CHANNELS,
+  SELF_TEST_LOCK_WINDOW_SECONDS,
+  selfTestAdapter,
+} from '../selfTest/dispatchAdapter.js';
 import {
   acquireSelfTestCooldown,
   getSelfTestRun,
@@ -131,6 +135,7 @@ async function startNextRun(
     dispatch: normalized.value,
     idempotencyKey,
     dispatchedAt: now,
+    lockExpiresAt: now + SELF_TEST_LOCK_WINDOW_SECONDS,
     targetMemberId: memberId,
     selfTestId: testId,
     channelsTested: SELF_TEST_CHANNELS,
