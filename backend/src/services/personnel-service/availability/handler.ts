@@ -269,7 +269,7 @@ export async function createAvailability(
     const existing = await ddb.send(
       new GetCommand({
         TableName: tableName,
-        Key: { pk: markoffItem.pk, sk: markoffItem.sk },
+        Key: { pk: buildDeptScopedPk(deptId, 'MEMBER', memberId), sk: markoffItem.sk },
         ConsistentRead: true,
       }),
     );
