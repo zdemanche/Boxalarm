@@ -1,4 +1,5 @@
 import { demoRequest } from './demoFixtures';
+import { reportClientError } from './telemetry';
 
 export interface AuthTokenSource {
   getAccessToken: () => Promise<string | null>;
@@ -46,6 +47,14 @@ export interface ApiRequestOptions extends Omit<RequestInit, 'headers'> {
 
 const API_BASE = '/api/v1/';
 
+async function isGatewayRefusal(response: Response): Promise<boolean> {
+  const body = (await response
+    .clone()
+    .json()
+    .catch(() => null)) as { status?: unknown } | null;
+  return typeof body?.status !== 'number';
+}
+
 export async function apiRequest(
   path: string,
   tokens: AuthTokenSource,
@@ -71,7 +80,7 @@ export async function apiRequest(
 
   let response = await send(await tokens.getAccessToken());
 
-  if (response.status === 401) {
+  if (response.status === 401 || (response.status === 403 && (await isGatewayRefusal(response)))) {
     const renewedToken = await tokens.renewSilently();
     if (renewedToken) {
       response = await send(renewedToken);
@@ -80,6 +89,13 @@ export async function apiRequest(
 
   if (!response.ok) {
     const problem = (await response.json().catch(() => null)) as ProblemDetails | null;
+    if (response.status >= 500) {
+      reportClientError(new Error(`${response.status} from ${path}`), {
+        status: response.status,
+        traceId: problem?.traceId,
+        endpoint: path,
+      });
+    }
     throw new ApiError(
       problem ?? {
         type: 'about:blank',

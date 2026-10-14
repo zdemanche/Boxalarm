@@ -1,5 +1,6 @@
 import { cleanup, render, screen, waitFor } from '@testing-library/react';
-import { MemoryRouter } from 'react-router-dom';
+import { StrictMode } from 'react';
+import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
 import { HttpResponse, http } from 'msw';
 import { setupServer } from 'msw/node';
 import { afterAll, afterEach, beforeAll, expect, test, vi } from 'vitest';
@@ -42,6 +43,7 @@ function makeFakeUserManager(
     signinRedirect: vi.fn(async () => undefined),
     signoutRedirect: vi.fn(async () => undefined),
     signinCallback: vi.fn(async () => (current as User) ?? undefined),
+    revokeTokens: vi.fn(async () => undefined),
     signinSilent: vi.fn(options.signinSilent ?? (async () => current)),
     removeUser: vi.fn(async () => {
       unloaded.forEach((cb) => cb(null));
@@ -381,4 +383,287 @@ test('apiRequest aborts rather than replaying unauthenticated when silent renewa
 
   await expect(apiRequest('personnel/members', tokens)).rejects.toBeInstanceOf(ApiError);
   expect(calls).toBe(1);
+});
+
+test('apiRequest renews and retries once on an authorizer refusal (gateway 403 without a problem body)', async () => {
+  let calls = 0;
+  server.use(
+    http.get('/api/v1/personnel/members', () => {
+      calls += 1;
+      return calls === 1
+        ? HttpResponse.json({ message: 'Forbidden' }, { status: 403 })
+        : HttpResponse.json({ members: [] });
+    }),
+  );
+
+  const tokens: AuthTokenSource = {
+    getAccessToken: vi.fn(async () => 'revoked'),
+    renewSilently: vi.fn(async () => 'fresh'),
+  };
+  const response = await apiRequest('personnel/members', tokens);
+
+  expect(response.status).toBe(200);
+  expect(tokens.renewSilently).toHaveBeenCalledTimes(1);
+});
+
+test('apiRequest surfaces the gateway 403 when renewal yields no token', async () => {
+  server.use(
+    http.get('/api/v1/personnel/members', () =>
+      HttpResponse.json({ message: 'Forbidden' }, { status: 403 }),
+    ),
+  );
+
+  const tokens: AuthTokenSource = {
+    getAccessToken: vi.fn(async () => 'revoked'),
+    renewSilently: vi.fn(async () => null),
+  };
+
+  await expect(apiRequest('personnel/members', tokens)).rejects.toBeInstanceOf(ApiError);
+  expect(tokens.renewSilently).toHaveBeenCalledTimes(1);
+});
+
+test('a gateway 403 on a revoked session ends in sign-out via the invalid_grant renewal', async () => {
+  server.use(
+    http.get('/api/v1/personnel/members', () =>
+      HttpResponse.json({ message: 'Forbidden' }, { status: 403 }),
+    ),
+  );
+  const { manager } = makeFakeUserManager(makeUser(), {
+    signinSilent: () => Promise.reject(new ErrorResponse({ error: 'invalid_grant' })),
+  });
+  let contextValue: ReturnType<typeof useAuth> | undefined;
+  function Capture() {
+    contextValue = useAuth();
+    return <AuthProbe />;
+  }
+  render(
+    <AuthProvider userManager={manager}>
+      <Capture />
+    </AuthProvider>,
+  );
+  await screen.findByText('authenticated:CHIEF');
+
+  await expect(apiRequest('personnel/members', contextValue!)).rejects.toBeInstanceOf(ApiError);
+
+  await screen.findByText('unauthenticated:');
+});
+
+test('overlapping renewal failures keep a single pending retry timer and one attempt per backoff step', async () => {
+  const { manager, emitRenewError } = makeFakeUserManager(makeUser(), {
+    signinSilent: () => Promise.reject(new Error('network unreachable')),
+  });
+  let contextValue: ReturnType<typeof useAuth> | undefined;
+  function Capture() {
+    contextValue = useAuth();
+    return null;
+  }
+  render(
+    <AuthProvider userManager={manager}>
+      <Capture />
+    </AuthProvider>,
+  );
+  await waitFor(() => expect(contextValue?.isLoading).toBe(false));
+
+  vi.useFakeTimers();
+  try {
+    await contextValue!.renewSilently();
+    await contextValue!.renewSilently();
+    emitRenewError(new Error('x'));
+    expect(vi.getTimerCount()).toBe(1);
+
+    const before = vi.mocked(manager.signinSilent).mock.calls.length;
+    await vi.advanceTimersByTimeAsync(1_000 + 2_000 + 4_000);
+    expect(vi.mocked(manager.signinSilent).mock.calls.length - before).toBe(3);
+    expect(vi.getTimerCount()).toBe(1);
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+test('signIn passes the return path through the OIDC state', async () => {
+  const { manager } = makeFakeUserManager(null);
+  let contextValue: ReturnType<typeof useAuth> | undefined;
+  function Capture() {
+    contextValue = useAuth();
+    return null;
+  }
+  render(
+    <AuthProvider userManager={manager}>
+      <Capture />
+    </AuthProvider>,
+  );
+  await waitFor(() => expect(contextValue?.isLoading).toBe(false));
+
+  await contextValue!.signIn('/incidents?status=OPEN');
+
+  expect(manager.signinRedirect).toHaveBeenCalledWith({ state: '/incidents?status=OPEN' });
+});
+
+test('signOut clears the local session, revokes the refresh token and ends the Cognito hosted-UI session', async () => {
+  vi.stubEnv('COGNITO_HOSTED_UI_ORIGIN', 'https://boxalarm.auth.us-east-1.amazoncognito.com');
+  vi.stubEnv('COGNITO_WEB_CLIENT_ID', 'test-web-client');
+  const assign = vi.fn();
+  vi.stubGlobal('location', { ...window.location, assign, origin: window.location.origin });
+  let revokeBody = '';
+  server.use(
+    http.post(
+      'https://boxalarm.auth.us-east-1.amazoncognito.com/oauth2/revoke',
+      async ({ request }) => {
+        revokeBody = await request.text();
+        return new HttpResponse(null, { status: 200 });
+      },
+    ),
+  );
+  const { manager } = makeFakeUserManager(makeUser({ refresh_token: 'refresh-1' }));
+  let contextValue: ReturnType<typeof useAuth> | undefined;
+  function Capture() {
+    contextValue = useAuth();
+    return null;
+  }
+  render(
+    <AuthProvider userManager={manager}>
+      <Capture />
+    </AuthProvider>,
+  );
+  await waitFor(() => expect(contextValue?.isLoading).toBe(false));
+
+  try {
+    await contextValue!.signOut();
+
+    expect(manager.removeUser).toHaveBeenCalledTimes(1);
+    expect(manager.signoutRedirect).not.toHaveBeenCalled();
+    expect(new URLSearchParams(revokeBody).get('token')).toBe('refresh-1');
+    expect(assign).toHaveBeenCalledWith(
+      `https://boxalarm.auth.us-east-1.amazoncognito.com/logout?client_id=test-web-client&logout_uri=${encodeURIComponent(window.location.origin)}`,
+    );
+  } finally {
+    vi.unstubAllEnvs();
+    vi.unstubAllGlobals();
+  }
+});
+
+test('signOut still ends the hosted-UI session when token revocation fails', async () => {
+  vi.stubEnv('COGNITO_HOSTED_UI_ORIGIN', 'https://boxalarm.auth.us-east-1.amazoncognito.com');
+  vi.stubEnv('COGNITO_WEB_CLIENT_ID', 'test-web-client');
+  const assign = vi.fn();
+  vi.stubGlobal('location', { ...window.location, assign, origin: window.location.origin });
+  server.use(
+    http.post('https://boxalarm.auth.us-east-1.amazoncognito.com/oauth2/revoke', () =>
+      HttpResponse.error(),
+    ),
+  );
+  const { manager } = makeFakeUserManager(makeUser({ refresh_token: 'refresh-1' }));
+  let contextValue: ReturnType<typeof useAuth> | undefined;
+  function Capture() {
+    contextValue = useAuth();
+    return null;
+  }
+  render(
+    <AuthProvider userManager={manager}>
+      <Capture />
+    </AuthProvider>,
+  );
+  await waitFor(() => expect(contextValue?.isLoading).toBe(false));
+
+  try {
+    await contextValue!.signOut();
+
+    expect(manager.removeUser).toHaveBeenCalledTimes(1);
+    expect(assign).toHaveBeenCalledTimes(1);
+  } finally {
+    vi.unstubAllEnvs();
+    vi.unstubAllGlobals();
+  }
+});
+
+function LocationProbe() {
+  const location = useLocation();
+  return <p>at:{location.pathname + location.search}</p>;
+}
+
+function renderCallback(manager: UserManager, strict = false) {
+  const tree = (
+    <MemoryRouter initialEntries={['/auth/callback']}>
+      <AuthProvider userManager={manager}>
+        <Routes>
+          <Route path="/auth/callback" element={<AuthCallbackPage />} />
+          <Route path="/login" element={<p>login page</p>} />
+          <Route path="*" element={<LocationProbe />} />
+        </Routes>
+      </AuthProvider>
+    </MemoryRouter>
+  );
+  return render(strict ? <StrictMode>{tree}</StrictMode> : tree);
+}
+
+test('the callback returns the member to the deep link they started from', async () => {
+  const { manager } = makeFakeUserManager(makeUser());
+  vi.mocked(manager.signinCallback).mockResolvedValue(
+    makeUser({ state: '/incidents?status=OPEN' } as Partial<User>),
+  );
+
+  renderCallback(manager);
+
+  await screen.findByText('at:/incidents?status=OPEN');
+});
+
+test.each(['//evil.example', '/\\evil.example', 'https://evil.example', undefined])(
+  'the callback ignores an unsafe return target (%s) and lands on the dashboard',
+  async (state) => {
+    const { manager } = makeFakeUserManager(makeUser());
+    vi.mocked(manager.signinCallback).mockResolvedValue(makeUser({ state } as Partial<User>));
+
+    renderCallback(manager);
+
+    await screen.findByText('at:/');
+  },
+);
+
+test('the callback still navigates under StrictMode double-invoked effects', async () => {
+  const { manager } = makeFakeUserManager(makeUser());
+
+  renderCallback(manager, true);
+
+  await screen.findByText('at:/');
+  expect(manager.signinCallback).toHaveBeenCalledTimes(1);
+});
+
+test('a rejected callback offers a way back to sign-in', async () => {
+  const { manager } = makeFakeUserManager(null);
+  vi.mocked(manager.signinCallback).mockRejectedValue(new Error('No matching state'));
+
+  renderCallback(manager);
+
+  const link = await screen.findByRole('link', { name: 'Sign in again' });
+  expect(link.getAttribute('href')).toBe('/login');
+});
+
+test('a rejected callback with a session already present goes to the dashboard instead of dead-ending', async () => {
+  const { manager } = makeFakeUserManager(makeUser());
+  vi.mocked(manager.signinCallback).mockRejectedValue(new Error('No matching state'));
+
+  renderCallback(manager);
+
+  await screen.findByText('at:/');
+});
+
+test('apiRequest reports a 5xx with its traceId to telemetry', async () => {
+  const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+  server.use(
+    http.get('/api/v1/personnel/members', () =>
+      HttpResponse.json(
+        { type: 'about:blank', title: 'Boom', status: 500, traceId: 'trace-500' },
+        { status: 500 },
+      ),
+    ),
+  );
+  const tokens: AuthTokenSource = {
+    getAccessToken: vi.fn(async () => 'token'),
+    renewSilently: vi.fn(async () => null),
+  };
+
+  await expect(apiRequest('personnel/members', tokens)).rejects.toBeInstanceOf(ApiError);
+
+  expect(consoleError).toHaveBeenCalledWith(expect.stringContaining('trace-500'));
+  consoleError.mockRestore();
 });
