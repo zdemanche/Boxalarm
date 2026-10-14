@@ -179,10 +179,22 @@ export interface DueWindow {
   readonly months: readonly string[];
   readonly startBound: string;
   readonly endBound: string;
+  readonly openOnlyBefore?: string;
 }
 
 const MONTH_PATTERN = /^\d{4}-\d{2}$/;
 const MS_PER_DAY = 86_400_000;
+const INSPECTION_TIME_ZONE = 'America/New_York';
+const OVERDUE_LOOKBACK_DAYS = 365;
+
+function localDate(now: Date): string {
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: INSPECTION_TIME_ZONE,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(now);
+}
 
 export function resolveDueWindow(
   query: Record<string, string | undefined> | null | undefined,
@@ -190,13 +202,17 @@ export function resolveDueWindow(
 ): DueWindow {
   const monthParam = query?.month;
   let start: Date;
+  let openOnlyBefore: string | undefined;
   if (monthParam !== undefined) {
     if (!MONTH_PATTERN.test(monthParam)) {
       throw new ValidationError('month must be in YYYY-MM format');
     }
     start = new Date(`${monthParam}-01T00:00:00.000Z`);
   } else {
-    start = now;
+    openOnlyBefore = localDate(now);
+    start = new Date(
+      new Date(`${openOnlyBefore}T00:00:00.000Z`).getTime() - OVERDUE_LOOKBACK_DAYS * MS_PER_DAY,
+    );
   }
 
   const leadDaysParam = query?.leadDays;
@@ -209,7 +225,8 @@ export function resolveDueWindow(
     leadDays = parsed;
   }
 
-  const end = new Date(start.getTime() + leadDays * MS_PER_DAY);
+  const anchor = openOnlyBefore === undefined ? start : new Date(`${openOnlyBefore}T00:00:00.000Z`);
+  const end = new Date(anchor.getTime() + leadDays * MS_PER_DAY);
   const startDate = start.toISOString().slice(0, 10);
   const endDate = end.toISOString().slice(0, 10);
   const months: string[] = [];
@@ -219,7 +236,12 @@ export function resolveDueWindow(
     months.push(cursor.toISOString().slice(0, 7));
     cursor.setUTCMonth(cursor.getUTCMonth() + 1);
   }
-  return { months, startBound: startDate, endBound: `${endDate}#￿` };
+  return {
+    months,
+    startBound: startDate,
+    endBound: `${endDate}#￿`,
+    ...(openOnlyBefore !== undefined && { openOnlyBefore }),
+  };
 }
 
 export function hasInspectionId(body: unknown): boolean {

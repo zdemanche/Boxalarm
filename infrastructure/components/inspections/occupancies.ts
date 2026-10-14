@@ -98,8 +98,8 @@ export class Occupancies extends pulumi.ComponentResource {
       ],
     });
 
-    // putPrePlan: Query (existing plan), then a transaction of ConditionCheck (occupancy
-    // exists) + Put (plan) + Put (outbox); presigned PUTs for the files.
+    // putPrePlan: Query (existing plan), GetItem (occupancy METADATA for the event payload),
+    // then a transaction of ConditionCheck (occupancy exists) + Put (plan) + Put (outbox); presigned PUTs for the files.
     this.prePlanPutLambda = inspectionsRoute(this, name, args, {
       fn: "pre-plan-put",
       routeKey: "PUT /api/v1/inspections/occupancies/{id}/pre-plan",
@@ -108,7 +108,7 @@ export class Occupancies extends pulumi.ComponentResource {
       statements: ({ tableArn, bucketArn }) => [
         dynamoGrant(
           "PrePlanPut",
-          ["dynamodb:Query", "dynamodb:ConditionCheckItem", "dynamodb:PutItem"],
+          ["dynamodb:Query", "dynamodb:GetItem", "dynamodb:ConditionCheckItem", "dynamodb:PutItem"],
           [tableArn],
         ),
         dynamoGrant("PrePlanPutObject", ["s3:PutObject"], [`${bucketArn}/*/PRE_PLAN/*`]),

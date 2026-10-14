@@ -121,6 +121,30 @@ describe('listInspections handler', () => {
     expect(body.items[0]!.violations[0]!.status).toBe('open');
   });
 
+  it('without a month, keeps an unconducted overdue inspection and drops a conducted past one', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-10-13T15:00:00.000Z'));
+    const overdue = item({ gsi2sk: '2026-10-12#INS-1', nextDueDate: '2026-10-12' });
+    const conducted = item({
+      gsi2sk: '2026-10-02#INS-2',
+      nextDueDate: '2026-10-02',
+      sk: 'INSPECTION#INS-2',
+      conductedDate: '2026-10-02T14:00:00.000Z',
+    });
+    const dynamo = fakeDynamoClient({
+      'DEPT#dept-001#DUE#INSPECTION_RECORD#2026-10': [conducted, overdue],
+    });
+    const { handler } = await loadHandler(vpClientDeciding('ALLOW'), dynamo);
+
+    const result = await handler(buildEvent(undefined));
+    vi.useRealTimers();
+
+    const body = JSON.parse((result as { body: string }).body) as {
+      items: { inspectionId: string }[];
+    };
+    expect(body.items.map((i) => i.inspectionId)).toEqual(['INS-1']);
+  });
+
   it('returns 200 with an empty list when no inspections are due in the window', async () => {
     const dynamo = fakeDynamoClient({});
     const { handler } = await loadHandler(vpClientDeciding('ALLOW'), dynamo);

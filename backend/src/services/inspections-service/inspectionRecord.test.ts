@@ -133,11 +133,23 @@ describe('hasInspectionId', () => {
 });
 
 describe('resolveDueWindow (AC4)', () => {
-  it('defaults leadDays to 30 and derives the window from the current UTC month when month is absent', () => {
-    const window = resolveDueWindow(undefined, new Date('2026-09-14T00:00:00.000Z'));
-    expect(window.months).toEqual(['2026-09', '2026-10']);
-    expect(window.startBound).toBe('2026-09-14');
+  it('defaults leadDays to 30 and starts the window a year back from the department-local date when month is absent', () => {
+    const window = resolveDueWindow(undefined, new Date('2026-09-14T12:00:00.000Z'));
+    expect(window.months[0]).toBe('2025-09');
+    expect(window.months.at(-1)).toBe('2026-10');
+    expect(window.startBound).toBe('2025-09-14');
     expect(window.endBound).toBe('2026-10-14#￿');
+    expect(window.openOnlyBefore).toBe('2026-09-14');
+  });
+
+  it('uses the department-local date, not UTC, so an inspection due today stays in the window late in the evening', () => {
+    const window = resolveDueWindow(undefined, new Date('2026-10-13T01:00:00.000Z'));
+    expect(window.openOnlyBefore).toBe('2026-10-12');
+    expect(window.endBound).toBe('2026-11-11#￿');
+  });
+
+  it('keeps no open-only cutoff when a month is given', () => {
+    expect(resolveDueWindow({ month: '2026-10' }, new Date()).openOnlyBefore).toBeUndefined();
   });
 
   it('anchors the window on the provided month, staying within one month when leadDays is small', () => {
