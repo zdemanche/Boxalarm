@@ -868,6 +868,7 @@ export const ridingBoard = new RidingBoard("riding-board", {
 export const alertingAlarms = new AlertingAlarms("alerting-alarms", {
   env,
   channelQueues: messagingAlerting.channelQueues,
+  alertingTopic: messagingAlerting.topic,
   fanOutFunctionName: fanOut.lambda.function.name,
   fanOutOnFailureQueue: fanOut.onFailureQueue,
   escalationFunctionName: escalation.lambda.function.name,

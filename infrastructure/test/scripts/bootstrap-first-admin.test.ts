@@ -34,7 +34,10 @@ let callLog: string;
 // Answers just enough of the AWS CLI for the script to reach the 409 resume branch: an
 // empty ADMIN/CHIEF group, a create Lambda that answers 409, and an existing login whose
 // status the test chooses.
-function writeFakeAws(userStatus: string, stackDept = "NICHOLS"): void {
+function writeFakeAws(userStatus: string, stackDept = "NICHOLS", groupMemberSub?: string): void {
+  const group = groupMemberSub
+    ? `{"Users":[{"Attributes":[{"Name":"custom:deptId","Value":"NICHOLS"},{"Name":"sub","Value":"${groupMemberSub}"}]}]}`
+    : '{"Users":[]}';
   const fake = `#!/usr/bin/env bash
 echo "$*" >> "${callLog}"
 case "$1 $2" in
@@ -43,7 +46,7 @@ case "$1 $2" in
       *alerting-canary*) echo "${stackDept}" ;;
       *) echo "us-east-1_pool" ;;
     esac ;;
-  "cognito-idp list-users-in-group") echo '{"Users":[]}' ;;
+  "cognito-idp list-users-in-group") echo '${group}' ;;
   "lambda invoke")
     for last; do :; done
     echo '{"statusCode":409,"body":"{}"}' > "$last" ;;
@@ -123,5 +126,25 @@ describe("bootstrap-first-admin.sh", () => {
     // resume branch has accepted the login and moved on to assigning the role.
     expect(result.stdout).toContain("resuming");
     expect(awsCalls()).toContain("members-update-roles");
+  });
+
+  it("lets --resume finish when the resuming login is already in the CHIEF/ADMIN group", () => {
+    writeFakeAws("FORCE_CHANGE_PASSWORD", "NICHOLS", "sub-1");
+    const result = run([...BASE_ARGS, "--dept-id", "NICHOLS", "--resume"]);
+
+    expect(result.stderr).not.toContain("already has a member");
+    expect(awsCalls()).toContain("members-update-roles");
+  });
+
+  it("still refuses when a different login holds the group, with or without --resume", () => {
+    writeFakeAws("FORCE_CHANGE_PASSWORD", "NICHOLS", "sub-other");
+    const resumed = run([...BASE_ARGS, "--dept-id", "NICHOLS", "--resume"]);
+    const fresh = run([...BASE_ARGS, "--dept-id", "NICHOLS"]);
+
+    expect(resumed.status).toBe(1);
+    expect(resumed.stderr).toContain("already has a member");
+    expect(fresh.status).toBe(1);
+    expect(fresh.stderr).toContain("already has a member");
+    expect(awsCalls()).not.toContain("members-update-roles");
   });
 });

@@ -130,6 +130,11 @@ describe("OutboxPublisher", () => {
     expect(env?.variables?.PLATFORM_EVENT_BUS_NAME).toBe("boxalarm-dev-platform-bus");
   });
 
+  it("keeps on-failure records 14 days so a weekend outage cannot expire the evidence", async () => {
+    const publisher = await build();
+    expect(await resolve(publisher.onFailureQueue.messageRetentionSeconds)).toBe(1_209_600);
+  });
+
   it("grants sqs:SendMessage on its own on-failure queue so exhausted records reach it", async () => {
     const publisher = await build();
     const [policyJson, queueArn] = await Promise.all([

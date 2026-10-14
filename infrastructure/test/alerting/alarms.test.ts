@@ -15,6 +15,7 @@ async function build(env = "dev") {
   const alarms = new AlertingAlarms("alerting-alarms", {
     env,
     channelQueues: messaging.channelQueues,
+    alertingTopic: messaging.topic,
     fanOutFunctionName: "boxalarm-dev-alerting-fan-out",
     fanOutOnFailureQueue: new aws.sqs.Queue("fan-out-onfailure", {
       name: "boxalarm-dev-alerting-fan-out-onfailure",
@@ -305,6 +306,42 @@ describe("AlertingAlarms — every alert-path failure mode pages", { timeout: 30
     expect(alarms.length).toBeGreaterThan(0);
     for (const alarm of alarms) {
       expect(alarm.inputs.alarmActions, alarm.inputs.name as string).toEqual([PAGE_TOPIC_ARN]);
+    }
+  });
+});
+
+describe("AlertingAlarms — SNS to channel-queue delivery", { timeout: 30_000 }, () => {
+  it("pages on SNS delivery failures and filtered-out publishes for the alerting topic", async () => {
+    installMocks();
+    await build();
+    for (const metricName of [
+      "NumberOfNotificationsFailed",
+      "NumberOfNotificationsFilteredOut-NoMessageAttributes",
+      "NumberOfNotificationsFilteredOut-InvalidAttributes",
+    ]) {
+      const alarm = alarmByName(`boxalarm-dev-alerting-topic-${metricName}`);
+      expect(alarm.inputs).toMatchObject({
+        namespace: "AWS/SNS",
+        metricName,
+        dimensions: { TopicName: "boxalarm-dev-alerting-topic.fifo" },
+        statistic: "Sum",
+        threshold: 0,
+        alarmActions: [PAGE_TOPIC_ARN],
+      });
+    }
+  });
+
+  it("pages when any channel subscription DLQ is not empty", async () => {
+    installMocks();
+    await build();
+    for (const channel of ["push", "sms", "voice"]) {
+      expect(
+        alarmByName(`boxalarm-dev-alerting-${channel}-subscription-dlq-not-empty`).inputs,
+      ).toMatchObject({
+        metricName: "ApproximateNumberOfMessagesVisible",
+        dimensions: { QueueName: `boxalarm-dev-alerting-${channel}-subscription-dlq.fifo` },
+        alarmActions: [PAGE_TOPIC_ARN],
+      });
     }
   });
 });

@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { STACK_CONFIG, installMocks, resourcesOfType, settleStack } from "../alerting/mock-harness";
+import {
+  STACK_CONFIG,
+  installMocks,
+  resourcesOfType,
+  settleStack,
+  statementsForRole,
+} from "../alerting/mock-harness";
 
 const scheduleState = () =>
   resourcesOfType("aws:scheduler/schedule:Schedule").find(
@@ -17,5 +23,11 @@ describe("NERIS schema refresh on a placeholder source", { timeout: 120_000 }, (
     await import("../../index");
     await settleStack();
     expect(scheduleState()).toBe("DISABLED");
+  });
+
+  it("can decrypt the incident CMK that DynamoDB uses for its transactional writes", () => {
+    const statements = statementsForRole("boxalarm-dev-incident-neris-schema-refresh");
+    const cmk = statements.find((s) => s.Sid === "SchemaVersionCmkAccess");
+    expect([cmk?.Action].flat()).toContain("kms:Decrypt");
   });
 });

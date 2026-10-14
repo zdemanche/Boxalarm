@@ -12,6 +12,8 @@ export const FAN_OUT_METRIC_NAMESPACE = "Boxalarm/alerting-fan-out";
 export interface AlertingAlarmsArgs {
   env: string;
   channelQueues: Record<AlertingChannel, ChannelQueue>;
+  /** The alerting SNS FIFO topic: SNS publishes its delivery-failure metrics under its name. */
+  alertingTopic: aws.sns.Topic;
   fanOutFunctionName: pulumi.Input<string>;
   /** Fan-out stream ESM on-failure destination — a record here is a dispatch nobody was paged for. */
   fanOutOnFailureQueue: aws.sqs.Queue;
@@ -380,8 +382,42 @@ export class AlertingAlarms extends pulumi.ComponentResource {
       evaluationPeriods: 1,
     });
 
+    for (const metricName of [
+      "NumberOfNotificationsFailed",
+      "NumberOfNotificationsFilteredOut-NoMessageAttributes",
+      "NumberOfNotificationsFilteredOut-InvalidAttributes",
+    ]) {
+      pageAlarm(`topic-${metricName.toLowerCase()}-alarm`, {
+        name: `boxalarm-${env}-alerting-topic-${metricName}`,
+        alarmDescription:
+          "SNS could not deliver a page from the alerting topic to a channel queue, or filtered it out because its message attributes did not match any channel subscription. " +
+          "Check the queue policies and encryption keys of the channel queues and that publishers set the `channel` attribute (a delivery failure that exhausted retries lands in that channel's subscription DLQ).",
+        namespace: "AWS/SNS",
+        metricName,
+        dimensions: { TopicName: args.alertingTopic.name },
+        statistic: "Sum",
+        comparisonOperator: "GreaterThanThreshold",
+        threshold: 0,
+        period: 60,
+        evaluationPeriods: 1,
+      });
+    }
+
     for (const channel of ALERTING_CHANNELS) {
       const dlq = args.channelQueues[channel].dlq;
+
+      pageAlarm(`${channel}-subscription-dlq-alarm`, {
+        name: `boxalarm-${env}-alerting-${channel}-subscription-dlq-not-empty`,
+        alarmDescription: `SNS could not deliver a ${channel} page to its channel queue and dead-lettered it; the member got no ${channel} for that tone. Check the queue policy and encryption key of the ${channel} queue, then redrive the subscription DLQ.`,
+        namespace: "AWS/SQS",
+        metricName: "ApproximateNumberOfMessagesVisible",
+        dimensions: { QueueName: args.channelQueues[channel].subscriptionDlq.name },
+        statistic: "Maximum",
+        comparisonOperator: "GreaterThanThreshold",
+        threshold: 0,
+        period: 60,
+        evaluationPeriods: 1,
+      });
 
       // A real page the worker had no target for is acknowledged with no DLQ entry and no
       // SendFailed - before this alarm, the silent shape of the SMS-never-sends defect (C2).

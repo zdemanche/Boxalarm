@@ -63,7 +63,7 @@ export class QueueConsumer extends pulumi.ComponentResource {
 
     this.dlq = new aws.sqs.Queue(
       `${name}-dlq`,
-      { name: `${args.queueName}-dlq` },
+      { name: `${args.queueName}-dlq`, messageRetentionSeconds: 1_209_600 },
       { parent: this },
     );
 

@@ -16,6 +16,8 @@
 # admin in a department that does not exist. If a run created the login but failed before
 # assigning the role, running it again with the same arguments plus --resume finishes the
 # job - only for a login that has never signed in, so an existing member is never promoted.
+# The resuming login itself is not counted against the ADMIN/CHIEF check, because the role
+# step may have added it to the Cognito group before failing to save the member row.
 # Don't run it twice at once for the same department.
 #
 # Usage:
@@ -100,11 +102,19 @@ pool_id="$(aws lambda get-function-configuration --function-name "$create_fn" \
 [[ -n "$pool_id" && "$pool_id" != "None" ]] || { echo "no COGNITO_USER_POOL_ID on $create_fn" >&2; exit 1; }
 
 # Per department: the pool is shared, so another department's admin must not block this one.
-# Filtered with jq --arg, never by splicing the id into a JMESPath query string.
+# Filtered with jq --arg, never by splicing the id into a JMESPath query string. On --resume
+# the login being finished may already be in the group (the role step adds the group before
+# it saves the member row), so only a different login blocks the run.
+resume_sub=""
+if [[ "$resume" -eq 1 ]]; then
+  resume_sub="$(aws cognito-idp admin-get-user --user-pool-id "$pool_id" --username "$email" \
+    --output json 2>/dev/null | jq -r '.UserAttributes[] | select(.Name == "sub") | .Value' || true)"
+fi
 for group in ADMIN CHIEF; do
   existing="$(aws cognito-idp list-users-in-group --user-pool-id "$pool_id" --group-name "$group" \
-    --output json | jq --arg dept "$dept_id" \
-    '[.Users[] | select(any(.Attributes[]; .Name == "custom:deptId" and .Value == $dept))] | length')"
+    --output json | jq --arg dept "$dept_id" --arg sub "$resume_sub" \
+    '[.Users[] | select(any(.Attributes[]; .Name == "custom:deptId" and .Value == $dept))
+      | select(all(.Attributes[]; .Name != "sub" or .Value != $sub))] | length')"
   if [[ "$existing" != "0" ]]; then
     echo "refusing: ${dept_id} already has a member in $group - add members from the web app" >&2
     exit 1
