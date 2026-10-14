@@ -114,6 +114,11 @@ describe("Members", () => {
     expect(listPolicy).not.toContain("cognito-idp");
   });
 
+  it("gives the create Lambda 15 s for the adopt path's Cognito and table calls", async () => {
+    const members = await build();
+    expect(await resolve(members.createLambda.function.timeout)).toBe(15);
+  });
+
   it("lets the create Lambda read member rows only, for the adopted-login existence check", async () => {
     const members = await build();
     const policyJson = await resolve(members.createLambda.rolePolicy.policy);

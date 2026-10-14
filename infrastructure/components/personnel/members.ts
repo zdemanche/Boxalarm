@@ -204,6 +204,7 @@ export class Members extends pulumi.ComponentResource {
         code: lambdaCode("personnel-service", "members-create"),
         logGroup: args.logGroup,
         environment: { ...baseEnvironment, COGNITO_USER_POOL_ID: args.userPoolId },
+        timeout: 15,
         additionalPolicyStatements: pulumi
           .all([
             CREATE_STATEMENT(args.platformTableArn),

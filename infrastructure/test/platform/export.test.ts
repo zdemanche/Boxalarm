@@ -219,6 +219,17 @@ describe("Export", () => {
     expect(policyJson).not.toContain("TransactWriteItems");
   });
 
+  it("lets the handler list the export bucket so a missing manifest is a 404, not a 403", async () => {
+    const exp = await build();
+    const policy = JSON.parse(await resolve(exp.handlerLambda.rolePolicy.policy)) as {
+      Statement: Array<{ Sid: string; Action: string[]; Resource: string }>;
+    };
+    const list = policy.Statement.find((s) => s.Sid === "ListExportBucket");
+    expect(list?.Action).toEqual(["s3:ListBucket"]);
+    expect(list?.Resource).toBe("arn:aws:s3:::boxalarm-dev-exports-staging");
+    expect(policy.Statement.flatMap((s) => s.Action)).not.toContain("s3:HeadObject");
+  });
+
   // #257 sweep: markJobFailed's UpdateItem makes the handler a mutating role.
   it("carries the audit-row deny on the handler's UpdateItem grant", async () => {
     const exp = await build();

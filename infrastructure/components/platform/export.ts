@@ -287,8 +287,14 @@ export class Export extends pulumi.ComponentResource {
             {
               Sid: "ReadExportBucket" as const,
               Effect: "Allow" as const,
-              Action: ["s3:HeadObject", "s3:GetObject"],
+              Action: ["s3:GetObject"],
               Resource: `${bucketArn}/*`,
+            },
+            {
+              Sid: "ListExportBucket" as const,
+              Effect: "Allow" as const,
+              Action: ["s3:ListBucket"],
+              Resource: bucketArn,
             },
           ]),
       },

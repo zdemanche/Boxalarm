@@ -137,7 +137,7 @@ export const mobileUserPoolClient = new BoxalarmUserPoolClient("identity-client-
   userPoolId: identity.userPool.id,
   clientName: `boxalarm-${env}-mobile`,
   standardWriteAttributes: SELF_SERVICE_WRITE_ATTRIBUTES,
-  callbackUrls: ["boxalarm://auth"],
+  callbackUrls: ["boxalarm://auth", "boxalarm://sign-in"],
   logoutUrls: ["boxalarm://auth"],
   ...SESSION_TOKEN_POLICY,
 });
@@ -146,8 +146,13 @@ export const webUserPoolClient = new BoxalarmUserPoolClient("identity-client-web
   userPoolId: identity.userPool.id,
   clientName: `boxalarm-${env}-web`,
   standardWriteAttributes: SELF_SERVICE_WRITE_ATTRIBUTES,
-  // silent-renew.html is required for the iframe fallback path (#6 comment).
-  callbackUrls: [`${webOrigin}/auth/callback`, `${webOrigin}/silent-renew.html`],
+  // silent-renew.html is required for the iframe fallback path (#6 comment); /login is the
+  // forgot-password return URI.
+  callbackUrls: [
+    `${webOrigin}/auth/callback`,
+    `${webOrigin}/silent-renew.html`,
+    `${webOrigin}/login`,
+  ],
   logoutUrls: [webOrigin],
   ...SESSION_TOKEN_POLICY,
 });
@@ -958,6 +963,7 @@ export const cadSources = new CadSources("cad-sources", {
   httpApi,
   webhookUrl: cadIngress.webhookUrl,
   webhookUsagePlanId: cadIngress.webhookUsagePlan.id,
+  pageTopicArn: alertingPageTopic.topicArn,
   ...(cadIngressEmailDomain !== undefined ? { emailDomain: cadIngressEmailDomain } : {}),
 });
 
