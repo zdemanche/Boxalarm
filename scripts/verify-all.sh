@@ -34,7 +34,7 @@ run ui             lint      npm run lint
 run ui             format    npm run format
 run ui/apps/web    tests     npx vitest run
 run ui/apps/mobile tests     npx jest
-run ui/apps/web    e2e       npm run test:e2e
+run ui/apps/web    e2e       env CI=1 npm run test:e2e -- --forbid-only
 
 if [ "$fail" -ne 0 ]; then
   echo "verify-all: FAILED (see ** lines above; re-run LocalStack timeouts alone first)"
