@@ -10,6 +10,7 @@ import { Text, View } from 'react-native';
 import { Button, Card, Screen, StatusChip, useTheme } from '../../components/ui';
 import { useAlertsRepository } from '../../features/alerts/apiAlertsRepository';
 import { ackStatusLabel } from '../../features/alerts/ackStatus';
+import { useMemberNames } from '../../features/alerts/useMemberNames';
 import type { AckStatus, RosterEntry } from '../../features/alerts/types';
 import type { AlertsStackParamList } from '../../navigation/AlertsStack';
 import { useConnectivity } from '../../sync/ConnectivityContext';
@@ -57,6 +58,7 @@ export function RosterScreen() {
   const isFocused = useIsFocused();
   const { isOnline } = useConnectivity();
   const repository = useAlertsRepository();
+  const memberNames = useMemberNames(repository);
   const [roster, setRoster] = useState<RosterEntry[]>([]);
   const [staleSince, setStaleSince] = useState<number | null>(null);
   const [loadedAt, setLoadedAt] = useState<number | null>(null);
@@ -143,6 +145,11 @@ export function RosterScreen() {
           </Text>
         </Notice>
       ) : null}
+      {memberNames.failed ? (
+        <Notice tone="warning">
+          <Text style={noticeText(theme, 'warning')}>Names couldn't load. Showing member IDs.</Text>
+        </Notice>
+      ) : null}
       {isOnline && staleSince ? (
         <Notice tone="warning">
           <Text accessibilityRole="alert" style={noticeText(theme, 'warning')}>
@@ -176,7 +183,7 @@ export function RosterScreen() {
                 }}
               >
                 <Text style={{ flex: 1, minWidth: 120, color: theme.fg, ...ROW_PRIMARY }}>
-                  {item.name}
+                  {memberNames.displayName(item)}
                 </Text>
                 <StatusChip
                   status={ACK_CHIP[item.ackStatus]}

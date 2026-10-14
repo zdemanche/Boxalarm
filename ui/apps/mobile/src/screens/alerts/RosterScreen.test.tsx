@@ -1,6 +1,7 @@
 import { act, fireEvent, render } from '@testing-library/react-native';
 import { useOptionalAuth } from '../../auth/AuthContext';
 import { mockAlertsRepository } from '../../features/alerts/mockAlertsRepository';
+import { resetMemberNamesCache } from '../../features/alerts/useMemberNames';
 import { RosterScreen } from './RosterScreen';
 
 const mockRouteParams: { dispatchId: string } = { dispatchId: '' };
@@ -25,6 +26,7 @@ const mockRepository = {
   getRoster: jest.fn((...args: Parameters<typeof mockAlertsRepository.getRoster>) =>
     mockAlertsRepository.getRoster(...args),
   ),
+  listMemberNames: jest.fn(() => mockAlertsRepository.listMemberNames()),
 };
 
 jest.mock('../../features/alerts/apiAlertsRepository', () => ({
@@ -32,12 +34,15 @@ jest.mock('../../features/alerts/apiAlertsRepository', () => ({
 }));
 
 beforeEach(async () => {
+  resetMemberNamesCache();
   mockNavigate.mockClear();
   (useOptionalAuth as jest.Mock).mockReturnValue({ roles: ['MEMBER'] });
   const { dispatchId } = await mockAlertsRepository.triggerSelfTest();
   mockRouteParams.dispatchId = dispatchId;
   mockConnectivity.isOnline = true;
   mockIsFocused.current = true;
+  mockRepository.listMemberNames.mockReset();
+  mockRepository.listMemberNames.mockImplementation(() => mockAlertsRepository.listMemberNames());
   mockRepository.getRoster.mockReset();
   mockRepository.getRoster.mockImplementation((...args) => mockAlertsRepository.getRoster(...args));
 });
@@ -142,4 +147,34 @@ test('polling stops while the screen is unfocused and resumes immediately once i
   } finally {
     jest.useRealTimers();
   }
+});
+
+const nameless = {
+  memberId: 'sub-1',
+  name: 'sub-1',
+  ackStatus: 'UNANSWERED' as const,
+  eta: null,
+  assignedApparatusId: null,
+  quals: [],
+  lastAnsweredTone: null,
+};
+
+test('a roster entry with no name shows the directory name, not the member ID', async () => {
+  mockRepository.getRoster.mockResolvedValue([nameless]);
+  mockRepository.listMemberNames.mockResolvedValue({ 'sub-1': 'Jamie Rios' });
+
+  const { findByText, queryByText } = await render(<RosterScreen />);
+
+  expect(await findByText('Jamie Rios')).toBeTruthy();
+  expect(queryByText('sub-1')).toBeNull();
+});
+
+test('when the member directory fails the roster still renders by member ID with a notice', async () => {
+  mockRepository.getRoster.mockResolvedValue([nameless]);
+  mockRepository.listMemberNames.mockRejectedValue(new Error('personnel down'));
+
+  const { findByText } = await render(<RosterScreen />);
+
+  expect(await findByText('sub-1')).toBeTruthy();
+  expect(await findByText(/names couldn't load/i)).toBeTruthy();
 });

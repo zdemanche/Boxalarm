@@ -263,6 +263,8 @@ export interface AlertsRepository {
   /** The department's active calls - the in-app path to a call whose notification is gone. */
   listActiveDispatches(): Promise<ActiveDispatchList>;
   getRoster(dispatchId: string): Promise<RosterEntry[]>;
+  /** The department's members as memberId -> "First Last"; a separate call so a personnel outage never blocks the roster. */
+  listMemberNames(): Promise<Record<string, string>>;
   /**
    * Saves the answer on the phone and starts sending it; resolves with the outbox row carrying it
    * (null when there is no API to send to - the local mock), never with the network result.

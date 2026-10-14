@@ -181,6 +181,16 @@ function buildApiAlertsRepository(tokens: AuthTokenSource, apiBaseUrl: string): 
       return body.members.flatMap(toRosterEntry);
     },
 
+    async listMemberNames() {
+      const response = await req('personnel/members');
+      const body = (await response.json()) as {
+        items: { memberId: string; firstName: string; lastName: string }[];
+      };
+      return Object.fromEntries(
+        body.items.map((m) => [m.memberId, `${m.firstName} ${m.lastName}`.trim()]),
+      );
+    },
+
     // Through the SQLite outbox, never a bare POST: the old `void submitResponse` dropped a failed
     // answer on the floor while the screen said "You responded" (alert-ux C2).
     async submitResponse(dispatchId, ackStatus, eta) {

@@ -111,6 +111,20 @@ test('a digest push displays on the default channel without a full-screen action
   expect(call.android.fullScreenAction).toBeUndefined();
 });
 
+test('a digest push carrying a notificationId posts under a stable id and alerts once', async () => {
+  Platform.OS = 'android';
+
+  await displayPushNotification({
+    category: 'digest',
+    title: 'Cert expiring',
+    notificationId: 'N-7',
+  });
+
+  const call = displayNotification.mock.calls[0][0];
+  expect(call.id).toBe('digest:N-7');
+  expect(call.android.onlyAlertOnce).toBe(true);
+});
+
 test('a CAD update displays on the default channel: no alarm, no full-screen, no ring cap', async () => {
   Platform.OS = 'android';
 

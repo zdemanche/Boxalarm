@@ -11,7 +11,11 @@ import {
   rememberAlertPayload,
 } from './alertPayload';
 import { ANDROID_RESPONSE_ACTIONS } from './notificationActions';
-import { dispatchNotificationId, mutualAidNotificationId } from './notificationIds';
+import {
+  digestNotificationId,
+  dispatchNotificationId,
+  mutualAidNotificationId,
+} from './notificationIds';
 import {
   categoryFromPushData,
   CRITICAL_CHANNEL_ID,
@@ -114,7 +118,9 @@ export async function displayPushNotification(
     ? prompt
       ? mutualAidNotificationId(payload.dispatchId)
       : dispatchNotificationId(payload.dispatchId)
-    : null;
+    : category === 'digest' && typeof data?.notificationId === 'string'
+      ? digestNotificationId(data.notificationId)
+      : null;
 
   await notifee.displayNotification({
     ...(notificationId ? { id: notificationId } : {}),
@@ -129,6 +135,7 @@ export async function displayPushNotification(
       channelId,
       importance: isCritical ? AndroidImportance.HIGH : AndroidImportance.DEFAULT,
       pressAction: { id: 'default' },
+      ...(category === 'digest' && notificationId ? { onlyAlertOnce: true } : {}),
       ...(isCritical
         ? {
             fullScreenAction: { id: 'default' },

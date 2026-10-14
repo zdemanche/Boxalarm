@@ -121,6 +121,10 @@ export const mockAlertsRepository: AlertsRepository = {
     return ROSTERS.get(dispatchId) ?? [];
   },
 
+  async listMemberNames() {
+    return {};
+  },
+
   async submitResponse(dispatchId, ackStatus, eta) {
     const roster = ROSTERS.get(dispatchId);
     const entry = roster?.[0];

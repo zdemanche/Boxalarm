@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Text, TouchableOpacity, View } from 'react-native';
 import { Button, Card, Screen, StatusChip, useTheme } from '../../components/ui';
 import { useAlertsRepository } from '../../features/alerts/apiAlertsRepository';
+import { useMemberNames } from '../../features/alerts/useMemberNames';
 import type { RidingBoardApparatus, RosterEntry } from '../../features/alerts/types';
 import { ApiError } from '../../lib/apiClient';
 import { useConnectivity } from '../../sync/ConnectivityContext';
@@ -26,8 +27,8 @@ interface PendingAssignment {
   clientAssignmentId: string;
 }
 
-// E1-S18-UI: the officer's riding board. Members come from the response roster (name, quals,
-// ETA, direct-to-scene distinction); seats come from apparatus-service's riding board. The
+// E1-S18-UI: the officer's riding board. Members come from the response roster (quals, ETA,
+// direct-to-scene distinction; names from the personnel directory); seats come from apparatus-service's riding board. The
 // member's own one-tap response flow (AlertDetailScreen) is untouched by this screen.
 export function RidingBoardScreen() {
   const route = useRoute();
@@ -36,6 +37,7 @@ export function RidingBoardScreen() {
   const isFocused = useIsFocused();
   const { isOnline } = useConnectivity();
   const repository = useAlertsRepository();
+  const memberNames = useMemberNames(repository);
   const [apparatus, setApparatus] = useState<RidingBoardApparatus[]>([]);
   const [roster, setRoster] = useState<RosterEntry[]>([]);
   const [openSeat, setOpenSeat] = useState<{ unitId: string; positionCode: string } | null>(null);
@@ -129,8 +131,9 @@ export function RidingBoardScreen() {
         } catch (error) {
           // Leave it queued - the next reconnect (or a future retry trigger) will try again with
           // the same clientAssignmentId, so a lost response replays instead of conflicting. A
-          // genuine 409 means the seat moved on: drop the entry rather than re-send it forever.
-          if (error instanceof ApiError && error.problem.status === 409) {
+          // genuine 409 means the seat moved on, and a 400 means the config changed under the queued
+          // replay: drop the entry rather than re-send it forever.
+          if (error instanceof ApiError && [400, 409].includes(error.problem.status)) {
             if (cancelled) return;
             setPending((prev) => {
               const next = new Map(prev);
@@ -138,7 +141,9 @@ export function RidingBoardScreen() {
               return next;
             });
             setConflict(
-              `${assignment.unitId} / ${assignment.positionCode} was reassigned by another officer. Refreshed.`,
+              error.problem.status === 409
+                ? `${assignment.unitId} / ${assignment.positionCode} was reassigned by another officer. Refreshed.`
+                : `${assignment.unitId} / ${assignment.positionCode} could not be assigned; the board changed. Refreshed.`,
             );
           }
         }
@@ -225,6 +230,11 @@ export function RidingBoardScreen() {
           </Text>
         </Notice>
       ) : null}
+      {memberNames.failed ? (
+        <Notice tone="warning">
+          <Text style={noticeText(theme, 'warning')}>Names couldn't load. Showing member IDs.</Text>
+        </Notice>
+      ) : null}
       {staleSince ? (
         <Notice tone="warning">
           <Text accessibilityRole="alert" style={noticeText(theme, 'warning')}>
@@ -267,7 +277,9 @@ export function RidingBoardScreen() {
                     >
                       {position.label}:{' '}
                       {position.assignment
-                        ? (assignedMember?.name ?? position.assignment.memberId)
+                        ? assignedMember
+                          ? memberNames.displayName(assignedMember)
+                          : memberNames.nameOf(position.assignment.memberId)
                         : 'Unassigned'}
                     </Text>
                     {position.assignment?.qualStatus === 'UNMET' || isPending ? (
@@ -313,6 +325,7 @@ export function RidingBoardScreen() {
                       <TouchableOpacity
                         key={member.memberId}
                         accessibilityRole="button"
+                        accessibilityLabel={`Assign ${memberNames.displayName(member)}${member.ackStatus === 'DIRECT_TO_SCENE' ? ' (direct to scene)' : ''} to ${position.label}`}
                         onPress={() =>
                           void assign(unit.unitId, position.code, member.memberId, position.version)
                         }
@@ -324,7 +337,7 @@ export function RidingBoardScreen() {
                         }}
                       >
                         <Text style={{ flex: 1, color: theme.fg, ...ROW_PRIMARY }}>
-                          {member.name}
+                          {memberNames.displayName(member)}
                           {member.ackStatus === 'DIRECT_TO_SCENE' ? ' (direct to scene)' : ''}
                         </Text>
                       </TouchableOpacity>
