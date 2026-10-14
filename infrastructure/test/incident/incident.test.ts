@@ -152,12 +152,13 @@ describe("Incident", () => {
     );
   });
 
-  it("grants submit and retry the Update + outbox Put of their transaction and the conflict GetItem", async () => {
+  it("grants submit and retry the Update + outbox Put of their transaction, the conflict GetItem and the NERIS settings Query", async () => {
     const incident = await build();
     for (const lambda of [incident.submitLambda, incident.submissionRetryLambda]) {
       expect((await actionsFor(lambda, "IncidentSubmissionAccess")).sort()).toEqual([
         "dynamodb:GetItem",
         "dynamodb:PutItem",
+        "dynamodb:Query",
         "dynamodb:UpdateItem",
       ]);
     }

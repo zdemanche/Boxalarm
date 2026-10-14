@@ -428,7 +428,7 @@ export class Incident extends pulumi.ComponentResource {
         key: "submit",
         fn: "submit",
         routeKey: "POST /api/v1/incidents/{incidentId}/submit",
-        actions: ["dynamodb:UpdateItem", "dynamodb:PutItem", "dynamodb:GetItem"],
+        actions: ["dynamodb:UpdateItem", "dynamodb:PutItem", "dynamodb:GetItem", "dynamodb:Query"],
       },
       {
         key: "submission-get",
@@ -444,7 +444,7 @@ export class Incident extends pulumi.ComponentResource {
         key: "submission-retry",
         fn: "submission-retry",
         routeKey: "POST /api/v1/incidents/{incidentId}/submission/retry",
-        actions: ["dynamodb:UpdateItem", "dynamodb:PutItem", "dynamodb:GetItem"],
+        actions: ["dynamodb:UpdateItem", "dynamodb:PutItem", "dynamodb:GetItem", "dynamodb:Query"],
       },
     ];
     const submissionLambdas = submissionRoutes.map((route) => {
